@@ -257,6 +257,14 @@ export interface SubAgentStartContext {
 	conversationId: string;
 	parentAgentId: string;
 	input: SpawnAgentInput;
+	/**
+	 * The spawning tool call. Unique per spawned agent (batch spawns suffix the
+	 * index), and known before the agent's own id exists, so it is the key a
+	 * per-agent sandbox is registered under and later handed back by. Optional
+	 * because a tool context need not carry one; sandboxing is skipped when it
+	 * does not.
+	 */
+	toolCallId?: string;
 }
 
 export interface SubAgentEndContext {
@@ -264,6 +272,8 @@ export interface SubAgentEndContext {
 	conversationId: string;
 	parentAgentId: string;
 	input: SpawnAgentInput;
+	/** The spawning tool call; see {@link SubAgentStartContext.toolCallId}. */
+	toolCallId?: string;
 	result?: SpawnAgentOutput;
 	agentResult?: AgentResult;
 	error?: Error;
@@ -805,7 +815,12 @@ async function runSpawnedAgent(
 			};
 			if (config.onSubAgentStart) {
 				try {
-					await config.onSubAgentStart({ ...started, parentAgentId, input });
+					await config.onSubAgentStart({
+						...started,
+						parentAgentId,
+						input,
+						toolCallId: context.toolCallId,
+					});
 				} catch {
 					// Best-effort observer callback.
 				}
@@ -887,6 +902,7 @@ async function runSpawnedAgent(
 					...started,
 					parentAgentId,
 					input,
+					toolCallId: context.toolCallId,
 					result: output,
 					agentResult: result,
 				});
@@ -902,6 +918,7 @@ async function runSpawnedAgent(
 					...started,
 					parentAgentId,
 					input,
+					toolCallId: context.toolCallId,
 					error: error instanceof Error ? error : new Error(String(error)),
 				});
 			} catch {

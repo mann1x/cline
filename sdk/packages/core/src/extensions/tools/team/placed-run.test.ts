@@ -4,7 +4,13 @@ import type {
 	AgentNodePlacement,
 	PlacedAgentNode,
 } from "./agent-node-placement";
-import { isRefusedSpawn, runPlacedAgent } from "./placed-run";
+import {
+	admissionHeadroom,
+	isDurableRefusal,
+	isRefusedSpawn,
+	MAX_STALLED_DURABLE_REFUSALS,
+	runPlacedAgent,
+} from "./placed-run";
 
 /** A placement that hands out the named nodes in turn, recording what it is told. */
 function fakePlacement(nodeIds: string[]) {
@@ -159,6 +165,51 @@ describe("an agent through the spawn queue", () => {
 
 		expect(order).toEqual(["attempt 1", "close session", "attempt 2"]);
 	});
+
+	// pandorum 2026-09-23 (Node1): the opencoti pool deadlocked — every worker
+	// holds nothing and waits, so nothing finishes to free the cells the next
+	// one needs. The gate answered 126 agents with "largest admissible 160",
+	// the figure never moving, and each was re-queued to the front. It spun for
+	// twelve hours. A durable refusal whose stated headroom does not grow must
+	// be reported to the lead, not retried forever.
+	it("stops re-queuing a durable refusal whose headroom never grows, and reports it", async () => {
+		const { placement } = fakePlacement(["oc"]);
+		const run = vi.fn(async () => {
+			throw new Error(
+				"admission rejected: context allocation exhausted (largest admissible 160 < peak 70000)",
+			);
+		});
+
+		await expect(
+			runPlacedAgent({ placement, label: "a", run }),
+		).rejects.toThrow("context allocation exhausted");
+		// One climb to 160, then the guard's worth of flat refusals before it
+		// gives up — far short of MAX_REFUSED_REQUEUES.
+		expect(run).toHaveBeenCalledTimes(MAX_STALLED_DURABLE_REFUSALS + 1);
+	});
+
+	// The other side of the guard: while the admissible figure keeps climbing,
+	// siblings are finishing and space is opening, so waiting is still worth it.
+	it("keeps re-queuing a durable refusal while its admissible headroom is still climbing", async () => {
+		const { placement } = fakePlacement(["oc"]);
+		const run = vi.fn();
+		for (const admissible of [160, 200, 320]) {
+			run.mockImplementationOnce(async () => {
+				throw new Error(
+					`admission rejected: context allocation exhausted (largest admissible ${admissible} < peak 70000)`,
+				);
+			});
+		}
+		run.mockImplementationOnce(async (_node, admitted: () => void) => {
+			admitted();
+			return ok("done");
+		});
+
+		const outcome = await runPlacedAgent({ placement, label: "a", run });
+
+		expect(outcome.result.text).toBe("done");
+		expect(run).toHaveBeenCalledTimes(4);
+	});
 });
 
 describe("telling a refusal from the agent's own failure", () => {
@@ -199,5 +250,24 @@ describe("telling a refusal from the agent's own failure", () => {
 				usage: { inputTokens: 10, outputTokens: 40 },
 			}),
 		).toBe(false);
+	});
+
+	it("reads a durable admission refusal and its headroom, and a 429 as neither", () => {
+		const durable = new Error(
+			"admission rejected: context allocation exhausted (largest admissible 160 < peak 70000)",
+		);
+		expect(isDurableRefusal(durable)).toBe(true);
+		expect(admissionHeadroom(durable)).toBe(160);
+		expect(
+			isDurableRefusal(new Error("projected mean tps below floor (0.4 < 1)")),
+		).toBe(true);
+		// A 429 or a full window frees when a sibling finishes: a refusal, but
+		// not a durable one, and it states no admissible figure.
+		expect(
+			isDurableRefusal(
+				Object.assign(new Error("Too Many Requests"), { status: 429 }),
+			),
+		).toBe(false);
+		expect(admissionHeadroom(new Error("Too Many Requests"))).toBeUndefined();
 	});
 });

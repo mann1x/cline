@@ -163,6 +163,32 @@ describe("FeatureSettingsSection", () => {
 		expect(mockUpdateSetting).toHaveBeenCalledWith("subagentsEnabled", true)
 	})
 
+	it("renders the 'Agents can run commands' toggle under Subagents", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const agentSection = container.querySelector("#agent-features")
+		expect(agentSection?.querySelector('[id="Agents can run commands"]')).toBeTruthy()
+	})
+
+	it("calls updateSetting with subagentCommandsEnabled when toggled", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		fireEvent.click(container.querySelector('[id="Agents can run commands"]') as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("subagentCommandsEnabled", true)
+	})
+
+	it("persists a trimmed agentModelOverride on blur", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const field = container.querySelector("#agent-model-override") as HTMLInputElement
+		expect(field).toBeTruthy()
+		fireEvent.change(field, { target: { value: "  qwen3-coder:30b  " } })
+		fireEvent.blur(field)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("agentModelOverride", "qwen3-coder:30b")
+	})
+
 	// Default on. An extension state that predates the key must still render
 	// the row checked, or the first thing a user does is turn back on what was
 	// never off -- and the row reads as a new opt-in feature rather than as the

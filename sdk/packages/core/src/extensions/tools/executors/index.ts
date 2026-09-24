@@ -6,6 +6,7 @@
  * for custom implementations.
  */
 
+import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
 import type { ToolExecutors } from "../types";
 import {
 	type ApplyPatchExecutorOptions,
@@ -84,6 +85,21 @@ export interface DefaultExecutorsOptions {
 	 * each set gets its own, which is the right scope for a session.
 	 */
 	receipts?: ReadReceipts;
+
+	/**
+	 * A delegated agent's private overlay of the workspace. When present, every
+	 * file executor — read, editor, apply_patch, grep, sed, awk — resolves its
+	 * paths through it, so the agent's reads fall through to the lead's tree but
+	 * its writes, deletes and renames stay in the overlay. Threaded here in one
+	 * place on purpose: an executor left pointing at the real workspace is a
+	 * silent escape, so the wiring is not left to each call site.
+	 *
+	 * The agent's shell commands are a separate concern: they are rooted at the
+	 * native sandbox launcher via `bash.wrapSpawn`, and a caller that has no
+	 * launcher for the platform withholds the shell rather than letting a command
+	 * run against the workspace.
+	 */
+	overlay?: AgentOverlay;
 }
 
 /**
@@ -123,27 +139,34 @@ export function createDefaultExecutors(
 	// are useless apart, so they are wired together here rather than left to
 	// each caller to remember.
 	const receipts = options.receipts ?? createReadReceipts();
+	// A delegated agent's overlay, threaded into every file executor. Undefined
+	// for the lead, whose executors resolve straight to the workspace.
+	const overlay = options.overlay;
 	// The read ledger is NOT wired by default, deliberately. Suppressing a copy
 	// on the grounds that the model "already has it" is a claim about the
 	// conversation that compaction can falsify, and re-reading is part of how
 	// these models work. A host that wants it passes its own through
 	// `fileRead.readLedger`; without one, every read returns the content.
 	return {
-		readFile: createFileReadExecutor({ ...options.fileRead, receipts }),
+		readFile: createFileReadExecutor({
+			...options.fileRead,
+			receipts,
+			overlay,
+		}),
 		search: createSearchExecutor(options.search),
 		// Receipts reach the shell too, so a command that rewrites a file the
 		// model has read says so. Nothing else about the shell changes.
 		bash: createDefaultShellExecutor({ ...options.bash, receipts }),
 		webFetch: createWebFetchExecutor(options.webFetch),
-		applyPatch: createApplyPatchExecutor(options.applyPatch),
-		editor: createEditorExecutor({ ...options.editor, receipts }),
+		applyPatch: createApplyPatchExecutor({ ...options.applyPatch, overlay }),
+		editor: createEditorExecutor({ ...options.editor, receipts, overlay }),
 		// The same registry as the reader and the editor, deliberately: a model
 		// that greps a file has read it, and `sed -i` is an edit and is refused
 		// on a file nobody read. Give these their own and both halves break
 		// quietly — grep would stop counting as a read, and sed would guard
 		// against a history it cannot see.
-		grep: createGrepExecutor({ ...options.grep, receipts }),
-		sed: createSedExecutor({ ...options.sed, receipts }),
-		awk: createAwkExecutor({ ...options.awk, receipts }),
+		grep: createGrepExecutor({ ...options.grep, receipts, overlay }),
+		sed: createSedExecutor({ ...options.sed, receipts, overlay }),
+		awk: createAwkExecutor({ ...options.awk, receipts, overlay }),
 	};
 }

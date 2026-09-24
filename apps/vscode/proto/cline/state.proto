@@ -325,6 +325,8 @@ message Settings {
   optional bool translate_compaction_prompts = 219;
   optional bool jev_enabled = 220;
   optional string jev_settings = 221;
+  optional bool subagent_commands_enabled = 222;
+  optional string agent_model_override = 223;
 }
 
 message State {
@@ -458,6 +460,8 @@ message UpdateSettingsRequest {
   optional string vscode_terminal_execution_mode = 27;
   reserved 28; // was max_consecutive_mistakes (removed; the SDK owns the mistake limit)
   optional bool subagents_enabled = 29;
+  optional bool subagent_commands_enabled = 83;
+  optional string agent_model_override = 84;
   optional int32 subagent_terminal_output_line_limit = 30;
   optional string cline_env = 31;
   optional OnboardingModelGroup onboarding_models = 33;

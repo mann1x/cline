@@ -11,6 +11,7 @@ import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
 import type { AgentToolContext } from "@cline/shared";
 import { resolveExistingFilePath } from "@cline/shared/storage";
+import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
 import type { ReadFileRequest } from "../schemas";
 import type { FileReadExecutor } from "../types";
 import { withFileLock } from "./file-locks";
@@ -94,6 +95,13 @@ export interface FileReadExecutorOptions {
 	 * editor executor, this is what lets an edit require a prior read.
 	 */
 	receipts?: ReadReceipts;
+
+	/**
+	 * A delegated agent's private overlay. When present, a read resolves through
+	 * it: the agent's own version if it wrote one, otherwise the lead's, and a
+	 * file the agent deleted reads as absent.
+	 */
+	overlay?: AgentOverlay;
 }
 
 // `receipts`, `cwd` and `readLedger` are deliberately outside the defaults: there is no
@@ -104,7 +112,7 @@ export interface FileReadExecutorOptions {
 // `readLedger` is absent for the same reason as `receipts`: without one, every
 // read returns the content, which is what a standalone executor should do.
 const DEFAULT_FILE_READ_OPTIONS: Required<
-	Omit<FileReadExecutorOptions, "receipts" | "cwd" | "readLedger">
+	Omit<FileReadExecutorOptions, "receipts" | "cwd" | "readLedger" | "overlay">
 > = {
 	maxFileSizeBytes: 10_000_000, // 10MB default limit
 	encoding: "utf-8", // Default to UTF-8 encoding
@@ -373,7 +381,7 @@ async function readTextWindow(
 export function createFileReadExecutor(
 	options: FileReadExecutorOptions = {},
 ): FileReadExecutor {
-	const { receipts, cwd, readLedger } = options;
+	const { receipts, cwd, readLedger, overlay } = options;
 	const { maxFileSizeBytes, encoding, includeLineNumbers, maxReadChars } = {
 		...DEFAULT_FILE_READ_OPTIONS,
 		...options,
@@ -385,9 +393,12 @@ export function createFileReadExecutor(
 		// copy this text into `editor` needs it without the gutter; everyone
 		// else keeps the line numbers they address edits by.
 		const withLineNumbers = request.line_numbers ?? includeLineNumbers;
-		const initialPath = path.isAbsolute(filePath)
+		let initialPath = path.isAbsolute(filePath)
 			? path.normalize(filePath)
 			: path.resolve(cwd ?? process.cwd(), filePath);
+		// A delegated agent reads its own overlay: its version, else the lead's,
+		// and a file it deleted resolves to an absent overlay path (ENOENT).
+		if (overlay) initialPath = await overlay.resolveRead(initialPath);
 		// Tolerate Unicode-whitespace mismatches (e.g. macOS Sonoma+
 		// screenshot paths where the on-disk filename contains U+202F but
 		// the caller's string has a regular space).

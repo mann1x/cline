@@ -229,6 +229,16 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			}
 		}
 
+		// Update the "agents can run commands" setting
+		if (request.subagentCommandsEnabled !== undefined) {
+			controller.stateManager.setGlobalState("subagentCommandsEnabled", !!request.subagentCommandsEnabled)
+		}
+
+		// Update the global agent-model override
+		if (request.agentModelOverride !== undefined) {
+			controller.stateManager.setGlobalState("agentModelOverride", request.agentModelOverride)
+		}
+
 		// Update auto-condense setting
 		if (request.compactionPrompt !== undefined) {
 			controller.stateManager.setGlobalState("compactionPrompt", request.compactionPrompt)

@@ -58,6 +58,20 @@ const agentFeatures: FeatureToggle[] = [
 		settingKey: "subagentsEnabled",
 	},
 	{
+		// Sits under Subagents because it only means anything once delegation is
+		// on. Off by default, and off is the safe reading: a delegated agent's
+		// commands run in a sandbox rooted at a native launcher, and on a platform
+		// with no launcher — or with this off — the agent is given no shell at all
+		// rather than one pointed at the real workspace. It applies to every
+		// delegated agent, whether it runs on the lead's model or a different one.
+		id: "subagent-commands",
+		label: "Agents can run commands",
+		description:
+			"Let a subagent run terminal commands. Each agent's commands run against its own private copy of the workspace, not the real one, and its changes come back to you as revisions you can review and keep. Leave this off and agents can still read and edit in isolation but cannot run commands. Where the command sandbox has no native launcher for your platform, commands stay off whatever this says.",
+		stateKey: "subagentCommandsEnabled",
+		settingKey: "subagentCommandsEnabled",
+	},
+	{
 		// Default on: it is what every build did before the switch existed, and
 		// inside a coding task it is the right reading -- a turn that called
 		// nothing is nearly always one that should have acted, a needless nudge
@@ -238,6 +252,8 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		atomicProtocolSettings,
 		webSearchEnabled,
 		subagentsEnabled,
+		subagentCommandsEnabled,
+		agentModelOverride,
 		strongNudgesEnabled,
 		worktreesEnabled,
 		backgroundEditEnabled,
@@ -252,6 +268,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		hooksEnabled,
 		useAutoCondense,
 		subagentsEnabled,
+		subagentCommandsEnabled,
 		// `?? true` rather than a bare read: the default is on, and an
 		// extension state that predates the key must not render as off.
 		strongNudgesEnabled: strongNudgesEnabled ?? true,
@@ -285,6 +302,25 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 									onChange={(checked) => updateSetting(feature.settingKey, checked)}
 								/>
 							))}
+							<div className="space-y-2 py-3">
+								<Label className="text-sm font-medium text-foreground" htmlFor="agent-model-override">
+									Agents model
+								</Label>
+								<p className="text-xs text-muted-foreground">
+									A model for delegated agents, used instead of the session's own. One value for every agent,
+									whatever the provider — leave it empty to run them on the session's model. It overrides only
+									the agents' model; the lead keeps its own model and tools.
+								</p>
+								<Input
+									defaultValue={agentModelOverride ?? ""}
+									id="agent-model-override"
+									// Persist on blur, not per keystroke: a model id typed a character
+									// at a time would store every prefix on its way to the real value.
+									onBlur={(event) => updateSetting("agentModelOverride", event.target.value.trim())}
+									placeholder="e.g. qwen3-coder:30b — empty uses the session's model"
+									type="text"
+								/>
+							</div>
 							<FeatureRow
 								checked={focusChainSettings?.enabled ?? true}
 								description={TASK_CHECKLIST_DESCRIPTION}

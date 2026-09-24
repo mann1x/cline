@@ -405,6 +405,15 @@ const USER_SETTINGS_FIELDS = {
 	availableUpdate: { default: "" as string },
 	cappedThinkingPrompt: { default: "" as string },
 	subagentsEnabled: { default: false as boolean },
+	// Whether a delegated agent is offered `run_commands` at all. Off by default:
+	// a delegate's commands run in a sandbox rooted at the native launcher, and
+	// where there is no launcher (or this is off) it gets no shell rather than one
+	// pointed at the real workspace. Independent of which model the agent runs on.
+	subagentCommandsEnabled: { default: false as boolean },
+	// A global model for delegated agents, overriding the session's own model for
+	// them only. Empty means agents run on the session's model. One value on the
+	// session's provider — not per-provider, and it never touches the lead.
+	agentModelOverride: { default: "" as string },
 	strongNudgesEnabled: { default: true as boolean },
 	worktreesEnabled: { default: false as boolean },
 	preferredLanguage: { default: "English" as string },

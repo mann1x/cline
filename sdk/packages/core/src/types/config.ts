@@ -254,6 +254,21 @@ export interface CoreRuntimeFeatures {
 	enableSpawnAgent: boolean;
 	enableAgentTeams: boolean;
 	/**
+	 * Whether a delegated agent may run commands. When on, an agent's commands
+	 * run in a sandbox rooted at a native launcher (and only where one exists for
+	 * the platform); when off, the agent is offered no shell. Independent of the
+	 * agent's model. The overlay file-isolation and hand-back apply whenever
+	 * delegation is on, regardless of this.
+	 */
+	subagentCommandsEnabled?: boolean;
+	/**
+	 * Directory holding the native command-sandbox binaries (`sandbox-launch.exe`
+	 * and `hook.dll`), which the host ships. When present and the binaries exist
+	 * for this platform, a delegated agent's commands are rooted there; when
+	 * absent, agents get file isolation but no shell.
+	 */
+	sandboxBinariesDir?: string;
+	/**
 	 * Whether a turn that calls no tool is nudged to continue even when nothing
 	 * says work is unfinished. Defaults to true, which is what every host did
 	 * before this was a setting.

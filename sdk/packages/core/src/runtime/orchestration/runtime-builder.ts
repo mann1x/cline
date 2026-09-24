@@ -233,6 +233,13 @@ function createBuiltinToolsList(
 	runCommandExecutionController?: RunCommandExecutionController,
 	readReceipts?: ReadReceipts,
 	fileReadMaxChars?: number,
+	/**
+	 * Force `run_commands` off, overriding the mode preset. Set for a delegated
+	 * agent whose commands are not sandboxed: on those paths a shell would run
+	 * straight against the real workspace, which is the escape the delegated
+	 * sandbox exists to prevent. The lead's own tools never pass this.
+	 */
+	withholdShell?: boolean,
 ): AgentTool[] {
 	const preset = ToolPresets[resolveToolPresetName({ mode })];
 	const toolRoutingConfig = resolveToolRoutingConfig(
@@ -260,6 +267,11 @@ function createBuiltinToolsList(
 			...preset,
 			enableSkills: !!skillsExecutor,
 			...toolRoutingConfig,
+			// Last, so it beats both the mode preset and any model routing rule
+			// that re-enables run_commands: a delegated agent on an unsandboxed
+			// path gets no shell, or it escapes to the real workspace
+			// (escape-critical). The lead never passes this.
+			...(withholdShell ? { enableBash: false } : {}),
 			executors: {
 				...(skillsExecutor
 					? {
@@ -992,6 +1004,8 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 												input.runCommandExecutionController,
 												input.readReceipts,
 												fileReadMaxChars,
+												// withholdShell: configured agents are not sandboxed — no run_commands (escape-critical)
+												true,
 											),
 											config.extraTools,
 										),
@@ -1112,6 +1126,8 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 									input.runCommandExecutionController,
 									input.readReceipts,
 									fileReadMaxChars,
+									// withholdShell: teammates are not sandboxed — no run_commands (escape-critical)
+									true,
 								)
 						: undefined,
 					teammateConfigProvider: delegatedAgentConfigProvider,

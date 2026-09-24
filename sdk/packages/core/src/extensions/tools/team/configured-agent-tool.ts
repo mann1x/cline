@@ -524,6 +524,7 @@ export function createConfiguredAgentTools(
 										...started,
 										parentAgentId,
 										input: spawnInput,
+										toolCallId: context.toolCallId,
 									});
 								} catch {
 									// Best-effort observer callback.
@@ -622,6 +623,7 @@ export function createConfiguredAgentTools(
 									...started,
 									parentAgentId,
 									input: spawnInput,
+									toolCallId: context.toolCallId,
 									result: output,
 									agentResult: result,
 								});
@@ -637,6 +639,7 @@ export function createConfiguredAgentTools(
 									...started,
 									parentAgentId,
 									input: spawnInput,
+									toolCallId: context.toolCallId,
 									error:
 										error instanceof Error ? error : new Error(String(error)),
 								});

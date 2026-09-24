@@ -14,6 +14,7 @@
 import type { Dirent, Stats } from "node:fs";
 import { promises as fs } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
 import { MAX_SEARCH_OUTPUT_CHARS } from "./output-limits";
 import { compilePosixRegex } from "./posix-regex";
 import { type ReadReceipts, readFileStamp } from "./read-receipts";
@@ -77,12 +78,17 @@ export interface GrepExecutorOptions {
 	cwd?: string;
 	receipts?: ReadReceipts;
 	maxOutputChars?: number;
+	/** A delegated agent's overlay; grep walks and reads the merged view. */
+	overlay?: AgentOverlay;
 }
 
-async function collectFiles(target: string): Promise<string[]> {
+async function collectFiles(
+	target: string,
+	overlay?: AgentOverlay,
+): Promise<string[]> {
 	let stat: Stats;
 	try {
-		stat = await fs.stat(target);
+		stat = overlay ? await overlay.stat(target) : await fs.stat(target);
 	} catch {
 		return [];
 	}
@@ -93,6 +99,32 @@ async function collectFiles(target: string): Promise<string[]> {
 		return [];
 	}
 	const found: string[] = [];
+	// With an overlay, walk the merged listing (overlay-only files included,
+	// deleted files excluded) and stat each entry through the overlay. Without
+	// one, the fast withFileTypes path.
+	const walkOverlay = async (directory: string): Promise<void> => {
+		let names: string[];
+		try {
+			names = await (overlay as AgentOverlay).readdir(directory);
+		} catch {
+			return;
+		}
+		for (const name of names) {
+			const full = join(directory, name);
+			let st: Stats;
+			try {
+				st = await (overlay as AgentOverlay).stat(full);
+			} catch {
+				continue;
+			}
+			if (st.isDirectory()) {
+				if (SKIP_DIRECTORIES.has(name)) continue;
+				await walkOverlay(full);
+			} else if (st.isFile()) {
+				found.push(full);
+			}
+		}
+	};
 	const walk = async (directory: string): Promise<void> => {
 		// Typed explicitly: inferring from `fs.readdir` picks the Buffer
 		// overload, which then makes every `entry.name` a Buffer.
@@ -115,7 +147,7 @@ async function collectFiles(target: string): Promise<string[]> {
 			}
 		}
 	};
-	await walk(target);
+	await (overlay ? walkOverlay(target) : walk(target));
 	return found.sort();
 }
 
@@ -149,7 +181,7 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 		const files: string[] = [];
 		for (const target of targets) {
 			const absolute = isAbsolute(target) ? target : resolve(cwd, target);
-			const found = await collectFiles(absolute);
+			const found = await collectFiles(absolute, options.overlay);
 			if (found.length === 0) {
 				files.push(absolute);
 			} else {
@@ -180,7 +212,9 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 		for (const filePath of files) {
 			let content: string;
 			try {
-				content = await fs.readFile(filePath, "utf8");
+				content = options.overlay
+					? (await options.overlay.read(filePath)).toString("utf8")
+					: await fs.readFile(filePath, "utf8");
 			} catch (error) {
 				// A named file that cannot be read is worth saying; one found by
 				// walking a directory is not.

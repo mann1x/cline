@@ -78,6 +78,8 @@ export async function getStateToPostToWebview(controller: {
 	const compactionStrategy = readCompactionStrategyGlobally()
 	const webSearchEnabled = isModelToolEnabledGlobally("web_search")
 	const subagentsEnabled = stateManager.getGlobalSettingsKey("subagentsEnabled")
+	const subagentCommandsEnabled = stateManager.getGlobalSettingsKey("subagentCommandsEnabled")
+	const agentModelOverride = stateManager.getGlobalSettingsKey("agentModelOverride")
 	const strongNudgesEnabled = stateManager.getGlobalSettingsKey("strongNudgesEnabled")
 	const userInfo = stateManager.getGlobalStateKey("userInfo")
 	const mcpMarketplaceEnabled = stateManager.getGlobalStateKey("mcpMarketplaceEnabled")
@@ -211,6 +213,8 @@ export async function getStateToPostToWebview(controller: {
 		compactionStrategy,
 		webSearchEnabled,
 		subagentsEnabled,
+		subagentCommandsEnabled,
+		agentModelOverride,
 		strongNudgesEnabled,
 		userInfo,
 		mcpMarketplaceEnabled,

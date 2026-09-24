@@ -9,6 +9,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentToolContext } from "@cline/shared";
+import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
 import type { ApplyPatchInput } from "../schemas";
 import type { ApplyPatchExecutor } from "../types";
 import {
@@ -54,6 +55,9 @@ export interface ApplyPatchExecutorOptions {
 	 * @default true
 	 */
 	restrictToCwd?: boolean;
+
+	/** A delegated agent's overlay; the patch reads and writes the agent's copies. */
+	overlay?: AgentOverlay;
 }
 
 function resolveFilePath(
@@ -207,6 +211,7 @@ async function loadFiles(
 	cwd: string,
 	encoding: BufferEncoding,
 	restrictToCwd: boolean,
+	overlay?: AgentOverlay,
 ): Promise<LoadedFiles> {
 	const filesToLoad = extractFilesForOperations(lines, [
 		PATCH_MARKERS.UPDATE,
@@ -219,7 +224,9 @@ async function loadFiles(
 		const absolutePath = resolveFilePath(cwd, filePath, restrictToCwd);
 		let fileContent: string;
 		try {
-			fileContent = await fs.readFile(absolutePath, encoding);
+			fileContent = overlay
+				? (await overlay.read(absolutePath)).toString(encoding)
+				: await fs.readFile(absolutePath, encoding);
 		} catch {
 			throw new DiffError(`File not found: ${filePath}`);
 		}
@@ -304,22 +311,35 @@ async function applyChanges(
 	cwd: string,
 	encoding: BufferEncoding,
 	restrictToCwd: boolean,
+	overlay?: AgentOverlay,
 ): Promise<string[]> {
 	const touched: string[] = [];
+
+	// With an overlay every write, delete and move goes through it: a delete
+	// becomes a whiteout, a write lands in the overlay, and the workspace is
+	// never touched.
+	const writeFile = async (absPath: string, content: string) => {
+		if (overlay) return overlay.write(absPath, content);
+		await fs.mkdir(path.dirname(absPath), { recursive: true });
+		await fs.writeFile(absPath, content, { encoding });
+	};
+	const removeFile = async (absPath: string) => {
+		if (overlay) return overlay.unlink(absPath);
+		await fs.rm(absPath, { force: true });
+	};
 
 	for (const [filePath, change] of Object.entries(changes)) {
 		const sourceAbsPath = resolveFilePath(cwd, filePath, restrictToCwd);
 		switch (change.type) {
 			case PatchActionType.DELETE:
-				await fs.rm(sourceAbsPath, { force: true });
+				await removeFile(sourceAbsPath);
 				touched.push(`${filePath}: [deleted]`);
 				break;
 			case PatchActionType.ADD:
 				if (change.newContent === undefined) {
 					throw new DiffError(`Cannot create ${filePath} with no content`);
 				}
-				await fs.mkdir(path.dirname(sourceAbsPath), { recursive: true });
-				await fs.writeFile(sourceAbsPath, change.newContent, { encoding });
+				await writeFile(sourceAbsPath, change.newContent);
 				touched.push(filePath);
 				break;
 			case PatchActionType.UPDATE: {
@@ -335,12 +355,11 @@ async function applyChanges(
 						change.movePath,
 						restrictToCwd,
 					);
-					await fs.mkdir(path.dirname(moveAbsPath), { recursive: true });
-					await fs.writeFile(moveAbsPath, change.newContent, { encoding });
-					await fs.rm(sourceAbsPath, { force: true });
+					await writeFile(moveAbsPath, change.newContent);
+					await removeFile(sourceAbsPath);
 					touched.push(`${filePath} -> ${change.movePath}`);
 				} else {
-					await fs.writeFile(sourceAbsPath, change.newContent, { encoding });
+					await writeFile(sourceAbsPath, change.newContent);
 					touched.push(filePath);
 				}
 				break;
@@ -362,13 +381,14 @@ export async function computePatchChanges(
 	cwd: string,
 	options: ApplyPatchExecutorOptions = {},
 ): Promise<{ changes: Record<string, PatchFileChange>; fuzz: number }> {
-	const { encoding = "utf-8", restrictToCwd = true } = options;
+	const { encoding = "utf-8", restrictToCwd = true, overlay } = options;
 	const normalizedInput = normalizePatchInput(patchText);
 	const loaded = await loadFiles(
 		normalizedInput.lines,
 		cwd,
 		encoding,
 		restrictToCwd,
+		overlay,
 	);
 	const parser = new PatchParser(normalizedInput.lines, loaded.files);
 	const { patch, fuzz } = parser.parse();
@@ -385,7 +405,7 @@ export async function computePatchChanges(
 export function createApplyPatchExecutor(
 	options: ApplyPatchExecutorOptions = {},
 ): ApplyPatchExecutor {
-	const { encoding = "utf-8", restrictToCwd = true } = options;
+	const { encoding = "utf-8", restrictToCwd = true, overlay } = options;
 
 	return async (
 		input: ApplyPatchInput,
@@ -395,8 +415,15 @@ export function createApplyPatchExecutor(
 		const { changes, fuzz } = await computePatchChanges(input.input, cwd, {
 			encoding,
 			restrictToCwd,
+			overlay,
 		});
-		const touched = await applyChanges(changes, cwd, encoding, restrictToCwd);
+		const touched = await applyChanges(
+			changes,
+			cwd,
+			encoding,
+			restrictToCwd,
+			overlay,
+		);
 
 		const responseLines = [
 			"Successfully applied patch to the following files:",

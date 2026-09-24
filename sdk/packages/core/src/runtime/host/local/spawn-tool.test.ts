@@ -17,7 +17,9 @@ vi.mock("../../../extensions/tools/team/delegated-agent", () => ({
 	},
 }));
 
-const { createSessionSwarmTool } = await import("./spawn-tool");
+const { createSessionSwarmTool, appendHandbackNote } = await import(
+	"./spawn-tool"
+);
 
 function swarmOn(providerId: string) {
 	return createSessionSwarmTool(
@@ -111,5 +113,59 @@ describe("createSessionSwarmTool workers", () => {
 		for (const tool of tools.filter((entry) => entry.name === "ask_question")) {
 			expect(tool.lifecycle?.completesRun).toBe(true);
 		}
+	});
+});
+
+// The failure this closes: an agent hands its work back as revisions the lead
+// was never told about, so the lead judged the agent by its own untouched
+// on-disk copy and called the (correct) agent a liar (pandorum 2026-09-24).
+describe("the hand-back note on the agent's answer", () => {
+	it("names each changed file and its revision, and says the workspace is unchanged", () => {
+		const context = {
+			subAgentId: "a",
+			conversationId: "c",
+			parentAgentId: "lead",
+			input: { name: "qa-fixer" },
+			result: { text: "Fixed manic_miner.html; harness reports ok:true." },
+		} as never as Parameters<typeof appendHandbackNote>[0];
+
+		appendHandbackNote(context, "qa-fixer", [
+			{ rel: "manic_miner.html", index: 3, kind: "modified" },
+		]);
+
+		const text = (context as { result: { text: string } }).result.text;
+		// The agent's own answer is preserved.
+		expect(text).toContain("Fixed manic_miner.html");
+		// And the lead is told exactly where the work went.
+		expect(text).toContain("manic_miner.html — revision #3");
+		expect(text).toContain('"qa-fixer"');
+		expect(text).toContain("UNCHANGED");
+		expect(text).toContain("restore_file");
+		expect(text).toContain('revision: "#3"');
+	});
+
+	it("still tells the lead when the agent changed nothing", () => {
+		const context = {
+			input: { name: "checker" },
+			result: { text: "Looked, nothing to fix." },
+		} as never as Parameters<typeof appendHandbackNote>[0];
+
+		appendHandbackNote(context, "checker", []);
+
+		const text = (context as { result: { text: string } }).result.text;
+		expect(text).toContain("Looked, nothing to fix.");
+		expect(text).toContain("no file changes to hand back");
+	});
+
+	it("does nothing when there is no result to annotate", () => {
+		const context = { input: { name: "x" } } as never as Parameters<
+			typeof appendHandbackNote
+		>[0];
+		// Must not throw when a run ended in error with no result object.
+		expect(() =>
+			appendHandbackNote(context, "x", [
+				{ rel: "a.txt", index: 2, kind: "created" },
+			]),
+		).not.toThrow();
 	});
 });

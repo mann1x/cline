@@ -140,6 +140,61 @@ describe("prepareLocalRuntimeBootstrap startup telemetry", () => {
 		expect(initErrorCalls).toHaveLength(0);
 	});
 
+	// Regression: createSubAgentLifecycleCallbacks is invoked in-band, before
+	// prepareLocalRuntimeBootstrap resolves — so anything the callback reads must
+	// already exist at that point. The host's sandbox wiring once spread a value
+	// derived from `bootstrap.config` into this callback; because `bootstrap` is
+	// only assigned from this function's return, every task start threw "Cannot
+	// read properties of undefined (reading 'config')". An error thrown by the
+	// callback surfacing here is the proof that the invocation is eager.
+	it("runs createSubAgentLifecycleCallbacks during preparation, so its errors surface", async () => {
+		vi.doMock("./workspace/workspace-manifest", () => ({
+			buildWorkspaceMetadataWithInfo: vi.fn(async (rootPath: string) => ({
+				workspaceInfo: {
+					rootPath,
+					git: undefined,
+					remotes: [],
+					branch: undefined,
+					commit: undefined,
+				},
+				workspaceMetadata: "",
+				durationMs: 3,
+				vcsType: "none" as const,
+				initError: undefined,
+			})),
+		}));
+
+		const { prepareLocalRuntimeBootstrap } = await import(
+			"./local-runtime-bootstrap"
+		);
+		const { telemetry } = createTelemetryStub();
+
+		const input = createStartInput();
+		input.config.cwd = "/tmp/project-startup-lifecycle";
+		input.config.workspaceRoot = "/tmp/project-startup-lifecycle";
+
+		let invokedInBand = false;
+		await expect(
+			prepareLocalRuntimeBootstrap({
+				input,
+				sessionId: "sess-startup-lifecycle",
+				providerSettingsManager: createProviderSettingsManager() as never,
+				defaultTelemetry: telemetry,
+				defaultToolPolicies: undefined,
+				onPluginEvent: () => {},
+				onTeamEvent: () => {},
+				createSpawnTool,
+				createSubAgentLifecycleCallbacks: () => {
+					invokedInBand = true;
+					throw new Error("lifecycle callback ran during prep");
+				},
+				readSessionMetadata: async () => undefined,
+				writeSessionMetadata: async () => {},
+			} as never),
+		).rejects.toThrow("lifecycle callback ran during prep");
+		expect(invokedInBand).toBe(true);
+	});
+
 	it("emits workspace.init_error when workspace diagnostics report a failure", async () => {
 		vi.doMock("./workspace/workspace-manifest", () => ({
 			buildWorkspaceMetadataWithInfo: vi.fn(async (rootPath: string) => ({

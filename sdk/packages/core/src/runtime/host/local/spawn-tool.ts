@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
 	clearPolykvSession,
 	releasePolykvAgent,
@@ -26,6 +28,10 @@ import type {
 } from "../../../extensions/tools/team";
 import { createSpawnAgentTool } from "../../../extensions/tools/team";
 import { admissionFromCapacity } from "../../../extensions/tools/team/agent-admission";
+import {
+	type DelegatedSandboxProvider,
+	setUpDelegatedSandbox,
+} from "../../../extensions/tools/team/agent-sandbox-executors";
 import type { DelegatedAgentConfigProvider } from "../../../extensions/tools/team/delegated-agent";
 import { createDelegatedAgent } from "../../../extensions/tools/team/delegated-agent";
 import { delegatedAgentTools } from "../../../extensions/tools/team/delegated-tools";
@@ -53,6 +59,7 @@ import {
 } from "../../../services/telemetry/core-events";
 import type { CoreSessionConfig } from "../../../types/config";
 import type { ActiveSession } from "../../../types/session";
+import type { AgentSandbox } from "../../sandbox/agent-sandbox";
 
 export type SubAgentStartTracker = Map<
 	string,
@@ -68,6 +75,25 @@ export interface SpawnToolDeps {
 		event: AgentEvent,
 	): void;
 	invokeBackendOptional(method: string, ...args: unknown[]): Promise<void>;
+	/**
+	 * When present, each delegated agent runs over a private overlay of the
+	 * workspace instead of sharing the lead's executors. Absent — the default —
+	 * keeps the prior behaviour exactly.
+	 */
+	sandboxProvider?: DelegatedSandboxProvider;
+	/**
+	 * The live sandboxes, keyed by the spawning tool call, shared between the
+	 * tool builder that creates them and the lifecycle callback that hands their
+	 * changes back and disposes them. Supplied alongside `sandboxProvider`.
+	 */
+	agentSandboxes?: Map<string, AgentSandbox>;
+	/**
+	 * Whether a delegated agent may run commands at all — the "Agents can run
+	 * commands" toggle. Even when true, a command runs only if the sandbox has a
+	 * native launcher for the platform; when false, the shell is withheld
+	 * however capable the sandbox is.
+	 */
+	agentCommandsEnabled?: boolean;
 }
 
 export interface SessionSubAgentLifecycleCallbacks {
@@ -119,7 +145,7 @@ export function createSessionSubAgentLifecycleCallbacks(
 				context,
 			);
 		},
-		onSubAgentEnd: (context) => {
+		onSubAgentEnd: async (context) => {
 			const teamRuntime = deps.getSession(rootSessionId)?.runtime.teamRuntime;
 			const started = deps.subAgentStarts.get(context.subAgentId);
 			const durationMs = started ? Date.now() - started.startedAt : 0;
@@ -144,6 +170,20 @@ export function createSessionSubAgentLifecycleCallbacks(
 				}),
 			});
 			deps.subAgentStarts.delete(context.subAgentId);
+			// Tear down the agent's sandbox: fold its changed files into the lead's
+			// revision log, then dispose the overlay.
+			const sandbox = context.toolCallId
+				? deps.agentSandboxes?.get(context.toolCallId)
+				: undefined;
+			if (sandbox && context.toolCallId) {
+				deps.agentSandboxes?.delete(context.toolCallId);
+				// Awaited, not fire-and-forget: the hand-back appends the revision
+				// list to `context.result.text`, and the spawn tool returns that same
+				// object to the lead right after this callback. Detached, the lead
+				// would see the agent's answer without ever being told where its work
+				// went — the failure that made this whole hand-back invisible.
+				await handBackAndDispose(deps, rootSessionId, context, sandbox);
+			}
 			void deps.invokeBackendOptional(
 				"handleSubAgentEnd",
 				rootSessionId,
@@ -151,6 +191,104 @@ export function createSessionSubAgentLifecycleCallbacks(
 			);
 		},
 	};
+}
+
+/**
+ * Fold a finished agent's changed files into the lead's revision log, then
+ * dispose the overlay.
+ *
+ * Each change becomes the next revision in the lead's own list, marked as the
+ * agent's (`by: "agent:<name>"`) and never written to disk — the lead adopts it
+ * with `restore_file` or leaves it. The lead's current on-disk version is seeded
+ * first so the agent's version lands as a revision the lead can go back from;
+ * `seed()` is a no-op when the file is already tracked, so the numbering stays
+ * continuous in the one list. Best-effort throughout: a hand-back that throws
+ * must not fail the agent's teardown, and the overlay is disposed either way.
+ */
+async function handBackAndDispose(
+	deps: SpawnToolDeps,
+	rootSessionId: string,
+	context: SubAgentEndContext,
+	sandbox: AgentSandbox,
+): Promise<void> {
+	try {
+		const log = deps.getSession(rootSessionId)?.revisionLog;
+		const workspaceRoot = deps.sandboxProvider?.workspaceRoot;
+		const agentName = context.input.name ?? "agent";
+		const handed: { rel: string; index: number; kind: string }[] = [];
+		if (log && workspaceRoot) {
+			const by = `agent:${agentName}`;
+			for (const change of await sandbox.changedFiles()) {
+				const absolutePath = join(workspaceRoot, change.rel);
+				log.seed(absolutePath, await readIfPresent(absolutePath), "session");
+				const body =
+					change.kind === "deleted" || !change.overlayPath
+						? undefined
+						: await readIfPresent(change.overlayPath);
+				const revision = log.record(absolutePath, body, by, {
+					intent: `${change.kind} by delegated agent — held as a revision, not written to disk`,
+				});
+				if (revision) {
+					handed.push({
+						rel: change.rel,
+						index: revision.index,
+						kind: change.kind,
+					});
+				}
+			}
+		}
+		// Tell the lead where the agent's work went. Without this it reads or runs
+		// its own on-disk copy -- unchanged, because the agent worked on a private
+		// overlay -- sees no fix, and calls the agent a liar (pandorum 2026-09-24).
+		appendHandbackNote(context, agentName, handed);
+	} catch {
+		// A failed hand-back must not fail teardown.
+	} finally {
+		await sandbox.dispose().catch(() => {});
+	}
+}
+
+/**
+ * Append a note to the agent's answer naming the revisions its changes were
+ * handed back as, so the lead adopts them with `restore_file` instead of judging
+ * the agent by an on-disk copy the overlay never touched.
+ */
+export function appendHandbackNote(
+	context: SubAgentEndContext,
+	agentName: string,
+	handed: { rel: string; index: number; kind: string }[],
+): void {
+	if (!context.result || typeof context.result.text !== "string") {
+		return;
+	}
+	if (handed.length === 0) {
+		context.result.text += `\n\n---\nThis agent worked on a private copy of the workspace and left your files unchanged; it recorded no file changes to hand back.`;
+		return;
+	}
+	const verb = (kind: string): string =>
+		kind === "deleted" ? "deleted" : kind === "created" ? "created" : "changed";
+	const lines = handed
+		.map(
+			(h) =>
+				`  - ${h.rel} — revision #${h.index} (${verb(h.kind)} by "${agentName}")`,
+		)
+		.join("\n");
+	const first = handed[0]?.index ?? 1;
+	context.result.text +=
+		`\n\n---\nThe agent worked on a private copy of the workspace, so your own files are UNCHANGED. Its changes are held for you as revisions, not written to disk:\n${lines}\n` +
+		`To see a version: \`read_files\` with \`revision: "#${first}"\`. To apply it to your workspace: \`restore_file\` with the same \`revision\`. ` +
+		`Do not verify the agent's work by reading or running your current copy of these files — it does not contain these changes yet.`;
+}
+
+async function readIfPresent(
+	absolutePath: string,
+): Promise<Buffer | undefined> {
+	try {
+		return await readFile(absolutePath);
+	} catch {
+		// Absent or unreadable is "no content at this revision" — a real answer.
+		return undefined;
+	}
 }
 
 export function createSessionSpawnTool(
@@ -165,14 +303,63 @@ export function createSessionSpawnTool(
 		config,
 		rootSessionId,
 	);
-	const createSubAgentTools = () => {
+	const createSubAgentTools = async (
+		_input: unknown,
+		context?: { toolCallId?: string },
+	): Promise<AgentTool[]> => {
+		// A delegated agent works over a private overlay when the host provides a
+		// sandbox. Its file tools resolve through the overlay and its shell is
+		// rooted at the launcher, so none of the lead's disk-backed executors are
+		// passed through — that isolation is the whole point. Without a provider,
+		// or without a tool-call id to key the overlay on, it behaves as before.
+		const toolCallId = context?.toolCallId;
+		let sandboxTools: {
+			executorOptions?: Awaited<
+				ReturnType<typeof setUpDelegatedSandbox>
+			>["executorOptions"];
+			enableBash?: boolean;
+		} = {};
+		if (deps.sandboxProvider && toolCallId) {
+			const setup = await setUpDelegatedSandbox({
+				workspaceRoot: deps.sandboxProvider.workspaceRoot,
+				overlayRoot: deps.sandboxProvider.overlayRootFor(toolCallId),
+				...(deps.sandboxProvider.binaries
+					? { binaries: deps.sandboxProvider.binaries }
+					: {}),
+			});
+			// Registered so the lifecycle callback can hand its changes back and
+			// dispose it when the agent ends.
+			deps.agentSandboxes?.set(toolCallId, setup.sandbox);
+			// The shell is offered only when both hold: the user allowed agent
+			// commands, and the sandbox has a launcher for this platform. Either
+			// missing and it is withheld — an un-launched command escapes to the
+			// real workspace, and a disallowed one must not run at all.
+			const allowCommands =
+				setup.commandsEnabled && deps.agentCommandsEnabled === true;
+			sandboxTools = {
+				executorOptions: setup.executorOptions,
+				...(allowCommands ? {} : { enableBash: false }),
+			};
+		} else if (deps.agentCommandsEnabled === false) {
+			// The feature is wired and the toggle is off: the agent keeps the lead's
+			// executors (no overlay), but the shell is withheld. `undefined` instead
+			// means an older host that never wired the toggle, and there the agent
+			// behaves exactly as before — lead executors, shell included.
+			sandboxTools = { enableBash: false };
+		}
 		const tools: AgentTool[] = config.enableTools
 			? delegatedAgentTools(
 					createBuiltinTools({
 						cwd: config.cwd,
 						telemetry: config.telemetry,
 						...ToolPresets[resolveToolPresetName({ mode: config.mode })],
-						executors: toolExecutors,
+						// Sandboxed agents build overlay-backed executors from options
+						// and take no lead overrides; unsandboxed agents reuse the
+						// lead's executors as before.
+						...(sandboxTools.executorOptions
+							? { executorOptions: sandboxTools.executorOptions }
+							: { executors: toolExecutors }),
+						...(sandboxTools.enableBash === false ? { enableBash: false } : {}),
 					}),
 					config.extraTools,
 				)
@@ -358,6 +545,12 @@ export function createSessionSwarmTool(
 							cwd: config.cwd,
 							telemetry: config.telemetry,
 							...ToolPresets[resolveToolPresetName({ mode: config.mode })],
+							// A swarm worker runs on the lead's own executors, with no
+							// overlay and no command sandbox, so per escape-critical it
+							// gets no shell: an unsandboxed `run_commands` would write
+							// straight to the real workspace. Sandboxing this path is
+							// what would let the worker have commands back.
+							enableBash: false,
 							executors: toolExecutors,
 						}),
 						config.extraTools,

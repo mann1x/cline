@@ -8,6 +8,7 @@
 //
 // The factory does NOT handle UI concerns — that's the SdkController's job.
 
+import { join } from "node:path"
 import {
 	type AgentProviderConnection,
 	buildWorkspaceMetadata,
@@ -2117,6 +2118,11 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	const subagentsEnabled =
 		input.taskSettings?.subagentsEnabled ?? stateManager.getGlobalSettingsKey("subagentsEnabled") ?? false
 	Logger.log(`[Agents] Subagents ${subagentsEnabled ? "enabled" : "disabled"}`)
+	// Whether a delegated agent is offered `run_commands`. Its commands run in a
+	// per-agent sandbox; off by default, and off means no shell rather than one
+	// pointed at the real workspace.
+	const subagentCommandsEnabled =
+		input.taskSettings?.subagentCommandsEnabled ?? stateManager.getGlobalSettingsKey("subagentCommandsEnabled") ?? false
 	// Whether a turn that calls nothing is nudged to continue even when
 	// nothing says work is unfinished. On by default, which is what the
 	// extension did before this was a setting.
@@ -2299,6 +2305,31 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		fetch,
 	}
 
+	// A global model override for delegated agents (Features panel): they run
+	// this model on the session's own provider, overriding the lead's model for
+	// them alone. Empty means no override. It is not per-provider and carries no
+	// enable toggle — a value is the switch — and it never touches the lead. When
+	// set it supersedes the Agents tab's own connection.
+	const agentModelOverride = (stateManager.getGlobalSettingsKey("agentModelOverride") ?? "").trim()
+	const effectiveDelegatedConnection: DelegatedAgentConnectionOverride | undefined = agentModelOverride
+		? {
+				providerId: sdkProviderId,
+				modelId: agentModelOverride,
+				...(apiKey ? { apiKey } : {}),
+				...(baseUrl !== undefined ? { baseUrl } : {}),
+				...(knownModels && Object.keys(knownModels).length > 0 ? { knownModels } : {}),
+				// The lead's whole provider config with only the model swapped, so
+				// the agents inherit its proxy-aware fetch, sampler and caps.
+				providerConfig: {
+					...providerConfig,
+					modelId: agentModelOverride,
+				},
+			}
+		: delegatedAgentConnection
+	if (agentModelOverride) {
+		Logger.log(`[Agents] Global model override: delegated agents run ${agentModelOverride} on provider=${sdkProviderId}`)
+	}
+
 	const config: CoreSessionConfig = {
 		providerId: sdkProviderId,
 		modelId,
@@ -2309,7 +2340,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// (sdk-compaction.ts) budgets against config.knownModels[modelId] and
 		// otherwise falls back to a conservative 64k input budget.
 		...(knownModels && Object.keys(knownModels).length > 0 ? { knownModels } : {}),
-		...(delegatedAgentConnection ? { delegatedAgentConnection } : {}),
+		...(effectiveDelegatedConnection ? { delegatedAgentConnection: effectiveDelegatedConnection } : {}),
 		// One node is the connection above; a list starts at two.
 		...(agentNodes.length > 1 ? { agentNodes } : {}),
 		// Only when there is somewhere to escalate to. An `escalation` block
@@ -2381,6 +2412,12 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// implementation detail they have no way to choose between.
 		enableSpawnAgent: subagentsEnabled,
 		enableAgentTeams: subagentsEnabled,
+		// Whether those delegated agents are offered a (sandboxed) shell.
+		subagentCommandsEnabled,
+		// Where the shipped command-sandbox binaries live. The host resolves the
+		// actual files under here per platform; absent binaries just mean no
+		// delegated shell, so pointing at the folder is safe before it is filled.
+		sandboxBinariesDir: join(HostProvider.get().extensionFsPath, "assets", "sandbox"),
 		strongNudges: strongNudgesEnabled,
 		// Sent whether or not auto compaction is on. `enabled` is the only thing
 		// that decides whether the transcript gets compacted — the runtime

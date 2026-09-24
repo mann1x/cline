@@ -1,4 +1,4 @@
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { readFile as readFileFromDisk } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
@@ -61,6 +61,7 @@ import {
 } from "../../extensions/tools/task-progress";
 import type { TeamEvent } from "../../extensions/tools/team";
 import { clearAgentReports } from "../../extensions/tools/team/agent-reports";
+import type { DelegatedSandboxProvider } from "../../extensions/tools/team/agent-sandbox-executors";
 import {
 	agentEndpointKey,
 	delegationCanRunInParallel,
@@ -192,6 +193,7 @@ import {
 	createStruggleFeed,
 	StruggleDetector,
 } from "../safety/struggle-detector";
+import type { AgentSandbox, SandboxBinaries } from "../sandbox/agent-sandbox";
 import { PendingPromptsController } from "../turn-queue/pending-prompt-service";
 import { manifestToSessionRecord } from "./history";
 import { AgentEventBridge } from "./local/agent-event-bridge";
@@ -208,6 +210,7 @@ import {
 	createSessionSpawnTool,
 	createSessionSubAgentLifecycleCallbacks,
 	createSessionSwarmTool,
+	type SpawnToolDeps,
 	type SubAgentStartTracker,
 } from "./local/spawn-tool";
 import { loadUserFileContent } from "./local/user-files";
@@ -465,6 +468,24 @@ export interface LocalRuntimeHostOptions {
 	 * the AI gateway providers when issuing HTTP requests.
 	 */
 	fetch?: typeof fetch;
+}
+
+/**
+ * The native command-sandbox binaries under `dir`, or undefined when they are
+ * not usable here. Windows-only for now: the launcher and hook are a Detours
+ * injection, and there is no build for other platforms yet — an agent on those
+ * gets file isolation without a shell rather than an unsandboxed one.
+ */
+function resolveSandboxBinaries(dir?: string): SandboxBinaries | undefined {
+	if (!dir || process.platform !== "win32") {
+		return undefined;
+	}
+	const launcher = join(dir, "sandbox-launch.exe");
+	const hook = join(dir, "hook.dll");
+	if (!existsSync(launcher) || !existsSync(hook)) {
+		return undefined;
+	}
+	return { launcher, hook, platforms: ["win32"] };
 }
 
 export class LocalRuntimeHost implements RuntimeHost {
@@ -786,6 +807,58 @@ export class LocalRuntimeHost implements RuntimeHost {
 			invokeBackendOptional: (method: string, ...args: unknown[]) =>
 				this.invokeOptional(method, ...args),
 		};
+		// Delegated-agent sandboxes for this session, keyed by the spawning tool
+		// call. Shared between the spawn tool that creates them and the lifecycle
+		// callback that hands their changes back and disposes them.
+		const agentSandboxes = new Map<string, AgentSandbox>();
+		let resolvedSandboxDeps:
+			| Pick<SpawnToolDeps, "sandboxProvider" | "agentCommandsEnabled">
+			| undefined;
+		// Read from `startInput.config`, not `bootstrap.config`: the lifecycle
+		// callback that spreads this in is invoked *inside*
+		// prepareLocalRuntimeBootstrap (before `bootstrap` is assigned), so
+		// touching `bootstrap` here throws "reading 'config'" on every task start.
+		// These fields are set by the host and pass through the provider merge
+		// unchanged, so the resolved value is identical.
+		const sandboxSpawnDeps = (): Pick<
+			SpawnToolDeps,
+			"sandboxProvider" | "agentCommandsEnabled"
+		> => {
+			if (resolvedSandboxDeps) {
+				return resolvedSandboxDeps;
+			}
+			// Overlay file-isolation is the core feature and is decoupled from
+			// commands: it is always on for a delegated agent, so its writes land in
+			// a private copy and hand back as revisions rather than touching the
+			// lead's tree. The overlay is pure path-rewriting and needs no binary,
+			// so it works on every platform. The "Agents can run commands" toggle
+			// gates only the shell, and the shell additionally needs the native
+			// launcher (`setUpDelegatedSandbox`'s `commandsEnabled`). With commands
+			// off, an agent still gets its overlay -- just no `run_commands`.
+			const commandsEnabled =
+				startInput.config.subagentCommandsEnabled === true;
+			const workspaceRoot =
+				startInput.config.workspaceRoot ??
+				startInput.config.cwd ??
+				process.cwd();
+			// Overlays live under the persistent session directory, never tmpfs: a
+			// copy-up can be large, and a lost overlay loses the agent's work.
+			const overlaysBase = join(sessionDir, "agent-overlays");
+			const binaries = resolveSandboxBinaries(
+				startInput.config.sandboxBinariesDir,
+			);
+			const sandboxProvider: DelegatedSandboxProvider = {
+				workspaceRoot,
+				...(binaries ? { binaries } : {}),
+				overlayRootFor: (toolCallId) =>
+					join(overlaysBase, toolCallId.replace(/[^A-Za-z0-9_.-]/g, "_")),
+			};
+			resolvedSandboxDeps = {
+				sandboxProvider,
+				agentCommandsEnabled: commandsEnabled,
+			};
+			return resolvedSandboxDeps;
+		};
 		bootstrap = await prepareLocalRuntimeBootstrap({
 			input: startInput,
 			localRuntime: input.localRuntime,
@@ -818,7 +891,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			},
 			createSpawnTool: (options) =>
 				createSessionSpawnTool(
-					subAgentDeps,
+					{ ...subAgentDeps, ...sandboxSpawnDeps(), agentSandboxes },
 					bootstrap.config,
 					sessionId,
 					sessionToolExecutors,
@@ -826,14 +899,14 @@ export class LocalRuntimeHost implements RuntimeHost {
 				),
 			createSwarmTool: () =>
 				createSessionSwarmTool(
-					subAgentDeps,
+					{ ...subAgentDeps, ...sandboxSpawnDeps(), agentSandboxes },
 					bootstrap.config,
 					sessionId,
 					sessionToolExecutors,
 				),
 			createSubAgentLifecycleCallbacks: (config) =>
 				createSessionSubAgentLifecycleCallbacks(
-					subAgentDeps,
+					{ ...subAgentDeps, ...sandboxSpawnDeps(), agentSandboxes },
 					config,
 					sessionId,
 				),
@@ -2340,6 +2413,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 				startedAt,
 			pendingPrompt: manifest.prompt,
 			runtime,
+			// The session's file history, exposed so a delegated agent's changes
+			// can be folded in as new revisions on task end.
+			revisionLog: sessionRevisions.log,
 			agent,
 			started: false,
 			status:

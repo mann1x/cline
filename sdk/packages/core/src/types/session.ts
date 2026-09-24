@@ -1,5 +1,6 @@
 import type * as LlmsProviders from "@cline/llms";
 import type { AgentFinishReason } from "@cline/shared";
+import type { RevisionLog } from "../runtime/atomic/file-revisions";
 import type { AtomicProtocolSession } from "../runtime/atomic/session-protocol";
 import type { EscalationSession } from "../runtime/escalation/escalation-session";
 import type { SessionAccumulatedUsage } from "../runtime/host/runtime-host";
@@ -24,6 +25,14 @@ export type ActiveSession = {
 	exitCode?: number | null;
 	pendingPrompt?: string;
 	runtime: BuiltRuntime;
+	/**
+	 * The session's own file-revision log, exposed so a delegated agent's changes
+	 * can be handed back into it as new revisions (`#N`) the lead can inspect and
+	 * adopt. The same log the change protocol and compaction share; held here
+	 * because the hand-back happens from the spawn tool's lifecycle callback,
+	 * which reaches the session only through `getSession`.
+	 */
+	revisionLog?: RevisionLog;
 	agent: SessionRuntime;
 	started: boolean;
 	aborting: boolean;

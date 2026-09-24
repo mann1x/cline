@@ -451,6 +451,24 @@ export interface ShellExecutorOptions {
 	executionController?: RunCommandExecutionController;
 
 	/**
+	 * Transform the resolved spawn just before it runs. A delegated agent uses
+	 * this to root the command tree at its sandbox launcher, so the command and
+	 * every process it spawns read and write the agent's overlay rather than the
+	 * workspace. Absent for the lead, whose commands run directly.
+	 */
+	wrapSpawn?: (spec: {
+		executable: string;
+		args: string[];
+		cwd: string;
+		env: Record<string, string>;
+	}) => {
+		executable: string;
+		args: string[];
+		cwd: string;
+		env: Record<string, string>;
+	};
+
+	/**
 	 * How long a completed detached command log remains available before its
 	 * temporary directory is removed.
 	 *
@@ -1104,6 +1122,7 @@ export function createShellExecutor(
 		executionController,
 		processStartTokenProbe = probeProcessStartTokenAsync,
 		receipts,
+		wrapSpawn,
 	} = options;
 	const detachedLogRetentionMs = resolveDetachedLogRetentionMs(
 		options.detachedLogRetentionMs,
@@ -1130,16 +1149,25 @@ export function createShellExecutor(
 		// files to the set and a file this session has never read is not one it
 		// can be holding a stale view of.
 		const tracked = receipts?.paths() ?? [];
+		// The per-call environment wins over the executor's own: it is the
+		// caller saying "this command, and only this one, needs these". Both are
+		// merged over `process.env` at spawn, so the child is the only place
+		// either exists.
+		const baseSpec = {
+			executable: directExec ? command.command : shell,
+			args: invocation.args,
+			cwd,
+			env: callOptions?.env ? { ...env, ...callOptions.env } : env,
+		};
+		// A delegated agent roots the whole command tree at the sandbox launcher,
+		// so the command and everything it spawns reads and writes the overlay.
+		const spec = wrapSpawn ? wrapSpawn(baseSpec) : baseSpec;
 		const output = await spawnAndCollect(
 			{
-				executable: directExec ? command.command : shell,
-				args: invocation.args,
-				cwd,
-				// The per-call environment wins over the executor's own: it is the
-				// caller saying "this command, and only this one, needs these".
-				// Both are merged over `process.env` at spawn, so the child is the
-				// only place either exists.
-				env: callOptions?.env ? { ...env, ...callOptions.env } : env,
+				executable: spec.executable,
+				args: spec.args,
+				cwd: spec.cwd,
+				env: spec.env,
 				withhold: callOptions?.withhold,
 				input: invocation.input,
 			},

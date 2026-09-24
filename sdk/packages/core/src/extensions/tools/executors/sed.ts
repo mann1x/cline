@@ -21,6 +21,7 @@
  */
 import { promises as fs } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
 import { withFileLock } from "./file-locks";
 import { compilePosixRegex } from "./posix-regex";
 import { type ReadReceipts, readFileStamp } from "./read-receipts";
@@ -560,6 +561,8 @@ export interface SedExecutorOptions {
 	 * receipts exist to stop.
 	 */
 	receipts?: ReadReceipts;
+	/** A delegated agent's overlay; an in-place sed writes into it, not the workspace. */
+	overlay?: AgentOverlay;
 }
 
 export interface SedInput {
@@ -632,7 +635,7 @@ export interface SedFileOutcome {
 }
 
 export function createSedExecutor(options: SedExecutorOptions = {}) {
-	const { receipts } = options;
+	const { receipts, overlay } = options;
 
 	// `cwd` is taken per call, the way `EditorExecutor` takes it: the tool
 	// layer knows the workspace root and the executor is built before it is
@@ -654,7 +657,10 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 
 		const outcomes: SedFileOutcome[] = [];
 		for (const file of input.files) {
-			const filePath = isAbsolute(file) ? file : resolve(cwd, file);
+			const resolvedInput = isAbsolute(file) ? file : resolve(cwd, file);
+			const filePath = overlay
+				? await overlay.resolveWrite(resolvedInput)
+				: resolvedInput;
 			// One file at a time, and the whole read-modify-write inside the
 			// lock: `sed -i` reads, transforms and writes back exactly as
 			// `editor` does, so it loses an update in exactly the same way.

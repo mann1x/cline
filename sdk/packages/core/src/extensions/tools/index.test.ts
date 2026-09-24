@@ -84,3 +84,29 @@ describe("createBuiltinTools shell configuration", () => {
 		);
 	});
 });
+
+// The invariant every unsandboxed delegated path relies on: a trailing
+// `enableBash: false` overrides a preset that turned the shell on, so
+// `run_commands` is left off the list entirely. The team, configured-agent and
+// swarm builders pass it because those paths have no command sandbox, and an
+// unsandboxed shell writes straight to the real workspace (escape-critical).
+describe("withholding run_commands", () => {
+	const hasRunCommands = (
+		options: Parameters<typeof createBuiltinTools>[0],
+	): boolean =>
+		createBuiltinTools(options).some((tool) => tool.name === "run_commands");
+
+	it("keeps run_commands when the shell is enabled", () => {
+		expect(hasRunCommands({ enableBash: true })).toBe(true);
+	});
+
+	it("drops run_commands when enableBash is false, even over an enabling preset", () => {
+		// A preset turning the shell on, then the delegated override turning it
+		// off last — the spread order the builders use.
+		const enablingPreset = { enableBash: true };
+		expect(hasRunCommands({ ...enablingPreset, enableBash: false })).toBe(
+			false,
+		);
+		expect(hasRunCommands({ enableBash: false })).toBe(false);
+	});
+});

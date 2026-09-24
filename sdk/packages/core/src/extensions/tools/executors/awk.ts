@@ -18,6 +18,7 @@
  */
 import { promises as fs } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
 import { type Expr, parseAwk, type Rule, type Stmt } from "./awk-parser";
 import { compilePosixRegex } from "./posix-regex";
 import { type ReadReceipts, readFileStamp } from "./read-receipts";
@@ -862,6 +863,8 @@ export interface AwkExecutorOptions {
 	 * file the model has in fact just been through.
 	 */
 	receipts?: ReadReceipts;
+	/** A delegated agent's overlay; awk reads the agent's version of a file. */
+	overlay?: AgentOverlay;
 }
 
 export interface AwkInput {
@@ -898,7 +901,10 @@ export function createAwkExecutor(options: AwkExecutorOptions = {}) {
 
 		const sections: string[] = [];
 		for (const file of files) {
-			const filePath = isAbsolute(file) ? file : resolve(cwd, file);
+			const resolvedInput = isAbsolute(file) ? file : resolve(cwd, file);
+			const filePath = options.overlay
+				? await options.overlay.resolveRead(resolvedInput)
+				: resolvedInput;
 			let content: string;
 			try {
 				content = await fs.readFile(filePath, "utf8");

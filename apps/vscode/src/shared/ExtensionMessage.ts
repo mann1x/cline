@@ -219,6 +219,8 @@ export interface ExtensionState {
 	compactionStrategy?: string
 	webSearchEnabled?: boolean
 	subagentsEnabled?: boolean
+	subagentCommandsEnabled?: boolean
+	agentModelOverride?: string
 	strongNudgesEnabled?: boolean
 	worktreesEnabled?: ClineFeatureSetting
 	favoritedModelIds: string[]

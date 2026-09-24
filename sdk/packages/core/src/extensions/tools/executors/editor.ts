@@ -7,6 +7,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentToolContext } from "@cline/shared";
+import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
 import {
 	describeDelimiterBalance,
 	PRESCRIPTION_MARKER,
@@ -70,6 +71,13 @@ export interface EditorExecutorOptions {
 	 * wrong default for an embedder wiring the tools up one at a time.
 	 */
 	receipts?: ReadReceipts;
+
+	/**
+	 * A delegated agent's private overlay. When present every path is resolved
+	 * through it: edits copy the workspace file up and write the agent's copy,
+	 * so the lead's tree is never touched. Absent for the lead itself.
+	 */
+	overlay?: AgentOverlay;
 }
 
 /**
@@ -1771,7 +1779,19 @@ export function createEditorExecutor(
 		restrictToCwd = true,
 		maxDiffLines = 200,
 		receipts,
+		overlay,
 	} = options;
+
+	// Resolve a path to the real file to operate on. With an overlay, this copies
+	// the workspace file up and returns the overlay copy, so a read-modify-write
+	// edit reads the lead's content and writes only into the agent's overlay.
+	const resolvePath = async (
+		cwd: string,
+		inputPath: string,
+	): Promise<string> => {
+		const resolved = resolveFilePath(cwd, inputPath, restrictToCwd);
+		return overlay ? overlay.resolveWrite(resolved) : resolved;
+	};
 
 	/**
 	 * Every no-op edit this session has been refused, and how often.
@@ -1918,7 +1938,7 @@ export function createEditorExecutor(
 		cwd: string,
 		context: AgentToolContext,
 	): Promise<string> => {
-		const filePath = resolveFilePath(cwd, input.path, restrictToCwd);
+		const filePath = await resolvePath(cwd, input.path);
 		// The whole edit, not just the write. An edit reads the file, computes
 		// the result and writes it back, and those three steps have to be one
 		// step with respect to other writers: two agents that each read before
@@ -2190,7 +2210,7 @@ export function createEditorExecutor(
 		const result = await edit(input, cwd, context);
 		let filePath: string;
 		try {
-			filePath = resolveFilePath(cwd, input.path, restrictToCwd);
+			filePath = await resolvePath(cwd, input.path);
 		} catch {
 			return result;
 		}
