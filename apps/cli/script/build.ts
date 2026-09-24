@@ -279,14 +279,17 @@ for (const item of targets) {
 	// The delegated-agent command-sandbox binaries for this target, so a
 	// delegated agent's run_commands can be sandboxed on the installed CLI. The
 	// core host reads them from `assets/sandbox` next to the binary (see
-	// resolveSandboxBinariesDir). A target with no binary — darwin until M1
-	// lands, win32/arm64 — is skipped and gets file-isolation without a
-	// sandboxed shell.
+	// resolveSandboxBinariesDir). A target whose binary is not yet in
+	// `assets/sandbox` is skipped and gets file-isolation without a sandboxed
+	// shell. Windows ships the Rust launcher plus the injected `hook.dll`; Linux
+	// and macOS ship an arch-suffixed launcher (macOS with a `darwin-` infix).
 	const sandboxSrcDir = join(rootDir, "apps/vscode/assets/sandbox");
 	const sandboxFiles =
 		item.os === "win32"
-			? ["sandbox-launch.exe", "hook.dll"]
-			: [`cerebriline-sandbox-${item.arch}`];
+			? ["cerebriline-sandbox.exe", "hook.dll"]
+			: item.os === "darwin"
+				? [`cerebriline-sandbox-darwin-${item.arch}`]
+				: [`cerebriline-sandbox-${item.arch}`];
 	const sandboxDest = join(cliDir, `dist/${dirName}/assets/sandbox`);
 	for (const file of sandboxFiles) {
 		const src = join(sandboxSrcDir, file);

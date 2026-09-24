@@ -17,11 +17,15 @@ import { AgentOverlay, type OverlayChange } from "./overlay-fs";
 
 /** The native command-sandbox binary and its hook library. */
 export interface SandboxBinaries {
-	/** Absolute path to sandbox-launch(.exe). */
+	/** Absolute path to the `cerebriline-sandbox` launcher (`.exe` on Windows). */
 	launcher: string;
-	/** Absolute path to the hook library the launcher injects. */
+	/**
+	 * Absolute path to the hook library the launcher injects (Windows `hook.dll`);
+	 * on Linux/macOS there is none, so this points back at the launcher, which
+	 * ignores it — keeping `wrapSpawn`'s `[hook, log, cmd, ...]` shape uniform.
+	 */
 	hook: string;
-	/** Platforms the binaries support; defaults to ["win32"]. */
+	/** Platforms the binaries support. */
 	platforms?: NodeJS.Platform[];
 }
 

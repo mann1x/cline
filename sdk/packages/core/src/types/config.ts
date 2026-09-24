@@ -262,10 +262,12 @@ export interface CoreRuntimeFeatures {
 	 */
 	subagentCommandsEnabled?: boolean;
 	/**
-	 * Directory holding the native command-sandbox binaries (`sandbox-launch.exe`
-	 * and `hook.dll`), which the host ships. When present and the binaries exist
-	 * for this platform, a delegated agent's commands are rooted there; when
-	 * absent, agents get file isolation but no shell.
+	 * Directory holding the native command-sandbox binaries (per platform:
+	 * `cerebriline-sandbox-<arch>` on Linux, `-darwin-<arch>` on macOS,
+	 * `cerebriline-sandbox.exe` + `hook.dll` on Windows), which the host ships.
+	 * When present and the binaries exist for this platform, a delegated agent's
+	 * commands are rooted there; when absent, agents get file isolation but no
+	 * shell.
 	 */
 	sandboxBinariesDir?: string;
 	/**
