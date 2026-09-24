@@ -1,0 +1,149 @@
+name: sandbox-binaries
+
+# Builds the six command-sandbox launchers on their native runners and commits
+# the refreshed bytes into apps/vscode/assets/sandbox/. This is the "CI is the
+# builder" half of the sandbox: the same build steps sandbox-test.yml verifies,
+# but producing the shipped artifacts. It runs only when the sandbox source
+# changes, so a release with no sandbox change reuses the committed binaries
+# untouched (see docs/protocols/BUILD-RELEASE-DEPLOY.md, "The command-sandbox
+# binaries"). The commit touches apps/vscode/assets/** — disjoint from this
+# workflow's sandbox/** trigger — so it never re-triggers itself.
+
+on:
+    push:
+        branches:
+            - main
+        paths:
+            - "sandbox/cerebriline-sandbox/**"
+            - "sandbox/w1-spike/**"
+            - ".github/workflows/sandbox-binaries.yml"
+    workflow_dispatch:
+
+# Never let two refreshes race to commit the same files.
+concurrency:
+    group: sandbox-binaries
+    cancel-in-progress: false
+
+permissions:
+    contents: read
+
+jobs:
+    linux:
+        runs-on: ubuntu-latest
+        name: Build Linux (x64 + arm64)
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+              with:
+                  targets: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu
+            - name: Install the arm64 cross-linker
+              run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+            - name: Build + stage
+              working-directory: sandbox/cerebriline-sandbox
+              run: ./build.sh
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: sandbox-linux
+                  path: |
+                      apps/vscode/assets/sandbox/cerebriline-sandbox-x64
+                      apps/vscode/assets/sandbox/cerebriline-sandbox-arm64
+                  if-no-files-found: error
+                  retention-days: 7
+
+    macos:
+        runs-on: macos-14
+        name: Build macOS (arm64 + x64)
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+              with:
+                  targets: aarch64-apple-darwin, x86_64-apple-darwin
+            - name: Build both darwin targets
+              working-directory: sandbox/cerebriline-sandbox
+              run: |
+                  set -euo pipefail
+                  mkdir -p out
+                  cargo build --release --target aarch64-apple-darwin
+                  cargo build --release --target x86_64-apple-darwin
+                  cp target/aarch64-apple-darwin/release/cerebriline-sandbox out/cerebriline-sandbox-darwin-arm64
+                  cp target/x86_64-apple-darwin/release/cerebriline-sandbox out/cerebriline-sandbox-darwin-x64
+                  chmod 755 out/cerebriline-sandbox-darwin-*
+                  shasum -a 256 out/cerebriline-sandbox-darwin-*
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: sandbox-macos
+                  path: sandbox/cerebriline-sandbox/out/cerebriline-sandbox-darwin-*
+                  if-no-files-found: error
+                  retention-days: 7
+
+    windows:
+        runs-on: windows-latest
+        name: Build Windows (exe + hook.dll)
+        env:
+            DETOURS_LIB_DIR: ${{ github.workspace }}\sandbox\w1-spike\Detours\lib.X64
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+            - name: Build Microsoft Detours + hook.dll
+              working-directory: sandbox/w1-spike
+              shell: cmd
+              run: build.bat
+            - name: Build the Rust launcher
+              working-directory: sandbox/cerebriline-sandbox
+              run: cargo build --release
+            - name: Collect artifacts
+              shell: pwsh
+              run: |
+                  New-Item -ItemType Directory -Force -Path out | Out-Null
+                  Copy-Item sandbox/cerebriline-sandbox/target/release/cerebriline-sandbox.exe out/
+                  Copy-Item sandbox/w1-spike/hook.dll out/
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: sandbox-windows
+                  path: |
+                      out/cerebriline-sandbox.exe
+                      out/hook.dll
+                  if-no-files-found: error
+                  retention-days: 7
+
+    commit:
+        needs: [linux, macos, windows]
+        runs-on: ubuntu-latest
+        name: Commit the refreshed binaries
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/checkout@v4
+            - name: Download all built binaries
+              uses: actions/download-artifact@v4
+              with:
+                  path: incoming
+            - name: Stage into assets/sandbox
+              run: |
+                  set -euo pipefail
+                  dest=apps/vscode/assets/sandbox
+                  mkdir -p "$dest"
+                  cp incoming/sandbox-linux/cerebriline-sandbox-x64 "$dest/"
+                  cp incoming/sandbox-linux/cerebriline-sandbox-arm64 "$dest/"
+                  cp incoming/sandbox-macos/cerebriline-sandbox-darwin-x64 "$dest/"
+                  cp incoming/sandbox-macos/cerebriline-sandbox-darwin-arm64 "$dest/"
+                  cp incoming/sandbox-windows/cerebriline-sandbox.exe "$dest/"
+                  cp incoming/sandbox-windows/hook.dll "$dest/"
+                  chmod 755 "$dest"/cerebriline-sandbox-x64 "$dest"/cerebriline-sandbox-arm64 \
+                            "$dest"/cerebriline-sandbox-darwin-x64 "$dest"/cerebriline-sandbox-darwin-arm64
+                  # The W1 fold retires the old C++ launcher; drop it if present.
+                  git rm --quiet --ignore-unmatch "$dest/sandbox-launch.exe"
+                  rm -rf incoming
+            - name: Commit if the bytes changed
+              run: |
+                  set -euo pipefail
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  git add apps/vscode/assets/sandbox
+                  if git diff --cached --quiet; then
+                      echo "sandbox binaries unchanged; nothing to commit"
+                      exit 0
+                  fi
+                  git commit -m "assets: refresh command-sandbox binaries from CI [skip ci]" \
+                             -m "Built by .github/workflows/sandbox-binaries.yml from ${GITHUB_SHA}."
+                  git push
