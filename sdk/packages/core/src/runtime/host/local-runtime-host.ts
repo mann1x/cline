@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync } from "node:fs";
 import { readFile as readFileFromDisk } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
@@ -471,21 +471,52 @@ export interface LocalRuntimeHostOptions {
 }
 
 /**
- * The native command-sandbox binaries under `dir`, or undefined when they are
- * not usable here. Windows-only for now: the launcher and hook are a Detours
- * injection, and there is no build for other platforms yet — an agent on those
- * gets file isolation without a shell rather than an unsandboxed one.
+ * The native command-sandbox launcher under `dir`, or undefined when there is
+ * none for this platform. Windows is the Detours launcher + hook DLL; Linux is
+ * the `cerebriline-sandbox` binary (user namespace + overlayfs, no injected
+ * library — the `hook` field is unused there and points at the launcher itself
+ * so the shared `wrapSpawn` shape holds). A platform with no launcher gets file
+ * isolation without a shell rather than an unsandboxed one.
  */
 function resolveSandboxBinaries(dir?: string): SandboxBinaries | undefined {
-	if (!dir || process.platform !== "win32") {
+	if (!dir) {
 		return undefined;
 	}
-	const launcher = join(dir, "sandbox-launch.exe");
-	const hook = join(dir, "hook.dll");
-	if (!existsSync(launcher) || !existsSync(hook)) {
-		return undefined;
+	if (process.platform === "win32") {
+		const launcher = join(dir, "sandbox-launch.exe");
+		const hook = join(dir, "hook.dll");
+		if (!existsSync(launcher) || !existsSync(hook)) {
+			return undefined;
+		}
+		return { launcher, hook, platforms: ["win32"] };
 	}
-	return { launcher, hook, platforms: ["win32"] };
+	if (process.platform === "linux") {
+		// Pick the launcher for this CPU. Shipped arch-suffixed
+		// (`cerebriline-sandbox-x64` / `-arm64`); a flat `cerebriline-sandbox`
+		// is accepted as a fallback for a single-arch build.
+		const suffix = (
+			{ x64: "x64", arm64: "arm64" } as Record<string, string | undefined>
+		)[process.arch];
+		const names = suffix
+			? [`cerebriline-sandbox-${suffix}`, "cerebriline-sandbox"]
+			: ["cerebriline-sandbox"];
+		const launcher = names.map((n) => join(dir, n)).find(existsSync);
+		if (!launcher) {
+			return undefined;
+		}
+		// A vsix is a zip and may drop the executable bit on extraction; restore
+		// it best-effort so the launcher can run.
+		try {
+			chmodSync(launcher, 0o755);
+		} catch {
+			// Read-only install or already executable; the spawn will report if
+			// it truly cannot run.
+		}
+		// No injected library on Linux; the launcher ignores argv[1]. Point it at
+		// the launcher so wrapSpawn's `[hook, log, cmd, ...]` shape is uniform.
+		return { launcher, hook: launcher, platforms: ["linux"] };
+	}
+	return undefined;
 }
 
 export class LocalRuntimeHost implements RuntimeHost {

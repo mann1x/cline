@@ -1,0 +1,4 @@
+# Cross-linker for the arm64 Linux build (build.sh's second target). The x86_64
+# host build needs nothing here.
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"

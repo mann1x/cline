@@ -261,8 +261,25 @@ export function appendHandbackNote(
 	if (!context.result || typeof context.result.text !== "string") {
 		return;
 	}
+	// Whether the agent gave an answer of its own -- read before we append to it.
+	// An empty answer is the tell that the run ended without the agent saying
+	// what it did, and the usual cause is a final turn that produced no text and
+	// no *readable* tool call: a tool call emitted inside the reasoning channel
+	// is swallowed, so the loop sees "no more tool calls" and finishes as
+	// "completed". The lead must not read that silence as success, and if the
+	// agent handed changes back it must be told they are unvetted (pandorum
+	// 2026-09-24, agent "fix-manic-miner": empty summary, a revision that had
+	// not converged, because the fix it worked out was lost inside its thinking).
+	const answered = context.result.text.trim().length > 0;
+	const finishReason = context.result.finishReason;
+	const noAnswerNote =
+		finishReason === "completed"
+			? `\n\n---\nThis agent ended without an answer of its own: its final turn produced no text and no readable tool call. That usually means an action it attempted could not be read — for example a tool call emitted inside its reasoning — so it may not have finished. Do not treat its run as successful.`
+			: `\n\n---\nThis agent ended early (${finishReason}) without an answer of its own, so it may not have finished. Do not treat its run as successful.`;
 	if (handed.length === 0) {
-		context.result.text += `\n\n---\nThis agent worked on a private copy of the workspace and left your files unchanged; it recorded no file changes to hand back.`;
+		context.result.text += answered
+			? `\n\n---\nThis agent worked on a private copy of the workspace and left your files unchanged; it recorded no file changes to hand back.`
+			: noAnswerNote;
 		return;
 	}
 	const verb = (kind: string): string =>
@@ -274,6 +291,15 @@ export function appendHandbackNote(
 		)
 		.join("\n");
 	const first = handed[0]?.index ?? 1;
+	if (!answered) {
+		// Changes handed back by an agent that never said whether they work: make
+		// the lead inspect them rather than adopt them on faith.
+		context.result.text +=
+			noAnswerNote +
+			`\n\nIt did leave changes on its private copy, held for you as revisions (NOT written to disk). Because it gave no summary, these are UNVETTED and may be an unfinished or non-working edit:\n${lines}\n` +
+			`Inspect one before trusting it: \`read_files\` with \`revision: "#${first}"\`, then run your own check. To apply it: \`restore_file\` with the same \`revision\`. Do not verify by reading your current copy — it does not contain these changes yet.`;
+		return;
+	}
 	context.result.text +=
 		`\n\n---\nThe agent worked on a private copy of the workspace, so your own files are UNCHANGED. Its changes are held for you as revisions, not written to disk:\n${lines}\n` +
 		`To see a version: \`read_files\` with \`revision: "#${first}"\`. To apply it to your workspace: \`restore_file\` with the same \`revision\`. ` +

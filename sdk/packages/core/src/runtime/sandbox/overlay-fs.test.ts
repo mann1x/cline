@@ -91,4 +91,16 @@ describe("AgentOverlay", () => {
 		expect(byRel["sub/new.txt"]).toBe("created");
 		expect(byRel["c.txt"]).toBe("deleted");
 	});
+
+	it("does not hand back a copy-up whose content still equals the workspace", async () => {
+		// A file the agent opened for write but left byte-identical (or edited and
+		// then reverted) sits in the overlay as a copy-up equal to the lower. It is
+		// not a change and must not become a revision — the no-op-revision guard.
+		await overlay.write("a.txt", "A"); // same bytes as the workspace
+		await overlay.write("b.txt", "B-EDIT"); // a real change, for contrast
+		expect(await fs.readdir(ov)).toContain("a.txt"); // the copy-up is on disk
+		const rels = (await overlay.changedFiles()).map((c) => c.rel);
+		expect(rels).not.toContain("a.txt"); // filtered: identical to the workspace
+		expect(rels).toContain("b.txt"); // the real change survives
+	});
 });

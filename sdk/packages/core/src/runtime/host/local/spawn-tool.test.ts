@@ -144,6 +144,45 @@ describe("the hand-back note on the agent's answer", () => {
 		expect(text).toContain('revision: "#3"');
 	});
 
+	it("warns the handed-back changes are unvetted when the agent gave no answer", () => {
+		const context = {
+			input: { name: "fix-manic-miner" },
+			// The swallowed-tool-call shape: empty answer, a normal "completed"
+			// finish because the loop saw no tool call on the final turn.
+			result: { text: "", finishReason: "completed" },
+		} as never as Parameters<typeof appendHandbackNote>[0];
+
+		appendHandbackNote(context, "fix-manic-miner", [
+			{ rel: "manic_miner.html", index: 2, kind: "modified" },
+		]);
+
+		const text = (context as { result: { text: string } }).result.text;
+		expect(text).toContain("without an answer of its own");
+		expect(text).toContain("UNVETTED");
+		// The revision is still named so the lead can go and inspect it.
+		expect(text).toContain("manic_miner.html — revision #2");
+		expect(text).toContain('revision: "#2"');
+		// It must not read as a success, and must not use the confident wording.
+		expect(text).toContain("Do not treat its run as successful");
+		expect(text).not.toContain("Its changes are held for you as revisions");
+	});
+
+	it("flags an empty-answer run that changed nothing as possibly unfinished", () => {
+		const context = {
+			input: { name: "prober" },
+			result: { text: "   ", finishReason: "completed" },
+		} as never as Parameters<typeof appendHandbackNote>[0];
+
+		appendHandbackNote(context, "prober", []);
+
+		const text = (context as { result: { text: string } }).result.text;
+		expect(text).toContain("without an answer of its own");
+		expect(text).toContain("Do not treat its run as successful");
+		// The confident "nothing to hand back" wording is for an agent that
+		// actually answered; it must not be used for a silent, empty run.
+		expect(text).not.toContain("recorded no file changes to hand back");
+	});
+
 	it("still tells the lead when the agent changed nothing", () => {
 		const context = {
 			input: { name: "checker" },

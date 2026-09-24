@@ -48,6 +48,7 @@ import {
 	normalizeProviderId,
 } from "./utils/provider-auth";
 import { resolveCliReasoning } from "./utils/reasoning";
+import { resolveSandboxBinariesDir } from "./utils/sandbox-binaries";
 import {
 	resolveStartupCompactionMode,
 	resolveStartupMode,
@@ -1399,6 +1400,14 @@ export async function runCli(): Promise<void> {
 			toolPolicies,
 			enableSpawnAgent: !isYoloMode,
 			enableAgentTeams: !isYoloMode,
+			// Let a delegated agent run commands in the overlay sandbox, off by
+			// default (as in the desktop app) and opted into with
+			// CLINE_SUBAGENT_COMMANDS=1. The binaries dir is always resolved: the
+			// file-isolation overlay is always on, and the command sandbox turns on
+			// only when this flag and a platform launcher are both present.
+			subagentCommandsEnabled:
+				process.env.CLINE_SUBAGENT_COMMANDS?.trim() === "1",
+			sandboxBinariesDir: resolveSandboxBinariesDir(),
 			enableTools: true,
 			cwd,
 			workspaceRoot,
