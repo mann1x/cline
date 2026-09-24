@@ -4,10 +4,10 @@
 //! shares the same private view as its in-process file tools and never touches
 //! the lead's files.
 //!
-//! One binary, one CLI, a per-OS backend chosen at build time. Today: Linux
-//! (L1, user namespace + overlayfs). Windows keeps its proven Detours launcher
-//! until it is folded in here; macOS (M1, APFS clonefile) is planned. See
-//! PLANS.md §10.
+//! One binary, one CLI, a per-OS backend chosen at build time: Linux (L1 user
+//! namespace + overlayfs, L2 ptrace fallback), macOS (M1 APFS clonefile), Windows
+//! (W1 Detours injection — the launcher folded in here; the C++ `hook.dll` it
+//! loads stays separate). See PLANS.md §10.
 //!
 //! ## Invocation (matches `wrapSpawn` in `agent-sandbox.ts`)
 //!
