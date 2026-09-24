@@ -4,8 +4,9 @@ import { fileURLToPath } from "node:url";
 
 /**
  * The directory holding the delegated-agent command-sandbox binaries
- * (`cerebriline-sandbox-<arch>` on Linux, `sandbox-launch.exe` + `hook.dll` on
- * Windows). The core host reads a platform binary from here to sandbox a
+ * (`cerebriline-sandbox-<arch>` on Linux, `-darwin-<arch>` on macOS,
+ * `cerebriline-sandbox.exe` + `hook.dll` on Windows). The core host reads a
+ * platform binary from here to sandbox a
  * delegated agent's `run_commands`; when none is found it withholds the shell
  * and the agent still gets file-isolation.
  *

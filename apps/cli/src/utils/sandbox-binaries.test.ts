@@ -17,7 +17,9 @@ describe("resolveSandboxBinariesDir", () => {
 		const anyLauncher = [
 			"cerebriline-sandbox-x64",
 			"cerebriline-sandbox-arm64",
-			"sandbox-launch.exe",
+			"cerebriline-sandbox-darwin-x64",
+			"cerebriline-sandbox-darwin-arm64",
+			"cerebriline-sandbox.exe",
 		].some((name) => existsSync(`${dir}/${name}`));
 		expect(anyLauncher).toBe(true);
 	});

@@ -93,15 +93,14 @@ exact one CI verified; the commit is the "change" that regenerated it; and every
 release in between reuses it untouched. `fork-release.yml` has no `cargo`/Detours
 step — it only packages.
 
-> **Status (2026-09-24).** The L1/L2/M1/W1 backends and the three verifying CI
-> legs are green and on `main`. Still to land before the six-binary set above is
-> what `assets/sandbox/` actually carries: the **auto-commit refresh job**; the
-> resolver rename `sandbox-launch.exe` → `cerebriline-sandbox.exe` (the W1 fold
-> gives the Windows launcher the same CLI shape under the unified name) in
-> `local-runtime-host.ts`, `apps/cli/.../sandbox-binaries.ts`, `build.ts` and
-> their tests; and the **darwin** resolver entries. Today `assets/sandbox/` still
-> holds the pre-fold four: `sandbox-launch.exe`, `hook.dll`,
-> `cerebriline-sandbox-{x64,arm64}`.
+> **Status (2026-09-24).** Complete. The L1/L2/M1/W1 backends and the three
+> verifying CI legs are green on `main`; the auto-commit refresh job
+> (`sandbox-binaries.yml`) has populated `assets/sandbox/` with the **six-binary
+> set** above (the pre-fold `sandbox-launch.exe` retired); and the resolver
+> (`local-runtime-host.ts`, `apps/cli/.../sandbox-binaries.ts`, `build.ts` and
+> their tests) resolves `cerebriline-sandbox.exe` on Windows and the `darwin-`
+> launchers on macOS. From here a `sandbox/` source change refreshes the affected
+> binaries automatically; a release just packages them.
 
 ### Building a launcher by hand (local / pandorum)
 
@@ -310,23 +309,18 @@ a command on the affected OS. Assert them by name:
 
 ```bash
 unzip -l "$VSIX" | grep -E \
-  'assets/sandbox/(sandbox-launch\.exe|hook\.dll|cerebriline-sandbox-(x64|arm64))'
-# expect FOUR lines today: the Windows pair AND both Linux launchers.
+  'assets/sandbox/(cerebriline-sandbox\.exe|hook\.dll|cerebriline-sandbox(-darwin)?-(x64|arm64))'
+# expect SIX lines: the Windows pair, both Linux launchers, both macOS launchers.
 ```
 
 The count is load-bearing: miss the set for an OS and that OS silently loses
 `run_commands` for delegated agents — the launcher resolves to `undefined`, the
 shell is withheld, and only the in-process **overlay** (file isolation) still
-works. Three lines, not four, means the Linux launchers didn't rebuild into
-`assets/` before packaging, and a Windows-only `.vsix` is the result.
-
-**Which set to expect** is the set the resolver names for the shipped code — see
-*The command-sandbox binaries* above. It is **four today** (the pre-fold Windows
-`sandbox-launch.exe`/`hook.dll` plus the two Linux launchers) and becomes **six**
-once the W1 fold's `cerebriline-sandbox.exe` and the two macOS `-darwin-` launchers
-are committed into `assets/sandbox/` by the auto-commit refresh; update this grep
-and the count in the same commit that lands them, so the assertion always matches
-the resolver.
+works. Fewer than six means a platform's launcher is not in `assets/sandbox/` —
+the auto-commit refresh (`sandbox-binaries.yml`) never ran or a build leg failed
+— and that OS ships without a sandboxed shell. The set must match the resolver
+(*The command-sandbox binaries* above); if a platform is ever dropped or added,
+update this grep and the count in the same commit.
 
 ### 7. Deploy to pandorum
 
