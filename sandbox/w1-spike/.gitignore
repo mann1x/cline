@@ -1,0 +1,10 @@
+# Microsoft Detours is cloned + built by build.bat (MIT, third-party); never
+# commit it. Build artifacts are produced by build.bat / CI, not tracked.
+Detours/
+*.dll
+*.exe
+*.lib
+*.obj
+*.exp
+*.pdb
+*.log
