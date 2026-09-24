@@ -444,6 +444,9 @@ describe("tool calls the provider could not parse", () => {
 		"could not parse the function call",
 		"invalid tool_call in response",
 		"malformed function arguments",
+		// llama.cpp's streaming parser, verbatim from a swarm worker it ended
+		// (the "Previous" dump runs on for kilobytes of the call's arguments).
+		"Invalid diff: now finding less tool calls!\n  Previous (1):\n    - name: 'editor', args: '{\"new_text\":\"    dIt(c,x){this.it.forEach(it=>{",
 	])("classifies %j as recoverable", (message) => {
 		expect(classifyProviderError(new Error(message))).toBe(
 			"tool_call_unparsable",
@@ -460,6 +463,9 @@ describe("tool calls the provider could not parse", () => {
 		"failed to parse response body",
 		"invalid JSON in request",
 		"rate limit exceeded",
+		// Same parser, a content diff rather than a tool call: nothing was
+		// asked of a tool, so there is no call to ask for again.
+		"Invalid diff: 'abc' not found at start of 'xyz'",
 	])("leaves %j alone", (message) => {
 		expect(classifyProviderError(new Error(message))).not.toBe(
 			"tool_call_unparsable",
