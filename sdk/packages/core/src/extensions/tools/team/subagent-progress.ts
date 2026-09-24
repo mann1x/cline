@@ -65,6 +65,23 @@ export function reportSubagentPlaced(
 }
 
 /**
+ * The agent has ended: its row finishes now, with its result, and not when the
+ * whole call does.
+ *
+ * A batch or a swarm closed every row at the call's end, so an agent that was
+ * done sat on a "running" row, its output showing, until the slowest one
+ * finished -- sixteen rows running on 2026-09-24 while the server processed
+ * one. `report` is the member's own entry of the call's `results`, and an
+ * `error` on it is what marks the row failed.
+ */
+export function reportSubagentFinished(
+	emitUpdate: ((update: unknown) => void) | undefined,
+	report: object,
+): void {
+	emitUpdate?.({ finished: report });
+}
+
+/**
  * Keep an agent's row honest while its requests wait for room on the engine.
  *
  * A PolyKV worker whose window is full is held inside the opencoti vendor's

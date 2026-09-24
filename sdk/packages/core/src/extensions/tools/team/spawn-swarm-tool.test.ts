@@ -532,6 +532,56 @@ describe("spawn_swarm worker rows", () => {
 		});
 	});
 
+	// A done worker's row stayed "running" until the slowest worker ended:
+	// sixteen rows running on pandorum while the server processed one.
+	it("finishes a worker's row when that worker ends, not with the round", async () => {
+		const updates: unknown[] = [];
+		let releaseSlow: () => void = () => {};
+		const slow = new Promise<void>((resolve) => {
+			releaseSlow = resolve;
+		});
+		const tool = createSpawnSwarmTool({
+			pools: stubPools({ snapshotFails: true }).source,
+			runWorker: async ({ task }) => {
+				if (task === "slow") await slow;
+				return agentResult('```json\n{"done":["ok"]}\n```');
+			},
+		});
+		const running = tool.execute(
+			{
+				systemPrompt: "s",
+				tasks: [
+					{ name: "fast", task: "fast" },
+					{ name: "slow", task: "slow" },
+				],
+			},
+			rowContext(updates),
+		);
+		await vi.waitFor(() =>
+			expect(updates).toContainEqual(
+				expect.objectContaining({
+					member: 0,
+					finished: expect.objectContaining({ name: "fast" }),
+				}),
+			),
+		);
+		expect(
+			updates.some(
+				(u) =>
+					(u as { member?: number; finished?: unknown }).member === 1 &&
+					(u as { finished?: unknown }).finished,
+			),
+		).toBe(false);
+		releaseSlow();
+		await running;
+		expect(updates).toContainEqual(
+			expect.objectContaining({
+				member: 1,
+				finished: expect.objectContaining({ name: "slow" }),
+			}),
+		);
+	});
+
 	it("gives a counted swarm a row per worker, not one for the call", async () => {
 		const updates: Array<Record<string, unknown>> = [];
 		const tool = createSpawnSwarmTool({

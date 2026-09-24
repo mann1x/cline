@@ -5520,6 +5520,48 @@ describe("a spawn_agent batch", () => {
 	})
 })
 
+describe("a batch member that ends before the call", () => {
+	const send = (state: MessageTranslatorState, event: Record<string, unknown>) =>
+		translateSessionEvent(
+			{ type: "agent_event", payload: { sessionId: "session-1", event: event as unknown as AgentEvent } },
+			state,
+		)
+
+	// pandorum 2026-09-24: sixteen rows "running" while the server processed
+	// one; most of them had finished and sat there showing their output.
+	it("finishes its own row while the others run", () => {
+		const state = new MessageTranslatorState()
+		send(state, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-1",
+			input: {
+				agents: [
+					{ name: "one", task: "a" },
+					{ name: "two", task: "b" },
+					{ name: "three", task: "c" },
+				],
+			},
+		})
+		const update = (payload: Record<string, unknown>) =>
+			send(state, {
+				type: "content_update",
+				contentType: "tool",
+				toolName: "spawn_agent",
+				toolCallId: "call-1",
+				update: payload,
+			})
+
+		update({ member: 0, finished: { name: "one", text: "all good", usage: { inputTokens: 5, outputTokens: 2 } } })
+		update({ member: 2, finished: { name: "three", error: "stopped" } })
+
+		expect(state.getSpawnAgentItems().map((item) => item.status)).toEqual(["completed", "running", "failed"])
+		expect(state.getSpawnAgentItems()[0]).toMatchObject({ result: "all good", outputTokens: 2 })
+		expect(state.getSpawnAgentItems()[2]?.error).toBe("stopped")
+	})
+})
+
 // ---------------------------------------------------------------------------
 // configuredAgentUsage
 // ---------------------------------------------------------------------------

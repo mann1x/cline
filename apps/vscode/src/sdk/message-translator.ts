@@ -2392,6 +2392,21 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						if (typeof updateData.nodeLabel === "string") entry.nodeLabel = updateData.nodeLabel
 						if (typeof updateData.genTps === "number" && Number.isFinite(updateData.genTps))
 							entry.genTps = updateData.genTps
+						// Ended, on its own: a batch or swarm member's row finishes
+						// when that agent does, not with the call. Until then a done
+						// agent sat on a "running" row, its output showing, until the
+						// slowest of the round finished.
+						const finished = updateData.finished
+						if (finished && typeof finished === "object") {
+							const report = finished as Record<string, unknown>
+							applySpawnAgentOutput(entry, report)
+							if (typeof report.error === "string" && report.error) {
+								entry.status = "failed"
+								entry.error = report.error
+							} else {
+								entry.status = "completed"
+							}
+						}
 					}
 				}
 				// Emit a running status update

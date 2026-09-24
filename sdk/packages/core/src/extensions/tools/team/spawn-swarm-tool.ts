@@ -55,6 +55,7 @@ import {
 	registerSubagentCancellation,
 	subagentCancelId,
 } from "./subagent-cancellation";
+import { reportSubagentFinished } from "./subagent-progress";
 
 export const SpawnSwarmInputSchema = z.object({
 	systemPrompt: z
@@ -481,6 +482,7 @@ export function createSpawnSwarmTool(
 			const report = (member: number, entry: SwarmMemberReport): void => {
 				if (rowed) {
 					reports[member] = entry;
+					reportSubagentFinished(updatesFor(member), entry);
 				}
 			};
 

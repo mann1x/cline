@@ -35,6 +35,7 @@ import { buildSubagentLayout } from "./subagent-layout";
 import {
 	createSubagentProgress,
 	DELEGATION_PACING_NOTE,
+	reportSubagentFinished,
 	watchPolykvRoom,
 } from "./subagent-progress";
 
@@ -612,69 +613,81 @@ async function runSpawnBatch(
 	const configured = config.configuredAgents?.();
 	const results = await Promise.all(
 		members.map(async (member, index): Promise<SpawnAgentMemberOutput> => {
-			const name = member.name?.trim() || `agent-${index + 1}`;
-			// Each member reports on its own row: the host keys it by the call
-			// and this index, and its stop registration by the same pair.
-			const memberContext: AgentToolContext = {
-				...context,
-				toolCallId: `${context.toolCallId}#${index}`,
-				...(context.emitUpdate
-					? {
-							emitUpdate: (update: unknown) =>
-								context.emitUpdate?.({
-									...(update as Record<string, unknown>),
-									member: index,
-								}),
-						}
-					: {}),
-			};
-			try {
-				if (member.type?.trim()) {
-					const tool = configured?.get(configuredAgentKey(member.type));
-					if (!tool) {
-						const known = [...(configured?.keys() ?? [])].join(", ");
-						throw new Error(
-							`No configured agent named "${member.type}".${
-								known
-									? ` Configured agents: ${known}.`
-									: " None are configured."
-							}`,
-						);
-					}
-					const output = (await tool.execute(
-						{ prompt: withKnowledge(input.knowledge, member.task) } as never,
-						memberContext,
-					)) as SpawnAgentOutput;
-					return { name, ...output };
-				}
-				const output = await runSpawnedAgent(
-					config,
-					{
-						name,
-						task: member.task,
-						...(input.knowledge ? { knowledge: input.knowledge } : {}),
-						...((member.instructions ??
-						input.instructions ??
-						input.systemPrompt)
-							? {
-									instructions:
-										member.instructions ??
-										input.instructions ??
-										input.systemPrompt,
-								}
-							: {}),
-					},
-					memberContext,
-				);
-				return { name, ...output };
-			} catch (error) {
-				return {
-					name,
-					error: error instanceof Error ? error.message : String(error),
-				};
-			}
+			const output = await runBatchMember(member, index);
+			reportSubagentFinished(
+				context.emitUpdate &&
+					((update: unknown) =>
+						context.emitUpdate?.({
+							...(update as Record<string, unknown>),
+							member: index,
+						})),
+				output,
+			);
+			return output;
 		}),
 	);
+	async function runBatchMember(
+		member: SpawnAgentMember,
+		index: number,
+	): Promise<SpawnAgentMemberOutput> {
+		const name = member.name?.trim() || `agent-${index + 1}`;
+		// Each member reports on its own row: the host keys it by the call
+		// and this index, and its stop registration by the same pair.
+		const memberContext: AgentToolContext = {
+			...context,
+			toolCallId: `${context.toolCallId}#${index}`,
+			...(context.emitUpdate
+				? {
+						emitUpdate: (update: unknown) =>
+							context.emitUpdate?.({
+								...(update as Record<string, unknown>),
+								member: index,
+							}),
+					}
+				: {}),
+		};
+		try {
+			if (member.type?.trim()) {
+				const tool = configured?.get(configuredAgentKey(member.type));
+				if (!tool) {
+					const known = [...(configured?.keys() ?? [])].join(", ");
+					throw new Error(
+						`No configured agent named "${member.type}".${
+							known ? ` Configured agents: ${known}.` : " None are configured."
+						}`,
+					);
+				}
+				const output = (await tool.execute(
+					{ prompt: withKnowledge(input.knowledge, member.task) } as never,
+					memberContext,
+				)) as SpawnAgentOutput;
+				return { name, ...output };
+			}
+			const output = await runSpawnedAgent(
+				config,
+				{
+					name,
+					task: member.task,
+					...(input.knowledge ? { knowledge: input.knowledge } : {}),
+					...((member.instructions ?? input.instructions ?? input.systemPrompt)
+						? {
+								instructions:
+									member.instructions ??
+									input.instructions ??
+									input.systemPrompt,
+							}
+						: {}),
+				},
+				memberContext,
+			);
+			return { name, ...output };
+		} catch (error) {
+			return {
+				name,
+				error: error instanceof Error ? error.message : String(error),
+			};
+		}
+	}
 	return {
 		results,
 		usage: {
