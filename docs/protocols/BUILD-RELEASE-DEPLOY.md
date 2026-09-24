@@ -223,6 +223,33 @@ A zero-byte `readme.md` is the signature of the README swap not running;
 `apps/vscode/README.md` is an empty upstream placeholder and is what vsce picks
 up when `scripts/marketplace-readme.mjs swap-in` has not been called.
 
+**Check the command-sandbox binaries are in the package.** The delegated-agent
+command sandbox is a set of native launchers shipped under
+`apps/vscode/assets/sandbox/` and kept in the `.vsix` by the single
+`!assets/sandbox/**` line in `.vscodeignore`. They are code the bundle carries,
+not code esbuild compiles, so `check-types` and the esbuild step pass whether or
+not they made it in — a missing binary is invisible until an agent tries to run
+a command on the affected OS. Assert them by name:
+
+```bash
+unzip -l "$VSIX" | grep -E \
+  'assets/sandbox/(sandbox-launch\.exe|hook\.dll|cerebriline-sandbox-(x64|arm64))'
+# expect FOUR lines: the Windows pair AND both Linux launchers.
+```
+
+The host (`resolveSandboxBinaries`, `local-runtime-host.ts`) resolves per OS:
+**win32** needs *both* `sandbox-launch.exe` and `hook.dll`; **linux** needs
+`cerebriline-sandbox-x64` or `-arm64` (arch-suffixed, flat `cerebriline-sandbox`
+tolerated). macOS has no backend yet, by design. Miss the pair for an OS and
+that OS silently loses `run_commands` for delegated agents — the launcher
+resolves to `undefined`, the shell is withheld, and only the pure-path-rewrite
+**overlay** (file isolation) still works. So the count is load-bearing: three
+lines, not four, means the Linux launchers didn't rebuild into `assets/` before
+packaging (they are produced by `sandbox/cerebriline-sandbox/build.sh`, not by
+`bun run package`), and a Windows-only `.vsix` is the result. Rebuild the
+launchers into `assets/sandbox/` and repackage rather than shipping the short
+set.
+
 ### 7. Deploy to pandorum
 
 ```bash
