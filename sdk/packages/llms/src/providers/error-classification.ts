@@ -244,7 +244,7 @@ const TOOL_CALL_UNPARSABLE_PATTERNS = [
 	/\b(?:invalid|malformed)\s+(?:tool[_\s-]?call|function[_\s-]?call|tool arguments|function arguments)\b/i,
 	// llama.cpp's streaming tool-call parser (common/chat.cpp) throws this when
 	// a partial re-parse finds fewer calls than the last one did, and the server
-	// ends the stream on it. Measured on the 75-agent swarm on pandorum: 13
+	// ends the stream on it. Measured on the 75-agent swarm on pandorum: 16
 	// workers lost to it, every one mid-way through a long `editor` payload of
 	// minified JS. The call was never delivered, so asking for it again is the
 	// same recovery as any other call the parser could not read.
