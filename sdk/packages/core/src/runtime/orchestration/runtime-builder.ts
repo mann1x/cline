@@ -62,6 +62,7 @@ import {
 	admissionFromCapacity,
 	createAgentAdmissionController,
 } from "../../extensions/tools/team/agent-admission";
+import { createReadAgentReportTool } from "../../extensions/tools/team/agent-reports";
 import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configured-agent-config";
 import { loadConfiguredAgentConfigs } from "../../extensions/tools/team/configured-agent-config";
 import { createConfiguredAgentTools } from "../../extensions/tools/team/configured-agent-tool";
@@ -1209,6 +1210,8 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 					return spawnTool.execute(spawnInput, context);
 				},
 			});
+			// Where the full reports behind the agents' summaries are read.
+			tools.push(createReadAgentReportTool());
 		}
 
 		if (normalized.enableAgentTeams) {

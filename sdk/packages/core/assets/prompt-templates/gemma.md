@@ -208,6 +208,9 @@ Transition from planning to execution.
 - **Output:** A one-line confirmation.
 {{DEFAULT}}
 
+# tool: read_agent_report
+{{DEFAULT}}
+
 # tool: spawn_agent
 {{DEFAULT}}
 

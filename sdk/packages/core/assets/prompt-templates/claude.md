@@ -413,6 +413,9 @@ Only after the user approves the plan in a message sent *after* you presented it
 
 {{DEFAULT}}
 
+# tool: read_agent_report
+{{DEFAULT}}
+
 # tool: spawn_agent
 {{DEFAULT}}
 

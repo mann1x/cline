@@ -60,6 +60,7 @@ import {
 	withTaskProgressCapture,
 } from "../../extensions/tools/task-progress";
 import type { TeamEvent } from "../../extensions/tools/team";
+import { clearAgentReports } from "../../extensions/tools/team/agent-reports";
 import {
 	agentEndpointKey,
 	delegationCanRunInParallel,
@@ -82,6 +83,7 @@ import {
 	createDelegatedAgentConfigProvider,
 	type DelegatedAgentConnectionConfig,
 } from "../../extensions/tools/team/delegated-agent";
+import { subagentCancellation } from "../../extensions/tools/team/subagent-cancellation";
 import type { HookEventPayload } from "../../hooks";
 import { buildTelemetryAgentIdentity } from "../../services/agent-events";
 import { resolveWorkspacePath } from "../../services/config";
@@ -231,6 +233,11 @@ import {
 	replaySubagentHookEvent,
 	resolveMessagesPath,
 } from "./runtime-host-support";
+import {
+	describeSideTurnForLead,
+	runSteerSideTurn,
+	STEER_SIDE_TURN_MAX_ITERATIONS,
+} from "./steer-side-turn";
 
 const MAX_SCAN_LIMIT = 5000;
 
@@ -503,6 +510,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 		string,
 		BackgroundDelegationRegistry
 	>();
+	/**
+	 * The lead's agent config, kept for the side turn that answers a steer
+	 * while the lead waits on its agents (`steer-side-turn.ts`), and the
+	 * chain that runs those turns one at a time per session.
+	 */
+	private readonly sideTurnConfigs = new Map<string, AgentConfig>();
+	private readonly sideTurns = new Map<string, Promise<void>>();
 	private readonly eventBridge: AgentEventBridge;
 	private readonly sessionVersioning = new SessionVersioningService();
 	private readonly runCommandExecutionController =
@@ -2279,6 +2293,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 		if (agentConfig.onEvent) {
 			agent.subscribeEvents(agentConfig.onEvent);
 		}
+		this.sideTurnConfigs.set(sessionId, agentConfig as AgentConfig);
 		runtime.registerLeadAgent?.(agent);
 		const rootAgentIdentity = buildTelemetryAgentIdentity({
 			agentId: agent.getAgentId(),
@@ -2497,6 +2512,77 @@ export class LocalRuntimeHost implements RuntimeHost {
 		});
 	}
 
+	/**
+	 * Answer a steer with the lead's model while the lead waits on its agents.
+	 * One at a time per session; the reply goes to the chat as a status notice,
+	 * and the lead's real turn is told what happened when the round returns.
+	 */
+	private answerSteerInSideTurn(session: ActiveSession, message: string): void {
+		const sessionId = session.sessionId;
+		const base = this.sideTurnConfigs.get(sessionId);
+		if (!base) {
+			return;
+		}
+		const previous = this.sideTurns.get(sessionId) ?? Promise.resolve();
+		const next = previous.then(async () => {
+			const logger = session.config.logger;
+			logger?.log?.(
+				`[Agents] steer while ${subagentCancellation.runningIn(sessionId).length} agent(s) run: answering in a side turn`,
+			);
+			const result = await runSteerSideTurn({
+				sessionId,
+				message,
+				messages: session.agent.getMessages(),
+				createRunner: (tools) => {
+					// The lead's model, prompt and settings; nothing that writes
+					// the lead's state: no compaction pipeline, hooks, extensions
+					// or approvals, and only the round's tools.
+					const runner = this.createAgentInstance({
+						...base,
+						tools,
+						modelTools: undefined,
+						prepareTurn: undefined,
+						hooks: undefined,
+						extensions: undefined,
+						onEvent: undefined,
+						initialMessages: undefined,
+						consumePendingUserMessage: undefined,
+						requestToolApproval: undefined,
+						toolPolicies: undefined,
+						maxIterations: STEER_SIDE_TURN_MAX_ITERATIONS,
+					} as AgentConfig);
+					return {
+						restore: (messages) => runner.restore(messages),
+						continue: (text) => runner.continue(text),
+					};
+				},
+			});
+			this.eventBridge.dispatchAgentEvent(sessionId, session.config, {
+				type: "notice",
+				noticeType: "status",
+				displayRole: "status",
+				message: [
+					`While the agents run: ${result.reply || "(no reply)"}`,
+					...result.actions,
+				].join("\n\n"),
+				metadata: { kind: "steer_reply", actions: result.actions },
+			});
+			// For the lead's own next turn: the exchange is not in its history.
+			// A side turn that failed hands the message itself on, as it would
+			// have been queued without one.
+			this.pendingPromptsController.enqueue(sessionId, {
+				prompt: result.failed
+					? message
+					: describeSideTurnForLead(message, result),
+				delivery: "steer",
+			});
+		});
+		this.sideTurns.set(
+			sessionId,
+			next.catch(() => undefined),
+		);
+	}
+
 	async runTurn(input: SendSessionInput): Promise<AgentResult | undefined> {
 		const session = this.getSessionOrThrow(input.sessionId);
 		const canStartRun = session.agent.canStartRun();
@@ -2513,6 +2599,20 @@ export class LocalRuntimeHost implements RuntimeHost {
 				delivery: delivery ?? "immediate",
 			},
 		});
+		// A steer while the lead waits inside a delegation is answered now, in
+		// a side turn, instead of at a boundary the lead will not reach until
+		// the whole round is done.
+		if (
+			delivery === "steer" &&
+			!canStartRun &&
+			!input.userImages?.length &&
+			!input.userFiles?.length &&
+			this.sideTurnConfigs.has(input.sessionId) &&
+			subagentCancellation.runningIn(input.sessionId).length > 0
+		) {
+			this.answerSteerInSideTurn(session, input.prompt);
+			return undefined;
+		}
 		if (delivery === "queue" || delivery === "steer") {
 			this.pendingPromptsController.enqueue(input.sessionId, {
 				prompt: input.prompt,
@@ -4057,6 +4157,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// it was started from: the conversation it would report into is gone.
 		this.backgroundDelegations.get(session.sessionId)?.stopAll();
 		this.backgroundDelegations.delete(session.sessionId);
+		this.sideTurnConfigs.delete(session.sessionId);
+		clearAgentReports(session.sessionId);
+		this.sideTurns.delete(session.sessionId);
 		this.sessions.delete(session.sessionId);
 		this.emit({
 			type: "ended",

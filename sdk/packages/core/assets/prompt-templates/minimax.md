@@ -309,6 +309,9 @@ Switching to act mode immediately starts executing the plan, so only call this a
 
 **Output:** a one-line confirmation, as plain text. This call ends the current run and the next one starts in act mode with the file and command tools available, so it is a handover, not a failure — carry on with the plan there.
 
+# tool: read_agent_report
+{{DEFAULT}}
+
 # tool: spawn_agent
 
 Spawn a sub-agent with a custom system prompt for specialised tasks. Call shape: `spawn_agent(knowledge?: {files?, text?}, instructions?: string, systemPrompt?: string, task?: string, name?: string, agents?: [{name?, task, instructions?, type?}])`.

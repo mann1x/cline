@@ -14,6 +14,7 @@ import {
 } from "@cline/shared";
 import { z } from "zod";
 import { isPolykvProvider } from "../../context/polykv-session";
+import { summarizeForLead } from "./agent-reports";
 import { agentEndpointKey } from "./agent-slot-gate";
 import type { ConfiguredAgentConfig } from "./configured-agent-config";
 import {
@@ -428,6 +429,7 @@ export function createConfiguredAgentTools(
 					const cancellation = registerSubagentCancellation(
 						cancelId,
 						context.signal,
+						config.name,
 					);
 					// Announced rather than reconstructed by the reader. The chat row is
 					// the thing that offers the stop, and it must name exactly what was
@@ -472,6 +474,8 @@ export function createConfiguredAgentTools(
 						admitted: () => void,
 					): Promise<AgentResult> => {
 						const subAgent = createDelegatedAgent({
+							// What the lead's side turn leaves for it while the lead waits.
+							consumePendingUserMessage: async () => cancellation.takeMessage(),
 							kind: "subagent",
 							prompt: config.systemPrompt,
 							engineSessionId,
@@ -526,7 +530,14 @@ export function createConfiguredAgentTools(
 								}
 							}
 						}
-						return await subAgent.run(input.prompt);
+						const result = await subAgent.run(input.prompt);
+						// A summary for the lead, and the full report kept for it.
+						return summarizeForLead({
+							sessionId: context.sessionId,
+							name: config.name,
+							result,
+							summarize: (prompt) => subAgent.continue(prompt),
+						});
 					};
 
 					try {

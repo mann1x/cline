@@ -32,6 +32,19 @@ export interface SubagentCancellation {
 	 * and the round is short one report.
 	 */
 	restart(id: string): boolean;
+	/**
+	 * Leave a message for this agent, read at its next turn boundary. `false`
+	 * when nothing by that id is running.
+	 *
+	 * How the lead's side turn reaches the round it is waiting on: a message
+	 * from the user while the lead sat inside its delegation call was queued
+	 * for a turn the lead would not take until every agent had finished.
+	 */
+	message(id: string, text: string): boolean;
+	/** The agents running for this session, with the names they were given. */
+	runningIn(
+		sessionId: string | undefined,
+	): Array<{ id: string; label: string }>;
 	/** Ids of the agents running right now. For tests and diagnostics. */
 	running(): string[];
 }
@@ -43,6 +56,10 @@ interface RunningAgent {
 	attempt?: AbortController;
 	/** Set by Restart, read by the attempt that it aborted. */
 	restartRequested: boolean;
+	/** What the round calls it, for the lead's side turn. */
+	label: string;
+	/** Messages left for it, read one per turn boundary. */
+	inbox: string[];
 }
 
 const RUNNING = new Map<string, RunningAgent>();
@@ -63,6 +80,8 @@ export interface SubagentCancellationRegistration {
 		run: () => Promise<T>,
 		onRestart?: () => void | Promise<void>,
 	): Promise<T>;
+	/** The next message left for this agent, for its `consumePendingUserMessage`. */
+	takeMessage: () => string | undefined;
 	release: () => void;
 }
 
@@ -92,11 +111,13 @@ export function subagentCancelId(
 export function registerSubagentCancellation(
 	id: string | undefined,
 	parent: AbortSignal | undefined,
+	label?: string,
 ): SubagentCancellationRegistration {
 	if (!id) {
 		return {
 			signal: parent,
 			restartable: (run) => run(),
+			takeMessage: () => undefined,
 			release: () => {},
 		};
 	}
@@ -111,7 +132,12 @@ export function registerSubagentCancellation(
 	// left running unreachable: two agents under one id would mean a stop that
 	// hits whichever was registered first and no way to reach the other.
 	RUNNING.get(id)?.own.abort();
-	const entry: RunningAgent = { own, restartRequested: false };
+	const entry: RunningAgent = {
+		own,
+		restartRequested: false,
+		label: label?.trim() || id.slice(id.indexOf("::") + 2),
+		inbox: [],
+	};
 	RUNNING.set(id, entry);
 	return {
 		get signal() {
@@ -150,6 +176,7 @@ export function registerSubagentCancellation(
 				return outcome.value;
 			}
 		},
+		takeMessage: () => entry.inbox.shift(),
 		release: () => {
 			parent?.removeEventListener("abort", onParentAbort);
 			if (RUNNING.get(id) === entry) {
@@ -182,6 +209,22 @@ export const subagentCancellation: SubagentCancellation = {
 			new DOMException("The sub-agent was restarted.", "AbortError"),
 		);
 		return true;
+	},
+	message(id: string, text: string): boolean {
+		const entry = RUNNING.get(id);
+		if (!entry || entry.own.signal.aborted || !text.trim()) {
+			return false;
+		}
+		entry.inbox.push(text.trim());
+		return true;
+	},
+	runningIn(sessionId: string | undefined) {
+		const prefix = `${sessionId ?? ""}::`;
+		return [...RUNNING.entries()]
+			.filter(
+				([id, entry]) => id.startsWith(prefix) && !entry.own.signal.aborted,
+			)
+			.map(([id, entry]) => ({ id, label: entry.label }));
 	},
 	running(): string[] {
 		return [...RUNNING.keys()];

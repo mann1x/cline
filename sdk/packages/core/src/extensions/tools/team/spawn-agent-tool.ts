@@ -21,6 +21,7 @@ import {
 } from "@cline/shared";
 import { z } from "zod";
 import { isPolykvProvider } from "../../context/polykv-session";
+import { summarizeForLead } from "./agent-reports";
 import type { ConfiguredAgentConfig } from "./configured-agent-config";
 import {
 	createDelegatedAgent,
@@ -733,7 +734,11 @@ async function runSpawnedAgent(
 	// Its own abort signal, so a runaway agent can be stopped without
 	// cancelling the session and the siblings that are working.
 	const cancelId = subagentCancelId(context.sessionId, context.toolCallId);
-	const cancellation = registerSubagentCancellation(cancelId, context.signal);
+	const cancellation = registerSubagentCancellation(
+		cancelId,
+		context.signal,
+		input.name,
+	);
 	// Announced rather than reconstructed by the reader. The chat row is the
 	// thing that offers the stop, and it must name exactly what was
 	// registered.
@@ -767,6 +772,8 @@ async function runSpawnedAgent(
 		});
 		const agent = createDelegatedAgent({
 			kind: "subagent",
+			// What the lead's side turn leaves for it while the lead waits.
+			consumePendingUserMessage: async () => cancellation.takeMessage(),
 			prompt: layout.systemPrompt,
 			engineSessionId,
 			...(pooled
@@ -804,9 +811,18 @@ async function runSpawnedAgent(
 				}
 			}
 		}
-		return layout.pinnedHead.length > 0
-			? await agent.runWithHead(layout.pinnedHead, layout.task)
-			: await agent.run(layout.task);
+		const result =
+			layout.pinnedHead.length > 0
+				? await agent.runWithHead(layout.pinnedHead, layout.task)
+				: await agent.run(layout.task);
+		// A summary for the lead, and the full report kept for it to read: a
+		// round's reports sent whole were cut from the middle.
+		return summarizeForLead({
+			sessionId: context.sessionId,
+			name: input.name ?? "agent",
+			result,
+			summarize: (prompt) => agent.continue(prompt),
+		});
 	};
 
 	try {

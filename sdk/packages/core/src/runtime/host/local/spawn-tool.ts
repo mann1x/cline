@@ -341,6 +341,7 @@ export function createSessionSwarmTool(
 		tools?: string[];
 		emitUpdate?: (update: unknown) => void;
 		signal?: AbortSignal;
+		takeMessage?: () => string | undefined;
 	}): Promise<SwarmWorkerResult> => {
 		const base = configProvider();
 		const workerSessionId = `${rootSessionId}:swarm:${request.name}:${Date.now().toString(36)}`;
@@ -423,6 +424,11 @@ export function createSessionSwarmTool(
 			}
 			const worker = createDelegatedAgent({
 				kind: "subagent",
+				...(request.takeMessage
+					? {
+							consumePendingUserMessage: async () => request.takeMessage?.(),
+						}
+					: {}),
 				prompt: layout.systemPrompt,
 				// The worker's engine session, for its compaction as well as its
 				// requests. Without it the compaction pipeline ran in the LEAD's

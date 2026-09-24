@@ -252,6 +252,9 @@ Output: plain text, one result per line as `file:line:column` followed by that s
 # tool: switch_to_act_mode
 {{DEFAULT}}
 
+# tool: read_agent_report
+{{DEFAULT}}
+
 # tool: spawn_agent
 {{DEFAULT}}
 

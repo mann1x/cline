@@ -19,6 +19,14 @@ export {
 	type PlacementLease,
 } from "./agent-placement-queue";
 export {
+	AGENT_SUMMARY_MAX_CHARS,
+	clearAgentReports,
+	createReadAgentReportTool,
+	READ_AGENT_REPORT_TOOL_NAME,
+	readAgentReport,
+	recordAgentReport,
+} from "./agent-reports";
+export {
 	type BackgroundDelegationControls,
 	type BackgroundDelegationRegistry,
 	type BackgroundDelegationStatus,

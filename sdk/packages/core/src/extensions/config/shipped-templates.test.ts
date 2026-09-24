@@ -24,6 +24,7 @@ import {
 	createWebFetchTool,
 } from "../tools/definitions";
 import { createListFilesTool } from "../tools/list-files";
+import { createReadAgentReportTool } from "../tools/team/agent-reports";
 import { createSpawnAgentTool } from "../tools/team/spawn-agent-tool";
 import { createAgentTeamsTools } from "../tools/team/team-tools";
 import { parsePromptTemplate } from "./prompt-template-parser";
@@ -71,6 +72,7 @@ const LIVE_TOOLS = [
 	createAskQuestionTool(stubExecutor),
 	createSubmitAndExitTool(stubExecutor, stubConfig),
 	createSpawnAgentTool({ configProvider: {} as never }),
+	createReadAgentReportTool(),
 	createListFilesTool({ cwd: "/workspace", createLister: {} as never }),
 	...createAgentTeamsTools({
 		runtime: {} as never,

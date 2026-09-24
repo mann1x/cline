@@ -198,6 +198,9 @@ Reach for it the moment you are about to do one of these by hand:
 # tool: switch_to_act_mode
 Switch from plan mode to act mode. Switching immediately starts executing the plan, so only call this after the user has explicitly approved the plan in a message sent AFTER you presented it (e.g. 'looks good', 'go ahead', 'switch to act mode'). Never call this in the same turn you present a plan, never call it proactively, and never treat the original task request as approval. Output: a one-line confirmation as plain text. This call ends the current run and the next one starts in act mode with file and command tools available — it is a handover, not a failure; carry on with the plan there.
 
+# tool: read_agent_report
+{{DEFAULT}}
+
 # tool: spawn_agent
 
 Spawn sub-agents for focused tasks: `task` for one agent, `agents` for several in one call. Structure the work in three parts, from most shared to least: `knowledge` (files and notes the agents need — identical across them), `instructions` (the role — identical for every agent of the same kind), and each agent's `task` (what it alone does). Shared parts are loaded once for all agents that share them, so many agents cost little more than one. An `agents` entry may name a configured agent in `type`; it then runs with that agent's own role and model.

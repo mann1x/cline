@@ -200,6 +200,8 @@ export interface SwarmWorkerRequest {
 	emitUpdate?: (update: unknown) => void;
 	/** This worker's own stop, which the lead's cancel also trips. */
 	signal?: AbortSignal;
+	/** Messages the lead's side turn left for it, one per turn boundary. */
+	takeMessage?: () => string | undefined;
 }
 
 export interface SpawnSwarmToolConfig {
@@ -419,7 +421,7 @@ export function createSpawnSwarmTool(
 			// pair. A task repeated `count` times has one row, the call's, and
 			// one stop that reaches every worker on it.
 			const cancellations = rowed
-				? requested.map((_entry, index) =>
+				? requested.map((entry, index) =>
 						registerSubagentCancellation(
 							subagentCancelId(
 								context?.sessionId,
@@ -428,6 +430,7 @@ export function createSpawnSwarmTool(
 									: undefined,
 							),
 							context?.signal,
+							entry.name ?? `worker-${index + 1}`,
 						),
 					)
 				: [
@@ -527,6 +530,9 @@ export function createSpawnSwarmTool(
 									...(snapshot ? { poolId: snapshot.poolId } : {}),
 									...(emitUpdate ? { emitUpdate } : {}),
 									...(attemptSignal ? { signal: attemptSignal } : {}),
+									...(cancellation
+										? { takeMessage: cancellation.takeMessage }
+										: {}),
 								});
 							};
 							// Restartable from its row. A worker releases its own

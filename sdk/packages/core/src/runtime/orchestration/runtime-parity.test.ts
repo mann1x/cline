@@ -61,6 +61,8 @@ function normalizeParityToolNames(toolNames: string[]): string[] {
 		(toolName) =>
 			toolName !== "skills" &&
 			toolName !== "create_agent" &&
+			// New with the agents' summaries, for the same reason.
+			toolName !== "read_agent_report" &&
 			!toolName.includes("__"),
 	);
 }
@@ -124,6 +126,8 @@ describe("runtime tool parity", () => {
 		const actual = runtime.tools.map((tool) => tool.name);
 
 		expect(normalizeParityToolNames(actual)).toEqual(expected);
+		// The full reports behind the agents' summaries come with delegation.
+		expect(actual).toContain("read_agent_report");
 	});
 
 	it("offers create_agent with the subagents it creates, and not without them", async () => {
