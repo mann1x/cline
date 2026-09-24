@@ -131,6 +131,7 @@ Apply complex changes using a patch grammar.
 Clarify requirements with the user.
 - **Arguments:** `question`: The query string. `options`: An array of 2-5 strings for the user to choose from.
 - **When to use:** When a decision is needed or information is missing. Do not include "Switch to Act mode" as an option.
+- **Recommend:** End the option you would pick with ` (recommended)` and say why in the question. Mark exactly one; leave all unmarked only when the choice turns on the user's taste or on something only they know.
 - **Output:** The user's chosen option or a custom text response.
 {{DEFAULT}}
 

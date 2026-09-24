@@ -947,7 +947,7 @@ export const AskQuestionInputSchema = z.object({
 		.min(2)
 		.max(5)
 		.describe(
-			"Array of 2-5 user-selectable answer options for the single question",
+			"Array of 2-5 user-selectable answer options for the single question. End the one you would pick with ' (recommended)'; mark none only when the choice turns on the user's taste or on something only they know.",
 		),
 });
 

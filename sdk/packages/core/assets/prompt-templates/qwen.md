@@ -209,6 +209,7 @@ Ask the user a clarifying question to gather information needed to proceed.
 
 - **Usage**: Use when a key implementation decision is ambiguous. Ask only one question at a time.
 - **Arguments**: `question` (string), `options` (array of 2-5 strings). Do not include an option to toggle Act mode.
+- **Recommend**: End the option you would pick with ` (recommended)` and say why in the question. Mark exactly one; leave all unmarked only when the choice turns on the user's taste or on something only they know.
 - **Output**: Returns the user's answer as plain text (either one of the options or custom text). Act on the answer immediately in the next step; do not stop working just because an answer arrived.
 
 {{DEFAULT}}
