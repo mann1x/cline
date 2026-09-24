@@ -63,10 +63,21 @@ jobs:
             - name: Build
               run: cargo build --release
 
+            # GitHub's ubuntu image ships with AppArmor's unprivileged-userns
+            # restriction on (kernel default since 24.04): the L1 backend's
+            # unshare is permitted but the namespace is then confined and its
+            # setgroups/uid_map/gid_map writes are denied, so L1 would only ever
+            # skip. Relaxing the sysctl lets L1 actually run and assert in CI.
+            # Best-effort: a kernel without the knob is fine — the test skips.
+            - name: Allow unprivileged user namespaces (L1)
+              if: runner.os == 'Linux'
+              run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
             # On ubuntu this exercises L1 + L2; on macos-14 the M1 clonefile
             # backend against the runner's APFS volume. Each integration test
             # skips itself (rather than failing) if its kernel/filesystem
             # prerequisite is absent, so a hardened runner does not produce a
-            # spurious red.
+            # spurious red. --no-fail-fast so every backend's test reports even
+            # when an earlier one skips or fails.
             - name: Test
-              run: cargo test --release
+              run: cargo test --release --no-fail-fast

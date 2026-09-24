@@ -77,7 +77,17 @@ fn l1_isolates_the_workspace_and_produces_the_change_set() {
         .expect("failed to run cerebriline-sandbox");
 
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if out.status.code() == Some(71) && stderr.contains("unshare") {
+    // The backend refuses (71) when the host forbids the unprivileged user
+    // namespace at any of its setup steps: the `unshare` itself, or — where the
+    // unshare is permitted but the namespace is then confined (AppArmor's
+    // `apparmor_restrict_unprivileged_userns`, the default on Ubuntu 24.04 and on
+    // GitHub's ubuntu runners) — the `setgroups`/`uid_map`/`gid_map` writes. Any of
+    // these means "L1 can't run here", so skip rather than assert. L2 covers such a
+    // host in production, and its own integration test still runs.
+    let userns_blocked = ["unshare", "setgroups", "uid_map", "gid_map"]
+        .iter()
+        .any(|needle| stderr.contains(needle));
+    if out.status.code() == Some(71) && userns_blocked {
         eprintln!("skipping: unprivileged user namespaces unavailable on this host\n{stderr}");
         fs::remove_dir_all(&base).ok();
         return;
