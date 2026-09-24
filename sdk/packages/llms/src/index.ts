@@ -225,9 +225,11 @@ export {
 export {
 	engineSessionId,
 	isWorkerWindowFull,
+	onPolykvNotice,
 	onPolykvRoomWait,
 	POLYKV_OWNER_MIN_WINDOW,
 	POLYKV_WORKER_MAX_WAIT_MS,
+	type PolykvNotice,
 	type PolykvReleaseResult,
 	type PolykvRoomWait,
 	type PolykvWorkerAttach,

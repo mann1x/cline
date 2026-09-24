@@ -324,17 +324,89 @@ async function openOwner(
 }
 
 /**
+ * Fields of a chat request that are not how its prompt renders, or that name
+ * this request's own session and pool.
+ */
+const NOT_TEMPLATE_FIELDS = new Set([
+	"messages",
+	"tools",
+	"model",
+	"stream",
+	"stream_options",
+	"session_id",
+	"pool_id",
+	"num_ctx",
+	"num_ctx_min",
+	"shared_prefix_n_tokens",
+	"overcommit",
+]);
+
+/**
+ * The fields of `body` a pool's rendering must be given, so that it renders
+ * the prompt the way the server will render this request.
+ *
+ * Everything but the conversation and this request's own session, rather than
+ * a list of the fields known to matter: the server parses `/apply-template`
+ * with the chat request's own parser, and a field left out is one more way for
+ * the two to disagree. The one that did, on 8240 2026-09-24:
+ * `reasoning_budget_tokens: 0` renders Gemma-4's system turn without
+ * `<|think|>`, and the pool, rendered without it, had the flag. Every worker
+ * request diverged from its pool at token 4 -- 20 attaches of 20 -- and
+ * prefilled its whole ~5.6k-token prompt on every turn.
+ */
+export function templateFieldsOf(
+	body: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+	const fields: Record<string, unknown> = {};
+	for (const [name, value] of Object.entries(body)) {
+		if (!NOT_TEMPLATE_FIELDS.has(name) && value !== undefined) {
+			fields[name] = value;
+		}
+	}
+	return fields;
+}
+
+/**
+ * What in `fields` can change a rendering, for keying pools by it.
+ *
+ * Not the fields themselves: a request's budget is a share of its output cap,
+ * so it moves turn by turn, and a pool keyed on the number would be rebuilt
+ * whenever it did. What renders differently is whether there is one -- `0`
+ * drops the thinking flag, any other count keeps it (measured on 8240).
+ */
+export function templateSignature(
+	fields: Readonly<Record<string, unknown>>,
+): string {
+	const budget = (value: unknown) =>
+		value === undefined ? undefined : value === 0 ? 0 : "on";
+	return JSON.stringify([
+		fields.chat_template_kwargs,
+		fields.reasoning_effort,
+		fields.reasoning_format,
+		fields.enable_thinking,
+		budget(fields.reasoning_budget_tokens),
+		budget(fields.reasoning_budget),
+		budget(fields.thinking_budget_tokens),
+	]);
+}
+
+/**
  * The layer's prefix: the conversation so far, rendered by the server, up to
  * and including the opener of the turn that follows it.
+ *
+ * `fields` are the request's own (`templateFieldsOf`): a layer rendered
+ * without them is a different prompt from the one the request renders to.
  */
 export async function renderLayer(
 	client: PolykvClient,
 	messages: readonly unknown[],
 	tools: readonly unknown[] | undefined,
+	fields?: Readonly<Record<string, unknown>>,
 ): Promise<string | undefined> {
 	const rendered = await client.applyTemplate({
 		messages: [...messages, { role: "user", content: SENTINEL }],
 		...(tools ? { tools } : {}),
+		...(fields ? { fields } : {}),
 	});
 	const at = rendered.indexOf(SENTINEL);
 	return at > 0 ? rendered.slice(0, at) : undefined;
@@ -358,7 +430,10 @@ async function ensureChain(
 	const messages = body.messages as unknown[];
 	const tools = body.tools as unknown[] | undefined;
 	let parent: string | undefined;
-	let key = hashString(JSON.stringify([body.model ?? "", tools ?? []]));
+	const fields = templateFieldsOf(body);
+	let key = hashString(
+		JSON.stringify([body.model ?? "", tools ?? [], templateSignature(fields)]),
+	);
 	for (let depth = 0; depth <= layers; depth++) {
 		key = hashString(`${key}\n${JSON.stringify(messages[depth])}`);
 		let pending = shard.pools.get(key);
@@ -369,6 +444,7 @@ async function ensureChain(
 					group.client,
 					messages.slice(0, depth + 1),
 					tools,
+					fields,
 				);
 				if (!prompt || !fullRendering.startsWith(prompt)) {
 					return undefined;
@@ -501,6 +577,9 @@ export async function preparePolykvWorker(options: {
 		fullRendering = await group.client.applyTemplate({
 			messages,
 			...(body.tools ? { tools: body.tools as unknown[] } : {}),
+			// The request's own fields here as well: the prefix check below is
+			// only a check if this is what the server will actually render.
+			fields: templateFieldsOf(body),
 		});
 	} catch {
 		return unpooled;
@@ -688,6 +767,72 @@ export async function releaseAllPolykvSwarms(): Promise<void> {
 }
 
 /** Where an agent's request is while it waits on the engine for room. */
+/** Something about an agent's requests that its row should say. */
+export interface PolykvNotice {
+	/** `warn` is a fault the turn survived: it ran, but not as it should have. */
+	severity: "info" | "warn";
+	/** Worded for the agent's row. */
+	text: string;
+}
+
+const NOTICE_LISTENERS = new Map<string, Set<(notice: PolykvNotice) => void>>();
+const LAST_NOTICE = new Map<string, string>();
+
+/**
+ * Be told what the vendor learns about an agent's requests from the engine.
+ *
+ * The same reach problem as the room wait: the response is read inside this
+ * vendor's fetch, where nothing of the agent's UI can be reached. A worker's
+ * pool shared 4 tokens of 5,627 on every turn of 2026-09-24 and it reached the
+ * server log only. Keyed by the agent's own session id. Returns the
+ * unsubscribe.
+ */
+export function onPolykvNotice(
+	sessionId: string,
+	listener: (notice: PolykvNotice) => void,
+): () => void {
+	const key = engineSessionId(sessionId);
+	let listeners = NOTICE_LISTENERS.get(key);
+	if (!listeners) {
+		listeners = new Set();
+		NOTICE_LISTENERS.set(key, listeners);
+	}
+	listeners.add(listener);
+	return () => {
+		listeners?.delete(listener);
+		if (listeners?.size === 0) {
+			NOTICE_LISTENERS.delete(key);
+			LAST_NOTICE.delete(key);
+		}
+	};
+}
+
+/**
+ * Report a notice for an agent. A repeat of the last one is dropped: a
+ * divergence found on every turn is one line on the row, not one per turn.
+ */
+export function reportPolykvNotice(
+	sessionId: string,
+	notice: PolykvNotice,
+): void {
+	const key = engineSessionId(sessionId);
+	if (LAST_NOTICE.get(key) === notice.text) {
+		return;
+	}
+	const listeners = NOTICE_LISTENERS.get(key);
+	if (!listeners) {
+		return;
+	}
+	LAST_NOTICE.set(key, notice.text);
+	for (const listener of listeners) {
+		try {
+			listener(notice);
+		} catch {
+			// A listener's fault is not the request's.
+		}
+	}
+}
+
 export interface PolykvRoomWait {
 	/** `true` while the request is held client-side, `false` once it is sent. */
 	waiting: boolean;

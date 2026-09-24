@@ -66,6 +66,7 @@ import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configur
 import { loadConfiguredAgentConfigs } from "../../extensions/tools/team/configured-agent-config";
 import { createConfiguredAgentTools } from "../../extensions/tools/team/configured-agent-tool";
 import { createCreateAgentTool } from "../../extensions/tools/team/create-agent-tool";
+import { delegatedAgentTools } from "../../extensions/tools/team/delegated-tools";
 import { configuredAgentKey } from "../../extensions/tools/team/spawn-agent-tool";
 import {
 	filterDisabledTools,
@@ -970,25 +971,28 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 						createSubAgentTools: (agent) =>
 							normalized.enableTools
 								? filterToolsForConfiguredAgent(
-										createBuiltinToolsList(
-											config.cwd,
-											agent.providerId ?? config.providerId,
-											normalized.mode,
-											agent.modelId ?? config.modelId,
-											config.toolRoutingRules,
-											effectiveToolPolicies,
-											agent.skills !== undefined &&
-												userInstructionService?.createSkillsExecutor
-												? userInstructionService.createSkillsExecutor(
-														agent.skills,
-													)
-												: undefined,
-											toolExecutors,
-											telemetry ?? config.telemetry,
-											config.qaCredentials,
-											input.runCommandExecutionController,
-											input.readReceipts,
-											fileReadMaxChars,
+										delegatedAgentTools(
+											createBuiltinToolsList(
+												config.cwd,
+												agent.providerId ?? config.providerId,
+												normalized.mode,
+												agent.modelId ?? config.modelId,
+												config.toolRoutingRules,
+												effectiveToolPolicies,
+												agent.skills !== undefined &&
+													userInstructionService?.createSkillsExecutor
+													? userInstructionService.createSkillsExecutor(
+															agent.skills,
+														)
+													: undefined,
+												toolExecutors,
+												telemetry ?? config.telemetry,
+												config.qaCredentials,
+												input.runCommandExecutionController,
+												input.readReceipts,
+												fileReadMaxChars,
+											),
+											config.extraTools,
 										),
 										agent,
 									)

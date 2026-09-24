@@ -1,6 +1,6 @@
-import type { ClineMessage, ClineSaySubagentStatus, SubagentStatusItem } from "@shared/ExtensionMessage"
+import type { ClineMessage, ClineSaySubagentStatus, SubagentActivityEntry, SubagentStatusItem } from "@shared/ExtensionMessage"
 import { StringRequest } from "@shared/proto/cline/common"
-import { ClockIcon, LoaderCircleIcon, SquareIcon, XIcon } from "lucide-react"
+import { ClockIcon, LoaderCircleIcon, SquareIcon, TriangleAlertIcon, XIcon } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -91,6 +91,48 @@ function outputTail(agent: SubagentStatusItem): string | undefined {
 	return text.split("\n").slice(-6).join("\n")
 }
 
+/** The warning colour: one orange, readable on the light and the dark themes alike. */
+const WARN_TEXT = "text-[#e8912d]"
+
+function hasWarning(agent: SubagentStatusItem): boolean {
+	return agent.activity?.some((entry) => entry.severity === "warn") ?? false
+}
+
+function clockOf(at: number): string {
+	return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+}
+
+/**
+ * What the agent has been doing, newest last, with what went wrong marked.
+ *
+ * The line at the top says only what it is doing now. A fault the turn
+ * survives -- the pool that shared 4 of its 5,627 tokens on every turn, the
+ * node that refused it a dozen times -- was otherwise only in the logs.
+ */
+export function AgentActivity({ activity }: { activity: readonly SubagentActivityEntry[] }) {
+	if (activity.length === 0) {
+		return null
+	}
+	return (
+		<div className="mt-1.5">
+			<div className="text-[10px] opacity-60">Activity</div>
+			<ol className="m-0 max-h-28 list-none overflow-y-auto p-0 font-mono text-[10px]">
+				{activity.map((entry, index) => (
+					<li
+						className={`flex gap-1.5 ${entry.severity === "warn" ? WARN_TEXT : "opacity-80"}`}
+						key={`${entry.at}-${index}`}>
+						<span className="shrink-0 tabular-nums opacity-70">{clockOf(entry.at)}</span>
+						{entry.severity === "warn" && (
+							<TriangleAlertIcon aria-label="warning" className="mt-[1px] size-3 shrink-0" />
+						)}
+						<span className="min-w-0 whitespace-pre-wrap break-words">{entry.text}</span>
+					</li>
+				))}
+			</ol>
+		</div>
+	)
+}
+
 function AgentDetail({
 	agent,
 	onClose,
@@ -155,6 +197,7 @@ function AgentDetail({
 			<div className="mt-1.5 max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[11px] text-foreground opacity-90">
 				{agent.prompt}
 			</div>
+			<AgentActivity activity={agent.activity ?? []} />
 			{tail && (
 				<div className="mt-1.5">
 					<div className="text-[10px] opacity-60">{agent.latestOutputKind === "reasoning" ? "Thinking" : "Output"}</div>
@@ -263,6 +306,9 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 								type="button">
 								<StatusIcon agent={agent} />
 								<span className="min-w-0 truncate">{identity.label}</span>
+								{hasWarning(agent) && (
+									<TriangleAlertIcon aria-label="has a warning" className={`size-3 shrink-0 ${WARN_TEXT}`} />
+								)}
 							</button>
 						)
 					})}

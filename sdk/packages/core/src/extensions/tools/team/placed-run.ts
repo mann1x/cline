@@ -183,9 +183,11 @@ export async function runPlacedAgent(
 				// On the agent's row as well as in the log: a refused agent
 				// otherwise looks exactly like one that is working, and the
 				// only place the engine's reason appeared was a log file.
+				const refusedLine = `${where} refused it (refusal ${refusals} of ${MAX_REFUSED_REQUEUES}): ${refusalReason(failure)}`;
 				input.emitUpdate?.({
-					latestOutput: `${where} refused it (refusal ${refusals} of ${MAX_REFUSED_REQUEUES}): ${refusalReason(failure)}`,
+					latestOutput: refusedLine,
 					latestOutputKind: "text",
+					activity: { text: refusedLine, severity: "warn" },
 				});
 				await input.beforeRetry?.().catch(() => undefined);
 				front = true;
@@ -218,11 +220,13 @@ export async function runPlacedAgent(
 							: "unreachable"
 					}); back to the front of the queue`,
 				);
+				const failedLine = `${where} could not run it (${
+					wasted ? "it does not have the model" : "the node is not answering"
+				}); waiting for another node`;
 				input.emitUpdate?.({
-					latestOutput: `${where} could not run it (${
-						wasted ? "it does not have the model" : "the node is not answering"
-					}); waiting for another node`,
+					latestOutput: failedLine,
 					latestOutputKind: "text",
+					activity: { text: failedLine, severity: "warn" },
 				});
 				await input.beforeRetry?.().catch(() => undefined);
 				front = true;

@@ -488,6 +488,22 @@ export interface SubagentStatusItem {
 	cancelId?: string
 	result?: string
 	error?: string
+	/**
+	 * What the agent has been doing, newest last, and what went wrong on the way.
+	 *
+	 * The row's other fields say only what it is doing now, so a fault the turn
+	 * survives -- a pool that shared 4 of its 5,627 tokens on every turn, a node
+	 * that refused it twelve times -- was visible in the logs and nowhere else.
+	 */
+	activity?: SubagentActivityEntry[]
+}
+
+export interface SubagentActivityEntry {
+	/** Epoch ms. */
+	at: number
+	text: string
+	/** `warn` is a fault: shown with a warning sign, in the warning colour. */
+	severity?: "warn"
 }
 
 export interface ClineSaySubagentStatus {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createOpencotiFetch } from "./opencoti";
 import {
 	engineSessionId,
+	onPolykvNotice,
 	onPolykvRoomWait,
 	polykvSwarmState,
 	releaseAllPolykvSwarms,
@@ -19,13 +20,28 @@ function stubEngine(options: { refuseWorkersTimes?: number } = {}) {
 	const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
 	let nextPool = 0;
 	let refusals = options.refuseWorkersTimes ?? 0;
-	const render = (messages: Array<{ role: string; content: unknown }>) =>
+	// Gemma-4's shape: the system turn carries the thinking flag unless the
+	// request's budget is 0, and `/apply-template` reads the same field.
+	const render = (
+		messages: Array<{ role: string; content: unknown }>,
+		fields: Record<string, unknown> = {},
+	) =>
 		messages
 			.map(
 				(message) =>
-					`<|${message.role}|>${typeof message.content === "string" ? message.content : JSON.stringify(message.content)}<|end|>`,
+					`<|${message.role}|>${
+						message.role === "system" && fields.reasoning_budget_tokens !== 0
+							? "<|think|>"
+							: ""
+					}${typeof message.content === "string" ? message.content : JSON.stringify(message.content)}<|end|>`,
 			)
 			.join("");
+	const pools = new Map<number, string>();
+	const matchOf = (pool: string, request: string) => {
+		let at = 0;
+		while (at < pool.length && pool[at] === request[at]) at += 1;
+		return at;
+	};
 	const fetchImpl = (async (input: unknown, init?: RequestInit) => {
 		const url = new URL(String(input));
 		const body = init?.body
@@ -44,13 +60,16 @@ function stubEngine(options: { refuseWorkersTimes?: number } = {}) {
 			return json({
 				prompt: render(
 					body.messages as Array<{ role: string; content: unknown }>,
+					body,
 				),
 			});
 		}
 		if (url.pathname === "/polykv/pools") {
+			pools.set(nextPool, String(body.prompt));
 			return json({ pool_id: nextPool++, parent: -1, prefix_len: 100 });
 		}
 		if (/^\/polykv\/pools\/\d+\/fork$/.test(url.pathname)) {
+			pools.set(nextPool, String(body.prompt));
 			return json({
 				pool_id: nextPool++,
 				parent: Number(url.pathname.split("/")[3]),
@@ -74,11 +93,28 @@ function stubEngine(options: { refuseWorkersTimes?: number } = {}) {
 					{ "retry-after": "0" },
 				);
 			}
-			return json({ choices: [{ message: { content: "ok" } }] });
+			const pool =
+				typeof body.pool_id === "number" ? pools.get(body.pool_id) : undefined;
+			const request = render(
+				body.messages as Array<{ role: string; content: unknown }>,
+				body,
+			);
+			return json({
+				choices: [{ message: { content: "ok" } }],
+				...(pool !== undefined
+					? {
+							opencoti: {
+								pool_id: body.pool_id,
+								pool_match: matchOf(pool, request),
+								pool_len: pool.length,
+							},
+						}
+					: {}),
+			});
 		}
 		return json({ error: "no route" }, 404);
 	}) as unknown as typeof fetch;
-	return { calls, fetch: fetchImpl };
+	return { calls, fetch: fetchImpl, pools };
 }
 
 function agentBody(role: string, task: string, knowledge = "the shared file") {
@@ -159,6 +195,57 @@ describe("a PolyKV swarm", () => {
 				workers[(index + 1) % 6]?.body.session_id,
 			);
 		}
+	});
+
+	// 8240 2026-09-24: the workers sent `reasoning_budget_tokens: 0`, the pools
+	// were rendered without it, and every attach shared 4 tokens of ~5.6k.
+	it("renders its pools the way the request renders, thinking flag and all", async () => {
+		const engine = stubEngine();
+		const notices: string[] = [];
+		const stop = onPolykvNotice("a", (notice) => notices.push(notice.text));
+		try {
+			const response = await send(engine, "a", {
+				...agentBody("brace role", "t1"),
+				reasoning_budget_tokens: 0,
+			});
+			const block = (
+				(await response.json()) as { opencoti: Record<string, number> }
+			).opencoti;
+			expect(block.pool_match).toBe(block.pool_len);
+		} finally {
+			stop();
+		}
+		for (const call of engine.calls.filter(
+			(entry) => entry.path === "/apply-template",
+		)) {
+			expect(call.body.reasoning_budget_tokens).toBe(0);
+			expect(call.body.session_id).toBeUndefined();
+		}
+		expect(notices).toEqual([]);
+	});
+
+	// The client could not see the divergence: a worker's response went past
+	// unread, so "4 of 5,627" reached the server log and nowhere else.
+	it("tells the agent when its request diverges from the pool", async () => {
+		const engine = stubEngine();
+		await send(engine, "a", agentBody("brace role", "t1"));
+		const notices: Array<{ severity: string; text: string }> = [];
+		const stop = onPolykvNotice("b", (notice) => notices.push(notice));
+		try {
+			// Same pools (same signature), but this request renders without
+			// the flag: the stub then reports the divergence, as b45 does.
+			for (const [id, prompt] of engine.pools) {
+				engine.pools.set(id, prompt.replace("<|think|>", "<|THINK|>"));
+			}
+			const response = await send(engine, "b", agentBody("brace role", "t2"));
+			await response.json();
+		} finally {
+			stop();
+		}
+		expect(notices).toHaveLength(1);
+		expect(notices[0]?.severity).toBe("warn");
+		expect(notices[0]?.text).toMatch(/shared only \d+ of its \d+ tokens/);
+		expect(notices[0]?.text).toMatch(/diverges .* at token \d+/);
 	});
 
 	it("gives a second role its own layer on the same knowledge", async () => {

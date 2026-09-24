@@ -28,6 +28,7 @@ import { createSpawnAgentTool } from "../../../extensions/tools/team";
 import { admissionFromCapacity } from "../../../extensions/tools/team/agent-admission";
 import type { DelegatedAgentConfigProvider } from "../../../extensions/tools/team/delegated-agent";
 import { createDelegatedAgent } from "../../../extensions/tools/team/delegated-agent";
+import { delegatedAgentTools } from "../../../extensions/tools/team/delegated-tools";
 import {
 	isAdmissionEvent,
 	runPlacedAgent,
@@ -166,12 +167,15 @@ export function createSessionSpawnTool(
 	);
 	const createSubAgentTools = () => {
 		const tools: AgentTool[] = config.enableTools
-			? createBuiltinTools({
-					cwd: config.cwd,
-					telemetry: config.telemetry,
-					...ToolPresets[resolveToolPresetName({ mode: config.mode })],
-					executors: toolExecutors,
-				})
+			? delegatedAgentTools(
+					createBuiltinTools({
+						cwd: config.cwd,
+						telemetry: config.telemetry,
+						...ToolPresets[resolveToolPresetName({ mode: config.mode })],
+						executors: toolExecutors,
+					}),
+					config.extraTools,
+				)
 			: [];
 		if (config.enableSpawnAgent) {
 			tools.push(
@@ -246,8 +250,6 @@ export function createSessionSpawnTool(
  * worker therefore gets an id of its own, registered against the shared pool so
  * the vendor sends `pool_id` with it, and cleared when the worker finishes.
  */
-/** Tools a swarm worker does not get; see `runOnPool`. */
-const SWARM_WORKER_EXCLUDED_TOOLS = new Set(["ask_question"]);
 
 export function createSessionSwarmTool(
 	deps: SpawnToolDeps,
@@ -346,19 +348,23 @@ export function createSessionSwarmTool(
 		// nobody is watching it, so a question from one blocked the round on a
 		// prompt the user could not place -- measured on pandorum, a worker
 		// asked, and the lead then sat "generating" for as long as it waited.
+		// Its `ask_question` ends it and goes to the lead instead
+		// (`delegated-tools.ts`), as every delegated agent's does.
 		const tools: AgentTool[] = config.enableTools
 			? filterDisabledTools(
-					createBuiltinTools({
-						cwd: config.cwd,
-						telemetry: config.telemetry,
-						...ToolPresets[resolveToolPresetName({ mode: config.mode })],
-						executors: toolExecutors,
-					}),
+					delegatedAgentTools(
+						createBuiltinTools({
+							cwd: config.cwd,
+							telemetry: config.telemetry,
+							...ToolPresets[resolveToolPresetName({ mode: config.mode })],
+							executors: toolExecutors,
+						}),
+						config.extraTools,
+					),
 				).filter(
 					(tool) =>
-						!SWARM_WORKER_EXCLUDED_TOOLS.has(tool.name) &&
 						// A configured agent's own list, when the worker is one.
-						(request.tools === undefined || request.tools.includes(tool.name)),
+						request.tools === undefined || request.tools.includes(tool.name),
 				)
 			: [];
 		// The worker's row: what it is running and writing, as a lone

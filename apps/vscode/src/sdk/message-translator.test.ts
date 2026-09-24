@@ -5520,6 +5520,57 @@ describe("a spawn_agent batch", () => {
 	})
 })
 
+describe("a sub-agent's activity", () => {
+	const update = (state: MessageTranslatorState, payload: Record<string, unknown>) =>
+		translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "content_update",
+						contentType: "tool",
+						toolName: "subagent_js_syntactic",
+						toolCallId: "call-1",
+						update: payload,
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+
+	it("keeps what it did and what went wrong, a repeated line once", () => {
+		const state = new MessageTranslatorState()
+		translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "content_start",
+						contentType: "tool",
+						toolName: "subagent_js_syntactic",
+						toolCallId: "call-1",
+						input: { prompt: "fix the braces" },
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+		update(state, { queued: false, nodeLabel: "Node1" })
+		update(state, { latestToolCall: "read_files a.html" })
+		update(state, { latestToolCall: "read_files a.html" })
+		update(state, { activity: { text: "Pool 5 shared only 4 of its 5,627 tokens", severity: "warn" } })
+		update(state, { activity: { text: "Pool 5 shared only 4 of its 5,627 tokens", severity: "warn" } })
+
+		expect(state.getSpawnAgentItems()[0]?.activity?.map((entry) => [entry.text, entry.severity])).toEqual([
+			["Placed on Node1", undefined],
+			["read_files a.html", undefined],
+			["Pool 5 shared only 4 of its 5,627 tokens", "warn"],
+		])
+	})
+})
+
 describe("a batch member that ends before the call", () => {
 	const send = (state: MessageTranslatorState, event: Record<string, unknown>) =>
 		translateSessionEvent(

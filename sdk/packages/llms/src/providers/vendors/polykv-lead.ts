@@ -10,7 +10,13 @@ import {
 	probeOpencotiProps,
 	setPolykvSession,
 } from "./polykv";
-import { engineSessionId, hashString, renderLayer } from "./polykv-swarm";
+import {
+	engineSessionId,
+	hashString,
+	renderLayer,
+	templateFieldsOf,
+	templateSignature,
+} from "./polykv-swarm";
 
 /**
  * Conversations that share a prefix, deduplicated on the engine.
@@ -228,8 +234,14 @@ export async function prepareLeadPool(options: {
 	if (!props?.poolsEnabled) {
 		return undefined;
 	}
+	const fields = templateFieldsOf(body);
 	const rootKey = hashString(
-		JSON.stringify([body.model ?? "", tools ?? [], messages[0]]),
+		JSON.stringify([
+			body.model ?? "",
+			tools ?? [],
+			messages[0],
+			templateSignature(fields),
+		]),
 	);
 	let lead = LEADS.get(sessionId);
 	if (lead && lead.root.key !== `${polykvRoot(options.baseUrl)}\n${rootKey}`) {
@@ -277,7 +289,7 @@ export async function prepareLeadPool(options: {
 		OPENCOTI_FEATURES.sharedRoot,
 	);
 	root.pool ??= (async () => {
-		const prompt = await renderLayer(root.client, [messages[0]], tools);
+		const prompt = await renderLayer(root.client, [messages[0]], tools, fields);
 		if (!prompt) {
 			return undefined;
 		}
@@ -319,6 +331,7 @@ export async function prepareLeadPool(options: {
 						root.client,
 						messages.slice(0, 2),
 						tools,
+						fields,
 					);
 					// Never attach a layer that does not extend its parent: it is
 					// created, pinned and attached, and shares nothing.

@@ -101,10 +101,15 @@ describe("createSessionSwarmTool workers", () => {
 			{ systemPrompt: "s", tasks: [{ task: "a" }] },
 			{ agentId: "lead" },
 		);
-		const names = (built[0]?.tools as Array<{ name: string }>).map(
-			(tool) => tool.name,
-		);
-		expect(names.length).toBeGreaterThan(0);
-		expect(names).not.toContain("ask_question");
+		const tools = built[0]?.tools as Array<{
+			name: string;
+			lifecycle?: { completesRun?: boolean };
+		}>;
+		expect(tools.length).toBeGreaterThan(0);
+		// It may ask -- the lead, not the user: the call ends the worker and
+		// the question is its report (`delegated-tools.ts`).
+		for (const tool of tools.filter((entry) => entry.name === "ask_question")) {
+			expect(tool.lifecycle?.completesRun).toBe(true);
+		}
 	});
 });

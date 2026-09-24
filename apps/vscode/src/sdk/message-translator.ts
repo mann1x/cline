@@ -226,6 +226,27 @@ export function spawnMemberKey(callId: string, index: number): string {
 }
 
 /** A spawned agent's report, onto its row: text, tokens, model and node. */
+/** Entries an agent's activity keeps: enough to see a pattern, not a transcript. */
+export const SUBAGENT_ACTIVITY_LIMIT = 12
+
+/**
+ * Add a line to an agent's activity. A repeat of the last line is dropped, so
+ * a tool called ten times running is one line, not ten.
+ */
+function pushSubagentActivity(entry: SubagentStatusItem, text: string, severity?: "warn", at: number = Date.now()): void {
+	const line = text.trim()
+	if (!line) {
+		return
+	}
+	const activity = entry.activity ?? []
+	const last = activity[activity.length - 1]
+	if (last?.text === line && last.severity === severity) {
+		return
+	}
+	activity.push({ at, text: line, ...(severity ? { severity } : {}) })
+	entry.activity = activity.slice(-SUBAGENT_ACTIVITY_LIMIT)
+}
+
 function applySpawnAgentOutput(entry: SubagentStatusItem, output: Record<string, unknown>): void {
 	entry.result = typeof output.text === "string" ? output.text : undefined
 	const usage = output.usage as Record<string, unknown> | undefined
@@ -2373,7 +2394,12 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						if (typeof updateData.contextWindow === "number") entry.contextWindow = updateData.contextWindow
 						if (typeof updateData.contextUsagePercentage === "number")
 							entry.contextUsagePercentage = updateData.contextUsagePercentage
-						if (typeof updateData.latestToolCall === "string") entry.latestToolCall = updateData.latestToolCall
+						if (typeof updateData.latestToolCall === "string") {
+							if (updateData.latestToolCall !== entry.latestToolCall) {
+								pushSubagentActivity(entry, updateData.latestToolCall)
+							}
+							entry.latestToolCall = updateData.latestToolCall
+						}
 						if (typeof updateData.latestOutput === "string") entry.latestOutput = updateData.latestOutput
 						if (updateData.latestOutputKind === "text" || updateData.latestOutputKind === "reasoning")
 							entry.latestOutputKind = updateData.latestOutputKind
@@ -2390,6 +2416,18 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						// end, when it no longer explains anything.
 						if (typeof updateData.nodeId === "string") entry.nodeId = updateData.nodeId
 						if (typeof updateData.nodeLabel === "string") entry.nodeLabel = updateData.nodeLabel
+						if (
+							updateData.queued === false &&
+							(typeof updateData.nodeLabel === "string" || typeof updateData.nodeId === "string")
+						) {
+							pushSubagentActivity(entry, `Placed on ${entry.nodeLabel ?? entry.nodeId}`)
+						}
+						// What the tool, the placement queue and the engine said about
+						// it: a wait, a refusal, a pool that shares nothing.
+						const activity = updateData.activity as { text?: unknown; severity?: unknown } | undefined
+						if (activity && typeof activity.text === "string") {
+							pushSubagentActivity(entry, activity.text, activity.severity === "warn" ? "warn" : undefined)
+						}
 						if (typeof updateData.genTps === "number" && Number.isFinite(updateData.genTps))
 							entry.genTps = updateData.genTps
 						// Ended, on its own: a batch or swarm member's row finishes
@@ -2403,8 +2441,10 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 							if (typeof report.error === "string" && report.error) {
 								entry.status = "failed"
 								entry.error = report.error
+								pushSubagentActivity(entry, `Failed: ${report.error}`, "warn")
 							} else {
 								entry.status = "completed"
+								pushSubagentActivity(entry, "Finished")
 							}
 						}
 					}

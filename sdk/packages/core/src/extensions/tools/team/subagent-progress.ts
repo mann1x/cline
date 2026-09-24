@@ -1,4 +1,4 @@
-import { onPolykvRoomWait } from "@cline/llms";
+import { onPolykvNotice, onPolykvRoomWait } from "@cline/llms";
 import type { AgentEvent } from "@cline/shared";
 
 /**
@@ -101,18 +101,37 @@ export function watchPolykvRoom(
 	if (!engineSessionId || !emitUpdate) {
 		return () => {};
 	}
-	return onPolykvRoomWait(engineSessionId, (state) => {
+	const stopRoom = onPolykvRoomWait(engineSessionId, (state) => {
 		emitUpdate(
 			state.waiting
 				? {
 						queued: true,
 						...(state.reason
-							? { latestOutput: state.reason, latestOutputKind: "text" }
+							? {
+									latestOutput: state.reason,
+									latestOutputKind: "text",
+									activity: { text: state.reason },
+								}
 							: {}),
 					}
 				: { queued: false },
 		);
 	});
+	// What the engine said about its requests: a pool that shared 4 tokens of
+	// 5,627 on every turn was a warning in the server log and nowhere a user
+	// would look. On the row's activity, with its severity.
+	const stopNotices = onPolykvNotice(engineSessionId, (notice) => {
+		emitUpdate({
+			activity: {
+				text: notice.text,
+				...(notice.severity === "warn" ? { severity: "warn" } : {}),
+			},
+		});
+	});
+	return () => {
+		stopRoom();
+		stopNotices();
+	};
 }
 
 /**

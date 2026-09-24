@@ -201,6 +201,32 @@ describe("the lead tree", () => {
 		expect(polykvLeadState()[0]?.sessions).toEqual(["lead-1", "lead-2"]);
 	});
 
+	// 8240 2026-09-24: a request's `reasoning_budget_tokens: 0` drops Gemma-4's
+	// `<|think|>` at token 4, and a root rendered without it shared 4 tokens.
+	it("renders the root with the request's own template fields, and keys it by them", async () => {
+		const engine = stubEngine();
+		await prepare(engine, "lead-1", {
+			...hoisted("c:/one"),
+			reasoning_budget_tokens: 0,
+		});
+		const renders = engine.calls.filter(
+			(call) => call.path === "/apply-template",
+		);
+		expect(renders.length).toBeGreaterThan(0);
+		for (const call of renders) {
+			expect(call.body.reasoning_budget_tokens).toBe(0);
+		}
+		// Thinking on renders differently, so it is a root of its own.
+		await prepare(engine, "lead-2", {
+			...hoisted("d:/two"),
+			reasoning_budget_tokens: 4000,
+		});
+		expect(polykvLeadState().map((entry) => entry.sessions)).toEqual([
+			["lead-1"],
+			["lead-2"],
+		]);
+	});
+
 	// A pool's owner must be a live allocation: the sub-pool waits for the
 	// window, then lives inside it.
 	it("forks the conversation's own sub-pool once it holds a window", async () => {

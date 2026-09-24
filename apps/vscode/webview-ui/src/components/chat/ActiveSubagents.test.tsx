@@ -156,6 +156,38 @@ describe("the working-agents strip", () => {
 		expect(screen.getByText("queued")).toBeInTheDocument()
 	})
 
+	// 8240 2026-09-24: every worker's pool shared 4 of its 5,627 tokens, on
+	// every turn, and it was in the server log and nowhere a user would look.
+	it("shows what the agent has been doing, and marks what went wrong", () => {
+		const divergence =
+			"Pool 5 shared only 4 of its 5,627 tokens: this request's prompt diverges from the pool at token 4, so each turn prefills the whole prompt again."
+		render(
+			<ActiveSubagents
+				messages={[
+					statusMessage([
+						item({
+							index: 1,
+							agentName: "js-syntactic",
+							activity: [
+								{ at: 1_000, text: "read_files manic_miner.html" },
+								{ at: 2_000, text: divergence, severity: "warn" },
+							],
+						}),
+					]),
+				]}
+			/>,
+		)
+
+		// Marked on its tag, before anything is opened.
+		expect(screen.getByLabelText("has a warning")).toBeInTheDocument()
+		fireEvent.click(screen.getByRole("button", { name: /js-syntactic/ }))
+		expect(screen.getByText("Activity")).toBeInTheDocument()
+		expect(screen.getByText("read_files manic_miner.html")).toBeInTheDocument()
+		const warning = screen.getByText(divergence).closest("li")
+		expect(warning?.className).toContain("text-[#e8912d]")
+		expect(warning?.querySelector('[aria-label="warning"]')).not.toBeNull()
+	})
+
 	it("opens the agent's box when its name is clicked, and closes it again", () => {
 		render(
 			<ActiveSubagents

@@ -464,6 +464,14 @@ export interface PolykvClient {
 	applyTemplate(body: {
 		messages: readonly unknown[];
 		tools?: readonly unknown[];
+		/**
+		 * The rest of the chat request, as it will be sent: see
+		 * `templateFieldsOf`. The server parses this body with the same code
+		 * it parses a chat request with, so fields such as
+		 * `reasoning_budget_tokens` change the rendering here exactly as they
+		 * do there.
+		 */
+		fields?: Readonly<Record<string, unknown>>;
 	}): Promise<string>;
 }
 
@@ -980,6 +988,7 @@ export function createPolykvClient(options: PolykvClientOptions): PolykvClient {
 			const result = await call<{ prompt: string }>("/apply-template", {
 				method: "POST",
 				body: {
+					...body.fields,
 					messages: body.messages,
 					...(body.tools && body.tools.length > 0 ? { tools: body.tools } : {}),
 					// Without this the template appends the assistant generation

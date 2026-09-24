@@ -29,6 +29,7 @@ import {
 	type PolykvWorkerSpec,
 	preparePolykvWorker,
 	rememberOpencotiSession,
+	reportPolykvNotice,
 	reportPolykvRoomWait,
 } from "./polykv-swarm";
 import type { ProviderFactoryResult } from "./types";
@@ -424,82 +425,136 @@ export function createOpencotiFetch(options: {
 		if (leadSession !== undefined && leadAskedWindow && response.ok) {
 			markLeadWindowLive(leadSession);
 		}
-		if (!options.onFacts) {
-			return response;
-		}
-		{
-			const onFacts = options.onFacts;
-			const facts: OpencotiResponseFacts = {
-				...(numberOrUndefined(response.headers.get("x-sessions-remaining")) !==
-				undefined
-					? {
-							sessionsRemaining: numberOrUndefined(
-								response.headers.get("x-sessions-remaining"),
-							) as number,
-						}
-					: {}),
-				...(numberOrUndefined(
-					response.headers.get("x-polykv-settle-waived"),
-				) !== undefined
-					? {
-							settleWaivedMs: numberOrUndefined(
-								response.headers.get("x-polykv-settle-waived"),
-							) as number,
-						}
-					: {}),
-				...(numberOrUndefined(response.headers.get("x-context-window")) !==
-				undefined
-					? {
-							contextWindow: numberOrUndefined(
-								response.headers.get("x-context-window"),
-							) as number,
-						}
-					: {}),
-			};
-
-			// A stream cannot be read here and handed on intact, so the headers
-			// go out now and the attach follows when the last frame passes. Two
-			// calls on a streamed turn, one on a buffered one: the callback
-			// takes observations as they are learned, not a single summary.
-			const contentType = response.headers.get("content-type") ?? "";
-			if (contentType.includes("text/event-stream") && response.body !== null) {
-				if (Object.keys(facts).length > 0) {
-					onFacts(facts);
-				}
-				return new Response(
-					response.body.pipeThrough(
-						scanEventStream((block) => {
-							const attach = readAttachFacts(block);
-							if (Object.keys(attach).length > 0) {
-								onFacts(attach);
-							}
-						}),
-					),
-					{
-						status: response.status,
-						statusText: response.statusText,
-						headers: response.headers,
-					},
-				);
-			}
-
-			// Buffered: `clone()` so the body the caller gets is still unread.
-			// A response that is not JSON simply has no block, which is the same
-			// answer as a server that does not set one.
-			let attach: OpencotiResponseFacts = {};
-			try {
-				const body = (await response.clone().json()) as Record<string, unknown>;
-				attach = readAttachFacts(body?.opencoti);
-			} catch {
-				attach = {};
-			}
-			const merged = { ...facts, ...attach };
-			if (Object.keys(merged).length > 0) {
-				onFacts(merged);
-			}
-		}
-		return response;
+		return extras?.sessionId !== undefined || options.onFacts
+			? observeResponseFacts(
+					response,
+					noticeDivergence(extras?.sessionId, options.onFacts),
+				)
+			: response;
 	}) as typeof fetch;
+}
+
+/**
+ * A pool divergence, worded for the agent's row.
+ *
+ * `pool_match` is where the two token streams part, so it is also the token
+ * the server names in its log ("diverges from the pool prompt at token 4").
+ */
+export function poolDivergenceNotice(facts: OpencotiResponseFacts): string {
+	const format = (value: number | undefined) =>
+		value === undefined ? "?" : Intl.NumberFormat("en-US").format(value);
+	return `Pool ${facts.poolId ?? "?"} shared only ${format(facts.poolMatchTokens)} of its ${format(facts.poolLengthTokens)} tokens: this request's prompt diverges from the pool at token ${format(facts.poolMatchTokens)}, so each turn prefills the whole prompt again.`;
+}
+
+/**
+ * `onFacts`, with a pool divergence also put on the agent's row.
+ *
+ * Here and not in a caller's `onFacts`: this is the one place that knows both
+ * the response and whose it is, for every fetch the vendor builds. The turn
+ * succeeds regardless, so it is a fault nobody sees unless it is put where
+ * they look.
+ */
+function noticeDivergence(
+	sessionId: string | undefined,
+	onFacts: ((facts: OpencotiResponseFacts) => void) | undefined,
+): (facts: OpencotiResponseFacts) => void {
+	return (facts) => {
+		if (
+			sessionId !== undefined &&
+			facts.poolMatchTokens !== undefined &&
+			facts.poolLengthTokens !== undefined &&
+			facts.poolMatchTokens < facts.poolLengthTokens
+		) {
+			reportPolykvNotice(sessionId, {
+				severity: "warn",
+				text: poolDivergenceNotice(facts),
+			});
+		}
+		onFacts?.(facts);
+	};
+}
+
+/**
+ * Hand what the response says about the turn to `onFacts`, and return a
+ * response the caller can still read whole.
+ *
+ * Shared by the ordinary fetch and the worker's. The worker's read nothing, so
+ * a worker whose pool shared 4 of its 5,627 tokens said so to the server log
+ * and to nothing on this side -- the one warning written for it was on the
+ * other path.
+ */
+async function observeResponseFacts(
+	response: Response,
+	onFacts: (facts: OpencotiResponseFacts) => void,
+): Promise<Response> {
+	const facts: OpencotiResponseFacts = {
+		...(numberOrUndefined(response.headers.get("x-sessions-remaining")) !==
+		undefined
+			? {
+					sessionsRemaining: numberOrUndefined(
+						response.headers.get("x-sessions-remaining"),
+					) as number,
+				}
+			: {}),
+		...(numberOrUndefined(response.headers.get("x-polykv-settle-waived")) !==
+		undefined
+			? {
+					settleWaivedMs: numberOrUndefined(
+						response.headers.get("x-polykv-settle-waived"),
+					) as number,
+				}
+			: {}),
+		...(numberOrUndefined(response.headers.get("x-context-window")) !==
+		undefined
+			? {
+					contextWindow: numberOrUndefined(
+						response.headers.get("x-context-window"),
+					) as number,
+				}
+			: {}),
+	};
+
+	// A stream cannot be read here and handed on intact, so the headers
+	// go out now and the attach follows when the last frame passes. Two
+	// calls on a streamed turn, one on a buffered one: the callback
+	// takes observations as they are learned, not a single summary.
+	const contentType = response.headers.get("content-type") ?? "";
+	if (contentType.includes("text/event-stream") && response.body !== null) {
+		if (Object.keys(facts).length > 0) {
+			onFacts(facts);
+		}
+		return new Response(
+			response.body.pipeThrough(
+				scanEventStream((block) => {
+					const attach = readAttachFacts(block);
+					if (Object.keys(attach).length > 0) {
+						onFacts(attach);
+					}
+				}),
+			),
+			{
+				status: response.status,
+				statusText: response.statusText,
+				headers: response.headers,
+			},
+		);
+	}
+
+	// Buffered: `clone()` so the body the caller gets is still unread.
+	// A response that is not JSON simply has no block, which is the same
+	// answer as a server that does not set one.
+	let attach: OpencotiResponseFacts = {};
+	try {
+		const body = (await response.clone().json()) as Record<string, unknown>;
+		attach = readAttachFacts(body?.opencoti);
+	} catch {
+		attach = {};
+	}
+	const merged = { ...facts, ...attach };
+	if (Object.keys(merged).length > 0) {
+		onFacts(merged);
+	}
+	return response;
 }
 
 /**
@@ -521,8 +576,14 @@ function createWorkerFetch(options: {
 	worker: PolykvWorkerSpec;
 	baseUrl: string;
 	headers?: Record<string, string>;
+	onFacts?: (facts: OpencotiResponseFacts) => void;
 }): typeof fetch {
 	const base = options.fetch ?? fetch;
+	const observed = (response: Response) =>
+		observeResponseFacts(
+			response,
+			noticeDivergence(options.worker.sessionId, options.onFacts),
+		);
 	let ranOnce = false;
 	return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
 		if (!init?.body || typeof init.body !== "string") {
@@ -574,7 +635,7 @@ function createWorkerFetch(options: {
 					ranOnce = true;
 				}
 				reportPolykvRoomWait(options.worker.sessionId, { waiting: false });
-				return response;
+				return observed(response);
 			}
 			const text = await response
 				.clone()
@@ -582,7 +643,7 @@ function createWorkerFetch(options: {
 				.catch(() => "");
 			if (!isWorkerWindowFull(response.status, text) || Date.now() > deadline) {
 				reportPolykvRoomWait(options.worker.sessionId, { waiting: false });
-				return response;
+				return observed(response);
 			}
 			await response.body?.cancel().catch(() => {});
 			if (!ranOnce && !triedFresh) {
