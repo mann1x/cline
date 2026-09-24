@@ -40,6 +40,18 @@ Requires unprivileged user namespaces (kernel ≥ 5.11). Where they are blocked
 (e.g. AppArmor on Ubuntu 24.04+), the mount fails and the launcher exits non-zero
 rather than run the command unsandboxed — the caller then withholds the shell.
 
+**Known L1 limitation — exotic lower filesystems.** On a few filesystems the
+kernel's overlayfs copy-up of a lower file into the tmpfs upper fails with
+`EOVERFLOW` ("Value too large for defined data type") the moment a command
+modifies a file it has not already touched with a tool. Observed on an ext4
+volume carrying project/user/group quotas (`jqfmt=vfsv0`) on top of bcache;
+**not** on plain ext4, btrfs, xfs or tmpfs — i.e. not on a typical workspace.
+Such a host is also the one that refuses a disk overlay upper ("failed to set
+xattr on upper"), so it is doubly hostile to unprivileged overlayfs and is
+exactly the case the **L2** (seccomp-notify) backend exists to cover. Until L2
+lands, a command's copy-up failure surfaces as that command's own error and does
+not corrupt anything.
+
 ## Invocation
 
 ```text

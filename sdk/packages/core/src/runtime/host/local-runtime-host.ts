@@ -491,8 +491,17 @@ function resolveSandboxBinaries(dir?: string): SandboxBinaries | undefined {
 		return { launcher, hook, platforms: ["win32"] };
 	}
 	if (process.platform === "linux") {
-		const launcher = join(dir, "cerebriline-sandbox");
-		if (!existsSync(launcher)) {
+		// Pick the launcher for this CPU. Shipped arch-suffixed
+		// (`cerebriline-sandbox-x64` / `-arm64`); a flat `cerebriline-sandbox`
+		// is accepted as a fallback for a single-arch build.
+		const suffix = (
+			{ x64: "x64", arm64: "arm64" } as Record<string, string | undefined>
+		)[process.arch];
+		const names = suffix
+			? [`cerebriline-sandbox-${suffix}`, "cerebriline-sandbox"]
+			: ["cerebriline-sandbox"];
+		const launcher = names.map((n) => join(dir, n)).find(existsSync);
+		if (!launcher) {
 			return undefined;
 		}
 		// A vsix is a zip and may drop the executable bit on extraction; restore
