@@ -51,6 +51,11 @@ import {
 	createSubagentProgress,
 	watchPolykvRoom,
 } from "../../../extensions/tools/team/subagent-progress";
+import {
+	createWorkerStruggleSupervisor,
+	WORKER_STRUGGLE_MIN_ITERATION,
+	type WorkerStruggleOptions,
+} from "../../../runtime/safety/worker-struggle";
 import { buildTelemetryAgentIdentity } from "../../../services/agent-events";
 import { filterDisabledTools } from "../../../services/global-settings";
 import {
@@ -65,6 +70,35 @@ export type SubAgentStartTracker = Map<
 	string,
 	{ startedAt: number; rootSessionId: string }
 >;
+
+/**
+ * Where a swarm worker's one nudge and its stop sit, relative to its cap.
+ *
+ * The non-progress signal has to land below `maxIterations` for it to mean
+ * anything: the whole point is to stop the grind *before* the worker spends its
+ * whole budget and vanishes. So the nudge is placed at half the cap and the
+ * stop at four-fifths of it, leaving the last fifth for the worker to write its
+ * SUMMARY after the nudge. With no cap set, the supervisor's own defaults --
+ * calibrated to a ~40-iteration worker -- stand. The detector's edit-streak and
+ * distress paths fire on their own thresholds regardless of this.
+ */
+function swarmWorkerStruggleOptions(
+	maxIterations?: number,
+): Pick<WorkerStruggleOptions, "nudgeAfterIterations" | "stopAfterIterations"> {
+	if (typeof maxIterations !== "number" || maxIterations <= 0) {
+		return {};
+	}
+	return {
+		nudgeAfterIterations: Math.max(
+			WORKER_STRUGGLE_MIN_ITERATION,
+			Math.round(maxIterations * 0.5),
+		),
+		stopAfterIterations: Math.max(
+			WORKER_STRUGGLE_MIN_ITERATION + 1,
+			Math.round(maxIterations * 0.8),
+		),
+	};
+}
 
 export interface SpawnToolDeps {
 	getSession(sessionId: string): ActiveSession | undefined;
@@ -641,8 +675,23 @@ export function createSessionSwarmTool(
 					prefixTokens: 0,
 				});
 			}
+			// A headless worker gets the struggle layer the lead has always had,
+			// with a terminal action a worker can take: nudge once ("commit your
+			// best finding now as a SUMMARY"), then, if it keeps grinding, stop it.
+			// The stop is not data loss -- `digestOf` recovers whatever the worker
+			// produced, its reasoning tail included. Fresh per attempt so a
+			// re-placed worker starts watching from zero. See `worker-struggle.ts`
+			// and the v9-agentic swarm-grind diagnosis.
+			const struggle = createWorkerStruggleSupervisor({
+				...swarmWorkerStruggleOptions(config.maxIterations),
+				onTransition: (phase, reason) =>
+					config.logger?.log?.(
+						`[swarm] ${request.name}: worker ${phase} (${reason})`,
+					),
+			});
 			const worker = createDelegatedAgent({
 				kind: "subagent",
+				struggle,
 				...(request.takeMessage
 					? {
 							consumePendingUserMessage: async () => request.takeMessage?.(),
