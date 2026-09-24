@@ -57,6 +57,26 @@ const MNT_DETACH: c_int = 2;
 /// (e.g. `8g`, `50%`, or `default` for the kernel's own 50%-of-RAM cap).
 const DEFAULT_TMPFS_SIZE: &str = "4g";
 
+/// Whether an unprivileged user namespace can be created here — the precondition
+/// for L1. Probed in a throwaway child so a failure (AppArmor on Ubuntu 24.04+,
+/// `max_user_namespaces=0`) does not disturb this process.
+pub fn userns_available() -> bool {
+    // SAFETY: single-threaded; the child only calls unshare and _exit.
+    let pid = unsafe { fork() };
+    if pid == 0 {
+        let ok = unsafe { unshare(CLONE_NEWUSER) } == 0;
+        std::process::exit(if ok { 0 } else { 1 });
+    }
+    if pid < 0 {
+        return false;
+    }
+    let mut status: c_int = 0;
+    if unsafe { waitpid(pid, &mut status, 0) } < 0 {
+        return false;
+    }
+    exit_code_of(status) == 0
+}
+
 /// Run the command under the L1 sandbox. Returns the process exit code to
 /// propagate, or a non-zero launcher error code if the sandbox could not be set
 /// up (the caller must treat that as a failed command, never as "ran without a

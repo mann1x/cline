@@ -25,6 +25,13 @@ mod overlay;
 #[cfg(target_os = "linux")]
 mod linux;
 
+// The L2 (ptrace) backend and its resolver are x86_64-only for now.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod linux_l2;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod resolve;
+
 use std::path::PathBuf;
 
 /// The resolved launch request.
@@ -75,6 +82,24 @@ fn env_path(key: &str) -> Result<PathBuf, String> {
     }
 }
 
+// The L2 (ptrace) backend is implemented for x86_64 only. On another Linux arch
+// it is unavailable, so refuse rather than run the command unsandboxed (the
+// escape-critical rule). arm64 has working user namespaces, so `auto` reaches
+// this only when L1 is force-disabled or unavailable.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn run_l2(cfg: &Config) -> i32 {
+    linux_l2::run(cfg)
+}
+
+#[cfg(all(target_os = "linux", not(target_arch = "x86_64")))]
+fn run_l2(_cfg: &Config) -> i32 {
+    eprintln!(
+        "cerebriline-sandbox: the L2 (ptrace) backend is only implemented for \
+         x86_64; refusing to run the command unsandboxed"
+    );
+    71
+}
+
 fn main() {
     let cfg = match parse() {
         Ok(cfg) => cfg,
@@ -86,7 +111,23 @@ fn main() {
 
     #[cfg(target_os = "linux")]
     {
-        std::process::exit(linux::run(&cfg));
+        // L1 (user namespace + overlayfs) is the default; L2 (ptrace) is the
+        // fallback for hosts where L1 cannot run. `CEREBRILINE_SANDBOX_BACKEND`
+        // forces one (`l1`/`l2`); `auto` (the default) uses L1 when unprivileged
+        // user namespaces are available and L2 otherwise.
+        let backend = std::env::var("CEREBRILINE_SANDBOX_BACKEND").unwrap_or_default();
+        let code = match backend.as_str() {
+            "l2" => run_l2(&cfg),
+            "l1" => linux::run(&cfg),
+            _ => {
+                if linux::userns_available() {
+                    linux::run(&cfg)
+                } else {
+                    run_l2(&cfg)
+                }
+            }
+        };
+        std::process::exit(code);
     }
 
     // The escape-critical rule: with no working backend, refuse the command

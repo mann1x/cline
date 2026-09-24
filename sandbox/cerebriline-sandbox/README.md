@@ -15,8 +15,15 @@ hand-back, so both halves share the exact `.wh.<name>` on-disk format.
 | OS | backend | status |
 |---|---|---|
 | Linux | **L1** — user namespace + overlayfs over the workspace path | **done** (`src/linux.rs`) |
+| Linux | **L2** — ptrace path rewriting (fallback when L1 can't run) | **done**, x86_64 (`src/linux_l2.rs`, `src/resolve.rs`) |
 | Windows | W1 — Detours DLL injection (`../w1-spike`, C++) | shipped separately as `sandbox-launch.exe` + `hook.dll`; folding it in here is planned |
 | macOS | M1 — APFS clonefile | planned |
+
+Backend selection is automatic: `CEREBRILINE_SANDBOX_BACKEND=auto` (the default)
+uses **L1** where unprivileged user namespaces are available and **L2** where
+they are not; `l1`/`l2` force one. A workspace on an overlayfs-hostile filesystem
+(the copy-up EOVERFLOW below) is the one case `auto` does not detect — force `l2`
+there.
 
 See PLANS.md §10 for the full design and the per-OS ladder.
 
@@ -48,9 +55,35 @@ volume carrying project/user/group quotas (`jqfmt=vfsv0`) on top of bcache;
 **not** on plain ext4, btrfs, xfs or tmpfs — i.e. not on a typical workspace.
 Such a host is also the one that refuses a disk overlay upper ("failed to set
 xattr on upper"), so it is doubly hostile to unprivileged overlayfs and is
-exactly the case the **L2** (seccomp-notify) backend exists to cover. Until L2
-lands, a command's copy-up failure surfaces as that command's own error and does
-not corrupt anything.
+exactly the case the **L2** backend covers.
+
+### Linux L2 detail
+
+L2 is a ptrace supervisor (like proot). ptrace is used, not seccomp
+user-notification, because path redirection has to **rewrite** a syscall's
+arguments before it runs, which seccomp-notify cannot do. The supervisor traces
+the command and every descendant (`PTRACE_O_TRACEFORK|VFORK|CLONE|EXEC`); on each
+path-bearing syscall it resolves the path against the overlay (`src/resolve.rs`,
+the same `.wh.` semantics as the in-process overlay) and either:
+
+- **rewrites** the path argument to the overlay copy — open (with copy-up on a
+  write intent), stat/lstat/newfstatat/statx, access/faccessat, readlink, mkdir,
+  and their `*at` forms — writing the new path into the tracee's stack scratch
+  below the red zone;
+- **reads through** to the workspace (an untouched file), by leaving the arg; or
+- **neutralises and emulates** — unlink/rmdir/rename become a no-op syscall plus
+  a userspace overlay op (a delete leaves a `.wh.` whiteout), by setting an
+  invalid syscall number at entry and forcing the return value at exit.
+
+Writes land directly in the overlay in `.wh.` format, so there is no reconcile
+step and the hand-back is unchanged. It needs no user namespace and no special
+filesystem, so it covers AppArmor-locked hosts and overlayfs-hostile
+filesystems alike.
+
+**Scope / gaps (x86_64 only for now):** symlink following in the tracee's view is
+lexical, not resolved; a few rarer path syscalls (link, symlink, chdir-relative
+edge cases, `*at` with an O_PATH dirfd) are not intercepted. These are tracked in
+PLANS.md §10.
 
 ## Invocation
 
