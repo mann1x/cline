@@ -95,6 +95,25 @@ async function main(): Promise<void> {
 			await readFile(join(root, "..", "package.json"), "utf8"),
 		) as { overrides?: Record<string, unknown> };
 
+		// The workspace is bun-locked to @sap-ai-sdk 2.15.0, whose dist imports
+		// `@sap-cloud-sdk/connectivity/internal.js` (with the extension). This
+		// standalone npm install resolves the `^2.15.0` range fresh, and 2.16.0
+		// (the current `latest`) reverted that to the extensionless
+		// `@sap-cloud-sdk/connectivity/internal`, which Node's strict ESM resolver
+		// rejects (ERR_MODULE_NOT_FOUND) — so the smoke drifts onto a build the
+		// workspace never tests. Pin the SAP AI SDK packages to the bun-locked
+		// version here (the sandbox's own overrides; the root lockfile is left
+		// untouched) so the smoke installs what the workspace actually ships.
+		const sapAiSdkPin = "2.15.0";
+		const smokeOverrides = {
+			...(rootPackageJson.overrides ?? {}),
+			"@sap-ai-sdk/ai-api": sapAiSdkPin,
+			"@sap-ai-sdk/core": sapAiSdkPin,
+			"@sap-ai-sdk/foundation-models": sapAiSdkPin,
+			"@sap-ai-sdk/orchestration": sapAiSdkPin,
+			"@sap-ai-sdk/prompt-registry": sapAiSdkPin,
+		};
+
 		await writeFile(
 			join(smokeDir, "package.json"),
 			`${JSON.stringify(
@@ -108,9 +127,7 @@ async function main(): Promise<void> {
 						"@cline/llms": `file:${tarballs.llms}`,
 						"@cline/shared": `file:${tarballs.shared}`,
 					},
-					...(rootPackageJson.overrides
-						? { overrides: rootPackageJson.overrides }
-						: {}),
+					overrides: smokeOverrides,
 				},
 				null,
 				2,
