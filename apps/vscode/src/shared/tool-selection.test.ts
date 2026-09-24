@@ -42,6 +42,13 @@ function buildEveryTool(): WireTool[] {
 			enableGrep: true,
 			enableSed: true,
 			enableAwk: true,
+			// run_commands describes the shell that will run the commands, so
+			// its size follows the platform: the PowerShell text a Windows host
+			// gets by default is ~9% shorter than the POSIX one the catalog was
+			// measured on (483 vs 529 tokens). Unpinned, this test measured the
+			// CI runner rather than the catalog and failed on windows-latest
+			// only. Pin the shell the catalog describes.
+			shell: "/bin/bash",
 		}),
 		createCheckFileTool({ cwd: stub.cwd }),
 		createAskLspTool({ ...stub, provider: { readLine: async () => undefined } as never }),

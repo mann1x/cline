@@ -1,4 +1,6 @@
+import type { AgentEvent, AgentTool } from "@cline/shared";
 import { describe, expect, it } from "vitest";
+import { createWorkerStruggleSupervisor } from "../../../runtime/safety/worker-struggle";
 import {
 	buildDelegatedAgentConfig,
 	createDelegatedAgentConfigProvider,
@@ -155,6 +157,178 @@ describe("buildDelegatedAgentConfig", () => {
 
 		expect(built).toBe(2);
 		expect(first.prepareTurn).not.toBe(second.prepareTurn);
+	});
+
+	// A delegated worker gets no execution tuning of its own until now: the
+	// runtime's loop-detection and mistake thresholds are the lead's, and a
+	// swarm worker that needs a tighter mistake budget than the lead has no way
+	// to carry one. The passthrough is what a worker-struggle supervisor rides
+	// in on -- see `worker-struggle.ts`.
+	it("carries execution tuning from the runtime config", () => {
+		const execution = { maxConsecutiveMistakes: 3 } as const;
+		const configProvider = createDelegatedAgentConfigProvider({
+			providerId: "ollama",
+			modelId: "small",
+			execution,
+		});
+
+		const config = buildDelegatedAgentConfig({
+			kind: "subagent",
+			prompt: "review the diff",
+			tools: [],
+			configProvider,
+		});
+
+		expect(config.execution).toBe(execution);
+	});
+
+	// A per-spawn override beats the runtime default: the swarm path tightens a
+	// worker's budget without disturbing the shared runtime config every other
+	// delegation reads.
+	it("lets a per-build execution override the runtime default", () => {
+		const configProvider = createDelegatedAgentConfigProvider({
+			providerId: "ollama",
+			modelId: "small",
+			execution: { maxConsecutiveMistakes: 6 },
+		});
+
+		const override = { maxConsecutiveMistakes: 2 } as const;
+		const config = buildDelegatedAgentConfig({
+			kind: "subagent",
+			prompt: "review the diff",
+			tools: [],
+			configProvider,
+			execution: override,
+		});
+
+		expect(config.execution).toBe(override);
+	});
+
+	it("leaves execution unset when neither runtime nor build supplies one", () => {
+		const configProvider = createDelegatedAgentConfigProvider({
+			providerId: "ollama",
+			modelId: "small",
+		});
+
+		const config = buildDelegatedAgentConfig({
+			kind: "subagent",
+			prompt: "review the diff",
+			tools: [],
+			configProvider,
+		});
+
+		expect(config.execution).toBeUndefined();
+	});
+
+	// The struggle supervisor rides in on the one funnel both spawn paths pass
+	// through, so wiring it here reaches `spawn_agent` and the swarm without
+	// either duplicating the composition.
+	describe("with a worker-struggle supervisor", () => {
+		function build(
+			supervisor: ReturnType<typeof createWorkerStruggleSupervisor>,
+		) {
+			const events: AgentEvent[] = [];
+			const configProvider = createDelegatedAgentConfigProvider({
+				providerId: "ollama",
+				modelId: "small",
+			});
+			const grep = {
+				name: "grep",
+				description: "",
+				inputSchema: { type: "object" },
+				execute: async () => "found 3 matches",
+			} as unknown as AgentTool<unknown, unknown>;
+			const outer = new AbortController();
+			const config = buildDelegatedAgentConfig({
+				kind: "subagent",
+				prompt: "gather",
+				tools: [grep],
+				configProvider,
+				onEvent: (event) => events.push(event),
+				abortSignal: outer.signal,
+				struggle: supervisor,
+			});
+			return { config, events, outer };
+		}
+
+		const iter = (n: number): AgentEvent[] => [
+			{ type: "iteration_start", iteration: n },
+			{
+				type: "iteration_end",
+				iteration: n,
+				hadToolCalls: true,
+				toolCallCount: 1,
+			},
+		];
+
+		it("forwards events to the supervisor and preserves the original onEvent", () => {
+			const supervisor = createWorkerStruggleSupervisor({
+				nudgeAfterIterations: 4,
+			});
+			const { config, events } = build(supervisor);
+			for (let n = 1; n <= 4; n += 1) {
+				for (const event of iter(n)) {
+					config.onEvent?.(event);
+				}
+			}
+			// The composed onEvent both fed the supervisor and kept the caller's.
+			expect(supervisor.phase).toBe("nudged");
+			expect(events).toHaveLength(8);
+		});
+
+		it("wraps the tools so the held nudge lands on the next result", async () => {
+			const supervisor = createWorkerStruggleSupervisor({
+				nudgeAfterIterations: 4,
+				nudgeMessage: "COMMIT NOW",
+			});
+			const { config } = build(supervisor);
+			for (let n = 1; n <= 4; n += 1) {
+				for (const event of iter(n)) {
+					config.onEvent?.(event);
+				}
+			}
+			const result = await config.tools[0].execute({}, {} as never);
+			expect(result).toContain("found 3 matches");
+			expect(result).toContain("COMMIT NOW");
+		});
+
+		// A stop comes only from thinking that keeps running out its budget, so
+		// drive exactly that: each turn's reasoning ends on the engine's marker.
+		const spentTurn = (n: number): AgentEvent[] => [
+			{ type: "iteration_start", iteration: n },
+			{
+				type: "content_end",
+				contentType: "reasoning",
+				reasoning:
+					"…\n\nI have used my thinking budget. I must stop analysing now.",
+			},
+			{
+				type: "iteration_end",
+				iteration: n,
+				hadToolCalls: true,
+				toolCallCount: 1,
+			},
+		];
+
+		it("composes the abort signal so a supervisor stop reaches the runtime", () => {
+			const supervisor = createWorkerStruggleSupervisor({ graceIterations: 0 });
+			const { config } = build(supervisor);
+			expect(config.abortSignal?.aborted).toBe(false);
+			for (let n = 1; n <= 5; n += 1) {
+				for (const event of spentTurn(n)) {
+					config.onEvent?.(event);
+				}
+			}
+			expect(supervisor.phase).toBe("stopped");
+			expect(config.abortSignal?.aborted).toBe(true);
+		});
+
+		it("the composed abort signal still fires on the outer cancellation", () => {
+			const supervisor = createWorkerStruggleSupervisor();
+			const { config, outer } = build(supervisor);
+			outer.abort();
+			expect(config.abortSignal?.aborted).toBe(true);
+		});
 	});
 
 	// The host may have auto-compaction switched off entirely, and a teammate

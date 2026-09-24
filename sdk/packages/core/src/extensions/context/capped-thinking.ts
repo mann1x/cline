@@ -112,6 +112,38 @@ function endsWithBudgetMessage(thinking: string, message: string): boolean {
 	).includes(marker);
 }
 
+/**
+ * The engine's own admission that it ran out, in the words every budget
+ * message the fork has met uses: "I have used my thinking budget".
+ *
+ * Only for a session that does not know its message -- a delegated worker on
+ * a node whose server sets `--reasoning-budget-message` itself, say. Anchored
+ * to the tail like the exact match, so reasoning that merely *mentions* a
+ * budget mid-thought is not read as one that ran out of it.
+ */
+const GENERIC_BUDGET_ADMISSION =
+	/\b(?:used|exhausted|spent|run out of|ran out of|reached) (?:my|the) (?:thinking|reasoning) budget\b/i;
+
+/**
+ * Whether this reasoning ended because the thinking budget ran out.
+ *
+ * With the session's budget message, the exact marker test the capped-thinking
+ * condenser uses. Without one, the generic admission above, in the same tail
+ * window.
+ */
+export function reasoningHitBudget(
+	thinking: string,
+	budgetMessage?: string,
+): boolean {
+	const message = budgetMessage?.trim();
+	if (message) {
+		return endsWithBudgetMessage(thinking, message);
+	}
+	return GENERIC_BUDGET_ADMISSION.test(
+		thinking.slice(-BUDGET_MESSAGE_TAIL_MARGIN_CHARS * 2),
+	);
+}
+
 /** What the note is allowed to cost. It is a handful of lines by design. */
 /**
  * Guard against a runaway note becoming the thing that fills the window.

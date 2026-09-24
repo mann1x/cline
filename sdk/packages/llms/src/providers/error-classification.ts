@@ -242,6 +242,13 @@ const TOOL_CALL_UNPARSABLE_PATTERNS = [
 	/\bXML syntax error\b[\s\S]*<\/?(?:function|tool_call|parameter|invoke)\b/i,
 	/\b(?:failed to|could not|cannot|unable to)\s+parse\b[\s\S]{0,80}\b(?:tool[_\s-]?call|function[_\s-]?call|tool arguments|function arguments)\b/i,
 	/\b(?:invalid|malformed)\s+(?:tool[_\s-]?call|function[_\s-]?call|tool arguments|function arguments)\b/i,
+	// llama.cpp's streaming tool-call parser (common/chat.cpp) throws this when
+	// a partial re-parse finds fewer calls than the last one did, and the server
+	// ends the stream on it. Measured on the 75-agent swarm on pandorum: 16
+	// workers lost to it, every one mid-way through a long `editor` payload of
+	// minified JS. The call was never delivered, so asking for it again is the
+	// same recovery as any other call the parser could not read.
+	/\bInvalid diff:\s*now finding less tool calls\b/i,
 ];
 
 function verdictFromSignals(signals: ErrorSignals): ProviderErrorClass {

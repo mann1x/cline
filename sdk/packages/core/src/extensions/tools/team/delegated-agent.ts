@@ -11,6 +11,7 @@ import type {
 } from "@cline/shared";
 import { mergeAgentHooks } from "../../../hooks/hook-file-hooks";
 import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-orchestrator";
+import type { WorkerStruggleSupervisor } from "../../../runtime/safety/worker-struggle";
 import type { AgentNodePlacement } from "./agent-node-placement";
 import type { AgentSlotGate, AgentSlotGateRegistry } from "./agent-slot-gate";
 import { pinConversationHead } from "./subagent-layout";
@@ -46,6 +47,17 @@ export interface DelegatedAgentRuntimeConfig
 	clinePlatform?: string;
 	clineIdeName?: string;
 	maxIterations?: number;
+	/**
+	 * Loop-detection and mistake-budget tuning for this agent's own runtime.
+	 *
+	 * Until now a delegated agent ran on whatever `execution` the lead's runtime
+	 * config carried, which for a headless swarm worker is nothing worker-shaped:
+	 * the exact-repeat loop tracker and the default mistake budget never catch a
+	 * worker grinding on slightly-varying probes to the token cap. Carrying it
+	 * here lets a spawn path hand a worker a tighter, worker-calibrated budget --
+	 * see `worker-struggle.ts` -- without touching the shared runtime config.
+	 */
+	execution?: AgentConfig["execution"];
 	hooks?: AgentHooks;
 	extensions?: AgentExtension[];
 	logger?: BasicLogger;
@@ -155,6 +167,12 @@ export interface BuildDelegatedAgentConfigOptions {
 	configProvider: DelegatedAgentConfigProvider;
 	parentAgentId?: string;
 	maxIterations?: number;
+	/**
+	 * Per-build override of the runtime's loop-detection and mistake budget.
+	 * Falls back to {@link DelegatedAgentRuntimeConfig.execution}. The swarm path
+	 * uses it to hand each worker a tighter budget than the shared runtime.
+	 */
+	execution?: AgentConfig["execution"];
 	abortSignal?: AbortSignal;
 	onEvent?: (event: AgentEvent) => void;
 	hookErrorMode?: HookErrorMode;
@@ -196,6 +214,31 @@ export interface BuildDelegatedAgentConfigOptions {
 	 * verbatim. See `subagent-layout.ts`.
 	 */
 	pinnedHead?: readonly string[];
+	/**
+	 * Watches a headless worker for a grind and stops it, per worker.
+	 *
+	 * The lead has a struggle layer; a delegated worker had none, and on the
+	 * 75-agent swarm a third of them ground to the token cap without ever
+	 * reporting. Passed here rather than composed in each spawn path because this
+	 * builder is the one funnel both `spawn_agent` and the swarm pass through:
+	 * wiring it once reaches both. When present it wraps this agent's tools so the
+	 * one nudge lands on a result, folds every event into the supervisor, and ORs
+	 * its stop into the agent's abort signal. See `worker-struggle.ts`. The
+	 * supervisor is stateful and per-agent -- a caller that builds two agents
+	 * gives each its own.
+	 */
+	struggle?: WorkerStruggleSupervisor;
+}
+
+/** OR two optional abort signals, without an `AbortSignal.any` of one. */
+function composeAbortSignals(
+	...signals: (AbortSignal | undefined)[]
+): AbortSignal | undefined {
+	const present = signals.filter((s): s is AbortSignal => s !== undefined);
+	if (present.length === 0) {
+		return undefined;
+	}
+	return present.length === 1 ? present[0] : AbortSignal.any(present);
 }
 
 /**
@@ -285,6 +328,25 @@ export function buildDelegatedAgentConfig(
 			? buildTeammateSystemPrompt(options.prompt, runtimeConfig)
 			: buildSubAgentSystemPrompt(options.prompt, runtimeConfig);
 
+	// The supervisor, when present, wraps the tools (so its one nudge lands on a
+	// result), folds every event in (so it sees the grind), and ORs its stop into
+	// the abort signal (so it can pull the worker). Absent, everything is exactly
+	// what the caller passed.
+	const supervisor = options.struggle;
+	const tools = supervisor
+		? supervisor.wrapTools(options.tools)
+		: options.tools;
+	const onEvent: BuildDelegatedAgentConfigOptions["onEvent"] = supervisor
+		? (event) => {
+				options.onEvent?.(event);
+				supervisor.observe(event);
+			}
+		: options.onEvent;
+	const abortSignal = composeAbortSignals(
+		options.abortSignal,
+		supervisor?.stopSignal,
+	);
+
 	return {
 		...connection,
 		distinctId: runtimeConfig.distinctId,
@@ -294,8 +356,9 @@ export function buildDelegatedAgentConfig(
 			: {}),
 		...(options.polykvWorker ? { polykvWorker: options.polykvWorker } : {}),
 		systemPrompt,
-		tools: options.tools,
+		tools,
 		maxIterations: options.maxIterations ?? runtimeConfig.maxIterations,
+		execution: options.execution ?? runtimeConfig.execution,
 		// One pipeline per agent, built here rather than passed in: see
 		// `createPrepareTurn`. A delegated agent that inherited the lead's
 		// would compact against the lead's summary and overwrite its state.
@@ -305,8 +368,8 @@ export function buildDelegatedAgentConfig(
 		) as AgentConfig["prepareTurn"],
 		condenseDiscardedReasoning: runtimeConfig.condenseDiscardedReasoning,
 		parentAgentId: options.parentAgentId,
-		abortSignal: options.abortSignal,
-		onEvent: options.onEvent,
+		abortSignal,
+		onEvent,
 		hooks: mergeAgentHooks([runtimeConfig.hooks, options.hooks]),
 		extensions: runtimeConfig.extensions,
 		hookErrorMode: options.hookErrorMode,

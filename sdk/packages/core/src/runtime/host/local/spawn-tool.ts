@@ -51,6 +51,11 @@ import {
 	createSubagentProgress,
 	watchPolykvRoom,
 } from "../../../extensions/tools/team/subagent-progress";
+import {
+	createWorkerStruggleSupervisor,
+	WORKER_STRUGGLE_MIN_ITERATION,
+	type WorkerStruggleOptions,
+} from "../../../runtime/safety/worker-struggle";
 import { buildTelemetryAgentIdentity } from "../../../services/agent-events";
 import { filterDisabledTools } from "../../../services/global-settings";
 import {
@@ -65,6 +70,29 @@ export type SubAgentStartTracker = Map<
 	string,
 	{ startedAt: number; rootSessionId: string }
 >;
+
+/**
+ * Where a swarm worker's turn-count nudge sits, relative to its cap.
+ *
+ * Half the cap: late enough that a worker still reading the problem is left
+ * alone, early enough that the nudge arrives with turns to spare. It is a
+ * nudge only -- on the replayed swarms the longest workers all answered in the
+ * end, so the turn count is not evidence enough to stop one. With no cap set
+ * the supervisor's own default, calibrated to a ~40-iteration worker, stands.
+ */
+function swarmWorkerStruggleOptions(
+	maxIterations?: number,
+): Pick<WorkerStruggleOptions, "nudgeAfterIterations"> {
+	if (typeof maxIterations !== "number" || maxIterations <= 0) {
+		return {};
+	}
+	return {
+		nudgeAfterIterations: Math.max(
+			WORKER_STRUGGLE_MIN_ITERATION,
+			Math.round(maxIterations * 0.5),
+		),
+	};
+}
 
 export interface SpawnToolDeps {
 	getSession(sessionId: string): ActiveSession | undefined;
@@ -641,8 +669,33 @@ export function createSessionSwarmTool(
 					prefixTokens: 0,
 				});
 			}
+			// A headless worker gets the struggle layer the lead has always had,
+			// with a terminal action a worker can take: nudge once ("commit your
+			// best finding now as a SUMMARY"), and stop it only if its thinking
+			// keeps running out its budget after that. The stop is not data loss
+			// -- `digestOf` recovers whatever the worker produced, its reasoning
+			// tail included. Fresh per attempt so a re-placed worker starts
+			// watching from zero. See `worker-struggle.ts` for the replay that
+			// set what fires and what stops.
+			const struggle = createWorkerStruggleSupervisor({
+				...swarmWorkerStruggleOptions(config.maxIterations),
+				// What the server appends to reasoning it cut at the budget, when
+				// the session knows it; without it the supervisor reads the
+				// generic admission in the reasoning's tail.
+				...(config.compaction?.cappedThinkingBudgetMessage
+					? {
+							thinkingBudgetMessage:
+								config.compaction.cappedThinkingBudgetMessage,
+						}
+					: {}),
+				onTransition: (phase, reason) =>
+					config.logger?.log?.(
+						`[swarm] ${request.name}: worker ${phase} (${reason})`,
+					),
+			});
 			const worker = createDelegatedAgent({
 				kind: "subagent",
+				struggle,
 				...(request.takeMessage
 					? {
 							consumePendingUserMessage: async () => request.takeMessage?.(),
