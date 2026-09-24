@@ -44,10 +44,20 @@ mod resolve;
 #[cfg(target_os = "macos")]
 mod macos;
 
+// The Windows W1 backend (Detours DLL injection). It folds the C++
+// `sandbox-launch.exe` into this binary; the injected `hook.dll` stays C++.
+#[cfg(windows)]
+mod windows;
+
 use std::path::PathBuf;
 
 /// The resolved launch request.
 pub struct Config {
+    /// The injected hook DLL the Windows (W1) backend loads into the child. It is
+    /// positional so one `wrapSpawn` shape drives every platform; every backend but
+    /// Windows ignores it.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub hook: PathBuf,
     /// The lead's workspace; the overlay's lower layer.
     pub ws_root: PathBuf,
     /// The agent's private overlay directory; the hand-back is read from here.
@@ -68,6 +78,7 @@ fn parse() -> Result<Config, String> {
                 .to_string(),
         );
     }
+    let hook = PathBuf::from(args[1].clone());
     let log_arg = args[2].clone();
     let command = args[3..].to_vec();
 
@@ -80,6 +91,7 @@ fn parse() -> Result<Config, String> {
         .map(PathBuf::from);
 
     Ok(Config {
+        hook,
         ws_root,
         overlay_root,
         log,
@@ -151,11 +163,19 @@ fn main() {
         std::process::exit(macos::run(&cfg));
     }
 
+    // Windows: the W1 backend starts the command with `hook.dll` injected via
+    // Detours; the DLL redirects file I/O into the overlay and re-injects itself
+    // into every child, so the whole tree runs sandboxed.
+    #[cfg(windows)]
+    {
+        std::process::exit(windows::run(&cfg));
+    }
+
     // The escape-critical rule: with no working backend, refuse the command
     // rather than run it unsandboxed. The caller withholds `run_commands` when
     // no launcher exists, so reaching here is a wiring bug, and running the
     // command anyway would write straight to the lead's workspace.
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = &cfg;
         eprintln!(

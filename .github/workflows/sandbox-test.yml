@@ -1,9 +1,11 @@
 name: sandbox-test
 
 # Builds and tests the `cerebriline-sandbox` launcher on every platform whose
-# backend it carries. The macOS M1 (APFS clonefile) backend has no local host in
-# development, so this workflow's macos-14 leg — Apple Silicon, a real arm64 M1
-# runner — is the one place its isolation contract is verified end to end. The
+# backend it carries: Linux (L1 userns+overlayfs, L2 ptrace), macOS (M1 APFS
+# clonefile), Windows (W1 Detours injection). Neither the macOS nor the Windows
+# backend has a local host in development, so the macos-14 and windows-latest legs
+# here are the one place their isolation contracts are verified end to end — and
+# the recipe those legs run is exactly how the release binaries are built. The
 # project rule is that a backend does not ship unverified, so this gates it.
 
 on:
@@ -80,4 +82,47 @@ jobs:
             # spurious red. --no-fail-fast so every backend's test reports even
             # when an earlier one skips or fails.
             - name: Test
+              run: cargo test --release --no-fail-fast
+
+    # Windows W1 is a separate job: it must build Microsoft Detours + the C++
+    # hook.dll before the Rust launcher can link and the test can inject.
+    windows:
+        runs-on: windows-latest
+        name: Test (windows-latest, windows-w1)
+        env:
+            DETOURS_LIB_DIR: ${{ github.workspace }}\sandbox\w1-spike\Detours\lib.X64
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Install the Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  components: clippy, rustfmt
+
+            - name: Format check
+              run: cargo fmt --all --check
+
+            # Clone + build Microsoft Detours (a /MT static lib) and the C++
+            # hook.dll, exactly as a developer would with build.bat — it enters the
+            # VS build environment itself, so no extra setup action is needed.
+            - name: Build Microsoft Detours + hook.dll
+              working-directory: sandbox/w1-spike
+              shell: cmd
+              run: build.bat
+
+            - name: Clippy (warnings are errors)
+              run: cargo clippy --release --tests -- -D warnings
+
+            # Links detours.lib (crt-static, to match Detours' /MT) into the one
+            # Rust launcher that replaces sandbox-launch.exe.
+            - name: Build the Rust launcher
+              run: cargo build --release
+
+            # w1_isolation.rs injects the freshly built hook.dll into a cmd child,
+            # redirects its absolute workspace writes into the overlay, and asserts
+            # the workspace is untouched. It skips cleanly if injection can't run.
+            - name: Test
+              env:
+                  CEREBRILINE_TEST_HOOK_DLL: ${{ github.workspace }}\sandbox\w1-spike\hook.dll
               run: cargo test --release --no-fail-fast

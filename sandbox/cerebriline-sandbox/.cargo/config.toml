@@ -2,3 +2,13 @@
 # host build needs nothing here.
 [target.aarch64-unknown-linux-gnu]
 linker = "aarch64-linux-gnu-gcc"
+
+# The Windows W1 backend links Microsoft Detours' detours.lib, which
+# sandbox/w1-spike/build.bat builds with /MT (static CRT). Build this binary with
+# the static CRT too so the two match (no LNK4098 CRT conflict) and the shipped
+# .exe is self-contained — no VC++ runtime DLL to carry into the vsix.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-Ctarget-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-Ctarget-feature=+crt-static"]
