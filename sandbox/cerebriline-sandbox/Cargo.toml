@@ -1,0 +1,22 @@
+[package]
+name = "cerebriline-sandbox"
+version = "0.1.0"
+edition = "2021"
+description = "Cross-platform command sandbox launcher for Cerebriline delegated agents"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "cerebriline-sandbox"
+path = "src/main.rs"
+
+# No external crates: the Linux backend declares the handful of libc entry
+# points it needs directly, so the binary builds with a bare toolchain and no
+# network. Rust links libc by default on these targets, which resolves them.
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
