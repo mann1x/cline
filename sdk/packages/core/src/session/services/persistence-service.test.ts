@@ -1,5 +1,6 @@
 import {
 	existsSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
@@ -206,6 +207,51 @@ describe("UnifiedSessionPersistenceService", () => {
 		await expect(
 			service.readSessionCompactionState(sessionId),
 		).resolves.toBeUndefined();
+	});
+
+	// Deleting a conversation must take everything the session wrote with it:
+	// the delegated agents' overlays (`agent-overlays/<toolCallId>/…`, their
+	// copy-ups of workspace files) and the sub-agents' transcripts live inside
+	// the root session's directory, so the delete is only complete if that
+	// directory goes as a whole rather than file by file.
+	it("purges agent overlays and sub-agent transcripts when a root session is deleted", async () => {
+		const sessionsDir = mkdtempSync(join(tmpdir(), "delete-overlays-"));
+		tempDirs.push(sessionsDir);
+		const service = new FileSessionService(sessionsDir);
+		const sessionId = "session-with-overlays";
+		const artifacts = await service.createRootSessionWithArtifacts({
+			sessionId,
+			source: SessionSource.CLI,
+			pid: process.pid,
+			interactive: true,
+			provider: "ollama",
+			model: "small",
+			cwd: "/tmp/project",
+			workspaceRoot: "/tmp/project",
+			enableTools: true,
+			enableSpawn: true,
+			enableTeams: false,
+			startedAt: "2026-01-01T00:00:00.000Z",
+		});
+		await service.persistSessionMessages(sessionId, [
+			{ id: "u1", role: "user" as const, content: "fan out" },
+		]);
+		const sessionDir = join(sessionsDir, sessionId);
+		const overlayDir = join(sessionDir, "agent-overlays", "call_1", "src");
+		mkdirSync(overlayDir, { recursive: true });
+		const overlayFile = join(overlayDir, "main.ts");
+		writeFileSync(overlayFile, "export const copiedUp = true;\n");
+		const agentTranscript = join(sessionDir, "agent_1_abc.messages.json");
+		writeFileSync(agentTranscript, "[]");
+		expect(existsSync(artifacts.messagesPath)).toBe(true);
+
+		await expect(service.deleteSession(sessionId)).resolves.toMatchObject({
+			deleted: true,
+		});
+
+		expect(existsSync(overlayFile)).toBe(false);
+		expect(existsSync(agentTranscript)).toBe(false);
+		expect(existsSync(sessionDir)).toBe(false);
 	});
 
 	it("adds compaction path to old manifests only when sidecar is written", async () => {

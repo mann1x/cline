@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import type { SessionHistoryRecord } from "@cline/core"
 import type { HistoryItem } from "@shared/HistoryItem"
 import getFolderSize from "get-folder-size"
@@ -455,6 +458,55 @@ describe("SdkTaskHistory", () => {
 
 		expect(getFolderSize.loose).not.toHaveBeenCalled()
 		expect(updateSession).not.toHaveBeenCalled()
+	})
+
+	// The list's size is measured once and cached; a session whose delegated
+	// agents went on writing overlays kept showing its size from before they
+	// started. "Size on disk" measures now and writes the answer back.
+	it("measures a task on demand and replaces a stale cached size", async () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "size-on-disk-"))
+		try {
+			writeFileSync(path.join(dir, "task-1.messages.json"), "x".repeat(100))
+			writeFileSync(path.join(dir, "agent_1_a.messages.json"), "x".repeat(40))
+			mkdirSync(path.join(dir, "agent-overlays", "call_1"), { recursive: true })
+			writeFileSync(path.join(dir, "agent-overlays", "call_1", "main.ts"), "x".repeat(900))
+			const { history, updateSession } = makeHistory([
+				makeSessionRecord("task-1", {
+					metadata: {
+						size: 100,
+						checkpoint: {
+							history: [
+								{ ref: "a", createdAt: 1, runCount: 1 },
+								{ ref: "b", createdAt: 2, runCount: 2 },
+							],
+						},
+					},
+					messagesPath: path.join(dir, "task-1.messages.json"),
+				}),
+			])
+
+			await expect(history.measureTaskSizeOnDisk("task-1")).resolves.toEqual({
+				totalBytes: 1040,
+				sessionBytes: 100,
+				agentTranscriptBytes: 40,
+				overlayBytes: 900,
+				checkpointCount: 2,
+			})
+			expect(updateSession).toHaveBeenCalledWith(
+				"task-1",
+				expect.objectContaining({ metadata: expect.objectContaining({ size: 1040 }) }),
+			)
+		} finally {
+			rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("does not measure a sub-agent session on its own", async () => {
+		const { history } = makeHistory([
+			makeSessionRecord("agent-1", { isSubagent: true, messagesPath: "/tmp/cline/sessions/root/agent-1.messages.json" }),
+		])
+
+		await expect(history.measureTaskSizeOnDisk("agent-1")).resolves.toBeUndefined()
 	})
 
 	it("returns undefined when a task is missing from SDK history", async () => {

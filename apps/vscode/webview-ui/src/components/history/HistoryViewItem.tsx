@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils"
 import { TaskServiceClient } from "@/services/grpc-client"
 import { writeToClipboard } from "@/utils/clipboard"
 import { formatLargeNumber, formatSize } from "@/utils/format"
+import { HistoryItemContextMenu } from "./HistoryItemContextMenu"
 import { HISTORY_SETTINGS_HOVER_DELAY_MS, HistorySettingsTooltip } from "./HistorySettingsTooltip"
 
 type HistoryViewItemProps = {
@@ -43,6 +44,8 @@ const HistoryViewItem = ({
 	selectedItems,
 }: HistoryViewItemProps) => {
 	const [expanded, setExpanded] = useState(false)
+	// Where the right-click landed, relative to the row; undefined while the menu is closed.
+	const [menuAt, setMenuAt] = useState<{ x: number; y: number } | undefined>(undefined)
 	const isCostVisible = useUsageCostVisibility()
 	const { markTaskOpenedFromHistory } = useExtensionState()
 
@@ -88,7 +91,25 @@ const HistoryViewItem = ({
 	}, [])
 
 	return (
-		<div className="history-item cursor-pointer flex group mb-1 hover:bg-list-hover border-b border-accent/10" key={item.id}>
+		<div
+			className="history-item cursor-pointer flex group mb-1 hover:bg-list-hover border-b border-accent/10 relative"
+			key={item.id}
+			onContextMenu={(e) => {
+				e.preventDefault()
+				e.stopPropagation()
+				const rect = e.currentTarget.getBoundingClientRect()
+				// The context-menu key fires this with no pointer position; open at the row's head.
+				const fromKeyboard = e.clientX === 0 && e.clientY === 0
+				setMenuAt(fromKeyboard ? { x: 16, y: 24 } : { x: e.clientX - rect.left, y: e.clientY - rect.top })
+			}}>
+			<HistoryItemContextMenu
+				at={menuAt}
+				canDelete={!isFavoritedItem}
+				firstPrompt={item.task}
+				onClose={() => setMenuAt(undefined)}
+				onDelete={() => handleDeleteHistoryItem(item.id)}
+				taskId={item.id}
+			/>
 			<VSCodeCheckbox
 				checked={selectedItems.includes(item.id)}
 				className="pl-3 pr-1 py-auto self-start mt-3"
