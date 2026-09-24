@@ -247,8 +247,13 @@ Write a concise commit message.`,
 				toolPolicies: effectiveToolPolicies,
 			}),
 		);
+		// A configured agent runs on an unsandboxed path, so the escape gate
+		// withholds its shell: no `run_commands`, or a command would escape to the
+		// real workspace (runtime-builder passes `withholdShell: true` here). Only
+		// the file/skills tools survive. Upstream #11368 wrote this before the
+		// overlay sandbox landed and asserted `run_commands`; the fork's
+		// escape-critical withhold (57fc361b0) is the current, intended behavior.
 		expect(delegatedConfig?.tools.map((tool) => tool.name).sort()).toEqual([
-			"run_commands",
 			"skills",
 		]);
 

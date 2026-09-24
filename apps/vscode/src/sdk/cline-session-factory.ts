@@ -2417,7 +2417,13 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// Where the shipped command-sandbox binaries live. The host resolves the
 		// actual files under here per platform; absent binaries just mean no
 		// delegated shell, so pointing at the folder is safe before it is filled.
-		sandboxBinariesDir: join(HostProvider.get().extensionFsPath, "assets", "sandbox"),
+		// Guarded on `isInitialized` because this field is optional and safe when
+		// absent (`resolveSandboxBinaries(undefined)` → no shell): a session built
+		// before the host is set up degrades to no delegated shell rather than
+		// throwing an opaque "HostProvider not setup" from deep inside config.
+		sandboxBinariesDir: HostProvider.isInitialized()
+			? join(HostProvider.get().extensionFsPath, "assets", "sandbox")
+			: undefined,
 		strongNudges: strongNudgesEnabled,
 		// Sent whether or not auto compaction is on. `enabled` is the only thing
 		// that decides whether the transcript gets compacted — the runtime
