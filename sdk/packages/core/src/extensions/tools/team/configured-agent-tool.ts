@@ -36,6 +36,7 @@ import {
 import {
 	createSubagentProgress,
 	DELEGATION_PACING_NOTE,
+	restarted,
 	watchPolykvRoom,
 } from "./subagent-progress";
 
@@ -529,44 +530,51 @@ export function createConfiguredAgentTools(
 					};
 
 					try {
-						let result: AgentResult;
-						let placed: { nodeId: string; nodeLabel?: string } | undefined;
-						if (placement) {
-							const outcome = await runPlacedAgent({
-								placement,
-								signal: context.signal,
-								emitUpdate: context.emitUpdate,
-								...(options.logger ? { logger: options.logger } : {}),
-								label: config.name,
-								run: (node, admitted) =>
-									attempt(
-										buildAgentRuntimeConfig(
-											node.configProvider.getRuntimeConfig(),
-											config,
-											options.resolveProviderConnection,
-											options.resolveProfileConnection,
-											options.listProfileNames,
-										),
-										admitted,
-									),
-								beforeRetry: async () => {
-									await releasePolykvAgent(engineSessionId);
-								},
-							});
-							result = outcome.result;
-							placed = outcome.placed;
-						} else {
-							// Held to what the endpoint *this* agent resolved to will
-							// serve, which is not necessarily the session's: an agent
-							// naming a provider or a profile has its own. Two agents on
-							// different servers therefore run at once, and two on the
-							// same one queue.
-							const gate = baseRuntimeConfig.slotGates?.for(
-								agentEndpointKey(provisional),
-							);
-							const run = () => attempt(provisional, () => {});
-							result = gate ? await gate.run(run) : await run();
-						}
+						// Restartable from the row, as `spawn_agent` is.
+						const { result, placed } = await cancellation.restartable(
+							async (): Promise<{
+								result: AgentResult;
+								placed?: { nodeId: string; nodeLabel?: string };
+							}> => {
+								if (placement) {
+									const outcome = await runPlacedAgent({
+										placement,
+										// The attempt's: a restart while queued leaves the queue.
+										signal: cancellation.signal,
+										emitUpdate: context.emitUpdate,
+										...(options.logger ? { logger: options.logger } : {}),
+										label: config.name,
+										run: (node, admitted) =>
+											attempt(
+												buildAgentRuntimeConfig(
+													node.configProvider.getRuntimeConfig(),
+													config,
+													options.resolveProviderConnection,
+													options.resolveProfileConnection,
+													options.listProfileNames,
+												),
+												admitted,
+											),
+										beforeRetry: async () => {
+											await releasePolykvAgent(engineSessionId);
+										},
+									});
+									return { result: outcome.result, placed: outcome.placed };
+								} else {
+									// Held to what the endpoint *this* agent resolved to will
+									// serve, which is not necessarily the session's: an agent
+									// naming a provider or a profile has its own. Two agents on
+									// different servers therefore run at once, and two on the
+									// same one queue.
+									const gate = baseRuntimeConfig.slotGates?.for(
+										agentEndpointKey(provisional),
+									);
+									const run = () => attempt(provisional, () => {});
+									return { result: gate ? await gate.run(run) : await run() };
+								}
+							},
+							() => restarted(context.emitUpdate, engineSessionId),
+						);
 						const output: SpawnAgentOutput = {
 							text: result.text,
 							iterations: result.iterations,

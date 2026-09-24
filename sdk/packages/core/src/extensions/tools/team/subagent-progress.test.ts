@@ -233,3 +233,24 @@ describe("placement", () => {
 		expect(() => reportSubagentQueued(undefined)).not.toThrow();
 	});
 });
+
+describe("reporting what a sub-agent has spent", () => {
+	// Every row read "0 tokens" while the agent ran: nothing sent usage.
+	it("sends the totals and the context it holds on every turn", () => {
+		const emitUpdate = vi.fn();
+		const progress = createSubagentProgress(emitUpdate);
+		progress.observe({
+			type: "usage",
+			inputTokens: 6_000,
+			outputTokens: 300,
+			cacheReadTokens: 0,
+			totalInputTokens: 11_000,
+			totalOutputTokens: 700,
+		} as AgentEvent);
+		expect(emitUpdate).toHaveBeenCalledWith({
+			inputTokens: 11_000,
+			outputTokens: 700,
+			contextTokens: 6_300,
+		});
+	});
+});

@@ -21,11 +21,50 @@
 export interface SubagentCancellation {
 	/** Stop this agent. `false` when nothing by that id is running. */
 	cancel(id: string): boolean;
+	/**
+	 * Abandon this agent's current attempt and start it again from its task,
+	 * in the same place in the round. `false` when nothing by that id is
+	 * running.
+	 *
+	 * The case it is for: an agent stuck on a stream the server dropped (a
+	 * restart under it), or one looping in its output. Stop was the only
+	 * control, and a stopped agent is a lost task -- the lead gets "stopped"
+	 * and the round is short one report.
+	 */
+	restart(id: string): boolean;
 	/** Ids of the agents running right now. For tests and diagnostics. */
 	running(): string[];
 }
 
-const RUNNING = new Map<string, AbortController>();
+interface RunningAgent {
+	/** Aborted by Stop and by the parent: the end of the agent. */
+	own: AbortController;
+	/** The attempt in progress, aborted by Restart as well. A child of `own`. */
+	attempt?: AbortController;
+	/** Set by Restart, read by the attempt that it aborted. */
+	restartRequested: boolean;
+}
+
+const RUNNING = new Map<string, RunningAgent>();
+
+export interface SubagentCancellationRegistration {
+	/**
+	 * The signal to run under: the current attempt's, once `restartable` has
+	 * started one. Read it when the agent is built, not once up front, or a
+	 * restarted attempt runs on the signal of the one it replaced.
+	 */
+	readonly signal: AbortSignal | undefined;
+	/**
+	 * Run `run`, and run it again for as long as an attempt ends because it was
+	 * restarted. `onRestart` goes between attempts: whatever the abandoned one
+	 * held -- its engine session -- is given back there.
+	 */
+	restartable<T>(
+		run: () => Promise<T>,
+		onRestart?: () => void | Promise<void>,
+	): Promise<T>;
+	release: () => void;
+}
 
 /**
  * How a running sub-agent is named from outside.
@@ -53,9 +92,13 @@ export function subagentCancelId(
 export function registerSubagentCancellation(
 	id: string | undefined,
 	parent: AbortSignal | undefined,
-): { signal: AbortSignal | undefined; release: () => void } {
+): SubagentCancellationRegistration {
 	if (!id) {
-		return { signal: parent, release: () => {} };
+		return {
+			signal: parent,
+			restartable: (run) => run(),
+			release: () => {},
+		};
 	}
 	const own = new AbortController();
 	const onParentAbort = () => own.abort(parent?.reason);
@@ -67,13 +110,49 @@ export function registerSubagentCancellation(
 	// Last registration wins, and the one it replaces is aborted rather than
 	// left running unreachable: two agents under one id would mean a stop that
 	// hits whichever was registered first and no way to reach the other.
-	RUNNING.get(id)?.abort();
-	RUNNING.set(id, own);
+	RUNNING.get(id)?.own.abort();
+	const entry: RunningAgent = { own, restartRequested: false };
+	RUNNING.set(id, entry);
 	return {
-		signal: own.signal,
+		get signal() {
+			return entry.attempt?.signal ?? own.signal;
+		},
+		restartable: async (run, onRestart) => {
+			for (;;) {
+				const attempt = new AbortController();
+				const onStop = () => attempt.abort(own.signal.reason);
+				if (own.signal.aborted) {
+					attempt.abort(own.signal.reason);
+				} else {
+					own.signal.addEventListener("abort", onStop, { once: true });
+				}
+				entry.attempt = attempt;
+				entry.restartRequested = false;
+				let outcome:
+					| { value: Awaited<ReturnType<typeof run>> }
+					| { error: unknown };
+				try {
+					outcome = { value: await run() };
+				} catch (error) {
+					outcome = { error };
+				} finally {
+					own.signal.removeEventListener("abort", onStop);
+				}
+				// A restart that was asked for and not overtaken by a stop: the
+				// abandoned attempt's result or failure is not the agent's.
+				if (entry.restartRequested && !own.signal.aborted) {
+					await onRestart?.();
+					continue;
+				}
+				if ("error" in outcome) {
+					throw outcome.error;
+				}
+				return outcome.value;
+			}
+		},
 		release: () => {
 			parent?.removeEventListener("abort", onParentAbort);
-			if (RUNNING.get(id) === own) {
+			if (RUNNING.get(id) === entry) {
 				RUNNING.delete(id);
 			}
 		},
@@ -82,12 +161,25 @@ export function registerSubagentCancellation(
 
 export const subagentCancellation: SubagentCancellation = {
 	cancel(id: string): boolean {
-		const controller = RUNNING.get(id);
-		if (!controller) {
+		const entry = RUNNING.get(id);
+		if (!entry) {
 			return false;
 		}
-		controller.abort(
+		entry.own.abort(
 			new DOMException("The sub-agent was stopped.", "AbortError"),
+		);
+		return true;
+	},
+	restart(id: string): boolean {
+		const entry = RUNNING.get(id);
+		if (!entry || entry.own.signal.aborted) {
+			return false;
+		}
+		entry.restartRequested = true;
+		// Before its first attempt there is nothing to abandon: it will start
+		// clean anyway, so the request is simply spent on that attempt.
+		entry.attempt?.abort(
+			new DOMException("The sub-agent was restarted.", "AbortError"),
 		);
 		return true;
 	},

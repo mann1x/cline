@@ -55,7 +55,7 @@ import {
 	registerSubagentCancellation,
 	subagentCancelId,
 } from "./subagent-cancellation";
-import { reportSubagentFinished } from "./subagent-progress";
+import { reportSubagentFinished, restarted } from "./subagent-progress";
 
 export const SpawnSwarmInputSchema = z.object({
 	systemPrompt: z
@@ -518,12 +518,25 @@ export function createSpawnSwarmTool(
 						}
 						try {
 							const emitUpdate = updatesFor(member);
-							const result = await config.runWorker({
-								...request,
-								...(snapshot ? { poolId: snapshot.poolId } : {}),
-								...(emitUpdate ? { emitUpdate } : {}),
-								...(signal ? { signal } : {}),
-							});
+							const cancellation = cancellations[rowed ? member : 0];
+							const runOnce = () => {
+								// Per attempt: a restarted one runs on a fresh signal.
+								const attemptSignal = signalFor(member);
+								return config.runWorker({
+									...request,
+									...(snapshot ? { poolId: snapshot.poolId } : {}),
+									...(emitUpdate ? { emitUpdate } : {}),
+									...(attemptSignal ? { signal: attemptSignal } : {}),
+								});
+							};
+							// Restartable from its row. A worker releases its own
+							// engine session when its run ends, restarted or not.
+							const result =
+								rowed && cancellation
+									? await cancellation.restartable(runOnce, () =>
+											restarted(emitUpdate, undefined),
+										)
+									: await runOnce();
 							inputTokens += result.usage?.inputTokens ?? 0;
 							outputTokens += result.usage?.outputTokens ?? 0;
 							results.push(digestOf(worker.name, result));

@@ -22,6 +22,10 @@ service TaskService {
   // fan-out of five where one agent grinds has four finished reports, and
   // cancelling the session throws them away along with the lead's context.
   rpc cancelSubagent(StringRequest) returns (Empty);
+  // Abandon one running sub-agent's current attempt and start it again from
+  // its task, in the same place in its round -- for an agent stuck on a stream
+  // the server dropped, or looping. Stop loses the task; this keeps it.
+  rpc restartSubagent(StringRequest) returns (Empty);
   // Detaches the running foreground terminal command ("Proceed While Running"):
   // the agent receives the partial output and a log file path for the rest.
   rpc proceedWhileRunningCommand(EmptyRequest) returns (Empty);

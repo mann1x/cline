@@ -75,10 +75,19 @@ const formatCount = (value: number | undefined): string => {
  * Exported so it can be tested as the string it is, rather than through the
  * row that renders it.
  */
-export function subagentStatsText(entry: { toolCalls?: number; contextTokens?: number; totalCost?: number }): string {
+export function subagentStatsText(entry: {
+	toolCalls?: number
+	contextTokens?: number
+	inputTokens?: number
+	outputTokens?: number
+	totalCost?: number
+}): string {
+	// The context it holds, when that was reported; otherwise what it spent.
+	// A finished agent's report carries the second only, and read "0 tokens".
+	const tokens = entry.contextTokens || (entry.inputTokens ?? 0) + (entry.outputTokens ?? 0)
 	return [
 		`${formatCount(entry.toolCalls)} tools called`,
-		`${formatCount(entry.contextTokens)} tokens`,
+		`${formatCount(tokens)} tokens`,
 		entry.totalCost ? formatCost(entry.totalCost) : "",
 	]
 		.filter(Boolean)

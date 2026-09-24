@@ -36,6 +36,14 @@ describe("what a finished sub-agent reports", () => {
 
 	// Below a cent it is four places, or every small paid run reads as free --
 	// which is the thing this change must not start doing.
+	// pandorum 2026-09-24: "7 tools called · 0 tokens" on every agent, running
+	// or finished. A finished report carries what it spent and no context.
+	it("counts what the agent spent when no context size was reported", () => {
+		expect(subagentStatsText(entry({ toolCalls: 7, inputTokens: 40_000, outputTokens: 1_200 }))).toBe(
+			"7 tools called · 41,200 tokens",
+		)
+	})
+
 	it("does not round a real price down to nothing", () => {
 		expect(subagentStatsText(entry({ totalCost: 0.0004 }))).toContain("$0.0004")
 	})

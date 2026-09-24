@@ -527,6 +527,62 @@ describe("createSpawnAgentTool", () => {
 	// sx4bp (pandorum, 2026-09-23): asked for 75 reports, the lead wrote 75
 	// calls, each repeating the same knowledge and instructions. A list states
 	// them once, and every agent still reports on its own row.
+	// pandorum 2026-09-24: agents stuck on streams a server restart dropped.
+	// Restart runs the agent again inside the same call; the lead gets the
+	// second attempt's report, not "stopped".
+	it("runs a restarted agent again and reports the new attempt", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const { subagentCancellation } = await import("./subagent-cancellation.js");
+		let calls = 0;
+		runMock.mockImplementation(async () => {
+			calls += 1;
+			if (calls === 1) {
+				expect(subagentCancellation.restart("lead::call-9")).toBe(true);
+				return {
+					text: "",
+					iterations: 1,
+					finishReason: "aborted",
+					usage: { inputTokens: 1, outputTokens: 0 },
+				};
+			}
+			return {
+				text: "fresh report",
+				iterations: 1,
+				finishReason: "completed",
+				usage: { inputTokens: 3, outputTokens: 2 },
+			};
+		});
+		const updates: unknown[] = [];
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "mock-model",
+			}),
+		});
+		const output = (await tool.execute(
+			{ instructions: "You review code.", task: "lines 1-50" },
+			{
+				agentId: "parent-1",
+				conversationId: "conv-parent",
+				iteration: 1,
+				toolCallId: "call-9",
+				sessionId: "lead",
+				emitUpdate: (update: unknown) => updates.push(update),
+			} as never,
+		)) as { text?: string; finishReason?: string };
+
+		expect(calls).toBe(2);
+		expect(output).toMatchObject({
+			text: "fresh report",
+			finishReason: "completed",
+		});
+		expect(updates).toContainEqual(
+			expect.objectContaining({
+				activity: { text: "Restarted: starting again from its task" },
+			}),
+		);
+	});
+
 	it("runs every entry of `agents` as its own agent, each on its own row", async () => {
 		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
 		runMock.mockImplementation(async (task: string) => ({

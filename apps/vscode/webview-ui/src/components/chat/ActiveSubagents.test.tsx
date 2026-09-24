@@ -2,9 +2,9 @@ import type { ClineMessage, SubagentStatusItem } from "@shared/ExtensionMessage"
 import { fireEvent, render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const mocks = vi.hoisted(() => ({ cancelSubagent: vi.fn() }))
+const mocks = vi.hoisted(() => ({ cancelSubagent: vi.fn(), restartSubagent: vi.fn() }))
 vi.mock("@/services/grpc-client", () => ({
-	TaskServiceClient: { cancelSubagent: mocks.cancelSubagent },
+	TaskServiceClient: { cancelSubagent: mocks.cancelSubagent, restartSubagent: mocks.restartSubagent },
 }))
 
 import { ActiveSubagents, liveSubagentsFrom } from "./ActiveSubagents"
@@ -186,6 +186,17 @@ describe("the working-agents strip", () => {
 		const warning = screen.getByText(divergence).closest("li")
 		expect(warning?.className).toContain("text-[#e8912d]")
 		expect(warning?.querySelector('[aria-label="warning"]')).not.toBeNull()
+	})
+
+	// Two agents hung after a server restart, and Stop was the only control.
+	it("restarts an agent by the id its spawn tool announced", () => {
+		mocks.restartSubagent.mockResolvedValue({})
+		render(<ActiveSubagents messages={[statusMessage([item({ index: 1, agentName: "stuck", cancelId: "lead::call-3" })])]} />)
+
+		fireEvent.click(screen.getByRole("button", { name: /stuck/ }))
+		fireEvent.click(screen.getByRole("button", { name: "Restart stuck" }))
+		expect(mocks.restartSubagent).toHaveBeenCalledWith(expect.objectContaining({ value: "lead::call-3" }))
+		expect(screen.getByText("Restarting…")).toBeInTheDocument()
 	})
 
 	it("opens the agent's box when its name is clicked, and closes it again", () => {

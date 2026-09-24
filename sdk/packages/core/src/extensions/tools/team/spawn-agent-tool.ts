@@ -36,6 +36,7 @@ import {
 	createSubagentProgress,
 	DELEGATION_PACING_NOTE,
 	reportSubagentFinished,
+	restarted,
 	watchPolykvRoom,
 } from "./subagent-progress";
 
@@ -809,32 +810,42 @@ async function runSpawnedAgent(
 	};
 
 	try {
-		let result: AgentResult;
-		let placed: { nodeId: string; nodeLabel?: string } | undefined;
-		if (placement) {
-			const outcome = await runPlacedAgent({
-				placement,
-				signal: context.signal,
-				emitUpdate: context.emitUpdate,
-				...(config.logger ? { logger: config.logger } : {}),
-				label: input.name ?? "a sub-agent",
-				run: (node, admitted) => attempt(node.configProvider, admitted),
-				// A failed spawn's engine session goes before the next try, or
-				// the retry is charged to a window booked for the last one.
-				beforeRetry: async () => {
-					await releasePolykvAgent(engineSessionId);
-				},
-			});
-			result = outcome.result;
-			placed = outcome.placed;
-		} else {
-			// Held to the endpoint's slot count, around the run alone: building
-			// the toolset costs the server nothing, and holding a slot across it
-			// would leave the endpoint idle while a slot was booked.
-			const slotGate = config.configProvider.getRuntimeConfig().slotGate;
-			const run = () => attempt(config.configProvider, () => {});
-			result = slotGate ? await slotGate.run(run) : await run();
-		}
+		// Restartable from the row: an attempt abandoned by Restart is run
+		// again from the task, in the same place in the round, and the lead
+		// never sees it. The abandoned attempt's engine session goes first --
+		// a stream the server dropped is still booked there.
+		const { result, placed } = await cancellation.restartable(
+			async (): Promise<{
+				result: AgentResult;
+				placed?: { nodeId: string; nodeLabel?: string };
+			}> => {
+				if (placement) {
+					const outcome = await runPlacedAgent({
+						placement,
+						// The attempt's, not the lead's: a restart while it is still
+						// queued takes it out of the queue as well.
+						signal: cancellation.signal,
+						emitUpdate: context.emitUpdate,
+						...(config.logger ? { logger: config.logger } : {}),
+						label: input.name ?? "a sub-agent",
+						run: (node, admitted) => attempt(node.configProvider, admitted),
+						// A failed spawn's engine session goes before the next try, or
+						// the retry is charged to a window booked for the last one.
+						beforeRetry: async () => {
+							await releasePolykvAgent(engineSessionId);
+						},
+					});
+					return { result: outcome.result, placed: outcome.placed };
+				}
+				// Held to the endpoint's slot count, around the run alone: building
+				// the toolset costs the server nothing, and holding a slot across it
+				// would leave the endpoint idle while a slot was booked.
+				const slotGate = config.configProvider.getRuntimeConfig().slotGate;
+				const run = () => attempt(config.configProvider, () => {});
+				return { result: slotGate ? await slotGate.run(run) : await run() };
+			},
+			() => restarted(context.emitUpdate, engineSessionId),
+		);
 		const output: SpawnAgentOutput = {
 			text: result.text,
 			iterations: result.iterations,

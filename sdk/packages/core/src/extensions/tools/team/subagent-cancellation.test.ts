@@ -68,3 +68,67 @@ describe("stopping one sub-agent", () => {
 		expect(unnamed.signal).toBeUndefined();
 	});
 });
+
+describe("restarting a sub-agent", () => {
+	// pandorum 2026-09-24: two agents stuck after the server restarted under
+	// them. Stop was the only control, and a stopped agent is a lost task.
+	it("runs the agent again from its task when its attempt is restarted", async () => {
+		const registration = registerSubagentCancellation(
+			"s::restart-1",
+			undefined,
+		);
+		const signals: AbortSignal[] = [];
+		let restarts = 0;
+		const result = await registration.restartable(
+			async () => {
+				const signal = registration.signal as AbortSignal;
+				signals.push(signal);
+				if (signals.length === 1) {
+					expect(subagentCancellation.restart("s::restart-1")).toBe(true);
+					expect(signal.aborted).toBe(true);
+					return "abandoned";
+				}
+				return "second attempt";
+			},
+			() => {
+				restarts += 1;
+			},
+		);
+		expect(result).toBe("second attempt");
+		expect(restarts).toBe(1);
+		expect(signals[1]?.aborted).toBe(false);
+		registration.release();
+	});
+
+	it("does not bring back an agent that was stopped", async () => {
+		const registration = registerSubagentCancellation(
+			"s::restart-2",
+			undefined,
+		);
+		let runs = 0;
+		await expect(
+			registration.restartable(async () => {
+				runs += 1;
+				subagentCancellation.restart("s::restart-2");
+				subagentCancellation.cancel("s::restart-2");
+				throw new Error("aborted");
+			}),
+		).rejects.toThrow("aborted");
+		expect(runs).toBe(1);
+		expect(subagentCancellation.restart("s::restart-2")).toBe(false);
+		registration.release();
+	});
+
+	it("stops the current attempt when the agent is stopped", async () => {
+		const registration = registerSubagentCancellation(
+			"s::restart-3",
+			undefined,
+		);
+		await registration.restartable(async () => {
+			const signal = registration.signal as AbortSignal;
+			subagentCancellation.cancel("s::restart-3");
+			expect(signal.aborted).toBe(true);
+		});
+		registration.release();
+	});
+});

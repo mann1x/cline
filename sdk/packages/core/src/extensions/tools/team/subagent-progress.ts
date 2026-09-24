@@ -1,4 +1,8 @@
-import { onPolykvNotice, onPolykvRoomWait } from "@cline/llms";
+import {
+	onPolykvNotice,
+	onPolykvRoomWait,
+	releasePolykvAgent,
+} from "@cline/llms";
 import type { AgentEvent } from "@cline/shared";
 
 /**
@@ -79,6 +83,26 @@ export function reportSubagentFinished(
 	report: object,
 ): void {
 	emitUpdate?.({ finished: report });
+}
+
+/**
+ * Between a restarted attempt and the next: the row says so, and the engine
+ * session the abandoned attempt held goes back -- after a server restart it is
+ * still booked there, and the new attempt would be charged to it.
+ */
+export async function restarted(
+	emitUpdate: ((update: unknown) => void) | undefined,
+	engineSessionId: string | undefined,
+): Promise<void> {
+	emitUpdate?.({
+		queued: true,
+		latestOutput: "Restarted: starting again from its task",
+		latestOutputKind: "text",
+		activity: { text: "Restarted: starting again from its task" },
+	});
+	if (engineSessionId) {
+		await releasePolykvAgent(engineSessionId).catch(() => undefined);
+	}
 }
 
 /**
@@ -203,6 +227,25 @@ export function createSubagentProgress(
 		observe(event: AgentEvent): void {
 			forward?.(event);
 			if (!emitUpdate) {
+				return;
+			}
+			// What it has spent, every turn. Nothing reported usage while an
+			// agent ran, so every row read "0 tokens" until -- and, since the row
+			// counts the context, also after -- it finished.
+			if (event.type === "usage") {
+				emitUpdate({
+					inputTokens: event.totalInputTokens,
+					outputTokens: event.totalOutputTokens,
+					// The window it is using now: what this turn sent, and what
+					// it wrote on top.
+					contextTokens:
+						event.inputTokens +
+						(event.cacheReadTokens ?? 0) +
+						event.outputTokens,
+					...(event.totalCost !== undefined
+						? { totalCost: event.totalCost }
+						: {}),
+				});
 				return;
 			}
 			if (event.type === "content_start" && event.contentType === "text") {

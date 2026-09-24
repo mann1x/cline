@@ -1,6 +1,6 @@
 import type { ClineMessage, ClineSaySubagentStatus, SubagentActivityEntry, SubagentStatusItem } from "@shared/ExtensionMessage"
 import { StringRequest } from "@shared/proto/cline/common"
-import { ClockIcon, LoaderCircleIcon, SquareIcon, TriangleAlertIcon, XIcon } from "lucide-react"
+import { ClockIcon, LoaderCircleIcon, RefreshCwIcon, SquareIcon, TriangleAlertIcon, XIcon } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -137,12 +137,16 @@ function AgentDetail({
 	agent,
 	onClose,
 	onStop,
+	onRestart,
 	stopping,
+	restarting,
 }: {
 	agent: SubagentStatusItem
 	onClose: () => void
 	onStop?: () => void
+	onRestart?: () => void
 	stopping: boolean
+	restarting: boolean
 }) {
 	const identity = subagentIdentity(agent.index, agent.agentName)
 	const node = nodeNameOf(agent)
@@ -178,6 +182,25 @@ function AgentDetail({
 						type="button">
 						<SquareIcon className="size-2.5 fill-current" />
 						<span>{stopping ? "Stopping…" : "Stop"}</span>
+					</button>
+				)}
+				{/* Start it again from its task, keeping its place in the round:
+				    for an agent stuck on a stream the server dropped, or looping.
+				    Stop loses the task; this keeps it. */}
+				{onRestart && (
+					<button
+						aria-label={`Restart ${identity.label}`}
+						className="flex shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-editor-group-border bg-transparent px-1.5 py-[1px] text-foreground opacity-80 hover:opacity-100 disabled:cursor-default disabled:opacity-40"
+						disabled={stopping || restarting}
+						onClick={onRestart}
+						title={
+							restarting
+								? `Restarting ${identity.label}…`
+								: `Restart ${identity.label}: abandon what it is doing and start it again from its task`
+						}
+						type="button">
+						<RefreshCwIcon className={`size-2.5 ${restarting ? "animate-spin" : ""}`} />
+						<span>{restarting ? "Restarting…" : "Restart"}</span>
 					</button>
 				)}
 				<span className="shrink-0 opacity-70">{tools}</span>
@@ -243,6 +266,25 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 				next.delete(cancelId)
 				return next
 			})
+		})
+	}, [])
+
+	// Which agents were just asked to restart. Cleared after a few seconds: a
+	// restart ends in the same agent running again, so there is no end state
+	// to wait for, only a press to keep from being repeated.
+	const [restarting, setRestarting] = useState<ReadonlySet<string>>(new Set())
+	const restart = useCallback((cancelId: string) => {
+		setRestarting((previous) => new Set(previous).add(cancelId))
+		const clear = () =>
+			setRestarting((previous) => {
+				const next = new Set(previous)
+				next.delete(cancelId)
+				return next
+			})
+		setTimeout(clear, 4000)
+		TaskServiceClient.restartSubagent(StringRequest.create({ value: cancelId })).catch((error) => {
+			console.error("Failed to restart sub-agent:", error)
+			clear()
 		})
 	}, [])
 
@@ -339,7 +381,13 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 					<AgentDetail
 						agent={open}
 						onClose={() => setOpenIndex(undefined)}
-						{...(open.cancelId ? { onStop: () => stop(open.cancelId as string) } : {})}
+						{...(open.cancelId
+							? {
+									onStop: () => stop(open.cancelId as string),
+									onRestart: () => restart(open.cancelId as string),
+								}
+							: {})}
+						restarting={open.cancelId !== undefined && restarting.has(open.cancelId)}
 						stopping={open.cancelId !== undefined && stopping.has(open.cancelId)}
 					/>
 				)}
