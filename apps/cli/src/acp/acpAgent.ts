@@ -38,6 +38,7 @@ import { createCliCore } from "../session/session";
 import { isClineOrgIndividualInferenceSubscriptionErrorMessage } from "../utils/cline-pass-errors";
 import { getCliBuildInfo } from "../utils/common";
 import { randomSessionId, resolveWorkspaceRoot } from "../utils/helpers";
+import { resolveSandboxBinariesDir } from "../utils/sandbox-binaries";
 import type { Config } from "../utils/types";
 import {
 	ACP_AUTH_METHODS,
@@ -786,6 +787,9 @@ export class AcpAgent implements Agent {
 			toolPolicies: { "*": { autoApprove: false } },
 			enableSpawnAgent: true,
 			enableAgentTeams: false,
+			subagentCommandsEnabled:
+				process.env.CLINE_SUBAGENT_COMMANDS?.trim() === "1",
+			sandboxBinariesDir: resolveSandboxBinariesDir(),
 			enableTools: true,
 			cwd,
 			workspaceRoot,
