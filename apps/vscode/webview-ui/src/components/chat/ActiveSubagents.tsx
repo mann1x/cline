@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { TaskServiceClient } from "@/services/grpc-client"
-import { subagentIdentity } from "./subagentIdentity"
+import { subagentIdentity, subagentModelLabel } from "./subagentIdentity"
 
 /**
  * The agents working right now, above the conversation rather than inside it.
@@ -153,10 +153,10 @@ function AgentDetail({
 	const doing = agent.latestToolCall?.trim() || (agent.status === "pending" ? "queued" : "thinking")
 	const tools = `${agent.toolCalls} tool${agent.toolCalls === 1 ? "" : "s"}`
 	const tps = agent.status === "running" && agent.genTps ? `~${agent.genTps} tok/s` : ""
-	const details = [
-		agent.modelId ?? "",
-		agent.contextTokens ? `${Intl.NumberFormat("en-US").format(agent.contextTokens)} tokens` : "",
-	].filter(Boolean)
+	const model = subagentModelLabel(agent)
+	const details = [agent.contextTokens ? `${Intl.NumberFormat("en-US").format(agent.contextTokens)} tokens` : ""].filter(
+		Boolean,
+	)
 	const tail = outputTail(agent)
 
 	return (
@@ -172,6 +172,11 @@ function AgentDetail({
 					style={identity.style}>
 					{identity.label}
 				</span>
+				{model && (
+					<span className="max-w-[12rem] shrink truncate font-mono opacity-70" title={model}>
+						{model}
+					</span>
+				)}
 				{onStop && (
 					<button
 						aria-label={`Stop ${identity.label}`}

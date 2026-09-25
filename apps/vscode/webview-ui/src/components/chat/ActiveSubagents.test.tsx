@@ -141,6 +141,20 @@ describe("the working-agents strip", () => {
 		expect(screen.queryByText(/primary/)).not.toBeInTheDocument()
 	})
 
+	// #78: the provider and model, beside the agent's name, while it runs.
+	it("names the provider and model an agent is running on", () => {
+		render(
+			<ActiveSubagents
+				messages={[
+					statusMessage([item({ index: 1, agentName: "js-syntactic", providerId: "opencoti", modelId: "v9-agentic" })]),
+				]}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /js-syntactic/ }))
+		expect(screen.getByText("opencoti/v9-agentic")).toBeInTheDocument()
+	})
+
 	// A run recorded before nodes were named still has to say something.
 	it("falls back to the id when the run carries no name", () => {
 		render(<ActiveSubagents messages={[statusMessage([item({ index: 1, agentName: "old", nodeId: "node-mucuczcm" })])]} />)

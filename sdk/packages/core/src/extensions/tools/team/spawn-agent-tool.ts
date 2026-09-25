@@ -37,6 +37,7 @@ import {
 	createSubagentProgress,
 	DELEGATION_PACING_NOTE,
 	reportSubagentFinished,
+	reportSubagentModel,
 	restarted,
 	watchPolykvRoom,
 } from "./subagent-progress";
@@ -767,6 +768,11 @@ async function runSpawnedAgent(
 		admitted: () => void,
 	): Promise<AgentResult> => {
 		const connection = provider.getConnectionConfig();
+		// The row names the model while it runs, not only once it is done.
+		reportSubagentModel(context.emitUpdate, {
+			providerId: connection.providerId,
+			modelId: connection.modelId,
+		});
 		const pooled = isPolykvProvider({
 			providerId: connection.providerId,
 			baseUrl: connection.baseUrl,

@@ -96,6 +96,59 @@ describe("createSpawnAgentTool", () => {
 		expect(placement?.occupancy().get("n1") ?? 0).toBe(0);
 	});
 
+	// #78: the node decides the model, and the row has to say which one while
+	// the agent runs -- not only once the result names it.
+	it("reports the placed node's provider and model before the agent finishes", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const { createAgentNodePlacement } = await import(
+			"./agent-node-placement.js"
+		);
+		const updates: unknown[] = [];
+		let updatesWhileRunning: unknown[] = [];
+		runMock.mockImplementation(async () => {
+			updatesWhileRunning = [...updates];
+			return {
+				text: "done",
+				iterations: 1,
+				finishReason: "completed",
+				usage: { inputTokens: 1, outputTokens: 1 },
+			};
+		});
+		const placement = createAgentNodePlacement({
+			nodes: [
+				{
+					id: "n1",
+					priority: 1,
+					capacity: 1,
+					connection: { providerId: "opencoti", modelId: "worker-model" },
+				},
+			],
+			base: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "lead-model",
+			}),
+		});
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "lead-model",
+				nodePlacement: placement,
+			} as never),
+		});
+
+		await tool.execute({ systemPrompt: "p", task: "t" }, {
+			agentId: "parent",
+			conversationId: "c",
+			iteration: 1,
+			emitUpdate: (update: unknown) => updates.push(update),
+		} as never);
+
+		expect(updatesWhileRunning).toContainEqual({
+			providerId: "opencoti",
+			modelId: "worker-model",
+		});
+	});
+
 	it("creates a sub-agent, forwards callbacks, and returns normalized output", async () => {
 		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
 		runMock.mockResolvedValue({

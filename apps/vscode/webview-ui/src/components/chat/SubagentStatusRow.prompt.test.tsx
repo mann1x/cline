@@ -52,3 +52,42 @@ describe("a long sub-agent prompt", () => {
 		expect(screen.getByRole("button", { name: "Show full subagent prompt" })).toBeTruthy()
 	})
 })
+
+describe("a running sub-agent's row", () => {
+	// #78: the row said `on <node> · <model>` only once the agent was done,
+	// and never named the provider.
+	it("names the provider and model beside the agent while it runs", () => {
+		const running = {
+			ts: 1,
+			type: "say",
+			say: "subagent",
+			partial: true,
+			text: JSON.stringify({
+				status: "running",
+				total: 1,
+				completed: 0,
+				items: [
+					{
+						index: 1,
+						agentName: "reviewer",
+						prompt: "review it",
+						status: "running",
+						providerId: "opencoti",
+						modelId: "v9-agentic",
+						nodeLabel: "Node2",
+						toolCalls: 0,
+						inputTokens: 0,
+						outputTokens: 0,
+						totalCost: 0,
+						contextTokens: 0,
+						contextWindow: 0,
+						contextUsagePercentage: 0,
+					},
+				],
+			}),
+		} as ClineMessage
+		render(<SubagentStatusRow isLast={true} lastModifiedMessage={running} message={running} />)
+		expect(screen.getByText("opencoti/v9-agentic")).toBeTruthy()
+		expect(screen.getByText("on Node2")).toBeTruthy()
+	})
+})

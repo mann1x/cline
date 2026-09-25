@@ -17,7 +17,7 @@ import {
 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import MarkdownBlock from "../common/MarkdownBlock"
-import { subagentIdentity } from "./subagentIdentity"
+import { subagentIdentity, subagentModelLabel } from "./subagentIdentity"
 
 interface SubagentStatusRowProps {
 	message: ClineMessage
@@ -288,7 +288,10 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 					// a storage key shown nowhere in the UI, so on its own it
 					// named a machine the reader could not look up.
 					const nodeName = entry.nodeLabel ?? entry.nodeId
-					const placementText = [nodeName ? `on ${nodeName}` : "", entry.modelId ?? ""].filter(Boolean).join(" · ")
+					const placementText = nodeName ? `on ${nodeName}` : ""
+					// provider/model beside the tag, from the moment the agent is
+					// placed rather than only once its result names it (#78).
+					const modelLabel = subagentModelLabel(entry)
 					const latestToolCallText = entry.latestToolCall?.trim() || ""
 					return (
 						<div
@@ -304,6 +307,13 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 										title={`Sub-agent ${entry.index}`}>
 										{identity.label}
 									</span>
+									{modelLabel && (
+										<span
+											className="ml-1.5 mb-1 inline-block max-w-[16rem] truncate align-middle font-mono text-[10px] opacity-60"
+											title={modelLabel}>
+											{modelLabel}
+										</span>
+									)}
 									<SubagentPromptText
 										isExpanded={expandedPrompts[entry.index] === true}
 										onToggle={() => togglePrompt(entry.index)}

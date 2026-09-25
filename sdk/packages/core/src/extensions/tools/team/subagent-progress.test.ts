@@ -2,6 +2,7 @@ import type { AgentEvent } from "@cline/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
 	createSubagentProgress,
+	reportSubagentModel,
 	reportSubagentPlaced,
 	reportSubagentQueued,
 	SUBAGENT_OUTPUT_TAIL_CHARS,
@@ -231,6 +232,31 @@ describe("placement", () => {
 		reportSubagentPlaced(emitUpdate, undefined);
 		expect(emitUpdate).toHaveBeenCalledWith({ queued: false });
 		expect(() => reportSubagentQueued(undefined)).not.toThrow();
+	});
+});
+
+describe("the model an agent runs on", () => {
+	// #78: the row named the model only from the final result, so while an
+	// agent ran nothing said which model -- or which provider -- it was on.
+	it("names the provider and the model", () => {
+		const emitUpdate = vi.fn();
+		reportSubagentModel(emitUpdate, {
+			providerId: "opencoti",
+			modelId: "v9-agentic",
+		});
+		expect(emitUpdate).toHaveBeenCalledWith({
+			providerId: "opencoti",
+			modelId: "v9-agentic",
+		});
+	});
+
+	it("sends nothing when there is nothing to name", () => {
+		const emitUpdate = vi.fn();
+		reportSubagentModel(emitUpdate, {});
+		expect(emitUpdate).not.toHaveBeenCalled();
+		expect(() =>
+			reportSubagentModel(undefined, { providerId: "x" }),
+		).not.toThrow();
 	});
 });
 

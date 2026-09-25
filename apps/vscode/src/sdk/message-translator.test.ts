@@ -5457,6 +5457,36 @@ describe("a sub-agent's placement, while it runs", () => {
 			genTps: 21.5,
 		})
 	})
+
+	// #78: the model was named only by the final result, so while an agent ran
+	// nothing said which provider or model it was on.
+	it("names its provider and model while it runs", () => {
+		const state = new MessageTranslatorState()
+		translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "content_start",
+						contentType: "tool",
+						toolName: "subagent_js_syntactic",
+						toolCallId: "call-1",
+						input: { prompt: "fix the braces" },
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+
+		update(state, { queued: false, nodeLabel: "Node3" })
+		update(state, { providerId: "opencoti", modelId: "v9-agentic" })
+		expect(state.getSpawnAgentItems()[0]).toMatchObject({
+			status: "running",
+			providerId: "opencoti",
+			modelId: "v9-agentic",
+		})
+	})
 })
 
 describe("a spawn_agent batch", () => {
