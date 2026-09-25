@@ -1,10 +1,16 @@
-import { noteOpencotiRefusalPressure } from "./opencoti-kv-pressure";
+import {
+	noteOpencotiRefusalPressure,
+	resizeOpencotiSession,
+} from "./opencoti-kv-pressure";
 import type { OpencotiStreamPhase } from "./opencoti-liveness";
 import {
 	createPolykvClient,
+	hasOpencotiFeature,
+	OPENCOTI_FEATURES,
 	type PolykvAdmissionPolicy,
 	type PolykvClient,
 	polykvRoot,
+	probeOpencotiProps,
 } from "./polykv";
 
 /**
@@ -313,6 +319,25 @@ interface OwnerShard {
 	 * here: releasing it means releasing the pools, not the session.
 	 */
 	borrowed?: boolean;
+	/**
+	 * The window each agent on this owner is owed, and the least of it one
+	 * accepts: the node's window and its "Agent window" floor. Absent for an
+	 * owner opened with no node window stated -- that owner carries any number
+	 * of agents, as every owner did before.
+	 */
+	perAgent?: { ask: number; floor: number };
+	/** The window the engine holds for this owner now, as last granted or resized. */
+	window?: number;
+	/** The window it was opened asking for: where a pressure grow-back stops. */
+	ceiling?: number;
+	/** The floor it was opened at: one agent's. */
+	windowMin?: number;
+	/** The engine's per-session maximum: no owner grows past it. */
+	maximum?: number;
+	/** A grow of this owner is in flight. */
+	growing?: boolean;
+	/** When the engine last refused to grow it (`Date.now()`). */
+	growRefusedAt?: number;
 }
 
 interface SwarmGroup {
@@ -1122,25 +1147,345 @@ function groupFor(
 }
 
 /**
- * Owner engine session -> the window it asked for and the floor it accepted.
+ * Owner engine session -> the owner this process opened under that id.
  *
  * What a resize of an owner is bounded by (`kv_resize_v1`): an owner is the
  * booking its pooled agents live in, so it is the owner that shrinks under
- * pressure and grows back -- never below the floor it was opened at, never
- * above the window it asked for. Only owners this module opened are here: the
- * lead's own session lent to priority-0 agents is the lead's to resize.
+ * pressure and grows back -- never below the floor its agents are owed,
+ * never above the window it asked for. Only owners this module opened are
+ * here: the lead's own session lent to priority-0 agents is the lead's to
+ * resize.
  */
-const OWNER_WINDOW_BOUNDS = new Map<
-	string,
-	{ floor: number; ceiling: number }
->();
+const OWNER_SHARDS = new Map<string, OwnerShard>();
 
-/** The bounds of an owner this process opened, by its engine session id. */
+/**
+ * The bounds of an owner this process opened, by its engine session id.
+ *
+ * The floor is every agent on it at its own floor -- one agent's floor times
+ * the agents it carries now (never less than the floor it opened at, never
+ * above the ceiling): a pressure shrink that left four agents one agent's
+ * floor would starve three of them.
+ */
 export function polykvOwnerWindowBounds(
 	ownerSessionId: string,
 ): { floor: number; ceiling: number } | undefined {
-	const bounds = OWNER_WINDOW_BOUNDS.get(ownerSessionId);
-	return bounds ? { ...bounds } : undefined;
+	const shard = OWNER_SHARDS.get(ownerSessionId);
+	if (!shard || shard.ceiling === undefined || shard.windowMin === undefined) {
+		return undefined;
+	}
+	const ceiling = shard.ceiling;
+	const perAgentFloor = shard.perAgent?.floor ?? shard.windowMin;
+	const floor = Math.min(
+		ceiling,
+		Math.max(shard.windowMin, shard.agents.size * perAgentFloor),
+	);
+	return { floor, ceiling };
+}
+
+/**
+ * The engine resized an owner (a pressure shrink or grow-back): the agents it
+ * carries follow the window it holds now.
+ */
+export function notePolykvOwnerWindow(
+	ownerSessionId: string,
+	window: number,
+): void {
+	const shard = OWNER_SHARDS.get(ownerSessionId);
+	if (shard && Number.isFinite(window) && window > 0) {
+		shard.window = window;
+	}
+}
+
+/**
+ * What an owner asks the engine for: every agent it can carry at the node's
+ * window, capped at the engine's per-session maximum.
+ *
+ * The engine charges each pooled worker's private cells to its owner
+ * (`oc_alloc_tree_used`: a slot's tokens minus what it shares from a pool),
+ * so an owner booked at one agent's window has to hold every one of its
+ * workers in it. Live on 8244 (b108, 2026-09-25): 64k owners refused their
+ * second and third worker ("session allocation full (worker of ...)") with
+ * 786k base cells free. The node window is the budget PER AGENT; an owner
+ * carries `agents` of them. The floor is one agent's: an owner granted less
+ * carries the agent that opened it, and the capacity check below keeps the
+ * others off it.
+ */
+export function polykvOwnerBooking(
+	perAgent: { ask: number; floor: number },
+	maximum: number,
+): { window: number; windowMin: number; agents: number } {
+	const ask = Math.max(1, Math.min(perAgent.ask, maximum));
+	const agents = Math.max(1, Math.floor(maximum / ask));
+	const window = Math.max(perAgent.floor, Math.min(maximum, agents * ask));
+	return { window, windowMin: Math.min(window, perAgent.floor), agents };
+}
+
+/**
+ * How many agents an owner of `window` cells carries at `ask` each.
+ *
+ * `sharedPrefix` is the prefix every agent on it shares from its pools: the
+ * engine charges it once, to the pool, and each worker only for what is past
+ * it. Never less than one: an owner is never opened for nobody, and the agent
+ * that opened it keeps it whatever it was granted.
+ */
+export function polykvOwnerAgentCapacity(
+	window: number,
+	ask: number,
+	sharedPrefix = 0,
+): number {
+	if (!(ask > 0) || !(window > 0)) {
+		return 1;
+	}
+	const prefix = Math.max(0, Math.min(sharedPrefix, ask - 1));
+	return Math.max(1, Math.floor((window - prefix) / (ask - prefix)));
+}
+
+/** The cells an owner needs to carry `agents` at `ask`, the prefix once. */
+function ownerWindowFor(agents: number, ask: number, sharedPrefix: number) {
+	const prefix = Math.max(0, Math.min(sharedPrefix, ask - 1));
+	return prefix + agents * (ask - prefix);
+}
+
+/**
+ * The prefix every agent on this owner shares: its shortest pool, the root.
+ * `0` until one is built -- the capacity is then counted conservatively.
+ */
+function ownerSharedPrefix(shard: OwnerShard): number {
+	let shortest: number | undefined;
+	for (const record of shard.records.values()) {
+		if (typeof record.prefixLen === "number" && record.prefixLen > 0) {
+			shortest =
+				shortest === undefined
+					? record.prefixLen
+					: Math.min(shortest, record.prefixLen);
+		}
+	}
+	return shortest ?? 0;
+}
+
+/** How many agents this owner carries at the window it holds now. */
+function ownerCapacity(shard: OwnerShard): number {
+	if (!shard.perAgent || shard.window === undefined) {
+		return Number.POSITIVE_INFINITY;
+	}
+	return polykvOwnerAgentCapacity(
+		shard.window,
+		shard.perAgent.ask,
+		ownerSharedPrefix(shard),
+	);
+}
+
+/** Resize targets are whole multiples of this, as the engine's grants are. */
+const OWNER_RESIZE_ALIGN = 256;
+const alignUp = (value: number): number =>
+	Math.ceil(value / OWNER_RESIZE_ALIGN) * OWNER_RESIZE_ALIGN;
+
+/**
+ * Grow an owner this process opened to `target` cells (`kv_resize_v1`).
+ * `true` when the engine took it. Never throws: a refusal -- busy with its
+ * workers' requests, no room, no resize on this server -- is `false`, and
+ * the caller places the agent elsewhere or waits.
+ */
+async function growOwner(
+	group: SwarmGroup,
+	shard: OwnerShard,
+	target: number,
+): Promise<boolean> {
+	if (
+		shard.closed ||
+		shard.borrowed ||
+		shard.growing ||
+		shard.window === undefined ||
+		shard.maximum === undefined ||
+		target <= shard.window ||
+		target > shard.maximum
+	) {
+		return false;
+	}
+	const props = await probeOpencotiProps(group.root, group.fetch).catch(
+		() => undefined,
+	);
+	if (!hasOpencotiFeature(props?.features, OPENCOTI_FEATURES.kvResize)) {
+		return false;
+	}
+	shard.growing = true;
+	try {
+		const answer = await resizeOpencotiSession({
+			baseUrl: group.root,
+			sessionId: shard.sessionId,
+			numCtx: target,
+			fetch: group.fetch,
+			...(group.headers ? { headers: group.headers } : {}),
+		});
+		if (!answer.ok) {
+			shard.growRefusedAt = Date.now();
+			return false;
+		}
+		shard.window = answer.windowNew;
+		shard.ceiling = Math.max(shard.ceiling ?? 0, answer.windowNew);
+		shard.growRefusedAt = undefined;
+		return true;
+	} finally {
+		shard.growing = false;
+	}
+}
+
+/**
+ * Make room on an open owner for one more agent by growing it, where the
+ * engine allows: an owner granted less than it asked, or shrunk under
+ * pressure. `true` when one grew; the caller looks for room again.
+ *
+ * The engine resizes only between an owner's requests -- any running worker
+ * of it answers `session_busy` -- so this mostly succeeds on an owner whose
+ * agents are all in their tools. A refused owner is not asked again for
+ * {@link POLYKV_LAYER_RETRY_MS}.
+ */
+async function growOwnerForAgent(
+	group: SwarmGroup,
+	open: OwnerShard[],
+): Promise<boolean> {
+	const now = Date.now();
+	for (const shard of open) {
+		if (
+			!shard.perAgent ||
+			shard.borrowed ||
+			(shard.growRefusedAt !== undefined &&
+				now - shard.growRefusedAt < POLYKV_LAYER_RETRY_MS)
+		) {
+			continue;
+		}
+		const target = alignUp(
+			ownerWindowFor(
+				shard.agents.size + 1,
+				shard.perAgent.ask,
+				ownerSharedPrefix(shard),
+			),
+		);
+		if (await growOwner(group, shard, target)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * The owner a new agent goes on, with the agent already counted on it.
+ *
+ * The newest open owner with room for one more at the node's window; else an
+ * open owner grown by one agent; else a new owner, waiting for room on the
+ * engine as long as it takes (agents retry, never fail). The seat is taken
+ * here, synchronously after the check, so agents arriving together never
+ * over-fill one owner between the check and the assignment.
+ */
+async function placeAgent(
+	group: SwarmGroup,
+	spec: PolykvWorkerSpec,
+	body: Record<string, unknown>,
+	signal: AbortSignal | null | undefined,
+): Promise<OwnerShard | undefined> {
+	const take = (shard: OwnerShard): OwnerShard => {
+		const previous = group.assigned.get(spec.sessionId);
+		if (previous && previous !== shard) {
+			previous.agents.delete(spec.sessionId);
+			previous.uses?.delete(spec.sessionId);
+		}
+		group.assigned.set(spec.sessionId, shard);
+		shard.agents.add(spec.sessionId);
+		return shard;
+	};
+	const roomy = (shard: OwnerShard) =>
+		!shard.closed && shard.agents.size < ownerCapacity(shard);
+	while (true) {
+		const open = [...group.shards]
+			.reverse()
+			.filter((candidate) => !candidate.closed && !candidate.borrowed);
+		const found = open.find(roomy);
+		if (found) {
+			return take(found);
+		}
+		if (await growOwnerForAgent(group, open)) {
+			continue;
+		}
+		const opened = await awaitOwner(group, spec.sessionId, () =>
+			openShard(group, body, signal, true, spec.window),
+		);
+		if (!opened) {
+			return undefined;
+		}
+		if (roomy(opened)) {
+			return take(opened);
+		}
+		// Others waiting on the same open took its seats: look again.
+	}
+}
+
+/**
+ * The owner parsed from a worker's session-full refusal, and by how much it
+ * is short: `session allocation full (worker of '<owner>': <free> of <cells>
+ * cells free, needs <need>)`.
+ */
+export function parseWorkerWindowFull(
+	text: string,
+): { owner: string; free: number; cells: number; needs: number } | undefined {
+	const match =
+		/session allocation full \(worker of '([^']+)': (\d+) of (\d+) cells free, needs (\d+)\)/i.exec(
+			text,
+		);
+	if (!match) {
+		return undefined;
+	}
+	return {
+		owner: match[1] as string,
+		free: Number(match[2]),
+		cells: Number(match[3]),
+		needs: Number(match[4]),
+	};
+}
+
+/**
+ * A worker was refused because its owner's window is full -- not because the
+ * server is: grow that owner by the shortfall so the worker fits.
+ *
+ * The engine prices a worker at its private cells (its prompt and declared
+ * reply past the pool it attaches to) against the owner's free cells, and
+ * such a refusal asks nothing of the base pool (`refused_needed_max_60s` 0):
+ * the cells are there, the owner's booking is what is short. The answer is
+ * a bigger owner, never compacting everyone. Bounded by the engine's
+ * per-session maximum; the resize itself is bounded by the free base cells
+ * (a 429 there means the server really is full, and the worker waits).
+ * `true` when the owner grew and the worker should be sent again.
+ */
+export async function growPolykvOwnerForWorker(
+	sessionId: string,
+	refusalText: string,
+): Promise<boolean> {
+	const refusal = parseWorkerWindowFull(refusalText);
+	if (!refusal) {
+		return false;
+	}
+	const group = AGENT_GROUPS.get(sessionId);
+	const shard = OWNER_SHARDS.get(refusal.owner);
+	if (
+		!group ||
+		!shard ||
+		shard.closed ||
+		shard.borrowed ||
+		!group.shards.includes(shard)
+	) {
+		return false;
+	}
+	const shortfall = refusal.needs - refusal.free;
+	if (shortfall <= 0) {
+		return false;
+	}
+	const current = Math.max(refusal.cells, shard.window ?? 0);
+	shard.window = current;
+	const target = alignUp(refusal.cells + shortfall);
+	if (target <= current) {
+		// Grown meanwhile by another refused worker: send it again.
+		return true;
+	}
+	return growOwner(group, shard, target);
 }
 
 /** The model's own per-session maximum, which is what an owner asks for. */
@@ -1189,15 +1534,16 @@ async function openOwner(
 	const sessionId = engineSessionId(`${name}~polykv-owner-${serial}`);
 	const generation = polykvRootGeneration(group.root);
 	const maximum = await sessionContextMax(group);
-	// Sized from the agents it hosts, where their node states a window: the
-	// node's window (the engine's maximum at most -- it clamps anyway) floored
-	// at the opening agent's share. Without one, the engine's maximum floored
-	// at the owner minimum, as before.
-	const window = agentWindow
-		? Math.max(agentWindow.floor, Math.min(agentWindow.ask, maximum))
-		: maximum;
-	const windowMin = agentWindow
-		? Math.min(window, agentWindow.floor)
+	// Sized from the agents it hosts, where their node states a window: every
+	// agent it can carry at the node's window (the engine's maximum at most),
+	// floored at the opening agent's share -- see polykvOwnerBooking. Without
+	// one, the engine's maximum floored at the owner minimum, as before.
+	const booking = agentWindow
+		? polykvOwnerBooking(agentWindow, maximum)
+		: undefined;
+	const window = booking ? booking.window : maximum;
+	const windowMin = booking
+		? booking.windowMin
 		: Math.min(window, POLYKV_OWNER_MIN_WINDOW);
 	let waits = 0;
 	while (true) {
@@ -1227,6 +1573,9 @@ async function openOwner(
 			await response.body?.cancel().catch(() => {});
 		}
 		if (response.ok) {
+			// The window the engine granted, which may be less than asked:
+			// what the agents on this owner are counted against.
+			const granted = Number(response.headers.get("x-context-window"));
 			if (polykvRootGeneration(group.root) !== generation) {
 				// The server restarted while this owner was being opened: it
 				// belongs to a generation nothing may attach to any more.
@@ -1238,9 +1587,21 @@ async function openOwner(
 				records: new Map(),
 				agents: new Set(),
 				closed: false,
+				window: Number.isFinite(granted) && granted > 0 ? granted : window,
+				ceiling: window,
+				windowMin,
+				maximum,
+				...(agentWindow
+					? {
+							perAgent: {
+								ask: Math.min(agentWindow.ask, maximum),
+								floor: agentWindow.floor,
+							},
+						}
+					: {}),
 			};
 			group.shards.push(shard);
-			OWNER_WINDOW_BOUNDS.set(sessionId, { floor: windowMin, ceiling: window });
+			OWNER_SHARDS.set(sessionId, shard);
 			return shard;
 		}
 		if (response.status !== 429 || !waitForRoom) {
@@ -1885,10 +2246,7 @@ async function attachWorker(options: {
 				// agent keeps its place on the owner it has and waits there.
 				((await openShard(group, body, options.signal, false, spec.window)) ??
 				(current && !current.closed ? current : undefined))
-			: ([...group.shards].reverse().find((candidate) => !candidate.closed) ??
-				(await awaitOwner(group, spec.sessionId, () =>
-					openShard(group, body, options.signal, true, spec.window),
-				)));
+			: await placeAgent(group, spec, body, options.signal);
 		if (!shard) {
 			return unpooled(
 				options.fresh
@@ -1986,8 +2344,13 @@ export async function movePolykvWorker(sessionId: string): Promise<boolean> {
 	if (!group || !current || current.borrowed) {
 		return false;
 	}
+	// Only to an owner with a seat left: moving onto one that carries all its
+	// agents already is the refusal this move is escaping, on another owner.
 	const open = group.shards.filter(
-		(shard) => !shard.closed && shard !== current,
+		(shard) =>
+			!shard.closed &&
+			shard !== current &&
+			shard.agents.size < ownerCapacity(shard),
 	);
 	if (open.length === 0) {
 		return false;
@@ -2220,7 +2583,7 @@ export async function releaseAllPolykvSwarms(): Promise<void> {
 	STARTED_WORKERS.clear();
 	ROOT_STATES.clear();
 	OWNER_SERIALS.clear();
-	OWNER_WINDOW_BOUNDS.clear();
+	OWNER_SHARDS.clear();
 	LAST_ATTACH.clear();
 	CHARGED_TO.clear();
 	// Shutdown: the lent pools are gone, so the leads can go too.

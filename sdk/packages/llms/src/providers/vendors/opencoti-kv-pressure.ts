@@ -195,6 +195,30 @@ export function resetOpencotiPressure(): void {
 export const OPENCOTI_PRESSURE_CLEAR_MAX_AGE_MS = 15_000;
 
 /**
+ * Whether the refusals in a pressure block were for want of cells on the
+ * SERVER -- the only refusals running agents answer by giving cells back.
+ *
+ * `refused_needed_max_60s` is the most base-pool cells any refusal in the
+ * window asked for (opencoti `oc_refusal_record`: the admission's
+ * `want[OC_POOL_BASE]`). A worker refused because its OWNER is full asks the
+ * base pool for nothing -- its cells are priced against the owner's window --
+ * so a window of only those reads 0: the server had the room, one booking
+ * was short. Live on 8244 (b108, 2026-09-25): four such refusals with 786k
+ * base cells free; answering them by compacting and shrinking every running
+ * agent would have been exactly wrong. The answer to those is growing the
+ * owner (`growPolykvOwnerForWorker`). A block without the field (an older
+ * engine) reads as global, as before.
+ */
+export function opencotiRefusalsAreGlobal(
+	pressure: OpencotiKvPressure,
+): boolean {
+	return (
+		pressure.refusedNeededMax60s === undefined ||
+		pressure.refusedNeededMax60s > 0
+	);
+}
+
+/**
  * Whether the server is refusing now: `active`, `clear`, or `unknown`.
  *
  * Active while the last refusal is inside the window, counted forward from
@@ -205,6 +229,10 @@ export const OPENCOTI_PRESSURE_CLEAR_MAX_AGE_MS = 15_000;
  *
  * Clear only on a recent reading: an old "nothing refused" says nothing about
  * now, and growing on it would take cells someone was just refused.
+ *
+ * Only refusals for want of server cells count ({@link
+ * opencotiRefusalsAreGlobal}): a window of nothing but session-full
+ * refusals is a server with room, and reads as one.
  */
 export function opencotiPressureState(
 	reading: OpencotiPressureReading | undefined,
@@ -225,7 +253,7 @@ export function opencotiPressureState(
 		age !== undefined
 			? age <= windowS
 			: pressure.refused60s > 0 && elapsedS <= windowS;
-	if (refusing) {
+	if (refusing && opencotiRefusalsAreGlobal(pressure)) {
 		return "active";
 	}
 	return now - at <= OPENCOTI_PRESSURE_CLEAR_MAX_AGE_MS ? "clear" : "unknown";
@@ -384,8 +412,9 @@ export interface OpencotiResizeDone {
  * - `session_not_found` (404), `session_closing` (409): the booking is gone
  *   or going; nothing to resize.
  * - `invalid_num_ctx`, `above_session_ctx_max` (400).
- * - `per_request_session` (409): the session re-books on every request; the
- *   smaller window goes on its next request's `num_ctx` instead.
+ * - `per_request_session` (409): the session holds nothing between
+ *   requests, so there is nothing to resize -- and stating a smaller
+ *   `num_ctx` on its next request would make it a HELD booking (mail #301).
  * - `session_busy` (409): a task is active or pending; try between requests.
  * - `used_exceeds_window` (409): the tree holds more than the asked window;
  *   `used` is the floor.

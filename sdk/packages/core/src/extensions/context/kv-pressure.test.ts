@@ -359,6 +359,55 @@ describe("compaction on global pressure", () => {
 	});
 });
 
+/**
+ * Refusals that asked the base pool for nothing: workers refused because
+ * their OWNER was full, verbatim from 8244 (b108, 2026-09-25), with 786k base
+ * cells free. Not global pressure -- the owner grows instead.
+ */
+const SESSION_FULL = {
+	window_s: 60,
+	refused_60s: 4,
+	refused_peak_max_60s: 32_521,
+	refused_needed_max_60s: 0,
+	refused_min_needed_min_60s: 32_521,
+	last_refusal_age_s: 3,
+	refusals_total: 4,
+};
+
+describe("session-full refusals are not global pressure", () => {
+	it("neither compacts nor shrinks a running agent over them", async () => {
+		const stub = engine({
+			row: { window: 262_144, used: 150_000 },
+			pressure: SESSION_FULL,
+		});
+		const { found } = await boundary(stub.fetch, { messageChars: 600_000 });
+		expect(found?.kvPressureState).not.toBe("active");
+		expect(found?.kvPressureCompaction).toBe(false);
+		expect(found?.shouldCompact).toBe(false);
+		expect(stub.resizes()).toEqual([]);
+	});
+
+	it("does not shrink a small context over them either", async () => {
+		const stub = engine({
+			row: { window: 262_144, used: 5_000 },
+			pressure: SESSION_FULL,
+		});
+		await boundary(stub.fetch);
+		expect(stub.resizes()).toEqual([]);
+		expect(getPolykvGrantedWindow(SESSION)).toBe(262_144);
+	});
+
+	it("still compacts when a refusal asked the base pool for cells", async () => {
+		const stub = engine({
+			row: { window: 262_144, used: 150_000 },
+			pressure: { ...SESSION_FULL, refused_needed_max_60s: 65_536 },
+		});
+		const { found } = await boundary(stub.fetch, { messageChars: 600_000 });
+		expect(found?.kvPressureState).toBe("active");
+		expect(found?.kvPressureCompaction).toBe(true);
+	});
+});
+
 describe("shrinking under pressure", () => {
 	it("gives cells back at once when the context is already small", async () => {
 		const stub = engine({
@@ -493,16 +542,21 @@ describe("shrinking under pressure", () => {
 		noWarnings(lines);
 	});
 
-	it("sends a per-request session's smaller window on its next request instead", async () => {
+	it("leaves a per-request session alone: no smaller num_ctx on its next request", async () => {
+		// opencoti mail #301 (7): a request that states num_ctx under a session
+		// id creates a HELD booking -- per_request happens only when num_ctx is
+		// unstated. Sending a smaller one would turn a booking released after
+		// every request into one held until close or TTL.
 		const stub = engine({
 			row: { window: 262_144, used: 5_000 },
 			pressure: ACTIVE,
 			resize: [refusal(409, "per_request_session")],
 		});
 		const { lines } = await boundary(stub.fetch);
-		const target = stub.resizes()[0]?.body?.num_ctx as number;
-		// The grant is what the next request asks for as `num_ctx`.
-		expect(getPolykvGrantedWindow(SESSION)).toBe(target);
+		expect(stub.resizes()).toHaveLength(1);
+		// The grant -- what the next request would state as num_ctx -- is
+		// untouched.
+		expect(getPolykvGrantedWindow(SESSION)).toBe(262_144);
 		noWarnings(lines);
 		clearPolykvAllocationCache();
 		await boundary(stub.fetch);

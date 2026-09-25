@@ -52,6 +52,7 @@ import {
 import {
 	engineSessionId,
 	forgetPolykvWorkerPool,
+	growPolykvOwnerForWorker,
 	invalidatePolykvRoot,
 	isWorkerWindowFull,
 	markPolykvWorkerStarted,
@@ -1572,6 +1573,13 @@ function createWorkerFetch(options: {
 				return observed(response);
 			}
 			await response.body?.cancel().catch(() => {});
+			// Its owner is full, not the server: grow the owner by what this
+			// worker is short and send it again. The engine takes that only
+			// between the owner's requests, so on a busy swarm this is best
+			// effort -- the moves and the wait below are the rest of it.
+			if (await growPolykvOwnerForWorker(options.worker.sessionId, text)) {
+				continue;
+			}
 			if (!ranOnce && !triedFresh) {
 				triedFresh = true;
 				fresh = true;

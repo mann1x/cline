@@ -195,7 +195,9 @@ describe("reading the agent window off the provider config", () => {
 		expect(own[0]?.num_ctx).toBe(128_000);
 		expect(own[0]?.num_ctx_min).toBeLessThan(128_000);
 
-		// A swarm worker's owner.
+		// A swarm worker's owner: the window for every agent it carries --
+		// two of 128,000 in the engine's 262,144 (the node window is the
+		// budget per agent, and the engine charges each worker to its owner).
 		const pooled = await sendWith(
 			nodeRequest({
 				polykvWorker: {
@@ -206,7 +208,9 @@ describe("reading the agent window off the provider config", () => {
 			}),
 			agentBody(),
 		);
-		expect(pooled.find((chat) => chat.max_tokens === 1)?.num_ctx).toBe(128_000);
+		expect(pooled.find((chat) => chat.max_tokens === 1)?.num_ctx).toBe(
+			2 * 128_000,
+		);
 
 		// The same worker, unpooled.
 		const alone = await sendWith(
@@ -270,7 +274,7 @@ describe("an agent's opencoti request", () => {
 		expect(getPolykvGrantedWindow("agent-own")).toBe(WINDOW);
 	});
 
-	it("opens a swarm owner floored at the share of the agent it hosts", async () => {
+	it("opens a swarm owner for the agents it carries, floored at one agent's share", async () => {
 		const stub = engine();
 		const body = agentBody();
 		const fetchImpl = createOpencotiFetch({
@@ -287,8 +291,9 @@ describe("an agent's opencoti request", () => {
 		});
 		const owner = stub.chats.find((chat) => chat.max_tokens === 1);
 		const minimum = minimumOf(body);
-		// The node's window, not the engine's 262,144 maximum.
-		expect(owner?.num_ctx).toBe(WINDOW);
+		// The node's window for each agent it can carry -- two of 131,072 in
+		// the engine's 262,144 -- and one agent's share as the floor.
+		expect(owner?.num_ctx).toBe(2 * WINDOW);
 		expect(owner?.num_ctx_min).toBe(
 			Math.floor(minimum + (WINDOW - minimum) / 2),
 		);

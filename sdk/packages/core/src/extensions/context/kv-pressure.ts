@@ -6,6 +6,7 @@ import {
 	hasOpencotiFeature,
 	latestOpencotiPressure,
 	normalizeProviderId,
+	notePolykvOwnerWindow,
 	OPENCOTI_FEATURES,
 	type OpencotiAllocation,
 	type OpencotiKvPressure,
@@ -427,8 +428,7 @@ export async function shrinkForKvPressure(
 	}
 	const state = subjectState(turn.subject.engineId);
 	if (state.perRequest) {
-		// Already told: its next request carries the smaller `num_ctx`.
-		rebookSmaller(turn, target);
+		// Released after every request already: nothing held to give back.
 		return;
 	}
 	const answer = await resize(turn, target, "shrink");
@@ -449,26 +449,6 @@ export async function shrinkForKvPressure(
 		}
 		await resize(turn, atUsed, "shrink");
 	}
-}
-
-/**
- * A per-request booking cannot be resized: it re-books on every request from
- * that request's `num_ctx`. The smaller window goes there instead, through the
- * grant the next request asks for.
- */
-function rebookSmaller(turn: KvPressureTurn, target: number): void {
-	if (turn.subject.kind !== "own") {
-		return;
-	}
-	const granted = getPolykvWindowGrant(turn.subject.grantKey)?.granted;
-	if (granted !== undefined && granted <= target) {
-		return;
-	}
-	recordPolykvGrantedWindow(turn.subject.grantKey, target);
-	turn.logger?.log?.(
-		`[PolyKV] ${turn.subject.engineId} re-books per request: its next request asks for ${cells(target)} (${describePressure(turn.pressure)})`,
-		{ severity: "info" },
-	);
 }
 
 /**
@@ -512,6 +492,10 @@ async function resize(
 		// window the next turn is sized against.
 		clearPolykvAllocationCache();
 		recordPolykvGrantedWindow(subject.grantKey, answer.windowNew);
+		if (subject.kind === "owner") {
+			// The owner carries as many agents as its new window holds.
+			notePolykvOwnerWindow(subject.engineId, answer.windowNew);
+		}
 		if (turn.row) {
 			turn.row = { ...turn.row, window: answer.windowNew };
 		}
@@ -543,12 +527,13 @@ async function resize(
 			);
 			break;
 		case "per_request_session":
+			// Nothing to do, in either direction. A per-request booking is
+			// released after each request, and stating a smaller `num_ctx` on
+			// the next one would turn it into a HELD booking, released only by
+			// close or the TTL (opencoti mail #301): the opposite of giving
+			// cells back.
 			state.perRequest = true;
-			if (direction === "shrink") {
-				rebookSmaller(turn, target);
-			} else {
-				info("re-books per request; there is no held window to grow");
-			}
+			info("books per request: nothing is held between its requests to resize");
 			break;
 		case "session_not_found":
 		case "session_closing":
