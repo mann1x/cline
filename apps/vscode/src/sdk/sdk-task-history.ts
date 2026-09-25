@@ -4,6 +4,7 @@ import { type ClineCoreListHistoryOptions, readSessionCheckpointHistory, type Se
 import type { MessageWithMetadata as SdkMessage } from "@cline/llms"
 import { formatDisplayUserInput, parseUserInputMode } from "@cline/shared"
 import { resolveSessionDataDir } from "@cline/shared/storage"
+import { CONVERSATION_TAGS_METADATA_KEY, normalizeTags } from "@shared/conversation-tags"
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import type { HistoryItem } from "@shared/HistoryItem"
 import getFolderSize from "get-folder-size"
@@ -70,6 +71,12 @@ function metadataString(metadata: SessionHistoryRecord["metadata"] | undefined, 
 	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined
 }
 
+/** A conversation's tags from session metadata, normalized; `[]` when it has none. */
+export function metadataTags(metadata: SessionHistoryRecord["metadata"] | undefined): string[] {
+	const value = metadata?.[CONVERSATION_TAGS_METADATA_KEY]
+	return Array.isArray(value) ? normalizeTags(value) : []
+}
+
 function dateStringToTimestamp(value: string | null | undefined): number {
 	if (!value) {
 		return 0
@@ -105,6 +112,10 @@ export function historyItemToSessionMetadata(item: HistoryItem, fallbackModelId?
 		cacheReads: item.cacheReads ?? 0,
 		modelId: item.modelId ?? fallbackModelId ?? "",
 		legacyTask: item.isLegacy ?? false,
+		// Only when the caller has them. This is spread over the stored
+		// metadata, so writing a default here would erase the tags of any
+		// conversation updated through an item that was built without them.
+		...(item.tags !== undefined ? { [CONVERSATION_TAGS_METADATA_KEY]: normalizeTags(item.tags) } : {}),
 	}
 }
 
@@ -199,6 +210,7 @@ export function sessionHistoryRecordToHistoryItem(item: SessionHistoryRecord): H
 		cwdOnTaskInitialization: item.cwd ?? item.workspaceRoot,
 		isLegacy:
 			metadataBoolean(metadata, "legacyTask") === true || metadataBoolean(metadata, "migratedFromLegacyTask") === true,
+		tags: metadataTags(metadata),
 	}
 }
 

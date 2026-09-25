@@ -29,6 +29,7 @@ import type { ApiConfiguration } from "@shared/api"
 import type { ChatContent } from "@shared/ChatContent"
 import { CLINE_ACCOUNT_AUTH_ERROR_MESSAGE } from "@shared/ClineAccount"
 import { mentionRegexGlobal } from "@shared/context-mentions"
+import { normalizeTags } from "@shared/conversation-tags"
 import type { ClineApiReqInfo, ClineMessage, ExtensionState } from "@shared/ExtensionMessage"
 import type { HistoryItem } from "@shared/HistoryItem"
 import { DeleteAllTaskHistoryCount, type GetTaskHistoryRequest, TaskHistoryArray, TaskResponse } from "@shared/proto/cline/task"
@@ -54,11 +55,12 @@ import { toLegacyApiProvider } from "@/shared/model-catalog/provider-helpers"
 import { ShowMessageRequest, ShowMessageType } from "@/shared/proto/host/window"
 import { Logger } from "@/shared/services/Logger"
 import { isClineManagedProvider } from "@/shared/utils/cline"
-import { arePathsEqual, getDesktopDir } from "@/utils/path"
+import { getDesktopDir } from "@/utils/path"
 import { ClineAccountService } from "./account-service"
 import { AuthService, LogoutReason } from "./auth-service"
 import { BUILTIN_SLASH_COMMANDS } from "./builtin-slash-commands"
 import { buildStartSessionInput, createHistoryItemFromSession } from "./cline-session-factory"
+import { isStorePagedHistoryQuery, selectHistoryPage } from "./history-query"
 import { rankQuestionWithJev } from "./jev-question-ranking"
 import { MessageTranslatorState, reshapeErrorForWebview } from "./message-translator"
 import { createProviderCatalog } from "./model-catalog/catalog"
@@ -92,7 +94,7 @@ import { SdkSessionHistoryLoader } from "./sdk-session-history-loader"
 import { SdkSessionLifecycle } from "./sdk-session-lifecycle"
 import { SdkSessionRebuildScheduler } from "./sdk-session-rebuild-scheduler"
 import { SdkTaskControlCoordinator } from "./sdk-task-control-coordinator"
-import { SdkTaskHistory, sessionHistoryRecordToHistoryItem, type TaskSizeOnDisk } from "./sdk-task-history"
+import { metadataTags, SdkTaskHistory, sessionHistoryRecordToHistoryItem, type TaskSizeOnDisk } from "./sdk-task-history"
 import { SdkTaskStartCoordinator } from "./sdk-task-start-coordinator"
 import { createVscodeSdkTelemetryHandle, type VscodeSdkTelemetryHandle } from "./sdk-telemetry"
 import { SdkTerminalExecutionModeCoordinator } from "./sdk-terminal-execution-mode-coordinator"
@@ -2173,78 +2175,27 @@ export class Controller {
 	}
 
 	async getTaskHistory(request: GetTaskHistoryRequest): Promise<TaskHistoryArray> {
-		const { favoritesOnly, currentWorkspaceOnly, searchQuery, sortBy } = request
+		const { favoritesOnly, currentWorkspaceOnly, searchQuery, sortBy, tagsMatchAll } = request
+		const tagFilter = normalizeTags(request.tags ?? [])
 		const limit = request.limit > 0 ? Math.min(request.limit, 100) : 50
 		const offset = request.offset > 0 ? request.offset : 0
 		const workspacePath = currentWorkspaceOnly ? await this.getWorkspaceRoot() : undefined
-		const sessionHistory = await this.taskHistory.listHistory({
-			hydrate: false,
-			limit: limit + 1,
+		const pagedByStore = isStorePagedHistoryQuery(request, tagFilter)
+		const sessionHistory = pagedByStore
+			? await this.taskHistory.listHistory({ hydrate: false, limit: limit + 1, offset })
+			: await this.taskHistory.listHistory({ hydrate: false })
+		const { page, hasMore } = selectHistoryPage(sessionHistory, {
+			favoritesOnly,
+			workspacePath: currentWorkspaceOnly ? workspacePath : undefined,
+			searchQuery,
+			sortBy,
+			tags: tagFilter,
+			tagsMatchAll,
+			limit,
 			offset,
+			pagedByStore,
 		})
-
-		let filteredTasks = sessionHistory.filter((item) => {
-			const ts = dateStringToTimestamp(item.updatedAt ?? item.endedAt ?? item.startedAt)
-			const task = metadataString(item.metadata, "title") ?? item.prompt ?? ""
-
-			if (!ts || !task) {
-				return false
-			}
-
-			const isFavorited =
-				metadataBoolean(item.metadata, "isFavorited") ?? metadataBoolean(item.metadata, "is_favorited") ?? false
-			if (favoritesOnly && !isFavorited) {
-				return false
-			}
-
-			if (currentWorkspaceOnly && workspacePath) {
-				const sessionWorkspacePath = item.cwd ?? item.workspaceRoot
-				if (!sessionWorkspacePath || !arePathsEqual(sessionWorkspacePath, workspacePath)) {
-					return false
-				}
-			}
-
-			return true
-		})
-
-		if (searchQuery) {
-			const query = searchQuery.toLowerCase()
-			filteredTasks = filteredTasks.filter((item) => {
-				const task = metadataString(item.metadata, "title") ?? item.prompt ?? ""
-				return task.toLowerCase().includes(query)
-			})
-		}
-
-		filteredTasks.sort((a, b) => {
-			switch (sortBy) {
-				case "oldest":
-					return (
-						dateStringToTimestamp(a.updatedAt ?? a.endedAt ?? a.startedAt) -
-						dateStringToTimestamp(b.updatedAt ?? b.endedAt ?? b.startedAt)
-					)
-				case "mostExpensive":
-					return (metadataNumber(b.metadata, "totalCost") ?? 0) - (metadataNumber(a.metadata, "totalCost") ?? 0)
-				case "mostTokens":
-					return (
-						(metadataNumber(b.metadata, "tokensIn") ?? 0) +
-						(metadataNumber(b.metadata, "tokensOut") ?? 0) +
-						(metadataNumber(b.metadata, "cacheWrites") ?? 0) +
-						(metadataNumber(b.metadata, "cacheReads") ?? 0) -
-						((metadataNumber(a.metadata, "tokensIn") ?? 0) +
-							(metadataNumber(a.metadata, "tokensOut") ?? 0) +
-							(metadataNumber(a.metadata, "cacheWrites") ?? 0) +
-							(metadataNumber(a.metadata, "cacheReads") ?? 0))
-					)
-				default:
-					return (
-						dateStringToTimestamp(b.updatedAt ?? b.endedAt ?? b.startedAt) -
-						dateStringToTimestamp(a.updatedAt ?? a.endedAt ?? a.startedAt)
-					)
-			}
-		})
-
-		const hasMore = sessionHistory.length > limit
-		const tasks = filteredTasks.slice(0, limit).map((item) => {
+		const tasks = page.slice(0, limit).map((item) => {
 			const metadata = item.metadata
 			return {
 				id: item.sessionId,
@@ -2262,6 +2213,7 @@ export class Controller {
 				isLegacy:
 					metadataBoolean(metadata, "legacyTask") === true ||
 					metadataBoolean(metadata, "migratedFromLegacyTask") === true,
+				tags: metadataTags(metadata),
 				// Rendered here rather than in the webview: which of these are
 				// worth showing is a fact about providers.json, and the list is
 				// bounded by the page size rather than by the whole history.
@@ -2273,7 +2225,15 @@ export class Controller {
 			}
 		})
 
-		if (offset === 0 && !favoritesOnly && this.task?.taskId && !tasks.some((task) => task.id === this.task?.taskId)) {
+		// The running task has no session record yet, so it has no tags and
+		// cannot pass a tag filter either.
+		if (
+			offset === 0 &&
+			!favoritesOnly &&
+			tagFilter.length === 0 &&
+			this.task?.taskId &&
+			!tasks.some((task) => task.id === this.task?.taskId)
+		) {
 			const taskMessage = this.task.messageStateHandler
 				.getClineMessages()
 				.find((message) => message.type === "say" && message.say === "task" && message.text)
@@ -2295,6 +2255,7 @@ export class Controller {
 					isLegacy: false,
 					// The running task has no session record to read yet.
 					settings: [],
+					tags: [],
 				})
 			}
 		}
@@ -2385,6 +2346,20 @@ export class Controller {
 
 	async updateTaskHistory(item: HistoryItem): Promise<HistoryItem[]> {
 		return this.taskHistory.updateTaskHistory(item)
+	}
+
+	async setTaskTags(taskId: string, tags: readonly string[]): Promise<void> {
+		const historyItem = await this.taskHistory.findHistoryItem(taskId)
+		if (!historyItem) {
+			Logger.log(`[setTaskTags] Task not found in history: ${taskId}`)
+			return
+		}
+
+		await this.taskHistory.updateTaskHistory({
+			...historyItem,
+			tags: normalizeTags(tags),
+		})
+		await this.postStateToWebview()
 	}
 
 	async toggleTaskFavorite(taskId: string, isFavorited: boolean): Promise<void> {
