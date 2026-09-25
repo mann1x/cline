@@ -9,6 +9,7 @@ vi.mock("./provider-migration", () => ({
 }))
 vi.mock("./model-catalog/sdk-provider-id", () => ({ toSdkProviderId: (id: string) => id }))
 
+import { recordPolykvGrantedWindow, resetPolykvSessions } from "@cline/llms"
 import { captureSessionSettings, describeSessionSettings } from "./session-settings-snapshot"
 
 describe("captureSessionSettings", () => {
@@ -52,6 +53,27 @@ describe("captureSessionSettings", () => {
 	it("records nothing rather than an empty object when there is nothing to record", () => {
 		mocks.getProviderSettings.mockReturnValue({ apiKey: "sk-secret" })
 		expect(captureSessionSettings("opencoti")).toBeUndefined()
+	})
+
+	// The resume rule across a re-stamp: a resumed session is stamped again at
+	// start, and the window it was granted must be in the new stamp, or the
+	// next restart forgets which window it has to ask for.
+	it("records the window the session was granted", () => {
+		mocks.getProviderSettings.mockReturnValue({ contextWindow: 262_144 })
+		recordPolykvGrantedWindow("conv", 163_840, { asked: 262_144 })
+		try {
+			expect(captureSessionSettings("opencoti", "conv")).toEqual({
+				contextWindow: 262_144,
+				contextWindowGrant: { granted: 163_840, asked: 262_144 },
+			})
+			expect(
+				describeSessionSettings({
+					settings: { contextWindowGrant: { granted: 163_840 } },
+				}),
+			).toContainEqual({ label: "Granted window", value: "163,840 tokens" })
+		} finally {
+			resetPolykvSessions()
+		}
 	})
 
 	// A session must start whether or not providers.json can be read.

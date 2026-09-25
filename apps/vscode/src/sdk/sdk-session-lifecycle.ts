@@ -12,6 +12,7 @@ import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTermin
 import { McpHub } from "@/services/mcp/McpHub"
 import { Logger } from "@/shared/services/Logger"
 import type { ActiveSession } from "./cline-session-factory"
+import { hydrateWindowGrant, persistWindowGrants } from "./context-window-grant"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
 import { buildToolPolicies } from "./sdk-tool-policies"
 import type { SdkSessionHost } from "./session-host"
@@ -89,7 +90,14 @@ export class SdkSessionLifecycle {
 	 */
 	private turnGeneration = 0
 
-	constructor(private readonly options: SdkSessionLifecycleOptions) {}
+	/** Stops persisting granted windows; see {@link persistWindowGrants}. */
+	private readonly stopPersistingWindowGrants: () => void
+
+	constructor(private readonly options: SdkSessionLifecycleOptions) {
+		// Every grant opencoti reports lands in the session's stored settings,
+		// so a conversation reopened after a restart asks for the same window.
+		this.stopPersistingWindowGrants = persistWindowGrants(() => this.sharedHost)
+	}
 
 	getActiveSession(): ActiveSession | undefined {
 		return this.activeSession
@@ -181,11 +189,24 @@ export class SdkSessionLifecycle {
 
 		const sdkHost = await this.getOrCreateSharedHost()
 
+		// A reopened conversation asks for the window it was opened with (the
+		// resume rule), and after an extension restart only its stored record
+		// still knows which one that was. Put it back before the first request.
+		if (requestedSessionId) {
+			try {
+				const existing = await sdkHost.get(requestedSessionId)
+				hydrateWindowGrant(requestedSessionId, existing?.metadata as Record<string, unknown> | undefined)
+			} catch (error) {
+				Logger.warn(`[SdkController] Could not read the stored window for ${requestedSessionId}:`, error)
+			}
+		}
+
 		// Stamped here because this is the one place every session starts --
 		// new task, resume, follow-up and the compaction sub-session all come
 		// through it. A resume is re-stamped on purpose: it really did run
-		// again, with whatever is configured now.
-		const recordedSettings = captureSessionSettings(startInput.config?.providerId)
+		// again, with whatever is configured now -- and with the window it was
+		// granted, which it must ask for again.
+		const recordedSettings = captureSessionSettings(startInput.config?.providerId, requestedSessionId)
 		const startResult = await sdkHost.start({
 			...startInput,
 			...(toolPolicies ? { toolPolicies } : {}),
@@ -291,6 +312,7 @@ export class SdkSessionLifecycle {
 	}
 
 	async dispose(reason = "SdkSessionLifecycle.dispose"): Promise<void> {
+		this.stopPersistingWindowGrants()
 		await this.endActiveSession(reason, { awaitStop: true })
 
 		const sharedHost = this.sharedHost ?? (await this.sharedHostPromise?.catch(() => undefined))

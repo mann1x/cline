@@ -47,6 +47,7 @@ import type {
 	ClineThinkingCondensedInfo,
 	ClineTransactionInfo,
 	ContextBreakdown,
+	ContextWindowGrant,
 	SubagentStatusItem,
 } from "@shared/ExtensionMessage"
 import { Logger } from "@shared/services/Logger"
@@ -333,8 +334,20 @@ export class MessageTranslatorState {
 		private readonly getUiMode?: () => "plan" | "act" | "yolo" | undefined,
 		private readonly getCwd?: () => string | undefined,
 		private readonly getActiveModelId?: () => string | undefined,
+		private readonly getContextWindowGrant?: () => ContextWindowGrant | undefined,
 	) {
 		this.minter = minter
+	}
+
+	/**
+	 * The window the server granted the request a usage event is for.
+	 *
+	 * Read when the usage arrives, which is after the response whose
+	 * `X-Context-Window` it reports: the grant and the cost of one request land
+	 * on the same `api_req_started`, the only row the context bar reads.
+	 */
+	contextWindowGrant(): ContextWindowGrant | undefined {
+		return this.getContextWindowGrant?.()
 	}
 
 	/**
@@ -3039,6 +3052,8 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 				// say how much of what it is showing was spent before the first
 				// message.
 				...(state.contextBreakdown() ? { contextBreakdown: state.contextBreakdown() } : {}),
+				// The window this request was granted, when the server said.
+				...(state.contextWindowGrant() ? { contextWindowGrant: state.contextWindowGrant() } : {}),
 			}
 			messages.push({
 				ts: state.nextTs(),

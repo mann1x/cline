@@ -60,6 +60,7 @@ import { ClineAccountService } from "./account-service"
 import { AuthService, LogoutReason } from "./auth-service"
 import { BUILTIN_SLASH_COMMANDS } from "./builtin-slash-commands"
 import { buildStartSessionInput, createHistoryItemFromSession } from "./cline-session-factory"
+import { readContextWindowGrant } from "./context-window-grant"
 import { isStorePagedHistoryQuery, selectHistoryPage } from "./history-query"
 import { rankQuestionWithJev } from "./jev-question-ranking"
 import { MessageTranslatorState, reshapeErrorForWebview } from "./message-translator"
@@ -354,6 +355,11 @@ export class Controller {
 			// The shim starts as "unknown" (filtered out by getTaskModelId), so
 			// fresh sessions still resolve through their start metadata.
 			() => this.getTaskModelId() ?? this.getSessionModelId(),
+			// The window opencoti granted the request a usage row is for, so the
+			// context bar is drawn against what the server holds rather than
+			// what was configured. Read when the usage arrives -- after the
+			// response that reported it.
+			() => readContextWindowGrant(this.sessions.getActiveSession()?.sessionId),
 		)
 		// Warm the synchronous workspace-root snapshot used for display-path
 		// relativization (getWorkspaceRoot never rejects — it falls back internally).

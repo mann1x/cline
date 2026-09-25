@@ -370,6 +370,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 						apiMetrics={apiMetrics}
 						contextBreakdown={shownContextUsage.breakdown}
 						contextTokensUsed={shownContextUsage.used || undefined}
+						contextWindowGrant={shownContextUsage.grant}
 						messageHandlers={messageHandlers}
 						selectedModelInfo={{
 							supportsPromptCache: selectedModelInfo.supportsPromptCache,

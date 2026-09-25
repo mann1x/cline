@@ -224,6 +224,7 @@ export {
 	readOpencotiStatus,
 	readPolykvWindowGrant,
 	recordPolykvGrantedWindow,
+	recordPolykvWindowObservation,
 	resetPolykvAvailability,
 	resetPolykvSessions,
 	setPolykvSession,

@@ -1,4 +1,6 @@
+import { getPolykvWindowGrant } from "@cline/llms"
 import { Logger } from "@shared/services/Logger"
+import { WINDOW_GRANT_SETTINGS_KEY } from "./context-window-grant"
 import { resolveDataDir } from "./legacy-state-reader"
 import { toSdkProviderId } from "./model-catalog/sdk-provider-id"
 import { getProviderSettingsManager } from "./provider-migration"
@@ -74,10 +76,15 @@ function isEmptyValue(value: unknown): boolean {
  * record, so a session with nothing configured carries no key at all and the
  * reader can tell "not recorded" from "recorded, and there was nothing".
  */
-export function captureSessionSettings(providerId: string | undefined): Record<string, unknown> | undefined {
+export function captureSessionSettings(providerId: string | undefined, sessionId?: string): Record<string, unknown> | undefined {
 	if (!providerId) {
 		return undefined
 	}
+	// The window opencoti granted this conversation, when one is known -- on a
+	// resume it was hydrated from the record this snapshot is about to replace.
+	// Re-stamping without it would forget the one setting that has to survive:
+	// the window the conversation must ask for again.
+	const grant = sessionId ? getPolykvWindowGrant(sessionId) : undefined
 	let stored: Record<string, unknown> | undefined
 	try {
 		stored = getProviderSettingsManager(resolveDataDir()).getProviderSettings(toSdkProviderId(providerId)) as
@@ -86,18 +93,17 @@ export function captureSessionSettings(providerId: string | undefined): Record<s
 	} catch (error) {
 		// A session must start whether or not providers.json can be read.
 		Logger.warn("[SessionSettings] Failed to read provider settings for the session record:", error)
-		return undefined
+		return grant ? { [WINDOW_GRANT_SETTINGS_KEY]: { ...grant } } : undefined
 	}
-	if (!stored) {
-		return undefined
-	}
-
 	const recorded: Record<string, unknown> = {}
 	for (const key of RECORDED_SETTING_KEYS) {
-		const value = stored[key]
+		const value = stored?.[key]
 		if (!isEmptyValue(value)) {
 			recorded[key] = value
 		}
+	}
+	if (grant) {
+		recorded[WINDOW_GRANT_SETTINGS_KEY] = { ...grant }
 	}
 	return Object.keys(recorded).length > 0 ? recorded : undefined
 }
@@ -186,6 +192,12 @@ export function describeSessionSettings(input: { provider?: string; model?: stri
 	const contextWindow = formatNumber(settings.contextWindow)
 	if (contextWindow) {
 		rows.push({ label: "Context window", value: `${contextWindow} tokens` })
+	}
+
+	const grant = asRecord(settings[WINDOW_GRANT_SETTINGS_KEY])
+	const granted = grant && formatNumber(grant.granted)
+	if (granted) {
+		rows.push({ label: "Granted window", value: `${granted} tokens` })
 	}
 
 	const outputBudget = asRecord(settings.outputBudget)

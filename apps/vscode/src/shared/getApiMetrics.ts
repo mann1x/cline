@@ -1,4 +1,4 @@
-import { ClineMessage, ContextBreakdown } from "./ExtensionMessage"
+import { ClineMessage, ContextBreakdown, ContextWindowGrant } from "./ExtensionMessage"
 
 /**
  * What one connection spent over a task.
@@ -323,12 +323,23 @@ export interface ContextWindowUsage {
 	/** The fixed part, as measured, never rescaled. */
 	breakdown?: ContextBreakdown
 	/**
+	 * The window the server granted that same request, when it stated one.
+	 * Read from the same row as the total, so the bar's length and its end
+	 * describe one request.
+	 */
+	grant?: ContextWindowGrant
+	/**
 	 * A compaction is open. Nothing about the window is settled until it
 	 * finishes — the transcript is mid-rewrite and the summarizer's own model
 	 * calls report usage of their own — so the caller holds its last value
 	 * rather than animating through numbers that describe neither state.
 	 */
 	compacting: boolean
+}
+
+function readGrant(info: Record<string, unknown>): ContextWindowGrant | undefined {
+	const grant = info.contextWindowGrant as ContextWindowGrant | undefined
+	return grant && typeof grant.grantedTokens === "number" && grant.grantedTokens > 0 ? grant : undefined
 }
 
 function readBreakdown(info: Record<string, unknown>): ContextBreakdown | undefined {
@@ -410,9 +421,11 @@ export function getContextWindowUsage(messages: ClineMessage[]): ContextWindowUs
 					// conversation is empty, and squeezing the measured parts to
 					// fit would report the drawing instead of the measurement.
 					const conversation = Math.max(0, prompt - fixed) * shrinkFraction
+					const grant = readGrant(info)
 					return {
 						used: Math.ceil(fixed + conversation),
 						breakdown,
+						...(grant ? { grant } : {}),
 						compacting: newestCompactionStatus === "started",
 					}
 				}
