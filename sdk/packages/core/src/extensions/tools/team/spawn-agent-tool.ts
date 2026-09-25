@@ -316,6 +316,14 @@ export interface SubAgentEndContext {
 	error?: Error;
 }
 
+/** How a delegation that has ended is identified to its last observer. */
+export interface SubAgentSettledContext {
+	/** The spawning tool call; see {@link SubAgentStartContext.toolCallId}. */
+	toolCallId?: string;
+	/** The agent's name, as the lead gave it or as its file names it. */
+	name: string;
+}
+
 export interface SpawnAgentToolConfig {
 	configProvider: DelegatedAgentConfigProvider;
 	defaultMaxIterations?: number;
@@ -347,6 +355,14 @@ export interface SpawnAgentToolConfig {
 	 * Errors are ignored so lifecycle observers cannot break task execution.
 	 */
 	onSubAgentEnd?: (context: SubAgentEndContext) => void | Promise<void>;
+	/**
+	 * Called once the spawn is over, however it ended -- including the paths
+	 * {@link onSubAgentEnd} never sees, where the agent failed or was stopped
+	 * before it started. Whatever `createSubAgentTools` opened for this call
+	 * (its private workspace) is released here, so nothing outlives the call.
+	 * Errors are ignored.
+	 */
+	onSubAgentSettled?: (context: SubAgentSettledContext) => void | Promise<void>;
 	/**
 	 * Optional per-tool policy for spawned sub-agents.
 	 */
@@ -1027,6 +1043,17 @@ async function runSpawnedAgent(
 		cancellation.release();
 		stopRoomWatch();
 		trouble.dispose();
+		// And its workspace, which a run that never started still opened.
+		if (config.onSubAgentSettled) {
+			try {
+				await config.onSubAgentSettled({
+					toolCallId: context.toolCallId,
+					name: input.name ?? "agent",
+				});
+			} catch {
+				// Best-effort observer callback.
+			}
+		}
 		// Its engine session goes back the moment it ends, and its pool owner
 		// with it if it was the last: admission is decided against held
 		// windows, and one held past its work refuses the next agent.

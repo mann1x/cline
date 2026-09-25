@@ -20,6 +20,7 @@
 import {
 	type AgentSandbox,
 	createAgentSandbox,
+	createAgentSandboxSync,
 	type SandboxBinaries,
 } from "../../../runtime/sandbox/agent-sandbox";
 import type { DefaultExecutorsOptions } from "../executors";
@@ -79,18 +80,41 @@ export interface DelegatedSandboxSetup {
 export async function setUpDelegatedSandbox(
 	options: DelegatedSandboxOptions,
 ): Promise<DelegatedSandboxSetup> {
-	const sandbox = await createAgentSandbox({
-		workspaceRoot: options.workspaceRoot,
-		overlayRoot: options.overlayRoot,
-		binaries: options.binaries,
-	});
+	return bindSandbox(
+		await createAgentSandbox({
+			workspaceRoot: options.workspaceRoot,
+			overlayRoot: options.overlayRoot,
+			binaries: options.binaries,
+		}),
+		options.base,
+	);
+}
+
+/** {@link setUpDelegatedSandbox} for a caller that cannot await. */
+export function setUpDelegatedSandboxSync(
+	options: DelegatedSandboxOptions,
+): DelegatedSandboxSetup {
+	return bindSandbox(
+		createAgentSandboxSync({
+			workspaceRoot: options.workspaceRoot,
+			overlayRoot: options.overlayRoot,
+			binaries: options.binaries,
+		}),
+		options.base,
+	);
+}
+
+function bindSandbox(
+	sandbox: AgentSandbox,
+	base: DefaultExecutorsOptions | undefined,
+): DelegatedSandboxSetup {
 	const commandsEnabled = sandbox.wrapSpawn != null;
 
 	const executorOptions: DefaultExecutorsOptions = {
-		...options.base,
+		...base,
 		overlay: sandbox.overlay,
 		bash: {
-			...options.base?.bash,
+			...base?.bash,
 			...(sandbox.wrapSpawn ? { wrapSpawn: sandbox.wrapSpawn } : {}),
 		},
 	};

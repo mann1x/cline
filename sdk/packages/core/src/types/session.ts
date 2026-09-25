@@ -75,6 +75,8 @@ export type ActiveSession = {
 	pendingAtomicStatus?: { armed: boolean; message: string };
 	drainingPendingPrompts: boolean;
 	pluginSandboxShutdown?: () => Promise<void>;
+	/** Hand back and dispose every delegated agent's workspace still open. */
+	delegatedSandboxesShutdown?: () => Promise<void>;
 	turnUsageBaseline?: SessionAccumulatedUsage;
 	turnAggregateUsageBaseline?: SessionAccumulatedUsage;
 	turnPrimaryUsage?: SessionAccumulatedUsage;

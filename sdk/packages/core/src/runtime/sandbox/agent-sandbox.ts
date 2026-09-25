@@ -12,6 +12,7 @@
  * When it does not, `wrapSpawn` is undefined and the caller withholds
  * `run_commands` rather than letting a command escape to the workspace.
  */
+import { mkdirSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import { AgentOverlay, type OverlayChange } from "./overlay-fs";
 
@@ -63,8 +64,24 @@ export interface CreateAgentSandboxOptions {
 export async function createAgentSandbox(
 	options: CreateAgentSandboxOptions,
 ): Promise<AgentSandbox> {
+	await fs.mkdir(options.overlayRoot, { recursive: true });
+	return buildAgentSandbox(options);
+}
+
+/**
+ * {@link createAgentSandbox} for a caller that cannot await: a teammate's
+ * toolset is built synchronously when it is spawned. Only the overlay root's
+ * creation differs; the sandbox is the same object.
+ */
+export function createAgentSandboxSync(
+	options: CreateAgentSandboxOptions,
+): AgentSandbox {
+	mkdirSync(options.overlayRoot, { recursive: true });
+	return buildAgentSandbox(options);
+}
+
+function buildAgentSandbox(options: CreateAgentSandboxOptions): AgentSandbox {
 	const { workspaceRoot, overlayRoot, binaries } = options;
-	await fs.mkdir(overlayRoot, { recursive: true });
 	const overlay = new AgentOverlay(workspaceRoot, overlayRoot);
 	// A sibling of the overlay root, never inside it: the overlay is the mirror
 	// of the workspace, and a log written into it would surface in the agent's

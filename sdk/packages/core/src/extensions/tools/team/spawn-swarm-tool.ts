@@ -51,6 +51,7 @@ import {
 	renderWorkDigest,
 	type WorkDigest,
 } from "../../context/work-digest";
+import type { HandedRevision } from "./delegated-sandboxes";
 import {
 	mergeSpawnSampling,
 	readSpawnSampling,
@@ -163,7 +164,22 @@ export interface SwarmMemberReport {
 /** A worker's result, with where it ran when the runner knows. */
 export type SwarmWorkerResult = AgentResult & {
 	placed?: { nodeId: string; nodeLabel?: string };
+	/**
+	 * The revisions its changes were handed back to the lead as, when it ran on
+	 * a private workspace. Present -- even empty -- means it did; the runner
+	 * sets the same field on the error a failed worker throws.
+	 */
+	handback?: readonly HandedRevision[];
 };
+
+/** The revisions a result or a thrown error carries, if it ran sandboxed. */
+function handbackOf(carrier: unknown): readonly HandedRevision[] | undefined {
+	if (carrier && typeof carrier === "object" && "handback" in carrier) {
+		const handback = (carrier as { handback?: unknown }).handback;
+		return Array.isArray(handback) ? handback : undefined;
+	}
+	return undefined;
+}
 
 /** An ephemeral pool holding a snapshot of the lead's live context. */
 export interface SwarmPoolSnapshot {
@@ -311,6 +327,49 @@ function digestOf(name: string, result: AgentResult): WorkDigest {
 		};
 	}
 	return { agent: name, error: `returned nothing (${result.finishReason})` };
+}
+
+/** One sandboxed worker's hand-back. */
+interface SwarmHandback {
+	name: string;
+	handed: readonly HandedRevision[];
+}
+
+/**
+ * Where the round's work went, for the end of the swarm's report.
+ *
+ * Each worker ran on a private copy of the workspace, so the lead's files are
+ * untouched and every change is a revision in the lead's log. Without this the
+ * lead reads its own copy, sees none of the fixes the digest describes, and
+ * concludes the workers did nothing (the `spawn_agent` note's pandorum
+ * failure, once per worker). Empty when no worker was sandboxed.
+ */
+export function swarmHandbackNote(handbacks: readonly SwarmHandback[]): string {
+	if (handbacks.length === 0) {
+		return "";
+	}
+	const changed = handbacks.filter((entry) => entry.handed.length > 0);
+	if (changed.length === 0) {
+		return `\n\n---\nThe workers worked on private copies of the workspace and left your files unchanged; none recorded file changes to hand back.`;
+	}
+	const verb = (kind: string): string =>
+		kind === "deleted" || kind === "created" || kind === "reverted"
+			? kind
+			: "changed";
+	const lines = changed
+		.flatMap((entry) =>
+			entry.handed.map(
+				(h) =>
+					`  - ${h.rel} — revision #${h.index} (${verb(h.kind)} by "${entry.name}")`,
+			),
+		)
+		.join("\n");
+	const first = changed[0]?.handed[0]?.index ?? 1;
+	return (
+		`\n\n---\nThe workers worked on private copies of the workspace, so your own files are UNCHANGED. Their changes are held for you as revisions, not written to disk:\n${lines}\n` +
+		`To see a version: \`read_files\` with \`revision: "#${first}"\`. To apply it to your workspace: \`restore_file\` with the same \`revision\`. ` +
+		`Do not verify the workers' work by reading or running your current copy of these files — it does not contain these changes yet.`
+	);
 }
 
 function requestedWorkers(input: SpawnSwarmInput): Array<{
@@ -554,6 +613,10 @@ export function createSpawnSwarmTool(
 				// tick, then ask again. A slot that frees mid-round belongs to
 				// this swarm as much as one that was free at the start.
 				const results: WorkDigest[] = [];
+				// What each sandboxed worker handed back, for the report: the
+				// digest is rewritten by the fold or the reducer, and neither
+				// keeps a worker's note about where its changes went.
+				const handbacks: SwarmHandback[] = [];
 				const inFlight = new Set<Promise<void>>();
 				let started = 0;
 
@@ -594,6 +657,10 @@ export function createSpawnSwarmTool(
 											restarted(emitUpdate, undefined),
 										)
 									: await runOnce();
+							const handed = handbackOf(result);
+							if (handed) {
+								handbacks.push({ name: worker.name, handed });
+							}
 							inputTokens += result.usage?.inputTokens ?? 0;
 							outputTokens += result.usage?.outputTokens ?? 0;
 							results.push(digestOf(worker.name, result));
@@ -627,6 +694,10 @@ export function createSpawnSwarmTool(
 									: {}),
 							});
 						} catch (error) {
+							const handed = handbackOf(error);
+							if (handed) {
+								handbacks.push({ name: worker.name, handed });
+							}
 							const message =
 								error instanceof Error ? error.message : String(error);
 							// Named, never dropped: the lead cannot tell an
@@ -705,7 +776,7 @@ export function createSpawnSwarmTool(
 				const digest = merged ?? mergeWorkDigests(results);
 
 				return {
-					digest: renderWorkDigest(digest),
+					digest: renderWorkDigest(digest) + swarmHandbackNote(handbacks),
 					workers: started,
 					pooled: snapshot !== undefined,
 					usage: { inputTokens, outputTokens },

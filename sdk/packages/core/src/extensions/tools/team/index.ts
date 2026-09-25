@@ -82,6 +82,7 @@ export {
 } from "./session-window-retry";
 export type {
 	SubAgentEndContext,
+	SubAgentSettledContext,
 	SubAgentStartContext,
 } from "./spawn-agent-tool";
 export {

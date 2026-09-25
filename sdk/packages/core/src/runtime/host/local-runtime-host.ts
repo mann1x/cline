@@ -85,6 +85,10 @@ import {
 	createDelegatedAgentConfigProvider,
 	type DelegatedAgentConnectionConfig,
 } from "../../extensions/tools/team/delegated-agent";
+import {
+	createDelegatedSandboxes,
+	type DelegatedSandboxes,
+} from "../../extensions/tools/team/delegated-sandboxes";
 import { subagentCancellation } from "../../extensions/tools/team/subagent-cancellation";
 import type { HookEventPayload } from "../../hooks";
 import { buildTelemetryAgentIdentity } from "../../services/agent-events";
@@ -197,7 +201,7 @@ import {
 	createStruggleFeed,
 	StruggleDetector,
 } from "../safety/struggle-detector";
-import type { AgentSandbox, SandboxBinaries } from "../sandbox/agent-sandbox";
+import type { SandboxBinaries } from "../sandbox/agent-sandbox";
 import { PendingPromptsController } from "../turn-queue/pending-prompt-service";
 import { manifestToSessionRecord } from "./history";
 import { AgentEventBridge } from "./local/agent-event-bridge";
@@ -861,25 +865,20 @@ export class LocalRuntimeHost implements RuntimeHost {
 			invokeBackendOptional: (method: string, ...args: unknown[]) =>
 				this.invokeOptional(method, ...args),
 		};
-		// Delegated-agent sandboxes for this session, keyed by the spawning tool
-		// call. Shared between the spawn tool that creates them and the lifecycle
-		// callback that hands their changes back and disposes them.
-		const agentSandboxes = new Map<string, AgentSandbox>();
-		let resolvedSandboxDeps:
-			| Pick<SpawnToolDeps, "sandboxProvider" | "agentCommandsEnabled">
-			| undefined;
+		// Delegated-agent workspaces for this session -- one per spawned agent,
+		// swarm worker, configured-agent call and teammate. Shared between the
+		// tools that open them and the callbacks that hand their changes back
+		// and dispose them.
+		let resolvedSandboxes: DelegatedSandboxes | undefined;
 		// Read from `startInput.config`, not `bootstrap.config`: the lifecycle
 		// callback that spreads this in is invoked *inside*
 		// prepareLocalRuntimeBootstrap (before `bootstrap` is assigned), so
 		// touching `bootstrap` here throws "reading 'config'" on every task start.
 		// These fields are set by the host and pass through the provider merge
 		// unchanged, so the resolved value is identical.
-		const sandboxSpawnDeps = (): Pick<
-			SpawnToolDeps,
-			"sandboxProvider" | "agentCommandsEnabled"
-		> => {
-			if (resolvedSandboxDeps) {
-				return resolvedSandboxDeps;
+		const sessionSandboxes = (): DelegatedSandboxes => {
+			if (resolvedSandboxes) {
+				return resolvedSandboxes;
 			}
 			// Overlay file-isolation is the core feature and is decoupled from
 			// commands: it is always on for a delegated agent, so its writes land in
@@ -907,12 +906,16 @@ export class LocalRuntimeHost implements RuntimeHost {
 				overlayRootFor: (toolCallId) =>
 					join(overlaysBase, toolCallId.replace(/[^A-Za-z0-9_.-]/g, "_")),
 			};
-			resolvedSandboxDeps = {
-				sandboxProvider,
-				agentCommandsEnabled: commandsEnabled,
-			};
-			return resolvedSandboxDeps;
+			resolvedSandboxes = createDelegatedSandboxes({
+				provider: sandboxProvider,
+				commandsEnabled,
+				revisionLog: () => this.sessions.get(sessionId)?.revisionLog,
+			});
+			return resolvedSandboxes;
 		};
+		const sandboxSpawnDeps = (): Pick<SpawnToolDeps, "sandboxes"> => ({
+			sandboxes: sessionSandboxes(),
+		});
 		bootstrap = await prepareLocalRuntimeBootstrap({
 			input: startInput,
 			localRuntime: input.localRuntime,
@@ -945,7 +948,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			},
 			createSpawnTool: (options) =>
 				createSessionSpawnTool(
-					{ ...subAgentDeps, ...sandboxSpawnDeps(), agentSandboxes },
+					{ ...subAgentDeps, ...sandboxSpawnDeps() },
 					bootstrap.config,
 					sessionId,
 					sessionToolExecutors,
@@ -953,14 +956,14 @@ export class LocalRuntimeHost implements RuntimeHost {
 				),
 			createSwarmTool: () =>
 				createSessionSwarmTool(
-					{ ...subAgentDeps, ...sandboxSpawnDeps(), agentSandboxes },
+					{ ...subAgentDeps, ...sandboxSpawnDeps() },
 					bootstrap.config,
 					sessionId,
 					sessionToolExecutors,
 				),
 			createSubAgentLifecycleCallbacks: (config) =>
 				createSessionSubAgentLifecycleCallbacks(
-					{ ...subAgentDeps, ...sandboxSpawnDeps(), agentSandboxes },
+					{ ...subAgentDeps, ...sandboxSpawnDeps() },
 					config,
 					sessionId,
 				),
@@ -2501,6 +2504,12 @@ export class LocalRuntimeHost implements RuntimeHost {
 			// the user most needs told, and it leaves no session behind.
 			...(pendingAtomicStatus ? { pendingAtomicStatus } : {}),
 			pluginSandboxShutdown: bootstrap.pluginSandboxShutdown,
+			// Whatever a delegated agent still has open when the session ends --
+			// one cut off mid-run -- is handed back and its overlay removed, so
+			// no overlay outlives the session that made it.
+			delegatedSandboxesShutdown: async () => {
+				await resolvedSandboxes?.closeAll();
+			},
 			submitAndExitObserved: false,
 			taskCompletedEmitted: false,
 			lastInteractiveTurnFinishReason: undefined,
@@ -4326,6 +4335,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 		} catch (error) {
 			recordCleanupError("plugin_sandbox_shutdown", error);
 		}
+		try {
+			await session.delegatedSandboxesShutdown?.();
+		} catch (error) {
+			recordCleanupError("delegated_sandboxes_shutdown", error);
+		}
 		// A background run outlives the turn it was started in, not the session
 		// it was started from: the conversation it would report into is gone.
 		this.backgroundDelegations.get(session.sessionId)?.stopAll();
@@ -4416,6 +4430,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 			await session.pluginSandboxShutdown?.();
 		} catch (error) {
 			recordCleanupError("plugin_sandbox_shutdown", error);
+		}
+		try {
+			await session.delegatedSandboxesShutdown?.();
+		} catch (error) {
+			recordCleanupError("delegated_sandboxes_shutdown", error);
 		}
 		// A background run outlives the turn it was started in, not the session
 		// it was started from: the conversation it would report into is gone.
