@@ -496,6 +496,47 @@ async function prepareLeadPoolOnce(
 }
 
 /**
+ * One pool of this conversation's chain is gone while the process stayed up
+ * (`pool_unknown` under an unchanged boot id): its sub-pool, released with a
+ * window that lapsed on the idle TTL, or the root it forks from, swept.
+ *
+ * Only that chain is dropped. A lost sub-pool goes with its window (the
+ * resume rule re-books it on the next request, and the sub-pool follows on
+ * the one after -- as when a lapse is found by the recheck). A lost root
+ * takes the sub-pools forked from it, for every conversation on it. Nothing
+ * is released: the server no longer holds it. Returns whether the id was
+ * this conversation's.
+ */
+export function forgetPolykvLeadPool(
+	sessionId: string,
+	poolId: string,
+): boolean {
+	const lead = LEADS.get(sessionId);
+	if (!lead) {
+		return false;
+	}
+	const root = lead.root;
+	if (root.held?.id === poolId) {
+		root.pool = undefined;
+		root.held = undefined;
+		for (const other of LEADS.values()) {
+			if (other.root === root) {
+				other.sub = undefined;
+			}
+		}
+	} else if (lead.sub?.held?.id === poolId) {
+		lead.sub = undefined;
+		lead.windowLive = false;
+	} else {
+		return false;
+	}
+	if (getPolykvSession(sessionId)?.layout === "lead") {
+		clearPolykvSession(sessionId);
+	}
+	return true;
+}
+
+/**
  * The conversation now holds a window: the next request may own a sub-pool.
  *
  * Called on a successful response to a request that asked for one.

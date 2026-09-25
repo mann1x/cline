@@ -233,6 +233,11 @@ interface OwnerShard {
 	pools: Map<string, Promise<string | undefined>>;
 	/** Pool id -> what the server said it was, for {@link verifyPolykvRoot}. */
 	records: Map<string, PoolRecord>;
+	/**
+	 * Layer key -> the id `pools` resolved to, once it has: read synchronously
+	 * by {@link forgetPolykvWorkerPool}.
+	 */
+	settled?: Map<string, string | undefined>;
 	/** Agents currently assigned here. */
 	agents: Set<string>;
 	closed: boolean;
@@ -587,6 +592,71 @@ function adoptBootId(state: RootState, bootId: string): void {
 		state.retiredBootIds.add(state.bootId);
 	}
 	state.bootId = bootId;
+}
+
+/**
+ * The boot id this root's pools belong to, when the server has stated one.
+ * `undefined` on a server without `boot_id_v1`: nothing to compare against.
+ */
+export function polykvRootBootId(baseUrl: string): string | undefined {
+	return ROOT_STATES.get(polykvRoot(baseUrl))?.bootId;
+}
+
+/**
+ * One pool of this agent's chain is gone while the process stayed up
+ * (`pool_unknown` under an unchanged boot id): its owner lapsed or was
+ * closed, or the engine released it. Forget that pool and every pool forked
+ * from it -- in the shard that holds it, and nowhere else -- so the agent's
+ * next turn rebuilds its chain from the first layer still standing. Other
+ * agents, on this shard or another, keep their pools; if theirs went too,
+ * their own next answer says so.
+ *
+ * Layers whose build failed are retried too: a fork from the pool that just
+ * vanished is the likeliest reason one did.
+ *
+ * Returns whether any pool was forgotten.
+ */
+export function forgetPolykvWorkerPool(
+	baseUrl: string,
+	sessionId: string,
+	poolId: string,
+): boolean {
+	const root = polykvRoot(baseUrl);
+	const own = AGENT_GROUPS.get(sessionId)?.assigned.get(sessionId);
+	const shards = [
+		...(own ? [own] : []),
+		...[...GROUPS.values()]
+			.filter((group) => group.root === root)
+			.flatMap((group) => group.shards)
+			.filter((shard) => shard !== own),
+	];
+	const shard = shards.find(
+		(candidate) => !candidate.closed && candidate.records.has(poolId),
+	);
+	if (!shard) {
+		return false;
+	}
+	// The named pool and its descendants, by the parents the server reported.
+	const gone = new Set([poolId]);
+	for (let grew = true; grew; ) {
+		grew = false;
+		for (const [id, record] of shard.records) {
+			if (!gone.has(id) && record.parent && gone.has(record.parent)) {
+				gone.add(id);
+				grew = true;
+			}
+		}
+	}
+	for (const id of gone) {
+		shard.records.delete(id);
+	}
+	for (const [key, id] of [...(shard.settled ?? [])]) {
+		if (id === undefined || gone.has(id)) {
+			shard.pools.delete(key);
+			shard.settled?.delete(key);
+		}
+	}
+	return true;
 }
 
 /**
@@ -1162,6 +1232,13 @@ async function ensureChain(
 				return pool.pool_id;
 			})().catch(() => undefined);
 			shard.pools.set(key, pending);
+			const settling = pending;
+			void settling.then((id) => {
+				if (shard.pools.get(key) === settling) {
+					shard.settled ??= new Map();
+					shard.settled.set(key, id);
+				}
+			});
 		}
 		const poolId = await pending;
 		if (poolId === undefined) {

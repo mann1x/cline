@@ -778,7 +778,7 @@ describe("pool_unknown on the lead's response", () => {
 		await releaseAllPolykvSwarms();
 	});
 
-	function leadTurn(unknown: boolean, root: string) {
+	function leadTurn(unknown: boolean, root: string, bootId?: string) {
 		const engine = server(
 			[],
 			() =>
@@ -787,7 +787,13 @@ describe("pool_unknown on the lead's response", () => {
 						choices: [],
 						opencoti: { pool_id: 3, pool_match: -1, pool_unknown: unknown },
 					}),
-					{ status: 200, headers: { "content-type": "application/json" } },
+					{
+						status: 200,
+						headers: {
+							"content-type": "application/json",
+							...(bootId ? { "x-opencoti-boot-id": bootId } : {}),
+						},
+					},
 				),
 		);
 		const logged: Array<[string, string]> = [];
@@ -811,7 +817,12 @@ describe("pool_unknown on the lead's response", () => {
 		await probe.run();
 		expect(polykvRootGeneration(`${root}/v1`)).toBe(generation + 1);
 		expect(probe.logged).toEqual([
-			[expect.stringContaining("pool 3 (pool_unknown)"), "info"],
+			[
+				expect.stringContaining(
+					"does not hold pool 3 (pool_unknown, no boot id to compare)",
+				),
+				"info",
+			],
 		]);
 	});
 
@@ -822,5 +833,19 @@ describe("pool_unknown on the lead's response", () => {
 		await probe.run();
 		expect(polykvRootGeneration(`${root}/v1`)).toBe(generation);
 		expect(probe.logged).toEqual([]);
+	});
+
+	// Same process: one pool lapsed, not a restart. The root keeps its
+	// generation, so nothing else on the server is rebuilt.
+	it("keeps the root's generation when the boot id is unchanged", async () => {
+		const root = "http://lead-lapsed";
+		await leadTurn(false, root, "cccccccccccccccc").run();
+		const generation = polykvRootGeneration(`${root}/v1`);
+		const probe = leadTurn(true, root, "cccccccccccccccc");
+		await probe.run();
+		expect(polykvRootGeneration(`${root}/v1`)).toBe(generation);
+		expect(probe.logged).toEqual([
+			[expect.stringContaining("pool_unknown, same boot id"), "info"],
+		]);
 	});
 });

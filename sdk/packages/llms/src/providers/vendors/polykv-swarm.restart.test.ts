@@ -277,6 +277,13 @@ function restartableEngine(
 			pools = new Map();
 			nextPool = 0;
 		},
+		/**
+		 * One pool goes away with the process still up: an owner lapsed,
+		 * or the engine released it.
+		 */
+		dropPool: (id: number) => {
+			pools.delete(id);
+		},
 		/** Bring it back with nothing: no pools, ids from 0 again. */
 		up: () => {
 			down = false;
@@ -818,5 +825,34 @@ describe("a response that says its pool is unknown", () => {
 		engine.restartQuietly();
 		await send(engine, "u4", agentBody("role A", "t2"));
 		expect(polykvRootGeneration("http://engine/v1")).toBe(generation + 1);
+	});
+
+	// boot id unchanged: the process stayed up and one pool went. Only the
+	// chain that held it is rebuilt; the root's generation does not move.
+	it("rebuilds only that agent's chain when the boot id is unchanged", async () => {
+		const engine = restartableEngine({ poolUnknown: true, bootHeader: true });
+		await send(engine, "ua", agentBody("role A", "t1"));
+		await send(engine, "ub", agentBody("role B", "t1"));
+		const [poolA] = poolsSentBy(engine, "ua");
+		const [poolB] = poolsSentBy(engine, "ub");
+		expect(poolA).not.toBe(poolB);
+		const generation = polykvRootGeneration("http://engine/v1");
+		const created = engine.pools().size;
+
+		engine.dropPool(poolA as number);
+		await send(engine, "ua", agentBody("role A", "t2"));
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation);
+
+		await send(engine, "ua", agentBody("role A", "t3"));
+		await send(engine, "ub", agentBody("role B", "t2"));
+		// A was rebuilt: a new id, holding A's layer, known to the server.
+		const newA = poolsSentBy(engine, "ua").at(-1) as number;
+		expect(newA).not.toBe(poolA);
+		expect(engine.pools().get(newA)?.prompt).toContain("role A");
+		// B kept its pool, and nothing else was built for it.
+		expect(poolsSentBy(engine, "ub")).toEqual([poolB, poolB]);
+		expect(engine.pools().size).toBe(created);
+		// Only A's one turn after the drop named a pool the server lacked.
+		expect(engine.unknownPoolSends).toEqual([poolA]);
 	});
 });

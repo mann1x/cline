@@ -22,6 +22,7 @@ import {
 } from "./opencoti-liveness";
 import { OpencotiWindowUnavailableError } from "./opencoti-window";
 import {
+	clearPolykvSession,
 	getPolykvGrantedWindow,
 	getPolykvSession,
 	hasOpencotiFeature,
@@ -33,12 +34,14 @@ import {
 	recordPolykvWindowObservation,
 } from "./polykv";
 import {
+	forgetPolykvLeadPool,
 	hoistLeadEnvironment,
 	markLeadWindowLive,
 	prepareLeadPool,
 } from "./polykv-lead";
 import {
 	engineSessionId,
+	forgetPolykvWorkerPool,
 	invalidatePolykvRoot,
 	isWorkerWindowFull,
 	markPolykvWorkerStarted,
@@ -48,6 +51,7 @@ import {
 	type PolykvLeadRoom,
 	type PolykvWorkerSpec,
 	polykvRoomBackoffMs,
+	polykvRootBootId,
 	polykvRootGeneration,
 	polykvWorkerStarted,
 	preparePolykvWorker,
@@ -516,12 +520,16 @@ export function createOpencotiFetch(options: {
 			}
 			nextInit = { ...init, body: JSON.stringify(body) };
 		}
-		/** The root's generation when the last attempt went out. */
-		let sentGeneration: number | undefined;
+		/** The last attempt, as it went out and was answered. */
+		let sent: SentTurn = {};
 		const sendWire = async (wire: Record<string, unknown> | undefined) => {
-			if (options.baseUrl) {
-				sentGeneration = polykvRootGeneration(options.baseUrl);
-			}
+			const named = (wire ?? body)?.pool_id;
+			sent = {
+				...(options.baseUrl
+					? { generation: polykvRootGeneration(options.baseUrl) }
+					: {}),
+				...(typeof named === "number" ? { poolId: String(named) } : {}),
+			};
 			const response = await base(input, {
 				...nextInit,
 				...(wire ? { body: JSON.stringify(wire) } : {}),
@@ -530,6 +538,7 @@ export function createOpencotiFetch(options: {
 				// timeout is five minutes.
 				...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
 			} as RequestInit);
+			sent.bootId = response.headers.get(OPENCOTI_BOOT_ID_HEADER);
 			if (options.baseUrl) {
 				noteBootId(options.baseUrl, response, options.log);
 			}
@@ -656,13 +665,14 @@ export function createOpencotiFetch(options: {
 				sharedAboveBudget,
 			);
 		}
-		const onFacts = noticePoolUnknown(
-			options.baseUrl,
+		const onFacts = noticePoolUnknown({
+			baseUrl: options.baseUrl,
 			sessionId,
-			() => sentGeneration,
-			options.log,
-			noticeDivergence(sessionId, options.onFacts),
-		);
+			chain: "lead",
+			sent: () => sent,
+			log: options.log,
+			onFacts: noticeDivergence(sessionId, options.onFacts),
+		});
 		return sessionId !== undefined ||
 			options.onFacts ||
 			(options.baseUrl && typeof body?.pool_id === "number")
@@ -947,54 +957,110 @@ function noticeDivergence(
 	};
 }
 
+/** What went out with the turn in hand, for reading its answer. */
+interface SentTurn {
+	/** The root's generation when it went out. */
+	generation?: number;
+	/** `X-OpenCoti-Boot-Id` on its answer; `null` when the server sent none. */
+	bootId?: string | null;
+	/** The pool id it named. */
+	poolId?: string;
+}
+
 /**
  * `onFacts`, with `opencoti.pool_unknown` acted on: the pool this turn named
- * does not exist in the process that answered, so every id held for the root
- * is suspect -- a restart renumbers pools from 0 -- and its generation ends
- * now; the next turn rebuilds.
+ * does not exist in the process that answered.
+ *
+ * - **Same process** (the answer's boot id is the one the root's pools belong
+ *   to): one pool went away while the server stayed up -- a lapsed or closed
+ *   owner, a lead sub-pool released on the idle TTL. Only the chain holding
+ *   that id is dropped: this worker's pool and what was forked from it
+ *   ({@link forgetPolykvWorkerPool}), or the lead's
+ *   ({@link forgetPolykvLeadPool}), or a plain session's remembered pool.
+ *   Every other agent on the server keeps its pools.
+ * - **Anything else** -- a new boot id, or none to compare (a server without
+ *   `boot_id_v1`) -- is read as the restart it most likely is: the root's
+ *   generation ends, and everything on it rebuilds.
  *
  * Info, not warn, on the row and in the log: the server served the turn (a
  * full reprocess, never a refusal) and the rebuild recovers it. Skipped when
  * the generation already moved after the turn went out -- the boot id on the
  * same response, most likely -- so one restart is one rebuild.
  */
-function noticePoolUnknown(
-	baseUrl: string | undefined,
-	sessionId: string | undefined,
-	sentGeneration: () => number | undefined,
-	log: OpencotiLog | undefined,
-	onFacts: (facts: OpencotiResponseFacts) => void,
-): (facts: OpencotiResponseFacts) => void {
+function noticePoolUnknown(context: {
+	baseUrl: string | undefined;
+	sessionId: string | undefined;
+	/** Whose chain the pool is in: a swarm worker's, or a lead's / session's. */
+	chain: "worker" | "lead";
+	sent: () => SentTurn;
+	log: OpencotiLog | undefined;
+	onFacts: (facts: OpencotiResponseFacts) => void;
+}): (facts: OpencotiResponseFacts) => void {
+	const { baseUrl, sessionId, log } = context;
 	return (facts) => {
-		const generation = sentGeneration();
+		const sent = context.sent();
 		if (
 			facts.poolUnknown &&
 			baseUrl &&
-			generation !== undefined &&
-			polykvRootGeneration(baseUrl) === generation
+			sent.generation !== undefined &&
+			polykvRootGeneration(baseUrl) === sent.generation
 		) {
-			const pool =
-				facts.poolId !== undefined ? `pool ${facts.poolId}` : "its pool";
-			const told = invalidatePolykvRoot(baseUrl, `${pool} is unknown to it`, {
-				severity: "info",
-				text: `The server does not hold ${pool} any more (pool_unknown): this turn was prefilled in full, and the shared pools are rebuilt on the next turn.`,
-			}).map(engineSessionId);
-			if (
-				sessionId !== undefined &&
-				!told.includes(engineSessionId(sessionId))
-			) {
-				reportPolykvNotice(sessionId, {
+			const poolId = facts.poolId ?? sent.poolId;
+			const pool = poolId !== undefined ? `pool ${poolId}` : "its pool";
+			const recorded = polykvRootBootId(baseUrl);
+			const sameProcess =
+				typeof sent.bootId === "string" &&
+				recorded !== undefined &&
+				sent.bootId === recorded;
+			if (sameProcess && poolId !== undefined) {
+				const forgotten =
+					sessionId === undefined
+						? false
+						: context.chain === "worker"
+							? forgetPolykvWorkerPool(baseUrl, sessionId, poolId)
+							: forgetPolykvLeadPool(sessionId, poolId) ||
+								forgetSessionPool(sessionId, poolId);
+				if (sessionId !== undefined) {
+					reportPolykvNotice(sessionId, {
+						severity: "info",
+						text: `The server no longer holds ${pool} (pool_unknown; same process, so its owner or window lapsed): this turn was prefilled in full${forgotten ? ", and this agent's pool chain is rebuilt on its next turn" : ""}.`,
+					});
+				}
+				log?.(
+					`[opencoti] ${polykvRoot(baseUrl)} no longer holds ${pool} (pool_unknown, same boot id): the turn was reprocessed in full; ${forgotten ? "that chain is rebuilt on the next turn, the root's other pools are kept" : "no chain here held it"}`,
+					"info",
+				);
+			} else {
+				const told = invalidatePolykvRoot(baseUrl, `${pool} is unknown to it`, {
 					severity: "info",
-					text: `The server did not know ${pool}: this turn was prefilled in full, and the pool is rebuilt on the next turn.`,
-				});
+					text: `The server does not hold ${pool} any more (pool_unknown): this turn was prefilled in full, and the shared pools are rebuilt on the next turn.`,
+				}).map(engineSessionId);
+				if (
+					sessionId !== undefined &&
+					!told.includes(engineSessionId(sessionId))
+				) {
+					reportPolykvNotice(sessionId, {
+						severity: "info",
+						text: `The server did not know ${pool}: this turn was prefilled in full, and the pool is rebuilt on the next turn.`,
+					});
+				}
+				log?.(
+					`[opencoti] ${polykvRoot(baseUrl)} does not hold ${pool} (pool_unknown, ${sent.bootId ? "boot id changed" : "no boot id to compare"}): the turn was reprocessed in full; the root's pools are rebuilt on the next turn`,
+					"info",
+				);
 			}
-			log?.(
-				`[opencoti] ${polykvRoot(baseUrl)} does not hold ${pool} (pool_unknown): the turn was reprocessed in full; its pools are rebuilt on the next turn`,
-				"info",
-			);
 		}
-		onFacts(facts);
+		context.onFacts(facts);
 	};
+}
+
+/** A plain session's remembered pool, when it is the one that went. */
+function forgetSessionPool(sessionId: string, poolId: string): boolean {
+	if (getPolykvSession(sessionId)?.poolId !== poolId) {
+		return false;
+	}
+	clearPolykvSession(sessionId);
+	return true;
 }
 
 /**
@@ -1142,18 +1208,19 @@ function createWorkerFetch(options: {
 	log?: OpencotiLog;
 }): typeof fetch {
 	const base = options.fetch ?? fetch;
-	/** The root's generation when the turn now in hand went out. */
-	let sentGeneration: number | undefined;
+	/** The turn now in hand, as it went out and was answered. */
+	let sent: SentTurn = {};
 	const observed = (response: Response) =>
 		observeResponseFacts(
 			response,
-			noticePoolUnknown(
-				options.baseUrl,
-				options.worker.sessionId,
-				() => sentGeneration,
-				options.log,
-				noticeDivergence(options.worker.sessionId, options.onFacts),
-			),
+			noticePoolUnknown({
+				baseUrl: options.baseUrl,
+				sessionId: options.worker.sessionId,
+				chain: "worker",
+				sent: () => sent,
+				log: options.log,
+				onFacts: noticeDivergence(options.worker.sessionId, options.onFacts),
+			}),
 		);
 	let ranOnce = false;
 	// The lead's session, lent to this agent (priority 0). A summary call is
@@ -1291,13 +1358,19 @@ function createWorkerFetch(options: {
 				return leadReserveRefusal(lent, undefined);
 			}
 			let response: Response;
-			sentGeneration = polykvRootGeneration(options.baseUrl);
+			sent = {
+				generation: polykvRootGeneration(options.baseUrl),
+				...(typeof wire.pool_id === "number"
+					? { poolId: String(wire.pool_id) }
+					: {}),
+			};
 			try {
 				response = await base(input, {
 					...init,
 					body: JSON.stringify(wire),
 					...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
 				} as RequestInit);
+				sent.bootId = response.headers.get(OPENCOTI_BOOT_ID_HEADER);
 				noteBootId(options.baseUrl, response, options.log);
 				// A first-result error inside a 200 stream goes back to being
 				// the HTTP error the window-full and server-fault waits read.
