@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -223,6 +224,43 @@ describe("hub discovery", () => {
 		}
 		await clearHubDiscovery(discoveryPath);
 		await expect(readHubDiscovery(discoveryPath)).resolves.toBeUndefined();
+	});
+
+	it("runs beforePublish before the record becomes readable", async () => {
+		snapshot = captureEnv();
+		delete process.env.CLINE_HUB_DISCOVERY_PATH;
+		process.env.CLINE_DATA_DIR = "/tmp/cline-data";
+
+		const discoveryPath = resolveHubOwnerContext(
+			"before-publish-order",
+		).discoveryPath;
+		await clearHubDiscovery(discoveryPath);
+		const visibleAtHook: unknown[] = [];
+		await writeHubDiscovery(
+			discoveryPath,
+			{
+				hubId: "hub_before_publish",
+				protocolVersion: "v1",
+				authToken: "test-token",
+				host: "127.0.0.1",
+				port: 25463,
+				url: "ws://127.0.0.1:25463/hub",
+				startedAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			},
+			{
+				beforePublish: () => {
+					visibleAtHook.push(existsSync(discoveryPath));
+				},
+			},
+		);
+		// A server marks itself ready in this hook, so no reader can find the
+		// record while the server still answers 503 "Starting".
+		expect(visibleAtHook).toEqual([false]);
+		expect((await readHubDiscovery(discoveryPath))?.hubId).toBe(
+			"hub_before_publish",
+		);
+		await clearHubDiscovery(discoveryPath);
 	});
 
 	it("rejects discovery records without an auth token", async () => {

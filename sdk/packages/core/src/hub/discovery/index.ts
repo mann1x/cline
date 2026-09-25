@@ -399,9 +399,21 @@ export async function readHubDiscovery(
 	}
 }
 
+export interface WriteHubDiscoveryOptions {
+	/**
+	 * Runs synchronously immediately before the record becomes visible to
+	 * readers (the atomic rename). A server marks itself ready here so that a
+	 * reader who finds the record can never reach a hub that still answers
+	 * "Starting": the directory fsync and mutation-lock teardown that follow
+	 * the rename are not part of the readiness window.
+	 */
+	beforePublish?: () => void;
+}
+
 export async function writeHubDiscovery(
 	discoveryPath: string,
 	record: HubServerDiscoveryRecord,
+	options?: WriteHubDiscoveryOptions,
 ): Promise<void> {
 	await withHubDiscoveryMutationLock(discoveryPath, async () => {
 		const directory = dirname(discoveryPath);
@@ -419,6 +431,7 @@ export async function writeHubDiscovery(
 			// On local filesystems with atomic same-directory rename semantics, this
 			// prevents readers from observing the old remove/write gap and preserves
 			// the previous complete record if publication fails.
+			options?.beforePublish?.();
 			await rename(temporaryPath, discoveryPath);
 			// Persist the rename where directory fsync is supported. Windows and
 			// some virtual filesystems reject opening directories, so durability

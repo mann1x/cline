@@ -822,25 +822,37 @@ export async function startHubWebSocketServer(
 	}
 
 	try {
-		await writeHubDiscovery(owner.discoveryPath, {
-			hubId,
-			protocolVersion: CURRENT_HUB_PROTOCOL_VERSION,
-			minClientProtocolVersion: MIN_CLIENT_HUB_PROTOCOL_VERSION,
-			maxClientProtocolVersion: MAX_CLIENT_HUB_PROTOCOL_VERSION,
-			capabilities: [...versionPayload.capabilities],
-			coreVersion: corePackage.version,
-			buildId,
-			buildEpochMs,
-			authToken,
-			host,
-			port,
-			url,
-			pid: process.pid,
-			startedAt,
-			updatedAt: startedAt,
-		});
-		published = true;
+		await writeHubDiscovery(
+			owner.discoveryPath,
+			{
+				hubId,
+				protocolVersion: CURRENT_HUB_PROTOCOL_VERSION,
+				minClientProtocolVersion: MIN_CLIENT_HUB_PROTOCOL_VERSION,
+				maxClientProtocolVersion: MAX_CLIENT_HUB_PROTOCOL_VERSION,
+				capabilities: [...versionPayload.capabilities],
+				coreVersion: corePackage.version,
+				buildId,
+				buildEpochMs,
+				authToken,
+				host,
+				port,
+				url,
+				pid: process.pid,
+				startedAt,
+				updatedAt: startedAt,
+			},
+			{
+				// Serve before the record is visible, not after the write
+				// settles: the rename makes it readable, and the directory fsync
+				// and lock teardown after it left a window where a client that
+				// had just read discovery got 503 "Starting" from /health.
+				beforePublish: () => {
+					published = true;
+				},
+			},
+		);
 	} catch (error) {
+		published = false;
 		// Listening without a published auth token creates an undiscoverable
 		// daemon that still owns the endpoint. Start full rollback immediately,
 		// but do not let Bun's WebSocket/http close bug prevent startup from
