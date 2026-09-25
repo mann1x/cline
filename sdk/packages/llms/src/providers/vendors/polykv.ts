@@ -848,6 +848,17 @@ export const OPENCOTI_FEATURES = {
 	sessionCloseBody: "session_close_body_v1",
 	/** The response's `opencoti` block carries `pool_match` and `pool_len`. */
 	poolMatchInResponse: "pool_match_in_response_v1",
+	/**
+	 * `stream_options.keepalive`: the SSE stream opens at once and every silent
+	 * period carries a `: keepalive <phase>` comment (`opencoti-liveness.ts`).
+	 */
+	streamKeepalive: "stream_keepalive_v1",
+	/** SO_KEEPALIVE on the server's sockets. Server-side only: nothing to send. */
+	tcpKeepalive: "tcp_keepalive_v1",
+	/** `boot_id` / `started_at` on `/health` and `/props`, `X-OpenCoti-Boot-Id` on completions. */
+	bootId: "boot_id_v1",
+	/** `opencoti.pool_unknown`: the named pool is not in this process. */
+	poolUnknownInResponse: "pool_unknown_in_response_v1",
 } as const;
 
 export type OpencotiFeature =

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpencotiFetch } from "./opencoti";
+import { resetPolykvAvailability } from "./polykv";
 import {
 	invalidatePolykvRoot,
 	onPolykvRoomWait,
@@ -22,6 +23,8 @@ function restartableEngine(
 	options: {
 		/** State opencoti's c8 boot fields: `opencoti.boot_id` in /props, `started_at` in /health. */
 		bootFields?: boolean;
+		/** `/props` `features`. */
+		features?: string[];
 	} = {},
 ) {
 	const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
@@ -73,6 +76,7 @@ function restartableEngine(
 				opencoti: options.bootFields ? { boot_id: `b-${bootId}` } : {},
 				boot,
 				start_time: identity,
+				...(options.features ? { features: options.features } : {}),
 			});
 		}
 		if (url.pathname === "/polykv/pools" && !init?.body) {
@@ -226,6 +230,7 @@ const turns = (engine: Engine) =>
 
 afterEach(async () => {
 	await releaseAllPolykvSwarms();
+	resetPolykvAvailability();
 });
 
 describe("a started worker whose server goes away", () => {
@@ -504,5 +509,32 @@ describe("pool ids across a server restart", () => {
 			polykvServerIdentity({ build_info: "b1", start_time: 6 }),
 		);
 		expect(polykvServerIdentity({ chat_template: "x" })).toBeUndefined();
+	});
+});
+
+describe("the heartbeat on a worker's turn", () => {
+	it("goes on its streaming request, merged into the stream options", async () => {
+		const engine = restartableEngine({ features: ["stream_keepalive_v1"] });
+		await send(engine, "hb", {
+			...agentBody("r", "t"),
+			stream: true,
+			stream_options: { include_usage: true },
+		});
+		expect(turns(engine).at(-1)?.body).toMatchObject({
+			stream_options: { include_usage: true, keepalive: true },
+			sse_ping_interval: 10,
+		});
+	});
+
+	it("stays off where the server does not advertise it", async () => {
+		const engine = restartableEngine();
+		await send(engine, "hb-off", {
+			...agentBody("r", "t"),
+			stream: true,
+			stream_options: { include_usage: true },
+		});
+		expect(turns(engine).at(-1)?.body.stream_options).toEqual({
+			include_usage: true,
+		});
 	});
 });

@@ -14,6 +14,7 @@ import { primeTemplateReinjection } from "../reasoning-history";
 import { waitForServerHealth } from "../server-health";
 import { llamaCppTimingsMetadataExtractor } from "./llamacpp-timings";
 import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
+import { requestStreamKeepalive } from "./opencoti-liveness";
 import { OpencotiWindowUnavailableError } from "./opencoti-window";
 import {
 	getPolykvGrantedWindow,
@@ -489,6 +490,11 @@ export function createOpencotiFetch(options: {
 					}
 				}
 			}
+			// The heartbeat, on every streaming request to a server that sends
+			// one: a lead's, a plain session's, an unpooled one's alike.
+			if (await keepaliveAdvertised(options.baseUrl, base, body)) {
+				requestStreamKeepalive(body);
+			}
 			nextInit = { ...init, body: JSON.stringify(body) };
 		}
 		const sendWire = (wire: Record<string, unknown> | undefined) =>
@@ -623,6 +629,25 @@ interface WindowNegotiation {
 	resume: boolean;
 	ask?: number;
 	floor?: number;
+}
+
+/**
+ * Whether this request should ask for the heartbeat: it streams, and the
+ * server advertises `stream_keepalive_v1`. `/props` is read once per root, and
+ * only for a streaming request -- a buffered one has no stream to keep alive.
+ */
+async function keepaliveAdvertised(
+	baseUrl: string | undefined,
+	fetchImpl: typeof fetch,
+	body: Record<string, unknown>,
+): Promise<boolean> {
+	if (!baseUrl || body.stream !== true) {
+		return false;
+	}
+	const props = await probeOpencotiProps(baseUrl, fetchImpl).catch(
+		() => undefined,
+	);
+	return hasOpencotiFeature(props?.features, OPENCOTI_FEATURES.streamKeepalive);
 }
 
 /** The two flags the window request branches on, read off `/props`. */
@@ -1114,6 +1139,9 @@ function createWorkerFetch(options: {
 			}
 			if (attach.poolId !== undefined && /^\d+$/.test(attach.poolId)) {
 				wire.pool_id = Number(attach.poolId);
+			}
+			if (await keepaliveAdvertised(options.baseUrl, base, wire)) {
+				requestStreamKeepalive(wire);
 			}
 			if (lent && !ranOnce && attach.poolId === undefined) {
 				// Priority 0 without a sub-pool is not priority 0: the lead's
