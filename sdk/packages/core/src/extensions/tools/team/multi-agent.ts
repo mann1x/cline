@@ -33,6 +33,7 @@ import {
 } from "@cline/shared";
 import { nanoid } from "nanoid";
 import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-orchestrator";
+import { type HandedRevision, handbackNote } from "./delegated-sandboxes";
 
 // Re-export shared types for backward compatibility
 export {
@@ -134,6 +135,31 @@ export interface AgentTeamsRuntimeOptions {
 	missionLogIntervalMs?: number;
 	maxConcurrentRuns?: number;
 	onTeamEvent?: (event: TeamEvent) => void;
+	/**
+	 * The teammates' private workspaces, when the host sandboxes them. A
+	 * teammate's toolset opens its workspace when it is spawned; the runtime
+	 * owns the rest of the lifecycle through these hooks.
+	 */
+	teammateWorkspaces?: TeammateWorkspaceHooks;
+}
+
+/**
+ * The lifecycle of a teammate's private workspace, as the team runtime drives
+ * it. A teammate is long-lived, so its overlay is too: it is handed back at
+ * the end of every task, and released only when the teammate goes.
+ */
+export interface TeammateWorkspaceHooks {
+	/**
+	 * Fold what the teammate changed since its last hand-back into the lead's
+	 * revision log. Called when each of its runs ends, however it ended, so the
+	 * lead finds the revisions named in the result it is handed.
+	 */
+	handBack(agentId: string): Promise<readonly HandedRevision[]>;
+	/**
+	 * Hand back anything outstanding and dispose the workspace: the teammate
+	 * was shut down or removed. Idempotent.
+	 */
+	release(agentId: string): Promise<void>;
 }
 
 export interface SpawnTeammateOptions {
@@ -564,9 +590,11 @@ export class AgentTeamsRuntime {
 	private readonly missionLogIntervalSteps: number;
 	private readonly missionLogIntervalMs: number;
 	private readonly maxConcurrentRuns: number;
+	private readonly teammateWorkspaces?: TeammateWorkspaceHooks;
 
 	constructor(options: AgentTeamsRuntimeOptions) {
 		this.teamName = options.teamName;
+		this.teammateWorkspaces = options.teammateWorkspaces;
 		this.teamId = `t_${sanitizeFileName(nanoid(10))}`;
 		this.onTeamEvent = options.onTeamEvent;
 		this.missionLogIntervalSteps = Math.max(
@@ -945,7 +973,34 @@ export class AgentTeamsRuntime {
 			}
 		}
 		member.status = "stopped";
+		// Its workspace goes with it -- after the hand-back, so nothing it did is
+		// lost. A teammate still inside a run is released when that run ends
+		// (`routeToTeammate`), not now: its tools may still be writing.
+		if (member.runningCount <= 0) {
+			this.releaseWorkspace(agentId);
+		}
 		this.emitEvent({ type: TeamMessageType.TeammateShutdown, agentId, reason });
+	}
+
+	private releaseWorkspace(agentId: string): void {
+		void this.teammateWorkspaces?.release(agentId).catch(() => {});
+	}
+
+	/**
+	 * Hand a teammate's changes back at the end of a run, and say where they
+	 * went. Best-effort: a failed hand-back must not fail the task.
+	 */
+	private async handBackWorkspace(
+		agentId: string,
+	): Promise<readonly HandedRevision[] | undefined> {
+		if (!this.teammateWorkspaces) {
+			return undefined;
+		}
+		try {
+			return await this.teammateWorkspaces.handBack(agentId);
+		} catch {
+			return undefined;
+		}
 	}
 
 	updateTeammateConnections(
@@ -1072,6 +1127,18 @@ export class AgentTeamsRuntime {
 			const result = options?.continueConversation
 				? await member.agent.continue(enrichedMessage)
 				: await member.agent.run(enrichedMessage);
+			// The teammate worked on a private copy of the workspace: its changes
+			// become revisions in the lead's log now, and the result the lead is
+			// handed names them.
+			const handed = await this.handBackWorkspace(agentId);
+			if (handed) {
+				result.text += handbackNote(
+					result.text,
+					result.finishReason,
+					agentId,
+					handed,
+				);
+			}
 			const taskEndStatus = taskEndStatusFromResult(result);
 			this.emitEvent({
 				type: TeamMessageType.TaskEnd,
@@ -1097,6 +1164,12 @@ export class AgentTeamsRuntime {
 			return result;
 		} catch (error) {
 			const err = error instanceof Error ? error : new Error(String(error));
+			// A failed run's changes are still its work: back to the lead, and
+			// named in the error the lead sees.
+			const handed = await this.handBackWorkspace(agentId);
+			if (handed && handed.length > 0) {
+				err.message += handbackNote("", "error", agentId, handed);
+			}
 			const intentionalAbort = isIntentionalTeammateAbort(member, err);
 			this.emitEvent({
 				type: TeamMessageType.TaskEnd,
@@ -1121,6 +1194,12 @@ export class AgentTeamsRuntime {
 				this.members.get(agentId)?.status !== "stopped"
 			) {
 				member.status = "idle";
+			} else if (
+				member.runningCount <= 0 &&
+				(member.status as TeamMemberState["status"]) === "stopped"
+			) {
+				// Shut down while this run was in flight: its release waited for it.
+				this.releaseWorkspace(agentId);
 			}
 		}
 	}
@@ -1747,6 +1826,7 @@ export class AgentTeamsRuntime {
 		for (const [memberId, member] of this.members.entries()) {
 			if (member.role === "teammate") {
 				this.members.delete(memberId);
+				this.releaseWorkspace(memberId);
 			}
 		}
 	}

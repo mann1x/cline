@@ -68,7 +68,13 @@ import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configur
 import { loadConfiguredAgentConfigs } from "../../extensions/tools/team/configured-agent-config";
 import { createConfiguredAgentTools } from "../../extensions/tools/team/configured-agent-tool";
 import { createCreateAgentTool } from "../../extensions/tools/team/create-agent-tool";
+import {
+	type DelegatedSandboxes,
+	type DelegatedWorkspace,
+	handbackNote,
+} from "../../extensions/tools/team/delegated-sandboxes";
 import { delegatedAgentTools } from "../../extensions/tools/team/delegated-tools";
+import type { TeammateWorkspaceHooks } from "../../extensions/tools/team/multi-agent";
 import { configuredAgentKey } from "../../extensions/tools/team/spawn-agent-tool";
 import {
 	filterDisabledTools,
@@ -235,12 +241,15 @@ function createBuiltinToolsList(
 	readReceipts?: ReadReceipts,
 	fileReadMaxChars?: number,
 	/**
-	 * Force `run_commands` off, overriding the mode preset. Set for a delegated
-	 * agent whose commands are not sandboxed: on those paths a shell would run
-	 * straight against the real workspace, which is the escape the delegated
-	 * sandbox exists to prevent. The lead's own tools never pass this.
+	 * Set for a delegated agent (a configured agent or a teammate); the lead's
+	 * own tools never pass it. With a workspace, the file tools resolve through
+	 * the agent's private overlay and none of the lead's executor overrides
+	 * apply; `run_commands` is offered only when the workspace allows it (a
+	 * launcher for this platform, and agent commands enabled). Without one, the
+	 * lead's executors and never a shell: an unsandboxed command would run
+	 * straight against the real workspace (escape-critical).
 	 */
-	withholdShell?: boolean,
+	delegated?: { workspace?: DelegatedWorkspace },
 ): AgentTool[] {
 	const preset = ToolPresets[resolveToolPresetName({ mode })];
 	const toolRoutingConfig = resolveToolRoutingConfig(
@@ -255,31 +264,45 @@ function createBuiltinToolsList(
 			cwd,
 			telemetry,
 			qaCredentials,
-			executorOptions: {
-				bash: { executionController: runCommandExecutionController },
-				// One registry for every tool that reads or writes a file. Without
-				// this the host's reader records into its own and `grep`/`sed`/
-				// `awk` guard against a registry nothing ever writes to.
-				...(readReceipts ? { receipts: readReceipts } : {}),
-				...(fileReadMaxChars !== undefined
-					? { fileRead: { maxReadChars: fileReadMaxChars } }
-					: {}),
-			},
+			executorOptions: delegated?.workspace
+				? {
+						// The overlay and the launcher-rooted shell. Not the lead's
+						// read receipts: this agent's reads are not the lead's.
+						...delegated.workspace.executorOptions,
+						...(fileReadMaxChars !== undefined
+							? { fileRead: { maxReadChars: fileReadMaxChars } }
+							: {}),
+					}
+				: {
+						bash: { executionController: runCommandExecutionController },
+						// One registry for every tool that reads or writes a file.
+						// Without this the host's reader records into its own and
+						// `grep`/`sed`/`awk` guard against a registry nothing ever
+						// writes to.
+						...(readReceipts ? { receipts: readReceipts } : {}),
+						...(fileReadMaxChars !== undefined
+							? { fileRead: { maxReadChars: fileReadMaxChars } }
+							: {}),
+					},
 			...preset,
 			enableSkills: !!skillsExecutor,
 			...toolRoutingConfig,
 			// Last, so it beats both the mode preset and any model routing rule
-			// that re-enables run_commands: a delegated agent on an unsandboxed
-			// path gets no shell, or it escapes to the real workspace
-			// (escape-critical). The lead never passes this.
-			...(withholdShell ? { enableBash: false } : {}),
+			// that re-enables run_commands: a delegated agent whose workspace
+			// cannot launch a command gets no shell, or it escapes to the real
+			// workspace (escape-critical). The lead never passes `delegated`.
+			...(delegated && !delegated.workspace?.allowCommands
+				? { enableBash: false }
+				: {}),
 			executors: {
 				...(skillsExecutor
 					? {
 							skills: skillsExecutor,
 						}
 					: {}),
-				...(executorOverrides ?? {}),
+				// The lead's disk-backed overrides would re-point a sandboxed
+				// agent's tools at the real workspace.
+				...(delegated?.workspace ? {} : (executorOverrides ?? {})),
 			},
 		}),
 		toolPolicies,
@@ -416,6 +439,29 @@ async function loadConfiguredMcpTools(options: {
 		tools,
 		shutdown: async () => {
 			await manager.dispose();
+		},
+	};
+}
+
+/** A configured agent's workspace key: one per call. */
+function configuredAgentSandboxKey(toolCallId: string): string {
+	return `configured:${toolCallId}`;
+}
+
+/** A teammate's workspace key: one per teammate, for its lifetime. */
+function teammateSandboxKey(agentId: string): string {
+	return `teammate:${agentId}`;
+}
+
+/** The team runtime's end of a teammate's workspace lifecycle. */
+function teammateWorkspaceHooks(
+	sandboxes: () => DelegatedSandboxes,
+): TeammateWorkspaceHooks {
+	return {
+		handBack: (agentId) =>
+			sandboxes().handBack(teammateSandboxKey(agentId), agentId),
+		release: async (agentId) => {
+			await sandboxes().close(teammateSandboxKey(agentId), agentId);
 		},
 	};
 }
@@ -989,6 +1035,9 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		// Kept by name as well as registered, so a `spawn_agent` batch entry can
 		// run as one of them (`agents[].type`).
 		let configuredAgentTools: AgentTool[] = [];
+		// Which agent each open configured-agent workspace belongs to, for the
+		// attribution of its revisions.
+		const configuredAgentNames = new Map<string, string>();
 		if (normalized.enableSpawnAgent) {
 			// Offered to the lead only, and gated with the subagents it creates:
 			// writing an agent file is pointless in a session that cannot run one,
@@ -1016,43 +1065,88 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 						resolveProviderConnection: config.resolveProviderConnection,
 						resolveProfileConnection: config.resolveProfileConnection,
 						listProfileNames: config.listProfileNames,
-						createSubAgentTools: (agent) =>
-							normalized.enableTools
-								? filterToolsForConfiguredAgent(
-										delegatedAgentTools(
-											createBuiltinToolsList(
-												config.cwd,
-												agent.providerId ?? config.providerId,
-												normalized.mode,
-												agent.modelId ?? config.modelId,
-												config.toolRoutingRules,
-												effectiveToolPolicies,
-												agent.skills !== undefined &&
-													userInstructionService?.createSkillsExecutor
-													? userInstructionService.createSkillsExecutor(
-															agent.skills,
-														)
-													: undefined,
-												toolExecutors,
-												telemetry ?? config.telemetry,
-												config.qaCredentials,
-												input.runCommandExecutionController,
-												input.readReceipts,
-												fileReadMaxChars,
-												// withholdShell: configured agents are not sandboxed — no run_commands (escape-critical)
-												true,
-											),
-											config.extraTools,
-										),
-										agent,
-									)
-								: [],
+						createSubAgentTools: async (agent, _agentInput, context) => {
+							if (!normalized.enableTools) {
+								return [];
+							}
+							// One workspace per call, keyed on the call: without a
+							// call id there is nothing to hand it back by, so no
+							// workspace -- and then no shell.
+							const sandboxes = input.delegatedSandboxes?.();
+							const key = context.toolCallId
+								? configuredAgentSandboxKey(context.toolCallId)
+								: undefined;
+							const workspace =
+								sandboxes && key ? await sandboxes.open(key) : undefined;
+							if (key && workspace) {
+								configuredAgentNames.set(key, agent.name);
+							}
+							return filterToolsForConfiguredAgent(
+								delegatedAgentTools(
+									createBuiltinToolsList(
+										config.cwd,
+										agent.providerId ?? config.providerId,
+										normalized.mode,
+										agent.modelId ?? config.modelId,
+										config.toolRoutingRules,
+										effectiveToolPolicies,
+										agent.skills !== undefined &&
+											userInstructionService?.createSkillsExecutor
+											? userInstructionService.createSkillsExecutor(
+													agent.skills,
+												)
+											: undefined,
+										toolExecutors,
+										telemetry ?? config.telemetry,
+										config.qaCredentials,
+										input.runCommandExecutionController,
+										input.readReceipts,
+										fileReadMaxChars,
+										{ workspace },
+									),
+									config.extraTools,
+								),
+								agent,
+							);
+						},
 						hookErrorMode: config.hookErrorMode,
 						toolPolicies: effectiveToolPolicies,
 						requestToolApproval: input.requestToolApproval,
 						onSubAgentEvent: input.onSubAgentEvent,
 						onSubAgentStart: input.onSubAgentStart,
-						onSubAgentEnd: input.onSubAgentEnd,
+						// The agent's changes go back to the lead as revisions and its
+						// overlay is disposed before anyone reads the result, so the
+						// note naming them is in the answer the lead is handed.
+						onSubAgentEnd: async (context) => {
+							const key = context.toolCallId
+								? configuredAgentSandboxKey(context.toolCallId)
+								: undefined;
+							const sandboxes = input.delegatedSandboxes?.();
+							if (key && sandboxes?.has(key)) {
+								const name = configuredAgentNames.get(key) ?? "agent";
+								configuredAgentNames.delete(key);
+								const handed = await sandboxes.close(key, name);
+								if (context.result && typeof context.result.text === "string") {
+									context.result.text += handbackNote(
+										context.result.text,
+										context.result.finishReason,
+										name,
+										handed,
+									);
+								}
+							}
+							await input.onSubAgentEnd?.(context);
+						},
+						// However the call ended -- including before the agent
+						// started, which `onSubAgentEnd` never sees.
+						onSubAgentSettled: async (context) => {
+							if (!context.toolCallId) {
+								return;
+							}
+							const key = configuredAgentSandboxKey(context.toolCallId);
+							configuredAgentNames.delete(key);
+							await input.delegatedSandboxes?.().close(key, context.name);
+						},
 					}),
 					effectiveToolPolicies,
 				);
@@ -1091,6 +1185,13 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 							: config.maxConcurrentAgents,
 					missionLogIntervalSteps: normalized.missionLogIntervalSteps,
 					missionLogIntervalMs: normalized.missionLogIntervalMs,
+					...(input.delegatedSandboxes
+						? {
+								teammateWorkspaces: teammateWorkspaceHooks(
+									input.delegatedSandboxes,
+								),
+							}
+						: {}),
 					onTeamEvent: (event: TeamEvent) => {
 						onTeamEvent(event);
 						if (teamRuntime && teamStore) {
@@ -1152,7 +1253,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 						leadAgentInstance?.addTools(teamTools);
 					},
 					createBaseTools: normalized.enableTools
-						? () =>
+						? (agentId) =>
 								createBuiltinToolsList(
 									config.cwd,
 									config.providerId,
@@ -1167,8 +1268,14 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 									input.runCommandExecutionController,
 									input.readReceipts,
 									fileReadMaxChars,
-									// withholdShell: teammates are not sandboxed — no run_commands (escape-critical)
-									true,
+									// Its own workspace for its lifetime: opened here, when it
+									// is spawned, and handed back and released by the team
+									// runtime (`teammateWorkspaces` below).
+									{
+										workspace: input
+											.delegatedSandboxes?.()
+											.openSync(teammateSandboxKey(agentId)),
+									},
 								)
 						: undefined,
 					teammateConfigProvider: delegatedAgentConfigProvider,

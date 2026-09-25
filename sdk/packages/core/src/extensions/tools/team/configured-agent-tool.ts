@@ -30,6 +30,7 @@ import { isAdmissionEvent, runPlacedAgent } from "./placed-run";
 import type {
 	SpawnAgentOutput,
 	SubAgentEndContext,
+	SubAgentSettledContext,
 	SubAgentStartContext,
 } from "./spawn-agent-tool";
 import {
@@ -153,6 +154,8 @@ export interface ConfiguredAgentToolConfig {
 	) => Promise<ToolApprovalResult> | ToolApprovalResult;
 	onSubAgentStart?: (context: SubAgentStartContext) => void | Promise<void>;
 	onSubAgentEnd?: (context: SubAgentEndContext) => void | Promise<void>;
+	/** See `SpawnAgentToolConfig.onSubAgentSettled`. */
+	onSubAgentSettled?: (context: SubAgentSettledContext) => void | Promise<void>;
 }
 
 function sanitizeAgentName(name: string): string {
@@ -706,6 +709,18 @@ export function createConfiguredAgentTools(
 						cancellation.release();
 						stopRoomWatch();
 						trouble.dispose();
+						// And its workspace, which a run that never started
+						// still opened.
+						if (options.onSubAgentSettled) {
+							try {
+								await options.onSubAgentSettled({
+									toolCallId: context.toolCallId,
+									name: config.name,
+								});
+							} catch {
+								// Best-effort observer callback.
+							}
+						}
 						// Its engine session goes back the moment it ends.
 						const released = await releasePolykvAgent(engineSessionId).catch(
 							() => undefined,

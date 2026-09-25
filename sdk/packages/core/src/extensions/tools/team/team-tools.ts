@@ -261,7 +261,11 @@ export interface CreateAgentTeamsToolsOptions {
 	runtime: AgentTeamsRuntime;
 	requesterId: string;
 	teammateConfigProvider: DelegatedAgentConfigProvider;
-	createBaseTools?: () => AgentTool[];
+	/**
+	 * The builtin tools for one teammate, by its id: a sandboxing host opens the
+	 * teammate's private workspace here and binds the tools to it.
+	 */
+	createBaseTools?: (agentId: string) => AgentTool[];
 	allowSpawn?: boolean;
 	includeSpawnTool?: boolean;
 	includeManagementTools?: boolean;
@@ -271,7 +275,11 @@ export interface CreateAgentTeamsToolsOptions {
 export interface BootstrapAgentTeamsOptions {
 	runtime: AgentTeamsRuntime;
 	teammateConfigProvider: DelegatedAgentConfigProvider;
-	createBaseTools?: () => AgentTool[];
+	/**
+	 * The builtin tools for one teammate, by its id: a sandboxing host opens the
+	 * teammate's private workspace here and binds the tools to it.
+	 */
+	createBaseTools?: (agentId: string) => AgentTool[];
 	leadAgentId?: string;
 	restoredTeammates?: TeamTeammateSpec[];
 	restoredFromPersistence?: boolean;
@@ -315,7 +323,7 @@ function spawnTeamTeammate(
 ): void {
 	const teammateTools: AgentTool[] = [];
 	if (options.createBaseTools) {
-		teammateTools.push(...options.createBaseTools());
+		teammateTools.push(...options.createBaseTools(options.spec.agentId));
 	}
 	teammateTools.push(
 		...createAgentTeamsTools({

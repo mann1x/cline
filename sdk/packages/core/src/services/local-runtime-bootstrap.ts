@@ -35,6 +35,7 @@ import type {
 	SubAgentStartContext,
 	TeamEvent,
 } from "../extensions/tools/team";
+import type { DelegatedSandboxes } from "../extensions/tools/team/delegated-sandboxes";
 import type { SpawnToolOptions } from "../extensions/tools/team/spawn-agent-tool";
 import { createCheckpointHooks } from "../hooks/checkpoint-hooks";
 import {
@@ -263,6 +264,12 @@ export interface PrepareLocalRuntimeBootstrapOptions {
 	};
 	createSpawnTool: (options?: SpawnToolOptions) => AgentTool;
 	createSwarmTool?: () => AgentTool;
+	/**
+	 * The session's delegated-agent workspaces, for the paths the runtime
+	 * builder runs itself: configured agents and teammates. See
+	 * `RuntimeBuilderInput.delegatedSandboxes`.
+	 */
+	delegatedSandboxes?: () => DelegatedSandboxes;
 	readSessionMetadata: () => Promise<Record<string, unknown> | undefined>;
 	writeSessionMetadata: (
 		metadata: Record<string, unknown>,
@@ -304,6 +311,7 @@ export async function prepareLocalRuntimeBootstrap(
 		createSubAgentLifecycleCallbacks,
 		createSpawnTool,
 		createSwarmTool,
+		delegatedSandboxes,
 		localRuntime,
 		readSessionMetadata,
 		writeSessionMetadata,
@@ -556,6 +564,7 @@ export async function prepareLocalRuntimeBootstrap(
 			onTeamEvent,
 			createSpawnTool,
 			createSwarmTool,
+			...(delegatedSandboxes ? { delegatedSandboxes } : {}),
 			onTeamRestored: onTeamRestored,
 			onSubAgentEvent: subAgentLifecycleCallbacks?.onSubAgentEvent,
 			onSubAgentStart: subAgentLifecycleCallbacks?.onSubAgentStart,

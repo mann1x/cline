@@ -961,6 +961,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 					sessionId,
 					sessionToolExecutors,
 				),
+			// Configured agents and teammates, which the runtime builder runs
+			// itself, open theirs from the same set.
+			delegatedSandboxes: sessionSandboxes,
 			createSubAgentLifecycleCallbacks: (config) =>
 				createSessionSubAgentLifecycleCallbacks(
 					{ ...subAgentDeps, ...sandboxSpawnDeps() },

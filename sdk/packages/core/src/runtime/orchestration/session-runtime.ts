@@ -30,6 +30,7 @@ import type {
 	TeamEvent,
 } from "../../extensions/tools/team";
 import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configured-agent-config";
+import type { DelegatedSandboxes } from "../../extensions/tools/team/delegated-sandboxes";
 import type { SpawnToolOptions } from "../../extensions/tools/team/spawn-agent-tool";
 import type { WorkspaceManager } from "../../services/workspace/workspace-manager";
 import type { CoreSessionConfig } from "../../types/config";
@@ -85,6 +86,14 @@ export interface RuntimeBuilderInput {
 	createSpawnTool?: (options?: SpawnToolOptions) => AgentTool;
 	/** `spawn_swarm`, when the host can build one. See `local/spawn-tool.ts`. */
 	createSwarmTool?: () => AgentTool;
+	/**
+	 * The session's delegated-agent workspaces. Configured agents and
+	 * teammates -- the delegated paths the runtime builder runs itself -- each
+	 * open one, so their writes land in a private overlay and come back to the
+	 * lead as revisions. Absent, they keep the lead's executors and get no
+	 * shell.
+	 */
+	delegatedSandboxes?: () => DelegatedSandboxes;
 	onTeamRestored?: () => void;
 	userInstructionService?: UserInstructionConfigService;
 	pluginSkillDirectories?: ReadonlyArray<string>;
