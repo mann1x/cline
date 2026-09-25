@@ -884,11 +884,13 @@ export class AgentTeamsRuntime {
 		return !!member && member.role === "teammate" && !!member.agent;
 	}
 
-	spawnTeammate({
-		agentId,
-		config,
-		sampling,
-	}: SpawnTeammateOptions): TeamMemberSnapshot {
+	/**
+	 * Throw if `agentId` cannot be (re)spawned now. Asked before anything is
+	 * built for the new teammate: building its toolset opens its workspace,
+	 * which replaces -- and releases -- the one a teammate still running under
+	 * the same id is writing to.
+	 */
+	assertCanSpawnTeammate(agentId: string): void {
 		const existing = this.members.get(agentId);
 		if (existing && existing.role !== "teammate") {
 			throw new Error(
@@ -900,6 +902,14 @@ export class AgentTeamsRuntime {
 				`Teammate "${agentId}" is currently running and cannot be respawned`,
 			);
 		}
+	}
+
+	spawnTeammate({
+		agentId,
+		config,
+		sampling,
+	}: SpawnTeammateOptions): TeamMemberSnapshot {
+		this.assertCanSpawnTeammate(agentId);
 
 		const wrappedConfig: TeamMemberConfig = {
 			...config,

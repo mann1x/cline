@@ -321,6 +321,10 @@ function spawnTeamTeammate(
 		spec: TeamTeammateSpec;
 	},
 ): void {
+	// Refused before its tools are built: building them opens the teammate's
+	// workspace, and a running teammate under this id is still writing to the
+	// one that would replace.
+	options.runtime.assertCanSpawnTeammate(options.spec.agentId);
 	const teammateTools: AgentTool[] = [];
 	if (options.createBaseTools) {
 		teammateTools.push(...options.createBaseTools(options.spec.agentId));

@@ -278,6 +278,50 @@ describe("delegated paths the runtime builder runs, on private workspaces", () =
 			await runtime.shutdown("test");
 		});
 
+		it("leaves a running teammate's overlay alone when a respawn is refused", async () => {
+			let firstWritten!: () => void;
+			const wrote = new Promise<void>((resolve) => {
+				firstWritten = resolve;
+			});
+			let finish!: () => void;
+			const gate = new Promise<void>((resolve) => {
+				finish = resolve;
+			});
+			behaviour = async (tools) => {
+				await write(tools, path.join(ws, "a.txt"), "BEFORE");
+				firstWritten();
+				await gate;
+				// Still writing after the respawn was attempted.
+				await write(tools, path.join(ws, "b.txt"), "AFTER");
+				return { text: "done" };
+			};
+			const runtime = await build({ teams: true });
+			await spawn(runtime);
+			const running = runTask(runtime, "a long task");
+			await wrote;
+			const before = await fs.readdir(overlays);
+
+			await expect(spawn(runtime)).rejects.toThrow(/running/);
+			// Give a detached release every chance to run.
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(await fs.readdir(overlays)).toEqual(before);
+
+			finish();
+			const result = await running;
+			const a = log.revisions(path.join(ws, "a.txt")).at(-1);
+			const b = log.revisions(path.join(ws, "b.txt")).at(-1);
+			expect(a?.body?.toString()).toBe("BEFORE");
+			expect(b?.body?.toString()).toBe("AFTER");
+			expect(result.text).toContain(`a.txt — revision #${a?.index}`);
+			expect(result.text).toContain(`b.txt — revision #${b?.index}`);
+			// Only now, with the run over and handed back, may it go.
+			expect(await fs.readdir(overlays)).toEqual(before);
+			await runtime.shutdown("session_stop");
+			await vi.waitFor(async () =>
+				expect(await fs.readdir(overlays)).toEqual([]),
+			);
+		});
+
 		it("hands back a failed task's changes and disposes the overlay on shutdown", async () => {
 			behaviour = async (tools) => {
 				await write(tools, path.join(ws, "a.txt"), "HALF-DONE");

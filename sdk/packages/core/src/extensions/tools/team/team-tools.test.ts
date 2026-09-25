@@ -471,6 +471,7 @@ describe("createAgentTeamsTools runtime behavior", () => {
 		const runtime = {
 			getMemberRole: vi.fn(() => "lead"),
 			isTeammateActive: vi.fn(() => false),
+			assertCanSpawnTeammate: vi.fn(),
 			spawnTeammate,
 		} as unknown as AgentTeamsRuntime;
 
@@ -514,6 +515,7 @@ describe("createAgentTeamsTools runtime behavior", () => {
 		const runtime = {
 			getMemberRole: vi.fn(() => "lead"),
 			isTeammateActive: vi.fn(() => false),
+			assertCanSpawnTeammate: vi.fn(),
 			spawnTeammate,
 		} as unknown as AgentTeamsRuntime;
 
