@@ -20,6 +20,9 @@ interface ReadyDaemon {
 	stderr: () => string;
 }
 
+// The fixture must run under Bun; which Bun is the installer's business, not this test's.
+const RUNTIME_LINE = /\[shutdown-fixture\] runtime: bun \d+\.\d+\.\d+/;
+
 const tempDirs = new Set<string>();
 const children = new Set<ChildProcess>();
 
@@ -247,9 +250,7 @@ describe("hub daemon shutdown", () => {
 			const result = await withTimeout(daemon.exit, 5_000, "daemon exit");
 			expect(result).toEqual({ code: 0, signal: null });
 			expect(Date.now() - startedAt).toBeLessThan(5_000);
-			expect(daemon.stderr()).toContain(
-				"[shutdown-fixture] runtime: bun 1.3.13",
-			);
+			expect(daemon.stderr()).toMatch(RUNTIME_LINE);
 			expect(daemon.stderr()).toContain("[shutdown-fixture] forced exit:");
 			await expect(
 				readFile(daemon.discoveryPath, "utf8"),
@@ -282,9 +283,7 @@ describe("hub daemon shutdown", () => {
 				const result = await withTimeout(daemon.exit, 5_000, "daemon exit");
 				expect(result).toEqual({ code: 0, signal: null });
 				expect(Date.now() - startedAt).toBeLessThan(5_000);
-				expect(daemon.stderr()).toContain(
-					"[shutdown-fixture] runtime: bun 1.3.13",
-				);
+				expect(daemon.stderr()).toMatch(RUNTIME_LINE);
 				expect(daemon.stderr()).toContain("[shutdown-fixture] forced exit:");
 				await expect(
 					readFile(daemon.discoveryPath, "utf8"),
