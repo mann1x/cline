@@ -9,6 +9,7 @@
 
 import { type ApiHandler, createHandler, type ProviderConfig } from "@cline/llms"
 import type { ApiConfiguration } from "@shared/api"
+import { scopedContextWindow } from "@shared/api-config-snapshot"
 import type { Mode } from "@shared/storage/types"
 import { reasoningEffortFromThinkingBudget } from "@shared/utils/reasoning-support"
 import { fetch } from "@/shared/net"
@@ -91,6 +92,10 @@ export function buildSdkProviderConfig(
 		// ignore an explicit Request Timeout setting and load models with
 		// Ollama's 4096-token server default.
 		...(providerId === "ollama" ? resolveOllamaProviderConfig(configuration, modelId, options?.visionProviderSettings) : {}),
+		// The Vision tab's own window off Ollama, read the way the tab shows it.
+		// Without it a vision model on opencoti or llama.cpp took the shared
+		// `models.json` entry for its id, whatever its tab said.
+		...(providerId !== "ollama" ? scopedWindowModelInfo(modelId, options?.visionProviderSettings) : {}),
 		// Everything built here is a standalone utility call — the image
 		// describer, the commit-message writer, the prompt-template generator.
 		// The task loop does not come through this function; it goes through
@@ -119,6 +124,18 @@ export function buildSdkProviderConfig(
 		return { ...base, reasoningEffort: budgetEffort }
 	}
 	return base
+}
+
+/** `{ modelInfo }` carrying a scoped tab's window, or `{}` when it names none. */
+function scopedWindowModelInfo(
+	modelId: string | undefined,
+	settings: Record<string, unknown> | undefined,
+): Pick<ProviderConfig, "modelInfo"> {
+	const window = scopedContextWindow(settings)
+	if (!modelId || window === undefined) {
+		return {}
+	}
+	return { modelInfo: { id: modelId, name: modelId, contextWindow: window, maxInputTokens: window } }
 }
 
 /**

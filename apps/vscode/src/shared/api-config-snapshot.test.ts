@@ -10,7 +10,10 @@ import {
 	PROVIDER_CONFIG_CLEARS,
 	PROVIDER_CONFIG_PROFILE_KEYS,
 	parseModeScopedKey,
+	profileProviderConfigFromScope,
 	providerConfigPatchForProfile,
+	scopedContextWindow,
+	scopedProviderConfigFromProfile,
 } from "./api-config-snapshot"
 
 const configuration = {
@@ -464,5 +467,71 @@ describe("the provider config a profile carries", () => {
 		const stillLoading = { global: {}, mode: {} }
 
 		expect(apiConfigurationSnapshotsEqual(stored, stillLoading)).toBe(true)
+	})
+})
+
+// A profile files the committed model's overrides as `modelOverrides`; a
+// scoped tab (Vision, Agents, Escalation) reads `selectedModelOverrides`.
+describe("a provider config crossing between a profile and a scoped tab", () => {
+	it("reads the window from contextWindow, then either spelling of the overrides", () => {
+		expect(scopedContextWindow({ contextWindow: 65_536, selectedModelOverrides: { contextWindow: 1 } })).toBe(65_536)
+		expect(scopedContextWindow({ selectedModelOverrides: { contextWindow: 98_304 } })).toBe(98_304)
+		expect(scopedContextWindow({ modelOverrides: { contextWindow: 32_768 } })).toBe(32_768)
+		// A cleared box stores zero, which names nothing.
+		expect(scopedContextWindow({ contextWindow: 0, modelOverrides: { contextWindow: 32_768 } })).toBe(32_768)
+		expect(scopedContextWindow({ contextWindow: 0 })).toBeUndefined()
+		expect(scopedContextWindow(undefined)).toBeUndefined()
+	})
+
+	it("stores a loaded profile's overrides and window under the tab's keys", () => {
+		const profile = { sampling: { temperature: 0.7 }, modelOverrides: { contextWindow: 65_536, maxTokens: 8_000 } }
+
+		expect(scopedProviderConfigFromProfile(profile)).toEqual({
+			sampling: { temperature: 0.7 },
+			contextWindow: 65_536,
+			selectedModelOverrides: { contextWindow: 65_536, maxTokens: 8_000 },
+		})
+		// A copy: the stored profile is not rewritten by being loaded.
+		expect(profile).not.toHaveProperty("selectedModelOverrides")
+	})
+
+	it("saves a tab's overrides and window under the profile's keys, without its picker key", () => {
+		expect(
+			profileProviderConfigFromScope({
+				selectedModelId: "v9",
+				contextWindow: 0,
+				selectedModelOverrides: { contextWindow: 98_304 },
+			}),
+		).toEqual({ contextWindow: 98_304, modelOverrides: { contextWindow: 98_304 } })
+	})
+
+	it("round-trips a profile through a scoped tab unchanged", () => {
+		const profile = { contextWindow: 65_536, modelOverrides: { contextWindow: 65_536, maxTokens: 8_000 } }
+
+		expect(profileProviderConfigFromScope(scopedProviderConfigFromProfile(profile))).toEqual(profile)
+	})
+
+	it("reads a tab holding a loaded profile as matching it", () => {
+		const profile = { global: {}, mode: {}, providerConfig: { modelOverrides: { contextWindow: 65_536 } } }
+		const tab = {
+			global: {},
+			mode: {},
+			providerConfig: { ...scopedProviderConfigFromProfile(profile.providerConfig), selectedModelId: "v9" },
+		}
+
+		expect(apiConfigurationSnapshotsEqual(profile, tab)).toBe(true)
+		expect(
+			apiConfigurationSnapshotsEqual(profile, {
+				...tab,
+				providerConfig: { ...tab.providerConfig, contextWindow: 131_072 },
+			}),
+		).toBe(false)
+	})
+
+	it("commits a scoped-spelled profile's overrides rather than writing them as a provider field", () => {
+		const patch = providerConfigPatchForProfile({ selectedModelOverrides: { contextWindow: 65_536 }, contextWindow: 65_536 })
+
+		expect(patch).not.toHaveProperty("selectedModelOverrides")
+		expect(patch.contextWindow).toBe(65_536)
 	})
 })

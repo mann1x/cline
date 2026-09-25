@@ -103,6 +103,103 @@ export const PROVIDER_CONFIG_PROFILE_KEYS = [
 export const PROVIDER_CONFIG_MODEL_OVERRIDES_KEY = "modelOverrides"
 
 /**
+ * Where a tab that keeps its own snapshot (Vision, Agents, Escalation) files
+ * the same overrides: its picker writes and reads this key, a profile files
+ * them under {@link PROVIDER_CONFIG_MODEL_OVERRIDES_KEY}. Every crossing
+ * between the two goes through {@link scopedProviderConfigFromProfile} or
+ * {@link profileProviderConfigFromScope}, so neither spelling is left unread.
+ */
+export const SCOPED_MODEL_OVERRIDES_KEY = "selectedModelOverrides"
+
+function positiveWindow(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined
+}
+
+function overridesWindow(providerConfig: Record<string, unknown>, key: string): number | undefined {
+	const overrides = providerConfig[key]
+	return overrides && typeof overrides === "object" && !Array.isArray(overrides)
+		? positiveWindow((overrides as Record<string, unknown>).contextWindow)
+		: undefined
+}
+
+/**
+ * The context window a stored provider config names, or `undefined` when it
+ * names none.
+ *
+ * One answer for the panel and the session, read the same way on both sides:
+ * the config's own `contextWindow` first (what the Model Context Window box
+ * writes), then the committed model's overrides under either spelling. Zero is
+ * how a cleared box is stored, so it names nothing.
+ *
+ * Measured on pandorum, 2026-09-25: an Agents node on opencoti stored 65536,
+ * showed 128000 and ran at 256000 -- the panel read a safe default, the
+ * session read the shared `models.json` catalog, and neither read this.
+ */
+export function scopedContextWindow(providerConfig: Record<string, unknown> | undefined): number | undefined {
+	if (!providerConfig) {
+		return undefined
+	}
+	return (
+		positiveWindow(providerConfig.contextWindow) ??
+		overridesWindow(providerConfig, SCOPED_MODEL_OVERRIDES_KEY) ??
+		overridesWindow(providerConfig, PROVIDER_CONFIG_MODEL_OVERRIDES_KEY)
+	)
+}
+
+/** `contextWindow` set to what the config names, or removed when it names none. */
+function withResolvedWindow(providerConfig: Record<string, unknown>): Record<string, unknown> {
+	const window = scopedContextWindow(providerConfig)
+	if (window !== undefined) {
+		providerConfig.contextWindow = window
+	} else {
+		delete providerConfig.contextWindow
+	}
+	return providerConfig
+}
+
+/**
+ * A profile's provider config as a scoped tab stores it.
+ *
+ * A profile files the model's overrides under `modelOverrides`, and the tab's
+ * panel reads `selectedModelOverrides`. Copied verbatim, a loaded profile's
+ * window sat under a key the panel never read: the box showed a default and
+ * the agents ran on the catalog's number. The window is also lifted to
+ * `contextWindow` when the profile carries it only among the overrides, so the
+ * box and the session read it from the same field.
+ */
+export function scopedProviderConfigFromProfile(providerConfig: Record<string, unknown> | undefined): Record<string, unknown> {
+	const next: Record<string, unknown> = { ...(providerConfig ?? {}) }
+	if (next[PROVIDER_CONFIG_MODEL_OVERRIDES_KEY] !== undefined) {
+		if (next[SCOPED_MODEL_OVERRIDES_KEY] === undefined) {
+			next[SCOPED_MODEL_OVERRIDES_KEY] = next[PROVIDER_CONFIG_MODEL_OVERRIDES_KEY]
+		}
+		delete next[PROVIDER_CONFIG_MODEL_OVERRIDES_KEY]
+	}
+	return withResolvedWindow(next)
+}
+
+/**
+ * A scoped tab's provider config as a profile stores it: the inverse of
+ * {@link scopedProviderConfigFromProfile}, and the form two provider configs
+ * are compared in.
+ *
+ * Without the tab's picker key, and with its overrides under the profile's
+ * spelling, so a profile saved from Node1 loads into Act with its window and
+ * output cap committed rather than dropped as an unknown provider field. The
+ * window is captured as `contextWindow` whichever field held it.
+ */
+export function profileProviderConfigFromScope(providerConfig: Record<string, unknown>): Record<string, unknown> {
+	const next: Record<string, unknown> = { ...withoutScopeBookkeeping(providerConfig) }
+	if (next[SCOPED_MODEL_OVERRIDES_KEY] !== undefined) {
+		if (next[PROVIDER_CONFIG_MODEL_OVERRIDES_KEY] === undefined) {
+			next[PROVIDER_CONFIG_MODEL_OVERRIDES_KEY] = next[SCOPED_MODEL_OVERRIDES_KEY]
+		}
+		delete next[SCOPED_MODEL_OVERRIDES_KEY]
+	}
+	return withResolvedWindow(next)
+}
+
+/**
  * How each profile-carried provider field is spelled when a profile does not
  * carry it.
  *
@@ -195,6 +292,9 @@ export function providerConfigPatchForProfile(providerConfig: Record<string, unk
 	// Not the saving tab's picker key: the model is committed as a selection.
 	const patch: Record<string, unknown> = { ...withoutScopeBookkeeping(providerConfig ?? {}) }
 	delete patch[PROVIDER_CONFIG_MODEL_OVERRIDES_KEY]
+	// The scoped spelling of the same overrides, which a profile saved from a
+	// scoped tab by an earlier build carries. Committed with the selection too.
+	delete patch[SCOPED_MODEL_OVERRIDES_KEY]
 	// Which sections the profile actually carries, read before the clears below
 	// fill the rest in — a section the profile does not have is cleared whole,
 	// and must not then be handed a field-level clear that makes it non-empty
@@ -418,7 +518,11 @@ function providerConfigsEqual(stored: Record<string, unknown> | undefined, panel
 	if (panel === undefined) {
 		return true
 	}
-	return sameValues(withoutScopeBookkeeping(stored ?? {}), withoutScopeBookkeeping(panel))
+	// In the profile's spelling on both sides: a scoped tab stores a loaded
+	// profile's overrides as `selectedModelOverrides` and its window as
+	// `contextWindow`, and the same settings under the tab's keys are not a
+	// change to the profile.
+	return sameValues(profileProviderConfigFromScope(stored ?? {}), profileProviderConfigFromScope(panel))
 }
 
 /**

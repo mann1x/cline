@@ -1,5 +1,6 @@
 import { TooltipContent, TooltipTrigger } from "@radix-ui/react-tooltip"
 import { azureOpenAiDefaultApiVersion, type OpenAiCompatibleModelInfo, openAiModelInfoSafeDefaults } from "@shared/api"
+import { scopedContextWindow } from "@shared/api-config-snapshot"
 import { OpenAiModelsRequest } from "@shared/proto/cline/models"
 import { fromProtobufModelInfo } from "@shared/proto-conversions/models/typeConversion"
 import type { Mode } from "@shared/storage/types"
@@ -20,6 +21,7 @@ import { DropdownContainer } from "../common/ModelSelector"
 import { RequestTimingsToggle } from "../common/RequestTimingsToggle"
 import { SamplingSection } from "../common/SamplingSection"
 import { ThinkingBudgetField } from "../common/ThinkingBudgetField"
+import { useApiConfigurationScope } from "../utils/ApiConfigurationScopeContext"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
 import { useProviderApiKeyField } from "../utils/useProviderApiKeyField"
 
@@ -45,6 +47,7 @@ export const OpenAICompatibleProvider = ({
 	const { apiConfiguration, remoteConfigSettings } = useExtensionState()
 	const { handleFieldChange, handleModeFieldChange } = useApiConfigurationHandlers()
 	const { config, write, commitSelection } = useProviderConfig(providerId)
+	const scope = useApiConfigurationScope()
 
 	const [modelConfigurationSelected, setModelConfigurationSelected] = useState(false)
 	const [isCustomOpenAiModelEntryVisible, setIsCustomOpenAiModelEntryVisible] = useState(false)
@@ -93,6 +96,23 @@ export const OpenAICompatibleProvider = ({
 	// resolved ModelInfo satisfies it structurally.
 	const openAiModelInfo: OpenAiCompatibleModelInfo = selectedModelInfo ?? openAiModelInfoSafeDefaults
 	const selectedModelOverrides = fromProtobufProviderModelOverrides(committedSelection?.overrides) ?? {}
+	// The window this configuration has stored, read by the resolver the
+	// session reads it with (`scopedContextWindow`): the config's own
+	// `contextWindow`, then the committed overrides. `undefined` is "none".
+	const storedContextWindow = scopedContextWindow({
+		...((config ?? {}) as Record<string, unknown>),
+		selectedModelOverrides,
+	})
+	// A tab that keeps its own snapshot (Agents, Vision, Escalation) has no
+	// resolved model info: its selection is `{ modelId, overrides }`, so
+	// `openAiModelInfo` above is the safe default and its 128000 was shown as
+	// though stored -- on pandorum over a stored 65536, with the agents running
+	// at 256000. There the box shows what is stored, and nothing when nothing
+	// is. Plan and Act keep the host's resolved model info.
+	const ownsContextWindow = !!scope?.ownsProviderSettings
+	const displayedContextWindow = ownsContextWindow ? storedContextWindow : openAiModelInfo?.contextWindow
+	const displayedModelInfo =
+		ownsContextWindow && selectedModelInfo ? { ...selectedModelInfo, contextWindow: storedContextWindow } : selectedModelInfo
 	// Plan and Act have independent selections, so each mode gets its own
 	// pending accumulator: a pending commit in one mode must never become
 	// the base (or the model id) for an edit in the other mode, and a round
@@ -184,12 +204,19 @@ export const OpenAICompatibleProvider = ({
 			// Compare against the pending override when one is in flight so a
 			// quick revert during a commit round-trip is not mistaken for an
 			// echo of the (stale) displayed value.
+			//
+			// The context window is compared against what is *stored*, not what
+			// the box happened to display. Compared against the display, the
+			// scoped tabs' safe-default 128000 made typing 128000 over a stored
+			// 65536 read as an echo, and nothing was saved.
 			const pending = selectedModelOverridesRef.current[currentMode]
 			const pendingOverrides = pending.modelId === selectedModelId?.trim() ? pending.overrides : undefined
 			const effectiveValue =
 				pendingOverrides && Object.hasOwn(pendingOverrides, key)
 					? displayedModelNumber(pendingOverrides[key] as number | undefined)
-					: displayedModelNumber(openAiModelInfo?.[key])
+					: key === "contextWindow"
+						? storedContextWindow
+						: displayedModelNumber(openAiModelInfo?.[key])
 			if (parsed.value === effectiveValue) {
 				return
 			}
@@ -219,7 +246,7 @@ export const OpenAICompatibleProvider = ({
 			}
 			updateModelOverride(key, parsed.value)
 		},
-		[updateModelOverride, currentMode, openAiModelInfo, selectedModelId, write],
+		[updateModelOverride, currentMode, openAiModelInfo, selectedModelId, storedContextWindow, write],
 	)
 
 	// Debounced function to refresh OpenAI models (prevents excessive API calls while typing)
@@ -561,10 +588,14 @@ export const OpenAICompatibleProvider = ({
 			    where Ollama's does -- in the open, above the section -- rather
 			    than folded away with the prices. */}
 			<DebouncedTextField
-				initialValue={formatOptionalModelNumber(openAiModelInfo?.contextWindow)}
+				initialValue={formatOptionalModelNumber(displayedContextWindow)}
 				numeric
 				onChange={(value) => updateNumericModelOverride("contextWindow", "Model Context Window", value)}
-				placeholder={`Default: ${openAiModelInfoSafeDefaults.contextWindow}`}
+				placeholder={
+					ownsContextWindow
+						? "Not set: the model's catalog window applies"
+						: `Default: ${openAiModelInfoSafeDefaults.contextWindow}`
+				}
 				style={{ width: "100%" }}>
 				<span className="font-semibold">Model Context Window</span>
 			</DebouncedTextField>
@@ -701,7 +732,7 @@ export const OpenAICompatibleProvider = ({
 				<ModelInfoView
 					capabilitiesElsewhere
 					isPopup={isPopup}
-					modelInfo={selectedModelInfo}
+					modelInfo={displayedModelInfo}
 					selectedModelId={selectedModelId}
 				/>
 			)}

@@ -55,6 +55,7 @@ import {
 import { agentNodeLabels, PRIMARY_AGENT_NODE_ID, parseAgentNodes, polykvPriorityZeroApplies } from "@shared/agent-nodes"
 import type { ApiConfiguration } from "@shared/api"
 import { profileProviderSettingsFor } from "@shared/api-config-profiles"
+import { scopedContextWindow } from "@shared/api-config-snapshot"
 import { ClineClient } from "@shared/cline"
 import type { HistoryItem } from "@shared/HistoryItem"
 import { DEFAULT_LANGUAGE_SETTINGS, getLanguageKey, type LanguageDisplay } from "@shared/Languages"
@@ -1345,6 +1346,32 @@ export async function buildDelegatedAgentConnection(
 	} catch (error) {
 		Logger.warn(`[${label}] Failed to resolve known models for provider=${sdkProviderId}:`, error)
 	}
+
+	// The tab's own window, for every provider but Ollama (resolved above, with
+	// the server's declared `num_ctx` behind it).
+	//
+	// Without this the agents took the `models.json` catalog entry for their
+	// model id -- one entry per id, shared by every scope that names it, and on
+	// pandorum written by an old unscoped edit: Node1 said 128000 and the agents
+	// ran at 256000. Read by the resolver the tab displays from, so the number
+	// in the box is the number the agents get. A tab that names none falls
+	// through to the catalog, as before.
+	const scopedWindow = providerId === "ollama" ? undefined : scopedContextWindow(providerSettings)
+	let scopedModelInfo: SdkModelInfo | undefined
+	if (scopedWindow !== undefined) {
+		const known = knownModels?.[modelId]
+		scopedModelInfo = {
+			...known,
+			id: modelId,
+			name: known?.name ?? modelId,
+			contextWindow: scopedWindow,
+			maxInputTokens: Math.min(known?.maxInputTokens ?? scopedWindow, scopedWindow),
+		}
+		// Into the catalog copy as well: the runtime reads `knownModels[modelId]`
+		// ahead of `modelInfo`, so the catalog's 256000 left there still wins.
+		knownModels = { ...(knownModels ?? {}), [modelId]: scopedModelInfo }
+		Logger.log(`[${label}] Context window: ${scopedWindow} from the tab (model=${modelId})`)
+	}
 	const hasKnownModels = !!knownModels && Object.keys(knownModels).length > 0
 
 	// The tab's own tool-result cap, when it names one. Absent, the delegated
@@ -1408,6 +1435,7 @@ export async function buildDelegatedAgentConnection(
 		// to bare global fetch.
 		providerConfig: {
 			...(ollamaConfig ?? {}),
+			...(scopedModelInfo ? { modelInfo: scopedModelInfo } : {}),
 			// The tab's PolyKV section, which this list had been leaving out:
 			// a node on an opencoti server ran with pooling and swarms off
 			// whatever its tab said, and nothing could tell a node offered
@@ -1720,7 +1748,18 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// Ollama it can answer exactly -- `num_ctx` is in the Modelfile and
 	// `/api/show` reports it -- rather than being guessed at by a catalog that
 	// has never heard of a local model.
-	const configuredContextWindow = positiveFiniteNumber(ollamaProviderConfig?.modelInfo?.contextWindow)
+	//
+	// Off Ollama the configured window is the one the profile in force for this
+	// mode names, by the resolver every scoped tab uses. It used to be nothing:
+	// an opencoti lead read only the `models.json` entry for its model id, which
+	// every scope naming that id shares, so a profile with its own window ran
+	// on whichever number the last unscoped edit had left in the catalog. With
+	// no profile, or one that names no window, the catalog entry -- which is
+	// what this mode's own panel writes -- stays the answer.
+	const configuredContextWindow =
+		toSdkProviderId(providerId) === "ollama"
+			? positiveFiniteNumber(ollamaProviderConfig?.modelInfo?.contextWindow)
+			: scopedContextWindow(profileSettings)
 	const declaredContextWindow =
 		configuredContextWindow === undefined && toSdkProviderId(providerId) === "ollama"
 			? await resolveOllamaContextWindow(apiConfig ? resolveBaseUrl(providerId, apiConfig) : undefined, modelId)

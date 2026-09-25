@@ -17,8 +17,10 @@ import {
 	captureApiConfigurationSnapshot,
 	captureProviderConfigSnapshot,
 	PROVIDER_CONFIG_MODEL_OVERRIDES_KEY,
+	profileProviderConfigFromScope,
 	providerConfigPatchForProfile,
-	withoutScopeBookkeeping,
+	SCOPED_MODEL_OVERRIDES_KEY,
+	scopedProviderConfigFromProfile,
 } from "@shared/api-config-snapshot"
 import { CommitModelSelectionRequest } from "@shared/proto/cline/models"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
@@ -222,7 +224,11 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 			// the last profile's per-turn cap is that number showing up under a
 			// name that never chose it.
 			const profileProviderConfig = snapshot.providerConfig as Record<string, unknown> | undefined
-			const modelOverrides = (profileProviderConfig?.[PROVIDER_CONFIG_MODEL_OVERRIDES_KEY] ?? {}) as Record<string, unknown>
+			// Under either spelling: a profile saved from a scoped tab by an
+			// earlier build carries its overrides as `selectedModelOverrides`.
+			const modelOverrides = (profileProviderConfig?.[PROVIDER_CONFIG_MODEL_OVERRIDES_KEY] ??
+				profileProviderConfig?.[SCOPED_MODEL_OVERRIDES_KEY] ??
+				{}) as Record<string, unknown>
 			// Everything the profile carries, plus a clear for every field it does
 			// not — a patch only changes what it names, so the fields left out are
 			// how the previous profile's values ended up under this profile's name.
@@ -234,8 +240,14 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 				// context window onto the entry the *session's* model reads, so
 				// loading a profile into Vision resized Plan and Act — the one
 				// window between them that having a snapshot per tab exists to end.
+				//
+				// Under the keys the tab reads, not the profile's: a profile files
+				// the model's overrides as `modelOverrides` and the tab's panel reads
+				// `selectedModelOverrides`, so a window carried only there was
+				// stored where nothing on the tab looked -- the box showed a default
+				// and the agents ran on the catalog's number.
 				const providerConfig = {
-					...((snapshot.providerConfig as Record<string, unknown> | undefined) ?? {}),
+					...scopedProviderConfigFromProfile(snapshot.providerConfig as Record<string, unknown> | undefined),
 					// The tab keeps its selection inside the snapshot, under the key
 					// its picker reads.
 					...(selection.modelId ? { selectedModelId: selection.modelId } : {}),
@@ -392,9 +404,13 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 			// Without the tab's own picker key: the profile is the same one Plan
 			// and Act load, and a key only this kind of tab writes made it read as
 			// changed there. A load puts it back (`applySnapshot`).
+			//
+			// And in the profile's spelling: the window under `contextWindow`
+			// whichever field the tab held it in, the overrides under
+			// `modelOverrides`, so the profile loads into Plan or Act with both.
 			const providerConfig = currentSnapshot.providerConfig as Record<string, unknown> | undefined
 			return providerConfig
-				? { ...currentSnapshot, providerConfig: withoutScopeBookkeeping(providerConfig) }
+				? { ...currentSnapshot, providerConfig: profileProviderConfigFromScope(providerConfig) }
 				: currentSnapshot
 		}
 		const base = captureApiConfigurationSnapshot(apiConfiguration, scopeMode)

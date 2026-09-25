@@ -118,4 +118,30 @@ describe("buildSdkProviderConfig", () => {
 		expect(providerConfig.providerId).toBe("ollama")
 		expect("timeoutMs" in providerConfig).toBe(false)
 	})
+
+	// The Vision tab stores its window in its own snapshot. Only Ollama read
+	// it; a vision model on opencoti ran on the shared models.json entry.
+	it.each([
+		["contextWindow", { contextWindow: 32_768 }],
+		["selectedModelOverrides.contextWindow", { selectedModelOverrides: { contextWindow: 32_768 } }],
+		["modelOverrides.contextWindow", { modelOverrides: { contextWindow: 32_768 } }],
+	])("carries a non-Ollama vision tab's %s", (_label, visionProviderSettings) => {
+		const providerConfig = buildSdkProviderConfig(
+			{ actModeApiProvider: "opencoti" as never, actModeApiModelId: "vision.gguf" },
+			"act",
+			{ visionProviderSettings },
+		)
+
+		expect(providerConfig.modelInfo).toMatchObject({ id: "vision.gguf", contextWindow: 32_768, maxInputTokens: 32_768 })
+	})
+
+	it("leaves the catalog's window alone when the vision tab names none", () => {
+		const providerConfig = buildSdkProviderConfig(
+			{ actModeApiProvider: "opencoti" as never, actModeApiModelId: "vision.gguf" },
+			"act",
+			{ visionProviderSettings: { contextWindow: 0 } },
+		)
+
+		expect(providerConfig.modelInfo).toBeUndefined()
+	})
 })

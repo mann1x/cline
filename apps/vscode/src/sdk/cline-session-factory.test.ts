@@ -5,6 +5,14 @@ import type { CoreSessionConfig } from "@cline/core"
 import * as LlmsModels from "@cline/llms"
 import { OLLAMA_DEFAULT_REASONING_EFFORT } from "@cline/llms"
 import { buildOutputBudgetSection } from "@cline/shared"
+import {
+	CATALOG_CONTEXT_WINDOW,
+	NODE_MODEL_ID,
+	NODE_WINDOW_CASES,
+	opencotiNodeSnapshot,
+} from "@shared/__tests__/scoped-context-window.fixtures"
+import { scopedContextWindow, scopedProviderConfigFromProfile } from "@shared/api-config-snapshot"
+import { snapshotProviderSettings } from "@shared/model-scope-config"
 import { ApiFormat } from "@shared/proto/cline/models"
 import { Logger } from "@shared/services/Logger"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -95,6 +103,19 @@ vi.mock("@shared/services/Logger", () => ({
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * The shared `models.json` entry for the node fixtures' model, at
+ * {@link CATALOG_CONTEXT_WINDOW} -- written the way the unscoped panel writes
+ * it, through the store, so every reader of the registry sees it.
+ */
+function mockNodeCatalog(extra: Record<string, unknown> = {}): void {
+	createProviderConfigStore().commitSelection(parseProviderId("opencoti"), "act", {
+		providerId: parseProviderId("opencoti"),
+		modelId: NODE_MODEL_ID,
+		overrides: { contextWindow: CATALOG_CONTEXT_WINDOW, ...extra },
+	})
+}
 
 let tempDir: string
 const previousGlobalSettingsPath = process.env.CLINE_GLOBAL_SETTINGS_PATH
@@ -575,6 +596,50 @@ describe("buildSessionConfig", () => {
 		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
 
 		expect((config.providerConfig as { modelInfo?: { contextWindow?: number } }).modelInfo?.contextWindow).toBe(131072)
+	})
+
+	// The same rule off Ollama. An opencoti lead read its window only from the
+	// `models.json` entry for its model id -- an entry every scope naming that
+	// id shares -- so a profile in force for this mode with its own window
+	// still ran at whatever the last unscoped edit had put in the catalog.
+	it.each([
+		["contextWindow", { contextWindow: 128_000 }],
+		["modelOverrides.contextWindow", { modelOverrides: { contextWindow: 128_000 } }],
+	])("lets an opencoti profile's %s win over the models.json catalog", async (_label, providerConfig) => {
+		mockNodeCatalog({ maxInputTokens: CATALOG_CONTEXT_WINDOW })
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			actModeApiProvider: "opencoti",
+			actModeApiModelId: NODE_MODEL_ID,
+		} as any)
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string): any => {
+			if (key === "subagentsEnabled" || key === "useAutoCondense") {
+				return false
+			}
+			if (key === "apiConfigurationProfiles") {
+				return JSON.stringify([{ name: "node", updatedAt: 1, snapshot: { global: {}, mode: {}, providerConfig } }])
+			}
+			if (key === "activeApiConfigurationProfile") {
+				return JSON.stringify({ act: "node" })
+			}
+			return undefined
+		})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.modelId).toBe(NODE_MODEL_ID)
+		expect(config.knownModels?.[NODE_MODEL_ID]).toMatchObject({ contextWindow: 128_000, maxInputTokens: 128_000 })
+	})
+
+	it("keeps the opencoti lead on the catalog window when its profile names none", async () => {
+		mockNodeCatalog()
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			actModeApiProvider: "opencoti",
+			actModeApiModelId: NODE_MODEL_ID,
+		} as any)
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.knownModels?.[NODE_MODEL_ID]?.contextWindow).toBe(CATALOG_CONTEXT_WINDOW)
 	})
 
 	it("carries the provider entry's tool selection onto the session", async () => {
@@ -2332,6 +2397,88 @@ describe("buildDelegatedAgentConnection", () => {
 		["the tab names no provider", JSON.stringify({ global: {}, mode: {} })],
 	])("reports no connection when %s", async (_label, stored) => {
 		expect(await buildDelegatedAgentConnection({ actModeApiProvider: "ollama" } as never, stored)).toBeUndefined()
+	})
+
+	// pandorum, 2026-09-25: Node1 on opencoti, 128000 typed into the tab, the
+	// agents running at 256000. Only Ollama resolved a window here; every other
+	// provider took the shared `models.json` catalog, whose entry for this
+	// model id came from an old unscoped edit and leaks into every scope that
+	// names the same model.
+	describe("a window on a non-Ollama node", () => {
+		function catalog() {
+			mockNodeCatalog({ maxInputTokens: CATALOG_CONTEXT_WINDOW, maxTokens: 16_000 })
+		}
+
+		it.each(
+			NODE_WINDOW_CASES.filter((c) => c.expected !== undefined).map((c) => [c.label, c] as const),
+		)("takes the tab's %s over the models.json catalog", async (_label, windowCase) => {
+			catalog()
+			const connection = await buildDelegatedAgentConnection(
+				{ actModeApiProvider: "ollama" } as never,
+				opencotiNodeSnapshot(windowCase.providerConfig),
+			)
+
+			expect(connection?.modelId).toBe(NODE_MODEL_ID)
+			expect(connection?.providerConfig?.modelInfo).toMatchObject({
+				id: NODE_MODEL_ID,
+				contextWindow: windowCase.expected,
+				maxInputTokens: windowCase.expected,
+			})
+			// And the catalog copy the runtime reads first (`knownModels[modelId]`
+			// wins over `modelInfo` in the orchestrator), with the rest of the
+			// catalog's facts about the model kept.
+			for (const known of [connection?.knownModels, connection?.providerConfig?.knownModels]) {
+				expect(known?.[NODE_MODEL_ID]).toMatchObject({
+					contextWindow: windowCase.expected,
+					maxInputTokens: windowCase.expected,
+					maxTokens: 16_000,
+				})
+			}
+		})
+
+		// A profile files its window among `modelOverrides`. Loaded into Node1
+		// it is stored the way the tab reads it; a build before the mapping
+		// stored it verbatim. Both have to reach the agents.
+		it.each([
+			["as a load now stores it", scopedProviderConfigFromProfile({ modelOverrides: { contextWindow: 65_536 } })],
+			["as an older load stored it", { modelOverrides: { contextWindow: 65_536 } }],
+		])("uses a loaded profile's modelOverrides window %s", async (_label, providerConfig) => {
+			catalog()
+			const connection = await buildDelegatedAgentConnection(
+				{ actModeApiProvider: "ollama" } as never,
+				opencotiNodeSnapshot({ ...providerConfig, selectedModelId: NODE_MODEL_ID }),
+			)
+
+			expect(connection?.providerConfig?.modelInfo?.contextWindow).toBe(65_536)
+			expect(connection?.knownModels?.[NODE_MODEL_ID]?.contextWindow).toBe(65_536)
+		})
+
+		it("leaves the catalog's window in place when the tab names none", async () => {
+			catalog()
+			const connection = await buildDelegatedAgentConnection(
+				{ actModeApiProvider: "ollama" } as never,
+				opencotiNodeSnapshot({ selectedModelId: NODE_MODEL_ID }),
+			)
+
+			expect(connection?.providerConfig?.modelInfo).toBeUndefined()
+			expect(connection?.knownModels?.[NODE_MODEL_ID]?.contextWindow).toBe(CATALOG_CONTEXT_WINDOW)
+		})
+
+		// The contract with the panel: what the Agents tab shows for a snapshot
+		// is `scopedContextWindow` of its provider config (asserted on the
+		// webview side over these same fixtures), so the connection must resolve
+		// exactly that -- including "none", where both fall through.
+		it.each(
+			NODE_WINDOW_CASES.map((c) => [c.label, c] as const),
+		)("resolves what the tab shows for %s", async (_label, windowCase) => {
+			catalog()
+			const snapshot = opencotiNodeSnapshot(windowCase.providerConfig)
+			const connection = await buildDelegatedAgentConnection({ actModeApiProvider: "ollama" } as never, snapshot)
+			const shown = scopedContextWindow(snapshotProviderSettings(snapshot))
+
+			expect(shown).toBe(windowCase.expected)
+			expect(connection?.knownModels?.[NODE_MODEL_ID]?.contextWindow).toBe(shown ?? CATALOG_CONTEXT_WINDOW)
+		})
 	})
 })
 
