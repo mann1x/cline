@@ -79,7 +79,10 @@ jobs:
             matrix:
                 include: ${{ fromJson(needs.matrix_prep.outputs.matrix) }}
         runs-on: ${{ matrix.runner }}-latest
-        timeout-minutes: 20
+        # The Windows leg takes ~15 min on a warm cache. The limit also has to
+        # hold the capped Bun-cache download below plus the cold install it
+        # falls back to.
+        timeout-minutes: 30
         # Nothing in this job uses OIDC, so it does not need an id-token
         # permission.
         permissions:
@@ -98,9 +101,16 @@ jobs:
             # fallbacks); a miss just means a cold install, which is acceptable.
 
             # Cache Bun's global install cache - keyed on the authoritative root bun.lock.
+            # A restore normally takes ~3.5 min on Windows. One stalled
+            # download took 11.5 min, and the job's 20-minute limit then
+            # cancelled it partway through the tests. With the download
+            # capped, a stall becomes a cache miss: a cold install is slower
+            # but still fits the job's time.
             - name: Cache Bun install cache
               uses: actions/cache@v4
               id: bun-cache
+              env:
+                  SEGMENT_DOWNLOAD_TIMEOUT_MINS: 6
               with:
                   path: ~/.bun/install/cache
                   key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
