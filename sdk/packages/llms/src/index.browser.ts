@@ -56,6 +56,16 @@ export {
 	type ResolveProviderRequestHeadersInput,
 	resolveProviderRequestHeaders,
 } from "./providers/request-headers";
+// Shared with the webview: ClineError reads the code to pick the "Can't
+// resume" card. The module has no imports, so it is browser-safe.
+export {
+	formatWindowK,
+	isOpencotiWindowUnavailableError,
+	OPENCOTI_WINDOW_UNAVAILABLE_CODE,
+	type OpencotiWindowUnavailableDetails,
+	OpencotiWindowUnavailableError,
+	parseOpencotiWindowUnavailable,
+} from "./providers/vendors/opencoti-window";
 export type {
 	ProviderCapability,
 	ProviderId,
