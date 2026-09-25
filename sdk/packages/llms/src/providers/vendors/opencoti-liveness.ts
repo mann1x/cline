@@ -236,21 +236,105 @@ type ChunkRead = Awaited<
 	ReturnType<ReadableStreamDefaultReader<Uint8Array>["read"]>
 >;
 
-/** Splits a byte stream into lines, keeping the unfinished tail. */
-class LineSplitter {
+/**
+ * Splits a byte stream into lines, keeping the unfinished tail, and drops the
+ * `data: null` events on the way.
+ *
+ * With `stream_options.keepalive` opencoti opens the stream before its first
+ * result exists, and writes that missing result as `data: null` -- the first
+ * frame of every keepalive stream (patch 0388:
+ * `first_result_json = first_result ? ... : json(nullptr)`). It carries
+ * nothing, and the AI SDK's chunk schema rejects it: in 4.100.195 every
+ * keepalive stream died on it, 48 agents of a 75-agent swarm within seconds
+ * of dispatch. So an event whose data is exactly `null` is dropped whole --
+ * its `event:`/`id:` lines and the blank line that ends it with it -- and
+ * never reaches the SDK or the first-event logic below.
+ *
+ * An event is held from its first field line to the blank line that ends it,
+ * which costs nothing: an SSE parser dispatches nothing before that blank line
+ * either. A comment outside an event is passed at once, as it came.
+ */
+class SseLineFilter {
 	private readonly decoder = new TextDecoder();
+	private readonly encoder = new TextEncoder();
 	private carry = "";
-	push(chunk: Uint8Array): string[] {
+	/** The field lines of the event not yet ended. */
+	private pending: string[] = [];
+	/** The complete lines kept by the last push or flush, for the event reader. */
+	lines: string[] = [];
+
+	/** The bytes of `chunk` that go on, possibly none. */
+	push(chunk: Uint8Array): Uint8Array {
 		this.carry += this.decoder.decode(chunk, { stream: true });
 		const lines = this.carry.split("\n");
 		this.carry = lines.pop() ?? "";
-		return lines.map((line) => line.replace(/\r$/, ""));
+		return this.encode(this.filter(lines), "");
 	}
-	flush(): string[] {
+
+	/**
+	 * What is left at the end of the stream: an event nobody ended, and a last
+	 * line without its newline. Neither is dispatched by an SSE parser; both go
+	 * on as they came, unless they are the null event.
+	 */
+	flush(): Uint8Array {
 		const rest = this.carry + this.decoder.decode();
 		this.carry = "";
-		return rest ? [rest.replace(/\r$/, "")] : [];
+		const last = stripCr(rest);
+		const event = last ? [...this.pending, last] : this.pending;
+		const held = this.pending;
+		this.pending = [];
+		if (isNullEvent(event)) {
+			this.lines = [];
+			return new Uint8Array(0);
+		}
+		this.lines = event;
+		return this.encode(held, rest);
 	}
+
+	private filter(raw: string[]): string[] {
+		const out: string[] = [];
+		for (const line of raw.map(stripCr)) {
+			if (this.pending.length === 0) {
+				if (line === "" || line.startsWith(":")) {
+					out.push(line);
+				} else {
+					this.pending.push(line);
+				}
+				continue;
+			}
+			if (line !== "") {
+				this.pending.push(line);
+				continue;
+			}
+			if (!isNullEvent(this.pending)) {
+				out.push(...this.pending, "");
+			}
+			this.pending = [];
+		}
+		this.lines = out;
+		return out;
+	}
+
+	private encode(lines: string[], tail: string): Uint8Array {
+		if (lines.length === 0 && !tail) {
+			return new Uint8Array(0);
+		}
+		return this.encoder.encode(
+			lines.map((line) => `${line}\n`).join("") + tail,
+		);
+	}
+}
+
+function stripCr(line: string): string {
+	return line.replace(/\r$/, "");
+}
+
+/** The event's data is exactly `null`: the first result that was not there. */
+function isNullEvent(lines: string[]): boolean {
+	const data = lines
+		.filter((line) => line.startsWith("data:"))
+		.map((line) => line.slice("data:".length));
+	return data.length > 0 && data.join("\n").trim() === "null";
 }
 
 type StreamEvent =
@@ -359,7 +443,8 @@ export async function superviseKeepaliveStream(
 		return response;
 	}
 	const reader = response.body.getReader();
-	const splitter = new LineSplitter();
+	// What goes on: every byte but the `data: null` events.
+	const filter = new SseLineFilter();
 	const readEvent = createEventReader();
 	const deadMs =
 		options.pingSeconds !== undefined &&
@@ -454,22 +539,30 @@ export async function superviseKeepaliveStream(
 		return { data };
 	};
 
-	// Up to the first event that is not a comment.
+	// Up to the first event that is not a comment. A `data: null` event is
+	// not one: it never leaves the filter, so an error after it is still the
+	// first result's.
 	const read: Uint8Array[] = [];
+	const keep = (bytes: Uint8Array) => {
+		if (bytes.length > 0) {
+			read.push(bytes);
+		}
+	};
 	let ended = false;
 	while (true) {
 		const result = await readWithin();
 		if (result.done) {
 			ended = true;
-			const tail = consider(splitter.flush());
+			keep(filter.flush());
+			const tail = consider(filter.lines);
 			if (tail.error && !tail.data) {
 				showPhase(undefined);
 				return firstResultErrorResponse(response, tail.error);
 			}
 			break;
 		}
-		read.push(result.value);
-		const seen = consider(splitter.push(result.value));
+		keep(filter.push(result.value));
+		const seen = consider(filter.lines);
 		if (seen.error && !seen.data) {
 			reader.cancel().catch(() => {});
 			showPhase(undefined);
@@ -492,20 +585,32 @@ export async function superviseKeepaliveStream(
 		},
 		async pull(controller) {
 			try {
-				const result = await readWithin();
-				if (result.done) {
-					consider(splitter.flush());
-					showPhase(undefined);
-					controller.close();
-					return;
+				// Until something goes on: a read can be all null event, or a
+				// line without its end yet.
+				while (true) {
+					const result = await readWithin();
+					if (result.done) {
+						const tail = filter.flush();
+						consider(filter.lines);
+						showPhase(undefined);
+						if (tail.length > 0) {
+							controller.enqueue(tail);
+						}
+						controller.close();
+						return;
+					}
+					const bytes = filter.push(result.value);
+					// Silent generation (hidden reasoning, a long draft round) is
+					// pinged too; the row says so until the next frame.
+					const seen = consider(filter.lines);
+					if (seen.data || seen.error) {
+						showPhase(undefined);
+					}
+					if (bytes.length > 0) {
+						controller.enqueue(bytes);
+						return;
+					}
 				}
-				// Silent generation (hidden reasoning, a long draft round) is
-				// pinged too; the row says so until the next frame.
-				const seen = consider(splitter.push(result.value));
-				if (seen.data || seen.error) {
-					showPhase(undefined);
-				}
-				controller.enqueue(result.value);
 			} catch (error) {
 				showPhase(undefined);
 				controller.error(error);

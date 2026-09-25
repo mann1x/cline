@@ -2451,7 +2451,78 @@ export function withRateLimitRetry(
 	});
 }
 
+/**
+ * The upstream request, aborted whenever its response is abandoned unfinished.
+ *
+ * Reading a response to its end or its error is not the same as closing the
+ * connection it came on. `streamText` tees its base stream for every consumer,
+ * and a tee cancels its source only when BOTH branches are cancelled: when
+ * {@link emitAiSdkEvents} stops at an error part -- or the agent loop stops
+ * reading, on a failed turn or a watchdog -- the branch it read is cancelled
+ * and the other one, which nobody reads, keeps the HTTP response open. The
+ * server never sees a disconnect and generates to the end. Measured on a
+ * 75-agent swarm (4.100.195): five slots decoding 13k+ tokens at ~30 tok/s
+ * for agents already marked failed, each holding a 262k-cell KV booking that
+ * starved every other agent.
+ *
+ * So each turn gets its own signal, following the caller's, and aborted here
+ * when the turn ends in anything but a clean `finish`: an error finish, a
+ * throw, or a consumer that returns early. Aborting the fetch is what closes
+ * the connection (undici destroys the socket), which is what stops the server.
+ * Every provider built here gets it, and every opencoti request path with it
+ * -- lead, worker, keepalive or not -- since each passes `init.signal` on.
+ */
+export async function* abortWhenAbandoned(
+	request: GatewayStreamRequest,
+	run: (
+		request: GatewayStreamRequest,
+	) => AsyncIterable<AgentModelEvent> | Promise<AsyncIterable<AgentModelEvent>>,
+): AsyncGenerator<AgentModelEvent> {
+	const upstream = new AbortController();
+	const caller = request.signal;
+	const follow = () => upstream.abort(caller?.reason);
+	if (caller?.aborted) {
+		follow();
+	} else {
+		caller?.addEventListener("abort", follow, { once: true });
+	}
+	let completed = false;
+	try {
+		for await (const event of await run({
+			...request,
+			signal: upstream.signal,
+		})) {
+			if (event.type === "finish") {
+				completed = event.reason !== "error";
+			}
+			yield event;
+		}
+	} finally {
+		caller?.removeEventListener("abort", follow);
+		if (!completed && !upstream.signal.aborted) {
+			upstream.abort(
+				new Error(
+					"the response was abandoned unfinished; the request is closed so the server stops generating",
+				),
+			);
+		}
+	}
+}
+
 function createAiSdkProvider(kind: ProviderModuleKind): GatewayProviderFactory {
+	const unsupervised = createUnsupervisedAiSdkProvider(kind);
+	return async (config) => {
+		const provider = await unsupervised(config);
+		return {
+			stream: (request, context) =>
+				abortWhenAbandoned(request, (owned) => provider.stream(owned, context)),
+		};
+	};
+}
+
+function createUnsupervisedAiSdkProvider(
+	kind: ProviderModuleKind,
+): GatewayProviderFactory {
 	return async (config) => ({
 		async *stream(request, context) {
 			const log = context.logger;
