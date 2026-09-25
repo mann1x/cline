@@ -92,7 +92,7 @@ import { SdkSessionHistoryLoader } from "./sdk-session-history-loader"
 import { SdkSessionLifecycle } from "./sdk-session-lifecycle"
 import { SdkSessionRebuildScheduler } from "./sdk-session-rebuild-scheduler"
 import { SdkTaskControlCoordinator } from "./sdk-task-control-coordinator"
-import { SdkTaskHistory, sessionHistoryRecordToHistoryItem } from "./sdk-task-history"
+import { SdkTaskHistory, sessionHistoryRecordToHistoryItem, type TaskSizeOnDisk } from "./sdk-task-history"
 import { SdkTaskStartCoordinator } from "./sdk-task-start-coordinator"
 import { createVscodeSdkTelemetryHandle, type VscodeSdkTelemetryHandle } from "./sdk-telemetry"
 import { SdkTerminalExecutionModeCoordinator } from "./sdk-terminal-execution-mode-coordinator"
@@ -2312,6 +2312,11 @@ export class Controller {
 		Logger.log(`[EXPORT] Opening task directory: ${taskDirPath}`)
 		const open = (await import("open")).default
 		await open(taskDirPath)
+	}
+
+	/** One task's footprint on disk, measured now; see `SdkTaskHistory.measureTaskSizeOnDisk`. */
+	async getTaskSizeOnDisk(id: string): Promise<TaskSizeOnDisk | undefined> {
+		return this.taskHistory.measureTaskSizeOnDisk(id)
 	}
 
 	async deleteTaskFromState(id: string): Promise<HistoryItem[]> {

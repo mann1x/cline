@@ -168,6 +168,17 @@ export class BannerService {
 	 * so the webview falls back to hardcoded welcome items.
 	 */
 	public getWelcomeBanners(): BannerCardData[] | undefined {
+		// Fork: the home view's news/"What's New" panel must not surface Cline's
+		// upstream announcements. Welcome banners are fetched from upstream
+		// (`{apiBaseUrl}/banners/v2/messages` → api.cline.bot); returning undefined
+		// here disables that upstream news source and lets the webview fall back to
+		// the hardcoded welcome items, exactly as it does when the flag is off.
+		// TODO(mann1x): repoint to a fork-owned news feed, then remove this guard.
+		const FORK_UPSTREAM_NEWS_DISABLED = true
+		if (FORK_UPSTREAM_NEWS_DISABLED) {
+			return undefined
+		}
+
 		const isLocal = process.env.IS_DEV === "true" || process.env.CLINE_ENVIRONMENT === "local"
 		const flagEnabled = isLocal || featureFlagsService.getBooleanFlagEnabled(FeatureFlag.REMOTE_WELCOME_BANNERS)
 

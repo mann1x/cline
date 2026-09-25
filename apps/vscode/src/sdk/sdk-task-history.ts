@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs"
 import path from "node:path"
-import type { ClineCoreListHistoryOptions, SessionHistoryRecord } from "@cline/core"
+import { type ClineCoreListHistoryOptions, readSessionCheckpointHistory, type SessionHistoryRecord } from "@cline/core"
 import type { MessageWithMetadata as SdkMessage } from "@cline/llms"
 import { formatDisplayUserInput, parseUserInputMode } from "@cline/shared"
 import { resolveSessionDataDir } from "@cline/shared/storage"
@@ -19,7 +19,13 @@ import {
 import type { MessageIdMinter } from "./message-id-minter"
 import { sdkMessagesToClineMessages } from "./message-translator"
 import type { SdkSessionLifecycle } from "./sdk-session-lifecycle"
+import { measureSessionDir, type SessionFootprint } from "./session-footprint"
 import type { VscodeSessionHost } from "./vscode-session-host"
+
+/** What "Size on disk" reports for one task. */
+export interface TaskSizeOnDisk extends SessionFootprint {
+	checkpointCount: number
+}
 
 export interface TaskUsage {
 	tokensIn: number
@@ -630,6 +636,37 @@ export class SdkTaskHistory {
 
 		const legacyItem = this.findLegacyTask(taskId)?.item
 		return legacyItem ? { ...legacyItem, isLegacy: true } : undefined
+	}
+
+	/**
+	 * Measure a task's footprint now, and refresh the size the list shows.
+	 *
+	 * The list's size is a cache filled the first time a session is listed and
+	 * never measured again, so a session whose delegated agents went on writing
+	 * overlays kept showing its size from before they started. This measures the
+	 * whole session directory -- transcripts, overlays, compaction state -- and
+	 * writes the result back as that cache.
+	 *
+	 * `undefined` for a task with no session directory: a legacy task, or a
+	 * sub-agent's, which is measured as part of its lead.
+	 */
+	async measureTaskSizeOnDisk(taskId: string): Promise<TaskSizeOnDisk | undefined> {
+		return this.withHistoryHost(async (host) => {
+			const record = (await host.get(taskId)) as SessionHistoryRecord | undefined
+			if (!record || record.isSubagent === true) {
+				return undefined
+			}
+			const messagesPath = typeof record.messagesPath === "string" ? record.messagesPath.trim() : ""
+			if (!messagesPath) {
+				return undefined
+			}
+			const footprint = await measureSessionDir(path.dirname(messagesPath))
+			if (!footprint) {
+				return undefined
+			}
+			await this.cacheTaskSize(host, record, footprint.totalBytes)
+			return { ...footprint, checkpointCount: readSessionCheckpointHistory(record).length }
+		})
 	}
 
 	async deleteTaskFromState(id: string): Promise<HistoryItem[]> {

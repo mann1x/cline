@@ -33,6 +33,11 @@ service TaskService {
   rpc clearTask(EmptyRequest) returns (Empty);
   // Gets the total size of all tasks
   rpc getTotalTasksSize(EmptyRequest) returns (Int64);
+  // Measures one task's footprint on disk now: its session directory
+  // (transcript, sub-agent transcripts, compaction state, agent overlays) and
+  // the checkpoints it holds in the workspace. Refreshes the cached size the
+  // history list shows, which is otherwise measured once and never again.
+  rpc getTaskSizeOnDisk(StringRequest) returns (TaskSizeOnDisk);
   // Deletes multiple tasks with the given IDs
   rpc deleteTasksWithIds(StringArrayRequest) returns (Empty);
   // Creates a new task with the given text and optional images
@@ -55,6 +60,24 @@ service TaskService {
   rpc executeQuickWin(ExecuteQuickWinRequest) returns (Empty);
   // Deletes all task history
   rpc deleteAllTaskHistory(EmptyRequest) returns (DeleteAllTaskHistoryCount);
+}
+
+// One task's footprint on disk, split by what wrote it.
+message TaskSizeOnDisk {
+  // Everything under the session directory, in bytes.
+  int64 total_bytes = 1;
+  // The lead's own transcript, manifest and compaction state.
+  int64 session_bytes = 2;
+  // Transcripts of the delegated agents the session ran.
+  int64 agent_transcript_bytes = 3;
+  // Delegated agents' overlays: their private copies of workspace files.
+  int64 overlay_bytes = 4;
+  // Checkpoints this session holds as git refs in the workspace. Their
+  // objects are shared with the repository, so they have a count, not a size.
+  int32 checkpoint_count = 5;
+  // False when the task has no session directory to measure (a legacy task,
+  // or one that was never persisted).
+  bool measured = 6;
 }
 
 // Request message for creating a new task
