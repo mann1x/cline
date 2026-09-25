@@ -1,8 +1,9 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { LanguageModelV4 } from "@ai-sdk/provider";
-import type {
-	GatewayProviderContext,
-	GatewayResolvedProviderConfig,
+import {
+	classifyTurnFaultError,
+	type GatewayProviderContext,
+	type GatewayResolvedProviderConfig,
 } from "@cline/shared";
 import { wrapLanguageModel } from "ai";
 import type { PolykvOptions } from "../config";
@@ -10,6 +11,7 @@ import { sleep as abortableSleep } from "../middleware/backoff";
 import { DEFAULT_MAX_RETRY_AFTER_MS } from "../middleware/retry-rate-limit";
 import { splitToolImagesMiddleware } from "../middleware/split-tool-images";
 import { primeTemplateReinjection } from "../reasoning-history";
+import { waitForServerHealth } from "../server-health";
 import { llamaCppTimingsMetadataExtractor } from "./llamacpp-timings";
 import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
 import { OpencotiWindowUnavailableError } from "./opencoti-window";
@@ -19,6 +21,7 @@ import {
 	hasOpencotiFeature,
 	OPENCOTI_FEATURES,
 	polykvAdmissionPolicy,
+	polykvRoot,
 	probeOpencotiProps,
 	recordPolykvGrantedWindow,
 	recordPolykvWindowObservation,
@@ -33,9 +36,11 @@ import {
 	isWorkerWindowFull,
 	markPolykvWorkerStarted,
 	movePolykvWorker,
-	POLYKV_WORKER_MAX_WAIT_MS,
+	notePolykvServerFault,
 	type PolykvLeadRoom,
 	type PolykvWorkerSpec,
+	polykvRoomBackoffMs,
+	polykvRootGeneration,
 	polykvWorkerStarted,
 	preparePolykvWorker,
 	readPolykvLeadRoom,
@@ -351,6 +356,8 @@ export function createOpencotiFetch(options: {
 		const extras = options.request;
 		let leadSession: string | undefined;
 		let leadAskedWindow = false;
+		/** The server generation of the lead pool id this request carries. */
+		let leadGeneration: number | undefined;
 		let body: Record<string, unknown> | undefined;
 		let negotiation: WindowNegotiation | undefined;
 		// The prefix the lead tree shares above a private budget, so the grant
@@ -443,6 +450,7 @@ export function createOpencotiFetch(options: {
 					}).catch(() => undefined);
 					if (leadPool && /^\d+$/.test(leadPool.poolId)) {
 						body.pool_id = Number(leadPool.poolId);
+						leadGeneration = leadPool.generation;
 						// `num_ctx` is the private budget on a server that says so,
 						// and the shared prefix rides above it. A new conversation
 						// then books its window minus what it shares -- the whole
@@ -483,7 +491,7 @@ export function createOpencotiFetch(options: {
 			}
 			nextInit = { ...init, body: JSON.stringify(body) };
 		}
-		const send = (wire: Record<string, unknown> | undefined) =>
+		const sendWire = (wire: Record<string, unknown> | undefined) =>
 			base(input, {
 				...nextInit,
 				...(wire ? { body: JSON.stringify(wire) } : {}),
@@ -492,6 +500,41 @@ export function createOpencotiFetch(options: {
 				// timeout is five minutes.
 				...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
 			} as RequestInit);
+		const leadBaseUrl = options.baseUrl;
+		const send = async (wire: Record<string, unknown> | undefined) => {
+			// A lead pool id is a number the server issued; after a restart the
+			// new server issues the same numbers to other pools. If the server
+			// was seen to restart since this request chose its pool -- a window
+			// refusal waited out across it -- the turn goes unpooled, which is
+			// slower and never wrong, and the next one rebuilds the chain.
+			let outgoing = wire;
+			if (
+				leadGeneration !== undefined &&
+				leadBaseUrl &&
+				polykvRootGeneration(leadBaseUrl) !== leadGeneration
+			) {
+				const { pool_id: _stale, ...rest } = wire ?? body ?? {};
+				outgoing = rest;
+			}
+			try {
+				const response = await sendWire(outgoing);
+				if (
+					leadGeneration !== undefined &&
+					leadBaseUrl &&
+					[502, 503, 504].includes(response.status)
+				) {
+					notePolykvServerFault(leadBaseUrl);
+				}
+				return response;
+			} catch (error) {
+				// Thrown on the way to a pooled lead turn: the server may be
+				// restarting, and the pools with it. The next turn asks first.
+				if (leadGeneration !== undefined && leadBaseUrl) {
+					notePolykvServerFault(leadBaseUrl);
+				}
+				throw error;
+			}
+		};
 
 		// A refusal goes back as a response, not as a throw.
 		//
@@ -536,6 +579,17 @@ export function createOpencotiFetch(options: {
 
 		if (leadSession !== undefined && leadAskedWindow && response.ok) {
 			markLeadWindowLive(leadSession);
+		}
+		if (
+			leadGeneration !== undefined &&
+			options.baseUrl &&
+			response.ok &&
+			!response.headers.has("x-context-window")
+		) {
+			// Every opencoti response names its window. A pooled lead turn that
+			// does not is a pool the server no longer holds -- restarted, or its
+			// window lapsed -- and the next turn asks the server first.
+			notePolykvServerFault(options.baseUrl);
 		}
 		const sessionId = extras?.sessionId;
 		// Every admitted response, header or not: an absent `X-Context-Window`
@@ -896,6 +950,9 @@ async function observeResponseFacts(
 	return response;
 }
 
+/** Statuses that mean the server behind the address did not answer. */
+const SERVER_FAULT_STATUSES = new Set([502, 503, 504]);
+
 /**
  * The fetch of one swarm agent.
  *
@@ -971,7 +1028,56 @@ function createWorkerFetch(options: {
 				return leadReserveRefusal(lent, room);
 			}
 		}
-		const deadline = Date.now() + POLYKV_WORKER_MAX_WAIT_MS;
+		/**
+		 * The server dropped this request before any of it streamed: the
+		 * connection was refused or reset, or the gateway in front of it
+		 * answered 502/503/504. For an agent that has started, wait for the
+		 * server to answer `/health` again and send the same turn -- nothing of
+		 * it ran. Measured on 1tmrl: the server was listening again ten seconds
+		 * after it restarted, and the agents on it had already ended.
+		 *
+		 * An agent that has not started is handed the failure instead: the
+		 * spawn queue places it again, possibly on a node that is up.
+		 *
+		 * `false` means "not ours to wait out"; the caller fails as before.
+		 */
+		const waitOutServerFault = async (fault: unknown): Promise<boolean> => {
+			const started = ranOnce || polykvWorkerStarted(options.worker.sessionId);
+			if (signal?.aborted || !started) {
+				return false;
+			}
+			if (fault instanceof Response) {
+				await fault.body?.cancel().catch(() => {});
+			} else if (classifyTurnFaultError(fault) !== "transport") {
+				return false;
+			}
+			reportPolykvRoomWait(options.worker.sessionId, {
+				waiting: true,
+				reason: `Waiting for the server to come back (${
+					fault instanceof Response
+						? `it answered ${fault.status}`
+						: "it is not answering"
+				}); the turn is sent again once it does.`,
+			});
+			// The server may be a new one when it answers: its pools are then
+			// gone, and the ids this agent's tree holds name nothing -- or
+			// someone else's. The next prepare asks before it resolves any.
+			notePolykvServerFault(options.baseUrl);
+			const back = await waitForServerHealth(polykvRoot(options.baseUrl), {
+				fetch: base,
+				...(options.headers ? { headers: options.headers } : {}),
+				...(signal ? { signal } : {}),
+			});
+			if (!back) {
+				throw signal?.reason ?? new Error("aborted");
+			}
+			return true;
+		};
+		// Refusals waited on in a row, for the backoff. No deadline: a full
+		// window is a queue the other agents are draining, and an agent that
+		// has started is meant to finish (ruled after 1tmrl, where a worker
+		// that outwaited fifteen minutes became the refusal it was waiting on).
+		let waits = 0;
 		let fresh = false;
 		// One fresh owner per agent, at most: after that a full window is a
 		// queue to wait in, not a reason to keep opening owners.
@@ -997,6 +1103,15 @@ function createWorkerFetch(options: {
 				wire.max_tokens = options.workerMaxTokens ?? 8_192;
 			}
 			wire.session_id = attach.sessionId;
+			if (
+				attach.poolId !== undefined &&
+				attach.generation !== undefined &&
+				attach.generation !== polykvRootGeneration(options.baseUrl)
+			) {
+				// A restart was found between resolving this id and sending
+				// it: it is a number from a boot that is gone. Resolve again.
+				continue;
+			}
 			if (attach.poolId !== undefined && /^\d+$/.test(attach.poolId)) {
 				wire.pool_id = Number(attach.poolId);
 			}
@@ -1009,20 +1124,40 @@ function createWorkerFetch(options: {
 				// server as a session of its own.
 				return leadReserveRefusal(lent, undefined);
 			}
-			const response = await base(input, {
-				...init,
-				body: JSON.stringify(wire),
-				...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
-			} as RequestInit);
+			let response: Response;
+			try {
+				response = await base(input, {
+					...init,
+					body: JSON.stringify(wire),
+					...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
+				} as RequestInit);
+			} catch (error) {
+				if (!(await waitOutServerFault(error))) {
+					throw error;
+				}
+				continue;
+			}
+			if (
+				SERVER_FAULT_STATUSES.has(response.status) &&
+				(await waitOutServerFault(response))
+			) {
+				continue;
+			}
 			if (response.status !== 429 || attach.poolId === undefined) {
 				if (response.ok) {
 					ranOnce = true;
 					markPolykvWorkerStarted(options.worker.sessionId);
-					if (
-						options.worker.owner &&
+					const windowless =
 						attach.poolId !== undefined &&
-						!response.headers.has("x-context-window")
-					) {
+						!response.headers.has("x-context-window");
+					if (windowless) {
+						// Every opencoti response names its window. A pooled
+						// turn that does not is a pool the server no longer
+						// holds -- restarted, or its owner lapsed -- and the next
+						// turn asks the server before resolving any pool.
+						notePolykvServerFault(options.baseUrl);
+					}
+					if (options.worker.owner && windowless) {
 						// Every opencoti response names its window. One that
 						// does not is the sign the lead's allocation lapsed (idle
 						// TTL) or was closed, taking this agent's sub-pool with
@@ -1041,7 +1176,7 @@ function createWorkerFetch(options: {
 				.clone()
 				.text()
 				.catch(() => "");
-			if (!isWorkerWindowFull(response.status, text) || Date.now() > deadline) {
+			if (!isWorkerWindowFull(response.status, text)) {
 				reportPolykvRoomWait(options.worker.sessionId, { waiting: false });
 				return observed(response);
 			}
@@ -1069,10 +1204,14 @@ function createWorkerFetch(options: {
 				reason:
 					"Waiting for room on the server: this swarm's window is full, and it starts when another agent finishes.",
 			});
+			waits += 1;
 			await new Promise<void>((resolve, reject) => {
 				const handle = setTimeout(
 					resolve,
-					Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 2000,
+					polykvRoomBackoffMs(
+						waits,
+						Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 2000,
+					),
 				);
 				signal?.addEventListener(
 					"abort",

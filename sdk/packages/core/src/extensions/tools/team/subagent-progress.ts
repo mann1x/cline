@@ -148,11 +148,16 @@ export function watchPolykvRoom(
 	logger?: {
 		log?: (message: string, metadata?: { severity?: "warn" }) => void;
 	},
+	/** Told when a wait starts, with its reason: for the lead's report. */
+	onWaiting?: (reason: string | undefined) => void,
 ): () => void {
 	if (!engineSessionId || !emitUpdate) {
 		return () => {};
 	}
 	const stopRoom = onPolykvRoomWait(engineSessionId, (state) => {
+		if (state.waiting) {
+			onWaiting?.(state.reason);
+		}
 		emitUpdate(
 			state.waiting
 				? {

@@ -19,6 +19,7 @@ import {
 	buildSubAgentSystemPrompt,
 	buildTeammateSystemPrompt,
 } from "./subagent-prompts";
+import { createTurnFaultRecovery } from "./turn-fault-recovery";
 
 type AgentExtension = NonNullable<AgentConfig["extensions"]>[number];
 
@@ -237,6 +238,13 @@ export interface BuildDelegatedAgentConfigOptions {
 	 * gives each its own.
 	 */
 	struggle?: WorkerStruggleSupervisor;
+	/**
+	 * How this agent waits out a turn the server dropped or refused. Defaults
+	 * to waiting on its own connection's server with no limit (see
+	 * `turn-fault-recovery.ts`); a spawn path that placed the agent passes one
+	 * that knows the node and whether the engine has admitted it.
+	 */
+	recoverTurnFault?: AgentConfig["recoverTurnFault"];
 }
 
 /** OR two optional abort signals, without an `AbortSignal.any` of one. */
@@ -376,6 +384,24 @@ export function buildDelegatedAgentConfig(
 		supervisor?.stopSignal,
 	);
 
+	// Every delegated agent retries a server restart or a refusal rather than
+	// ending on it: it is meant to finish its job, and Stop is the bound.
+	const recoverTurnFault =
+		options.recoverTurnFault ??
+		createTurnFaultRecovery({
+			label: options.role ?? options.kind,
+			baseUrl: () => connection.baseUrl,
+			headers: () => connection.headers,
+			...(abortSignal ? { signal: abortSignal } : {}),
+			...(runtimeConfig.logger
+				? {
+						logger: {
+							log: (message: string) => runtimeConfig.logger?.log?.(message),
+						},
+					}
+				: {}),
+		});
+
 	return {
 		...connection,
 		distinctId: runtimeConfig.distinctId,
@@ -407,6 +433,7 @@ export function buildDelegatedAgentConfig(
 		logger: runtimeConfig.logger,
 		role: options.role,
 		consumePendingUserMessage: options.consumePendingUserMessage,
+		recoverTurnFault,
 	};
 }
 

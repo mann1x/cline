@@ -5,7 +5,7 @@ import {
 	releasePolykvAgent,
 	setPolykvSession,
 } from "@cline/llms";
-import type { AgentEvent, AgentTool } from "@cline/shared";
+import type { AgentEvent, AgentTool, TurnFaultRecovery } from "@cline/shared";
 import {
 	isPolykvProvider,
 	readPolykvCapacity,
@@ -32,6 +32,10 @@ import {
 	type DelegatedSandboxProvider,
 	setUpDelegatedSandbox,
 } from "../../../extensions/tools/team/agent-sandbox-executors";
+import {
+	createAgentTroubleWatch,
+	roomWaitTrouble,
+} from "../../../extensions/tools/team/agent-trouble";
 import type { DelegatedAgentConfigProvider } from "../../../extensions/tools/team/delegated-agent";
 import { createDelegatedAgent } from "../../../extensions/tools/team/delegated-agent";
 import { delegatedAgentTools } from "../../../extensions/tools/team/delegated-tools";
@@ -51,6 +55,7 @@ import {
 	createSubagentProgress,
 	watchPolykvRoom,
 } from "../../../extensions/tools/team/subagent-progress";
+import { createTurnFaultRecovery } from "../../../extensions/tools/team/turn-fault-recovery";
 import {
 	createWorkerStruggleSupervisor,
 	WORKER_STRUGGLE_MIN_ITERATION,
@@ -620,17 +625,32 @@ export function createSessionSwarmTool(
 		const progress = createSubagentProgress(request.emitUpdate, (event) =>
 			lifecycle.onSubAgentEvent?.(event),
 		);
+		// How long it has been stuck, for the lead: after long enough without
+		// progress the lead is told, once.
+		const trouble = createAgentTroubleWatch({
+			sessionId: rootSessionId,
+			name: request.name,
+			...(config.logger?.log
+				? {
+						logger: {
+							log: (message: string) => config.logger?.log?.(message),
+						},
+					}
+				: {}),
+		});
 		// Queued again while its requests wait for room on the engine.
 		const stopRoomWatch = watchPolykvRoom(
 			workerSessionId,
 			request.emitUpdate,
 			config.logger,
+			(reason) => trouble.waiting(roomWaitTrouble(reason)),
 		);
 		// Built on the connection it runs on: a node decides the worker's
 		// connection, so with nodes this runs once per placement.
 		const attempt = async (
 			workerConfig: DelegatedAgentConfigProvider,
 			admitted: () => void,
+			recoverTurnFault?: TurnFaultRecovery,
 		) => {
 			// The lead's pool lives on the lead's engine. A worker placed on
 			// another endpoint cannot attach to it, and sending the id there
@@ -724,9 +744,28 @@ export function createSessionSwarmTool(
 				onEvent: (event) => {
 					if (isAdmissionEvent(event)) {
 						admitted();
+						trouble.progressed();
 					}
 					progress.observe(event);
 				},
+				// A server restart or a refusal is waited out, never the answer.
+				recoverTurnFault:
+					recoverTurnFault ??
+					createTurnFaultRecovery({
+						label: `swarm worker ${request.name}`,
+						onWaiting: trouble.waiting,
+						baseUrl: () => connection.baseUrl,
+						headers: () => connection.headers,
+						...(request.signal ? { signal: request.signal } : {}),
+						...(request.emitUpdate ? { emitUpdate: request.emitUpdate } : {}),
+						...(config.logger?.log
+							? {
+									logger: {
+										log: (message: string) => config.logger?.log?.(message),
+									},
+								}
+							: {}),
+					}),
 			});
 			return layout.pinnedHead.length > 0
 				? await worker.runWithHead(layout.pinnedHead, layout.task)
@@ -744,7 +783,9 @@ export function createSessionSwarmTool(
 					...(request.emitUpdate ? { emitUpdate: request.emitUpdate } : {}),
 					...(config.logger ? { logger: config.logger } : {}),
 					label: `swarm worker ${request.name}`,
-					run: (node, admitted) => attempt(node.configProvider, admitted),
+					onWaiting: trouble.waiting,
+					run: (node, admitted, recoverTurnFault) =>
+						attempt(node.configProvider, admitted, recoverTurnFault),
 					// A re-placed worker starts clean on its new node: its session
 					// and, if it was the last, its owner go back first.
 					beforeRetry: async () => {
@@ -781,6 +822,7 @@ export function createSessionSwarmTool(
 		} finally {
 			clearPolykvSession(workerSessionId);
 			stopRoomWatch();
+			trouble.dispose();
 			// Its engine session goes back the moment it ends, and its owner
 			// window with it if it was the last agent on it. The swarm path
 			// never did this: `spawn_agent` and configured agents released,

@@ -126,6 +126,9 @@ export function createAgentRuntimeConfig(
 		// the truncated turn and the retry's request said the call never happened;
 		// the runtime finally said why: "no condenser is installed".
 		condenseDiscardedReasoning: agentConfig.condenseDiscardedReasoning,
+		// On the list for the same reason: a delegated agent's retry of a
+		// server restart or an admission refusal lives here.
+		recoverTurnFault: agentConfig.recoverTurnFault,
 		onImageInputUnsupported: agentConfig.onImageInputUnsupported,
 		describeImages: agentConfig.describeImages,
 		alwaysDescribeImages: agentConfig.alwaysDescribeImages,

@@ -456,6 +456,18 @@ export function createGenerateImageTool(
 				// sent to a text-only model spends the context window on
 				// something it cannot read.
 				if (context?.metadata?.modelSupportsImages !== true) {
+					// #53: the person watching still sees it. A tool's update
+					// goes to its row and never into the transcript, so the
+					// image is shown there while the model gets text alone.
+					context?.emitUpdate?.({
+						displayImages: [
+							{
+								type: "image",
+								data: image.data.toString("base64"),
+								mediaType: image.mediaType,
+							},
+						],
+					});
 					return `${text}\n\nYou cannot see images, so look at the file only if you need to — describe what you asked for when reporting this.`;
 				}
 				return [

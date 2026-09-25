@@ -66,6 +66,7 @@ import {
 	agentEndpointKey,
 	delegationCanRunInParallel,
 } from "../../extensions/tools/team/agent-slot-gate";
+import { onLeadNudge } from "../../extensions/tools/team/agent-trouble";
 import {
 	type BackgroundDelegationRegistry,
 	type BackgroundDelegationView,
@@ -590,6 +591,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 	 */
 	private readonly sideTurnConfigs = new Map<string, AgentConfig>();
 	private readonly sideTurns = new Map<string, Promise<void>>();
+	private readonly leadNudgeUnsubscribes = new Map<string, () => void>();
 	private readonly eventBridge: AgentEventBridge;
 	private readonly sessionVersioning = new SessionVersioningService();
 	private readonly runCommandExecutionController =
@@ -2419,6 +2421,14 @@ export class LocalRuntimeHost implements RuntimeHost {
 			agent.subscribeEvents(agentConfig.onEvent);
 		}
 		this.sideTurnConfigs.set(sessionId, agentConfig as AgentConfig);
+		// Agents stuck for a long time are reported to the lead (see
+		// `agent-trouble.ts`): in a side turn while its round runs, where it
+		// may stop them and take their tasks back; queued otherwise.
+		this.leadNudgeUnsubscribes.get(sessionId)?.();
+		this.leadNudgeUnsubscribes.set(
+			sessionId,
+			onLeadNudge(sessionId, (text) => this.nudgeLead(sessionId, text)),
+		);
 		runtime.registerLeadAgent?.(agent);
 		const rootAgentIdentity = buildTelemetryAgentIdentity({
 			agentId: agent.getAgentId(),
@@ -2645,7 +2655,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 	 * One at a time per session; the reply goes to the chat as a status notice,
 	 * and the lead's real turn is told what happened when the round returns.
 	 */
-	private answerSteerInSideTurn(session: ActiveSession, message: string): void {
+	private answerSteerInSideTurn(
+		session: ActiveSession,
+		message: string,
+		source: "user" | "system" = "user",
+	): void {
 		const sessionId = session.sessionId;
 		const base = this.sideTurnConfigs.get(sessionId);
 		if (!base) {
@@ -2660,6 +2674,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			const result = await runSteerSideTurn({
 				sessionId,
 				message,
+				source,
 				messages: session.agent.getMessages(),
 				createRunner: (tools) => {
 					// The lead's model, prompt and settings; nothing that writes
@@ -2690,10 +2705,16 @@ export class LocalRuntimeHost implements RuntimeHost {
 				noticeType: "status",
 				displayRole: "status",
 				message: [
+					...(source === "system"
+						? [`Agents stuck for a long time:\n${message}`]
+						: []),
 					`While the agents run: ${result.reply || "(no reply)"}`,
 					...result.actions,
 				].join("\n\n"),
-				metadata: { kind: "steer_reply", actions: result.actions },
+				metadata: {
+					kind: source === "system" ? "lead_nudge_reply" : "steer_reply",
+					actions: result.actions,
+				},
 			});
 			// For the lead's own next turn: the exchange is not in its history.
 			// A side turn that failed hands the message itself on, as it would
@@ -2701,7 +2722,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			this.pendingPromptsController.enqueue(sessionId, {
 				prompt: result.failed
 					? message
-					: describeSideTurnForLead(message, result),
+					: describeSideTurnForLead(message, result, source),
 				delivery: "steer",
 			});
 		});
@@ -2709,6 +2730,30 @@ export class LocalRuntimeHost implements RuntimeHost {
 			sessionId,
 			next.catch(() => undefined),
 		);
+	}
+
+	/**
+	 * The agent system's report of agents stuck for a long time. Answered in
+	 * a side turn while the lead waits on its round -- where it can stop them
+	 * -- and queued for its next turn when there is no round to answer from.
+	 */
+	private nudgeLead(sessionId: string, text: string): void {
+		const session = this.sessions.get(sessionId);
+		if (!session) {
+			return;
+		}
+		if (
+			!session.agent.canStartRun() &&
+			this.sideTurnConfigs.has(sessionId) &&
+			subagentCancellation.runningIn(sessionId).length > 0
+		) {
+			this.answerSteerInSideTurn(session, text, "system");
+			return;
+		}
+		this.pendingPromptsController.enqueue(sessionId, {
+			prompt: text,
+			delivery: "steer",
+		});
 	}
 
 	async runTurn(input: SendSessionInput): Promise<AgentResult | undefined> {
@@ -4286,6 +4331,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 		this.backgroundDelegations.get(session.sessionId)?.stopAll();
 		this.backgroundDelegations.delete(session.sessionId);
 		this.sideTurnConfigs.delete(session.sessionId);
+		this.leadNudgeUnsubscribes.get(session.sessionId)?.();
+		this.leadNudgeUnsubscribes.delete(session.sessionId);
 		clearAgentReports(session.sessionId);
 		this.sideTurns.delete(session.sessionId);
 		this.sessions.delete(session.sessionId);

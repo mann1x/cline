@@ -13,9 +13,13 @@ import {
 import {
 	engineSessionId,
 	hashString,
+	type PolykvPoolRecord,
+	polykvRootGeneration,
+	registerPolykvPoolHolder,
 	renderLayer,
 	templateFieldsOf,
 	templateSignature,
+	verifyPolykvRoot,
 } from "./polykv-swarm";
 
 /**
@@ -57,6 +61,13 @@ import {
  * counts shared tokens against the window, so a conversation sharing P0 still
  * books a window covering P0 + its own tokens. The saving is the prefill of P0
  * on every new conversation, and the cells held once. (Reported as E4.)
+ *
+ * Across a server restart the tree follows the swarm's root generation
+ * (`polykvRootGeneration`): a restarted server numbers its pools from 0
+ * again, so an id cached from before names nothing -- or someone else's
+ * pool. Every root and sub-pool is tagged with the generation it was made in;
+ * once the generation moves, the lead's next turn rebuilds its chain, never
+ * sends, releases or forks from an id of the old one.
  */
 
 /** A root one or more conversations on a server share. */
@@ -70,6 +81,10 @@ interface LeadRoot {
 		| undefined
 	>;
 	sessions: Set<string>;
+	/** The server generation `pool` was made in. */
+	generation: number;
+	/** `pool` once it resolved, for the restart check (which is synchronous). */
+	held?: { id: string; prefixLen: number };
 }
 
 /** Where a lead request attaches, and what that means for its window. */
@@ -82,6 +97,11 @@ export interface LeadAttach {
 	 * (`polykv_private_window_v1`): the shared prefix rides above it.
 	 */
 	privateWindow: boolean;
+	/**
+	 * The server generation `poolId` belongs to. A request that goes out after
+	 * the generation moved must not carry it.
+	 */
+	generation: number;
 }
 
 interface LeadSession {
@@ -92,7 +112,11 @@ interface LeadSession {
 	sub?: {
 		key: string;
 		pool: Promise<{ id: string; prefixLen: number } | undefined>;
+		/** `pool` once it resolved, for the restart check. */
+		held?: { id: string; prefixLen: number };
 	};
+	/** The server generation `sub` and `windowLive` belong to. */
+	generation: number;
 	lastUsed: number;
 }
 
@@ -107,6 +131,38 @@ const LEADS = new Map<string, LeadSession>();
  * naming a released pool is not refused -- it reprocesses in full, silently.
  */
 export const POLYKV_LEAD_RECHECK_MS = 60_000;
+
+/**
+ * The lead tree's pools, for the swarm's restart check after a fault. Only
+ * the current generation's: an older id is already known to be gone.
+ */
+registerPolykvPoolHolder((serverRoot) => {
+	const generation = polykvRootGeneration(serverRoot);
+	const held: Array<[string, PolykvPoolRecord]> = [];
+	for (const root of ROOTS.values()) {
+		if (
+			root.root === serverRoot &&
+			root.generation === generation &&
+			root.held
+		) {
+			held.push([root.held.id, { prefixLen: root.held.prefixLen }]);
+		}
+	}
+	for (const lead of LEADS.values()) {
+		const sub = lead.sub?.held;
+		const parent = lead.root.held;
+		if (
+			sub &&
+			parent &&
+			lead.root.root === serverRoot &&
+			lead.generation === generation &&
+			lead.root.generation === generation
+		) {
+			held.push([sub.id, { prefixLen: sub.prefixLen, parent: parent.id }]);
+		}
+	}
+	return held;
+});
 
 type TextPart = { type?: unknown; text?: unknown };
 
@@ -170,6 +226,7 @@ function rootFor(
 				...(headers ? { headers } : {}),
 			}),
 			sessions: new Set(),
+			generation: polykvRootGeneration(root),
 		};
 		ROOTS.set(fullKey, entry);
 	}
@@ -184,7 +241,9 @@ async function releasePool(client: PolykvClient, id: string): Promise<void> {
 async function detach(lead: LeadSession): Promise<void> {
 	const sub = await lead.sub?.pool.catch(() => undefined);
 	lead.sub = undefined;
-	if (sub) {
+	// An id from before a restart is not ours to release: the new server may
+	// have given that number to someone else's pool.
+	if (sub && lead.generation === polykvRootGeneration(lead.root.root)) {
 		await releasePool(lead.root.client, sub.id);
 	}
 	const root = lead.root;
@@ -194,7 +253,11 @@ async function detach(lead: LeadSession): Promise<void> {
 		const pool = await root.pool?.catch(() => undefined);
 		// A shared root is every process's: another window may be attached to it
 		// right now. The engine's ephemeral sweep releases it once nothing is.
-		if (pool && !pool.shared) {
+		if (
+			pool &&
+			!pool.shared &&
+			root.generation === polykvRootGeneration(root.root)
+		) {
 			await releasePool(root.client, pool.id);
 		}
 	}
@@ -208,7 +271,28 @@ async function detach(lead: LeadSession): Promise<void> {
  * the server has no pools, or the prefix could not be made shareable -- slower,
  * never wrong.
  */
-export async function prepareLeadPool(options: {
+export async function prepareLeadPool(
+	options: PrepareLeadPoolOptions,
+): Promise<LeadAttach | undefined> {
+	// A restart noticed while this was resolving -- a pool created on the old
+	// server, answered after the new one was seen -- is one more pass, under
+	// the new generation. Never an id of the old one.
+	for (let pass = 0; pass < 3; pass++) {
+		const attach = await prepareLeadPoolOnce(options);
+		if (
+			!attach ||
+			attach.generation === polykvRootGeneration(options.baseUrl)
+		) {
+			return attach;
+		}
+	}
+	if (getPolykvSession(options.sessionId)?.layout === "lead") {
+		clearPolykvSession(options.sessionId);
+	}
+	return undefined;
+}
+
+interface PrepareLeadPoolOptions {
 	baseUrl: string;
 	fetch: typeof fetch;
 	headers?: Record<string, string>;
@@ -216,7 +300,11 @@ export async function prepareLeadPool(options: {
 	/** The conversation's session id, as the host knows it. */
 	sessionId: string;
 	now?: number;
-}): Promise<LeadAttach | undefined> {
+}
+
+async function prepareLeadPoolOnce(
+	options: PrepareLeadPoolOptions,
+): Promise<LeadAttach | undefined> {
 	const { body, sessionId } = options;
 	const now = options.now ?? Date.now();
 	const messages = body.messages as Array<Record<string, unknown>>;
@@ -260,7 +348,13 @@ export async function prepareLeadPool(options: {
 			rootKey,
 		);
 		root.sessions.add(sessionId);
-		lead = { sessionId, root, windowLive: false, lastUsed: now };
+		lead = {
+			sessionId,
+			root,
+			windowLive: false,
+			generation: root.generation,
+			lastUsed: now,
+		};
 		LEADS.set(sessionId, lead);
 	}
 	const root = lead.root;
@@ -283,6 +377,32 @@ export async function prepareLeadPool(options: {
 		}
 	}
 	lead.lastUsed = now;
+
+	// Is this still the server the tree was built on? Shared with the swarm:
+	// asked at most every couple of seconds per server, and at once after a
+	// fault (a dropped turn, a turn without `X-Context-Window`).
+	await verifyPolykvRoot(root.root, options.fetch, options.headers).catch(
+		() => undefined,
+	);
+	const generation = polykvRootGeneration(root.root);
+	if (root.generation !== generation) {
+		// The server restarted: the root's id is from the old one. Nothing is
+		// released -- there is nothing left, and the number may be someone
+		// else's now. The root is found or made again below.
+		root.pool = undefined;
+		root.held = undefined;
+		root.generation = generation;
+	}
+	if (lead.generation !== generation) {
+		// Its sub-pool and its window went with the old server. The window is
+		// re-booked by this request; the sub-pool follows on the next one.
+		lead.sub = undefined;
+		lead.windowLive = false;
+		lead.generation = generation;
+		if (getPolykvSession(sessionId)?.layout === "lead") {
+			clearPolykvSession(sessionId);
+		}
+	}
 
 	const sharedRoot = hasOpencotiFeature(
 		props.features,
@@ -312,6 +432,9 @@ export async function prepareLeadPool(options: {
 	const rootPool = await root.pool;
 	if (!rootPool) {
 		return undefined;
+	}
+	if (root.generation === generation) {
+		root.held = { id: rootPool.id, prefixLen: rootPool.prefixLen };
 	}
 
 	let attach = { id: rootPool.id, prefixLen: 0, shared: rootPool.prefixLen };
@@ -347,8 +470,12 @@ export async function prepareLeadPool(options: {
 				})().catch(() => undefined),
 			};
 		}
-		const sub = await lead.sub?.pool;
+		const current = lead.sub;
+		const sub = await current?.pool;
 		if (sub) {
+			if (current) {
+				current.held = sub;
+			}
 			attach = { ...sub, shared: sub.prefixLen };
 		}
 	}
@@ -364,6 +491,7 @@ export async function prepareLeadPool(options: {
 			props.features,
 			OPENCOTI_FEATURES.privateWindow,
 		),
+		generation,
 	};
 }
 

@@ -202,13 +202,36 @@ export function polykvWorkerStarted(sessionId: string): boolean {
 export interface PolykvWorkerAttach {
 	poolId?: string;
 	sessionId: string;
+	/**
+	 * The server generation `poolId` belongs to (see
+	 * {@link polykvRootGeneration}). A pool id is a number the server issued
+	 * in one boot; the caller re-prepares rather than send it once the
+	 * generation has moved on.
+	 */
+	generation?: number;
+}
+
+/** What the server said a pool was when it made it, to know it again. */
+interface PoolRecord {
+	parent?: string;
+	prefixLen?: number;
 }
 
 /** An owner session and the pool tree inside its window. */
 interface OwnerShard {
 	sessionId: string;
-	/** Layer key -> pool id (`undefined` when that layer could not be pooled). */
+	/**
+	 * Layer key -> pool id (`undefined` when that layer could not be pooled).
+	 *
+	 * The layer key is the stable logical name of a pool -- a hash of the chain
+	 * of turns it holds -- and it is what every agent resolves on every turn.
+	 * The id is only the current generation's answer to it: when the server
+	 * restarts, the whole map goes with the shard (see
+	 * {@link invalidatePolykvRoot}) and the key resolves to a pool built anew.
+	 */
 	pools: Map<string, Promise<string | undefined>>;
+	/** Pool id -> what the server said it was, for {@link verifyPolykvRoot}. */
+	records: Map<string, PoolRecord>;
 	/** Agents currently assigned here. */
 	agents: Set<string>;
 	closed: boolean;
@@ -272,12 +295,27 @@ const SENTINEL = "⁣POLYKV-LAYER-END⁣";
 export const POLYKV_OWNER_MIN_WINDOW = 32_768;
 
 /**
- * How long a worker waits on a full owner before handing the refusal back.
+ * Longest wait between two tries on a full window.
  *
- * Long on purpose: a full window is a queue, not a fault -- it drains as the
- * other agents finish -- and the engine names the wait on every refusal.
+ * There is no overall deadline: a full window is a queue, not a fault -- it
+ * drains as the other agents finish -- and an agent is meant to finish its
+ * job (ruled after 1tmrl). This is the one guard against a tight loop: the
+ * first {@link POLYKV_ROOM_WAITS_AT_NAMED} waits are what the engine names,
+ * and after that the wait doubles on each refusal in a row, up to this.
  */
-export const POLYKV_WORKER_MAX_WAIT_MS = 15 * 60_000;
+export const POLYKV_ROOM_BACKOFF_MAX_MS = 30_000;
+
+/** Waits in a row taken at the engine's own `Retry-After` before backing off. */
+export const POLYKV_ROOM_WAITS_AT_NAMED = 4;
+
+/** The wait before the `waits`th retry on a full window (1-based). */
+export function polykvRoomBackoffMs(waits: number, namedMs: number): number {
+	const doublings = Math.max(0, waits - POLYKV_ROOM_WAITS_AT_NAMED);
+	return Math.min(
+		Math.max(POLYKV_ROOM_BACKOFF_MAX_MS, namedMs),
+		namedMs * 2 ** doublings,
+	);
+}
 
 export function hashString(text: string): string {
 	// cyrb53: a key, not a fingerprint -- a collision costs one shared pool
@@ -326,6 +364,385 @@ function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
 		};
 		signal?.addEventListener("abort", onAbort, { once: true });
 	});
+}
+
+/**
+ * What this process knows about one server across its restarts.
+ *
+ * A restart takes every pool and owner allocation with it, and the new server
+ * numbers its pools from 0 again (1tmrl: bs2:8244 restarted twice under a
+ * 75-agent swarm). A cached id then names nothing -- and a pool id the server
+ * does not know is not refused, it is silently prefilled in full -- or,
+ * worse, names a DIFFERENT pool that a newer agent built. So each server root
+ * has a generation, and every pool id handed out is tagged with the
+ * generation it was made in.
+ */
+interface RootState {
+	generation: number;
+	/** The server's identity as `/props` states it, when it states one. */
+	identity?: string;
+	/** Last time the server was asked whether it is the same one. */
+	checkedAt: number;
+	/** Something suggested a restart; ask before the next attach. */
+	suspect: boolean;
+	checking?: Promise<void>;
+}
+
+const ROOT_STATES = new Map<string, RootState>();
+
+/**
+ * How often an agent's reattach asks the server whether it is the one its
+ * pools were made on, when nothing has suggested otherwise. Shared by every
+ * agent on the root, so a swarm asks once per interval, not once per agent.
+ */
+export const POLYKV_VERIFY_INTERVAL_MS = 2_000;
+
+function rootState(root: string): RootState {
+	let state = ROOT_STATES.get(root);
+	if (!state) {
+		state = { generation: 0, checkedAt: 0, suspect: false };
+		ROOT_STATES.set(root, state);
+	}
+	return state;
+}
+
+/** The server generation pool ids on this root currently belong to. */
+export function polykvRootGeneration(baseUrl: string): number {
+	return rootState(polykvRoot(baseUrl)).generation;
+}
+
+/**
+ * Something suggested the server at `baseUrl` restarted: a transport fault,
+ * or a pooled turn that came back without `X-Context-Window`. The next attach
+ * on that root asks the server before it resolves any pool.
+ */
+export function notePolykvServerFault(baseUrl: string): void {
+	const root = polykvRoot(baseUrl);
+	if (
+		ROOT_STATES.has(root) ||
+		[...GROUPS.values()].some((g) => g.root === root)
+	) {
+		rootState(root).suspect = true;
+	}
+}
+
+/**
+ * The fields opencoti states for exactly this purpose (c8 row L, confirmed in
+ * the answer to mail 274): `boot_id` is new with every process, `started_at`
+ * is when it started. Read at the top level and under `opencoti.*`, from
+ * `/props` and from `/health`. When a build states either, it is the whole
+ * identity: nothing else is needed, and a field that can change without a
+ * restart must not be read as one.
+ */
+const BOOT_IDENTITY_FIELDS = ["boot_id", "started_at"] as const;
+
+/**
+ * Fields of `/props` that change when the server process does, for a build
+ * that states neither boot field. Whatever of them the build states is the
+ * identity; a build that states none of them is checked by its pools alone.
+ * `build_info` is among them because a restart onto a new build is the
+ * common case.
+ */
+const IDENTITY_FIELDS = [
+	"build_info",
+	"build_number",
+	"build_commit",
+	"start_time",
+	"started_at",
+	"server_start_time",
+	"t_start",
+	"boot_id",
+	"instance_id",
+	"pid",
+] as const;
+
+function pickIdentity(
+	bodies: ReadonlyArray<Record<string, unknown> | undefined>,
+	fields: readonly string[],
+): Array<[string, unknown]> {
+	const picked: Array<[string, unknown]> = [];
+	const seen = new Set<string>();
+	for (const body of bodies) {
+		if (!body) {
+			continue;
+		}
+		const opencoti = (
+			body.opencoti && typeof body.opencoti === "object" ? body.opencoti : {}
+		) as Record<string, unknown>;
+		for (const field of fields) {
+			// The same field from /props and /health is one field.
+			if (body[field] !== undefined && !seen.has(field)) {
+				seen.add(field);
+				picked.push([field, body[field]]);
+			}
+			const nested = `opencoti.${field}`;
+			if (opencoti[field] !== undefined && !seen.has(nested)) {
+				seen.add(nested);
+				picked.push([nested, opencoti[field]]);
+			}
+		}
+	}
+	return picked;
+}
+
+/**
+ * The identity a `/props` body (and, when given, a `/health` body) states,
+ * or undefined when it states none. `boot_id` / `started_at` are preferred
+ * whenever either is present; see {@link BOOT_IDENTITY_FIELDS}.
+ */
+export function polykvServerIdentity(
+	props: Record<string, unknown> | undefined,
+	health?: Record<string, unknown>,
+): string | undefined {
+	const boot = pickIdentity([props, health], BOOT_IDENTITY_FIELDS);
+	if (boot.length > 0) {
+		return `boot:${JSON.stringify(boot)}`;
+	}
+	const picked = pickIdentity([props], IDENTITY_FIELDS);
+	return picked.length > 0 ? `props:${JSON.stringify(picked)}` : undefined;
+}
+
+/**
+ * The server restarted: every pool and owner this process knew on `baseUrl`
+ * is gone. Bumps the root's generation and drops its groups' owners, pools
+ * and assignments -- nothing is closed, there is nothing left to close -- so
+ * each agent's next turn resolves its layer key to a pool built anew, under
+ * a new owner, and the prefix is shared again.
+ */
+export function invalidatePolykvRoot(baseUrl: string, reason: string): void {
+	const root = polykvRoot(baseUrl);
+	const state = rootState(root);
+	state.generation += 1;
+	state.suspect = false;
+	const agents: string[] = [];
+	for (const group of GROUPS.values()) {
+		if (group.root !== root) {
+			continue;
+		}
+		for (const shard of group.shards) {
+			shard.closed = true;
+			shard.pools.clear();
+			shard.records.clear();
+		}
+		group.shards = [];
+		agents.push(...group.assigned.keys());
+		group.assigned.clear();
+		group.opening = undefined;
+	}
+	for (const agent of agents) {
+		reportPolykvNotice(agent, {
+			severity: "warn",
+			text: `The server at ${root} restarted (${reason}): this agent's shared pools are rebuilt under a new owner on its next turn.`,
+		});
+	}
+}
+
+/** What the server said of a pool when it was made, for the listing check. */
+export type PolykvPoolRecord = PoolRecord;
+
+/** Pools on `root` held outside the swarm's groups, current generation only. */
+export type PolykvPoolHolder = (root: string) => Array<[string, PoolRecord]>;
+
+const SUSPECT_POOL_HOLDERS = new Set<PolykvPoolHolder>();
+
+/**
+ * Register pools held outside the swarm -- the lead tree's -- so a restart
+ * check can see them too.
+ *
+ * Read only when a fault made the root suspect: the lead's pools can go for
+ * reasons that are not a restart (a lapsed window takes its sub-pool, the
+ * engine sweeps an idle shared root), and on a quiet root that must not cost
+ * every agent its pools. After a fault, a missing pool is read as the restart
+ * it most likely is -- a rebuilt pool costs a prefill, a stale id can attach
+ * a turn to someone else's. Returns the unregister.
+ */
+export function registerPolykvPoolHolder(holder: PolykvPoolHolder): () => void {
+	SUSPECT_POOL_HOLDERS.add(holder);
+	return () => {
+		SUSPECT_POOL_HOLDERS.delete(holder);
+	};
+}
+
+/** Pool ids this process holds on `root`, with what the server said of each. */
+function heldPools(root: string, suspect = false): Array<[string, PoolRecord]> {
+	const held: Array<[string, PoolRecord]> = [];
+	if (suspect) {
+		for (const holder of SUSPECT_POOL_HOLDERS) {
+			try {
+				held.push(...holder(root));
+			} catch {
+				// A holder that cannot say contributes nothing.
+			}
+		}
+	}
+	for (const group of GROUPS.values()) {
+		if (group.root !== root) {
+			continue;
+		}
+		for (const shard of group.shards) {
+			if (!shard.closed) {
+				held.push(...shard.records.entries());
+			}
+		}
+	}
+	return held;
+}
+
+/** Whether a `/polykv/pools` listing still holds every pool we made. */
+function listingHoldsOurs(
+	listing: Record<string, unknown>,
+	held: Array<[string, PoolRecord]>,
+): boolean | undefined {
+	if (!Array.isArray(listing.pools)) {
+		return undefined;
+	}
+	const byId = new Map<string, Record<string, unknown>>();
+	for (const entry of listing.pools as Array<Record<string, unknown>>) {
+		if (entry && entry.pool_id !== undefined) {
+			byId.set(String(entry.pool_id), entry);
+		}
+	}
+	for (const [id, record] of held) {
+		const entry = byId.get(id);
+		if (!entry) {
+			return false;
+		}
+		if (
+			record.prefixLen !== undefined &&
+			typeof entry.prefix_len === "number" &&
+			entry.prefix_len !== record.prefixLen
+		) {
+			return false;
+		}
+		const parent =
+			typeof entry.parent === "number" && entry.parent >= 0
+				? String(entry.parent)
+				: undefined;
+		if (entry.parent !== undefined && (record.parent ?? undefined) !== parent) {
+			return false;
+		}
+	}
+	return true;
+}
+
+async function readRootJson(
+	fetchFn: typeof fetch,
+	url: string,
+	headers?: Record<string, string>,
+	timeoutMs = 5_000,
+): Promise<Record<string, unknown> | undefined> {
+	const controller = new AbortController();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const expiry = new Promise<undefined>((resolve) => {
+		timer = setTimeout(() => {
+			controller.abort();
+			resolve(undefined);
+		}, timeoutMs);
+	});
+	try {
+		return await Promise.race([
+			(async () => {
+				const response = await fetchFn(url, {
+					method: "GET",
+					headers: headers ?? {},
+					signal: controller.signal,
+				});
+				if (!response.ok) {
+					await response.body?.cancel().catch(() => {});
+					return undefined;
+				}
+				return (await response.json()) as Record<string, unknown>;
+			})(),
+			expiry,
+		]);
+	} catch {
+		return undefined;
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/**
+ * Ask the server whether it is still the one this process's pools on `root`
+ * were made on, and start a new generation if it is not.
+ *
+ * Two signals, whichever the build gives: its identity in `/props` (see
+ * {@link polykvServerIdentity}) changing, or `/polykv/pools` no longer holding
+ * a pool we made as we made it. Asked at most every
+ * {@link POLYKV_VERIFY_INTERVAL_MS} per root, and at once when a fault made
+ * the root suspect. A suspect root that cannot be asked is rebuilt: a rebuilt
+ * pool costs a prefill, a stale id can attach an agent to someone else's.
+ */
+export async function verifyPolykvRoot(
+	root: string,
+	fetchFn: typeof fetch,
+	headers?: Record<string, string>,
+): Promise<void> {
+	const state = rootState(root);
+	if (
+		!state.suspect &&
+		Date.now() - state.checkedAt < POLYKV_VERIFY_INTERVAL_MS
+	) {
+		return;
+	}
+	if (state.checking) {
+		return state.checking;
+	}
+	state.checking = (async () => {
+		const held = heldPools(root, state.suspect);
+		const [props, listing] = await Promise.all([
+			readRootJson(fetchFn, `${root}/props`, headers),
+			held.length > 0
+				? readRootJson(fetchFn, `${root}/polykv/pools`, headers)
+				: Promise.resolve(undefined),
+		]);
+		// `/health` is asked only for what `/props` did not say: the boot
+		// fields, on a build that puts them there alone.
+		const health =
+			props && polykvServerIdentity(props)?.startsWith("boot:")
+				? undefined
+				: await readRootJson(fetchFn, `${root}/health`, headers);
+		state.checkedAt = Date.now();
+		const identity =
+			props || health ? polykvServerIdentity(props, health) : undefined;
+		let reason: string | undefined;
+		// Compared only kind to kind: a `/health` that did not answer this once
+		// drops the boot fields it carries, and falling back to the `/props`
+		// fields is not a new server. A build that gains the boot fields is
+		// re-baselined, never read as a restart.
+		const kind = (value: string) => value.slice(0, value.indexOf(":"));
+		if (
+			identity !== undefined &&
+			state.identity !== undefined &&
+			kind(identity) === kind(state.identity) &&
+			identity !== state.identity
+		) {
+			reason = "its identity in /props changed";
+		}
+		if (
+			identity !== undefined &&
+			(state.identity === undefined ||
+				kind(identity) === "boot" ||
+				kind(state.identity) !== "boot")
+		) {
+			state.identity = identity;
+		}
+		if (!reason && held.length > 0 && listing) {
+			if (listingHoldsOurs(listing, held) === false) {
+				reason = "the pools this process made are gone";
+			}
+		}
+		if (!reason && state.suspect && held.length > 0 && !listing) {
+			reason = "a fault, and its pools could not be confirmed";
+		}
+		state.suspect = false;
+		if (reason) {
+			invalidatePolykvRoot(root, reason);
+		}
+	})().finally(() => {
+		state.checking = undefined;
+	});
+	return state.checking;
 }
 
 function groupFor(
@@ -404,8 +821,9 @@ async function openOwner(
 	const sessionId = engineSessionId(
 		`${group.key.split("\n")[1]}~polykv-owner-${++group.serial}`,
 	);
+	const generation = polykvRootGeneration(group.root);
 	const window = await sessionContextMax(group);
-	const deadline = Date.now() + POLYKV_WORKER_MAX_WAIT_MS;
+	let waits = 0;
 	while (true) {
 		const response = await group.fetch(`${group.root}/v1/chat/completions`, {
 			method: "POST",
@@ -424,19 +842,26 @@ async function openOwner(
 		});
 		await response.body?.cancel().catch(() => {});
 		if (response.ok) {
+			if (polykvRootGeneration(group.root) !== generation) {
+				// The server restarted while this owner was being opened: it
+				// belongs to a generation nothing may attach to any more.
+				return undefined;
+			}
 			const shard: OwnerShard = {
 				sessionId,
 				pools: new Map(),
+				records: new Map(),
 				agents: new Set(),
 				closed: false,
 			};
 			group.shards.push(shard);
 			return shard;
 		}
-		if (response.status !== 429 || !waitForRoom || Date.now() > deadline) {
+		if (response.status !== 429 || !waitForRoom) {
 			return undefined;
 		}
 		const wait = Number(response.headers.get("retry-after"));
+		waits += 1;
 		for (const agent of group.awaitingOwner) {
 			reportPolykvRoomWait(agent, {
 				waiting: true,
@@ -444,7 +869,13 @@ async function openOwner(
 					"Waiting for room on the server: every cell is booked, so a new window for this swarm cannot open yet.",
 			});
 		}
-		await sleep(Number.isFinite(wait) && wait > 0 ? wait * 1000 : 2000, signal);
+		await sleep(
+			polykvRoomBackoffMs(
+				waits,
+				Number.isFinite(wait) && wait > 0 ? wait * 1000 : 2000,
+			),
+			signal,
+		);
 	}
 }
 
@@ -602,6 +1033,12 @@ async function ensureChain(
 						.setAdmission(pool.pool_id, admission)
 						.catch(() => undefined);
 				}
+				shard.records.set(String(pool.pool_id), {
+					...(parentId !== undefined ? { parent: parentId } : {}),
+					...(typeof pool.prefix_len === "number"
+						? { prefixLen: pool.prefix_len }
+						: {}),
+				});
 				return pool.pool_id;
 			})().catch(() => undefined);
 			shard.pools.set(key, pending);
@@ -638,6 +1075,7 @@ function lendLeadShard(
 		lent = {
 			sessionId: engineSessionId(owner),
 			pools: new Map(),
+			records: new Map(),
 			agents: new Set(),
 			closed: false,
 			borrowed: true,
@@ -694,6 +1132,32 @@ export async function preparePolykvWorker(options: {
 	body: Record<string, unknown>;
 	signal?: AbortSignal | null;
 	/** Start on a fresh owner: the current one refused this agent. */
+	fresh?: boolean;
+}): Promise<PolykvWorkerAttach> {
+	const root = polykvRoot(options.baseUrl);
+	// Is the server the one these pools were made on? Asked on reattach --
+	// an agent coming back from its tools may find the server restarted
+	// under it -- and settled before anything is resolved from the cache.
+	await verifyPolykvRoot(root, options.fetch, options.headers);
+	// A restart found by another agent while this one resolved is a pool id
+	// from a boot that is gone: resolve again against the new generation.
+	for (let tries = 0; tries < 3; tries += 1) {
+		const generation = polykvRootGeneration(root);
+		const attach = await attachWorker(options);
+		if (polykvRootGeneration(root) === generation) {
+			return attach.poolId === undefined ? attach : { ...attach, generation };
+		}
+	}
+	return { sessionId: engineSessionId(options.spec.sessionId) };
+}
+
+async function attachWorker(options: {
+	spec: PolykvWorkerSpec;
+	baseUrl: string;
+	fetch: typeof fetch;
+	headers?: Record<string, string>;
+	body: Record<string, unknown>;
+	signal?: AbortSignal | null;
 	fresh?: boolean;
 }): Promise<PolykvWorkerAttach> {
 	const { spec, body } = options;
@@ -1035,6 +1499,7 @@ export async function releaseAllPolykvSwarms(): Promise<void> {
 	GROUPS.clear();
 	AGENT_GROUPS.clear();
 	STARTED_WORKERS.clear();
+	ROOT_STATES.clear();
 	// Shutdown: the lent pools are gone, so the leads can go too.
 	for (const sessionId of [...DEFERRED_LEAD_CLOSES.keys()]) {
 		closes.push(runDeferredLeadClose(sessionId));

@@ -437,3 +437,125 @@ describe("an agent coming back from a failed spawn", () => {
 		expect(later.nodeId).toBeUndefined();
 	});
 });
+
+/**
+ * 1tmrl: the server behind Node1 restarted and was listening again ten
+ * seconds later; the node sat out the rest of the 30 s cool-off anyway.
+ */
+describe("a node in its cool-off", () => {
+	function manualClock() {
+		let now = 1_000;
+		const timers: Array<{ at: number; fn: () => void }> = [];
+		return {
+			now: () => now,
+			schedule: (fn: () => void, ms: number) => {
+				timers.push({ at: now + ms, fn });
+			},
+			/** Move the clock and run what fell due, in order. */
+			advance: async (ms: number) => {
+				const until = now + ms;
+				for (;;) {
+					timers.sort((a, b) => a.at - b.at);
+					const next = timers[0];
+					if (!next || next.at > until) {
+						break;
+					}
+					timers.shift();
+					now = next.at;
+					next.fn();
+					await settle();
+				}
+				now = until;
+			},
+		};
+	}
+
+	it("is asked every 5 s and put back as soon as its /health answers", async () => {
+		const clock = manualClock();
+		const probes: number[] = [];
+		let up = false;
+		const queue = createAgentPlacementQueue([node("oc", 1, 1)], {
+			now: clock.now,
+			schedule: clock.schedule,
+			probe: async () => {
+				probes.push(clock.now());
+				return up;
+			},
+		});
+
+		queue.markUnreachable("oc");
+
+		await clock.advance(10_000);
+		expect(probes).toEqual([6_000, 11_000]);
+		up = true;
+		await clock.advance(5_000);
+		expect(probes).toEqual([6_000, 11_000, 16_000]);
+		// Back: no more probes, well inside the 30 s.
+		await clock.advance(30_000);
+		expect(probes).toHaveLength(3);
+	});
+
+	it("comes back through the probe before the cool-off, where a live node would otherwise win", async () => {
+		const clock = manualClock();
+		let up = false;
+		const queue = createAgentPlacementQueue(
+			[node("oc", 1, 4), node("other", 1, 4)],
+			{
+				now: clock.now,
+				schedule: clock.schedule,
+				probe: async (id) => id === "oc" && up,
+			},
+		);
+
+		queue.markUnreachable("oc");
+		const during = [await queue.acquire(), await queue.acquire()];
+		expect(during.map((lease) => lease.nodeId)).toEqual(["other", "other"]);
+
+		up = true;
+		await clock.advance(5_000);
+		const after = [await queue.acquire(), await queue.acquire()];
+		expect(after.map((lease) => lease.nodeId)).toContain("oc");
+	});
+
+	it("keeps 30 s as the upper bound when the node never answers", async () => {
+		const clock = manualClock();
+		const probes: number[] = [];
+		const queue = createAgentPlacementQueue(
+			[node("oc", 1, 4), node("other", 1, 4)],
+			{
+				now: clock.now,
+				schedule: clock.schedule,
+				probe: async () => {
+					probes.push(clock.now());
+					return false;
+				},
+			},
+		);
+
+		queue.markUnreachable("oc");
+		await clock.advance(30_001);
+		expect(probes.length).toBeGreaterThanOrEqual(5);
+		expect(probes.length).toBeLessThanOrEqual(6);
+		const after = [await queue.acquire(), await queue.acquire()];
+		expect(after.map((lease) => lease.nodeId).sort()).toEqual(["oc", "other"]);
+		await clock.advance(60_000);
+		expect(probes.length).toBeLessThanOrEqual(6);
+	});
+
+	it("is not probed out of a missing-model cool-off: /health says nothing about a model", async () => {
+		const clock = manualClock();
+		let probes = 0;
+		const queue = createAgentPlacementQueue([node("oc", 1, 4)], {
+			now: clock.now,
+			schedule: clock.schedule,
+			probe: async () => {
+				probes += 1;
+				return true;
+			},
+		});
+
+		queue.markUnreachable("oc", 600_000);
+		await clock.advance(60_000);
+		expect(probes).toBe(0);
+	});
+});

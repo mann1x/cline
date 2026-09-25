@@ -43,6 +43,8 @@ import {
 	captureAgentUnexpectedReasoningTokens,
 	captureSdkError,
 	captureTaskLifecycleEvent,
+	classifyTurnFault,
+	classifyTurnFaultError,
 	estimateTokens,
 	lastOutputCap,
 	mergeModelOptions,
@@ -1616,7 +1618,7 @@ export class AgentRuntime {
 
 				const usageBeforeTurn = cloneUsage(this.state.usage);
 				const { message, finishReason } =
-					await this.generateAssistantMessageWithOverflowRecovery();
+					await this.generateAssistantMessageRecoveringFaults();
 				if (finishReason === "aborted") {
 					throw this.normalizeAbortError();
 				}
@@ -2203,6 +2205,117 @@ export class AgentRuntime {
 	private async callAfterRunHooks(result: AgentRunResult): Promise<void> {
 		for (const hook of this.hooks.afterRun) {
 			await hook({ snapshot: this.snapshot(), result });
+		}
+	}
+
+	/**
+	 * Run a model turn, and take it again for as long as it fails on a fault
+	 * that is not the model's: the server restarted or dropped the connection
+	 * (`transport`), or declined to run it now (`refusal`).
+	 *
+	 * Only with a `recoverTurnFault` configured, which does the waiting -- for
+	 * the server to answer again, or a backoff -- and decides whether to go on.
+	 * Without one, such a turn fails the run exactly as it always did.
+	 *
+	 * Replaying is safe because a turn that failed committed nothing: the
+	 * message is discarded here, before it can enter the transcript, and no tool
+	 * in it has run. Measured on 1tmrl: ten agents ended on `server is shutting
+	 * down` mid-stream and eighteen on an admission refusal of a later turn,
+	 * every one of them a turn that could simply have been sent again.
+	 *
+	 * Unbounded on purpose; the user's Stop is the bound. The abort signal wins
+	 * over every wait, and is checked again before each re-send.
+	 */
+	private async generateAssistantMessageRecoveringFaults(): Promise<{
+		message: AgentMessage;
+		finishReason: AgentModelFinishReason;
+	}> {
+		for (let attempt = 1; ; attempt += 1) {
+			let turn:
+				| { message: AgentMessage; finishReason: AgentModelFinishReason }
+				| undefined;
+			let thrown: unknown;
+			let threw = false;
+			try {
+				turn = await this.generateAssistantMessageWithOverflowRecovery();
+			} catch (error) {
+				if (
+					this.abortController?.signal.aborted ||
+					error instanceof ControlledStopError ||
+					error instanceof ContextWindowOverflowError ||
+					error instanceof AgentRuntimeAbortError
+				) {
+					throw error;
+				}
+				thrown = error;
+				threw = true;
+			}
+			const recover = this.config.recoverTurnFault;
+			const giveUp = () => {
+				if (threw) {
+					throw thrown;
+				}
+				return turn as {
+					message: AgentMessage;
+					finishReason: AgentModelFinishReason;
+				};
+			};
+			if (!recover) {
+				return giveUp();
+			}
+			let kind: ReturnType<typeof classifyTurnFault>;
+			let providerError: string;
+			if (threw) {
+				kind = classifyTurnFaultError(thrown);
+				providerError =
+					thrown instanceof Error ? thrown.message : String(thrown);
+			} else if (turn?.finishReason === "error") {
+				providerError = this.state.lastError ?? "";
+				kind = classifyTurnFault(providerError, this.state.lastErrorClass);
+			} else {
+				return giveUp();
+			}
+			if (!kind) {
+				return giveUp();
+			}
+			this.config.logger?.log?.(
+				`Turn ${this.state.iteration} failed on a ${kind} fault (attempt ${attempt}): ${providerError}; waiting to send it again`,
+				{ severity: "warn" },
+			);
+			await this.emit({
+				type: "status-notice",
+				snapshot: this.snapshot(),
+				message:
+					kind === "transport"
+						? "the server dropped the turn — waiting for it to come back, then retrying"
+						: "the server refused the turn for now — waiting, then retrying",
+				metadata: {
+					kind: "turn_fault_recovery",
+					reason: kind,
+					phase: "started",
+					iteration: this.state.iteration,
+					attempt,
+					providerError,
+				},
+			});
+			let again = false;
+			try {
+				again = await recover({
+					kind,
+					message: providerError,
+					attempt,
+					iteration: this.state.iteration,
+					...(this.abortController?.signal
+						? { signal: this.abortController.signal }
+						: {}),
+				});
+			} catch {
+				again = false;
+			}
+			this.throwIfAborted();
+			if (!again) {
+				return giveUp();
+			}
 		}
 	}
 

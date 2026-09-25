@@ -39,6 +39,7 @@ import {
 	type ReasoningEffort,
 	ReasoningEffortSchema,
 } from "../llms/reasoning-options";
+import type { TurnFaultRecovery } from "./turn-faults";
 
 export {
 	REASONING_LEVELS,
@@ -1075,6 +1076,8 @@ export interface AgentConfig {
 		| Promise<DiscardedTurnCondensation | undefined>
 		| DiscardedTurnCondensation
 		| undefined;
+	/** See `AgentRuntimeConfig.recoverTurnFault`. */
+	recoverTurnFault?: TurnFaultRecovery;
 	/**
 	 * Optional Telemetry service for emitting structured events about agent execution to configured telemetry backends.
 	 */

@@ -396,3 +396,111 @@ describe("sniffMediaType", () => {
 		).toBeUndefined();
 	});
 });
+
+/**
+ * #53: a text-only model is sent text, so no image part reached the tool's
+ * output -- and the user's chat row is built from that output, so the person
+ * who asked for the image never saw it either.
+ */
+describe("a generated image and a model that cannot read images", () => {
+	it("still shows the image to the user, through the tool's own row", async () => {
+		const updates: unknown[] = [];
+		const tool = createGenerateImageTool({
+			cwd: WORKSPACE,
+			getEndpoint: () => ({ baseUrl: "http://localhost:8080", model: "z" }),
+			writeFile: async () => {},
+			fetchImpl: (async () =>
+				jsonResponse({
+					data: [{ b64_json: PNG_BASE64 }],
+				})) as unknown as typeof fetch,
+		});
+
+		const output = await tool.execute({ prompt: "a rocket icon" }, {
+			metadata: { modelSupportsImages: false },
+			emitUpdate: (update: unknown) => updates.push(update),
+		} as never);
+
+		expect(typeof output).toBe("string");
+		expect(updates).toEqual([
+			{
+				displayImages: [
+					{ type: "image", data: PNG_BASE64, mediaType: expect.any(String) },
+				],
+			},
+		]);
+	});
+
+	it("sends no separate display image to a model that reads images", async () => {
+		const updates: unknown[] = [];
+		const tool = createGenerateImageTool({
+			cwd: WORKSPACE,
+			getEndpoint: () => ({ baseUrl: "http://localhost:8080", model: "z" }),
+			writeFile: async () => {},
+			fetchImpl: (async () =>
+				jsonResponse({
+					data: [{ b64_json: PNG_BASE64 }],
+				})) as unknown as typeof fetch,
+		});
+
+		const output = await tool.execute({ prompt: "a rocket icon" }, {
+			metadata: { modelSupportsImages: true },
+			emitUpdate: (update: unknown) => updates.push(update),
+		} as never);
+
+		expect(Array.isArray(output)).toBe(true);
+		expect(updates).toEqual([]);
+	});
+
+	it("keeps the image out of a text-only model's transcript while the row's update carries it", async () => {
+		const { AgentRuntime } = await import("@cline/agents");
+		const tool = createGenerateImageTool({
+			cwd: WORKSPACE,
+			getEndpoint: () => ({ baseUrl: "http://localhost:8080", model: "z" }),
+			writeFile: async () => {},
+			fetchImpl: (async () =>
+				jsonResponse({
+					data: [{ b64_json: PNG_BASE64 }],
+				})) as unknown as typeof fetch,
+		});
+		const steps = [
+			[
+				{
+					type: "tool-call-delta",
+					toolCallId: "img-1",
+					toolName: "generate_image",
+					inputText: JSON.stringify({ prompt: "a rocket icon" }),
+				},
+				{ type: "finish", reason: "tool-calls" },
+			],
+			[
+				{ type: "text-delta", text: "done" },
+				{ type: "finish", reason: "stop" },
+			],
+		];
+		const runtime = new AgentRuntime({
+			model: {
+				stream: async () =>
+					(async function* () {
+						for (const event of steps.shift() ?? []) {
+							yield event as never;
+						}
+					})(),
+			},
+			tools: [tool as never],
+			toolContextMetadata: { modelSupportsImages: false },
+		});
+		const shown: unknown[] = [];
+		runtime.subscribe((event) => {
+			if (event.type === "tool-updated") {
+				shown.push(event.update);
+			}
+		});
+
+		const result = await runtime.run("make me an icon");
+
+		const parts = JSON.stringify(result.messages);
+		expect(parts).not.toContain(PNG_BASE64);
+		expect(parts).not.toContain('"type":"image"');
+		expect(JSON.stringify(shown)).toContain(PNG_BASE64);
+	});
+});
