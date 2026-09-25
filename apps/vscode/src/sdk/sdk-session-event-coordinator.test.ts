@@ -491,6 +491,7 @@ function makeCoordinator(input: Partial<MakeCoordinatorInput> = {}) {
 		sessions: {
 			getActiveSession: vi.fn(() => activeSession),
 			setRunning: vi.fn(),
+			markTurnStarted: vi.fn(),
 		},
 		messages: {
 			appendAndEmit: vi.fn(),

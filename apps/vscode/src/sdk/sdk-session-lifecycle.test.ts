@@ -335,6 +335,41 @@ describe("SdkSessionLifecycle", () => {
 		expect(lifecycle.getActiveSession()?.isRunning).toBe(true)
 	})
 
+	// #83: a previous turn's send failing late must not fail the turn that
+	// is running now -- a drained queued prompt, or a follow-up send.
+	it("skips error bookkeeping when a newer turn started before the send failed", async () => {
+		const onSendError = vi.fn()
+		const rejects: Array<(error: Error) => void> = []
+		const send = vi.fn(
+			() =>
+				new Promise<void>((_resolve, reject) => {
+					rejects.push(reject)
+				}),
+		)
+		const sdkHost = makeSdkHost({ send })
+		mockCreateSessionHost.mockResolvedValueOnce(sdkHost)
+		const lifecycle = makeLifecycle({ onSendError })
+		await lifecycle.startNewSession({} as StartInput)
+
+		lifecycle.fireAndForgetSend(sdkHost as unknown as SendHost, "session-123", "first")
+		// The SDK drains a queued prompt: the next turn is running.
+		lifecycle.markTurnStarted()
+		lifecycle.setRunning(true)
+
+		rejects[0]?.(new Error("late failure of the first turn"))
+		await new Promise((resolve) => setTimeout(resolve, 0))
+
+		expect(onSendError).not.toHaveBeenCalled()
+		expect(lifecycle.getActiveSession()?.isRunning).toBe(true)
+
+		// A failure of the turn that is current is still reported.
+		lifecycle.fireAndForgetSend(sdkHost as unknown as SendHost, "session-123", "second")
+		const current = new Error("current turn failed")
+		rejects[1]?.(current)
+		await vi.waitFor(() => expect(onSendError).toHaveBeenCalledWith(current, "session-123"))
+		expect(lifecycle.getActiveSession()?.isRunning).toBe(false)
+	})
+
 	it("completes the old session stop before starting a same-id replacement", async () => {
 		let resolveStop: () => void = () => {}
 		const stop = vi.fn(

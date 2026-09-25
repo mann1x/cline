@@ -82,6 +82,12 @@ export class SdkSessionLifecycle {
 	 * sequencing the CLI uses.
 	 */
 	private readonly pendingStops = new Map<string, Promise<void>>()
+	/**
+	 * Advances every time a turn starts: a turn-starting send, or a queued
+	 * prompt the SDK drained (markTurnStarted). A send whose promise fails
+	 * after a newer turn began is a straggler from the turn before (#83).
+	 */
+	private turnGeneration = 0
 
 	constructor(private readonly options: SdkSessionLifecycleOptions) {}
 
@@ -397,6 +403,14 @@ export class SdkSessionLifecycle {
 		return this.sharedHostPromise
 	}
 
+	/**
+	 * A turn started that did not go through fireAndForgetSend: the SDK drained
+	 * a queued prompt at the previous turn's end.
+	 */
+	markTurnStarted(): void {
+		this.turnGeneration += 1
+	}
+
 	fireAndForgetSend(
 		sdkHost: SdkSessionHost,
 		sessionId: string,
@@ -413,6 +427,8 @@ export class SdkSessionLifecycle {
 		// auto-continued run to isRunning=false, which makes the event coordinator
 		// treat the new turn's completion as a cancelled-turn straggler).
 		const sessionAtSend = this.activeSession
+		// Queued and steered prompts join the running turn; anything else starts one.
+		const turnAtSend = delivery === "queue" || delivery === "steer" ? this.turnGeneration : ++this.turnGeneration
 		const isSuperseded = (label: string): boolean => {
 			if (this.activeSession === sessionAtSend) {
 				return false
@@ -455,6 +471,16 @@ export class SdkSessionLifecycle {
 					return
 				}
 				if (isSuperseded("failure")) {
+					return
+				}
+				// Same idea within one session: a newer turn has started since this
+				// send, so marking the session idle and the phase "error" would land
+				// on that turn -- the footer loses Cancel while it runs (#83).
+				if (this.turnGeneration !== turnAtSend) {
+					Logger.warn(
+						`[SdkController] Send of an earlier turn failed after a newer turn started; not failing that turn: ${sessionId}`,
+						error,
+					)
 					return
 				}
 				Logger.error("[SdkController] Agent turn failed:", error)
