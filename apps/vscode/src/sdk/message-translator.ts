@@ -2400,6 +2400,9 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 							}
 							entry.latestToolCall = updateData.latestToolCall
 						}
+						// Its tool has ended and it is thinking again (#77): the row
+						// stops naming the tool rather than showing it until the next.
+						if (updateData.latestToolCall === null) entry.latestToolCall = undefined
 						if (typeof updateData.latestOutput === "string") entry.latestOutput = updateData.latestOutput
 						if (updateData.latestOutputKind === "text" || updateData.latestOutputKind === "reasoning")
 							entry.latestOutputKind = updateData.latestOutputKind

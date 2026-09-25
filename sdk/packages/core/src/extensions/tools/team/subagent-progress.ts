@@ -198,6 +198,9 @@ export function createSubagentProgress(
 	now: () => number = Date.now,
 ): SubagentProgress {
 	let toolCalls = 0;
+	// Tools that have started and not yet ended. The row's "doing" is the
+	// running tool, and once none is running the agent is thinking again.
+	let toolsRunning = 0;
 	// The tail of what it is writing, and separately of what it is thinking:
 	// an agent deep in reasoning has written nothing, and "nothing" is not what
 	// it is doing.
@@ -287,9 +290,20 @@ export function createSubagentProgress(
 				reportOutput(true);
 				return;
 			}
-			// Only the start of a tool. `content_end` would report what it has
-			// just stopped doing, and a sub-agent between tools is thinking
-			// rather than running the last one it finished.
+			// A tool ended: a sub-agent between tools is thinking rather than
+			// running the last one it finished, so the row stops naming it
+			// (`null` clears it). Only for a tool this observer saw start, and
+			// only once the last of a parallel batch is done (#77).
+			if (event.type === "content_end" && event.contentType === "tool") {
+				if (toolsRunning > 0) {
+					toolsRunning -= 1;
+					if (toolsRunning === 0) {
+						emitUpdate({ latestToolCall: null });
+					}
+				}
+				return;
+			}
+			// Only the start of a tool counts as a tool call.
 			if (
 				event.type !== "content_start" ||
 				event.contentType !== "tool" ||
@@ -298,6 +312,7 @@ export function createSubagentProgress(
 				return;
 			}
 			toolCalls += 1;
+			toolsRunning += 1;
 			// A new step: what it wrote before is the previous step's. So is the
 			// speed window: time spent running a tool is not generation.
 			text = "";

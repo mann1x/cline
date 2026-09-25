@@ -42,8 +42,27 @@ describe("reporting what a sub-agent is doing", () => {
 		});
 	});
 
-	// An agent between tools is thinking, not still running the last one it
-	// finished, so the end of a tool says nothing new.
+	// #77: "doing" kept naming the last tool while the agent had gone back to
+	// thinking. The end of the tool it started clears it.
+	it("stops naming a tool once it has ended", () => {
+		const emitUpdate = vi.fn();
+		const progress = createSubagentProgress(emitUpdate);
+		const toolEnd = {
+			type: "content_end",
+			contentType: "tool",
+			toolName: "editor",
+		} as AgentEvent;
+
+		progress.observe(toolStart("read_files"));
+		progress.observe(toolStart("editor"));
+		progress.observe(toolEnd);
+		// One of a parallel pair is still running.
+		expect(emitUpdate).not.toHaveBeenCalledWith({ latestToolCall: null });
+		progress.observe(toolEnd);
+		expect(emitUpdate).toHaveBeenLastCalledWith({ latestToolCall: null });
+	});
+
+	// The end of a tool it never saw start says nothing.
 	// Text is reported as output (below), never as a tool call.
 	it("counts only a tool starting as a tool call", () => {
 		const emitUpdate = vi.fn();

@@ -5458,6 +5458,33 @@ describe("a sub-agent's placement, while it runs", () => {
 		})
 	})
 
+	// #77: the last tool stayed on the row while the agent went back to thinking.
+	it("stops naming a tool once the agent reports it ended", () => {
+		const state = new MessageTranslatorState()
+		translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "content_start",
+						contentType: "tool",
+						toolName: "subagent_js_syntactic",
+						toolCallId: "call-1",
+						input: { prompt: "fix the braces" },
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+
+		update(state, { latestToolCall: "editor", toolCalls: 1 })
+		expect(state.getSpawnAgentItems()[0]?.latestToolCall).toBe("editor")
+		update(state, { latestToolCall: null })
+		expect(state.getSpawnAgentItems()[0]?.latestToolCall).toBeUndefined()
+		expect(state.getSpawnAgentItems()[0]?.toolCalls).toBe(1)
+	})
+
 	// #78: the model was named only by the final result, so while an agent ran
 	// nothing said which provider or model it was on.
 	it("names its provider and model while it runs", () => {
