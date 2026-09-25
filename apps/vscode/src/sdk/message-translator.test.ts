@@ -5575,6 +5575,54 @@ describe("a spawn_agent batch", () => {
 		])
 		expect(state.getSpawnAgentItems()[0]?.result).toBe("all good")
 	})
+
+	// The result the model gets is sized to fit the tool-result cap: an index
+	// of every agent and not every report. Each row keeps the full report its
+	// own `finished` update brought, and the index settles its status.
+	it("finishes every row from the batch index, keeping each full report", () => {
+		const state = new MessageTranslatorState()
+		send(state, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-2",
+			input: {
+				agents: [
+					{ name: "one", task: "a" },
+					{ name: "two", task: "b" },
+					{ name: "three", task: "c" },
+				],
+			},
+		})
+		send(state, {
+			type: "content_update",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-2",
+			update: { member: 0, finished: { name: "one", text: "the full report of one", finishReason: "completed" } },
+		})
+		send(state, {
+			type: "content_end",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-2",
+			output: {
+				summary: { total: 3, completed: 1, errored: 1, cancelled: 1 },
+				agents: [
+					{ name: "one", status: "completed", line: "the full report…" },
+					{ name: "two", status: "errored", failureClass: "infra", error: "server is shutting down" },
+					"three|cancelled",
+				],
+				reports: [{ name: "one", text: "the full report of one" }],
+				usage: { inputTokens: 1, outputTokens: 1 },
+			},
+		})
+		const items = state.getSpawnAgentItems()
+		expect(items.map((item) => item.status)).toEqual(["completed", "failed", "failed"])
+		expect(items[0]?.result).toBe("the full report of one")
+		expect(items[1]?.error).toBe("server is shutting down")
+		expect(items[2]?.error).toBe("Agent cancelled")
+	})
 })
 
 describe("a sub-agent's activity", () => {

@@ -24,6 +24,7 @@ import { z } from "zod";
 import { isPolykvProvider } from "../../context/polykv-session";
 import { summarizeForLead } from "./agent-reports";
 import { createAgentTroubleWatch, roomWaitTrouble } from "./agent-trouble";
+import { buildSpawnBatchReport, type SpawnBatchReport } from "./batch-report";
 import type { ConfiguredAgentConfig } from "./configured-agent-config";
 import {
 	createDelegatedAgent,
@@ -217,10 +218,12 @@ export interface SpawnAgentMemberOutput extends Partial<SpawnAgentOutput> {
 	error?: string;
 }
 
-export interface SpawnAgentBatchOutput {
-	results: SpawnAgentMemberOutput[];
-	usage: { inputTokens: number; outputTokens: number };
-}
+/**
+ * An `agents` call's result: an aggregate, an index of every agent, and as
+ * many reports as fit -- the rest named, to read with `read_agent_report`.
+ * See `batch-report.ts`.
+ */
+export type SpawnAgentBatchOutput = SpawnBatchReport;
 
 export interface SpawnAgentOutput {
 	text: string;
@@ -358,7 +361,9 @@ export function configuredAgentKey(name: string): string {
 
 const SPAWN_AGENT_DESCRIPTION =
 	"Spawn sub-agents for focused tasks: `task` for one agent, `agents` for several in one call. Structure the work in three parts, from most shared to least: `knowledge` (files and notes the agents need -- identical across them), `instructions` (the role -- identical for every agent of the same kind), and each agent's `task` (what it alone does). Shared parts are loaded once for all agents that share them, so many agents cost little more than one. An `agents` entry may name a configured agent in `type`; it then runs with that agent's own role and model. " +
-	"Output: one agent gives `{text, iterations, finishReason, usage: {inputTokens, outputTokens}}`; `agents` gives `{results: [{name, text, finishReason, error?}], usage}`. " +
+	"Output: one agent gives `{text, iterations, finishReason, usage: {inputTokens, outputTokens}}`; `agents` gives `{summary: {total, completed, errored, cancelled, byType, byFailureClass, totalIterations, totalTokens}, agents: [{name, status, failureClass?, line?, error?}], reports: [{name, text}], notShown?: {names}, usage}` -- every agent is in `agents`; a report left out of `reports` to keep the result whole is listed in `notShown` and read with `read_agent_report(name)`. `failureClass` is `infra` (server, transport or refusal: worth running again as is) or `task` (the model, a tool or the iteration budget). " +
+	"Not merging is the way to get N separate reports: each agent of an `agents` call reports on its own, where `merge` returns one combined report. " +
+	"Use `spawn_agent` for tasks that finish and report back; use the `team_*` tools for long-lived teammates you keep assigning work to and messaging. " +
 	"`text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. It has already finished by the time you see this — there is nothing to poll and nothing to await. " +
 	"Give each sub-agent a short `name`: when several run at once it is the only thing telling their progress apart on screen. ";
 
@@ -704,19 +709,17 @@ async function runSpawnBatch(
 			};
 		}
 	}
-	return {
-		results,
-		usage: {
-			inputTokens: results.reduce(
-				(sum, entry) => sum + (entry.usage?.inputTokens ?? 0),
-				0,
-			),
-			outputTokens: results.reduce(
-				(sum, entry) => sum + (entry.usage?.outputTokens ?? 0),
-				0,
-			),
-		},
-	};
+	// Built to fit the tool-result cap and name every agent: a round of 75
+	// summaries was cut from the middle, and the lead lost the agents there.
+	return buildSpawnBatchReport(
+		results.map((result, index) => ({
+			...result,
+			...(members[index]?.type?.trim()
+				? { type: members[index]?.type?.trim() }
+				: {}),
+		})),
+		context.sessionId,
+	);
 }
 
 /** One agent: placed through the spawn queue when there are nodes, run, reported. */

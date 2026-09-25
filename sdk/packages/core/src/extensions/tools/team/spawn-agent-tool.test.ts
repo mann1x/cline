@@ -1,5 +1,6 @@
 import type { AgentConfig } from "@cline/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SpawnBatchIndexEntry, SpawnBatchReport } from "./batch-report";
 import { createDelegatedAgentConfigProvider } from "./delegated-agent";
 
 type AgentExtension = NonNullable<AgentConfig["extensions"]>[number];
@@ -668,11 +669,16 @@ describe("createSpawnAgentTool", () => {
 				sessionId: "lead",
 				emitUpdate: (update: unknown) => updates.push(update),
 			} as never,
-		)) as { results: Array<{ name: string; text?: string }>; usage: unknown };
+		)) as SpawnBatchReport;
 
-		expect(output.results.map((entry) => [entry.name, entry.text])).toEqual([
+		expect(output.reports.map((entry) => [entry.name, entry.text])).toEqual([
 			["one", "report for lines 1-50"],
 			["two", "report for lines 51-100"],
+		]);
+		const index = output.agents as SpawnBatchIndexEntry[];
+		expect(index.map((entry) => [entry.name, entry.status])).toEqual([
+			["one", "completed"],
+			["two", "completed"],
 		]);
 		expect(output.usage).toEqual({ inputTokens: 6, outputTokens: 4 });
 		// Every update names its member, and each member has a stop of its own.
@@ -722,19 +728,28 @@ describe("createSpawnAgentTool", () => {
 				iteration: 1,
 				toolCallId: "t",
 			} as never,
-		)) as { results: Array<{ name: string; text?: string; error?: string }> };
+		)) as SpawnBatchReport;
 
-		expect(output.results[0]?.text).toBe("configured report");
+		expect(output.reports[0]?.text).toBe("configured report");
 		const prompt = (configuredExecute.mock.calls[0] as unknown[])[0] as {
 			prompt: string;
 		};
 		expect(prompt.prompt).toContain("game.html");
 		expect(prompt.prompt).toContain("check braces");
 		// One bad entry is its own failure, not the batch's.
-		expect(output.results[1]?.error).toContain(
+		expect(output.agents[1]).toMatchObject({
+			name: "b",
+			status: "errored",
+			failureClass: "task",
+		});
+		expect((output.agents[1] as SpawnBatchIndexEntry).error).toContain(
 			'No configured agent named "nonexistent"',
 		);
-		expect(output.results[1]?.error).toContain("js_syntactic");
+		expect(output.reports[1]?.text).toContain("js_syntactic");
+		expect(output.summary.byType).toMatchObject({
+			"subagent_js-syntactic": { total: 1, completed: 1 },
+			nonexistent: { total: 1, errored: 1 },
+		});
 	});
 
 	it("routes `merge` to the swarm, and offers it only when there is one", async () => {

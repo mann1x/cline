@@ -252,6 +252,22 @@ function pushSubagentActivity(entry: SubagentStatusItem, text: string, severity?
 	entry.activity = activity.slice(-SUBAGENT_ACTIVITY_LIMIT)
 }
 
+/**
+ * One entry of a batch result's `agents` index: an object, or for a round too
+ * large for that, a `name|status|failureClass` string.
+ */
+function readBatchIndexEntry(value: unknown): { status: string; error?: string } | undefined {
+	if (typeof value === "string") {
+		const [, status] = value.split("|")
+		return status ? { status } : undefined
+	}
+	if (value && typeof value === "object" && typeof (value as { status?: unknown }).status === "string") {
+		const entry = value as { status: string; error?: unknown }
+		return { status: entry.status, ...(typeof entry.error === "string" ? { error: entry.error } : {}) }
+	}
+	return undefined
+}
+
 function applySpawnAgentOutput(entry: SubagentStatusItem, output: Record<string, unknown>): void {
 	entry.result = typeof output.text === "string" ? output.text : undefined
 	const usage = output.usage as Record<string, unknown> | undefined
@@ -2599,6 +2615,11 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						const batchSize = callId ? state.countSpawnMembers(callId) : 0
 						if (batchSize > 0) {
 							const results = Array.isArray(output?.results) ? (output.results as unknown[]) : []
+							// The batch result sized for the model: an index of every
+							// agent (status and why), and not every report. Each row
+							// already has its full report from its own `finished`
+							// update, so the index only settles the status.
+							const agentIndex = Array.isArray(output?.agents) ? (output.agents as unknown[]) : []
 							for (let index = 0; index < batchSize; index += 1) {
 								const memberEntry = state.getSpawnAgent(spawnMemberKey(callId, index))
 								if (!memberEntry) {
@@ -2608,7 +2629,13 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 								if (result) {
 									applySpawnAgentOutput(memberEntry, result)
 								}
-								const failure = event.error ?? (typeof result?.error === "string" ? result.error : undefined)
+								const indexed = readBatchIndexEntry(agentIndex[index])
+								const failure =
+									event.error ??
+									(typeof result?.error === "string" ? result.error : undefined) ??
+									(indexed && indexed.status !== "completed"
+										? (indexed.error ?? memberEntry.error ?? `Agent ${indexed.status}`)
+										: undefined)
 								if (failure) {
 									memberEntry.status = "failed"
 									memberEntry.error = failure
