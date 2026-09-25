@@ -70,6 +70,7 @@ vi.mock("../../../../src/services/error/ClineError", () => ({
 		ClinePassLimit: "clinePassLimit",
 		ClineFreeModelLimit: "clineFreeModelLimit",
 		ClineFreePromotionEnded: "clineFreePromotionEnded",
+		OpencotiWindowUnavailable: "opencotiWindowUnavailable",
 		QuotaExceeded: "quotaExceeded",
 	},
 }))
@@ -336,6 +337,28 @@ describe("ErrorRow", () => {
 			expect(screen.queryByText(limitMessage)).not.toBeInTheDocument()
 			expect(screen.queryByText(/deepseek-v4-flash/i)).not.toBeInTheDocument()
 			expect(screen.queryByText(/Switch to Usage-Based billing/i)).not.toBeInTheDocument()
+		})
+
+		it("renders the Can't resume card for a window the server cannot give", async () => {
+			const rawMessage = "Can't resume this conversation."
+			const mockClineError = {
+				message: rawMessage,
+				isErrorType: vi.fn((type) => type === "opencotiWindowUnavailable"),
+				providerId: "opencoti",
+				_error: {
+					message: rawMessage,
+					details: { asked: 262_144, floor: 262_144, largestAdmissible: 131_072, resume: true },
+				},
+			}
+
+			const { ClineError } = await import("../../../../src/services/error/ClineError")
+			vi.mocked(ClineError.parse).mockReturnValue(mockClineError as any)
+
+			render(<ErrorRow apiRequestFailedMessage={rawMessage} errorType="error" message={mockMessage} />)
+
+			expect(screen.getByTestId("opencoti-window-unavailable-error")).toBeInTheDocument()
+			expect(screen.getByText("The server has 128k free right now.")).toBeInTheDocument()
+			expect(screen.getByText("View history")).toBeInTheDocument()
 		})
 
 		it("renders the promotion-ended card with a route into the model picker", async () => {
