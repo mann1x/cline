@@ -497,9 +497,44 @@ export function invalidatePolykvRoot(baseUrl: string, reason: string): void {
 	}
 }
 
+/** What the server said of a pool when it was made, for the listing check. */
+export type PolykvPoolRecord = PoolRecord;
+
+/** Pools on `root` held outside the swarm's groups, current generation only. */
+export type PolykvPoolHolder = (root: string) => Array<[string, PoolRecord]>;
+
+const SUSPECT_POOL_HOLDERS = new Set<PolykvPoolHolder>();
+
+/**
+ * Register pools held outside the swarm -- the lead tree's -- so a restart
+ * check can see them too.
+ *
+ * Read only when a fault made the root suspect: the lead's pools can go for
+ * reasons that are not a restart (a lapsed window takes its sub-pool, the
+ * engine sweeps an idle shared root), and on a quiet root that must not cost
+ * every agent its pools. After a fault, a missing pool is read as the restart
+ * it most likely is -- a rebuilt pool costs a prefill, a stale id can attach
+ * a turn to someone else's. Returns the unregister.
+ */
+export function registerPolykvPoolHolder(holder: PolykvPoolHolder): () => void {
+	SUSPECT_POOL_HOLDERS.add(holder);
+	return () => {
+		SUSPECT_POOL_HOLDERS.delete(holder);
+	};
+}
+
 /** Pool ids this process holds on `root`, with what the server said of each. */
-function heldPools(root: string): Array<[string, PoolRecord]> {
+function heldPools(root: string, suspect = false): Array<[string, PoolRecord]> {
 	const held: Array<[string, PoolRecord]> = [];
+	if (suspect) {
+		for (const holder of SUSPECT_POOL_HOLDERS) {
+			try {
+				held.push(...holder(root));
+			} catch {
+				// A holder that cannot say contributes nothing.
+			}
+		}
+	}
 	for (const group of GROUPS.values()) {
 		if (group.root !== root) {
 			continue;
@@ -614,7 +649,7 @@ export async function verifyPolykvRoot(
 		return state.checking;
 	}
 	state.checking = (async () => {
-		const held = heldPools(root);
+		const held = heldPools(root, state.suspect);
 		const [props, listing] = await Promise.all([
 			readRootJson(fetchFn, `${root}/props`, headers),
 			held.length > 0

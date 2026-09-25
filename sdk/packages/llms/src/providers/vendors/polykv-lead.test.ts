@@ -26,6 +26,8 @@ function stubEngine(
 	const pools = new Set<string>();
 	const sharedRoots = new Map<string, string>();
 	let nextPool = 0;
+	let bootId = 1;
+	let failNextChat = false;
 	const render = (messages: Array<{ role: string; content: unknown }>) =>
 		messages
 			.map(
@@ -50,6 +52,7 @@ function stubEngine(
 				// no `num_ctx`, and the lead tree has no window to fork under.
 				features: ["elastic_guaranteed_alloc_v1", ...(options.features ?? [])],
 				opencoti: {
+					boot_id: `boot-${bootId}`,
 					polykv: { pools_enabled: options.poolsEnabled !== false },
 					elastic_slots: { enabled: true },
 				},
@@ -104,6 +107,12 @@ function stubEngine(
 			return json({ ok: true });
 		}
 		if (url.pathname === "/v1/chat/completions") {
+			if (failNextChat) {
+				failNextChat = false;
+				throw Object.assign(new Error("fetch failed"), {
+					cause: { code: "ECONNRESET" },
+				});
+			}
 			// The grant is what was asked, as a server with room answers.
 			return new Response(
 				JSON.stringify({ choices: [{ message: { content: "ok" } }] }),
@@ -119,7 +128,22 @@ function stubEngine(
 		}
 		return json({ error: "no route" }, 404);
 	}) as unknown as typeof fetch;
-	return { calls, pools, fetch: fetchImpl };
+	return {
+		calls,
+		pools,
+		fetch: fetchImpl,
+		/**
+		 * The process restarts: every pool goes, ids count from 0 again, and
+		 * the boot id changes. The turn in flight is cut.
+		 */
+		restart: () => {
+			pools.clear();
+			sharedRoots.clear();
+			nextPool = 0;
+			bootId += 1;
+			failNextChat = true;
+		},
+	};
 }
 
 const STATIC = "You are Cline. Working Directory: see <environment>";
@@ -408,6 +432,60 @@ describe("the lead tree", () => {
 			(call) => call.path === "/v1/chat/completions",
 		);
 		expect(wire?.body.num_ctx).toBe(65_536);
+	});
+
+	// 1tmrl: a restarted server numbers its pools from 0 again. A lead that
+	// kept its ids would attach someone else's pool -- the engine does not
+	// refuse an id it knows, whoever made it.
+	it("rebuilds its chain after a server restart and never sends an old id", async () => {
+		const engine = stubEngine();
+		const baseUrl = "http://engine-restart/v1";
+		const fetchImpl = createOpencotiFetch({
+			fetch: engine.fetch,
+			baseUrl,
+			request: { sessionId: "lead-r", leadPool: true, numCtx: 65_536 },
+		});
+		const send = () =>
+			fetchImpl(`${baseUrl}/chat/completions`, {
+				method: "POST",
+				body: JSON.stringify(leadBody("c:/one")),
+			});
+		const wire = () =>
+			engine.calls
+				.filter((call) => call.path === "/v1/chat/completions")
+				.map((call) => call.body.pool_id);
+		await send();
+		await send();
+		expect(wire()).toEqual([0, 1]);
+
+		engine.restart();
+		// The turn in flight dies with the old server.
+		await expect(send()).rejects.toThrow();
+		const cut = engine.calls.length;
+		// Someone else is quicker on the new server: its pools are 0 and 1.
+		for (const prompt of ["other root", "other root 2"]) {
+			await engine.fetch("http://engine-restart/polykv/pools", {
+				method: "POST",
+				body: JSON.stringify({ prompt }),
+			});
+		}
+		expect([...engine.pools]).toEqual(["0", "1"]);
+
+		await send();
+		await send();
+		const after = engine.calls.slice(cut);
+		const sent = after
+			.filter((call) => call.path === "/v1/chat/completions")
+			.map((call) => call.body.pool_id);
+		// A root made anew (2), then its sub-pool once the window is live (3).
+		expect(sent).toEqual([2, 3]);
+		expect(
+			after.filter((call) => call.path.endsWith("/fork")).map((c) => c.path),
+		).toEqual(["/polykv/pools/2/fork"]);
+		// Nothing of the old tree was released: those numbers are not ours now.
+		expect(after.some((call) => call.path.endsWith("/release"))).toBe(false);
+		expect(engine.pools.has("0") && engine.pools.has("1")).toBe(true);
+		expect(getPolykvSession("lead-r")?.poolId).toBe("3");
 	});
 
 	it("runs unpooled on a server without pools", async () => {

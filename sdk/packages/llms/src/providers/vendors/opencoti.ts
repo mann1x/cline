@@ -356,6 +356,8 @@ export function createOpencotiFetch(options: {
 		const extras = options.request;
 		let leadSession: string | undefined;
 		let leadAskedWindow = false;
+		/** The server generation of the lead pool id this request carries. */
+		let leadGeneration: number | undefined;
 		let body: Record<string, unknown> | undefined;
 		let negotiation: WindowNegotiation | undefined;
 		// The prefix the lead tree shares above a private budget, so the grant
@@ -448,6 +450,7 @@ export function createOpencotiFetch(options: {
 					}).catch(() => undefined);
 					if (leadPool && /^\d+$/.test(leadPool.poolId)) {
 						body.pool_id = Number(leadPool.poolId);
+						leadGeneration = leadPool.generation;
 						// `num_ctx` is the private budget on a server that says so,
 						// and the shared prefix rides above it. A new conversation
 						// then books its window minus what it shares -- the whole
@@ -488,7 +491,7 @@ export function createOpencotiFetch(options: {
 			}
 			nextInit = { ...init, body: JSON.stringify(body) };
 		}
-		const send = (wire: Record<string, unknown> | undefined) =>
+		const sendWire = (wire: Record<string, unknown> | undefined) =>
 			base(input, {
 				...nextInit,
 				...(wire ? { body: JSON.stringify(wire) } : {}),
@@ -497,6 +500,41 @@ export function createOpencotiFetch(options: {
 				// timeout is five minutes.
 				...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
 			} as RequestInit);
+		const leadBaseUrl = options.baseUrl;
+		const send = async (wire: Record<string, unknown> | undefined) => {
+			// A lead pool id is a number the server issued; after a restart the
+			// new server issues the same numbers to other pools. If the server
+			// was seen to restart since this request chose its pool -- a window
+			// refusal waited out across it -- the turn goes unpooled, which is
+			// slower and never wrong, and the next one rebuilds the chain.
+			let outgoing = wire;
+			if (
+				leadGeneration !== undefined &&
+				leadBaseUrl &&
+				polykvRootGeneration(leadBaseUrl) !== leadGeneration
+			) {
+				const { pool_id: _stale, ...rest } = wire ?? body ?? {};
+				outgoing = rest;
+			}
+			try {
+				const response = await sendWire(outgoing);
+				if (
+					leadGeneration !== undefined &&
+					leadBaseUrl &&
+					[502, 503, 504].includes(response.status)
+				) {
+					notePolykvServerFault(leadBaseUrl);
+				}
+				return response;
+			} catch (error) {
+				// Thrown on the way to a pooled lead turn: the server may be
+				// restarting, and the pools with it. The next turn asks first.
+				if (leadGeneration !== undefined && leadBaseUrl) {
+					notePolykvServerFault(leadBaseUrl);
+				}
+				throw error;
+			}
+		};
 
 		// A refusal goes back as a response, not as a throw.
 		//
@@ -541,6 +579,17 @@ export function createOpencotiFetch(options: {
 
 		if (leadSession !== undefined && leadAskedWindow && response.ok) {
 			markLeadWindowLive(leadSession);
+		}
+		if (
+			leadGeneration !== undefined &&
+			options.baseUrl &&
+			response.ok &&
+			!response.headers.has("x-context-window")
+		) {
+			// Every opencoti response names its window. A pooled lead turn that
+			// does not is a pool the server no longer holds -- restarted, or its
+			// window lapsed -- and the next turn asks the server first.
+			notePolykvServerFault(options.baseUrl);
 		}
 		const sessionId = extras?.sessionId;
 		// Every admitted response, header or not: an absent `X-Context-Window`
