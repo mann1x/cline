@@ -18,13 +18,19 @@ import {
  * are refused while it is down, and when it is back every pool and owner
  * allocation is gone and new pools are numbered from 0 again.
  */
-function restartableEngine() {
+function restartableEngine(
+	options: {
+		/** State opencoti's c8 boot fields: `opencoti.boot_id` in /props, `started_at` in /health. */
+		bootFields?: boolean;
+	} = {},
+) {
 	const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
 	let nextPool = 0;
 	let boot = 1;
 	let down = false;
 	let refusals = 0;
 	let identity = 1;
+	let bootId = 1;
 	let onTemplate: (() => void) | undefined;
 	/** Pool ids a turn named that this boot never issued. */
 	const unknownPoolSends: number[] = [];
@@ -56,12 +62,15 @@ function restartableEngine() {
 				headers: { "content-type": "application/json", ...headers },
 			});
 		if (url.pathname === "/health") {
-			return json({ status: "ok" });
+			return json({
+				status: "ok",
+				...(options.bootFields ? { started_at: 1_000 + bootId } : {}),
+			});
 		}
 		if (url.pathname === "/props") {
 			return json({
 				build_info: "opencoti-test",
-				opencoti: {},
+				opencoti: options.bootFields ? { boot_id: `b-${bootId}` } : {},
 				boot,
 				start_time: identity,
 			});
@@ -149,6 +158,10 @@ function restartableEngine() {
 		/** A new process identity in `/props`, pools untouched. */
 		newIdentity: () => {
 			identity += 1;
+		},
+		/** A new `boot_id` / `started_at`, pools untouched. */
+		newBoot: () => {
+			bootId += 1;
 		},
 		/** Run `fn` on the next `/apply-template`, once. */
 		onNextTemplate: (fn: () => void) => {
@@ -244,10 +257,16 @@ describe("a started worker whose server goes away", () => {
 	it("hands a worker that has not started its failure, for the queue to re-place", async () => {
 		const engine = restartableEngine();
 		engine.down();
+		const waits: boolean[] = [];
+		const stop = onPolykvRoomWait("fresh", (state) => {
+			waits.push(state.waiting);
+		});
 		await expect(send(engine, "fresh", agentBody("r", "t"))).rejects.toThrow(
 			"fetch failed",
 		);
-		expect(engine.calls.some((call) => call.path === "/health")).toBe(false);
+		stop();
+		// No wait for the server: the failure goes back as it came.
+		expect(waits.includes(true)).toBe(false);
 	});
 
 	it("gives up waiting the moment the agent is stopped", async () => {
@@ -430,6 +449,51 @@ describe("pool ids across a server restart", () => {
 		expect(engine.pools().get(sent)?.prompt).toContain("role A");
 		expect(engine.unknownPoolSends).toEqual([]);
 		expect(poolsSentBy(engine, "g")).toHaveLength(2);
+	});
+
+	// opencoti c8 row L (mail 274): `boot_id` and `started_at` on /props and
+	// /health, top level or under `opencoti`, are the identity when present.
+	it("rebuilds when the server's boot_id changes", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const engine = restartableEngine({ bootFields: true });
+		await send(engine, "boot", agentBody("role A", "t1"));
+		const generation = polykvRootGeneration("http://engine/v1");
+		engine.newBoot();
+		vi.setSystemTime(Date.now() + POLYKV_VERIFY_INTERVAL_MS + 1);
+		await send(engine, "boot", agentBody("role A", "t2"));
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation + 1);
+	});
+
+	it("reads only the boot fields when the server states them", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const engine = restartableEngine({ bootFields: true });
+		await send(engine, "boot-same", agentBody("role A", "t1"));
+		const generation = polykvRootGeneration("http://engine/v1");
+		// `start_time` moves; the boot id does not: the same process.
+		engine.newIdentity();
+		vi.setSystemTime(Date.now() + POLYKV_VERIFY_INTERVAL_MS + 1);
+		await send(engine, "boot-same", agentBody("role A", "t2"));
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation);
+	});
+
+	it("prefers boot_id and started_at, at the top level or under opencoti", () => {
+		const a = polykvServerIdentity({ build_info: "b1", boot_id: "x" });
+		expect(a).toBe(polykvServerIdentity({ build_info: "b2", boot_id: "x" }));
+		expect(a).not.toBe(
+			polykvServerIdentity({ build_info: "b1", boot_id: "y" }),
+		);
+		expect(
+			polykvServerIdentity({ opencoti: { boot_id: "x" }, pid: 1 }),
+		).not.toBe(polykvServerIdentity({ opencoti: { boot_id: "y" }, pid: 1 }));
+		expect(
+			polykvServerIdentity({ opencoti: { started_at: 5 }, build_info: "b1" }),
+		).toBe(
+			polykvServerIdentity({ opencoti: { started_at: 5 }, build_info: "b2" }),
+		);
+		// From /health, when /props does not carry them.
+		expect(
+			polykvServerIdentity({ build_info: "b1" }, { boot_id: "x" }),
+		).not.toBe(polykvServerIdentity({ build_info: "b1" }, { boot_id: "y" }));
 	});
 
 	it("reads a server's identity from what /props states", () => {

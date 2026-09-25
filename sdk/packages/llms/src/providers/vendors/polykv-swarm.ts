@@ -427,10 +427,21 @@ export function notePolykvServerFault(baseUrl: string): void {
 }
 
 /**
- * Fields of `/props` that change when the server process does. Whatever of
- * them the build states is the identity; a build that states none of them is
- * checked by its pools alone. `build_info` is among them because a restart
- * onto a new build is the common case.
+ * The fields opencoti states for exactly this purpose (c8 row L, confirmed in
+ * the answer to mail 274): `boot_id` is new with every process, `started_at`
+ * is when it started. Read at the top level and under `opencoti.*`, from
+ * `/props` and from `/health`. When a build states either, it is the whole
+ * identity: nothing else is needed, and a field that can change without a
+ * restart must not be read as one.
+ */
+const BOOT_IDENTITY_FIELDS = ["boot_id", "started_at"] as const;
+
+/**
+ * Fields of `/props` that change when the server process does, for a build
+ * that states neither boot field. Whatever of them the build states is the
+ * identity; a build that states none of them is checked by its pools alone.
+ * `build_info` is among them because a restart onto a new build is the
+ * common case.
  */
 const IDENTITY_FIELDS = [
 	"build_info",
@@ -445,21 +456,50 @@ const IDENTITY_FIELDS = [
 	"pid",
 ] as const;
 
-/** The identity a `/props` body states, or undefined when it states none. */
-export function polykvServerIdentity(
-	props: Record<string, unknown>,
-): string | undefined {
-	const opencoti = (props.opencoti ?? {}) as Record<string, unknown>;
+function pickIdentity(
+	bodies: ReadonlyArray<Record<string, unknown> | undefined>,
+	fields: readonly string[],
+): Array<[string, unknown]> {
 	const picked: Array<[string, unknown]> = [];
-	for (const field of IDENTITY_FIELDS) {
-		if (props[field] !== undefined) {
-			picked.push([field, props[field]]);
+	const seen = new Set<string>();
+	for (const body of bodies) {
+		if (!body) {
+			continue;
 		}
-		if (opencoti[field] !== undefined) {
-			picked.push([`opencoti.${field}`, opencoti[field]]);
+		const opencoti = (
+			body.opencoti && typeof body.opencoti === "object" ? body.opencoti : {}
+		) as Record<string, unknown>;
+		for (const field of fields) {
+			// The same field from /props and /health is one field.
+			if (body[field] !== undefined && !seen.has(field)) {
+				seen.add(field);
+				picked.push([field, body[field]]);
+			}
+			const nested = `opencoti.${field}`;
+			if (opencoti[field] !== undefined && !seen.has(nested)) {
+				seen.add(nested);
+				picked.push([nested, opencoti[field]]);
+			}
 		}
 	}
-	return picked.length > 0 ? JSON.stringify(picked) : undefined;
+	return picked;
+}
+
+/**
+ * The identity a `/props` body (and, when given, a `/health` body) states,
+ * or undefined when it states none. `boot_id` / `started_at` are preferred
+ * whenever either is present; see {@link BOOT_IDENTITY_FIELDS}.
+ */
+export function polykvServerIdentity(
+	props: Record<string, unknown> | undefined,
+	health?: Record<string, unknown>,
+): string | undefined {
+	const boot = pickIdentity([props, health], BOOT_IDENTITY_FIELDS);
+	if (boot.length > 0) {
+		return `boot:${JSON.stringify(boot)}`;
+	}
+	const picked = pickIdentity([props], IDENTITY_FIELDS);
+	return picked.length > 0 ? `props:${JSON.stringify(picked)}` : undefined;
 }
 
 /**
@@ -656,17 +696,35 @@ export async function verifyPolykvRoot(
 				? readRootJson(fetchFn, `${root}/polykv/pools`, headers)
 				: Promise.resolve(undefined),
 		]);
+		// `/health` is asked only for what `/props` did not say: the boot
+		// fields, on a build that puts them there alone.
+		const health =
+			props && polykvServerIdentity(props)?.startsWith("boot:")
+				? undefined
+				: await readRootJson(fetchFn, `${root}/health`, headers);
 		state.checkedAt = Date.now();
-		const identity = props ? polykvServerIdentity(props) : undefined;
+		const identity =
+			props || health ? polykvServerIdentity(props, health) : undefined;
 		let reason: string | undefined;
+		// Compared only kind to kind: a `/health` that did not answer this once
+		// drops the boot fields it carries, and falling back to the `/props`
+		// fields is not a new server. A build that gains the boot fields is
+		// re-baselined, never read as a restart.
+		const kind = (value: string) => value.slice(0, value.indexOf(":"));
 		if (
 			identity !== undefined &&
 			state.identity !== undefined &&
+			kind(identity) === kind(state.identity) &&
 			identity !== state.identity
 		) {
 			reason = "its identity in /props changed";
 		}
-		if (identity !== undefined) {
+		if (
+			identity !== undefined &&
+			(state.identity === undefined ||
+				kind(identity) === "boot" ||
+				kind(state.identity) !== "boot")
+		) {
 			state.identity = identity;
 		}
 		if (!reason && held.length > 0 && listing) {
