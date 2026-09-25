@@ -4687,6 +4687,76 @@ describe("MCP tool rendering (serverName__toolName convention)", () => {
 // browser screenshots
 // ---------------------------------------------------------------------------
 
+/**
+ * #53: a generated image, for a model that reads no images. The model is sent
+ * text alone, so the image is not in the tool's output -- the tool shows it
+ * on its row through an update instead, and the row must carry it.
+ */
+describe("a generated image the model could not be sent", () => {
+	const PNG = "iVBORw0KGgoAAAANSUhEUg"
+	const send = (state: MessageTranslatorState, event: Record<string, unknown>) =>
+		translateSessionEvent(
+			{ type: "agent_event", payload: { sessionId: "session-1", event: event as unknown as AgentEvent } },
+			state,
+		).messages
+
+	it("is shown under the tool's row even though the output is text only", () => {
+		const state = new MessageTranslatorState()
+		send(state, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "generate_image",
+			toolCallId: "img-1",
+			input: { prompt: "a rocket icon" },
+		})
+		send(state, {
+			type: "content_update",
+			contentType: "tool",
+			toolName: "generate_image",
+			toolCallId: "img-1",
+			update: { displayImages: [{ type: "image", data: PNG, mediaType: "image/png" }] },
+		})
+		const messages = send(state, {
+			type: "content_end",
+			contentType: "tool",
+			toolName: "generate_image",
+			toolCallId: "img-1",
+			output: "Generated and saved to `.cline/generated-images/a-rocket-icon.png`.\n\nYou cannot see images",
+		})
+
+		const row = messages.find((message) => message.images && message.images.length > 0)
+		expect(row?.images).toEqual([`data:image/png;base64,${PNG}`])
+		expect(row?.text).toContain("Generated and saved")
+		expect(row?.text).not.toContain(PNG)
+	})
+
+	it("belongs to its own call only", () => {
+		const state = new MessageTranslatorState()
+		send(state, {
+			type: "content_update",
+			contentType: "tool",
+			toolName: "generate_image",
+			toolCallId: "img-1",
+			update: { displayImages: [{ type: "image", data: PNG, mediaType: "image/png" }] },
+		})
+		send(state, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "read_files",
+			toolCallId: "other",
+			input: { path: "a.ts" },
+		})
+		const messages = send(state, {
+			type: "content_end",
+			contentType: "tool",
+			toolName: "read_files",
+			toolCallId: "other",
+			output: "text",
+		})
+		expect(messages.some((message) => (message.images?.length ?? 0) > 0)).toBe(false)
+	})
+})
+
 describe("browser screenshots reach the transcript", () => {
 	const PNG = "iVBORw0KGgoAAAANSUhEUg"
 

@@ -333,6 +333,11 @@ export class MessageTranslatorState {
 	/** Approved tool-call ids mapped to the approval row that should be updated in place. */
 	private approvedToolMessageTsByCallId = new Map<string, number>()
 	/**
+	 * Images a tool showed the user but not the model (#53), by tool call, as
+	 * data URLs: shown under the tool's row when it ends.
+	 */
+	private displayImagesByCallId = new Map<string, string[]>()
+	/**
 	 * The in-flight compaction divider's ts, so the "completed"/"skipped" notice
 	 * (or a turn error/abort) updates the same row in place. Deliberately NOT
 	 * cleared by the per-iteration `reset()`: the started/completed notices both
@@ -832,6 +837,24 @@ export class MessageTranslatorState {
 	 * conversation, so it deliberately does NOT touch turn-outcome signals such as
 	 * `attemptCompletionSeen` — those are scoped to the whole turn and survive its iterations.
 	 */
+	/** Keep images a tool sent for the user alone, until its row is built. */
+	addToolDisplayImages(toolCallId: string, images: string[]): void {
+		if (images.length === 0) {
+			return
+		}
+		this.displayImagesByCallId.set(toolCallId, [...(this.displayImagesByCallId.get(toolCallId) ?? []), ...images])
+	}
+
+	/** The images a tool showed the user alone, once: they belong to one row. */
+	takeToolDisplayImages(toolCallId: string | undefined): string[] {
+		if (!toolCallId) {
+			return []
+		}
+		const images = this.displayImagesByCallId.get(toolCallId) ?? []
+		this.displayImagesByCallId.delete(toolCallId)
+		return images
+	}
+
 	reset(): void {
 		this.iterationTextChars = 0
 		this.iterationReasoningChars = 0
@@ -2501,7 +2524,15 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 				break
 			}
 
-			// For all other tools, content_update is ignored — the
+			// #53: an image the tool showed the user and not the model -- a
+			// generated image when the model reads no images. Held for the row
+			// the tool's end builds, so it sits under its own tool call.
+			const displayUpdate = event.update as { displayImages?: unknown } | undefined
+			if (event.toolCallId && Array.isArray(displayUpdate?.displayImages)) {
+				state.addToolDisplayImages(event.toolCallId, extractToolOutputImages(displayUpdate.displayImages))
+			}
+
+			// For all other tools, content_update is otherwise ignored — the
 			// content_start message with partial=true is sufficient until
 			// content_end finalizes it.
 			break
@@ -2890,7 +2921,13 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					// Emitted as its own row so the image sits under the tool call it came
 					// from, and carried in `images` (the field user attachments already use)
 					// so referencing one back into a reply is just re-attaching it.
-					const screenshots = extractToolOutputImages(event.output)
+					// A tool may also have shown the user an image it kept from
+					// the model (#53): a text-only model gets the text, the person
+					// watching still sees what was made.
+					const screenshots = [
+						...extractToolOutputImages(event.output),
+						...state.takeToolDisplayImages(event.toolCallId),
+					]
 					if (screenshots.length > 0) {
 						messages.push({
 							ts: state.nextTs(),
