@@ -38,6 +38,12 @@ export interface SdkSessionEventCoordinatorOptions {
 	setTurnPhase?: (phase: TurnPhase, anchorTs?: number) => void
 	/** Current authoritative UI turn phase, from the controller's TurnStateTracker. */
 	getTurnPhase?: () => TurnPhase
+	/**
+	 * Sequence of the latest phase write, from the controller's TurnStateTracker. Advances on
+	 * every write, so a turn-end handler can tell that a newer write landed while it was
+	 * suspended. Optional for tests; without it the turn-end write is unconditional.
+	 */
+	getTurnSeq?: () => number
 	captureProviderApiError?: (event: ProviderFailureTelemetry) => void
 	beginProviderFailureTelemetryTurn?: () => void
 }
@@ -82,6 +88,11 @@ export class SdkSessionEventCoordinator {
 			this.options.sessions.setRunning(true)
 			this.options.setTurnPhase?.(PROVIDER_FAILURE_PHASE.STREAMING)
 		}
+		// Events are dispatched without awaiting the previous handler, so this handler can be
+		// suspended below (zero-cost lookup) while the next turn starts: a drained queued prompt
+		// or a follow-up writes "streaming" in the meantime. Record the phase seq now, before
+		// the first await, so the turn-end write can see it has been overtaken (#83).
+		const turnSeqAtEvent = this.options.getTurnSeq?.()
 		const zeroCostPromise = this.zeroCostForFreeClineModel(result)
 		if (zeroCostPromise) {
 			await zeroCostPromise
@@ -154,7 +165,18 @@ export class SdkSessionEventCoordinator {
 				// isRunning back to false mid-turn (see fireAndForgetSend). Keying on isRunning
 				// alone made the queued turn's real completion look like this straggler, leaving
 				// the phase stuck on "streaming" (endless Thinking).
-				if (!activeSession.isRunning && this.options.getTurnPhase?.() === "resumable") {
+				//
+				// Likewise a phase written by someone else while this handler was suspended is newer
+				// than this turn's end: the next turn has started (or was cancelled), and writing
+				// awaiting_followup/completed/error over it left the footer without Cancel while
+				// that turn ran. Leave both the phase and isRunning to the newer writer.
+				const turnSeqNow = this.options.getTurnSeq?.()
+				const overtaken = turnSeqAtEvent !== undefined && turnSeqNow !== undefined && turnSeqNow !== turnSeqAtEvent
+				if (overtaken) {
+					Logger.debug(
+						`[SdkController] turn-complete overtaken by a newer phase (${this.options.getTurnPhase?.()}); not overwriting it`,
+					)
+				} else if (!activeSession.isRunning && this.options.getTurnPhase?.() === "resumable") {
 					Logger.debug("[SdkController] turn-complete straggler after cancel; preserving resumable phase")
 				} else if (this.options.messageTranslatorState.wasErrorSeen()) {
 					// The turn surfaced a provider error (ask:"api_req_failed" was emitted) —
@@ -166,7 +188,9 @@ export class SdkSessionEventCoordinator {
 					this.options.setTurnPhase?.("awaiting_followup")
 				}
 
-				this.options.sessions.setRunning(false)
+				if (!overtaken) {
+					this.options.sessions.setRunning(false)
+				}
 			}
 
 			if (result.usage && activeSession.startResult) {

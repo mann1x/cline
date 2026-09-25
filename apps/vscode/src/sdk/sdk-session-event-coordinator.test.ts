@@ -254,6 +254,62 @@ describe("SdkSessionEventCoordinator", () => {
 		expect(options.sessions.setRunning).toHaveBeenCalledWith(false)
 	})
 
+	it("does not overwrite a newer turn's phase when a turn-complete resumes after the next turn started", async () => {
+		// #83: handlers are dispatched without awaiting each other. A turn-complete suspended on
+		// the zero-cost lookup resumed after the next turn (a drained queued prompt) had already
+		// written "streaming", and wrote awaiting_followup over it: the footer lost Cancel while
+		// the new turn ran. The newer phase write wins, and isRunning stays with its owner.
+		let releaseLookup: (free: boolean) => void = () => {}
+		const lookup = new Promise<boolean>((resolve) => {
+			releaseLookup = resolve
+		})
+		const { coordinator, options, event } = makeCoordinator({
+			isClineFreeModel: vi.fn(() => lookup),
+			translation: {
+				messages: [],
+				sessionEnded: false,
+				turnComplete: true,
+				usage: { tokensIn: 1, tokensOut: 1, totalCost: 0.01 },
+			},
+		})
+		let seq = 10
+		const phases: string[] = []
+		Object.assign(options, {
+			getTurnSeq: () => seq,
+			setTurnPhase: vi.fn((phase: string) => {
+				phases.push(phase)
+				seq++
+			}),
+		})
+
+		const turnEnd = coordinator.handleSessionEvent(event)
+		// The next turn starts while the turn-complete is suspended.
+		options.setTurnPhase?.("streaming")
+		releaseLookup(false)
+		await turnEnd
+
+		expect(phases).toEqual(["streaming"])
+		expect(options.sessions.setRunning).not.toHaveBeenCalledWith(false)
+	})
+
+	it("still resolves the phase when no newer write landed during the turn-complete", async () => {
+		const { coordinator, options, event } = makeCoordinator({
+			isClineFreeModel: vi.fn().mockResolvedValue(false),
+			translation: {
+				messages: [],
+				sessionEnded: false,
+				turnComplete: true,
+				usage: { tokensIn: 1, tokensOut: 1, totalCost: 0.01 },
+			},
+		})
+		Object.assign(options, { getTurnSeq: () => 10 })
+
+		await coordinator.handleSessionEvent(event)
+
+		expect(options.setTurnPhase).toHaveBeenCalledWith("awaiting_followup")
+		expect(options.sessions.setRunning).toHaveBeenCalledWith(false)
+	})
+
 	it("updates task usage when the active session has a start result", async () => {
 		const { coordinator, options, event } = makeCoordinator({
 			task: { taskId: "task-1" },

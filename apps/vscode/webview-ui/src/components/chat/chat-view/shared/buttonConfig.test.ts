@@ -6,6 +6,8 @@ import {
 	getButtonConfig,
 	getButtonConfigForMessages,
 	getButtonConfigFromState,
+	hasPartialSayTail,
+	withCancelWhileRunning,
 } from "./buttonConfig"
 
 describe("getButtonConfig", () => {
@@ -266,5 +268,61 @@ describe("getButtonConfigFromState (dispatch + legacy fallback)", () => {
 			BUTTON_CONFIGS.completion_result,
 		)
 		expect(getButtonConfigFromState(messages, { phase: "idle", seq: 6 }, "act", true)).toEqual(BUTTON_CONFIGS.default)
+	})
+})
+
+describe("withCancelWhileRunning (#83)", () => {
+	const idle = { pendingResponseUnconfirmed: false, partialTail: false }
+	const pending = { pendingResponseUnconfirmed: true, partialTail: false }
+	const partial = { pendingResponseUnconfirmed: false, partialTail: true }
+	const state = (phase: TurnState["phase"]): TurnState => ({ phase, seq: 1 })
+
+	it("keeps the phase config when nothing is running", () => {
+		expect(withCancelWhileRunning(BUTTON_CONFIGS.default, state("idle"), idle)).toBe(BUTTON_CONFIGS.default)
+	})
+
+	it("replaces the empty idle / awaiting_followup sets with Cancel while the loader shows", () => {
+		for (const phase of ["idle", "awaiting_followup"] as const) {
+			const config = buttonsForPhase(state(phase), undefined)
+			expect(withCancelWhileRunning(config, state(phase), pending)).toBe(BUTTON_CONFIGS.partial)
+			expect(withCancelWhileRunning(config, state(phase), partial)).toBe(BUTTON_CONFIGS.partial)
+		}
+	})
+
+	it("replaces a stale completed phase's Start New Task with Cancel", () => {
+		expect(withCancelWhileRunning(BUTTON_CONFIGS.completion_result, state("completed"), pending)).toBe(BUTTON_CONFIGS.partial)
+	})
+
+	it("offers Proceed While Running when a foreground command runs", () => {
+		expect(withCancelWhileRunning(BUTTON_CONFIGS.default, state("idle"), pending, true)).toBe(
+			BUTTON_CONFIGS.foreground_command_running,
+		)
+	})
+
+	it("never hides a real approval", () => {
+		expect(withCancelWhileRunning(BUTTON_CONFIGS.tool_approve, state("awaiting_approval"), pending)).toBe(
+			BUTTON_CONFIGS.tool_approve,
+		)
+	})
+
+	it("keeps Retry behind a leftover partial row, but not behind a fresh submission", () => {
+		expect(withCancelWhileRunning(BUTTON_CONFIGS.api_req_failed, state("error"), partial)).toBe(BUTTON_CONFIGS.api_req_failed)
+		expect(withCancelWhileRunning(BUTTON_CONFIGS.api_req_failed, state("error"), pending)).toBe(BUTTON_CONFIGS.partial)
+	})
+})
+
+describe("hasPartialSayTail", () => {
+	it("looks past bookkeeping rows to the partial reasoning row", () => {
+		const messages: ClineMessage[] = [
+			{ ts: 1, type: "say", say: "reasoning", text: "…", partial: true },
+			{ ts: 2, type: "say", say: "task_progress", text: "" },
+		]
+		expect(hasPartialSayTail(messages)).toBe(true)
+	})
+
+	it("is false for a final tail or a partial ask", () => {
+		expect(hasPartialSayTail([{ ts: 1, type: "say", say: "text", text: "done", partial: false }])).toBe(false)
+		expect(hasPartialSayTail([{ ts: 1, type: "ask", ask: "tool", text: "{}", partial: true }])).toBe(false)
+		expect(hasPartialSayTail([])).toBe(false)
 	})
 })
