@@ -1,8 +1,10 @@
+import { matchesTagFilter, normalizeTags } from "@shared/conversation-tags"
 import { StringRequest } from "@shared/proto/cline/common"
 import { memo, useLayoutEffect, useRef, useState } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { hasReportableCost, useUsageCostVisibility } from "@/hooks/useUsageCostVisibility"
 import { TaskServiceClient } from "@/services/grpc-client"
+import { TagChip } from "./TagChip"
 
 type HistoryPreviewProps = {
 	showHistoryView: () => void
@@ -40,6 +42,20 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 	// tallest row could shrink it, the count would rise, bring that row back,
 	// and fall again -- a list that flickers between two lengths.
 	const tallestRow = useRef(0)
+	// Clicking a tag narrows the list to conversations carrying any of the
+	// clicked tags, the history view's default match. Only the recent list
+	// is filtered; "View All" still opens the whole history.
+	const [filterTags, setFilterTags] = useState<string[]>([])
+	const toggleFilterTag = (tag: string) => {
+		const key = tag.toLowerCase()
+		setFilterTags((current) =>
+			current.some((active) => active.toLowerCase() === key)
+				? current.filter((active) => active.toLowerCase() !== key)
+				: normalizeTags([...current, tag]),
+		)
+	}
+	const recent = taskHistory.filter((item) => item.ts && item.task)
+	const shown = recent.filter((item) => matchesTagFilter(item.tags ?? [], filterTags))
 
 	// Show as many as the space the home view leaves us holds. The list grows
 	// into that space (see the flex settings below) and never shrinks under
@@ -179,7 +195,7 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 						Recent
 					</span>
 				</div>
-				{taskHistory.filter((item) => item.ts && item.task).length > 0 && (
+				{recent.length > 0 && (
 					<button
 						aria-label="View all history"
 						className="history-view-all-btn"
@@ -191,36 +207,56 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 				)}
 			</div>
 
+			{filterTags.length > 0 && (
+				<div aria-label="Tag filter" className="flex flex-wrap items-center gap-1 px-4 pb-2" role="group">
+					{filterTags.map((tag) => (
+						<TagChip key={tag} onRemove={() => toggleFilterTag(tag)} tag={tag} />
+					))}
+					<button
+						className="ml-auto border-none bg-transparent p-0 text-[0.85em] text-description hover:text-foreground cursor-pointer"
+						onClick={() => setFilterTags([])}
+						type="button">
+						Clear
+					</button>
+				</div>
+			)}
+
 			{
 				<div className="px-4" ref={listRef} style={{ flex: "1 1 auto", minHeight: 0, overflow: "hidden" }}>
-					{taskHistory.filter((item) => item.ts && item.task).length > 0 ? (
-						taskHistory
-							.filter((item) => item.ts && item.task)
-							.slice(0, rowCount)
-							.map((item) => (
-								<div className="history-preview-item" key={item.id} onClick={() => handleHistorySelect(item.id)}>
-									<div className="history-task-content">
-										{item.isFavorited && (
-											<span
-												aria-label="Favorited"
-												className="codicon codicon-star-full"
-												style={{
-													color: "var(--vscode-button-background)",
-													flexShrink: 0,
-												}}
-											/>
+					{shown.length > 0 ? (
+						shown.slice(0, rowCount).map((item) => (
+							<div className="history-preview-item" key={item.id} onClick={() => handleHistorySelect(item.id)}>
+								<div className="history-task-content">
+									{item.isFavorited && (
+										<span
+											aria-label="Favorited"
+											className="codicon codicon-star-full"
+											style={{
+												color: "var(--vscode-button-background)",
+												flexShrink: 0,
+											}}
+										/>
+									)}
+									<div className="flex flex-1 min-w-0 flex-col gap-1">
+										{(item.tags?.length ?? 0) > 0 && (
+											<div className="flex flex-wrap gap-1">
+												{item.tags?.map((tag) => (
+													<TagChip key={tag} onSelect={() => toggleFilterTag(tag)} tag={tag} />
+												))}
+											</div>
 										)}
 										<div className="history-task-description ph-no-capture">{item.task}</div>
-										{item.isLegacy && <span className="history-cost-chip">Legacy</span>}
 									</div>
-									<div className="history-meta-stack">
-										<span className="history-date">{formatDate(item.ts)}</span>
-										{hasReportableCost(item.totalCost) && isCostVisible(item.apiProvider) && (
-											<span className="history-cost-chip">${item.totalCost.toFixed(2)}</span>
-										)}
-									</div>
+									{item.isLegacy && <span className="history-cost-chip">Legacy</span>}
 								</div>
-							))
+								<div className="history-meta-stack">
+									<span className="history-date">{formatDate(item.ts)}</span>
+									{hasReportableCost(item.totalCost) && isCostVisible(item.apiProvider) && (
+										<span className="history-cost-chip">${item.totalCost.toFixed(2)}</span>
+									)}
+								</div>
+							</div>
+						))
 					) : (
 						<div
 							style={{
@@ -229,7 +265,7 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 								fontSize: "var(--vscode-font-size)",
 								padding: "10px 0",
 							}}>
-							No recent tasks
+							{filterTags.length > 0 ? "No recent conversations with these tags" : "No recent tasks"}
 						</div>
 					)}
 				</div>
