@@ -602,7 +602,7 @@ export const OpenAICompatibleProvider = ({
 			{modelFieldErrors.contextWindow && <div role="alert">{modelFieldErrors.contextWindow}</div>}
 			{/* Below the fixed price plus the output room a turn cannot fit.
 			    Warned, not blocked: the value above still saves. */}
-			<ContextMinimumWarning contextWindow={openAiModelInfo?.contextWindow} providerId={providerId} />
+			<ContextMinimumWarning contextWindow={displayedContextWindow} providerId={providerId} />
 
 			<div
 				onClick={() => setModelConfigurationSelected((val) => !val)}

@@ -101,6 +101,17 @@ describe("the agent window slider", () => {
 		)
 	})
 
+	// A profile loaded into the node by an earlier build stored its window as
+	// `modelOverrides`; the host sizes the agents from it, so the floor shown
+	// here has to be read against it too.
+	it("reads the window a loaded profile stored among its modelOverrides", () => {
+		mocks.config.current = { outputBudget: { mode: "auto" }, modelOverrides: { contextWindow: WINDOW } }
+		render(<AgentWindowField negotiates providerId="opencoti" />)
+		expect(screen.getByTestId("agent-window-percent").textContent).toBe(
+			`50% · ${expectedFloor(50).toLocaleString("en-US")} tokens`,
+		)
+	})
+
 	// Ollama and llama.cpp have no negotiation: the node's window is what is
 	// sent, so the slider is shown but cannot move, and says why.
 	it("is disabled, with its reason, where the provider does not negotiate", () => {

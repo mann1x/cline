@@ -1,4 +1,5 @@
 import { normalizeAgentWindowShare, resolveAgentWindowFloor } from "@cline/shared"
+import { scopedContextWindow } from "@shared/api-config-snapshot"
 import { useRef } from "react"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
@@ -7,11 +8,6 @@ import { useContextMinimum } from "./ContextMinimumWarning"
 
 /** Steps the slider moves in, as the output budget's does. */
 const STEP_PERCENT = 5
-
-function positive(value: unknown): number | undefined {
-	const parsed = typeof value === "string" ? Number.parseInt(value, 10) : value
-	return typeof parsed === "number" && Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
-}
 
 /**
  * "Agent window", per agent node: the least window a delegated agent accepts.
@@ -48,12 +44,12 @@ export const AgentWindowField = ({
 	// the first rather than from the render before it.
 	const pending = useRef<{ sharePercent: number } | undefined>(undefined)
 	const inFlight = useRef(0)
-	// The node's window as its tab stores it -- the box's `contextWindow`, or
-	// the selection override the same box writes. The model info's figure is
-	// not used: on a node tab it is the safe default, not what the host
-	// resolves, and a floor shown against it would be a number nobody books.
-	const overrides = (config as { selectedModelOverrides?: { contextWindow?: unknown } } | undefined)?.selectedModelOverrides
-	const window = positive(config?.contextWindow) ?? positive(overrides?.contextWindow)
+	// The node's window as its tab stores it, read by the resolver the host
+	// sizes the agents with (`scopedContextWindow`): the box's `contextWindow`,
+	// then the selection override under either spelling. The model info's
+	// figure is not used: on a node tab it is the safe default, not what the
+	// host resolves, and a floor shown against it would be a number nobody books.
+	const window = scopedContextWindow(config as Record<string, unknown> | undefined)
 	const minimum = useContextMinimum(providerId, window)
 	if (config === undefined) {
 		return null

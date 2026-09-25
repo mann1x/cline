@@ -58,6 +58,13 @@ vi.mock("../common/BaseUrlField", () => ({ BaseUrlField: () => null }))
 vi.mock("../common/SamplingSection", () => ({ SamplingSection: () => null }))
 vi.mock("../common/ThinkingBudgetField", () => ({ ThinkingBudgetField: () => null }))
 vi.mock("../common/RequestTimingsToggle", () => ({ RequestTimingsToggle: () => null }))
+// The below-minimum warning is read against the window too, so it has to be
+// handed the stored one and not the default.
+vi.mock("../common/ContextMinimumWarning", () => ({
+	ContextMinimumWarning: ({ contextWindow }: { contextWindow?: number }) => (
+		<div data-testid="minimum-warning-window">{contextWindow === undefined ? "" : String(contextWindow)}</div>
+	),
+}))
 vi.mock("../common/DebouncedTextField", () => ({
 	DebouncedTextField: ({
 		children,
@@ -127,6 +134,7 @@ describe("the Model Context Window on a scoped tab", () => {
 		expect(shown).toBe(windowCase.expected)
 		expect(windowBox().value).toBe(shown === undefined ? "" : String(shown))
 		expect(screen.getByTestId("model-info-context").textContent).toBe(shown === undefined ? "" : String(shown))
+		expect(screen.getByTestId("minimum-warning-window").textContent).toBe(shown === undefined ? "" : String(shown))
 	})
 
 	it("shows 65536 when 65536 is stored, not the 128000 default", async () => {
