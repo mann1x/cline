@@ -17,6 +17,7 @@ import {
 	type ToolApprovalRequest,
 	type ToolApprovalResult,
 	type ToolPolicy,
+	type TurnFaultRecovery,
 	zodToJsonSchema,
 } from "@cline/shared";
 import { z } from "zod";
@@ -41,6 +42,7 @@ import {
 	restarted,
 	watchPolykvRoom,
 } from "./subagent-progress";
+import { createTurnFaultRecovery } from "./turn-fault-recovery";
 
 /** The tool a model calls to hand a self-contained piece of work to a subagent. */
 export const SPAWN_AGENT_TOOL_NAME = "spawn_agent";
@@ -770,6 +772,7 @@ async function runSpawnedAgent(
 	const attempt = async (
 		provider: DelegatedAgentConfigProvider,
 		admitted: () => void,
+		recoverTurnFault?: TurnFaultRecovery,
 	): Promise<AgentResult> => {
 		const connection = provider.getConnectionConfig();
 		// The row names the model while it runs, not only once it is done.
@@ -817,6 +820,17 @@ async function runSpawnedAgent(
 			hookErrorMode: config.hookErrorMode,
 			toolPolicies: config.toolPolicies,
 			requestToolApproval: config.requestToolApproval,
+			// A server restart or a refusal is waited out, never the answer.
+			recoverTurnFault:
+				recoverTurnFault ??
+				createTurnFaultRecovery({
+					label: input.name ?? "a sub-agent",
+					baseUrl: () => connection.baseUrl,
+					headers: () => connection.headers,
+					signal: cancellation.signal,
+					...(context.emitUpdate ? { emitUpdate: context.emitUpdate } : {}),
+					...(config.logger ? { logger: config.logger } : {}),
+				}),
 		});
 		if (!started) {
 			started = {
@@ -869,7 +883,8 @@ async function runSpawnedAgent(
 						emitUpdate: context.emitUpdate,
 						...(config.logger ? { logger: config.logger } : {}),
 						label: input.name ?? "a sub-agent",
-						run: (node, admitted) => attempt(node.configProvider, admitted),
+						run: (node, admitted, recoverTurnFault) =>
+							attempt(node.configProvider, admitted, recoverTurnFault),
 						// A failed spawn's engine session goes before the next try, or
 						// the retry is charged to a window booked for the last one.
 						beforeRetry: async () => {

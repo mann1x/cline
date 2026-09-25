@@ -5,7 +5,7 @@ import {
 	releasePolykvAgent,
 	setPolykvSession,
 } from "@cline/llms";
-import type { AgentEvent, AgentTool } from "@cline/shared";
+import type { AgentEvent, AgentTool, TurnFaultRecovery } from "@cline/shared";
 import {
 	isPolykvProvider,
 	readPolykvCapacity,
@@ -51,6 +51,7 @@ import {
 	createSubagentProgress,
 	watchPolykvRoom,
 } from "../../../extensions/tools/team/subagent-progress";
+import { createTurnFaultRecovery } from "../../../extensions/tools/team/turn-fault-recovery";
 import {
 	createWorkerStruggleSupervisor,
 	WORKER_STRUGGLE_MIN_ITERATION,
@@ -631,6 +632,7 @@ export function createSessionSwarmTool(
 		const attempt = async (
 			workerConfig: DelegatedAgentConfigProvider,
 			admitted: () => void,
+			recoverTurnFault?: TurnFaultRecovery,
 		) => {
 			// The lead's pool lives on the lead's engine. A worker placed on
 			// another endpoint cannot attach to it, and sending the id there
@@ -727,6 +729,23 @@ export function createSessionSwarmTool(
 					}
 					progress.observe(event);
 				},
+				// A server restart or a refusal is waited out, never the answer.
+				recoverTurnFault:
+					recoverTurnFault ??
+					createTurnFaultRecovery({
+						label: `swarm worker ${request.name}`,
+						baseUrl: () => connection.baseUrl,
+						headers: () => connection.headers,
+						...(request.signal ? { signal: request.signal } : {}),
+						...(request.emitUpdate ? { emitUpdate: request.emitUpdate } : {}),
+						...(config.logger?.log
+							? {
+									logger: {
+										log: (message: string) => config.logger?.log?.(message),
+									},
+								}
+							: {}),
+					}),
 			});
 			return layout.pinnedHead.length > 0
 				? await worker.runWithHead(layout.pinnedHead, layout.task)
@@ -744,7 +763,8 @@ export function createSessionSwarmTool(
 					...(request.emitUpdate ? { emitUpdate: request.emitUpdate } : {}),
 					...(config.logger ? { logger: config.logger } : {}),
 					label: `swarm worker ${request.name}`,
-					run: (node, admitted) => attempt(node.configProvider, admitted),
+					run: (node, admitted, recoverTurnFault) =>
+						attempt(node.configProvider, admitted, recoverTurnFault),
 					// A re-placed worker starts clean on its new node: its session
 					// and, if it was the last, its owner go back first.
 					beforeRetry: async () => {

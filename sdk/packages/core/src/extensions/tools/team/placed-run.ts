@@ -20,7 +20,14 @@
  * The admission report is also what paces an uncapped node: it takes its next
  * agent only when this one is admitted (see `agent-placement-queue`).
  */
-import type { AgentEvent, AgentResult } from "@cline/shared";
+import { serverHealthBackoffMs, sleepUnlessAborted } from "@cline/llms";
+import {
+	type AgentEvent,
+	type AgentResult,
+	classifyTurnFault,
+	classifyTurnFaultError,
+	type TurnFaultRecovery,
+} from "@cline/shared";
 import type {
 	AgentNodePlacement,
 	PlacedAgentNode,
@@ -39,6 +46,10 @@ import {
 	reportSubagentPlaced,
 	reportSubagentQueued,
 } from "./subagent-progress";
+import {
+	createTurnFaultRecovery,
+	type TurnFaultWait,
+} from "./turn-fault-recovery";
 
 /**
  * How many times one agent may be refused and re-queued.
@@ -173,6 +184,30 @@ export function admissionHeadroom(outcome: unknown): number | undefined {
  */
 export const MAX_STALLED_DURABLE_REFUSALS = 8;
 
+/**
+ * The attempt never reached a server that could run it: a refused or reset
+ * connection, a gateway with nothing behind it, or a server going down. Read
+ * from a thrown error or from a run that ended in error having spent nothing.
+ */
+export function isTransportFailure(
+	outcome: { result: AgentResult } | { error: unknown },
+): boolean {
+	if ("error" in outcome) {
+		return (
+			isNodeUnreachable(outcome.error) ||
+			isGatewayDown((outcome.error as { message?: unknown } | null)?.message) ||
+			classifyTurnFaultError(outcome.error) === "transport"
+		);
+	}
+	const result = outcome.result;
+	return (
+		isGatewayDownRun(result) ||
+		(result.finishReason === "error" &&
+			(result.usage?.outputTokens ?? 0) === 0 &&
+			classifyTurnFault(String(result.text ?? "")) === "transport")
+	);
+}
+
 /** An event that shows the engine is generating for this agent. */
 export function isAdmissionEvent(event: AgentEvent): boolean {
 	return event.type === "content_start";
@@ -188,8 +223,21 @@ export interface PlacedRunInput {
 	/**
 	 * Build the agent for this node and run it. `admitted` is to be called on
 	 * its first output; {@link isAdmissionEvent} says which event that is.
+	 *
+	 * `recoverTurnFault` is to be given to the agent (`AgentConfig`): it waits
+	 * out a turn the server dropped or refused once the engine has admitted the
+	 * agent, and declines before that, so the failure comes back here and the
+	 * agent is placed again.
 	 */
-	run: (placed: PlacedAgentNode, admitted: () => void) => Promise<AgentResult>;
+	run: (
+		placed: PlacedAgentNode,
+		admitted: () => void,
+		recoverTurnFault: TurnFaultRecovery,
+	) => Promise<AgentResult>;
+	/** Told whenever the agent is waiting on a fault or a refusal. */
+	onWaiting?: (state: TurnFaultWait) => void;
+	/** Seam for tests: the backoff between re-placements. */
+	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 	/** Between a failed spawn and the next placement: close its engine session. */
 	beforeRetry?: () => Promise<void>;
 }
@@ -205,6 +253,7 @@ export async function runPlacedAgent(
 ): Promise<PlacedRunOutcome> {
 	let refusals = 0;
 	let nodeFailures = 0;
+	let transportFailures = 0;
 	let front = false;
 	// Deadlock guard: the best admissible headroom a durable refusal has stated,
 	// and how many durable refusals in a row have failed to beat it.
@@ -225,14 +274,33 @@ export async function runPlacedAgent(
 			}
 		};
 
+		const where = placed.nodeLabel ?? placed.nodeId;
+		const recoverTurnFault = createTurnFaultRecovery({
+			label: input.label,
+			where: () => where,
+			baseUrl: () => placed.configProvider?.getConnectionConfig?.().baseUrl,
+			headers: () => placed.configProvider?.getConnectionConfig?.().headers,
+			...(input.signal ? { signal: input.signal } : {}),
+			...(input.emitUpdate ? { emitUpdate: input.emitUpdate } : {}),
+			...(input.logger ? { logger: input.logger } : {}),
+			...(input.onWaiting ? { onWaiting: input.onWaiting } : {}),
+			isAdmitted: () => admitted,
+			// The node went away under a running agent: the next agent should
+			// not be sent there until it answers again.
+			onTransportFault: () => placed.markUnreachable(),
+		});
+
 		let outcome: { result: AgentResult } | { error: unknown };
 		try {
-			outcome = { result: await placed.run(() => input.run(placed, admit)) };
+			outcome = {
+				result: await placed.run(() =>
+					input.run(placed, admit, recoverTurnFault),
+				),
+			};
 		} catch (error) {
 			outcome = { error };
 		}
 		const failure = "error" in outcome ? outcome.error : outcome.result;
-		const where = placed.nodeLabel ?? placed.nodeId;
 
 		if (!admitted && !input.signal?.aborted) {
 			if (isRefusedSpawn(failure) && refusals < MAX_REFUSED_REQUEUES) {
@@ -285,19 +353,27 @@ export async function runPlacedAgent(
 					activity: { text: stalledLine, severity: "warn" },
 				});
 			}
-			const unreachable =
-				("error" in outcome &&
-					(isNodeUnreachable(outcome.error) ||
-						isGatewayDown(
-							(outcome.error as { message?: unknown } | null)?.message,
-						))) ||
-				("result" in outcome && isGatewayDownRun(outcome.result));
+			const unreachable = isTransportFailure(outcome);
 			const wasted = "result" in outcome && isWastedNodeRun(outcome.result);
+			// A node that went away is waited out without limit -- the agent
+			// is placed again, on whichever node answers -- because a restart
+			// is not the agent failing. A node without the model is a
+			// configuration, and three of those in a row is the agent's own
+			// failure (see MAX_NODE_PLACEMENT_ATTEMPTS).
 			if (
-				(unreachable || wasted) &&
-				nodeFailures < MAX_NODE_PLACEMENT_ATTEMPTS - 1
+				unreachable ||
+				(wasted && nodeFailures < MAX_NODE_PLACEMENT_ATTEMPTS - 1)
 			) {
-				nodeFailures += 1;
+				if (unreachable) {
+					transportFailures += 1;
+					input.onWaiting?.({
+						kind: "transport",
+						where,
+						detail: "not answering",
+					});
+				} else {
+					nodeFailures += 1;
+				}
 				placed.markUnreachable(
 					wasted ? NODE_MODEL_MISSING_COOL_OFF_MS : undefined,
 				);
@@ -321,6 +397,15 @@ export async function runPlacedAgent(
 					activity: { text: failedLine, severity: "warn" },
 				});
 				await input.beforeRetry?.().catch(() => undefined);
+				// Every node down at once must not become a tight loop: the
+				// first retry goes straight to another node, and each one after
+				// it waits longer, up to the health probe's 30 s.
+				if (unreachable && transportFailures > 1) {
+					await (input.sleep ?? sleepUnlessAborted)(
+						serverHealthBackoffMs(transportFailures - 2),
+						input.signal,
+					);
+				}
 				front = true;
 				continue;
 			}

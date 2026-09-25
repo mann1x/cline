@@ -1,8 +1,9 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { LanguageModelV4 } from "@ai-sdk/provider";
-import type {
-	GatewayProviderContext,
-	GatewayResolvedProviderConfig,
+import {
+	classifyTurnFaultError,
+	type GatewayProviderContext,
+	type GatewayResolvedProviderConfig,
 } from "@cline/shared";
 import { wrapLanguageModel } from "ai";
 import type { PolykvOptions } from "../config";
@@ -10,6 +11,7 @@ import { sleep as abortableSleep } from "../middleware/backoff";
 import { DEFAULT_MAX_RETRY_AFTER_MS } from "../middleware/retry-rate-limit";
 import { splitToolImagesMiddleware } from "../middleware/split-tool-images";
 import { primeTemplateReinjection } from "../reasoning-history";
+import { waitForServerHealth } from "../server-health";
 import { llamaCppTimingsMetadataExtractor } from "./llamacpp-timings";
 import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
 import { OpencotiWindowUnavailableError } from "./opencoti-window";
@@ -19,6 +21,7 @@ import {
 	hasOpencotiFeature,
 	OPENCOTI_FEATURES,
 	polykvAdmissionPolicy,
+	polykvRoot,
 	probeOpencotiProps,
 	recordPolykvGrantedWindow,
 	recordPolykvWindowObservation,
@@ -896,6 +899,9 @@ async function observeResponseFacts(
 	return response;
 }
 
+/** Statuses that mean the server behind the address did not answer. */
+const SERVER_FAULT_STATUSES = new Set([502, 503, 504]);
+
 /**
  * The fetch of one swarm agent.
  *
@@ -971,6 +977,47 @@ function createWorkerFetch(options: {
 				return leadReserveRefusal(lent, room);
 			}
 		}
+		/**
+		 * The server dropped this request before any of it streamed: the
+		 * connection was refused or reset, or the gateway in front of it
+		 * answered 502/503/504. For an agent that has started, wait for the
+		 * server to answer `/health` again and send the same turn -- nothing of
+		 * it ran. Measured on 1tmrl: the server was listening again ten seconds
+		 * after it restarted, and the agents on it had already ended.
+		 *
+		 * An agent that has not started is handed the failure instead: the
+		 * spawn queue places it again, possibly on a node that is up.
+		 *
+		 * `false` means "not ours to wait out"; the caller fails as before.
+		 */
+		const waitOutServerFault = async (fault: unknown): Promise<boolean> => {
+			const started = ranOnce || polykvWorkerStarted(options.worker.sessionId);
+			if (signal?.aborted || !started) {
+				return false;
+			}
+			if (fault instanceof Response) {
+				await fault.body?.cancel().catch(() => {});
+			} else if (classifyTurnFaultError(fault) !== "transport") {
+				return false;
+			}
+			reportPolykvRoomWait(options.worker.sessionId, {
+				waiting: true,
+				reason: `Waiting for the server to come back (${
+					fault instanceof Response
+						? `it answered ${fault.status}`
+						: "it is not answering"
+				}); the turn is sent again once it does.`,
+			});
+			const back = await waitForServerHealth(polykvRoot(options.baseUrl), {
+				fetch: base,
+				...(options.headers ? { headers: options.headers } : {}),
+				...(signal ? { signal } : {}),
+			});
+			if (!back) {
+				throw signal?.reason ?? new Error("aborted");
+			}
+			return true;
+		};
 		const deadline = Date.now() + POLYKV_WORKER_MAX_WAIT_MS;
 		let fresh = false;
 		// One fresh owner per agent, at most: after that a full window is a
@@ -1009,11 +1056,25 @@ function createWorkerFetch(options: {
 				// server as a session of its own.
 				return leadReserveRefusal(lent, undefined);
 			}
-			const response = await base(input, {
-				...init,
-				body: JSON.stringify(wire),
-				...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
-			} as RequestInit);
+			let response: Response;
+			try {
+				response = await base(input, {
+					...init,
+					body: JSON.stringify(wire),
+					...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
+				} as RequestInit);
+			} catch (error) {
+				if (!(await waitOutServerFault(error))) {
+					throw error;
+				}
+				continue;
+			}
+			if (
+				SERVER_FAULT_STATUSES.has(response.status) &&
+				(await waitOutServerFault(response))
+			) {
+				continue;
+			}
 			if (response.status !== 429 || attach.poolId === undefined) {
 				if (response.ok) {
 					ranOnce = true;

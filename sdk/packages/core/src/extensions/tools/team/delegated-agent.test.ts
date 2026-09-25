@@ -106,6 +106,44 @@ describe("buildDelegatedAgentConfig", () => {
 		expect(config.sessionId).toBeUndefined();
 	});
 
+	// 1tmrl: 41 of 75 agents ended on a server restart or an admission
+	// refusal. Every delegated agent now waits those out by default.
+	it("waits out a server restart or a refusal by default", async () => {
+		const configProvider = createDelegatedAgentConfigProvider({
+			providerId: "anthropic",
+			modelId: "claude-sonnet-4-6",
+		});
+		const passed = async () => true;
+		const byDefault = buildDelegatedAgentConfig({
+			kind: "subagent",
+			prompt: "review the diff",
+			tools: [],
+			configProvider,
+		});
+		const given = buildDelegatedAgentConfig({
+			kind: "subagent",
+			prompt: "review the diff",
+			tools: [],
+			configProvider,
+			recoverTurnFault: passed,
+		});
+
+		expect(typeof byDefault.recoverTurnFault).toBe("function");
+		expect(given.recoverTurnFault).toBe(passed);
+		// A stopped agent is never held.
+		const controller = new AbortController();
+		controller.abort();
+		expect(
+			await byDefault.recoverTurnFault?.({
+				kind: "transport",
+				message: "server is shutting down",
+				attempt: 1,
+				iteration: 1,
+				signal: controller.signal,
+			}),
+		).toBe(false);
+	});
+
 	// A delegated agent with no `prepareTurn` compacts never, and nothing says
 	// so: the transcript just grows until the provider truncates the prompt. A
 	// reported session reached 491,454 input tokens against a 262,144 window,

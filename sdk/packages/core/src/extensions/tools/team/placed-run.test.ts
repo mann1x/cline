@@ -1,4 +1,4 @@
-import type { AgentResult } from "@cline/shared";
+import type { AgentResult, TurnFaultRecovery } from "@cline/shared";
 import { describe, expect, it, vi } from "vitest";
 import type {
 	AgentNodePlacement,
@@ -209,6 +209,87 @@ describe("an agent through the spawn queue", () => {
 
 		expect(outcome.result.text).toBe("done");
 		expect(run).toHaveBeenCalledTimes(4);
+	});
+});
+
+/**
+ * 1tmrl, build .191: the server behind Node1 restarted twice. Agents it had
+ * not admitted yet came back as `server is shutting down` or a refused
+ * connection, and after three nodes' worth of those the failure became the
+ * agent's result. A restart is not the agent failing.
+ */
+describe("an agent whose node goes away before it starts", () => {
+	const shuttingDown = (): AgentResult =>
+		({
+			text: "server is shutting down",
+			finishReason: "error",
+			iterations: 1,
+			usage: { inputTokens: 0, outputTokens: 0 },
+		}) as AgentResult;
+
+	it("is placed again for as long as it takes, never failed", async () => {
+		const { placement, log } = fakePlacement(["oc"]);
+		const run = vi.fn();
+		for (let i = 0; i < 9; i += 1) {
+			if (i % 2 === 0) {
+				run.mockResolvedValueOnce(shuttingDown());
+			} else {
+				run.mockRejectedValueOnce(
+					Object.assign(new TypeError("fetch failed"), {
+						cause: { code: "ECONNREFUSED" },
+					}),
+				);
+			}
+		}
+		run.mockImplementationOnce(async (_node, admitted: () => void) => {
+			admitted();
+			return ok("done");
+		});
+		const waits: number[] = [];
+
+		const outcome = await runPlacedAgent({
+			placement,
+			label: "a",
+			run,
+			sleep: async (ms) => {
+				waits.push(ms);
+			},
+		});
+
+		expect(outcome.result.text).toBe("done");
+		expect(run).toHaveBeenCalledTimes(10);
+		expect(log.filter((line) => line === "unreachable oc")).toHaveLength(9);
+		// The first retry goes straight to another node; after that the
+		// re-placements back off, up to the health probe's 30 s.
+		expect(waits[0]).toBe(1_000);
+		expect(Math.max(...waits)).toBeLessThanOrEqual(30_000);
+		expect(waits).toHaveLength(8);
+	});
+
+	it("hands the agent a recovery that waits only once the engine admitted it", async () => {
+		const { placement } = fakePlacement(["oc"]);
+		let before: boolean | undefined;
+		const run = vi.fn(
+			async (
+				_node: unknown,
+				admitted: () => void,
+				recover: TurnFaultRecovery,
+			) => {
+				before = await recover({
+					kind: "refusal",
+					message: "projected mean tps below floor",
+					attempt: 1,
+					iteration: 1,
+				});
+				admitted();
+				return ok("done");
+			},
+		);
+
+		await runPlacedAgent({ placement, label: "a", run });
+
+		// Before admission the spawn queue owns the retry: it can re-place.
+		expect(before).toBe(false);
 	});
 });
 

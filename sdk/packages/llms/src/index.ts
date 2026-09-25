@@ -169,6 +169,16 @@ export {
 	resolveProviderRequestHeaders,
 } from "./providers/request-headers";
 export {
+	probeServerHealth,
+	SERVER_HEALTH_FIRST_INTERVAL_MS,
+	SERVER_HEALTH_MAX_INTERVAL_MS,
+	SERVER_HEALTH_PROBE_TIMEOUT_MS,
+	serverHealthBackoffMs,
+	serverRoot,
+	sleepUnlessAborted,
+	waitForServerHealth,
+} from "./providers/server-health";
+export {
 	type ClineProvider,
 	type ClineProviderOptions,
 	type ClineWebSearchInput,

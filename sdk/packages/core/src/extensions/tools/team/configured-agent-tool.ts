@@ -10,6 +10,7 @@ import {
 	type ToolApprovalRequest,
 	type ToolApprovalResult,
 	type ToolPolicy,
+	type TurnFaultRecovery,
 	zodToJsonSchema,
 } from "@cline/shared";
 import { z } from "zod";
@@ -41,6 +42,7 @@ import {
 	restarted,
 	watchPolykvRoom,
 } from "./subagent-progress";
+import { createTurnFaultRecovery } from "./turn-fault-recovery";
 
 const CONFIGURED_AGENT_TOOL_NAME_PREFIX = "subagent_";
 const CONFIGURED_AGENT_TOOL_NAME_MAX_LENGTH = 64;
@@ -474,6 +476,7 @@ export function createConfiguredAgentTools(
 					const attempt = async (
 						runtimeConfig: typeof provisional,
 						admitted: () => void,
+						recoverTurnFault?: TurnFaultRecovery,
 					): Promise<AgentResult> => {
 						// The row names the model while it runs, not only once it is done.
 						reportSubagentModel(context.emitUpdate, {
@@ -519,6 +522,20 @@ export function createConfiguredAgentTools(
 							hookErrorMode: options.hookErrorMode,
 							toolPolicies: options.toolPolicies,
 							requestToolApproval: options.requestToolApproval,
+							// A server restart or a refusal is waited out, never
+							// the answer.
+							recoverTurnFault:
+								recoverTurnFault ??
+								createTurnFaultRecovery({
+									label: config.name,
+									baseUrl: () => runtimeConfig.baseUrl,
+									headers: () => runtimeConfig.headers,
+									signal: cancellation.signal,
+									...(context.emitUpdate
+										? { emitUpdate: context.emitUpdate }
+										: {}),
+									...(options.logger ? { logger: options.logger } : {}),
+								}),
 						});
 						if (!started) {
 							started = {
@@ -563,7 +580,7 @@ export function createConfiguredAgentTools(
 										emitUpdate: context.emitUpdate,
 										...(options.logger ? { logger: options.logger } : {}),
 										label: config.name,
-										run: (node, admitted) =>
+										run: (node, admitted, recoverTurnFault) =>
 											attempt(
 												buildAgentRuntimeConfig(
 													node.configProvider.getRuntimeConfig(),
@@ -573,6 +590,7 @@ export function createConfiguredAgentTools(
 													options.listProfileNames,
 												),
 												admitted,
+												recoverTurnFault,
 											),
 										beforeRetry: async () => {
 											await releasePolykvAgent(engineSessionId);

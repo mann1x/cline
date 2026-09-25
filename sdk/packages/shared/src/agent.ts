@@ -5,6 +5,7 @@
  *
  */
 
+import type { TurnFaultRecovery } from "./agents/turn-faults";
 import type { GeneratedMedia } from "./llms/media";
 import type { ModelInfo } from "./llms/model-info";
 import type {
@@ -892,6 +893,15 @@ export interface AgentRuntimeConfig {
 		| Promise<DiscardedTurnCondensation | undefined>
 		| DiscardedTurnCondensation
 		| undefined;
+	/**
+	 * Wait out a turn that failed on a transport fault or an admission refusal,
+	 * and say whether to send it again. See `TurnFaultRecovery`.
+	 *
+	 * Absent, such a turn fails the run as any other provider error does. A
+	 * delegated agent is given one: it is meant to finish its job, and a server
+	 * restart or a busy pool is not the job failing.
+	 */
+	recoverTurnFault?: TurnFaultRecovery;
 	// Optional host callback used by interactive sessions to inject a queued
 	// user steering message between agent loop iterations, before the next
 	// model request.
