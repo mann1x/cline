@@ -353,6 +353,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		webSearchEnabled: false,
 		subagentsEnabled: false,
 		subagentCommandsEnabled: false,
+		polykvAgentsPriorityZero: false,
 		agentModelOverride: "",
 		strongNudgesEnabled: true,
 		worktreesEnabled: { user: true, featureFlag: false },

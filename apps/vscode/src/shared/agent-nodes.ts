@@ -143,3 +143,35 @@ export function setAgentNodeSnapshot(nodes: readonly AgentNodeRecord[], id: stri
 export function agentNodeLabels(nodes: readonly AgentNodeRecord[]): Record<string, string> {
 	return Object.fromEntries(nodes.map((node, index) => [node.id, `Node${index + 1}`]))
 }
+
+/**
+ * Whether "Use PolyKV agents as Priority 0" can apply (PLANS §9g).
+ *
+ * Both have to hold, and the panel and the host ask the same question so the
+ * toggle is shown exactly when it would do something:
+ *
+ * - the **Model** provider -- the lead's -- is opencoti: priority 0 is the
+ *   lead's own session, and no other provider has one to lend;
+ * - that server's `/props` **confirmed** `pools_enabled`. Unknown is not yes:
+ *   a server that could not be asked, or one booted without
+ *   `--polykv-max-pools` (the default), fails on the first pool call.
+ */
+export function polykvPriorityZeroAvailable(input: {
+	leadProviderId: string | undefined
+	poolsEnabled: boolean | undefined
+}): boolean {
+	return input.leadProviderId?.trim().toLowerCase() === "opencoti" && input.poolsEnabled === true
+}
+
+/**
+ * Whether a session should run agents as priority 0: the setting is on AND it
+ * can apply. Off by default -- turned on, a swarm spends the conversation's own
+ * window, which is a decision to make rather than one taken for someone.
+ */
+export function polykvPriorityZeroApplies(input: {
+	enabled: boolean | undefined
+	leadProviderId: string | undefined
+	poolsEnabled: boolean | undefined
+}): boolean {
+	return input.enabled === true && polykvPriorityZeroAvailable(input)
+}

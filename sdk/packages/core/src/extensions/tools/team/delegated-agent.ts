@@ -98,6 +98,15 @@ export interface DelegatedAgentRuntimeConfig
 	 */
 	nodePlacement?: AgentNodePlacement;
 	/**
+	 * Priority 0 (PLANS §9g): this configuration is the lead's own opencoti
+	 * connection, and a pooled agent built from it attaches as a sub-pool of
+	 * the lead's session -- this id -- rather than of an owner opened for the
+	 * swarm. Set only on the priority-0 node's provider; see
+	 * `agent-node-placement.ts`. Absent everywhere else, which is every agent
+	 * before this setting.
+	 */
+	polykvLeadOwner?: string;
+	/**
 	 * Stable end-user identity inherited from the parent session so
 	 * delegated-agent telemetry (Langfuse `userId`) groups with the user.
 	 */
@@ -294,11 +303,31 @@ export function createDelegatedAgentConfigProvider(
 	};
 }
 
+/**
+ * The worker spec with its owner, when the agent was placed on priority 0.
+ *
+ * Decided here, the one funnel every spawn path builds through, rather than at
+ * each of the three spawn sites: which node took the agent is a property of
+ * the configuration it was built from, and a site that forgot to ask would put
+ * a priority-0 agent in an owner the swarm opened -- quietly correct, and not
+ * what the setting says.
+ */
+export function withPolykvLeadOwner(
+	worker: AgentConfig["polykvWorker"],
+	owner: string | undefined,
+): AgentConfig["polykvWorker"] {
+	return worker && owner ? { ...worker, owner } : worker;
+}
+
 export function buildDelegatedAgentConfig(
 	options: BuildDelegatedAgentConfigOptions,
 ): AgentConfig & { role?: string } {
 	const runtimeConfig = options.configProvider.getRuntimeConfig();
 	const connection = options.configProvider.getConnectionConfig();
+	const polykvWorker = withPolykvLeadOwner(
+		options.polykvWorker,
+		runtimeConfig.polykvLeadOwner,
+	);
 	// What this agent's own requests are built from, summarizer included: the
 	// node's connection, the agent's engine session and its pool tree.
 	const ownProviderConfig = {
@@ -311,8 +340,8 @@ export function buildDelegatedAgentConfig(
 		...(options.engineSessionId
 			? { engineSessionId: options.engineSessionId }
 			: {}),
-		...(options.polykvWorker
-			? { polykvWorker: { ...options.polykvWorker, attachOnly: true } }
+		...(polykvWorker
+			? { polykvWorker: { ...polykvWorker, attachOnly: true } }
 			: {}),
 	} as NonNullable<AgentConfig["providerConfig"]>;
 	const prepareTurn = runtimeConfig.createPrepareTurn?.({
@@ -354,7 +383,7 @@ export function buildDelegatedAgentConfig(
 		...(options.engineSessionId
 			? { engineSessionId: options.engineSessionId }
 			: {}),
-		...(options.polykvWorker ? { polykvWorker: options.polykvWorker } : {}),
+		...(polykvWorker ? { polykvWorker } : {}),
 		systemPrompt,
 		tools,
 		maxIterations: options.maxIterations ?? runtimeConfig.maxIterations,

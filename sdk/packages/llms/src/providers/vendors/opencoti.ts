@@ -24,10 +24,14 @@ import {
 import {
 	engineSessionId,
 	isWorkerWindowFull,
+	markPolykvWorkerStarted,
 	movePolykvWorker,
 	POLYKV_WORKER_MAX_WAIT_MS,
+	type PolykvLeadRoom,
 	type PolykvWorkerSpec,
+	polykvWorkerStarted,
 	preparePolykvWorker,
+	readPolykvLeadRoom,
 	rememberOpencotiSession,
 	reportPolykvNotice,
 	reportPolykvRoomWait,
@@ -569,6 +573,17 @@ async function observeResponseFacts(
  *
  * Any other response is returned untouched, and so is a refusal that outlasts
  * the wait: the caller sees the 429 it was.
+ *
+ * **Priority 0 (§9g), a worker whose owner is the lead's own session**, differs
+ * in exactly the place the lead-window hazard lives (991ce2466: 49 of 51 agents
+ * lost to one full lead window). Until it has run a turn, the window is not the
+ * agent's to wait on: it is the conversation's, and there are Agent Nodes to go
+ * to instead. So before its first turn the lead's free room is checked against
+ * a reserve kept for the conversation, and a lead window below it -- or the
+ * engine's own "worker of ... full" -- is handed straight back as the refusal
+ * it is. The spawn queue reads that as "refused before admission" and places
+ * the agent on the next tier. After its first turn it waits like any worker:
+ * it has work in flight, and a worker that finishes frees what it needs.
  */
 function createWorkerFetch(options: {
 	fetch?: typeof fetch;
@@ -585,6 +600,10 @@ function createWorkerFetch(options: {
 			noticeDivergence(options.worker.sessionId, options.onFacts),
 		);
 	let ranOnce = false;
+	// The lead's session, lent to this agent (priority 0). A summary call is
+	// the agent's own and attaches to what exists: it is never the agent's
+	// first turn, and is never refused for the lead's sake.
+	const lent = options.worker.attachOnly ? undefined : options.worker.owner;
 	return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
 		if (!init?.body || typeof init.body !== "string") {
 			return base(input, init);
@@ -602,6 +621,20 @@ function createWorkerFetch(options: {
 			options.headers,
 		);
 		const signal = init.signal ?? undefined;
+		if (lent && !ranOnce && polykvWorkerStarted(options.worker.sessionId)) {
+			ranOnce = true;
+		}
+		if (lent && !ranOnce) {
+			const room = await readPolykvLeadRoom({
+				baseUrl: options.baseUrl,
+				fetch: base,
+				...(options.headers ? { headers: options.headers } : {}),
+				owner: lent,
+			});
+			if (room && room.free < room.reserve) {
+				return leadReserveRefusal(lent, room);
+			}
+		}
 		const deadline = Date.now() + POLYKV_WORKER_MAX_WAIT_MS;
 		let fresh = false;
 		// One fresh owner per agent, at most: after that a full window is a
@@ -625,6 +658,15 @@ function createWorkerFetch(options: {
 			if (attach.poolId !== undefined && /^\d+$/.test(attach.poolId)) {
 				wire.pool_id = Number(attach.poolId);
 			}
+			if (lent && !ranOnce && attach.poolId === undefined) {
+				// Priority 0 without a sub-pool is not priority 0: the lead's
+				// session is at its eight per slot, or the server's pool
+				// reservoir is empty -- the engine refuses both alike (mail
+				// 269). Either way priority 0 is full for this agent, and it
+				// goes to the nodes rather than running unpooled on the lead's
+				// server as a session of its own.
+				return leadReserveRefusal(lent, undefined);
+			}
 			const response = await base(input, {
 				...init,
 				body: JSON.stringify(wire),
@@ -633,6 +675,22 @@ function createWorkerFetch(options: {
 			if (response.status !== 429 || attach.poolId === undefined) {
 				if (response.ok) {
 					ranOnce = true;
+					markPolykvWorkerStarted(options.worker.sessionId);
+					if (
+						options.worker.owner &&
+						attach.poolId !== undefined &&
+						!response.headers.has("x-context-window")
+					) {
+						// Every opencoti response names its window. One that
+						// does not is the sign the lead's allocation lapsed (idle
+						// TTL) or was closed, taking this agent's sub-pool with
+						// it: the engine does not refuse a released pool, it
+						// prefills the whole prompt again in silence.
+						reportPolykvNotice(options.worker.sessionId, {
+							severity: "warn",
+							text: `No X-Context-Window on this turn: the lead's session ${engineSessionId(options.worker.owner)} may have lapsed and released this agent's sub-pool, so the turn was prefilled in full.`,
+						});
+					}
 				}
 				reportPolykvRoomWait(options.worker.sessionId, { waiting: false });
 				return observed(response);
@@ -642,6 +700,12 @@ function createWorkerFetch(options: {
 				.text()
 				.catch(() => "");
 			if (!isWorkerWindowFull(response.status, text) || Date.now() > deadline) {
+				reportPolykvRoomWait(options.worker.sessionId, { waiting: false });
+				return observed(response);
+			}
+			if (lent && !ranOnce) {
+				// Not started, and the full window is the lead's: back to the
+				// spawn queue, which places it on the next tier.
 				reportPolykvRoomWait(options.worker.sessionId, { waiting: false });
 				return observed(response);
 			}
@@ -679,6 +743,33 @@ function createWorkerFetch(options: {
 			});
 		}
 	}) as typeof fetch;
+}
+
+/**
+ * The refusal a priority-0 agent gets when the lead's window is below its
+ * reserve: worded as the engine words a full owner, because that is what
+ * every reader of it -- the retry middleware, the spawn queue -- already
+ * treats as "not started, place it elsewhere".
+ */
+function leadReserveRefusal(
+	owner: string,
+	room: PolykvLeadRoom | undefined,
+): Response {
+	const why = room
+		? `${room.free} of ${room.window} cells free, the conversation keeps ${room.reserve}`
+		: "no sub-pool: the session's per-slot limit or the server's pool reservoir";
+	return new Response(
+		JSON.stringify({
+			error: {
+				message: `admission rejected: session allocation full (worker of '${engineSessionId(owner)}': ${why}) — priority 0 is full; overflowing to the Agent Nodes`,
+				type: "polykv_lead_reserve",
+			},
+		}),
+		{
+			status: 429,
+			headers: { "content-type": "application/json", "retry-after": "1" },
+		},
+	);
 }
 
 function numberOrUndefined(value: string | null): number | undefined {

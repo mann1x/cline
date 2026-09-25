@@ -35,6 +35,7 @@ import {
 	OLLAMA_DEFAULT_CONTEXT_WINDOW,
 	OLLAMA_DEFAULT_REASONING_EFFORT,
 	primeDeclaredNumCtx,
+	probeOpencotiProps,
 	readResolvedOllamaWindow,
 	resolveAgentSlotLimit,
 	resolveDefaultMaxOutputTokens,
@@ -50,7 +51,7 @@ import {
 	type RenderedPromptTemplate,
 	resolveOutputBudgetTokens,
 } from "@cline/shared"
-import { agentNodeLabels, PRIMARY_AGENT_NODE_ID, parseAgentNodes } from "@shared/agent-nodes"
+import { agentNodeLabels, PRIMARY_AGENT_NODE_ID, parseAgentNodes, polykvPriorityZeroApplies } from "@shared/agent-nodes"
 import type { ApiConfiguration } from "@shared/api"
 import { profileProviderSettingsFor } from "@shared/api-config-profiles"
 import { ClineClient } from "@shared/cline"
@@ -2330,6 +2331,31 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		Logger.log(`[Agents] Global model override: delegated agents run ${agentModelOverride} on provider=${sdkProviderId}`)
 	}
 
+	// "Use PolyKV agents as Priority 0" (PLANS §9g): agents first as sub-pools
+	// of this session's own opencoti window, overflowing to the nodes above.
+	// Asked of the Model's endpoint -- that is the window being lent -- and
+	// only when the setting is on, so a session that never asked for it spends
+	// no round trip. `/props` is cached per server by the probe.
+	const polykvAgentsPriorityZeroSetting = stateManager.getGlobalSettingsKey("polykvAgentsPriorityZero") ?? false
+	const polykvAgentsPriorityZero =
+		polykvAgentsPriorityZeroSetting &&
+		polykvPriorityZeroApplies({
+			enabled: polykvAgentsPriorityZeroSetting,
+			leadProviderId: sdkProviderId,
+			poolsEnabled: sdkProviderId === "opencoti" ? (await probeOpencotiProps(baseUrl, fetch)).poolsEnabled : false,
+		})
+	if (polykvAgentsPriorityZeroSetting) {
+		Logger.log(
+			polykvAgentsPriorityZero
+				? "[Agents] Priority 0: agents run first as sub-pools of this session's PolyKV window (at most 8), then on the nodes"
+				: `[Agents] Priority 0 is on but does not apply: ${
+						sdkProviderId === "opencoti"
+							? "the Model's server did not confirm pools_enabled"
+							: `the Model provider is ${sdkProviderId}, not opencoti`
+					}`,
+		)
+	}
+
 	const config: CoreSessionConfig = {
 		providerId: sdkProviderId,
 		modelId,
@@ -2343,6 +2369,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		...(effectiveDelegatedConnection ? { delegatedAgentConnection: effectiveDelegatedConnection } : {}),
 		// One node is the connection above; a list starts at two.
 		...(agentNodes.length > 1 ? { agentNodes } : {}),
+		...(polykvAgentsPriorityZero ? { polykvAgentsPriorityZero: true } : {}),
 		// Only when there is somewhere to escalate to. An `escalation` block
 		// holding no connection would be a feature that is on and cannot run,
 		// which is the state this fork keeps finding and then has to explain.

@@ -621,7 +621,11 @@ export function createSessionSwarmTool(
 			lifecycle.onSubAgentEvent?.(event),
 		);
 		// Queued again while its requests wait for room on the engine.
-		const stopRoomWatch = watchPolykvRoom(workerSessionId, request.emitUpdate);
+		const stopRoomWatch = watchPolykvRoom(
+			workerSessionId,
+			request.emitUpdate,
+			config.logger,
+		);
 		// Built on the connection it runs on: a node decides the worker's
 		// connection, so with nodes this runs once per placement.
 		const attempt = async (

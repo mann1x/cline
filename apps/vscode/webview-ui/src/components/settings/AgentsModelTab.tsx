@@ -17,6 +17,7 @@ import { useCallback, useMemo, useState } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { StateServiceClient } from "@/services/grpc-client"
 import AgentNodeTabs from "./AgentNodeTabs"
+import PolykvPriorityZeroSetting from "./PolykvPriorityZeroSetting"
 import ScopedModelTab from "./ScopedModelTab"
 
 /**
@@ -104,6 +105,9 @@ const AgentsModelTab = ({
 
 	return (
 		<div>
+			{/* Priority 0 sits above the nodes it ranks above. */}
+			<PolykvPriorityZeroSetting />
+
 			<AgentNodeTabs
 				nodes={nodes}
 				onAdd={handleAdd}

@@ -56,6 +56,7 @@ import {
 	createDelegatedAgentConfigProvider,
 	type DelegatedAgentConnectionConfig,
 	delegationCanRunInParallel,
+	sessionAgentNodes,
 	type TeamEvent,
 } from "../../extensions/tools/team";
 import {
@@ -457,6 +458,40 @@ function isRuntimeLifecycleShutdownReason(reason: string | undefined): boolean {
 	}
 }
 
+/**
+ * The nodes this session places agents on, priority 0 included when
+ * "Use PolyKV agents as Priority 0" is on. Every reader of the node list
+ * goes through here, so the delegation gate and the swarm offer see the
+ * nodes agents are actually placed on.
+ */
+export function resolveSessionAgentNodes(
+	config: CoreSessionConfig,
+): NonNullable<CoreSessionConfig["agentNodes"]> {
+	return sessionAgentNodes({
+		providerId: config.providerId,
+		modelId: config.modelId,
+		agentNodes: (config.agentNodes ?? []).map((node) => ({
+			...node,
+			connection: node.connection as Partial<DelegatedAgentConnectionConfig>,
+		})),
+		polykvAgentsPriorityZero: config.polykvAgentsPriorityZero,
+		overflowCapacity: config.maxConcurrentAgents,
+		lead: {
+			apiKey: config.apiKey,
+			baseUrl: config.baseUrl,
+			headers: config.headers,
+			providerConfig: config.providerConfig,
+			knownModels: config.knownModels,
+			thinking: config.thinking,
+			reasoningEffort: config.reasoningEffort,
+			thinkingBudgetTokens: config.thinkingBudgetTokens,
+			maxTokensPerTurn: config.maxTokensPerTurn,
+			maxToolResultChars: config.maxToolResultChars,
+			temperature: config.temperature,
+		},
+	}) as NonNullable<CoreSessionConfig["agentNodes"]>;
+}
+
 function normalizeConfig(
 	config: CoreSessionConfig,
 ): Required<
@@ -492,7 +527,7 @@ function normalizeConfig(
 		enableAgentTeams:
 			delegationCanRunInParallel({
 				maxConcurrentAgents: config.maxConcurrentAgents,
-				nodes: config.agentNodes,
+				nodes: resolveSessionAgentNodes(config),
 			}) &&
 			(config.enableAgentTeams ?? preset.enableAgentTeams ?? true),
 		disableMcpSettingsTools: config.disableMcpSettingsTools === true,
@@ -849,7 +884,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		// them comes through here. A list of fields to copy is a list that goes
 		// stale on the next field; the only part that needs naming is the cast,
 		// which is the one thing the two shapes genuinely disagree about.
-		const agentNodes = (config.agentNodes ?? []).map((node) => ({
+		const agentNodes = resolveSessionAgentNodes(config).map((node) => ({
 			...node,
 			connection: node.connection as Partial<DelegatedAgentConnectionConfig>,
 		}));
@@ -937,7 +972,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		if (
 			!delegationCanRunInParallel({
 				maxConcurrentAgents: config.maxConcurrentAgents,
-				nodes: config.agentNodes,
+				nodes: resolveSessionAgentNodes(config),
 			}) &&
 			(config.enableSpawnAgent !== false || config.enableAgentTeams !== false)
 		) {
@@ -1156,7 +1191,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			createSpawnTool &&
 			delegationCanRunInParallel({
 				maxConcurrentAgents: config.maxConcurrentAgents,
-				nodes: config.agentNodes,
+				nodes: resolveSessionAgentNodes(config),
 			})
 		) {
 			// Swarms are offered when anything the agents can run on has them:
@@ -1175,7 +1210,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			const swarmCandidates = [
 				config.providerConfig,
 				config.delegatedAgentConnection?.providerConfig,
-				...(config.agentNodes ?? []).map(
+				...resolveSessionAgentNodes(config).map(
 					(node) => node.connection.providerConfig,
 				),
 			].filter(

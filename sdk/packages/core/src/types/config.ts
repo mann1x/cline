@@ -893,7 +893,27 @@ export interface CoreSessionConfig
 		/** What the settings panel calls it: `Node1`, `Node2`, `Node3`. */
 		label?: string;
 		connection: DelegatedAgentConnectionOverride;
+		/**
+		 * The lead's own session as priority 0. Added by core from
+		 * `polykvAgentsPriorityZero`, never by a host: one a host lists is
+		 * dropped. See `sessionAgentNodes`.
+		 */
+		polykvLead?: boolean;
 	}>;
+	/**
+	 * "Use PolyKV agents as Priority 0" (PLANS §9g). Off by default.
+	 *
+	 * On, delegated agents are placed first as sub-pools of THIS session's own
+	 * opencoti window -- priority 0, above every node, at most eight -- and
+	 * overflow into `agentNodes` when those are taken or the lead's window is
+	 * below the room it keeps for the conversation. It spends the
+	 * conversation's own window on agent work, which is why it is opt-in.
+	 *
+	 * The host sets it only with the setting on AND `pools_enabled` confirmed
+	 * from this endpoint's `/props`; core ignores it on any provider but
+	 * opencoti. See `sessionAgentNodes`.
+	 */
+	polykvAgentsPriorityZero?: boolean;
 	agentSlotLimits?: ReadonlyArray<{
 		providerId?: string;
 		baseUrl?: string;

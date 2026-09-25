@@ -181,7 +181,10 @@ import {
 	describeEscalationOffer,
 	withStruggleSuggestion,
 } from "../escalation/struggle-offer";
-import { DefaultRuntimeBuilder } from "../orchestration/runtime-builder";
+import {
+	DefaultRuntimeBuilder,
+	resolveSessionAgentNodes,
+} from "../orchestration/runtime-builder";
 import {
 	OAuthReauthRequiredError,
 	type RuntimeOAuthResolution,
@@ -2033,7 +2036,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			configWithProvider.enableSpawnAgent !== false &&
 			delegationCanRunInParallel({
 				maxConcurrentAgents: configWithProvider.maxConcurrentAgents,
-				nodes: configWithProvider.agentNodes,
+				nodes: resolveSessionAgentNodes(configWithProvider),
 			});
 		// An expert is no longer the only thing worth supervising a run for.
 		// The detector used to be gated on one existing, which meant a session

@@ -3,6 +3,7 @@ import {
 	clearPolykvGrantedWindow,
 	clearPolykvSession,
 	createPolykvClient,
+	deferPolykvLeadClose,
 	engineSessionId,
 	getPolykvSession,
 	hasOpencotiFeature,
@@ -554,24 +555,38 @@ export async function releasePolykvSession(options: {
 	if (!hasOpencotiFeature(props?.features, OPENCOTI_FEATURES.sessionClose)) {
 		return;
 	}
-	try {
-		// The id the wire carried: the fetch sends `engineSessionId(...)`, and
-		// the close route cannot match a `/`.
-		const released = await client.closeSession(engineSessionId(sessionId));
-		options.logger?.debug?.(
-			released
-				? `[PolyKV] Closed session ${sessionId}`
-				: // Not an error, and worth saying: the server held no window
-					// under this id, so ours and theirs have diverged.
-					`[PolyKV] Server held no window for session ${sessionId}`,
+	const close = async (): Promise<void> => {
+		try {
+			// The id the wire carried: the fetch sends `engineSessionId(...)`,
+			// and the close route cannot match a `/`.
+			const released = await client.closeSession(engineSessionId(sessionId));
+			options.logger?.debug?.(
+				released
+					? `[PolyKV] Closed session ${sessionId}`
+					: // Not an error, and worth saying: the server held no window
+						// under this id, so ours and theirs have diverged.
+						`[PolyKV] Server held no window for session ${sessionId}`,
+			);
+		} catch (error) {
+			options.logger?.debug?.(
+				`[PolyKV] Could not close session ${sessionId}: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+		}
+	};
+	// "Use PolyKV agents as Priority 0": agents may be running as sub-pools of
+	// this very session. Closing it releases their pools, and the engine does
+	// not refuse a worker that names a released pool -- it prefills the whole
+	// prompt again, silently (opencoti, mail 269). So the close waits for the
+	// last of them.
+	if (deferPolykvLeadClose(sessionId, close)) {
+		options.logger?.log(
+			`[PolyKV] Session ${sessionId} ended with priority-0 agents still running in it; its window is closed after the last of them`,
 		);
-	} catch (error) {
-		options.logger?.debug?.(
-			`[PolyKV] Could not close session ${sessionId}: ${
-				error instanceof Error ? error.message : String(error)
-			}`,
-		);
+		return;
 	}
+	await close();
 }
 
 /**

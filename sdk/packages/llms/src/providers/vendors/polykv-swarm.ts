@@ -82,6 +82,121 @@ export interface PolykvWorkerSpec {
 	 * attaches to -- a policy on the root alone gates nobody.
 	 */
 	admission?: PolykvAdmissionPolicy;
+	/**
+	 * Priority 0 (PLANS §9g): the pools live in THIS session's window -- the
+	 * lead conversation's own -- instead of an owner opened for the swarm.
+	 *
+	 * The lead's session id as the host knows it (the engine spelling is made
+	 * here). Such an owner is borrowed, never ours: it is not opened, never
+	 * closed, and never swapped for a fresh one. What the swarm puts in it goes
+	 * back when its last agent ends -- the pools are released one by one, the
+	 * session stays. And a full window is the lead's, so a worker that has not
+	 * started yet is not held on it: see `createWorkerFetch`, which hands such
+	 * a refusal straight back so the agent overflows to a node.
+	 */
+	owner?: string;
+}
+
+/**
+ * How many agents may run as sub-pools of the lead's own session (§9g).
+ *
+ * The engine's per-session sub-pool limit (`polykv_subpools_v1`): the unit
+ * of priority 0's capacity, and ruled as its cap.
+ */
+export const POLYKV_LEAD_SUBPOOL_CAP = 8;
+
+/**
+ * Pools the lead-owned swarm tree may hold: one fewer than the session's
+ * limit, so the conversation's own sub-pool (`polykv-lead.ts`'s `Ls`, re-made
+ * after each compaction) always has a place. A chain that reaches the limit
+ * stops there and the worker attaches to its parent -- sharing less.
+ */
+export const POLYKV_LEAD_WORKER_POOL_MAX = POLYKV_LEAD_SUBPOOL_CAP - 1;
+
+/**
+ * Cells of the lead's window a priority-0 agent must leave free to start.
+ *
+ * The hazard this guards is measured (991ce2466): agents charged to the
+ * lead's window filled it at about 21 and 49 of 51 failed. A new agent is
+ * therefore admitted to priority 0 only while a quarter of the window -- and
+ * never less than a worker's minimum useful room -- is still free for the
+ * conversation's own next turn. Below it the agent is refused before it
+ * starts and overflows to the Agent Nodes.
+ */
+export function polykvLeadReserveCells(window: number): number {
+	return Math.max(POLYKV_MOVE_MIN_FREE_CELLS, Math.ceil(window * 0.25));
+}
+
+/** The lead's allocation on the engine, from `GET /kv`. */
+export interface PolykvLeadRoom {
+	window: number;
+	free: number;
+	/** Cells the lead keeps; a priority-0 agent starts only above this. */
+	reserve: number;
+}
+
+/**
+ * How much of the lead's booked window is free right now.
+ *
+ * `undefined` when it cannot be said -- `/kv` unreadable, or the lead holds
+ * no allocation (no `dynamicContextSize`: then a pool it "owns" is unowned,
+ * nothing is charged to it, and there is nothing of its to protect). The
+ * engine's own refusal is the backstop either way.
+ */
+export async function readPolykvLeadRoom(options: {
+	baseUrl: string;
+	fetch: typeof fetch;
+	headers?: Record<string, string>;
+	owner: string;
+}): Promise<PolykvLeadRoom | undefined> {
+	try {
+		const response = await options.fetch(`${polykvRoot(options.baseUrl)}/kv`, {
+			headers: options.headers ?? {},
+		});
+		if (!response.ok) {
+			return undefined;
+		}
+		const body = (await response.json()) as { allocations?: unknown };
+		const allocations = Array.isArray(body.allocations)
+			? (body.allocations as Array<{
+					key?: unknown;
+					cells?: unknown;
+					used?: unknown;
+				}>)
+			: [];
+		const key = engineSessionId(options.owner);
+		const entry = allocations.find((allocation) => allocation.key === key);
+		if (typeof entry?.cells !== "number" || entry.cells <= 0) {
+			return undefined;
+		}
+		const used = typeof entry.used === "number" ? entry.used : 0;
+		return {
+			window: entry.cells,
+			free: Math.max(0, entry.cells - used),
+			reserve: polykvLeadReserveCells(entry.cells),
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Agents that have had a turn served, by their own session id.
+ *
+ * Module state rather than the fetch's own flag because a fetch is built per
+ * model, and a model is built per turn: a flag on the fetch would read every
+ * later turn of a running agent as its first, and a priority-0 agent would
+ * be refused -- killed, since it has already started -- the moment the lead's
+ * window dipped below its reserve.
+ */
+const STARTED_WORKERS = new Set<string>();
+
+export function markPolykvWorkerStarted(sessionId: string): void {
+	STARTED_WORKERS.add(engineSessionId(sessionId));
+}
+
+export function polykvWorkerStarted(sessionId: string): boolean {
+	return STARTED_WORKERS.has(engineSessionId(sessionId));
 }
 
 export interface PolykvWorkerAttach {
@@ -97,6 +212,11 @@ interface OwnerShard {
 	/** Agents currently assigned here. */
 	agents: Set<string>;
 	closed: boolean;
+	/**
+	 * The lead's own session, lent to the swarm (§9g). Never opened or closed
+	 * here: releasing it means releasing the pools, not the session.
+	 */
+	borrowed?: boolean;
 }
 
 interface SwarmGroup {
@@ -215,7 +335,12 @@ function groupFor(
 	headers?: Record<string, string>,
 ): SwarmGroup {
 	const root = polykvRoot(baseUrl);
-	const key = `${root}\n${spec.group}`;
+	// A borrowed owner is its own group: its agents must never be moved to,
+	// or opened beside, an owner the swarm opened -- and the swarm's owners
+	// must never be handed the lead's window.
+	const key = spec.owner
+		? `${root}\n${spec.group}\nlead:${engineSessionId(spec.owner)}`
+		: `${root}\n${spec.group}`;
 	let group = GROUPS.get(key);
 	if (!group) {
 		group = {
@@ -437,6 +562,15 @@ async function ensureChain(
 	for (let depth = 0; depth <= layers; depth++) {
 		key = hashString(`${key}\n${JSON.stringify(messages[depth])}`);
 		let pending = shard.pools.get(key);
+		if (
+			!pending &&
+			shard.borrowed &&
+			shard.pools.size >= POLYKV_LEAD_WORKER_POOL_MAX
+		) {
+			// The lead's session has a sub-pool limit, and its own conversation
+			// needs one of them: share what is already built instead.
+			return parent;
+		}
 		if (!pending) {
 			const parentId = parent;
 			pending = (async () => {
@@ -474,11 +608,49 @@ async function ensureChain(
 		}
 		const poolId = await pending;
 		if (poolId === undefined) {
+			if (shard.borrowed && shard.pools.get(key) === pending) {
+				// On the lead's session a refused pool is priority 0 being
+				// full -- its eight per slot, or the server's pool reservoir --
+				// and that ends as agents do. Not remembered, so the next agent
+				// asks again rather than inheriting this one's refusal.
+				shard.pools.delete(key);
+			}
 			return parent;
 		}
 		parent = poolId;
 	}
 	return parent;
+}
+
+/**
+ * The lead's own session as this group's one owner, with the agent on it.
+ *
+ * Made on first use and again after its last agent released it; it is never
+ * opened (the lead's window already exists) and never closed from here.
+ */
+function lendLeadShard(
+	group: SwarmGroup,
+	agentSessionId: string,
+	owner: string,
+): OwnerShard {
+	let lent = group.shards.find((candidate) => !candidate.closed);
+	if (!lent) {
+		lent = {
+			sessionId: engineSessionId(owner),
+			pools: new Map(),
+			agents: new Set(),
+			closed: false,
+			borrowed: true,
+		};
+		group.shards.push(lent);
+	}
+	const previous = group.assigned.get(agentSessionId);
+	if (previous !== lent) {
+		previous?.agents.delete(agentSessionId);
+		group.assigned.set(agentSessionId, lent);
+		lent.agents.add(agentSessionId);
+	}
+	return lent;
 }
 
 /** Wait on an owner opening, as one of the agents that will be told if it stalls. */
@@ -554,7 +726,11 @@ export async function preparePolykvWorker(options: {
 	}
 	const current = group.assigned.get(spec.sessionId);
 	let shard = options.fresh ? undefined : current;
-	if (!shard || shard.closed) {
+	if (spec.owner) {
+		// Priority 0: the one owner is the lead's session, lent rather than
+		// opened. There is no fresh one to try and nothing to open.
+		shard = lendLeadShard(group, spec.sessionId, spec.owner);
+	} else if (!shard || shard.closed) {
 		shard = options.fresh
 			? // An extra owner, if the engine has room for one; otherwise the
 				// agent keeps its place on the owner it has and waits there.
@@ -632,7 +808,9 @@ export const POLYKV_MOVE_MIN_FREE_CELLS = 16_384;
 export async function movePolykvWorker(sessionId: string): Promise<boolean> {
 	const group = AGENT_GROUPS.get(sessionId);
 	const current = group?.assigned.get(sessionId);
-	if (!group || !current) {
+	// A priority-0 agent has one owner, the lead's session, and nowhere to
+	// move to: its group holds nothing else.
+	if (!group || !current || current.borrowed) {
 		return false;
 	}
 	const open = group.shards.filter(
@@ -702,6 +880,7 @@ export async function releasePolykvAgent(
 	const group = AGENT_GROUPS.get(sessionId);
 	AGENT_GROUPS.delete(sessionId);
 	ROOM_WAITING.delete(engineSessionId(sessionId));
+	STARTED_WORKERS.delete(engineSessionId(sessionId));
 	const known = OPENCOTI_SESSIONS.get(sessionId);
 	OPENCOTI_SESSIONS.delete(sessionId);
 	const result: PolykvReleaseResult = { closed: [], failed: [] };
@@ -736,10 +915,23 @@ export async function releasePolykvAgent(
 		if (shard) {
 			shard.agents.delete(sessionId);
 			if (shard.agents.size === 0 && !shard.closed) {
-				// Closing the owner releases every pool it owns with it.
 				shard.closed = true;
 				group.shards = group.shards.filter((candidate) => candidate !== shard);
-				close(group.client, shard.sessionId);
+				if (shard.borrowed) {
+					// The lead's session is not ours to close -- closing it would
+					// end the conversation's window. What the swarm put in it goes
+					// back instead, deepest first, so the lead gets its cells and
+					// its sub-pool slots back when its agents are done. A lead
+					// whose conversation ended meanwhile is closed after that.
+					closes.push(
+						releaseLentPools(group.client, shard).then(() =>
+							runDeferredLeadClose(shard.sessionId),
+						),
+					);
+				} else {
+					// Closing the owner releases every pool it owns with it.
+					close(group.client, shard.sessionId);
+				}
 			}
 		}
 		if (group.shards.length === 0 && group.assigned.size === 0) {
@@ -750,6 +942,83 @@ export async function releasePolykvAgent(
 	return result;
 }
 
+/**
+ * Lead sessions whose close is waiting on their priority-0 agents.
+ *
+ * Closing the lead's opencoti session releases every sub-pool it owns, and a
+ * worker that then names a released pool is not refused: it is silently given
+ * a full prefill (opencoti, mail 269). So a lead whose conversation ends while
+ * its priority-0 agents still run is closed after the last of them, not
+ * before.
+ */
+const DEFERRED_LEAD_CLOSES = new Map<string, () => Promise<unknown>>();
+
+/** The lent shard for this lead, if agents are running on it. */
+function busyLentShard(owner: string): OwnerShard | undefined {
+	const id = engineSessionId(owner);
+	for (const group of GROUPS.values()) {
+		for (const shard of group.shards) {
+			if (
+				shard.borrowed &&
+				!shard.closed &&
+				shard.sessionId === id &&
+				shard.agents.size > 0
+			) {
+				return shard;
+			}
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Hold a lead's session close until its last priority-0 agent ends.
+ *
+ * `true` when the close was deferred -- the caller must not close now -- and
+ * `false` when nothing of the swarm is running in that session, so the caller
+ * closes as it always did. A second deferral for one lead replaces the first.
+ */
+export function deferPolykvLeadClose(
+	owner: string,
+	close: () => Promise<unknown>,
+): boolean {
+	if (!busyLentShard(owner)) {
+		return false;
+	}
+	DEFERRED_LEAD_CLOSES.set(engineSessionId(owner), close);
+	return true;
+}
+
+/** Whether priority-0 agents are running in this lead's session now. */
+export function polykvLeadLent(owner: string): boolean {
+	return busyLentShard(owner) !== undefined;
+}
+
+async function runDeferredLeadClose(sessionId: string): Promise<void> {
+	const close = DEFERRED_LEAD_CLOSES.get(sessionId);
+	DEFERRED_LEAD_CLOSES.delete(sessionId);
+	await close?.().catch(() => undefined);
+}
+
+/** Release the pools a swarm built in the lead's window, children first. */
+async function releaseLentPools(
+	client: PolykvClient,
+	shard: OwnerShard,
+): Promise<void> {
+	const ids = (
+		await Promise.all(
+			[...shard.pools.values()].map((pending) =>
+				pending.catch(() => undefined),
+			),
+		)
+	).filter((id): id is string => id !== undefined);
+	shard.pools.clear();
+	for (const id of ids.reverse()) {
+		await client.unpin(id).catch(() => undefined);
+		await client.releasePool(id).catch(() => undefined);
+	}
+}
+
 /** Close every owner this process holds. For shutdown and for tests. */
 export async function releaseAllPolykvSwarms(): Promise<void> {
 	const closes: Promise<unknown>[] = [];
@@ -757,12 +1026,19 @@ export async function releaseAllPolykvSwarms(): Promise<void> {
 		for (const shard of group.shards) {
 			shard.closed = true;
 			closes.push(
-				group.client.closeSession(shard.sessionId).catch(() => false),
+				shard.borrowed
+					? releaseLentPools(group.client, shard)
+					: group.client.closeSession(shard.sessionId).catch(() => false),
 			);
 		}
 	}
 	GROUPS.clear();
 	AGENT_GROUPS.clear();
+	STARTED_WORKERS.clear();
+	// Shutdown: the lent pools are gone, so the leads can go too.
+	for (const sessionId of [...DEFERRED_LEAD_CLOSES.keys()]) {
+		closes.push(runDeferredLeadClose(sessionId));
+	}
 	await Promise.all(closes);
 }
 
@@ -903,12 +1179,18 @@ export function reportPolykvRoomWait(
 /** Test seam. */
 export function polykvSwarmState(): Array<{
 	group: string;
-	owners: Array<{ sessionId: string; agents: string[]; pools: number }>;
+	owners: Array<{
+		sessionId: string;
+		borrowed?: boolean;
+		agents: string[];
+		pools: number;
+	}>;
 }> {
 	return [...GROUPS.values()].map((group) => ({
 		group: group.key,
 		owners: group.shards.map((shard) => ({
 			sessionId: shard.sessionId,
+			...(shard.borrowed ? { borrowed: true } : {}),
 			agents: [...shard.agents],
 			pools: shard.pools.size,
 		})),

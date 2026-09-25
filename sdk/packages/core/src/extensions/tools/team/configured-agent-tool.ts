@@ -456,6 +456,7 @@ export function createConfiguredAgentTools(
 					const stopRoomWatch = watchPolykvRoom(
 						engineSessionId,
 						context.emitUpdate,
+						options.logger,
 					);
 					const parentAgentId = context.agentId;
 					const spawnInput = {

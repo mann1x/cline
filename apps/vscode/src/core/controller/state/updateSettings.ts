@@ -233,6 +233,9 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.subagentCommandsEnabled !== undefined) {
 			controller.stateManager.setGlobalState("subagentCommandsEnabled", !!request.subagentCommandsEnabled)
 		}
+		if (request.polykvAgentsPriorityZero !== undefined) {
+			controller.stateManager.setGlobalState("polykvAgentsPriorityZero", !!request.polykvAgentsPriorityZero)
+		}
 
 		// Update the global agent-model override
 		if (request.agentModelOverride !== undefined) {

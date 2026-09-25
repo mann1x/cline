@@ -871,9 +871,11 @@ export interface AgentConfig {
 	 *
 	 * `group` is the swarm the agent dedupes against, `layers` how many turns
 	 * after the system turn are shared. The agent's own session is
-	 * `engineSessionId`.
+	 * `engineSessionId`. `owner`, when present, is the lead conversation's
+	 * session: the tree is built in ITS window rather than in an owner opened
+	 * for the swarm -- priority 0, "Use PolyKV agents as Priority 0".
 	 */
-	polykvWorker?: { group: string; layers: number };
+	polykvWorker?: { group: string; layers: number; owner?: string };
 	// -------------------------------------------------------------------------
 	// Provider Settings
 	// -------------------------------------------------------------------------

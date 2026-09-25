@@ -72,6 +72,26 @@ describe("watchPolykvRoom", () => {
 		expect(noticeListeners.has("s3")).toBe(false);
 	});
 
+	// A priority-0 agent that lost its sub-pool was prefilled in full. The row
+	// scrolls away; the log keeps it, at warn.
+	it("logs the engine's warnings at warn, and only those", () => {
+		const log = vi.fn();
+		const stop = watchPolykvRoom("s3", vi.fn(), { log });
+
+		noticeListeners.get("s3")?.({ severity: "info", text: "fine" });
+		noticeListeners.get("s3")?.({
+			severity: "warn",
+			text: "No X-Context-Window on this turn",
+		});
+		stop();
+
+		expect(log).toHaveBeenCalledTimes(1);
+		expect(log).toHaveBeenCalledWith(
+			"[PolyKV] s3: No X-Context-Window on this turn",
+			{ severity: "warn" },
+		);
+	});
+
 	it("watches nothing without a session or a row to update", () => {
 		watchPolykvRoom(undefined, vi.fn())();
 		watchPolykvRoom("s2", undefined)();

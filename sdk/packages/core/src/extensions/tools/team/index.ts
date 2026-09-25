@@ -3,10 +3,18 @@ export {
 	type AgentNodeRuntimeConfig,
 	createAgentNodePlacement,
 	type PlacedAgentNode,
+	POLYKV_LEAD_NODE_ID,
+	POLYKV_LEAD_NODE_LABEL,
+	PRIMARY_OVERFLOW_NODE_ID,
+	type SessionAgentNodesInput,
+	sessionAgentNodes,
 } from "./agent-node-placement";
 export {
 	type AgentNode,
+	capLeadTier,
 	emptyPlacementState,
+	LEAD_PRIORITY,
+	LEAD_SUBPOOL_CAPACITY,
 	type Placement,
 	type PlacementState,
 	placeAgent,
