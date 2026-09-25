@@ -740,7 +740,11 @@ async function runSpawnedAgent(
 		config.onSubAgentEvent,
 	);
 	// Queued again while its requests wait for room on the engine.
-	const stopRoomWatch = watchPolykvRoom(engineSessionId, context.emitUpdate);
+	const stopRoomWatch = watchPolykvRoom(
+		engineSessionId,
+		context.emitUpdate,
+		config.logger,
+	);
 	// Its own abort signal, so a runaway agent can be stopped without
 	// cancelling the session and the siblings that are working.
 	const cancelId = subagentCancelId(context.sessionId, context.toolCallId);

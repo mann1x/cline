@@ -327,6 +327,7 @@ message Settings {
   optional string jev_settings = 221;
   optional bool subagent_commands_enabled = 222;
   optional string agent_model_override = 223;
+  optional bool polykv_agents_priority_zero = 224;
 }
 
 message State {
@@ -462,6 +463,9 @@ message UpdateSettingsRequest {
   optional bool subagents_enabled = 29;
   optional bool subagent_commands_enabled = 83;
   optional string agent_model_override = 84;
+  // "Use PolyKV agents as Priority 0": agents first as sub-pools of the Model's
+  // own opencoti session, overflowing to the Agent Nodes.
+  optional bool polykv_agents_priority_zero = 85;
   optional int32 subagent_terminal_output_line_limit = 30;
   optional string cline_env = 31;
   optional OnboardingModelGroup onboarding_models = 33;

@@ -121,6 +121,13 @@ export async function restarted(
 export function watchPolykvRoom(
 	engineSessionId: string | undefined,
 	emitUpdate: ((update: unknown) => void) | undefined,
+	/**
+	 * Where a warning also goes, beside the row: a lost priority-0 sub-pool
+	 * is a full prefill nobody sees on a row that has scrolled away.
+	 */
+	logger?: {
+		log?: (message: string, metadata?: { severity?: "warn" }) => void;
+	},
 ): () => void {
 	if (!engineSessionId || !emitUpdate) {
 		return () => {};
@@ -145,6 +152,11 @@ export function watchPolykvRoom(
 	// 5,627 on every turn was a warning in the server log and nowhere a user
 	// would look. On the row's activity, with its severity.
 	const stopNotices = onPolykvNotice(engineSessionId, (notice) => {
+		if (notice.severity === "warn") {
+			logger?.log?.(`[PolyKV] ${engineSessionId}: ${notice.text}`, {
+				severity: "warn",
+			});
+		}
 		emitUpdate({
 			activity: {
 				text: notice.text,

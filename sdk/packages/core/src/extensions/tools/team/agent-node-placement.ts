@@ -17,7 +17,12 @@
  * So an agent takes a node, then runs inside that node's gate, and gives the
  * node back however the run ended.
  */
-import type { AgentNode } from "./agent-placement";
+import {
+	type AgentNode,
+	capLeadTier,
+	LEAD_PRIORITY,
+	LEAD_SUBPOOL_CAPACITY,
+} from "./agent-placement";
 import {
 	type AcquireOptions,
 	createAgentPlacementQueue,
@@ -59,6 +64,110 @@ export interface AgentNodeRuntimeConfig {
 	label?: string;
 	/** The node's own connection, in the shape the Agents tab already stores. */
 	connection: Partial<DelegatedAgentConnectionConfig>;
+	/**
+	 * This node is the lead conversation's own opencoti session: priority 0,
+	 * "Use PolyKV agents as Priority 0" (PLANS §9g). Its agents are built as
+	 * sub-pools of the lead's window, its priority is 0 and its capacity at
+	 * most {@link LEAD_SUBPOOL_CAPACITY}, whatever else the entry says.
+	 */
+	polykvLead?: boolean;
+}
+
+/** The id and label the priority-0 node goes by. */
+export const POLYKV_LEAD_NODE_ID = "polykv-lead";
+export const POLYKV_LEAD_NODE_LABEL = "Model (PolyKV)";
+
+/** What {@link sessionAgentNodes} reads of a session's config. */
+export interface SessionAgentNodesInput {
+	providerId: string;
+	modelId: string;
+	agentNodes?: readonly AgentNodeRuntimeConfig[];
+	/**
+	 * The host's word that the setting is on AND this session's endpoint
+	 * confirmed `pools_enabled`. The provider is checked again here.
+	 */
+	polykvAgentsPriorityZero?: boolean;
+	/** The lead's own connection, from which the priority-0 node is built. */
+	lead: Partial<DelegatedAgentConnectionConfig>;
+	/**
+	 * The session's own agent concurrency (`maxConcurrentAgents`), for the
+	 * overflow node made when the host lists none. `0` or absent is "the
+	 * endpoint decides", which a node spells `Infinity`.
+	 */
+	overflowCapacity?: number;
+}
+
+/** The overflow tier made when priority 0 is on and the host lists no node. */
+export const PRIMARY_OVERFLOW_NODE_ID = "primary";
+
+/**
+ * The nodes delegated agents are placed across, priority 0 included.
+ *
+ * With "Use PolyKV agents as Priority 0" off -- the default -- this is the
+ * host's list untouched. On, and only on an opencoti lead, the lead's own
+ * session is prepended as priority 0 with its cap of eight; the host's list is
+ * the overflow, and a host that has no second node sends Node1 there on its
+ * own, so an agent always has somewhere to go when the lead's window is full.
+ *
+ * One function for every reader -- the placement, the delegation gate, the
+ * swarm offer -- so none of them sees a different set of nodes than the one
+ * agents are actually placed on.
+ */
+export function sessionAgentNodes(
+	input: SessionAgentNodesInput,
+): AgentNodeRuntimeConfig[] {
+	const listed = (input.agentNodes ?? []).filter((node) => !node.polykvLead);
+	if (
+		input.polykvAgentsPriorityZero !== true ||
+		input.providerId.trim().toLowerCase() !== "opencoti"
+	) {
+		return [...listed];
+	}
+	// Priority 0 always has somewhere to overflow to. A host with one node
+	// sends no list (one node is the delegated connection itself), so that
+	// connection becomes tier 1 here -- `{}` is "the session's delegated
+	// connection unchanged". Without it a full lead window would leave an
+	// agent nowhere to go but the queue, refused until it gave up.
+	const overflow: AgentNodeRuntimeConfig[] =
+		listed.length > 0
+			? listed
+			: [
+					{
+						id: PRIMARY_OVERFLOW_NODE_ID,
+						priority: LEAD_PRIORITY + 1,
+						capacity:
+							typeof input.overflowCapacity === "number" &&
+							input.overflowCapacity > 0
+								? input.overflowCapacity
+								: Number.POSITIVE_INFINITY,
+						label: "Node1",
+						connection: {},
+					},
+				];
+	return [
+		{
+			id: POLYKV_LEAD_NODE_ID,
+			priority: LEAD_PRIORITY,
+			capacity: LEAD_SUBPOOL_CAPACITY,
+			label: POLYKV_LEAD_NODE_LABEL,
+			// Every field the lead has, even the undefined ones: a node
+			// inherits what it does not name from the Agents tab's connection,
+			// and an agent in the lead's window must run the lead's model, with
+			// the lead's thinking and caps, not Node1's.
+			connection: {
+				thinking: undefined,
+				reasoningEffort: undefined,
+				thinkingBudgetTokens: undefined,
+				maxTokensPerTurn: undefined,
+				temperature: undefined,
+				...input.lead,
+				providerId: input.providerId,
+				modelId: input.modelId,
+			},
+			polykvLead: true,
+		},
+		...overflow,
+	];
 }
 
 /** Somewhere to run one agent, held until it is given back. */
@@ -134,11 +243,16 @@ export function createAgentNodePlacement(input: {
 	}
 	const queue = createAgentPlacementQueue(
 		input.nodes.map(
-			(node): AgentNode => ({
-				id: node.id,
-				priority: node.priority,
-				capacity: node.capacity,
-			}),
+			(node): AgentNode =>
+				capLeadTier({
+					id: node.id,
+					// The lead node is priority 0 by what it is, and nothing
+					// else is: a listed node claiming 0 would jump the lead.
+					priority: node.polykvLead
+						? LEAD_PRIORITY
+						: Math.max(node.priority, LEAD_PRIORITY + 1),
+					capacity: node.capacity,
+				}),
 		),
 	);
 
@@ -148,10 +262,20 @@ export function createAgentNodePlacement(input: {
 	const providers = new Map<string, DelegatedAgentConfigProvider>();
 	for (const node of input.nodes) {
 		const overrides = node.connection;
+		const base = input.base.getRuntimeConfig();
 		providers.set(
 			node.id,
 			createDelegatedAgentConfigProvider(
-				{ ...input.base.getRuntimeConfig(), ...overrides },
+				{
+					...base,
+					...overrides,
+					// The lead's session is the owner its agents' pools live in.
+					// A session with no id has no window to lend, and the node
+					// then runs its agents as ordinary swarm workers.
+					...(node.polykvLead && base.sessionId
+						? { polykvLeadOwner: base.sessionId }
+						: {}),
+				},
 				Object.keys(overrides) as (keyof DelegatedAgentConnectionConfig)[],
 			),
 		);

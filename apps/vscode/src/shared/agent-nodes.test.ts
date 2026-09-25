@@ -7,11 +7,14 @@ import {
 	nextAgentNodeId,
 	PRIMARY_AGENT_NODE_ID,
 	parseAgentNodes,
+	polykvPriorityZeroApplies,
+	polykvPriorityZeroAvailable,
 	removeAgentNode,
 	serializeAgentNodes,
 	setAgentNodePriority,
 	setAgentNodeSnapshot,
 } from "./agent-nodes"
+import { ApiHandlerSettingsKeys, SettingsKeys } from "./storage/state-keys"
 
 describe("agent nodes", () => {
 	// Every install that predates nodes has no `agentNodes` at all, and its
@@ -124,5 +127,33 @@ describe("minting an id", () => {
 			nodes = addAgentNode(nodes, nextAgentNodeId(nodes, 1_700_000_000_000))
 		}
 		expect(new Set(nodes.map((node) => node.id)).size).toBe(5)
+	})
+})
+
+describe("Use PolyKV agents as Priority 0", () => {
+	// Priority 0 is the lead's own session: only an opencoti lead has one to
+	// lend, and only a server that confirmed pools can hold its agents.
+	it("is available only for an opencoti Model whose server confirmed pools", () => {
+		expect(polykvPriorityZeroAvailable({ leadProviderId: "opencoti", poolsEnabled: true })).toBe(true)
+		expect(polykvPriorityZeroAvailable({ leadProviderId: "opencoti", poolsEnabled: false })).toBe(false)
+		// Not asked, or could not be asked, is not yes.
+		expect(polykvPriorityZeroAvailable({ leadProviderId: "opencoti", poolsEnabled: undefined })).toBe(false)
+		expect(polykvPriorityZeroAvailable({ leadProviderId: "ollama", poolsEnabled: true })).toBe(false)
+		expect(polykvPriorityZeroAvailable({ leadProviderId: undefined, poolsEnabled: true })).toBe(false)
+	})
+
+	it("applies only when it is also switched on, and it is off by default", () => {
+		const available = { leadProviderId: "opencoti", poolsEnabled: true }
+		expect(polykvPriorityZeroApplies({ ...available, enabled: true })).toBe(true)
+		expect(polykvPriorityZeroApplies({ ...available, enabled: false })).toBe(false)
+		expect(polykvPriorityZeroApplies({ ...available, enabled: undefined })).toBe(false)
+		expect(polykvPriorityZeroApplies({ leadProviderId: "ollama", poolsEnabled: true, enabled: true })).toBe(false)
+	})
+
+	// A global setting like the other Agents toggles, not a profile field: a
+	// profile load neither carries nor clears it.
+	it("is stored as a global setting, outside what a profile captures", () => {
+		expect(SettingsKeys).toContain("polykvAgentsPriorityZero")
+		expect(ApiHandlerSettingsKeys as readonly string[]).not.toContain("polykvAgentsPriorityZero")
 	})
 })

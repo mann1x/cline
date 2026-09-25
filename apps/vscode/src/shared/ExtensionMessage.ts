@@ -223,6 +223,8 @@ export interface ExtensionState {
 	webSearchEnabled?: boolean
 	subagentsEnabled?: boolean
 	subagentCommandsEnabled?: boolean
+	/** "Use PolyKV agents as Priority 0"; see state-keys.ts. */
+	polykvAgentsPriorityZero?: boolean
 	agentModelOverride?: string
 	strongNudgesEnabled?: boolean
 	worktreesEnabled?: ClineFeatureSetting

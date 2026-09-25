@@ -356,6 +356,11 @@ export interface ProviderOptions {
 		layers: number;
 		/** Attach to the agent's existing tree without building anything. */
 		attachOnly?: boolean;
+		/**
+		 * Build the tree in this session's window -- the lead's own -- instead
+		 * of an owner opened for the swarm: priority 0, PLANS §9g.
+		 */
+		owner?: string;
 	};
 	/** Which tools this configuration withholds from its sessions. */
 	tools?: ToolSelectionOptions;

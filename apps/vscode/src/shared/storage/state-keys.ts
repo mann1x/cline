@@ -414,6 +414,12 @@ const USER_SETTINGS_FIELDS = {
 	// them only. Empty means agents run on the session's model. One value on the
 	// session's provider — not per-provider, and it never touches the lead.
 	agentModelOverride: { default: "" as string },
+	// "Use PolyKV agents as Priority 0" (PLANS §9g). Delegated agents run first
+	// as sub-pools of the Model's own opencoti session -- at most eight -- and
+	// overflow to the Agent Nodes. Off by default: on, a swarm spends the
+	// conversation's own window. Applied only while the Model provider is
+	// opencoti and its `/props` confirms `pools_enabled`.
+	polykvAgentsPriorityZero: { default: false as boolean },
 	strongNudgesEnabled: { default: true as boolean },
 	worktreesEnabled: { default: false as boolean },
 	preferredLanguage: { default: "English" as string },

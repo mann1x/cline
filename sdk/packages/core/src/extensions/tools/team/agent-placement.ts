@@ -47,6 +47,33 @@ export interface AgentNode {
 	capacity: number;
 }
 
+/** The tier that is the lead conversation's own PolyKV session (§9g). */
+export const LEAD_PRIORITY = 0;
+
+/**
+ * Priority 0's capacity: 8 sub-pools of the lead's one session -- the engine's
+ * per-session limit, and the ruled cap (PLANS §9g, 2026-09-25).
+ */
+export const LEAD_SUBPOOL_CAPACITY = 8;
+
+/**
+ * A node's capacity with priority 0's cap applied.
+ *
+ * Only the lead tier is capped. It is always a bounded thing -- sub-pools of
+ * one window -- so `Infinity` ("the endpoint decides") cannot apply to it: the
+ * endpoint deciding is what filled the lead's window and lost 49 of 51 agents
+ * (991ce2466). `0` stays off. Every other tier is left as configured, where
+ * `Infinity` keeps meaning the endpoint decides.
+ */
+export function capLeadTier<T extends AgentNode>(node: T): T {
+	if (node.priority !== LEAD_PRIORITY || !(node.capacity > 0)) {
+		return node;
+	}
+	return node.capacity > LEAD_SUBPOOL_CAPACITY
+		? { ...node, capacity: LEAD_SUBPOOL_CAPACITY }
+		: node;
+}
+
 export type Placement =
 	| { kind: "node"; nodeId: string }
 	/**

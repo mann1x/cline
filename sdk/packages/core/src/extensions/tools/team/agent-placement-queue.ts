@@ -36,6 +36,7 @@
  */
 import {
 	type AgentNode,
+	capLeadTier,
 	emptyPlacementState,
 	type PlacementState,
 	placeAgent,
@@ -176,7 +177,7 @@ function abortReason(signal: AbortSignal): unknown {
 }
 
 export function createAgentPlacementQueue(
-	nodes: readonly AgentNode[],
+	configuredNodes: readonly AgentNode[],
 	options?: {
 		/** Injected so the cool-off can be tested without waiting for it. */
 		now?: () => number;
@@ -184,6 +185,9 @@ export function createAgentPlacementQueue(
 		schedule?: (fn: () => void, ms: number) => void;
 	},
 ): AgentPlacementQueue {
+	// Priority 0 is sub-pools of one window and never more than eight of
+	// them, whatever the caller said: see `capLeadTier`.
+	const nodes = configuredNodes.map(capLeadTier);
 	const occupancy = new Map<string, number>();
 	const downUntil = new Map<string, number>();
 	const waiters: Waiter[] = [];

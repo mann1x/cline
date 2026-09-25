@@ -1,5 +1,8 @@
 import {
 	getPolykvSession,
+	preparePolykvWorker,
+	releaseAllPolykvSwarms,
+	releasePolykvAgent,
 	resetPolykvAvailability,
 	resetPolykvSessions,
 	setPolykvSession,
@@ -595,6 +598,40 @@ describe("ending the session", () => {
 		expect(server.calls.map((c) => `${c.method} ${c.path}`)).toContain(
 			"POST /sessions/s1/close",
 		);
+	});
+
+	// "Use PolyKV agents as Priority 0": agents may be sub-pools of this very
+	// session. Closing it releases their pools, and the engine then prefills a
+	// worker naming a released pool in full rather than refusing it (opencoti,
+	// mail 269). The close waits for the last of them.
+	it("closes a lead only after its last priority-0 agent ends", async () => {
+		const server = engine({ features: ["session_close_v1"] });
+		const config = provider(server.fetch);
+		try {
+			await preparePolykvWorker({
+				spec: { group: "s1", sessionId: "s1~agent-1", layers: 0, owner: "s1" },
+				baseUrl: config.baseUrl,
+				fetch: server.fetch,
+				body: {
+					messages: [
+						{ role: "system", content: "s" },
+						{ role: "user", content: "t" },
+					],
+				},
+			});
+
+			await releasePolykvSession({ sessionId: "s1", providerConfig: config });
+			const closes = () =>
+				server.calls
+					.map((c) => `${c.method} ${c.path}`)
+					.filter((c) => c === "POST /sessions/s1/close");
+			expect(closes()).toEqual([]);
+
+			await releasePolykvAgent("s1~agent-1");
+			expect(closes()).toEqual(["POST /sessions/s1/close"]);
+		} finally {
+			await releaseAllPolykvSwarms();
+		}
 	});
 
 	it("closes the session after releasing its pool, not instead", async () => {
