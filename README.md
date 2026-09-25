@@ -256,6 +256,8 @@ Install the thinking-budget build from the fork: **https://github.com/mann1x/oll
 
 It is ordinary Ollama with the budget sampler added — same models, same API, same `OLLAMA_HOST`, nothing to re-import. Take the binary for your platform, and on Windows and Linux take the matching **runtime** archive from the same release: the sampler lives in the runtime libraries, and a binary paired with the stock runtime will fail to start or quietly lose the budget.
 
+The panel also reads your Ollama account: the plan you are on and which models are cloud models.
+
 Everything else in the Ollama panel works on stock Ollama. Only the thinking budget requires this build.
 
 ### llama.cpp: the server's own numbers
@@ -320,6 +322,7 @@ Turn on **Subagents** in Features and the model can hand work to sub-agents with
 - **Swarms.** With **Allow swarms** on and a PolyKV server behind it, `spawn_agent` with `merge: true` runs its agents on a snapshot of your context and returns one merged report.
 - **Watch and steer.** A strip above the chat shows every running agent: its node, model, current tool, speed and recent activity, with **Stop**, **Restart** and **Stop all**. A message you send during a round is answered at once, and the lead can pass it to its agents or stop them.
 - **Resilient rounds.** An agent never fails on infrastructure. After a server restart, a dropped connection or an admission refusal, it waits for the server and runs its turn again. The lead hears about an agent that has been stuck for a while. An agent that keeps running out its thinking budget is nudged once and then stopped, and it still reports.
+- **Sampling per spawn.** `spawn_agent`, `spawn_swarm`, teammates and configured agents take an optional `temperature` and `seed`. Leave them out and the model's own sampler applies. A seed that covers several agents is offset per agent (seed, seed+1, …).
 - **Every report reaches the lead.** Each agent writes a short summary, and the lead reads any full report with `read_agent_report`. A question from an agent goes to the lead, not to you.
 
 ### Agents work on a private copy
@@ -337,6 +340,8 @@ A 27B model on a local server fails in ways a frontier model does not, and often
 - **Compaction that keeps the thread.** The summary is a present-tense replay that cites tool calls by number instead of copying them. What you typed is quoted verbatim, and the harness's own record of every tool call sits beside it. Compaction Council checks each half of the transcript against the summary.
 - **A context bar that shows the fixed price**: system prompt, tool schemas and MCP schemas, before the conversation starts. Tools can be switched off per profile.
 - **Tool calls read the shapes models actually send**, such as an array sent as a string or a single path where a list is expected. Refusals point at the character that went wrong.
+- **Reasoning replay per provider.** Whether earlier thinking is sent back to the model is decided from what the model measurably does, is adjustable per profile, and is inlined into the content when a chat template would drop it.
+- **Tool calls run as a batch.** Several independent calls in one message run in parallel. Writes to the same file are serialized, so no parallel edit is lost. A profile can set, or turn off, the size limit for a file read.
 - **Guards** catch reasoning loops, repeated calls, non-convergence and files changed behind the model's back. An atomic change protocol with `restore_file` undoes damage.
 - **Questions recommend an option.** When the model asks you to choose, it marks the option it would pick. Optionally, **Jev** scores the options before they reach you.
 - **Generated images reach you on text-only models.** The model gets a text result and the chat shows the image.

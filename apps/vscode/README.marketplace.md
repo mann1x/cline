@@ -43,6 +43,9 @@ all. Send a message mid-round and the lead answers at once. An agent never fails
 on a server restart or refusal. It waits and runs its turn again, and every
 agent's report reaches the lead.
 
+**Sampling per agent.** Spawn tools take an optional `temperature` and `seed`
+(offset per agent in a fan-out); leave them out and the model's sampler applies.
+
 **Agents work on a private copy.** A `spawn_agent` agent's edits stay in a
 copy-on-write overlay and come back to the lead as revisions to review and
 adopt. Nothing is applied behind your back. With **Agents can run commands** on,
@@ -77,7 +80,8 @@ verbatim-repetition nudge, a turn-level non-convergence signal, and an
 unchanged-read ledger — one observed session re-read the same 14 KB file 31
 times, burning roughly 110k tokens.
 
-**Local-serving support.** One output budget on every provider, a context bar
+**Local-serving support.** One output budget on every provider, reasoning replay
+chosen per profile, tool calls run as a parallel batch, a context bar
 that shows what the tool schemas cost, tools switchable per profile, Ollama's
 thinking budget and cloud models, the full sampler on llama.cpp and
 opencoti-llamafile with the server's own timings, PolyKV pools on opencoti,
