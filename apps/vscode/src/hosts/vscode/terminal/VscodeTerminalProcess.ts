@@ -584,6 +584,11 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 		this.emit("continue")
 	}
 
+	/** Who owns the command now: Cerebriline, or the user after continue()/detach(). */
+	getOwnership(): UnobservedTerminalCommand["ownership"] {
+		return this.ownership
+	}
+
 	releaseActiveExecutionResources(): void {
 		this.activeCloseDisposable?.dispose()
 		this.activeCloseDisposable = undefined
