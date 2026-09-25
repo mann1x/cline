@@ -15,6 +15,11 @@ import { waitForServerHealth } from "../server-health";
 import { llamaCppTimingsMetadataExtractor } from "./llamacpp-timings";
 import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
 import {
+	agentWindowFloorForBody,
+	type OpencotiAgentWindow,
+	readOpencotiAgentWindow,
+} from "./opencoti-agent-window";
+import {
 	type KeepaliveRequest,
 	OPENCOTI_BOOT_ID_HEADER,
 	requestStreamKeepalive,
@@ -169,6 +174,15 @@ export interface OpencotiRequestOptions {
 	 * sent either. See `polykv-swarm.ts`.
 	 */
 	worker?: PolykvWorkerSpec;
+	/**
+	 * This request is a delegated agent's on a node with an "Agent window"
+	 * share: the floor (`num_ctx_min`) is that share between the minimum the
+	 * request itself needs and the node's window, and is measured off the body
+	 * at send time. A per-agent session asks for the node's window with it; a
+	 * swarm worker hands it to the owner it opens, and to the session it books
+	 * when it falls back to running unpooled. See `opencoti-agent-window.ts`.
+	 */
+	agentWindow?: OpencotiAgentWindow;
 }
 
 /**
@@ -373,6 +387,9 @@ export function createOpencotiFetch(options: {
 			...(options.request?.workerMaxTokens !== undefined
 				? { workerMaxTokens: options.request.workerMaxTokens }
 				: {}),
+			...(options.request?.agentWindow
+				? { agentWindow: options.request.agentWindow }
+				: {}),
 		});
 	}
 	return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -443,14 +460,21 @@ export function createOpencotiFetch(options: {
 					const features = await windowFeatures(options.baseUrl, base);
 					if (features.guaranteed) {
 						body.num_ctx = extras.numCtx;
+						// An agent node's share floors a fresh session; a resume
+						// keeps "exactly the window I had", which it already names.
+						const floor =
+							extras.numCtxMin ??
+							(extras.agentWindow && extras.resume !== true
+								? agentWindowFloorForBody(body, extras.agentWindow)
+								: undefined);
 						// A floor is only meaningful under an ask. Sent alone it
 						// would read as a demand for a minimum window on a request
 						// that never asked for one; sent above the ask it is a
 						// contradiction, and the resolution that means something is
 						// "exactly this window or refuse" -- which is also the
 						// resume rule's shape.
-						if (extras.numCtxMin !== undefined) {
-							body.num_ctx_min = Math.min(extras.numCtxMin, extras.numCtx);
+						if (floor !== undefined) {
+							body.num_ctx_min = Math.min(floor, extras.numCtx);
 						}
 						negotiation = {
 							atomic: features.atomic,
@@ -1207,6 +1231,8 @@ function createWorkerFetch(options: {
 	headers?: Record<string, string>;
 	onFacts?: (facts: OpencotiResponseFacts) => void;
 	workerMaxTokens?: number;
+	/** See {@link OpencotiRequestOptions.agentWindow}. */
+	agentWindow?: OpencotiAgentWindow;
 	log?: OpencotiLog;
 }): typeof fetch {
 	const base = options.fetch ?? fetch;
@@ -1314,9 +1340,30 @@ function createWorkerFetch(options: {
 		// One fresh owner per agent, at most: after that a full window is a
 		// queue to wait in, not a reason to keep opening owners.
 		let triedFresh = false;
+		// The agent's floor, measured once per turn off the body it sends: the
+		// owner it may open is floored at it, and so is its own booking when it
+		// falls back to running unpooled.
+		const agentFloor = options.agentWindow
+			? agentWindowFloorForBody(
+					body,
+					options.agentWindow,
+					options.workerMaxTokens,
+				)
+			: undefined;
+		/** The window an unpooled turn asked for, for the grant it gets back. */
+		let unpooledAsk: number | undefined;
 		while (true) {
 			const attach = await preparePolykvWorker({
-				spec: options.worker,
+				spec:
+					options.agentWindow && agentFloor !== undefined
+						? {
+								...options.worker,
+								window: {
+									ask: options.agentWindow.contextWindow,
+									floor: agentFloor,
+								},
+							}
+						: options.worker,
 				baseUrl: options.baseUrl,
 				fetch: base,
 				...(options.headers ? { headers: options.headers } : {}),
@@ -1346,6 +1393,28 @@ function createWorkerFetch(options: {
 			}
 			if (attach.poolId !== undefined && /^\d+$/.test(attach.poolId)) {
 				wire.pool_id = Number(attach.poolId);
+			}
+			unpooledAsk = undefined;
+			if (
+				attach.poolId === undefined &&
+				!lent &&
+				options.agentWindow &&
+				agentFloor !== undefined
+			) {
+				// Unpooled, the agent is a session of its own -- and one that
+				// asks for nothing is given the model's whole window. It books
+				// the node's instead, floored at its share; a session already
+				// granted one keeps exactly that (the resume rule).
+				const features = await windowFeatures(options.baseUrl, base);
+				if (features.guaranteed) {
+					const granted = getPolykvGrantedWindow(options.worker.sessionId);
+					wire.num_ctx = granted ?? options.agentWindow.contextWindow;
+					if (features.atomic) {
+						wire.num_ctx_min =
+							granted ?? Math.min(agentFloor, wire.num_ctx as number);
+					}
+					unpooledAsk = wire.num_ctx as number;
+				}
 			}
 			const keepalive = (await keepaliveAdvertised(options.baseUrl, base, wire))
 				? requestStreamKeepalive(wire)
@@ -1411,11 +1480,12 @@ function createWorkerFetch(options: {
 					// lead's grant path never runs for it -- and without this its
 					// compaction sized against the node's static window, 256k,
 					// while the booking it lived in held a fraction of that (§9:
-					// compaction runs against the granted window).
+					// compaction runs against the granted window). An unpooled turn
+					// that booked the node's window names its ask beside it.
 					noteWindowGrant(
 						options.worker.sessionId,
 						numberOrUndefined(response.headers.get("x-context-window")),
-						undefined,
+						unpooledAsk,
 						undefined,
 					);
 					const windowless =
@@ -1615,11 +1685,20 @@ export function readOpencotiRequestOptions(
 	const live = getPolykvSession(
 		typeof sessionId === "string" ? sessionId : undefined,
 	);
-	const window = resolveOpencotiWindow(
-		typeof sessionId === "string" ? sessionId : undefined,
-		settings,
+	const agentWindow = readOpencotiAgentWindow(
+		read("agentWindow"),
 		context.model?.contextWindow,
 	);
+	const window = agentWindow
+		? resolveAgentOpencotiWindow(
+				typeof sessionId === "string" ? sessionId : undefined,
+				agentWindow,
+			)
+		: resolveOpencotiWindow(
+				typeof sessionId === "string" ? sessionId : undefined,
+				settings,
+				context.model?.contextWindow,
+			);
 	const poolId =
 		live?.poolId ??
 		(typeof configuredPool === "string" && configuredPool
@@ -1634,11 +1713,17 @@ export function readOpencotiRequestOptions(
 		const admission = settings?.overcommit
 			? undefined
 			: polykvAdmissionPolicy(settings);
+		// Every swarm agent carries its window: the owner it may open is sized
+		// from it, and so is its own booking when it runs unpooled. A worker
+		// whose config names no share takes the default one.
+		const workerWindow =
+			agentWindow ?? readOpencotiAgentWindow({}, context.model?.contextWindow);
 		return {
 			worker: admission ? { ...worker, admission } : worker,
 			sessionId: worker.sessionId,
 			...(typeof overcommit === "boolean" ? { overcommit } : {}),
 			workerMaxTokens: resolveWorkerMaxTokens(context.model),
+			...(workerWindow ? { agentWindow: workerWindow } : {}),
 		};
 	}
 	return {
@@ -1656,6 +1741,7 @@ export function readOpencotiRequestOptions(
 			? { leadPool: true }
 			: {}),
 		...window,
+		...(agentWindow ? { agentWindow } : {}),
 		...(typeof settings?.maxRetryAfterMs === "number" &&
 		Number.isFinite(settings.maxRetryAfterMs) &&
 		settings.maxRetryAfterMs >= 0
@@ -1726,6 +1812,23 @@ function resolveOpencotiWindow(
 		// is all-or-nothing rather than silently open-ended.
 		...(isPositiveInteger(floor) ? { numCtxMin: floor } : {}),
 	};
+}
+
+/**
+ * What an agent node's session asks for: the node's window, with the floor
+ * measured off each request (see `agentWindowFloorForBody`). Asked whether or
+ * not the profile turned on dynamic sizing, because the share is the node's
+ * own statement of what it accepts. The resume rule still comes first.
+ */
+function resolveAgentOpencotiWindow(
+	sessionId: string | undefined,
+	agentWindow: OpencotiAgentWindow,
+): { numCtx?: number; numCtxMin?: number; resume?: boolean } {
+	const granted = getPolykvGrantedWindow(sessionId);
+	if (granted !== undefined) {
+		return { numCtx: granted, numCtxMin: granted, resume: true };
+	}
+	return { numCtx: agentWindow.contextWindow };
 }
 
 function isPositiveInteger(value: unknown): value is number {

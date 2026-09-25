@@ -13,6 +13,7 @@ import { ModelsServiceClient } from "@/services/grpc-client"
 import { getAsVar, VSC_DESCRIPTION_FOREGROUND } from "@/utils/vscStyles"
 import { ApiKeyField } from "../common/ApiKeyField"
 import { BaseUrlField } from "../common/BaseUrlField"
+import { ContextMinimumWarning } from "../common/ContextMinimumWarning"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import { ModelCapabilityRows, ModelInfoView } from "../common/ModelInfoView"
 import { DropdownContainer } from "../common/ModelSelector"
@@ -568,6 +569,9 @@ export const OpenAICompatibleProvider = ({
 				<span className="font-semibold">Model Context Window</span>
 			</DebouncedTextField>
 			{modelFieldErrors.contextWindow && <div role="alert">{modelFieldErrors.contextWindow}</div>}
+			{/* Below the fixed price plus the output room a turn cannot fit.
+			    Warned, not blocked: the value above still saves. */}
+			<ContextMinimumWarning contextWindow={openAiModelInfo?.contextWindow} providerId={providerId} />
 
 			<div
 				onClick={() => setModelConfigurationSelected((val) => !val)}

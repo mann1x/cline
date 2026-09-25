@@ -65,6 +65,8 @@ export interface AgentNodeRuntimeConfig {
 	label?: string;
 	/** The node's own connection, in the shape the Agents tab already stores. */
 	connection: Partial<DelegatedAgentConnectionConfig>;
+	/** See `CoreSessionConfig.agentNodes[].windowShare`. */
+	windowShare?: number;
 	/**
 	 * This node is the lead conversation's own opencoti session: priority 0,
 	 * "Use PolyKV agents as Priority 0" (PLANS §9g). Its agents are built as
@@ -72,6 +74,31 @@ export interface AgentNodeRuntimeConfig {
 	 * most {@link LEAD_SUBPOOL_CAPACITY}, whatever else the entry says.
 	 */
 	polykvLead?: boolean;
+}
+
+/**
+ * The node's connection with its window share on the provider config.
+ *
+ * Merged, never replacing: a node that names no provider config runs on the
+ * session's, polykv section and fetch included, and the share must ride on
+ * that rather than stand in for it.
+ */
+function withAgentWindowShare(
+	connection: Partial<DelegatedAgentConnectionConfig>,
+	inherited: DelegatedAgentConnectionConfig["providerConfig"] | undefined,
+	windowShare: number | undefined,
+): Partial<DelegatedAgentConnectionConfig> {
+	if (typeof windowShare !== "number" || !Number.isFinite(windowShare)) {
+		return connection;
+	}
+	const providerConfig = connection.providerConfig ?? inherited;
+	return {
+		...connection,
+		providerConfig: {
+			...((providerConfig ?? {}) as Record<string, unknown>),
+			agentWindow: { sharePercent: windowShare },
+		} as DelegatedAgentConnectionConfig["providerConfig"],
+	};
 }
 
 /** The id and label the priority-0 node goes by. */
@@ -277,8 +304,12 @@ export function createAgentNodePlacement(input: {
 	// the session's refreshed model or key must not move agents back onto it.
 	const providers = new Map<string, DelegatedAgentConfigProvider>();
 	for (const node of input.nodes) {
-		const overrides = node.connection;
 		const base = input.base.getRuntimeConfig();
+		const overrides = withAgentWindowShare(
+			node.connection,
+			base.providerConfig,
+			node.windowShare,
+		);
 		providers.set(
 			node.id,
 			createDelegatedAgentConfigProvider(

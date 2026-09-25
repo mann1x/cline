@@ -55,6 +55,7 @@ import {
 	resolveRecencyBounds,
 	seedCalibrationFromTranscript,
 } from "./compaction-shared";
+import { warnIfWindowBelowMinimum } from "./context-minimum-warning";
 import { withCouncilWriterPrompt } from "./council-compaction";
 import { DEFAULT_FULL_COMPACTION_PROMPT } from "./full-compaction";
 import {
@@ -885,6 +886,24 @@ export function createContextCompactionPrepareTurn(
 				maxInputTokens: context.model.info?.maxInputTokens,
 				contextWindow: context.model.info?.contextWindow,
 			}) ?? DEFAULT_MAX_INPUT_TOKENS;
+		// Once per session: a window below the fixed price plus the output cap
+		// cannot hold one turn. The panel warns where a window is typed; this
+		// is the same arithmetic for a host that has no panel.
+		warnIfWindowBelowMinimum({
+			sessionId: config.sessionId,
+			logger: config.logger,
+			contextWindow:
+				context.model.info?.contextWindow ?? context.model.info?.maxInputTokens,
+			systemPromptTokens,
+			toolSchemaTokens: builtinToolSchemaTokens,
+			mcpToolSchemaTokens,
+			...(typeof providerConfig.defaultMaxOutputTokens === "number"
+				? { outputCapTokens: providerConfig.defaultMaxOutputTokens }
+				: {}),
+			...(typeof context.model.info?.maxTokens === "number"
+				? { modelMaxOutputTokens: context.model.info.maxTokens }
+				: {}),
+		});
 		// What this session's own turns have cost, so the room held back for the
 		// next one is sized to the model actually running rather than to its
 		// declared ceiling. A model that answers in two thousand tokens and one

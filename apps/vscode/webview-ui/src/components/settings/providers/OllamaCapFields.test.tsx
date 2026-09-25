@@ -385,4 +385,19 @@ describe("changing a cap the configuration already has", () => {
 		expect(perTurn.value).toBe("4096")
 		expect((panel.committed()?.overrides as { maxTokens?: number } | undefined)?.maxTokens).toBe(4096)
 	})
+
+	// Ruled 2026-09-25: a window below the fixed price plus the output room is
+	// warned about where it is typed. A warning, not a block: it still saves.
+	it("warns when the window is below the minimum this profile needs", async () => {
+		await openPanel({ contextWindow: 16384 })
+		const warning = screen.getByTestId("context-minimum-warning")
+		expect(warning.textContent).toMatch(
+			/^16,384 is below the [\d,]+ this profile needs \(system prompt \+ tools \+ MCP [\d,]+, output room 12,288\)/,
+		)
+	})
+
+	it("says nothing when the window holds a turn", async () => {
+		await openPanel({ contextWindow: 131072 })
+		expect(screen.queryByTestId("context-minimum-warning")).toBeNull()
+	})
 })

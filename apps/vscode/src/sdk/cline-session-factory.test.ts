@@ -2286,6 +2286,44 @@ describe("buildDelegatedAgentConnection", () => {
 		}
 	})
 
+	// "Agent window", ruled 2026-09-25: an opencoti node's agents floor their
+	// sessions at the tab's share (`num_ctx_min`), measured at the wire against
+	// the node's window. Default 50%.
+	it("gives an opencoti node's agents its window share", async () => {
+		const opencoti = (providerConfig: Record<string, unknown>) =>
+			JSON.stringify({ global: {}, mode: { apiProvider: "opencoti" }, providerConfig })
+		const stored = await buildDelegatedAgentConnection(
+			{ actModeApiProvider: "ollama" } as never,
+			opencoti({ selectedModelId: "agent-model", contextWindow: 131_072, agentWindow: { sharePercent: 20 } }),
+		)
+		expect(stored?.providerConfig?.agentWindow).toEqual({ sharePercent: 20 })
+
+		const unset = await buildDelegatedAgentConnection(
+			{ actModeApiProvider: "ollama" } as never,
+			opencoti({ selectedModelId: "agent-model" }),
+		)
+		expect(unset?.providerConfig?.agentWindow).toEqual({ sharePercent: 50 })
+
+		// The expert resolves through the same builder and has no slider.
+		const expert = await buildDelegatedAgentConnection(
+			{ actModeApiProvider: "ollama" } as never,
+			opencoti({ selectedModelId: "agent-model", agentWindow: { sharePercent: 20 } }),
+			"Escalation",
+		)
+		expect(expert?.providerConfig?.agentWindow).toBeUndefined()
+	})
+
+	// Ollama has no negotiation: the node's window is what is sent, whatever
+	// the slider says.
+	it("sends an Ollama node's plain window and no share", async () => {
+		const connection = await buildDelegatedAgentConnection(
+			{ actModeApiProvider: "ollama" } as never,
+			snapshot({ selectedModelId: "small-agent", contextWindow: 16_384, agentWindow: { sharePercent: 10 } }),
+		)
+		expect(connection?.providerConfig?.modelInfo?.contextWindow).toBe(16_384)
+		expect(connection?.providerConfig?.agentWindow).toBeUndefined()
+	})
+
 	// Not configured is not the same as configured badly: agents keep inheriting
 	// the session's connection, which is the behaviour every build has had.
 	it.each([

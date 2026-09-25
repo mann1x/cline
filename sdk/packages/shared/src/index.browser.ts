@@ -128,6 +128,16 @@ export {
 	sanitizeSurrogates,
 	toAiSdkToolResultOutput,
 } from "./llms/ai-sdk-format";
+export {
+	AGENT_WINDOW_DEFAULT_SHARE_PERCENT,
+	type ContextFixedPrice,
+	type ContextMinimum,
+	describeContextShortfall,
+	normalizeAgentWindowShare,
+	resolveAgentWindowFloor,
+	resolveContextMinimum,
+	resolveContextMinimumForWindow,
+} from "./llms/context-minimum";
 export * from "./llms/gateway";
 export {
 	type Base64MediaValidationFailure,

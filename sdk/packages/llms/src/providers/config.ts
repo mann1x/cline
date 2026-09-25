@@ -364,6 +364,13 @@ export interface ProviderOptions {
 	};
 	/** Which tools this configuration withholds from its sessions. */
 	tools?: ToolSelectionOptions;
+	/**
+	 * "Agent window" (opencoti): the floor a delegated agent's session accepts,
+	 * as a share between the minimum one turn needs (0) and the node's window
+	 * (100). Set by the host on an agent node's connection; inert elsewhere.
+	 * See `opencoti-agent-window.ts`.
+	 */
+	agentWindow?: { sharePercent?: number };
 }
 
 /**

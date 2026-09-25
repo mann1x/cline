@@ -9,6 +9,7 @@
  *     --agent-node model=small,capacity=8
  *     --agent-node model=big,url=http://other:8240/v1,priority=2,capacity=2
  *     --agent-node model=big,url=http://other:8240/v1,capacity=auto
+ *     --agent-node model=small,capacity=8,window-share=30
  *
  * `capacity=auto` places without a ceiling of our own and lets the endpoint's
  * admission control do the refusing -- the right answer for an elastic server.
@@ -54,7 +55,7 @@ export function parseAgentNodeFlags(
 		const modelId = fields.get("model");
 		if (!modelId) {
 			throw new Error(
-				`--agent-node "${entry}" names no model. Expected model=<id>[,url=<baseUrl>][,provider=<id>][,priority=1-10][,capacity=<n>].`,
+				`--agent-node "${entry}" names no model. Expected model=<id>[,url=<baseUrl>][,provider=<id>][,priority=1-10][,capacity=<n>][,window-share=0-100].`,
 			);
 		}
 		const capacity = fields.get("capacity");
@@ -62,6 +63,26 @@ export function parseAgentNodeFlags(
 			throw new Error(
 				`--agent-node "${entry}" has capacity=0. A node placed on runs at least one agent: write capacity=auto to let the endpoint decide, or drop the flag to leave the node out.`,
 			);
+		}
+		// "Agent window": the floor an opencoti agent's session accepts, as a
+		// share between the minimum one turn needs (0) and the node's window
+		// (100). Refused rather than clamped when it is not a percentage: a
+		// typo here silently changes how much of a server every agent books.
+		const windowShareText = fields.get("window-share");
+		let windowShare: number | undefined;
+		if (windowShareText !== undefined) {
+			const parsed = Number(windowShareText.replace(/%$/, ""));
+			if (
+				windowShareText === "" ||
+				!Number.isFinite(parsed) ||
+				parsed < 0 ||
+				parsed > 100
+			) {
+				throw new Error(
+					`--agent-node "${entry}" has window-share=${windowShareText}. It is a percentage from 0 (the minimum a turn needs) to 100 (the node's whole window).`,
+				);
+			}
+			windowShare = Math.round(parsed);
 		}
 		const providerId = fields.get("provider");
 		const baseUrl = fields.get("url");
@@ -77,6 +98,7 @@ export function parseAgentNodeFlags(
 				capacity === "auto"
 					? Number.POSITIVE_INFINITY
 					: clamp(capacity, 1, Number.MAX_SAFE_INTEGER, 1),
+			...(windowShare !== undefined ? { windowShare } : {}),
 			connection: {
 				...(providerId ? { providerId } : {}),
 				modelId,

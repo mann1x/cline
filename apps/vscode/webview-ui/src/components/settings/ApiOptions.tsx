@@ -11,6 +11,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useDynamicProviderSelection } from "@/hooks/useDynamicProviderSelection"
 import { useProviderListings } from "@/hooks/useProviderListings"
 import { ClinePassHint } from "./ClinePassHint"
+import { AgentWindowField } from "./common/AgentWindowField"
 import { OutputBudgetField } from "./common/OutputBudgetField"
 import ParallelSessionsField, { parallelSessionsDescription, useOpencotiEngineMode } from "./common/ParallelSessionsField"
 import { PolykvSection } from "./common/PolykvSection"
@@ -54,6 +55,7 @@ import { VertexProvider } from "./providers/VertexProvider"
 import { VSCodeLmProvider } from "./providers/VSCodeLmProvider"
 import { XaiProvider } from "./providers/XaiProvider"
 import { ZAiProvider } from "./providers/ZAiProvider"
+import { useApiConfigurationScope } from "./utils/ApiConfigurationScopeContext"
 import { useApiConfigurationHandlers } from "./utils/useApiConfigurationHandlers"
 
 interface ApiOptionsProps {
@@ -132,6 +134,10 @@ const ApiOptions = ({
 	// Whether this opencoti decides its own concurrency, asked of the server:
 	// the parallel-sessions copy gives opposite advice in the two cases.
 	const opencotiEngine = useOpencotiEngineMode(selectedProvider)
+	// An agent node's tab: Node1 and every node past it share this scope key
+	// prefix, and only they get the "Agent window" slider.
+	const scope = useApiConfigurationScope()
+	const isAgentNode = scope?.scopeKey?.startsWith("agentsModeApiConfiguration") === true
 	// The window the selected model reports, for the output budget to fall back
 	// on. Provider-level `contextWindow` is only written when the box is edited,
 	// so a profile that predates that write has none -- and the budget's slider
@@ -533,6 +539,14 @@ const ApiOptions = ({
 			    form, and duplicating it to bolt one section on would give two
 			    copies to keep in step. */}
 			{apiConfiguration && showModelOptions && isOpencoti && <PolykvSection providerId={selectedProvider} />}
+
+			{/* "Agent window", per agent node (ruled 2026-09-25): the least window
+			    this node's agents accept, as a share from the minimum a turn
+			    needs to the node's window. Shown on every node so the setting is
+			    findable; live only where the provider negotiates (opencoti). */}
+			{apiConfiguration && showModelOptions && isAgentNode && selectedProvider && (
+				<AgentWindowField negotiates={isOpencoti} providerId={selectedProvider} />
+			)}
 
 			{/* Every provider, for the same reason as the fields below: the tool
 			    schemas are sent to every endpoint there is, and what they cost is

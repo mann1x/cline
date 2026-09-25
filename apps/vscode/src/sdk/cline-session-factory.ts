@@ -47,6 +47,7 @@ import {
 	buildClineSystemPrompt,
 	buildOutputBudgetSection,
 	isClineProvider,
+	normalizeAgentWindowShare,
 	type PromptTemplateCompactionId,
 	type RenderedPromptTemplate,
 	resolveOutputBudgetTokens,
@@ -1372,6 +1373,26 @@ export async function buildDelegatedAgentConnection(
 	const outputCapOverride =
 		scopedOutputCap !== undefined || scopedOutputBudget !== undefined ? { maxTokensPerTurn: scopedOutputCap } : {}
 
+	// "Agent window" (ruled 2026-09-25), opencoti agent nodes only: the tab's
+	// share of the way from the minimum a turn needs to the node's window,
+	// which is what the agents floor their sessions at (`num_ctx_min`). The
+	// window itself is the model's as this connection resolves it, and the
+	// floor is measured at the wire, where the system prompt, the tool schemas
+	// and the output cap are exact (`opencoti-agent-window.ts`). The Escalation
+	// tab resolves through here too and has no slider, so the expert is left
+	// as it was. Ollama and llama.cpp have no negotiation: the window is what
+	// is sent, and the share is inert.
+	const agentWindowOverride =
+		label === "Agents" && sdkProviderId === "opencoti"
+			? {
+					agentWindow: {
+						sharePercent: normalizeAgentWindowShare(
+							(providerSettings?.agentWindow as { sharePercent?: unknown } | undefined)?.sharePercent,
+						),
+					},
+				}
+			: {}
+
 	return {
 		providerId: sdkProviderId,
 		modelId,
@@ -1397,6 +1418,7 @@ export async function buildDelegatedAgentConnection(
 			// opencoti node sent the engine's defaults whatever its tab said.
 			...(providerSettings?.sampling ? { sampling: providerSettings.sampling as ProviderSamplingOptions } : {}),
 			...reasoningOverride,
+			...agentWindowOverride,
 			providerId: sdkProviderId,
 			modelId,
 			...(apiKey ? { apiKey } : {}),

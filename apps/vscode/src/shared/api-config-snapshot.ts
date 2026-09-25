@@ -84,6 +84,10 @@ export const PROVIDER_CONFIG_PROFILE_KEYS = [
 	// two above are: a key the load clears must be a key the save captures, or
 	// a profile with no selection comes back carrying the last one's.
 	"tools",
+	// An agent node's "Agent window" share, in both lists for the same reason:
+	// saved from a node, it must come back with the profile, and a profile
+	// with none must read back as the default rather than the last share.
+	"agentWindow",
 	"headers",
 	"region",
 	"aws",
@@ -150,6 +154,9 @@ export const PROVIDER_CONFIG_CLEARS: Readonly<Record<string, unknown>> = {
 	// which reads as "leave it alone". Present and empty survives, and the store
 	// reads it as the clear.
 	reasoning: {},
+	// Written whole by `AgentWindowField`, and a node's store replaces a
+	// section wholesale, so `{}` really is the clear: absent reads as 50%.
+	agentWindow: {},
 }
 
 /**

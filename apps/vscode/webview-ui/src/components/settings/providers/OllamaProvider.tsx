@@ -13,6 +13,7 @@ import { useProviderModelSelection } from "@/hooks/useProviderModelSelection"
 import { ModelsServiceClient } from "@/services/grpc-client"
 import { ApiKeyField } from "../common/ApiKeyField"
 import { BaseUrlField } from "../common/BaseUrlField"
+import { ContextMinimumWarning } from "../common/ContextMinimumWarning"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import { OllamaAccountStrip } from "../common/OllamaAccountStrip"
 import { RequestTimingsToggle } from "../common/RequestTimingsToggle"
@@ -533,6 +534,21 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 					style={{ width: "100%" }}>
 					<span className="font-semibold">Model Context Window</span>
 				</DebouncedTextField>
+			)}
+			{/* Below the fixed price plus the output room a turn cannot fit.
+			    Warned, not blocked: the value above still saves. The window
+			    judged is the one the box shows, its placeholder when empty. */}
+			{config !== undefined && (
+				<ContextMinimumWarning
+					contextWindow={
+						Number.isFinite(scopedNumCtx) && (scopedNumCtx ?? 0) > 0
+							? scopedNumCtx
+							: Number.isFinite(legacyNumCtx) && legacyNumCtx > 0
+								? legacyNumCtx
+								: 32768
+					}
+					providerId="ollama"
+				/>
 			)}
 
 			{/* The two budgets that decide how much of the context window the

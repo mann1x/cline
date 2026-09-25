@@ -747,4 +747,32 @@ describe("OpenAICompatibleProvider", () => {
 		expect(mocks.handleFieldChange).toHaveBeenCalledWith("azureApiVersion", "2026-01-01")
 		expect(mocks.handleFieldChange).toHaveBeenCalledWith("azureIdentity", true)
 	})
+
+	// Ruled 2026-09-25, for the llama.cpp and opencoti forms alike: a window
+	// below the fixed price plus the output room is warned about under the box.
+	for (const providerId of ["llamacpp", "opencoti"]) {
+		it(`warns on ${providerId} when the window is below the minimum`, async () => {
+			mocks.useDynamicProviderSelection.mockReturnValue({
+				selectedModelId: "custom-model",
+				selectedModelInfo: { contextWindow: 16_384, inputPrice: 0, maxTokens: -1, outputPrice: 0, temperature: 0 },
+			})
+			render(<OpenAICompatibleProvider currentMode="act" providerId={providerId} showModelOptions={false} />)
+			await act(async () => {})
+
+			expect(screen.getByTestId("context-minimum-warning").textContent).toMatch(
+				/^16,384 is below the [\d,]+ this profile needs .*output room 12,288\)\. Turns will be cut short or refused\.$/,
+			)
+		})
+
+		it(`says nothing on ${providerId} when the window holds a turn`, async () => {
+			mocks.useDynamicProviderSelection.mockReturnValue({
+				selectedModelId: "custom-model",
+				selectedModelInfo: { contextWindow: 262_144, inputPrice: 0, maxTokens: -1, outputPrice: 0, temperature: 0 },
+			})
+			render(<OpenAICompatibleProvider currentMode="act" providerId={providerId} showModelOptions={false} />)
+			await act(async () => {})
+
+			expect(screen.queryByTestId("context-minimum-warning")).toBeNull()
+		})
+	}
 })

@@ -509,6 +509,9 @@ export function buildGatewayConfig(config: ProviderConfig) {
 			// opencoti: the session and the pool tree these requests belong to.
 			// Absent, a summary call is an anonymous per-request admission.
 			polykv: config.polykv,
+			// opencoti: an agent node's window share, read where its session
+			// books a window. See `opencoti-agent-window.ts`.
+			...(config.agentWindow ? { agentWindow: config.agentWindow } : {}),
 			...(config.engineSessionId
 				? { polykvSessionId: config.engineSessionId }
 				: {}),

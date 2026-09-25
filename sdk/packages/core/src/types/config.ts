@@ -894,6 +894,14 @@ export interface CoreSessionConfig
 		label?: string;
 		connection: DelegatedAgentConnectionOverride;
 		/**
+		 * "Agent window", 0..100: the least window this node's opencoti agents
+		 * accept, as a share between the minimum a turn needs and the node's
+		 * window. Merged onto the agents' provider config as `agentWindow`,
+		 * beside what that config already carries. A host that builds the
+		 * provider config itself may put `agentWindow` there instead.
+		 */
+		windowShare?: number;
+		/**
 		 * The lead's own session as priority 0. Added by core from
 		 * `polykvAgentsPriorityZero`, never by a host: one a host lists is
 		 * dropped. See `sessionAgentNodes`.

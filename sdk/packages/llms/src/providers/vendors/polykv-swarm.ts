@@ -96,6 +96,16 @@ export interface PolykvWorkerSpec {
 	 * a refusal straight back so the agent overflows to a node.
 	 */
 	owner?: string;
+	/**
+	 * The window this agent's node states, and the least of it the agent
+	 * accepts -- its "Agent window" share (see `opencoti-agent-window.ts`).
+	 * An owner this agent opens is sized from it: it asks for the node's
+	 * window (never more than the engine's per-session maximum) rather than
+	 * the maximum itself, and floors at the agent's floor rather than at
+	 * {@link POLYKV_OWNER_MIN_WINDOW} -- an owner granted less than one of its
+	 * agents needs is an owner that agent can never run in.
+	 */
+	window?: { ask: number; floor: number };
 }
 
 /**
@@ -1145,6 +1155,8 @@ async function openOwner(
 	 * an offer, and a refused one means "wait on the owner you have".
 	 */
 	waitForRoom: boolean,
+	/** The opening agent's node window; see {@link PolykvWorkerSpec.window}. */
+	agentWindow?: { ask: number; floor: number },
 ): Promise<OwnerShard | undefined> {
 	const messages = body.messages as Array<Record<string, unknown>>;
 	const system = messages[0];
@@ -1153,7 +1165,17 @@ async function openOwner(
 	OWNER_SERIALS.set(name, serial);
 	const sessionId = engineSessionId(`${name}~polykv-owner-${serial}`);
 	const generation = polykvRootGeneration(group.root);
-	const window = await sessionContextMax(group);
+	const maximum = await sessionContextMax(group);
+	// Sized from the agents it hosts, where their node states a window: the
+	// node's window (the engine's maximum at most -- it clamps anyway) floored
+	// at the opening agent's share. Without one, the engine's maximum floored
+	// at the owner minimum, as before.
+	const window = agentWindow
+		? Math.max(agentWindow.floor, Math.min(agentWindow.ask, maximum))
+		: maximum;
+	const windowMin = agentWindow
+		? Math.min(window, agentWindow.floor)
+		: Math.min(window, POLYKV_OWNER_MIN_WINDOW);
 	let waits = 0;
 	while (true) {
 		const response = await group.fetch(`${group.root}/v1/chat/completions`, {
@@ -1165,7 +1187,7 @@ async function openOwner(
 				...(body.tools !== undefined ? { tools: body.tools } : {}),
 				session_id: sessionId,
 				num_ctx: window,
-				num_ctx_min: Math.min(window, POLYKV_OWNER_MIN_WINDOW),
+				num_ctx_min: windowMin,
 				max_tokens: 1,
 				stream: false,
 			}),
@@ -1720,8 +1742,15 @@ function openShard(
 	body: Record<string, unknown>,
 	signal: AbortSignal | null | undefined,
 	waitForRoom = true,
+	agentWindow?: { ask: number; floor: number },
 ): Promise<OwnerShard | undefined> {
-	group.opening ??= openOwner(group, body, signal, waitForRoom).finally(() => {
+	group.opening ??= openOwner(
+		group,
+		body,
+		signal,
+		waitForRoom,
+		agentWindow,
+	).finally(() => {
 		group.opening = undefined;
 	});
 	return group.opening;
@@ -1821,11 +1850,16 @@ async function attachWorker(options: {
 		shard = options.fresh
 			? // An extra owner, if the engine has room for one; otherwise the
 				// agent keeps its place on the owner it has and waits there.
-				((await openShard(group, body, options.signal, false)) ??
-				(current && !current.closed ? current : undefined))
+				((await openShard(
+					group,
+					body,
+					options.signal,
+					false,
+					spec.window,
+				)) ?? (current && !current.closed ? current : undefined))
 			: ([...group.shards].reverse().find((candidate) => !candidate.closed) ??
 				(await awaitOwner(group, spec.sessionId, () =>
-					openShard(group, body, options.signal),
+					openShard(group, body, options.signal, true, spec.window),
 				)));
 		if (!shard) {
 			return unpooled(

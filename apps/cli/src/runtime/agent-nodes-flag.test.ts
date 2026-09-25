@@ -76,6 +76,29 @@ describe("--agent-node", () => {
 		expect(() => parseAgentNodeFlags(["nonsense"])).toThrow(/model/i);
 	});
 
+	// "Agent window" (ruled 2026-09-25): 0 is the minimum a turn needs, 100
+	// the node's window. Only opencoti negotiates one; elsewhere it is inert.
+	it("reads window-share as the node's agent window percentage", () => {
+		expect(parseAgentNodeFlags(["model=a,window-share=30"])[0]).toMatchObject({
+			windowShare: 30,
+		});
+		expect(parseAgentNodeFlags(["model=a,window-share=0"])[0]).toMatchObject({
+			windowShare: 0,
+		});
+		expect(parseAgentNodeFlags(["model=a"])[0]).not.toHaveProperty(
+			"windowShare",
+		);
+	});
+
+	it("refuses a window-share that is not a percentage", () => {
+		expect(() => parseAgentNodeFlags(["model=a,window-share=150"])).toThrow(
+			/window-share/,
+		);
+		expect(() => parseAgentNodeFlags(["model=a,window-share=half"])).toThrow(
+			/window-share/,
+		);
+	});
+
 	it("is nothing at all when the flag was not passed", () => {
 		expect(parseAgentNodeFlags(undefined)).toEqual([]);
 	});

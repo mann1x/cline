@@ -54,6 +54,47 @@ describe("placing an agent on a node", () => {
 		expect(placement.base.getRuntimeConfig().modelId).toBe("lead-model");
 	});
 
+	// "Agent window": a node's share rides on its agents' provider config,
+	// beside whatever that config already carried, where the opencoti fetch
+	// reads it.
+	it("carries the node's window share on its agents' provider config", async () => {
+		const base = createDelegatedAgentConfigProvider({
+			providerId: "opencoti",
+			modelId: "lead",
+			cwd: "/w",
+			apiKey: "",
+			providerConfig: {
+				providerId: "opencoti",
+				modelId: "lead",
+				polykv: { enabled: true },
+			},
+		} as never);
+		const placement = required(
+			createAgentNodePlacement({
+				nodes: [
+					{ ...node("n1", 1, 1, "small"), windowShare: 25 },
+					node("n2", 2, 1),
+				],
+				base,
+			}),
+		);
+		const first = await placement.place();
+		expect(
+			first.configProvider.getConnectionConfig().providerConfig,
+		).toMatchObject({
+			polykv: { enabled: true },
+			agentWindow: { sharePercent: 25 },
+		});
+		const second = await placement.place();
+		expect(
+			(
+				second.configProvider.getConnectionConfig().providerConfig as {
+					agentWindow?: unknown;
+				}
+			).agentWindow,
+		).toBeUndefined();
+	});
+
 	// The tier rules are agent-placement.ts's and are tested there; this is the
 	// wiring around them, which is what decides whether a lower tier is ever
 	// reached at all.

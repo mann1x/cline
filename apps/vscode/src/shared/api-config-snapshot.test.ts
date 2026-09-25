@@ -237,6 +237,17 @@ describe("the provider config a profile carries", () => {
 		})
 	})
 
+	// "Agent window" is per node, and a node's configuration is a profile like
+	// any other: the share saved from a node must come back when the profile is
+	// loaded -- a 0% included, which is a real setting and not "unset".
+	it("brings an agent node's window share back through a save and a load", () => {
+		for (const sharePercent of [0, 35, 100]) {
+			const captured = captureProviderConfigSnapshot({ contextWindow: 131072, agentWindow: { sharePercent } })
+			expect(captured?.agentWindow).toEqual({ sharePercent })
+			expect(providerConfigPatchForProfile(captured).agentWindow).toEqual({ sharePercent })
+		}
+	})
+
 	// The round trip is the one that matters: a switch turned off has to still
 	// be off after saving the profile and loading it back.
 	it("brings a PolyKV switch turned off back through a save and a load", () => {
@@ -289,6 +300,9 @@ describe("the provider config a profile carries", () => {
 			// of them in, rather than inheriting the last profile's cuts and
 			// leaving a model short of tools nobody switched off.
 			tools: {},
+			// And an agent node's window share: a profile that names none
+			// reads back as the default 50%, not the last profile's share.
+			agentWindow: {},
 		})
 	})
 
@@ -302,6 +316,7 @@ describe("the provider config a profile carries", () => {
 			outputBudget: {},
 			reasoning: {},
 			tools: {},
+			agentWindow: {},
 		})
 	})
 
