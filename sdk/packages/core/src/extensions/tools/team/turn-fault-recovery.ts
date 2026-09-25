@@ -12,7 +12,9 @@
  *
  * - **Transport**: wait for the server to answer `GET /health` again, probing
  *   with exponential backoff capped at 30 s. Measured on 1tmrl: the server was
- *   listening again ten seconds after it restarted.
+ *   listening again ten seconds after it restarted. A transport fault that
+ *   repeats (any attempt after the first) then also backs off like a refusal:
+ *   a stream the SDK cannot read comes from a server that answers `/health`.
  * - **Refusal**: back off, growing to {@link REFUSAL_BACKOFF_MAX_MS}. The
  *   refusal thresholds (the tps floor, the allocation) are the user's own
  *   settings and are never touched from here; waiting is the only answer.
@@ -107,7 +109,9 @@ export function transportFaultReason(message: string): string {
 					message,
 				)
 			? "its gateway has nothing behind it"
-			: "not answering";
+			: /type validation failed|json parsing failed/i.test(message)
+				? "the stream it sent could not be read"
+				: "not answering";
 }
 
 function report(
@@ -170,6 +174,14 @@ export function createTurnFaultRecovery(
 						}
 					},
 				});
+				// Answering again is not proof the fault is gone. A stream the
+				// SDK could not read comes from a server whose /health is fine,
+				// and a retry sent at once fetches the same bad frame in a tight
+				// loop. The first retry goes at once, as after a restart; a
+				// fault that repeats backs off like a refusal, to the minute.
+				if (fault.attempt > 1 && !signal?.aborted) {
+					await sleep(refusalBackoffMs(fault.attempt - 1), signal);
+				}
 			} else {
 				// No address to ask (a cloud provider): back off instead.
 				await sleep(refusalBackoffMs(fault.attempt), signal);

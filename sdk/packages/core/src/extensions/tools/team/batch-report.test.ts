@@ -165,6 +165,7 @@ describe("whose failure it was", () => {
 			"Bad Gateway",
 			"fetch failed",
 			"No agent node can take an agent: every node has a capacity of 0.",
+			'Type validation failed: Value: null.\nError message: [{"expected":"object","code":"invalid_type","path":[],"message":"Invalid input: expected object, received null"}]',
 		]) {
 			expect(
 				failureClassOf({ name: "a", text, finishReason: "error" }),

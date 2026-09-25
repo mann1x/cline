@@ -52,6 +52,17 @@ const TRANSPORT_PATTERNS: readonly RegExp[] = [
 	/^(?:network|connection) (?:error|failure|lost|reset)$/i,
 	/^(?:(?:error:\s*)?(?:502|503|504)\s*)?(?:bad gateway|service unavailable|gateway time-?out)$/i,
 	/^no healthy upstream$/i,
+	// The stream arrived and could not be read: a provider chunk the AI SDK's
+	// schema rejects (`TypeValidationError`) or that is not JSON
+	// (`JSONParseError`). Nothing the model chose -- the bytes on the wire
+	// are wrong -- and a new request is a new stream. Measured in 4.100.195:
+	// opencoti's keepalive stream opened with `data: null`, "Type validation
+	// failed: Value: null", and 48 of 75 agents ended on it as a task failure.
+	// Anchored at the start: a tool's own input validation is worded
+	// "Invalid input for tool ...: Type validation failed ..." and stays the
+	// model's.
+	/^(?:error:\s*)?(?:AI_TypeValidationError:\s*)?type validation failed\b[^:\n]*: value:/i,
+	/^(?:error:\s*)?(?:AI_JSONParseError:\s*)?json parsing failed: text:/i,
 ];
 
 /** HTTP statuses that mean the thing behind the gateway did not answer. */

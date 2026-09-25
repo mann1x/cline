@@ -131,6 +131,31 @@ describe("a turn the server dropped", () => {
 		expect((await runtime.run("go")).status).toBe("completed");
 	});
 
+	it("retries a stream the SDK could not validate, as transport", async () => {
+		// 4.100.195: the keepalive stream's `data: null` first frame, rejected
+		// by the chunk schema, ended 48 of 75 agents as a task failure.
+		const error =
+			'Type validation failed: Value: null.\nError message: [{"expected":"object","code":"invalid_type","path":[],"message":"Invalid input: expected object, received null"}]';
+		const model = new ScriptedModel([
+			() => [{ type: "finish", reason: "error", error }],
+			() => finishOk("Hi!"),
+		]);
+		const faults: TurnFault[] = [];
+		const runtime = new AgentRuntime({
+			model,
+			recoverTurnFault: async (fault) => {
+				faults.push(fault);
+				return true;
+			},
+		});
+
+		const result = await runtime.run("go");
+
+		expect(result.status).toBe("completed");
+		expect(result.outputText).toBe("Hi!");
+		expect(faults).toMatchObject([{ kind: "transport", attempt: 1 }]);
+	});
+
 	it("says so on the transcript's notice path while it waits", async () => {
 		const model = new ScriptedModel([
 			() => [

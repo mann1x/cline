@@ -46,6 +46,37 @@ describe("waiting out a turn the server dropped", () => {
 		);
 	});
 
+	it("backs off a fault that repeats against a server that answers", async () => {
+		// A stream the SDK cannot read comes from a server whose /health is
+		// fine: without a backoff the same bad frame would be fetched in a
+		// tight loop. The first retry is at once, as after a restart.
+		const waits: number[] = [];
+		const updates: Array<{ latestOutput?: string }> = [];
+		const recover = createTurnFaultRecovery({
+			label: "a",
+			baseUrl: () => "http://h:1/v1",
+			emitUpdate: (update) => updates.push(update as never),
+			probe: async () => true,
+			sleep: async (ms) => {
+				waits.push(ms);
+			},
+		});
+		const message = "Type validation failed: Value: null.";
+
+		for (const attempt of [1, 2, 3, 9]) {
+			expect(await recover(fault({ message, attempt }))).toBe(true);
+		}
+
+		expect(waits).toEqual([
+			refusalBackoffMs(1),
+			refusalBackoffMs(2),
+			refusalBackoffMs(8),
+		]);
+		expect(updates[0]?.latestOutput).toContain(
+			"(the stream it sent could not be read)",
+		);
+	});
+
 	it("declines before the engine admitted a placed agent, so the queue re-places it", async () => {
 		const probe = vi.fn(async () => true);
 		const recover = createTurnFaultRecovery({

@@ -32,6 +32,24 @@ describe("what a failed turn was", () => {
 		}
 	});
 
+	it("reads a provider chunk the SDK could not read as transport", () => {
+		// Verbatim from 4.100.195: opencoti's keepalive stream opened with
+		// `data: null`, and 48 of 75 agents ended on this.
+		for (const message of [
+			'Type validation failed: Value: null.\nError message: [{"expected":"object","code":"invalid_type","path":[],"message":"Invalid input: expected object, received null"}]',
+			'Type validation failed for chunk: Value: {"choices":"bogus"}.\nError message: invalid',
+			'JSON parsing failed: Text: {"choices":[{"delta.\nError message: Unexpected end of JSON input',
+		]) {
+			expect(classifyTurnFault(message), message).toBe("transport");
+		}
+		// A tool call's own arguments are the model's, however they fail.
+		expect(
+			classifyTurnFault(
+				"Invalid input for tool read_files: Type validation failed: Value: {}.",
+			),
+		).toBeUndefined();
+	});
+
 	it("reads a rate limit as a refusal", () => {
 		expect(classifyTurnFault("slow down", "rate_limited")).toBe("refusal");
 	});
