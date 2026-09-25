@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createDefaultExecutors } from "../../extensions/tools/executors";
 import { createApplyPatchExecutor } from "../../extensions/tools/executors/apply-patch";
 import { createEditorExecutor } from "../../extensions/tools/executors/editor";
 import { createFileReadExecutor } from "../../extensions/tools/executors/file-read";
@@ -115,5 +116,41 @@ describe("executors over an AgentOverlay", () => {
 		expect(hit).toContain("fresh.txt");
 		const gone = await grep({ pattern: "ORIG", paths: [ws] }, ws);
 		expect(gone).not.toContain("a.txt");
+	});
+
+	// The agent reads the lead's file, then edits it. The edit writes the
+	// overlay copy, which is a different path on disk; the read-before-edit
+	// guard must see one file, not refuse a file the agent just read.
+	it("lets the agent edit a workspace file it read, without re-reading its overlay copy", async () => {
+		const executors = createDefaultExecutors({ overlay }) as Required<
+			ReturnType<typeof createDefaultExecutors>
+		>;
+		await executors.readFile({ path: path.join(ws, "a.txt") }, ctx);
+		const result = await executors.editor(
+			{ path: path.join(ws, "a.txt"), new_text: "EDITED" },
+			ws,
+			ctx,
+		);
+		expect(JSON.stringify(result)).not.toContain("Read before");
+		expect((await fs.readFile(path.join(ov, "a.txt"))).toString()).toBe(
+			"EDITED",
+		);
+		expect((await fs.readFile(path.join(ws, "a.txt"))).toString()).toBe("ORIG");
+	});
+
+	it("still refuses the edit when the lead's file changed after the agent read it", async () => {
+		const executors = createDefaultExecutors({ overlay }) as Required<
+			ReturnType<typeof createDefaultExecutors>
+		>;
+		await executors.readFile({ path: path.join(ws, "a.txt") }, ctx);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		await fs.writeFile(path.join(ws, "a.txt"), "LEAD CHANGED IT");
+		await expect(
+			executors.editor(
+				{ path: path.join(ws, "a.txt"), new_text: "EDITED" },
+				ws,
+				ctx,
+			),
+		).rejects.toThrow(/changed since you last read it/);
 	});
 });

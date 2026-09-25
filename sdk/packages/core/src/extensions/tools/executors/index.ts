@@ -20,6 +20,7 @@ import {
 	type FileReadExecutorOptions,
 } from "./file-read";
 import { createGrepExecutor, type GrepExecutorOptions } from "./grep";
+import { overlayReadReceipts } from "./overlay-receipts";
 import { createReadReceipts, type ReadReceipts } from "./read-receipts";
 import { createSearchExecutor, type SearchExecutorOptions } from "./search";
 import { createSedExecutor, type SedExecutorOptions } from "./sed";
@@ -138,10 +139,14 @@ export function createDefaultExecutors(
 	// what was seen and the writer refuses to edit anything that was not. They
 	// are useless apart, so they are wired together here rather than left to
 	// each caller to remember.
-	const receipts = options.receipts ?? createReadReceipts();
 	// A delegated agent's overlay, threaded into every file executor. Undefined
 	// for the lead, whose executors resolve straight to the workspace.
 	const overlay = options.overlay;
+	// Over an overlay the receipts are keyed by the workspace path, so a read of
+	// the lead's file and an edit of its copy-up are one file to the guard.
+	const receipts = overlay
+		? overlayReadReceipts(options.receipts ?? createReadReceipts(), overlay)
+		: (options.receipts ?? createReadReceipts());
 	// The read ledger is NOT wired by default, deliberately. Suppressing a copy
 	// on the grounds that the model "already has it" is a claim about the
 	// conversation that compaction can falsify, and re-reading is part of how

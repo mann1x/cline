@@ -68,10 +68,37 @@ async function sameContent(a: string, b: string): Promise<boolean> {
  * `overlayRoot` is the agent's private directory in extension storage.
  */
 export class AgentOverlay {
+	private readonly copyUpListeners: Array<
+		(wsPath: string, ovPath: string) => Promise<void> | void
+	> = [];
+
 	constructor(
 		private readonly workspaceRoot: string,
 		private readonly overlayRoot: string,
 	) {}
+
+	/**
+	 * Be told when a workspace file is copied up into the overlay, after the
+	 * copy. The read receipts use it: the agent read the workspace file, and
+	 * the copy it is about to edit is that same file.
+	 */
+	onCopyUp(
+		listener: (wsPath: string, ovPath: string) => Promise<void> | void,
+	): void {
+		this.copyUpListeners.push(listener);
+	}
+
+	/**
+	 * The workspace path an overlay path stands for; any other path unchanged.
+	 * A file is one file to the agent whichever side of the overlay it is
+	 * currently read from, and anything keyed by path must agree.
+	 */
+	logicalPath(p: string): string {
+		const abs = path.resolve(p);
+		const rel = path.relative(this.overlayRoot, abs);
+		if (rel.startsWith("..") || path.isAbsolute(rel)) return p;
+		return path.join(this.workspaceRoot, rel);
+	}
 
 	/** Where a path lands. Paths outside the workspace are used as given. */
 	private locate(p: string): Located {
@@ -116,7 +143,12 @@ export class AgentOverlay {
 		if (await pathExists(l.whPath)) await fs.rm(l.whPath, { force: true });
 		if (!(await pathExists(l.ovPath)) && (await pathExists(l.wsPath))) {
 			const st = await fs.lstat(l.wsPath);
-			if (st.isFile()) await fs.copyFile(l.wsPath, l.ovPath);
+			if (st.isFile()) {
+				await fs.copyFile(l.wsPath, l.ovPath);
+				for (const listener of this.copyUpListeners) {
+					await listener(l.wsPath, l.ovPath);
+				}
+			}
 		}
 		return l.ovPath;
 	}
