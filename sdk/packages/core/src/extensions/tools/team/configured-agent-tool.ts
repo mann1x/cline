@@ -17,6 +17,7 @@ import { z } from "zod";
 import { isPolykvProvider } from "../../context/polykv-session";
 import { summarizeForLead } from "./agent-reports";
 import { agentEndpointKey } from "./agent-slot-gate";
+import { createAgentTroubleWatch, roomWaitTrouble } from "./agent-trouble";
 import type { ConfiguredAgentConfig } from "./configured-agent-config";
 import {
 	createDelegatedAgent,
@@ -454,11 +455,19 @@ export function createConfiguredAgentTools(
 					// every instance of this agent shares its system prompt and
 					// tools as one pool.
 					const engineSessionId = `${context.sessionId ?? "cerebriline"}~agent-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+					// How long it has been stuck, for the lead: after long enough
+					// without progress the lead is told, once.
+					const trouble = createAgentTroubleWatch({
+						sessionId: context.sessionId,
+						name: config.name,
+						...(options.logger ? { logger: options.logger } : {}),
+					});
 					// Queued again while its requests wait for room on the engine.
 					const stopRoomWatch = watchPolykvRoom(
 						engineSessionId,
 						context.emitUpdate,
 						options.logger,
+						(reason) => trouble.waiting(roomWaitTrouble(reason)),
 					);
 					const parentAgentId = context.agentId;
 					const spawnInput = {
@@ -516,6 +525,7 @@ export function createConfiguredAgentTools(
 							onEvent: (event) => {
 								if (isAdmissionEvent(event)) {
 									admitted();
+									trouble.progressed();
 								}
 								progress.observe(event);
 							},
@@ -528,6 +538,7 @@ export function createConfiguredAgentTools(
 								recoverTurnFault ??
 								createTurnFaultRecovery({
 									label: config.name,
+									onWaiting: trouble.waiting,
 									baseUrl: () => runtimeConfig.baseUrl,
 									headers: () => runtimeConfig.headers,
 									signal: cancellation.signal,
@@ -580,6 +591,7 @@ export function createConfiguredAgentTools(
 										emitUpdate: context.emitUpdate,
 										...(options.logger ? { logger: options.logger } : {}),
 										label: config.name,
+										onWaiting: trouble.waiting,
 										run: (node, admitted, recoverTurnFault) =>
 											attempt(
 												buildAgentRuntimeConfig(
@@ -681,6 +693,7 @@ export function createConfiguredAgentTools(
 						// that reports success and does nothing.
 						cancellation.release();
 						stopRoomWatch();
+						trouble.dispose();
 						// Its engine session goes back the moment it ends.
 						const released = await releasePolykvAgent(engineSessionId).catch(
 							() => undefined,

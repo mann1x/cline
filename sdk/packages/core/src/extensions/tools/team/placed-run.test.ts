@@ -201,6 +201,35 @@ describe("an agent through the spawn queue", () => {
 		expect(Math.max(...(holds as number[]))).toBe(REFUSED_HOLD_MAX_MS);
 	});
 
+	it("tells whoever tracks it what it is waiting on, for the lead's report", async () => {
+		const { placement } = fakePlacement(["oc"]);
+		const waits: unknown[] = [];
+		const run = vi
+			.fn()
+			.mockRejectedValueOnce(
+				new Error("pool 5 admission rejected: projected mean tps below floor"),
+			)
+			.mockImplementationOnce(async (_node, admitted: () => void) => {
+				admitted();
+				return ok("done");
+			});
+
+		await runPlacedAgent({
+			placement,
+			label: "a",
+			run,
+			onWaiting: (state) => waits.push(state),
+		});
+
+		expect(waits).toEqual([
+			{
+				kind: "refusal",
+				where: "oc",
+				detail: "pool 5 admission rejected: projected mean tps below floor",
+			},
+		]);
+	});
+
 	it("never ends an agent on a refusal returned as its result either", async () => {
 		const { placement } = fakePlacement(["oc"]);
 		const run = vi.fn();

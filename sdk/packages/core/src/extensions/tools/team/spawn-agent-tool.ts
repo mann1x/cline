@@ -23,6 +23,7 @@ import {
 import { z } from "zod";
 import { isPolykvProvider } from "../../context/polykv-session";
 import { summarizeForLead } from "./agent-reports";
+import { createAgentTroubleWatch, roomWaitTrouble } from "./agent-trouble";
 import type { ConfiguredAgentConfig } from "./configured-agent-config";
 import {
 	createDelegatedAgent,
@@ -742,11 +743,19 @@ async function runSpawnedAgent(
 		context.emitUpdate,
 		config.onSubAgentEvent,
 	);
+	// How long it has been stuck, for the lead: after long enough without
+	// progress the lead is told, once, and may take the task back.
+	const trouble = createAgentTroubleWatch({
+		sessionId: context.sessionId,
+		name: input.name ?? "agent",
+		...(config.logger ? { logger: config.logger } : {}),
+	});
 	// Queued again while its requests wait for room on the engine.
 	const stopRoomWatch = watchPolykvRoom(
 		engineSessionId,
 		context.emitUpdate,
 		config.logger,
+		(reason) => trouble.waiting(roomWaitTrouble(reason)),
 	);
 	// Its own abort signal, so a runaway agent can be stopped without
 	// cancelling the session and the siblings that are working.
@@ -814,6 +823,7 @@ async function runSpawnedAgent(
 			onEvent: (event) => {
 				if (isAdmissionEvent(event)) {
 					admitted();
+					trouble.progressed();
 				}
 				progress.observe(event);
 			},
@@ -830,6 +840,7 @@ async function runSpawnedAgent(
 					signal: cancellation.signal,
 					...(context.emitUpdate ? { emitUpdate: context.emitUpdate } : {}),
 					...(config.logger ? { logger: config.logger } : {}),
+					onWaiting: trouble.waiting,
 				}),
 		});
 		if (!started) {
@@ -883,6 +894,7 @@ async function runSpawnedAgent(
 						emitUpdate: context.emitUpdate,
 						...(config.logger ? { logger: config.logger } : {}),
 						label: input.name ?? "a sub-agent",
+						onWaiting: trouble.waiting,
 						run: (node, admitted, recoverTurnFault) =>
 							attempt(node.configProvider, admitted, recoverTurnFault),
 						// A failed spawn's engine session goes before the next try, or
@@ -956,6 +968,7 @@ async function runSpawnedAgent(
 		// is a button that reports success and does nothing.
 		cancellation.release();
 		stopRoomWatch();
+		trouble.dispose();
 		// Its engine session goes back the moment it ends, and its pool owner
 		// with it if it was the last: admission is decided against held
 		// windows, and one held past its work refuses the next agent.

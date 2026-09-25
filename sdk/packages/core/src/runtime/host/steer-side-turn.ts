@@ -38,8 +38,14 @@ export interface SteerSideTurnRunner {
 
 export interface SteerSideTurnInput {
 	sessionId: string;
-	/** The steer, as the user wrote it. */
+	/** The steer, as the user wrote it -- or the system's status report. */
 	message: string;
+	/**
+	 * Who is speaking. `system` is the agents' own status report (see
+	 * `agent-trouble.ts`): agents stuck for a long time, which the lead may
+	 * want to take back. Defaults to the user.
+	 */
+	source?: "user" | "system";
 	/** The lead's conversation as it stands, with its delegation call open. */
 	messages: readonly Message[];
 	/** Builds the lead's model with exactly these tools. */
@@ -178,6 +184,14 @@ export function createSteerRoundTools(
 	];
 }
 
+const SYSTEM_SIDE_TURN_PREAMBLE = [
+	"This is a status report from the agent system, not a message from the user. Your agents are still running; you are reading it now, between their progress, without ending the delegation.",
+	"You can reply in plain text, `message_agents` to pass something to running agents, or `stop_agents` to stop some or all of them. Nothing else is available until the round returns.",
+	"The agents named below keep retrying on their own unless you stop them. If you decide to stop some, you will do their tasks yourself once the round returns. Answer in one short reply: what you decided, and why.",
+	"",
+	"The report:",
+].join("\n");
+
 const SIDE_TURN_PREAMBLE = [
 	"The user has sent you this message while your agents are still running. You are answering it now, between your agents' progress, without ending the delegation.",
 	"You can reply in plain text, `message_agents` to pass something to running agents, or `stop_agents` to stop some or all of them. Nothing else is available until the round returns.",
@@ -198,9 +212,11 @@ export async function runSteerSideTurn(
 		runner.restore(
 			closeOpenToolCalls(input.messages, describeRunningRound(input.sessionId)),
 		);
-		const result = await runner.continue(
-			`${SIDE_TURN_PREAMBLE}\n${input.message}`,
-		);
+		const preamble =
+			input.source === "system"
+				? SYSTEM_SIDE_TURN_PREAMBLE
+				: SIDE_TURN_PREAMBLE;
+		const result = await runner.continue(`${preamble}\n${input.message}`);
 		return { reply: result.text.trim(), actions };
 	} catch (error) {
 		return {
@@ -220,10 +236,13 @@ export async function runSteerSideTurn(
 export function describeSideTurnForLead(
 	message: string,
 	result: SteerSideTurnResult,
+	source: "user" | "system" = "user",
 ): string {
 	return [
-		"While your agents were running, the user sent a message and you answered it in a side turn. This already happened; do not repeat it.",
-		`The user said: ${message.trim()}`,
+		source === "system"
+			? "While your agents were running, the agent system reported agents stuck for a long time, and you answered it in a side turn. This already happened; do not repeat it. If you stopped agents, their tasks are yours to do now."
+			: "While your agents were running, the user sent a message and you answered it in a side turn. This already happened; do not repeat it.",
+		`${source === "system" ? "The report said" : "The user said"}: ${message.trim()}`,
 		`You replied: ${result.reply || "(no reply)"}`,
 		result.actions.length > 0
 			? `You did: ${result.actions.join(" ")}`

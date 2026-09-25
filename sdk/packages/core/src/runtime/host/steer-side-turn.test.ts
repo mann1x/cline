@@ -108,3 +108,35 @@ describe("the lead's side turn", () => {
 		expect(closeOpenToolCalls(messages, "x")).toHaveLength(1);
 	});
 });
+
+describe("the agent system's report to the lead", () => {
+	it("is put to the lead as a status report, not as the user's words", async () => {
+		registerSubagentCancellation("lead::call_1#0", undefined, "stuck-1");
+		let asked = "";
+		const result = await runSteerSideTurn({
+			sessionId: "lead",
+			source: "system",
+			message:
+				'- stuck-1: refused 14 times by Node1: "projected mean tps below floor"',
+			messages: leadMessages,
+			createRunner: (tools: AgentTool[]) => ({
+				restore: () => {},
+				continue: async (text) => {
+					asked = text;
+					await tools
+						.find((tool) => tool.name === "stop_agents")
+						?.execute({ agents: ["stuck-1"] }, {} as never);
+					return { text: "Stopped stuck-1; I will review that file myself." };
+				},
+			}),
+		});
+
+		expect(asked).toContain("status report from the agent system");
+		expect(asked).toContain("keep retrying on their own unless you stop them");
+		expect(asked).not.toContain("The user has sent you this message");
+		expect(result.actions).toEqual(["Stopped 1 agent(s): stuck-1."]);
+		const note = describeSideTurnForLead(asked, result, "system");
+		expect(note).toContain("the agent system reported agents stuck");
+		expect(note).toContain("their tasks are yours to do now");
+	});
+});

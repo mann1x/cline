@@ -32,6 +32,10 @@ import {
 	type DelegatedSandboxProvider,
 	setUpDelegatedSandbox,
 } from "../../../extensions/tools/team/agent-sandbox-executors";
+import {
+	createAgentTroubleWatch,
+	roomWaitTrouble,
+} from "../../../extensions/tools/team/agent-trouble";
 import type { DelegatedAgentConfigProvider } from "../../../extensions/tools/team/delegated-agent";
 import { createDelegatedAgent } from "../../../extensions/tools/team/delegated-agent";
 import { delegatedAgentTools } from "../../../extensions/tools/team/delegated-tools";
@@ -621,11 +625,25 @@ export function createSessionSwarmTool(
 		const progress = createSubagentProgress(request.emitUpdate, (event) =>
 			lifecycle.onSubAgentEvent?.(event),
 		);
+		// How long it has been stuck, for the lead: after long enough without
+		// progress the lead is told, once.
+		const trouble = createAgentTroubleWatch({
+			sessionId: rootSessionId,
+			name: request.name,
+			...(config.logger?.log
+				? {
+						logger: {
+							log: (message: string) => config.logger?.log?.(message),
+						},
+					}
+				: {}),
+		});
 		// Queued again while its requests wait for room on the engine.
 		const stopRoomWatch = watchPolykvRoom(
 			workerSessionId,
 			request.emitUpdate,
 			config.logger,
+			(reason) => trouble.waiting(roomWaitTrouble(reason)),
 		);
 		// Built on the connection it runs on: a node decides the worker's
 		// connection, so with nodes this runs once per placement.
@@ -726,6 +744,7 @@ export function createSessionSwarmTool(
 				onEvent: (event) => {
 					if (isAdmissionEvent(event)) {
 						admitted();
+						trouble.progressed();
 					}
 					progress.observe(event);
 				},
@@ -734,6 +753,7 @@ export function createSessionSwarmTool(
 					recoverTurnFault ??
 					createTurnFaultRecovery({
 						label: `swarm worker ${request.name}`,
+						onWaiting: trouble.waiting,
 						baseUrl: () => connection.baseUrl,
 						headers: () => connection.headers,
 						...(request.signal ? { signal: request.signal } : {}),
@@ -763,6 +783,7 @@ export function createSessionSwarmTool(
 					...(request.emitUpdate ? { emitUpdate: request.emitUpdate } : {}),
 					...(config.logger ? { logger: config.logger } : {}),
 					label: `swarm worker ${request.name}`,
+					onWaiting: trouble.waiting,
 					run: (node, admitted, recoverTurnFault) =>
 						attempt(node.configProvider, admitted, recoverTurnFault),
 					// A re-placed worker starts clean on its new node: its session
@@ -801,6 +822,7 @@ export function createSessionSwarmTool(
 		} finally {
 			clearPolykvSession(workerSessionId);
 			stopRoomWatch();
+			trouble.dispose();
 			// Its engine session goes back the moment it ends, and its owner
 			// window with it if it was the last agent on it. The swarm path
 			// never did this: `spawn_agent` and configured agents released,
