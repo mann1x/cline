@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentTool } from "@cline/shared";
+import type { AgentTool } from "@cline/shared";
 import { describe, expect, it } from "vitest";
 import {
 	createWorkerStruggleSupervisor,
