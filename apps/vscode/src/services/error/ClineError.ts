@@ -5,6 +5,7 @@ import {
 	isClineNotSubscribedMessage,
 	isClineOrgIndividualInferenceSubscriptionMessage,
 	isClinePassLimitMessage,
+	OPENCOTI_WINDOW_UNAVAILABLE_CODE,
 } from "@cline/llms"
 import { serializeError } from "serialize-error"
 import { CLINE_ACCOUNT_AUTH_ERROR_MESSAGE } from "../../shared/ClineAccount"
@@ -20,6 +21,8 @@ export enum ClineErrorType {
 	ClinePassLimit = "clinePassLimit",
 	ClineFreeModelLimit = "clineFreeModelLimit",
 	ClineFreePromotionEnded = "clineFreePromotionEnded",
+	/** opencoti could not give the conversation a window it can use (PLANS §9c). */
+	OpencotiWindowUnavailable = "opencotiWindowUnavailable",
 }
 
 export const CLINE_FREE_MODEL_ID_PREFIX = "cline-free/"
@@ -222,6 +225,13 @@ export class ClineError extends Error {
 		const rawMessage = err._error?.message || err.message || JSON.stringify(err._error)
 		const message = rawMessage?.toLowerCase()
 		const detailMessage = typeof details?.message === "string" ? details.message : undefined
+
+		// Stamped by the host from the provider's own refusal, and before every
+		// status-based branch below: nothing about it is a credential, a quota
+		// or a rate limit, and a Retry that waits it out is not on offer.
+		if (code === OPENCOTI_WINDOW_UNAVAILABLE_CODE || details?.code === OPENCOTI_WINDOW_UNAVAILABLE_CODE) {
+			return ClineErrorType.OpencotiWindowUnavailable
+		}
 
 		// Check balance error first (most specific)
 		if (code === "insufficient_credits" && typeof details?.current_balance === "number") {

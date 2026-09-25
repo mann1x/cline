@@ -157,6 +157,47 @@ afterEach(async () => {
 	await releaseAllPolykvSwarms();
 });
 
+/**
+ * P2: a worker is charged to its owner's window, and the engine can refuse it
+ * at arrival -- before a prefill is spent -- only if the request says how long
+ * the reply may run. The gateway sends no cap for a model the catalog does not
+ * know, so the worker's fetch declares one itself.
+ */
+describe("a worker's output cap", () => {
+	async function workerBody(
+		body: Record<string, unknown>,
+		workerMaxTokens?: number,
+	) {
+		const engine = stubEngine();
+		const fetchImpl = createOpencotiFetch({
+			fetch: engine.fetch,
+			baseUrl: "http://engine/v1",
+			request: {
+				worker: { group: "cap-lead", sessionId: "cap-agent", layers: 2 },
+				...(workerMaxTokens !== undefined ? { workerMaxTokens } : {}),
+			},
+		});
+		await fetchImpl("http://engine/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify(body),
+		});
+		return sent(engine).at(-1)?.body;
+	}
+
+	it("declares one when the request carried none", async () => {
+		const body = await workerBody(agentBody("role", "task"), 12_000);
+		expect(body?.max_tokens).toBe(12_000);
+	});
+
+	it("keeps the cap the gateway sent", async () => {
+		const body = await workerBody(
+			{ ...agentBody("role", "task"), max_tokens: 4_096 },
+			12_000,
+		);
+		expect(body?.max_tokens).toBe(4_096);
+	});
+});
+
 describe("a PolyKV swarm", () => {
 	// The whole point: fifty agents given the same knowledge and role are one
 	// prefill and one set of cells, not fifty.

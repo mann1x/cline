@@ -6,15 +6,22 @@ import type {
 } from "@cline/shared";
 import { wrapLanguageModel } from "ai";
 import type { PolykvOptions } from "../config";
+import { sleep as abortableSleep } from "../middleware/backoff";
+import { DEFAULT_MAX_RETRY_AFTER_MS } from "../middleware/retry-rate-limit";
 import { splitToolImagesMiddleware } from "../middleware/split-tool-images";
 import { primeTemplateReinjection } from "../reasoning-history";
 import { llamaCppTimingsMetadataExtractor } from "./llamacpp-timings";
 import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
+import { OpencotiWindowUnavailableError } from "./opencoti-window";
 import {
 	getPolykvGrantedWindow,
 	getPolykvSession,
+	hasOpencotiFeature,
+	OPENCOTI_FEATURES,
 	polykvAdmissionPolicy,
+	probeOpencotiProps,
 	recordPolykvGrantedWindow,
+	recordPolykvWindowObservation,
 } from "./polykv";
 import {
 	hoistLeadEnvironment,
@@ -106,10 +113,33 @@ export interface OpencotiRequestOptions {
 	 * A resumed conversation may never negotiate down, because its history no
 	 * longer fits a smaller window and a silent shrink truncates mid-thread.
 	 *
-	 * Requires `ctx_min_negotiation_v1`. Without it the field is ignored and
-	 * the caller must fall back to retrying against `largest_admissible`.
+	 * Sent only where `/props` advertises `ctx_min_negotiation_v1`. Without it
+	 * the fetch keeps the floor to itself and falls back to retrying ONCE at
+	 * the refusal's `largest_admissible`, when that is at or above the floor.
 	 */
 	numCtxMin?: number;
+	/**
+	 * This session has been granted a window before: every admission from here
+	 * on is "exactly that window, or refuse". A resume never negotiates down
+	 * and never waits -- a refusal is the "Can't resume" card at once.
+	 */
+	resume?: boolean;
+	/**
+	 * The longest a NEW session below its floor waits, once, before it is
+	 * refused. The profile's `maxRetryAfterMs`, the same bound the rate-limit
+	 * middleware honours; the server's `Retry-After` inside it.
+	 */
+	maxRetryAfterMs?: number;
+	/**
+	 * The output cap a worker declares when the request carries none (P2).
+	 *
+	 * A worker is charged to its owner's window, and the engine can refuse it
+	 * at arrival -- before a prefill is spent -- only if it knows how much the
+	 * reply may take. The gateway sends no cap for a model the catalog knows
+	 * nothing about, or when its estimate leaves no room, so this is the
+	 * fallback that makes "workers always declare" true on the wire.
+	 */
+	workerMaxTokens?: number;
 	/**
 	 * This request is one agent of a swarm sharing a pool tree.
 	 *
@@ -188,6 +218,12 @@ export interface OpencotiResponseFacts {
 	 * silent lie about the one number the conversation is sized against.
 	 */
 	contextWindow?: number;
+	/**
+	 * The window this request asked for on the wire (`num_ctx`), beside the
+	 * grant, so "asked X, got Y" is one observation rather than two numbers
+	 * from two places. Absent when the request asked for none.
+	 */
+	askedWindow?: number;
 }
 
 /**
@@ -295,56 +331,84 @@ export function createOpencotiFetch(options: {
 	/** Server root, for the swarm's control-plane calls and session close. */
 	baseUrl?: string;
 	headers?: Record<string, string>;
+	/** Seam for tests: the one below-floor wait a new session is allowed. */
+	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }): typeof fetch {
 	const base = options.fetch ?? fetch;
 	const worker = options.request?.worker;
 	if (worker && options.baseUrl) {
-		return createWorkerFetch({ ...options, worker, baseUrl: options.baseUrl });
+		return createWorkerFetch({
+			...options,
+			worker,
+			baseUrl: options.baseUrl,
+			...(options.request?.workerMaxTokens !== undefined
+				? { workerMaxTokens: options.request.workerMaxTokens }
+				: {}),
+		});
 	}
 	return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
 		let nextInit = init;
 		const extras = options.request;
 		let leadSession: string | undefined;
 		let leadAskedWindow = false;
+		let body: Record<string, unknown> | undefined;
+		let negotiation: WindowNegotiation | undefined;
+		// The prefix the lead tree shares above a private budget, so the grant
+		// can be read back as the window the conversation can actually fill.
+		let sharedAboveBudget: number | undefined;
 		if (init?.body && typeof init.body === "string") {
 			try {
-				const body = JSON.parse(init.body) as Record<string, unknown>;
-				// Environment spans become a turn of their own on every request
-				// that carries them, pooled or not: the system turn left behind is
-				// the same for every conversation, which is what the engine's
-				// prefix cache and the lead tree both key on.
-				const isLead = hoistLeadEnvironment(body);
-				if (extras) {
-					// Held as a string on this side -- the first pool is 0, and a
-					// numeric 0 is falsy -- but the engine parses the field as a
-					// number and 400s a string. Anything that is not an integer is
-					// not an id it issued: left off, the turn runs unpooled rather
-					// than failing.
-					const wirePoolId =
-						extras.poolId !== undefined && /^\d+$/.test(extras.poolId)
-							? Number(extras.poolId)
-							: undefined;
-					if (wirePoolId !== undefined) {
-						body.pool_id = wirePoolId;
+				body = JSON.parse(init.body) as Record<string, unknown>;
+			} catch {
+				// A body that is not JSON is not ours to rewrite. The request goes
+				// as it was: an unpooled turn is slower, a mangled one is broken.
+				body = undefined;
+			}
+		}
+		if (body) {
+			// Environment spans become a turn of their own on every request
+			// that carries them, pooled or not: the system turn left behind is
+			// the same for every conversation, which is what the engine's
+			// prefix cache and the lead tree both key on.
+			const isLead = hoistLeadEnvironment(body);
+			if (extras) {
+				// Held as a string on this side -- the first pool is 0, and a
+				// numeric 0 is falsy -- but the engine parses the field as a
+				// number and 400s a string. Anything that is not an integer is
+				// not an id it issued: left off, the turn runs unpooled rather
+				// than failing.
+				const wirePoolId =
+					extras.poolId !== undefined && /^\d+$/.test(extras.poolId)
+						? Number(extras.poolId)
+						: undefined;
+				if (wirePoolId !== undefined) {
+					body.pool_id = wirePoolId;
+				}
+				if (extras.sessionId !== undefined) {
+					body.session_id = engineSessionId(extras.sessionId);
+					if (options.baseUrl) {
+						rememberOpencotiSession(
+							extras.sessionId,
+							options.baseUrl,
+							base,
+							options.headers,
+						);
 					}
-					if (extras.sessionId !== undefined) {
-						body.session_id = engineSessionId(extras.sessionId);
-						if (options.baseUrl) {
-							rememberOpencotiSession(
-								extras.sessionId,
-								options.baseUrl,
-								base,
-								options.headers,
-							);
-						}
-					}
-					if (extras.sharedPrefixTokens !== undefined) {
-						body.shared_prefix_n_tokens = extras.sharedPrefixTokens;
-					}
-					if (extras.overcommit !== undefined) {
-						body.overcommit = extras.overcommit;
-					}
-					if (extras.numCtx !== undefined) {
+				}
+				if (extras.sharedPrefixTokens !== undefined) {
+					body.shared_prefix_n_tokens = extras.sharedPrefixTokens;
+				}
+				if (extras.overcommit !== undefined) {
+					body.overcommit = extras.overcommit;
+				}
+				if (extras.numCtx !== undefined) {
+					// A window is booked only on a server that books them. Where
+					// `/props` does not advertise guaranteed allocations the field
+					// means nothing the client can rely on -- no grant comes back
+					// and no refusal is a window refusal -- so the switch stands
+					// down there rather than sending a promise nobody keeps.
+					const features = await windowFeatures(options.baseUrl, base);
+					if (features.guaranteed) {
 						body.num_ctx = extras.numCtx;
 						// A floor is only meaningful under an ask. Sent alone it
 						// would read as a demand for a minimum window on a request
@@ -355,63 +419,79 @@ export function createOpencotiFetch(options: {
 						if (extras.numCtxMin !== undefined) {
 							body.num_ctx_min = Math.min(extras.numCtxMin, extras.numCtx);
 						}
-					}
-					if (
-						isLead &&
-						extras.leadPool &&
-						extras.sessionId !== undefined &&
-						options.baseUrl
-					) {
-						// The lead tree decides the pool for a lead request; whatever
-						// the registry held is its own answer from the last turn.
-						delete body.pool_id;
-						const leadPool = await prepareLeadPool({
-							baseUrl: options.baseUrl,
-							fetch: base,
-							...(options.headers ? { headers: options.headers } : {}),
-							body,
-							sessionId: extras.sessionId,
-						}).catch(() => undefined);
-						if (leadPool && /^\d+$/.test(leadPool.poolId)) {
-							body.pool_id = Number(leadPool.poolId);
-							// `num_ctx` is the private budget on a server that says so,
-							// and the shared prefix rides above it. A new conversation
-							// then books its window minus what it shares -- the whole
-							// point of sharing, in admission terms: N conversations
-							// cost N·(W − P) + P, not N·W. A resumed one keeps what it
-							// was granted (the resume rule), which is already that.
-							if (
-								leadPool.privateWindow &&
-								typeof body.num_ctx === "number" &&
-								getPolykvGrantedWindow(extras.sessionId) === undefined
-							) {
-								const budget = Math.max(
-									1,
-									body.num_ctx - leadPool.sharedTokens,
-								);
-								body.num_ctx = budget;
-								if (typeof body.num_ctx_min === "number") {
-									body.num_ctx_min = Math.min(body.num_ctx_min, budget);
-								}
-							}
-						}
-						leadSession = extras.sessionId;
-						leadAskedWindow = body.num_ctx !== undefined;
+						negotiation = {
+							atomic: features.atomic,
+							resume: extras.resume === true,
+						};
 					}
 				}
-				nextInit = { ...init, body: JSON.stringify(body) };
-			} catch {
-				// A body that is not JSON is not ours to rewrite. The request goes
-				// as it was: an unpooled turn is slower, a mangled one is broken.
+				if (
+					isLead &&
+					extras.leadPool &&
+					extras.sessionId !== undefined &&
+					options.baseUrl
+				) {
+					// The lead tree decides the pool for a lead request; whatever
+					// the registry held is its own answer from the last turn.
+					delete body.pool_id;
+					const leadPool = await prepareLeadPool({
+						baseUrl: options.baseUrl,
+						fetch: base,
+						...(options.headers ? { headers: options.headers } : {}),
+						body,
+						sessionId: extras.sessionId,
+					}).catch(() => undefined);
+					if (leadPool && /^\d+$/.test(leadPool.poolId)) {
+						body.pool_id = Number(leadPool.poolId);
+						// `num_ctx` is the private budget on a server that says so,
+						// and the shared prefix rides above it. A new conversation
+						// then books its window minus what it shares -- the whole
+						// point of sharing, in admission terms: N conversations
+						// cost N·(W − P) + P, not N·W. A resumed one keeps what it
+						// was granted (the resume rule), which is already that.
+						if (
+							leadPool.privateWindow &&
+							typeof body.num_ctx === "number" &&
+							getPolykvGrantedWindow(extras.sessionId) === undefined
+						) {
+							const budget = Math.max(1, body.num_ctx - leadPool.sharedTokens);
+							sharedAboveBudget = body.num_ctx - budget;
+							body.num_ctx = budget;
+							if (typeof body.num_ctx_min === "number") {
+								body.num_ctx_min = Math.min(body.num_ctx_min, budget);
+							}
+						}
+					}
+					leadSession = extras.sessionId;
+					leadAskedWindow = body.num_ctx !== undefined;
+				}
+				if (negotiation && typeof body.num_ctx === "number") {
+					negotiation.ask = body.num_ctx;
+					// No floor stated is "all or nothing"; a resume's floor is its
+					// ask by construction.
+					negotiation.floor = negotiation.resume
+						? body.num_ctx
+						: typeof body.num_ctx_min === "number"
+							? body.num_ctx_min
+							: body.num_ctx;
+					// Without the atomic negotiation the server ignores the field;
+					// the floor stays on this side and is applied to the refusal.
+					if (!negotiation.atomic) {
+						delete body.num_ctx_min;
+					}
+				}
 			}
+			nextInit = { ...init, body: JSON.stringify(body) };
 		}
-		const response = await base(input, {
-			...nextInit,
-			// Prefill is the reason this matters: creating or attaching a pool
-			// can compute a very long prefix, and undici's default header
-			// timeout is five minutes.
-			...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
-		} as RequestInit);
+		const send = (wire: Record<string, unknown> | undefined) =>
+			base(input, {
+				...nextInit,
+				...(wire ? { body: JSON.stringify(wire) } : {}),
+				// Prefill is the reason this matters: creating or attaching a pool
+				// can compute a very long prefix, and undici's default header
+				// timeout is five minutes.
+				...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
+			} as RequestInit);
 
 		// A refusal goes back as a response, not as a throw.
 		//
@@ -422,21 +502,276 @@ export function createOpencotiFetch(options: {
 		// a transport failure, so the caller gave up on a server that had told it
 		// exactly when to come back.
 		//
-		// Note what is NOT done here: the body is not consulted. On c7, the
-		// published release, the refusal is a `429` carrying a body that says
-		// `503`/`unavailable_error`; the status line is the half that is right on
-		// both releases.
+		// The one exception is a WINDOW refusal below the floor, settled in
+		// `negotiateWindow`: that one has had its wait, and is thrown so that
+		// nothing downstream waits it out again.
+		//
+		// Note what is NOT done here: the body is not consulted for the status.
+		// On c7, the published release, the refusal is a `429` carrying a body
+		// that says `503`/`unavailable_error`; the status line is the half that
+		// is right on both releases.
+		const window =
+			negotiation?.ask !== undefined && negotiation.floor !== undefined
+				? {
+						atomic: negotiation.atomic,
+						resume: negotiation.resume,
+						ask: negotiation.ask,
+						floor: negotiation.floor,
+					}
+				: undefined;
+		const first = await send(undefined);
+		const outcome =
+			window && body && first.status === 429
+				? await negotiateWindow({
+						first,
+						body,
+						window,
+						send,
+						sleep: options.sleep ?? abortableSleep,
+						maxWaitMs: extras?.maxRetryAfterMs ?? DEFAULT_MAX_RETRY_AFTER_MS,
+						signal: init?.signal ?? undefined,
+					})
+				: { response: first, asked: window?.ask };
+		const response = outcome.response;
+
 		if (leadSession !== undefined && leadAskedWindow && response.ok) {
 			markLeadWindowLive(leadSession);
 		}
-		return extras?.sessionId !== undefined || options.onFacts
-			? observeResponseFacts(
-					response,
-					noticeDivergence(extras?.sessionId, options.onFacts),
+		const sessionId = extras?.sessionId;
+		// Every admitted response, header or not: an absent `X-Context-Window`
+		// is an observation too -- "unknown" -- and must replace whatever the
+		// last response said rather than let it stand.
+		if (sessionId !== undefined && response.ok) {
+			noteWindowGrant(
+				sessionId,
+				numberOrUndefined(response.headers.get("x-context-window")),
+				outcome.asked,
+				sharedAboveBudget,
+			);
+		}
+		const onFacts = noticeDivergence(sessionId, options.onFacts);
+		return sessionId !== undefined || options.onFacts
+			? observeResponseFacts(response, (facts) =>
+					onFacts(
+						outcome.asked !== undefined && facts.contextWindow !== undefined
+							? { ...facts, askedWindow: outcome.asked }
+							: facts,
+					),
 				)
 			: response;
 	}) as typeof fetch;
 }
+
+/** How this request's window is being negotiated. */
+interface WindowNegotiation {
+	/** `ctx_min_negotiation_v1`: the server settles ask and floor in one admission. */
+	atomic: boolean;
+	resume: boolean;
+	ask?: number;
+	floor?: number;
+}
+
+/** The two flags the window request branches on, read off `/props`. */
+async function windowFeatures(
+	baseUrl: string | undefined,
+	fetchImpl: typeof fetch,
+): Promise<{ guaranteed: boolean; atomic: boolean }> {
+	const props = await probeOpencotiProps(baseUrl, fetchImpl).catch(
+		() => undefined,
+	);
+	return {
+		guaranteed: hasOpencotiFeature(
+			props?.features,
+			OPENCOTI_FEATURES.guaranteedAlloc,
+		),
+		atomic: hasOpencotiFeature(
+			props?.features,
+			OPENCOTI_FEATURES.ctxMinNegotiation,
+		),
+	};
+}
+
+/**
+ * Record what an admitted response said about the window.
+ *
+ * `granted` undefined is a response with no `X-Context-Window`: not guaranteed,
+ * so the observation is UNKNOWN, and the remembered grant -- the booking the
+ * resume rule rests on -- is left exactly as it was.
+ */
+function noteWindowGrant(
+	sessionId: string,
+	granted: number | undefined,
+	asked: number | undefined,
+	sharedTokens: number | undefined,
+): void {
+	if (granted !== undefined) {
+		recordPolykvGrantedWindow(sessionId, granted, {
+			...(asked !== undefined ? { asked } : {}),
+			...(sharedTokens !== undefined ? { sharedTokens } : {}),
+		});
+	}
+	recordPolykvWindowObservation(sessionId, {
+		...(granted !== undefined ? { granted } : {}),
+		...(asked !== undefined ? { asked } : {}),
+		...(sharedTokens !== undefined ? { sharedTokens } : {}),
+	});
+}
+
+/** What a 429 says about the window, when it is a window refusal at all. */
+interface WindowRefusal {
+	largestAdmissible?: number;
+	retryAfterMs?: number;
+}
+
+/**
+ * Read `largest_admissible` off a refusal: the header, or the body field.
+ *
+ * A 429 without either is not a window refusal -- the throughput floor refuses
+ * with the same status -- and is left to the rate-limit middleware, which waits
+ * it out the way it always has.
+ */
+async function readWindowRefusal(response: Response): Promise<WindowRefusal> {
+	const seconds = Number(response.headers.get("retry-after"));
+	const retryAfterMs =
+		Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
+	const header = numberOrUndefined(
+		response.headers.get("x-context-largest-admissible"),
+	);
+	if (header !== undefined) {
+		return { largestAdmissible: header, retryAfterMs };
+	}
+	try {
+		const parsed = JSON.parse(await response.clone().text()) as Record<
+			string,
+			unknown
+		>;
+		const nested = (parsed?.error ?? {}) as Record<string, unknown>;
+		const value = parsed?.largest_admissible ?? nested?.largest_admissible;
+		return typeof value === "number" && Number.isFinite(value)
+			? { largestAdmissible: value, retryAfterMs }
+			: { retryAfterMs };
+	} catch {
+		return { retryAfterMs };
+	}
+}
+
+/**
+ * Settle a window refusal (PLANS §9c, §9k).
+ *
+ * - **Atomic** (`ctx_min_negotiation_v1`): the server already granted the
+ *   largest window in `[floor, ask]` if one fit, so a window refusal here is
+ *   below the floor.
+ * - **Not atomic**: a refusal naming `largest_admissible` at or above the floor
+ *   is retried ONCE at exactly that window. Another arrival can take the cells
+ *   in between -- the race the atomic path does not have -- and then this is
+ *   below the floor too.
+ * - **Below the floor, new session**: wait once, the server's `Retry-After`
+ *   bounded by `maxRetryAfterMs`, and ask again from the top. Still below:
+ *   refuse.
+ * - **Below the floor, resume**: refuse at once. Never a wait, never a smaller
+ *   window.
+ *
+ * Returns the response to hand on, and the window it asked for, when it is not
+ * a refusal below the floor. Throws {@link OpencotiWindowUnavailableError} when
+ * it is.
+ */
+async function negotiateWindow(input: {
+	first: Response;
+	body: Record<string, unknown>;
+	window: { atomic: boolean; resume: boolean; ask: number; floor: number };
+	send: (wire: Record<string, unknown> | undefined) => Promise<Response>;
+	sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+	maxWaitMs: number;
+	signal?: AbortSignal;
+}): Promise<{ response: Response; asked: number }> {
+	const { window } = input;
+	const discard = (response: Response) =>
+		response.body?.cancel().catch(() => {});
+	// One pass: the refusal in hand, and the single retry at `largest` the
+	// non-atomic path allows. `below` carries the refusal that ended it.
+	const pass = async (
+		refused: Response,
+	): Promise<
+		| { response: Response; asked: number; below?: undefined }
+		| { below: WindowRefusal; response?: undefined }
+	> => {
+		let refusal = await readWindowRefusal(refused);
+		if (refusal.largestAdmissible === undefined) {
+			return { response: refused, asked: window.ask };
+		}
+		if (
+			!window.atomic &&
+			!window.resume &&
+			refusal.largestAdmissible >= window.floor &&
+			refusal.largestAdmissible < window.ask
+		) {
+			// `asked` stays the conversation's own ask: a grant of `smaller` is
+			// exactly the "asked 256k, got 160k" the context bar reports.
+			const smaller = Math.floor(refusal.largestAdmissible);
+			await discard(refused);
+			const retried = await input.send({ ...input.body, num_ctx: smaller });
+			if (retried.status !== 429) {
+				return { response: retried, asked: window.ask };
+			}
+			refusal = await readWindowRefusal(retried);
+			if (
+				refusal.largestAdmissible === undefined ||
+				refusal.largestAdmissible >= window.floor
+			) {
+				// Not a window refusal after all, or one the rate-limit layer
+				// can still wait out: hand it on as the 429 it is.
+				return { response: retried, asked: window.ask };
+			}
+			await discard(retried);
+			return { below: refusal };
+		}
+		if (refusal.largestAdmissible >= window.floor) {
+			// The window fits by the server's own account, so this refusal is
+			// about something else -- throughput, a settling hold. Not ours.
+			return { response: refused, asked: window.ask };
+		}
+		await discard(refused);
+		return { below: refusal };
+	};
+
+	const refuse = (refusal: WindowRefusal): never => {
+		throw new OpencotiWindowUnavailableError({
+			asked: window.ask,
+			floor: window.floor,
+			...(refusal.largestAdmissible !== undefined
+				? { largestAdmissible: refusal.largestAdmissible }
+				: {}),
+			resume: window.resume,
+		});
+	};
+
+	const firstPass = await pass(input.first);
+	if (firstPass.below === undefined) {
+		return firstPass;
+	}
+	if (window.resume) {
+		return refuse(firstPass.below);
+	}
+	await input.sleep(
+		Math.min(
+			Math.max(0, input.maxWaitMs),
+			firstPass.below.retryAfterMs ?? DEFAULT_WINDOW_WAIT_MS,
+		),
+		input.signal,
+	);
+	const again = await input.send(undefined);
+	if (again.status !== 429) {
+		return { response: again, asked: window.ask };
+	}
+	const secondPass = await pass(again);
+	if (secondPass.below === undefined) {
+		return secondPass;
+	}
+	return refuse(secondPass.below);
+}
+
+/** The wait when a below-floor refusal named no `Retry-After`. */
+const DEFAULT_WINDOW_WAIT_MS = 2_000;
 
 /**
  * A pool divergence, worded for the agent's row.
@@ -592,6 +927,7 @@ function createWorkerFetch(options: {
 	baseUrl: string;
 	headers?: Record<string, string>;
 	onFacts?: (facts: OpencotiResponseFacts) => void;
+	workerMaxTokens?: number;
 }): typeof fetch {
 	const base = options.fetch ?? fetch;
 	const observed = (response: Response) =>
@@ -654,6 +990,12 @@ function createWorkerFetch(options: {
 			// A worker books nothing: its window is the owner's.
 			delete wire.num_ctx;
 			delete wire.num_ctx_min;
+			// P2: a worker always declares its output, so a refusal lands at
+			// arrival instead of after a prefill spent on a reply that cannot fit
+			// the owner's window. The gateway's cap is kept where it sent one.
+			if (!declaresOutputCap(wire)) {
+				wire.max_tokens = options.workerMaxTokens ?? 8_192;
+			}
 			wire.session_id = attach.sessionId;
 			if (attach.poolId !== undefined && /^\d+$/.test(attach.poolId)) {
 				wire.pool_id = Number(attach.poolId);
@@ -772,6 +1114,14 @@ function leadReserveRefusal(
 	);
 }
 
+/** Whether a chat body already states how long the reply may run. */
+function declaresOutputCap(body: Record<string, unknown>): boolean {
+	return ["max_tokens", "max_completion_tokens", "n_predict"].some((key) => {
+		const value = body[key];
+		return typeof value === "number" && Number.isFinite(value) && value > 0;
+	});
+}
+
 function numberOrUndefined(value: string | null): number | undefined {
 	if (!value) {
 		return undefined;
@@ -838,6 +1188,7 @@ export function readOpencotiRequestOptions(
 			worker: admission ? { ...worker, admission } : worker,
 			sessionId: worker.sessionId,
 			...(typeof overcommit === "boolean" ? { overcommit } : {}),
+			workerMaxTokens: resolveWorkerMaxTokens(context.model),
 		};
 	}
 	return {
@@ -855,7 +1206,32 @@ export function readOpencotiRequestOptions(
 			? { leadPool: true }
 			: {}),
 		...window,
+		...(typeof settings?.maxRetryAfterMs === "number" &&
+		Number.isFinite(settings.maxRetryAfterMs) &&
+		settings.maxRetryAfterMs >= 0
+			? { maxRetryAfterMs: settings.maxRetryAfterMs }
+			: {}),
 	};
+}
+
+/**
+ * The cap a worker declares when the gateway sent none.
+ *
+ * The model's own ceiling where the catalog has one; otherwise a quarter of the
+ * window, floored at 1,024 so a tiny window still leaves a reply room;
+ * otherwise a flat 8,192. Any of these is
+ * better than nothing on the wire, which is the one value P2 rules out.
+ */
+function resolveWorkerMaxTokens(
+	model: { contextWindow?: number; maxOutputTokens?: number } | undefined,
+): number {
+	if (isPositiveInteger(model?.maxOutputTokens)) {
+		return Math.floor(model.maxOutputTokens);
+	}
+	if (isPositiveInteger(model?.contextWindow)) {
+		return Math.max(1_024, Math.floor(model.contextWindow / 4));
+	}
+	return 8_192;
 }
 
 /**
@@ -882,13 +1258,13 @@ function resolveOpencotiWindow(
 	sessionId: string | undefined,
 	settings: PolykvOptions | undefined,
 	configuredWindow: number | undefined,
-): { numCtx?: number; numCtxMin?: number } {
+): { numCtx?: number; numCtxMin?: number; resume?: boolean } {
 	if (settings?.dynamicContextSize !== true) {
 		return {};
 	}
 	const granted = getPolykvGrantedWindow(sessionId);
 	if (granted !== undefined) {
-		return { numCtx: granted, numCtxMin: granted };
+		return { numCtx: granted, numCtxMin: granted, resume: true };
 	}
 	if (!isPositiveInteger(configuredWindow)) {
 		return {};
@@ -958,25 +1334,23 @@ export async function createOpencotiProviderModule(
 		...(baseURL ? { baseUrl: baseURL } : {}),
 		...(config.headers ? { headers: config.headers } : {}),
 		onFacts: (facts) => {
-			// The grant, remembered. Every later admission for this session
-			// asks for exactly it, which is how a resume gets the window it was
-			// opened with rather than whatever happens to be free.
-			if (facts.contextWindow !== undefined && request.sessionId) {
-				recordPolykvGrantedWindow(request.sessionId, facts.contextWindow);
-				if (
-					request.numCtx !== undefined &&
-					facts.contextWindow !== request.numCtx
-				) {
-					// Asked for one window, given another. On a continuation
-					// this is expected -- the server ignores a changed `num_ctx`
-					// and keeps the held one -- and on a new admission it means
-					// the floor was used. Either way it is worth saying, because
-					// the conversation is now sized against a number nobody
-					// chose.
-					context.logger?.debug(
-						`[opencoti] asked for a ${request.numCtx}-token window, holding ${facts.contextWindow}`,
-					);
-				}
+			// Asked for one window, given another. The grant itself is recorded
+			// by the fetch, beside the ask that produced it; this is the line in
+			// the log. On a continuation a mismatch is expected -- the server
+			// ignores a changed `num_ctx` and keeps the held one -- and on a new
+			// admission it means the floor was used. Either way the conversation
+			// is now sized against a number nobody chose.
+			if (
+				facts.contextWindow !== undefined &&
+				facts.askedWindow !== undefined &&
+				facts.contextWindow !== facts.askedWindow
+			) {
+				context.logger?.log(
+					`[opencoti] asked for a ${facts.askedWindow}-token window, granted ${facts.contextWindow}`,
+					{
+						severity: facts.contextWindow < facts.askedWindow ? "warn" : "info",
+					},
+				);
 			}
 			// A pool prompt that diverges from the rendered request is a bug on
 			// this side -- the prefix was built from something other than what

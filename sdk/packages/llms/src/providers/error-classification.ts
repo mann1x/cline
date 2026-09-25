@@ -4,6 +4,7 @@ import {
 	type ToolCallRejection,
 } from "@cline/shared";
 import { AISDKError, APICallError, RetryError, TypeValidationError } from "ai";
+import { isOpencotiWindowUnavailableError } from "./vendors/opencoti-window";
 
 /**
  * Provider codes that unambiguously identify a context-window overflow
@@ -365,6 +366,13 @@ function classifyTypedError(
 ): ProviderErrorClass | undefined {
 	if (depth > MAX_WALK_DEPTH) {
 		return undefined;
+	}
+	// opencoti could not give the conversation a window it can use. Neither
+	// retryable (it has had its one wait, or is a resume that never waits) nor
+	// an overflow (compacting cannot conjure cells on the server), so it must
+	// not reach a verdict that does either.
+	if (depth === 0 && isOpencotiWindowUnavailableError(error)) {
+		return "unknown";
 	}
 	// Specific classes before the generic guard — every AI SDK error
 	// subclasses AISDKError, so the generic check would swallow them.

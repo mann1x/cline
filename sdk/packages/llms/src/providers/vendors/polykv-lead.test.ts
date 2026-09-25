@@ -1,7 +1,11 @@
 import { markPromptEnvironment } from "@cline/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { createOpencotiFetch } from "./opencoti";
-import { getPolykvSession, resetPolykvAvailability } from "./polykv";
+import {
+	getPolykvSession,
+	getPolykvWindowGrant,
+	resetPolykvAvailability,
+} from "./polykv";
 import {
 	hoistLeadEnvironment,
 	POLYKV_LEAD_RECHECK_MS,
@@ -42,7 +46,9 @@ function stubEngine(
 			});
 		if (url.pathname === "/props") {
 			return json({
-				features: options.features ?? [],
+				// A server that books windows: without the flag the fetch sends
+				// no `num_ctx`, and the lead tree has no window to fork under.
+				features: ["elastic_guaranteed_alloc_v1", ...(options.features ?? [])],
 				opencoti: {
 					polykv: { pools_enabled: options.poolsEnabled !== false },
 					elastic_slots: { enabled: true },
@@ -98,7 +104,18 @@ function stubEngine(
 			return json({ ok: true });
 		}
 		if (url.pathname === "/v1/chat/completions") {
-			return json({ choices: [{ message: { content: "ok" } }] });
+			// The grant is what was asked, as a server with room answers.
+			return new Response(
+				JSON.stringify({ choices: [{ message: { content: "ok" } }] }),
+				{
+					headers: {
+						"content-type": "application/json",
+						...(typeof body.num_ctx === "number"
+							? { "x-context-window": String(body.num_ctx) }
+							: {}),
+					},
+				},
+			);
 		}
 		return json({ error: "no route" }, 404);
 	}) as unknown as typeof fetch;
@@ -345,7 +362,9 @@ describe("the lead tree", () => {
 	// With `num_ctx` as the private budget, a conversation books its window
 	// minus what it shares -- and a resumed one keeps what it was granted.
 	it("books the window minus the shared prefix where the server counts it privately", async () => {
-		const engine = stubEngine({ features: ["polykv_private_window_v1"] });
+		const engine = stubEngine({
+			features: ["polykv_private_window_v1", "ctx_min_negotiation_v1"],
+		});
 		const fetchImpl = createOpencotiFetch({
 			fetch: engine.fetch,
 			baseUrl: "http://engine/v1",
@@ -365,6 +384,13 @@ describe("the lead tree", () => {
 		);
 		expect(wire?.body.num_ctx).toBe(65_436);
 		expect(wire?.body.num_ctx_min).toBe(65_436);
+		// The grant is the private budget; the window the conversation can
+		// fill is that plus the prefix riding above it.
+		expect(getPolykvWindowGrant("lead-9")).toEqual({
+			granted: 65_436,
+			asked: 65_436,
+			sharedTokens: 100,
+		});
 	});
 
 	it("books the whole window where the server counts shared tokens against it", async () => {

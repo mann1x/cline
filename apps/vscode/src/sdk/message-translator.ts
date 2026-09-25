@@ -28,7 +28,11 @@
 
 import type { CoreSessionEvent } from "@cline/core"
 import { describeRestoreTarget, PATCH_MARKERS, projectSessionMessagesForDisplay, readTaskProgress } from "@cline/core"
-import type { MessageWithMetadata as SdkMessage } from "@cline/llms"
+import {
+	OPENCOTI_WINDOW_UNAVAILABLE_CODE,
+	parseOpencotiWindowUnavailable,
+	type MessageWithMetadata as SdkMessage,
+} from "@cline/llms"
 import { type AgentEvent, formatDisplayUserInput, type ProviderErrorClass, type RequestTimings } from "@cline/shared"
 import { COMMAND_OUTPUT_STRING } from "@shared/combineCommandSequences"
 import type {
@@ -47,6 +51,7 @@ import type {
 	ClineThinkingCondensedInfo,
 	ClineTransactionInfo,
 	ContextBreakdown,
+	ContextWindowGrant,
 	SubagentStatusItem,
 } from "@shared/ExtensionMessage"
 import { Logger } from "@shared/services/Logger"
@@ -333,8 +338,20 @@ export class MessageTranslatorState {
 		private readonly getUiMode?: () => "plan" | "act" | "yolo" | undefined,
 		private readonly getCwd?: () => string | undefined,
 		private readonly getActiveModelId?: () => string | undefined,
+		private readonly getContextWindowGrant?: () => ContextWindowGrant | undefined,
 	) {
 		this.minter = minter
+	}
+
+	/**
+	 * The window the server granted the request a usage event is for.
+	 *
+	 * Read when the usage arrives, which is after the response whose
+	 * `X-Context-Window` it reports: the grant and the cost of one request land
+	 * on the same `api_req_started`, the only row the context bar reads.
+	 */
+	contextWindowGrant(): ContextWindowGrant | undefined {
+		return this.getContextWindowGrant?.()
 	}
 
 	/**
@@ -3039,6 +3056,8 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 				// say how much of what it is showing was spent before the first
 				// message.
 				...(state.contextBreakdown() ? { contextBreakdown: state.contextBreakdown() } : {}),
+				// The window this request was granted, when the server said.
+				...(state.contextWindowGrant() ? { contextWindowGrant: state.contextWindowGrant() } : {}),
 			}
 			messages.push({
 				ts: state.nextTs(),
@@ -3889,6 +3908,21 @@ export function reshapeErrorForWebview(
 	// provider when the active provider id is unknown.
 	const clineErrorProviderId = providerId ?? "cline"
 	const rawMessage = error.message ?? "Unknown error"
+
+	// opencoti refused the conversation a window it can use. The error object
+	// is gone by now; its numbers ride the message, and the card needs them
+	// structured: "opened with 256k, the server has 128k free right now".
+	const windowRefusal = parseOpencotiWindowUnavailable(rawMessage)
+	if (windowRefusal) {
+		const prose = rawMessage.replace(/\s*\[opencoti_window_unavailable[^\]]*\]\s*$/, "")
+		return JSON.stringify({
+			message: prose,
+			code: OPENCOTI_WINDOW_UNAVAILABLE_CODE,
+			...(providerId ? { providerId } : {}),
+			...(modelId ? { modelId } : {}),
+			details: { code: OPENCOTI_WINDOW_UNAVAILABLE_CODE, message: prose, ...windowRefusal },
+		})
+	}
 
 	// A retired cline-free/ model answers "model not found" once its free
 	// promotion ends and the id is removed from the catalog. Stamp the payload

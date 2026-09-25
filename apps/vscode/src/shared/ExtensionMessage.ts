@@ -610,6 +610,24 @@ export interface ClineApiReqInfo {
 	 * exactly as it did before.
 	 */
 	contextBreakdown?: ContextBreakdown
+	/**
+	 * The window the server granted this request, where it reported one.
+	 *
+	 * opencoti books a window per conversation and may grant less than was
+	 * asked -- down to the floor -- so the configured context size is not the
+	 * number the bar should be drawn against. Absent on every other provider,
+	 * and on a response that did not state a grant: that is "unknown", and the
+	 * bar falls back to the configured window rather than to a stale grant.
+	 */
+	contextWindowGrant?: ContextWindowGrant
+}
+
+/** See {@link ClineApiReqInfo.contextWindowGrant}. */
+export interface ContextWindowGrant {
+	/** The window the conversation can fill, in tokens. */
+	grantedTokens: number
+	/** What the conversation asked for when it was opened, in tokens. */
+	askedTokens?: number
 }
 
 /** The fixed price of a request, as {@link ClineApiReqInfo.contextBreakdown}. */

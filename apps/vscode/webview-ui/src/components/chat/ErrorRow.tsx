@@ -6,6 +6,7 @@ import ClineFreePromotionEndedError from "@/components/chat/ClineFreePromotionEn
 import ClinePassLimitError from "@/components/chat/ClinePassLimitError"
 import CreditLimitError from "@/components/chat/CreditLimitError"
 import EntitlementError from "@/components/chat/EntitlementError"
+import OpencotiWindowUnavailableError from "@/components/chat/OpencotiWindowUnavailableError"
 import OrgClinePassRestrictionError from "@/components/chat/OrgClinePassRestrictionError"
 import SpendLimitError from "@/components/chat/SpendLimitError"
 import { Button } from "@/components/ui/button"
@@ -43,6 +44,12 @@ const ErrorRow = memo(({ message, errorType, apiRequestFailedMessage, apiReqStre
 					// and login prompts below.
 					const isClineUsageBillingProvider = providerId === "cline"
 					const errorCode = clineError?._error?.code
+
+					// opencoti could not give the conversation a usable window. Its
+					// own card: the numbers, Retry, and (for a resume) the history.
+					if (clineError?.isErrorType(ClineErrorType.OpencotiWindowUnavailable)) {
+						return <OpencotiWindowUnavailableError details={clineError._error?.details} />
+					}
 
 					if (clineError?.isErrorType(ClineErrorType.Balance)) {
 						const errorDetails = clineError._error?.details

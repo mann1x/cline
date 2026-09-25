@@ -60,8 +60,10 @@ import { DEFAULT_FULL_COMPACTION_PROMPT } from "./full-compaction";
 import {
 	ensurePolykvPool,
 	polykvSaysCompact,
+	readPolykvAllocation,
 	readPolykvCapacity,
 	repointPolykvAfterCompaction,
+	resolveGrantedContextWindow,
 } from "./polykv-session";
 import { DEFAULT_REPLAY_COMPACTION_PROMPT } from "./replay-compaction";
 
@@ -643,6 +645,36 @@ export function resetStarvedOutputCapLatch(): void {
 	starvedOutputCapSessions.clear();
 }
 
+/**
+ * The turn's model with its window replaced by the granted one, or the turn
+ * unchanged when there is no smaller grant to size against.
+ *
+ * `maxInputTokens` is clamped with it: an input ceiling above the window is a
+ * number no request can reach.
+ */
+function withGrantedWindow(
+	turn: ContextPipelinePrepareTurnInput,
+	granted: number | undefined,
+): ContextPipelinePrepareTurnInput {
+	const info = turn.model.info;
+	if (granted === undefined || !info) {
+		return turn;
+	}
+	return {
+		...turn,
+		model: {
+			...turn.model,
+			info: {
+				...info,
+				contextWindow: granted,
+				...(typeof info.maxInputTokens === "number"
+					? { maxInputTokens: Math.min(info.maxInputTokens, granted) }
+					: {}),
+			},
+		},
+	};
+}
+
 export function createContextCompactionPrepareTurn(
 	config: Pick<
 		CoreSessionConfig,
@@ -686,7 +718,20 @@ export function createContextCompactionPrepareTurn(
 		? "custom"
 		: strategy;
 
-	return async (context) => {
+	return async (turn) => {
+		// Sized against the window the server GRANTED, where one is known and
+		// smaller than the configured one. A conversation negotiated down to
+		// 160k of 256k holds 160k for its life, and every threshold below --
+		// the trigger, the target, the output room -- computed against 256k
+		// fires after the real window has already run out.
+		const context = withGrantedWindow(
+			turn,
+			resolveGrantedContextWindow(
+				config.sessionId,
+				config.providerId,
+				turn.model.info?.contextWindow,
+			),
+		);
 		// The tail is a per-compaction decision, not a per-session one: a run
 		// that has compacted before is measurably different from one that has
 		// not, and the summary is what the next attempt gets to read either way.
@@ -953,9 +998,17 @@ export function createContextCompactionPrepareTurn(
 			expectedTokens: triggerInputTokens,
 			logger: config.logger,
 		});
+		// The session's own row of `GET /kv`: its raw `pressure` is the
+		// preferred signal, and it needs no pool to be read.
+		const polykvAllocation = await readPolykvAllocation({
+			sessionId: config.sessionId,
+			providerConfig,
+			logger: config.logger,
+		});
 		const polykvPressure = polykvSaysCompact(
 			polykvCapacity,
 			providerConfig.polykv?.compactionPressureThreshold,
+			polykvAllocation,
 		);
 		// What the request path actually resolved for the last turn, against what
 		// a reply from this session actually costs.
@@ -1061,6 +1114,11 @@ export function createContextCompactionPrepareTurn(
 			observedOutputTokens,
 			contextOverflow,
 			polykvCompactionPressure: polykvCapacity?.compaction_pressure,
+			polykvRawPressure: polykvAllocation?.pressure ?? polykvCapacity?.pressure,
+			grantedContextWindow:
+				context.model.info?.contextWindow !== turn.model.info?.contextWindow
+					? context.model.info?.contextWindow
+					: undefined,
 			polykvKvHeadroomPct: polykvCapacity?.kv_headroom_pct,
 			polykvPressure,
 			outputRoomTokens,

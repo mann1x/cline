@@ -1,4 +1,4 @@
-import type { ContextBreakdown } from "@shared/ExtensionMessage"
+import type { ContextBreakdown, ContextWindowGrant } from "@shared/ExtensionMessage"
 import type { ProviderApiMetrics } from "@shared/getApiMetrics"
 import { StringRequest } from "@shared/proto/cline/common"
 import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
@@ -10,6 +10,7 @@ import { formatLargeNumber as formatTokenNumber } from "@/utils/format"
 import CompactTaskButton from "./buttons/CompactTaskButton"
 import { ContextWindowBar } from "./ContextWindowBar"
 import { ContextWindowSummary } from "./ContextWindowSummary"
+import { resolveShownContextWindow } from "./context-window-grant"
 
 // Type definitions
 interface ContextWindowInfoProps {
@@ -44,6 +45,11 @@ interface ContextWindowProgressProps extends ContextWindowInfoProps {
 	 */
 	contextTokensUsed?: number
 	contextWindow?: number
+	/**
+	 * The window the server granted the last request, when it stated one. The
+	 * bar is drawn against it, with a note when it is smaller than was asked.
+	 */
+	contextWindowGrant?: ContextWindowGrant
 	onSendMessage?: (command: string, files: string[], images: string[]) => void
 }
 
@@ -92,6 +98,7 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 	generateTokens,
 	generateMs,
 	contextBreakdown,
+	contextWindowGrant,
 }) => {
 	const [isOpened, setIsOpened] = useState(false)
 	const [confirmationNeeded, setConfirmationNeeded] = useState(false)
@@ -125,16 +132,21 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 		setConfirmationNeeded(false)
 	}, [])
 
+	const shownWindow = useMemo(
+		() => resolveShownContextWindow(contextWindow, contextWindowGrant),
+		[contextWindow, contextWindowGrant],
+	)
+
 	const tokenData = useMemo(() => {
-		if (!contextWindow) {
+		if (!shownWindow.max) {
 			return null
 		}
 		return {
-			percentage: (contextTokensUsed / contextWindow) * 100,
-			max: contextWindow,
+			percentage: (contextTokensUsed / shownWindow.max) * 100,
+			max: shownWindow.max,
 			used: contextTokensUsed,
 		}
-	}, [contextWindow, contextTokensUsed])
+	}, [shownWindow.max, contextTokensUsed])
 
 	const debounceCloseHover = useCallback((e: React.MouseEvent) => {
 		e.preventDefault()
@@ -209,12 +221,24 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 							</HoverCardTrigger>
 						</HoverCard>
 					</div>
-					<span className="cursor-pointer text-sm" title="Maximum context window size for this model">
+					<span
+						className="cursor-pointer text-sm"
+						title={
+							shownWindow.granted
+								? "Context window the server granted this conversation"
+								: "Maximum context window size for this model"
+						}>
 						{formatTokenNumber(tokenData.max)}
 					</span>
 				</div>
 				<CompactTaskButton onClick={handleCompactClick} />
 			</div>
+			{shownWindow.smallerThanAsked && shownWindow.asked !== undefined && (
+				<div className="text-xs text-description mt-0.5" data-testid="context-window-granted-note">
+					Granted {formatTokenNumber(tokenData.max)} of {formatTokenNumber(shownWindow.asked)} configured: smaller than
+					configured, so this conversation compacts sooner.
+				</div>
+			)}
 			{confirmationNeeded && <ConfirmationDialog onCancel={handleCancel} onConfirm={handleConfirm} />}
 		</div>
 	)

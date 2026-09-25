@@ -5,11 +5,15 @@ import {
 	type OpencotiResponseFacts,
 	readOpencotiRequestOptions,
 } from "./opencoti";
+import { OpencotiWindowUnavailableError } from "./opencoti-window";
 import {
 	clearPolykvGrantedWindow,
 	getPolykvGrantedWindow,
+	getPolykvWindowGrant,
+	getPolykvWindowObservation,
 	polykvRoot,
 	recordPolykvGrantedWindow,
+	resetPolykvAvailability,
 	resetPolykvSessions,
 } from "./polykv";
 
@@ -439,20 +443,26 @@ describe("reading the attach off the response", () => {
  * request has no gap to lose.
  */
 describe("asking for a window", () => {
-	async function sent(request: Record<string, unknown>) {
-		let body: Record<string, unknown> | undefined;
+	beforeEach(() => {
+		resetPolykvAvailability();
+		resetPolykvSessions();
+	});
+
+	async function sent(
+		request: Record<string, unknown>,
+		features: string[] = [GUARANTEED, ATOMIC],
+	) {
+		const engine = windowEngine({ features, replies: [ok({ choices: [] })] });
 		const fetchImpl = createOpencotiFetch({
-			fetch: (async (_input: unknown, init?: RequestInit) => {
-				body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-				return ok({ choices: [] });
-			}) as unknown as typeof fetch,
+			fetch: engine.fetch,
+			baseUrl: "http://x/v1",
 			request,
 		});
 		await fetchImpl("http://x/v1/chat/completions", {
 			method: "POST",
 			body: JSON.stringify({ model: "m", messages: [] }),
 		});
-		return body;
+		return engine.chats[0];
 	}
 
 	it("puts the window and its floor at the body root", async () => {
@@ -481,6 +491,298 @@ describe("asking for a window", () => {
 	it("leaves both out when the user stated no window", async () => {
 		const body = await sent({ sessionId: "s" });
 		expect(body).not.toHaveProperty("num_ctx");
+	});
+
+	// K: a server that does not book windows makes no promise about one, so
+	// nothing is asked of it.
+	it("books nothing on a server without guaranteed allocations", async () => {
+		const body = await sent({ numCtx: 262_144, numCtxMin: 65_536 }, [ATOMIC]);
+		expect(body).not.toHaveProperty("num_ctx");
+		expect(body).not.toHaveProperty("num_ctx_min");
+	});
+
+	// A: without the flag the field is not ours to send; the floor is applied
+	// to the refusal on this side instead.
+	it("keeps the floor to itself where the server cannot negotiate it", async () => {
+		const body = await sent({ numCtx: 262_144, numCtxMin: 65_536 }, [
+			GUARANTEED,
+		]);
+		expect(body?.num_ctx).toBe(262_144);
+		expect(body).not.toHaveProperty("num_ctx_min");
+	});
+
+	it("asks a resume for exactly its window, floored at itself", async () => {
+		const body = await sent({
+			numCtx: 163_840,
+			numCtxMin: 163_840,
+			resume: true,
+		});
+		expect(body?.num_ctx).toBe(163_840);
+		expect(body?.num_ctx_min).toBe(163_840);
+	});
+});
+
+const GUARANTEED = "elastic_guaranteed_alloc_v1";
+const ATOMIC = "ctx_min_negotiation_v1";
+
+/**
+ * A stub opencoti: `/props` names the features, and the chat route answers
+ * from a script, one reply per request, recording every body it was sent.
+ */
+function windowEngine(options: { features: string[]; replies: Response[] }) {
+	const chats: Array<Record<string, unknown>> = [];
+	const replies = [...options.replies];
+	const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+		const url = new URL(String(input));
+		if (url.pathname === "/props") {
+			return ok({ features: options.features });
+		}
+		chats.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+		const reply = replies.shift();
+		if (!reply) {
+			throw new Error("the script ran out of replies");
+		}
+		return reply;
+	}) as unknown as typeof fetch;
+	return { chats, fetch: fetchImpl };
+}
+
+/** A window refusal: 429 naming what would have fit. */
+function refused(
+	largest: number | undefined,
+	options: { retryAfter?: string; inHeader?: boolean } = {},
+): Response {
+	return new Response(
+		JSON.stringify({
+			error: {
+				code: 503,
+				message: "no room",
+				...(largest !== undefined && !options.inHeader
+					? { largest_admissible: largest }
+					: {}),
+			},
+		}),
+		{
+			status: 429,
+			headers: {
+				...(options.retryAfter ? { "retry-after": options.retryAfter } : {}),
+				...(largest !== undefined && options.inHeader
+					? { "x-context-largest-admissible": String(largest) }
+					: {}),
+			},
+		},
+	);
+}
+
+/**
+ * The negotiation, PLANS §9c and the §9k rulings.
+ *
+ * A new session negotiates down to its floor and, below it, waits ONCE and
+ * asks again before it is refused. A resume never negotiates and never waits.
+ */
+describe("negotiating a window the server cannot give", () => {
+	beforeEach(() => {
+		resetPolykvAvailability();
+		resetPolykvSessions();
+	});
+
+	function negotiate(
+		request: Record<string, unknown>,
+		features: string[],
+		replies: Response[],
+	) {
+		const engine = windowEngine({ features, replies });
+		const waits: number[] = [];
+		const fetchImpl = createOpencotiFetch({
+			fetch: engine.fetch,
+			baseUrl: "http://x/v1",
+			request: { sessionId: "conv", ...request },
+			sleep: async (ms) => {
+				waits.push(ms);
+			},
+		});
+		return {
+			engine,
+			waits,
+			run: () =>
+				fetchImpl("http://x/v1/chat/completions", {
+					method: "POST",
+					body: JSON.stringify({ model: "m", messages: [] }),
+				}),
+		};
+	}
+
+	it("retries once at largest_admissible when it clears the floor", async () => {
+		const probe = negotiate(
+			{ numCtx: 262_144, numCtxMin: 65_536 },
+			[GUARANTEED],
+			[
+				refused(163_840, { inHeader: true }),
+				ok({ choices: [] }, { "x-context-window": "163840" }),
+			],
+		);
+		const response = await probe.run();
+		expect(response.status).toBe(200);
+		expect(probe.engine.chats.map((body) => body.num_ctx)).toEqual([
+			262_144, 163_840,
+		]);
+		expect(probe.waits).toEqual([]);
+		// The ask is the conversation's, not the retry's: "asked 256k, got 160k".
+		expect(getPolykvWindowGrant("conv")).toEqual({
+			granted: 163_840,
+			asked: 262_144,
+		});
+	});
+
+	it("reads largest_admissible off the body as well as the header", async () => {
+		const probe = negotiate(
+			{ numCtx: 262_144, numCtxMin: 65_536 },
+			[GUARANTEED],
+			[refused(131_072), ok({ choices: [] })],
+		);
+		await probe.run();
+		expect(probe.engine.chats[1]?.num_ctx).toBe(131_072);
+	});
+
+	// §9k: a new session below its floor waits once, honouring Retry-After.
+	it("waits once for a new session below its floor, then asks again", async () => {
+		const probe = negotiate(
+			{ numCtx: 262_144, numCtxMin: 131_072 },
+			[GUARANTEED, ATOMIC],
+			[
+				refused(65_536, { retryAfter: "3" }),
+				ok({ choices: [] }, { "x-context-window": "262144" }),
+			],
+		);
+		const response = await probe.run();
+		expect(response.status).toBe(200);
+		expect(probe.waits).toEqual([3_000]);
+		// The re-ask is the original ask, floor and all, not a smaller one.
+		expect(probe.engine.chats[1]).toMatchObject({
+			num_ctx: 262_144,
+			num_ctx_min: 131_072,
+		});
+	});
+
+	it("bounds that wait by maxRetryAfterMs", async () => {
+		const probe = negotiate(
+			{ numCtx: 262_144, numCtxMin: 131_072, maxRetryAfterMs: 1_500 },
+			[GUARANTEED, ATOMIC],
+			[refused(65_536, { retryAfter: "60" }), ok({ choices: [] })],
+		);
+		await probe.run();
+		expect(probe.waits).toEqual([1_500]);
+	});
+
+	it("refuses a new session still below its floor after the one wait", async () => {
+		const probe = negotiate(
+			{ numCtx: 262_144, numCtxMin: 131_072 },
+			[GUARANTEED, ATOMIC],
+			[refused(65_536), refused(98_304)],
+		);
+		const error = await probe.run().catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(OpencotiWindowUnavailableError);
+		expect((error as OpencotiWindowUnavailableError).details).toEqual({
+			asked: 262_144,
+			floor: 131_072,
+			largestAdmissible: 98_304,
+			resume: false,
+		});
+		expect(probe.waits).toHaveLength(1);
+		expect(probe.engine.chats).toHaveLength(2);
+	});
+
+	// The resume rule: never a smaller window, never a wait. The user decides.
+	it("refuses a resume at once, without waiting or negotiating", async () => {
+		const probe = negotiate(
+			{ numCtx: 262_144, numCtxMin: 262_144, resume: true },
+			[GUARANTEED],
+			[refused(131_072, { retryAfter: "2" })],
+		);
+		const error = await probe.run().catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(OpencotiWindowUnavailableError);
+		expect((error as OpencotiWindowUnavailableError).resume).toBe(true);
+		expect((error as Error).message).toContain(
+			"It was opened with a 256k window and needs the same to continue. The server has 128k free right now.",
+		);
+		expect(probe.waits).toEqual([]);
+		expect(probe.engine.chats).toHaveLength(1);
+	});
+
+	// A 429 that names no window is the throughput floor, not ours: it goes
+	// back as the response it is, for the rate-limit middleware to wait out.
+	it("hands back a refusal that is not about the window", async () => {
+		const probe = negotiate(
+			{ numCtx: 262_144, numCtxMin: 65_536 },
+			[GUARANTEED, ATOMIC],
+			[refused(undefined, { retryAfter: "2" })],
+		);
+		const response = await probe.run();
+		expect(response.status).toBe(429);
+		expect(probe.waits).toEqual([]);
+	});
+
+	it("does not treat a refused ask as below the floor when the floor fits", async () => {
+		const probe = negotiate(
+			{ numCtx: 262_144, numCtxMin: 65_536 },
+			[GUARANTEED, ATOMIC],
+			[refused(131_072)],
+		);
+		const response = await probe.run();
+		// Atomic: had 131,072 been grantable the server would have granted it,
+		// so this refusal is about something else and is not negotiated here.
+		expect(response.status).toBe(429);
+		expect(probe.engine.chats).toHaveLength(1);
+	});
+});
+
+/**
+ * "Asked X, got Y", on every admitted response.
+ */
+describe("what an admitted response says about the window", () => {
+	beforeEach(() => {
+		resetPolykvAvailability();
+		resetPolykvSessions();
+	});
+
+	async function admit(headers: Record<string, string>, numCtx = 262_144) {
+		const engine = windowEngine({
+			features: [GUARANTEED, ATOMIC],
+			replies: [ok({ choices: [] }, headers)],
+		});
+		const seen: OpencotiResponseFacts[] = [];
+		const fetchImpl = createOpencotiFetch({
+			fetch: engine.fetch,
+			baseUrl: "http://x/v1",
+			request: { sessionId: "conv", numCtx },
+			onFacts: (facts) => seen.push(facts),
+		});
+		await fetchImpl("http://x/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({ model: "m", messages: [] }),
+		});
+		return seen;
+	}
+
+	it("puts the ask beside the grant", async () => {
+		const seen = await admit({ "x-context-window": "163840" });
+		expect(seen.at(-1)).toMatchObject({
+			contextWindow: 163_840,
+			askedWindow: 262_144,
+		});
+		expect(getPolykvWindowObservation("conv")).toEqual({
+			granted: 163_840,
+			asked: 262_144,
+		});
+	});
+
+	// Absent is unknown, not unchanged: the observation says so, while the
+	// booking the resume rule rests on is kept.
+	it("reads a missing header as unknown and keeps the booking", async () => {
+		await admit({ "x-context-window": "163840" });
+		await admit({});
+		expect(getPolykvWindowObservation("conv")?.granted).toBeUndefined();
+		expect(getPolykvGrantedWindow("conv")).toBe(163_840);
 	});
 });
 
@@ -565,6 +867,26 @@ describe("remembering the window a session was granted", () => {
 		// this conversation already has.
 		expect(options.numCtx).toBe(163_840);
 		expect(options.numCtxMin).toBe(163_840);
+		expect(options.resume).toBe(true);
+	});
+
+	it("carries the profile's wait bound for the one below-floor wait", () => {
+		const options = readOpencotiRequestOptions({
+			config: {
+				providerId: "opencoti",
+				options: {
+					polykvSessionId: "fresh",
+					polykv: {
+						enabled: true,
+						dynamicContextSize: true,
+						maxRetryAfterMs: 4_000,
+					},
+				},
+			},
+			model: { id: "m", contextWindow: 262_144 },
+		} as never);
+		expect(options.maxRetryAfterMs).toBe(4_000);
+		expect(options.resume).toBeUndefined();
 	});
 
 	it("negotiates down to the floor on a session with no grant yet", () => {

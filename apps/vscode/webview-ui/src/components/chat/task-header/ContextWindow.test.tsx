@@ -72,4 +72,21 @@ describe("ContextWindow compact button", () => {
 		await waitFor(() => expect(condense).toHaveBeenCalledWith({ value: "compact" }))
 		expect(onSendMessage).not.toHaveBeenCalled()
 	})
+
+	it("ends the bar at the granted window and says it is smaller than configured", () => {
+		render(
+			<ContextWindow
+				contextTokensUsed={20_000}
+				contextWindow={262_144}
+				contextWindowGrant={{ grantedTokens: 163_840, askedTokens: 262_144 }}
+				useAutoCondense={false}
+			/>,
+		)
+		expect(screen.getByTestId("context-window-granted-note").textContent).toContain("smaller than configured")
+	})
+
+	it("says nothing about a grant it was not given", () => {
+		render(<ContextWindow contextTokensUsed={20_000} contextWindow={262_144} useAutoCondense={false} />)
+		expect(screen.queryByTestId("context-window-granted-note")).toBeNull()
+	})
 })
