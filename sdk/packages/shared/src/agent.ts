@@ -416,6 +416,24 @@ export type ProviderErrorClass =
 	| "pool_contract_violation"
 	| "unknown";
 
+/**
+ * Why an engine rejected a tool call the model emitted, when it says so.
+ *
+ * opencoti sends it with the rejection (`type: "tool_call_rejected"`), so a
+ * retry can tell the model what it got wrong instead of just "it did not
+ * parse". The measured case is `swallowed_key`: a long `editor` argument
+ * closed with a backtick from the code inside it, so the parser read the next
+ * argument (`key`) as part of the value.
+ */
+export interface ToolCallRejection {
+	/** The engine's rule; `swallowed_key` today. Unknown reasons read as generic. */
+	reason: string;
+	/** The argument the malformed value ran into. */
+	key?: string;
+	/** The tool the rejected call was for. */
+	tool?: string;
+}
+
 export type AgentModelEvent =
 	| { type: "text-delta"; text: string }
 	| { type: "media"; media: GeneratedMedia }
@@ -460,6 +478,8 @@ export type AgentModelEvent =
 			reason: AgentModelFinishReason;
 			error?: string;
 			errorClass?: ProviderErrorClass;
+			/** What the engine said was wrong with a rejected tool call. */
+			toolCallRejection?: ToolCallRejection;
 			/**
 			 * The model layer already recorded `sdk.error` telemetry for this
 			 * failure at its own error boundary. `error` is a flattened string,

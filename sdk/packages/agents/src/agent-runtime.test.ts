@@ -21,6 +21,7 @@ import {
 	TOOL_REJECTION_SUFFIX,
 } from "@cline/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { toolCallUnparsableReminder } from "./agent-runtime";
 import { AgentRuntime, DEFAULT_MAX_NO_TOOL_CALL_NUDGES } from "./index";
 
 beforeEach(() => {
@@ -5091,6 +5092,41 @@ describe("a tool call the provider could not parse", () => {
 		expect(resent).toContain("planning");
 	});
 
+	// opencoti bug-3601: the engine says which argument a malformed value ran
+	// into. The generic reminder would send the model back to write the same
+	// call the same way; this one names what to do differently.
+	it("names the argument a rejected value swallowed, when the engine says", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{
+					type: "finish",
+					reason: "error",
+					error: "Invalid diff: now finding less tool calls!",
+					errorClass: "tool_call_unparsable",
+					toolCallRejection: {
+						reason: "swallowed_key",
+						key: "path",
+						tool: "editor",
+					},
+				},
+			],
+			() => [
+				{ type: "text-delta", text: "recovered" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model });
+
+		const result = await runtime.run("fix it");
+
+		expect(result.status).toBe("completed");
+		const resent = JSON.stringify(model.requests[1]);
+		expect(resent).toContain("`editor` call was rejected");
+		expect(resent).toContain("ran on into `path`");
+		expect(resent).toContain("backtick");
+		expect(resent).not.toContain("did not parse");
+	});
+
 	// A model that cannot emit a well-formed call twice running will not on the
 	// third attempt, and the run has somewhere better to spend the clock.
 	it("gives up after the budget and reports the provider's own error", async () => {
@@ -5599,5 +5635,21 @@ describe("a tool that bounds its own concurrency", () => {
 		expect(order).toEqual(
 			Array.from({ length: 12 }, (_, index) => `call_${index}`),
 		);
+	});
+});
+
+describe("toolCallUnparsableReminder", () => {
+	it("is the generic reminder with no rejection or an unknown reason", () => {
+		const generic = toolCallUnparsableReminder();
+		expect(generic).toContain("did not parse");
+		expect(toolCallUnparsableReminder({ reason: "some_future_rule" })).toBe(
+			generic,
+		);
+	});
+
+	it("still reads without the key or the tool", () => {
+		const text = toolCallUnparsableReminder({ reason: "swallowed_key" });
+		expect(text).toContain("Your last tool call was rejected");
+		expect(text).toContain("ran on into the next argument");
 	});
 });
