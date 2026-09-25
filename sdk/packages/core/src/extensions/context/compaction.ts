@@ -59,6 +59,11 @@ import { warnIfWindowBelowMinimum } from "./context-minimum-warning";
 import { withCouncilWriterPrompt } from "./council-compaction";
 import { DEFAULT_FULL_COMPACTION_PROMPT } from "./full-compaction";
 import {
+	beginKvPressureTurn,
+	kvPressureWantsCompaction,
+	shrinkForKvPressure,
+} from "./kv-pressure";
+import {
 	ensurePolykvPool,
 	polykvSaysCompact,
 	readPolykvAllocation,
@@ -720,6 +725,18 @@ export function createContextCompactionPrepareTurn(
 		: strategy;
 
 	return async (turn) => {
+		// The server's pressure, and this session's booking in it (`kv-pressure.ts`).
+		// First, because a booking grown back here is the window everything
+		// below is sized against this very turn. Automatic compaction only: a
+		// manual one is the user's, and an overflow recovery has one job.
+		const kvTurn =
+			!turn.overflowRecovery && mode === "auto"
+				? await beginKvPressureTurn({
+						sessionId: config.sessionId,
+						providerConfig,
+						logger: config.logger,
+					}).catch(() => undefined)
+				: undefined;
 		// Sized against the window the server GRANTED, where one is known and
 		// smaller than the configured one. A conversation negotiated down to
 		// 160k of 256k holds 160k for its life, and every threshold below --
@@ -1098,11 +1115,29 @@ export function createContextCompactionPrepareTurn(
 		} else {
 			starvedOutputCapSessions.delete(latchKey);
 		}
+		// The server is refusing others and this booking could give back a real
+		// share of itself by compacting (`kvPressureWantsCompaction`). One more
+		// reason to compact, through this same trigger; it loosens none of the
+		// others. Compared on the provider's scale, as the ratio trigger is.
+		const kvPressureCompaction = kvPressureWantsCompaction(kvTurn, {
+			requestTokens: triggerInputTokens,
+			compactedTokens: scaleEstimateToObserved(
+				requestOverheadTokens +
+					resolveMessageTargetTokens({
+						maxInputTokens,
+						requestOverheadTokens,
+					}),
+				requestInputTokens,
+				observedRequestTokens,
+			),
+			outputRoomTokens,
+		});
 		const shouldCompact =
 			contextOverflow !== undefined ||
 			triggerInputTokens >= requestTriggerTokens ||
 			polykvPressure ||
-			outputCapStarvedFires;
+			outputCapStarvedFires ||
+			kvPressureCompaction;
 		const diagnostics = {
 			mode: effectiveMode,
 			strategy,
@@ -1140,6 +1175,10 @@ export function createContextCompactionPrepareTurn(
 					: undefined,
 			polykvKvHeadroomPct: polykvCapacity?.kv_headroom_pct,
 			polykvPressure,
+			kvPressureState: kvTurn?.state,
+			kvPressureCompaction,
+			kvWindow: kvTurn?.row?.window,
+			kvFloor: kvTurn?.subject.floor,
 			outputRoomTokens,
 			lastOutputCapTokens: lastCap?.maxTokens,
 			lastOutputCapSource: lastCap?.source,
@@ -1179,6 +1218,13 @@ export function createContextCompactionPrepareTurn(
 			maxInputTokens,
 		});
 		if (effectiveMode === "auto" && !shouldCompact) {
+			// Nothing to compact, and possibly cells to give back: a context
+			// already small in a booking the server is short of.
+			await shrinkForKvPressure(kvTurn, {
+				usageTokens: triggerInputTokens,
+				outputRoomTokens,
+				afterCompaction: false,
+			}).catch(() => undefined);
 			return undefined;
 		}
 		let requestTargetTokens: number;
@@ -1676,6 +1722,13 @@ export function createContextCompactionPrepareTurn(
 				requestInputTokens,
 				observedRequestTokens,
 			);
+			// Between requests, with the transcript just rewritten: the booking
+			// can now shrink to what is left, when the server is short of cells.
+			await shrinkForKvPressure(kvTurn, {
+				usageTokens: scaledAfterRequestTokens,
+				outputRoomTokens,
+				afterCompaction: true,
+			}).catch(() => undefined);
 			config.logger?.log("Context compaction completed", {
 				severity: "info",
 				strategy: executedStrategy,

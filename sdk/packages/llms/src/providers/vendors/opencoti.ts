@@ -20,6 +20,10 @@ import {
 	readOpencotiAgentWindow,
 } from "./opencoti-agent-window";
 import {
+	noteOpencotiRefusalPressure,
+	recordOpencotiWindowFloor,
+} from "./opencoti-kv-pressure";
+import {
 	type KeepaliveRequest,
 	OPENCOTI_BOOT_ID_HEADER,
 	requestStreamKeepalive,
@@ -143,6 +147,13 @@ export interface OpencotiRequestOptions {
 	 * the refusal's `largest_admissible`, when that is at or above the floor.
 	 */
 	numCtxMin?: number;
+	/**
+	 * The floor the session declared, kept apart from {@link numCtxMin}: a
+	 * resume sends its grant as `num_ctx_min`, and the floor it declared is
+	 * then what a pressure resize may shrink it to (`kv_resize_v1`). The
+	 * profile's `contextFloor`; an agent's is measured off the body instead.
+	 */
+	windowFloor?: number;
 	/**
 	 * This session has been granted a window before: every admission from here
 	 * on is "exactly that window, or refuse". A resume never negotiates down
@@ -476,6 +487,18 @@ export function createOpencotiFetch(options: {
 						if (floor !== undefined) {
 							body.num_ctx_min = Math.min(floor, extras.numCtx);
 						}
+						// The floor it declared, for a pressure resize: on a
+						// resume `num_ctx_min` is the grant, not the floor.
+						if (extras.sessionId !== undefined) {
+							recordOpencotiWindowFloor(
+								extras.sessionId,
+								extras.agentWindow
+									? extras.resume === true
+										? agentWindowFloorForBody(body, extras.agentWindow)
+										: floor
+									: extras.windowFloor,
+							);
+						}
 						negotiation = {
 							atomic: features.atomic,
 							resume: extras.resume === true,
@@ -651,6 +674,17 @@ export function createOpencotiFetch(options: {
 					}
 				: undefined;
 		const first = await send(undefined);
+		if (first.status === 429 && options.baseUrl) {
+			// Every admission refusal says how hard the server is refusing
+			// (`kv_pressure_v1`): news for every running agent there.
+			noteOpencotiRefusalPressure(
+				options.baseUrl,
+				await first
+					.clone()
+					.text()
+					.catch(() => ""),
+			);
+		}
 		const outcome =
 			window && body && first.status === 429
 				? await negotiateWindow({
@@ -1414,6 +1448,8 @@ function createWorkerFetch(options: {
 							granted ?? Math.min(agentFloor, wire.num_ctx as number);
 					}
 					unpooledAsk = wire.num_ctx as number;
+					// Its own booking now: the floor a pressure resize keeps.
+					recordOpencotiWindowFloor(options.worker.sessionId, agentFloor);
 				}
 			}
 			const keepalive = (await keepaliveAdvertised(options.baseUrl, base, wire))
@@ -1517,6 +1553,7 @@ function createWorkerFetch(options: {
 				.clone()
 				.text()
 				.catch(() => "");
+			noteOpencotiRefusalPressure(options.baseUrl, text);
 			if (!isWorkerWindowFull(response.status, text)) {
 				reportPolykvRoomWait(options.worker.sessionId, { waiting: false });
 				return observed(response);
@@ -1794,23 +1831,30 @@ function resolveOpencotiWindow(
 	sessionId: string | undefined,
 	settings: PolykvOptions | undefined,
 	configuredWindow: number | undefined,
-): { numCtx?: number; numCtxMin?: number; resume?: boolean } {
+): {
+	numCtx?: number;
+	numCtxMin?: number;
+	resume?: boolean;
+	windowFloor?: number;
+} {
 	if (settings?.dynamicContextSize !== true) {
 		return {};
 	}
+	const floor = settings.contextFloor;
+	const declared = isPositiveInteger(floor) ? { windowFloor: floor } : {};
 	const granted = getPolykvGrantedWindow(sessionId);
 	if (granted !== undefined) {
-		return { numCtx: granted, numCtxMin: granted, resume: true };
+		return { numCtx: granted, numCtxMin: granted, resume: true, ...declared };
 	}
 	if (!isPositiveInteger(configuredWindow)) {
 		return {};
 	}
-	const floor = settings.contextFloor;
 	return {
 		numCtx: configuredWindow,
 		// No floor means no smaller window was declared acceptable, so the ask
 		// is all-or-nothing rather than silently open-ended.
 		...(isPositiveInteger(floor) ? { numCtxMin: floor } : {}),
+		...declared,
 	};
 }
 

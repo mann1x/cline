@@ -864,6 +864,13 @@ export const OPENCOTI_FEATURES = {
 	bootId: "boot_id_v1",
 	/** `opencoti.pool_unknown`: the named pool is not in this process. */
 	poolUnknownInResponse: "pool_unknown_in_response_v1",
+	/**
+	 * `GET /kv` carries `pressure` -- the server's refusals over the last
+	 * `window_s` -- and every admission 429 carries it as `error.pressure`.
+	 */
+	kvPressure: "kv_pressure_v1",
+	/** `POST /kv/sessions/{id}/resize {num_ctx}`: a live booking can shrink and grow. */
+	kvResize: "kv_resize_v1",
 } as const;
 
 export type OpencotiFeature =
@@ -1470,7 +1477,7 @@ async function readJson(
 }
 
 /** `GET /kv`'s `allocations[]`, one row per session holding a window. */
-function parseOpencotiAllocations(
+export function parseOpencotiAllocations(
 	kv: Record<string, unknown> | undefined,
 ): OpencotiAllocation[] {
 	const rawAllocations = Array.isArray(kv?.allocations)

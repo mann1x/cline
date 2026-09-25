@@ -1,3 +1,4 @@
+import { noteOpencotiRefusalPressure } from "./opencoti-kv-pressure";
 import type { OpencotiStreamPhase } from "./opencoti-liveness";
 import {
 	createPolykvClient,
@@ -1120,6 +1121,28 @@ function groupFor(
 	return group;
 }
 
+/**
+ * Owner engine session -> the window it asked for and the floor it accepted.
+ *
+ * What a resize of an owner is bounded by (`kv_resize_v1`): an owner is the
+ * booking its pooled agents live in, so it is the owner that shrinks under
+ * pressure and grows back -- never below the floor it was opened at, never
+ * above the window it asked for. Only owners this module opened are here: the
+ * lead's own session lent to priority-0 agents is the lead's to resize.
+ */
+const OWNER_WINDOW_BOUNDS = new Map<
+	string,
+	{ floor: number; ceiling: number }
+>();
+
+/** The bounds of an owner this process opened, by its engine session id. */
+export function polykvOwnerWindowBounds(
+	ownerSessionId: string,
+): { floor: number; ceiling: number } | undefined {
+	const bounds = OWNER_WINDOW_BOUNDS.get(ownerSessionId);
+	return bounds ? { ...bounds } : undefined;
+}
+
 /** The model's own per-session maximum, which is what an owner asks for. */
 async function sessionContextMax(group: SwarmGroup): Promise<number> {
 	try {
@@ -1193,7 +1216,16 @@ async function openOwner(
 			}),
 			...(signal ? { signal } : {}),
 		});
-		await response.body?.cancel().catch(() => {});
+		if (response.status === 429) {
+			// Every admission refusal says how hard the server is refusing
+			// (`kv_pressure_v1`): news for every running agent there.
+			noteOpencotiRefusalPressure(
+				group.root,
+				await response.text().catch(() => ""),
+			);
+		} else {
+			await response.body?.cancel().catch(() => {});
+		}
 		if (response.ok) {
 			if (polykvRootGeneration(group.root) !== generation) {
 				// The server restarted while this owner was being opened: it
@@ -1208,6 +1240,7 @@ async function openOwner(
 				closed: false,
 			};
 			group.shards.push(shard);
+			OWNER_WINDOW_BOUNDS.set(sessionId, { floor: windowMin, ceiling: window });
 			return shard;
 		}
 		if (response.status !== 429 || !waitForRoom) {
@@ -2187,6 +2220,7 @@ export async function releaseAllPolykvSwarms(): Promise<void> {
 	STARTED_WORKERS.clear();
 	ROOT_STATES.clear();
 	OWNER_SERIALS.clear();
+	OWNER_WINDOW_BOUNDS.clear();
 	LAST_ATTACH.clear();
 	CHARGED_TO.clear();
 	// Shutdown: the lent pools are gone, so the leads can go too.

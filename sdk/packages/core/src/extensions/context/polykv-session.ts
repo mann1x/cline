@@ -10,12 +10,13 @@ import {
 	normalizeProviderId,
 	OPENCOTI_FEATURES,
 	type OpencotiAllocation,
+	type OpencotiKvSnapshot,
 	type PolykvCapacity,
 	type PolykvClient,
 	polykvEffectiveWindow,
 	polykvWorkerChargedTo,
 	probeOpencotiProps,
-	readOpencotiAllocations,
+	readOpencotiKv,
 	releasePolykvLead,
 	setPolykvSession,
 } from "@cline/llms";
@@ -396,10 +397,10 @@ export async function readPolykvCapacity(options: {
 	return value;
 }
 
-/** The last `/kv` allocation per session, bounded like the capacity read. */
+/** The last `/kv` read per session, bounded like the capacity read. */
 const POLYKV_ALLOCATION_CACHE = new Map<
 	string,
-	{ at: number; value: OpencotiAllocation | undefined }
+	{ at: number; value: OpencotiKvSnapshot | undefined }
 >();
 
 /** Forget the cached allocations. Test seam. */
@@ -432,6 +433,41 @@ export async function readPolykvAllocation(options: {
 	providerConfig: PolykvProviderConfig;
 	logger?: BasicLogger;
 }): Promise<OpencotiAllocation | undefined> {
+	const snapshot = await readPolykvKvSnapshot(options);
+	if (!snapshot || !options.sessionId) {
+		return undefined;
+	}
+	// The id the wire carried: `session_id` is sent as `engineSessionId(...)`.
+	const wireId = engineSessionId(options.sessionId);
+	// A worker charged to an owner reads the owner's row first.
+	const owner = options.providerConfig.polykvWorker
+		? polykvWorkerChargedTo(options.sessionId)
+		: undefined;
+	const order = owner && owner !== wireId ? [owner, wireId] : [wireId];
+	for (const id of order) {
+		const row = snapshot.allocations.find((entry) => entry.sessionId === id);
+		if (row) {
+			return row;
+		}
+	}
+	return undefined;
+}
+
+/**
+ * This session's last `GET /kv` read: every allocation row, and the server's
+ * `pressure` where it states one (`kv_pressure_v1`).
+ *
+ * The one read behind both the compaction trigger's row
+ * ({@link readPolykvAllocation}) and the pressure policy (`kv-pressure.ts`),
+ * so a turn asks `/kv` once. Bounded by
+ * {@link POLYKV_CAPACITY_MIN_INTERVAL_MS} per session, and a failed read is
+ * cached too.
+ */
+export async function readPolykvKvSnapshot(options: {
+	sessionId: string | undefined;
+	providerConfig: PolykvProviderConfig;
+	logger?: BasicLogger;
+}): Promise<OpencotiKvSnapshot | undefined> {
 	const config = options.providerConfig;
 	if (
 		!options.sessionId ||
@@ -445,25 +481,9 @@ export async function readPolykvAllocation(options: {
 	if (cached && Date.now() - cached.at < POLYKV_CAPACITY_MIN_INTERVAL_MS) {
 		return cached.value;
 	}
-	// The id the wire carried: `session_id` is sent as `engineSessionId(...)`.
-	const wireId = engineSessionId(options.sessionId);
-	// A worker charged to an owner reads the owner's row first.
-	const owner = config.polykvWorker
-		? polykvWorkerChargedTo(options.sessionId)
-		: undefined;
-	const order = owner && owner !== wireId ? [owner, wireId] : [wireId];
-	let value: OpencotiAllocation | undefined;
+	let value: OpencotiKvSnapshot | undefined;
 	try {
-		const allocations = await readOpencotiAllocations(
-			config.baseUrl,
-			config.fetch,
-		);
-		for (const id of order) {
-			value = allocations?.find((entry) => entry.sessionId === id);
-			if (value) {
-				break;
-			}
-		}
+		value = await readOpencotiKv(config.baseUrl, config.fetch);
 	} catch (error) {
 		options.logger?.debug?.(
 			`[PolyKV] Allocations unavailable: ${

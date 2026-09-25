@@ -195,6 +195,28 @@ export {
 	resolveLlamaCppThinkBudgetWindow,
 } from "./providers/vendors/llamacpp-sampling";
 export {
+	getOpencotiWindowFloor,
+	latestOpencotiPressure,
+	noteOpencotiPressure,
+	noteOpencotiRefusalPressure,
+	OPENCOTI_PRESSURE_CLEAR_MAX_AGE_MS,
+	type OpencotiKvPressure,
+	type OpencotiKvSnapshot,
+	type OpencotiPressureReading,
+	type OpencotiResizeDone,
+	type OpencotiResizeRefused,
+	type OpencotiResizeResult,
+	opencotiPressureState,
+	opencotiResizeRequest,
+	parseOpencotiKvPressure,
+	parseOpencotiRefusalPressure,
+	readOpencotiKv,
+	recordOpencotiWindowFloor,
+	resetOpencotiPressure,
+	resetOpencotiWindowFloors,
+	resizeOpencotiSession,
+} from "./providers/vendors/opencoti-kv-pressure";
+export {
 	describeOpencotiStreamPhase,
 	OPENCOTI_KEEPALIVE_PING_SECONDS,
 	OpencotiServerSilentError,
@@ -280,6 +302,7 @@ export {
 	type PolykvWorkerSpec,
 	polykvLeadLent,
 	polykvLeadReserveCells,
+	polykvOwnerWindowBounds,
 	polykvRoomBackoffMs,
 	polykvRootGeneration,
 	polykvServerIdentity,
@@ -290,6 +313,7 @@ export {
 	releaseAllPolykvSwarms,
 	releasePolykvAgent,
 	rememberOpencotiSession,
+	reportPolykvNotice,
 } from "./providers/vendors/polykv-swarm";
 export { disposeLangfuseTelemetry } from "./services/langfuse-telemetry";
 export {
