@@ -1,6 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpencotiFetch } from "./opencoti";
-import { onPolykvRoomWait, releaseAllPolykvSwarms } from "./polykv-swarm";
+import {
+	onPolykvRoomWait,
+	POLYKV_ROOM_BACKOFF_MAX_MS,
+	polykvRoomBackoffMs,
+	releaseAllPolykvSwarms,
+} from "./polykv-swarm";
 
 /**
  * A stub opencoti that can be restarted.
@@ -14,6 +19,7 @@ function restartableEngine() {
 	let nextPool = 0;
 	let boot = 1;
 	let down = false;
+	let refusals = 0;
 	/** Pool id -> the prompt it holds, for the current boot only. */
 	let pools = new Map<number, string>();
 	const render = (messages: Array<{ role: string; content: unknown }>) =>
@@ -72,6 +78,21 @@ function restartableEngine() {
 		if (/^\/sessions\/[^/]+\/close$/.test(url.pathname)) {
 			return json({ found: true, released: true });
 		}
+		if (url.pathname === "/v1/chat/completions" && body.max_tokens !== 1) {
+			if (body.pool_id !== undefined && refusals > 0) {
+				refusals -= 1;
+				return json(
+					{
+						error: {
+							message:
+								"admission rejected: session allocation full (worker of 'x': 0 of 65536 cells free, needs 75)",
+						},
+					},
+					429,
+					{ "retry-after": "2" },
+				);
+			}
+		}
 		if (url.pathname === "/v1/chat/completions") {
 			const known = typeof body.pool_id === "number" && pools.has(body.pool_id);
 			return new Response(JSON.stringify({ choices: [{ message: {} }] }), {
@@ -91,6 +112,10 @@ function restartableEngine() {
 		calls,
 		fetch: fetchImpl,
 		pools: () => pools,
+		/** Refuse the next `n` worker turns with a full window. */
+		refuseWorkers: (n: number) => {
+			refusals = n;
+		},
 		/** Take the server down; requests are refused until `up()`. */
 		down: () => {
 			down = true;
@@ -201,5 +226,38 @@ describe("a started worker whose server goes away", () => {
 		} finally {
 			stop();
 		}
+	});
+});
+
+/**
+ * 1tmrl: a started worker refused on a later turn waited out a fifteen-minute
+ * deadline and then ended on the refusal. Ruled: there is no deadline.
+ */
+describe("a started worker on a full window", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("waits past the old fifteen-minute deadline instead of ending on the refusal", async () => {
+		const engine = restartableEngine();
+		await send(engine, "slow", agentBody("r", "t"));
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+		engine.refuseWorkers(60);
+		const start = Date.now();
+		const pending = send(engine, "slow", agentBody("r", "t2"));
+		for (let i = 0; i < 80; i += 1) {
+			await vi.advanceTimersByTimeAsync(POLYKV_ROOM_BACKOFF_MAX_MS);
+		}
+		const response = await pending;
+		expect(response.status).toBe(200);
+		expect(Date.now() - start).toBeGreaterThan(15 * 60_000);
+	});
+
+	it("backs off from the engine's figure to thirty seconds, never past it", () => {
+		expect(
+			[1, 2, 3, 4, 5, 6, 7, 8, 30].map((n) => polykvRoomBackoffMs(n, 2_000)),
+		).toEqual([
+			2_000, 2_000, 2_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000,
+		]);
 	});
 });

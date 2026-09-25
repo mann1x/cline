@@ -272,12 +272,27 @@ const SENTINEL = "⁣POLYKV-LAYER-END⁣";
 export const POLYKV_OWNER_MIN_WINDOW = 32_768;
 
 /**
- * How long a worker waits on a full owner before handing the refusal back.
+ * Longest wait between two tries on a full window.
  *
- * Long on purpose: a full window is a queue, not a fault -- it drains as the
- * other agents finish -- and the engine names the wait on every refusal.
+ * There is no overall deadline: a full window is a queue, not a fault -- it
+ * drains as the other agents finish -- and an agent is meant to finish its
+ * job (ruled after 1tmrl). This is the one guard against a tight loop: the
+ * first {@link POLYKV_ROOM_WAITS_AT_NAMED} waits are what the engine names,
+ * and after that the wait doubles on each refusal in a row, up to this.
  */
-export const POLYKV_WORKER_MAX_WAIT_MS = 15 * 60_000;
+export const POLYKV_ROOM_BACKOFF_MAX_MS = 30_000;
+
+/** Waits in a row taken at the engine's own `Retry-After` before backing off. */
+export const POLYKV_ROOM_WAITS_AT_NAMED = 4;
+
+/** The wait before the `waits`th retry on a full window (1-based). */
+export function polykvRoomBackoffMs(waits: number, namedMs: number): number {
+	const doublings = Math.max(0, waits - POLYKV_ROOM_WAITS_AT_NAMED);
+	return Math.min(
+		Math.max(POLYKV_ROOM_BACKOFF_MAX_MS, namedMs),
+		namedMs * 2 ** doublings,
+	);
+}
 
 export function hashString(text: string): string {
 	// cyrb53: a key, not a fingerprint -- a collision costs one shared pool
@@ -405,7 +420,7 @@ async function openOwner(
 		`${group.key.split("\n")[1]}~polykv-owner-${++group.serial}`,
 	);
 	const window = await sessionContextMax(group);
-	const deadline = Date.now() + POLYKV_WORKER_MAX_WAIT_MS;
+	let waits = 0;
 	while (true) {
 		const response = await group.fetch(`${group.root}/v1/chat/completions`, {
 			method: "POST",
@@ -433,10 +448,11 @@ async function openOwner(
 			group.shards.push(shard);
 			return shard;
 		}
-		if (response.status !== 429 || !waitForRoom || Date.now() > deadline) {
+		if (response.status !== 429 || !waitForRoom) {
 			return undefined;
 		}
 		const wait = Number(response.headers.get("retry-after"));
+		waits += 1;
 		for (const agent of group.awaitingOwner) {
 			reportPolykvRoomWait(agent, {
 				waiting: true,
@@ -444,7 +460,13 @@ async function openOwner(
 					"Waiting for room on the server: every cell is booked, so a new window for this swarm cannot open yet.",
 			});
 		}
-		await sleep(Number.isFinite(wait) && wait > 0 ? wait * 1000 : 2000, signal);
+		await sleep(
+			polykvRoomBackoffMs(
+				waits,
+				Number.isFinite(wait) && wait > 0 ? wait * 1000 : 2000,
+			),
+			signal,
+		);
 	}
 }
 

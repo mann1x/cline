@@ -35,6 +35,7 @@ import type {
 import {
 	MAX_NODE_PLACEMENT_ATTEMPTS,
 	NODE_MODEL_MISSING_COOL_OFF_MS,
+	NODE_REFUSED_HOLD_MS,
 } from "./agent-placement-queue";
 import {
 	isGatewayDown,
@@ -52,14 +53,25 @@ import {
 } from "./turn-fault-recovery";
 
 /**
- * How many times one agent may be refused and re-queued.
+ * Longest a node is held after refusing an agent that has not started, when
+ * none of its agents finishes first.
  *
- * A refusal is the engine describing this moment, so it is retried rather
- * than reported -- but not forever: a server that refuses every attempt for
- * ten minutes (at the 5 s hold, and sooner when an agent there finishes) is
- * saying something the agent should report instead of waiting on.
+ * A refusal is never the agent's result, however many there are: ruled after
+ * 1tmrl, where 13 agents were never admitted and became "projected mean tps
+ * below floor" as their final answer. What stops a refused agent from
+ * hammering the node is the hold, which grows from the queue's 5 s with each
+ * refusal in a row to this, and ends early the moment one of the node's own
+ * agents finishes -- the room the refusal was waiting for.
  */
-export const MAX_REFUSED_REQUEUES = 120;
+export const REFUSED_HOLD_MAX_MS = 60_000;
+
+/** The hold after the `refusals`th consecutive refusal (1-based). */
+export function refusedHoldMs(refusals: number): number {
+	return Math.min(
+		REFUSED_HOLD_MAX_MS,
+		NODE_REFUSED_HOLD_MS * 2 ** Math.max(0, refusals - 1),
+	);
+}
 
 const REFUSAL = [
 	/\b429\b/,
@@ -110,10 +122,12 @@ export function isRefusedSpawn(outcome: unknown): boolean {
 		(result.usage?.outputTokens ?? 0) === 0
 	) {
 		const text = String(result.text ?? "");
-		return REFUSAL.some((pattern) => pattern.test(text));
+		return [...REFUSAL, ...DURABLE_REFUSAL].some((pattern) =>
+			pattern.test(text),
+		);
 	}
 	return messageChain(outcome).some((text) =>
-		REFUSAL.some((pattern) => pattern.test(text)),
+		[...REFUSAL, ...DURABLE_REFUSAL].some((pattern) => pattern.test(text)),
 	);
 }
 
@@ -134,8 +148,14 @@ export function refusalReason(outcome: unknown): string {
  * the request — `context allocation exhausted (largest admissible N < peak M)` —
  * and the endpoint is estimated too slow for the concurrency — `projected mean
  * tps below floor`. A 429 or a full window frees when a sibling finishes; these
- * do not, because the request's own size and the endpoint's own speed are what
- * they are. Re-queuing them to the front forever is the livelock this guards.
+ * clear more slowly, as the pool drains or the endpoint's load falls.
+ *
+ * Still never the agent's result (ruled after 1tmrl): they are waited out with
+ * a hold that grows to {@link REFUSED_HOLD_MAX_MS}, so a pool that is not
+ * draining is asked once a minute rather than spun on, and after long enough
+ * the lead is told (see `agent-trouble.ts`) and may take the task back. The
+ * thresholds behind them -- the tps floor, the allocation -- are the user's
+ * settings and are never changed from here.
  */
 const DURABLE_REFUSAL = [
 	/context allocation exhausted/i,
@@ -170,19 +190,6 @@ export function admissionHeadroom(outcome: unknown): number | undefined {
 	const match = /largest admissible\s+(\d+)/i.exec(text ?? "");
 	return match ? Number(match[1]) : undefined;
 }
-
-/**
- * Consecutive durable refusals whose headroom did not grow before a worker
- * stops waiting and reports the refusal instead.
- *
- * Small on purpose. A pool that is going to free space for this request shows
- * it by the admissible figure climbing; one that refuses with the same figure
- * this many times running is not draining, and every extra attempt only starves
- * the siblings that could have. At the queue's ~5 s place hold this is on the
- * order of a minute — long enough to ride out a brief stall, short enough that a
- * genuine deadlock is reported rather than spun on (it spun for twelve hours).
- */
-export const MAX_STALLED_DURABLE_REFUSALS = 8;
 
 /**
  * The attempt never reached a server that could run it: a refused or reset
@@ -255,10 +262,10 @@ export async function runPlacedAgent(
 	let nodeFailures = 0;
 	let transportFailures = 0;
 	let front = false;
-	// Deadlock guard: the best admissible headroom a durable refusal has stated,
-	// and how many durable refusals in a row have failed to beat it.
+	// The best admissible headroom a durable refusal has stated, and how many
+	// refusals in a row have failed to beat it: what the node's hold grows by.
 	let bestHeadroom = -1;
-	let stalledDurable = 0;
+	let stalledRefusals = 0;
 	for (;;) {
 		reportSubagentQueued(input.emitUpdate);
 		const placed = await input.placement.place(
@@ -303,55 +310,42 @@ export async function runPlacedAgent(
 		const failure = "error" in outcome ? outcome.error : outcome.result;
 
 		if (!admitted && !input.signal?.aborted) {
-			if (isRefusedSpawn(failure) && refusals < MAX_REFUSED_REQUEUES) {
-				// Is waiting still worth it? A durable refusal whose stated
-				// headroom is not growing is a pool that will not fit this request
-				// and is not draining; a transient one (a 429, a full window) can
-				// clear on its own and does not count toward the guard.
-				if (isDurableRefusal(failure)) {
-					const headroom = admissionHeadroom(failure);
-					if (headroom !== undefined && headroom > bestHeadroom) {
-						bestHeadroom = headroom;
-						stalledDurable = 0;
-					} else {
-						stalledDurable += 1;
-					}
+			if (isRefusedSpawn(failure)) {
+				// The hold grows while the refusals do not change: a durable
+				// refusal whose stated headroom is climbing is a pool that is
+				// draining, and the next try is worth making sooner.
+				const headroom = isDurableRefusal(failure)
+					? admissionHeadroom(failure)
+					: undefined;
+				if (headroom !== undefined && headroom > bestHeadroom) {
+					bestHeadroom = headroom;
+					stalledRefusals = 1;
 				} else {
-					stalledDurable = 0;
+					stalledRefusals += 1;
 				}
-				if (stalledDurable < MAX_STALLED_DURABLE_REFUSALS) {
-					refusals += 1;
-					placed.refused();
-					input.logger?.log(
-						`[Agents] ${where} refused ${input.label} before starting it; back to the front of the queue (refusal ${refusals})`,
-					);
-					// On the agent's row as well as in the log: a refused agent
-					// otherwise looks exactly like one that is working, and the
-					// only place the engine's reason appeared was a log file.
-					const refusedLine = `${where} refused it (refusal ${refusals} of ${MAX_REFUSED_REQUEUES}): ${refusalReason(failure)}`;
-					input.emitUpdate?.({
-						latestOutput: refusedLine,
-						latestOutputKind: "text",
-						activity: { text: refusedLine, severity: "warn" },
-					});
-					await input.beforeRetry?.().catch(() => undefined);
-					front = true;
-					continue;
-				}
-				// The pool is not draining for this request. Report the refusal to
-				// the lead — which can shrink the round or free the pool — rather
-				// than re-queuing it and starving the siblings that might free
-				// space. Measured before this guard: 126 identical refusals over
-				// twelve hours, "largest admissible 160" never once moving.
-				input.logger?.log(
-					`[Agents] ${where} cannot admit ${input.label}: ${refusalReason(failure)} — reported after ${stalledDurable} refusals with no headroom gained`,
-				);
-				const stalledLine = `${where} could not admit it (${refusalReason(failure)}); the pool is not freeing up — reported instead of waiting`;
-				input.emitUpdate?.({
-					latestOutput: stalledLine,
-					latestOutputKind: "text",
-					activity: { text: stalledLine, severity: "warn" },
+				refusals += 1;
+				const holdMs = refusedHoldMs(stalledRefusals);
+				placed.refused(holdMs);
+				input.onWaiting?.({
+					kind: "refusal",
+					where,
+					detail: refusalReason(failure),
 				});
+				input.logger?.log(
+					`[Agents] ${where} refused ${input.label} before starting it; back to the front of the queue, the node held up to ${Math.round(holdMs / 1000)} s (refusal ${refusals})`,
+				);
+				// On the agent's row as well as in the log: a refused agent
+				// otherwise looks exactly like one that is working, and the
+				// only place the engine's reason appeared was a log file.
+				const refusedLine = `${where} refused it (refusal ${refusals}): ${refusalReason(failure)}; waiting for room, then trying again`;
+				input.emitUpdate?.({
+					latestOutput: refusedLine,
+					latestOutputKind: "text",
+					activity: { text: refusedLine, severity: "warn" },
+				});
+				await input.beforeRetry?.().catch(() => undefined);
+				front = true;
+				continue;
 			}
 			const unreachable = isTransportFailure(outcome);
 			const wasted = "result" in outcome && isWastedNodeRun(outcome.result);

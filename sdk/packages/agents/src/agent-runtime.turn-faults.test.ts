@@ -235,3 +235,56 @@ describe("a turn the server dropped", () => {
 		expect(model.requests).toHaveLength(1);
 	});
 });
+
+/**
+ * 1tmrl: 18 agents were refused on a LATER turn -- "projected mean tps below
+ * floor" -- and ended on it. A refusal is the engine saying "not now".
+ */
+describe("a turn the engine refused after the agent had started", () => {
+	it("is waited out and sent again, as many times as it takes", async () => {
+		const refused = (): AgentModelEvent[] => [
+			{
+				type: "finish",
+				reason: "error",
+				error: "pool 5 admission rejected: projected mean tps below floor",
+			},
+		];
+		const model = new ScriptedModel([
+			() => [
+				{
+					type: "tool-call-delta",
+					toolCallId: "c1",
+					toolName: "echo",
+					inputText: '{"text":"hi"}',
+				},
+				{ type: "finish", reason: "tool-calls" },
+			],
+			...Array.from({ length: 7 }, () => refused),
+			() => finishOk("done"),
+		]);
+		const kinds: string[] = [];
+		const runtime = new AgentRuntime({
+			model,
+			tools: [
+				{
+					name: "echo",
+					description: "echo",
+					inputSchema: { type: "object" },
+					execute: async (input: unknown) => input,
+				},
+			],
+			recoverTurnFault: async (fault) => {
+				kinds.push(`${fault.kind}#${fault.attempt}@${fault.iteration}`);
+				return true;
+			},
+		});
+
+		const result = await runtime.run("go");
+
+		expect(result.status).toBe("completed");
+		expect(result.outputText).toBe("done");
+		expect(kinds).toHaveLength(7);
+		expect(kinds[0]).toBe("refusal#1@2");
+		expect(kinds.at(-1)).toBe("refusal#7@2");
+	});
+});

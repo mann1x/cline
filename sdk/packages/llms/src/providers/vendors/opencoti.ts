@@ -36,9 +36,9 @@ import {
 	isWorkerWindowFull,
 	markPolykvWorkerStarted,
 	movePolykvWorker,
-	POLYKV_WORKER_MAX_WAIT_MS,
 	type PolykvLeadRoom,
 	type PolykvWorkerSpec,
+	polykvRoomBackoffMs,
 	polykvWorkerStarted,
 	preparePolykvWorker,
 	readPolykvLeadRoom,
@@ -1018,7 +1018,11 @@ function createWorkerFetch(options: {
 			}
 			return true;
 		};
-		const deadline = Date.now() + POLYKV_WORKER_MAX_WAIT_MS;
+		// Refusals waited on in a row, for the backoff. No deadline: a full
+		// window is a queue the other agents are draining, and an agent that
+		// has started is meant to finish (ruled after 1tmrl, where a worker
+		// that outwaited fifteen minutes became the refusal it was waiting on).
+		let waits = 0;
 		let fresh = false;
 		// One fresh owner per agent, at most: after that a full window is a
 		// queue to wait in, not a reason to keep opening owners.
@@ -1102,7 +1106,7 @@ function createWorkerFetch(options: {
 				.clone()
 				.text()
 				.catch(() => "");
-			if (!isWorkerWindowFull(response.status, text) || Date.now() > deadline) {
+			if (!isWorkerWindowFull(response.status, text)) {
 				reportPolykvRoomWait(options.worker.sessionId, { waiting: false });
 				return observed(response);
 			}
@@ -1130,10 +1134,14 @@ function createWorkerFetch(options: {
 				reason:
 					"Waiting for room on the server: this swarm's window is full, and it starts when another agent finishes.",
 			});
+			waits += 1;
 			await new Promise<void>((resolve, reject) => {
 				const handle = setTimeout(
 					resolve,
-					Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 2000,
+					polykvRoomBackoffMs(
+						waits,
+						Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 2000,
+					),
 				);
 				signal?.addEventListener(
 					"abort",

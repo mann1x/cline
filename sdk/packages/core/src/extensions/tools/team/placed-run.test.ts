@@ -8,12 +8,15 @@ import {
 	admissionHeadroom,
 	isDurableRefusal,
 	isRefusedSpawn,
-	MAX_STALLED_DURABLE_REFUSALS,
+	REFUSED_HOLD_MAX_MS,
 	runPlacedAgent,
 } from "./placed-run";
 
 /** A placement that hands out the named nodes in turn, recording what it is told. */
-function fakePlacement(nodeIds: string[]) {
+function fakePlacement(
+	nodeIds: string[],
+	holds: Array<number | undefined> = [],
+) {
 	const log: string[] = [];
 	const placeOptions: Array<{ front?: boolean } | undefined> = [];
 	let next = 0;
@@ -31,7 +34,10 @@ function fakePlacement(nodeIds: string[]) {
 				run: async (fn) => await fn(),
 				release: () => log.push(`release ${nodeId}`),
 				admitted: () => log.push(`admitted ${nodeId}`),
-				refused: () => log.push(`refused ${nodeId}`),
+				refused: (holdMs) => {
+					holds.push(holdMs);
+					log.push(`refused ${nodeId}`);
+				},
 				markUnreachable: () => log.push(`unreachable ${nodeId}`),
 			};
 			return placed;
@@ -166,32 +172,61 @@ describe("an agent through the spawn queue", () => {
 		expect(order).toEqual(["attempt 1", "close session", "attempt 2"]);
 	});
 
-	// pandorum 2026-09-23 (Node1): the opencoti pool deadlocked — every worker
-	// holds nothing and waits, so nothing finishes to free the cells the next
-	// one needs. The gate answered 126 agents with "largest admissible 160",
-	// the figure never moving, and each was re-queued to the front. It spun for
-	// twelve hours. A durable refusal whose stated headroom does not grow must
-	// be reported to the lead, not retried forever.
-	it("stops re-queuing a durable refusal whose headroom never grows, and reports it", async () => {
-		const { placement } = fakePlacement(["oc"]);
-		const run = vi.fn(async () => {
-			throw new Error(
-				"admission rejected: context allocation exhausted (largest admissible 160 < peak 70000)",
-			);
+	// pandorum 2026-09-23 (Node1): the opencoti pool deadlocked, and 126
+	// refusals re-queued at a fixed 5 s hold. 1tmrl, 2026-09-25: the guard
+	// that followed turned 13 never-admitted agents' "projected mean tps below
+	// floor" into their final answer. Ruled: a refusal never ends an agent.
+	// What keeps it from spinning is a hold that grows to a minute.
+	it("never ends an agent on a durable refusal, and holds the node longer each time", async () => {
+		const holds: Array<number | undefined> = [];
+		const { placement } = fakePlacement(["oc"], holds);
+		const run = vi.fn();
+		for (let i = 0; i < 30; i += 1) {
+			run.mockImplementationOnce(async () => {
+				throw new Error(
+					"pool 5 admission rejected: projected mean tps below floor",
+				);
+			});
+		}
+		run.mockImplementationOnce(async (_node, admitted: () => void) => {
+			admitted();
+			return ok("done");
 		});
 
-		await expect(
-			runPlacedAgent({ placement, label: "a", run }),
-		).rejects.toThrow("context allocation exhausted");
-		// One climb to 160, then the guard's worth of flat refusals before it
-		// gives up — far short of MAX_REFUSED_REQUEUES.
-		expect(run).toHaveBeenCalledTimes(MAX_STALLED_DURABLE_REFUSALS + 1);
+		const outcome = await runPlacedAgent({ placement, label: "a", run });
+
+		expect(outcome.result.text).toBe("done");
+		expect(run).toHaveBeenCalledTimes(31);
+		expect(holds.slice(0, 5)).toEqual([5_000, 10_000, 20_000, 40_000, 60_000]);
+		expect(Math.max(...(holds as number[]))).toBe(REFUSED_HOLD_MAX_MS);
 	});
 
-	// The other side of the guard: while the admissible figure keeps climbing,
-	// siblings are finishing and space is opening, so waiting is still worth it.
-	it("keeps re-queuing a durable refusal while its admissible headroom is still climbing", async () => {
+	it("never ends an agent on a refusal returned as its result either", async () => {
 		const { placement } = fakePlacement(["oc"]);
+		const run = vi.fn();
+		for (let i = 0; i < 12; i += 1) {
+			run.mockResolvedValueOnce({
+				text: "pool 2 admission rejected: projected mean tps below floor",
+				finishReason: "error",
+				iterations: 1,
+				usage: { inputTokens: 0, outputTokens: 0 },
+			} as AgentResult);
+		}
+		run.mockImplementationOnce(async (_node, admitted: () => void) => {
+			admitted();
+			return ok("done");
+		});
+
+		const outcome = await runPlacedAgent({ placement, label: "a", run });
+
+		expect(outcome.result.text).toBe("done");
+	});
+
+	// While the admissible figure keeps climbing, siblings are finishing and
+	// space is opening, so the next try is worth making soon.
+	it("keeps the hold short while a durable refusal's admissible headroom is climbing", async () => {
+		const holds: Array<number | undefined> = [];
+		const { placement } = fakePlacement(["oc"], holds);
 		const run = vi.fn();
 		for (const admissible of [160, 200, 320]) {
 			run.mockImplementationOnce(async () => {
@@ -209,6 +244,7 @@ describe("an agent through the spawn queue", () => {
 
 		expect(outcome.result.text).toBe("done");
 		expect(run).toHaveBeenCalledTimes(4);
+		expect(holds).toEqual([5_000, 5_000, 5_000]);
 	});
 });
 
