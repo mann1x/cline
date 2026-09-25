@@ -206,9 +206,7 @@ describe("reading the agent window off the provider config", () => {
 			}),
 			agentBody(),
 		);
-		expect(pooled.find((chat) => chat.max_tokens === 1)?.num_ctx).toBe(
-			128_000,
-		);
+		expect(pooled.find((chat) => chat.max_tokens === 1)?.num_ctx).toBe(128_000);
 
 		// The same worker, unpooled.
 		const alone = await sendWith(

@@ -1850,13 +1850,8 @@ async function attachWorker(options: {
 		shard = options.fresh
 			? // An extra owner, if the engine has room for one; otherwise the
 				// agent keeps its place on the owner it has and waits there.
-				((await openShard(
-					group,
-					body,
-					options.signal,
-					false,
-					spec.window,
-				)) ?? (current && !current.closed ? current : undefined))
+				((await openShard(group, body, options.signal, false, spec.window)) ??
+				(current && !current.closed ? current : undefined))
 			: ([...group.shards].reverse().find((candidate) => !candidate.closed) ??
 				(await awaitOwner(group, spec.sessionId, () =>
 					openShard(group, body, options.signal, true, spec.window),

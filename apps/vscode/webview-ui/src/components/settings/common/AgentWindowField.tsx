@@ -52,9 +52,8 @@ export const AgentWindowField = ({
 	// the selection override the same box writes. The model info's figure is
 	// not used: on a node tab it is the safe default, not what the host
 	// resolves, and a floor shown against it would be a number nobody books.
-	const window =
-		positive(config?.contextWindow) ??
-		positive((config as { selectedModelOverrides?: { contextWindow?: unknown } } | undefined)?.selectedModelOverrides?.contextWindow)
+	const overrides = (config as { selectedModelOverrides?: { contextWindow?: unknown } } | undefined)?.selectedModelOverrides
+	const window = positive(config?.contextWindow) ?? positive(overrides?.contextWindow)
 	const minimum = useContextMinimum(providerId, window)
 	if (config === undefined) {
 		return null
