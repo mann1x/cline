@@ -1111,3 +1111,43 @@ describe("a teammate's temperature and seed", () => {
 		expect(options?.sampling).toEqual({ temperature: 0.3, seed: 2 });
 	});
 });
+
+/**
+ * A teammate runs in an engine session of its own, as a `spawn_agent` agent
+ * does. With none it fell back to the LEAD's: its requests went out as the
+ * lead's engine session and its compaction read and re-rooted the lead's.
+ */
+describe("a teammate's engine session", () => {
+	const lead = { agentId: "lead", conversationId: "conv-1", iteration: 1 };
+
+	it("is its own, under the lead's, and reaches its compaction", async () => {
+		const runtime = new AgentTeamsRuntime({ teamName: "test-team" });
+		const spawnSpy = vi.spyOn(runtime, "spawnTeammate");
+		const targets: Array<{ engineSessionId?: string }> = [];
+		const tools = createAgentTeamsTools({
+			runtime,
+			requesterId: "lead",
+			teammateConfigProvider: makeTeammateConfigProvider({
+				sessionId: "lead-session",
+				createPrepareTurn: (target) => {
+					targets.push(target ?? {});
+					return undefined;
+				},
+			}),
+		});
+		const spawn = tools.find((tool) => tool.name === "team_spawn_teammate");
+		await spawn?.execute({ agentId: "w1", rolePrompt: "Write" }, lead);
+		await spawn?.execute({ agentId: "w2", rolePrompt: "Review" }, lead);
+
+		const first = spawnSpy.mock.calls[0]?.[0]?.config.engineSessionId;
+		const second = spawnSpy.mock.calls[1]?.[0]?.config.engineSessionId;
+		expect(first).toMatch(/^lead-session~teammate-w1/);
+		expect(second).toMatch(/^lead-session~teammate-w2/);
+		expect(first).not.toBe(second);
+		// The compaction pipeline is built in the same session's name.
+		expect(targets.map((target) => target.engineSessionId)).toEqual([
+			first,
+			second,
+		]);
+	});
+});

@@ -4,6 +4,7 @@
  * Utilities for orchestrating multiple agents working together.
  */
 
+import { releasePolykvAgent } from "@cline/llms";
 import {
 	type AgentConfig,
 	type AgentEvent,
@@ -563,6 +564,8 @@ interface TeamMemberState extends TeamMemberSnapshot {
 	lastMissionStep: number;
 	lastMissionAt: number;
 	pendingSteerMessage?: string;
+	/** The teammate's own engine session, given back when it is released. */
+	engineSessionId?: string;
 }
 
 export class AgentTeamsRuntime {
@@ -910,6 +913,12 @@ export class AgentTeamsRuntime {
 		sampling,
 	}: SpawnTeammateOptions): TeamMemberSnapshot {
 		this.assertCanSpawnTeammate(agentId);
+		// An idle teammate replaced under the same id: its engine session goes
+		// with it (a stopped one has already given its back).
+		const replaced = this.members.get(agentId);
+		if (replaced && replaced.engineSessionId !== config.engineSessionId) {
+			this.releaseEngineSession(replaced);
+		}
 
 		const wrappedConfig: TeamMemberConfig = {
 			...config,
@@ -943,6 +952,9 @@ export class AgentTeamsRuntime {
 			runningCount: 0,
 			lastMissionStep: 0,
 			lastMissionAt: Date.now(),
+			...(config.engineSessionId
+				? { engineSessionId: config.engineSessionId }
+				: {}),
 		};
 		this.members.set(agentId, teammate);
 		this.emitEvent({
@@ -988,12 +1000,27 @@ export class AgentTeamsRuntime {
 		// (`routeToTeammate`), not now: its tools may still be writing.
 		if (member.runningCount <= 0) {
 			this.releaseWorkspace(agentId);
+			this.releaseEngineSession(member);
 		}
 		this.emitEvent({ type: TeamMessageType.TeammateShutdown, agentId, reason });
 	}
 
 	private releaseWorkspace(agentId: string): void {
 		void this.teammateWorkspaces?.release(agentId).catch(() => {});
+	}
+
+	/**
+	 * Give the teammate's engine session back: its window, its slot affinity,
+	 * any pool it holds. Once -- the id is dropped from the member -- and never
+	 * waited on: this runs on shutdown paths that must not block.
+	 */
+	private releaseEngineSession(member: TeamMemberState): void {
+		const engineSessionId = member.engineSessionId;
+		if (!engineSessionId) {
+			return;
+		}
+		member.engineSessionId = undefined;
+		void releasePolykvAgent(engineSessionId).catch(() => undefined);
 	}
 
 	/**
@@ -1210,6 +1237,7 @@ export class AgentTeamsRuntime {
 			) {
 				// Shut down while this run was in flight: its release waited for it.
 				this.releaseWorkspace(agentId);
+				this.releaseEngineSession(member);
 			}
 		}
 	}
@@ -1837,6 +1865,7 @@ export class AgentTeamsRuntime {
 			if (member.role === "teammate") {
 				this.members.delete(memberId);
 				this.releaseWorkspace(memberId);
+				this.releaseEngineSession(member);
 			}
 		}
 	}

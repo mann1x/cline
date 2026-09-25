@@ -284,6 +284,7 @@ export {
 	polykvRootGeneration,
 	polykvServerIdentity,
 	polykvSwarmState,
+	polykvWorkerChargedTo,
 	preparePolykvWorker,
 	readPolykvLeadRoom,
 	releaseAllPolykvSwarms,

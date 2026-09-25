@@ -13,6 +13,7 @@ import {
 	type PolykvCapacity,
 	type PolykvClient,
 	polykvEffectiveWindow,
+	polykvWorkerChargedTo,
 	probeOpencotiProps,
 	readOpencotiAllocations,
 	releasePolykvLead,
@@ -415,6 +416,14 @@ export function clearPolykvAllocationCache(): void {
  * a session can book a window with pooling off -- so it is asked for on its
  * own, and only where the server offers the route (`kv_status_v1`).
  *
+ * **A delegated agent reads the booking it lives in.** A worker whose turns
+ * are pooled books nothing -- the engine charges its suffix to the owner the
+ * swarm assigned it (the lead's own session on priority 0) -- so the owner's
+ * row is its pressure. A worker whose last turn went out unpooled runs as a
+ * session of its own, and its own row is. Each falls back to the other when
+ * its row is not listed. Turning every worker away here, as this once did,
+ * left no delegated agent on a PolyKV node able to compact on engine pressure.
+ *
  * Bounded by {@link POLYKV_CAPACITY_MIN_INTERVAL_MS}, the same manners as the
  * capacity read, and a failed read is cached too.
  */
@@ -428,8 +437,7 @@ export async function readPolykvAllocation(options: {
 		!options.sessionId ||
 		!config.baseUrl ||
 		config.providerId === undefined ||
-		normalizeProviderId(config.providerId) !== "opencoti" ||
-		config.polykvWorker
+		normalizeProviderId(config.providerId) !== "opencoti"
 	) {
 		return undefined;
 	}
@@ -439,13 +447,23 @@ export async function readPolykvAllocation(options: {
 	}
 	// The id the wire carried: `session_id` is sent as `engineSessionId(...)`.
 	const wireId = engineSessionId(options.sessionId);
+	// A worker charged to an owner reads the owner's row first.
+	const owner = config.polykvWorker
+		? polykvWorkerChargedTo(options.sessionId)
+		: undefined;
+	const order = owner && owner !== wireId ? [owner, wireId] : [wireId];
 	let value: OpencotiAllocation | undefined;
 	try {
 		const allocations = await readOpencotiAllocations(
 			config.baseUrl,
 			config.fetch,
 		);
-		value = allocations?.find((entry) => entry.sessionId === wireId);
+		for (const id of order) {
+			value = allocations?.find((entry) => entry.sessionId === id);
+			if (value) {
+				break;
+			}
+		}
 	} catch (error) {
 		options.logger?.debug?.(
 			`[PolyKV] Allocations unavailable: ${
@@ -562,6 +580,13 @@ export async function repointPolykvAfterCompaction(options: {
 	if (state.layout === "lead") {
 		return undefined;
 	}
+	// A pool this session only attaches to -- a swarm worker on the lead's
+	// snapshot. Re-rooting would fork it at 0 and then unpin and release
+	// `previous`: the lead's pool, with the rest of the round on it. The
+	// worker stays attached, which is the safe side, as for a failed re-root.
+	if (state.layout === "borrowed") {
+		return undefined;
+	}
 	const client = clientFor(options.providerConfig);
 	if (!client) {
 		return undefined;
@@ -652,7 +677,8 @@ export async function releasePolykvSession(options: {
 	if (!client) {
 		return;
 	}
-	if (state && state.layout !== "lead") {
+	// Neither a lead-tree pool nor a borrowed one is this session's to release.
+	if (state && state.layout !== "lead" && state.layout !== "borrowed") {
 		try {
 			await client.unpin(state.poolId);
 			await client.releasePool(state.poolId);

@@ -344,17 +344,26 @@ function spawnTeamTeammate(
 	);
 	// The lead's sampler, from the spawn call or from the spec a restore reads.
 	const sampling = readSpawnSampling(options.spec);
+	// Its own engine session, as a `spawn_agent` agent has. Without one the
+	// handler fell back to the conversation's id: every teammate request went
+	// out as the LEAD's engine session, and its compaction read and re-rooted
+	// the lead's. Unique per spawn, so a respawn under the same agent id never
+	// lands on a session whose close is still in flight. Released by the team
+	// runtime when the teammate is shut down.
+	const runtimeConfig = options.teammateConfigProvider.getRuntimeConfig();
+	const engineSessionId = `${runtimeConfig.sessionId ?? "cerebriline"}~teammate-${options.spec.agentId}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 	options.runtime.spawnTeammate({
 		agentId: options.spec.agentId,
 		...(sampling ? { sampling } : {}),
 		config: buildDelegatedAgentConfig({
 			kind: "teammate",
+			engineSessionId,
 			prompt: options.spec.rolePrompt,
 			role: options.spec.rolePrompt,
 			configProvider: options.teammateConfigProvider,
 			tools: teammateTools,
 			maxIterations: options.spec.maxIterations,
-			cwd: options.teammateConfigProvider.getRuntimeConfig().cwd,
+			cwd: runtimeConfig.cwd,
 			...(sampling ? { sampling } : {}),
 		}),
 	});

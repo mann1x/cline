@@ -2,9 +2,9 @@ import {
 	getPolykvGrantedWindow,
 	getPolykvSession,
 	preparePolykvWorker,
+	recordPolykvGrantedWindow,
 	releaseAllPolykvSwarms,
 	releasePolykvAgent,
-	recordPolykvGrantedWindow,
 	resetPolykvAvailability,
 	resetPolykvSessions,
 	setPolykvSession,
@@ -468,6 +468,35 @@ describe("what the engine says about its own room", () => {
 });
 
 describe("re-rooting after a compaction", () => {
+	// A swarm worker attached to the lead's snapshot: the pool is the lead's,
+	// and every other worker of the round is on it.
+	it("never forks or releases a pool the session only borrows", async () => {
+		const server = engine({ features: ["session_close_v1"] });
+		const config = provider(server.fetch);
+		setPolykvSession("lead~worker", {
+			poolId: "lead-pool",
+			prefixTokens: 0,
+			layout: "borrowed",
+		});
+
+		const forked = await repointPolykvAfterCompaction({
+			sessionId: "lead~worker",
+			providerConfig: config,
+			compactedPrompt: "the summary",
+		});
+		expect(forked).toBeUndefined();
+		expect(getPolykvSession("lead~worker")?.poolId).toBe("lead-pool");
+
+		await releasePolykvSession({
+			sessionId: "lead~worker",
+			providerConfig: config,
+		});
+		const paths = server.calls.map((c) => `${c.method} ${c.path}`);
+		expect(paths.filter((p) => p.includes("lead-pool"))).toEqual([]);
+		// Its own session is still closed: that window is the worker's.
+		expect(paths).toContain("POST /sessions/lead~worker/close");
+	});
+
 	it("forks at the shared prefix, migrates, then releases the old pool", async () => {
 		const server = engine();
 		const config = provider(server.fetch);
@@ -1143,6 +1172,92 @@ describe("the pressure that decides a compaction", () => {
 			});
 		}
 		expect(stub.calls.filter((call) => call.path === "/kv")).toHaveLength(1);
+	});
+});
+
+/**
+ * A delegated agent on a PolyKV node reads the `/kv` row of the booking it
+ * actually lives in: the owner it is charged to when its turns are pooled,
+ * its own session's row when they are not. It read none: every worker was
+ * turned away before the read.
+ */
+describe("a delegated agent's pressure", () => {
+	const workerConfig = (fetchImpl: typeof fetch, owner?: string) => ({
+		...provider(fetchImpl),
+		polykvWorker: {
+			group: "s1",
+			layers: 0,
+			...(owner ? { owner } : {}),
+			attachOnly: true,
+		},
+	});
+
+	it("reads the owner's row for a worker charged to it", async () => {
+		const server = engine({
+			features: ["kv_status_v1"],
+			allocations: [
+				{ session_id: "s1", window: 131_072, used: 118_000, pressure: 0.9 },
+				{ session_id: "s1~agent-1", window: 4_096, used: 40, pressure: 0.01 },
+			],
+		});
+		// The layer must be a prefix of the request's rendering to be pooled:
+		// render what was sent rather than one fixed prompt.
+		const rendering = (async (input: unknown, init?: RequestInit) => {
+			if (new URL(String(input)).pathname === "/apply-template") {
+				const body = JSON.parse(String(init?.body)) as {
+					messages: Array<{ role: string; content: string }>;
+				};
+				return Response.json({
+					prompt: body.messages
+						.map((m) => `<|${m.role}|>${m.content}<|end|>`)
+						.join(""),
+				});
+			}
+			return server.fetch(input as never, init);
+		}) as unknown as typeof fetch;
+		try {
+			const attach = await preparePolykvWorker({
+				spec: { group: "s1", sessionId: "s1/agent-1", layers: 0, owner: "s1" },
+				baseUrl: "http://localhost:8080/v1",
+				fetch: rendering,
+				body: {
+					messages: [
+						{ role: "system", content: "s" },
+						{ role: "user", content: "t" },
+					],
+				},
+			});
+			expect(attach.poolId).toBeDefined();
+			const row = await readPolykvAllocation({
+				sessionId: "s1/agent-1",
+				providerConfig: workerConfig(server.fetch, "s1"),
+			});
+			expect(row?.sessionId).toBe("s1");
+			expect(polykvSaysCompact(undefined, 0.85, row)).toBe(true);
+		} finally {
+			await releaseAllPolykvSwarms();
+		}
+	});
+
+	it("reads its own row for a worker whose turns go out unpooled", async () => {
+		const server = engine({
+			features: ["kv_status_v1"],
+			allocations: [
+				{ session_id: "s1", window: 131_072, used: 1_000, pressure: 0.01 },
+				{
+					session_id: "s1~agent-2",
+					window: 65_536,
+					used: 60_000,
+					pressure: 0.92,
+				},
+			],
+		});
+		const row = await readPolykvAllocation({
+			sessionId: "s1/agent-2",
+			providerConfig: workerConfig(server.fetch),
+		});
+		expect(row?.sessionId).toBe("s1~agent-2");
+		expect(row?.pressure).toBe(0.92);
 	});
 });
 

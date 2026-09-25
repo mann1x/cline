@@ -502,8 +502,13 @@ export interface PolykvSessionState {
 	 * tree (`polykv-lead.ts`) -- a shared root, or the conversation's own
 	 * sub-pool of it. Not this session's to re-root or release by id: the root
 	 * is every session's, and the lead tree releases what it made.
+	 *
+	 * `"borrowed"`: someone else's pool this session only attaches to -- a
+	 * swarm worker on the lead's snapshot or borrowed root. Its to read, never
+	 * its to re-root, unpin or release: that pool is the lead's, and every
+	 * other worker of the round is attached to it.
 	 */
-	layout?: "lead";
+	layout?: "lead" | "borrowed";
 }
 
 const POLYKV_SESSIONS = new Map<string, PolykvSessionState>();

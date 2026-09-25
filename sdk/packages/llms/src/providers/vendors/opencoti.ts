@@ -1405,6 +1405,19 @@ function createWorkerFetch(options: {
 				if (response.ok) {
 					ranOnce = true;
 					markPolykvWorkerStarted(options.worker.sessionId);
+					// The window this agent actually fills: its owner's when the
+					// turn was pooled, its own session's when it went out alone.
+					// A worker asks for none (`num_ctx` is deleted above), so the
+					// lead's grant path never runs for it -- and without this its
+					// compaction sized against the node's static window, 256k,
+					// while the booking it lived in held a fraction of that (§9:
+					// compaction runs against the granted window).
+					noteWindowGrant(
+						options.worker.sessionId,
+						numberOrUndefined(response.headers.get("x-context-window")),
+						undefined,
+						undefined,
+					);
 					const windowless =
 						attach.poolId !== undefined &&
 						!response.headers.has("x-context-window");

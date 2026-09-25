@@ -625,6 +625,10 @@ export function createSessionSwarmTool(
 				setPolykvSession(workerSessionId, {
 					poolId: request.poolId,
 					prefixTokens: 0,
+					// The lead's, not the worker's: a compaction inside the
+					// worker must not fork it at 0 and release it from under
+					// the lead and the rest of the round.
+					layout: "borrowed",
 				});
 			}
 			// A headless worker gets the struggle layer the lead has always had,

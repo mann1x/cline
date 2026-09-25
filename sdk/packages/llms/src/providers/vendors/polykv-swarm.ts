@@ -200,6 +200,34 @@ export function polykvWorkerStarted(sessionId: string): boolean {
 	return STARTED_WORKERS.has(engineSessionId(sessionId));
 }
 
+/**
+ * Agent engine session -> the owner (engine id) its last resolved attach was
+ * charged to. Absent: its last turn went out unpooled, as a session of its own.
+ */
+const CHARGED_TO = new Map<string, string>();
+
+/**
+ * The owner session whose `/kv` row this agent's usage lands in, or
+ * `undefined` when its last turn was unpooled (its own row is then the one).
+ *
+ * A worker attached to an owned pool books nothing: the engine charges its
+ * private suffix to the owner, so the owner's row is the booking the agent
+ * lives in -- and the one its compaction trigger has to read. Without it the
+ * trigger read no row at all for any delegated agent on a PolyKV node.
+ */
+export function polykvWorkerChargedTo(sessionId: string): string | undefined {
+	return CHARGED_TO.get(engineSessionId(sessionId));
+}
+
+function noteChargedTo(sessionId: string, attach: PolykvWorkerAttach): void {
+	const key = engineSessionId(sessionId);
+	if (attach.poolId !== undefined && attach.ownerSessionId !== undefined) {
+		CHARGED_TO.set(key, attach.ownerSessionId);
+	} else {
+		CHARGED_TO.delete(key);
+	}
+}
+
 export interface PolykvWorkerAttach {
 	poolId?: string;
 	sessionId: string;
@@ -217,6 +245,11 @@ export interface PolykvWorkerAttach {
 	 * `pool=none`.
 	 */
 	reason?: string;
+	/**
+	 * The owner session (engine id) whose window this attach is charged to:
+	 * set exactly when `poolId` is. See {@link polykvWorkerChargedTo}.
+	 */
+	ownerSessionId?: string;
 }
 
 /** What the server said a pool was when it made it, to know it again. */
@@ -1722,14 +1755,17 @@ export async function preparePolykvWorker(options: {
 		const generation = polykvRootGeneration(root);
 		const attach = await attachWorker(options);
 		if (polykvRootGeneration(root) === generation) {
+			noteChargedTo(options.spec.sessionId, attach);
 			return attach.poolId === undefined ? attach : { ...attach, generation };
 		}
 	}
-	return {
+	const unpooled: PolykvWorkerAttach = {
 		sessionId: engineSessionId(options.spec.sessionId),
 		reason:
 			"the server's generation moved on three times while this request resolved its pool",
 	};
+	noteChargedTo(options.spec.sessionId, unpooled);
+	return unpooled;
 }
 
 async function attachWorker(options: {
@@ -1757,7 +1793,7 @@ async function attachWorker(options: {
 		for (const pending of shard.pools.values()) {
 			const poolId = await pending;
 			if (poolId !== undefined) {
-				return { poolId, sessionId };
+				return { poolId, sessionId, ownerSessionId: shard.sessionId };
 			}
 		}
 		return unpooled("this agent's owner holds no pool yet");
@@ -1839,6 +1875,7 @@ async function attachWorker(options: {
 	return {
 		poolId: chain.poolId,
 		sessionId,
+		ownerSessionId: shard.sessionId,
 		...(chain.reason
 			? {
 					reason: `attached ${chain.keys.length} of ${spec.layers + 1} layers on owner ${shard.sessionId}: ${chain.reason}`,
@@ -1957,6 +1994,7 @@ export async function releasePolykvAgent(
 	ROOM_WAITING.delete(engineSessionId(sessionId));
 	STARTED_WORKERS.delete(engineSessionId(sessionId));
 	LAST_ATTACH.delete(engineSessionId(sessionId));
+	CHARGED_TO.delete(engineSessionId(sessionId));
 	const known = OPENCOTI_SESSIONS.get(sessionId);
 	OPENCOTI_SESSIONS.delete(sessionId);
 	const result: PolykvReleaseResult = { closed: [], failed: [] };
@@ -2121,6 +2159,7 @@ export async function releaseAllPolykvSwarms(): Promise<void> {
 	ROOT_STATES.clear();
 	OWNER_SERIALS.clear();
 	LAST_ATTACH.clear();
+	CHARGED_TO.clear();
 	// Shutdown: the lent pools are gone, so the leads can go too.
 	for (const sessionId of [...DEFERRED_LEAD_CLOSES.keys()]) {
 		closes.push(runDeferredLeadClose(sessionId));
