@@ -39,6 +39,7 @@ import {
 } from "./polykv-lead";
 import {
 	engineSessionId,
+	invalidatePolykvRoot,
 	isWorkerWindowFull,
 	markPolykvWorkerStarted,
 	movePolykvWorker,
@@ -222,6 +223,12 @@ export interface OpencotiResponseFacts {
 	poolMatchTokens?: number;
 	poolLengthTokens?: number;
 	/**
+	 * The named pool does not exist in the process that answered
+	 * (`pool_unknown_in_response_v1`): the turn ran, reprocessed in full --
+	 * never refused -- and the id this side holds is stale.
+	 */
+	poolUnknown?: boolean;
+	/**
 	 * The window the server granted, from `X-Context-Window`.
 	 *
 	 * **Absent is not "unchanged".** The header rides every admitted response
@@ -262,6 +269,7 @@ function readAttachFacts(block: unknown): OpencotiResponseFacts {
 	const match = count(source.pool_match);
 	const length = count(source.pool_len);
 	return {
+		...(source.pool_unknown === true ? { poolUnknown: true } : {}),
 		...(match !== undefined ? { poolMatchTokens: match } : {}),
 		...(length !== undefined ? { poolLengthTokens: length } : {}),
 		// `-1` is the engine's "no pool", not pool minus one.
@@ -508,7 +516,12 @@ export function createOpencotiFetch(options: {
 			}
 			nextInit = { ...init, body: JSON.stringify(body) };
 		}
+		/** The root's generation when the last attempt went out. */
+		let sentGeneration: number | undefined;
 		const sendWire = async (wire: Record<string, unknown> | undefined) => {
+			if (options.baseUrl) {
+				sentGeneration = polykvRootGeneration(options.baseUrl);
+			}
 			const response = await base(input, {
 				...nextInit,
 				...(wire ? { body: JSON.stringify(wire) } : {}),
@@ -643,8 +656,16 @@ export function createOpencotiFetch(options: {
 				sharedAboveBudget,
 			);
 		}
-		const onFacts = noticeDivergence(sessionId, options.onFacts);
-		return sessionId !== undefined || options.onFacts
+		const onFacts = noticePoolUnknown(
+			options.baseUrl,
+			sessionId,
+			() => sentGeneration,
+			options.log,
+			noticeDivergence(sessionId, options.onFacts),
+		);
+		return sessionId !== undefined ||
+			options.onFacts ||
+			(options.baseUrl && typeof body?.pool_id === "number")
 			? observeResponseFacts(response, (facts) =>
 					onFacts(
 						outcome.asked !== undefined && facts.contextWindow !== undefined
@@ -927,6 +948,56 @@ function noticeDivergence(
 }
 
 /**
+ * `onFacts`, with `opencoti.pool_unknown` acted on: the pool this turn named
+ * does not exist in the process that answered, so every id held for the root
+ * is suspect -- a restart renumbers pools from 0 -- and its generation ends
+ * now; the next turn rebuilds.
+ *
+ * Info, not warn, on the row and in the log: the server served the turn (a
+ * full reprocess, never a refusal) and the rebuild recovers it. Skipped when
+ * the generation already moved after the turn went out -- the boot id on the
+ * same response, most likely -- so one restart is one rebuild.
+ */
+function noticePoolUnknown(
+	baseUrl: string | undefined,
+	sessionId: string | undefined,
+	sentGeneration: () => number | undefined,
+	log: OpencotiLog | undefined,
+	onFacts: (facts: OpencotiResponseFacts) => void,
+): (facts: OpencotiResponseFacts) => void {
+	return (facts) => {
+		const generation = sentGeneration();
+		if (
+			facts.poolUnknown &&
+			baseUrl &&
+			generation !== undefined &&
+			polykvRootGeneration(baseUrl) === generation
+		) {
+			const pool =
+				facts.poolId !== undefined ? `pool ${facts.poolId}` : "its pool";
+			const told = invalidatePolykvRoot(baseUrl, `${pool} is unknown to it`, {
+				severity: "info",
+				text: `The server does not hold ${pool} any more (pool_unknown): this turn was prefilled in full, and the shared pools are rebuilt on the next turn.`,
+			}).map(engineSessionId);
+			if (
+				sessionId !== undefined &&
+				!told.includes(engineSessionId(sessionId))
+			) {
+				reportPolykvNotice(sessionId, {
+					severity: "info",
+					text: `The server did not know ${pool}: this turn was prefilled in full, and the pool is rebuilt on the next turn.`,
+				});
+			}
+			log?.(
+				`[opencoti] ${polykvRoot(baseUrl)} does not hold ${pool} (pool_unknown): the turn was reprocessed in full; its pools are rebuilt on the next turn`,
+				"info",
+			);
+		}
+		onFacts(facts);
+	};
+}
+
+/**
  * Hand what the response says about the turn to `onFacts`, and return a
  * response the caller can still read whole.
  *
@@ -1071,10 +1142,18 @@ function createWorkerFetch(options: {
 	log?: OpencotiLog;
 }): typeof fetch {
 	const base = options.fetch ?? fetch;
+	/** The root's generation when the turn now in hand went out. */
+	let sentGeneration: number | undefined;
 	const observed = (response: Response) =>
 		observeResponseFacts(
 			response,
-			noticeDivergence(options.worker.sessionId, options.onFacts),
+			noticePoolUnknown(
+				options.baseUrl,
+				options.worker.sessionId,
+				() => sentGeneration,
+				options.log,
+				noticeDivergence(options.worker.sessionId, options.onFacts),
+			),
 		);
 	let ranOnce = false;
 	// The lead's session, lent to this agent (priority 0). A summary call is
@@ -1212,6 +1291,7 @@ function createWorkerFetch(options: {
 				return leadReserveRefusal(lent, undefined);
 			}
 			let response: Response;
+			sentGeneration = polykvRootGeneration(options.baseUrl);
 			try {
 				response = await base(input, {
 					...init,

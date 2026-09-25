@@ -531,7 +531,7 @@ export function invalidatePolykvRoot(
 		/** The notice's text, when "restarted" is not what happened. */
 		text?: string;
 	} = {},
-): void {
+): string[] {
 	const root = polykvRoot(baseUrl);
 	const state = rootState(root);
 	state.generation += 1;
@@ -559,6 +559,8 @@ export function invalidatePolykvRoot(
 				`The server at ${root} restarted (${reason}): this agent's shared pools are rebuilt under a new owner on its next turn.`,
 		});
 	}
+	// Who was told, so a caller with news for one more does not tell twice.
+	return agents;
 }
 
 /** `boot_id` as `/props` or `/health` states it, top level or under `opencoti`. */

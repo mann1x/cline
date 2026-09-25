@@ -772,3 +772,55 @@ describe("the boot id on the lead's responses", () => {
 		expect(logged[0]?.[0]).toContain("bbbbbbbbbbbbbbbb");
 	});
 });
+
+describe("pool_unknown on the lead's response", () => {
+	afterEach(async () => {
+		await releaseAllPolykvSwarms();
+	});
+
+	function leadTurn(unknown: boolean, root: string) {
+		const engine = server(
+			[],
+			() =>
+				new Response(
+					JSON.stringify({
+						choices: [],
+						opencoti: { pool_id: 3, pool_match: -1, pool_unknown: unknown },
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				),
+		);
+		const logged: Array<[string, string]> = [];
+		const run = () =>
+			createOpencotiFetch({
+				fetch: engine.fetch,
+				baseUrl: `${root}/v1`,
+				request: { poolId: "3", sessionId: "lead-u" },
+				log: (message, severity) => logged.push([message, severity]),
+			})(`${root}/v1/chat/completions`, {
+				method: "POST",
+				body: JSON.stringify({ model: "m", messages: [] }),
+			});
+		return { run, logged };
+	}
+
+	it("ends the root's generation and logs it at info", async () => {
+		const root = "http://lead-unknown";
+		const generation = polykvRootGeneration(`${root}/v1`);
+		const probe = leadTurn(true, root);
+		await probe.run();
+		expect(polykvRootGeneration(`${root}/v1`)).toBe(generation + 1);
+		expect(probe.logged).toEqual([
+			[expect.stringContaining("pool 3 (pool_unknown)"), "info"],
+		]);
+	});
+
+	it("does nothing when the pool was there", async () => {
+		const root = "http://lead-known";
+		const generation = polykvRootGeneration(`${root}/v1`);
+		const probe = leadTurn(false, root);
+		await probe.run();
+		expect(polykvRootGeneration(`${root}/v1`)).toBe(generation);
+		expect(probe.logged).toEqual([]);
+	});
+});

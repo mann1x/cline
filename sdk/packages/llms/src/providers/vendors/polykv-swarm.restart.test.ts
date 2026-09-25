@@ -3,6 +3,7 @@ import { createOpencotiFetch } from "./opencoti";
 import { resetPolykvAvailability } from "./polykv";
 import {
 	invalidatePolykvRoot,
+	onPolykvNotice,
 	onPolykvRoomWait,
 	POLYKV_ROOM_BACKOFF_MAX_MS,
 	POLYKV_VERIFY_INTERVAL_MS,
@@ -27,6 +28,8 @@ function restartableEngine(
 		features?: string[];
 		/** `X-OpenCoti-Boot-Id` on every completion (`boot_id_v1`). */
 		bootHeader?: boolean;
+		/** The `opencoti` block with `pool_unknown` (`pool_unknown_in_response_v1`). */
+		poolUnknown?: boolean;
 	} = {},
 ) {
 	const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
@@ -145,19 +148,34 @@ function restartableEngine(
 			if (typeof body.pool_id === "number" && !known) {
 				unknownPoolSends.push(body.pool_id);
 			}
-			return new Response(JSON.stringify({ choices: [{ message: {} }] }), {
-				status: 200,
-				headers: {
-					"content-type": "application/json",
-					// Every opencoti turn attached to a live pool names its window.
-					...(known || body.pool_id === undefined
-						? { "x-context-window": "65536" }
+			return new Response(
+				JSON.stringify({
+					choices: [{ message: {} }],
+					// Only when the request named a pool (the T12 rule).
+					...(options.poolUnknown && typeof body.pool_id === "number"
+						? {
+								opencoti: {
+									pool_id: body.pool_id,
+									pool_match: known ? 0 : -1,
+									pool_unknown: !known,
+								},
+							}
 						: {}),
-					...(options.bootHeader
-						? { "x-opencoti-boot-id": `b-${bootId}` }
-						: {}),
+				}),
+				{
+					status: 200,
+					headers: {
+						"content-type": "application/json",
+						// Every opencoti turn attached to a live pool names its window.
+						...(known || body.pool_id === undefined
+							? { "x-context-window": "65536" }
+							: {}),
+						...(options.bootHeader
+							? { "x-opencoti-boot-id": `b-${bootId}` }
+							: {}),
+					},
 				},
-			});
+			);
 		}
 		return json({ error: "no route" }, 404);
 	};
@@ -730,5 +748,75 @@ describe("the boot id on every response", () => {
 		await send(engine, "e3", agentBody("role A", "t4"));
 		expect(polykvRootGeneration("http://engine/v1")).toBe(generation + 1);
 		expect(engine.unknownPoolSends).toHaveLength(1);
+	});
+});
+
+/**
+ * pool_unknown_in_response_v1: a turn that named a pool the answering process
+ * does not hold says so in its `opencoti` block. Served anyway -- a full
+ * reprocess, never a refusal -- so it is the client's to notice.
+ */
+describe("a response that says its pool is unknown", () => {
+	const poolsSentBy = (engine: Engine, sessionId: string) =>
+		turns(engine)
+			.filter((call) => call.body.session_id === sessionId)
+			.map((call) => call.body.pool_id as number | undefined);
+
+	it("rebuilds the root's pools on the next turn, and says so at info", async () => {
+		const engine = restartableEngine({ poolUnknown: true });
+		await send(engine, "u1", agentBody("role A", "t1"));
+		const generation = polykvRootGeneration("http://engine/v1");
+		const notices: Array<{ severity: string; text: string }> = [];
+		const stop = onPolykvNotice("u1", (notice) => notices.push(notice));
+		try {
+			engine.restartQuietly();
+			await send(engine, "u1", agentBody("role A", "t2"));
+		} finally {
+			stop();
+		}
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation + 1);
+		expect(notices.length).toBeGreaterThan(0);
+		expect(notices.every((notice) => notice.severity === "info")).toBe(true);
+		expect(notices.map((notice) => notice.text).join("\n")).toContain(
+			"pool_unknown",
+		);
+		const stale = [...engine.unknownPoolSends];
+		await send(engine, "u1", agentBody("role A", "t3"));
+		expect(engine.unknownPoolSends).toEqual(stale);
+		const sent = poolsSentBy(engine, "u1").at(-1) as number;
+		expect(engine.pools().get(sent)?.prompt).toContain("role A");
+	});
+
+	it("reads it off the last frame of a heartbeat stream too", async () => {
+		const engine = restartableEngine({
+			poolUnknown: true,
+			features: ["stream_keepalive_v1"],
+		});
+		const body = { ...agentBody("role A", "t1"), stream: true };
+		await (await send(engine, "u2", body)).text();
+		const generation = polykvRootGeneration("http://engine/v1");
+		engine.restartQuietly();
+		const response = await send(engine, "u2", body);
+		// The block rides the stream's last frame: read once the stream is.
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation);
+		await response.text();
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation + 1);
+	});
+
+	it("leaves the pools alone when the pool was known", async () => {
+		const engine = restartableEngine({ poolUnknown: true });
+		await send(engine, "u3", agentBody("role A", "t1"));
+		const generation = polykvRootGeneration("http://engine/v1");
+		await send(engine, "u3", agentBody("role A", "t2"));
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation);
+	});
+
+	it("is one rebuild with the boot id on the same response", async () => {
+		const engine = restartableEngine({ poolUnknown: true, bootHeader: true });
+		await send(engine, "u4", agentBody("role A", "t1"));
+		const generation = polykvRootGeneration("http://engine/v1");
+		engine.restartQuietly();
+		await send(engine, "u4", agentBody("role A", "t2"));
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation + 1);
 	});
 });
