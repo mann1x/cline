@@ -17,6 +17,7 @@
  * So an agent takes a node, then runs inside that node's gate, and gives the
  * node back however the run ended.
  */
+import { probeServerHealth, serverRoot } from "@cline/llms";
 import {
 	type AgentNode,
 	capLeadTier,
@@ -254,6 +255,21 @@ export function createAgentNodePlacement(input: {
 					capacity: node.capacity,
 				}),
 		),
+		{
+			// A node out for not answering goes back the moment its server
+			// does: asked on its own `/health`, every few seconds.
+			probe: async (nodeId) => {
+				const connection = (
+					providers.get(nodeId) ?? input.base
+				).getConnectionConfig();
+				const root = serverRoot(connection.baseUrl);
+				return root
+					? await probeServerHealth(root, {
+							...(connection.headers ? { headers: connection.headers } : {}),
+						})
+					: false;
+			},
+		},
 	);
 
 	// One config provider per node, built once. Each pins the fields its node

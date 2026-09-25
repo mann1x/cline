@@ -90,6 +90,17 @@ export const NODE_REFUSED_HOLD_MS = 5_000;
 export const NODE_COOL_OFF_MS = 30_000;
 
 /**
+ * How often a node in its cool-off is asked whether it is back.
+ *
+ * The cool-off is an upper bound, not a sentence. Measured on 1tmrl: the
+ * opencoti server behind Node1 restarted and was listening again ten seconds
+ * later, and the node sat out the rest of the 30 s regardless. A node whose
+ * `/health` answers is put back at once; one that never answers still comes
+ * back when the cool-off ends, as before.
+ */
+export const NODE_PROBE_INTERVAL_MS = 5_000;
+
+/**
  * The cool-off for a node whose model is not on its server.
  *
  * Longer, because the two conditions heal on different scales. A box that was
@@ -183,6 +194,13 @@ export function createAgentPlacementQueue(
 		now?: () => number;
 		/** Injected for the same reason; returns a canceller. */
 		schedule?: (fn: () => void, ms: number) => void;
+		/**
+		 * Is this node answering again? Asked every
+		 * {@link NODE_PROBE_INTERVAL_MS} while the node sits out an
+		 * unreachable cool-off; `true` puts it back in rotation at once.
+		 */
+		probe?: (nodeId: string) => Promise<boolean>;
+		probeIntervalMs?: number;
 	},
 ): AgentPlacementQueue {
 	// Priority 0 is sub-pools of one window and never more than eight of
@@ -202,6 +220,41 @@ export function createAgentPlacementQueue(
 			timer.unref?.();
 		});
 	let state: PlacementState = emptyPlacementState();
+	const probing = new Set<string>();
+	const probeIntervalMs = options?.probeIntervalMs ?? NODE_PROBE_INTERVAL_MS;
+	const isDown = (nodeId: string): boolean =>
+		(downUntil.get(nodeId) ?? 0) > now();
+	// One probe loop per node while it is down. It ends when the node answers
+	// (back in rotation now), or when the cool-off ran out on its own.
+	const probeWhileDown = (nodeId: string): void => {
+		const probe = options?.probe;
+		if (!probe || probing.has(nodeId)) {
+			return;
+		}
+		probing.add(nodeId);
+		const tick = (): void => {
+			if (!isDown(nodeId)) {
+				probing.delete(nodeId);
+				return;
+			}
+			probe(nodeId)
+				.catch(() => false)
+				.then((back) => {
+					if (!isDown(nodeId)) {
+						probing.delete(nodeId);
+						return;
+					}
+					if (back) {
+						probing.delete(nodeId);
+						downUntil.delete(nodeId);
+						drain();
+						return;
+					}
+					schedule(tick, probeIntervalMs);
+				});
+		};
+		schedule(tick, probeIntervalMs);
+	};
 	// Uncapped nodes: leases not yet admitted, and refusals still holding.
 	const unadmitted = new Map<string, number>();
 	const heldUntil = new Map<string, number>();
@@ -355,11 +408,16 @@ export function createAgentPlacementQueue(
 			return waiters.length;
 		},
 		occupancy: () => new Map(occupancy),
-		markUnreachable: (nodeId, coolOffMs = NODE_COOL_OFF_MS) => {
+		markUnreachable: (nodeId, coolOffMs) => {
 			if (!nodes.some((node) => node.id === nodeId)) {
 				return;
 			}
-			downUntil.set(nodeId, now() + coolOffMs);
+			downUntil.set(nodeId, now() + (coolOffMs ?? NODE_COOL_OFF_MS));
+			// Only for a node that did not answer. A model the server does
+			// not have is an answer, and its health says nothing about it.
+			if (coolOffMs === undefined) {
+				probeWhileDown(nodeId);
+			}
 			// Nothing to drain now: a waiter exists only when every node is
 			// full, and taking one out of the rotation frees no slot. What
 			// does need announcing is the END of the cool-off -- a node that
@@ -368,7 +426,7 @@ export function createAgentPlacementQueue(
 			// out of favour. When the cool-off lapses that capacity becomes
 			// usable with no release to notice it, and the waiter would sit
 			// until some unrelated agent happened to finish.
-			schedule(drain, coolOffMs);
+			schedule(drain, coolOffMs ?? NODE_COOL_OFF_MS);
 		},
 	};
 }
