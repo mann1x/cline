@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpencotiFetch } from "./opencoti";
 import {
+	invalidatePolykvRoot,
 	onPolykvRoomWait,
 	POLYKV_ROOM_BACKOFF_MAX_MS,
+	POLYKV_VERIFY_INTERVAL_MS,
 	polykvRoomBackoffMs,
+	polykvRootGeneration,
+	polykvServerIdentity,
 	releaseAllPolykvSwarms,
 } from "./polykv-swarm";
 
@@ -20,8 +24,12 @@ function restartableEngine() {
 	let boot = 1;
 	let down = false;
 	let refusals = 0;
+	let identity = 1;
+	let onTemplate: (() => void) | undefined;
+	/** Pool ids a turn named that this boot never issued. */
+	const unknownPoolSends: number[] = [];
 	/** Pool id -> the prompt it holds, for the current boot only. */
-	let pools = new Map<number, string>();
+	let pools = new Map<number, { prompt: string; parent: number }>();
 	const render = (messages: Array<{ role: string; content: unknown }>) =>
 		messages
 			.map(
@@ -51,12 +59,27 @@ function restartableEngine() {
 			return json({ status: "ok" });
 		}
 		if (url.pathname === "/props") {
-			return json({ build_info: "opencoti-test", opencoti: {}, boot });
+			return json({
+				build_info: "opencoti-test",
+				opencoti: {},
+				boot,
+				start_time: identity,
+			});
+		}
+		if (url.pathname === "/polykv/pools" && !init?.body) {
+			return json({
+				pools: [...pools.entries()].map(([id, pool]) => ({
+					pool_id: id,
+					parent: pool.parent,
+					prefix_len: pool.prompt.length,
+				})),
+			});
 		}
 		if (url.pathname === "/kv") {
 			return json({ session_ctx_max: 262_144 });
 		}
 		if (url.pathname === "/apply-template") {
+			onTemplate?.();
 			return json({
 				prompt: render(
 					body.messages as Array<{ role: string; content: unknown }>,
@@ -64,15 +87,22 @@ function restartableEngine() {
 			});
 		}
 		if (url.pathname === "/polykv/pools") {
-			pools.set(nextPool, String(body.prompt));
-			return json({ pool_id: nextPool++, parent: -1, prefix_len: 100 });
-		}
-		if (/^\/polykv\/pools\/\d+\/fork$/.test(url.pathname)) {
-			pools.set(nextPool, String(body.prompt));
+			const prompt = String(body.prompt);
+			pools.set(nextPool, { prompt, parent: -1 });
 			return json({
 				pool_id: nextPool++,
-				parent: Number(url.pathname.split("/")[3]),
-				prefix_len: 200,
+				parent: -1,
+				prefix_len: prompt.length,
+			});
+		}
+		if (/^\/polykv\/pools\/\d+\/fork$/.test(url.pathname)) {
+			const prompt = String(body.prompt);
+			const parent = Number(url.pathname.split("/")[3]);
+			pools.set(nextPool, { prompt, parent });
+			return json({
+				pool_id: nextPool++,
+				parent,
+				prefix_len: prompt.length,
 			});
 		}
 		if (/^\/sessions\/[^/]+\/close$/.test(url.pathname)) {
@@ -95,6 +125,9 @@ function restartableEngine() {
 		}
 		if (url.pathname === "/v1/chat/completions") {
 			const known = typeof body.pool_id === "number" && pools.has(body.pool_id);
+			if (typeof body.pool_id === "number" && !known) {
+				unknownPoolSends.push(body.pool_id);
+			}
 			return new Response(JSON.stringify({ choices: [{ message: {} }] }), {
 				status: 200,
 				headers: {
@@ -110,8 +143,20 @@ function restartableEngine() {
 	}) as unknown as typeof fetch;
 	return {
 		calls,
+		unknownPoolSends,
 		fetch: fetchImpl,
 		pools: () => pools,
+		/** A new process identity in `/props`, pools untouched. */
+		newIdentity: () => {
+			identity += 1;
+		},
+		/** Run `fn` on the next `/apply-template`, once. */
+		onNextTemplate: (fn: () => void) => {
+			onTemplate = () => {
+				onTemplate = undefined;
+				fn();
+			};
+		},
 		/** Refuse the next `n` worker turns with a full window. */
 		refuseWorkers: (n: number) => {
 			refusals = n;
@@ -259,5 +304,141 @@ describe("a started worker on a full window", () => {
 		).toEqual([
 			2_000, 2_000, 2_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000,
 		]);
+	});
+});
+
+/**
+ * 1tmrl: bs2:8244 restarted twice under a 75-agent swarm. Every pool and
+ * owner went with it, and the new server numbered its pools from 0 again --
+ * so a cached id could now name a DIFFERENT pool, and one the server did not
+ * know was silently prefilled in full.
+ */
+describe("pool ids across a server restart", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	/** The pool id each of an agent's turns named, in order. */
+	const poolsSentBy = (engine: Engine, sessionId: string) =>
+		turns(engine)
+			.filter((call) => call.body.session_id === sessionId)
+			.map((call) => call.body.pool_id as number | undefined);
+
+	it("attaches an agent between turns to the new id of its own layer, never to an old number", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const engine = restartableEngine();
+		await send(engine, "a1", agentBody("role A", "task a"));
+		await send(engine, "b1", agentBody("role B", "task b"));
+		const [oldA] = poolsSentBy(engine, "a1");
+		const [oldB] = poolsSentBy(engine, "b1");
+		expect(oldA).toBe(2);
+		expect(oldB).toBe(3);
+		const before = polykvRootGeneration("http://engine/v1");
+
+		// Restarted while both agents were running their tools: nothing
+		// faulted, and the new server has no pools at all.
+		engine.down();
+		engine.up();
+		vi.setSystemTime(Date.now() + POLYKV_VERIFY_INTERVAL_MS + 1);
+
+		// B goes first, so the new pool 2 is B's layer -- the number A held.
+		await send(engine, "b1", agentBody("role B", "task b, turn 2"));
+		await send(engine, "a1", agentBody("role A", "task a, turn 2"));
+
+		expect(polykvRootGeneration("http://engine/v1")).toBe(before + 1);
+		const newB = poolsSentBy(engine, "b1").at(-1) as number;
+		const newA = poolsSentBy(engine, "a1").at(-1) as number;
+		expect(newB).toBe(2);
+		expect(engine.pools().get(newB)?.prompt).toContain("role B");
+		expect(engine.pools().get(newA)?.prompt).toContain("role A");
+		expect(newA).not.toBe(oldA);
+		// After the bump A never names its old number, which is B's now.
+		expect(poolsSentBy(engine, "a1").slice(1)).not.toContain(oldA);
+		expect(engine.unknownPoolSends).toEqual([]);
+	});
+
+	it("asks at once after a transport fault, and re-sends onto the rebuilt pool", async () => {
+		const engine = restartableEngine();
+		await send(engine, "w", agentBody("role A", "t1"));
+		engine.down();
+		const stop = onPolykvRoomWait("w", (state) => {
+			if (state.waiting) {
+				setTimeout(() => engine.up(), 5);
+			}
+		});
+		try {
+			await send(engine, "w", agentBody("role A", "t2"));
+		} finally {
+			stop();
+		}
+		const sent = poolsSentBy(engine, "w").at(-1) as number;
+		expect(engine.pools().get(sent)?.prompt).toContain("role A");
+		expect(engine.pools().size).toBeGreaterThan(0);
+	});
+
+	it("reads a pooled turn without X-Context-Window as the pools being gone", async () => {
+		const engine = restartableEngine();
+		await send(engine, "x", agentBody("role A", "t1"));
+		// Restarted silently, within the verify interval: the next turn
+		// still names the old pool, and the server answers it windowless.
+		engine.down();
+		engine.up();
+		await send(engine, "x", agentBody("role A", "t2"));
+		const generation = polykvRootGeneration("http://engine/v1");
+		await send(engine, "x", agentBody("role A", "t3"));
+
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation + 1);
+		const sent = poolsSentBy(engine, "x").at(-1) as number;
+		expect(engine.pools().get(sent)?.prompt).toContain("role A");
+	});
+
+	it("rebuilds when the server's identity in /props changes", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const engine = restartableEngine();
+		await send(engine, "i", agentBody("role A", "t1"));
+		const generation = polykvRootGeneration("http://engine/v1");
+		engine.newIdentity();
+		vi.setSystemTime(Date.now() + POLYKV_VERIFY_INTERVAL_MS + 1);
+		await send(engine, "i", agentBody("role A", "t2"));
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation + 1);
+	});
+
+	it("keeps the pools when the server is the same one", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const engine = restartableEngine();
+		await send(engine, "same", agentBody("role A", "t1"));
+		const generation = polykvRootGeneration("http://engine/v1");
+		const poolsBefore = engine.pools().size;
+		vi.setSystemTime(Date.now() + POLYKV_VERIFY_INTERVAL_MS + 1);
+		await send(engine, "same", agentBody("role A", "t2"));
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation);
+		expect(engine.pools().size).toBe(poolsBefore);
+		expect(poolsSentBy(engine, "same")).toEqual([2, 2]);
+	});
+
+	it("never sends an id resolved in a generation that ended before the send", async () => {
+		const engine = restartableEngine();
+		await send(engine, "g", agentBody("role A", "t1"));
+		// Another agent finds the restart while this one is resolving.
+		engine.onNextTemplate(() => {
+			engine.down();
+			engine.up();
+			invalidatePolykvRoot("http://engine/v1", "test");
+		});
+		await send(engine, "g", agentBody("role A", "t2"));
+		const sent = poolsSentBy(engine, "g").at(-1) as number;
+		expect(engine.pools().get(sent)?.prompt).toContain("role A");
+		expect(engine.unknownPoolSends).toEqual([]);
+		expect(poolsSentBy(engine, "g")).toHaveLength(2);
+	});
+
+	it("reads a server's identity from what /props states", () => {
+		expect(polykvServerIdentity({ build_info: "b1", start_time: 5 })).toBe(
+			polykvServerIdentity({ build_info: "b1", start_time: 5 }),
+		);
+		expect(polykvServerIdentity({ build_info: "b1", start_time: 5 })).not.toBe(
+			polykvServerIdentity({ build_info: "b1", start_time: 6 }),
+		);
+		expect(polykvServerIdentity({ chat_template: "x" })).toBeUndefined();
 	});
 });

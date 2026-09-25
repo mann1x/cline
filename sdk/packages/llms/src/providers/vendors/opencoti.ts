@@ -36,9 +36,11 @@ import {
 	isWorkerWindowFull,
 	markPolykvWorkerStarted,
 	movePolykvWorker,
+	notePolykvServerFault,
 	type PolykvLeadRoom,
 	type PolykvWorkerSpec,
 	polykvRoomBackoffMs,
+	polykvRootGeneration,
 	polykvWorkerStarted,
 	preparePolykvWorker,
 	readPolykvLeadRoom,
@@ -1008,6 +1010,10 @@ function createWorkerFetch(options: {
 						: "it is not answering"
 				}); the turn is sent again once it does.`,
 			});
+			// The server may be a new one when it answers: its pools are then
+			// gone, and the ids this agent's tree holds name nothing -- or
+			// someone else's. The next prepare asks before it resolves any.
+			notePolykvServerFault(options.baseUrl);
 			const back = await waitForServerHealth(polykvRoot(options.baseUrl), {
 				fetch: base,
 				...(options.headers ? { headers: options.headers } : {}),
@@ -1048,6 +1054,15 @@ function createWorkerFetch(options: {
 				wire.max_tokens = options.workerMaxTokens ?? 8_192;
 			}
 			wire.session_id = attach.sessionId;
+			if (
+				attach.poolId !== undefined &&
+				attach.generation !== undefined &&
+				attach.generation !== polykvRootGeneration(options.baseUrl)
+			) {
+				// A restart was found between resolving this id and sending
+				// it: it is a number from a boot that is gone. Resolve again.
+				continue;
+			}
 			if (attach.poolId !== undefined && /^\d+$/.test(attach.poolId)) {
 				wire.pool_id = Number(attach.poolId);
 			}
@@ -1083,11 +1098,17 @@ function createWorkerFetch(options: {
 				if (response.ok) {
 					ranOnce = true;
 					markPolykvWorkerStarted(options.worker.sessionId);
-					if (
-						options.worker.owner &&
+					const windowless =
 						attach.poolId !== undefined &&
-						!response.headers.has("x-context-window")
-					) {
+						!response.headers.has("x-context-window");
+					if (windowless) {
+						// Every opencoti response names its window. A pooled
+						// turn that does not is a pool the server no longer
+						// holds -- restarted, or its owner lapsed -- and the next
+						// turn asks the server before resolving any pool.
+						notePolykvServerFault(options.baseUrl);
+					}
+					if (options.worker.owner && windowless) {
 						// Every opencoti response names its window. One that
 						// does not is the sign the lead's allocation lapsed (idle
 						// TTL) or was closed, taking this agent's sub-pool with

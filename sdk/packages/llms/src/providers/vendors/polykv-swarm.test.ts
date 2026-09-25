@@ -64,6 +64,12 @@ function stubEngine(options: { refuseWorkersTimes?: number } = {}) {
 				),
 			});
 		}
+		if (url.pathname === "/polykv/pools" && init?.method === "GET") {
+			// The listing: what a restart check reads.
+			return json({
+				pools: [...pools.keys()].map((id) => ({ pool_id: id })),
+			});
+		}
 		if (url.pathname === "/polykv/pools") {
 			pools.set(nextPool, String(body.prompt));
 			return json({ pool_id: nextPool++, parent: -1, prefix_len: 100 });
@@ -368,9 +374,13 @@ describe("a PolyKV swarm", () => {
 	it("attaches an agent's other requests to its tree without building", async () => {
 		const engine = stubEngine();
 		await send(engine, "a", agentBody("r", "t"));
-		const poolsBefore = engine.calls.filter((call) =>
-			call.path.startsWith("/polykv"),
-		).length;
+		// Builds only: a restart check's listing reads, it builds nothing.
+		const builds = () =>
+			engine.calls.filter(
+				(call) =>
+					call.path.startsWith("/polykv") && Object.keys(call.body).length > 0,
+			).length;
+		const poolsBefore = builds();
 
 		const summary = createOpencotiFetch({
 			fetch: engine.fetch,
@@ -400,9 +410,7 @@ describe("a PolyKV swarm", () => {
 		expect(last?.body.pool_id).toBe(0);
 		expect(last?.body.session_id).toBe("a");
 		expect(last?.body.num_ctx).toBeUndefined();
-		expect(
-			engine.calls.filter((call) => call.path.startsWith("/polykv")).length,
-		).toBe(poolsBefore);
+		expect(builds()).toBe(poolsBefore);
 	});
 
 	it("closes the agent's session, and the owner with its last agent", async () => {

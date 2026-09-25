@@ -22,6 +22,7 @@
  * this declines, and `runPlacedAgent` re-places it.
  */
 import {
+	notePolykvServerFault,
 	serverRoot,
 	sleepUnlessAborted,
 	waitForServerHealth,
@@ -136,6 +137,13 @@ export function createTurnFaultRecovery(
 		const where = options.where?.() ?? "the server";
 		if (fault.kind === "transport") {
 			options.onTransportFault?.();
+			// The server may come back as a new one, without the pools this
+			// agent's tree names: its next attach asks first (PolyKV only; a
+			// no-op on any other server).
+			const faulted = options.baseUrl?.();
+			if (faulted) {
+				notePolykvServerFault(faulted);
+			}
 			const reason = transportFaultReason(fault.message);
 			const line = `Waiting for ${where} to come back (${reason}); the turn is sent again once it answers.`;
 			options.logger?.log(
