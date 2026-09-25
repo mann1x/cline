@@ -1,3 +1,4 @@
+import type { OpencotiStreamPhase } from "./opencoti-liveness";
 import {
 	createPolykvClient,
 	type PolykvAdmissionPolicy,
@@ -1635,6 +1636,84 @@ export function reportPolykvRoomWait(
 	for (const listener of ROOM_WAIT_LISTENERS.get(key) ?? []) {
 		try {
 			listener(state);
+		} catch {
+			// A listener is a UI update; it must never fail a request.
+		}
+	}
+}
+
+/**
+ * The least time between two row updates of the same phase kind. A new kind
+ * (queued -> prefill) and the end of the phase always go through at once.
+ */
+export const POLYKV_PHASE_REPORT_MS = 3_000;
+
+const PHASE_LISTENERS = new Map<
+	string,
+	Set<(phase: OpencotiStreamPhase | undefined) => void>
+>();
+const LAST_PHASE = new Map<string, { at: number; kind?: string }>();
+
+/**
+ * Be told what an agent's request is doing on the server while its stream is
+ * silent: queued, prefilling `n` of `N`, generating with nothing to show
+ * (`stream_keepalive_v1`), and `undefined` once it produces again.
+ *
+ * The same reach problem as the room wait: the heartbeat is read inside this
+ * vendor's fetch. Without it a 40k prefill behind a busy server was a row
+ * that said nothing for minutes. Keyed by the agent's own session id.
+ * Returns the unsubscribe.
+ */
+export function onPolykvStreamPhase(
+	sessionId: string,
+	listener: (phase: OpencotiStreamPhase | undefined) => void,
+): () => void {
+	const key = engineSessionId(sessionId);
+	let listeners = PHASE_LISTENERS.get(key);
+	if (!listeners) {
+		listeners = new Set();
+		PHASE_LISTENERS.set(key, listeners);
+	}
+	listeners.add(listener);
+	return () => {
+		listeners?.delete(listener);
+		if (listeners?.size === 0) {
+			PHASE_LISTENERS.delete(key);
+			LAST_PHASE.delete(key);
+		}
+	};
+}
+
+/**
+ * Report an agent's stream phase. Throttled here, once for every listener:
+ * a repeat of the same kind within {@link POLYKV_PHASE_REPORT_MS} is dropped,
+ * so the row is updated in place every few seconds at most.
+ */
+export function reportPolykvStreamPhase(
+	sessionId: string,
+	phase: OpencotiStreamPhase | undefined,
+	now: number = Date.now(),
+): void {
+	const key = engineSessionId(sessionId);
+	const listeners = PHASE_LISTENERS.get(key);
+	if (!listeners) {
+		return;
+	}
+	const last = LAST_PHASE.get(key);
+	if (phase === undefined) {
+		if (last?.kind === undefined) {
+			return;
+		}
+	} else if (
+		last?.kind === phase.kind &&
+		now - last.at < POLYKV_PHASE_REPORT_MS
+	) {
+		return;
+	}
+	LAST_PHASE.set(key, { at: now, ...(phase ? { kind: phase.kind } : {}) });
+	for (const listener of listeners) {
+		try {
+			listener(phase);
 		} catch {
 			// A listener is a UI update; it must never fail a request.
 		}

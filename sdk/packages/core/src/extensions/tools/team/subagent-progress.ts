@@ -1,6 +1,8 @@
 import {
+	describeOpencotiStreamPhase,
 	onPolykvNotice,
 	onPolykvRoomWait,
+	onPolykvStreamPhase,
 	releasePolykvAgent,
 } from "@cline/llms";
 import type { AgentEvent } from "@cline/shared";
@@ -189,9 +191,29 @@ export function watchPolykvRoom(
 			},
 		});
 	});
+	// What its request is doing on the server while the stream is silent --
+	// queued, prefilling n of N, generating with nothing to show -- from the
+	// heartbeat's comments. In place, on the row's current line, not on its
+	// activity: it changes every ping, and the activity log is for events.
+	// Not a warning either: a long prefill is the server working.
+	let phaseShown = false;
+	const stopPhase = onPolykvStreamPhase(engineSessionId, (phase) => {
+		if (phase) {
+			phaseShown = true;
+			emitUpdate({
+				latestOutput: describeOpencotiStreamPhase(phase),
+				latestOutputKind: "text",
+			});
+		} else if (phaseShown) {
+			// The stream produces again: its own output takes the line.
+			phaseShown = false;
+			emitUpdate({ latestOutput: "" });
+		}
+	});
 	return () => {
 		stopRoom();
 		stopNotices();
+		stopPhase();
 	};
 }
 

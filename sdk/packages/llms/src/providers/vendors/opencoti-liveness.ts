@@ -79,6 +79,55 @@ export class OpencotiServerSilentError extends Error {
 	}
 }
 
+/** What a keepalive comment says the request is doing. */
+export type OpencotiStreamPhase =
+	| { kind: "queued" }
+	| { kind: "prefill"; processed: number; total: number }
+	| { kind: "generating"; decoded: number };
+
+/**
+ * Read one SSE comment line. A bare `:` (upstream's ping) and anything that is
+ * not a keepalive line say nothing about the phase.
+ */
+export function parseKeepaliveComment(
+	line: string,
+): OpencotiStreamPhase | undefined {
+	const match = /^:\s*keepalive\s+(\w+)(?:\s+(\d+)(?:\/(\d+))?)?\s*$/.exec(
+		line.trim(),
+	);
+	if (!match) {
+		return undefined;
+	}
+	const [, kind, first, second] = match;
+	if (kind === "queued") {
+		return { kind: "queued" };
+	}
+	if (kind === "prefill" && first !== undefined && second !== undefined) {
+		return { kind: "prefill", processed: Number(first), total: Number(second) };
+	}
+	if (kind === "generating") {
+		return { kind: "generating", decoded: Number(first ?? 0) };
+	}
+	return undefined;
+}
+
+/** A phase, worded for an agent's row. */
+export function describeOpencotiStreamPhase(
+	phase: OpencotiStreamPhase,
+): string {
+	const count = (value: number) => Intl.NumberFormat("en-US").format(value);
+	switch (phase.kind) {
+		case "queued":
+			return "Queued on the server";
+		case "prefill":
+			return `Prefilling ${count(phase.processed)} / ${count(phase.total)}`;
+		case "generating":
+			return phase.decoded > 0
+				? `Generating (silent, ${count(phase.decoded)} tokens so far)`
+				: "Generating (silent)";
+	}
+}
+
 /** What a request that asked for the heartbeat asked for. */
 export interface KeepaliveRequest {
 	/**
@@ -263,6 +312,11 @@ export interface KeepaliveSupervision {
 	pingSeconds?: number;
 	/** Told once, when the silence has outlasted three periods. */
 	onDead?: (error: OpencotiServerSilentError) => void;
+	/**
+	 * Told the phase each keepalive comment names, and `undefined` once the
+	 * stream produces again (or ends). Per comment; the receiver throttles.
+	 */
+	onPhase?: (phase: OpencotiStreamPhase | undefined) => void;
 	/** Test seams. */
 	setTimer?: (fn: () => void, ms: number) => unknown;
 	clearTimer?: (handle: unknown) => void;
@@ -320,6 +374,19 @@ export async function superviseKeepaliveStream(
 		((handle: unknown) =>
 			clearTimeout(handle as ReturnType<typeof setTimeout>));
 
+	let phaseShown = false;
+	const showPhase = (phase: OpencotiStreamPhase | undefined) => {
+		if (phase === undefined && !phaseShown) {
+			return;
+		}
+		phaseShown = phase !== undefined;
+		try {
+			options.onPhase?.(phase);
+		} catch {
+			// A row update must never fail a request.
+		}
+	};
+
 	/**
 	 * One read, failed when no byte -- a comment is a byte -- arrives within
 	 * the dead interval. The body is cancelled, which closes the connection.
@@ -369,7 +436,14 @@ export async function superviseKeepaliveStream(
 		let data = false;
 		for (const line of lines) {
 			const event = readEvent(line);
-			if (!event || event.type === "comment") {
+			if (!event) {
+				continue;
+			}
+			if (event.type === "comment") {
+				const phase = parseKeepaliveComment(event.line);
+				if (phase) {
+					showPhase(phase);
+				}
 				continue;
 			}
 			if (event.type === "error") {
@@ -389,6 +463,7 @@ export async function superviseKeepaliveStream(
 			ended = true;
 			const tail = consider(splitter.flush());
 			if (tail.error && !tail.data) {
+				showPhase(undefined);
 				return firstResultErrorResponse(response, tail.error);
 			}
 			break;
@@ -397,12 +472,14 @@ export async function superviseKeepaliveStream(
 		const seen = consider(splitter.push(result.value));
 		if (seen.error && !seen.data) {
 			reader.cancel().catch(() => {});
+			showPhase(undefined);
 			return firstResultErrorResponse(response, seen.error);
 		}
 		if (seen.data || seen.error) {
 			break;
 		}
 	}
+	showPhase(undefined);
 
 	const body = new ReadableStream<Uint8Array>({
 		start(controller) {
@@ -417,15 +494,25 @@ export async function superviseKeepaliveStream(
 			try {
 				const result = await readWithin();
 				if (result.done) {
+					consider(splitter.flush());
+					showPhase(undefined);
 					controller.close();
 					return;
 				}
+				// Silent generation (hidden reasoning, a long draft round) is
+				// pinged too; the row says so until the next frame.
+				const seen = consider(splitter.push(result.value));
+				if (seen.data || seen.error) {
+					showPhase(undefined);
+				}
 				controller.enqueue(result.value);
 			} catch (error) {
+				showPhase(undefined);
 				controller.error(error);
 			}
 		},
 		cancel(reason) {
+			showPhase(undefined);
 			return reader.cancel(reason);
 		},
 	});

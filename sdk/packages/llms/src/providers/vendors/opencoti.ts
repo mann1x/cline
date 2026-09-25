@@ -52,6 +52,7 @@ import {
 	rememberOpencotiSession,
 	reportPolykvNotice,
 	reportPolykvRoomWait,
+	reportPolykvStreamPhase,
 } from "./polykv-swarm";
 import type { ProviderFactoryResult } from "./types";
 
@@ -517,6 +518,12 @@ export function createOpencotiFetch(options: {
 			return keepalive
 				? superviseKeepaliveStream(response, {
 						...keepalive,
+						...(extras?.sessionId !== undefined
+							? {
+									onPhase: (phase) =>
+										reportPolykvStreamPhase(extras.sessionId as string, phase),
+								}
+							: {}),
 						// Dead, not slow: whatever pools it held may be gone with it.
 						onDead: () => {
 							if (options.baseUrl) {
@@ -1188,6 +1195,8 @@ function createWorkerFetch(options: {
 				if (keepalive) {
 					response = await superviseKeepaliveStream(response, {
 						...keepalive,
+						onPhase: (phase) =>
+							reportPolykvStreamPhase(options.worker.sessionId, phase),
 						onDead: () => notePolykvServerFault(options.baseUrl),
 					});
 				}

@@ -2,14 +2,22 @@ import { classifyTurnFault, classifyTurnFaultError } from "@cline/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpencotiFetch } from "./opencoti";
 import {
+	describeOpencotiStreamPhase,
 	OPENCOTI_KEEPALIVE_PING_SECONDS,
 	OpencotiServerSilentError,
+	type OpencotiStreamPhase,
 	opencotiKeepaliveDeadMs,
+	parseKeepaliveComment,
 	requestStreamKeepalive,
 	statusOfStreamError,
 	superviseKeepaliveStream,
 } from "./opencoti-liveness";
 import { resetPolykvAvailability, resetPolykvSessions } from "./polykv";
+import {
+	onPolykvStreamPhase,
+	POLYKV_PHASE_REPORT_MS,
+	reportPolykvStreamPhase,
+} from "./polykv-swarm";
 
 const BASE = "http://engine/v1";
 const CHAT = `${BASE}/chat/completions`;
@@ -582,5 +590,138 @@ describe("a server that stops sending", () => {
 		);
 		await vi.advanceTimersByTimeAsync(36_000);
 		expect(await outcome).toBeInstanceOf(OpencotiServerSilentError);
+	});
+});
+
+describe("the phase a keepalive comment names", () => {
+	it("reads the three phases the server writes", () => {
+		expect(parseKeepaliveComment(": keepalive queued")).toEqual({
+			kind: "queued",
+		});
+		expect(parseKeepaliveComment(": keepalive prefill 20481/41533")).toEqual({
+			kind: "prefill",
+			processed: 20_481,
+			total: 41_533,
+		});
+		expect(parseKeepaliveComment(": keepalive generating 17")).toEqual({
+			kind: "generating",
+			decoded: 17,
+		});
+	});
+
+	it("reads nothing from upstream's bare ping or any other comment", () => {
+		expect(parseKeepaliveComment(":")).toBeUndefined();
+		expect(parseKeepaliveComment(": ping")).toBeUndefined();
+		expect(parseKeepaliveComment(": keepalive sleeping")).toBeUndefined();
+	});
+
+	it("words each for the row", () => {
+		expect(describeOpencotiStreamPhase({ kind: "queued" })).toBe(
+			"Queued on the server",
+		);
+		expect(
+			describeOpencotiStreamPhase({
+				kind: "prefill",
+				processed: 20_481,
+				total: 41_533,
+			}),
+		).toBe("Prefilling 20,481 / 41,533");
+		expect(
+			describeOpencotiStreamPhase({ kind: "generating", decoded: 0 }),
+		).toBe("Generating (silent)");
+		expect(
+			describeOpencotiStreamPhase({ kind: "generating", decoded: 1_017 }),
+		).toBe("Generating (silent, 1,017 tokens so far)");
+	});
+
+	it("is reported as the stream goes, and cleared when it produces", async () => {
+		const phases: Array<OpencotiStreamPhase | undefined> = [];
+		const response = await superviseKeepaliveStream(
+			sse([
+				": keepalive queued\n\n",
+				": keepalive prefill 8192/40960\n\n",
+				delta("a"),
+				": keepalive generating 17\n\n",
+				delta("b"),
+				"data: [DONE]\n\n",
+			]),
+			{ onPhase: (phase) => phases.push(phase) },
+		);
+		await response.text();
+		expect(phases).toEqual([
+			{ kind: "queued" },
+			{ kind: "prefill", processed: 8192, total: 40_960 },
+			undefined,
+			{ kind: "generating", decoded: 17 },
+			undefined,
+		]);
+	});
+
+	it("is cleared when the first event is an error", async () => {
+		const phases: Array<OpencotiStreamPhase | undefined> = [];
+		await superviseKeepaliveStream(
+			sse([
+				": keepalive queued\n\n",
+				errorEvent({ code: 400, message: "x", type: "invalid_request_error" }),
+			]),
+			{ onPhase: (phase) => phases.push(phase) },
+		);
+		expect(phases).toEqual([{ kind: "queued" }, undefined]);
+	});
+});
+
+describe("the phase on an agent's row", () => {
+	it("is updated in place at most every few seconds, a new phase at once", () => {
+		const seen: Array<OpencotiStreamPhase | undefined> = [];
+		const stop = onPolykvStreamPhase("row-1", (phase) => seen.push(phase));
+		const at = 1_000_000;
+		const prefill = (processed: number): OpencotiStreamPhase => ({
+			kind: "prefill",
+			processed,
+			total: 40_960,
+		});
+		reportPolykvStreamPhase("row-1", { kind: "queued" }, at);
+		reportPolykvStreamPhase("row-1", { kind: "queued" }, at + 1_000);
+		reportPolykvStreamPhase("row-1", prefill(1), at + 1_500);
+		reportPolykvStreamPhase("row-1", prefill(2), at + 2_000);
+		reportPolykvStreamPhase(
+			"row-1",
+			prefill(3),
+			at + 1_500 + POLYKV_PHASE_REPORT_MS,
+		);
+		reportPolykvStreamPhase("row-1", undefined, at + 5_000);
+		reportPolykvStreamPhase("row-1", undefined, at + 5_001);
+		stop();
+		expect(seen).toEqual([
+			{ kind: "queued" },
+			prefill(1),
+			prefill(3),
+			undefined,
+		]);
+	});
+
+	it("reaches the row from the lead's own streaming request", async () => {
+		const seen: Array<OpencotiStreamPhase | undefined> = [];
+		const stop = onPolykvStreamPhase("conv-phase", (phase) => seen.push(phase));
+		const engine = server(["stream_keepalive_v1"], () =>
+			sse([": keepalive prefill 100/200\n\n", delta("x"), "data: [DONE]\n\n"]),
+		);
+		try {
+			const response = await createOpencotiFetch({
+				fetch: engine.fetch,
+				baseUrl: BASE,
+				request: { sessionId: "conv-phase" },
+			})(CHAT, {
+				method: "POST",
+				body: JSON.stringify({ model: "m", messages: [], stream: true }),
+			});
+			await response.text();
+		} finally {
+			stop();
+		}
+		expect(seen).toEqual([
+			{ kind: "prefill", processed: 100, total: 200 },
+			undefined,
+		]);
 	});
 });
