@@ -16,6 +16,7 @@ import { llamaCppTimingsMetadataExtractor } from "./llamacpp-timings";
 import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
 import {
 	type KeepaliveRequest,
+	OPENCOTI_BOOT_ID_HEADER,
 	requestStreamKeepalive,
 	superviseKeepaliveStream,
 } from "./opencoti-liveness";
@@ -41,6 +42,7 @@ import {
 	isWorkerWindowFull,
 	markPolykvWorkerStarted,
 	movePolykvWorker,
+	notePolykvBootId,
 	notePolykvServerFault,
 	type PolykvLeadRoom,
 	type PolykvWorkerSpec,
@@ -344,6 +346,8 @@ export function createOpencotiFetch(options: {
 	headers?: Record<string, string>;
 	/** Seam for tests: the one below-floor wait a new session is allowed. */
 	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+	/** Where what the fetch learns and recovers from is logged. */
+	log?: OpencotiLog;
 }): typeof fetch {
 	const base = options.fetch ?? fetch;
 	const worker = options.request?.worker;
@@ -513,6 +517,9 @@ export function createOpencotiFetch(options: {
 				// timeout is five minutes.
 				...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
 			} as RequestInit);
+			if (options.baseUrl) {
+				noteBootId(options.baseUrl, response, options.log);
+			}
 			// With the heartbeat a first-result error arrives inside a 200
 			// stream; put it back as the HTTP error every path below reads.
 			return keepalive
@@ -1002,6 +1009,30 @@ async function observeResponseFacts(
 	return response;
 }
 
+/** A line for the provider's log. */
+export type OpencotiLog = (message: string, severity: "info" | "warn") => void;
+
+/**
+ * Every completion response names the process that answered it
+ * (`X-OpenCoti-Boot-Id`, `boot_id_v1`). One that is not the process the
+ * root's pools were made on ends their generation at once -- the swarm's and
+ * the lead's alike -- so the next turn rebuilds instead of naming ids that
+ * the new process has handed out again from 0.
+ */
+function noteBootId(
+	baseUrl: string,
+	response: Response,
+	log: OpencotiLog | undefined,
+): void {
+	const bootId = response.headers.get(OPENCOTI_BOOT_ID_HEADER);
+	if (notePolykvBootId(baseUrl, bootId)) {
+		log?.(
+			`[opencoti] ${polykvRoot(baseUrl)} answered as a new process (boot id ${bootId}): its pools are gone, and they are rebuilt on the next turn`,
+			"info",
+		);
+	}
+}
+
 /** Statuses that mean the server behind the address did not answer. */
 const SERVER_FAULT_STATUSES = new Set([502, 503, 504]);
 
@@ -1037,6 +1068,7 @@ function createWorkerFetch(options: {
 	headers?: Record<string, string>;
 	onFacts?: (facts: OpencotiResponseFacts) => void;
 	workerMaxTokens?: number;
+	log?: OpencotiLog;
 }): typeof fetch {
 	const base = options.fetch ?? fetch;
 	const observed = (response: Response) =>
@@ -1186,6 +1218,7 @@ function createWorkerFetch(options: {
 					body: JSON.stringify(wire),
 					...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
 				} as RequestInit);
+				noteBootId(options.baseUrl, response, options.log);
 				// A first-result error inside a 200 stream goes back to being
 				// the HTTP error the window-full and server-fault waits read.
 				// A heartbeat that stops before the first event throws here,
@@ -1541,6 +1574,7 @@ export async function createOpencotiProviderModule(
 		request,
 		...(baseURL ? { baseUrl: baseURL } : {}),
 		...(config.headers ? { headers: config.headers } : {}),
+		log: (message, severity) => context.logger?.log(message, { severity }),
 		onFacts: (facts) => {
 			// Asked for one window, given another. The grant itself is recorded
 			// by the fetch, beside the ask that produced it; this is the line in

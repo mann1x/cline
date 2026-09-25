@@ -387,6 +387,14 @@ interface RootState {
 	/** Something suggested a restart; ask before the next attach. */
 	suspect: boolean;
 	checking?: Promise<void>;
+	/**
+	 * The `boot_id` of the process this generation's pools were made on
+	 * (`boot_id_v1`), from `/props` when the chain was verified or from the
+	 * first `X-OpenCoti-Boot-Id` seen for it.
+	 */
+	bootId?: string;
+	/** Boot ids of processes already replaced: a late answer from one is not news. */
+	retiredBootIds?: Set<string>;
 }
 
 const ROOT_STATES = new Map<string, RootState>();
@@ -510,7 +518,20 @@ export function polykvServerIdentity(
  * each agent's next turn resolves its layer key to a pool built anew, under
  * a new owner, and the prefix is shared again.
  */
-export function invalidatePolykvRoot(baseUrl: string, reason: string): void {
+export function invalidatePolykvRoot(
+	baseUrl: string,
+	reason: string,
+	options: {
+		/**
+		 * The agents' notice. `warn` by default; `info` where the loss was
+		 * found and recovered in the same breath -- the rebuild is the whole
+		 * of what follows, and nothing is left to watch.
+		 */
+		severity?: PolykvNotice["severity"];
+		/** The notice's text, when "restarted" is not what happened. */
+		text?: string;
+	} = {},
+): void {
 	const root = polykvRoot(baseUrl);
 	const state = rootState(root);
 	state.generation += 1;
@@ -532,10 +553,92 @@ export function invalidatePolykvRoot(baseUrl: string, reason: string): void {
 	}
 	for (const agent of agents) {
 		reportPolykvNotice(agent, {
-			severity: "warn",
-			text: `The server at ${root} restarted (${reason}): this agent's shared pools are rebuilt under a new owner on its next turn.`,
+			severity: options.severity ?? "warn",
+			text:
+				options.text ??
+				`The server at ${root} restarted (${reason}): this agent's shared pools are rebuilt under a new owner on its next turn.`,
 		});
 	}
+}
+
+/** `boot_id` as `/props` or `/health` states it, top level or under `opencoti`. */
+function readBootId(
+	...bodies: ReadonlyArray<Record<string, unknown> | undefined>
+): string | undefined {
+	for (const body of bodies) {
+		const nested =
+			body?.opencoti && typeof body.opencoti === "object"
+				? (body.opencoti as Record<string, unknown>).boot_id
+				: undefined;
+		const value = body?.boot_id ?? nested;
+		if (typeof value === "string" && value) {
+			return value;
+		}
+	}
+	return undefined;
+}
+
+/** Record `bootId` as the current generation's, retiring the one it replaces. */
+function adoptBootId(state: RootState, bootId: string): void {
+	if (state.bootId !== undefined && state.bootId !== bootId) {
+		state.retiredBootIds ??= new Set();
+		state.retiredBootIds.add(state.bootId);
+	}
+	state.bootId = bootId;
+}
+
+/**
+ * Read the `X-OpenCoti-Boot-Id` of a completion response (`boot_id_v1`).
+ *
+ * Pool ids restart from 0 with the process, so a pool id held across a
+ * restart names nothing -- silently reprocessed in full -- or a pool someone
+ * built since. The header is on every completion, so a restart is known from
+ * the first answer of the new process, not from the next `/props` check up to
+ * {@link POLYKV_VERIFY_INTERVAL_MS} later (and only on a turn that attaches).
+ *
+ * The generation's boot id is the first one stated for the root -- by
+ * `/props` when a chain is verified, or by this header -- and it is carried
+ * across a generation that ended for another reason (a lapsed pool, a
+ * listing that lost one): that is still the same process. So once the server
+ * has stated any boot id, one is always recorded, and a header that differs
+ * from it is the one signal: it starts a new generation at once. The swarm's
+ * owners and pools are dropped and every agent -- and the lead, whose tree
+ * follows the generation -- rebuilds on its next turn. The notice is `info`:
+ * the restart is over, and the rebuild is its whole consequence.
+ *
+ * Returns whether the root was invalidated. An absent header (an older build)
+ * says nothing.
+ */
+export function notePolykvBootId(
+	baseUrl: string,
+	bootId: string | null | undefined,
+): boolean {
+	if (!bootId) {
+		return false;
+	}
+	const root = polykvRoot(baseUrl);
+	const state = rootState(root);
+	if (state.bootId === bootId || state.retiredBootIds?.has(bootId)) {
+		return false;
+	}
+	const previous = state.bootId;
+	if (previous === undefined) {
+		// The first the root has heard of one: its pools were checked
+		// against /props when they were made, and nothing says otherwise.
+		adoptBootId(state, bootId);
+		return false;
+	}
+	notePolykvServerFault(baseUrl);
+	invalidatePolykvRoot(
+		baseUrl,
+		`its boot id changed from ${previous} to ${bootId}`,
+		{ severity: "info" },
+	);
+	adoptBootId(state, bootId);
+	// The identity /props stated was the old process's: the next check
+	// re-baselines on the new one instead of finding the same restart again.
+	state.identity = undefined;
+	return true;
 }
 
 /** What the server said of a pool when it was made, for the listing check. */
@@ -720,6 +823,17 @@ export async function verifyPolykvRoot(
 		) {
 			reason = "its identity in /props changed";
 		}
+		// The generation's boot id, from a header seen before any /props read,
+		// against the one /props states now.
+		const bootId = readBootId(props, health);
+		if (
+			!reason &&
+			bootId !== undefined &&
+			state.bootId !== undefined &&
+			bootId !== state.bootId
+		) {
+			reason = "its boot id changed";
+		}
 		if (
 			identity !== undefined &&
 			(state.identity === undefined ||
@@ -739,6 +853,9 @@ export async function verifyPolykvRoot(
 		state.suspect = false;
 		if (reason) {
 			invalidatePolykvRoot(root, reason);
+		}
+		if (bootId !== undefined) {
+			adoptBootId(state, bootId);
 		}
 	})().finally(() => {
 		state.checking = undefined;

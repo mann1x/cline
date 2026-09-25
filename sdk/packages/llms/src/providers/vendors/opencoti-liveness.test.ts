@@ -16,6 +16,8 @@ import { resetPolykvAvailability, resetPolykvSessions } from "./polykv";
 import {
 	onPolykvStreamPhase,
 	POLYKV_PHASE_REPORT_MS,
+	polykvRootGeneration,
+	releaseAllPolykvSwarms,
 	reportPolykvStreamPhase,
 } from "./polykv-swarm";
 
@@ -723,5 +725,50 @@ describe("the phase on an agent's row", () => {
 			{ kind: "prefill", processed: 100, total: 200 },
 			undefined,
 		]);
+	});
+});
+
+describe("the boot id on the lead's responses", () => {
+	afterEach(async () => {
+		await releaseAllPolykvSwarms();
+	});
+
+	// The lead tree follows the root's generation (polykv-lead.ts): a new
+	// generation is what makes its next turn rebuild its chain.
+	it("starts a new generation when the header changes, and logs it at info", async () => {
+		let boot = "aaaaaaaaaaaaaaaa";
+		const engine = server(
+			[],
+			() =>
+				new Response(JSON.stringify({ choices: [] }), {
+					status: 200,
+					headers: {
+						"content-type": "application/json",
+						"x-opencoti-boot-id": boot,
+					},
+				}),
+		);
+		const logged: Array<[string, string]> = [];
+		const fetchImpl = createOpencotiFetch({
+			fetch: engine.fetch,
+			baseUrl: "http://lead-engine/v1",
+			request: { sessionId: "lead-conv" },
+			log: (message, severity) => logged.push([message, severity]),
+		});
+		const turn = () =>
+			fetchImpl("http://lead-engine/v1/chat/completions", {
+				method: "POST",
+				body: JSON.stringify({ model: "m", messages: [] }),
+			});
+		await turn();
+		const generation = polykvRootGeneration("http://lead-engine/v1");
+		await turn();
+		expect(polykvRootGeneration("http://lead-engine/v1")).toBe(generation);
+		boot = "bbbbbbbbbbbbbbbb";
+		await turn();
+		expect(polykvRootGeneration("http://lead-engine/v1")).toBe(generation + 1);
+		expect(logged).toHaveLength(1);
+		expect(logged[0]?.[1]).toBe("info");
+		expect(logged[0]?.[0]).toContain("bbbbbbbbbbbbbbbb");
 	});
 });

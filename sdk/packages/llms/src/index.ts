@@ -261,6 +261,7 @@ export {
 	engineSessionId,
 	invalidatePolykvRoot,
 	isWorkerWindowFull,
+	notePolykvBootId,
 	notePolykvServerFault,
 	onPolykvNotice,
 	onPolykvRoomWait,

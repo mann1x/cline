@@ -25,6 +25,8 @@ function restartableEngine(
 		bootFields?: boolean;
 		/** `/props` `features`. */
 		features?: string[];
+		/** `X-OpenCoti-Boot-Id` on every completion (`boot_id_v1`). */
+		bootHeader?: boolean;
 	} = {},
 ) {
 	const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
@@ -151,6 +153,9 @@ function restartableEngine(
 					...(known || body.pool_id === undefined
 						? { "x-context-window": "65536" }
 						: {}),
+					...(options.bootHeader
+						? { "x-opencoti-boot-id": `b-${bootId}` }
+						: {}),
 				},
 			});
 		}
@@ -243,6 +248,16 @@ function restartableEngine(
 		/** Take the server down; requests are refused until `up()`. */
 		down: () => {
 			down = true;
+		},
+		/**
+		 * Restarted between two turns, unnoticed: a new process (new boot
+		 * id) with no pools, numbering them from 0 again.
+		 */
+		restartQuietly: () => {
+			bootId += 1;
+			boot += 1;
+			pools = new Map();
+			nextPool = 0;
 		},
 		/** Bring it back with nothing: no pools, ids from 0 again. */
 		up: () => {
@@ -653,5 +668,67 @@ describe("a worker's heartbeat that stops", () => {
 		expect(waits).toEqual([true, false]);
 		expect(engine.calls.some((call) => call.path === "/health")).toBe(true);
 		expect(turns(engine)).toHaveLength(3);
+	});
+});
+
+/**
+ * boot_id_v1: every completion names its process in X-OpenCoti-Boot-Id. A
+ * restart between two turns is known from the first answer of the new one,
+ * not from the next /props check.
+ */
+describe("the boot id on every response", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	const poolsSentBy = (engine: Engine, sessionId: string) =>
+		turns(engine)
+			.filter((call) => call.body.session_id === sessionId)
+			.map((call) => call.body.pool_id as number | undefined);
+
+	it("rebuilds the pools on a changed header, and never sends the old ids again", async () => {
+		const engine = restartableEngine({ bootHeader: true });
+		await send(engine, "e1", agentBody("role A", "t1"));
+		const generation = polykvRootGeneration("http://engine/v1");
+		// Within the verify interval, and nothing faulted: only the header
+		// can tell.
+		engine.restartQuietly();
+		await send(engine, "e1", agentBody("role A", "t2"));
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation + 1);
+		// t2 went out before the answer that said so; it is the last one.
+		const staleSends = [...engine.unknownPoolSends];
+		expect(staleSends).toHaveLength(1);
+		await send(engine, "e1", agentBody("role A", "t3"));
+		await send(engine, "e1", agentBody("role A", "t4"));
+		expect(engine.unknownPoolSends).toEqual(staleSends);
+		const sent = poolsSentBy(engine, "e1").at(-1) as number;
+		expect(engine.pools().get(sent)?.prompt).toContain("role A");
+		// Rebuilt once, not once per signal.
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation + 1);
+	});
+
+	it("keeps the pools while the header stays the same", async () => {
+		const engine = restartableEngine({ bootHeader: true });
+		await send(engine, "e2", agentBody("role A", "t1"));
+		const generation = polykvRootGeneration("http://engine/v1");
+		await send(engine, "e2", agentBody("role A", "t2"));
+		await send(engine, "e2", agentBody("role A", "t3"));
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation);
+		expect(new Set(poolsSentBy(engine, "e2")).size).toBe(1);
+	});
+
+	it("does not rebuild twice when /props then states the same new boot id", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const engine = restartableEngine({ bootHeader: true, bootFields: true });
+		await send(engine, "e3", agentBody("role A", "t1"));
+		const generation = polykvRootGeneration("http://engine/v1");
+		engine.restartQuietly();
+		await send(engine, "e3", agentBody("role A", "t2"));
+		vi.setSystemTime(Date.now() + POLYKV_VERIFY_INTERVAL_MS + 1);
+		await send(engine, "e3", agentBody("role A", "t3"));
+		vi.setSystemTime(Date.now() + POLYKV_VERIFY_INTERVAL_MS + 1);
+		await send(engine, "e3", agentBody("role A", "t4"));
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation + 1);
+		expect(engine.unknownPoolSends).toHaveLength(1);
 	});
 });
