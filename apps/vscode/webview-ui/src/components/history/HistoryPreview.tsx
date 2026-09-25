@@ -1,5 +1,5 @@
 import { StringRequest } from "@shared/proto/cline/common"
-import { memo } from "react"
+import { memo, useLayoutEffect, useRef, useState } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { hasReportableCost, useUsageCostVisibility } from "@/hooks/useUsageCostVisibility"
 import { TaskServiceClient } from "@/services/grpc-client"
@@ -8,9 +8,57 @@ type HistoryPreviewProps = {
 	showHistoryView: () => void
 }
 
+/** The list never shows fewer than this, even when it has to scroll to. */
+export const MIN_PREVIEW_ROWS = 3
+
+/** The host sends the 100 most recent; the home view has no use for more than this. */
+const MAX_PREVIEW_ROWS = 30
+
+/** `margin-bottom` of `.history-preview-item`, which `offsetHeight` leaves out. */
+const ROW_GAP_PX = 8
+
+/**
+ * How many rows fit in `available` pixels, given the tallest row seen so far.
+ *
+ * The tallest, not the average: a row is one or two lines (the description
+ * clamps at two), and sizing on the average would let the last row be cut.
+ */
+export function rowsThatFit(available: number, rowHeight: number): number {
+	if (!(available > 0) || !(rowHeight > 0)) {
+		return MIN_PREVIEW_ROWS
+	}
+	const fit = Math.floor((available + ROW_GAP_PX) / (rowHeight + ROW_GAP_PX))
+	return Math.min(MAX_PREVIEW_ROWS, Math.max(MIN_PREVIEW_ROWS, fit))
+}
+
 const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 	const { taskHistory } = useExtensionState()
 	const isCostVisible = useUsageCostVisibility()
+	const listRef = useRef<HTMLDivElement>(null)
+	const [rowCount, setRowCount] = useState(MIN_PREVIEW_ROWS)
+	// Only ever grows. Measured on the rows currently shown, so if dropping the
+	// tallest row could shrink it, the count would rise, bring that row back,
+	// and fall again -- a list that flickers between two lengths.
+	const tallestRow = useRef(0)
+
+	// Show as many as the space the home view leaves us holds. The list grows
+	// into that space (see the flex settings below) and never shrinks under
+	// the minimum; on a short window the home view scrolls instead.
+	useLayoutEffect(() => {
+		const list = listRef.current
+		if (!list || typeof ResizeObserver === "undefined") {
+			return
+		}
+		const measure = () => {
+			const rows = Array.from(list.querySelectorAll<HTMLElement>(".history-preview-item"))
+			tallestRow.current = rows.reduce((max, row) => Math.max(max, row.offsetHeight), tallestRow.current)
+			setRowCount(rowsThatFit(list.clientHeight, tallestRow.current))
+		}
+		measure()
+		const observer = new ResizeObserver(measure)
+		observer.observe(list)
+		return () => observer.disconnect()
+	}, [])
 	const handleHistorySelect = (id: string) => {
 		TaskServiceClient.showTaskWithId(StringRequest.create({ value: id })).catch((error) =>
 			console.error("Error showing task:", error),
@@ -26,7 +74,7 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 	}
 
 	return (
-		<div style={{ flexShrink: 0 }}>
+		<div style={{ flex: "1 0 auto", display: "flex", flexDirection: "column" }}>
 			<style>
 				{`
 					.history-preview-item {
@@ -144,11 +192,11 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 			</div>
 
 			{
-				<div className="px-4">
+				<div className="px-4" ref={listRef} style={{ flex: "1 1 auto", minHeight: 0, overflow: "hidden" }}>
 					{taskHistory.filter((item) => item.ts && item.task).length > 0 ? (
 						taskHistory
 							.filter((item) => item.ts && item.task)
-							.slice(0, 3)
+							.slice(0, rowCount)
 							.map((item) => (
 								<div className="history-preview-item" key={item.id} onClick={() => handleHistorySelect(item.id)}>
 									<div className="history-task-content">

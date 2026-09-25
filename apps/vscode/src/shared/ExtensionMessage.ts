@@ -2,6 +2,7 @@
 
 import type { GeneratedMedia, RequestTimings } from "@cline/shared"
 import { WorkspaceRoot } from "@shared/multi-root/types"
+import type { NewsItem } from "@shared/News"
 import { RemoteConfigFields } from "@shared/storage/state-keys"
 import type { UpdateChannel } from "@shared/UpdateSettings"
 import type { Environment } from "../config"
@@ -209,6 +210,8 @@ export interface ExtensionState {
 	updateChannel?: UpdateChannel
 	/** The version the last check found, or empty when this build is current. */
 	availableUpdate?: string
+	/** The fork's current announcements, newest first; empty hides the home panel. */
+	news?: NewsItem[]
 	/** Replaces the built-in continuation-note instruction; empty means default. */
 	cappedThinkingPrompt?: string
 	/** The built-in continuation-note instruction, so the field can show what it replaces. */
