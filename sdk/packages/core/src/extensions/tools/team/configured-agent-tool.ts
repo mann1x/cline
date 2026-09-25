@@ -34,6 +34,9 @@ import type {
 	SubAgentStartContext,
 } from "./spawn-agent-tool";
 import {
+	drawSpawnSampling,
+	primeModelTemperature,
+	type RealizedSpawnSampling,
 	readSpawnSampling,
 	SPAWN_SAMPLING_NOTE,
 	SpawnSamplingFields,
@@ -46,6 +49,7 @@ import {
 	createSubagentProgress,
 	DELEGATION_PACING_NOTE,
 	reportSubagentModel,
+	reportSubagentSampling,
 	restarted,
 	watchPolykvRoom,
 } from "./subagent-progress";
@@ -482,7 +486,9 @@ export function createConfiguredAgentTools(
 					const parentAgentId = context.agentId;
 					// The lead's sampler, when it gave one: applied over whatever
 					// connection this agent's file, profile or node resolves to.
-					const sampling = readSpawnSampling(input);
+					// Drawn once here, so every attempt runs the same random values.
+					const sampling = drawSpawnSampling(readSpawnSampling(input));
+					let realizedSampling: RealizedSpawnSampling | undefined;
 					const spawnInput = {
 						systemPrompt: config.systemPrompt,
 						task: input.prompt,
@@ -505,6 +511,8 @@ export function createConfiguredAgentTools(
 							providerId: runtimeConfig.providerId,
 							modelId: runtimeConfig.modelId,
 						});
+						// A random temperature is drawn around the model's own.
+						await primeModelTemperature(sampling, runtimeConfig);
 						const subAgent = createDelegatedAgent({
 							// What the lead's side turn leaves for it while the lead waits.
 							consumePendingUserMessage: async () => cancellation.takeMessage(),
@@ -526,7 +534,15 @@ export function createConfiguredAgentTools(
 									}
 								: {}),
 							configProvider: createDelegatedAgentConfigProvider(runtimeConfig),
-							...(sampling ? { sampling } : {}),
+							...(sampling
+								? {
+										sampling,
+										onSampling: (realized: RealizedSpawnSampling) => {
+											realizedSampling = realized;
+											reportSubagentSampling(context.emitUpdate, realized);
+										},
+									}
+								: {}),
 							tools,
 							maxIterations: config.maxIterations,
 							parentAgentId: context.agentId,
@@ -667,7 +683,7 @@ export function createConfiguredAgentTools(
 							// and naming it is noise.
 							...(placed ? { nodeId: placed.nodeId } : {}),
 							...(placed?.nodeLabel ? { nodeLabel: placed.nodeLabel } : {}),
-							...(sampling ? { sampling } : {}),
+							...(realizedSampling ? { sampling: realizedSampling } : {}),
 						};
 						if (options.onSubAgentEnd && started) {
 							try {

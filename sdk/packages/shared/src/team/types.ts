@@ -89,6 +89,21 @@ export interface TeamMemberSnapshot {
 	activity?: TeamAgentActivity;
 	/** Its counts for the task it is running, or last ran. */
 	taskActivity?: TeamAgentActivity;
+	/** The seed and temperature it was spawned with, when the lead set any. */
+	sampling?: TeamAgentSampling;
+}
+
+/**
+ * A delegated agent's realized sampler: what it runs with, and for a value the
+ * lead asked to be `"random"`, what it was drawn around.
+ */
+export interface TeamAgentSampling {
+	temperature?: number;
+	seed?: number;
+	seedRandom?: boolean;
+	temperatureBase?: number;
+	temperatureRange?: number;
+	note?: string;
 }
 
 export interface TeammateLifecycleSpec {
@@ -98,6 +113,11 @@ export interface TeammateLifecycleSpec {
 	/** The sampler the lead spawned it with; absent is the model's own. */
 	temperature?: number;
 	seed?: number;
+	/** The seed was drawn per agent (`seed: "random"`), not given. */
+	seedRandom?: boolean;
+	/** For a randomized temperature: what it was drawn around, and by what percent. */
+	temperatureBase?: number;
+	temperatureRange?: number;
 	runtimeAgentId?: string;
 	conversationId?: string;
 	parentAgentId?: string | null;

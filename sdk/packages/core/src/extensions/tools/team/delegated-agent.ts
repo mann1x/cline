@@ -14,7 +14,13 @@ import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-o
 import type { WorkerStruggleSupervisor } from "../../../runtime/safety/worker-struggle";
 import type { AgentNodePlacement } from "./agent-node-placement";
 import type { AgentSlotGate, AgentSlotGateRegistry } from "./agent-slot-gate";
-import { applySpawnSampling, type SpawnSampling } from "./spawn-sampling";
+import {
+	applySpawnSampling,
+	modelTemperatureOf,
+	type RealizedSpawnSampling,
+	realizeSpawnSampling,
+	type SpawnSamplingDraw,
+} from "./spawn-sampling";
 import { pinConversationHead } from "./subagent-layout";
 import {
 	buildSubAgentSystemPrompt,
@@ -254,8 +260,19 @@ export interface BuildDelegatedAgentConfigOptions {
 	 * session's `updateConnectionDefaults`, a profile, a node's placement --
 	 * can move it. Absent leaves the connection's sampler exactly as it was.
 	 * See `spawn-sampling.ts`.
+	 *
+	 * Already drawn (`drawSpawnSampling`): a random seed is a number here, and
+	 * a random temperature is a position in its range, made concrete against
+	 * this build's connection -- the model's own temperature is only known
+	 * once the node, and so the model, is.
 	 */
-	sampling?: SpawnSampling;
+	sampling?: SpawnSamplingDraw;
+	/**
+	 * Told what this build's sampler came to: the values applied, what a
+	 * random one was drawn around, or why one was not applied. Called on every
+	 * build with a sampler, so a re-placement reports its own.
+	 */
+	onSampling?: (realized: RealizedSpawnSampling) => void;
 }
 
 /** OR two optional abort signals, without an `AbortSignal.any` of one. */
@@ -413,6 +430,15 @@ export function buildDelegatedAgentConfig(
 				: {}),
 		});
 
+	const realized = realizeSpawnSampling(
+		options.sampling,
+		options.sampling?.temperatureRandom
+			? modelTemperatureOf(connection)
+			: undefined,
+	);
+	if (realized) {
+		options.onSampling?.(realized);
+	}
 	return applySpawnSampling(
 		{
 			...connection,
@@ -447,7 +473,7 @@ export function buildDelegatedAgentConfig(
 			consumePendingUserMessage: options.consumePendingUserMessage,
 			recoverTurnFault,
 		},
-		options.sampling,
+		realized,
 	);
 }
 

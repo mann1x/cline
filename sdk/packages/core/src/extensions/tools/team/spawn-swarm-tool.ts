@@ -54,6 +54,7 @@ import {
 import type { HandedRevision } from "./delegated-sandboxes";
 import {
 	mergeSpawnSampling,
+	type RealizedSpawnSampling,
 	readSpawnSampling,
 	SPAWN_SAMPLING_NOTE,
 	type SpawnSampling,
@@ -98,7 +99,10 @@ export const SpawnSwarmInputSchema = z.object({
 					"Sampling temperature for this worker, over the swarm's `temperature`.",
 				),
 				seed: SpawnSamplingFields.seed.describe(
-					"Sampling seed for this worker, used as given, over the swarm's `seed`.",
+					'Sampling seed for this worker, used as given, over the swarm\'s `seed`; "random" for its own.',
+				),
+				temperature_range: SpawnSamplingFields.temperature_range.describe(
+					"Percent this worker's temperature is randomized by, over the swarm's `temperature_range`.",
 				),
 			}),
 		)
@@ -111,11 +115,12 @@ export const SpawnSwarmInputSchema = z.object({
 			'How many workers to run on `task`. "max" means as many as the server will take right now; a number is an upper bound, and the server may allow fewer.',
 		),
 	temperature: SpawnSamplingFields.temperature.describe(
-		"Sampling temperature for every worker, over their model's own. Omit to keep the model's.",
+		"Sampling temperature for every worker, over their model's own. \"random\": each worker gets the model's own +/- `temperature_range`%. Omit to keep the model's.",
 	),
 	seed: SpawnSamplingFields.seed.describe(
-		"Sampling seed for the workers: worker i (from 0) gets seed + i, so they do not sample identically. A task's own `seed` is used as given.",
+		'Sampling seed for the workers: worker i (from 0) gets seed + i, so they do not sample identically; "random" gives each its own. A task\'s own `seed` is used as given.',
 	),
+	temperature_range: SpawnSamplingFields.temperature_range,
 });
 
 export type SpawnSwarmInput = z.infer<typeof SpawnSwarmInputSchema>;
@@ -159,11 +164,15 @@ export interface SwarmMemberReport {
 	model?: { provider: string; id: string };
 	nodeId?: string;
 	nodeLabel?: string;
+	/** The seed and temperature it ran with, as drawn, when the call set any. */
+	sampling?: RealizedSpawnSampling;
 }
 
 /** A worker's result, with where it ran when the runner knows. */
 export type SwarmWorkerResult = AgentResult & {
 	placed?: { nodeId: string; nodeLabel?: string };
+	/** What its sampler came to, when the call set one. */
+	sampling?: RealizedSpawnSampling;
 	/**
 	 * The revisions its changes were handed back to the lead as, when it ran on
 	 * a private workspace. Present -- even empty -- means it did; the runner
@@ -417,7 +426,7 @@ function requestedWorkers(input: SpawnSwarmInput): Array<{
  * workers on one task do not draw identical samples, under the task's own.
  */
 export function workerSampling(
-	input: Pick<SpawnSwarmInput, "temperature" | "seed">,
+	input: Pick<SpawnSwarmInput, "temperature" | "seed" | "temperature_range">,
 	index: number,
 	task?: unknown,
 ): SpawnSampling | undefined {
@@ -693,6 +702,7 @@ export function createSpawnSwarmTool(
 										}
 									: {}),
 								...(result.placed ? result.placed : {}),
+								...(result.sampling ? { sampling: result.sampling } : {}),
 								...(failed
 									? {
 											error:

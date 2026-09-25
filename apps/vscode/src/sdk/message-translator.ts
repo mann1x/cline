@@ -53,6 +53,7 @@ import type {
 	ContextBreakdown,
 	ContextWindowGrant,
 	SubagentCompactionCause,
+	SubagentSampling,
 	SubagentStatusItem,
 } from "@shared/ExtensionMessage"
 import { Logger } from "@shared/services/Logger"
@@ -309,6 +310,30 @@ const TEAMMATE_INDEX_BASE = 1000
 /** A teammate as `team_progress` reports it. */
 type TeammateProgress = NonNullable<Extract<CoreSessionEvent, { type: "team_progress" }>["payload"]["teammates"]>[number]
 
+/**
+ * A realized sampler as the spawn tools report it (`RealizedSpawnSampling` in
+ * core), keeping only the fields of the shape it should have.
+ */
+export function readSubagentSampling(value: unknown): SubagentSampling | undefined {
+	if (!value || typeof value !== "object") {
+		return undefined
+	}
+	const record = value as Record<string, unknown>
+	const number = (field: unknown) => (typeof field === "number" && Number.isFinite(field) ? field : undefined)
+	const sampling: SubagentSampling = {}
+	const temperature = number(record.temperature)
+	const seed = number(record.seed)
+	const temperatureBase = number(record.temperatureBase)
+	const temperatureRange = number(record.temperatureRange)
+	if (temperature !== undefined) sampling.temperature = temperature
+	if (seed !== undefined) sampling.seed = seed
+	if (record.seedRandom === true) sampling.seedRandom = true
+	if (temperatureBase !== undefined) sampling.temperatureBase = temperatureBase
+	if (temperatureRange !== undefined) sampling.temperatureRange = temperatureRange
+	if (typeof record.note === "string" && record.note.trim()) sampling.note = record.note.trim()
+	return Object.keys(sampling).length > 0 ? sampling : undefined
+}
+
 function applySpawnAgentOutput(entry: SubagentStatusItem, output: Record<string, unknown>): void {
 	entry.result = typeof output.text === "string" ? output.text : undefined
 	const usage = output.usage as Record<string, unknown> | undefined
@@ -336,6 +361,11 @@ function applySpawnAgentOutput(entry: SubagentStatusItem, output: Record<string,
 	// by it told the user nothing they could look up.
 	if (typeof output.nodeLabel === "string") {
 		entry.nodeLabel = output.nodeLabel
+	}
+	// The seed and temperature it ran with, when the lead set any.
+	const sampling = readSubagentSampling(output.sampling)
+	if (sampling) {
+		entry.sampling = sampling
 	}
 }
 
@@ -898,6 +928,11 @@ export class MessageTranslatorState {
 				contextTokens: 0,
 				contextWindow: 0,
 				contextUsagePercentage: 0,
+			}
+			// The seed and temperature it was spawned with, as drawn.
+			const sampling = readSubagentSampling(teammate.sampling)
+			if (sampling) {
+				item.sampling = sampling
 			}
 			if (teammate.activity) {
 				applySubagentCompactions(item, teammate.activity as unknown as Record<string, unknown>)
@@ -2613,6 +2648,10 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						// final result still overwrites these with what actually answered.
 						if (typeof updateData.providerId === "string") entry.providerId = updateData.providerId
 						if (typeof updateData.modelId === "string") entry.modelId = updateData.modelId
+						// The sampler its attempt was built with -- a random seed or
+						// temperature as drawn -- sent beside the model.
+						const sampling = readSubagentSampling(updateData.sampling)
+						if (sampling) entry.sampling = sampling
 						if (
 							updateData.queued === false &&
 							(typeof updateData.nodeLabel === "string" || typeof updateData.nodeId === "string")

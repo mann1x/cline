@@ -147,6 +147,9 @@ export {
 	// on the model's architecture, and a local model's name does not carry one.
 	readDeclaredFamily,
 	readDeclaredNumCtx,
+	// The Modelfile's own temperature: what a spawn's `temperature: "random"`
+	// randomizes around.
+	readDeclaredTemperature,
 	// The window to actually load with, from every source the server offers.
 	// A cloud model declares no `num_ctx`, so this is the only one of the three
 	// that answers for one.

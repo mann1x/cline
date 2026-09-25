@@ -253,6 +253,47 @@ export function parseDeclaredFamily(payload: unknown): string | undefined {
 	return trimmed === "" ? undefined : trimmed;
 }
 
+/**
+ * The temperature the model's Modelfile declares, keyed the same way as its
+ * window, and read from the same `/api/show` answer.
+ *
+ * Read, never written: it is what a spawn that asked for a *random*
+ * temperature randomizes around (`spawn-sampling.ts` in core), so a lead that
+ * says "random" gets the model's own sampler jittered rather than one this
+ * side invented.
+ */
+const declaredTemperature = new Map<string, number | null>();
+
+/** The model's own `temperature` parameter, if it has been looked up and it has one. */
+export function readDeclaredTemperature(
+	baseUrl: string | undefined,
+	modelId: string | undefined,
+): number | undefined {
+	if (!modelId) {
+		return undefined;
+	}
+	return declaredTemperature.get(declaredKey(baseUrl, modelId)) ?? undefined;
+}
+
+/** Parse `temperature` out of the `parameters` block `/api/show` returns. */
+export function parseDeclaredTemperature(payload: unknown): number | undefined {
+	if (!payload || typeof payload !== "object") {
+		return undefined;
+	}
+	const parameters = (payload as { parameters?: unknown }).parameters;
+	if (typeof parameters !== "string") {
+		return undefined;
+	}
+	const found = parameters.match(
+		/^[ \t]*temperature[ \t]+"?([0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)"?[ \t]*$/m,
+	);
+	if (!found) {
+		return undefined;
+	}
+	const value = Number(found[1]);
+	return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 /** Parse `num_ctx` out of the `parameters` block `/api/show` returns. */
 export function parseDeclaredNumCtx(payload: unknown): number | undefined {
 	if (!payload || typeof payload !== "object") {
@@ -311,6 +352,7 @@ export async function primeDeclaredNumCtx(
 			declaredNumCtx.set(key, null);
 			declaredFamily.set(key, null);
 			declaredTrainedCtx.set(key, null);
+			declaredTemperature.set(key, null);
 			await account;
 			return;
 		}
@@ -329,10 +371,12 @@ export async function primeDeclaredNumCtx(
 		}
 		const trained = parseDeclaredTrainedCtx(payload);
 		declaredTrainedCtx.set(key, trained ?? null);
+		declaredTemperature.set(key, parseDeclaredTemperature(payload) ?? null);
 	} catch {
 		declaredNumCtx.set(key, null);
 		declaredFamily.set(key, null);
 		declaredTrainedCtx.set(key, null);
+		declaredTemperature.set(key, null);
 	}
 	await account;
 	const resolved = readResolvedOllamaWindow(baseUrl, modelId);
@@ -351,6 +395,7 @@ export function resetDeclaredNumCtx(): void {
 	declaredNumCtx.clear();
 	declaredFamily.clear();
 	declaredTrainedCtx.clear();
+	declaredTemperature.clear();
 	resetOllamaAccountStatus();
 }
 

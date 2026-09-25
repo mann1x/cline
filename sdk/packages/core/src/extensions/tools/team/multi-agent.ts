@@ -18,6 +18,7 @@ import {
 	type RouteToTeammateOptions,
 	sanitizeFileName,
 	type TeamAgentActivity,
+	type TeamAgentSampling,
 	type TeamMailboxMessage,
 	type TeamMemberSnapshot,
 	TeamMessageType,
@@ -176,7 +177,7 @@ export interface SpawnTeammateOptions {
 	 * Carried on the spawn event so the persisted spec -- and a restore from
 	 * it -- keeps it.
 	 */
-	sampling?: { temperature?: number; seed?: number };
+	sampling?: TeamAgentSampling;
 }
 
 function isAbortLikeError(error: unknown): boolean {
@@ -768,6 +769,10 @@ export class AgentTeamsRuntime {
 				description: member.description,
 				status: member.status,
 				...teammateActivity(member),
+				// Its realized sampler, for its row: a swarm experiment reads it.
+				...(member.role === "teammate" && member.sampling
+					? { sampling: member.sampling }
+					: {}),
 			})),
 			tasks: Array.from(this.tasks.values()).map((task) => ({ ...task })),
 			mailbox: this.mailbox.map((message) => ({ ...message })),
@@ -849,6 +854,7 @@ export class AgentTeamsRuntime {
 				// What it had done, so a restored teammate counts on from it.
 				...(member.activity ? { activity: member.activity } : {}),
 				...(member.taskActivity ? { taskActivity: member.taskActivity } : {}),
+				...(member.sampling ? { sampling: member.sampling } : {}),
 				agent: undefined,
 				runningCount: 0,
 				lastMissionStep: this.missionStepCounter,
@@ -978,6 +984,7 @@ export class AgentTeamsRuntime {
 			...(config.engineSessionId
 				? { engineSessionId: config.engineSessionId }
 				: {}),
+			...(sampling ? { sampling } : {}),
 			// Its count carries on from the one it had under this id -- a
 			// teammate restored with the session, or respawned in place.
 			activityCounter: createActivityCounter(
@@ -1003,6 +1010,14 @@ export class AgentTeamsRuntime {
 					? { temperature: sampling.temperature }
 					: {}),
 				...(sampling?.seed !== undefined ? { seed: sampling.seed } : {}),
+				// How they were drawn, so a restore reports them as it found them.
+				...(sampling?.seedRandom ? { seedRandom: true } : {}),
+				...(sampling?.temperatureBase !== undefined
+					? { temperatureBase: sampling.temperatureBase }
+					: {}),
+				...(sampling?.temperatureRange !== undefined
+					? { temperatureRange: sampling.temperatureRange }
+					: {}),
 				runtimeAgentId: agent.getAgentId(),
 				conversationId: agent.getConversationId(),
 				parentAgentId: null,

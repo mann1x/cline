@@ -13,6 +13,7 @@ import {
 	formatToolOutput,
 	truncate,
 } from "../../utils/helpers";
+import { formatSpawnSampling } from "../../utils/spawn-sampling";
 import type { ChatEntry, InlineStream, TuiProps } from "../types";
 import { parseCompactionNoticeMetadata } from "../utils/compaction-status";
 
@@ -195,6 +196,26 @@ export function useAgentEventHandlers(deps: AgentEventDeps) {
 					}
 					break;
 				}
+				case "content_update": {
+					// A spawn tool reports each agent's realized sampler -- a
+					// random seed or temperature as drawn -- as it builds it.
+					const update = event.update as
+						| { sampling?: unknown; member?: unknown }
+						| undefined;
+					const line = formatSpawnSampling(update?.sampling);
+					if (!line || !event.toolCallId) break;
+					const member =
+						typeof update?.member === "number" ? String(update.member) : "0";
+					updateEntry((entry) =>
+						entry.kind === "tool_call" && entry.toolCallId === event.toolCallId
+							? {
+									...entry,
+									samplings: { ...(entry.samplings ?? {}), [member]: line },
+								}
+							: entry,
+					);
+					break;
+				}
 				case "content_end": {
 					switch (event.contentType) {
 						case "text":
@@ -349,9 +370,13 @@ export function useAgentEventHandlers(deps: AgentEventDeps) {
 				appendEntry({ kind: "team", text });
 			};
 			switch (event.type) {
-				case "teammate_spawned":
-					team(`[team] teammate spawned: ${event.agentId}`);
+				case "teammate_spawned": {
+					const sampling = formatSpawnSampling(event.teammate);
+					team(
+						`[team] teammate spawned: ${event.agentId}${sampling ? ` (${sampling})` : ""}`,
+					);
 					break;
+				}
 				case "teammate_shutdown":
 					team(`[team] teammate shutdown: ${event.agentId}`);
 					break;

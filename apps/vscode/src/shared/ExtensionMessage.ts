@@ -507,6 +507,12 @@ export interface SubagentStatusItem {
 	nodeId?: string
 	/** What the settings panel calls that node: `Node1`, `Node2`. */
 	nodeLabel?: string
+	/**
+	 * The seed and temperature it ran with, when the lead set a sampler on the
+	 * spawn -- as drawn, when it asked for "random". Kept on the row, which is
+	 * persisted with the task, so a swarm experiment can be reproduced.
+	 */
+	sampling?: SubagentSampling
 	contextTokens: number
 	contextWindow: number
 	contextUsagePercentage: number
@@ -537,6 +543,18 @@ export interface SubagentStatusItem {
 	 * that refused it twelve times -- was visible in the logs and nowhere else.
 	 */
 	activity?: SubagentActivityEntry[]
+}
+
+export interface SubagentSampling {
+	temperature?: number
+	seed?: number
+	/** The seed was drawn for this agent (`seed: "random"`). */
+	seedRandom?: boolean
+	/** A randomized temperature: what it was drawn around, and +/- what percent. */
+	temperatureBase?: number
+	temperatureRange?: number
+	/** Why a requested value was not applied, e.g. the model's temperature was unknown. */
+	note?: string
 }
 
 export interface SubagentActivityEntry {

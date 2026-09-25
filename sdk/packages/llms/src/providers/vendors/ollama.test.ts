@@ -14,6 +14,7 @@ import {
 	OLLAMA_DEFAULT_TIMEOUT_MS,
 	parseDeclaredFamily,
 	parseDeclaredNumCtx,
+	parseDeclaredTemperature,
 	parseDeclaredTrainedCtx,
 	primeDeclaredNumCtx,
 	readDeclaredFamily,
@@ -922,5 +923,24 @@ describe("setOllamaNoStreamTimeoutDispatcher", () => {
 		setOllamaNoStreamTimeoutDispatcher(undefined);
 
 		expect(hasOllamaNoStreamTimeoutDispatcher()).toBe(false);
+	});
+});
+
+describe("parseDeclaredTemperature", () => {
+	it("reads the Modelfile's temperature, quoted or not", () => {
+		expect(
+			parseDeclaredTemperature({
+				parameters: "num_ctx 8192\ntemperature 0.6\ntop_k 20",
+			}),
+		).toBe(0.6);
+		expect(parseDeclaredTemperature({ parameters: 'temperature "1"' })).toBe(1);
+	});
+
+	it("is undefined when the model states none", () => {
+		expect(parseDeclaredTemperature({ parameters: "num_ctx 8192" })).toBe(
+			undefined,
+		);
+		expect(parseDeclaredTemperature({})).toBeUndefined();
+		expect(parseDeclaredTemperature(undefined)).toBeUndefined();
 	});
 });

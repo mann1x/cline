@@ -7,8 +7,23 @@ import {
 	type DelegatedAgentRuntimeConfig,
 } from "./delegated-agent";
 import { expandAgentCounts, toSwarmInput } from "./spawn-agent-tool";
-import { applySpawnSampling, type SpawnSampling } from "./spawn-sampling";
+import {
+	applySpawnSampling,
+	DEFAULT_TEMPERATURE_RANGE_PERCENT,
+	describeRealizedSampling,
+	drawSpawnSampling,
+	modelTemperatureOf,
+	primeModelTemperature,
+	RANDOM_SEED_LIMIT,
+	type RealizedSpawnSampling,
+	readSpawnSampling,
+	realizeSpawnSampling,
+	type SpawnSamplingDraw,
+	samplingForCopy,
+	UNKNOWN_MODEL_TEMPERATURE_NOTE,
+} from "./spawn-sampling";
 import { workerSampling } from "./spawn-swarm-tool";
+import { reportSubagentSampling } from "./subagent-progress";
 
 /**
  * The request body a delegated agent built with `sampling` actually sends.
@@ -19,7 +34,7 @@ import { workerSampling } from "./spawn-swarm-tool";
  */
 async function wireBody(
 	runtime: DelegatedAgentRuntimeConfig,
-	sampling?: SpawnSampling,
+	sampling?: SpawnSamplingDraw,
 	provider = createDelegatedAgentConfigProvider(runtime),
 ): Promise<Record<string, unknown>> {
 	const bodies: Record<string, unknown>[] = [];
@@ -243,5 +258,338 @@ describe("seed offsets for several agents", () => {
 		const tasks = swarm.tasks as Array<Record<string, unknown>>;
 		expect(tasks.map((task) => task.seed)).toEqual([50, 51, undefined]);
 		expect(toSwarmInput({ task: "t" })).not.toHaveProperty("seed");
+	});
+});
+
+/** A deterministic uniform source: the same sequence every run. */
+function seededRandom(seed = 1): () => number {
+	let state = seed >>> 0;
+	return () => {
+		// mulberry32
+		state = (state + 0x6d2b79f5) >>> 0;
+		let t = state;
+		t = Math.imul(t ^ (t >>> 15), t | 1);
+		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+}
+
+/** Build one agent from `request` on `runtime`; what it realized and applied. */
+function buildWith(
+	runtime: DelegatedAgentRuntimeConfig,
+	request: Record<string, unknown>,
+	random: () => number,
+): { realized?: RealizedSpawnSampling; config: AgentConfig } {
+	let realized: RealizedSpawnSampling | undefined;
+	const config = buildDelegatedAgentConfig({
+		kind: "subagent",
+		prompt: "p",
+		tools: [],
+		configProvider: createDelegatedAgentConfigProvider(runtime),
+		sampling: drawSpawnSampling(readSpawnSampling(request), random),
+		onSampling: (value) => {
+			realized = value;
+		},
+	});
+	return { realized, config };
+}
+
+const WITH_MODEL_TEMPERATURE: DelegatedAgentRuntimeConfig = {
+	...LLAMACPP,
+	providerConfig: {
+		...(LLAMACPP.providerConfig as Record<string, unknown>),
+		sampling: { temperature: 0.7, topK: 20 },
+	} as AgentConfig["providerConfig"],
+};
+
+describe("reading the random keyword and the range", () => {
+	it("reads the keyword in any case, and numbers from strings", () => {
+		expect(
+			readSpawnSampling({ seed: "Random", temperature: "RANDOM" }),
+		).toEqual({ seed: "random", temperature: "random" });
+		expect(readSpawnSampling({ seed: " random ", temperature: "0.7" })).toEqual(
+			{
+				seed: "random",
+				temperature: 0.7,
+			},
+		);
+	});
+
+	it("reads a range as a percent, with or without the sign", () => {
+		expect(readSpawnSampling({ temperature_range: "2%" })).toEqual({
+			temperature_range: 2,
+		});
+		expect(readSpawnSampling({ temperature_range: " 5 % " })).toEqual({
+			temperature_range: 5,
+		});
+		expect(readSpawnSampling({ temperatureRange: 3 })).toEqual({
+			temperature_range: 3,
+		});
+	});
+
+	it("drops what is not usable", () => {
+		expect(readSpawnSampling({ temperature_range: 150 })).toBeUndefined();
+		expect(readSpawnSampling({ temperature_range: -1 })).toBeUndefined();
+		expect(readSpawnSampling({ seed: "randomly", temperature: "hot" })).toBe(
+			undefined,
+		);
+		expect(readSpawnSampling({ seed: 1.5, temperature: -0.1 })).toBeUndefined();
+	});
+
+	it("keeps a random seed random for every copy", () => {
+		expect(samplingForCopy({ seed: "random" }, 3)).toEqual({ seed: "random" });
+		expect(
+			expandAgentCounts([{ task: "t", count: 3, seed: "random" }]).map(
+				(member) => member.seed,
+			),
+		).toEqual(["random", "random", "random"]);
+	});
+});
+
+describe('seed: "random"', () => {
+	it("gives each agent its own seed, a non-negative 32-bit integer", () => {
+		const random = seededRandom(7);
+		const seeds = Array.from(
+			{ length: 50 },
+			() => drawSpawnSampling({ seed: "random" }, random)?.seed,
+		);
+		expect(new Set(seeds).size).toBe(50);
+		for (const seed of seeds) {
+			expect(Number.isInteger(seed)).toBe(true);
+			expect(seed).toBeGreaterThanOrEqual(0);
+			expect(seed).toBeLessThan(RANDOM_SEED_LIMIT);
+		}
+	});
+
+	it("is reported as drawn and reaches the wire", async () => {
+		const draw = drawSpawnSampling({ seed: "random" }, () => 0.5);
+		expect(draw).toEqual({ seed: 2 ** 30, seedRandom: true });
+		expect(realizeSpawnSampling(draw, undefined)).toEqual({
+			seed: 2 ** 30,
+			seedRandom: true,
+		});
+		const body = await wireBody(LLAMACPP, draw);
+		expect(body.seed).toBe(2 ** 30);
+		expect(body).not.toHaveProperty("temperature");
+	});
+});
+
+describe('temperature: "random"', () => {
+	it("draws each agent within the model's own temperature +/- 2%", () => {
+		const random = seededRandom(3);
+		const temperatures = Array.from({ length: 40 }, () => {
+			const { realized, config } = buildWith(
+				WITH_MODEL_TEMPERATURE,
+				{ temperature: "random" },
+				random,
+			);
+			expect(realized).toMatchObject({
+				temperatureBase: 0.7,
+				temperatureRange: DEFAULT_TEMPERATURE_RANGE_PERCENT,
+			});
+			expect(config.temperature).toBe(realized?.temperature);
+			return realized?.temperature as number;
+		});
+		for (const value of temperatures) {
+			// Three decimals, inside [0.686, 0.714] up to that rounding.
+			expect(Math.round(value * 1000) / 1000).toBe(value);
+			expect(value).toBeGreaterThanOrEqual(0.686 - 0.0005);
+			expect(value).toBeLessThanOrEqual(0.714 + 0.0005);
+		}
+		expect(new Set(temperatures).size).toBeGreaterThan(5);
+	});
+
+	it("reaches the edges of the range at the edges of the draw", () => {
+		const low = buildWith(
+			WITH_MODEL_TEMPERATURE,
+			{ temperature: "random" },
+			() => 0,
+		);
+		const high = buildWith(
+			WITH_MODEL_TEMPERATURE,
+			{ temperature: "random" },
+			() => 0.999999,
+		);
+		expect(low.realized?.temperature).toBe(0.686);
+		expect(high.realized?.temperature).toBe(0.714);
+	});
+
+	it("randomizes around an explicit temperature when a range is given", () => {
+		const random = seededRandom(11);
+		for (let index = 0; index < 30; index += 1) {
+			const { realized } = buildWith(
+				WITH_MODEL_TEMPERATURE,
+				{ temperature: 1, temperature_range: 10 },
+				random,
+			);
+			expect(realized).toMatchObject({
+				temperatureBase: 1,
+				temperatureRange: 10,
+			});
+			expect(realized?.temperature).toBeGreaterThanOrEqual(0.9);
+			expect(realized?.temperature).toBeLessThanOrEqual(1.1);
+		}
+	});
+
+	it("randomizes around the model's own when only a range is given", () => {
+		const { realized } = buildWith(
+			WITH_MODEL_TEMPERATURE,
+			{ temperature_range: "50%" },
+			() => 0,
+		);
+		expect(realized).toEqual({
+			temperature: 0.35,
+			temperatureBase: 0.7,
+			temperatureRange: 50,
+		});
+	});
+
+	it("keeps a number without a range fixed", () => {
+		const { realized } = buildWith(
+			WITH_MODEL_TEMPERATURE,
+			{ temperature: 0.4 },
+			() => 0,
+		);
+		expect(realized).toEqual({ temperature: 0.4 });
+	});
+
+	it("leaves the temperature unset, with an info line, when the model states none", () => {
+		const { realized, config } = buildWith(
+			LLAMACPP,
+			{ temperature: "random", seed: 5 },
+			() => 0.3,
+		);
+		expect(realized).toEqual({
+			seed: 5,
+			temperatureRange: 2,
+			note: UNKNOWN_MODEL_TEMPERATURE_NOTE,
+		});
+		expect(config.temperature).toBeUndefined();
+		expect(
+			(config.providerConfig as { sampling?: unknown } | undefined)?.sampling,
+		).toEqual({ seed: 5 });
+		const updates: unknown[] = [];
+		reportSubagentSampling((update) => updates.push(update), realized);
+		// An info line: no severity, which the row shows as a warning.
+		expect(updates).toEqual([
+			{
+				sampling: realized,
+				activity: { text: UNKNOWN_MODEL_TEMPERATURE_NOTE },
+			},
+		]);
+	});
+
+	it("puts the drawn value on the wire", async () => {
+		const draw = drawSpawnSampling({ temperature: "random" }, () => 1 - 1e-12);
+		const body = await wireBody(WITH_MODEL_TEMPERATURE, draw);
+		expect(body.temperature).toBe(0.714);
+		expect(body.top_k).toBe(20);
+	});
+});
+
+describe("the model's own temperature", () => {
+	it("is read from the connection, then its sampler bag", () => {
+		expect(
+			modelTemperatureOf({ providerId: "x", modelId: "m", temperature: 0.3 }),
+		).toBe(0.3);
+		expect(
+			modelTemperatureOf({
+				providerId: "x",
+				modelId: "m",
+				providerConfig: {
+					providerId: "x",
+					modelId: "m",
+					sampling: { temperature: 0.6 },
+				} as AgentConfig["providerConfig"],
+			}),
+		).toBe(0.6);
+		expect(modelTemperatureOf({ providerId: "x", modelId: "m" })).toBe(
+			undefined,
+		);
+	});
+
+	it("is read from an Ollama Modelfile through /api/show", async () => {
+		// A model and server nothing else in this run has looked up.
+		const connection = {
+			providerId: "ollama",
+			modelId: `tuned-${Date.now()}:latest`,
+			baseUrl: "http://127.0.0.1:9",
+		};
+		const fetchStub = (async (input: unknown) => {
+			const url = String(input);
+			if (url.endsWith("/api/show")) {
+				return Response.json({
+					parameters: 'num_ctx 32768\ntemperature 0.6\nstop "<|im_end|>"',
+				});
+			}
+			return new Response("{}", { status: 404 });
+		}) as typeof fetch;
+		const draw = drawSpawnSampling({ temperature: "random" }, () => 0.5);
+		expect(modelTemperatureOf(connection)).toBeUndefined();
+		await primeModelTemperature(draw, connection, fetchStub);
+		expect(modelTemperatureOf(connection)).toBe(0.6);
+		expect(realizeSpawnSampling(draw, modelTemperatureOf(connection))).toEqual({
+			temperature: 0.6,
+			temperatureBase: 0.6,
+			temperatureRange: 2,
+		});
+	});
+
+	it("is read from opencoti's /props default generation settings", async () => {
+		const { resetPolykvAvailability } = await import("@cline/llms");
+		resetPolykvAvailability();
+		const connection = {
+			providerId: "opencoti",
+			modelId: "m",
+			baseUrl: "http://127.0.0.1:9/v1",
+		};
+		const fetchStub = (async (input: unknown) => {
+			if (String(input).endsWith("/props")) {
+				return Response.json({
+					default_generation_settings: { params: { temperature: 0.8 } },
+				});
+			}
+			return new Response("{}", { status: 404 });
+		}) as typeof fetch;
+		await primeModelTemperature(
+			drawSpawnSampling({ temperature: "random" }),
+			connection,
+			fetchStub,
+		);
+		expect(modelTemperatureOf(connection)).toBe(0.8);
+		resetPolykvAvailability();
+	});
+
+	it("is not asked for when nothing random needs it", async () => {
+		let asked = 0;
+		const fetchStub = (async () => {
+			asked += 1;
+			return new Response("{}");
+		}) as unknown as typeof fetch;
+		const connection = { providerId: "ollama", modelId: "m" };
+		await primeModelTemperature(
+			drawSpawnSampling({ temperature: 0.5, seed: "random" }),
+			connection,
+			fetchStub,
+		);
+		await primeModelTemperature(
+			drawSpawnSampling({ temperature: 0.5, temperature_range: 4 }),
+			connection,
+			fetchStub,
+		);
+		expect(asked).toBe(0);
+	});
+});
+
+describe("describeRealizedSampling", () => {
+	it("is the row's compact line", () => {
+		expect(
+			describeRealizedSampling({
+				seed: 2847193,
+				temperature: 0.713,
+				seedRandom: true,
+			}),
+		).toBe("seed 2847193 · T 0.713");
+		expect(describeRealizedSampling({ note: "x" })).toBeUndefined();
 	});
 });

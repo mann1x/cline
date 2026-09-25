@@ -13,6 +13,7 @@ import {
 	write,
 	writeErr,
 } from "./output";
+import { formatSpawnSampling } from "./spawn-sampling";
 import type { Config } from "./types";
 
 // =============================================================================
@@ -181,6 +182,24 @@ export function handleEvent(event: AgentEvent, config: Config): void {
 			}
 			break;
 
+		case "content_update": {
+			// A spawned agent's realized sampler, as its spawn tool builds it:
+			// a swarm experiment reproduces from these.
+			const update = event.update as
+				| { sampling?: unknown; member?: unknown }
+				| undefined;
+			const line = formatSpawnSampling(update?.sampling);
+			if (line) {
+				closeInlineStreamIfNeeded();
+				const who =
+					typeof update?.member === "number" ? ` #${update.member + 1}` : "";
+				write(
+					`   ${c.gray}${HOOK}${c.reset}${c.dim}sampling${who}: ${line}${c.reset}\n`,
+				);
+			}
+			break;
+		}
+
 		case "content_end":
 			switch (event.contentType) {
 				case "text":
@@ -304,11 +323,13 @@ export function handleTeamEvent(event: TeamEvent): void {
 	}
 
 	switch (event.type) {
-		case "teammate_spawned":
+		case "teammate_spawned": {
+			const sampling = formatSpawnSampling(event.teammate);
 			write(
-				`${c.dim}[team] teammate spawned:${c.reset} ${c.cyan}${event.agentId}${c.reset}\n`,
+				`${c.dim}[team] teammate spawned:${c.reset} ${c.cyan}${event.agentId}${c.reset}${sampling ? ` ${c.dim}(${sampling})${c.reset}` : ""}\n`,
 			);
 			break;
+		}
 		case "teammate_shutdown":
 			write(
 				`${c.dim}[team] teammate shutdown:${c.reset} ${c.cyan}${event.agentId}${c.reset}\n`,

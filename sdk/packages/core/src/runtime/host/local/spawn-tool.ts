@@ -47,7 +47,12 @@ import {
 } from "../../../extensions/tools/team/placed-run";
 import { retryWhileSessionFull } from "../../../extensions/tools/team/session-window-retry";
 import type { SpawnToolOptions } from "../../../extensions/tools/team/spawn-agent-tool";
-import type { SpawnSampling } from "../../../extensions/tools/team/spawn-sampling";
+import {
+	drawSpawnSampling,
+	primeModelTemperature,
+	type RealizedSpawnSampling,
+	type SpawnSampling,
+} from "../../../extensions/tools/team/spawn-sampling";
 import type { SwarmWorkerResult } from "../../../extensions/tools/team/spawn-swarm-tool";
 import {
 	createSpawnSwarmTool,
@@ -56,6 +61,7 @@ import {
 import { buildSubagentLayout } from "../../../extensions/tools/team/subagent-layout";
 import {
 	createSubagentProgress,
+	reportSubagentSampling,
 	watchPolykvRoom,
 } from "../../../extensions/tools/team/subagent-progress";
 import { createTurnFaultRecovery } from "../../../extensions/tools/team/turn-fault-recovery";
@@ -579,6 +585,10 @@ export function createSessionSwarmTool(
 			config.logger,
 			(reason) => trouble.waiting(roomWaitTrouble(reason)),
 		);
+		// The worker's random choices, made once: a re-placement runs the same
+		// seed and the same position in the temperature range.
+		const sampling = drawSpawnSampling(request.sampling);
+		let realizedSampling: RealizedSpawnSampling | undefined;
 		// Built on the connection it runs on: a node decides the worker's
 		// connection, so with nodes this runs once per placement.
 		const attempt = async (
@@ -618,6 +628,8 @@ export function createSessionSwarmTool(
 				pooled,
 				cwd: workerConfig.getRuntimeConfig().cwd,
 			});
+			// A random temperature is drawn around the model's own.
+			await primeModelTemperature(sampling, connection);
 			if (attached && request.poolId) {
 				// The vendor looks the live pool up under this key, so this is
 				// what makes the agent attach to the lead's snapshot rather than
@@ -677,7 +689,15 @@ export function createSessionSwarmTool(
 				configProvider: forWorker(workerConfig, workerSessionId),
 				// The lead's sampler for this worker, applied over whichever
 				// node's connection it was placed on.
-				...(request.sampling ? { sampling: request.sampling } : {}),
+				...(sampling
+					? {
+							sampling,
+							onSampling: (realized: RealizedSpawnSampling) => {
+								realizedSampling = realized;
+								reportSubagentSampling(request.emitUpdate, realized);
+							},
+						}
+					: {}),
 				tools,
 				maxIterations: config.maxIterations,
 				parentAgentId: rootSessionId,
@@ -735,7 +755,11 @@ export function createSessionSwarmTool(
 						await releasePolykvAgent(workerSessionId);
 					},
 				});
-				result = { ...outcome.result, placed: outcome.placed };
+				result = {
+					...outcome.result,
+					placed: outcome.placed,
+					...(realizedSampling ? { sampling: realizedSampling } : {}),
+				};
 				return result;
 			}
 			// The same gate the lead's sub-agents queue on, so a swarm and a
@@ -763,6 +787,9 @@ export function createSessionSwarmTool(
 				return runWorker();
 			};
 			result = slotGate ? await slotGate.run(started) : await started();
+			if (realizedSampling) {
+				result = { ...result, sampling: realizedSampling };
+			}
 			return result;
 		} catch (error) {
 			failure = error;

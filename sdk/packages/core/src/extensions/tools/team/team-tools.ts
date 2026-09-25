@@ -78,9 +78,12 @@ import {
 } from "./delegated-agent";
 import type { AgentTeamsRuntime } from "./multi-agent";
 import {
+	drawSpawnSampling,
+	primeModelTemperature,
+	type RealizedSpawnSampling,
 	readSpawnSampling,
 	SPAWN_SAMPLING_NOTE,
-	spawnSamplingFields,
+	type SpawnSamplingDraw,
 } from "./spawn-sampling";
 
 /**
@@ -319,8 +322,14 @@ function spawnTeamTeammate(
 	options: Omit<CreateAgentTeamsToolsOptions, "requesterId" | "allowSpawn"> & {
 		requesterId: string;
 		spec: TeamTeammateSpec;
+		/**
+		 * The lead's request, already drawn, on a spawn. Absent on a restore,
+		 * where the spec holds the values the first spawn drew and they are
+		 * used as they are.
+		 */
+		sampling?: SpawnSamplingDraw;
 	},
-): void {
+): RealizedSpawnSampling | undefined {
 	// Refused before its tools are built: building them opens the teammate's
 	// workspace, and a running teammate under this id is still writing to the
 	// one that would replace.
@@ -342,8 +351,20 @@ function spawnTeamTeammate(
 			includeSpawnTool: false,
 		}),
 	);
-	// The lead's sampler, from the spawn call or from the spec a restore reads.
-	const sampling = readSpawnSampling(options.spec);
+	// The lead's sampler, drawn at the spawn call, or the values a restore
+	// reads from the spec -- concrete there, so a restored teammate samples
+	// as it did before rather than drawing again.
+	// Only the two values: the spec's `temperatureRange` records how they were
+	// drawn, and read as a request it would draw them again.
+	const sampling =
+		options.sampling ??
+		drawSpawnSampling(
+			readSpawnSampling({
+				temperature: options.spec.temperature,
+				seed: options.spec.seed,
+			}),
+		);
+	let realized: RealizedSpawnSampling | undefined;
 	// Its own engine session, as a `spawn_agent` agent has. Without one the
 	// handler fell back to the conversation's id: every teammate request went
 	// out as the LEAD's engine session, and its compaction read and re-rooted
@@ -352,21 +373,43 @@ function spawnTeamTeammate(
 	// runtime when the teammate is shut down.
 	const runtimeConfig = options.teammateConfigProvider.getRuntimeConfig();
 	const engineSessionId = `${runtimeConfig.sessionId ?? "cerebriline"}~teammate-${options.spec.agentId}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+	const config = buildDelegatedAgentConfig({
+		kind: "teammate",
+		engineSessionId,
+		prompt: options.spec.rolePrompt,
+		role: options.spec.rolePrompt,
+		configProvider: options.teammateConfigProvider,
+		tools: teammateTools,
+		maxIterations: options.spec.maxIterations,
+		cwd: runtimeConfig.cwd,
+		...(sampling
+			? {
+					sampling,
+					onSampling: (value: RealizedSpawnSampling) => {
+						realized = value;
+					},
+				}
+			: {}),
+	});
+	// A restore re-realizes fixed values; how they were first drawn is on the spec.
+	if (realized && !options.sampling) {
+		realized = {
+			...realized,
+			...(options.spec.seedRandom ? { seedRandom: true } : {}),
+			...(options.spec.temperatureBase !== undefined
+				? { temperatureBase: options.spec.temperatureBase }
+				: {}),
+			...(options.spec.temperatureRange !== undefined
+				? { temperatureRange: options.spec.temperatureRange }
+				: {}),
+		};
+	}
 	options.runtime.spawnTeammate({
 		agentId: options.spec.agentId,
-		...(sampling ? { sampling } : {}),
-		config: buildDelegatedAgentConfig({
-			kind: "teammate",
-			engineSessionId,
-			prompt: options.spec.rolePrompt,
-			role: options.spec.rolePrompt,
-			configProvider: options.teammateConfigProvider,
-			tools: teammateTools,
-			maxIterations: options.spec.maxIterations,
-			cwd: runtimeConfig.cwd,
-			...(sampling ? { sampling } : {}),
-		}),
+		...(realized ? { sampling: realized } : {}),
+		config,
 	});
+	return realized;
 }
 
 export function bootstrapAgentTeams(
@@ -445,14 +488,22 @@ export function createAgentTeamsTools(
 					const spec: TeamTeammateSpec = {
 						agentId: validatedInput.agentId,
 						rolePrompt: validatedInput.rolePrompt,
-						...spawnSamplingFields(readSpawnSampling(validatedInput)),
 					};
+					// Drawn here, and a random temperature's base read from the
+					// server if nothing local states it; the values it comes to
+					// are what the persisted spec keeps.
+					const sampling = drawSpawnSampling(readSpawnSampling(validatedInput));
+					await primeModelTemperature(
+						sampling,
+						options.teammateConfigProvider.getConnectionConfig(),
+					);
 					spawnTeamTeammate({
 						runtime: options.runtime,
 						requesterId: options.requesterId,
 						teammateConfigProvider: options.teammateConfigProvider,
 						createBaseTools: options.createBaseTools,
 						spec,
+						...(sampling ? { sampling } : {}),
 					});
 					if (!includeManagementTools) {
 						options.onLeadToolsUnlocked?.(

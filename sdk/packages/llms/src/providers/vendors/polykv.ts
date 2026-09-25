@@ -787,6 +787,13 @@ export interface OpencotiProps {
 	chatTemplate?: string;
 	/** Advertised capabilities, e.g. `slots_nonblocking_v1`. */
 	features: readonly string[];
+	/**
+	 * The temperature the server samples at when a request names none:
+	 * `default_generation_settings.params.temperature` (or, on an older build,
+	 * `default_generation_settings.temperature`). Read, never sent -- it is the
+	 * model's own sampler, which a spawn's `temperature: "random"` jitters.
+	 */
+	defaultTemperature?: number;
 }
 
 const NOT_OPENCOTI: OpencotiProps = {
@@ -891,6 +898,38 @@ export function hasOpencotiFeature(
 }
 
 const OPENCOTI_PROPS = new Map<string, Promise<OpencotiProps>>();
+/** The answered reads of {@link OPENCOTI_PROPS}, for a reader that cannot wait. */
+const OPENCOTI_PROPS_READ = new Map<string, OpencotiProps>();
+
+/**
+ * The server's default temperature, from a `/props` read that has already
+ * answered -- never a fetch. `undefined` when it was not read yet, did not
+ * answer, or states none.
+ */
+export function readOpencotiDefaultTemperature(
+	baseUrl: string | undefined,
+): number | undefined {
+	if (!baseUrl) {
+		return undefined;
+	}
+	return OPENCOTI_PROPS_READ.get(polykvRoot(baseUrl))?.defaultTemperature;
+}
+
+/** `default_generation_settings`' temperature, in either shape llama.cpp has used. */
+function parseDefaultTemperature(settings: unknown): number | undefined {
+	if (!settings || typeof settings !== "object") {
+		return undefined;
+	}
+	const record = settings as { params?: unknown; temperature?: unknown };
+	const params =
+		record.params && typeof record.params === "object"
+			? (record.params as { temperature?: unknown })
+			: undefined;
+	const value = params?.temperature ?? record.temperature;
+	return typeof value === "number" && Number.isFinite(value) && value >= 0
+		? value
+		: undefined;
+}
 
 /**
  * The release, when the build says it.
@@ -958,6 +997,9 @@ export function probeOpencotiProps(
 				unknown
 			>;
 			const release = parseRelease(body.build_info);
+			const defaultTemperature = parseDefaultTemperature(
+				body.default_generation_settings,
+			);
 			return {
 				...(release ? { release } : {}),
 				// It answered. Whether it is opencoti at all is the next three
@@ -979,6 +1021,7 @@ export function probeOpencotiProps(
 							(entry) => typeof entry === "string",
 						)
 					: [],
+				...(defaultTemperature !== undefined ? { defaultTemperature } : {}),
 			};
 		} catch {
 			return NOT_OPENCOTI;
@@ -994,6 +1037,9 @@ export function probeOpencotiProps(
 	void pending.then((props) => {
 		if (!props.reachable && OPENCOTI_PROPS.get(root) === pending) {
 			OPENCOTI_PROPS.delete(root);
+		}
+		if (props.reachable && OPENCOTI_PROPS.get(root) === pending) {
+			OPENCOTI_PROPS_READ.set(root, props);
 		}
 	});
 	return pending;
@@ -1019,6 +1065,7 @@ export async function probePolykvEnabled(
 /** Test seam, and the way a changed server launch is picked up. */
 export function resetPolykvAvailability(): void {
 	OPENCOTI_PROPS.clear();
+	OPENCOTI_PROPS_READ.clear();
 }
 
 export function createPolykvClient(options: PolykvClientOptions): PolykvClient {

@@ -10,6 +10,7 @@ import {
 	COMPACTION_CAUSES,
 	type CompactionCause,
 } from "../../context/compaction-cause";
+import type { RealizedSpawnSampling } from "./spawn-sampling";
 
 /**
  * What a delegated agent is doing, reported on the tool call that started it.
@@ -91,6 +92,26 @@ export function reportSubagentModel(
 	emitUpdate?.({
 		...(model.providerId ? { providerId: model.providerId } : {}),
 		...(model.modelId ? { modelId: model.modelId } : {}),
+	});
+}
+
+/**
+ * The sampler the agent was built with -- its realized seed and temperature,
+ * and when they were drawn, what around -- sent per build beside the model.
+ * A swarm experiment needs each agent's values to reproduce it, and the row
+ * (persisted with the task) is where they are kept. A requested value that
+ * could not be applied is also an info line on the row, never a warning.
+ */
+export function reportSubagentSampling(
+	emitUpdate: ((update: unknown) => void) | undefined,
+	sampling: RealizedSpawnSampling | undefined,
+): void {
+	if (!sampling) {
+		return;
+	}
+	emitUpdate?.({
+		sampling,
+		...(sampling.note ? { activity: { text: sampling.note } } : {}),
 	});
 }
 

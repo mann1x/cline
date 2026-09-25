@@ -53,6 +53,10 @@ export const TeamTeammateSpecSchema = z.object({
 	/** The sampler the lead spawned it with, kept so a restore keeps it. */
 	temperature: z.number().nonnegative().optional(),
 	seed: z.number().int().optional(),
+	/** How they were drawn, when `"random"` or a range asked for it. */
+	seedRandom: z.boolean().optional(),
+	temperatureBase: z.number().nonnegative().optional(),
+	temperatureRange: z.number().min(0).max(100).optional(),
 });
 
 function nullableOptional<T extends z.ZodTypeAny>(schema: T) {
@@ -69,11 +73,20 @@ export const TeamSpawnTeammateInputSchema = z
 			.string()
 			.min(1)
 			.describe("System prompt describing teammate role"),
-		temperature: nullableOptional(z.number().nonnegative()).describe(
-			"Sampling temperature for this teammate, over its model's own. Omit to keep the model's.",
+		// A string is read tolerantly by the tool ("random", "0.7", "2%"), so
+		// the schema does not reject the spellings the tool accepts.
+		temperature: nullableOptional(
+			z.union([z.number().nonnegative(), z.string()]),
+		).describe(
+			"Sampling temperature for this teammate, over its model's own. \"random\": the model's own +/- `temperature_range`%. Omit to keep the model's.",
 		),
-		seed: nullableOptional(z.number().int()).describe(
-			"Sampling seed for this teammate. Omit to leave it unset.",
+		seed: nullableOptional(z.union([z.number().int(), z.string()])).describe(
+			'Sampling seed for this teammate. "random" draws one. Omit to leave it unset.',
+		),
+		temperature_range: nullableOptional(
+			z.union([z.number().min(0).max(100), z.string()]),
+		).describe(
+			"Percent (default 2) the temperature is randomized by, around `temperature` or the model's own.",
 		),
 	})
 	.strict();

@@ -61,3 +61,52 @@ export function subagentModelLabel(item: { providerId?: string; modelId?: string
 	}
 	return model || provider || undefined
 }
+
+interface SamplingLike {
+	temperature?: number
+	seed?: number
+	seedRandom?: boolean
+	temperatureBase?: number
+	temperatureRange?: number
+	note?: string
+}
+
+/**
+ * The sampler an agent ran with, compact: `seed 2847193 · T 0.713`.
+ *
+ * Only when the lead set one on the spawn; an agent on its model's own
+ * sampler shows nothing. A random temperature the model could not supply a
+ * base for shows as the model's (`T model`), which is what it ran on.
+ */
+export function subagentSamplingText(sampling: SamplingLike | undefined): string | undefined {
+	if (!sampling) {
+		return undefined
+	}
+	const parts = [
+		sampling.seed !== undefined ? `seed ${sampling.seed}` : "",
+		sampling.temperature !== undefined ? `T ${sampling.temperature}` : sampling.note ? "T model" : "",
+	].filter(Boolean)
+	return parts.length > 0 ? parts.join(" · ") : undefined
+}
+
+/** The same, in full, for its tooltip: which values were drawn, and around what. */
+export function subagentSamplingTitle(sampling: SamplingLike | undefined): string | undefined {
+	if (!sampling) {
+		return undefined
+	}
+	const lines: string[] = []
+	if (sampling.seed !== undefined) {
+		lines.push(`Seed ${sampling.seed}${sampling.seedRandom ? " (random)" : ""}`)
+	}
+	if (sampling.temperature !== undefined) {
+		const drawn =
+			sampling.temperatureBase !== undefined && sampling.temperatureRange !== undefined
+				? ` (random: ${sampling.temperatureBase} ± ${sampling.temperatureRange}%)`
+				: ""
+		lines.push(`Temperature ${sampling.temperature}${drawn}`)
+	}
+	if (sampling.note) {
+		lines.push(`Temperature: ${sampling.note}`)
+	}
+	return lines.length > 0 ? lines.join("\n") : undefined
+}

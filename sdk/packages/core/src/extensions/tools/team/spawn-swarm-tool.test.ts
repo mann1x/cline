@@ -683,6 +683,77 @@ describe("spawn_swarm temperature and seed", () => {
 		});
 	});
 
+	it("hands every worker the random request, to draw its own", async () => {
+		const { tool, byName } = samplingTool();
+		await call(tool, {
+			systemPrompt: "s",
+			task: "t",
+			count: 2,
+			seed: "random",
+			temperature: "random",
+			temperature_range: 5,
+		});
+		expect(byName()).toEqual({
+			"worker-1": {
+				seed: "random",
+				temperature: "random",
+				temperature_range: 5,
+			},
+			"worker-2": {
+				seed: "random",
+				temperature: "random",
+				temperature_range: 5,
+			},
+		});
+	});
+
+	it("puts each worker's realized sampler on its report", async () => {
+		const updates: Array<Record<string, unknown>> = [];
+		const tool = createSpawnSwarmTool({
+			pools: stubPools().source,
+			runWorker: async (request: { name: string }) => ({
+				...agentResult("done"),
+				sampling: {
+					seed: request.name === "a" ? 11 : 22,
+					seedRandom: true,
+				},
+			}),
+		} as never);
+		const output = (await tool.execute(
+			{
+				systemPrompt: "s",
+				seed: "random",
+				tasks: [
+					{ name: "a", task: "a" },
+					{ name: "b", task: "b" },
+				],
+			},
+			{
+				...(context as object),
+				emitUpdate: (update: unknown) =>
+					updates.push(update as Record<string, unknown>),
+			} as never,
+		)) as { results?: Array<{ name: string; sampling?: unknown }> };
+		expect(
+			output.results?.map((entry) => [entry.name, entry.sampling]),
+		).toEqual([
+			["a", { seed: 11, seedRandom: true }],
+			["b", { seed: 22, seedRandom: true }],
+		]);
+		const finished = updates
+			.filter((update) => update.finished)
+			.map((update) => [
+				update.member,
+				(update.finished as { sampling?: unknown }).sampling,
+			]);
+		expect(finished).toEqual(
+			expect.arrayContaining([
+				[0, { seed: 11, seedRandom: true }],
+				[1, { seed: 22, seedRandom: true }],
+			]),
+		);
+	});
+
 	it("hands a worker no sampler when the call names none", async () => {
 		const { tool, byName } = samplingTool();
 		await call(tool, { systemPrompt: "s", task: "t", count: 2 });

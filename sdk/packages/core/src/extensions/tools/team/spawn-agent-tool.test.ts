@@ -914,6 +914,102 @@ describe("createSpawnAgentTool", () => {
 			expect(byTask.get("c")).toEqual({ temperature: 0, seed: 5 });
 		});
 
+		it("draws a random seed and temperature per agent and reports each on its row", async () => {
+			const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+			runMock.mockResolvedValue(completed);
+			const tool = createSpawnAgentTool({
+				configProvider: createDelegatedAgentConfigProvider({
+					providerId: "anthropic",
+					modelId: "m",
+					providerConfig: {
+						providerId: "anthropic",
+						modelId: "m",
+						sampling: { temperature: 0.7 },
+					} as never,
+				}),
+			});
+			const updates: Array<Record<string, unknown>> = [];
+			const output = (await tool.execute(
+				{
+					agents: [
+						{
+							name: "w",
+							task: "t",
+							count: 4,
+							seed: "random",
+							temperature: "random",
+						},
+					],
+				} as never,
+				{
+					...(context as object),
+					emitUpdate: (update: unknown) =>
+						updates.push(update as Record<string, unknown>),
+				} as never,
+			)) as { results?: Array<{ sampling?: Record<string, unknown> }> };
+			// One sampling update per agent, on that agent's row.
+			const rows = updates.filter((update) => update.sampling);
+			expect(rows.map((row) => row.member).sort()).toEqual([0, 1, 2, 3]);
+			const seeds = new Set(
+				rows.map((row) => (row.sampling as { seed: number }).seed),
+			);
+			expect(seeds.size).toBe(4);
+			for (const row of rows) {
+				const sampling = row.sampling as {
+					temperature: number;
+					temperatureBase: number;
+					temperatureRange: number;
+					seedRandom: boolean;
+				};
+				expect(sampling).toMatchObject({
+					seedRandom: true,
+					temperatureBase: 0.7,
+					temperatureRange: 2,
+				});
+				expect(sampling.temperature).toBeGreaterThanOrEqual(0.686 - 0.0005);
+				expect(sampling.temperature).toBeLessThanOrEqual(0.714 + 0.0005);
+			}
+			// And what was built is what was reported.
+			const built = builtSamplers().map((entry) => entry.sampling?.seed);
+			expect(new Set(built)).toEqual(seeds);
+			// The rows' final reports carry the same values.
+			const finished = updates
+				.map((update) => update.finished as { sampling?: unknown } | undefined)
+				.filter(Boolean);
+			expect(finished).toHaveLength(4);
+			expect(
+				new Set(
+					finished.map((entry) => (entry?.sampling as { seed: number }).seed),
+				),
+			).toEqual(seeds);
+			expect(output).toBeDefined();
+		});
+
+		it("returns a single agent's realized sampler in its result", async () => {
+			const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+			runMock.mockResolvedValue(completed);
+			const tool = createSpawnAgentTool({
+				configProvider: createDelegatedAgentConfigProvider({
+					providerId: "anthropic",
+					modelId: "m",
+				}),
+			});
+			const output = await tool.execute(
+				{ task: "t", temperature: 1, temperature_range: 10, seed: 4 } as never,
+				context,
+			);
+			const sampling = (output as { sampling?: Record<string, number> })
+				.sampling;
+			expect(sampling).toMatchObject({
+				seed: 4,
+				temperatureBase: 1,
+				temperatureRange: 10,
+			});
+			expect(sampling?.temperature).toBeGreaterThanOrEqual(0.9);
+			expect(sampling?.temperature).toBeLessThanOrEqual(1.1);
+			expect(builtSamplers()[0]?.temperature).toBe(sampling?.temperature);
+		});
+
 		it("hands a configured agent's entry its sampler", async () => {
 			const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
 			const configuredExecute = vi.fn(async () => completed);

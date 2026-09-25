@@ -290,6 +290,30 @@ describe("handleEvent text formatting", () => {
 		expect(errorOutput).toContain("Select another model");
 	});
 
+	it("names a spawned agent's realized sampler, and a teammate's", () => {
+		handleEvent(
+			{
+				type: "content_update",
+				contentType: "tool",
+				toolName: "spawn_agent",
+				toolCallId: "t1",
+				update: {
+					member: 1,
+					sampling: { seed: 42, seedRandom: true, temperature: 0.71 },
+				},
+			} as unknown as AgentEvent,
+			{} as Config,
+		);
+		handleTeamEvent({
+			type: "teammate_spawned",
+			agentId: "w",
+			teammate: { rolePrompt: "r", seed: 9, temperature: 0.3 },
+		} as unknown as TeamEvent);
+
+		expect(output).toContain("sampling #2: seed 42 (random) · T 0.71");
+		expect(output).toContain("(seed 9 · T 0.3)");
+	});
+
 	it("suppresses heartbeat-only team progress messages", () => {
 		handleTeamEvent({
 			type: "run_progress",

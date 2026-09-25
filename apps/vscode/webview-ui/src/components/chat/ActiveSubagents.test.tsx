@@ -205,6 +205,27 @@ describe("the working-agents strip", () => {
 		expect(screen.queryByText(/compaction/)).not.toBeInTheDocument()
 	})
 
+	// A swarm experiment needs each agent's realized sampler where the agent is.
+	it("shows the seed and temperature the agent was spawned with, in its box", () => {
+		render(
+			<ActiveSubagents
+				messages={[
+					statusMessage([
+						item({
+							index: 1,
+							agentName: "probe",
+							sampling: { seed: 7, temperature: 0.702, temperatureBase: 0.7, temperatureRange: 2 },
+						}),
+					]),
+				]}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /probe/ }))
+		const line = screen.getByText("seed 7 · T 0.702")
+		expect(line.getAttribute("title")).toBe("Seed 7\nTemperature 0.702 (random: 0.7 ± 2%)")
+	})
+
 	// A run recorded before nodes were named still has to say something.
 	it("falls back to the id when the run carries no name", () => {
 		render(<ActiveSubagents messages={[statusMessage([item({ index: 1, agentName: "old", nodeId: "node-mucuczcm" })])]} />)

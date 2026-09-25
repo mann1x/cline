@@ -32,10 +32,12 @@ import {
 } from "./delegated-agent";
 import { isAdmissionEvent, runPlacedAgent } from "./placed-run";
 import {
+	drawSpawnSampling,
 	mergeSpawnSampling,
+	primeModelTemperature,
+	type RealizedSpawnSampling,
 	readSpawnSampling,
 	SPAWN_SAMPLING_NOTE,
-	type SpawnSampling,
 	SpawnSamplingFields,
 	samplingForCopy,
 	spawnSamplingFields,
@@ -50,6 +52,7 @@ import {
 	DELEGATION_PACING_NOTE,
 	reportSubagentFinished,
 	reportSubagentModel,
+	reportSubagentSampling,
 	restarted,
 	watchPolykvRoom,
 } from "./subagent-progress";
@@ -164,7 +167,10 @@ export const SpawnAgentMemberSchema = z.object({
 		"Sampling temperature for this entry's agents, over the call's `temperature`.",
 	),
 	seed: SpawnSamplingFields.seed.describe(
-		"Sampling seed for this entry, over the call's `seed`. With `count`, each copy gets seed + its index: seed 7 with count 3 is 7, 8, 9.",
+		'Sampling seed for this entry, over the call\'s `seed`. With `count`, each copy gets seed + its index: seed 7 with count 3 is 7, 8, 9; "random" gives each copy its own.',
+	),
+	temperature_range: SpawnSamplingFields.temperature_range.describe(
+		"Percent this entry's agents' temperature is randomized by, over the call's `temperature_range`.",
 	),
 });
 
@@ -199,7 +205,7 @@ export function expandAgentCounts(
 		return Array.from({ length: count }, (_entry, copy) => ({
 			...rest,
 			name: `${base}-${copy + 1}`,
-			...(rest.seed !== undefined ? { seed: rest.seed + copy } : {}),
+			...(typeof rest.seed === "number" ? { seed: rest.seed + copy } : {}),
 		}));
 	});
 }
@@ -284,9 +290,10 @@ export interface SpawnAgentOutput {
 	nodeLabel?: string;
 	/**
 	 * The sampler the call asked for, when it asked: what this agent ran with
-	 * over its model's own. Absent means the model's own throughout.
+	 * over its model's own -- a random seed or temperature as drawn, with what
+	 * it was drawn around. Absent means the model's own throughout.
 	 */
-	sampling?: SpawnSampling;
+	sampling?: RealizedSpawnSampling;
 }
 
 export interface SubAgentStartContext {
@@ -458,6 +465,7 @@ const AGENTS_SIBLING_FIELDS = new Set([
 	"name",
 	"temperature",
 	"seed",
+	"temperature_range",
 ]);
 
 /**
@@ -843,7 +851,11 @@ async function runSpawnedAgent(
 	const parentAgentId = context.agentId;
 	// The lead's sampler, when it gave one. Carried as a build option, so a
 	// re-placement onto another node keeps it.
-	const sampling = readSpawnSampling(input);
+	// Drawn here, once: a random seed, and where in its range a random
+	// temperature falls, are this agent's for every attempt.
+	const sampling = drawSpawnSampling(readSpawnSampling(input));
+	// What the latest build made of it, for the result.
+	let realizedSampling: RealizedSpawnSampling | undefined;
 	// From the first build, kept across re-placements: the observers identify
 	// one delegation, not one attempt at it.
 	let started: { subAgentId: string; conversationId: string } | undefined;
@@ -874,6 +886,9 @@ async function runSpawnedAgent(
 			pooled,
 			cwd: provider.getRuntimeConfig().cwd,
 		});
+		// A random temperature is drawn around the model's own: read it from
+		// the server now if nothing local states it.
+		await primeModelTemperature(sampling, connection);
 		const agent = createDelegatedAgent({
 			kind: "subagent",
 			// What the lead's side turn leaves for it while the lead waits.
@@ -885,7 +900,15 @@ async function runSpawnedAgent(
 				: {}),
 			pinnedHead: layout.pinnedHead,
 			configProvider: provider,
-			...(sampling ? { sampling } : {}),
+			...(sampling
+				? {
+						sampling,
+						onSampling: (realized: RealizedSpawnSampling) => {
+							realizedSampling = realized;
+							reportSubagentSampling(context.emitUpdate, realized);
+						},
+					}
+				: {}),
 			tools,
 			maxIterations: config.defaultMaxIterations,
 			parentAgentId,
@@ -1005,7 +1028,7 @@ async function runSpawnedAgent(
 			// there is one place to run and naming it is noise.
 			...(placed ? { nodeId: placed.nodeId } : {}),
 			...(placed?.nodeLabel ? { nodeLabel: placed.nodeLabel } : {}),
-			...(sampling ? { sampling } : {}),
+			...(realizedSampling ? { sampling: realizedSampling } : {}),
 		};
 		if (config.onSubAgentEnd && started) {
 			try {

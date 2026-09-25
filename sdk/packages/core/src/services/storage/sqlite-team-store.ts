@@ -84,6 +84,24 @@ function parseTeammatesJson(raw: string): TeamTeammateSpec[] {
 		if (typeof rec.seed === "number" && Number.isInteger(rec.seed)) {
 			spec.seed = rec.seed;
 		}
+		if (rec.seedRandom === true) {
+			spec.seedRandom = true;
+		}
+		if (
+			typeof rec.temperatureBase === "number" &&
+			Number.isFinite(rec.temperatureBase) &&
+			rec.temperatureBase >= 0
+		) {
+			spec.temperatureBase = rec.temperatureBase;
+		}
+		if (
+			typeof rec.temperatureRange === "number" &&
+			Number.isFinite(rec.temperatureRange) &&
+			rec.temperatureRange >= 0 &&
+			rec.temperatureRange <= 100
+		) {
+			spec.temperatureRange = rec.temperatureRange;
+		}
 		out.push(spec);
 	}
 	return out;

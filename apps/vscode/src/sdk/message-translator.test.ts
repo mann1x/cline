@@ -5647,6 +5647,73 @@ describe("a spawn_agent batch", () => {
 		expect(state.getSpawnAgentItems()[0]?.result).toBe("all good")
 	})
 
+	// A swarm experiment reproduces from each agent's realized seed and
+	// temperature: they belong on that agent's row, and the row is what the
+	// task history keeps.
+	it("puts each member's realized sampler on its own row and in the saved status", () => {
+		const state = new MessageTranslatorState()
+		send(state, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-s",
+			input: { seed: "random", temperature: "random", agents: [{ task: "a" }, { task: "b" }] },
+		})
+		const drawn = [
+			{ seed: 11, seedRandom: true, temperature: 0.702, temperatureBase: 0.7, temperatureRange: 2 },
+			{ seed: 22, seedRandom: true, temperature: 0.691, temperatureBase: 0.7, temperatureRange: 2 },
+		]
+		const messages = drawn.flatMap(
+			(sampling, member) =>
+				send(state, {
+					type: "content_update",
+					contentType: "tool",
+					toolName: "spawn_agent",
+					toolCallId: "call-s",
+					update: { member, sampling: { ...sampling, junk: "dropped" } },
+				}).messages,
+		)
+		expect(state.getSpawnAgentItems().map((item) => item.sampling)).toEqual(drawn)
+		const saved = messages.filter((message) => message.say === "subagent").pop()
+		expect(JSON.parse(saved?.text ?? "{}").items.map((item: { sampling?: unknown }) => item.sampling)).toEqual(drawn)
+
+		// An agent whose model stated no temperature: the note is kept, and it
+		// is an info line, not a warning.
+		send(state, {
+			type: "content_update",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-s",
+			update: {
+				member: 1,
+				sampling: { temperatureRange: 2, note: "model temperature unknown; kept the model's sampler" },
+				activity: { text: "model temperature unknown; kept the model's sampler" },
+			},
+		})
+		const second = state.getSpawnAgentItems()[1]
+		expect(second?.sampling).toEqual({
+			temperatureRange: 2,
+			note: "model temperature unknown; kept the model's sampler",
+		})
+		expect(second?.activity?.at(-1)).toMatchObject({ text: "model temperature unknown; kept the model's sampler" })
+		expect(second?.activity?.at(-1)?.severity).toBeUndefined()
+
+		// The final result carries the same values, and they survive it.
+		send(state, {
+			type: "content_end",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-s",
+			output: {
+				results: [
+					{ name: "agent-1", text: "ok", sampling: drawn[0] },
+					{ name: "agent-2", text: "ok", sampling: drawn[1] },
+				],
+			},
+		})
+		expect(state.getSpawnAgentItems().map((item) => item.sampling)).toEqual(drawn)
+	})
+
 	// The result the model gets is sized to fit the tool-result cap: an index
 	// of every agent and not every report. Each row keeps the full report its
 	// own `finished` update brought, and the index settles its status.
@@ -6282,6 +6349,13 @@ describe("the teammates' row", () => {
 		})
 		// Clear of the sub-agents' indexes, which the strip keys agents by.
 		expect(status.items[0].index).toBeGreaterThan(1000)
+	})
+
+	it("shows the seed and temperature a teammate was spawned with", () => {
+		const state = new MessageTranslatorState()
+		const sampling = { seed: 2847193, seedRandom: true, temperature: 0.713, temperatureBase: 0.7, temperatureRange: 2 }
+		const [row] = translateSessionEvent(progress([helper({ sampling })]), state).messages
+		expect(statusOf(row).items[0].sampling).toEqual(sampling)
 	})
 
 	it("says nothing when nothing it shows has changed", () => {

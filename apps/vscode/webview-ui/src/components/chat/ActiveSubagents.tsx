@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { TaskServiceClient } from "@/services/grpc-client"
 import { subagentCompactionDetail, subagentCompactionText } from "./subagentCompactions"
-import { subagentIdentity, subagentModelLabel } from "./subagentIdentity"
+import { subagentIdentity, subagentModelLabel, subagentSamplingText, subagentSamplingTitle } from "./subagentIdentity"
 import { useSubagentLiveness } from "./subagentLiveness"
 import { useCurrentWarnings } from "./subagentWarning"
 
@@ -166,6 +166,7 @@ function AgentDetail({
 	const tps = agent.status === "running" && agent.genTps ? (liveness.tpsIdle ? "idle" : `~${agent.genTps} tok/s`) : ""
 	const silent = agent.status === "running" ? liveness.silentForSec : undefined
 	const model = subagentModelLabel(agent)
+	const sampling = subagentSamplingText(agent.sampling)
 	const details = [agent.contextTokens ? `${Intl.NumberFormat("en-US").format(agent.contextTokens)} tokens` : ""].filter(
 		Boolean,
 	)
@@ -245,6 +246,12 @@ function AgentDetail({
 				</button>
 			</div>
 			{details.length > 0 && <div className="mt-1 truncate text-[10px] opacity-60">{details.join(" · ")}</div>}
+			{/* The sampler the lead set on it, as drawn for "random". */}
+			{sampling && (
+				<div className="mt-1 truncate font-mono text-[10px] opacity-60" title={subagentSamplingTitle(agent.sampling)}>
+					{sampling}
+				</div>
+			)}
 			{/* What it was asked to do. */}
 			<div className="mt-1.5 max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[11px] text-foreground opacity-90">
 				{agent.prompt}

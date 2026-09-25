@@ -91,3 +91,55 @@ describe("a running sub-agent's row", () => {
 		expect(screen.getByText("on Node2")).toBeTruthy()
 	})
 })
+
+describe("a sub-agent spawned with a sampler", () => {
+	const withSampling = (sampling: Record<string, unknown>) =>
+		({
+			ts: 1,
+			type: "say",
+			say: "subagent",
+			text: JSON.stringify({
+				status: "running",
+				total: 1,
+				completed: 0,
+				items: [
+					{
+						index: 1,
+						prompt: "probe",
+						status: "running",
+						sampling,
+						toolCalls: 0,
+						inputTokens: 0,
+						outputTokens: 0,
+						totalCost: 0,
+						contextTokens: 0,
+						contextWindow: 0,
+						contextUsagePercentage: 0,
+					},
+				],
+			}),
+		}) as ClineMessage
+
+	it("shows its seed and temperature, with how they were drawn in the tooltip", () => {
+		const message = withSampling({
+			seed: 2847193,
+			seedRandom: true,
+			temperature: 0.713,
+			temperatureBase: 0.7,
+			temperatureRange: 2,
+		})
+		render(<SubagentStatusRow isLast={true} lastModifiedMessage={message} message={message} />)
+		const line = screen.getByText("seed 2847193 · T 0.713")
+		expect(line.getAttribute("title")).toBe("Seed 2847193 (random)\nTemperature 0.713 (random: 0.7 ± 2%)")
+	})
+
+	it("says the model's temperature stood when it could not be randomized", () => {
+		const message = withSampling({
+			temperatureRange: 2,
+			note: "model temperature unknown; kept the model's sampler",
+		})
+		render(<SubagentStatusRow isLast={true} lastModifiedMessage={message} message={message} />)
+		const line = screen.getByText("T model")
+		expect(line.getAttribute("title")).toBe("Temperature: model temperature unknown; kept the model's sampler")
+	})
+})

@@ -1096,6 +1096,111 @@ describe("a teammate's temperature and seed", () => {
 		expect(options?.sampling).toBeUndefined();
 	});
 
+	it("are drawn when random and persisted as drawn on the spawn event", async () => {
+		const events: Array<{ type: string; teammate?: unknown }> = [];
+		const runtime = new AgentTeamsRuntime({
+			teamName: "test-team",
+			onTeamEvent: (event) => events.push(event as never),
+		});
+		const spawnSpy = vi.spyOn(runtime, "spawnTeammate");
+		const tools = createAgentTeamsTools({
+			runtime,
+			requesterId: "lead",
+			teammateConfigProvider: makeTeammateConfigProvider({ temperature: 0.9 }),
+		});
+		const spawn = tools.find((tool) => tool.name === "team_spawn_teammate");
+		await spawn?.execute(
+			{
+				agentId: "w",
+				rolePrompt: "Write",
+				temperature: "random",
+				seed: "RANDOM",
+				temperature_range: "10%",
+			},
+			lead,
+		);
+		const options = spawnSpy.mock.calls[0]?.[0];
+		const sampling = options?.sampling as {
+			temperature: number;
+			seed: number;
+		};
+		expect(sampling).toMatchObject({
+			seedRandom: true,
+			temperatureBase: 0.9,
+			temperatureRange: 10,
+		});
+		expect(sampling.temperature).toBeGreaterThanOrEqual(0.81);
+		expect(sampling.temperature).toBeLessThanOrEqual(0.99);
+		expect(Number.isInteger(sampling.seed)).toBe(true);
+		expect(options?.config.temperature).toBe(sampling.temperature);
+		const spawned = events.find((event) => event.type === "teammate_spawned");
+		expect(spawned?.teammate).toMatchObject({
+			temperature: sampling.temperature,
+			seed: sampling.seed,
+			seedRandom: true,
+			temperatureBase: 0.9,
+			temperatureRange: 10,
+		});
+	});
+
+	it("ride on the teammate's state, for its row, and survive a hydrate", async () => {
+		const runtime = new AgentTeamsRuntime({ teamName: "test-team" });
+		const tools = createAgentTeamsTools({
+			runtime,
+			requesterId: "lead",
+			teammateConfigProvider: makeTeammateConfigProvider({ temperature: 0.9 }),
+		});
+		const spawn = tools.find((tool) => tool.name === "team_spawn_teammate");
+		await spawn?.execute(
+			{ agentId: "w", rolePrompt: "Write", seed: "random", temperature: 0.4 },
+			lead,
+		);
+		const member = runtime
+			.exportState()
+			.members.find((entry) => entry.agentId === "w");
+		expect(member?.sampling).toMatchObject({
+			seedRandom: true,
+			temperature: 0.4,
+		});
+		expect(Number.isInteger(member?.sampling?.seed)).toBe(true);
+
+		const restored = new AgentTeamsRuntime({ teamName: "test-team" });
+		restored.hydrateState(JSON.parse(JSON.stringify(runtime.exportState())));
+		expect(
+			restored.exportState().members.find((entry) => entry.agentId === "w")
+				?.sampling,
+		).toEqual(member?.sampling);
+	});
+
+	it("restore as they were drawn, without drawing again", () => {
+		const runtime = new AgentTeamsRuntime({ teamName: "test-team" });
+		const spawnSpy = vi.spyOn(runtime, "spawnTeammate");
+		bootstrapAgentTeams({
+			runtime,
+			teammateConfigProvider: makeTeammateConfigProvider({ temperature: 0.5 }),
+			restoredTeammates: [
+				{
+					agentId: "w",
+					rolePrompt: "Write",
+					temperature: 0.713,
+					seed: 2847193,
+					seedRandom: true,
+					temperatureBase: 0.7,
+					temperatureRange: 2,
+				},
+			],
+		});
+		const options = spawnSpy.mock.calls[0]?.[0];
+		expect(options?.config.temperature).toBe(0.713);
+		expect(options?.sampling).toEqual({
+			temperature: 0.713,
+			seed: 2847193,
+			seedRandom: true,
+			temperatureBase: 0.7,
+			temperatureRange: 2,
+		});
+	});
+
 	it("come back with a restored teammate", () => {
 		const runtime = new AgentTeamsRuntime({ teamName: "test-team" });
 		const spawnSpy = vi.spyOn(runtime, "spawnTeammate");

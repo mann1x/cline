@@ -1210,6 +1210,13 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 									...(event.teammate.seed !== undefined
 										? { seed: event.teammate.seed }
 										: {}),
+									...(event.teammate.seedRandom ? { seedRandom: true } : {}),
+									...(event.teammate.temperatureBase !== undefined
+										? { temperatureBase: event.teammate.temperatureBase }
+										: {}),
+									...(event.teammate.temperatureRange !== undefined
+										? { temperatureRange: event.teammate.temperatureRange }
+										: {}),
 								};
 								teammateSpecs.set(spec.agentId, spec);
 							}

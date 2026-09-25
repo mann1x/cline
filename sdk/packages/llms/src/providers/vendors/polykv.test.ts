@@ -3,6 +3,7 @@ import {
 	createPolykvClient,
 	polykvAdmissionPolicy,
 	probeOpencotiProps,
+	readOpencotiDefaultTemperature,
 	readOpencotiStatus,
 	resetPolykvAvailability,
 } from "./polykv";
@@ -1231,5 +1232,46 @@ describe("polykvAdmissionPolicy", () => {
 	it("is nothing when the section sets no policy", () => {
 		expect(polykvAdmissionPolicy({})).toBeUndefined();
 		expect(polykvAdmissionPolicy(undefined)).toBeUndefined();
+	});
+});
+
+describe("the server's default temperature from /props", () => {
+	beforeEach(resetPolykvAvailability);
+
+	const propsWith = (body: unknown) =>
+		(async () =>
+			new Response(JSON.stringify(body), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			})) as unknown as typeof fetch;
+
+	it("is read from default_generation_settings, in either shape", async () => {
+		const current = await probeOpencotiProps(
+			"http://a:8080/v1",
+			propsWith({
+				default_generation_settings: { params: { temperature: 0.8 } },
+			}),
+		);
+		expect(current.defaultTemperature).toBe(0.8);
+		const older = await probeOpencotiProps(
+			"http://b:8080",
+			propsWith({ default_generation_settings: { temperature: 0.6 } }),
+		);
+		expect(older.defaultTemperature).toBe(0.6);
+	});
+
+	it("is readable without waiting once /props has answered, and not before", async () => {
+		expect(readOpencotiDefaultTemperature("http://c:8080/v1")).toBeUndefined();
+		await probeOpencotiProps(
+			"http://c:8080/v1",
+			propsWith({
+				default_generation_settings: { params: { temperature: 0.7 } },
+			}),
+		);
+		// The same server under either spelling of its root.
+		expect(readOpencotiDefaultTemperature("http://c:8080/v1")).toBe(0.7);
+		expect(readOpencotiDefaultTemperature("http://c:8080")).toBe(0.7);
+		resetPolykvAvailability();
+		expect(readOpencotiDefaultTemperature("http://c:8080/v1")).toBeUndefined();
 	});
 });

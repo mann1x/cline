@@ -17,6 +17,7 @@ import {
 	isClinePassLimitErrorMessage,
 	isClinePassSubscriptionError,
 } from "../../utils/cline-pass-errors";
+import { spawnSamplingLines } from "../../utils/spawn-sampling";
 import {
 	CLINE_CREDITS_DASHBOARD_URL,
 	isClineAccountCreditsErrorMessage,
@@ -234,6 +235,8 @@ function ToolCallView(props: {
 		rawOutput?: unknown;
 		error?: string;
 	};
+	/** The spawned agents' realized samplers, one line each. */
+	samplingLines?: string[];
 }) {
 	const { toolName, inputSummary, streaming, result, accent, defaultFg } =
 		props;
@@ -268,6 +271,13 @@ function ToolCallView(props: {
 					</span>
 				</text>
 			</box>
+			{(props.samplingLines ?? []).map((line) => (
+				<box key={line} paddingLeft={2}>
+					<text fg="gray" selectable>
+						{"  "}sampling: {line}
+					</text>
+				</box>
+			))}
 			{result && (
 				<ToolOutput
 					toolName={toolName}
@@ -710,6 +720,7 @@ export function ChatEntryView(props: {
 					rawInput={entry.rawInput}
 					streaming={entry.streaming}
 					result={entry.result}
+					samplingLines={spawnSamplingLines(entry)}
 					accent={accent}
 					defaultFg={defaultFg}
 				/>

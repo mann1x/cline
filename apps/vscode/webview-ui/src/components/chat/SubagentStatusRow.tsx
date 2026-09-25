@@ -18,7 +18,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react"
 import MarkdownBlock from "../common/MarkdownBlock"
 import { subagentCompactionDetail, subagentCompactionText } from "./subagentCompactions"
-import { subagentIdentity, subagentModelLabel } from "./subagentIdentity"
+import { subagentIdentity, subagentModelLabel, subagentSamplingText, subagentSamplingTitle } from "./subagentIdentity"
 
 interface SubagentStatusRowProps {
 	message: ClineMessage
@@ -325,6 +325,10 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 					// provider/model beside the tag, from the moment the agent is
 					// placed rather than only once its result names it (#78).
 					const modelLabel = subagentModelLabel(entry)
+					// The seed and temperature it ran with, when the lead set a
+					// sampler -- drawn per agent for "random" -- with how they were
+					// drawn in the tooltip.
+					const samplingText = subagentSamplingText(entry.sampling)
 					const latestToolCallText = entry.latestToolCall?.trim() || ""
 					return (
 						<div
@@ -372,6 +376,13 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 							)}
 							{shouldShowStats && placementText && (
 								<div className="mt-0.5 text-[10px] opacity-60 min-w-0 truncate">{placementText}</div>
+							)}
+							{shouldShowStats && samplingText && (
+								<div
+									className="mt-0.5 text-[10px] opacity-60 min-w-0 truncate font-mono"
+									title={subagentSamplingTitle(entry.sampling)}>
+									{samplingText}
+								</div>
 							)}
 							{shouldShowStats && hasDetails && (
 								<button

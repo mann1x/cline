@@ -52,6 +52,11 @@ export type ChatEntry = (
 				rawOutput?: unknown;
 				error?: string;
 			};
+			/**
+			 * A spawn tool's agents' realized samplers, one line each, keyed by
+			 * the member the update named ("0" for a lone agent).
+			 */
+			samplings?: Record<string, string>;
 	  }
 	| { kind: "error"; text: string }
 	| { kind: "status"; text: string }
