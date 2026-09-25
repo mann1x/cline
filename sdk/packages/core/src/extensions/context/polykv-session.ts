@@ -1,17 +1,20 @@
 import type { PolykvOptions } from "@cline/llms";
 import {
-	clearPolykvGrantedWindow,
 	clearPolykvSession,
 	createPolykvClient,
 	deferPolykvLeadClose,
 	engineSessionId,
 	getPolykvSession,
+	getPolykvWindowGrant,
 	hasOpencotiFeature,
 	normalizeProviderId,
 	OPENCOTI_FEATURES,
+	type OpencotiAllocation,
 	type PolykvCapacity,
 	type PolykvClient,
+	polykvEffectiveWindow,
 	probeOpencotiProps,
+	readOpencotiAllocations,
 	releasePolykvLead,
 	setPolykvSession,
 } from "@cline/llms";
@@ -392,24 +395,139 @@ export async function readPolykvCapacity(options: {
 	return value;
 }
 
+/** The last `/kv` allocation per session, bounded like the capacity read. */
+const POLYKV_ALLOCATION_CACHE = new Map<
+	string,
+	{ at: number; value: OpencotiAllocation | undefined }
+>();
+
+/** Forget the cached allocations. Test seam. */
+export function clearPolykvAllocationCache(): void {
+	POLYKV_ALLOCATION_CACHE.clear();
+}
+
+/**
+ * This session's row of `GET /kv`'s `allocations[]`, or `undefined`.
+ *
+ * The compaction trigger's preferred signal (P4): `pressure` there is the RAW
+ * `used/window` of the window the session booked, the number the user's
+ * threshold is written against. Unlike a pool's `/capacity` it needs no pool --
+ * a session can book a window with pooling off -- so it is asked for on its
+ * own, and only where the server offers the route (`kv_status_v1`).
+ *
+ * Bounded by {@link POLYKV_CAPACITY_MIN_INTERVAL_MS}, the same manners as the
+ * capacity read, and a failed read is cached too.
+ */
+export async function readPolykvAllocation(options: {
+	sessionId: string | undefined;
+	providerConfig: PolykvProviderConfig;
+	logger?: BasicLogger;
+}): Promise<OpencotiAllocation | undefined> {
+	const config = options.providerConfig;
+	if (
+		!options.sessionId ||
+		!config.baseUrl ||
+		config.providerId === undefined ||
+		normalizeProviderId(config.providerId) !== "opencoti" ||
+		config.polykvWorker
+	) {
+		return undefined;
+	}
+	const cached = POLYKV_ALLOCATION_CACHE.get(options.sessionId);
+	if (cached && Date.now() - cached.at < POLYKV_CAPACITY_MIN_INTERVAL_MS) {
+		return cached.value;
+	}
+	// The id the wire carried: `session_id` is sent as `engineSessionId(...)`.
+	const wireId = engineSessionId(options.sessionId);
+	let value: OpencotiAllocation | undefined;
+	try {
+		const allocations = await readOpencotiAllocations(
+			config.baseUrl,
+			config.fetch,
+		);
+		value = allocations?.find((entry) => entry.sessionId === wireId);
+	} catch (error) {
+		options.logger?.debug?.(
+			`[PolyKV] Allocations unavailable: ${
+				error instanceof Error ? error.message : String(error)
+			}`,
+		);
+		value = undefined;
+	}
+	POLYKV_ALLOCATION_CACHE.set(options.sessionId, { at: Date.now(), value });
+	return value;
+}
+
 /**
  * Whether the engine's own measurement says it is time to compact.
  *
+ * The RAW ratio decides (P4, ruled): this session's `pressure` from `GET /kv`
+ * first, then the pool's own raw `pressure` (`session_pressure_v1`), and only
+ * where neither is stated the older `compaction_pressure` -- a 0.70..1.0 ramp
+ * that stops matching the threshold the user set the moment it is compared
+ * against one.
+ *
  * A pool still settling reports pressure that describes a state it is leaving,
- * so it is not asked to decide anything.
+ * so it is not asked to decide anything. The allocation is the booked window's
+ * own ledger and is not subject to that.
  */
 export function polykvSaysCompact(
 	capacity: PolykvCapacity | undefined,
 	threshold?: number,
+	allocation?: Pick<OpencotiAllocation, "pressure">,
 ): boolean {
-	if (!capacity || capacity.settling) {
-		return false;
-	}
 	const at =
 		typeof threshold === "number" && threshold > 0 && threshold <= 1
 			? threshold
 			: POLYKV_COMPACTION_PRESSURE;
-	return (capacity.compaction_pressure ?? 0) >= at;
+	const raw = (value: unknown): number | undefined =>
+		typeof value === "number" && Number.isFinite(value) ? value : undefined;
+	const allocated = raw(allocation?.pressure);
+	if (allocated !== undefined) {
+		return allocated >= at;
+	}
+	if (!capacity || capacity.settling) {
+		return false;
+	}
+	return (raw(capacity.pressure) ?? capacity.compaction_pressure ?? 0) >= at;
+}
+
+/**
+ * The window compaction must size against: the granted one, when it is known
+ * and smaller than the configured one.
+ *
+ * A conversation negotiated down to 160k of a configured 256k is a 160k
+ * conversation for its whole life -- the server holds that and nothing more --
+ * so a trigger computed against 256k fires after the window has already
+ * overflowed. The effective grant counts a shared prefix riding above a
+ * private budget. Larger than configured is not a reason to size up: the
+ * configured window is what the rest of the session (the output cap, the
+ * prompt) was built for.
+ */
+export function resolveGrantedContextWindow(
+	sessionId: string | undefined,
+	providerId: string | undefined,
+	configuredWindow: number | undefined,
+): number | undefined {
+	if (
+		providerId === undefined ||
+		normalizeProviderId(providerId) !== "opencoti"
+	) {
+		return undefined;
+	}
+	const effective = polykvEffectiveWindow(getPolykvWindowGrant(sessionId));
+	if (effective === undefined) {
+		return undefined;
+	}
+	if (
+		typeof configuredWindow === "number" &&
+		Number.isFinite(configuredWindow) &&
+		configuredWindow > 0 &&
+		effective >= configuredWindow
+	) {
+		return undefined;
+	}
+	return effective;
 }
 
 /**
@@ -524,9 +642,12 @@ export async function releasePolykvSession(options: {
 	clearPolykvSession(sessionId);
 	// The answer described a pool that is about to stop existing.
 	clearPolykvCapacityCache(sessionId);
-	// The window goes with the session, not with the pool: a compaction
-	// re-root releases a pool and the booked window survives it.
-	clearPolykvGrantedWindow(sessionId);
+	POLYKV_ALLOCATION_CACHE.delete(sessionId);
+	// The granted window is NOT forgotten here. Closing gives the cells back;
+	// it does not change the window the conversation was opened with, and a
+	// conversation continued after its close must ask for exactly that one
+	// (the resume rule). Forgetting it made the next turn a new session that
+	// negotiated down -- a silent shrink under a history that no longer fits.
 	const client = clientFor(options.providerConfig);
 	if (!client) {
 		return;

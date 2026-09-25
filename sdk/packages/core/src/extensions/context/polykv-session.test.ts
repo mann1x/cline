@@ -1,8 +1,10 @@
 import {
+	getPolykvGrantedWindow,
 	getPolykvSession,
 	preparePolykvWorker,
 	releaseAllPolykvSwarms,
 	releasePolykvAgent,
+	recordPolykvGrantedWindow,
 	resetPolykvAvailability,
 	resetPolykvSessions,
 	setPolykvSession,
@@ -10,16 +12,19 @@ import {
 import { markPromptEnvironment } from "@cline/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	clearPolykvAllocationCache,
 	clearPolykvCapacityCache,
 	endAtTokenBoundary,
 	ensurePolykvPool,
 	isPolykvProvider,
 	polykvSaysCompact,
+	readPolykvAllocation,
 	readPolykvCapacity,
 	releasePolykvPool,
 	releasePolykvSession,
 	renderPolykvPrefixMessages,
 	repointPolykvAfterCompaction,
+	resolveGrantedContextWindow,
 	snapshotPolykvSession,
 } from "./polykv-session";
 
@@ -33,6 +38,7 @@ function engine(
 		fail?: string;
 		features?: string[];
 		sessionHeld?: boolean;
+		allocations?: Array<Record<string, unknown>>;
 	} = {},
 ) {
 	const calls: Array<{ method: string; path: string; body?: unknown }> = [];
@@ -77,6 +83,9 @@ function engine(
 		) {
 			return new Response(null, { status: 204 });
 		}
+		if (url.pathname === "/kv") {
+			return Response.json({ allocations: overrides.allocations ?? [] });
+		}
 		if (url.pathname === "/props") {
 			return Response.json({
 				features: overrides.features ?? [],
@@ -107,6 +116,7 @@ const provider = (fetchImpl: typeof fetch) => ({
 
 afterEach(() => {
 	resetPolykvSessions();
+	clearPolykvAllocationCache();
 	// The `/props` probe is cached per server root, and every case here uses
 	// the same one. Left standing, the first test's feature list decides what
 	// every later test believes the server can do.
@@ -1061,5 +1071,129 @@ describe("a lead conversation in the server-wide lead tree", () => {
 		expect(server.calls.map((c) => c.path)).toContain(
 			"/sessions/lead~one/close",
 		);
+	});
+});
+
+/**
+ * P4, ruled: the trigger is the RAW `used/window` ratio, compared against the
+ * threshold the user set. `compaction_pressure` is a 0.70..1.0 ramp over the
+ * same denominator and is read only where no raw figure is stated.
+ */
+describe("the pressure that decides a compaction", () => {
+	it("takes the session's raw pressure from /kv over the pool's ramp", () => {
+		// The ramp reads 0.99 of a window that is 60% used: acting on it
+		// compacts a conversation with 40% of its room left.
+		expect(
+			polykvSaysCompact({ can_admit: true, compaction_pressure: 0.99 }, 0.85, {
+				pressure: 0.6,
+			}),
+		).toBe(false);
+		expect(polykvSaysCompact(undefined, 0.85, { pressure: 0.9 })).toBe(true);
+	});
+
+	it("takes the pool's raw pressure over its ramp", () => {
+		expect(
+			polykvSaysCompact(
+				{ can_admit: true, pressure: 0.5, compaction_pressure: 0.95 },
+				0.85,
+			),
+		).toBe(false);
+	});
+
+	it("falls back to the ramp only where no raw figure is stated", () => {
+		expect(
+			polykvSaysCompact({ can_admit: true, compaction_pressure: 0.95 }, 0.85),
+		).toBe(true);
+	});
+
+	it("reads this session's row of /kv, by the id the wire carried", async () => {
+		const stub = engine({
+			features: ["kv_status_v1"],
+			allocations: [
+				{ session_id: "other", window: 65_536, used: 60_000, pressure: 0.92 },
+				{ session_id: "a~b", window: 65_536, used: 32_768, pressure: 0.5 },
+			],
+		});
+		const row = await readPolykvAllocation({
+			sessionId: "a/b",
+			providerConfig: provider(stub.fetch),
+		});
+		expect(row?.pressure).toBe(0.5);
+	});
+
+	it("asks nothing of a server that does not offer /kv", async () => {
+		const stub = engine({ features: [] });
+		const row = await readPolykvAllocation({
+			sessionId: "conv",
+			providerConfig: provider(stub.fetch),
+		});
+		expect(row).toBeUndefined();
+		expect(stub.calls.some((call) => call.path === "/kv")).toBe(false);
+	});
+
+	it("reads /kv no more than once in the capacity window", async () => {
+		const stub = engine({
+			features: ["kv_status_v1"],
+			allocations: [{ session_id: "conv", window: 65_536, used: 1 }],
+		});
+		for (let turn = 0; turn < 3; turn++) {
+			await readPolykvAllocation({
+				sessionId: "conv",
+				providerConfig: provider(stub.fetch),
+			});
+		}
+		expect(stub.calls.filter((call) => call.path === "/kv")).toHaveLength(1);
+	});
+});
+
+describe("the window compaction sizes against", () => {
+	it("is the granted window when it is smaller than the configured one", () => {
+		recordPolykvGrantedWindow("conv", 163_840, { asked: 262_144 });
+		expect(resolveGrantedContextWindow("conv", "opencoti", 262_144)).toBe(
+			163_840,
+		);
+	});
+
+	// A private budget books the window minus the shared prefix; the prefix
+	// still fills the window, so the conversation can use both.
+	it("counts a shared prefix riding above a private budget", () => {
+		recordPolykvGrantedWindow("conv", 150_000, {
+			asked: 150_000,
+			sharedTokens: 10_000,
+		});
+		expect(resolveGrantedContextWindow("conv", "opencoti", 262_144)).toBe(
+			160_000,
+		);
+	});
+
+	it("is the configured one when nothing smaller was granted", () => {
+		expect(resolveGrantedContextWindow("conv", "opencoti", 262_144)).toBe(
+			undefined,
+		);
+		recordPolykvGrantedWindow("conv", 262_144);
+		expect(resolveGrantedContextWindow("conv", "opencoti", 262_144)).toBe(
+			undefined,
+		);
+	});
+
+	it("belongs to opencoti alone", () => {
+		recordPolykvGrantedWindow("conv", 163_840);
+		expect(resolveGrantedContextWindow("conv", "ollama", 262_144)).toBe(
+			undefined,
+		);
+	});
+});
+
+describe("closing a session that booked a window", () => {
+	// The resume rule: the cells go back, the window the conversation was
+	// opened with does not change. A turn after the close asks for it again.
+	it("keeps the granted window for the conversation's next turn", async () => {
+		const stub = engine({ features: ["session_close_v1"] });
+		recordPolykvGrantedWindow("conv", 163_840);
+		await releasePolykvSession({
+			sessionId: "conv",
+			providerConfig: provider(stub.fetch),
+		});
+		expect(getPolykvGrantedWindow("conv")).toBe(163_840);
 	});
 });
