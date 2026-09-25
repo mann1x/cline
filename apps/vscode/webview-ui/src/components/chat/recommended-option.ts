@@ -18,6 +18,9 @@
  * reply that marks more than one is read as marking nothing rather than as
  * recommending the first. That is the failure mode a lenient parse would invent.
  *
+ * **It is listed first.** Whatever position the model gave it, the recommended
+ * option is moved to the top; the others keep their order.
+ *
  * The reason for the pick belongs in the question text, where there is room for
  * a sentence; the button has room for a word.
  */
@@ -49,9 +52,12 @@ export function readOptionItems(options: readonly string[] | undefined): OptionI
 		return { raw, label: label === "" ? raw : label, marked }
 	})
 	const markedCount = parsed.filter((item) => item.marked).length
-	return parsed.map(({ raw, label, marked }) => ({
+	const items = parsed.map(({ raw, label, marked }) => ({
 		raw,
 		label,
 		recommended: markedCount === 1 && marked,
 	}))
+	// The recommended option always leads: it is the one the reader should see
+	// first, wherever the model happened to put it. The rest keep their order.
+	return [...items.filter((item) => item.recommended), ...items.filter((item) => !item.recommended)]
 }

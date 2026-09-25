@@ -10,8 +10,8 @@ describe("the recommendation on an option", () => {
 	it("marks the one option the model chose and strips the marker", () => {
 		const items = readOptionItems(["Keep the current behaviour", "Rewrite the parser (recommended)"])
 
-		expect(items.map((item) => item.label)).toEqual(["Keep the current behaviour", "Rewrite the parser"])
-		expect(items.map((item) => item.recommended)).toEqual([false, true])
+		expect(items.map((item) => item.label)).toEqual(["Rewrite the parser", "Keep the current behaviour"])
+		expect(items.map((item) => item.recommended)).toEqual([true, false])
 	})
 
 	// The reported case: "there are cases where every choice is genuinely
@@ -53,5 +53,14 @@ describe("the recommendation on an option", () => {
 
 	it("says nothing about options that are not there", () => {
 		expect(readOptionItems(undefined)).toEqual([])
+	})
+	it("puts the recommended option first and keeps the others in order", () => {
+		const items = readOptionItems(["Keep it", "Rewrite it", "Patch it (recommended)", "Drop it"])
+		expect(items.map((item) => item.label)).toEqual(["Patch it", "Keep it", "Rewrite it", "Drop it"])
+		expect(items[0]?.recommended).toBe(true)
+	})
+
+	it("does not reorder when nothing, or more than one, is marked", () => {
+		expect(readOptionItems(["a", "b (recommended)", "c (recommended)"]).map((item) => item.label)).toEqual(["a", "b", "c"])
 	})
 })
