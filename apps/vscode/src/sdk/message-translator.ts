@@ -52,6 +52,7 @@ import type {
 	ClineTransactionInfo,
 	ContextBreakdown,
 	ContextWindowGrant,
+	SubagentCompactionCause,
 	SubagentStatusItem,
 } from "@shared/ExtensionMessage"
 import { Logger } from "@shared/services/Logger"
@@ -266,6 +267,40 @@ function readBatchIndexEntry(value: unknown): { status: string; error?: string }
 		return { status: entry.status, ...(typeof entry.error === "string" ? { error: entry.error } : {}) }
 	}
 	return undefined
+}
+
+const SUBAGENT_COMPACTION_CAUSES: readonly SubagentCompactionCause[] = ["auto", "pressure", "overflow", "manual"]
+
+function isSubagentCompactionCause(value: unknown): value is SubagentCompactionCause {
+	return SUBAGENT_COMPACTION_CAUSES.includes(value as SubagentCompactionCause)
+}
+
+/**
+ * The agent's compaction count, from its progress update: the total, the
+ * count by cause, and the last one. Exported for the tests.
+ */
+export function applySubagentCompactions(entry: SubagentStatusItem, update: Record<string, unknown>): void {
+	if (typeof update.compactions === "number" && Number.isFinite(update.compactions)) {
+		entry.compactions = update.compactions
+	}
+	const byCause = update.compactionsByCause
+	if (byCause && typeof byCause === "object") {
+		const counts: Partial<Record<SubagentCompactionCause, number>> = {}
+		for (const [cause, count] of Object.entries(byCause as Record<string, unknown>)) {
+			if (isSubagentCompactionCause(cause) && typeof count === "number" && Number.isFinite(count)) {
+				counts[cause] = count
+			}
+		}
+		entry.compactionsByCause = counts
+	}
+	const last = update.lastCompaction as Record<string, unknown> | undefined
+	if (last && typeof last === "object" && isSubagentCompactionCause(last.cause)) {
+		entry.lastCompaction = {
+			cause: last.cause,
+			...(typeof last.tokensBefore === "number" ? { tokensBefore: last.tokensBefore } : {}),
+			...(typeof last.tokensAfter === "number" ? { tokensAfter: last.tokensAfter } : {}),
+		}
+	}
 }
 
 function applySpawnAgentOutput(entry: SubagentStatusItem, output: Record<string, unknown>): void {
@@ -814,6 +849,7 @@ export class MessageTranslatorState {
 			successes,
 			failures,
 			toolCalls: items.reduce((acc, e) => acc + (e.toolCalls || 0), 0),
+			compactions: items.reduce((acc, e) => acc + (e.compactions || 0), 0),
 			inputTokens: items.reduce((acc, e) => acc + (e.inputTokens || 0), 0),
 			outputTokens: items.reduce((acc, e) => acc + (e.outputTokens || 0), 0),
 			contextWindow: items.reduce((acc, e) => Math.max(acc, e.contextWindow || 0), 0),
@@ -2443,6 +2479,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 				if (entry) {
 					if (updateData) {
 						if (typeof updateData.toolCalls === "number") entry.toolCalls = updateData.toolCalls
+						applySubagentCompactions(entry, updateData)
 						if (typeof updateData.inputTokens === "number") entry.inputTokens = updateData.inputTokens
 						if (typeof updateData.outputTokens === "number") entry.outputTokens = updateData.outputTokens
 						if (typeof updateData.totalCost === "number") entry.totalCost = updateData.totalCost

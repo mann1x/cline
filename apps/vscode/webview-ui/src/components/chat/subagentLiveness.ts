@@ -24,6 +24,7 @@ export function subagentActivityKey(agent: SubagentStatusItem): string {
 	return JSON.stringify([
 		agent.status,
 		agent.toolCalls,
+		agent.compactions ?? 0,
 		agent.inputTokens,
 		agent.outputTokens,
 		agent.contextTokens,

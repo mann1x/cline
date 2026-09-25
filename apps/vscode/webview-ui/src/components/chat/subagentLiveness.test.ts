@@ -40,4 +40,10 @@ describe("a running sub-agent's liveness (#77)", () => {
 		const writing = { ...agent, latestOutput: "hello", genTps: 20 }
 		expect(subagentOutputKey(writing)).not.toBe(subagentOutputKey(agent))
 	})
+
+	// A compaction is minutes of work with no output: its end is activity.
+	it("treats a finished compaction as activity", () => {
+		const compacted = { ...agent, compactions: 1 }
+		expect(subagentActivityKey(compacted)).not.toBe(subagentActivityKey(agent))
+	})
 })

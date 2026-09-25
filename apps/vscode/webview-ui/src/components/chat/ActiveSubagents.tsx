@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { TaskServiceClient } from "@/services/grpc-client"
+import { subagentCompactionDetail, subagentCompactionText } from "./subagentCompactions"
 import { subagentIdentity, subagentModelLabel } from "./subagentIdentity"
 import { useSubagentLiveness } from "./subagentLiveness"
 import { useCurrentWarnings } from "./subagentWarning"
@@ -150,6 +151,7 @@ function AgentDetail({
 	const node = nodeNameOf(agent)
 	const doing = agent.latestToolCall?.trim() || (agent.status === "pending" ? "queued" : "thinking")
 	const tools = `${agent.toolCalls} tool${agent.toolCalls === 1 ? "" : "s"}`
+	const compactions = subagentCompactionText(agent)
 	// A speed is only shown while output is arriving; with the deltas stopped
 	// the last figure is history, and the agent is idle (#77).
 	const liveness = useSubagentLiveness(agent)
@@ -211,6 +213,11 @@ function AgentDetail({
 					</button>
 				)}
 				<span className="shrink-0 opacity-70">{tools}</span>
+				{compactions && (
+					<span className="shrink-0 opacity-70" title={subagentCompactionDetail(agent)}>
+						{compactions}
+					</span>
+				)}
 				<span className="min-w-0 flex-1 truncate font-mono opacity-70">{doing}</span>
 				{silent !== undefined && (
 					<span

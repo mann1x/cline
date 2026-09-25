@@ -155,6 +155,35 @@ describe("the working-agents strip", () => {
 		expect(screen.getByText("opencoti/v9-agentic")).toBeInTheDocument()
 	})
 
+	it("says how many times an agent has compacted, beside its tools", () => {
+		render(
+			<ActiveSubagents
+				messages={[
+					statusMessage([
+						item({
+							index: 1,
+							agentName: "js-syntactic",
+							toolCalls: 4,
+							compactions: 2,
+							compactionsByCause: { overflow: 1, manual: 1 },
+						}),
+					]),
+				]}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /js-syntactic/ }))
+		expect(screen.getByText("4 tools")).toBeInTheDocument()
+		expect(screen.getByText("2 compactions").getAttribute("title")).toBe("Compactions: 1 × overflow recovery, 1 × manual")
+	})
+
+	it("says nothing about compactions for an agent that has had none", () => {
+		render(<ActiveSubagents messages={[statusMessage([item({ index: 1, agentName: "calm", toolCalls: 4 })])]} />)
+
+		fireEvent.click(screen.getByRole("button", { name: /calm/ }))
+		expect(screen.queryByText(/compaction/)).not.toBeInTheDocument()
+	})
+
 	// A run recorded before nodes were named still has to say something.
 	it("falls back to the id when the run carries no name", () => {
 		render(<ActiveSubagents messages={[statusMessage([item({ index: 1, agentName: "old", nodeId: "node-mucuczcm" })])]} />)

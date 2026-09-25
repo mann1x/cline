@@ -17,6 +17,7 @@ import {
 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import MarkdownBlock from "../common/MarkdownBlock"
+import { subagentCompactionDetail, subagentCompactionText } from "./subagentCompactions"
 import { subagentIdentity, subagentModelLabel } from "./subagentIdentity"
 
 interface SubagentStatusRowProps {
@@ -77,6 +78,7 @@ const formatCount = (value: number | undefined): string => {
  */
 export function subagentStatsText(entry: {
 	toolCalls?: number
+	compactions?: number
 	contextTokens?: number
 	inputTokens?: number
 	outputTokens?: number
@@ -87,6 +89,8 @@ export function subagentStatsText(entry: {
 	const tokens = entry.contextTokens || (entry.inputTokens ?? 0) + (entry.outputTokens ?? 0)
 	return [
 		`${formatCount(entry.toolCalls)} tools called`,
+		// How many times it compacted, beside the tools -- only once it has.
+		subagentCompactionText(entry),
 		`${formatCount(tokens)} tokens`,
 		entry.totalCost ? formatCost(entry.totalCost) : "",
 	]
@@ -323,7 +327,7 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 							</div>
 							{shouldShowStats && (
 								<div className="mt-1 text-[11px] opacity-70 min-w-0 whitespace-pre-wrap break-words">
-									<span>{statsText}</span>
+									<span title={subagentCompactionDetail(entry) || undefined}>{statsText}</span>
 								</div>
 							)}
 							{shouldShowStats && placementText && (

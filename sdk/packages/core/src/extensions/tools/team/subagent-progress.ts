@@ -6,6 +6,10 @@ import {
 	releasePolykvAgent,
 } from "@cline/llms";
 import type { AgentEvent } from "@cline/shared";
+import {
+	COMPACTION_CAUSES,
+	type CompactionCause,
+} from "../../context/compaction-cause";
 
 /**
  * What a delegated agent is doing, reported on the tool call that started it.
@@ -231,12 +235,84 @@ export function watchPolykvRoom(
 export const DELEGATION_PACING_NOTE =
 	"Launching many is safe: the harness paces them. Each agent starts when a node has room for it and waits in a queue until then, so asking for more than can run at once overloads nothing -- it only means some start later. A call returns when every agent in it has finished, and your next message is sent only after that -- so ask for the whole job at once: one `spawn_agent` call whose `agents` list holds every agent (a configured agent by `type`, several of one kind with `count`), or every call in the same message.";
 
+/** One finished compaction, as the agent's row reports it. */
+export interface SubagentCompaction {
+	cause: CompactionCause;
+	tokensBefore?: number;
+	tokensAfter?: number;
+}
+
+const COMPACTION_KIND_CAUSE: Record<string, CompactionCause> = {
+	auto_compaction: "auto",
+	manual_compaction: "manual",
+	overflow_recovery_compaction: "overflow",
+};
+
+/**
+ * A compaction that has finished, read off the status notice the compaction
+ * pipeline emits (`phase: "completed"`). The `started` notice and a skipped
+ * one are not compactions. `cause` refines the kind where the pipeline knew
+ * more -- an automatic compaction the server's KV pressure caused -- and a
+ * notice from before that field existed falls back to the kind.
+ */
+export function readCompactionNotice(
+	event: AgentEvent,
+): SubagentCompaction | undefined {
+	if (event.type !== "notice") {
+		return undefined;
+	}
+	const metadata = event.metadata;
+	if (!metadata || metadata.phase !== "completed") {
+		return undefined;
+	}
+	const kindCause =
+		typeof metadata.kind === "string"
+			? COMPACTION_KIND_CAUSE[metadata.kind]
+			: undefined;
+	if (!kindCause) {
+		return undefined;
+	}
+	const cause = COMPACTION_CAUSES.includes(metadata.cause as CompactionCause)
+		? (metadata.cause as CompactionCause)
+		: kindCause;
+	const count = (value: unknown) =>
+		typeof value === "number" && Number.isFinite(value) ? value : undefined;
+	const tokensBefore = count(metadata.tokensBefore);
+	const tokensAfter = count(metadata.tokensAfter);
+	return {
+		cause,
+		...(tokensBefore !== undefined ? { tokensBefore } : {}),
+		...(tokensAfter !== undefined ? { tokensAfter } : {}),
+	};
+}
+
+const COMPACTION_CAUSE_LABEL: Record<CompactionCause, string> = {
+	auto: "its own context threshold",
+	pressure: "KV pressure on the server",
+	overflow: "overflow recovery",
+	manual: "manual",
+};
+
+function describeCompaction(compaction: SubagentCompaction): string {
+	const format = (value: number) => Intl.NumberFormat("en-US").format(value);
+	const tokens =
+		compaction.tokensBefore !== undefined &&
+		compaction.tokensAfter !== undefined
+			? `: ${format(compaction.tokensBefore)} → ${format(compaction.tokensAfter)} tokens`
+			: "";
+	return `Compacted its context (${COMPACTION_CAUSE_LABEL[compaction.cause]})${tokens}`;
+}
+
 export function createSubagentProgress(
 	emitUpdate: ((update: unknown) => void) | undefined,
 	forward?: (event: AgentEvent) => void,
 	now: () => number = Date.now,
 ): SubagentProgress {
 	let toolCalls = 0;
+	// Compactions it has finished, in total and by why they ran: an agent
+	// given a small window is watched for exactly this.
+	let compactions = 0;
+	const compactionsByCause: Partial<Record<CompactionCause, number>> = {};
 	// Tools that have started and not yet ended. The row's "doing" is the
 	// running tool, and once none is running the agent is thinking again.
 	let toolsRunning = 0;
@@ -289,6 +365,22 @@ export function createSubagentProgress(
 		observe(event: AgentEvent): void {
 			forward?.(event);
 			if (!emitUpdate) {
+				return;
+			}
+			// A compaction finished: counted beside its tool calls, and said on
+			// its activity -- a compaction on a local model is minutes of
+			// silence that otherwise reads as a stuck agent.
+			const compaction = readCompactionNotice(event);
+			if (compaction) {
+				compactions += 1;
+				compactionsByCause[compaction.cause] =
+					(compactionsByCause[compaction.cause] ?? 0) + 1;
+				emitUpdate({
+					compactions,
+					compactionsByCause: { ...compactionsByCause },
+					lastCompaction: compaction,
+					activity: { text: describeCompaction(compaction) },
+				});
 				return;
 			}
 			// What it has spent, every turn. Nothing reported usage while an

@@ -35,6 +35,7 @@ import type {
 import type { ProviderConfig } from "../../types/provider-settings";
 import { runAgenticCompaction } from "./agentic-compaction";
 import { runBasicCompaction } from "./basic-compaction";
+import { resolveCompactionCause } from "./compaction-cause";
 import {
 	type CompactionJournal,
 	createCompactionJournal,
@@ -1297,9 +1298,18 @@ export function createContextCompactionPrepareTurn(
 				: effectiveMode === "overflow_recovery"
 					? "overflow-recovery-"
 					: "auto-";
+		// Which of the triggers above is the reason, for the per-agent counter.
+		const cause = resolveCompactionCause({
+			mode: effectiveMode,
+			contextOverflow: contextOverflow !== undefined,
+			overOwnThreshold: triggerInputTokens >= requestTriggerTokens,
+			outputCapStarved: outputCapStarvedFires,
+			pressure: polykvPressure || kvPressureCompaction,
+		});
 		context.emitStatusNotice?.(`${noticePrefix}compacting`, {
 			kind: statusReason,
 			reason: statusReason,
+			cause,
 			phase: "started",
 			iteration: context.iteration,
 			triggerTokens: requestTriggerTokens,
@@ -1750,6 +1760,7 @@ export function createContextCompactionPrepareTurn(
 			context.emitStatusNotice?.(`${noticePrefix}compacted`, {
 				kind: statusReason,
 				reason: statusReason,
+				cause,
 				phase: "completed",
 				iteration: context.iteration,
 				// Report what the decision was actually made on, which is the

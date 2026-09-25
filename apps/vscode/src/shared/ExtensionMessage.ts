@@ -444,6 +444,19 @@ export interface ClineSayBrowserAction {
 
 export type SubagentExecutionStatus = "pending" | "running" | "completed" | "failed"
 
+/**
+ * Why a sub-agent compacted: its own context threshold, KV pressure on the
+ * server, recovery from a request the provider rejected as too long, or a
+ * manual request.
+ */
+export type SubagentCompactionCause = "auto" | "pressure" | "overflow" | "manual"
+
+export interface SubagentCompaction {
+	cause: SubagentCompactionCause
+	tokensBefore?: number
+	tokensAfter?: number
+}
+
 export interface SubagentStatusItem {
 	index: number
 	/**
@@ -457,6 +470,15 @@ export interface SubagentStatusItem {
 	prompt: string
 	status: SubagentExecutionStatus
 	toolCalls: number
+	/**
+	 * How many times it compacted its context, when it has. Optional: a
+	 * transcript saved before this was counted has none, and reads as none.
+	 */
+	compactions?: number
+	/** The same count, by why each compaction ran. */
+	compactionsByCause?: Partial<Record<SubagentCompactionCause, number>>
+	/** The most recent one, with the context before and after it when known. */
+	lastCompaction?: SubagentCompaction
 	inputTokens: number
 	outputTokens: number
 	totalCost: number
@@ -520,6 +542,8 @@ export interface ClineSaySubagentStatus {
 	successes: number
 	failures: number
 	toolCalls: number
+	/** Compactions across every agent of the batch. Absent on an older transcript. */
+	compactions?: number
 	inputTokens: number
 	outputTokens: number
 	contextWindow: number

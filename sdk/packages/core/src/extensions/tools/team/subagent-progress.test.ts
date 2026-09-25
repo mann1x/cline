@@ -2,6 +2,7 @@ import type { AgentEvent } from "@cline/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
 	createSubagentProgress,
+	readCompactionNotice,
 	reportSubagentModel,
 	reportSubagentPlaced,
 	reportSubagentQueued,
@@ -297,5 +298,103 @@ describe("reporting what a sub-agent has spent", () => {
 			outputTokens: 700,
 			contextTokens: 6_300,
 		});
+	});
+});
+
+const compacted = (metadata: Record<string, unknown>): AgentEvent =>
+	({
+		type: "notice",
+		noticeType: "status",
+		displayRole: "status",
+		message: "auto-compacted",
+		reason: "auto_compaction",
+		metadata: { phase: "completed", ...metadata },
+	}) as AgentEvent;
+
+describe("counting a sub-agent's compactions", () => {
+	// Every agent given a 64k window, to see which of them compact: the row
+	// says how many times each one did, beside its tool calls.
+	it("counts each finished compaction, with the tokens of the last", () => {
+		const emitUpdate = vi.fn();
+		const progress = createSubagentProgress(emitUpdate);
+
+		progress.observe(
+			compacted({
+				kind: "auto_compaction",
+				cause: "auto",
+				tokensBefore: 60_000,
+				tokensAfter: 20_000,
+			}),
+		);
+
+		expect(emitUpdate).toHaveBeenLastCalledWith({
+			compactions: 1,
+			compactionsByCause: { auto: 1 },
+			lastCompaction: {
+				cause: "auto",
+				tokensBefore: 60_000,
+				tokensAfter: 20_000,
+			},
+			activity: {
+				text: "Compacted its context (its own context threshold): 60,000 → 20,000 tokens",
+			},
+		});
+	});
+
+	it("breaks the count down by why each one ran", () => {
+		const emitUpdate = vi.fn();
+		const progress = createSubagentProgress(emitUpdate);
+
+		progress.observe(compacted({ kind: "auto_compaction", cause: "auto" }));
+		progress.observe(compacted({ kind: "auto_compaction", cause: "pressure" }));
+		progress.observe(compacted({ kind: "auto_compaction", cause: "pressure" }));
+		progress.observe(compacted({ kind: "overflow_recovery_compaction" }));
+		progress.observe(compacted({ kind: "manual_compaction" }));
+
+		expect(emitUpdate).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				compactions: 5,
+				compactionsByCause: { auto: 1, pressure: 2, overflow: 1, manual: 1 },
+				lastCompaction: { cause: "manual" },
+			}),
+		);
+	});
+
+	// "compacting" is a compaction that has not happened yet, and a skipped one
+	// never happens: only the completed notice counts.
+	it("counts neither a compaction starting nor one skipped", () => {
+		const emitUpdate = vi.fn();
+		const progress = createSubagentProgress(emitUpdate);
+
+		progress.observe(compacted({ kind: "auto_compaction", phase: "started" }));
+		progress.observe(compacted({ kind: "auto_compaction", phase: "skipped" }));
+		progress.observe(compacted({ kind: "context_breakdown" }));
+
+		expect(emitUpdate).not.toHaveBeenCalled();
+	});
+
+	it("does not disturb the tool count", () => {
+		const emitUpdate = vi.fn();
+		const progress = createSubagentProgress(emitUpdate);
+
+		progress.observe(toolStart("read_files"));
+		progress.observe(compacted({ kind: "auto_compaction" }));
+		progress.observe(toolStart("editor"));
+
+		expect(emitUpdate).toHaveBeenLastCalledWith({
+			latestToolCall: "editor",
+			toolCalls: 2,
+		});
+	});
+
+	it("takes the cause from the kind when the notice predates the field", () => {
+		expect(
+			readCompactionNotice(compacted({ kind: "overflow_recovery_compaction" })),
+		).toEqual({ cause: "overflow" });
+		expect(
+			readCompactionNotice(
+				compacted({ kind: "auto_compaction", cause: "nonsense" }),
+			),
+		).toEqual({ cause: "auto" });
 	});
 });

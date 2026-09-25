@@ -1,11 +1,12 @@
 import type { CoreSessionEvent } from "@cline/core"
 import type { Message as SdkMessage } from "@cline/llms"
 import type { AgentEvent, MessageWithMetadata } from "@cline/shared"
-import type { ClineAskUseMcpServer, ClineMessage, ClineSayTool } from "@shared/ExtensionMessage"
+import type { ClineAskUseMcpServer, ClineMessage, ClineSayTool, SubagentStatusItem } from "@shared/ExtensionMessage"
 import { Logger } from "@shared/services/Logger"
 import { describe, expect, it, vi } from "vitest"
 import { getDesktopDir } from "@/utils/path"
 import {
+	applySubagentCompactions,
 	buildToolApprovalAskMessage,
 	configuredAgentUsage,
 	extractToolOutputImages,
@@ -6121,5 +6122,122 @@ describe("spawnBatchMembers", () => {
 	it('leaves count: "max" and a lone agent to one row', () => {
 		expect(spawnBatchMembers({ merge: true, count: "max", task: "t" })).toBeUndefined()
 		expect(spawnBatchMembers({ task: "t" })).toBeUndefined()
+	})
+})
+
+describe("a sub-agent's compaction count", () => {
+	const send = (state: MessageTranslatorState, event: Record<string, unknown>) =>
+		translateSessionEvent(
+			{ type: "agent_event", payload: { sessionId: "session-1", event: event as unknown as AgentEvent } },
+			state,
+		).messages
+	const counted = {
+		compactions: 3,
+		compactionsByCause: { auto: 1, pressure: 2 },
+		lastCompaction: { cause: "pressure", tokensBefore: 60000, tokensAfter: 21000 },
+	}
+
+	it("lands on the agent's row beside its tool count", () => {
+		const state = new MessageTranslatorState()
+		send(state, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-1",
+			input: { task: "look" },
+		})
+		const messages = send(state, {
+			type: "content_update",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-1",
+			update: { toolCalls: 4, ...counted },
+		})
+		expect(state.getSpawnAgentItems()[0]).toMatchObject({ toolCalls: 4, ...counted })
+		const status = JSON.parse(messages.find((message) => message.say === "subagent")?.text ?? "{}")
+		expect(status.compactions).toBe(3)
+	})
+
+	it("lands on a batch member's own row, and a configured agent's", () => {
+		const state = new MessageTranslatorState()
+		send(state, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-2",
+			input: {
+				agents: [
+					{ name: "one", task: "a" },
+					{ name: "two", task: "b" },
+				],
+			},
+		})
+		send(state, {
+			type: "content_update",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-2",
+			update: { member: 1, ...counted },
+		})
+		const [first, second] = state.getSpawnAgentItems()
+		expect(first?.compactions).toBeUndefined()
+		expect(second).toMatchObject(counted)
+
+		const configured = new MessageTranslatorState()
+		send(configured, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "subagent_reviewer",
+			toolCallId: "call-3",
+			input: { task: "review" },
+		})
+		send(configured, {
+			type: "content_update",
+			contentType: "tool",
+			toolName: "subagent_reviewer",
+			toolCallId: "call-3",
+			update: counted,
+		})
+		expect(configured.getSpawnAgentItems()[0]).toMatchObject(counted)
+	})
+
+	// The row is a saved say:"subagent" message: what it carries is what a
+	// reopened task shows.
+	it("is kept in the finished status message the task history saves", () => {
+		const state = new MessageTranslatorState()
+		send(state, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-4",
+			input: { task: "look" },
+		})
+		send(state, {
+			type: "content_update",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-4",
+			update: counted,
+		})
+		const messages = send(state, {
+			type: "content_end",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-4",
+			output: { text: "done", usage: { inputTokens: 1, outputTokens: 1 } },
+		})
+		const saved = messages.find((message) => message.say === "subagent" && message.partial === false)
+		const reloaded = JSON.parse(JSON.parse(JSON.stringify(saved)).text)
+		expect(reloaded.items[0]).toMatchObject({ status: "completed", ...counted })
+	})
+
+	it("ignores a cause it does not know", () => {
+		const entry = { compactions: 0 } as SubagentStatusItem
+		applySubagentCompactions(entry, {
+			compactionsByCause: { auto: 1, bogus: 4 },
+			lastCompaction: { cause: "bogus" },
+		})
+		expect(entry.compactionsByCause).toEqual({ auto: 1 })
+		expect(entry.lastCompaction).toBeUndefined()
 	})
 })

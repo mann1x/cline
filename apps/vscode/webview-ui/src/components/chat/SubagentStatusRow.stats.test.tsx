@@ -1,6 +1,8 @@
-import type { SubagentStatusItem } from "@shared/ExtensionMessage"
+import type { ClineMessage, SubagentStatusItem } from "@shared/ExtensionMessage"
+import { render, screen } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
-import { subagentStatsText } from "./SubagentStatusRow"
+import SubagentStatusRow, { subagentStatsText } from "./SubagentStatusRow"
+import { subagentCompactionDetail } from "./subagentCompactions"
 
 /**
  * "1 tools called · 0 tokens · $0.00" — the price was on every row of every
@@ -46,5 +48,69 @@ describe("what a finished sub-agent reports", () => {
 
 	it("does not round a real price down to nothing", () => {
 		expect(subagentStatsText(entry({ totalCost: 0.0004 }))).toContain("$0.0004")
+	})
+})
+
+/**
+ * Every agent given a 64k window, to see which of them compact: the count sits
+ * beside the tool count, and why each ran is in its tooltip.
+ */
+describe("how many times a sub-agent compacted", () => {
+	const compacted = {
+		compactions: 3,
+		compactionsByCause: { auto: 1, pressure: 2 },
+		lastCompaction: { cause: "pressure" as const, tokensBefore: 60_000, tokensAfter: 21_000 },
+	}
+
+	it("is said beside the tool count once it has compacted", () => {
+		expect(subagentStatsText(entry({ toolCalls: 7, contextTokens: 12_000, compactions: 1 }))).toBe(
+			"7 tools called · 1 compaction · 12,000 tokens",
+		)
+		expect(subagentStatsText(entry({ toolCalls: 7, contextTokens: 12_000, ...compacted }))).toBe(
+			"7 tools called · 3 compactions · 12,000 tokens",
+		)
+	})
+
+	it("is not said at all by an agent that never compacted", () => {
+		expect(subagentStatsText(entry({ toolCalls: 7, contextTokens: 12_000, compactions: 0 }))).toBe(
+			"7 tools called · 12,000 tokens",
+		)
+	})
+
+	it("is broken down by cause, with the last one's before and after", () => {
+		expect(subagentCompactionDetail(compacted)).toBe(
+			"Compactions: 1 × own context threshold, 2 × server KV pressure\nLast: server KV pressure, 60,000 → 21,000 tokens",
+		)
+		expect(subagentCompactionDetail({ compactions: 0 })).toBe("")
+	})
+
+	// The row is rendered from the saved say:"subagent" message, so a task
+	// reopened from history shows what the live row showed.
+	it("is on the row rendered from a saved status message", () => {
+		const saved = JSON.parse(
+			JSON.stringify({
+				ts: 1,
+				type: "say",
+				say: "subagent",
+				text: JSON.stringify({
+					status: "completed",
+					total: 1,
+					completed: 1,
+					successes: 1,
+					failures: 0,
+					toolCalls: 7,
+					compactions: 3,
+					inputTokens: 0,
+					outputTokens: 0,
+					contextWindow: 0,
+					maxContextTokens: 0,
+					maxContextUsagePercentage: 0,
+					items: [entry({ toolCalls: 7, contextTokens: 12_000, ...compacted })],
+				}),
+			}),
+		) as ClineMessage
+		render(<SubagentStatusRow isLast={false} message={saved} />)
+		const stats = screen.getByText("7 tools called · 3 compactions · 12,000 tokens")
+		expect(stats.getAttribute("title")).toContain("2 × server KV pressure")
 	})
 })
