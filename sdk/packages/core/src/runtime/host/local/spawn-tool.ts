@@ -45,6 +45,7 @@ import {
 } from "../../../extensions/tools/team/placed-run";
 import { retryWhileSessionFull } from "../../../extensions/tools/team/session-window-retry";
 import type { SpawnToolOptions } from "../../../extensions/tools/team/spawn-agent-tool";
+import type { SpawnSampling } from "../../../extensions/tools/team/spawn-sampling";
 import type { SwarmWorkerResult } from "../../../extensions/tools/team/spawn-swarm-tool";
 import {
 	createSpawnSwarmTool,
@@ -588,6 +589,7 @@ export function createSessionSwarmTool(
 		emitUpdate?: (update: unknown) => void;
 		signal?: AbortSignal;
 		takeMessage?: () => string | undefined;
+		sampling?: SpawnSampling;
 	}): Promise<SwarmWorkerResult> => {
 		const base = configProvider();
 		const workerSessionId = `${rootSessionId}:swarm:${request.name}:${Date.now().toString(36)}`;
@@ -737,6 +739,9 @@ export function createSessionSwarmTool(
 					: {}),
 				pinnedHead: layout.pinnedHead,
 				configProvider: forWorker(workerConfig, workerSessionId),
+				// The lead's sampler for this worker, applied over whichever
+				// node's connection it was placed on.
+				...(request.sampling ? { sampling: request.sampling } : {}),
 				tools,
 				maxIterations: config.maxIterations,
 				parentAgentId: rootSessionId,

@@ -1103,6 +1103,12 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 									rolePrompt: event.teammate.rolePrompt,
 									modelId: event.teammate.modelId,
 									maxIterations: event.teammate.maxIterations,
+									...(event.teammate.temperature !== undefined
+										? { temperature: event.teammate.temperature }
+										: {}),
+									...(event.teammate.seed !== undefined
+										? { seed: event.teammate.seed }
+										: {}),
 								};
 								teammateSpecs.set(spec.agentId, spec);
 							}

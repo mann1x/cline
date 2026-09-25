@@ -74,6 +74,16 @@ function parseTeammatesJson(raw: string): TeamTeammateSpec[] {
 		) {
 			spec.maxIterations = Math.max(1, Math.floor(rec.maxIterations));
 		}
+		if (
+			typeof rec.temperature === "number" &&
+			Number.isFinite(rec.temperature) &&
+			rec.temperature >= 0
+		) {
+			spec.temperature = rec.temperature;
+		}
+		if (typeof rec.seed === "number" && Number.isInteger(rec.seed)) {
+			spec.seed = rec.seed;
+		}
 		out.push(spec);
 	}
 	return out;

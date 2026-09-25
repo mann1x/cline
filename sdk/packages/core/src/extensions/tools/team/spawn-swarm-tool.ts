@@ -52,6 +52,14 @@ import {
 	type WorkDigest,
 } from "../../context/work-digest";
 import {
+	mergeSpawnSampling,
+	readSpawnSampling,
+	SPAWN_SAMPLING_NOTE,
+	type SpawnSampling,
+	SpawnSamplingFields,
+	samplingForCopy,
+} from "./spawn-sampling";
+import {
 	registerSubagentCancellation,
 	subagentCancelId,
 } from "./subagent-cancellation";
@@ -85,6 +93,12 @@ export const SpawnSwarmInputSchema = z.object({
 					.array(z.string())
 					.optional()
 					.describe("The only tools this worker may use, by name."),
+				temperature: SpawnSamplingFields.temperature.describe(
+					"Sampling temperature for this worker, over the swarm's `temperature`.",
+				),
+				seed: SpawnSamplingFields.seed.describe(
+					"Sampling seed for this worker, used as given, over the swarm's `seed`.",
+				),
 			}),
 		)
 		.optional()
@@ -95,6 +109,12 @@ export const SpawnSwarmInputSchema = z.object({
 		.describe(
 			'How many workers to run on `task`. "max" means as many as the server will take right now; a number is an upper bound, and the server may allow fewer.',
 		),
+	temperature: SpawnSamplingFields.temperature.describe(
+		"Sampling temperature for every worker, over their model's own. Omit to keep the model's.",
+	),
+	seed: SpawnSamplingFields.seed.describe(
+		"Sampling seed for the workers: worker i (from 0) gets seed + i, so they do not sample identically. A task's own `seed` is used as given.",
+	),
 });
 
 export type SpawnSwarmInput = z.infer<typeof SpawnSwarmInputSchema>;
@@ -202,6 +222,11 @@ export interface SwarmWorkerRequest {
 	signal?: AbortSignal;
 	/** Messages the lead's side turn left for it, one per turn boundary. */
 	takeMessage?: () => string | undefined;
+	/**
+	 * The sampler the call asked for this worker, when it asked; its seed
+	 * already offset by the worker's index. See `spawn-sampling.ts`.
+	 */
+	sampling?: SpawnSampling;
 }
 
 export interface SpawnSwarmToolConfig {
@@ -293,14 +318,19 @@ function requestedWorkers(input: SpawnSwarmInput): Array<{
 	task: string;
 	systemPrompt?: string;
 	tools?: string[];
+	sampling?: SpawnSampling;
 }> {
 	if (input.tasks && input.tasks.length > 0) {
-		return input.tasks.map((entry, index) => ({
-			name: entry.name?.trim() || `worker-${index + 1}`,
-			task: entry.task,
-			...(entry.systemPrompt ? { systemPrompt: entry.systemPrompt } : {}),
-			...(entry.tools ? { tools: entry.tools } : {}),
-		}));
+		return input.tasks.map((entry, index) => {
+			const sampling = workerSampling(input, index, entry);
+			return {
+				name: entry.name?.trim() || `worker-${index + 1}`,
+				task: entry.task,
+				...(entry.systemPrompt ? { systemPrompt: entry.systemPrompt } : {}),
+				...(entry.tools ? { tools: entry.tools } : {}),
+				...(sampling ? { sampling } : {}),
+			};
+		});
 	}
 	const task = input.task?.trim();
 	if (!task) {
@@ -311,6 +341,21 @@ function requestedWorkers(input: SpawnSwarmInput): Array<{
 		name: `worker-${index + 1}`,
 		task,
 	}));
+}
+
+/**
+ * Worker `index`'s sampler: the swarm's, its seed offset by the index so that
+ * workers on one task do not draw identical samples, under the task's own.
+ */
+export function workerSampling(
+	input: Pick<SpawnSwarmInput, "temperature" | "seed">,
+	index: number,
+	task?: unknown,
+): SpawnSampling | undefined {
+	return mergeSpawnSampling(
+		samplingForCopy(readSpawnSampling(input), index),
+		readSpawnSampling(task),
+	);
 }
 
 /**
@@ -373,6 +418,7 @@ export function createSpawnSwarmTool(
 			'`count: "max"` means as many as the server will take right now; that is what to pass when asked for as many agents as possible. ' +
 			"Workers start as the server admits them and the rest wait their turn, so a long task list or `max` overloads nothing; the round just takes longer. " +
 			"A swarm is one round: its workers are made for it, run once, and are gone when the digest comes back — there is nobody left to send a second task to. Work that is a known list of jobs, each wanting a worker you keep talking to, is a team instead. " +
+			SPAWN_SAMPLING_NOTE +
 			"Output: `{digest, workers, pooled, usage}`. `digest` is the whole result — the workers' own transcripts are discarded, so nothing they saw reaches you except through it.",
 		inputSchema: zodToJsonSchema(SpawnSwarmInputSchema),
 		execute: async (input, context?: AgentToolContext) => {
@@ -474,13 +520,18 @@ export function createSpawnSwarmTool(
 						task: entry.task,
 						systemPrompt: entry.systemPrompt ?? input.systemPrompt,
 						...(entry.tools ? { tools: entry.tools } : {}),
+						...(entry.sampling ? { sampling: entry.sampling } : {}),
 					}))
-				: Array.from({ length: queueLength }, (_entry, index) => ({
-						member: index,
-						name: `worker-${index + 1}`,
-						task: requested[0]?.task ?? "",
-						systemPrompt: input.systemPrompt,
-					}));
+				: Array.from({ length: queueLength }, (_entry, index) => {
+						const sampling = workerSampling(input, index);
+						return {
+							member: index,
+							name: `worker-${index + 1}`,
+							task: requested[0]?.task ?? "",
+							systemPrompt: input.systemPrompt,
+							...(sampling ? { sampling } : {}),
+						};
+					});
 			const reports: SwarmMemberReport[] = [];
 			const report = (member: number, entry: SwarmMemberReport): void => {
 				if (rowed) {

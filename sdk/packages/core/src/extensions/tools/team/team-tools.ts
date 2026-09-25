@@ -77,6 +77,11 @@ import {
 	type DelegatedAgentRuntimeConfig,
 } from "./delegated-agent";
 import type { AgentTeamsRuntime } from "./multi-agent";
+import {
+	readSpawnSampling,
+	SPAWN_SAMPLING_NOTE,
+	spawnSamplingFields,
+} from "./spawn-sampling";
 
 /**
  * Say what a team tool answers with, in the shape it really answers with.
@@ -325,8 +330,11 @@ function spawnTeamTeammate(
 			includeSpawnTool: false,
 		}),
 	);
+	// The lead's sampler, from the spawn call or from the spec a restore reads.
+	const sampling = readSpawnSampling(options.spec);
 	options.runtime.spawnTeammate({
 		agentId: options.spec.agentId,
+		...(sampling ? { sampling } : {}),
 		config: buildDelegatedAgentConfig({
 			kind: "teammate",
 			prompt: options.spec.rolePrompt,
@@ -335,6 +343,7 @@ function spawnTeamTeammate(
 			tools: teammateTools,
 			maxIterations: options.spec.maxIterations,
 			cwd: options.teammateConfigProvider.getRuntimeConfig().cwd,
+			...(sampling ? { sampling } : {}),
 		}),
 	});
 }
@@ -394,7 +403,8 @@ export function createAgentTeamsTools(
 					"Spawn a teammate with a required agentId and rolePrompt. " +
 					"A teammate is durable: it stays until it is shut down, takes one task at a time through team_run_task, and remembers the earlier ones. Spawn teammates when the work is a known load and you know how many workers it wants. " +
 					"Fanning one broad job out to as many workers as the machine will take, for a single merged answer, is a swarm; a roster of teammates is not how to do that. " +
-					"Many one-shot jobs, each with its own report, are spawn_agent (or subagent_*) calls, all in one message: those are queued and paced for you, and teammates are not." +
+					"Many one-shot jobs, each with its own report, are spawn_agent (or subagent_*) calls, all in one message: those are queued and paced for you, and teammates are not. " +
+					SPAWN_SAMPLING_NOTE +
 					describeOutput(
 						TeamSimpleAgentStatusToolResultSchema,
 						"The teammate exists after this returns but has done nothing; give it work with team_run_task.",
@@ -414,6 +424,7 @@ export function createAgentTeamsTools(
 					const spec: TeamTeammateSpec = {
 						agentId: validatedInput.agentId,
 						rolePrompt: validatedInput.rolePrompt,
+						...spawnSamplingFields(readSpawnSampling(validatedInput)),
 					};
 					spawnTeamTeammate({
 						runtime: options.runtime,

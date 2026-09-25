@@ -3,7 +3,7 @@ import { resolveTeamDataDir } from "@cline/shared/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDelegatedAgentConfigProvider } from "./delegated-agent";
 import { AgentTeamsRuntime } from "./multi-agent";
-import { createAgentTeamsTools } from "./team-tools";
+import { bootstrapAgentTeams, createAgentTeamsTools } from "./team-tools";
 
 type EnvSnapshot = {
 	CLINE_DATA_DIR: string | undefined;
@@ -1045,5 +1045,67 @@ describe("team tool output descriptions", () => {
 			tools.find((tool) => tool.name === "team_task")?.description ?? "";
 		expect(description).toContain('action: "create"');
 		expect(description).toContain('action: "list", tasks:');
+	});
+});
+
+describe("a teammate's temperature and seed", () => {
+	const lead = { agentId: "lead", conversationId: "conv-1", iteration: 1 };
+
+	it("are applied to the teammate and carried on its spawn event", async () => {
+		const events: Array<{ type: string; teammate?: unknown }> = [];
+		const runtime = new AgentTeamsRuntime({
+			teamName: "test-team",
+			onTeamEvent: (event) => events.push(event as never),
+		});
+		const spawnSpy = vi.spyOn(runtime, "spawnTeammate");
+		const tools = createAgentTeamsTools({
+			runtime,
+			requesterId: "lead",
+			teammateConfigProvider: makeTeammateConfigProvider({ temperature: 0.9 }),
+		});
+		const spawn = tools.find((tool) => tool.name === "team_spawn_teammate");
+		await spawn?.execute(
+			{ agentId: "w", rolePrompt: "Write", temperature: 0.2, seed: 8 },
+			lead,
+		);
+		const options = spawnSpy.mock.calls[0]?.[0];
+		expect(options?.config.temperature).toBe(0.2);
+		expect(
+			(options?.config.providerConfig as { sampling?: unknown } | undefined)
+				?.sampling,
+		).toEqual({ temperature: 0.2, seed: 8 });
+		const spawned = events.find((event) => event.type === "teammate_spawned");
+		expect(spawned?.teammate).toMatchObject({ temperature: 0.2, seed: 8 });
+	});
+
+	it("leave the connection's sampler alone when the spawn names neither", async () => {
+		const runtime = new AgentTeamsRuntime({ teamName: "test-team" });
+		const spawnSpy = vi.spyOn(runtime, "spawnTeammate");
+		const tools = createAgentTeamsTools({
+			runtime,
+			requesterId: "lead",
+			teammateConfigProvider: makeTeammateConfigProvider({ temperature: 0.9 }),
+		});
+		const spawn = tools.find((tool) => tool.name === "team_spawn_teammate");
+		await spawn?.execute({ agentId: "w", rolePrompt: "Write" }, lead);
+		const options = spawnSpy.mock.calls[0]?.[0];
+		expect(options?.config.temperature).toBe(0.9);
+		expect(options?.config.providerConfig).toBeUndefined();
+		expect(options?.sampling).toBeUndefined();
+	});
+
+	it("come back with a restored teammate", () => {
+		const runtime = new AgentTeamsRuntime({ teamName: "test-team" });
+		const spawnSpy = vi.spyOn(runtime, "spawnTeammate");
+		bootstrapAgentTeams({
+			runtime,
+			teammateConfigProvider: makeTeammateConfigProvider(),
+			restoredTeammates: [
+				{ agentId: "w", rolePrompt: "Write", temperature: 0.3, seed: 2 },
+			],
+		});
+		const options = spawnSpy.mock.calls[0]?.[0];
+		expect(options?.config.temperature).toBe(0.3);
+		expect(options?.sampling).toEqual({ temperature: 0.3, seed: 2 });
 	});
 });

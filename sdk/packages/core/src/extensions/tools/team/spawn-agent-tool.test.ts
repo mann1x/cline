@@ -793,4 +793,198 @@ describe("createSpawnAgentTool", () => {
 		);
 		expect(runMock).not.toHaveBeenCalled();
 	});
+
+	describe("temperature and seed", () => {
+		const completed = {
+			text: "done",
+			iterations: 1,
+			finishReason: "completed",
+			usage: { inputTokens: 1, outputTokens: 1 },
+		};
+		const builtSamplers = () =>
+			agentConstructorSpy.mock.calls.map((call) => {
+				const config = call[0] as AgentConfig & {
+					providerConfig?: { sampling?: Record<string, unknown> };
+				};
+				return {
+					temperature: config.temperature,
+					sampling: config.providerConfig?.sampling,
+				};
+			});
+		const context = {
+			agentId: "p",
+			conversationId: "c",
+			iteration: 1,
+			toolCallId: "t",
+		} as never;
+
+		it("builds the agent with the call's sampler and reports it", async () => {
+			const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+			runMock.mockResolvedValue(completed);
+			const tool = createSpawnAgentTool({
+				configProvider: createDelegatedAgentConfigProvider({
+					providerId: "anthropic",
+					modelId: "m",
+				}),
+			});
+			const output = await tool.execute(
+				{ task: "t", temperature: 0.25, seed: 9 },
+				context,
+			);
+			expect(builtSamplers()).toEqual([
+				{ temperature: 0.25, sampling: { temperature: 0.25, seed: 9 } },
+			]);
+			expect(output).toMatchObject({
+				sampling: { temperature: 0.25, seed: 9 },
+			});
+		});
+
+		it("writes nothing when the call names neither", async () => {
+			const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+			runMock.mockResolvedValue(completed);
+			const tool = createSpawnAgentTool({
+				configProvider: createDelegatedAgentConfigProvider({
+					providerId: "anthropic",
+					modelId: "m",
+				}),
+			});
+			const output = await tool.execute({ task: "t" }, context);
+			expect(builtSamplers()).toEqual([
+				{ temperature: undefined, sampling: undefined },
+			]);
+			expect(output).not.toHaveProperty("sampling");
+		});
+
+		it("gives an entry with count 3 and seed 7 the seeds 7, 8 and 9", async () => {
+			const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+			runMock.mockResolvedValue(completed);
+			const tool = createSpawnAgentTool({
+				configProvider: createDelegatedAgentConfigProvider({
+					providerId: "anthropic",
+					modelId: "m",
+				}),
+			});
+			await tool.execute(
+				{
+					agents: [
+						{ name: "w", task: "t", count: 3, seed: 7, temperature: 0.5 },
+					],
+				},
+				context,
+			);
+			const built = builtSamplers();
+			expect(built.map((entry) => entry.sampling?.seed).sort()).toEqual([
+				7, 8, 9,
+			]);
+			expect(built.every((entry) => entry.temperature === 0.5)).toBe(true);
+		});
+
+		it("offsets the call's seed by each agent's index, under an entry's own", async () => {
+			const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+			runMock.mockImplementation(async (task: string) => ({
+				...completed,
+				text: task,
+			}));
+			const tool = createSpawnAgentTool({
+				configProvider: createDelegatedAgentConfigProvider({
+					providerId: "anthropic",
+					modelId: "m",
+				}),
+			});
+			await tool.execute(
+				{
+					seed: 100,
+					temperature: 0.7,
+					agents: [
+						{ name: "a", task: "a" },
+						{ name: "b", task: "b" },
+						{ name: "c", task: "c", seed: 5, temperature: 0 },
+					],
+				},
+				context,
+			);
+			const byTask = new Map(
+				runMock.mock.calls.map((call, index) => [
+					call[0] as string,
+					builtSamplers()[index]?.sampling,
+				]),
+			);
+			expect(byTask.get("a")).toEqual({ temperature: 0.7, seed: 100 });
+			expect(byTask.get("b")).toEqual({ temperature: 0.7, seed: 101 });
+			expect(byTask.get("c")).toEqual({ temperature: 0, seed: 5 });
+		});
+
+		it("hands a configured agent's entry its sampler", async () => {
+			const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+			const configuredExecute = vi.fn(async () => completed);
+			const tool = createSpawnAgentTool({
+				configProvider: createDelegatedAgentConfigProvider({
+					providerId: "anthropic",
+					modelId: "m",
+				}),
+				configuredAgents: () =>
+					new Map([
+						["coder", { name: "subagent_coder", execute: configuredExecute }],
+					]) as never,
+			});
+			await tool.execute(
+				{ agents: [{ task: "t", type: "coder", count: 2, seed: 3 }] },
+				context,
+			);
+			const seeds = configuredExecute.mock.calls
+				.map((call) => ((call as unknown[])[0] as { seed?: number }).seed)
+				.sort();
+			expect(seeds).toEqual([3, 4]);
+		});
+
+		it("keeps the call's sampler on the node the agent was placed on", async () => {
+			const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+			const { createAgentNodePlacement } = await import(
+				"./agent-node-placement.js"
+			);
+			runMock.mockResolvedValue(completed);
+			const base = createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "lead-model",
+				temperature: 0.9,
+			});
+			const placement = createAgentNodePlacement({
+				nodes: [
+					{
+						id: "n1",
+						priority: 1,
+						capacity: 1,
+						connection: {
+							providerId: "opencoti",
+							modelId: "worker-model",
+							temperature: undefined,
+							providerConfig: {
+								providerId: "opencoti",
+								modelId: "worker-model",
+								sampling: { temperature: 0.6, seed: 1, topK: 20 },
+							},
+						} as never,
+					},
+				],
+				base,
+			});
+			const tool = createSpawnAgentTool({
+				configProvider: createDelegatedAgentConfigProvider({
+					providerId: "anthropic",
+					modelId: "lead-model",
+					temperature: 0.9,
+					nodePlacement: placement,
+				} as never),
+			});
+			await tool.execute({ task: "t", temperature: 0.1, seed: 42 }, context);
+			expect(agentConstructorSpy).toHaveBeenCalledWith(
+				expect.objectContaining({ modelId: "worker-model", temperature: 0.1 }),
+			);
+			expect(builtSamplers()[0]?.sampling).toEqual({
+				temperature: 0.1,
+				seed: 42,
+				topK: 20,
+			});
+		});
+	});
 });

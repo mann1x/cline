@@ -32,6 +32,15 @@ import {
 } from "./delegated-agent";
 import { isAdmissionEvent, runPlacedAgent } from "./placed-run";
 import {
+	mergeSpawnSampling,
+	readSpawnSampling,
+	SPAWN_SAMPLING_NOTE,
+	type SpawnSampling,
+	SpawnSamplingFields,
+	samplingForCopy,
+	spawnSamplingFields,
+} from "./spawn-sampling";
+import {
 	registerSubagentCancellation,
 	subagentCancelId,
 } from "./subagent-cancellation";
@@ -109,6 +118,11 @@ export const SpawnAgentInputSchema = z.object({
 		.describe(
 			"Short label for this sub-agent, shown in the UI (e.g. 'tests', 'docs', 'api-review'). A few words at most.",
 		),
+	/**
+	 * The lead's sampler for this agent -- or, beside `agents`, for every agent
+	 * of the call, the seed offset by each agent's index. See `spawn-sampling.ts`.
+	 */
+	...SpawnSamplingFields,
 });
 
 /**
@@ -146,6 +160,12 @@ export const SpawnAgentMemberSchema = z.object({
 		.describe(
 			"How many agents run this entry, each with its own report (default 1). 15 of each of five agent types is five entries with `count: 15`, not 75 entries.",
 		),
+	temperature: SpawnSamplingFields.temperature.describe(
+		"Sampling temperature for this entry's agents, over the call's `temperature`.",
+	),
+	seed: SpawnSamplingFields.seed.describe(
+		"Sampling seed for this entry, over the call's `seed`. With `count`, each copy gets seed + its index: seed 7 with count 3 is 7, 8, 9.",
+	),
 });
 
 /** Most agents one entry's `count` may ask for. */
@@ -157,6 +177,10 @@ export const MAX_AGENTS_PER_ENTRY = 100;
  * Copies are named `<name>-<n>` so their rows and reports tell them apart.
  * The host expands the same way (`spawnBatchMembers`), which is what keeps a
  * row keyed `<call>#<index>` on the agent it shows.
+ *
+ * An entry's `seed` is offset by the copy's index -- seed 7 with count 3 is
+ * 7, 8 and 9 -- so that copies running one task do not draw identical samples.
+ * Its `temperature` is the same for every copy.
  */
 export function expandAgentCounts(
 	agents: readonly SpawnAgentMember[],
@@ -175,6 +199,7 @@ export function expandAgentCounts(
 		return Array.from({ length: count }, (_entry, copy) => ({
 			...rest,
 			name: `${base}-${copy + 1}`,
+			...(rest.seed !== undefined ? { seed: rest.seed + copy } : {}),
 		}));
 	});
 }
@@ -257,6 +282,11 @@ export interface SpawnAgentOutput {
 	nodeId?: string;
 	/** What the settings panel calls that node: `Node1`, `Node2`. */
 	nodeLabel?: string;
+	/**
+	 * The sampler the call asked for, when it asked: what this agent ran with
+	 * over its model's own. Absent means the model's own throughout.
+	 */
+	sampling?: SpawnSampling;
 }
 
 export interface SubAgentStartContext {
@@ -374,6 +404,7 @@ export function describeSpawnAgent(swarm: boolean): string {
 	return (
 		SPAWN_AGENT_DESCRIPTION +
 		(swarm ? SPAWN_AGENT_SWARM_DESCRIPTION : "") +
+		SPAWN_SAMPLING_NOTE +
 		DELEGATION_PACING_NOTE
 	);
 }
@@ -409,6 +440,8 @@ const AGENTS_SIBLING_FIELDS = new Set([
 	"systemPrompt",
 	"task",
 	"name",
+	"temperature",
+	"seed",
 ]);
 
 /**
@@ -553,6 +586,7 @@ export function toSwarmInput(
 						const agent = roleOf(member);
 						return {
 							...(member.name ? { name: member.name } : {}),
+							...spawnSamplingFields(readSpawnSampling(member)),
 							task: member.instructions
 								? `${member.instructions}\n\n${member.task}`
 								: member.task,
@@ -569,6 +603,9 @@ export function toSwarmInput(
 				}
 			: {}),
 		...(input.count !== undefined ? { count: input.count } : {}),
+		// The call's sampler is the swarm's: its seed is offset per worker
+		// there, as it is per agent in a batch.
+		...spawnSamplingFields(readSpawnSampling(input)),
 	};
 }
 
@@ -632,6 +669,9 @@ async function runSpawnBatch(
 ): Promise<SpawnAgentBatchOutput> {
 	const members = input.agents ?? [];
 	const configured = config.configuredAgents?.();
+	// The call's sampler covers every agent of the call, its seed offset by the
+	// agent's index; an entry's own values, already offset per copy, win.
+	const callSampling = readSpawnSampling(input);
 	const results = await Promise.all(
 		members.map(async (member, index): Promise<SpawnAgentMemberOutput> => {
 			const output = await runBatchMember(member, index);
@@ -652,6 +692,12 @@ async function runSpawnBatch(
 		index: number,
 	): Promise<SpawnAgentMemberOutput> {
 		const name = member.name?.trim() || `agent-${index + 1}`;
+		const sampling = spawnSamplingFields(
+			mergeSpawnSampling(
+				samplingForCopy(callSampling, index),
+				readSpawnSampling(member),
+			),
+		);
 		// Each member reports on its own row: the host keys it by the call
 		// and this index, and its stop registration by the same pair.
 		const memberContext: AgentToolContext = {
@@ -679,7 +725,10 @@ async function runSpawnBatch(
 					);
 				}
 				const output = (await tool.execute(
-					{ prompt: withKnowledge(input.knowledge, member.task) } as never,
+					{
+						prompt: withKnowledge(input.knowledge, member.task),
+						...sampling,
+					} as never,
 					memberContext,
 				)) as SpawnAgentOutput;
 				return { name, ...output };
@@ -689,6 +738,7 @@ async function runSpawnBatch(
 				{
 					name,
 					task: member.task,
+					...sampling,
 					...(input.knowledge ? { knowledge: input.knowledge } : {}),
 					...((member.instructions ?? input.instructions ?? input.systemPrompt)
 						? {
@@ -775,6 +825,9 @@ async function runSpawnedAgent(
 		context.emitUpdate?.({ cancelId });
 	}
 	const parentAgentId = context.agentId;
+	// The lead's sampler, when it gave one. Carried as a build option, so a
+	// re-placement onto another node keeps it.
+	const sampling = readSpawnSampling(input);
 	// From the first build, kept across re-placements: the observers identify
 	// one delegation, not one attempt at it.
 	let started: { subAgentId: string; conversationId: string } | undefined;
@@ -816,6 +869,7 @@ async function runSpawnedAgent(
 				: {}),
 			pinnedHead: layout.pinnedHead,
 			configProvider: provider,
+			...(sampling ? { sampling } : {}),
 			tools,
 			maxIterations: config.defaultMaxIterations,
 			parentAgentId,
@@ -935,6 +989,7 @@ async function runSpawnedAgent(
 			// there is one place to run and naming it is noise.
 			...(placed ? { nodeId: placed.nodeId } : {}),
 			...(placed?.nodeLabel ? { nodeLabel: placed.nodeLabel } : {}),
+			...(sampling ? { sampling } : {}),
 		};
 		if (config.onSubAgentEnd && started) {
 			try {

@@ -33,6 +33,11 @@ import type {
 	SubAgentStartContext,
 } from "./spawn-agent-tool";
 import {
+	readSpawnSampling,
+	SPAWN_SAMPLING_NOTE,
+	SpawnSamplingFields,
+} from "./spawn-sampling";
+import {
 	registerSubagentCancellation,
 	subagentCancelId,
 } from "./subagent-cancellation";
@@ -50,6 +55,8 @@ const CONFIGURED_AGENT_TOOL_NAME_MAX_LENGTH = 64;
 
 const ConfiguredAgentInputSchema = z.object({
 	prompt: z.string().trim().min(1).describe("Task for the subagent to perform"),
+	/** The lead's sampler for this one agent, over its model's own. */
+	...SpawnSamplingFields,
 });
 
 export type ConfiguredAgentInput = z.infer<typeof ConfiguredAgentInputSchema>;
@@ -390,7 +397,7 @@ export function createConfiguredAgentTools(
 				// on spawn_agent. Then in qjryk (2026-09-23) "several calls in one
 				// message" came out as one call per message, each waiting for the
 				// last -- so name the one call that is the whole fan-out.
-				description: `Use the "${config.name}" subagent: ${config.description} Each call runs one agent of this kind. For several, or several kinds at once, use one \`spawn_agent\` call with \`agents\` entries of \`type: "${config.name}"\` and a \`count\`. ${DELEGATION_PACING_NOTE}`,
+				description: `Use the "${config.name}" subagent: ${config.description} Each call runs one agent of this kind. For several, or several kinds at once, use one \`spawn_agent\` call with \`agents\` entries of \`type: "${config.name}"\` and a \`count\`. ${SPAWN_SAMPLING_NOTE}${DELEGATION_PACING_NOTE}`,
 				inputSchema: zodToJsonSchema(ConfiguredAgentInputSchema),
 				execute: async (input, context) => {
 					const baseRuntimeConfig = options.configProvider.getRuntimeConfig();
@@ -470,6 +477,9 @@ export function createConfiguredAgentTools(
 						(reason) => trouble.waiting(roomWaitTrouble(reason)),
 					);
 					const parentAgentId = context.agentId;
+					// The lead's sampler, when it gave one: applied over whatever
+					// connection this agent's file, profile or node resolves to.
+					const sampling = readSpawnSampling(input);
 					const spawnInput = {
 						systemPrompt: config.systemPrompt,
 						task: input.prompt,
@@ -513,6 +523,7 @@ export function createConfiguredAgentTools(
 									}
 								: {}),
 							configProvider: createDelegatedAgentConfigProvider(runtimeConfig),
+							...(sampling ? { sampling } : {}),
 							tools,
 							maxIterations: config.maxIterations,
 							parentAgentId: context.agentId,
@@ -653,6 +664,7 @@ export function createConfiguredAgentTools(
 							// and naming it is noise.
 							...(placed ? { nodeId: placed.nodeId } : {}),
 							...(placed?.nodeLabel ? { nodeLabel: placed.nodeLabel } : {}),
+							...(sampling ? { sampling } : {}),
 						};
 						if (options.onSubAgentEnd && started) {
 							try {

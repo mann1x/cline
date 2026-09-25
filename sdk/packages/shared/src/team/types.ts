@@ -73,6 +73,9 @@ export interface TeammateLifecycleSpec {
 	rolePrompt: string;
 	modelId?: string;
 	maxIterations?: number;
+	/** The sampler the lead spawned it with; absent is the model's own. */
+	temperature?: number;
+	seed?: number;
 	runtimeAgentId?: string;
 	conversationId?: string;
 	parentAgentId?: string | null;

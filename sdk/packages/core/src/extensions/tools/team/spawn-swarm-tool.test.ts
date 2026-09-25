@@ -635,3 +635,57 @@ describe("spawn_swarm worker rows", () => {
 		expect(output.results?.[0]?.error).toBe("stopped before it started");
 	});
 });
+
+describe("spawn_swarm temperature and seed", () => {
+	function samplingTool() {
+		const seen: Array<{ name: string; sampling?: unknown }> = [];
+		const tool = createSpawnSwarmTool({
+			pools: stubPools().source,
+			runWorker: async (request: { name: string; sampling?: unknown }) => {
+				seen.push({ name: request.name, sampling: request.sampling });
+				return agentResult("done");
+			},
+		} as never);
+		const byName = () =>
+			Object.fromEntries(seen.map((entry) => [entry.name, entry.sampling]));
+		return { tool, byName };
+	}
+
+	it("offsets the swarm's seed per worker of a counted task", async () => {
+		const { tool, byName } = samplingTool();
+		await call(tool, {
+			systemPrompt: "s",
+			task: "t",
+			count: 3,
+			temperature: 0.4,
+			seed: 7,
+		});
+		expect(byName()).toEqual({
+			"worker-1": { temperature: 0.4, seed: 7 },
+			"worker-2": { temperature: 0.4, seed: 8 },
+			"worker-3": { temperature: 0.4, seed: 9 },
+		});
+	});
+
+	it("uses a task's own seed as given, and the swarm's offset for the rest", async () => {
+		const { tool, byName } = samplingTool();
+		await call(tool, {
+			systemPrompt: "s",
+			seed: 10,
+			tasks: [
+				{ name: "a", task: "a" },
+				{ name: "b", task: "b", seed: 3, temperature: 1.1 },
+			],
+		});
+		expect(byName()).toEqual({
+			a: { seed: 10 },
+			b: { seed: 3, temperature: 1.1 },
+		});
+	});
+
+	it("hands a worker no sampler when the call names none", async () => {
+		const { tool, byName } = samplingTool();
+		await call(tool, { systemPrompt: "s", task: "t", count: 2 });
+		expect(byName()).toEqual({ "worker-1": undefined, "worker-2": undefined });
+	});
+});

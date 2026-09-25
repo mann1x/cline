@@ -14,6 +14,7 @@ import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-o
 import type { WorkerStruggleSupervisor } from "../../../runtime/safety/worker-struggle";
 import type { AgentNodePlacement } from "./agent-node-placement";
 import type { AgentSlotGate, AgentSlotGateRegistry } from "./agent-slot-gate";
+import { applySpawnSampling, type SpawnSampling } from "./spawn-sampling";
 import { pinConversationHead } from "./subagent-layout";
 import {
 	buildSubAgentSystemPrompt,
@@ -245,6 +246,16 @@ export interface BuildDelegatedAgentConfigOptions {
 	 * that knows the node and whether the engine has admitted it.
 	 */
 	recoverTurnFault?: AgentConfig["recoverTurnFault"];
+	/**
+	 * The sampler the spawning call asked for: `temperature` and `seed`.
+	 *
+	 * A build option rather than a connection field, and applied after the
+	 * connection is read, so that nothing which moves a connection -- the
+	 * session's `updateConnectionDefaults`, a profile, a node's placement --
+	 * can move it. Absent leaves the connection's sampler exactly as it was.
+	 * See `spawn-sampling.ts`.
+	 */
+	sampling?: SpawnSampling;
 }
 
 /** OR two optional abort signals, without an `AbortSignal.any` of one. */
@@ -402,39 +413,42 @@ export function buildDelegatedAgentConfig(
 				: {}),
 		});
 
-	return {
-		...connection,
-		distinctId: runtimeConfig.distinctId,
-		sessionId: runtimeConfig.sessionId,
-		...(options.engineSessionId
-			? { engineSessionId: options.engineSessionId }
-			: {}),
-		...(polykvWorker ? { polykvWorker } : {}),
-		systemPrompt,
-		tools,
-		maxIterations: options.maxIterations ?? runtimeConfig.maxIterations,
-		execution: options.execution ?? runtimeConfig.execution,
-		// One pipeline per agent, built here rather than passed in: see
-		// `createPrepareTurn`. A delegated agent that inherited the lead's
-		// would compact against the lead's summary and overwrite its state.
-		prepareTurn: pinConversationHead(
-			prepareTurn as never,
-			options.pinnedHead ?? [],
-		) as AgentConfig["prepareTurn"],
-		condenseDiscardedReasoning: runtimeConfig.condenseDiscardedReasoning,
-		parentAgentId: options.parentAgentId,
-		abortSignal,
-		onEvent,
-		hooks: mergeAgentHooks([runtimeConfig.hooks, options.hooks]),
-		extensions: runtimeConfig.extensions,
-		hookErrorMode: options.hookErrorMode,
-		toolPolicies: options.toolPolicies,
-		requestToolApproval: options.requestToolApproval,
-		logger: runtimeConfig.logger,
-		role: options.role,
-		consumePendingUserMessage: options.consumePendingUserMessage,
-		recoverTurnFault,
-	};
+	return applySpawnSampling(
+		{
+			...connection,
+			distinctId: runtimeConfig.distinctId,
+			sessionId: runtimeConfig.sessionId,
+			...(options.engineSessionId
+				? { engineSessionId: options.engineSessionId }
+				: {}),
+			...(polykvWorker ? { polykvWorker } : {}),
+			systemPrompt,
+			tools,
+			maxIterations: options.maxIterations ?? runtimeConfig.maxIterations,
+			execution: options.execution ?? runtimeConfig.execution,
+			// One pipeline per agent, built here rather than passed in: see
+			// `createPrepareTurn`. A delegated agent that inherited the lead's
+			// would compact against the lead's summary and overwrite its state.
+			prepareTurn: pinConversationHead(
+				prepareTurn as never,
+				options.pinnedHead ?? [],
+			) as AgentConfig["prepareTurn"],
+			condenseDiscardedReasoning: runtimeConfig.condenseDiscardedReasoning,
+			parentAgentId: options.parentAgentId,
+			abortSignal,
+			onEvent,
+			hooks: mergeAgentHooks([runtimeConfig.hooks, options.hooks]),
+			extensions: runtimeConfig.extensions,
+			hookErrorMode: options.hookErrorMode,
+			toolPolicies: options.toolPolicies,
+			requestToolApproval: options.requestToolApproval,
+			logger: runtimeConfig.logger,
+			role: options.role,
+			consumePendingUserMessage: options.consumePendingUserMessage,
+			recoverTurnFault,
+		},
+		options.sampling,
+	);
 }
 
 export function createDelegatedAgent(

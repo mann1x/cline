@@ -139,6 +139,12 @@ export interface AgentTeamsRuntimeOptions {
 export interface SpawnTeammateOptions {
 	agentId: string;
 	config: TeamMemberConfig;
+	/**
+	 * The sampler the lead spawned it with, already applied to `config`.
+	 * Carried on the spawn event so the persisted spec -- and a restore from
+	 * it -- keeps it.
+	 */
+	sampling?: { temperature?: number; seed?: number };
 }
 
 function isAbortLikeError(error: unknown): boolean {
@@ -850,7 +856,11 @@ export class AgentTeamsRuntime {
 		return !!member && member.role === "teammate" && !!member.agent;
 	}
 
-	spawnTeammate({ agentId, config }: SpawnTeammateOptions): TeamMemberSnapshot {
+	spawnTeammate({
+		agentId,
+		config,
+		sampling,
+	}: SpawnTeammateOptions): TeamMemberSnapshot {
 		const existing = this.members.get(agentId);
 		if (existing && existing.role !== "teammate") {
 			throw new Error(
@@ -905,6 +915,10 @@ export class AgentTeamsRuntime {
 				rolePrompt: config.systemPrompt,
 				modelId: config.modelId,
 				maxIterations: config.maxIterations,
+				...(sampling?.temperature !== undefined
+					? { temperature: sampling.temperature }
+					: {}),
+				...(sampling?.seed !== undefined ? { seed: sampling.seed } : {}),
 				runtimeAgentId: agent.getAgentId(),
 				conversationId: agent.getConversationId(),
 				parentAgentId: null,

@@ -50,6 +50,9 @@ export const TeamTeammateSpecSchema = z.object({
 	rolePrompt: z.string(),
 	modelId: z.string().optional(),
 	maxIterations: z.number().optional(),
+	/** The sampler the lead spawned it with, kept so a restore keeps it. */
+	temperature: z.number().nonnegative().optional(),
+	seed: z.number().int().optional(),
 });
 
 function nullableOptional<T extends z.ZodTypeAny>(schema: T) {
@@ -66,6 +69,12 @@ export const TeamSpawnTeammateInputSchema = z
 			.string()
 			.min(1)
 			.describe("System prompt describing teammate role"),
+		temperature: nullableOptional(z.number().nonnegative()).describe(
+			"Sampling temperature for this teammate, over its model's own. Omit to keep the model's.",
+		),
+		seed: nullableOptional(z.number().int()).describe(
+			"Sampling seed for this teammate. Omit to leave it unset.",
+		),
 	})
 	.strict();
 
