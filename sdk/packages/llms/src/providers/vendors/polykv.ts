@@ -1030,7 +1030,18 @@ export function createPolykvClient(options: PolykvClientOptions): PolykvClient {
 		if (response.status === 429 || response.status === 503) {
 			let reason: string | undefined;
 			try {
-				reason = ((await response.json()) as { reason?: string }).reason;
+				// The engine's own refusals (`send_error`, e.g. the per-session
+				// sub-pool limit) put the why in `error.message`, not `reason`;
+				// without it every refusal read as a bare "503".
+				const body = (await response.json()) as {
+					reason?: string;
+					error?: { message?: unknown };
+				};
+				reason =
+					body.reason ??
+					(typeof body.error?.message === "string"
+						? body.error.message
+						: undefined);
 			} catch {
 				reason = undefined;
 			}

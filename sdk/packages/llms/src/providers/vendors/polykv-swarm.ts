@@ -210,6 +210,13 @@ export interface PolykvWorkerAttach {
 	 * generation has moved on.
 	 */
 	generation?: number;
+	/**
+	 * Why the request goes out with no pool, or with a shallower one than its
+	 * layers asked for. Logged at warn by the worker's fetch: 257 dispatches
+	 * of 2026-09-25 went out unpooled and the only line about it was a debug
+	 * `pool=none`.
+	 */
+	reason?: string;
 }
 
 /** What the server said a pool was when it made it, to know it again. */
@@ -238,6 +245,22 @@ interface OwnerShard {
 	 * by {@link forgetPolykvWorkerPool}.
 	 */
 	settled?: Map<string, string | undefined>;
+	/** Layer key -> the prompt its pool holds, for each attacher's own prefix check. */
+	prompts?: Map<string, string>;
+	/**
+	 * Layer key -> the last build of it that failed, and why. Never a verdict
+	 * for good: an engine refusal is asked again after
+	 * {@link POLYKV_LAYER_RETRY_MS}, anything else on the next request. Kept
+	 * forever, one refused root put every later agent of the owner on
+	 * `pool=none` for the rest of the session (2026-09-25).
+	 */
+	failed?: Map<string, { at: number; reason: string }>;
+	/** Agent session -> the layer keys its last request resolved. */
+	uses?: Map<string, string[]>;
+	/** Pool creates in flight -> the parent each forks from. */
+	creating?: Map<Promise<unknown>, string | undefined>;
+	/** A release of this owner's spare pools, when one is running. */
+	reclaiming?: Promise<number>;
 	/** Agents currently assigned here. */
 	agents: Set<string>;
 	closed: boolean;
@@ -260,12 +283,92 @@ interface SwarmGroup {
 	opening?: Promise<OwnerShard | undefined>;
 	/** Agents waiting on `opening`, told when it has to wait for room. */
 	awaitingOwner: Set<string>;
-	serial: number;
 }
 
 const GROUPS = new Map<string, SwarmGroup>();
 /** Agent session -> its group, for release by agent id alone. */
 const AGENT_GROUPS = new Map<string, SwarmGroup>();
+
+/**
+ * The last owner number used per group name, for the life of the process.
+ *
+ * Not per group object: a group is dropped when its last agent leaves and
+ * made again by the next one, and a counter on it started again at 1. The
+ * new group then opened `~polykv-owner-1` -- the name of an owner whose close
+ * was still in flight, or that a stale release had left holding its chain --
+ * and built the same chain in it again. bs2:8244, 2026-09-25: three identical
+ * chains under one `~polykv-owner-1`, its eight sub-pools gone, 112 refused
+ * creates, and every agent of the swarm prefilled its own prefix.
+ */
+const OWNER_SERIALS = new Map<string, number>();
+
+/**
+ * Owners a restart check gave up on while agents were still on them.
+ *
+ * {@link invalidatePolykvRoot} drops a root's owners without closing them:
+ * after a real restart there is nothing to close. But it is also reached on
+ * suspicion alone, and then the owner is alive, holding a whole window and its
+ * pools until the idle TTL. It is closed once no agent is left on it -- each
+ * has moved to the new owner, or ended -- so no turn in flight is cut; on a
+ * server that did restart, the close of a name it never saw is a no-op.
+ */
+const ABANDONED = new Map<OwnerShard, PolykvClient>();
+
+function abandonShard(client: PolykvClient, shard: OwnerShard): void {
+	if (shard.borrowed) {
+		return;
+	}
+	if (shard.agents.size === 0) {
+		void client.closeSession(shard.sessionId).catch(() => false);
+		return;
+	}
+	ABANDONED.set(shard, client);
+}
+
+/** `sessionId` left the owners it was abandoned on; close any it was last on. */
+function leaveAbandoned(sessionId: string): Promise<unknown>[] {
+	const closes: Promise<unknown>[] = [];
+	for (const [shard, client] of [...ABANDONED]) {
+		if (shard.agents.delete(sessionId) && shard.agents.size === 0) {
+			ABANDONED.delete(shard);
+			closes.push(client.closeSession(shard.sessionId).catch(() => false));
+		}
+	}
+	return closes;
+}
+
+/** Drop `group` from the registry, unless another has replaced it there. */
+function forgetGroupIfEmpty(group: SwarmGroup): void {
+	if (
+		group.shards.length === 0 &&
+		group.assigned.size === 0 &&
+		GROUPS.get(group.key) === group
+	) {
+		GROUPS.delete(group.key);
+	}
+}
+
+/**
+ * What an agent last dispatched with, per agent: `pool:<id>` or the reason
+ * it had none. So the worker's fetch logs a change, not every turn.
+ */
+const LAST_ATTACH = new Map<string, string>();
+
+/**
+ * Whether `state` differs from the last one noted for this agent (and note
+ * it). The worker's fetch logs only what changed.
+ */
+export function notePolykvWorkerAttach(
+	sessionId: string,
+	state: string,
+): boolean {
+	const key = engineSessionId(sessionId);
+	if (LAST_ATTACH.get(key) === state) {
+		return false;
+	}
+	LAST_ATTACH.set(key, state);
+	return true;
+}
 
 /**
  * Every opencoti session this process opened, so it can be closed by id alone.
@@ -550,6 +653,11 @@ export function invalidatePolykvRoot(
 			shard.closed = true;
 			shard.pools.clear();
 			shard.records.clear();
+			shard.settled?.clear();
+			shard.uses?.clear();
+			// Its name is never opened again (OWNER_SERIALS), so closing it
+			// later can only ever close it -- see ABANDONED.
+			abandonShard(group.client, shard);
 		}
 		group.shards = [];
 		agents.push(...group.assigned.keys());
@@ -963,7 +1071,6 @@ function groupFor(
 			shards: [],
 			assigned: new Map(),
 			awaitingOwner: new Set(),
-			serial: 0,
 		};
 		GROUPS.set(key, group);
 	}
@@ -1008,9 +1115,10 @@ async function openOwner(
 ): Promise<OwnerShard | undefined> {
 	const messages = body.messages as Array<Record<string, unknown>>;
 	const system = messages[0];
-	const sessionId = engineSessionId(
-		`${group.key.split("\n")[1]}~polykv-owner-${++group.serial}`,
-	);
+	const name = group.key.split("\n")[1] ?? "";
+	const serial = (OWNER_SERIALS.get(name) ?? 0) + 1;
+	OWNER_SERIALS.set(name, serial);
+	const sessionId = engineSessionId(`${name}~polykv-owner-${serial}`);
 	const generation = polykvRootGeneration(group.root);
 	const window = await sessionContextMax(group);
 	let waits = 0;
@@ -1159,20 +1267,285 @@ export async function renderLayer(
 }
 
 /**
+ * How long a layer the engine refused is left alone before it is asked again.
+ *
+ * A refusal is a state of the owner -- its sub-pools, its window -- that
+ * changes as agents end, so it is never remembered for good; this is only
+ * the guard against every turn of every agent asking in a tight loop.
+ */
+export const POLYKV_LAYER_RETRY_MS = 5_000;
+
+/** Whether the engine refused a pool create for want of room in its owner. */
+function isOwnerPoolRefusal(error: unknown): boolean {
+	const text = error instanceof Error ? error.message : String(error);
+	return /sub-pool limit reached|session allocation full \('/i.test(text);
+}
+
+function errorText(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Give back what an owner at its sub-pool limit holds that nobody needs,
+ * children first, and say how many pools went.
+ *
+ * Two kinds, in this order:
+ *
+ * 1. Pools the server lists under this owner that this process never made --
+ *    a previous extension process's chain under the same name, or a create
+ *    whose answer was lost. Nothing here can attach to them.
+ * 2. Only if there are none: this owner's own chains that no agent on it
+ *    resolved on its last request -- the tree of a role whose agents have all
+ *    ended while the owner stays up for others.
+ *
+ * Never on a borrowed owner: the lead's session holds the conversation's own
+ * pools too, and those are not the swarm's to judge. Single-flight per
+ * owner, and it waits out the creates already in flight first, so a pool
+ * made a moment ago is not read as nobody's.
+ */
+function reclaimOwnerPools(
+	group: SwarmGroup,
+	shard: OwnerShard,
+	keep: string | undefined,
+): Promise<number> {
+	if (shard.borrowed) {
+		return Promise.resolve(0);
+	}
+	shard.reclaiming ??= (async () => {
+		await Promise.allSettled([...(shard.creating?.keys() ?? [])]);
+		const listing = await readRootJson(
+			group.fetch,
+			`${group.root}/polykv/pools`,
+			group.headers,
+		);
+		const entries = (
+			Array.isArray(listing?.pools) ? listing.pools : []
+		) as Array<Record<string, unknown>>;
+		const listedParent = new Map<string, string | undefined>();
+		for (const entry of entries) {
+			if (entry?.pool_id !== undefined && entry.pool_id !== null) {
+				listedParent.set(
+					String(entry.pool_id),
+					typeof entry.parent === "number" && entry.parent >= 0
+						? String(entry.parent)
+						: undefined,
+				);
+			}
+		}
+		const parentOf = (id: string) =>
+			shard.records.get(id)?.parent ?? listedParent.get(id);
+		const ancestry = (id: string | undefined, into: Set<string>) => {
+			for (
+				let at = id, hops = 0;
+				at !== undefined && !into.has(at) && hops < 64;
+				at = parentOf(at), hops += 1
+			) {
+				into.add(at);
+			}
+		};
+		// What must stay: the chain the failed build forks from, and the
+		// parents of any create still in flight.
+		const kept = new Set<string>();
+		ancestry(keep, kept);
+		for (const parent of shard.creating?.values() ?? []) {
+			ancestry(parent, kept);
+		}
+		let victims = entries
+			.filter(
+				(entry) =>
+					entry?.owner === shard.sessionId &&
+					entry.pool_id !== undefined &&
+					entry.pool_id !== null,
+			)
+			.map((entry) => String(entry.pool_id))
+			.filter((id) => !shard.records.has(id) && !kept.has(id));
+		if (victims.length === 0) {
+			const used = new Set(kept);
+			for (const keys of shard.uses?.values() ?? []) {
+				for (const key of keys) {
+					ancestry(shard.settled?.get(key), used);
+				}
+			}
+			const spare = new Set<string>();
+			for (const [key, id] of [...(shard.settled ?? [])]) {
+				if (id !== undefined && !used.has(id)) {
+					spare.add(id);
+					// Forgotten now, before the releases: an agent that asks for
+					// this layer meanwhile builds it again rather than attach to
+					// a pool on its way out.
+					shard.pools.delete(key);
+					shard.settled?.delete(key);
+					shard.prompts?.delete(key);
+				}
+			}
+			victims = [...spare];
+		}
+		const depth = (id: string) => {
+			const chain = new Set<string>();
+			ancestry(id, chain);
+			return chain.size;
+		};
+		victims.sort((a, b) => depth(b) - depth(a));
+		let released = 0;
+		for (const id of victims) {
+			await group.client.unpin(id).catch(() => undefined);
+			try {
+				await group.client.releasePool(id);
+				released += 1;
+			} catch {
+				// Gone already, or refused: either way not counted.
+			}
+			shard.records.delete(id);
+		}
+		return released;
+	})().finally(() => {
+		shard.reclaiming = undefined;
+	});
+	return shard.reclaiming;
+}
+
+/** Create or fork one pool on `shard`, known as in flight until it answers. */
+function createOnShard(
+	group: SwarmGroup,
+	shard: OwnerShard,
+	parentId: string | undefined,
+	prompt: string,
+) {
+	const body = { prompt, session_id: shard.sessionId, pin: true };
+	const call =
+		parentId === undefined
+			? group.client.createPool(body)
+			: group.client.forkPool(parentId, body);
+	shard.creating ??= new Map();
+	shard.creating.set(call, parentId);
+	void call
+		.catch(() => undefined)
+		.finally(() => {
+			shard.creating?.delete(call);
+		});
+	return call;
+}
+
+/**
+ * Build one layer's pool: render it, check it is a prefix of the request it
+ * is for, create or fork it -- and at the owner's sub-pool limit, release
+ * what the owner holds for nobody and create again. Resolves to the pool id,
+ * or to `undefined` with the reason in `shard.failed`.
+ */
+function buildLayer(options: {
+	group: SwarmGroup;
+	shard: OwnerShard;
+	key: string;
+	parentId: string | undefined;
+	messages: readonly unknown[];
+	tools: readonly unknown[] | undefined;
+	fields: Readonly<Record<string, unknown>>;
+	fullRendering: string;
+	admission?: PolykvAdmissionPolicy;
+}): Promise<string | undefined> {
+	const { group, shard, key, parentId } = options;
+	const fail = (reason: string, cooldown: boolean): undefined => {
+		shard.failed ??= new Map();
+		shard.failed.set(key, {
+			at: cooldown ? Date.now() : Number.NEGATIVE_INFINITY,
+			reason,
+		});
+		return undefined;
+	};
+	return (async () => {
+		let prompt: string | undefined;
+		try {
+			prompt = await renderLayer(
+				group.client,
+				options.messages,
+				options.tools,
+				options.fields,
+			);
+		} catch (error) {
+			return fail(`the layer could not be rendered: ${errorText(error)}`, true);
+		}
+		if (!prompt || !options.fullRendering.startsWith(prompt)) {
+			// This request's; the next one is checked on its own.
+			return fail(
+				"the layer's rendering is not a prefix of the request's",
+				false,
+			);
+		}
+		let pool: Awaited<ReturnType<PolykvClient["createPool"]>>;
+		try {
+			pool = await createOnShard(group, shard, parentId, prompt);
+		} catch (error) {
+			if (!isOwnerPoolRefusal(error)) {
+				return fail(`the engine refused the pool: ${errorText(error)}`, true);
+			}
+			const released = await reclaimOwnerPools(group, shard, parentId).catch(
+				() => 0,
+			);
+			if (released === 0) {
+				return fail(
+					`${errorText(error)} (owner ${shard.sessionId}: nothing it holds is spare)`,
+					true,
+				);
+			}
+			try {
+				pool = await createOnShard(group, shard, parentId, prompt);
+			} catch (retry) {
+				return fail(
+					`the engine refused the pool again after ${released} of owner ${shard.sessionId}'s spare pools were released: ${errorText(retry)}`,
+					true,
+				);
+			}
+		}
+		shard.failed?.delete(key);
+		if (options.admission) {
+			// A pool without its policy still shares; one refused
+			// policy must not cost the tree.
+			await group.client
+				.setAdmission(pool.pool_id, options.admission)
+				.catch(() => undefined);
+		}
+		shard.records.set(String(pool.pool_id), {
+			...(parentId !== undefined ? { parent: parentId } : {}),
+			...(typeof pool.prefix_len === "number"
+				? { prefixLen: pool.prefix_len }
+				: {}),
+		});
+		shard.prompts ??= new Map();
+		shard.prompts.set(key, prompt);
+		return pool.pool_id;
+	})().catch((error: unknown) =>
+		fail(`the layer could not be built: ${errorText(error)}`, true),
+	);
+}
+
+/** What {@link ensureChain} resolved for one request. */
+interface ChainResult {
+	/** The deepest pool the request can attach to. */
+	poolId?: string;
+	/** The layer keys it resolved, root first. */
+	keys: string[];
+	/** Why the chain stopped short of the layers asked for. */
+	reason?: string;
+}
+
+/**
  * The pool for `layer` of this request on `shard`, creating the chain to it.
  *
- * Returns the deepest pool that could be made. A layer the engine refuses --
- * the per-session pool limit, a contract violation -- stops the chain there,
- * and the worker attaches to its parent: sharing less is still sharing.
+ * One build per layer key per owner, however many agents ask at once: the
+ * first one's promise is what the rest await (single-flight). Returns the
+ * deepest pool that could be made. A layer the engine refuses stops the chain
+ * there, and the worker attaches to its parent -- sharing less is still
+ * sharing -- with the reason, and the layer is asked again later.
  */
 async function ensureChain(
 	group: SwarmGroup,
 	shard: OwnerShard,
+	agent: string,
 	body: Record<string, unknown>,
 	layers: number,
 	fullRendering: string,
 	admission?: PolykvAdmissionPolicy,
-): Promise<string | undefined> {
+): Promise<ChainResult> {
 	const messages = body.messages as unknown[];
 	const tools = body.tools as unknown[] | undefined;
 	let parent: string | undefined;
@@ -1180,9 +1553,27 @@ async function ensureChain(
 	let key = hashString(
 		JSON.stringify([body.model ?? "", tools ?? [], templateSignature(fields)]),
 	);
+	const keys: string[] = [];
+	// What this agent resolved last time stays counted as in use until this
+	// resolve is done, so a reclaim meanwhile does not take it.
+	const before = shard.uses?.get(agent) ?? [];
+	const using = (resolved: string[]) => {
+		shard.uses ??= new Map();
+		shard.uses.set(agent, resolved);
+	};
+	const done = (result: Omit<ChainResult, "keys">): ChainResult => {
+		using(keys);
+		return { ...result, keys };
+	};
 	for (let depth = 0; depth <= layers; depth++) {
 		key = hashString(`${key}\n${JSON.stringify(messages[depth])}`);
 		let pending = shard.pools.get(key);
+		if (!pending) {
+			const failed = shard.failed?.get(key);
+			if (failed && Date.now() - failed.at < POLYKV_LAYER_RETRY_MS) {
+				return done({ poolId: parent, reason: failed.reason });
+			}
+		}
 		if (
 			!pending &&
 			shard.borrowed &&
@@ -1190,47 +1581,23 @@ async function ensureChain(
 		) {
 			// The lead's session has a sub-pool limit, and its own conversation
 			// needs one of them: share what is already built instead.
-			return parent;
+			return done({
+				poolId: parent,
+				reason: `the lead's session already holds ${POLYKV_LEAD_WORKER_POOL_MAX} of the swarm's pools`,
+			});
 		}
 		if (!pending) {
-			const parentId = parent;
-			pending = (async () => {
-				const prompt = await renderLayer(
-					group.client,
-					messages.slice(0, depth + 1),
-					tools,
-					fields,
-				);
-				if (!prompt || !fullRendering.startsWith(prompt)) {
-					return undefined;
-				}
-				const pool =
-					parentId === undefined
-						? await group.client.createPool({
-								prompt,
-								session_id: shard.sessionId,
-								pin: true,
-							})
-						: await group.client.forkPool(parentId, {
-								prompt,
-								session_id: shard.sessionId,
-								pin: true,
-							});
-				if (admission) {
-					// A pool without its policy still shares; one refused
-					// policy must not cost the tree.
-					await group.client
-						.setAdmission(pool.pool_id, admission)
-						.catch(() => undefined);
-				}
-				shard.records.set(String(pool.pool_id), {
-					...(parentId !== undefined ? { parent: parentId } : {}),
-					...(typeof pool.prefix_len === "number"
-						? { prefixLen: pool.prefix_len }
-						: {}),
-				});
-				return pool.pool_id;
-			})().catch(() => undefined);
+			pending = buildLayer({
+				group,
+				shard,
+				key,
+				parentId: parent,
+				messages: messages.slice(0, depth + 1),
+				tools,
+				fields,
+				fullRendering,
+				...(admission ? { admission } : {}),
+			});
 			shard.pools.set(key, pending);
 			const settling = pending;
 			void settling.then((id) => {
@@ -1242,18 +1609,31 @@ async function ensureChain(
 		}
 		const poolId = await pending;
 		if (poolId === undefined) {
-			if (shard.borrowed && shard.pools.get(key) === pending) {
-				// On the lead's session a refused pool is priority 0 being
-				// full -- its eight per slot, or the server's pool reservoir --
-				// and that ends as agents do. Not remembered, so the next agent
-				// asks again rather than inheriting this one's refusal.
+			if (shard.pools.get(key) === pending) {
+				// Not remembered as "no pool": the next agent asks again (after
+				// the cooldown, for a refusal) instead of inheriting this one's.
 				shard.pools.delete(key);
+				shard.settled?.delete(key);
 			}
-			return parent;
+			return done({
+				poolId: parent,
+				reason: shard.failed?.get(key)?.reason ?? "the layer was not pooled",
+			});
 		}
+		const prompt = shard.prompts?.get(key);
+		if (prompt !== undefined && !fullRendering.startsWith(prompt)) {
+			// Built for another agent's request, and this one renders it
+			// otherwise: attaching it would share nothing.
+			return done({
+				poolId: parent,
+				reason: `layer ${depth} is not a prefix of this request's rendering`,
+			});
+		}
+		keys.push(key);
+		using([...new Set([...before, ...keys])]);
 		parent = poolId;
 	}
-	return parent;
+	return done({ poolId: parent });
 }
 
 /**
@@ -1345,7 +1725,11 @@ export async function preparePolykvWorker(options: {
 			return attach.poolId === undefined ? attach : { ...attach, generation };
 		}
 	}
-	return { sessionId: engineSessionId(options.spec.sessionId) };
+	return {
+		sessionId: engineSessionId(options.spec.sessionId),
+		reason:
+			"the server's generation moved on three times while this request resolved its pool",
+	};
 }
 
 async function attachWorker(options: {
@@ -1360,19 +1744,23 @@ async function attachWorker(options: {
 	const { spec, body } = options;
 	const group = groupFor(spec, options.baseUrl, options.fetch, options.headers);
 	AGENT_GROUPS.set(spec.sessionId, group);
-	const unpooled = { sessionId: engineSessionId(spec.sessionId) };
+	const sessionId = engineSessionId(spec.sessionId);
+	const unpooled = (reason: string): PolykvWorkerAttach => ({
+		sessionId,
+		reason,
+	});
 	if (spec.attachOnly) {
 		const shard = group.assigned.get(spec.sessionId);
 		if (!shard || shard.closed) {
-			return unpooled;
+			return unpooled("this agent has no pool tree to attach to yet");
 		}
 		for (const pending of shard.pools.values()) {
 			const poolId = await pending;
 			if (poolId !== undefined) {
-				return { poolId, sessionId: unpooled.sessionId };
+				return { poolId, sessionId };
 			}
 		}
-		return unpooled;
+		return unpooled("this agent's owner holds no pool yet");
 	}
 	const messages = body.messages;
 	if (
@@ -1383,7 +1771,9 @@ async function attachWorker(options: {
 			.slice(1, spec.layers + 1)
 			.some((message) => (message as { role?: string })?.role !== "user")
 	) {
-		return unpooled;
+		return unpooled(
+			`the request is not shaped [system, ${spec.layers} shared user turn(s), task]`,
+		);
 	}
 	const current = group.assigned.get(spec.sessionId);
 	let shard = options.fresh ? undefined : current;
@@ -1402,13 +1792,22 @@ async function attachWorker(options: {
 					openShard(group, body, options.signal),
 				)));
 		if (!shard) {
-			return unpooled;
+			return unpooled(
+				options.fresh
+					? "the engine has no room for another owner, and this agent has none to keep"
+					: "no owner session could be opened for the swarm",
+			);
 		}
 		const previous = group.assigned.get(spec.sessionId);
-		previous?.agents.delete(spec.sessionId);
+		if (previous !== shard) {
+			previous?.agents.delete(spec.sessionId);
+			previous?.uses?.delete(spec.sessionId);
+		}
 		group.assigned.set(spec.sessionId, shard);
 		shard.agents.add(spec.sessionId);
 	}
+	// On an owner now: off any a restart check abandoned, closing the last.
+	leaveAbandoned(spec.sessionId);
 	let fullRendering: string;
 	try {
 		fullRendering = await group.client.applyTemplate({
@@ -1418,20 +1817,34 @@ async function attachWorker(options: {
 			// only a check if this is what the server will actually render.
 			fields: templateFieldsOf(body),
 		});
-	} catch {
-		return unpooled;
+	} catch (error) {
+		return unpooled(
+			`the request could not be rendered through /apply-template: ${errorText(error)}`,
+		);
 	}
-	const poolId = await ensureChain(
+	const chain = await ensureChain(
 		group,
 		shard,
+		spec.sessionId,
 		body,
 		spec.layers,
 		fullRendering,
 		spec.admission,
 	);
-	return poolId === undefined
-		? unpooled
-		: { poolId, sessionId: unpooled.sessionId };
+	if (chain.poolId === undefined) {
+		return unpooled(
+			`owner ${shard.sessionId}: ${chain.reason ?? "no layer was pooled"}`,
+		);
+	}
+	return {
+		poolId: chain.poolId,
+		sessionId,
+		...(chain.reason
+			? {
+					reason: `attached ${chain.keys.length} of ${spec.layers + 1} layers on owner ${shard.sessionId}: ${chain.reason}`,
+				}
+			: {}),
+	};
 }
 
 /**
@@ -1512,6 +1925,7 @@ export async function movePolykvWorker(sessionId: string): Promise<boolean> {
 		return false;
 	}
 	current.agents.delete(sessionId);
+	current.uses?.delete(sessionId);
 	group.assigned.set(sessionId, best);
 	best.agents.add(sessionId);
 	if (current.agents.size === 0 && !current.closed) {
@@ -1542,6 +1956,7 @@ export async function releasePolykvAgent(
 	AGENT_GROUPS.delete(sessionId);
 	ROOM_WAITING.delete(engineSessionId(sessionId));
 	STARTED_WORKERS.delete(engineSessionId(sessionId));
+	LAST_ATTACH.delete(engineSessionId(sessionId));
 	const known = OPENCOTI_SESSIONS.get(sessionId);
 	OPENCOTI_SESSIONS.delete(sessionId);
 	const result: PolykvReleaseResult = { closed: [], failed: [] };
@@ -1570,11 +1985,13 @@ export async function releasePolykvAgent(
 			engineSessionId(sessionId),
 		);
 	}
+	closes.push(...leaveAbandoned(sessionId));
 	if (group) {
 		const shard = group.assigned.get(sessionId);
 		group.assigned.delete(sessionId);
 		if (shard) {
 			shard.agents.delete(sessionId);
+			shard.uses?.delete(sessionId);
 			if (shard.agents.size === 0 && !shard.closed) {
 				shard.closed = true;
 				group.shards = group.shards.filter((candidate) => candidate !== shard);
@@ -1595,9 +2012,10 @@ export async function releasePolykvAgent(
 				}
 			}
 		}
-		if (group.shards.length === 0 && group.assigned.size === 0) {
-			GROUPS.delete(group.key);
-		}
+		// Only this group: one that replaced it under the same key belongs to
+		// agents still running, and dropping it made the next agent open the
+		// chain again (2026-09-25).
+		forgetGroupIfEmpty(group);
 	}
 	await Promise.all(closes);
 	return result;
@@ -1693,10 +2111,16 @@ export async function releaseAllPolykvSwarms(): Promise<void> {
 			);
 		}
 	}
+	for (const [shard, client] of ABANDONED) {
+		closes.push(client.closeSession(shard.sessionId).catch(() => false));
+	}
+	ABANDONED.clear();
 	GROUPS.clear();
 	AGENT_GROUPS.clear();
 	STARTED_WORKERS.clear();
 	ROOT_STATES.clear();
+	OWNER_SERIALS.clear();
+	LAST_ATTACH.clear();
 	// Shutdown: the lent pools are gone, so the leads can go too.
 	for (const sessionId of [...DEFERRED_LEAD_CLOSES.keys()]) {
 		closes.push(runDeferredLeadClose(sessionId));

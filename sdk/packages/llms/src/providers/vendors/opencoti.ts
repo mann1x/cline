@@ -48,7 +48,9 @@ import {
 	movePolykvWorker,
 	notePolykvBootId,
 	notePolykvServerFault,
+	notePolykvWorkerAttach,
 	type PolykvLeadRoom,
+	type PolykvWorkerAttach,
 	type PolykvWorkerSpec,
 	polykvRoomBackoffMs,
 	polykvRootBootId,
@@ -1357,6 +1359,7 @@ function createWorkerFetch(options: {
 				// server as a session of its own.
 				return leadReserveRefusal(lent, undefined);
 			}
+			noteWorkerAttach(options.log, options.worker, attach);
 			let response: Response;
 			sent = {
 				generation: polykvRootGeneration(options.baseUrl),
@@ -1479,6 +1482,46 @@ function createWorkerFetch(options: {
 			});
 		}
 	}) as typeof fetch;
+}
+
+/**
+ * Log where a worker's turn attached, when that changed since its last turn.
+ *
+ * A turn with no pool is a warn with the reason: the agent prefills its whole
+ * prefix alone, and on 2026-09-25 that was every one of 257 dispatches of a
+ * swarm while the log said `pool=none` at debug, once, at provider
+ * construction -- before any worker had resolved a pool at all. A summary
+ * call (`attachOnly`) without one is info: it shares little by design.
+ */
+function noteWorkerAttach(
+	log: OpencotiLog | undefined,
+	worker: PolykvWorkerSpec,
+	attach: PolykvWorkerAttach,
+): void {
+	if (!log) {
+		return;
+	}
+	const state =
+		attach.poolId !== undefined
+			? `pool:${attach.poolId}:${attach.reason ?? ""}`
+			: `none:${attach.reason ?? ""}`;
+	if (!notePolykvWorkerAttach(worker.sessionId, state)) {
+		return;
+	}
+	const who = `[opencoti] worker ${engineSessionId(worker.sessionId)} (group ${worker.group})`;
+	if (attach.poolId === undefined) {
+		log(
+			`${who} dispatched without a pool: ${attach.reason ?? "no reason given"}; it prefills its whole prompt alone`,
+			worker.attachOnly ? "info" : "warn",
+		);
+	} else if (attach.reason) {
+		log(
+			`${who} attached to pool ${attach.poolId}, short of its layers: ${attach.reason}`,
+			"warn",
+		);
+	} else {
+		log(`${who} attached to pool ${attach.poolId}`, "info");
+	}
 }
 
 /**
@@ -1705,9 +1748,15 @@ export async function createOpencotiProviderModule(
 		dispatcher && injected ? injected : (suppliedFetch ?? injected);
 	const request = readOpencotiRequestOptions(context);
 	context.logger?.debug(
-		`[opencoti] pool=${request.poolId ?? "none"} session=${
-			request.sessionId ?? "none"
-		} dispatcher=${dispatcher ? "attached" : "none"}`,
+		`[opencoti] pool=${
+			request.worker
+				? // A swarm worker resolves its pool per turn, in its fetch, and
+					// logs it there: nothing is known of it yet.
+					`per-turn (swarm worker of ${request.worker.group})`
+				: (request.poolId ?? "none")
+		} session=${request.sessionId ?? "none"} dispatcher=${
+			dispatcher ? "attached" : "none"
+		}`,
 	);
 	// Whether this server's chat template puts prior reasoning back into the
 	// prompt. Unlike ollama's, this probe is free: `/apply-template` renders a
