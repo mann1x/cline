@@ -21,21 +21,21 @@ did not help were removed.
 
 ## What it adds over Cline
 
-**Prompt templates per model family.** Upstream ships one system prompt for every
-model. Cerebriline ships a template per family — each one written *by a model of
-that family*, against the prompt it would really receive, then checked by audit
-gates. A 9B model and a frontier model do not need the same instructions.
-
-**Escalation to a stronger model.** When the working model gets stuck, a stronger
-expert can be brought in on the same transaction, make the edits, and hand back —
-while the base model stays live and supervises rather than sitting blocked.
-
 **Sub-agents across your machines.** Delegate work to agents with their own tools
 and context. One `spawn_agent` call can start a whole fan-out: a list of agents,
 agents you defined in `.cline/agents`, and shared context loaded once. The Agents
 tab holds several **nodes**, each with its own provider, model and priority, and
 agents queue for the best node with room. On a PolyKV server, `merge: true` runs
 them as a swarm on a snapshot of your context with one merged report.
+
+**Every agent works in a sandbox.** Every delegated agent (sub-agents, swarm
+workers, teammates, configured agents) writes to a private copy-on-write overlay,
+and its changes come back to the lead as revisions to review and adopt. Nothing is
+applied behind your back. With **Agents can run commands** on, the agent's shell
+runs in a native sandbox against that copy: user namespaces with overlayfs on
+Linux x64 and arm64 (with a ptrace fallback), APFS clonefile on macOS Apple
+Silicon and Intel, and Detours injection on Windows x64. All six launchers are
+built and verified on native CI runners and ship in the extension.
 
 **Watch and steer them.** A strip above the chat shows each running agent: its
 node, model, current tool, speed and recent activity, with Stop, Restart and Stop
@@ -46,21 +46,30 @@ agent's report reaches the lead.
 **Sampling per agent.** Spawn tools take an optional `temperature` and `seed`
 (offset per agent in a fan-out); leave them out and the model's sampler applies.
 
-**Agents work on a private copy.** A `spawn_agent` agent's edits stay in a
-copy-on-write overlay and come back to the lead as revisions to review and
-adopt. Nothing is applied behind your back. With **Agents can run commands** on,
-its commands run in a native sandbox against that copy on Linux, macOS and
-Windows.
+**Compaction Council.** A compaction summary becomes the session, so it is
+reviewed before it replaces anything. The writer produces a present-tense replay
+that cites tool calls instead of copying them and quotes you verbatim. Two fresh
+reviewers each check it against half of the transcript, in parallel. A
+synthesizer joins their corrections. It is on by default, costs three extra calls,
+and never fails a compaction.
+
+**Escalation to a stronger model, scored by Jev.** When the working model gets
+stuck, a stronger expert takes over the edit itself, on the same transaction, and
+hands its edits back as revisions. The base model stays live and supervises. The
+hand-over is offered only when a struggle detector's counts say so, you approve
+it, and you and the expert both see an assessment built from measurements, the
+code's complexity and Jev's independent score, next to the model's own account.
+
+**Prompt templates per model family.** Upstream ships one system prompt for every
+model. Cerebriline ships a template per family — each one written *by a model of
+that family*, against the prompt it would really receive, then checked by audit
+gates. A 9B model and a frontier model do not need the same instructions.
 
 **Questions that recommend.** When the model asks you to choose, it marks the
 option it would pick and lists it first. Optionally, Jev scores the options.
 
 **Image generation.** Generate images in the conversation, and see them there even
 when the working model is text-only.
-
-**Compaction that keeps the thread.** The summary is a present-tense replay that
-cites tool calls instead of copying them, quotes what you typed verbatim, and is
-checked against the transcript by a council of reviewers.
 
 **Conversation history.** Tag conversations and filter by `#tag`, see what model
 and settings a session ran with, and check its size on disk.

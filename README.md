@@ -30,6 +30,16 @@ The open source coding agent in your IDE and terminal.
 
 <br>
 
+**A fork of Cline built for local and small models.** The highlights:
+
+- **[Every agent works in a sandbox](#every-agent-works-in-a-sandbox).** Delegated agents edit a private copy-on-write overlay and hand changes back as revisions. Their commands run in a native sandbox on Linux (x64, arm64), macOS (Apple Silicon, Intel) and Windows (x64).
+- **[Sub-agents across your machines](#sub-agents-across-your-machines).** Agent nodes with priorities, one queue, swarms on shared KV pools, and rounds that survive a server restart.
+- **[Compaction Council](#compaction-council).** Every summary is checked by two reviewers, each holding half the transcript, before it replaces the conversation.
+- **[Escalation, scored by Jev](#escalation-to-a-stronger-model-scored-by-jev).** A stronger model takes over the edit when the working model is stuck. The hand-over is offered on measurements and scored by an independent model.
+- **[Built for small models](#built-for-small-models).** Per-family prompt templates, one output budget, tolerant tool calls and guards against measured failure modes.
+
+<br>
+
 <div align="center">
 <table>
 <tr>
@@ -325,11 +335,43 @@ Turn on **Subagents** in Features and the model can hand work to sub-agents with
 - **Sampling per spawn.** `spawn_agent`, `spawn_swarm`, teammates and configured agents take an optional `temperature` and `seed`. Leave them out and the model's own sampler applies. A seed that covers several agents is offset per agent (seed, seed+1, …).
 - **Every report reaches the lead.** Each agent writes a short summary, and the lead reads any full report with `read_agent_report`. A question from an agent goes to the lead, not to you.
 
-### Agents work on a private copy
+## Every Agent Works in a Sandbox
 
-A `spawn_agent` agent reads through to your workspace, but its writes stay in a private copy-on-write overlay. When it finishes, each file it changed comes back to the lead as a revision, which the lead reviews and adopts with `restore_file`. Nothing is applied behind your back.
+Every delegated agent (`spawn_agent` agents, swarm workers, teammates and configured agents) works on a **private copy-on-write overlay** of your workspace. It reads through to your files, but its writes, deletes and renames stay in its own copy. When it finishes, each file it changed comes back to the lead as a revision attributed to that agent. The lead reviews it with `read_files revision:"#N"` and adopts it with `restore_file`. Nothing is applied behind your back, and two agents working at once never see each other's writes. The overlay is pure TypeScript, so it is always on, on every platform.
 
-**Agents can run commands** (Features, off by default) lets an agent run commands against its own copy through a native sandbox: user namespaces and overlayfs on Linux, with a ptrace fallback; APFS clonefile on macOS; Detours on Windows. Where there is no launcher for your platform the agent gets no shell, never an unsandboxed one. Teammates, configured agents and swarm workers aren't sandboxed yet, so they get no shell.
+**Agents can run commands** (Features, off by default) extends the copy to the shell. The agent's commands run through `cerebriline-sandbox`, a native launcher that points the whole command tree (builds, test runners, scripts) at the agent's copy:
+
+| OS | architectures | how the agent's commands are isolated |
+|---|---|---|
+| Linux | x64, arm64 | **L1:** a user namespace with overlayfs mounted over the workspace |
+| Linux | x64 | **L2:** ptrace path rewriting, used automatically where user namespaces are blocked (AppArmor) or overlayfs can't mount |
+| macOS | Apple Silicon, Intel | **M1:** an APFS `clonefile` copy of the workspace |
+| Windows | x64 | **W1:** Microsoft Detours injection that redirects file access into the overlay |
+
+One Rust binary chooses the backend at runtime. All six launchers are built and verified on native CI runners for each OS and architecture, and they ship inside the `.vsix`. Where no launcher covers your platform the agent gets no shell, never an unsandboxed one. Design and build notes: [`sandbox/cerebriline-sandbox/README.md`](sandbox/cerebriline-sandbox/README.md).
+
+## Compaction Council
+
+A compaction summary is the one artifact in a session that is never checked against what it describes, and once written it *is* the session: every later turn reads it instead of the conversation. Measured summaries reported a failing check as a pass, paraphrased the instruction they were told to quote, and drifted into the past tense. None of that is a lack of intelligence. It happens when one pass has to cover more material than fits comfortably.
+
+So the summary is reviewed the way a council reviews a proposal:
+
+1. The writer produces a **present-tense replay** that cites tool calls by number (`[#3]`, `[#2-5]`) instead of copying them, quotes what you typed verbatim, and marks the halfway point of the work.
+2. The transcript is split there. Two fresh reviewers each get **half of the evidence and all of the summary**. They work in parallel, both on the original, and each corrects what its half contradicts, adds what it shows missing and fixes every quotation.
+3. A synthesizer joins the two corrected halves into one continuous replay and revises the retrospective against it.
+
+It is on by default and costs three extra model calls. It never fails a compaction: a step that can't run falls back to what it was given. Every prompt is editable in Features, and a prompt template can carry its own compaction prompts for its model family.
+
+## Escalation to a Stronger Model, Scored by Jev
+
+When the working model is stuck, a stronger **expert** model (the Escalation tab: its own provider and model) can take over the edit itself, not just give advice.
+
+- **Offered on evidence.** A struggle detector counts failed tool calls, turns that say the model is stuck, and discarded transactions. Only when it fires is the model offered `escalate`, and you approve the hand-over.
+- **An assessment that isn't self-reported.** Next to the model's own account of why it is stuck, you and the expert see the harness's counts, the complexity walker's reading of the files in play, and **Jev's** score for the task. Jev is an outside scoring model that answers with a probability instead of an argument. A disagreement between the model's story and the numbers is shown, not hidden.
+- **The expert edits.** It gets a brief (goal, open transaction, record), works on the same files with the same tools, and hands its edits back as revisions. The base model stays live and supervises, and you can steer the exchange while it runs.
+- **Bounded.** A task gets three hand-overs (configurable), and one that buys nothing is refunded.
+
+**Jev** also works outside escalation. With *Use Jev for confidence* ticked, the model can call a `jev` tool when it is unsure of a reading, a fact or a choice, and Jev scores the options of a question before it reaches you. Nothing is sent until the box is ticked and a key is stored.
 
 ## Built for Small Models
 
@@ -337,13 +379,13 @@ A 27B model on a local server fails in ways a frontier model does not, and often
 
 - **Prompt templates per model family**, each written by a model of that family. A template you write outranks a shipped one.
 - **One output budget** on every provider: three quarters of the window, capped at 96,000 tokens per turn, adjustable with a slider. The number the prompt states is the number sent to the server.
-- **Compaction that keeps the thread.** The summary is a present-tense replay that cites tool calls by number instead of copying them. What you typed is quoted verbatim, and the harness's own record of every tool call sits beside it. Compaction Council checks each half of the transcript against the summary.
+- **Compaction that keeps the thread**, reviewed by the [Compaction Council](#compaction-council). The harness's own record of every tool call sits beside the summary.
 - **A context bar that shows the fixed price**: system prompt, tool schemas and MCP schemas, before the conversation starts. Tools can be switched off per profile.
 - **Tool calls read the shapes models actually send**, such as an array sent as a string or a single path where a list is expected. Refusals point at the character that went wrong.
 - **Reasoning replay per provider.** Whether earlier thinking is sent back to the model is decided from what the model measurably does, is adjustable per profile, and is inlined into the content when a chat template would drop it.
 - **Tool calls run as a batch.** Several independent calls in one message run in parallel. Writes to the same file are serialized, so no parallel edit is lost. A profile can set, or turn off, the size limit for a file read.
 - **Guards** catch reasoning loops, repeated calls, non-convergence and files changed behind the model's back. An atomic change protocol with `restore_file` undoes damage.
-- **Questions recommend an option.** When the model asks you to choose, it marks the option it would pick. Optionally, **Jev** scores the options before they reach you.
+- **Questions recommend an option.** When the model asks you to choose, it marks the option it would pick and lists it first. Optionally, **Jev** scores the options before they reach you.
 - **Generated images reach you on text-only models.** The model gets a text result and the chat shows the image.
 
 ## Conversation History
