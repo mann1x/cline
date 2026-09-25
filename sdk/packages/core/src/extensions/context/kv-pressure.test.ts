@@ -52,7 +52,7 @@ function json(value: unknown, status = 200) {
 
 function engine(options: {
 	features?: string[];
-	row: { window: number; used: number };
+	row: { window: number; used: number } & Record<string, unknown>;
 	pressure?: Record<string, unknown>;
 	/** One answer per resize, in order; the last repeats. */
 	resize?: Array<(body: Record<string, unknown>) => Response>;
@@ -76,6 +76,7 @@ function engine(options: {
 			return json({
 				allocations: [
 					{
+						...options.row,
 						session_id: SESSION,
 						window: options.row.window,
 						used: options.row.used,
@@ -405,6 +406,79 @@ describe("session-full refusals are not global pressure", () => {
 		const { found } = await boundary(stub.fetch, { messageChars: 600_000 });
 		expect(found?.kvPressureState).toBe("active");
 		expect(found?.kvPressureCompaction).toBe(true);
+	});
+});
+
+/**
+ * A resize the booking cannot take now -- a request in flight on it -- is
+ * queued for its idle moment where the server offers it
+ * (`kv_resize_deferred_v1`, opencoti b110, mail #306).
+ */
+describe("a resize queued for the idle moment", () => {
+	const DEFERRED = [...BOTH, "kv_resize_deferred_v1"];
+	const SHRUNK = Math.ceil(60_000 / 256) * 256;
+	const queued = (sent: Record<string, unknown>) =>
+		json(
+			{
+				ok: true,
+				deferred: true,
+				status: 202,
+				window: 262_144,
+				resize_pending: sent.num_ctx,
+				active: 2,
+				pending: 0,
+			},
+			202,
+		);
+
+	it("is asked for deferred, and a queued shrink is not read as applied", async () => {
+		const stub = engine({
+			features: DEFERRED,
+			row: { window: 262_144, used: 5_000 },
+			pressure: ACTIVE,
+			resize: [queued],
+		});
+		const { lines } = await boundary(stub.fetch);
+		expect(stub.resizes().map((call) => call.body)).toEqual([
+			{ session_id: SESSION, num_ctx: SHRUNK, deferred: true },
+		]);
+		// Not applied yet: the next turn is still sized against the old window.
+		expect(getPolykvGrantedWindow(SESSION)).toBe(262_144);
+		expect(lines.some((line) => /queued/.test(line.message))).toBe(true);
+		noWarnings(lines);
+	});
+
+	it("is not sent again while the row says it is pending", async () => {
+		const stub = engine({
+			features: DEFERRED,
+			row: { window: 262_144, used: 5_000, resize_pending: SHRUNK },
+			pressure: ACTIVE,
+			resize: [queued],
+		});
+		await boundary(stub.fetch);
+		expect(stub.resizes()).toEqual([]);
+	});
+
+	it("is cancelled -- the current window asked for -- once the pressure clears", async () => {
+		const stub = engine({
+			features: DEFERRED,
+			row: { window: 262_144, used: 5_000, resize_pending: SHRUNK },
+			pressure: CLEARED,
+		});
+		await boundary(stub.fetch);
+		expect(stub.resizes().map((call) => call.body)).toEqual([
+			{ session_id: SESSION, num_ctx: 262_144, deferred: true },
+		]);
+	});
+
+	it("is never asked for on a server without the feature", async () => {
+		const stub = engine({
+			row: { window: 262_144, used: 5_000 },
+			pressure: ACTIVE,
+		});
+		await boundary(stub.fetch);
+		expect(stub.resizes()).toHaveLength(1);
+		expect(stub.resizes()[0]?.body).not.toHaveProperty("deferred");
 	});
 });
 

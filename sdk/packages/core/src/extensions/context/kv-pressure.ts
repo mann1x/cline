@@ -11,6 +11,7 @@ import {
 	type OpencotiAllocation,
 	type OpencotiKvPressure,
 	type OpencotiResizeResult,
+	opencotiPendingResize,
 	opencotiPressureState,
 	polykvOwnerWindowBounds,
 	polykvWorkerChargedTo,
@@ -128,6 +129,12 @@ export interface KvPressureTurn {
 	/** The subject's `/kv` row, as read this turn (updated by a resize). */
 	row?: OpencotiAllocation;
 	logger?: BasicLogger;
+	/**
+	 * The server queues a busy booking's resize for its idle moment
+	 * (`kv_resize_deferred_v1`): every resize is asked for that way, and one
+	 * already queued is not asked again.
+	 */
+	deferred?: boolean;
 }
 
 /** Per engine booking: a resize in flight, and what the engine has said. */
@@ -285,6 +292,9 @@ export async function beginKvPressureTurn(options: {
 		state: opencotiPressureState(reading),
 		...(reading ? { pressure: reading.pressure } : {}),
 		...(options.logger ? { logger: options.logger } : {}),
+		...(hasOpencotiFeature(props?.features, OPENCOTI_FEATURES.kvResizeDeferred)
+			? { deferred: true }
+			: {}),
 	};
 	const row = snapshot?.allocations.find(
 		(entry) => entry.sessionId === subject.engineId,
@@ -292,10 +302,30 @@ export async function beginKvPressureTurn(options: {
 	if (row) {
 		turn.row = row;
 	}
+	await cancelStaleShrink(turn);
 	if (options.grow !== false) {
 		await growIfCleared(turn);
 	}
 	return turn;
+}
+
+/**
+ * A shrink queued under pressure that has not applied by the time the
+ * pressure is gone is a decision nobody would make now: ask for the current
+ * window, which cancels it (`kv_resize_deferred_v1`).
+ */
+async function cancelStaleShrink(turn: KvPressureTurn): Promise<void> {
+	const row = turn.row;
+	if (
+		!turn.deferred ||
+		turn.state === "active" ||
+		!row ||
+		row.resizePending === undefined ||
+		row.resizePending >= row.window
+	) {
+		return;
+	}
+	await resize(turn, row.window, "cancel");
 }
 
 /**
@@ -459,12 +489,22 @@ export async function shrinkForKvPressure(
 async function resize(
 	turn: KvPressureTurn,
 	target: number,
-	direction: "shrink" | "grow",
+	direction: "shrink" | "grow" | "cancel",
 ): Promise<OpencotiResizeResult | undefined> {
 	const { subject } = turn;
 	const state = subjectState(subject.engineId);
 	if (state.inFlight) {
 		return undefined;
+	}
+	if (turn.deferred) {
+		// One target per booking, as the engine keeps it: the same decision
+		// again is already queued. A different one overwrites it.
+		const queued =
+			turn.row?.resizePending ??
+			opencotiPendingResize(turn.baseUrl, subject.engineId);
+		if (queued !== undefined && queued === target) {
+			return undefined;
+		}
 	}
 	state.inFlight = true;
 	let answer: OpencotiResizeResult;
@@ -473,6 +513,7 @@ async function resize(
 			baseUrl: turn.baseUrl,
 			sessionId: subject.engineId,
 			numCtx: target,
+			...(turn.deferred ? { deferred: true } : {}),
 			...(turn.fetch ? { fetch: turn.fetch } : {}),
 			...(turn.headers ? { headers: turn.headers } : {}),
 		});
@@ -484,7 +525,9 @@ async function resize(
 	const why =
 		direction === "shrink"
 			? describePressure(turn.pressure)
-			: "pressure cleared";
+			: direction === "grow"
+				? "pressure cleared"
+				: "queued shrink cancelled: pressure cleared";
 	const info = (message: string) =>
 		turn.logger?.log?.(`${who}: ${message}`, { severity: "info" });
 	if (answer.ok) {
@@ -497,7 +540,8 @@ async function resize(
 			notePolykvOwnerWindow(subject.engineId, answer.windowNew);
 		}
 		if (turn.row) {
-			turn.row = { ...turn.row, window: answer.windowNew };
+			const { resizePending: _applied, ...rest } = turn.row;
+			turn.row = { ...rest, window: answer.windowNew };
 		}
 		const change = `window ${before !== undefined ? cells(before) : "?"} → ${cells(answer.windowNew)}`;
 		info(
@@ -507,13 +551,28 @@ async function resize(
 					: ""
 			})`,
 		);
-		reportPolykvNotice(subject.grantKey, {
-			severity: "info",
-			text: `${change} (${direction === "shrink" ? "pressure" : "pressure cleared"})`,
-		});
+		if (answer.cellsDelta !== 0 && answer.windowNew !== before) {
+			reportPolykvNotice(subject.grantKey, {
+				severity: "info",
+				text: `${change} (${direction === "shrink" ? "pressure" : "pressure cleared"})`,
+			});
+		}
 		return answer;
 	}
 	switch (answer.kind) {
+		case "deferred":
+			// Queued, not applied: the window this turn is sized against is
+			// still the old one, and the next `/kv` read says when it moved.
+			if (turn.row) {
+				turn.row = {
+					...turn.row,
+					resizePending: answer.pending ?? target,
+				};
+			}
+			info(
+				`${direction} to ${cells(target)} queued for the booking's idle moment: a request is in flight on it`,
+			);
+			break;
 		case "session_busy":
 			info(
 				`${direction} to ${cells(target)} waits for the next turn boundary: a request is in flight on this booking`,

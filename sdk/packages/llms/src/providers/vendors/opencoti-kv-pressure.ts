@@ -305,8 +305,14 @@ export async function readOpencotiKv(
 	if (pressure) {
 		noteOpencotiPressure(baseUrl, pressure, at);
 	}
+	const allocations = parseOpencotiAllocations(kv);
+	// What the engine says is queued is what is queued: a row without a
+	// pending resize has applied or dropped it.
+	for (const row of allocations) {
+		notePendingResize(baseUrl, row.sessionId, row.resizePending);
+	}
 	return {
-		allocations: parseOpencotiAllocations(kv),
+		allocations,
 		...(pressure ? { pressure } : {}),
 	};
 }
@@ -394,6 +400,43 @@ export function opencotiResizeRequest(
 	};
 }
 
+/**
+ * Resizes queued on each session's idle moment (`kv_resize_deferred_v1`),
+ * by server and engine session id: one target per session, as the engine
+ * keeps it. Written by every deferred answer and by every `/kv` read, so a
+ * decision already queued is not sent again.
+ */
+const PENDING_RESIZES = new Map<string, number>();
+
+const pendingKey = (baseUrl: string, sessionId: string) =>
+	`${polykvRoot(baseUrl)}\n${sessionId}`;
+
+function notePendingResize(
+	baseUrl: string,
+	sessionId: string,
+	pending: number | undefined,
+): void {
+	const key = pendingKey(baseUrl, sessionId);
+	if (pending !== undefined && pending > 0) {
+		PENDING_RESIZES.set(key, pending);
+	} else {
+		PENDING_RESIZES.delete(key);
+	}
+}
+
+/** The window a resize queued on this session will apply, if one is. */
+export function opencotiPendingResize(
+	baseUrl: string,
+	sessionId: string,
+): number | undefined {
+	return PENDING_RESIZES.get(pendingKey(baseUrl, sessionId));
+}
+
+/** Test seam. */
+export function resetOpencotiPendingResizes(): void {
+	PENDING_RESIZES.clear();
+}
+
 /** A resize the engine took. `cellsDelta` is negative for cells given back. */
 export interface OpencotiResizeDone {
 	ok: true;
@@ -420,6 +463,10 @@ export interface OpencotiResizeDone {
  *   `used` is the floor.
  * - `exhausted` (429): a grow the free cells cannot cover;
  *   `largestAdmissible` is the most it could grow to.
+ * - `deferred` (202): not a refusal -- queued for the session's idle
+ *   moment (`deferred: true` asked, `kv_resize_deferred_v1`); `pending` is
+ *   the window it will apply. Not applied yet, so nothing may read it as
+ *   the new window.
  * - `transport`: no answer at all.
  * - anything else the engine names, verbatim.
  */
@@ -433,6 +480,8 @@ export interface OpencotiResizeRefused {
 	cells?: number;
 	largestAdmissible?: number;
 	pressure?: OpencotiKvPressure;
+	/** `deferred`: the window queued for the idle moment. */
+	pending?: number;
 }
 
 export type OpencotiResizeResult = OpencotiResizeDone | OpencotiResizeRefused;
@@ -488,6 +537,13 @@ export async function resizeOpencotiSession(options: {
 	baseUrl: string;
 	sessionId: string;
 	numCtx: number;
+	/**
+	 * Queue it for the session's idle moment if the session is busy
+	 * (`kv_resize_deferred_v1` -- the caller checks the feature). An idle
+	 * session takes it at once, as without the flag; asking for the current
+	 * window cancels what is queued.
+	 */
+	deferred?: boolean;
 	fetch?: typeof fetch;
 	headers?: Record<string, string>;
 }): Promise<OpencotiResizeResult> {
@@ -495,6 +551,9 @@ export async function resizeOpencotiSession(options: {
 		options.sessionId,
 		Math.max(1, Math.floor(options.numCtx)),
 	);
+	if (options.deferred) {
+		request.body.deferred = true;
+	}
 	const answer = await boundedRequest(
 		options.fetch ?? fetch,
 		`${polykvRoot(options.baseUrl)}${request.path}`,
@@ -508,7 +567,25 @@ export async function resizeOpencotiSession(options: {
 		return { ok: false, status: 0, kind: "transport" };
 	}
 	const body = isRecord(answer.json) ? answer.json : {};
+	if (answer.ok && body.deferred === true) {
+		const pending =
+			finite(body.resize_pending) ?? Math.max(1, Math.floor(options.numCtx));
+		notePendingResize(options.baseUrl, options.sessionId, pending);
+		const window = finite(body.window);
+		const used = finite(body.used);
+		return {
+			ok: false,
+			status: answer.status,
+			kind: "deferred",
+			pending,
+			...(window !== undefined ? { window } : {}),
+			...(used !== undefined ? { used } : {}),
+		};
+	}
 	if (answer.ok) {
+		// Applied now: an immediate resize supersedes a queued one, and one
+		// asking for the current window cancelled it.
+		notePendingResize(options.baseUrl, options.sessionId, undefined);
 		const windowNew = finite(body.window_new) ?? finite(body.window);
 		if (windowNew === undefined || windowNew <= 0) {
 			return {

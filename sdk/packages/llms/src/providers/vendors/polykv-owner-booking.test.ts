@@ -66,6 +66,7 @@ function json(
 
 function engine(
 	options: {
+		features?: string[];
 		maximum?: number;
 		/** The window an owner open is granted; default what it asked. */
 		grant?: (asked: number) => number;
@@ -86,7 +87,7 @@ function engine(
 			: {};
 		calls.push({ path: url.pathname, body });
 		if (url.pathname === "/props") {
-			return json({ features: FEATURES });
+			return json({ features: options.features ?? FEATURES });
 		}
 		if (url.pathname === "/kv") {
 			return json({ session_ctx_max: options.maximum ?? 262_144 });
@@ -398,5 +399,80 @@ describe("a worker refused because its owner is full", () => {
 			OWNER_1,
 			OWNER_2,
 		]);
+	});
+});
+
+describe("a grow the busy owner cannot take now (kv_resize_deferred_v1)", () => {
+	const full = () =>
+		json(
+			{
+				error: {
+					code: 429,
+					message: SESSION_FULL_TEXT,
+					pressure: SESSION_FULL_PRESSURE,
+				},
+			},
+			429,
+			{ "retry-after": "0" },
+		);
+	const ok = () =>
+		json({ choices: [{ message: { content: "ok" } }] }, 200, {
+			"x-context-window": "65536",
+		});
+	const queued = (sent: Record<string, unknown>) =>
+		json(
+			{
+				ok: true,
+				deferred: true,
+				status: 202,
+				session_id: sent.session_id,
+				window: 65_536,
+				resize_pending: sent.num_ctx,
+				active: 3,
+				pending: 0,
+			},
+			202,
+		);
+
+	it("is queued for the owner's idle moment, once, while the worker goes on", async () => {
+		const stub = engine({
+			features: [...FEATURES, "kv_resize_deferred_v1"],
+			grant: () => NODE_WINDOW,
+			resize: [queued],
+			worker: [full, ok, full, ok],
+		});
+		// Both refused on owner-1, by the same shortfall.
+		expect((await send(stub, "agent-a")).status).toBe(200);
+		expect((await send(stub, "agent-b")).status).toBe(200);
+		expect(stub.workers()).toHaveLength(4);
+		const grows = stub.resizes();
+		// One deferred grow by the shortfall; the same decision is not sent
+		// again while it is pending.
+		expect(grows).toHaveLength(1);
+		expect(grows[0]?.body).toEqual({
+			session_id: OWNER_1,
+			num_ctx: 67_328,
+			deferred: true,
+		});
+	});
+
+	it("is never sent deferred to a server without the feature", async () => {
+		const stub = engine({
+			grant: () => NODE_WINDOW,
+			resize: [
+				() =>
+					json(
+						{
+							error: { code: 409, error_kind: "session_busy", message: "busy" },
+						},
+						409,
+					),
+			],
+			worker: [full, ok],
+		});
+		expect((await send(stub, "agent-a")).status).toBe(200);
+		for (const grow of stub.resizes()) {
+			expect(grow.body).not.toHaveProperty("deferred");
+		}
 	});
 });

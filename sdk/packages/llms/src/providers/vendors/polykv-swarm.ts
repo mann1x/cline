@@ -1,5 +1,6 @@
 import {
 	noteOpencotiRefusalPressure,
+	opencotiPendingResize,
 	resizeOpencotiSession,
 } from "./opencoti-kv-pressure";
 import type { OpencotiStreamPhase } from "./opencoti-liveness";
@@ -1285,11 +1286,17 @@ const alignUp = (value: number): number =>
  * `true` when the engine took it. Never throws: a refusal -- busy with its
  * workers' requests, no room, no resize on this server -- is `false`, and
  * the caller places the agent elsewhere or waits.
+ *
+ * `defer`: where the server offers `kv_resize_deferred_v1`, a busy owner
+ * queues the grow for its idle moment instead of refusing it -- still
+ * `false` here (nothing is applied yet), and a grow already queued at least
+ * this big is not asked again.
  */
 async function growOwner(
 	group: SwarmGroup,
 	shard: OwnerShard,
 	target: number,
+	defer = false,
 ): Promise<boolean> {
 	if (
 		shard.closed ||
@@ -1308,15 +1315,30 @@ async function growOwner(
 	if (!hasOpencotiFeature(props?.features, OPENCOTI_FEATURES.kvResize)) {
 		return false;
 	}
+	const deferred =
+		defer &&
+		hasOpencotiFeature(props?.features, OPENCOTI_FEATURES.kvResizeDeferred);
+	const queued = deferred
+		? opencotiPendingResize(group.root, shard.sessionId)
+		: undefined;
+	if (queued !== undefined && queued >= target) {
+		// Already queued for the owner's idle moment: the same decision again
+		// would only overwrite it with itself.
+		return false;
+	}
 	shard.growing = true;
 	try {
 		const answer = await resizeOpencotiSession({
 			baseUrl: group.root,
 			sessionId: shard.sessionId,
 			numCtx: target,
+			...(deferred ? { deferred: true } : {}),
 			fetch: group.fetch,
 			...(group.headers ? { headers: group.headers } : {}),
 		});
+		if (!answer.ok && answer.kind === "deferred") {
+			return false;
+		}
 		if (!answer.ok) {
 			shard.growRefusedAt = Date.now();
 			return false;
@@ -1485,7 +1507,7 @@ export async function growPolykvOwnerForWorker(
 		// Grown meanwhile by another refused worker: send it again.
 		return true;
 	}
-	return growOwner(group, shard, target);
+	return growOwner(group, shard, target, true);
 }
 
 /** The model's own per-session maximum, which is what an owner asks for. */

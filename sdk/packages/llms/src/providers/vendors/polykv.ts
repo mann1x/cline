@@ -871,6 +871,12 @@ export const OPENCOTI_FEATURES = {
 	kvPressure: "kv_pressure_v1",
 	/** `POST /kv/sessions/{id}/resize {num_ctx}`: a live booking can shrink and grow. */
 	kvResize: "kv_resize_v1",
+	/**
+	 * `{num_ctx, deferred: true}` on the resize route: a busy session's resize
+	 * is queued (202) and applied at its idle moment; the `/kv` row carries
+	 * `resize_pending` (b110, mail #306).
+	 */
+	kvResizeDeferred: "kv_resize_deferred_v1",
 } as const;
 
 export type OpencotiFeature =
@@ -1302,6 +1308,17 @@ export interface OpencotiAllocation {
 	pressure: number;
 	/** Sub-pools this session holds, of `poolsMaxPerSlot`. */
 	pools: number;
+	/**
+	 * A resize queued for this session's idle moment (`kv_resize_deferred_v1`):
+	 * the window it will be resized to.
+	 */
+	resizePending?: number;
+	/**
+	 * Why a queued resize has not applied at an idle moment -- the engine's
+	 * resize refusal kind, e.g. `used_exceeds_window` for a shrink below what
+	 * the session holds. It stays queued.
+	 */
+	resizePendingReason?: string;
 }
 
 export interface OpencotiStatus {
@@ -1500,6 +1517,14 @@ export function parseOpencotiAllocations(
 				// window.
 				pressure: numberOr(entry.pressure) ?? (window > 0 ? used / window : 0),
 				pools: numberOr(entry.pools) ?? 0,
+				...(numberOr(entry.resize_pending) !== undefined &&
+				(numberOr(entry.resize_pending) as number) > 0
+					? { resizePending: numberOr(entry.resize_pending) as number }
+					: {}),
+				...(typeof entry.resize_pending_reason === "string" &&
+				entry.resize_pending_reason
+					? { resizePendingReason: entry.resize_pending_reason }
+					: {}),
 			},
 		];
 	});
