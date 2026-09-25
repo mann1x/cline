@@ -8,7 +8,20 @@ const noticeListeners = new Map<
 	string,
 	(notice: { severity: string; text: string }) => void
 >();
+const phaseListeners = new Map<string, (phase: unknown) => void>();
 vi.mock("@cline/llms", () => ({
+	describeOpencotiStreamPhase: (phase: {
+		kind: string;
+		processed?: number;
+		total?: number;
+	}) =>
+		phase.kind === "prefill"
+			? `Prefilling ${phase.processed} / ${phase.total}`
+			: `phase ${phase.kind}`,
+	onPolykvStreamPhase: (id: string, listener: (phase: unknown) => void) => {
+		phaseListeners.set(id, listener);
+		return () => phaseListeners.delete(id);
+	},
 	onPolykvNotice: (
 		id: string,
 		listener: (notice: { severity: string; text: string }) => void,
@@ -96,5 +109,30 @@ describe("watchPolykvRoom", () => {
 		watchPolykvRoom(undefined, vi.fn())();
 		watchPolykvRoom("s2", undefined)();
 		expect(listeners.has("s2")).toBe(false);
+	});
+
+	// patch 0388's heartbeat names the phase of a silent stream. It goes on
+	// the row's current line, in place, and never on the activity log.
+	it("shows the server phase of a silent stream in place, then gives the line back", () => {
+		const emitUpdate = vi.fn();
+		const stop = watchPolykvRoom("s9", emitUpdate);
+		phaseListeners.get("s9")?.({ kind: "queued" });
+		phaseListeners.get("s9")?.({
+			kind: "prefill",
+			processed: 20_481,
+			total: 41_533,
+		});
+		phaseListeners.get("s9")?.(undefined);
+		phaseListeners.get("s9")?.(undefined);
+		expect(emitUpdate.mock.calls).toEqual([
+			[{ latestOutput: "phase queued", latestOutputKind: "text" }],
+			[{ latestOutput: "Prefilling 20481 / 41533", latestOutputKind: "text" }],
+			[{ latestOutput: "" }],
+		]);
+		for (const [update] of emitUpdate.mock.calls) {
+			expect(update).not.toHaveProperty("activity");
+		}
+		stop();
+		expect(phaseListeners.has("s9")).toBe(false);
 	});
 });

@@ -195,6 +195,13 @@ export {
 	resolveLlamaCppThinkBudgetWindow,
 } from "./providers/vendors/llamacpp-sampling";
 export {
+	describeOpencotiStreamPhase,
+	OPENCOTI_KEEPALIVE_PING_SECONDS,
+	OpencotiServerSilentError,
+	type OpencotiStreamPhase,
+	opencotiKeepaliveDeadMs,
+} from "./providers/vendors/opencoti-liveness";
+export {
 	formatWindowK,
 	isOpencotiWindowUnavailableError,
 	OPENCOTI_WINDOW_UNAVAILABLE_CODE,
@@ -254,12 +261,15 @@ export {
 	engineSessionId,
 	invalidatePolykvRoot,
 	isWorkerWindowFull,
+	notePolykvBootId,
 	notePolykvServerFault,
 	onPolykvNotice,
 	onPolykvRoomWait,
+	onPolykvStreamPhase,
 	POLYKV_LEAD_SUBPOOL_CAP,
 	POLYKV_LEAD_WORKER_POOL_MAX,
 	POLYKV_OWNER_MIN_WINDOW,
+	POLYKV_PHASE_REPORT_MS,
 	POLYKV_ROOM_BACKOFF_MAX_MS,
 	POLYKV_VERIFY_INTERVAL_MS,
 	type PolykvLeadRoom,

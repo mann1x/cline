@@ -1,3 +1,4 @@
+import type { OpencotiStreamPhase } from "./opencoti-liveness";
 import {
 	createPolykvClient,
 	type PolykvAdmissionPolicy,
@@ -232,6 +233,11 @@ interface OwnerShard {
 	pools: Map<string, Promise<string | undefined>>;
 	/** Pool id -> what the server said it was, for {@link verifyPolykvRoot}. */
 	records: Map<string, PoolRecord>;
+	/**
+	 * Layer key -> the id `pools` resolved to, once it has: read synchronously
+	 * by {@link forgetPolykvWorkerPool}.
+	 */
+	settled?: Map<string, string | undefined>;
 	/** Agents currently assigned here. */
 	agents: Set<string>;
 	closed: boolean;
@@ -386,6 +392,14 @@ interface RootState {
 	/** Something suggested a restart; ask before the next attach. */
 	suspect: boolean;
 	checking?: Promise<void>;
+	/**
+	 * The `boot_id` of the process this generation's pools were made on
+	 * (`boot_id_v1`), from `/props` when the chain was verified or from the
+	 * first `X-OpenCoti-Boot-Id` seen for it.
+	 */
+	bootId?: string;
+	/** Boot ids of processes already replaced: a late answer from one is not news. */
+	retiredBootIds?: Set<string>;
 }
 
 const ROOT_STATES = new Map<string, RootState>();
@@ -509,7 +523,20 @@ export function polykvServerIdentity(
  * each agent's next turn resolves its layer key to a pool built anew, under
  * a new owner, and the prefix is shared again.
  */
-export function invalidatePolykvRoot(baseUrl: string, reason: string): void {
+export function invalidatePolykvRoot(
+	baseUrl: string,
+	reason: string,
+	options: {
+		/**
+		 * The agents' notice. `warn` by default; `info` where the loss was
+		 * found and recovered in the same breath -- the rebuild is the whole
+		 * of what follows, and nothing is left to watch.
+		 */
+		severity?: PolykvNotice["severity"];
+		/** The notice's text, when "restarted" is not what happened. */
+		text?: string;
+	} = {},
+): string[] {
 	const root = polykvRoot(baseUrl);
 	const state = rootState(root);
 	state.generation += 1;
@@ -531,10 +558,159 @@ export function invalidatePolykvRoot(baseUrl: string, reason: string): void {
 	}
 	for (const agent of agents) {
 		reportPolykvNotice(agent, {
-			severity: "warn",
-			text: `The server at ${root} restarted (${reason}): this agent's shared pools are rebuilt under a new owner on its next turn.`,
+			severity: options.severity ?? "warn",
+			text:
+				options.text ??
+				`The server at ${root} restarted (${reason}): this agent's shared pools are rebuilt under a new owner on its next turn.`,
 		});
 	}
+	// Who was told, so a caller with news for one more does not tell twice.
+	return agents;
+}
+
+/** `boot_id` as `/props` or `/health` states it, top level or under `opencoti`. */
+function readBootId(
+	...bodies: ReadonlyArray<Record<string, unknown> | undefined>
+): string | undefined {
+	for (const body of bodies) {
+		const nested =
+			body?.opencoti && typeof body.opencoti === "object"
+				? (body.opencoti as Record<string, unknown>).boot_id
+				: undefined;
+		const value = body?.boot_id ?? nested;
+		if (typeof value === "string" && value) {
+			return value;
+		}
+	}
+	return undefined;
+}
+
+/** Record `bootId` as the current generation's, retiring the one it replaces. */
+function adoptBootId(state: RootState, bootId: string): void {
+	if (state.bootId !== undefined && state.bootId !== bootId) {
+		state.retiredBootIds ??= new Set();
+		state.retiredBootIds.add(state.bootId);
+	}
+	state.bootId = bootId;
+}
+
+/**
+ * The boot id this root's pools belong to, when the server has stated one.
+ * `undefined` on a server without `boot_id_v1`: nothing to compare against.
+ */
+export function polykvRootBootId(baseUrl: string): string | undefined {
+	return ROOT_STATES.get(polykvRoot(baseUrl))?.bootId;
+}
+
+/**
+ * One pool of this agent's chain is gone while the process stayed up
+ * (`pool_unknown` under an unchanged boot id): its owner lapsed or was
+ * closed, or the engine released it. Forget that pool and every pool forked
+ * from it -- in the shard that holds it, and nowhere else -- so the agent's
+ * next turn rebuilds its chain from the first layer still standing. Other
+ * agents, on this shard or another, keep their pools; if theirs went too,
+ * their own next answer says so.
+ *
+ * Layers whose build failed are retried too: a fork from the pool that just
+ * vanished is the likeliest reason one did.
+ *
+ * Returns whether any pool was forgotten.
+ */
+export function forgetPolykvWorkerPool(
+	baseUrl: string,
+	sessionId: string,
+	poolId: string,
+): boolean {
+	const root = polykvRoot(baseUrl);
+	const own = AGENT_GROUPS.get(sessionId)?.assigned.get(sessionId);
+	const shards = [
+		...(own ? [own] : []),
+		...[...GROUPS.values()]
+			.filter((group) => group.root === root)
+			.flatMap((group) => group.shards)
+			.filter((shard) => shard !== own),
+	];
+	const shard = shards.find(
+		(candidate) => !candidate.closed && candidate.records.has(poolId),
+	);
+	if (!shard) {
+		return false;
+	}
+	// The named pool and its descendants, by the parents the server reported.
+	const gone = new Set([poolId]);
+	for (let grew = true; grew; ) {
+		grew = false;
+		for (const [id, record] of shard.records) {
+			if (!gone.has(id) && record.parent && gone.has(record.parent)) {
+				gone.add(id);
+				grew = true;
+			}
+		}
+	}
+	for (const id of gone) {
+		shard.records.delete(id);
+	}
+	for (const [key, id] of [...(shard.settled ?? [])]) {
+		if (id === undefined || gone.has(id)) {
+			shard.pools.delete(key);
+			shard.settled?.delete(key);
+		}
+	}
+	return true;
+}
+
+/**
+ * Read the `X-OpenCoti-Boot-Id` of a completion response (`boot_id_v1`).
+ *
+ * Pool ids restart from 0 with the process, so a pool id held across a
+ * restart names nothing -- silently reprocessed in full -- or a pool someone
+ * built since. The header is on every completion, so a restart is known from
+ * the first answer of the new process, not from the next `/props` check up to
+ * {@link POLYKV_VERIFY_INTERVAL_MS} later (and only on a turn that attaches).
+ *
+ * The generation's boot id is the first one stated for the root -- by
+ * `/props` when a chain is verified, or by this header -- and it is carried
+ * across a generation that ended for another reason (a lapsed pool, a
+ * listing that lost one): that is still the same process. So once the server
+ * has stated any boot id, one is always recorded, and a header that differs
+ * from it is the one signal: it starts a new generation at once. The swarm's
+ * owners and pools are dropped and every agent -- and the lead, whose tree
+ * follows the generation -- rebuilds on its next turn. The notice is `info`:
+ * the restart is over, and the rebuild is its whole consequence.
+ *
+ * Returns whether the root was invalidated. An absent header (an older build)
+ * says nothing.
+ */
+export function notePolykvBootId(
+	baseUrl: string,
+	bootId: string | null | undefined,
+): boolean {
+	if (!bootId) {
+		return false;
+	}
+	const root = polykvRoot(baseUrl);
+	const state = rootState(root);
+	if (state.bootId === bootId || state.retiredBootIds?.has(bootId)) {
+		return false;
+	}
+	const previous = state.bootId;
+	if (previous === undefined) {
+		// The first the root has heard of one: its pools were checked
+		// against /props when they were made, and nothing says otherwise.
+		adoptBootId(state, bootId);
+		return false;
+	}
+	notePolykvServerFault(baseUrl);
+	invalidatePolykvRoot(
+		baseUrl,
+		`its boot id changed from ${previous} to ${bootId}`,
+		{ severity: "info" },
+	);
+	adoptBootId(state, bootId);
+	// The identity /props stated was the old process's: the next check
+	// re-baselines on the new one instead of finding the same restart again.
+	state.identity = undefined;
+	return true;
 }
 
 /** What the server said of a pool when it was made, for the listing check. */
@@ -719,6 +895,17 @@ export async function verifyPolykvRoot(
 		) {
 			reason = "its identity in /props changed";
 		}
+		// The generation's boot id, from a header seen before any /props read,
+		// against the one /props states now.
+		const bootId = readBootId(props, health);
+		if (
+			!reason &&
+			bootId !== undefined &&
+			state.bootId !== undefined &&
+			bootId !== state.bootId
+		) {
+			reason = "its boot id changed";
+		}
 		if (
 			identity !== undefined &&
 			(state.identity === undefined ||
@@ -738,6 +925,9 @@ export async function verifyPolykvRoot(
 		state.suspect = false;
 		if (reason) {
 			invalidatePolykvRoot(root, reason);
+		}
+		if (bootId !== undefined) {
+			adoptBootId(state, bootId);
 		}
 	})().finally(() => {
 		state.checking = undefined;
@@ -1042,6 +1232,13 @@ async function ensureChain(
 				return pool.pool_id;
 			})().catch(() => undefined);
 			shard.pools.set(key, pending);
+			const settling = pending;
+			void settling.then((id) => {
+				if (shard.pools.get(key) === settling) {
+					shard.settled ??= new Map();
+					shard.settled.set(key, id);
+				}
+			});
 		}
 		const poolId = await pending;
 		if (poolId === undefined) {
@@ -1635,6 +1832,84 @@ export function reportPolykvRoomWait(
 	for (const listener of ROOM_WAIT_LISTENERS.get(key) ?? []) {
 		try {
 			listener(state);
+		} catch {
+			// A listener is a UI update; it must never fail a request.
+		}
+	}
+}
+
+/**
+ * The least time between two row updates of the same phase kind. A new kind
+ * (queued -> prefill) and the end of the phase always go through at once.
+ */
+export const POLYKV_PHASE_REPORT_MS = 3_000;
+
+const PHASE_LISTENERS = new Map<
+	string,
+	Set<(phase: OpencotiStreamPhase | undefined) => void>
+>();
+const LAST_PHASE = new Map<string, { at: number; kind?: string }>();
+
+/**
+ * Be told what an agent's request is doing on the server while its stream is
+ * silent: queued, prefilling `n` of `N`, generating with nothing to show
+ * (`stream_keepalive_v1`), and `undefined` once it produces again.
+ *
+ * The same reach problem as the room wait: the heartbeat is read inside this
+ * vendor's fetch. Without it a 40k prefill behind a busy server was a row
+ * that said nothing for minutes. Keyed by the agent's own session id.
+ * Returns the unsubscribe.
+ */
+export function onPolykvStreamPhase(
+	sessionId: string,
+	listener: (phase: OpencotiStreamPhase | undefined) => void,
+): () => void {
+	const key = engineSessionId(sessionId);
+	let listeners = PHASE_LISTENERS.get(key);
+	if (!listeners) {
+		listeners = new Set();
+		PHASE_LISTENERS.set(key, listeners);
+	}
+	listeners.add(listener);
+	return () => {
+		listeners?.delete(listener);
+		if (listeners?.size === 0) {
+			PHASE_LISTENERS.delete(key);
+			LAST_PHASE.delete(key);
+		}
+	};
+}
+
+/**
+ * Report an agent's stream phase. Throttled here, once for every listener:
+ * a repeat of the same kind within {@link POLYKV_PHASE_REPORT_MS} is dropped,
+ * so the row is updated in place every few seconds at most.
+ */
+export function reportPolykvStreamPhase(
+	sessionId: string,
+	phase: OpencotiStreamPhase | undefined,
+	now: number = Date.now(),
+): void {
+	const key = engineSessionId(sessionId);
+	const listeners = PHASE_LISTENERS.get(key);
+	if (!listeners) {
+		return;
+	}
+	const last = LAST_PHASE.get(key);
+	if (phase === undefined) {
+		if (last?.kind === undefined) {
+			return;
+		}
+	} else if (
+		last?.kind === phase.kind &&
+		now - last.at < POLYKV_PHASE_REPORT_MS
+	) {
+		return;
+	}
+	LAST_PHASE.set(key, { at: now, ...(phase ? { kind: phase.kind } : {}) });
+	for (const listener of listeners) {
+		try {
+			listener(phase);
 		} catch {
 			// A listener is a UI update; it must never fail a request.
 		}

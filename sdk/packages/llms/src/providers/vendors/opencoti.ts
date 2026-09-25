@@ -14,8 +14,15 @@ import { primeTemplateReinjection } from "../reasoning-history";
 import { waitForServerHealth } from "../server-health";
 import { llamaCppTimingsMetadataExtractor } from "./llamacpp-timings";
 import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
+import {
+	type KeepaliveRequest,
+	OPENCOTI_BOOT_ID_HEADER,
+	requestStreamKeepalive,
+	superviseKeepaliveStream,
+} from "./opencoti-liveness";
 import { OpencotiWindowUnavailableError } from "./opencoti-window";
 import {
+	clearPolykvSession,
 	getPolykvGrantedWindow,
 	getPolykvSession,
 	hasOpencotiFeature,
@@ -27,19 +34,24 @@ import {
 	recordPolykvWindowObservation,
 } from "./polykv";
 import {
+	forgetPolykvLeadPool,
 	hoistLeadEnvironment,
 	markLeadWindowLive,
 	prepareLeadPool,
 } from "./polykv-lead";
 import {
 	engineSessionId,
+	forgetPolykvWorkerPool,
+	invalidatePolykvRoot,
 	isWorkerWindowFull,
 	markPolykvWorkerStarted,
 	movePolykvWorker,
+	notePolykvBootId,
 	notePolykvServerFault,
 	type PolykvLeadRoom,
 	type PolykvWorkerSpec,
 	polykvRoomBackoffMs,
+	polykvRootBootId,
 	polykvRootGeneration,
 	polykvWorkerStarted,
 	preparePolykvWorker,
@@ -47,6 +59,7 @@ import {
 	rememberOpencotiSession,
 	reportPolykvNotice,
 	reportPolykvRoomWait,
+	reportPolykvStreamPhase,
 } from "./polykv-swarm";
 import type { ProviderFactoryResult } from "./types";
 
@@ -214,6 +227,12 @@ export interface OpencotiResponseFacts {
 	poolMatchTokens?: number;
 	poolLengthTokens?: number;
 	/**
+	 * The named pool does not exist in the process that answered
+	 * (`pool_unknown_in_response_v1`): the turn ran, reprocessed in full --
+	 * never refused -- and the id this side holds is stale.
+	 */
+	poolUnknown?: boolean;
+	/**
 	 * The window the server granted, from `X-Context-Window`.
 	 *
 	 * **Absent is not "unchanged".** The header rides every admitted response
@@ -254,6 +273,7 @@ function readAttachFacts(block: unknown): OpencotiResponseFacts {
 	const match = count(source.pool_match);
 	const length = count(source.pool_len);
 	return {
+		...(source.pool_unknown === true ? { poolUnknown: true } : {}),
 		...(match !== undefined ? { poolMatchTokens: match } : {}),
 		...(length !== undefined ? { poolLengthTokens: length } : {}),
 		// `-1` is the engine's "no pool", not pool minus one.
@@ -338,6 +358,8 @@ export function createOpencotiFetch(options: {
 	headers?: Record<string, string>;
 	/** Seam for tests: the one below-floor wait a new session is allowed. */
 	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+	/** Where what the fetch learns and recovers from is logged. */
+	log?: OpencotiLog;
 }): typeof fetch {
 	const base = options.fetch ?? fetch;
 	const worker = options.request?.worker;
@@ -363,6 +385,8 @@ export function createOpencotiFetch(options: {
 		// The prefix the lead tree shares above a private budget, so the grant
 		// can be read back as the window the conversation can actually fill.
 		let sharedAboveBudget: number | undefined;
+		/** Set when this request asked for the heartbeat. */
+		let keepalive: KeepaliveRequest | undefined;
 		if (init?.body && typeof init.body === "string") {
 			try {
 				body = JSON.parse(init.body) as Record<string, unknown>;
@@ -489,10 +513,24 @@ export function createOpencotiFetch(options: {
 					}
 				}
 			}
+			// The heartbeat, on every streaming request to a server that sends
+			// one: a lead's, a plain session's, an unpooled one's alike.
+			if (await keepaliveAdvertised(options.baseUrl, base, body)) {
+				keepalive = requestStreamKeepalive(body);
+			}
 			nextInit = { ...init, body: JSON.stringify(body) };
 		}
-		const sendWire = (wire: Record<string, unknown> | undefined) =>
-			base(input, {
+		/** The last attempt, as it went out and was answered. */
+		let sent: SentTurn = {};
+		const sendWire = async (wire: Record<string, unknown> | undefined) => {
+			const named = (wire ?? body)?.pool_id;
+			sent = {
+				...(options.baseUrl
+					? { generation: polykvRootGeneration(options.baseUrl) }
+					: {}),
+				...(typeof named === "number" ? { poolId: String(named) } : {}),
+			};
+			const response = await base(input, {
 				...nextInit,
 				...(wire ? { body: JSON.stringify(wire) } : {}),
 				// Prefill is the reason this matters: creating or attaching a pool
@@ -500,6 +538,30 @@ export function createOpencotiFetch(options: {
 				// timeout is five minutes.
 				...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
 			} as RequestInit);
+			sent.bootId = response.headers.get(OPENCOTI_BOOT_ID_HEADER);
+			if (options.baseUrl) {
+				noteBootId(options.baseUrl, response, options.log);
+			}
+			// With the heartbeat a first-result error arrives inside a 200
+			// stream; put it back as the HTTP error every path below reads.
+			return keepalive
+				? superviseKeepaliveStream(response, {
+						...keepalive,
+						...(extras?.sessionId !== undefined
+							? {
+									onPhase: (phase) =>
+										reportPolykvStreamPhase(extras.sessionId as string, phase),
+								}
+							: {}),
+						// Dead, not slow: whatever pools it held may be gone with it.
+						onDead: () => {
+							if (options.baseUrl) {
+								notePolykvServerFault(options.baseUrl);
+							}
+						},
+					})
+				: response;
+		};
 		const leadBaseUrl = options.baseUrl;
 		const send = async (wire: Record<string, unknown> | undefined) => {
 			// A lead pool id is a number the server issued; after a restart the
@@ -603,8 +665,17 @@ export function createOpencotiFetch(options: {
 				sharedAboveBudget,
 			);
 		}
-		const onFacts = noticeDivergence(sessionId, options.onFacts);
-		return sessionId !== undefined || options.onFacts
+		const onFacts = noticePoolUnknown({
+			baseUrl: options.baseUrl,
+			sessionId,
+			chain: "lead",
+			sent: () => sent,
+			log: options.log,
+			onFacts: noticeDivergence(sessionId, options.onFacts),
+		});
+		return sessionId !== undefined ||
+			options.onFacts ||
+			(options.baseUrl && typeof body?.pool_id === "number")
 			? observeResponseFacts(response, (facts) =>
 					onFacts(
 						outcome.asked !== undefined && facts.contextWindow !== undefined
@@ -623,6 +694,25 @@ interface WindowNegotiation {
 	resume: boolean;
 	ask?: number;
 	floor?: number;
+}
+
+/**
+ * Whether this request should ask for the heartbeat: it streams, and the
+ * server advertises `stream_keepalive_v1`. `/props` is read once per root, and
+ * only for a streaming request -- a buffered one has no stream to keep alive.
+ */
+async function keepaliveAdvertised(
+	baseUrl: string | undefined,
+	fetchImpl: typeof fetch,
+	body: Record<string, unknown>,
+): Promise<boolean> {
+	if (!baseUrl || body.stream !== true) {
+		return false;
+	}
+	const props = await probeOpencotiProps(baseUrl, fetchImpl).catch(
+		() => undefined,
+	);
+	return hasOpencotiFeature(props?.features, OPENCOTI_FEATURES.streamKeepalive);
 }
 
 /** The two flags the window request branches on, read off `/props`. */
@@ -867,6 +957,112 @@ function noticeDivergence(
 	};
 }
 
+/** What went out with the turn in hand, for reading its answer. */
+interface SentTurn {
+	/** The root's generation when it went out. */
+	generation?: number;
+	/** `X-OpenCoti-Boot-Id` on its answer; `null` when the server sent none. */
+	bootId?: string | null;
+	/** The pool id it named. */
+	poolId?: string;
+}
+
+/**
+ * `onFacts`, with `opencoti.pool_unknown` acted on: the pool this turn named
+ * does not exist in the process that answered.
+ *
+ * - **Same process** (the answer's boot id is the one the root's pools belong
+ *   to): one pool went away while the server stayed up -- a lapsed or closed
+ *   owner, a lead sub-pool released on the idle TTL. Only the chain holding
+ *   that id is dropped: this worker's pool and what was forked from it
+ *   ({@link forgetPolykvWorkerPool}), or the lead's
+ *   ({@link forgetPolykvLeadPool}), or a plain session's remembered pool.
+ *   Every other agent on the server keeps its pools.
+ * - **Anything else** -- a new boot id, or none to compare (a server without
+ *   `boot_id_v1`) -- is read as the restart it most likely is: the root's
+ *   generation ends, and everything on it rebuilds.
+ *
+ * Info, not warn, on the row and in the log: the server served the turn (a
+ * full reprocess, never a refusal) and the rebuild recovers it. Skipped when
+ * the generation already moved after the turn went out -- the boot id on the
+ * same response, most likely -- so one restart is one rebuild.
+ */
+function noticePoolUnknown(context: {
+	baseUrl: string | undefined;
+	sessionId: string | undefined;
+	/** Whose chain the pool is in: a swarm worker's, or a lead's / session's. */
+	chain: "worker" | "lead";
+	sent: () => SentTurn;
+	log: OpencotiLog | undefined;
+	onFacts: (facts: OpencotiResponseFacts) => void;
+}): (facts: OpencotiResponseFacts) => void {
+	const { baseUrl, sessionId, log } = context;
+	return (facts) => {
+		const sent = context.sent();
+		if (
+			facts.poolUnknown &&
+			baseUrl &&
+			sent.generation !== undefined &&
+			polykvRootGeneration(baseUrl) === sent.generation
+		) {
+			const poolId = facts.poolId ?? sent.poolId;
+			const pool = poolId !== undefined ? `pool ${poolId}` : "its pool";
+			const recorded = polykvRootBootId(baseUrl);
+			const sameProcess =
+				typeof sent.bootId === "string" &&
+				recorded !== undefined &&
+				sent.bootId === recorded;
+			if (sameProcess && poolId !== undefined) {
+				const forgotten =
+					sessionId === undefined
+						? false
+						: context.chain === "worker"
+							? forgetPolykvWorkerPool(baseUrl, sessionId, poolId)
+							: forgetPolykvLeadPool(sessionId, poolId) ||
+								forgetSessionPool(sessionId, poolId);
+				if (sessionId !== undefined) {
+					reportPolykvNotice(sessionId, {
+						severity: "info",
+						text: `The server no longer holds ${pool} (pool_unknown; same process, so its owner or window lapsed): this turn was prefilled in full${forgotten ? ", and this agent's pool chain is rebuilt on its next turn" : ""}.`,
+					});
+				}
+				log?.(
+					`[opencoti] ${polykvRoot(baseUrl)} no longer holds ${pool} (pool_unknown, same boot id): the turn was reprocessed in full; ${forgotten ? "that chain is rebuilt on the next turn, the root's other pools are kept" : "no chain here held it"}`,
+					"info",
+				);
+			} else {
+				const told = invalidatePolykvRoot(baseUrl, `${pool} is unknown to it`, {
+					severity: "info",
+					text: `The server does not hold ${pool} any more (pool_unknown): this turn was prefilled in full, and the shared pools are rebuilt on the next turn.`,
+				}).map(engineSessionId);
+				if (
+					sessionId !== undefined &&
+					!told.includes(engineSessionId(sessionId))
+				) {
+					reportPolykvNotice(sessionId, {
+						severity: "info",
+						text: `The server did not know ${pool}: this turn was prefilled in full, and the pool is rebuilt on the next turn.`,
+					});
+				}
+				log?.(
+					`[opencoti] ${polykvRoot(baseUrl)} does not hold ${pool} (pool_unknown, ${sent.bootId ? "boot id changed" : "no boot id to compare"}): the turn was reprocessed in full; the root's pools are rebuilt on the next turn`,
+					"info",
+				);
+			}
+		}
+		context.onFacts(facts);
+	};
+}
+
+/** A plain session's remembered pool, when it is the one that went. */
+function forgetSessionPool(sessionId: string, poolId: string): boolean {
+	if (getPolykvSession(sessionId)?.poolId !== poolId) {
+		return false;
+	}
+	clearPolykvSession(sessionId);
+	return true;
+}
+
 /**
  * Hand what the response says about the turn to `onFacts`, and return a
  * response the caller can still read whole.
@@ -950,6 +1146,30 @@ async function observeResponseFacts(
 	return response;
 }
 
+/** A line for the provider's log. */
+export type OpencotiLog = (message: string, severity: "info" | "warn") => void;
+
+/**
+ * Every completion response names the process that answered it
+ * (`X-OpenCoti-Boot-Id`, `boot_id_v1`). One that is not the process the
+ * root's pools were made on ends their generation at once -- the swarm's and
+ * the lead's alike -- so the next turn rebuilds instead of naming ids that
+ * the new process has handed out again from 0.
+ */
+function noteBootId(
+	baseUrl: string,
+	response: Response,
+	log: OpencotiLog | undefined,
+): void {
+	const bootId = response.headers.get(OPENCOTI_BOOT_ID_HEADER);
+	if (notePolykvBootId(baseUrl, bootId)) {
+		log?.(
+			`[opencoti] ${polykvRoot(baseUrl)} answered as a new process (boot id ${bootId}): its pools are gone, and they are rebuilt on the next turn`,
+			"info",
+		);
+	}
+}
+
 /** Statuses that mean the server behind the address did not answer. */
 const SERVER_FAULT_STATUSES = new Set([502, 503, 504]);
 
@@ -985,12 +1205,22 @@ function createWorkerFetch(options: {
 	headers?: Record<string, string>;
 	onFacts?: (facts: OpencotiResponseFacts) => void;
 	workerMaxTokens?: number;
+	log?: OpencotiLog;
 }): typeof fetch {
 	const base = options.fetch ?? fetch;
+	/** The turn now in hand, as it went out and was answered. */
+	let sent: SentTurn = {};
 	const observed = (response: Response) =>
 		observeResponseFacts(
 			response,
-			noticeDivergence(options.worker.sessionId, options.onFacts),
+			noticePoolUnknown({
+				baseUrl: options.baseUrl,
+				sessionId: options.worker.sessionId,
+				chain: "worker",
+				sent: () => sent,
+				log: options.log,
+				onFacts: noticeDivergence(options.worker.sessionId, options.onFacts),
+			}),
 		);
 	let ranOnce = false;
 	// The lead's session, lent to this agent (priority 0). A summary call is
@@ -1115,6 +1345,9 @@ function createWorkerFetch(options: {
 			if (attach.poolId !== undefined && /^\d+$/.test(attach.poolId)) {
 				wire.pool_id = Number(attach.poolId);
 			}
+			const keepalive = (await keepaliveAdvertised(options.baseUrl, base, wire))
+				? requestStreamKeepalive(wire)
+				: undefined;
 			if (lent && !ranOnce && attach.poolId === undefined) {
 				// Priority 0 without a sub-pool is not priority 0: the lead's
 				// session is at its eight per slot, or the server's pool
@@ -1125,12 +1358,34 @@ function createWorkerFetch(options: {
 				return leadReserveRefusal(lent, undefined);
 			}
 			let response: Response;
+			sent = {
+				generation: polykvRootGeneration(options.baseUrl),
+				...(typeof wire.pool_id === "number"
+					? { poolId: String(wire.pool_id) }
+					: {}),
+			};
 			try {
 				response = await base(input, {
 					...init,
 					body: JSON.stringify(wire),
 					...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
 				} as RequestInit);
+				sent.bootId = response.headers.get(OPENCOTI_BOOT_ID_HEADER);
+				noteBootId(options.baseUrl, response, options.log);
+				// A first-result error inside a 200 stream goes back to being
+				// the HTTP error the window-full and server-fault waits read.
+				// A heartbeat that stops before the first event throws here,
+				// as the transport fault it is, into the server-fault wait
+				// below; one that stops later errors the stream, and the turn
+				// recovery takes it from there.
+				if (keepalive) {
+					response = await superviseKeepaliveStream(response, {
+						...keepalive,
+						onPhase: (phase) =>
+							reportPolykvStreamPhase(options.worker.sessionId, phase),
+						onDead: () => notePolykvServerFault(options.baseUrl),
+					});
+				}
 			} catch (error) {
 				if (!(await waitOutServerFault(error))) {
 					throw error;
@@ -1472,6 +1727,7 @@ export async function createOpencotiProviderModule(
 		request,
 		...(baseURL ? { baseUrl: baseURL } : {}),
 		...(config.headers ? { headers: config.headers } : {}),
+		log: (message, severity) => context.logger?.log(message, { severity }),
 		onFacts: (facts) => {
 			// Asked for one window, given another. The grant itself is recorded
 			// by the fetch, beside the ask that produced it; this is the line in
