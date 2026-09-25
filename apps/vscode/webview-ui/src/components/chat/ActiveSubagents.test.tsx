@@ -74,6 +74,27 @@ describe("reading the live agents out of the conversation", () => {
 		expect(liveSubagentsFrom([{ ts: 1, type: "say", say: "text", text: "hello" } as ClineMessage])).toEqual([])
 	})
 
+	// A teammate outlives the round its sub-agents ran in: both kinds' rows
+	// are read, neither hiding the other.
+	it("takes the working teammates as well as the sub-agents", () => {
+		const teamRow = {
+			ts: 150,
+			type: "say",
+			say: "subagent",
+			text: JSON.stringify({
+				kind: "team",
+				status: "running",
+				items: [
+					item({ index: 1001, agentName: "helper", status: "running" }),
+					item({ index: 1002, agentName: "idle-one", status: "completed" }),
+				],
+			}),
+		} as ClineMessage
+		const live = liveSubagentsFrom([teamRow, statusMessage([item({ index: 1, agentName: "js-syntactic" })], 200)])
+
+		expect(live.map((entry) => entry.agentName)).toEqual(["js-syntactic", "helper"])
+	})
+
 	it("survives a status message that is not JSON", () => {
 		expect(liveSubagentsFrom([{ ts: 1, type: "say", say: "subagent", text: "{oh no" } as ClineMessage])).toEqual([])
 	})

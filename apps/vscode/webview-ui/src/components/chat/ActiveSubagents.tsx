@@ -52,22 +52,30 @@ function isLive(item: SubagentStatusItem): boolean {
  * agents that are already done.
  */
 export function liveSubagentsFrom(messages: ClineMessage[]): SubagentStatusItem[] {
-	for (let index = messages.length - 1; index >= 0; index -= 1) {
+	// The sub-agents' most recent row and the teammates' most recent row, each
+	// on its own: a teammate works across the turns sub-agents come and go in,
+	// so neither kind's row may hide the other's.
+	let agents: SubagentStatusItem[] | undefined
+	let teammates: SubagentStatusItem[] | undefined
+	for (let index = messages.length - 1; index >= 0 && (!agents || !teammates); index -= 1) {
 		const message = messages[index]
 		if (message?.say !== "subagent" || !message.text) {
 			continue
 		}
+		let parsed: ClineSaySubagentStatus | undefined
 		try {
-			const parsed = JSON.parse(message.text) as ClineSaySubagentStatus
-			if (!Array.isArray(parsed.items)) {
-				return []
-			}
-			return parsed.items.filter(isLive)
+			parsed = JSON.parse(message.text) as ClineSaySubagentStatus
 		} catch {
-			return []
+			parsed = undefined
+		}
+		const live = Array.isArray(parsed?.items) ? parsed.items.filter(isLive) : []
+		if (parsed?.kind === "team") {
+			teammates ??= live
+		} else {
+			agents ??= live
 		}
 	}
-	return []
+	return [...(agents ?? []), ...(teammates ?? [])]
 }
 
 /**

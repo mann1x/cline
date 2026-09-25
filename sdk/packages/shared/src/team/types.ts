@@ -62,11 +62,33 @@ export interface TeamMailboxMessage {
 	readAt?: Date;
 }
 
+/**
+ * What a delegated agent has done, as its row counts it: tool calls, and
+ * compactions with why each ran and the last one's context before and after.
+ * The same figures a `spawn_agent` row carries.
+ */
+export interface TeamAgentActivity {
+	toolCalls: number;
+	compactions: number;
+	compactionsByCause?: Partial<
+		Record<"auto" | "pressure" | "overflow" | "manual", number>
+	>;
+	lastCompaction?: {
+		cause: "auto" | "pressure" | "overflow" | "manual";
+		tokensBefore?: number;
+		tokensAfter?: number;
+	};
+}
+
 export interface TeamMemberSnapshot {
 	agentId: string;
 	role: "lead" | "teammate";
 	description?: string;
 	status: "idle" | "running" | "stopped";
+	/** A teammate's counts over its whole life, across every task. */
+	activity?: TeamAgentActivity;
+	/** Its counts for the task it is running, or last ran. */
+	taskActivity?: TeamAgentActivity;
 }
 
 export interface TeammateLifecycleSpec {
@@ -114,6 +136,8 @@ export interface TeamRunRecord {
 	lastProgressAt?: Date;
 	lastProgressMessage?: string;
 	currentActivity?: string;
+	/** What the teammate did on this run: its tool calls and compactions. */
+	activity?: TeamAgentActivity;
 	result?: unknown;
 	error?: string;
 }

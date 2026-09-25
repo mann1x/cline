@@ -457,6 +457,13 @@ export interface SubagentCompaction {
 	tokensAfter?: number
 }
 
+export interface SubagentTaskActivity {
+	toolCalls: number
+	compactions?: number
+	compactionsByCause?: Partial<Record<SubagentCompactionCause, number>>
+	lastCompaction?: SubagentCompaction
+}
+
 export interface SubagentStatusItem {
 	index: number
 	/**
@@ -479,6 +486,11 @@ export interface SubagentStatusItem {
 	compactionsByCause?: Partial<Record<SubagentCompactionCause, number>>
 	/** The most recent one, with the context before and after it when known. */
 	lastCompaction?: SubagentCompaction
+	/**
+	 * A teammate's counts on the task it is running, or last ran. The counts
+	 * above are then its whole life's, across every task it was given.
+	 */
+	lastTask?: SubagentTaskActivity
 	inputTokens: number
 	outputTokens: number
 	totalCost: number
@@ -536,6 +548,12 @@ export interface SubagentActivityEntry {
 }
 
 export interface ClineSaySubagentStatus {
+	/**
+	 * `team`: the session's teammates rather than one call's sub-agents. A
+	 * teammate outlives the call that started it, so its row is not closed by
+	 * the conversation moving on.
+	 */
+	kind?: "team"
 	status: "running" | "completed" | "failed"
 	total: number
 	completed: number

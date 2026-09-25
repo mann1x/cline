@@ -5,7 +5,7 @@ import {
 	onPolykvStreamPhase,
 	releasePolykvAgent,
 } from "@cline/llms";
-import type { AgentEvent } from "@cline/shared";
+import type { AgentEvent, TeamAgentActivity } from "@cline/shared";
 import {
 	COMPACTION_CAUSES,
 	type CompactionCause,
@@ -451,6 +451,72 @@ export function createSubagentProgress(
 			deltas = 0;
 			windowStart = Number.NaN;
 			emitUpdate({ latestToolCall: event.toolName, toolCalls });
+		},
+	};
+}
+
+/**
+ * A running count of what an agent does -- tool calls and compactions -- for a
+ * holder that has no tool call to report on: a teammate, which outlives any
+ * one call. Built on the same observer every `spawn_agent` row is counted by,
+ * so the two can never count differently.
+ *
+ * `base` is where it starts: a restored teammate carries on from the count it
+ * was saved with. `observe` says whether the count moved, so a caller can
+ * report only on a change -- a teammate's every streamed token is an event.
+ */
+export interface ActivityCounter {
+	observe(event: AgentEvent): boolean;
+	snapshot(): TeamAgentActivity;
+}
+
+export function createActivityCounter(
+	base?: TeamAgentActivity,
+): ActivityCounter {
+	let toolCalls = 0;
+	let compactions = 0;
+	let byCause: Partial<Record<CompactionCause, number>> = {};
+	let lastCompaction: SubagentCompaction | undefined = base?.lastCompaction;
+	let changed = false;
+	const progress = createSubagentProgress((update) => {
+		const fields = update as Record<string, unknown>;
+		if (typeof fields.toolCalls === "number") {
+			toolCalls = fields.toolCalls;
+			changed = true;
+		}
+		if (typeof fields.compactions === "number") {
+			compactions = fields.compactions;
+			byCause = {
+				...(fields.compactionsByCause as Partial<
+					Record<CompactionCause, number>
+				>),
+			};
+			lastCompaction = fields.lastCompaction as SubagentCompaction;
+			changed = true;
+		}
+	});
+	return {
+		observe(event: AgentEvent): boolean {
+			changed = false;
+			progress.observe(event);
+			return changed;
+		},
+		snapshot(): TeamAgentActivity {
+			const compactionsByCause: Partial<Record<CompactionCause, number>> = {
+				...base?.compactionsByCause,
+			};
+			for (const [cause, count] of Object.entries(byCause) as Array<
+				[CompactionCause, number]
+			>) {
+				compactionsByCause[cause] = (compactionsByCause[cause] ?? 0) + count;
+			}
+			const total = (base?.compactions ?? 0) + compactions;
+			return {
+				toolCalls: (base?.toolCalls ?? 0) + toolCalls,
+				compactions: total,
+				...(total > 0 ? { compactionsByCause } : {}),
+				...(lastCompaction ? { lastCompaction: { ...lastCompaction } } : {}),
+			};
 		},
 	};
 }

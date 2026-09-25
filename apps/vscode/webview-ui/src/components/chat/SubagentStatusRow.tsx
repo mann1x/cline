@@ -32,6 +32,8 @@ type SubagentRowStatus = "pending" | "running" | "completed" | "failed"
 interface SubagentRowData {
 	status: SubagentRowStatus
 	items: SubagentStatusItem[]
+	/** The session's teammates rather than one call's sub-agents. */
+	kind?: "team"
 }
 
 interface SubagentPromptTextProps {
@@ -98,6 +100,21 @@ export function subagentStatsText(entry: {
 		.join(" · ")
 }
 
+/**
+ * A teammate's counts. Over its whole life on the first line; on the task it
+ * is running, or last ran, on the second -- when it has had one. No tokens:
+ * a teammate's spend is the lead's, and a "0 tokens" on every teammate would
+ * say nothing.
+ */
+export function teammateStatsText(entry: SubagentStatusItem): { life: string; task: string } {
+	const counts = (value: { toolCalls?: number; compactions?: number }) =>
+		[`${formatCount(value.toolCalls)} tools called`, subagentCompactionText(value)].filter(Boolean).join(" · ")
+	return {
+		life: counts(entry),
+		task: entry.lastTask ? `This task: ${counts(entry.lastTask)}` : "",
+	}
+}
+
 const formatCost = (value: number | undefined): string => {
 	const normalized = Number.isFinite(value) ? Math.max(0, value || 0) : 0
 	const maximumFractionDigits = normalized >= 0.01 ? 2 : 4
@@ -152,6 +169,7 @@ function parseSubagentRowData(message: ClineMessage): SubagentRowData | null {
 		return {
 			status: parsed.status,
 			items: parsed.items,
+			...(parsed.kind === "team" ? { kind: "team" as const } : {}),
 		}
 	} catch {
 		return null
@@ -241,7 +259,10 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 	const resumedBeforeNextVisibleMessage =
 		isLast && lastModifiedMessage?.say === "api_req_started" && (lastModifiedMessage.ts ?? 0) > message.ts
 
+	// A teammate outlives the conversation turn that started it: its row is
+	// not over because the lead said something after it.
 	const wasCancelled =
+		data.kind !== "team" &&
 		data.status === "running" &&
 		(!isLast ||
 			lastModifiedMessage?.ask === "resume_task" ||
@@ -249,7 +270,14 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 			resumedBeforeNextVisibleMessage)
 
 	const singular = data.items.length === 1
-	const title = singular ? "Cerebriline wants to use a subagent:" : "Cerebriline wants to use subagents:"
+	const title =
+		data.kind === "team"
+			? singular
+				? "Teammate:"
+				: "Teammates:"
+			: singular
+				? "Cerebriline wants to use a subagent:"
+				: "Cerebriline wants to use subagents:"
 	const isPromptConstructionRow = message.ask === "use_subagents" || message.say === "use_subagents"
 	const toggleItem = (index: number) => {
 		setExpandedItems((prev) => ({
@@ -283,6 +311,7 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 						isPromptConstructionRow && message.partial === true && index === data.items.length - 1
 					const shouldShowStats = !isStreamingPromptUnderConstruction
 					const statsText = subagentStatsText(entry)
+					const teammateStats = data.kind === "team" ? teammateStatsText(entry) : undefined
 					// Where it ran, when the session has nodes to choose between.
 					// A fan-out that ran one at a time looks identical to one that
 					// ran in parallel until you can see that every agent landed on
@@ -327,7 +356,18 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 							</div>
 							{shouldShowStats && (
 								<div className="mt-1 text-[11px] opacity-70 min-w-0 whitespace-pre-wrap break-words">
-									<span title={subagentCompactionDetail(entry) || undefined}>{statsText}</span>
+									<span title={subagentCompactionDetail(entry) || undefined}>
+										{teammateStats ? teammateStats.life : statsText}
+									</span>
+									{teammateStats?.task && (
+										<div
+											className="text-[10px] opacity-80"
+											title={
+												entry.lastTask ? subagentCompactionDetail(entry.lastTask) || undefined : undefined
+											}>
+											{teammateStats.task}
+										</div>
+									)}
 								</div>
 							)}
 							{shouldShowStats && placementText && (

@@ -151,6 +151,7 @@ export function emitTeamProgress(
 ): void {
 	if (!session.runtime.teamRuntime) return;
 	const teamName = session.runtime.teamRuntime.getTeamName();
+	const state = session.runtime.teamRuntime.exportState();
 	emit({
 		type: "team_progress",
 		payload: {
@@ -161,10 +162,8 @@ export function emitTeamProgress(
 				sessionId: rootSessionId,
 				event,
 			}),
-			summary: buildTeamProgressSummary(
-				teamName,
-				session.runtime.teamRuntime.exportState(),
-			),
+			summary: buildTeamProgressSummary(teamName, state),
+			teammates: state.members.filter((member) => member.role === "teammate"),
 		},
 	});
 }

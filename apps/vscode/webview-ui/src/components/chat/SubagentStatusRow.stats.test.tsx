@@ -1,7 +1,7 @@
 import type { ClineMessage, SubagentStatusItem } from "@shared/ExtensionMessage"
 import { render, screen } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
-import SubagentStatusRow, { subagentStatsText } from "./SubagentStatusRow"
+import SubagentStatusRow, { subagentStatsText, teammateStatsText } from "./SubagentStatusRow"
 import { subagentCompactionDetail } from "./subagentCompactions"
 
 /**
@@ -112,5 +112,56 @@ describe("how many times a sub-agent compacted", () => {
 		render(<SubagentStatusRow isLast={false} message={saved} />)
 		const stats = screen.getByText("7 tools called · 3 compactions · 12,000 tokens")
 		expect(stats.getAttribute("title")).toContain("2 × server KV pressure")
+	})
+})
+
+/**
+ * Teammates get the same counts as sub-agents: over the teammate's life on its
+ * row, and on the task it is running beneath.
+ */
+describe("a teammate's row", () => {
+	const teammate = entry({
+		index: 1001,
+		agentName: "helper",
+		prompt: "reviews code",
+		status: "running",
+		toolCalls: 12,
+		compactions: 2,
+		compactionsByCause: { auto: 1, pressure: 1 },
+		lastTask: { toolCalls: 3, compactions: 1, compactionsByCause: { pressure: 1 } },
+	})
+	const teamRow = (items: SubagentStatusItem[]) =>
+		({
+			ts: 5,
+			type: "say",
+			say: "subagent",
+			partial: true,
+			text: JSON.stringify({ kind: "team", status: "running", total: items.length, items }),
+		}) as ClineMessage
+
+	it("counts its whole life, and its current task apart", () => {
+		expect(teammateStatsText(teammate)).toEqual({
+			life: "12 tools called · 2 compactions",
+			task: "This task: 3 tools called · 1 compaction",
+		})
+		expect(teammateStatsText(entry({ toolCalls: 0 }))).toEqual({ life: "0 tools called", task: "" })
+	})
+
+	it("is drawn as the teammates, with both counts and their causes", () => {
+		render(<SubagentStatusRow isLast={true} message={teamRow([teammate])} />)
+		expect(screen.getByText("Teammate:")).toBeInTheDocument()
+		expect(screen.getByText("12 tools called · 2 compactions").getAttribute("title")).toContain(
+			"1 × own context threshold, 1 × server KV pressure",
+		)
+		expect(screen.getByText("This task: 3 tools called · 1 compaction").getAttribute("title")).toContain(
+			"1 × server KV pressure",
+		)
+	})
+
+	// A teammate works on while the lead talks: its row is not cancelled for
+	// no longer being the last message.
+	it("is still running when the conversation has moved past it", () => {
+		const { container } = render(<SubagentStatusRow isLast={false} message={teamRow([teammate])} />)
+		expect(container.querySelector(".animate-spin")).not.toBeNull()
 	})
 })

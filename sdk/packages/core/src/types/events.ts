@@ -36,6 +36,11 @@ export interface SessionTeamProgressEvent {
 	teamName: string;
 	lifecycle: import("@cline/shared").TeamProgressLifecycleEvent;
 	summary: import("@cline/shared").TeamProgressSummary;
+	/**
+	 * Every teammate, with what it has done: tool calls and compactions over
+	 * its life and on its current (or last) task. What a teammate's row draws.
+	 */
+	teammates?: import("@cline/shared").TeamMemberSnapshot[];
 }
 
 export interface SessionPendingPrompt {

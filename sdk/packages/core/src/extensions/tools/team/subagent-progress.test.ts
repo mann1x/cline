@@ -1,6 +1,7 @@
 import type { AgentEvent } from "@cline/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
+	createActivityCounter,
 	createSubagentProgress,
 	readCompactionNotice,
 	reportSubagentModel,
@@ -396,5 +397,66 @@ describe("counting a sub-agent's compactions", () => {
 				compacted({ kind: "auto_compaction", cause: "nonsense" }),
 			),
 		).toEqual({ cause: "auto" });
+	});
+});
+
+describe("an activity counter", () => {
+	// What a teammate is counted with: the same observer, with nobody's tool
+	// call to report on.
+	it("counts tool calls and compactions, and says when the count moved", () => {
+		const counter = createActivityCounter();
+
+		expect(counter.observe(toolStart("read_files"))).toBe(true);
+		expect(
+			counter.observe({
+				type: "content_start",
+				contentType: "text",
+				text: "hi",
+			} as AgentEvent),
+		).toBe(false);
+		expect(
+			counter.observe(
+				compacted({
+					kind: "auto_compaction",
+					cause: "pressure",
+					tokensBefore: 9,
+					tokensAfter: 3,
+				}),
+			),
+		).toBe(true);
+
+		expect(counter.snapshot()).toEqual({
+			toolCalls: 1,
+			compactions: 1,
+			compactionsByCause: { pressure: 1 },
+			lastCompaction: { cause: "pressure", tokensBefore: 9, tokensAfter: 3 },
+		});
+	});
+
+	it("counts on from the count it was given", () => {
+		const counter = createActivityCounter({
+			toolCalls: 10,
+			compactions: 2,
+			compactionsByCause: { auto: 2 },
+			lastCompaction: { cause: "auto" },
+		});
+		expect(counter.snapshot()).toMatchObject({ toolCalls: 10, compactions: 2 });
+
+		counter.observe(toolStart("editor"));
+		counter.observe(compacted({ kind: "manual_compaction" }));
+
+		expect(counter.snapshot()).toEqual({
+			toolCalls: 11,
+			compactions: 3,
+			compactionsByCause: { auto: 2, manual: 1 },
+			lastCompaction: { cause: "manual" },
+		});
+	});
+
+	it("reports nothing for an agent that did nothing", () => {
+		expect(createActivityCounter().snapshot()).toEqual({
+			toolCalls: 0,
+			compactions: 0,
+		});
 	});
 });

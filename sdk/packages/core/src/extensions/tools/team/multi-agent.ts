@@ -17,6 +17,7 @@ import {
 	type ReviewTeamOutcomeFragmentInput,
 	type RouteToTeammateOptions,
 	sanitizeFileName,
+	type TeamAgentActivity,
 	type TeamMailboxMessage,
 	type TeamMemberSnapshot,
 	TeamMessageType,
@@ -35,6 +36,10 @@ import {
 import { nanoid } from "nanoid";
 import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-orchestrator";
 import { type HandedRevision, handbackNote } from "./delegated-sandboxes";
+import {
+	type ActivityCounter,
+	createActivityCounter,
+} from "./subagent-progress";
 
 // Re-export shared types for backward compatibility
 export {
@@ -566,6 +571,9 @@ interface TeamMemberState extends TeamMemberSnapshot {
 	pendingSteerMessage?: string;
 	/** The teammate's own engine session, given back when it is released. */
 	engineSessionId?: string;
+	/** Its tool calls and compactions over its life, and on its current task. */
+	activityCounter?: ActivityCounter;
+	currentTaskCounter?: ActivityCounter;
 }
 
 export class AgentTeamsRuntime {
@@ -759,11 +767,18 @@ export class AgentTeamsRuntime {
 				role: member.role,
 				description: member.description,
 				status: member.status,
+				...teammateActivity(member),
 			})),
 			tasks: Array.from(this.tasks.values()).map((task) => ({ ...task })),
 			mailbox: this.mailbox.map((message) => ({ ...message })),
 			missionLog: this.missionLog.map((entry) => ({ ...entry })),
-			runs: Array.from(this.runs.values()).map((run) => ({ ...run })),
+			runs: Array.from(this.runs.values()).map((run) => ({
+				...run,
+				// A run still going is counted live, off its teammate.
+				...(run.status === "running"
+					? liveRunActivity(this.members.get(run.agentId))
+					: {}),
+			})),
 			outcomes: Array.from(this.outcomes.values()).map((outcome) => ({
 				...outcome,
 			})),
@@ -831,6 +846,9 @@ export class AgentTeamsRuntime {
 				role: "teammate",
 				description: member.description,
 				status: "stopped",
+				// What it had done, so a restored teammate counts on from it.
+				...(member.activity ? { activity: member.activity } : {}),
+				...(member.taskActivity ? { taskActivity: member.taskActivity } : {}),
 				agent: undefined,
 				runningCount: 0,
 				lastMissionStep: this.missionStepCounter,
@@ -934,6 +952,11 @@ export class AgentTeamsRuntime {
 			},
 			onEvent: (event: AgentEvent) => {
 				config.onEvent?.(event);
+				// Counted before it is announced, so the progress the event
+				// raises already carries the count it moved.
+				const member = this.members.get(agentId);
+				member?.activityCounter?.observe(event);
+				member?.currentTaskCounter?.observe(event);
 				this.emitEvent({ type: TeamMessageType.AgentEvent, agentId, event });
 				this.trackMeaningfulEvent(agentId, event);
 			},
@@ -954,6 +977,17 @@ export class AgentTeamsRuntime {
 			lastMissionAt: Date.now(),
 			...(config.engineSessionId
 				? { engineSessionId: config.engineSessionId }
+				: {}),
+			// Its count carries on from the one it had under this id -- a
+			// teammate restored with the session, or respawned in place.
+			activityCounter: createActivityCounter(
+				replaced?.activityCounter?.snapshot() ?? replaced?.activity,
+			),
+			...(replaced?.taskActivity || replaced?.currentTaskCounter
+				? {
+						taskActivity:
+							replaced.currentTaskCounter?.snapshot() ?? replaced.taskActivity,
+					}
 				: {}),
 		};
 		this.members.set(agentId, teammate);
@@ -1150,6 +1184,8 @@ export class AgentTeamsRuntime {
 		member.abortReason = undefined;
 		member.runningCount++;
 		member.status = "running";
+		// Each task counts from nothing; the life count goes on.
+		member.currentTaskCounter = createActivityCounter();
 		this.emitEvent({ type: TeamMessageType.TaskStart, agentId, message });
 
 		try {
@@ -1400,6 +1436,7 @@ export class AgentTeamsRuntime {
 			run.status = "completed";
 			run.result = result;
 			run.endedAt = new Date();
+			Object.assign(run, liveRunActivity(this.members.get(run.agentId)));
 			run.currentActivity = "completed";
 			this.emitEvent({ type: TeamMessageType.RunCompleted, run: { ...run } });
 		} catch (error) {
@@ -1413,6 +1450,7 @@ export class AgentTeamsRuntime {
 			run.error = message;
 			run.endedAt = new Date();
 			const member = this.members.get(run.agentId);
+			Object.assign(run, liveRunActivity(member));
 			if (
 				isAbortLikeError(error) &&
 				isIntentionalTeammateAbort(member, error)
@@ -2073,4 +2111,32 @@ function maxCounter(ids: string[], prefix: string): number {
 		}
 	}
 	return max;
+}
+
+/** A teammate's counts, as its snapshot carries them. The lead has none. */
+function teammateActivity(member: {
+	role: "lead" | "teammate";
+	activity?: TeamAgentActivity;
+	taskActivity?: TeamAgentActivity;
+	activityCounter?: ActivityCounter;
+	currentTaskCounter?: ActivityCounter;
+}): { activity?: TeamAgentActivity; taskActivity?: TeamAgentActivity } {
+	if (member.role !== "teammate") {
+		return {};
+	}
+	const activity = member.activityCounter?.snapshot() ?? member.activity;
+	const taskActivity =
+		member.currentTaskCounter?.snapshot() ?? member.taskActivity;
+	return {
+		...(activity ? { activity } : {}),
+		...(taskActivity ? { taskActivity } : {}),
+	};
+}
+
+/** What the teammate has done on the task it is running now. */
+function liveRunActivity(
+	member: { currentTaskCounter?: ActivityCounter } | undefined,
+): { activity?: TeamAgentActivity } {
+	const activity = member?.currentTaskCounter?.snapshot();
+	return activity ? { activity } : {};
 }

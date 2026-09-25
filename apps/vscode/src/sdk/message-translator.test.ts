@@ -6241,3 +6241,80 @@ describe("a sub-agent's compaction count", () => {
 		expect(entry.lastCompaction).toBeUndefined()
 	})
 })
+
+describe("the teammates' row", () => {
+	const progress = (teammates: unknown[]) =>
+		({
+			type: "team_progress",
+			payload: { sessionId: "session-1", teamName: "team", lifecycle: {}, summary: {}, teammates },
+		}) as unknown as CoreSessionEvent
+	const helper = (overrides: Record<string, unknown> = {}) => ({
+		agentId: "helper",
+		role: "teammate",
+		description: "reviews code",
+		status: "running",
+		activity: {
+			toolCalls: 12,
+			compactions: 2,
+			compactionsByCause: { auto: 1, pressure: 1 },
+			lastCompaction: { cause: "pressure", tokensBefore: 60000, tokensAfter: 20000 },
+		},
+		taskActivity: { toolCalls: 3, compactions: 1, compactionsByCause: { pressure: 1 } },
+		...overrides,
+	})
+	const statusOf = (message: ClineMessage | undefined) => JSON.parse(message?.text ?? "{}")
+
+	it("shows each teammate's life count, with its current task's beside it", () => {
+		const state = new MessageTranslatorState()
+		const [row] = translateSessionEvent(progress([helper()]), state).messages
+		expect(row).toMatchObject({ type: "say", say: "subagent", partial: true })
+		const status = statusOf(row)
+		expect(status).toMatchObject({ kind: "team", status: "running", toolCalls: 12, compactions: 2 })
+		expect(status.items[0]).toMatchObject({
+			agentName: "helper",
+			prompt: "reviews code",
+			status: "running",
+			toolCalls: 12,
+			compactions: 2,
+			compactionsByCause: { auto: 1, pressure: 1 },
+			lastCompaction: { cause: "pressure", tokensBefore: 60000, tokensAfter: 20000 },
+			lastTask: { toolCalls: 3, compactions: 1, compactionsByCause: { pressure: 1 } },
+		})
+		// Clear of the sub-agents' indexes, which the strip keys agents by.
+		expect(status.items[0].index).toBeGreaterThan(1000)
+	})
+
+	it("says nothing when nothing it shows has changed", () => {
+		const state = new MessageTranslatorState()
+		translateSessionEvent(progress([helper()]), state)
+		expect(translateSessionEvent(progress([helper()]), state).messages).toEqual([])
+		const [updated] = translateSessionEvent(
+			progress([helper({ activity: { toolCalls: 13, compactions: 2 } })]),
+			state,
+		).messages
+		expect(statusOf(updated).items[0].toolCalls).toBe(13)
+	})
+
+	// One row updated in place while a teammate works; once all are idle, the
+	// next change opens a new row where the conversation is.
+	it("keeps its row while a teammate runs, and starts a new one after", () => {
+		const state = new MessageTranslatorState()
+		const [first] = translateSessionEvent(progress([helper()]), state).messages
+		state.reset()
+		const [second] = translateSessionEvent(progress([helper({ status: "idle" })]), state).messages
+		expect(second?.ts).toBe(first?.ts)
+		expect(second?.partial).toBe(false)
+		expect(statusOf(second).items[0].status).toBe("completed")
+		state.reset()
+		const [third] = translateSessionEvent(
+			progress([helper({ status: "idle", activity: { toolCalls: 20, compactions: 3 } })]),
+			state,
+		).messages
+		expect(third?.ts).not.toBe(first?.ts)
+		expect(statusOf(third).items[0].index).toBe(statusOf(first).items[0].index)
+	})
+
+	it("draws nothing for a team with no teammates", () => {
+		expect(translateSessionEvent(progress([]), new MessageTranslatorState()).messages).toEqual([])
+	})
+})

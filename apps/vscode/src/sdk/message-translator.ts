@@ -303,6 +303,12 @@ export function applySubagentCompactions(entry: SubagentStatusItem, update: Reco
 	}
 }
 
+/** Where teammate indexes start; see `buildTeammateStatusMessage`. */
+const TEAMMATE_INDEX_BASE = 1000
+
+/** A teammate as `team_progress` reports it. */
+type TeammateProgress = NonNullable<Extract<CoreSessionEvent, { type: "team_progress" }>["payload"]["teammates"]>[number]
+
 function applySpawnAgentOutput(entry: SubagentStatusItem, output: Record<string, unknown>): void {
 	entry.result = typeof output.text === "string" ? output.text : undefined
 	const usage = output.usage as Record<string, unknown> | undefined
@@ -859,6 +865,96 @@ export class MessageTranslatorState {
 		}
 	}
 
+	// -----------------------------------------------------------------------
+	// Teammates -- one row for the session's teammates, from team_progress.
+	// -----------------------------------------------------------------------
+
+	private teammateRowTs: number | undefined
+	private teammateRowRunning = false
+	private lastTeammateRowText: string | undefined
+	private readonly teammateIndex = new Map<string, number>()
+
+	/**
+	 * The teammates' status row, or nothing when it would say what it said
+	 * last. Index 1000 and up: the working-agents strip keys agents by index,
+	 * and a teammate must not collide with a sub-agent of the same round.
+	 */
+	buildTeammateStatusMessage(teammates: readonly TeammateProgress[]): ClineMessage | undefined {
+		const items: SubagentStatusItem[] = teammates.map((teammate) => {
+			let index = this.teammateIndex.get(teammate.agentId)
+			if (index === undefined) {
+				index = TEAMMATE_INDEX_BASE + this.teammateIndex.size + 1
+				this.teammateIndex.set(teammate.agentId, index)
+			}
+			const item: SubagentStatusItem = {
+				index,
+				agentName: teammate.agentId,
+				prompt: teammate.description ?? "",
+				status: teammate.status === "running" ? "running" : "completed",
+				toolCalls: teammate.activity?.toolCalls ?? 0,
+				inputTokens: 0,
+				outputTokens: 0,
+				totalCost: 0,
+				contextTokens: 0,
+				contextWindow: 0,
+				contextUsagePercentage: 0,
+			}
+			if (teammate.activity) {
+				applySubagentCompactions(item, teammate.activity as unknown as Record<string, unknown>)
+			}
+			if (teammate.taskActivity) {
+				// Read through the same reader as the life count, into its own record.
+				const task = { toolCalls: teammate.taskActivity.toolCalls } as SubagentStatusItem
+				applySubagentCompactions(task, teammate.taskActivity as unknown as Record<string, unknown>)
+				item.lastTask = {
+					toolCalls: task.toolCalls,
+					...(task.compactions !== undefined ? { compactions: task.compactions } : {}),
+					...(task.compactionsByCause ? { compactionsByCause: task.compactionsByCause } : {}),
+					...(task.lastCompaction ? { lastCompaction: task.lastCompaction } : {}),
+				}
+			}
+			return item
+		})
+		const running = items.some((item) => item.status === "running")
+		const status: ClineSaySubagentStatus = {
+			kind: "team",
+			status: running ? "running" : "completed",
+			total: items.length,
+			completed: items.filter((item) => item.status !== "running").length,
+			successes: items.filter((item) => item.status === "completed").length,
+			failures: 0,
+			toolCalls: items.reduce((acc, item) => acc + item.toolCalls, 0),
+			compactions: items.reduce((acc, item) => acc + (item.compactions ?? 0), 0),
+			inputTokens: 0,
+			outputTokens: 0,
+			contextWindow: 0,
+			maxContextTokens: 0,
+			maxContextUsagePercentage: 0,
+			items,
+		}
+		const text = JSON.stringify(status)
+		if (text === this.lastTeammateRowText) {
+			return undefined
+		}
+		this.lastTeammateRowText = text
+		if (this.teammateRowTs === undefined) {
+			this.teammateRowTs = this.nextTs()
+		}
+		this.teammateRowRunning = running
+		return { ts: this.teammateRowTs, type: "say", say: "subagent" as ClineSay, text, partial: running }
+	}
+
+	/**
+	 * The next change to the teammates starts a new row, down where the
+	 * conversation is -- unless one is still running, whose row stays where it
+	 * is until it is done. Called with the lead's every new iteration.
+	 */
+	releaseTeammateRow(): void {
+		if (!this.teammateRowRunning) {
+			this.teammateRowTs = undefined
+		}
+	}
+
 	/** Clear all spawn_agent state (called at iteration_start) */
 	clearSpawnAgents(): void {
 		this.spawnAgentEntries.clear()
@@ -903,6 +999,7 @@ export class MessageTranslatorState {
 		this.clearApprovedToolMessageTs()
 		this.deniedToolApprovalsByCallId.clear()
 		this.clearSpawnAgents()
+		this.releaseTeammateRow()
 	}
 
 	/**
@@ -3476,7 +3573,20 @@ export function translateSessionEvent(event: CoreSessionEvent, state: MessageTra
 			break
 		}
 
-		case "team_progress":
+		case "team_progress": {
+			// The teammates' row: each one's tool calls and compactions, over
+			// its life and on its current task. Only when something changed --
+			// this event fires for every token a teammate streams.
+			const teammates = event.payload.teammates
+			if (teammates && teammates.length > 0) {
+				const row = state.buildTeammateStatusMessage(teammates)
+				if (row) {
+					result.messages.push(row)
+				}
+			}
+			break
+		}
+
 		case "pending_prompts": {
 			// These are handled by the team/subagent system, not translated
 			// to ClineMessages at this layer
