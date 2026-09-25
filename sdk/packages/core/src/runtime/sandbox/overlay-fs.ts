@@ -89,6 +89,29 @@ export class AgentOverlay {
 	}
 
 	/**
+	 * `text` with every path into the overlay rewritten to the workspace path
+	 * it stands for. For anything an executor hands back to the agent: the
+	 * agent is told only about the workspace, and an overlay path in a result
+	 * or a refusal is an address it would then read and write directly.
+	 */
+	redact(text: string): string {
+		let out = text;
+		for (const root of new Set([
+			this.overlayRoot,
+			this.overlayRoot.split(path.sep).join("/"),
+		])) {
+			if (out.includes(root)) {
+				const target =
+					root === this.overlayRoot
+						? this.workspaceRoot
+						: this.workspaceRoot.split(path.sep).join("/");
+				out = out.split(root).join(target);
+			}
+		}
+		return out;
+	}
+
+	/**
 	 * The workspace path an overlay path stands for; any other path unchanged.
 	 * A file is one file to the agent whichever side of the overlay it is
 	 * currently read from, and anything keyed by path must agree.

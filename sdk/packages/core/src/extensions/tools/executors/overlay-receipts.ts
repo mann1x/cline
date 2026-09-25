@@ -1,5 +1,6 @@
 /**
- * Read receipts for a delegated agent working over an overlay.
+ * Read receipts -- and what the agent is shown -- for a delegated agent
+ * working over an overlay.
  *
  * The agent reads a file where it currently lives -- the lead's workspace until
  * the agent first writes it, its own overlay copy after -- and the editor
@@ -49,4 +50,49 @@ export function overlayReadReceipts(
 		forget: (filePath) => receipts.forget(key(filePath)),
 		paths: () => receipts.paths(),
 	};
+}
+
+/**
+ * `executor`, with every path into the overlay in what it returns or throws
+ * rewritten to the workspace path it stands for. See {@link AgentOverlay.redact}.
+ */
+export function withoutOverlayPaths<
+	F extends (...args: never[]) => Promise<unknown>,
+>(executor: F, overlay: AgentOverlay): F {
+	return (async (...args: Parameters<F>) => {
+		try {
+			return redactDeep(await executor(...args), overlay);
+		} catch (error) {
+			if (error instanceof Error) {
+				error.message = overlay.redact(error.message);
+				if (typeof error.stack === "string") {
+					error.stack = overlay.redact(error.stack);
+				}
+				throw error;
+			}
+			throw typeof error === "string" ? overlay.redact(error) : error;
+		}
+	}) as F;
+}
+
+function redactDeep(value: unknown, overlay: AgentOverlay): unknown {
+	if (typeof value === "string") {
+		return overlay.redact(value);
+	}
+	if (Array.isArray(value)) {
+		return value.map((entry) => redactDeep(entry, overlay));
+	}
+	if (
+		value !== null &&
+		typeof value === "object" &&
+		Object.getPrototypeOf(value) === Object.prototype
+	) {
+		return Object.fromEntries(
+			Object.entries(value).map(([key, entry]) => [
+				key,
+				redactDeep(entry, overlay),
+			]),
+		);
+	}
+	return value;
 }

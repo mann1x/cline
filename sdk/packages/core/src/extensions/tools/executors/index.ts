@@ -20,7 +20,7 @@ import {
 	type FileReadExecutorOptions,
 } from "./file-read";
 import { createGrepExecutor, type GrepExecutorOptions } from "./grep";
-import { overlayReadReceipts } from "./overlay-receipts";
+import { overlayReadReceipts, withoutOverlayPaths } from "./overlay-receipts";
 import { createReadReceipts, type ReadReceipts } from "./read-receipts";
 import { createSearchExecutor, type SearchExecutorOptions } from "./search";
 import { createSedExecutor, type SedExecutorOptions } from "./sed";
@@ -152,26 +152,38 @@ export function createDefaultExecutors(
 	// conversation that compaction can falsify, and re-reading is part of how
 	// these models work. A host that wants it passes its own through
 	// `fileRead.readLedger`; without one, every read returns the content.
+	// Nothing an executor hands back over an overlay may name the overlay: its
+	// results, refusals and errors all go to the agent, which knows only the
+	// workspace.
+	const shown = <F extends (...args: never[]) => Promise<unknown>>(
+		executor: F,
+	): F => (overlay ? withoutOverlayPaths(executor, overlay) : executor);
 	return {
-		readFile: createFileReadExecutor({
-			...options.fileRead,
-			receipts,
-			overlay,
-		}),
+		readFile: shown(
+			createFileReadExecutor({
+				...options.fileRead,
+				receipts,
+				overlay,
+			}),
+		),
 		search: createSearchExecutor(options.search),
 		// Receipts reach the shell too, so a command that rewrites a file the
 		// model has read says so. Nothing else about the shell changes.
 		bash: createDefaultShellExecutor({ ...options.bash, receipts }),
 		webFetch: createWebFetchExecutor(options.webFetch),
-		applyPatch: createApplyPatchExecutor({ ...options.applyPatch, overlay }),
-		editor: createEditorExecutor({ ...options.editor, receipts, overlay }),
+		applyPatch: shown(
+			createApplyPatchExecutor({ ...options.applyPatch, overlay }),
+		),
+		editor: shown(
+			createEditorExecutor({ ...options.editor, receipts, overlay }),
+		),
 		// The same registry as the reader and the editor, deliberately: a model
 		// that greps a file has read it, and `sed -i` is an edit and is refused
 		// on a file nobody read. Give these their own and both halves break
 		// quietly — grep would stop counting as a read, and sed would guard
 		// against a history it cannot see.
-		grep: createGrepExecutor({ ...options.grep, receipts, overlay }),
-		sed: createSedExecutor({ ...options.sed, receipts, overlay }),
-		awk: createAwkExecutor({ ...options.awk, receipts, overlay }),
+		grep: shown(createGrepExecutor({ ...options.grep, receipts, overlay })),
+		sed: shown(createSedExecutor({ ...options.sed, receipts, overlay })),
+		awk: shown(createAwkExecutor({ ...options.awk, receipts, overlay })),
 	};
 }
