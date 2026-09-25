@@ -46,6 +46,8 @@ function restartableEngine(
 					`<|${message.role}|>${typeof message.content === "string" ? message.content : JSON.stringify(message.content)}<|end|>`,
 			)
 			.join("");
+	let hangs = 0;
+	const url = (input: unknown) => new URL(String(input));
 	const answer = async (input: unknown, init?: RequestInit) => {
 		const url = new URL(String(input));
 		const body = init?.body
@@ -168,6 +170,33 @@ function restartableEngine(
 		if (options?.keepalive !== true) {
 			return response;
 		}
+		if (hangs > 0 && url(input).pathname === "/v1/chat/completions") {
+			// Open, one comment, then nothing: the process wedged or the
+			// connection went half-open.
+			hangs -= 1;
+			let sent = false;
+			return new Response(
+				new ReadableStream<Uint8Array>({
+					async pull(controller) {
+						if (!sent) {
+							sent = true;
+							controller.enqueue(
+								new TextEncoder().encode(": keepalive prefill 10/40960\n\n"),
+							);
+							return;
+						}
+						await new Promise(() => {});
+					},
+				}),
+				{
+					status: 200,
+					headers: {
+						"content-type": "text/event-stream",
+						"x-opencoti-boot-id": "0000000000000001",
+					},
+				},
+			);
+		}
 		const text = await response.text();
 		const headers = new Headers(response.headers);
 		headers.set("content-type", "text/event-stream");
@@ -202,6 +231,10 @@ function restartableEngine(
 				onTemplate = undefined;
 				fn();
 			};
+		},
+		/** The next `n` heartbeat turns open, send one comment, and go silent. */
+		hangTurns: (n: number) => {
+			hangs = n;
 		},
 		/** Refuse the next `n` worker turns with a full window. */
 		refuseWorkers: (n: number) => {
@@ -590,5 +623,35 @@ describe("a worker's refusal inside the heartbeat stream", () => {
 		expect(response.status).toBe(200);
 		expect(await response.text()).toContain("data: [DONE]");
 		expect(turns(engine).length).toBeGreaterThanOrEqual(3);
+	});
+});
+
+describe("a worker's heartbeat that stops", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("waits for /health and sends the same turn again", async () => {
+		const engine = restartableEngine({ features: ["stream_keepalive_v1"] });
+		const body = { ...agentBody("r", "t"), stream: true };
+		await send(engine, "hb-dead", body);
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		engine.hangTurns(1);
+		const waits: boolean[] = [];
+		const stop = onPolykvRoomWait("hb-dead", (state) => {
+			waits.push(state.waiting);
+		});
+		try {
+			const pending = send(engine, "hb-dead", body);
+			await vi.advanceTimersByTimeAsync(40_000);
+			const response = await pending;
+			expect(response.status).toBe(200);
+			expect(await response.text()).toContain("data: [DONE]");
+		} finally {
+			stop();
+		}
+		expect(waits).toEqual([true, false]);
+		expect(engine.calls.some((call) => call.path === "/health")).toBe(true);
+		expect(turns(engine)).toHaveLength(3);
 	});
 });

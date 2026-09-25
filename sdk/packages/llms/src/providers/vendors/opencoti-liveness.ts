@@ -43,6 +43,42 @@
  */
 export const OPENCOTI_KEEPALIVE_PING_SECONDS = 10;
 
+/** Silent periods after which the server is presumed dead (the contract's three). */
+export const OPENCOTI_KEEPALIVE_DEAD_PERIODS = 3;
+
+/**
+ * Slack on top of the three periods: the server's ping timer starts when its
+ * last write ended, and a busy event loop or a slow link adds to that. Enough
+ * to absorb both, small next to a period.
+ */
+export const OPENCOTI_KEEPALIVE_MARGIN_MS = 5_000;
+
+/** How long a keepalive stream may go without a single byte: 35 s at the default. */
+export function opencotiKeepaliveDeadMs(pingSeconds: number): number {
+	return (
+		pingSeconds * 1000 * OPENCOTI_KEEPALIVE_DEAD_PERIODS +
+		OPENCOTI_KEEPALIVE_MARGIN_MS
+	);
+}
+
+/**
+ * The server went silent past three keepalive periods.
+ *
+ * Carries `code: "ETIMEDOUT"` and says so in its message, because both are
+ * what the turn-fault classifier reads as transport -- the kind waited out by
+ * asking `/health` and then running the turn again -- whether it is handed
+ * the error object or only its flattened text.
+ */
+export class OpencotiServerSilentError extends Error {
+	readonly code = "ETIMEDOUT";
+	constructor(readonly silentMs: number) {
+		super(
+			`ETIMEDOUT: the opencoti server sent nothing for ${Math.round(silentMs / 1000)}s (${OPENCOTI_KEEPALIVE_DEAD_PERIODS} keepalive periods); presumed dead`,
+		);
+		this.name = "OpencotiServerSilentError";
+	}
+}
+
 /** What a request that asked for the heartbeat asked for. */
 export interface KeepaliveRequest {
 	/**
@@ -146,6 +182,11 @@ function firstResultErrorResponse(
 	});
 }
 
+/** One read of a byte stream's reader. */
+type ChunkRead = Awaited<
+	ReturnType<ReadableStreamDefaultReader<Uint8Array>["read"]>
+>;
+
 /** Splits a byte stream into lines, keeping the unfinished tail. */
 class LineSplitter {
 	private readonly decoder = new TextDecoder();
@@ -214,6 +255,22 @@ function createEventReader(): (line: string) => StreamEvent | undefined {
 	};
 }
 
+export interface KeepaliveSupervision {
+	/**
+	 * The ping interval the request asked for, in seconds. Absent: pings off,
+	 * so no watchdog.
+	 */
+	pingSeconds?: number;
+	/** Told once, when the silence has outlasted three periods. */
+	onDead?: (error: OpencotiServerSilentError) => void;
+	/** Test seams. */
+	setTimer?: (fn: () => void, ms: number) => unknown;
+	clearTimer?: (handle: unknown) => void;
+}
+
+/** The header patch 0388 puts on every completion response. */
+export const OPENCOTI_BOOT_ID_HEADER = "x-opencoti-boot-id";
+
 /**
  * Supervise a response to a request that asked for the heartbeat.
  *
@@ -226,9 +283,18 @@ function createEventReader(): (line: string) => StreamEvent | undefined {
  *   window negotiation, the worker's window-full wait, the 5xx server-fault
  *   wait, the error classifier) sees what it always saw. Anything else is
  *   handed on as a stream that replays what was read and then continues.
+ * - Throughout, before and after that first event, a silence longer than three
+ *   ping periods plus a margin cancels the body and fails the read with
+ *   {@link OpencotiServerSilentError}: thrown from here while the first event
+ *   is awaited, as a stream error after it. Armed only when the pings are on
+ *   AND the response carries `X-OpenCoti-Boot-Id` -- the proof that the
+ *   process that answered is one that sends the heartbeat. `/props` was read
+ *   once per root; a restart onto an older build would leave long prefills
+ *   silent, and a watchdog on those would kill healthy turns.
  */
 export async function superviseKeepaliveStream(
 	response: Response,
+	options: KeepaliveSupervision = {},
 ): Promise<Response> {
 	const contentType = response.headers.get("content-type") ?? "";
 	if (
@@ -241,6 +307,61 @@ export async function superviseKeepaliveStream(
 	const reader = response.body.getReader();
 	const splitter = new LineSplitter();
 	const readEvent = createEventReader();
+	const deadMs =
+		options.pingSeconds !== undefined &&
+		options.pingSeconds > 0 &&
+		response.headers.has(OPENCOTI_BOOT_ID_HEADER)
+			? opencotiKeepaliveDeadMs(options.pingSeconds)
+			: undefined;
+	const setTimer =
+		options.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
+	const clearTimer =
+		options.clearTimer ??
+		((handle: unknown) =>
+			clearTimeout(handle as ReturnType<typeof setTimeout>));
+
+	/**
+	 * One read, failed when no byte -- a comment is a byte -- arrives within
+	 * the dead interval. The body is cancelled, which closes the connection.
+	 */
+	const readWithin = (): Promise<ChunkRead> => {
+		if (deadMs === undefined) {
+			return reader.read();
+		}
+		return new Promise((resolve, reject) => {
+			let settled = false;
+			const handle = setTimer(() => {
+				if (settled) {
+					return;
+				}
+				settled = true;
+				const error = new OpencotiServerSilentError(deadMs);
+				reader.cancel(error).catch(() => {});
+				try {
+					options.onDead?.(error);
+				} catch {
+					// Reporting the death must not change it.
+				}
+				reject(error);
+			}, deadMs);
+			reader.read().then(
+				(result) => {
+					if (!settled) {
+						settled = true;
+						clearTimer(handle);
+						resolve(result);
+					}
+				},
+				(error: unknown) => {
+					if (!settled) {
+						settled = true;
+						clearTimer(handle);
+						reject(error);
+					}
+				},
+			);
+		});
+	};
 
 	const consider = (
 		lines: string[],
@@ -263,7 +384,7 @@ export async function superviseKeepaliveStream(
 	const read: Uint8Array[] = [];
 	let ended = false;
 	while (true) {
-		const result = await reader.read();
+		const result = await readWithin();
 		if (result.done) {
 			ended = true;
 			const tail = consider(splitter.flush());
@@ -294,7 +415,7 @@ export async function superviseKeepaliveStream(
 		},
 		async pull(controller) {
 			try {
-				const result = await reader.read();
+				const result = await readWithin();
 				if (result.done) {
 					controller.close();
 					return;

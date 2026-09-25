@@ -1,7 +1,10 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { classifyTurnFault, classifyTurnFaultError } from "@cline/shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpencotiFetch } from "./opencoti";
 import {
 	OPENCOTI_KEEPALIVE_PING_SECONDS,
+	OpencotiServerSilentError,
+	opencotiKeepaliveDeadMs,
 	requestStreamKeepalive,
 	statusOfStreamError,
 	superviseKeepaliveStream,
@@ -387,5 +390,197 @@ describe("the paths that read a refusal's status, through the heartbeat", () => 
 			body: JSON.stringify({ model: "m", messages: [], stream: true }),
 		});
 		expect(response.status).toBe(400);
+	});
+});
+
+/**
+ * A 200 event stream that sends each chunk after its delay, then -- unless
+ * `end` -- goes silent for good, the way a dead server's half-open connection
+ * does. `cancelled` says whether the reader gave up on it.
+ */
+function timedStream(
+	steps: Array<{ afterMs: number; chunk: string }>,
+	options: { end?: boolean; headers?: Record<string, string> } = {},
+) {
+	let index = 0;
+	const state = { cancelled: false };
+	const response = new Response(
+		new ReadableStream<Uint8Array>({
+			async pull(controller) {
+				const step = steps[index++];
+				if (!step) {
+					if (options.end) {
+						controller.close();
+						return;
+					}
+					await new Promise(() => {});
+					return;
+				}
+				await new Promise((resolve) => setTimeout(resolve, step.afterMs));
+				controller.enqueue(encoder.encode(step.chunk));
+			},
+			cancel() {
+				state.cancelled = true;
+			},
+		}),
+		{
+			status: 200,
+			headers: {
+				"content-type": "text/event-stream",
+				"x-opencoti-boot-id": "3f2a9c1e7b4d0086",
+				...options.headers,
+			},
+		},
+	);
+	return { response, state };
+}
+
+describe("a server that stops sending", () => {
+	beforeEach(() => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("is dead after three silent periods and a margin: 35 s at the default", () => {
+		expect(opencotiKeepaliveDeadMs(OPENCOTI_KEEPALIVE_PING_SECONDS)).toBe(
+			35_000,
+		);
+	});
+
+	it("fails the request before its first event as a transport fault", async () => {
+		const { response, state } = timedStream([
+			{ afterMs: 0, chunk: ": keepalive queued\n\n" },
+		]);
+		const dead: unknown[] = [];
+		const pending = superviseKeepaliveStream(response, {
+			pingSeconds: 10,
+			onDead: (error) => dead.push(error),
+		});
+		const outcome = pending.then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		await vi.advanceTimersByTimeAsync(34_000);
+		expect(dead).toEqual([]);
+		await vi.advanceTimersByTimeAsync(2_000);
+		const error = await outcome;
+		expect(error).toBeInstanceOf(OpencotiServerSilentError);
+		expect(dead).toHaveLength(1);
+		expect(state.cancelled).toBe(true);
+		// Transport, whether the classifier gets the object or only its text:
+		// the #104 recovery waits for /health and runs the turn again.
+		expect(classifyTurnFaultError(error)).toBe("transport");
+		expect(classifyTurnFault((error as Error).message)).toBe("transport");
+	});
+
+	it("keeps a long prefill alive on its comments alone", async () => {
+		const steps = [
+			{ afterMs: 0, chunk: ": keepalive queued\n\n" },
+			...Array.from({ length: 12 }, (_, i) => ({
+				afterMs: 10_000,
+				chunk: `: keepalive prefill ${(i + 1) * 3000}/41533\n\n`,
+			})),
+			{ afterMs: 10_000, chunk: delta("done") },
+		];
+		const { response } = timedStream(steps, { end: true });
+		const pending = superviseKeepaliveStream(response, { pingSeconds: 10 });
+		await vi.advanceTimersByTimeAsync(140_000);
+		const supervised = await pending;
+		expect(supervised.status).toBe(200);
+		expect(await supervised.text()).toContain('"done"');
+	});
+
+	it("errors the stream mid-reply when the silence comes after the first token", async () => {
+		const { response } = timedStream([
+			{ afterMs: 0, chunk: delta("Hel") },
+			{ afterMs: 10_000, chunk: ": keepalive generating 17\n\n" },
+		]);
+		const pending = superviseKeepaliveStream(response, { pingSeconds: 10 });
+		await vi.advanceTimersByTimeAsync(1);
+		const supervised = await pending;
+		const reader = supervised.body?.getReader();
+		expect(reader).toBeDefined();
+		const first = await reader?.read();
+		expect(new TextDecoder().decode(first?.value)).toContain("Hel");
+		const rest = (async () => {
+			try {
+				while (!(await reader?.read())?.done) {}
+				return undefined;
+			} catch (error) {
+				return error;
+			}
+		})();
+		await vi.advanceTimersByTimeAsync(10_000 + 36_000);
+		expect(await rest).toBeInstanceOf(OpencotiServerSilentError);
+	});
+
+	it("is not armed when the pings are off", async () => {
+		const { response } = timedStream(
+			[{ afterMs: 120_000, chunk: delta("late") }],
+			{ end: true },
+		);
+		const pending = superviseKeepaliveStream(response, {});
+		await vi.advanceTimersByTimeAsync(120_000);
+		expect((await pending).status).toBe(200);
+	});
+
+	// No boot id: the process that answered is not one that sends the
+	// heartbeat (an older build after a restart), and its prefill is silent.
+	it("is not armed on a response from a server that does not send the heartbeat", async () => {
+		const { response } = timedStream(
+			[{ afterMs: 120_000, chunk: delta("late") }],
+			{ end: true },
+		);
+		const bare = new Response(response.body, {
+			status: 200,
+			headers: { "content-type": "text/event-stream" },
+		});
+		const pending = superviseKeepaliveStream(bare, { pingSeconds: 10 });
+		await vi.advanceTimersByTimeAsync(120_000);
+		expect((await pending).status).toBe(200);
+	});
+
+	// Timeouts are off on purpose: without the heartbeat a long silent turn is
+	// legitimate, and nothing may time it.
+	it("is never applied to a request without the heartbeat", async () => {
+		const engine = server(
+			["pool_match_in_response_v1"],
+			() =>
+				timedStream([{ afterMs: 300_000, chunk: delta("slow") }], { end: true })
+					.response,
+		);
+		const pending = createOpencotiFetch({
+			fetch: engine.fetch,
+			baseUrl: BASE,
+		})(CHAT, {
+			method: "POST",
+			body: JSON.stringify({ model: "m", messages: [], stream: true }),
+		});
+		const response = await pending;
+		const text = response.text();
+		await vi.advanceTimersByTimeAsync(300_000);
+		expect(await text).toContain('"slow"');
+	});
+
+	it("fails the lead's request the same way when the heartbeat stops", async () => {
+		const engine = server(
+			["stream_keepalive_v1"],
+			() =>
+				timedStream([{ afterMs: 0, chunk: ": keepalive queued\n\n" }]).response,
+		);
+		const outcome = createOpencotiFetch({
+			fetch: engine.fetch,
+			baseUrl: BASE,
+		})(CHAT, {
+			method: "POST",
+			body: JSON.stringify({ model: "m", messages: [], stream: true }),
+		}).then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		await vi.advanceTimersByTimeAsync(36_000);
+		expect(await outcome).toBeInstanceOf(OpencotiServerSilentError);
 	});
 });

@@ -514,7 +514,17 @@ export function createOpencotiFetch(options: {
 			} as RequestInit);
 			// With the heartbeat a first-result error arrives inside a 200
 			// stream; put it back as the HTTP error every path below reads.
-			return keepalive ? superviseKeepaliveStream(response) : response;
+			return keepalive
+				? superviseKeepaliveStream(response, {
+						...keepalive,
+						// Dead, not slow: whatever pools it held may be gone with it.
+						onDead: () => {
+							if (options.baseUrl) {
+								notePolykvServerFault(options.baseUrl);
+							}
+						},
+					})
+				: response;
 		};
 		const leadBaseUrl = options.baseUrl;
 		const send = async (wire: Record<string, unknown> | undefined) => {
@@ -1171,8 +1181,15 @@ function createWorkerFetch(options: {
 				} as RequestInit);
 				// A first-result error inside a 200 stream goes back to being
 				// the HTTP error the window-full and server-fault waits read.
+				// A heartbeat that stops before the first event throws here,
+				// as the transport fault it is, into the server-fault wait
+				// below; one that stops later errors the stream, and the turn
+				// recovery takes it from there.
 				if (keepalive) {
-					response = await superviseKeepaliveStream(response);
+					response = await superviseKeepaliveStream(response, {
+						...keepalive,
+						onDead: () => notePolykvServerFault(options.baseUrl),
+					});
 				}
 			} catch (error) {
 				if (!(await waitOutServerFault(error))) {
