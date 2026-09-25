@@ -35,6 +35,21 @@ vi.mock("../../../extensions/tools/team/delegated-agent", () => ({
 	},
 }));
 
+// Off unless a test turns it on: with a pool the round has a reducer, which
+// is one more agent through the same runner.
+let pooled = false;
+vi.mock(
+	"../../../extensions/context/polykv-session",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../extensions/context/polykv-session")
+		>()),
+		snapshotPolykvSession: async () =>
+			pooled ? { poolId: "pool-1", borrowed: true } : undefined,
+		readPolykvCapacity: async () => undefined,
+	}),
+);
+
 const { createSessionSwarmTool } = await import("./spawn-tool");
 
 const ctx = { agentId: "worker", conversationId: "c", iteration: 1 };
@@ -73,6 +88,7 @@ describe("swarm workers on private workspaces", () => {
 
 	beforeEach(async () => {
 		built.length = 0;
+		pooled = false;
 		script = async () => "done";
 		base = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-sandbox-"));
 		ws = path.join(base, "ws");
@@ -229,5 +245,31 @@ describe("swarm workers on private workspaces", () => {
 		expect(await names({ launcher: true, commands: false })).not.toContain(
 			"run_commands",
 		);
+	});
+
+	it("names the reducer's handed-back revisions in the merged report, beside the workers'", async () => {
+		pooled = true;
+		script = async (tools, name) => {
+			if (name === "reducer") {
+				await write(tools, path.join(ws, "merged.txt"), "BY REDUCER");
+				return '```json\n{"done": ["merged"]}\n```';
+			}
+			await write(tools, path.join(ws, `${name}.txt`), `by ${name}`);
+			return `\`\`\`json\n{"done": ["${name}"]}\n\`\`\``;
+		};
+		const output = await swarm().execute(tasks("w1", "w2"), {
+			agentId: "lead",
+			toolCallId: "call-1",
+		});
+
+		const merged = log.revisions(path.join(ws, "merged.txt")).at(-1);
+		expect(merged?.by).toBe("agent:reducer");
+		expect(output.digest).toContain(
+			`merged.txt — revision #${merged?.index} (created by "reducer")`,
+		);
+		expect(output.digest).toContain('(created by "w1")');
+		expect(output.digest).toContain('(created by "w2")');
+		await expect(fs.access(path.join(ws, "merged.txt"))).rejects.toThrow();
+		expect(await fs.readdir(overlays)).toEqual([]);
 	});
 });

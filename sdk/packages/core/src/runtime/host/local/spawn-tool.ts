@@ -406,6 +406,22 @@ function attachHandback(
 	}
 }
 
+/** Pass the reducer's handed-back revisions, if any, to the swarm's report. */
+function reportHandback(
+	reducer:
+		| { handedBack(name: string, handed: readonly HandedRevision[]): void }
+		| undefined,
+	carrier: unknown,
+): void {
+	const handed =
+		carrier && typeof carrier === "object"
+			? (carrier as { handback?: readonly HandedRevision[] }).handback
+			: undefined;
+	if (handed) {
+		reducer?.handedBack("reducer", handed);
+	}
+}
+
 export function createSessionSwarmTool(
 	deps: SpawnToolDeps,
 	config: CoreSessionConfig,
@@ -840,7 +856,7 @@ export function createSessionSwarmTool(
 				return slotGate ? await slotGate.canAdmitMore() : true;
 			},
 		},
-		reduce: async (digests) => {
+		reduce: async (digests, reducer) => {
 			// The reducer runs on the SAME pool the workers did, so it writes
 			// already holding what the lead holds -- which is what lets its
 			// prompt ask for brevity instead of completeness. It is one more
@@ -851,12 +867,21 @@ export function createSessionSwarmTool(
 				// told all of it first.
 				return undefined;
 			}
-			const result = await runOnPool({
-				name: "reducer",
-				systemPrompt: SWARM_REDUCER_PROMPT,
-				task: digests.map(renderWorkDigest).join("\n\n---\n\n"),
-				poolId: sharedPoolId,
-			});
+			// Sandboxed like a worker: whatever it changed goes back to the lead
+			// as its revisions, and the report names them -- on failure too.
+			let result: SwarmWorkerResult;
+			try {
+				result = await runOnPool({
+					name: "reducer",
+					systemPrompt: SWARM_REDUCER_PROMPT,
+					task: digests.map(renderWorkDigest).join("\n\n---\n\n"),
+					poolId: sharedPoolId,
+				});
+			} catch (error) {
+				reportHandback(reducer, error);
+				throw error;
+			}
+			reportHandback(reducer, result);
 			return parseWorkDigest(result.text);
 		},
 		runWorker: async (request) => {

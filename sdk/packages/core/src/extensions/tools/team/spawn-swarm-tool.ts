@@ -256,8 +256,18 @@ export interface SpawnSwarmToolConfig {
 	 * Optional: without it, and whenever it fails, the digests are folded
 	 * mechanically instead. That fold is lossless where the model's is not, so
 	 * it is a fallback worth having rather than a degraded mode.
+	 *
+	 * The reducer is an agent with file tools like the workers, so it can hand
+	 * changes back too. It reports them through `handedBack`, whether it
+	 * returns a digest or not, so the report can name them beside the
+	 * workers'.
 	 */
-	reduce?: (digests: readonly WorkDigest[]) => Promise<WorkDigest | undefined>;
+	reduce?: (
+		digests: readonly WorkDigest[],
+		reducer?: {
+			handedBack(name: string, handed: readonly HandedRevision[]): void;
+		},
+	) => Promise<WorkDigest | undefined>;
 	/** Most workers this will ever run, whatever the model or engine says. */
 	maxWorkers?: number;
 	/**
@@ -771,7 +781,13 @@ export function createSpawnSwarmTool(
 
 				let merged: WorkDigest | undefined;
 				if (results.length > 1 && config.reduce) {
-					merged = await config.reduce(results).catch(() => undefined);
+					merged = await config
+						.reduce(results, {
+							handedBack: (name, handed) => {
+								handbacks.push({ name, handed });
+							},
+						})
+						.catch(() => undefined);
 				}
 				const digest = merged ?? mergeWorkDigests(results);
 
