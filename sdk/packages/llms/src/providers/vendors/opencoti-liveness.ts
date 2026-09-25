@@ -43,18 +43,28 @@
  */
 export const OPENCOTI_KEEPALIVE_PING_SECONDS = 10;
 
+/** What a request that asked for the heartbeat asked for. */
+export interface KeepaliveRequest {
+	/**
+	 * The ping interval it carries, in seconds; absent when the caller turned
+	 * the pings off (`sse_ping_interval <= 0`). The stream still opens early
+	 * then, so a first-result error is still in-stream -- but a silence proves
+	 * nothing, and there is no watchdog.
+	 */
+	pingSeconds?: number;
+}
+
 /**
  * Ask for the heartbeat on a streaming request body, in place.
  *
  * `stream_options` is merged, never replaced: the compatible provider puts
- * `include_usage` there, and the usage row is read from it. Returns the ping
- * interval the request now carries, or `undefined` when the request does not
- * stream (a buffered response has nowhere to put a comment) or asked for no
- * pings at all.
+ * `include_usage` there, and the usage row is read from it. Returns what was
+ * asked for, or `undefined` for a request that does not stream -- a buffered
+ * response has nowhere to put a comment.
  */
 export function requestStreamKeepalive(
 	body: Record<string, unknown>,
-): number | undefined {
+): KeepaliveRequest | undefined {
 	if (body.stream !== true) {
 		return undefined;
 	}
@@ -65,10 +75,242 @@ export function requestStreamKeepalive(
 	body.stream_options = { ...existing, keepalive: true };
 	const stated = body.sse_ping_interval;
 	if (typeof stated === "number" && Number.isFinite(stated)) {
-		// The caller chose one. `<= 0` disables the pings, and without pings a
-		// silence proves nothing: no watchdog.
-		return stated > 0 ? stated : undefined;
+		// The caller chose one.
+		return stated > 0 ? { pingSeconds: stated } : {};
 	}
 	body.sse_ping_interval = OPENCOTI_KEEPALIVE_PING_SECONDS;
-	return OPENCOTI_KEEPALIVE_PING_SECONDS;
+	return { pingSeconds: OPENCOTI_KEEPALIVE_PING_SECONDS };
+}
+
+/**
+ * The HTTP status the server gives an error `type` when it is not streaming.
+ *
+ * The same table as the server's `format_error_response`, plus the two types
+ * opencoti sets by hand (`rate_limit_error` on its 429s, `tool_call_rejected`
+ * on a 500). Used only when the event carries no numeric `code`, which every
+ * error the server formats does.
+ */
+const STATUS_BY_ERROR_TYPE: Record<string, number> = {
+	invalid_request_error: 400,
+	exceed_context_size_error: 400,
+	authentication_error: 401,
+	permission_error: 403,
+	not_found_error: 404,
+	rate_limit_error: 429,
+	server_error: 500,
+	tool_call_rejected: 500,
+	not_supported_error: 501,
+	unavailable_error: 503,
+};
+
+/**
+ * The status an in-stream error would have had as a plain HTTP error.
+ *
+ * The server's non-streaming path sets the status from the error's own `code`
+ * (`res->error`: `status = json_value(error, "code", 500)`), so that is read
+ * first; the type table is the fallback, and 500 the default, as there.
+ */
+export function statusOfStreamError(error: Record<string, unknown>): number {
+	const code = error.code;
+	if (
+		typeof code === "number" &&
+		Number.isInteger(code) &&
+		code >= 400 &&
+		code <= 599
+	) {
+		return code;
+	}
+	const type = typeof error.type === "string" ? error.type : "";
+	return STATUS_BY_ERROR_TYPE[type] ?? 500;
+}
+
+/**
+ * The response the server would have sent for this error without the option:
+ * its status, and `{"error": <the same object>}` as the body -- exactly
+ * `res->error`'s shape, so `largest_admissible`, `n_ctx`, `n_prompt_tokens`
+ * and the message every refusal matcher reads are all where they were. The
+ * headers the server set before opening the stream (`X-Context-Window`, the
+ * boot id) ride along, as they do on its plain error.
+ */
+function firstResultErrorResponse(
+	response: Response,
+	error: Record<string, unknown>,
+): Response {
+	const headers = new Headers(response.headers);
+	headers.set("content-type", "application/json; charset=utf-8");
+	headers.delete("content-length");
+	headers.delete("transfer-encoding");
+	return new Response(JSON.stringify({ error }), {
+		status: statusOfStreamError(error),
+		headers,
+	});
+}
+
+/** Splits a byte stream into lines, keeping the unfinished tail. */
+class LineSplitter {
+	private readonly decoder = new TextDecoder();
+	private carry = "";
+	push(chunk: Uint8Array): string[] {
+		this.carry += this.decoder.decode(chunk, { stream: true });
+		const lines = this.carry.split("\n");
+		this.carry = lines.pop() ?? "";
+		return lines.map((line) => line.replace(/\r$/, ""));
+	}
+	flush(): string[] {
+		const rest = this.carry + this.decoder.decode();
+		this.carry = "";
+		return rest ? [rest.replace(/\r$/, "")] : [];
+	}
+}
+
+type StreamEvent =
+	| { type: "comment"; line: string }
+	| { type: "data" }
+	| { type: "error"; error: Record<string, unknown> };
+
+/**
+ * One line's meaning, with `event:` state carried between lines.
+ *
+ * The server writes a first-result error as `data: {"error": {...}}` on the
+ * OpenAI routes and as `event: error` + `data: {...}` on the Anthropic one
+ * (`format_error` in `handle_completions_impl`); both are read.
+ */
+function createEventReader(): (line: string) => StreamEvent | undefined {
+	let eventName: string | undefined;
+	return (line) => {
+		if (line === "") {
+			eventName = undefined;
+			return undefined;
+		}
+		if (line.startsWith(":")) {
+			return { type: "comment", line };
+		}
+		if (line.startsWith("event:")) {
+			eventName = line.slice("event:".length).trim();
+			return undefined;
+		}
+		if (!line.startsWith("data:")) {
+			return undefined;
+		}
+		const payload = line.slice("data:".length).trim();
+		// Only a frame that names an error can be one: the cheap gate first,
+		// as most frames are content deltas.
+		if (eventName !== "error" && !payload.includes('"error"')) {
+			return { type: "data" };
+		}
+		try {
+			const parsed = JSON.parse(payload) as Record<string, unknown>;
+			const nested = parsed?.error;
+			if (nested && typeof nested === "object") {
+				return { type: "error", error: nested as Record<string, unknown> };
+			}
+			if (eventName === "error" && parsed && typeof parsed === "object") {
+				return { type: "error", error: parsed };
+			}
+		} catch {
+			// Not JSON: a content frame that happens to contain the word.
+		}
+		return { type: "data" };
+	};
+}
+
+/**
+ * Supervise a response to a request that asked for the heartbeat.
+ *
+ * - A response that is not a 200 event stream is returned as it is: a refusal
+ *   the server made before opening the stream is already the HTTP error it
+ *   always was.
+ * - Otherwise the stream is read up to its first data or error event --
+ *   comments do not count. An error first becomes the plain HTTP response it
+ *   would have been without the option, so every status-reading path (the 429
+ *   window negotiation, the worker's window-full wait, the 5xx server-fault
+ *   wait, the error classifier) sees what it always saw. Anything else is
+ *   handed on as a stream that replays what was read and then continues.
+ */
+export async function superviseKeepaliveStream(
+	response: Response,
+): Promise<Response> {
+	const contentType = response.headers.get("content-type") ?? "";
+	if (
+		response.status !== 200 ||
+		!contentType.includes("text/event-stream") ||
+		response.body === null
+	) {
+		return response;
+	}
+	const reader = response.body.getReader();
+	const splitter = new LineSplitter();
+	const readEvent = createEventReader();
+
+	const consider = (
+		lines: string[],
+	): { error?: Record<string, unknown>; data: boolean } => {
+		let data = false;
+		for (const line of lines) {
+			const event = readEvent(line);
+			if (!event || event.type === "comment") {
+				continue;
+			}
+			if (event.type === "error") {
+				return { error: event.error, data };
+			}
+			data = true;
+		}
+		return { data };
+	};
+
+	// Up to the first event that is not a comment.
+	const read: Uint8Array[] = [];
+	let ended = false;
+	while (true) {
+		const result = await reader.read();
+		if (result.done) {
+			ended = true;
+			const tail = consider(splitter.flush());
+			if (tail.error && !tail.data) {
+				return firstResultErrorResponse(response, tail.error);
+			}
+			break;
+		}
+		read.push(result.value);
+		const seen = consider(splitter.push(result.value));
+		if (seen.error && !seen.data) {
+			reader.cancel().catch(() => {});
+			return firstResultErrorResponse(response, seen.error);
+		}
+		if (seen.data || seen.error) {
+			break;
+		}
+	}
+
+	const body = new ReadableStream<Uint8Array>({
+		start(controller) {
+			for (const chunk of read) {
+				controller.enqueue(chunk);
+			}
+			if (ended) {
+				controller.close();
+			}
+		},
+		async pull(controller) {
+			try {
+				const result = await reader.read();
+				if (result.done) {
+					controller.close();
+					return;
+				}
+				controller.enqueue(result.value);
+			} catch (error) {
+				controller.error(error);
+			}
+		},
+		cancel(reason) {
+			return reader.cancel(reason);
+		},
+	});
+	return new Response(body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers: response.headers,
+	});
 }

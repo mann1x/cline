@@ -14,7 +14,11 @@ import { primeTemplateReinjection } from "../reasoning-history";
 import { waitForServerHealth } from "../server-health";
 import { llamaCppTimingsMetadataExtractor } from "./llamacpp-timings";
 import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
-import { requestStreamKeepalive } from "./opencoti-liveness";
+import {
+	type KeepaliveRequest,
+	requestStreamKeepalive,
+	superviseKeepaliveStream,
+} from "./opencoti-liveness";
 import { OpencotiWindowUnavailableError } from "./opencoti-window";
 import {
 	getPolykvGrantedWindow,
@@ -364,6 +368,8 @@ export function createOpencotiFetch(options: {
 		// The prefix the lead tree shares above a private budget, so the grant
 		// can be read back as the window the conversation can actually fill.
 		let sharedAboveBudget: number | undefined;
+		/** Set when this request asked for the heartbeat. */
+		let keepalive: KeepaliveRequest | undefined;
 		if (init?.body && typeof init.body === "string") {
 			try {
 				body = JSON.parse(init.body) as Record<string, unknown>;
@@ -493,12 +499,12 @@ export function createOpencotiFetch(options: {
 			// The heartbeat, on every streaming request to a server that sends
 			// one: a lead's, a plain session's, an unpooled one's alike.
 			if (await keepaliveAdvertised(options.baseUrl, base, body)) {
-				requestStreamKeepalive(body);
+				keepalive = requestStreamKeepalive(body);
 			}
 			nextInit = { ...init, body: JSON.stringify(body) };
 		}
-		const sendWire = (wire: Record<string, unknown> | undefined) =>
-			base(input, {
+		const sendWire = async (wire: Record<string, unknown> | undefined) => {
+			const response = await base(input, {
 				...nextInit,
 				...(wire ? { body: JSON.stringify(wire) } : {}),
 				// Prefill is the reason this matters: creating or attaching a pool
@@ -506,6 +512,10 @@ export function createOpencotiFetch(options: {
 				// timeout is five minutes.
 				...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
 			} as RequestInit);
+			// With the heartbeat a first-result error arrives inside a 200
+			// stream; put it back as the HTTP error every path below reads.
+			return keepalive ? superviseKeepaliveStream(response) : response;
+		};
 		const leadBaseUrl = options.baseUrl;
 		const send = async (wire: Record<string, unknown> | undefined) => {
 			// A lead pool id is a number the server issued; after a restart the
@@ -1140,9 +1150,9 @@ function createWorkerFetch(options: {
 			if (attach.poolId !== undefined && /^\d+$/.test(attach.poolId)) {
 				wire.pool_id = Number(attach.poolId);
 			}
-			if (await keepaliveAdvertised(options.baseUrl, base, wire)) {
-				requestStreamKeepalive(wire);
-			}
+			const keepalive = (await keepaliveAdvertised(options.baseUrl, base, wire))
+				? requestStreamKeepalive(wire)
+				: undefined;
 			if (lent && !ranOnce && attach.poolId === undefined) {
 				// Priority 0 without a sub-pool is not priority 0: the lead's
 				// session is at its eight per slot, or the server's pool
@@ -1159,6 +1169,11 @@ function createWorkerFetch(options: {
 					body: JSON.stringify(wire),
 					...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
 				} as RequestInit);
+				// A first-result error inside a 200 stream goes back to being
+				// the HTTP error the window-full and server-fault waits read.
+				if (keepalive) {
+					response = await superviseKeepaliveStream(response);
+				}
 			} catch (error) {
 				if (!(await waitOutServerFault(error))) {
 					throw error;

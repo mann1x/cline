@@ -46,7 +46,7 @@ function restartableEngine(
 					`<|${message.role}|>${typeof message.content === "string" ? message.content : JSON.stringify(message.content)}<|end|>`,
 			)
 			.join("");
-	const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+	const answer = async (input: unknown, init?: RequestInit) => {
 		const url = new URL(String(input));
 		const body = init?.body
 			? (JSON.parse(String(init.body)) as Record<string, unknown>)
@@ -153,6 +153,35 @@ function restartableEngine(
 			});
 		}
 		return json({ error: "no route" }, 404);
+	};
+	/**
+	 * A turn that asked for the heartbeat, as patch 0388 answers it: a 200
+	 * stream opened at once, a keepalive comment, then the reply -- or the
+	 * error the slot raised, as an in-stream event.
+	 */
+	const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+		const response = await answer(input, init);
+		const body = init?.body
+			? (JSON.parse(String(init.body)) as Record<string, unknown>)
+			: {};
+		const options = body.stream_options as Record<string, unknown> | undefined;
+		if (options?.keepalive !== true) {
+			return response;
+		}
+		const text = await response.text();
+		const headers = new Headers(response.headers);
+		headers.set("content-type", "text/event-stream");
+		return new Response(
+			response.ok
+				? `: keepalive queued\n\ndata: ${text}\n\ndata: [DONE]\n\n`
+				: `: keepalive queued\n\ndata: ${JSON.stringify({
+						error: {
+							code: response.status,
+							...((JSON.parse(text) as { error: object }).error ?? {}),
+						},
+					})}\n\n`,
+			{ status: 200, headers },
+		);
 	}) as unknown as typeof fetch;
 	return {
 		calls,
@@ -536,5 +565,30 @@ describe("the heartbeat on a worker's turn", () => {
 		expect(turns(engine).at(-1)?.body.stream_options).toEqual({
 			include_usage: true,
 		});
+	});
+});
+
+describe("a worker's refusal inside the heartbeat stream", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	// The window-full wait reads a 429 and its text. With the heartbeat the
+	// refusal is an in-stream event under a 200; it must still be waited out.
+	it("is waited out as the full window it is", async () => {
+		const engine = restartableEngine({ features: ["stream_keepalive_v1"] });
+		const body = { ...agentBody("r", "t"), stream: true };
+		await send(engine, "hb-full", body);
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		engine.refuseWorkers(1);
+		const pending = send(engine, "hb-full", {
+			...body,
+			messages: [...body.messages, { role: "user", content: "t2" }],
+		});
+		await vi.advanceTimersByTimeAsync(POLYKV_ROOM_BACKOFF_MAX_MS);
+		const response = await pending;
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain("data: [DONE]");
+		expect(turns(engine).length).toBeGreaterThanOrEqual(3);
 	});
 });
