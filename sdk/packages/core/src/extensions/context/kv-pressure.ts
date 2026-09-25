@@ -1,5 +1,6 @@
 import {
 	engineSessionId,
+	getOpencotiWindowCeiling,
 	getOpencotiWindowFloor,
 	getPolykvWindowGrant,
 	hasOpencotiFeature,
@@ -183,7 +184,11 @@ export function resolveKvResizeSubject(
 		}
 	}
 	const floor = getOpencotiWindowFloor(sessionId);
-	const ceiling = getPolykvWindowGrant(sessionId)?.asked;
+	// The node window a worker that left its pool recorded, else the window
+	// the session first asked for.
+	const ceiling =
+		getOpencotiWindowCeiling(sessionId) ??
+		getPolykvWindowGrant(sessionId)?.asked;
 	return {
 		kind: "own",
 		engineId: engineSessionId(sessionId),
@@ -241,6 +246,11 @@ export async function beginKvPressureTurn(options: {
 	sessionId: string | undefined;
 	providerConfig: PolykvProviderConfig;
 	logger?: BasicLogger;
+	/**
+	 * Grow back here when the pressure has cleared. Off for a manual
+	 * compaction and an overflow recovery: they are shrink-only boundaries.
+	 */
+	grow?: boolean;
 }): Promise<KvPressureTurn | undefined> {
 	const config = options.providerConfig;
 	if (
@@ -281,7 +291,9 @@ export async function beginKvPressureTurn(options: {
 	if (row) {
 		turn.row = row;
 	}
-	await growIfCleared(turn);
+	if (options.grow !== false) {
+		await growIfCleared(turn);
+	}
 	return turn;
 }
 

@@ -558,3 +558,35 @@ export function getOpencotiWindowFloor(
 export function resetOpencotiWindowFloors(): void {
 	WINDOW_FLOORS.clear();
 }
+
+/**
+ * The window a session would ask for in a booking of its own, by the host's
+ * session id: the ceiling a pressure resize grows it back to.
+ *
+ * The grant's `asked` is that ceiling for a session that booked its own window
+ * from the start. A swarm worker whose first grant came while it was pooled
+ * has none -- that grant was its owner's window, and `asked` is kept from the
+ * first grant -- so the worker records the node window here when it leaves the
+ * pool and books its own.
+ */
+const WINDOW_CEILINGS = new Map<string, number>();
+
+export function recordOpencotiWindowCeiling(
+	sessionId: string,
+	ceiling: number | undefined,
+): void {
+	if (typeof ceiling === "number" && Number.isFinite(ceiling) && ceiling > 0) {
+		WINDOW_CEILINGS.set(sessionId, Math.floor(ceiling));
+	}
+}
+
+export function getOpencotiWindowCeiling(
+	sessionId: string | undefined,
+): number | undefined {
+	return sessionId ? WINDOW_CEILINGS.get(sessionId) : undefined;
+}
+
+/** Test seam. */
+export function resetOpencotiWindowCeilings(): void {
+	WINDOW_CEILINGS.clear();
+}

@@ -195,6 +195,7 @@ export {
 	resolveLlamaCppThinkBudgetWindow,
 } from "./providers/vendors/llamacpp-sampling";
 export {
+	getOpencotiWindowCeiling,
 	getOpencotiWindowFloor,
 	latestOpencotiPressure,
 	noteOpencotiPressure,
@@ -211,8 +212,10 @@ export {
 	parseOpencotiKvPressure,
 	parseOpencotiRefusalPressure,
 	readOpencotiKv,
+	recordOpencotiWindowCeiling,
 	recordOpencotiWindowFloor,
 	resetOpencotiPressure,
+	resetOpencotiWindowCeilings,
 	resetOpencotiWindowFloors,
 	resizeOpencotiSession,
 } from "./providers/vendors/opencoti-kv-pressure";

@@ -727,16 +727,16 @@ export function createContextCompactionPrepareTurn(
 	return async (turn) => {
 		// The server's pressure, and this session's booking in it (`kv-pressure.ts`).
 		// First, because a booking grown back here is the window everything
-		// below is sized against this very turn. Automatic compaction only: a
-		// manual one is the user's, and an overflow recovery has one job.
-		const kvTurn =
-			!turn.overflowRecovery && mode === "auto"
-				? await beginKvPressureTurn({
-						sessionId: config.sessionId,
-						providerConfig,
-						logger: config.logger,
-					}).catch(() => undefined)
-				: undefined;
+		// below is sized against this very turn. Every compaction is followed
+		// by the shrink when the server is refusing; only the automatic
+		// boundary grows back -- a manual compaction and an overflow recovery
+		// are there to make the context smaller.
+		const kvTurn = await beginKvPressureTurn({
+			sessionId: config.sessionId,
+			providerConfig,
+			logger: config.logger,
+			grow: !turn.overflowRecovery && mode === "auto",
+		}).catch(() => undefined);
 		// Sized against the window the server GRANTED, where one is known and
 		// smaller than the configured one. A conversation negotiated down to
 		// 160k of 256k holds 160k for its life, and every threshold below --

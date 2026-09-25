@@ -114,6 +114,8 @@ async function boundary(
 		messageChars?: number;
 		contextWindow?: number;
 		compact?: () => Promise<{ messages: LlmsProviders.Message[] }>;
+		mode?: "auto" | "manual";
+		overflowRecovery?: boolean;
 	} = {},
 ) {
 	const diagnostics: Array<Record<string, unknown>> = [];
@@ -133,26 +135,29 @@ async function boundary(
 			});
 		},
 	};
-	const prepareTurn = createContextCompactionPrepareTurn({
-		providerId: "opencoti",
-		modelId: "m",
-		sessionId: SESSION,
-		providerConfig: {
+	const prepareTurn = createContextCompactionPrepareTurn(
+		{
 			providerId: "opencoti",
 			modelId: "m",
-			baseUrl: "http://engine/v1",
-			fetch: fetchImpl,
-			// No pool tree: a window is booked, and resized, without one.
-			polykv: { enabled: false },
-			engineSessionId: SESSION,
-		} as unknown as LlmsProviders.ProviderConfig,
-		compaction: {
-			enabled: true,
-			strategy: "basic",
-			...(options.compact ? { compact: options.compact } : {}),
-		} as never,
-		logger: logger as never,
-	});
+			sessionId: SESSION,
+			providerConfig: {
+				providerId: "opencoti",
+				modelId: "m",
+				baseUrl: "http://engine/v1",
+				fetch: fetchImpl,
+				// No pool tree: a window is booked, and resized, without one.
+				polykv: { enabled: false },
+				engineSessionId: SESSION,
+			} as unknown as LlmsProviders.ProviderConfig,
+			compaction: {
+				enabled: true,
+				strategy: "basic",
+				...(options.compact ? { compact: options.compact } : {}),
+			} as never,
+			logger: logger as never,
+		},
+		options.mode ? { mode: options.mode } : {},
+	);
 	const messages: LlmsProviders.Message[] = [
 		{ role: "user", content: "x".repeat(options.messageChars ?? 40) },
 	];
@@ -162,6 +167,7 @@ async function boundary(
 		parentAgentId: null,
 		iteration: 1,
 		abortSignal: new AbortController().signal,
+		...(options.overflowRecovery ? { overflowRecovery: true } : {}),
 		systemPrompt: "You are helpful.",
 		tools: [],
 		messages,
@@ -240,6 +246,55 @@ describe("compaction on global pressure", () => {
 		expect(target).toBeGreaterThanOrEqual(1_000);
 		expect(getPolykvGrantedWindow(SESSION)).toBe(target);
 		noWarnings(lines.filter((line) => line.message.includes("[PolyKV]")));
+	});
+
+	it.each([
+		["a manual compaction", { mode: "manual" as const }],
+		["an overflow recovery", { overflowRecovery: true }],
+	])("shrinks after %s too, never below the floor", async (_name, mode) => {
+		const stub = engine({
+			row: { window: 262_144, used: 150_000 },
+			pressure: ACTIVE,
+		});
+		let compacted = 0;
+		const { lines } = await boundary(stub.fetch, {
+			...mode,
+			messageChars: 600_000,
+			compact: async () => {
+				compacted += 1;
+				return {
+					messages: [{ role: "user", content: "summary ".repeat(200) }],
+				};
+			},
+		});
+		expect(compacted).toBe(1);
+		const resizes = stub.resizes();
+		expect(resizes).toHaveLength(1);
+		const target = resizes[0]?.body?.num_ctx as number;
+		// The same floor as after an automatic one.
+		expect(target).toBe(Math.ceil(60_000 / 256) * 256);
+		expect(getPolykvGrantedWindow(SESSION)).toBe(target);
+		noWarnings(lines.filter((line) => line.message.includes("[PolyKV]")));
+	});
+
+	it.each([
+		["a manual compaction", { mode: "manual" as const }],
+		["an overflow recovery", { overflowRecovery: true }],
+	])("does not resize after %s when nobody is being refused", async (_name, mode) => {
+		const stub = engine({
+			row: { window: 98_304, used: 90_000 },
+			pressure: CLEARED,
+		});
+		recordPolykvGrantedWindow(SESSION, 98_304);
+		await boundary(stub.fetch, {
+			...mode,
+			messageChars: 600_000,
+			compact: async () => ({
+				messages: [{ role: "user", content: "summary ".repeat(200) }],
+			}),
+		});
+		// Growing is the automatic boundary's; these compactions only shrink.
+		expect(stub.resizes()).toEqual([]);
 	});
 
 	it("does not compact an agent at its floor", async () => {

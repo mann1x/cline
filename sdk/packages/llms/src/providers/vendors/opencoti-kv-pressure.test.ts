@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createOpencotiFetch } from "./opencoti";
 import {
+	getOpencotiWindowCeiling,
 	getOpencotiWindowFloor,
 	latestOpencotiPressure,
 	noteOpencotiPressure,
@@ -10,10 +11,16 @@ import {
 	parseOpencotiRefusalPressure,
 	readOpencotiKv,
 	resetOpencotiPressure,
+	resetOpencotiWindowCeilings,
 	resetOpencotiWindowFloors,
 	resizeOpencotiSession,
 } from "./opencoti-kv-pressure";
-import { resetPolykvAvailability, resetPolykvSessions } from "./polykv";
+import {
+	getPolykvWindowGrant,
+	recordPolykvGrantedWindow,
+	resetPolykvAvailability,
+	resetPolykvSessions,
+} from "./polykv";
 import {
 	polykvOwnerWindowBounds,
 	releaseAllPolykvSwarms,
@@ -101,6 +108,7 @@ beforeEach(() => {
 	resetPolykvSessions();
 	resetOpencotiPressure();
 	resetOpencotiWindowFloors();
+	resetOpencotiWindowCeilings();
 });
 
 afterEach(async () => {
@@ -531,5 +539,50 @@ describe("the floor a pressure resize keeps", () => {
 				floor: opened?.body?.num_ctx_min,
 			},
 		);
+	});
+
+	it("records the node window as the ceiling when a worker leaves the pool", async () => {
+		const stub = engine({
+			features,
+			kv: { session_ctx_max: 262_144 },
+			chat: chatWith(262_144),
+		});
+		const inner = stub.fetch;
+		const withPools = (async (input: unknown, init?: RequestInit) => {
+			const url = new URL(String(input));
+			if (url.pathname === "/apply-template") {
+				return json({ prompt: "<|system|>x<|end|>" });
+			}
+			if (url.pathname === "/polykv/pools" && init?.method === "GET") {
+				return json({ pools: [] });
+			}
+			if (url.pathname === "/polykv/pools" || url.pathname.endsWith("/fork")) {
+				return json({ pool_id: 0, parent: -1, prefix_len: 10 });
+			}
+			return inner(input as never, init);
+		}) as unknown as typeof fetch;
+		// Its first grant came while pooled: the owner's window, no ask of
+		// its own -- so the grant names no ceiling to grow back to.
+		recordPolykvGrantedWindow("agent-left", 262_144);
+		expect(getPolykvWindowGrant("agent-left")?.asked).toBeUndefined();
+		// Not shaped [system, 2 shared turns, task]: it runs unpooled, in a
+		// booking of its own.
+		await createOpencotiFetch({
+			fetch: withPools,
+			baseUrl: "http://engine/v1",
+			request: {
+				worker: { group: "lead-left", sessionId: "agent-left", layers: 2 },
+				agentWindow: window,
+			},
+		})("http://engine/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify(agentBody),
+		});
+		const chat = stub.calls
+			.filter((call) => call.path === "/v1/chat/completions")
+			.at(-1);
+		expect(chat?.body).not.toHaveProperty("pool_id");
+		expect(chat?.body?.num_ctx).toBeDefined();
+		expect(getOpencotiWindowCeiling("agent-left")).toBe(131_072);
 	});
 });

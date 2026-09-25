@@ -1,9 +1,11 @@
 import type * as LlmsProviders from "@cline/llms";
 import {
 	getPolykvGrantedWindow,
+	recordOpencotiWindowCeiling,
 	recordOpencotiWindowFloor,
 	recordPolykvGrantedWindow,
 	resetOpencotiPressure,
+	resetOpencotiWindowCeilings,
 	resetOpencotiWindowFloors,
 	resetPolykvAvailability,
 	resetPolykvSessions,
@@ -40,7 +42,14 @@ const WORKER = "lead~agent-w";
 const OWNER = "lead~polykv-owner-1";
 const LEAD = "lead";
 
-function engine(rows: Array<{ id: string; window: number; used: number }>) {
+function engine(
+	rows: Array<{ id: string; window: number; used: number }>,
+	pressure: Record<string, unknown> = {
+		window_s: 60,
+		refused_60s: 2,
+		last_refusal_age_s: 1,
+	},
+) {
 	const resizes: Array<{ path: string; body: Record<string, unknown> }> = [];
 	const fetchImpl = (async (input: unknown, init?: RequestInit) => {
 		const url = new URL(String(input));
@@ -60,7 +69,7 @@ function engine(rows: Array<{ id: string; window: number; used: number }>) {
 					window: row.window,
 					used: row.used,
 				})),
-				pressure: { window_s: 60, refused_60s: 2, last_refusal_age_s: 1 },
+				pressure,
 			});
 		}
 		if (url.pathname.endsWith("/resize")) {
@@ -85,6 +94,7 @@ beforeEach(() => {
 	resetPolykvAvailability();
 	resetOpencotiPressure();
 	resetOpencotiWindowFloors();
+	resetOpencotiWindowCeilings();
 	resetKvPressureState();
 	clearPolykvAllocationCache();
 	charged.owner = undefined;
@@ -162,5 +172,31 @@ describe("a pooled agent under pressure", () => {
 			session_id: WORKER,
 			num_ctx: Math.ceil(50_000 / 256) * 256,
 		});
+	});
+
+	it("grows back to the node window after leaving the pool", async () => {
+		charged.owner = undefined;
+		// Its first grant was its owner's, with no ask of its own; the fetch
+		// recorded the node window when it went out on its own.
+		recordPolykvGrantedWindow(WORKER, 98_304);
+		recordOpencotiWindowCeiling(WORKER, 131_072);
+		recordOpencotiWindowFloor(WORKER, 50_000);
+		const stub = engine([{ id: WORKER, window: 98_304, used: 90_000 }], {
+			window_s: 60,
+			refused_60s: 0,
+			last_refusal_age_s: 600,
+		});
+		const turn = await beginKvPressureTurn({
+			sessionId: WORKER,
+			providerConfig: workerConfig(stub.fetch),
+		});
+		expect(turn?.subject).toMatchObject({ kind: "own", ceiling: 131_072 });
+		expect(stub.resizes).toEqual([
+			{
+				path: "/sessions/resize",
+				body: { session_id: WORKER, num_ctx: 131_072 },
+			},
+		]);
+		expect(getPolykvGrantedWindow(WORKER)).toBe(131_072);
 	});
 });

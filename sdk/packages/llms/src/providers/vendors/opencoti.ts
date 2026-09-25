@@ -21,6 +21,7 @@ import {
 } from "./opencoti-agent-window";
 import {
 	noteOpencotiRefusalPressure,
+	recordOpencotiWindowCeiling,
 	recordOpencotiWindowFloor,
 } from "./opencoti-kv-pressure";
 import {
@@ -1448,8 +1449,14 @@ function createWorkerFetch(options: {
 							granted ?? Math.min(agentFloor, wire.num_ctx as number);
 					}
 					unpooledAsk = wire.num_ctx as number;
-					// Its own booking now: the floor a pressure resize keeps.
+					// Its own booking now: the floor a pressure resize keeps, and
+					// the node window it grows back to. A first grant taken while
+					// pooled was the owner's and names no ask of its own.
 					recordOpencotiWindowFloor(options.worker.sessionId, agentFloor);
+					recordOpencotiWindowCeiling(
+						options.worker.sessionId,
+						options.agentWindow.contextWindow,
+					);
 				}
 			}
 			const keepalive = (await keepaliveAdvertised(options.baseUrl, base, wire))
