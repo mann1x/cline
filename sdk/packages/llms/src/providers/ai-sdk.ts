@@ -16,6 +16,7 @@ import type {
 	ProviderErrorClass,
 	ReasoningHistoryMode,
 	ReasoningHistoryPlan,
+	ToolCallRejection,
 } from "@cline/shared";
 import {
 	type AiSdkFormatterMessage,
@@ -48,7 +49,10 @@ import {
 } from "ai";
 import { nanoid } from "nanoid";
 import type { PolykvOptions } from "./config";
-import { classifyProviderError } from "./error-classification";
+import {
+	classifyProviderError,
+	extractToolCallRejection,
+} from "./error-classification";
 import { extractErrorMessage } from "./format";
 import {
 	createRetryEmptyResponseMiddleware,
@@ -1684,6 +1688,8 @@ function extractGoogleThoughtMetadata(
 interface CapturedStreamError {
 	message: string;
 	errorClass: ProviderErrorClass;
+	/** What the engine said was wrong with a rejected tool call, if it said. */
+	toolCallRejection?: ToolCallRejection;
 	/**
 	 * This layer already recorded `sdk.error` telemetry for the failure.
 	 * Forwarded as `errorReported` on the `finish` event so the agent loop
@@ -1696,6 +1702,7 @@ function captureStreamError(error: unknown): CapturedStreamError {
 	return {
 		message: extractErrorMessage(error),
 		errorClass: classifyProviderError(error),
+		toolCallRejection: extractToolCallRejection(error),
 	};
 }
 
@@ -2284,6 +2291,7 @@ async function* emitAiSdkEvents(
 		reason: streamError ? "error" : mapFinishReason(finishReason, sawToolCalls),
 		error: streamError?.message,
 		errorClass: streamError?.errorClass,
+		toolCallRejection: streamError?.toolCallRejection,
 		errorReported: streamError?.reported,
 	};
 }
@@ -2757,6 +2765,7 @@ function createAiSdkProvider(kind: ProviderModuleKind): GatewayProviderFactory {
 					reason: "error",
 					error: msg,
 					errorClass: captured.errorClass,
+					toolCallRejection: captured.toolCallRejection,
 					errorReported: reported || captured.reported,
 				};
 			}

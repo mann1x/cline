@@ -1,4 +1,8 @@
-import { type ProviderErrorClass, safeJsonParse } from "@cline/shared";
+import {
+	type ProviderErrorClass,
+	safeJsonParse,
+	type ToolCallRejection,
+} from "@cline/shared";
 import { AISDKError, APICallError, RetryError, TypeValidationError } from "ai";
 
 /**
@@ -251,15 +255,28 @@ const TOOL_CALL_UNPARSABLE_PATTERNS = [
 	/\bInvalid diff:\s*now finding less tool calls\b/i,
 ];
 
+/**
+ * The error `type` opencoti gives a tool call it rejected (bug-3601). It comes
+ * with the same message as before, so older builds are still caught by the
+ * `Invalid diff` pattern above. Newer ones also carry a `reason`, read by
+ * {@link extractToolCallRejection}.
+ */
+const TOOL_CALL_REJECTED_TYPE = "tool_call_rejected";
+
+function isToolCallUnparsable(signals: ErrorSignals): boolean {
+	return (
+		signals.codes.has(TOOL_CALL_REJECTED_TYPE) ||
+		signals.messages.some((message) =>
+			TOOL_CALL_UNPARSABLE_PATTERNS.some((pattern) => pattern.test(message)),
+		)
+	);
+}
+
 function verdictFromSignals(signals: ErrorSignals): ProviderErrorClass {
 	// First, and for the same reason as the image check that follows it: this
 	// is a property of what the model emitted, not of the request's HTTP shape,
 	// and providers return it under assorted codes or none at all.
-	if (
-		signals.messages.some((message) =>
-			TOOL_CALL_UNPARSABLE_PATTERNS.some((pattern) => pattern.test(message)),
-		)
-	) {
+	if (isToolCallUnparsable(signals)) {
 		return "tool_call_unparsable";
 	}
 
@@ -375,14 +392,20 @@ function classifyTypedError(
 		if (status !== undefined && AUTH_STATUSES.has(status)) {
 			return "auth";
 		}
-		if (status !== undefined && !CONTEXT_WINDOW_STATUSES.has(status)) {
-			return "unknown";
-		}
 		const signals = collectSignalsFrom([
 			error.message,
 			error.responseBody,
 			error.data,
 		]);
+		// Ahead of the status gate: opencoti rejects a tool call with a 500,
+		// and a 500 is otherwise "unknown". What the model emitted is the
+		// fault whatever the status says -- see `verdictFromSignals`.
+		if (isToolCallUnparsable(signals)) {
+			return "tool_call_unparsable";
+		}
+		if (status !== undefined && !CONTEXT_WINDOW_STATUSES.has(status)) {
+			return "unknown";
+		}
 		signals.statuses = new Set(status !== undefined ? [status] : []);
 		return verdictFromSignals(signals);
 	}
@@ -431,4 +454,79 @@ export function classifyProviderError(error: unknown): ProviderErrorClass {
 		return "unknown";
 	}
 	return verdictFromSignals(signals);
+}
+
+/**
+ * The engine's account of a tool call it rejected, if the error carries one.
+ *
+ * Looks for opencoti's `{type: "tool_call_rejected", reason, key?, tool?}`
+ * anywhere in the error: on the object itself, under `error`, in an HTTP
+ * response body, or JSON-encoded in a message string (a streamed SSE `error`
+ * event arrives that way). `undefined` when there is none. The rejection is
+ * still classified from its message; only the specific wording is lost.
+ */
+export function extractToolCallRejection(
+	error: unknown,
+): ToolCallRejection | undefined {
+	return findToolCallRejection(error, new Set(), 0);
+}
+
+function findToolCallRejection(
+	value: unknown,
+	visited: Set<unknown>,
+	depth: number,
+): ToolCallRejection | undefined {
+	if (value == null || depth > MAX_WALK_DEPTH) {
+		return undefined;
+	}
+	if (typeof value === "string") {
+		const parsed = safeJsonParse<unknown>(value.trim());
+		return parsed !== undefined && typeof parsed === "object"
+			? findToolCallRejection(parsed, visited, depth + 1)
+			: undefined;
+	}
+	if (typeof value !== "object" || visited.has(value)) {
+		return undefined;
+	}
+	visited.add(value);
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			const found = findToolCallRejection(item, visited, depth + 1);
+			if (found) {
+				return found;
+			}
+		}
+		return undefined;
+	}
+	const record = value as Record<string, unknown>;
+	if (
+		record.type === TOOL_CALL_REJECTED_TYPE &&
+		typeof record.reason === "string" &&
+		record.reason.trim()
+	) {
+		return {
+			reason: record.reason.trim(),
+			...(typeof record.key === "string" && record.key.trim()
+				? { key: record.key.trim() }
+				: {}),
+			...(typeof record.tool === "string" && record.tool.trim()
+				? { tool: record.tool.trim() }
+				: {}),
+		};
+	}
+	for (const key of [
+		"error",
+		"data",
+		"responseBody",
+		"cause",
+		"lastError",
+		"value",
+		"message",
+	]) {
+		const found = findToolCallRejection(record[key], visited, depth + 1);
+		if (found) {
+			return found;
+		}
+	}
+	return undefined;
 }

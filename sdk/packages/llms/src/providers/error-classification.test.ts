@@ -5,7 +5,10 @@ import {
 	TypeValidationError,
 } from "ai";
 import { describe, expect, it } from "vitest";
-import { classifyProviderError } from "./error-classification";
+import {
+	classifyProviderError,
+	extractToolCallRejection,
+} from "./error-classification";
 
 describe("classifyProviderError", () => {
 	describe("context_window_exceeded", () => {
@@ -470,6 +473,69 @@ describe("tool calls the provider could not parse", () => {
 		expect(classifyProviderError(new Error(message))).not.toBe(
 			"tool_call_unparsable",
 		);
+	});
+});
+
+describe("opencoti's tool_call_rejected (bug-3601)", () => {
+	// The shape the engine sends, verbatim from its gate (build 2609250311001):
+	// an SSE `error` event, same 500 and first line as before, plus the rule
+	// and the argument the malformed value swallowed.
+	const body = {
+		error: {
+			code: 500,
+			type: "tool_call_rejected",
+			message:
+				"Invalid diff: now finding less tool calls!\n  Previous (1): ...",
+			reason: "swallowed_key",
+			key: "path",
+			tool: "editor",
+		},
+	};
+
+	it("classifies the streamed event as recoverable", () => {
+		expect(classifyProviderError(body)).toBe("tool_call_unparsable");
+	});
+
+	// A 500 is otherwise "unknown" before the payload is read. The type is
+	// what the engine uses to say the model's output was at fault.
+	it("classifies it by type even as a typed 500 whose message changed", () => {
+		const error = new APICallError({
+			message: "Internal Server Error",
+			url: "http://node1:8240/v1/chat/completions",
+			requestBodyValues: {},
+			statusCode: 500,
+			responseBody: JSON.stringify({
+				error: { ...body.error, message: "rejected" },
+			}),
+		});
+		expect(classifyProviderError(error)).toBe("tool_call_unparsable");
+	});
+
+	it("reads the rule, the argument and the tool", () => {
+		expect(extractToolCallRejection(body)).toEqual({
+			reason: "swallowed_key",
+			key: "path",
+			tool: "editor",
+		});
+		// JSON-encoded in a message, as a gateway flattens it.
+		expect(
+			extractToolCallRejection(new Error(JSON.stringify(body))),
+		).toMatchObject({ key: "path" });
+	});
+
+	// Older engines send the message alone: still recovered, only the
+	// specific wording is lost.
+	it("finds nothing on an engine that sends no reason", () => {
+		expect(
+			extractToolCallRejection(
+				new Error("Invalid diff: now finding less tool calls!"),
+			),
+		).toBeUndefined();
+		expect(
+			extractToolCallRejection({
+				error: { type: "server_error", message: "boom" },
+			}),
+		).toBeUndefined();
 	});
 });
 

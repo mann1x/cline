@@ -31,6 +31,7 @@ import type {
 	RequestTimings,
 	TelemetryProperties,
 	ToolApprovalResult,
+	ToolCallRejection,
 	ToolPolicy,
 } from "@cline/shared";
 import {
@@ -263,6 +264,36 @@ const TOOL_CALL_UNPARSABLE_REMINDER =
 	"The text you wrote before it is still here and still correct — the call around it was malformed, most often because it was cut short. " +
 	"Send that one call again, complete, and nothing else in this reply. " +
 	"If it carries a large argument, make the argument smaller rather than sending the same one again: name a line range instead of a whole file, or split the work across two calls.";
+
+/**
+ * The reminder for a call the engine rejected and said why.
+ *
+ * `swallowed_key` is the one measured shape (opencoti bug-3601, 16 workers of
+ * a 75-agent swarm): a long string argument full of code was ended with a
+ * backtick from that code, so the parser read the next argument as part of
+ * the value. The generic "it did not parse, make it smaller" sends the model
+ * back to write the same call the same way. Naming the argument it ran into
+ * and the cause gives it the one thing to do differently. Any other reason
+ * gets the generic text, since there is nothing specific to say about a rule
+ * we have not seen.
+ */
+export function toolCallUnparsableReminder(
+	rejection?: ToolCallRejection,
+): string {
+	if (rejection?.reason !== "swallowed_key") {
+		return TOOL_CALL_UNPARSABLE_REMINDER;
+	}
+	const call = rejection.tool ? `\`${rejection.tool}\` call` : "tool call";
+	const into = rejection.key
+		? `ran on into \`${rejection.key}\`, so the parser read \`${rejection.key}\` and what followed as part of that value`
+		: "ran on into the next argument, so the parser read that argument as part of the value";
+	return (
+		`[SYSTEM] Your last ${call} was rejected before it ran, and nothing was changed by it. ` +
+		`A string argument in it never closed: it ${into}. ` +
+		"This happens when a string argument that contains code is ended with a character from that code, such as a backtick or a quote, instead of the tool-call format's own string delimiter. " +
+		"Send that one call again, complete, and nothing else in this reply, with every string argument closed by the format's delimiter."
+	);
+}
 
 /**
  * How many times one turn may be asked to resend a call before the run ends.
@@ -880,6 +911,11 @@ export class AgentRuntime {
 		 */
 		lastErrorReported: false,
 	};
+	/**
+	 * What the engine said was wrong with the last tool call it rejected.
+	 * Replaced on every failed turn, so it only ever describes `lastError`.
+	 */
+	private lastToolCallRejection: ToolCallRejection | undefined;
 	/** One automatic overflow-recovery attempt per run. */
 	private overflowRecoveryAttempted = false;
 	/**
@@ -2270,9 +2306,14 @@ export class AgentRuntime {
 				iteration: this.state.iteration,
 				attempt: this.toolCallParseRetries,
 				providerError: this.state.lastError,
+				...(this.lastToolCallRejection
+					? { rejection: this.lastToolCallRejection }
+					: {}),
 			},
 		});
-		await this.addUserReminderMessage(TOOL_CALL_UNPARSABLE_REMINDER);
+		await this.addUserReminderMessage(
+			toolCallUnparsableReminder(this.lastToolCallRejection),
+		);
 		return true;
 	}
 
@@ -2802,6 +2843,7 @@ export class AgentRuntime {
 						// stays eligible for overflow recovery.
 						this.state.lastErrorClass =
 							event.errorClass ?? classifyProviderError(event.error);
+						this.lastToolCallRejection = event.toolCallRejection;
 						this.state.lastErrorReported = event.errorReported === true;
 					}
 					break;
