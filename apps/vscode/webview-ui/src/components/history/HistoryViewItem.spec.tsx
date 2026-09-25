@@ -1,5 +1,5 @@
 import type { HistoryItem } from "@shared/HistoryItem"
-import { render } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const captured = vi.hoisted(() => ({ tooltipContentProps: [] as Array<Record<string, unknown>> }))
@@ -45,7 +45,10 @@ const renderRow = () =>
 			handleHistorySelect={vi.fn()}
 			index={0}
 			item={item}
+			onSetTags={vi.fn()}
+			onTagSelect={vi.fn()}
 			pendingFavoriteToggles={{}}
+			recentTags={[]}
 			selectedItems={[]}
 			toggleFavorite={vi.fn()}
 		/>,
@@ -75,12 +78,58 @@ describe("HistoryViewItem settings card", () => {
 				handleHistorySelect={vi.fn()}
 				index={0}
 				item={{ ...item, settings: [] }}
+				onSetTags={vi.fn()}
+				onTagSelect={vi.fn()}
 				pendingFavoriteToggles={{}}
+				recentTags={[]}
 				selectedItems={[]}
 				toggleFavorite={vi.fn()}
 			/>,
 		)
 
 		expect(captured.tooltipContentProps).toHaveLength(0)
+	})
+})
+
+describe("HistoryViewItem tags", () => {
+	const renderTagged = (handlers: { onSetTags?: () => void; onTagSelect?: () => void } = {}) =>
+		render(
+			<HistoryViewItem
+				handleDeleteHistoryItem={vi.fn()}
+				handleHistorySelect={vi.fn()}
+				index={0}
+				item={{ ...item, tags: ["work", "ui"] }}
+				onSetTags={handlers.onSetTags ?? vi.fn()}
+				onTagSelect={handlers.onTagSelect ?? vi.fn()}
+				pendingFavoriteToggles={{}}
+				recentTags={[]}
+				selectedItems={[]}
+				toggleFavorite={vi.fn()}
+			/>,
+		)
+
+	it("shows the tags above the prompt", () => {
+		renderTagged()
+		const work = screen.getByText("work")
+		const prompt = screen.getByText("check manic_miner.html")
+		expect(work.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+	})
+
+	it("removes one tag, keeping the rest", () => {
+		const onSetTags = vi.fn()
+		renderTagged({ onSetTags })
+		fireEvent.click(screen.getByLabelText("Remove tag work"))
+		expect(onSetTags).toHaveBeenCalledWith("task-1", ["ui"])
+	})
+
+	// The chip sits on a row that opens the conversation; clicking it filters
+	// instead, and must not also open the task.
+	it("filters by a tag without opening the conversation", async () => {
+		const onTagSelect = vi.fn()
+		const { TaskServiceClient } = await import("@/services/grpc-client")
+		renderTagged({ onTagSelect })
+		fireEvent.click(screen.getByText("ui"))
+		expect(onTagSelect).toHaveBeenCalledWith("ui")
+		expect(TaskServiceClient.showTaskWithId).not.toHaveBeenCalled()
 	})
 })

@@ -1,5 +1,6 @@
+import { normalizeTags, removeTagFromQuery, splitTagQuery } from "@shared/conversation-tags"
 import { EmptyRequest, StringArrayRequest } from "@shared/proto/cline/common"
-import { GetTaskHistoryRequest, TaskFavoriteRequest, type TaskItem } from "@shared/proto/cline/task"
+import { GetTaskHistoryRequest, SetTaskTagsRequest, TaskFavoriteRequest, type TaskItem } from "@shared/proto/cline/task"
 import { VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import Fuse, { FuseResult } from "fuse.js"
 import { FunnelIcon } from "lucide-react"
@@ -12,6 +13,10 @@ import { TaskServiceClient } from "@/services/grpc-client"
 import { formatSize } from "@/utils/format"
 import ViewHeader from "../common/ViewHeader"
 import HistoryViewItem from "./HistoryViewItem"
+import { TagChip } from "./TagChip"
+
+/** How many recent tags "Add tag" offers. */
+const RECENT_TAG_COUNT = 10
 
 type HistoryViewProps = {
 	onDone: () => void
@@ -47,6 +52,15 @@ const HistoryView = ({ onDone }: HistoryViewProps) => {
 	const [selectedItems, setSelectedItems] = useState<string[]>([])
 	const [showFavoritesOnly, setShowFavoritesOnly] = useState(false)
 	const [showCurrentWorkspaceOnly, setShowCurrentWorkspaceOnly] = useState(false)
+	// Tags filter the list two ways: typed as `#tag` in the search box, or
+	// picked by clicking a chip. `searchText` is the query with the tags taken
+	// out -- it is what the title search sees.
+	const [pickedTags, setPickedTags] = useState<string[]>([])
+	const [tagsMatchAll, setTagsMatchAll] = useState(false)
+	const { text: searchText, tags: typedTags } = useMemo(() => splitTagQuery(searchQuery), [searchQuery])
+	const filterTags = useMemo(() => normalizeTags([...pickedTags, ...typedTags]), [pickedTags, typedTags])
+	// A stable dependency: a new array with the same tags must not reload.
+	const filterTagsKey = filterTags.join("\u0000")
 
 	// Keep track of pending favorite toggle operations
 	const [pendingFavoriteToggles, setPendingFavoriteToggles] = useState<Record<string, boolean>>({})
@@ -75,8 +89,10 @@ const HistoryView = ({ onDone }: HistoryViewProps) => {
 				const response = await TaskServiceClient.getTaskHistory(
 					GetTaskHistoryRequest.create({
 						favoritesOnly: showFavoritesOnly,
-						searchQuery: searchQuery || undefined,
+						searchQuery: searchText || undefined,
 						sortBy: sortOption,
+						tags: filterTagsKey ? filterTagsKey.split("\u0000") : [],
+						tagsMatchAll,
 						currentWorkspaceOnly: showCurrentWorkspaceOnly,
 						limit: HISTORY_PAGE_SIZE,
 						offset,
@@ -111,7 +127,7 @@ const HistoryView = ({ onDone }: HistoryViewProps) => {
 				}
 			}
 		},
-		[showFavoritesOnly, showCurrentWorkspaceOnly, searchQuery, sortOption],
+		[showFavoritesOnly, showCurrentWorkspaceOnly, searchText, sortOption, filterTagsKey, tagsMatchAll],
 	)
 
 	const loadMoreTaskHistory = useCallback(() => {
@@ -174,6 +190,43 @@ const HistoryView = ({ onDone }: HistoryViewProps) => {
 		[showFavoritesOnly, showCurrentWorkspaceOnly, loadTaskHistory],
 	)
 
+	const setTaskTags = useCallback(
+		async (taskId: string, nextTags: string[]) => {
+			const tags = normalizeTags(nextTags)
+			// Optimistic: the chip appears or goes at once.
+			setTasks((currentTasks) => currentTasks.map((task) => (task.id === taskId ? { ...task, tags } : task)))
+			try {
+				await TaskServiceClient.setTaskTags(SetTaskTagsRequest.create({ taskId, tags }))
+				// Under a tag filter the edit can move the row in or out of the list.
+				if (filterTagsKey) {
+					await loadTaskHistory(0)
+				}
+			} catch (error) {
+				console.error(`Error setting tags for task ${taskId}:`, error)
+				await loadTaskHistory(0)
+			}
+		},
+		[filterTagsKey, loadTaskHistory],
+	)
+
+	const selectTag = useCallback((tag: string) => {
+		setPickedTags((current) => normalizeTags([...current, tag]))
+	}, [])
+
+	const removeFilterTag = useCallback((tag: string) => {
+		const key = tag.toLowerCase()
+		setPickedTags((current) => current.filter((picked) => picked.toLowerCase() !== key))
+		setSearchQuery((current) => removeTagFromQuery(current, tag))
+	}, [])
+
+	// Recent tags, for "Add tag": the tags on the most recent conversations,
+	// newest first. Read from what is already loaded rather than stored
+	// separately, so a tag removed everywhere stops being offered.
+	const recentTags = useMemo(() => {
+		const byRecency = [...taskHistory, ...tasks].sort((a, b) => b.ts - a.ts)
+		return normalizeTags(byRecency.flatMap((item) => item.tags ?? [])).slice(0, RECENT_TAG_COUNT)
+	}, [taskHistory, tasks])
+
 	// Use the onRelinquishControl hook instead of message event
 	useEffect(() => {
 		return onRelinquishControl(() => {
@@ -211,14 +264,14 @@ const HistoryView = ({ onDone }: HistoryViewProps) => {
 	}, [fetchTotalTasksSize, isLoadingHistory, nextHistoryOffset, totalTasksSize])
 
 	useEffect(() => {
-		if (searchQuery && sortOption !== "mostRelevant" && !lastNonRelevantSort) {
+		if (searchText && sortOption !== "mostRelevant" && !lastNonRelevantSort) {
 			setLastNonRelevantSort(sortOption)
 			setSortOption("mostRelevant")
-		} else if (!searchQuery && sortOption === "mostRelevant" && lastNonRelevantSort) {
+		} else if (!searchText && sortOption === "mostRelevant" && lastNonRelevantSort) {
 			setSortOption(lastNonRelevantSort)
 			setLastNonRelevantSort(null)
 		}
-	}, [searchQuery, sortOption, lastNonRelevantSort])
+	}, [searchText, sortOption, lastNonRelevantSort])
 
 	const handleHistorySelect = useCallback((itemId: string, checked: boolean) => {
 		setSelectedItems((prev) => {
@@ -286,9 +339,9 @@ const HistoryView = ({ onDone }: HistoryViewProps) => {
 	}, [tasks])
 
 	const taskHistorySearchResults = useMemo(() => {
-		const results = searchQuery
+		const results = searchText
 			? fuse
-					.search(searchQuery)
+					.search(searchText)
 					?.filter(({ matches }) => matches && matches.length)
 					.map(({ item }) => item)
 			: tasks
@@ -309,7 +362,7 @@ const HistoryView = ({ onDone }: HistoryViewProps) => {
 					)
 				case "mostRelevant":
 					// NOTE: you must never sort directly on object since it will cause members to be reordered
-					return searchQuery ? 0 : b.ts - a.ts // Keep fuse order if searching, otherwise sort by newest
+					return searchText ? 0 : b.ts - a.ts // Keep fuse order if searching, otherwise sort by newest
 				case "newest":
 				default:
 					return b.ts - a.ts
@@ -317,7 +370,7 @@ const HistoryView = ({ onDone }: HistoryViewProps) => {
 		})
 
 		return results
-	}, [tasks, searchQuery, fuse, sortOption])
+	}, [tasks, searchText, fuse, sortOption])
 
 	// Group tasks into "Today" and "Older" (only for date-based sorts)
 	const { groupedTasks, groupCounts, groupLabels } = useMemo(() => {
@@ -393,12 +446,12 @@ const HistoryView = ({ onDone }: HistoryViewProps) => {
 						onInput={(e) => {
 							const newValue = (e.target as HTMLInputElement)?.value
 							setSearchQuery(newValue)
-							if (newValue && !searchQuery && sortOption !== "mostRelevant") {
+							if (splitTagQuery(newValue).text && !searchText && sortOption !== "mostRelevant") {
 								setLastNonRelevantSort(sortOption)
 								setSortOption("mostRelevant")
 							}
 						}}
-						placeholder="Fuzzy search history..."
+						placeholder="Search history, #tag to filter..."
 						value={searchQuery}>
 						<div className="codicon codicon-search opacity-80 mt-0.5 !text-sm" slot="start" />
 						{searchQuery && (
@@ -420,7 +473,7 @@ const HistoryView = ({ onDone }: HistoryViewProps) => {
 								value === "mostTokens" ||
 								value === "mostRelevant"
 							) {
-								if (value === "mostRelevant" && !searchQuery) {
+								if (value === "mostRelevant" && !searchText) {
 									// Don't allow selecting mostRelevant without a search query
 									return
 								}
@@ -453,7 +506,7 @@ const HistoryView = ({ onDone }: HistoryViewProps) => {
 										: key === "favoritesOnly"
 											? showFavoritesOnly
 											: false
-								const isDisabled = key === "mostRelevant" && !searchQuery
+								const isDisabled = key === "mostRelevant" && !searchText
 
 								return (
 									<SelectItem
@@ -477,6 +530,41 @@ const HistoryView = ({ onDone }: HistoryViewProps) => {
 						</SelectContent>
 					</Select>
 				</div>
+				{filterTags.length > 0 && (
+					<div aria-label="Tag filter" className="flex flex-wrap items-center gap-1" role="group">
+						{filterTags.map((tag) => (
+							<TagChip key={tag} onRemove={() => removeFilterTag(tag)} tag={tag} />
+						))}
+						{filterTags.length > 1 && (
+							<div className="ml-auto flex overflow-hidden rounded-xs border border-input-border text-[10px]">
+								{(
+									[
+										[false, "Any"],
+										[true, "All"],
+									] as const
+								).map(([matchAll, label]) => (
+									<button
+										aria-pressed={tagsMatchAll === matchAll}
+										className={`border-none px-1.5 py-[1px] cursor-pointer ${
+											tagsMatchAll === matchAll
+												? "bg-button-background text-button-foreground"
+												: "bg-transparent text-description"
+										}`}
+										key={label}
+										onClick={() => setTagsMatchAll(matchAll)}
+										title={
+											matchAll
+												? "Conversations carrying every one of these tags"
+												: "Conversations carrying any of these tags"
+										}
+										type="button">
+										{label}
+									</button>
+								))}
+							</div>
+						)}
+					</div>
+				)}
 			</div>
 
 			{/* HISTORY ITEMS */}
@@ -506,7 +594,10 @@ const HistoryView = ({ onDone }: HistoryViewProps) => {
 								handleHistorySelect={handleHistorySelect}
 								index={index}
 								item={item}
+								onSetTags={setTaskTags}
+								onTagSelect={selectTag}
 								pendingFavoriteToggles={pendingFavoriteToggles}
+								recentTags={recentTags}
 								selectedItems={selectedItems}
 								toggleFavorite={toggleFavorite}
 							/>

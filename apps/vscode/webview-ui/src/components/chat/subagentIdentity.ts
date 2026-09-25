@@ -16,7 +16,7 @@
  * distinct at the size of a tag, which mattered more than having many of them
  * -- six agents at once is already a crowded row.
  */
-const AGENT_HUES = [210, 275, 175, 40, 245, 315]
+export const AGENT_HUES = [210, 275, 175, 40, 245, 315]
 
 export interface SubagentIdentity {
 	label: string

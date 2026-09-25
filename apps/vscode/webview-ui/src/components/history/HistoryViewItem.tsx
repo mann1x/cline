@@ -24,6 +24,7 @@ import { writeToClipboard } from "@/utils/clipboard"
 import { formatLargeNumber, formatSize } from "@/utils/format"
 import { HistoryItemContextMenu } from "./HistoryItemContextMenu"
 import { HISTORY_SETTINGS_HOVER_DELAY_MS, HistorySettingsTooltip } from "./HistorySettingsTooltip"
+import { TagChip } from "./TagChip"
 
 type HistoryViewItemProps = {
 	item: HistoryItem
@@ -33,6 +34,12 @@ type HistoryViewItemProps = {
 	handleDeleteHistoryItem: (id: string) => void
 	toggleFavorite: (id: string, isCurrentlyFavorited: boolean) => void
 	handleHistorySelect: (itemId: string, checked: boolean) => void
+	/** Tags used lately, offered by "Add tag". */
+	recentTags: readonly string[]
+	/** Replaces the conversation's tags. */
+	onSetTags: (id: string, tags: string[]) => void
+	/** A chip's name was clicked: filter by it. */
+	onTagSelect: (tag: string) => void
 }
 
 const HistoryViewItem = ({
@@ -42,7 +49,11 @@ const HistoryViewItem = ({
 	toggleFavorite,
 	handleHistorySelect,
 	selectedItems,
+	recentTags,
+	onSetTags,
+	onTagSelect,
 }: HistoryViewItemProps) => {
+	const tags = item.tags ?? []
 	const [expanded, setExpanded] = useState(false)
 	// Where the right-click landed, relative to the row; undefined while the menu is closed.
 	const [menuAt, setMenuAt] = useState<{ x: number; y: number } | undefined>(undefined)
@@ -106,8 +117,11 @@ const HistoryViewItem = ({
 				at={menuAt}
 				canDelete={!isFavoritedItem}
 				firstPrompt={item.task}
+				onAddTag={(tag) => onSetTags(item.id, [...tags, tag])}
 				onClose={() => setMenuAt(undefined)}
 				onDelete={() => handleDeleteHistoryItem(item.id)}
+				recentTags={recentTags}
+				tags={tags}
 				taskId={item.id}
 			/>
 			<VSCodeCheckbox
@@ -150,6 +164,23 @@ const HistoryViewItem = ({
 						}}
 						role="button"
 						tabIndex={0}>
+						{tags.length > 0 && (
+							<div className="flex flex-wrap gap-1">
+								{tags.map((tag) => (
+									<TagChip
+										key={tag}
+										onRemove={() =>
+											onSetTags(
+												item.id,
+												tags.filter((kept) => kept !== tag),
+											)
+										}
+										onSelect={() => onTagSelect(tag)}
+										tag={tag}
+									/>
+								))}
+							</div>
+						)}
 						<div className="flex items-center gap-2">
 							<div className="line-clamp-1 overflow-hidden break-words whitespace-pre-wrap flex-1 min-w-0">
 								<span className="ph-no-capture">{item.task}</span>

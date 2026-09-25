@@ -96,6 +96,14 @@ describe("SdkTaskHistory", () => {
 		vi.restoreAllMocks()
 	})
 
+	it("reads tags from session metadata, and none as an empty list", () => {
+		expect(
+			sessionHistoryRecordToHistoryItem(makeSessionRecord("a", { metadata: { conversationTags: ["work", 3, "work"] } }))
+				.tags,
+		).toEqual(["work"])
+		expect(sessionHistoryRecordToHistoryItem(makeSessionRecord("b")).tags).toEqual([])
+	})
+
 	it("maps SDK session history records to legacy history items", () => {
 		const result = sessionHistoryRecordToHistoryItem(
 			makeSessionRecord("task-1", {
@@ -543,6 +551,32 @@ describe("SdkTaskHistory", () => {
 				}),
 			}),
 		)
+	})
+
+	// Every other update -- usage, favourite, title -- is built from an item
+	// that may not carry tags. The metadata write is a spread over what is
+	// stored, so a default there would erase them.
+	it("keeps stored tags when an update does not mention them", async () => {
+		const existing = makeSessionRecord("task-1", { metadata: { conversationTags: ["work"] } })
+		const { history, updateSession } = makeHistory([existing])
+
+		await history.updateTaskHistoryItem(makeHistoryItem("task-1", { tokensIn: 7 }))
+
+		const written = updateSession.mock.calls[0][1] as { metadata: Record<string, unknown> }
+		expect(written.metadata.conversationTags).toEqual(["work"])
+	})
+
+	it("writes tags normalized, and an empty list clears them", async () => {
+		const existing = makeSessionRecord("task-1", { metadata: { conversationTags: ["old"] } })
+		const { history, updateSession } = makeHistory([existing])
+
+		await history.updateTaskHistoryItem(makeHistoryItem("task-1", { tags: ["  big   refactor ", "Big Refactor", "ui"] }))
+		await history.updateTaskHistoryItem(makeHistoryItem("task-1", { tags: [] }))
+
+		const first = updateSession.mock.calls[0][1] as { metadata: Record<string, unknown> }
+		const second = updateSession.mock.calls[1][1] as { metadata: Record<string, unknown> }
+		expect(first.metadata.conversationTags).toEqual(["big refactor", "ui"])
+		expect(second.metadata.conversationTags).toEqual([])
 	})
 
 	it("keeps cached SDK task size when updating history without measuring artifacts", async () => {

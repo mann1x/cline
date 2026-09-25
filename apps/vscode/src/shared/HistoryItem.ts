@@ -13,6 +13,8 @@ export type HistoryItem = {
 	cwdOnTaskInitialization?: string
 	conversationHistoryDeletedRange?: [number, number]
 	isFavorited?: boolean
+	/** Labels the user gave the conversation. See `shared/conversation-tags.ts`. */
+	tags?: string[]
 
 	modelId?: string
 	/**

@@ -48,6 +48,8 @@ service TaskService {
   rpc exportTaskWithId(StringRequest) returns (Empty);
   // Toggles the favorite status of a task
   rpc toggleTaskFavorite(TaskFavoriteRequest) returns (Empty);
+  // Replaces the tags on a task (an empty list removes them all)
+  rpc setTaskTags(SetTaskTagsRequest) returns (Empty);
   // Gets filtered task history
   rpc getTaskHistory(GetTaskHistoryRequest) returns (TaskHistoryArray);
   // Sends a response to a previous ask operation
@@ -96,6 +98,13 @@ message TaskFavoriteRequest {
   bool is_favorited = 3;
 }
 
+// Request message for replacing a task's tags
+message SetTaskTagsRequest {
+  Metadata metadata = 1;
+  string task_id = 2;
+  repeated string tags = 3;
+}
+
 // Response for task details
 message TaskResponse {
   string id = 1;
@@ -121,6 +130,10 @@ message GetTaskHistoryRequest {
   bool current_workspace_only = 5;
   int32 limit = 6;
   int32 offset = 7;
+  // Only tasks carrying these tags. Empty filters nothing.
+  repeated string tags = 8;
+  // Require every tag rather than any one of them.
+  bool tags_match_all = 9;
 }
 
 // Response for task history
@@ -149,6 +162,8 @@ message TaskItem {
   // What the session ran with, already rendered for display. Empty for
   // sessions recorded before the snapshot existed.
   repeated TaskSettingRow settings = 14;
+  // Labels the user gave the task.
+  repeated string tags = 15;
 }
 
 // One line of the history list's hover card.
