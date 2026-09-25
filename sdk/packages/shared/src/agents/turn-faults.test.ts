@@ -50,6 +50,19 @@ describe("what a failed turn was", () => {
 		).toBeUndefined();
 	});
 
+	it("reads a batch the engine failed to decode as transport", () => {
+		// Verbatim from opencoti b108 on 8244: one slot's rebase left its
+		// positions inconsistent, llama_decode failed the shared batch, and
+		// every agent decoding in it ended on this -- 47 requests in 5 hits.
+		for (const message of [
+			"Invalid input batch.",
+			"500 Invalid input batch.",
+			"Error: Invalid input batch.",
+		]) {
+			expect(classifyTurnFault(message), message).toBe("transport");
+		}
+	});
+
 	it("reads a rate limit as a refusal", () => {
 		expect(classifyTurnFault("slow down", "rate_limited")).toBe("refusal");
 	});

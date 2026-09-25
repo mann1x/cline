@@ -52,6 +52,12 @@ const TRANSPORT_PATTERNS: readonly RegExp[] = [
 	/^(?:network|connection) (?:error|failure|lost|reset)$/i,
 	/^(?:(?:error:\s*)?(?:502|503|504)\s*)?(?:bad gateway|service unavailable|gateway time-?out)$/i,
 	/^no healthy upstream$/i,
+	// llama.cpp / opencoti: llama_decode failed the shared batch. Every slot
+	// decoding in it gets this, whatever its own request was -- measured on
+	// b108, where one slot's rebase left its positions inconsistent and 47
+	// requests across the swarm ended on it. The request is not at fault; a
+	// new one is prefilled afresh.
+	/^(?:error:\s*)?(?:500\s*)?invalid input batch\.?$/i,
 	// The stream arrived and could not be read: a provider chunk the AI SDK's
 	// schema rejects (`TypeValidationError`) or that is not JSON
 	// (`JSONParseError`). Nothing the model chose -- the bytes on the wire
