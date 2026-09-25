@@ -535,20 +535,107 @@ export function clearPolykvSession(sessionId: string): void {
  * the session is closed. Clearing this with the pool would lose the one fact
  * the resume rule depends on.
  *
- * In-memory, so it does not survive the extension restarting. That is a real
- * gap and a known one: within a process it covers the case that actually
- * happens, a hold lapsing on an idle conversation, and the setters below are
- * the seam through which the host can hydrate it from stored task state later.
+ * In-memory, and hydrated by the host from the session's stored metadata when
+ * a conversation is reopened (see `onPolykvWindowGrant` for the other half):
+ * without that, an extension restart forgot the grant and a resumed
+ * conversation negotiated down like a new one, which is the truncation the
+ * resume rule exists to prevent.
+ *
+ * Deliberately NOT cleared when the session is closed. Closing gives the cells
+ * back to the server; it does not change which window the conversation was
+ * opened with, and a conversation continued after its close must ask for the
+ * same one.
  */
-const POLYKV_GRANTED_WINDOWS = new Map<string, number>();
+const POLYKV_GRANTED_WINDOWS = new Map<string, PolykvWindowGrant>();
 
-/** Record what `X-Context-Window` reported for this session. */
+/**
+ * The window a session was granted, and what it asked for when it was.
+ *
+ * `granted` and `asked` are the numbers on the wire: `num_ctx` and the
+ * `X-Context-Window` that answered it. Under `polykv_private_window_v1` both
+ * are the PRIVATE budget, and the shared prefix the conversation attached to
+ * rides above them -- `sharedTokens` -- so the window the conversation can
+ * actually fill is `granted + sharedTokens` ({@link polykvEffectiveWindow}).
+ */
+export interface PolykvWindowGrant {
+	granted: number;
+	/**
+	 * The window the conversation asked for when it was opened.
+	 *
+	 * Kept from the FIRST grant: every later admission of the session asks for
+	 * exactly the granted window, so the ask on the wire stops saying what the
+	 * user configured the moment the resume rule takes over.
+	 */
+	asked?: number;
+	sharedTokens?: number;
+}
+
+function positiveInteger(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) && value > 0
+		? Math.floor(value)
+		: undefined;
+}
+
+const WINDOW_GRANT_LISTENERS = new Set<
+	(sessionId: string, grant: PolykvWindowGrant) => void
+>();
+
+/**
+ * Be told whenever a session's grant is first learned or changes.
+ *
+ * The host persists it from here, because the grant arrives on a response --
+ * long after the session record was written at start.
+ */
+export function onPolykvWindowGrant(
+	listener: (sessionId: string, grant: PolykvWindowGrant) => void,
+): () => void {
+	WINDOW_GRANT_LISTENERS.add(listener);
+	return () => {
+		WINDOW_GRANT_LISTENERS.delete(listener);
+	};
+}
+
+/**
+ * Record what `X-Context-Window` reported for this session.
+ *
+ * `detail` describes the ask that produced it. It is taken only when the
+ * session has no grant yet -- see {@link PolykvWindowGrant.asked} -- so a
+ * hydrated record or a resumed ask can never overwrite the original ask with
+ * the granted one.
+ */
 export function recordPolykvGrantedWindow(
 	sessionId: string,
 	window: number,
+	detail: { asked?: number; sharedTokens?: number } = {},
 ): void {
-	if (Number.isFinite(window) && window > 0) {
-		POLYKV_GRANTED_WINDOWS.set(sessionId, window);
+	const granted = positiveInteger(window);
+	if (granted === undefined) {
+		return;
+	}
+	const existing = POLYKV_GRANTED_WINDOWS.get(sessionId);
+	const asked = existing ? existing.asked : positiveInteger(detail.asked);
+	const shared = existing
+		? existing.sharedTokens
+		: positiveInteger(detail.sharedTokens);
+	const next: PolykvWindowGrant = {
+		granted,
+		...(asked !== undefined ? { asked } : {}),
+		...(shared !== undefined ? { sharedTokens: shared } : {}),
+	};
+	POLYKV_GRANTED_WINDOWS.set(sessionId, next);
+	if (
+		!existing ||
+		existing.granted !== next.granted ||
+		existing.asked !== next.asked ||
+		existing.sharedTokens !== next.sharedTokens
+	) {
+		for (const listener of WINDOW_GRANT_LISTENERS) {
+			try {
+				listener(sessionId, { ...next });
+			} catch {
+				// A listener's failure is its own; the grant stands.
+			}
+		}
 	}
 }
 
@@ -556,16 +643,99 @@ export function recordPolykvGrantedWindow(
 export function getPolykvGrantedWindow(
 	sessionId: string | undefined,
 ): number | undefined {
-	return sessionId ? POLYKV_GRANTED_WINDOWS.get(sessionId) : undefined;
+	return sessionId ? POLYKV_GRANTED_WINDOWS.get(sessionId)?.granted : undefined;
 }
 
-/** Called when the session is closed, not when its pool is released. */
+/** The whole grant record, for persisting and for the context bar. */
+export function getPolykvWindowGrant(
+	sessionId: string | undefined,
+): PolykvWindowGrant | undefined {
+	const grant = sessionId ? POLYKV_GRANTED_WINDOWS.get(sessionId) : undefined;
+	return grant ? { ...grant } : undefined;
+}
+
+/**
+ * The window the conversation can actually fill: the grant plus the shared
+ * prefix riding above it. `undefined` when no grant is known.
+ */
+export function polykvEffectiveWindow(
+	grant: PolykvWindowGrant | undefined,
+): number | undefined {
+	return grant ? grant.granted + (grant.sharedTokens ?? 0) : undefined;
+}
+
+/**
+ * Read a grant back from stored metadata, rejecting anything malformed.
+ *
+ * The shape is {@link PolykvWindowGrant}; a record that does not carry a
+ * positive `granted` is not a grant, and hydrating from it would pin a resumed
+ * conversation to a window nobody was ever given.
+ */
+export function readPolykvWindowGrant(
+	value: unknown,
+): PolykvWindowGrant | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return undefined;
+	}
+	const record = value as Record<string, unknown>;
+	const granted = positiveInteger(record.granted);
+	if (granted === undefined) {
+		return undefined;
+	}
+	const asked = positiveInteger(record.asked);
+	const shared = positiveInteger(record.sharedTokens);
+	return {
+		granted,
+		...(asked !== undefined ? { asked } : {}),
+		...(shared !== undefined ? { sharedTokens: shared } : {}),
+	};
+}
+
+/**
+ * Forget a session's grant. A test seam and an explicit reset -- NOT called
+ * when a session closes, see {@link POLYKV_GRANTED_WINDOWS}.
+ */
 export function clearPolykvGrantedWindow(sessionId: string): void {
 	POLYKV_GRANTED_WINDOWS.delete(sessionId);
+	POLYKV_WINDOW_OBSERVATIONS.delete(sessionId);
+}
+
+/**
+ * What the LAST admitted response said about the window, per session.
+ *
+ * Separate from the grant on purpose. The grant is the booking, remembered for
+ * the resume rule; this is the per-response reading, and a response without
+ * `X-Context-Window` is not guaranteed -- an overcommit, or a server that is
+ * not enforcing -- so it reads as UNKNOWN (`granted: undefined`), never as
+ * "the same as last time".
+ */
+export interface PolykvWindowObservation {
+	granted?: number;
+	asked?: number;
+	sharedTokens?: number;
+}
+
+const POLYKV_WINDOW_OBSERVATIONS = new Map<string, PolykvWindowObservation>();
+
+export function recordPolykvWindowObservation(
+	sessionId: string,
+	observation: PolykvWindowObservation,
+): void {
+	POLYKV_WINDOW_OBSERVATIONS.set(sessionId, { ...observation });
+}
+
+export function getPolykvWindowObservation(
+	sessionId: string | undefined,
+): PolykvWindowObservation | undefined {
+	const seen = sessionId
+		? POLYKV_WINDOW_OBSERVATIONS.get(sessionId)
+		: undefined;
+	return seen ? { ...seen } : undefined;
 }
 
 export function resetPolykvSessions(): void {
 	POLYKV_GRANTED_WINDOWS.clear();
+	POLYKV_WINDOW_OBSERVATIONS.clear();
 	POLYKV_SESSIONS.clear();
 }
 
@@ -1272,6 +1442,59 @@ async function readJson(
 	return boundedJson(doFetch, url);
 }
 
+/** `GET /kv`'s `allocations[]`, one row per session holding a window. */
+function parseOpencotiAllocations(
+	kv: Record<string, unknown> | undefined,
+): OpencotiAllocation[] {
+	const rawAllocations = Array.isArray(kv?.allocations)
+		? (kv.allocations as Array<Record<string, unknown>>)
+		: [];
+	return rawAllocations.flatMap((entry) => {
+		const window = numberOr(entry.window);
+		if (typeof entry.session_id !== "string" || window === undefined) {
+			return [];
+		}
+		const used = numberOr(entry.used) ?? 0;
+		return [
+			{
+				sessionId: entry.session_id,
+				window,
+				used,
+				free: numberOr(entry.free) ?? Math.max(0, window - used),
+				// Derived only as a fallback: the server states it, and a
+				// division here would silently disagree with theirs on a zero
+				// window.
+				pressure: numberOr(entry.pressure) ?? (window > 0 ? used / window : 0),
+				pools: numberOr(entry.pools) ?? 0,
+			},
+		];
+	});
+}
+
+/**
+ * The per-session allocations, and nothing else, off `GET /kv`.
+ *
+ * For the compaction trigger, which wants one session's raw `pressure` and
+ * none of the rest of the status read. `undefined` when the server does not
+ * offer the route (`kv_status_v1`) or did not answer: "cannot say" is not
+ * "no pressure", and the caller falls back to what it had.
+ */
+export async function readOpencotiAllocations(
+	baseUrl: string | undefined,
+	fetchImpl?: typeof fetch,
+): Promise<OpencotiAllocation[] | undefined> {
+	if (!baseUrl) {
+		return undefined;
+	}
+	const doFetch = fetchImpl ?? fetch;
+	const props = await probeOpencotiProps(baseUrl, doFetch);
+	if (!hasOpencotiFeature(props.features, OPENCOTI_FEATURES.kvStatus)) {
+		return undefined;
+	}
+	const kv = await readJson(doFetch, `${polykvRoot(baseUrl)}/kv`);
+	return kv ? parseOpencotiAllocations(kv) : undefined;
+}
+
 /**
  * Read a server's live PolyKV state for display.
  *
@@ -1444,29 +1667,7 @@ export async function readOpencotiStatus(
 				}
 			: undefined;
 
-	const rawAllocations = Array.isArray(kv?.allocations)
-		? (kv.allocations as Array<Record<string, unknown>>)
-		: [];
-	const allocations: OpencotiAllocation[] = rawAllocations.flatMap((entry) => {
-		const window = numberOr(entry.window);
-		if (typeof entry.session_id !== "string" || window === undefined) {
-			return [];
-		}
-		const used = numberOr(entry.used) ?? 0;
-		return [
-			{
-				sessionId: entry.session_id,
-				window,
-				used,
-				free: numberOr(entry.free) ?? Math.max(0, window - used),
-				// Derived only as a fallback: the server states it, and a
-				// division here would silently disagree with theirs on a zero
-				// window.
-				pressure: numberOr(entry.pressure) ?? (window > 0 ? used / window : 0),
-				pools: numberOr(entry.pools) ?? 0,
-			},
-		];
-	});
+	const allocations = parseOpencotiAllocations(kv);
 
 	return {
 		reachable: true,
