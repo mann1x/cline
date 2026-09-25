@@ -178,7 +178,8 @@ export function createTurnFaultRecovery(
 			const waitMs = refusalBackoffMs(fault.attempt);
 			const line = `${where} refused the turn (${fault.message.trim().slice(0, 200)}); trying again in ${Math.round(waitMs / 1000)} s (refusal ${fault.attempt}).`;
 			options.logger?.log(`[Agents] ${options.label}: ${line}`);
-			report(options.emitUpdate, line, "warn");
+			// A refusal is pacing, not a fault: info, like the spawn-time one.
+			report(options.emitUpdate, line, "info");
 			options.onWaiting?.({
 				kind: "refusal",
 				where,

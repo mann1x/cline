@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { TaskServiceClient } from "@/services/grpc-client"
 import { subagentIdentity, subagentModelLabel } from "./subagentIdentity"
 import { useSubagentLiveness } from "./subagentLiveness"
+import { useCurrentWarnings } from "./subagentWarning"
 
 /**
  * The agents working right now, above the conversation rather than inside it.
@@ -94,10 +95,6 @@ function outputTail(agent: SubagentStatusItem): string | undefined {
 
 /** The warning colour: one orange, readable on the light and the dark themes alike. */
 const WARN_TEXT = "text-[#e8912d]"
-
-function hasWarning(agent: SubagentStatusItem): boolean {
-	return agent.activity?.some((entry) => entry.severity === "warn") ?? false
-}
 
 function clockOf(at: number): string {
 	return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
@@ -255,6 +252,7 @@ function AgentDetail({
 
 export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 	const agents = useMemo(() => liveSubagentsFrom(messages), [messages])
+	const hasWarning = useCurrentWarnings(agents)
 	const [openIndex, setOpenIndex] = useState<number | undefined>(undefined)
 
 	// An agent that finishes while its panel is open would otherwise leave the

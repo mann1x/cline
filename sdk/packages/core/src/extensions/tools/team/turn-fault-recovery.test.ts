@@ -99,7 +99,10 @@ describe("waiting out a refused turn", () => {
 	});
 
 	it("names the refusal on the row and sends the turn again", async () => {
-		const updates: Array<{ latestOutput?: string }> = [];
+		const updates: Array<{
+			latestOutput?: string;
+			activity?: { severity?: string };
+		}> = [];
 		const waits: number[] = [];
 		const recover = createTurnFaultRecovery({
 			label: "a",
@@ -123,5 +126,7 @@ describe("waiting out a refused turn", () => {
 		expect(updates[0]?.latestOutput).toContain(
 			"Node1 refused the turn (pool 5 admission rejected: projected mean tps below floor)",
 		);
+		// A refusal is the engine pacing its load: never a warning.
+		expect(updates[0]?.activity?.severity).not.toBe("warn");
 	});
 });

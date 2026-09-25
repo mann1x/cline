@@ -337,11 +337,14 @@ export async function runPlacedAgent(
 				// On the agent's row as well as in the log: a refused agent
 				// otherwise looks exactly like one that is working, and the
 				// only place the engine's reason appeared was a log file.
+				// Not a warning: an admission refusal is the engine pacing its
+				// load, and waiting it out is the normal path (user ruling
+				// 2026-09-25). The row says what it is waiting for, plainly.
 				const refusedLine = `${where} refused it (refusal ${refusals}): ${refusalReason(failure)}; waiting for room, then trying again`;
 				input.emitUpdate?.({
 					latestOutput: refusedLine,
 					latestOutputKind: "text",
-					activity: { text: refusedLine, severity: "warn" },
+					activity: { text: refusedLine },
 				});
 				await input.beforeRetry?.().catch(() => undefined);
 				front = true;
@@ -388,7 +391,11 @@ export async function runPlacedAgent(
 				input.emitUpdate?.({
 					latestOutput: failedLine,
 					latestOutputKind: "text",
-					activity: { text: failedLine, severity: "warn" },
+					// A node without the model is a configuration fault; one that
+					// is not answering is a wait, and says so without alarm.
+					activity: wasted
+						? { text: failedLine, severity: "warn" }
+						: { text: failedLine },
 				});
 				await input.beforeRetry?.().catch(() => undefined);
 				// Every node down at once must not become a tight loop: the
