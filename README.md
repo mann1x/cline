@@ -270,13 +270,19 @@ What this fork adds there is llama.cpp's own measurements. The server returns a 
 
 opencoti-llamafile is a single-file inference engine from the [opencoti](https://github.com/mann1x/opencoti) project: a llamafile base carrying the opencoti patch series — PolyKV shared-prefix KV pools with a REST control plane, KV residency and quantization, a rolling KV window that spills to host RAM, elastic multi-session serving behind an admission gate, DCA long context, MTP speculative decode, CUDA and Vulkan backends. One executable, no runtime to install, nothing to import.
 
-In the VS Code extension it is configured exactly like llama.cpp — the OpenAI Compatible panel, timings and all. The pool-aware half of it lives in the CLI and SDK, where the engine has a provider of its own and needs no API key:
+It has a provider of its own in the extension, the CLI and the SDK. It needs no API key. In the extension it uses the same form as llama.cpp (timings, the full sampler and the thinking budget) plus a **PolyKV** section. In the CLI:
 
 ```bash
 cline auth --provider opencoti --modelid <model> --baseurl http://localhost:8080/v1
 ```
 
-On that provider, with auto-compaction on, a session pins one PolyKV pool for its system prompt and tool schemas, asks the engine how much room is left before each turn, compacts when the engine reports cache pressure rather than when a token estimate guesses at it, and forks the pool at the prefix afterwards so the expensive part is not processed again. Delegated agents stop counting against a fixed slot limit and let the engine's admission control decide instead.
+What the provider does with the engine:
+
+- **Shared prompts.** The system prompt and tool schemas are about a third of the window. They are held once on the server for every conversation, across VS Code windows and the CLI. The per-session parts (date, folder, rules, mode) travel as a turn of their own. A new conversation books its window minus the shared part.
+- **Agents in a pool tree.** Each delegated agent is its own engine session, attached to a tree of pools: system prompt and tools, then shared knowledge, then role, then its task. Fifty agents fit in one 262k window. With **Use PolyKV agents as Priority 0** on, up to 8 agents run inside your own session before any agent node is used.
+- **Booked windows.** **Book a context window** asks the engine to guarantee the context size, with an optional floor. A reopened conversation asks for exactly the window it had. If the server can't give it back, a **Can't resume** card offers Retry instead of truncating the conversation. The context bar and compaction both size against the window actually granted.
+- **Admission and liveness.** An admission refusal is waited out using the server's `Retry-After` instead of failing. Streams use the server's heartbeat, a server silent for 35 s is treated as down, and the server's boot id is checked on every response. After a restart, pools are rebuilt and turns are retried.
+- **A status strip** under the PolyKV section shows the server's KV ledger, per-session windows and the admission floors in force.
 
 ## Extend With Plugins or MCP Servers
 
@@ -305,6 +311,42 @@ Coordinate multiple agents working together on complex tasks. A coordinator agen
 ```bash
 cline --team-name auth-sprint "Plan and implement user authentication with tests"
 ```
+
+### Sub-agents across your machines
+
+Turn on **Subagents** in Features and the model can hand work to sub-agents with `spawn_agent`. One call can start a whole fan-out. `agents: [{name, task, type?, count?}]` lists them, `type` runs an agent you defined in `.cline/agents`, and `count` repeats an entry. `knowledge` and `instructions` carry the context those agents share, and it is loaded once for all of them.
+
+- **Agent nodes.** The Agents tab holds several nodes, each with its own provider, model and a priority. Agents go to the best-priority node with room and wait in one queue when every node is busy. A node that is unreachable or lacks the model steps aside for a cool-off. In the CLI, `--agent-node model=…,url=…,priority=…,capacity=…` is repeatable.
+- **Swarms.** With **Allow swarms** on and a PolyKV server behind it, `spawn_agent` with `merge: true` runs its agents on a snapshot of your context and returns one merged report.
+- **Watch and steer.** A strip above the chat shows every running agent: its node, model, current tool, speed and recent activity, with **Stop**, **Restart** and **Stop all**. A message you send during a round is answered at once, and the lead can pass it to its agents or stop them.
+- **Resilient rounds.** An agent never fails on infrastructure. After a server restart, a dropped connection or an admission refusal, it waits for the server and runs its turn again. The lead hears about an agent that has been stuck for a while. An agent that keeps running out its thinking budget is nudged once and then stopped, and it still reports.
+- **Every report reaches the lead.** Each agent writes a short summary, and the lead reads any full report with `read_agent_report`. A question from an agent goes to the lead, not to you.
+
+### Agents work on a private copy
+
+A `spawn_agent` agent reads through to your workspace, but its writes stay in a private copy-on-write overlay. When it finishes, each file it changed comes back to the lead as a revision, which the lead reviews and adopts with `restore_file`. Nothing is applied behind your back.
+
+**Agents can run commands** (Features, off by default) lets an agent run commands against its own copy through a native sandbox: user namespaces and overlayfs on Linux, with a ptrace fallback; APFS clonefile on macOS; Detours on Windows. Where there is no launcher for your platform the agent gets no shell, never an unsandboxed one. Teammates, configured agents and swarm workers aren't sandboxed yet, so they get no shell.
+
+## Built for Small Models
+
+A 27B model on a local server fails in ways a frontier model does not, and often silently. Most of what this fork adds exists because a measurement found one of those failures:
+
+- **Prompt templates per model family**, each written by a model of that family. A template you write outranks a shipped one.
+- **One output budget** on every provider: three quarters of the window, capped at 96,000 tokens per turn, adjustable with a slider. The number the prompt states is the number sent to the server.
+- **Compaction that keeps the thread.** The summary is a present-tense replay that cites tool calls by number instead of copying them. What you typed is quoted verbatim, and the harness's own record of every tool call sits beside it. Compaction Council checks each half of the transcript against the summary.
+- **A context bar that shows the fixed price**: system prompt, tool schemas and MCP schemas, before the conversation starts. Tools can be switched off per profile.
+- **Tool calls read the shapes models actually send**, such as an array sent as a string or a single path where a list is expected. Refusals point at the character that went wrong.
+- **Guards** catch reasoning loops, repeated calls, non-convergence and files changed behind the model's back. An atomic change protocol with `restore_file` undoes damage.
+- **Questions recommend an option.** When the model asks you to choose, it marks the option it would pick. Optionally, **Jev** scores the options before they reach you.
+- **Generated images reach you on text-only models.** The model gets a text result and the chat shows the image.
+
+## Conversation History
+
+- **Tags.** Right-click a conversation to tag it, then type `#tag` in the history search or click a chip to filter, with **Any / All**. The home view's recent list shows tags too.
+- **What a session ran with.** Rest on a history row to see its provider, model, context window, output budget, reasoning and sampler. Credentials are never recorded.
+- **Size on disk** splits a conversation into its transcript, its agents' transcripts and their overlays. Delete removes all of it.
+- **News.** The home view shows this fork's own announcements when there are any.
 
 ## Scheduled Agents
 

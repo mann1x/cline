@@ -30,11 +30,37 @@ gates. A 9B model and a frontier model do not need the same instructions.
 expert can be brought in on the same transaction, make the edits, and hand back —
 while the base model stays live and supervises rather than sitting blocked.
 
-**Sub-agents.** Delegate a self-contained piece of work to a separate agent with
-its own tools and context, and get the result back without spending the main
-conversation's window on it.
+**Sub-agents across your machines.** Delegate work to agents with their own tools
+and context. One `spawn_agent` call can start a whole fan-out: a list of agents,
+agents you defined in `.cline/agents`, and shared context loaded once. The Agents
+tab holds several **nodes**, each with its own provider, model and priority, and
+agents queue for the best node with room. On a PolyKV server, `merge: true` runs
+them as a swarm on a snapshot of your context with one merged report.
 
-**Image generation.** Generate images directly in the conversation.
+**Watch and steer them.** A strip above the chat shows each running agent: its
+node, model, current tool, speed and recent activity, with Stop, Restart and Stop
+all. Send a message mid-round and the lead answers at once. An agent never fails
+on a server restart or refusal. It waits and runs its turn again, and every
+agent's report reaches the lead.
+
+**Agents work on a private copy.** A `spawn_agent` agent's edits stay in a
+copy-on-write overlay and come back to the lead as revisions to review and
+adopt. Nothing is applied behind your back. With **Agents can run commands** on,
+its commands run in a native sandbox against that copy on Linux, macOS and
+Windows.
+
+**Questions that recommend.** When the model asks you to choose, it marks the
+option it would pick and lists it first. Optionally, Jev scores the options.
+
+**Image generation.** Generate images in the conversation, and see them there even
+when the working model is text-only.
+
+**Compaction that keeps the thread.** The summary is a present-tense replay that
+cites tool calls instead of copying them, quotes what you typed verbatim, and is
+checked against the transcript by a council of reviewers.
+
+**Conversation history.** Tag conversations and filter by `#tag`, see what model
+and settings a session ran with, and check its size on disk.
 
 **An atomic transaction protocol.** Edits land as a transaction with a readable
 base revision, a `restore_file` escape hatch, and an approved completion check.
@@ -51,10 +77,11 @@ verbatim-repetition nudge, a turn-level non-convergence signal, and an
 unchanged-read ledger — one observed session re-read the same 14 KB file 31
 times, burning roughly 110k tokens.
 
-**Local-serving support.** Ollama's thinking budget and cloud-tag handling,
-llama.cpp and opencoti-llamafile read back with the server's own timings,
-PolyKV agentic KV pools on opencoti, per-profile configuration, a VS Code MCP
-bridge, and capability-list fixes.
+**Local-serving support.** One output budget on every provider, a context bar
+that shows what the tool schemas cost, tools switchable per profile, Ollama's
+thinking budget and cloud models, the full sampler on llama.cpp and
+opencoti-llamafile with the server's own timings, PolyKV pools on opencoti,
+per-profile configuration, and a VS Code MCP bridge.
 
 ## Install
 
@@ -150,22 +177,19 @@ host RAM, elastic multi-session serving behind an admission gate, DCA long
 context, MTP speculative decode, CUDA and Vulkan backends. One executable, no
 runtime to install, nothing to import.
 
-In the extension it is configured exactly like llama.cpp — the OpenAI Compatible
-panel, timings and all.
-
-The pool-aware half of it lives in the CLI and SDK, where the engine has a
-provider of its own and needs no API key:
+It has a provider of its own, with no API key. It uses the same form as llama.cpp
+(timings, sampler, thinking budget) plus a **PolyKV** section. In the CLI:
 
 ```bash
 cline auth --provider opencoti --modelid <model> --baseurl http://localhost:8080/v1
 ```
 
-On that provider, with auto-compaction on, a session pins one PolyKV pool for
-its system prompt and tool schemas, asks the engine how much room is left before
-each turn, compacts when the engine reports cache pressure rather than when a
-token estimate guesses at it, and forks the pool at the prefix afterwards so the
-expensive part is not processed again. Delegated agents stop counting against a
-fixed slot limit and let the engine's admission control decide instead.
+On that provider the system prompt and tool schemas are held once on the server
+for every conversation, and each delegated agent runs in a shared tree of pools,
+so fifty agents fit in one window. **Book a context window** guarantees the
+context size, and a reopened conversation gets the same window back or a **Can't
+resume** card instead of a silent truncation. Admission refusals are waited out,
+and a server restart is detected and recovered from rather than failing the turn.
 
 ## Not affiliated with Cline
 
