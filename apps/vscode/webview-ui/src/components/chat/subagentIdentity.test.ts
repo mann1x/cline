@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { subagentIdentity } from "./subagentIdentity"
+import { subagentIdentity, subagentModelLabel } from "./subagentIdentity"
 
 describe("subagentIdentity", () => {
 	it("uses the name the lead gave the sub-agent", () => {
@@ -35,5 +35,22 @@ describe("subagentIdentity", () => {
 		// The colour is the position, not the name -- a renamed agent in the
 		// same slot keeps its colour, and two agents cannot collide on one.
 		expect(subagentIdentity(2, "tests").style).toEqual(subagentIdentity(2, "docs").style)
+	})
+})
+
+describe("subagentModelLabel", () => {
+	it("reads provider/model", () => {
+		expect(subagentModelLabel({ providerId: "opencoti", modelId: "v9-agentic" })).toBe("opencoti/v9-agentic")
+	})
+
+	it("does not repeat a provider the model id already names", () => {
+		expect(subagentModelLabel({ providerId: "anthropic", modelId: "anthropic/claude-x" })).toBe("anthropic/claude-x")
+	})
+
+	it("uses whichever half is known, and nothing when neither is", () => {
+		expect(subagentModelLabel({ modelId: "local-model" })).toBe("local-model")
+		expect(subagentModelLabel({ providerId: "ollama" })).toBe("ollama")
+		expect(subagentModelLabel({})).toBeUndefined()
+		expect(subagentModelLabel({ providerId: " ", modelId: "" })).toBeUndefined()
 	})
 })

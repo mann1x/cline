@@ -42,3 +42,22 @@ export function subagentIdentity(index: number, agentName?: string): SubagentIde
 		},
 	}
 }
+
+/**
+ * What an agent runs on, as `provider/model`.
+ *
+ * Shown beside the agent's tag while it runs, not only once it is done: a
+ * configured agent can name a provider and a model of its own, and a node
+ * decides both for an agent placed on it, so the lead's are no guide. Either
+ * half alone when that is all there is; nothing when neither is known.
+ */
+export function subagentModelLabel(item: { providerId?: string; modelId?: string }): string | undefined {
+	const provider = item.providerId?.trim()
+	const model = item.modelId?.trim()
+	if (provider && model) {
+		// A model id that already names its provider (an OpenRouter-style id)
+		// would otherwise read `anthropic/anthropic/claude-…`.
+		return model.startsWith(`${provider}/`) ? model : `${provider}/${model}`
+	}
+	return model || provider || undefined
+}

@@ -225,10 +225,19 @@ export class VscodeTerminalManager {
 			vscodeTerminalInfo.busy = false
 		})
 		process.once("error", () => {
-			// A stream/API failure does not prove the launched command stopped.
-			// Evict the terminal from Cerebriline reuse without disposing potentially
-			// active user work.
-			this.evictTerminal(vscodeTerminalInfo)
+			// A stream/API failure does not prove the launched command stopped, so
+			// the terminal is never reused. Evicting it alone left it open with
+			// nothing that would ever close it (mann1x/cline#56): while
+			// Cerebriline still owns the command, it goes through the same
+			// deferred cleanup as a terminal abandoned during preparation, and
+			// closes at the next acquisition boundary -- the policy a managed
+			// unobserved command already gets. A command the user took over
+			// (continued/detached) may be their work and is only evicted.
+			if (process.getOwnership() === "managed") {
+				this.discardTerminal(vscodeTerminalInfo)
+			} else {
+				this.evictTerminal(vscodeTerminalInfo)
+			}
 		})
 
 		process.once("unobserved_command", (outcome) => {

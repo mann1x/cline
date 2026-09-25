@@ -2,6 +2,7 @@ import type { AgentEvent } from "@cline/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
 	createSubagentProgress,
+	reportSubagentModel,
 	reportSubagentPlaced,
 	reportSubagentQueued,
 	SUBAGENT_OUTPUT_TAIL_CHARS,
@@ -41,8 +42,27 @@ describe("reporting what a sub-agent is doing", () => {
 		});
 	});
 
-	// An agent between tools is thinking, not still running the last one it
-	// finished, so the end of a tool says nothing new.
+	// #77: "doing" kept naming the last tool while the agent had gone back to
+	// thinking. The end of the tool it started clears it.
+	it("stops naming a tool once it has ended", () => {
+		const emitUpdate = vi.fn();
+		const progress = createSubagentProgress(emitUpdate);
+		const toolEnd = {
+			type: "content_end",
+			contentType: "tool",
+			toolName: "editor",
+		} as AgentEvent;
+
+		progress.observe(toolStart("read_files"));
+		progress.observe(toolStart("editor"));
+		progress.observe(toolEnd);
+		// One of a parallel pair is still running.
+		expect(emitUpdate).not.toHaveBeenCalledWith({ latestToolCall: null });
+		progress.observe(toolEnd);
+		expect(emitUpdate).toHaveBeenLastCalledWith({ latestToolCall: null });
+	});
+
+	// The end of a tool it never saw start says nothing.
 	// Text is reported as output (below), never as a tool call.
 	it("counts only a tool starting as a tool call", () => {
 		const emitUpdate = vi.fn();
@@ -231,6 +251,31 @@ describe("placement", () => {
 		reportSubagentPlaced(emitUpdate, undefined);
 		expect(emitUpdate).toHaveBeenCalledWith({ queued: false });
 		expect(() => reportSubagentQueued(undefined)).not.toThrow();
+	});
+});
+
+describe("the model an agent runs on", () => {
+	// #78: the row named the model only from the final result, so while an
+	// agent ran nothing said which model -- or which provider -- it was on.
+	it("names the provider and the model", () => {
+		const emitUpdate = vi.fn();
+		reportSubagentModel(emitUpdate, {
+			providerId: "opencoti",
+			modelId: "v9-agentic",
+		});
+		expect(emitUpdate).toHaveBeenCalledWith({
+			providerId: "opencoti",
+			modelId: "v9-agentic",
+		});
+	});
+
+	it("sends nothing when there is nothing to name", () => {
+		const emitUpdate = vi.fn();
+		reportSubagentModel(emitUpdate, {});
+		expect(emitUpdate).not.toHaveBeenCalled();
+		expect(() =>
+			reportSubagentModel(undefined, { providerId: "x" }),
+		).not.toThrow();
 	});
 });
 

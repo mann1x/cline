@@ -104,4 +104,64 @@ describe("ActionButtons", () => {
 		expect(screen.getByRole("button", { name: "Save" })).not.toBeDisabled()
 		expect(screen.getByRole("button", { name: "Reject" })).not.toBeDisabled()
 	})
+
+	describe("Cancel follows the loader, not the phase (#83)", () => {
+		const task: ClineMessage = { ts: 1, type: "say", say: "task", text: "do it", partial: false }
+
+		it("shows Cancel while a just-sent follow-up is unacknowledged and the phase is still idle", () => {
+			mockTurnState.mockReturnValue({ phase: "idle", seq: 4 })
+			const executeButtonAction = vi.fn().mockResolvedValue(undefined)
+			const chatState = {
+				...makeChatState(),
+				pendingResponse: { id: 1, turnStateSeq: 4, messageCount: 1 },
+			} as unknown as ChatState
+
+			render(
+				<ActionButtons
+					chatState={chatState}
+					messageHandlers={{ executeButtonAction } as unknown as MessageHandlers}
+					messages={[task]}
+					mode="act"
+					task={task}
+				/>,
+			)
+
+			fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+			expect(executeButtonAction).toHaveBeenCalledWith("cancel", "", [], [])
+		})
+
+		it("shows Cancel while a partial reasoning row streams under a stale awaiting_followup phase", () => {
+			mockTurnState.mockReturnValue({ phase: "awaiting_followup", seq: 9 })
+			const reasoning: ClineMessage = { ts: 2, type: "say", say: "reasoning", text: "hmm", partial: true }
+
+			render(
+				<ActionButtons
+					chatState={makeChatState()}
+					messageHandlers={{ executeButtonAction: vi.fn() } as unknown as MessageHandlers}
+					messages={[task, reasoning]}
+					mode="act"
+					task={task}
+				/>,
+			)
+
+			expect(screen.getByRole("button", { name: "Cancel" })).not.toBeDisabled()
+		})
+
+		it("shows no buttons once the reasoning row is final and nothing is pending", () => {
+			mockTurnState.mockReturnValue({ phase: "awaiting_followup", seq: 9 })
+			const reasoning: ClineMessage = { ts: 2, type: "say", say: "reasoning", text: "hmm", partial: false }
+
+			render(
+				<ActionButtons
+					chatState={makeChatState()}
+					messageHandlers={{ executeButtonAction: vi.fn() } as unknown as MessageHandlers}
+					messages={[task, reasoning]}
+					mode="act"
+					task={task}
+				/>,
+			)
+
+			expect(screen.queryByRole("button")).not.toBeInTheDocument()
+		})
+	})
 })

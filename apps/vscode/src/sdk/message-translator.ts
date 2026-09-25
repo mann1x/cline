@@ -2400,6 +2400,9 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 							}
 							entry.latestToolCall = updateData.latestToolCall
 						}
+						// Its tool has ended and it is thinking again (#77): the row
+						// stops naming the tool rather than showing it until the next.
+						if (updateData.latestToolCall === null) entry.latestToolCall = undefined
 						if (typeof updateData.latestOutput === "string") entry.latestOutput = updateData.latestOutput
 						if (updateData.latestOutputKind === "text" || updateData.latestOutputKind === "reasoning")
 							entry.latestOutputKind = updateData.latestOutputKind
@@ -2416,6 +2419,10 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						// end, when it no longer explains anything.
 						if (typeof updateData.nodeId === "string") entry.nodeId = updateData.nodeId
 						if (typeof updateData.nodeLabel === "string") entry.nodeLabel = updateData.nodeLabel
+						// The model it runs on, sent when its attempt is built (#78). The
+						// final result still overwrites these with what actually answered.
+						if (typeof updateData.providerId === "string") entry.providerId = updateData.providerId
+						if (typeof updateData.modelId === "string") entry.modelId = updateData.modelId
 						if (
 							updateData.queued === false &&
 							(typeof updateData.nodeLabel === "string" || typeof updateData.nodeId === "string")

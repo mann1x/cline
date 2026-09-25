@@ -5,7 +5,8 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { TaskServiceClient } from "@/services/grpc-client"
-import { subagentIdentity } from "./subagentIdentity"
+import { subagentIdentity, subagentModelLabel } from "./subagentIdentity"
+import { useSubagentLiveness } from "./subagentLiveness"
 
 /**
  * The agents working right now, above the conversation rather than inside it.
@@ -152,11 +153,15 @@ function AgentDetail({
 	const node = nodeNameOf(agent)
 	const doing = agent.latestToolCall?.trim() || (agent.status === "pending" ? "queued" : "thinking")
 	const tools = `${agent.toolCalls} tool${agent.toolCalls === 1 ? "" : "s"}`
-	const tps = agent.status === "running" && agent.genTps ? `~${agent.genTps} tok/s` : ""
-	const details = [
-		agent.modelId ?? "",
-		agent.contextTokens ? `${Intl.NumberFormat("en-US").format(agent.contextTokens)} tokens` : "",
-	].filter(Boolean)
+	// A speed is only shown while output is arriving; with the deltas stopped
+	// the last figure is history, and the agent is idle (#77).
+	const liveness = useSubagentLiveness(agent)
+	const tps = agent.status === "running" && agent.genTps ? (liveness.tpsIdle ? "idle" : `~${agent.genTps} tok/s`) : ""
+	const silent = agent.status === "running" ? liveness.silentForSec : undefined
+	const model = subagentModelLabel(agent)
+	const details = [agent.contextTokens ? `${Intl.NumberFormat("en-US").format(agent.contextTokens)} tokens` : ""].filter(
+		Boolean,
+	)
 	const tail = outputTail(agent)
 
 	return (
@@ -172,6 +177,11 @@ function AgentDetail({
 					style={identity.style}>
 					{identity.label}
 				</span>
+				{model && (
+					<span className="max-w-[12rem] shrink truncate font-mono opacity-70" title={model}>
+						{model}
+					</span>
+				)}
 				{onStop && (
 					<button
 						aria-label={`Stop ${identity.label}`}
@@ -205,6 +215,13 @@ function AgentDetail({
 				)}
 				<span className="shrink-0 opacity-70">{tools}</span>
 				<span className="min-w-0 flex-1 truncate font-mono opacity-70">{doing}</span>
+				{silent !== undefined && (
+					<span
+						className={`shrink-0 tabular-nums ${WARN_TEXT}`}
+						title="Nothing has been reported by this agent for a while">
+						no activity for {silent}s
+					</span>
+				)}
 				{node && <span className="max-w-[8rem] shrink-0 truncate opacity-70">on {node}</span>}
 				{tps && <span className="shrink-0 tabular-nums opacity-70">{tps}</span>}
 				<button

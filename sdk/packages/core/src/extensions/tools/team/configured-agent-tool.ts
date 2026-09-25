@@ -37,6 +37,7 @@ import {
 import {
 	createSubagentProgress,
 	DELEGATION_PACING_NOTE,
+	reportSubagentModel,
 	restarted,
 	watchPolykvRoom,
 } from "./subagent-progress";
@@ -473,6 +474,11 @@ export function createConfiguredAgentTools(
 						runtimeConfig: typeof provisional,
 						admitted: () => void,
 					): Promise<AgentResult> => {
+						// The row names the model while it runs, not only once it is done.
+						reportSubagentModel(context.emitUpdate, {
+							providerId: runtimeConfig.providerId,
+							modelId: runtimeConfig.modelId,
+						});
 						const subAgent = createDelegatedAgent({
 							// What the lead's side turn leaves for it while the lead waits.
 							consumePendingUserMessage: async () => cancellation.takeMessage(),

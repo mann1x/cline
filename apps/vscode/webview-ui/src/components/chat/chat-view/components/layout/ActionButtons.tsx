@@ -4,8 +4,9 @@ import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 import type React from "react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useExtensionState } from "../../../../../context/ExtensionStateContext"
-import { ButtonActionType, getButtonConfigFromState } from "../../shared/buttonConfig"
+import { ButtonActionType, getButtonConfigFromState, hasPartialSayTail, withCancelWhileRunning } from "../../shared/buttonConfig"
 import type { ChatState, MessageHandlers } from "../../types/chatTypes"
+import { isPendingResponseUnconfirmed } from "../../utils/pendingResponse"
 
 interface ActionButtonsProps {
 	task?: ClineMessage
@@ -40,9 +41,20 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({ task, messages, ch
 	// path); otherwise it falls back to the legacy tail-walking heuristic. This makes the footer
 	// buttons immune to trailing bookkeeping messages and never disagree with the thinking
 	// indicator (RC1).
+	//
+	// The loader, however, can be up while the phase still describes the previous turn: an
+	// unacknowledged submission shows it optimistically, and a partial reasoning/text row renders
+	// as a live row whatever the phase. Cancel follows the loader, not the phase (#83).
+	const pendingResponseUnconfirmed = isPendingResponseUnconfirmed(chatState.pendingResponse, turnState, messages.length)
 	const buttonConfig = useMemo(() => {
-		return getButtonConfigFromState(messages, turnState, mode, foregroundCommandRunning)
-	}, [messages, turnState, mode, foregroundCommandRunning])
+		const fromState = getButtonConfigFromState(messages, turnState, mode, foregroundCommandRunning)
+		return withCancelWhileRunning(
+			fromState,
+			turnState,
+			{ pendingResponseUnconfirmed, partialTail: hasPartialSayTail(messages) },
+			foregroundCommandRunning,
+		)
+	}, [messages, turnState, mode, foregroundCommandRunning, pendingResponseUnconfirmed])
 
 	// Identity of the ask that currently owns the footer buttons. The button config objects are
 	// shared singletons (e.g. BUTTON_CONFIGS.tool_approve), so two consecutive identical asks

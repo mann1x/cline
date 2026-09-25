@@ -1,6 +1,6 @@
 import type { ClineMessage, SubagentStatusItem } from "@shared/ExtensionMessage"
-import { fireEvent, render, screen } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { act, fireEvent, render, screen } from "@testing-library/react"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({ cancelSubagent: vi.fn(), restartSubagent: vi.fn() }))
 vi.mock("@/services/grpc-client", () => ({
@@ -139,6 +139,20 @@ describe("the working-agents strip", () => {
 		fireEvent.click(screen.getByRole("button", { name: /js-syntactic/ }))
 		expect(screen.getByText("on Node1")).toBeInTheDocument()
 		expect(screen.queryByText(/primary/)).not.toBeInTheDocument()
+	})
+
+	// #78: the provider and model, beside the agent's name, while it runs.
+	it("names the provider and model an agent is running on", () => {
+		render(
+			<ActiveSubagents
+				messages={[
+					statusMessage([item({ index: 1, agentName: "js-syntactic", providerId: "opencoti", modelId: "v9-agentic" })]),
+				]}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /js-syntactic/ }))
+		expect(screen.getByText("opencoti/v9-agentic")).toBeInTheDocument()
 	})
 
 	// A run recorded before nodes were named still has to say something.
@@ -422,5 +436,37 @@ describe("stopping every agent at once", () => {
 	it("offers no stop-all when nothing can be stopped", () => {
 		render(<ActiveSubagents messages={[statusMessage([item({ index: 1 })])]} />)
 		expect(screen.queryByRole("button", { name: "Stop all agents" })).toBeNull()
+	})
+})
+
+describe("an agent that has stopped producing (#77)", () => {
+	beforeEach(() => {
+		vi.useFakeTimers()
+	})
+	afterEach(() => {
+		vi.useRealTimers()
+	})
+
+	it("stops quoting a speed once output stops, and says how long it has been quiet", () => {
+		render(
+			<ActiveSubagents
+				messages={[statusMessage([item({ index: 1, agentName: "writer", latestOutput: "text", genTps: 21.5 })])]}
+			/>,
+		)
+		fireEvent.click(screen.getByRole("button", { name: /writer/ }))
+		expect(screen.getByText("~21.5 tok/s")).toBeInTheDocument()
+		expect(screen.queryByText(/no activity/)).not.toBeInTheDocument()
+
+		act(() => {
+			vi.advanceTimersByTime(6_000)
+		})
+		expect(screen.queryByText("~21.5 tok/s")).not.toBeInTheDocument()
+		expect(screen.getByText("idle")).toBeInTheDocument()
+		expect(screen.queryByText(/no activity/)).not.toBeInTheDocument()
+
+		act(() => {
+			vi.advanceTimersByTime(25_000)
+		})
+		expect(screen.getByText("no activity for 31s")).toBeInTheDocument()
 	})
 })

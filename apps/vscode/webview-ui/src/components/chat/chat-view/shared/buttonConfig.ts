@@ -420,3 +420,49 @@ export function getButtonConfigFromState(
 	}
 	return getButtonConfigForMessages(messages, mode)
 }
+
+/**
+ * Whether the tail of the conversation (ignoring bookkeeping rows) is a partial say row. ChatRow
+ * renders such a row as a live Thinking/Generating row whatever the backend phase says.
+ */
+export function hasPartialSayTail(messages: ClineMessage[]): boolean {
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const message = messages[index]
+		if (!isInertStatusMessage(message)) {
+			return message.type === "say" && message.partial === true
+		}
+	}
+	return false
+}
+
+/**
+ * Cancel must be reachable whenever the Thinking/Generating loader is on screen (#83). Two
+ * signals put the loader up while the replica's phase still describes the previous turn:
+ * - `pendingResponseUnconfirmed`: a submission this webview just made that the backend has not
+ *   acknowledged yet (the optimistic `forceShow` loader, see isPendingResponseUnconfirmed);
+ * - `partialTail`: a partial say row at the tail (see hasPartialSayTail).
+ * The phase-driven config gives no buttons for idle/awaiting_followup, and a stale "completed"
+ * offers Start New Task, so while either signal holds those are replaced by the streaming set.
+ *
+ * Left alone: awaiting_approval (the approval is real and must stay actionable), streaming
+ * (already Cancel), and error unless the signal is a fresh submission (a stream that fails
+ * mid-reasoning can leave a partial row behind the Retry buttons).
+ */
+export function withCancelWhileRunning(
+	config: ButtonConfig,
+	turnState: TurnState | undefined,
+	running: { pendingResponseUnconfirmed: boolean; partialTail: boolean },
+	foregroundCommandRunning = false,
+): ButtonConfig {
+	if (!running.pendingResponseUnconfirmed && !running.partialTail) {
+		return config
+	}
+	const phase = turnState?.phase
+	if (phase === "awaiting_approval" || phase === "streaming") {
+		return config
+	}
+	if (phase === "error" && !running.pendingResponseUnconfirmed) {
+		return config
+	}
+	return foregroundCommandRunning ? BUTTON_CONFIGS.foreground_command_running : BUTTON_CONFIGS.partial
+}

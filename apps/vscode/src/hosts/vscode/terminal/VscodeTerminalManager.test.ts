@@ -390,6 +390,34 @@ describe("VscodeTerminalManager", () => {
 		}
 	})
 
+	// mann1x/cline#56: the error path evicted the terminal and nothing ever
+	// closed it. It is queued for the same cleanup as an abandoned terminal.
+	it("closes a terminal whose command stream failed at the next acquisition", async () => {
+		setVscodeHostProviderMock()
+		const terminalInfo = TerminalRegistry.createTerminal("/tmp/cline-stream-error-cleanup")
+		sandbox.stub(terminalInfo.terminal, "shellIntegration").get(() => ({
+			cwd: vscode.Uri.file("/tmp/cline-stream-error-cleanup"),
+			executeCommand: () => ({ read: () => createFailingStream(new Error("command stream failed")) }),
+		}))
+		const disposeSpy = sandbox.spy(terminalInfo.terminal, "dispose")
+
+		const process = manager.runCommand(
+			terminalInfo as unknown as Parameters<VscodeTerminalManager["runCommand"]>[0],
+			"long-running-command",
+		)
+		await assert.rejects(process, /command stream failed/)
+		assert.equal(disposeSpy.called, false, "the failed command's terminal is not closed under it")
+
+		const nextTerminal = (await manager.getOrCreateTerminal("/tmp/cline-stream-error-cleanup")) as unknown as TerminalInfo
+		try {
+			assert.equal(disposeSpy.calledOnce, true, "the next acquisition closes the failed terminal")
+			assert.notEqual(nextTerminal.id, terminalInfo.id)
+		} finally {
+			nextTerminal.terminal.dispose()
+			TerminalRegistry.removeTerminal(nextTerminal.id)
+		}
+	})
+
 	it("continues terminal acquisition when pending cleanup fails", async () => {
 		setVscodeHostProviderMock()
 		const failedCleanup = TerminalRegistry.createTerminal()
