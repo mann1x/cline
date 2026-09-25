@@ -12,6 +12,7 @@ import { useApiConfigurationHandlers } from "@/components/settings/utils/useApiC
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import HomeHeader from "@/components/welcome/HomeHeader"
+import NewsPanel from "@/components/welcome/NewsPanel"
 import { SuggestedTasks } from "@/components/welcome/SuggestedTasks"
 import CreateWorktreeModal from "@/components/worktrees/CreateWorktreeModal"
 import { useClineAuth } from "@/context/ClineAuthContext"
@@ -54,6 +55,7 @@ export const WelcomeSection: React.FC<WelcomeSectionProps> = ({
 		lastDismissedModelBannerVersion,
 		dismissedBanners,
 		availableUpdate,
+		news,
 	} = useExtensionState()
 
 	// Track if we've shown the "What's New" modal this session
@@ -399,12 +401,13 @@ export const WelcomeSection: React.FC<WelcomeSectionProps> = ({
 				version={version}
 				welcomeBanners={welcomeBanners}
 			/>
-			<div className="overflow-y-auto flex flex-col pb-2.5">
+			<div className="overflow-y-auto flex flex-col flex-1 min-h-0 pb-2.5">
 				<HomeHeader shouldShowQuickWins={shouldShowQuickWins} />
 				{!showWhatsNewModal && (
 					<>
 						<BannerCarousel banners={activeBanners} />
 						{!shouldShowQuickWins && taskHistory.length > 0 && <HistoryPreview showHistoryView={showHistoryView} />}
+						<NewsPanel news={news ?? []} />
 						{/* Quick launch worktree button */}
 						{isGitRepo && worktreesEnabled?.featureFlag && worktreesEnabled?.user && (
 							<div className="flex flex-col items-center gap-3 mt-2 mb-4 px-5">

@@ -9,6 +9,7 @@ export default defineConfig({
 		include: [
 			"src/sdk/**/*.test.ts",
 			"src/services/updates/**/*.test.ts",
+			"src/services/news/**/*.test.ts",
 			"src/hosts/vscode/VscodeEditPreview.test.ts",
 			"src/shared/atomic-protocol-defaults.test.ts",
 			"src/shared/escalation-thresholds.test.ts",

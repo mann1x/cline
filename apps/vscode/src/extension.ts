@@ -15,6 +15,7 @@ import { WebviewProvider } from "./core/webview"
 import { createClineAPI } from "./exports"
 import "./utils/path" // necessary to have access to String.prototype.toPosix
 import path from "node:path"
+import { registerNewsRefresh } from "@services/news/news-service"
 import { checkForUpdates, registerUpdateChecks } from "@services/updates/update-service"
 import type { ExtensionContext } from "vscode"
 import { HostProvider } from "@/hosts/host-provider"
@@ -171,6 +172,11 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand(commands.CheckForUpdates, () => checkForUpdates(context, { manual: true })),
 	)
 	registerUpdateChecks(context)
+	// The home view's news panel, fed from the fork's own news.json rather than
+	// upstream's banner service. See `services/news/news-service.ts`.
+	registerNewsRefresh(context, async () => {
+		await WebviewProvider.getVisibleInstance()?.controller.postStateToWebview()
+	})
 
 	context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(DIFF_VIEW_URI_SCHEME, diffContentProvider))
 

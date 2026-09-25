@@ -26,6 +26,7 @@ import { readQaCredentialNames } from "@/sdk/qa-credentials-store"
 import { BannerService } from "@/services/banner/BannerService"
 import { featureFlagsService } from "@/services/feature-flags"
 import { getDistinctId } from "@/services/logging/distinctId"
+import { getCurrentNews } from "@/services/news/news-service"
 import { getExtensionVariant } from "@/services/telemetry/rollout-metadata"
 import { getLatestAnnouncementId } from "@/utils/announcements"
 import { getClineOnboardingModels } from "../models/getClineOnboardingModels"
@@ -207,6 +208,7 @@ export async function getStateToPostToWebview(controller: {
 		showRequestTimings,
 		updateChannel,
 		availableUpdate,
+		news: getCurrentNews(),
 		cappedThinkingPrompt,
 		defaultCappedThinkingPrompt: DEFAULT_CAPPED_THINKING_PROMPT,
 		focusChainSettings,
