@@ -176,19 +176,22 @@ what broke, with file:line and the failing output.
 | Tool | Who | What |
 |---|---|---|
 | `team_spawn_teammate` | lead | `agentId`, `rolePrompt`, optional `temperature`/`seed`/`temperature_range` |
-| `team_shutdown_teammate` | lead | `agentId`, optional `reason`. The teammate is removed, reason or not; only the session shutting down keeps teammates for restore |
-| `team_run_task` | any | `agentId`, `task`, optional `taskId`, `runMode` (`sync` default / `async`), `continueConversation`, `max_iterations` |
-| `team_await_runs`, `team_list_runs`, `team_cancel_run` | any | Wait for, list, or cancel async runs. The wait has no time limit: it ends when the runs do, or when the lead is stopped. A teammate waiting for all runs does not wait for its own. Each finished run's answer (`resultSummary.text`) is whole up to 1,000 characters; a longer one is its opening plus a full report to read with `read_agent_report` |
-| `team_task` | any | Task board: `create`, `list`, `claim`, `complete`, `block`. Supports `dependsOn` |
-| `team_send_message`, `team_broadcast`, `team_read_mailbox` | any | Mailbox. Unread mail is put at the head of the teammate's next run |
+| `team_shutdown_teammate` | lead | `agentId`, optional `reason`. The teammate's running task is stopped and its queued ones are cancelled. It takes no more tasks until it is spawned again under the same `agentId` |
+| `team_run_task` | lead | `agentId`, `task`, optional `taskId`, `runMode` (`sync` default / `async`), `continueConversation`, `max_iterations`. A sync answer is whole up to 1,000 characters; a longer one is its opening plus a full report to read with `read_agent_report` |
+| `team_await_runs`, `team_list_runs`, `team_cancel_run` | lead | Wait for, list, or cancel async runs. The wait has no time limit: it ends when the runs do, or when the lead is stopped. Cancelling a running run stops the teammate's task, and the next one starts. Each finished run's answer (`resultSummary.text`) is whole up to 1,000 characters; a longer one is its opening plus a full report to read with `read_agent_report` |
+| `team_task` | any | Task board: `create`, `list`, `claim`, `complete`, `block`. Supports `dependsOn`. A teammate gets `list`, `claim`, `complete` and `block` |
+| `team_send_message`, `team_read_mailbox` | any | Mailbox. Unread mail is put at the head of the teammate's next run. A teammate writes to the lead as `lead` |
+| `team_broadcast` | lead | A message to every teammate |
 | `team_mission_log` | any | Log entries (`progress`, `handoff`, `blocked`, `decision`, `done`, `error`) |
-| `team_create_outcome`, `team_attach_outcome_fragment`, `team_review_outcome_fragment`, `team_finalize_outcome`, `team_list_outcomes` | any | A document built from reviewed sections |
-| `team_status` | any | Counts only: members, tasks, unread mail, runs, outcomes |
+| `team_create_outcome`, `team_attach_outcome_fragment`, `team_review_outcome_fragment`, `team_finalize_outcome`, `team_list_outcomes` | lead | A document built from reviewed sections |
+| `team_status` | lead | Counts only: members, tasks, unread mail, runs, outcomes |
 | `team_cleanup` | lead | Wipes the team state, persisted too, so a reload does not bring it back. Fails while anything is active |
 
 **Behaviour to know:**
 
-- **One run at a time.** A teammate runs one task at a time. Sync calls from the same caller wait their turn: a different task for the same teammate runs after the one ahead of it, and an identical call in the same batch shares its answer (`status: "joined"`). Any other second run on a busy teammate fails with "Cannot start a new run while another run is already in progress".
+- **Teammates' own tools.** A teammate is given four team tools: `team_task` (without `create`), `team_send_message`, `team_read_mailbox` and `team_mission_log`. That cuts its team-tool schemas from 17 tools and 10,706 characters to 4 tools and 3,033, about 1.7k tokens a request.
+- **One run at a time.** A teammate runs one task at a time. Async runs for a busy teammate queue and start, in order, when it is free. Sync calls from the same caller wait their turn, and an identical call in the same batch shares its answer (`status: "joined"`). A sync call on a teammate busy with an async run still fails with "Cannot start a new run while another run is already in progress".
+- **Controls.** `stop_agents`, `restart_agent`, `message_agents` and `requeue_agent` reach a teammate's current task, by its `agentId`, and so do the stop and restart buttons on its chat row. A stopped task is recorded as cancelled.
 - **The board is manual.** Passing `taskId` to `team_run_task` does not complete the task. Someone has to call `team_task` with `complete`.
 - **The lead cannot stop early.** While tasks are pending or runs are active, the lead is told it still has team obligations.
 - **Persistence.** State is kept in SQLite (`teams.db` in the data directory) and keyed by the session. VS Code passes no team name, so a team belongs to its task. In the CLI, `/team <task>` starts a team, and the hidden `--team-name <name>` names the state.
@@ -217,9 +220,9 @@ team_shutdown_teammate {"agentId":"reviewer","reason":"reviews done"}
 - "Start a team: a 'backend' teammate and a 'tests' teammate. Put the five API tasks on the board with dependencies, and run backend and tests async."
 - "Message the tests teammate that the endpoint moved to /v2."
 
-### Teammates on/off (coming)
+### Teammates on/off
 
-Today teammates have no switch of their own. In VS Code the `team_*` tools follow the **Subagents** toggle (`enableAgentTeams = subagentsEnabled`). In the CLI they are on unless `--yolo` is set. A separate teammates setting, off by default, is being added on branch `feat/teammates-toggle`. It had not reached `main` when this page was written.
+Teammates are off unless asked for, everywhere. In VS Code the **Teammates** setting turns them on, under the **Subagents** toggle. In the CLI, and on a connector process, `--teammates` or `CLINE_TEAMMATES=1` does; `--yolo` never offers them. In core an unset `enableAgentTeams` means off. The hub's own session paths still default to on (see the teammates audit).
 
 ## What this fork added
 
