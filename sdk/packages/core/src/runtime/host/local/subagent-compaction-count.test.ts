@@ -126,6 +126,7 @@ describe("a delegated agent's compactions reach its row", () => {
 		) as unknown as Executable;
 		await tool.execute(
 			{
+				wait: true,
 				agents: [
 					{ name: "a", task: "one" },
 					{ name: "b", task: "two" },

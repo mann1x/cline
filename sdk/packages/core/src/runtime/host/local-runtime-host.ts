@@ -2817,6 +2817,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 				prompt: describeSideTurnForLead(message, result, source),
 				delivery: "steer",
 				origin: "harness",
+				noteKind: "recap",
 			});
 		});
 		this.sideTurns.set(
@@ -2848,6 +2849,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			prompt: text,
 			delivery: "steer",
 			origin: "harness",
+			noteKind: "status",
 		});
 	}
 

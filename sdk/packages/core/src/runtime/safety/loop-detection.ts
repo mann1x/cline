@@ -230,6 +230,24 @@ export const WRITE_CLASS_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Tools that report on something that moves by itself, so the same call can
+ * rightly be sent again and again: a lead waiting on its agents polls
+ * `agents_status`, and each answer is a later picture of them. The guard's
+ * premise -- "the arguments have not changed, so neither will the result" --
+ * does not hold for them. Measured on pandorum 2026-09-26: a lead in a side
+ * turn polled `agents_status` six times with no arguments while its swarm ran,
+ * and the guard stopped it.
+ */
+export const POLLING_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"agents_status",
+	"await_agents",
+	"team_status",
+	"team_list_runs",
+	"team_await_runs",
+	"team_read_mailbox",
+]);
+
+/**
  * The answer a tool gave, with the part that cannot repeat taken out.
  *
  * `editor` and `restore_file` both end their message with the revision the file
@@ -381,6 +399,12 @@ export class LoopDetectionTracker {
 	}
 
 	inspect(call: LoopDetectionCall): LoopDetectionVerdict {
+		if (POLLING_TOOL_NAMES.has(call.name)) {
+			// Not counted, and not an interruption of any other call's run of
+			// repeats either: nothing is recorded for its outcome.
+			this.state.pendingKey = "";
+			return { kind: "ok" };
+		}
 		const signature = toolCallSignature(call.input);
 		const key = `${call.name}:${signature}`;
 		this.state.pendingKey = key;

@@ -685,6 +685,7 @@ describe("createSpawnAgentTool", () => {
 		const output = (await tool.execute(
 			{
 				instructions: "You review code.",
+				wait: true,
 				agents: [
 					{ name: "one", task: "lines 1-50" },
 					{ name: "two", task: "lines 51-100" },
@@ -740,6 +741,7 @@ describe("createSpawnAgentTool", () => {
 			{
 				knowledge: { files: ["a.js"] },
 				instructions: "You review code.",
+				wait: true,
 				agents: [
 					{ name: "one", task: "lines 1-50" },
 					{ name: "two", task: "lines 51-100" },
@@ -797,6 +799,7 @@ describe("createSpawnAgentTool", () => {
 		const output = (await tool.execute(
 			{
 				knowledge: { files: ["game.html"] },
+				wait: true,
 				agents: [
 					{ name: "a", task: "check braces", type: "subagent_js-syntactic" },
 					{ name: "b", task: "x", type: "nonexistent" },
@@ -1059,6 +1062,7 @@ describe("createSpawnAgentTool", () => {
 			const updates: Array<Record<string, unknown>> = [];
 			const output = (await tool.execute(
 				{
+					wait: true,
 					agents: [
 						{
 							name: "w",
@@ -1501,6 +1505,39 @@ describe("spawn_agent in the background", () => {
 		expect(updates.at(-1)).toMatchObject({
 			finished: { text: "background work done" },
 		});
+		__resetAgentRounds();
+	});
+
+	// Ruling 2: the lead is not held for a long job. Measured 2026-09-26: a
+	// 75-agent batch that blocked left the lead answering stuck-agent reports
+	// in side turns for its whole run.
+	it("runs several agents in the background unless told to wait", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const { __resetAgentRounds } = await import("./agent-rounds.js");
+		runMock.mockImplementation(() => new Promise(() => {}));
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "lead-model",
+			}),
+		});
+		const ack = (await tool.execute(
+			{
+				systemPrompt: "p",
+				agents: [
+					{ name: "a", task: "one" },
+					{ name: "b", task: "two" },
+				],
+			},
+			{
+				agentId: "parent",
+				conversationId: "c",
+				iteration: 1,
+				sessionId: "bg-batch",
+				toolCallId: "call-batch",
+			} as never,
+		)) as unknown as Record<string, unknown>;
+		expect(ack).toMatchObject({ background: true, round: "r1" });
 		__resetAgentRounds();
 	});
 });

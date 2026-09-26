@@ -25,6 +25,15 @@ describe("LoopDetectionTracker", () => {
 		}
 	}
 
+	it("lets a lead poll agents_status as often as it likes", () => {
+		const tracker = new LoopDetectionTracker();
+		const poll = { name: "agents_status", input: {} };
+		for (let attempt = 0; attempt < 20; attempt += 1) {
+			expect(tracker.inspect(poll).kind).toBe("ok");
+			tracker.noteOutcome(true);
+		}
+	});
+
 	it("stops a call that keeps failing even when other calls interrupt it", () => {
 		const tracker = new LoopDetectionTracker();
 

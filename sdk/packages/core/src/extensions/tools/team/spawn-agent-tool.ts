@@ -169,7 +169,7 @@ export const SpawnAgentInputSchema = z.object({
 		.boolean()
 		.optional()
 		.describe(
-			"Wait for the agents to finish before this call returns (default: true; false for `merge`). With false the call returns at once with a round id and the agents run in the background while you keep working: their report is delivered to you when the round ends, `agents_status` shows their progress, and `await_agents` waits for them.",
+			"Wait for the agents to finish before this call returns (default: true for one agent; false for several, and for `merge`). With false the call returns at once with a round id and the agents run in the background while you keep working: their report is delivered to you when the round ends, `agents_status` shows their progress, and `await_agents` waits for them.",
 		),
 });
 
@@ -508,7 +508,7 @@ const SPAWN_AGENT_DESCRIPTION =
 	"Spawn sub-agents for focused tasks: `task` for one agent, `agents` for several in one call. Structure the work in three parts, from most shared to least: `knowledge` (files and notes the agents need -- identical across them), `instructions` (the role -- identical for every agent of the same kind), and each agent's `task` (what it alone does). Shared parts are loaded once for all agents that share them, so many agents cost little more than one. An `agents` entry may name a configured agent in `type`; it then runs with that agent's own role and model. " +
 	"Output: one agent gives `{text, iterations, maxIterations?, finishReason, stopReason?, state?, oracle?, agentId, usage: {inputTokens, outputTokens}, agent: {id, round, state, stopReason, iterations, maxIterations, tokens, compactions, oracle, sampling, node, model}}`; `agents` gives `{round, summary: {total, completed, errored, cancelled, awaitingLead, byType, byFailureClass, totalIterations, totalTokens}, agents: [{id, name, status, stop?, failureClass?, line?, error?, iterations?, maxIterations?, stopReason?, agentId?, oracle?}], reports: [{name, id, facts, text, oracle?}], notShown?: {names}, usage}` -- every agent is in `agents`; a report left out of `reports` to keep the result whole is listed in `notShown` and read with `read_agent_report(name)`. `failureClass` is `infra` (server, transport or refusal: worth running again as is) or `task` (the model, a tool or the iteration budget). Every call is a round with an id (`r3`) and each agent has one (`r3-2`): `agents_status` shows a round or an agent in detail, and `retry_failed(round_id)` runs its failed agents again from their original tasks. " +
 	"Not merging is the way to get N separate reports: each agent of an `agents` call reports on its own, where `merge` returns one combined report. " +
-	"`text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. By default the call waits: the agents have already finished by the time you see this, unless one's `state` is `awaiting_lead`. With `wait: false` the call returns at once with the round id, and the agents' report is delivered to you when the round ends. " +
+	"`text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. One agent waits by default: it has finished by the time you see this, unless its `state` is `awaiting_lead`. Several agents run in the background by default: the call returns at once with the round id, you keep working, and their report is delivered to you when the round ends (`wait: true` to block instead). " +
 	"Give each sub-agent a short `name`: when several run at once it is the only thing telling their progress apart on screen. ";
 
 /** Said only when the session has the team tools; see {@link SpawnAgentToolConfig.teammates}. */
@@ -1018,7 +1018,12 @@ async function runSpawnBatch(
 		...controlFields(member),
 	}));
 	const rounds = roundsFor(context.sessionId);
-	const background = input.wait === false;
+	// Several agents are a long job: the lead is not held for it (ruling 2 of
+	// the lead-control spec). Measured 2026-09-26: a 75-agent batch left the
+	// lead blocked for its whole run, answering stuck-agent reports in side
+	// turns. One agent still blocks unless told otherwise.
+	const background =
+		input.wait === false || (input.wait !== true && members.length > 1);
 	const handle = rounds.open({
 		kind: "spawn_agent",
 		tool: SPAWN_AGENT_TOOL_NAME,

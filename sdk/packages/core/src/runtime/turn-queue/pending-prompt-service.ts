@@ -21,6 +21,14 @@ export type PendingPromptDelivery = "queue" | "steer";
  */
 export type PendingPromptOrigin = "user" | "harness";
 
+/**
+ * Harness notes that merge while they wait: a status report is replaced by a
+ * newer one (it describes the same agents, later), and side-turn recaps are
+ * joined into one note (each says what the lead already did). Measured
+ * 2026-09-26: a lead held by its round collected seven separate recaps.
+ */
+export type PendingPromptNoteKind = "status" | "recap";
+
 export interface PendingPromptEntry {
 	id: string;
 	prompt: string;
@@ -29,6 +37,8 @@ export interface PendingPromptEntry {
 	userImages?: string[];
 	userFiles?: string[];
 	origin?: PendingPromptOrigin;
+	/** For a harness note: what it is, so a later one of the same kind merges. */
+	noteKind?: PendingPromptNoteKind;
 }
 
 export interface PendingPromptQueueState {
@@ -54,6 +64,7 @@ export interface PendingPromptEnqueueInput {
 	userImages?: string[];
 	userFiles?: string[];
 	origin?: PendingPromptOrigin;
+	noteKind?: PendingPromptNoteKind;
 }
 
 export interface PendingPromptConsumeResult {
@@ -148,7 +159,18 @@ export class PendingPromptService {
 		state: PendingPromptQueueState,
 		input: PendingPromptEnqueueInput,
 	): SessionPendingPrompt[] {
-		const { prompt, mode, delivery, userImages, userFiles, origin } = input;
+		const { prompt, mode, delivery, userImages, userFiles, origin, noteKind } =
+			input;
+		if (origin === "harness" && noteKind) {
+			const waiting = state.pendingPrompts.find(
+				(queued) => queued.origin === "harness" && queued.noteKind === noteKind,
+			);
+			if (waiting) {
+				waiting.prompt =
+					noteKind === "recap" ? `${waiting.prompt}\n\n${prompt}` : prompt;
+				return snapshotPrompts(state);
+			}
+		}
 		const existingIndex = state.pendingPrompts.findIndex(
 			(queued) => queued.prompt === prompt,
 		);
@@ -175,6 +197,7 @@ export class PendingPromptService {
 				userImages,
 				userFiles,
 				...(origin === "harness" ? { origin } : {}),
+				...(origin === "harness" && noteKind ? { noteKind } : {}),
 			};
 			if (delivery === "steer") {
 				state.pendingPrompts.unshift(newEntry);
@@ -255,6 +278,7 @@ export class PendingPromptsController {
 			userImages?: string[];
 			userFiles?: string[];
 			origin?: PendingPromptOrigin;
+			noteKind?: PendingPromptNoteKind;
 		},
 	): void {
 		const session = this.deps.getSession(sessionId);

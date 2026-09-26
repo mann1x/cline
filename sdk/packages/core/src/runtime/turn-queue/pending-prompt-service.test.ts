@@ -48,6 +48,30 @@ describe("PendingPromptService", () => {
 		]);
 	});
 
+	it("merges the runtime's notes while they wait: recaps join, a status report is replaced", () => {
+		const service = new PendingPromptService();
+		const state = createState();
+		const note = (prompt: string, noteKind: "recap" | "status") =>
+			service.enqueue(state, {
+				prompt,
+				delivery: "steer",
+				origin: "harness",
+				noteKind,
+			});
+
+		note("side turn 1", "recap");
+		note("side turn 2", "recap");
+		note("3 agents stuck", "status");
+		note("5 agents stuck", "status");
+		service.enqueue(state, { prompt: "typed", delivery: "steer" });
+
+		expect(service.list(state).map(({ prompt }) => prompt)).toEqual([
+			"typed",
+			"5 agents stuck",
+			"side turn 1\n\nside turn 2",
+		]);
+	});
+
 	it("updates prompts and reorders when delivery changes", () => {
 		const service = new PendingPromptService();
 		const state = createState();
