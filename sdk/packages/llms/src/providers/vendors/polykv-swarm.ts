@@ -1311,10 +1311,28 @@ export async function verifyPolykvRoot(
 				}
 			}
 		}
+		// A suspect root whose listing did not answer. The boot id settles it
+		// when the server states one: the same boot is the same process, and
+		// a listing that did not answer a busy engine in time is a missed
+		// check -- pandorum 2026-09-26, 4.100.206: 17 agents told their
+		// server restarted, every owner abandoned, and the swarm waited ten
+		// minutes for cells the abandoned owners still held. Nothing
+		// answering at all leaves the root suspect, asked again on the next
+		// attach. Only a server that answers without a boot id to compare is
+		// rebuilt on suspicion alone.
+		let stillSuspect = false;
 		if (!reason && state.suspect && held.length > 0 && !listing) {
-			reason = "a fault, and its pools could not be confirmed";
+			const sameBoot =
+				bootId !== undefined &&
+				state.bootId !== undefined &&
+				bootId === state.bootId;
+			if (!props && !health) {
+				stillSuspect = true;
+			} else if (!sameBoot) {
+				reason = "a fault, and its pools could not be confirmed";
+			}
 		}
-		state.suspect = false;
+		state.suspect = stillSuspect;
 		if (reason) {
 			invalidatePolykvRoot(root, reason);
 		} else if (lapsed && invalidateLapsedOwners(root, lapsed) === false) {

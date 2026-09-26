@@ -52,6 +52,37 @@ describe("waiting out a turn the server dropped", () => {
 		);
 	});
 
+	it("shows the agent queued while it waits, and running once the turn goes again", async () => {
+		// A refused or dropped turn waits on the server, not on the model:
+		// its row said "running" for minutes while nothing ran.
+		for (const kind of ["transport", "refusal"] as const) {
+			const updates: Array<{ queued?: boolean }> = [];
+			const recover = createTurnFaultRecovery({
+				label: "w",
+				where: () => "Node1",
+				baseUrl: () => "http://h:1/v1",
+				emitUpdate: (update) => updates.push(update as never),
+				probe: async () => true,
+				sleep: async () => {},
+			});
+			expect(
+				await recover(
+					fault({
+						kind,
+						message:
+							kind === "refusal"
+								? "admission rejected: projected mean tps below floor"
+								: "server is shutting down",
+					}),
+				),
+			).toBe(true);
+			const flags = updates
+				.map((update) => update.queued)
+				.filter((queued) => queued !== undefined);
+			expect(flags).toEqual([true, false]);
+		}
+	});
+
 	it("backs off a fault that repeats against a server that answers", async () => {
 		// A stream the SDK cannot read comes from a server whose /health is
 		// fine: without a backoff the same bad frame would be fetched in a

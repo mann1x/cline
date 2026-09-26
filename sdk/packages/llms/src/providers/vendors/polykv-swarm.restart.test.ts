@@ -4,6 +4,7 @@ import { resetPolykvAvailability } from "./polykv";
 import {
 	invalidatePolykvRoot,
 	keepPolykvOwnersAlive,
+	notePolykvServerFault,
 	onPolykvNotice,
 	onPolykvRoomWait,
 	POLYKV_ROOM_BACKOFF_MAX_MS,
@@ -57,6 +58,10 @@ function restartableEngine(
 			)
 			.join("");
 	let hangs = 0;
+	/** `/polykv/pools` listings left unanswered (a busy engine), the rest answer. */
+	let listingDown = false;
+	/** `/props` and `/health` refused too: nothing on the server answers. */
+	let identityDown = false;
 	const url = (input: unknown) => new URL(String(input));
 	const answer = async (input: unknown, init?: RequestInit) => {
 		const url = new URL(String(input));
@@ -76,6 +81,12 @@ function restartableEngine(
 				status,
 				headers: { "content-type": "application/json", ...headers },
 			});
+		if (
+			identityDown &&
+			(url.pathname === "/health" || url.pathname === "/props")
+		) {
+			return json({ error: "unavailable" }, 503);
+		}
 		if (url.pathname === "/health") {
 			return json({
 				status: "ok",
@@ -92,6 +103,9 @@ function restartableEngine(
 			});
 		}
 		if (url.pathname === "/polykv/pools" && !init?.body) {
+			if (listingDown) {
+				return json({ error: "busy" }, 503);
+			}
 			return json({
 				pools: [...pools.entries()].map(([id, pool]) => ({
 					pool_id: id,
@@ -305,6 +319,14 @@ function restartableEngine(
 		 */
 		dropPool: (id: number) => {
 			pools.delete(id);
+		},
+		/** `/polykv/pools` stops (or starts again) answering; nothing else changes. */
+		listing: (answers: boolean) => {
+			listingDown = !answers;
+		},
+		/** `/props` and `/health` stop (or start again) answering. */
+		identity: (answers: boolean) => {
+			identityDown = !answers;
 		},
 		/** Bring it back with nothing: no pools, ids from 0 again. */
 		up: () => {
@@ -940,6 +962,62 @@ describe("an owner the server let go while it kept running", () => {
 		expect(engine.unknownPoolSends).toEqual([]);
 		expect(told.a.join(" ")).toContain("did not restart");
 		expect(told.a.join(" ")).not.toMatch(/\brestarted\b/);
+	});
+
+	it("keeps every owner when a fault made the root suspect and only the listing went unanswered", async () => {
+		// pandorum 2026-09-26 19:37:57Z, 4.100.206: 17 agents on 8241 told
+		// "restarted (a fault, and its pools could not be confirmed)" at
+		// once, every owner abandoned, and the swarm waited ten minutes for
+		// cells the abandoned owners still held. /props and /health named the
+		// same boot; /polykv/pools had not answered a busy engine in time.
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const engine = restartableEngine({ bootFields: true });
+		await sendIn(engine, "lead-a", "fa", agentBody("role A", "t1"));
+		await sendIn(engine, "lead-b", "fb", agentBody("role B", "t1"));
+		const [poolA] = poolsOf(engine, "fa");
+		const [poolB] = poolsOf(engine, "fb");
+		const generation = polykvRootGeneration("http://engine/v1");
+		const told: string[] = [];
+		const stops = ["fa", "fb"].map((id) =>
+			onPolykvNotice(id, (notice) => told.push(notice.text)),
+		);
+		try {
+			notePolykvServerFault("http://engine/v1");
+			engine.listing(false);
+			await sendIn(engine, "lead-a", "fa", agentBody("role A", "t2"));
+			await sendIn(engine, "lead-b", "fb", agentBody("role B", "t2"));
+		} finally {
+			for (const stop of stops) {
+				stop();
+			}
+			engine.listing(true);
+		}
+		expect(told).toEqual([]);
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation);
+		expect(poolsOf(engine, "fa")).toEqual([poolA, poolA]);
+		expect(poolsOf(engine, "fb")).toEqual([poolB, poolB]);
+	});
+
+	it("asks again, rather than rebuilding, when nothing on a suspect root answers", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const engine = restartableEngine({ bootFields: true });
+		await sendIn(engine, "lead-a", "na", agentBody("role A", "t1"));
+		const generation = polykvRootGeneration("http://engine/v1");
+		notePolykvServerFault("http://engine/v1");
+		engine.listing(false);
+		engine.identity(false);
+		await sendIn(engine, "lead-a", "na", agentBody("role A", "t2"));
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation);
+		// It answers again as a new process: still suspect, so the next turn
+		// asks at once and rebuilds.
+		engine.listing(true);
+		engine.identity(true);
+		engine.restartQuietly();
+		await sendIn(engine, "lead-a", "na", agentBody("role A", "t3"));
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation + 1);
+		const sent = poolsOf(engine, "na").at(-1) as number;
+		expect(engine.pools().get(sent)?.prompt).toContain("role A");
+		expect(engine.unknownPoolSends).toEqual([]);
 	});
 
 	it("still drops everything when the boot id changed with the pools", async () => {

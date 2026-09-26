@@ -174,8 +174,9 @@ several approaches.
   the round, which helps with one that is stuck or looping. **Stop all** asks
   first.
 - **Rows finish when their own agent does**, not when the slowest one in the
-  round finishes. A queued agent reads as queued, and a waiting one says it's
-  waiting for room on the server.
+  round finishes. A queued agent reads as queued, and so does one waiting on
+  the server (for room, after a refusal, or through an outage), including after
+  the chat is redrawn. Its row says what it is waiting for.
 - **Rows count compactions beside tool calls:** "7 tools called · 3
   compactions". The tooltip splits them by cause (the agent's own threshold, KV
   pressure on the server, overflow recovery, manual). Teammates are counted too,
@@ -385,7 +386,8 @@ instead of arguing, so it can check the working model without agreeing with it.
   finished no request for five minutes, and its pools with it. That used to
   read as a restart and rebuilt every agent's pools on the server. Now only
   that owner's agents are re-placed, and owners that still have agents are kept
-  from lapsing.
+  from lapsing. Nor is a pool listing that a busy server didn't answer in time:
+  while the boot id is unchanged, nothing is rebuilt.
 - **Agents give room back under KV pressure.** When the server reports global
   KV pressure, running agents compact and shrink their windows toward their
   floor, and grow back when it clears. A resize on a busy session waits for its

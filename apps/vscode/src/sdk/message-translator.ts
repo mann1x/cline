@@ -503,11 +503,13 @@ function applyRoundAgentState(entry: SubagentStatusItem, agent: RoundAgentLike):
 			}
 			break
 		}
+		// Waiting on the server -- a full window, a refusal, an outage -- is
+		// queued too: nothing of the agent runs until the server takes it.
 		case "queued":
+		case "waiting_infra":
 			entry.status = "pending"
 			break
 		case "running":
-		case "waiting_infra":
 			entry.status = "running"
 			break
 	}

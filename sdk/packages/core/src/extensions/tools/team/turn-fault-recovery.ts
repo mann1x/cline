@@ -179,7 +179,9 @@ export function createTurnFaultRecovery(
 			options.logger?.log(
 				`[Agents] ${options.label}: ${fault.message} -- ${line}`,
 			);
-			report(options.emitUpdate, line, "warn");
+			// Queued on its row while it waits: nothing of it runs until the
+			// server takes the turn again.
+			report(options.emitUpdate, line, "warn", { queued: true });
 			options.onWaiting?.({ kind: "transport", where, detail: reason });
 			const root = serverRoot(options.baseUrl?.());
 			if (root) {
@@ -233,7 +235,10 @@ export function createTurnFaultRecovery(
 			const line = `${where} evicted the turn to keep other requests alive${held} -- an engine bug, reported; trying again in ${Math.round(waitMs / 1000)} s (eviction ${evictions}).`;
 			options.logger?.log(`[Agents] ${options.label}: ${line}`);
 			// The one warning among the waits: an eviction is a bug report.
-			report(options.emitUpdate, line, "warn", { evicted: evictions });
+			report(options.emitUpdate, line, "warn", {
+				evicted: evictions,
+				queued: true,
+			});
 			options.onWaiting?.({
 				kind: "refusal",
 				where,
@@ -245,7 +250,7 @@ export function createTurnFaultRecovery(
 			const line = `${where} refused the turn (${fault.message.trim().slice(0, 200)}); trying again in ${Math.round(waitMs / 1000)} s (refusal ${fault.attempt}).`;
 			options.logger?.log(`[Agents] ${options.label}: ${line}`);
 			// A refusal is pacing, not a fault: info, like the spawn-time one.
-			report(options.emitUpdate, line, "info");
+			report(options.emitUpdate, line, "info", { queued: true });
 			options.onWaiting?.({
 				kind: "refusal",
 				where,
@@ -260,6 +265,7 @@ export function createTurnFaultRecovery(
 			options.emitUpdate,
 			`${where} answered; sending the turn again.`,
 			"info",
+			{ queued: false },
 		);
 		return true;
 	};

@@ -6351,6 +6351,22 @@ describe("a round's rows after its call", () => {
 		expect(messages.filter((message) => message.say === "subagent")).toHaveLength(1)
 	})
 
+	it("draws an agent waiting on the server as queued, not running", () => {
+		// pandorum 2026-09-26: seven swarm agents waiting for a window on a
+		// full server were drawn as running after the task was redrawn.
+		const waiting = [
+			{
+				...rounds[0],
+				agents: [
+					{ index: 0, name: "one", state: "waiting_infra" },
+					{ index: 1, name: "two", state: "running" },
+				],
+			},
+		]
+		const row = rowOf(sdkMessagesToClineMessages(reopened(), undefined, { rounds: waiting as never }))
+		expect(row?.status.items.map((item) => item.status)).toEqual(["pending", "running"])
+	})
+
 	it("hands the reopened rows to the live translator, so a rerun after the reload follows them", () => {
 		let kept: ReturnType<MessageTranslatorState["exportParkedSpawnGroups"]> = []
 		const messages = sdkMessagesToClineMessages(reopened(), undefined, {
