@@ -30,11 +30,17 @@
  * stopped. {@link createDelegatedAgentLifetime} is how the spawn path defers
  * its teardown to that point.
  *
- * **The engine session is released while an agent waits.** On an opencoti node
- * a held engine session is KV cells booked against the node's admission --
- * "one held past its work refuses the next agent" -- and an agent waiting on
- * the lead is generating nothing. The resumed agent pays one re-prefill of its
- * transcript. The client-side node lease (or endpoint slot) is kept: it pins
+ * **The engine session is kept while a listening lead decides**, and released
+ * only for an agent detached with nobody to ask. Released on every wait, it
+ * cost more than it freed (bs2 8244, 2026-09-26, 64 suspensions of 32 agents,
+ * the lead answering in about two minutes): closing the session erases the
+ * engine's running mark, so the resumed agent was admitted as a new session,
+ * and the pool's enforced tps floor -- which holds new sessions back and lets
+ * running ones through -- refused it every minute for up to half an hour. Its
+ * owner, with no finished request in five minutes, lapsed, and its pools with
+ * it. A swarm worker's window is its owner's booking anyway; kept, the agent
+ * also resumes on its own cache instead of re-prefilling its transcript.
+ * The client-side node lease (or endpoint slot) is kept either way: it pins
  * the agent to the node its transcript was produced on, and giving it up would
  * let the harness re-place it onto a different model mid-conversation.
  */
@@ -669,8 +675,11 @@ export async function runDelegatedWithCap(
 		}
 		if (!detached) {
 			queueNotice(waiting);
+		} else {
+			// Nobody to answer soon: the session goes back rather than holding
+			// the node for a decision that may never come.
+			void options.releaseEngineSession?.().catch(() => undefined);
 		}
-		void options.releaseEngineSession?.().catch(() => undefined);
 		return { entry, decided };
 	};
 

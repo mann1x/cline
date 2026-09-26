@@ -93,7 +93,9 @@ describe("an agent that reaches its iteration cap", () => {
 		expect(heard.join("\n")).toContain("brace-fix-1");
 		expect(heard.join("\n")).toContain("4-iteration cap");
 		expect(heard.join("\n")).toContain("resume_agent");
-		expect(released).toHaveBeenCalledTimes(1);
+		// Kept while a listening lead decides: released, the resumed agent came
+		// back to the engine a new session, and the pool floor held it back.
+		expect(released).not.toHaveBeenCalled();
 		expect(updates).toContainEqual({
 			awaitingLead: { iterations: 4, maxIterations: 4 },
 		});
@@ -111,6 +113,19 @@ describe("an agent that reaches its iteration cap", () => {
 		expect(done.stopReason).toBeUndefined();
 		expect(updates).toContainEqual({ awaitingLead: null });
 		expect(listAwaitingLead("lead")).toHaveLength(0);
+	});
+
+	it("gives its engine session back when there is no lead to ask", async () => {
+		const released = vi.fn(async () => {});
+		await runDelegatedWithCap({
+			agent: scriptedAgent(4, []),
+			start: async () => result("max_iterations", 4, "half"),
+			name: "unheard",
+			lifetime: createDelegatedAgentLifetime(),
+			releaseEngineSession: released,
+		});
+		expect(released).toHaveBeenCalledTimes(1);
+		stopSuspended("unheard");
 	});
 
 	it("keeps the work when the lead stops it at the cap", async () => {
