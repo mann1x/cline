@@ -569,20 +569,29 @@ export function resolveGrantedContextWindow(
 }
 
 /**
- * Re-root the conversation onto a fork of the shared prefix.
+ * After a compaction: the session goes on from its prefix pool plus the replay.
  *
- * Called after a compaction has rewritten the transcript. The new pool branches
- * from the root at `D_sys` -- the prefix is unchanged and stays shared, which is
- * the entire saving -- and carries the compacted suffix. The old subtree is
- * unpinned and released once the session has migrated, in that order: a pin
- * outliving its subtree is a leak of the cells it holds.
+ * The conversation still opens with the system prompt and tools the session's
+ * pool (its own root, or its place in the lead tree) already covers, so there
+ * is nothing to fork: the next request attaches to that pool and prefills the
+ * replay after it. What is left to do is give back the cells the session's
+ * slot still holds for the transcript the replay replaced -- unless the
+ * compaction already did (`continuation-compaction.ts` releases them before
+ * the synthesizer runs).
  *
- * Returns the new pool id, or `undefined` when the session stays where it was.
+ * Only where a pool covers the head: a session whose prefix lives in its slot
+ * alone would pay for it again. A held booking keeps its window -- the
+ * conversation goes on in it -- and only the slot is erased; a session with no
+ * booking is closed, which drops the slot and books nothing. A borrowed pool
+ * (a swarm worker) is left exactly as it is.
+ *
+ * Returns the pool the session stays on, or `undefined` when it has none.
  */
 export async function repointPolykvAfterCompaction(options: {
 	sessionId: string | undefined;
 	providerConfig: PolykvProviderConfig;
-	compactedPrompt: string;
+	/** The compaction already dropped the session's slot cells. */
+	sessionCellsReleased?: boolean;
 	logger?: BasicLogger;
 }): Promise<string | undefined> {
 	const state = getPolykvSession(options.sessionId);
@@ -593,66 +602,45 @@ export async function repointPolykvAfterCompaction(options: {
 	) {
 		return undefined;
 	}
-	// A lead's pool covers the system prompt, tools and environment turn only,
-	// and compaction rewrites none of them: the compacted conversation still
-	// opens with that prefix. Nothing to re-root -- and the pool may be the
-	// root every other conversation on the server attaches to.
-	if (state.layout === "lead") {
-		return undefined;
-	}
-	// A pool this session only attaches to -- a swarm worker on the lead's
-	// snapshot. Re-rooting would fork it at 0 and then unpin and release
-	// `previous`: the lead's pool, with the rest of the round on it. The
-	// worker stays attached, which is the safe side, as for a failed re-root.
-	if (state.layout === "borrowed") {
-		return undefined;
+	if (state.layout === "borrowed" || options.sessionCellsReleased) {
+		return state.poolId;
 	}
 	const client = clientFor(options.providerConfig);
 	if (!client) {
-		return undefined;
+		return state.poolId;
 	}
-	const previous = state.poolId;
+	const wireId = engineSessionId(options.sessionId);
 	try {
-		// `from_session`, not tokens. The body here is the child's FULL path
-		// `[0, L)`, checked token-exact against the parent over `[0, branch_pos)`
-		// -- sending the compacted text alone is a suffix, and is answered 400
-		// every time. Snapshotting the live session sidesteps the question
-		// entirely: the engine reads the prefix from the slot's own token history
-		// and nothing crosses the wire to be re-tokenized.
-		const forked = await client.forkPool(previous, {
-			branch_pos: state.prefixTokens,
-			from_session: options.sessionId,
-			session_id: options.sessionId,
+		const held = await readPolykvAllocation({
+			sessionId: options.sessionId,
+			providerConfig: { ...options.providerConfig, polykvWorker: false },
 		});
-		await client.pin(forked.pool_id);
-		setPolykvSession(options.sessionId, {
-			poolId: forked.pool_id,
-			// The fork shares the same prefix, so the next re-root branches at the
-			// same point. Reading it back from the fork would set the branch to
-			// the compacted suffix and make the prefix unshareable one compaction
-			// later.
-			prefixTokens: state.prefixTokens,
-		});
-		// Only now: until the session is pointed at the fork, the old pool is
-		// still the one serving requests.
-		await client.unpin(previous).catch(() => undefined);
-		await client.releasePool(previous).catch(() => undefined);
-		options.logger?.log?.(
-			`[PolyKV] Re-rooted onto pool ${forked.pool_id} (${forked.prefix_len} tokens, ${state.prefixTokens} shared with the root); released ${previous}`,
-		);
-		return forked.pool_id;
+		if (held?.sessionId === wireId) {
+			const erased = await client.eraseSessionSlot(wireId);
+			options.logger?.log?.(
+				`[PolyKV] After compaction: staying on pool ${state.poolId}; erased ${erased ?? 0} stale cells from the slot, booking kept`,
+			);
+		} else {
+			const report = await client.closeSessionReport(wireId);
+			options.logger?.log?.(
+				`[PolyKV] After compaction: staying on pool ${state.poolId}; ${
+					report.kvDropped
+						? "dropped the slot's stale cells"
+						: "no slot was resident"
+				}`,
+			);
+		}
 	} catch (error) {
-		// The old pool is still pinned and still attached, which is the safe
-		// side of this failure: the conversation carries on, paying full prefill
-		// for the rewritten suffix.
+		// The stale cells stay until the next request overwrites them: a cost
+		// in cells, never in correctness.
 		options.logger?.log?.(
-			`[PolyKV] Could not re-root after compaction; staying on pool ${previous}: ${
+			`[PolyKV] After compaction: could not drop the slot's stale cells: ${
 				error instanceof Error ? error.message : String(error)
 			}`,
 			{ severity: "warn" },
 		);
-		return undefined;
 	}
+	return state.poolId;
 }
 
 /**

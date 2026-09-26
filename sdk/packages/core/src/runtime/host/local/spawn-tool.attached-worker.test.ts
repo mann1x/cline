@@ -40,7 +40,6 @@ vi.mock("../../../extensions/tools/team/delegated-agent", () => ({
 					baseUrl: "http://engine/v1",
 					fetch: fetchImpl,
 				},
-				compactedPrompt: "summary",
 			});
 			seen.push({
 				sessionId: options.engineSessionId,

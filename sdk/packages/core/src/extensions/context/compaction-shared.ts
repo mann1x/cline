@@ -2018,9 +2018,27 @@ export function buildSummaryRequest(options: {
 	 * that if it can see which call is 7.
 	 */
 	toolLedger?: string;
+	/**
+	 * The writer already holds the transcript: it is writing as the next turn
+	 * of the conversation (compaction as a continuation). This says which part
+	 * of that context the replay covers, and takes the place of the
+	 * `Conversation:` section -- repeating the transcript as text is exactly
+	 * the prefill a continuation exists to avoid.
+	 */
+	conversationInContext?: string;
 }): string {
 	const template = options.promptTemplate?.trim() || DEFAULT_COMPACTION_PROMPT;
-	const parts: string[] = [renderCompactionPrompt(template, options.fileOps)];
+	const rendered = renderCompactionPrompt(template, options.fileOps);
+	const parts: string[] = [
+		// The default note is written for a transcript pasted after it. A
+		// continuation's transcript is the conversation above the request.
+		options.conversationInContext?.trim()
+			? rendered.replace(
+					"Everything below will be discarded;",
+					"The conversation above will be discarded;",
+				)
+			: rendered,
+	];
 
 	if (options.previousSummary?.trim()) {
 		parts.push(`Previous summary:\n${options.previousSummary.trim()}`);
@@ -2033,7 +2051,7 @@ export function buildSummaryRequest(options: {
 	if (quoted.length > 0) {
 		parts.push(
 			[
-				"What the user asked, in their own words. The harness quoted these; they are not always present in the transcript below, and they are what you must reproduce verbatim rather than describe:",
+				"What the user asked, in their own words. The harness quoted these; they are not always present in the transcript, and they are what you must reproduce verbatim rather than describe:",
 				"",
 				...quoted.map(
 					(request) => `<user_request>\n${request}\n</user_request>`,
@@ -2048,7 +2066,11 @@ export function buildSummaryRequest(options: {
 		);
 	}
 
-	parts.push(`Conversation:\n${options.conversationText || "(empty)"}`);
+	parts.push(
+		options.conversationInContext?.trim()
+			? options.conversationInContext.trim()
+			: `Conversation:\n${options.conversationText || "(empty)"}`,
+	);
 
 	return parts.join("\n\n");
 }

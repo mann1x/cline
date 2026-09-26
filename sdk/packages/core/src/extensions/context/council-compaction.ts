@@ -284,6 +284,12 @@ export function buildCouncilCriticRequest(input: {
 	toolLedgerKey?: string;
 	/** Replaces {@link DEFAULT_COUNCIL_CRITIC_PROMPT}; blank uses it. */
 	instructions?: string;
+	/**
+	 * The writer is reading this as the next turn of the conversation the
+	 * replay was written from (compaction as a continuation): the transcript
+	 * is the context above, and repeating it here would pay for it twice.
+	 */
+	transcriptInContext?: boolean;
 }): string {
 	const other = input.half === "first" ? "second" : "first";
 	return [
@@ -320,9 +326,15 @@ export function buildCouncilCriticRequest(input: {
 					"",
 				]
 			: []),
-		"The transcript both halves were written from:",
-		"",
-		input.transcript || "(empty)",
+		...(input.transcriptInContext
+			? [
+					"The transcript both halves were written from is the conversation above this message, up to where you were asked for the replay.",
+				]
+			: [
+					"The transcript both halves were written from:",
+					"",
+					input.transcript || "(empty)",
+				]),
 	].join("\n");
 }
 
@@ -515,11 +527,35 @@ export async function runCouncilReview(input: {
 	summary: string;
 	thinkingSummary?: string;
 	messages: readonly MessageWithMetadata[];
-	/** One model call. Throwing is allowed and is handled as a decline. */
+	/**
+	 * One model call. Throwing is allowed and is handled as a decline.
+	 *
+	 * `role` and `half` say which call it is, for a caller that runs the two
+	 * kinds differently -- a compaction written as a continuation sends a
+	 * critic as the next turn of the conversation and the synthesiser as a
+	 * request of its own.
+	 */
 	generate: (call: {
 		systemPrompt: string;
 		request: string;
+		role: "critic" | "synthesizer";
+		half?: CouncilHalf;
 	}) => Promise<string>;
+	/**
+	 * The critics hold the transcript as their context; it is not repeated in
+	 * their requests (see {@link buildCouncilCriticRequest}).
+	 */
+	transcriptInContext?: boolean;
+	/**
+	 * Called once the reviewers are done and before the synthesiser runs.
+	 * Its `thinkingSummary`, when it returns one, is the retrospective the
+	 * synthesiser revises.
+	 *
+	 * This is where a continuation gives its cells back: the critics were the
+	 * last calls that needed the session's context, and the synthesiser reads
+	 * only the halves.
+	 */
+	prepareSynthesis?: () => Promise<{ thinkingSummary?: string } | undefined>;
 	/**
 	 * What the summarizer will accept as one request. A reviewer whose half
 	 * does not fit declines rather than sending a call the provider refuses;
@@ -582,7 +618,9 @@ export async function runCouncilReview(input: {
 			},
 		);
 	}
-	const transcript = serializeConversation([...input.messages]);
+	const transcript = input.transcriptInContext
+		? ""
+		: serializeConversation([...input.messages]);
 	const originalLength = halves.first.length + halves.second.length;
 
 	input.logger?.debug(
@@ -607,8 +645,10 @@ export async function runCouncilReview(input: {
 			transcript,
 			toolLedgerKey: input.toolLedgerKey,
 			instructions: input.criticPrompt,
+			transcriptInContext: input.transcriptInContext,
 		});
 		if (
+			!input.transcriptInContext &&
 			typeof input.maxRequestChars === "number" &&
 			request.length > input.maxRequestChars
 		) {
@@ -627,6 +667,8 @@ export async function runCouncilReview(input: {
 			const text = await input.generate({
 				systemPrompt: COUNCIL_SYSTEM_PROMPTS.critic,
 				request,
+				role: "critic",
+				half,
 			});
 			// A writer that returned both halves anyway gets spliced back to
 			// its own: the other half is about to arrive from the writer that
@@ -679,6 +721,29 @@ export async function runCouncilReview(input: {
 		return { ...unchanged, summary: stripHalfMarker(input.summary) };
 	}
 
+	// The retrospective the synthesiser revises: the caller's, unless the
+	// synthesis hook produced it (a continuation writes it after its release).
+	let thinkingSummary = input.thinkingSummary;
+	if (input.prepareSynthesis) {
+		try {
+			const prepared = await input.prepareSynthesis();
+			if (prepared?.thinkingSummary !== undefined) {
+				thinkingSummary = prepared.thinkingSummary;
+			}
+		} catch (error) {
+			input.logger?.log(
+				"Preparing the compaction synthesis failed; joining without it",
+				{
+					severity: "warn",
+					errorMessage: error instanceof Error ? error.message : String(error),
+				},
+			);
+		}
+	}
+	const unchangedWithRetro: CouncilReviewResult = {
+		...unchanged,
+		thinkingSummary,
+	};
 	try {
 		const mergedText = await input.generate({
 			systemPrompt: COUNCIL_SYSTEM_PROMPTS.synthesizer,
@@ -687,16 +752,17 @@ export async function runCouncilReview(input: {
 				secondOriginal: halves.second,
 				firstRewritten: firstRewritten ?? halves.first,
 				secondRewritten: secondRewritten ?? halves.second,
-				thinkingSummary: input.thinkingSummary,
+				thinkingSummary,
 				originalLength,
 				instructions: input.synthesizerPrompt,
 			}),
+			role: "synthesizer",
 		});
 		const merged = parseCouncilSections(mergedText);
 		// With no retrospective the synthesiser is asked for one section, and a
 		// model given one section often writes it without the heading.
 		const mergedReplay = stripHalfMarker(
-			merged.replay?.trim() || (input.thinkingSummary ? "" : mergedText),
+			merged.replay?.trim() || (thinkingSummary ? "" : mergedText),
 		);
 		if (mergedReplay) {
 			input.logger?.debug(
@@ -714,7 +780,7 @@ export async function runCouncilReview(input: {
 				{ severity: "warn", reviewers },
 			);
 			return {
-				...unchanged,
+				...unchangedWithRetro,
 				summary: stripHalfMarker(input.summary),
 				reviewers,
 			};
@@ -730,14 +796,14 @@ export async function runCouncilReview(input: {
 				},
 			);
 			return {
-				...unchanged,
+				...unchangedWithRetro,
 				summary: stripHalfMarker(input.summary),
 				reviewers,
 			};
 		}
 		return {
 			summary: mergedReplay,
-			thinkingSummary: merged.retrospective?.trim() || input.thinkingSummary,
+			thinkingSummary: merged.retrospective?.trim() || thinkingSummary,
 			reviewers,
 			merged: true,
 		};
@@ -750,6 +816,10 @@ export async function runCouncilReview(input: {
 				errorMessage: error instanceof Error ? error.message : String(error),
 			},
 		);
-		return { ...unchanged, summary: stripHalfMarker(input.summary), reviewers };
+		return {
+			...unchangedWithRetro,
+			summary: stripHalfMarker(input.summary),
+			reviewers,
+		};
 	}
 }

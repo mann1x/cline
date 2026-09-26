@@ -57,6 +57,14 @@ import {
 	seedCalibrationFromTranscript,
 } from "./compaction-shared";
 import { warnIfWindowBelowMinimum } from "./context-minimum-warning";
+import {
+	type CompactionContinuation,
+	type CompactionMeter,
+	type ContinuationPath,
+	createCompactionMeter,
+	describeCompactionRun,
+	prepareCompactionContinuation,
+} from "./continuation-compaction";
 import { withCouncilWriterPrompt } from "./council-compaction";
 import { DEFAULT_FULL_COMPACTION_PROMPT } from "./full-compaction";
 import {
@@ -133,6 +141,13 @@ type BuiltinCompactionStrategyOptions = {
 	 */
 	measureReportedTokens: MeasureReportedTokens;
 	logger: Pick<CoreSessionConfig, "logger">["logger"];
+	/**
+	 * This compaction continues the session instead of pasting its transcript
+	 * (`continuation-compaction.ts`). Read by the agentic strategy only.
+	 */
+	continuation?: CompactionContinuation;
+	/** Where the compaction's prefill and bookings are counted. */
+	meter?: CompactionMeter;
 };
 
 type BuiltinCompactionStrategyRunner = (
@@ -274,12 +289,16 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 		estimateMessageTokens,
 		measureReportedTokens,
 		logger,
+		continuation,
+		meter,
 	}) =>
 		runAgenticCompaction({
 			context,
 			providerConfig,
 			summarizer: compaction?.summarizer,
 			keepRecentMessages,
+			...(continuation ? { continuation } : {}),
+			...(meter ? { meter } : {}),
 			// Bound, because the port is an object and the ledger wants a plain
 			// function. Absent when the host keeps no log, and the ledger then
 			// says nothing about files rather than guessing a revision number.
@@ -692,7 +711,13 @@ export function createContextCompactionPrepareTurn(
 		| "logger"
 		| "telemetry"
 		| "sessionId"
-	>,
+	> &
+		Partial<
+			Pick<
+				CoreSessionConfig,
+				"thinking" | "reasoningEffort" | "thinkingBudgetTokens" | "temperature"
+			>
+		>,
 	options: ContextCompactionPrepareTurnOptions = {},
 ):
 	| ((
@@ -1349,7 +1374,10 @@ export function createContextCompactionPrepareTurn(
 				{ reasoningHistory },
 			);
 
-		const builtinOptions = {
+		// What this compaction costs, on whichever path it takes: the line it
+		// logs, and the numbers a live gate compares before and after.
+		const meter = createCompactionMeter();
+		const builtinOptions: BuiltinCompactionStrategyOptions = {
 			context: compactionContext,
 			providerConfig: {
 				...providerConfig,
@@ -1360,6 +1388,85 @@ export function createContextCompactionPrepareTurn(
 			estimateMessageTokens,
 			measureReportedTokens,
 			logger: config.logger,
+			meter,
+		};
+		let runPath: ContinuationPath | "fallback" = "fallback";
+		let runReason =
+			strategy === "agentic" ? "not attempted" : `strategy ${strategy}`;
+		let continuation: CompactionContinuation | undefined;
+		let sessionCellsReleased = false;
+		/**
+		 * The agentic strategy as a continuation of the session where it can
+		 * run as one, and as the transcript-as-text compaction it replaced
+		 * wherever it cannot or does not produce a summary. What the
+		 * continuation created is released on every path out.
+		 */
+		const runAgenticWithContinuation = async (): Promise<
+			CoreCompactionResult | undefined
+		> => {
+			const prepared = await prepareCompactionContinuation({
+				providerConfig: builtinOptions.providerConfig,
+				sessionId: config.sessionId,
+				systemPrompt: context.systemPrompt,
+				tools: context.tools ?? [],
+				apiMessages: context.apiMessages,
+				contextWindow: context.model.info?.contextWindow,
+				requestTokens: triggerInputTokens,
+				...(observedRequestTokens !== undefined
+					? { observedRequestTokens }
+					: {}),
+				reasoning: {
+					thinking: providerConfig.thinking ?? config.thinking,
+					reasoningEffort:
+						providerConfig.reasoningEffort ?? config.reasoningEffort,
+					thinkingBudgetTokens:
+						providerConfig.thinkingBudgetTokens ?? config.thinkingBudgetTokens,
+					temperature: config.temperature,
+				},
+				separateSummarizer: userCompaction?.summarizer !== undefined,
+				kvPressureActive: kvTurn?.state === "active",
+				overflowRecovery: effectiveMode === "overflow_recovery",
+				abortSignal: context.abortSignal,
+				logger: config.logger,
+				meter,
+			}).catch((error: unknown) => ({
+				continuation: undefined,
+				reason: `could not be prepared (${describeCompactionError(error).errorMessage})`,
+			}));
+			continuation = prepared.continuation;
+			runReason = prepared.reason;
+			if (!continuation) {
+				return runBuiltinStrategy(builtinOptions);
+			}
+			runPath = continuation.path;
+			let produced: CoreCompactionResult | undefined;
+			try {
+				produced = await runBuiltinStrategy({
+					...builtinOptions,
+					continuation,
+				});
+			} catch (error) {
+				if (isCompactionCancellation(error, context.abortSignal)) {
+					throw error;
+				}
+				runReason = `${continuation.path} failed (${describeCompactionError(error).errorMessage}); transcript as text`;
+				config.logger?.log(
+					"Compaction as a continuation failed; compacting from the transcript instead",
+					{ severity: "warn", ...describeCompactionError(error) },
+				);
+			}
+			// Leaves, P', P and the session's cells -- whatever it made, before
+			// anything else is sent.
+			await continuation.dispose();
+			if (produced?.messages) {
+				sessionCellsReleased = true;
+				return produced;
+			}
+			if (!runReason.includes("failed")) {
+				runReason = `${continuation.path} wrote no usable summary; transcript as text`;
+			}
+			runPath = "fallback";
+			return runBuiltinStrategy(builtinOptions);
 		};
 		const sizeOf = (messages: CoreCompactionResult["messages"]): number =>
 			messages.reduce(
@@ -1438,7 +1545,12 @@ export function createContextCompactionPrepareTurn(
 				bounds: resolveRecencyBounds({ preserveRecentTokens: 1 }),
 				estimateMessageTokens,
 				logger: config.logger,
+				// Counted in the compaction's line. Sent as text: the
+				// continuation that wrote the keep-tail summary has already
+				// given its cells back.
+				meter,
 			});
+			runReason = `${runReason}; no-tail rescue as text`;
 			// Only if it actually did better. A no-tail cut that declines, or
 			// that somehow comes back larger, leaves the keep-tail result in
 			// place: an oversized transcript beats no transcript.
@@ -1607,7 +1719,10 @@ export function createContextCompactionPrepareTurn(
 			result = await userCompaction.compact(compactionContext);
 		} else {
 			try {
-				result = await runBuiltinStrategy(builtinOptions);
+				result =
+					strategy === "agentic"
+						? await runAgenticWithContinuation()
+						: await runBuiltinStrategy(builtinOptions);
 				result = await escalateToNoTailIfStillOversized(result);
 			} catch (error) {
 				if (
@@ -1674,6 +1789,22 @@ export function createContextCompactionPrepareTurn(
 		}
 
 		const durationMs = Date.now() - startedAt;
+		// One line per compaction: the path it took and why, what it
+		// prefilled, the cache it reused, what it booked, how long it took.
+		if (strategy === "agentic" && !userCompaction?.compact) {
+			config.logger?.log(
+				describeCompactionRun({
+					path: runPath,
+					reason: runReason,
+					meter,
+					durationMs,
+					...(typeof context.model.info?.contextWindow === "number"
+						? { sessionWindow: context.model.info.contextWindow }
+						: {}),
+				}),
+				{ severity: "info" },
+			);
+		}
 		// Telemetry identity: surface the agent/conversation passed into the
 		// prepareTurn so multi-agent runs can attribute compactions correctly.
 		// `sessionId` is the host-owned session id (ulid). We fall back to the
@@ -1715,7 +1846,7 @@ export function createContextCompactionPrepareTurn(
 			await repointPolykvAfterCompaction({
 				sessionId: config.sessionId,
 				providerConfig,
-				compactedPrompt: JSON.stringify(result.messages),
+				sessionCellsReleased,
 				logger: config.logger,
 			});
 			const compactedSummary = result.messages

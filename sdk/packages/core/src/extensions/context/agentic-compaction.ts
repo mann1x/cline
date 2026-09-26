@@ -34,7 +34,16 @@ import {
 	serializeConversation,
 	serializeReasoningWithOutcomes,
 } from "./compaction-shared";
-import { logExcerpt, runCouncilReview } from "./council-compaction";
+import {
+	type CompactionContinuation,
+	type CompactionMeter,
+	meterCall,
+} from "./continuation-compaction";
+import {
+	logExcerpt,
+	runCouncilReview,
+	stripHalfMarker,
+} from "./council-compaction";
 import { cutEchoedTranscript, trimReplayOverflow } from "./replay-compaction";
 import {
 	buildToolLedger,
@@ -224,11 +233,14 @@ async function generateSummary(options: {
 	request: string;
 	systemPrompt: string;
 	logger?: BasicLogger;
+	/** Where the prompt this call paid for is counted. */
+	meter?: CompactionMeter;
 }): Promise<SummaryGenerationResult> {
 	const handler = await createHandlerAsync(options.providerConfig);
 	let text = "";
 	let reasoningChars = 0;
 	let incompleteReason: string | undefined;
+	let promptTokens: number | undefined;
 	for await (const chunk of handler.createMessage(options.systemPrompt, [
 		{ role: "user", content: options.request },
 	])) {
@@ -240,6 +252,12 @@ async function generateSummary(options: {
 			reasoningChars += chunk.reasoning?.length ?? 0;
 			continue;
 		}
+		if (chunk.type === "usage") {
+			promptTokens =
+				(chunk.requestInputTokens ?? chunk.inputTokens) -
+				(chunk.cacheReadTokens ?? 0);
+			continue;
+		}
 		if (chunk.type === "done") {
 			if (!chunk.success && chunk.error) {
 				throw new Error(chunk.error);
@@ -247,6 +265,7 @@ async function generateSummary(options: {
 			incompleteReason = chunk.incompleteReason ?? incompleteReason;
 		}
 	}
+	meterCall(options.meter, undefined, promptTokens);
 	options.logger?.debug("Generated compaction summary", {
 		outputChars: text.length,
 		reasoningChars,
@@ -283,6 +302,17 @@ async function generateThinkingSummary(options: {
 	activeProviderConfig: ProviderConfig;
 	summarizerInputLimit: number;
 	logger?: BasicLogger;
+	meter?: CompactionMeter;
+	/**
+	 * Makes the call instead of the summarizer's own handler: a continuation
+	 * sends it on an exact booking of its own.
+	 */
+	generate?: (call: {
+		systemPrompt: string;
+		request: string;
+		maxOutputTokens: number;
+		providerConfig: ProviderConfig;
+	}) => Promise<SummaryGenerationResult>;
 }): Promise<string | undefined> {
 	if (!options.enabled) {
 		return undefined;
@@ -317,12 +347,20 @@ async function generateThinkingSummary(options: {
 		outputTokenCap: options.maxOutputTokens,
 	});
 	try {
-		const result = await generateSummary({
-			providerConfig,
-			request,
-			systemPrompt: SUMMARIZER_SYSTEM_PROMPTS.retrospective,
-			logger: options.logger,
-		});
+		const result = options.generate
+			? await options.generate({
+					systemPrompt: SUMMARIZER_SYSTEM_PROMPTS.retrospective,
+					request,
+					maxOutputTokens: options.maxOutputTokens,
+					providerConfig,
+				})
+			: await generateSummary({
+					providerConfig,
+					request,
+					systemPrompt: SUMMARIZER_SYSTEM_PROMPTS.retrospective,
+					logger: options.logger,
+					meter: options.meter,
+				});
 		// The retrospective is handed its own reasoning text and can run past
 		// the end of it in the same way the summary does, so it gets the same
 		// cut. It is the more damaging of the two to leave: the retrospective
@@ -468,8 +506,18 @@ export async function runAgenticCompaction(options: {
 	 */
 	measureReportedTokens?: MeasureReportedTokens;
 	logger?: BasicLogger;
+	/**
+	 * Write the summary as the session's next turn instead of from a pasted
+	 * transcript (`continuation-compaction.ts`). The caller owns it and
+	 * disposes of it on every path out.
+	 */
+	continuation?: CompactionContinuation;
+	/** Where this compaction's prefill is counted, on either path. */
+	meter?: CompactionMeter;
 }): Promise<CoreCompactionResult | undefined> {
 	const messages = options.context.messages;
+	const continuation = options.continuation;
+	const meter = continuation?.meter ?? options.meter;
 	if (messages.length < 2) {
 		return undefined;
 	}
@@ -598,7 +646,9 @@ export async function runAgenticCompaction(options: {
 	);
 	const availableSummaryInputTokens =
 		summarizerInputLimit - summaryRequestOverheadTokens;
-	if (availableSummaryInputTokens <= 0) {
+	// A continuation sends no transcript: the writer already holds it, so the
+	// summarizer's input limit has nothing to bound.
+	if (!continuation && availableSummaryInputTokens <= 0) {
 		// At warn, and naming the two numbers, because this is a configuration
 		// fault rather than a transcript that happens not to need compacting.
 		// The instruction alone does not fit the summarizer's window, so no
@@ -621,10 +671,10 @@ export async function runAgenticCompaction(options: {
 	}
 	const summaryInputBudget = buildAgenticSummaryInputBudget({
 		messages: newMessagesToFold,
-		targetTokens: availableSummaryInputTokens,
+		targetTokens: Math.max(1, availableSummaryInputTokens),
 		estimateMessageTokens: options.estimateMessageTokens,
 	});
-	if (summaryInputBudget.status === "failed") {
+	if (!continuation && summaryInputBudget.status === "failed") {
 		options.logger?.log(
 			"Skipped agentic compaction: summary input budget failed",
 			{
@@ -673,15 +723,34 @@ export async function runAgenticCompaction(options: {
 			)
 		: "";
 
-	const fileOps = extractFileOps(summaryInputBudget.messages);
-	const conversationText = serializeConversation(summaryInputBudget.messages);
+	// A continuation's writer reads the whole fold in its context, so the
+	// files are counted from all of it rather than from the projection that
+	// had to fit a request.
+	const fileOps = extractFileOps(
+		continuation ? newMessagesToFold : summaryInputBudget.messages,
+	);
+	const conversationText = continuation
+		? ""
+		: serializeConversation(summaryInputBudget.messages);
 	const mergedUserRequests = mergeUserRequests(
 		previousUserRequests,
 		spanUserRequests,
 	);
 	const summaryRequest = buildSummaryRequest({
-		previousSummary,
+		// In a continuation the previous summary is the first message of the
+		// context the writer is reading; quoting it again pays for it twice.
+		previousSummary: continuation ? undefined : previousSummary,
 		conversationText,
+		...(continuation
+			? {
+					conversationInContext: describeReplaySpan({
+						messages,
+						cutIndex,
+						keepRecentMessages,
+						pinnedMessage,
+					}),
+				}
+			: {}),
 		fileOps,
 		promptTemplate: options.summaryPrompt,
 		userRequests: mergeUserRequests(mergedUserRequests, pinnedUserRequests),
@@ -774,15 +843,24 @@ export async function runAgenticCompaction(options: {
 				: summaryRequest;
 		let candidate: SummaryGenerationResult | undefined;
 		progress.step("summary");
+		const writerRole = keepRecentMessages
+			? SUMMARIZER_SYSTEM_PROMPTS.tail
+			: SUMMARIZER_SYSTEM_PROMPTS.full;
 		try {
-			candidate = await generateSummary({
-				providerConfig: summarizerProviderConfig,
-				request,
-				systemPrompt: keepRecentMessages
-					? SUMMARIZER_SYSTEM_PROMPTS.tail
-					: SUMMARIZER_SYSTEM_PROMPTS.full,
-				logger: options.logger,
-			});
+			candidate = continuation
+				? // The session's own system prompt stays in place, so the role
+					// the summarizer is given travels in the instruction.
+					await continuation.write(
+						`${writerRole}\n\n${request}`,
+						summaryLimitTokens,
+					)
+				: await generateSummary({
+						providerConfig: summarizerProviderConfig,
+						request,
+						systemPrompt: writerRole,
+						logger: options.logger,
+						meter,
+					});
 		} catch (error) {
 			// A cancelled compaction is not a failed one, and retrying it would
 			// ignore the abort that asked it to stop.
@@ -941,56 +1019,76 @@ export async function runAgenticCompaction(options: {
 	// cannot honour, and costs tokens on every compaction to make it.
 	//
 	// Explicitly, not inferred from `spanFor`. An absent revision lookup already
-	if (thinkingSummaryEnabled) {
-		progress.step("retrospective");
-	}
-	const rawThinkingSummary = await generateThinkingSummary({
-		enabled: thinkingSummaryEnabled,
-		messages: newMessagesToFold,
-		previousThinkingSummary,
-		promptTemplate: options.thinkingSummaryPrompt,
-		maxOutputTokens: resolveThinkingSummaryMaxTokens({
-			budgets: outputBudgets,
-			summaryTokens: estimateTokens(summary.length),
-		}),
-		summarizer: options.summarizer,
-		activeProviderConfig: options.providerConfig,
-		summarizerInputLimit,
-		logger: options.logger,
-	});
-	// The council reads the transcript the summary was written from, so it runs
-	// on `newMessagesToFold` -- what this compaction is folding -- and not on
-	// the carried summary above it, which no reviewer holds the evidence for.
-	const reviewed =
-		options.councilEnabled === false
-			? {
-					summary,
-					thinkingSummary: rawThinkingSummary,
-					reviewers: 0,
-					merged: false,
-				}
-			: await runCouncilReview({
-					summary,
-					thinkingSummary: rawThinkingSummary,
-					serial: Boolean(summarizerProviderConfig.engineSessionId),
-					messages: newMessagesToFold,
-					maxRequestChars: summarizerInputLimit * CHARS_PER_TOKEN,
-					toolLedgerKey: ledgerEnabled
-						? renderToolLedgerKey(ledgerEntries)
-						: undefined,
-					generate: (call) => {
-						progress.step("review");
-						return generateSummary({
-							providerConfig: summarizerProviderConfig,
-							request: call.request,
-							systemPrompt: call.systemPrompt,
-							logger: options.logger,
-						}).then((result) => cutEchoedTranscript(result.text).text);
-					},
-					logger: options.logger,
-					criticPrompt: options.councilCriticPrompt,
-					synthesizerPrompt: options.councilSynthesizerPrompt,
-				});
+	const toolLedgerKey = ledgerEnabled
+		? renderToolLedgerKey(ledgerEntries)
+		: undefined;
+	const runRetrospective = (): Promise<string | undefined> => {
+		if (thinkingSummaryEnabled) {
+			progress.step("retrospective");
+		}
+		return generateThinkingSummary({
+			enabled: thinkingSummaryEnabled,
+			messages: newMessagesToFold,
+			previousThinkingSummary,
+			promptTemplate: options.thinkingSummaryPrompt,
+			maxOutputTokens: resolveThinkingSummaryMaxTokens({
+				budgets: outputBudgets,
+				summaryTokens: estimateTokens(summary.length),
+			}),
+			summarizer: options.summarizer,
+			activeProviderConfig: options.providerConfig,
+			summarizerInputLimit,
+			logger: options.logger,
+			meter,
+			...(continuation
+				? {
+						generate: (call: {
+							systemPrompt: string;
+							request: string;
+							maxOutputTokens: number;
+							providerConfig: ProviderConfig;
+						}) =>
+							continuation.fresh(
+								"retrospective",
+								call.systemPrompt,
+								call.request,
+								call.maxOutputTokens,
+								call.providerConfig,
+							),
+					}
+				: {}),
+		});
+	};
+	const reviewed = continuation
+		? await reviewAsContinuation({
+				continuation,
+				summary,
+				councilEnabled: options.councilEnabled !== false,
+				summaryLimitTokens,
+				summarizerProviderConfig,
+				messages: newMessagesToFold,
+				toolLedgerKey,
+				runRetrospective,
+				progress,
+				logger: options.logger,
+				criticPrompt: options.councilCriticPrompt,
+				synthesizerPrompt: options.councilSynthesizerPrompt,
+			})
+		: await reviewAsText({
+				summary,
+				// The retrospective first, as it always ran: the council reads it.
+				thinkingSummary: await runRetrospective(),
+				councilEnabled: options.councilEnabled !== false,
+				summarizerProviderConfig,
+				summarizerInputLimit,
+				messages: newMessagesToFold,
+				toolLedgerKey,
+				progress,
+				meter,
+				logger: options.logger,
+				criticPrompt: options.councilCriticPrompt,
+				synthesizerPrompt: options.councilSynthesizerPrompt,
+			});
 	const thinkingSummary = reviewed.thinkingSummary;
 	// After the council, so a citation survives being rewritten: the writers
 	// work on prose carrying `[#7]`, which is cheap to move around and cheap to
@@ -1083,4 +1181,186 @@ export async function runAgenticCompaction(options: {
 			liveTailHandling: summaryInputBudget.liveTailHandling,
 		},
 	};
+}
+
+/**
+ * Which part of the context a continuation's replay covers.
+ *
+ * The writer holds the whole conversation, and with a recency tail only the
+ * part before the cut is folded -- the rest stays in the context verbatim,
+ * directly after the replay. The boundary is named by the opening words of
+ * the first message that stays, because an index means nothing to a model.
+ */
+export function describeReplaySpan(input: {
+	messages: readonly MessageWithMetadata[];
+	cutIndex: number;
+	keepRecentMessages: boolean;
+	pinnedMessage?: MessageWithMetadata;
+}): string {
+	if (!input.keepRecentMessages || input.cutIndex >= input.messages.length) {
+		return "The conversation this replay covers is everything above this message.";
+	}
+	const opening = (message: MessageWithMetadata | undefined): string => {
+		const text = serializeConversation(message ? [message] : [])
+			.replace(/\s+/g, " ")
+			.trim();
+		return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+	};
+	const lines = [
+		`The conversation this replay covers is everything above this message up to, and not including, the message that begins: «${opening(input.messages[input.cutIndex])}». That message and everything after it stay in your context word for word, directly after what you write, so the replay ends where it begins.`,
+	];
+	if (input.pinnedMessage) {
+		lines.push(
+			`The user's message that begins «${opening(input.pinnedMessage)}» also stays word for word, directly after the replay.`,
+		);
+	}
+	return lines.join("\n\n");
+}
+
+interface ReviewedSummary {
+	summary: string;
+	thinkingSummary?: string;
+	reviewers: number;
+	merged: boolean;
+}
+
+/** The council over a pasted transcript: what always ran. */
+async function reviewAsText(input: {
+	summary: string;
+	thinkingSummary: string | undefined;
+	councilEnabled: boolean;
+	summarizerProviderConfig: ProviderConfig;
+	summarizerInputLimit: number;
+	messages: MessageWithMetadata[];
+	toolLedgerKey: string | undefined;
+	progress: CompactionProgress;
+	meter: CompactionMeter | undefined;
+	logger?: BasicLogger;
+	criticPrompt?: string;
+	synthesizerPrompt?: string;
+}): Promise<ReviewedSummary> {
+	if (!input.councilEnabled) {
+		return {
+			summary: input.summary,
+			thinkingSummary: input.thinkingSummary,
+			reviewers: 0,
+			merged: false,
+		};
+	}
+	// The council reads the transcript the summary was written from, so it
+	// runs on what this compaction is folding -- and not on the carried
+	// summary above it, which no reviewer holds the evidence for.
+	return runCouncilReview({
+		summary: input.summary,
+		thinkingSummary: input.thinkingSummary,
+		serial: Boolean(input.summarizerProviderConfig.engineSessionId),
+		messages: input.messages,
+		maxRequestChars: input.summarizerInputLimit * CHARS_PER_TOKEN,
+		toolLedgerKey: input.toolLedgerKey,
+		generate: (call) => {
+			input.progress.step("review");
+			return generateSummary({
+				providerConfig: input.summarizerProviderConfig,
+				request: call.request,
+				systemPrompt: call.systemPrompt,
+				logger: input.logger,
+				meter: input.meter,
+			}).then((result) => cutEchoedTranscript(result.text).text);
+		},
+		logger: input.logger,
+		criticPrompt: input.criticPrompt,
+		synthesizerPrompt: input.synthesizerPrompt,
+	});
+}
+
+/**
+ * The council as continuations: the critics continue the frozen session with
+ * the writer's summary in it, the session's cells are released, and only then
+ * do the retrospective and the synthesizer run -- each on an exact booking of
+ * its own, one after the other, so the compaction never holds more than one
+ * of them.
+ */
+async function reviewAsContinuation(input: {
+	continuation: CompactionContinuation;
+	summary: string;
+	councilEnabled: boolean;
+	summaryLimitTokens: number;
+	summarizerProviderConfig: ProviderConfig;
+	messages: MessageWithMetadata[];
+	toolLedgerKey: string | undefined;
+	runRetrospective: () => Promise<string | undefined>;
+	progress: CompactionProgress;
+	logger?: BasicLogger;
+	criticPrompt?: string;
+	synthesizerPrompt?: string;
+}): Promise<ReviewedSummary> {
+	const { continuation } = input;
+	const plan = await continuation.afterWriter(
+		input.summary.length,
+		input.summaryLimitTokens,
+	);
+	let retrospective: string | undefined;
+	let released = false;
+	const releaseThenRetrospect = async () => {
+		if (released) {
+			return { thinkingSummary: retrospective };
+		}
+		released = true;
+		await continuation.release();
+		retrospective = await input.runRetrospective();
+		return { thinkingSummary: retrospective };
+	};
+	if (!input.councilEnabled || plan.critics === "skip") {
+		if (input.councilEnabled) {
+			input.logger?.log(`The compaction council was skipped: ${plan.reason}`, {
+				severity: "info",
+			});
+		}
+		await releaseThenRetrospect();
+		return {
+			summary: stripHalfMarker(input.summary),
+			thinkingSummary: retrospective,
+			reviewers: 0,
+			merged: false,
+		};
+	}
+	input.logger?.debug?.(`[compaction] council: ${plan.reason}`);
+	const reviewed = await runCouncilReview({
+		summary: input.summary,
+		serial: plan.critics === "serial",
+		messages: input.messages,
+		transcriptInContext: true,
+		toolLedgerKey: input.toolLedgerKey,
+		generate: async (call) => {
+			input.progress.step("review");
+			if (call.role === "critic") {
+				const text = await continuation.critic(
+					call.half ?? "first",
+					call.systemPrompt,
+					call.request,
+					input.summaryLimitTokens,
+				);
+				return cutEchoedTranscript(text).text;
+			}
+			const result = await continuation.fresh(
+				"synthesizer",
+				call.systemPrompt,
+				call.request,
+				input.summaryLimitTokens,
+				input.summarizerProviderConfig,
+			);
+			return cutEchoedTranscript(result.text).text;
+		},
+		prepareSynthesis: releaseThenRetrospect,
+		logger: input.logger,
+		criticPrompt: input.criticPrompt,
+		synthesizerPrompt: input.synthesizerPrompt,
+	});
+	// The council can end before its synthesizer (no split, no usable half):
+	// the release and the retrospective still happen.
+	if (!released) {
+		await releaseThenRetrospect();
+		return { ...reviewed, thinkingSummary: retrospective };
+	}
+	return reviewed;
 }

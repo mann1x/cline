@@ -86,6 +86,12 @@ function engine(
 		if (url.pathname === "/kv") {
 			return Response.json({ allocations: overrides.allocations ?? [] });
 		}
+		if (url.pathname === "/slots") {
+			return Response.json([{ id: 2, opencoti: { session_id: "s1" } }]);
+		}
+		if (url.pathname.startsWith("/slots/")) {
+			return Response.json({ id_slot: 2, n_erased: 5_000 });
+		}
 		if (url.pathname === "/props") {
 			return Response.json({
 				features: overrides.features ?? [],
@@ -95,7 +101,10 @@ function engine(
 		// `found` is the answer, not the status: the server replies 200 with
 		// `found: false` for a session it never held.
 		if (url.pathname.endsWith("/close")) {
-			return Response.json({ found: overrides.sessionHeld !== false });
+			return Response.json({
+				found: overrides.sessionHeld !== false,
+				kv_dropped: true,
+			});
 		}
 		if (init?.method === "DELETE") {
 			// There is no DELETE route on this server. Say so.
@@ -249,19 +258,6 @@ describe("who owns the pools", () => {
 		).toMatchObject({
 			session_id: "s1",
 		});
-	});
-
-	it("names it on the fork a compaction re-roots onto", async () => {
-		const server = engine();
-		setPolykvSession("s1", { poolId: "pool-root", prefixTokens: 12_859 });
-		await repointPolykvAfterCompaction({
-			sessionId: "s1",
-			providerConfig: provider(server.fetch),
-			compactedPrompt: "a summary of the conversation so far",
-		});
-
-		const fork = server.calls.find((call) => call.path.endsWith("/fork"));
-		expect(fork?.body).toMatchObject({ session_id: "s1" });
 	});
 
 	it("names it on the swarm snapshot, which from_session would otherwise imply", async () => {
@@ -467,10 +463,10 @@ describe("what the engine says about its own room", () => {
 	});
 });
 
-describe("re-rooting after a compaction", () => {
+describe("after a compaction", () => {
 	// A swarm worker attached to the lead's snapshot: the pool is the lead's,
 	// and every other worker of the round is on it.
-	it("never forks or releases a pool the session only borrows", async () => {
+	it("never touches a pool the session only borrows", async () => {
 		const server = engine({ features: ["session_close_v1"] });
 		const config = provider(server.fetch);
 		setPolykvSession("lead~worker", {
@@ -479,12 +475,12 @@ describe("re-rooting after a compaction", () => {
 			layout: "borrowed",
 		});
 
-		const forked = await repointPolykvAfterCompaction({
+		const stays = await repointPolykvAfterCompaction({
 			sessionId: "lead~worker",
 			providerConfig: config,
-			compactedPrompt: "the summary",
 		});
-		expect(forked).toBeUndefined();
+		expect(stays).toBe("lead-pool");
+		expect(server.calls).toEqual([]);
 		expect(getPolykvSession("lead~worker")?.poolId).toBe("lead-pool");
 
 		await releasePolykvSession({
@@ -497,7 +493,10 @@ describe("re-rooting after a compaction", () => {
 		expect(paths).toContain("POST /sessions/lead~worker/close");
 	});
 
-	it("forks at the shared prefix, migrates, then releases the old pool", async () => {
+	// The replay still opens with the system prompt and tools the root pool
+	// covers. The old re-root forked the pre-compaction transcript into a new
+	// pool -- cells for a conversation that no longer exists.
+	it("stays on its prefix pool and forks nothing", async () => {
 		const server = engine();
 		const config = provider(server.fetch);
 		await ensurePolykvPool({
@@ -507,81 +506,95 @@ describe("re-rooting after a compaction", () => {
 		});
 		server.calls.length = 0;
 
-		const forked = await repointPolykvAfterCompaction({
+		const stays = await repointPolykvAfterCompaction({
 			sessionId: "s1",
 			providerConfig: config,
-			compactedPrompt: "the summary and the recent tail",
 		});
 
-		expect(forked).toBe("pool-fork");
-		// The branch is the prefix the compaction did not touch, which is the
-		// whole saving. The child itself comes from the live session, because the
-		// body a fork takes is the FULL child path, not the rewritten tail.
-		expect(server.calls[0]).toMatchObject({
-			path: "/polykv/pools/pool-root/fork",
-			body: { branch_pos: 12_859, from_session: "s1" },
+		expect(stays).toBe("pool-root");
+		expect(getPolykvSession("s1")).toMatchObject({
+			poolId: "pool-root",
+			prefixTokens: 12_859,
 		});
 		const paths = server.calls.map((c) => `${c.method} ${c.path}`);
-		expect(paths).toContain("POST /polykv/pools/pool-fork/pin");
-		expect(paths).toContain("POST /polykv/pools/pool-root/release");
-		expect(paths.indexOf("POST /polykv/pools/pool-fork/pin")).toBeLessThan(
-			paths.indexOf("POST /polykv/pools/pool-root/release"),
-		);
+		expect(paths.filter((p) => p.includes("/polykv/pools"))).toEqual([]);
 	});
 
-	// Reading the branch back off the fork would set it to the compacted suffix
-	// and make the prefix unshareable one compaction later.
-	it("keeps branching at the same prefix across repeated compactions", async () => {
+	// No booking: a close drops the slot's stale cells and books nothing.
+	it("closes an unbooked session to drop the replaced transcript's cells", async () => {
+		const server = engine({ features: ["kv_status_v1"] });
+		const config = provider(server.fetch);
+		setPolykvSession("s1", { poolId: "pool-root", prefixTokens: 12_859 });
+
+		await repointPolykvAfterCompaction({
+			sessionId: "s1",
+			providerConfig: config,
+		});
+
+		const paths = server.calls.map((c) => `${c.method} ${c.path}`);
+		expect(paths).toContain("POST /sessions/s1/close");
+		expect(paths.some((p) => p.includes("/slots"))).toBe(false);
+	});
+
+	// A held booking is where the conversation goes on: closing it would give
+	// the window away and have the next turn win it back.
+	it("erases the slot of a held booking and keeps the booking", async () => {
 		const server = engine({
-			pools: [
-				{ pool_id: "pool-root", prefix_len: 12_859 },
-				{ pool_id: "pool-a", prefix_len: 40_000 },
-				{ pool_id: "pool-b", prefix_len: 55_000 },
-			],
+			features: ["kv_status_v1"],
+			allocations: [{ session_id: "s1", window: 65_536, used: 40_000 }],
 		});
 		const config = provider(server.fetch);
-		await ensurePolykvPool({
-			sessionId: "s1",
-			providerConfig: config,
-			systemPrompt: "prompt",
-		});
+		setPolykvSession("s1", { poolId: "pool-root", prefixTokens: 12_859 });
+
 		await repointPolykvAfterCompaction({
 			sessionId: "s1",
 			providerConfig: config,
-			compactedPrompt: "first",
-		});
-		server.calls.length = 0;
-		await repointPolykvAfterCompaction({
-			sessionId: "s1",
-			providerConfig: config,
-			compactedPrompt: "second",
 		});
 
-		expect(server.calls[0]).toMatchObject({
-			path: "/polykv/pools/pool-a/fork",
-			body: { branch_pos: 12_859 },
-		});
-		expect(getPolykvSession("s1")?.prefixTokens).toBe(12_859);
+		const paths = server.calls.map((c) => `${c.method} ${c.path}`);
+		expect(paths).toContain("POST /slots/2?action=erase");
+		expect(paths.some((p) => p.endsWith("/close"))).toBe(false);
 	});
 
-	// The safe side of the failure: the old pool is still pinned and still
-	// serving, and the conversation pays full prefill rather than stopping.
-	it("stays on the old pool when the fork fails", async () => {
-		const server = engine({ fail: "/fork" });
-		const config = provider(server.fetch);
-		await ensurePolykvPool({
+	it("does nothing when the compaction already released the session's cells", async () => {
+		const server = engine({ features: ["kv_status_v1"] });
+		setPolykvSession("s1", { poolId: "pool-root", prefixTokens: 12_859 });
+
+		const stays = await repointPolykvAfterCompaction({
 			sessionId: "s1",
-			providerConfig: config,
-			systemPrompt: "prompt",
+			providerConfig: provider(server.fetch),
+			sessionCellsReleased: true,
 		});
 
-		const forked = await repointPolykvAfterCompaction({
-			sessionId: "s1",
-			providerConfig: config,
-			compactedPrompt: "rewritten",
-		});
+		expect(stays).toBe("pool-root");
+		expect(server.calls).toEqual([]);
+	});
 
-		expect(forked).toBeUndefined();
+	// A session whose prefix lives in its slot alone would pay for it again.
+	it("leaves the slot of a session no pool covers", async () => {
+		const server = engine({ features: ["kv_status_v1"] });
+
+		expect(
+			await repointPolykvAfterCompaction({
+				sessionId: "s1",
+				providerConfig: provider(server.fetch),
+			}),
+		).toBeUndefined();
+		expect(server.calls).toEqual([]);
+	});
+
+	// The stale cells stay until the next request overwrites them: cells,
+	// never correctness.
+	it("stays on the pool when the drop fails", async () => {
+		const server = engine({ fail: "/close" });
+		setPolykvSession("s1", { poolId: "pool-root", prefixTokens: 12_859 });
+
+		expect(
+			await repointPolykvAfterCompaction({
+				sessionId: "s1",
+				providerConfig: provider(server.fetch),
+			}),
+		).toBe("pool-root");
 		expect(getPolykvSession("s1")?.poolId).toBe("pool-root");
 	});
 });
@@ -778,58 +791,6 @@ describe("the prefix goes through the server's template", () => {
 		const created = server.calls.find((call) => call.path === "/polykv/pools")
 			?.body as { prompt?: string };
 		expect(created.prompt?.endsWith("\n")).toBe(true);
-	});
-});
-
-describe("re-rooting after a compaction", () => {
-	// The engine validates the child's prefix token-exact against the parent
-	// over `[0, branch_pos)` and answers 400 on a mismatch. The old code sent
-	// the compacted text alone -- a suffix -- so every fork was rejected and the
-	// catch reported "staying on pool X", which reads as a server that does not
-	// support it rather than a request that is malformed.
-	it("snapshots the live session rather than re-sending tokens", async () => {
-		const server = engine();
-		await ensurePolykvPool({
-			sessionId: "s1",
-			providerConfig: provider(server.fetch),
-			systemPrompt: "You are Cline.",
-		});
-		server.calls.length = 0;
-
-		const poolId = await repointPolykvAfterCompaction({
-			sessionId: "s1",
-			providerConfig: provider(server.fetch),
-			compactedPrompt: "a summary of what happened",
-		});
-
-		expect(poolId).toBe("pool-fork");
-		const fork = server.calls.find((call) => call.path.endsWith("/fork"));
-		expect(fork).toMatchObject({
-			method: "POST",
-			body: { branch_pos: 12_859, from_session: "s1" },
-		});
-		// Never a bare suffix: that is the 400.
-		expect((fork?.body as { tokens?: unknown }).tokens).toBeUndefined();
-	});
-
-	it("releases the old pool through the actions that exist", async () => {
-		const server = engine();
-		await ensurePolykvPool({
-			sessionId: "s1",
-			providerConfig: provider(server.fetch),
-			systemPrompt: "You are Cline.",
-		});
-		server.calls.length = 0;
-
-		await repointPolykvAfterCompaction({
-			sessionId: "s1",
-			providerConfig: provider(server.fetch),
-			compactedPrompt: "a summary",
-		});
-
-		const paths = server.calls.map((call) => call.path);
-		expect(paths).toContain("/polykv/pools/pool-root/unpin");
-		expect(paths).toContain("/polykv/pools/pool-root/release");
 	});
 });
 
@@ -1080,9 +1041,9 @@ describe("a lead conversation in the server-wide lead tree", () => {
 			await repointPolykvAfterCompaction({
 				sessionId: "s1",
 				providerConfig: config,
-				compactedPrompt: "summary",
+				sessionCellsReleased: true,
 			}),
-		).toBeUndefined();
+		).toBe("7");
 		await releasePolykvSession({ sessionId: "s1", providerConfig: config });
 		const actions = server.calls
 			.map((c) => `${c.method} ${c.path}`)
