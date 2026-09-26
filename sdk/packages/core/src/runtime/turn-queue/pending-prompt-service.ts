@@ -236,6 +236,17 @@ export class PendingPromptService {
 		state.pendingPrompts.length = 0;
 		return [];
 	}
+
+	/** Drop the harness's notes, keeping what the user queued. */
+	dropHarnessNotes(state: PendingPromptQueueState): number {
+		const before = state.pendingPrompts.length;
+		const kept = state.pendingPrompts.filter(
+			(entry) => entry.origin !== "harness",
+		);
+		state.pendingPrompts.length = 0;
+		state.pendingPrompts.push(...kept);
+		return before - kept.length;
+	}
 }
 
 export class PendingPromptsController {
@@ -313,6 +324,19 @@ export class PendingPromptsController {
 		if (session.pendingPrompts.length === 0) return;
 		this.service.clear(session);
 		this.emitPrompts(session);
+	}
+
+	/**
+	 * A user's Cancel stops the lead; the harness's notes to it must not start
+	 * it again. They were the lead's to read at its next boundary, and a
+	 * cancelled turn has none: drained, a queued note ran a new turn the moment
+	 * the old one stopped -- on pandorum 2026-09-26 it compacted a 58k-token
+	 * transcript until a second Cancel. What the user queued still runs.
+	 */
+	dropHarnessNotes(session: ActiveSession): void {
+		if (this.service.dropHarnessNotes(session) > 0) {
+			this.emitPrompts(session);
+		}
 	}
 
 	emitPrompts(session: ActiveSession): void {

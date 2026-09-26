@@ -48,6 +48,27 @@ describe("PendingPromptService", () => {
 		]);
 	});
 
+	it("drops the runtime's notes on a Cancel and keeps what the user queued", () => {
+		const service = new PendingPromptService();
+		const state = createState();
+		service.enqueue(state, { prompt: "typed", delivery: "queue" });
+		service.enqueue(state, {
+			prompt: "a side turn's recap",
+			delivery: "steer",
+			origin: "harness",
+			noteKind: "recap",
+		});
+		service.enqueue(state, {
+			prompt: "agents stuck",
+			delivery: "steer",
+			origin: "harness",
+			noteKind: "status",
+		});
+
+		expect(service.dropHarnessNotes(state)).toBe(2);
+		expect(service.list(state).map(({ prompt }) => prompt)).toEqual(["typed"]);
+	});
+
 	it("merges the runtime's notes while they wait: recaps join, a status report is replaced", () => {
 		const service = new PendingPromptService();
 		const state = createState();

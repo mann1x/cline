@@ -3001,6 +3001,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 		session.aborting = true;
 		if (session.drainingPendingPrompts) {
 			this.pendingPromptsController.discardQueue(session);
+		} else {
+			this.pendingPromptsController.dropHarnessNotes(session);
 		}
 		const teamRuntime = session.runtime.teamRuntime;
 		try {
