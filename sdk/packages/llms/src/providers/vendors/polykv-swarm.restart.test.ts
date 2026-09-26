@@ -3,6 +3,7 @@ import { createOpencotiFetch } from "./opencoti";
 import { resetPolykvAvailability } from "./polykv";
 import {
 	invalidatePolykvRoot,
+	keepPolykvOwnersAlive,
 	onPolykvNotice,
 	onPolykvRoomWait,
 	POLYKV_ROOM_BACKOFF_MAX_MS,
@@ -11,6 +12,7 @@ import {
 	polykvRootGeneration,
 	polykvServerIdentity,
 	releaseAllPolykvSwarms,
+	releasePolykvAgent,
 } from "./polykv-swarm";
 
 /**
@@ -30,8 +32,11 @@ function restartableEngine(
 		bootHeader?: boolean;
 		/** The `opencoti` block with `pool_unknown` (`pool_unknown_in_response_v1`). */
 		poolUnknown?: boolean;
+		/** `/kv` lists each owner that created a pool, at a 65,536-token window. */
+		ownerKv?: boolean;
 	} = {},
 ) {
+	const owners = new Set<string>();
 	const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
 	let nextPool = 0;
 	let boot = 1;
@@ -96,7 +101,21 @@ function restartableEngine(
 			});
 		}
 		if (url.pathname === "/kv") {
-			return json({ session_ctx_max: 262_144 });
+			return json({
+				session_ctx_max: 262_144,
+				...(options.ownerKv
+					? {
+							allocations: [...owners].map((session_id) => ({
+								session_id,
+								window: 65_536,
+								used: 0,
+							})),
+						}
+					: {}),
+			});
+		}
+		if (url.pathname === "/sessions/resize") {
+			return json({ ok: true, window_new: body.num_ctx });
 		}
 		if (url.pathname === "/apply-template") {
 			onTemplate?.();
@@ -107,6 +126,9 @@ function restartableEngine(
 			});
 		}
 		if (url.pathname === "/polykv/pools") {
+			if (typeof body.session_id === "string") {
+				owners.add(body.session_id);
+			}
 			const prompt = String(body.prompt);
 			pools.set(nextPool, { prompt, parent: -1 });
 			return json({
@@ -854,5 +876,109 @@ describe("a response that says its pool is unknown", () => {
 		expect(engine.pools().size).toBe(created);
 		// Only A's one turn after the drop named a pool the server lacked.
 		expect(engine.unknownPoolSends).toEqual([poolA]);
+	});
+});
+
+/**
+ * bs2 8244 2026-09-26: the engine released 26 owners idle past its TTL while
+ * it kept running, each exactly five minutes after the owner's last finished
+ * request, with its agents still being refused and retrying. Every lapse was
+ * read as a restart, and every owner on the server was dropped with it.
+ */
+describe("an owner the server let go while it kept running", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	const sendIn = (
+		engine: Engine,
+		group: string,
+		sessionId: string,
+		body: object,
+	) =>
+		createOpencotiFetch({
+			fetch: engine.fetch,
+			baseUrl: "http://engine/v1",
+			request: { worker: { group, sessionId, layers: 2 } },
+		})("http://engine/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify(body),
+		});
+	const poolsOf = (engine: Engine, sessionId: string) =>
+		turns(engine)
+			.filter((call) => call.body.session_id === sessionId)
+			.map((call) => call.body.pool_id as number | undefined);
+
+	it("drops only that owner, and does not call it a restart", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const engine = restartableEngine({ bootFields: true });
+		await sendIn(engine, "lead-a", "a", agentBody("role A", "t1"));
+		await sendIn(engine, "lead-b", "b", agentBody("role B", "t1"));
+		const [poolA] = poolsOf(engine, "a");
+		const [poolB] = poolsOf(engine, "b");
+		const told: Record<string, string[]> = { a: [], b: [] };
+		const stops = ["a", "b"].map((id) =>
+			onPolykvNotice(id, (notice) => told[id]?.push(notice.text)),
+		);
+		try {
+			engine.dropPool(poolA as number);
+			vi.setSystemTime(Date.now() + POLYKV_VERIFY_INTERVAL_MS + 1);
+			await sendIn(engine, "lead-b", "b", agentBody("role B", "t2"));
+			await sendIn(engine, "lead-a", "a", agentBody("role A", "t2"));
+		} finally {
+			for (const stop of stops) {
+				stop();
+			}
+		}
+		// B kept its owner and its pool.
+		expect(poolsOf(engine, "b")).toEqual([poolB, poolB]);
+		expect(told.b).toEqual([]);
+		// A was placed anew, on a pool holding its own layer.
+		const newA = poolsOf(engine, "a").at(-1) as number;
+		expect(newA).not.toBe(poolA);
+		expect(engine.pools().get(newA)?.prompt).toContain("role A");
+		expect(engine.unknownPoolSends).toEqual([]);
+		expect(told.a.join(" ")).toContain("did not restart");
+		expect(told.a.join(" ")).not.toMatch(/\brestarted\b/);
+	});
+
+	it("still drops everything when the boot id changed with the pools", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const engine = restartableEngine({ bootFields: true });
+		await sendIn(engine, "lead-a", "a2", agentBody("role A", "t1"));
+		await sendIn(engine, "lead-b", "b2", agentBody("role B", "t1"));
+		const generation = polykvRootGeneration("http://engine/v1");
+		engine.restartQuietly();
+		vi.setSystemTime(Date.now() + POLYKV_VERIFY_INTERVAL_MS + 1);
+		await sendIn(engine, "lead-b", "b2", agentBody("role B", "t2"));
+		expect(polykvRootGeneration("http://engine/v1")).toBe(generation + 1);
+	});
+
+	it("keeps an owner with agents from lapsing, at the window the server holds", async () => {
+		const engine = restartableEngine({
+			bootFields: true,
+			ownerKv: true,
+			features: ["kv_status_v1", "kv_resize_v1"],
+		});
+		await send(engine, "k", agentBody("role A", "t1"));
+		expect(await keepPolykvOwnersAlive("http://engine/v1", engine.fetch)).toBe(
+			1,
+		);
+		const resizes = engine.calls.filter(
+			(call) => call.path === "/sessions/resize",
+		);
+		expect(resizes).toHaveLength(1);
+		expect(String(resizes[0]?.body.session_id)).toContain("polykv-owner");
+		// The window /kv states, not one remembered: never a grow.
+		expect(resizes[0]?.body.num_ctx).toBe(65_536);
+
+		// With its last agent gone the owner is closed, and nothing is kept.
+		await releasePolykvAgent("k");
+		expect(await keepPolykvOwnersAlive("http://engine/v1", engine.fetch)).toBe(
+			0,
+		);
+		expect(
+			engine.calls.filter((call) => call.path === "/sessions/resize"),
+		).toHaveLength(1);
 	});
 });

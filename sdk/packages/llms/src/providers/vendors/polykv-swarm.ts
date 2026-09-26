@@ -1,6 +1,7 @@
 import {
 	noteOpencotiRefusalPressure,
 	opencotiPendingResize,
+	readOpencotiKv,
 	resizeOpencotiSession,
 } from "./opencoti-kv-pressure";
 import type { OpencotiStreamPhase } from "./opencoti-liveness";
@@ -768,6 +769,160 @@ export function invalidatePolykvRoot(
 	return agents;
 }
 
+/**
+ * Owners whose pools the engine released while the server kept running --
+ * an allocation idle past the engine's TTL goes with its pools. Only those
+ * owners are dropped: their agents are placed anew on their next turn, and
+ * every other agent keeps its owner and its pools. The generation moves on,
+ * so a request prepared against a released id is prepared again; an agent
+ * whose owner stands resolves the same pools as before.
+ *
+ * `false` when a pool in `gone` belonged to no owner of the swarm, which this
+ * cannot account for; nothing was dropped then.
+ */
+function invalidateLapsedOwners(
+	root: string,
+	gone: ReadonlySet<string>,
+): boolean {
+	const lapsed: Array<[SwarmGroup, OwnerShard]> = [];
+	const accounted = new Set<string>();
+	for (const group of GROUPS.values()) {
+		if (group.root !== root) {
+			continue;
+		}
+		for (const shard of group.shards) {
+			if (shard.closed) {
+				continue;
+			}
+			const ids = [...shard.records.keys()].filter((id) => gone.has(id));
+			if (ids.length > 0) {
+				lapsed.push([group, shard]);
+				for (const id of ids) {
+					accounted.add(id);
+				}
+			}
+		}
+	}
+	if (accounted.size < gone.size) {
+		return false;
+	}
+	rootState(root).generation += 1;
+	for (const [group, shard] of lapsed) {
+		shard.closed = true;
+		shard.pools.clear();
+		shard.records.clear();
+		shard.settled?.clear();
+		shard.uses?.clear();
+		abandonShard(group.client, shard);
+		group.shards = group.shards.filter((other) => other !== shard);
+		for (const [agent, on] of [...group.assigned]) {
+			if (on !== shard) {
+				continue;
+			}
+			group.assigned.delete(agent);
+			reportPolykvNotice(agent, {
+				severity: "info",
+				text: `Its owner on ${root} was released by the server after sitting idle, and its shared pools with it (the server did not restart): they are rebuilt under a new owner on its next turn.`,
+			});
+		}
+	}
+	return true;
+}
+
+/**
+ * How often an owner with agents is kept from lapsing.
+ *
+ * The engine releases an allocation idle past its TTL (`--elastic-alloc-ttl`,
+ * five minutes on bs2), and only a finished request of the owner's resets
+ * that clock. An owner whose agents are all being refused -- the pool floor,
+ * no room -- or are in long tool calls has none, and on bs2 8244 2026-09-26
+ * every one of 26 lapses came exactly five minutes after the owner's last
+ * finished request, with its agents still retrying. Losing the owner costs
+ * them their pools and a new window they then wait for, so an owner is not
+ * let go while it has agents.
+ */
+export const POLYKV_OWNER_KEEPALIVE_MS = 60_000;
+
+const OWNER_KEEPALIVES = new Map<string, ReturnType<typeof setInterval>>();
+
+function ensureOwnerKeepalive(group: SwarmGroup): void {
+	if (OWNER_KEEPALIVES.has(group.root)) {
+		return;
+	}
+	const timer = setInterval(() => {
+		void keepPolykvOwnersAlive(group.root, group.fetch, group.headers);
+	}, POLYKV_OWNER_KEEPALIVE_MS);
+	(timer as { unref?: () => void }).unref?.();
+	OWNER_KEEPALIVES.set(group.root, timer);
+}
+
+function stopOwnerKeepalive(root: string): void {
+	const timer = OWNER_KEEPALIVES.get(root);
+	if (timer !== undefined) {
+		clearInterval(timer);
+		OWNER_KEEPALIVES.delete(root);
+	}
+}
+
+/**
+ * Reset the idle clock of every owner on `root` that has agents: a resize to
+ * the window the engine holds for it now (`/kv`), which the engine takes as a
+ * use and which changes nothing else. Never a grow -- the window is read, not
+ * remembered, so a pressure shrink stands. An owner busy with a request is
+ * refused the resize and needs none. Returns how many were reset.
+ */
+export async function keepPolykvOwnersAlive(
+	baseUrl: string,
+	fetchFn: typeof fetch,
+	headers?: Record<string, string>,
+): Promise<number> {
+	const root = polykvRoot(baseUrl);
+	const live: OwnerShard[] = [];
+	for (const group of GROUPS.values()) {
+		if (group.root !== root) {
+			continue;
+		}
+		for (const shard of group.shards) {
+			if (!shard.closed && !shard.borrowed && shard.agents.size > 0) {
+				live.push(shard);
+			}
+		}
+	}
+	if (live.length === 0) {
+		stopOwnerKeepalive(root);
+		return 0;
+	}
+	const props = await probeOpencotiProps(root, fetchFn).catch(() => undefined);
+	if (!hasOpencotiFeature(props?.features, OPENCOTI_FEATURES.kvResize)) {
+		return 0;
+	}
+	const kv = await readOpencotiKv(root, fetchFn).catch(() => undefined);
+	if (!kv) {
+		return 0;
+	}
+	const rows = new Map(kv.allocations.map((row) => [row.sessionId, row]));
+	let kept = 0;
+	await Promise.all(
+		live.map(async (shard) => {
+			const row = rows.get(shard.sessionId);
+			if (!row || row.resizePending !== undefined || shard.growing) {
+				return;
+			}
+			const answer = await resizeOpencotiSession({
+				baseUrl: root,
+				sessionId: shard.sessionId,
+				numCtx: row.window,
+				fetch: fetchFn,
+				...(headers ? { headers } : {}),
+			}).catch(() => undefined);
+			if (answer?.ok) {
+				kept += 1;
+			}
+		}),
+	);
+	return kept;
+}
+
 /** `boot_id` as `/props` or `/health` states it, top level or under `opencoti`. */
 function readBootId(
 	...bodies: ReadonlyArray<Record<string, unknown> | undefined>
@@ -964,6 +1119,26 @@ function heldPools(root: string, suspect = false): Array<[string, PoolRecord]> {
 	return held;
 }
 
+/**
+ * The pools we made that a `/polykv/pools` listing no longer holds as we made
+ * them. `undefined` when the listing says nothing about pools.
+ */
+function poolsNotListed(
+	listing: Record<string, unknown>,
+	held: Array<[string, PoolRecord]>,
+): Set<string> | undefined {
+	if (!Array.isArray(listing.pools)) {
+		return undefined;
+	}
+	const gone = new Set<string>();
+	for (const entry of held) {
+		if (listingHoldsOurs(listing, [entry]) === false) {
+			gone.add(entry[0]);
+		}
+	}
+	return gone;
+}
+
 /** Whether a `/polykv/pools` listing still holds every pool we made. */
 function listingHoldsOurs(
 	listing: Record<string, unknown>,
@@ -1114,9 +1289,26 @@ export async function verifyPolykvRoot(
 		) {
 			state.identity = identity;
 		}
+		// Pools gone from a server that did not restart are an owner that
+		// lapsed: the engine releases an allocation idle past its TTL, and its
+		// pools with it. That costs that owner's agents their pools and no one
+		// else's. Read as a restart, it cost every agent on the server its
+		// owner -- bs2 8244 2026-09-26: 26 lapses, 51 owners in two hours, the
+		// same 34k-token chain built once per owner, and the abandoned owners'
+		// windows booked until they lapsed in turn.
+		let lapsed: Set<string> | undefined;
 		if (!reason && held.length > 0 && listing) {
-			if (listingHoldsOurs(listing, held) === false) {
-				reason = "the pools this process made are gone";
+			const gone = poolsNotListed(listing, held);
+			if (gone && gone.size > 0) {
+				const sameBoot =
+					bootId !== undefined &&
+					state.bootId !== undefined &&
+					bootId === state.bootId;
+				if (sameBoot) {
+					lapsed = gone;
+				} else {
+					reason = "the pools this process made are gone";
+				}
 			}
 		}
 		if (!reason && state.suspect && held.length > 0 && !listing) {
@@ -1125,6 +1317,12 @@ export async function verifyPolykvRoot(
 		state.suspect = false;
 		if (reason) {
 			invalidatePolykvRoot(root, reason);
+		} else if (lapsed && invalidateLapsedOwners(root, lapsed) === false) {
+			// A pool gone that no owner of the swarm held -- the lead's -- is
+			// dropped with the root, as before, but not called a restart.
+			invalidatePolykvRoot(root, "pools gone", {
+				text: `Pools this process made on ${root} are gone, though the server did not restart: this agent's shared pools are rebuilt under a new owner on its next turn.`,
+			});
 		}
 		if (bootId !== undefined) {
 			adoptBootId(state, bootId);
@@ -1166,6 +1364,7 @@ function groupFor(
 		};
 		GROUPS.set(key, group);
 	}
+	ensureOwnerKeepalive(group);
 	return group;
 }
 
@@ -2704,6 +2903,9 @@ export async function releaseAllPolykvSwarms(): Promise<void> {
 	ABANDONED.clear();
 	GROUPS.clear();
 	AGENT_GROUPS.clear();
+	for (const root of [...OWNER_KEEPALIVES.keys()]) {
+		stopOwnerKeepalive(root);
+	}
 	STARTED_WORKERS.clear();
 	ROOT_STATES.clear();
 	OWNER_SERIALS.clear();
