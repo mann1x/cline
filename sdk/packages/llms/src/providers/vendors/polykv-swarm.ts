@@ -407,6 +407,28 @@ function leaveAbandoned(sessionId: string): Promise<unknown>[] {
 	return closes;
 }
 
+/**
+ * Take an agent that was released mid-placement back off the owner it was
+ * just placed on, closing the owner if that left it empty.
+ */
+async function leaveReleasedOwner(
+	group: SwarmGroup,
+	shard: OwnerShard,
+	sessionId: string,
+): Promise<void> {
+	shard.agents.delete(sessionId);
+	shard.uses?.delete(sessionId);
+	if (group.assigned.get(sessionId) === shard) {
+		group.assigned.delete(sessionId);
+	}
+	if (shard.agents.size === 0 && !shard.closed && !shard.borrowed) {
+		shard.closed = true;
+		group.shards = group.shards.filter((candidate) => candidate !== shard);
+		await group.client.closeSession(shard.sessionId).catch(() => false);
+	}
+	forgetGroupIfEmpty(group);
+}
+
 /** Drop `group` from the registry, unless another has replaced it there. */
 function forgetGroupIfEmpty(group: SwarmGroup): void {
 	if (
@@ -2283,6 +2305,13 @@ async function attachWorker(options: {
 		}
 		group.assigned.set(spec.sessionId, shard);
 		shard.agents.add(spec.sessionId);
+		if (AGENT_GROUPS.get(spec.sessionId) !== group) {
+			// Released while it waited for its owner: the release found it on no
+			// owner, and adding it now would hold this one open with nobody on
+			// it -- booked, with its pools, until the engine's idle TTL.
+			await leaveReleasedOwner(group, shard, spec.sessionId);
+			return unpooled("this agent was released while its owner opened");
+		}
 	}
 	// On an owner now: off any a restart check abandoned, closing the last.
 	leaveAbandoned(spec.sessionId);
@@ -2427,10 +2456,21 @@ export async function movePolykvWorker(sessionId: string): Promise<boolean> {
  * this runs on every agent's way out, including the ones being cancelled.
  */
 export interface PolykvReleaseResult {
-	/** Engine session ids closed. */
+	/** Engine session ids closed: the engine held them and let them go. */
 	closed: string[];
 	/** Engine session ids whose close failed, with why. */
 	failed: Array<{ sessionId: string; error: string }>;
+	/**
+	 * Closes the engine answered `found: false` for: it held no session under
+	 * the id. For an agent that sent requests, ours and the engine's have
+	 * diverged -- a restart, the idle TTL, or an id the wire never carried.
+	 */
+	notFound: string[];
+	/**
+	 * The agent's own session, not closed: the server does not advertise
+	 * `session_close_v1`, so the route is not there to ask.
+	 */
+	unsupported: string[];
 }
 
 export async function releasePolykvAgent(
@@ -2444,30 +2484,44 @@ export async function releasePolykvAgent(
 	CHARGED_TO.delete(engineSessionId(sessionId));
 	const known = OPENCOTI_SESSIONS.get(sessionId);
 	OPENCOTI_SESSIONS.delete(sessionId);
-	const result: PolykvReleaseResult = { closed: [], failed: [] };
+	const result: PolykvReleaseResult = {
+		closed: [],
+		failed: [],
+		notFound: [],
+		unsupported: [],
+	};
 	const closes: Promise<unknown>[] = [];
-	const close = (client: PolykvClient, id: string) =>
-		closes.push(
-			client.closeSession(id).then(
-				() => {
-					result.closed.push(id);
-				},
-				(error: unknown) => {
-					result.failed.push({
-						sessionId: id,
-						error: error instanceof Error ? error.message : String(error),
-					});
-				},
-			),
+	const closeNow = (client: PolykvClient, id: string): Promise<void> =>
+		client.closeSession(id).then(
+			(found) => {
+				(found ? result.closed : result.notFound).push(id);
+			},
+			(error: unknown) => {
+				result.failed.push({
+					sessionId: id,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			},
 		);
+	const close = (client: PolykvClient, id: string) =>
+		closes.push(closeNow(client, id));
 	if (known) {
-		close(
-			createPolykvClient({
-				baseUrl: known.root,
-				fetch: known.fetch,
-				...(known.headers ? { headers: known.headers } : {}),
-			}),
-			engineSessionId(sessionId),
+		const id = engineSessionId(sessionId);
+		const client = createPolykvClient({
+			baseUrl: known.root,
+			fetch: known.fetch,
+			...(known.headers ? { headers: known.headers } : {}),
+		});
+		// Only where the server says it has the route: a 404 there is not a
+		// close, and reading it as one is how a held window goes unnoticed.
+		closes.push(
+			probeOpencotiProps(known.root, known.fetch)
+				.catch(() => undefined)
+				.then((props) =>
+					hasOpencotiFeature(props?.features, OPENCOTI_FEATURES.sessionClose)
+						? closeNow(client, id)
+						: void result.unsupported.push(id),
+				),
 		);
 	}
 	closes.push(...leaveAbandoned(sessionId));
@@ -2581,6 +2635,54 @@ async function releaseLentPools(
 		await client.unpin(id).catch(() => undefined);
 		await client.releasePool(id).catch(() => undefined);
 	}
+}
+
+/**
+ * The lead conversation `group` ended: release every owner its swarm opened.
+ *
+ * Its agents are being stopped with it, and each one's own release lands when
+ * its abort does -- or never, on a path that throws before it gets there. So
+ * the owners go back with the lead rather than at the engine's idle TTL. The
+ * agents' registrations on them are dropped; an agent's own release landing
+ * after this still closes its own session. A borrowed owner -- the lead's own
+ * session -- gives back the pools the swarm put in it, and a lead close that
+ * was deferred on them runs.
+ *
+ * @returns how many owners were released.
+ */
+export async function releasePolykvSwarmsOf(group: string): Promise<number> {
+	const closes: Promise<unknown>[] = [];
+	let released = 0;
+	for (const swarm of [...GROUPS.values()]) {
+		if (swarm.key.split("\n")[1] !== group) {
+			continue;
+		}
+		for (const shard of swarm.shards) {
+			if (shard.closed) {
+				continue;
+			}
+			shard.closed = true;
+			released += 1;
+			closes.push(
+				shard.borrowed
+					? releaseLentPools(swarm.client, shard).then(() =>
+							runDeferredLeadClose(shard.sessionId),
+						)
+					: swarm.client.closeSession(shard.sessionId).catch(() => false),
+			);
+			shard.agents.clear();
+		}
+		swarm.shards = [];
+		for (const agent of swarm.assigned.keys()) {
+			if (AGENT_GROUPS.get(agent) === swarm) {
+				AGENT_GROUPS.delete(agent);
+			}
+		}
+		swarm.assigned.clear();
+		forgetGroupIfEmpty(swarm);
+	}
+	await Promise.all(closes);
+	return released;
 }
 
 /** Close every owner this process holds. For shutdown and for tests. */

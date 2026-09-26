@@ -3,6 +3,7 @@ import {
 	onPolykvNotice,
 	onPolykvRoomWait,
 	onPolykvStreamPhase,
+	type PolykvReleaseResult,
 	releasePolykvAgent,
 } from "@cline/llms";
 import type { AgentEvent, TeamAgentActivity } from "@cline/shared";
@@ -146,6 +147,37 @@ export function reportSubagentFinished(
 	report: object,
 ): void {
 	emitUpdate?.({ finished: report });
+}
+
+/**
+ * What an agent's engine release said, for the log: a close that failed, an
+ * id the engine held no session under -- for an agent that sent requests,
+ * ours and the engine's have diverged -- and a session left to the idle TTL
+ * because the server has no close route. A clean release says nothing.
+ */
+export function logEngineRelease(
+	log: ((line: string) => void) | undefined,
+	released: PolykvReleaseResult | undefined,
+	prefix: string,
+): void {
+	if (!log || !released) {
+		return;
+	}
+	for (const failure of released.failed) {
+		log(
+			`${prefix} could not close engine session ${failure.sessionId}: ${failure.error}`,
+		);
+	}
+	for (const id of released.notFound ?? []) {
+		log(
+			`${prefix} the engine held no session ${id} at its release: ours and the engine's diverged (a restart, the idle TTL, or an id the requests never carried)`,
+		);
+	}
+	for (const id of released.unsupported ?? []) {
+		log(
+			`${prefix} engine session ${id} left to the idle TTL: the server does not advertise session_close_v1`,
+		);
+	}
 }
 
 /**

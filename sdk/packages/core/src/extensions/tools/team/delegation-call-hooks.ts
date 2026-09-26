@@ -38,3 +38,37 @@ export function readDelegationHooks(
 	// at the call that put it there.
 	return value && typeof value === "object" ? (value as AgentHooks) : undefined;
 }
+
+/**
+ * How a run hands its caller the way to give its engine session back.
+ *
+ * A background delegation the user paused holds its engine session -- on an
+ * opencoti node a whole booked window -- for as long as the pause lasts. The
+ * session id is made inside the agent's tool, so the tool binds its release
+ * here and the caller calls it on pause. The next request after the resume
+ * books the session again.
+ */
+export type DelegationEngineSessionBinder = (
+	release: () => Promise<unknown>,
+) => void;
+
+const DELEGATION_ENGINE_SESSION_KEY = "clineDelegationEngineSession";
+
+export function withDelegationEngineSession(
+	metadata: Record<string, unknown> | undefined,
+	bind: DelegationEngineSessionBinder | undefined,
+): Record<string, unknown> | undefined {
+	if (!bind) {
+		return metadata;
+	}
+	return { ...(metadata ?? {}), [DELEGATION_ENGINE_SESSION_KEY]: bind };
+}
+
+export function readDelegationEngineSession(
+	metadata: Record<string, unknown> | undefined,
+): DelegationEngineSessionBinder | undefined {
+	const value = metadata?.[DELEGATION_ENGINE_SESSION_KEY];
+	return typeof value === "function"
+		? (value as DelegationEngineSessionBinder)
+		: undefined;
+}

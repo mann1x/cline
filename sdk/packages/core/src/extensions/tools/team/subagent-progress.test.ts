@@ -4,6 +4,7 @@ import {
 	compactionLogger,
 	createActivityCounter,
 	createSubagentProgress,
+	logEngineRelease,
 	readCompactionNotice,
 	reportSubagentModel,
 	reportSubagentPlaced,
@@ -500,5 +501,41 @@ describe("a compaction is recorded, not only shown", () => {
 		expect(lines).toEqual([
 			"[Agents] fixer-3 compacted its context (cause: overflow): 61,000 → 12,000 tokens",
 		]);
+	});
+});
+
+describe("an agent's engine session going back", () => {
+	// The engine answers every close 200 and says in `found` whether it held
+	// anything. An agent that sent requests should have had a session there:
+	// no session is a divergence -- a restart, the idle TTL, an id the wire
+	// never carried -- and it went unsaid.
+	it("says when the engine held no session, when the server cannot close one, and when a close failed", () => {
+		const lines: string[] = [];
+		logEngineRelease(
+			(line) => lines.push(line),
+			{
+				closed: ["lead~ok"],
+				failed: [{ sessionId: "lead~broken", error: "ECONNRESET" }],
+				notFound: ["lead~agent-1"],
+				unsupported: ["lead~agent-2"],
+			},
+			"[Agents]",
+		);
+		expect(lines).toEqual([
+			"[Agents] could not close engine session lead~broken: ECONNRESET",
+			"[Agents] the engine held no session lead~agent-1 at its release: ours and the engine's diverged (a restart, the idle TTL, or an id the requests never carried)",
+			"[Agents] engine session lead~agent-2 left to the idle TTL: the server does not advertise session_close_v1",
+		]);
+	});
+
+	it("says nothing for a clean release, or none", () => {
+		const log = vi.fn();
+		logEngineRelease(
+			log,
+			{ closed: ["a"], failed: [], notFound: [], unsupported: [] },
+			"[Agents]",
+		);
+		logEngineRelease(log, undefined, "[Agents]");
+		expect(log).not.toHaveBeenCalled();
 	});
 });

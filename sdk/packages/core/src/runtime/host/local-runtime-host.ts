@@ -3,6 +3,7 @@ import { readFile as readFileFromDisk } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type * as LlmsProviders from "@cline/llms";
+import { releasePolykvSwarmsOf } from "@cline/llms";
 import {
 	type AgentConfig,
 	type AgentEvent,
@@ -4471,6 +4472,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 		this.roundUnsubscribes.get(session.sessionId)?.();
 		this.roundUnsubscribes.delete(session.sessionId);
 		releaseRounds(session.sessionId);
+		// The owners its swarm opened on the engine go back with it, not at the
+		// idle TTL: its agents were stopped above, and their own releases land
+		// whenever their aborts do -- or never, on a path that throws first.
+		void releasePolykvSwarmsOf(session.sessionId).catch(() => undefined);
 		this.sideTurnConfigs.delete(session.sessionId);
 		this.leadNudgeUnsubscribes.get(session.sessionId)?.();
 		this.leadNudgeUnsubscribes.delete(session.sessionId);
@@ -4570,6 +4575,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 		this.roundUnsubscribes.get(session.sessionId)?.();
 		this.roundUnsubscribes.delete(session.sessionId);
 		releaseRounds(session.sessionId);
+		// The owners its swarm opened on the engine go back with it, not at the
+		// idle TTL: its agents were stopped above, and their own releases land
+		// whenever their aborts do -- or never, on a path that throws first.
+		void releasePolykvSwarmsOf(session.sessionId).catch(() => undefined);
 		this.sessions.delete(session.sessionId);
 		if (cleanupErrors.length > 0) {
 			throw cleanupErrors[0];

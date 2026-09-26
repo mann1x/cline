@@ -18,7 +18,11 @@ import { randomUUID } from "node:crypto";
 import type { AgentHooks, AgentTool, AgentToolContext } from "@cline/shared";
 import type { ConfiguredAgentConfig } from "./configured-agent-config";
 import { buildConfiguredAgentToolDescriptors } from "./configured-agent-tool";
-import { withDelegationHooks } from "./delegation-call-hooks";
+import {
+	type DelegationEngineSessionBinder,
+	withDelegationEngineSession,
+	withDelegationHooks,
+} from "./delegation-call-hooks";
 import type { SpawnAgentOutput } from "./spawn-agent-tool";
 
 /** One configured agent, as a host needs to show it in a picker. */
@@ -122,6 +126,8 @@ export interface DelegateToConfiguredAgentInput {
 	 * down would be a second path to keep correct.
 	 */
 	hooks?: AgentHooks;
+	/** Where the run binds the release of its engine session, for a pause. */
+	bindEngineSession?: DelegationEngineSessionBinder;
 	/**
 	 * The id the run goes by as a tool call. The agent's sandbox, its
 	 * hand-back and its stop button are all keyed on it; a background run
@@ -174,7 +180,10 @@ export async function delegateToConfiguredAgent(
 		conversationId: input.conversationId,
 		iteration: 0,
 		signal: input.signal,
-		metadata: withDelegationHooks({ delegatedByUser: true }, input.hooks),
+		metadata: withDelegationEngineSession(
+			withDelegationHooks({ delegatedByUser: true }, input.hooks),
+			input.bindEngineSession,
+		),
 	};
 
 	const startedAt = Date.now();

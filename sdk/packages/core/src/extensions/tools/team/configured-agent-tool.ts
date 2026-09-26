@@ -40,7 +40,10 @@ import {
 	type DelegatedAgentConfigProvider,
 	type DelegatedAgentRuntimeConfig,
 } from "./delegated-agent";
-import { readDelegationHooks } from "./delegation-call-hooks";
+import {
+	readDelegationEngineSession,
+	readDelegationHooks,
+} from "./delegation-call-hooks";
 import {
 	isAdmissionEvent,
 	resumePlacement,
@@ -79,6 +82,7 @@ import {
 	compactionLogger,
 	createSubagentProgress,
 	DELEGATION_PACING_NOTE,
+	logEngineRelease,
 	reportSubagentFinished,
 	reportSubagentModel,
 	reportSubagentSampling,
@@ -567,6 +571,11 @@ export function createConfiguredAgentTools(
 				// every instance of this agent shares its system prompt and
 				// tools as one pool.
 				const engineSessionId = `${context.sessionId ?? "cerebriline"}~agent-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+				// A background delegation gives it back while the user has the
+				// run paused; its next request books it again.
+				readDelegationEngineSession(context.metadata)?.(() =>
+					releasePolykvAgent(engineSessionId),
+				);
 				// How long it has been stuck, for the lead: after long enough
 				// without progress the lead is told, once.
 				const trouble = reportWaits(
@@ -942,11 +951,11 @@ export function createConfiguredAgentTools(
 						const released = await releasePolykvAgent(engineSessionId).catch(
 							() => undefined,
 						);
-						for (const failure of released?.failed ?? []) {
-							options.logger?.log(
-								`[Agents] could not close engine session ${failure.sessionId}: ${failure.error}`,
-							);
-						}
+						logEngineRelease(
+							options.logger ? (line) => options.logger?.log(line) : undefined,
+							released,
+							"[Agents]",
+						);
 					});
 				}
 			}

@@ -84,6 +84,7 @@ import { buildSubagentLayout } from "../../../extensions/tools/team/subagent-lay
 import {
 	compactionLogger,
 	createSubagentProgress,
+	logEngineRelease,
 	reportSubagentModel,
 	reportSubagentSampling,
 	requeued,
@@ -963,11 +964,11 @@ export function createSessionSwarmTool(
 				const released = await releasePolykvAgent(workerSessionId).catch(
 					() => undefined,
 				);
-				for (const failure of released?.failed ?? []) {
-					config.logger?.log?.(
-						`[PolyKV] could not close engine session ${failure.sessionId}: ${failure.error}`,
-					);
-				}
+				logEngineRelease(
+					config.logger?.log ? (line) => config.logger?.log?.(line) : undefined,
+					released,
+					"[PolyKV]",
+				);
 			});
 		}
 	};

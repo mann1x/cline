@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createOpencotiFetch } from "./opencoti";
+import { resetPolykvAvailability } from "./polykv";
 import {
 	engineSessionId,
 	onPolykvNotice,
@@ -7,6 +8,7 @@ import {
 	polykvSwarmState,
 	releaseAllPolykvSwarms,
 	releasePolykvAgent,
+	releasePolykvSwarmsOf,
 } from "./polykv-swarm";
 
 /**
@@ -16,7 +18,18 @@ import {
  * delimited block per turn -- so a layer cut at the sentinel is a byte-prefix
  * of the full rendering exactly when the real template's would be.
  */
-function stubEngine(options: { refuseWorkersTimes?: number } = {}) {
+function stubEngine(
+	options: {
+		refuseWorkersTimes?: number;
+		/** What `/props` advertises; `session_close_v1` unless a test says. */
+		features?: string[];
+		/** What a close of an agent's own session answers for `found`. */
+		agentCloseFound?: boolean;
+		/** Held before the owner's opening request is answered. */
+		holdOwnerOpen?: Promise<void>;
+		onOwnerOpen?: () => void;
+	} = {},
+) {
 	const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
 	let nextPool = 0;
 	let refusals = options.refuseWorkersTimes ?? 0;
@@ -56,6 +69,9 @@ function stubEngine(options: { refuseWorkersTimes?: number } = {}) {
 		if (url.pathname === "/kv") {
 			return json({ session_ctx_max: 262_144 });
 		}
+		if (url.pathname === "/props") {
+			return json({ features: options.features ?? ["session_close_v1"] });
+		}
 		if (url.pathname === "/apply-template") {
 			return json({
 				prompt: render(
@@ -83,7 +99,18 @@ function stubEngine(options: { refuseWorkersTimes?: number } = {}) {
 			});
 		}
 		if (/^\/sessions\/[^/]+\/close$/.test(url.pathname)) {
-			return json({ found: true, released: true });
+			const found =
+				url.pathname.includes("polykv-owner") ||
+				options.agentCloseFound !== false;
+			return json({ found, released: found });
+		}
+		if (
+			url.pathname === "/v1/chat/completions" &&
+			body.max_tokens === 1 &&
+			String(body.session_id).includes("polykv-owner")
+		) {
+			options.onOwnerOpen?.();
+			await options.holdOwnerOpen;
 		}
 		if (url.pathname === "/v1/chat/completions") {
 			if (body.pool_id !== undefined && refusals > 0) {
@@ -161,6 +188,7 @@ const sent = (engine: ReturnType<typeof stubEngine>) =>
 
 afterEach(async () => {
 	await releaseAllPolykvSwarms();
+	resetPolykvAvailability();
 });
 
 /**
@@ -590,5 +618,116 @@ describe("the admission policy", () => {
 			target_tps_per_session: 15,
 			mode: "enforced",
 		});
+	});
+});
+
+describe("an agent's release, as the engine answers it", () => {
+	it("says when the engine held no session for an agent that should have had one", async () => {
+		const engine = stubEngine({ agentCloseFound: false });
+		await send(engine, "agent/one", agentBody("r", "t1"));
+
+		const released = await releasePolykvAgent("agent/one");
+
+		expect(released.notFound).toEqual(["agent~one"]);
+		expect(released.closed).not.toContain("agent~one");
+		expect(released.failed).toEqual([]);
+	});
+
+	it("does not ask a server without session_close_v1 to close the agent's session", async () => {
+		const engine = stubEngine({ features: [] });
+		await send(engine, "agent/one", agentBody("r", "t1"));
+
+		const released = await releasePolykvAgent("agent/one");
+
+		expect(released.unsupported).toEqual(["agent~one"]);
+		expect(released.closed).not.toContain("agent~one");
+		expect(
+			engine.calls.some((call) => call.path === "/sessions/agent~one/close"),
+		).toBe(false);
+	});
+});
+
+describe("an owner nobody is left on", () => {
+	// An agent released while its request waited on the owner's opening was
+	// added to that owner after its release, and the release had already
+	// dropped the group: the owner, and every pool it owns, stayed booked
+	// until the engine's idle TTL, where not even a shutdown could reach it.
+	it("is closed when the agent it was opened for was released while it opened", async () => {
+		let reached!: () => void;
+		const atOwnerOpen = new Promise<void>((resolve) => {
+			reached = resolve;
+		});
+		let open!: () => void;
+		const engine = stubEngine({
+			holdOwnerOpen: new Promise<void>((resolve) => {
+				open = resolve;
+			}),
+			onOwnerOpen: () => reached(),
+		});
+		const pending = send(engine, "agent/one", agentBody("r", "t1"));
+		await atOwnerOpen;
+		await releasePolykvAgent("agent/one");
+		open();
+		await pending;
+
+		expect(
+			engine.calls.some(
+				(call) =>
+					call.path.startsWith("/sessions/") &&
+					call.path.includes("polykv-owner"),
+			),
+		).toBe(true);
+		expect(polykvSwarmState()).toEqual([]);
+	});
+});
+
+describe("the end of the lead's session", () => {
+	async function sendAs(
+		engine: ReturnType<typeof stubEngine>,
+		group: string,
+		sessionId: string,
+		body: Record<string, unknown>,
+	) {
+		const fetchImpl = createOpencotiFetch({
+			fetch: engine.fetch,
+			baseUrl: "http://engine/v1",
+			request: { worker: { group, sessionId, layers: 2 } },
+		});
+		return fetchImpl("http://engine/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify(body),
+		});
+	}
+
+	// Its agents are being stopped with it, and each one's own release lands
+	// whenever its abort does -- or never, on a path that throws first. The
+	// owners the lead's swarm opened go back with the lead, not at the TTL.
+	it("releases the owners its agents were on, and no other lead's", async () => {
+		const engine = stubEngine();
+		await sendAs(engine, "lead-1", "agent/one", agentBody("r", "t1"));
+		await sendAs(engine, "lead-2", "agent/two", agentBody("r", "t2"));
+		const ownerOf = (lead: string) =>
+			polykvSwarmState().find((group) => group.group.includes(`\n${lead}`))
+				?.owners[0]?.sessionId;
+		const first = ownerOf("lead-1");
+		const second = ownerOf("lead-2");
+		expect(first).toBeDefined();
+		expect(second).toBeDefined();
+		const closed = (owner: string | undefined) =>
+			engine.calls.some((call) => call.path === `/sessions/${owner}/close`);
+
+		expect(await releasePolykvSwarmsOf("lead-1")).toBe(1);
+
+		expect(closed(first)).toBe(true);
+		expect(closed(second)).toBe(false);
+		expect(ownerOf("lead-1")).toBeUndefined();
+		expect(ownerOf("lead-2")).toBe(second);
+		// The agent's own release, landing after, still closes its session.
+		const late = await releasePolykvAgent("agent/one");
+		expect(late.closed).toEqual(["agent~one"]);
+	});
+
+	it("releases nothing for a lead that opened nothing", async () => {
+		expect(await releasePolykvSwarmsOf("nobody")).toBe(0);
 	});
 });

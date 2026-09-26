@@ -64,6 +64,13 @@ export interface BackgroundDelegationControls {
 	 * away work the user has paid for and asked to keep.
 	 */
 	hooks: AgentHooks;
+	/**
+	 * Where the run hands over the release of its engine session. A pause
+	 * calls it -- a paused run must not hold a booked window for as long as
+	 * the user leaves it -- and the resume waits for that close to land, so
+	 * the next request books afresh rather than racing it.
+	 */
+	bindEngineSession: (release: () => Promise<unknown>) => void;
 }
 
 export interface StartBackgroundDelegationInput {
@@ -106,6 +113,10 @@ interface BackgroundRun {
 	controller: AbortController;
 	/** Resolves when the run is let go again. Absent while it is not paused. */
 	resume?: () => void;
+	/** Gives the run's engine session back, once the run has bound one. */
+	releaseEngine?: () => Promise<unknown>;
+	/** The release a pause started, which the resume waits for. */
+	engineReleasing?: Promise<unknown>;
 }
 
 /**
@@ -211,6 +222,15 @@ export function createBackgroundDelegationRegistry(options?: {
 							run.resume = resolve;
 						});
 					}
+					// Its engine session went back on the pause: the request
+					// about to go out books it again, after that close landed.
+					const releasing = run.engineReleasing;
+					if (releasing) {
+						await releasing;
+						if (run.engineReleasing === releasing) {
+							run.engineReleasing = undefined;
+						}
+					}
 					return undefined;
 				},
 				// The same per-run channel the barrier uses, which is what makes
@@ -222,7 +242,14 @@ export function createBackgroundDelegationRegistry(options?: {
 			};
 
 			input
-				.run({ runId: id, signal: controller.signal, hooks })
+				.run({
+					runId: id,
+					signal: controller.signal,
+					hooks,
+					bindEngineSession: (release) => {
+						run.releaseEngine = release;
+					},
+				})
 				.then((result) => {
 					if (!isLive(run.view.status)) {
 						return;
@@ -266,6 +293,23 @@ export function createBackgroundDelegationRegistry(options?: {
 				return false;
 			}
 			run.view.status = "paused";
+			// Its booked window goes back for the length of the pause. Chained
+			// on any release still landing from the last pause.
+			const release = run.releaseEngine;
+			if (release) {
+				const previous = run.engineReleasing;
+				let releasing: Promise<unknown>;
+				if (previous) {
+					releasing = previous.then(() => release());
+				} else {
+					try {
+						releasing = release();
+					} catch (error) {
+						releasing = Promise.reject(error);
+					}
+				}
+				run.engineReleasing = releasing.catch(() => undefined);
+			}
 			announce();
 			return true;
 		},
@@ -341,7 +385,10 @@ export function createBackgroundDelegationRegistry(options?: {
  */
 export function startBackgroundDelegation(
 	registry: BackgroundDelegationRegistry,
-	input: Omit<DelegateToConfiguredAgentInput, "signal" | "hooks"> & {
+	input: Omit<
+		DelegateToConfiguredAgentInput,
+		"signal" | "hooks" | "bindEngineSession"
+	> & {
 		onSettled?: (view: BackgroundDelegationView) => void;
 	},
 ): BackgroundDelegationView {
@@ -356,11 +403,12 @@ export function startBackgroundDelegation(
 		agentName: agent.name,
 		prompt: input.prompt,
 		// Its sandbox and its stop button go by the run's own id.
-		run: ({ runId, signal, hooks }) =>
+		run: ({ runId, signal, hooks, bindEngineSession }) =>
 			delegateToConfiguredAgent({
 				...input,
 				signal,
 				hooks,
+				bindEngineSession,
 				toolCallId: `delegate_${runId}`,
 			}),
 		onSettled: input.onSettled,

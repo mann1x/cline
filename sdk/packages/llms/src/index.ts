@@ -330,6 +330,7 @@ export {
 	readPolykvLeadRoom,
 	releaseAllPolykvSwarms,
 	releasePolykvAgent,
+	releasePolykvSwarmsOf,
 	rememberOpencotiSession,
 	reportPolykvNotice,
 } from "./providers/vendors/polykv-swarm";

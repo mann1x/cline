@@ -16,6 +16,12 @@ import {
 import { LocalRuntimeHost } from "./local-runtime-host";
 import { splitCoreSessionConfig } from "./runtime-host";
 
+const releaseSwarms = vi.hoisted(() => vi.fn(async (_group: string) => 0));
+vi.mock("@cline/llms", async (original) => ({
+	...(await original<typeof import("@cline/llms")>()),
+	releasePolykvSwarmsOf: releaseSwarms,
+}));
+
 /**
  * Background rounds as the host wires them (lead-agent-control spec, A): a
  * round's report reaches the lead at its next boundary, as a background
@@ -188,6 +194,16 @@ describe("background rounds, as the host wires them", () => {
 		expect(last?.content).toMatch(/^\[Round r1 interrupted\] /);
 		expect(last?.content).toContain('retry_failed(round_id: "r1")');
 		expect(round?.delivered).toBe(true);
+	});
+
+	// The owners its swarm opened on the engine go back with the session: its
+	// agents' own releases land whenever their aborts do, or never.
+	it("releases the engine owners its swarm opened when the session ends", async () => {
+		releaseSwarms.mockClear();
+		const { host, sessionId } = await start();
+		expect(releaseSwarms).not.toHaveBeenCalled();
+		await host.stopSession(sessionId);
+		expect(releaseSwarms).toHaveBeenCalledWith(sessionId);
 	});
 
 	it("queues it for the next boundary when the lead is mid-turn", async () => {

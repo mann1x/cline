@@ -6,7 +6,10 @@ import {
 	startBackgroundDelegation,
 } from "./background-delegations";
 import { UnknownConfiguredAgentError } from "./delegate-to-agent";
-import { readDelegationHooks } from "./delegation-call-hooks";
+import {
+	readDelegationEngineSession,
+	readDelegationHooks,
+} from "./delegation-call-hooks";
 
 function deferred<T>(): {
 	promise: Promise<T>;
@@ -115,6 +118,51 @@ describe("pausing one", () => {
 		await expect(
 			Promise.resolve(controls().hooks.beforeModel?.({} as never)),
 		).resolves.toBeUndefined();
+	});
+
+	// A paused run holds its engine session -- a whole booked window -- for as
+	// long as the user leaves it paused. It goes back on pause, and the run
+	// resumes only once that close has landed: its next request books again.
+	it("gives its engine session back on pause, and resumes after the release has landed", async () => {
+		const { registry, view, controls } = harness();
+		const releases: string[] = [];
+		const landed = deferred<void>();
+		controls().bindEngineSession(async () => {
+			releases.push("release");
+			await landed.promise;
+		});
+		registry.pause(view.id);
+		expect(releases).toEqual(["release"]);
+
+		let released = false;
+		const barrier = Promise.resolve(
+			controls().hooks.beforeModel?.({} as never),
+		).then(() => {
+			released = true;
+		});
+		registry.resume(view.id);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(released).toBe(false);
+
+		landed.resolve();
+		await barrier;
+		expect(released).toBe(true);
+		// Once per pause, not per request.
+		await controls().hooks.beforeModel?.({} as never);
+		expect(releases).toEqual(["release"]);
+	});
+
+	it("survives an engine release that fails", async () => {
+		const { registry, view, controls } = harness();
+		controls().bindEngineSession(async () => {
+			throw new Error("engine gone");
+		});
+		registry.pause(view.id);
+		const barrier = Promise.resolve(
+			controls().hooks.beforeModel?.({} as never),
+		);
+		registry.resume(view.id);
+		await expect(barrier).resolves.toBeUndefined();
 	});
 
 	it("refuses to pause what is not running and to resume what is not paused", () => {
@@ -329,5 +377,7 @@ describe("starting one on the delegation path", () => {
 		expect(seen).toHaveLength(1);
 		expect(readDelegationHooks(seen[0])?.beforeModel).toBeTypeOf("function");
 		expect(seen[0]?.delegatedByUser).toBe(true);
+		// And the binder its engine session is handed back through on pause.
+		expect(readDelegationEngineSession(seen[0])).toBeTypeOf("function");
 	});
 });

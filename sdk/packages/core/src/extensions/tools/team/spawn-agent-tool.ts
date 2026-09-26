@@ -87,6 +87,7 @@ import {
 	compactionLogger,
 	createSubagentProgress,
 	DELEGATION_PACING_NOTE,
+	logEngineRelease,
 	reportSubagentFinished,
 	reportSubagentModel,
 	reportSubagentSampling,
@@ -1644,11 +1645,11 @@ async function runSpawnedAgent(
 			const released = await releasePolykvAgent(engineSessionId).catch(
 				() => undefined,
 			);
-			for (const failure of released?.failed ?? []) {
-				config.logger?.log(
-					`[Agents] could not close engine session ${failure.sessionId}: ${failure.error}`,
-				);
-			}
+			logEngineRelease(
+				config.logger ? (line) => config.logger?.log(line) : undefined,
+				released,
+				"[Agents]",
+			);
 		});
 	}
 }
