@@ -5,9 +5,9 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.206] — 2026-09-26
+## [4.100.207] — 2026-09-26
 
-The first public release since 4.100.118. Builds 4.100.119 to 4.100.205 were
+The first public release since 4.100.118. Builds 4.100.119 to 4.100.206 were
 test builds and were never published, so everything they carried is collected
 here, grouped by what it changes for you. The major features:
 
