@@ -60,6 +60,15 @@ export interface SessionRevisions {
 	 * same log, and wrapping twice would record every write as two revisions.
 	 */
 	decorate<T extends AgentToolDefinition>(tools: readonly T[]): T[];
+	/**
+	 * Reads only: `read_files` learns `revision`, and nothing is recorded.
+	 *
+	 * For Checkpoints off. The lead's own writes are then not recorded, as the
+	 * switch says, but a delegated agent's changes still come back as
+	 * revisions in this log -- the only way they reach the lead -- and a lead
+	 * with no tool to read or adopt them loses the agent's work.
+	 */
+	decorateReads<T extends AgentToolDefinition>(tools: readonly T[]): T[];
 }
 
 export function createSessionRevisions(options: {
@@ -120,6 +129,8 @@ export function createSessionRevisions(options: {
 			tracked: () => log.tracked(),
 			noteCompaction: (keep) => log.noteCompaction(keep),
 		},
+		decorateReads: (tools) =>
+			withBaseRevisionReads(tools, source, SESSION_REVISION_WORDING),
 		decorate: (tools) =>
 			withRevisionCapture(
 				// Reads first, writes outside, matching the protocol's own order:

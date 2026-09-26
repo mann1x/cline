@@ -557,6 +557,10 @@ function resolveArchSuffixedLauncher(
 	return { launcher, hook: launcher, platforms: [platform] };
 }
 
+/** Tools that run a delegated agent, whose changes come back as revisions. */
+const DELEGATING_TOOL =
+	/^(?:spawn_agent|spawn_swarm|team_run_task|subagent_[\w-]+)$/;
+
 export class LocalRuntimeHost implements RuntimeHost {
 	/**
 	 * Sessions whose change protocol is to stand down at the next safe point.
@@ -2004,9 +2008,20 @@ export class LocalRuntimeHost implements RuntimeHost {
 				revisionsEnabled
 				? sessionRevisions.decorate([...tools, ...sessionRevisions.tools])
 				: // Checkpoints off and no protocol: nothing records the
-					// writing tools and nothing offers a way back, which is
-					// what the switch says it does.
-					tools;
+					// writing tools, and a session that cannot delegate is
+					// offered no way back, which is what the switch says it
+					// does. One that can delegate still receives its agents'
+					// work in the log -- their changes arrive only as revisions
+					// -- so reading and adopting a revision stay offered there;
+					// without them that work was unreachable. Its own writes
+					// are still not recorded, so a revision it can reach is
+					// always an agent's.
+					tools.some((tool) => DELEGATING_TOOL.test(tool.name))
+					? sessionRevisions.decorateReads([
+							...tools,
+							...sessionRevisions.tools,
+						])
+					: tools;
 		// The expert gets the session's tools WITHOUT the change protocol, and
 		// less the tool that reached it. Set before the session's own list is
 		// extended: an expert that could escalate would escalate to itself.

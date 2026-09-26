@@ -102,6 +102,7 @@ describe("what the checkpoints switch turns off", () => {
 	async function toolNames(
 		checkpoint: { enabled?: boolean } | undefined,
 		atomic?: boolean,
+		spawn = false,
 	): Promise<string[]> {
 		let agentConfig: AgentConfig | undefined;
 		const host = new LocalRuntimeHost({
@@ -122,7 +123,7 @@ describe("what the checkpoints switch turns off", () => {
 				systemPrompt: "You are a test agent",
 				mode: "act",
 				enableTools: true,
-				enableSpawnAgent: false,
+				enableSpawnAgent: spawn,
 				enableAgentTeams: false,
 				...(checkpoint ? { checkpoint } : {}),
 				...(atomic
@@ -150,6 +151,15 @@ describe("what the checkpoints switch turns off", () => {
 
 	it("withholds restore_file once checkpoints are off", async () => {
 		expect(await toolNames({ enabled: false })).not.toContain("restore_file");
+	});
+
+	// A delegated agent's changes come back only as revisions: with no way to
+	// read or adopt one, the agent's work was unreachable. Its own writes are
+	// still not recorded, so what it can reach is the agents' work alone.
+	it("still offers reading and adopting revisions when the session can delegate", async () => {
+		const names = await toolNames({ enabled: false }, false, true);
+		expect(names).toContain("spawn_agent");
+		expect(names).toContain("restore_file");
 	});
 
 	// The one exception the tester named. The protocol brings its own
