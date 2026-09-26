@@ -105,7 +105,7 @@ describe("background rounds, as the host wires them", () => {
 		rmSync(root, { recursive: true, force: true });
 	});
 
-	async function start() {
+	async function start(sessionId?: string) {
 		const host = new LocalRuntimeHost({
 			distinctId: `test-${nanoid(5)}`,
 			sessionService: sessionServiceStub(root) as never,
@@ -114,6 +114,7 @@ describe("background rounds, as the host wires them", () => {
 		const started = await host.startSession({
 			interactive: true,
 			...splitCoreSessionConfig({
+				...(sessionId ? { sessionId } : {}),
 				providerId: "anthropic",
 				modelId: "claude-sonnet-4-6",
 				apiKey: "test-key",
@@ -160,6 +161,33 @@ describe("background rounds, as the host wires them", () => {
 		expect(last.role).toBe("user");
 		expect(last.content).toContain("[Round r1 finished]");
 		expect(last.content).toContain("the background work");
+	});
+
+	// A round still running when the session ended -- the window reloaded, the
+	// task closed -- has no agents anywhere when the session comes back. They
+	// are interrupted, and the lead is told at its next turn, with the way to
+	// run them again.
+	it("tells the lead of a round the session's end interrupted, when the session comes back", async () => {
+		const first = await start();
+		const { rounds } = backgroundRound(first.sessionId);
+		expect(rounds.get("r1")?.status).toBe("running");
+		await first.host.stopSession(first.sessionId);
+
+		agent = stubAgent();
+		const again = await start(first.sessionId);
+		expect(again.sessionId).toBe(first.sessionId);
+		const round = roundsFor(again.sessionId).get("r1");
+		expect(round?.agents[0]).toMatchObject({
+			state: "cancelled",
+			stopReason: "interrupted",
+		});
+		// The lead is idle at its start: the notice is in its transcript, for
+		// its next turn, as a background round's report reaches an idle lead.
+		const last = agent.messages.at(-1) as { role: string; content: string };
+		expect(last?.role).toBe("user");
+		expect(last?.content).toMatch(/^\[Round r1 interrupted\] /);
+		expect(last?.content).toContain('retry_failed(round_id: "r1")');
+		expect(round?.delivered).toBe(true);
 	});
 
 	it("queues it for the next boundary when the lead is mid-turn", async () => {

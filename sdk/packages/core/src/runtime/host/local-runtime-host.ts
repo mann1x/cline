@@ -2488,26 +2488,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 		);
 		// A round the lead did not wait for reports on its own, at the lead's
 		// next boundary. What settled while nobody listened -- before a reload,
-		// say -- is queued now, for the next turn.
+		// say -- is delivered once the session is registered, below.
 		this.roundUnsubscribes.get(sessionId)?.();
 		const rounds = roundsFor(sessionId);
 		this.roundUnsubscribes.set(
 			sessionId,
 			rounds.onSettled((settled) => this.deliverRound(sessionId, settled)),
 		);
-		for (const round of rounds.list()) {
-			if (round.status === "done" && !round.delivered) {
-				rounds.markDelivered(round.id);
-				this.pendingPromptsController.enqueue(sessionId, {
-					prompt: renderRoundNotice({
-						record: round,
-						report: rounds.reportFor(round.id),
-					}),
-					delivery: "steer",
-					origin: "harness",
-				});
-			}
-		}
 		runtime.registerLeadAgent?.(agent);
 		const rootAgentIdentity = buildTelemetryAgentIdentity({
 			agentId: agent.getAgentId(),
@@ -2610,6 +2597,18 @@ export class LocalRuntimeHost implements RuntimeHost {
 			active.compactionState = undefined;
 		}
 		this.sessions.set(sessionId, active);
+		// Rounds that settled while nothing listened -- the ones a reload
+		// interrupted among them -- are the lead's to be told now. Not before
+		// the session is registered: delivery looks the session up, and until
+		// this line every one of these notices was dropped on the floor.
+		for (const round of roundsFor(sessionId).list()) {
+			if (round.status === "done" && !round.delivered) {
+				this.deliverRound(sessionId, {
+					record: round,
+					report: roundsFor(sessionId).reportFor(round.id),
+				});
+			}
+		}
 		if (resumedArtifacts) {
 			await this.refreshActiveSessionGitMetadata(active, bootstrap.gitState);
 		}

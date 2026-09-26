@@ -14,6 +14,7 @@ import {
 	agentFacts,
 	agentFactsLine,
 	classifyAgentEnd,
+	releaseRounds,
 	renderRoundNotice,
 	roundsCompletionGuard,
 	roundsFor,
@@ -300,6 +301,68 @@ describe("a round persisted with the session", () => {
 			agents: [{ name: "x", task: "y" }],
 		});
 		expect(next.id).toBe("r2");
+	});
+
+	// A round still running when the session ends -- a reload of the window,
+	// the task closed -- has no agents left anywhere. What it becomes after the
+	// reload: every agent that was out is interrupted, the round is over, and
+	// its notice is owed to the lead, naming retry_failed.
+	it("interrupts a round still running when the session ends, and owes the lead a notice", async () => {
+		dir = mkdtempSync(join(tmpdir(), "rounds-"));
+		const path = join(dir, "s1.rounds.json");
+		const before = roundsFor("s1");
+		before.attachStore(path);
+		const handle = before.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: true,
+			agents: [
+				{ name: "finished", task: "first" },
+				{ name: "still-out", task: "second" },
+			],
+		});
+		await handle.run(0, context, async () => ({
+			text: "done early",
+			finishReason: "completed",
+		}));
+		let aborted = false;
+		void handle.run(
+			1,
+			{ ...(context as object), signal: handle.signal } as never,
+			(ctx) =>
+				new Promise((resolve) => {
+					// Its end, as an agent aborted under it reports one: after
+					// the session has gone, and not what the record keeps.
+					ctx.signal?.addEventListener("abort", () => {
+						aborted = true;
+						setTimeout(() => resolve({ finishReason: "aborted" }), 5);
+					});
+				}),
+		);
+		handle.close();
+
+		releaseRounds("s1");
+		expect(aborted).toBe(true);
+		await new Promise((resolve) => setTimeout(resolve, 1_200));
+
+		const after = new AgentRounds("s1");
+		after.attachStore(path);
+		const round = after.get("r1");
+		expect(round).toMatchObject({ status: "done", delivered: false });
+		expect(
+			round?.agents.map((agent) => [agent.state, agent.stopReason]),
+		).toEqual([
+			["done", "completed"],
+			["cancelled", "interrupted"],
+		]);
+		const notice = renderRoundNotice({
+			record: round as never,
+			report: after.reportFor("r1"),
+		});
+		expect(notice).toMatch(/^\[Round r1 interrupted\] /);
+		expect(notice).toContain("r1-2 still-out");
+		expect(notice).not.toContain("r1-1 finished");
+		expect(notice).toContain('retry_failed(round_id: "r1")');
 	});
 
 	it("runs a failed agent again from its stored task, after its call is gone", async () => {

@@ -280,6 +280,24 @@ export interface SettledRound {
  */
 export function renderRoundNotice(settled: SettledRound): string {
 	const round = settled.record;
+	// Ended under it by the session going away: a reload of the window, or
+	// the task closed. Its agents are gone, and the lead has to be told the
+	// one thing it can do about that.
+	const interrupted = round.agents.filter(
+		(agent) => agent.stopReason === "interrupted",
+	);
+	if (interrupted.length > 0) {
+		const names = interrupted
+			.map((agent) => `${agent.id} ${agent.name}`)
+			.join(", ");
+		const count =
+			interrupted.length === round.agents.length
+				? interrupted.length === 1
+					? "its agent was"
+					: `all ${interrupted.length} of its agents were`
+				: `${interrupted.length} of its ${round.agents.length} agents were`;
+		return `[Round ${round.id} interrupted] The session ended while ${round.tool} ran (the window was reloaded or the task was closed), and ${count} stopped with the work in progress lost: ${names}. retry_failed(round_id: "${round.id}") runs them again from their original tasks; restart_agent runs one with new instructions. The round's report as it stands:\n\n${settled.report}`;
+	}
 	const how = round.background
 		? `it ran in the background (${round.tool})`
 		: `an agent of ${round.tool} finished after its call had returned`;
@@ -545,26 +563,57 @@ export class AgentRounds {
 			for (const agent of round.agents ?? []) {
 				agent.activity ??= [];
 				agent.errors ??= [];
-				if (LIVE_STATES.has(agent.state)) {
-					agent.state = "cancelled";
-					agent.stopReason = "interrupted";
-					agent.stopDetail =
-						"The session was reloaded while it ran; its work in progress is gone.";
-					agent.endedAt ??= this.now();
-					agent.waiting = undefined;
-					changed = true;
-				}
 			}
-			if (round.status === "running") {
-				round.status = "done";
-				round.endedAt ??= this.now();
-				changed = true;
-			}
+			// Written while it ran by a process that did not end it -- a
+			// crash: nothing of it runs now either.
+			changed = this.interruptRound(round) || changed;
 			this.rounds.set(round.id, round);
 		}
 		if (changed) {
 			this.schedulePersist();
 		}
+	}
+
+	/**
+	 * The session is going with rounds still out: a reload of the window, or
+	 * the task closed. Their agents are about to be stopped, and whatever they
+	 * would report on the way out is not what the record keeps: each is
+	 * `interrupted` now, its round is over with a report owed to the lead, and
+	 * that is what is written. Nothing is written after it -- the late ends of
+	 * the agents being stopped would otherwise land a second later as
+	 * "cancelled by the session", or not at all if the process is gone by
+	 * then. The next start of the session delivers the notice.
+	 */
+	interruptAll(): void {
+		for (const round of this.rounds.values()) {
+			this.interruptRound(round);
+		}
+		this.flush();
+		this.path = undefined;
+	}
+
+	private interruptRound(round: RoundRecord): boolean {
+		let changed = false;
+		for (const agent of round.agents ?? []) {
+			if (LIVE_STATES.has(agent.state)) {
+				agent.state = "cancelled";
+				agent.stopReason = "interrupted";
+				agent.stopDetail =
+					"The session ended while it ran (the window was reloaded or the task closed); its work in progress is gone.";
+				agent.endedAt ??= this.now();
+				agent.waiting = undefined;
+				agent.awaitingReason = undefined;
+				changed = true;
+			}
+		}
+		if (round.status === "running") {
+			round.status = "done";
+			round.endedAt ??= this.now();
+			// Its report, interruption and all, is the lead's to be told.
+			round.delivered = false;
+			changed = true;
+		}
+		return changed;
 	}
 
 	/** Write now, and stop writing: the session is going. */
@@ -1572,8 +1621,10 @@ export function releaseRounds(sessionId: string): void {
 	if (!rounds) {
 		return;
 	}
+	// Recorded as interrupted and written before anything is stopped: see
+	// `interruptAll`.
+	rounds.interruptAll();
 	rounds.stopAll();
-	rounds.flush();
 	REGISTRIES.delete(sessionId);
 }
 
