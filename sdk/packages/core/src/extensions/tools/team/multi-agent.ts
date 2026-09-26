@@ -1753,26 +1753,19 @@ export class AgentTeamsRuntime {
 
 		for (const run of this.runs.values()) {
 			if (run.status === "queued" || run.status === "running") {
-				this.cancelRun(run.id, message);
+				try {
+					this.cancelRun(run.id, message);
+				} catch (error) {
+					firstAbortError ??= error;
+				}
 			}
 		}
+		// And the sync tasks, which have no run record to cancel.
 		for (const member of this.members.values()) {
-			if (
-				member.role !== "teammate" ||
-				!member.agent ||
-				member.runningCount <= 0 ||
-				member.abortRequested
-			) {
-				continue;
-			}
-			member.abortRequested = true;
-			member.abortReason = message;
 			try {
-				member.agent.abort(new Error(message));
+				this.abortTeammateRun(member.agentId, message);
 			} catch (error) {
-				if (!isAbortLikeError(error) && firstAbortError === undefined) {
-					firstAbortError = error;
-				}
+				firstAbortError ??= error;
 			}
 		}
 		if (firstAbortError !== undefined) {
@@ -1793,6 +1786,7 @@ export class AgentTeamsRuntime {
 		) {
 			return { ...run };
 		}
+		const wasRunning = run.status === "running";
 		run.status = "cancelled";
 		run.error = reason;
 		run.endedAt = new Date();
@@ -1806,7 +1800,39 @@ export class AgentTeamsRuntime {
 			run: { ...run },
 			reason,
 		});
+		if (wasRunning) {
+			// The record alone said cancelled while the teammate went on: it
+			// spent tokens, edited its workspace, and the next run dispatched
+			// onto it failed as a second run beside the first.
+			this.abortTeammateRun(run.agentId, reason ?? "cancelled");
+		}
 		return { ...run };
+	}
+
+	/**
+	 * Abort what `agentId` is running now, marked as intended so its end is
+	 * reported as cancelled. Once: a teammate already being stopped is left.
+	 */
+	private abortTeammateRun(agentId: string, reason: string): void {
+		const member = this.members.get(agentId);
+		if (
+			!member ||
+			member.role !== "teammate" ||
+			!member.agent ||
+			member.runningCount <= 0 ||
+			member.abortRequested
+		) {
+			return;
+		}
+		member.abortRequested = true;
+		member.abortReason = reason;
+		try {
+			member.agent.abort(new Error(reason));
+		} catch (error) {
+			if (!isAbortLikeError(error)) {
+				throw error;
+			}
+		}
 	}
 
 	recoverActiveRuns(reason = "runtime_recovered"): TeamRunRecord[] {

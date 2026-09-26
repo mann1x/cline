@@ -196,3 +196,53 @@ describe("a teammate's async queue", () => {
 		);
 	});
 });
+
+const eventsOf = (events: TeamEvent[], type: string, runId: string) =>
+	events.filter(
+		(event) =>
+			event.type === type &&
+			"run" in event &&
+			(event.run as { id: string }).id === runId,
+	);
+
+describe("team_cancel_run on a running run", () => {
+	it("stops the teammate, and its next queued run starts and completes", async () => {
+		const { runtime, events, spawn } = team();
+		const w = spawn("w");
+
+		const first = runtime.startTeammateRun("w", "long task");
+		const next = runtime.startTeammateRun("w", "next task");
+		await vi.waitFor(() => expect(w.started).toEqual(["long task"]));
+
+		runtime.cancelRun(first.id, "not needed");
+
+		expect(w.aborts).toBe(1);
+		await vi.waitFor(() =>
+			expect(w.started).toEqual(["long task", "next task"]),
+		);
+		expect(statusOf(runtime, first.id)).toBe("cancelled");
+		w.finish("next done");
+		await vi.waitFor(() =>
+			expect(statusOf(runtime, next.id)).toBe("completed"),
+		);
+		expect(statusOf(runtime, first.id)).toBe("cancelled");
+		expect(eventsOf(events, "run_cancelled", first.id)).toHaveLength(1);
+		expect(eventsOf(events, "run_completed", first.id)).toHaveLength(0);
+		expect(eventsOf(events, "run_failed", next.id)).toHaveLength(0);
+	});
+
+	it("leaves a queued run's teammate alone", async () => {
+		const { runtime, spawn } = team();
+		const w = spawn("w");
+
+		runtime.startTeammateRun("w", "running task");
+		const queued = runtime.startTeammateRun("w", "queued task");
+		await vi.waitFor(() => expect(w.started).toEqual(["running task"]));
+
+		runtime.cancelRun(queued.id);
+
+		expect(w.aborts).toBe(0);
+		expect(statusOf(runtime, queued.id)).toBe("cancelled");
+		w.finish();
+	});
+});
