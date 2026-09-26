@@ -53,7 +53,7 @@ const agentFeatures: FeatureToggle[] = [
 		id: "subagents",
 		label: "Subagents",
 		description:
-			"Let the model hand a piece of work to a subagent. Agents defined in .cline/agents are offered as soon as this is on; the open-ended spawn and the team tools also need the profile's parallel sessions above 1, because an endpoint that serves one request at a time would run them one after another rather than beside each other.",
+			"Let the model hand a piece of work to a subagent. Agents defined in .cline/agents are offered as soon as this is on; the open-ended spawn (and the team tools, when Teammates is on) also need the profile's parallel sessions above 1, because an endpoint that serves one request at a time would run them one after another rather than beside each other.",
 		stateKey: "subagentsEnabled",
 		settingKey: "subagentsEnabled",
 	},
