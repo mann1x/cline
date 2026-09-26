@@ -4,6 +4,7 @@ import {
 	createTurnFaultRecovery,
 	REFUSAL_BACKOFF_MAX_MS,
 	refusalBackoffMs,
+	transportFaultReason,
 } from "./turn-fault-recovery";
 
 const fault = (overrides: Partial<TurnFault> = {}): TurnFault => ({
@@ -159,5 +160,22 @@ describe("waiting out a refused turn", () => {
 		);
 		// A refusal is the engine pacing its load: never a warning.
 		expect(updates[0]?.activity?.severity).not.toBe("warn");
+	});
+});
+
+describe("why the server went away, as the row says it", () => {
+	it("says the server failed the batch, not that it is not answering", () => {
+		// Swarm 0926: opencoti's "Invalid input batch." (bug-3650) reached
+		// the lead as "Node1 unreachable (not answering)" while the node
+		// served every other request.
+		for (const message of [
+			"Invalid input batch.",
+			"got exception: speculative batch index 32 is not inside the current sub-batch [0, 32)",
+		]) {
+			expect(transportFaultReason(message), message).toBe(
+				"it failed the batch this turn was in",
+			);
+		}
+		expect(transportFaultReason("socket hang up")).toBe("not answering");
 	});
 });

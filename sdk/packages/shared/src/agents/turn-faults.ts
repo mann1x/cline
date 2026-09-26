@@ -58,6 +58,10 @@ const TRANSPORT_PATTERNS: readonly RegExp[] = [
 	// requests across the swarm ended on it. The request is not at fault; a
 	// new one is prefilled afresh.
 	/^(?:error:\s*)?(?:500\s*)?invalid input batch\.?$/i,
+	// opencoti's speculative verification threw because a KV-full decode had
+	// halved the batch under it (bug-3655). The server's fault, per batch;
+	// 4 agents of swarm 0926 ended on it.
+	/^(?:error:\s*)?got exception: speculative batch index \d+ is not inside the current sub-batch\b/i,
 	// The stream arrived and could not be read: a provider chunk the AI SDK's
 	// schema rejects (`TypeValidationError`) or that is not JSON
 	// (`JSONParseError`). Nothing the model chose -- the bytes on the wire
@@ -84,6 +88,12 @@ const REFUSAL_PATTERNS: readonly RegExp[] = [
 	/session allocation full/i,
 	/admission (?:rejected|refused)/i,
 	/\btoo many requests\b/i,
+	// opencoti's partial eviction (patch 0233): the node's KV could not fit
+	// another token, so it evicted the largest live sequence to keep the
+	// others. It says "Context size has been exceeded" but the agent's own
+	// window was not -- victims in swarm 0926 held 20-31k of 64k. No room
+	// now, like an admission refusal: back off and send again.
+	/^(?:error:\s*)?evicted to keep other in-flight requests alive\b/i,
 ];
 
 /** Classify a failed turn from what the agent loop was told about it. */

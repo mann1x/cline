@@ -114,6 +114,12 @@ const INFRA_PATTERNS: readonly RegExp[] = [
 
 function statusOf(result: SpawnBatchMemberResult): SpawnBatchStatus {
 	if (result.error !== undefined && result.finishReason === undefined) {
+		// The runtime's own guard ends the run with an abort error; nobody
+		// cancelled it, and showing it as cancelled reads like a stop by the
+		// lead or the user (9 agents of swarm 0926).
+		if (/\bloop guard\b/i.test(result.error)) {
+			return "errored";
+		}
 		return /\babort|cancel|stopped\b/i.test(result.error)
 			? "cancelled"
 			: "errored";

@@ -20,7 +20,7 @@
  * The agents keep retrying. Nothing here stops one: the lead may, and so may
  * the user.
  */
-import type { TurnFaultWait } from "./turn-fault-recovery";
+import { FAILED_BATCH_REASON, type TurnFaultWait } from "./turn-fault-recovery";
 
 /** Continuous waiting after which the lead is told about an agent. */
 export const LEAD_NUDGE_AFTER_MS = 10 * 60_000;
@@ -113,6 +113,9 @@ export function describeTrouble(
 		return `- ${record.name}: refused ${record.refusals} time${
 			record.refusals === 1 ? "" : "s"
 		} by ${record.where}: "${record.detail.trim().slice(0, 200)}" (waiting since ${clock(record.since)}, ${waited})`;
+	}
+	if (record.detail === FAILED_BATCH_REASON) {
+		return `- ${record.name}: ${record.where} answering, but failing its turns since ${clock(record.since)} (${record.detail}, ${waited})`;
 	}
 	return `- ${record.name}: ${record.where} unreachable since ${clock(record.since)} (${record.detail}, ${waited})`;
 }

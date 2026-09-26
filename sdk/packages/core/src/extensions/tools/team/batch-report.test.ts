@@ -166,12 +166,34 @@ describe("whose failure it was", () => {
 			"fetch failed",
 			"No agent node can take an agent: every node has a capacity of 0.",
 			'Type validation failed: Value: null.\nError message: [{"expected":"object","code":"invalid_type","path":[],"message":"Invalid input: expected object, received null"}]',
+			// Verbatim from opencoti b108 on 8244 (swarm 0926): the engine's
+			// partial eviction, its speculative sub-batch throw, and the batch it
+			// failed to decode. 15 agents ended on the first two as "task".
+			"Evicted to keep other in-flight requests alive: the KV cache could not fit another token and this was the largest live sequence. Context size has been exceeded.",
+			"got exception: speculative batch index 32 is not inside the current sub-batch [0, 32)",
+			"Invalid input batch.",
 		]) {
 			expect(
 				failureClassOf({ name: "a", text, finishReason: "error" }),
 				text,
 			).toBe("infra");
 		}
+	});
+
+	it("reads the runtime's loop guard as the agent's failure, not a cancellation", () => {
+		// 9 agents of swarm 0926 were stopped by the repeated-call guard and
+		// the round showed them as "cancelled", which reads like a stop by
+		// the lead or the user.
+		const result = {
+			name: "js-syntax-01",
+			text: "",
+			error:
+				"AgentRuntimeAbortError: repeated-call loop guard stopped the run at iteration 21",
+		};
+		const report = buildSpawnBatchReport([result], "lead");
+		expect(report.summary.cancelled).toBe(0);
+		expect(report.summary.errored).toBe(1);
+		expect(failureClassOf(result)).toBe("task");
 	});
 
 	it("is task for the model, a tool or the iteration budget", () => {

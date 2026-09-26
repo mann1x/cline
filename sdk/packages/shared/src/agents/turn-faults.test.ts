@@ -63,6 +63,22 @@ describe("what a failed turn was", () => {
 		}
 	});
 
+	it("reads the engine's KV-full eviction as a refusal and its batch throw as transport", () => {
+		// Verbatim from opencoti b108 on 8244, swarm 0926: 11 agents ended on
+		// the eviction and 4 on the speculative sub-batch throw. Neither says
+		// anything about the request; the eviction means "no room now".
+		expect(
+			classifyTurnFault(
+				"Evicted to keep other in-flight requests alive: the KV cache could not fit another token and this was the largest live sequence. Context size has been exceeded.",
+			),
+		).toBe("refusal");
+		expect(
+			classifyTurnFault(
+				"got exception: speculative batch index 32 is not inside the current sub-batch [0, 32)",
+			),
+		).toBe("transport");
+	});
+
 	it("reads a rate limit as a refusal", () => {
 		expect(classifyTurnFault("slow down", "rate_limited")).toBe("refusal");
 	});

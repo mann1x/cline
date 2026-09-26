@@ -101,8 +101,23 @@ function composed(
 	return AbortSignal.any(present);
 }
 
+/**
+ * The server answered and failed the whole decode batch the turn was in:
+ * opencoti's "Invalid input batch." or its speculative sub-batch throw. The
+ * node is up and serving; calling it unreachable made the lead stop agents
+ * on a working node (swarm 0926).
+ */
+export const FAILED_BATCH_REASON = "it failed the batch this turn was in";
+
 /** Why the server went away, in the words the row uses. */
 export function transportFaultReason(message: string): string {
+	if (
+		/invalid input batch|speculative batch index \d+ is not inside/i.test(
+			message,
+		)
+	) {
+		return FAILED_BATCH_REASON;
+	}
 	return /shutting down|loading model/i.test(message)
 		? "server restarted"
 		: /\b50[234]\b|bad gateway|gateway time|service unavailable|upstream/i.test(

@@ -84,6 +84,27 @@ describe("telling the lead about agents stuck for a long time", () => {
 		watch.dispose();
 	});
 
+	it("does not call a node that failed the batch unreachable", async () => {
+		// Swarm 0926: bug-3650's "Invalid input batch." reached the lead as
+		// "Node1 unreachable", and the lead stopped agents on a node that was
+		// serving every other request.
+		const sent: string[] = [];
+		const watch = watchFor("brace-fix-02", sent);
+		watch.waiting({
+			kind: "transport",
+			where: "Node1",
+			detail: "it failed the batch this turn was in",
+		});
+		await vi.advanceTimersByTimeAsync(
+			LEAD_NUDGE_AFTER_MS + LEAD_NUDGE_BATCH_MS,
+		);
+		expect(sent[0]).toContain(
+			"brace-fix-02: Node1 answering, but failing its turns since 2026-09-25T05:16:25Z (it failed the batch this turn was in",
+		);
+		expect(sent[0]).not.toContain("unreachable");
+		watch.dispose();
+	});
+
 	it("puts agents that cross the line together in one report", async () => {
 		const sent: string[] = [];
 		const a = watchFor("a", sent);
