@@ -221,8 +221,47 @@ function withoutHeaders(
 }
 
 /**
+ * Each past assistant turn without its `thinking`.
+ *
+ * A council's thinking is its deliberation: several thousand tokens of plan,
+ * findings and critiques per turn (xollama mail #375). Sent back, it fills the
+ * window and brings the council's compaction on early, and nothing reads it;
+ * what the council needs across turns travels in its sealed state instead.
+ */
+function withoutThinking(messages: unknown[]): unknown[] {
+	return messages.map((message) => {
+		if (
+			!message ||
+			typeof message !== "object" ||
+			!("thinking" in message) ||
+			(message as { role?: unknown }).role !== "assistant"
+		) {
+			return message;
+		}
+		const { thinking: _deliberation, ...rest } = message as Record<
+			string,
+			unknown
+		>;
+		return rest;
+	});
+}
+
+/** The server root a chat URL was sent to, for the model lookup. */
+function chatRoot(input: Parameters<typeof fetch>[0]): string | undefined {
+	const url =
+		typeof input === "string"
+			? input
+			: input instanceof URL
+				? input.href
+				: input.url;
+	const at = url.search(/\/api\/chat(?:[?#]|$)/);
+	return at >= 0 ? url.slice(0, at) : undefined;
+}
+
+/**
  * xOllama's request fields, added to each `/api/chat` body: `session_id` from
- * the request's session, and `x_read_only` on its read-only tools. A body
+ * the request's session, `x_read_only` on its read-only tools, and, for a
+ * council model, the history without the council's past deliberation. A body
  * that is not a chat body goes out untouched.
  */
 export function withXollamaRequestFields(
@@ -232,31 +271,43 @@ export function withXollamaRequestFields(
 	return (async (input, init) => {
 		const session = headerValue(init?.headers, XOLLAMA_SESSION_HEADER);
 		const readOnly = headerValue(init?.headers, XOLLAMA_READ_ONLY_HEADER);
-		if (session === undefined && readOnly === undefined) {
+		const root = chatRoot(input);
+		if (
+			typeof init?.body !== "string" ||
+			(root === undefined && session === undefined && readOnly === undefined)
+		) {
 			return baseFetch(input, init);
 		}
-		const headers = withoutHeaders(init?.headers, [
+		const headers = withoutHeaders(init.headers, [
 			XOLLAMA_SESSION_HEADER,
 			XOLLAMA_READ_ONLY_HEADER,
 		]);
-		let body = init?.body;
-		if (typeof body === "string") {
-			try {
-				const parsed = JSON.parse(body) as Record<string, unknown>;
-				if (Array.isArray(parsed.messages)) {
+		let body = init.body;
+		try {
+			const parsed = JSON.parse(body) as Record<string, unknown>;
+			if (Array.isArray(parsed.messages)) {
+				const council =
+					root !== undefined && typeof parsed.model === "string"
+						? (await readXollamaModel(root, parsed.model, baseFetch))
+								?.council === true
+						: false;
+				const names = readOnlyNames(readOnly);
+				// A body with nothing to add goes out as it came, byte for byte.
+				if (council || session !== undefined || names.size > 0) {
 					body = JSON.stringify({
 						...parsed,
+						...(council ? { messages: withoutThinking(parsed.messages) } : {}),
 						...(session !== undefined ? { session_id: session } : {}),
 						...(parsed.tools !== undefined
-							? { tools: markReadOnly(parsed.tools, readOnlyNames(readOnly)) }
+							? { tools: markReadOnly(parsed.tools, names) }
 							: {}),
 					});
 				}
-			} catch {
-				options?.logger?.debug?.(
-					"[xollama] request body is not JSON; sent without xOllama fields",
-				);
 			}
+		} catch {
+			options?.logger?.debug?.(
+				"[xollama] request body is not JSON; sent without xOllama fields",
+			);
 		}
 		return baseFetch(input, { ...init, headers, body });
 	}) as typeof fetch;

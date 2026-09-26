@@ -25,8 +25,11 @@ describe("the xOllama request fields", () => {
 	// while it keeps sending its id: every xOllama chat turn names it.
 	it("moves the request's session into the chat body and drops the header", async () => {
 		const sent: RequestInit[] = [];
-		const wire = withXollamaRequestFields((async (_url, init) => {
-			sent.push(init ?? {});
+		const wire = withXollamaRequestFields((async (url, init) => {
+			// The council lookup goes to /api/show; only the chat is asserted.
+			if (String(url).endsWith("/api/chat")) {
+				sent.push(init ?? {});
+			}
 			return json({});
 		}) as typeof fetch);
 		await wire("http://x/api/chat", {
@@ -47,8 +50,11 @@ describe("the xOllama request fields", () => {
 
 	it("leaves a request with no session as it was", async () => {
 		const sent: RequestInit[] = [];
-		const wire = withXollamaRequestFields((async (_url, init) => {
-			sent.push(init ?? {});
+		const wire = withXollamaRequestFields((async (url, init) => {
+			// The council lookup goes to /api/show; only the chat is asserted.
+			if (String(url).endsWith("/api/chat")) {
+				sent.push(init ?? {});
+			}
 			return json({});
 		}) as typeof fetch);
 		const body = JSON.stringify({ model: "m", messages: [] });
@@ -62,8 +68,11 @@ describe("the council's read-only tools", () => {
 	// means write, so a missing mark costs a tool, never grants a write.
 	it("marks x_read_only on the tools named read-only, and only those", async () => {
 		const sent: RequestInit[] = [];
-		const wire = withXollamaRequestFields((async (_url, init) => {
-			sent.push(init ?? {});
+		const wire = withXollamaRequestFields((async (url, init) => {
+			// The council lookup goes to /api/show; only the chat is asserted.
+			if (String(url).endsWith("/api/chat")) {
+				sent.push(init ?? {});
+			}
 			return json({});
 		}) as typeof fetch);
 		const headers = xollamaReadOnlyHeaders([
@@ -114,6 +123,44 @@ describe("the council's read-only tools", () => {
 				{ name: "editor", description: "", inputSchema: {} },
 			]),
 		).toEqual({});
+	});
+});
+
+describe("a council's past deliberation", () => {
+	// Mail #375 and the user: a council's thinking is its deliberation; sent
+	// back it only fills the window. A plain model keeps its thinking.
+	const history = [
+		{ role: "user", content: "q1" },
+		{ role: "assistant", content: "a1", thinking: "plan, findings, critiques" },
+		{ role: "user", content: "q2" },
+	];
+	const chatThrough = async (council: boolean) => {
+		const chats: Record<string, unknown>[] = [];
+		const wire = withXollamaRequestFields((async (url, init) => {
+			if (String(url).endsWith("/api/show")) {
+				return json({ xollama: { council: { enabled: council } } });
+			}
+			chats.push(JSON.parse(String(init?.body)));
+			return json({});
+		}) as typeof fetch);
+		await wire(`http://gpu2:22434/api/chat`, {
+			method: "POST",
+			body: JSON.stringify({
+				model: council ? "omni-council" : "qwen",
+				messages: history,
+			}),
+		});
+		return chats[0]?.messages as Array<Record<string, unknown>>;
+	};
+
+	it("is not sent back to a council", async () => {
+		const messages = await chatThrough(true);
+		expect(messages[1]).toEqual({ role: "assistant", content: "a1" });
+	});
+
+	it("is left alone for a plain model", async () => {
+		const messages = await chatThrough(false);
+		expect(messages[1]?.thinking).toBe("plan, findings, critiques");
 	});
 });
 
