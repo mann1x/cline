@@ -1408,6 +1408,9 @@ export class AgentTeamsRuntime {
 				// shut down (opencoti mail #322 -- idle sessions' windows filled
 				// the SWA half). Its next task books again under the same id.
 				this.releaseEngineSessionBetweenTasks(member);
+				// Free again: a run queued behind this task starts. A sync task
+				// ends with no run of the queue's to dispatch it.
+				this.dispatchQueuedRuns();
 			} else if (
 				member.runningCount <= 0 &&
 				(member.status as TeamMemberState["status"]) === "stopped"
@@ -1493,6 +1496,12 @@ export class AgentTeamsRuntime {
 			if (!run || run.status !== "queued") {
 				continue;
 			}
+			// A teammate takes one task at a time: its next run waits for the
+			// one it is on, sync or async. Started beside it, the second failed
+			// at once with the runtime's "another run is already in progress".
+			if (!this.canTakeQueuedRun(run.agentId)) {
+				continue;
+			}
 			if (run.nextAttemptAt && run.nextAttemptAt.getTime() > now) {
 				if (!nextDelayedAttemptAt || run.nextAttemptAt < nextDelayedAttemptAt) {
 					nextDelayedAttemptAt = run.nextAttemptAt;
@@ -1505,6 +1514,26 @@ export class AgentTeamsRuntime {
 			}
 		}
 		return { index: selectedIndex, nextDelayedAttemptAt };
+	}
+
+	/** Whether `agentId` is free for its next queued run: idle, and not stopped. */
+	private canTakeQueuedRun(agentId: string): boolean {
+		const member = this.members.get(agentId);
+		if (
+			!member ||
+			member.role !== "teammate" ||
+			!member.agent ||
+			member.status === "stopped" ||
+			member.runningCount > 0
+		) {
+			return false;
+		}
+		for (const run of this.runs.values()) {
+			if (run.agentId === agentId && run.status === "running") {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private scheduleQueuedRunDispatch(nextAttemptAt: Date | undefined): void {

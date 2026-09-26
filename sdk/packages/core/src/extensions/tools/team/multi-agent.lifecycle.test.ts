@@ -518,15 +518,15 @@ describe("AgentTeamsRuntime teammate lifecycle events", () => {
 			"replacement task",
 			{ maxRetries: 1 },
 		);
+		// It waits for the teammate to be free, rather than failing beside it.
+		expect(runtime.getRun(replacement.id)).toEqual(
+			expect.objectContaining({ status: "queued", retryCount: 0 }),
+		);
+		expect(runtime.getRun(replacement.id)?.error).toBeUndefined();
+
+		resolveRun?.();
 		await vi.waitFor(() => {
-			expect(runtime.getRun(replacement.id)).toEqual(
-				expect.objectContaining({
-					status: "queued",
-					error:
-						"Cannot start a new run while another run is already in progress",
-					retryCount: 1,
-				}),
-			);
+			expect(runtime.getRun(replacement.id)?.status).toBe("running");
 		});
 		expect(
 			events.filter(
@@ -535,13 +535,6 @@ describe("AgentTeamsRuntime teammate lifecycle events", () => {
 					event.run.id === replacement.id,
 			),
 		).toHaveLength(0);
-
-		resolveRun?.();
-		await vi.waitFor(() => {
-			expect(runtime.getSnapshot().members).toContainEqual(
-				expect.objectContaining({ agentId: "python-poet", status: "idle" }),
-			);
-		});
 		runtime.cancelOutstandingWork("test_cleanup");
 	});
 
