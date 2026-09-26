@@ -847,21 +847,30 @@ export function createAgentTeamsTools(
 		createTool<TeamAwaitRunsInput, TeamRunToolSummary | TeamRunToolSummary[]>({
 			name: "team_await_runs",
 			description:
-				"Wait for async teammate runs. Provide runId to wait for one run, or omit it to wait for all active async runs. Uses a long timeout for legitimate teammate work." +
+				"Wait for async teammate runs. Provide runId to wait for one run, or omit it to wait for all active async runs other than your own." +
 				describeListOutput(
 					TeamRunToolSummarySchema,
 					"resultSummary carries each finished run's answer, truncated to a preview; a run that is still going has no resultSummary.",
 				),
 			inputSchema: zodToJsonSchema(TeamAwaitRunsInputSchema),
+			// Not a bound: nothing reads a tool's timeoutMs. The wait ends when
+			// the runs do, or when the lead is stopped.
 			timeoutMs: TEAM_AWAIT_TIMEOUT_MS,
 			execute: async (input) => {
 				const validatedInput = validateWithZod(TeamAwaitRunsInputSchema, input);
 				if (validatedInput.runId) {
-					const run = await options.runtime.awaitRun(validatedInput.runId);
+					const run = await options.runtime.awaitRun(
+						validatedInput.runId,
+						undefined,
+						options.requesterId,
+					);
 					assertAwaitedRunSucceeded(run);
 					return validateWithZod(TeamRunToolSummarySchema, summarizeRun(run));
 				}
-				const runs = await options.runtime.awaitAllRuns();
+				const runs = await options.runtime.awaitAllRuns(
+					undefined,
+					options.requesterId,
+				);
 				const failedRuns = runs.filter((run) =>
 					["failed", "cancelled", "interrupted"].includes(run.status),
 				);

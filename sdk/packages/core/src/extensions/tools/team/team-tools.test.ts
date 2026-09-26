@@ -781,7 +781,10 @@ describe("createAgentTeamsTools runtime behavior", () => {
 		]);
 	});
 
-	it("sets long timeout for team await tool", () => {
+	// The tool told the model it "uses a long timeout", and the docs said the
+	// wait times out after 1 h. Nothing reads a tool's `timeoutMs`: the wait
+	// has no clock, and agents get no wall-clock bound by design.
+	it("claims no timeout it does not have", () => {
 		const runtime = new AgentTeamsRuntime({ teamName: "test-team" });
 		const tools = createAgentTeamsTools({
 			runtime,
@@ -789,7 +792,75 @@ describe("createAgentTeamsTools runtime behavior", () => {
 			teammateConfigProvider: makeTeammateConfigProvider(),
 		});
 		const awaitRuns = tools.find((tool) => tool.name === "team_await_runs");
-		expect(awaitRuns?.timeoutMs).toBe(60 * 60 * 1000);
+		expect(awaitRuns?.description).not.toMatch(/timeout/i);
+	});
+
+	// A teammate is given team_await_runs too. Called with no runId it waited
+	// for every active run -- its own included, which cannot end while it
+	// waits: a deadlock only the lead's Stop broke.
+	it("does not make a teammate wait for its own run", async () => {
+		const runtime = new AgentTeamsRuntime({ teamName: "test-team" });
+		let finish!: () => void;
+		(
+			runtime as unknown as {
+				members: Map<string, Record<string, unknown>>;
+			}
+		).members.set("w", {
+			agentId: "w",
+			role: "teammate",
+			status: "idle",
+			runningCount: 0,
+			lastMissionStep: 0,
+			lastMissionAt: Date.now(),
+			agent: {
+				canStartRun: () => true,
+				run: () =>
+					new Promise((resolve) => {
+						finish = () =>
+							resolve({
+								text: "done",
+								finishReason: "completed",
+								iterations: 1,
+								durationMs: 1,
+								usage: { inputTokens: 1, outputTokens: 1 },
+								messages: [],
+								toolCalls: [],
+							});
+					}),
+				getMessages: () => [],
+				abort: () => {},
+			},
+		});
+		const own = runtime.startTeammateRun("w", "task");
+		const teammateTools = createAgentTeamsTools({
+			runtime,
+			requesterId: "w",
+			teammateConfigProvider: makeTeammateConfigProvider(),
+			includeSpawnTool: false,
+		});
+		const awaitRuns = teammateTools.find(
+			(tool) => tool.name === "team_await_runs",
+		);
+		const ctx = { agentId: "w", conversationId: "conv-w", iteration: 1 };
+		const stillWaiting = Symbol("still waiting");
+		const within = <T>(promise: Promise<T>) =>
+			Promise.race([
+				promise,
+				new Promise<typeof stillWaiting>((resolve) =>
+					setTimeout(() => resolve(stillWaiting), 1_000),
+				),
+			]);
+		try {
+			await expect(
+				within(Promise.resolve(awaitRuns?.execute({}, ctx))),
+			).resolves.toEqual([]);
+			await expect(
+				within(Promise.resolve(awaitRuns?.execute({ runId: own.id }, ctx))),
+			).rejects.toThrow("your own run");
+		} finally {
+			finish();
+			await runtime.awaitRun(own.id, 1);
+		}
 	});
 
 	it("collapses concurrent sync team_run_task calls to the same agent", async () => {

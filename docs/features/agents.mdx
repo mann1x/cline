@@ -178,7 +178,7 @@ what broke, with file:line and the failing output.
 | `team_spawn_teammate` | lead | `agentId`, `rolePrompt`, optional `temperature`/`seed`/`temperature_range` |
 | `team_shutdown_teammate` | lead | `agentId`, optional `reason`. Without a reason the teammate stays persisted and comes back on restore |
 | `team_run_task` | any | `agentId`, `task`, optional `taskId`, `runMode` (`sync` default / `async`), `continueConversation`, `max_iterations` |
-| `team_await_runs`, `team_list_runs`, `team_cancel_run` | any | Wait for, list, or cancel async runs (the wait times out after 1 h) |
+| `team_await_runs`, `team_list_runs`, `team_cancel_run` | any | Wait for, list, or cancel async runs. The wait has no time limit: it ends when the runs do, or when the lead is stopped. A teammate waiting for all runs does not wait for its own |
 | `team_task` | any | Task board: `create`, `list`, `claim`, `complete`, `block`. Supports `dependsOn` |
 | `team_send_message`, `team_broadcast`, `team_read_mailbox` | any | Mailbox. Unread mail is put at the head of the teammate's next run |
 | `team_mission_log` | any | Log entries (`progress`, `handoff`, `blocked`, `decision`, `done`, `error`) |

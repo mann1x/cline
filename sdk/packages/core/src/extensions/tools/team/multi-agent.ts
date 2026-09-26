@@ -1596,10 +1596,28 @@ export class AgentTeamsRuntime {
 		return run ? { ...run } : undefined;
 	}
 
-	async awaitRun(runId: string, pollIntervalMs = 250): Promise<TeamRunRecord> {
+	/**
+	 * Wait for one run to end. `requesterId` is who waits: a teammate asking
+	 * for its own active run is refused, since that run cannot end while it
+	 * waits for it.
+	 */
+	async awaitRun(
+		runId: string,
+		pollIntervalMs = 250,
+		requesterId?: string,
+	): Promise<TeamRunRecord> {
 		const run = this.runs.get(runId);
 		if (!run) {
 			throw new Error(`Run "${runId}" was not found`);
+		}
+		if (
+			requesterId !== undefined &&
+			run.agentId === requesterId &&
+			(run.status === "queued" || run.status === "running")
+		) {
+			throw new Error(
+				`Run "${runId}" is your own run: it ends when you finish this task, so waiting for it would never return.`,
+			);
 		}
 		while (run.status === "queued" || run.status === "running") {
 			await sleep(pollIntervalMs);
@@ -1607,15 +1625,25 @@ export class AgentTeamsRuntime {
 		return { ...run };
 	}
 
-	async awaitAllRuns(pollIntervalMs = 250): Promise<TeamRunRecord[]> {
+	/**
+	 * Wait for every active run to end, and list them. The requester's own
+	 * runs are left out: a teammate that waits for "all runs" is inside one of
+	 * them, and waiting for it deadlocked until the lead was stopped.
+	 */
+	async awaitAllRuns(
+		pollIntervalMs = 250,
+		requesterId?: string,
+	): Promise<TeamRunRecord[]> {
+		const awaited = (run: TeamRunRecord) =>
+			requesterId === undefined || run.agentId !== requesterId;
 		while (
-			Array.from(this.runs.values()).some((run) =>
-				["queued", "running"].includes(run.status),
+			Array.from(this.runs.values()).some(
+				(run) => awaited(run) && ["queued", "running"].includes(run.status),
 			)
 		) {
 			await sleep(pollIntervalMs);
 		}
-		return this.listRuns();
+		return this.listRuns().filter(awaited);
 	}
 
 	/**
