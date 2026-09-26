@@ -355,8 +355,14 @@ export function startBackgroundDelegation(
 	return registry.start({
 		agentName: agent.name,
 		prompt: input.prompt,
-		run: ({ signal, hooks }) =>
-			delegateToConfiguredAgent({ ...input, signal, hooks }),
+		// Its sandbox and its stop button go by the run's own id.
+		run: ({ runId, signal, hooks }) =>
+			delegateToConfiguredAgent({
+				...input,
+				signal,
+				hooks,
+				toolCallId: `delegate_${runId}`,
+			}),
 		onSettled: input.onSettled,
 	});
 }

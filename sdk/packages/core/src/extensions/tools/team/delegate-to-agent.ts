@@ -14,6 +14,7 @@
  * implementation of any of them would be a second thing to keep correct.
  */
 
+import { randomUUID } from "node:crypto";
 import type { AgentHooks, AgentTool, AgentToolContext } from "@cline/shared";
 import type { ConfiguredAgentConfig } from "./configured-agent-config";
 import { buildConfiguredAgentToolDescriptors } from "./configured-agent-tool";
@@ -121,6 +122,12 @@ export interface DelegateToConfiguredAgentInput {
 	 * down would be a second path to keep correct.
 	 */
 	hooks?: AgentHooks;
+	/**
+	 * The id the run goes by as a tool call. The agent's sandbox, its
+	 * hand-back and its stop button are all keyed on it; a background run
+	 * passes the id it was registered under, a foreground one gets its own.
+	 */
+	toolCallId?: string;
 }
 
 /**
@@ -156,8 +163,13 @@ export async function delegateToConfiguredAgent(
 		);
 	}
 
+	// A tool call id of its own, as if the lead had made the call: the
+	// sandbox is opened per call id, and a run without one edited the real
+	// workspace with no shell -- the one delegated path outside the private
+	// copy every other agent works on.
 	const context: AgentToolContext = {
 		sessionId: input.sessionId,
+		toolCallId: input.toolCallId ?? `delegate_${randomUUID()}`,
 		agentId: input.parentAgentId,
 		conversationId: input.conversationId,
 		iteration: 0,

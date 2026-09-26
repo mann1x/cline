@@ -210,3 +210,49 @@ describe("renderDelegationForTranscript", () => {
 		expect(text).toContain("finished without reporting anything");
 	});
 });
+
+describe("a delegated run is sandboxed like one the model starts", () => {
+	// The sandbox, its hand-back and its stop button are keyed on the tool
+	// call id. /delegate ran the agent with none, so it edited the real
+	// workspace and got no shell -- the one delegated path outside the
+	// "every delegated agent works on a private copy" rule.
+	it("gives each run a tool call id of its own", async () => {
+		const agents = [makeAgent()];
+		const seen: Array<string | undefined> = [];
+		const tool = makeSubagentTool(agents, "qa", async (_input, context) => {
+			seen.push(context.toolCallId);
+			return { text: "done", iterations: 1 };
+		});
+		const run = () =>
+			delegateToConfiguredAgent({
+				agents,
+				tools: [tool],
+				agentName: "qa",
+				prompt: "check the last change",
+				parentAgentId: "lead",
+			});
+		await run();
+		await run();
+		expect(seen[0]).toMatch(/^delegate_/);
+		expect(seen[1]).toMatch(/^delegate_/);
+		expect(seen[0]).not.toBe(seen[1]);
+	});
+
+	it("uses the id a background run was registered under", async () => {
+		const agents = [makeAgent()];
+		let seen: string | undefined;
+		const tool = makeSubagentTool(agents, "qa", async (_input, context) => {
+			seen = context.toolCallId;
+			return { text: "done", iterations: 1 };
+		});
+		await delegateToConfiguredAgent({
+			agents,
+			tools: [tool],
+			agentName: "qa",
+			prompt: "check the last change",
+			parentAgentId: "lead",
+			toolCallId: "delegate_run-7",
+		});
+		expect(seen).toBe("delegate_run-7");
+	});
+});
