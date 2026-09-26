@@ -213,8 +213,17 @@ function summarizeRunResult(
 	};
 }
 
-function dateToIso(value: Date | undefined): string | undefined {
-	return value?.toISOString();
+/**
+ * A run's date as the summary carries it. A string is taken too: a state
+ * reloaded through a reviver that missed a field hands one over, and a
+ * summary that throws on it made every listing of the team fail.
+ */
+function dateToIso(value: Date | string | undefined): string | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+	const date = value instanceof Date ? value : new Date(value);
+	return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
 function summarizeRun(run: TeamRunRecord): TeamRunToolSummary {
@@ -1135,6 +1144,9 @@ export function reviveTeamStateDates(
 				? new Date(run.nextAttemptAt)
 				: undefined,
 			heartbeatAt: run.heartbeatAt ? new Date(run.heartbeatAt) : undefined,
+			lastProgressAt: run.lastProgressAt
+				? new Date(run.lastProgressAt)
+				: undefined,
 		})),
 		outcomes: (state.outcomes ?? []).map((outcome) => ({
 			...outcome,

@@ -1,9 +1,19 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { TeamRuntimeState } from "@cline/shared";
 import { resolveTeamDataDir } from "@cline/shared/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { FileTeamStore } from "../../../services/storage/file-team-store";
+import { SqliteTeamStore } from "../../../services/storage/sqlite-team-store";
+import { reviveTeamStateDates as reviveSessionTeamStateDates } from "../../../session/models/session-row";
 import { createDelegatedAgentConfigProvider } from "./delegated-agent";
 import { AgentTeamsRuntime } from "./multi-agent";
-import { bootstrapAgentTeams, createAgentTeamsTools } from "./team-tools";
+import {
+	bootstrapAgentTeams,
+	createAgentTeamsTools,
+	reviveTeamStateDates,
+} from "./team-tools";
 
 type EnvSnapshot = {
 	CLINE_DATA_DIR: string | undefined;
@@ -1322,5 +1332,101 @@ describe("a teammate's engine session", () => {
 			first,
 			second,
 		]);
+	});
+});
+
+/**
+ * A team reopened from its store: every date on a run comes back as a date.
+ * `lastProgressAt` did not, so the first `team_list_runs` or
+ * `team_await_runs` after a reload threw `value?.toISOString is not a
+ * function` for any team with a finished run.
+ */
+describe("a team reloaded from its store", () => {
+	const lead = { agentId: "lead", conversationId: "conv-1", iteration: 1 };
+
+	async function finishedTeam(): Promise<AgentTeamsRuntime> {
+		const runtime = new AgentTeamsRuntime({ teamName: "test-team" });
+		(
+			runtime as unknown as {
+				members: Map<string, Record<string, unknown>>;
+			}
+		).members.set("w", {
+			agentId: "w",
+			role: "teammate",
+			status: "idle",
+			runningCount: 0,
+			lastMissionStep: 0,
+			lastMissionAt: Date.now(),
+			agent: {
+				canStartRun: () => true,
+				run: async () => ({
+					text: "done",
+					finishReason: "completed",
+					iterations: 1,
+					durationMs: 1,
+					usage: { inputTokens: 1, outputTokens: 1 },
+					messages: [],
+					toolCalls: [],
+				}),
+				getMessages: () => [],
+				abort: () => {},
+			},
+		});
+		const run = runtime.startTeammateRun("w", "task");
+		await runtime.awaitRun(run.id, 1);
+		return runtime;
+	}
+
+	async function listAndAwait(state: TeamRuntimeState): Promise<unknown[]> {
+		const restored = new AgentTeamsRuntime({ teamName: "test-team" });
+		restored.hydrateState(state);
+		const tools = createAgentTeamsTools({
+			runtime: restored,
+			requesterId: "lead",
+			teammateConfigProvider: makeTeammateConfigProvider(),
+		});
+		const list = tools.find((tool) => tool.name === "team_list_runs");
+		const wait = tools.find((tool) => tool.name === "team_await_runs");
+		return [await list?.execute({}, lead), await wait?.execute({}, lead)];
+	}
+
+	it("lists and awaits its runs after a JSON round trip", async () => {
+		const saved = JSON.parse(
+			JSON.stringify((await finishedTeam()).exportState()),
+		);
+		for (const revive of [reviveTeamStateDates, reviveSessionTeamStateDates]) {
+			const [listed, awaited] = await listAndAwait(revive(saved));
+			expect(listed).toEqual([
+				expect.objectContaining({
+					status: "completed",
+					lastProgressAt: expect.any(String),
+				}),
+			]);
+			expect(awaited).toEqual(listed);
+		}
+	});
+
+	it("lists and awaits its runs loaded from either store", async () => {
+		const state = (await finishedTeam()).exportState();
+		const dir = mkdtempSync(join(tmpdir(), "team-reload-"));
+		try {
+			for (const store of [
+				new SqliteTeamStore({ teamDir: join(dir, "sqlite") }),
+				new FileTeamStore({ teamDir: join(dir, "file") }),
+			]) {
+				store.init();
+				store.persistRuntime("team", state, []);
+				const loaded = store.loadRuntime("team").state;
+				if (!loaded) {
+					throw new Error("nothing loaded");
+				}
+				const [listed] = await listAndAwait(loaded);
+				expect(listed).toEqual([
+					expect.objectContaining({ lastProgressAt: expect.any(String) }),
+				]);
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
