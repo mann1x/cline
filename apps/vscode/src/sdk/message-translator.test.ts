@@ -1183,6 +1183,52 @@ describe("translateSessionEvent — agent_event content_end", () => {
 // translateSessionEvent — agent_event (done)
 // ---------------------------------------------------------------------------
 
+// A teammate's events reach the host as `agent_event`s with `teamRole:
+// "teammate"` and no parentAgentId. Only parentAgentId was filtered, so a
+// teammate's streamed text and tool rows rendered as the lead's, and its
+// `done` ended the lead's turn. The CLI filters on teamRole and keeps usage
+// for the session totals; so does this.
+describe("translateSessionEvent — a teammate's events", () => {
+	const teammate = (event: AgentEvent): CoreSessionEvent => ({
+		type: "agent_event",
+		payload: { sessionId: "session-1", teamRole: "teammate", teamAgentId: "w", event },
+	})
+
+	it("do not render in the lead's chat and do not end its turn", () => {
+		const state = new MessageTranslatorState()
+		const events = [
+			{ type: "content_start", contentType: "text", text: "teammate says hi" },
+			{ type: "content_start", contentType: "tool", toolName: "read_files", toolCallId: "t1", input: { files: [] } },
+			{ type: "content_end", contentType: "tool", toolName: "read_files", toolCallId: "t1", output: "x" },
+			{ type: "done", reason: "completed", text: "teammate done", iterations: 1 },
+			{ type: "error", error: new Error("teammate failed"), recoverable: false, iteration: 1 },
+		] as AgentEvent[]
+		for (const event of events) {
+			const result = translateSessionEvent(teammate(event), state)
+			expect(result.messages).toEqual([])
+			expect(result.turnComplete).toBe(false)
+			expect(result.toolError).toBeUndefined()
+			expect(result.toolSuccess).toBeUndefined()
+		}
+	})
+
+	it("still count toward the task's usage, without a row of their own", () => {
+		const state = new MessageTranslatorState()
+		const result = translateSessionEvent(
+			teammate({
+				type: "usage",
+				inputTokens: 100,
+				outputTokens: 20,
+				totalInputTokens: 100,
+				totalOutputTokens: 20,
+			} as AgentEvent),
+			state,
+		)
+		expect(result.messages).toEqual([])
+		expect(result.usage).toMatchObject({ tokensIn: 100, tokensOut: 20 })
+	})
+})
+
 describe("translateSessionEvent — agent_event done", () => {
 	it("translates done event to ask completion_result with empty text (no green rectangle)", () => {
 		const state = new MessageTranslatorState()

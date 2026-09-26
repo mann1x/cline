@@ -3753,6 +3753,16 @@ export function translateSessionEvent(event: CoreSessionEvent, state: MessageTra
 			// SubagentStatusRow UI. Without this filter, every sub-agent tool call,
 			// text output, iteration, and usage event floods the main chat.
 			const agentEvent = event.payload.event
+			// A teammate's events carry teamRole, not parentAgentId. Rendered, its
+			// text and tool rows read as the lead's and its `done` ended the lead's
+			// turn. Only its usage goes on, for the task's totals -- as the CLI
+			// keeps it -- without a request row of its own in the lead's chat.
+			if (event.payload.teamRole === "teammate") {
+				if (agentEvent.type === "usage") {
+					result.usage = normalizeUsageEvent(agentEvent)
+				}
+				break
+			}
 			const isToolLifecycleEvent =
 				agentEvent.type === "content_start" || agentEvent.type === "content_update" || agentEvent.type === "content_end"
 			const isSpawnAgentToolEvent =

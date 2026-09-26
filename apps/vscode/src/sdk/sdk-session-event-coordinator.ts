@@ -224,7 +224,8 @@ export class SdkSessionEventCoordinator {
 	}
 
 	private getAgentFailureTelemetry(event: CoreSessionEvent): AgentFailureTelemetry {
-		if (event.type !== "agent_event") {
+		// A teammate's failure is its own run's, not the lead's provider failing.
+		if (event.type !== "agent_event" || event.payload.teamRole === "teammate") {
 			return undefined
 		}
 

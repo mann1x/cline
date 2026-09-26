@@ -451,6 +451,23 @@ describe("SdkSessionEventCoordinator", () => {
 		expect(options.captureProviderApiError).not.toHaveBeenCalled()
 	})
 
+	// A teammate's failures are its own run's, not the lead's provider: they
+	// were counted as lead provider failures.
+	it("does not capture a teammate's failure as the lead's provider failure", async () => {
+		const { coordinator, options } = makeCoordinator()
+		for (const agentEvent of [
+			{ type: "error", error: new Error("teammate failed"), recoverable: false },
+			{ type: "done", reason: "error", text: "teammate stream failed", iterations: 1 },
+		]) {
+			await coordinator.handleSessionEvent({
+				type: "agent_event",
+				payload: { sessionId: "session-123", teamRole: "teammate", teamAgentId: "w", event: agentEvent },
+			} as unknown as CoreSessionEvent)
+		}
+
+		expect(options.captureProviderApiError).not.toHaveBeenCalled()
+	})
+
 	it("captures provider failure telemetry when the SDK finishes a turn with reason error", async () => {
 		const { coordinator, options } = makeCoordinator()
 		const event: CoreSessionEvent = {
