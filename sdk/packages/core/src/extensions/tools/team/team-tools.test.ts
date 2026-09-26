@@ -849,6 +849,66 @@ describe("createAgentTeamsTools runtime behavior", () => {
 		expect(result2.message).toContain("already dispatched");
 	});
 
+	// The dedupe was keyed by teammate alone: a second, DIFFERENT task in the
+	// same batch was answered with the first one's result, marked joined, and
+	// never ran -- the lead was told it had completed.
+	it("runs a different sync task for the same teammate after the first, not as a duplicate", async () => {
+		const resolvers: Array<
+			(value: { text: string; iterations: number }) => void
+		> = [];
+		const routeToTeammate = vi.fn(
+			() =>
+				new Promise<{ text: string; iterations: number }>((resolve) => {
+					resolvers.push(resolve);
+				}),
+		);
+		const runtime = {
+			routeToTeammate,
+			getMemberRole: vi.fn(() => "lead"),
+		} as unknown as AgentTeamsRuntime;
+		const tools = createAgentTeamsTools({
+			runtime,
+			requesterId: "lead",
+			teammateConfigProvider: makeTeammateConfigProvider(),
+		});
+		const runTask = tools.find((tool) => tool.name === "team_run_task");
+		if (!runTask) {
+			throw new Error("Expected team_run_task tool to be defined");
+		}
+		const ctx = { agentId: "lead", conversationId: "conv-1", iteration: 1 };
+
+		const call1 = runTask.execute(
+			{ agentId: "w", task: "task-AAAAAA", runMode: "sync" },
+			ctx,
+		);
+		const call2 = runTask.execute(
+			{ agentId: "w", task: "task-BBBBBB", runMode: "sync" },
+			ctx,
+		);
+		// The second waits for the teammate: one task at a time.
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(routeToTeammate).toHaveBeenCalledTimes(1);
+		resolvers[0]?.({ text: "did: AAAAAA", iterations: 1 });
+		const result1 = (await call1) as { text?: string };
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(routeToTeammate).toHaveBeenCalledTimes(2);
+		expect(routeToTeammate.mock.calls[1]).toEqual([
+			"w",
+			"task-BBBBBB",
+			expect.anything(),
+		]);
+		resolvers[1]?.({ text: "did: BBBBBB", iterations: 1 });
+		const result2 = (await call2) as {
+			text?: string;
+			status?: string;
+			deduped?: boolean;
+		};
+		expect(result1.text).toBe("did: AAAAAA");
+		expect(result2.text).toBe("did: BBBBBB");
+		expect(result2.deduped).toBeUndefined();
+		expect(result2.status).not.toBe("joined");
+	});
+
 	it("returns explicit dispatch state for async team_run_task calls", async () => {
 		const runtime = {
 			startTeammateRun: vi.fn(() => ({ id: "run_00001" })),

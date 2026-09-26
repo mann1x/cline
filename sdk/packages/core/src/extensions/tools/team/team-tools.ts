@@ -685,10 +685,12 @@ export function createAgentTeamsTools(
 		}) as AgentTool,
 	);
 
-	// Track in-flight sync runs per agent for dedup
+	// Track in-flight sync runs per agent and task for dedup
 	// (Claude sometimes emits duplicate tool_use blocks in a single response;
 	//  duplicate sync calls should await the first dispatched run)
 	const pendingSyncRuns = new Map<string, Promise<TeamRunTaskToolResult>>();
+	// The last sync run dispatched to each teammate, for the next to wait on.
+	const syncQueueTails = new Map<string, Promise<TeamRunTaskToolResult>>();
 
 	tools.push(
 		createTool<TeamRunTaskInput, TeamRunTaskToolResult>({
@@ -730,9 +732,17 @@ export function createAgentTeamsTools(
 					});
 				}
 
-				// Deduplication guard: collapse a duplicate sync call for the same
-				// agent onto the first in-flight dispatch in this parallel tool-call batch.
-				const pendingRun = pendingSyncRuns.get(validatedInput.agentId);
+				// Deduplication guard: collapse a duplicate sync call -- the same
+				// teammate, the same task, asked the same way -- onto the first
+				// in-flight dispatch in this parallel tool-call batch.
+				const syncKey = JSON.stringify([
+					validatedInput.agentId,
+					validatedInput.task,
+					validatedInput.taskId || null,
+					validatedInput.continueConversation === true,
+					maxIterations ?? null,
+				]);
+				const pendingRun = pendingSyncRuns.get(syncKey);
 				if (pendingRun) {
 					const result = await pendingRun;
 					return validateWithZod(TeamRunTaskToolResultSchema, {
@@ -742,14 +752,27 @@ export function createAgentTeamsTools(
 						message: `Task for ${validatedInput.agentId} was already dispatched in this tool batch; joined the existing in-flight run.`,
 					});
 				}
-				const runPromise = options.runtime
-					.routeToTeammate(validatedInput.agentId, validatedInput.task, {
-						taskId: validatedInput.taskId || undefined,
-						fromAgentId: options.requesterId,
-						continueConversation:
-							validatedInput.continueConversation || undefined,
-						...(maxIterations !== undefined ? { maxIterations } : {}),
-					})
+				// A different task for a teammate still on one runs after it: a
+				// teammate takes one task at a time, and this caller waits anyway.
+				const ahead = syncQueueTails.get(validatedInput.agentId);
+				const route = () =>
+					options.runtime.routeToTeammate(
+						validatedInput.agentId,
+						validatedInput.task,
+						{
+							taskId: validatedInput.taskId || undefined,
+							fromAgentId: options.requesterId,
+							continueConversation:
+								validatedInput.continueConversation || undefined,
+							...(maxIterations !== undefined ? { maxIterations } : {}),
+						},
+					);
+				const runPromise = (
+					ahead
+						? ahead.then(route, route)
+						: // Dispatched now, not a microtask later, when nothing is ahead.
+							route()
+				)
 					.then((result) => {
 						const capped = result.finishReason === "max_iterations";
 						return validateWithZod(TeamRunTaskToolResultSchema, {
@@ -770,9 +793,13 @@ export function createAgentTeamsTools(
 						});
 					})
 					.finally(() => {
-						pendingSyncRuns.delete(validatedInput.agentId);
+						pendingSyncRuns.delete(syncKey);
+						if (syncQueueTails.get(validatedInput.agentId) === runPromise) {
+							syncQueueTails.delete(validatedInput.agentId);
+						}
 					});
-				pendingSyncRuns.set(validatedInput.agentId, runPromise);
+				pendingSyncRuns.set(syncKey, runPromise);
+				syncQueueTails.set(validatedInput.agentId, runPromise);
 				return await runPromise;
 			},
 		}) as AgentTool,

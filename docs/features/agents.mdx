@@ -188,7 +188,7 @@ what broke, with file:line and the failing output.
 
 **Behaviour to know:**
 
-- **One run at a time.** A teammate runs one task at a time. A second run on a busy teammate fails with "Cannot start a new run while another run is already in progress".
+- **One run at a time.** A teammate runs one task at a time. Sync calls from the same caller wait their turn: a different task for the same teammate runs after the one ahead of it, and an identical call in the same batch shares its answer (`status: "joined"`). Any other second run on a busy teammate fails with "Cannot start a new run while another run is already in progress".
 - **The board is manual.** Passing `taskId` to `team_run_task` does not complete the task. Someone has to call `team_task` with `complete`.
 - **The lead cannot stop early.** While tasks are pending or runs are active, the lead is told it still has team obligations.
 - **Persistence.** State is kept in SQLite (`teams.db` in the data directory) and keyed by the session. VS Code passes no team name, so a team belongs to its task. In the CLI, `/team <task>` starts a team, and the hidden `--team-name <name>` names the state.
