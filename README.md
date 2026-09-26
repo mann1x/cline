@@ -335,6 +335,8 @@ Turn on **Subagents** in Features and the model can hand work to sub-agents with
 - **Sampling per spawn.** `spawn_agent`, `spawn_swarm`, teammates and configured agents take an optional `temperature` and `seed`. Leave them out and the model's own sampler applies. A seed that covers several agents is offset per agent (seed, seed+1, …).
 - **Every report reaches the lead.** Each agent writes a short summary, and the lead reads any full report with `read_agent_report`. A question from an agent goes to the lead, not to you.
 
+Every agent feature (sub-agents, configured agents, teammates, swarms, `create_agent`, `/delegate`, nodes, the sandbox, `max_iterations` and `check`, escalation), with how it works and example prompts: [`docs/features/agents.mdx`](docs/features/agents.mdx).
+
 ## Every Agent Works in a Sandbox
 
 Every delegated agent (`spawn_agent` agents, swarm workers, teammates and configured agents) works on a **private copy-on-write overlay** of your workspace. It reads through to your files, but its writes, deletes and renames stay in its own copy. When it finishes, each file it changed comes back to the lead as a revision attributed to that agent. The lead reviews it with `read_files revision:"#N"` and adopts it with `restore_file`. Nothing is applied behind your back, and two agents working at once never see each other's writes. The overlay is pure TypeScript, so it is always on, on every platform.

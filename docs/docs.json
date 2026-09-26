@@ -157,7 +157,8 @@
 							"core-workflows/using-commands",
 							"core-workflows/checkpoints",
 							"cli/agent-teams",
-							"features/subagents"
+							"features/subagents",
+							"features/agents"
 						]
 					},
 					{

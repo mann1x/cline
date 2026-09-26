@@ -1,0 +1,612 @@
+---
+title: "Delegated Agents"
+sidebarTitle: "Delegated Agents"
+description: "Sub-agents, configured agents, teammates and swarms in Cerebriline: what each one does, how it works, and how to ask the model to use it."
+---
+
+Cerebriline, the mann1x fork of Cline, can hand work to other agents in four ways. The lead model can spawn **sub-agents**, run **configured agents** that you defined in files, keep a roster of **teammates**, or run a **swarm** on a shared PolyKV prefix. This page covers what each one does, how it works underneath, the settings that control it, and example prompts. Everything here was checked against the code on `main` as of 2026-09-26.
+
+<Note>
+  This page is about the SDK-based agent tools (`spawn_agent`, `subagent_<name>`, `team_*`). The read-only research tool described in [Subagents](/features/subagents) (`use_subagents`) is upstream's older, separate mechanism.
+</Note>
+
+## Turning it on
+
+| Where | Setting | Default | Effect |
+|---|---|---|---|
+| VS Code, Settings → Features | **Subagents** (`subagentsEnabled`) | off | Turns on `spawn_agent`, configured agents, `create_agent` and, for now, the `team_*` tools |
+| VS Code, Settings → Features | **Agents can run commands** (`subagentCommandsEnabled`) | off | Gives delegated agents a sandboxed shell (see [Sandbox](#every-agent-works-in-a-sandbox)) |
+| VS Code, opencoti provider, PolyKV section | **Allow swarms** (`polykv.swarm`) | off | Adds `merge` and `count` to `spawn_agent` |
+| VS Code, Agents tab | **Use PolyKV agents as Priority 0** (`polykvAgentsPriorityZero`) | off | Runs up to 8 agents inside the lead's own opencoti session |
+| CLI | none | on | `spawn_agent` and the team tools are on unless you run with `--yolo` |
+| CLI | `CLINE_SUBAGENT_COMMANDS=1` (env) | unset | The CLI's equivalent of **Agents can run commands** |
+
+The Subagents toggle is necessary but not always sufficient. `spawn_agent` and the team tools are also withheld when delegation cannot run in parallel: the profile's **Parallel Sessions** must be above 1, or the agent nodes together must have a capacity above 1. Configured agents (`subagent_<name>`) are offered as soon as the toggle is on. The reasoning is that an endpoint serving one request at a time would run the agents one after another, not side by side.
+
+## The three agent kinds
+
+Upstream Cline built all three. This fork extended them (see [What this fork added](#what-this-fork-added)).
+
+| | Sub-agent (`spawn_agent`) | Configured agent (`subagent_<name>`) | Teammate (`team_*`) |
+|---|---|---|---|
+| Upstream origin | `78aedcde8`, 2026-03-02, "feat: agents, core, cli, llms sdk packages" | `1c13edd39`, 2026-06-09, #11368 | `78aedcde8`, 2026-03-02 (same commit as sub-agents) |
+| Defined by | The lead, in the tool call | You (or the lead via `create_agent`), in `.cline/agents/<name>.md` | The lead, with `team_spawn_teammate` |
+| Lifetime | One call. It ends when it answers | One call per use. The definition persists as a file | Persists across turns and sessions until shut down |
+| Model | The session's, the Agents tab's, or a node's | Its own `profile` / `providerId` / `modelId` if the file names one | The session's (or the Agents tab's) |
+| How work is given | `task`, or `agents: [...]` for several | `prompt` | `team_run_task`, one task at a time, and the task board |
+| Blocking | Yes. The call returns when every agent in it has finished | Yes | `runMode: "sync"` (default) blocks. `"async"` returns a `runId` |
+| Coordination | None between agents. Each one reports to the lead | None | Mailbox, task board, mission log, outcomes |
+| Remembers earlier work | No | No | Yes, with `continueConversation: true` |
+
+The `DelegatedAgent` engine that all three share first appeared in `665cd3cc0` (2026-03-28, #43). The team directory was moved to its current home, `sdk/packages/core/src/extensions/tools/team/`, by the "RuntimeHost boundary" refactor (`f4fe3d36e`, 2026-04-21, #196). That refactor moved these files; it did not create them.
+
+**Upstream's apparent strategy.** This is inferred from the tool descriptions, not stated anywhere:
+
+- **Sub-agents** are disposable one-shot workers. You give each one a focused task and it hands back a report.
+- **Configured agents** are reusable specialists with a fixed role, model and skills. You describe them once and call them by name.
+- **Teammates** are a persistent roster that coordinates through shared state. You keep assigning work to them.
+
+The `spawn_agent` description tells the model the same thing: "Use `spawn_agent` for tasks that finish and report back; use the `team_*` tools for long-lived teammates you keep assigning work to and messaging."
+
+## Sub-agents: `spawn_agent`
+
+**What it does.** Runs one or many agents on a task and returns their reports to the lead. Each agent has its own context window. The lead sees only what the agent writes in its answer.
+
+**How it works.** Code: `team/spawn-agent-tool.ts`, `team/batch-report.ts`, `team/placed-run.ts`.
+
+- The input is split from most shared to least:
+  - `knowledge` (`files` and `text`): identical for every agent;
+  - `instructions`: the role, identical for every agent of one kind;
+  - `task`: what this agent alone does.
+- On a PolyKV engine the shared parts are held once in a pool tree. On other engines the files are passed by name.
+- Each agent is placed on an [agent node](#agent-nodes-and-placement), runs in its own [sandbox overlay](#every-agent-works-in-a-sandbox), and ends by writing a summary of up to 1,000 characters.
+- The full report is kept in memory for the session, and the lead reads it with `read_agent_report`.
+- By default a sub-agent has **no iteration cap**. The host never sets `defaultMaxIterations`.
+
+Single agent:
+
+```json
+{
+  "name": "api-review",
+  "task": "Review src/api/routes.ts for missing input validation. Report file:line for each finding.",
+  "knowledge": { "files": ["src/api/routes.ts", "src/api/schema.ts"] }
+}
+```
+
+It returns `{text, iterations, maxIterations?, finishReason, stopReason?, state?, oracle?, agentId, usage}`.
+
+### Batches: `agents: [...]`
+
+Added in `a7f892531` (2026-09-23, "one global spawn queue; batch spawn_agent; swarms on any node"), extended in `addb27abc` (same day). One call starts the whole fan-out. `knowledge` and `instructions` are stated once and shared.
+
+Each entry takes these fields:
+
+- `name` and `task`;
+- `instructions`, to override the shared role;
+- `type`, to run a configured agent by name (its own role and model);
+- `count`, to run the entry several times (at most 100 per entry). Copies are named `<name>-1`, `<name>-2`, and so on;
+- `temperature`, `seed`, `temperature_range`, `max_iterations` and `check`, which override the call-level values.
+
+```json
+{
+  "instructions": "You are a reviewer. Report concrete defects as file:line with a one-line reason.",
+  "agents": [
+    { "name": "parser", "task": "Review src/parser.ts" },
+    { "name": "lexer", "task": "Review src/lexer.ts" },
+    { "type": "security-auditor", "task": "Audit src/auth/", "count": 3 }
+  ],
+  "seed": "random",
+  "temperature": "random"
+}
+```
+
+**The round report.** Added in `cea4a1247` (2026-09-25, #104). A tool result reaches the model capped at 32,000 characters and is cut from the middle. A round of 75 agents used to lose the middle of its list that way. The batch result is now built to fit under 28,000 characters, in this order:
+
+1. `summary`: totals (completed, errored, cancelled, `awaitingLead`), counts per type and per failure class, and total iterations and tokens.
+2. `agents`: one index entry per agent in the order asked, with status, failure class and one line. For very large rounds an entry shrinks to `name|status|class`.
+3. `reports`: as many full summaries as fit.
+4. `notShown`: the names of agents whose summary did not fit, to read with `read_agent_report`.
+
+**Failure classes.** An errored agent is classed as one of:
+
+- `infra`: the server, the transport, a refusal, an unreachable node, or a missing model. Nothing the agent did, and worth running again as is.
+- `task`: the model, a tool, the iteration budget (`max_iterations`), the mistake limit, or the loop guard. The job itself was not done.
+
+Since `8e284da5b` (2026-09-26) an agent stopped by the repeated-call loop guard is reported as errored (class `task`), not cancelled.
+
+**Example prompts**
+
+- "Spawn 10 agents to review the files in src/, one per file, with seed random and temperature random."
+- "Use one spawn_agent call: 15 agents of type js-fixer (count 15) and 5 of type test-writer, all sharing src/lib/util.ts as knowledge."
+- "Spawn three agents to investigate the flaky test from three angles: timing, shared state, and the mock setup. Name them timing, state and mocks."
+- "Read the full report of agent lexer." (The lead calls `read_agent_report`.)
+
+## Configured agents: `.cline/agents/*.md`
+
+**What it does.** Each agent file becomes a tool named `subagent_<name>`. The file gives the agent's description, role (the file body), and optionally its model, tools, skills and iteration cap. Upstream added this in `1c13edd39` (2026-06-09, #11368). The fork added its own provider connection per agent (`db3bf5977`, 2026-08-10), profiles (`27e571889`), `.md` loading (`67fd279cb`, 2026-08-18), and the sandbox.
+
+**File format.** Code: `team/configured-agent-config.ts`. The file needs YAML frontmatter between `---` lines and a non-empty body.
+
+```markdown
+---
+name: "qa"
+description: "Use to check a finished change: run the tests, read the diff, report regressions. Not for writing new features."
+profile: "qwen"
+skills:
+  - "qa"
+maxIterations: 40
+---
+
+You are a QA engineer. Run the project's tests, read the change, and report
+what broke, with file:line and the failing output.
+```
+
+| Key | Required | Meaning |
+|---|---|---|
+| `name` | yes | The agent's name. The tool is `subagent_<name>`, lowercased, with other characters collapsed to `_` |
+| `description` | yes | The only thing the lead reads when choosing an agent |
+| `profile` | no | A saved API configuration profile. An unknown profile errors and lists the existing ones |
+| `providerId`, `modelId` | no | Override the profile's (or the session's) provider and model |
+| `tools` | no | Allowlist of tool names. Aliases like `bash` → `run_commands` are accepted |
+| `skills` | no | Skills the agent may load. Setting it also adds the `skills` tool |
+| `maxIterations` | no | Its iteration cap. A call's `max_iterations` wins over it |
+
+- **File types:** `.md`, `.markdown`, `.yml` and `.yaml` are read.
+- **Search order:** the workspace's `.cline/agents/` first, then the global `~/.cerebriline/agents/`. The global directory falls back to `~/.cline/agents/`, or `CEREBRILINE_DIR` / `CLINE_DIR` when set. The first file with a given name wins, compared case-insensitively.
+- **Loading:** files are read when a session starts, and only when Subagents is on.
+
+**Tool input:** `prompt`, plus optional `temperature`, `seed`, `temperature_range`, `max_iterations` and `check`.
+
+**Where it runs:**
+
+- An agent pinned to its own endpoint (profile or provider) bypasses node placement and uses that endpoint's slot limit.
+- Otherwise it is placed on a node like a sub-agent.
+
+**Example prompts**
+
+- "Ask the qa agent to check the last change."
+- "Run subagent_security_auditor on src/auth with max_iterations 25."
+
+## Teammates: the `team_*` tools
+
+**What it does.** Gives the lead a persistent roster of agents it keeps assigning work to. The team shares a task board, a mailbox, a mission log and outcome documents. Upstream code; this fork added sampling, iteration caps, counters and sandboxing.
+
+**How it works.** Code: `team/team-tools.ts`, `team/multi-agent.ts`.
+
+| Tool | Who | What |
+|---|---|---|
+| `team_spawn_teammate` | lead | `agentId`, `rolePrompt`, optional `temperature`/`seed`/`temperature_range` |
+| `team_shutdown_teammate` | lead | `agentId`, optional `reason`. Without a reason the teammate stays persisted and comes back on restore |
+| `team_run_task` | any | `agentId`, `task`, optional `taskId`, `runMode` (`sync` default / `async`), `continueConversation`, `max_iterations` |
+| `team_await_runs`, `team_list_runs`, `team_cancel_run` | any | Wait for, list, or cancel async runs (the wait times out after 1 h) |
+| `team_task` | any | Task board: `create`, `list`, `claim`, `complete`, `block`. Supports `dependsOn` |
+| `team_send_message`, `team_broadcast`, `team_read_mailbox` | any | Mailbox. Unread mail is put at the head of the teammate's next run |
+| `team_mission_log` | any | Log entries (`progress`, `handoff`, `blocked`, `decision`, `done`, `error`) |
+| `team_create_outcome`, `team_attach_outcome_fragment`, `team_review_outcome_fragment`, `team_finalize_outcome`, `team_list_outcomes` | any | A document built from reviewed sections |
+| `team_status` | any | Counts only: members, tasks, unread mail, runs, outcomes |
+| `team_cleanup` | lead | Wipes the team state. Fails while anything is active |
+
+**Behaviour to know:**
+
+- **One run at a time.** A teammate runs one task at a time. A second run on a busy teammate fails with "Cannot start a new run while another run is already in progress".
+- **The board is manual.** Passing `taskId` to `team_run_task` does not complete the task. Someone has to call `team_task` with `complete`.
+- **The lead cannot stop early.** While tasks are pending or runs are active, the lead is told it still has team obligations.
+- **Persistence.** State is kept in SQLite (`teams.db` in the data directory) and keyed by the session. VS Code passes no team name, so a team belongs to its task. In the CLI, `/team <task>` starts a team, and the hidden `--team-name <name>` names the state.
+- **Iteration cap.** At its cap a teammate's run stops with its conversation kept. Run the task again with `continueConversation: true` to go on. Teammates do not enter `awaiting_lead`.
+- **Counters.** Each teammate counts its tool calls and compactions over its life and for the current task (`c0ebb71af`, 2026-09-25). They are shown in the chat's "Teammates" row, not sent to the model.
+
+Giving a teammate three tasks one at a time:
+
+```text
+team_spawn_teammate {"agentId":"reviewer","rolePrompt":"You are a code reviewer. Report defects as file:line."}
+team_task {"action":"create","title":"Review parser","description":"Review src/parser.ts"}          -> task_0001
+team_task {"action":"create","title":"Review lexer","description":"Review src/lexer.ts"}            -> task_0002
+team_task {"action":"create","title":"Review CLI","description":"Review src/cli.ts"}                -> task_0003
+team_run_task {"agentId":"reviewer","task":"Review src/parser.ts","taskId":"task_0001"}
+team_task {"action":"complete","taskId":"task_0001","summary":"2 defects"}
+team_run_task {"agentId":"reviewer","task":"Now review src/lexer.ts","taskId":"task_0002","continueConversation":true}
+team_task {"action":"complete","taskId":"task_0002","summary":"..."}
+team_run_task {"agentId":"reviewer","task":"Now review src/cli.ts","taskId":"task_0003","continueConversation":true}
+team_task {"action":"complete","taskId":"task_0003","summary":"..."}
+team_shutdown_teammate {"agentId":"reviewer","reason":"reviews done"}
+```
+
+**Example prompts**
+
+- "Spawn a teammate 'reviewer' and give it the three review tasks one at a time."
+- "Start a team: a 'backend' teammate and a 'tests' teammate. Put the five API tasks on the board with dependencies, and run backend and tests async."
+- "Message the tests teammate that the endpoint moved to /v2."
+
+### Teammates on/off (coming)
+
+Today teammates have no switch of their own. In VS Code the `team_*` tools follow the **Subagents** toggle (`enableAgentTeams = subagentsEnabled`). In the CLI they are on unless `--yolo` is set. A separate teammates setting, off by default, is being added on branch `feat/teammates-toggle`. It had not reached `main` when this page was written.
+
+## What this fork added
+
+| Feature | Commits |
+|---|---|
+| Own connection and context window for delegated agents; slot gate per endpoint | `5c2c0bc59`, `09c582da2` (2026-08-10) |
+| `create_agent` and `/delegate` | `77765068b` (2026-09-07) |
+| Background delegations and their panel | `605ebd5dd`, `477662692`, `37439bb7f` (2026-09-07) |
+| Expert escalation | `cd6cbf73f`, `42cad5f10`, `ec30e870e` and others (2026-09-13); `5a6c1d742` (2026-09-14) |
+| `spawn_swarm` (a standalone tool at first) | `7bf7e7198` (2026-09-15) |
+| Agent nodes and placement | `607567253`, `011504c32`, `1dea9e631`, `0ce41111a` (2026-09-22) |
+| Batches, `merge: true`, one global spawn queue | `a7f892531`, `addb27abc` (2026-09-23) |
+| Swarms run configured agents by `type` | `440775f99` (2026-09-23) |
+| Side turn while a round runs; `read_agent_report` | `a14dde050` (2026-09-24) |
+| Per-agent sandbox overlay | `57fc361b0` (2026-09-24), `858cf1cff`, `394038d38` (2026-09-25) |
+| Worker struggle supervisor | `c8ef7aff4` (2026-09-25, #92) |
+| Priority 0 | `efef62b86` (2026-09-25, #100) |
+| Retry, never fail; lead nudge; batch report | `cea4a1247` (2026-09-25, #104); `8e284da5b` (2026-09-26) |
+| `temperature` and `seed`; `"random"` and `temperature_range` | `9078bd9f2`, `6222ce903` (2026-09-25) |
+| Agent window share | `efbbea14b` (2026-09-25) |
+| Compaction and tool counters; teammates' counters | `07b717e67`, `c0ebb71af` (2026-09-25) |
+| Out of turns ends as `max_iterations` | `fdee39e61` (2026-09-26) |
+| `max_iterations`, `awaiting_lead`, `check` | `d8dcee6a3` (2026-09-26) |
+| Row shows awaiting lead and the check's verdict | `e4893c1b1` (2026-09-26) |
+
+### Swarms: `spawn_agent` with `merge: true`
+
+**What it does.** Runs several workers on a snapshot of the lead's current context and returns **one merged report**. The workers need no `knowledge` about what the lead already knows, because they start from its context. Their own transcripts are discarded.
+
+**How it works.** Code: `team/spawn-swarm-tool.ts`, `runtime/host/local/spawn-tool.ts`, `llms/.../vendors/polykv-swarm.ts`.
+
+1. **Snapshot.** The tool takes one snapshot of the lead's engine session as an ephemeral PolyKV pool. The engine copies the prefix from its own token history, so nothing is re-sent. If that fails, it borrows the lead's root pool (system prompt and tools). If there is nothing to borrow, the round runs unpooled and reports `pooled: false`.
+2. **Workers.** Each worker attaches to the pool with its own task as a private suffix, and runs on its own sandbox overlay.
+   - A worker on another PolyKV node joins that node's pool tree instead.
+   - An `agents` entry with `type` runs with that configured agent's role and tool allowlist. A configured agent pinned to its own model is refused in a swarm, because it cannot share the snapshot.
+3. **Size.** With a single `task`, `count` says how many workers run it. `count: "max"` asks the server's admission for as many as it will take (a hard ceiling of 64; 8 when nothing can be measured). Workers the server never admitted are reported as "never started".
+4. **Merge.** Each worker's output is read as a work digest. With more than one result and a pool, a reducer agent on the same pool merges them. It is told not to pick a winner and to name failed workers. Otherwise a mechanical merge is used.
+5. **Revisions.** Changed files come back as revisions attributed to each worker. The lead's files are unchanged until it adopts them.
+
+`spawn_swarm` was a tool of its own from `7bf7e7198` (2026-09-15). Since `a7f892531` (2026-09-23) it is no longer registered: the model reaches the swarm only through `spawn_agent`'s `merge` field. `merge` is ignored, and the call runs as a normal batch, when the session has no swarm.
+
+**Gates:** all of these must hold.
+
+- Subagents is on, and delegation can run in parallel.
+- A connection (the lead's, the Agents tab's, or a node's) is the **opencoti** provider with **Allow swarms** on.
+- That server confirms pools (`pools_enabled` in `/props`; it was started with `--polykv-max-pools`).
+
+```json
+{
+  "merge": true,
+  "instructions": "You are a syntax fixer. Fix only syntax errors; do not refactor.",
+  "agents": [
+    { "name": "a", "task": "Fix src/a.js" },
+    { "name": "b", "task": "Fix src/b.js" }
+  ],
+  "max_iterations": 30,
+  "check": { "command": "node --check src/a.js && node --check src/b.js", "expect": "" }
+}
+```
+
+**Example prompts**
+
+- "Search the repo for every caller of parseConfig as a swarm, count max, and give me one merged answer."
+- "Run a swarm of 20 workers to fix the syntax errors in these files; give each max_iterations 30 and check that `node --check <file>` exits 0."
+
+<Note>
+  The lead cannot choose a node. There is no node field on any spawn tool, by design: placement is the harness's job. To make a swarm run on Node1, give Node1 the best priority in the Agents tab (or turn the other nodes off).
+</Note>
+
+### Owners and workers (PolyKV)
+
+On opencoti, every delegated agent is its own engine session attached to a tree of pools:
+
+- **P0:** the system prompt and tools;
+- **P1:** P0 plus the shared knowledge (files inlined up to 200,000 characters);
+- **P2:** P1 plus the role;
+- **worker:** P2 plus its own task.
+
+An **owner** is an engine session whose booked window holds the whole tree. It is opened with a one-token request that books `num_ctx`, sized for every agent it can carry. A **worker** attached to an owned pool books nothing of its own; the engine charges its private suffix to the owner. An owner closes when its last agent ends. With Priority 0 on, the lead's own session is the owner, for up to 8 sub-pools.
+
+### `create_agent`
+
+**What it does.** Lets the lead write a configured agent file. It **does not run the agent**, and the new agent is not available until the **next session**, because agent files are read at session start. This is the difference from `spawn_agent`, which runs an unnamed agent now and keeps nothing.
+
+**Input:**
+
+- `name`, `description` and `systemPrompt`: required;
+- `scope`: `workspace` (default, writes `.cline/agents/<slug>.md`) or `global` (writes to `~/.cerebriline/agents/`);
+- `profile`, `providerId`, `modelId`, `tools`, `skills` and `maxIterations`: optional;
+- `overwrite`: required to replace an existing file.
+
+It is offered only to the lead, and only when Subagents is on.
+
+```json
+{
+  "name": "qa",
+  "description": "Use to check a finished change: run the tests, read the diff, report regressions.",
+  "systemPrompt": "You are a QA engineer. Run the tests, read the change, and report what broke with file:line.",
+  "profile": "qwen",
+  "skills": ["qa"]
+}
+```
+
+**Example prompt:** "Create an agent called qa that uses my qwen profile and the qa skill." Then, in a new task: "/delegate qa check the last change".
+
+### `/delegate` and background delegations
+
+**`/delegate <agent> <task>`**, typed by you, runs a configured agent directly. The lead model is not consulted.
+
+- It calls the same `subagent_<name>` tool, and the agent's report is appended to the conversation as your message ("I delegated this to the "qa" agent: …"). No new turn is started.
+- It is refused while a turn is running.
+- Only configured agents can be named. An unknown name lists the available ones.
+- In VS Code the command is recognised only in a task that already has messages. In a new task the text goes to the model as an ordinary message.
+
+**`/delegate-background <agent> <task>`** does the same thing without blocking:
+
+- It returns at once with an id (`bg_1`, …) and is allowed mid-turn.
+- When it finishes, its report is delivered as a message: appended if the session is idle, or queued as a steer for the next iteration if a turn is running.
+- You can pause it (it stops before its next model request) or stop it. A stopped run reports nothing.
+- In VS Code the panel above the chat shows running delegations with Pause/Resume and Stop. In the CLI, `/agents` opens the same controls.
+- All background runs stop when the session ends.
+
+<Warning>
+  User-initiated delegations are **not** overlay-sandboxed today. `/delegate` and `/delegate-background` call the agent with no tool-call id, so no private workspace is opened. The agent edits your real files and gets no shell. Every model-initiated path (`spawn_agent`, swarm workers, `subagent_<name>`, teammates) is sandboxed.
+</Warning>
+
+### Agent nodes and placement
+
+**What it does.** Lets you spread agents across several endpoints. A node is a complete provider configuration: endpoint, model, context window, sampler and budget. Nodes can be mixed, for example opencoti, a LAN Ollama and Anthropic.
+
+**Configuring nodes:**
+
+- **VS Code, Agents tab.** Up to 10 nodes. Node1 is the Agents tab's own configuration. Each node has a **Priority** from 1 to 10, where 1 is the highest.
+  - Capacity is the node profile's **Parallel Sessions** field. On opencoti with elastic slots, empty means "engine decides".
+  - Placement only engages with more than one configured node.
+- **CLI.** Repeat `--agent-node`:
+
+```bash
+cline --agent-node model=small,capacity=8 \
+      --agent-node model=big,url=http://other:8240/v1,priority=2,capacity=auto,window-share=30 \
+      "task"
+```
+
+Keys: `model` (required), `url`, `provider`, `priority` (1-10, default 1), `capacity` (default 1; `auto` is elastic; `0` is refused), and `window-share` (0-100).
+
+**Placement.** Code: `team/agent-placement.ts`, `team/agent-placement-queue.ts`, `team/placed-run.ts`.
+
+- **Priority.** The best-priority node with a free slot takes the agent. Within one priority it is round-robin. A lower priority is used only when every higher one is full.
+- **Queue.** When every node is full, the agent waits in one queue per session, drained in spawn order. A newcomer never jumps a waiter. A freed slot on a higher tier pulls the next agent back up.
+- **Capacity.** A node with capacity 0 is off. An elastic (uncapped) node takes the next agent only after the previous one has produced its first output.
+- **Unreachable node.** A connection refused or reset, DNS failure, or a zero-token gateway error takes the node out for 30 s. It is probed on `/health` every 5 s and rejoins as soon as it answers.
+- **Model missing.** A node that does not have the model is taken out for 10 minutes. The agent is re-placed up to 3 times.
+- **Refusal.** An admission refusal holds the node for 5 s, doubling up to 60 s, and the agent goes back to the front of the queue.
+- **Two nodes on one server** are two lanes, and their capacities add.
+- **Re-placement boundary.** A failure before the agent's first output re-places it. A failure after that is handled by [retry, never fail](#retry-never-fail-and-the-lead-nudge).
+
+**Priority 0** (`efef62b86`). This option is available when the lead's own provider is opencoti with pools confirmed. Up to 8 agents run inside the lead's session, ahead of every node, sharing its window, so a large swarm makes the lead compact sooner. The nodes are the overflow. A priority-0 agent overflows to them when the lead's free cells fall below `max(16384, 25% of the window)`.
+
+**Agent window** (`efbbea14b`). This is a per-node slider, 0-100% in steps of 5, default 50, and it only applies to opencoti.
+
+- It sets the smallest window an agent will accept: `minimum + share × (window − minimum)`. The minimum is the fixed price (system prompt, tool schemas and MCP schemas) plus the output room.
+- The request carries `num_ctx` (the node's window) and `num_ctx_min` (that floor). Below the floor the agent waits.
+- A node window below the minimum shows a warning. It still saves.
+
+**Example prompts:** placement is not something you ask the model for. Configure it, then ask for the work as usual: "Spawn 40 agents, one per file in src/components." The queue paces them.
+
+### Every agent works in a sandbox
+
+**What it does.** Every model-initiated delegated agent works on a private copy-on-write overlay of the workspace:
+
+- `spawn_agent` single agents and batches;
+- swarm workers;
+- `subagent_<name>`;
+- teammates.
+
+**How the overlay works.** Code: `runtime/sandbox/overlay-fs.ts`, `team/delegated-sandboxes.ts`, `team/agent-sandbox-executors.ts`.
+
+- Reads fall through to your files. Writes, deletes and renames stay in the agent's copy under the session directory.
+- The overlay is pure TypeScript and always on, on every platform.
+- The file tools (`read_files`, `editor`, `apply_patch`, `grep`, `sed`, `awk`) are built over it.
+- Paths outside the workspace are not isolated.
+- When the agent ends, whether it finished, failed or was stopped, each changed file comes back to the lead as a revision attributed to that agent. The lead reads a revision with `read_files` and `revision: "#N"`, and adopts it with `restore_file`. Nothing is applied automatically.
+- A teammate hands back after every run.
+
+**The shell.** **Agents can run commands** gives the agent `run_commands` through the native `cerebriline-sandbox` launcher, which points the command tree at the agent's copy:
+
+| OS | Backend |
+|---|---|
+| Linux x64, arm64 | L1: user namespace plus overlayfs |
+| Linux x64 | L2: ptrace path rewriting, when user namespaces or overlayfs are unavailable |
+| macOS Apple Silicon, Intel | M1: APFS `clonefile` copy |
+| Windows x64 | W1: Detours injection |
+
+Where there is no launcher, or the setting is off, the agent gets no shell. It never gets an unsandboxed one.
+
+**Limits:**
+
+- `/delegate` and `/delegate-background` are not overlay-sandboxed (see the warning above).
+- `restore_file` and `read_files revision` are offered only when Checkpoints or the change protocol is on. With both off, the lead is told about revisions it has no tool to read.
+
+**Example prompts**
+
+- "Spawn two agents to try two different fixes for the race in queue.ts, then show me both revisions and adopt the one whose tests pass."
+- "Adopt revision #4 of src/queue.ts."
+
+### Retry, never fail, and the lead nudge
+
+**What it does.** An agent does not fail on infrastructure. Code: `shared/src/agents/turn-faults.ts`, `team/turn-fault-recovery.ts`, `team/agent-trouble.ts`.
+
+A failed turn is classed as one of two faults:
+
+- **Transport:** the server restarted or is shutting down, the connection was refused or reset, a 502/503/504, a stream the SDK cannot read, a failed shared batch, or the speculative sub-batch error. The agent waits for `/health` to answer, with backoff capped at 30 s, and sends the same turn again.
+- **Refusal:** an admission refusal, a rate limit, "session allocation full", or an engine partial eviction. The agent backs off from 2 s up to 60 s and sends again.
+
+There is no attempt limit and no deadline. The refusal thresholds are your own settings and are never touched. A bad tool call, a context overflow, a 400 or an auth error is not a fault of this kind and still ends the run.
+
+**The lead nudge.** An agent that has waited without a break for **10 minutes** is reported to the lead once. Agents crossing the line within 30 s of each other are reported together. The report arrives as a side turn in which the lead can reply, `message_agents` or `stop_agents`. The agents keep retrying unless someone stops them.
+
+**Example prompt:** "If any agent is stuck on the server for more than 10 minutes, stop it and do its task yourself."
+
+### Watching and steering a round
+
+- **The strip above the chat.** It shows each running agent with its node, model, current tool, speed and activity, plus Stop, Restart and Stop all.
+- **Side turn.** A message you send while the lead waits on a round is answered at once by a short run of the lead's model (at most 4 turns) on a copy of its conversation. In that side turn the lead can reply, `message_agents` (the message is read at the agent's next turn), or `stop_agents`. The lead's next real turn is told what was said.
+- **Questions go to the lead.** A question from an agent goes to the lead, not to you.
+
+### Sampling: `temperature`, `seed`, `"random"`, `temperature_range`
+
+Code: `team/spawn-sampling.ts`. This is available on `spawn_agent` (call and entry), swarms, `subagent_<name>` and `team_spawn_teammate`.
+
+- **Leave them out** and the model's own sampler applies. Nothing is written that you did not ask for.
+- **`seed`** as a number: agents covered by one call or entry get seed, seed+1, …, by index. `"random"` gives each agent an independent seed.
+- **`temperature`** as a number is used as given. `"random"` draws each agent's temperature from the model's own ± `temperature_range` percent (default 2).
+  - The model's own temperature is read, never guessed. When nothing states it, the agent keeps the model's sampler and its row says so.
+- **`temperature_range`** (0-100) with a numeric `temperature` randomizes around that number. Given alone, it randomizes around the model's own.
+- The value each agent actually ran with is shown on its row and in its result. For a teammate it is also saved in its spec, and restored rather than drawn again.
+
+**Example prompt:** "Spawn 5 agents on the same bug with seed random and temperature 0.7, temperature_range 10."
+
+### Compaction and tool counters
+
+Each delegated agent counts its tool calls and compactions (`07b717e67`). Compactions are broken down by cause: auto, pressure, overflow or manual, with the last one's tokens before and after. They are shown on the agent's chat row and in the strip, for example "7 tools called · 3 compactions · 12,000 tokens", and saved with the task. Teammates count over their life and per task (`c0ebb71af`). The counts are not sent to the model, and the CLI has no per-agent display.
+
+### `max_iterations`, `awaiting_lead`, and the check
+
+Landed on 2026-09-26 in `fdee39e61`, `d8dcee6a3` and `e4893c1b1`. Available on `spawn_agent` (call and entry), swarms (round and task), `subagent_<name>`, and `team_run_task`. An agent's own value wins over the call's.
+
+**`max_iterations`** caps the agent's model turns.
+
+- It is read tolerantly: `"30"` works, and floats are floored. `0`, negatives and words are refused.
+- The default is no cap.
+- A run that runs out of turns now ends as `max_iterations`, not `error` (`fdee39e61`).
+
+**At the cap the agent waits (`awaiting_lead`).** The run is suspended with its transcript, overlay and place in the round kept.
+
+- The lead is told once for all agents of the session that stop together, through a side turn or the steer queue. The notice is batched over 3 s.
+- A blocking round does not return while one of its agents waits.
+- While it waits, the agent's engine session is released. Its node lease is kept, so it resumes on the same model.
+- With no way to reach the lead, the agent is detached: its spawn returns with `state: "awaiting_lead"` and the agent stays suspended.
+- Stopping it (`stop_agents`, or the row's Stop) ends it with its work as its report.
+- The row shows "awaiting lead (iteration cap N)".
+- Teammates do not suspend. See the teammates section above.
+
+**`check: {command, expect, must?}`** is the agent's oracle. It is the change protocol's check runner applied to one agent.
+
+- The agent is told its check up front. When it says it is done, `command` runs in the agent's own sandboxed copy.
+- It must exit 0, and its stdout+stderr must match the regex `expect`. With `must: "not_match"` the output must not match. An empty `expect` means "exit 0".
+- On a fail the agent is shown the output and keeps working.
+- After three identical failing outputs in a row it is let finish, and the verdict stays `fail`.
+- Without a command sandbox (the setting is off, or there is no launcher) the check is **not** run on the host. The report says "not run: no command sandbox".
+- The verdict (`status`, `exitCode`, output tail) is in the report and on the row.
+
+```json
+{
+  "agents": [
+    { "name": "fix-a", "task": "Fix the syntax errors in src/a.js" },
+    { "name": "fix-b", "task": "Fix the syntax errors in src/b.js", "check": { "command": "node --check src/b.js", "expect": "" } }
+  ],
+  "max_iterations": 30,
+  "check": { "command": "node --check src/a.js", "expect": "" }
+}
+```
+
+**Example prompts**
+
+- "Spawn one agent per file in broken/ to fix the syntax errors; give each max_iterations 30 and a check that `node --check <its file>` exits 0."
+- "Run the qa agent with a check that `npm test` output does not match `failing`." (`must: "not_match"`)
+
+<Note>
+  The notice tells the lead to call `resume_agent(agent_id, extra_iterations)`. The resume primitive is on `main`, but the `resume_agent` **tool** is not registered yet. It is part of the rounds work below. Until then the lead's options at the cap are to stop the agent (its work kept) or to do the rest itself.
+</Note>
+
+### Expert escalation
+
+**What it does.** When the lead is stuck, a stronger **expert** model can take over the edit. This is for the lead only; delegated agents cannot escalate. Code: `core/src/runtime/escalation/`, `core/src/runtime/safety/struggle-detector.ts`.
+
+**The struggle detector.** It reads the last 10 iterations and fires no earlier than iteration 20. It counts:
+
+- failed tool calls, including a refusal hidden inside a "successful" result;
+- phrases like "I'm stuck" or "keeps failing" in the reasoning;
+- a rise in hedging;
+- refused edits in a row;
+- thrown-away transactions.
+
+An offer needs all of these:
+
+- 6 failed calls;
+- 2 distress hits, or rising hedging;
+- fewer than 2 offers so far in this task.
+
+A nudge fires one call earlier. Three refused edits in a row, or two discarded transactions, give a nudge only. Every threshold is a setting in the Escalation tab and a `--struggle-*` CLI flag.
+
+**The hand-over.**
+
+- Only after the detector fires is the model offered `escalate` (`goal`, `expectation`, `files`; then `message` or `finished`).
+- The expert gets a brief, not the transcript. The brief holds the goal, what is acceptable, the task, the files, and the harness's assessment. The assessment includes **Jev**'s score when **Use Jev for confidence** is on and a key is stored.
+- The expert runs on its own connection: the Escalation tab in VS Code, or `--expert-model` (same provider) in the CLI.
+- Its edits come back as revisions.
+- With **Alternate usage with base model** on, the base model stands down, follows the expert through `wait_for_expert`, and can message it or end the exchange.
+- A terminal guard (mistake limit, loop guard) forces one escalation attempt per task.
+
+**Limits.**
+
+- 3 hand-overs per task (`maxEscalations`, `--expert-max-escalations`) and 20 follow-ups per escalation.
+- A hand-over whose expert delivered nothing is refunded, for example when the endpoint was down or the model was missing.
+- The user refusing an approval costs nothing.
+
+**The worker struggle supervisor** (`c8ef7aff4`) watches swarm workers only. It is not wired for `spawn_agent` agents yet, although its code comment says it covers both.
+
+- **Nudge.** It nudges once, asking for a summary now, on any of:
+  - a detector verdict from iteration 8;
+  - 3 of the last 6 turns out of thinking budget;
+  - reaching the non-progress mark: 20 turns, or half of `max_iterations`.
+- **Stop.** It stops the worker only if, after the nudge, it runs out of thinking budget twice more.
+
+**Example prompts:** the offer is evidence-driven, so you normally do not ask for it. You can say "If you get stuck on this, escalate to the expert with the goal of making test_parse pass."
+
+## In progress: lead control over rounds
+
+The branch `feat/agent-rounds-control` implements the rest of the lead-agent-control spec. None of the following was on `main` when this page was written:
+
+- **Non-blocking rounds.** A `wait` field on batches and swarms, with swarms defaulting to the background. The report is delivered when the round completes, and `await_agents` blocks explicitly.
+- **A round registry,** persisted with the session so it survives compaction and reload.
+- **`agents_status`.** Read-only status per round, per node and per agent, including why each agent stopped. It is available in every mode, escalation included.
+- **Controls:**
+  - `requeue_agent` puts an agent back in the queue with its transcript;
+  - `restart_agent` restarts it from its original task, optionally with new instructions;
+  - `resume_agent` continues an agent in `awaiting_lead` with a raised cap;
+  - `retry_failed` restarts a round's failed agents from their stored tasks.
+- **`message_agents` and `stop_agents` outside the side turn,** for background rounds.
+
+By design, the lead will not be able to route an agent to a node, and agents will not get a wall-clock timeout.
+
+## When to use which
+
+| You want | Use |
+|---|---|
+| One focused piece of work, reported back, then gone | `spawn_agent` with `task` |
+| The same job on many files, one report each | `spawn_agent` with `agents` (and `count`) |
+| One combined answer from many parallel attempts, on opencoti | `spawn_agent` with `merge: true` |
+| A specialist you reuse, with its own model or skills | A configured agent (`.cline/agents/<name>.md`, or `create_agent`) |
+| To run a specialist yourself, without the lead deciding | `/delegate <agent> <task>` |
+| To keep working while a specialist runs | `/delegate-background <agent> <task>` |
+| Workers that remember earlier tasks, share a board and message each other | Teammates |
+| A stronger model to take over when the lead is stuck | Escalation |
+| A machine-checked "done" for each agent | `check` on the spawn call |
+| A bound on how long an agent may go | `max_iterations` |
+| Several agents that sample differently | `seed: "random"`, `temperature: "random"` |
+
+Some rules of thumb:
+
+- Prefer one `spawn_agent` call with every agent in `agents` over many calls. The shared parts are loaded once, and the lead waits once.
+- Use a swarm only when the parts are independent and you want one answer. Use a batch when you want N separate reports.
+- Use teammates when the work has order and dependencies and benefits from memory. Their tasks run one at a time per teammate.
+- Give agents a `check` whenever "done" can be tested by a command. What an agent says about its own work was measured as routinely worth nothing.
+
+## Glossary
+
+| Term | Meaning |
+|---|---|
+| **Lead** | The session's own model: the one you talk to, which spawns and supervises the others |
+| **Round** | One spawn call and all the agents it started. A blocking round returns when all have ended |
+| **Side turn** | A short run of the lead's model, on a copy of its conversation, that answers a message (or a system report) while a round is still running. Its tools are `message_agents` and `stop_agents` |
+| **Node** | One endpoint and model that agents can be placed on, with a priority and a capacity |
+| **Priority 0** | The lead's own opencoti session, used for up to 8 agents ahead of every node |
+| **Owner / worker (PolyKV)** | The owner is an engine session whose booked window holds a pool tree. A worker attaches to that tree and books nothing of its own; its private part is charged to the owner |
+| **Awaiting lead** | The state of an agent suspended at its `max_iterations` cap, with its work kept, waiting for the lead to resume or stop it |
+| **Failure class** | `infra` (server, transport, refusal: run it again as is) or `task` (model, tool, iteration budget: the job was not done) |
+| **Revision** | A changed file handed back from an agent's overlay, readable with `read_files revision:"#N"` and adoptable with `restore_file` |
+| **Check (oracle)** | A command plus a regex that decides whether an agent is done, run in the agent's sandbox |

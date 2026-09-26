@@ -27,6 +27,8 @@ agents you defined in `.cline/agents`, and shared context loaded once. The Agent
 tab holds several **nodes**, each with its own provider, model and priority, and
 agents queue for the best node with room. On a PolyKV server, `merge: true` runs
 them as a swarm on a snapshot of your context with one merged report.
+Every agent feature, with example prompts, is documented in
+[docs/features/agents.mdx](https://github.com/mann1x/cline/blob/main/docs/features/agents.mdx).
 
 **Every agent works in a sandbox.** Every delegated agent (sub-agents, swarm
 workers, teammates, configured agents) writes to a private copy-on-write overlay,
