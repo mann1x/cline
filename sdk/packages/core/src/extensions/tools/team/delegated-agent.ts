@@ -174,6 +174,15 @@ export interface DelegatedAgentConfigProvider {
 	updateConnectionDefaults(
 		overrides: Partial<DelegatedAgentConnectionConfig>,
 	): void;
+	/**
+	 * The part of a session connection push the agents take: the fields
+	 * their own connection names are left out. For an agent built earlier
+	 * that the push reaches directly -- a live teammate -- so it keeps its own
+	 * server as a new spawn would.
+	 */
+	acceptedConnectionUpdates?(
+		overrides: Partial<DelegatedAgentConnectionConfig>,
+	): Partial<DelegatedAgentConnectionConfig>;
 }
 
 export type DelegatedAgentKind = "subagent" | "teammate";
@@ -310,6 +319,12 @@ export function createDelegatedAgentConfigProvider(
 ): DelegatedAgentConfigProvider {
 	let runtimeConfig: DelegatedAgentRuntimeConfig = { ...initialConfig };
 	const held = new Set<string>(pinned as readonly string[]);
+	const accepted = (overrides: Partial<DelegatedAgentConnectionConfig>) =>
+		held.size === 0
+			? overrides
+			: Object.fromEntries(
+					Object.entries(overrides).filter(([key]) => !held.has(key)),
+				);
 
 	return {
 		getRuntimeConfig: () => runtimeConfig,
@@ -333,17 +348,12 @@ export function createDelegatedAgentConfigProvider(
 			temperature: runtimeConfig.temperature,
 		}),
 		updateConnectionDefaults: (overrides) => {
-			const accepted =
-				held.size === 0
-					? overrides
-					: Object.fromEntries(
-							Object.entries(overrides).filter(([key]) => !held.has(key)),
-						);
 			runtimeConfig = {
 				...runtimeConfig,
-				...accepted,
+				...accepted(overrides),
 			};
 		},
+		acceptedConnectionUpdates: accepted,
 	};
 }
 

@@ -1220,6 +1220,12 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 							: config.maxConcurrentAgents,
 					missionLogIntervalSteps: normalized.missionLogIntervalSteps,
 					missionLogIntervalMs: normalized.missionLogIntervalMs,
+					// A live teammate is pushed the session's connection as the
+					// provider takes it: the Agents tab's pinned fields stay.
+					acceptTeammateConnectionUpdates: (overrides) =>
+						delegatedAgentConfigProvider.acceptedConnectionUpdates?.(
+							overrides,
+						) ?? overrides,
 					...(input.delegatedSandboxes
 						? {
 								teammateWorkspaces: teammateWorkspaceHooks(

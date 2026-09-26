@@ -178,7 +178,19 @@ export interface AgentTeamsRuntimeOptions {
 	 * owns the rest of the lifecycle through these hooks.
 	 */
 	teammateWorkspaces?: TeammateWorkspaceHooks;
+	/**
+	 * The part of a session connection push a live teammate takes. A
+	 * teammate on a connection of its own (the Agents tab) keeps the fields
+	 * that connection names; without this the push takes everything.
+	 */
+	acceptTeammateConnectionUpdates?: (
+		overrides: TeammateConnectionUpdate,
+	) => TeammateConnectionUpdate;
 }
+
+type TeammateConnectionUpdate = Partial<
+	Pick<AgentConfig, "apiKey" | "baseUrl" | "headers">
+>;
 
 /**
  * The lifecycle of a teammate's private workspace, as the team runtime drives
@@ -647,10 +659,13 @@ export class AgentTeamsRuntime {
 	private readonly missionLogIntervalMs: number;
 	private readonly maxConcurrentRuns: number;
 	private readonly teammateWorkspaces?: TeammateWorkspaceHooks;
+	private readonly acceptTeammateConnectionUpdates?: AgentTeamsRuntimeOptions["acceptTeammateConnectionUpdates"];
 
 	constructor(options: AgentTeamsRuntimeOptions) {
 		this.teamName = options.teamName;
 		this.teammateWorkspaces = options.teammateWorkspaces;
+		this.acceptTeammateConnectionUpdates =
+			options.acceptTeammateConnectionUpdates;
 		this.teamId = `t_${sanitizeFileName(nanoid(10))}`;
 		this.onTeamEvent = options.onTeamEvent;
 		this.missionLogIntervalSteps = Math.max(
@@ -1158,14 +1173,19 @@ export class AgentTeamsRuntime {
 		}
 	}
 
-	updateTeammateConnections(
-		overrides: Partial<Pick<AgentConfig, "apiKey" | "baseUrl" | "headers">>,
-	): void {
+	updateTeammateConnections(overrides: TeammateConnectionUpdate): void {
+		// Only what the teammates' own connection leaves to the session: a
+		// teammate on the Agents tab's server was moved onto the lead's.
+		const accepted =
+			this.acceptTeammateConnectionUpdates?.(overrides) ?? overrides;
+		if (Object.keys(accepted).length === 0) {
+			return;
+		}
 		for (const member of this.members.values()) {
 			if (member.role !== "teammate" || !member.agent) {
 				continue;
 			}
-			member.agent.updateConnection(overrides);
+			member.agent.updateConnection(accepted);
 		}
 	}
 
