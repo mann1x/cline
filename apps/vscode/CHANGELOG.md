@@ -5,9 +5,9 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.207] — 2026-09-26
+## [4.100.208] — 2026-09-26
 
-The first public release since 4.100.118. Builds 4.100.119 to 4.100.206 were
+The first public release since 4.100.118. Builds 4.100.119 to 4.100.207 were
 test builds and were never published, so everything they carried is collected
 here, grouped by what it changes for you. The major features:
 
@@ -391,6 +391,11 @@ instead of arguing, so it can check the working model without agreeing with it.
   on while the server keeps running is closed as soon as none of its agents has
   a turn running on it, so its cells go to the new owners at once instead of
   after the engine's idle timeout.
+- **A pool the engine has no room for is asked for again.** opencoti b137
+  answers a pool it has no KV cells for with a 503. A swarm then releases the
+  pools its owner holds for nobody and builds again, and the lead's own pools
+  are asked for again after five seconds instead of being given up on until
+  the server restarts.
 - **Agents give room back under KV pressure.** When the server reports global
   KV pressure, running agents compact and shrink their windows toward their
   floor, and grow back when it clears. A resize on a busy session waits for its
