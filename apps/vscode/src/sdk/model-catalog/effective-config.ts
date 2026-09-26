@@ -133,7 +133,15 @@ function readPolykv(settings: Record<string, unknown>): PolykvConfig | undefined
 		return undefined
 	}
 	const result: Record<string, unknown> = {}
-	for (const field of ["enabled", "pinPrefix", "ephemeral", "overcommit", "swarm", "dynamicContextSize"]) {
+	for (const field of [
+		"enabled",
+		"pinPrefix",
+		"ephemeral",
+		"overcommit",
+		"swarm",
+		"dynamicContextSize",
+		"continuationCompaction",
+	]) {
 		if (typeof polykv[field] === "boolean") {
 			result[field] = polykv[field]
 		}

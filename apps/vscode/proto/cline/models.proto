@@ -579,6 +579,10 @@ message PolykvProviderConfig {
   // worse than none. Unset means the ask is all-or-nothing, which is the
   // honest reading of "I did not say what smaller would be acceptable".
   optional int32 context_floor = 16;
+  // Compaction as a continuation of the session: the summary is written as
+  // the conversation's next turn and reviewed on frozen pools of it, instead
+  // of re-sending the transcript as text. On unless set false.
+  optional bool continuation_compaction = 17;
 }
 
 // The tools a configuration leaves out of its sessions.

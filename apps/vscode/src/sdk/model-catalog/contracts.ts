@@ -162,6 +162,7 @@ export interface PolykvSettings {
 	readonly maxRetryAfterMs?: number
 	readonly dynamicContextSize?: boolean
 	readonly contextFloor?: number
+	readonly continuationCompaction?: boolean
 }
 
 /**

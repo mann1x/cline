@@ -315,6 +315,7 @@ function toPolykvSettings(patch: NonNullable<WriteProviderConfigPatch["polykv"]>
 		...(patch.swarm !== undefined ? { swarm: patch.swarm } : {}),
 		...(patch.maxRetryAfterMs !== undefined ? { maxRetryAfterMs: patch.maxRetryAfterMs } : {}),
 		...(patch.dynamicContextSize !== undefined ? { dynamicContextSize: patch.dynamicContextSize } : {}),
+		...(patch.continuationCompaction !== undefined ? { continuationCompaction: patch.continuationCompaction } : {}),
 		// Zero is how the wire says "cleared" for an optional int32, and a floor
 		// of nothing is not a floor — it says every window is acceptable, which
 		// is what having no floor already means.

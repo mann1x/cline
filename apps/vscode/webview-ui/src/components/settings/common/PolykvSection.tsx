@@ -190,6 +190,12 @@ export const PolykvSection = ({ providerId }: { providerId: string }) => {
 							"The smallest window still worth opening with, in tokens. If the full size is not free the server grants the largest that is, down to this; below it the conversation is refused rather than opened too small to be useful. Leave empty to accept only the full size.",
 						)}
 					{toggle(
+						"continuationCompaction",
+						"Compact as a continuation",
+						"Writes the compaction summary as the conversation's next turn and reviews it on frozen pools of the session, so the transcript is never sent again and nothing is booked beyond what each call needs. Off re-sends the transcript as text to a summarizer of its own.",
+						true,
+					)}
+					{toggle(
 						"overcommit",
 						"Bypass admission",
 						"Sends every request past the admission gate. The engine stops protecting the throughput floor, so sessions can make each other slow — deliberate, and visible here rather than silent.",

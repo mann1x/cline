@@ -66,6 +66,18 @@ describe("the PolyKV section", () => {
 		expect(mocks.write).toHaveBeenCalledWith({ polykv: { enabled: false } })
 	})
 
+	// On unless the profile says false: the stored section carries nothing
+	// until the switch is turned off, and that is what it then writes.
+	it("shows compaction as a continuation on by default, and writes it off", () => {
+		render(<PolykvSection providerId="opencoti" />)
+		const toggle = screen.getByTestId("polykv-continuationCompaction") as HTMLInputElement
+		expect(toggle.checked).toBe(true)
+
+		fireEvent.click(toggle)
+
+		expect(mocks.write).toHaveBeenLastCalledWith({ polykv: { enabled: true, continuationCompaction: false } })
+	})
+
 	it("shows the switch off after the write comes back", async () => {
 		render(<PolykvSection providerId="opencoti" />)
 		const toggle = screen.getByTestId("polykv-enabled") as HTMLInputElement

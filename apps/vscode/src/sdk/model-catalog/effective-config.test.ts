@@ -397,6 +397,17 @@ describe("the PolyKV section", () => {
 	// value that turns the arm off, here it would mean "any window at all is
 	// acceptable" — which is the same as having no floor, said in a way that
 	// looks deliberate.
+	it("reads compaction as a continuation switched off", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({
+			opencoti: { provider: "opencoti", polykv: { enabled: true, continuationCompaction: false } },
+		})
+
+		const config = buildEffectiveProviderConfig(parseProviderId("opencoti"))
+
+		expect(config.polykv).toEqual({ enabled: true, continuationCompaction: false })
+	})
+
 	it("drops a floor of zero rather than storing a floor of nothing", async () => {
 		const { buildEffectiveProviderConfig } = await import("./effective-config")
 		mocks.setProviderSettings({

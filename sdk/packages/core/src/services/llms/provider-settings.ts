@@ -217,6 +217,11 @@ export const PolykvSettingsSchema = z.object({
 	 */
 	dynamicContextSize: z.boolean().optional(),
 	/**
+	 * Compaction as a continuation of the session (`continuation-compaction.ts`).
+	 * On unless `false`; off re-sends the transcript as text, as before.
+	 */
+	continuationCompaction: z.boolean().optional(),
+	/**
 	 * The smallest window still worth connecting with.
 	 *
 	 * Below it a connection is worse than none: the conversation opens and is
