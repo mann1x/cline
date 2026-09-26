@@ -27,6 +27,16 @@ import type {
 } from "../../../extensions/tools/team";
 import { createSpawnAgentTool } from "../../../extensions/tools/team";
 import { admissionFromCapacity } from "../../../extensions/tools/team/agent-admission";
+import {
+	type AgentCheck,
+	createDelegatedAgentCheck,
+	describeAgentCheck,
+} from "../../../extensions/tools/team/agent-check";
+import {
+	createDelegatedAgentLifetime,
+	type DelegatedRunOutcome,
+	runDelegatedWithCap,
+} from "../../../extensions/tools/team/agent-iteration-cap";
 import type { DelegatedSandboxProvider } from "../../../extensions/tools/team/agent-sandbox-executors";
 import {
 	createAgentTroubleWatch,
@@ -35,6 +45,8 @@ import {
 import type { DelegatedAgentConfigProvider } from "../../../extensions/tools/team/delegated-agent";
 import { createDelegatedAgent } from "../../../extensions/tools/team/delegated-agent";
 import {
+	commandLauncherOf,
+	commandSandboxOf,
 	type DelegatedSandboxes,
 	type DelegatedWorkspace,
 	type HandedRevision,
@@ -377,6 +389,10 @@ export function createSessionSpawnTool(
 			updateConnectionDefaults: () => {},
 		},
 		createSubAgentTools,
+		// An agent's check runs under its own launcher, in its own overlay;
+		// with none -- no sandbox, or agent commands off -- it is not run.
+		commandSandboxFor: (toolCallId) =>
+			commandSandboxOf(deps.sandboxes, toolCallId),
 		...lifecycle,
 	}) as AgentTool;
 }
@@ -520,6 +536,8 @@ export function createSessionSwarmTool(
 		signal?: AbortSignal;
 		takeMessage?: () => string | undefined;
 		sampling?: SpawnSampling;
+		maxIterations?: number;
+		check?: AgentCheck;
 	}): Promise<SwarmWorkerResult> => {
 		const base = configProvider();
 		const workerSessionId = `${rootSessionId}:swarm:${request.name}:${Date.now().toString(36)}`;
@@ -585,6 +603,17 @@ export function createSessionSwarmTool(
 			config.logger,
 			(reason) => trouble.waiting(roomWaitTrouble(reason)),
 		);
+		// Its cap, and its check under its own launcher when it has one: a
+		// worker with no sandboxed shell has its check reported as not run.
+		const maxIterations = request.maxIterations ?? config.maxIterations;
+		const wrapSpawn = request.check ? commandLauncherOf(workspace) : undefined;
+		const task = request.check
+			? `${request.task}\n\n${describeAgentCheck(request.check, wrapSpawn !== undefined)}`
+			: request.task;
+		// Held past the round when the worker is detached at its cap.
+		const lifetime = createDelegatedAgentLifetime();
+		let capOutcome: DelegatedRunOutcome | undefined;
+		let agentId: string | undefined;
 		// The worker's random choices, made once: a re-placement runs the same
 		// seed and the same position in the temperature range.
 		const sampling = drawSpawnSampling(request.sampling);
@@ -624,7 +653,7 @@ export function createSessionSwarmTool(
 				});
 			const layout = await buildSubagentLayout({
 				instructions: request.systemPrompt,
-				task: request.task,
+				task,
 				pooled,
 				cwd: workerConfig.getRuntimeConfig().cwd,
 			});
@@ -652,7 +681,7 @@ export function createSessionSwarmTool(
 			// watching from zero. See `worker-struggle.ts` for the replay that
 			// set what fires and what stops.
 			const struggle = createWorkerStruggleSupervisor({
-				...swarmWorkerStruggleOptions(config.maxIterations),
+				...swarmWorkerStruggleOptions(maxIterations),
 				// What the server appends to reasoning it cut at the budget, when
 				// the session knows it; without it the supervisor reads the
 				// generic admission in the reasoning's tail.
@@ -667,9 +696,17 @@ export function createSessionSwarmTool(
 						`[swarm] ${request.name}: worker ${phase} (${reason})`,
 					),
 			});
+			const check = request.check
+				? createDelegatedAgentCheck({
+						check: request.check,
+						cwd: deps.sandboxes?.workspaceRoot ?? config.cwd,
+						...(wrapSpawn ? { wrapSpawn } : {}),
+					})
+				: undefined;
 			const worker = createDelegatedAgent({
 				kind: "subagent",
 				struggle,
+				...(check ? { check } : {}),
 				...(request.takeMessage
 					? {
 							consumePendingUserMessage: async () => request.takeMessage?.(),
@@ -699,7 +736,7 @@ export function createSessionSwarmTool(
 						}
 					: {}),
 				tools,
-				maxIterations: config.maxIterations,
+				maxIterations,
 				parentAgentId: rootSessionId,
 				...(request.signal ? { abortSignal: request.signal } : {}),
 				onEvent: (event) => {
@@ -728,10 +765,43 @@ export function createSessionSwarmTool(
 							: {}),
 					}),
 			});
-			return layout.pinnedHead.length > 0
-				? await worker.runWithHead(layout.pinnedHead, layout.task)
-				: await worker.run(layout.task);
+			agentId = worker.getAgentId?.();
+			// At its cap it waits for the lead, work kept.
+			const outcome = await runDelegatedWithCap({
+				agent: worker,
+				start: () =>
+					layout.pinnedHead.length > 0
+						? worker.runWithHead(layout.pinnedHead, layout.task)
+						: worker.run(layout.task),
+				name: request.name,
+				...(maxIterations !== undefined ? { maxIterations } : {}),
+				sessionId: rootSessionId,
+				...(request.signal ? { signal: request.signal } : {}),
+				...(request.emitUpdate ? { emitUpdate: request.emitUpdate } : {}),
+				...(check ? { check } : {}),
+				// While it waits, its engine session goes back, and so does its
+				// attachment to the round's pool: the pool is released when the
+				// round ends, and a worker resumed after that must not name it.
+				releaseEngineSession: async () => {
+					clearPolykvSession(workerSessionId);
+					await releasePolykvAgent(workerSessionId);
+				},
+				lifetime,
+			});
+			capOutcome = outcome;
+			return outcome.result;
 		};
+		/** What the cap and the check add to the worker's result. */
+		const withCapOutcome = (value: SwarmWorkerResult): SwarmWorkerResult => ({
+			...value,
+			...(agentId ? { agentId } : {}),
+			...(capOutcome?.maxIterations !== undefined
+				? { maxIterations: capOutcome.maxIterations }
+				: {}),
+			...(capOutcome?.stopReason ? { stopReason: capOutcome.stopReason } : {}),
+			...(capOutcome?.state ? { state: capOutcome.state } : {}),
+			...(capOutcome?.oracle ? { oracle: capOutcome.oracle } : {}),
+		});
 		let result: SwarmWorkerResult | undefined;
 		let failure: unknown;
 		try {
@@ -755,11 +825,11 @@ export function createSessionSwarmTool(
 						await releasePolykvAgent(workerSessionId);
 					},
 				});
-				result = {
+				result = withCapOutcome({
 					...outcome.result,
 					placed: outcome.placed,
 					...(realizedSampling ? { sampling: realizedSampling } : {}),
-				};
+				});
 				return result;
 			}
 			// The same gate the lead's sub-agents queue on, so a swarm and a
@@ -786,7 +856,9 @@ export function createSessionSwarmTool(
 				request.emitUpdate?.({ queued: false });
 				return runWorker();
 			};
-			result = slotGate ? await slotGate.run(started) : await started();
+			result = withCapOutcome(
+				slotGate ? await slotGate.run(started) : await started(),
+			);
 			if (realizedSampling) {
 				result = { ...result, sampling: realizedSampling };
 			}
@@ -795,33 +867,38 @@ export function createSessionSwarmTool(
 			failure = error;
 			throw error;
 		} finally {
-			// On every path -- finished, failed, stopped, cancelled -- the worker's
-			// changes go back to the lead as revisions and its overlay goes. The
-			// revisions travel with the result (or the error) so the swarm's
-			// report can say where the work went.
-			if (workspace) {
-				const handed = await deps.sandboxes
-					?.close(sandboxKey, request.name)
-					.catch(() => [] as HandedRevision[]);
-				attachHandback(result ?? failure, handed ?? []);
-			}
-			clearPolykvSession(workerSessionId);
-			stopRoomWatch();
-			trouble.dispose();
-			// Its engine session goes back the moment it ends, and its owner
-			// window with it if it was the last agent on it. The swarm path
-			// never did this: `spawn_agent` and configured agents released,
-			// swarm workers did not, so every owner a swarm opened stayed
-			// booked until the engine's 300 s idle TTL -- on 2026-09-24 four
-			// owners held all 1,048,576 cells of 8240.
-			const released = await releasePolykvAgent(workerSessionId).catch(
-				() => undefined,
-			);
-			for (const failure of released?.failed ?? []) {
-				config.logger?.log?.(
-					`[PolyKV] could not close engine session ${failure.sessionId}: ${failure.error}`,
+			// On every path -- or, for a worker detached at its cap, once it
+			// is finally done: its workspace, pool session and engine session
+			// are what it would go on with.
+			await lifetime.end(async () => {
+				// On every path -- finished, failed, stopped, cancelled -- the worker's
+				// changes go back to the lead as revisions and its overlay goes. The
+				// revisions travel with the result (or the error) so the swarm's
+				// report can say where the work went.
+				if (workspace) {
+					const handed = await deps.sandboxes
+						?.close(sandboxKey, request.name)
+						.catch(() => [] as HandedRevision[]);
+					attachHandback(result ?? failure, handed ?? []);
+				}
+				clearPolykvSession(workerSessionId);
+				stopRoomWatch();
+				trouble.dispose();
+				// Its engine session goes back the moment it ends, and its owner
+				// window with it if it was the last agent on it. The swarm path
+				// never did this: `spawn_agent` and configured agents released,
+				// swarm workers did not, so every owner a swarm opened stayed
+				// booked until the engine's 300 s idle TTL -- on 2026-09-24 four
+				// owners held all 1,048,576 cells of 8240.
+				const released = await releasePolykvAgent(workerSessionId).catch(
+					() => undefined,
 				);
-			}
+				for (const failure of released?.failed ?? []) {
+					config.logger?.log?.(
+						`[PolyKV] could not close engine session ${failure.sessionId}: ${failure.error}`,
+					);
+				}
+			});
 		}
 	};
 

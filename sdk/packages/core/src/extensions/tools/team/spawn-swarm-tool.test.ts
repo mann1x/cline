@@ -760,3 +760,128 @@ describe("spawn_swarm temperature and seed", () => {
 		expect(byName()).toEqual({ "worker-1": undefined, "worker-2": undefined });
 	});
 });
+
+describe("spawn_swarm iteration cap and check", () => {
+	function controlsTool(
+		answer: (request: { name: string }) => Record<string, unknown> = () => ({}),
+	) {
+		const seen: Record<string, { maxIterations?: number; check?: unknown }> =
+			{};
+		const tool = createSpawnSwarmTool({
+			pools: stubPools().source,
+			runWorker: async (request: {
+				name: string;
+				maxIterations?: number;
+				check?: unknown;
+			}) => {
+				seen[request.name] = {
+					...(request.maxIterations !== undefined
+						? { maxIterations: request.maxIterations }
+						: {}),
+					...(request.check ? { check: request.check } : {}),
+				};
+				return { ...agentResult("done"), ...answer(request) };
+			},
+		} as never);
+		return { tool, seen };
+	}
+
+	it("gives each worker its task's cap and check, else the round's", async () => {
+		const { tool, seen } = controlsTool();
+		await call(tool, {
+			systemPrompt: "s",
+			max_iterations: 8,
+			check: { command: "node t.js", expect: "^OK" },
+			tasks: [
+				{ name: "a", task: "a" },
+				{
+					name: "b",
+					task: "b",
+					max_iterations: 20,
+					check: { command: "make test", expect: "FAIL", must: "not_match" },
+				},
+			],
+		} as never);
+		expect(seen).toEqual({
+			a: { maxIterations: 8, check: { command: "node t.js", expect: "^OK" } },
+			b: {
+				maxIterations: 20,
+				check: { command: "make test", expect: "FAIL", must: "not_match" },
+			},
+		});
+	});
+
+	it("gives every worker of a counted task the round's cap", async () => {
+		const { tool, seen } = controlsTool();
+		await call(tool, {
+			systemPrompt: "s",
+			task: "t",
+			count: 2,
+			max_iterations: 6,
+		} as never);
+		expect(seen).toEqual({
+			"worker-1": { maxIterations: 6 },
+			"worker-2": { maxIterations: 6 },
+		});
+	});
+
+	it("refuses a round whose check cannot parse, before any worker starts", async () => {
+		const { tool, seen } = controlsTool();
+		await expect(
+			call(tool, {
+				systemPrompt: "s",
+				task: "t",
+				check: { command: "x", expect: "(" },
+			} as never),
+		).rejects.toThrow(/regular expression/);
+		expect(seen).toEqual({});
+	});
+
+	it("reports each worker's iterations, cap and check, and names one waiting at its cap", async () => {
+		const oracle = {
+			status: "fail",
+			command: "node t.js",
+			expect: "^OK",
+			must: "match",
+			exitCode: 1,
+			output: "boom at 12",
+			runs: 2,
+		};
+		const { tool } = controlsTool((request) =>
+			request.name === "a"
+				? {
+						iterations: 4,
+						maxIterations: 4,
+						stopReason: "iteration_cap",
+						state: "awaiting_lead",
+						agentId: "agent_a",
+					}
+				: { iterations: 3, maxIterations: 8, oracle },
+		);
+		const output = (await call(tool, {
+			systemPrompt: "s",
+			tasks: [
+				{ name: "a", task: "a" },
+				{ name: "b", task: "b" },
+			],
+		} as never)) as {
+			digest: string;
+			results?: Array<Record<string, unknown>>;
+		};
+		expect(output.results?.[0]).toMatchObject({
+			name: "a",
+			iterations: 4,
+			maxIterations: 4,
+			state: "awaiting_lead",
+			agentId: "agent_a",
+		});
+		expect(output.results?.[1]).toMatchObject({
+			name: "b",
+			iterations: 3,
+			maxIterations: 8,
+			oracle: { status: "fail", exitCode: 1 },
+		});
+		expect(output.digest).toContain('resume_agent(agent_id: "agent_a"');
+		expect(output.digest).toContain("FAIL (exit 1)");
+	});
+});

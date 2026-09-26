@@ -69,6 +69,7 @@ import { loadConfiguredAgentConfigs } from "../../extensions/tools/team/configur
 import { createConfiguredAgentTools } from "../../extensions/tools/team/configured-agent-tool";
 import { createCreateAgentTool } from "../../extensions/tools/team/create-agent-tool";
 import {
+	commandSandboxOf,
 	type DelegatedSandboxes,
 	type DelegatedWorkspace,
 	handbackNote,
@@ -1112,6 +1113,15 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 						hookErrorMode: config.hookErrorMode,
 						toolPolicies: effectiveToolPolicies,
 						requestToolApproval: input.requestToolApproval,
+						// Its check runs under its own launcher, in its overlay;
+						// with none it is reported as not run.
+						commandSandboxFor: (toolCallId) =>
+							toolCallId
+								? commandSandboxOf(
+										input.delegatedSandboxes?.(),
+										configuredAgentSandboxKey(toolCallId),
+									)
+								: undefined,
 						onSubAgentEvent: input.onSubAgentEvent,
 						onSubAgentStart: input.onSubAgentStart,
 						// The agent's changes go back to the lead as revisions and its

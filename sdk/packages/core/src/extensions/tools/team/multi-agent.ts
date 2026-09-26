@@ -1217,9 +1217,23 @@ export class AgentTeamsRuntime {
 				unreadMail.length > 0
 					? `${this.buildMailboxNotification(unreadMail)}\n\n${message}`
 					: message;
-			const result = options?.continueConversation
-				? await member.agent.continue(enrichedMessage)
-				: await member.agent.run(enrichedMessage);
+			// The lead's cap for this task alone; the teammate's own comes back
+			// after it, whatever the run did.
+			const agent = member.agent;
+			const ownCap = agent.getMaxIterations?.();
+			if (options?.maxIterations !== undefined) {
+				agent.setMaxIterations?.(options.maxIterations);
+			}
+			let result: AgentResult;
+			try {
+				result = options?.continueConversation
+					? await agent.continue(enrichedMessage)
+					: await agent.run(enrichedMessage);
+			} finally {
+				if (options?.maxIterations !== undefined) {
+					agent.setMaxIterations?.(ownCap);
+				}
+			}
 			// The teammate worked on a private copy of the workspace: its changes
 			// become revisions in the lead's log now, and the result the lead is
 			// handed names them.
@@ -1318,6 +1332,9 @@ export class AgentTeamsRuntime {
 			retryCount: 0,
 			maxRetries: Math.max(0, options?.maxRetries ?? 0),
 			continueConversation: options?.continueConversation,
+			...(options?.maxIterations !== undefined
+				? { maxIterations: options.maxIterations }
+				: {}),
 			startedAt: new Date(0),
 			leaseOwner: options?.leaseOwner,
 			heartbeatAt: undefined,
@@ -1437,6 +1454,9 @@ export class AgentTeamsRuntime {
 			const result = await this.routeToTeammate(run.agentId, runMessage, {
 				taskId: run.taskId,
 				continueConversation: run.continueConversation,
+				...(run.maxIterations !== undefined
+					? { maxIterations: run.maxIterations }
+					: {}),
 			});
 			if (this.runs.get(run.id)?.status !== "running") {
 				return;

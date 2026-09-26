@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createWorkerStruggleSupervisor } from "../../../runtime/safety/worker-struggle";
 import {
 	buildDelegatedAgentConfig,
+	createDelegatedAgentCheck,
 	createDelegatedAgentConfigProvider,
 } from "./delegated-agent";
 
@@ -68,6 +69,45 @@ describe("createDelegatedAgentConfigProvider", () => {
 });
 
 describe("buildDelegatedAgentConfig", () => {
+	// The lead's check is judged where the change protocol's approved check
+	// is: the runtime's completion boundary, so a fail keeps the agent in the
+	// same run instead of ending it.
+	it("judges the lead's check at the agent's completion boundary", async () => {
+		const check = createDelegatedAgentCheck({
+			check: { command: "x", expect: "ok" },
+			cwd: "/w",
+			wrapSpawn: (spec) => spec,
+			run: async () => ({
+				passed: false,
+				exitCode: 1,
+				output: "boom",
+				timedOut: false,
+			}),
+		});
+		const config = buildDelegatedAgentConfig({
+			kind: "subagent",
+			prompt: "fix it",
+			tools: [],
+			configProvider: provider(),
+			check,
+		});
+		const message = await config.completionPolicy?.onCompletionAttempt?.({
+			text: "done",
+		});
+		expect(message).toContain("Your check did not pass");
+		expect(check.result()?.status).toBe("fail");
+	});
+
+	it("leaves the completion boundary alone without a check", () => {
+		const config = buildDelegatedAgentConfig({
+			kind: "subagent",
+			prompt: "fix it",
+			tools: [],
+			configProvider: provider(),
+		});
+		expect(config.completionPolicy).toBeUndefined();
+	});
+
 	it("inherits the parent distinctId and sessionId for telemetry grouping", () => {
 		const configProvider = createDelegatedAgentConfigProvider({
 			providerId: "anthropic",

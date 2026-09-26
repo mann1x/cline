@@ -71,6 +71,7 @@ import {
 	validateWithZod,
 	zodToJsonSchema,
 } from "@cline/shared";
+import { readMaxIterations } from "./agent-controls";
 import {
 	buildDelegatedAgentConfig,
 	type DelegatedAgentConfigProvider,
@@ -692,6 +693,12 @@ export function createAgentTeamsTools(
 			inputSchema: zodToJsonSchema(TeamRunTaskInputSchema),
 			execute: async (input) => {
 				const validatedInput = validateWithZod(TeamRunTaskInputSchema, input);
+				// The lead's cap for this task; refused, not ignored, when it is
+				// not a number of turns.
+				const maxIterations = readMaxIterations(
+					validatedInput.max_iterations ??
+						(input as { maxIterations?: unknown }).maxIterations,
+				);
 				if (validatedInput.runMode === "async") {
 					const run = options.runtime.startTeammateRun(
 						validatedInput.agentId,
@@ -701,6 +708,7 @@ export function createAgentTeamsTools(
 							fromAgentId: options.requesterId,
 							continueConversation:
 								validatedInput.continueConversation || undefined,
+							...(maxIterations !== undefined ? { maxIterations } : {}),
 						},
 					);
 					return validateWithZod(TeamRunTaskToolResultSchema, {
@@ -731,18 +739,27 @@ export function createAgentTeamsTools(
 						fromAgentId: options.requesterId,
 						continueConversation:
 							validatedInput.continueConversation || undefined,
+						...(maxIterations !== undefined ? { maxIterations } : {}),
 					})
-					.then((result) =>
-						validateWithZod(TeamRunTaskToolResultSchema, {
+					.then((result) => {
+						const capped = result.finishReason === "max_iterations";
+						return validateWithZod(TeamRunTaskToolResultSchema, {
 							agentId: validatedInput.agentId,
 							mode: "sync" as const,
 							status: "running" as const,
 							dispatched: true,
-							message: `Task dispatched to ${validatedInput.agentId} and completed in sync mode.`,
+							message: capped
+								? `${validatedInput.agentId} stopped at its iteration cap after ${result.iterations} iterations; its conversation is kept. To go on, run team_run_task again with continueConversation: true (and a higher max_iterations).`
+								: `Task dispatched to ${validatedInput.agentId} and completed in sync mode.`,
 							text: result.text,
 							iterations: result.iterations,
-						}),
-					)
+							...(maxIterations !== undefined ? { maxIterations } : {}),
+							...(result.finishReason
+								? { finishReason: result.finishReason }
+								: {}),
+							...(capped ? { stopReason: "iteration_cap" as const } : {}),
+						});
+					})
 					.finally(() => {
 						pendingSyncRuns.delete(validatedInput.agentId);
 					});

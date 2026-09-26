@@ -376,3 +376,93 @@ describe("a page check named in the settings", () => {
 		});
 	});
 });
+
+describe("a check whose output must not say something", () => {
+	it("passes a clean exit whose output does not match", async () => {
+		await withWorkspace({}, async (root) => {
+			const verdict = await runOracle({
+				label: "ok",
+				command: process.execPath,
+				args: ["-e", "console.log('all good')"],
+				cwd: root,
+				reason: "test",
+				expect: "ERROR",
+				must: "not_match",
+			});
+			expect(verdict.passed).toBe(true);
+		});
+	});
+
+	it("fails a clean exit whose output matches, and says what matched", async () => {
+		await withWorkspace({}, async (root) => {
+			const verdict = await runOracle({
+				label: "bad",
+				command: process.execPath,
+				args: ["-e", "console.log('ERROR: brace at 12')"],
+				cwd: root,
+				reason: "test",
+				expect: "ERROR",
+				must: "not_match",
+			});
+			expect(verdict.passed).toBe(false);
+			expect(verdict.exitCode).toBe(0);
+			expect(verdict.unmatched).toBe(true);
+			expect(verdict.output).toContain("must not match /ERROR/");
+		});
+	});
+
+	it("still fails a non-zero exit", async () => {
+		await withWorkspace({}, async (root) => {
+			const verdict = await runOracle({
+				label: "bad",
+				command: process.execPath,
+				args: ["-e", "process.exit(3)"],
+				cwd: root,
+				reason: "test",
+				expect: "ERROR",
+				must: "not_match",
+			});
+			expect(verdict.passed).toBe(false);
+			expect(verdict.exitCode).toBe(3);
+		});
+	});
+});
+
+describe("a check run through a launcher", () => {
+	// A delegated agent's check runs where its shell runs: under the sandbox
+	// launcher, which sees the agent's own files. The wrapper is the same
+	// `wrapSpawn` its `run_commands` is built with.
+	it("hands the spawn to the wrapper and judges what the wrapper ran", async () => {
+		await withWorkspace({}, async (root) => {
+			const seen: string[] = [];
+			const verdict = await runOracle(
+				{
+					label: "wrapped",
+					command: "definitely-not-a-real-command-xyz",
+					args: ["--flag"],
+					cwd: root,
+					reason: "test",
+					expect: "launched definitely-not-a-real-command-xyz --flag",
+				},
+				{
+					wrapSpawn: (spec) => {
+						seen.push(spec.executable, ...spec.args);
+						return {
+							executable: process.execPath,
+							args: [
+								"-e",
+								`console.log("launched " + ${JSON.stringify(
+									[spec.executable, ...spec.args].join(" "),
+								)})`,
+							],
+							cwd: spec.cwd,
+							env: { ...spec.env, WRAPPED: "1" },
+						};
+					},
+				},
+			);
+			expect(seen).toEqual(["definitely-not-a-real-command-xyz", "--flag"]);
+			expect(verdict.passed).toBe(true);
+		});
+	});
+});

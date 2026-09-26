@@ -169,6 +169,42 @@ describe("AgentTeamsRuntime teammate lifecycle events", () => {
 		).toBe(false);
 	});
 
+	it("runs one task under the lead's cap and puts the teammate's own back after", async () => {
+		const caps: Array<number | undefined> = [];
+		let cap: number | undefined = 30;
+		mockNextSessionRuntime({
+			run: vi.fn(async () => {
+				caps.push(cap);
+				return {
+					text: "done",
+					iterations: 2,
+					finishReason: "completed",
+					usage: { inputTokens: 1, outputTokens: 1 },
+				} as unknown as AgentResult;
+			}),
+			...({
+				getMaxIterations: () => cap,
+				setMaxIterations: (value: number | undefined) => {
+					cap = value;
+				},
+			} as object),
+		});
+		const runtime = new AgentTeamsRuntime({ teamName: "t" });
+		runtime.spawnTeammate({
+			agentId: "fixer",
+			config: {
+				providerId: "anthropic",
+				modelId: "m",
+				systemPrompt: "fix",
+				maxIterations: 30,
+				tools: [],
+			},
+		});
+		await runtime.routeToTeammate("fixer", "task", { maxIterations: 5 });
+		expect(caps).toEqual([5]);
+		expect(cap).toBe(30);
+	});
+
 	it("emits teammate_spawned with lifecycle payload", () => {
 		const events: TeamEvent[] = [];
 		// biome-ignore lint/complexity/useArrowFunction: `new SessionRuntime(...)` requires a non-arrow callable.

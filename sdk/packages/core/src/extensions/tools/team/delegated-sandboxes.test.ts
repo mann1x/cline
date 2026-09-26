@@ -6,7 +6,10 @@ import {
 	createRevisionLog,
 	type RevisionLog,
 } from "../../../runtime/atomic/file-revisions";
-import { createDelegatedSandboxes } from "./delegated-sandboxes";
+import {
+	commandLauncherOf,
+	createDelegatedSandboxes,
+} from "./delegated-sandboxes";
 
 describe("createDelegatedSandboxes", () => {
 	let base: string;
@@ -109,5 +112,31 @@ describe("createDelegatedSandboxes", () => {
 		expect(log.revisions(path.join(ws, "a.txt")).at(-1)?.body?.toString()).toBe(
 			"OLD",
 		);
+	});
+});
+
+describe("commandLauncherOf", () => {
+	const wrapSpawn = (spec: {
+		executable: string;
+		args: string[];
+		cwd: string;
+		env: Record<string, string>;
+	}) => spec;
+	const workspace = (allowCommands: boolean, withLauncher = true) =>
+		({
+			sandbox: {},
+			allowCommands,
+			executorOptions: { bash: withLauncher ? { wrapSpawn } : {} },
+		}) as never;
+
+	// An agent's check runs where its shell runs, and only there.
+	it("is the agent's shell launcher when it may run commands", () => {
+		expect(commandLauncherOf(workspace(true))).toBe(wrapSpawn);
+	});
+
+	it("is nothing when agent commands are off, or there is no workspace", () => {
+		expect(commandLauncherOf(workspace(false))).toBeUndefined();
+		expect(commandLauncherOf(undefined)).toBeUndefined();
+		expect(commandLauncherOf(workspace(true, false))).toBeUndefined();
 	});
 });

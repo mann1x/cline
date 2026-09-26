@@ -10,12 +10,15 @@ const runWithHeadMock = vi.fn();
 const getAgentIdMock = vi.fn(() => "sub-agent-1");
 const getConversationIdMock = vi.fn(() => "conv-sub-1");
 const agentConstructorSpy = vi.fn();
+const continueMock = vi.fn();
+const setMaxIterationsMock = vi.fn();
 
 vi.mock("../../../runtime/orchestration/session-runtime-orchestrator", () => {
 	return {
 		SessionRuntime: class MockSessionRuntime {
 			constructor(config: unknown) {
 				agentConstructorSpy(config);
+				this.cap = (config as { maxIterations?: number }).maxIterations;
 			}
 
 			getAgentId(): string {
@@ -36,6 +39,21 @@ vi.mock("../../../runtime/orchestration/session-runtime-orchestrator", () => {
 
 			async runWithHead(head: string[], task: string): Promise<unknown> {
 				return runWithHeadMock(head, task);
+			}
+
+			async continue(message?: string): Promise<unknown> {
+				return continueMock(message);
+			}
+
+			private cap: number | undefined;
+
+			getMaxIterations(): number | undefined {
+				return this.cap;
+			}
+
+			setMaxIterations(value: number | undefined): void {
+				this.cap = value;
+				setMaxIterationsMock(value);
 			}
 		},
 	};
@@ -206,6 +224,9 @@ describe("createSpawnAgentTool", () => {
 				inputTokens: 11,
 				outputTokens: 7,
 			},
+			// What `resume_agent` and the status tool name it by, and its cap.
+			agentId: "sub-agent-1",
+			maxIterations: 4,
 		});
 		expect(agentConstructorSpy).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -1082,5 +1103,238 @@ describe("createSpawnAgentTool", () => {
 				topK: 20,
 			});
 		});
+	});
+});
+
+describe("spawn_agent's iteration cap and check", () => {
+	const doneResult = (
+		text: string,
+		iterations: number,
+		finishReason = "completed",
+	) => ({
+		text,
+		iterations,
+		finishReason,
+		usage: { inputTokens: iterations, outputTokens: iterations },
+	});
+
+	beforeEach(async () => {
+		vi.clearAllMocks();
+		const { __resetAwaitingLead } = await import("./agent-iteration-cap.js");
+		__resetAwaitingLead();
+	});
+
+	it("builds each agent with its own cap, an entry's over the call's", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		runMock.mockResolvedValue(doneResult("ok", 1));
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "m",
+			}),
+		});
+		await tool.execute(
+			{
+				max_iterations: 12,
+				agents: [
+					{ name: "a", task: "t" },
+					{ name: "b", task: "t", max_iterations: "30" },
+				],
+			} as never,
+			{ agentId: "p", conversationId: "c", iteration: 1 } as never,
+		);
+		const caps = agentConstructorSpy.mock.calls
+			.map((call) => (call[0] as { maxIterations?: number }).maxIterations)
+			.sort((x, y) => (x ?? 0) - (y ?? 0));
+		expect(caps).toEqual([12, 30]);
+	});
+
+	it("refuses a cap that is not a number of turns", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "m",
+			}),
+		});
+		await expect(
+			tool.execute(
+				{ task: "t", max_iterations: 0 } as never,
+				{
+					agentId: "p",
+					conversationId: "c",
+					iteration: 1,
+				} as never,
+			),
+		).rejects.toThrow(/max_iterations/);
+		expect(agentConstructorSpy).not.toHaveBeenCalled();
+	});
+
+	it("tells the agent its check up front and judges it at completion, in its sandbox", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const launched: string[] = [];
+		runMock.mockImplementation(async () => {
+			const config = agentConstructorSpy.mock.calls.at(-1)?.[0] as AgentConfig;
+			const verdict = await config.completionPolicy?.onCompletionAttempt?.({
+				text: "done",
+			});
+			expect(verdict).toBeUndefined();
+			return doneResult("fixed it", 2);
+		});
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "m",
+				cwd: process.cwd(),
+			}),
+			commandSandboxFor: (toolCallId) =>
+				toolCallId === "call_1"
+					? {
+							cwd: process.cwd(),
+							wrapSpawn: (spec) => {
+								launched.push(spec.args.join(" "));
+								return spec;
+							},
+						}
+					: undefined,
+		});
+		const output = (await tool.execute(
+			{
+				task: "fix the braces",
+				check: { command: "echo all-good", expect: "^all-good" },
+			} as never,
+			{
+				agentId: "p",
+				conversationId: "c",
+				iteration: 1,
+				toolCallId: "call_1",
+			} as never,
+		)) as { oracle?: unknown };
+		const task = runMock.mock.calls[0]?.[0] as string;
+		expect(task).toContain("fix the braces");
+		expect(task).toContain("`echo all-good`");
+		expect(task).toContain("run_commands");
+		expect(launched).toEqual(["-c echo all-good"]);
+		expect(output.oracle).toMatchObject({
+			status: "pass",
+			exitCode: 0,
+			output: "all-good",
+		});
+	});
+
+	it("reports a check it had no sandbox to run in as not run", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		runMock.mockImplementation(async () => {
+			const config = agentConstructorSpy.mock.calls.at(-1)?.[0] as AgentConfig;
+			await config.completionPolicy?.onCompletionAttempt?.({ text: "done" });
+			return doneResult("done", 1);
+		});
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "m",
+			}),
+		});
+		const output = (await tool.execute(
+			{ task: "t", check: { command: "echo x", expect: "x" } } as never,
+			{ agentId: "p", conversationId: "c", iteration: 1 } as never,
+		)) as { oracle?: unknown };
+		expect(runMock.mock.calls[0]?.[0]).toContain("will not be run");
+		expect(output.oracle).toMatchObject({
+			status: "not_run",
+			reason: "no command sandbox",
+		});
+	});
+
+	it("waits at its cap for the lead, and goes on when resumed", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const { onLeadNudge } = await import("./agent-trouble.js");
+		const { listAwaitingLead, resumeSuspended } = await import(
+			"./agent-iteration-cap.js"
+		);
+		const stopListening = onLeadNudge("lead", () => {});
+		runMock.mockResolvedValue(doneResult("halfway", 4, "max_iterations"));
+		continueMock.mockResolvedValue(doneResult("finished", 3));
+		const updates: unknown[] = [];
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "m",
+			}),
+		});
+		const running = tool.execute(
+			{ name: "fixer", task: "t", max_iterations: 4 } as never,
+			{
+				agentId: "p",
+				conversationId: "c",
+				iteration: 1,
+				sessionId: "lead",
+				toolCallId: "call_1",
+				emitUpdate: (update: unknown) => updates.push(update),
+			} as never,
+		) as unknown as Promise<Record<string, unknown>>;
+		await vi.waitFor(() => expect(listAwaitingLead("lead")).toHaveLength(1));
+		expect(updates).toContainEqual({
+			awaitingLead: { iterations: 4, maxIterations: 4 },
+		});
+		expect(resumeSuspended("fixer", 5, "lead").ok).toBe(true);
+		const output = await running;
+		expect(setMaxIterationsMock).toHaveBeenCalledWith(5);
+		expect(output).toMatchObject({
+			text: "finished",
+			iterations: 7,
+			maxIterations: 9,
+			finishReason: "completed",
+			agentId: "sub-agent-1",
+		});
+		expect(output.stopReason).toBeUndefined();
+		stopListening();
+	});
+
+	it("returns an agent it cannot ask the lead about as awaiting_lead, and keeps its workspace", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const { resumeSuspended } = await import("./agent-iteration-cap.js");
+		runMock.mockResolvedValue(doneResult("halfway", 4, "max_iterations"));
+		continueMock.mockResolvedValue(doneResult("finished", 2));
+		const onSubAgentEnd = vi.fn();
+		const onSubAgentSettled = vi.fn();
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "m",
+			}),
+			onSubAgentEnd,
+			onSubAgentSettled,
+		});
+		const output = (await tool.execute(
+			{ name: "solo", task: "t", max_iterations: 4 } as never,
+			{
+				agentId: "p",
+				conversationId: "c",
+				iteration: 1,
+				sessionId: "nobody-listening",
+				toolCallId: "call_1",
+			} as never,
+		)) as unknown as Record<string, unknown>;
+		expect(output).toMatchObject({
+			state: "awaiting_lead",
+			stopReason: "iteration_cap",
+			iterations: 4,
+			maxIterations: 4,
+		});
+		expect(String(output.text)).toContain("resume_agent");
+		// Its workspace is not handed back and disposed while it waits.
+		expect(onSubAgentEnd).not.toHaveBeenCalled();
+		expect(onSubAgentSettled).not.toHaveBeenCalled();
+
+		const resumed = resumeSuspended("solo", 3, "nobody-listening");
+		const final = await resumed.completion;
+		expect(final?.result.text).toBe("finished");
+		await vi.waitFor(() => expect(onSubAgentSettled).toHaveBeenCalledTimes(1));
+		expect(onSubAgentEnd).toHaveBeenCalledWith(
+			expect.objectContaining({
+				result: expect.objectContaining({ text: "finished", iterations: 6 }),
+			}),
+		);
 	});
 });

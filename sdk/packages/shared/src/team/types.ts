@@ -149,6 +149,8 @@ export interface TeamRunRecord {
 	maxRetries: number;
 	nextAttemptAt?: Date;
 	continueConversation?: boolean;
+	/** The task's iteration cap, when the lead set one. */
+	maxIterations?: number;
 	startedAt: Date;
 	endedAt?: Date;
 	leaseOwner?: string;
@@ -256,6 +258,8 @@ export interface RouteToTeammateOptions {
 	taskId?: string;
 	fromAgentId?: string;
 	continueConversation?: boolean;
+	/** This task's iteration cap, over the teammate's own, for this run only. */
+	maxIterations?: number;
 }
 
 export enum TeamMessageType {

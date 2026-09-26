@@ -21,7 +21,26 @@ import {
 	zodToJsonSchema,
 } from "@cline/shared";
 import { z } from "zod";
+import type { OracleSpawnWrapper } from "../../../runtime/atomic/oracle";
 import { isPolykvProvider } from "../../context/polykv-session";
+import {
+	type AgentCheck,
+	type AgentOracleResult,
+	createDelegatedAgentCheck,
+	describeAgentCheck,
+	readAgentCheck,
+} from "./agent-check";
+import {
+	AGENT_CONTROLS_NOTE,
+	AgentControlFields,
+	maxIterationsOf,
+} from "./agent-controls";
+import {
+	createDelegatedAgentLifetime,
+	type DelegatedRunOutcome,
+	type DelegatedStopReason,
+	runDelegatedWithCap,
+} from "./agent-iteration-cap";
 import { summarizeForLead } from "./agent-reports";
 import { createAgentTroubleWatch, roomWaitTrouble } from "./agent-trouble";
 import { buildSpawnBatchReport, type SpawnBatchReport } from "./batch-report";
@@ -126,6 +145,8 @@ export const SpawnAgentInputSchema = z.object({
 	 * of the call, the seed offset by each agent's index. See `spawn-sampling.ts`.
 	 */
 	...SpawnSamplingFields,
+	/** Its iteration cap and its check; beside `agents`, every agent's default. */
+	...AgentControlFields,
 });
 
 /**
@@ -171,6 +192,12 @@ export const SpawnAgentMemberSchema = z.object({
 	),
 	temperature_range: SpawnSamplingFields.temperature_range.describe(
 		"Percent this entry's agents' temperature is randomized by, over the call's `temperature_range`.",
+	),
+	max_iterations: AgentControlFields.max_iterations.describe(
+		"This entry's iteration cap, over the call's `max_iterations`.",
+	),
+	check: AgentControlFields.check.describe(
+		"This entry's check, over the call's `check`.",
 	),
 });
 
@@ -294,6 +321,19 @@ export interface SpawnAgentOutput {
 	 * it was drawn around. Absent means the model's own throughout.
 	 */
 	sampling?: RealizedSpawnSampling;
+	/** The agent's own id: what `resume_agent` and the status tool name it by. */
+	agentId?: string;
+	/** Its cap: the first one plus every raise. Absent is no cap. */
+	maxIterations?: number;
+	/** Set when the iteration cap is what ended it (the lead stopped it there). */
+	stopReason?: DelegatedStopReason;
+	/**
+	 * `awaiting_lead`: it is at its cap, waiting, work kept -- continue it with
+	 * `resume_agent`. Only when nothing could ask the lead during the round.
+	 */
+	state?: "awaiting_lead";
+	/** The lead's check, when one was set: pass, fail or not run. */
+	oracle?: AgentOracleResult;
 }
 
 export interface SubAgentStartContext {
@@ -400,6 +440,14 @@ export interface SpawnAgentToolConfig {
 	 * registered on its own.
 	 */
 	swarm?: AgentTool;
+	/**
+	 * The launcher an agent's commands run under, keyed by its spawning tool
+	 * call: where its `check` is run. `undefined` -- or no resolver -- is no
+	 * command sandbox, and the check is reported as not run.
+	 */
+	commandSandboxFor?: (
+		toolCallId: string | undefined,
+	) => { wrapSpawn: OracleSpawnWrapper; cwd: string } | undefined;
 }
 
 /** The key a configured agent is looked up by: `JS-Syntactic`, `js_syntactic` and `subagent_js_syntactic` are one agent. */
@@ -414,10 +462,10 @@ export function configuredAgentKey(name: string): string {
 
 const SPAWN_AGENT_DESCRIPTION =
 	"Spawn sub-agents for focused tasks: `task` for one agent, `agents` for several in one call. Structure the work in three parts, from most shared to least: `knowledge` (files and notes the agents need -- identical across them), `instructions` (the role -- identical for every agent of the same kind), and each agent's `task` (what it alone does). Shared parts are loaded once for all agents that share them, so many agents cost little more than one. An `agents` entry may name a configured agent in `type`; it then runs with that agent's own role and model. " +
-	"Output: one agent gives `{text, iterations, finishReason, usage: {inputTokens, outputTokens}}`; `agents` gives `{summary: {total, completed, errored, cancelled, byType, byFailureClass, totalIterations, totalTokens}, agents: [{name, status, failureClass?, line?, error?}], reports: [{name, text}], notShown?: {names}, usage}` -- every agent is in `agents`; a report left out of `reports` to keep the result whole is listed in `notShown` and read with `read_agent_report(name)`. `failureClass` is `infra` (server, transport or refusal: worth running again as is) or `task` (the model, a tool or the iteration budget). " +
+	"Output: one agent gives `{text, iterations, maxIterations?, finishReason, stopReason?, state?, oracle?, agentId, usage: {inputTokens, outputTokens}}`; `agents` gives `{summary: {total, completed, errored, cancelled, awaitingLead, byType, byFailureClass, totalIterations, totalTokens}, agents: [{name, status, failureClass?, line?, error?, iterations?, maxIterations?, stopReason?, agentId?, oracle?}], reports: [{name, text, oracle?}], notShown?: {names}, usage}` -- every agent is in `agents`; a report left out of `reports` to keep the result whole is listed in `notShown` and read with `read_agent_report(name)`. `failureClass` is `infra` (server, transport or refusal: worth running again as is) or `task` (the model, a tool or the iteration budget). " +
 	"Not merging is the way to get N separate reports: each agent of an `agents` call reports on its own, where `merge` returns one combined report. " +
 	"Use `spawn_agent` for tasks that finish and report back; use the `team_*` tools for long-lived teammates you keep assigning work to and messaging. " +
-	"`text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. It has already finished by the time you see this — there is nothing to poll and nothing to await. " +
+	"`text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. It has already finished by the time you see this — there is nothing to poll and nothing to await -- unless its `state` is `awaiting_lead`. " +
 	"Give each sub-agent a short `name`: when several run at once it is the only thing telling their progress apart on screen. ";
 
 const SPAWN_AGENT_SWARM_DESCRIPTION =
@@ -428,6 +476,7 @@ export function describeSpawnAgent(swarm: boolean): string {
 		SPAWN_AGENT_DESCRIPTION +
 		(swarm ? SPAWN_AGENT_SWARM_DESCRIPTION : "") +
 		SPAWN_SAMPLING_NOTE +
+		AGENT_CONTROLS_NOTE +
 		DELEGATION_PACING_NOTE
 	);
 }
@@ -466,6 +515,8 @@ const AGENTS_SIBLING_FIELDS = new Set([
 	"temperature",
 	"seed",
 	"temperature_range",
+	"max_iterations",
+	"check",
 ]);
 
 /**
@@ -611,6 +662,7 @@ export function toSwarmInput(
 						return {
 							...(member.name ? { name: member.name } : {}),
 							...spawnSamplingFields(readSpawnSampling(member)),
+							...controlFields(member),
 							task: member.instructions
 								? `${member.instructions}\n\n${member.task}`
 								: member.task,
@@ -630,6 +682,22 @@ export function toSwarmInput(
 		// The call's sampler is the swarm's: its seed is offset per worker
 		// there, as it is per agent in a batch.
 		...spawnSamplingFields(readSpawnSampling(input)),
+		// And its cap and check are the round's, under each task's own.
+		...controlFields(input),
+	};
+}
+
+/** `max_iterations` and `check`, read and passed on only when set. */
+export function controlFields(input: unknown): {
+	max_iterations?: number;
+	check?: AgentCheck;
+} {
+	const record = (input ?? {}) as { check?: unknown };
+	const maxIterations = maxIterationsOf(input);
+	const check = readAgentCheck(record.check);
+	return {
+		...(maxIterations !== undefined ? { max_iterations: maxIterations } : {}),
+		...(check ? { check } : {}),
 	};
 }
 
@@ -696,6 +764,12 @@ async function runSpawnBatch(
 	// The call's sampler covers every agent of the call, its seed offset by the
 	// agent's index; an entry's own values, already offset per copy, win.
 	const callSampling = readSpawnSampling(input);
+	// Read once, before any agent starts: a check that will not parse is
+	// refused for the whole call rather than failing every agent it covers.
+	const callControls = controlFields(input);
+	for (const member of members) {
+		controlFields(member);
+	}
 	const results = await Promise.all(
 		members.map(async (member, index): Promise<SpawnAgentMemberOutput> => {
 			const output = await runBatchMember(member, index);
@@ -716,6 +790,8 @@ async function runSpawnBatch(
 		index: number,
 	): Promise<SpawnAgentMemberOutput> {
 		const name = member.name?.trim() || `agent-${index + 1}`;
+		// The entry's cap and check over the call's.
+		const controls = { ...callControls, ...controlFields(member) };
 		const sampling = spawnSamplingFields(
 			mergeSpawnSampling(
 				samplingForCopy(callSampling, index),
@@ -752,6 +828,7 @@ async function runSpawnBatch(
 					{
 						prompt: withKnowledge(input.knowledge, member.task),
 						...sampling,
+						...controls,
 					} as never,
 					memberContext,
 				)) as SpawnAgentOutput;
@@ -763,6 +840,7 @@ async function runSpawnBatch(
 					name,
 					task: member.task,
 					...sampling,
+					...controls,
 					...(input.knowledge ? { knowledge: input.knowledge } : {}),
 					...((member.instructions ?? input.instructions ?? input.systemPrompt)
 						? {
@@ -802,9 +880,25 @@ async function runSpawnedAgent(
 	input: SpawnAgentInput & { task: string },
 	context: AgentToolContext,
 ): Promise<SpawnAgentOutput> {
+	// Refused before anything is opened: a check that cannot parse would fail
+	// every completion attempt of an agent that can never finish.
+	const controls = controlFields(input);
 	const tools = config.createSubAgentTools
 		? await config.createSubAgentTools(input, context)
 		: (config.subAgentTools ?? []);
+	// Where its check runs: under its own command sandbox, which exists only
+	// once its workspace is open -- above. None means the check is not run.
+	const sandbox = controls.check
+		? config.commandSandboxFor?.(context.toolCallId)
+		: undefined;
+	const task = controls.check
+		? `${input.task}\n\n${describeAgentCheck(controls.check, sandbox !== undefined)}`
+		: input.task;
+	const maxIterations = controls.max_iterations ?? config.defaultMaxIterations;
+	// Held past the call when the agent is detached at its cap: its
+	// workspace, stop registration and engine session go when it is done.
+	const lifetime = createDelegatedAgentLifetime();
+	let capOutcome: DelegatedRunOutcome | undefined;
 	// Where it runs is decided before it is built: a node is a whole agents
 	// configuration, so which node took this agent decides which model it
 	// is. Without nodes this is undefined and the agent runs on the single
@@ -881,7 +975,7 @@ async function runSpawnedAgent(
 		});
 		const layout = await buildSubagentLayout({
 			instructions: input.instructions ?? input.systemPrompt ?? "",
-			task: input.task,
+			task,
 			...(input.knowledge ? { knowledge: input.knowledge } : {}),
 			pooled,
 			cwd: provider.getRuntimeConfig().cwd,
@@ -889,8 +983,17 @@ async function runSpawnedAgent(
 		// A random temperature is drawn around the model's own: read it from
 		// the server now if nothing local states it.
 		await primeModelTemperature(sampling, connection);
+		// Fresh per attempt: a restarted agent is judged from its own start.
+		const check = controls.check
+			? createDelegatedAgentCheck({
+					check: controls.check,
+					cwd: sandbox?.cwd ?? provider.getRuntimeConfig().cwd ?? process.cwd(),
+					...(sandbox ? { wrapSpawn: sandbox.wrapSpawn } : {}),
+				})
+			: undefined;
 		const agent = createDelegatedAgent({
 			kind: "subagent",
+			...(check ? { check } : {}),
 			// What the lead's side turn leaves for it while the lead waits.
 			consumePendingUserMessage: async () => cancellation.takeMessage(),
 			prompt: layout.systemPrompt,
@@ -910,7 +1013,7 @@ async function runSpawnedAgent(
 					}
 				: {}),
 			tools,
-			maxIterations: config.defaultMaxIterations,
+			maxIterations,
 			parentAgentId,
 			abortSignal: cancellation.signal,
 			// Its own events still go where they always went; the observer
@@ -957,18 +1060,100 @@ async function runSpawnedAgent(
 				}
 			}
 		}
-		const result =
-			layout.pinnedHead.length > 0
-				? await agent.runWithHead(layout.pinnedHead, layout.task)
-				: await agent.run(layout.task);
+		// At its cap it waits for the lead, work kept; see
+		// `agent-iteration-cap.ts`.
+		const outcome = await runDelegatedWithCap({
+			agent,
+			start: () =>
+				layout.pinnedHead.length > 0
+					? agent.runWithHead(layout.pinnedHead, layout.task)
+					: agent.run(layout.task),
+			name: input.name ?? "agent",
+			...(maxIterations !== undefined ? { maxIterations } : {}),
+			...(context.sessionId ? { sessionId: context.sessionId } : {}),
+			...(cancelId ? { cancelId } : {}),
+			...(cancellation.signal ? { signal: cancellation.signal } : {}),
+			...(context.emitUpdate ? { emitUpdate: context.emitUpdate } : {}),
+			...(check ? { check } : {}),
+			releaseEngineSession: () => releasePolykvAgent(engineSessionId),
+			lifetime,
+			onDetachedFinish: (final) => finishDetached(final),
+		});
+		capOutcome = outcome;
+		if (outcome.state === "awaiting_lead") {
+			return outcome.result;
+		}
 		// A summary for the lead, and the full report kept for it to read: a
 		// round's reports sent whole were cut from the middle.
 		return summarizeForLead({
 			sessionId: context.sessionId,
 			name: input.name ?? "agent",
-			result,
+			result: outcome.result,
 			summarize: (prompt) => agent.continue(prompt),
 		});
+	};
+
+	/** The report, from a result and what the cap and the check made of it. */
+	const buildOutput = (
+		result: AgentResult,
+		outcome: DelegatedRunOutcome | undefined,
+		placed?: { nodeId: string; nodeLabel?: string },
+	): SpawnAgentOutput => ({
+		text:
+			outcome?.state === "awaiting_lead"
+				? `${result.text}${awaitingLeadNote(input.name ?? "agent", started?.subAgentId, outcome)}`
+				: result.text,
+		iterations: result.iterations,
+		finishReason: result.finishReason,
+		usage: {
+			inputTokens: result.usage.inputTokens,
+			outputTokens: result.usage.outputTokens,
+		},
+		// Guarded rather than read straight through: `model` is required on
+		// the type but this is bookkeeping, and a result that arrives without
+		// one is not a reason to fail a sub-agent that has done its work.
+		...(result.model
+			? { model: { id: result.model.id, provider: result.model.provider } }
+			: {}),
+		// Where it ran. Only when it was placed: on a session with no nodes
+		// there is one place to run and naming it is noise.
+		...(placed ? { nodeId: placed.nodeId } : {}),
+		...(placed?.nodeLabel ? { nodeLabel: placed.nodeLabel } : {}),
+		...(realizedSampling ? { sampling: realizedSampling } : {}),
+		...controlReport(started?.subAgentId, outcome),
+	});
+
+	/** The observers' end, for a run that ended or an agent detached at its cap. */
+	const notifyEnd = async (
+		output: SpawnAgentOutput | undefined,
+		agentResult: AgentResult | undefined,
+		error?: unknown,
+	): Promise<void> => {
+		if (!config.onSubAgentEnd || !started) {
+			return;
+		}
+		try {
+			await config.onSubAgentEnd({
+				...started,
+				parentAgentId,
+				input,
+				toolCallId: context.toolCallId,
+				...(output ? { result: output } : {}),
+				...(agentResult ? { agentResult } : {}),
+				...(error !== undefined
+					? {
+							error: error instanceof Error ? error : new Error(String(error)),
+						}
+					: {}),
+			});
+		} catch {
+			// Best-effort observer callback.
+		}
+	};
+
+	/** A detached agent's real end: its work handed back, its observers told. */
+	const finishDetached = async (final: DelegatedRunOutcome): Promise<void> => {
+		await notifyEnd(buildOutput(final.result, final), final.result);
 	};
 
 	try {
@@ -1010,83 +1195,75 @@ async function runSpawnedAgent(
 			},
 			() => restarted(context.emitUpdate, engineSessionId),
 		);
-		const output: SpawnAgentOutput = {
-			text: result.text,
-			iterations: result.iterations,
-			finishReason: result.finishReason,
-			usage: {
-				inputTokens: result.usage.inputTokens,
-				outputTokens: result.usage.outputTokens,
-			},
-			// Guarded rather than read straight through: `model` is required on
-			// the type but this is bookkeeping, and a result that arrives without
-			// one is not a reason to fail a sub-agent that has done its work.
-			...(result.model
-				? { model: { id: result.model.id, provider: result.model.provider } }
-				: {}),
-			// Where it ran. Only when it was placed: on a session with no nodes
-			// there is one place to run and naming it is noise.
-			...(placed ? { nodeId: placed.nodeId } : {}),
-			...(placed?.nodeLabel ? { nodeLabel: placed.nodeLabel } : {}),
-			...(realizedSampling ? { sampling: realizedSampling } : {}),
-		};
-		if (config.onSubAgentEnd && started) {
-			try {
-				await config.onSubAgentEnd({
-					...started,
-					parentAgentId,
-					input,
-					toolCallId: context.toolCallId,
-					result: output,
-					agentResult: result,
-				});
-			} catch {
-				// Best-effort observer callback.
-			}
+		const output = buildOutput(result, capOutcome, placed);
+		// Detached at its cap: its observers -- the hand-back of its workspace
+		// above all -- wait for its real end, or they would dispose what it is
+		// waiting to go on with.
+		if (capOutcome?.state !== "awaiting_lead") {
+			await notifyEnd(output, result);
 		}
 		return output;
 	} catch (error) {
-		if (config.onSubAgentEnd && started) {
-			try {
-				await config.onSubAgentEnd({
-					...started,
-					parentAgentId,
-					input,
-					toolCallId: context.toolCallId,
-					error: error instanceof Error ? error : new Error(String(error)),
-				});
-			} catch {
-				// Best-effort observer callback.
-			}
-		}
+		await notifyEnd(undefined, undefined, error);
 		throw error;
 	} finally {
-		// However the run ended: a stop registration that outlives its agent
-		// is a button that reports success and does nothing.
-		cancellation.release();
-		stopRoomWatch();
-		trouble.dispose();
-		// And its workspace, which a run that never started still opened.
-		if (config.onSubAgentSettled) {
-			try {
-				await config.onSubAgentSettled({
-					toolCallId: context.toolCallId,
-					name: input.name ?? "agent",
-				});
-			} catch {
-				// Best-effort observer callback.
+		// However the run ended -- or, for an agent detached at its cap, once
+		// it does end. A stop registration that outlives its agent is a
+		// button that reports success and does nothing.
+		await lifetime.end(async () => {
+			cancellation.release();
+			stopRoomWatch();
+			trouble.dispose();
+			// And its workspace, which a run that never started still opened.
+			if (config.onSubAgentSettled) {
+				try {
+					await config.onSubAgentSettled({
+						toolCallId: context.toolCallId,
+						name: input.name ?? "agent",
+					});
+				} catch {
+					// Best-effort observer callback.
+				}
 			}
-		}
-		// Its engine session goes back the moment it ends, and its pool owner
-		// with it if it was the last: admission is decided against held
-		// windows, and one held past its work refuses the next agent.
-		const released = await releasePolykvAgent(engineSessionId).catch(
-			() => undefined,
-		);
-		for (const failure of released?.failed ?? []) {
-			config.logger?.log(
-				`[Agents] could not close engine session ${failure.sessionId}: ${failure.error}`,
+			// Its engine session goes back the moment it ends, and its pool
+			// owner with it if it was the last: admission is decided against
+			// held windows, and one held past its work refuses the next agent.
+			const released = await releasePolykvAgent(engineSessionId).catch(
+				() => undefined,
 			);
-		}
+			for (const failure of released?.failed ?? []) {
+				config.logger?.log(
+					`[Agents] could not close engine session ${failure.sessionId}: ${failure.error}`,
+				);
+			}
+		});
 	}
+}
+
+/** The report fields the cap and the check add, only where they say something. */
+export function controlReport(
+	agentId: string | undefined,
+	outcome: DelegatedRunOutcome | undefined,
+): Pick<
+	SpawnAgentOutput,
+	"agentId" | "maxIterations" | "stopReason" | "state" | "oracle"
+> {
+	return {
+		...(agentId ? { agentId } : {}),
+		...(outcome?.maxIterations !== undefined
+			? { maxIterations: outcome.maxIterations }
+			: {}),
+		...(outcome?.stopReason ? { stopReason: outcome.stopReason } : {}),
+		...(outcome?.state ? { state: outcome.state } : {}),
+		...(outcome?.oracle ? { oracle: outcome.oracle } : {}),
+	};
+}
+
+/** What the lead reads under an agent returned while it waits at its cap. */
+export function awaitingLeadNote(
+	name: string,
+	agentId: string | undefined,
+	outcome: DelegatedRunOutcome,
+): string {
+	return `\n\n---\n${name} reached its ${outcome.maxIterations ?? outcome.iterations}-iteration cap and is WAITING for you, its work kept (transcript and file changes). Call resume_agent(agent_id: "${agentId ?? name}", extra_iterations: <n>) to continue it from where it stopped; its report arrives when it finishes. Or stop it (stop_agents) to take the above as its report.`;
 }

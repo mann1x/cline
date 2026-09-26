@@ -24,6 +24,7 @@
  * model will receive.
  */
 import { classifyTurnFault } from "@cline/shared";
+import type { AgentOracleResult } from "./agent-check";
 import {
 	READ_AGENT_REPORT_TOOL_NAME,
 	recordAgentReport,
@@ -42,7 +43,15 @@ export const SPAWN_BATCH_RESULT_BUDGET_CHARS = 28_000;
 /** The longest index line per agent, before the index has to shrink. */
 export const SPAWN_BATCH_INDEX_LINE_CHARS = 120;
 
-export type SpawnBatchStatus = "completed" | "errored" | "cancelled";
+/**
+ * `awaiting_lead`: stopped at its iteration cap and still waiting, work kept --
+ * only when nothing could ask the lead while the round ran.
+ */
+export type SpawnBatchStatus =
+	| "completed"
+	| "errored"
+	| "cancelled"
+	| "awaiting_lead";
 
 /**
  * Whose failure it was. `infra` is the transport, a refusal or the server --
@@ -62,6 +71,12 @@ export interface SpawnBatchMemberResult {
 	usage?: { inputTokens?: number; outputTokens?: number };
 	/** Set when the agent could not be run or threw. */
 	error?: string;
+	/** Its own id, for `resume_agent` and the status tool. */
+	agentId?: string;
+	maxIterations?: number;
+	stopReason?: "iteration_cap";
+	state?: "awaiting_lead";
+	oracle?: AgentOracleResult;
 }
 
 export interface SpawnBatchIndexEntry {
@@ -72,6 +87,15 @@ export interface SpawnBatchIndexEntry {
 	line?: string;
 	/** For an agent that did not complete: why, short. */
 	error?: string;
+	/** Iterations used, and the cap, where there is one. */
+	iterations?: number;
+	maxIterations?: number;
+	/** `iteration_cap` when the cap is what ended it. */
+	stopReason?: "iteration_cap";
+	/** For an agent waiting at its cap: the id to resume it by. */
+	agentId?: string;
+	/** Its check's verdict in a word: `pass`, `fail (exit N)`, `not run: why`. */
+	oracle?: string;
 }
 
 export interface SpawnBatchSummary {
@@ -79,6 +103,8 @@ export interface SpawnBatchSummary {
 	completed: number;
 	errored: number;
 	cancelled: number;
+	/** Stopped at the iteration cap and waiting on you; see `agents`. */
+	awaitingLead: number;
 	/** Per configured type, or per name with its `-<n>` copy suffix dropped. */
 	byType: Record<
 		string,
@@ -96,7 +122,14 @@ export interface SpawnBatchReport {
 	 * too large for that, `name|status` or `name|status|failureClass`.
 	 */
 	agents: Array<SpawnBatchIndexEntry | string>;
-	reports: Array<{ name: string; text: string }>;
+	reports: Array<{
+		name: string;
+		text: string;
+		/** Its check, with the end of the output, when one was set. */
+		oracle?: Pick<AgentOracleResult, "status" | "exitCode" | "output"> & {
+			reason?: string;
+		};
+	}>;
 	notShown?: {
 		names: string[];
 		note: string;
@@ -113,6 +146,9 @@ const INFRA_PATTERNS: readonly RegExp[] = [
 ];
 
 function statusOf(result: SpawnBatchMemberResult): SpawnBatchStatus {
+	if (result.state === "awaiting_lead") {
+		return "awaiting_lead";
+	}
 	if (result.error !== undefined && result.finishReason === undefined) {
 		// The runtime's own guard ends the run with an abort error; nobody
 		// cancelled it, and showing it as cancelled reads like a stop by the
@@ -201,7 +237,42 @@ function indexEntry(
 		...(failureClass ? { failureClass } : {}),
 		...(line ? { line } : {}),
 		...(why ? { error: why } : {}),
+		...controlFieldsOf(result),
 	};
+}
+
+/** The cap and the check, in the index, only where they say something. */
+function controlFieldsOf(
+	result: SpawnBatchMemberResult,
+): Pick<
+	SpawnBatchIndexEntry,
+	"iterations" | "maxIterations" | "stopReason" | "agentId" | "oracle"
+> {
+	const capped =
+		result.maxIterations !== undefined || result.stopReason !== undefined;
+	return {
+		...(capped && result.iterations !== undefined
+			? { iterations: result.iterations }
+			: {}),
+		...(result.maxIterations !== undefined
+			? { maxIterations: result.maxIterations }
+			: {}),
+		...(result.stopReason ? { stopReason: result.stopReason } : {}),
+		...(result.state === "awaiting_lead" && result.agentId
+			? { agentId: result.agentId }
+			: {}),
+		...(result.oracle ? { oracle: oracleWord(result.oracle) } : {}),
+	};
+}
+
+function oracleWord(oracle: AgentOracleResult): string {
+	if (oracle.status === "not_run") {
+		return `not run: ${oracle.reason ?? "no command sandbox"}`;
+	}
+	if (oracle.status === "pass") {
+		return "pass";
+	}
+	return oracle.exitCode === null ? "fail" : `fail (exit ${oracle.exitCode})`;
 }
 
 /** The index entry at its smallest: `name|status[|failureClass]`. */
@@ -211,6 +282,9 @@ function compactIndexEntry(result: SpawnBatchMemberResult): string {
 		result.name,
 		statusOf(result),
 		...(failureClass ? [failureClass] : []),
+		...(result.state === "awaiting_lead" && result.agentId
+			? [result.agentId]
+			: []),
 	].join("|");
 }
 
@@ -247,6 +321,7 @@ export function buildSpawnBatchReport(
 		completed: 0,
 		errored: 0,
 		cancelled: 0,
+		awaitingLead: 0,
 		byType: {},
 		byFailureClass: { infra: 0, task: 0 },
 		totalIterations: 0,
@@ -254,7 +329,8 @@ export function buildSpawnBatchReport(
 	};
 	for (const result of results) {
 		const status = statusOf(result);
-		summary[status] += 1;
+		const counted = status === "awaiting_lead" ? "awaitingLead" : status;
+		summary[counted] += 1;
 		const kind = kindOf(result);
 		summary.byType[kind] ??= {
 			total: 0,
@@ -264,7 +340,9 @@ export function buildSpawnBatchReport(
 		};
 		const byKind = summary.byType[kind];
 		byKind.total += 1;
-		byKind[status] += 1;
+		if (status !== "awaiting_lead") {
+			byKind[status] += 1;
+		}
 		const failureClass = failureClassOf(result);
 		if (failureClass) {
 			summary.byFailureClass[failureClass] += 1;
@@ -314,7 +392,20 @@ export function buildSpawnBatchReport(
 		if (!text) {
 			continue;
 		}
-		const entry = { name: result.name, text };
+		const entry = {
+			name: result.name,
+			text,
+			...(result.oracle
+				? {
+						oracle: {
+							status: result.oracle.status,
+							exitCode: result.oracle.exitCode,
+							output: result.oracle.output,
+							...(result.oracle.reason ? { reason: result.oracle.reason } : {}),
+						},
+					}
+				: {}),
+		};
 		const cost = jsonLength(entry) + 1;
 		if (used + cost + reserve <= budget) {
 			report.reports.push(entry);

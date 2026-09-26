@@ -216,3 +216,92 @@ describe("whose failure it was", () => {
 		).toBeUndefined();
 	});
 });
+
+describe("the iteration cap and the check in a round's result", () => {
+	afterEach(() => clearAgentReports("lead"));
+
+	it("names an agent waiting at its cap, with the id to resume it by", () => {
+		const report = buildSpawnBatchReport(
+			[
+				{
+					name: "fixer-1",
+					agentId: "agent_42",
+					text: "halfway",
+					finishReason: "max_iterations",
+					iterations: 4,
+					maxIterations: 4,
+					stopReason: "iteration_cap",
+					state: "awaiting_lead",
+				},
+				{
+					name: "fixer-2",
+					text: "done",
+					finishReason: "completed",
+					iterations: 2,
+				},
+			],
+			"lead",
+		);
+		expect(report.summary.awaitingLead).toBe(1);
+		expect(report.agents[0]).toMatchObject({
+			name: "fixer-1",
+			status: "awaiting_lead",
+			agentId: "agent_42",
+			iterations: 4,
+			maxIterations: 4,
+		});
+		expect(report.summary.errored).toBe(0);
+	});
+
+	it("says the cap stopped an agent, with its iterations used and max", () => {
+		const report = buildSpawnBatchReport(
+			[
+				{
+					name: "a",
+					text: "partial",
+					finishReason: "max_iterations",
+					iterations: 10,
+					maxIterations: 10,
+					stopReason: "iteration_cap",
+				},
+			],
+			"lead",
+		);
+		expect(report.agents[0]).toMatchObject({
+			status: "errored",
+			failureClass: "task",
+			stopReason: "iteration_cap",
+			iterations: 10,
+			maxIterations: 10,
+		});
+	});
+
+	it("carries each agent's check verdict: status in the index, output with its report", () => {
+		const oracle = {
+			status: "fail" as const,
+			command: "node t.js",
+			expect: "ok",
+			must: "match" as const,
+			exitCode: 1,
+			output: "SyntaxError at 12",
+			runs: 3,
+		};
+		const report = buildSpawnBatchReport(
+			[
+				{
+					name: "a",
+					text: "done",
+					finishReason: "completed",
+					iterations: 2,
+					oracle,
+				},
+			],
+			"lead",
+		);
+		expect(report.agents[0]).toMatchObject({ oracle: "fail (exit 1)" });
+		expect(report.reports[0]).toMatchObject({
+			name: "a",
+			oracle: { status: "fail", exitCode: 1, output: "SyntaxError at 12" },
+		});
+	});
+});

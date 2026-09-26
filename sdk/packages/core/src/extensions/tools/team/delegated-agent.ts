@@ -12,6 +12,7 @@ import type {
 import { mergeAgentHooks } from "../../../hooks/hook-file-hooks";
 import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-orchestrator";
 import type { WorkerStruggleSupervisor } from "../../../runtime/safety/worker-struggle";
+import type { DelegatedAgentCheck } from "./agent-check";
 import type { AgentNodePlacement } from "./agent-node-placement";
 import type { AgentSlotGate, AgentSlotGateRegistry } from "./agent-slot-gate";
 import {
@@ -273,6 +274,13 @@ export interface BuildDelegatedAgentConfigOptions {
 	 * build with a sampler, so a re-placement reports its own.
 	 */
 	onSampling?: (realized: RealizedSpawnSampling) => void;
+	/**
+	 * The lead's check on this agent (`agent-check.ts`), judged at each of its
+	 * completion attempts. Wired into the runtime's completion boundary -- the
+	 * hook the change protocol's approved check uses -- so a failing check
+	 * keeps the agent in the same run, within its iteration budget.
+	 */
+	check?: DelegatedAgentCheck;
 }
 
 /** OR two optional abort signals, without an `AbortSignal.any` of one. */
@@ -472,6 +480,18 @@ export function buildDelegatedAgentConfig(
 			role: options.role,
 			consumePendingUserMessage: options.consumePendingUserMessage,
 			recoverTurnFault,
+			...(options.check
+				? {
+						completionPolicy: {
+							onCompletionAttempt: (context: {
+								text?: string;
+								forced?: boolean;
+							}) =>
+								options.check?.onCompletionAttempt(context) ??
+								Promise.resolve(undefined),
+						},
+					}
+				: {}),
 		},
 		realized,
 	);
@@ -487,3 +507,30 @@ export function createDelegatedAgent(
 	}
 	return session;
 }
+
+// The controls a lead has over a delegated agent at this layer: the iteration
+// cap's suspension (`awaiting_lead`) and its resume, and the lead's check.
+// `resume_agent` and the status tool are built on these.
+export {
+	type AgentCheck,
+	type AgentOracleResult,
+	createDelegatedAgentCheck,
+	type DelegatedAgentCheck,
+	describeAgentCheck,
+	readAgentCheck,
+} from "./agent-check";
+export {
+	type AwaitingLeadEvent,
+	type AwaitingLeadView,
+	createDelegatedAgentLifetime,
+	type DelegatedAgentLifetime,
+	type DelegatedRunOutcome,
+	type DelegatedStopReason,
+	listAwaitingLead,
+	onAwaitingLead,
+	RESUME_AGENT_TOOL_NAME,
+	type ResumeSuspendedResult,
+	resumeSuspended,
+	runDelegatedWithCap,
+	stopSuspended,
+} from "./agent-iteration-cap";

@@ -152,6 +152,57 @@ describe("swarm workers on private workspaces", () => {
 		tasks: names.map((name) => ({ name, task: `task for ${name}` })),
 	});
 
+	// The lead's check runs where the worker's shell runs: under its launcher,
+	// over its overlay. A fake launcher that cannot start proves the check went
+	// through it -- `echo ok` on the host would have passed.
+	it("runs a worker's check under the worker's own launcher, with its cap", async () => {
+		const verdicts: unknown[] = [];
+		script = async () => {
+			const options = built.at(-1) as unknown as {
+				check?: { onCompletionAttempt(c: object): Promise<unknown> };
+			};
+			verdicts.push(await options.check?.onCompletionAttempt({}));
+			return "done";
+		};
+		const output = (await swarm({ launcher: true, commands: true }).execute(
+			{
+				systemPrompt: "s",
+				max_iterations: 5,
+				check: { command: "echo ok", expect: "ok" },
+				tasks: [{ name: "w1", task: "t" }],
+			},
+			{ agentId: "lead", toolCallId: "call-1" },
+		)) as { results?: Array<Record<string, unknown>> };
+		expect(
+			(built[0] as unknown as { maxIterations?: number }).maxIterations,
+		).toBe(5);
+		expect(String(verdicts[0])).toContain("could not be started");
+		expect(output.results?.[0]).toMatchObject({
+			oracle: { status: "fail", exitCode: null },
+		});
+	});
+
+	it("reports a worker's check as not run when it has no command sandbox", async () => {
+		script = async () => {
+			const options = built.at(-1) as unknown as {
+				check?: { onCompletionAttempt(c: object): Promise<unknown> };
+			};
+			await options.check?.onCompletionAttempt({});
+			return "done";
+		};
+		const output = (await swarm().execute(
+			{
+				systemPrompt: "s",
+				check: { command: "echo ok", expect: "ok" },
+				tasks: [{ name: "w1", task: "t" }],
+			},
+			{ agentId: "lead", toolCallId: "call-1" },
+		)) as { results?: Array<Record<string, unknown>> };
+		expect(output.results?.[0]).toMatchObject({
+			oracle: { status: "not_run", reason: "no command sandbox" },
+		});
+	});
+
 	it("writes into the worker's overlay and hands it back as the worker's revision", async () => {
 		script = async (tools) => {
 			await write(tools, path.join(ws, "a.txt"), "FROM-W1");

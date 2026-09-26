@@ -51,6 +51,17 @@ import {
 	renderWorkDigest,
 	type WorkDigest,
 } from "../../context/work-digest";
+import {
+	type AgentCheck,
+	type AgentOracleResult,
+	readAgentCheck,
+} from "./agent-check";
+import {
+	AGENT_CONTROLS_NOTE,
+	AgentControlFields,
+	maxIterationsOf,
+} from "./agent-controls";
+import type { DelegatedStopReason } from "./agent-iteration-cap";
 import type { HandedRevision } from "./delegated-sandboxes";
 import {
 	mergeSpawnSampling,
@@ -104,6 +115,12 @@ export const SpawnSwarmInputSchema = z.object({
 				temperature_range: SpawnSamplingFields.temperature_range.describe(
 					"Percent this worker's temperature is randomized by, over the swarm's `temperature_range`.",
 				),
+				max_iterations: AgentControlFields.max_iterations.describe(
+					"This worker's iteration cap, over the swarm's `max_iterations`.",
+				),
+				check: AgentControlFields.check.describe(
+					"This worker's check, over the swarm's `check`.",
+				),
 			}),
 		)
 		.optional()
@@ -121,6 +138,12 @@ export const SpawnSwarmInputSchema = z.object({
 		'Sampling seed for the workers: worker i (from 0) gets seed + i, so they do not sample identically; "random" gives each its own. A task\'s own `seed` is used as given.',
 	),
 	temperature_range: SpawnSamplingFields.temperature_range,
+	max_iterations: AgentControlFields.max_iterations.describe(
+		"Every worker's iteration cap, unless its task sets its own.",
+	),
+	check: AgentControlFields.check.describe(
+		"Every worker's check, unless its task sets its own.",
+	),
 });
 
 export type SpawnSwarmInput = z.infer<typeof SpawnSwarmInputSchema>;
@@ -166,6 +189,17 @@ export interface SwarmMemberReport {
 	nodeLabel?: string;
 	/** The seed and temperature it ran with, as drawn, when the call set any. */
 	sampling?: RealizedSpawnSampling;
+	/** Iterations used, and its cap where there is one. */
+	iterations?: number;
+	maxIterations?: number;
+	/** `iteration_cap` when the cap is what ended it. */
+	stopReason?: DelegatedStopReason;
+	/** `awaiting_lead`: waiting at its cap, work kept; see `resume_agent`. */
+	state?: "awaiting_lead";
+	/** Its own id, for `resume_agent` and the status tool. */
+	agentId?: string;
+	/** The lead's check, when one was set. */
+	oracle?: AgentOracleResult;
 }
 
 /** A worker's result, with where it ran when the runner knows. */
@@ -179,6 +213,12 @@ export type SwarmWorkerResult = AgentResult & {
 	 * sets the same field on the error a failed worker throws.
 	 */
 	handback?: readonly HandedRevision[];
+	/** Its cap, and what the cap and the check made of its run. */
+	maxIterations?: number;
+	stopReason?: DelegatedStopReason;
+	state?: "awaiting_lead";
+	agentId?: string;
+	oracle?: AgentOracleResult;
 };
 
 /** The revisions a result or a thrown error carries, if it ran sandboxed. */
@@ -252,6 +292,10 @@ export interface SwarmWorkerRequest {
 	 * already offset by the worker's index. See `spawn-sampling.ts`.
 	 */
 	sampling?: SpawnSampling;
+	/** Its iteration cap: the task's, else the swarm's; absent is the default. */
+	maxIterations?: number;
+	/** Its check: the task's, else the swarm's. */
+	check?: AgentCheck;
 }
 
 export interface SpawnSwarmToolConfig {
@@ -348,6 +392,49 @@ function digestOf(name: string, result: AgentResult): WorkDigest {
 	return { agent: name, error: `returned nothing (${result.finishReason})` };
 }
 
+/**
+ * A worker's digest, with what its cap and its check said. The reducer and
+ * the fold keep `notes`, so the lead reads it in the merged report -- and
+ * a worker waiting at its cap is named with the id to resume it by.
+ */
+function withControls(
+	digest: WorkDigest,
+	result: SwarmWorkerResult,
+): WorkDigest {
+	const lines: string[] = [];
+	const cap = result.maxIterations ?? result.iterations;
+	if (result.state === "awaiting_lead") {
+		lines.push(
+			`WAITING at its ${cap}-iteration cap, work kept: resume_agent(agent_id: "${result.agentId ?? digest.agent ?? ""}", extra_iterations: <n>) continues it.`,
+		);
+	} else if (result.stopReason === "iteration_cap") {
+		lines.push(
+			`Stopped at its ${cap}-iteration cap; the above is what it got to.`,
+		);
+	}
+	const oracle = result.oracle;
+	if (oracle) {
+		lines.push(
+			oracle.status === "not_run"
+				? `Check \`${oracle.command}\`: not run (${oracle.reason ?? "no command sandbox"}).`
+				: `Check \`${oracle.command}\`: ${oracle.status.toUpperCase()}${
+						oracle.exitCode === null ? "" : ` (exit ${oracle.exitCode})`
+					}${
+						oracle.status === "fail" && oracle.output
+							? `: ${oracle.output.slice(-300)}`
+							: ""
+					}`,
+		);
+	}
+	if (lines.length === 0) {
+		return digest;
+	}
+	return {
+		...digest,
+		notes: [digest.notes, ...lines].filter(Boolean).join("\n"),
+	};
+}
+
 /** One sandboxed worker's hand-back. */
 interface SwarmHandback {
 	name: string;
@@ -397,16 +484,23 @@ function requestedWorkers(input: SpawnSwarmInput): Array<{
 	systemPrompt?: string;
 	tools?: string[];
 	sampling?: SpawnSampling;
+	maxIterations?: number;
+	check?: AgentCheck;
 }> {
+	// The round's cap and check, under each task's own. Read up front so a
+	// check that cannot parse refuses the round before any worker starts.
+	const round = workerControls(input);
 	if (input.tasks && input.tasks.length > 0) {
 		return input.tasks.map((entry, index) => {
 			const sampling = workerSampling(input, index, entry);
+			const controls = { ...round, ...workerControls(entry) };
 			return {
 				name: entry.name?.trim() || `worker-${index + 1}`,
 				task: entry.task,
 				...(entry.systemPrompt ? { systemPrompt: entry.systemPrompt } : {}),
 				...(entry.tools ? { tools: entry.tools } : {}),
 				...(sampling ? { sampling } : {}),
+				...controls,
 			};
 		});
 	}
@@ -418,7 +512,22 @@ function requestedWorkers(input: SpawnSwarmInput): Array<{
 	return Array.from({ length: Math.max(1, count) }, (_entry, index) => ({
 		name: `worker-${index + 1}`,
 		task,
+		...round,
 	}));
+}
+
+/** A task's (or the round's) `max_iterations` and `check`, when set. */
+function workerControls(entry: unknown): {
+	maxIterations?: number;
+	check?: AgentCheck;
+} {
+	const record = (entry ?? {}) as { check?: unknown };
+	const maxIterations = maxIterationsOf(entry);
+	const check = readAgentCheck(record.check);
+	return {
+		...(maxIterations !== undefined ? { maxIterations } : {}),
+		...(check ? { check } : {}),
+	};
 }
 
 /**
@@ -497,6 +606,7 @@ export function createSpawnSwarmTool(
 			"Workers start as the server admits them and the rest wait their turn, so a long task list or `max` overloads nothing; the round just takes longer. " +
 			"A swarm is one round: its workers are made for it, run once, and are gone when the digest comes back — there is nobody left to send a second task to. Work that is a known list of jobs, each wanting a worker you keep talking to, is a team instead. " +
 			SPAWN_SAMPLING_NOTE +
+			AGENT_CONTROLS_NOTE +
 			"Output: `{digest, workers, pooled, usage}`. `digest` is the whole result — the workers' own transcripts are discarded, so nothing they saw reaches you except through it.",
 		inputSchema: zodToJsonSchema(SpawnSwarmInputSchema),
 		execute: async (input, context?: AgentToolContext) => {
@@ -599,15 +709,24 @@ export function createSpawnSwarmTool(
 						systemPrompt: entry.systemPrompt ?? input.systemPrompt,
 						...(entry.tools ? { tools: entry.tools } : {}),
 						...(entry.sampling ? { sampling: entry.sampling } : {}),
+						...(entry.maxIterations !== undefined
+							? { maxIterations: entry.maxIterations }
+							: {}),
+						...(entry.check ? { check: entry.check } : {}),
 					}))
 				: Array.from({ length: queueLength }, (_entry, index) => {
 						const sampling = workerSampling(input, index);
+						const first = requested[0];
 						return {
 							member: index,
 							name: `worker-${index + 1}`,
-							task: requested[0]?.task ?? "",
+							task: first?.task ?? "",
 							systemPrompt: input.systemPrompt,
 							...(sampling ? { sampling } : {}),
+							...(first?.maxIterations !== undefined
+								? { maxIterations: first.maxIterations }
+								: {}),
+							...(first?.check ? { check: first.check } : {}),
 						};
 					});
 			const reports: SwarmMemberReport[] = [];
@@ -682,7 +801,7 @@ export function createSpawnSwarmTool(
 							}
 							inputTokens += result.usage?.inputTokens ?? 0;
 							outputTokens += result.usage?.outputTokens ?? 0;
-							results.push(digestOf(worker.name, result));
+							results.push(withControls(digestOf(worker.name, result), result));
 							const failed =
 								result.finishReason === "error" ||
 								result.finishReason === "aborted";
@@ -703,6 +822,14 @@ export function createSpawnSwarmTool(
 									: {}),
 								...(result.placed ? result.placed : {}),
 								...(result.sampling ? { sampling: result.sampling } : {}),
+								iterations: result.iterations,
+								...(result.maxIterations !== undefined
+									? { maxIterations: result.maxIterations }
+									: {}),
+								...(result.stopReason ? { stopReason: result.stopReason } : {}),
+								...(result.state ? { state: result.state } : {}),
+								...(result.agentId ? { agentId: result.agentId } : {}),
+								...(result.oracle ? { oracle: result.oracle } : {}),
 								...(failed
 									? {
 											error:

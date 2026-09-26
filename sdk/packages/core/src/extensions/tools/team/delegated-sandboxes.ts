@@ -68,6 +68,8 @@ export interface DelegatedSandboxes {
 	/** {@link open} for a caller that cannot await (a teammate's toolset). */
 	openSync(key: string): DelegatedWorkspace;
 	has(key: string): boolean;
+	/** The open workspace for `key`, if any: what the agent's check runs in. */
+	get(key: string): DelegatedWorkspace | undefined;
 	/**
 	 * Fold what the agent changed since its last hand-back into the lead's
 	 * revision log, attributed to `agentName`. The workspace stays open.
@@ -254,6 +256,7 @@ export function createDelegatedSandboxes(
 			return register(key, setup).workspace;
 		},
 		has: (key) => entries.has(key),
+		get: (key) => entries.get(key)?.workspace,
 		handBack(key, agentName) {
 			const entry = entries.get(key);
 			if (!entry) {
@@ -275,6 +278,40 @@ export function createDelegatedSandboxes(
 			]);
 		},
 	};
+}
+
+/**
+ * The launcher an agent's commands run under, when it may run any: the same
+ * `wrapSpawn` its `run_commands` was built with. `undefined` -- no workspace,
+ * no launcher on this platform, or agent commands turned off -- means nothing
+ * may be run for the agent at all; never run it on the host instead.
+ */
+export function commandLauncherOf(
+	workspace: DelegatedWorkspace | undefined,
+): NonNullable<DelegatedWorkspace["executorOptions"]["bash"]>["wrapSpawn"] {
+	if (!workspace?.allowCommands) {
+		return undefined;
+	}
+	return workspace.executorOptions.bash?.wrapSpawn;
+}
+
+/**
+ * The launcher and root an agent's check runs under, from its open workspace
+ * (keyed as it was opened); `undefined` when it may run no command.
+ */
+export function commandSandboxOf(
+	sandboxes: DelegatedSandboxes | undefined,
+	key: string | undefined,
+):
+	| {
+			wrapSpawn: NonNullable<ReturnType<typeof commandLauncherOf>>;
+			cwd: string;
+	  }
+	| undefined {
+	const wrapSpawn = key ? commandLauncherOf(sandboxes?.get(key)) : undefined;
+	return wrapSpawn && sandboxes
+		? { wrapSpawn, cwd: sandboxes.workspaceRoot }
+		: undefined;
 }
 
 function fingerprint(body: Buffer | undefined): string {

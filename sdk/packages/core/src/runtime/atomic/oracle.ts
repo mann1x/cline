@@ -1,10 +1,18 @@
-import { execFile } from "node:child_process";
+import { type ExecFileOptions, execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { checkPage } from "./page-check";
 
-const run = promisify(execFile);
+// Resolved when an oracle runs, not when this module loads: the delegated
+// agents' check imports this runner, and a module-load `promisify(execFile)`
+// would reach into `node:child_process` for every importer of the tool set.
+const run = (
+	command: string,
+	args: readonly string[],
+	options: ExecFileOptions,
+): Promise<{ stdout: string; stderr: string }> =>
+	promisify(execFile)(command, args, { ...options, encoding: "utf8" });
 
 /**
  * The thing that decides whether a transaction is kept.
@@ -44,7 +52,33 @@ export interface CommandOracle extends OracleCommon {
 	 * together, in this process — never through a shell.
 	 */
 	expect?: string;
+	/**
+	 * Whether the output must match `expect` (the default) or must not.
+	 *
+	 * `not_match` is for the check that names its failure rather than its
+	 * success -- a linter's `ERROR`, a test runner's `FAIL` -- where "it exited
+	 * zero and did not say that" is the pass. The exit status still has to be
+	 * zero either way.
+	 */
+	must?: "match" | "not_match";
 }
+
+/**
+ * How a command is started somewhere other than straight on the host: the
+ * shape of `ShellExecutorOptions.wrapSpawn`, which is how a delegated agent's
+ * shell is rooted at the sandbox launcher.
+ */
+export type OracleSpawnWrapper = (spec: {
+	executable: string;
+	args: string[];
+	cwd: string;
+	env: Record<string, string>;
+}) => {
+	executable: string;
+	args: string[];
+	cwd: string;
+	env: Record<string, string>;
+};
 
 /**
  * A check the harness runs itself, with no external program involved.
@@ -200,7 +234,7 @@ export interface OracleSources {
 	expect?: string;
 }
 
-function shellOracle(
+export function shellOracle(
 	line: string,
 	cwd: string,
 	reason: string,
@@ -419,18 +453,40 @@ async function runPageOracle(oracle: PageOracle): Promise<OracleVerdict> {
  */
 export async function runOracle(
 	oracle: Oracle,
-	options: { timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
+	options: {
+		timeoutMs?: number;
+		env?: NodeJS.ProcessEnv;
+		/**
+		 * Start the command through this instead of directly: a delegated
+		 * agent's check runs under the same launcher as its shell, so it sees
+		 * the agent's own files. Absent is the host, as before.
+		 */
+		wrapSpawn?: OracleSpawnWrapper;
+	} = {},
 ): Promise<OracleVerdict> {
 	if (isPageOracle(oracle)) {
 		return runPageOracle(oracle);
 	}
 	const timeoutMs = options.timeoutMs ?? DEFAULT_ORACLE_TIMEOUT_MS;
+	const env = options.env ?? process.env;
+	const spec = options.wrapSpawn
+		? options.wrapSpawn({
+				executable: oracle.command,
+				args: oracle.args,
+				cwd: oracle.cwd,
+				env: Object.fromEntries(
+					Object.entries(env).filter(
+						(entry): entry is [string, string] => entry[1] !== undefined,
+					),
+				),
+			})
+		: { executable: oracle.command, args: oracle.args, cwd: oracle.cwd, env };
 	try {
-		const { stdout, stderr } = await run(oracle.command, oracle.args, {
-			cwd: oracle.cwd,
+		const { stdout, stderr } = await run(spec.executable, spec.args, {
+			cwd: spec.cwd,
 			timeout: timeoutMs,
 			maxBuffer: 16 * 1024 * 1024,
-			env: options.env ?? process.env,
+			env: spec.env,
 		});
 		const combined = `${stdout}${stderr}`;
 		const matched = outputSaysItPassed(oracle, combined);
@@ -439,7 +495,11 @@ export async function runOracle(
 			exitCode: 0,
 			output: matched
 				? truncate(combined)
-				: `${truncate(combined)}\n\nThe check ran and finished cleanly, but its output does not match /${oracle.expect}/, which is what this task counts as working.`,
+				: `${truncate(combined)}\n\n${
+						oracle.must === "not_match"
+							? `The check ran and finished cleanly, but its output matches /${oracle.expect}/, and it must not match /${oracle.expect}/ for this task to count as working.`
+							: `The check ran and finished cleanly, but its output does not match /${oracle.expect}/, which is what this task counts as working.`
+					}`,
 			timedOut: false,
 			...(matched ? {} : { unmatched: true }),
 		};
@@ -481,7 +541,8 @@ function outputSaysItPassed(oracle: CommandOracle, output: string): boolean {
 		return true;
 	}
 	try {
-		return new RegExp(oracle.expect).test(output);
+		const found = new RegExp(oracle.expect).test(output);
+		return oracle.must === "not_match" ? !found : found;
 	} catch {
 		return false;
 	}

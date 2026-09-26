@@ -1,4 +1,35 @@
 export {
+	type AgentCheck,
+	AgentCheckSchema,
+	type AgentOracleResult,
+	createDelegatedAgentCheck,
+	type DelegatedAgentCheck,
+	describeAgentCheck,
+	readAgentCheck,
+} from "./agent-check";
+export {
+	AGENT_CONTROLS_NOTE,
+	AgentControlFields,
+	maxIterationsOf,
+	readMaxIterations,
+} from "./agent-controls";
+export {
+	type AwaitingLeadEvent,
+	type AwaitingLeadView,
+	createDelegatedAgentLifetime,
+	type DelegatedAgentLifetime,
+	type DelegatedRunOutcome,
+	type DelegatedStopReason,
+	describeAwaitingLead,
+	listAwaitingLead,
+	onAwaitingLead,
+	RESUME_AGENT_TOOL_NAME,
+	type ResumeSuspendedResult,
+	resumeSuspended,
+	runDelegatedWithCap,
+	stopSuspended,
+} from "./agent-iteration-cap";
+export {
 	type AgentNodePlacement,
 	type AgentNodeRuntimeConfig,
 	createAgentNodePlacement,

@@ -108,6 +108,7 @@ describe("DefaultRuntimeBuilder configured agent execution", () => {
 			iterations: 2,
 			finishReason: "completed",
 			usage: { inputTokens: 13, outputTokens: 8 },
+			agentId: "configured-sub-agent",
 		});
 	});
 
@@ -203,6 +204,9 @@ Write a concise commit message.`,
 			iterations: 2,
 			finishReason: "completed",
 			usage: { inputTokens: 13, outputTokens: 8 },
+			agentId: "configured-sub-agent",
+			// The agent file's cap, reported with the iterations used.
+			maxIterations: 3,
 		});
 		expect(runMock).toHaveBeenCalledWith("review this change");
 		expect(onSubAgentStart).toHaveBeenCalledWith(
@@ -333,6 +337,7 @@ You are a reviewer.`,
 			iterations: 2,
 			finishReason: "completed",
 			usage: { inputTokens: 13, outputTokens: 8 },
+			agentId: "configured-sub-agent",
 		});
 		const delegatedConfig = agentConstructorSpy.mock.calls.at(-1)?.[0] as
 			| AgentConfig
@@ -341,6 +346,60 @@ You are a reviewer.`,
 			"skills",
 		);
 
+		await runtime.shutdown("test");
+	});
+
+	// The lead's per-agent controls reach a configured agent too: its cap over
+	// the file's, and its check stated in its task.
+	it("runs a configured agent with the lead's cap over its file's, and states its check", async () => {
+		const { DefaultRuntimeBuilder } = await import("./runtime-builder");
+		const workspaceRoot = mkdtempSync(join(tmpdir(), "cline-agent-cap-"));
+		tempDirs.push(workspaceRoot);
+		const agentsDir = join(workspaceRoot, ".cline", "agents");
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(
+			join(agentsDir, "fixer.yml"),
+			`---
+name: fixer
+description: Fixes code
+maxIterations: 4
+---
+You fix code.`,
+			"utf8",
+		);
+		runMock.mockResolvedValue({
+			text: "fixed",
+			iterations: 3,
+			finishReason: "completed",
+			usage: { inputTokens: 1, outputTokens: 1 },
+		});
+		const runtime = await new DefaultRuntimeBuilder().build({
+			config: makeBaseConfig({ cwd: workspaceRoot, workspaceRoot }),
+			configExtensions: [],
+		});
+		const fixer = runtime.tools.find((tool) => tool.name === "subagent_fixer");
+		if (!fixer) {
+			throw new Error("Expected configured fixer tool.");
+		}
+		const output = (await fixer.execute(
+			{
+				prompt: "fix the braces",
+				max_iterations: 25,
+				check: { command: "node check.js", expect: "^OK" },
+			},
+			{ agentId: "parent-agent", iteration: 1 },
+		)) as { maxIterations?: number };
+		const delegatedConfig = agentConstructorSpy.mock.calls.at(-1)?.[0] as
+			| AgentConfig
+			| undefined;
+		expect(delegatedConfig?.maxIterations).toBe(25);
+		expect(output.maxIterations).toBe(25);
+		const prompt = runMock.mock.calls.at(-1)?.[0] as string;
+		expect(prompt).toContain("fix the braces");
+		expect(prompt).toContain("`node check.js`");
+		expect(delegatedConfig?.completionPolicy?.onCompletionAttempt).toBeTypeOf(
+			"function",
+		);
 		await runtime.shutdown("test");
 	});
 });

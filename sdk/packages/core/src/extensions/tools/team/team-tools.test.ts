@@ -873,6 +873,74 @@ describe("createAgentTeamsTools runtime behavior", () => {
 		expect(result.message).toContain("queued as run_00001");
 	});
 
+	// A teammate is durable: at its cap its conversation stays, so going on is
+	// another task with continueConversation. The lead is told exactly that.
+	it("runs a task under the lead's cap, and says how to go on when the cap stops it", async () => {
+		const routeToTeammate = vi.fn(async () => ({
+			text: "got halfway",
+			iterations: 6,
+			finishReason: "max_iterations",
+		}));
+		const runtime = {
+			routeToTeammate,
+			getMemberRole: vi.fn(() => "lead"),
+		} as unknown as AgentTeamsRuntime;
+		const tools = createAgentTeamsTools({
+			runtime,
+			requesterId: "lead",
+			teammateConfigProvider: makeTeammateConfigProvider(),
+		});
+		const runTask = tools.find((tool) => tool.name === "team_run_task");
+		if (!runTask) {
+			throw new Error("Expected team_run_task tool to be defined");
+		}
+		const result = (await runTask.execute(
+			{
+				agentId: "fixer",
+				task: "fix it",
+				runMode: "sync",
+				max_iterations: "6",
+			},
+			{ agentId: "lead", conversationId: "conv-1", iteration: 1 },
+		)) as Record<string, unknown>;
+		expect(routeToTeammate).toHaveBeenCalledWith(
+			"fixer",
+			"fix it",
+			expect.objectContaining({ maxIterations: 6 }),
+		);
+		expect(result).toMatchObject({
+			text: "got halfway",
+			iterations: 6,
+			maxIterations: 6,
+			finishReason: "max_iterations",
+			stopReason: "iteration_cap",
+		});
+		expect(String(result.message)).toContain("continueConversation");
+	});
+
+	it("passes the lead's cap to an async run", async () => {
+		const startTeammateRun = vi.fn(() => ({ id: "run_1" }));
+		const runtime = {
+			startTeammateRun,
+			getMemberRole: vi.fn(() => "lead"),
+		} as unknown as AgentTeamsRuntime;
+		const tools = createAgentTeamsTools({
+			runtime,
+			requesterId: "lead",
+			teammateConfigProvider: makeTeammateConfigProvider(),
+		});
+		const runTask = tools.find((tool) => tool.name === "team_run_task");
+		await runTask?.execute(
+			{ agentId: "fixer", task: "fix it", runMode: "async", max_iterations: 9 },
+			{ agentId: "lead", conversationId: "conv-1", iteration: 1 },
+		);
+		expect(startTeammateRun).toHaveBeenCalledWith(
+			"fixer",
+			"fix it",
+			expect.objectContaining({ maxIterations: 9 }),
+		);
+	});
+
 	it("allows concurrent sync team_run_task calls to different agents", async () => {
 		let resolveRoute1!: (value: { text: string; iterations: number }) => void;
 		let resolveRoute2!: (value: { text: string; iterations: number }) => void;

@@ -54,6 +54,11 @@ export function onLeadNudge(
 	};
 }
 
+/** Whether a host is listening for this session's lead: a side turn or a queue. */
+export function leadCanBeReached(sessionId: string): boolean {
+	return LEAD_NUDGE_LISTENERS.has(sessionId);
+}
+
 /** Put a message in front of the lead. `false` when no host is listening. */
 export function sendLeadNudge(sessionId: string, text: string): boolean {
 	const listener = LEAD_NUDGE_LISTENERS.get(sessionId);
