@@ -80,7 +80,10 @@ import {
 	handbackNote,
 } from "../../extensions/tools/team/delegated-sandboxes";
 import { delegatedAgentTools } from "../../extensions/tools/team/delegated-tools";
-import { createLeadAgentTools } from "../../extensions/tools/team/lead-agent-tools";
+import {
+	createLeadAgentTools,
+	TEAMMATE_CONTROL_TOOL_NAMES,
+} from "../../extensions/tools/team/lead-agent-tools";
 import {
 	isTeamStateChange,
 	type TeammateWorkspaceHooks,
@@ -1222,6 +1225,9 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 				teamRuntime = new AgentTeamsRuntime({
 					teamName: effectiveTeamName,
 					leadAgentId: config.sessionId || "lead",
+					// A teammate's task is registered under the lead's session, for
+					// the lead's controls and its row's stop.
+					sessionId: config.sessionId,
 					// The team runtime has always had a bound of its own; until now it
 					// was a hardcoded 2 that no caller ever set, which is the wrong
 					// number on a one-slot server and on a ten-slot one alike. `0` is
@@ -1457,12 +1463,19 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 
 		// What the agents are doing, and why: offered wherever the lead can
 		// delegate at all -- spawn_agent, a configured agent, or a team. The
-		// controls act on rounds, which teammates are not part of.
+		// controls act on rounds and on a teammate's running task; a team
+		// alone opens no rounds, so it gets only the ones that reach a task.
 		const opensRounds =
 			configuredAgentTools.length > 0 ||
 			tools.some((tool) => tool.name === "spawn_agent");
 		if (config.sessionId && opensRounds) {
 			tools.push(...createLeadAgentTools({ sessionId: config.sessionId }));
+		} else if (config.sessionId && normalized.enableAgentTeams) {
+			tools.push(
+				...createLeadAgentTools({ sessionId: config.sessionId }).filter(
+					(tool) => TEAMMATE_CONTROL_TOOL_NAMES.has(tool.name),
+				),
+			);
 		}
 		if (config.sessionId && (normalized.enableAgentTeams || opensRounds)) {
 			tools.push(

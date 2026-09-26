@@ -76,4 +76,28 @@ describe("the Teammates setting", () => {
 			runtime.tools.filter((tool) => tool.name === "read_agent_report"),
 		).toHaveLength(1);
 	});
+
+	// The lead's controls reach a teammate's task. With no rounds to open,
+	// the round-only ones (resume, retry, await) are not offered.
+	it("on, spawn_agent off: the controls that reach a teammate are offered", async () => {
+		const runtime = await new DefaultRuntimeBuilder().build({
+			config: {
+				...config(true),
+				enableSpawnAgent: false,
+				sessionId: "lead-session",
+			},
+		});
+		const names = runtime.tools.map((tool) => tool.name);
+		for (const name of [
+			"stop_agents",
+			"restart_agent",
+			"message_agents",
+			"requeue_agent",
+		]) {
+			expect(names).toContain(name);
+		}
+		for (const name of ["resume_agent", "retry_failed", "await_agents"]) {
+			expect(names).not.toContain(name);
+		}
+	});
 });

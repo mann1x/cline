@@ -15,8 +15,9 @@
  * Every control takes an agent's id (`r3-2`) or its name, and every one works
  * for every delegated path that opens a round -- `spawn_agent` single and
  * batch, configured agents, swarm workers -- because they all go through the
- * round registry and the stop registry. Teammates are not rounds: they are
- * stopped and messaged through the `team_*` tools.
+ * round registry and the stop registry. A teammate is not a round, but its
+ * running task is in the stop registry under the teammate's name: stop,
+ * restart, message and requeue reach it there.
  *
  * None of these routes an agent by hand. Infrastructure trouble is the
  * harness's to retry (ruling 1); these are for an agent whose *work* the lead
@@ -54,6 +55,17 @@ export const LEAD_CONTROL_TOOL_NAMES: ReadonlySet<string> = new Set([
 	MESSAGE_AGENTS_TOOL_NAME,
 	STOP_AGENTS_TOOL_NAME,
 	AWAIT_AGENTS_TOOL_NAME,
+]);
+
+/**
+ * The controls that reach a teammate's running task. The rest act on rounds,
+ * which a team alone never opens.
+ */
+export const TEAMMATE_CONTROL_TOOL_NAMES: ReadonlySet<string> = new Set([
+	REQUEUE_AGENT_TOOL_NAME,
+	RESTART_AGENT_TOOL_NAME,
+	MESSAGE_AGENTS_TOOL_NAME,
+	STOP_AGENTS_TOOL_NAME,
 ]);
 
 /** Reasons for a requeue that say the node, not the task, was the trouble. */
@@ -172,14 +184,14 @@ function stateOf(target: ResolvedAgent): string {
 const agentIdProperty = {
 	type: "string",
 	description:
-		"The agent's id as its round gives it (r3-2), or its name. agents_status lists them.",
+		"The agent's id as its round gives it (r3-2), or its name; a teammate by its agentId, while it runs a task. agents_status lists them.",
 };
 
 const agentsProperty = {
 	type: "array",
 	items: { type: "string" },
 	description:
-		"The agents, by id (r3-2) or name. Leave it out to mean every agent still running.",
+		"The agents, by id (r3-2) or name; a teammate by its agentId. Leave it out to mean every agent still running, teammates' tasks included.",
 };
 
 export const REQUEUE_AGENT_DESCRIPTION =

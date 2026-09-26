@@ -91,6 +91,11 @@ export interface TeamMemberSnapshot {
 	taskActivity?: TeamAgentActivity;
 	/** The seed and temperature it was spawned with, when the lead set any. */
 	sampling?: TeamAgentSampling;
+	/**
+	 * While it runs a task: the id its row's stop and restart send, and what
+	 * the lead's controls know it by.
+	 */
+	cancelId?: string;
 }
 
 /**

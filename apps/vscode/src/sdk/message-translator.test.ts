@@ -6686,6 +6686,16 @@ describe("the teammates' row", () => {
 		expect(statusOf(row).items[0].sampling).toEqual(sampling)
 	})
 
+	// Its stop and restart in the working-agents strip, as a sub-agent's.
+	it("carries a running teammate's stop id, and none once it is idle", () => {
+		const state = new MessageTranslatorState()
+		const cancelId = "session-1::teammate:helper"
+		const [running] = translateSessionEvent(progress([helper({ cancelId })]), state).messages
+		expect(statusOf(running).items[0].cancelId).toBe(cancelId)
+		const [idle] = translateSessionEvent(progress([helper({ status: "idle" })]), state).messages
+		expect(statusOf(idle).items[0].cancelId).toBeUndefined()
+	})
+
 	it("says nothing when nothing it shows has changed", () => {
 		const state = new MessageTranslatorState()
 		translateSessionEvent(progress([helper()]), state)

@@ -1125,6 +1125,11 @@ export class MessageTranslatorState {
 			if (sampling) {
 				item.sampling = sampling
 			}
+			// Its stop and restart in the strip, while it runs a task: the id
+			// the team runtime registered that task under, not one rebuilt here.
+			if (item.status === "running" && typeof teammate.cancelId === "string") {
+				item.cancelId = teammate.cancelId
+			}
 			if (teammate.activity) {
 				applySubagentCompactions(item, teammate.activity as unknown as Record<string, unknown>)
 			}

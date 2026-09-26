@@ -38,6 +38,14 @@ import { nanoid } from "nanoid";
 import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-orchestrator";
 import { type HandedRevision, handbackNote } from "./delegated-sandboxes";
 import {
+	registerSubagentCancellation,
+	type SubagentCancellationRegistration,
+	type SubagentRequeueCarry,
+	subagentCancelId,
+	subagentCancellation,
+	withRevisedInstructions,
+} from "./subagent-cancellation";
+import {
 	type ActivityCounter,
 	createActivityCounter,
 } from "./subagent-progress";
@@ -168,6 +176,13 @@ export function isTeamStateChange(event: TeamEvent): boolean {
 export interface AgentTeamsRuntimeOptions {
 	teamName: string;
 	leadAgentId?: string;
+	/**
+	 * The lead's session. A teammate's task is registered under it while it
+	 * runs, as a `spawn_agent` agent is: the lead's stop_agents,
+	 * restart_agent, message_agents and requeue_agent, and its row's stop,
+	 * reach it there. Without it a task runs unregistered.
+	 */
+	sessionId?: string;
 	missionLogIntervalSteps?: number;
 	missionLogIntervalMs?: number;
 	maxConcurrentRuns?: number;
@@ -243,6 +258,16 @@ function abortError(message: string): Error {
 	const error = new Error(message);
 	error.name = "AbortError";
 	return error;
+}
+
+/**
+ * What a requeued teammate is told as it carries on. It has no placement
+ * queue to go back to: it gave its engine session back and booked again.
+ */
+function teammateRequeueNote(reason: string | undefined): string {
+	return `[The lead requeued you${
+		reason ? ` (${reason})` : ""
+	}: your engine session was given back and booked again. Your work so far is above. Carry on with your task from where you stopped.]`;
 }
 
 /** What a task given to a teammate that was shut down is told. */
@@ -642,11 +667,14 @@ interface TeamMemberState extends TeamMemberSnapshot {
 	/** Its tool calls and compactions over its life, and on its current task. */
 	activityCounter?: ActivityCounter;
 	currentTaskCounter?: ActivityCounter;
+	/** Its current task's controls: stop, restart, message, requeue. */
+	control?: SubagentCancellationRegistration;
 }
 
 export class AgentTeamsRuntime {
 	private readonly teamId: string;
 	private readonly teamName: string;
+	private readonly sessionId?: string;
 	private readonly onTeamEvent?: (event: TeamEvent) => void;
 	private readonly members: Map<string, TeamMemberState> = new Map();
 	private readonly tasks: Map<string, TeamTask> = new Map();
@@ -674,6 +702,7 @@ export class AgentTeamsRuntime {
 
 	constructor(options: AgentTeamsRuntimeOptions) {
 		this.teamName = options.teamName;
+		this.sessionId = options.sessionId?.trim() || undefined;
 		this.teammateWorkspaces = options.teammateWorkspaces;
 		this.acceptTeammateConnectionUpdates =
 			options.acceptTeammateConnectionUpdates;
@@ -843,6 +872,8 @@ export class AgentTeamsRuntime {
 				...(member.role === "teammate" && member.sampling
 					? { sampling: member.sampling }
 					: {}),
+				// Its row's stop and restart, while it runs a task.
+				...(member.control?.id ? { cancelId: member.control.id } : {}),
 			})),
 			tasks: Array.from(this.tasks.values()).map((task) => ({ ...task })),
 			mailbox: this.mailbox.map((message) => ({ ...message })),
@@ -1048,6 +1079,12 @@ export class AgentTeamsRuntime {
 			apiTimeoutMs: TEAMMATE_API_TIMEOUT_MS,
 			consumePendingUserMessage: () => {
 				const member = this.members.get(agentId);
+				// The lead's message_agents first. Read at the turn boundary,
+				// which is also where a requeue the lead asked for stops it.
+				const fromLead = member?.control?.takeMessage();
+				if (fromLead !== undefined) {
+					return fromLead;
+				}
 				if (!member || !member.pendingSteerMessage) {
 					return undefined;
 				}
@@ -1200,6 +1237,81 @@ export class AgentTeamsRuntime {
 	}
 
 	/**
+	 * Between a restart's or a requeue's two attempts: give back the session
+	 * the stopped one held and wait for the close, so the next books afresh.
+	 * A fresh start asks for a fresh window; a requeue keeps its own.
+	 */
+	private async rebookEngineSession(
+		member: TeamMemberState,
+		fresh: boolean,
+	): Promise<void> {
+		const engineSessionId = member.engineSessionId;
+		if (engineSessionId) {
+			await releasePolykvAgent(engineSessionId).catch(() => undefined);
+			if (fresh) {
+				clearPolykvGrantedWindow(engineSessionId);
+			}
+		}
+		// Shut down meanwhile: it must not book the session again.
+		if (member.status === "stopped") {
+			throw abortError(stoppedTeammateMessage(member.agentId));
+		}
+	}
+
+	/**
+	 * One stretch of a teammate's task, under its controls: the task itself,
+	 * or -- after a requeue -- its carrying on from its transcript. A stop
+	 * aborts it as intended, so the task ends cancelled; a restart or a
+	 * requeue aborts only the stretch, and the controls run the next.
+	 */
+	private async runTeammateSegment(
+		member: TeamMemberState,
+		agent: SessionRuntime,
+		control: SubagentCancellationRegistration,
+		input:
+			| { carry: SubagentRequeueCarry }
+			| { message: string; continueConversation: boolean },
+	): Promise<AgentResult> {
+		const signal = control.signal;
+		const stop = () => {
+			// Only a stop is the end of the task: said so, for its record.
+			const by = control.id
+				? subagentCancellation.stoppedBy(control.id)
+				: undefined;
+			if (by && !member.abortRequested) {
+				member.abortRequested = true;
+				member.abortReason =
+					by === "lead" ? "Stopped by the lead." : "Stopped by the user.";
+			}
+			try {
+				agent.abort(signal?.reason);
+			} catch (error) {
+				if (!isAbortLikeError(error)) {
+					throw error;
+				}
+			}
+		};
+		if (signal?.aborted) {
+			stop();
+			throw abortError(
+				member.abortReason ?? "The teammate's task was stopped.",
+			);
+		}
+		signal?.addEventListener("abort", stop, { once: true });
+		try {
+			control.track(agent);
+			if ("carry" in input) {
+				return await agent.continue(teammateRequeueNote(input.carry.reason));
+			}
+			return input.continueConversation
+				? await agent.continue(input.message)
+				: await agent.run(input.message);
+		} finally {
+			signal?.removeEventListener("abort", stop);
+		}
+	}
+
+	/**
 	 * Hand a teammate's changes back at the end of a run, and say where they
 	 * went. Best-effort: a failed hand-back must not fail the task.
 	 */
@@ -1335,6 +1447,16 @@ export class AgentTeamsRuntime {
 		member.status = "running";
 		// Each task counts from nothing; the life count goes on.
 		member.currentTaskCounter = createActivityCounter();
+		// Its controls, from now until the task ends: a stop while it waits on
+		// the close below is a stop too.
+		const control = registerSubagentCancellation(
+			this.sessionId
+				? subagentCancelId(this.sessionId, `teammate:${agentId}`)
+				: undefined,
+			undefined,
+			agentId,
+		);
+		member.control = control;
 		this.emitEvent({ type: TeamMessageType.TaskStart, agentId, message });
 
 		try {
@@ -1370,11 +1492,45 @@ export class AgentTeamsRuntime {
 			if (options?.maxIterations !== undefined) {
 				agent.setMaxIterations?.(options.maxIterations);
 			}
+			// Where a restart goes back to: the conversation the task was given
+			// on. A fresh task starts from nothing anyway.
+			const given = options?.continueConversation
+				? agent.getMessages()
+				: undefined;
 			let result: AgentResult;
 			try {
-				result = options?.continueConversation
-					? await agent.continue(enrichedMessage)
-					: await agent.run(enrichedMessage);
+				result = await control.restartable(
+					() =>
+						control.continuable(
+							(carry) =>
+								this.runTeammateSegment(
+									member,
+									agent,
+									control,
+									carry
+										? { carry }
+										: {
+												// A restart's revised instructions go with the task.
+												message: withRevisedInstructions(
+													enrichedMessage,
+													control.instructions,
+												),
+												continueConversation: given !== undefined,
+											},
+								),
+							// Requeued: the session it held goes back, and it books
+							// again, carrying on with the same conversation.
+							() => this.rebookEngineSession(member, false),
+						),
+					// Restarted: the abandoned attempt's session goes back, and
+					// the task starts over from what it was given.
+					async () => {
+						if (given) {
+							agent.restore(given);
+						}
+						await this.rebookEngineSession(member, given === undefined);
+					},
+				);
 			} finally {
 				if (options?.maxIterations !== undefined) {
 					agent.setMaxIterations?.(ownCap);
@@ -1441,6 +1597,10 @@ export class AgentTeamsRuntime {
 			}
 			throw err;
 		} finally {
+			control.release();
+			if (member.control === control) {
+				member.control = undefined;
+			}
 			member.runningCount--;
 			if (
 				member.runningCount <= 0 &&

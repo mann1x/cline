@@ -79,6 +79,7 @@ import {
 	registerSubagentCancellation,
 	type SubagentRequeueCarry,
 	subagentCancelId,
+	withRevisedInstructions,
 } from "./subagent-cancellation";
 import { buildSubagentLayout } from "./subagent-layout";
 import {
@@ -1201,15 +1202,9 @@ export function requeueNote(reason: string | undefined): string {
 	}. Your work so far is above. Carry on with your task from where you stopped.]`;
 }
 
-/** Its task, with what the lead added when it restarted it. */
-export function withRevisedInstructions(
-	task: string,
-	instructions: string | undefined,
-): string {
-	return instructions?.trim()
-		? `${task}\n\n# Revised instructions from the lead\n\n${instructions.trim()}`
-		: task;
-}
+// Beside the registry whose restarts carry the instructions: a teammate's
+// task, run by the team runtime, is restarted the same way.
+export { withRevisedInstructions };
 
 /** One agent: placed through the spawn queue when there are nodes, run, reported. */
 async function runSpawnedAgent(

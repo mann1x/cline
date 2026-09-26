@@ -353,6 +353,16 @@ export function registerSubagentCancellation(
 	};
 }
 
+/** Its task, with what the lead added when it restarted it. */
+export function withRevisedInstructions(
+	task: string,
+	instructions: string | undefined,
+): string {
+	return instructions?.trim()
+		? `${task}\n\n# Revised instructions from the lead\n\n${instructions.trim()}`
+		: task;
+}
+
 function requeueAbort(): DOMException {
 	return new DOMException("The sub-agent was requeued.", "AbortError");
 }
