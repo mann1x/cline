@@ -1,3 +1,4 @@
+import { classifyTurnFault, classifyTurnFaultError } from "@cline/shared";
 import { describe, expect, it } from "vitest";
 import { classifyProviderError } from "../error-classification";
 import {
@@ -66,6 +67,26 @@ describe("the window refusal", () => {
 		expect(
 			isOpencotiWindowUnavailableError(new Error("wrapped", { cause: error })),
 		).toBe(true);
+	});
+
+	// `unknown` to the provider layer, but "not now" to an agent's turn-fault
+	// recovery: a delegated agent waits it out and sends the turn again.
+	it("is a refusal an agent waits out, thrown or flattened", () => {
+		for (const resume of [true, false]) {
+			const error = new OpencotiWindowUnavailableError({
+				asked: 131_072,
+				floor: resume ? 131_072 : 65_536,
+				largestAdmissible: 32_768,
+				resume,
+			});
+			expect(classifyTurnFaultError(error)).toBe("refusal");
+			expect(
+				classifyTurnFaultError(new Error("wrapped", { cause: error })),
+			).toBe("refusal");
+			expect(
+				classifyTurnFault(error.message, classifyProviderError(error)),
+			).toBe("refusal");
+		}
 	});
 
 	it("rounds a window to k", () => {

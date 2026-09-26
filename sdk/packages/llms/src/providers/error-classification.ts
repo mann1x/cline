@@ -387,7 +387,9 @@ function classifyTypedError(
 	// opencoti could not give the conversation a window it can use. Neither
 	// retryable (it has had its one wait, or is a resume that never waits) nor
 	// an overflow (compacting cannot conjure cells on the server), so it must
-	// not reach a verdict that does either.
+	// not reach a verdict that does either. A delegated agent's turn-fault
+	// recovery still waits it out as a refusal (`classifyTurnFault` in
+	// @cline/shared reads its tail code): an agent retries infra, never fails.
 	if (depth === 0 && isOpencotiWindowUnavailableError(error)) {
 		return "unknown";
 	}

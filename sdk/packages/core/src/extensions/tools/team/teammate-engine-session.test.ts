@@ -140,6 +140,61 @@ describe("a teammate's engine session", () => {
 		runtime.shutdownTeammate("w");
 	});
 
+	it("opens a fresh task at a fresh window, and resumes only a continued one", async () => {
+		// The between-task close kept the recorded grant, so every later task
+		// asked for exactly the old window with `resume` -- refused at once,
+		// never waited, by a server that could not give that much back. A
+		// fresh task has no history to fit: it asks like a new session.
+		const { recordPolykvGrantedWindow, getPolykvGrantedWindow } = await import(
+			"@cline/llms"
+		);
+		const { runtime, spawn, engineSessionOf } = team();
+		await spawn("w");
+		const own = engineSessionOf(0) as string;
+		const member = (
+			runtime as unknown as {
+				members: Map<
+					string,
+					{
+						agent: {
+							canStartRun: () => boolean;
+							run: unknown;
+							continue: unknown;
+						};
+					}
+				>;
+			}
+		).members.get("w");
+		if (!member) {
+			throw new Error("no teammate");
+		}
+		const grantAtStart: Array<number | undefined> = [];
+		const answer = async () => {
+			grantAtStart.push(getPolykvGrantedWindow(own));
+			recordPolykvGrantedWindow(own, 131_072);
+			return {
+				text: "done",
+				finishReason: "completed",
+				iterations: 1,
+				usage: { inputTokens: 1, outputTokens: 1 },
+				messages: [],
+				toolCalls: [],
+			};
+		};
+		member.agent.canStartRun = () => true;
+		member.agent.run = answer;
+		member.agent.continue = answer;
+
+		await runtime.routeToTeammate("w", "task one");
+		await runtime.routeToTeammate("w", "task two");
+		await runtime.routeToTeammate("w", "task three", {
+			continueConversation: true,
+		});
+
+		expect(grantAtStart).toEqual([undefined, undefined, 131_072]);
+		runtime.shutdownTeammate("w");
+	});
+
 	it("is not booked by a second task while the last one's close is in flight", async () => {
 		// Two tasks for one teammate at once (an async run and a sync call):
 		// both passed the busy check while the first waited for the close, and

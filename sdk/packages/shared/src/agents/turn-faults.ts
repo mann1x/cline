@@ -166,6 +166,14 @@ const REFUSAL_PATTERNS: readonly RegExp[] = [
 	// window was not -- victims in swarm 0926 held 20-31k of 64k. No room
 	// now, like an admission refusal: back off and send again.
 	KV_EVICTION_PATTERN,
+	// opencoti could not give the conversation the window it asked for
+	// (`OpencotiWindowUnavailableError`, its tail code). The provider layer
+	// leaves it `unknown` -- it has had its one wait there, and compacting
+	// cannot make cells -- but for an agent it is still "not now": a
+	// teammate's task whose engine session resumed an old grant on a busy
+	// server ended on it. The lead has no turn-fault recovery, so it keeps
+	// its "Can't resume" card.
+	/\[opencoti_window_unavailable\b/,
 ];
 
 /** Classify a failed turn from what the agent loop was told about it. */

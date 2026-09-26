@@ -4,7 +4,7 @@
  * Utilities for orchestrating multiple agents working together.
  */
 
-import { releasePolykvAgent } from "@cline/llms";
+import { clearPolykvGrantedWindow, releasePolykvAgent } from "@cline/llms";
 import {
 	type AgentConfig,
 	type AgentEvent,
@@ -1242,6 +1242,14 @@ export class AgentTeamsRuntime {
 			if (released) {
 				member.pendingEngineRelease = undefined;
 				await released;
+			}
+			// The close gave the window back but the grant is still on record,
+			// and a recorded grant is asked for again exactly, as a resume that
+			// is refused rather than waited for. A fresh task has no history to
+			// fit, so it asks like a new session; a continued one keeps its
+			// window, and a busy server's refusal of it is waited out.
+			if (!options?.continueConversation && member.engineSessionId) {
+				clearPolykvGrantedWindow(member.engineSessionId);
 			}
 			const unreadMail = this.listMailbox(agentId, {
 				unreadOnly: true,

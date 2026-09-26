@@ -137,6 +137,20 @@ describe("what a failed turn was", () => {
 		expect(classifyTurnFault("slow down", "rate_limited")).toBe("refusal");
 	});
 
+	// opencoti had no window of the size asked for. The provider layer calls
+	// it `unknown` (it is not retried there, and not an overflow), which left
+	// a teammate whose task resumed its old grant on a busy server ending the
+	// task on it: an infrastructure fault, waited out like any refusal.
+	it("reads opencoti's window refusal as a refusal", () => {
+		for (const message of [
+			"Can't resume this conversation. It was opened with a 128k window and needs the same to continue. The server has 64k free right now. [opencoti_window_unavailable asked=131072 floor=131072 largest=65536 resume=true]",
+			"Can't open this conversation. It needs at least a 32k window (asked for 64k). The server did not say how much it has free. [opencoti_window_unavailable asked=65536 floor=32768 resume=false]",
+		]) {
+			expect(classifyTurnFault(message, "unknown")).toBe("refusal");
+			expect(classifyTurnFaultError(new Error(message))).toBe("refusal");
+		}
+	});
+
 	it("leaves the request's and the model's own failures alone", () => {
 		for (const message of [
 			"400 invalid_request_error: unknown field",
