@@ -312,6 +312,9 @@ Switching to act mode immediately starts executing the plan, so only call this a
 # tool: read_agent_report
 {{DEFAULT}}
 
+# tool: agents_status
+{{DEFAULT}}
+
 # tool: spawn_agent
 
 Spawn a sub-agent with a custom system prompt for specialised tasks. Call shape: `spawn_agent(knowledge?: {files?, text?}, instructions?: string, systemPrompt?: string, task?: string, name?: string, agents?: [{name?, task, instructions?, type?}])`.

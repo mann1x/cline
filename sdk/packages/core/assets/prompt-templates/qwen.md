@@ -328,6 +328,9 @@ Switch from plan mode to act mode.
 # tool: read_agent_report
 {{DEFAULT}}
 
+# tool: agents_status
+{{DEFAULT}}
+
 # tool: spawn_agent
 {{DEFAULT}}
 

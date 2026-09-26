@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	buildReadFilesKeys,
 	extractFullOutputText,
+	formatAgentControlInput,
 	formatSpawnSwarmSummary,
 	parseReadFilesInput,
 	parseSpawnSwarmInput,
@@ -176,5 +177,28 @@ describe("formatSpawnSwarmSummary", () => {
 		expect(out.startsWith("3 workers: ")).toBe(true);
 		expect(out.endsWith("...")).toBe(true);
 		expect(out.length).toBeLessThanOrEqual(33);
+	});
+});
+
+// The lead's agent tools rendered as their bare name, saying nothing about
+// which agent or round they were about.
+describe("formatAgentControlInput", () => {
+	it("names the agents or the round agents_status looked at", () => {
+		expect(formatAgentControlInput("agents_status", {})).toBe("every round");
+		expect(formatAgentControlInput("agents_status", { round_id: "r3" })).toBe(
+			"round r3",
+		);
+		expect(
+			formatAgentControlInput("agents_status", {
+				agent_id: "r3-1",
+				agent_ids: ["r3-2"],
+			}),
+		).toBe("r3-1, r3-2");
+	});
+
+	it("leaves other tools alone", () => {
+		expect(
+			formatAgentControlInput("spawn_agent", { task: "x" }),
+		).toBeUndefined();
 	});
 });

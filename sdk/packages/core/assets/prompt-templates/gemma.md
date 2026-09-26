@@ -211,6 +211,9 @@ Transition from planning to execution.
 # tool: read_agent_report
 {{DEFAULT}}
 
+# tool: agents_status
+{{DEFAULT}}
+
 # tool: spawn_agent
 {{DEFAULT}}
 

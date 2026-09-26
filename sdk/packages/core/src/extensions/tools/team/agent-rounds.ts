@@ -1144,6 +1144,19 @@ export class RoundHandle {
 				agent.state = "running";
 			}
 		}
+		// A path with no queue in front of it (the session's single delegated
+		// connection, no slot gate) never says `queued: false`: its first
+		// iteration or output is what says it runs.
+		if (
+			agent.state === "queued" &&
+			update.queued === undefined &&
+			["iterations", "inputTokens", "latestOutput", "genTps", "activity"].some(
+				(key) => update[key] !== undefined,
+			)
+		) {
+			agent.startedAt ??= at;
+			agent.state = "running";
+		}
 		if (update.waiting && typeof update.waiting === "object") {
 			const wait = update.waiting as Partial<AgentWaitInfo>;
 			agent.waiting = {

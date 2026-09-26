@@ -64,6 +64,7 @@ import {
 	createAgentAdmissionController,
 } from "../../extensions/tools/team/agent-admission";
 import { createReadAgentReportTool } from "../../extensions/tools/team/agent-reports";
+import { createAgentsStatusTool } from "../../extensions/tools/team/agent-status";
 import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configured-agent-config";
 import { loadConfiguredAgentConfigs } from "../../extensions/tools/team/configured-agent-config";
 import { createConfiguredAgentTools } from "../../extensions/tools/team/configured-agent-tool";
@@ -1400,6 +1401,32 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 
 		if (normalized.enableAgentTeams) {
 			ensureTeamRuntime();
+		}
+
+		// What the agents are doing, and why: offered wherever the lead can
+		// delegate at all -- spawn_agent, a configured agent, or a team.
+		if (
+			config.sessionId &&
+			(normalized.enableAgentTeams ||
+				configuredAgentTools.length > 0 ||
+				tools.some((tool) => tool.name === "spawn_agent"))
+		) {
+			tools.push(
+				createAgentsStatusTool({
+					sessionId: config.sessionId,
+					configProvider: () =>
+						this.teamRuntimeEntries.get(registryKey)
+							?.delegatedAgentConfigProvider ?? delegatedAgentConfigProvider,
+					teammates: () => {
+						const state = this.teamRuntimeEntries
+							.get(registryKey)
+							?.runtime?.exportState();
+						return state
+							? { members: state.members, runs: state.runs }
+							: undefined;
+					},
+				}),
+			);
 		}
 
 		const finalTools = filterAvailableTools(tools, effectiveToolPolicies);

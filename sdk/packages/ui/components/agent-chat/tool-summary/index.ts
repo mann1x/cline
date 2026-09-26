@@ -12,6 +12,7 @@
  * defensive; a malformed payload degrades to a generic label, never a throw.
  */
 
+import { AGENT_CONTROL_TOOL_NAMES, agentControlLabel } from "./agents";
 import { countDiffLines, makeUnifiedDiff } from "./diff.js";
 import {
 	extractOutputMedia,
@@ -209,7 +210,12 @@ export function classifyTool(toolName: string): ToolKind {
 		name.startsWith("subagent_")
 	)
 		return "spawn";
-	if (name === "team" || name === "teams" || name.startsWith("team_"))
+	if (
+		name === "team" ||
+		name === "teams" ||
+		name.startsWith("team_") ||
+		AGENT_CONTROL_TOOL_NAMES.has(name)
+	)
 		return "team";
 	if (name === "skills" || name === "skill") return "skill";
 	if (name === "ask_question" || name === "ask_followup_question")
@@ -420,6 +426,17 @@ export function buildToolSummary(
 	};
 	if (isError) {
 		base.errorText = extractErrorText(payload.result, opts.maxOutputChars);
+	}
+
+	const control = agentControlLabel(toolName, input, inProgress);
+	if (control) {
+		return {
+			...base,
+			...labeled([{ text: control }]),
+			outputText: isError
+				? undefined
+				: capText(extractOutputText(payload.result), opts.maxOutputChars),
+		};
 	}
 
 	if (kind === "team") {

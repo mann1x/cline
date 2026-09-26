@@ -6092,6 +6092,16 @@ describe("tools with no bespoke row still reach the chat with something to show"
 	it("says how many when check_file is given several", () => {
 		expect(sayToolFor("check_file", { paths: ["/w/a.html", "/w/b.html", "/w/c.html"] }).path).toBe("/w/a.html (+2 more)")
 	})
+
+	// The lead's agent tools: the generic row printed their raw arguments.
+	it("says which agents or round the lead checked on", () => {
+		expect(sayToolFor("agents_status", {})).toMatchObject({
+			headline: "Cerebriline checked on its agents:",
+			path: "every round",
+		})
+		expect(sayToolFor("agents_status", { round_id: "r3" }).path).toBe("round r3")
+		expect(sayToolFor("agents_status", { agent_ids: ["r3-1", "r3-2"] }).path).toBe("r3-1, r3-2")
+	})
 })
 
 // ---------------------------------------------------------------------------

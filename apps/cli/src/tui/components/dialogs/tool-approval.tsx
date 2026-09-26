@@ -5,6 +5,7 @@ import type React from "react";
 import { useDialogPalette } from "../../hooks/use-theme";
 import {
 	buildReadFilesKeys,
+	formatAgentControlInput,
 	formatSpawnSwarmSummary,
 	parseApplyPatchInput,
 	parseEditorInput,
@@ -21,6 +22,15 @@ export function formatApprovalParams(
 	toolName: string,
 	rawInput: unknown,
 ): React.ReactNode {
+	const control = formatAgentControlInput(toolName, rawInput);
+	if (control !== undefined) {
+		return (
+			<text fg="gray" selectable>
+				{"  "}
+				{control}
+			</text>
+		);
+	}
 	switch (toolName) {
 		case "read_files": {
 			const info = parseReadFilesInput(rawInput);

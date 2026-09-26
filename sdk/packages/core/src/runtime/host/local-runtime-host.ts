@@ -255,6 +255,7 @@ import {
 import {
 	describeSideTurnForLead,
 	runSteerSideTurn,
+	SIDE_TURN_LEAD_TOOL_NAMES,
 	STEER_SIDE_TURN_MAX_ITERATIONS,
 } from "./steer-side-turn";
 
@@ -2713,6 +2714,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 				message,
 				source,
 				messages: session.agent.getMessages(),
+				leadTools: (base.tools ?? []).filter((tool) =>
+					SIDE_TURN_LEAD_TOOL_NAMES.has(tool.name),
+				) as AgentTool[],
 				createRunner: (tools) => {
 					// The lead's model, prompt and settings; nothing that writes
 					// the lead's state: no compaction pipeline, hooks, extensions

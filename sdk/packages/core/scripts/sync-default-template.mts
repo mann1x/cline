@@ -40,6 +40,8 @@ import {
 	createSubmitAndExitTool,
 	createWebFetchTool,
 } from "../src/extensions/tools/definitions";
+import { createReadAgentReportTool } from "../src/extensions/tools/team/agent-reports";
+import { createAgentsStatusTool } from "../src/extensions/tools/team/agent-status";
 import { createSpawnAgentTool } from "../src/extensions/tools/team/spawn-agent-tool";
 import { createAgentTeamsTools } from "../src/extensions/tools/team/team-tools";
 
@@ -78,6 +80,8 @@ function liveTools(): { name: string; description?: string }[] {
 		createAskQuestionTool(stubExecutor),
 		createSubmitAndExitTool(stubExecutor),
 		createSpawnAgentTool({ configProvider: {} as never }),
+		createReadAgentReportTool(),
+		createAgentsStatusTool({ sessionId: "s" }),
 		...createAgentTeamsTools({
 			runtime: {} as never,
 			requesterId: "lead",

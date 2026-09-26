@@ -190,6 +190,9 @@ Output: plain text, one result per line as `file:line:column` followed by the so
 # tool: read_agent_report
 {{DEFAULT}}
 
+# tool: agents_status
+{{DEFAULT}}
+
 # tool: spawn_agent
 {{DEFAULT}}
 

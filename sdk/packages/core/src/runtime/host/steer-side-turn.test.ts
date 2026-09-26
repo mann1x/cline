@@ -217,3 +217,36 @@ describe("a side turn that did not finish", () => {
 		expect(STEER_SIDE_TURN_MAX_ITERATIONS).toBeGreaterThanOrEqual(8);
 	});
 });
+
+// Spec B: the status tool in every mode, the blocking round's side turn
+// included -- and nothing else of the lead's.
+describe("the side turn's view into the round", () => {
+	it("gets agents_status from the lead's tools, and none of the rest", async () => {
+		let offered: string[] = [];
+		let prompt = "";
+		const tool = (name: string) =>
+			({
+				name,
+				description: name,
+				inputSchema: {},
+				execute: async () => "",
+			}) as never;
+		await runSteerSideTurn({
+			sessionId: "lead",
+			message: "how are they doing?",
+			messages: leadMessages,
+			leadTools: [tool("agents_status"), tool("editor"), tool("spawn_agent")],
+			createRunner: (tools: AgentTool[]) => ({
+				restore: () => {},
+				continue: async (text) => {
+					offered = tools.map((entry) => entry.name);
+					prompt = text;
+					return { text: "fine" };
+				},
+			}),
+		});
+		expect(offered).toEqual(["message_agents", "stop_agents", "agents_status"]);
+		expect(prompt).toContain("`agents_status` shows what each agent is doing");
+		expect(prompt).not.toContain("{LEAD_TOOLS}");
+	});
+});

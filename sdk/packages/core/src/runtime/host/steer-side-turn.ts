@@ -65,7 +65,20 @@ export interface SteerSideTurnInput {
 	messages: readonly Message[];
 	/** Builds the lead's model with exactly these tools. */
 	createRunner: (tools: AgentTool[]) => SteerSideTurnRunner;
+	/**
+	 * The lead's own agent tools the side turn may use besides the two above:
+	 * those of {@link SIDE_TURN_LEAD_TOOL_NAMES} the session has.
+	 */
+	leadTools?: readonly AgentTool[];
 }
+
+/**
+ * The session's tools a side turn gets as they are: what the lead needs to
+ * see into the round it is waiting on (spec B: the status tool in every mode).
+ */
+export const SIDE_TURN_LEAD_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"agents_status",
+]);
 
 export interface SteerSideTurnResult {
 	/** What the lead said to the user. */
@@ -207,7 +220,7 @@ export function createSteerRoundTools(
 
 const SYSTEM_SIDE_TURN_PREAMBLE = [
 	"This is a status report from the agent system, not a message from the user. Your agents are still running; you are reading it now, between their progress, without ending the delegation.",
-	"You can reply in plain text, `message_agents` to pass something to running agents, or `stop_agents` to stop some or all of them. Nothing else is available until the round returns.",
+	"You can reply in plain text, `message_agents` to pass something to running agents, or `stop_agents` to stop some or all of them.{LEAD_TOOLS} Nothing else is available until the round returns.",
 	"The agents named below keep retrying on their own unless you stop them. If you decide to stop some, you will do their tasks yourself once the round returns. Answer in one short reply: what you decided, and why.",
 	"",
 	"The report:",
@@ -215,7 +228,7 @@ const SYSTEM_SIDE_TURN_PREAMBLE = [
 
 const SIDE_TURN_PREAMBLE = [
 	"The user has sent you this message while your agents are still running. You are answering it now, between your agents' progress, without ending the delegation.",
-	"You can reply in plain text, `message_agents` to pass something to running agents, or `stop_agents` to stop some or all of them. Nothing else is available until the round returns.",
+	"You can reply in plain text, `message_agents` to pass something to running agents, or `stop_agents` to stop some or all of them.{LEAD_TOOLS} Nothing else is available until the round returns.",
 	"Answer the user in one short reply: what you will do, or what you did.",
 	"",
 	"The user's message:",
@@ -233,9 +246,13 @@ export async function runSteerSideTurn(
 ): Promise<SteerSideTurnResult> {
 	const actions: string[] = [];
 	try {
-		const runner = input.createRunner(
-			createSteerRoundTools(input.sessionId, actions),
+		const leadTools = (input.leadTools ?? []).filter((tool) =>
+			SIDE_TURN_LEAD_TOOL_NAMES.has(tool.name),
 		);
+		const runner = input.createRunner([
+			...createSteerRoundTools(input.sessionId, actions),
+			...leadTools,
+		]);
 		runner.restore(
 			closeOpenToolCalls(input.messages, describeRunningRound(input.sessionId)),
 		);
@@ -243,7 +260,12 @@ export async function runSteerSideTurn(
 			input.source === "system"
 				? SYSTEM_SIDE_TURN_PREAMBLE
 				: SIDE_TURN_PREAMBLE;
-		const result = await runner.continue(`${preamble}\n${input.message}`);
+		const toolsLine = leadTools.some((tool) => tool.name === "agents_status")
+			? " `agents_status` shows what each agent is doing and why."
+			: "";
+		const result = await runner.continue(
+			`${preamble.replace("{LEAD_TOOLS}", toolsLine)}\n${input.message}`,
+		);
 		// The side turn's own cap is the side turn's, never the round's. Its
 		// "exceeded maxIterations (4)" handed on as the reply was read by the lead
 		// as a cap on its agents (pandorum 2ge0c) -- a cap none of them had. A

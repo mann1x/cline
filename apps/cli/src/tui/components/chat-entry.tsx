@@ -30,6 +30,7 @@ import { getSyntaxStyle, type SyntaxAccentMode } from "../utils/syntax-style";
 import { isWarningToolError } from "../utils/tool-errors";
 import {
 	buildReadFilesKeys,
+	formatAgentControlInput,
 	formatSpawnSwarmSummary,
 	parseApplyPatchInput,
 	parseAskQuestionInput,
@@ -135,6 +136,10 @@ function formatToolParams(
 	rawInput: unknown,
 	fallback: string,
 ): React.ReactNode {
+	const control = formatAgentControlInput(toolName, rawInput);
+	if (control !== undefined) {
+		return control;
+	}
 	switch (toolName) {
 		case "read_files": {
 			const info = parseReadFilesInput(rawInput);

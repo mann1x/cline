@@ -810,3 +810,28 @@ describe("shortenPath", () => {
 		expect(short.endsWith("file-name.ts")).toBe(true);
 	});
 });
+
+// The lead's agent controls: without a case of their own they rendered as a
+// bare humanized name, saying nothing about which agent or round.
+describe("the lead's agent tools", () => {
+	it("names what agents_status looked at, and shows its answer", () => {
+		expect(
+			buildToolSummary({ toolName: "agents_status", input: {} }).label,
+		).toBe("Checked the agents");
+		expect(
+			buildToolSummary({
+				toolName: "agents_status",
+				input: { round_id: "r3" },
+				inProgress: true,
+			}).label,
+		).toBe("Checking round r3");
+		const detail = buildToolSummary({
+			toolName: "agents_status",
+			input: { agent_ids: ["r3-1", "r3-2"] },
+			result: "r3-1 fixer-1 (round r3, spawn_agent) -- running: running",
+		});
+		expect(detail.label).toBe("Checked agents r3-1, r3-2");
+		expect(detail.outputText).toContain("r3-1 fixer-1");
+		expect(detail.kind).toBe("team");
+	});
+});

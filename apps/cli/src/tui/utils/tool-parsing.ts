@@ -261,6 +261,37 @@ export function formatSpawnSwarmSummary(
 	return `${prefix}${task}`;
 }
 
+/**
+ * What one of the lead's agent tools was about -- an agent, a round, or all
+ * of them -- for its row. `undefined` for any other tool.
+ */
+export function formatAgentControlInput(
+	toolName: string,
+	input: unknown,
+): string | undefined {
+	const record = isRecord(input) ? input : {};
+	const agents = [
+		...(typeof record.agent_id === "string" ? [record.agent_id] : []),
+		...(Array.isArray(record.agent_ids)
+			? record.agent_ids.filter(
+					(entry): entry is string => typeof entry === "string",
+				)
+			: []),
+	]
+		.map((entry) => entry.trim())
+		.filter(Boolean);
+	const round =
+		typeof record.round_id === "string" && record.round_id.trim()
+			? `round ${record.round_id.trim()}`
+			: undefined;
+	switch (toolName) {
+		case "agents_status":
+			return agents.length > 0 ? agents.join(", ") : (round ?? "every round");
+		default:
+			return undefined;
+	}
+}
+
 // Base64 payloads are one giant line; chunk to MIME width so GenericOutput's
 // line-based collapse stays compact and expand shows the full data.
 function chunkBase64(data: string): string {

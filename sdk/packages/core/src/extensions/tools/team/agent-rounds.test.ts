@@ -346,3 +346,24 @@ describe("a round persisted with the session", () => {
 		expect(handle.agent(0)?.stopReason).toBe("cancelled_by_lead");
 	});
 });
+
+// agents_status counted a running agent on the session's own connection as
+// queued: that path has no queue, so nothing ever said `queued: false`.
+describe("an agent with no queue in front of it", () => {
+	it("reads as running from its first iteration", async () => {
+		const rounds = new AgentRounds("s1");
+		const handle = rounds.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: false,
+			agents: [{ name: "a", task: "t" }],
+		});
+		let state: string | undefined;
+		await handle.run(0, context, async (ctx) => {
+			ctx.emitUpdate?.({ iterations: 1 });
+			state = handle.agent(0)?.state;
+			return { finishReason: "completed" };
+		});
+		expect(state).toBe("running");
+	});
+});

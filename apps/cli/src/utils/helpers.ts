@@ -7,6 +7,7 @@ import { ensureHookLogDir } from "@cline/shared/storage";
 import { nanoid } from "nanoid";
 import { commanderToParsedArgs, createProgram } from "../commands/program";
 import {
+	formatAgentControlInput,
 	formatSpawnSwarmSummary,
 	parseSpawnSwarmInput,
 } from "../tui/utils/tool-parsing";
@@ -183,6 +184,10 @@ export function formatToolInput(toolName: string, input: unknown): string {
 	}
 
 	const obj = input as Record<string, unknown>;
+	const control = formatAgentControlInput(toolName, obj);
+	if (control !== undefined) {
+		return truncate(control, 120);
+	}
 
 	switch (toolName) {
 		case "ask_question":

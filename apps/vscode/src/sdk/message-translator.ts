@@ -1505,6 +1505,16 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 			}
 		}
 
+		case "agents_status": {
+			// The lead looking at its delegated agents. What it looked at is the
+			// row: its raw arguments said `{"round_id":"r3"}`.
+			return {
+				tool: toolName as ClineSayTool["tool"],
+				headline: "Cerebriline checked on its agents:",
+				path: describeAgentTargets(parsedInput) ?? "every round",
+			}
+		}
+
 		case "grep":
 		case "sed":
 		case "awk": {
@@ -1616,6 +1626,23 @@ function describePlanCall(input: Record<string, unknown> | undefined): string | 
  * and a tool that was handed a whole file should not push the next message off
  * the screen.
  */
+/** The agents or round one of the lead's agent tools names, in a line. */
+function describeAgentTargets(input: Record<string, unknown> | undefined): string | undefined {
+	const agents = [
+		...(typeof input?.agent_id === "string" ? [input.agent_id] : []),
+		...(Array.isArray(input?.agent_ids)
+			? (input.agent_ids as unknown[]).filter((entry): entry is string => typeof entry === "string")
+			: []),
+	]
+		.map((entry) => entry.trim())
+		.filter(Boolean)
+	if (agents.length > 0) {
+		return agents.length > 6 ? `${agents.slice(0, 6).join(", ")} (+${agents.length - 6} more)` : agents.join(", ")
+	}
+	const round = getStringField(input, "round_id")?.trim()
+	return round ? `round ${round}` : undefined
+}
+
 function describeToolArguments(input: Record<string, unknown> | undefined): string | undefined {
 	if (!input) {
 		return undefined

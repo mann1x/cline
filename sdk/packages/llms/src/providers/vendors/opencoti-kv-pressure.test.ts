@@ -3,6 +3,7 @@ import { createOpencotiFetch } from "./opencoti";
 import {
 	getOpencotiWindowCeiling,
 	getOpencotiWindowFloor,
+	latestOpencotiKv,
 	latestOpencotiPressure,
 	noteOpencotiPressure,
 	OPENCOTI_PRESSURE_CLEAR_MAX_AGE_MS,
@@ -137,6 +138,32 @@ describe("the server's pressure", () => {
 		expect(latestOpencotiPressure("http://engine")?.pressure).toEqual(
 			PARSED_PRESSURE,
 		);
+	});
+
+	// The lead's agents_status states a PolyKV node's cells from the read the
+	// compaction trigger already makes; it never polls on its own.
+	it("keeps the cells a /kv read stated, for the lead's status report", async () => {
+		const stub = engine({
+			features: ["kv_status_v1"],
+			kv: {
+				cells_total: 1_048_576,
+				cells_free: 655_360,
+				allocations: [
+					{ session_id: "a", window: 262_144, used: 1_000 },
+					{ session_id: "b", window: 131_072, used: 2_000 },
+				],
+			},
+		});
+		expect(latestOpencotiKv("http://engine")).toBeUndefined();
+		await readOpencotiKv("http://engine/v1", stub.fetch);
+		expect(latestOpencotiKv("http://engine/v1")).toMatchObject({
+			booked: 393_216,
+			sessions: 2,
+			cellsTotal: 1_048_576,
+			cellsFree: 655_360,
+		});
+		resetOpencotiPressure();
+		expect(latestOpencotiKv("http://engine")).toBeUndefined();
 	});
 
 	it("is not read off a server that does not advertise it", async () => {

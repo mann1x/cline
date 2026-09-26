@@ -21,6 +21,7 @@ const TOOL_KIND_MAP: Record<string, ToolKind> = {
 	Agent: "think",
 	spawn_agent: "think",
 	spawn_swarm: "think",
+	agents_status: "think",
 	NotebookEdit: "edit",
 	skills: "other",
 };

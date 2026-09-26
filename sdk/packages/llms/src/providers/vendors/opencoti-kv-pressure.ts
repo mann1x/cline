@@ -194,6 +194,32 @@ export function latestOpencotiPressure(
 /** Test seam. */
 export function resetOpencotiPressure(): void {
 	PRESSURE_BY_ROOT.clear();
+	KV_BY_ROOT.clear();
+}
+
+/** The KV cells a server stated on its last `GET /kv`, as this process read it. */
+export interface OpencotiKvCellsReading {
+	/** `Date.now()` when it was read. */
+	at: number;
+	/** Cells booked: the sum of every live session's window. */
+	booked: number;
+	/** Sessions holding a window. */
+	sessions: number;
+	cellsTotal?: number;
+	cellsFree?: number;
+}
+
+const KV_BY_ROOT = new Map<string, OpencotiKvCellsReading>();
+
+/** The newest `/kv` cells reading for a server, if any was made. */
+export function latestOpencotiKv(
+	baseUrl: string | undefined,
+): OpencotiKvCellsReading | undefined {
+	if (!baseUrl) {
+		return undefined;
+	}
+	const reading = KV_BY_ROOT.get(polykvRoot(baseUrl));
+	return reading ? { ...reading } : undefined;
 }
 
 /**
@@ -374,6 +400,16 @@ export async function readOpencotiKv(
 	const cellsFree = finite(kv.cells_free);
 	const cellsTotal = finite(kv.cells_total);
 	const swa = idleResident !== undefined ? parseSwa(kv.swa) : undefined;
+	// Kept for the lead's status report, which states cells booked and free
+	// from the read the compaction trigger already makes -- never a read of
+	// its own.
+	KV_BY_ROOT.set(polykvRoot(baseUrl), {
+		at,
+		booked: allocations.reduce((sum, row) => sum + row.window, 0),
+		sessions: allocations.length,
+		...(cellsTotal !== undefined ? { cellsTotal } : {}),
+		...(cellsFree !== undefined ? { cellsFree } : {}),
+	});
 	return {
 		allocations,
 		...(pressure ? { pressure } : {}),
