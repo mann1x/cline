@@ -2136,7 +2136,15 @@ export class AgentTeamsRuntime {
 		if (!this.members.has(fromAgentId)) {
 			throw new Error(`Unknown sender "${fromAgentId}"`);
 		}
-		const recipient = this.members.get(toAgentId);
+		// "lead" is the lead, whatever its id: the lead is its session's id, and
+		// a teammate has no tool that lists the members.
+		const recipient =
+			this.members.get(toAgentId) ??
+			(toAgentId === "lead"
+				? Array.from(this.members.values()).find(
+						(member) => member.role === "lead",
+					)
+				: undefined);
 		if (!recipient) {
 			throw new Error(`Unknown recipient "${toAgentId}"`);
 		}
@@ -2144,7 +2152,7 @@ export class AgentTeamsRuntime {
 			id: `msg_${String(++this.messageCounter).padStart(5, "0")}`,
 			teamId: this.teamId,
 			fromAgentId,
-			toAgentId,
+			toAgentId: recipient.agentId,
 			subject,
 			body,
 			taskId,

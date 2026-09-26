@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentResult, TeamRuntimeState } from "@cline/shared";
+import type { AgentResult, AgentTool, TeamRuntimeState } from "@cline/shared";
 import { resolveTeamDataDir } from "@cline/shared/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FileTeamStore } from "../../../services/storage/file-team-store";
@@ -1754,5 +1754,86 @@ describe("a sync run's answer", () => {
 		const result = await runSync("partial", "aborted");
 		expect(result.message).toMatch(/stopped before it finished/);
 		expect(result.message).not.toMatch(/completed/);
+	});
+});
+
+/**
+ * A teammate got seventeen team tools: the lead's run, await, cancel,
+ * cleanup, shutdown, broadcast and outcome tools among them. With them it
+ * could cancel the lead's runs, route tasks to other teammates out of the
+ * lead's sight, and -- two teammates each waiting on "all runs" -- deadlock
+ * (audit G-6). It gets the board, the mailbox and the mission log.
+ */
+describe("a teammate's own team tools", () => {
+	const lead = { agentId: "lead", conversationId: "conv-1", iteration: 1 };
+
+	async function spawnedTeammateTools() {
+		const runtime = new AgentTeamsRuntime({
+			teamName: "test-team",
+			leadAgentId: "lead-session",
+		});
+		const spawnSpy = vi.spyOn(runtime, "spawnTeammate");
+		const leadTools = createAgentTeamsTools({
+			runtime,
+			requesterId: "lead-session",
+			teammateConfigProvider: makeTeammateConfigProvider(),
+		});
+		await leadTools
+			.find((tool) => tool.name === "team_spawn_teammate")
+			?.execute({ agentId: "w", rolePrompt: "Review" }, lead);
+		const tools = (spawnSpy.mock.calls[0]?.[0]?.config.tools ??
+			[]) as AgentTool[];
+		const teamTools = tools.filter((tool) => tool.name.startsWith("team_"));
+		return { runtime, teamTools };
+	}
+
+	it("are the board, the mailbox and the mission log -- nothing that waits on or runs another agent", async () => {
+		const { teamTools } = await spawnedTeammateTools();
+		expect(teamTools.map((tool) => tool.name).sort()).toEqual([
+			"team_mission_log",
+			"team_read_mailbox",
+			"team_send_message",
+			"team_task",
+		]);
+	});
+
+	it("work the board but do not add to it", async () => {
+		const { runtime, teamTools } = await spawnedTeammateTools();
+		const board = teamTools.find((tool) => tool.name === "team_task");
+		const schema = board?.inputSchema as {
+			properties: { action: { enum: string[] }; title?: unknown };
+		};
+		expect(schema.properties.action.enum).toEqual([
+			"list",
+			"claim",
+			"complete",
+			"block",
+		]);
+		expect(schema.properties.title).toBeUndefined();
+		const ctx = { agentId: "w", conversationId: "conv-w", iteration: 1 };
+		await expect(
+			board?.execute({ action: "create", title: "t", description: "d" }, ctx),
+		).rejects.toThrow();
+		const task = runtime.createTask({
+			title: "Review parser",
+			description: "src/parser.ts",
+			createdBy: "lead-session",
+		});
+		await board?.execute({ action: "claim", taskId: task.id }, ctx);
+		expect(runtime.getTask(task.id)).toEqual(
+			expect.objectContaining({ status: "in_progress", assignee: "w" }),
+		);
+	});
+
+	it('reach the lead as "lead", whatever id the lead has', async () => {
+		const { runtime, teamTools } = await spawnedTeammateTools();
+		const send = teamTools.find((tool) => tool.name === "team_send_message");
+		await send?.execute(
+			{ toAgentId: "lead", subject: "Blocked", body: "Need the schema." },
+			{ agentId: "w", conversationId: "conv-w", iteration: 1 },
+		);
+		expect(runtime.listMailbox("lead-session")).toEqual([
+			expect.objectContaining({ fromAgentId: "w", subject: "Blocked" }),
+		]);
 	});
 });

@@ -35,6 +35,7 @@ import {
 	type TeamMissionLogInput,
 	TeamMissionLogInputSchema,
 	TeamMissionLogToolResultSchema,
+	TeammateTaskInputSchema,
 	TeamOutcomeFragmentToolResultSchema,
 	type TeamOutcomeToolResult,
 	TeamOutcomeToolResultSchema,
@@ -349,6 +350,11 @@ export interface CreateAgentTeamsToolsOptions {
 	includeSpawnTool?: boolean;
 	includeManagementTools?: boolean;
 	onLeadToolsUnlocked?: (tools: AgentTool[]) => void;
+	/**
+	 * The tools are a teammate's: {@link TEAMMATE_TEAM_TOOL_NAMES} only, and
+	 * its `team_task` works the board without adding to it.
+	 */
+	teammate?: boolean;
 }
 
 export interface BootstrapAgentTeamsOptions {
@@ -394,6 +400,20 @@ export const TEAM_TOOL_NAMES = [
 	"team_list_outcomes",
 ] as const;
 
+/**
+ * A teammate's team tools: the board, the mailbox, the mission log. The rest
+ * are the lead's. With them a teammate cancelled the lead's runs, finalized
+ * its outcomes, routed tasks to other teammates out of the lead's sight, and
+ * -- two teammates each awaiting "all runs" -- deadlocked (audit G-6, B-8).
+ * Their schemas were also a third of every teammate request's team tools.
+ */
+export const TEAMMATE_TEAM_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"team_task",
+	"team_send_message",
+	"team_read_mailbox",
+	"team_mission_log",
+]);
+
 function spawnTeamTeammate(
 	options: Omit<CreateAgentTeamsToolsOptions, "requesterId" | "allowSpawn"> & {
 		requesterId: string;
@@ -425,6 +445,7 @@ function spawnTeamTeammate(
 			// makes them burn turns on "Only the lead agent can manage
 			// teammates." rejections.
 			includeSpawnTool: false,
+			teammate: true,
 		}),
 	);
 	// The lead's sampler, drawn at the spawn call, or the values a restore
@@ -655,8 +676,10 @@ export function createAgentTeamsTools(
 		createTool<TeamTaskInput, TeamTaskToolResult>({
 			name: "team_task",
 			description:
-				"Manage shared team tasks with action-specific payloads. " +
-				"create requires title and description, with optional dependsOn and assignee. " +
+				(options.teammate
+					? "Work the shared team task list with action-specific payloads. "
+					: "Manage shared team tasks with action-specific payloads. " +
+						"create requires title and description, with optional dependsOn and assignee. ") +
 				"list accepts optional status, assignee. " +
 				"claim requires taskId. complete requires taskId and summary. block requires taskId and reason. " +
 				"Do not include fields from other actions." +
@@ -664,9 +687,14 @@ export function createAgentTeamsTools(
 					TeamTaskToolResultSchema,
 					"The shape depends on the action you sent; only list returns the tasks themselves.",
 				),
-			inputSchema: zodToJsonSchema(TeamTaskInputSchema),
+			// A teammate's has no create: the board is the lead's to fill.
+			inputSchema: zodToJsonSchema(
+				options.teammate ? TeammateTaskInputSchema : TeamTaskInputSchema,
+			),
 			execute: async (input) => {
-				const validatedInput = validateWithZod(TeamTaskInputSchema, input);
+				const validatedInput: TeamTaskInput = options.teammate
+					? validateWithZod(TeammateTaskInputSchema, input)
+					: validateWithZod(TeamTaskInputSchema, input);
 				switch (validatedInput.action) {
 					case "create": {
 						const ignoredFieldSet = new Set(
@@ -718,8 +746,9 @@ export function createAgentTeamsTools(
 							action: "claim",
 							taskId: task.id,
 							status: task.status,
-							nextStep:
-								"Task is now in_progress. Execute the work using team_run_task or your own tools, then call team_task with action=complete when done.",
+							nextStep: options.teammate
+								? "Task is now in_progress. Do the work with your own tools, then call team_task with action=complete when done."
+								: "Task is now in_progress. Execute the work using team_run_task or your own tools, then call team_task with action=complete when done.",
 						});
 					}
 					case "complete": {
@@ -982,7 +1011,9 @@ export function createAgentTeamsTools(
 		createTool<TeamSendMessageInput, { id: string; toAgentId: string }>({
 			name: "team_send_message",
 			description:
-				"Send a mailbox message to a specific teammate." +
+				(options.teammate
+					? 'Send a mailbox message to a teammate by its agentId, or to the lead as "lead".'
+					: "Send a mailbox message to a specific teammate.") +
 				describeOutput(
 					TeamSendMessageToolResultSchema,
 					"Delivery only. The teammate reads its mailbox on its own schedule and there is no reply here.",
@@ -1235,6 +1266,9 @@ export function createAgentTeamsTools(
 		}) as AgentTool,
 	);
 
+	if (options.teammate) {
+		return tools.filter((tool) => TEAMMATE_TEAM_TOOL_NAMES.has(tool.name));
+	}
 	return tools;
 }
 

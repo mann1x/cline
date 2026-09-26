@@ -145,6 +145,36 @@ export const TeamTaskInputSchema = z
 		}
 	});
 
+/**
+ * `team_task` as a teammate has it: its own work on the board. Adding tasks
+ * is the lead's, so there is no `create` and none of its fields.
+ */
+export const TeammateTaskInputSchema = z
+	.object({
+		action: z.enum(["list", "claim", "complete", "block"]),
+		status: nullableOptional(
+			z.enum(["pending", "in_progress", "blocked", "completed"]),
+		).describe("Optional task status filter"),
+		assignee: nullableOptional(z.string().min(1)).describe(
+			"Optional assignee filter",
+		),
+		taskId: nullableOptional(z.string()).describe("Task ID"),
+		summary: nullableOptional(z.string().min(1)).describe("Completion summary"),
+		reason: nullableOptional(z.string().min(1)).describe("Blocking reason"),
+	})
+	.superRefine((input, ctx) => {
+		for (const field of TEAM_TASK_REQUIRED_FIELDS_BY_ACTION[input.action]) {
+			if (input[field] !== undefined) {
+				continue;
+			}
+			ctx.addIssue({
+				code: "custom",
+				path: [field],
+				message: `Field "${field}" is required when action=${input.action}`,
+			});
+		}
+	});
+
 export const TeamRunTaskInputSchema = z.object({
 	agentId: z.string().describe("Teammate agent ID"),
 	task: z.string().min(1).describe("Task instructions for the teammate"),
@@ -267,6 +297,7 @@ export type TeamShutdownTeammateInput = z.infer<
 >;
 export type TeamStatusInput = z.infer<typeof TeamStatusInputSchema>;
 export type TeamTaskInput = z.infer<typeof TeamTaskInputSchema>;
+export type TeammateTaskInput = z.infer<typeof TeammateTaskInputSchema>;
 export type TeamRunTaskInput = z.infer<typeof TeamRunTaskInputSchema>;
 export type TeamListRunsInput = z.infer<typeof TeamListRunsInputSchema>;
 export type TeamCancelRunInput = z.infer<typeof TeamCancelRunInputSchema>;
