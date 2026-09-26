@@ -64,6 +64,7 @@ vi.mock("../commands/auth", async () => {
 
 import {
 	buildConnectorStartRequest,
+	buildThreadStartRequest,
 	isReusableConnectorSession,
 } from "./session-runtime";
 
@@ -191,5 +192,59 @@ describe("isReusableConnectorSession", () => {
 			isReusableConnectorSession({ sessionId: "s1", status: "idle" }),
 		).toBe(true);
 		expect(isReusableConnectorSession({ sessionId: "s1" })).toBe(true);
+	});
+});
+
+// A connector (Slack and the others) got the team tools whenever it had
+// tools at all: eighteen of them, ~2.9k tokens a request, unasked.
+describe("buildThreadStartRequest", () => {
+	const base = {
+		workspaceRoot: "/w",
+		cwd: "/w",
+		provider: "anthropic",
+		model: "m",
+		enableTools: true,
+	} as Parameters<typeof buildThreadStartRequest>[0];
+
+	it("leaves the teammates off with tools on, unless the start request asks", () => {
+		expect(buildThreadStartRequest(base, {}).enableTeams).toBe(false);
+		expect(buildThreadStartRequest(base, {}).enableSpawn).toBe(true);
+		expect(
+			buildThreadStartRequest({ ...base, enableTeams: true }, {}).enableTeams,
+		).toBe(true);
+		expect(
+			buildThreadStartRequest(
+				{ ...base, enableTeams: true },
+				{ enableTools: false },
+			).enableTeams,
+		).toBe(false);
+	});
+
+	it("CLINE_TEAMMATES=1 on the connector process opts its threads in", async () => {
+		mockGetLastUsedProviderSettings.mockReturnValue({ provider: "anthropic" });
+		mockGetProviderSettings.mockReturnValue({ provider: "anthropic" });
+		mockGetProviderCollection.mockReturnValue({ provider: { env: [] } });
+		mockResolveSystemPrompt.mockResolvedValue("system");
+		const start = () =>
+			buildConnectorStartRequest({
+				options: { cwd: "/w", mode: "act", enableTools: true, apiKey: "k" },
+				io: { writeln: vi.fn(), writeErr: vi.fn() },
+				loggerConfig: { enabled: false, level: "info", destination: "stdout" },
+				systemRules: "Rules",
+			});
+		const previous = process.env.CLINE_TEAMMATES;
+		try {
+			delete process.env.CLINE_TEAMMATES;
+			expect(buildThreadStartRequest(await start(), {}).enableTeams).toBe(
+				false,
+			);
+			process.env.CLINE_TEAMMATES = "1";
+			expect(buildThreadStartRequest(await start(), {}).enableTeams).toBe(
+				true,
+			);
+		} finally {
+			if (previous === undefined) delete process.env.CLINE_TEAMMATES;
+			else process.env.CLINE_TEAMMATES = previous;
+		}
 	});
 });

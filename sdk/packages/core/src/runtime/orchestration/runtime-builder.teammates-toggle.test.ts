@@ -50,6 +50,19 @@ describe("the Teammates setting", () => {
 		expect(createSpawnTool.mock.calls[0]?.[0]?.teammates).not.toBe(true);
 	});
 
+	// Core's own default: a caller that says nothing (the SDK, a hub or
+	// connector session) gets none, as VS Code and the CLI do. It fell back
+	// to the mode preset, which said true.
+	it("unset: no team tool", async () => {
+		const { enableAgentTeams: _unset, ...unset } = config(true);
+		const runtime = await new DefaultRuntimeBuilder().build({
+			config: unset as CoreSessionConfig,
+		});
+
+		const team = new Set<string>(TEAM_TOOL_NAMES);
+		expect(runtime.tools.filter((tool) => team.has(tool.name))).toEqual([]);
+	});
+
 	it("on: the team tools are offered, and spawn_agent points at them", async () => {
 		const createSpawnTool = vi.fn((_options?: SpawnToolOptions) =>
 			stubSpawnTool(),

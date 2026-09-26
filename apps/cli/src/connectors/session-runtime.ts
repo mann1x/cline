@@ -17,6 +17,7 @@ import type { CliLoggerAdapter } from "../logging/adapter";
 import { resolveSystemPrompt } from "../runtime/prompt";
 import { resolveCliSessionMetadata } from "../utils/enterprise";
 import { resolveWorkspaceRoot } from "../utils/helpers";
+import { teammatesRequested } from "../utils/team-command";
 import {
 	parseLocalRowMetadata,
 	parseRowMetadata,
@@ -116,6 +117,8 @@ export async function buildConnectorStartRequest(input: {
 		systemPrompt,
 		logger: input.loggerConfig,
 		enableTools: input.options.enableTools,
+		// The CLI's opt-in: `CLINE_TEAMMATES=1` on the connector process.
+		enableTeams: teammatesRequested({}),
 		autoApproveTools: false,
 	};
 }
@@ -129,7 +132,9 @@ export function buildThreadStartRequest<TState extends ConnectorThreadState>(
 		...base,
 		enableTools,
 		enableSpawn: enableTools,
-		enableTeams: enableTools,
+		// Teammates are opt-in, as in VS Code and the CLI: tools alone do not
+		// bring the eighteen team tools into every connector request.
+		enableTeams: enableTools !== false && base.enableTeams === true,
 		autoApproveTools: state.autoApproveTools ?? base.autoApproveTools,
 		cwd: state.cwd || base.cwd,
 		workspaceRoot: state.workspaceRoot || base.workspaceRoot,

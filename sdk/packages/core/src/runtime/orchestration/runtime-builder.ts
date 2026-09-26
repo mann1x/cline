@@ -611,12 +611,17 @@ function normalizeConfig(
 		// run and answers the question on its own. The host's flag does not
 		// turn them back on: this is what the servers do, not what anyone
 		// prefers.
+		//
+		// And only when the host asks for them. Unset fell back to the mode
+		// preset, which says true for act and plan: every SDK, hub and
+		// connector session that said nothing carried eighteen team tools
+		// (~2.9k tokens) in every request, where VS Code and the CLI are off
+		// until their Teammates setting is on.
 		enableAgentTeams:
 			delegationCanRunInParallel({
 				maxConcurrentAgents: config.maxConcurrentAgents,
 				nodes: resolveSessionAgentNodes(config),
-			}) &&
-			(config.enableAgentTeams ?? preset.enableAgentTeams ?? true),
+			}) && config.enableAgentTeams === true,
 		disableMcpSettingsTools: config.disableMcpSettingsTools === true,
 		yolo: config.yolo === true,
 		missionLogIntervalSteps:
