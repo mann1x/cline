@@ -13,6 +13,10 @@ import { resolveTeamDataDir } from "@cline/shared/storage";
 import type { TeamEvent } from "../../extensions/tools/team";
 import { reviveTeamStateDates } from "../../extensions/tools/team/team-state-dates";
 import type { TeamStore } from "../../types/storage";
+import {
+	createPruneSchedule,
+	type TeamEventsRetention,
+} from "./team-events-retention";
 
 function nowIso(): string {
 	return new Date().toISOString();
@@ -32,7 +36,7 @@ interface PersistedTeamEnvelope {
 	teammates: TeamTeammateSpec[];
 }
 
-export interface FileTeamStoreOptions {
+export interface FileTeamStoreOptions extends TeamEventsRetention {
 	teamDir?: string;
 }
 
@@ -44,9 +48,11 @@ export interface TeamRuntimeLoadResult {
 
 export class FileTeamStore implements TeamStore {
 	private readonly teamDirPath: string;
+	private readonly eventsPrune: ReturnType<typeof createPruneSchedule>;
 
 	constructor(options: FileTeamStoreOptions = {}) {
 		this.teamDirPath = options.teamDir ?? resolveTeamDataDir();
+		this.eventsPrune = createPruneSchedule(options);
 	}
 
 	init(): void {
@@ -105,11 +111,27 @@ export class FileTeamStore implements TeamStore {
 
 	handleTeamEvent(teamName: string, event: TeamEvent): void {
 		this.ensureTeamSubdir(teamName);
+		const historyPath = this.historyPath(teamName);
 		appendFileSync(
-			this.historyPath(teamName),
+			historyPath,
 			`${JSON.stringify({ ts: nowIso(), eventType: event.type, payload: event })}\n`,
 			"utf8",
 		);
+		if (this.eventsPrune.due(sanitizeTeamName(teamName))) {
+			// The newest lines, written whole beside it and swapped in.
+			const lines = readFileSync(historyPath, "utf8")
+				.split("\n")
+				.filter((line) => line.trim());
+			if (lines.length > this.eventsPrune.kept) {
+				const tempPath = `${historyPath}.tmp`;
+				writeFileSync(
+					tempPath,
+					`${lines.slice(-this.eventsPrune.kept).join("\n")}\n`,
+					"utf8",
+				);
+				renameSync(tempPath, historyPath);
+			}
+		}
 	}
 
 	persistRuntime(

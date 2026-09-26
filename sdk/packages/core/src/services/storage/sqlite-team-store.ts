@@ -10,6 +10,10 @@ import { resolveDbDataDir } from "@cline/shared/storage";
 import type { TeamEvent } from "../../extensions/tools/team";
 import { reviveTeamStateDates } from "../../extensions/tools/team/team-state-dates";
 import type { TeamStore } from "../../types/storage";
+import {
+	createPruneSchedule,
+	type TeamEventsRetention,
+} from "./team-events-retention";
 
 function defaultTeamDir(): string {
 	return resolveDbDataDir();
@@ -22,7 +26,7 @@ function sanitizeTeamName(name: string): string {
 		.replace(/^-+|-+$/g, "");
 }
 
-export interface SqliteTeamStoreOptions {
+export interface SqliteTeamStoreOptions extends TeamEventsRetention {
 	teamDir?: string;
 }
 
@@ -111,9 +115,11 @@ function parseTeammatesJson(raw: string): TeamTeammateSpec[] {
 export class SqliteTeamStore implements TeamStore {
 	private readonly teamDirPath: string;
 	private db: SqliteDb | undefined;
+	private readonly eventsPrune: ReturnType<typeof createPruneSchedule>;
 
 	constructor(options: SqliteTeamStoreOptions = {}) {
 		this.teamDirPath = options.teamDir ?? defaultTeamDir();
+		this.eventsPrune = createPruneSchedule(options);
 	}
 
 	init(): void {
@@ -174,6 +180,11 @@ export class SqliteTeamStore implements TeamStore {
 		db.exec(`
 			CREATE INDEX IF NOT EXISTS idx_team_events_name_ts
 				ON team_events(team_name, ts DESC);
+		`);
+		// What the tail is kept by: a team's newest rows, by id.
+		db.exec(`
+			CREATE INDEX IF NOT EXISTS idx_team_events_name_id
+				ON team_events(team_name, id);
 		`);
 		db.exec(`
 			CREATE TABLE IF NOT EXISTS team_runtime_snapshot (
@@ -356,17 +367,29 @@ export class SqliteTeamStore implements TeamStore {
 		payload: unknown,
 		correlationId?: string,
 	): void {
+		const safeTeamName = sanitizeTeamName(teamName);
 		this.run(
 			`INSERT INTO team_events (team_name, ts, event_type, payload_json, causation_id, correlation_id)
 			 VALUES (?, ?, ?, ?, NULL, ?)`,
 			[
-				sanitizeTeamName(teamName),
+				safeTeamName,
 				nowIso(),
 				eventType,
 				JSON.stringify(payload),
 				correlationId ?? null,
 			],
 		);
+		// The team's newest rows are kept; everything at or below the first
+		// one past them goes.
+		if (this.eventsPrune.due(safeTeamName)) {
+			this.run(
+				`DELETE FROM team_events WHERE team_name = ? AND id <= (
+					SELECT id FROM team_events WHERE team_name = ?
+					ORDER BY id DESC LIMIT 1 OFFSET ?
+				)`,
+				[safeTeamName, safeTeamName, this.eventsPrune.kept],
+			);
+		}
 	}
 
 	persistRuntime(
