@@ -47,11 +47,13 @@ import {
 } from "./placed-run";
 import {
 	awaitingLeadNote,
+	backgroundAck,
 	configuredAgentKey,
 	controlFields,
 	controlReport,
 	requeueNote,
 	type SpawnAgentOutput,
+	type SpawnBackgroundAck,
 	type SubAgentEndContext,
 	type SubAgentSettledContext,
 	type SubAgentStartContext,
@@ -76,6 +78,7 @@ import {
 	compactionLogger,
 	createSubagentProgress,
 	DELEGATION_PACING_NOTE,
+	reportSubagentFinished,
 	reportSubagentModel,
 	reportSubagentSampling,
 	requeued,
@@ -93,6 +96,12 @@ const ConfiguredAgentInputSchema = z.object({
 	...SpawnSamplingFields,
 	/** Its iteration cap (over its file's) and its check. */
 	...AgentControlFields,
+	wait: z
+		.boolean()
+		.optional()
+		.describe(
+			"Wait for the agent to finish before this call returns (default: true). With false the call returns at once with a round id and the agent runs in the background while you keep working: its report is delivered to you when it ends, `agents_status` shows its progress, and `await_agents` waits for it.",
+		),
 });
 
 export type ConfiguredAgentInput = z.infer<typeof ConfiguredAgentInputSchema>;
@@ -443,7 +452,10 @@ export function createConfiguredAgentTools(
 	>();
 	const tools = buildConfiguredAgentToolDescriptors(options.agents).map(
 		({ toolName, config }) => {
-			const tool = createTool<ConfiguredAgentInput, SpawnAgentOutput>({
+			const tool = createTool<
+				ConfiguredAgentInput,
+				SpawnAgentOutput | SpawnBackgroundAck
+			>({
 				name: toolName,
 				// One call is one agent of this kind. The lead in sx4bp read that as a
 				// reason to avoid these tools for a fan-out ("those subagent tools
@@ -965,16 +977,17 @@ async function runConfiguredRound(
 		input: ConfiguredAgentInput,
 		context: AgentToolContext,
 	) => Promise<SpawnAgentOutput>,
-): Promise<SpawnAgentOutput> {
+): Promise<SpawnAgentOutput | SpawnBackgroundAck> {
 	const rounds = roundsFor(context.sessionId);
 	const sampling = readSpawnSampling(input);
 	const controls = controlFields(input);
 	const maxIterations = controls.max_iterations ?? config.maxIterations;
+	const background = input.wait === false;
 	const handle = rounds.open({
 		kind: "configured",
 		tool: buildConfiguredAgentToolName(config.name),
 		...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),
-		background: false,
+		background,
 		agents: [
 			{
 				name: config.name,
@@ -985,14 +998,23 @@ async function runConfiguredRound(
 				...(controls.check ? { check: controls.check } : {}),
 			},
 		],
-		...(context.signal ? { signal: context.signal } : {}),
+		// A background round is not tied to the turn it started in.
+		...(background ? {} : context.signal ? { signal: context.signal } : {}),
 		...(context.emitUpdate ? { emitUpdate: context.emitUpdate } : {}),
 	});
+	const memberContext: AgentToolContext = { ...context, signal: handle.signal };
+	if (background) {
+		// As spawn_agent's: its row stays open past the call, and its end is
+		// sent to it, since no call result will carry it there.
+		void handle
+			.run(0, memberContext, (ctx) => run(input, ctx))
+			.then((output) => reportSubagentFinished(context.emitUpdate, output))
+			.finally(() => handle.close());
+		return backgroundAck(handle);
+	}
 	const leave = rounds.enterBlocking();
 	try {
-		await handle.run(0, { ...context, signal: handle.signal }, (ctx) =>
-			run(input, ctx),
-		);
+		await handle.run(0, memberContext, (ctx) => run(input, ctx));
 		await handle.idle();
 		const output = handle.outputs()[0] as SpawnAgentOutput & {
 			error?: string;

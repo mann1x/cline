@@ -1,8 +1,104 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { __resetAgentRounds, roundsFor } from "./agent-rounds";
 import {
 	buildConfiguredAgentToolName,
 	createConfiguredAgentTools,
 } from "./configured-agent-tool";
+
+// `wait: false`, as spawn_agent has it: a configured agent the lead does not
+// need to sit and wait for runs beside it, and its report arrives on its own.
+describe("a configured agent in the background", () => {
+	afterEach(() => __resetAgentRounds());
+
+	it("returns at once with its round when asked not to wait, and its row gets its end", async () => {
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const connection = {
+			providerId: "ollama",
+			modelId: "local-model",
+			baseUrl: "http://127.0.0.1:11434",
+		};
+		const [tool] = createConfiguredAgentTools({
+			sessionId: "cfg-bg",
+			configProvider: {
+				getRuntimeConfig: () =>
+					({
+						...connection,
+						slotGates: {
+							for: () => ({
+								run: async () => {
+									await gate;
+									return {
+										text: "reviewed",
+										iterations: 1,
+										finishReason: "completed",
+										usage: { inputTokens: 0, outputTokens: 0 },
+									};
+								},
+								active: () => 0,
+							}),
+						},
+					}) as never,
+				getConnectionConfig: () => connection,
+				updateConnectionDefaults: () => {},
+			},
+			agents: [
+				{
+					name: "reviewer",
+					description: "reviews code",
+					systemPrompt: "You review code.",
+				},
+			],
+		});
+		const updates: Array<Record<string, unknown>> = [];
+		const ack = await (
+			tool as { execute: (i: unknown, c: unknown) => Promise<unknown> }
+		).execute(
+			{ prompt: "go", wait: false },
+			{
+				agentId: "lead",
+				sessionId: "cfg-bg",
+				toolCallId: "call-1",
+				emitUpdate: (update: Record<string, unknown>) => updates.push(update),
+			},
+		);
+		expect(ack).toMatchObject({
+			background: true,
+			round: "r1",
+			agents: [{ id: "r1-1", name: "reviewer" }],
+		});
+		const rounds = roundsFor("cfg-bg");
+		expect(rounds.get("r1")).toMatchObject({
+			background: true,
+			status: "running",
+		});
+
+		release();
+		await rounds.waitFor(["r1"]);
+		expect(rounds.get("r1")?.agents[0]).toMatchObject({
+			state: "done",
+			result: "reviewed",
+		});
+		expect(updates.some((update) => update.finished !== undefined)).toBe(true);
+	});
+
+	it("says in its schema that it can run in the background", () => {
+		const [tool] = createConfiguredAgentTools({
+			configProvider: {
+				getRuntimeConfig: () => ({ providerId: "ollama" }) as never,
+				getConnectionConfig: () => ({ providerId: "ollama" }) as never,
+				updateConnectionDefaults: () => {},
+			},
+			agents: [{ name: "r", description: "d", systemPrompt: "s" }],
+		});
+		expect(
+			(tool?.inputSchema as { properties?: Record<string, unknown> }).properties
+				?.wait,
+		).toMatchObject({ type: "boolean" });
+	});
+});
 
 describe("configured agent tools", () => {
 	it("builds stable subagent tool names", () => {
