@@ -515,7 +515,10 @@ export class HubServerTransport implements NativeHubTransport {
 						maxIterations: task.maxIterations,
 						enableTools: true,
 						enableSpawnAgent: true,
-						enableAgentTeams: true,
+						// Teammates are opt-in everywhere (18 tools, ~2.8k tokens
+						// per request): an agenda task gets them only with the
+						// CLI's switch on the hub process.
+						enableAgentTeams: process.env.CLINE_TEAMMATES === "1",
 					},
 					metadata,
 					runtimeOptions: {
@@ -523,7 +526,7 @@ export class HubServerTransport implements NativeHubTransport {
 						maxIterations: task.maxIterations,
 						enableTools: true,
 						enableSpawn: true,
-						enableTeams: true,
+						enableTeams: process.env.CLINE_TEAMMATES === "1",
 					},
 					toolPolicies: {
 						"*": { autoApprove: autoApproveTools, enabled: true },

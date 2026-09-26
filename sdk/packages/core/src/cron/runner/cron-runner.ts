@@ -590,7 +590,8 @@ export class CronRunner {
 			maxIterations: spec.maxIterations,
 			enableTools: runtimeOptions?.enableTools ?? true,
 			enableSpawn: runtimeOptions?.enableSpawn ?? true,
-			enableTeams: runtimeOptions?.enableTeams ?? true,
+			enableTeams:
+				runtimeOptions?.enableTeams ?? process.env.CLINE_TEAMMATES === "1",
 			autoApproveTools: runtimeOptions?.autoApproveTools ?? true,
 			toolPolicies: buildToolPolicies(spec, mode),
 			configExtensions: DEFAULT_CRON_EXTENSIONS.filter((extension) =>

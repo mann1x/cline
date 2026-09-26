@@ -237,6 +237,8 @@ describe("Hub agenda task vertical slice", () => {
 				),
 			).toBe(true);
 			expect(capturedStart?.config.workspaceRoot).toBe(canonicalChatWorkspace);
+			// Teammates are opt-in: an agenda task without CLINE_TEAMMATES gets none.
+			expect(capturedStart?.config.enableAgentTeams).toBe(false);
 			expect(capturedStart?.toolPolicies).toMatchObject({
 				"*": { autoApprove: true, enabled: true },
 			});

@@ -402,7 +402,7 @@ export async function handleSessionCreate(
 			enableSpawnAgent:
 				sessionConfig?.enableSpawnAgent ?? runtimeOptions.enableSpawn !== false,
 			enableAgentTeams:
-				sessionConfig?.enableAgentTeams ?? runtimeOptions.enableTeams !== false,
+				sessionConfig?.enableAgentTeams ?? runtimeOptions.enableTeams === true,
 			checkpoint:
 				sessionConfig?.checkpoint ??
 				(runtimeOptions.checkpointEnabled === true
@@ -679,7 +679,7 @@ export async function handleSessionRestore(
 							runtimeOptions.enableSpawn !== false,
 						enableAgentTeams:
 							sessionConfig?.enableAgentTeams ??
-							runtimeOptions.enableTeams !== false,
+							runtimeOptions.enableTeams === true,
 						checkpoint:
 							sessionConfig?.checkpoint ??
 							(runtimeOptions.checkpointEnabled === true
