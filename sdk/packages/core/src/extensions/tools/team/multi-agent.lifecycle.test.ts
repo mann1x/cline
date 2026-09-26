@@ -351,7 +351,7 @@ describe("AgentTeamsRuntime teammate lifecycle events", () => {
 				agentId: "python-poet",
 				status: "cancelled",
 			}),
-			reason: "This operation was aborted",
+			reason: 'Teammate "python-poet" was shut down (manual_restart)',
 		});
 	});
 

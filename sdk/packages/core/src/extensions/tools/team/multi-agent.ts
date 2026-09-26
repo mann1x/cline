@@ -239,6 +239,17 @@ function isAbortLikeError(error: unknown): boolean {
 	);
 }
 
+function abortError(message: string): Error {
+	const error = new Error(message);
+	error.name = "AbortError";
+	return error;
+}
+
+/** What a task given to a teammate that was shut down is told. */
+function stoppedTeammateMessage(agentId: string): string {
+	return `Teammate "${agentId}" was shut down and takes no more tasks. To give it work, spawn it again with team_spawn_teammate under the same agentId.`;
+}
+
 function isIntentionalTeammateAbort(
 	member: TeamMemberState | undefined,
 	error: unknown,
@@ -972,7 +983,31 @@ export class AgentTeamsRuntime {
 
 	isTeammateActive(agentId: string): boolean {
 		const member = this.members.get(agentId);
-		return !!member && member.role === "teammate" && !!member.agent;
+		return (
+			!!member &&
+			member.role === "teammate" &&
+			!!member.agent &&
+			member.status !== "stopped"
+		);
+	}
+
+	/**
+	 * Throw unless `agentId` is a live teammate that can be given a task. A
+	 * stopped one kept its agent for the task it was ending, and a task given
+	 * it ran on a released workspace and booked an engine session nothing
+	 * closed.
+	 */
+	private requireTaskableTeammate(
+		agentId: string,
+	): TeamMemberState & { agent: SessionRuntime } {
+		const member = this.members.get(agentId);
+		if (!member || member.role !== "teammate" || !member.agent) {
+			throw new Error(`Teammate "${agentId}" was not found`);
+		}
+		if (member.status === "stopped") {
+			throw new Error(stoppedTeammateMessage(agentId));
+		}
+		return member as TeamMemberState & { agent: SessionRuntime };
 	}
 
 	/**
@@ -1105,13 +1140,21 @@ export class AgentTeamsRuntime {
 		if (!member || member.role !== "teammate") {
 			throw new Error(`Teammate "${agentId}" was not found`);
 		}
-		try {
-			member.agent?.abort();
-		} catch (error) {
-			if (!isAbortLikeError(error)) {
-				throw error;
+		const why = `Teammate "${agentId}" was shut down${reason ? ` (${reason})` : ""}`;
+		// Its runs go with it: the queued ones never start, and the running one
+		// ends as cancelled. Left queued, the aborted task's end dispatched the
+		// next one onto a teammate whose workspace was released -- after the
+		// session had ended -- booking an engine session nothing closed.
+		for (const run of this.runs.values()) {
+			if (
+				run.agentId === agentId &&
+				(run.status === "queued" || run.status === "running")
+			) {
+				this.cancelRun(run.id, why);
 			}
 		}
+		// A sync task has no run: stopped as intended, so it ends cancelled too.
+		this.abortTeammateRun(agentId, why);
 		member.status = "stopped";
 		// Its workspace goes with it -- after the hand-back, so nothing it did is
 		// lost. A teammate still inside a run is released when that run ends
@@ -1274,10 +1317,7 @@ export class AgentTeamsRuntime {
 		message: string,
 		options?: RouteToTeammateOptions,
 	): Promise<AgentResult> {
-		const member = this.members.get(agentId);
-		if (!member || member.role !== "teammate" || !member.agent) {
-			throw new Error(`Teammate "${agentId}" was not found`);
-		}
+		const member = this.requireTaskableTeammate(agentId);
 		// The member's own count, taken with the check and before any await:
 		// the agent is not "running" yet while this task waits for the last
 		// one's engine close below, so a second task that asked only the agent
@@ -1302,6 +1342,10 @@ export class AgentTeamsRuntime {
 			if (released) {
 				member.pendingEngineRelease = undefined;
 				await released;
+			}
+			// Shut down while it waited: it must not book the session again.
+			if ((member.status as TeamMemberState["status"]) === "stopped") {
+				throw abortError(stoppedTeammateMessage(agentId));
 			}
 			// The close gave the window back but the grant is still on record,
 			// and a recorded grant is asked for again exactly, as a resume that
@@ -1431,6 +1475,9 @@ export class AgentTeamsRuntime {
 			leaseOwner?: string;
 		},
 	): TeamRunRecord {
+		// Refused now, not queued to fail -- or, for a stopped one, to sit
+		// queued with nothing to take it.
+		this.requireTaskableTeammate(agentId);
 		const runId = `run_${String(++this.runCounter).padStart(5, "0")}`;
 		const record: TeamRunRecord & { result?: AgentResult } = {
 			id: runId,
@@ -1598,8 +1645,13 @@ export class AgentTeamsRuntime {
 				return;
 			}
 			const cancellationReason = this.members.get(run.agentId)?.abortReason;
-			if (cancellationReason !== undefined) {
-				this.cancelRun(run.id, cancellationReason);
+			// An aborted task did not complete, whoever stopped it: recorded as
+			// completed, a shutdown's abort read as the teammate's answer.
+			if (
+				cancellationReason !== undefined ||
+				result.finishReason === "aborted"
+			) {
+				this.cancelRun(run.id, cancellationReason ?? "aborted");
 				return;
 			}
 			// Model-stream failures surface as results with finishReason

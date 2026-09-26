@@ -483,6 +483,16 @@ function shutdownTeamRuntime(
 	if (!teamRuntime) {
 		return;
 	}
+	// Every queued and running run first, and the retry timer with them: a
+	// queued run left behind was dispatched by the aborted run's end, after
+	// the session had ended.
+	try {
+		teamRuntime.cancelOutstandingWork(
+			`${RUNTIME_SHUTDOWN_REASON_PREFIX}${reason}`,
+		);
+	} catch {
+		// Best-effort; each teammate's shutdown below cancels its own too.
+	}
 	for (const teammateId of teamRuntime.getTeammateIds()) {
 		try {
 			teamRuntime.shutdownTeammate(

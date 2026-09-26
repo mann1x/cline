@@ -24,7 +24,7 @@ vi.mock("@cline/llms", async (importOriginal) => ({
 interface FakeTeammate {
 	started: string[];
 	aborts: number;
-	finish(text?: string): void;
+	finish(text?: string, finishReason?: AgentResult["finishReason"]): void;
 	running(): boolean;
 }
 
@@ -37,10 +37,10 @@ vi.mock("../../../runtime/orchestration/session-runtime-orchestrator", () => ({
 		const fake: FakeTeammate = {
 			started: [],
 			aborts: 0,
-			finish: (text = "done") => {
+			finish: (text = "done", finishReason = "completed") => {
 				const done = settle;
 				settle = undefined;
-				done?.(result(text, "completed"));
+				done?.(result(text, finishReason));
 			},
 			running: () => settle !== undefined,
 		};
@@ -244,5 +244,113 @@ describe("team_cancel_run on a running run", () => {
 		expect(w.aborts).toBe(0);
 		expect(statusOf(runtime, queued.id)).toBe("cancelled");
 		w.finish();
+	});
+});
+
+describe("a teammate shut down with work queued", () => {
+	it("cancels its running and queued runs, and starts none after", async () => {
+		const { runtime, events, spawn } = team();
+		const w = spawn("w", "lead~teammate-w-1");
+
+		const running = runtime.startTeammateRun("w", "task-1");
+		const queued = runtime.startTeammateRun("w", "task-2");
+		await vi.waitFor(() => expect(w.started).toEqual(["task-1"]));
+
+		runtime.shutdownTeammate("w", "lead_removed_it");
+
+		await vi.waitFor(() =>
+			expect(statusOf(runtime, running.id)).toBe("cancelled"),
+		);
+		expect(statusOf(runtime, queued.id)).toBe("cancelled");
+		// Past the aborted task's end and its dispatch: nothing else starts.
+		await vi.waitFor(() =>
+			expect(llms.releasePolykvAgent).toHaveBeenCalledWith("lead~teammate-w-1"),
+		);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(w.started).toEqual(["task-1"]);
+		expect(eventsOf(events, "run_completed", running.id)).toHaveLength(0);
+	});
+
+	it("starts no queued run of another teammate the session shut down", async () => {
+		// probe3: `a` aborted at session shutdown, then `b START task-2`.
+		const { runtime, spawn } = team({ maxConcurrentRuns: 1 });
+		const a = spawn("a");
+		const b = spawn("b");
+
+		const forA = runtime.startTeammateRun("a", "task-1");
+		const forB = runtime.startTeammateRun("b", "task-2");
+		await vi.waitFor(() => expect(a.started).toEqual(["task-1"]));
+
+		runtime.shutdownTeammate("a", "runtime_shutdown:session_stop");
+		runtime.shutdownTeammate("b", "runtime_shutdown:session_stop");
+
+		await vi.waitFor(() =>
+			expect(statusOf(runtime, forA.id)).toBe("cancelled"),
+		);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(b.started).toEqual([]);
+		expect(statusOf(runtime, forB.id)).toBe("cancelled");
+	});
+
+	it("does not start a task waiting on the last task's engine close", async () => {
+		let closeLanded: (() => void) | undefined;
+		const { runtime, spawn } = team();
+		const w = spawn("w", "lead~teammate-w-2");
+
+		const first = runtime.routeToTeammate("w", "first");
+		await vi.waitFor(() => expect(w.started).toEqual(["first"]));
+		llms.releasePolykvAgent.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					closeLanded = () => resolve({ closed: [], failed: [] });
+				}),
+		);
+		w.finish();
+		await first;
+
+		const second = runtime.routeToTeammate("w", "second");
+		const outcome = second.catch((error: Error) => error);
+		runtime.shutdownTeammate("w");
+		closeLanded?.();
+
+		expect(await outcome).toEqual(
+			expect.objectContaining({
+				message: expect.stringContaining("shut down"),
+			}),
+		);
+		expect(w.started).toEqual(["first"]);
+		// Its session closed for good, not left booked by a task that ran on.
+		expect(
+			llms.releasePolykvAgent.mock.calls.filter(
+				([id]) => id === "lead~teammate-w-2",
+			).length,
+		).toBeGreaterThanOrEqual(2);
+	});
+
+	it("records a run whose teammate was aborted as cancelled, not completed", async () => {
+		const { runtime, events, spawn } = team();
+		const w = spawn("w");
+
+		const run = runtime.startTeammateRun("w", "task");
+		await vi.waitFor(() => expect(w.started).toEqual(["task"]));
+		w.finish("cut short", "aborted");
+
+		await vi.waitFor(() => expect(statusOf(runtime, run.id)).toBe("cancelled"));
+		expect(eventsOf(events, "run_completed", run.id)).toHaveLength(0);
+	});
+
+	it("refuses a new task, sync or async, with a message that says so", async () => {
+		const { runtime, spawn } = team();
+		const w = spawn("w");
+		runtime.shutdownTeammate("w");
+
+		await expect(runtime.routeToTeammate("w", "more")).rejects.toThrow(
+			/"w" was shut down.*team_spawn_teammate/,
+		);
+		expect(() => runtime.startTeammateRun("w", "more")).toThrow(
+			/"w" was shut down.*team_spawn_teammate/,
+		);
+		expect(w.started).toEqual([]);
+		expect(runtime.isTeammateActive("w")).toBe(false);
 	});
 });

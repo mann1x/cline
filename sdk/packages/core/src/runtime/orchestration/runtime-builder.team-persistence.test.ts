@@ -41,6 +41,7 @@ class MockAgentTeamsRuntime {
 	recoverActiveRuns = vi.fn();
 	getTeammateIds = vi.fn(() => []);
 	shutdownTeammate = vi.fn();
+	cancelOutstandingWork = vi.fn();
 }
 
 // Partial rather than a replacement list. Written as a full replacement, this
@@ -314,6 +315,36 @@ describe("DefaultRuntimeBuilder team persistence boundary", () => {
 			expect.any(Object),
 			expect.arrayContaining([expect.objectContaining({ agentId: "w" })]),
 		);
+	});
+
+	it("cancels the team's queued and running runs before its teammates go", async () => {
+		const { DefaultRuntimeBuilder } = await import("./runtime-builder");
+		const built = await new DefaultRuntimeBuilder().build({
+			config: {
+				providerId: "anthropic",
+				modelId: "claude-sonnet-4-6",
+				apiKey: "key",
+				systemPrompt: "test",
+				cwd: process.cwd(),
+				enableTools: false,
+				enableSpawnAgent: false,
+				enableAgentTeams: true,
+			},
+		});
+		if (!runtimeInstance) {
+			throw new Error("Expected a mocked runtime instance");
+		}
+		const runtime = runtimeInstance;
+		runtime.getTeammateIds.mockReturnValue(["w"] as never);
+
+		await built.shutdown?.("session_stop");
+
+		expect(runtime.cancelOutstandingWork).toHaveBeenCalledWith(
+			"runtime_shutdown:session_stop",
+		);
+		expect(
+			runtime.cancelOutstandingWork.mock.invocationCallOrder[0],
+		).toBeLessThan(runtime.shutdownTeammate.mock.invocationCallOrder[0] ?? 0);
 	});
 
 	it("forwards cline workspace metadata to teammate runtime bootstrap config", async () => {
