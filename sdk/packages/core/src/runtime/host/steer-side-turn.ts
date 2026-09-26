@@ -167,6 +167,7 @@ export function createSteerRoundTools(
 const SYSTEM_SIDE_TURN_PREAMBLE = [
 	"This is a status report from the agent system, not a message from the user. Your agents are still running; you are reading it now, between their progress, without ending the delegation.",
 	"You can reply in plain text, `message_agents` to pass something to running agents, `stop_agents` to stop some or all of them, `requeue_agent` to move one off a node that is slow or misbehaving (keeping its transcript), `restart_agent` to start one over, `resume_agent` to continue one waiting at its iteration cap, or `retry_failed` to run a round's failed agents again.{LEAD_TOOLS} Nothing else is available until the round returns.",
+	`There is no waiting here -- no \`await_agents\`, and \`agents_status\` asked again shows the same round. This turn ends only when you write your reply, and it has ${STEER_SIDE_TURN_MAX_ITERATIONS} turns: act, then reply.`,
 	"The agents named below keep retrying on their own unless you stop them. If you decide to stop some, you will do their tasks yourself once the round returns. Answer in one short reply: what you decided, and why.",
 	"",
 	"The report:",
@@ -175,6 +176,7 @@ const SYSTEM_SIDE_TURN_PREAMBLE = [
 const SIDE_TURN_PREAMBLE = [
 	"The user has sent you this message while your agents are still running. You are answering it now, between your agents' progress, without ending the delegation.",
 	"You can reply in plain text, `message_agents` to pass something to running agents, `stop_agents` to stop some or all of them, `requeue_agent` to move one off a node that is slow or misbehaving (keeping its transcript), `restart_agent` to start one over, `resume_agent` to continue one waiting at its iteration cap, or `retry_failed` to run a round's failed agents again.{LEAD_TOOLS} Nothing else is available until the round returns.",
+	`There is no waiting here -- no \`await_agents\`, and \`agents_status\` asked again shows the same round. This turn ends only when you write your reply, and it has ${STEER_SIDE_TURN_MAX_ITERATIONS} turns: act, then reply.`,
 	"Answer the user in one short reply: what you will do, or what you did.",
 	"",
 	"The user's message:",

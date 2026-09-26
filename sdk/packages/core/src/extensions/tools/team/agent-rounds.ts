@@ -673,6 +673,41 @@ export class AgentRounds {
 		return this.blocking > 0;
 	}
 
+	/** `await_agents` calls in progress, each ended by {@link wakeAwaits}. */
+	private readonly wakers = new Set<() => void>();
+
+	/** Register an `await_agents` wait that a message for the lead ends. */
+	onWake(wake: () => void): () => void {
+		this.wakers.add(wake);
+		return () => {
+			this.wakers.delete(wake);
+		};
+	}
+
+	/**
+	 * The lead is inside `await_agents`: a wait it chose, which a message for
+	 * it should end rather than sit behind for the whole round.
+	 */
+	get leadAwaiting(): boolean {
+		return this.wakers.size > 0;
+	}
+
+	/**
+	 * Something is waiting for the lead -- the user's message, the harness's
+	 * report of a stuck agent. Its `await_agents` returns now, so the message
+	 * reaches it at the turn boundary right after; the rounds carry on.
+	 * Returns whether a wait was ended.
+	 */
+	wakeAwaits(): boolean {
+		if (this.wakers.size === 0) {
+			return false;
+		}
+		for (const wake of [...this.wakers]) {
+			wake();
+		}
+		return true;
+	}
+
 	list(): RoundRecord[] {
 		return [...this.rounds.values()];
 	}

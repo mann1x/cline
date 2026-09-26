@@ -2836,6 +2836,19 @@ export class LocalRuntimeHost implements RuntimeHost {
 		if (!session) {
 			return;
 		}
+		// Waiting in `await_agents`: the report goes to the lead itself, which
+		// is the one that can resume, restart or stop the agent. Its wait ends
+		// and the note is read at the boundary after it.
+		if (roundsFor(sessionId).leadAwaiting) {
+			this.pendingPromptsController.enqueue(sessionId, {
+				prompt: text,
+				delivery: "steer",
+				origin: "harness",
+				noteKind: "status",
+			});
+			roundsFor(sessionId).wakeAwaits();
+			return;
+		}
 		if (
 			!session.agent.canStartRun() &&
 			this.sideTurnConfigs.has(sessionId) &&
@@ -2869,6 +2882,24 @@ export class LocalRuntimeHost implements RuntimeHost {
 				delivery: delivery ?? "immediate",
 			},
 		});
+		// A steer while the lead waits in `await_agents` ends that wait: the
+		// lead reads it at the boundary right after, and waits again if it
+		// wants to. A wait the lead chose is not a reason to stop listening.
+		if (
+			delivery === "steer" &&
+			!canStartRun &&
+			roundsFor(input.sessionId).leadAwaiting
+		) {
+			this.pendingPromptsController.enqueue(input.sessionId, {
+				prompt: input.prompt,
+				mode: input.mode,
+				delivery,
+				userImages: input.userImages,
+				userFiles: input.userFiles,
+			});
+			roundsFor(input.sessionId).wakeAwaits();
+			return undefined;
+		}
 		// A steer while the lead waits inside a delegation is answered now, in
 		// a side turn, instead of at a boundary the lead will not reach until
 		// the whole round is done.

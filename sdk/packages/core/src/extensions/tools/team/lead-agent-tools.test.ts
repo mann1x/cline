@@ -307,6 +307,25 @@ describe("await_agents", () => {
 		expect(rounds.get("r1")?.delivered).toBe(true);
 	});
 
+	it("ends the wait when a message arrives for the lead, and the round carries on", async () => {
+		const { rounds, finish } = await backgroundRound();
+		const waiting = run("await_agents", {});
+		expect(rounds.leadAwaiting).toBe(true);
+		expect(rounds.wakeAwaits()).toBe(true);
+		const text = await waiting;
+		expect(text).toContain("a message for you arrived");
+		expect(text).toContain("Round r1 is running");
+		expect(rounds.leadAwaiting).toBe(false);
+		expect(rounds.leadBlocked).toBe(false);
+		// Not delivered: the report still comes when the round ends.
+		expect(rounds.get("r1")?.delivered).not.toBe(true);
+		expect(rounds.wakeAwaits()).toBe(false);
+		// Waiting again works, and the report comes to that call.
+		const again = run("await_agents", {});
+		finish();
+		expect(await again).toContain("bg done");
+	});
+
 	it("says there is nothing to wait for", async () => {
 		expect(await run("await_agents", {})).toBe(
 			"No rounds are running: there is nothing to wait for.",

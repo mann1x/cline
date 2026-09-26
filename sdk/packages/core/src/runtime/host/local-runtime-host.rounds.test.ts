@@ -230,4 +230,31 @@ describe("background rounds, as the host wires them", () => {
 		const pending = await host.pendingPrompts.list({ sessionId });
 		expect(JSON.stringify(pending)).toContain("also check the tests");
 	});
+
+	// The lead that chose await_agents was deaf for the whole round: a user's
+	// message went to side turns that ran out of turns, and every note queued
+	// behind a boundary it did not reach (pandorum, 2026-09-26).
+	it("ends the lead's await_agents for a user's steer, and queues the steer for it", async () => {
+		const { host, sessionId } = await start();
+		agent.canStartRun.mockReturnValue(false);
+		backgroundRound(sessionId);
+		registerSubagentCancellation(`${sessionId}::c#0`, undefined, "bg");
+		const rounds = roundsFor(sessionId);
+		const woken = vi.fn();
+		const off = rounds.onWake(woken);
+		const leave = rounds.enterBlocking();
+		try {
+			await host.runTurn({
+				sessionId,
+				prompt: "stop the reviewers",
+				delivery: "steer",
+			} as never);
+		} finally {
+			leave();
+			off();
+		}
+		expect(woken).toHaveBeenCalledTimes(1);
+		const pending = await host.pendingPrompts.list({ sessionId });
+		expect(JSON.stringify(pending)).toContain("stop the reviewers");
+	});
 });

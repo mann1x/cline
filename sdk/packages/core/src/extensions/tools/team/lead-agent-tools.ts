@@ -550,7 +550,7 @@ export function createLeadAgentMessagingTools(
 }
 
 export const AWAIT_AGENTS_DESCRIPTION =
-	"Wait for rounds running in the background to finish, and get their reports. With no arguments it waits for every round still running; `round_id` (or `round_ids`) waits for those. You need it only when you have nothing else to do until the agents are done: a background round's report is delivered to you on its own when it ends. While you wait, a message from the user is answered in a side turn, as during a call that waits.";
+	"Wait for rounds running in the background to finish, and get their reports. With no arguments it waits for every round still running; `round_id` (or `round_ids`) waits for those. You need it only when you have nothing else to do until the agents are done: a background round's report is delivered to you on its own when it ends. A message for you -- from the user, or the agent system's report of a stuck agent -- ends the wait: this call returns, you read the message, and you can wait again.";
 
 /**
  * Wait for background rounds, as a call that waited would have: their
@@ -604,12 +604,30 @@ export function createAwaitAgentsTool(
 				}),
 			);
 			const leave = rounds.enterBlocking();
+			// A message for the lead ends the wait: the lead chose to wait, not
+			// to stop listening. It reads the message at the boundary after this
+			// result and can wait again.
+			const woken = new AbortController();
+			const offWake = rounds.onWake(() => woken.abort("woken"));
+			const signal = context?.signal
+				? AbortSignal.any([context.signal, woken.signal])
+				: woken.signal;
 			let finished: RoundRecord[];
 			try {
-				finished = await rounds.waitFor(ids, context?.signal);
+				finished = await rounds.waitFor(ids, signal);
 			} catch {
+				if (woken.signal.aborted && !context?.signal?.aborted) {
+					return `Stopped waiting: a message for you arrived, and it follows this result. ${ids
+						.map(
+							(id) => `Round ${id} is ${rounds.get(id)?.status ?? "running"}`,
+						)
+						.join(
+							"; ",
+						)}; nothing was stopped. Deal with the message, then call await_agents again if there is still nothing else to do -- the report is delivered when the round ends either way.`;
+				}
 				return "Stopped waiting: the turn was stopped. The rounds carry on; their reports are delivered when they end.";
 			} finally {
+				offWake();
 				leave();
 			}
 			const parts = finished.map((round) => {
