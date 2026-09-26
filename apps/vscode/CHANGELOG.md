@@ -5,9 +5,9 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.208] — 2026-09-26
+## [4.100.209] — 2026-09-26
 
-The first public release since 4.100.118. Builds 4.100.119 to 4.100.207 were
+The first public release since 4.100.118. Builds 4.100.119 to 4.100.208 were
 test builds and were never published, so everything they carried is collected
 here, grouped by what it changes for you. The major features:
 
@@ -486,6 +486,11 @@ instead of arguing, so it can check the working model without agreeing with it.
   Sessions stop compacting with half the window free.
 - **Compaction fires when the output cap runs thin**, before a whole-file edit
   is cut off mid-call.
+- **A request whose window looks full keeps its output cap.** When the
+  estimate left no room, the request went out with no cap at all, and Ollama
+  and llama.cpp then generate until the context is full: a compaction summary
+  ran 28,500 tokens to the end of a 128,000 window. It now keeps the cap it
+  would otherwise have had.
 - **An agent's context overflow no longer compacts the lead.** An agent's
   measurements are filed under its own session.
 - **Stale reads are rewritten only under context pressure.** A file read that
