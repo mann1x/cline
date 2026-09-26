@@ -606,9 +606,24 @@ export function resolveGatewayOutputCap(
 				noteContextOverflow(report, input.sessionId);
 			}
 			input.onContextOverflow?.(report);
-			// No cap goes out, but the window is still what decided that, and the
-			// next truncation is squarely compaction's to fix.
+			// The request keeps the cap it would have had without the window:
+			// the one it asked for, the default, the model's ceiling. Sent
+			// uncapped, Ollama and llama.cpp generate until the context is full
+			// -- pandorum 2026-09-27, a compaction summary estimated at 123,702
+			// of 128,000 ran 28,553 tokens to `truncated = 1`, and the estimate
+			// was high: the next call, estimated at 118,832, was 99,427. A
+			// request that really overflows fails with or without a cap; one
+			// that only looks full stays bounded. The window still decided, so
+			// the next truncation is squarely compaction's to fix.
+			const bound = caps.reduce<number | undefined>(
+				(least, cap) =>
+					least === undefined || cap.tokens < least ? cap.tokens : least,
+				undefined,
+			);
 			return {
+				...(bound !== undefined
+					? { maxTokens: Math.max(1, Math.floor(bound)) }
+					: {}),
 				source: "context-overflow",
 				windowBound: true,
 				...(isPositiveFiniteNumber(input.estimatedInputTokens)
@@ -888,7 +903,7 @@ export class DefaultGateway implements Gateway {
 				reasoningBudgetTokens: request.reasoning?.budgetTokens,
 				onContextOverflow: (details) => {
 					this.logger?.log(
-						"Estimated remaining context leaves no usable output budget; sending no output cap" +
+						"Estimated remaining context leaves no usable output budget; keeping the request's own cap" +
 							` (${describeOutputBudget(details)})`,
 						{
 							severity: "warn",

@@ -501,17 +501,31 @@ describe("sdk-gateway", () => {
 			}),
 		).toMatchObject({ source: "remaining-context", windowBound: true });
 
-		// So is having no room at all, even though no cap goes out.
+		// So is having no room at all -- and the request keeps the cap it would
+		// have had. With none, Ollama and llama.cpp generate until the context
+		// is full: pandorum 2026-09-27, a compaction summary on a 128,000
+		// window estimated at 123,702 input tokens went out uncapped, ran
+		// 28,553 tokens to `n_tokens = 127999, truncated = 1`, and the next
+		// call (99,427 real tokens, estimated 118,832) went out uncapped too.
 		const overflowed = resolveGatewayOutputCap({
 			requestedMaxTokens: 32_000,
 			model: { maxOutputTokens: 32_000, contextWindow: 60_000 },
 			estimatedInputTokens: 59_990,
 		});
-		expect(overflowed.maxTokens).toBeUndefined();
+		expect(overflowed.maxTokens).toBe(32_000);
 		expect(overflowed).toMatchObject({
 			source: "context-overflow",
 			windowBound: true,
 		});
+		// A call that asks for nothing keeps the synthesized default.
+		const defaulted = resolveGatewayOutputCap({
+			requestedMaxTokens: undefined,
+			defaultMaxOutputTokens: 16_000,
+			model: { contextWindow: 128_000 },
+			estimatedInputTokens: 123_702,
+		});
+		expect(defaulted.maxTokens).toBe(16_000);
+		expect(defaulted.source).toBe("context-overflow");
 
 		// A model with neither term declares nothing to attribute a cap to.
 		const uncapped = resolveGatewayOutputCap({
@@ -1060,7 +1074,7 @@ describe("sdk-gateway", () => {
 				outputReserveTokens: 1_024,
 				onContextOverflow,
 			}),
-		).toBeUndefined();
+		).toBe(8_192);
 		expect(onContextOverflow).toHaveBeenCalledWith({
 			contextWindow: 10_000,
 			estimatedInputTokens: 9_500,
@@ -1083,7 +1097,7 @@ describe("sdk-gateway", () => {
 				estimatedInputTokens: 9_500,
 				outputReserveTokens: 1_024,
 			}),
-		).toBeUndefined();
+		).toBe(8_192);
 		expect(consumeContextOverflow()).toMatchObject({
 			contextWindow: 10_000,
 			remainingContext: -524,
@@ -1102,11 +1116,12 @@ describe("sdk-gateway", () => {
 		expect(consumeContextOverflow()).toBeUndefined();
 	});
 
-	it("sends no output cap rather than a cap too small to answer with", () => {
+	it("sends the request's own cap rather than one too small to answer with", () => {
 		// A high estimate walks the remaining-context term down; below the floor
 		// the estimate is the likelier explanation than an exhausted window, and a
 		// 60-token cap is not a request worth sending -- with Ollama it also sizes
 		// the thinking budget, which then forces its end sequence into a tool call.
+		// Nor is no cap: Ollama then generates until the context is full.
 		const onContextOverflow = vi.fn();
 
 		expect(
@@ -1117,7 +1132,7 @@ describe("sdk-gateway", () => {
 				outputReserveTokens: 1_024,
 				onContextOverflow,
 			}),
-		).toBeUndefined();
+		).toBe(32_000);
 		expect(onContextOverflow).toHaveBeenCalledWith(
 			expect.objectContaining({ remainingContext: 60 }),
 		);
