@@ -69,7 +69,7 @@ import {
 	roundsFor,
 } from "./agent-rounds";
 import type { HandedRevision } from "./delegated-sandboxes";
-import { backgroundAck } from "./spawn-agent-tool";
+import { backgroundAck, wokenAck } from "./spawn-agent-tool";
 import {
 	mergeSpawnSampling,
 	type RealizedSpawnSampling,
@@ -1298,15 +1298,41 @@ export function createSpawnSwarmTool(
 				};
 			}
 			const leave = rounds.enterBlocking();
+			const round = runRound();
+			let detached = false;
 			try {
-				const output = await runRound();
+				const first = await rounds.untilWoken(round);
+				if (first.woken) {
+					// Finished as a background round is: the pool is kept
+					// until the workers are done with it.
+					detached = true;
+					void round
+						.then((output) => {
+							handle.setReport(JSON.stringify(output), output.digest);
+						})
+						.catch(() => undefined)
+						.finally(async () => {
+							await finish();
+							handle.close();
+						});
+					return {
+						...wokenAck(handle),
+						digest: `Round ${handle.id} now runs in the background; the merged report is delivered to you when it ends.`,
+						workers: 0,
+						pooled: snapshot !== undefined,
+						usage: { inputTokens: 0, outputTokens: 0 },
+					};
+				}
+				const output = first.value;
 				handle.setReport(JSON.stringify(output), output.digest);
 				handle.delivered();
 				return output;
 			} finally {
 				leave();
-				await finish();
-				handle.close();
+				if (!detached) {
+					await finish();
+					handle.close();
+				}
 			}
 		},
 		timeoutMs: 600_000,

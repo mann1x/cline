@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CoreSessionEvent } from "../../types/events";
 import type { ActiveSession } from "../../types/session";
+import { SIDE_TURN_RECAP_HEADER } from "./harness-notes";
 import {
 	type PendingPromptQueueState,
 	PendingPromptService,
@@ -80,16 +81,36 @@ describe("PendingPromptService", () => {
 				noteKind,
 			});
 
-		note("side turn 1", "recap");
-		note("side turn 2", "recap");
+		const header = SIDE_TURN_RECAP_HEADER;
+		note(
+			`${header}\n- report (stalled: a, b): you replied: "waiting"`,
+			"recap",
+		);
+		note(`${header}\n- user: "status?" -> you replied: "3 running"`, "recap");
+		note(
+			`${header}\n- report (stalled: a): you replied: "stopping b"; did: Stopped 1 agent(s): b.`,
+			"recap",
+		);
+		note(
+			`${header}\n- report (stalled: a): you replied: "still waiting"`,
+			"recap",
+		);
 		note("3 agents stuck", "status");
 		note("5 agents stuck", "status");
 		service.enqueue(state, { prompt: "typed", delivery: "steer" });
 
+		// pandorum 2026-09-26: nine recaps, each quoting the whole report
+		// again, were 11.4k characters. The user's messages first; of the
+		// reports, the latest whole and an older one only for what it did.
 		expect(service.list(state).map(({ prompt }) => prompt)).toEqual([
 			"typed",
 			"5 agents stuck",
-			"side turn 1\n\nside turn 2",
+			[
+				header,
+				'- user: "status?" -> you replied: "3 running"',
+				"- earlier report: did: Stopped 1 agent(s): b.",
+				'- report (stalled: a): you replied: "still waiting"',
+			].join("\n"),
 		]);
 	});
 

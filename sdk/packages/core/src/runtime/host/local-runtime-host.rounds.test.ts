@@ -165,7 +165,7 @@ describe("background rounds, as the host wires them", () => {
 		await vi.waitFor(() => expect(rounds.get("r1")?.delivered).toBe(true));
 		const last = agent.messages.at(-1) as { role: string; content: string };
 		expect(last.role).toBe("user");
-		expect(last.content).toContain("[Round r1 finished]");
+		expect(last.content).toContain("[SYSTEM MESSAGE] Round r1 finished");
 		expect(last.content).toContain("the background work");
 	});
 
@@ -191,7 +191,7 @@ describe("background rounds, as the host wires them", () => {
 		// its next turn, as a background round's report reaches an idle lead.
 		const last = agent.messages.at(-1) as { role: string; content: string };
 		expect(last?.role).toBe("user");
-		expect(last?.content).toMatch(/^\[Round r1 interrupted\] /);
+		expect(last?.content).toMatch(/^\[SYSTEM MESSAGE\] Round r1 interrupted: /);
 		expect(last?.content).toContain('retry_failed(round_id: "r1")');
 		expect(round?.delivered).toBe(true);
 	});
@@ -213,7 +213,9 @@ describe("background rounds, as the host wires them", () => {
 		finish();
 		await vi.waitFor(() => expect(rounds.get("r1")?.delivered).toBe(true));
 		const pending = await host.pendingPrompts.list({ sessionId });
-		expect(JSON.stringify(pending)).toContain("[Round r1 finished]");
+		expect(JSON.stringify(pending)).toContain(
+			"[SYSTEM MESSAGE] Round r1 finished",
+		);
 		expect(agent.messages).toHaveLength(0);
 	});
 

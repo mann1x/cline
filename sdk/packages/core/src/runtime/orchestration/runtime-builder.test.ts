@@ -1462,9 +1462,7 @@ describe("the lead's completion and its background rounds", () => {
 			{ agentId: "lead", iteration: 1, sessionId: "rounds-guard" } as never,
 			() => new Promise(() => {}),
 		);
-		expect(guard?.()).toContain(
-			"Round r1 (spawn_agent, 1 agent) is still running",
-		);
+		expect(guard?.()).toContain("Still running: r1 (spawn_agent, 1 agent)");
 	});
 
 	it("carries no rounds guard without delegation", async () => {

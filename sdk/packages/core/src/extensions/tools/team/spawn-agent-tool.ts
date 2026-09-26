@@ -171,7 +171,7 @@ export const SpawnAgentInputSchema = z.object({
 		.boolean()
 		.optional()
 		.describe(
-			"Wait for the agents to finish before this call returns (default: true for one agent; false for several, and for `merge`). With false the call returns at once with a round id and the agents run in the background while you keep working: their report is delivered to you when the round ends, `agents_status` shows their progress, and `await_agents` waits for them.",
+			"Wait for the agents to finish before this call returns (default: true for one agent; false for several, and for `merge`). With false the call returns at once with a round id and the agents run in the background while you keep working: their report is delivered to you when the round ends, `agents_status` shows their progress, and `await_agents` waits for them. A message for you ends a wait early: the agents go on in the background.",
 		),
 });
 
@@ -920,6 +920,18 @@ export function backgroundAck(handle: RoundHandle): SpawnBackgroundAck {
 	};
 }
 
+/**
+ * What a blocking call returns when a message for the lead arrives first: the
+ * round is detached and goes on in the background.
+ */
+export function wokenAck(handle: RoundHandle): SpawnBackgroundAck {
+	handle.detach();
+	return {
+		...backgroundAck(handle),
+		note: `A message for you arrived and follows this result. Round ${handle.id} now runs in the background; nothing was stopped. Answer the message; the round's report is delivered when it ends, and \`await_agents(round_id: "${handle.id}")\` waits for it again.`,
+	};
+}
+
 /** One agent: a round of one, blocking unless `wait: false`. */
 async function runSingleSpawn(
 	config: SpawnAgentToolConfig,
@@ -965,7 +977,15 @@ async function runSingleSpawn(
 	}
 	const leave = rounds.enterBlocking();
 	try {
-		await handle.run(0, memberContext, run);
+		const ran = handle.run(0, memberContext, run);
+		// A message for the lead ends the wait; the agent goes on (`finally`
+		// closes the call's hold, and the round settles when the agent ends).
+		if ((await rounds.untilWoken(ran.then(() => handle.idle()))).woken) {
+			void ran.then((output) =>
+				reportSubagentFinished(context.emitUpdate, output),
+			);
+			return wokenAck(handle);
+		}
 		// A restart or retry of it from the side turn runs before the call
 		// returns: the lead gets the run that counts.
 		await handle.idle();
@@ -1169,8 +1189,9 @@ async function runSpawnBatch(
 	}
 	const leave = rounds.enterBlocking();
 	try {
-		await runAll;
-		await handle.idle();
+		if ((await rounds.untilWoken(runAll.then(() => handle.idle()))).woken) {
+			return wokenAck(handle);
+		}
 		handle.delivered();
 		// Built to fit the tool-result cap and name every agent: a round of 75
 		// summaries was cut from the middle, and the lead lost the agents there.

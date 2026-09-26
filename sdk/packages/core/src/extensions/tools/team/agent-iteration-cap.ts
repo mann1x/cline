@@ -41,6 +41,7 @@
 
 import type { AgentResult } from "@cline/shared";
 import { isWorkerStruggleStop } from "../../../runtime/safety/worker-struggle-stop";
+import { HARNESS_TAG } from "../../../runtime/turn-queue/harness-notes";
 import type { AgentOracleResult, DelegatedAgentCheck } from "./agent-check";
 import { leadCanBeReached, sendLeadNudge } from "./agent-trouble";
 
@@ -300,49 +301,31 @@ export function describeAwaitingLead(
 	const lines = [
 		...capped.map(
 			(view) =>
-				`- ${view.name} (agent id ${view.agentId}) reached its ${view.maxIterations}-iteration cap after ${view.iterations} iterations.`,
+				`- ${view.name} (${view.agentId}): ${view.maxIterations}-iteration cap reached.`,
 		),
 		...looping.map(
 			(view) =>
-				`- ${view.name} (agent id ${view.agentId}) was LOOPING: it sent the same call again after the loop guard's warning, and the guard stopped it after ${view.iterations} iterations.${
-					view.detail ? ` The guard said: ${oneLine(view.detail, 300)}` : ""
+				`- ${view.name} (${view.agentId}): LOOPING, loop guard stopped it at iteration ${view.iterations}.${
+					view.detail ? ` Guard: ${oneLine(view.detail, 300)}` : ""
 				}`,
 		),
 		...struggling.map(
 			(view) =>
-				`- ${view.name} (agent id ${view.agentId}) was STRUGGLING: the struggle supervisor had told it to commit a SUMMARY and stopped it when it went on, after ${view.iterations} iterations.${
-					view.detail
-						? ` The supervisor said: ${oneLine(view.detail, 300)}`
-						: ""
+				`- ${view.name} (${view.agentId}): STRUGGLING, supervisor stopped it at iteration ${view.iterations}.${
+					view.detail ? ` Supervisor: ${oneLine(view.detail, 300)}` : ""
 				}`,
 		),
 	];
-	const kinds = [
-		capped.length > 0 ? "stopped at the iteration cap" : "",
-		looping.length > 0 ? "were stopped by the loop guard" : "",
-		struggling.length > 0 ? "were stopped by the struggle supervisor" : "",
+	const hints = [
+		looping.length > 0 ? "for LOOPING say what to do instead" : "",
+		struggling.length > 0 ? "for STRUGGLING say what to settle for" : "",
 	].filter(Boolean);
-	const why =
-		kinds.length <= 1
-			? (kinds[0] ?? "stopped at the iteration cap")
-			: `${kinds.slice(0, -1).join(", ")} or ${kinds[kinds.length - 1]}`;
 	return [
-		`${views.length === 1 ? "An agent has" : `${views.length} agents have`} ${views.length === 1 ? why.replace("were stopped", "was stopped") : why} and ${views.length === 1 ? "is" : "are"} waiting for you. The work is kept -- transcript and file changes -- and nothing has been discarded:`,
+		`${HARNESS_TAG} ${views.length} agent${views.length === 1 ? "" : "s"} stopped, waiting for you (work kept: transcript + files):`,
 		...lines,
-		`Call ${RESUME_AGENT_TOOL_NAME}(agent_id, extra_iterations, instructions?) to continue one from where it stopped${
-			looping.length > 0 || struggling.length > 0
-				? ` -- ${[
-						looping.length > 0
-							? "for a looping agent, say in `instructions` what to do instead of the call it repeated"
-							: "",
-						struggling.length > 0
-							? "for a struggling agent, say in `instructions` what to settle for or where to look"
-							: "",
-					]
-						.filter(Boolean)
-						.join("; ")}`
-				: " with a raised cap"
-		}; restart_agent(agent_id, instructions) to start it over with revised instructions; or stop it (stop_agents) to take its work as it is. Its round does not return until you decide.`,
+		`Decide: ${RESUME_AGENT_TOOL_NAME}(agent_id, extra_iterations, instructions?) continues${
+			hints.length > 0 ? ` (${hints.join("; ")})` : ""
+		}; restart_agent(agent_id, instructions) starts over; stop_agents takes the work as is. Its round waits for you.`,
 	].join("\n");
 }
 

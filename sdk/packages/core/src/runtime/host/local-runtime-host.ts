@@ -2836,9 +2836,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 		if (!session) {
 			return;
 		}
-		// Waiting in `await_agents`: the report goes to the lead itself, which
-		// is the one that can resume, restart or stop the agent. Its wait ends
-		// and the note is read at the boundary after it.
+		// Waiting on its agents (`await_agents`, a blocking spawn): the report
+		// goes to the lead itself, which is the one that can resume, restart or
+		// stop the agent. Its wait ends and the note is read right after it.
 		if (roundsFor(sessionId).leadAwaiting) {
 			this.pendingPromptsController.enqueue(sessionId, {
 				prompt: text,
@@ -2882,9 +2882,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 				delivery: delivery ?? "immediate",
 			},
 		});
-		// A steer while the lead waits in `await_agents` ends that wait: the
-		// lead reads it at the boundary right after, and waits again if it
-		// wants to. A wait the lead chose is not a reason to stop listening.
+		// A steer while the lead waits on its agents (`await_agents`, a
+		// blocking spawn) ends that wait: the round goes on in the background,
+		// the lead reads the steer at the boundary right after, and waits again
+		// if it wants to. Waiting is not a reason to stop listening.
 		if (
 			delivery === "steer" &&
 			!canStartRun &&

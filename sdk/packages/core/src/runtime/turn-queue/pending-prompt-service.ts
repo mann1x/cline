@@ -10,6 +10,7 @@ import type {
 	PendingPromptsDeleteInput,
 	PendingPromptsUpdateInput,
 } from "../host/runtime-host";
+import { mergeSideTurnRecaps } from "./harness-notes";
 
 export type PendingPromptDelivery = "queue" | "steer";
 
@@ -24,7 +25,8 @@ export type PendingPromptOrigin = "user" | "harness";
 /**
  * Harness notes that merge while they wait: a status report is replaced by a
  * newer one (it describes the same agents, later), and side-turn recaps are
- * joined into one note (each says what the lead already did). Measured
+ * merged into one note (`mergeSideTurnRecaps`: the user's messages first,
+ * the latest report on the agents whole). Measured
  * 2026-09-26: a lead held by its round collected seven separate recaps.
  */
 export type PendingPromptNoteKind = "status" | "recap";
@@ -167,7 +169,9 @@ export class PendingPromptService {
 			);
 			if (waiting) {
 				waiting.prompt =
-					noteKind === "recap" ? `${waiting.prompt}\n\n${prompt}` : prompt;
+					noteKind === "recap"
+						? mergeSideTurnRecaps(waiting.prompt, prompt)
+						: prompt;
 				return snapshotPrompts(state);
 			}
 		}

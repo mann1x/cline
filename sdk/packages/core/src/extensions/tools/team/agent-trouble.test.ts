@@ -56,14 +56,13 @@ describe("telling the lead about agents stuck for a long time", () => {
 
 		expect(sent).toHaveLength(1);
 		const text = sent[0] ?? "";
+		expect(text).toMatch(/^\[SYSTEM MESSAGE\] /);
 		expect(text).toContain(
-			`code-correctness-2: refused 14 times by Node1: "${TPS}"`,
+			`code-correctness-2: refused 14x by Node1: "${TPS}" (`,
 		);
-		expect(text).toContain("waiting since 2026-09-25T05:16:25Z");
 		expect(text).toContain("still retrying");
-		expect(text).toContain("nothing has been stopped");
-		expect(text).toContain("stop them (`stop_agents`)");
-		expect(text).toContain("do those tasks yourself");
+		expect(text).toContain("nothing stopped");
+		expect(text).toContain("stop_agents and do their tasks yourself");
 		watch.dispose();
 	});
 
@@ -79,7 +78,7 @@ describe("telling the lead about agents stuck for a long time", () => {
 			LEAD_NUDGE_AFTER_MS + LEAD_NUDGE_BATCH_MS,
 		);
 		expect(sent[0]).toContain(
-			"review-7: Node1 unreachable since 2026-09-25T05:16:25Z (server restarted",
+			"review-7: Node1 unreachable (server restarted, ",
 		);
 		watch.dispose();
 	});
@@ -99,7 +98,7 @@ describe("telling the lead about agents stuck for a long time", () => {
 			LEAD_NUDGE_AFTER_MS + LEAD_NUDGE_BATCH_MS,
 		);
 		expect(sent[0]).toContain(
-			"brace-fix-02: Node1 answering, but failing its turns since 2026-09-25T05:16:25Z (it failed the batch this turn was in",
+			"brace-fix-02: Node1 answers, its turns fail (it failed the batch this turn was in",
 		);
 		expect(sent[0]).not.toContain("unreachable");
 		watch.dispose();
@@ -116,7 +115,7 @@ describe("telling the lead about agents stuck for a long time", () => {
 			LEAD_NUDGE_AFTER_MS + LEAD_NUDGE_BATCH_MS,
 		);
 		expect(sent).toHaveLength(1);
-		expect(sent[0]).toContain("2 agents have been waiting");
+		expect(sent[0]).toContain("2 agents stalled");
 		expect(sent[0]).toContain("- a:");
 		expect(sent[0]).toContain("- b:");
 		a.dispose();

@@ -37,6 +37,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { AgentToolContext } from "@cline/shared";
+import { HARNESS_TAG } from "../../../runtime/turn-queue/harness-notes";
 import type { CompactionCause } from "../../context/compaction-cause";
 import type { AgentOracleResult } from "./agent-check";
 import { type AwaitingLeadEvent, onAwaitingLead } from "./agent-iteration-cap";
@@ -317,12 +318,12 @@ export function renderRoundNotice(settled: SettledRound): string {
 					? "its agent was"
 					: `all ${interrupted.length} of its agents were`
 				: `${interrupted.length} of its ${round.agents.length} agents were`;
-		return `[Round ${round.id} interrupted] The session ended while ${round.tool} ran (the window was reloaded or the task was closed), and ${count} stopped with the work in progress lost: ${names}. retry_failed(round_id: "${round.id}") runs them again from their original tasks; restart_agent runs one with new instructions. The round's report as it stands:\n\n${settled.report}`;
+		return `${HARNESS_TAG} Round ${round.id} interrupted: the session ended while ${round.tool} ran (window reloaded or task closed); ${count} stopped, work in progress lost: ${names}. retry_failed(round_id: "${round.id}") reruns them from their tasks; restart_agent reruns one with new instructions. Report so far:\n\n${settled.report}`;
 	}
 	const how = round.background
-		? `it ran in the background (${round.tool})`
-		: `an agent of ${round.tool} finished after its call had returned`;
-	return `[Round ${round.id} finished] ${how}. Its report:\n\n${settled.report}`;
+		? `background ${round.tool}`
+		: `an agent of ${round.tool} ended after its call returned`;
+	return `${HARNESS_TAG} Round ${round.id} finished (${how}). Report:\n\n${settled.report}`;
 }
 
 /**
@@ -349,9 +350,9 @@ export function roundsCompletionGuard(
 					})`,
 			)
 			.join(", ");
-		return running.length === 1
-			? `[SYSTEM] Round ${names} is still running in the background. Its report comes to you when it ends: call await_agents to wait for it, or stop_agents to stop it, before you finish.`
-			: `[SYSTEM] Rounds ${names} are still running in the background. Their reports come to you when they end: call await_agents to wait for them, or stop_agents to stop them, before you finish.`;
+		return `${HARNESS_TAG} Still running: ${names}. ${
+			running.length === 1 ? "Its report comes" : "Their reports come"
+		} when it ends; await_agents to wait, or stop_agents, before you finish.`;
 	};
 }
 
@@ -508,6 +509,8 @@ interface LiveRound {
 	holds: number;
 	/** Callers inside `await_agents` for it: its report goes to them. */
 	awaited: number;
+	/** Lets go of the lead's turn signal, for a blocking round detached. */
+	unlinkTurn?: () => void;
 	/** Reruns started, for unique tool-call ids. */
 	reruns: number;
 	/** A report from the call itself, in place of one built from results. */
@@ -673,10 +676,36 @@ export class AgentRounds {
 		return this.blocking > 0;
 	}
 
-	/** `await_agents` calls in progress, each ended by {@link wakeAwaits}. */
+	/**
+	 * The lead's waits on its agents in progress -- `await_agents`, a blocking
+	 * spawn -- each ended by {@link wakeAwaits}.
+	 */
 	private readonly wakers = new Set<() => void>();
 
-	/** Register an `await_agents` wait that a message for the lead ends. */
+	/**
+	 * `work`, or a message for the lead, whichever comes first. A blocking
+	 * spawn waits here: measured 2026-09-26, a `wait: true` spawn of 50
+	 * agents held the lead for the whole round while the user's steers went
+	 * to side turns and their results queued behind it.
+	 */
+	async untilWoken<T>(
+		work: Promise<T>,
+	): Promise<{ woken: false; value: T } | { woken: true }> {
+		let off = () => {};
+		const woken = new Promise<{ woken: true }>((resolve) => {
+			off = this.onWake(() => resolve({ woken: true }));
+		});
+		try {
+			return await Promise.race([
+				work.then((value) => ({ woken: false as const, value })),
+				woken,
+			]);
+		} finally {
+			off();
+		}
+	}
+
+	/** Register a wait on the agents that a message for the lead ends. */
 	onWake(wake: () => void): () => void {
 		this.wakers.add(wake);
 		return () => {
@@ -685,8 +714,8 @@ export class AgentRounds {
 	}
 
 	/**
-	 * The lead is inside `await_agents`: a wait it chose, which a message for
-	 * it should end rather than sit behind for the whole round.
+	 * The lead is waiting on its agents (`await_agents`, a blocking spawn):
+	 * a message for it should end the wait rather than sit behind the round.
 	 */
 	get leadAwaiting(): boolean {
 		return this.wakers.size > 0;
@@ -787,18 +816,18 @@ export class AgentRounds {
 		};
 		const controller = new AbortController();
 		const signal = input.signal;
+		let unlinkTurn: (() => void) | undefined;
 		if (signal) {
 			const onAbort = () => controller.abort(signal.reason);
 			if (signal.aborted) {
 				controller.abort(signal.reason);
 			} else {
 				signal.addEventListener("abort", onAbort, { once: true });
+				unlinkTurn = () => signal.removeEventListener("abort", onAbort);
 				// A blocking round lets go of the turn's signal once it returns.
-				controller.signal.addEventListener(
-					"abort",
-					() => signal.removeEventListener("abort", onAbort),
-					{ once: true },
-				);
+				controller.signal.addEventListener("abort", unlinkTurn, {
+					once: true,
+				});
 			}
 		}
 		const live: LiveRound = {
@@ -813,6 +842,7 @@ export class AgentRounds {
 			holds: 1,
 			awaited: 0,
 			reruns: 0,
+			...(unlinkTurn ? { unlinkTurn } : {}),
 		};
 		this.rounds.set(id, record);
 		this.live.set(id, live);
@@ -1287,6 +1317,18 @@ export class RoundHandle {
 	delivered(): void {
 		this.rounds.markDelivered(this.id);
 		this.live.emitUpdate = undefined;
+	}
+
+	/**
+	 * A blocking round whose call returns before it ends: a message for the
+	 * lead woke it. The round goes on in the background, no longer stopped by
+	 * the turn's signal, and its report is delivered when it ends.
+	 */
+	detach(): void {
+		this.live.record.background = true;
+		this.live.unlinkTurn?.();
+		this.live.unlinkTurn = undefined;
+		this.rounds.schedulePersist();
 	}
 
 	/**

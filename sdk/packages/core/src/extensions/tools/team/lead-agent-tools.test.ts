@@ -314,7 +314,7 @@ describe("await_agents", () => {
 		expect(rounds.wakeAwaits()).toBe(true);
 		const text = await waiting;
 		expect(text).toContain("a message for you arrived");
-		expect(text).toContain("Round r1 is running");
+		expect(text).toContain("Round r1: running");
 		expect(rounds.leadAwaiting).toBe(false);
 		expect(rounds.leadBlocked).toBe(false);
 		// Not delivered: the report still comes when the round ends.

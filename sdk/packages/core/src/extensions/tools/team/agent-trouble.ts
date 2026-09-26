@@ -20,6 +20,7 @@
  * The agents keep retrying. Nothing here stops one: the lead may, and so may
  * the user.
  */
+import { HARNESS_TAG } from "../../../runtime/turn-queue/harness-notes";
 import { FAILED_BATCH_REASON, type TurnFaultWait } from "./turn-fault-recovery";
 
 /** Continuous waiting after which the lead is told about an agent. */
@@ -97,10 +98,6 @@ function unref(timer: ReturnType<typeof setTimeout>): void {
 	(timer as unknown as { unref?: () => void }).unref?.();
 }
 
-function clock(at: number): string {
-	return new Date(at).toISOString().replace(/\.\d{3}Z$/, "Z");
-}
-
 function minutes(ms: number): number {
 	return Math.max(1, Math.round(ms / 60_000));
 }
@@ -115,14 +112,12 @@ export function describeTrouble(
 ): string {
 	const waited = `${minutes(now - record.since)} min`;
 	if (record.kind === "refusal") {
-		return `- ${record.name}: refused ${record.refusals} time${
-			record.refusals === 1 ? "" : "s"
-		} by ${record.where}: "${record.detail.trim().slice(0, 200)}" (waiting since ${clock(record.since)}, ${waited})`;
+		return `- ${record.name}: refused ${record.refusals}x by ${record.where}: "${record.detail.trim().slice(0, 160)}" (${waited})`;
 	}
 	if (record.detail === FAILED_BATCH_REASON) {
-		return `- ${record.name}: ${record.where} answering, but failing its turns since ${clock(record.since)} (${record.detail}, ${waited})`;
+		return `- ${record.name}: ${record.where} answers, its turns fail (${record.detail}, ${waited})`;
 	}
-	return `- ${record.name}: ${record.where} unreachable since ${clock(record.since)} (${record.detail}, ${waited})`;
+	return `- ${record.name}: ${record.where} unreachable (${record.detail}, ${waited})`;
 }
 
 /** The whole report, as the lead reads it. */
@@ -137,9 +132,9 @@ export function describeLeadNudge(
 ): string {
 	const count = records.length;
 	return [
-		`Status of your agents: ${count} agent${count === 1 ? " has" : "s have"} been waiting for over ${minutes(LEAD_NUDGE_AFTER_MS)} minutes without making progress, and ${count === 1 ? "is" : "are"} still retrying:`,
+		`${HARNESS_TAG} ${count} agent${count === 1 ? "" : "s"} stalled >${minutes(LEAD_NUDGE_AFTER_MS)} min, still retrying; nothing stopped:`,
 		...records.map((record) => describeTrouble(record, now)),
-		"They will keep retrying on their own; nothing has been stopped. Consider whether it is better to stop them (`stop_agents`) and do those tasks yourself once the round returns. The user can also stop or restart any agent from its row.",
+		"Options: let them retry; or stop_agents and do their tasks yourself when the round returns. The user can stop/restart them from their rows.",
 	].join("\n");
 }
 

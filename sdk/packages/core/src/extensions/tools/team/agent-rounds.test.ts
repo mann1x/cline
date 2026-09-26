@@ -360,7 +360,7 @@ describe("a round persisted with the session", () => {
 			record: round as never,
 			report: after.reportFor("r1"),
 		});
-		expect(notice).toMatch(/^\[Round r1 interrupted\] /);
+		expect(notice).toMatch(/^\[SYSTEM MESSAGE\] Round r1 interrupted: /);
 		expect(notice).toContain("r1-2 still-out");
 		expect(notice).not.toContain("r1-1 finished");
 		expect(notice).toContain('retry_failed(round_id: "r1")');
@@ -756,7 +756,7 @@ describe("a background round and the lead's completion", () => {
 	it("holds the lead's completion while a round runs, and names the way to wait", async () => {
 		const { handle, finish } = background();
 		expect(roundsCompletionGuard("s1")()).toBe(
-			"[SYSTEM] Round r1 (spawn_agent, 1 agent) is still running in the background. Its report comes to you when it ends: call await_agents to wait for it, or stop_agents to stop it, before you finish.",
+			"[SYSTEM MESSAGE] Still running: r1 (spawn_agent, 1 agent). Its report comes when it ends; await_agents to wait, or stop_agents, before you finish.",
 		);
 		finish();
 		await handle.idle();
@@ -771,8 +771,65 @@ describe("a background round and the lead's completion", () => {
 		await handle.idle();
 		expect(notices).toHaveLength(1);
 		expect(notices[0]).toMatch(
-			/^\[Round r1 finished\] it ran in the background \(spawn_agent\)\. Its report:\n\n/,
+			/^\[SYSTEM MESSAGE\] Round r1 finished \(background spawn_agent\)\. Report:\n\n/,
 		);
 		expect(notices[0]).toContain("done");
+	});
+});
+
+/**
+ * pandorum 2026-09-26: the lead spawned 50 agents with `wait: true` and sat in
+ * that call for the whole round. The user's steers went to side turns whose
+ * results queued behind it. A message for the lead now ends a blocking wait
+ * the way it ends `await_agents`, and the round goes on in the background.
+ */
+describe("a blocking round woken by a message for the lead", () => {
+	it("detaches: the turn's stop no longer stops it, and its report is delivered at the end", async () => {
+		const rounds = new AgentRounds("s1");
+		const turn = new AbortController();
+		const handle = rounds.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: false,
+			agents: [{ name: "a", task: "t" }],
+			signal: turn.signal,
+		});
+		let finish: () => void = () => {};
+		const ran = handle.run(
+			0,
+			context,
+			() =>
+				new Promise((resolve) => {
+					finish = () => resolve({ text: "a done", finishReason: "completed" });
+				}),
+		);
+		const waiting = rounds.untilWoken(ran.then(() => handle.idle()));
+		expect(rounds.leadAwaiting).toBe(true);
+		expect(rounds.wakeAwaits()).toBe(true);
+		expect((await waiting).woken).toBe(true);
+		expect(rounds.leadAwaiting).toBe(false);
+
+		handle.detach();
+		handle.close();
+		expect(handle.record.background).toBe(true);
+		// The lead's turn ending is not the round ending any more.
+		turn.abort("turn over");
+		expect(handle.signal.aborted).toBe(false);
+
+		const delivered: string[] = [];
+		rounds.onSettled((round) => delivered.push(round.report));
+		finish();
+		await ran;
+		await handle.idle();
+		expect(handle.record.status).toBe("done");
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]).toContain("a done");
+	});
+
+	it("returns the work's value when nothing wakes it", async () => {
+		const rounds = new AgentRounds("s1");
+		const result = await rounds.untilWoken(Promise.resolve(7));
+		expect(result).toEqual({ woken: false, value: 7 });
+		expect(rounds.leadAwaiting).toBe(false);
 	});
 });

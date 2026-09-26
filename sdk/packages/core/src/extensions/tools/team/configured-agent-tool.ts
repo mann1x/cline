@@ -63,6 +63,7 @@ import {
 	type SubAgentStartContext,
 	storedControls,
 	withRevisedInstructions,
+	wokenAck,
 } from "./spawn-agent-tool";
 import {
 	drawSpawnSampling,
@@ -1034,8 +1035,13 @@ async function runConfiguredRound(
 	}
 	const leave = rounds.enterBlocking();
 	try {
-		await handle.run(0, memberContext, (ctx) => run(input, ctx));
-		await handle.idle();
+		const ran = handle.run(0, memberContext, (ctx) => run(input, ctx));
+		if ((await rounds.untilWoken(ran.then(() => handle.idle()))).woken) {
+			void ran.then((output) =>
+				reportSubagentFinished(context.emitUpdate, output),
+			);
+			return wokenAck(handle);
+		}
 		const output = handle.outputs()[0] as SpawnAgentOutput & {
 			error?: string;
 			name?: string;

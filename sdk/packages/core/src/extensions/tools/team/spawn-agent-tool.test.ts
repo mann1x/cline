@@ -1624,4 +1624,68 @@ describe("spawn_agent in the background", () => {
 		expect(ack).toMatchObject({ background: true, round: "r1" });
 		__resetAgentRounds();
 	});
+
+	// pandorum 2026-09-26: `wait: true` on 50 agents held the lead for the
+	// whole round, and the user's steers queued behind it.
+	it("lets a message for the lead end a `wait: true` batch, which goes on in the background", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const { __resetAgentRounds, roundsFor } = await import("./agent-rounds.js");
+		const finishers: Array<() => void> = [];
+		runMock.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					finishers.push(() =>
+						resolve({
+							text: "done",
+							iterations: 1,
+							finishReason: "completed",
+							usage: { inputTokens: 1, outputTokens: 1 },
+						}),
+					);
+				}),
+		);
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "lead-model",
+			}),
+		});
+		const turn = new AbortController();
+		const call = tool.execute(
+			{
+				systemPrompt: "p",
+				wait: true,
+				agents: [
+					{ name: "a", task: "one" },
+					{ name: "b", task: "two" },
+				],
+			},
+			{
+				agentId: "parent",
+				conversationId: "c",
+				iteration: 1,
+				sessionId: "woken-batch",
+				toolCallId: "call-woken",
+				signal: turn.signal,
+			} as never,
+		);
+		const rounds = roundsFor("woken-batch");
+		await vi.waitFor(() => expect(rounds.leadAwaiting).toBe(true));
+		expect(rounds.wakeAwaits()).toBe(true);
+		const ack = (await call) as unknown as Record<string, unknown>;
+		expect(ack).toMatchObject({ background: true, round: "r1" });
+		expect(String(ack.note)).toContain("A message for you arrived");
+		expect(rounds.leadBlocked).toBe(false);
+		// The lead's turn ending does not stop the agents it left running.
+		turn.abort("turn over");
+		await vi.waitFor(() => expect(finishers).toHaveLength(2));
+		const delivered: string[] = [];
+		rounds.onSettled((round) => delivered.push(round.record.id));
+		for (const finish of finishers) {
+			finish();
+		}
+		await vi.waitFor(() => expect(rounds.get("r1")?.status).toBe("done"));
+		expect(delivered).toEqual(["r1"]);
+		__resetAgentRounds();
+	});
 });

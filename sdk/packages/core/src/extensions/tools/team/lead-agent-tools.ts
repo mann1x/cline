@@ -617,13 +617,11 @@ export function createAwaitAgentsTool(
 				finished = await rounds.waitFor(ids, signal);
 			} catch {
 				if (woken.signal.aborted && !context?.signal?.aborted) {
-					return `Stopped waiting: a message for you arrived, and it follows this result. ${ids
-						.map(
-							(id) => `Round ${id} is ${rounds.get(id)?.status ?? "running"}`,
-						)
+					return `Stopped waiting: a message for you arrived and follows this result. ${ids
+						.map((id) => `Round ${id}: ${rounds.get(id)?.status ?? "running"}`)
 						.join(
 							"; ",
-						)}; nothing was stopped. Deal with the message, then call await_agents again if there is still nothing else to do -- the report is delivered when the round ends either way.`;
+						)}; nothing stopped. Answer it; await_agents again if there is nothing else to do. Reports are delivered when rounds end either way.`;
 				}
 				return "Stopped waiting: the turn was stopped. The rounds carry on; their reports are delivered when they end.";
 			} finally {
@@ -632,7 +630,7 @@ export function createAwaitAgentsTool(
 			}
 			const parts = finished.map((round) => {
 				if (deliveredBefore.has(round.id)) {
-					return `Round ${round.id} had already finished and its report was delivered to you as a message ("[Round ${round.id} finished]").`;
+					return `Round ${round.id} had already finished and its report was delivered to you as a message ("Round ${round.id} finished").`;
 				}
 				rounds.markDelivered(round.id);
 				return `Round ${round.id} finished.\n${rounds.reportFor(round.id)}`;

@@ -114,6 +114,7 @@ describe("the lead's side turn", () => {
 		const note = describeSideTurnForLead("status?", result);
 		expect(note).not.toContain("exceeded maxIterations");
 		expect(note).toContain("not the agents'");
+		expect(note).toMatch(/^\[SYSTEM MESSAGE\] /);
 	});
 
 	it("tells the lead afterwards what was said and done", () => {
@@ -121,8 +122,10 @@ describe("the lead's side turn", () => {
 			reply: "Stopped them.",
 			actions: ["Stopped 2 agent(s): a, b."],
 		});
-		expect(note).toContain("The user said: stop the fixers");
-		expect(note).toContain("You did: Stopped 2 agent(s): a, b.");
+		expect(note).toContain(
+			'- user: "stop the fixers" -> you replied: "Stopped them."; did: Stopped 2 agent(s): a, b.',
+		);
+		expect(note).not.toContain("answer it");
 	});
 
 	it("leaves a conversation with nothing open as it is", () => {
@@ -160,8 +163,9 @@ describe("the agent system's report to the lead", () => {
 		expect(asked).not.toContain("The user has sent you this message");
 		expect(result.actions).toEqual(["Stopped 1 agent(s): stuck-1."]);
 		const note = describeSideTurnForLead(asked, result, "system");
-		expect(note).toContain("the agent system reported agents stuck");
-		expect(note).toContain("their tasks are yours to do now");
+		expect(note).toContain("- report (stalled:");
+		expect(note).not.toContain("- user:");
+		expect(note).toContain("Their tasks are yours now");
 	});
 });
 
@@ -186,8 +190,8 @@ describe("a side turn that did not finish", () => {
 		expect(result.reply).not.toContain("maxIterations");
 		const note = describeSideTurnForLead("how are the fixers doing?", result);
 		expect(note).not.toContain("You replied: Agent runtime exceeded");
-		expect(note).toMatch(/side turn ran out of its \d+ iterations/i);
-		expect(note).toMatch(/not about your agents/i);
+		expect(note).toMatch(/side turn used its own \d+ turns, not the agents'/);
+		expect(note).toContain("NOT ANSWERED");
 	});
 
 	it("says a side turn that errored failed, not what the lead said", async () => {

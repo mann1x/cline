@@ -27,6 +27,7 @@ import {
 	createLeadAgentMessagingTools,
 } from "../../extensions/tools/team/lead-agent-tools";
 import { subagentCancellation } from "../../extensions/tools/team/subagent-cancellation";
+import { SIDE_TURN_RECAP_HEADER } from "../turn-queue/harness-notes";
 
 type Message = LlmsProviders.MessageWithMetadata;
 
@@ -249,42 +250,59 @@ export async function runSteerSideTurn(
 	}
 }
 
+/** One line: a recap is merged by its lines (`mergeSideTurnRecaps`). */
+function oneLine(text: string, max?: number): string {
+	const flat = text.trim().replace(/\s*\n\s*/g, " ");
+	return max !== undefined && flat.length > max
+		? `${flat.slice(0, max - 1)}…`
+		: flat;
+}
+
+/** The agents a stuck-agent report names, from its `- name: …` lines. */
+function reportedAgents(report: string): string {
+	const names = report
+		.split("\n")
+		.map((line) => /^- ([^:]+):/.exec(line.trim())?.[1]?.trim())
+		.filter((name): name is string => Boolean(name));
+	return names.length > 0 ? names.join(", ") : "agents";
+}
+
+/** Longest side-turn reply carried into the recap. */
+const RECAP_REPLY_CHARS = 600;
+
 /**
  * What the lead's real turn is told, once the round returns: the exchange it
- * had in the side turn, which is not in its history.
+ * had in the side turn, which is not in its history. One line, so queued
+ * recaps merge into one note with the user's messages first; a stuck-agent
+ * report is named by its agents, not quoted -- the latest status says the
+ * rest. "Answer it" only when the side turn neither replied nor acted.
  */
 export function describeSideTurnForLead(
 	message: string,
 	result: SteerSideTurnResult,
 	source: "user" | "system" = "user",
 ): string {
-	if (result.failed) {
-		const what =
-			result.failure === "iteration_cap"
-				? `the side turn ran out of its ${STEER_SIDE_TURN_MAX_ITERATIONS} iterations before it replied`
-				: "the side turn failed before it replied";
-		return [
-			`While your agents were running, ${
-				source === "system"
-					? "the agent system reported agents stuck for a long time"
-					: "the user sent a message"
-			}, and a side turn was started to answer it, but ${what}. This is about that side turn, not about your agents: none of them hit a limit because of it.`,
-			`${source === "system" ? "The report said" : "The user said"}: ${message.trim()}`,
-			`What was shown in place of a reply: ${result.reply}`,
-			result.actions.length > 0
-				? `Before it stopped, you did: ${result.actions.join(" ")}`
-				: "It did nothing to the round.",
-			"It still needs your answer.",
-		].join("\n");
-	}
-	return [
+	const subject =
 		source === "system"
-			? "While your agents were running, the agent system reported agents stuck for a long time, and you answered it in a side turn. This already happened; do not repeat it. If you stopped agents, their tasks are yours to do now."
-			: "While your agents were running, the user sent a message and you answered it in a side turn. This already happened; do not repeat it.",
-		`${source === "system" ? "The report said" : "The user said"}: ${message.trim()}`,
-		`You replied: ${result.reply || "(no reply)"}`,
+			? `- report (stalled: ${reportedAgents(message)}):`
+			: `- user: "${oneLine(message)}" ->`;
+	const stopped =
+		source === "system" &&
+		result.actions.some((action) => action.startsWith("Stopped"));
+	const did =
 		result.actions.length > 0
-			? `You did: ${result.actions.join(" ")}`
-			: "You did nothing to the round.",
-	].join("\n");
+			? `; did: ${oneLine(result.actions.join(" "))}${
+					stopped ? " Their tasks are yours now." : ""
+				}`
+			: "";
+	const outcome = !result.failed
+		? `you replied: "${oneLine(result.reply || "(nothing)", RECAP_REPLY_CHARS)}"${did}`
+		: did
+			? `side turn stopped before replying${did}`
+			: `NOT ANSWERED (${
+					result.failure === "iteration_cap"
+						? `the side turn used its own ${STEER_SIDE_TURN_MAX_ITERATIONS} turns, not the agents'`
+						: "the side turn failed; agents unaffected"
+				}): answer it now.`;
+	return `${SIDE_TURN_RECAP_HEADER}\n${subject} ${outcome}`;
 }
