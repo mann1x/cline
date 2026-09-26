@@ -535,6 +535,22 @@ export interface PolykvSessionState {
 	 * other worker of the round is attached to it.
 	 */
 	layout?: "lead" | "borrowed";
+	/**
+	 * Send this session's requests as continuations of the pool
+	 * (`pool_continue_v1`): only the last `continueTail` messages go on the
+	 * wire, as the turns that follow the pool's stored stream. Set only on a
+	 * pool that ends where an assistant reply ends -- a `from_session` pool of
+	 * a finished turn -- and only by a caller that knows the engine has it.
+	 */
+	continueTail?: number;
+	/**
+	 * The `templateSignature` of the request fields a session's own root was
+	 * rendered with. A root rendered without the request's fields -- Gemma-4's
+	 * `<|think|>` follows `reasoning_budget_tokens` -- diverges at token 4;
+	 * the vendor renders it again with the fields of the first request that
+	 * attaches it.
+	 */
+	templateSignature?: string;
 }
 
 const POLYKV_SESSIONS = new Map<string, PolykvSessionState>();
@@ -919,6 +935,20 @@ export const OPENCOTI_FEATURES = {
 	 * was refused at its idle moment.
 	 */
 	kvObservable: "kv_observable_v1",
+	/**
+	 * `unowned: true` on pool create and fork (b124, patch 0406, mail #342): a
+	 * pool charged to nobody even when built `from_session` of a session that
+	 * holds a booking; every attacher books its own window. A 400 together
+	 * with `session_id`.
+	 */
+	poolUnowned: "pool_unowned_v1",
+	/**
+	 * `continue_pool: true` + `pool_id` on a chat request (b124, patch 0406):
+	 * the prompt is the pool's stored tokens followed by `messages` rendered as
+	 * a continuation, so `cache_n == len(pool)` by construction. `messages` are
+	 * only the new turns, and the pool must end where an assistant reply ends.
+	 */
+	poolContinue: "pool_continue_v1",
 } as const;
 
 export type OpencotiFeature =

@@ -37,15 +37,18 @@ import {
 import { OpencotiWindowUnavailableError } from "./opencoti-window";
 import {
 	clearPolykvSession,
+	createPolykvClient,
 	getPolykvGrantedWindow,
 	getPolykvSession,
 	hasOpencotiFeature,
 	OPENCOTI_FEATURES,
+	type PolykvSessionState,
 	polykvAdmissionPolicy,
 	polykvRoot,
 	probeOpencotiProps,
 	recordPolykvGrantedWindow,
 	recordPolykvWindowObservation,
+	setPolykvSession,
 } from "./polykv";
 import {
 	forgetPolykvLeadPool,
@@ -77,6 +80,8 @@ import {
 	reportPolykvNotice,
 	reportPolykvRoomWait,
 	reportPolykvStreamPhase,
+	templateFieldsOf,
+	templateSignature,
 } from "./polykv-swarm";
 import type { ProviderFactoryResult } from "./types";
 
@@ -456,6 +461,41 @@ export function createOpencotiFetch(options: {
 						: undefined;
 				if (wirePoolId !== undefined) {
 					body.pool_id = wirePoolId;
+				}
+				const attached =
+					extras.sessionId !== undefined
+						? getPolykvSession(extras.sessionId)
+						: undefined;
+				if (
+					attached &&
+					attached.layout !== "lead" &&
+					/^\d+$/.test(attached.poolId)
+				) {
+					// The registry is the live answer: the options were read when
+					// the model was built, and a root rendered again since then
+					// has a new id.
+					body.pool_id = Number(attached.poolId);
+					if (attached.continueTail !== undefined) {
+						continuePoolBody(body, attached.continueTail);
+					} else if (
+						!isLead &&
+						attached.layout === undefined &&
+						options.baseUrl &&
+						extras.sessionId !== undefined
+					) {
+						const rendered = await renderOwnRootWithRequestFields({
+							baseUrl: options.baseUrl,
+							fetch: base,
+							...(options.headers ? { headers: options.headers } : {}),
+							sessionId: extras.sessionId,
+							state: attached,
+							body,
+							...(options.log ? { log: options.log } : {}),
+						});
+						if (rendered !== undefined) {
+							body.pool_id = Number(rendered);
+						}
+					}
 				}
 				if (extras.sessionId !== undefined) {
 					body.session_id = engineSessionId(extras.sessionId);
@@ -2109,4 +2149,131 @@ export async function createOpencotiProviderModule(
 				}) as LanguageModelV4,
 		},
 	};
+}
+
+/**
+ * A request continuing its pool (`pool_continue_v1`): only the turns after
+ * the pool's stored stream go on the wire. The tools are dropped with the
+ * rest of the prefix -- the template renders them into the system turn, which
+ * the pool already holds -- and a rendering of them here would sit between
+ * the pool and the new turns.
+ */
+export function continuePoolBody(
+	body: Record<string, unknown>,
+	tail: number,
+): void {
+	const messages = Array.isArray(body.messages) ? body.messages : [];
+	body.messages = messages.slice(-Math.max(1, Math.floor(tail)));
+	body.continue_pool = true;
+	delete body.tools;
+	delete body.tool_choice;
+	delete body.parallel_tool_calls;
+}
+
+/** One rendering at a time per session: concurrent turns share its answer. */
+const OWN_ROOT_RENDERS = new Map<string, Promise<string | undefined>>();
+
+/**
+ * Render a session's own root pool again, with the fields of the request that
+ * attaches it, when it was rendered without them.
+ *
+ * The root is created before any request exists (`ensurePolykvPool`), so it is
+ * rendered from the system prompt and tools alone. The request carries the
+ * reasoning fields, and on Gemma-4 `reasoning_budget_tokens` decides whether
+ * the system turn opens with `<|think|>`: measured on 8244 2026-09-26, the
+ * root matched 4 of its 141 tokens and every turn prefilled whole. The lead
+ * tree and the swarm already render with `templateFieldsOf`; this is the one
+ * root that did not.
+ *
+ * Returns the new pool id, or `undefined` when the root is already right or
+ * could not be rendered -- the request then goes as it was, which is slower
+ * and never broken.
+ */
+export async function renderOwnRootWithRequestFields(input: {
+	baseUrl: string;
+	fetch?: typeof fetch;
+	headers?: Record<string, string>;
+	sessionId: string;
+	state: PolykvSessionState;
+	body: Record<string, unknown>;
+	log?: OpencotiLog;
+}): Promise<string | undefined> {
+	const fields = templateFieldsOf(input.body);
+	const signature = templateSignature(fields);
+	if (input.state.templateSignature === signature) {
+		return undefined;
+	}
+	const pending = OWN_ROOT_RENDERS.get(input.sessionId);
+	if (pending) {
+		return pending;
+	}
+	const run = (async () => {
+		const messages = Array.isArray(input.body.messages)
+			? (input.body.messages as Array<Record<string, unknown>>)
+			: [];
+		const system = messages[0];
+		// Recorded either way, so a request that cannot be rendered is not
+		// retried on every turn.
+		const remember = (poolId: string, prefixTokens: number) =>
+			setPolykvSession(input.sessionId, {
+				...input.state,
+				poolId,
+				prefixTokens,
+				templateSignature: signature,
+			});
+		if (system?.role !== "system") {
+			remember(input.state.poolId, input.state.prefixTokens);
+			return undefined;
+		}
+		const client = createPolykvClient({
+			baseUrl: input.baseUrl,
+			...(input.fetch ? { fetch: input.fetch } : {}),
+			...(input.headers ? { headers: input.headers } : {}),
+		});
+		try {
+			const tools = Array.isArray(input.body.tools)
+				? (input.body.tools as unknown[])
+				: undefined;
+			const rendered = await client.applyTemplate({
+				messages: [system],
+				...(tools && tools.length > 0 ? { tools } : {}),
+				fields,
+			});
+			const trimmed = rendered.replace(/[ \t]+$/, "");
+			const prompt = trimmed.endsWith("\n") ? trimmed : `${trimmed}\n`;
+			if (prompt.trim() === "") {
+				remember(input.state.poolId, input.state.prefixTokens);
+				return undefined;
+			}
+			const pool = await client.createPool({
+				prompt,
+				pin: true,
+				session_id: engineSessionId(input.sessionId),
+			});
+			remember(pool.pool_id, pool.prefix_len);
+			const old = input.state.poolId;
+			await client.unpin(old).catch(() => undefined);
+			await client.releasePool(old).catch(() => undefined);
+			input.log?.(
+				`[PolyKV] rendered the session's root again with its request fields: pool ${pool.pool_id} (${pool.prefix_len} tokens) replaces ${old}`,
+				"info",
+			);
+			return pool.pool_id;
+		} catch (error) {
+			remember(input.state.poolId, input.state.prefixTokens);
+			input.log?.(
+				`[PolyKV] could not render the session's root with its request fields; keeping pool ${input.state.poolId}: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+				"warn",
+			);
+			return undefined;
+		}
+	})();
+	OWN_ROOT_RENDERS.set(input.sessionId, run);
+	try {
+		return await run;
+	} finally {
+		OWN_ROOT_RENDERS.delete(input.sessionId);
+	}
 }
