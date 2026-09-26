@@ -1,5 +1,5 @@
 import { markPromptEnvironment } from "@cline/shared";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpencotiFetch } from "./opencoti";
 import {
 	getPolykvSession,
@@ -14,6 +14,7 @@ import {
 	releaseAllPolykvLeads,
 	releasePolykvLead,
 } from "./polykv-lead";
+import { POLYKV_LAYER_RETRY_MS } from "./polykv-swarm";
 
 /**
  * A stub engine: pools on, a template that renders one delimited block per
@@ -28,6 +29,20 @@ function stubEngine(
 	let nextPool = 0;
 	let bootId = 1;
 	let failNextChat = false;
+	/** Pool creates and forks still to refuse as b137 does with no room. */
+	let noRoom = 0;
+	const noRoomAnswer = () =>
+		new Response(
+			JSON.stringify({
+				error: {
+					code: 503,
+					type: "unavailable_error",
+					message:
+						"no room in the KV cache for the pool prefill: needs 9000 cells, 12 of 1048576 free -- compact the session",
+				},
+			}),
+			{ status: 503, headers: { "content-type": "application/json" } },
+		);
 	const render = (messages: Array<{ role: string; content: unknown }>) =>
 		messages
 			.map(
@@ -64,6 +79,14 @@ function stubEngine(
 					body.messages as Array<{ role: string; content: unknown }>,
 				),
 			});
+		}
+		if (
+			noRoom > 0 &&
+			((url.pathname === "/polykv/pools" && init?.method === "POST") ||
+				/^\/polykv\/pools\/\d+\/fork$/.test(url.pathname))
+		) {
+			noRoom -= 1;
+			return noRoomAnswer();
 		}
 		if (url.pathname === "/polykv/pools" && init?.method === "POST") {
 			// Find-or-create: the same prompt, shared, is the same root.
@@ -136,6 +159,10 @@ function stubEngine(
 		 * The process restarts: every pool goes, ids count from 0 again, and
 		 * the boot id changes. The turn in flight is cut.
 		 */
+		/** Refuse the next `n` pool creates and forks for want of cells (b137). */
+		refuseNoRoom: (n: number) => {
+			noRoom = n;
+		},
 		restart: () => {
 			pools.clear();
 			sharedRoots.clear();
@@ -338,6 +365,59 @@ describe("the lead tree", () => {
 		expect(forks(engine)).toHaveLength(2);
 		expect(engine.pools.has("1")).toBe(false);
 		expect(engine.pools.has("2")).toBe(true);
+	});
+
+	// b137 answers a pool create or fork it has no cells for with a 503. A
+	// refusal is the server's state at that moment: the root and the
+	// sub-pool are asked for again, not given up on for the generation.
+	it("asks again for a root the server had no room for", async () => {
+		const engine = stubEngine();
+		engine.refuseNoRoom(1);
+		expect(
+			(await prepare(engine, "lead-1", hoisted("c:/one"), 1_000))?.poolId,
+		).toBeUndefined();
+		expect(
+			(await prepare(engine, "lead-1", hoisted("c:/one"), 2_000))?.poolId,
+		).toBeUndefined();
+		expect(creates(engine)).toHaveLength(1);
+		const later = await prepare(
+			engine,
+			"lead-1",
+			hoisted("c:/one"),
+			1_000 + POLYKV_LAYER_RETRY_MS + 1,
+		);
+		expect(later?.poolId).toBe("0");
+		expect(creates(engine)).toHaveLength(2);
+	});
+
+	it("asks again for a sub-pool the server had no room for", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			const engine = stubEngine();
+			const fetchImpl = createOpencotiFetch({
+				fetch: engine.fetch,
+				baseUrl: "http://engine/v1",
+				request: { sessionId: "lead-nr", leadPool: true, numCtx: 65_536 },
+			});
+			const send = () =>
+				fetchImpl("http://engine/v1/chat/completions", {
+					method: "POST",
+					body: JSON.stringify(leadBody("c:/one")),
+				});
+			await send();
+			engine.refuseNoRoom(1);
+			await send();
+			await send();
+			vi.setSystemTime(Date.now() + POLYKV_LAYER_RETRY_MS + 1);
+			await send();
+			const wire = engine.calls.filter(
+				(call) => call.path === "/v1/chat/completions",
+			);
+			expect(wire.map((call) => call.body.pool_id)).toEqual([0, 0, 0, 1]);
+			expect(forks(engine)).toHaveLength(2);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("keeps the root until its last conversation ends", async () => {

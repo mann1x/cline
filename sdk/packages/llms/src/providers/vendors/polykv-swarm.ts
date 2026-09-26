@@ -2028,10 +2028,18 @@ export async function renderLayer(
  */
 export const POLYKV_LAYER_RETRY_MS = 5_000;
 
-/** Whether the engine refused a pool create for want of room in its owner. */
-function isOwnerPoolRefusal(error: unknown): boolean {
+/**
+ * Whether the engine refused a pool create for want of room: in its owner (the
+ * sub-pool limit, a full allocation), or in the KV cache for the prefill --
+ * b137 (patch 0412) answers that `503` "no room in the KV cache for the pool
+ * prefill" where b133 answered `500`. Each is met the same way: release what
+ * the owner holds for nobody, and create again.
+ */
+export function isPolykvNoRoomRefusal(error: unknown): boolean {
 	const text = error instanceof Error ? error.message : String(error);
-	return /sub-pool limit reached|session allocation full \('/i.test(text);
+	return /sub-pool limit reached|session allocation full \('|no room in the KV cache/i.test(
+		text,
+	);
 }
 
 function errorText(error: unknown): string {
@@ -2228,7 +2236,7 @@ function buildLayer(options: {
 		try {
 			pool = await createOnShard(group, shard, parentId, prompt);
 		} catch (error) {
-			if (!isOwnerPoolRefusal(error)) {
+			if (!isPolykvNoRoomRefusal(error)) {
 				return fail(`the engine refused the pool: ${errorText(error)}`, true);
 			}
 			const released = await reclaimOwnerPools(group, shard, parentId).catch(

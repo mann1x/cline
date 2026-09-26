@@ -62,6 +62,8 @@ function restartableEngine(
 	let listingDown = false;
 	/** `/props` and `/health` refused too: nothing on the server answers. */
 	let identityDown = false;
+	/** Pool creates and forks still to refuse as b137 does with no room. */
+	let noRoom = 0;
 	const url = (input: unknown) => new URL(String(input));
 	const answer = async (input: unknown, init?: RequestInit) => {
 		const url = new URL(String(input));
@@ -139,6 +141,24 @@ function restartableEngine(
 				),
 			});
 		}
+		if (
+			noRoom > 0 &&
+			((url.pathname === "/polykv/pools" && init?.body) ||
+				/^\/polykv\/pools\/\d+\/fork$/.test(url.pathname))
+		) {
+			noRoom -= 1;
+			return json(
+				{
+					error: {
+						code: 503,
+						type: "unavailable_error",
+						message:
+							"no room in the KV cache for the pool prefill: needs 9000 cells, 12 of 1048576 free -- compact the session",
+					},
+				},
+				503,
+			);
+		}
 		if (url.pathname === "/polykv/pools") {
 			if (typeof body.session_id === "string") {
 				owners.add(body.session_id);
@@ -150,6 +170,14 @@ function restartableEngine(
 				parent: -1,
 				prefix_len: prompt.length,
 			});
+		}
+		const released = url.pathname.match(/^\/polykv\/pools\/(\d+)\/release$/);
+		if (released) {
+			pools.delete(Number(released[1]));
+			return json({ released: true });
+		}
+		if (/^\/polykv\/pools\/\d+\/(un)?pin$/.test(url.pathname)) {
+			return json({ ok: true });
 		}
 		if (/^\/polykv\/pools\/\d+\/fork$/.test(url.pathname)) {
 			const prompt = String(body.prompt);
@@ -327,6 +355,10 @@ function restartableEngine(
 		/** `/props` and `/health` stop (or start again) answering. */
 		identity: (answers: boolean) => {
 			identityDown = !answers;
+		},
+		/** Refuse the next `n` pool creates and forks for want of cells (b137). */
+		refuseNoRoom: (n: number) => {
+			noRoom = n;
 		},
 		/** Bring it back with nothing: no pools, ids from 0 again. */
 		up: () => {
@@ -1076,6 +1108,32 @@ describe("an owner the server let go while it kept running", () => {
 		await running.text();
 		await settle();
 		expect(closed(engine, owner)).toBe(true);
+	});
+
+	it("releases the owner's spare pools and builds again when the engine has no room (b137 503)", async () => {
+		const engine = restartableEngine({ bootFields: true });
+		await (
+			await sendIn(engine, "lead-r", "ra", agentBody("role A", "t1"))
+		).text();
+		await (
+			await sendIn(engine, "lead-r", "rb", agentBody("role B", "t1"))
+		).text();
+		const roleA = [...engine.pools()].find(([, pool]) =>
+			pool.prompt.includes("role A"),
+		)?.[0];
+		expect(roleA).toBeDefined();
+		await releasePolykvAgent("ra");
+		engine.refuseNoRoom(1);
+		await (
+			await sendIn(engine, "lead-r", "rc", agentBody("role C", "t1"))
+		).text();
+		const sent = poolsOf(engine, "rc").at(-1) as number;
+		expect(engine.pools().get(sent)?.prompt).toContain("role C");
+		expect(
+			engine.calls.some(
+				(call) => call.path === `/polykv/pools/${roleA}/release`,
+			),
+		).toBe(true);
 	});
 
 	it("still drops everything when the boot id changed with the pools", async () => {

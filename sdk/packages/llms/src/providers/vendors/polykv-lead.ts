@@ -13,6 +13,7 @@ import {
 import {
 	engineSessionId,
 	hashString,
+	POLYKV_LAYER_RETRY_MS,
 	type PolykvPoolRecord,
 	polykvRootGeneration,
 	registerPolykvPoolHolder,
@@ -85,6 +86,8 @@ interface LeadRoot {
 	generation: number;
 	/** `pool` once it resolved, for the restart check (which is synchronous). */
 	held?: { id: string; prefixLen: number };
+	/** When the engine last refused the root, for the retry cooldown. */
+	refusedAt?: number;
 }
 
 /** Where a lead request attaches, and what that means for its window. */
@@ -114,6 +117,8 @@ interface LeadSession {
 		pool: Promise<{ id: string; prefixLen: number } | undefined>;
 		/** `pool` once it resolved, for the restart check. */
 		held?: { id: string; prefixLen: number };
+		/** When the engine refused it: asked for again after the cooldown. */
+		refusedAt?: number;
 	};
 	/** The server generation `sub` and `windowLive` belong to. */
 	generation: number;
@@ -408,27 +413,55 @@ async function prepareLeadPoolOnce(
 		props.features,
 		OPENCOTI_FEATURES.sharedRoot,
 	);
-	root.pool ??= (async () => {
-		const prompt = await renderLayer(root.client, [messages[0]], tools, fields);
-		if (!prompt) {
+	// A refused root is asked for again once the cooldown has passed: a
+	// refusal is the server's state at that moment -- b137 answers a create
+	// it has no cells for with a 503 -- and remembered as "no pool" it cost
+	// the lead its root for the rest of the server's generation.
+	if (
+		!root.pool &&
+		!(
+			root.refusedAt !== undefined &&
+			now - root.refusedAt < POLYKV_LAYER_RETRY_MS
+		)
+	) {
+		const building: NonNullable<LeadRoot["pool"]> = (async () => {
+			const prompt = await renderLayer(
+				root.client,
+				[messages[0]],
+				tools,
+				fields,
+			);
+			if (!prompt) {
+				return undefined;
+			}
+			// Find-or-create where the server has it: every process -- two VS Code
+			// windows, the CLI -- converges on one root, and the engine owns its
+			// life. Ephemeral and unpinned, it is swept once nothing references it
+			// (no sub-pool, no attach for 60 s), so no process has to decide when
+			// the others are done and a crash leaks nothing. Without it, the root is
+			// this process's own: pinned, and released with its last conversation.
+			const pool = sharedRoot
+				? await root.client.createPool({
+						prompt,
+						shared: true,
+						ephemeral: true,
+					})
+				: await root.client.createPool({ prompt, pin: true });
+			return {
+				id: pool.pool_id,
+				prompt,
+				prefixLen: pool.prefix_len,
+				shared: sharedRoot,
+			};
+		})().catch(() => {
+			root.refusedAt = now;
+			if (root.pool === building) {
+				root.pool = undefined;
+			}
 			return undefined;
-		}
-		// Find-or-create where the server has it: every process -- two VS Code
-		// windows, the CLI -- converges on one root, and the engine owns its
-		// life. Ephemeral and unpinned, it is swept once nothing references it
-		// (no sub-pool, no attach for 60 s), so no process has to decide when
-		// the others are done and a crash leaks nothing. Without it, the root is
-		// this process's own: pinned, and released with its last conversation.
-		const pool = sharedRoot
-			? await root.client.createPool({ prompt, shared: true, ephemeral: true })
-			: await root.client.createPool({ prompt, pin: true });
-		return {
-			id: pool.pool_id,
-			prompt,
-			prefixLen: pool.prefix_len,
-			shared: sharedRoot,
-		};
-	})().catch(() => undefined);
+		});
+		root.pool = building;
+	}
 	const rootPool = await root.pool;
 	if (!rootPool) {
 		return undefined;
@@ -440,6 +473,15 @@ async function prepareLeadPoolOnce(
 	let attach = { id: rootPool.id, prefixLen: 0, shared: rootPool.prefixLen };
 	if (lead.windowLive) {
 		const subKey = hashString(`${rootKey}\n${JSON.stringify(messages[1])}`);
+		// A sub-pool the engine refused is asked for again after the cooldown,
+		// as the root is.
+		if (
+			lead.sub?.key === subKey &&
+			lead.sub.refusedAt !== undefined &&
+			now - lead.sub.refusedAt >= POLYKV_LAYER_RETRY_MS
+		) {
+			lead.sub = undefined;
+		}
 		if (lead.sub?.key !== subKey) {
 			const stale = lead.sub;
 			lead.sub = undefined;
@@ -447,28 +489,33 @@ async function prepareLeadPoolOnce(
 			if (old) {
 				await releasePool(root.client, old.id);
 			}
-			lead.sub = {
+			const next: NonNullable<LeadSession["sub"]> = {
 				key: subKey,
-				pool: (async () => {
-					const prompt = await renderLayer(
-						root.client,
-						messages.slice(0, 2),
-						tools,
-						fields,
-					);
-					// Never attach a layer that does not extend its parent: it is
-					// created, pinned and attached, and shares nothing.
-					if (!prompt || !prompt.startsWith(rootPool.prompt)) {
-						return undefined;
-					}
-					const pool = await root.client.forkPool(rootPool.id, {
-						prompt,
-						session_id: engineSessionId(sessionId),
-						pin: true,
-					});
-					return { id: pool.pool_id, prefixLen: pool.prefix_len };
-				})().catch(() => undefined),
+				pool: Promise.resolve(undefined),
 			};
+			next.pool = (async () => {
+				const prompt = await renderLayer(
+					root.client,
+					messages.slice(0, 2),
+					tools,
+					fields,
+				);
+				// Never attach a layer that does not extend its parent: it is
+				// created, pinned and attached, and shares nothing.
+				if (!prompt || !prompt.startsWith(rootPool.prompt)) {
+					return undefined;
+				}
+				const pool = await root.client.forkPool(rootPool.id, {
+					prompt,
+					session_id: engineSessionId(sessionId),
+					pin: true,
+				});
+				return { id: pool.pool_id, prefixLen: pool.prefix_len };
+			})().catch(() => {
+				next.refusedAt = now;
+				return undefined;
+			});
+			lead.sub = next;
 		}
 		const current = lead.sub;
 		const sub = await current?.pool;
