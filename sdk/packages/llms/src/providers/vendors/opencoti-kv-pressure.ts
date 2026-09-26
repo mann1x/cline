@@ -341,6 +341,14 @@ export interface OpencotiKvSwa {
 	cellsReserved?: number;
 	/** The model's sliding window, per sequence. */
 	window?: number;
+	/**
+	 * Under `kv_recyclable_v1` (b122, mail #326): the cells a batch can take
+	 * now -- empty ones plus those find_slot recycles (a sequence's own cells
+	 * behind its window). The half's real room; `cellsUsed` is accounting.
+	 */
+	cellsPhysFree?: number;
+	/** The physical size of the half, beside {@link cellsPhysFree}. */
+	cellsPhysTotal?: number;
 }
 
 const KV_READ_TIMEOUT_MS = 5_000;
@@ -439,12 +447,16 @@ function parseSwa(raw: unknown): OpencotiKvSwa | undefined {
 	const cellsFree = finite(raw.cells_free);
 	const cellsReserved = finite(raw.cells_reserved);
 	const window = finite(raw.window);
+	const cellsPhysFree = finite(raw.cells_phys_free);
+	const cellsPhysTotal = finite(raw.cells_phys_total);
 	return {
 		cellsUsed,
 		cellsTotal,
 		...(cellsFree !== undefined ? { cellsFree } : {}),
 		...(cellsReserved !== undefined ? { cellsReserved } : {}),
 		...(window !== undefined ? { window } : {}),
+		...(cellsPhysFree !== undefined ? { cellsPhysFree } : {}),
+		...(cellsPhysTotal !== undefined ? { cellsPhysTotal } : {}),
 	};
 }
 

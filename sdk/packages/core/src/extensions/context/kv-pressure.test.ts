@@ -916,4 +916,52 @@ describe("the SWA half (opencoti mail #322)", () => {
 		await boundary(stub.fetch);
 		expect(stub.resizes().map((call) => call.body?.num_ctx)).toEqual([262_144]);
 	});
+
+	it("reads the physical room when the engine publishes it: a half full of recyclable cells is not full (mail #326)", async () => {
+		recordPolykvGrantedWindow(SESSION, 98_304, { asked: 262_144 });
+		const stub = engine({
+			features: OBSERVABLE,
+			row: { window: 98_304, used: 90_000 },
+			pressure: { ...CLEARED, idle_resident: 0 },
+			top: {
+				cells_free: 880_000,
+				cells_total: 1_048_576,
+				// Full by accounting, but 30k of it is recyclable.
+				swa: {
+					...fullSwa,
+					cells_used: 66_000,
+					cells_free: 48,
+					cells_phys_total: 66_048,
+					cells_phys_free: 30_048,
+				},
+			},
+		});
+		await boundary(stub.fetch);
+		expect(stub.resizes().map((call) => call.body?.num_ctx)).toEqual([262_144]);
+	});
+
+	it("and calls the half full when its physical room is gone, whatever the accounting says", async () => {
+		recordPolykvGrantedWindow(SESSION, 98_304, { asked: 262_144 });
+		const stub = engine({
+			features: OBSERVABLE,
+			row: { window: 98_304, used: 90_000 },
+			pressure: { ...CLEARED, idle_resident: 0 },
+			top: {
+				cells_free: 880_000,
+				cells_total: 1_048_576,
+				swa: {
+					...fullSwa,
+					cells_used: 20_000,
+					cells_free: 46_048,
+					cells_phys_total: 66_048,
+					cells_phys_free: 4_000,
+				},
+			},
+		});
+		const { lines } = await boundary(stub.fetch);
+		expect(stub.resizes()).toEqual([]);
+		expect(lines.some((line) => /SWA half is full/.test(line.message))).toBe(
+			true,
+		);
+	});
 });

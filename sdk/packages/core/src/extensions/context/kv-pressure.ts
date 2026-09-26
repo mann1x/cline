@@ -168,9 +168,21 @@ export function swaIsPressure(swa: {
 	cellsUsed: number;
 	cellsTotal: number;
 	cellsFree?: number;
+	cellsPhysFree?: number;
+	cellsPhysTotal?: number;
 }): boolean {
 	if (!(swa.cellsTotal > 0)) {
 		return false;
+	}
+	// An engine that publishes the physical room (b122's `cells_phys_free`,
+	// recyclable cells counted free) is read on it alone: a half that looks
+	// full by accounting but is mostly recyclable is not full (mail #326).
+	if (swa.cellsPhysFree !== undefined) {
+		const total = swa.cellsPhysTotal ?? swa.cellsTotal;
+		return (
+			total > 0 &&
+			total - swa.cellsPhysFree >= total * KV_SWA_PRESSURE_OCCUPANCY
+		);
 	}
 	// Reserved cells are taken too: free, where stated, says so.
 	const taken =
@@ -435,7 +447,14 @@ export async function beginKvPressureTurn(options: {
 		const swa = snapshot.resident.swa;
 		if (swa && swaIsPressure(swa)) {
 			turn.swaPressure = true;
-			turn.swa = { cellsUsed: swa.cellsUsed, cellsTotal: swa.cellsTotal };
+			turn.swa =
+				swa.cellsPhysFree !== undefined
+					? {
+							cellsUsed:
+								(swa.cellsPhysTotal ?? swa.cellsTotal) - swa.cellsPhysFree,
+							cellsTotal: swa.cellsPhysTotal ?? swa.cellsTotal,
+						}
+					: { cellsUsed: swa.cellsUsed, cellsTotal: swa.cellsTotal };
 		}
 	}
 	await cancelStaleShrink(turn);
