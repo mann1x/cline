@@ -34,6 +34,9 @@ import {
 	GENERATE_IMAGE_TOOL_NAME,
 } from "../tools/image-generation";
 import { JEV_TOOL_INPUT_SCHEMA, JEV_TOOL_NAME } from "../tools/jev";
+import { createReadAgentReportTool } from "../tools/team/agent-reports";
+import { createAgentsStatusTool } from "../tools/team/agent-status";
+import { createLeadAgentTools } from "../tools/team/lead-agent-tools";
 import { createSpawnAgentTool } from "../tools/team/spawn-agent-tool";
 import { createAgentTeamsTools } from "../tools/team/team-tools";
 import {
@@ -167,6 +170,11 @@ export function getShippedToolCallSignatures(): readonly ToolCallSignature[] {
 		createAskQuestionTool(stubExecutor),
 		createSubmitAndExitTool(stubExecutor, config),
 		createSpawnAgentTool({ configProvider: {} as never }),
+		// The lead's tools over its agents. Built for their schemas only: the
+		// session id is never read until a tool runs.
+		createReadAgentReportTool(),
+		createAgentsStatusTool({ sessionId: "" }),
+		...createLeadAgentTools({ sessionId: "" }),
 		...createAgentTeamsTools({
 			runtime: {} as never,
 			requesterId: "lead",

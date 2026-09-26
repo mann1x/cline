@@ -69,6 +69,43 @@ describe("builtin tool catalog", () => {
 		expect(names).toContain("team_run_task");
 	});
 
+	// The lead's tools over its agents came with the delegation work, and a
+	// session selecting `spawn_agent` by name (the CLI's --tools, the hub's
+	// toggles) left them all out: a background round nobody could collect.
+	it("selects the lead's agent tools with spawn_agent, and the report tools with teams", () => {
+		const lead = [
+			"agents_status",
+			"await_agents",
+			"requeue_agent",
+			"restart_agent",
+			"resume_agent",
+			"retry_failed",
+			"message_agents",
+			"stop_agents",
+			"read_agent_report",
+		];
+		const spawn = getCoreHeadlessToolNames(new Set(["spawn_agent"]), {
+			mode: "act",
+		});
+		expect(spawn).toEqual(expect.arrayContaining(["spawn_agent", ...lead]));
+		const swarm = getCoreHeadlessToolNames(new Set(["spawn_swarm"]), {
+			mode: "act",
+		});
+		expect(swarm).toEqual(expect.arrayContaining(["spawn_swarm", ...lead]));
+		const teams = getCoreHeadlessToolNames(new Set(["teams"]), {
+			mode: "act",
+		});
+		expect(teams).toEqual(
+			expect.arrayContaining(["agents_status", "read_agent_report"]),
+		);
+		// Selected twice over, named once.
+		const both = getCoreHeadlessToolNames(
+			new Set(["spawn_agent", "spawn_swarm", "teams"]),
+			{ mode: "act" },
+		);
+		expect(new Set(both).size).toBe(both.length);
+	});
+
 	it("uses a single editor catalog entry and maps to apply_patch when routed", () => {
 		const actCatalog = getCoreBuiltinToolCatalog({ mode: "act" });
 		expect(actCatalog.some((entry) => entry.id === "apply_patch")).toBe(false);

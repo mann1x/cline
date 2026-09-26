@@ -5,10 +5,27 @@ import {
 	resolveToolRoutingConfig,
 } from "./model-tool-routing";
 import { resolveToolPresetName, ToolPresets } from "./presets";
+import { READ_AGENT_REPORT_TOOL_NAME } from "./team/agent-reports";
+import { AGENTS_STATUS_TOOL_NAME } from "./team/agent-status";
+import { LEAD_CONTROL_TOOL_NAMES } from "./team/lead-agent-tools";
 import { createSpawnAgentTool } from "./team/spawn-agent-tool";
 import { createSpawnSwarmTool } from "./team/spawn-swarm-tool";
 import { TEAM_TOOL_NAMES } from "./team/team-tools";
 import type { DefaultToolsConfig } from "./types";
+
+/**
+ * What the lead holds over the agents a delegation starts: their status, the
+ * full reports behind their summaries, and the controls (await, requeue,
+ * restart, resume, retry, message, stop). The session offers them wherever it
+ * offers a way to delegate, so a session that selects a delegation tool by
+ * name selects these with it -- a background round nobody can collect is
+ * worse than none.
+ */
+const LEAD_AGENT_TOOL_NAMES: readonly string[] = [
+	AGENTS_STATUS_TOOL_NAME,
+	READ_AGENT_REPORT_TOOL_NAME,
+	...LEAD_CONTROL_TOOL_NAMES,
+];
 
 export interface ToolCatalogEntry {
 	id: string;
@@ -101,18 +118,24 @@ const BASE_TOOL_CATALOG: readonly RuntimeToolCatalogEntry[] = [
 		id: "spawn_agent",
 		description: createSpawnAgentTool({ configProvider: {} as never })
 			.description,
-		headlessToolNames: ["spawn_agent"],
+		headlessToolNames: ["spawn_agent", ...LEAD_AGENT_TOOL_NAMES],
 	},
 	{
 		id: "spawn_swarm",
 		description: createSpawnSwarmTool({} as never).description,
-		headlessToolNames: ["spawn_swarm"],
+		headlessToolNames: ["spawn_swarm", ...LEAD_AGENT_TOOL_NAMES],
 	},
 	{
 		id: "teams",
 		description:
 			"Enable team collaboration tools for teammate management, task coordination, mailbox messaging, mission logs, and outcomes.",
-		headlessToolNames: [...TEAM_TOOL_NAMES],
+		// A teammate's long answer is read in full with read_agent_report, and
+		// agents_status covers teammates by id.
+		headlessToolNames: [
+			...TEAM_TOOL_NAMES,
+			AGENTS_STATUS_TOOL_NAME,
+			READ_AGENT_REPORT_TOOL_NAME,
+		],
 	},
 ] as const;
 
@@ -333,9 +356,14 @@ export function getCoreHeadlessToolNames(
 	selectedToolIds: ReadonlySet<string>,
 	context: BuiltinToolAvailabilityContext = {},
 ): string[] {
-	return getCoreBuiltinToolCatalog(context)
-		.filter((entry) => selectedToolIds.has(entry.id))
-		.flatMap((entry) => entry.headlessToolNames);
+	// Several entries carry the lead's agent tools; each is named once.
+	return [
+		...new Set(
+			getCoreBuiltinToolCatalog(context)
+				.filter((entry) => selectedToolIds.has(entry.id))
+				.flatMap((entry) => entry.headlessToolNames),
+		),
+	];
 }
 
 export function getCoreAcpToolNames(
