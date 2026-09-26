@@ -709,35 +709,107 @@ async function runSwarmWorker(
 	}
 }
 
+/**
+ * A round's pool while the round holds it, keyed `session\nround`: a worker
+ * run again inside the round attaches to it, and the round's release waits
+ * for those reruns to be done with it.
+ */
+interface RoundPool {
+	snapshot: SwarmPoolSnapshot;
+	/** Reruns attached to it now. */
+	users: number;
+	/** The round let it go: released when the last rerun on it ends. */
+	closing: boolean;
+}
+
+const ROUND_POOLS = new Map<string, RoundPool>();
+
+const roundPoolKey = (sessionId: string, roundId: string): string =>
+	`${sessionId}\n${roundId}`;
+
+/** The round's end: release its pool, or leave that to the last rerun on it. */
+async function closeRoundPool(key: string | undefined): Promise<void> {
+	const entry = key ? ROUND_POOLS.get(key) : undefined;
+	if (!key || !entry) {
+		return;
+	}
+	entry.closing = true;
+	if (entry.users === 0) {
+		ROUND_POOLS.delete(key);
+		await entry.snapshot.release().catch(() => {});
+	}
+}
+
+/**
+ * The pool a worker run again attaches to: its round's, while the round
+ * holds it, or a fresh snapshot of the lead's context -- how the round made
+ * its own -- that is released when the worker is done.
+ */
+async function rerunPool(
+	config: SpawnSwarmToolConfig,
+	key: string,
+): Promise<{ poolId?: string; done: () => Promise<void> }> {
+	const live = ROUND_POOLS.get(key);
+	if (live && !live.closing) {
+		live.users += 1;
+		return {
+			poolId: live.snapshot.poolId,
+			done: async () => {
+				live.users -= 1;
+				if (live.closing && live.users === 0) {
+					if (ROUND_POOLS.get(key) === live) {
+						ROUND_POOLS.delete(key);
+					}
+					await live.snapshot.release().catch(() => {});
+				}
+			},
+		};
+	}
+	const fresh = await config.pools.snapshot().catch(() => undefined);
+	return {
+		...(fresh ? { poolId: fresh.poolId } : {}),
+		done: async () => {
+			await fresh?.release().catch(() => {});
+		},
+	};
+}
+
 export function createSpawnSwarmTool(
 	config: SpawnSwarmToolConfig,
 ): AgentTool<SpawnSwarmInput, SpawnSwarmOutput> {
 	// A worker of this session's rounds can be run again from its record:
-	// its task, role, tools and sampler. Its pool is gone with its round, so
-	// it runs unpooled and prefills its own prefix.
+	// its task, role, tools and sampler -- and its round's prefix, from the
+	// round's pool or, once that is gone, a fresh snapshot.
 	if (config.sessionId !== undefined) {
-		roundsFor(config.sessionId).registerRunner(
+		const sessionId = config.sessionId;
+		roundsFor(sessionId).registerRunner(
 			"swarm",
 			async ({ round, agent, task, context }) => {
-				const result = await runSwarmWorker(
-					config,
-					{
-						name: agent.name,
-						task,
-						systemPrompt: agent.systemPrompt ?? round.shared.systemPrompt ?? "",
-						...(agent.tools ? { tools: agent.tools } : {}),
-						...(agent.sampling ? { sampling: agent.sampling } : {}),
-						...workerControls({
-							...(agent.maxIterations !== undefined
-								? { max_iterations: agent.maxIterations }
-								: {}),
-							...(agent.check !== undefined ? { check: agent.check } : {}),
-						}),
-					},
-					context,
-					{},
-				);
-				return swarmMemberOutput(agent.name, result);
+				const pool = await rerunPool(config, roundPoolKey(sessionId, round.id));
+				try {
+					const result = await runSwarmWorker(
+						config,
+						{
+							name: agent.name,
+							task,
+							systemPrompt:
+								agent.systemPrompt ?? round.shared.systemPrompt ?? "",
+							...(agent.tools ? { tools: agent.tools } : {}),
+							...(agent.sampling ? { sampling: agent.sampling } : {}),
+							...workerControls({
+								...(agent.maxIterations !== undefined
+									? { max_iterations: agent.maxIterations }
+									: {}),
+								...(agent.check !== undefined ? { check: agent.check } : {}),
+							}),
+						},
+						context,
+						pool.poolId ? { poolId: pool.poolId } : {},
+					);
+					return swarmMemberOutput(agent.name, result);
+				} finally {
+					await pool.done();
+				}
 			},
 		);
 	}
@@ -947,6 +1019,15 @@ export function createSpawnSwarmTool(
 			// call returns, too, when the round runs in the background: it is
 			// the lead's context as it was when it asked.
 			const snapshot = await config.pools.snapshot().catch(() => undefined);
+			// Where a worker the lead runs again attaches while the round holds
+			// the pool.
+			const poolKey =
+				snapshot && config.sessionId !== undefined
+					? roundPoolKey(config.sessionId, handle.id)
+					: undefined;
+			if (snapshot && poolKey) {
+				ROUND_POOLS.set(poolKey, { snapshot, users: 0, closing: false });
+			}
 
 			const runRound = async (): Promise<SpawnSwarmOutput> => {
 				const reports: SwarmMemberReport[] = [];
@@ -1190,7 +1271,12 @@ export function createSpawnSwarmTool(
 				}
 				// The leak this whole change set exists to stop. On the failure
 				// paths too.
-				await snapshot?.release().catch(() => {});
+				// A rerun still attached to it keeps it until that rerun ends.
+				if (poolKey) {
+					await closeRoundPool(poolKey);
+				} else {
+					await snapshot?.release().catch(() => {});
+				}
 			};
 
 			if (background) {

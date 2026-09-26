@@ -1,5 +1,6 @@
 import type { AgentResult } from "@cline/shared";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { __resetAgentRounds, roundsFor } from "./agent-rounds";
 import {
 	createSpawnSwarmTool,
 	type SpawnSwarmInput,
@@ -887,5 +888,108 @@ describe("spawn_swarm iteration cap and check", () => {
 		});
 		expect(output.digest).toContain('resume_agent(agent_id: "agent_a"');
 		expect(output.digest).toContain("FAIL (exit 1)");
+	});
+});
+
+/**
+ * A worker run again from the lead -- restart_agent on one that ended, or
+ * retry_failed -- shares its round's prefix as the first run did: the round's
+ * pool while the round holds it, a fresh snapshot once the round let it go.
+ * It used to run unpooled and prefill the whole prefix on its own.
+ */
+describe("a swarm worker run again", () => {
+	const session = "s-pool";
+	const leadContext = {
+		agentId: "lead",
+		sessionId: session,
+		toolCallId: "swarm-1",
+	} as never;
+
+	afterEach(() => {
+		__resetAgentRounds();
+	});
+
+	it("attaches to the round's pool while the round still holds it", async () => {
+		const seen: Array<{ task: string; poolId?: string }> = [];
+		let letGo!: () => void;
+		const holding = new Promise<void>((resolve) => {
+			letGo = resolve;
+		});
+		const pools = stubPools();
+		const tool = createSpawnSwarmTool({
+			sessionId: session,
+			pools: pools.source,
+			runWorker: async ({
+				task,
+				poolId,
+			}: {
+				task: string;
+				poolId?: string;
+			}) => {
+				seen.push({ task, ...(poolId ? { poolId } : {}) });
+				if (task === "slow") {
+					await holding;
+				}
+				return agentResult("done");
+			},
+		} as never);
+		const running = tool.execute(
+			{
+				wait: true,
+				systemPrompt: "s",
+				tasks: [
+					{ name: "quick", task: "quick" },
+					{ name: "slow", task: "slow" },
+				],
+			},
+			leadContext,
+		);
+		const rounds = roundsFor(session);
+		await vi.waitFor(() =>
+			expect(["completed", "failed"]).toContain(
+				rounds.get("r1")?.agents[0]?.state,
+			),
+		);
+
+		expect(rounds.rerun("r1", 0, leadContext).started).toBe(true);
+		await vi.waitFor(() => expect(seen).toHaveLength(3));
+		letGo();
+		await running;
+
+		expect(seen[2]).toEqual({ task: "quick", poolId: "pool-1" });
+		expect(pools.createdCount()).toBe(1);
+		expect(pools.released).toEqual(["pool-1"]);
+	});
+
+	it("takes a fresh snapshot once the round has released its pool, and releases that too", async () => {
+		const seen: Array<{ task: string; poolId?: string }> = [];
+		const pools = stubPools();
+		const tool = createSpawnSwarmTool({
+			sessionId: session,
+			pools: pools.source,
+			runWorker: async ({
+				task,
+				poolId,
+			}: {
+				task: string;
+				poolId?: string;
+			}) => {
+				seen.push({ task, ...(poolId ? { poolId } : {}) });
+				return agentResult("done");
+			},
+		} as never);
+		await tool.execute(
+			{ wait: true, systemPrompt: "s", tasks: [{ name: "a", task: "a" }] },
+			leadContext,
+		);
+		expect(pools.released).toEqual(["pool-1"]);
+
+		const rounds = roundsFor(session);
+		expect(rounds.rerun("r1", 0, leadContext).started).toBe(true);
+		await vi.waitFor(() =>
+			expect(pools.released).toEqual(["pool-1", "pool-2"]),
+		);
+
+		expect(seen[1]).toEqual({ task: "a", poolId: "pool-2" });
 	});
 });
