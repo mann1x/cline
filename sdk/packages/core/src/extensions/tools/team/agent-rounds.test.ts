@@ -14,6 +14,7 @@ import {
 	agentFacts,
 	agentFactsLine,
 	classifyAgentEnd,
+	readRoundRecords,
 	releaseRounds,
 	renderRoundNotice,
 	roundsCompletionGuard,
@@ -398,6 +399,126 @@ describe("a round persisted with the session", () => {
 			state: "done",
 			attempts: 2,
 		});
+	});
+
+	// The row an agent was drawn on follows its rerun: running again, then
+	// its new end. Its call is gone, so the control call carries the updates,
+	// each tagged with the row it is for -- the control call's own row is not
+	// the agent's.
+	it("draws a rerun on the agent's own row once its call is gone", async () => {
+		const rounds = roundsFor("s1");
+		rounds.registerRunner("spawn_agent", async ({ context: ctx }) => {
+			ctx.emitUpdate?.({ iterations: 1 });
+			return { text: "second time lucky", finishReason: "completed" };
+		});
+		const original = vi.fn();
+		const handle = rounds.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			toolCallId: "call-7",
+			background: false,
+			rowed: true,
+			emitUpdate: original,
+			agents: [
+				{ name: "a", task: "t" },
+				{ name: "b", task: "u" },
+			],
+		});
+		await handle.run(0, context, async () => ({ text: "fine" }));
+		await handle.run(1, context, async () => ({
+			finishReason: "error",
+			error: "Tool editor failed",
+		}));
+		handle.delivered();
+		handle.close();
+		original.mockClear();
+
+		const control = vi.fn();
+		const started = rounds.rerun("r1", 1, {
+			...(context as object),
+			emitUpdate: control,
+		} as never);
+		expect(started.started).toBe(true);
+		await rounds.waitFor(["r1"]);
+
+		const row = { toolCallId: "call-7", member: 1 };
+		expect(control.mock.calls.map(([update]) => update)).toEqual([
+			{ rerun: { attempt: 2 }, roundRow: row },
+			{ iterations: 1, roundRow: row },
+			{
+				finished: { text: "second time lucky", finishReason: "completed" },
+				roundRow: row,
+			},
+		]);
+		expect(original).not.toHaveBeenCalled();
+	});
+
+	it("keeps a rerun on the call's own channel while the call still draws its rows", async () => {
+		const rounds = roundsFor("s1");
+		rounds.registerRunner("spawn_agent", async () => ({ text: "again" }));
+		const original = vi.fn();
+		const handle = rounds.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			toolCallId: "call-8",
+			background: true,
+			rowed: true,
+			emitUpdate: original,
+			agents: [{ name: "a", task: "t" }],
+		});
+		await handle.run(0, context, async () => ({ error: "broke" }));
+		handle.close();
+		original.mockClear();
+
+		const control = vi.fn();
+		rounds.rerun("r1", 0, {
+			...(context as object),
+			emitUpdate: control,
+		} as never);
+		await rounds.waitFor(["r1"]);
+
+		expect(original.mock.calls.map(([update]) => update)).toEqual([
+			{ rerun: { attempt: 2 }, member: 0 },
+			{ finished: { text: "again" }, member: 0 },
+		]);
+		expect(control).not.toHaveBeenCalled();
+	});
+
+	// A task reopened after the window reloaded draws its rows from the
+	// transcript, which says what the call returned -- "running in the
+	// background", "awaiting the lead" -- not how its agents ended.
+	it("reads a session's rounds back from its file, a running one as interrupted", () => {
+		const dir = mkdtempSync(join(tmpdir(), "rounds-read-"));
+		try {
+			const path = join(dir, "s9.rounds.json");
+			const rounds = new AgentRounds("s9");
+			rounds.attachStore(path);
+			const handle = rounds.open({
+				kind: "spawn_agent",
+				tool: "spawn_agent",
+				toolCallId: "call-9",
+				background: true,
+				rowed: true,
+				agents: [{ name: "a", task: "t" }],
+			});
+			void handle;
+			rounds.flush();
+
+			const read = readRoundRecords("s9", path);
+			expect(read).toHaveLength(1);
+			expect(read[0]).toMatchObject({
+				toolCallId: "call-9",
+				rowed: true,
+				status: "done",
+			});
+			expect(read[0]?.agents[0]).toMatchObject({
+				state: "cancelled",
+				stopReason: "interrupted",
+			});
+			expect(readRoundRecords("s9", join(dir, "missing.json"))).toEqual([]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("records who stopped an agent, after its control is gone", async () => {

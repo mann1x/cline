@@ -432,11 +432,108 @@ function isSpawnAgentOut(entry: SubagentStatusItem): boolean {
 	return entry.status === "running" || entry.status === "pending" || entry.awaitingLead !== undefined
 }
 
+/** How many earlier spawn rows are kept to be followed; see `parkedSpawnGroups`. */
+const PARKED_SPAWN_GROUPS_MAX = 64
+
+/** The lead running an agent of an earlier call again: its row starts over. */
+function isRerunUpdate(updateData: Record<string, unknown> | undefined): boolean {
+	return !!updateData && typeof updateData.rerun === "object" && updateData.rerun !== null
+}
+
+/**
+ * The row a rerun's update is for, when the call that drew it is gone: the
+ * control call (`restart_agent`, `retry_failed`) carries the update, tagged
+ * with the original call and, in a batch, the agent's index.
+ */
+function readRoundRow(updateData: Record<string, unknown> | undefined): string | undefined {
+	const target = updateData?.roundRow as { toolCallId?: unknown; member?: unknown } | undefined
+	if (!target || typeof target.toolCallId !== "string" || !target.toolCallId) {
+		return undefined
+	}
+	return typeof target.member === "number" ? spawnMemberKey(target.toolCallId, target.member) : target.toolCallId
+}
+
+/** A round's agent, as the core's round registry recorded it. */
+interface RoundAgentLike {
+	index: number
+	state?: string
+	stopReason?: string
+	stopDetail?: string
+	awaitingReason?: string
+	iterations?: number
+	maxIterations?: number
+}
+
+/** A round, as the core's round registry recorded it: what a reopened row is drawn from. */
+export interface RoundRowSource {
+	toolCallId?: string
+	rowed?: boolean
+	agents: RoundAgentLike[]
+}
+
+/**
+ * A row drawn from the transcript, set to how the round registry says its
+ * agent is: the transcript holds what the call returned -- "running in the
+ * background", "awaiting the lead" -- not how the agent ended.
+ */
+function applyRoundAgentState(entry: SubagentStatusItem, agent: RoundAgentLike): void {
+	switch (agent.state) {
+		case "done":
+			entry.status = "completed"
+			entry.awaitingLead = undefined
+			break
+		case "failed":
+		case "cancelled": {
+			entry.status = "failed"
+			entry.awaitingLead = undefined
+			const why = agent.stopReason ?? agent.state
+			entry.error = agent.stopDetail ? `${why}: ${agent.stopDetail}` : (entry.error ?? why)
+			break
+		}
+		case "awaiting_lead": {
+			const maxIterations = agent.maxIterations ?? entry.maxIterations ?? 0
+			entry.status = "running"
+			entry.awaitingLead = {
+				iterations: agent.iterations ?? maxIterations,
+				maxIterations,
+				...(agent.awaitingReason === "looping" || agent.awaitingReason === "struggling"
+					? { reason: agent.awaitingReason }
+					: {}),
+				...(agent.stopDetail ? { detail: agent.stopDetail } : {}),
+			}
+			break
+		}
+		case "queued":
+			entry.status = "pending"
+			break
+		case "running":
+		case "waiting_infra":
+			entry.status = "running"
+			break
+	}
+}
+
 /**
  * One progress update from a spawn tool, onto its agent's row: the current
  * iteration's, or one kept from an earlier call whose agents are still out.
  */
 function applySpawnAgentUpdate(entry: SubagentStatusItem, updateData: Record<string, unknown>): void {
+	// The lead ran it again (restart_agent, retry_failed): the row starts
+	// over -- running, its last end cleared -- and follows the new run.
+	if (isRerunUpdate(updateData)) {
+		const attempt = (updateData.rerun as { attempt?: unknown }).attempt
+		entry.status = "running"
+		entry.error = undefined
+		entry.result = undefined
+		entry.awaitingLead = undefined
+		entry.stopReason = undefined
+		entry.oracle = undefined
+		entry.latestToolCall = undefined
+		pushSubagentActivity(
+			entry,
+			typeof attempt === "number" ? `Run again by the lead (attempt ${attempt})` : "Run again by the lead",
+		)
+	}
 	if (typeof updateData.toolCalls === "number") entry.toolCalls = updateData.toolCalls
 	applySubagentCompactions(entry, updateData)
 	if (typeof updateData.inputTokens === "number") entry.inputTokens = updateData.inputTokens
@@ -1195,13 +1292,58 @@ export class MessageTranslatorState {
 	}
 
 	/**
-	 * Rows of calls that returned with agents still out -- a background round,
-	 * an agent detached at its iteration cap -- kept past the iteration that
-	 * made them. Their agents keep sending updates through the call's tool
-	 * events; each lands on its row, at the row's own timestamp, until every
-	 * agent of the row has ended.
+	 * Rows of earlier iterations' spawn calls, kept past the iteration that
+	 * made them. Agents still out -- a background round, an agent detached at
+	 * its iteration cap -- keep sending updates through the call's tool
+	 * events, and each lands on its row, at the row's own timestamp. A row
+	 * whose agents have all ended is kept too, the most recent
+	 * {@link PARKED_SPAWN_GROUPS_MAX} of them: the lead can run one of its
+	 * agents again (`restart_agent`, `retry_failed`), and the rerun follows
+	 * on that row.
 	 */
 	private readonly parkedSpawnGroups = new Map<string, { ts: number; entries: Map<string, SubagentStatusItem> }>()
+
+	private parkSpawnGroup(ts: number, entries: Map<string, SubagentStatusItem>): void {
+		this.parkedSpawnGroups.delete(String(ts))
+		this.parkedSpawnGroups.set(String(ts), { ts, entries })
+		while (this.parkedSpawnGroups.size > PARKED_SPAWN_GROUPS_MAX) {
+			const oldest = this.parkedSpawnGroups.keys().next().value
+			if (oldest === undefined) {
+				break
+			}
+			this.parkedSpawnGroups.delete(oldest)
+		}
+	}
+
+	/** The kept rows, for a translator that follows them next: a reopened task's. */
+	exportParkedSpawnGroups(): Array<{ ts: number; entries: Array<[string, SubagentStatusItem]> }> {
+		return Array.from(this.parkedSpawnGroups.values(), (group) => ({
+			ts: group.ts,
+			entries: Array.from(group.entries.entries(), ([key, entry]) => [key, structuredClone(entry)]),
+		}))
+	}
+
+	/**
+	 * Follow these rows from now on, in place of any kept before: the rows of
+	 * a task just drawn from its transcript, whose agents the lead may run
+	 * again.
+	 */
+	adoptParkedSpawnGroups(groups: ReadonlyArray<{ ts: number; entries: ReadonlyArray<[string, SubagentStatusItem]> }>): void {
+		this.parkedSpawnGroups.clear()
+		for (const group of groups) {
+			this.parkSpawnGroup(group.ts, new Map(group.entries.map(([key, entry]) => [key, structuredClone(entry)])))
+		}
+	}
+
+	/** A kept row's agent, set from the round registry: the row's ts, or `undefined` for no such row. */
+	applyRoundToParkedRow(key: string, agent: RoundAgentLike): number | undefined {
+		const parked = this.getParkedSpawnAgent(key)
+		if (!parked) {
+			return undefined
+		}
+		applyRoundAgentState(parked.entry, agent)
+		return parked.groupTs
+	}
 
 	/** A kept row's agent, by the key its updates name. */
 	getParkedSpawnAgent(key: string): { entry: SubagentStatusItem; groupTs: number } | undefined {
@@ -1214,7 +1356,24 @@ export class MessageTranslatorState {
 		return undefined
 	}
 
-	/** The kept row at `ts`, as a status message; dropped once all its agents have ended. */
+	/** This iteration's spawn row as it stands: running while an agent of it is out. */
+	buildCurrentSubagentMessage(): ClineMessage {
+		const items = this.getSpawnAgentItems()
+		const out = items.some(isSpawnAgentOut)
+		const status = this.buildSubagentStatus(
+			out ? "running" : items.some((item) => item.status === "failed") ? "failed" : "completed",
+			items,
+		)
+		return {
+			ts: this.getSpawnAgentStatusTs(),
+			type: "say",
+			say: "subagent" as ClineSay,
+			text: JSON.stringify(status),
+			partial: out,
+		}
+	}
+
+	/** The kept row at `ts`, as a status message. */
 	buildParkedSubagentMessage(ts: number): ClineMessage | undefined {
 		const group = this.parkedSpawnGroups.get(String(ts))
 		if (!group) {
@@ -1222,9 +1381,6 @@ export class MessageTranslatorState {
 		}
 		const items = Array.from(group.entries.values()).sort((a, b) => a.index - b.index)
 		const out = items.some(isSpawnAgentOut)
-		if (!out) {
-			this.parkedSpawnGroups.delete(String(ts))
-		}
 		const status = this.buildSubagentStatus(
 			out ? "running" : items.some((item) => item.status === "failed") ? "failed" : "completed",
 			items,
@@ -1234,11 +1390,8 @@ export class MessageTranslatorState {
 
 	/** Clear all spawn_agent state (called at iteration_start) */
 	clearSpawnAgents(): void {
-		if (this.spawnAgentStatusTs !== undefined && this.getSpawnAgentItems().some(isSpawnAgentOut)) {
-			this.parkedSpawnGroups.set(String(this.spawnAgentStatusTs), {
-				ts: this.spawnAgentStatusTs,
-				entries: new Map(this.spawnAgentEntries),
-			})
+		if (this.spawnAgentStatusTs !== undefined && this.spawnAgentEntries.size > 0) {
+			this.parkSpawnGroup(this.spawnAgentStatusTs, new Map(this.spawnAgentEntries))
 		}
 		this.spawnAgentEntries.clear()
 		this.backgroundSpawnKeys.clear()
@@ -2939,21 +3092,43 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 			// sub-agent progress (iterations, tool calls, usage). We translate
 			// these into the ClineSaySubagentStatus format for the rich UI.
 			const updateToolName = event.toolName ?? state.getStreamingToolName()
-			// An agent of a call from an earlier iteration, still out: its
-			// kept row, at that row's place in the conversation.
-			if (isSubagentSpawnTool(updateToolName) && event.toolCallId) {
+			// A rerun of an agent whose call is gone, carried by the lead's
+			// control call and tagged with the agent's row: that row, wherever
+			// it is -- this iteration's or a kept one -- and never the control
+			// call's own.
+			const taggedRow = readRoundRow(event.update as Record<string, unknown> | undefined)
+			// An agent of a call from an earlier iteration, still out or run
+			// again: its kept row, at that row's place in the conversation.
+			if (taggedRow || (isSubagentSpawnTool(updateToolName) && event.toolCallId)) {
 				const updateData = event.update as Record<string, unknown> | undefined
 				const member = typeof updateData?.member === "number" ? updateData.member : undefined
-				const key = member !== undefined ? spawnMemberKey(event.toolCallId, member) : event.toolCallId
+				const key =
+					taggedRow ??
+					(member !== undefined ? spawnMemberKey(event.toolCallId ?? "", member) : (event.toolCallId ?? ""))
+				const current = taggedRow ? state.getSpawnAgent(key) : undefined
+				if (current) {
+					if (updateData) {
+						applySpawnAgentUpdate(current, updateData)
+					}
+					messages.push(state.buildCurrentSubagentMessage())
+					break
+				}
 				const parked = state.getSpawnAgent(key) ? undefined : state.getParkedSpawnAgent(key)
 				if (parked) {
-					if (updateData) {
-						applySpawnAgentUpdate(parked.entry, updateData)
+					// An ended row is followed again only by a rerun: anything
+					// else arriving for it is a straggler of its last run.
+					if (isSpawnAgentOut(parked.entry) || isRerunUpdate(updateData)) {
+						if (updateData) {
+							applySpawnAgentUpdate(parked.entry, updateData)
+						}
+						const row = state.buildParkedSubagentMessage(parked.groupTs)
+						if (row) {
+							messages.push(row)
+						}
 					}
-					const row = state.buildParkedSubagentMessage(parked.groupTs)
-					if (row) {
-						messages.push(row)
-					}
+					break
+				}
+				if (taggedRow) {
 					break
 				}
 			}
@@ -4112,6 +4287,18 @@ export interface SdkMessagesToClineMessagesOptions {
 	 * display, matching the live streaming path.
 	 */
 	cwd?: string
+	/**
+	 * The session's rounds, as the core's round registry has them. The
+	 * transcript holds what a spawn call returned -- "running in the
+	 * background", "awaiting the lead" -- and these say how its agents are
+	 * now: each round's rows are drawn from them.
+	 */
+	rounds?: ReadonlyArray<RoundRowSource>
+	/**
+	 * The spawn rows as drawn, for the live translator to follow: an agent the
+	 * lead runs again after the task was reopened lands on its row.
+	 */
+	onSpawnRows?: (groups: ReturnType<MessageTranslatorState["exportParkedSpawnGroups"]>) => void
 }
 
 /**
@@ -4177,6 +4364,9 @@ export function sdkMessagesToClineMessages(
 		const sourceMessage = messages[sourceIndex]
 		if (message.role === "assistant") {
 			flushUnmatchedToolUses()
+			// Each assistant message is an iteration, as live: its spawn calls
+			// get a row of their own, and the last iteration's is kept.
+			state.clearSpawnAgents()
 
 			if (typeof message.content === "string") {
 				const text = message.content.trim()
@@ -4348,6 +4538,33 @@ export function sdkMessagesToClineMessages(
 			clineMessages.push(...finalizePersistedToolUse(toolUse, state, block.content, block.is_error))
 		}
 	}
+
+	// The spawn rows, as the round registry says their agents are now -- and
+	// handed on, so the live translator follows them if the lead runs an
+	// agent of them again.
+	state.clearSpawnAgents()
+	if (options?.rounds?.length) {
+		const touched = new Set<number>()
+		for (const round of options.rounds) {
+			if (!round.toolCallId) {
+				continue
+			}
+			for (const agent of round.agents) {
+				const key = round.rowed ? spawnMemberKey(round.toolCallId, agent.index) : round.toolCallId
+				const ts = state.applyRoundToParkedRow(key, agent)
+				if (ts !== undefined) {
+					touched.add(ts)
+				}
+			}
+		}
+		for (const ts of touched) {
+			const row = state.buildParkedSubagentMessage(ts)
+			if (row) {
+				upsertClineMessages([row])
+			}
+		}
+	}
+	options?.onSpawnRows?.(state.exportParkedSpawnGroups())
 
 	// Close out the transcript's final agent turn so its terminal text (if the turn ended on
 	// text) gets the inferred completion retag. Skipped when the session record says the last

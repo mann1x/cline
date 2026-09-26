@@ -6167,6 +6167,178 @@ describe("an agent at its iteration cap, and the lead's check", () => {
 })
 
 // ---------------------------------------------------------------------------
+// A round's rows after its call: reruns, and a task reopened
+// ---------------------------------------------------------------------------
+
+describe("a round's rows after its call", () => {
+	const send = (state: MessageTranslatorState, event: Record<string, unknown>) =>
+		translateSessionEvent(
+			{ type: "agent_event", payload: { sessionId: "session-1", event: event as unknown as AgentEvent } },
+			state,
+		).messages
+	const rowOf = (messages: ClineMessage[]) => {
+		const row = messages.filter((message) => message.say === "subagent").at(-1)
+		return row
+			? { ts: row.ts, partial: row.partial, status: JSON.parse(row.text ?? "{}") as ClineSaySubagentStatus }
+			: undefined
+	}
+	/** A blocking batch of two that returned: one done, one failed. */
+	const endedBatch = (state: MessageTranslatorState) => {
+		send(state, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-1",
+			input: {
+				agents: [
+					{ name: "one", task: "a" },
+					{ name: "two", task: "b" },
+				],
+			},
+		})
+		return rowOf(
+			send(state, {
+				type: "content_end",
+				contentType: "tool",
+				toolName: "spawn_agent",
+				toolCallId: "call-1",
+				output: {
+					results: [
+						{ name: "one", text: "one done" },
+						{ name: "two", error: "Tool editor failed" },
+					],
+				},
+			}),
+		)
+	}
+	const viaControl = (state: MessageTranslatorState, update: Record<string, unknown>) =>
+		send(state, {
+			type: "content_update",
+			contentType: "tool",
+			toolName: "retry_failed",
+			toolCallId: "ctl-1",
+			update: { ...update, roundRow: { toolCallId: "call-1", member: 1 } },
+		})
+
+	// retry_failed in a later iteration: the batch's call is long gone, the
+	// control call carries the rerun's updates, and the agent's own row --
+	// not the control call's -- follows it: running again, then its new end.
+	it("follows a rerun on the ended agent's own row, running again and then its new end", () => {
+		const state = new MessageTranslatorState()
+		const ended = endedBatch(state)
+		expect(ended?.status.items.map((item) => item.status)).toEqual(["completed", "failed"])
+		send(state, { type: "iteration_start", iteration: 2 })
+		send(state, { type: "iteration_start", iteration: 3 })
+
+		const again = rowOf(viaControl(state, { rerun: { attempt: 2 } }))
+		expect(again?.ts).toBe(ended?.ts)
+		expect(again?.partial).toBe(true)
+		expect(again?.status.items[1]).toMatchObject({ status: "running" })
+		expect(again?.status.items[1]?.error).toBeUndefined()
+		expect(again?.status.items[1]?.activity?.at(-1)?.text).toBe("Run again by the lead (attempt 2)")
+		expect(again?.status.items[0]?.status).toBe("completed")
+
+		const working = rowOf(viaControl(state, { latestOutput: "fixing the brace" }))
+		expect(working?.status.items[1]?.latestOutput).toBe("fixing the brace")
+
+		const done = rowOf(viaControl(state, { finished: { name: "two", text: "fixed it" } }))
+		expect(done?.ts).toBe(ended?.ts)
+		expect(done?.partial).toBe(false)
+		expect(done?.status.items[1]).toMatchObject({ status: "completed", result: "fixed it" })
+	})
+
+	it("says nothing for an ended row's stray update that is not a rerun", () => {
+		const state = new MessageTranslatorState()
+		endedBatch(state)
+		send(state, { type: "iteration_start", iteration: 2 })
+		expect(viaControl(state, { latestOutput: "late" })).toEqual([])
+	})
+
+	// A task reopened after the window reloaded: its rows come from the
+	// transcript, which says what the call returned -- "running in the
+	// background" -- and the round registry says how its agents ended.
+	const reopened = (): SdkMessage[] => [
+		{ role: "user", content: '<user_input mode="act">fan out</user_input>' } as SdkMessage,
+		{
+			role: "assistant",
+			content: [
+				{
+					type: "tool_use",
+					id: "call-1",
+					name: "spawn_agent",
+					input: {
+						agents: [
+							{ name: "one", task: "a" },
+							{ name: "two", task: "b" },
+						],
+						wait: false,
+					},
+				},
+			],
+		} as SdkMessage,
+		{
+			role: "user",
+			content: [
+				{
+					type: "tool_result",
+					tool_use_id: "call-1",
+					content: { background: true, round: "r1", agents: [{ id: "r1-1" }, { id: "r1-2" }] },
+				},
+			],
+		} as unknown as SdkMessage,
+		{ role: "assistant", content: [{ type: "text", text: "They are running." }] } as SdkMessage,
+	]
+	const rounds = [
+		{
+			id: "r1",
+			toolCallId: "call-1",
+			rowed: true,
+			agents: [
+				{ index: 0, name: "one", state: "done", stopReason: "completed" },
+				{
+					index: 1,
+					name: "two",
+					state: "cancelled",
+					stopReason: "interrupted",
+					stopDetail: "The session ended while it ran.",
+				},
+			],
+		},
+	]
+
+	it("draws a reopened task's round rows as the round registry says they ended", () => {
+		const plain = rowOf(sdkMessagesToClineMessages(reopened()))
+		expect(plain?.status.items.map((item) => item.status)).toEqual(["running", "running"])
+
+		const messages = sdkMessagesToClineMessages(reopened(), undefined, { rounds: rounds as never })
+		const row = rowOf(messages)
+		expect(row?.partial).toBe(false)
+		expect(row?.status.items.map((item) => item.status)).toEqual(["completed", "failed"])
+		expect(row?.status.items[1]?.error).toBe("interrupted: The session ended while it ran.")
+		expect(messages.filter((message) => message.say === "subagent")).toHaveLength(1)
+	})
+
+	it("hands the reopened rows to the live translator, so a rerun after the reload follows them", () => {
+		let kept: ReturnType<MessageTranslatorState["exportParkedSpawnGroups"]> = []
+		const messages = sdkMessagesToClineMessages(reopened(), undefined, {
+			rounds: rounds as never,
+			onSpawnRows: (groups) => {
+				kept = groups
+			},
+		})
+		const row = rowOf(messages)
+		expect(kept.map((group) => group.ts)).toEqual([row?.ts])
+
+		const live = new MessageTranslatorState()
+		live.adoptParkedSpawnGroups(kept)
+		const again = rowOf(viaControl(live, { rerun: { attempt: 2 } }))
+		expect(again?.ts).toBe(row?.ts)
+		expect(again?.status.items[1]).toMatchObject({ status: "running" })
+		expect(again?.status.items[1]?.error).toBeUndefined()
+	})
+})
+
+// ---------------------------------------------------------------------------
 // configuredAgentUsage
 // ---------------------------------------------------------------------------
 

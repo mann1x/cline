@@ -657,6 +657,7 @@ export class Controller {
 			},
 			onAskResponse: (text, images, files) => this.askResponse(text, images, files),
 			resetMessageTranslator: () => this.resetMessageTranslatorAndFence(),
+			adoptSpawnRows: (groups) => this.messageTranslatorState.adoptParkedSpawnGroups(groups),
 			// Bump the epoch synchronously before abort so straggler events from the cancelled
 			// turn carry the old epoch and are dropped by the webview. The resumable phase is set
 			// in SdkController.cancelTask before this runs.

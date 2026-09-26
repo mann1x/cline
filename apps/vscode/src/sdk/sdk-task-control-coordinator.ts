@@ -1,6 +1,7 @@
 import type { ClineMessage, TurnPhase } from "@shared/ExtensionMessage"
 import type { HistoryItem } from "@shared/HistoryItem"
 import { Logger } from "@/shared/services/Logger"
+import type { SdkMessagesToClineMessagesOptions } from "./message-translator"
 import type { SdkInteractionCoordinator } from "./sdk-interaction-coordinator"
 import type { SdkMessageCoordinator } from "./sdk-message-coordinator"
 import { isAbortError, type SdkSessionLifecycle } from "./sdk-session-lifecycle"
@@ -16,6 +17,12 @@ export interface SdkTaskControlCoordinatorOptions {
 	setTask: (task: TaskProxy | undefined) => void
 	onAskResponse: (text?: string, images?: string[], files?: string[]) => Promise<void>
 	resetMessageTranslator: () => void
+	/**
+	 * Follow the reopened task's spawn rows in the live translator, so an
+	 * agent the lead runs again (`restart_agent`, `retry_failed`) lands on its
+	 * row rather than nowhere.
+	 */
+	adoptSpawnRows?: (groups: Parameters<NonNullable<SdkMessagesToClineMessagesOptions["onSpawnRows"]>>[0]) => void
 	postStateToWebview: () => Promise<void>
 	/**
 	 * Drops the StateManager's task-scoped settings overlay (persisting pending
@@ -209,9 +216,17 @@ export class SdkTaskControlCoordinator {
 			// postStateToWebview() caller never sees the new id with empty messages.
 			const isLegacyTask = await this.options.taskHistory.isLegacyTask(taskId)
 			const sessionStatus = isLegacyTask ? undefined : await this.options.taskHistory.getSessionStatus(taskId)
-			const rawMessages = await this.options.taskHistory.getClineMessages(taskId)
+			let spawnRows: Parameters<NonNullable<SdkMessagesToClineMessagesOptions["onSpawnRows"]>>[0] | undefined
+			const rawMessages = await this.options.taskHistory.getClineMessages(taskId, {
+				onSpawnRows: (groups) => {
+					spawnRows = groups
+				},
+			})
 			if (isSuperseded()) {
 				return historyItem
+			}
+			if (spawnRows) {
+				this.options.adoptSpawnRows?.(spawnRows)
 			}
 			const messages = this.options.messages.finalizeMessagesForSave(rawMessages)
 			const cleanedMessages = isLegacyTask

@@ -141,13 +141,41 @@ describe("SdkTaskControlCoordinator", () => {
 		expect(existingTask.messageStateHandler.clear).toHaveBeenCalledOnce()
 		expect(options.resetMessageTranslator).toHaveBeenCalledOnce()
 		expect(state.task?.taskId).toBe("task-1")
-		expect(options.taskHistory.getClineMessages).toHaveBeenCalledWith("task-1")
+		expect(options.taskHistory.getClineMessages).toHaveBeenCalledWith("task-1", expect.anything())
 		expect(state.task?.messageStateHandler.getClineMessages()).toEqual([
 			{ ts: 1, type: "say", say: "task", text: "hello" },
 			{ ts: 2, type: "ask", ask: "completion_result", text: "" },
 			expect.objectContaining({ type: "ask", ask: "resume_completed_task" }),
 		])
 		expect(options.postStateToWebview).toHaveBeenCalledOnce()
+	})
+
+	// The reopened task's spawn rows are drawn from its transcript. The live
+	// translator follows them from then on: an agent the lead runs again after
+	// the reload lands on its row, not nowhere.
+	it("hands the reopened task's spawn rows to the live translator, after its reset", async () => {
+		const groups = [{ ts: 7, entries: [["call-1#0", { index: 0 }]] }]
+		const { coordinator, options } = makeCoordinator({
+			activeSession: makeActiveSession(),
+			hasHistoryItem: true,
+			clineMessages: [{ ts: 1, type: "say", say: "task", text: "hello" }],
+			sessionStatus: "completed",
+		})
+		;(options.taskHistory.getClineMessages as ReturnType<typeof vi.fn>).mockImplementation(
+			async (_taskId: string, load?: { onSpawnRows?: (rows: unknown) => void }) => {
+				load?.onSpawnRows?.(groups)
+				return [{ ts: 1, type: "say", say: "task", text: "hello" }]
+			},
+		)
+		const adoptSpawnRows = vi.fn()
+		;(options as { adoptSpawnRows?: unknown }).adoptSpawnRows = adoptSpawnRows
+
+		await coordinator.showTaskWithId("task-1")
+
+		expect(adoptSpawnRows).toHaveBeenCalledWith(groups)
+		expect(adoptSpawnRows.mock.invocationCallOrder[0]).toBeGreaterThan(
+			(options.resetMessageTranslator as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0],
+		)
 	})
 
 	it("clears a pending approval when switching tasks so the new task input is not consumed", async () => {

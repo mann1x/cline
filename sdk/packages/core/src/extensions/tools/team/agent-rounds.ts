@@ -229,6 +229,22 @@ export interface RoundRecord {
 	delivered: boolean;
 	/** A swarm's merged report, as its call returned it. */
 	digest?: string;
+	/**
+	 * Each agent has its own row under the call, keyed `<call>#<index>`; a
+	 * round without it is one row, keyed by the call. Where a rerun's updates
+	 * go, after the call is gone.
+	 */
+	rowed?: boolean;
+}
+
+/**
+ * Where a rerun's updates belong, when the call that drew the agent's row is
+ * gone: the control call carries them, tagged with the row -- the original
+ * call and, for a rowed round, the agent's index.
+ */
+export interface RoundRowTarget {
+	toolCallId: string;
+	member?: number;
 }
 
 /**
@@ -598,27 +614,7 @@ export class AgentRounds {
 	}
 
 	private interruptRound(round: RoundRecord): boolean {
-		let changed = false;
-		for (const agent of round.agents ?? []) {
-			if (LIVE_STATES.has(agent.state)) {
-				agent.state = "cancelled";
-				agent.stopReason = "interrupted";
-				agent.stopDetail =
-					"The session ended while it ran (the window was reloaded or the task closed); its work in progress is gone.";
-				agent.endedAt ??= this.now();
-				agent.waiting = undefined;
-				agent.awaitingReason = undefined;
-				changed = true;
-			}
-		}
-		if (round.status === "running") {
-			round.status = "done";
-			round.endedAt ??= this.now();
-			// Its report, interruption and all, is the lead's to be told.
-			round.delivered = false;
-			changed = true;
-		}
-		return changed;
+		return markRoundInterrupted(round, this.now());
 	}
 
 	/** Write now, and stop writing: the session is going. */
@@ -752,6 +748,7 @@ export class AgentRounds {
 				this.newAgent(id, index, spec, at),
 			),
 			delivered: false,
+			...(input.rowed ? { rowed: true } : {}),
 		};
 		const controller = new AbortController();
 		const signal = input.signal;
@@ -838,7 +835,7 @@ export class AgentRounds {
 				slots: new Map(),
 				outputs: new Map(),
 				cancelIds: new Map(),
-				rowed: false,
+				rowed: round.rowed === true,
 				idleWaiters: [],
 				holds: 0,
 				awaited: 0,
@@ -860,20 +857,63 @@ export class AgentRounds {
 		agent.attempts += 1;
 		const handle = new RoundHandle(this, live);
 		const base = round.toolCallId ?? `${round.id}`;
+		// Its row: through the call while the call is open; once it is gone,
+		// through the control call, each update tagged with the row it is for.
+		// The control call's own channel, untagged, drew it on the control
+		// call's row -- or nowhere -- and the agent's row kept its last end.
+		const target: RoundRowTarget | undefined = round.toolCallId
+			? {
+					toolCallId: round.toolCallId,
+					...(live.rowed ? { member: index } : {}),
+				}
+			: undefined;
+		const control = context.emitUpdate;
+		const toRow = live.emitUpdate
+			? live.rowed
+				? (update: unknown) =>
+						live.emitUpdate?.({
+							...(update as Record<string, unknown>),
+							member: index,
+						})
+				: (update: unknown) => live.emitUpdate?.(update)
+			: target && control
+				? (update: unknown) =>
+						control({
+							...(update as Record<string, unknown>),
+							roundRow: target,
+						})
+				: undefined;
+		// The row starts over: running again, its last end cleared.
+		toRow?.({ rerun: { attempt: agent.attempts } });
 		const rerunContext: AgentToolContext = {
 			...context,
 			toolCallId: `${base}#${index}~${live.reruns}`,
 			signal: live.controller.signal,
 			metadata: { ...(context.metadata ?? {}), [ROUND_MEMBER_KEY]: true },
 		};
-		void handle.run(index, rerunContext, (memberContext) =>
-			runner({
-				round,
-				agent,
-				task: taskWithRevision(agent),
-				context: memberContext,
-			}),
-		);
+		if (!live.emitUpdate) {
+			if (toRow) {
+				rerunContext.emitUpdate = toRow;
+			} else {
+				delete rerunContext.emitUpdate;
+			}
+		}
+		void handle
+			.run(index, rerunContext, (memberContext) =>
+				runner({
+					round,
+					agent,
+					task: taskWithRevision(agent),
+					context: memberContext,
+				}),
+			)
+			.then((output) => {
+				// Its new end, on its row -- unless it returned waiting for the
+				// lead, which its own update already drew there.
+				if (output.state !== "awaiting_lead") {
+					toRow?.({ finished: output });
+				}
+			});
 		return { started: true };
 	}
 
@@ -1620,6 +1660,77 @@ export class RoundHandle {
  * by the session id its context carries.
  */
 const REGISTRIES = new Map<string, AgentRounds>();
+
+/**
+ * A round the session's end caught running: each agent still out is
+ * `interrupted`, and the round is over with its report owed to the lead.
+ */
+function markRoundInterrupted(round: RoundRecord, at: number): boolean {
+	let changed = false;
+	for (const agent of round.agents ?? []) {
+		if (LIVE_STATES.has(agent.state)) {
+			agent.state = "cancelled";
+			agent.stopReason = "interrupted";
+			agent.stopDetail =
+				"The session ended while it ran (the window was reloaded or the task closed); its work in progress is gone.";
+			agent.endedAt ??= at;
+			agent.waiting = undefined;
+			agent.awaitingReason = undefined;
+			changed = true;
+		}
+	}
+	if (round.status === "running") {
+		round.status = "done";
+		round.endedAt ??= at;
+		// Its report, interruption and all, is the lead's to be told.
+		round.delivered = false;
+		changed = true;
+	}
+	return changed;
+}
+
+/**
+ * A session's rounds, for a view drawn after the fact -- a task reopened, a
+ * window reloaded: this process's registry when it holds them, else the file
+ * the session wrote beside its transcript. A round the file says is running
+ * was not ended by any process alive now, so it reads as interrupted, as the
+ * session's next start will record it. Copies: nothing here changes a round.
+ */
+export function readRoundRecords(
+	sessionId: string,
+	path?: string,
+): RoundRecord[] {
+	const registry = REGISTRIES.get(sessionId);
+	const held = registry?.list() ?? [];
+	if (held.length > 0) {
+		return held.map((round) => structuredClone(round));
+	}
+	if (!path) {
+		return [];
+	}
+	let rounds: RoundRecord[];
+	try {
+		const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+			version?: number;
+			rounds?: RoundRecord[];
+		};
+		rounds =
+			parsed?.version === 1 && Array.isArray(parsed.rounds)
+				? parsed.rounds
+				: [];
+	} catch {
+		return [];
+	}
+	const at = Date.now();
+	for (const round of rounds) {
+		for (const agent of round.agents ?? []) {
+			agent.activity ??= [];
+			agent.errors ??= [];
+		}
+		markRoundInterrupted(round, at);
+	}
+	return rounds;
+}
 
 /** This session's rounds, created on first use. */
 export function roundsFor(sessionId: string | undefined): AgentRounds {

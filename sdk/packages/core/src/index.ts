@@ -465,6 +465,12 @@ export {
 	UnknownConfiguredAgentError,
 } from "./extensions/tools/team";
 export {
+	type RoundAgentRecord,
+	type RoundRecord,
+	type RoundRowTarget,
+	readRoundRecords,
+} from "./extensions/tools/team/agent-rounds";
+export {
 	createAgentHooksExtension,
 	createHookAuditHooks,
 	createHookConfigFileExtension,

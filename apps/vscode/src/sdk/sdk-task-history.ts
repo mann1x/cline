@@ -1,6 +1,12 @@
 import { existsSync } from "node:fs"
 import path from "node:path"
-import { type ClineCoreListHistoryOptions, readSessionCheckpointHistory, type SessionHistoryRecord } from "@cline/core"
+import {
+	type ClineCoreListHistoryOptions,
+	type RoundRecord,
+	readRoundRecords,
+	readSessionCheckpointHistory,
+	type SessionHistoryRecord,
+} from "@cline/core"
 import type { MessageWithMetadata as SdkMessage } from "@cline/llms"
 import { formatDisplayUserInput, parseUserInputMode } from "@cline/shared"
 import { resolveSessionDataDir } from "@cline/shared/storage"
@@ -18,7 +24,7 @@ import {
 	mergeLegacyUiMessagesWithResumedSdkMessages,
 } from "./legacy-task-handling"
 import type { MessageIdMinter } from "./message-id-minter"
-import { sdkMessagesToClineMessages } from "./message-translator"
+import { type SdkMessagesToClineMessagesOptions, sdkMessagesToClineMessages } from "./message-translator"
 import type { SdkSessionLifecycle } from "./sdk-session-lifecycle"
 import { measureSessionDir, type SessionFootprint } from "./session-footprint"
 import type { VscodeSessionHost } from "./vscode-session-host"
@@ -467,7 +473,27 @@ export class SdkTaskHistory {
 		return this.withHistoryHost((host) => host.get(taskId) as Promise<SessionHistoryRecord | undefined>)
 	}
 
-	async getClineMessages(taskId: string): Promise<ClineMessage[]> {
+	/**
+	 * The session's rounds, as the core's round registry has them: this
+	 * process's, or the file the session wrote beside its transcript.
+	 */
+	private readRounds(taskId: string, sdkRecord: SessionHistoryRecord | undefined): RoundRecord[] {
+		try {
+			const messagesPath = typeof sdkRecord?.messagesPath === "string" ? sdkRecord.messagesPath.trim() : ""
+			const sessionDir = messagesPath ? path.dirname(messagesPath) : path.join(resolveSessionDataDir(), taskId)
+			return readRoundRecords(taskId, path.join(sessionDir, `${taskId}.rounds.json`))
+		} catch {
+			return []
+		}
+	}
+
+	async getClineMessages(
+		taskId: string,
+		options?: {
+			/** The spawn rows as drawn, for the live translator to follow. */
+			onSpawnRows?: SdkMessagesToClineMessagesOptions["onSpawnRows"]
+		},
+	): Promise<ClineMessage[]> {
 		const sdkRecord = await this.getSdkRecord(taskId)
 		const legacyTask = this.findLegacyTask(taskId)
 		if (!sdkRecord && legacyTask) {
@@ -492,6 +518,10 @@ export class SdkTaskHistory {
 				finalTurnCompleted: sdkRecord?.status === "completed",
 				// Relativize the absolute tool paths for display, same as the live path.
 				cwd: sdkRecord?.cwd || sdkRecord?.workspaceRoot || undefined,
+				// A spawn call's row as its round says its agents are now: the
+				// transcript has what the call returned, not how they ended.
+				rounds: this.readRounds(taskId, sdkRecord),
+				...(options?.onSpawnRows ? { onSpawnRows: options.onSpawnRows } : {}),
 			},
 		)
 		if (sdkRecord && legacyTask) {
