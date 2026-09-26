@@ -320,8 +320,10 @@ const agent = new Agent({ tools: [deployTool], /* ... */ })
 
 Coordinate multiple agents working together on complex tasks. A coordinator agent breaks the work into subtasks and delegates to specialist agents, each with their own tools and context. Team state persists across sessions so you can pick up where you left off.
 
+Teams are off by default: the `team_*` tools add 18 tools (about 2,800 tokens) to every request. Turn on **Teammates** in Features (under **Agents can run commands**, and only with **Subagents** on), or pass `--teammates` (or set `CLINE_TEAMMATES=1`) to the CLI. A `/team` prompt turns them on for its own run.
+
 ```bash
-cline --team-name auth-sprint "Plan and implement user authentication with tests"
+cline --teammates --team-name auth-sprint "Plan and implement user authentication with tests"
 ```
 
 ### Sub-agents across your machines

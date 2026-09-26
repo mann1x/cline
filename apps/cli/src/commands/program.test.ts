@@ -179,3 +179,19 @@ describe("--expert-model and its knobs", () => {
 		expect(help).toContain("escalation paths stay closed");
 	});
 });
+
+describe("--teammates", () => {
+	function parse(argv: string[]) {
+		const program = createProgram();
+		program.exitOverride();
+		program.parse(["node", "cline", ...argv]);
+		return commanderToParsedArgs(program);
+	}
+
+	// Off by default, like the extension's Teammates setting: absent is not
+	// false-by-accident but the default the run resolves to.
+	it("is on only when passed", () => {
+		expect(parse(["--teammates"]).teammates).toBe(true);
+		expect(parse([]).teammates).toBeUndefined();
+	});
+});

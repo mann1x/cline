@@ -35,3 +35,30 @@ export async function enableTeamsForPrompt(config: Config): Promise<void> {
 	config.enableAgentTeams = true;
 	config.teamName = config.teamName?.trim() || createTeamName();
 }
+
+/**
+ * Whether this run offers the team tools. Off unless asked for, mirroring the
+ * extension's Teammates setting: eighteen tools in every request that most
+ * runs never call. `--teammates` or `CLINE_TEAMMATES=1` turns them on.
+ */
+export function teammatesRequested(
+	args: { teammates?: boolean },
+	env: NodeJS.ProcessEnv = process.env,
+): boolean {
+	return args.teammates === true || env.CLINE_TEAMMATES?.trim() === "1";
+}
+
+/**
+ * A `/team` prompt is an explicit request for a team, so it turns the team
+ * tools on for its own run whatever the default says -- except in yolo mode,
+ * which has never offered them.
+ */
+export function teamsForRewrittenPrompt(
+	rewritten: TeamPromptRewriteResult,
+	config: Config,
+	isYoloMode: boolean,
+): void {
+	if (rewritten.kind === "rewritten" && !isYoloMode) {
+		config.enableAgentTeams = true;
+	}
+}

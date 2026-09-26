@@ -1377,6 +1377,8 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			);
 			const spawnTool = createSpawnTool({
 				...(swarmTool ? { swarm: swarmTool } : {}),
+				// Its description names the team tools only when they are offered.
+				...(normalized.enableAgentTeams ? { teammates: true } : {}),
 				...(configuredByName.size > 0
 					? {
 							configuredAgents: () => configuredByName,

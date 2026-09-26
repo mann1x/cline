@@ -54,7 +54,12 @@ import {
 	resolveStartupMode,
 	resolveStartupToolAutoApprove,
 } from "./utils/startup-settings";
-import { rewriteTeamPrompt, TEAM_COMMAND_USAGE } from "./utils/team-command";
+import {
+	rewriteTeamPrompt,
+	TEAM_COMMAND_USAGE,
+	teammatesRequested,
+	teamsForRewrittenPrompt,
+} from "./utils/team-command";
 import {
 	captureCliExtensionActivated,
 	getCliTelemetryService,
@@ -1399,7 +1404,11 @@ export async function runCli(): Promise<void> {
 			defaultToolAutoApprove,
 			toolPolicies,
 			enableSpawnAgent: !isYoloMode,
-			enableAgentTeams: !isYoloMode,
+			// The team tools, off unless asked for: `--teammates` or
+			// CLINE_TEAMMATES=1, mirroring the extension's Teammates setting. A
+			// `/team` prompt still turns them on for its own run (see
+			// `teamsForRewrittenPrompt`).
+			enableAgentTeams: !isYoloMode && teammatesRequested(args),
 			// Let a delegated agent run commands in the overlay sandbox, off by
 			// default (as in the desktop app) and opted into with
 			// CLINE_SUBAGENT_COMMANDS=1. The binaries dir is always resolved: the
@@ -1668,6 +1677,7 @@ export async function runCli(): Promise<void> {
 					rewrittenTeamPrompt.kind === "rewritten"
 						? rewrittenTeamPrompt.prompt
 						: prompt;
+				teamsForRewrittenPrompt(rewrittenTeamPrompt, config, isYoloMode);
 				if (isZenMode) {
 					const { runZen } = await import("./runtime/run-zen");
 					await runZen(pipedEffectivePrompt, config, userInstructionService);
@@ -1737,6 +1747,7 @@ export async function runCli(): Promise<void> {
 			rewrittenTeamPrompt.kind === "rewritten"
 				? rewrittenTeamPrompt.prompt
 				: args.prompt;
+		teamsForRewrittenPrompt(rewrittenTeamPrompt, config, isYoloMode);
 
 		// Zen mode: dispatch the task to the background hub and exit. The CLI
 		// does not stay connected to stream output; completion is delivered via

@@ -410,6 +410,12 @@ const USER_SETTINGS_FIELDS = {
 	// where there is no launcher (or this is off) it gets no shell rather than one
 	// pointed at the real workspace. Independent of which model the agent runs on.
 	subagentCommandsEnabled: { default: false as boolean },
+	// Whether the lead is offered the `team_*` tools: durable named teammates
+	// with a mailbox and a task board. Off by default -- eighteen tools in every
+	// request that most sessions never call. An absent value reads as off, so a
+	// user who never touched it gets none either. Only meaningful with
+	// subagents on.
+	teammatesEnabled: { default: false as boolean },
 	// A global model for delegated agents, overriding the session's own model for
 	// them only. Empty means agents run on the session's model. One value on the
 	// session's provider — not per-provider, and it never touches the lead.

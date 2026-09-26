@@ -1753,10 +1753,10 @@ describe("buildSessionConfig", () => {
 		expect(config.enableAgentTeams).toBe(false)
 	})
 
-	// Both from one setting: a user who turns subagents on wants to delegate,
-	// and which mechanism carries the delegation is not a choice they have any
-	// way to make.
-	it("offers subagents and teams once the toggle is on", async () => {
+	// Subagents on is spawn_agent and the agent files. The team tools are their
+	// own setting, Teammates, off by default and never written reads as off:
+	// eighteen tools in every request is a price most sessions never collect on.
+	it("offers subagents but not teams once the Subagents toggle alone is on", async () => {
 		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
 			key === "subagentsEnabled" ? true : undefined,
 		)
@@ -1764,7 +1764,43 @@ describe("buildSessionConfig", () => {
 		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
 
 		expect(config.enableSpawnAgent).toBe(true)
+		expect(config.enableAgentTeams).toBe(false)
+	})
+
+	it("offers teams once Teammates is on as well", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
+			key === "subagentsEnabled" || key === "teammatesEnabled" ? true : undefined,
+		)
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.enableSpawnAgent).toBe(true)
 		expect(config.enableAgentTeams).toBe(true)
+	})
+
+	// Teammates sits under Subagents and means nothing without it.
+	it("offers no teams with Teammates on and Subagents off", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
+			key === "teammatesEnabled" ? true : key === "subagentsEnabled" ? false : undefined,
+		)
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect(config.enableSpawnAgent).toBe(false)
+		expect(config.enableAgentTeams).toBe(false)
+	})
+
+	it("lets a task setting turn Teammates off for one task", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
+			key === "subagentsEnabled" || key === "teammatesEnabled" ? true : undefined,
+		)
+
+		const config = await buildSessionConfig({
+			cwd: "/tmp/workspace",
+			taskSettings: { teammatesEnabled: false },
+		})
+
+		expect(config.enableAgentTeams).toBe(false)
 	})
 
 	// Never written is off. Delegation spends tokens on a second model, so it is

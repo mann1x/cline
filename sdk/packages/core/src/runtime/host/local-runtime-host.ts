@@ -90,6 +90,10 @@ import {
 	type DelegatedSandboxes,
 } from "../../extensions/tools/team/delegated-sandboxes";
 import { subagentCancellation } from "../../extensions/tools/team/subagent-cancellation";
+import {
+	historyUsedTeammates,
+	TEAMMATES_OFF_RESTORE_NOTE,
+} from "../../extensions/tools/team/teammates-off";
 import type { HookEventPayload } from "../../hooks";
 import { buildTelemetryAgentIdentity } from "../../services/agent-events";
 import { resolveWorkspacePath } from "../../services/config";
@@ -752,6 +756,17 @@ export class LocalRuntimeHost implements RuntimeHost {
 		const startInput: ResolvedStartSessionInput =
 			await this.applyInitialOAuthCredentials(input);
 		const initialMessages = startInput.initialMessages ?? [];
+		// A session that used teammates, reopened with Teammates off: nothing of
+		// the team is restored, which is right, and this says so once.
+		if (
+			startInput.config.enableAgentTeams === false &&
+			historyUsedTeammates(initialMessages)
+		) {
+			(
+				(startInput.localRuntime as Partial<CoreSessionConfig> | undefined)
+					?.logger ?? this.defaultLogger
+			)?.log(TEAMMATES_OFF_RESTORE_NOTE, { sessionId });
+		}
 		const initialUsage =
 			initialMessages.length > 0
 				? summarizeUsageFromMessages(initialMessages)

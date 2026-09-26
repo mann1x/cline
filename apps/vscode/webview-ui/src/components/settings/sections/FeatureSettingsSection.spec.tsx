@@ -178,6 +178,25 @@ describe("FeatureSettingsSection", () => {
 		expect(mockUpdateSetting).toHaveBeenCalledWith("subagentCommandsEnabled", true)
 	})
 
+	// Directly below "Agents can run commands", off unless the state says on.
+	it("renders the Teammates toggle directly under 'Agents can run commands', off by default", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const agentSection = container.querySelector("#agent-features")
+		const ids = Array.from(agentSection?.querySelectorAll('[role="switch"]') ?? []).map((el) => el.id)
+		expect(ids.indexOf("Teammates")).toBe(ids.indexOf("Agents can run commands") + 1)
+		expect(container.querySelector("#Teammates")?.getAttribute("aria-checked")).toBe("false")
+		expect(screen.getByText(/Adds 18 tools/)).toBeTruthy()
+	})
+
+	it("calls updateSetting with teammatesEnabled when toggled", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		fireEvent.click(container.querySelector("#Teammates") as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("teammatesEnabled", true)
+	})
+
 	it("persists a trimmed agentModelOverride on blur", () => {
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 

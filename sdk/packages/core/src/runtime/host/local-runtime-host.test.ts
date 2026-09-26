@@ -1580,6 +1580,92 @@ describe("LocalRuntimeHost", () => {
 		});
 	});
 
+	// Teammates are a setting, off by default. A session that used them and is
+	// reopened with the setting off gets no team tools and nothing restored;
+	// the only trace is one log line, so it has to be there.
+	it.each([
+		{ teams: false, used: true, logged: true },
+		{ teams: true, used: true, logged: false },
+		{ teams: false, used: false, logged: false },
+	])("a resumed session says once that its teammates are off (teams=$teams, used=$used)", async ({
+		teams,
+		used,
+		logged,
+	}) => {
+		const sessionId = `sess-teammates-off-${teams}-${used}`;
+		const manifest = createManifest(sessionId);
+		const initialMessages: MessageWithMetadata[] = [
+			{ role: "user" as const, content: "split the work" },
+			{
+				role: "assistant" as const,
+				content: [
+					{
+						type: "tool_use" as const,
+						id: "call-1",
+						name: used ? "team_spawn_teammate" : "read_files",
+						input: {},
+					},
+				],
+			},
+		];
+		const sessionService = {
+			ensureSessionsDir: vi.fn().mockReturnValue("/tmp/sessions"),
+			createRootSessionWithArtifacts: vi.fn().mockResolvedValue({
+				manifestPath: "/tmp/manifest.json",
+				messagesPath: "/tmp/messages.json",
+				manifest,
+			}),
+			persistSessionMessages: vi.fn(),
+			updateSessionStatus: vi.fn(),
+			writeSessionManifest: vi.fn(),
+			listSessions: vi.fn().mockResolvedValue([]),
+			deleteSession: vi.fn().mockResolvedValue({ deleted: true }),
+		};
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [],
+				teamRuntime: undefined,
+				teamRestoredFromPersistence: false,
+				shutdown: vi.fn(),
+			}),
+		};
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn(),
+			getMessages: vi.fn().mockReturnValue(initialMessages),
+			getAgentId: vi.fn().mockReturnValue("agent-root-1"),
+			getConversationId: vi.fn().mockReturnValue("conv-root-1"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		const logger = { debug: vi.fn(), log: vi.fn(), error: vi.fn() };
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: sessionService as never,
+			runtimeBuilder: runtimeBuilder as never,
+			createAgent: () => agent as never,
+		});
+
+		await manager.startSession(
+			normalizeStartInput({
+				config: createConfig({
+					sessionId,
+					enableAgentTeams: teams,
+					logger,
+				}),
+				interactive: true,
+				initialMessages,
+			}),
+		);
+
+		const notes = logger.log.mock.calls.filter(([message]) =>
+			String(message).includes("Teammates is off in settings"),
+		);
+		expect(notes).toHaveLength(logged ? 1 : 0);
+	});
+
 	it("keeps brand-new empty sessions lazy until the first user turn", async () => {
 		const sessionId = "sess-lazy-empty";
 		const manifest = createManifest(sessionId);

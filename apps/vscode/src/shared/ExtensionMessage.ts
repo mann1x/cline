@@ -223,6 +223,8 @@ export interface ExtensionState {
 	webSearchEnabled?: boolean
 	subagentsEnabled?: boolean
 	subagentCommandsEnabled?: boolean
+	/** Whether the lead is offered the team_* tools; see state-keys.ts. */
+	teammatesEnabled?: boolean
 	/** "Use PolyKV agents as Priority 0"; see state-keys.ts. */
 	polykvAgentsPriorityZero?: boolean
 	agentModelOverride?: string

@@ -233,6 +233,10 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.subagentCommandsEnabled !== undefined) {
 			controller.stateManager.setGlobalState("subagentCommandsEnabled", !!request.subagentCommandsEnabled)
 		}
+		// Update the "Teammates" setting
+		if (request.teammatesEnabled !== undefined) {
+			controller.stateManager.setGlobalState("teammatesEnabled", !!request.teammatesEnabled)
+		}
 		if (request.polykvAgentsPriorityZero !== undefined) {
 			controller.stateManager.setGlobalState("polykvAgentsPriorityZero", !!request.polykvAgentsPriorityZero)
 		}

@@ -244,6 +244,10 @@ export function addRootOptions(cmd: Command): Command {
 				`Directory path to additional hooks for runtime hook injection (default: ${configDirDefault()}/hooks)`,
 			)
 			.option(
+				"--teammates",
+				"Offer the team tools: durable named teammates that take tasks one at a time and coordinate through a mailbox and a task board. Adds 18 tools to every request. Off by default; CLINE_TEAMMATES=1 does the same, and a /team prompt turns them on for that run",
+			)
+			.option(
 				"--worktree",
 				`Auto-create a detached git worktree under ${configDirDefault()}/worktrees/ and run the task there`,
 			)
@@ -502,6 +506,7 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 	if (opts.config !== undefined) result.configDir = opts.config;
 	if (opts.hooksDir !== undefined) result.hooksDir = opts.hooksDir;
 	if (opts.worktree !== undefined) result.worktree = !!opts.worktree;
+	if (opts.teammates !== undefined) result.teammates = !!opts.teammates;
 	if (opts.cwd !== undefined) result.cwd = opts.cwd;
 	if (opts.teamName !== undefined) result.teamName = opts.teamName;
 	if (opts.system !== undefined) result.systemPrompt = opts.system;

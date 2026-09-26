@@ -347,6 +347,7 @@ export function createSessionSpawnTool(
 
 	return createSpawnAgentTool({
 		...(options?.swarm ? { swarm: options.swarm } : {}),
+		...(options?.teammates ? { teammates: true } : {}),
 		...(options?.configuredAgents
 			? { configuredAgents: options.configuredAgents }
 			: {}),

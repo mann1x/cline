@@ -72,6 +72,19 @@ const agentFeatures: FeatureToggle[] = [
 		settingKey: "subagentCommandsEnabled",
 	},
 	{
+		// Directly under "Agents can run commands", and like it only meaningful
+		// with Subagents on. Off by default: the team tools are a large surface
+		// that few sessions use, and every request carries them when offered.
+		// The count is TEAM_TOOL_NAMES in core; the token figure was measured on
+		// their wire schemas with the Qwen tokenizer.
+		id: "teammates",
+		label: "Teammates",
+		description:
+			"Let the model keep durable, named teammates that take tasks one at a time and coordinate through a mailbox and a task board. Adds 18 tools, about 2,800 tokens, to every request, so leave it off unless you use it; subagents work without it.",
+		stateKey: "teammatesEnabled",
+		settingKey: "teammatesEnabled",
+	},
+	{
 		// Default on: it is what every build did before the switch existed, and
 		// inside a coding task it is the right reading -- a turn that called
 		// nothing is nearly always one that should have acted, a needless nudge
@@ -253,6 +266,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		webSearchEnabled,
 		subagentsEnabled,
 		subagentCommandsEnabled,
+		teammatesEnabled,
 		agentModelOverride,
 		strongNudgesEnabled,
 		worktreesEnabled,
@@ -269,6 +283,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		useAutoCondense,
 		subagentsEnabled,
 		subagentCommandsEnabled,
+		teammatesEnabled,
 		// `?? true` rather than a bare read: the default is on, and an
 		// extension state that predates the key must not render as off.
 		strongNudgesEnabled: strongNudgesEnabled ?? true,

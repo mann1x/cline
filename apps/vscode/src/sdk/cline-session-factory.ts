@@ -2185,6 +2185,14 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// pointed at the real workspace.
 	const subagentCommandsEnabled =
 		input.taskSettings?.subagentCommandsEnabled ?? stateManager.getGlobalSettingsKey("subagentCommandsEnabled") ?? false
+	// Whether the lead is offered the team_* tools. Its own setting, off by
+	// default: eighteen tools in every request that most sessions never call.
+	// Absent reads as off. Only meaningful with subagents on.
+	const teammatesEnabled =
+		input.taskSettings?.teammatesEnabled ?? stateManager.getGlobalSettingsKey("teammatesEnabled") ?? false
+	if (subagentsEnabled) {
+		Logger.log(`[Agents] Teammates ${teammatesEnabled ? "enabled" : "disabled"}`)
+	}
 	// Whether a turn that calls nothing is nudged to continue even when
 	// nothing says work is unfinished. On by default, which is what the
 	// extension did before this was a setting.
@@ -2499,7 +2507,9 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// wants to delegate, and which mechanism carries the delegation is an
 		// implementation detail they have no way to choose between.
 		enableSpawnAgent: subagentsEnabled,
-		enableAgentTeams: subagentsEnabled,
+		// The team tools are a second mechanism with a price of their own (see
+		// `teammatesEnabled`), so they take their own switch on top of this one.
+		enableAgentTeams: subagentsEnabled && teammatesEnabled,
 		// Whether those delegated agents are offered a (sandboxed) shell.
 		subagentCommandsEnabled,
 		// Where the shipped command-sandbox binaries live. The host resolves the

@@ -1462,6 +1462,45 @@ describe("runCli lightweight command dispatch", () => {
 		expect(hubRuntimeMocks.ensureCliHubServer).not.toHaveBeenCalled();
 	});
 
+	// Teammates are off by default, as in the extension: eighteen tools in
+	// every request is a price most runs never collect on.
+	it.each([
+		{ argv: [], env: undefined, teams: false },
+		{ argv: ["--teammates"], env: undefined, teams: true },
+		{ argv: [], env: "1", teams: true },
+	])("offers the team tools only when asked (argv=$argv, CLINE_TEAMMATES=$env)", async ({
+		argv,
+		env,
+		teams,
+	}) => {
+		runtimeMocks.runAgent.mockClear();
+		const previous = process.env.CLINE_TEAMMATES;
+		if (env === undefined) {
+			delete process.env.CLINE_TEAMMATES;
+		} else {
+			process.env.CLINE_TEAMMATES = env;
+		}
+		try {
+			forcePromptModeInput();
+			process.argv = ["bun", "src/index.ts", ...argv, "find the bug"];
+
+			const { runCli } = await import("./main");
+
+			await expect(runCli()).resolves.toBeUndefined();
+			expect(runtimeMocks.runAgent).toHaveBeenCalledWith(
+				"find the bug",
+				expect.objectContaining({ enableAgentTeams: teams }),
+				expect.anything(),
+			);
+		} finally {
+			if (previous === undefined) {
+				delete process.env.CLINE_TEAMMATES;
+			} else {
+				process.env.CLINE_TEAMMATES = previous;
+			}
+		}
+	});
+
 	it("rewrites /team prompts and enables teams in single-prompt mode", async () => {
 		runtimeMocks.runAgent.mockClear();
 

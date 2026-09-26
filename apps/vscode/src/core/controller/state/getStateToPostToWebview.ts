@@ -80,6 +80,7 @@ export async function getStateToPostToWebview(controller: {
 	const webSearchEnabled = isModelToolEnabledGlobally("web_search")
 	const subagentsEnabled = stateManager.getGlobalSettingsKey("subagentsEnabled")
 	const subagentCommandsEnabled = stateManager.getGlobalSettingsKey("subagentCommandsEnabled")
+	const teammatesEnabled = stateManager.getGlobalSettingsKey("teammatesEnabled")
 	const polykvAgentsPriorityZero = stateManager.getGlobalSettingsKey("polykvAgentsPriorityZero")
 	const agentModelOverride = stateManager.getGlobalSettingsKey("agentModelOverride")
 	const strongNudgesEnabled = stateManager.getGlobalSettingsKey("strongNudgesEnabled")
@@ -217,6 +218,7 @@ export async function getStateToPostToWebview(controller: {
 		webSearchEnabled,
 		subagentsEnabled,
 		subagentCommandsEnabled,
+		teammatesEnabled,
 		polykvAgentsPriorityZero,
 		agentModelOverride,
 		strongNudgesEnabled,

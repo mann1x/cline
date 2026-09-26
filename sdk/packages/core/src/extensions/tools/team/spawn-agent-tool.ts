@@ -375,6 +375,12 @@ export interface SubAgentSettledContext {
 
 export interface SpawnAgentToolConfig {
 	configProvider: DelegatedAgentConfigProvider;
+	/**
+	 * Whether the session also offers the `team_*` tools. Only then does the
+	 * description point at them: with Teammates off (the default) a sentence
+	 * sending the model to tools it was not given is a call that fails.
+	 */
+	teammates?: boolean;
 	defaultMaxIterations?: number;
 	subAgentTools?: AgentTool[];
 	createSubAgentTools?: (
@@ -466,16 +472,20 @@ const SPAWN_AGENT_DESCRIPTION =
 	"Spawn sub-agents for focused tasks: `task` for one agent, `agents` for several in one call. Structure the work in three parts, from most shared to least: `knowledge` (files and notes the agents need -- identical across them), `instructions` (the role -- identical for every agent of the same kind), and each agent's `task` (what it alone does). Shared parts are loaded once for all agents that share them, so many agents cost little more than one. An `agents` entry may name a configured agent in `type`; it then runs with that agent's own role and model. " +
 	"Output: one agent gives `{text, iterations, maxIterations?, finishReason, stopReason?, state?, oracle?, agentId, usage: {inputTokens, outputTokens}}`; `agents` gives `{summary: {total, completed, errored, cancelled, awaitingLead, byType, byFailureClass, totalIterations, totalTokens}, agents: [{name, status, failureClass?, line?, error?, iterations?, maxIterations?, stopReason?, agentId?, oracle?}], reports: [{name, text, oracle?}], notShown?: {names}, usage}` -- every agent is in `agents`; a report left out of `reports` to keep the result whole is listed in `notShown` and read with `read_agent_report(name)`. `failureClass` is `infra` (server, transport or refusal: worth running again as is) or `task` (the model, a tool or the iteration budget). " +
 	"Not merging is the way to get N separate reports: each agent of an `agents` call reports on its own, where `merge` returns one combined report. " +
-	"Use `spawn_agent` for tasks that finish and report back; use the `team_*` tools for long-lived teammates you keep assigning work to and messaging. " +
 	"`text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. It has already finished by the time you see this — there is nothing to poll and nothing to await -- unless its `state` is `awaiting_lead`. " +
 	"Give each sub-agent a short `name`: when several run at once it is the only thing telling their progress apart on screen. ";
+
+/** Said only when the session has the team tools; see {@link SpawnAgentToolConfig.teammates}. */
+const SPAWN_AGENT_TEAMMATES_NOTE =
+	"Use `spawn_agent` for tasks that finish and report back; use the `team_*` tools for long-lived teammates you keep assigning work to and messaging. ";
 
 const SPAWN_AGENT_SWARM_DESCRIPTION =
 	'With `merge: true` the agents run as a swarm instead: they share a snapshot of your current context, so they need no `knowledge` about what you already know, and you get back one merged report rather than one per agent. Use it when the parts do not depend on each other and you want one answer -- searching a repo several ways, checking several files, trying several approaches. With a single `task`, `count` says how many agents run it; `count: "max"` means as many as the servers will take. An `agents` entry with a `type` keeps the role and tools of that agent in the swarm. ';
 
-export function describeSpawnAgent(swarm: boolean): string {
+export function describeSpawnAgent(swarm: boolean, teammates = false): string {
 	return (
 		SPAWN_AGENT_DESCRIPTION +
+		(teammates ? SPAWN_AGENT_TEAMMATES_NOTE : "") +
 		(swarm ? SPAWN_AGENT_SWARM_DESCRIPTION : "") +
 		SPAWN_SAMPLING_NOTE +
 		AGENT_CONTROLS_NOTE +
@@ -706,7 +716,7 @@ export function controlFields(input: unknown): {
 /** What a session hands its spawn tool beyond the connection. */
 export type SpawnToolOptions = Pick<
 	SpawnAgentToolConfig,
-	"swarm" | "configuredAgents" | "configuredAgentConfigs"
+	"swarm" | "configuredAgents" | "configuredAgentConfigs" | "teammates"
 >;
 
 /**
@@ -717,7 +727,10 @@ export function createSpawnAgentTool(
 ): AgentTool<SpawnAgentInput, SpawnAgentOutput | SpawnAgentBatchOutput> {
 	return createTool<SpawnAgentInput, SpawnAgentOutput | SpawnAgentBatchOutput>({
 		name: SPAWN_AGENT_TOOL_NAME,
-		description: describeSpawnAgent(Boolean(config.swarm)),
+		description: describeSpawnAgent(
+			Boolean(config.swarm),
+			config.teammates === true,
+		),
 		inputSchema: zodToJsonSchema(
 			config.swarm ? SpawnAgentSwarmInputSchema : SpawnAgentBatchInputSchema,
 		),

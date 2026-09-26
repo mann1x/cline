@@ -97,6 +97,11 @@ export interface ParsedArgs {
 	configDir?: string;
 	hooksDir?: string;
 	worktree?: boolean;
+	/**
+	 * `--teammates`: offer the `team_*` tools. Off by default, as in the
+	 * extension's Teammates setting -- eighteen tools in every request.
+	 */
+	teammates?: boolean;
 	acpMode: boolean;
 	model?: string;
 	provider?: string;
