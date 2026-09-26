@@ -48,6 +48,7 @@ describe("a teammate's own connection", () => {
 				enableSpawnAgent: false,
 				enableAgentTeams: true,
 				delegatedAgentConnection: {
+					providerId: "openai-compatible",
 					modelId: "agents-model",
 					apiKey: "agents-key",
 					baseUrl: "http://agents/v1",
