@@ -636,6 +636,23 @@ describe("the leak test", () => {
 		expectNothingLeft(server);
 	});
 
+	// Live on 8244: the synthesizer went out with the model's default
+	// thinking, spent its output budget reasoning and returned no replay. It
+	// carries the summarizer config's own reasoning, as the text path did.
+	it("gives a fresh call the summarizer's reasoning settings", async () => {
+		const server = engine({ allocations: held, owner: "lead" });
+		const m = model();
+		const c = (
+			await prepareCompactionContinuation(input(server, { model: m.fn }))
+		).continuation;
+		await c?.fresh("synthesizer", "s", "r", 1_000, {
+			...input(server).providerConfig,
+			thinking: false,
+		});
+		expect(m.calls[0]?.reasoning).toEqual({ thinking: false });
+		await c?.dispose();
+	});
+
 	it("is idempotent: a second dispose sends nothing", async () => {
 		const server = engine({ allocations: held, owner: "lead" });
 		const c = (

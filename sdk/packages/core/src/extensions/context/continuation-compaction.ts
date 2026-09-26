@@ -1067,6 +1067,21 @@ class Continuation implements CompactionContinuation {
 					],
 					tools: [],
 					maxTokens,
+					// Not a continuation, so not the session's reasoning: the
+					// summarizer config's own, which is how the text path sent
+					// it. Left to the model's default, a thinking model spent the
+					// synthesizer's whole budget reasoning (8244, 2026-09-26).
+					reasoning: {
+						...(summarizerConfig.thinking !== undefined
+							? { thinking: summarizerConfig.thinking }
+							: {}),
+						...(summarizerConfig.reasoningEffort !== undefined
+							? { reasoningEffort: summarizerConfig.reasoningEffort }
+							: {}),
+						...(summarizerConfig.thinkingBudgetTokens !== undefined
+							? { thinkingBudgetTokens: summarizerConfig.thinkingBudgetTokens }
+							: {}),
+					},
 					...(this.input.abortSignal
 						? { abortSignal: this.input.abortSignal }
 						: {}),
