@@ -379,28 +379,71 @@ const OWNER_SERIALS = new Map<string, number>();
  * {@link invalidatePolykvRoot} drops a root's owners without closing them:
  * after a real restart there is nothing to close. But it is also reached on
  * suspicion alone, and then the owner is alive, holding a whole window and its
- * pools until the idle TTL. It is closed once no agent is left on it -- each
- * has moved to the new owner, or ended -- so no turn in flight is cut; on a
- * server that did restart, the close of a name it never saw is a no-op.
+ * pools until the idle TTL. It is closed as soon as none of its agents has a
+ * turn running on it, so no turn in flight is cut; on a server that did
+ * restart, the close of a name it never saw is a no-op.
+ *
+ * Not "once every agent has moved to a new owner": the new owners are what
+ * the abandoned ones' cells are needed for. pandorum 2026-09-26 19:38Z, 17
+ * agents waited about ten minutes for new owners that could not open while
+ * the abandoned owners held every cell, until the engine's idle TTL let them
+ * go. An agent between turns does not use its old owner again -- it is closed
+ * to it, and its next turn is placed anew -- so it holds nothing open.
  */
 const ABANDONED = new Map<OwnerShard, PolykvClient>();
+
+/** Worker turns sent and not yet ended, per agent engine session. */
+const TURNS_IN_FLIGHT = new Map<string, number>();
+
+function turnRunning(sessionId: string): boolean {
+	return (TURNS_IN_FLIGHT.get(sessionId) ?? 0) > 0;
+}
+
+/**
+ * A worker turn goes out: until the returned call, `sessionId` is using the
+ * owner it was sent on. The end is idempotent; ending the agent's last
+ * running turn closes any abandoned owner no other running turn holds.
+ */
+export function beginPolykvWorkerTurn(sessionId: string): () => void {
+	TURNS_IN_FLIGHT.set(sessionId, (TURNS_IN_FLIGHT.get(sessionId) ?? 0) + 1);
+	let ended = false;
+	return () => {
+		if (ended) {
+			return;
+		}
+		ended = true;
+		const left = (TURNS_IN_FLIGHT.get(sessionId) ?? 1) - 1;
+		if (left > 0) {
+			TURNS_IN_FLIGHT.set(sessionId, left);
+			return;
+		}
+		TURNS_IN_FLIGHT.delete(sessionId);
+		leaveAbandoned(sessionId);
+	};
+}
 
 function abandonShard(client: PolykvClient, shard: OwnerShard): void {
 	if (shard.borrowed) {
 		return;
 	}
-	if (shard.agents.size === 0) {
+	if (![...shard.agents].some(turnRunning)) {
 		void client.closeSession(shard.sessionId).catch(() => false);
 		return;
 	}
 	ABANDONED.set(shard, client);
 }
 
-/** `sessionId` left the owners it was abandoned on; close any it was last on. */
+/**
+ * `sessionId` is done with the owners it was abandoned on; close any that no
+ * running turn holds any longer.
+ */
 function leaveAbandoned(sessionId: string): Promise<unknown>[] {
 	const closes: Promise<unknown>[] = [];
 	for (const [shard, client] of [...ABANDONED]) {
-		if (shard.agents.delete(sessionId) && shard.agents.size === 0) {
+		if (
+			shard.agents.delete(sessionId) &&
+			![...shard.agents].some(turnRunning)
+		) {
 			ABANDONED.delete(shard);
 			closes.push(client.closeSession(shard.sessionId).catch(() => false));
 		}
@@ -2699,6 +2742,8 @@ export async function releasePolykvAgent(
 	STARTED_WORKERS.delete(engineSessionId(sessionId));
 	LAST_ATTACH.delete(engineSessionId(sessionId));
 	CHARGED_TO.delete(engineSessionId(sessionId));
+	// Released: whatever turn it had is over, and holds no abandoned owner.
+	TURNS_IN_FLIGHT.delete(sessionId);
 	const known = OPENCOTI_SESSIONS.get(sessionId);
 	OPENCOTI_SESSIONS.delete(sessionId);
 	const result: PolykvReleaseResult = {
@@ -2919,6 +2964,7 @@ export async function releaseAllPolykvSwarms(): Promise<void> {
 		closes.push(client.closeSession(shard.sessionId).catch(() => false));
 	}
 	ABANDONED.clear();
+	TURNS_IN_FLIGHT.clear();
 	GROUPS.clear();
 	AGENT_GROUPS.clear();
 	for (const root of [...OWNER_KEEPALIVES.keys()]) {

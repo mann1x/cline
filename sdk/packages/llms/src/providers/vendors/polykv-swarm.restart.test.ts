@@ -1020,6 +1020,64 @@ describe("an owner the server let go while it kept running", () => {
 		expect(engine.unknownPoolSends).toEqual([]);
 	});
 
+	/** The owner the first pool create of `sessionId`'s group named. */
+	const ownerOf = (engine: Engine) =>
+		engine.calls.find(
+			(call) =>
+				call.path === "/polykv/pools" &&
+				typeof call.body.session_id === "string",
+		)?.body.session_id as string;
+	const closed = (engine: Engine, owner: string) =>
+		engine.calls.some(
+			(call) => call.path === `/sessions/${encodeURIComponent(owner)}/close`,
+		);
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+	it("closes an abandoned owner at once when none of its agents has a turn running", async () => {
+		// pandorum 2026-09-26 19:38Z: owners abandoned on a live server kept
+		// their windows while their agents waited for a new owner -- which
+		// could not open, because the abandoned ones held every cell.
+		const engine = restartableEngine({ bootFields: true });
+		const first = await sendIn(
+			engine,
+			"lead-c",
+			"c1",
+			agentBody("role A", "t1"),
+		);
+		const second = await sendIn(
+			engine,
+			"lead-c",
+			"c2",
+			agentBody("role A", "t1"),
+		);
+		await first.text();
+		await second.text();
+		const owner = ownerOf(engine);
+		invalidatePolykvRoot("http://engine/v1", "a test");
+		await settle();
+		expect(closed(engine, owner)).toBe(true);
+	});
+
+	it("keeps an abandoned owner until the turn running on it ends, then closes it", async () => {
+		const engine = restartableEngine({ bootFields: true });
+		await (
+			await sendIn(engine, "lead-d", "d1", agentBody("role A", "t1"))
+		).text();
+		const running = await sendIn(
+			engine,
+			"lead-d",
+			"d1",
+			agentBody("role A", "t2"),
+		);
+		const owner = ownerOf(engine);
+		invalidatePolykvRoot("http://engine/v1", "a test");
+		await settle();
+		expect(closed(engine, owner)).toBe(false);
+		await running.text();
+		await settle();
+		expect(closed(engine, owner)).toBe(true);
+	});
+
 	it("still drops everything when the boot id changed with the pools", async () => {
 		vi.useFakeTimers({ toFake: ["Date"] });
 		const engine = restartableEngine({ bootFields: true });

@@ -57,6 +57,7 @@ import {
 	prepareLeadPool,
 } from "./polykv-lead";
 import {
+	beginPolykvWorkerTurn,
 	engineSessionId,
 	forgetPolykvWorkerPool,
 	growPolykvOwnerForWorker,
@@ -1317,6 +1318,49 @@ const SERVER_FAULT_STATUSES = new Set([502, 503, 504]);
  * the agent on the next tier. After its first turn it waits like any worker:
  * it has work in flight, and a worker that finishes frees what it needs.
  */
+/**
+ * `response` with `end` called once its body is finished: read to its end,
+ * errored or cancelled. A response without a body is finished already.
+ */
+function whenBodyEnds(response: Response, end: () => void): Response {
+	const source = response.body;
+	if (!source) {
+		end();
+		return response;
+	}
+	const reader = source.getReader();
+	const body = new ReadableStream<Uint8Array>(
+		{
+			async pull(controller) {
+				try {
+					const { done, value } = await reader.read();
+					if (done) {
+						end();
+						controller.close();
+						return;
+					}
+					controller.enqueue(value);
+				} catch (error) {
+					end();
+					controller.error(error);
+				}
+			},
+			cancel(reason) {
+				end();
+				return reader.cancel(reason);
+			},
+		},
+		// Read only as the consumer reads: a chunk pulled ahead would run
+		// what the source does at a frame -- the last one's facts -- early.
+		{ highWaterMark: 0 },
+	);
+	return new Response(body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers: response.headers,
+	});
+}
+
 function createWorkerFetch(options: {
 	fetch?: typeof fetch;
 	dispatcher?: unknown;
@@ -1446,233 +1490,273 @@ function createWorkerFetch(options: {
 			: undefined;
 		/** The window an unpooled turn asked for, for the grant it gets back. */
 		let unpooledAsk: number | undefined;
-		while (true) {
-			const attach = await preparePolykvWorker({
-				spec:
-					options.agentWindow && agentFloor !== undefined
-						? {
-								...options.worker,
-								window: {
-									ask: options.agentWindow.contextWindow,
-									floor: agentFloor,
-								},
-							}
-						: options.worker,
-				baseUrl: options.baseUrl,
-				fetch: base,
-				...(options.headers ? { headers: options.headers } : {}),
-				body,
-				signal,
-				fresh,
-			});
-			const wire: Record<string, unknown> = { ...body };
-			// A worker books nothing: its window is the owner's.
-			delete wire.num_ctx;
-			delete wire.num_ctx_min;
-			// P2: a worker always declares its output, so a refusal lands at
-			// arrival instead of after a prefill spent on a reply that cannot fit
-			// the owner's window. The gateway's cap is kept where it sent one.
-			if (!declaresOutputCap(wire)) {
-				wire.max_tokens = options.workerMaxTokens ?? 8_192;
+		/**
+		 * The attempt now on the wire, ended when it is dropped or when the
+		 * body handed back ends: an owner a restart check abandoned is closed
+		 * once no turn runs on it (`beginPolykvWorkerTurn`).
+		 */
+		let endAttempt: (() => void) | undefined;
+		const dropAttempt = () => {
+			endAttempt?.();
+			endAttempt = undefined;
+		};
+		const handOver = async (
+			pending: Response | Promise<Response>,
+		): Promise<Response> => {
+			const end = endAttempt;
+			endAttempt = undefined;
+			if (!end) {
+				return pending;
 			}
-			wire.session_id = attach.sessionId;
-			if (
-				attach.poolId !== undefined &&
-				attach.generation !== undefined &&
-				attach.generation !== polykvRootGeneration(options.baseUrl)
-			) {
-				// A restart was found between resolving this id and sending
-				// it: it is a number from a boot that is gone. Resolve again.
-				continue;
-			}
-			if (attach.poolId !== undefined && /^\d+$/.test(attach.poolId)) {
-				wire.pool_id = Number(attach.poolId);
-			}
-			unpooledAsk = undefined;
-			if (
-				attach.poolId === undefined &&
-				!lent &&
-				options.agentWindow &&
-				agentFloor !== undefined
-			) {
-				// Unpooled, the agent is a session of its own -- and one that
-				// asks for nothing is given the model's whole window. It books
-				// the node's instead, floored at its share; a session already
-				// granted one keeps exactly that (the resume rule).
-				const features = await windowFeatures(options.baseUrl, base);
-				if (features.guaranteed) {
-					const granted = getPolykvGrantedWindow(options.worker.sessionId);
-					wire.num_ctx = granted ?? options.agentWindow.contextWindow;
-					if (features.atomic) {
-						wire.num_ctx_min =
-							granted ?? Math.min(agentFloor, wire.num_ctx as number);
-					}
-					unpooledAsk = wire.num_ctx as number;
-					// Its own booking now: the floor a pressure resize keeps, and
-					// the node window it grows back to. A first grant taken while
-					// pooled was the owner's and names no ask of its own.
-					recordOpencotiWindowFloor(options.worker.sessionId, agentFloor);
-					recordOpencotiWindowCeiling(
-						options.worker.sessionId,
-						options.agentWindow.contextWindow,
-					);
-				}
-			}
-			const keepalive = (await keepaliveAdvertised(options.baseUrl, base, wire))
-				? requestStreamKeepalive(wire)
-				: undefined;
-			if (lent && !ranOnce && attach.poolId === undefined) {
-				// Priority 0 without a sub-pool is not priority 0: the lead's
-				// session is at its eight per slot, or the server's pool
-				// reservoir is empty -- the engine refuses both alike (mail
-				// 269). Either way priority 0 is full for this agent, and it
-				// goes to the nodes rather than running unpooled on the lead's
-				// server as a session of its own.
-				return leadReserveRefusal(lent, undefined);
-			}
-			noteWorkerAttach(options.log, options.worker, attach);
-			let response: Response;
-			sent = {
-				generation: polykvRootGeneration(options.baseUrl),
-				...(typeof wire.pool_id === "number"
-					? { poolId: String(wire.pool_id) }
-					: {}),
-			};
 			try {
-				response = await base(input, {
-					...init,
-					body: JSON.stringify(wire),
-					...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
-				} as RequestInit);
-				sent.bootId = response.headers.get(OPENCOTI_BOOT_ID_HEADER);
-				noteBootId(options.baseUrl, response, options.log);
-				// A first-result error inside a 200 stream goes back to being
-				// the HTTP error the window-full and server-fault waits read.
-				// A heartbeat that stops before the first event throws here,
-				// as the transport fault it is, into the server-fault wait
-				// below; one that stops later errors the stream, and the turn
-				// recovery takes it from there.
-				if (keepalive) {
-					response = await superviseKeepaliveStream(response, {
-						...keepalive,
-						onPhase: (phase) =>
-							reportPolykvStreamPhase(options.worker.sessionId, phase),
-						onDead: () => notePolykvServerFault(options.baseUrl),
-					});
-				}
+				return whenBodyEnds(await pending, end);
 			} catch (error) {
-				if (!(await waitOutServerFault(error))) {
-					throw error;
+				end();
+				throw error;
+			}
+		};
+		try {
+			while (true) {
+				dropAttempt();
+				const attach = await preparePolykvWorker({
+					spec:
+						options.agentWindow && agentFloor !== undefined
+							? {
+									...options.worker,
+									window: {
+										ask: options.agentWindow.contextWindow,
+										floor: agentFloor,
+									},
+								}
+							: options.worker,
+					baseUrl: options.baseUrl,
+					fetch: base,
+					...(options.headers ? { headers: options.headers } : {}),
+					body,
+					signal,
+					fresh,
+				});
+				const wire: Record<string, unknown> = { ...body };
+				// A worker books nothing: its window is the owner's.
+				delete wire.num_ctx;
+				delete wire.num_ctx_min;
+				// P2: a worker always declares its output, so a refusal lands at
+				// arrival instead of after a prefill spent on a reply that cannot fit
+				// the owner's window. The gateway's cap is kept where it sent one.
+				if (!declaresOutputCap(wire)) {
+					wire.max_tokens = options.workerMaxTokens ?? 8_192;
 				}
-				continue;
-			}
-			if (
-				SERVER_FAULT_STATUSES.has(response.status) &&
-				(await waitOutServerFault(response))
-			) {
-				continue;
-			}
-			if (response.status !== 429 || attach.poolId === undefined) {
-				if (response.ok) {
-					ranOnce = true;
-					markPolykvWorkerStarted(options.worker.sessionId);
-					// The window this agent actually fills: its owner's when the
-					// turn was pooled, its own session's when it went out alone.
-					// A worker asks for none (`num_ctx` is deleted above), so the
-					// lead's grant path never runs for it -- and without this its
-					// compaction sized against the node's static window, 256k,
-					// while the booking it lived in held a fraction of that (§9:
-					// compaction runs against the granted window). An unpooled turn
-					// that booked the node's window names its ask beside it.
-					noteWindowGrant(
-						options.worker.sessionId,
-						numberOrUndefined(response.headers.get("x-context-window")),
-						unpooledAsk,
-						undefined,
-					);
-					const windowless =
-						attach.poolId !== undefined &&
-						!response.headers.has("x-context-window");
-					if (windowless) {
-						// Every opencoti response names its window. A pooled
-						// turn that does not is a pool the server no longer
-						// holds -- restarted, or its owner lapsed -- and the next
-						// turn asks the server before resolving any pool.
-						notePolykvServerFault(options.baseUrl);
+				wire.session_id = attach.sessionId;
+				if (
+					attach.poolId !== undefined &&
+					attach.generation !== undefined &&
+					attach.generation !== polykvRootGeneration(options.baseUrl)
+				) {
+					// A restart was found between resolving this id and sending
+					// it: it is a number from a boot that is gone. Resolve again.
+					continue;
+				}
+				if (attach.poolId !== undefined && /^\d+$/.test(attach.poolId)) {
+					wire.pool_id = Number(attach.poolId);
+				}
+				unpooledAsk = undefined;
+				if (
+					attach.poolId === undefined &&
+					!lent &&
+					options.agentWindow &&
+					agentFloor !== undefined
+				) {
+					// Unpooled, the agent is a session of its own -- and one that
+					// asks for nothing is given the model's whole window. It books
+					// the node's instead, floored at its share; a session already
+					// granted one keeps exactly that (the resume rule).
+					const features = await windowFeatures(options.baseUrl, base);
+					if (features.guaranteed) {
+						const granted = getPolykvGrantedWindow(options.worker.sessionId);
+						wire.num_ctx = granted ?? options.agentWindow.contextWindow;
+						if (features.atomic) {
+							wire.num_ctx_min =
+								granted ?? Math.min(agentFloor, wire.num_ctx as number);
+						}
+						unpooledAsk = wire.num_ctx as number;
+						// Its own booking now: the floor a pressure resize keeps, and
+						// the node window it grows back to. A first grant taken while
+						// pooled was the owner's and names no ask of its own.
+						recordOpencotiWindowFloor(options.worker.sessionId, agentFloor);
+						recordOpencotiWindowCeiling(
+							options.worker.sessionId,
+							options.agentWindow.contextWindow,
+						);
 					}
-					if (options.worker.owner && windowless) {
-						// Every opencoti response names its window. One that
-						// does not is the sign the lead's allocation lapsed (idle
-						// TTL) or was closed, taking this agent's sub-pool with
-						// it: the engine does not refuse a released pool, it
-						// prefills the whole prompt again in silence.
-						reportPolykvNotice(options.worker.sessionId, {
-							severity: "warn",
-							text: `No X-Context-Window on this turn: the lead's session ${engineSessionId(options.worker.owner)} may have lapsed and released this agent's sub-pool, so the turn was prefilled in full.`,
+				}
+				const keepalive = (await keepaliveAdvertised(
+					options.baseUrl,
+					base,
+					wire,
+				))
+					? requestStreamKeepalive(wire)
+					: undefined;
+				if (lent && !ranOnce && attach.poolId === undefined) {
+					// Priority 0 without a sub-pool is not priority 0: the lead's
+					// session is at its eight per slot, or the server's pool
+					// reservoir is empty -- the engine refuses both alike (mail
+					// 269). Either way priority 0 is full for this agent, and it
+					// goes to the nodes rather than running unpooled on the lead's
+					// server as a session of its own.
+					return leadReserveRefusal(lent, undefined);
+				}
+				noteWorkerAttach(options.log, options.worker, attach);
+				let response: Response;
+				sent = {
+					generation: polykvRootGeneration(options.baseUrl),
+					...(typeof wire.pool_id === "number"
+						? { poolId: String(wire.pool_id) }
+						: {}),
+				};
+				endAttempt = beginPolykvWorkerTurn(options.worker.sessionId);
+				try {
+					response = await base(input, {
+						...init,
+						body: JSON.stringify(wire),
+						...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
+					} as RequestInit);
+					sent.bootId = response.headers.get(OPENCOTI_BOOT_ID_HEADER);
+					noteBootId(options.baseUrl, response, options.log);
+					// A first-result error inside a 200 stream goes back to being
+					// the HTTP error the window-full and server-fault waits read.
+					// A heartbeat that stops before the first event throws here,
+					// as the transport fault it is, into the server-fault wait
+					// below; one that stops later errors the stream, and the turn
+					// recovery takes it from there.
+					if (keepalive) {
+						response = await superviseKeepaliveStream(response, {
+							...keepalive,
+							onPhase: (phase) =>
+								reportPolykvStreamPhase(options.worker.sessionId, phase),
+							onDead: () => notePolykvServerFault(options.baseUrl),
 						});
 					}
+				} catch (error) {
+					dropAttempt();
+					if (!(await waitOutServerFault(error))) {
+						throw error;
+					}
+					continue;
 				}
-				reportPolykvRoomWait(options.worker.sessionId, { waiting: false });
-				return observed(response);
+				if (SERVER_FAULT_STATUSES.has(response.status)) {
+					// Dropped by the server: nothing of the turn runs while it waits.
+					dropAttempt();
+					if (await waitOutServerFault(response)) {
+						continue;
+					}
+				}
+				if (response.status !== 429 || attach.poolId === undefined) {
+					if (response.ok) {
+						ranOnce = true;
+						markPolykvWorkerStarted(options.worker.sessionId);
+						// The window this agent actually fills: its owner's when the
+						// turn was pooled, its own session's when it went out alone.
+						// A worker asks for none (`num_ctx` is deleted above), so the
+						// lead's grant path never runs for it -- and without this its
+						// compaction sized against the node's static window, 256k,
+						// while the booking it lived in held a fraction of that (§9:
+						// compaction runs against the granted window). An unpooled turn
+						// that booked the node's window names its ask beside it.
+						noteWindowGrant(
+							options.worker.sessionId,
+							numberOrUndefined(response.headers.get("x-context-window")),
+							unpooledAsk,
+							undefined,
+						);
+						const windowless =
+							attach.poolId !== undefined &&
+							!response.headers.has("x-context-window");
+						if (windowless) {
+							// Every opencoti response names its window. A pooled
+							// turn that does not is a pool the server no longer
+							// holds -- restarted, or its owner lapsed -- and the next
+							// turn asks the server before resolving any pool.
+							notePolykvServerFault(options.baseUrl);
+						}
+						if (options.worker.owner && windowless) {
+							// Every opencoti response names its window. One that
+							// does not is the sign the lead's allocation lapsed (idle
+							// TTL) or was closed, taking this agent's sub-pool with
+							// it: the engine does not refuse a released pool, it
+							// prefills the whole prompt again in silence.
+							reportPolykvNotice(options.worker.sessionId, {
+								severity: "warn",
+								text: `No X-Context-Window on this turn: the lead's session ${engineSessionId(options.worker.owner)} may have lapsed and released this agent's sub-pool, so the turn was prefilled in full.`,
+							});
+						}
+					}
+					reportPolykvRoomWait(options.worker.sessionId, { waiting: false });
+					return handOver(observed(response));
+				}
+				const text = await response
+					.clone()
+					.text()
+					.catch(() => "");
+				noteOpencotiRefusalPressure(options.baseUrl, text);
+				if (!isWorkerWindowFull(response.status, text)) {
+					reportPolykvRoomWait(options.worker.sessionId, { waiting: false });
+					return handOver(observed(response));
+				}
+				if (lent && !ranOnce) {
+					// Not started, and the full window is the lead's: back to the
+					// spawn queue, which places it on the next tier.
+					reportPolykvRoomWait(options.worker.sessionId, { waiting: false });
+					return handOver(observed(response));
+				}
+				await response.body?.cancel().catch(() => {});
+				dropAttempt();
+				// Its owner is full, not the server: grow the owner by what this
+				// worker is short and send it again. The engine takes that only
+				// between the owner's requests, so on a busy swarm this is best
+				// effort -- the moves and the wait below are the rest of it.
+				if (await growPolykvOwnerForWorker(options.worker.sessionId, text)) {
+					continue;
+				}
+				if (!ranOnce && !triedFresh) {
+					triedFresh = true;
+					fresh = true;
+					continue;
+				}
+				fresh = false;
+				// Another owner of this swarm may have room this one lacks. Tried
+				// before waiting, on every refusal: the room moves as agents end.
+				if (await movePolykvWorker(options.worker.sessionId)) {
+					continue;
+				}
+				const seconds = Number(response.headers.get("retry-after"));
+				reportPolykvRoomWait(options.worker.sessionId, {
+					waiting: true,
+					reason:
+						"Waiting for room on the server: this swarm's window is full, and it starts when another agent finishes.",
+				});
+				waits += 1;
+				await new Promise<void>((resolve, reject) => {
+					const handle = setTimeout(
+						resolve,
+						polykvRoomBackoffMs(
+							waits,
+							Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 2000,
+						),
+					);
+					signal?.addEventListener(
+						"abort",
+						() => {
+							clearTimeout(handle);
+							reject(signal.reason ?? new Error("aborted"));
+						},
+						{ once: true },
+					);
+				});
 			}
-			const text = await response
-				.clone()
-				.text()
-				.catch(() => "");
-			noteOpencotiRefusalPressure(options.baseUrl, text);
-			if (!isWorkerWindowFull(response.status, text)) {
-				reportPolykvRoomWait(options.worker.sessionId, { waiting: false });
-				return observed(response);
-			}
-			if (lent && !ranOnce) {
-				// Not started, and the full window is the lead's: back to the
-				// spawn queue, which places it on the next tier.
-				reportPolykvRoomWait(options.worker.sessionId, { waiting: false });
-				return observed(response);
-			}
-			await response.body?.cancel().catch(() => {});
-			// Its owner is full, not the server: grow the owner by what this
-			// worker is short and send it again. The engine takes that only
-			// between the owner's requests, so on a busy swarm this is best
-			// effort -- the moves and the wait below are the rest of it.
-			if (await growPolykvOwnerForWorker(options.worker.sessionId, text)) {
-				continue;
-			}
-			if (!ranOnce && !triedFresh) {
-				triedFresh = true;
-				fresh = true;
-				continue;
-			}
-			fresh = false;
-			// Another owner of this swarm may have room this one lacks. Tried
-			// before waiting, on every refusal: the room moves as agents end.
-			if (await movePolykvWorker(options.worker.sessionId)) {
-				continue;
-			}
-			const seconds = Number(response.headers.get("retry-after"));
-			reportPolykvRoomWait(options.worker.sessionId, {
-				waiting: true,
-				reason:
-					"Waiting for room on the server: this swarm's window is full, and it starts when another agent finishes.",
-			});
-			waits += 1;
-			await new Promise<void>((resolve, reject) => {
-				const handle = setTimeout(
-					resolve,
-					polykvRoomBackoffMs(
-						waits,
-						Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 2000,
-					),
-				);
-				signal?.addEventListener(
-					"abort",
-					() => {
-						clearTimeout(handle);
-						reject(signal.reason ?? new Error("aborted"));
-					},
-					{ once: true },
-				);
-			});
+		} catch (error) {
+			// Stopped, or a fault no wait covers: the attempt is over.
+			dropAttempt();
+			throw error;
 		}
 	}) as typeof fetch;
 }
