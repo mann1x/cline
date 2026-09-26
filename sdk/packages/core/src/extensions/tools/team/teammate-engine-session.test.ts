@@ -139,4 +139,68 @@ describe("a teammate's engine session", () => {
 		expect(llms.releasePolykvAgent).toHaveBeenLastCalledWith(own);
 		runtime.shutdownTeammate("w");
 	});
+
+	it("is not booked by a second task while the last one's close is in flight", async () => {
+		// Two tasks for one teammate at once (an async run and a sync call):
+		// both passed the busy check while the first waited for the close, and
+		// the second found the close already taken and started at once -- its
+		// booking could be closed under it, and the first then failed on
+		// `SessionRuntime state is "running"`.
+		const { runtime, spawn } = team();
+		await spawn("w");
+		const member = (
+			runtime as unknown as {
+				members: Map<
+					string,
+					{
+						agent: { canStartRun: () => boolean; run: unknown };
+						pendingEngineRelease?: Promise<unknown>;
+					}
+				>;
+			}
+		).members.get("w");
+		if (!member) {
+			throw new Error("no teammate");
+		}
+		let closeLanded = false;
+		member.pendingEngineRelease = new Promise((resolve) =>
+			setTimeout(() => {
+				closeLanded = true;
+				resolve(undefined);
+			}, 20),
+		);
+		let running = false;
+		const starts: Array<{ task: string; afterClose: boolean }> = [];
+		member.agent.canStartRun = () => !running;
+		member.agent.run = async (task: string) => {
+			if (running) {
+				throw new Error('SessionRuntime state is "running"');
+			}
+			running = true;
+			starts.push({ task, afterClose: closeLanded });
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			running = false;
+			return {
+				text: task,
+				finishReason: "completed",
+				iterations: 1,
+				usage: { inputTokens: 1, outputTokens: 1 },
+				messages: [],
+				toolCalls: [],
+			};
+		};
+
+		const [first, second] = await Promise.allSettled([
+			runtime.routeToTeammate("w", "async-run"),
+			runtime.routeToTeammate("w", "sync-call"),
+		]);
+
+		expect(first.status).toBe("fulfilled");
+		expect(second.status).toBe("rejected");
+		expect(String((second as PromiseRejectedResult).reason)).toContain(
+			"another run is already in progress",
+		);
+		expect(starts).toEqual([{ task: "async-run", afterClose: true }]);
+		runtime.shutdownTeammate("w");
+	});
 });

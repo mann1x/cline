@@ -1218,7 +1218,12 @@ export class AgentTeamsRuntime {
 		if (!member || member.role !== "teammate" || !member.agent) {
 			throw new Error(`Teammate "${agentId}" was not found`);
 		}
-		if (!member.agent.canStartRun()) {
+		// The member's own count, taken with the check and before any await:
+		// the agent is not "running" yet while this task waits for the last
+		// one's engine close below, so a second task that asked only the agent
+		// got in, skipped the close the first had taken, and booked a session
+		// that close could take away from it.
+		if (member.runningCount > 0 || !member.agent.canStartRun()) {
 			throw new Error(
 				`Cannot start a new run while another run is already in progress`,
 			);
