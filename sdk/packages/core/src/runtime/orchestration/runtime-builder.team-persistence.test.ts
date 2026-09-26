@@ -305,4 +305,61 @@ describe("DefaultRuntimeBuilder team persistence boundary", () => {
 			}),
 		);
 	});
+
+	// Every team event was persisted: a BEGIN IMMEDIATE transaction writing
+	// the whole exported state, once per streamed chunk of every teammate --
+	// with every finished run's transcript in it. Only a change of state is
+	// written now.
+	it("writes the team on a change of state, not on a teammate's streamed chunks", async () => {
+		const { DefaultRuntimeBuilder } = await import("./runtime-builder");
+		await new DefaultRuntimeBuilder().build({
+			config: {
+				providerId: "anthropic",
+				modelId: "claude-sonnet-4-6",
+				apiKey: "key",
+				systemPrompt: "test",
+				cwd: process.cwd(),
+				enableTools: false,
+				enableSpawnAgent: false,
+				enableAgentTeams: true,
+			},
+		});
+		if (!runtimeInstance || !teamStoreInstance) {
+			throw new Error("Expected mocked runtime and team store instances");
+		}
+		teamStoreInstance.persistRuntime.mockClear();
+		teamStoreInstance.handleTeamEvent.mockClear();
+		runtimeInstance.exportState.mockClear();
+
+		const chunks = 100;
+		for (let index = 0; index < chunks; index++) {
+			runtimeInstance.emit({
+				type: "agent_event",
+				agentId: "w",
+				event: {
+					type: "content_start",
+					contentType: index % 2 === 0 ? "text" : "reasoning",
+					text: `token ${index}`,
+				},
+			});
+		}
+		// The run heartbeat and live activity of a running run are progress,
+		// not state.
+		runtimeInstance.emit({
+			type: "run_progress",
+			run: { id: "run_00001", agentId: "w", status: "running" },
+			message: "heartbeat",
+		});
+		expect(teamStoreInstance.persistRuntime).toHaveBeenCalledTimes(0);
+		expect(teamStoreInstance.handleTeamEvent).toHaveBeenCalledTimes(0);
+		expect(runtimeInstance.exportState).toHaveBeenCalledTimes(0);
+
+		runtimeInstance.emit({
+			type: "run_completed",
+			run: { id: "run_00001", agentId: "w", status: "completed" },
+		});
+		expect(teamStoreInstance.persistRuntime).toHaveBeenCalledTimes(1);
+		expect(teamStoreInstance.handleTeamEvent).toHaveBeenCalledTimes(1);
+		expect(runtimeInstance.exportState).toHaveBeenCalledTimes(1);
+	});
 });

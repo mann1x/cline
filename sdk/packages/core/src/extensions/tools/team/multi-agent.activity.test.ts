@@ -15,6 +15,11 @@ const { createSessionRuntimeMock } = vi.hoisted(() => {
 		const work = async () => {
 			onEvent?.({
 				type: "content_start",
+				contentType: "text",
+				text: "Reading",
+			});
+			onEvent?.({
+				type: "content_start",
 				contentType: "tool",
 				toolName: "read_files",
 			});
@@ -107,6 +112,28 @@ describe("a teammate's tool calls and compactions", () => {
 			.exportState()
 			.runs.find((entry) => entry.id === run.id);
 		expect(saved?.activity).toMatchObject({ toolCalls: 2, compactions: 1 });
+	});
+
+	// The host exports the team for a progress row only when the counts moved:
+	// a streamed chunk is not worth a full state.
+	it("say on the event when they moved, and only then", async () => {
+		const moved: Array<[string, boolean]> = [];
+		const runtime = new AgentTeamsRuntime({
+			teamName: "t",
+			onTeamEvent: (event) => {
+				if (event.type === "agent_event") {
+					moved.push([event.event.type, event.activityChanged === true]);
+				}
+			},
+		});
+		runtime.spawnTeammate({ agentId: "helper", config });
+		await runtime.routeToTeammate("helper", "first");
+		expect(moved).toEqual([
+			["content_start", false],
+			["content_start", true],
+			["content_start", true],
+			["notice", true],
+		]);
 	});
 
 	it("are not given to the lead", () => {

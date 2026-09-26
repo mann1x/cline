@@ -1496,8 +1496,11 @@ describe("a team reloaded from its store", () => {
 					iterations: 1,
 					durationMs: 1,
 					usage: { inputTokens: 1, outputTokens: 1 },
-					messages: [],
-					toolCalls: [],
+					messages: [
+						{ role: "user", content: "the whole transcript" },
+						{ role: "assistant", content: "done" },
+					],
+					toolCalls: [{ name: "read_files", input: {}, output: "a file" }],
 				}),
 				getMessages: () => [],
 				abort: () => {},
@@ -1507,6 +1510,19 @@ describe("a team reloaded from its store", () => {
 		await runtime.awaitRun(run.id, 1);
 		return runtime;
 	}
+
+	// The exported state is what every write of the team serializes, and it
+	// carried each finished run's whole transcript: the state grew by a
+	// conversation per run, rewritten on every event.
+	it("exports a finished run's answer without its transcript", async () => {
+		const [run] = (await finishedTeam()).exportState().runs ?? [];
+		const result = run?.result as
+			| { text?: string; messages?: unknown[]; toolCalls?: unknown[] }
+			| undefined;
+		expect(result?.text).toBe("done");
+		expect(result?.messages).toEqual([]);
+		expect(result?.toolCalls).toEqual([]);
+	});
 
 	async function listAndAwait(state: TeamRuntimeState): Promise<unknown[]> {
 		const restored = new AgentTeamsRuntime({ teamName: "test-team" });

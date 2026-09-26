@@ -122,6 +122,89 @@ describe("AgentEventBridge.dispatchAgentEvent", () => {
 	});
 });
 
+// Every team event exported the whole team state again for a `team_progress`
+// -- a teammate's every streamed chunk included. Progress now goes out on a
+// change of state, or when a teammate's counters moved.
+describe("AgentEventBridge.handleTeamEvent progress", () => {
+	function createTeamFixture() {
+		const exportState = vi.fn(() => ({
+			teamId: "t",
+			teamName: "team",
+			members: [],
+			tasks: [],
+			mailbox: [],
+			missionLog: [],
+			runs: [],
+			outcomes: [],
+			outcomeFragments: [],
+		}));
+		const session = {
+			config: { telemetry: createTelemetryStub() },
+			agent: {
+				getAgentId: () => "agent-1",
+				getConversationId: () => "conv-1",
+			},
+			runtime: {
+				teamRuntime: {
+					exportState,
+					getTeamName: () => "team",
+					getTeamId: () => "t",
+				},
+			},
+			activeTeamRunIds: new Set<string>(),
+			pendingTeamRunUpdates: [],
+		} as unknown as ActiveSession;
+		const emit = vi.fn();
+		const deps = {
+			getSession: () => session,
+			usageBySession: new Map(),
+			aggregateUsageBySession: new Map(),
+			emit,
+			persistMessages: vi.fn(),
+			invokeBackendOptional: vi.fn(async () => {}),
+		} as unknown as AgentEventBridgeDeps;
+		return { exportState, emit, bridge: new AgentEventBridge(deps) };
+	}
+
+	const progressEmits = (emit: ReturnType<typeof vi.fn>) =>
+		emit.mock.calls.filter(([event]) => event?.type === "team_progress").length;
+
+	it("is not exported for a teammate's streamed chunks", async () => {
+		const { exportState, emit, bridge } = createTeamFixture();
+		for (let index = 0; index < 50; index++) {
+			await bridge.handleTeamEvent("session-1", {
+				type: "agent_event",
+				agentId: "w",
+				event: {
+					type: "content_start",
+					contentType: "text",
+					text: `token ${index}`,
+				} as AgentEvent,
+			} as never);
+		}
+		expect(exportState).not.toHaveBeenCalled();
+		expect(progressEmits(emit)).toBe(0);
+
+		await bridge.handleTeamEvent("session-1", {
+			type: "agent_event",
+			agentId: "w",
+			event: {
+				type: "content_end",
+				contentType: "tool",
+				toolName: "read_files",
+			} as AgentEvent,
+			activityChanged: true,
+		} as never);
+		await bridge.handleTeamEvent("session-1", {
+			type: "task_start",
+			agentId: "w",
+			message: "task",
+		} as never);
+		expect(exportState).toHaveBeenCalledTimes(2);
+		expect(progressEmits(emit)).toBe(2);
+	});
+});
+
 describe("AgentEventBridge.handlePluginTelemetry", () => {
 	it("routes plugin capture calls into the session telemetry service", () => {
 		const telemetry = createTelemetryStub();

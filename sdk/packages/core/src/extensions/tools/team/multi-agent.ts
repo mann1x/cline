@@ -102,7 +102,17 @@ export type TeamEvent =
 			error?: Error;
 			messages?: AgentResult["messages"];
 	  }
-	| { type: TeamMessageType.AgentEvent; agentId: string; event: AgentEvent }
+	| {
+			type: TeamMessageType.AgentEvent;
+			agentId: string;
+			event: AgentEvent;
+			/**
+			 * The event moved the teammate's tool-call or compaction count, so
+			 * its row has something new to show. Most events are streamed
+			 * chunks that move nothing.
+			 */
+			activityChanged?: boolean;
+	  }
 	| {
 			type: TeamMessageType.TeammateSpawned;
 			agentId: string;
@@ -134,6 +144,25 @@ export type TeamEvent =
 			fragment: TeamOutcomeFragment;
 	  }
 	| { type: TeamMessageType.OutcomeFinalized; outcome: TeamOutcome };
+
+/**
+ * Whether an event changed the team's state -- what a store must write.
+ *
+ * A teammate's own agent events are not: every streamed text or reasoning
+ * delta is one, and each was a full-state SQLite transaction. Nor is the
+ * progress of a run that is still running (its 2 s heartbeat and its live
+ * activity): the run's recorded state is written when it starts and ends.
+ */
+export function isTeamStateChange(event: TeamEvent): boolean {
+	if (event.type === TeamMessageType.AgentEvent) {
+		return false;
+	}
+	if (event.type === TeamMessageType.RunProgress) {
+		// A retry is announced as progress, with the run back in the queue.
+		return event.run.status !== "running";
+	}
+	return true;
+}
 
 export interface AgentTeamsRuntimeOptions {
 	teamName: string;
@@ -793,6 +822,11 @@ export class AgentTeamsRuntime {
 			missionLog: this.missionLog.map((entry) => ({ ...entry })),
 			runs: Array.from(this.runs.values()).map((run) => ({
 				...run,
+				// Its answer, not its transcript: every write of the team
+				// serializes this, and nothing read from it needs the messages.
+				...(run.result
+					? { result: { ...run.result, messages: [], toolCalls: [] } }
+					: {}),
 				// A run still going is counted live, off its teammate.
 				...(run.status === "running"
 					? liveRunActivity(this.members.get(run.agentId))
@@ -975,9 +1009,14 @@ export class AgentTeamsRuntime {
 				// Counted before it is announced, so the progress the event
 				// raises already carries the count it moved.
 				const member = this.members.get(agentId);
-				member?.activityCounter?.observe(event);
-				member?.currentTaskCounter?.observe(event);
-				this.emitEvent({ type: TeamMessageType.AgentEvent, agentId, event });
+				const moved = member?.activityCounter?.observe(event) === true;
+				const taskMoved = member?.currentTaskCounter?.observe(event) === true;
+				this.emitEvent({
+					type: TeamMessageType.AgentEvent,
+					agentId,
+					event,
+					...(moved || taskMoved ? { activityChanged: true } : {}),
+				});
 				this.trackMeaningfulEvent(agentId, event);
 			},
 		};

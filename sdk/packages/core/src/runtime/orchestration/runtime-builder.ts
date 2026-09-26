@@ -78,7 +78,10 @@ import {
 } from "../../extensions/tools/team/delegated-sandboxes";
 import { delegatedAgentTools } from "../../extensions/tools/team/delegated-tools";
 import { createLeadAgentTools } from "../../extensions/tools/team/lead-agent-tools";
-import type { TeammateWorkspaceHooks } from "../../extensions/tools/team/multi-agent";
+import {
+	isTeamStateChange,
+	type TeammateWorkspaceHooks,
+} from "../../extensions/tools/team/multi-agent";
 import { configuredAgentKey } from "../../extensions/tools/team/spawn-agent-tool";
 import {
 	filterDisabledTools,
@@ -1208,7 +1211,9 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 						: {}),
 					onTeamEvent: (event: TeamEvent) => {
 						onTeamEvent(event);
-						if (teamRuntime && teamStore) {
+						// A teammate's streamed chunks and a running run's heartbeat
+						// change nothing to write: each was a full-state transaction.
+						if (teamRuntime && teamStore && isTeamStateChange(event)) {
 							if (
 								event.type === "teammate_spawned" &&
 								event.teammate?.rolePrompt

@@ -172,7 +172,13 @@ export class AgentEventBridge {
 			this.deps.invokeBackendOptional,
 		);
 
-		if (session) {
+		// Each progress exports the whole team state. A teammate's own events
+		// are mostly streamed chunks that change none of it; only one that
+		// moved its counts has a row to update.
+		if (
+			session &&
+			(event.type !== "agent_event" || event.activityChanged === true)
+		) {
 			emitTeamProgress(session, rootSessionId, event, this.deps.emit);
 		}
 	}
