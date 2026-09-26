@@ -65,4 +65,15 @@ describe("the Teammates setting", () => {
 		).toBeGreaterThan(0);
 		expect(createSpawnTool.mock.calls[0]?.[0]?.teammates).toBe(true);
 	});
+
+	// team_await_runs hands a long answer back as its opening and a full
+	// report; the tool that reads it came only with spawn_agent.
+	it("on: the full reports are readable with spawn_agent off", async () => {
+		const runtime = await new DefaultRuntimeBuilder().build({
+			config: { ...config(true), enableSpawnAgent: false },
+		});
+		expect(
+			runtime.tools.filter((tool) => tool.name === "read_agent_report"),
+		).toHaveLength(1);
+	});
 });

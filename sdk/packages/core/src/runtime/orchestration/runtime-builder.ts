@@ -63,7 +63,10 @@ import {
 	admissionFromCapacity,
 	createAgentAdmissionController,
 } from "../../extensions/tools/team/agent-admission";
-import { createReadAgentReportTool } from "../../extensions/tools/team/agent-reports";
+import {
+	createReadAgentReportTool,
+	READ_AGENT_REPORT_TOOL_NAME,
+} from "../../extensions/tools/team/agent-reports";
 import { roundsCompletionGuard } from "../../extensions/tools/team/agent-rounds";
 import { createAgentsStatusTool } from "../../extensions/tools/team/agent-status";
 import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configured-agent-config";
@@ -1435,6 +1438,11 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 
 		if (normalized.enableAgentTeams) {
 			ensureTeamRuntime();
+			// A long async answer comes back as its opening and a full report
+			// (team_await_runs), read here -- with spawn_agent off too.
+			if (!tools.some((tool) => tool.name === READ_AGENT_REPORT_TOOL_NAME)) {
+				tools.push(createReadAgentReportTool());
+			}
 		}
 
 		// What the agents are doing, and why: offered wherever the lead can

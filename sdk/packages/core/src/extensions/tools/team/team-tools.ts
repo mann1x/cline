@@ -73,6 +73,11 @@ import {
 } from "@cline/shared";
 import { readMaxIterations } from "./agent-controls";
 import {
+	AGENT_SUMMARY_MAX_CHARS,
+	READ_AGENT_REPORT_TOOL_NAME,
+	recordAgentReport,
+} from "./agent-reports";
+import {
 	buildDelegatedAgentConfig,
 	type DelegatedAgentConfigProvider,
 	type DelegatedAgentRuntimeConfig,
@@ -191,8 +196,54 @@ function requireInputField<T>(value: T | undefined, field: string): T {
 	return value;
 }
 
+/** Where a teammate's hand-back note starts, at the end of its answer. */
+const HANDBACK_NOTE_MARK = "\n\n---\nThis agent ";
+
+/** Each runtime's filed run reports, by session and run: filed once. */
+const FILED_RUN_REPORTS = new WeakMap<object, Map<string, string>>();
+
+/**
+ * A finished run's answer as the lead is handed it, bounded like every
+ * other agent report: whole when it is short, else its opening and the name
+ * of its full report for `read_agent_report`. The hand-back note, which names
+ * the revisions the run left, is kept whole after the opening.
+ *
+ * No summary turn here, unlike `summarizeForLead`: the run is over and its
+ * teammate may be on another task, so the opening stands in for it.
+ */
+function answerForLead(
+	runtime: AgentTeamsRuntime,
+	sessionId: string | undefined,
+	run: TeamRunRecord,
+): string | undefined {
+	const full = (run.result as AgentResult | undefined)?.text;
+	if (full === undefined) {
+		return undefined;
+	}
+	const at = full.lastIndexOf(HANDBACK_NOTE_MARK);
+	const answer = at >= 0 ? full.slice(0, at) : full;
+	const note = at >= 0 ? full.slice(at) : "";
+	if (answer.length <= AGENT_SUMMARY_MAX_CHARS) {
+		return full;
+	}
+	let filed = FILED_RUN_REPORTS.get(runtime);
+	if (!filed) {
+		filed = new Map();
+		FILED_RUN_REPORTS.set(runtime, filed);
+	}
+	const key = `${sessionId ?? ""}\u0000${run.id}`;
+	let name = filed.get(key);
+	if (!name) {
+		name = recordAgentReport(sessionId, `${run.agentId}:${run.id}`, full);
+		filed.set(key, name);
+	}
+	const lines = full.split("\n").length;
+	return `${answer.slice(0, AGENT_SUMMARY_MAX_CHARS - 1)}…\n\n[Full report: ${full.length.toLocaleString("en-US")} characters, ${lines} lines. Read it with ${READ_AGENT_REPORT_TOOL_NAME}(name: "${name}").]${note}`;
+}
+
 function summarizeRunResult(
 	run: TeamRunRecord,
+	answer?: string,
 ): TeamRunResultSummary | undefined {
 	const result = run.result as AgentResult | undefined;
 	if (!result) {
@@ -200,6 +251,7 @@ function summarizeRunResult(
 	}
 	return {
 		textPreview: truncateText(result.text, TEAM_RUN_TEXT_PREVIEW_LIMIT),
+		...(answer !== undefined ? { text: answer } : {}),
 		iterations: result.iterations,
 		finishReason: result.finishReason,
 		durationMs: result.durationMs,
@@ -226,7 +278,7 @@ function dateToIso(value: Date | string | undefined): string | undefined {
 	return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
-function summarizeRun(run: TeamRunRecord): TeamRunToolSummary {
+function summarizeRun(run: TeamRunRecord, answer?: string): TeamRunToolSummary {
 	return {
 		id: run.id,
 		agentId: run.agentId,
@@ -246,7 +298,7 @@ function summarizeRun(run: TeamRunRecord): TeamRunToolSummary {
 		lastProgressMessage: run.lastProgressMessage,
 		currentActivity: run.currentActivity,
 		error: run.error,
-		resultSummary: summarizeRunResult(run),
+		resultSummary: summarizeRunResult(run, answer),
 	};
 }
 
@@ -838,7 +890,7 @@ export function createAgentTeamsTools(
 					TeamRunToolSummarySchema.array(),
 					options.runtime
 						.listRuns(validateWithZod(TeamListRunsInputSchema, input))
-						.map(summarizeRun),
+						.map((run) => summarizeRun(run)),
 				),
 		}) as AgentTool,
 	);
@@ -850,14 +902,20 @@ export function createAgentTeamsTools(
 				"Wait for async teammate runs. Provide runId to wait for one run, or omit it to wait for all active async runs other than your own." +
 				describeListOutput(
 					TeamRunToolSummarySchema,
-					"resultSummary carries each finished run's answer, truncated to a preview; a run that is still going has no resultSummary.",
+					"resultSummary.text is each finished run's answer: whole when short, else its opening and the name of its full report for read_agent_report. A run that is still going has no resultSummary.",
 				),
 			inputSchema: zodToJsonSchema(TeamAwaitRunsInputSchema),
 			// Not a bound: nothing reads a tool's timeoutMs. The wait ends when
 			// the runs do, or when the lead is stopped.
 			timeoutMs: TEAM_AWAIT_TIMEOUT_MS,
-			execute: async (input) => {
+			execute: async (input, context) => {
 				const validatedInput = validateWithZod(TeamAwaitRunsInputSchema, input);
+				// Each finished run's answer, bounded as every agent report is.
+				const withAnswer = (run: TeamRunRecord) =>
+					summarizeRun(
+						run,
+						answerForLead(options.runtime, context?.sessionId, run),
+					);
 				if (validatedInput.runId) {
 					const run = await options.runtime.awaitRun(
 						validatedInput.runId,
@@ -865,7 +923,7 @@ export function createAgentTeamsTools(
 						options.requesterId,
 					);
 					assertAwaitedRunSucceeded(run);
-					return validateWithZod(TeamRunToolSummarySchema, summarizeRun(run));
+					return validateWithZod(TeamRunToolSummarySchema, withAnswer(run));
 				}
 				const runs = await options.runtime.awaitAllRuns(
 					undefined,
@@ -887,7 +945,7 @@ export function createAgentTeamsTools(
 				}
 				return validateWithZod(
 					TeamRunToolSummarySchema.array(),
-					runs.map(summarizeRun),
+					runs.map(withAnswer),
 				);
 			},
 		}) as AgentTool,

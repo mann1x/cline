@@ -367,6 +367,11 @@ export const TeamRunTaskToolResultSchema = z.object({
 
 export const TeamRunResultSummarySchema = z.object({
 	textPreview: z.string(),
+	/**
+	 * The run's answer, from team_await_runs: whole when it is short, else
+	 * its opening and the name its full report is filed under.
+	 */
+	text: z.string().optional(),
 	iterations: z.number(),
 	finishReason: z.string(),
 	durationMs: z.number(),

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FileTeamStore } from "../../../services/storage/file-team-store";
 import { SqliteTeamStore } from "../../../services/storage/sqlite-team-store";
 import { reviveTeamStateDates as reviveSessionTeamStateDates } from "../../../session/models/session-row";
+import { readAgentReport } from "./agent-reports";
 import { createDelegatedAgentConfigProvider } from "./delegated-agent";
 import { AgentTeamsRuntime } from "./multi-agent";
 import {
@@ -714,6 +715,7 @@ describe("createAgentTeamsTools runtime behavior", () => {
 			resultSummary: {
 				textPreview:
 					"Models are the public catalog and provider files are provider-specific defaults.",
+				text: "Models are the public catalog and provider files are provider-specific defaults.",
 				iterations: 3,
 				finishReason: "completed",
 				durationMs: 60_000,
@@ -1543,13 +1545,14 @@ describe("a team reloaded from its store", () => {
 		);
 		for (const revive of [reviveTeamStateDates, reviveSessionTeamStateDates]) {
 			const [listed, awaited] = await listAndAwait(revive(saved));
-			expect(listed).toEqual([
-				expect.objectContaining({
-					status: "completed",
-					lastProgressAt: expect.any(String),
-				}),
-			]);
-			expect(awaited).toEqual(listed);
+			for (const runs of [listed, awaited]) {
+				expect(runs).toEqual([
+					expect.objectContaining({
+						status: "completed",
+						lastProgressAt: expect.any(String),
+					}),
+				]);
+			}
 		}
 	});
 
@@ -1575,5 +1578,98 @@ describe("a team reloaded from its store", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+/**
+ * An async run's answer reached the lead only as a 400-character preview,
+ * and no tool returned the rest: a 5,000-character report came back as 400
+ * (probe P7). team_await_runs now hands it over the way every other agent
+ * report is: whole when short, else its opening and a full report to read.
+ */
+describe("an async run's answer", () => {
+	const lead = {
+		agentId: "lead",
+		conversationId: "conv-1",
+		iteration: 1,
+		sessionId: "session-answers",
+	};
+
+	async function awaitAnswer(answer: string) {
+		const runtime = new AgentTeamsRuntime({ teamName: "test-team" });
+		(
+			runtime as unknown as {
+				members: Map<string, Record<string, unknown>>;
+			}
+		).members.set("w", {
+			agentId: "w",
+			role: "teammate",
+			status: "idle",
+			runningCount: 0,
+			lastMissionStep: 0,
+			lastMissionAt: Date.now(),
+			agent: {
+				canStartRun: () => true,
+				run: async () => ({
+					text: answer,
+					finishReason: "completed",
+					iterations: 1,
+					durationMs: 1,
+					usage: { inputTokens: 1, outputTokens: 1 },
+					messages: [],
+					toolCalls: [],
+				}),
+				getMessages: () => [],
+				abort: () => {},
+			},
+		});
+		const tools = createAgentTeamsTools({
+			runtime,
+			requesterId: "lead",
+			teammateConfigProvider: makeTeammateConfigProvider(),
+		});
+		const run = runtime.startTeammateRun("w", "report");
+		const wait = tools.find((tool) => tool.name === "team_await_runs");
+		const one = (await wait?.execute({ runId: run.id }, lead)) as {
+			resultSummary?: { text?: string; textPreview?: string };
+		};
+		const all = (await wait?.execute({}, lead)) as Array<{
+			resultSummary?: { text?: string };
+		}>;
+		return { one, all };
+	}
+
+	it("comes back whole when it is short", async () => {
+		const answer = "Found 2 defects: parser.ts:12 and lexer.ts:40.";
+		const { one, all } = await awaitAnswer(answer);
+		expect(one.resultSummary?.text).toBe(answer);
+		expect(all[0]?.resultSummary?.text).toBe(answer);
+	});
+
+	it("comes back as its opening and a full report to read when it is long", async () => {
+		const lines = Array.from(
+			{ length: 100 },
+			(_, index) => `finding ${index}: ${"x".repeat(40)}`,
+		);
+		const answer = lines.join("\n");
+		expect(answer.length).toBeGreaterThan(4_000);
+		const { one, all } = await awaitAnswer(answer);
+		const text = one.resultSummary?.text ?? "";
+		expect(text.startsWith(lines.slice(0, 5).join("\n"))).toBe(true);
+		expect(text.length).toBeLessThan(1_300);
+		const name = /read_agent_report\(name: "([^"]+)"\)/.exec(text)?.[1];
+		expect(name).toBeDefined();
+		const page = readAgentReport(lead.sessionId, name ?? "");
+		expect(page).toContain("finding 99:");
+		expect(page).toContain("the end of the report");
+		// Filed once, however often it is awaited.
+		expect(all[0]?.resultSummary?.text).toBe(text);
+	});
+
+	it("keeps the hand-back note whole after a long answer's opening", async () => {
+		const note =
+			'\n\n---\nThis agent worked on a private copy of the workspace; its changes are held for you as revisions (NOT written to disk):\n  - src/a.ts — revision #3 (changed by "w")';
+		const { one } = await awaitAnswer(`${"y".repeat(3_000)}${note}`);
+		expect(one.resultSummary?.text?.endsWith(note)).toBe(true);
 	});
 });
