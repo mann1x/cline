@@ -14,6 +14,8 @@ import {
 	agentFacts,
 	agentFactsLine,
 	classifyAgentEnd,
+	renderRoundNotice,
+	roundsCompletionGuard,
 	roundsFor,
 } from "./agent-rounds";
 import {
@@ -455,7 +457,13 @@ describe("an agent at its iteration cap", () => {
 					usage: { inputTokens: 5, outputTokens: 1 },
 				}) as never,
 		};
-		await handle.run(0, context, async (ctx) => {
+		const updates: Array<Record<string, unknown>> = [];
+		const rowContext = {
+			...(context as object),
+			emitUpdate: (update: unknown) =>
+				updates.push(update as Record<string, unknown>),
+		} as never;
+		await handle.run(0, rowContext, async (ctx) => {
 			const outcome = await runDelegatedWithCap({
 				agent,
 				start: async () =>
@@ -491,5 +499,56 @@ describe("an agent at its iteration cap", () => {
 			result: "finished it",
 		});
 		expect(handle.record.delivered).toBe(false);
+		// Its row hears of it too, the way a member's end reaches it.
+		expect(updates.at(-1)).toMatchObject({
+			finished: { text: "finished it", finishReason: "completed" },
+		});
+	});
+});
+
+// Spec A: a background round is the lead's to collect before it finishes.
+describe("a background round and the lead's completion", () => {
+	function background() {
+		const rounds = roundsFor("s1");
+		const handle = rounds.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: true,
+			agents: [{ name: "bg", task: "t" }],
+		});
+		let finish: () => void = () => {};
+		void handle.run(
+			0,
+			context,
+			() =>
+				new Promise((resolve) => {
+					finish = () => resolve({ text: "done", finishReason: "completed" });
+				}),
+		);
+		handle.close();
+		return { rounds, handle, finish: () => finish() };
+	}
+
+	it("holds the lead's completion while a round runs, and names the way to wait", async () => {
+		const { handle, finish } = background();
+		expect(roundsCompletionGuard("s1")()).toBe(
+			"[SYSTEM] Round r1 (spawn_agent, 1 agent) is still running in the background. Its report comes to you when it ends: call await_agents to wait for it, or stop_agents to stop it, before you finish.",
+		);
+		finish();
+		await handle.idle();
+		expect(roundsCompletionGuard("s1")()).toBeUndefined();
+	});
+
+	it("says what it is when its report arrives on its own", async () => {
+		const { rounds, handle, finish } = background();
+		const notices: string[] = [];
+		rounds.onSettled((settled) => notices.push(renderRoundNotice(settled)));
+		finish();
+		await handle.idle();
+		expect(notices).toHaveLength(1);
+		expect(notices[0]).toMatch(
+			/^\[Round r1 finished\] it ran in the background \(spawn_agent\)\. Its report:\n\n/,
+		);
+		expect(notices[0]).toContain("done");
 	});
 });

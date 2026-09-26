@@ -40,6 +40,7 @@ export { RESUME_AGENT_TOOL_NAME };
 export const RETRY_FAILED_TOOL_NAME = "retry_failed";
 export const MESSAGE_AGENTS_TOOL_NAME = "message_agents";
 export const STOP_AGENTS_TOOL_NAME = "stop_agents";
+export const AWAIT_AGENTS_TOOL_NAME = "await_agents";
 
 /**
  * The tools that act on agents, as opposed to looking at them. An
@@ -52,6 +53,7 @@ export const LEAD_CONTROL_TOOL_NAMES: ReadonlySet<string> = new Set([
 	RETRY_FAILED_TOOL_NAME,
 	MESSAGE_AGENTS_TOOL_NAME,
 	STOP_AGENTS_TOOL_NAME,
+	AWAIT_AGENTS_TOOL_NAME,
 ]);
 
 /** Reasons for a requeue that say the node, not the task, was the trouble. */
@@ -523,12 +525,91 @@ export function createLeadAgentMessagingTools(
 	];
 }
 
-/** All six, for the lead's own turn. */
+export const AWAIT_AGENTS_DESCRIPTION =
+	"Wait for rounds running in the background to finish, and get their reports. With no arguments it waits for every round still running; `round_id` (or `round_ids`) waits for those. You need it only when you have nothing else to do until the agents are done: a background round's report is delivered to you on its own when it ends. While you wait, a message from the user is answered in a side turn, as during a call that waits.";
+
+/**
+ * Wait for background rounds, as a call that waited would have: their
+ * reports come back as this call's result, and not as a notice as well.
+ */
+export function createAwaitAgentsTool(
+	options: LeadAgentToolsOptions,
+): AgentTool {
+	const { sessionId } = options;
+	return {
+		name: AWAIT_AGENTS_TOOL_NAME,
+		description: AWAIT_AGENTS_DESCRIPTION,
+		inputSchema: {
+			type: "object",
+			properties: {
+				round_id: {
+					type: "string",
+					description: "The round (r3) to wait for.",
+				},
+				round_ids: {
+					type: "array",
+					items: { type: "string" },
+					description: "Several rounds to wait for.",
+				},
+			},
+		},
+		execute: async (input: unknown, context: AgentToolContext) => {
+			const record = (input ?? {}) as Record<string, unknown>;
+			const rounds = roundsFor(sessionId);
+			const named = [
+				...(textOf(record.round_id) ? [textOf(record.round_id) as string] : []),
+				...idsOf(record.round_ids).map((id) => id.trim()),
+			];
+			const unknown = named.filter((id) => !rounds.get(id));
+			const ids =
+				named.length > 0
+					? named.filter((id) => rounds.get(id))
+					: rounds
+							.list()
+							.filter((round) => round.status === "running")
+							.map((round) => round.id);
+			if (ids.length === 0) {
+				return unknown.length > 0
+					? `No round ${unknown.join(", ")}.`
+					: "No rounds are running: there is nothing to wait for.";
+			}
+			const deliveredBefore = new Set(
+				ids.filter((id) => {
+					const round = rounds.get(id);
+					return round?.status === "done" && round.delivered;
+				}),
+			);
+			const leave = rounds.enterBlocking();
+			let finished: RoundRecord[];
+			try {
+				finished = await rounds.waitFor(ids, context?.signal);
+			} catch {
+				return "Stopped waiting: the turn was stopped. The rounds carry on; their reports are delivered when they end.";
+			} finally {
+				leave();
+			}
+			const parts = finished.map((round) => {
+				if (deliveredBefore.has(round.id)) {
+					return `Round ${round.id} had already finished and its report was delivered to you as a message ("[Round ${round.id} finished]").`;
+				}
+				rounds.markDelivered(round.id);
+				return `Round ${round.id} finished.\n${rounds.reportFor(round.id)}`;
+			});
+			if (unknown.length > 0) {
+				parts.push(`No round ${unknown.join(", ")}.`);
+			}
+			return parts.join("\n\n");
+		},
+	} as AgentTool;
+}
+
+/** Everything the lead has over its agents, for its own turn. */
 export function createLeadAgentTools(
 	options: LeadAgentToolsOptions,
 ): AgentTool[] {
 	return [
 		...createLeadAgentControlTools(options),
 		...createLeadAgentMessagingTools(options),
+		createAwaitAgentsTool(options),
 	];
 }

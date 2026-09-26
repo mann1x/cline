@@ -329,6 +329,9 @@ Output: plain text, one result per line as `file:line:column` followed by that s
 # tool: stop_agents
 {{DEFAULT}}
 
+# tool: await_agents
+{{DEFAULT}}
+
 # tool: spawn_agent
 {{DEFAULT}}
 

@@ -63,7 +63,9 @@ import type { TeamEvent } from "../../extensions/tools/team";
 import { clearAgentReports } from "../../extensions/tools/team/agent-reports";
 import {
 	releaseRounds,
+	renderRoundNotice,
 	roundsFor,
+	type SettledRound,
 } from "../../extensions/tools/team/agent-rounds";
 import type { DelegatedSandboxProvider } from "../../extensions/tools/team/agent-sandbox-executors";
 import {
@@ -606,6 +608,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 	private readonly sideTurnConfigs = new Map<string, AgentConfig>();
 	private readonly sideTurns = new Map<string, Promise<void>>();
 	private readonly leadNudgeUnsubscribes = new Map<string, () => void>();
+	/** Each session's subscription to its settled rounds (spec A). */
+	private readonly roundUnsubscribes = new Map<string, () => void>();
 	private readonly eventBridge: AgentEventBridge;
 	private readonly sessionVersioning = new SessionVersioningService();
 	private readonly runCommandExecutionController =
@@ -2467,6 +2471,27 @@ export class LocalRuntimeHost implements RuntimeHost {
 			sessionId,
 			onLeadNudge(sessionId, (text) => this.nudgeLead(sessionId, text)),
 		);
+		// A round the lead did not wait for reports on its own, at the lead's
+		// next boundary. What settled while nobody listened -- before a reload,
+		// say -- is queued now, for the next turn.
+		this.roundUnsubscribes.get(sessionId)?.();
+		const rounds = roundsFor(sessionId);
+		this.roundUnsubscribes.set(
+			sessionId,
+			rounds.onSettled((settled) => this.deliverRound(sessionId, settled)),
+		);
+		for (const round of rounds.list()) {
+			if (round.status === "done" && !round.delivered) {
+				rounds.markDelivered(round.id);
+				this.pendingPromptsController.enqueue(sessionId, {
+					prompt: renderRoundNotice({
+						record: round,
+						report: rounds.reportFor(round.id),
+					}),
+					delivery: "steer",
+				});
+			}
+		}
 		runtime.registerLeadAgent?.(agent);
 		const rootAgentIdentity = buildTelemetryAgentIdentity({
 			agentId: agent.getAgentId(),
@@ -2796,6 +2821,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 		if (
 			!session.agent.canStartRun() &&
 			this.sideTurnConfigs.has(sessionId) &&
+			roundsFor(sessionId).leadBlocked &&
 			subagentCancellation.runningIn(sessionId).length > 0
 		) {
 			this.answerSteerInSideTurn(session, text, "system");
@@ -2832,6 +2858,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 			!input.userImages?.length &&
 			!input.userFiles?.length &&
 			this.sideTurnConfigs.has(input.sessionId) &&
+			// Waiting on its agents, not working beside a background round:
+			// then the steer is the lead's own, at its next boundary.
+			roundsFor(input.sessionId).leadBlocked &&
 			subagentCancellation.runningIn(input.sessionId).length > 0
 		) {
 			this.answerSteerInSideTurn(session, input.prompt);
@@ -3434,6 +3463,34 @@ export class LocalRuntimeHost implements RuntimeHost {
 		}
 		this.pendingAtomicDisengage.add(sessionId);
 		return true;
+	}
+
+	/**
+	 * A settled round the lead was not waiting for, delivered the way a
+	 * background delegation's report is: appended with the session idle,
+	 * queued as a steer for the next boundary with a turn in flight.
+	 */
+	private deliverRound(sessionId: string, settled: SettledRound): void {
+		const live = this.sessions.get(sessionId);
+		if (!live) {
+			return;
+		}
+		roundsFor(sessionId).markDelivered(settled.record.id);
+		const text = renderRoundNotice(settled);
+		if (live.agent.canStartRun()) {
+			live.agent.restore([
+				...live.agent.getMessages(),
+				{
+					role: "user",
+					content: text,
+				} as LlmsProviders.MessageWithMetadata,
+			]);
+			return;
+		}
+		this.pendingPromptsController.enqueue(sessionId, {
+			prompt: text,
+			delivery: "steer",
+		});
 	}
 
 	private deliverBackgroundDelegation(
@@ -4390,6 +4447,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 		this.backgroundDelegations.get(session.sessionId)?.stopAll();
 		this.backgroundDelegations.delete(session.sessionId);
 		// Its rounds too, written down first.
+		this.roundUnsubscribes.get(session.sessionId)?.();
+		this.roundUnsubscribes.delete(session.sessionId);
 		releaseRounds(session.sessionId);
 		this.sideTurnConfigs.delete(session.sessionId);
 		this.leadNudgeUnsubscribes.get(session.sessionId)?.();
@@ -4487,6 +4546,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// it was started from: the conversation it would report into is gone.
 		this.backgroundDelegations.get(session.sessionId)?.stopAll();
 		this.backgroundDelegations.delete(session.sessionId);
+		this.roundUnsubscribes.get(session.sessionId)?.();
+		this.roundUnsubscribes.delete(session.sessionId);
 		releaseRounds(session.sessionId);
 		this.sessions.delete(session.sessionId);
 		if (cleanupErrors.length > 0) {

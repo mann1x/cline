@@ -64,6 +64,7 @@ import {
 	createAgentAdmissionController,
 } from "../../extensions/tools/team/agent-admission";
 import { createReadAgentReportTool } from "../../extensions/tools/team/agent-reports";
+import { roundsCompletionGuard } from "../../extensions/tools/team/agent-rounds";
 import { createAgentsStatusTool } from "../../extensions/tools/team/agent-status";
 import type { ConfiguredAgentConfig } from "../../extensions/tools/team/configured-agent-config";
 import { loadConfiguredAgentConfigs } from "../../extensions/tools/team/configured-agent-config";
@@ -1470,6 +1471,16 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 					return undefined;
 				}
 			: undefined;
+		// A background round is the lead's to collect before it finishes
+		// (lead-agent-control spec, A). Team obligations speak first.
+		const roundsGuard =
+			config.sessionId && opensRounds
+				? roundsCompletionGuard(config.sessionId)
+				: undefined;
+		const completionGuard =
+			teamCompletionGuard && roundsGuard
+				? () => teamCompletionGuard() ?? roundsGuard()
+				: (teamCompletionGuard ?? roundsGuard);
 		// `maxNoToolCallNudges` is always set here: the SDK leaves it off so the
 		// bare runtime keeps its "a turn with no tool calls ends the run"
 		// contract, but a coding agent is the case the nudge exists for. A model
@@ -1481,7 +1492,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		// existed rather than merely equivalent to it.
 		const completionPolicy = {
 			...(requiresCompletionTool ? { requireCompletionTool: true } : {}),
-			...(teamCompletionGuard ? { completionGuard: teamCompletionGuard } : {}),
+			...(completionGuard ? { completionGuard } : {}),
 			maxNoToolCallNudges: DEFAULT_MAX_NO_TOOL_CALL_NUDGES,
 			...(config.strongNudges === false ? { strongNudges: false } : {}),
 		};

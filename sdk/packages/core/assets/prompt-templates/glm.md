@@ -211,6 +211,9 @@ Output: plain text, one result per line as `file:line:column` followed by the so
 # tool: stop_agents
 {{DEFAULT}}
 
+# tool: await_agents
+{{DEFAULT}}
+
 # tool: spawn_agent
 {{DEFAULT}}
 

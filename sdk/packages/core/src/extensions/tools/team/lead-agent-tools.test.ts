@@ -265,3 +265,61 @@ describe("message_agents and stop_agents from the lead's turn", () => {
 		expect(subagentCancellation.stoppedBy("s1::c#0")).toBe("lead");
 	});
 });
+
+// Spec A: a background round's report comes on its own; await_agents is how
+// the lead waits for it on purpose.
+describe("await_agents", () => {
+	async function backgroundRound() {
+		const rounds = roundsFor("s1");
+		const handle = rounds.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: true,
+			agents: [{ name: "bg", task: "t" }],
+		});
+		let finish: () => void = () => {};
+		void handle.run(
+			0,
+			context,
+			() =>
+				new Promise((resolve) => {
+					finish = () =>
+						resolve({ text: "bg done", finishReason: "completed" });
+				}),
+		);
+		handle.close();
+		return { rounds, handle, finish: () => finish() };
+	}
+
+	it("waits for the running rounds and hands over their reports", async () => {
+		const { rounds, finish } = await backgroundRound();
+		const delivered: string[] = [];
+		rounds.onSettled((round) => delivered.push(round.record.id));
+		const waiting = run("await_agents", {});
+		expect(rounds.leadBlocked).toBe(true);
+		finish();
+		const text = await waiting;
+		expect(text).toContain("Round r1 finished");
+		expect(text).toContain("bg done");
+		expect(rounds.leadBlocked).toBe(false);
+		// Its report went to the call, not to a notice as well.
+		expect(delivered).toEqual([]);
+		expect(rounds.get("r1")?.delivered).toBe(true);
+	});
+
+	it("says there is nothing to wait for", async () => {
+		expect(await run("await_agents", {})).toBe(
+			"No rounds are running: there is nothing to wait for.",
+		);
+	});
+
+	it("points to the notice for a round whose report is already delivered", async () => {
+		const { rounds, handle, finish } = await backgroundRound();
+		finish();
+		await handle.idle();
+		rounds.markDelivered("r1");
+		expect(await run("await_agents", { round_id: "r1" })).toContain(
+			"Round r1 had already finished and its report was delivered to you",
+		);
+	});
+});

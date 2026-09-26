@@ -19,6 +19,10 @@ import { setHomeDir } from "@cline/shared/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { createUserInstructionConfigService } from "../../extensions/config";
 import { PLAN_MODE_COMMAND_GUARD_EXTENSION_NAME } from "../../extensions/tools/command-guard-extension";
+import {
+	__resetAgentRounds,
+	roundsFor,
+} from "../../extensions/tools/team/agent-rounds";
 import { TelemetryService } from "../../services/telemetry/TelemetryService";
 import type { CoreSessionConfig } from "../../types/config";
 import { DefaultRuntimeBuilder } from "./runtime-builder";
@@ -1427,5 +1431,46 @@ Review skill.`,
 		expect(extensionTools.map((tool) => tool.name)).not.toContain("skills");
 
 		await runtime.shutdown("test");
+	});
+});
+
+// Lead-agent-control spec, A: where the lead can delegate, a background round
+// still out holds its completion; where it cannot, nothing is added.
+describe("the lead's completion and its background rounds", () => {
+	afterEach(() => {
+		__resetAgentRounds();
+	});
+
+	it("is held while a round of the session runs", async () => {
+		const runtime = await new DefaultRuntimeBuilder().build({
+			config: makeBaseConfig({
+				sessionId: "rounds-guard",
+				enableSpawnAgent: true,
+			}),
+			createSpawnTool: makeSpawnTool,
+		});
+		const guard = runtime.completionPolicy?.completionGuard;
+		expect(guard?.()).toBeUndefined();
+		const handle = roundsFor("rounds-guard").open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: true,
+			agents: [{ name: "bg", task: "t" }],
+		});
+		void handle.run(
+			0,
+			{ agentId: "lead", iteration: 1, sessionId: "rounds-guard" } as never,
+			() => new Promise(() => {}),
+		);
+		expect(guard?.()).toContain(
+			"Round r1 (spawn_agent, 1 agent) is still running",
+		);
+	});
+
+	it("carries no rounds guard without delegation", async () => {
+		const runtime = await new DefaultRuntimeBuilder().build({
+			config: makeBaseConfig({ sessionId: "rounds-none" }),
+		});
+		expect(runtime.completionPolicy?.completionGuard).toBeUndefined();
 	});
 });

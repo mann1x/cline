@@ -390,12 +390,100 @@ export function applySubagentIterationCap(entry: SubagentStatusItem, update: Rec
 		entry.maxIterations = maxIterations
 	} else if (waiting === null && entry.awaitingLead) {
 		entry.awaitingLead = undefined
+		// Its call may have returned while it waited: working again.
+		if (entry.status === "completed") entry.status = "running"
 		pushSubagentActivity(entry, "Resumed by the lead")
 	}
 	// ...or from a report that returned while it still waits.
 	if (update.state === "awaiting_lead") {
 		const maxIterations = cap ?? entry.maxIterations ?? 0
 		entry.awaitingLead = { iterations: positive(update.iterations) ?? maxIterations, maxIterations }
+	}
+}
+
+/** An agent whose call returned while it went on: in the background, or waiting at its cap. */
+function isSpawnAgentOut(entry: SubagentStatusItem): boolean {
+	return entry.status === "running" || entry.status === "pending" || entry.awaitingLead !== undefined
+}
+
+/**
+ * One progress update from a spawn tool, onto its agent's row: the current
+ * iteration's, or one kept from an earlier call whose agents are still out.
+ */
+function applySpawnAgentUpdate(entry: SubagentStatusItem, updateData: Record<string, unknown>): void {
+	if (typeof updateData.toolCalls === "number") entry.toolCalls = updateData.toolCalls
+	applySubagentCompactions(entry, updateData)
+	if (typeof updateData.inputTokens === "number") entry.inputTokens = updateData.inputTokens
+	if (typeof updateData.outputTokens === "number") entry.outputTokens = updateData.outputTokens
+	if (typeof updateData.totalCost === "number") entry.totalCost = updateData.totalCost
+	if (typeof updateData.contextTokens === "number") entry.contextTokens = updateData.contextTokens
+	if (typeof updateData.contextWindow === "number") entry.contextWindow = updateData.contextWindow
+	if (typeof updateData.contextUsagePercentage === "number") entry.contextUsagePercentage = updateData.contextUsagePercentage
+	if (typeof updateData.latestToolCall === "string") {
+		if (updateData.latestToolCall !== entry.latestToolCall) {
+			pushSubagentActivity(entry, updateData.latestToolCall)
+		}
+		entry.latestToolCall = updateData.latestToolCall
+	}
+	// Its tool has ended and it is thinking again (#77): the row
+	// stops naming the tool rather than showing it until the next.
+	if (updateData.latestToolCall === null) entry.latestToolCall = undefined
+	if (typeof updateData.latestOutput === "string") entry.latestOutput = updateData.latestOutput
+	if (updateData.latestOutputKind === "text" || updateData.latestOutputKind === "reasoning")
+		entry.latestOutputKind = updateData.latestOutputKind
+	// How the row stops this agent. Sent by the spawn tool
+	// as soon as it registers, so the button exists before
+	// the agent's first tool call rather than after it.
+	if (typeof updateData.cancelId === "string") entry.cancelId = updateData.cancelId
+	// Waiting for a node, or placed on one. Every entry starts as
+	// running, so without this a fan-out larger than its nodes
+	// showed every agent at work while most of them were queued.
+	if (updateData.queued === true && entry.status === "running") entry.status = "pending"
+	if (updateData.queued === false && entry.status === "pending") entry.status = "running"
+	// The node it runs on, known at placement -- not only at the
+	// end, when it no longer explains anything.
+	if (typeof updateData.nodeId === "string") entry.nodeId = updateData.nodeId
+	if (typeof updateData.nodeLabel === "string") entry.nodeLabel = updateData.nodeLabel
+	// The model it runs on, sent when its attempt is built (#78). The
+	// final result still overwrites these with what actually answered.
+	if (typeof updateData.providerId === "string") entry.providerId = updateData.providerId
+	if (typeof updateData.modelId === "string") entry.modelId = updateData.modelId
+	// The sampler its attempt was built with -- a random seed or
+	// temperature as drawn -- sent beside the model.
+	const sampling = readSubagentSampling(updateData.sampling)
+	if (sampling) entry.sampling = sampling
+	if (updateData.queued === false && (typeof updateData.nodeLabel === "string" || typeof updateData.nodeId === "string")) {
+		pushSubagentActivity(entry, `Placed on ${entry.nodeLabel ?? entry.nodeId}`)
+	}
+	// What the tool, the placement queue and the engine said about
+	// it: a wait, a refusal, a pool that shares nothing.
+	const activity = updateData.activity as { text?: unknown; severity?: unknown } | undefined
+	if (activity && typeof activity.text === "string") {
+		pushSubagentActivity(entry, activity.text, activity.severity === "warn" ? "warn" : undefined)
+	}
+	// Stopped at its iteration cap, waiting for the lead; or resumed.
+	if ("awaitingLead" in updateData) applySubagentIterationCap(entry, updateData)
+	if (typeof updateData.genTps === "number" && Number.isFinite(updateData.genTps)) entry.genTps = updateData.genTps
+	// Ended, on its own: a batch or swarm member's row finishes
+	// when that agent does, not with the call. Until then a done
+	// agent sat on a "running" row, its output showing, until the
+	// slowest of the round finished.
+	const finished = updateData.finished
+	if (finished && typeof finished === "object") {
+		const report = finished as Record<string, unknown>
+		applySpawnAgentOutput(entry, report)
+		if (typeof report.error === "string" && report.error) {
+			entry.status = "failed"
+			entry.error = report.error
+			pushSubagentActivity(entry, `Failed: ${report.error}`, "warn")
+		} else {
+			entry.status = "completed"
+			pushSubagentActivity(entry, "Finished")
+		}
+	}
+	// Its end, after it had waited at its cap: no longer waiting.
+	if (updateData.finished && typeof updateData.finished === "object" && entry.awaitingLead) {
+		entry.awaitingLead = undefined
 	}
 }
 
@@ -911,9 +999,22 @@ export class MessageTranslatorState {
 		return this.spawnAgentEntries.size > 0
 	}
 
+	/**
+	 * Rows of a call that returned while its agents work on (`wait: false`).
+	 * They run beside the lead rather than in place of its turn, so they do not
+	 * count as the spawn in flight that holds the lead's own events back.
+	 */
+	private readonly backgroundSpawnKeys = new Set<string>()
+
+	markSpawnAgentBackground(key: string): void {
+		this.backgroundSpawnKeys.add(key)
+	}
+
 	/** Whether any registered spawn_agent call has not finished yet. */
 	hasRunningSpawnAgents(): boolean {
-		return this.getSpawnAgentItems().some((entry) => entry.status === "running" || entry.status === "pending")
+		return Array.from(this.spawnAgentEntries.entries()).some(
+			([key, entry]) => !this.backgroundSpawnKeys.has(key) && (entry.status === "running" || entry.status === "pending"),
+		)
 	}
 
 	/** Get all spawn_agent entries as an ordered array */
@@ -943,8 +1044,10 @@ export class MessageTranslatorState {
 	}
 
 	/** Build a ClineSaySubagentStatus from the current entries */
-	buildSubagentStatus(overallStatus: ClineSaySubagentStatus["status"]): ClineSaySubagentStatus {
-		const items = this.getSpawnAgentItems()
+	buildSubagentStatus(
+		overallStatus: ClineSaySubagentStatus["status"],
+		items: SubagentStatusItem[] = this.getSpawnAgentItems(),
+	): ClineSaySubagentStatus {
 		const completed = items.filter((e) => e.status === "completed" || e.status === "failed").length
 		const successes = items.filter((e) => e.status === "completed").length
 		const failures = items.filter((e) => e.status === "failed").length
@@ -1060,9 +1163,54 @@ export class MessageTranslatorState {
 		}
 	}
 
+	/**
+	 * Rows of calls that returned with agents still out -- a background round,
+	 * an agent detached at its iteration cap -- kept past the iteration that
+	 * made them. Their agents keep sending updates through the call's tool
+	 * events; each lands on its row, at the row's own timestamp, until every
+	 * agent of the row has ended.
+	 */
+	private readonly parkedSpawnGroups = new Map<string, { ts: number; entries: Map<string, SubagentStatusItem> }>()
+
+	/** A kept row's agent, by the key its updates name. */
+	getParkedSpawnAgent(key: string): { entry: SubagentStatusItem; groupTs: number } | undefined {
+		for (const group of this.parkedSpawnGroups.values()) {
+			const entry = group.entries.get(key)
+			if (entry) {
+				return { entry, groupTs: group.ts }
+			}
+		}
+		return undefined
+	}
+
+	/** The kept row at `ts`, as a status message; dropped once all its agents have ended. */
+	buildParkedSubagentMessage(ts: number): ClineMessage | undefined {
+		const group = this.parkedSpawnGroups.get(String(ts))
+		if (!group) {
+			return undefined
+		}
+		const items = Array.from(group.entries.values()).sort((a, b) => a.index - b.index)
+		const out = items.some(isSpawnAgentOut)
+		if (!out) {
+			this.parkedSpawnGroups.delete(String(ts))
+		}
+		const status = this.buildSubagentStatus(
+			out ? "running" : items.some((item) => item.status === "failed") ? "failed" : "completed",
+			items,
+		)
+		return { ts, type: "say", say: "subagent" as ClineSay, text: JSON.stringify(status), partial: out }
+	}
+
 	/** Clear all spawn_agent state (called at iteration_start) */
 	clearSpawnAgents(): void {
+		if (this.spawnAgentStatusTs !== undefined && this.getSpawnAgentItems().some(isSpawnAgentOut)) {
+			this.parkedSpawnGroups.set(String(this.spawnAgentStatusTs), {
+				ts: this.spawnAgentStatusTs,
+				entries: new Map(this.spawnAgentEntries),
+			})
+		}
 		this.spawnAgentEntries.clear()
+		this.backgroundSpawnKeys.clear()
 		this.spawnAgentPromptsTs = undefined
 		this.spawnAgentStatusTs = undefined
 		this.spawnAgentNextIndex = 0
@@ -1512,6 +1660,24 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 				tool: toolName as ClineSayTool["tool"],
 				headline: "Cerebriline checked on its agents:",
 				path: describeAgentTargets(parsedInput) ?? "every round",
+			}
+		}
+
+		case "await_agents": {
+			// The lead waiting on purpose for rounds it had sent to the background.
+			const ids = [
+				...(Array.isArray(parsedInput?.round_ids)
+					? (parsedInput.round_ids as unknown[]).filter((entry): entry is string => typeof entry === "string")
+					: []),
+				...(getStringField(parsedInput, "round_id") ? [getStringField(parsedInput, "round_id") as string] : []),
+			]
+				.map((entry) => entry.trim())
+				.filter(Boolean)
+			return {
+				tool: toolName as ClineSayTool["tool"],
+				headline: "Cerebriline waited for its agents:",
+				path:
+					ids.length === 0 ? "every running round" : ids.length === 1 ? `round ${ids[0]}` : `rounds ${ids.join(", ")}`,
 			}
 		}
 
@@ -2742,6 +2908,24 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 			// sub-agent progress (iterations, tool calls, usage). We translate
 			// these into the ClineSaySubagentStatus format for the rich UI.
 			const updateToolName = event.toolName ?? state.getStreamingToolName()
+			// An agent of a call from an earlier iteration, still out: its
+			// kept row, at that row's place in the conversation.
+			if (isSubagentSpawnTool(updateToolName) && event.toolCallId) {
+				const updateData = event.update as Record<string, unknown> | undefined
+				const member = typeof updateData?.member === "number" ? updateData.member : undefined
+				const key = member !== undefined ? spawnMemberKey(event.toolCallId, member) : event.toolCallId
+				const parked = state.getSpawnAgent(key) ? undefined : state.getParkedSpawnAgent(key)
+				if (parked) {
+					if (updateData) {
+						applySpawnAgentUpdate(parked.entry, updateData)
+					}
+					const row = state.buildParkedSubagentMessage(parked.groupTs)
+					if (row) {
+						messages.push(row)
+					}
+					break
+				}
+			}
 			if (isSubagentSpawnTool(updateToolName) && state.hasSpawnAgents()) {
 				const callId = event.toolCallId ?? ""
 				const updateData = event.update as Record<string, unknown> | undefined
@@ -2753,81 +2937,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					: undefined
 				if (entry) {
 					if (updateData) {
-						if (typeof updateData.toolCalls === "number") entry.toolCalls = updateData.toolCalls
-						applySubagentCompactions(entry, updateData)
-						if (typeof updateData.inputTokens === "number") entry.inputTokens = updateData.inputTokens
-						if (typeof updateData.outputTokens === "number") entry.outputTokens = updateData.outputTokens
-						if (typeof updateData.totalCost === "number") entry.totalCost = updateData.totalCost
-						if (typeof updateData.contextTokens === "number") entry.contextTokens = updateData.contextTokens
-						if (typeof updateData.contextWindow === "number") entry.contextWindow = updateData.contextWindow
-						if (typeof updateData.contextUsagePercentage === "number")
-							entry.contextUsagePercentage = updateData.contextUsagePercentage
-						if (typeof updateData.latestToolCall === "string") {
-							if (updateData.latestToolCall !== entry.latestToolCall) {
-								pushSubagentActivity(entry, updateData.latestToolCall)
-							}
-							entry.latestToolCall = updateData.latestToolCall
-						}
-						// Its tool has ended and it is thinking again (#77): the row
-						// stops naming the tool rather than showing it until the next.
-						if (updateData.latestToolCall === null) entry.latestToolCall = undefined
-						if (typeof updateData.latestOutput === "string") entry.latestOutput = updateData.latestOutput
-						if (updateData.latestOutputKind === "text" || updateData.latestOutputKind === "reasoning")
-							entry.latestOutputKind = updateData.latestOutputKind
-						// How the row stops this agent. Sent by the spawn tool
-						// as soon as it registers, so the button exists before
-						// the agent's first tool call rather than after it.
-						if (typeof updateData.cancelId === "string") entry.cancelId = updateData.cancelId
-						// Waiting for a node, or placed on one. Every entry starts as
-						// running, so without this a fan-out larger than its nodes
-						// showed every agent at work while most of them were queued.
-						if (updateData.queued === true && entry.status === "running") entry.status = "pending"
-						if (updateData.queued === false && entry.status === "pending") entry.status = "running"
-						// The node it runs on, known at placement -- not only at the
-						// end, when it no longer explains anything.
-						if (typeof updateData.nodeId === "string") entry.nodeId = updateData.nodeId
-						if (typeof updateData.nodeLabel === "string") entry.nodeLabel = updateData.nodeLabel
-						// The model it runs on, sent when its attempt is built (#78). The
-						// final result still overwrites these with what actually answered.
-						if (typeof updateData.providerId === "string") entry.providerId = updateData.providerId
-						if (typeof updateData.modelId === "string") entry.modelId = updateData.modelId
-						// The sampler its attempt was built with -- a random seed or
-						// temperature as drawn -- sent beside the model.
-						const sampling = readSubagentSampling(updateData.sampling)
-						if (sampling) entry.sampling = sampling
-						if (
-							updateData.queued === false &&
-							(typeof updateData.nodeLabel === "string" || typeof updateData.nodeId === "string")
-						) {
-							pushSubagentActivity(entry, `Placed on ${entry.nodeLabel ?? entry.nodeId}`)
-						}
-						// What the tool, the placement queue and the engine said about
-						// it: a wait, a refusal, a pool that shares nothing.
-						const activity = updateData.activity as { text?: unknown; severity?: unknown } | undefined
-						if (activity && typeof activity.text === "string") {
-							pushSubagentActivity(entry, activity.text, activity.severity === "warn" ? "warn" : undefined)
-						}
-						// Stopped at its iteration cap, waiting for the lead; or resumed.
-						if ("awaitingLead" in updateData) applySubagentIterationCap(entry, updateData)
-						if (typeof updateData.genTps === "number" && Number.isFinite(updateData.genTps))
-							entry.genTps = updateData.genTps
-						// Ended, on its own: a batch or swarm member's row finishes
-						// when that agent does, not with the call. Until then a done
-						// agent sat on a "running" row, its output showing, until the
-						// slowest of the round finished.
-						const finished = updateData.finished
-						if (finished && typeof finished === "object") {
-							const report = finished as Record<string, unknown>
-							applySpawnAgentOutput(entry, report)
-							if (typeof report.error === "string" && report.error) {
-								entry.status = "failed"
-								entry.error = report.error
-								pushSubagentActivity(entry, `Failed: ${report.error}`, "warn")
-							} else {
-								entry.status = "completed"
-								pushSubagentActivity(entry, "Finished")
-							}
-						}
+						applySpawnAgentUpdate(entry, updateData)
 					}
 				}
 				// Emit a running status update
@@ -2958,11 +3068,27 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					if (isSubagentSpawnTool(toolName)) {
 						const callId = event.toolCallId ?? ""
 						const output = event.output as Record<string, unknown> | undefined
+						// Returned at once, its agents working on (`wait: false`):
+						// their rows stay open and follow them past this iteration.
+						const backgroundRound =
+							output?.background === true && typeof output.round === "string" ? output.round : undefined
 						// A batch: each member's own report, on its own row. A
 						// merged swarm returns one digest and no per-agent
 						// reports, so its rows end with the call.
 						const batchSize = callId ? state.countSpawnMembers(callId) : 0
-						if (batchSize > 0) {
+						if (backgroundRound && !event.error) {
+							const keys =
+								batchSize > 0
+									? Array.from({ length: batchSize }, (_, index) => spawnMemberKey(callId, index))
+									: [callId]
+							for (const key of keys) {
+								const entry = state.getSpawnAgent(key)
+								if (entry) {
+									state.markSpawnAgentBackground(key)
+									pushSubagentActivity(entry, `Running in the background as round ${backgroundRound}`)
+								}
+							}
+						} else if (batchSize > 0) {
 							const results = Array.isArray(output?.results) ? (output.results as unknown[]) : []
 							// The batch result sized for the model: an index of every
 							// agent (status and why), and not every report. Each row
@@ -2993,7 +3119,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 								}
 							}
 						}
-						const entry = callId && batchSize === 0 ? state.getSpawnAgent(callId) : undefined
+						const entry = callId && batchSize === 0 && !backgroundRound ? state.getSpawnAgent(callId) : undefined
 						if (entry) {
 							// Extract output stats from SpawnAgentOutput
 							if (output) {

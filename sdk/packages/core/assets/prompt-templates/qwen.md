@@ -349,6 +349,9 @@ Switch from plan mode to act mode.
 # tool: stop_agents
 {{DEFAULT}}
 
+# tool: await_agents
+{{DEFAULT}}
+
 # tool: spawn_agent
 {{DEFAULT}}
 

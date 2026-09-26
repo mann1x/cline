@@ -1445,3 +1445,62 @@ describe("spawn_agent's iteration cap and check", () => {
 		);
 	});
 });
+
+// Lead-agent-control spec, A: `wait: false` returns the round at once, and
+// the agent's row hears of its end when it comes, as a batch member's does.
+describe("spawn_agent in the background", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("returns the round at once and ends the agent's row when it finishes", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const { __resetAgentRounds, roundsFor } = await import("./agent-rounds.js");
+		let finish: () => void = () => {};
+		runMock.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					finish = () =>
+						resolve({
+							text: "background work done",
+							iterations: 1,
+							finishReason: "completed",
+							usage: { inputTokens: 1, outputTokens: 1 },
+						});
+				}),
+		);
+		const updates: Array<Record<string, unknown>> = [];
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "lead-model",
+			}),
+		});
+		const ack = (await tool.execute(
+			{ systemPrompt: "p", task: "t", name: "bg", wait: false },
+			{
+				agentId: "parent",
+				conversationId: "c",
+				iteration: 1,
+				sessionId: "bg-session",
+				toolCallId: "call-bg",
+				emitUpdate: (update: unknown) =>
+					updates.push(update as Record<string, unknown>),
+			} as never,
+		)) as unknown as Record<string, unknown>;
+		expect(ack).toMatchObject({
+			background: true,
+			round: "r1",
+			agents: [{ id: "r1-1", name: "bg" }],
+		});
+		await vi.waitFor(() => expect(runMock).toHaveBeenCalled());
+		finish();
+		await vi.waitFor(() =>
+			expect(roundsFor("bg-session").get("r1")?.status).toBe("done"),
+		);
+		expect(updates.at(-1)).toMatchObject({
+			finished: { text: "background work done" },
+		});
+		__resetAgentRounds();
+	});
+});

@@ -1,7 +1,13 @@
 import type { CoreSessionEvent } from "@cline/core"
 import type { Message as SdkMessage } from "@cline/llms"
 import type { AgentEvent, MessageWithMetadata } from "@cline/shared"
-import type { ClineAskUseMcpServer, ClineMessage, ClineSayTool, SubagentStatusItem } from "@shared/ExtensionMessage"
+import type {
+	ClineAskUseMcpServer,
+	ClineMessage,
+	ClineSaySubagentStatus,
+	ClineSayTool,
+	SubagentStatusItem,
+} from "@shared/ExtensionMessage"
 import { Logger } from "@shared/services/Logger"
 import { describe, expect, it, vi } from "vitest"
 import { getDesktopDir } from "@/utils/path"
@@ -5961,6 +5967,85 @@ describe("an agent at its iteration cap, and the lead's check", () => {
 		expect(one?.error).toBeUndefined()
 		expect(one?.awaitingLead).toEqual({ iterations: 4, maxIterations: 4 })
 	})
+
+	// Lead-agent-control spec, A: a round the lead did not wait for. Its
+	// agents' rows keep following them after the call returned and the lead
+	// moved on to its next iteration.
+	const statusOf = (messages: ClineMessage[]) => {
+		const row = messages.filter((message) => message.say === "subagent").at(-1)
+		return row
+			? { ts: row.ts, partial: row.partial, status: JSON.parse(row.text ?? "{}") as ClineSaySubagentStatus }
+			: undefined
+	}
+
+	it("keeps a background round's rows running, and finishes them when their agents do", () => {
+		const state = new MessageTranslatorState()
+		start(state, {
+			agents: [
+				{ name: "one", task: "a" },
+				{ name: "two", task: "b" },
+			],
+			wait: false,
+		})
+		const returned = statusOf(
+			send(state, {
+				type: "content_end",
+				contentType: "tool",
+				toolName: "spawn_agent",
+				toolCallId: "call-1",
+				output: {
+					background: true,
+					round: "r1",
+					agents: [
+						{ id: "r1-1", name: "one" },
+						{ id: "r1-2", name: "two" },
+					],
+					note: "Round r1 runs in the background.",
+				},
+			}).messages,
+		)
+		expect(returned?.partial).toBe(true)
+		expect(returned?.status.items.map((item) => item.status)).toEqual(["running", "running"])
+		expect(returned?.status.items[0]?.activity?.at(-1)?.text).toBe("Running in the background as round r1")
+		// The lead works on beside them: its own events are not held back.
+		expect(state.hasRunningSpawnAgents()).toBe(false)
+
+		send(state, { type: "iteration_start", iteration: 2 })
+		const first = statusOf(update(state, { member: 0, finished: { name: "one", text: "one done" } }).messages)
+		expect(first?.ts).toBe(returned?.ts)
+		expect(first?.partial).toBe(true)
+		expect(first?.status.items[0]).toMatchObject({ status: "completed", result: "one done" })
+
+		const last = statusOf(update(state, { member: 1, finished: { name: "two", error: "stopped" } }).messages)
+		expect(last?.ts).toBe(returned?.ts)
+		expect(last?.partial).toBe(false)
+		expect(last?.status.status).toBe("failed")
+		// Done: nothing is kept for it any more.
+		expect(update(state, { member: 1, latestOutput: "x" }).messages).toEqual([])
+	})
+
+	it("finishes a row left awaiting the lead when its agent ends after the call", () => {
+		const state = new MessageTranslatorState()
+		start(state, { agents: [{ name: "one", task: "a" }] })
+		const returned = statusOf(
+			send(state, {
+				type: "content_end",
+				contentType: "tool",
+				toolName: "spawn_agent",
+				toolCallId: "call-1",
+				output: {
+					agents: [{ name: "one", status: "awaiting_lead", iterations: 4, maxIterations: 4 }],
+					results: [{ name: "one", text: "half", iterations: 4, maxIterations: 4, state: "awaiting_lead" }],
+				},
+			}).messages,
+		)
+		send(state, { type: "iteration_start", iteration: 2 })
+		update(state, { member: 0, awaitingLead: null })
+		const late = statusOf(update(state, { member: 0, finished: { name: "one", text: "all of it", iterations: 9 } }).messages)
+		expect(late?.ts).toBe(returned?.ts)
+		expect(late?.status.items[0]).toMatchObject({ status: "completed", result: "all of it" })
+		expect(late?.status.items[0]?.awaitingLead).toBeUndefined()
+	})
 })
 
 // ---------------------------------------------------------------------------
@@ -6126,6 +6211,15 @@ describe("tools with no bespoke row still reach the chat with something to show"
 			path: "a",
 			content: "Skip it.",
 		})
+	})
+
+	it("says which rounds the lead waited for", () => {
+		expect(sayToolFor("await_agents", {})).toMatchObject({
+			headline: "Cerebriline waited for its agents:",
+			path: "every running round",
+		})
+		expect(sayToolFor("await_agents", { round_ids: ["r2", "r3"] }).path).toBe("rounds r2, r3")
+		expect(sayToolFor("await_agents", { round_id: "r3" }).path).toBe("round r3")
 	})
 })
 

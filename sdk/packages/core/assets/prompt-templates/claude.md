@@ -437,6 +437,9 @@ Only after the user approves the plan in a message sent *after* you presented it
 # tool: stop_agents
 {{DEFAULT}}
 
+# tool: await_agents
+{{DEFAULT}}
+
 # tool: spawn_agent
 {{DEFAULT}}
 

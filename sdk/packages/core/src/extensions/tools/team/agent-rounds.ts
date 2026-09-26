@@ -268,6 +268,50 @@ export interface SettledRound {
 	report: string;
 }
 
+/**
+ * A settled round as the lead reads it when it was not waiting for it: a
+ * background round, or an agent that finished after its call returned. It
+ * arrives at the lead's next boundary, the way a background delegation's
+ * report does, so it says what it is before it says what happened.
+ */
+export function renderRoundNotice(settled: SettledRound): string {
+	const round = settled.record;
+	const how = round.background
+		? `it ran in the background (${round.tool})`
+		: `an agent of ${round.tool} finished after its call had returned`;
+	return `[Round ${round.id} finished] ${how}. Its report:\n\n${settled.report}`;
+}
+
+/**
+ * The lead's completion, held while a round it did not wait for is still
+ * out: a background round, or an agent detached at its cap. Its report would
+ * otherwise arrive into a finished task. No wall clock: the round ends when
+ * its agents do, or when the lead stops them.
+ */
+export function roundsCompletionGuard(
+	sessionId: string,
+): () => string | undefined {
+	return () => {
+		const running = roundsFor(sessionId)
+			.list()
+			.filter((round) => round.status === "running");
+		if (running.length === 0) {
+			return undefined;
+		}
+		const names = running
+			.map(
+				(round) =>
+					`${round.id} (${round.tool}, ${round.agents.length} agent${
+						round.agents.length === 1 ? "" : "s"
+					})`,
+			)
+			.join(", ");
+		return running.length === 1
+			? `[SYSTEM] Round ${names} is still running in the background. Its report comes to you when it ends: call await_agents to wait for it, or stop_agents to stop it, before you finish.`
+			: `[SYSTEM] Rounds ${names} are still running in the background. Their reports come to you when they end: call await_agents to wait for them, or stop_agents to stop them, before you finish.`;
+	};
+}
+
 /** Longest output tail kept per agent (spec B: "e.g. 1,500 chars"). */
 export const ROUND_OUTPUT_TAIL_CHARS = 1_500;
 /** Activity lines kept per agent. */
@@ -406,6 +450,8 @@ interface LiveRound {
 	outputs: Map<number, RoundMemberOutput>;
 	/** Each agent's live control id. */
 	cancelIds: Map<number, string>;
+	/** Each agent's channel to its row, kept for news after its call returned. */
+	rows?: Map<number, (update: unknown) => void>;
 	/** Where the original call's progress went, while it is still open. */
 	emitUpdate?: (update: unknown) => void;
 	/** Tags an update with its agent, as the call's rows expect. */
@@ -1299,6 +1345,10 @@ export class RoundHandle {
 						})
 				: (update: unknown) => this.live.emitUpdate?.(update)
 			: context.emitUpdate;
+		if (forward) {
+			this.live.rows ??= new Map();
+			this.live.rows.set(index, forward);
+		}
 		const memberContext: AgentToolContext = {
 			...context,
 			emitUpdate: this.tap(index, agent, forward),
@@ -1388,6 +1438,8 @@ export class RoundHandle {
 			};
 			live.outputs.set(agent.index, late);
 			this.finish(agent, late, late);
+			// Its row still shows it waiting: it ends there as a member does.
+			live.rows?.get(agent.index)?.({ finished: late });
 			// Its end is news the lead has not had, whoever had the round's
 			// report before.
 			live.record.delivered = false;

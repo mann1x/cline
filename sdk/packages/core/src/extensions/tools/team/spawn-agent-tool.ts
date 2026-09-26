@@ -952,7 +952,12 @@ async function runSingleSpawn(
 	const run = (ctx: AgentToolContext) =>
 		runSpawnedAgent(config, input, ctx) as Promise<RoundMemberOutput>;
 	if (background) {
-		void handle.run(0, memberContext, run).finally(() => handle.close());
+		// Its row stays open past the call; its end is sent to it the way a
+		// batch member's is, since no call result will carry it there.
+		void handle
+			.run(0, memberContext, run)
+			.then((output) => reportSubagentFinished(context.emitUpdate, output))
+			.finally(() => handle.close());
 		return backgroundAck(handle);
 	}
 	const leave = rounds.enterBlocking();
