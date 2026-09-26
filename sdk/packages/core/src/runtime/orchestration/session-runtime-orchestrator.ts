@@ -1670,7 +1670,13 @@ export class SessionRuntime {
 		]);
 	}
 
-	private emitLegacyEvent(event: AgentEvent): void {
+	private emitLegacyEvent(input: AgentEvent): void {
+		// Every event this session sends names it -- the translated runtime
+		// events and the ones made here (mistake notices, loop and stop notices)
+		// alike. A sub-agent's "1 tool call(s) failed: [editor]" went out
+		// without a parent and rendered in the lead's chat (pandorum,
+		// 2026-09-26); the adapter's stamp only covered the translated half.
+		const event = this.stampIdentity(input);
 		for (const listener of this.listeners) {
 			try {
 				listener(event);
@@ -1681,6 +1687,20 @@ export class SessionRuntime {
 				});
 			}
 		}
+	}
+
+	private stampIdentity(event: AgentEvent): AgentEvent {
+		const record = event as unknown as Record<string, unknown>;
+		const stamp: Record<string, unknown> = {};
+		if (record.agentId === undefined && this.agentId) {
+			stamp.agentId = this.agentId;
+		}
+		if (record.parentAgentId === undefined && this.parentAgentId) {
+			stamp.parentAgentId = this.parentAgentId;
+		}
+		return Object.keys(stamp).length > 0
+			? ({ ...event, ...stamp } as AgentEvent)
+			: event;
 	}
 
 	/**

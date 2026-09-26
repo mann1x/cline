@@ -2581,6 +2581,37 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 		);
 	});
 
+	it("names a sub-agent's parent on the notices it makes itself, not only on translated events", async () => {
+		const notices: Array<Record<string, unknown>> = [];
+		const { deps } = makeScriptedRuntime({
+			events: failedStructuredToolTurnEvents(),
+		});
+		const session = new SessionRuntime(
+			{
+				...makeAgentConfig({ execution: { maxConsecutiveMistakes: 1 } }),
+				parentAgentId: "agent_lead",
+			},
+			{
+				...deps,
+				telemetry: undefined,
+				logger: { log() {}, debug() {}, error() {} },
+			},
+		);
+		session.subscribeEvents((event) => {
+			if (event.type === "error") {
+				notices.push(event as unknown as Record<string, unknown>);
+			}
+		});
+
+		await session.run("run tool");
+
+		expect(notices.length).toBeGreaterThan(0);
+		for (const notice of notices) {
+			expect(notice.parentAgentId).toBe("agent_lead");
+			expect(notice.agentId).toBe(session.getAgentId());
+		}
+	});
+
 	it("resets mistake tracking when run() starts a fresh conversation", async () => {
 		const { deps, abortCalls } = makeScriptedRuntime({
 			events: failedToolTurnEvents(),
