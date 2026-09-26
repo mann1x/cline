@@ -284,7 +284,7 @@ Return a snapshot of team members, task counts, mailbox, and mission log stats. 
 Manage shared team tasks with action-specific payloads. create requires title and description, with optional dependsOn and assignee. list accepts optional status, assignee. claim requires taskId. complete requires taskId and summary. block requires taskId and reason. Do not include fields from other actions. Output: {action: "create", taskId, status, ignoredFields?: [...], note?} | {action: "list", tasks: [{...}]} | {action: "claim", taskId, status, nextStep} | {action: "complete", taskId, status} | {action: "block", taskId, status}. The shape depends on the action you sent; only list returns the tasks themselves.
 
 # tool: team_run_task
-Route a delegated task to a teammate. Choose sync (wait) or async (run in background). Output: {agentId, mode, status, dispatched, message, deduped?, runId?, text?, iterations?, maxIterations?, finishReason?, stopReason?: "iteration_cap"}. In sync mode text holds the teammate's answer. In async mode it does not: you get a runId, and the answer arrives from team_await_runs.
+Route a delegated task to a teammate. Choose sync (wait) or async (run in background). Output: {agentId, mode, status, dispatched, message, deduped?, runId?, text?, iterations?, maxIterations?, finishReason?, stopReason?: "iteration_cap"}. In sync mode text holds the teammate's answer: whole when short, else its opening and the name of its full report for read_agent_report. In async mode it does not: you get a runId, and the answer arrives from team_await_runs.
 
 # tool: team_cancel_run
 Cancel one async teammate run. Output: {runId, status}.

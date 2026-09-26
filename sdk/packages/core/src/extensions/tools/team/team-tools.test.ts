@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TeamRuntimeState } from "@cline/shared";
+import type { AgentResult, TeamRuntimeState } from "@cline/shared";
 import { resolveTeamDataDir } from "@cline/shared/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FileTeamStore } from "../../../services/storage/file-team-store";
@@ -1671,5 +1671,88 @@ describe("an async run's answer", () => {
 			'\n\n---\nThis agent worked on a private copy of the workspace; its changes are held for you as revisions (NOT written to disk):\n  - src/a.ts — revision #3 (changed by "w")';
 		const { one } = await awaitAnswer(`${"y".repeat(3_000)}${note}`);
 		expect(one.resultSummary?.text?.endsWith(note)).toBe(true);
+	});
+});
+
+/**
+ * A sync team_run_task handed the teammate's whole answer back as the tool
+ * result, however long: the one delegated answer not bounded like the
+ * others. It comes back as an async one does now.
+ */
+describe("a sync run's answer", () => {
+	const lead = {
+		agentId: "lead",
+		conversationId: "conv-1",
+		iteration: 1,
+		sessionId: "session-sync-answers",
+		toolCallId: "call-1",
+	};
+
+	async function runSync(
+		answer: string,
+		finishReason: AgentResult["finishReason"] = "completed",
+	) {
+		const runtime = new AgentTeamsRuntime({ teamName: "test-team" });
+		(
+			runtime as unknown as {
+				members: Map<string, Record<string, unknown>>;
+			}
+		).members.set("w", {
+			agentId: "w",
+			role: "teammate",
+			status: "idle",
+			runningCount: 0,
+			lastMissionStep: 0,
+			lastMissionAt: Date.now(),
+			agent: {
+				canStartRun: () => true,
+				run: async () => ({
+					text: answer,
+					finishReason,
+					iterations: 1,
+					durationMs: 1,
+					usage: { inputTokens: 1, outputTokens: 1 },
+					messages: [],
+					toolCalls: [],
+				}),
+				getMessages: () => [],
+				abort: () => {},
+			},
+		});
+		const tools = createAgentTeamsTools({
+			runtime,
+			requesterId: "lead",
+			teammateConfigProvider: makeTeammateConfigProvider(),
+		});
+		const run = tools.find((tool) => tool.name === "team_run_task");
+		return (await run?.execute({ agentId: "w", task: "report" }, lead)) as {
+			text?: string;
+			message: string;
+		};
+	}
+
+	it("comes back whole when it is short", async () => {
+		const answer = "No defects.";
+		expect((await runSync(answer)).text).toBe(answer);
+	});
+
+	it("comes back as its opening and a full report to read when it is long", async () => {
+		const lines = Array.from(
+			{ length: 100 },
+			(_, index) => `finding ${index}: ${"x".repeat(40)}`,
+		);
+		const text = (await runSync(lines.join("\n"))).text ?? "";
+		expect(text.startsWith(lines.slice(0, 5).join("\n"))).toBe(true);
+		expect(text.length).toBeLessThan(1_300);
+		const name = /read_agent_report\(name: "([^"]+)"\)/.exec(text)?.[1];
+		expect(readAgentReport(lead.sessionId, name ?? "")).toContain(
+			"finding 99:",
+		);
+	});
+
+	it("says a stopped task was stopped, not completed", async () => {
+		const result = await runSync("partial", "aborted");
+		expect(result.message).toMatch(/stopped before it finished/);
+		expect(result.message).not.toMatch(/completed/);
 	});
 });

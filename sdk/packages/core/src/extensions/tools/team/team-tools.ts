@@ -219,6 +219,21 @@ function answerForLead(
 	if (full === undefined) {
 		return undefined;
 	}
+	return boundedAnswer(runtime, sessionId, run.id, run.agentId, full);
+}
+
+/**
+ * A teammate's answer, bounded: whole when short, else its opening, the
+ * name of its full report, and the hand-back note whole. `key` names the
+ * answer in its session -- a run's id, a sync call's -- so it is filed once.
+ */
+function boundedAnswer(
+	runtime: AgentTeamsRuntime,
+	sessionId: string | undefined,
+	key: string,
+	agentId: string,
+	full: string,
+): string {
 	const at = full.lastIndexOf(HANDBACK_NOTE_MARK);
 	const answer = at >= 0 ? full.slice(0, at) : full;
 	const note = at >= 0 ? full.slice(at) : "";
@@ -230,11 +245,11 @@ function answerForLead(
 		filed = new Map();
 		FILED_RUN_REPORTS.set(runtime, filed);
 	}
-	const key = `${sessionId ?? ""}\u0000${run.id}`;
-	let name = filed.get(key);
+	const filedKey = `${sessionId ?? ""}\u0000${key}`;
+	let name = filed.get(filedKey);
 	if (!name) {
-		name = recordAgentReport(sessionId, `${run.agentId}:${run.id}`, full);
-		filed.set(key, name);
+		name = recordAgentReport(sessionId, `${agentId}:${key}`, full);
+		filed.set(filedKey, name);
 	}
 	const lines = full.split("\n").length;
 	return `${answer.slice(0, AGENT_SUMMARY_MAX_CHARS - 1)}…\n\n[Full report: ${full.length.toLocaleString("en-US")} characters, ${lines} lines. Read it with ${READ_AGENT_REPORT_TOOL_NAME}(name: "${name}").]${note}`;
@@ -742,6 +757,8 @@ export function createAgentTeamsTools(
 	const pendingSyncRuns = new Map<string, Promise<TeamRunTaskToolResult>>();
 	// The last sync run dispatched to each teammate, for the next to wait on.
 	const syncQueueTails = new Map<string, Promise<TeamRunTaskToolResult>>();
+	// Names a sync answer's report when the call has no id of its own.
+	let syncAnswers = 0;
 
 	tools.push(
 		createTool<TeamRunTaskInput, TeamRunTaskToolResult>({
@@ -750,10 +767,10 @@ export function createAgentTeamsTools(
 				"Route a delegated task to a teammate. Choose sync (wait) or async (run in background)." +
 				describeOutput(
 					TeamRunTaskToolResultSchema,
-					"In sync mode text holds the teammate's answer. In async mode it does not: you get a runId, and the answer arrives from team_await_runs.",
+					"In sync mode text holds the teammate's answer: whole when short, else its opening and the name of its full report for read_agent_report. In async mode it does not: you get a runId, and the answer arrives from team_await_runs.",
 				),
 			inputSchema: zodToJsonSchema(TeamRunTaskInputSchema),
-			execute: async (input) => {
+			execute: async (input, context) => {
 				const validatedInput = validateWithZod(TeamRunTaskInputSchema, input);
 				// The lead's cap for this task; refused, not ignored, when it is
 				// not a number of turns.
@@ -826,6 +843,7 @@ export function createAgentTeamsTools(
 				)
 					.then((result) => {
 						const capped = result.finishReason === "max_iterations";
+						const stopped = result.finishReason === "aborted";
 						return validateWithZod(TeamRunTaskToolResultSchema, {
 							agentId: validatedInput.agentId,
 							mode: "sync" as const,
@@ -833,8 +851,18 @@ export function createAgentTeamsTools(
 							dispatched: true,
 							message: capped
 								? `${validatedInput.agentId} stopped at its iteration cap after ${result.iterations} iterations; its conversation is kept. To go on, run team_run_task again with continueConversation: true (and a higher max_iterations).`
-								: `Task dispatched to ${validatedInput.agentId} and completed in sync mode.`,
-							text: result.text,
+								: stopped
+									? `${validatedInput.agentId} was stopped before it finished; text is what it had written.`
+									: `Task dispatched to ${validatedInput.agentId} and completed in sync mode.`,
+							// Bounded like every agent report: a long answer is its
+							// opening and a full report for read_agent_report.
+							text: boundedAnswer(
+								options.runtime,
+								context?.sessionId,
+								`sync:${context?.toolCallId ?? `${options.requesterId}-${++syncAnswers}`}`,
+								validatedInput.agentId,
+								result.text,
+							),
 							iterations: result.iterations,
 							...(maxIterations !== undefined ? { maxIterations } : {}),
 							...(result.finishReason
