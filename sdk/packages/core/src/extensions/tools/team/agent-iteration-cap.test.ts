@@ -201,6 +201,122 @@ describe("an agent that reaches its iteration cap", () => {
 	});
 });
 
+const LOOP_STOP = "repeated-call loop guard stopped the run at iteration 12";
+
+function looped(iterations: number, text = ""): AgentResult {
+	return { ...result("aborted", iterations, text), abortReason: LOOP_STOP };
+}
+
+describe("an agent the loop guard stops", () => {
+	it("waits for the lead, who is told it was looping, and resumes with the lead's instructions", async () => {
+		const heard = listeningLead();
+		const agent = scriptedAgent(30, [result("completed", 2, "fixed it")]);
+		const updates: unknown[] = [];
+		const running = runDelegatedWithCap({
+			agent,
+			start: async () => looped(12, "ran the test again"),
+			name: "braces-8",
+			sessionId: "lead",
+			emitUpdate: (update) => updates.push(update),
+		});
+		await vi.waitFor(() => expect(listAwaitingLead("lead")).toHaveLength(1));
+		expect(listAwaitingLead("lead")[0]).toMatchObject({
+			reason: "looping",
+			detail: LOOP_STOP,
+		});
+		flushAwaitingLeadNotices();
+		const notice = heard.join("\n");
+		expect(notice).toContain("braces-8");
+		expect(notice).toContain("LOOPING");
+		expect(notice).toContain(LOOP_STOP);
+		expect(notice).toContain("restart_agent");
+		expect(updates).toContainEqual({
+			awaitingLead: {
+				iterations: 12,
+				maxIterations: 30,
+				reason: "looping",
+				detail: LOOP_STOP,
+			},
+		});
+
+		expect(
+			resumeSuspended("braces-8", 5, "lead", "Read the script's output instead")
+				.ok,
+		).toBe(true);
+		const done = await running;
+		expect(agent.continued[0]).toContain("loop guard");
+		expect(agent.continued[0]).toContain("Read the script's output instead");
+		// The 18 turns it had left under its cap carry over, plus the 5.
+		expect(agent.caps).toEqual([23]);
+		expect(done.maxIterations).toBe(35);
+		expect(done.result.text).toBe("fixed it");
+		expect(done.stopReason).toBeUndefined();
+	});
+
+	it("gives an agent with no cap no cap when it resumes", async () => {
+		listeningLead();
+		const agent = scriptedAgent(undefined, [result("completed", 2, "ok")]);
+		const running = runDelegatedWithCap({
+			agent,
+			start: async () => looped(7),
+			name: "a",
+			sessionId: "lead",
+		});
+		await vi.waitFor(() => expect(listAwaitingLead("lead")).toHaveLength(1));
+		resumeSuspended("a", 3, "lead");
+		const done = await running;
+		expect(agent.caps).toEqual([undefined]);
+		expect(done.result.text).toBe("ok");
+	});
+
+	it("keeps the work, reported as the loop guard's stop, when the lead stops it", async () => {
+		listeningLead();
+		const running = runDelegatedWithCap({
+			agent: scriptedAgent(30, []),
+			start: async () => looped(12, "so far"),
+			name: "a",
+			sessionId: "lead",
+		});
+		await vi.waitFor(() => expect(listAwaitingLead("lead")).toHaveLength(1));
+		expect(stopSuspended("a", { sessionId: "lead" }).message).toContain(
+			"loop guard",
+		);
+		const done = await running;
+		expect(done.stopReason).toBe("loop_guard");
+		expect(done.result.text).toBe("so far");
+	});
+
+	it("does not hold a run someone stopped from outside", async () => {
+		listeningLead();
+		const controller = new AbortController();
+		controller.abort();
+		const done = await runDelegatedWithCap({
+			agent: scriptedAgent(30, []),
+			start: async () => looped(3),
+			name: "a",
+			sessionId: "lead",
+			signal: controller.signal,
+		});
+		expect(done.stopReason).toBeUndefined();
+		expect(listAwaitingLead("lead")).toHaveLength(0);
+	});
+
+	it("does not hold an abort that was not the loop guard", async () => {
+		listeningLead();
+		const done = await runDelegatedWithCap({
+			agent: scriptedAgent(30, []),
+			start: async () => ({
+				...result("aborted", 3),
+				abortReason: "maximum consecutive mistakes reached (6)",
+			}),
+			name: "a",
+			sessionId: "lead",
+		});
+		expect(done.stopReason).toBeUndefined();
+		expect(listAwaitingLead("lead")).toHaveLength(0);
+	});
+});
+
 describe("an agent at its cap with no lead to ask", () => {
 	it("returns as awaiting_lead, keeps its resources, and resumes in the background", async () => {
 		const agent = scriptedAgent(4, [result("completed", 2, "finished later")]);

@@ -444,9 +444,17 @@ function withControls(
 ): WorkDigest {
 	const lines: string[] = [];
 	const cap = result.maxIterations ?? result.iterations;
-	if (result.state === "awaiting_lead") {
+	if (result.state === "awaiting_lead" && result.stopReason === "loop_guard") {
+		lines.push(
+			`LOOPING: the loop guard stopped it for sending the same call again; WAITING for you, work kept: resume_agent(agent_id: "${result.agentId ?? digest.agent ?? ""}", extra_iterations: <n>, instructions: "<what to do instead>") continues it, restart_agent starts it over.`,
+		);
+	} else if (result.state === "awaiting_lead") {
 		lines.push(
 			`WAITING at its ${cap}-iteration cap, work kept: resume_agent(agent_id: "${result.agentId ?? digest.agent ?? ""}", extra_iterations: <n>) continues it.`,
+		);
+	} else if (result.stopReason === "loop_guard") {
+		lines.push(
+			"Stopped by the loop guard for repeating the same call; the above is what it got to.",
 		);
 	} else if (result.stopReason === "iteration_cap") {
 		lines.push(

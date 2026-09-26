@@ -157,6 +157,11 @@ export function describeReason(
 			return `waiting on infrastructure: ${wait.where} ${oneLine(wait.detail, 80) || "not answering"}, retrying ${since}`;
 		}
 		case "awaiting_lead":
+			if (agent.awaitingReason === "looping") {
+				return `LOOPING: the loop guard stopped it for sending the same call again after its warning, after ${agent.iterations ?? "?"} iterations, its work kept${
+					agent.stopDetail ? ` (${oneLine(agent.stopDetail, 200)})` : ""
+				}; resume_agent(agent_id, extra_iterations, instructions) continues it -- say what to do instead of that call -- restart_agent(agent_id, instructions) starts it over, stop_agents takes its work as it is`;
+			}
 			return `stopped at its ${agent.maxIterations ?? "?"}-iteration cap after ${agent.iterations ?? agent.maxIterations ?? "?"} iterations, its work kept; resume_agent(agent_id, extra_iterations) continues it, stop_agents takes its work as it is, restart_agent starts it over`;
 		case "queued":
 			return agent.requeues > 0
@@ -172,6 +177,8 @@ export function describeReason(
 			const reason = agent.stopReason ?? state;
 			const label: Record<string, string> = {
 				iteration_cap: `reached its ${agent.maxIterations ?? "?"}-iteration cap`,
+				looping:
+					"the loop guard stopped it for repeating the same call, and it was ended there",
 				context_overflow: "its context overflowed and could not be recovered",
 				mistake_limit: "stopped by its own guard (repeated mistakes or a loop)",
 				engine_error: "the engine returned an error it could not retry",

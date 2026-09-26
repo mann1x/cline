@@ -374,8 +374,8 @@ export function applySubagentIterationCap(entry: SubagentStatusItem, update: Rec
 	if (cap !== undefined) {
 		entry.maxIterations = cap
 	}
-	if (update.stopReason === "iteration_cap") {
-		entry.stopReason = "iteration_cap"
+	if (update.stopReason === "iteration_cap" || update.stopReason === "loop_guard") {
+		entry.stopReason = update.stopReason
 	}
 	// Waiting, from the spawn tool's own update while the round is open...
 	const waiting = update.awaitingLead
@@ -383,10 +383,21 @@ export function applySubagentIterationCap(entry: SubagentStatusItem, update: Rec
 		const record = waiting as Record<string, unknown>
 		const maxIterations = positive(record.maxIterations) ?? entry.maxIterations ?? 0
 		const iterations = positive(record.iterations) ?? maxIterations
+		const looping = record.reason === "looping"
+		const detail = looping && typeof record.detail === "string" ? record.detail : undefined
 		if (!entry.awaitingLead) {
-			pushSubagentActivity(entry, `Awaiting lead (iteration cap ${maxIterations})`, "warn")
+			pushSubagentActivity(
+				entry,
+				looping ? "Looping: stopped by the loop guard, awaiting lead" : `Awaiting lead (iteration cap ${maxIterations})`,
+				"warn",
+			)
 		}
-		entry.awaitingLead = { iterations, maxIterations }
+		entry.awaitingLead = {
+			iterations,
+			maxIterations,
+			...(looping ? { reason: "looping" as const } : {}),
+			...(detail ? { detail } : {}),
+		}
 		entry.maxIterations = maxIterations
 	} else if (waiting === null && entry.awaitingLead) {
 		entry.awaitingLead = undefined
@@ -397,7 +408,14 @@ export function applySubagentIterationCap(entry: SubagentStatusItem, update: Rec
 	// ...or from a report that returned while it still waits.
 	if (update.state === "awaiting_lead") {
 		const maxIterations = cap ?? entry.maxIterations ?? 0
-		entry.awaitingLead = { iterations: positive(update.iterations) ?? maxIterations, maxIterations }
+		entry.awaitingLead = {
+			iterations: positive(update.iterations) ?? maxIterations,
+			maxIterations,
+			...(update.stopReason === "loop_guard" || entry.awaitingLead?.reason === "looping"
+				? { reason: "looping" as const }
+				: {}),
+			...(entry.awaitingLead?.detail ? { detail: entry.awaitingLead.detail } : {}),
+		}
 	}
 }
 

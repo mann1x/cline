@@ -189,7 +189,7 @@ export const RESTART_AGENT_DESCRIPTION =
 	"Start an agent over from its original task, discarding its transcript and its workspace changes. It keeps its place in the round, its check, its sampler (a random seed is drawn again) and its iteration cap. `instructions` are added to its task as revised instructions -- say what to do differently. Works on a running agent and on one that has finished, failed or been stopped; a finished agent's new report reaches you when it ends.";
 
 export const RESUME_AGENT_DESCRIPTION =
-	"Continue an agent that stopped at its iteration cap and is waiting for you (awaiting_lead), with `extra_iterations` more turns. It carries on from where it stopped, with its transcript and its changes. To take its work as it is instead, stop it (stop_agents); to start it over, restart_agent.";
+	"Continue an agent that is waiting for you (awaiting_lead): one that stopped at its iteration cap, or one the loop guard stopped for repeating the same call. It carries on from where it stopped, with its transcript and its changes, and `extra_iterations` more turns. `instructions` are added as it resumes -- for a looping agent, say what to do instead of the call it repeated. To take its work as it is instead, stop it (stop_agents); to start it over, restart_agent.";
 
 export const RETRY_FAILED_DESCRIPTION =
 	"Run a round's failed and cancelled agents again, each from the task it was originally given (and any revised instructions from a restart), with the same check, sampler and cap. `agent_ids` limits it to some of them. The round reports again when they finish. Infrastructure trouble never fails an agent -- it is retried on its own -- so what this reruns failed on its task: consider restart_agent with instructions for one that will fail the same way again.";
@@ -198,7 +198,7 @@ export const MESSAGE_AGENTS_DESCRIPTION =
 	"Leave a message for running agents. Each reads it at its next turn, between tool calls, and carries on with it in mind. Use it to pass on a change of plan, a constraint, or an answer.";
 
 export const STOP_AGENTS_DESCRIPTION =
-	"Stop running agents. A stopped agent reports as cancelled by you, with the work it had done so far; the rest of its round carries on. An agent waiting at its iteration cap is ended with its work kept.";
+	"Stop running agents. A stopped agent reports as cancelled by you, with the work it had done so far; the rest of its round carries on. An agent waiting on you -- at its iteration cap, or stopped by the loop guard -- is ended with its work kept.";
 
 function textOf(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -344,6 +344,11 @@ export function createLeadAgentControlTools(
 						minimum: 1,
 						description: "How many more turns it may take.",
 					},
+					instructions: {
+						type: "string",
+						description:
+							"What it should do now, added to its conversation as it resumes. For an agent the loop guard stopped, say what to do instead of the call it repeated.",
+					},
 				},
 				required: ["agent_id", "extra_iterations"],
 			},
@@ -362,13 +367,19 @@ export function createLeadAgentControlTools(
 					target?.cancelId ?? ref,
 					extra,
 					sessionId,
+					textOf(record.instructions),
 				);
 				if (!resumed.ok) {
 					return target
-						? `${target.label} is ${stateOf(target)}, not waiting at its iteration cap: there is nothing to resume.`
+						? `${target.label} is ${stateOf(target)}, not waiting on you (at its iteration cap, or stopped by the loop guard): there is nothing to resume.`
 						: resumed.message;
 				}
-				if (target?.agent && resumed.agent) {
+				if (
+					target?.agent &&
+					resumed.agent &&
+					(resumed.agent.reason !== "looping" ||
+						target.agent.maxIterations !== undefined)
+				) {
 					target.agent.maxIterations = resumed.agent.maxIterations + extra;
 				}
 				return note(

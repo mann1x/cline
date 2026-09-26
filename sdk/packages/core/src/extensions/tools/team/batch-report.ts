@@ -74,7 +74,7 @@ export interface SpawnBatchMemberResult {
 	/** Its own id, for `resume_agent` and the status tool. */
 	agentId?: string;
 	maxIterations?: number;
-	stopReason?: "iteration_cap";
+	stopReason?: "iteration_cap" | "loop_guard";
 	state?: "awaiting_lead";
 	oracle?: AgentOracleResult;
 	/**
@@ -107,7 +107,7 @@ export interface SpawnBatchIndexEntry {
 	iterations?: number;
 	maxIterations?: number;
 	/** `iteration_cap` when the cap is what ended it. */
-	stopReason?: "iteration_cap";
+	stopReason?: "iteration_cap" | "loop_guard";
 	/** For an agent waiting at its cap: the id to resume it by. */
 	agentId?: string;
 	/** Its check's verdict in a word: `pass`, `fail (exit N)`, `not run: why`. */

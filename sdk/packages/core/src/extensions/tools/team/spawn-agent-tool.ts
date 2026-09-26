@@ -1667,5 +1667,8 @@ export function awaitingLeadNote(
 	agentId: string | undefined,
 	outcome: DelegatedRunOutcome,
 ): string {
+	if (outcome.stopReason === "loop_guard") {
+		return `\n\n---\n${name} was LOOPING: the loop guard stopped it for sending the same call again after its warning. It is WAITING for you, its work kept (transcript and file changes). Call resume_agent(agent_id: "${agentId ?? name}", extra_iterations: <n>, instructions: "<what to do instead>") to continue it, or restart_agent(agent_id: "${agentId ?? name}", instructions: "...") to start it over; its report arrives when it finishes. Or stop it (stop_agents) to take the above as its report.`;
+	}
 	return `\n\n---\n${name} reached its ${outcome.maxIterations ?? outcome.iterations}-iteration cap and is WAITING for you, its work kept (transcript and file changes). Call resume_agent(agent_id: "${agentId ?? name}", extra_iterations: <n>) to continue it from where it stopped; its report arrives when it finishes. Or stop it (stop_agents) to take the above as its report.`;
 }

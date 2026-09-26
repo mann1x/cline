@@ -12,8 +12,14 @@ type CapFields = Pick<SubagentStatusItem, "awaitingLead" | "maxIterations" | "st
  * stopped there. An agent that finished under its cap says nothing about it.
  */
 export function subagentCapText(item: CapFields): { text: string; warn: boolean } | undefined {
+	if (item.awaitingLead?.reason === "looping") {
+		return { text: "looping: stopped by the loop guard, awaiting lead", warn: true }
+	}
 	if (item.awaitingLead) {
 		return { text: `awaiting lead (iteration cap ${item.awaitingLead.maxIterations})`, warn: true }
+	}
+	if (item.stopReason === "loop_guard") {
+		return { text: "stopped by the loop guard (looping)", warn: true }
 	}
 	if (item.stopReason === "iteration_cap") {
 		return {

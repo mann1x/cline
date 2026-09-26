@@ -210,7 +210,7 @@ describe("resume_agent", () => {
 		expect(
 			await run("resume_agent", { agent_id: "fixer-1", extra_iterations: 5 }),
 		).toBe(
-			"r1-1 fixer-1 is running, not waiting at its iteration cap: there is nothing to resume.",
+			"r1-1 fixer-1 is running, not waiting on you (at its iteration cap, or stopped by the loop guard): there is nothing to resume.",
 		);
 		expect(
 			await run("resume_agent", { agent_id: "fixer-1", extra_iterations: 0 }),

@@ -72,6 +72,8 @@ export type AgentStopReason =
 	| "completed"
 	/** Reached its iteration cap. */
 	| "iteration_cap"
+	/** The loop guard stopped it for sending the same call again. */
+	| "looping"
 	/** Its context overflowed and could not be recovered. */
 	| "context_overflow"
 	/** Too many consecutive mistakes, or a loop guard ended it. */
@@ -157,6 +159,8 @@ export interface RoundAgentRecord extends RoundAgentSpec {
 	stopReason?: AgentStopReason;
 	/** A line on the stop: the error, the abort's reason. */
 	stopDetail?: string;
+	/** While it waits on the lead: its cap, or a loop the guard stopped. */
+	awaitingReason?: "iteration_cap" | "looping";
 	queuedAt: number;
 	startedAt?: number;
 	endedAt?: number;
@@ -1236,8 +1240,15 @@ export class RoundHandle {
 			const cap = update.awaitingLead as {
 				iterations?: unknown;
 				maxIterations?: unknown;
+				reason?: unknown;
+				detail?: unknown;
 			};
 			agent.state = "awaiting_lead";
+			agent.awaitingReason =
+				cap.reason === "looping" ? "looping" : "iteration_cap";
+			if (cap.reason === "looping" && typeof cap.detail === "string") {
+				agent.stopDetail = cap.detail;
+			}
 			if (typeof cap.iterations === "number") {
 				agent.iterations = cap.iterations;
 			}
@@ -1249,6 +1260,7 @@ export class RoundHandle {
 			agent.state === "awaiting_lead"
 		) {
 			agent.state = "running";
+			agent.awaitingReason = undefined;
 		}
 		const text = (key: string) =>
 			typeof update[key] === "string" ? (update[key] as string) : undefined;
@@ -1413,6 +1425,8 @@ export class RoundHandle {
 			}
 			if (event.type === "suspended") {
 				agent.state = "awaiting_lead";
+				agent.awaitingReason =
+					event.agent.reason === "looping" ? "looping" : "iteration_cap";
 				this.rounds.schedulePersist();
 				return;
 			}
@@ -1480,10 +1494,16 @@ export class RoundHandle {
 						this.live.controller.signal.aborted,
 					);
 		const at = this.rounds.now_();
-		// Returned while it waits at its cap: it has not ended.
+		// Returned while it waits on the lead: it has not ended.
 		if (output.state === "awaiting_lead") {
 			end.state = "awaiting_lead";
-			end.reason = "iteration_cap";
+			end.reason =
+				output.stopReason === "loop_guard" ? "looping" : "iteration_cap";
+			agent.awaitingReason = end.reason;
+		} else if (output.stopReason === "loop_guard" && !stoppedBy) {
+			// Ended where the loop guard stopped it, with nobody to ask.
+			end.state = "failed";
+			end.reason = "looping";
 		}
 		agent.maxIterations = output.maxIterations ?? agent.maxIterations;
 		agent.state = end.state;

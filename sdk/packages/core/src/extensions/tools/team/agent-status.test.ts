@@ -233,6 +233,36 @@ describe("agents_status for one agent", () => {
 		).toContain("awaiting-lead 1");
 	});
 
+	it("shows an agent the loop guard stopped as looping, with what the guard said", async () => {
+		const rounds = roundsFor("s1");
+		const handle = rounds.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: true,
+			agents: [{ name: "braces-8", task: "t" }],
+		});
+		void handle.run(0, context, (ctx) => {
+			ctx.emitUpdate?.({
+				awaitingLead: {
+					iterations: 12,
+					maxIterations: 30,
+					reason: "looping",
+					detail: "repeated-call loop guard stopped the run at iteration 12",
+				},
+			});
+			return new Promise(() => {});
+		});
+		const text = renderAgentsStatus(
+			{ agent_id: "braces-8" },
+			{ sessionId: "s1", now: () => NOW },
+		);
+		expect(text).toContain("awaiting_lead: LOOPING: the loop guard stopped it");
+		expect(text).toContain(
+			"repeated-call loop guard stopped the run at iteration 12",
+		);
+		expect(text).toContain("restart_agent(agent_id, instructions)");
+	});
+
 	it("says so when there is no such agent", () => {
 		expect(renderAgentsStatus({ agent_id: "r9-9" }, { sessionId: "s1" })).toBe(
 			"r9-9: no agent by that id or name in this session.",

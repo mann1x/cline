@@ -16,6 +16,13 @@
  * round does not return while one of its agents waits: the spawn call is the
  * thing waiting, and the lead's side turn is where it decides.
  *
+ * **A loop is treated like the cap.** A run the repeated-call loop guard
+ * stopped -- the same call, arguments unchanged, sent again after its warning
+ * -- is suspended the same way (user ruling, 2026-09-26: the lead is told the
+ * agent was looping and picks resume_agent or restart_agent with new
+ * instructions). Ending it there threw its work away: three workers of the
+ * 0926b swarm were ended so, reported only as "stopped".
+ *
  * With nobody to ask -- a host that registered no lead listener, so no side
  * turn and no queue -- the agent is *detached*: its spawn returns at once with
  * the agent reported `awaiting_lead`, and the agent stays suspended with its
@@ -51,6 +58,9 @@ export interface CappableAgent {
 	continue(message?: string): Promise<AgentResult>;
 }
 
+/** Why an agent waits on the lead: its iteration cap, or a loop the guard stopped. */
+export type AwaitingLeadReason = "iteration_cap" | "looping";
+
 /** An agent waiting on the lead, as the lead and the status tool see it. */
 export interface AwaitingLeadView {
 	/** The agent's own id (its runtime's). */
@@ -68,10 +78,14 @@ export interface AwaitingLeadView {
 	since: number;
 	/** Its spawn call has returned; a resume runs it in the background. */
 	detached: boolean;
+	/** Why it waits; absent is the cap. */
+	reason?: AwaitingLeadReason;
+	/** For a loop: the guard's own words, naming the call it repeated. */
+	detail?: string;
 }
 
 /** Why an agent's run came to an end, as far as the cap is concerned. */
-export type DelegatedStopReason = "iteration_cap";
+export type DelegatedStopReason = "iteration_cap" | "loop_guard";
 
 /** A delegated run, with what the cap and the check made of it. */
 export interface DelegatedRunOutcome {
@@ -96,7 +110,7 @@ export type AwaitingLeadEvent =
 	| { type: "finished"; agent: AwaitingLeadView; outcome: DelegatedRunOutcome };
 
 type LeadDecision =
-	| { kind: "resume"; extraIterations: number }
+	| { kind: "resume"; extraIterations: number; instructions?: string }
 	| { kind: "stop"; reason: string };
 
 interface Entry {
@@ -203,6 +217,7 @@ export function resumeSuspended(
 	idOrName: string,
 	extraIterations: number,
 	sessionId?: string,
+	instructions?: string,
 ): ResumeSuspendedResult {
 	const extra = Math.floor(Number(extraIterations));
 	if (!Number.isFinite(extra) || extra < 1) {
@@ -216,12 +231,17 @@ export function resumeSuspended(
 		return { ok: false, message: error ?? "Not found." };
 	}
 	const agent = { ...entry.view };
-	entry.decide({ kind: "resume", extraIterations: extra });
+	const said = instructions?.trim();
+	entry.decide({
+		kind: "resume",
+		extraIterations: extra,
+		...(said ? { instructions: said } : {}),
+	});
 	return {
 		ok: true,
 		message: `Resumed ${agent.name} with ${extra} more iteration${
 			extra === 1 ? "" : "s"
-		} (cap now ${agent.maxIterations + extra}).${
+		} (cap now ${agent.maxIterations + extra})${said ? ", with your instructions" : ""}.${
 			agent.detached
 				? " It runs in the background; its report arrives when it finishes."
 				: " Its report comes back with its round."
@@ -250,7 +270,7 @@ export function stopSuspended(
 	});
 	return {
 		ok: true,
-		message: `Stopped ${agent.name} at its iteration cap; its work so far is its report.`,
+		message: `Stopped ${agent.name} ${agent.reason === "looping" ? "where the loop guard stopped it" : "at its iteration cap"}; its work so far is its report.`,
 		agent,
 	};
 }
@@ -259,14 +279,34 @@ export function stopSuspended(
 export function describeAwaitingLead(
 	views: readonly AwaitingLeadView[],
 ): string {
-	const lines = views.map(
-		(view) =>
-			`- ${view.name} (agent id ${view.agentId}) reached its ${view.maxIterations}-iteration cap after ${view.iterations} iterations.`,
-	);
+	const looping = views.filter((view) => view.reason === "looping");
+	const capped = views.filter((view) => view.reason !== "looping");
+	const lines = [
+		...capped.map(
+			(view) =>
+				`- ${view.name} (agent id ${view.agentId}) reached its ${view.maxIterations}-iteration cap after ${view.iterations} iterations.`,
+		),
+		...looping.map(
+			(view) =>
+				`- ${view.name} (agent id ${view.agentId}) was LOOPING: it sent the same call again after the loop guard's warning, and the guard stopped it after ${view.iterations} iterations.${
+					view.detail ? ` The guard said: ${oneLine(view.detail, 300)}` : ""
+				}`,
+		),
+	];
+	const why =
+		looping.length === 0
+			? "stopped at the iteration cap"
+			: capped.length === 0
+				? "were stopped by the loop guard"
+				: "stopped at the iteration cap or were stopped by the loop guard";
 	return [
-		`${views.length === 1 ? "An agent has" : `${views.length} agents have`} stopped at the iteration cap and ${views.length === 1 ? "is" : "are"} waiting for you. The work is kept -- transcript and file changes -- and nothing has been discarded:`,
+		`${views.length === 1 ? "An agent has" : `${views.length} agents have`} ${views.length === 1 ? why.replace("were stopped", "was stopped") : why} and ${views.length === 1 ? "is" : "are"} waiting for you. The work is kept -- transcript and file changes -- and nothing has been discarded:`,
 		...lines,
-		`Call ${RESUME_AGENT_TOOL_NAME}(agent_id, extra_iterations) to continue one from where it stopped with a raised cap, or stop it (stop_agents) to take its work as it is, or restart it. Its round does not return until you decide.`,
+		`Call ${RESUME_AGENT_TOOL_NAME}(agent_id, extra_iterations, instructions?) to continue one from where it stopped${
+			looping.length > 0
+				? " -- for a looping agent, say in `instructions` what to do instead of the call it repeated"
+				: " with a raised cap"
+		}; restart_agent(agent_id, instructions) to start it over with revised instructions; or stop it (stop_agents) to take its work as it is. Its round does not return until you decide.`,
 	].join("\n");
 }
 
@@ -425,9 +465,39 @@ function addUsage(
 	};
 }
 
-/** What an agent is told when the lead raises its cap. */
-export function resumeNote(extraIterations: number): string {
-	return `The lead raised your iteration budget by ${extraIterations}. Continue from exactly where you stopped -- your earlier work is all still here -- finish the task, and give your answer.`;
+/** What an agent is told when the lead raises its cap, or lets it go on after a loop. */
+export function resumeNote(
+	extraIterations: number,
+	reason: AwaitingLeadReason = "iteration_cap",
+	instructions?: string,
+): string {
+	const said = instructions?.trim()
+		? ` The lead's instructions: ${instructions.trim()}`
+		: "";
+	if (reason === "looping") {
+		return `You were stopped by the loop guard: you sent the same call again, with the same arguments, after being warned that its result could not change. The lead lets you continue${said ? "" : ", but not by repeating it"}.${said} Your earlier work is all still here. Do not send that call again as it was: change what you do, finish the task, and give your answer.`;
+	}
+	return `The lead raised your iteration budget by ${extraIterations}. Continue from exactly where you stopped -- your earlier work is all still here -- finish the task, and give your answer.${said}`;
+}
+
+/** The loop guard's stop, as a run's result carries it. */
+const LOOP_GUARD_STOP = /repeated-call loop guard/i;
+
+/** Whether the repeated-call loop guard, not a stop from outside, ended this run. */
+export function stoppedByLoopGuard(
+	result: Pick<AgentResult, "finishReason"> & { abortReason?: string },
+	signal?: AbortSignal,
+): boolean {
+	return (
+		result.finishReason === "aborted" &&
+		!signal?.aborted &&
+		LOOP_GUARD_STOP.test(result.abortReason ?? "")
+	);
+}
+
+function oneLine(text: string, max: number): string {
+	const flat = text.replace(/\s+/g, " ").trim();
+	return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
 /**
@@ -464,16 +534,36 @@ export async function runDelegatedWithCap(
 		} satisfies DelegatedRunOutcome;
 	};
 
-	const view = (detached: boolean): AwaitingLeadView => ({
-		agentId: options.agent.getAgentId(),
-		name: options.name,
-		...(options.sessionId ? { sessionId: options.sessionId } : {}),
-		...(options.cancelId ? { cancelId: options.cancelId } : {}),
-		iterations,
-		maxIterations: cap ?? iterations,
-		since: Date.now(),
-		detached,
-	});
+	/** Why the run that just ended waits on the lead, or nothing when it does not. */
+	const waitReason = (): AwaitingLeadReason | undefined =>
+		result.finishReason === "max_iterations"
+			? "iteration_cap"
+			: stoppedByLoopGuard(result, options.signal)
+				? "looping"
+				: undefined;
+	/** What a stop while it waits records as its end. */
+	const stopReasonFor = (reason: AwaitingLeadReason | undefined) =>
+		reason === "looping" ? ("loop_guard" as const) : ("iteration_cap" as const);
+
+	const view = (detached: boolean): AwaitingLeadView => {
+		const reason = waitReason();
+		return {
+			agentId: options.agent.getAgentId(),
+			name: options.name,
+			...(options.sessionId ? { sessionId: options.sessionId } : {}),
+			...(options.cancelId ? { cancelId: options.cancelId } : {}),
+			iterations,
+			maxIterations: cap ?? iterations,
+			since: Date.now(),
+			detached,
+			...(reason === "looping"
+				? {
+						reason,
+						...(result.abortReason ? { detail: result.abortReason } : {}),
+					}
+				: {}),
+		};
+	};
 
 	/**
 	 * Wait here for the lead's decision. Registered under the agent's id; a
@@ -520,6 +610,8 @@ export async function runDelegatedWithCap(
 			awaitingLead: {
 				iterations: waiting.iterations,
 				maxIterations: waiting.maxIterations,
+				...(waiting.reason ? { reason: waiting.reason } : {}),
+				...(waiting.detail ? { detail: waiting.detail } : {}),
 			},
 		});
 		emit({ type: "suspended", agent: { ...waiting } });
@@ -535,30 +627,50 @@ export async function runDelegatedWithCap(
 		return { entry, decided };
 	};
 
-	/** Resume, and carry on to the next end: finished, or the cap again. */
-	const resume = async (extra: number) => {
-		cap = (cap ?? iterations) + extra;
-		options.agent.setMaxIterations?.(extra);
-		fold(await options.agent.continue(resumeNote(extra)));
+	/**
+	 * Resume, and carry on to the next end: finished, the cap again, or
+	 * another loop. After a loop the agent had turns left under its cap:
+	 * those carry over, and an agent with no cap is not given one.
+	 */
+	const resume = async (extra: number, instructions?: string) => {
+		const reason = waitReason() ?? "iteration_cap";
+		if (reason === "looping") {
+			if (cap !== undefined) {
+				const left = Math.max(0, cap - iterations);
+				cap += extra;
+				options.agent.setMaxIterations?.(left + extra);
+			}
+		} else {
+			cap = (cap ?? iterations) + extra;
+			options.agent.setMaxIterations?.(extra);
+		}
+		fold(await options.agent.continue(resumeNote(extra, reason, instructions)));
 	};
 
 	const leadListening = () =>
 		options.sessionId !== undefined && leadCanBeReached(options.sessionId);
 
-	while (result.finishReason === "max_iterations") {
+	for (let reason = waitReason(); reason; reason = waitReason()) {
 		if (!leadListening() && options.lifetime) {
-			return detach(options, suspend, resume, () => result, outcome);
+			return detach(
+				options,
+				suspend,
+				resume,
+				waitReason,
+				stopReasonFor,
+				outcome,
+			);
 		}
 		if (!leadListening()) {
-			// Nobody to ask and nowhere to hold it: ended at the cap, work kept.
-			return outcome({ stopReason: "iteration_cap" });
+			// Nobody to ask and nowhere to hold it: ended here, work kept.
+			return outcome({ stopReason: stopReasonFor(reason) });
 		}
 		const { decided } = suspend(false);
 		const decision = await decided;
 		if (decision.kind === "stop") {
-			return outcome({ stopReason: "iteration_cap" });
+			return outcome({ stopReason: stopReasonFor(reason) });
 		}
-		await resume(decision.extraIterations);
+		await resume(decision.extraIterations, decision.instructions);
 	}
 	return outcome();
 }
@@ -573,8 +685,11 @@ function detach(
 		entry: Entry;
 		decided: Promise<LeadDecision>;
 	},
-	resume: (extra: number) => Promise<void>,
-	current: () => AgentResult,
+	resume: (extra: number, instructions?: string) => Promise<void>,
+	waitReason: () => AwaitingLeadReason | undefined,
+	stopReasonFor: (
+		reason: AwaitingLeadReason | undefined,
+	) => DelegatedStopReason,
 	outcome: (extra?: Partial<DelegatedRunOutcome>) => DelegatedRunOutcome,
 ): DelegatedRunOutcome {
 	let finish!: () => void;
@@ -585,23 +700,30 @@ function detach(
 
 	const wait = () => {
 		const { entry, decided } = suspend(true);
+		const waitingFor = waitReason();
 		const completion = decided.then(async (decision) => {
 			if (decision.kind === "stop") {
-				return outcome({ stopReason: "iteration_cap" });
+				return outcome({ stopReason: stopReasonFor(waitingFor) });
 			}
 			try {
 				const extra = decision.extraIterations;
+				const said = decision.instructions;
 				await (options.resumeThrough
-					? options.resumeThrough(() => resume(extra))
-					: resume(extra));
+					? options.resumeThrough(() => resume(extra, said))
+					: resume(extra, said));
 			} catch (error) {
 				finish();
 				throw error;
 			}
-			if (current().finishReason === "max_iterations") {
-				// At the cap again: waiting again, and this resume's caller is told so.
+			const again = waitReason();
+			if (again) {
+				// At the cap or looping again: waiting again, and this resume's
+				// caller is told so.
 				wait();
-				return outcome({ state: "awaiting_lead", stopReason: "iteration_cap" });
+				return outcome({
+					state: "awaiting_lead",
+					stopReason: stopReasonFor(again),
+				});
 			}
 			return outcome();
 		});
@@ -626,8 +748,9 @@ function detach(
 			() => undefined,
 		);
 	};
+	const first = waitReason();
 	wait();
-	return outcome({ state: "awaiting_lead", stopReason: "iteration_cap" });
+	return outcome({ state: "awaiting_lead", stopReason: stopReasonFor(first) });
 }
 
 /** Test seam. */

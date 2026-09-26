@@ -5970,6 +5970,27 @@ describe("an agent at its iteration cap, and the lead's check", () => {
 		expect(state.getSpawnAgentItems()[0]?.activity?.at(-1)?.text).toBe("Resumed by the lead")
 	})
 
+	it("marks the row looping when the loop guard stopped it, and says so in its activity", () => {
+		const state = new MessageTranslatorState()
+		start(state, { name: "braces-8", task: "fix braces" })
+		update(state, {
+			awaitingLead: {
+				iterations: 12,
+				maxIterations: 30,
+				reason: "looping",
+				detail: "repeated-call loop guard stopped the run at iteration 12",
+			},
+		})
+		const [waiting] = state.getSpawnAgentItems()
+		expect(waiting?.awaitingLead).toEqual({
+			iterations: 12,
+			maxIterations: 30,
+			reason: "looping",
+			detail: "repeated-call loop guard stopped the run at iteration 12",
+		})
+		expect(waiting?.activity?.at(-1)?.text).toBe("Looping: stopped by the loop guard, awaiting lead")
+	})
+
 	it("keeps the check's verdict, the cap and the stop reason from the report", () => {
 		const state = new MessageTranslatorState()
 		start(state, {
