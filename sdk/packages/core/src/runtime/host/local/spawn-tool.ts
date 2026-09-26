@@ -56,6 +56,7 @@ import {
 import { delegatedAgentTools } from "../../../extensions/tools/team/delegated-tools";
 import {
 	isAdmissionEvent,
+	resumePlacement,
 	runPlacedAgent,
 } from "../../../extensions/tools/team/placed-run";
 import { retryWhileSessionFull } from "../../../extensions/tools/team/session-window-retry";
@@ -657,6 +658,7 @@ export function createSessionSwarmTool(
 			admitted: () => void,
 			recoverTurnFault: TurnFaultRecovery | undefined,
 			carry: SubagentRequeueCarry | undefined,
+			nodeId?: string,
 		) => {
 			// The lead's pool lives on the lead's engine. A worker placed on
 			// another endpoint cannot attach to it, and sending the id there
@@ -836,6 +838,19 @@ export function createSessionSwarmTool(
 					await releasePolykvAgent(workerSessionId);
 				},
 				lifetime,
+				// Resumed after the round returned: back through its placement.
+				resumeThrough: resumePlacement({
+					...(nodeId && base.getRuntimeConfig().nodePlacement
+						? {
+								placement: base.getRuntimeConfig().nodePlacement,
+								nodeId,
+							}
+						: {}),
+					...(!nodeId && base.getRuntimeConfig().slotGate
+						? { slotGate: base.getRuntimeConfig().slotGate }
+						: {}),
+					signal: signalNow,
+				}),
 			});
 			capOutcome = outcome;
 			return outcome.result;
@@ -886,7 +901,13 @@ export function createSessionSwarmTool(
 								}
 							: {}),
 						run: (node, admitted, recoverTurnFault) =>
-							attempt(node.configProvider, admitted, recoverTurnFault, carry),
+							attempt(
+								node.configProvider,
+								admitted,
+								recoverTurnFault,
+								carry,
+								node.nodeId,
+							),
 						// A re-placed worker starts clean on its new node: its session
 						// and, if it was the last, its owner go back first.
 						beforeRetry: async () => {

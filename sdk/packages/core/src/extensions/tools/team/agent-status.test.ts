@@ -8,10 +8,7 @@ import {
 	STATUS_MAX_CHARS,
 } from "./agent-status";
 import type { DelegatedAgentConfigProvider } from "./delegated-agent";
-import {
-	__resetSubagentCancellations,
-	registerSubagentCancellation,
-} from "./subagent-cancellation";
+import { __resetSubagentCancellations } from "./subagent-cancellation";
 
 afterEach(() => {
 	__resetAgentRounds();
@@ -218,9 +215,10 @@ describe("agents_status for one agent", () => {
 			agents: [{ name: "slow", task: "t" }],
 		});
 		void handle.run(0, context, (ctx) => {
-			const control = registerSubagentCancellation("s1::c1", undefined, "slow");
-			ctx.emitUpdate?.({ cancelId: "s1::c1", maxIterations: 30 });
-			void control.awaitLead();
+			ctx.emitUpdate?.({ iterations: 1 });
+			ctx.emitUpdate?.({
+				awaitingLead: { iterations: 30, maxIterations: 30 },
+			});
 			return new Promise(() => {});
 		});
 		const text = renderAgentsStatus(
@@ -228,7 +226,7 @@ describe("agents_status for one agent", () => {
 			{ sessionId: "s1", now: () => NOW },
 		);
 		expect(text).toContain(
-			"awaiting_lead: stopped at its 30-iteration cap with its work kept; resume_agent to continue",
+			"awaiting_lead: stopped at its 30-iteration cap after 30 iterations, its work kept; resume_agent(agent_id, extra_iterations) continues it",
 		);
 		expect(
 			renderAgentsStatus({}, { sessionId: "s1", now: () => NOW }),
@@ -299,5 +297,36 @@ describe("agents_status for a round", () => {
 		expect(renderAgentsStatus({ round_id: "r7" }, { sessionId: "s1" })).toBe(
 			"No round r7. Rounds: r1.",
 		);
+	});
+});
+
+// E: the check's verdict, as the report carries it, in the agent's detail.
+describe("agents_status and the check", () => {
+	it("gives the check's command, verdict and output tail", async () => {
+		const rounds = roundsFor("s1");
+		const handle = rounds.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: false,
+			agents: [{ name: "a", task: "t", check: { command: "node t.js" } }],
+		});
+		await handle.run(0, context, async () => ({
+			text: "done",
+			finishReason: "completed",
+			oracle: {
+				status: "fail",
+				command: "node t.js",
+				expect: "^OK",
+				must: "match",
+				exitCode: 1,
+				output: "SyntaxError at 12",
+				runs: 3,
+			},
+		}));
+		const text = renderAgentsStatus({ agent_id: "a" }, { sessionId: "s1" });
+		expect(text).toContain(
+			"check: FAIL (exit 1) -- `node t.js` must match /^OK/, judged 3 times",
+		);
+		expect(text).toContain("output (tail): SyntaxError at 12");
 	});
 });

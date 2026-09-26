@@ -38,6 +38,8 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { AgentToolContext } from "@cline/shared";
 import type { CompactionCause } from "../../context/compaction-cause";
+import type { AgentOracleResult } from "./agent-check";
+import { type AwaitingLeadEvent, onAwaitingLead } from "./agent-iteration-cap";
 import {
 	buildSpawnBatchReport,
 	failureClassOf,
@@ -102,11 +104,18 @@ export interface AgentWaitInfo {
 	since: number;
 }
 
-/** The oracle's verdict on an agent's work, when it ran one (section E). */
-export interface AgentOracleResult {
-	passed: boolean;
-	exitCode?: number;
-	outputTail?: string;
+/** The check's verdict on an agent's work (section E): `agent-check.ts`. */
+export type { AgentOracleResult };
+
+/** The check's verdict in a few words: `pass`, `FAIL (exit 1)`, `not run (why)`. */
+export function oracleWords(oracle: AgentOracleResult): string {
+	if (oracle.status === "not_run") {
+		return `not run (${oracle.reason ?? "no command sandbox"})`;
+	}
+	if (oracle.status === "pass") {
+		return "pass";
+	}
+	return oracle.exitCode === null ? "FAIL" : `FAIL (exit ${oracle.exitCode})`;
 }
 
 /** An agent as the lead asked for it: what `retry_failed` runs again. */
@@ -233,6 +242,10 @@ export interface RoundMemberOutput {
 	/** `iteration_cap` when the cap ended it. */
 	stopReason?: string;
 	maxIterations?: number;
+	/** The check's verdict, when one was set. */
+	oracle?: AgentOracleResult;
+	/** Its runtime's id: what a detached agent's later events name it by. */
+	agentId?: string;
 }
 
 /**
@@ -1171,10 +1184,22 @@ export class RoundHandle {
 			agent.state = "running";
 			agent.startedAt ??= at;
 		}
-		if (update.awaitingLead === true) {
+		// At its cap, waiting for the lead (`agent-iteration-cap.ts`): the
+		// update carries its iterations and cap; `null` is its resume.
+		if (update.awaitingLead && typeof update.awaitingLead === "object") {
+			const cap = update.awaitingLead as {
+				iterations?: unknown;
+				maxIterations?: unknown;
+			};
 			agent.state = "awaiting_lead";
+			if (typeof cap.iterations === "number") {
+				agent.iterations = cap.iterations;
+			}
+			if (typeof cap.maxIterations === "number") {
+				agent.maxIterations = cap.maxIterations;
+			}
 		} else if (
-			update.awaitingLead === false &&
+			(update.awaitingLead === null || update.awaitingLead === false) &&
 			agent.state === "awaiting_lead"
 		) {
 			agent.state = "running";
@@ -1300,6 +1325,78 @@ export class RoundHandle {
 		return output;
 	}
 
+	/**
+	 * An agent whose run returned while it waits at its cap, its call gone
+	 * (`agent-iteration-cap.ts`: detached). The round stays open for it, its
+	 * resume and its real end are recorded as they happen, and its end
+	 * settles the round again -- a report the lead has not had.
+	 */
+	private followDetached(
+		agent: RoundAgentRecord,
+		output: RoundMemberOutput,
+	): void {
+		const cancelId = this.live.cancelIds.get(agent.index);
+		const runtimeId = output.agentId;
+		if (!runtimeId && !cancelId) {
+			return;
+		}
+		const live = this.live;
+		live.holds += 1;
+		const mine = (event: AwaitingLeadEvent) =>
+			(runtimeId !== undefined && event.agent.agentId === runtimeId) ||
+			(cancelId !== undefined && event.agent.cancelId === cancelId);
+		const stop = onAwaitingLead((event) => {
+			if (!mine(event)) {
+				return;
+			}
+			if (event.type === "resumed") {
+				agent.state = "running";
+				agent.maxIterations =
+					(agent.maxIterations ?? event.agent.maxIterations) +
+					event.extraIterations;
+				agent.activity.push({
+					at: this.rounds.now_(),
+					text: `Resumed by the lead with ${event.extraIterations} more iterations`,
+				});
+				this.rounds.schedulePersist();
+				return;
+			}
+			if (event.type === "suspended") {
+				agent.state = "awaiting_lead";
+				this.rounds.schedulePersist();
+				return;
+			}
+			if (event.type !== "finished") {
+				return;
+			}
+			stop();
+			const final = event.outcome;
+			const late: RoundMemberOutput = {
+				name: agent.name,
+				text: final.result.text,
+				iterations: final.iterations,
+				finishReason: final.result.finishReason,
+				usage: {
+					inputTokens: final.result.usage.inputTokens,
+					outputTokens: final.result.usage.outputTokens,
+				},
+				...(final.maxIterations !== undefined
+					? { maxIterations: final.maxIterations }
+					: {}),
+				...(final.stopReason ? { stopReason: final.stopReason } : {}),
+				...(final.oracle ? { oracle: final.oracle } : {}),
+			};
+			live.outputs.set(agent.index, late);
+			this.finish(agent, late, late);
+			// Its end is news the lead has not had, whoever had the round's
+			// report before.
+			live.record.delivered = false;
+			live.reportOverride = undefined;
+			live.holds -= 1;
+			this.rounds.settleIfIdle(live);
+		});
+	}
+
 	private finish(
 		agent: RoundAgentRecord,
 		output: RoundMemberOutput,
@@ -1354,10 +1451,14 @@ export class RoundHandle {
 		agent.nodeId = output.nodeId ?? agent.nodeId;
 		agent.nodeLabel = output.nodeLabel ?? agent.nodeLabel;
 		agent.samplingUsed = output.sampling ?? agent.samplingUsed;
+		agent.oracle = output.oracle ?? agent.oracle;
 		const report = (output.text ?? output.error ?? "").trim();
 		if (report) {
 			agent.result = tail(report, ROUND_OUTPUT_TAIL_CHARS);
 			agent.outputTail = agent.result;
+		}
+		if (end.state === "awaiting_lead") {
+			this.followDetached(agent, output);
 		}
 		if (end.state === "failed") {
 			const failureClass =
@@ -1589,13 +1690,7 @@ export function agentFactsLine(agent: RoundAgentRecord): string {
 		);
 	}
 	if (agent.oracle) {
-		parts.push(
-			`check ${agent.oracle.passed ? "passed" : "failed"}${
-				agent.oracle.exitCode !== undefined
-					? ` (exit ${agent.oracle.exitCode})`
-					: ""
-			}`,
-		);
+		parts.push(`check ${oracleWords(agent.oracle)}`);
 	}
 	const sampling = agent.samplingUsed;
 	if (

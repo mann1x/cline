@@ -37,13 +37,13 @@ import {
 	type AgentRounds,
 	type AgentRunState,
 	LIVE_STATES,
+	oracleWords,
 	type RoundAgentRecord,
 	type RoundRecord,
 	roundsFor,
 } from "./agent-rounds";
 import type { DelegatedAgentConfigProvider } from "./delegated-agent";
 import { REFUSED_HOLD_MAX_MS } from "./placed-run";
-import { subagentCancellation } from "./subagent-cancellation";
 
 export const AGENTS_STATUS_TOOL_NAME = "agents_status";
 
@@ -111,12 +111,26 @@ function oneLine(text: string | undefined, max: number): string {
 }
 
 /** The live state of an agent: its record, with its control's say. */
-function stateOf(agent: RoundAgentRecord, cancelId: string | undefined) {
-	const control = cancelId ? subagentCancellation.inspect(cancelId) : undefined;
-	if (control?.awaitingLead && LIVE_STATES.has(agent.state)) {
-		return "awaiting_lead" as AgentRunState;
+
+/** The check (section E): what it runs, and what it said. */
+function describeCheck(agent: RoundAgentRecord): string {
+	const oracle = agent.oracle;
+	if (oracle) {
+		const what = `\`${oracle.command}\` must ${oracle.must === "not_match" ? "not match" : "match"} /${oracle.expect}/`;
+		const tailText = oracle.output?.trim()
+			? `\n  output (tail): ${oneLine(oracle.output.slice(-400), 400)}`
+			: "";
+		return `check: ${oracleWords(oracle)} -- ${what}, judged ${oracle.runs} time${oracle.runs === 1 ? "" : "s"}${
+			oracle.reason && oracle.status !== "not_run"
+				? ` (${oneLine(oracle.reason, 120)})`
+				: ""
+		}${tailText}`;
 	}
-	return agent.state;
+	const check = agent.check as { command?: unknown } | undefined;
+	if (check) {
+		return `check: set (\`${typeof check.command === "string" ? check.command : "?"}\`), not judged yet`;
+	}
+	return "check: none";
 }
 
 /** Why an agent is where it is, in words (ruling 6). */
@@ -143,7 +157,7 @@ export function describeReason(
 			return `waiting on infrastructure: ${wait.where} ${oneLine(wait.detail, 80) || "not answering"}, retrying ${since}`;
 		}
 		case "awaiting_lead":
-			return `stopped at its ${agent.maxIterations ?? "?"}-iteration cap with its work kept; resume_agent to continue, or stop/restart it`;
+			return `stopped at its ${agent.maxIterations ?? "?"}-iteration cap after ${agent.iterations ?? agent.maxIterations ?? "?"} iterations, its work kept; resume_agent(agent_id, extra_iterations) continues it, stop_agents takes its work as it is, restart_agent starts it over`;
 		case "queued":
 			return agent.requeues > 0
 				? "queued again after a requeue, carrying its transcript"
@@ -186,25 +200,18 @@ const STATE_ORDER: AgentRunState[] = [
 	"cancelled",
 ];
 
-function roundCounts(
-	rounds: AgentRounds,
-	round: RoundRecord,
-): Record<AgentRunState, number> {
+function roundCounts(round: RoundRecord): Record<AgentRunState, number> {
 	const counts = Object.fromEntries(
 		STATE_ORDER.map((state) => [state, 0]),
 	) as Record<AgentRunState, number>;
 	for (const agent of round.agents) {
-		counts[stateOf(agent, rounds.cancelIdOf(round.id, agent.index))] += 1;
+		counts[agent.state] += 1;
 	}
 	return counts;
 }
 
-function roundLine(
-	rounds: AgentRounds,
-	round: RoundRecord,
-	now: number,
-): string {
-	const counts = roundCounts(rounds, round);
+function roundLine(round: RoundRecord, now: number): string {
+	const counts = roundCounts(round);
 	const parts = STATE_ORDER.filter((state) => counts[state] > 0).map(
 		(state) => `${state.replace("_", "-")} ${counts[state]}`,
 	);
@@ -404,7 +411,7 @@ export function describeSummary(
 	} else {
 		lines.push("Rounds, newest first:");
 		for (const round of all.slice(0, SUMMARY_ROUNDS)) {
-			lines.push(`- ${roundLine(rounds, round, now)}`);
+			lines.push(`- ${roundLine(round, now)}`);
 		}
 		const older = all.slice(SUMMARY_ROUNDS);
 		if (older.length > 0) {
@@ -432,14 +439,10 @@ export function describeSummary(
 }
 
 /** One line per agent of a round. */
-export function describeRound(
-	rounds: AgentRounds,
-	round: RoundRecord,
-	now: number,
-): string {
-	const lines = [roundLine(rounds, round, now)];
+export function describeRound(round: RoundRecord, now: number): string {
+	const lines = [roundLine(round, now)];
 	for (const agent of round.agents) {
-		const state = stateOf(agent, rounds.cancelIdOf(round.id, agent.index));
+		const state = agent.state;
 		const where = agent.nodeLabel ?? agent.nodeId;
 		const bits = [
 			state,
@@ -472,12 +475,11 @@ export function describeRound(
 
 /** One agent in full: everything ruling 6 and spec B ask for, bounded. */
 export function describeAgent(
-	rounds: AgentRounds,
 	round: RoundRecord,
 	agent: RoundAgentRecord,
 	now: number,
 ): string {
-	const state = stateOf(agent, rounds.cancelIdOf(round.id, agent.index));
+	const state = agent.state;
 	const lines = [
 		`${agent.id} ${agent.name} (round ${round.id}, ${round.tool}) -- ${state}: ${describeReason(agent, state, now)}`,
 	];
@@ -530,17 +532,7 @@ export function describeAgent(
 			`runs: ${agent.attempts}${agent.requeues > 0 ? `, requeued ${agent.requeues}x` : ""}`,
 		].join(" · "),
 	);
-	lines.push(
-		agent.oracle
-			? `check: ${agent.oracle.passed ? "passed" : "failed"}${
-					agent.oracle.exitCode !== undefined
-						? ` (exit ${agent.oracle.exitCode})`
-						: ""
-				}${agent.oracle.outputTail ? `\n  ${oneLine(agent.oracle.outputTail, 400)}` : ""}`
-			: agent.check
-				? "check: set, not run yet"
-				: "check: none",
-	);
+	lines.push(describeCheck(agent));
 	if (agent.revisedInstructions) {
 		lines.push(
 			`revised instructions: ${oneLine(agent.revisedInstructions, 300)}`,
@@ -634,7 +626,7 @@ export function renderAgentsStatus(
 		const parts = ids.slice(0, DETAIL_MAX_AGENTS).map((id) => {
 			const found = rounds.findAgent(id);
 			if (found) {
-				return describeAgent(rounds, found.round, found.agent, now);
+				return describeAgent(found.round, found.agent, now);
 			}
 			return (
 				teammateDetail(options.teammates?.(), id, now) ??
@@ -657,7 +649,7 @@ export function renderAgentsStatus(
 				.slice(-10);
 			return `No round ${input.round_id.trim()}.${known.length > 0 ? ` Rounds: ${known.join(", ")}.` : ""}`;
 		}
-		return bound(describeRound(rounds, round, now));
+		return bound(describeRound(round, now));
 	}
 	return bound(describeSummary(rounds, options));
 }

@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	__resetAwaitingLead,
+	runDelegatedWithCap,
+} from "./agent-iteration-cap";
 import { __resetAgentRounds, roundsFor } from "./agent-rounds";
+import { onLeadNudge } from "./agent-trouble";
 import { createLeadAgentTools } from "./lead-agent-tools";
 import {
 	__resetSubagentCancellations,
@@ -8,6 +13,7 @@ import {
 } from "./subagent-cancellation";
 
 afterEach(() => {
+	__resetAwaitingLead();
 	__resetAgentRounds();
 	__resetSubagentCancellations();
 	vi.restoreAllMocks();
@@ -146,24 +152,57 @@ describe("resume_agent", () => {
 		const handle = rounds.open({
 			kind: "spawn_agent",
 			tool: "spawn_agent",
+			toolCallId: "w",
 			background: true,
 			agents: [{ name: "slow", task: "t" }],
 		});
-		let granted: Promise<number> | undefined;
-		void handle.run(0, context, (ctx) => {
-			const control = registerSubagentCancellation("s1::w", undefined, "slow");
-			ctx.emitUpdate?.({ cancelId: "s1::w", maxIterations: 30 });
-			granted = control.awaitLead();
-			return new Promise(() => {});
+		const agent = {
+			continued: [] as string[],
+			getAgentId: () => "agent_slow",
+			getMaxIterations: () => 30,
+			setMaxIterations: () => {},
+			continue: async (message?: string) => {
+				agent.continued.push(message ?? "");
+				return {
+					text: "finished",
+					finishReason: "completed",
+					iterations: 3,
+					usage: { inputTokens: 1, outputTokens: 1 },
+				} as never;
+			},
+		};
+		const stopLead = onLeadNudge("s1", () => {});
+		void handle.run(0, context, async (ctx) => {
+			registerSubagentCancellation("s1::w#0", undefined, "slow");
+			ctx.emitUpdate?.({ cancelId: "s1::w#0" });
+			return await runDelegatedWithCap({
+				agent,
+				start: async () =>
+					({
+						text: "half",
+						finishReason: "max_iterations",
+						iterations: 30,
+						usage: { inputTokens: 1, outputTokens: 1 },
+					}) as never,
+				name: "slow",
+				sessionId: "s1",
+				cancelId: "s1::w#0",
+				emitUpdate: ctx.emitUpdate,
+			}).then((outcome) => ({ ...outcome.result }));
 		});
+		await vi.waitFor(() =>
+			expect(roundsFor("s1").get("r1")?.agents[0]?.state).toBe("awaiting_lead"),
+		);
 		const text = await run("resume_agent", {
-			agent_id: "slow",
+			agent_id: "r1-1",
 			extra_iterations: 10,
 		});
 		expect(text).toBe(
-			"Resumed r1-1 slow with 10 more iterations (cap now 40).",
+			"r1-1 slow: Resumed slow with 10 more iterations (cap now 40). Its report comes back with its round.",
 		);
-		await expect(granted).resolves.toBe(10);
+		await vi.waitFor(() => expect(agent.continued).toHaveLength(1));
+		expect(roundsFor("s1").get("r1")?.agents[0]?.maxIterations).toBe(40);
+		stopLead();
 	});
 
 	it("refuses an agent that is not waiting, and a count that is not one", async () => {

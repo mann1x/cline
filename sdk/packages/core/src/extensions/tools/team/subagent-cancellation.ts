@@ -42,8 +42,6 @@ export interface SubagentRequeueCarry {
 /** The live control state of one agent, for the lead's status tool. */
 export interface SubagentControlState {
 	label: string;
-	/** Stopped at its iteration cap, waiting for `resume_agent`. */
-	awaitingLead: boolean;
 	/** A requeue was asked for and has not yet happened. */
 	requeuePending: boolean;
 	/** Waiting on infrastructure right now (a refusal, a server gone). */
@@ -75,11 +73,6 @@ export interface SubagentCancellation {
 	 * nothing by that id is running.
 	 */
 	requeue(id: string, options?: SubagentRequeueOptions): boolean;
-	/**
-	 * Let an agent suspended at its iteration cap (`awaiting_lead`) carry on
-	 * with `extraIterations` more. `false` when it is not suspended.
-	 */
-	resumeSuspended(id: string, extraIterations: number): boolean;
 	/** What a live agent's controls are doing, or undefined when not running. */
 	inspect(id: string): SubagentControlState | undefined;
 	/**
@@ -125,8 +118,6 @@ interface RunningAgent {
 	tracked?: { getMessages(): readonly unknown[] };
 	/** Waiting on infrastructure: a requeue need not wait for a boundary. */
 	waitingInfra: boolean;
-	/** Set while suspended at its cap; resolves with the iterations granted. */
-	suspended?: (extraIterations: number) => void;
 }
 
 /** Who stopped each agent, kept past release for its report. */
@@ -167,12 +158,6 @@ export interface SubagentCancellationRegistration {
 	track(agent: { getMessages(): readonly unknown[] }): void;
 	/** Waiting on infrastructure, or not: a requeue then stops it at once. */
 	setWaitingInfra(waiting: boolean): void;
-	/**
-	 * Suspend until the lead grants more iterations (`resume_agent`). Resolves
-	 * with the number granted; rejects when the agent is stopped meanwhile.
-	 * For the iteration cap: the run is held, never discarded.
-	 */
-	awaitLead(): Promise<number>;
 	/** What the lead added to the task when it last restarted this agent. */
 	readonly instructions: string | undefined;
 	/** The next message left for this agent, for its `consumePendingUserMessage`. */
@@ -216,10 +201,6 @@ export function registerSubagentCancellation(
 			continuable: (run) => run(undefined),
 			track: () => {},
 			setWaitingInfra: () => {},
-			awaitLead: () =>
-				Promise.reject(
-					new Error("This agent has no id the lead could resume it by."),
-				),
 			instructions: undefined,
 			takeMessage: () => undefined,
 			release: () => {},
@@ -353,25 +334,6 @@ export function registerSubagentCancellation(
 				entry.segment?.abort(requeueAbort());
 			}
 		},
-		awaitLead: () =>
-			new Promise<number>((resolve, reject) => {
-				const signal =
-					entry.segment?.signal ?? entry.attempt?.signal ?? own.signal;
-				if (signal.aborted) {
-					reject(signal.reason);
-					return;
-				}
-				const onAbort = () => {
-					entry.suspended = undefined;
-					reject(signal.reason);
-				};
-				signal.addEventListener("abort", onAbort, { once: true });
-				entry.suspended = (extra) => {
-					signal.removeEventListener("abort", onAbort);
-					entry.suspended = undefined;
-					resolve(extra);
-				};
-			}),
 		takeMessage: () => {
 			// The boundary: no tool call open, no request in flight. A requeue
 			// the lead asked for stops the segment here, with a whole
@@ -431,7 +393,6 @@ export const subagentCancellation: SubagentCancellation = {
 		}
 		entry.restartRequested = true;
 		entry.requeue = undefined;
-		entry.suspended = undefined;
 		// Before its first attempt there is nothing to abandon: it will start
 		// clean anyway, so the request is simply spent on that attempt.
 		entry.attempt?.abort(
@@ -443,12 +404,7 @@ export const subagentCancellation: SubagentCancellation = {
 		const entry = RUNNING.get(id);
 		// No segment: this path runs its agent outside a continuable loop, so
 		// nothing would pick the transcript up -- the requeue would only stop it.
-		if (
-			!entry ||
-			entry.own.signal.aborted ||
-			entry.suspended ||
-			!entry.segment
-		) {
+		if (!entry || entry.own.signal.aborted || !entry.segment) {
 			return false;
 		}
 		entry.requeue = { ...(options ?? {}) };
@@ -460,14 +416,6 @@ export const subagentCancellation: SubagentCancellation = {
 		}
 		return true;
 	},
-	resumeSuspended(id: string, extraIterations: number): boolean {
-		const entry = RUNNING.get(id);
-		if (!entry?.suspended || entry.own.signal.aborted) {
-			return false;
-		}
-		entry.suspended(Math.max(1, Math.floor(extraIterations)));
-		return true;
-	},
 	inspect(id: string): SubagentControlState | undefined {
 		const entry = RUNNING.get(id);
 		if (!entry || entry.own.signal.aborted) {
@@ -475,7 +423,6 @@ export const subagentCancellation: SubagentCancellation = {
 		}
 		return {
 			label: entry.label,
-			awaitingLead: Boolean(entry.suspended),
 			requeuePending: Boolean(entry.requeue),
 			waitingInfra: entry.waitingInfra,
 		};

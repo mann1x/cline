@@ -75,6 +75,12 @@ export interface AcquireOptions {
 	 * not banned -- with no other room it still goes there rather than wait.
 	 */
 	avoid?: string;
+	/**
+	 * The one node this agent may take: an agent resumed on the transcript it
+	 * produced there. It waits for that node, and while it waits, agents that
+	 * can go elsewhere are not held up behind it.
+	 */
+	only?: string;
 }
 
 /** One node as the queue sees it, for the lead's status report. */
@@ -194,6 +200,7 @@ export class NoAgentCapacityError extends Error {
 
 interface Waiter {
 	avoid?: string;
+	only?: string;
 	resolve: (lease: PlacementLease) => void;
 	reject: (error: unknown) => void;
 	signal?: AbortSignal;
@@ -311,7 +318,10 @@ export function createAgentPlacementQueue(
 		(entry) => !Number.isNaN(entry.capacity) && entry.capacity > 0,
 	);
 
-	const tryPlace = (avoid?: string): PlacementLease | undefined => {
+	const tryPlace = (
+		avoid?: string,
+		only?: string,
+	): PlacementLease | undefined => {
 		const place = (nodesView: AgentNode[]) =>
 			placeAgent({
 				nodes: nodesView,
@@ -322,16 +332,25 @@ export function createAgentPlacementQueue(
 			});
 		// Anywhere but the avoided node first; that node only when nothing
 		// else has room.
-		let result = avoid
+		// Pinned: every other node reads as full.
+		let result = only
 			? place(
 					view().map((node) =>
-						node.id === avoid
-							? { ...node, capacity: occupancy.get(node.id) ?? 0 }
-							: node,
+						node.id === only
+							? node
+							: { ...node, capacity: occupancy.get(node.id) ?? 0 },
 					),
 				)
-			: place(view());
-		if (avoid && result.placement.kind === "queued") {
+			: avoid
+				? place(
+						view().map((node) =>
+							node.id === avoid
+								? { ...node, capacity: occupancy.get(node.id) ?? 0 }
+								: node,
+						),
+					)
+				: place(view());
+		if (!only && avoid && result.placement.kind === "queued") {
 			result = place(view());
 		}
 		state = result.state;
@@ -389,16 +408,25 @@ export function createAgentPlacementQueue(
 	};
 
 	const drain = (): void => {
-		while (waiters.length > 0) {
-			const lease = tryPlace(waiters[0]?.avoid);
+		// In order; a waiter pinned to a node that has no room is passed
+		// over rather than holding up the ones behind it. The first unpinned
+		// waiter that cannot be placed ends the pass: nothing behind it can.
+		let index = 0;
+		while (index < waiters.length) {
+			const waiter = waiters[index] as Waiter;
+			const lease = tryPlace(waiter.avoid, waiter.only);
 			if (!lease) {
+				if (waiter.only) {
+					index += 1;
+					continue;
+				}
 				return;
 			}
-			const head = waiters.shift() as Waiter;
-			if (head.signal && head.onAbort) {
-				head.signal.removeEventListener("abort", head.onAbort);
+			waiters.splice(index, 1);
+			if (waiter.signal && waiter.onAbort) {
+				waiter.signal.removeEventListener("abort", waiter.onAbort);
 			}
-			head.resolve(lease);
+			waiter.resolve(lease);
 		}
 	};
 
@@ -414,8 +442,14 @@ export function createAgentPlacementQueue(
 			// waiting there is no room by construction, and asking anyway
 			// would let a newcomer take a slot that frees mid-call. An agent
 			// coming back to the front has nobody ahead by definition.
-			if (waiters.length === 0 || options?.front) {
-				const lease = tryPlace(options?.avoid);
+			// A waiter pinned to a full node is not ahead of anyone who
+			// can go elsewhere.
+			if (
+				waiters.every((waiter) => waiter.only) ||
+				options?.front ||
+				options?.only
+			) {
+				const lease = tryPlace(options?.avoid, options?.only);
 				if (lease) {
 					return Promise.resolve(lease);
 				}
@@ -426,6 +460,7 @@ export function createAgentPlacementQueue(
 					reject,
 					signal,
 					...(options?.avoid ? { avoid: options.avoid } : {}),
+					...(options?.only ? { only: options.only } : {}),
 				};
 				if (signal) {
 					waiter.onAbort = () => {

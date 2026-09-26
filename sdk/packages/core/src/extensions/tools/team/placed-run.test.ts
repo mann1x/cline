@@ -9,6 +9,7 @@ import {
 	isDurableRefusal,
 	isRefusedSpawn,
 	REFUSED_HOLD_MAX_MS,
+	resumePlacement,
 	runPlacedAgent,
 } from "./placed-run";
 
@@ -415,5 +416,31 @@ describe("telling a refusal from the agent's own failure", () => {
 			),
 		).toBe(false);
 		expect(admissionHeadroom(new Error("Too Many Requests"))).toBeUndefined();
+	});
+});
+
+// Gap 1 of D: an agent resumed after its spawn call returned ran outside the
+// node lease and the slot gate.
+describe("a resume after the call returned", () => {
+	it("takes a lease on the node it ran on, admitted, and gives it back", async () => {
+		const { placement, log, placeOptions } = fakePlacement(["oc"]);
+		const through = resumePlacement({ placement, nodeId: "oc" });
+		await expect(through(async () => "ran")).resolves.toBe("ran");
+		expect(placeOptions[0]).toEqual({ front: true, only: "oc" });
+		expect(log).toEqual(["admitted oc", "release oc"]);
+	});
+
+	it("goes through the endpoint's slot gate when it was not placed", async () => {
+		const gated: string[] = [];
+		const through = resumePlacement({
+			slotGate: {
+				run: async <T>(fn: () => Promise<T>) => {
+					gated.push("in");
+					return await fn();
+				},
+			},
+		});
+		await through(async () => "ran");
+		expect(gated).toEqual(["in"]);
 	});
 });

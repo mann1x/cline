@@ -199,16 +199,6 @@ describe("the lead's controls on one agent", () => {
 		expect(seen).toEqual([undefined, "Be brief."]);
 	});
 
-	it("holds an agent at its cap until the lead grants more iterations", async () => {
-		const agent = registerSubagentCancellation("s::c", undefined, "a");
-		const waiting = agent.awaitLead();
-		expect(subagentCancellation.inspect("s::c")?.awaitingLead).toBe(true);
-		expect(subagentCancellation.resumeSuspended("s::c", 5)).toBe(true);
-		await expect(waiting).resolves.toBe(5);
-		expect(subagentCancellation.inspect("s::c")?.awaitingLead).toBe(false);
-		expect(subagentCancellation.resumeSuspended("s::c", 5)).toBe(false);
-	});
-
 	it("remembers who stopped it", () => {
 		registerSubagentCancellation("s::c", undefined, "a");
 		subagentCancellation.cancel("s::c", "lead");

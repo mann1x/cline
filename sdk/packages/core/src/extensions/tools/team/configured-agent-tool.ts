@@ -40,7 +40,11 @@ import {
 	type DelegatedAgentRuntimeConfig,
 } from "./delegated-agent";
 import { readDelegationHooks } from "./delegation-call-hooks";
-import { isAdmissionEvent, runPlacedAgent } from "./placed-run";
+import {
+	isAdmissionEvent,
+	resumePlacement,
+	runPlacedAgent,
+} from "./placed-run";
 import {
 	awaitingLeadNote,
 	configuredAgentKey,
@@ -508,6 +512,15 @@ export function createConfiguredAgentTools(
 				const placement = ownsEndpoint
 					? undefined
 					: baseRuntimeConfig.nodePlacement;
+				// Held to what the endpoint *this* agent resolved to will
+				// serve, which is not necessarily the session's: an agent
+				// naming a provider or a profile has its own. Two agents on
+				// different servers therefore run at once, and two on the
+				// same one queue.
+				// A placed agent's lease is its gate; this one is for the rest.
+				const endpointGate = placement
+					? undefined
+					: baseRuntimeConfig.slotGates?.for(agentEndpointKey(provisional));
 				// Its own abort signal, so a runaway agent can be stopped
 				// without cancelling the session and the siblings that are
 				// working.
@@ -581,6 +594,7 @@ export function createConfiguredAgentTools(
 					admitted: () => void,
 					recoverTurnFault: TurnFaultRecovery | undefined,
 					carry: SubagentRequeueCarry | undefined,
+					nodeId?: string,
 				): Promise<AgentResult> => {
 					// The row names the model while it runs, not only once it is done.
 					reportSubagentModel(context.emitUpdate, {
@@ -709,6 +723,12 @@ export function createConfiguredAgentTools(
 						onDetachedFinish: async (final) => {
 							await notifyEnd(buildOutput(final.result, final), final.result);
 						},
+						// Resumed after the call returned: back through its placement.
+						resumeThrough: resumePlacement({
+							...(placement && nodeId ? { placement, nodeId } : {}),
+							...(!placement && endpointGate ? { slotGate: endpointGate } : {}),
+							signal: () => cancellation.signal,
+						}),
 					});
 					capOutcome = outcome;
 					if (outcome.state === "awaiting_lead") {
@@ -839,6 +859,7 @@ export function createConfiguredAgentTools(
 													admitted,
 													recoverTurnFault,
 													carry,
+													node.nodeId,
 												),
 											beforeRetry: async () => {
 												await releasePolykvAgent(engineSessionId);
@@ -846,14 +867,7 @@ export function createConfiguredAgentTools(
 										});
 										return { result: outcome.result, placed: outcome.placed };
 									}
-									// Held to what the endpoint *this* agent resolved to will
-									// serve, which is not necessarily the session's: an agent
-									// naming a provider or a profile has its own. Two agents on
-									// different servers therefore run at once, and two on the
-									// same one queue.
-									const gate = baseRuntimeConfig.slotGates?.for(
-										agentEndpointKey(provisional),
-									);
+									const gate = endpointGate;
 									const run = () =>
 										attempt(provisional, () => {}, undefined, carry);
 									return {

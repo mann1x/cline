@@ -441,3 +441,38 @@ export async function runPlacedAgent(
 		};
 	}
 }
+
+/**
+ * Where an agent resumed after its spawn call returned runs: back through
+ * its path's placement. On a node, a lease on that same node -- its transcript
+ * was produced by that node's model -- at the front of the queue, taken as
+ * admitted (the engine held it before; a refusal on the resumed turn is the
+ * turn-fault recovery's). Off nodes, the endpoint's slot gate. The lease is
+ * given back when the resumed run ends, whatever its end.
+ */
+export function resumePlacement(input: {
+	placement?: AgentNodePlacement;
+	nodeId?: string;
+	slotGate?: { run<T>(task: () => Promise<T>): Promise<T> };
+	signal?: () => AbortSignal | undefined;
+}): <T>(run: () => Promise<T>) => Promise<T> {
+	const { placement, nodeId, slotGate } = input;
+	if (placement && nodeId) {
+		return async <T>(run: () => Promise<T>): Promise<T> => {
+			const node = await placement.place(input.signal?.(), {
+				front: true,
+				only: nodeId,
+			});
+			node.admitted();
+			try {
+				return await run();
+			} finally {
+				node.release();
+			}
+		};
+	}
+	if (slotGate) {
+		return <T>(run: () => Promise<T>) => slotGate.run(run);
+	}
+	return <T>(run: () => Promise<T>) => run();
+}

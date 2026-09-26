@@ -59,7 +59,11 @@ import {
 	createDelegatedAgent,
 	type DelegatedAgentConfigProvider,
 } from "./delegated-agent";
-import { isAdmissionEvent, runPlacedAgent } from "./placed-run";
+import {
+	isAdmissionEvent,
+	resumePlacement,
+	runPlacedAgent,
+} from "./placed-run";
 import {
 	drawSpawnSampling,
 	mergeSpawnSampling,
@@ -1292,6 +1296,7 @@ async function runSpawnedAgent(
 		admitted: () => void,
 		recoverTurnFault: TurnFaultRecovery | undefined,
 		carry: SubagentRequeueCarry | undefined,
+		nodeId?: string,
 	): Promise<AgentResult> => {
 		const connection = provider.getConnectionConfig();
 		// The row names the model while it runs, not only once it is done.
@@ -1421,6 +1426,15 @@ async function runSpawnedAgent(
 			releaseEngineSession: () => releasePolykvAgent(engineSessionId),
 			lifetime,
 			onDetachedFinish: (final) => finishDetached(final),
+			// Resumed after the call returned: back through its placement.
+			resumeThrough: resumePlacement({
+				...(placement ? { placement } : {}),
+				...(nodeId ? { nodeId } : {}),
+				...(config.configProvider.getRuntimeConfig().slotGate
+					? { slotGate: config.configProvider.getRuntimeConfig().slotGate }
+					: {}),
+				signal: () => cancellation.signal,
+			}),
 		});
 		capOutcome = outcome;
 		if (outcome.state === "awaiting_lead") {
@@ -1550,6 +1564,7 @@ async function runSpawnedAgent(
 										admitted,
 										recoverTurnFault,
 										carry,
+										node.nodeId,
 									),
 								// A failed spawn's engine session goes before the next try, or
 								// the retry is charged to a window booked for the last one.

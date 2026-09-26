@@ -1,11 +1,18 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	__resetAwaitingLead,
+	createDelegatedAgentLifetime,
+	resumeSuspended,
+	runDelegatedWithCap,
+} from "./agent-iteration-cap";
 import {
 	__resetAgentRounds,
 	AgentRounds,
 	agentFacts,
+	agentFactsLine,
 	classifyAgentEnd,
 	roundsFor,
 } from "./agent-rounds";
@@ -365,5 +372,124 @@ describe("an agent with no queue in front of it", () => {
 			return { finishReason: "completed" };
 		});
 		expect(state).toBe("running");
+	});
+});
+
+// Integration with the iteration cap (D) and the check (E).
+describe("an agent at its iteration cap", () => {
+	afterEach(() => __resetAwaitingLead());
+
+	it("reads as awaiting the lead from its cap update, and running again on resume", async () => {
+		const rounds = new AgentRounds("s1");
+		const handle = rounds.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: true,
+			agents: [{ name: "a", task: "t" }],
+		});
+		const states: string[] = [];
+		void handle.run(0, context, (ctx) => {
+			ctx.emitUpdate?.({ iterations: 1 });
+			ctx.emitUpdate?.({ awaitingLead: { iterations: 8, maxIterations: 8 } });
+			states.push(handle.agent(0)?.state ?? "");
+			ctx.emitUpdate?.({ awaitingLead: null });
+			states.push(handle.agent(0)?.state ?? "");
+			return new Promise(() => {});
+		});
+		expect(states).toEqual(["awaiting_lead", "running"]);
+		expect(handle.agent(0)).toMatchObject({ iterations: 8, maxIterations: 8 });
+	});
+
+	it("records the check's verdict from the agent's result", async () => {
+		const rounds = new AgentRounds("s1");
+		const handle = rounds.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: false,
+			agents: [{ name: "a", task: "t" }],
+		});
+		await handle.run(0, context, async () => ({
+			text: "done",
+			finishReason: "completed",
+			oracle: {
+				status: "fail",
+				command: "node t.js",
+				expect: "^OK",
+				must: "match",
+				exitCode: 1,
+				output: "boom",
+				runs: 2,
+			},
+		}));
+		expect(handle.agent(0)?.oracle).toMatchObject({
+			status: "fail",
+			exitCode: 1,
+		});
+		expect(agentFactsLine(handle.agent(0) as never)).toContain(
+			"check FAIL (exit 1)",
+		);
+	});
+
+	// D's gap 2: an agent detached at its cap and resumed after its call
+	// returned finished with nobody recording it.
+	it("keeps its round open while detached, and records its late end", async () => {
+		const rounds = new AgentRounds("s1");
+		const settled: string[] = [];
+		rounds.onSettled((round) => settled.push(round.record.id));
+		const handle = rounds.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: false,
+			agents: [{ name: "a", task: "t" }],
+		});
+		const lifetime = createDelegatedAgentLifetime();
+		const agent = {
+			getAgentId: () => "agent_x",
+			getMaxIterations: () => 4,
+			setMaxIterations: () => {},
+			continue: async () =>
+				({
+					text: "finished it",
+					finishReason: "completed",
+					iterations: 2,
+					usage: { inputTokens: 5, outputTokens: 1 },
+				}) as never,
+		};
+		await handle.run(0, context, async (ctx) => {
+			const outcome = await runDelegatedWithCap({
+				agent,
+				start: async () =>
+					({
+						text: "half",
+						finishReason: "max_iterations",
+						iterations: 4,
+						usage: { inputTokens: 5, outputTokens: 1 },
+					}) as never,
+				name: "a",
+				emitUpdate: ctx.emitUpdate,
+				lifetime,
+			});
+			return {
+				...outcome.result,
+				state: outcome.state,
+				stopReason: outcome.stopReason,
+				maxIterations: outcome.maxIterations,
+				agentId: "agent_x",
+			};
+		});
+		handle.delivered();
+		handle.close();
+		expect(handle.agent(0)?.state).toBe("awaiting_lead");
+		expect(handle.record.status).toBe("running");
+		expect(settled).toEqual([]);
+
+		expect(resumeSuspended("agent_x", 5).ok).toBe(true);
+		await vi.waitFor(() => expect(settled).toEqual(["r1"]));
+		expect(handle.agent(0)).toMatchObject({
+			state: "done",
+			stopReason: "completed",
+			result: "finished it",
+		});
+		expect(handle.record.delivered).toBe(false);
 	});
 });

@@ -24,6 +24,7 @@
  */
 
 import type { AgentTool, AgentToolContext } from "@cline/shared";
+import { RESUME_AGENT_TOOL_NAME, resumeSuspended } from "./agent-iteration-cap";
 import {
 	type AgentRounds,
 	LIVE_STATES,
@@ -35,7 +36,7 @@ import { subagentCancellation } from "./subagent-cancellation";
 
 export const REQUEUE_AGENT_TOOL_NAME = "requeue_agent";
 export const RESTART_AGENT_TOOL_NAME = "restart_agent";
-export const RESUME_AGENT_TOOL_NAME = "resume_agent";
+export { RESUME_AGENT_TOOL_NAME };
 export const RETRY_FAILED_TOOL_NAME = "retry_failed";
 export const MESSAGE_AGENTS_TOOL_NAME = "message_agents";
 export const STOP_AGENTS_TOOL_NAME = "stop_agents";
@@ -163,13 +164,7 @@ function notFound(sessionId: string, ref: string): string {
 }
 
 function stateOf(target: ResolvedAgent): string {
-	if (!target.agent) {
-		return "running";
-	}
-	const control = target.cancelId
-		? subagentCancellation.inspect(target.cancelId)
-		: undefined;
-	return control?.awaitingLead ? "awaiting_lead" : target.agent.state;
+	return target.agent?.state ?? "running";
 }
 
 const agentIdProperty = {
@@ -357,25 +352,25 @@ export function createLeadAgentControlTools(
 				if (!Number.isFinite(extra) || extra < 1) {
 					return `extra_iterations must be a whole number of at least 1 (got ${JSON.stringify(record.extra_iterations)}).`;
 				}
+				// The cap's own registry holds the waiting agents
+				// (`agent-iteration-cap.ts`); it knows one by its row's id,
+				// its runtime id or its name. A round id resolves to the row.
 				const target = resolveAgent(sessionId, ref);
-				if (!target) {
-					return notFound(sessionId, ref);
+				const resumed = resumeSuspended(
+					target?.cancelId ?? ref,
+					extra,
+					sessionId,
+				);
+				if (!resumed.ok) {
+					return target
+						? `${target.label} is ${stateOf(target)}, not waiting at its iteration cap: there is nothing to resume.`
+						: resumed.message;
 				}
-				if (
-					!target.cancelId ||
-					!subagentCancellation.resumeSuspended(target.cancelId, extra)
-				) {
-					return `${target.label} is ${stateOf(target)}, not waiting at its iteration cap: there is nothing to resume.`;
-				}
-				const cap =
-					target.agent?.maxIterations !== undefined
-						? ` (cap now ${target.agent.maxIterations + extra})`
-						: "";
-				if (target.agent?.maxIterations !== undefined) {
-					target.agent.maxIterations += extra;
+				if (target?.agent && resumed.agent) {
+					target.agent.maxIterations = resumed.agent.maxIterations + extra;
 				}
 				return note(
-					`Resumed ${target.label} with ${extra} more iteration${extra === 1 ? "" : "s"}${cap}.`,
+					target ? `${target.label}: ${resumed.message}` : resumed.message,
 				);
 			},
 		} as AgentTool,

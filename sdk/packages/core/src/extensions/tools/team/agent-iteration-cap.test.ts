@@ -267,3 +267,32 @@ describe("an agent at its cap with no lead to ask", () => {
 		expect(cleanup).toHaveBeenCalledTimes(1);
 	});
 });
+
+// A detached agent resumed after its spawn call returned ran outside its node
+// lease and slot gate: the resume goes back through placement.
+describe("a detached agent's resume", () => {
+	it("runs inside the placement its path gives it", async () => {
+		const agent = scriptedAgent(4, [result("completed", 2, "done")]);
+		const order: string[] = [];
+		await runDelegatedWithCap({
+			agent,
+			start: async () => result("max_iterations", 4, "half"),
+			name: "solo",
+			lifetime: createDelegatedAgentLifetime(),
+			resumeThrough: async (run) => {
+				order.push("placed");
+				try {
+					return await run();
+				} finally {
+					order.push("released");
+				}
+			},
+		});
+		const resumed = resumeSuspended("solo", 5);
+		expect(resumed.ok).toBe(true);
+		const final = await resumed.completion;
+		expect(final?.result.text).toBe("done");
+		expect(order).toEqual(["placed", "released"]);
+		expect(agent.continued).toHaveLength(1);
+	});
+});

@@ -393,6 +393,14 @@ export interface RunDelegatedWithCapOptions {
 	lifetime?: DelegatedAgentLifetime;
 	/** A detached agent's final outcome, for the path's own end-of-run work. */
 	onDetachedFinish?: (outcome: DelegatedRunOutcome) => Promise<void> | void;
+	/**
+	 * Where a detached agent's resume runs: its path's placement -- the node
+	 * lease on the node it ran on, or the endpoint's slot gate. Its spawn call
+	 * returned and gave those back, so without this the resumed agent would
+	 * run outside every bound. An agent held inside its call keeps its lease
+	 * and does not use it.
+	 */
+	resumeThrough?: <T>(run: () => Promise<T>) => Promise<T>;
 }
 
 function addUsage(
@@ -582,7 +590,10 @@ function detach(
 				return outcome({ stopReason: "iteration_cap" });
 			}
 			try {
-				await resume(decision.extraIterations);
+				const extra = decision.extraIterations;
+				await (options.resumeThrough
+					? options.resumeThrough(() => resume(extra))
+					: resume(extra));
 			} catch (error) {
 				finish();
 				throw error;

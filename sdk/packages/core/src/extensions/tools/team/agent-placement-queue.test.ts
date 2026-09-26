@@ -592,3 +592,37 @@ describe("a requeued agent's placement", () => {
 		]);
 	});
 });
+
+// An agent resumed after its spawn call returned (detached at its cap) ran
+// outside the node lease: it goes back through placement, on the node its
+// transcript was produced on.
+describe("a placement pinned to one node", () => {
+	it("takes that node, not the first with room", async () => {
+		const queue = createAgentPlacementQueue([
+			node("first", 1, 2),
+			node("pinned", 2, 2),
+		]);
+		const lease = await queue.acquire(undefined, { only: "pinned" });
+		expect(lease.nodeId).toBe("pinned");
+	});
+
+	it("waits for that node, without holding up agents that can go elsewhere", async () => {
+		const queue = createAgentPlacementQueue([
+			node("pinned", 1, 1),
+			node("other", 2, 1),
+		]);
+		const held = await queue.acquire(undefined, { only: "pinned" });
+		let pinned: string | undefined;
+		void queue
+			.acquire(undefined, { only: "pinned", front: true })
+			.then((lease) => {
+				pinned = lease.nodeId;
+			});
+		const other = await queue.acquire();
+		expect(other.nodeId).toBe("other");
+		expect(pinned).toBeUndefined();
+		held.release();
+		await Promise.resolve();
+		expect(pinned).toBe("pinned");
+	});
+});
