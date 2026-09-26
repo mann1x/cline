@@ -218,3 +218,13 @@ describe("the lead's controls on one agent", () => {
 		expect(subagentCancellation.stoppedBy("s::d")).toBe("user");
 	});
 });
+
+// requeue_agent on a path that runs its agent outside a continuable loop
+// would only have stopped it: nothing there takes the transcript back.
+describe("a requeue with nothing to carry it", () => {
+	it("is refused rather than taken as a stop", () => {
+		registerSubagentCancellation("s::bare", undefined, "a");
+		expect(subagentCancellation.requeue("s::bare")).toBe(false);
+		expect(subagentCancellation.inspect("s::bare")?.requeuePending).toBe(false);
+	});
+});

@@ -287,6 +287,44 @@ export function formatAgentControlInput(
 	switch (toolName) {
 		case "agents_status":
 			return agents.length > 0 ? agents.join(", ") : (round ?? "every round");
+		case "requeue_agent":
+		case "restart_agent":
+		case "resume_agent": {
+			const agent = agents[0] ?? "";
+			const reason =
+				typeof record.reason === "string" && record.reason.trim()
+					? ` (${record.reason.trim()})`
+					: "";
+			const extra = Number(record.extra_iterations);
+			return toolName === "resume_agent" && Number.isFinite(extra) && extra > 0
+				? `${agent} +${extra} iterations`
+				: `${agent}${reason}`;
+		}
+		case "retry_failed":
+			return round ?? "";
+		case "message_agents":
+		case "stop_agents": {
+			const named = Array.isArray(record.agents)
+				? record.agents.filter(
+						(entry): entry is string => typeof entry === "string",
+					)
+				: [];
+			const who = named.length > 0 ? named.join(", ") : "every running agent";
+			return toolName === "message_agents" && typeof record.text === "string"
+				? `${who}: "${record.text}"`
+				: who;
+		}
+		case "await_agents": {
+			const rounds = [
+				...(typeof record.round_id === "string" ? [record.round_id] : []),
+				...(Array.isArray(record.round_ids)
+					? record.round_ids.filter(
+							(entry): entry is string => typeof entry === "string",
+						)
+					: []),
+			];
+			return rounds.length > 0 ? rounds.join(", ") : "every running round";
+		}
 		default:
 			return undefined;
 	}

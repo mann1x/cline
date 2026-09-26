@@ -178,6 +178,7 @@ describe("the escalation path, as the host wires it", () => {
 	async function startSession(
 		escalation?: Record<string, unknown>,
 		atomicProtocol?: Record<string, unknown>,
+		extra?: Record<string, unknown>,
 	) {
 		let agentConfig: AgentConfig | undefined;
 		const events: CoreSessionEvent[] = [];
@@ -207,6 +208,7 @@ describe("the escalation path, as the host wires it", () => {
 				enableAgentTeams: false,
 				...(escalation ? { escalation } : {}),
 				...(atomicProtocol ? { atomicProtocol } : {}),
+				...(extra ?? {}),
 			} as never),
 		});
 		return { agentConfig, events, host, sessionId: started.sessionId };
@@ -316,6 +318,43 @@ describe("the escalation path, as the host wires it", () => {
 			"plan",
 		]) {
 			expect(expertCalls[0]?.tools).not.toContain(protocolTool);
+		}
+	});
+
+	// Lead-agent-control spec: "Escalation gets the status tool only." The
+	// expert may look at the lead's agents; acting on them stays the lead's.
+	it("hands the expert agents_status and none of the lead's agent controls", async () => {
+		const { agentConfig } = await startSession(
+			{
+				connection: {
+					providerId: "ollama",
+					modelId: "qwen3.6:27b",
+					baseUrl: "http://192.168.178.161:11434",
+				},
+			},
+			undefined,
+			{ enableSpawnAgent: true, maxConcurrentAgents: 4 },
+		);
+		const sessionTools = (agentConfig?.tools ?? []).map((tool) => tool.name);
+		expect(sessionTools).toEqual(
+			expect.arrayContaining(["agents_status", "requeue_agent", "stop_agents"]),
+		);
+
+		await escalateVia(agentConfig)({
+			goal: "explain why step() throws on frame 2",
+			expectation: "run_game.js prints ok:true",
+		});
+
+		expect(expertCalls[0]?.tools).toContain("agents_status");
+		for (const control of [
+			"requeue_agent",
+			"restart_agent",
+			"resume_agent",
+			"retry_failed",
+			"message_agents",
+			"stop_agents",
+		]) {
+			expect(expertCalls[0]?.tools).not.toContain(control);
 		}
 	});
 

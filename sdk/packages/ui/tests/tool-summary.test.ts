@@ -834,4 +834,26 @@ describe("the lead's agent tools", () => {
 		expect(detail.outputText).toContain("r3-1 fixer-1");
 		expect(detail.kind).toBe("team");
 	});
+
+	it("names the agent or round each control acted on", () => {
+		const label = (toolName: string, input: unknown, inProgress = false) =>
+			buildToolSummary({ toolName, input, inProgress }).label;
+		expect(label("requeue_agent", { agent_id: "r3-2", reason: "slow" })).toBe(
+			"Requeued r3-2 (slow)",
+		);
+		expect(label("restart_agent", { agent_id: "fixer-1" }, true)).toBe(
+			"Restarting fixer-1",
+		);
+		expect(
+			label("resume_agent", { agent_id: "r3-2", extra_iterations: 20 }),
+		).toBe("Resumed r3-2 (+20 iterations)");
+		expect(label("retry_failed", { round_id: "r3" })).toBe(
+			"Retried the failed agents of r3",
+		);
+		expect(label("message_agents", { text: "hi", agents: ["r3-1"] })).toBe(
+			"Messaged r3-1",
+		);
+		expect(label("stop_agents", {})).toBe("Stopped every running agent");
+		expect(classifyTool("stop_agents")).toBe("team");
+	});
 });

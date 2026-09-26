@@ -196,6 +196,33 @@ describe("formatAgentControlInput", () => {
 		).toBe("r3-1, r3-2");
 	});
 
+	it("names what each control acted on", () => {
+		expect(
+			formatAgentControlInput("requeue_agent", {
+				agent_id: "r3-2",
+				reason: "slow",
+			}),
+		).toBe("r3-2 (slow)");
+		expect(
+			formatAgentControlInput("resume_agent", {
+				agent_id: "r3-2",
+				extra_iterations: 20,
+			}),
+		).toBe("r3-2 +20 iterations");
+		expect(formatAgentControlInput("retry_failed", { round_id: "r3" })).toBe(
+			"round r3",
+		);
+		expect(formatAgentControlInput("stop_agents", {})).toBe(
+			"every running agent",
+		);
+		expect(
+			formatAgentControlInput("message_agents", {
+				text: "go",
+				agents: ["a", "b"],
+			}),
+		).toBe('a, b: "go"');
+	});
+
 	it("leaves other tools alone", () => {
 		expect(
 			formatAgentControlInput("spawn_agent", { task: "x" }),

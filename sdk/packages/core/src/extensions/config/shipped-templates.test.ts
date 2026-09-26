@@ -26,6 +26,7 @@ import {
 import { createListFilesTool } from "../tools/list-files";
 import { createReadAgentReportTool } from "../tools/team/agent-reports";
 import { createAgentsStatusTool } from "../tools/team/agent-status";
+import { createLeadAgentTools } from "../tools/team/lead-agent-tools";
 import { createSpawnAgentTool } from "../tools/team/spawn-agent-tool";
 import { createAgentTeamsTools } from "../tools/team/team-tools";
 import { parsePromptTemplate } from "./prompt-template-parser";
@@ -75,6 +76,7 @@ const LIVE_TOOLS = [
 	createSpawnAgentTool({ configProvider: {} as never }),
 	createReadAgentReportTool(),
 	createAgentsStatusTool({ sessionId: "s" }),
+	...createLeadAgentTools({ sessionId: "s" }),
 	createListFilesTool({ cwd: "/workspace", createLister: {} as never }),
 	...createAgentTeamsTools({
 		runtime: {} as never,

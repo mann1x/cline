@@ -315,6 +315,24 @@ Switching to act mode immediately starts executing the plan, so only call this a
 # tool: agents_status
 {{DEFAULT}}
 
+# tool: requeue_agent
+{{DEFAULT}}
+
+# tool: restart_agent
+{{DEFAULT}}
+
+# tool: resume_agent
+{{DEFAULT}}
+
+# tool: retry_failed
+{{DEFAULT}}
+
+# tool: message_agents
+{{DEFAULT}}
+
+# tool: stop_agents
+{{DEFAULT}}
+
 # tool: spawn_agent
 
 Spawn a sub-agent with a custom system prompt for specialised tasks. Call shape: `spawn_agent(knowledge?: {files?, text?}, instructions?: string, systemPrompt?: string, task?: string, name?: string, agents?: [{name?, task, instructions?, type?}])`.

@@ -6102,6 +6102,31 @@ describe("tools with no bespoke row still reach the chat with something to show"
 		expect(sayToolFor("agents_status", { round_id: "r3" }).path).toBe("round r3")
 		expect(sayToolFor("agents_status", { agent_ids: ["r3-1", "r3-2"] }).path).toBe("r3-1, r3-2")
 	})
+
+	it("says what the lead did to which agent", () => {
+		expect(sayToolFor("requeue_agent", { agent_id: "r3-2", reason: "slow" })).toMatchObject({
+			headline: "Cerebriline requeued an agent (slow):",
+			path: "r3-2",
+		})
+		expect(sayToolFor("restart_agent", { agent_id: "r3-2", instructions: "Use X." })).toMatchObject({
+			headline: "Cerebriline restarted an agent:",
+			path: "r3-2",
+			content: "Use X.",
+		})
+		expect(sayToolFor("resume_agent", { agent_id: "r3-2", extra_iterations: 20 }).headline).toBe(
+			"Cerebriline gave an agent 20 more iterations:",
+		)
+		expect(sayToolFor("retry_failed", { round_id: "r3" }).path).toBe("round r3")
+		expect(sayToolFor("stop_agents", {})).toMatchObject({
+			headline: "Cerebriline stopped its agents:",
+			path: "every running agent",
+		})
+		expect(sayToolFor("message_agents", { text: "Skip it.", agents: ["a"] })).toMatchObject({
+			headline: "Cerebriline sent its agents a message:",
+			path: "a",
+			content: "Skip it.",
+		})
+	})
 })
 
 // ---------------------------------------------------------------------------

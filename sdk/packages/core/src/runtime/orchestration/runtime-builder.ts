@@ -76,6 +76,7 @@ import {
 	handbackNote,
 } from "../../extensions/tools/team/delegated-sandboxes";
 import { delegatedAgentTools } from "../../extensions/tools/team/delegated-tools";
+import { createLeadAgentTools } from "../../extensions/tools/team/lead-agent-tools";
 import type { TeammateWorkspaceHooks } from "../../extensions/tools/team/multi-agent";
 import { configuredAgentKey } from "../../extensions/tools/team/spawn-agent-tool";
 import {
@@ -1404,13 +1405,15 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		}
 
 		// What the agents are doing, and why: offered wherever the lead can
-		// delegate at all -- spawn_agent, a configured agent, or a team.
-		if (
-			config.sessionId &&
-			(normalized.enableAgentTeams ||
-				configuredAgentTools.length > 0 ||
-				tools.some((tool) => tool.name === "spawn_agent"))
-		) {
+		// delegate at all -- spawn_agent, a configured agent, or a team. The
+		// controls act on rounds, which teammates are not part of.
+		const opensRounds =
+			configuredAgentTools.length > 0 ||
+			tools.some((tool) => tool.name === "spawn_agent");
+		if (config.sessionId && opensRounds) {
+			tools.push(...createLeadAgentTools({ sessionId: config.sessionId }));
+		}
+		if (config.sessionId && (normalized.enableAgentTeams || opensRounds)) {
 			tools.push(
 				createAgentsStatusTool({
 					sessionId: config.sessionId,

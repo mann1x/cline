@@ -22,6 +22,10 @@
 
 import type * as LlmsProviders from "@cline/llms";
 import type { AgentTool } from "@cline/shared";
+import {
+	createLeadAgentControlTools,
+	createLeadAgentMessagingTools,
+} from "../../extensions/tools/team/lead-agent-tools";
 import { subagentCancellation } from "../../extensions/tools/team/subagent-cancellation";
 
 type Message = LlmsProviders.MessageWithMetadata;
@@ -142,85 +146,27 @@ export function closeOpenToolCalls(
 	];
 }
 
-function matchAgents(sessionId: string, names: readonly string[] | undefined) {
-	const running = subagentCancellation.runningIn(sessionId);
-	if (!names || names.length === 0) {
-		return running;
-	}
-	const wanted = new Set(names.map((name) => name.trim().toLowerCase()));
-	return running.filter((agent) => wanted.has(agent.label.toLowerCase()));
-}
-
-/** The two things the side turn may do to the round. */
+/**
+ * What the side turn may do to the round: message and stop its agents, and
+ * the controls -- requeue, restart, resume, retry -- the lead has in its own
+ * turn. Each records what it did, for the user and for the lead.
+ */
 export function createSteerRoundTools(
 	sessionId: string,
 	actions: string[],
 ): AgentTool[] {
-	const agentsProperty = {
-		type: "array",
-		items: { type: "string" },
-		description:
-			"Names of the agents, as the round names them. Leave it out to mean every agent still running.",
+	const onAction = (line: string) => {
+		actions.push(line);
 	};
 	return [
-		{
-			name: "message_agents",
-			description:
-				"Leave a message for running agents. Each reads it at its next turn, between tool calls, and carries on with it in mind. Use it to pass on a change of plan, a constraint, or an answer.",
-			inputSchema: {
-				type: "object",
-				properties: {
-					text: {
-						type: "string",
-						description: "The message, written to the agent.",
-					},
-					agents: agentsProperty,
-				},
-				required: ["text"],
-			},
-			execute: async (input: unknown) => {
-				const { text, agents } = input as { text?: string; agents?: string[] };
-				if (!text?.trim()) {
-					return "Nothing sent: `text` is empty.";
-				}
-				const targets = matchAgents(sessionId, agents);
-				const reached = targets.filter((agent) =>
-					subagentCancellation.message(agent.id, text),
-				);
-				const line = `Sent to ${reached.length} agent(s): ${
-					reached.map((agent) => agent.label).join(", ") || "none"
-				}.`;
-				actions.push(`${line} Message: "${text.trim()}"`);
-				return line;
-			},
-		} as AgentTool,
-		{
-			name: "stop_agents",
-			description:
-				"Stop running agents. A stopped agent reports as stopped and its work so far is lost; the rest of the round carries on.",
-			inputSchema: {
-				type: "object",
-				properties: { agents: agentsProperty },
-			},
-			execute: async (input: unknown) => {
-				const { agents } = (input ?? {}) as { agents?: string[] };
-				const targets = matchAgents(sessionId, agents);
-				const stopped = targets.filter((agent) =>
-					subagentCancellation.cancel(agent.id),
-				);
-				const line = `Stopped ${stopped.length} agent(s): ${
-					stopped.map((agent) => agent.label).join(", ") || "none"
-				}.`;
-				actions.push(line);
-				return line;
-			},
-		} as AgentTool,
+		...createLeadAgentMessagingTools({ sessionId, onAction }),
+		...createLeadAgentControlTools({ sessionId, onAction }),
 	];
 }
 
 const SYSTEM_SIDE_TURN_PREAMBLE = [
 	"This is a status report from the agent system, not a message from the user. Your agents are still running; you are reading it now, between their progress, without ending the delegation.",
-	"You can reply in plain text, `message_agents` to pass something to running agents, or `stop_agents` to stop some or all of them.{LEAD_TOOLS} Nothing else is available until the round returns.",
+	"You can reply in plain text, `message_agents` to pass something to running agents, `stop_agents` to stop some or all of them, `requeue_agent` to move one off a node that is slow or misbehaving (keeping its transcript), `restart_agent` to start one over, `resume_agent` to continue one waiting at its iteration cap, or `retry_failed` to run a round's failed agents again.{LEAD_TOOLS} Nothing else is available until the round returns.",
 	"The agents named below keep retrying on their own unless you stop them. If you decide to stop some, you will do their tasks yourself once the round returns. Answer in one short reply: what you decided, and why.",
 	"",
 	"The report:",
@@ -228,7 +174,7 @@ const SYSTEM_SIDE_TURN_PREAMBLE = [
 
 const SIDE_TURN_PREAMBLE = [
 	"The user has sent you this message while your agents are still running. You are answering it now, between your agents' progress, without ending the delegation.",
-	"You can reply in plain text, `message_agents` to pass something to running agents, or `stop_agents` to stop some or all of them.{LEAD_TOOLS} Nothing else is available until the round returns.",
+	"You can reply in plain text, `message_agents` to pass something to running agents, `stop_agents` to stop some or all of them, `requeue_agent` to move one off a node that is slow or misbehaving (keeping its transcript), `restart_agent` to start one over, `resume_agent` to continue one waiting at its iteration cap, or `retry_failed` to run a round's failed agents again.{LEAD_TOOLS} Nothing else is available until the round returns.",
 	"Answer the user in one short reply: what you will do, or what you did.",
 	"",
 	"The user's message:",

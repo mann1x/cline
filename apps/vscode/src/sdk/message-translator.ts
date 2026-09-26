@@ -1515,6 +1515,52 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 			}
 		}
 
+		case "requeue_agent":
+		case "restart_agent":
+		case "resume_agent":
+		case "retry_failed":
+		case "message_agents":
+		case "stop_agents": {
+			// The lead acting on its agents: which agent, and what it did.
+			const reason = getStringField(parsedInput, "reason")?.trim()
+			const extra = Number(parsedInput?.extra_iterations)
+			const named = Array.isArray(parsedInput?.agents)
+				? (parsedInput.agents as unknown[]).filter((entry): entry is string => typeof entry === "string")
+				: []
+			const headline =
+				toolName === "requeue_agent"
+					? `Cerebriline requeued an agent${reason ? ` (${reason})` : ""}:`
+					: toolName === "restart_agent"
+						? "Cerebriline restarted an agent:"
+						: toolName === "resume_agent"
+							? Number.isFinite(extra) && extra > 0
+								? `Cerebriline gave an agent ${extra} more iterations:`
+								: "Cerebriline gave an agent more iterations:"
+							: toolName === "retry_failed"
+								? "Cerebriline ran its failed agents again:"
+								: toolName === "stop_agents"
+									? "Cerebriline stopped its agents:"
+									: "Cerebriline sent its agents a message:"
+			const path =
+				toolName === "message_agents" || toolName === "stop_agents"
+					? named.length > 0
+						? named.join(", ")
+						: "every running agent"
+					: (describeAgentTargets(parsedInput) ?? "")
+			const content =
+				toolName === "restart_agent"
+					? getStringField(parsedInput, "instructions")
+					: toolName === "message_agents"
+						? getStringField(parsedInput, "text")
+						: undefined
+			return {
+				tool: toolName as ClineSayTool["tool"],
+				headline,
+				path,
+				...(content ? { content } : {}),
+			}
+		}
+
 		case "grep":
 		case "sed":
 		case "awk": {

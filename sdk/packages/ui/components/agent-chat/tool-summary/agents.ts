@@ -31,6 +31,13 @@ function listed(list: string[], max = 4): string {
 /** The tools this covers. */
 export const AGENT_CONTROL_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"agents_status",
+	"requeue_agent",
+	"restart_agent",
+	"resume_agent",
+	"retry_failed",
+	"message_agents",
+	"stop_agents",
+	"await_agents",
 ]);
 
 /** The row label for one of {@link AGENT_CONTROL_TOOL_NAMES}, or undefined. */
@@ -54,6 +61,42 @@ export function agentControlLabel(
 				return `${verb("Checking", "Checked")} round ${record.round_id.trim()}`;
 			}
 			return `${verb("Checking", "Checked")} the agents`;
+		}
+		case "requeue_agent":
+		case "restart_agent":
+		case "resume_agent": {
+			const agent = ids(record, "agent_id", "agent_ids")[0] ?? "an agent";
+			const reason =
+				typeof record.reason === "string" && record.reason.trim()
+					? ` (${record.reason.trim()})`
+					: "";
+			const extra = Number(record.extra_iterations);
+			if (toolName === "requeue_agent") {
+				return `${verb("Requeuing", "Requeued")} ${agent}${reason}`;
+			}
+			if (toolName === "restart_agent") {
+				return `${verb("Restarting", "Restarted")} ${agent}`;
+			}
+			return `${verb("Resuming", "Resumed")} ${agent}${
+				Number.isFinite(extra) && extra > 0 ? ` (+${extra} iterations)` : ""
+			}`;
+		}
+		case "retry_failed": {
+			const round =
+				typeof record.round_id === "string" ? record.round_id.trim() : "";
+			return `${verb("Retrying", "Retried")} the failed agents${round ? ` of ${round}` : ""}`;
+		}
+		case "message_agents":
+		case "stop_agents": {
+			const agents = ids(record, "agent", "agents");
+			if (toolName === "message_agents") {
+				return `${verb("Messaging", "Messaged")} ${agents.length > 0 ? listed(agents) : "every running agent"}`;
+			}
+			return `${verb("Stopping", "Stopped")} ${agents.length > 0 ? listed(agents) : "every running agent"}`;
+		}
+		case "await_agents": {
+			const rounds = ids(record, "round_id", "round_ids");
+			return `${verb("Waiting for", "Waited for")} ${rounds.length > 0 ? `round ${listed(rounds)}` : "the running rounds"}`;
 		}
 		default:
 			return undefined;

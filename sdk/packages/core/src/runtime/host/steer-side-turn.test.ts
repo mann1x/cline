@@ -245,7 +245,15 @@ describe("the side turn's view into the round", () => {
 				},
 			}),
 		});
-		expect(offered).toEqual(["message_agents", "stop_agents", "agents_status"]);
+		expect(offered).toEqual([
+			"message_agents",
+			"stop_agents",
+			"requeue_agent",
+			"restart_agent",
+			"resume_agent",
+			"retry_failed",
+			"agents_status",
+		]);
 		expect(prompt).toContain("`agents_status` shows what each agent is doing");
 		expect(prompt).not.toContain("{LEAD_TOOLS}");
 	});

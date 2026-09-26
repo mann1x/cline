@@ -204,6 +204,24 @@ Switch from plan mode to act mode. Switching immediately starts executing the pl
 # tool: agents_status
 {{DEFAULT}}
 
+# tool: requeue_agent
+{{DEFAULT}}
+
+# tool: restart_agent
+{{DEFAULT}}
+
+# tool: resume_agent
+{{DEFAULT}}
+
+# tool: retry_failed
+{{DEFAULT}}
+
+# tool: message_agents
+{{DEFAULT}}
+
+# tool: stop_agents
+{{DEFAULT}}
+
 # tool: spawn_agent
 
 Spawn sub-agents for focused tasks: `task` for one agent, `agents` for several in one call. Structure the work in three parts, from most shared to least: `knowledge` (files and notes the agents need — identical across them), `instructions` (the role — identical for every agent of the same kind), and each agent's `task` (what it alone does). Shared parts are loaded once for all agents that share them, so many agents cost little more than one. An `agents` entry may name a configured agent in `type`; it then runs with that agent's own role and model.

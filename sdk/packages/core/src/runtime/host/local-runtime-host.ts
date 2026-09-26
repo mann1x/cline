@@ -93,6 +93,7 @@ import {
 	createDelegatedSandboxes,
 	type DelegatedSandboxes,
 } from "../../extensions/tools/team/delegated-sandboxes";
+import { LEAD_CONTROL_TOOL_NAMES } from "../../extensions/tools/team/lead-agent-tools";
 import { subagentCancellation } from "../../extensions/tools/team/subagent-cancellation";
 import {
 	historyUsedTeammates,
@@ -2026,7 +2027,12 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// Cast because the session's list is a union of tools with their own
 		// input types and the delegated-agent builder takes the erased one; the
 		// runtime reads them through the same `execute` either way.
-		expertTools = tools as AgentTool[];
+		// Of the lead's agent tools the expert keeps `agents_status` only
+		// (lead-agent-control spec): it may look at the lead's agents, and
+		// acting on them stays the lead's.
+		expertTools = (tools as AgentTool[]).filter(
+			(tool) => !LEAD_CONTROL_TOOL_NAMES.has(tool.name),
+		);
 		// The struggle detector and the offer it earns.
 		//
 		// Built only where an expert is configured: the diagnosis is worth

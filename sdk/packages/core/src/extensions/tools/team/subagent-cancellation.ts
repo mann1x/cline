@@ -441,7 +441,14 @@ export const subagentCancellation: SubagentCancellation = {
 	},
 	requeue(id: string, options?: SubagentRequeueOptions): boolean {
 		const entry = RUNNING.get(id);
-		if (!entry || entry.own.signal.aborted || entry.suspended) {
+		// No segment: this path runs its agent outside a continuable loop, so
+		// nothing would pick the transcript up -- the requeue would only stop it.
+		if (
+			!entry ||
+			entry.own.signal.aborted ||
+			entry.suspended ||
+			!entry.segment
+		) {
 			return false;
 		}
 		entry.requeue = { ...(options ?? {}) };

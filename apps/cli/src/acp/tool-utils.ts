@@ -22,6 +22,13 @@ const TOOL_KIND_MAP: Record<string, ToolKind> = {
 	spawn_agent: "think",
 	spawn_swarm: "think",
 	agents_status: "think",
+	requeue_agent: "think",
+	restart_agent: "think",
+	resume_agent: "think",
+	retry_failed: "think",
+	message_agents: "think",
+	stop_agents: "think",
+	await_agents: "think",
 	NotebookEdit: "edit",
 	skills: "other",
 };

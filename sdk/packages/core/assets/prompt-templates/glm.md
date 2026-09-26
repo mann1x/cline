@@ -193,6 +193,24 @@ Output: plain text, one result per line as `file:line:column` followed by the so
 # tool: agents_status
 {{DEFAULT}}
 
+# tool: requeue_agent
+{{DEFAULT}}
+
+# tool: restart_agent
+{{DEFAULT}}
+
+# tool: resume_agent
+{{DEFAULT}}
+
+# tool: retry_failed
+{{DEFAULT}}
+
+# tool: message_agents
+{{DEFAULT}}
+
+# tool: stop_agents
+{{DEFAULT}}
+
 # tool: spawn_agent
 {{DEFAULT}}
 

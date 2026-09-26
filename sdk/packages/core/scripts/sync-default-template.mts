@@ -42,6 +42,7 @@ import {
 } from "../src/extensions/tools/definitions";
 import { createReadAgentReportTool } from "../src/extensions/tools/team/agent-reports";
 import { createAgentsStatusTool } from "../src/extensions/tools/team/agent-status";
+import { createLeadAgentTools } from "../src/extensions/tools/team/lead-agent-tools";
 import { createSpawnAgentTool } from "../src/extensions/tools/team/spawn-agent-tool";
 import { createAgentTeamsTools } from "../src/extensions/tools/team/team-tools";
 
@@ -82,6 +83,7 @@ function liveTools(): { name: string; description?: string }[] {
 		createSpawnAgentTool({ configProvider: {} as never }),
 		createReadAgentReportTool(),
 		createAgentsStatusTool({ sessionId: "s" }),
+		...createLeadAgentTools({ sessionId: "s" }),
 		...createAgentTeamsTools({
 			runtime: {} as never,
 			requesterId: "lead",
