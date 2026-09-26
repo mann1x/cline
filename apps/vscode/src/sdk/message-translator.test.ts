@@ -1230,6 +1230,39 @@ describe("translateSessionEvent — a teammate's events", () => {
 	})
 })
 
+// A background round (4.100.201) closes its spawn_agent call at once, so
+// "hide everything while a spawn is open" no longer covers its agents: 50
+// agents' text, reasoning and tool rows rendered in the lead's chat, their
+// reasoning interleaved in one row (pandorum, 2026-09-26). Core now stamps a
+// sub-agent's events with its parentAgentId; this pins the filter on it with
+// no spawn open.
+describe("translateSessionEvent — a background agent's events", () => {
+	const worker = (event: AgentEvent): CoreSessionEvent => ({
+		type: "agent_event",
+		payload: {
+			sessionId: "session-1",
+			event: { ...event, agentId: "agent_worker", parentAgentId: "agent_lead" } as AgentEvent,
+		},
+	})
+
+	it("do not render in the lead's chat when no spawn_agent call is open", () => {
+		const state = new MessageTranslatorState()
+		expect(state.hasRunningSpawnAgents()).toBe(false)
+		const events = [
+			{ type: "content_start", contentType: "reasoning", reasoning: "the loop bound" },
+			{ type: "content_start", contentType: "text", text: "Let me check line 90" },
+			{ type: "content_start", contentType: "tool", toolName: "editor", toolCallId: "t1", input: { path: "a" } },
+			{ type: "content_end", contentType: "tool", toolName: "editor", toolCallId: "t1", output: "x" },
+			{ type: "done", reason: "completed", text: "worker done", iterations: 1 },
+		] as AgentEvent[]
+		for (const event of events) {
+			const result = translateSessionEvent(worker(event), state)
+			expect(result.messages).toEqual([])
+			expect(result.turnComplete).toBe(false)
+		}
+	})
+})
+
 describe("translateSessionEvent — agent_event done", () => {
 	it("translates done event to ask completion_result with empty text (no green rectangle)", () => {
 		const state = new MessageTranslatorState()

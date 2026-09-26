@@ -58,6 +58,7 @@ import type {
 	AgentMessage,
 	AgentReasoningPart,
 	AgentRuntimeEvent,
+	AgentRuntimeStateSnapshot,
 	AgentTextPart,
 	AgentToolResultPart,
 	AgentUsage,
@@ -156,6 +157,52 @@ function deriveToolError(
 	}
 }
 
+/**
+ * Which agent an event came from, carried over from the runtime's snapshot.
+ *
+ * Every runtime event names its agent in `snapshot`; the legacy events did
+ * not, so a delegated agent's text, reasoning and tool rows reached the host
+ * looking like the lead's. The extension hid them only while a `spawn_agent`
+ * call was open, and a batch that runs in the background (4.100.201) closes
+ * its call at once: 50 agents' streams rendered in the lead's chat, their
+ * reasoning interleaved in one row (pandorum, 2026-09-26). Stamped here, a
+ * sub-agent's events carry `parentAgentId` wherever they are forwarded, and
+ * the host's bridge no longer counts them as the lead's.
+ *
+ * Never overwrites an id an event already carries; a null parent (the lead)
+ * is left off.
+ */
+function stampAgentIdentity(
+	events: AgentEvent[],
+	source: AgentRuntimeEvent,
+): AgentEvent[] {
+	const snapshot = (source as { snapshot?: AgentRuntimeStateSnapshot })
+		.snapshot;
+	if (!snapshot || events.length === 0) {
+		return events;
+	}
+	return events.map((event) => {
+		const record = event as unknown as Record<string, unknown>;
+		const stamp: Record<string, unknown> = {};
+		if (record.agentId === undefined && snapshot.agentId) {
+			stamp.agentId = snapshot.agentId;
+		}
+		if (record.conversationId === undefined && snapshot.conversationId) {
+			stamp.conversationId = snapshot.conversationId;
+		}
+		if (
+			record.parentAgentId === undefined &&
+			typeof snapshot.parentAgentId === "string" &&
+			snapshot.parentAgentId
+		) {
+			stamp.parentAgentId = snapshot.parentAgentId;
+		}
+		return Object.keys(stamp).length > 0
+			? ({ ...event, ...stamp } as AgentEvent)
+			: event;
+	});
+}
+
 // =============================================================================
 // Stateful adapter
 // =============================================================================
@@ -184,6 +231,10 @@ export class RuntimeEventAdapter {
 	private toolStartedAt = new Map<string, number>();
 
 	translate(event: AgentRuntimeEvent): AgentEvent[] {
+		return stampAgentIdentity(this.translateEvent(event), event);
+	}
+
+	private translateEvent(event: AgentRuntimeEvent): AgentEvent[] {
 		switch (event.type) {
 			case "run-started":
 				return [];

@@ -35,7 +35,9 @@ function makeSnapshot(
 	overrides: Partial<AgentRuntimeStateSnapshot> = {},
 ): AgentRuntimeStateSnapshot {
 	return {
-		agentId: "agent_test",
+		// Empty: an event is stamped with its agent only from a real id, so the
+		// translations below read as they did. The stamp is tested on its own.
+		agentId: "",
 		runId: "run_test",
 		status: "running",
 		iteration: 1,
@@ -1023,5 +1025,55 @@ describe("RuntimeEventAdapter — exhaustiveness", () => {
 		for (const event of variants) {
 			expect(() => adapter.translate(event)).not.toThrow();
 		}
+	});
+});
+
+describe("RuntimeEventAdapter — which agent an event came from", () => {
+	it("stamps a sub-agent's events with its parent, so the host can tell them from the lead's", () => {
+		const adapter = new RuntimeEventAdapter();
+		const snapshot = makeSnapshot({
+			agentId: "agent_worker",
+			parentAgentId: "agent_lead",
+			conversationId: "conv_worker",
+		});
+		const out = [
+			...adapter.translate({ type: "turn-started", snapshot, iteration: 1 }),
+			...adapter.translate({
+				type: "assistant-reasoning-delta",
+				snapshot,
+				iteration: 1,
+				text: "the loop bound",
+				accumulatedText: "the loop bound",
+			}),
+			...adapter.translate({
+				type: "assistant-text-delta",
+				snapshot,
+				iteration: 1,
+				text: "Reading line 92.",
+				accumulatedText: "Reading line 92.",
+			}),
+		];
+		expect(out.length).toBeGreaterThan(0);
+		for (const event of out) {
+			expect(event).toMatchObject({
+				agentId: "agent_worker",
+				parentAgentId: "agent_lead",
+				conversationId: "conv_worker",
+			});
+		}
+	});
+
+	it("gives the lead's events its id and no parent", () => {
+		const adapter = new RuntimeEventAdapter();
+		const [event] = adapter.translate({
+			type: "turn-started",
+			snapshot: makeSnapshot({ agentId: "agent_lead", parentAgentId: null }),
+			iteration: 2,
+		});
+		expect(event).toEqual({
+			type: "iteration_start",
+			iteration: 2,
+			agentId: "agent_lead",
+		});
 	});
 });
