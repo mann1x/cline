@@ -57,35 +57,54 @@ export const ThinkingRow = memo(
 			return null
 		}
 
+		const hasReasoning = !!reasoningContent?.trim()
+
 		return (
 			<div className="ml-1 pl-0 mb-0 -mt-[2px]">
 				{showTitle ? (
-					<Button
-						className={cn(
-							"inline-flex justify-baseline gap-0.5 text-left select-none px-0 py-0 my-0 h-auto min-h-0 w-full text-description overflow-visible",
-							{
-								"cursor-pointer": !!onToggle,
-								"cursor-default": !onToggle,
-							},
+					<div className="flex items-center w-full min-w-0">
+						<Button
+							className={cn(
+								"inline-flex justify-baseline gap-0.5 text-left select-none px-0 py-0 my-0 h-auto min-h-0 w-full text-description overflow-visible",
+								{
+									"cursor-pointer": !!onToggle,
+									"cursor-default": !onToggle,
+								},
+							)}
+							onClick={onToggle}
+							size="icon"
+							variant="icon">
+							<span
+								className={cn("text-[13px] leading-[1.2]", {
+									"animate-shimmer bg-linear-90 from-foreground to-description bg-[length:200%_100%] bg-clip-text text-transparent":
+										isStreaming,
+									"select-none": isStreaming,
+								})}>
+								{title}
+							</span>
+							{showChevron &&
+								(isExpanded ? (
+									<ChevronDownIcon className="!size-1 text-description" />
+								) : (
+									<ChevronRightIcon className="!size-1 text-description" />
+								))}
+						</Button>
+						{/*
+						 * On the title line, and while it streams: the body is a
+						 * 150px box pinned to its bottom as text arrives, so what
+						 * scrolled out of it could not be read until the turn ended
+						 * (reported 2026-09-26). Copying it as it stands is how it is
+						 * inspected mid-stream. Beside the title, not in it: the
+						 * title is a button.
+						 */}
+						{hasReasoning && (
+							<CopyButton
+								ariaLabel="Copy reasoning"
+								className="shrink-0 h-auto min-h-0 py-0"
+								textToCopy={reasoningContent}
+							/>
 						)}
-						onClick={onToggle}
-						size="icon"
-						variant="icon">
-						<span
-							className={cn("text-[13px] leading-[1.2]", {
-								"animate-shimmer bg-linear-90 from-foreground to-description bg-[length:200%_100%] bg-clip-text text-transparent":
-									isStreaming,
-								"select-none": isStreaming,
-							})}>
-							{title}
-						</span>
-						{showChevron &&
-							(isExpanded ? (
-								<ChevronDownIcon className="!size-1 text-description" />
-							) : (
-								<ChevronRightIcon className="!size-1 text-description" />
-							))}
-					</Button>
+					</div>
 				) : null}
 
 				{/*
@@ -169,11 +188,11 @@ export const ThinkingRow = memo(
 							 * out of a run, to quote a model's own account of what
 							 * it was doing.
 							 *
-							 * Not while streaming: the text is still arriving, and a
-							 * button that copies a third of a sentence is worse than
-							 * no button.
+							 * Here only without a title line, which carries the button
+							 * otherwise -- and not while streaming, where the body
+							 * scrolls under it.
 							 */}
-							{!isStreaming && !!reasoningContent?.trim() && (
+							{!showTitle && !isStreaming && hasReasoning && (
 								<div className="absolute top-0 right-0 z-10">
 									<CopyButton ariaLabel="Copy reasoning" textToCopy={reasoningContent} />
 								</div>

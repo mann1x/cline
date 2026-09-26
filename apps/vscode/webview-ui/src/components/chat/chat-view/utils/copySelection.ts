@@ -55,6 +55,10 @@ export function prefersPlainText(range: Range, getComputedStyle: (element: Eleme
 /**
  * The text for a selection, or nothing if there is no usable one.
  *
+ * Plain text by default: the Markdown markers made copied thinking hard to
+ * read, and were rarely wanted (reported 2026-09-26). `formatted` keeps them,
+ * for "Copy Formatted" (Ctrl+Shift+C).
+ *
  * Returns `null` rather than an empty string when nothing should be written:
  * an empty string is a value a caller would happily put on the clipboard,
  * which is the failure being fixed here.
@@ -62,6 +66,7 @@ export function prefersPlainText(range: Range, getComputedStyle: (element: Eleme
 export function copyTextForSelection(
 	selection: Selection | null,
 	getComputedStyle: (element: Element) => CSSStyleDeclaration,
+	formatted = false,
 ): string | null {
 	if (!selection || selection.rangeCount === 0) {
 		return null
@@ -70,6 +75,11 @@ export function copyTextForSelection(
 
 	if (prefersPlainText(range, getComputedStyle)) {
 		return selection.toString() || null
+	}
+	if (!formatted) {
+		// The tail only, for the same reason as below: a newline pasted into
+		// the chat box is submit.
+		return selection.toString().replace(/\n+$/, "") || null
 	}
 
 	const div = document.createElement("div")
@@ -89,4 +99,30 @@ export function copyTextForSelection(
 		// would have written anyway.
 		return selection.toString() || null
 	}
+}
+
+/** Ctrl+Shift+C (Cmd+Shift+C on a Mac): copy with the Markdown kept. */
+export function isCopyFormattedKey(e: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey">): boolean {
+	return (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "c"
+}
+
+/**
+ * Put the formatted selection where the host's "Copy Formatted" menu command
+ * finds it: VS Code hands a `webview/context` command the merged
+ * `data-vscode-context` of the clicked element and its ancestors. Cleared when
+ * nothing is selected, so an old selection is never what gets copied.
+ */
+export function stampFormattedSelection(body: HTMLElement, text: string | null): void {
+	let context: Record<string, unknown> = {}
+	try {
+		context = JSON.parse(body.dataset.vscodeContext ?? "{}") as Record<string, unknown>
+	} catch {
+		context = {}
+	}
+	if (text === null) {
+		delete context.formattedSelection
+	} else {
+		context.formattedSelection = text
+	}
+	body.dataset.vscodeContext = JSON.stringify(context)
 }

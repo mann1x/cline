@@ -31,7 +31,7 @@ import {
 	useScrollBehavior,
 	WelcomeSection,
 } from "./chat-view"
-import { copyTextForSelection } from "./chat-view/utils/copySelection"
+import { copyTextForSelection, isCopyFormattedKey, stampFormattedSelection } from "./chat-view/utils/copySelection"
 import {
 	hasPendingMessageConfirmation,
 	isPendingResponseUnconfirmed,
@@ -151,6 +151,8 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		// with whatever was on it before, and reported that to a log only.
 		// The text now goes through `clipboardData`, which is the copy the
 		// browser was already about to make.
+		// Set by Ctrl+Shift+C for the one copy it runs.
+		let formattedCopyPending = false
 		const handleCopy = (e: ClipboardEvent) => {
 			const targetElement = e.target as HTMLElement | null
 			// If the copy event originated from an input or textarea,
@@ -168,8 +170,12 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				return
 			}
 
-			const textToCopy = copyTextForSelection(window.getSelection?.() ?? null, (element) =>
-				window.getComputedStyle(element),
+			const formatted = formattedCopyPending
+			formattedCopyPending = false
+			const textToCopy = copyTextForSelection(
+				window.getSelection?.() ?? null,
+				(element) => window.getComputedStyle(element),
+				formatted,
 			)
 			if (textToCopy === null) {
 				return
@@ -177,10 +183,39 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 			e.clipboardData.setData("text/plain", textToCopy)
 			e.preventDefault()
 		}
+		// A plain copy is the default; Ctrl+Shift+C copies with the Markdown
+		// kept. The copy it runs is the browser's own, so it goes through the
+		// listener above and its `clipboardData` like any other.
+		const handleKeyDown = (e: KeyboardEvent) => {
+			if (!isCopyFormattedKey(e)) {
+				return
+			}
+			const target = e.target as HTMLElement | null
+			if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+				return
+			}
+			e.preventDefault()
+			formattedCopyPending = true
+			document.execCommand("copy")
+			formattedCopyPending = false
+		}
+		// The right-click menu's "Copy Formatted" runs in the host, which is
+		// handed the `data-vscode-context` of what was clicked: the text is put
+		// there before VS Code reads it, in the capture phase.
+		const handleContextMenu = () => {
+			stampFormattedSelection(
+				document.body,
+				copyTextForSelection(window.getSelection?.() ?? null, (element) => window.getComputedStyle(element), true),
+			)
+		}
 		document.addEventListener("copy", handleCopy)
+		document.addEventListener("keydown", handleKeyDown)
+		window.addEventListener("contextmenu", handleContextMenu, true)
 
 		return () => {
 			document.removeEventListener("copy", handleCopy)
+			document.removeEventListener("keydown", handleKeyDown)
+			window.removeEventListener("contextmenu", handleContextMenu, true)
 		}
 	}, [])
 	// Button state is now managed by useButtonState hook

@@ -403,6 +403,20 @@ export async function activate(context: vscode.ExtensionContext) {
 		}),
 	)
 
+	// "Copy Formatted" in the chat's right-click menu: the webview puts the
+	// selection, Markdown kept, in the `data-vscode-context` VS Code hands
+	// here. From Ctrl+Shift+C there is no argument -- the webview has already
+	// made that copy itself -- and the binding is here only so the key does
+	// not also open an external terminal.
+	context.subscriptions.push(
+		vscode.commands.registerCommand(commands.CopyFormatted, async (menuContext?: { formattedSelection?: unknown }) => {
+			const text = menuContext?.formattedSelection
+			if (typeof text === "string" && text.length > 0) {
+				await vscode.env.clipboard.writeText(text)
+			}
+		}),
+	)
+
 	// Register Jupyter Notebook command handlers
 	const NOTEBOOK_EDIT_INSTRUCTIONS = `Special considerations for using replace_in_file on *.ipynb files:
 * Jupyter notebook files are JSON format with specific structure for source code cells

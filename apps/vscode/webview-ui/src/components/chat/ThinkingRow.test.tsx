@@ -60,10 +60,12 @@ describe("ThinkingRow", () => {
 		expect(screen.getByRole("button", { name: "Thinking" })).toBeInTheDocument()
 	})
 
-	it("offers a way to copy the reasoning once it has stopped arriving", () => {
+	it("offers a way to copy the reasoning on its title line, while it streams too", () => {
 		// Reasoning was the one row in the panel with no copy affordance, and
-		// its body is a 150px scroller -- so the only route was dragging a
-		// selection through a box that scrolls under the cursor.
+		// its body is a 150px scroller pinned to its bottom while text arrives
+		// -- what scrolled out could not be read until the turn ended
+		// (reported 2026-09-26). The copy sits on the title line and works
+		// mid-stream.
 		const { rerender } = render(
 			<ThinkingRow
 				isExpanded={true}
@@ -75,9 +77,10 @@ describe("ThinkingRow", () => {
 			/>,
 		)
 
-		// Not mid-stream: a button that copies a third of a sentence is worse
-		// than no button.
-		expect(screen.queryByRole("button", { name: "Copy reasoning" })).toBeNull()
+		const copy = screen.getByRole("button", { name: "Copy reasoning" })
+		// Beside the title, not inside it: a button cannot hold a button.
+		expect(copy.closest("button")).toBe(copy)
+		expect(copy.parentElement?.contains(screen.getByRole("button", { name: "Thinking" }))).toBe(true)
 
 		rerender(
 			<ThinkingRow
@@ -90,7 +93,8 @@ describe("ThinkingRow", () => {
 			/>,
 		)
 
-		expect(screen.getByRole("button", { name: "Copy reasoning" })).toBeInTheDocument()
+		// One button, on the title line: the body does not add a second.
+		expect(screen.getAllByRole("button", { name: "Copy reasoning" })).toHaveLength(1)
 	})
 
 	it("calls onToggle when header is clicked", () => {

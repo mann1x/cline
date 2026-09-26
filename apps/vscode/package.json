@@ -234,6 +234,11 @@
 				"title": "Check for Updates",
 				"category": "Cerebriline",
 				"icon": "$(cloud-download)"
+			},
+			{
+				"command": "cerebriline.copyFormatted",
+				"title": "Copy Formatted",
+				"category": "Cerebriline"
 			}
 		],
 		"keybindings": [
@@ -256,6 +261,12 @@
 				"win": "ctrl+'",
 				"linux": "ctrl+'",
 				"when": "!editorHasSelection"
+			},
+			{
+				"command": "cerebriline.copyFormatted",
+				"key": "ctrl+shift+c",
+				"mac": "cmd+shift+c",
+				"when": "focusedView == 'cerebriline.SidebarProvider'"
 			}
 		],
 		"menus": {
@@ -338,6 +349,17 @@
 				{
 					"command": "cerebriline.abortGitCommitMessage",
 					"when": "config.git.enabled && cerebriline.isGeneratingCommit"
+				},
+				{
+					"command": "cerebriline.copyFormatted",
+					"when": "false"
+				}
+			],
+			"webview/context": [
+				{
+					"command": "cerebriline.copyFormatted",
+					"group": "9_cutcopypaste@2",
+					"when": "webviewId == 'cerebriline.SidebarProvider'"
 				}
 			]
 		},
