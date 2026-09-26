@@ -350,7 +350,14 @@ export function createAgentModelFromConfig(
 			temperature: normalizedProviderConfig.temperature,
 			auxiliary: options?.auxiliary ?? normalizedProviderConfig.auxiliary,
 			conversation: options?.conversation === true,
-			sessionId: config.sessionId,
+			// Whose measurements these are: the gateway files the last request's
+			// count, its output cap and a context overflow under this key, and
+			// compaction collects them by it. A delegated agent carries the
+			// lead's `sessionId` for telemetry, so keyed on that its overflow
+			// was the lead's: on pandorum 2026-09-26 an agent's 62,553-token
+			// overflow of a 65,536 window forced the lead, at 35k of 128k, to
+			// compact. Its own engine session is its own.
+			sessionId: config.engineSessionId || config.sessionId,
 		},
 	);
 }

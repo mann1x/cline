@@ -735,6 +735,9 @@ export function createContextCompactionPrepareTurn(
 			providerId: config.providerId,
 			modelId: config.modelId,
 		} as ProviderConfig);
+	// The key the gateway filed this agent's measurements under (see
+	// `createAgentModelFromConfig`): its own engine session, else the session.
+	const measurementsKey = providerConfig.engineSessionId || config.sessionId;
 	const estimateMessageTokens = createTokenEstimator();
 	const strategy = userCompaction?.strategy ?? "agentic";
 	const runBuiltinStrategy = BUILTIN_COMPACTION_STRATEGIES[strategy];
@@ -849,7 +852,7 @@ export function createContextCompactionPrepareTurn(
 		const requestInputTokens = anchoredRequestTokens(
 			requestChars,
 			requestReasoningChars,
-			config.sessionId,
+			measurementsKey,
 		);
 		const messageInputTokens = context.messages.reduce(
 			(total: number, message) => total + estimateMessageTokens(message),
@@ -1032,13 +1035,13 @@ export function createContextCompactionPrepareTurn(
 		// days had the estimate over the trigger and a foreign count below it,
 		// the worst vetoing a 436,717-token estimate with 18,875 observed tokens
 		// against a 262,144 window (mann1x/cline#68).
-		const observedRequestTokens = lastObservedRequestTokens(config.sessionId);
+		const observedRequestTokens = lastObservedRequestTokens(measurementsKey);
 		const triggerInputTokens = observedRequestTokens ?? requestInputTokens;
 		// The request path found no room for a reply on the last turn. That is
 		// not a projection that could be miscalibrated -- it is the budget
 		// arithmetic having already failed -- so it compacts whatever the ratio
 		// above concludes, and covers the case where the two disagree.
-		const contextOverflow = consumeContextOverflow(config.sessionId);
+		const contextOverflow = consumeContextOverflow(measurementsKey);
 		// The one signal here that is not an estimate.
 		//
 		// On an engine with a KV pool tree, the pool knows what it holds and
@@ -1094,7 +1097,7 @@ export function createContextCompactionPrepareTurn(
 			modelMaxTokens: context.model.info?.maxTokens,
 			observedOutputTokens,
 		});
-		const lastCap = lastOutputCap(config.sessionId);
+		const lastCap = lastOutputCap(measurementsKey);
 		// A cap is a conclusion drawn from an estimate, and this is the one
 		// trigger that acts on a conclusion rather than on a measurement. When
 		// the estimate behind it disagrees with what the provider counted for
@@ -1133,7 +1136,7 @@ export function createContextCompactionPrepareTurn(
 				},
 			);
 		}
-		const latchKey = config.sessionId ?? "";
+		const latchKey = measurementsKey ?? "";
 		const outputCapStarvedFires =
 			outputCapStarved && !starvedOutputCapSessions.has(latchKey);
 		if (outputCapStarved) {
