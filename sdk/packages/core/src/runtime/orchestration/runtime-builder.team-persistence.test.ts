@@ -205,6 +205,8 @@ describe("DefaultRuntimeBuilder team persistence boundary", () => {
 		);
 		expect(teamStoreInstance.persistRuntime).toHaveBeenCalled();
 
+		// A shutdown the lead asked for, with or without a reason, removes it:
+		// `reason` is optional in the tool's schema, and a model omits it.
 		runtimeInstance.emit({
 			type: "teammate_shutdown",
 			agentId: "python-poet",
@@ -219,11 +221,16 @@ describe("DefaultRuntimeBuilder team persistence boundary", () => {
 		expect(teamStoreInstance.persistRuntime).toHaveBeenLastCalledWith(
 			expect.any(String),
 			expect.any(Object),
-			expect.arrayContaining([
+			expect.not.arrayContaining([
 				expect.objectContaining({ agentId: "python-poet" }),
 			]),
 		);
 
+		runtimeInstance.emit({
+			type: "teammate_spawned",
+			agentId: "python-poet",
+			teammate: { rolePrompt: "Write concise Python-focused haiku" },
+		});
 		runtimeInstance.emit({
 			type: "teammate_shutdown",
 			agentId: "python-poet",
@@ -255,6 +262,57 @@ describe("DefaultRuntimeBuilder team persistence boundary", () => {
 			expect.arrayContaining([
 				expect.objectContaining({ agentId: "java-poet" }),
 			]),
+		);
+
+		// team_cleanup wiped the team without a word to the store, so a reload
+		// brought back the team it had removed.
+		runtimeInstance.emit({ type: "team_cleaned" });
+		expect(teamStoreInstance.persistRuntime).toHaveBeenLastCalledWith(
+			expect.any(String),
+			expect.any(Object),
+			[],
+		);
+	});
+
+	// The runtime going down shuts its teammates down with the host's reason,
+	// whatever the host calls it; they are kept, to come back with the session.
+	it("keeps the teammates of a runtime that is shutting down, for restore", async () => {
+		const { DefaultRuntimeBuilder } = await import("./runtime-builder");
+		const built = await new DefaultRuntimeBuilder().build({
+			config: {
+				providerId: "anthropic",
+				modelId: "claude-sonnet-4-6",
+				apiKey: "key",
+				systemPrompt: "test",
+				cwd: process.cwd(),
+				enableTools: false,
+				enableSpawnAgent: false,
+				enableAgentTeams: true,
+			},
+		});
+		if (!runtimeInstance || !teamStoreInstance) {
+			throw new Error("Expected mocked runtime and team store instances");
+		}
+		const runtime = runtimeInstance;
+		runtime.emit({
+			type: "teammate_spawned",
+			agentId: "w",
+			teammate: { rolePrompt: "Write" },
+		});
+		runtime.getTeammateIds.mockReturnValue(["w"] as never);
+		runtime.shutdownTeammate.mockImplementation(((
+			agentId: string,
+			reason?: string,
+		) => {
+			runtime.emit({ type: "teammate_shutdown", agentId, reason });
+		}) as never);
+
+		await built.shutdown?.("some_host_reason");
+
+		expect(teamStoreInstance.persistRuntime).toHaveBeenLastCalledWith(
+			expect.any(String),
+			expect.any(Object),
+			expect.arrayContaining([expect.objectContaining({ agentId: "w" })]),
 		);
 	});
 

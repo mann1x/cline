@@ -143,7 +143,8 @@ export type TeamEvent =
 			type: TeamMessageType.OutcomeFragmentReviewed;
 			fragment: TeamOutcomeFragment;
 	  }
-	| { type: TeamMessageType.OutcomeFinalized; outcome: TeamOutcome };
+	| { type: TeamMessageType.OutcomeFinalized; outcome: TeamOutcome }
+	| { type: TeamMessageType.TeamCleaned };
 
 /**
  * Whether an event changed the team's state -- what a store must write.
@@ -2065,8 +2066,16 @@ export class AgentTeamsRuntime {
 				this.members.delete(memberId);
 				this.releaseWorkspace(memberId);
 				this.releaseEngineSession(member);
+				this.emitEvent({
+					type: TeamMessageType.TeammateShutdown,
+					agentId: memberId,
+					reason: "team_cleanup",
+				});
 			}
 		}
+		// Said, so a store writes the empty team: without it a reload brought
+		// the wiped one back, teammates and all.
+		this.emitEvent({ type: TeamMessageType.TeamCleaned });
 	}
 
 	private requireTask(taskId: string): TeamTask {

@@ -1042,3 +1042,54 @@ describe("AgentTeamsRuntime run failure reporting", () => {
 		);
 	});
 });
+
+// team_cleanup deleted every teammate, task and run without an event, so
+// nothing told the store: a reload restored the team it had just wiped.
+describe("AgentTeamsRuntime cleanup", () => {
+	it("says so: each teammate is shut down, then the team is cleaned", () => {
+		const events: TeamEvent[] = [];
+		const runtime = new AgentTeamsRuntime({
+			teamName: "test-team",
+			onTeamEvent: (event) => events.push(event),
+		});
+		spawnTestTeammate(runtime, "alice");
+		spawnTestTeammate(runtime, "bob");
+		runtime.createTask({ title: "t", description: "d", createdBy: "lead" });
+		events.length = 0;
+
+		runtime.cleanup();
+
+		expect(events.map((event) => event.type)).toEqual([
+			TeamMessageType.TeammateShutdown,
+			TeamMessageType.TeammateShutdown,
+			TeamMessageType.TeamCleaned,
+		]);
+		expect(events[0]).toMatchObject({
+			agentId: "alice",
+			reason: "team_cleanup",
+		});
+		expect(events[1]).toMatchObject({ agentId: "bob", reason: "team_cleanup" });
+		// What the store writes on each of them is the empty team.
+		expect(runtime.exportState()).toMatchObject({
+			members: [expect.objectContaining({ role: "lead" })],
+			tasks: [],
+			runs: [],
+		});
+	});
+
+	it("is announced for a team with tasks and no teammates", () => {
+		const events: TeamEvent[] = [];
+		const runtime = new AgentTeamsRuntime({
+			teamName: "test-team",
+			onTeamEvent: (event) => events.push(event),
+		});
+		runtime.createTask({ title: "t", description: "d", createdBy: "lead" });
+		events.length = 0;
+
+		runtime.cleanup();
+
+		expect(events.map((event) => event.type)).toEqual([
+			TeamMessageType.TeamCleaned,
+		]);
+	});
+});

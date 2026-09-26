@@ -176,7 +176,7 @@ what broke, with file:line and the failing output.
 | Tool | Who | What |
 |---|---|---|
 | `team_spawn_teammate` | lead | `agentId`, `rolePrompt`, optional `temperature`/`seed`/`temperature_range` |
-| `team_shutdown_teammate` | lead | `agentId`, optional `reason`. Without a reason the teammate stays persisted and comes back on restore |
+| `team_shutdown_teammate` | lead | `agentId`, optional `reason`. The teammate is removed, reason or not; only the session shutting down keeps teammates for restore |
 | `team_run_task` | any | `agentId`, `task`, optional `taskId`, `runMode` (`sync` default / `async`), `continueConversation`, `max_iterations` |
 | `team_await_runs`, `team_list_runs`, `team_cancel_run` | any | Wait for, list, or cancel async runs. The wait has no time limit: it ends when the runs do, or when the lead is stopped. A teammate waiting for all runs does not wait for its own |
 | `team_task` | any | Task board: `create`, `list`, `claim`, `complete`, `block`. Supports `dependsOn` |
@@ -184,7 +184,7 @@ what broke, with file:line and the failing output.
 | `team_mission_log` | any | Log entries (`progress`, `handoff`, `blocked`, `decision`, `done`, `error`) |
 | `team_create_outcome`, `team_attach_outcome_fragment`, `team_review_outcome_fragment`, `team_finalize_outcome`, `team_list_outcomes` | any | A document built from reviewed sections |
 | `team_status` | any | Counts only: members, tasks, unread mail, runs, outcomes |
-| `team_cleanup` | lead | Wipes the team state. Fails while anything is active |
+| `team_cleanup` | lead | Wipes the team state, persisted too, so a reload does not bring it back. Fails while anything is active |
 
 **Behaviour to know:**
 

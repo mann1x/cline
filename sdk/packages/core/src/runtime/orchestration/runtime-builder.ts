@@ -482,15 +482,33 @@ function shutdownTeamRuntime(
 	}
 	for (const teammateId of teamRuntime.getTeammateIds()) {
 		try {
-			teamRuntime.shutdownTeammate(teammateId, reason);
+			teamRuntime.shutdownTeammate(
+				teammateId,
+				`${RUNTIME_SHUTDOWN_REASON_PREFIX}${reason}`,
+			);
 		} catch {
 			// Best-effort shutdown for all teammates.
 		}
 	}
 }
 
+/**
+ * Marks a teammate shutdown the runtime did on its way down, whatever the
+ * host called the reason: the teammate is kept, to come back with the
+ * session. Hosts pass reasons no list here names.
+ */
+const RUNTIME_SHUTDOWN_REASON_PREFIX = "runtime_shutdown:";
+
+/**
+ * Whether a teammate's shutdown was the session going down (kept for
+ * restore) rather than the lead removing it. No reason is the lead's: the
+ * tool's `reason` is optional, and a model leaves it out.
+ */
 function isRuntimeLifecycleShutdownReason(reason: string | undefined): boolean {
 	if (reason === undefined) {
+		return false;
+	}
+	if (reason.startsWith(RUNTIME_SHUTDOWN_REASON_PREFIX)) {
 		return true;
 	}
 	switch (reason) {
@@ -1244,6 +1262,9 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 								!isRuntimeLifecycleShutdownReason(event.reason)
 							) {
 								teammateSpecs.delete(event.agentId);
+							}
+							if (event.type === "team_cleaned") {
+								teammateSpecs.clear();
 							}
 							teamStore.handleTeamEvent(teamStoreKey, event);
 							teamStore.persistRuntime(

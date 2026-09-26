@@ -283,4 +283,6 @@ export enum TeamMessageType {
 	OutcomeFragmentAttached = "outcome_fragment_attached",
 	OutcomeFragmentReviewed = "outcome_fragment_reviewed",
 	OutcomeFinalized = "outcome_finalized",
+	/** `team_cleanup` wiped the team: its tasks, runs, mail, log and teammates. */
+	TeamCleaned = "team_cleaned",
 }
