@@ -1,5 +1,5 @@
 import type { AgentResult } from "@cline/shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * A teammate's async runs, queued, cancelled and shut down (audit B-3..B-6).
@@ -26,13 +26,17 @@ interface FakeTeammate {
 	aborts: number;
 	finish(text?: string, finishReason?: AgentResult["finishReason"]): void;
 	running(): boolean;
+	/** An event from the agent, as its runtime would announce it. */
+	emit(event: unknown): void;
 }
 
 const fakes = vi.hoisted(() => ({ list: [] as FakeTeammate[] }));
 
 vi.mock("../../../runtime/orchestration/session-runtime-orchestrator", () => ({
 	// biome-ignore lint/complexity/useArrowFunction: `new SessionRuntime(...)` requires a non-arrow callable.
-	SessionRuntime: vi.fn(function () {
+	SessionRuntime: vi.fn(function (config: {
+		onEvent?: (event: unknown) => void;
+	}) {
 		let settle: ((result: AgentResult) => void) | undefined;
 		const fake: FakeTeammate = {
 			started: [],
@@ -43,6 +47,7 @@ vi.mock("../../../runtime/orchestration/session-runtime-orchestrator", () => ({
 				done?.(result(text, finishReason));
 			},
 			running: () => settle !== undefined,
+			emit: (event) => config.onEvent?.(event),
 		};
 		fakes.list.push(fake);
 		const start = (message: string) => {
@@ -352,5 +357,45 @@ describe("a teammate shut down with work queued", () => {
 		);
 		expect(w.started).toEqual([]);
 		expect(runtime.isTeammateActive("w")).toBe(false);
+	});
+});
+
+describe("a running run's heartbeat", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	const heartbeats = (events: TeamEvent[]) =>
+		events.filter(
+			(event) =>
+				event.type === "run_progress" &&
+				(event as { message?: string }).message === "heartbeat",
+		).length;
+
+	it("is announced only when the teammate's count moved since the last one", async () => {
+		vi.useFakeTimers();
+		const { runtime, events, spawn } = team();
+		const w = spawn("w");
+		runtime.startTeammateRun("w", "slow task");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(w.started).toEqual(["slow task"]);
+
+		// Ten seconds of a teammate thinking: nothing it shows has changed.
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(heartbeats(events)).toBe(0);
+
+		w.emit({
+			type: "content_start",
+			contentType: "tool",
+			toolName: "read_files",
+			toolCallId: "t1",
+		});
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(heartbeats(events)).toBe(1);
+
+		await vi.advanceTimersByTimeAsync(6_000);
+		expect(heartbeats(events)).toBe(1);
+		w.finish();
+		await vi.advanceTimersByTimeAsync(0);
 	});
 });

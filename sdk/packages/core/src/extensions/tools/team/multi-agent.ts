@@ -1783,10 +1783,28 @@ export class AgentTeamsRuntime {
 		run.currentActivity = "run_started";
 		this.emitEvent({ type: TeamMessageType.RunStarted, run: { ...run } });
 
+		// What the run's progress shows that moves on its own: the teammate's
+		// counts on this task. A tick with nothing new keeps the run's
+		// heartbeat time and announces nothing -- every announcement was a
+		// team_progress event and a row redrawn, every two seconds a run was
+		// thinking.
+		const shown = () =>
+			JSON.stringify(liveRunActivity(this.members.get(run.agentId)));
+		// From the count a task starts at: its teammate's counter for it is
+		// made when the task starts, after this.
+		let lastShown = JSON.stringify(
+			liveRunActivity({ currentTaskCounter: createActivityCounter() }),
+		);
 		const heartbeatTimer = setInterval(() => {
 			if (run.status !== "running") {
 				return;
 			}
+			const now = shown();
+			if (now === lastShown) {
+				run.heartbeatAt = new Date();
+				return;
+			}
+			lastShown = now;
 			this.recordRunProgress(run, "heartbeat");
 		}, 2000);
 
