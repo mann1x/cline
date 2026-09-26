@@ -57,6 +57,14 @@ export interface OpencotiKvPressure {
 	lastRefusalAgeS?: number;
 	/** Refusals since boot. */
 	refusalsTotal?: number;
+	/**
+	 * Cells physically held by IDLE slots minus their pool share
+	 * (`kv_observable_v1`, bug-3657): released workers' "ghosts", charged to
+	 * no booking. Reclaimed one slot per failed `find_slot`, or when the slot
+	 * is reused -- until then, room the admission gate counts as free and the
+	 * cache does not have. Server-wide: the engine does not say whose.
+	 */
+	idleResident?: number;
 }
 
 const DEFAULT_PRESSURE_WINDOW_S = 60;
@@ -105,6 +113,7 @@ export function parseOpencotiKvPressure(
 		...optional("lastRefusalAt", block.last_refusal_at),
 		...optional("lastRefusalAgeS", block.last_refusal_age_s),
 		...optional("refusalsTotal", block.refusals_total),
+		...optional("idleResident", block.idle_resident),
 	};
 }
 
@@ -264,6 +273,48 @@ export interface OpencotiKvSnapshot {
 	allocations: OpencotiAllocation[];
 	/** Present only where the server advertises `kv_pressure_v1`. */
 	pressure?: OpencotiKvPressure;
+	/**
+	 * Present only where the server advertises `kv_observable_v1`: what the
+	 * cache physically holds beyond the bookings, and the room the admission
+	 * gate still counts as free.
+	 */
+	resident?: OpencotiKvResident;
+}
+
+/** The part of the cache no booking accounts for (`kv_observable_v1`). */
+export interface OpencotiKvResident {
+	/** `pressure.idle_resident`: see {@link OpencotiKvPressure.idleResident}. */
+	idleResident: number;
+	/** `cells_free`: unallocated base cells, what admission will hand out. */
+	cellsFree?: number;
+	/** `cells_total`: the base pool. */
+	cellsTotal?: number;
+	/**
+	 * `/kv` → `swa`: the sliding-window half, on a model with one (null
+	 * otherwise). Bookings and `largest_admissible` count BASE cells only,
+	 * and every resident sequence keeps its last SWA window -- idle sessions
+	 * and pools included -- so this half can be full while the base is nearly
+	 * empty: the b116 evictions were "SWA half could not fit the batch (2048
+	 * tokens): swa 66044 used of 66048 cells" with the base holding 163k of
+	 * 1M (opencoti mail #322).
+	 */
+	swa?: OpencotiKvSwa;
+}
+
+/**
+ * The SWA half as `/kv` states it. `cellsUsed` is the engine's ACCOUNTING
+ * (`oc_kv_pools_state`): the eventual demand of processing slots and pools,
+ * with idle slots deliberately uncharged (bug-3535). It is not the physical
+ * occupancy the engine's find_slot failure logs, which includes the idle
+ * slots' windows -- so it reads low exactly when ghosts hold the half.
+ */
+export interface OpencotiKvSwa {
+	cellsUsed: number;
+	cellsTotal: number;
+	cellsFree?: number;
+	cellsReserved?: number;
+	/** The model's sliding window, per sequence. */
+	window?: number;
 }
 
 const KV_READ_TIMEOUT_MS = 5_000;
@@ -311,9 +362,53 @@ export async function readOpencotiKv(
 	for (const row of allocations) {
 		notePendingResize(baseUrl, row.sessionId, row.resizePending);
 	}
+	// Only on an engine that says what it means: before `kv_observable_v1`
+	// there is no idle count, and nothing below changes.
+	const idleResident = hasOpencotiFeature(
+		props.features,
+		OPENCOTI_FEATURES.kvObservable,
+	)
+		? (pressure?.idleResident ??
+			(isRecord(kv.pressure) ? finite(kv.pressure.idle_resident) : undefined))
+		: undefined;
+	const cellsFree = finite(kv.cells_free);
+	const cellsTotal = finite(kv.cells_total);
+	const swa = idleResident !== undefined ? parseSwa(kv.swa) : undefined;
 	return {
 		allocations,
 		...(pressure ? { pressure } : {}),
+		...(idleResident !== undefined
+			? {
+					resident: {
+						idleResident: Math.max(0, idleResident),
+						...(cellsFree !== undefined ? { cellsFree } : {}),
+						...(cellsTotal !== undefined ? { cellsTotal } : {}),
+						...(swa ? { swa } : {}),
+					},
+				}
+			: {}),
+	};
+}
+
+/** `/kv` → `swa`, when the model has the half and the block says enough. */
+function parseSwa(raw: unknown): OpencotiKvSwa | undefined {
+	if (!isRecord(raw)) {
+		return undefined;
+	}
+	const cellsUsed = finite(raw.cells_used);
+	const cellsTotal = finite(raw.cells_total);
+	if (cellsUsed === undefined || cellsTotal === undefined || cellsTotal <= 0) {
+		return undefined;
+	}
+	const cellsFree = finite(raw.cells_free);
+	const cellsReserved = finite(raw.cells_reserved);
+	const window = finite(raw.window);
+	return {
+		cellsUsed,
+		cellsTotal,
+		...(cellsFree !== undefined ? { cellsFree } : {}),
+		...(cellsReserved !== undefined ? { cellsReserved } : {}),
+		...(window !== undefined ? { window } : {}),
 	};
 }
 
@@ -447,6 +542,11 @@ export interface OpencotiResizeDone {
 	cellsDelta?: number;
 	used?: number;
 	sequences?: number;
+	/**
+	 * `idle_resident` at the resize (`kv_observable_v1`): the cells beyond
+	 * `used` the cache still holds. Shrink against `used + idleResident`.
+	 */
+	idleResident?: number;
 }
 
 /**
@@ -482,6 +582,8 @@ export interface OpencotiResizeRefused {
 	pressure?: OpencotiKvPressure;
 	/** `deferred`: the window queued for the idle moment. */
 	pending?: number;
+	/** As on {@link OpencotiResizeDone}, where the engine states it. */
+	idleResident?: number;
 }
 
 export type OpencotiResizeResult = OpencotiResizeDone | OpencotiResizeRefused;
@@ -609,6 +711,7 @@ export async function resizeOpencotiSession(options: {
 			...optional("cellsDelta", field("cells_delta")),
 			...optional("used", field("used")),
 			...optional("sequences", field("sequences")),
+			...optional("idleResident", field("idle_resident")),
 		};
 	}
 	const error = isRecord(body.error) ? body.error : body;
@@ -621,6 +724,7 @@ export async function resizeOpencotiSession(options: {
 	const window = number("window");
 	const cells = number("cells");
 	const largestAdmissible = number("largest_admissible");
+	const idleResident = number("idle_resident") ?? finite(body.idle_resident);
 	return {
 		ok: false,
 		status: answer.status,
@@ -630,6 +734,7 @@ export async function resizeOpencotiSession(options: {
 		...(window !== undefined ? { window } : {}),
 		...(cells !== undefined ? { cells } : {}),
 		...(largestAdmissible !== undefined ? { largestAdmissible } : {}),
+		...(idleResident !== undefined ? { idleResident } : {}),
 		...(pressure ? { pressure } : {}),
 	};
 }

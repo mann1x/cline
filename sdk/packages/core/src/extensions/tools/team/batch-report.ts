@@ -77,6 +77,11 @@ export interface SpawnBatchMemberResult {
 	stopReason?: "iteration_cap";
 	state?: "awaiting_lead";
 	oracle?: AgentOracleResult;
+	/**
+	 * Times the engine evicted it and it was sent again. Each one is an
+	 * engine bug: no session is ever meant to be evicted.
+	 */
+	evicted?: number;
 }
 
 export interface SpawnBatchIndexEntry {
@@ -96,6 +101,8 @@ export interface SpawnBatchIndexEntry {
 	agentId?: string;
 	/** Its check's verdict in a word: `pass`, `fail (exit N)`, `not run: why`. */
 	oracle?: string;
+	/** Times the engine evicted it, when it did. */
+	evicted?: number;
 }
 
 export interface SpawnBatchSummary {
@@ -111,6 +118,11 @@ export interface SpawnBatchSummary {
 		{ total: number; completed: number; errored: number; cancelled: number }
 	>;
 	byFailureClass: { infra: number; task: number };
+	/**
+	 * Engine evictions across the round, every agent's summed. Each one is an
+	 * engine bug and was retried; stated even at 0, so its absence says so.
+	 */
+	evicted: number;
 	totalIterations: number;
 	totalTokens: { input: number; output: number };
 }
@@ -238,6 +250,7 @@ function indexEntry(
 		...(line ? { line } : {}),
 		...(why ? { error: why } : {}),
 		...controlFieldsOf(result),
+		...(result.evicted ? { evicted: result.evicted } : {}),
 	};
 }
 
@@ -324,6 +337,7 @@ export function buildSpawnBatchReport(
 		awaitingLead: 0,
 		byType: {},
 		byFailureClass: { infra: 0, task: 0 },
+		evicted: 0,
 		totalIterations: 0,
 		totalTokens: { input: 0, output: 0 },
 	};
@@ -347,6 +361,7 @@ export function buildSpawnBatchReport(
 		if (failureClass) {
 			summary.byFailureClass[failureClass] += 1;
 		}
+		summary.evicted += result.evicted ?? 0;
 		summary.totalIterations += result.iterations ?? 0;
 		summary.totalTokens.input += result.usage?.inputTokens ?? 0;
 		summary.totalTokens.output += result.usage?.outputTokens ?? 0;

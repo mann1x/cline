@@ -19,6 +19,12 @@
  *   refusal thresholds (the tps floor, the allocation) are the user's own
  *   settings and are never touched from here; waiting is the only answer.
  *
+ * - **Eviction**: the engine dropped the turn's sequence to keep its batch
+ *   alive (`kv_observable_v1`'s `evicted_kv_full`, or the text before it).
+ *   Waited out exactly like a refusal, and -- the one fault that is a warning
+ *   while it is waited out -- reported as the engine bug it is: counted in
+ *   {@link recordEngineEviction} and on the agent's row as `evicted`.
+ *
  * Before the engine admitted an agent that was placed on a node, the spawn
  * queue owns the retry instead -- it can put the agent on another node -- so
  * this declines, and `runPlacedAgent` re-places it.
@@ -30,6 +36,7 @@ import {
 	waitForServerHealth,
 } from "@cline/llms";
 import type { TurnFault, TurnFaultRecovery } from "@cline/shared";
+import { recordEngineEviction } from "./engine-evictions";
 
 /** First wait after a refusal; doubles with each one in a row. */
 export const REFUSAL_BACKOFF_FIRST_MS = 2_000;
@@ -133,11 +140,13 @@ function report(
 	emitUpdate: TurnFaultRecoveryOptions["emitUpdate"],
 	text: string,
 	severity: "warn" | "info",
+	extra?: Record<string, unknown>,
 ): void {
 	emitUpdate?.({
 		latestOutput: text,
 		latestOutputKind: "text",
 		activity: { text, severity },
+		...extra,
 	});
 }
 
@@ -145,6 +154,8 @@ export function createTurnFaultRecovery(
 	options: TurnFaultRecoveryOptions,
 ): TurnFaultRecovery {
 	const sleep = options.sleep ?? sleepUnlessAborted;
+	/** Evictions this agent has been through, for its row. */
+	let evictions = 0;
 	return async (fault: TurnFault): Promise<boolean> => {
 		const signal = composed(fault.signal, options.signal);
 		if (signal?.aborted) {
@@ -201,6 +212,34 @@ export function createTurnFaultRecovery(
 				// No address to ask (a cloud provider): back off instead.
 				await sleep(refusalBackoffMs(fault.attempt), signal);
 			}
+		} else if (fault.evicted) {
+			// Recorded even when a Stop is already pending: it happened.
+			evictions += 1;
+			recordEngineEviction({
+				at: Date.now(),
+				label: options.label,
+				where,
+				...(fault.sessionId ? { sessionId: fault.sessionId } : {}),
+				...(fault.tokensHeld !== undefined
+					? { tokensHeld: fault.tokensHeld }
+					: {}),
+				message: fault.message,
+			});
+			const waitMs = refusalBackoffMs(fault.attempt);
+			const held =
+				fault.tokensHeld !== undefined
+					? `, holding ${fault.tokensHeld.toLocaleString("en-US")} tokens`
+					: "";
+			const line = `${where} evicted the turn to keep other requests alive${held} -- an engine bug, reported; trying again in ${Math.round(waitMs / 1000)} s (eviction ${evictions}).`;
+			options.logger?.log(`[Agents] ${options.label}: ${line}`);
+			// The one warning among the waits: an eviction is a bug report.
+			report(options.emitUpdate, line, "warn", { evicted: evictions });
+			options.onWaiting?.({
+				kind: "refusal",
+				where,
+				detail: fault.message,
+			});
+			await sleep(waitMs, signal);
 		} else {
 			const waitMs = refusalBackoffMs(fault.attempt);
 			const line = `${where} refused the turn (${fault.message.trim().slice(0, 200)}); trying again in ${Math.round(waitMs / 1000)} s (refusal ${fault.attempt}).`;

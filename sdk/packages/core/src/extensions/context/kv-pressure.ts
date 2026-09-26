@@ -101,6 +101,85 @@ export const KV_PRESSURE_COMPACTION_MIN_GAIN_SHARE = 0.25;
  */
 export const KV_PRESSURE_COMPACTION_MIN_RATIO = 1.25;
 
+/**
+ * When the cells idle slots hold count as pressure (`kv_observable_v1`).
+ *
+ * `idle_resident` is resident cache no booking pays for: a released worker's
+ * private suffix, an LCP-kept slot's cache. The admission gate counts those
+ * cells as free (`cells_free`) and hands them out; the cache does not have
+ * them. The engine reclaims them one slot per FAILED `find_slot` -- so once
+ * the bookings grow into that room, what reclaims it is a failed batch, and
+ * a failed batch is an "Invalid input batch" for everyone in it or a partial
+ * eviction (b108: `used 9750` booked while ~81k released-worker tokens were
+ * held, then evictions of agents holding 20-31k of 64k).
+ *
+ * So it is pressure when it is a real part of the room admission still
+ * offers: at least {@link KV_IDLE_RESIDENT_PRESSURE_SHARE} of `cells_free`
+ * (of `cells_total` where the engine states no free count). A quarter because
+ * that is the point where the next few admissions -- each books a window of
+ * tens of thousands of cells -- can already reach cells that are not there,
+ * while a pool with room several times the ghosts has nothing to fear from
+ * them yet. And never under {@link KV_IDLE_RESIDENT_PRESSURE_MIN_CELLS}: one
+ * idle slot keeping a short request's cache is how the engine is meant to run
+ * (the 0399 gate read 1,997 after a single 512-token completion), not a leak.
+ */
+export const KV_IDLE_RESIDENT_PRESSURE_SHARE = 0.25;
+export const KV_IDLE_RESIDENT_PRESSURE_MIN_CELLS = 8_192;
+
+/** Whether the idle-resident cells are pressure: see the constants above. */
+export function idleResidentIsPressure(resident: {
+	idleResident: number;
+	cellsFree?: number;
+	cellsTotal?: number;
+}): boolean {
+	const room = resident.cellsFree ?? resident.cellsTotal;
+	if (room === undefined || room < 0) {
+		return false;
+	}
+	return (
+		resident.idleResident >= KV_IDLE_RESIDENT_PRESSURE_MIN_CELLS &&
+		resident.idleResident >= room * KV_IDLE_RESIDENT_PRESSURE_SHARE
+	);
+}
+
+/**
+ * When the SWA half is full enough to be pressure (opencoti mail #322).
+ *
+ * On a model with a sliding window the cache has two halves, and bookings and
+ * `largest_admissible` count only the base. Every resident sequence keeps its
+ * last SWA window -- idle sessions and pools too -- so the SWA half fills while
+ * the base looks empty: the b116 evictions were "SWA half could not fit the
+ * batch (2048 tokens): swa 66044 used of 66048 cells" with the base at 163k of
+ * 1M. A batch needs a ubatch of free SWA cells on top of every live window,
+ * so the room that matters is a few batches, not a share of a big pool.
+ *
+ * 0.85: on that 66,048-cell half the last 15% is ~9,900 cells, four or five
+ * 2,048-token batches -- the headroom a wave of prefills uses up before the
+ * next turn boundary reads `/kv` again. Lower would call a half that is
+ * merely busy (each live sequence holds a whole window by design) pressure;
+ * higher leaves less than two batches between the reading and the failure.
+ * And `/kv`'s count is the engine's accounting, which leaves the idle slots'
+ * windows out: the physical half is fuller than it says, never emptier.
+ */
+export const KV_SWA_PRESSURE_OCCUPANCY = 0.85;
+
+/** Whether the SWA half is pressure: see {@link KV_SWA_PRESSURE_OCCUPANCY}. */
+export function swaIsPressure(swa: {
+	cellsUsed: number;
+	cellsTotal: number;
+	cellsFree?: number;
+}): boolean {
+	if (!(swa.cellsTotal > 0)) {
+		return false;
+	}
+	// Reserved cells are taken too: free, where stated, says so.
+	const taken =
+		swa.cellsFree !== undefined
+			? Math.max(swa.cellsUsed, swa.cellsTotal - swa.cellsFree)
+			: swa.cellsUsed;
+	return taken >= swa.cellsTotal * KV_SWA_PRESSURE_OCCUPANCY;
+}
+
 /** The booking this session's usage lands in, and its bounds. */
 export interface KvResizeSubject {
 	/**
@@ -135,6 +214,31 @@ export interface KvPressureTurn {
 	 * already queued is not asked again.
 	 */
 	deferred?: boolean;
+	/**
+	 * Cells idle slots hold beyond every booking, server-wide, as this turn's
+	 * `/kv` read stated them (`kv_observable_v1`); absent on older engines.
+	 * Added to `used` wherever a shrink is sized: right after a batch failure
+	 * `used` alone is a floor, not a fact.
+	 */
+	idleResident?: number;
+	/**
+	 * {@link idleResident} is pressure of its own ({@link
+	 * idleResidentIsPressure}): the state is `active` whatever the refusals
+	 * say.
+	 */
+	idlePressure?: boolean;
+	/**
+	 * The SWA half is full ({@link swaIsPressure}), whatever the base says.
+	 * Nothing grows into it. It is NOT a reason to compact or shrink: a
+	 * sequence holds one SWA window whatever its context length, so neither
+	 * frees an SWA cell, and a shrink hands base cells to admission, which
+	 * books base only and would seat more sequences in the full half. What
+	 * frees SWA is fewer resident sequences -- sessions released as their
+	 * agents end.
+	 */
+	swaPressure?: boolean;
+	/** The SWA half as read, for the log. */
+	swa?: { cellsUsed: number; cellsTotal: number };
 }
 
 /** Per engine booking: a resize in flight, and what the engine has said. */
@@ -215,6 +319,19 @@ const cells = (value: number): string =>
 	Math.round(value).toLocaleString("en-US");
 
 /**
+ * What the booking physically stands on: the engine's `used` plus the cells
+ * idle slots hold. The idle count is the server's, not this booking's -- the
+ * engine does not say whose ghosts they are -- so for a booking of its own it
+ * over-states, and errs toward giving back less: every cell given back is a
+ * cell admission hands out, and handing out cells the cache holds is the
+ * failure this guards against. For a swarm owner it is close to exact: its
+ * released workers are the ghosts.
+ */
+function resident(turn: KvPressureTurn, used: number): number {
+	return used + Math.max(0, turn.idleResident ?? 0);
+}
+
+/**
  * The window a context of `usage` plus a reply's `room` is shrunk to: aligned
  * up, so never below the floor even where the floor itself is not aligned.
  */
@@ -231,14 +348,18 @@ function minShrinkGain(window: number): number {
 	);
 }
 
-function describePressure(pressure: OpencotiKvPressure | undefined): string {
-	if (!pressure) {
-		return "pressure";
-	}
-	const refused = pressure.refused60s;
-	return refused > 0
-		? `pressure: ${refused} refused in ${pressure.windowS}s`
-		: "pressure";
+function describePressure(turn: KvPressureTurn): string {
+	const pressure = turn.pressure;
+	const refused = pressure?.refused60s ?? 0;
+	const parts = [
+		...(refused > 0 && pressure
+			? [`${refused} refused in ${pressure.windowS}s`]
+			: []),
+		...(turn.idlePressure && turn.idleResident !== undefined
+			? [`${cells(turn.idleResident)} cells held by idle slots`]
+			: []),
+	];
+	return parts.length > 0 ? `pressure: ${parts.join(", ")}` : "pressure";
 }
 
 /**
@@ -302,6 +423,21 @@ export async function beginKvPressureTurn(options: {
 	if (row) {
 		turn.row = row;
 	}
+	// `kv_observable_v1`: the cells nobody is charged for. Sized into every
+	// shrink, and pressure of their own when they are a real part of the room
+	// admission still offers -- growing into them is what fails batches.
+	if (snapshot?.resident) {
+		turn.idleResident = snapshot.resident.idleResident;
+		if (idleResidentIsPressure(snapshot.resident)) {
+			turn.idlePressure = true;
+			turn.state = "active";
+		}
+		const swa = snapshot.resident.swa;
+		if (swa && swaIsPressure(swa)) {
+			turn.swaPressure = true;
+			turn.swa = { cellsUsed: swa.cellsUsed, cellsTotal: swa.cellsTotal };
+		}
+	}
 	await cancelStaleShrink(turn);
 	if (options.grow !== false) {
 		await growIfCleared(turn);
@@ -329,6 +465,23 @@ async function cancelStaleShrink(turn: KvPressureTurn): Promise<void> {
 }
 
 /**
+ * A queued shrink the engine refused at its idle moment and still holds
+ * (`resize_pending_refused_at`, `kv_observable_v1`). The engine tries that
+ * target again at every idle moment; sending it again adds nothing, and it
+ * was decided on numbers that turned out wrong. So it is never re-sent, and
+ * the next decision is made afresh from this turn's `/kv`: a different
+ * target replaces it, and no shrink worth making cancels it.
+ */
+function refusedPendingShrink(turn: KvPressureTurn): number | undefined {
+	const row = turn.row;
+	return row?.resizePendingRefusedAt !== undefined &&
+		row.resizePending !== undefined &&
+		row.resizePending < row.window
+		? row.resizePending
+		: undefined;
+}
+
+/**
  * Grow back toward the window first asked for: the pressure has cleared on a
  * recent reading, and the engine says the booking is filling. On an exhausted
  * grow, once more at the `largest_admissible` it named, when that is still a
@@ -337,7 +490,24 @@ async function cancelStaleShrink(turn: KvPressureTurn): Promise<void> {
 async function growIfCleared(turn: KvPressureTurn): Promise<void> {
 	const { row, subject } = turn;
 	if (
+		turn.swaPressure &&
+		turn.state === "clear" &&
+		row &&
+		row.used >= row.window * KV_GROW_AT
+	) {
+		turn.logger?.log?.(
+			`[PolyKV] ${subject.engineId}: not grown: the SWA half is full (${
+				turn.swa
+					? `${cells(turn.swa.cellsUsed)} of ${cells(turn.swa.cellsTotal)} cells`
+					: "over its threshold"
+			}), and bookings do not count it`,
+			{ severity: "info" },
+		);
+		return;
+	}
+	if (
 		turn.state !== "clear" ||
+		turn.swaPressure ||
 		!row ||
 		subject.ceiling === undefined ||
 		row.used < row.window * KV_GROW_AT
@@ -399,23 +569,39 @@ export function kvPressureWantsCompaction(
 		return false;
 	}
 	// An owner is the whole swarm's booking: compacting this one agent gives
-	// back what it frees of it, and no more.
+	// back what it frees of it, and no more. Both sides stand on the cells
+	// idle slots hold, which compacting does not free.
 	const usageNow =
 		turn.subject.kind === "owner"
-			? row.used
-			: Math.max(row.used, requestTokens);
+			? resident(turn, row.used)
+			: Math.max(resident(turn, row.used), resident(turn, requestTokens));
 	const usageAfter =
 		turn.subject.kind === "owner"
-			? Math.max(0, row.used - (requestTokens - compactedTokens))
-			: compactedTokens;
+			? resident(
+					turn,
+					Math.max(0, row.used - (requestTokens - compactedTokens)),
+				)
+			: resident(turn, compactedTokens);
 	const targetNow = Math.min(
 		row.window,
 		fitWindow(usageNow, outputRoomTokens, floor),
 	);
 	const targetAfter = fitWindow(usageAfter, outputRoomTokens, floor);
-	return (
+	if (
 		targetAfter < row.window &&
 		targetNow - targetAfter >=
+			row.window * KV_PRESSURE_COMPACTION_MIN_GAIN_SHARE
+	) {
+		return true;
+	}
+	// Idle-slot pressure is answered in cells the cache holds, not in cells
+	// booked: the ghosts cannot be given back from here, and the live contexts
+	// are what the next batch has to fit beside them. Compacting frees this
+	// agent's own share of the cache whether or not its booking can shrink
+	// after it, so it counts when it frees the same share of the window.
+	return (
+		turn.idlePressure === true &&
+		requestTokens - compactedTokens >=
 			row.window * KV_PRESSURE_COMPACTION_MIN_GAIN_SHARE
 	);
 }
@@ -443,20 +629,35 @@ export async function shrinkForKvPressure(
 	if (!turn || turn.state !== "active" || !row || floor === undefined) {
 		return;
 	}
-	const usage =
+	// Sized against what the cache holds, not what is booked: `used` plus
+	// the cells idle slots keep (`kv_observable_v1`).
+	const usage = resident(
+		turn,
 		turn.subject.kind === "owner"
 			? row.used
 			: input.afterCompaction
 				? input.usageTokens
-				: Math.max(row.used, input.usageTokens);
+				: Math.max(row.used, input.usageTokens),
+	);
 	const target = Math.min(
 		row.window,
 		fitWindow(usage, input.outputRoomTokens, floor),
 	);
+	const state = subjectState(turn.subject.engineId);
+	const refused = refusedPendingShrink(turn);
 	if (row.window - target < minShrinkGain(row.window)) {
+		if (refused !== undefined && !state.perRequest) {
+			// Decided afresh, no shrink is worth making now: the refused one
+			// goes rather than waiting for an idle moment to apply it.
+			await resize(
+				turn,
+				row.window,
+				"cancel",
+				`queued shrink to ${cells(refused)} cancelled: refused at the booking's idle moment, and no shrink is worth making now`,
+			);
+		}
 		return;
 	}
-	const state = subjectState(turn.subject.engineId);
 	if (state.perRequest) {
 		// Released after every request already: nothing held to give back.
 		return;
@@ -468,11 +669,17 @@ export async function shrinkForKvPressure(
 		answer.kind === "used_exceeds_window" &&
 		answer.used !== undefined
 	) {
-		// The engine's own floor for this booking. Once more at it, when that
-		// still gives back something worth a resize.
+		// The engine's own floor for this booking, plus what idle slots hold
+		// (from the answer where it says, else this turn's read). Once more at
+		// it, when that still gives back something worth a resize.
 		const atUsed = Math.min(
 			row.window,
-			fitWindow(answer.used, input.outputRoomTokens, floor),
+			fitWindow(
+				answer.used +
+					Math.max(0, answer.idleResident ?? turn.idleResident ?? 0),
+				input.outputRoomTokens,
+				floor,
+			),
 		);
 		if (atUsed < target || row.window - atUsed < minShrinkGain(row.window)) {
 			return;
@@ -490,6 +697,7 @@ async function resize(
 	turn: KvPressureTurn,
 	target: number,
 	direction: "shrink" | "grow" | "cancel",
+	reason?: string,
 ): Promise<OpencotiResizeResult | undefined> {
 	const { subject } = turn;
 	const state = subjectState(subject.engineId);
@@ -499,6 +707,8 @@ async function resize(
 	if (turn.deferred) {
 		// One target per booking, as the engine keeps it: the same decision
 		// again is already queued. A different one overwrites it.
+		// A queued target the engine refused at idle is still this: it is
+		// retried there, never re-sent from here.
 		const queued =
 			turn.row?.resizePending ??
 			opencotiPendingResize(turn.baseUrl, subject.engineId);
@@ -523,11 +733,12 @@ async function resize(
 	const before = turn.row?.window;
 	const who = `[PolyKV] ${subject.engineId}`;
 	const why =
-		direction === "shrink"
-			? describePressure(turn.pressure)
+		reason ??
+		(direction === "shrink"
+			? describePressure(turn)
 			: direction === "grow"
 				? "pressure cleared"
-				: "queued shrink cancelled: pressure cleared";
+				: "queued shrink cancelled: pressure cleared");
 	const info = (message: string) =>
 		turn.logger?.log?.(`${who}: ${message}`, { severity: "info" });
 	if (answer.ok) {

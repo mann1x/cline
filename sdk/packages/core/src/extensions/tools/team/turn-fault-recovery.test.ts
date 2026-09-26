@@ -1,6 +1,11 @@
 import type { TurnFault } from "@cline/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
+	engineEvictionCount,
+	engineEvictions,
+	resetEngineEvictions,
+} from "./engine-evictions";
+import {
 	createTurnFaultRecovery,
 	REFUSAL_BACKOFF_MAX_MS,
 	refusalBackoffMs,
@@ -177,5 +182,67 @@ describe("why the server went away, as the row says it", () => {
 			);
 		}
 		expect(transportFaultReason("socket hang up")).toBe("not answering");
+	});
+});
+
+describe("a turn the engine evicted", () => {
+	// Ruled: no session is ever evicted. Retried like a refusal, reported as
+	// the engine's bug, counted for agents_status and the round report.
+	it("backs off like a refusal, warns on the row, counts it, and sends the turn again", async () => {
+		resetEngineEvictions();
+		const waits: number[] = [];
+		const updates: Array<Record<string, unknown>> = [];
+		const waiting: unknown[] = [];
+		const recover = createTurnFaultRecovery({
+			label: "coder-3",
+			where: () => "Node1",
+			baseUrl: () => "http://h:1/v1",
+			emitUpdate: (update) => updates.push(update as never),
+			onWaiting: (state) => waiting.push(state),
+			sleep: async (ms) => {
+				waits.push(ms);
+			},
+		});
+		const evicted = (attempt: number) =>
+			fault({
+				kind: "refusal",
+				message: "Evicted to keep other in-flight requests alive",
+				attempt,
+				evicted: true,
+				tokensHeld: 24_310,
+				sessionId: "lead~agent-coder-3",
+			});
+
+		expect(await recover(evicted(1))).toBe(true);
+		expect(await recover(evicted(2))).toBe(true);
+
+		expect(waits).toEqual([refusalBackoffMs(1), refusalBackoffMs(2)]);
+		const rows = updates.filter((update) => update.evicted !== undefined);
+		expect(rows.map((update) => update.evicted)).toEqual([1, 2]);
+		expect(rows[0]).toMatchObject({
+			activity: { severity: "warn" },
+		});
+		expect(String(rows[0]?.latestOutput)).toContain("24,310 tokens");
+		expect(waiting[0]).toMatchObject({ kind: "refusal", where: "Node1" });
+		expect(engineEvictionCount()).toBe(2);
+		expect(engineEvictions()[0]).toMatchObject({
+			label: "coder-3",
+			where: "Node1",
+			sessionId: "lead~agent-coder-3",
+			tokensHeld: 24_310,
+		});
+	});
+
+	it("leaves a plain refusal uncounted and at info", async () => {
+		resetEngineEvictions();
+		const updates: Array<Record<string, unknown>> = [];
+		const recover = createTurnFaultRecovery({
+			label: "a",
+			emitUpdate: (update) => updates.push(update as never),
+			sleep: async () => {},
+		});
+		await recover(fault({ kind: "refusal", message: "tps below floor" }));
+		expect(engineEvictionCount()).toBe(0);
+		expect(updates.some((update) => update.evicted !== undefined)).toBe(false);
 	});
 });

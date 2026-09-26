@@ -575,8 +575,17 @@ interface TeamMemberState extends TeamMemberSnapshot {
 	lastMissionStep: number;
 	lastMissionAt: number;
 	pendingSteerMessage?: string;
-	/** The teammate's own engine session, given back when it is released. */
+	/**
+	 * The teammate's own engine session: given back when each task ends, and
+	 * when the teammate is released.
+	 */
 	engineSessionId?: string;
+	/**
+	 * The close of its engine session sent when its last task ended. Its
+	 * next task waits for it: a close that landed after the next request had
+	 * booked would take that booking away mid-turn.
+	 */
+	pendingEngineRelease?: Promise<unknown>;
 	/** Its tool calls and compactions over its life, and on its current task. */
 	activityCounter?: ActivityCounter;
 	currentTaskCounter?: ActivityCounter;
@@ -1078,6 +1087,21 @@ export class AgentTeamsRuntime {
 	}
 
 	/**
+	 * Give the engine session back at the end of a task, keeping the id: the
+	 * teammate's next task sends it again and is booked afresh (after this
+	 * close has landed), and its shutdown still has it to close.
+	 */
+	private releaseEngineSessionBetweenTasks(member: TeamMemberState): void {
+		const engineSessionId = member.engineSessionId;
+		if (!engineSessionId) {
+			return;
+		}
+		member.pendingEngineRelease = releasePolykvAgent(engineSessionId).catch(
+			() => undefined,
+		);
+	}
+
+	/**
 	 * Hand a teammate's changes back at the end of a run, and say where they
 	 * went. Best-effort: a failed hand-back must not fail the task.
 	 */
@@ -1209,6 +1233,11 @@ export class AgentTeamsRuntime {
 		this.emitEvent({ type: TeamMessageType.TaskStart, agentId, message });
 
 		try {
+			const released = member.pendingEngineRelease;
+			if (released) {
+				member.pendingEngineRelease = undefined;
+				await released;
+			}
 			const unreadMail = this.listMailbox(agentId, {
 				unreadOnly: true,
 				markRead: true,
@@ -1301,6 +1330,11 @@ export class AgentTeamsRuntime {
 				this.members.get(agentId)?.status !== "stopped"
 			) {
 				member.status = "idle";
+				// Its task is done: the engine drops the idle slot's cache and
+				// SWA window now rather than holding them until the teammate is
+				// shut down (opencoti mail #322 -- idle sessions' windows filled
+				// the SWA half). Its next task books again under the same id.
+				this.releaseEngineSessionBetweenTasks(member);
 			} else if (
 				member.runningCount <= 0 &&
 				(member.status as TeamMemberState["status"]) === "stopped"

@@ -773,6 +773,54 @@ describe("createSpawnAgentTool", () => {
 		});
 	});
 
+	it("counts the evictions each agent's row reported into the round report", async () => {
+		// The turn-fault recovery puts `evicted` on the row for every eviction
+		// (an engine bug each time); the round report states them, with or
+		// without a host listening to the rows.
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const configuredExecute = vi.fn(
+			async (
+				_input: unknown,
+				context: { emitUpdate?: (u: unknown) => void },
+			) => {
+				context.emitUpdate?.({ latestOutput: "evicted", evicted: 1 });
+				context.emitUpdate?.({ latestOutput: "evicted", evicted: 2 });
+				return {
+					text: "configured report",
+					iterations: 1,
+					finishReason: "completed",
+					usage: { inputTokens: 1, outputTokens: 1 },
+				};
+			},
+		);
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "mock-model",
+			}),
+			configuredAgents: () =>
+				new Map([
+					[
+						"coder",
+						{ name: "subagent_coder", execute: configuredExecute } as never,
+					],
+				]),
+		});
+
+		const output = (await tool.execute(
+			{ agents: [{ name: "a", task: "fix it", type: "coder" }] },
+			{
+				agentId: "p",
+				conversationId: "c",
+				iteration: 1,
+				toolCallId: "t",
+			} as never,
+		)) as SpawnBatchReport;
+
+		expect(output.summary.evicted).toBe(2);
+		expect(output.agents[0]).toMatchObject({ name: "a", evicted: 2 });
+	});
+
 	it("routes `merge` to the swarm, and offers it only when there is one", async () => {
 		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
 		const swarmExecute = vi.fn(async () => ({ digest: "merged", workers: 2 }));

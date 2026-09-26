@@ -1,4 +1,5 @@
 import {
+	KV_EVICTED_ERROR_KIND,
 	type ProviderErrorClass,
 	safeJsonParse,
 	type ToolCallRejection,
@@ -173,7 +174,9 @@ function collectSignals(
 	for (const key of STATUS_KEYS) {
 		recordStatus(signals, record[key]);
 	}
-	for (const key of ["code", "type", "name"]) {
+	// `error_kind` is opencoti's machine-readable kind, beside `message` in
+	// the error object (`kv_observable_v1`): the eviction names itself there.
+	for (const key of ["code", "type", "name", "error_kind"]) {
 		const candidate = record[key];
 		if (typeof candidate === "string" && candidate.trim()) {
 			signals.codes.add(candidate.trim());
@@ -273,7 +276,21 @@ function isToolCallUnparsable(signals: ErrorSignals): boolean {
 	);
 }
 
+/**
+ * The engine evicted the request's sequence to keep its batch alive. Named by
+ * `error_kind` alone: the message says "Context size has been exceeded",
+ * which is not this request's window, and the status is a bare 500.
+ */
+function isKvEvicted(signals: ErrorSignals): boolean {
+	return signals.codes.has(KV_EVICTED_ERROR_KIND);
+}
+
 function verdictFromSignals(signals: ErrorSignals): ProviderErrorClass {
+	// Ahead of everything: the eviction's text talks about a context size, and
+	// it must never read as this request's own overflow (opencoti mail #311).
+	if (isKvEvicted(signals)) {
+		return "kv_evicted";
+	}
 	// First, and for the same reason as the image check that follows it: this
 	// is a property of what the model emitted, not of the request's HTTP shape,
 	// and providers return it under assorted codes or none at all.
@@ -410,6 +427,10 @@ function classifyTypedError(
 		// fault whatever the status says -- see `verdictFromSignals`.
 		if (isToolCallUnparsable(signals)) {
 			return "tool_call_unparsable";
+		}
+		// The eviction is a 500 too, and only its `error_kind` says so.
+		if (isKvEvicted(signals)) {
+			return "kv_evicted";
 		}
 		if (status !== undefined && !CONTEXT_WINDOW_STATUSES.has(status)) {
 			return "unknown";

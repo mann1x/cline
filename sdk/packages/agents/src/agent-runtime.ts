@@ -46,6 +46,8 @@ import {
 	classifyTurnFault,
 	classifyTurnFaultError,
 	estimateTokens,
+	isKvEviction,
+	isKvEvictionError,
 	lastOutputCap,
 	mergeModelOptions,
 	NO_TOOL_CALL_NUDGE_MESSAGE,
@@ -928,6 +930,11 @@ export class AgentRuntime {
 	private lastToolCallRejection: ToolCallRejection | undefined;
 	/** One automatic overflow-recovery attempt per run. */
 	private overflowRecoveryAttempted = false;
+	/**
+	 * The last request that completed, prompt and reply: what the engine held
+	 * for this session at the least. Named in an eviction's bug report.
+	 */
+	private lastRequestTokens: number | undefined;
 	/**
 	 * Compact before the next request, whatever the trigger concludes.
 	 *
@@ -2275,33 +2282,64 @@ export class AgentRuntime {
 			}
 			let kind: ReturnType<typeof classifyTurnFault>;
 			let providerError: string;
+			let evicted: boolean;
 			if (threw) {
 				kind = classifyTurnFaultError(thrown);
 				providerError =
 					thrown instanceof Error ? thrown.message : String(thrown);
+				evicted = isKvEvictionError(thrown);
 			} else if (turn?.finishReason === "error") {
 				providerError = this.state.lastError ?? "";
 				kind = classifyTurnFault(providerError, this.state.lastErrorClass);
+				evicted = isKvEviction(providerError, this.state.lastErrorClass);
 			} else {
 				return giveUp();
 			}
 			if (!kind) {
 				return giveUp();
 			}
-			this.config.logger?.log?.(
-				`Turn ${this.state.iteration} failed on a ${kind} fault (attempt ${attempt}): ${providerError}; waiting to send it again`,
-				{ severity: "warn" },
-			);
+			const sessionId = trimNonEmpty(this.config.sessionId);
+			const tokensHeld = this.lastRequestTokens;
+			if (evicted) {
+				// No session is ever meant to be evicted: this is the engine's
+				// bug, reported as one, and the only fault that is a warning
+				// while the turn is waited out like a refusal.
+				this.config.logger?.log?.(
+					`Engine bug: the server evicted session ${sessionId ?? "(unnamed)"} (agent ${this.state.agentId}) at ${new Date().toISOString()}, holding ${
+						tokensHeld !== undefined
+							? `${tokensHeld.toLocaleString("en-US")} tokens (its last completed request)`
+							: "an unknown number of tokens (no request had completed)"
+					}, turn ${this.state.iteration}, attempt ${attempt}: ${providerError}; waiting to send it again`,
+					{
+						severity: "warn",
+						kind: "engine_eviction",
+						...(sessionId ? { sessionId } : {}),
+						agentId: this.state.agentId,
+						...(tokensHeld !== undefined ? { tokensHeld } : {}),
+						iteration: this.state.iteration,
+						attempt,
+					},
+				);
+			} else {
+				// A refusal is pacing, not a fault: info. A transport fault is a
+				// server gone, which is worth a warning.
+				this.config.logger?.log?.(
+					`Turn ${this.state.iteration} failed on a ${kind} fault (attempt ${attempt}): ${providerError}; waiting to send it again`,
+					{ severity: kind === "refusal" ? "info" : "warn" },
+				);
+			}
 			await this.emit({
 				type: "status-notice",
 				snapshot: this.snapshot(),
-				message:
-					kind === "transport"
+				message: evicted
+					? "the server evicted the turn to keep others alive (an engine bug) — waiting, then retrying"
+					: kind === "transport"
 						? "the server dropped the turn — waiting for it to come back, then retrying"
 						: "the server refused the turn for now — waiting, then retrying",
 				metadata: {
 					kind: "turn_fault_recovery",
 					reason: kind,
+					...(evicted ? { evicted: true } : {}),
 					phase: "started",
 					iteration: this.state.iteration,
 					attempt,
@@ -2315,6 +2353,9 @@ export class AgentRuntime {
 					message: providerError,
 					attempt,
 					iteration: this.state.iteration,
+					...(evicted ? { evicted: true } : {}),
+					...(evicted && tokensHeld !== undefined ? { tokensHeld } : {}),
+					...(sessionId ? { sessionId } : {}),
 					...(this.abortController?.signal
 						? { signal: this.abortController.signal }
 						: {}),
@@ -3326,6 +3367,10 @@ export class AgentRuntime {
 		// request this update came from and is replaced by the next one.
 		if (timings) {
 			this.state.lastRequestTimings = timings;
+		}
+		if (usage.inputTokens !== undefined) {
+			this.lastRequestTokens =
+				(usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
 		}
 		await this.emit({
 			type: "usage-updated",

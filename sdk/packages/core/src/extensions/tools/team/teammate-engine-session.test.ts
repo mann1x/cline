@@ -102,4 +102,41 @@ describe("a teammate's engine session", () => {
 
 		expect(llms.releasePolykvAgent).toHaveBeenCalledWith(second);
 	});
+
+	it("is released as soon as a task ends, and kept for the next one", async () => {
+		// opencoti mail #322: every resident sequence keeps its SWA window,
+		// idle ones too. A teammate that waits for its next task holds nothing.
+		const { runtime, spawn, engineSessionOf } = team();
+		await spawn("w");
+		const own = engineSessionOf(0);
+		const member = (
+			runtime as unknown as {
+				members: Map<
+					string,
+					{ agent: { canStartRun: () => boolean; run: unknown } }
+				>;
+			}
+		).members.get("w");
+		if (!member) {
+			throw new Error("no teammate");
+		}
+		member.agent.canStartRun = () => true;
+		member.agent.run = async () => ({
+			text: "done",
+			finishReason: "completed",
+			iterations: 1,
+			usage: { inputTokens: 1, outputTokens: 1 },
+			messages: [],
+			toolCalls: [],
+		});
+
+		await runtime.routeToTeammate("w", "task one");
+		expect(llms.releasePolykvAgent).toHaveBeenCalledTimes(1);
+		expect(llms.releasePolykvAgent).toHaveBeenCalledWith(own);
+
+		await runtime.routeToTeammate("w", "task two");
+		expect(llms.releasePolykvAgent).toHaveBeenCalledTimes(2);
+		expect(llms.releasePolykvAgent).toHaveBeenLastCalledWith(own);
+		runtime.shutdownTeammate("w");
+	});
 });

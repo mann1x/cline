@@ -274,6 +274,8 @@ export interface SpawnAgentMemberOutput extends Partial<SpawnAgentOutput> {
 	name: string;
 	/** Set when this agent failed; its siblings' reports are unaffected. */
 	error?: string;
+	/** Times the engine evicted it (an engine bug each time), when it did. */
+	evicted?: number;
 }
 
 /**
@@ -799,20 +801,25 @@ async function runSpawnBatch(
 			),
 		);
 		// Each member reports on its own row: the host keys it by the call
-		// and this index, and its stop registration by the same pair.
+		// and this index, and its stop registration by the same pair. Every
+		// eviction the turn-fault recovery reports there is counted for the
+		// round report, host or no host.
+		let evicted = 0;
 		const memberContext: AgentToolContext = {
 			...context,
 			toolCallId: `${context.toolCallId}#${index}`,
-			...(context.emitUpdate
-				? {
-						emitUpdate: (update: unknown) =>
-							context.emitUpdate?.({
-								...(update as Record<string, unknown>),
-								member: index,
-							}),
-					}
-				: {}),
+			emitUpdate: (update: unknown) => {
+				const row = update as Record<string, unknown>;
+				if (typeof row?.evicted === "number") {
+					evicted += 1;
+				}
+				context.emitUpdate?.({ ...row, member: index });
+			},
 		};
+		const withEvictions = (
+			output: SpawnAgentMemberOutput,
+		): SpawnAgentMemberOutput =>
+			evicted > 0 ? { ...output, evicted } : output;
 		try {
 			if (member.type?.trim()) {
 				const tool = configured?.get(configuredAgentKey(member.type));
@@ -832,7 +839,7 @@ async function runSpawnBatch(
 					} as never,
 					memberContext,
 				)) as SpawnAgentOutput;
-				return { name, ...output };
+				return withEvictions({ name, ...output });
 			}
 			const output = await runSpawnedAgent(
 				config,
@@ -853,12 +860,12 @@ async function runSpawnBatch(
 				},
 				memberContext,
 			);
-			return { name, ...output };
+			return withEvictions({ name, ...output });
 		} catch (error) {
-			return {
+			return withEvictions({
 				name,
 				error: error instanceof Error ? error.message : String(error),
-			};
+			});
 		}
 	}
 	// Built to fit the tool-result cap and name every agent: a round of 75

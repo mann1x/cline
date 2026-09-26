@@ -79,6 +79,78 @@ const TRANSPORT_PATTERNS: readonly RegExp[] = [
 const TRANSPORT_STATUSES = new Set([502, 503, 504]);
 
 /**
+ * The `error_kind` opencoti puts on the partial eviction's 500, top-level in
+ * the error object beside `message` (`kv_observable_v1`, patch 0399).
+ */
+export const KV_EVICTED_ERROR_KIND = "evicted_kv_full";
+
+/**
+ * The partial eviction's text, for engines older than `kv_observable_v1`
+ * that name no `error_kind`.
+ */
+const KV_EVICTION_PATTERN =
+	/^(?:error:\s*)?evicted to keep other in-flight requests alive\b/i;
+
+/**
+ * Whether a failed turn was the engine evicting this request's sequence.
+ *
+ * Keyed on the provider layer's class (from `error_kind`, where the engine
+ * sends it) and on the text for engines that do not. Every eviction is an
+ * engine bug -- no session is meant to be evicted -- so the caller reports
+ * it as one, on top of retrying it as a refusal.
+ */
+export function isKvEviction(
+	message: string | undefined,
+	errorClass?: ProviderErrorClass,
+): boolean {
+	return (
+		errorClass === "kv_evicted" ||
+		KV_EVICTION_PATTERN.test((message ?? "").trim())
+	);
+}
+
+/**
+ * Whether a thrown error is the eviction: its `error_kind`, on the error, its
+ * `error` body, its response body or data, or anywhere down its cause chain;
+ * else its message.
+ */
+export function isKvEvictionError(error: unknown, depth = 0): boolean {
+	if (depth > 5 || error === null || error === undefined) {
+		return false;
+	}
+	if (typeof error === "string") {
+		const text = error.trim();
+		if (KV_EVICTION_PATTERN.test(text)) {
+			return true;
+		}
+		if (!text.startsWith("{")) {
+			return false;
+		}
+		try {
+			return isKvEvictionError(JSON.parse(text), depth + 1);
+		} catch {
+			return false;
+		}
+	}
+	if (typeof error !== "object") {
+		return false;
+	}
+	const record = error as Record<string, unknown>;
+	if (record.error_kind === KV_EVICTED_ERROR_KIND) {
+		return true;
+	}
+	for (const key of ["error", "responseBody", "data", "cause", "message"]) {
+		const nested = record[key];
+		if (nested !== undefined && nested !== error) {
+			if (isKvEvictionError(nested, depth + 1)) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+/**
  * Admission refusals. The engine's own words; any of them means "not now",
  * and none of them says anything about the request being wrong.
  */
@@ -93,7 +165,7 @@ const REFUSAL_PATTERNS: readonly RegExp[] = [
 	// others. It says "Context size has been exceeded" but the agent's own
 	// window was not -- victims in swarm 0926 held 20-31k of 64k. No room
 	// now, like an admission refusal: back off and send again.
-	/^(?:error:\s*)?evicted to keep other in-flight requests alive\b/i,
+	KV_EVICTION_PATTERN,
 ];
 
 /** Classify a failed turn from what the agent loop was told about it. */
@@ -107,6 +179,7 @@ export function classifyTurnFault(
 	// gateway fault.
 	if (
 		errorClass === "rate_limited" ||
+		errorClass === "kv_evicted" ||
 		REFUSAL_PATTERNS.some((pattern) => pattern.test(text))
 	) {
 		return "refusal";
@@ -149,7 +222,9 @@ export function classifyTurnFaultError(
 		return undefined;
 	}
 	const status = statusOf(error);
-	if (status === 429) {
+	// The eviction is a 500, which says nothing by itself: its `error_kind`
+	// does (`kv_observable_v1`).
+	if (status === 429 || isKvEvictionError(error, depth)) {
 		return "refusal";
 	}
 	const message = (error as { message?: unknown }).message;
@@ -185,6 +260,19 @@ export interface TurnFault {
 	iteration: number;
 	/** The run's abort signal: the user's Stop. Every wait must honour it. */
 	signal?: AbortSignal;
+	/**
+	 * The engine evicted the turn's sequence ({@link isKvEviction}). Waited
+	 * out as a refusal, and reported as the engine bug it is.
+	 */
+	evicted?: boolean;
+	/**
+	 * The session's context when it was evicted: the last request that
+	 * completed, prompt and reply -- what the engine held for it at the least.
+	 * Absent when no request of this run has completed.
+	 */
+	tokensHeld?: number;
+	/** The session the turn belongs to, when the loop knows it. */
+	sessionId?: string;
 }
 
 /**

@@ -1,4 +1,7 @@
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import {
+	createOpenAICompatible,
+	type OpenAICompatibleChatLanguageModel,
+} from "@ai-sdk/openai-compatible";
 import type { LanguageModelV4 } from "@ai-sdk/provider";
 import {
 	classifyTurnFaultError,
@@ -6,6 +9,7 @@ import {
 	type GatewayResolvedProviderConfig,
 } from "@cline/shared";
 import { wrapLanguageModel } from "ai";
+import { z } from "zod";
 import type { PolykvOptions } from "../config";
 import { sleep as abortableSleep } from "../middleware/backoff";
 import { DEFAULT_MAX_RETRY_AFTER_MS } from "../middleware/retry-rate-limit";
@@ -1905,6 +1909,66 @@ export function normalizeOpencotiBaseUrl(
 	return trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
 }
 
+/**
+ * The error object opencoti sends, kept whole.
+ *
+ * The AI SDK validates an in-stream error event against its error schema and
+ * hands on the PARSED value, and its default schema names only `message`,
+ * `type`, `param` and `code`: everything else the engine puts there was
+ * dropped on the way. That is where a victim of the partial eviction hears
+ * about it -- mid-decode, its stream long open -- and its `error_kind:
+ * "evicted_kv_full"` (`kv_observable_v1`) is the only thing that tells the
+ * eviction from any other 500. A tool call's rejection `reason` and `key`
+ * (bug-3601) were lost the same way. The same four fields are required as
+ * before; the rest pass through.
+ */
+const OPENCOTI_ERROR_STRUCTURE = {
+	errorSchema: z.object({
+		error: z.looseObject({
+			message: z.string(),
+			type: z.string().nullish(),
+			param: z.any().nullish(),
+			code: z.union([z.string(), z.number()]).nullish(),
+		}),
+	}),
+	errorToMessage: (data: { error: { message: string } }) => data.error.message,
+};
+
+type OpencotiChatConfig = ConstructorParameters<
+	typeof OpenAICompatibleChatLanguageModel
+>[1];
+
+/**
+ * The provider's own chat model, rebuilt with {@link OPENCOTI_ERROR_STRUCTURE}.
+ *
+ * `createOpenAICompatible` takes no error structure (only the model class
+ * does), so the model is made again, by its own class, from the exact config
+ * the provider gave it -- URL, headers, fetch, usage, metadata -- plus the
+ * error structure. Anything that is not such a model is returned as it is.
+ */
+function withOpencotiErrors(model: LanguageModelV4): LanguageModelV4 {
+	const config = (model as unknown as { config?: OpencotiChatConfig }).config;
+	const Model = (model as { constructor?: unknown }).constructor as
+		| (new (
+				modelId: string,
+				config: OpencotiChatConfig,
+		  ) => LanguageModelV4)
+		| undefined;
+	if (
+		!config ||
+		typeof config !== "object" ||
+		typeof config.url !== "function" ||
+		typeof Model !== "function" ||
+		(Model as unknown) === Object
+	) {
+		return model;
+	}
+	return new Model(model.modelId, {
+		...config,
+		errorStructure: OPENCOTI_ERROR_STRUCTURE,
+	});
+}
+
 export async function createOpencotiProviderModule(
 	config: GatewayResolvedProviderConfig,
 	context: GatewayProviderContext,
@@ -2012,7 +2076,7 @@ export async function createOpencotiProviderModule(
 		operations: {
 			language: (modelId: string) =>
 				wrapLanguageModel({
-					model: provider(modelId) as LanguageModelV4,
+					model: withOpencotiErrors(provider(modelId) as LanguageModelV4),
 					middleware: splitToolImagesMiddleware,
 				}) as LanguageModelV4,
 		},

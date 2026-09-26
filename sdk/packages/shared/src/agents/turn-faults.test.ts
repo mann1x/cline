@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { classifyTurnFault, classifyTurnFaultError } from "./turn-faults";
+import {
+	classifyTurnFault,
+	classifyTurnFaultError,
+	isKvEviction,
+	isKvEvictionError,
+} from "./turn-faults";
 
 describe("what a failed turn was", () => {
 	it("reads the 1tmrl restart and refusals as retryable faults", () => {
@@ -77,6 +82,55 @@ describe("what a failed turn was", () => {
 				"got exception: speculative batch index 32 is not inside the current sub-batch [0, 32)",
 			),
 		).toBe("transport");
+	});
+
+	it("reads the eviction's error_kind as a refusal, whatever its text says", () => {
+		// kv_observable_v1 (opencoti b115, patch 0399): the partial evict's 500
+		// carries `error_kind` beside `message`. The class is what the provider
+		// layer derives from it; the text may be anything.
+		expect(classifyTurnFault("Internal server error", "kv_evicted")).toBe(
+			"refusal",
+		);
+		expect(isKvEviction("Internal server error", "kv_evicted")).toBe(true);
+		const thrown = Object.assign(new Error("Internal server error"), {
+			status: 500,
+			responseBody: JSON.stringify({
+				error: {
+					code: 500,
+					message: "Evicted to keep other in-flight requests alive",
+					type: "server_error",
+					error_kind: "evicted_kv_full",
+				},
+			}),
+		});
+		expect(classifyTurnFaultError(thrown)).toBe("refusal");
+		expect(isKvEvictionError(thrown)).toBe(true);
+		expect(
+			isKvEvictionError({
+				error: { message: "x", error_kind: "evicted_kv_full" },
+			}),
+		).toBe(true);
+	});
+
+	it("tells the eviction from every other refusal", () => {
+		// Older engines name no error_kind: the text still says it.
+		expect(
+			isKvEviction(
+				"Evicted to keep other in-flight requests alive: the KV cache could not fit another token.",
+			),
+		).toBe(true);
+		expect(
+			isKvEviction("pool 5 admission rejected: projected mean tps below floor"),
+		).toBe(false);
+		expect(isKvEviction("slow down", "rate_limited")).toBe(false);
+		expect(
+			isKvEvictionError(
+				Object.assign(new Error("x"), {
+					status: 500,
+					responseBody: '{"error":{"error_kind":"session_busy"}}',
+				}),
+			),
+		).toBe(false);
 	});
 
 	it("reads a rate limit as a refusal", () => {

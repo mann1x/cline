@@ -313,3 +313,120 @@ describe("a turn the engine refused after the agent had started", () => {
 		expect(kinds.at(-1)).toBe("refusal#7@2");
 	});
 });
+
+/**
+ * opencoti's partial eviction (b108 swarm 0926: 11 agents holding 20-31k of
+ * 64k). Ruled: no session is ever evicted -- an eviction is the engine's bug.
+ * The turn is waited out like a refusal, and reported, at WARN, as a bug.
+ */
+describe("a turn the engine evicted", () => {
+	const lines = () => {
+		const logged: Array<{ message: string; severity?: unknown }> = [];
+		return {
+			logged,
+			logger: {
+				debug: () => {},
+				log: (message: string, metadata?: Record<string, unknown>) => {
+					logged.push({ message, severity: metadata?.severity });
+				},
+			},
+		};
+	};
+
+	it("is retried as a refusal and reported as an engine bug, with the session and what it held", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{
+					type: "tool-call-delta",
+					toolCallId: "c1",
+					toolName: "echo",
+					inputText: '{"text":"hi"}',
+				},
+				{ type: "usage", usage: { inputTokens: 20_000, outputTokens: 500 } },
+				{ type: "finish", reason: "tool-calls" },
+			],
+			// kv_observable_v1: the class comes from `error_kind`; the text
+			// need not say anything.
+			() => [
+				{
+					type: "finish",
+					reason: "error",
+					error: "Internal Server Error",
+					errorClass: "kv_evicted",
+				},
+			],
+			() => finishOk("done"),
+		]);
+		const faults: TurnFault[] = [];
+		const { logged, logger } = lines();
+		const runtime = new AgentRuntime({
+			model,
+			sessionId: "sess-evicted",
+			logger,
+			tools: [
+				{
+					name: "echo",
+					description: "echo",
+					inputSchema: { type: "object" },
+					execute: async (input: unknown) => input,
+				},
+			],
+			recoverTurnFault: async (fault) => {
+				faults.push(fault);
+				return true;
+			},
+		} as never);
+
+		const result = await runtime.run("go");
+
+		expect(result.status).toBe("completed");
+		expect(faults).toMatchObject([
+			{
+				kind: "refusal",
+				evicted: true,
+				tokensHeld: 20_500,
+				sessionId: "sess-evicted",
+			},
+		]);
+		const warnings = logged.filter((line) => line.severity === "warn");
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]?.message).toMatch(/^Engine bug: .*evicted/);
+		expect(warnings[0]?.message).toContain("sess-evicted");
+		expect(warnings[0]?.message).toContain("20,500 tokens");
+		expect(warnings[0]?.message).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+	});
+
+	it("leaves a refusal at info: pacing, not a fault", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{
+					type: "finish",
+					reason: "error",
+					error: "pool 5 admission rejected: projected mean tps below floor",
+				},
+			],
+			() => finishOk("done"),
+		]);
+		const faults: TurnFault[] = [];
+		const { logged, logger } = lines();
+		const runtime = new AgentRuntime({
+			model,
+			logger,
+			recoverTurnFault: async (fault) => {
+				faults.push(fault);
+				return true;
+			},
+		} as never);
+
+		await runtime.run("go");
+
+		expect(faults[0]?.evicted).toBeUndefined();
+		expect(logged.filter((line) => line.severity === "warn")).toEqual([]);
+		expect(
+			logged.some(
+				(line) =>
+					/refusal fault/.test(line.message) && line.severity === "info",
+			),
+		).toBe(true);
+	});
+});

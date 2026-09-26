@@ -661,3 +661,44 @@ describe("opencoti's own refusals", () => {
 		).toBe("pool_contract_violation");
 	});
 });
+
+describe("opencoti's partial eviction (kv_observable_v1)", () => {
+	// The engine's shape (patch 0399, `oc_send_error_kind`): a server_error
+	// 500 whose `error_kind` sits beside `message`. The message ends in the
+	// decode's own "Context size has been exceeded", which is not this
+	// request's window -- the victims of swarm 0926 held 20-31k of 64k.
+	const body = {
+		error: {
+			code: 500,
+			type: "server_error",
+			message:
+				"Evicted to keep other in-flight requests alive: the KV cache could not fit another token and this was the largest live sequence. Context size has been exceeded.",
+			error_kind: "evicted_kv_full",
+		},
+	};
+
+	it("classifies the streamed event by its error_kind", () => {
+		expect(classifyProviderError(body)).toBe("kv_evicted");
+	});
+
+	it("classifies a typed 500 by its error_kind, whatever the message says", () => {
+		const error = new APICallError({
+			message: "Internal Server Error",
+			url: "http://node1:8240/v1/chat/completions",
+			requestBodyValues: {},
+			statusCode: 500,
+			responseBody: JSON.stringify({
+				error: { ...body.error, message: "evicted" },
+			}),
+		});
+		expect(classifyProviderError(error)).toBe("kv_evicted");
+	});
+
+	it("leaves an engine that names no error_kind where it was", () => {
+		expect(
+			classifyProviderError({
+				error: { code: 500, type: "server_error", message: body.error.message },
+			}),
+		).toBe("unknown");
+	});
+});

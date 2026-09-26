@@ -305,3 +305,29 @@ describe("the iteration cap and the check in a round's result", () => {
 		});
 	});
 });
+
+describe("engine evictions in the round report", () => {
+	// Ruled: no session is ever evicted; each one is an engine bug, retried,
+	// and counted where the lead reads the round.
+	it("counts every agent's evictions in the summary and names them per agent", () => {
+		const report = buildSpawnBatchReport(
+			[
+				{ name: "a-1", text: "done", finishReason: "completed", evicted: 2 },
+				{ name: "a-2", text: "done", finishReason: "completed" },
+				{ name: "a-3", text: "done", finishReason: "completed", evicted: 1 },
+			],
+			"lead",
+		);
+		expect(report.summary.evicted).toBe(3);
+		expect(report.agents[0]).toMatchObject({ name: "a-1", evicted: 2 });
+		expect(report.agents[1]).not.toHaveProperty("evicted");
+	});
+
+	it("states 0 when nothing was evicted", () => {
+		const report = buildSpawnBatchReport(
+			[{ name: "a-1", text: "done", finishReason: "completed" }],
+			"lead",
+		);
+		expect(report.summary.evicted).toBe(0);
+	});
+});

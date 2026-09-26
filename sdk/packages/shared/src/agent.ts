@@ -415,6 +415,17 @@ export type ProviderErrorClass =
 	 * meanwhile — never to fail the turn.
 	 */
 	| "pool_contract_violation"
+	/**
+	 * The engine evicted this request's sequence to keep the others in its
+	 * batch alive: its KV could not fit another token (opencoti's partial
+	 * eviction, `error_kind: "evicted_kv_full"`, `kv_observable_v1`).
+	 *
+	 * Not the request's fault and not an overflow of its own window -- the
+	 * victims of swarm 0926 held 20-31k of 64k. The turn is sent again like a
+	 * refusal, and the eviction is reported as the engine bug it is: no
+	 * session is ever meant to be evicted.
+	 */
+	| "kv_evicted"
 	| "unknown";
 
 /**

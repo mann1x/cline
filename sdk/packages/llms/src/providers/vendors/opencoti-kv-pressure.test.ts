@@ -586,3 +586,114 @@ describe("the floor a pressure resize keeps", () => {
 		expect(getOpencotiWindowCeiling("agent-left")).toBe(131_072);
 	});
 });
+
+describe("what the cache holds beyond the bookings (kv_observable_v1)", () => {
+	// b115, patch 0399: released workers' cells stay resident, charged to no
+	// booking (bug-3657). b108 reported `used 9750` while ~81k were held.
+	const observable = [
+		"kv_status_v1",
+		"kv_pressure_v1",
+		"kv_resize_v1",
+		"kv_resize_deferred_v1",
+		"kv_observable_v1",
+	];
+	const kv = {
+		cells_total: 1_048_576,
+		cells_free: 300_000,
+		allocations: [
+			{
+				session_id: "owner",
+				window: 131_072,
+				used: 9_750,
+				resize_pending: 65_536,
+				resize_pending_reason: "used_exceeds_window",
+				resize_pending_refused_at: 1_790_000_100,
+				resize_pending_refused_s: 1.5,
+			},
+		],
+		pressure: { ...WIRE_PRESSURE, idle_resident: 81_000 },
+	};
+
+	it("reads idle_resident, the free and total cells, and a refused pending resize", async () => {
+		const stub = engine({ features: observable, kv });
+		const read = await readOpencotiKv("http://engine/v1", stub.fetch);
+		expect(read?.resident).toEqual({
+			idleResident: 81_000,
+			cellsFree: 300_000,
+			cellsTotal: 1_048_576,
+		});
+		expect(read?.pressure?.idleResident).toBe(81_000);
+		expect(read?.allocations[0]).toMatchObject({
+			resizePending: 65_536,
+			resizePendingRefusedAt: 1_790_000_100,
+			resizePendingRefusedS: 1.5,
+		});
+	});
+
+	it("reads the SWA half, which bookings do not count", async () => {
+		// b116 (opencoti mail #322): "swa 66044 used of 66048 cells" while the
+		// base held 163k of 1M.
+		const stub = engine({
+			features: observable,
+			kv: {
+				...kv,
+				swa: {
+					cells_total: 66_048,
+					cells_used: 60_000,
+					cells_reserved: 2_048,
+					cells_free: 4_000,
+					window: 1_024,
+					seq_budget: 64,
+				},
+			},
+		});
+		const read = await readOpencotiKv("http://engine/v1", stub.fetch);
+		expect(read?.resident?.swa).toEqual({
+			cellsUsed: 60_000,
+			cellsTotal: 66_048,
+			cellsFree: 4_000,
+			cellsReserved: 2_048,
+			window: 1_024,
+		});
+		// A model with no SWA half says `swa: null`.
+		const none = engine({ features: observable, kv: { ...kv, swa: null } });
+		resetPolykvAvailability();
+		expect(
+			(await readOpencotiKv("http://engine/v1", none.fetch))?.resident?.swa,
+		).toBeUndefined();
+	});
+
+	it("says nothing of it on an engine that does not advertise it", async () => {
+		const stub = engine({
+			features: observable.filter((f) => f !== "kv_observable_v1"),
+			kv,
+		});
+		const read = await readOpencotiKv("http://engine/v1", stub.fetch);
+		expect(read?.resident).toBeUndefined();
+	});
+
+	it("reads idle_resident off the resize result", async () => {
+		const stub = engine({
+			features: [],
+			resize: () =>
+				json({
+					ok: true,
+					window: 131_072,
+					window_new: 98_304,
+					used: 1_997,
+					idle_resident: 1_997,
+				}),
+		});
+		const result = await resizeOpencotiSession({
+			baseUrl: "http://engine/v1",
+			sessionId: "s",
+			numCtx: 98_304,
+			fetch: stub.fetch,
+		});
+		expect(result).toMatchObject({
+			ok: true,
+			used: 1_997,
+			idleResident: 1_997,
+		});
+	});
+});

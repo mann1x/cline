@@ -54,6 +54,8 @@ function engine(options: {
 	features?: string[];
 	row: { window: number; used: number } & Record<string, unknown>;
 	pressure?: Record<string, unknown>;
+	/** Top-level `/kv` fields: `cells_free`, `cells_total`. */
+	top?: Record<string, unknown>;
 	/** One answer per resize, in order; the last repeats. */
 	resize?: Array<(body: Record<string, unknown>) => Response>;
 }) {
@@ -84,6 +86,7 @@ function engine(options: {
 					},
 				],
 				...(options.pressure ? { pressure: options.pressure } : {}),
+				...(options.top ?? {}),
 			});
 		}
 		if (url.pathname.endsWith("/resize")) {
@@ -713,5 +716,204 @@ describe("growing back", () => {
 		expect(
 			stub.resizes().filter((call) => (call.body?.num_ctx as number) > 98_304),
 		).toEqual([]);
+	});
+});
+
+describe("cells idle slots hold (kv_observable_v1)", () => {
+	// b115, patch 0399 (mail #316): released workers' cells stay resident and
+	// are charged to no booking. b108 booked `used 9750` while ~81k were held.
+	const OBSERVABLE = [...BOTH, "kv_resize_deferred_v1", "kv_observable_v1"];
+	const SHRUNK = Math.ceil(60_000 / 256) * 256;
+	const queued = (sent: Record<string, unknown>) =>
+		json(
+			{
+				ok: true,
+				deferred: true,
+				status: 202,
+				window: 262_144,
+				resize_pending: sent.num_ctx,
+			},
+			202,
+		);
+
+	it("sizes a shrink against used plus the idle cells", async () => {
+		recordOpencotiWindowFloor(SESSION, 1_000);
+		const stub = engine({
+			features: OBSERVABLE,
+			row: { window: 262_144, used: 5_000 },
+			pressure: { ...ACTIVE, idle_resident: 40_000 },
+			// Far more room than ghosts: sized with them, not pressed by them.
+			top: { cells_free: 1_000_000, cells_total: 1_048_576 },
+			resize: [queued],
+		});
+		const { lines } = await boundary(stub.fetch);
+		const target = stub.resizes()[0]?.body?.num_ctx as number;
+		expect(target).toBeGreaterThanOrEqual(45_000 / KV_SHRINK_FILL);
+		expect(target).toBeLessThan(262_144);
+		noWarnings(lines);
+	});
+
+	it("reads idle cells that are a quarter of the free room as pressure", async () => {
+		const stub = engine({
+			features: OBSERVABLE,
+			row: { window: 262_144, used: 5_000 },
+			// Nobody refused: the idle cells alone are the pressure.
+			pressure: { ...CLEARED, idle_resident: 81_000 },
+			top: { cells_free: 200_000, cells_total: 1_048_576 },
+		});
+		const { found, lines } = await boundary(stub.fetch);
+		expect(found?.kvPressureState).toBe("active");
+		const target = stub.resizes()[0]?.body?.num_ctx as number;
+		expect(target).toBeGreaterThanOrEqual(86_000 / KV_SHRINK_FILL);
+		expect(target).toBeLessThan(262_144);
+		expect(
+			lines.some((line) =>
+				/81,000 cells held by idle slots/.test(line.message),
+			),
+		).toBe(true);
+		noWarnings(lines);
+	});
+
+	it("does not read one idle slot's short cache as pressure", async () => {
+		const stub = engine({
+			features: OBSERVABLE,
+			row: { window: 262_144, used: 5_000 },
+			// A quarter of the free room, and still only one short request.
+			pressure: { ...CLEARED, idle_resident: 4_000 },
+			top: { cells_free: 10_000, cells_total: 1_048_576 },
+		});
+		const { found } = await boundary(stub.fetch);
+		expect(found?.kvPressureState).toBe("clear");
+		expect(stub.resizes()).toEqual([]);
+	});
+
+	it("does not grow a filling booking into idle cells", async () => {
+		recordPolykvGrantedWindow(SESSION, 98_304, { asked: 262_144 });
+		const stub = engine({
+			features: OBSERVABLE,
+			row: { window: 98_304, used: 90_000 },
+			pressure: { ...CLEARED, idle_resident: 81_000 },
+			top: { cells_free: 200_000, cells_total: 1_048_576 },
+		});
+		await boundary(stub.fetch);
+		expect(
+			stub.resizes().filter((call) => (call.body?.num_ctx as number) > 98_304),
+		).toEqual([]);
+	});
+
+	it("compacts under idle-cell pressure when that frees a real share of the window", async () => {
+		const stub = engine({
+			features: OBSERVABLE,
+			row: { window: 262_144, used: 150_000 },
+			pressure: { ...CLEARED, idle_resident: 200_000 },
+			top: { cells_free: 400_000, cells_total: 1_048_576 },
+		});
+		const { found } = await boundary(stub.fetch, { messageChars: 600_000 });
+		expect(found?.kvPressureCompaction).toBe(true);
+		expect(found?.shouldCompact).toBe(true);
+	});
+
+	it("re-decides a queued shrink the engine refused at idle from the current /kv", async () => {
+		recordOpencotiWindowFloor(SESSION, 1_000);
+		const stub = engine({
+			features: OBSERVABLE,
+			row: {
+				window: 262_144,
+				used: 5_000,
+				resize_pending: SHRUNK,
+				resize_pending_reason: "used_exceeds_window",
+				resize_pending_refused_at: 1_790_000_100,
+				resize_pending_refused_s: 1.5,
+			},
+			pressure: { ...ACTIVE, idle_resident: 40_000 },
+			top: { cells_free: 1_000_000, cells_total: 1_048_576 },
+			resize: [queued],
+		});
+		await boundary(stub.fetch);
+		const sent = stub.resizes().map((call) => call.body?.num_ctx as number);
+		// Not the refused target again: a new one, standing on what is held.
+		expect(sent).toHaveLength(1);
+		expect(sent[0]).not.toBe(SHRUNK);
+		expect(sent[0]).toBeGreaterThanOrEqual(45_000 / KV_SHRINK_FILL);
+	});
+
+	it("cancels a refused queued shrink when no shrink is worth making now", async () => {
+		const stub = engine({
+			features: OBSERVABLE,
+			row: {
+				window: 262_144,
+				used: 150_000,
+				resize_pending: 200_000,
+				resize_pending_reason: "used_exceeds_window",
+				resize_pending_refused_at: 1_790_000_100,
+				resize_pending_refused_s: 1.5,
+			},
+			pressure: { ...ACTIVE, idle_resident: 0 },
+			top: { cells_free: 1_000_000, cells_total: 1_048_576 },
+		});
+		const { lines } = await boundary(stub.fetch);
+		expect(stub.resizes().map((call) => call.body?.num_ctx)).toEqual([262_144]);
+		expect(
+			lines.some((line) =>
+				/refused at the booking's idle moment/.test(line.message),
+			),
+		).toBe(true);
+		noWarnings(lines);
+	});
+});
+
+describe("the SWA half (opencoti mail #322)", () => {
+	const OBSERVABLE = [...BOTH, "kv_resize_deferred_v1", "kv_observable_v1"];
+	// b116: "swa 66044 used of 66048 cells" while the base held 163k of 1M.
+	const fullSwa = {
+		cells_total: 66_048,
+		cells_used: 60_000,
+		cells_reserved: 0,
+		cells_free: 6_048,
+		window: 1_024,
+	};
+
+	it("does not grow a filling booking while the SWA half is full, however empty the base", async () => {
+		recordPolykvGrantedWindow(SESSION, 98_304, { asked: 262_144 });
+		const stub = engine({
+			features: OBSERVABLE,
+			row: { window: 98_304, used: 90_000 },
+			pressure: { ...CLEARED, idle_resident: 0 },
+			top: { cells_free: 880_000, cells_total: 1_048_576, swa: fullSwa },
+		});
+		const { lines } = await boundary(stub.fetch);
+		expect(stub.resizes()).toEqual([]);
+		expect(lines.some((line) => /SWA half is full/.test(line.message))).toBe(
+			true,
+		);
+		noWarnings(lines);
+	});
+
+	it("neither compacts nor shrinks over it: that frees no SWA cell", async () => {
+		const stub = engine({
+			features: OBSERVABLE,
+			row: { window: 262_144, used: 150_000 },
+			pressure: { ...CLEARED, idle_resident: 0 },
+			top: { cells_free: 880_000, cells_total: 1_048_576, swa: fullSwa },
+		});
+		const { found } = await boundary(stub.fetch, { messageChars: 600_000 });
+		expect(found?.kvPressureCompaction).toBe(false);
+		expect(stub.resizes()).toEqual([]);
+	});
+
+	it("grows as before below the threshold", async () => {
+		recordPolykvGrantedWindow(SESSION, 98_304, { asked: 262_144 });
+		const stub = engine({
+			features: OBSERVABLE,
+			row: { window: 98_304, used: 90_000 },
+			pressure: { ...CLEARED, idle_resident: 0 },
+			top: {
+				cells_free: 880_000,
+				cells_total: 1_048_576,
+				swa: { ...fullSwa, cells_used: 40_000, cells_free: 26_048 },
+			},
+		});
+		await boundary(stub.fetch);
+		expect(stub.resizes().map((call) => call.body?.num_ctx)).toEqual([262_144]);
 	});
 });

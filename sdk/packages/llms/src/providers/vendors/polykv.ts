@@ -884,6 +884,15 @@ export const OPENCOTI_FEATURES = {
 	 * `resize_pending` (b110, mail #306).
 	 */
 	kvResizeDeferred: "kv_resize_deferred_v1",
+	/**
+	 * What the engine holds that nobody is charged for (b115, patch 0399,
+	 * mail #316): `idle_resident` on `/kv.pressure` and on the resize result
+	 * -- cells physically held by idle slots, a released worker's "ghost" --
+	 * `error_kind: "evicted_kv_full"` on the partial eviction, and
+	 * `resize_pending_refused_at` / `_s` on a `/kv` row whose queued resize
+	 * was refused at its idle moment.
+	 */
+	kvObservable: "kv_observable_v1",
 } as const;
 
 export type OpencotiFeature =
@@ -1366,6 +1375,15 @@ export interface OpencotiAllocation {
 	 * the session holds. It stays queued.
 	 */
 	resizePendingReason?: string;
+	/**
+	 * When the queued resize was last refused at an idle moment, epoch seconds
+	 * on the server's clock (`kv_observable_v1`). Set only while it stays
+	 * queued: the engine will try the same target again at the next idle
+	 * moment, and a client that re-sends it adds nothing.
+	 */
+	resizePendingRefusedAt?: number;
+	/** Seconds since that refusal, when the row was written. */
+	resizePendingRefusedS?: number;
 }
 
 export interface OpencotiStatus {
@@ -1571,6 +1589,20 @@ export function parseOpencotiAllocations(
 				...(typeof entry.resize_pending_reason === "string" &&
 				entry.resize_pending_reason
 					? { resizePendingReason: entry.resize_pending_reason }
+					: {}),
+				...(numberOr(entry.resize_pending_refused_at) !== undefined
+					? {
+							resizePendingRefusedAt: numberOr(
+								entry.resize_pending_refused_at,
+							) as number,
+						}
+					: {}),
+				...(numberOr(entry.resize_pending_refused_s) !== undefined
+					? {
+							resizePendingRefusedS: numberOr(
+								entry.resize_pending_refused_s,
+							) as number,
+						}
 					: {}),
 			},
 		];

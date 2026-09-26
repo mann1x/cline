@@ -101,6 +101,13 @@ export {
 	renderDelegationForTranscript,
 	UnknownConfiguredAgentError,
 } from "./delegate-to-agent";
+export {
+	type EngineEviction,
+	engineEvictionCount,
+	engineEvictions,
+	recordEngineEviction,
+	resetEngineEvictions,
+} from "./engine-evictions";
 export { isNodeUnreachable } from "./node-reachability";
 export {
 	buildTeamProgressSummary,

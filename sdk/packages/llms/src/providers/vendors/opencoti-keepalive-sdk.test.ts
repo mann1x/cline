@@ -438,3 +438,44 @@ describe("a stream the SDK cannot validate", () => {
 		expect(classifyTurnFault(ended?.error)).toBe("transport");
 	});
 });
+
+describe("the engine's partial eviction, through the SDK (kv_observable_v1)", () => {
+	// patch 0399: the victim's 500 carries `error_kind` beside `message`. The
+	// victim is mid-decode, so its stream has usually opened already and the
+	// error arrives as an in-stream event, which the AI SDK validates against
+	// its error schema -- a schema that dropped every field it did not name.
+	const eviction = {
+		code: 500,
+		type: "server_error",
+		message:
+			"Evicted to keep other in-flight requests alive: the KV cache could not fit another token and this was the largest live sequence. Context size has been exceeded.",
+		error_kind: "evicted_kv_full",
+	};
+	const delta = `data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: "assistant", content: "x" } }] })}\n\n`;
+
+	it("keeps its error_kind when it arrives mid-stream", async () => {
+		const server = engine(() => [
+			encoder.encode(delta),
+			encoder.encode(`data: ${JSON.stringify({ error: eviction })}\n\n`),
+		]);
+		const ended = finish(await turn(server.fetch));
+		expect(ended?.reason).toBe("error");
+		expect((ended as { errorClass?: string } | undefined)?.errorClass).toBe(
+			"kv_evicted",
+		);
+	});
+
+	// Before any data the supervision turns it into the plain 500 it would
+	// have been, which the AI SDK retries twice (2 s, then 4 s) before the
+	// turn ends: hence the long timeout.
+	it("keeps its error_kind when it is the stream's first result", async () => {
+		const server = engine(() => [
+			encoder.encode(`data: ${JSON.stringify({ error: eviction })}\n\n`),
+		]);
+		const ended = finish(await turn(server.fetch));
+		expect(ended?.reason).toBe("error");
+		expect((ended as { errorClass?: string } | undefined)?.errorClass).toBe(
+			"kv_evicted",
+		);
+	}, 20_000);
+});
