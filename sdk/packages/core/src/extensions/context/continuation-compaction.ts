@@ -331,6 +331,8 @@ export interface CompactionMeter {
 	/** Each critic's `cache_n`, and what P' made possible. */
 	criticCacheN: number[];
 	criticExpectedCacheN?: number;
+	/** `cache_n` of the retrospective and synthesizer when they continued P'. */
+	siblingCacheN: number[];
 	/** Engine objects released, and those a release failed for. */
 	released: string[];
 	leaked: string[];
@@ -345,6 +347,7 @@ export function createCompactionMeter(): CompactionMeter {
 		calls: 0,
 		peakBookedCells: 0,
 		criticCacheN: [],
+		siblingCacheN: [],
 		released: [],
 		leaked: [],
 		notes: [],
@@ -405,8 +408,22 @@ export interface CompactionContinuation {
 		maxTokens: number,
 	): Promise<string>;
 	/**
-	 * A call that is not a continuation -- the retrospective, the
-	 * synthesizer -- on an exact booking of its own where the engine books.
+	 * Room on P' for the retrospective or the synthesizer, reserved now; or
+	 * `undefined` when the call does not fit there, and must wait for the
+	 * release and run on a booking of its own. Only on an engine that
+	 * continues a pool token-exact (`pool_continue_v1`): anywhere else the
+	 * call's own reasoning fields would render the prefix differently and it
+	 * would share nothing.
+	 */
+	reservePPrime(
+		purpose: "retrospective" | "synthesizer",
+		chars: number,
+		maxTokens: number,
+	): PPrimeReservation | undefined;
+	/**
+	 * The retrospective or the synthesizer: as a continuation of P' with a
+	 * reservation that still holds, otherwise on an exact booking of its own
+	 * where the engine books.
 	 */
 	fresh(
 		purpose: "retrospective" | "synthesizer",
@@ -414,6 +431,7 @@ export interface CompactionContinuation {
 		request: string,
 		maxTokens: number,
 		providerConfig: ProviderConfig,
+		reservation?: PPrimeReservation,
 	): Promise<ContinuationCallResult>;
 	/**
 	 * Give the session's cells back: the critics, P', P, then the session's
@@ -423,6 +441,13 @@ export interface CompactionContinuation {
 	release(): Promise<void>;
 	/** Release everything this continuation created. Idempotent. */
 	dispose(): Promise<void>;
+}
+
+/** Room on P' held for one call (`reservePPrime`). */
+export interface PPrimeReservation {
+	readonly purpose: "retrospective" | "synthesizer";
+	/** Cells charged against the owner's room while the call runs. */
+	readonly cells: number;
 }
 
 export interface PrepareContinuationInput {
@@ -631,6 +656,18 @@ class Continuation implements CompactionContinuation {
 	private disposed = false;
 	/** Extra cells booked right now, and at the peak. */
 	private bookedNow = 0;
+	/**
+	 * The owner's free cells when P' was frozen, and what this compaction's
+	 * calls on P' have claimed of them since. `undefined` room: not measured.
+	 */
+	private ownerRoom?: number;
+	private claimed = 0;
+	/**
+	 * The critics' share of {@link claimed}: held from the plan until the
+	 * synthesizer reserves, which the council only asks for once both critics
+	 * have answered.
+	 */
+	private criticClaim = 0;
 
 	constructor(private readonly state: ContinuationState) {
 		this.meter = state.input.meter ?? createCompactionMeter();
@@ -874,14 +911,19 @@ class Continuation implements CompactionContinuation {
 			} else {
 				// Workers of the owner: charged instruction + answer against its
 				// room. No growth -- a compaction never books past the window.
-				const room = await this.ownerRoom(owner);
+				const room = await this.readOwnerRoom(owner);
+				this.ownerRoom = room;
 				if (room === undefined || room >= criticNeed * 2) {
+					this.criticClaim = criticNeed * 2;
+					this.claimed += this.criticClaim;
 					return {
 						critics: "concurrent",
 						reason: `critics are workers of ${owner}${room === undefined ? "" : ` (${room} cells free)`}`,
 					};
 				}
 				if (room >= criticNeed) {
+					this.criticClaim = criticNeed;
+					this.claimed += this.criticClaim;
 					return {
 						critics: "serial",
 						reason: `room for one critic at a time in ${owner} (${room} of ${criticNeed * 2} cells)`,
@@ -918,7 +960,7 @@ class Continuation implements CompactionContinuation {
 	/** P' was frozen but the critics cannot use it: release it with the rest. */
 	private releasePPrimeLater = false;
 
-	private async ownerRoom(owner: string): Promise<number | undefined> {
+	private async readOwnerRoom(owner: string): Promise<number | undefined> {
 		const config = this.input.providerConfig;
 		const snapshot = await readOpencotiKv(config.baseUrl, config.fetch).catch(
 			() => undefined,
@@ -977,6 +1019,7 @@ class Continuation implements CompactionContinuation {
 				poolId: this.pPrime.pool_id,
 				prefixTokens: this.pPrime.prefix_len,
 				layout: "borrowed",
+				...(this.continuesPools ? { continueTail: 1 } : {}),
 			});
 			this.openSessions.add(criticId);
 			if (booking > 0) {
@@ -1029,13 +1072,163 @@ class Continuation implements CompactionContinuation {
 		}
 	}
 
+	/** The engine continues a pool token-exact (`pool_continue_v1`). */
+	private get continuesPools(): boolean {
+		return hasOpencotiFeature(
+			this.state.features,
+			OPENCOTI_FEATURES.poolContinue,
+		);
+	}
+
+	reservePPrime(
+		purpose: "retrospective" | "synthesizer",
+		chars: number,
+		maxTokens: number,
+	): PPrimeReservation | undefined {
+		if (
+			this.path !== "pooled" ||
+			!this.pPrime ||
+			this.releasePPrimeLater ||
+			this.released ||
+			!this.continuesPools
+		) {
+			return undefined;
+		}
+		const cells = tokensForChars(chars) + maxTokens + BOOKING_SLACK_TOKENS;
+		if (purpose === "synthesizer" && this.criticClaim > 0) {
+			this.claimed = Math.max(0, this.claimed - this.criticClaim);
+			this.criticClaim = 0;
+		}
+		if (this.pPrimeOwned) {
+			// A worker of the owner, charged its request and its answer against
+			// room the owner already holds: no new cells anywhere.
+			if (
+				this.ownerRoom !== undefined &&
+				this.claimed + cells > this.ownerRoom
+			) {
+				return undefined;
+			}
+		} else if (
+			purpose === "synthesizer" ||
+			!hasOpencotiFeature(this.state.features, OPENCOTI_FEATURES.privateWindow)
+		) {
+			// On an unowned P' every attacher books its own window. The
+			// retrospective's is small and runs beside the critics; the
+			// synthesizer's would be booked while P and P' are still held, which
+			// is what running it after the release exists to avoid.
+			return undefined;
+		}
+		this.claimed += cells;
+		this.note(
+			`${purpose} continues P' (${cells} cells${this.pPrimeOwned ? ` of ${this.ownerRoom ?? "unmeasured"} free in the owner` : ", booked"})`,
+		);
+		return { purpose, cells };
+	}
+
+	/** One call as a continuation of P', in its own session. */
+	private async onPPrime(
+		reservation: PPrimeReservation,
+		systemPrompt: string,
+		request: string,
+		maxTokens: number,
+		summarizerConfig: ProviderConfig,
+	): Promise<ContinuationCallResult> {
+		const writer = this.lastWriter;
+		const pPrime = this.pPrime;
+		if (!writer || !pPrime) {
+			throw new Error("no P' to continue");
+		}
+		const id = this.idFor(reservation.purpose);
+		const booking = this.pPrimeOwned
+			? 0
+			: exactBooking(systemPrompt.length + request.length, maxTokens);
+		const {
+			polykvWorker: _worker,
+			polykvBooking: _booking,
+			...rest
+		} = this.input.providerConfig;
+		setPolykvSession(id, {
+			poolId: pPrime.pool_id,
+			prefixTokens: pPrime.prefix_len,
+			layout: "borrowed",
+			continueTail: 1,
+		});
+		this.openSessions.add(id);
+		if (booking > 0) {
+			this.book(booking);
+		}
+		try {
+			const result = await this.call(
+				{
+					purpose: reservation.purpose,
+					providerConfig: {
+						...rest,
+						engineSessionId: id,
+						polykvLeadPool: false,
+						...(booking > 0 ? { polykvBooking: { numCtx: booking } } : {}),
+					},
+					sessionId: id,
+					systemPrompt: this.input.systemPrompt,
+					messages: [
+						...this.writerMessages(writer.instruction),
+						{
+							role: "assistant",
+							content: [{ type: "text", text: writer.text }],
+						},
+						{
+							role: "user",
+							content: [
+								{ type: "text", text: `${systemPrompt}\n\n${request}` },
+							],
+						},
+					],
+					tools: this.input.tools,
+					maxTokens,
+					toolChoice: "none",
+					// The pool is continued token-exact, so the reasoning fields
+					// no longer have to match the session's to share its prefix:
+					// the summarizer's own, as on a booking of its own.
+					reasoning: summarizerReasoning(summarizerConfig),
+					...(this.input.abortSignal
+						? { abortSignal: this.input.abortSignal }
+						: {}),
+				},
+				{ boundedWaits: true },
+			);
+			if (result.timings?.cachedTokens !== undefined) {
+				this.meter.siblingCacheN.push(result.timings.cachedTokens);
+			}
+			return result;
+		} finally {
+			await this.closeSession(id);
+			clearPolykvSession(id);
+			if (booking > 0) {
+				this.unbook(booking);
+			}
+			this.claimed = Math.max(0, this.claimed - reservation.cells);
+		}
+	}
+
 	async fresh(
 		purpose: "retrospective" | "synthesizer",
 		systemPrompt: string,
 		request: string,
 		maxTokens: number,
 		summarizerConfig: ProviderConfig,
+		reservation?: PPrimeReservation,
 	): Promise<ContinuationCallResult> {
+		if (reservation) {
+			if (this.pPrime && !this.released) {
+				return this.onPPrime(
+					reservation,
+					systemPrompt,
+					request,
+					maxTokens,
+					summarizerConfig,
+				);
+			}
+			this.claimed = Math.max(0, this.claimed - reservation.cells);
+		}
 		let providerConfig = summarizerConfig;
 		let id: string | undefined;
 		let booking = 0;
@@ -1071,17 +1264,7 @@ class Continuation implements CompactionContinuation {
 					// summarizer config's own, which is how the text path sent
 					// it. Left to the model's default, a thinking model spent the
 					// synthesizer's whole budget reasoning (8244, 2026-09-26).
-					reasoning: {
-						...(summarizerConfig.thinking !== undefined
-							? { thinking: summarizerConfig.thinking }
-							: {}),
-						...(summarizerConfig.reasoningEffort !== undefined
-							? { reasoningEffort: summarizerConfig.reasoningEffort }
-							: {}),
-						...(summarizerConfig.thinkingBudgetTokens !== undefined
-							? { thinkingBudgetTokens: summarizerConfig.thinkingBudgetTokens }
-							: {}),
-					},
+					reasoning: summarizerReasoning(summarizerConfig),
 					...(this.input.abortSignal
 						? { abortSignal: this.input.abortSignal }
 						: {}),
@@ -1197,6 +1380,19 @@ class Continuation implements CompactionContinuation {
 	}
 }
 
+/** The summarizer config's own reasoning settings, as a call's. */
+function summarizerReasoning(config: ProviderConfig): ContinuationReasoning {
+	return {
+		...(config.thinking !== undefined ? { thinking: config.thinking } : {}),
+		...(config.reasoningEffort !== undefined
+			? { reasoningEffort: config.reasoningEffort }
+			: {}),
+		...(config.thinkingBudgetTokens !== undefined
+			? { thinkingBudgetTokens: config.thinkingBudgetTokens }
+			: {}),
+	};
+}
+
 function describe(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
@@ -1222,10 +1418,14 @@ export function describeCompactionRun(input: {
 		m.criticCacheN.length === 0
 			? "n/a"
 			: `${m.criticCacheN.join(",")}/${m.criticExpectedCacheN ?? "?"}`;
+	const siblings =
+		m.siblingCacheN.length === 0
+			? ""
+			: ` on-P'=${m.siblingCacheN.join(",")}/${m.criticExpectedCacheN ?? "?"}`;
 	return [
 		`[compaction] path=${input.path} (${input.reason})`,
 		`prefill=${m.prefillTokens}${m.unmeasuredCalls > 0 ? ` (+${m.unmeasuredCalls} unmeasured)` : ""} over ${m.calls} calls`,
-		`cache_n writer=${writer} critics=${critics}`,
+		`cache_n writer=${writer} critics=${critics}${siblings}`,
 		`peak booked=${m.peakBookedCells}${input.sessionWindow ? ` of window ${input.sessionWindow}` : ""}`,
 		`wall=${input.durationMs}ms`,
 		...(m.released.length > 0 ? [`released=${m.released.length}`] : []),

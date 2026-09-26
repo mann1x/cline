@@ -359,6 +359,12 @@ export function buildCouncilSynthesizerRequest(input: {
 	originalLength: number;
 	/** Replaces {@link DEFAULT_COUNCIL_SYNTHESIZER_PROMPT}; blank uses it. */
 	instructions?: string;
+	/**
+	 * The synthesiser continues the conversation the replay was written in, so
+	 * the originals are its own answer above: named by where they begin and
+	 * end rather than pasted again.
+	 */
+	originalsInContext?: boolean;
 }): string {
 	const budget = Math.round(input.originalLength * 1.1);
 	const parts = [
@@ -389,9 +395,11 @@ export function buildCouncilSynthesizerRequest(input: {
 		"",
 		"---",
 		"",
-		"**First half — as originally written:**",
-		"",
-		input.firstOriginal,
+		...(input.originalsInContext
+			? [
+					`**First half — as originally written:** your replay above, from its start to “…${tailOf(input.firstOriginal)}”.`,
+				]
+			: ["**First half — as originally written:**", "", input.firstOriginal]),
 		"",
 		"**First half — as rewritten:**",
 		"",
@@ -399,9 +407,11 @@ export function buildCouncilSynthesizerRequest(input: {
 		"",
 		"---",
 		"",
-		"**Second half — as originally written:**",
-		"",
-		input.secondOriginal,
+		...(input.originalsInContext
+			? [
+					`**Second half — as originally written:** your replay above, from “${headOf(input.secondOriginal)}…” to its end.`,
+				]
+			: ["**Second half — as originally written:**", "", input.secondOriginal]),
 		"",
 		"**Second half — as rewritten:**",
 		"",
@@ -418,6 +428,17 @@ export function buildCouncilSynthesizerRequest(input: {
 		);
 	}
 	return parts.join("\n");
+}
+
+/** Where a half ends, in few enough words to find it by. */
+function tailOf(text: string): string {
+	const trimmed = text.trim();
+	return trimmed.slice(Math.max(0, trimmed.length - 80)).trimStart();
+}
+
+/** Where a half begins. */
+function headOf(text: string): string {
+	return text.trim().slice(0, 80).trimEnd();
 }
 
 /**
@@ -555,7 +576,9 @@ export async function runCouncilReview(input: {
 	 * last calls that needed the session's context, and the synthesiser reads
 	 * only the halves.
 	 */
-	prepareSynthesis?: () => Promise<{ thinkingSummary?: string } | undefined>;
+	prepareSynthesis?: () => Promise<
+		{ thinkingSummary?: string; originalsInContext?: boolean } | undefined
+	>;
 	/**
 	 * What the summarizer will accept as one request. A reviewer whose half
 	 * does not fit declines rather than sending a call the provider refuses;
@@ -724,12 +747,14 @@ export async function runCouncilReview(input: {
 	// The retrospective the synthesiser revises: the caller's, unless the
 	// synthesis hook produced it (a continuation writes it after its release).
 	let thinkingSummary = input.thinkingSummary;
+	let originalsInContext = false;
 	if (input.prepareSynthesis) {
 		try {
 			const prepared = await input.prepareSynthesis();
 			if (prepared?.thinkingSummary !== undefined) {
 				thinkingSummary = prepared.thinkingSummary;
 			}
+			originalsInContext = prepared?.originalsInContext === true;
 		} catch (error) {
 			input.logger?.log(
 				"Preparing the compaction synthesis failed; joining without it",
@@ -755,6 +780,7 @@ export async function runCouncilReview(input: {
 				thinkingSummary,
 				originalLength,
 				instructions: input.synthesizerPrompt,
+				originalsInContext,
 			}),
 			role: "synthesizer",
 		});

@@ -38,6 +38,7 @@ import {
 	type CompactionContinuation,
 	type CompactionMeter,
 	meterCall,
+	type PPrimeReservation,
 } from "./continuation-compaction";
 import {
 	logExcerpt,
@@ -1022,7 +1023,13 @@ export async function runAgenticCompaction(options: {
 	const toolLedgerKey = ledgerEnabled
 		? renderToolLedgerKey(ledgerEntries)
 		: undefined;
-	const runRetrospective = (): Promise<string | undefined> => {
+	const retrospectiveMaxTokens = resolveThinkingSummaryMaxTokens({
+		budgets: outputBudgets,
+		summaryTokens: estimateTokens(summary.length),
+	});
+	const runRetrospective = (
+		reservation?: PPrimeReservation,
+	): Promise<string | undefined> => {
 		if (thinkingSummaryEnabled) {
 			progress.step("retrospective");
 		}
@@ -1031,10 +1038,7 @@ export async function runAgenticCompaction(options: {
 			messages: newMessagesToFold,
 			previousThinkingSummary,
 			promptTemplate: options.thinkingSummaryPrompt,
-			maxOutputTokens: resolveThinkingSummaryMaxTokens({
-				budgets: outputBudgets,
-				summaryTokens: estimateTokens(summary.length),
-			}),
+			maxOutputTokens: retrospectiveMaxTokens,
 			summarizer: options.summarizer,
 			activeProviderConfig: options.providerConfig,
 			summarizerInputLimit,
@@ -1054,6 +1058,7 @@ export async function runAgenticCompaction(options: {
 								call.request,
 								call.maxOutputTokens,
 								call.providerConfig,
+								reservation,
 							),
 					}
 				: {}),
@@ -1069,6 +1074,12 @@ export async function runAgenticCompaction(options: {
 				messages: newMessagesToFold,
 				toolLedgerKey,
 				runRetrospective,
+				retrospective: retrospectiveNeed({
+					enabled: thinkingSummaryEnabled,
+					messages: newMessagesToFold,
+					previousThinkingSummary,
+					maxTokens: retrospectiveMaxTokens,
+				}),
 				progress,
 				logger: options.logger,
 				criticPrompt: options.councilCriticPrompt,
@@ -1274,11 +1285,41 @@ async function reviewAsText(input: {
 }
 
 /**
+ * What the retrospective will ask for, before it is built: `undefined` when it
+ * will make no call at all, so no room is held for it.
+ */
+function retrospectiveNeed(input: {
+	enabled: boolean;
+	messages: MessageWithMetadata[];
+	previousThinkingSummary?: string;
+	maxTokens: number;
+}): { chars: number; maxTokens: number } | undefined {
+	if (!input.enabled) {
+		return undefined;
+	}
+	const reasoning = serializeReasoningWithOutcomes(input.messages);
+	const previous = input.previousThinkingSummary ?? "";
+	if (!reasoning.trim() && !previous.trim()) {
+		return undefined;
+	}
+	// The request's own wording and the retrospective's instruction.
+	return {
+		chars: reasoning.length + previous.length + 4_000,
+		maxTokens: input.maxTokens,
+	};
+}
+
+/**
  * The council as continuations: the critics continue the frozen session with
- * the writer's summary in it, the session's cells are released, and only then
- * do the retrospective and the synthesizer run -- each on an exact booking of
- * its own, one after the other, so the compaction never holds more than one
- * of them.
+ * the writer's summary in it.
+ *
+ * On an engine that continues a pool token-exact, the retrospective and the
+ * synthesizer continue P' too, where it has room for them: the retrospective
+ * beside the critics, the synthesizer after them with the replay's originals
+ * as its own answer above instead of pasted again, and only then is the
+ * session's cells released. What does not fit waits for the release and runs
+ * on an exact booking of its own, one after the other, as before -- so the
+ * compaction never books more than one of them.
  */
 async function reviewAsContinuation(input: {
 	continuation: CompactionContinuation;
@@ -1288,7 +1329,11 @@ async function reviewAsContinuation(input: {
 	summarizerProviderConfig: ProviderConfig;
 	messages: MessageWithMetadata[];
 	toolLedgerKey: string | undefined;
-	runRetrospective: () => Promise<string | undefined>;
+	runRetrospective: (
+		reservation?: PPrimeReservation,
+	) => Promise<string | undefined>;
+	/** The retrospective's request, estimated; `undefined`: it makes no call. */
+	retrospective?: { chars: number; maxTokens: number };
 	progress: CompactionProgress;
 	logger?: BasicLogger;
 	criticPrompt?: string;
@@ -1299,68 +1344,121 @@ async function reviewAsContinuation(input: {
 		input.summary.length,
 		input.summaryLimitTokens,
 	);
+	const council = input.councilEnabled && plan.critics !== "skip";
+	// Beside the critics when it fits on P': it reads the session's reasoning,
+	// not the replay, so nothing it needs is waiting on them.
+	const retrospectiveReservation =
+		council && input.retrospective
+			? continuation.reservePPrime(
+					"retrospective",
+					input.retrospective.chars,
+					input.retrospective.maxTokens,
+				)
+			: undefined;
+	const earlyRetrospective = retrospectiveReservation
+		? input.runRetrospective(retrospectiveReservation)
+		: undefined;
 	let retrospective: string | undefined;
-	let released = false;
-	const releaseThenRetrospect = async () => {
-		if (released) {
-			return { thinkingSummary: retrospective };
+	let retrospectiveDone = false;
+	const finishRetrospective = async () => {
+		if (!retrospectiveDone) {
+			retrospectiveDone = true;
+			retrospective = earlyRetrospective
+				? await earlyRetrospective
+				: await input.runRetrospective();
 		}
-		released = true;
-		await continuation.release();
-		retrospective = await input.runRetrospective();
-		return { thinkingSummary: retrospective };
+		return retrospective;
 	};
-	if (!input.councilEnabled || plan.critics === "skip") {
-		if (input.councilEnabled) {
-			input.logger?.log(`The compaction council was skipped: ${plan.reason}`, {
-				severity: "info",
-			});
+	let released = false;
+	const release = async () => {
+		if (!released) {
+			released = true;
+			await continuation.release();
 		}
-		await releaseThenRetrospect();
+	};
+	/** The synthesizer's room on P', when it has some. */
+	let synthesizerReservation: PPrimeReservation | undefined;
+	let synthesisPrepared = false;
+	const prepareSynthesis = async () => {
+		synthesisPrepared = true;
+		if (earlyRetrospective) {
+			await finishRetrospective();
+			// The originals, the rewrites and the retrospective, less the
+			// originals it no longer needs pasted: an upper bound.
+			synthesizerReservation = continuation.reservePPrime(
+				"synthesizer",
+				input.summary.length * 2 + (retrospective?.length ?? 0) + 6_000,
+				input.summaryLimitTokens,
+			);
+		}
+		if (!synthesizerReservation) {
+			await release();
+			await finishRetrospective();
+		}
 		return {
-			summary: stripHalfMarker(input.summary),
 			thinkingSummary: retrospective,
-			reviewers: 0,
-			merged: false,
+			originalsInContext: synthesizerReservation !== undefined,
 		};
-	}
-	input.logger?.debug?.(`[compaction] council: ${plan.reason}`);
-	const reviewed = await runCouncilReview({
-		summary: input.summary,
-		serial: plan.critics === "serial",
-		messages: input.messages,
-		transcriptInContext: true,
-		toolLedgerKey: input.toolLedgerKey,
-		generate: async (call) => {
-			input.progress.step("review");
-			if (call.role === "critic") {
-				const text = await continuation.critic(
-					call.half ?? "first",
+	};
+	try {
+		if (!council) {
+			if (input.councilEnabled) {
+				input.logger?.log(
+					`The compaction council was skipped: ${plan.reason}`,
+					{ severity: "info" },
+				);
+			}
+			await release();
+			await finishRetrospective();
+			return {
+				summary: stripHalfMarker(input.summary),
+				thinkingSummary: retrospective,
+				reviewers: 0,
+				merged: false,
+			};
+		}
+		input.logger?.debug?.(`[compaction] council: ${plan.reason}`);
+		const reviewed = await runCouncilReview({
+			summary: input.summary,
+			serial: plan.critics === "serial",
+			messages: input.messages,
+			transcriptInContext: true,
+			toolLedgerKey: input.toolLedgerKey,
+			generate: async (call) => {
+				input.progress.step("review");
+				if (call.role === "critic") {
+					const text = await continuation.critic(
+						call.half ?? "first",
+						call.systemPrompt,
+						call.request,
+						input.summaryLimitTokens,
+					);
+					return cutEchoedTranscript(text).text;
+				}
+				const result = await continuation.fresh(
+					"synthesizer",
 					call.systemPrompt,
 					call.request,
 					input.summaryLimitTokens,
+					input.summarizerProviderConfig,
+					synthesizerReservation,
 				);
-				return cutEchoedTranscript(text).text;
-			}
-			const result = await continuation.fresh(
-				"synthesizer",
-				call.systemPrompt,
-				call.request,
-				input.summaryLimitTokens,
-				input.summarizerProviderConfig,
-			);
-			return cutEchoedTranscript(result.text).text;
-		},
-		prepareSynthesis: releaseThenRetrospect,
-		logger: input.logger,
-		criticPrompt: input.criticPrompt,
-		synthesizerPrompt: input.synthesizerPrompt,
-	});
-	// The council can end before its synthesizer (no split, no usable half):
-	// the release and the retrospective still happen.
-	if (!released) {
-		await releaseThenRetrospect();
+				return cutEchoedTranscript(result.text).text;
+			},
+			prepareSynthesis,
+			logger: input.logger,
+			criticPrompt: input.criticPrompt,
+			synthesizerPrompt: input.synthesizerPrompt,
+		});
+		if (synthesisPrepared) {
+			// The synthesizer revised the retrospective it was handed.
+			return reviewed;
+		}
+		// The council ended before its synthesizer (no split, no usable
+		// half): the retrospective and the release still happen.
+		await finishRetrospective();
 		return { ...reviewed, thinkingSummary: retrospective };
+	} finally {
+		await release();
 	}
-	return reviewed;
 }

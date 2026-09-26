@@ -792,6 +792,166 @@ describe("the whole compaction as a continuation", () => {
 		]);
 	});
 
+	it("on an engine that continues pools, runs the retrospective beside the critics and the synthesizer on P' before the release", async () => {
+		const server = engine({
+			features: [...POOLED, "pool_continue_v1"],
+			allocations: [{ session_id: "lead", window: 65_536, used: 21_000 }],
+			owner: "lead",
+		});
+		const timeline: string[] = [];
+		const registered: Record<string, unknown> = {};
+		const m = model({
+			onCall: (call) => {
+				timeline.push(call.purpose);
+				if (call.sessionId) {
+					registered[call.purpose] = getPolykvSession(call.sessionId);
+				}
+			},
+		});
+		const tracked = server.fetch;
+		const trackingFetch = (async (url: unknown, init?: RequestInit) => {
+			const path = new URL(String(url)).pathname;
+			if (path.endsWith("/release") || path.startsWith("/slots/")) {
+				timeline.push(`release ${path}`);
+			}
+			return tracked(url as never, init);
+		}) as unknown as typeof fetch;
+		const list = messages();
+		// Reasoning for the retrospective to be about.
+		(list[1].content as unknown[]).unshift({
+			type: "thinking",
+			thinking: "The parser drops the last token; check the loop bound.",
+		});
+		const prepared = await prepareCompactionContinuation(
+			input(server, {
+				model: m.fn,
+				apiMessages: list,
+				providerConfig: { fetch: trackingFetch },
+			}),
+		);
+		const c = prepared.continuation;
+		const result = await runAgenticCompaction({
+			context: contextFor(list),
+			providerConfig: {
+				providerId: "opencoti",
+				modelId: "m",
+				baseUrl: "http://engine/v1",
+				fetch: trackingFetch,
+				modelInfo: { id: "m", maxInputTokens: 100_000 },
+			} as never,
+			thinkingSummaryEnabled: true,
+			bounds: resolveRecencyBounds({
+				preserveRecentTokens: 200,
+				preserveRecentMessagesRatio: Number.EPSILON,
+				messageTargetTokens: Number.MAX_SAFE_INTEGER,
+			}),
+			estimateMessageTokens: estimateJsonTokens,
+			...(c ? { continuation: c } : {}),
+		});
+		await c?.dispose();
+
+		expect(result?.messages.length).toBeGreaterThan(0);
+		const firstRelease = timeline.findIndex((x) => x.startsWith("release"));
+		// The retrospective started before the critics had both answered.
+		expect(timeline.indexOf("retrospective")).toBeLessThan(
+			timeline.lastIndexOf("critic"),
+		);
+		// Everything ran on P' before a single release.
+		expect(timeline.indexOf("synthesizer")).toBeGreaterThan(0);
+		expect(firstRelease).toBeGreaterThan(timeline.indexOf("synthesizer"));
+		// Every call on P' continues it: one new turn on the wire.
+		for (const purpose of ["critic", "retrospective", "synthesizer"]) {
+			expect(registered[purpose]).toMatchObject({
+				layout: "borrowed",
+				continueTail: 1,
+			});
+		}
+		// The synthesizer names the originals instead of pasting them again.
+		const synthesizer = m.calls.find((call) => call.purpose === "synthesizer");
+		const request = JSON.stringify(synthesizer?.messages.at(-1)?.content);
+		expect(request).toContain("your replay above, from its start");
+		expect(request).not.toContain("Read the files and found the bug");
+		// The summarizer's reasoning, not the session's: the prefix no longer
+		// depends on it.
+		expect(synthesizer?.reasoning).toEqual({ thinking: false });
+		expectNothingLeft(server);
+		expect(server.closed).toEqual(
+			expect.arrayContaining([
+				"lead~cc1-critic-first",
+				"lead~cc1-critic-second",
+				"lead~cc1-retrospective",
+				"lead~cc1-synthesizer",
+			]),
+		);
+		expect(
+			describeCompactionRun({
+				path: "pooled",
+				reason: "r",
+				meter: c?.meter ?? createCompactionMeter(),
+				durationMs: 1,
+			}),
+		).toContain("on-P'=");
+	});
+
+	it("keeps the retrospective and the synthesizer after the release when the owner has no room for them", async () => {
+		const server = engine({
+			features: [...POOLED, "pool_continue_v1"],
+			allocations: [{ session_id: "lead", window: 65_536, used: 21_000 }],
+			owner: "lead",
+		});
+		const timeline: string[] = [];
+		const m = model({ onCall: (call) => timeline.push(call.purpose) });
+		const tracked = server.fetch;
+		const trackingFetch = (async (url: unknown, init?: RequestInit) => {
+			const path = new URL(String(url)).pathname;
+			if (path.endsWith("/release")) {
+				timeline.push("release");
+			}
+			return tracked(url as never, init);
+		}) as unknown as typeof fetch;
+		const list = messages();
+		// A retrospective whose request alone outgrows the room the critics
+		// leave in the owner's window.
+		(list[1].content as unknown[]).unshift({
+			type: "thinking",
+			thinking: "x ".repeat(60_000),
+		});
+		const prepared = await prepareCompactionContinuation(
+			input(server, {
+				model: m.fn,
+				apiMessages: list,
+				providerConfig: { fetch: trackingFetch },
+			}),
+		);
+		const c = prepared.continuation;
+		await runAgenticCompaction({
+			context: contextFor(list),
+			providerConfig: {
+				providerId: "opencoti",
+				modelId: "m",
+				baseUrl: "http://engine/v1",
+				fetch: trackingFetch,
+				modelInfo: { id: "m", maxInputTokens: 100_000 },
+			} as never,
+			thinkingSummaryEnabled: true,
+			bounds: resolveRecencyBounds({
+				preserveRecentTokens: 200,
+				preserveRecentMessagesRatio: Number.EPSILON,
+				messageTargetTokens: Number.MAX_SAFE_INTEGER,
+			}),
+			estimateMessageTokens: estimateJsonTokens,
+			...(c ? { continuation: c } : {}),
+		});
+		await c?.dispose();
+		const firstRelease = timeline.indexOf("release");
+		expect(timeline.lastIndexOf("critic")).toBeLessThan(firstRelease);
+		expect(timeline.indexOf("retrospective")).toBeGreaterThan(firstRelease);
+		expect(timeline.indexOf("synthesizer")).toBeGreaterThan(
+			timeline.indexOf("retrospective"),
+		);
+		expectNothingLeft(server);
+	});
+
 	it("hands back nothing when the writer cannot answer, and the caller falls back", async () => {
 		const server = engine({
 			allocations: [{ session_id: "lead", window: 65_536, used: 21_000 }],
