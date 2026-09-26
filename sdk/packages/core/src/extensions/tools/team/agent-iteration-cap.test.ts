@@ -1,5 +1,6 @@
 import type { AgentResult } from "@cline/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { describeWorkerStop } from "../../../runtime/safety/worker-struggle-stop";
 import {
 	__resetAwaitingLead,
 	type CappableAgent,
@@ -308,6 +309,118 @@ describe("an agent the loop guard stops", () => {
 			start: async () => ({
 				...result("aborted", 3),
 				abortReason: "maximum consecutive mistakes reached (6)",
+			}),
+			name: "a",
+			sessionId: "lead",
+		});
+		expect(done.stopReason).toBeUndefined();
+		expect(listAwaitingLead("lead")).toHaveLength(0);
+	});
+});
+
+// Swarm 0926b: the struggle supervisor ended 4 workers outright ("worker
+// stopped (thinking-budget)", then "This operation was aborted"), their work
+// discarded. The loop guard's ruling applies to every harness stop of a
+// delegated agent: it suspends the run for the lead.
+const SUPERVISOR_STOP = describeWorkerStop("thinking-budget", {
+	spentAfterNudge: 2,
+});
+
+function struggled(iterations: number, text = ""): AgentResult {
+	return {
+		...result("aborted", iterations, text),
+		abortReason: SUPERVISOR_STOP,
+	};
+}
+
+describe("an agent the struggle supervisor stops", () => {
+	it("waits for the lead, who is told it was struggling in the supervisor's words, and resumes with instructions", async () => {
+		const heard = listeningLead();
+		const agent = scriptedAgent(40, [
+			result("completed", 2, "SUMMARY: found it"),
+		]);
+		const updates: unknown[] = [];
+		const rearmed = vi.fn();
+		const running = runDelegatedWithCap({
+			agent,
+			start: async () => struggled(13, "probing once more"),
+			name: "braces-7",
+			sessionId: "lead",
+			emitUpdate: (update) => updates.push(update),
+			supervisor: { rearm: rearmed },
+		});
+		await vi.waitFor(() => expect(listAwaitingLead("lead")).toHaveLength(1));
+		expect(listAwaitingLead("lead")[0]).toMatchObject({
+			reason: "struggling",
+			detail: SUPERVISOR_STOP,
+		});
+		flushAwaitingLeadNotices();
+		const notice = heard.join("\n");
+		expect(notice).toContain("braces-7");
+		expect(notice).toContain("STRUGGLING");
+		expect(notice).toContain(SUPERVISOR_STOP);
+		expect(notice).toContain("restart_agent");
+		expect(updates).toContainEqual({
+			awaitingLead: {
+				iterations: 13,
+				maxIterations: 40,
+				reason: "struggling",
+				detail: SUPERVISOR_STOP,
+			},
+		});
+
+		expect(
+			resumeSuspended("braces-7", 5, "lead", "Write the SUMMARY now").ok,
+		).toBe(true);
+		const done = await running;
+		expect(rearmed).toHaveBeenCalledTimes(1);
+		expect(agent.continued[0]).toContain("struggle supervisor");
+		expect(agent.continued[0]).toContain("Write the SUMMARY now");
+		// The 27 turns it had left under its cap carry over, plus the 5.
+		expect(agent.caps).toEqual([32]);
+		expect(done.result.text).toBe("SUMMARY: found it");
+		expect(done.stopReason).toBeUndefined();
+	});
+
+	it("keeps the work, reported as the supervisor's stop, when the lead stops it", async () => {
+		listeningLead();
+		const running = runDelegatedWithCap({
+			agent: scriptedAgent(40, []),
+			start: async () => struggled(13, "so far"),
+			name: "a",
+			sessionId: "lead",
+		});
+		await vi.waitFor(() => expect(listAwaitingLead("lead")).toHaveLength(1));
+		expect(stopSuspended("a", { sessionId: "lead" }).message).toContain(
+			"struggle supervisor",
+		);
+		const done = await running;
+		expect(done.stopReason).toBe("supervisor");
+		expect(done.result.text).toBe("so far");
+	});
+
+	it("does not hold a run someone stopped from outside", async () => {
+		listeningLead();
+		const controller = new AbortController();
+		controller.abort();
+		const done = await runDelegatedWithCap({
+			agent: scriptedAgent(40, []),
+			start: async () => struggled(3),
+			name: "a",
+			sessionId: "lead",
+			signal: controller.signal,
+		});
+		expect(done.stopReason).toBeUndefined();
+		expect(listAwaitingLead("lead")).toHaveLength(0);
+	});
+
+	it("is not taken for a bare abort", async () => {
+		listeningLead();
+		const done = await runDelegatedWithCap({
+			agent: scriptedAgent(40, []),
+			start: async () => ({
+				...result("aborted", 3),
+				abortReason: "This operation was aborted",
 			}),
 			name: "a",
 			sessionId: "lead",

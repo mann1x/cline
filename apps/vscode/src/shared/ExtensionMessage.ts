@@ -522,11 +522,12 @@ export interface SubagentStatusItem {
 	/**
 	 * Set while it waits for the lead to resume it (`resume_agent`), restart
 	 * or stop it -- its work kept: stopped at its iteration cap, or (`reason:
-	 * "looping"`) stopped by the loop guard for repeating the same call.
+	 * "looping"`) stopped by the loop guard for repeating the same call, or
+	 * (`reason: "struggling"`) stopped by the struggle supervisor.
 	 */
-	awaitingLead?: { iterations: number; maxIterations: number; reason?: "looping"; detail?: string }
-	/** Why it ended when that was not its own answer: the iteration cap, or a loop. */
-	stopReason?: "iteration_cap" | "loop_guard"
+	awaitingLead?: { iterations: number; maxIterations: number; reason?: "looping" | "struggling"; detail?: string }
+	/** Why it ended when that was not its own answer: the iteration cap, a loop, or the struggle supervisor. */
+	stopReason?: "iteration_cap" | "loop_guard" | "supervisor"
 	/** How the lead's check on it came out, when the lead set one. */
 	oracle?: SubagentOracleResult
 	contextTokens: number

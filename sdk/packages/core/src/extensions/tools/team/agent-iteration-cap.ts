@@ -40,6 +40,7 @@
  */
 
 import type { AgentResult } from "@cline/shared";
+import { isWorkerStruggleStop } from "../../../runtime/safety/worker-struggle-stop";
 import type { AgentOracleResult, DelegatedAgentCheck } from "./agent-check";
 import { leadCanBeReached, sendLeadNudge } from "./agent-trouble";
 
@@ -58,8 +59,11 @@ export interface CappableAgent {
 	continue(message?: string): Promise<AgentResult>;
 }
 
-/** Why an agent waits on the lead: its iteration cap, or a loop the guard stopped. */
-export type AwaitingLeadReason = "iteration_cap" | "looping";
+/**
+ * Why an agent waits on the lead: its iteration cap, a loop the guard
+ * stopped, or a grind the struggle supervisor stopped.
+ */
+export type AwaitingLeadReason = "iteration_cap" | "looping" | "struggling";
 
 /** An agent waiting on the lead, as the lead and the status tool see it. */
 export interface AwaitingLeadView {
@@ -80,12 +84,15 @@ export interface AwaitingLeadView {
 	detached: boolean;
 	/** Why it waits; absent is the cap. */
 	reason?: AwaitingLeadReason;
-	/** For a loop: the guard's own words, naming the call it repeated. */
+	/**
+	 * For a loop: the guard's own words, naming the call it repeated. For a
+	 * supervisor stop: the supervisor's, saying what it measured.
+	 */
 	detail?: string;
 }
 
 /** Why an agent's run came to an end, as far as the cap is concerned. */
-export type DelegatedStopReason = "iteration_cap" | "loop_guard";
+export type DelegatedStopReason = "iteration_cap" | "loop_guard" | "supervisor";
 
 /** A delegated run, with what the cap and the check made of it. */
 export interface DelegatedRunOutcome {
@@ -270,7 +277,13 @@ export function stopSuspended(
 	});
 	return {
 		ok: true,
-		message: `Stopped ${agent.name} ${agent.reason === "looping" ? "where the loop guard stopped it" : "at its iteration cap"}; its work so far is its report.`,
+		message: `Stopped ${agent.name} ${
+			agent.reason === "looping"
+				? "where the loop guard stopped it"
+				: agent.reason === "struggling"
+					? "where the struggle supervisor stopped it"
+					: "at its iteration cap"
+		}; its work so far is its report.`,
 		agent,
 	};
 }
@@ -280,7 +293,10 @@ export function describeAwaitingLead(
 	views: readonly AwaitingLeadView[],
 ): string {
 	const looping = views.filter((view) => view.reason === "looping");
-	const capped = views.filter((view) => view.reason !== "looping");
+	const struggling = views.filter((view) => view.reason === "struggling");
+	const capped = views.filter(
+		(view) => view.reason !== "looping" && view.reason !== "struggling",
+	);
 	const lines = [
 		...capped.map(
 			(view) =>
@@ -292,19 +308,39 @@ export function describeAwaitingLead(
 					view.detail ? ` The guard said: ${oneLine(view.detail, 300)}` : ""
 				}`,
 		),
+		...struggling.map(
+			(view) =>
+				`- ${view.name} (agent id ${view.agentId}) was STRUGGLING: the struggle supervisor had told it to commit a SUMMARY and stopped it when it went on, after ${view.iterations} iterations.${
+					view.detail
+						? ` The supervisor said: ${oneLine(view.detail, 300)}`
+						: ""
+				}`,
+		),
 	];
+	const kinds = [
+		capped.length > 0 ? "stopped at the iteration cap" : "",
+		looping.length > 0 ? "were stopped by the loop guard" : "",
+		struggling.length > 0 ? "were stopped by the struggle supervisor" : "",
+	].filter(Boolean);
 	const why =
-		looping.length === 0
-			? "stopped at the iteration cap"
-			: capped.length === 0
-				? "were stopped by the loop guard"
-				: "stopped at the iteration cap or were stopped by the loop guard";
+		kinds.length <= 1
+			? (kinds[0] ?? "stopped at the iteration cap")
+			: `${kinds.slice(0, -1).join(", ")} or ${kinds[kinds.length - 1]}`;
 	return [
 		`${views.length === 1 ? "An agent has" : `${views.length} agents have`} ${views.length === 1 ? why.replace("were stopped", "was stopped") : why} and ${views.length === 1 ? "is" : "are"} waiting for you. The work is kept -- transcript and file changes -- and nothing has been discarded:`,
 		...lines,
 		`Call ${RESUME_AGENT_TOOL_NAME}(agent_id, extra_iterations, instructions?) to continue one from where it stopped${
-			looping.length > 0
-				? " -- for a looping agent, say in `instructions` what to do instead of the call it repeated"
+			looping.length > 0 || struggling.length > 0
+				? ` -- ${[
+						looping.length > 0
+							? "for a looping agent, say in `instructions` what to do instead of the call it repeated"
+							: "",
+						struggling.length > 0
+							? "for a struggling agent, say in `instructions` what to settle for or where to look"
+							: "",
+					]
+						.filter(Boolean)
+						.join("; ")}`
 				: " with a raised cap"
 		}; restart_agent(agent_id, instructions) to start it over with revised instructions; or stop it (stop_agents) to take its work as it is. Its round does not return until you decide.`,
 	].join("\n");
@@ -431,6 +467,11 @@ export interface RunDelegatedWithCapOptions {
 	 * its work kept.
 	 */
 	lifetime?: DelegatedAgentLifetime;
+	/**
+	 * The agent's struggle supervisor, when it has one: a resume after its
+	 * stop is watched from zero again.
+	 */
+	supervisor?: { rearm(): void };
 	/** A detached agent's final outcome, for the path's own end-of-run work. */
 	onDetachedFinish?: (outcome: DelegatedRunOutcome) => Promise<void> | void;
 	/**
@@ -474,6 +515,9 @@ export function resumeNote(
 	const said = instructions?.trim()
 		? ` The lead's instructions: ${instructions.trim()}`
 		: "";
+	if (reason === "struggling") {
+		return `You were stopped by the struggle supervisor: you had been told to commit a SUMMARY of what you found, and went on probing instead. The lead lets you continue.${said} Your earlier work is all still here. Do not start another round of the same probing: act on what you have, finish the task, and give your answer.`;
+	}
 	if (reason === "looping") {
 		return `You were stopped by the loop guard: you sent the same call again, with the same arguments, after being warned that its result could not change. The lead lets you continue${said ? "" : ", but not by repeating it"}.${said} Your earlier work is all still here. Do not send that call again as it was: change what you do, finish the task, and give your answer.`;
 	}
@@ -482,6 +526,18 @@ export function resumeNote(
 
 /** The loop guard's stop, as a run's result carries it. */
 const LOOP_GUARD_STOP = /repeated-call loop guard/i;
+
+/** Whether the struggle supervisor, not a stop from outside, ended this run. */
+export function stoppedBySupervisor(
+	result: Pick<AgentResult, "finishReason"> & { abortReason?: string },
+	signal?: AbortSignal,
+): boolean {
+	return (
+		result.finishReason === "aborted" &&
+		!signal?.aborted &&
+		isWorkerStruggleStop(result.abortReason)
+	);
+}
 
 /** Whether the repeated-call loop guard, not a stop from outside, ended this run. */
 export function stoppedByLoopGuard(
@@ -540,10 +596,18 @@ export async function runDelegatedWithCap(
 			? "iteration_cap"
 			: stoppedByLoopGuard(result, options.signal)
 				? "looping"
-				: undefined;
+				: stoppedBySupervisor(result, options.signal)
+					? "struggling"
+					: undefined;
 	/** What a stop while it waits records as its end. */
-	const stopReasonFor = (reason: AwaitingLeadReason | undefined) =>
-		reason === "looping" ? ("loop_guard" as const) : ("iteration_cap" as const);
+	const stopReasonFor = (
+		reason: AwaitingLeadReason | undefined,
+	): DelegatedStopReason =>
+		reason === "looping"
+			? "loop_guard"
+			: reason === "struggling"
+				? "supervisor"
+				: "iteration_cap";
 
 	const view = (detached: boolean): AwaitingLeadView => {
 		const reason = waitReason();
@@ -556,7 +620,7 @@ export async function runDelegatedWithCap(
 			maxIterations: cap ?? iterations,
 			since: Date.now(),
 			detached,
-			...(reason === "looping"
+			...(reason === "looping" || reason === "struggling"
 				? {
 						reason,
 						...(result.abortReason ? { detail: result.abortReason } : {}),
@@ -634,7 +698,10 @@ export async function runDelegatedWithCap(
 	 */
 	const resume = async (extra: number, instructions?: string) => {
 		const reason = waitReason() ?? "iteration_cap";
-		if (reason === "looping") {
+		if (reason === "struggling") {
+			options.supervisor?.rearm();
+		}
+		if (reason === "looping" || reason === "struggling") {
 			if (cap !== undefined) {
 				const left = Math.max(0, cap - iterations);
 				cap += extra;

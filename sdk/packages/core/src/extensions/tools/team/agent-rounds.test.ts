@@ -465,6 +465,46 @@ describe("an agent at its iteration cap", () => {
 		expect(handle.agent(0)).toMatchObject({ iterations: 8, maxIterations: 8 });
 	});
 
+	// A supervisor stop is held for the lead like the loop guard's, and the
+	// round says which it was, in the supervisor's words.
+	it("reads as struggling while the supervisor's stop waits on the lead, and as its stop when the lead ends it", async () => {
+		const rounds = new AgentRounds("s1");
+		const handle = rounds.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: false,
+			agents: [
+				{ name: "waiting", task: "t" },
+				{ name: "ended", task: "t" },
+			],
+		});
+		void handle.run(0, context, (ctx) => {
+			ctx.emitUpdate?.({
+				awaitingLead: {
+					iterations: 13,
+					maxIterations: 40,
+					reason: "struggling",
+					detail: "Stopped by the struggle supervisor (thinking-budget): …",
+				},
+			});
+			return new Promise(() => {});
+		});
+		expect(handle.agent(0)).toMatchObject({
+			state: "awaiting_lead",
+			awaitingReason: "struggling",
+			stopDetail: "Stopped by the struggle supervisor (thinking-budget): …",
+		});
+		await handle.run(1, context, async () => ({
+			text: "so far",
+			finishReason: "aborted",
+			stopReason: "supervisor",
+		}));
+		expect(handle.agent(1)).toMatchObject({
+			state: "failed",
+			stopReason: "struggling",
+		});
+	});
+
 	it("records the check's verdict from the agent's result", async () => {
 		const rounds = new AgentRounds("s1");
 		const handle = rounds.open({

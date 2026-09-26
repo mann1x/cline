@@ -74,6 +74,8 @@ export type AgentStopReason =
 	| "iteration_cap"
 	/** The loop guard stopped it for sending the same call again. */
 	| "looping"
+	/** The struggle supervisor stopped it for grinding after its nudge. */
+	| "struggling"
 	/** Its context overflowed and could not be recovered. */
 	| "context_overflow"
 	/** Too many consecutive mistakes, or a loop guard ended it. */
@@ -159,8 +161,11 @@ export interface RoundAgentRecord extends RoundAgentSpec {
 	stopReason?: AgentStopReason;
 	/** A line on the stop: the error, the abort's reason. */
 	stopDetail?: string;
-	/** While it waits on the lead: its cap, or a loop the guard stopped. */
-	awaitingReason?: "iteration_cap" | "looping";
+	/**
+	 * While it waits on the lead: its cap, a loop the guard stopped, or a
+	 * grind the struggle supervisor stopped.
+	 */
+	awaitingReason?: "iteration_cap" | "looping" | "struggling";
 	queuedAt: number;
 	startedAt?: number;
 	endedAt?: number;
@@ -1294,8 +1299,13 @@ export class RoundHandle {
 			};
 			agent.state = "awaiting_lead";
 			agent.awaitingReason =
-				cap.reason === "looping" ? "looping" : "iteration_cap";
-			if (cap.reason === "looping" && typeof cap.detail === "string") {
+				cap.reason === "looping" || cap.reason === "struggling"
+					? cap.reason
+					: "iteration_cap";
+			if (
+				(cap.reason === "looping" || cap.reason === "struggling") &&
+				typeof cap.detail === "string"
+			) {
 				agent.stopDetail = cap.detail;
 			}
 			if (typeof cap.iterations === "number") {
@@ -1474,8 +1484,7 @@ export class RoundHandle {
 			}
 			if (event.type === "suspended") {
 				agent.state = "awaiting_lead";
-				agent.awaitingReason =
-					event.agent.reason === "looping" ? "looping" : "iteration_cap";
+				agent.awaitingReason = event.agent.reason ?? "iteration_cap";
 				this.rounds.schedulePersist();
 				return;
 			}
@@ -1547,12 +1556,20 @@ export class RoundHandle {
 		if (output.state === "awaiting_lead") {
 			end.state = "awaiting_lead";
 			end.reason =
-				output.stopReason === "loop_guard" ? "looping" : "iteration_cap";
+				output.stopReason === "loop_guard"
+					? "looping"
+					: output.stopReason === "supervisor"
+						? "struggling"
+						: "iteration_cap";
 			agent.awaitingReason = end.reason;
 		} else if (output.stopReason === "loop_guard" && !stoppedBy) {
 			// Ended where the loop guard stopped it, with nobody to ask.
 			end.state = "failed";
 			end.reason = "looping";
+		} else if (output.stopReason === "supervisor" && !stoppedBy) {
+			// Ended where the struggle supervisor stopped it, likewise.
+			end.state = "failed";
+			end.reason = "struggling";
 		}
 		agent.maxIterations = output.maxIterations ?? agent.maxIterations;
 		agent.state = end.state;

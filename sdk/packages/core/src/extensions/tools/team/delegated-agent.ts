@@ -67,6 +67,13 @@ export interface DelegatedAgentRuntimeConfig
 	 * see `worker-struggle.ts` -- without touching the shared runtime config.
 	 */
 	execution?: AgentConfig["execution"];
+	/**
+	 * What the server appends to reasoning it cut at the thinking budget, when
+	 * the session knows it: how an agent's struggle supervisor tells a turn
+	 * that ran out its budget. Without it the supervisor reads the generic
+	 * admission in the reasoning's tail (`worker-struggle.ts`).
+	 */
+	thinkingBudgetMessage?: string;
 	hooks?: AgentHooks;
 	extensions?: AgentExtension[];
 	logger?: BasicLogger;
@@ -412,9 +419,11 @@ export function buildDelegatedAgentConfig(
 			: buildSubAgentSystemPrompt(options.prompt, runtimeConfig);
 
 	// The supervisor, when present, wraps the tools (so its one nudge lands on a
-	// result), folds every event in (so it sees the grind), and ORs its stop into
-	// the abort signal (so it can pull the worker). Absent, everything is exactly
-	// what the caller passed.
+	// result) and folds every event in (so it sees the grind). Its stop aborts
+	// the run it ends -- see `createDelegatedAgent` -- and never this signal:
+	// the stop suspends the worker for the lead, who may resume it, and an
+	// agent built on an aborted signal aborts every run it is given. Absent,
+	// everything is exactly what the caller passed.
 	const supervisor = options.struggle;
 	const tools = supervisor
 		? supervisor.wrapTools(options.tools)
@@ -425,10 +434,7 @@ export function buildDelegatedAgentConfig(
 				supervisor.observe(event);
 			}
 		: options.onEvent;
-	const abortSignal = composeAbortSignals(
-		options.abortSignal,
-		supervisor?.stopSignal,
-	);
+	const abortSignal = composeAbortSignals(options.abortSignal);
 
 	// Every delegated agent retries a server restart or a refusal rather than
 	// ending on it: it is meant to finish its job, and Stop is the bound.
@@ -515,6 +521,10 @@ export function createDelegatedAgent(
 	if (config.onEvent) {
 		session.subscribeEvents(config.onEvent);
 	}
+	// A supervisor stop ends the run in flight with the supervisor's words as
+	// its abort reason, which `runDelegatedWithCap` reads as a stop to put to
+	// the lead (`awaiting_lead`, struggling) rather than an end.
+	options.struggle?.onStop((reason) => session.abort(reason));
 	return session;
 }
 

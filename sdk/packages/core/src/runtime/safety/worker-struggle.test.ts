@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	createWorkerStruggleSupervisor,
 	describeWorkerNudge,
+	isWorkerStruggleStop,
 } from "./worker-struggle";
 
 const BUDGET_MESSAGE =
@@ -56,6 +57,68 @@ function textTool(name: string, result: string): AgentTool<unknown, unknown> {
 		execute: async () => result,
 	} as unknown as AgentTool<unknown, unknown>;
 }
+
+// Its stop suspends the worker for the lead (the loop guard's ruling), so the
+// stop must be recognizable as the supervisor's, say why in words the lead can
+// read, and leave a worker the lead resumes watched from zero again.
+describe("a supervisor stop the lead can act on", () => {
+	function driveToStop(supervisor: Supervisor): void {
+		for (const [iteration, spent] of [
+			[1, false],
+			[2, false],
+			[3, true],
+			[4, false],
+			[5, true],
+			[6, true],
+			[7, true],
+			[8, true],
+			[9, true],
+			[10, true],
+		] as const) {
+			turn(supervisor, iteration, { spent });
+		}
+	}
+
+	it("aborts with its own words, and tells its listeners the same", () => {
+		const supervisor = createWorkerStruggleSupervisor();
+		const heard: string[] = [];
+		supervisor.onStop((reason) => heard.push(reason.message));
+		driveToStop(supervisor);
+		expect(supervisor.phase).toBe("stopped");
+		const reason = supervisor.stopSignal.reason as Error;
+		expect(isWorkerStruggleStop(reason.message)).toBe(true);
+		expect(reason.message).toContain("thinking");
+		expect(reason.message).toContain("SUMMARY");
+		expect(heard).toEqual([reason.message]);
+		expect(isWorkerStruggleStop("This operation was aborted")).toBe(false);
+		expect(
+			isWorkerStruggleStop(
+				"repeated-call loop guard stopped the run at iteration 12",
+			),
+		).toBe(false);
+	});
+
+	it("watches a resumed worker from zero, and can stop it again", () => {
+		const supervisor = createWorkerStruggleSupervisor();
+		const heard: string[] = [];
+		supervisor.onStop((reason) => heard.push(reason.message));
+		driveToStop(supervisor);
+		supervisor.rearm();
+		expect(supervisor.phase).toBe("watching");
+		expect(supervisor.stopSignal.aborted).toBe(false);
+		// The resumed run's turns: two spent turns are not a loop yet.
+		turn(supervisor, 11, { spent: true });
+		turn(supervisor, 12, { spent: true });
+		expect(supervisor.phase).toBe("watching");
+		turn(supervisor, 13, { spent: true });
+		expect(supervisor.phase).toBe("nudged");
+		for (let iteration = 14; iteration <= 18; iteration += 1) {
+			turn(supervisor, iteration, { spent: true });
+		}
+		expect(supervisor.phase).toBe("stopped");
+		expect(heard).toHaveLength(2);
+	});
+});
 
 describe("createWorkerStruggleSupervisor", () => {
 	it("starts watching, with the stop signal unset", () => {

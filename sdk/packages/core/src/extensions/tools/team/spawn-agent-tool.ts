@@ -22,6 +22,7 @@ import {
 } from "@cline/shared";
 import { z } from "zod";
 import type { OracleSpawnWrapper } from "../../../runtime/atomic/oracle";
+import { createDelegatedStruggleSupervisor } from "../../../runtime/safety/worker-struggle";
 import { isPolykvProvider } from "../../context/polykv-session";
 import {
 	type AgentCheck,
@@ -1335,8 +1336,17 @@ async function runSpawnedAgent(
 					...(sandbox ? { wrapSpawn: sandbox.wrapSpawn } : {}),
 				})
 			: undefined;
+		// The struggle layer the swarm's workers have: one nudge to commit a
+		// SUMMARY, then a stop the lead decides on. Fresh per attempt.
+		const struggle = createDelegatedStruggleSupervisor({
+			label: `[agents] ${input.name ?? "agent"}`,
+			maxIterations: maxIterations ?? provider.getRuntimeConfig().maxIterations,
+			thinkingBudgetMessage: provider.getRuntimeConfig().thinkingBudgetMessage,
+			...(config.logger ? { logger: config.logger } : {}),
+		});
 		const agent = createDelegatedAgent({
 			kind: "subagent",
+			struggle,
 			...(check ? { check } : {}),
 			// What the lead's side turn leaves for it while the lead waits.
 			consumePendingUserMessage: async () => cancellation.takeMessage(),
@@ -1422,6 +1432,7 @@ async function runSpawnedAgent(
 					: await agent.run(layout.task);
 			},
 			name: input.name ?? "agent",
+			supervisor: struggle,
 			...(maxIterations !== undefined ? { maxIterations } : {}),
 			...(context.sessionId ? { sessionId: context.sessionId } : {}),
 			...(cancelId ? { cancelId } : {}),
@@ -1667,6 +1678,9 @@ export function awaitingLeadNote(
 	agentId: string | undefined,
 	outcome: DelegatedRunOutcome,
 ): string {
+	if (outcome.stopReason === "supervisor") {
+		return `\n\n---\n${name} was STRUGGLING: the struggle supervisor had told it to commit a SUMMARY of what it had, and stopped it when it went on probing. It is WAITING for you, its work kept (transcript and file changes). Call resume_agent(agent_id: "${agentId ?? name}", extra_iterations: <n>, instructions: "<what to settle for>") to continue it, or restart_agent(agent_id: "${agentId ?? name}", instructions: "...") to start it over; its report arrives when it finishes. Or stop it (stop_agents) to take the above as its report.`;
+	}
 	if (outcome.stopReason === "loop_guard") {
 		return `\n\n---\n${name} was LOOPING: the loop guard stopped it for sending the same call again after its warning. It is WAITING for you, its work kept (transcript and file changes). Call resume_agent(agent_id: "${agentId ?? name}", extra_iterations: <n>, instructions: "<what to do instead>") to continue it, or restart_agent(agent_id: "${agentId ?? name}", instructions: "...") to start it over; its report arrives when it finishes. Or stop it (stop_agents) to take the above as its report.`;
 	}

@@ -1,8 +1,13 @@
 import type { AgentEvent, AgentTool } from "@cline/shared";
-import { describe, expect, it } from "vitest";
-import { createWorkerStruggleSupervisor } from "../../../runtime/safety/worker-struggle";
+import { describe, expect, it, vi } from "vitest";
+import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-orchestrator";
+import {
+	createWorkerStruggleSupervisor,
+	isWorkerStruggleStop,
+} from "../../../runtime/safety/worker-struggle";
 import {
 	buildDelegatedAgentConfig,
+	createDelegatedAgent,
 	createDelegatedAgentCheck,
 	createDelegatedAgentConfigProvider,
 } from "./delegated-agent";
@@ -388,17 +393,43 @@ describe("buildDelegatedAgentConfig", () => {
 			},
 		];
 
-		it("composes the abort signal so a supervisor stop reaches the runtime", () => {
+		// A supervisor stop suspends the worker for the lead, who may resume
+		// it: the stop aborts the run it ends, with the supervisor's words, and
+		// never the agent's own signal -- an agent built on an aborted signal
+		// aborts every run it is ever given, and the resume with it.
+		it("aborts the run a supervisor stop ends, not the agent", () => {
 			const supervisor = createWorkerStruggleSupervisor({ graceIterations: 0 });
-			const { config } = build(supervisor);
-			expect(config.abortSignal?.aborted).toBe(false);
-			for (let n = 1; n <= 5; n += 1) {
-				for (const event of spentTurn(n)) {
-					config.onEvent?.(event);
+			const aborted: unknown[] = [];
+			const abort = vi
+				.spyOn(SessionRuntime.prototype, "abort")
+				.mockImplementation((reason?: unknown) => {
+					aborted.push(reason);
+				});
+			try {
+				createDelegatedAgent({
+					kind: "subagent",
+					prompt: "gather",
+					tools: [],
+					configProvider: createDelegatedAgentConfigProvider({
+						providerId: "ollama",
+						modelId: "small",
+					}),
+					abortSignal: new AbortController().signal,
+					struggle: supervisor,
+				});
+				const { config } = build(supervisor);
+				for (let n = 1; n <= 5; n += 1) {
+					for (const event of spentTurn(n)) {
+						supervisor.observe(event);
+					}
 				}
+				expect(supervisor.phase).toBe("stopped");
+				expect(config.abortSignal?.aborted).toBe(false);
+				expect(aborted).toHaveLength(1);
+				expect(isWorkerStruggleStop((aborted[0] as Error).message)).toBe(true);
+			} finally {
+				abort.mockRestore();
 			}
-			expect(supervisor.phase).toBe("stopped");
-			expect(config.abortSignal?.aborted).toBe(true);
 		});
 
 		it("the composed abort signal still fires on the outer cancellation", () => {

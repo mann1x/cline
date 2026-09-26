@@ -12,6 +12,7 @@ const getConversationIdMock = vi.fn(() => "conv-sub-1");
 const agentConstructorSpy = vi.fn();
 const continueMock = vi.fn();
 const setMaxIterationsMock = vi.fn();
+const abortMock = vi.fn();
 
 vi.mock("../../../runtime/orchestration/session-runtime-orchestrator", () => {
 	return {
@@ -55,8 +56,91 @@ vi.mock("../../../runtime/orchestration/session-runtime-orchestrator", () => {
 				this.cap = value;
 				setMaxIterationsMock(value);
 			}
+
+			abort(reason?: unknown): void {
+				abortMock(reason);
+			}
 		},
 	};
+});
+
+// The worker struggle supervisor watched only swarm workers. A spawn_agent
+// agent grinds the same way, and gets the same nudge and the same stop -- a
+// stop that ends the run with the supervisor's words, for the lead to decide.
+describe("a spawned agent's struggle supervisor", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("nudges a grinding agent on a tool result, then stops the run in its own words", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const { isWorkerStruggleStop } = await import(
+			"../../../runtime/safety/worker-struggle.js"
+		);
+		let nudged = "";
+		runMock.mockImplementation(async () => {
+			const config = agentConstructorSpy.mock.calls.at(-1)?.[0] as {
+				onEvent?: (event: unknown) => void;
+				tools: Array<{
+					name: string;
+					execute: (i: unknown, c: unknown) => Promise<unknown>;
+				}>;
+			};
+			const spent = (iteration: number) => {
+				config.onEvent?.({ type: "iteration_start", iteration });
+				config.onEvent?.({
+					type: "content_end",
+					contentType: "reasoning",
+					reasoning:
+						"Let me probe once more.\n\nI have used my thinking budget. I must stop analysing now.",
+				});
+				config.onEvent?.({
+					type: "iteration_end",
+					iteration,
+					hadToolCalls: true,
+					toolCallCount: 1,
+				});
+			};
+			for (let iteration = 1; iteration <= 3; iteration += 1) {
+				spent(iteration);
+			}
+			const probe = config.tools.find((entry) => entry.name === "probe");
+			nudged = String(await probe?.execute({}, {}));
+			for (let iteration = 4; iteration <= 10; iteration += 1) {
+				spent(iteration);
+			}
+			return {
+				text: "so far",
+				iterations: 10,
+				finishReason: "completed",
+				usage: { inputTokens: 1, outputTokens: 1 },
+			};
+		});
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "lead-model",
+			}),
+			createSubAgentTools: () => [
+				{
+					name: "probe",
+					description: "",
+					inputSchema: { type: "object" },
+					execute: async () => "probed",
+				} as never,
+			],
+		});
+		await tool.execute({ systemPrompt: "p", task: "t" }, {
+			agentId: "parent",
+			conversationId: "c",
+			iteration: 1,
+		} as never);
+		expect(nudged).toContain("probed");
+		expect(nudged).toContain("SUMMARY");
+		expect(abortMock).toHaveBeenCalledTimes(1);
+		const reason = abortMock.mock.calls[0]?.[0] as Error;
+		expect(isWorkerStruggleStop(reason.message)).toBe(true);
+	});
 });
 
 describe("createSpawnAgentTool", () => {

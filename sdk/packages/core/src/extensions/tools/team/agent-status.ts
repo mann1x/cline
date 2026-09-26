@@ -157,6 +157,11 @@ export function describeReason(
 			return `waiting on infrastructure: ${wait.where} ${oneLine(wait.detail, 80) || "not answering"}, retrying ${since}`;
 		}
 		case "awaiting_lead":
+			if (agent.awaitingReason === "struggling") {
+				return `STRUGGLING: the struggle supervisor stopped it after it was told to commit a SUMMARY and went on, after ${agent.iterations ?? "?"} iterations, its work kept${
+					agent.stopDetail ? ` (${oneLine(agent.stopDetail, 200)})` : ""
+				}; resume_agent(agent_id, extra_iterations, instructions) continues it -- say what to settle for -- restart_agent(agent_id, instructions) starts it over, stop_agents takes its work as it is`;
+			}
 			if (agent.awaitingReason === "looping") {
 				return `LOOPING: the loop guard stopped it for sending the same call again after its warning, after ${agent.iterations ?? "?"} iterations, its work kept${
 					agent.stopDetail ? ` (${oneLine(agent.stopDetail, 200)})` : ""
@@ -179,6 +184,8 @@ export function describeReason(
 				iteration_cap: `reached its ${agent.maxIterations ?? "?"}-iteration cap`,
 				looping:
 					"the loop guard stopped it for repeating the same call, and it was ended there",
+				struggling:
+					"the struggle supervisor stopped it for grinding after its nudge, and it was ended there",
 				context_overflow: "its context overflowed and could not be recovered",
 				mistake_limit: "stopped by its own guard (repeated mistakes or a loop)",
 				engine_error: "the engine returned an error it could not retry",

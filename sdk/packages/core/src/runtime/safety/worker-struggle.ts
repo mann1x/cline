@@ -47,6 +47,10 @@ import {
 	StruggleDetector,
 	type StruggleThresholds,
 } from "./struggle-detector";
+import {
+	describeWorkerStop,
+	type WorkerStruggleReason,
+} from "./worker-struggle-stop";
 
 /**
  * Before this iteration the detector's window/distress path stays quiet.
@@ -86,11 +90,7 @@ export const WORKER_STRUGGLE_THRESHOLDS: StruggleThresholds = {
 
 export type WorkerStrugglePhase = "watching" | "nudged" | "stopped";
 
-/** Which signal moved the phase. */
-export type WorkerStruggleReason =
-	| "struggle"
-	| "non-progress"
-	| "thinking-budget";
+export type { WorkerStruggleReason };
 
 export interface WorkerStruggleOptions {
 	/** Detector thresholds; defaults to {@link WORKER_STRUGGLE_THRESHOLDS}. */
@@ -134,11 +134,82 @@ export interface WorkerStruggleSupervisor {
 	observe(event: AgentEvent): void;
 	/** Wrap the worker's tools so the held nudge lands on the next result. */
 	wrapTools<T extends AgentToolDefinition>(tools: readonly T[]): T[];
-	/** Aborts when the worker is stopped. Pass to the delegated agent's runtime. */
+	/**
+	 * Aborts when the worker is stopped, with the stop's words
+	 * ({@link describeWorkerStop}) as its reason. A fresh one after
+	 * {@link rearm}.
+	 */
 	readonly stopSignal: AbortSignal;
 	/** Which stage of the machine the supervisor is in. */
 	readonly phase: WorkerStrugglePhase;
+	/**
+	 * Be told of a stop, with the reason the run is to be aborted with. How
+	 * the delegated agent's builder aborts the *run* -- not the agent, which
+	 * the lead may resume. Returns the unsubscribe.
+	 */
+	onStop(listener: (reason: Error) => void): () => void;
+	/**
+	 * The lead resumed the worker it stopped: watch it from zero again, as
+	 * a fresh attempt is watched, with a nudge and a stop still to give.
+	 */
+	rearm(): void;
 }
+
+/**
+ * Where a worker's turn-count nudge sits, relative to its cap.
+ *
+ * Half the cap: late enough that a worker still reading the problem is left
+ * alone, early enough that the nudge arrives with turns to spare. It is a
+ * nudge only -- on the replayed swarms the longest workers all answered in the
+ * end, so the turn count is not evidence enough to stop one. With no cap set
+ * the supervisor's own default, calibrated to a ~40-iteration worker, stands.
+ * Every delegated path places it the same way: the swarm, `spawn_agent` and a
+ * configured agent.
+ */
+export function workerStruggleOptions(
+	maxIterations?: number,
+): Pick<WorkerStruggleOptions, "nudgeAfterIterations"> {
+	if (typeof maxIterations !== "number" || maxIterations <= 0) {
+		return {};
+	}
+	return {
+		nudgeAfterIterations: Math.max(
+			WORKER_STRUGGLE_MIN_ITERATION,
+			Math.round(maxIterations * 0.5),
+		),
+	};
+}
+
+/**
+ * The supervisor a delegated agent gets, built the one way every path builds
+ * it: the nudge placed at half its cap, the server's thinking-budget message
+ * when the session knows it, and each transition logged under its name. Fresh
+ * per attempt, so a re-placed or restarted agent is watched from zero.
+ */
+export function createDelegatedStruggleSupervisor(input: {
+	/** How the log names it: `[agents] reviewer`. */
+	label: string;
+	maxIterations?: number;
+	thinkingBudgetMessage?: string;
+	logger?: { log?: (message: string) => void };
+}): WorkerStruggleSupervisor {
+	return createWorkerStruggleSupervisor({
+		...workerStruggleOptions(input.maxIterations),
+		...(input.thinkingBudgetMessage
+			? { thinkingBudgetMessage: input.thinkingBudgetMessage }
+			: {}),
+		onTransition: (phase, reason) =>
+			input.logger?.log?.(`${input.label}: worker ${phase} (${reason})`),
+	});
+}
+
+// A stop's words live beside it, importing nothing: the iteration cap reads
+// them under every spawn path. `runDelegatedWithCap` suspends a run they end
+// for the lead, as it does the loop guard's, rather than ending it.
+export {
+	describeWorkerStop,
+	isWorkerStruggleStop,
+} from "./worker-struggle-stop";
 
 /**
  * The nudge a headless worker is handed, worded for what it can actually do.
@@ -173,7 +244,8 @@ export function createWorkerStruggleSupervisor(
 	const toNudge = options.budgetTurnsToNudge ?? WORKER_BUDGET_TURNS_TO_NUDGE;
 	const toStop = options.budgetTurnsToStop ?? WORKER_BUDGET_TURNS_TO_STOP;
 	const grace = options.graceIterations ?? WORKER_STRUGGLE_GRACE_ITERATIONS;
-	const controller = options.abortController ?? new AbortController();
+	let controller = options.abortController ?? new AbortController();
+	const stopListeners = new Set<(reason: Error) => void>();
 
 	const detector = new StruggleDetector(
 		options.thresholds ?? WORKER_STRUGGLE_THRESHOLDS,
@@ -199,13 +271,26 @@ export function createWorkerStruggleSupervisor(
 		options.onTransition?.("nudged", reason);
 	};
 
-	const stop = (reason: WorkerStruggleReason): void => {
+	const stop = (
+		reason: WorkerStruggleReason,
+		spentAfterNudge: number,
+	): void => {
 		if (phase !== "nudged") {
 			return;
 		}
 		phase = "stopped";
 		options.onTransition?.("stopped", reason);
-		controller.abort();
+		// Its own words as the reason: what the run's abort carries, and what
+		// the lead is shown when it decides whether the worker goes on.
+		const why = new Error(describeWorkerStop(reason, { spentAfterNudge }));
+		for (const listener of stopListeners) {
+			try {
+				listener(why);
+			} catch {
+				// A listener that throws must not keep the others from the stop.
+			}
+		}
+		controller.abort(why);
 	};
 
 	// Every detector verdict -- the refused-edit streak, distress, the window --
@@ -239,7 +324,7 @@ export function createWorkerStruggleSupervisor(
 				(spent) => spent > countsFrom,
 			).length;
 			if (after >= toStop) {
-				stop("thinking-budget");
+				stop("thinking-budget", after);
 			}
 		}
 	};
@@ -273,6 +358,27 @@ export function createWorkerStruggleSupervisor(
 		},
 		get phase(): WorkerStrugglePhase {
 			return phase;
+		},
+		onStop(listener) {
+			stopListeners.add(listener);
+			return () => {
+				stopListeners.delete(listener);
+			};
+		},
+		rearm(): void {
+			if (phase === "watching") {
+				return;
+			}
+			// What the stop was judged on is spent: the lead has seen it and
+			// let the worker go on. The detector's own window is left as it
+			// is -- it only ever nudges.
+			phase = "watching";
+			nudgedAtIteration = undefined;
+			spentIterations.length = 0;
+			spentThisIteration = false;
+			if (controller.signal.aborted) {
+				controller = new AbortController();
+			}
 		},
 	};
 }

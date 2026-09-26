@@ -444,7 +444,14 @@ function withControls(
 ): WorkDigest {
 	const lines: string[] = [];
 	const cap = result.maxIterations ?? result.iterations;
-	if (result.state === "awaiting_lead" && result.stopReason === "loop_guard") {
+	if (result.state === "awaiting_lead" && result.stopReason === "supervisor") {
+		lines.push(
+			`STRUGGLING: the struggle supervisor stopped it after its nudge to commit a SUMMARY; WAITING for you, work kept: resume_agent(agent_id: "${result.agentId ?? digest.agent ?? ""}", extra_iterations: <n>, instructions: "<what to settle for>") continues it, restart_agent starts it over.`,
+		);
+	} else if (
+		result.state === "awaiting_lead" &&
+		result.stopReason === "loop_guard"
+	) {
 		lines.push(
 			`LOOPING: the loop guard stopped it for sending the same call again; WAITING for you, work kept: resume_agent(agent_id: "${result.agentId ?? digest.agent ?? ""}", extra_iterations: <n>, instructions: "<what to do instead>") continues it, restart_agent starts it over.`,
 		);
@@ -455,6 +462,10 @@ function withControls(
 	} else if (result.stopReason === "loop_guard") {
 		lines.push(
 			"Stopped by the loop guard for repeating the same call; the above is what it got to.",
+		);
+	} else if (result.stopReason === "supervisor") {
+		lines.push(
+			"Stopped by the struggle supervisor after its nudge to commit a SUMMARY; the above is what it got to.",
 		);
 	} else if (result.stopReason === "iteration_cap") {
 		lines.push(

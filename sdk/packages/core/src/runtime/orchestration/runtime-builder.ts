@@ -999,6 +999,14 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 				maxToolResultChars: config.maxToolResultChars,
 				temperature: config.temperature,
 				maxIterations: config.maxIterations,
+				// How each agent's struggle supervisor knows a turn that ran out
+				// its thinking budget, as the swarm's workers already did.
+				...(config.compaction?.cappedThinkingBudgetMessage
+					? {
+							thinkingBudgetMessage:
+								config.compaction.cappedThinkingBudgetMessage,
+						}
+					: {}),
 				hooks,
 				extensions: runtimeExtensions,
 				logger: logger ?? config.logger,

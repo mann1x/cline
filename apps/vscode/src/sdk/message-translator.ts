@@ -374,7 +374,7 @@ export function applySubagentIterationCap(entry: SubagentStatusItem, update: Rec
 	if (cap !== undefined) {
 		entry.maxIterations = cap
 	}
-	if (update.stopReason === "iteration_cap" || update.stopReason === "loop_guard") {
+	if (update.stopReason === "iteration_cap" || update.stopReason === "loop_guard" || update.stopReason === "supervisor") {
 		entry.stopReason = update.stopReason
 	}
 	// Waiting, from the spawn tool's own update while the round is open...
@@ -383,19 +383,23 @@ export function applySubagentIterationCap(entry: SubagentStatusItem, update: Rec
 		const record = waiting as Record<string, unknown>
 		const maxIterations = positive(record.maxIterations) ?? entry.maxIterations ?? 0
 		const iterations = positive(record.iterations) ?? maxIterations
-		const looping = record.reason === "looping"
-		const detail = looping && typeof record.detail === "string" ? record.detail : undefined
+		const reason = record.reason === "looping" || record.reason === "struggling" ? record.reason : undefined
+		const detail = reason && typeof record.detail === "string" ? record.detail : undefined
 		if (!entry.awaitingLead) {
 			pushSubagentActivity(
 				entry,
-				looping ? "Looping: stopped by the loop guard, awaiting lead" : `Awaiting lead (iteration cap ${maxIterations})`,
+				reason === "looping"
+					? "Looping: stopped by the loop guard, awaiting lead"
+					: reason === "struggling"
+						? "Struggling: stopped by the struggle supervisor, awaiting lead"
+						: `Awaiting lead (iteration cap ${maxIterations})`,
 				"warn",
 			)
 		}
 		entry.awaitingLead = {
 			iterations,
 			maxIterations,
-			...(looping ? { reason: "looping" as const } : {}),
+			...(reason ? { reason } : {}),
 			...(detail ? { detail } : {}),
 		}
 		entry.maxIterations = maxIterations
@@ -408,12 +412,16 @@ export function applySubagentIterationCap(entry: SubagentStatusItem, update: Rec
 	// ...or from a report that returned while it still waits.
 	if (update.state === "awaiting_lead") {
 		const maxIterations = cap ?? entry.maxIterations ?? 0
+		const reason =
+			update.stopReason === "loop_guard"
+				? ("looping" as const)
+				: update.stopReason === "supervisor"
+					? ("struggling" as const)
+					: entry.awaitingLead?.reason
 		entry.awaitingLead = {
 			iterations: positive(update.iterations) ?? maxIterations,
 			maxIterations,
-			...(update.stopReason === "loop_guard" || entry.awaitingLead?.reason === "looping"
-				? { reason: "looping" as const }
-				: {}),
+			...(reason ? { reason } : {}),
 			...(entry.awaitingLead?.detail ? { detail: entry.awaitingLead.detail } : {}),
 		}
 	}

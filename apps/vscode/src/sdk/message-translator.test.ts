@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest"
 import { getDesktopDir } from "@/utils/path"
 import {
 	applySubagentCompactions,
+	applySubagentIterationCap,
 	buildToolApprovalAskMessage,
 	configuredAgentUsage,
 	extractToolOutputImages,
@@ -5989,6 +5990,31 @@ describe("an agent at its iteration cap, and the lead's check", () => {
 			detail: "repeated-call loop guard stopped the run at iteration 12",
 		})
 		expect(waiting?.activity?.at(-1)?.text).toBe("Looping: stopped by the loop guard, awaiting lead")
+	})
+
+	it("marks the row struggling when the struggle supervisor stopped it, and keeps that after its report", () => {
+		const state = new MessageTranslatorState()
+		start(state, { name: "worker-3", task: "port the parser" })
+		update(state, {
+			awaitingLead: {
+				iterations: 18,
+				maxIterations: 40,
+				reason: "struggling",
+				detail: "Stopped by the struggle supervisor (no_progress): 6 iterations after the nudge.",
+			},
+		})
+		const [waiting] = state.getSpawnAgentItems()
+		expect(waiting?.awaitingLead?.reason).toBe("struggling")
+		expect(waiting?.awaitingLead?.detail).toContain("struggle supervisor")
+		expect(waiting?.activity?.at(-1)?.text).toBe("Struggling: stopped by the struggle supervisor, awaiting lead")
+		update(state, { state: "awaiting_lead", stopReason: "supervisor", iterations: 18, maxIterations: 40 })
+		expect(state.getSpawnAgentItems()[0]?.awaitingLead?.reason).toBe("struggling")
+	})
+
+	it("keeps a supervisor stop as the row's stop reason", () => {
+		const entry = { name: "w", task: "t", status: "failed", contextTokens: 0 } as never
+		applySubagentIterationCap(entry, { stopReason: "supervisor" })
+		expect((entry as { stopReason?: string }).stopReason).toBe("supervisor")
 	})
 
 	it("keeps the check's verdict, the cap and the stop reason from the report", () => {

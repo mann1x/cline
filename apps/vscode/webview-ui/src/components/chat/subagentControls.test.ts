@@ -26,6 +26,16 @@ describe("the iteration cap on a sub-agent's row", () => {
 		})
 	})
 
+	it("says it was struggling when the struggle supervisor stopped it, waiting or ended there", () => {
+		expect(
+			subagentCapText({ awaitingLead: { iterations: 18, maxIterations: 40, reason: "struggling" }, maxIterations: 40 }),
+		).toEqual({ text: "struggling: stopped by the struggle supervisor, awaiting lead", warn: true })
+		expect(subagentCapText({ stopReason: "supervisor" })).toEqual({
+			text: "stopped by the struggle supervisor (struggling)",
+			warn: true,
+		})
+	})
+
 	it("says nothing for an agent the cap never touched", () => {
 		expect(subagentCapText({ maxIterations: 10 })).toBeUndefined()
 		expect(subagentCapText({})).toBeUndefined()

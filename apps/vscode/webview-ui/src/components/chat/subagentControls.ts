@@ -15,11 +15,17 @@ export function subagentCapText(item: CapFields): { text: string; warn: boolean 
 	if (item.awaitingLead?.reason === "looping") {
 		return { text: "looping: stopped by the loop guard, awaiting lead", warn: true }
 	}
+	if (item.awaitingLead?.reason === "struggling") {
+		return { text: "struggling: stopped by the struggle supervisor, awaiting lead", warn: true }
+	}
 	if (item.awaitingLead) {
 		return { text: `awaiting lead (iteration cap ${item.awaitingLead.maxIterations})`, warn: true }
 	}
 	if (item.stopReason === "loop_guard") {
 		return { text: "stopped by the loop guard (looping)", warn: true }
+	}
+	if (item.stopReason === "supervisor") {
+		return { text: "stopped by the struggle supervisor (struggling)", warn: true }
 	}
 	if (item.stopReason === "iteration_cap") {
 		return {

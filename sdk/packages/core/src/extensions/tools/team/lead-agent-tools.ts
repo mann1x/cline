@@ -201,7 +201,7 @@ export const RESTART_AGENT_DESCRIPTION =
 	"Start an agent over from its original task, discarding its transcript and its workspace changes. It keeps its place in the round, its check, its sampler (a random seed is drawn again) and its iteration cap. `instructions` are added to its task as revised instructions -- say what to do differently. Works on a running agent and on one that has finished, failed or been stopped; a finished agent's new report reaches you when it ends.";
 
 export const RESUME_AGENT_DESCRIPTION =
-	"Continue an agent that is waiting for you (awaiting_lead): one that stopped at its iteration cap, or one the loop guard stopped for repeating the same call. It carries on from where it stopped, with its transcript and its changes, and `extra_iterations` more turns. `instructions` are added as it resumes -- for a looping agent, say what to do instead of the call it repeated. To take its work as it is instead, stop it (stop_agents); to start it over, restart_agent.";
+	"Continue an agent that is waiting for you (awaiting_lead): one that stopped at its iteration cap, one the loop guard stopped for repeating the same call, or one the struggle supervisor stopped for grinding on after it was told to commit a SUMMARY. It carries on from where it stopped, with its transcript and its changes, and `extra_iterations` more turns. `instructions` are added as it resumes -- for a looping agent, say what to do instead of the call it repeated; for a struggling one, what to settle for. To take its work as it is instead, stop it (stop_agents); to start it over, restart_agent.";
 
 export const RETRY_FAILED_DESCRIPTION =
 	"Run a round's failed and cancelled agents again, each from the task it was originally given (and any revised instructions from a restart), with the same check, sampler and cap. `agent_ids` limits it to some of them. The round reports again when they finish. Infrastructure trouble never fails an agent -- it is retried on its own -- so what this reruns failed on its task: consider restart_agent with instructions for one that will fail the same way again.";
@@ -389,7 +389,8 @@ export function createLeadAgentControlTools(
 				if (
 					target?.agent &&
 					resumed.agent &&
-					(resumed.agent.reason !== "looping" ||
+					((resumed.agent.reason !== "looping" &&
+						resumed.agent.reason !== "struggling") ||
 						target.agent.maxIterations !== undefined)
 				) {
 					target.agent.maxIterations = resumed.agent.maxIterations + extra;

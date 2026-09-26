@@ -15,6 +15,7 @@ import {
 } from "@cline/shared";
 import { z } from "zod";
 import type { OracleSpawnWrapper } from "../../../runtime/atomic/oracle";
+import { createDelegatedStruggleSupervisor } from "../../../runtime/safety/worker-struggle";
 import { isPolykvProvider } from "../../context/polykv-session";
 import { createDelegatedAgentCheck, describeAgentCheck } from "./agent-check";
 import { AGENT_CONTROLS_NOTE, AgentControlFields } from "./agent-controls";
@@ -624,7 +625,16 @@ export function createConfiguredAgentTools(
 								...(sandbox ? { wrapSpawn: sandbox.wrapSpawn } : {}),
 							})
 						: undefined;
+					// The struggle layer the swarm's workers have: one nudge to
+					// commit a SUMMARY, then a stop the lead decides on.
+					const struggle = createDelegatedStruggleSupervisor({
+						label: `[agents] ${config.name}`,
+						maxIterations: maxIterations ?? runtimeConfig.maxIterations,
+						thinkingBudgetMessage: runtimeConfig.thinkingBudgetMessage,
+						...(options.logger ? { logger: options.logger } : {}),
+					});
 					const subAgent = createDelegatedAgent({
+						struggle,
 						...(check ? { check } : {}),
 						// What the lead's side turn leaves for it while the lead waits.
 						consumePendingUserMessage: async () => cancellation.takeMessage(),
@@ -724,6 +734,7 @@ export function createConfiguredAgentTools(
 							);
 						},
 						name: config.name,
+						supervisor: struggle,
 						...(maxIterations !== undefined ? { maxIterations } : {}),
 						...(context.sessionId ? { sessionId: context.sessionId } : {}),
 						...(cancelId ? { cancelId } : {}),

@@ -92,8 +92,7 @@ import {
 import { createTurnFaultRecovery } from "../../../extensions/tools/team/turn-fault-recovery";
 import {
 	createWorkerStruggleSupervisor,
-	WORKER_STRUGGLE_MIN_ITERATION,
-	type WorkerStruggleOptions,
+	workerStruggleOptions,
 } from "../../../runtime/safety/worker-struggle";
 import { buildTelemetryAgentIdentity } from "../../../services/agent-events";
 import { filterDisabledTools } from "../../../services/global-settings";
@@ -108,29 +107,6 @@ export type SubAgentStartTracker = Map<
 	string,
 	{ startedAt: number; rootSessionId: string }
 >;
-
-/**
- * Where a swarm worker's turn-count nudge sits, relative to its cap.
- *
- * Half the cap: late enough that a worker still reading the problem is left
- * alone, early enough that the nudge arrives with turns to spare. It is a
- * nudge only -- on the replayed swarms the longest workers all answered in the
- * end, so the turn count is not evidence enough to stop one. With no cap set
- * the supervisor's own default, calibrated to a ~40-iteration worker, stands.
- */
-function swarmWorkerStruggleOptions(
-	maxIterations?: number,
-): Pick<WorkerStruggleOptions, "nudgeAfterIterations"> {
-	if (typeof maxIterations !== "number" || maxIterations <= 0) {
-		return {};
-	}
-	return {
-		nudgeAfterIterations: Math.max(
-			WORKER_STRUGGLE_MIN_ITERATION,
-			Math.round(maxIterations * 0.5),
-		),
-	};
-}
 
 export interface SpawnToolDeps {
 	getSession(sessionId: string): ActiveSession | undefined;
@@ -722,7 +698,7 @@ export function createSessionSwarmTool(
 			// watching from zero. See `worker-struggle.ts` for the replay that
 			// set what fires and what stops.
 			const struggle = createWorkerStruggleSupervisor({
-				...swarmWorkerStruggleOptions(maxIterations),
+				...workerStruggleOptions(maxIterations),
 				// What the server appends to reasoning it cut at the budget, when
 				// the session knows it; without it the supervisor reads the
 				// generic admission in the reasoning's tail.
@@ -824,6 +800,8 @@ export function createSessionSwarmTool(
 						: await worker.run(layout.task);
 				},
 				name: request.name,
+				// A resume after its stop is watched from zero again.
+				supervisor: struggle,
 				...(maxIterations !== undefined ? { maxIterations } : {}),
 				sessionId: rootSessionId,
 				...(control?.id ? { cancelId: control.id } : {}),
