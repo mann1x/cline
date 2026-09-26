@@ -3853,6 +3853,19 @@ export function translateSessionEvent(event: CoreSessionEvent, state: MessageTra
 
 		case "pending_prompt_submitted": {
 			const { prompt, userImages, userFiles } = event.payload
+			// Text the runtime queued for the model (a side turn's recap, a
+			// round's report, a nudge about stuck agents) is not the user's:
+			// it is shown as a note, never as a user bubble.
+			if (event.payload.origin === "harness") {
+				result.messages.push({
+					ts: state.nextTs(),
+					type: "say",
+					say: "info",
+					text: `Note from Cerebriline to the model:\n\n${prompt.trim()}`,
+					partial: false,
+				})
+				break
+			}
 			// Synthetic prompts (task resumption, plan -> act auto-continue) are
 			// hidden from every other transcript surface, and this echo must
 			// hide them too: a send that races a settling abort is auto-queued

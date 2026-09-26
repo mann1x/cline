@@ -29,6 +29,25 @@ describe("PendingPromptService", () => {
 		expect(state.pendingPrompts).toHaveLength(2);
 	});
 
+	it("keeps who queued a prompt, so the UI can tell the runtime's notes from the user's", () => {
+		const service = new PendingPromptService();
+		const state = createState();
+
+		service.enqueue(state, { prompt: "typed", delivery: "steer" });
+		service.enqueue(state, {
+			prompt: "a side turn's recap",
+			delivery: "steer",
+			origin: "harness",
+		});
+
+		expect(
+			service.list(state).map(({ prompt, origin }) => ({ prompt, origin })),
+		).toEqual([
+			{ prompt: "a side turn's recap", origin: "harness" },
+			{ prompt: "typed", origin: undefined },
+		]);
+	});
+
 	it("updates prompts and reorders when delivery changes", () => {
 		const service = new PendingPromptService();
 		const state = createState();

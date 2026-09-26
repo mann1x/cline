@@ -1967,6 +1967,7 @@ export class HubRuntimeHost implements RuntimeHost {
 						attachmentCount: prompt.attachmentCount,
 						userImages: prompt.userImages,
 						userFiles: prompt.userFiles,
+						...(prompt.origin ? { origin: prompt.origin } : {}),
 					},
 				});
 				return;

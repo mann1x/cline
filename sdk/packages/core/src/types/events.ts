@@ -50,6 +50,8 @@ export interface SessionPendingPrompt {
 	attachmentCount: number;
 	userImages?: string[];
 	userFiles?: string[];
+	/** `harness` when the runtime queued it, not the user. */
+	origin?: "user" | "harness";
 }
 
 export interface SessionPendingPromptsEvent {
@@ -65,6 +67,8 @@ export interface SessionPendingPromptSubmittedEvent {
 	attachmentCount: number;
 	userImages?: string[];
 	userFiles?: string[];
+	/** `harness` when the runtime queued it, not the user. */
+	origin?: "user" | "harness";
 }
 
 export interface SessionSnapshotEvent {

@@ -2489,6 +2489,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 						report: rounds.reportFor(round.id),
 					}),
 					delivery: "steer",
+					origin: "harness",
 				});
 			}
 		}
@@ -2800,6 +2801,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			this.pendingPromptsController.enqueue(sessionId, {
 				prompt: describeSideTurnForLead(message, result, source),
 				delivery: "steer",
+				origin: "harness",
 			});
 		});
 		this.sideTurns.set(
@@ -2830,6 +2832,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 		this.pendingPromptsController.enqueue(sessionId, {
 			prompt: text,
 			delivery: "steer",
+			origin: "harness",
 		});
 	}
 
@@ -3490,6 +3493,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 		this.pendingPromptsController.enqueue(sessionId, {
 			prompt: text,
 			delivery: "steer",
+			origin: "harness",
 		});
 	}
 
@@ -3519,6 +3523,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 		this.pendingPromptsController.enqueue(sessionId, {
 			prompt: text,
 			delivery: "steer",
+			origin: "harness",
 		});
 	}
 

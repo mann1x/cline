@@ -280,6 +280,8 @@ export interface QueuedPrompt {
 	prompt: string
 	delivery: "queue" | "steer"
 	attachmentCount: number
+	/** `harness` when the runtime queued it for the model, not the user. */
+	origin?: "user" | "harness"
 }
 
 export interface ClineMessage {

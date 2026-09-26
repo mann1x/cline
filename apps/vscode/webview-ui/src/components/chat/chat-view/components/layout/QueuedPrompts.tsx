@@ -16,6 +16,12 @@ function attachmentLabel(count: number): string | undefined {
 }
 
 function queueSummary(items: QueuedPrompt[]): string {
+	const harnessCount = items.filter((item) => item.origin === "harness").length
+	if (harnessCount > 0) {
+		const notes = harnessCount === 1 ? "1 note from Cerebriline" : `${harnessCount} notes from Cerebriline`
+		const yours = items.length - harnessCount
+		return yours === 0 ? notes : `${yours === 1 ? "1 message" : `${yours} messages`} from you, ${notes}`
+	}
 	const steerCount = items.filter((item) => item.delivery === "steer").length
 	const queueCount = items.length - steerCount
 	if (steerCount === 0) {
@@ -75,6 +81,13 @@ export function QueuedPrompts({ items = [] }: QueuedPromptsProps) {
 							key={item.id}>
 							<span aria-hidden="true" className="mt-1.75 size-1.5 shrink-0 rounded-full bg-description/70" />
 							<span className="min-w-0 flex-1 break-words text-foreground">{truncatePrompt(item.prompt)}</span>
+							{item.origin === "harness" && (
+								<span
+									className="flex h-5 shrink-0 items-center rounded-[3px] border border-editor-group-border px-1.5 text-[10px] leading-none text-description"
+									title="Written by Cerebriline for the model, not by you. It reaches the model when its current call returns: a steer is read at a turn boundary, and the model is waiting inside a call that runs agents.">
+									Cerebriline
+								</span>
+							)}
 							{isSteer && (
 								<span className="flex h-5 shrink-0 items-center rounded-[3px] border border-editor-group-border px-1.5 text-[10px] leading-none text-description">
 									Steer

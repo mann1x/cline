@@ -51,6 +51,26 @@ describe("QueuedPrompts", () => {
 		await waitFor(() => expect(cancelButtons[0]).not.toBeDisabled())
 	})
 
+	it("labels a note the runtime queued, and does not count it as the user's", () => {
+		render(
+			<QueuedPrompts
+				items={[
+					...queuedPrompts,
+					{
+						id: "prompt-3",
+						prompt: "While your agents were running, the agent system reported agents stuck",
+						delivery: "steer",
+						attachmentCount: 0,
+						origin: "harness",
+					},
+				]}
+			/>,
+		)
+
+		expect(screen.getByText("2 messages from you, 1 note from Cerebriline")).toBeInTheDocument()
+		expect(screen.getAllByText("Cerebriline")).toHaveLength(1)
+	})
+
 	it("does not render an empty queue", () => {
 		const { container } = render(<QueuedPrompts items={[]} />)
 

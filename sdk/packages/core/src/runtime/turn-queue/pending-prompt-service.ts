@@ -13,6 +13,14 @@ import type {
 
 export type PendingPromptDelivery = "queue" | "steer";
 
+/**
+ * Who queued a prompt. `harness` is text the runtime writes to the model --
+ * a side turn's recap, a round's report, a nudge about stuck agents -- that
+ * rides the same queue as the user's messages; the UI labels it instead of
+ * showing it as something the user typed.
+ */
+export type PendingPromptOrigin = "user" | "harness";
+
 export interface PendingPromptEntry {
 	id: string;
 	prompt: string;
@@ -20,6 +28,7 @@ export interface PendingPromptEntry {
 	delivery: PendingPromptDelivery;
 	userImages?: string[];
 	userFiles?: string[];
+	origin?: PendingPromptOrigin;
 }
 
 export interface PendingPromptQueueState {
@@ -44,6 +53,7 @@ export interface PendingPromptEnqueueInput {
 	delivery: PendingPromptDelivery;
 	userImages?: string[];
 	userFiles?: string[];
+	origin?: PendingPromptOrigin;
 }
 
 export interface PendingPromptConsumeResult {
@@ -138,7 +148,7 @@ export class PendingPromptService {
 		state: PendingPromptQueueState,
 		input: PendingPromptEnqueueInput,
 	): SessionPendingPrompt[] {
-		const { prompt, mode, delivery, userImages, userFiles } = input;
+		const { prompt, mode, delivery, userImages, userFiles, origin } = input;
 		const existingIndex = state.pendingPrompts.findIndex(
 			(queued) => queued.prompt === prompt,
 		);
@@ -164,6 +174,7 @@ export class PendingPromptService {
 				delivery,
 				userImages,
 				userFiles,
+				...(origin === "harness" ? { origin } : {}),
 			};
 			if (delivery === "steer") {
 				state.pendingPrompts.unshift(newEntry);
@@ -243,6 +254,7 @@ export class PendingPromptsController {
 			delivery: "queue" | "steer";
 			userImages?: string[];
 			userFiles?: string[];
+			origin?: PendingPromptOrigin;
 		},
 	): void {
 		const session = this.deps.getSession(sessionId);
@@ -365,6 +377,7 @@ export class PendingPromptsController {
 				attachmentCount: prompt.attachmentCount,
 				userImages: prompt.userImages,
 				userFiles: prompt.userFiles,
+				...(prompt.origin ? { origin: prompt.origin } : {}),
 			},
 		});
 	}
@@ -388,6 +401,7 @@ function snapshotPrompt(entry: PendingPromptEntry): SessionPendingPrompt {
 			(entry.userImages?.length ?? 0) + (entry.userFiles?.length ?? 0),
 		userImages: entry.userImages,
 		userFiles: entry.userFiles,
+		...(entry.origin === "harness" ? { origin: entry.origin } : {}),
 	};
 }
 

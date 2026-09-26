@@ -234,6 +234,31 @@ describe("translateSessionEvent — pending prompts", () => {
 		])
 	})
 
+	it("renders a note the runtime queued as a note, not as the user's message", () => {
+		const state = new MessageTranslatorState()
+		const event: CoreSessionEvent = {
+			type: "pending_prompt_submitted",
+			payload: {
+				sessionId: "session-1",
+				id: "pending-2",
+				prompt: "While your agents were running, the agent system reported agents stuck for a long time.",
+				delivery: "steer",
+				attachmentCount: 0,
+				origin: "harness",
+			},
+		}
+
+		const result = translateSessionEvent(event, state)
+
+		expect(result.messages).toEqual([
+			expect.objectContaining({
+				type: "say",
+				say: "info",
+				text: "Note from Cerebriline to the model:\n\nWhile your agents were running, the agent system reported agents stuck for a long time.",
+			}),
+		])
+	})
+
 	it("strips runtime-generated mode notices from the queued prompt echo", () => {
 		// The webview shows what the user typed; the <mode_notice> element the
 		// mode coordinator stamps onto outbound prompts is model-facing context
