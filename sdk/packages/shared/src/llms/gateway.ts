@@ -324,6 +324,17 @@ export interface GatewayStreamRequest {
 		effort?: ReasoningEffort;
 		budgetTokens?: number;
 	};
+	/**
+	 * Whether the model may call the tools it is shown.
+	 *
+	 * `"none"` keeps the tools in the request -- they are rendered into the
+	 * prompt, and a request that dropped them would share no prefix with the
+	 * turns that carried them -- while telling the server the answer is text.
+	 * A compaction written as a continuation of the conversation needs exactly
+	 * that: the agent's own prompt, byte for byte, and a reply that is prose.
+	 * Absent is the provider's default (`auto`).
+	 */
+	toolChoice?: "auto" | "none";
 	signal?: AbortSignal;
 }
 

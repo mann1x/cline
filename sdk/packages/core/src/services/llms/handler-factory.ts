@@ -105,6 +105,15 @@ function buildGatewayProviderOptions(
 				sessionId: engineSession,
 			};
 		}
+		// A compaction call's own exact booking, and whether it may join the
+		// lead tree (`continuation-compaction.ts`). Lifted for the reason the
+		// sampler is: a field left on the config reaches nothing.
+		if (config.polykvBooking) {
+			options.polykvBooking = config.polykvBooking;
+		}
+		if (config.polykvLeadPool === false) {
+			options.polykvLeadPool = false;
+		}
 	}
 
 	if (config.providerId === "bedrock") {

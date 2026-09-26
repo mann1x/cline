@@ -415,6 +415,10 @@ class GatewayModelAdapter implements AgentModel {
 				requestedReasoning,
 			),
 			signal: request.signal ?? this.defaults?.signal,
+			...(request.options?.toolChoice === "none" ||
+			request.options?.toolChoice === "auto"
+				? { toolChoice: request.options.toolChoice }
+				: {}),
 			auxiliary: this.defaults?.auxiliary,
 			conversation: this.defaults?.conversation,
 			sessionId: this.defaults?.sessionId,

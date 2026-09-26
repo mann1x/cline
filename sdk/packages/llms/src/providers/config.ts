@@ -362,6 +362,28 @@ export interface ProviderOptions {
 		 */
 		owner?: string;
 	};
+	/**
+	 * One exact-size booking for the requests built from this config
+	 * (opencoti), instead of whatever the session's window rules would ask.
+	 *
+	 * Set by compaction for the calls it makes outside the conversation's own
+	 * booking -- a critic on a pool nobody owns, the synthesizer, the
+	 * retrospective -- so each books the cells it can use and no more. Without
+	 * it such a call is a per-request admission, which on this engine asks for
+	 * `session_ctx_max`: a quarter of 8244 for a two-thousand-token answer.
+	 *
+	 * Transient: the grant it gets back is not recorded as the session's
+	 * window, so the resume rule and the compaction trigger never size a
+	 * conversation against a number that described one summary call.
+	 */
+	polykvBooking?: { numCtx: number };
+	/**
+	 * `false`: never attach these requests to the lead tree, even when their
+	 * system turn carries environment spans. A compaction critic continues the
+	 * lead's prompt under a session of its own; the lead tree would hand it
+	 * the lead's sub-pool, which is not the pool it was asked to attach to.
+	 */
+	polykvLeadPool?: boolean;
 	/** Which tools this configuration withholds from its sessions. */
 	tools?: ToolSelectionOptions;
 	/**
@@ -454,6 +476,15 @@ export interface PolykvOptions {
 	 * what smaller would be acceptable".
 	 */
 	contextFloor?: number;
+	/**
+	 * Compaction runs as a continuation of the session: the summary is written
+	 * in the session's own context, the reviewers continue from it, and the
+	 * session's cells are given back before the replay is joined.
+	 *
+	 * **On by default** wherever the engine advertises what it needs; `false`
+	 * turns it off and compaction re-sends the transcript as text, as before.
+	 */
+	continuationCompaction?: boolean;
 }
 
 /**

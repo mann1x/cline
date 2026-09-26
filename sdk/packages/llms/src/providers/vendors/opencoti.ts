@@ -200,6 +200,12 @@ export interface OpencotiRequestOptions {
 	 * when it falls back to running unpooled. See `opencoti-agent-window.ts`.
 	 */
 	agentWindow?: OpencotiAgentWindow;
+	/**
+	 * `numCtx` is one compaction call's exact booking, not the session's
+	 * window: the grant that comes back is not recorded, no floor is recorded
+	 * for a pressure resize, and a refusal is not negotiated as a resume.
+	 */
+	transientBooking?: boolean;
 }
 
 /**
@@ -494,8 +500,12 @@ export function createOpencotiFetch(options: {
 							body.num_ctx_min = Math.min(floor, extras.numCtx);
 						}
 						// The floor it declared, for a pressure resize: on a
-						// resume `num_ctx_min` is the grant, not the floor.
-						if (extras.sessionId !== undefined) {
+						// resume `num_ctx_min` is the grant, not the floor. A
+						// transient booking declares nothing about the session.
+						if (
+							extras.sessionId !== undefined &&
+							extras.transientBooking !== true
+						) {
 							recordOpencotiWindowFloor(
 								extras.sessionId,
 								extras.agentWindow
@@ -723,7 +733,11 @@ export function createOpencotiFetch(options: {
 		// Every admitted response, header or not: an absent `X-Context-Window`
 		// is an observation too -- "unknown" -- and must replace whatever the
 		// last response said rather than let it stand.
-		if (sessionId !== undefined && response.ok) {
+		if (
+			sessionId !== undefined &&
+			response.ok &&
+			extras?.transientBooking !== true
+		) {
 			noteWindowGrant(
 				sessionId,
 				numberOrUndefined(response.headers.get("x-context-window")),
@@ -1745,6 +1759,14 @@ export function readOpencotiRequestOptions(
 		read("agentWindow"),
 		context.model?.contextWindow,
 	);
+	// One compaction call's exact booking (`polykvBooking`): its own window,
+	// floored at itself, never the session's -- see `transientBooking`.
+	const booking = read("polykvBooking") as { numCtx?: unknown } | undefined;
+	const exactBooking =
+		booking && isPositiveInteger(booking.numCtx)
+			? Math.floor(booking.numCtx)
+			: undefined;
+	const leadPoolAllowed = read("polykvLeadPool") !== false;
 	const window = agentWindow
 		? resolveAgentOpencotiWindow(
 				typeof sessionId === "string" ? sessionId : undefined,
@@ -1792,12 +1814,18 @@ export function readOpencotiRequestOptions(
 		// A conversation's place in the lead tree is keyed by its session: no
 		// session, no place to hold.
 		...(settings?.enabled !== false &&
+		leadPoolAllowed &&
 		typeof sessionId === "string" &&
 		sessionId
 			? { leadPool: true }
 			: {}),
-		...window,
-		...(agentWindow ? { agentWindow } : {}),
+		...(exactBooking !== undefined
+			? {
+					numCtx: exactBooking,
+					numCtxMin: exactBooking,
+					transientBooking: true,
+				}
+			: { ...window, ...(agentWindow ? { agentWindow } : {}) }),
 		...(typeof settings?.maxRetryAfterMs === "number" &&
 		Number.isFinite(settings.maxRetryAfterMs) &&
 		settings.maxRetryAfterMs >= 0

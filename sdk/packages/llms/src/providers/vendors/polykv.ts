@@ -35,6 +35,19 @@ export interface PolykvPool {
 	reused?: boolean;
 	/** Said, not refused: e.g. an owner that holds no live allocation. */
 	warning?: string;
+	/**
+	 * The session whose window the pool lives in; `""` when it is unowned
+	 * (charged server-wide). Absent on an engine that does not say.
+	 */
+	owner?: string;
+}
+
+/** What `POST /sessions/{id}/close` did, in the engine's words. */
+export interface PolykvCloseReport {
+	/** The session held a booking, now released (or deferred to its drain). */
+	found: boolean;
+	/** The session's idle slot KV was dropped (`kv-drop-on-close`). */
+	kvDropped: boolean;
 }
 
 /**
@@ -419,6 +432,19 @@ export interface PolykvClient {
 	 * server's have diverged, which is worth knowing and not worth guessing at.
 	 */
 	closeSession(sessionId: string): Promise<boolean>;
+	/**
+	 * {@link closeSession}, with what the engine dropped. A session with slot
+	 * affinity and no booking -- a pooled worker, a compaction critic -- answers
+	 * `found: false, kv_dropped: true`: nothing was booked, and its resident
+	 * cells are gone all the same.
+	 */
+	closeSessionReport(sessionId: string): Promise<PolykvCloseReport>;
+	/**
+	 * Drop the resident KV of the slot a session last ran in, keeping its
+	 * booking (`POST /slots/{id}?action=erase`). `undefined` when no slot names
+	 * the session; the number the engine says it erased otherwise.
+	 */
+	eraseSessionSlot(sessionId: string): Promise<number | undefined>;
 	/**
 	 * The ids of the pools the server holds now.
 	 *
@@ -1159,10 +1185,16 @@ export function createPolykvClient(options: PolykvClientOptions): PolykvClient {
 			parent !== null &&
 			!(typeof parent === "number" && parent < 0) &&
 			String(parent) !== "-1";
+		const owner = (pool as { owner?: unknown }).owner;
 		return {
 			...pool,
 			pool_id: String(pool.pool_id),
 			...(hasParent ? { parent: String(parent) } : { parent: undefined }),
+			...(typeof owner === "string"
+				? { owner }
+				: owner === null
+					? { owner: "" }
+					: {}),
 		};
 	};
 
@@ -1184,6 +1216,33 @@ export function createPolykvClient(options: PolykvClientOptions): PolykvClient {
 				{ method: "POST", body: {} },
 			);
 			return result?.found === true;
+		},
+		closeSessionReport: async (sessionId) => {
+			const result = await call<{ found?: boolean; kv_dropped?: boolean }>(
+				`/sessions/${encodeURIComponent(sessionId)}/close`,
+				{ method: "POST", body: {} },
+			);
+			return {
+				found: result?.found === true,
+				kvDropped: result?.kv_dropped === true,
+			};
+		},
+		eraseSessionSlot: async (sessionId) => {
+			const slots =
+				await call<
+					Array<{ id?: unknown; opencoti?: { session_id?: unknown } }>
+				>("/slots");
+			const slot = (Array.isArray(slots) ? slots : []).find(
+				(entry) => entry?.opencoti?.session_id === sessionId,
+			);
+			if (!slot || typeof slot.id !== "number") {
+				return undefined;
+			}
+			const result = await call<{ n_erased?: unknown }>(
+				`/slots/${slot.id}?action=erase`,
+				{ method: "POST", body: {} },
+			);
+			return typeof result?.n_erased === "number" ? result.n_erased : 0;
 		},
 		listPoolIds: async () => {
 			const result = await call<{ pools?: Array<{ pool_id?: unknown }> }>(

@@ -2725,6 +2725,9 @@ function createUnsupervisedAiSdkProvider(
 							messages: messages as never,
 							...(useSystemOption ? { system: systemPrompt } : {}),
 							...(tools ? { tools } : {}),
+							...(tools && request.toolChoice
+								? { toolChoice: request.toolChoice }
+								: {}),
 							abortSignal: request.signal,
 							experimental_repairToolCall: repairMalformedToolCall as never,
 							telemetry: {

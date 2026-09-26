@@ -8460,3 +8460,50 @@ describe("a synthesized output cap the model cannot honour", () => {
 		expect(seen).toEqual([262_144]);
 	});
 });
+
+describe("tool choice", () => {
+	const tool = {
+		name: "read_files",
+		description: "Read files",
+		inputSchema: { type: "object", properties: {} },
+	};
+	const modelFor = () =>
+		createGateway({
+			providerConfigs: [{ providerId: "openrouter", apiKey: "openrouter-key" }],
+		}).createAgentModel({
+			providerId: "openrouter",
+			modelId: "anthropic/claude-test",
+		});
+
+	// A compaction written as a continuation keeps the agent's tools in the
+	// request -- they are part of the prompt it has to match -- and asks for
+	// prose. Dropping the tools would change the prompt; `none` does not.
+	it("keeps the tools and tells the provider the answer is text", async () => {
+		mockSuccessfulStream();
+		await collect(
+			await modelFor().stream({
+				messages: baseMessages,
+				tools: [tool],
+				options: { toolChoice: "none" },
+			}),
+		);
+		expect(streamTextSpy).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				tools: expect.objectContaining({ read_files: expect.anything() }),
+				toolChoice: "none",
+			}),
+		);
+	});
+
+	it("says nothing about tool choice when the caller did not", async () => {
+		mockSuccessfulStream();
+		await collect(
+			await modelFor().stream({ messages: baseMessages, tools: [tool] }),
+		);
+		const call = streamTextSpy.mock.calls.at(-1)?.[0] as Record<
+			string,
+			unknown
+		>;
+		expect(call).not.toHaveProperty("toolChoice");
+	});
+});
