@@ -1,8 +1,10 @@
 import { resolveCompactionPromptSources } from "@cline/core"
+import { isOllamaNativeProvider } from "@cline/shared"
 import { EmptyRequest } from "@shared/proto/cline/common"
 import { GeneratedPromptTemplate } from "@shared/proto/cline/file"
 import { resolveBaseUrl, resolveModelId } from "@/sdk/cline-session-factory"
 import { resolveOllamaModelFamily } from "@/sdk/ollama-model-family"
+import { withOllamaNativeDefault } from "@/sdk/ollama-native"
 import { generateTemplateForModel } from "@/sdk/prompt-template-generator"
 import { Controller } from ".."
 
@@ -27,10 +29,10 @@ export async function generatePromptTemplate(controller: Controller, _request: E
 	}
 
 	let family: string | undefined
-	if (providerId === "ollama") {
-		// An unset base URL is Ollama's default endpoint, which is where the
-		// generated template's own session will be sent.
-		const baseUrl = resolveBaseUrl(providerId, apiConfiguration)
+	if (isOllamaNativeProvider(providerId)) {
+		// An unset base URL is the provider's default endpoint, which is where
+		// the generated template's own session will be sent.
+		const baseUrl = withOllamaNativeDefault(providerId, resolveBaseUrl(providerId, apiConfiguration))
 		family = await resolveOllamaModelFamily(baseUrl, modelId).catch(() => undefined)
 	}
 

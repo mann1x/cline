@@ -129,6 +129,7 @@ function resolveFactory(
 		case "dify":
 			return createDifyProvider;
 		case "ollama":
+		case "xollama":
 			return createOllamaProvider;
 		case "sapaicore":
 			return createSapAiCoreProvider;

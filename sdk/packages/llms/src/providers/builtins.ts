@@ -1017,6 +1017,22 @@ const OPENAI_COMPATIBLE_SPEC_OVERRIDES: BuiltinSpecOverride[] = [
 		modelsSourceUrl: "http://localhost:11434/api/tags",
 	},
 	{
+		id: "xollama",
+		name: "xOllama",
+		description:
+			"xOllama: Ollama with the opencoti engine, PolyKV and council models",
+		// Ollama's native API, so the Ollama vendor: xOllama answers /api/chat,
+		// /api/show and /api/tags as Ollama does, and adds to them.
+		family: "ollama",
+		capabilities: ["tools"],
+		defaultModelId: "",
+		apiKeyEnv: ["XOLLAMA_API_KEY"],
+		modelsFactory: () => ({}),
+		// xOllama's default port, so it can run beside a stock Ollama.
+		defaults: { baseUrl: "http://localhost:22434" },
+		modelsSourceUrl: "http://localhost:22434/api/tags",
+	},
+	{
 		id: "opencoti",
 		name: "Opencoti",
 		description: "opencoti-llamafile: llama.cpp with PolyKV agentic KV pools",

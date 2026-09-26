@@ -5,10 +5,17 @@ import {
 	loadPromptTemplates,
 	resolvePromptTemplateDirectories,
 } from "@cline/core"
-import { type PromptTemplate, type PromptTemplateSource, promptTemplateMatchBlocks, renderPromptTemplate } from "@cline/shared"
+import {
+	isOllamaNativeProvider,
+	type PromptTemplate,
+	type PromptTemplateSource,
+	promptTemplateMatchBlocks,
+	renderPromptTemplate,
+} from "@cline/shared"
 import { fileExistsAtPath } from "@utils/fs"
 import * as path from "path"
 import { resolveOllamaModelFamily } from "./ollama-model-family"
+import { withOllamaNativeDefault } from "./ollama-native"
 import { resolveGlobalTemplateDirectory, resolveWorkspaceTemplateDirectory } from "./prompt-templates"
 
 /**
@@ -144,8 +151,11 @@ export async function readPromptTemplateSettings(options: ReadPromptTemplateSett
 	// so it resolves the family the same way: an unset base URL is Ollama's
 	// default endpoint rather than a reason to skip the lookup.
 	let family: string | undefined
-	if (options.providerId === "ollama") {
-		family = await resolveOllamaModelFamily(options.baseUrl, options.modelId).catch(() => undefined)
+	if (isOllamaNativeProvider(options.providerId)) {
+		family = await resolveOllamaModelFamily(
+			withOllamaNativeDefault(options.providerId, options.baseUrl),
+			options.modelId,
+		).catch(() => undefined)
 	}
 
 	const { templates, errors, warnings } = loadPromptTemplates(
@@ -210,10 +220,11 @@ export async function readPromptTemplateSettings(options: ReadPromptTemplateSett
 	// tag reports none, and that is exactly the case worth showing.
 	const scopes: PromptTemplateScopeMapping[] = []
 	for (const request of options.scopes ?? []) {
-		const scopeFamily =
-			request.providerId === "ollama"
-				? await resolveOllamaModelFamily(request.baseUrl, request.modelId).catch(() => undefined)
-				: undefined
+		const scopeFamily = isOllamaNativeProvider(request.providerId)
+			? await resolveOllamaModelFamily(withOllamaNativeDefault(request.providerId, request.baseUrl), request.modelId).catch(
+					() => undefined,
+				)
+			: undefined
 		const scopeRendered = renderPromptTemplate(all, {
 			providerId: request.providerId,
 			modelId: request.modelId,

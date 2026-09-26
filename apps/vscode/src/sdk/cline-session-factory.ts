@@ -47,6 +47,7 @@ import {
 	buildClineSystemPrompt,
 	buildOutputBudgetSection,
 	isClineProvider,
+	isOllamaNativeProvider,
 	normalizeAgentWindowShare,
 	type PromptTemplateCompactionId,
 	type RenderedPromptTemplate,
@@ -101,6 +102,7 @@ import {
 	resolveOllamaThinkBudget,
 	resolveOllamaToolSupport,
 } from "./ollama-model-family"
+import { withOllamaNativeDefault } from "./ollama-native"
 import { resolveSessionPromptTemplate } from "./prompt-templates"
 import { getProviderSettingsManager } from "./provider-migration"
 import { buildSapProviderConfig, type SapProviderConfig } from "./sap-config"
@@ -414,7 +416,7 @@ function toSdkModelInfo(selection: ResolvedModelSelection): SdkModelInfo {
  */
 function thinkingEngine(providerId: string): "ollama" | "llamacpp" | undefined {
 	const sdkProviderId = toSdkProviderId(providerId)
-	if (sdkProviderId === "ollama") {
+	if (isOllamaNativeProvider(sdkProviderId)) {
 		return "ollama"
 	}
 	return sdkProviderId === "opencoti" || sdkProviderId === "openai-compatible" ? "llamacpp" : undefined
@@ -882,20 +884,22 @@ export function resolveOllamaProviderConfig(
 	config: ApiConfiguration,
 	modelId: string | undefined,
 	overrideSettings?: Record<string, unknown>,
+	// Ollama or xOllama: both keep these settings under their own id.
+	providerId = "ollama",
 ): OllamaProviderConfig {
 	// providers.json (`contextWindow`) is the source of truth; the legacy
 	// StateManager string is a migration fallback (the config store mirrors
 	// writes to both).
 	let settingsContextWindow: number | undefined
 	try {
-		const value = (overrideSettings ?? getProviderSettingsManager().getProviderSettings("ollama"))?.contextWindow
+		const value = (overrideSettings ?? getProviderSettingsManager().getProviderSettings(providerId))?.contextWindow
 		settingsContextWindow = typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined
 	} catch {
 		Logger.warn("[SessionFactory] Failed to read Ollama settings from providers.json")
 	}
 	let sampling: ProviderSamplingOptions | undefined
 	try {
-		const stored = (overrideSettings ?? getProviderSettingsManager().getProviderSettings("ollama"))?.sampling
+		const stored = (overrideSettings ?? getProviderSettingsManager().getProviderSettings(providerId))?.sampling
 		sampling = stored && typeof stored === "object" ? (stored as ProviderSamplingOptions) : undefined
 	} catch {
 		Logger.warn("[SessionFactory] Failed to read Ollama sampling settings from providers.json")
@@ -910,7 +914,8 @@ export function resolveOllamaProviderConfig(
 	// with it. The webview stopped doing this in 4.100.25 and this did not, so the
 	// panel showed the right thing while the request carried the wrong one —
 	// a display fixed over a behaviour that was not.
-	const scoped = overrideSettings !== undefined
+	// The legacy global field is Ollama's alone.
+	const scoped = overrideSettings !== undefined || providerId !== "ollama"
 	const raw = scoped ? undefined : config.ollamaApiOptionsCtxNum?.trim()
 	const parsed = raw ? Number(raw) : Number.NaN
 	const legacyContextWindow = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined
@@ -923,7 +928,7 @@ export function resolveOllamaProviderConfig(
 	// A cloud model declares no `num_ctx` at all -- its `/api/show` carries no
 	// `parameters` block -- so this reads the published window from the
 	// recommendations list, or the trained one from `model_info`, for those.
-	const declaredContextWindow = readResolvedOllamaWindow(config.ollamaBaseUrl, modelId)
+	const declaredContextWindow = readResolvedOllamaWindow(ollamaNativeBaseUrl(providerId, config), modelId)
 	const contextWindow = settingsContextWindow ?? legacyContextWindow ?? declaredContextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW
 	const timeoutMs = config.requestTimeoutMs
 	return {
@@ -931,6 +936,19 @@ export function resolveOllamaProviderConfig(
 		...(sampling ? { sampling } : {}),
 		...(modelId ? { modelInfo: { id: modelId, name: modelId, contextWindow } } : {}),
 	}
+}
+
+/**
+ * The server an Ollama-API provider talks to. Ollama's is its legacy field,
+ * exactly as stored: the per-server caches (`num_ctx`, capabilities) are keyed
+ * by it, so it is not normalized here. xOllama's is its configured base URL,
+ * else its default port.
+ */
+export function ollamaNativeBaseUrl(providerId: string, config: ApiConfiguration): string | undefined {
+	if (providerId === "ollama") {
+		return config.ollamaBaseUrl
+	}
+	return withOllamaNativeDefault(providerId, resolveBaseUrl(providerId, config))
 }
 
 export function resolveBaseUrl(providerId: string, config: ApiConfiguration): string | undefined {
@@ -1328,15 +1346,15 @@ export async function buildDelegatedAgentConnection(
 	const providerSettings = snapshotProviderSettings(storedSnapshot)
 
 	let ollamaConfig: ReturnType<typeof resolveOllamaProviderConfig> | undefined
-	if (providerId === "ollama") {
+	if (isOllamaNativeProvider(providerId)) {
 		// Same priming as the session's own model: ask the server what window
 		// this one was built with before resolving one for it, so the first
 		// request already carries it rather than reloading the model mid-run.
-		await primeDeclaredNumCtx(configuration.ollamaBaseUrl, modelId, fetch)
+		await primeDeclaredNumCtx(ollamaNativeBaseUrl(providerId, configuration), modelId, fetch)
 		// The tab's own settings, passed as the override — so an Agents tab that
 		// names no window falls through to what the model itself declares rather
 		// than to the number the session's model was given.
-		ollamaConfig = resolveOllamaProviderConfig(configuration, modelId, providerSettings ?? {})
+		ollamaConfig = resolveOllamaProviderConfig(configuration, modelId, providerSettings ?? {}, providerId)
 	}
 
 	const sdkProviderId = toSdkProviderId(providerId)
@@ -1356,7 +1374,7 @@ export async function buildDelegatedAgentConnection(
 	// ran at 256000. Read by the resolver the tab displays from, so the number
 	// in the box is the number the agents get. A tab that names none falls
 	// through to the catalog, as before.
-	const scopedWindow = providerId === "ollama" ? undefined : scopedContextWindow(providerSettings)
+	const scopedWindow = isOllamaNativeProvider(providerId) ? undefined : scopedContextWindow(providerSettings)
 	let scopedModelInfo: SdkModelInfo | undefined
 	if (scopedWindow !== undefined) {
 		const known = knownModels?.[modelId]
@@ -1571,17 +1589,18 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 				baseUrl = sapProviderConfig.baseUrl
 			}
 
-			if (providerId === "ollama") {
+			if (isOllamaNativeProvider(providerId)) {
 				// Ask the server what window this model was built with before
 				// resolving one for it. Cached per server and model, so this
 				// costs one request the first time a model is used and nothing
 				// afterwards; a server that will not answer leaves the previous
 				// behaviour exactly as it was.
-				await primeDeclaredNumCtx(apiConfig.ollamaBaseUrl, modelId, fetch)
+				await primeDeclaredNumCtx(ollamaNativeBaseUrl(providerId, apiConfig), modelId, fetch)
 				ollamaProviderConfig = resolveOllamaProviderConfig(
 					apiConfig,
 					modelId,
 					profileOverSharedEntry(profileSettings, providerId),
+					providerId,
 				)
 			}
 
@@ -1756,12 +1775,11 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// on whichever number the last unscoped edit had left in the catalog. With
 	// no profile, or one that names no window, the catalog entry -- which is
 	// what this mode's own panel writes -- stays the answer.
-	const configuredContextWindow =
-		toSdkProviderId(providerId) === "ollama"
-			? positiveFiniteNumber(ollamaProviderConfig?.modelInfo?.contextWindow)
-			: scopedContextWindow(profileSettings)
+	const configuredContextWindow = isOllamaNativeProvider(toSdkProviderId(providerId))
+		? positiveFiniteNumber(ollamaProviderConfig?.modelInfo?.contextWindow)
+		: scopedContextWindow(profileSettings)
 	const declaredContextWindow =
-		configuredContextWindow === undefined && toSdkProviderId(providerId) === "ollama"
+		configuredContextWindow === undefined && isOllamaNativeProvider(toSdkProviderId(providerId))
 			? await resolveOllamaContextWindow(apiConfig ? resolveBaseUrl(providerId, apiConfig) : undefined, modelId)
 			: undefined
 	const sessionContextWindow =
@@ -1850,7 +1868,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			ollamaProviderConfig?.sampling?.thinkBudgetMessage?.trim() || readConfiguredThinkBudgetMessage(providerId)
 		if (configuredBudgetMessage) {
 			thinkingBudgetMessage = configuredBudgetMessage
-		} else if (providerId === "ollama" && modelId) {
+		} else if (isOllamaNativeProvider(providerId) && modelId) {
 			const parameters = await resolveOllamaModelParameters(
 				apiConfig ? resolveBaseUrl(providerId, apiConfig) : undefined,
 				modelId,
@@ -2244,7 +2262,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// it an empty tool set — every call coming back "No tools are available"
 	// while the system prompt still described them (mann1x/cline#63).
 	const ollamaCapabilities =
-		sdkProviderId === "ollama" && modelId
+		isOllamaNativeProvider(sdkProviderId) && modelId
 			? {
 					images: await resolveOllamaImageSupport(baseUrl, modelId),
 					tools: await resolveOllamaToolSupport(baseUrl, modelId),
@@ -2299,7 +2317,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// and a key that exists with no value is not the same as no key -- the
 		// `-1`-sentinel path asserts the difference.
 		const resolvedMaxTokens =
-			explicitOutputCap ?? existing?.maxTokens ?? (sdkProviderId === "ollama" ? sessionOutputCap : undefined)
+			explicitOutputCap ?? existing?.maxTokens ?? (isOllamaNativeProvider(sdkProviderId) ? sessionOutputCap : undefined)
 		knownModels = {
 			...(knownModels ?? {}),
 			[modelId]: {

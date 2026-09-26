@@ -112,7 +112,9 @@ export function inferProviderOptionsTarget(
 			return "opencode";
 		case "dify":
 			return "dify";
+		// xOllama is Ollama's wire: every Ollama option rule holds for it.
 		case "ollama":
+		case "xollama":
 			return "ollama";
 		case "sapaicore":
 			return "sapaicore";

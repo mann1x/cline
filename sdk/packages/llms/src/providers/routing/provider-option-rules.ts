@@ -1,4 +1,8 @@
-import { flattenPromptEnvironment, isClineProvider } from "@cline/shared";
+import {
+	flattenPromptEnvironment,
+	isClineProvider,
+	isOllamaNativeProvider,
+} from "@cline/shared";
 import { toAiSdkReasoning } from "../ai-sdk";
 import { DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS } from "../gateway";
 import {
@@ -66,7 +70,7 @@ function isOllamaReasoningDefaultOnDisable(
 	input: ProviderOptionMatchInput,
 ): boolean {
 	return (
-		input.request.providerId === "ollama" &&
+		isOllamaNativeProvider(input.request.providerId) &&
 		input.request.reasoning?.enabled === false &&
 		modelReasoningDefaultsOn({
 			request: input.request,

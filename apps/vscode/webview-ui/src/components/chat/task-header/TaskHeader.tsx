@@ -313,6 +313,7 @@ export function shouldShowTaskCost(input: {
 	return (
 		input.apiProvider !== "vscode-lm" &&
 		input.apiProvider !== "ollama" &&
+		(input.apiProvider as string) !== "xollama" &&
 		input.apiProvider !== "lmstudio" &&
 		input.usageCostDisplay === "show"
 	)

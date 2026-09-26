@@ -8,6 +8,7 @@
 // there is no second source of truth.
 
 import { type ApiHandler, createHandler, type ProviderConfig } from "@cline/llms"
+import { isOllamaNativeProvider } from "@cline/shared"
 import type { ApiConfiguration } from "@shared/api"
 import { scopedContextWindow } from "@shared/api-config-snapshot"
 import type { Mode } from "@shared/storage/types"
@@ -91,11 +92,13 @@ export function buildSdkProviderConfig(
 		// (`num_ctx`) on the provider config; without this, standalone callers
 		// ignore an explicit Request Timeout setting and load models with
 		// Ollama's 4096-token server default.
-		...(providerId === "ollama" ? resolveOllamaProviderConfig(configuration, modelId, options?.visionProviderSettings) : {}),
+		...(isOllamaNativeProvider(providerId)
+			? resolveOllamaProviderConfig(configuration, modelId, options?.visionProviderSettings, providerId)
+			: {}),
 		// The Vision tab's own window off Ollama, read the way the tab shows it.
 		// Without it a vision model on opencoti or llama.cpp took the shared
 		// `models.json` entry for its id, whatever its tab said.
-		...(providerId !== "ollama" ? scopedWindowModelInfo(modelId, options?.visionProviderSettings) : {}),
+		...(!isOllamaNativeProvider(providerId) ? scopedWindowModelInfo(modelId, options?.visionProviderSettings) : {}),
 		// Everything built here is a standalone utility call — the image
 		// describer, the commit-message writer, the prompt-template generator.
 		// The task loop does not come through this function; it goes through

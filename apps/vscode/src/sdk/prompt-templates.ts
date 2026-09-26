@@ -6,10 +6,12 @@ import {
 	resolveSessionPromptTemplateFrom,
 } from "@cline/core"
 import type { RenderedPromptTemplate } from "@cline/shared"
+import { isOllamaNativeProvider } from "@cline/shared"
 import { Logger } from "@shared/services/Logger"
 import { resolveDataDirFromEnv } from "@shared/storage/storage-context"
 import * as path from "path"
 import { resolveOllamaModelFamily } from "./ollama-model-family"
+import { withOllamaNativeDefault } from "./ollama-native"
 
 /**
  * Work out which prompt template a session is on, once.
@@ -61,11 +63,11 @@ async function resolveFamily(options: ResolvePromptTemplateOptions): Promise<str
 	// No check on `baseUrl`: an unset one is Ollama's default endpoint, not the
 	// absence of one, and `resolveOllamaModelFamily` resolves it the same way
 	// the request path does.
-	if (options.providerId !== "ollama") {
+	if (!isOllamaNativeProvider(options.providerId)) {
 		return undefined
 	}
 	try {
-		return await resolveOllamaModelFamily(options.baseUrl, options.modelId)
+		return await resolveOllamaModelFamily(withOllamaNativeDefault(options.providerId, options.baseUrl), options.modelId)
 	} catch (error) {
 		// Not knowing the family costs a family template. Letting the failure
 		// through would cost the whole stack, including default.md, which is a

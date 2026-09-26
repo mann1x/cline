@@ -494,6 +494,16 @@ const ApiOptions = ({
 				<OllamaProvider currentMode={currentMode} isPopup={isPopup} showModelOptions={showModelOptions} />
 			)}
 
+			{/* xOllama speaks Ollama's API, so it takes Ollama's form under its own id. */}
+			{apiConfiguration && (selectedProvider as string) === "xollama" && (
+				<OllamaProvider
+					currentMode={currentMode}
+					isPopup={isPopup}
+					providerId="xollama"
+					showModelOptions={showModelOptions}
+				/>
+			)}
+
 			{apiConfiguration && selectedProvider === "moonshot" && (
 				<MoonshotProvider currentMode={currentMode} isPopup={isPopup} showModelOptions={showModelOptions} />
 			)}

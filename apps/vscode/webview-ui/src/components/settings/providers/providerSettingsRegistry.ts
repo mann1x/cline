@@ -21,6 +21,7 @@ const CUSTOM_PROVIDER_SETTINGS_IDS = new Set([
 	"moonshot",
 	"oca",
 	"ollama",
+	"xollama",
 	"openai",
 	"openai-codex",
 	"openai-native",

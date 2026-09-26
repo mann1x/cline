@@ -97,6 +97,8 @@ function whatSetsIt(providerId: string): string {
 	switch (providerId) {
 		case "ollama":
 			return "Ollama serves this many at once: its OLLAMA_NUM_PARALLEL, set where the server is launched."
+		case "xollama":
+			return "xOllama serves this many at once: its OLLAMA_NUM_PARALLEL, or on opencoti the slots it grows to, set where the server is launched."
 		case "opencoti":
 			return "opencoti serves this many at once: its --parallel, set where the server is launched."
 		case "openai":

@@ -32,6 +32,24 @@ interface OllamaProviderProps {
 	showModelOptions: boolean
 	isPopup?: boolean
 	currentMode: Mode
+	/**
+	 * Ollama, or xOllama: an Ollama fork on its own port that may run opencoti.
+	 * Both speak Ollama's API and keep these settings under their own id.
+	 */
+	providerId?: OllamaApiProviderId
+}
+
+export type OllamaApiProviderId = "ollama" | "xollama"
+
+/** Where each is reached when no base URL is set. */
+const DEFAULT_BASE_URLS: Record<OllamaApiProviderId, string> = {
+	ollama: "http://localhost:11434",
+	xollama: "http://localhost:22434",
+}
+
+const PROVIDER_NAMES: Record<OllamaApiProviderId, string> = {
+	ollama: "Ollama",
+	xollama: "xOllama",
 }
 
 /**
@@ -80,20 +98,25 @@ type NumericFieldKey = "contextWindow" | "toolResultChars" | "maxTokens" | "requ
 /**
  * The Ollama provider configuration component
  */
-export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: OllamaProviderProps) => {
+export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, providerId = "ollama" }: OllamaProviderProps) => {
+	const providerName = PROVIDER_NAMES[providerId]
 	const { apiConfiguration, maxToolResultChars, activeApiConfigurationProfile } = useExtensionState()
 	const { handleFieldChange } = useApiConfigurationHandlers()
-	const { config, write, commitSelection } = useProviderConfig("ollama")
+	const { config, write, commitSelection } = useProviderConfig(providerId)
 	// The sampler is written whole and two controls on this panel write it --
 	// the thinking level clears `think_budget` as it sets an effort. The shared
 	// hook is what keeps the second write composing from the first one rather
 	// than from the copy it rendered with.
-	const { sampling, composeAndWrite } = useSamplingWrite("ollama", "ollama")
+	const { sampling, composeAndWrite } = useSamplingWrite(providerId, "ollama")
 	const scope = useApiConfigurationScope()
 
 	const [ollamaModels, setOllamaModels] = useState<string[]>([])
 
-	const ollamaBaseUrl = config?.baseUrl ?? apiConfiguration?.ollamaBaseUrl
+	// Ollama's legacy field is Ollama's alone.
+	const ollamaBaseUrl = config?.baseUrl ?? (providerId === "ollama" ? apiConfiguration?.ollamaBaseUrl : undefined)
+	// What the server lookups use: an empty URL is Ollama's default port to the
+	// host, which is the wrong server for xOllama.
+	const lookupBaseUrl = ollamaBaseUrl || (providerId === "ollama" ? "" : DEFAULT_BASE_URLS[providerId])
 	// providers.json (config.contextWindow) is the source of truth; the legacy
 	// apiConfiguration string is a migration fallback.
 	//
@@ -104,7 +127,8 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 	// "context window seems to be a global setting, and changing it on the vision
 	// tab doesn't set it only for the vision tab". A scoped panel owns its own
 	// entry, and an empty one means empty rather than "borrow the other model's".
-	const legacyNumCtx = scope ? Number.NaN : Number.parseInt(apiConfiguration?.ollamaApiOptionsCtxNum || "", 10)
+	const legacyNumCtx =
+		scope || providerId !== "ollama" ? Number.NaN : Number.parseInt(apiConfiguration?.ollamaApiOptionsCtxNum || "", 10)
 	// This configuration's own window, and only its own — the same rule the cap
 	// below follows, and the same fault it had. The legacy key is a migration
 	// seed: it keeps an entry that predates providers.json resolving a window.
@@ -139,7 +163,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 		() => Object.fromEntries(ollamaModels.map((modelId) => [modelId, { ...ollamaModelInfo, name: modelId }])),
 		[ollamaModelInfo, ollamaModels],
 	)
-	const { committedSelection, selectedModel, commitModelSelection } = useProviderModelSelection("ollama", currentMode, {
+	const { committedSelection, selectedModel, commitModelSelection } = useProviderModelSelection(providerId, currentMode, {
 		models: ollamaModelInfoById,
 		config,
 		commitSelection,
@@ -159,7 +183,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 
 	const { savedApiKeyMask, handleApiKeyChange } = useProviderApiKeyField({
 		apiKeyLength: config?.apiKeyLength,
-		providerName: "Ollama",
+		providerName,
 		write,
 	})
 
@@ -269,7 +293,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 		try {
 			const response = await ModelsServiceClient.getOllamaModels(
 				StringRequest.create({
-					value: ollamaBaseUrl || "",
+					value: lookupBaseUrl,
 				}),
 			)
 			if (response && response.values) {
@@ -279,7 +303,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 			console.error("Failed to fetch Ollama models:", error)
 			setOllamaModels([])
 		}
-	}, [ollamaBaseUrl])
+	}, [lookupBaseUrl])
 
 	useEffect(() => {
 		requestOllamaModels()
@@ -321,7 +345,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 		}
 		let cancelled = false
 		void ModelsServiceClient.getOllamaModelParameters(
-			OllamaModelParametersRequest.create({ baseUrl: ollamaBaseUrl || "", modelId: selectedModelId }),
+			OllamaModelParametersRequest.create({ baseUrl: lookupBaseUrl, modelId: selectedModelId }),
 		)
 			.then((response) => {
 				if (!cancelled) {
@@ -338,7 +362,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 		return () => {
 			cancelled = true
 		}
-	}, [ollamaBaseUrl, selectedModelId])
+	}, [lookupBaseUrl, selectedModelId])
 
 	/**
 	 * Placeholder for a sampling field the user has not filled in.
@@ -372,16 +396,16 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 				label="Use custom base URL"
 				onChange={handleBaseUrlChange}
 				onClear={handleBaseUrlClear}
-				placeholder="Default: http://localhost:11434"
+				placeholder={`Default: ${DEFAULT_BASE_URLS[providerId]}`}
 			/>
 
 			{ollamaBaseUrl && (
 				<ApiKeyField
-					helpText="Optional API key for authenticated Ollama instances or cloud services. Leave empty for local installations."
+					helpText={`Optional API key for authenticated ${providerName} instances or cloud services. Leave empty for local installations.`}
 					initialValue={savedApiKeyMask}
 					onChange={handleApiKeyChange}
 					placeholder="Enter API Key (optional)..."
-					providerName="Ollama"
+					providerName={providerName}
 				/>
 			)}
 
@@ -410,7 +434,8 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 			    whether it is a cloud model at all, which plan it needs, and the
 			    window and thinking settings its publisher states. All read;
 			    none of it inferred from the model's name. */}
-			<OllamaAccountStrip modelId={selectedModel.modelId || undefined} providerId="ollama" />
+			{/* The ollama.com account is Ollama's. */}
+			{providerId === "ollama" && <OllamaAccountStrip modelId={selectedModel.modelId || undefined} providerId="ollama" />}
 
 			{/* Thinking. Rendered only once the provider config has resolved, for
 			    the same reason as the context-window field below: mounting
@@ -547,7 +572,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 								? legacyNumCtx
 								: 32768
 					}
-					providerId="ollama"
+					providerId={providerId}
 				/>
 			)}
 
@@ -673,7 +698,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode }: Ollam
 					<RequestTimingsToggle engineNote="Ollama also reports its own model load time and the split between reading the prompt and generating the answer, which are shown when you expand the line." />
 				}
 				modelParameters={modelParameters}
-				providerId="ollama"
+				providerId={providerId}
 				resetKey={`${selectedModelId ?? ""}::${scope?.scopeKey ?? "session"}::${activeApiConfigurationProfile ?? ""}`}
 				showThinkBudgetMessage
 			/>

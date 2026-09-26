@@ -14,6 +14,7 @@ const PORTABLE_REASONING_PROVIDERS = new Set([
 	"openai-native",
 	"openai-codex",
 	"ollama",
+	"xollama",
 	"vertex",
 	"xai",
 ]);

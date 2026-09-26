@@ -39,6 +39,7 @@ import {
 	readOpencotiDefaultTemperature,
 } from "@cline/llms";
 import type { AgentConfig } from "@cline/shared";
+import { isOllamaNativeProvider } from "@cline/shared";
 import { z } from "zod";
 
 /** The keyword that asks for a per-agent random value. */
@@ -321,7 +322,7 @@ export function modelTemperatureOf(
 	const baseUrl =
 		connection.baseUrl ??
 		(connection.providerConfig as { baseUrl?: string } | undefined)?.baseUrl;
-	if (connection.providerId === "ollama") {
+	if (isOllamaNativeProvider(connection.providerId)) {
 		return readDeclaredTemperature(baseUrl, connection.modelId);
 	}
 	return readOpencotiDefaultTemperature(baseUrl);
@@ -350,7 +351,7 @@ export async function primeModelTemperature(
 		connection.baseUrl ??
 		(connection.providerConfig as { baseUrl?: string } | undefined)?.baseUrl;
 	try {
-		if (connection.providerId === "ollama") {
+		if (isOllamaNativeProvider(connection.providerId)) {
 			await primeDeclaredNumCtx(baseUrl, connection.modelId, fetchImpl);
 		} else if (connection.providerId === "opencoti") {
 			await probeOpencotiProps(baseUrl, fetchImpl);

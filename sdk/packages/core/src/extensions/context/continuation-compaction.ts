@@ -84,6 +84,7 @@ export type ContinuationPath = "pooled" | "continuation";
 const CONTINUATION_PROVIDERS = new Set([
 	"opencoti",
 	"ollama",
+	"xollama",
 	"lmstudio",
 	"openai-compatible",
 ]);

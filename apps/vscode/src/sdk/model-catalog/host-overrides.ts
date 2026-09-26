@@ -11,6 +11,7 @@
  */
 
 import { OLLAMA_DEFAULT_CONTEXT_WINDOW } from "@cline/llms"
+import { isOllamaNativeProvider } from "@cline/shared"
 import type { ModelInfo } from "@shared/api"
 import { StateManager } from "@/core/storage/StateManager"
 import { getProviderSettingsManager } from "../provider-migration"
@@ -23,17 +24,21 @@ import type { ProviderId } from "./contracts"
  * request default) instead of catalog/safe-default values so the chat
  * indicator and context management match reality.
  */
-function resolveOllamaContextWindow(): number {
+function resolveOllamaContextWindow(providerId: string): number {
 	// providers.json (`contextWindow`) is the source of truth; the legacy
 	// StateManager string is a migration fallback (the config store mirrors
 	// writes to both).
 	try {
-		const value = getProviderSettingsManager().getProviderSettings("ollama")?.contextWindow
+		const value = getProviderSettingsManager().getProviderSettings(providerId)?.contextWindow
 		if (typeof value === "number" && Number.isFinite(value) && value > 0) {
 			return Math.floor(value)
 		}
 	} catch {
 		// providers.json unavailable — fall through to the legacy state key.
+	}
+	// The legacy state key is Ollama's alone.
+	if (providerId !== "ollama") {
+		return OLLAMA_DEFAULT_CONTEXT_WINDOW
 	}
 	try {
 		const raw = StateManager.get().getApiConfiguration().ollamaApiOptionsCtxNum?.trim()
@@ -50,8 +55,8 @@ function resolveOllamaContextWindow(): number {
 }
 
 export function applyHostModelInfoOverrides(providerId: ProviderId, modelId: string, modelInfo: ModelInfo): ModelInfo {
-	if (providerId === "ollama") {
-		return { ...modelInfo, contextWindow: resolveOllamaContextWindow() }
+	if (isOllamaNativeProvider(providerId)) {
+		return { ...modelInfo, contextWindow: resolveOllamaContextWindow(providerId) }
 	}
 	return modelInfo
 }

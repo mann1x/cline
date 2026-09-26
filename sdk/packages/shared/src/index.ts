@@ -449,7 +449,7 @@ export {
 	validatePromptTemplate,
 } from "./prompt/template-validation";
 export { CLINE_DEFAULT_MODEL_ID } from "./providers/defaults";
-export { isClineProvider } from "./providers/utils";
+export { isClineProvider, isOllamaNativeProvider } from "./providers/utils";
 export {
 	buildRemoteConfigSessionBlobUploadMetadata,
 	clearMaterializedRemoteConfigRuntime,

@@ -9,7 +9,11 @@ import type {
 	ReasoningHistoryPlan,
 	ReasoningHistorySetting,
 } from "@cline/shared";
-import { nativeReasoningHistoryPlan, REASONING_LEVELS } from "@cline/shared";
+import {
+	isOllamaNativeProvider,
+	nativeReasoningHistoryPlan,
+	REASONING_LEVELS,
+} from "@cline/shared";
 import { resolveReasoningHistoryPlan } from "./reasoning-history";
 
 const ACTIVE_REASONING_EFFORTS = REASONING_LEVELS.filter(
@@ -453,7 +457,7 @@ export function isOllamaQwen3ModelIdFallback(
 	// names such as "qwen3-coder:30b". This fallback is used by
 	// modelReasoningDefaultsOn when no catalog metadata is present.
 	return (
-		request.providerId === "ollama" &&
+		isOllamaNativeProvider(request.providerId) &&
 		normalizedModelId(request).includes("qwen3")
 	);
 }
@@ -490,7 +494,7 @@ export function isOllamaProvider(
 		request.providerId,
 		context.config.providerId,
 		context.provider.id,
-	].some((id) => id.toLowerCase() === "ollama");
+	].some((id) => isOllamaNativeProvider(id.toLowerCase()));
 }
 
 export function modelReasoningDefaultsOn(options: {
@@ -523,7 +527,12 @@ export type ReasoningHistoryMode = "all" | "last" | "none";
  * reasoning replay and Anthropic requires the signed blocks back for tool use.
  */
 /** Providers whose `auto` is not simply "keep replaying reasoning". */
-const PROBED_OR_MUTE_PROVIDERS = new Set(["cerebras", "ollama", "opencoti"]);
+const PROBED_OR_MUTE_PROVIDERS = new Set([
+	"cerebras",
+	"ollama",
+	"xollama",
+	"opencoti",
+]);
 
 function unprobedReasoningHistory(
 	providerId: string | undefined,
@@ -531,6 +540,7 @@ function unprobedReasoningHistory(
 	switch ((providerId ?? "").toLowerCase()) {
 		case "cerebras":
 		case "ollama":
+		case "xollama":
 		case "opencoti":
 			return "none";
 		default:

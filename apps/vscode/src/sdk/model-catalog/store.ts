@@ -7,7 +7,7 @@ import {
 	writeModelsFileSync,
 } from "@cline/core"
 import { getGeneratedModelsForProvider, MODEL_COLLECTIONS_BY_PROVIDER_ID, normalizeParallelSessions } from "@cline/llms"
-import { ModelCapabilitySchema } from "@cline/shared"
+import { isOllamaNativeProvider, ModelCapabilitySchema } from "@cline/shared"
 import { type ApiConfiguration, type ApiProvider, type ModelInfo, openAiModelInfoSafeDefaults } from "@shared/api"
 import { Logger } from "@shared/services/Logger"
 import { getProviderModelIdKey } from "@shared/storage/provider-keys"
@@ -905,7 +905,7 @@ function writeSelectionToProviderSettings(providerId: ProviderId, selection: Mod
 	// Prune model metadata that earlier builds may have written to
 	// providers.json — except for Ollama, whose contextWindow is a real
 	// user setting (maps to num_ctx) written by the settings UI.
-	if (providerKey(providerId) !== "ollama") {
+	if (!isOllamaNativeProvider(providerKey(providerId))) {
 		delete next.contextWindow
 	}
 	delete next.maxTokens
