@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	CouncilDeliberation,
+	councilHeading,
 	probeXollama,
 	readXollamaModel,
 	resetXollamaProbes,
@@ -161,6 +163,100 @@ describe("a council's past deliberation", () => {
 	it("is left alone for a plain model", async () => {
 		const messages = await chatThrough(false);
 		expect(messages[1]?.thinking).toBe("plan, findings, critiques");
+	});
+});
+
+describe("a council's deliberation", () => {
+	const researcher2 = { role: "researcher", index: 1, round: 0 };
+	const critic1 = { role: "critic", index: 0, round: 0 };
+
+	it("names each member as people count, from 1", () => {
+		expect(councilHeading({ role: "planner", index: 0, round: 0 })).toBe(
+			"#### Planner · round 1",
+		);
+		expect(councilHeading(researcher2)).toBe("#### Researcher 2 · round 1");
+	});
+
+	// xOllama's own heading line is for clients that ignore tags, and it can
+	// arrive in pieces: nothing of it may leak once ours stands in its place.
+	it("replaces the server's heading line with its own, however it is split", () => {
+		const d = new CouncilDeliberation();
+		const out = [
+			d.thinking(researcher2, "### Rese"),
+			d.thinking(researcher2, "archer 2"),
+			d.thinking(researcher2, "\n\nThe loop "),
+			d.thinking(researcher2, "is in foo.ts."),
+			d.thinking(critic1, "No heading here."),
+			d.close(),
+		].join("");
+		expect(out).toBe(
+			"#### Researcher 2 · round 1\n\nThe loop is in foo.ts." +
+				"\n\n#### Critic 1 · round 1\n\nNo heading here.",
+		);
+	});
+
+	it("drops a heading line whose span ended before the line did", () => {
+		const d = new CouncilDeliberation();
+		const out = [
+			d.thinking(researcher2, "### Researcher 2"),
+			d.thinking(critic1, "Fine."),
+		].join("");
+		expect(out).toBe(
+			"#### Researcher 2 · round 1\n\n\n\n#### Critic 1 · round 1\n\nFine.",
+		);
+	});
+
+	it("reaches the stream: tagged thinking gets headings, the answer is untouched", async () => {
+		const lines = [
+			{
+				council: researcher2,
+				message: {
+					role: "assistant",
+					content: "",
+					thinking: "### Researcher 2\nfound it",
+				},
+			},
+			{
+				council: critic1,
+				message: { role: "assistant", content: "", thinking: "agreed" },
+			},
+			{ message: { role: "assistant", content: "The answer." } },
+			{ done: true, message: { role: "assistant", content: "" } },
+		];
+		const ndjson = `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`;
+		// Delivered in awkward pieces, as a socket would.
+		const bytes = new TextEncoder().encode(ndjson);
+		const wire = withXollamaRequestFields((async (url) => {
+			if (String(url).endsWith("/api/show")) {
+				return json({ xollama: { council: { enabled: true } } });
+			}
+			return new Response(
+				new ReadableStream({
+					start(controller) {
+						for (let at = 0; at < bytes.length; at += 7) {
+							controller.enqueue(bytes.slice(at, at + 7));
+						}
+						controller.close();
+					},
+				}),
+				{ headers: { "content-type": "application/x-ndjson" } },
+			);
+		}) as typeof fetch);
+		const response = await wire("http://gpu2:22434/api/chat", {
+			method: "POST",
+			body: JSON.stringify({ model: "omni-council", messages: [] }),
+		});
+		const got = (await response.text())
+			.trim()
+			.split("\n")
+			.map((l) => JSON.parse(l));
+		expect(got.map((c) => c.message.thinking)).toEqual([
+			"#### Researcher 2 · round 1\n\nfound it",
+			"\n\n#### Critic 1 · round 1\n\nagreed",
+			undefined,
+			undefined,
+		]);
+		expect(got[2].message.content).toBe("The answer.");
 	});
 });
 

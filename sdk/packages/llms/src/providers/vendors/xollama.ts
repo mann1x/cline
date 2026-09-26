@@ -14,6 +14,9 @@
 // - A tool's function object takes `x_read_only: true` (#372, D2): a council
 //   offers researchers and critics only those, and only the synthesizer
 //   writes. Unmarked means write.
+// - `council_tags_v1` (#387): each thinking chunk of a council turn carries a
+//   top-level `council: {role, index, round}`, counted from 0, and holds one
+//   member's text. Content, state and done chunks carry none.
 
 import type { AgentToolDefinition, BasicLogger } from "@cline/shared";
 import { engineSessionId } from "./polykv-swarm";
@@ -258,11 +261,159 @@ function chatRoot(input: Parameters<typeof fetch>[0]): string | undefined {
 	return at >= 0 ? url.slice(0, at) : undefined;
 }
 
+/** A council member's tag, as `council_tags_v1` sends it. */
+export interface XollamaCouncilTag {
+	role: string;
+	index: number;
+	round: number;
+}
+
+function councilTagOf(value: unknown): XollamaCouncilTag | undefined {
+	const tag = value as Partial<XollamaCouncilTag> | null | undefined;
+	return tag &&
+		typeof tag.role === "string" &&
+		typeof tag.index === "number" &&
+		typeof tag.round === "number"
+		? { role: tag.role, index: tag.index, round: tag.round }
+		: undefined;
+}
+
+/**
+ * The heading a member's span opens with: its role, its number among its
+ * peers where there are several, and the round, all counted from 1.
+ */
+export function councilHeading(tag: XollamaCouncilTag): string {
+	const role = tag.role.charAt(0).toUpperCase() + tag.role.slice(1);
+	const peers = tag.role === "researcher" || tag.role === "critic";
+	return `#### ${role}${peers ? ` ${tag.index + 1}` : ""} · round ${tag.round + 1}`;
+}
+
+/**
+ * A council turn's deliberation with a heading at each member's span.
+ *
+ * The thinking block renders as Markdown, so the tag becomes a heading there.
+ * xOllama opens each span with its own `### Researcher 2` line for clients
+ * that do not read tags; that line is dropped for ours, and it can arrive
+ * split over several chunks, so a span's first text is held until its first
+ * line is known.
+ */
+export class CouncilDeliberation {
+	private span: string | undefined;
+	private opening = false;
+	private held = "";
+
+	/** The thinking text to send for one chunk. */
+	thinking(tag: XollamaCouncilTag, text: string): string {
+		const key = `${tag.role}/${tag.index}/${tag.round}`;
+		let out = "";
+		if (key !== this.span) {
+			out += this.close();
+			out += `${this.span === undefined ? "" : "\n\n"}${councilHeading(tag)}\n\n`;
+			this.span = key;
+			this.opening = true;
+			this.held = "";
+		}
+		if (!this.opening) {
+			return out + text;
+		}
+		this.held += text;
+		const start = this.held.trimStart();
+		if (start === "") {
+			return out;
+		}
+		if (!start.startsWith("#")) {
+			this.opening = false;
+			return out + start;
+		}
+		const eol = start.indexOf("\n");
+		if (eol < 0) {
+			return out;
+		}
+		this.opening = false;
+		return out + start.slice(eol + 1).replace(/^\n+/, "");
+	}
+
+	/**
+	 * What is held when the span ends. Held text that began with `#` and never
+	 * finished its line was the span's own heading; anything else is kept.
+	 */
+	close(): string {
+		const held = this.opening ? this.held.trimStart() : "";
+		this.opening = false;
+		this.held = "";
+		return held.startsWith("#") ? "" : held;
+	}
+}
+
+/** Each tagged thinking chunk of an NDJSON chat stream, given its heading. */
+function withCouncilHeadings(response: Response): Response {
+	if (
+		!response.ok ||
+		!response.body ||
+		!/ndjson/i.test(response.headers.get("content-type") ?? "")
+	) {
+		return response;
+	}
+	const deliberation = new CouncilDeliberation();
+	const decoder = new TextDecoder();
+	const encoder = new TextEncoder();
+	let partial = "";
+	const line = (raw: string): string => {
+		if (raw.trim() === "") {
+			return raw;
+		}
+		let chunk: {
+			council?: unknown;
+			message?: { thinking?: unknown };
+		};
+		try {
+			chunk = JSON.parse(raw);
+		} catch {
+			return raw;
+		}
+		const tag = councilTagOf(chunk.council);
+		if (tag && typeof chunk.message?.thinking === "string") {
+			return JSON.stringify({
+				...chunk,
+				message: {
+					...chunk.message,
+					thinking: deliberation.thinking(tag, chunk.message.thinking),
+				},
+			});
+		}
+		return raw;
+	};
+	const body = response.body.pipeThrough(
+		new TransformStream<Uint8Array, Uint8Array>({
+			transform(bytes, controller) {
+				partial += decoder.decode(bytes, { stream: true });
+				const lines = partial.split("\n");
+				partial = lines.pop() ?? "";
+				if (lines.length > 0) {
+					controller.enqueue(encoder.encode(`${lines.map(line).join("\n")}\n`));
+				}
+			},
+			flush(controller) {
+				partial += decoder.decode();
+				if (partial !== "") {
+					controller.enqueue(encoder.encode(line(partial)));
+				}
+			},
+		}),
+	);
+	return new Response(body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers: response.headers,
+	});
+}
+
 /**
  * xOllama's request fields, added to each `/api/chat` body: `session_id` from
  * the request's session, `x_read_only` on its read-only tools, and, for a
  * council model, the history without the council's past deliberation. A body
- * that is not a chat body goes out untouched.
+ * that is not a chat body goes out untouched. A chat's streamed answer comes
+ * back with each council member's span of thinking under its own heading.
  */
 export function withXollamaRequestFields(
 	baseFetch: typeof fetch,
@@ -309,6 +460,7 @@ export function withXollamaRequestFields(
 				"[xollama] request body is not JSON; sent without xOllama fields",
 			);
 		}
-		return baseFetch(input, { ...init, headers, body });
+		const response = await baseFetch(input, { ...init, headers, body });
+		return root === undefined ? response : withCouncilHeadings(response);
 	}) as typeof fetch;
 }
