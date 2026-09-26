@@ -42,6 +42,16 @@ import {
 	runDelegatedWithCap,
 } from "./agent-iteration-cap";
 import { summarizeForLead } from "./agent-reports";
+import {
+	type AgentFacts,
+	agentFacts,
+	agentFactsLine,
+	type RoundHandle,
+	type RoundMemberOutput,
+	type RoundShared,
+	reportWaits,
+	roundsFor,
+} from "./agent-rounds";
 import { createAgentTroubleWatch, roomWaitTrouble } from "./agent-trouble";
 import { buildSpawnBatchReport, type SpawnBatchReport } from "./batch-report";
 import type { ConfiguredAgentConfig } from "./configured-agent-config";
@@ -63,15 +73,18 @@ import {
 } from "./spawn-sampling";
 import {
 	registerSubagentCancellation,
+	type SubagentRequeueCarry,
 	subagentCancelId,
 } from "./subagent-cancellation";
 import { buildSubagentLayout } from "./subagent-layout";
 import {
+	compactionLogger,
 	createSubagentProgress,
 	DELEGATION_PACING_NOTE,
 	reportSubagentFinished,
 	reportSubagentModel,
 	reportSubagentSampling,
+	requeued,
 	restarted,
 	watchPolykvRoom,
 } from "./subagent-progress";
@@ -147,6 +160,12 @@ export const SpawnAgentInputSchema = z.object({
 	...SpawnSamplingFields,
 	/** Its iteration cap and its check; beside `agents`, every agent's default. */
 	...AgentControlFields,
+	wait: z
+		.boolean()
+		.optional()
+		.describe(
+			"Wait for the agents to finish before this call returns (default: true; false for `merge`). With false the call returns at once with a round id and the agents run in the background while you keep working: their report is delivered to you when the round ends, `agents_status` shows their progress, and `await_agents` waits for them.",
+		),
 });
 
 /**
@@ -336,6 +355,12 @@ export interface SpawnAgentOutput {
 	state?: "awaiting_lead";
 	/** The lead's check, when one was set: pass, fail or not run. */
 	oracle?: AgentOracleResult;
+	/**
+	 * Its place in the round and how it ended (section F): id, state, stop
+	 * reason, iterations against its cap, tokens, compactions, check, sampler
+	 * and node. Set on the result the lead is handed.
+	 */
+	agent?: AgentFacts;
 }
 
 export interface SubAgentStartContext {
@@ -456,6 +481,12 @@ export interface SpawnAgentToolConfig {
 	commandSandboxFor?: (
 		toolCallId: string | undefined,
 	) => { wrapSpawn: OracleSpawnWrapper; cwd: string } | undefined;
+	/**
+	 * The lead's session, when the tool is built for one: its rounds can then
+	 * run an agent again from their record (`retry_failed`) without the call
+	 * that first ran it.
+	 */
+	sessionId?: string;
 }
 
 /** The key a configured agent is looked up by: `JS-Syntactic`, `js_syntactic` and `subagent_js_syntactic` are one agent. */
@@ -470,9 +501,9 @@ export function configuredAgentKey(name: string): string {
 
 const SPAWN_AGENT_DESCRIPTION =
 	"Spawn sub-agents for focused tasks: `task` for one agent, `agents` for several in one call. Structure the work in three parts, from most shared to least: `knowledge` (files and notes the agents need -- identical across them), `instructions` (the role -- identical for every agent of the same kind), and each agent's `task` (what it alone does). Shared parts are loaded once for all agents that share them, so many agents cost little more than one. An `agents` entry may name a configured agent in `type`; it then runs with that agent's own role and model. " +
-	"Output: one agent gives `{text, iterations, maxIterations?, finishReason, stopReason?, state?, oracle?, agentId, usage: {inputTokens, outputTokens}}`; `agents` gives `{summary: {total, completed, errored, cancelled, awaitingLead, byType, byFailureClass, totalIterations, totalTokens}, agents: [{name, status, failureClass?, line?, error?, iterations?, maxIterations?, stopReason?, agentId?, oracle?}], reports: [{name, text, oracle?}], notShown?: {names}, usage}` -- every agent is in `agents`; a report left out of `reports` to keep the result whole is listed in `notShown` and read with `read_agent_report(name)`. `failureClass` is `infra` (server, transport or refusal: worth running again as is) or `task` (the model, a tool or the iteration budget). " +
+	"Output: one agent gives `{text, iterations, maxIterations?, finishReason, stopReason?, state?, oracle?, agentId, usage: {inputTokens, outputTokens}, agent: {id, round, state, stopReason, iterations, maxIterations, tokens, compactions, oracle, sampling, node, model}}`; `agents` gives `{round, summary: {total, completed, errored, cancelled, awaitingLead, byType, byFailureClass, totalIterations, totalTokens}, agents: [{id, name, status, stop?, failureClass?, line?, error?, iterations?, maxIterations?, stopReason?, agentId?, oracle?}], reports: [{name, id, facts, text, oracle?}], notShown?: {names}, usage}` -- every agent is in `agents`; a report left out of `reports` to keep the result whole is listed in `notShown` and read with `read_agent_report(name)`. `failureClass` is `infra` (server, transport or refusal: worth running again as is) or `task` (the model, a tool or the iteration budget). Every call is a round with an id (`r3`) and each agent has one (`r3-2`): `agents_status` shows a round or an agent in detail, and `retry_failed(round_id)` runs its failed agents again from their original tasks. " +
 	"Not merging is the way to get N separate reports: each agent of an `agents` call reports on its own, where `merge` returns one combined report. " +
-	"`text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. It has already finished by the time you see this — there is nothing to poll and nothing to await -- unless its `state` is `awaiting_lead`. " +
+	"`text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. By default the call waits: the agents have already finished by the time you see this, unless one's `state` is `awaiting_lead`. With `wait: false` the call returns at once with the round id, and the agents' report is delivered to you when the round ends. " +
 	"Give each sub-agent a short `name`: when several run at once it is the only thing telling their progress apart on screen. ";
 
 /** Said only when the session has the team tools; see {@link SpawnAgentToolConfig.teammates}. */
@@ -517,6 +548,7 @@ function withKnowledge(
 
 /** Fields a call can carry beside `agents`; see {@link readAgentsField}. */
 const AGENTS_SIBLING_FIELDS = new Set([
+	"wait",
 	"merge",
 	"count",
 	"knowledge",
@@ -691,6 +723,7 @@ export function toSwarmInput(
 				}
 			: {}),
 		...(input.count !== undefined ? { count: input.count } : {}),
+		...(input.wait !== undefined ? { wait: input.wait } : {}),
 		// The call's sampler is the swarm's: its seed is offset per worker
 		// there, as it is per agent in a batch.
 		...spawnSamplingFields(readSpawnSampling(input)),
@@ -724,8 +757,20 @@ export type SpawnToolOptions = Pick<
  */
 export function createSpawnAgentTool(
 	config: SpawnAgentToolConfig,
-): AgentTool<SpawnAgentInput, SpawnAgentOutput | SpawnAgentBatchOutput> {
-	return createTool<SpawnAgentInput, SpawnAgentOutput | SpawnAgentBatchOutput>({
+): AgentTool<
+	SpawnAgentInput,
+	SpawnAgentOutput | SpawnAgentBatchOutput | SpawnBackgroundAck
+> {
+	// A session's spawn tool can run an agent of one of its rounds again from
+	// the round's record -- `retry_failed`, a restart of a finished agent --
+	// long after the call that started it is gone from the lead's history.
+	if (config.sessionId !== undefined) {
+		registerSpawnRunner(config, config.sessionId);
+	}
+	return createTool<
+		SpawnAgentInput,
+		SpawnAgentOutput | SpawnAgentBatchOutput | SpawnBackgroundAck
+	>({
 		name: SPAWN_AGENT_TOOL_NAME,
 		description: describeSpawnAgent(
 			Boolean(config.swarm),
@@ -751,7 +796,7 @@ export function createSpawnAgentTool(
 					"spawn_agent needs a `task` for one agent, or `agents` for several.",
 				);
 			}
-			return await runSpawnedAgent(config, { ...input, task }, context);
+			return await runSingleSpawn(config, { ...input, task }, context);
 		},
 		timeoutMs: 300000,
 		retryable: false,
@@ -760,6 +805,182 @@ export function createSpawnAgentTool(
 		// gate it again. Forty requested agents ran eight wide behind it.
 		lifecycle: { boundsOwnConcurrency: true },
 	});
+}
+
+/** The round's shared parts, as a retry needs them. */
+function sharedOf(input: SpawnAgentInput): RoundShared {
+	const instructions = input.instructions ?? input.systemPrompt;
+	const sampling = readSpawnSampling(input);
+	return {
+		...(input.knowledge ? { knowledge: input.knowledge } : {}),
+		...(instructions ? { instructions } : {}),
+		...(sampling ? { sampling } : {}),
+	};
+}
+
+/**
+ * How `retry_failed` and a restart run a `spawn_agent` agent again: the same
+ * way the call ran it, from the round's stored task, knowledge and role.
+ */
+function registerSpawnRunner(
+	config: SpawnAgentToolConfig,
+	sessionId: string,
+): void {
+	roundsFor(sessionId).registerRunner(
+		"spawn_agent",
+		async ({ round, agent, task, context }) => {
+			const sampling = spawnSamplingFields(
+				mergeSpawnSampling(round.shared.sampling, agent.sampling),
+			);
+			// Its cap and check as the call gave them.
+			const controls = storedControls(agent);
+			if (agent.type?.trim()) {
+				const tool = config
+					.configuredAgents?.()
+					?.get(configuredAgentKey(agent.type));
+				if (!tool) {
+					throw new Error(
+						`No configured agent named "${agent.type}" in this session.`,
+					);
+				}
+				const output = (await tool.execute(
+					{
+						prompt: withKnowledge(round.shared.knowledge, task),
+						...sampling,
+						...controls,
+					} as never,
+					context,
+				)) as SpawnAgentOutput;
+				return { name: agent.name, ...output };
+			}
+			const instructions = agent.instructions ?? round.shared.instructions;
+			const output = await runSpawnedAgent(
+				config,
+				{
+					name: agent.name,
+					task,
+					...sampling,
+					...controls,
+					...(round.shared.knowledge
+						? { knowledge: round.shared.knowledge }
+						: {}),
+					...(instructions ? { instructions } : {}),
+				},
+				context,
+			);
+			return { name: agent.name, ...output };
+		},
+	);
+}
+
+/**
+ * An agent's cap and check as its round stored them, for a rerun. The cap
+ * is the one it was given, not one the lead raised later: a rerun starts
+ * over.
+ */
+export function storedControls(agent: {
+	maxIterations?: number;
+	check?: unknown;
+}): { max_iterations?: number; check?: AgentCheck } {
+	return controlFields({
+		...(agent.maxIterations !== undefined
+			? { max_iterations: agent.maxIterations }
+			: {}),
+		...(agent.check !== undefined ? { check: agent.check } : {}),
+	});
+}
+
+/**
+ * What a call that runs in the background returns at once: where its agents
+ * are, and how their report will reach the lead.
+ */
+export interface SpawnBackgroundAck {
+	background: true;
+	round: string;
+	agents: Array<{ id: string; name: string }>;
+	note: string;
+}
+
+export function backgroundAck(handle: RoundHandle): SpawnBackgroundAck {
+	return {
+		background: true,
+		round: handle.id,
+		agents: handle.record.agents.map((agent) => ({
+			id: agent.id,
+			name: agent.name,
+		})),
+		note: `Round ${handle.id} runs in the background. Keep working: its report is delivered to you when every agent has finished. \`agents_status\` shows progress; \`await_agents(round_id: "${handle.id}")\` waits for it.`,
+	};
+}
+
+/** One agent: a round of one, blocking unless `wait: false`. */
+async function runSingleSpawn(
+	config: SpawnAgentToolConfig,
+	input: SpawnAgentInput & { task: string },
+	context: AgentToolContext,
+): Promise<SpawnAgentOutput | SpawnBackgroundAck> {
+	// Refused before a round is opened: a check that cannot parse.
+	const controls = controlFields(input);
+	const maxIterations = controls.max_iterations ?? config.defaultMaxIterations;
+	const rounds = roundsFor(context.sessionId);
+	const background = input.wait === false;
+	const name = input.name?.trim() || "agent";
+	const sampling = readSpawnSampling(input);
+	const handle = rounds.open({
+		kind: "spawn_agent",
+		tool: SPAWN_AGENT_TOOL_NAME,
+		...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),
+		background,
+		shared: sharedOf(input),
+		agents: [
+			{
+				name,
+				task: input.task,
+				...(sampling ? { sampling } : {}),
+				...(maxIterations ? { maxIterations } : {}),
+				...(controls.check ? { check: controls.check } : {}),
+			},
+		],
+		...(background ? {} : context.signal ? { signal: context.signal } : {}),
+		...(context.emitUpdate ? { emitUpdate: context.emitUpdate } : {}),
+	});
+	const memberContext: AgentToolContext = { ...context, signal: handle.signal };
+	const run = (ctx: AgentToolContext) =>
+		runSpawnedAgent(config, input, ctx) as Promise<RoundMemberOutput>;
+	if (background) {
+		void handle.run(0, memberContext, run).finally(() => handle.close());
+		return backgroundAck(handle);
+	}
+	const leave = rounds.enterBlocking();
+	try {
+		await handle.run(0, memberContext, run);
+		// A restart or retry of it from the side turn runs before the call
+		// returns: the lead gets the run that counts.
+		await handle.idle();
+		const output = handle.outputs()[0] as SpawnAgentOutput & {
+			error?: string;
+		};
+		const agent = handle.agent(0);
+		handle.delivered();
+		if (output.error !== undefined && output.finishReason === undefined) {
+			throw new Error(output.error);
+		}
+		const {
+			name: _name,
+			error: _error,
+			...rest
+		} = output as SpawnAgentOutput & {
+			name?: string;
+			error?: string;
+		};
+		return {
+			...rest,
+			...(agent ? { agent: agentFacts(handle.record, agent) } : {}),
+		};
+	} finally {
+		leave();
+		handle.close();
+	}
 }
 
 /**
@@ -773,7 +994,7 @@ async function runSpawnBatch(
 	config: SpawnAgentToolConfig,
 	input: SpawnAgentInput,
 	context: AgentToolContext,
-): Promise<SpawnAgentBatchOutput> {
+): Promise<SpawnAgentBatchOutput | SpawnBackgroundAck> {
 	const members = input.agents ?? [];
 	const configured = config.configuredAgents?.();
 	// The call's sampler covers every agent of the call, its seed offset by the
@@ -782,51 +1003,71 @@ async function runSpawnBatch(
 	// Read once, before any agent starts: a check that will not parse is
 	// refused for the whole call rather than failing every agent it covers.
 	const callControls = controlFields(input);
-	for (const member of members) {
-		controlFields(member);
-	}
-	const results = await Promise.all(
-		members.map(async (member, index): Promise<SpawnAgentMemberOutput> => {
-			const output = await runBatchMember(member, index);
-			reportSubagentFinished(
-				context.emitUpdate &&
-					((update: unknown) =>
-						context.emitUpdate?.({
-							...(update as Record<string, unknown>),
-							member: index,
-						})),
-				output,
+	const memberControls = members.map((member) => ({
+		...callControls,
+		...controlFields(member),
+	}));
+	const rounds = roundsFor(context.sessionId);
+	const background = input.wait === false;
+	const handle = rounds.open({
+		kind: "spawn_agent",
+		tool: SPAWN_AGENT_TOOL_NAME,
+		...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),
+		background,
+		shared: sharedOf(input),
+		agents: members.map((member, index) => {
+			const sampling = mergeSpawnSampling(
+				samplingForCopy(callSampling, index),
+				readSpawnSampling(member),
 			);
-			return output;
+			return {
+				name: member.name?.trim() || `agent-${index + 1}`,
+				task: member.task,
+				...(member.instructions ? { instructions: member.instructions } : {}),
+				...(member.type?.trim() ? { type: member.type.trim() } : {}),
+				...(sampling ? { sampling } : {}),
+				...((memberControls[index]?.max_iterations ??
+				config.defaultMaxIterations)
+					? {
+							maxIterations:
+								memberControls[index]?.max_iterations ??
+								config.defaultMaxIterations,
+						}
+					: {}),
+				...(memberControls[index]?.check
+					? { check: memberControls[index]?.check }
+					: {}),
+			};
 		}),
-	);
+		...(background ? {} : context.signal ? { signal: context.signal } : {}),
+		...(context.emitUpdate ? { emitUpdate: context.emitUpdate } : {}),
+		rowed: true,
+	});
 	async function runBatchMember(
 		member: SpawnAgentMember,
 		index: number,
+		memberContext: AgentToolContext,
 	): Promise<SpawnAgentMemberOutput> {
 		const name = member.name?.trim() || `agent-${index + 1}`;
 		// The entry's cap and check over the call's.
-		const controls = { ...callControls, ...controlFields(member) };
+		const controls = memberControls[index] ?? {};
 		const sampling = spawnSamplingFields(
 			mergeSpawnSampling(
 				samplingForCopy(callSampling, index),
 				readSpawnSampling(member),
 			),
 		);
-		// Each member reports on its own row: the host keys it by the call
-		// and this index, and its stop registration by the same pair. Every
-		// eviction the turn-fault recovery reports there is counted for the
-		// round report, host or no host.
+		// Every eviction the turn-fault recovery reports on its row is
+		// counted for the round report, host or no host.
 		let evicted = 0;
-		const memberContext: AgentToolContext = {
-			...context,
-			toolCallId: `${context.toolCallId}#${index}`,
+		const countedContext: AgentToolContext = {
+			...memberContext,
 			emitUpdate: (update: unknown) => {
 				const row = update as Record<string, unknown>;
 				if (typeof row?.evicted === "number") {
 					evicted += 1;
 				}
-				context.emitUpdate?.({ ...row, member: index });
+				memberContext.emitUpdate?.(update);
 			},
 		};
 		const withEvictions = (
@@ -850,7 +1091,7 @@ async function runSpawnBatch(
 						...sampling,
 						...controls,
 					} as never,
-					memberContext,
+					countedContext,
 				)) as SpawnAgentOutput;
 				return withEvictions({ name, ...output });
 			}
@@ -871,7 +1112,7 @@ async function runSpawnBatch(
 							}
 						: {}),
 				},
-				memberContext,
+				countedContext,
 			);
 			return withEvictions({ name, ...output });
 		} catch (error) {
@@ -881,17 +1122,84 @@ async function runSpawnBatch(
 			});
 		}
 	}
-	// Built to fit the tool-result cap and name every agent: a round of 75
-	// summaries was cut from the middle, and the lead lost the agents there.
-	return buildSpawnBatchReport(
-		results.map((result, index) => ({
-			...result,
-			...(members[index]?.type?.trim()
-				? { type: members[index]?.type?.trim() }
-				: {}),
-		})),
-		context.sessionId,
+	const runAll = Promise.all(
+		members.map(async (member, index) => {
+			// Each member reports on its own row: the host keys it by the call
+			// and this index, and its stop registration by the same pair.
+			const memberContext: AgentToolContext = {
+				...context,
+				signal: handle.signal,
+				toolCallId: `${context.toolCallId}#${index}`,
+			};
+			const output = await handle.run(index, memberContext, (ctx) =>
+				runBatchMember(member, index, ctx),
+			);
+			reportSubagentFinished(
+				context.emitUpdate &&
+					((update: unknown) =>
+						context.emitUpdate?.({
+							...(update as Record<string, unknown>),
+							member: index,
+						})),
+				output,
+			);
+			return output;
+		}),
 	);
+	if (background) {
+		void runAll.finally(() => handle.close());
+		return backgroundAck(handle);
+	}
+	const leave = rounds.enterBlocking();
+	try {
+		await runAll;
+		await handle.idle();
+		handle.delivered();
+		// Built to fit the tool-result cap and name every agent: a round of 75
+		// summaries was cut from the middle, and the lead lost the agents there.
+		return roundBatchReport(handle, context.sessionId);
+	} finally {
+		leave();
+		handle.close();
+	}
+}
+
+/** A round's batch report, each agent with its id, stop reason and facts. */
+function roundBatchReport(
+	handle: RoundHandle,
+	sessionId: string | undefined,
+): SpawnAgentBatchOutput {
+	const outputs = handle.outputs();
+	return buildSpawnBatchReport(
+		handle.record.agents.map((agent, index) => ({
+			...(outputs[index] as SpawnAgentMemberOutput),
+			name: agent.name,
+			...(agent.type ? { type: agent.type } : {}),
+			id: agent.id,
+			...(agent.stopReason ? { stop: agent.stopReason } : {}),
+			facts: agentFactsLine(agent),
+		})),
+		sessionId,
+		undefined,
+		handle.id,
+	);
+}
+
+/** What an agent moved to another node is told when it carries on. */
+export function requeueNote(reason: string | undefined): string {
+	return `[The lead moved you to another place to run${
+		reason ? ` (${reason})` : ""
+	}. Your work so far is above. Carry on with your task from where you stopped.]`;
+}
+
+/** Its task, with what the lead added when it restarted it. */
+export function withRevisedInstructions(
+	task: string,
+	instructions: string | undefined,
+): string {
+	return instructions?.trim()
+		? `${task}\n\n# Revised instructions from the lead\n\n${instructions.trim()}`
+		: task;
 }
 
 /** One agent: placed through the spawn queue when there are nodes, run, reported. */
@@ -903,22 +1211,15 @@ async function runSpawnedAgent(
 	// Refused before anything is opened: a check that cannot parse would fail
 	// every completion attempt of an agent that can never finish.
 	const controls = controlFields(input);
-	const tools = config.createSubAgentTools
-		? await config.createSubAgentTools(input, context)
-		: (config.subAgentTools ?? []);
-	// Where its check runs: under its own command sandbox, which exists only
-	// once its workspace is open -- above. None means the check is not run.
-	const sandbox = controls.check
-		? config.commandSandboxFor?.(context.toolCallId)
-		: undefined;
-	const task = controls.check
-		? `${input.task}\n\n${describeAgentCheck(controls.check, sandbox !== undefined)}`
-		: input.task;
 	const maxIterations = controls.max_iterations ?? config.defaultMaxIterations;
 	// Held past the call when the agent is detached at its cap: its
 	// workspace, stop registration and engine session go when it is done.
 	const lifetime = createDelegatedAgentLifetime();
 	let capOutcome: DelegatedRunOutcome | undefined;
+	// Where its check runs, and the task that states the check: set per
+	// attempt, once that attempt's workspace is open.
+	let sandbox: { wrapSpawn: OracleSpawnWrapper; cwd: string } | undefined;
+	let task = input.task;
 	// Where it runs is decided before it is built: a node is a whole agents
 	// configuration, so which node took this agent decides which model it
 	// is. Without nodes this is undefined and the agent runs on the single
@@ -933,20 +1234,8 @@ async function runSpawnedAgent(
 	const progress = createSubagentProgress(
 		context.emitUpdate,
 		config.onSubAgentEvent,
-	);
-	// How long it has been stuck, for the lead: after long enough without
-	// progress the lead is told, once, and may take the task back.
-	const trouble = createAgentTroubleWatch({
-		sessionId: context.sessionId,
-		name: input.name ?? "agent",
-		...(config.logger ? { logger: config.logger } : {}),
-	});
-	// Queued again while its requests wait for room on the engine.
-	const stopRoomWatch = watchPolykvRoom(
-		engineSessionId,
-		context.emitUpdate,
-		config.logger,
-		(reason) => trouble.waiting(roomWaitTrouble(reason)),
+		Date.now,
+		{ onCompaction: compactionLogger(input.name ?? "agent", config.logger) },
 	);
 	// Its own abort signal, so a runaway agent can be stopped without
 	// cancelling the session and the siblings that are working.
@@ -955,6 +1244,25 @@ async function runSpawnedAgent(
 		cancelId,
 		context.signal,
 		input.name,
+	);
+	// How long it has been stuck, for the lead: after long enough without
+	// progress the lead is told, once, and may take the task back. Each wait
+	// is also on its row's channel, for its round's status.
+	const trouble = reportWaits(
+		createAgentTroubleWatch({
+			sessionId: context.sessionId,
+			name: input.name ?? "agent",
+			...(config.logger ? { logger: config.logger } : {}),
+		}),
+		context.emitUpdate,
+		cancellation,
+	);
+	// Queued again while its requests wait for room on the engine.
+	const stopRoomWatch = watchPolykvRoom(
+		engineSessionId,
+		context.emitUpdate,
+		config.logger,
+		(reason) => trouble.waiting(roomWaitTrouble(reason)),
 	);
 	// Announced rather than reconstructed by the reader. The chat row is the
 	// thing that offers the stop, and it must name exactly what was
@@ -966,26 +1274,32 @@ async function runSpawnedAgent(
 	// The lead's sampler, when it gave one. Carried as a build option, so a
 	// re-placement onto another node keeps it.
 	// Drawn here, once: a random seed, and where in its range a random
-	// temperature falls, are this agent's for every attempt.
-	const sampling = drawSpawnSampling(readSpawnSampling(input));
+	// temperature falls, are this agent's for every attempt -- and for every
+	// requeue. A restart starts the agent over, and draws a random one again.
+	const requestedSampling = readSpawnSampling(input);
+	let sampling = drawSpawnSampling(requestedSampling);
 	// What the latest build made of it, for the result.
 	let realizedSampling: RealizedSpawnSampling | undefined;
 	// From the first build, kept across re-placements: the observers identify
 	// one delegation, not one attempt at it.
 	let started: { subAgentId: string; conversationId: string } | undefined;
+	let tools: AgentTool[] = [];
 
 	// Built per attempt, because the node IS the configuration: the provider
 	// is read once at construction.
 	const attempt = async (
 		provider: DelegatedAgentConfigProvider,
 		admitted: () => void,
-		recoverTurnFault?: TurnFaultRecovery,
+		recoverTurnFault: TurnFaultRecovery | undefined,
+		carry: SubagentRequeueCarry | undefined,
 	): Promise<AgentResult> => {
 		const connection = provider.getConnectionConfig();
 		// The row names the model while it runs, not only once it is done.
 		reportSubagentModel(context.emitUpdate, {
 			providerId: connection.providerId,
 			modelId: connection.modelId,
+			knownModels: connection.knownModels,
+			maxIterations: maxIterations ?? provider.getRuntimeConfig().maxIterations,
 		});
 		const pooled = isPolykvProvider({
 			providerId: connection.providerId,
@@ -995,7 +1309,7 @@ async function runSpawnedAgent(
 		});
 		const layout = await buildSubagentLayout({
 			instructions: input.instructions ?? input.systemPrompt ?? "",
-			task,
+			task: withRevisedInstructions(task, cancellation.instructions),
 			...(input.knowledge ? { knowledge: input.knowledge } : {}),
 			pooled,
 			cwd: provider.getRuntimeConfig().cwd,
@@ -1062,6 +1376,8 @@ async function runSpawnedAgent(
 					onWaiting: trouble.waiting,
 				}),
 		});
+		// Its transcript, should the lead requeue it.
+		cancellation.track(agent);
 		if (!started) {
 			started = {
 				subAgentId: agent.getAgentId(),
@@ -1084,10 +1400,17 @@ async function runSpawnedAgent(
 		// `agent-iteration-cap.ts`.
 		const outcome = await runDelegatedWithCap({
 			agent,
-			start: () =>
-				layout.pinnedHead.length > 0
-					? agent.runWithHead(layout.pinnedHead, layout.task)
-					: agent.run(layout.task),
+			start: async () => {
+				if (carry && carry.messages.length > 0) {
+					// Requeued: it carries on from its own transcript on its new
+					// placement, rather than starting its task over.
+					agent.restore(carry.messages as never);
+					return await agent.continue(requeueNote(carry.reason));
+				}
+				return layout.pinnedHead.length > 0
+					? await agent.runWithHead(layout.pinnedHead, layout.task)
+					: await agent.run(layout.task);
+			},
 			name: input.name ?? "agent",
 			...(maxIterations !== undefined ? { maxIterations } : {}),
 			...(context.sessionId ? { sessionId: context.sessionId } : {}),
@@ -1177,43 +1500,82 @@ async function runSpawnedAgent(
 	};
 
 	try {
-		// Restartable from the row: an attempt abandoned by Restart is run
-		// again from the task, in the same place in the round, and the lead
-		// never sees it. The abandoned attempt's engine session goes first --
-		// a stream the server dropped is still booked there.
+		// Restartable from the row and by the lead: an attempt abandoned by a
+		// restart is run again from the task, in the same place in the round,
+		// on a fresh workspace. The abandoned attempt's engine session goes
+		// first -- a stream the server dropped is still booked there.
 		const { result, placed } = await cancellation.restartable(
 			async (): Promise<{
 				result: AgentResult;
 				placed?: { nodeId: string; nodeLabel?: string };
 			}> => {
-				if (placement) {
-					const outcome = await runPlacedAgent({
-						placement,
-						// The attempt's, not the lead's: a restart while it is still
-						// queued takes it out of the queue as well.
-						signal: cancellation.signal,
-						emitUpdate: context.emitUpdate,
-						...(config.logger ? { logger: config.logger } : {}),
-						label: input.name ?? "a sub-agent",
-						onWaiting: trouble.waiting,
-						run: (node, admitted, recoverTurnFault) =>
-							attempt(node.configProvider, admitted, recoverTurnFault),
-						// A failed spawn's engine session goes before the next try, or
-						// the retry is charged to a window booked for the last one.
-						beforeRetry: async () => {
-							await releasePolykvAgent(engineSessionId);
-						},
-					});
-					return { result: outcome.result, placed: outcome.placed };
-				}
-				// Held to the endpoint's slot count, around the run alone: building
-				// the toolset costs the server nothing, and holding a slot across it
-				// would leave the endpoint idle while a slot was booked.
-				const slotGate = config.configProvider.getRuntimeConfig().slotGate;
-				const run = () => attempt(config.configProvider, () => {});
-				return { result: slotGate ? await slotGate.run(run) : await run() };
+				// Its toolset, over a private workspace when the host sandboxes:
+				// opened per attempt, so a restart starts from a fresh overlay
+				// (opening a key that is open closes the old one first). A
+				// requeue keeps it: the transcript it carries refers to it.
+				tools = config.createSubAgentTools
+					? await config.createSubAgentTools(input, context)
+					: (config.subAgentTools ?? []);
+				// Where its check runs: under its own command sandbox, which
+				// exists only once its workspace is open -- above. None means
+				// the check is not run.
+				sandbox = controls.check
+					? config.commandSandboxFor?.(context.toolCallId)
+					: undefined;
+				task = controls.check
+					? `${input.task}\n\n${describeAgentCheck(controls.check, sandbox !== undefined)}`
+					: input.task;
+				return await cancellation.continuable(
+					async (carry) => {
+						if (placement) {
+							const outcome = await runPlacedAgent({
+								placement,
+								// The segment's, not the lead's: a restart or a requeue
+								// while it is still queued takes it out of the queue.
+								signal: cancellation.signal,
+								emitUpdate: context.emitUpdate,
+								...(config.logger ? { logger: config.logger } : {}),
+								label: input.name ?? "a sub-agent",
+								onWaiting: trouble.waiting,
+								...(carry
+									? {
+											requeued: carry.avoidNodeId
+												? { avoidNodeId: carry.avoidNodeId }
+												: {},
+										}
+									: {}),
+								run: (node, admitted, recoverTurnFault) =>
+									attempt(
+										node.configProvider,
+										admitted,
+										recoverTurnFault,
+										carry,
+									),
+								// A failed spawn's engine session goes before the next try, or
+								// the retry is charged to a window booked for the last one.
+								beforeRetry: async () => {
+									await releasePolykvAgent(engineSessionId);
+								},
+							});
+							return { result: outcome.result, placed: outcome.placed };
+						}
+						// Held to the endpoint's slot count, around the run alone: building
+						// the toolset costs the server nothing, and holding a slot across it
+						// would leave the endpoint idle while a slot was booked.
+						const slotGate = config.configProvider.getRuntimeConfig().slotGate;
+						const run = () =>
+							attempt(config.configProvider, () => {}, undefined, carry);
+						return { result: slotGate ? await slotGate.run(run) : await run() };
+					},
+					(carry) =>
+						requeued(context.emitUpdate, engineSessionId, carry.reason),
+				);
 			},
-			() => restarted(context.emitUpdate, engineSessionId),
+			async () => {
+				// A restart is a new start: a random sampler is drawn again.
+				sampling = drawSpawnSampling(requestedSampling);
+				await restarted(context.emitUpdate, engineSessionId);
+			},
 		);
 		const output = buildOutput(result, capOutcome, placed);
 		// Detached at its cap: its observers -- the hand-back of its workspace

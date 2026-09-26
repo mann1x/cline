@@ -331,3 +331,42 @@ describe("engine evictions in the round report", () => {
 		expect(report.summary.evicted).toBe(0);
 	});
 });
+
+describe("a round's report", () => {
+	// Spec F: every agent result says how it ended; the controls take ids.
+	it("names each agent by its round id, with its stop reason and facts", () => {
+		const report = buildSpawnBatchReport(
+			[
+				{
+					name: "fixer-1",
+					id: "r2-1",
+					stop: "completed",
+					facts: "done (completed) · 4/40 iterations",
+					text: "fixed a.js",
+					finishReason: "completed",
+				},
+				{
+					name: "fixer-2",
+					id: "r2-2",
+					stop: "iteration_cap",
+					facts: "failed (iteration_cap) · 40/40 iterations",
+					text: "ran out",
+					finishReason: "max_iterations",
+				},
+			],
+			"s1",
+			undefined,
+			"r2",
+		);
+		expect(report.round).toBe("r2");
+		expect(report.agents[0]).toMatchObject({ id: "r2-1", stop: "completed" });
+		expect(report.agents[1]).toMatchObject({
+			id: "r2-2",
+			stop: "iteration_cap",
+		});
+		expect(report.reports[1]).toMatchObject({
+			id: "r2-2",
+			facts: "failed (iteration_cap) · 40/40 iterations",
+		});
+	});
+});

@@ -144,7 +144,7 @@ describe("a delegated agent's compactions reach its row", () => {
 			"lead-session",
 		) as unknown as Executable;
 		await swarm.execute(
-			{ systemPrompt: "s", tasks: [{ name: "w1", task: "a" }] },
+			{ wait: true, systemPrompt: "s", tasks: [{ name: "w1", task: "a" }] },
 			context(updates),
 		);
 		expect(updates).toContainEqual(countedFor(0));
@@ -161,6 +161,7 @@ describe("a delegated agent's compactions reach its row", () => {
 		) as unknown as Executable;
 		await tool.execute(
 			{
+				wait: true,
 				merge: true,
 				agents: [
 					{ name: "a", task: "one" },

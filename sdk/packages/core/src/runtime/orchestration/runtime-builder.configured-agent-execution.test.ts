@@ -207,6 +207,11 @@ Write a concise commit message.`,
 			agentId: "configured-sub-agent",
 			// The agent file's cap, reported with the iterations used.
 			maxIterations: 3,
+			// A direct call is a round of one; its result says how it ended.
+			agent: expect.objectContaining({
+				state: "done",
+				stopReason: "completed",
+			}),
 		});
 		expect(runMock).toHaveBeenCalledWith("review this change");
 		expect(onSubAgentStart).toHaveBeenCalledWith(
@@ -229,7 +234,11 @@ Write a concise commit message.`,
 		expect(onSubAgentEnd).toHaveBeenCalledWith(
 			expect.objectContaining({
 				parentAgentId: "parent-agent",
-				result: output,
+				// The run's own output; the round adds its facts after.
+				result: expect.objectContaining({
+					text: "configured result",
+					finishReason: "completed",
+				}),
 			}),
 		);
 
@@ -338,6 +347,11 @@ You are a reviewer.`,
 			finishReason: "completed",
 			usage: { inputTokens: 13, outputTokens: 8 },
 			agentId: "configured-sub-agent",
+			// A direct call is a round of one; its result says how it ended.
+			agent: expect.objectContaining({
+				state: "done",
+				stopReason: "completed",
+			}),
 		});
 		const delegatedConfig = agentConstructorSpy.mock.calls.at(-1)?.[0] as
 			| AgentConfig

@@ -37,6 +37,7 @@ import {
 	type DelegatedRunOutcome,
 	runDelegatedWithCap,
 } from "../../../extensions/tools/team/agent-iteration-cap";
+import { reportWaits } from "../../../extensions/tools/team/agent-rounds";
 import type { DelegatedSandboxProvider } from "../../../extensions/tools/team/agent-sandbox-executors";
 import {
 	createAgentTroubleWatch,
@@ -60,6 +61,10 @@ import {
 import { retryWhileSessionFull } from "../../../extensions/tools/team/session-window-retry";
 import type { SpawnToolOptions } from "../../../extensions/tools/team/spawn-agent-tool";
 import {
+	requeueNote,
+	withRevisedInstructions,
+} from "../../../extensions/tools/team/spawn-agent-tool";
+import {
 	drawSpawnSampling,
 	primeModelTemperature,
 	type RealizedSpawnSampling,
@@ -70,10 +75,17 @@ import {
 	createSpawnSwarmTool,
 	SWARM_REDUCER_PROMPT,
 } from "../../../extensions/tools/team/spawn-swarm-tool";
+import type {
+	SubagentCancellationRegistration,
+	SubagentRequeueCarry,
+} from "../../../extensions/tools/team/subagent-cancellation";
 import { buildSubagentLayout } from "../../../extensions/tools/team/subagent-layout";
 import {
+	compactionLogger,
 	createSubagentProgress,
+	reportSubagentModel,
 	reportSubagentSampling,
+	requeued,
 	watchPolykvRoom,
 } from "../../../extensions/tools/team/subagent-progress";
 import { createTurnFaultRecovery } from "../../../extensions/tools/team/turn-fault-recovery";
@@ -346,6 +358,9 @@ export function createSessionSpawnTool(
 	};
 
 	return createSpawnAgentTool({
+		// The lead's own spawn tool (built with options) is the one its rounds
+		// run agents again through; a sub-agent's nested one is not.
+		...(options ? { sessionId: rootSessionId } : {}),
 		...(options?.swarm ? { swarm: options.swarm } : {}),
 		...(options?.teammates ? { teammates: true } : {}),
 		...(options?.configuredAgents
@@ -539,7 +554,11 @@ export function createSessionSwarmTool(
 		sampling?: SpawnSampling;
 		maxIterations?: number;
 		check?: AgentCheck;
+		control?: SubagentCancellationRegistration;
 	}): Promise<SwarmWorkerResult> => {
+		const control = request.control;
+		// Per segment: a requeue ends one and starts the next on a new signal.
+		const signalNow = () => control?.signal ?? request.signal;
 		const base = configProvider();
 		const workerSessionId = `${rootSessionId}:swarm:${request.name}:${Date.now().toString(36)}`;
 		// Its own private workspace, exactly as a lone `spawn_agent` gets: file
@@ -581,22 +600,34 @@ export function createSessionSwarmTool(
 			: [];
 		// The worker's row: what it is running and writing, as a lone
 		// `spawn_agent` reports it.
-		const progress = createSubagentProgress(request.emitUpdate, (event) =>
-			lifecycle.onSubAgentEvent?.(event),
+		const progress = createSubagentProgress(
+			request.emitUpdate,
+			(event) => lifecycle.onSubAgentEvent?.(event),
+			Date.now,
+			{
+				onCompaction: compactionLogger(
+					`swarm worker ${request.name}`,
+					config.logger,
+				),
+			},
 		);
 		// How long it has been stuck, for the lead: after long enough without
 		// progress the lead is told, once.
-		const trouble = createAgentTroubleWatch({
-			sessionId: rootSessionId,
-			name: request.name,
-			...(config.logger?.log
-				? {
-						logger: {
-							log: (message: string) => config.logger?.log?.(message),
-						},
-					}
-				: {}),
-		});
+		const trouble = reportWaits(
+			createAgentTroubleWatch({
+				sessionId: rootSessionId,
+				name: request.name,
+				...(config.logger?.log
+					? {
+							logger: {
+								log: (message: string) => config.logger?.log?.(message),
+							},
+						}
+					: {}),
+			}),
+			request.emitUpdate,
+			control,
+		);
 		// Queued again while its requests wait for room on the engine.
 		const stopRoomWatch = watchPolykvRoom(
 			workerSessionId,
@@ -624,7 +655,8 @@ export function createSessionSwarmTool(
 		const attempt = async (
 			workerConfig: DelegatedAgentConfigProvider,
 			admitted: () => void,
-			recoverTurnFault?: TurnFaultRecovery,
+			recoverTurnFault: TurnFaultRecovery | undefined,
+			carry: SubagentRequeueCarry | undefined,
 		) => {
 			// The lead's pool lives on the lead's engine. A worker placed on
 			// another endpoint cannot attach to it, and sending the id there
@@ -644,6 +676,12 @@ export function createSessionSwarmTool(
 			// its own at the full per-session window -- 262,144 cells apiece on
 			// a 1M server, four at a time, and the fifth refused 120 times.
 			const connection = workerConfig.getConnectionConfig();
+			reportSubagentModel(request.emitUpdate, {
+				providerId: connection.providerId,
+				modelId: connection.modelId,
+				knownModels: connection.knownModels,
+				maxIterations: config.maxIterations,
+			});
 			const pooled =
 				!attached &&
 				isPolykvProvider({
@@ -654,7 +692,7 @@ export function createSessionSwarmTool(
 				});
 			const layout = await buildSubagentLayout({
 				instructions: request.systemPrompt,
-				task,
+				task: withRevisedInstructions(task, control?.instructions),
 				pooled,
 				cwd: workerConfig.getRuntimeConfig().cwd,
 			});
@@ -708,9 +746,10 @@ export function createSessionSwarmTool(
 				kind: "subagent",
 				struggle,
 				...(check ? { check } : {}),
-				...(request.takeMessage
+				...(request.takeMessage || control
 					? {
-							consumePendingUserMessage: async () => request.takeMessage?.(),
+							consumePendingUserMessage: async () =>
+								(control?.takeMessage ?? request.takeMessage)?.(),
 						}
 					: {}),
 				prompt: layout.systemPrompt,
@@ -739,7 +778,7 @@ export function createSessionSwarmTool(
 				tools,
 				maxIterations,
 				parentAgentId: rootSessionId,
-				...(request.signal ? { abortSignal: request.signal } : {}),
+				...(signalNow() ? { abortSignal: signalNow() } : {}),
 				onEvent: (event) => {
 					if (isAdmissionEvent(event)) {
 						admitted();
@@ -755,7 +794,7 @@ export function createSessionSwarmTool(
 						onWaiting: trouble.waiting,
 						baseUrl: () => connection.baseUrl,
 						headers: () => connection.headers,
-						...(request.signal ? { signal: request.signal } : {}),
+						...(signalNow() ? { signal: signalNow() } : {}),
 						...(request.emitUpdate ? { emitUpdate: request.emitUpdate } : {}),
 						...(config.logger?.log
 							? {
@@ -767,17 +806,26 @@ export function createSessionSwarmTool(
 					}),
 			});
 			agentId = worker.getAgentId?.();
+			// Its transcript, should the lead requeue it.
+			control?.track(worker);
 			// At its cap it waits for the lead, work kept.
 			const outcome = await runDelegatedWithCap({
 				agent: worker,
-				start: () =>
-					layout.pinnedHead.length > 0
-						? worker.runWithHead(layout.pinnedHead, layout.task)
-						: worker.run(layout.task),
+				start: async () => {
+					if (carry && carry.messages.length > 0) {
+						// Requeued: it carries on from its own transcript.
+						worker.restore(carry.messages as never);
+						return await worker.continue(requeueNote(carry.reason));
+					}
+					return layout.pinnedHead.length > 0
+						? await worker.runWithHead(layout.pinnedHead, layout.task)
+						: await worker.run(layout.task);
+				},
 				name: request.name,
 				...(maxIterations !== undefined ? { maxIterations } : {}),
 				sessionId: rootSessionId,
-				...(request.signal ? { signal: request.signal } : {}),
+				...(control?.id ? { cancelId: control.id } : {}),
+				...(signalNow() ? { signal: signalNow() } : {}),
 				...(request.emitUpdate ? { emitUpdate: request.emitUpdate } : {}),
 				...(check ? { check } : {}),
 				// While it waits, its engine session goes back, and so does its
@@ -805,27 +853,47 @@ export function createSessionSwarmTool(
 		});
 		let result: SwarmWorkerResult | undefined;
 		let failure: unknown;
+		// A requeue ends a segment and the next carries its transcript; the
+		// overlay above is the worker's for all of them.
+		const continuable = <T>(
+			run: (carry: SubagentRequeueCarry | undefined) => Promise<T>,
+		): Promise<T> =>
+			control
+				? control.continuable(run, async (carry) => {
+						clearPolykvSession(workerSessionId);
+						await requeued(request.emitUpdate, workerSessionId, carry.reason);
+					})
+				: run(undefined);
 		try {
 			const placement = base.getRuntimeConfig().nodePlacement;
 			if (placement) {
 				// Through the spawn queue like every other agent: a refusal --
 				// the lead's window full, or the admission gate's 429 -- puts the
 				// worker back at the front rather than failing it.
-				const outcome = await runPlacedAgent({
-					placement,
-					...(request.signal ? { signal: request.signal } : {}),
-					...(request.emitUpdate ? { emitUpdate: request.emitUpdate } : {}),
-					...(config.logger ? { logger: config.logger } : {}),
-					label: `swarm worker ${request.name}`,
-					onWaiting: trouble.waiting,
-					run: (node, admitted, recoverTurnFault) =>
-						attempt(node.configProvider, admitted, recoverTurnFault),
-					// A re-placed worker starts clean on its new node: its session
-					// and, if it was the last, its owner go back first.
-					beforeRetry: async () => {
-						await releasePolykvAgent(workerSessionId);
-					},
-				});
+				const outcome = await continuable((carry) =>
+					runPlacedAgent({
+						placement,
+						...(signalNow() ? { signal: signalNow() } : {}),
+						...(request.emitUpdate ? { emitUpdate: request.emitUpdate } : {}),
+						...(config.logger ? { logger: config.logger } : {}),
+						label: `swarm worker ${request.name}`,
+						onWaiting: trouble.waiting,
+						...(carry
+							? {
+									requeued: carry.avoidNodeId
+										? { avoidNodeId: carry.avoidNodeId }
+										: {},
+								}
+							: {}),
+						run: (node, admitted, recoverTurnFault) =>
+							attempt(node.configProvider, admitted, recoverTurnFault, carry),
+						// A re-placed worker starts clean on its new node: its session
+						// and, if it was the last, its owner go back first.
+						beforeRetry: async () => {
+							await releasePolykvAgent(workerSessionId);
+						},
+					}),
+				);
 				result = withCapOutcome({
 					...outcome.result,
 					placed: outcome.placed,
@@ -843,8 +911,8 @@ export function createSessionSwarmTool(
 			// the room comes back when a running worker finishes. Waiting is
 			// the answer; failing the worker throws away a task the round was
 			// asked to do.
-			const runWorker = () =>
-				retryWhileSessionFull(() => attempt(base, () => {}), {
+			const runWorker = (carry: SubagentRequeueCarry | undefined) =>
+				retryWhileSessionFull(() => attempt(base, () => {}, undefined, carry), {
 					onRetry: (retry, waitMs) =>
 						config.logger?.log?.(
 							`[PolyKV] ${request.name} refused: the session's window is full; waiting ${
@@ -853,12 +921,14 @@ export function createSessionSwarmTool(
 						),
 				});
 			// Off the queue the moment it has a slot, not when it ends.
-			const started = () => {
-				request.emitUpdate?.({ queued: false });
-				return runWorker();
-			};
 			result = withCapOutcome(
-				slotGate ? await slotGate.run(started) : await started(),
+				await continuable((carry) => {
+					const started = () => {
+						request.emitUpdate?.({ queued: false });
+						return runWorker(carry);
+					};
+					return slotGate ? slotGate.run(started) : started();
+				}),
 			);
 			if (realizedSampling) {
 				result = { ...result, sampling: realizedSampling };
@@ -904,6 +974,7 @@ export function createSessionSwarmTool(
 	};
 
 	return createSpawnSwarmTool({
+		sessionId: rootSessionId,
 		pools: {
 			snapshot: async () => {
 				const snapshot = await snapshotPolykvSession({

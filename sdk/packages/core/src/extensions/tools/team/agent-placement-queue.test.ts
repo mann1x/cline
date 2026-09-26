@@ -559,3 +559,36 @@ describe("a node in its cool-off", () => {
 		expect(probes).toBe(0);
 	});
 });
+
+describe("a requeued agent's placement", () => {
+	// Spec C: with reason slow/malfunction the current node is deprioritised
+	// for that one placement; the harness still picks the node.
+	it("goes anywhere but the node it was moved off, when another has room", async () => {
+		const queue = createAgentPlacementQueue([
+			node("slow", 1, 2),
+			node("other", 1, 2),
+		]);
+		const lease = await queue.acquire(undefined, { avoid: "slow" });
+		expect(lease.nodeId).toBe("other");
+	});
+
+	it("still goes to that node rather than wait, when nothing else has room", async () => {
+		const queue = createAgentPlacementQueue([
+			node("slow", 1, 2),
+			node("other", 1, 1),
+		]);
+		await queue.acquire();
+		const busy = await queue.acquire(undefined, { avoid: "slow" });
+		expect(busy.nodeId).not.toBe("slow");
+		const fallback = await queue.acquire(undefined, { avoid: "slow" });
+		expect(fallback.nodeId).toBe("slow");
+	});
+
+	it("says, per node, how full it is and whether it is held", () => {
+		const queue = createAgentPlacementQueue([node("a", 1, 2)]);
+		void queue.acquire();
+		expect(queue.nodeStates()).toEqual([
+			{ nodeId: "a", capacity: 2, running: 1 },
+		]);
+	});
+});

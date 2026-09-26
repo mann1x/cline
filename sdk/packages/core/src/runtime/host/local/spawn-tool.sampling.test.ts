@@ -94,6 +94,7 @@ describe("a swarm worker's random sampler", () => {
 		const updates: Array<Record<string, unknown>> = [];
 		const output = (await tool.execute(
 			{
+				wait: true,
 				systemPrompt: "s",
 				seed: "random",
 				temperature: "random",
@@ -151,6 +152,7 @@ describe("a swarm worker's random sampler", () => {
 		const updates: Array<Record<string, unknown>> = [];
 		const output = (await tool.execute(
 			{
+				wait: true,
 				systemPrompt: "s",
 				temperature: "random",
 				tasks: [{ name: "w1", task: "a" }],

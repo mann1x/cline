@@ -111,6 +111,7 @@ describe("a swarm worker attached to the lead's snapshot", () => {
 
 		await tool.execute(
 			{
+				wait: true,
 				systemPrompt: "s",
 				tasks: [{ name: "w1", task: "task for w1" }],
 			},

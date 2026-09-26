@@ -70,7 +70,7 @@ async function call(
 	tool: ReturnType<typeof toolWith>["tool"],
 	input: SpawnSwarmInput,
 ) {
-	return tool.execute(input, context);
+	return tool.execute({ wait: true, ...input }, context);
 }
 
 describe("spawn_swarm", () => {
@@ -506,6 +506,7 @@ describe("spawn_swarm worker rows", () => {
 		});
 		const output = (await tool.execute(
 			{
+				wait: true,
 				systemPrompt: "s",
 				tasks: [
 					{ name: "a", task: "good" },
@@ -549,6 +550,7 @@ describe("spawn_swarm worker rows", () => {
 		});
 		const running = tool.execute(
 			{
+				wait: true,
 				systemPrompt: "s",
 				tasks: [
 					{ name: "fast", task: "fast" },
@@ -589,7 +591,7 @@ describe("spawn_swarm worker rows", () => {
 			runWorker: async () => agentResult('```json\n{"done":["ok"]}\n```'),
 		});
 		const output = (await tool.execute(
-			{ systemPrompt: "s", task: "t", count: 3 },
+			{ wait: true, systemPrompt: "s", task: "t", count: 3 },
 			rowContext(updates as unknown[]),
 		)) as { results?: unknown[] };
 		expect(
@@ -607,7 +609,7 @@ describe("spawn_swarm worker rows", () => {
 			runWorker: async () => agentResult("unused"),
 		});
 		const output = (await tool.execute(
-			{ systemPrompt: "s", tasks: [{ name: "a", task: "t" }] },
+			{ wait: true, systemPrompt: "s", tasks: [{ name: "a", task: "t" }] },
 			rowContext([]),
 		)) as { results?: Array<Record<string, unknown>>; digest: string };
 		expect(output.results?.[0]?.error).toMatch(/never started/);
@@ -623,7 +625,7 @@ describe("spawn_swarm worker rows", () => {
 			runWorker: run,
 		});
 		const output = (await tool.execute(
-			{ systemPrompt: "s", tasks: [{ name: "a", task: "t" }] },
+			{ wait: true, systemPrompt: "s", tasks: [{ name: "a", task: "t" }] },
 			{
 				agentId: "lead",
 				sessionId: "s1",
@@ -721,6 +723,7 @@ describe("spawn_swarm temperature and seed", () => {
 		} as never);
 		const output = (await tool.execute(
 			{
+				wait: true,
 				systemPrompt: "s",
 				seed: "random",
 				tasks: [
@@ -860,6 +863,7 @@ describe("spawn_swarm iteration cap and check", () => {
 		);
 		const output = (await call(tool, {
 			systemPrompt: "s",
+			wait: true,
 			tasks: [
 				{ name: "a", task: "a" },
 				{ name: "b", task: "b" },

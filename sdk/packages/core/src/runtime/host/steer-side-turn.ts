@@ -26,15 +26,27 @@ import { subagentCancellation } from "../../extensions/tools/team/subagent-cance
 
 type Message = LlmsProviders.MessageWithMetadata;
 
-/** Turns the side run may take: one to act, one to answer, one spare. */
-export const STEER_SIDE_TURN_MAX_ITERATIONS = 4;
+/**
+ * Turns the side run may take.
+ *
+ * Four ran out in 4 of the 8 side turns of swarm 0926: a side turn now reads
+ * the round (`agents_status`, sometimes twice -- summary, then an agent's
+ * detail), acts on it (`message_agents`, `stop_agents`, `requeue_agent`,
+ * `restart_agent`, `resume_agent`, `retry_failed`; a model often issues these
+ * one per turn rather than in one batch), and then answers. Status twice,
+ * four controls and the reply is seven; ten leaves room for one tool error
+ * the model corrects and one more look, and still bounds a side run that
+ * loops -- it is a copy of the lead answering one message, not a work turn.
+ */
+export const STEER_SIDE_TURN_MAX_ITERATIONS = 10;
 
 export interface SteerSideTurnRunner {
 	/** Seed the copy of the lead's conversation. */
 	restore(messages: readonly Message[]): void;
 	/**
-	 * Run one user message on it; resolves with the final text, and how the
-	 * run ended when the runner says.
+	 * Run one user message on it; resolves with the final text, and why the
+	 * run ended when it says (a run that hit its cap or failed ends with the
+	 * runtime's message as its text, which is not a reply).
 	 */
 	continue(message: string): Promise<{ text: string; finishReason?: string }>;
 }
@@ -62,6 +74,12 @@ export interface SteerSideTurnResult {
 	actions: string[];
 	/** The side turn itself failed; the message still needs the lead. */
 	failed?: boolean;
+	/**
+	 * How it failed: `iteration_cap` when it ran out of turns before it
+	 * replied, `error` when its run ended in an error. About the side turn,
+	 * never about the agents.
+	 */
+	failure?: "iteration_cap" | "error";
 }
 
 /** The agents of this session's round, as the lead's side turn is shown them. */
@@ -228,9 +246,25 @@ export async function runSteerSideTurn(
 		const result = await runner.continue(`${preamble}\n${input.message}`);
 		// The side turn's own cap is the side turn's, never the round's. Its
 		// "exceeded maxIterations (4)" handed on as the reply was read by the lead
-		// as a cap on its agents (pandorum 2ge0c) -- a cap none of them had.
+		// as a cap on its agents (pandorum 2ge0c) -- a cap none of them had. A
+		// run that ended in an error likewise ends with the runtime's message
+		// as its text, which is not what the lead said.
 		if (result.finishReason === "max_iterations") {
-			return { reply: SIDE_TURN_OUT_OF_TURNS, actions };
+			return {
+				reply: SIDE_TURN_OUT_OF_TURNS,
+				actions,
+				failed: true,
+				failure: "iteration_cap",
+			};
+		}
+		if (result.finishReason === "error") {
+			return {
+				reply:
+					"My reply between the agents' progress failed before I could answer. Your message is queued for my next turn.",
+				actions,
+				failed: true,
+				failure: "error",
+			};
 		}
 		return { reply: result.text.trim(), actions };
 	} catch (error) {
@@ -240,6 +274,7 @@ export async function runSteerSideTurn(
 			}. Your message is queued for when the round returns.`,
 			actions,
 			failed: true,
+			failure: "error",
 		};
 	}
 }
@@ -253,6 +288,25 @@ export function describeSideTurnForLead(
 	result: SteerSideTurnResult,
 	source: "user" | "system" = "user",
 ): string {
+	if (result.failed) {
+		const what =
+			result.failure === "iteration_cap"
+				? `the side turn ran out of its ${STEER_SIDE_TURN_MAX_ITERATIONS} iterations before it replied`
+				: "the side turn failed before it replied";
+		return [
+			`While your agents were running, ${
+				source === "system"
+					? "the agent system reported agents stuck for a long time"
+					: "the user sent a message"
+			}, and a side turn was started to answer it, but ${what}. This is about that side turn, not about your agents: none of them hit a limit because of it.`,
+			`${source === "system" ? "The report said" : "The user said"}: ${message.trim()}`,
+			`What was shown in place of a reply: ${result.reply}`,
+			result.actions.length > 0
+				? `Before it stopped, you did: ${result.actions.join(" ")}`
+				: "It did nothing to the round.",
+			"It still needs your answer.",
+		].join("\n");
+	}
 	return [
 		source === "system"
 			? "While your agents were running, the agent system reported agents stuck for a long time, and you answered it in a side turn. This already happened; do not repeat it. If you stopped agents, their tasks are yours to do now."

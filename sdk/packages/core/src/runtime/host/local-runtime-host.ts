@@ -61,6 +61,10 @@ import {
 } from "../../extensions/tools/task-progress";
 import type { TeamEvent } from "../../extensions/tools/team";
 import { clearAgentReports } from "../../extensions/tools/team/agent-reports";
+import {
+	releaseRounds,
+	roundsFor,
+} from "../../extensions/tools/team/agent-rounds";
 import type { DelegatedSandboxProvider } from "../../extensions/tools/team/agent-sandbox-executors";
 import {
 	agentEndpointKey,
@@ -785,6 +789,12 @@ export class LocalRuntimeHost implements RuntimeHost {
 		const sessionDir = join(sessionsDir, sessionId);
 		const messagesPath = join(sessionDir, `${sessionId}.messages.json`);
 		const manifestPath = join(sessionDir, `${sessionId}.json`);
+		// The lead's rounds live beside its transcript, so a round survives the
+		// lead's compaction and a reload: `retry_failed` still has every
+		// agent's original task. A resumed session gets its rounds back.
+		roundsFor(sessionId).attachStore(
+			join(sessionDir, `${sessionId}.rounds.json`),
+		);
 		const workspacePath = resolveWorkspacePath(input.config);
 
 		// An interactive session started without a prompt has no turn in
@@ -2723,7 +2733,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 					} as AgentConfig);
 					return {
 						restore: (messages) => runner.restore(messages),
-						continue: (text) => runner.continue(text),
+						continue: async (text) => {
+							const result = await runner.continue(text);
+							return {
+								text: result.text,
+								finishReason: result.finishReason,
+							};
+						},
 					};
 				},
 			});
@@ -2744,12 +2760,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 				},
 			});
 			// For the lead's own next turn: the exchange is not in its history.
-			// A side turn that failed hands the message itself on, as it would
-			// have been queued without one.
+			// A side turn that failed says so -- that it was the side turn, and
+			// what it did before -- and hands the message on for an answer.
 			this.pendingPromptsController.enqueue(sessionId, {
-				prompt: result.failed
-					? message
-					: describeSideTurnForLead(message, result, source),
+				prompt: describeSideTurnForLead(message, result, source),
 				delivery: "steer",
 			});
 		});
@@ -4365,6 +4379,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// it was started from: the conversation it would report into is gone.
 		this.backgroundDelegations.get(session.sessionId)?.stopAll();
 		this.backgroundDelegations.delete(session.sessionId);
+		// Its rounds too, written down first.
+		releaseRounds(session.sessionId);
 		this.sideTurnConfigs.delete(session.sessionId);
 		this.leadNudgeUnsubscribes.get(session.sessionId)?.();
 		this.leadNudgeUnsubscribes.delete(session.sessionId);
@@ -4461,6 +4477,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// it was started from: the conversation it would report into is gone.
 		this.backgroundDelegations.get(session.sessionId)?.stopAll();
 		this.backgroundDelegations.delete(session.sessionId);
+		releaseRounds(session.sessionId);
 		this.sessions.delete(session.sessionId);
 		if (cleanupErrors.length > 0) {
 			throw cleanupErrors[0];

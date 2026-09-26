@@ -256,6 +256,30 @@ export interface AgentNodePlacement {
 	base: DelegatedAgentConfigProvider;
 	occupancy(): ReadonlyMap<string, number>;
 	readonly waiting: number;
+	/**
+	 * Every node as the lead's status tool reports it: what it runs, how full
+	 * it is, and whether it is out of rotation. Optional for hand-built
+	 * placements in tests.
+	 */
+	describe?(): AgentNodeStatus[];
+}
+
+/** One node, for `agents_status`. */
+export interface AgentNodeStatus {
+	nodeId: string;
+	label?: string;
+	priority: number;
+	providerId?: string;
+	modelId?: string;
+	baseUrl?: string;
+	/** The node's provider config: its PolyKV section, when it has one. */
+	providerConfig?: unknown;
+	capacity: number;
+	running: number;
+	/** Out of rotation until then: not answering, or without its model. */
+	downUntil?: number;
+	/** Held after a refusal until then. */
+	heldUntil?: number;
 }
 
 /**
@@ -357,6 +381,32 @@ export function createAgentNodePlacement(input: {
 		occupancy: () => queue.occupancy(),
 		get waiting() {
 			return queue.waiting;
+		},
+		describe: () => {
+			const states = new Map(
+				queue.nodeStates().map((state) => [state.nodeId, state] as const),
+			);
+			return input.nodes.map((node): AgentNodeStatus => {
+				const connection = (
+					providers.get(node.id) ?? input.base
+				).getConnectionConfig();
+				const state = states.get(node.id);
+				return {
+					nodeId: node.id,
+					...(node.label ? { label: node.label } : {}),
+					priority: node.priority,
+					providerId: connection.providerId,
+					modelId: connection.modelId,
+					...(connection.baseUrl ? { baseUrl: connection.baseUrl } : {}),
+					...(connection.providerConfig
+						? { providerConfig: connection.providerConfig }
+						: {}),
+					capacity: state?.capacity ?? node.capacity,
+					running: state?.running ?? 0,
+					...(state?.downUntil ? { downUntil: state.downUntil } : {}),
+					...(state?.heldUntil ? { heldUntil: state.heldUntil } : {}),
+				};
+			});
 		},
 	};
 }

@@ -247,6 +247,12 @@ export interface PlacedRunInput {
 	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 	/** Between a failed spawn and the next placement: close its engine session. */
 	beforeRetry?: () => Promise<void>;
+	/**
+	 * The first placement of an agent the lead requeued: back at the front of
+	 * the queue, and off the node it named as slow or misbehaving when another
+	 * has room. Re-placements after a refusal or a fault are the queue's own.
+	 */
+	requeued?: { avoidNodeId?: string };
 }
 
 export interface PlacedRunOutcome {
@@ -261,7 +267,8 @@ export async function runPlacedAgent(
 	let refusals = 0;
 	let nodeFailures = 0;
 	let transportFailures = 0;
-	let front = false;
+	let front = input.requeued !== undefined;
+	let avoid = input.requeued?.avoidNodeId;
 	// The best admissible headroom a durable refusal has stated, and how many
 	// refusals in a row have failed to beat it: what the node's hold grows by.
 	let bestHeadroom = -1;
@@ -270,8 +277,11 @@ export async function runPlacedAgent(
 		reportSubagentQueued(input.emitUpdate);
 		const placed = await input.placement.place(
 			input.signal,
-			front ? { front: true } : undefined,
+			front || avoid
+				? { ...(front ? { front: true } : {}), ...(avoid ? { avoid } : {}) }
+				: undefined,
 		);
+		avoid = undefined;
 		reportSubagentPlaced(input.emitUpdate, placed);
 		let admitted = false;
 		const admit = (): void => {

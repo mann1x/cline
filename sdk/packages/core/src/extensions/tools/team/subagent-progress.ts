@@ -84,14 +84,30 @@ export function reportSubagentPlaced(
  */
 export function reportSubagentModel(
 	emitUpdate: ((update: unknown) => void) | undefined,
-	model: { providerId?: string; modelId?: string },
+	model: {
+		providerId?: string;
+		modelId?: string;
+		/** The connection's model catalog, for the model's context window. */
+		knownModels?: Record<string, { contextWindow?: number } | undefined>;
+		/** The iteration cap this attempt runs under, for the lead's status. */
+		maxIterations?: number;
+	},
 ): void {
 	if (!model.providerId && !model.modelId) {
 		return;
 	}
+	const contextWindow = model.modelId
+		? model.knownModels?.[model.modelId]?.contextWindow
+		: undefined;
 	emitUpdate?.({
 		...(model.providerId ? { providerId: model.providerId } : {}),
 		...(model.modelId ? { modelId: model.modelId } : {}),
+		...(typeof contextWindow === "number" && contextWindow > 0
+			? { contextWindow }
+			: {}),
+		...(typeof model.maxIterations === "number" && model.maxIterations > 0
+			? { maxIterations: model.maxIterations }
+			: {}),
 	});
 }
 
@@ -146,6 +162,28 @@ export async function restarted(
 		latestOutput: "Restarted: starting again from its task",
 		latestOutputKind: "text",
 		activity: { text: "Restarted: starting again from its task" },
+	});
+	if (engineSessionId) {
+		await releasePolykvAgent(engineSessionId).catch(() => undefined);
+	}
+}
+
+/**
+ * The lead requeued the agent: it stopped at a boundary and goes back to the
+ * placement queue with its transcript. The row says so, and the engine
+ * session it held goes back -- it may be placed on another node.
+ */
+export async function requeued(
+	emitUpdate: ((update: unknown) => void) | undefined,
+	engineSessionId: string | undefined,
+	reason?: string,
+): Promise<void> {
+	const line = `Requeued by the lead${reason ? ` (${reason})` : ""}: placed again, carrying on from where it stopped`;
+	emitUpdate?.({
+		queued: true,
+		latestOutput: line,
+		latestOutputKind: "text",
+		activity: { text: line },
 	});
 	if (engineSessionId) {
 		await releasePolykvAgent(engineSessionId).catch(() => undefined);
@@ -254,7 +292,7 @@ export function watchPolykvRoom(
  * started a process on the spot.
  */
 export const DELEGATION_PACING_NOTE =
-	"Launching many is safe: the harness paces them. Each agent starts when a node has room for it and waits in a queue until then, so asking for more than can run at once overloads nothing -- it only means some start later. A call returns when every agent in it has finished, and your next message is sent only after that -- so ask for the whole job at once: one `spawn_agent` call whose `agents` list holds every agent (a configured agent by `type`, several of one kind with `count`), or every call in the same message.";
+	"Launching many is safe: the harness paces them. Each agent starts when a node has room for it and waits in a queue until then, so asking for more than can run at once overloads nothing -- it only means some start later. A call that waits returns when every agent in it has finished, and your next message is sent only after that -- so ask for the whole job at once: one `spawn_agent` call whose `agents` list holds every agent (a configured agent by `type`, several of one kind with `count`), or every call in the same message.";
 
 /** One finished compaction, as the agent's row reports it. */
 export interface SubagentCompaction {
@@ -324,10 +362,39 @@ function describeCompaction(compaction: SubagentCompaction): string {
 	return `Compacted its context (${COMPACTION_CAUSE_LABEL[compaction.cause]})${tokens}`;
 }
 
+/**
+ * A compaction observer that logs one info line per completed compaction:
+ * the agent, the cause, and its tokens before and after. The row shows the
+ * count; the log is what is left to analyse after a run (swarm 0926).
+ */
+export function compactionLogger(
+	name: string,
+	logger: { log?: (message: string) => void } | undefined,
+): ((compaction: SubagentCompaction) => void) | undefined {
+	if (!logger?.log) {
+		return undefined;
+	}
+	const format = (value: number) => Intl.NumberFormat("en-US").format(value);
+	return (compaction) => {
+		const tokens =
+			compaction.tokensBefore !== undefined &&
+			compaction.tokensAfter !== undefined
+				? `: ${format(compaction.tokensBefore)} → ${format(compaction.tokensAfter)} tokens`
+				: "";
+		logger.log?.(
+			`[Agents] ${name} compacted its context (cause: ${compaction.cause})${tokens}`,
+		);
+	};
+}
+
 export function createSubagentProgress(
 	emitUpdate: ((update: unknown) => void) | undefined,
 	forward?: (event: AgentEvent) => void,
 	now: () => number = Date.now,
+	options?: {
+		/** Told of each completed compaction, row or no row. */
+		onCompaction?: (compaction: SubagentCompaction) => void;
+	},
 ): SubagentProgress {
 	let toolCalls = 0;
 	// Compactions it has finished, in total and by why they ran: an agent
@@ -385,13 +452,21 @@ export function createSubagentProgress(
 	return {
 		observe(event: AgentEvent): void {
 			forward?.(event);
+			// A compaction finished: counted beside its tool calls, and said on
+			// its activity -- a compaction on a local model is minutes of
+			// silence that otherwise reads as a stuck agent. Told to the
+			// observer first, whether or not there is a row to show it on.
+			const compaction = readCompactionNotice(event);
+			if (compaction) {
+				try {
+					options?.onCompaction?.(compaction);
+				} catch {
+					// A log line is not worth an agent.
+				}
+			}
 			if (!emitUpdate) {
 				return;
 			}
-			// A compaction finished: counted beside its tool calls, and said on
-			// its activity -- a compaction on a local model is minutes of
-			// silence that otherwise reads as a stuck agent.
-			const compaction = readCompactionNotice(event);
 			if (compaction) {
 				compactions += 1;
 				compactionsByCause[compaction.cause] =
@@ -402,6 +477,11 @@ export function createSubagentProgress(
 					lastCompaction: compaction,
 					activity: { text: describeCompaction(compaction) },
 				});
+				return;
+			}
+			// Its turns, for the lead's status: iterations used against its cap.
+			if (event.type === "iteration_start") {
+				emitUpdate({ iterations: event.iteration });
 				return;
 			}
 			// What it has spent, every turn. Nothing reported usage while an

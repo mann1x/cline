@@ -82,9 +82,20 @@ export interface SpawnBatchMemberResult {
 	 * engine bug: no session is ever meant to be evicted.
 	 */
 	evicted?: number;
+	/** Its id in the round (`r2-3`), what the lead's controls take. */
+	id?: string;
+	/** Why it stopped, in the round's taxonomy. */
+	stop?: string;
+	/**
+	 * State, stop reason, iterations, tokens, compactions, check, sampler and
+	 * node, on one line (section F of the lead-control spec).
+	 */
+	facts?: string;
 }
 
 export interface SpawnBatchIndexEntry {
+	/** Its id in the round, for `agents_status` and the controls. */
+	id?: string;
 	name: string;
 	status: SpawnBatchStatus;
 	failureClass?: SpawnBatchFailureClass;
@@ -103,6 +114,8 @@ export interface SpawnBatchIndexEntry {
 	oracle?: string;
 	/** Times the engine evicted it, when it did. */
 	evicted?: number;
+	/** Why it stopped, in the round's taxonomy. */
+	stop?: string;
 }
 
 export interface SpawnBatchSummary {
@@ -136,12 +149,18 @@ export interface SpawnBatchReport {
 	agents: Array<SpawnBatchIndexEntry | string>;
 	reports: Array<{
 		name: string;
+		/** Its id in the round (`r2-3`). */
+		id?: string;
+		/** Section F's facts on one line. */
+		facts?: string;
 		text: string;
 		/** Its check, with the end of the output, when one was set. */
 		oracle?: Pick<AgentOracleResult, "status" | "exitCode" | "output"> & {
 			reason?: string;
 		};
 	}>;
+	/** The round this call opened: its id, for `agents_status` and `retry_failed`. */
+	round?: string;
 	notShown?: {
 		names: string[];
 		note: string;
@@ -244,8 +263,10 @@ function indexEntry(
 	const line =
 		status === "completed" ? oneLine(result.text, lineChars) : undefined;
 	return {
+		...(result.id ? { id: result.id } : {}),
 		name: result.name,
 		status,
+		...(result.stop ? { stop: result.stop } : {}),
 		...(failureClass ? { failureClass } : {}),
 		...(line ? { line } : {}),
 		...(why ? { error: why } : {}),
@@ -292,7 +313,7 @@ function oracleWord(oracle: AgentOracleResult): string {
 function compactIndexEntry(result: SpawnBatchMemberResult): string {
 	const failureClass = failureClassOf(result);
 	return [
-		result.name,
+		result.id ? `${result.id}:${result.name}` : result.name,
 		statusOf(result),
 		...(failureClass ? [failureClass] : []),
 		...(result.state === "awaiting_lead" && result.agentId
@@ -328,6 +349,7 @@ export function buildSpawnBatchReport(
 	results: readonly SpawnBatchMemberResult[],
 	sessionId: string | undefined,
 	budget = SPAWN_BATCH_RESULT_BUDGET_CHARS,
+	round?: string,
 ): SpawnBatchReport {
 	const summary: SpawnBatchSummary = {
 		total: results.length,
@@ -389,12 +411,13 @@ export function buildSpawnBatchReport(
 		agents = results.map((result) =>
 			tier < 0 ? compactIndexEntry(result) : indexEntry(result, tier),
 		);
-		if (jsonLength({ summary, agents }) + reserve <= budget) {
+		if (jsonLength({ round, summary, agents }) + reserve <= budget) {
 			break;
 		}
 	}
 
 	const report: SpawnBatchReport = {
+		...(round ? { round } : {}),
 		summary,
 		agents,
 		reports: [],
@@ -409,6 +432,8 @@ export function buildSpawnBatchReport(
 		}
 		const entry = {
 			name: result.name,
+			...(result.id ? { id: result.id } : {}),
+			...(result.facts ? { facts: result.facts } : {}),
 			text,
 			...(result.oracle
 				? {

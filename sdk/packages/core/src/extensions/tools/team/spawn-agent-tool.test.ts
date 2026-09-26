@@ -227,6 +227,14 @@ describe("createSpawnAgentTool", () => {
 			// What `resume_agent` and the status tool name it by, and its cap.
 			agentId: "sub-agent-1",
 			maxIterations: 4,
+			// Section F: every result says how it ended and what it spent.
+			agent: expect.objectContaining({
+				state: "done",
+				stopReason: "completed",
+				iterations: 2,
+				maxIterations: 4,
+				tokens: { input: 11, output: 7 },
+			}),
 		});
 		expect(agentConstructorSpy).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -708,6 +716,57 @@ describe("createSpawnAgentTool", () => {
 			.map((update) => update as { cancelId: string; member: number });
 		expect(cancelIds.map((entry) => entry.member).sort()).toEqual([0, 1]);
 		expect(new Set(cancelIds.map((entry) => entry.cancelId)).size).toBe(2);
+	});
+
+	// The lead's evaluation of swarm 0926: after compaction it no longer had
+	// the tasks it had given. A batch is a round that keeps them.
+	it("opens a round that keeps each agent's task, and names every agent by id", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const { roundsFor, __resetAgentRounds } = await import("./agent-rounds.js");
+		__resetAgentRounds();
+		runMock.mockImplementation(async (task: string) => ({
+			text: `report for ${task}`,
+			iterations: 2,
+			finishReason: "completed",
+			usage: { inputTokens: 3, outputTokens: 2 },
+		}));
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "mock-model",
+			}),
+		});
+		const output = (await tool.execute(
+			{
+				knowledge: { files: ["a.js"] },
+				instructions: "You review code.",
+				agents: [
+					{ name: "one", task: "lines 1-50" },
+					{ name: "two", task: "lines 51-100" },
+				],
+			},
+			{
+				agentId: "parent-1",
+				iteration: 1,
+				toolCallId: "call-8",
+				sessionId: "lead-rounds",
+			} as never,
+		)) as SpawnBatchReport;
+		expect(output.round).toBe("r1");
+		expect(
+			(output.agents as SpawnBatchIndexEntry[]).map((entry) => entry.id),
+		).toEqual(["r1-1", "r1-2"]);
+		expect(output.reports[0]?.facts).toMatch(/^done \(completed\)/);
+		const round = roundsFor("lead-rounds").get("r1");
+		expect(round?.shared).toMatchObject({
+			knowledge: { files: ["a.js"] },
+			instructions: "You review code.",
+		});
+		expect(round?.agents.map((agent) => [agent.task, agent.state])).toEqual([
+			["lines 1-50", "done"],
+			["lines 51-100", "done"],
+		]);
+		expect(round?.delivered).toBe(true);
 	});
 
 	it("runs an entry naming a configured agent through that agent's own tool", async () => {

@@ -62,7 +62,14 @@ import {
 	maxIterationsOf,
 } from "./agent-controls";
 import type { DelegatedStopReason } from "./agent-iteration-cap";
+import {
+	agentFactsLine,
+	type RoundAgentSpec,
+	type RoundMemberOutput,
+	roundsFor,
+} from "./agent-rounds";
 import type { HandedRevision } from "./delegated-sandboxes";
+import { backgroundAck } from "./spawn-agent-tool";
 import {
 	mergeSpawnSampling,
 	type RealizedSpawnSampling,
@@ -74,6 +81,7 @@ import {
 } from "./spawn-sampling";
 import {
 	registerSubagentCancellation,
+	type SubagentCancellationRegistration,
 	subagentCancelId,
 } from "./subagent-cancellation";
 import { reportSubagentFinished, restarted } from "./subagent-progress";
@@ -144,6 +152,12 @@ export const SpawnSwarmInputSchema = z.object({
 	check: AgentControlFields.check.describe(
 		"Every worker's check, unless its task sets its own.",
 	),
+	wait: z
+		.boolean()
+		.optional()
+		.describe(
+			"Wait for the swarm to finish before this call returns. Default false: the call returns at once with a round id, the workers run while you keep working, and the merged report is delivered to you when the round ends (`await_agents` waits for it explicitly).",
+		),
 });
 
 export type SpawnSwarmInput = z.infer<typeof SpawnSwarmInputSchema>;
@@ -175,6 +189,19 @@ export interface SpawnSwarmOutput {
 	 * and a worker that failed -- or never started -- said so nowhere.
 	 */
 	results?: SwarmMemberReport[];
+	/** The round this call opened, for `agents_status` and `retry_failed`. */
+	round?: string;
+	/** Every worker's id and how it ended, one line of facts each. */
+	agents?: Array<{
+		id: string;
+		name: string;
+		state?: string;
+		stop?: string;
+		facts?: string;
+	}>;
+	/** Set when the round runs in the background and this is its receipt. */
+	background?: true;
+	note?: string;
 }
 
 /** How one worker ended, for its row. */
@@ -189,13 +216,16 @@ export interface SwarmMemberReport {
 	nodeLabel?: string;
 	/** The seed and temperature it ran with, as drawn, when the call set any. */
 	sampling?: RealizedSpawnSampling;
+	/** Its id in the round, and how it ended there. */
+	id?: string;
+	/** Its state in the round: `awaiting_lead` while it waits at its cap. */
+	state?: string;
+	/** The round's stop reason (`iteration_cap` when the cap ended it). */
+	stopReason?: DelegatedStopReason | string;
+	finishReason?: string;
 	/** Iterations used, and its cap where there is one. */
 	iterations?: number;
 	maxIterations?: number;
-	/** `iteration_cap` when the cap is what ended it. */
-	stopReason?: DelegatedStopReason;
-	/** `awaiting_lead`: waiting at its cap, work kept; see `resume_agent`. */
-	state?: "awaiting_lead";
 	/** Its own id, for `resume_agent` and the status tool. */
 	agentId?: string;
 	/** The lead's check, when one was set. */
@@ -296,6 +326,12 @@ export interface SwarmWorkerRequest {
 	maxIterations?: number;
 	/** Its check: the task's, else the swarm's. */
 	check?: AgentCheck;
+	/**
+	 * The worker's own controls: read its signal per segment (a requeue ends
+	 * a segment), run its placement `continuable` so a requeue carries its
+	 * transcript, and `track` the agent it builds.
+	 */
+	control?: SubagentCancellationRegistration;
 }
 
 export interface SpawnSwarmToolConfig {
@@ -330,6 +366,11 @@ export interface SpawnSwarmToolConfig {
 	tickMs?: number;
 	/** Test seam. */
 	sleep?: (ms: number) => Promise<void>;
+	/**
+	 * The lead's session, when the tool is built for one: `retry_failed` and a
+	 * restart of a finished worker then run it again from its round.
+	 */
+	sessionId?: string;
 }
 
 /**
@@ -564,9 +605,123 @@ Rules:
 - An agent that reported an error or nothing must still appear, in notes, by name.
 - Do not add findings none of them reported.`;
 
+/** A worker's result, as its round and its row record it. */
+function swarmMemberOutput(
+	name: string,
+	result: SwarmWorkerResult,
+): SwarmMemberReport & RoundMemberOutput {
+	const failed =
+		result.finishReason === "error" || result.finishReason === "aborted";
+	return {
+		name,
+		text: result.text,
+		finishReason: result.finishReason,
+		iterations: result.iterations,
+		usage: {
+			inputTokens: result.usage?.inputTokens ?? 0,
+			outputTokens: result.usage?.outputTokens ?? 0,
+		},
+		...(result.model
+			? { model: { provider: result.model.provider, id: result.model.id } }
+			: {}),
+		...(result.placed ? result.placed : {}),
+		...(result.sampling ? { sampling: result.sampling } : {}),
+		...(result.maxIterations !== undefined
+			? { maxIterations: result.maxIterations }
+			: {}),
+		...(result.stopReason ? { stopReason: result.stopReason } : {}),
+		...(result.state ? { state: result.state } : {}),
+		...(result.agentId ? { agentId: result.agentId } : {}),
+		...(result.oracle ? { oracle: result.oracle } : {}),
+		...(failed
+			? {
+					error:
+						result.text.trim() ||
+						(result.finishReason === "aborted"
+							? "stopped"
+							: "failed without saying why"),
+				}
+			: {}),
+	};
+}
+
+/**
+ * One worker, under a control of its own: restartable from its row and by the
+ * lead, requeueable, messageable. A worker releases its own engine session
+ * when its run ends, restarted or not.
+ */
+async function runSwarmWorker(
+	config: SpawnSwarmToolConfig,
+	request: SwarmWorkerRequest,
+	context: AgentToolContext,
+	options: {
+		poolId?: string;
+		/** Registered already, so its row's stop worked while it queued. */
+		registration?: SubagentCancellationRegistration;
+		/** Tells the round which control is this worker's. */
+		bind?: (cancelId: string) => void;
+	},
+): Promise<SwarmWorkerResult> {
+	const cancelId = subagentCancelId(context.sessionId, context.toolCallId);
+	const cancellation =
+		options.registration ??
+		registerSubagentCancellation(cancelId, context.signal, request.name);
+	if (cancelId && !options.registration) {
+		options.bind?.(cancelId);
+	}
+	const emitUpdate = context.emitUpdate;
+	try {
+		return await cancellation.restartable(
+			() =>
+				config.runWorker({
+					...request,
+					...(options.poolId ? { poolId: options.poolId } : {}),
+					...(emitUpdate ? { emitUpdate } : {}),
+					...(cancellation.signal ? { signal: cancellation.signal } : {}),
+					takeMessage: cancellation.takeMessage,
+					control: cancellation,
+				}),
+			() => restarted(emitUpdate, undefined),
+		);
+	} finally {
+		if (!options.registration) {
+			cancellation.release();
+		}
+	}
+}
+
 export function createSpawnSwarmTool(
 	config: SpawnSwarmToolConfig,
 ): AgentTool<SpawnSwarmInput, SpawnSwarmOutput> {
+	// A worker of this session's rounds can be run again from its record:
+	// its task, role, tools and sampler. Its pool is gone with its round, so
+	// it runs unpooled and prefills its own prefix.
+	if (config.sessionId !== undefined) {
+		roundsFor(config.sessionId).registerRunner(
+			"swarm",
+			async ({ round, agent, task, context }) => {
+				const result = await runSwarmWorker(
+					config,
+					{
+						name: agent.name,
+						task,
+						systemPrompt: agent.systemPrompt ?? round.shared.systemPrompt ?? "",
+						...(agent.tools ? { tools: agent.tools } : {}),
+						...(agent.sampling ? { sampling: agent.sampling } : {}),
+						...workerControls({
+							...(agent.maxIterations !== undefined
+								? { max_iterations: agent.maxIterations }
+								: {}),
+							...(agent.check !== undefined ? { check: agent.check } : {}),
+						}),
+					},
+					context,
+					{},
+				);
+				return swarmMemberOutput(agent.name, result);
+			},
+		);
+	}
 	const ceiling = Math.max(1, config.maxWorkers ?? DEFAULT_MAX_SWARM_WORKERS);
 	const tickMs = Math.max(0, config.tickMs ?? DEFAULT_SWARM_TICK_MS);
 	/**
@@ -650,56 +805,93 @@ export function createSpawnSwarmTool(
 						? SWARM_RUNAWAY_MAX
 						: Math.min(requested.length, SWARM_RUNAWAY_MAX)
 					: hint;
+			// A swarm runs beside the lead unless it asks to wait: the lead
+			// keeps working, and the round's report is delivered when it ends.
+			const background = input.wait !== true;
+			const rounds = roundsFor(context?.sessionId);
+			const handle = rounds.open({
+				kind: "swarm",
+				tool: "spawn_swarm",
+				...(context?.toolCallId ? { toolCallId: context.toolCallId } : {}),
+				background,
+				shared: {
+					systemPrompt: input.systemPrompt,
+					...(readSpawnSampling(input)
+						? { sampling: readSpawnSampling(input) }
+						: {}),
+				},
+				// Known up front when rowed; `max` adds its workers as it
+				// launches them.
+				agents: rowed
+					? requested.slice(0, queueLength).map((entry) => ({
+							name: entry.name,
+							task: entry.task,
+							...(entry.systemPrompt
+								? { systemPrompt: entry.systemPrompt }
+								: {}),
+							...(entry.tools ? { tools: entry.tools } : {}),
+							...(entry.sampling ? { sampling: entry.sampling } : {}),
+							...(entry.maxIterations !== undefined
+								? { maxIterations: entry.maxIterations }
+								: {}),
+							...(entry.check ? { check: entry.check } : {}),
+						}))
+					: [],
+				...(background
+					? {}
+					: context?.signal
+						? { signal: context.signal }
+						: {}),
+				...(context?.emitUpdate ? { emitUpdate: context.emitUpdate } : {}),
+				rowed,
+			});
 			// Each worker of a task list has a row of its own in the host, keyed
 			// by the call and its index, and a stop of its own under the same
-			// pair. A task repeated `count` times has one row, the call's, and
-			// one stop that reaches every worker on it.
-			const cancellations = rowed
-				? requested.map((entry, index) =>
-						registerSubagentCancellation(
-							subagentCancelId(
-								context?.sessionId,
-								context?.toolCallId
-									? `${context.toolCallId}#${index}`
-									: undefined,
-							),
-							context?.signal,
-							entry.name ?? `worker-${index + 1}`,
-						),
-					)
-				: [
-						registerSubagentCancellation(
-							subagentCancelId(context?.sessionId, context?.toolCallId),
-							context?.signal,
-						),
-					];
-			const updatesFor = (member: number) =>
-				context?.emitUpdate
-					? (update: unknown) =>
-							context.emitUpdate?.(
-								rowed
-									? { ...(update as Record<string, unknown>), member }
-									: update,
-							)
+			// pair -- registered now, so its row's stop works while it queues.
+			// A task repeated `count: "max"` times has one row, the call's, and
+			// one stop that reaches every worker on it -- and each worker still
+			// has a control of its own, under the call's, for the lead.
+			const memberCancellations = new Map<
+				number,
+				SubagentCancellationRegistration
+			>();
+			const callCancellation = rowed
+				? undefined
+				: registerSubagentCancellation(
+						subagentCancelId(context?.sessionId, context?.toolCallId),
+						handle.signal,
+					);
+			const callCancelId = rowed
+				? undefined
+				: subagentCancelId(context?.sessionId, context?.toolCallId);
+			if (callCancelId && callCancellation?.signal) {
+				context?.emitUpdate?.({ cancelId: callCancelId, queued: true });
+			}
+			const memberCallId = (member: number) =>
+				context?.toolCallId
+					? `${context.toolCallId}#${rowed ? member : `w${member}`}`
 					: undefined;
-			const signalFor = (member: number) =>
-				cancellations[rowed ? member : 0]?.signal;
-			cancellations.forEach((cancellation, index) => {
-				const cancelId = rowed
-					? subagentCancelId(
-							context?.sessionId,
-							context?.toolCallId
-								? `${context.toolCallId}#${index}`
-								: undefined,
-						)
-					: subagentCancelId(context?.sessionId, context?.toolCallId);
-				if (cancelId && cancellation.signal) {
-					// Waiting its turn until the supervisor launches it: every row
-					// otherwise starts as "running", and a round of 75 showed 75
-					// agents at work while four of them were.
-					updatesFor(index)?.({ cancelId, queued: true });
-				}
-			});
+			if (rowed) {
+				requested.slice(0, queueLength).forEach((entry, index) => {
+					const cancelId = subagentCancelId(
+						context?.sessionId,
+						memberCallId(index),
+					);
+					const registration = registerSubagentCancellation(
+						cancelId,
+						handle.signal,
+						entry.name,
+					);
+					memberCancellations.set(index, registration);
+					if (cancelId && registration.signal) {
+						handle.bindControl(index, cancelId);
+						// Waiting its turn until the supervisor launches it: every row
+						// otherwise starts as "running", and a round of 75 showed 75
+						// agents at work while four of them were.
+						context?.emitUpdate?.({ cancelId, queued: true, member: index });
+					}
+				});
+			}
 
 			const queue: Array<SwarmWorkerRequest & { member: number }> = explicit
 				? requested.slice(0, queueLength).map((entry, index) => ({
@@ -729,23 +921,18 @@ export function createSpawnSwarmTool(
 							...(first?.check ? { check: first.check } : {}),
 						};
 					});
-			const reports: SwarmMemberReport[] = [];
-			const report = (member: number, entry: SwarmMemberReport): void => {
-				if (rowed) {
-					reports[member] = entry;
-					reportSubagentFinished(updatesFor(member), entry);
-				}
-			};
 
 			// Taken before any worker starts, for the reason at the top of this
 			// file: the host prompt cache clears an idle slot the moment a new
-			// task launches, and the snapshot is of that slot.
+			// task launches, and the snapshot is of that slot. Taken before the
+			// call returns, too, when the round runs in the background: it is
+			// the lead's context as it was when it asked.
 			const snapshot = await config.pools.snapshot().catch(() => undefined);
 
-			let inputTokens = 0;
-			let outputTokens = 0;
-
-			try {
+			const runRound = async (): Promise<SpawnSwarmOutput> => {
+				const reports: SwarmMemberReport[] = [];
+				let inputTokens = 0;
+				let outputTokens = 0;
 				// The supervisor. Launch while the engine says yes and work is
 				// left; when it says no, wait for a worker to finish or for the
 				// tick, then ask again. A slot that frees mid-round belongs to
@@ -757,104 +944,128 @@ export function createSpawnSwarmTool(
 				const handbacks: SwarmHandback[] = [];
 				const inFlight = new Set<Promise<void>>();
 				let started = 0;
+				// Round index per queue member: `max` adds its workers as they
+				// launch.
+				const roundIndex = new Map<number, number>();
+				const indexOf = (worker: { member: number } & RoundAgentSpec) => {
+					let index = roundIndex.get(worker.member);
+					if (index === undefined) {
+						index = rowed
+							? worker.member
+							: handle.add({
+									name: worker.name,
+									task: worker.task,
+									...(worker.systemPrompt
+										? { systemPrompt: worker.systemPrompt }
+										: {}),
+									...(worker.sampling ? { sampling: worker.sampling } : {}),
+									...(worker.maxIterations !== undefined
+										? { maxIterations: worker.maxIterations }
+										: {}),
+									...(worker.check ? { check: worker.check } : {}),
+								});
+						roundIndex.set(worker.member, index);
+					}
+					return index;
+				};
+				const record = (
+					member: number,
+					entry: SwarmMemberReport,
+					index: number | undefined,
+				): void => {
+					const agent = index !== undefined ? handle.agent(index) : undefined;
+					const withFacts = agent
+						? {
+								...entry,
+								id: agent.id,
+								state: agent.state,
+								...(agent.stopReason ? { stopReason: agent.stopReason } : {}),
+							}
+						: entry;
+					if (rowed) {
+						reports[member] = withFacts;
+						reportSubagentFinished(
+							context?.emitUpdate &&
+								((update: unknown) =>
+									context.emitUpdate?.({
+										...(update as Record<string, unknown>),
+										member,
+									})),
+							withFacts,
+						);
+					}
+				};
 
 				const launch = (
 					worker: SwarmWorkerRequest & { member: number },
 				): void => {
 					started += 1;
 					const { member, ...request } = worker;
+					const index = indexOf(worker as never);
+					const registration = memberCancellations.get(member);
 					const running = (async () => {
-						const signal = signalFor(member);
-						if (signal?.aborted) {
+						if (
+							handle.signal.aborted ||
+							callCancellation?.signal?.aborted ||
+							registration?.signal?.aborted
+						) {
+							registration?.release();
 							const error = "stopped before it started";
-							report(member, { name: worker.name, error });
+							handle.never(index, error);
+							record(member, { name: worker.name, error }, index);
 							results.push({ agent: worker.name, error });
 							return;
 						}
-						try {
-							const emitUpdate = updatesFor(member);
-							const cancellation = cancellations[rowed ? member : 0];
-							const runOnce = () => {
-								// Per attempt: a restarted one runs on a fresh signal.
-								const attemptSignal = signalFor(member);
-								return config.runWorker({
-									...request,
-									...(snapshot ? { poolId: snapshot.poolId } : {}),
-									...(emitUpdate ? { emitUpdate } : {}),
-									...(attemptSignal ? { signal: attemptSignal } : {}),
-									...(cancellation
-										? { takeMessage: cancellation.takeMessage }
-										: {}),
-								});
-							};
-							// Restartable from its row. A worker releases its own
-							// engine session when its run ends, restarted or not.
-							const result =
-								rowed && cancellation
-									? await cancellation.restartable(runOnce, () =>
-											restarted(emitUpdate, undefined),
-										)
-									: await runOnce();
-							const handed = handbackOf(result);
-							if (handed) {
-								handbacks.push({ name: worker.name, handed });
-							}
-							inputTokens += result.usage?.inputTokens ?? 0;
-							outputTokens += result.usage?.outputTokens ?? 0;
-							results.push(withControls(digestOf(worker.name, result), result));
-							const failed =
-								result.finishReason === "error" ||
-								result.finishReason === "aborted";
-							report(member, {
-								name: worker.name,
-								text: result.text,
-								usage: {
-									inputTokens: result.usage?.inputTokens ?? 0,
-									outputTokens: result.usage?.outputTokens ?? 0,
-								},
-								...(result.model
-									? {
-											model: {
-												provider: result.model.provider,
-												id: result.model.id,
-											},
-										}
-									: {}),
-								...(result.placed ? result.placed : {}),
-								...(result.sampling ? { sampling: result.sampling } : {}),
-								iterations: result.iterations,
-								...(result.maxIterations !== undefined
-									? { maxIterations: result.maxIterations }
-									: {}),
-								...(result.stopReason ? { stopReason: result.stopReason } : {}),
-								...(result.state ? { state: result.state } : {}),
-								...(result.agentId ? { agentId: result.agentId } : {}),
-								...(result.oracle ? { oracle: result.oracle } : {}),
-								...(failed
-									? {
-											error:
-												result.text.trim() ||
-												(result.finishReason === "aborted"
-													? "stopped"
-													: "failed without saying why"),
-										}
-									: {}),
-							});
-						} catch (error) {
-							const handed = handbackOf(error);
-							if (handed) {
-								handbacks.push({ name: worker.name, handed });
-							}
-							const message =
-								error instanceof Error ? error.message : String(error);
-							// Named, never dropped: the lead cannot tell an
-							// empty round from a lost one otherwise.
+						const memberContext: AgentToolContext = {
+							...(context ??
+								({ agentId: "", iteration: 0 } as AgentToolContext)),
+							signal: callCancellation?.signal ?? handle.signal,
+							...(memberCallId(member)
+								? { toolCallId: memberCallId(member) }
+								: {}),
+						};
+						let failed: unknown;
+						const output = await handle.run(
+							index,
+							memberContext,
+							async (ctx) => {
+								try {
+									const result = await runSwarmWorker(config, request, ctx, {
+										...(snapshot ? { poolId: snapshot.poolId } : {}),
+										...(registration ? { registration } : {}),
+										bind: (cancelId) => handle.bindControl(index, cancelId),
+									});
+									const handed = handbackOf(result);
+									if (handed) {
+										handbacks.push({ name: worker.name, handed });
+									}
+									inputTokens += result.usage?.inputTokens ?? 0;
+									outputTokens += result.usage?.outputTokens ?? 0;
+									results.push(
+										withControls(digestOf(worker.name, result), result),
+									);
+									return swarmMemberOutput(worker.name, result);
+								} catch (error) {
+									failed = error;
+									const handed = handbackOf(error);
+									if (handed) {
+										handbacks.push({ name: worker.name, handed });
+									}
+									throw error;
+								} finally {
+									registration?.release();
+								}
+							},
+						);
+						if (failed !== undefined) {
+							// Named, never dropped: the lead cannot tell an empty
+							// round from a lost one otherwise.
 							results.push({
 								agent: worker.name,
-								error: message,
+								error: output.error ?? "failed",
 							} satisfies WorkDigest);
-							report(member, { name: worker.name, error: message });
 						}
+						record(member, output as SwarmMemberReport, index);
 					})();
 					const tracked = running.finally(() => {
 						inFlight.delete(tracked);
@@ -864,6 +1075,9 @@ export function createSpawnSwarmTool(
 
 				while (queue.length > 0 || inFlight.size > 0) {
 					while (queue.length > 0 && started < SWARM_RUNAWAY_MAX) {
+						if (handle.signal.aborted) {
+							break;
+						}
 						if (probe) {
 							if (!(await probe.call(config.pools))) {
 								break;
@@ -899,16 +1113,21 @@ export function createSpawnSwarmTool(
 				// Asked for and never run: the round stopped with work left.
 				// Each one is named, in the digest and on its row.
 				for (const worker of queue) {
-					const error = context?.signal?.aborted
+					memberCancellations.get(worker.member)?.release();
+					const error = handle.signal.aborted
 						? "stopped before it started"
 						: "never started: no node had room when the round ended";
 					if (rowed) {
+						handle.never(worker.member, error);
 						results.push({ agent: worker.name, error });
-						report(worker.member, { name: worker.name, error });
+						record(worker.member, { name: worker.name, error }, worker.member);
 					}
 				}
+				// A restart or retry of a worker from the lead runs before the
+				// round reports: the lead gets the run that counts.
+				await handle.idle();
 				if (rowed) {
-					requested.forEach((entry, index) => {
+					requested.slice(0, queueLength).forEach((entry, index) => {
 						reports[index] ??= {
 							name: entry.name ?? `worker-${index + 1}`,
 							error: "never started",
@@ -929,19 +1148,60 @@ export function createSpawnSwarmTool(
 				const digest = merged ?? mergeWorkDigests(results);
 
 				return {
+					round: handle.id,
 					digest: renderWorkDigest(digest) + swarmHandbackNote(handbacks),
 					workers: started,
 					pooled: snapshot !== undefined,
 					usage: { inputTokens, outputTokens },
+					agents: handle.record.agents.map((agent) => ({
+						id: agent.id,
+						name: agent.name,
+						state: agent.state,
+						...(agent.stopReason ? { stop: agent.stopReason } : {}),
+						facts: agentFactsLine(agent),
+					})),
 					...(rowed ? { results: reports } : {}),
 				};
-			} finally {
-				for (const cancellation of cancellations) {
-					cancellation.release();
+			};
+
+			const finish = async () => {
+				callCancellation?.release();
+				for (const registration of memberCancellations.values()) {
+					registration.release();
 				}
 				// The leak this whole change set exists to stop. On the failure
 				// paths too.
 				await snapshot?.release().catch(() => {});
+			};
+
+			if (background) {
+				void runRound()
+					.then((output) => {
+						handle.setReport(JSON.stringify(output), output.digest);
+					})
+					.catch(() => undefined)
+					.finally(async () => {
+						await finish();
+						handle.close();
+					});
+				return {
+					...backgroundAck(handle),
+					digest: `Round ${handle.id} runs in the background; the merged report is delivered to you when it ends.`,
+					workers: 0,
+					pooled: snapshot !== undefined,
+					usage: { inputTokens: 0, outputTokens: 0 },
+				};
+			}
+			const leave = rounds.enterBlocking();
+			try {
+				const output = await runRound();
+				handle.setReport(JSON.stringify(output), output.digest);
+				handle.delivered();
+				return output;
+			} finally {
+				leave();
+				await finish();
+				handle.close();
 			}
 		},
 		timeoutMs: 600_000,

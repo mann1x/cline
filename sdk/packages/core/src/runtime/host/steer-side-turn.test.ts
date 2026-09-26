@@ -164,3 +164,56 @@ describe("the agent system's report to the lead", () => {
 		expect(note).toContain("their tasks are yours to do now");
 	});
 });
+
+describe("a side turn that did not finish", () => {
+	// Swarm 0926: the side turn hit its cap and the lead was told "You replied:
+	// Agent runtime exceeded maxIterations (4)", then blamed the fixer agents,
+	// which never hit a cap.
+	it("never presents the runtime's failure as the lead's reply", async () => {
+		const result = await runSteerSideTurn({
+			sessionId: "lead",
+			message: "how are the fixers doing?",
+			messages: leadMessages,
+			createRunner: () => ({
+				restore: () => {},
+				continue: async () => ({
+					text: "Agent runtime exceeded maxIterations (4)",
+					finishReason: "max_iterations",
+				}),
+			}),
+		});
+		expect(result.failed).toBe(true);
+		expect(result.reply).not.toContain("maxIterations");
+		const note = describeSideTurnForLead("how are the fixers doing?", result);
+		expect(note).not.toContain("You replied: Agent runtime exceeded");
+		expect(note).toMatch(/side turn ran out of its \d+ iterations/i);
+		expect(note).toMatch(/not about your agents/i);
+	});
+
+	it("says a side turn that errored failed, not what the lead said", async () => {
+		const result = await runSteerSideTurn({
+			sessionId: "lead",
+			message: "status?",
+			messages: leadMessages,
+			createRunner: () => ({
+				restore: () => {},
+				continue: async () => ({
+					text: "503 Service Unavailable",
+					finishReason: "error",
+				}),
+			}),
+		});
+		expect(result.failed).toBe(true);
+		const note = describeSideTurnForLead("status?", result);
+		expect(note).not.toContain("You replied: 503");
+	});
+
+	// 4 of 8 side turns in swarm 0926 ran out at 4 iterations. A side turn has
+	// to be able to look at the round, act on a few agents, and answer.
+	it("has room for a status call, several controls and a reply", async () => {
+		const { STEER_SIDE_TURN_MAX_ITERATIONS } = await import(
+			"./steer-side-turn"
+		);
+		expect(STEER_SIDE_TURN_MAX_ITERATIONS).toBeGreaterThanOrEqual(8);
+	});
+});

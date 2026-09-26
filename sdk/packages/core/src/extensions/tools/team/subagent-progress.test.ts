@@ -1,6 +1,7 @@
 import type { AgentEvent } from "@cline/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
+	compactionLogger,
 	createActivityCounter,
 	createSubagentProgress,
 	readCompactionNotice,
@@ -458,5 +459,46 @@ describe("an activity counter", () => {
 			toolCalls: 0,
 			compactions: 0,
 		});
+	});
+});
+
+describe("a compaction is recorded, not only shown", () => {
+	// Swarm 0926: the count by cause reached the row and nothing else, so
+	// after the run it could not be analysed.
+	it("tells its observer each completed compaction, with cause and tokens", () => {
+		const seen: unknown[] = [];
+		const progress = createSubagentProgress(undefined, undefined, Date.now, {
+			onCompaction: (compaction) => seen.push(compaction),
+		});
+		progress.observe({
+			type: "notice",
+			noticeType: "status",
+			message: "compacted",
+			metadata: {
+				phase: "completed",
+				kind: "auto_compaction",
+				cause: "pressure",
+				tokensBefore: 40_000,
+				tokensAfter: 9_000,
+			},
+		} as never);
+		expect(seen).toEqual([
+			{ cause: "pressure", tokensBefore: 40_000, tokensAfter: 9_000 },
+		]);
+	});
+
+	it("logs one line per compaction, naming the agent", () => {
+		const lines: string[] = [];
+		const onCompaction = compactionLogger("fixer-3", {
+			log: (line: string) => lines.push(line),
+		});
+		onCompaction?.({
+			cause: "overflow",
+			tokensBefore: 61_000,
+			tokensAfter: 12_000,
+		});
+		expect(lines).toEqual([
+			"[Agents] fixer-3 compacted its context (cause: overflow): 61,000 → 12,000 tokens",
+		]);
 	});
 });

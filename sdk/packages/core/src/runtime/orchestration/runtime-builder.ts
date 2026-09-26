@@ -1055,6 +1055,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 					createConfiguredAgentTools({
 						configProvider: delegatedAgentConfigProvider,
 						agents: configuredAgents.configs,
+						...(config.sessionId ? { sessionId: config.sessionId } : {}),
 						// So a node that could not run an agent leaves a
 						// line: the agent is re-queued and succeeds, so the
 						// run looks clean and the bad node is otherwise

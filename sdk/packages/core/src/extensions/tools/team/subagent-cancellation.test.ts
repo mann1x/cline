@@ -132,3 +132,89 @@ describe("restarting a sub-agent", () => {
 		registration.release();
 	});
 });
+
+describe("the lead's controls on one agent", () => {
+	afterEach(() => {
+		__resetSubagentCancellations();
+	});
+
+	// Spec C: requeue continues the agent's transcript; it does not restart it.
+	it("requeues at the next boundary and carries the transcript on", async () => {
+		const agent = registerSubagentCancellation("s::c", undefined, "a");
+		const carried: unknown[] = [];
+		const result = await agent.restartable(() =>
+			agent.continuable(async (carry) => {
+				carried.push(carry);
+				if (!carry) {
+					agent.track({ getMessages: () => ["turn-1", "turn-2"] });
+					expect(
+						subagentCancellation.requeue("s::c", {
+							reason: "slow",
+							avoidNodeId: "node-1",
+						}),
+					).toBe(true);
+					// The boundary: its next turn's message check.
+					expect(agent.takeMessage()).toBeUndefined();
+					expect(agent.signal?.aborted).toBe(true);
+					throw new DOMException("aborted", "AbortError");
+				}
+				return "continued";
+			}),
+		);
+		expect(result).toBe("continued");
+		expect(carried[1]).toEqual({
+			messages: ["turn-1", "turn-2"],
+			reason: "slow",
+			avoidNodeId: "node-1",
+		});
+	});
+
+	it("requeues at once an agent that is only waiting on infrastructure", async () => {
+		const agent = registerSubagentCancellation("s::c", undefined, "a");
+		let segments = 0;
+		await agent.continuable(async (carry) => {
+			segments += 1;
+			if (!carry) {
+				agent.setWaitingInfra(true);
+				subagentCancellation.requeue("s::c");
+				expect(agent.signal?.aborted).toBe(true);
+				throw new DOMException("aborted", "AbortError");
+			}
+			return undefined;
+		});
+		expect(segments).toBe(2);
+	});
+
+	it("restarts from the task with the lead's revised instructions", async () => {
+		const agent = registerSubagentCancellation("s::c", undefined, "a");
+		const seen: Array<string | undefined> = [];
+		await agent.restartable(async () => {
+			seen.push(agent.instructions);
+			if (seen.length === 1) {
+				subagentCancellation.restart("s::c", { instructions: "Be brief." });
+				throw new DOMException("aborted", "AbortError");
+			}
+			return undefined;
+		});
+		expect(seen).toEqual([undefined, "Be brief."]);
+	});
+
+	it("holds an agent at its cap until the lead grants more iterations", async () => {
+		const agent = registerSubagentCancellation("s::c", undefined, "a");
+		const waiting = agent.awaitLead();
+		expect(subagentCancellation.inspect("s::c")?.awaitingLead).toBe(true);
+		expect(subagentCancellation.resumeSuspended("s::c", 5)).toBe(true);
+		await expect(waiting).resolves.toBe(5);
+		expect(subagentCancellation.inspect("s::c")?.awaitingLead).toBe(false);
+		expect(subagentCancellation.resumeSuspended("s::c", 5)).toBe(false);
+	});
+
+	it("remembers who stopped it", () => {
+		registerSubagentCancellation("s::c", undefined, "a");
+		subagentCancellation.cancel("s::c", "lead");
+		expect(subagentCancellation.stoppedBy("s::c")).toBe("lead");
+		registerSubagentCancellation("s::d", undefined, "b");
+		subagentCancellation.cancel("s::d");
+		expect(subagentCancellation.stoppedBy("s::d")).toBe("user");
+	});
+});

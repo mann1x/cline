@@ -148,6 +148,7 @@ describe("swarm workers on private workspaces", () => {
 	}
 
 	const tasks = (...names: string[]) => ({
+		wait: true,
 		systemPrompt: "s",
 		tasks: names.map((name) => ({ name, task: `task for ${name}` })),
 	});
@@ -167,6 +168,7 @@ describe("swarm workers on private workspaces", () => {
 		const output = (await swarm({ launcher: true, commands: true }).execute(
 			{
 				systemPrompt: "s",
+				wait: true,
 				max_iterations: 5,
 				check: { command: "echo ok", expect: "ok" },
 				tasks: [{ name: "w1", task: "t" }],
@@ -193,6 +195,7 @@ describe("swarm workers on private workspaces", () => {
 		const output = (await swarm().execute(
 			{
 				systemPrompt: "s",
+				wait: true,
 				check: { command: "echo ok", expect: "ok" },
 				tasks: [{ name: "w1", task: "t" }],
 			},

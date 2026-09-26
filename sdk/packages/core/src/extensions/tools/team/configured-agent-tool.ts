@@ -24,6 +24,12 @@ import {
 	runDelegatedWithCap,
 } from "./agent-iteration-cap";
 import { summarizeForLead } from "./agent-reports";
+import {
+	agentFacts,
+	isRoundMember,
+	reportWaits,
+	roundsFor,
+} from "./agent-rounds";
 import { agentEndpointKey } from "./agent-slot-gate";
 import { createAgentTroubleWatch, roomWaitTrouble } from "./agent-trouble";
 import type { ConfiguredAgentConfig } from "./configured-agent-config";
@@ -37,12 +43,16 @@ import { readDelegationHooks } from "./delegation-call-hooks";
 import { isAdmissionEvent, runPlacedAgent } from "./placed-run";
 import {
 	awaitingLeadNote,
+	configuredAgentKey,
 	controlFields,
 	controlReport,
+	requeueNote,
 	type SpawnAgentOutput,
 	type SubAgentEndContext,
 	type SubAgentSettledContext,
 	type SubAgentStartContext,
+	storedControls,
+	withRevisedInstructions,
 } from "./spawn-agent-tool";
 import {
 	drawSpawnSampling,
@@ -51,16 +61,20 @@ import {
 	readSpawnSampling,
 	SPAWN_SAMPLING_NOTE,
 	SpawnSamplingFields,
+	spawnSamplingFields,
 } from "./spawn-sampling";
 import {
 	registerSubagentCancellation,
+	type SubagentRequeueCarry,
 	subagentCancelId,
 } from "./subagent-cancellation";
 import {
+	compactionLogger,
 	createSubagentProgress,
 	DELEGATION_PACING_NOTE,
 	reportSubagentModel,
 	reportSubagentSampling,
+	requeued,
 	restarted,
 	watchPolykvRoom,
 } from "./subagent-progress";
@@ -177,6 +191,11 @@ export interface ConfiguredAgentToolConfig {
 	commandSandboxFor?: (
 		toolCallId: string | undefined,
 	) => { wrapSpawn: OracleSpawnWrapper; cwd: string } | undefined;
+	/**
+	 * The lead's session, when the tools are built for one: a call opens a
+	 * round there, and `retry_failed` can run the agent again from it.
+	 */
+	sessionId?: string;
 }
 
 function sanitizeAgentName(name: string): string {
@@ -411,7 +430,14 @@ function withSessionFetch(providerConfig: unknown, base: unknown): unknown {
 export function createConfiguredAgentTools(
 	options: ConfiguredAgentToolConfig,
 ): AgentTool[] {
-	return buildConfiguredAgentToolDescriptors(options.agents).map(
+	const runners = new Map<
+		string,
+		(
+			input: ConfiguredAgentInput,
+			context: AgentToolContext,
+		) => Promise<SpawnAgentOutput>
+	>();
+	const tools = buildConfiguredAgentToolDescriptors(options.agents).map(
 		({ toolName, config }) => {
 			const tool = createTool<ConfiguredAgentInput, SpawnAgentOutput>({
 				name: toolName,
@@ -423,405 +449,14 @@ export function createConfiguredAgentTools(
 				// last -- so name the one call that is the whole fan-out.
 				description: `Use the "${config.name}" subagent: ${config.description} Each call runs one agent of this kind. For several, or several kinds at once, use one \`spawn_agent\` call with \`agents\` entries of \`type: "${config.name}"\` and a \`count\`. ${SPAWN_SAMPLING_NOTE}${AGENT_CONTROLS_NOTE}${DELEGATION_PACING_NOTE}`,
 				inputSchema: zodToJsonSchema(ConfiguredAgentInputSchema),
+				// A call of its own is a round of one; a call from a batch is
+				// already an agent of the batch's round.
 				execute: async (input, context) => {
 					// Refused before anything is opened; see `spawn_agent`.
-					const controls = controlFields(input);
-					const baseRuntimeConfig = options.configProvider.getRuntimeConfig();
-					const provisional = buildAgentRuntimeConfig(
-						baseRuntimeConfig,
-						config,
-						options.resolveProviderConnection,
-						options.resolveProfileConnection,
-						options.listProfileNames,
-					);
-					// Where it runs, before it is built -- the same order
-					// `spawn_agent` uses, and for the same reason: a node is a
-					// whole agents configuration, so which node took this agent
-					// decides which model it is.
-					//
-					// An agent that names a provider or a profile of its own has
-					// its own endpoint, and a node is not where it runs; it keeps
-					// the per-endpoint gate below. Without that check a nodeless
-					// session behaves exactly as before.
-					//
-					// This was the second half of a measured failure: two
-					// configured agents launched together, both pointed at the
-					// session's endpoint, and the slot gate served one while the
-					// other waited out the whole run and was aborted with no
-					// model turn at all. The nodes were configured and had room;
-					// nothing here looked at them.
-					const ownsEndpoint =
-						agentEndpointKey(provisional) !==
-						agentEndpointKey(baseRuntimeConfig);
-					const placement = ownsEndpoint
-						? undefined
-						: baseRuntimeConfig.nodePlacement;
-					// Its own abort signal, so a runaway agent can be stopped
-					// without cancelling the session and the siblings that are
-					// working.
-					const cancelId = subagentCancelId(
-						context.sessionId,
-						context.toolCallId,
-					);
-					const cancellation = registerSubagentCancellation(
-						cancelId,
-						context.signal,
-						config.name,
-					);
-					// Announced rather than reconstructed by the reader. The chat row is
-					// the thing that offers the stop, and it must name exactly what was
-					// registered -- a host rebuilding the same string from its own idea
-					// of the session id is a stop button that works until the two drift.
-					if (cancelId) {
-						context.emitUpdate?.({ cancelId });
-					}
-					const tools = options.createSubAgentTools
-						? await options.createSubAgentTools(config, input, context)
-						: [];
-					// Its check runs in its own sandbox, open once its tools are.
-					const sandbox = controls.check
-						? options.commandSandboxFor?.(context.toolCallId)
-						: undefined;
-					const prompt = controls.check
-						? `${input.prompt}\n\n${describeAgentCheck(controls.check, sandbox !== undefined)}`
-						: input.prompt;
-					// The lead's cap for this call wins over the agent file's.
-					const maxIterations = controls.max_iterations ?? config.maxIterations;
-					const lifetime = createDelegatedAgentLifetime();
-					let capOutcome: DelegatedRunOutcome | undefined;
-					// What it is doing, on the tool call that started it. Nothing
-					// else reports a running sub-agent to the user at all.
-					const progress = createSubagentProgress(
-						context.emitUpdate,
-						options.onSubAgentEvent,
-					);
-					// Its own engine session, never the lead's; on a PolyKV node
-					// every instance of this agent shares its system prompt and
-					// tools as one pool.
-					const engineSessionId = `${context.sessionId ?? "cerebriline"}~agent-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-					// How long it has been stuck, for the lead: after long enough
-					// without progress the lead is told, once.
-					const trouble = createAgentTroubleWatch({
-						sessionId: context.sessionId,
-						name: config.name,
-						...(options.logger ? { logger: options.logger } : {}),
-					});
-					// Queued again while its requests wait for room on the engine.
-					const stopRoomWatch = watchPolykvRoom(
-						engineSessionId,
-						context.emitUpdate,
-						options.logger,
-						(reason) => trouble.waiting(roomWaitTrouble(reason)),
-					);
-					const parentAgentId = context.agentId;
-					// The lead's sampler, when it gave one: applied over whatever
-					// connection this agent's file, profile or node resolves to.
-					// Drawn once here, so every attempt runs the same random values.
-					const sampling = drawSpawnSampling(readSpawnSampling(input));
-					let realizedSampling: RealizedSpawnSampling | undefined;
-					const spawnInput = {
-						systemPrompt: config.systemPrompt,
-						task: input.prompt,
-					};
-					// From the first build and kept across re-placements: the
-					// observers identify one delegation, not one attempt at it.
-					let started:
-						| { subAgentId: string; conversationId: string }
-						| undefined;
-
-					// Built per attempt: the node IS the configuration, so
-					// re-placing means resolving the connection again.
-					const attempt = async (
-						runtimeConfig: typeof provisional,
-						admitted: () => void,
-						recoverTurnFault?: TurnFaultRecovery,
-					): Promise<AgentResult> => {
-						// The row names the model while it runs, not only once it is done.
-						reportSubagentModel(context.emitUpdate, {
-							providerId: runtimeConfig.providerId,
-							modelId: runtimeConfig.modelId,
-						});
-						// A random temperature is drawn around the model's own.
-						await primeModelTemperature(sampling, runtimeConfig);
-						const check = controls.check
-							? createDelegatedAgentCheck({
-									check: controls.check,
-									cwd: sandbox?.cwd ?? runtimeConfig.cwd ?? process.cwd(),
-									...(sandbox ? { wrapSpawn: sandbox.wrapSpawn } : {}),
-								})
-							: undefined;
-						const subAgent = createDelegatedAgent({
-							...(check ? { check } : {}),
-							// What the lead's side turn leaves for it while the lead waits.
-							consumePendingUserMessage: async () => cancellation.takeMessage(),
-							kind: "subagent",
-							prompt: config.systemPrompt,
-							engineSessionId,
-							...(isPolykvProvider({
-								providerId: runtimeConfig.providerId,
-								baseUrl: runtimeConfig.baseUrl,
-								polykv: (
-									runtimeConfig.providerConfig as { polykv?: never } | undefined
-								)?.polykv,
-							})
-								? {
-										polykvWorker: {
-											group: context.sessionId ?? "cerebriline",
-											layers: 0,
-										},
-									}
-								: {}),
-							configProvider: createDelegatedAgentConfigProvider(runtimeConfig),
-							...(sampling
-								? {
-										sampling,
-										onSampling: (realized: RealizedSpawnSampling) => {
-											realizedSampling = realized;
-											reportSubagentSampling(context.emitUpdate, realized);
-										},
-									}
-								: {}),
-							tools,
-							maxIterations,
-							parentAgentId: context.agentId,
-							abortSignal: cancellation.signal,
-							// The caller's hooks for this run alone -- the pause barrier
-							// of a background delegation, and nothing in an ordinary
-							// call the model makes.
-							hooks: readDelegationHooks(context.metadata),
-							// The first event is also the engine admitting it.
-							onEvent: (event) => {
-								if (isAdmissionEvent(event)) {
-									admitted();
-									trouble.progressed();
-								}
-								progress.observe(event);
-							},
-							hookErrorMode: options.hookErrorMode,
-							toolPolicies: options.toolPolicies,
-							requestToolApproval: options.requestToolApproval,
-							// A server restart or a refusal is waited out, never
-							// the answer.
-							recoverTurnFault:
-								recoverTurnFault ??
-								createTurnFaultRecovery({
-									label: config.name,
-									onWaiting: trouble.waiting,
-									baseUrl: () => runtimeConfig.baseUrl,
-									headers: () => runtimeConfig.headers,
-									signal: cancellation.signal,
-									...(context.emitUpdate
-										? { emitUpdate: context.emitUpdate }
-										: {}),
-									...(options.logger ? { logger: options.logger } : {}),
-								}),
-						});
-						if (!started) {
-							started = {
-								subAgentId: subAgent.getAgentId(),
-								conversationId: subAgent.getConversationId(),
-							};
-							if (options.onSubAgentStart) {
-								try {
-									await options.onSubAgentStart({
-										...started,
-										parentAgentId,
-										input: spawnInput,
-										toolCallId: context.toolCallId,
-									});
-								} catch {
-									// Best-effort observer callback.
-								}
-							}
-						}
-						// At its cap it waits for the lead, work kept.
-						const outcome = await runDelegatedWithCap({
-							agent: subAgent,
-							start: () => subAgent.run(prompt),
-							name: config.name,
-							...(maxIterations !== undefined ? { maxIterations } : {}),
-							...(context.sessionId ? { sessionId: context.sessionId } : {}),
-							...(cancelId ? { cancelId } : {}),
-							...(cancellation.signal ? { signal: cancellation.signal } : {}),
-							...(context.emitUpdate ? { emitUpdate: context.emitUpdate } : {}),
-							...(check ? { check } : {}),
-							releaseEngineSession: () => releasePolykvAgent(engineSessionId),
-							lifetime,
-							onDetachedFinish: async (final) => {
-								await notifyEnd(buildOutput(final.result, final), final.result);
-							},
-						});
-						capOutcome = outcome;
-						if (outcome.state === "awaiting_lead") {
-							return outcome.result;
-						}
-						// A summary for the lead, and the full report kept for it.
-						return summarizeForLead({
-							sessionId: context.sessionId,
-							name: config.name,
-							result: outcome.result,
-							summarize: (summaryPrompt) => subAgent.continue(summaryPrompt),
-						});
-					};
-
-					const buildOutput = (
-						result: AgentResult,
-						outcome: DelegatedRunOutcome | undefined,
-						placed?: { nodeId: string; nodeLabel?: string },
-					): SpawnAgentOutput => ({
-						text:
-							outcome?.state === "awaiting_lead"
-								? `${result.text}${awaitingLeadNote(config.name, started?.subAgentId, outcome)}`
-								: result.text,
-						iterations: result.iterations,
-						finishReason: result.finishReason,
-						usage: {
-							inputTokens: result.usage.inputTokens,
-							outputTokens: result.usage.outputTokens,
-						},
-						// A configured agent is the case where this matters most:
-						// its file may name a provider of its own, so its tokens
-						// can be billed where the session's are not, or the
-						// reverse. Guarded: `model` is bookkeeping, and a result
-						// without one is no reason to fail an agent that did its
-						// work.
-						...(result.model
-							? {
-									model: {
-										id: result.model.id,
-										provider: result.model.provider,
-									},
-								}
-							: {}),
-						// Where it ran. Only when it was placed: on a session
-						// with no nodes there is one place to run and naming it
-						// is noise.
-						...(placed ? { nodeId: placed.nodeId } : {}),
-						...(placed?.nodeLabel ? { nodeLabel: placed.nodeLabel } : {}),
-						...(realizedSampling ? { sampling: realizedSampling } : {}),
-						...controlReport(started?.subAgentId, outcome),
-					});
-
-					const notifyEnd = async (
-						output: SpawnAgentOutput | undefined,
-						agentResult: AgentResult | undefined,
-						error?: unknown,
-					): Promise<void> => {
-						if (!options.onSubAgentEnd || !started) {
-							return;
-						}
-						try {
-							await options.onSubAgentEnd({
-								...started,
-								parentAgentId,
-								input: spawnInput,
-								toolCallId: context.toolCallId,
-								...(output ? { result: output } : {}),
-								...(agentResult ? { agentResult } : {}),
-								...(error !== undefined
-									? {
-											error:
-												error instanceof Error
-													? error
-													: new Error(String(error)),
-										}
-									: {}),
-							});
-						} catch {
-							// Best-effort observer callback.
-						}
-					};
-
-					try {
-						// Restartable from the row, as `spawn_agent` is.
-						const { result, placed } = await cancellation.restartable(
-							async (): Promise<{
-								result: AgentResult;
-								placed?: { nodeId: string; nodeLabel?: string };
-							}> => {
-								if (placement) {
-									const outcome = await runPlacedAgent({
-										placement,
-										// The attempt's: a restart while queued leaves the queue.
-										signal: cancellation.signal,
-										emitUpdate: context.emitUpdate,
-										...(options.logger ? { logger: options.logger } : {}),
-										label: config.name,
-										onWaiting: trouble.waiting,
-										run: (node, admitted, recoverTurnFault) =>
-											attempt(
-												buildAgentRuntimeConfig(
-													node.configProvider.getRuntimeConfig(),
-													config,
-													options.resolveProviderConnection,
-													options.resolveProfileConnection,
-													options.listProfileNames,
-												),
-												admitted,
-												recoverTurnFault,
-											),
-										beforeRetry: async () => {
-											await releasePolykvAgent(engineSessionId);
-										},
-									});
-									return { result: outcome.result, placed: outcome.placed };
-								} else {
-									// Held to what the endpoint *this* agent resolved to will
-									// serve, which is not necessarily the session's: an agent
-									// naming a provider or a profile has its own. Two agents on
-									// different servers therefore run at once, and two on the
-									// same one queue.
-									const gate = baseRuntimeConfig.slotGates?.for(
-										agentEndpointKey(provisional),
-									);
-									const run = () => attempt(provisional, () => {});
-									return { result: gate ? await gate.run(run) : await run() };
-								}
-							},
-							() => restarted(context.emitUpdate, engineSessionId),
-						);
-						const output = buildOutput(result, capOutcome, placed);
-						// Detached at its cap: its hand-back waits for its real end.
-						if (capOutcome?.state !== "awaiting_lead") {
-							await notifyEnd(output, result);
-						}
-						return output;
-					} catch (error) {
-						await notifyEnd(undefined, undefined, error);
-						throw error;
-					} finally {
-						await lifetime.end(async () => {
-							// The lease outlives the run on every path, or a node
-							// stays booked for an agent that is no longer on it and
-							// the round narrows with each failure. Same for the stop
-							// registration: one that outlives its agent is a button
-							// that reports success and does nothing.
-							cancellation.release();
-							stopRoomWatch();
-							trouble.dispose();
-							// And its workspace, which a run that never started
-							// still opened.
-							if (options.onSubAgentSettled) {
-								try {
-									await options.onSubAgentSettled({
-										toolCallId: context.toolCallId,
-										name: config.name,
-									});
-								} catch {
-									// Best-effort observer callback.
-								}
-							}
-							// Its engine session goes back the moment it ends.
-							const released = await releasePolykvAgent(engineSessionId).catch(
-								() => undefined,
-							);
-							for (const failure of released?.failed ?? []) {
-								options.logger?.log(
-									`[Agents] could not close engine session ${failure.sessionId}: ${failure.error}`,
-								);
-							}
-						});
-					}
+					controlFields(input);
+					return isRoundMember(context)
+						? await runConfigured(input, context)
+						: await runConfiguredRound(config, input, context, runConfigured);
 				},
 				timeoutMs: 300000,
 				retryable: false,
@@ -830,7 +465,537 @@ export function createConfiguredAgentTools(
 				// gate it again. Forty requested agents ran eight wide behind it.
 				lifecycle: { boundsOwnConcurrency: true },
 			});
+			runners.set(configuredAgentKey(config.name), runConfigured);
+			async function runConfigured(
+				input: ConfiguredAgentInput,
+				context: AgentToolContext,
+			): Promise<SpawnAgentOutput> {
+				const controls = controlFields(input);
+				// The lead's cap for this call wins over the agent file's.
+				const maxIterations = controls.max_iterations ?? config.maxIterations;
+				const lifetime = createDelegatedAgentLifetime();
+				let capOutcome: DelegatedRunOutcome | undefined;
+				// Its check's sandbox and the task that states the check: set
+				// per attempt, once that attempt's tools (and overlay) are open.
+				let sandbox: { wrapSpawn: OracleSpawnWrapper; cwd: string } | undefined;
+				let prompt = input.prompt;
+				const baseRuntimeConfig = options.configProvider.getRuntimeConfig();
+				const provisional = buildAgentRuntimeConfig(
+					baseRuntimeConfig,
+					config,
+					options.resolveProviderConnection,
+					options.resolveProfileConnection,
+					options.listProfileNames,
+				);
+				// Where it runs, before it is built -- the same order
+				// `spawn_agent` uses, and for the same reason: a node is a
+				// whole agents configuration, so which node took this agent
+				// decides which model it is.
+				//
+				// An agent that names a provider or a profile of its own has
+				// its own endpoint, and a node is not where it runs; it keeps
+				// the per-endpoint gate below. Without that check a nodeless
+				// session behaves exactly as before.
+				//
+				// This was the second half of a measured failure: two
+				// configured agents launched together, both pointed at the
+				// session's endpoint, and the slot gate served one while the
+				// other waited out the whole run and was aborted with no
+				// model turn at all. The nodes were configured and had room;
+				// nothing here looked at them.
+				const ownsEndpoint =
+					agentEndpointKey(provisional) !== agentEndpointKey(baseRuntimeConfig);
+				const placement = ownsEndpoint
+					? undefined
+					: baseRuntimeConfig.nodePlacement;
+				// Its own abort signal, so a runaway agent can be stopped
+				// without cancelling the session and the siblings that are
+				// working.
+				const cancelId = subagentCancelId(
+					context.sessionId,
+					context.toolCallId,
+				);
+				const cancellation = registerSubagentCancellation(
+					cancelId,
+					context.signal,
+					config.name,
+				);
+				// Announced rather than reconstructed by the reader. The chat row is
+				// the thing that offers the stop, and it must name exactly what was
+				// registered -- a host rebuilding the same string from its own idea
+				// of the session id is a stop button that works until the two drift.
+				if (cancelId) {
+					context.emitUpdate?.({ cancelId });
+				}
+				// Opened per attempt, so a restart starts on a fresh workspace.
+				let tools: AgentTool[] = [];
+				// What it is doing, on the tool call that started it. Nothing
+				// else reports a running sub-agent to the user at all.
+				const progress = createSubagentProgress(
+					context.emitUpdate,
+					options.onSubAgentEvent,
+					Date.now,
+					{ onCompaction: compactionLogger(config.name, options.logger) },
+				);
+				// Its own engine session, never the lead's; on a PolyKV node
+				// every instance of this agent shares its system prompt and
+				// tools as one pool.
+				const engineSessionId = `${context.sessionId ?? "cerebriline"}~agent-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+				// How long it has been stuck, for the lead: after long enough
+				// without progress the lead is told, once.
+				const trouble = reportWaits(
+					createAgentTroubleWatch({
+						sessionId: context.sessionId,
+						name: config.name,
+						...(options.logger ? { logger: options.logger } : {}),
+					}),
+					context.emitUpdate,
+					cancellation,
+				);
+				// Queued again while its requests wait for room on the engine.
+				const stopRoomWatch = watchPolykvRoom(
+					engineSessionId,
+					context.emitUpdate,
+					options.logger,
+					(reason) => trouble.waiting(roomWaitTrouble(reason)),
+				);
+				const parentAgentId = context.agentId;
+				// The lead's sampler, when it gave one: applied over whatever
+				// connection this agent's file, profile or node resolves to.
+				// Drawn once here, so every attempt runs the same random values.
+				const requestedSampling = readSpawnSampling(input);
+				let sampling = drawSpawnSampling(requestedSampling);
+				let realizedSampling: RealizedSpawnSampling | undefined;
+				const spawnInput = {
+					systemPrompt: config.systemPrompt,
+					task: input.prompt,
+				};
+				// From the first build and kept across re-placements: the
+				// observers identify one delegation, not one attempt at it.
+				let started: { subAgentId: string; conversationId: string } | undefined;
+
+				// Built per attempt: the node IS the configuration, so
+				// re-placing means resolving the connection again.
+				const attempt = async (
+					runtimeConfig: typeof provisional,
+					admitted: () => void,
+					recoverTurnFault: TurnFaultRecovery | undefined,
+					carry: SubagentRequeueCarry | undefined,
+				): Promise<AgentResult> => {
+					// The row names the model while it runs, not only once it is done.
+					reportSubagentModel(context.emitUpdate, {
+						providerId: runtimeConfig.providerId,
+						modelId: runtimeConfig.modelId,
+						knownModels: runtimeConfig.knownModels,
+						maxIterations: maxIterations ?? runtimeConfig.maxIterations,
+					});
+					// A random temperature is drawn around the model's own.
+					await primeModelTemperature(sampling, runtimeConfig);
+					const check = controls.check
+						? createDelegatedAgentCheck({
+								check: controls.check,
+								cwd: sandbox?.cwd ?? runtimeConfig.cwd ?? process.cwd(),
+								...(sandbox ? { wrapSpawn: sandbox.wrapSpawn } : {}),
+							})
+						: undefined;
+					const subAgent = createDelegatedAgent({
+						...(check ? { check } : {}),
+						// What the lead's side turn leaves for it while the lead waits.
+						consumePendingUserMessage: async () => cancellation.takeMessage(),
+						kind: "subagent",
+						prompt: config.systemPrompt,
+						engineSessionId,
+						...(isPolykvProvider({
+							providerId: runtimeConfig.providerId,
+							baseUrl: runtimeConfig.baseUrl,
+							polykv: (
+								runtimeConfig.providerConfig as { polykv?: never } | undefined
+							)?.polykv,
+						})
+							? {
+									polykvWorker: {
+										group: context.sessionId ?? "cerebriline",
+										layers: 0,
+									},
+								}
+							: {}),
+						configProvider: createDelegatedAgentConfigProvider(runtimeConfig),
+						...(sampling
+							? {
+									sampling,
+									onSampling: (realized: RealizedSpawnSampling) => {
+										realizedSampling = realized;
+										reportSubagentSampling(context.emitUpdate, realized);
+									},
+								}
+							: {}),
+						tools,
+						maxIterations,
+						parentAgentId: context.agentId,
+						abortSignal: cancellation.signal,
+						// The caller's hooks for this run alone -- the pause barrier
+						// of a background delegation, and nothing in an ordinary
+						// call the model makes.
+						hooks: readDelegationHooks(context.metadata),
+						// The first event is also the engine admitting it.
+						onEvent: (event) => {
+							if (isAdmissionEvent(event)) {
+								admitted();
+								trouble.progressed();
+							}
+							progress.observe(event);
+						},
+						hookErrorMode: options.hookErrorMode,
+						toolPolicies: options.toolPolicies,
+						requestToolApproval: options.requestToolApproval,
+						// A server restart or a refusal is waited out, never
+						// the answer.
+						recoverTurnFault:
+							recoverTurnFault ??
+							createTurnFaultRecovery({
+								label: config.name,
+								onWaiting: trouble.waiting,
+								baseUrl: () => runtimeConfig.baseUrl,
+								headers: () => runtimeConfig.headers,
+								signal: cancellation.signal,
+								...(context.emitUpdate
+									? { emitUpdate: context.emitUpdate }
+									: {}),
+								...(options.logger ? { logger: options.logger } : {}),
+							}),
+					});
+					// Its transcript, should the lead requeue it.
+					cancellation.track(subAgent);
+					if (!started) {
+						started = {
+							subAgentId: subAgent.getAgentId(),
+							conversationId: subAgent.getConversationId(),
+						};
+						if (options.onSubAgentStart) {
+							try {
+								await options.onSubAgentStart({
+									...started,
+									parentAgentId,
+									input: spawnInput,
+									toolCallId: context.toolCallId,
+								});
+							} catch {
+								// Best-effort observer callback.
+							}
+						}
+					}
+					// At its cap it waits for the lead, work kept.
+					const outcome = await runDelegatedWithCap({
+						agent: subAgent,
+						start: async () => {
+							if (carry && carry.messages.length > 0) {
+								// Requeued: it carries on from its own transcript.
+								subAgent.restore(carry.messages as never);
+								return await subAgent.continue(requeueNote(carry.reason));
+							}
+							return await subAgent.run(
+								withRevisedInstructions(prompt, cancellation.instructions),
+							);
+						},
+						name: config.name,
+						...(maxIterations !== undefined ? { maxIterations } : {}),
+						...(context.sessionId ? { sessionId: context.sessionId } : {}),
+						...(cancelId ? { cancelId } : {}),
+						...(cancellation.signal ? { signal: cancellation.signal } : {}),
+						...(context.emitUpdate ? { emitUpdate: context.emitUpdate } : {}),
+						...(check ? { check } : {}),
+						releaseEngineSession: () => releasePolykvAgent(engineSessionId),
+						lifetime,
+						onDetachedFinish: async (final) => {
+							await notifyEnd(buildOutput(final.result, final), final.result);
+						},
+					});
+					capOutcome = outcome;
+					if (outcome.state === "awaiting_lead") {
+						return outcome.result;
+					}
+					// A summary for the lead, and the full report kept for it.
+					return summarizeForLead({
+						sessionId: context.sessionId,
+						name: config.name,
+						result: outcome.result,
+						summarize: (summaryPrompt) => subAgent.continue(summaryPrompt),
+					});
+				};
+
+				const buildOutput = (
+					result: AgentResult,
+					outcome: DelegatedRunOutcome | undefined,
+					placed?: { nodeId: string; nodeLabel?: string },
+				): SpawnAgentOutput => ({
+					text:
+						outcome?.state === "awaiting_lead"
+							? `${result.text}${awaitingLeadNote(config.name, started?.subAgentId, outcome)}`
+							: result.text,
+					iterations: result.iterations,
+					finishReason: result.finishReason,
+					usage: {
+						inputTokens: result.usage.inputTokens,
+						outputTokens: result.usage.outputTokens,
+					},
+					// A configured agent is the case where this matters most:
+					// its file may name a provider of its own, so its tokens
+					// can be billed where the session's are not, or the
+					// reverse. Guarded: `model` is bookkeeping, and a result
+					// without one is no reason to fail an agent that did its
+					// work.
+					...(result.model
+						? {
+								model: {
+									id: result.model.id,
+									provider: result.model.provider,
+								},
+							}
+						: {}),
+					// Where it ran. Only when it was placed: on a session
+					// with no nodes there is one place to run and naming it
+					// is noise.
+					...(placed ? { nodeId: placed.nodeId } : {}),
+					...(placed?.nodeLabel ? { nodeLabel: placed.nodeLabel } : {}),
+					...(realizedSampling ? { sampling: realizedSampling } : {}),
+					...controlReport(started?.subAgentId, outcome),
+				});
+
+				const notifyEnd = async (
+					output: SpawnAgentOutput | undefined,
+					agentResult: AgentResult | undefined,
+					error?: unknown,
+				): Promise<void> => {
+					if (!options.onSubAgentEnd || !started) {
+						return;
+					}
+					try {
+						await options.onSubAgentEnd({
+							...started,
+							parentAgentId,
+							input: spawnInput,
+							toolCallId: context.toolCallId,
+							...(output ? { result: output } : {}),
+							...(agentResult ? { agentResult } : {}),
+							...(error !== undefined
+								? {
+										error:
+											error instanceof Error ? error : new Error(String(error)),
+									}
+								: {}),
+						});
+					} catch {
+						// Best-effort observer callback.
+					}
+				};
+
+				try {
+					// Restartable from the row, as `spawn_agent` is.
+					const { result, placed } = await cancellation.restartable(
+						async (): Promise<{
+							result: AgentResult;
+							placed?: { nodeId: string; nodeLabel?: string };
+						}> => {
+							// A fresh workspace per attempt (a restart); a requeue
+							// keeps this one.
+							tools = options.createSubAgentTools
+								? await options.createSubAgentTools(config, input, context)
+								: [];
+							// Its check runs in its own sandbox, open once its tools are.
+							sandbox = controls.check
+								? options.commandSandboxFor?.(context.toolCallId)
+								: undefined;
+							prompt = controls.check
+								? `${input.prompt}\n\n${describeAgentCheck(controls.check, sandbox !== undefined)}`
+								: input.prompt;
+							return await cancellation.continuable(
+								async (carry) => {
+									if (placement) {
+										const outcome = await runPlacedAgent({
+											placement,
+											// The segment's: a restart or requeue while queued
+											// leaves the queue.
+											signal: cancellation.signal,
+											emitUpdate: context.emitUpdate,
+											...(options.logger ? { logger: options.logger } : {}),
+											label: config.name,
+											onWaiting: trouble.waiting,
+											...(carry
+												? {
+														requeued: carry.avoidNodeId
+															? { avoidNodeId: carry.avoidNodeId }
+															: {},
+													}
+												: {}),
+											run: (node, admitted, recoverTurnFault) =>
+												attempt(
+													buildAgentRuntimeConfig(
+														node.configProvider.getRuntimeConfig(),
+														config,
+														options.resolveProviderConnection,
+														options.resolveProfileConnection,
+														options.listProfileNames,
+													),
+													admitted,
+													recoverTurnFault,
+													carry,
+												),
+											beforeRetry: async () => {
+												await releasePolykvAgent(engineSessionId);
+											},
+										});
+										return { result: outcome.result, placed: outcome.placed };
+									}
+									// Held to what the endpoint *this* agent resolved to will
+									// serve, which is not necessarily the session's: an agent
+									// naming a provider or a profile has its own. Two agents on
+									// different servers therefore run at once, and two on the
+									// same one queue.
+									const gate = baseRuntimeConfig.slotGates?.for(
+										agentEndpointKey(provisional),
+									);
+									const run = () =>
+										attempt(provisional, () => {}, undefined, carry);
+									return {
+										result: gate ? await gate.run(run) : await run(),
+									};
+								},
+								(carry) =>
+									requeued(context.emitUpdate, engineSessionId, carry.reason),
+							);
+						},
+						async () => {
+							// A restart is a new start: a random sampler is drawn again.
+							sampling = drawSpawnSampling(requestedSampling);
+							await restarted(context.emitUpdate, engineSessionId);
+						},
+					);
+					const output = buildOutput(result, capOutcome, placed);
+					// Detached at its cap: its hand-back waits for its real end.
+					if (capOutcome?.state !== "awaiting_lead") {
+						await notifyEnd(output, result);
+					}
+					return output;
+				} catch (error) {
+					await notifyEnd(undefined, undefined, error);
+					throw error;
+				} finally {
+					await lifetime.end(async () => {
+						// The lease outlives the run on every path, or a node
+						// stays booked for an agent that is no longer on it and
+						// the round narrows with each failure. Same for the stop
+						// registration: one that outlives its agent is a button
+						// that reports success and does nothing.
+						cancellation.release();
+						stopRoomWatch();
+						trouble.dispose();
+						// And its workspace, which a run that never started
+						// still opened.
+						if (options.onSubAgentSettled) {
+							try {
+								await options.onSubAgentSettled({
+									toolCallId: context.toolCallId,
+									name: config.name,
+								});
+							} catch {
+								// Best-effort observer callback.
+							}
+						}
+						// Its engine session goes back the moment it ends.
+						const released = await releasePolykvAgent(engineSessionId).catch(
+							() => undefined,
+						);
+						for (const failure of released?.failed ?? []) {
+							options.logger?.log(
+								`[Agents] could not close engine session ${failure.sessionId}: ${failure.error}`,
+							);
+						}
+					});
+				}
+			}
 			return tool as unknown as AgentTool;
 		},
 	);
+	// `retry_failed` and a restart of a finished configured agent run it
+	// again through the same path, by its name.
+	if (options.sessionId !== undefined) {
+		roundsFor(options.sessionId).registerRunner(
+			"configured",
+			async ({ agent, task, context }) => {
+				const run = runners.get(configuredAgentKey(agent.type ?? agent.name));
+				if (!run) {
+					throw new Error(
+						`The configured agent "${agent.type ?? agent.name}" is no longer defined in this session.`,
+					);
+				}
+				const sampling = spawnSamplingFields(agent.sampling);
+				return await run(
+					{ prompt: task, ...sampling, ...storedControls(agent) },
+					context,
+				);
+			},
+		);
+	}
+	return tools;
+}
+
+/**
+ * A direct `subagent_<name>` call: a round of one, blocking as it always
+ * was, whose result carries the agent's facts.
+ */
+async function runConfiguredRound(
+	config: ConfiguredAgentConfig,
+	input: ConfiguredAgentInput,
+	context: AgentToolContext,
+	run: (
+		input: ConfiguredAgentInput,
+		context: AgentToolContext,
+	) => Promise<SpawnAgentOutput>,
+): Promise<SpawnAgentOutput> {
+	const rounds = roundsFor(context.sessionId);
+	const sampling = readSpawnSampling(input);
+	const controls = controlFields(input);
+	const maxIterations = controls.max_iterations ?? config.maxIterations;
+	const handle = rounds.open({
+		kind: "configured",
+		tool: buildConfiguredAgentToolName(config.name),
+		...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),
+		background: false,
+		agents: [
+			{
+				name: config.name,
+				type: config.name,
+				task: input.prompt,
+				...(sampling ? { sampling } : {}),
+				...(maxIterations ? { maxIterations } : {}),
+				...(controls.check ? { check: controls.check } : {}),
+			},
+		],
+		...(context.signal ? { signal: context.signal } : {}),
+		...(context.emitUpdate ? { emitUpdate: context.emitUpdate } : {}),
+	});
+	const leave = rounds.enterBlocking();
+	try {
+		await handle.run(0, { ...context, signal: handle.signal }, (ctx) =>
+			run(input, ctx),
+		);
+		await handle.idle();
+		const output = handle.outputs()[0] as SpawnAgentOutput & {
+			error?: string;
+			name?: string;
+		};
+		const agent = handle.agent(0);
+		handle.delivered();
+		if (output.error !== undefined && output.finishReason === undefined) {
+			throw new Error(output.error);
+		}
+		const { name: _name, error: _error, ...rest } = output;
+		return {
+			...rest,
+			...(agent ? { agent: agentFacts(handle.record, agent) } : {}),
+		};
+	} finally {
+		leave();
+		handle.close();
+	}
 }

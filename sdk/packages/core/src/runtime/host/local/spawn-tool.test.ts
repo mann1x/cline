@@ -56,7 +56,7 @@ describe("createSessionSwarmTool workers", () => {
 				execute: (i: unknown, c: unknown) => Promise<unknown>;
 			}
 		).execute(
-			{ systemPrompt: "Check the syntax.", tasks: [{ task: "a" }] },
+			{ wait: true, systemPrompt: "Check the syntax.", tasks: [{ task: "a" }] },
 			{ agentId: "lead" },
 		);
 		const worker = built[0];
@@ -71,7 +71,7 @@ describe("createSessionSwarmTool workers", () => {
 				execute: (i: unknown, c: unknown) => Promise<unknown>;
 			}
 		).execute(
-			{ systemPrompt: "Check the syntax.", tasks: [{ task: "a" }] },
+			{ wait: true, systemPrompt: "Check the syntax.", tasks: [{ task: "a" }] },
 			{ agentId: "lead" },
 		);
 		const worker = built[0];
@@ -86,7 +86,11 @@ describe("createSessionSwarmTool workers", () => {
 				execute: (i: unknown, c: unknown) => Promise<unknown>;
 			}
 		).execute(
-			{ systemPrompt: "s", tasks: [{ task: "a", tools: ["read_files"] }] },
+			{
+				wait: true,
+				systemPrompt: "s",
+				tasks: [{ task: "a", tools: ["read_files"] }],
+			},
 			{ agentId: "lead" },
 		);
 		expect(
@@ -100,7 +104,7 @@ describe("createSessionSwarmTool workers", () => {
 				execute: (i: unknown, c: unknown) => Promise<unknown>;
 			}
 		).execute(
-			{ systemPrompt: "s", tasks: [{ task: "a" }] },
+			{ wait: true, systemPrompt: "s", tasks: [{ task: "a" }] },
 			{ agentId: "lead" },
 		);
 		const tools = built[0]?.tools as Array<{

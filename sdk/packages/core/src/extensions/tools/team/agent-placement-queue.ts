@@ -69,6 +69,23 @@ export interface AcquireOptions {
 	 * reason to lose that.
 	 */
 	front?: boolean;
+	/**
+	 * A node to place this agent anywhere but, when another has room: the one
+	 * the lead requeued it off for being slow or misbehaving. Deprioritised,
+	 * not banned -- with no other room it still goes there rather than wait.
+	 */
+	avoid?: string;
+}
+
+/** One node as the queue sees it, for the lead's status report. */
+export interface PlacementNodeState {
+	nodeId: string;
+	capacity: number;
+	running: number;
+	/** Out of rotation (not answering, or without the model) until then. */
+	downUntil?: number;
+	/** Held after a refusal until then. */
+	heldUntil?: number;
 }
 
 /**
@@ -143,6 +160,8 @@ export interface AgentPlacementQueue {
 	readonly waiting: number;
 	/** Node id to agents running on it now. A copy. */
 	occupancy(): ReadonlyMap<string, number>;
+	/** Every node's capacity, load and holds, for a status line. */
+	nodeStates(): PlacementNodeState[];
 	/**
 	 * Take a node out of the rotation for a cool-off.
 	 *
@@ -174,6 +193,7 @@ export class NoAgentCapacityError extends Error {
 }
 
 interface Waiter {
+	avoid?: string;
 	resolve: (lease: PlacementLease) => void;
 	reject: (error: unknown) => void;
 	signal?: AbortSignal;
@@ -291,14 +311,29 @@ export function createAgentPlacementQueue(
 		(entry) => !Number.isNaN(entry.capacity) && entry.capacity > 0,
 	);
 
-	const tryPlace = (): PlacementLease | undefined => {
-		const result = placeAgent({
-			nodes: view(),
-			occupancy,
-			state,
-			downUntil,
-			now: now(),
-		});
+	const tryPlace = (avoid?: string): PlacementLease | undefined => {
+		const place = (nodesView: AgentNode[]) =>
+			placeAgent({
+				nodes: nodesView,
+				occupancy,
+				state,
+				downUntil,
+				now: now(),
+			});
+		// Anywhere but the avoided node first; that node only when nothing
+		// else has room.
+		let result = avoid
+			? place(
+					view().map((node) =>
+						node.id === avoid
+							? { ...node, capacity: occupancy.get(node.id) ?? 0 }
+							: node,
+					),
+				)
+			: place(view());
+		if (avoid && result.placement.kind === "queued") {
+			result = place(view());
+		}
 		state = result.state;
 		if (result.placement.kind === "queued") {
 			return undefined;
@@ -355,7 +390,7 @@ export function createAgentPlacementQueue(
 
 	const drain = (): void => {
 		while (waiters.length > 0) {
-			const lease = tryPlace();
+			const lease = tryPlace(waiters[0]?.avoid);
 			if (!lease) {
 				return;
 			}
@@ -380,13 +415,18 @@ export function createAgentPlacementQueue(
 			// would let a newcomer take a slot that frees mid-call. An agent
 			// coming back to the front has nobody ahead by definition.
 			if (waiters.length === 0 || options?.front) {
-				const lease = tryPlace();
+				const lease = tryPlace(options?.avoid);
 				if (lease) {
 					return Promise.resolve(lease);
 				}
 			}
 			return new Promise<PlacementLease>((resolve, reject) => {
-				const waiter: Waiter = { resolve, reject, signal };
+				const waiter: Waiter = {
+					resolve,
+					reject,
+					signal,
+					...(options?.avoid ? { avoid: options.avoid } : {}),
+				};
 				if (signal) {
 					waiter.onAbort = () => {
 						const index = waiters.indexOf(waiter);
@@ -408,6 +448,20 @@ export function createAgentPlacementQueue(
 			return waiters.length;
 		},
 		occupancy: () => new Map(occupancy),
+		nodeStates: () => {
+			const at = now();
+			return nodes.map((node) => {
+				const down = downUntil.get(node.id) ?? 0;
+				const held = heldUntil.get(node.id) ?? 0;
+				return {
+					nodeId: node.id,
+					capacity: node.capacity,
+					running: occupancy.get(node.id) ?? 0,
+					...(down > at ? { downUntil: down } : {}),
+					...(held > at ? { heldUntil: held } : {}),
+				};
+			});
+		},
 		markUnreachable: (nodeId, coolOffMs) => {
 			if (!nodes.some((node) => node.id === nodeId)) {
 				return;
