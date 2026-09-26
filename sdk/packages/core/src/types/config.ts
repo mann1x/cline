@@ -193,11 +193,10 @@ export interface CoreEscalationConfig {
 	 * alternation is an unload and a load. Only the host knows which of those
 	 * its hardware is doing, so only the host can answer this.
 	 *
-	 * Off is not the hand-over this feature started as. The notes are still
-	 * collected and still carry the revision each changed file can be read at;
-	 * they arrive in one batch with the delivery rather than while the expert
-	 * is still working, so the base can check the claims against the exact
-	 * bytes without ever having run beside it.
+	 * Off is the hand-over this feature started as: the base blocks inside
+	 * `escalate` until the delivery, and no notes are collected
+	 * (`local-runtime-host.ts` builds the notes only on the stand-down). The
+	 * delivery still names the revision each changed file can be read at.
 	 */
 	alternateWithBase?: boolean;
 	/**

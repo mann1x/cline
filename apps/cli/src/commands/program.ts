@@ -171,7 +171,7 @@ export function addRootOptions(cmd: Command): Command {
 			)
 			.option(
 				"--expert-alternate",
-				"Let the base model keep running while the expert works: batched notes on what the expert is doing, the guards watching it for going in circles, and messages in both directions. Two models are then in use at once -- free against a cloud expert, an unload and a load per alternation against a second local model on a one-slot server. Off, the same notes arrive in one batch with the delivery",
+				"Let the base model keep running while the expert works: batched notes on what the expert is doing, the guards watching it for going in circles, and messages in both directions. Two models are then in use at once -- free against a cloud expert, an unload and a load per alternation against a second local model on a one-slot server. Off, the base waits inside the hand-over until the delivery and no notes are collected",
 			)
 			.option(
 				"--expert-no-relay",
@@ -179,7 +179,7 @@ export function addRootOptions(cmd: Command): Command {
 			)
 			.option(
 				"--struggle-failed-calls <count>",
-				"Failed tool calls within the window that satisfy the behavioural half of the stuck trigger (default: 4). A session running the change protocol rarely fails a call at all -- it calls the check, the call succeeds, and the result says the check did not pass -- so 1 is what makes the trigger reachable there",
+				"Failed tool calls within the window that satisfy the behavioural half of the stuck trigger (default: 6). A session running the change protocol rarely fails a call at all -- it calls the check, the call succeeds, and the result says the check did not pass -- so 1 is what makes the trigger reachable there",
 			)
 			.option(
 				"--struggle-distress-hits <count>",
@@ -207,11 +207,11 @@ export function addRootOptions(cmd: Command): Command {
 			)
 			.option(
 				"--force-full-from-compaction <n>",
-				"The compaction from which the recency tail is dropped and the summary becomes the whole context, counting from 1 (default: 2). Measured: across 335 harness runs the fix rate falls 85% -> 63% -> 50% -> 25% with each compaction a run has been through. 1 drops the tail on every compaction; 0 never does",
+				"The compaction from which the recency tail is dropped and the summary becomes the whole context, counting from 1 (default: 0, never). Measured: across 335 harness runs the fix rate falls 85% -> 63% -> 50% -> 25% with each compaction a run has been through. 1 drops the tail on every compaction; 0 never does",
 			)
 			.option(
 				"--parallel-sessions <count>",
-				"How many requests this endpoint serves at once (OLLAMA_NUM_PARALLEL, --parallel); bounds concurrent agents (default: 1, max: 10)",
+				"How many requests this endpoint serves at once (OLLAMA_NUM_PARALLEL, --parallel); bounds concurrent agents (default: 1, max: 64)",
 			)
 			.option(
 				"--agent-node <spec>",
