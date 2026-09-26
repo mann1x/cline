@@ -597,6 +597,14 @@ interface HookBag {
 	onEvent: NonNullable<AgentRuntimeHooks["onEvent"]>[];
 }
 
+/** The run used every turn `maxIterations` gave it. */
+class MaxIterationsReachedError extends Error {
+	constructor(maxIterations: number | undefined) {
+		super(`Agent runtime exceeded maxIterations (${maxIterations})`);
+		this.name = "MaxIterationsReachedError";
+	}
+}
+
 class ControlledStopError extends Error {
 	readonly reason?: string;
 
@@ -2106,9 +2114,7 @@ export class AgentRuntime {
 				}
 			}
 
-			throw new Error(
-				`Agent runtime exceeded maxIterations (${this.config.maxIterations})`,
-			);
+			throw new MaxIterationsReachedError(this.config.maxIterations);
 		} catch (error) {
 			const normalized =
 				error instanceof Error ? error : new Error(String(error));
@@ -2151,6 +2157,10 @@ export class AgentRuntime {
 				// mode` in the runtime log — reported `external_abort` on the JSON
 				// stream, which is what anything machine-readable had to go on.
 				abortReason: status === "aborted" ? normalized.message : undefined,
+				...(status === "failed" &&
+				normalized instanceof MaxIterationsReachedError
+					? { limit: "max_iterations" as const }
+					: {}),
 			};
 			// The name and message go in the text, not only in the metadata below.
 			// Hosts routinely drop structured log arguments — the VS Code host

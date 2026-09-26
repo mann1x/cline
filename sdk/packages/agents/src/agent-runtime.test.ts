@@ -2172,6 +2172,51 @@ describe("AgentRuntime", () => {
 		expect(result.outputText).toBe("done");
 	});
 
+	it("says a run that reached maxIterations stopped at its cap, and keeps the transcript", async () => {
+		const toolTurn = (id: string) => () => [
+			{
+				type: "tool-call-delta" as const,
+				toolCallId: id,
+				toolName: "echo",
+				inputText: '{"text":"x"}',
+			},
+			{ type: "finish" as const, reason: "tool-calls" as const },
+		];
+		const model = new ScriptedModel([toolTurn("call_1"), toolTurn("call_2")]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [createEchoTool()],
+			maxIterations: 2,
+		});
+
+		const result = await runtime.run("Start");
+
+		expect(result.status).toBe("failed");
+		expect(result.limit).toBe("max_iterations");
+		expect(result.iterations).toBe(2);
+		expect(result.error?.message).toBe(
+			"Agent runtime exceeded maxIterations (2)",
+		);
+		// Both turns and their results are still there to continue from.
+		expect(
+			result.messages.filter((message) => message.role === "assistant"),
+		).toHaveLength(2);
+	});
+
+	it("marks no limit on a run that failed for another reason", async () => {
+		const model = new ScriptedModel([
+			() => {
+				throw new Error("boom");
+			},
+		]);
+		const runtime = new AgentRuntime({ model, maxIterations: 3 });
+
+		const result = await runtime.run("Start");
+
+		expect(result.status).toBe("failed");
+		expect(result.limit).toBeUndefined();
+	});
+
 	it("supports plugin-contributed tools and hooks", async () => {
 		const beforeRun = vi.fn();
 		const plugin: AgentRuntimePlugin = {

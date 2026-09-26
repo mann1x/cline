@@ -804,6 +804,22 @@ export class SessionRuntime {
 		this.config = next;
 	}
 
+	/**
+	 * The turn cap for the next run or continuation. `undefined` is no cap.
+	 *
+	 * A delegated agent stopped at its cap is continued, not restarted: the
+	 * lead raises the cap and the same conversation goes on from its last turn.
+	 * Each run counts its turns from zero, so this is the allowance for that
+	 * one continuation.
+	 */
+	setMaxIterations(maxIterations: number | undefined): void {
+		this.config = { ...this.config, maxIterations };
+	}
+
+	getMaxIterations(): number | undefined {
+		return this.config.maxIterations;
+	}
+
 	clearHistory(): void {
 		this.conversation.clearHistory();
 		this.resetConversationBoundaryTrackers();
@@ -1829,7 +1845,13 @@ export class SessionRuntime {
 		const finishReason: AgentFinishReason = thrownError
 			? "error"
 			: deriveFinishReason(runResult);
+		// A run stopped at its cap did work, and its last words are that work;
+		// the cap itself is in `finishReason`. Any other failure has no answer,
+		// and its text is what went wrong.
 		const text =
+			(runResult?.status === "failed" && runResult.limit === "max_iterations"
+				? runResult.outputText || runResult.error?.message
+				: undefined) ||
 			(runResult?.status === "failed" ? runResult.error?.message : undefined) ||
 			runResult?.outputText ||
 			"";
@@ -1916,7 +1938,9 @@ function deriveFinishReason(
 		case "aborted":
 			return "aborted";
 		case "failed":
-			return "error";
+			// Out of turns is not broken: the transcript is whole and can be
+			// continued with a higher cap, so it is reported as the limit it is.
+			return runResult.limit === "max_iterations" ? "max_iterations" : "error";
 	}
 }
 

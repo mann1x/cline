@@ -1075,4 +1075,14 @@ export interface AgentRunResult {
 	 * cause from booleans it happened to hold.
 	 */
 	abortReason?: string;
+	/**
+	 * The limit that ended a failed run, when one did rather than an error.
+	 *
+	 * `max_iterations`: the run used every turn it was given. Its transcript is
+	 * whole -- every turn it took and every tool result -- so a host can
+	 * continue it with a higher cap instead of treating the work as lost. Kept
+	 * apart from `error` because "out of turns" and "broken" call for opposite
+	 * answers from whoever is watching the run.
+	 */
+	limit?: "max_iterations";
 }

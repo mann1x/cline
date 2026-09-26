@@ -4223,7 +4223,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 	): Promise<void> {
 		if (hasPendingTeamRunWork(session)) return;
 		const isAborted = finishReason === "aborted" || session.aborting;
-		const isError = finishReason === "error";
+		// A headless run that used every turn did not finish its task: it exits
+		// as it did when the cap was reported as an error.
+		const isError =
+			finishReason === "error" || finishReason === "max_iterations";
 		await this.shutdownSession(session, {
 			status: isAborted ? "cancelled" : isError ? "failed" : "completed",
 			exitCode: isError ? 1 : 0,

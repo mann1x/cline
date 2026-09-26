@@ -1209,6 +1209,42 @@ describe("SessionRuntime.continue", () => {
 	});
 });
 
+describe("SessionRuntime iteration cap", () => {
+	it("finishes a run that used every turn with max_iterations, not error", async () => {
+		const { deps } = withFakeRuntime({
+			result: {
+				status: "failed",
+				iterations: 4,
+				error: new Error("Agent runtime exceeded maxIterations (4)"),
+				limit: "max_iterations",
+				outputText: "got halfway",
+			},
+		});
+		const session = new SessionRuntime(
+			makeAgentConfig({ maxIterations: 4 }),
+			deps,
+		);
+		const result = await session.run("go");
+		expect(result.finishReason).toBe("max_iterations");
+		expect(result.iterations).toBe(4);
+		// Its last words are the work; the cap is in finishReason.
+		expect(result.text).toBe("got halfway");
+	});
+
+	it("runs the next continuation with the cap it was given", async () => {
+		const { deps, configs } = withCapturingFakeRuntime();
+		const session = new SessionRuntime(
+			makeAgentConfig({ maxIterations: 4 }),
+			deps,
+		);
+		await session.run("go");
+		session.setMaxIterations(10);
+		await session.continue("carry on");
+		expect(configs.map((config) => config.maxIterations)).toEqual([4, 10]);
+		expect(session.getMaxIterations()).toBe(10);
+	});
+});
+
 // ---------------------------------------------------------------------------
 // abort
 // ---------------------------------------------------------------------------

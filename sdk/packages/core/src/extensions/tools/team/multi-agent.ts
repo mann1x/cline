@@ -209,7 +209,12 @@ function isIntentionalTeammateAbort(
 
 function taskEndStatusFromResult(result: AgentResult): TeamTaskEndStatus {
 	if (result.finishReason === "aborted") return "cancelled";
-	if (result.finishReason === "error") return "failed";
+	// Out of turns is not done. Reported as it was while the cap was an error.
+	if (
+		result.finishReason === "error" ||
+		result.finishReason === "max_iterations"
+	)
+		return "failed";
 	return "completed";
 }
 
@@ -1445,8 +1450,15 @@ export class AgentTeamsRuntime {
 			// "error" rather than throws; route them through the failure
 			// path so the run is reported as failed (and retried when
 			// maxRetries allows) instead of masquerading as completed.
-			if (result.finishReason === "error") {
-				throw new Error(result.text || "Teammate run failed");
+			if (
+				result.finishReason === "error" ||
+				result.finishReason === "max_iterations"
+			) {
+				throw new Error(
+					result.finishReason === "max_iterations"
+						? `Teammate run stopped at its iteration cap (${result.iterations} iterations); its conversation is kept -- run the task again with continueConversation to go on.`
+						: result.text || "Teammate run failed",
+				);
 			}
 			run.status = "completed";
 			run.result = result;

@@ -32,8 +32,11 @@ export const STEER_SIDE_TURN_MAX_ITERATIONS = 4;
 export interface SteerSideTurnRunner {
 	/** Seed the copy of the lead's conversation. */
 	restore(messages: readonly Message[]): void;
-	/** Run one user message on it; resolves with the final text. */
-	continue(message: string): Promise<{ text: string }>;
+	/**
+	 * Run one user message on it; resolves with the final text, and how the
+	 * run ended when the runner says.
+	 */
+	continue(message: string): Promise<{ text: string; finishReason?: string }>;
 }
 
 export interface SteerSideTurnInput {
@@ -200,6 +203,12 @@ const SIDE_TURN_PREAMBLE = [
 	"The user's message:",
 ].join("\n");
 
+/**
+ * The reply when the side turn used all of its own turns without writing one.
+ * Says whose turns they were, so it cannot be read as a report on the agents.
+ */
+export const SIDE_TURN_OUT_OF_TURNS = `(No reply: this side turn used all ${STEER_SIDE_TURN_MAX_ITERATIONS} of its own turns before answering. That limit is the side turn's own, not the agents' -- it says nothing about how far they got.)`;
+
 /** Run the side turn. Never throws: a failure is the reply. */
 export async function runSteerSideTurn(
 	input: SteerSideTurnInput,
@@ -217,6 +226,12 @@ export async function runSteerSideTurn(
 				? SYSTEM_SIDE_TURN_PREAMBLE
 				: SIDE_TURN_PREAMBLE;
 		const result = await runner.continue(`${preamble}\n${input.message}`);
+		// The side turn's own cap is the side turn's, never the round's. Its
+		// "exceeded maxIterations (4)" handed on as the reply was read by the lead
+		// as a cap on its agents (pandorum 2ge0c) -- a cap none of them had.
+		if (result.finishReason === "max_iterations") {
+			return { reply: SIDE_TURN_OUT_OF_TURNS, actions };
+		}
 		return { reply: result.text.trim(), actions };
 	} catch (error) {
 		return {

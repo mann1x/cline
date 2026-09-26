@@ -92,6 +92,30 @@ describe("the lead's side turn", () => {
 		expect(result.reply).toContain("model unreachable");
 	});
 
+	// pandorum 2ge0c (4.100.199): the side turn used its own four turns, and the
+	// runtime's "Agent runtime exceeded maxIterations (4)" was handed to the
+	// lead as its reply. The lead then reported its fixer agents as "cut off at
+	// 4 iterations" -- a cap no agent of that round had.
+	it("does not pass its own turn cap off as the lead's reply", async () => {
+		const result = await runSteerSideTurn({
+			sessionId: "lead",
+			message: "status?",
+			messages: leadMessages,
+			createRunner: () => ({
+				restore: () => {},
+				continue: async () => ({
+					text: "Agent runtime exceeded maxIterations (4)",
+					finishReason: "max_iterations",
+				}),
+			}),
+		});
+		expect(result.reply).not.toContain("exceeded maxIterations");
+		expect(result.reply).toContain("side turn");
+		const note = describeSideTurnForLead("status?", result);
+		expect(note).not.toContain("exceeded maxIterations");
+		expect(note).toContain("not the agents'");
+	});
+
 	it("tells the lead afterwards what was said and done", () => {
 		const note = describeSideTurnForLead("stop the fixers", {
 			reply: "Stopped them.",
