@@ -1,7 +1,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createLogFileSink } from "./log-file-sink"
 
 /**
@@ -52,19 +52,40 @@ describe("createLogFileSink", () => {
 		// A run that logs continuously would otherwise reset the idle timer
 		// forever and never reach disk — the case the deadline is for.
 		const sink = createLogFileSink({ directory, idleMs: 1000, maxLatencyMs: 20 })
-		const stop = Date.now() + 200
-		const interval = setInterval(() => {
-			if (Date.now() < stop) {
-				sink.write("busy")
-			}
-		}, 5)
+		// Busy for as long as the test looks: the idle timer never fires, so
+		// only the deadline can have written what is read.
+		const interval = setInterval(() => sink.write("busy"), 5)
 
 		try {
-			await waitFor(async () => fs.existsSync(path.join(directory, "extension.log")))
+			await waitFor(async () => fs.existsSync(path.join(directory, "extension.log")) && (await read()).includes("busy"))
+		} finally {
+			clearInterval(interval)
+			await sink.dispose()
+		}
+	})
+
+	// The flake, 1 run in 3 under the full suite: an append is an open, then
+	// a write, then a close, each its own trip through the thread pool. The
+	// test waited for the file to exist and read it at once, and a busy pool
+	// let it read between the open that creates the file and the write that
+	// fills it -- an empty file, and "busy" not in it. Held apart here, as a
+	// loaded machine holds them.
+	it("is read for its lines, not for its existence, while an append is still landing", async () => {
+		const appendFile = fs.promises.appendFile.bind(fs.promises)
+		const spy = vi.spyOn(fs.promises, "appendFile").mockImplementation(async (file, data, options) => {
+			await fs.promises.writeFile(file as string, "", { flag: "a" })
+			await new Promise((resolve) => setTimeout(resolve, 50))
+			await appendFile(file, data, options)
+		})
+		const sink = createLogFileSink({ directory, idleMs: 1000, maxLatencyMs: 20 })
+		const interval = setInterval(() => sink.write("busy"), 5)
+		try {
+			await waitFor(async () => fs.existsSync(path.join(directory, "extension.log")) && (await read()).includes("busy"))
 			expect(await read()).toContain("busy")
 		} finally {
 			clearInterval(interval)
 			await sink.dispose()
+			spy.mockRestore()
 		}
 	})
 
