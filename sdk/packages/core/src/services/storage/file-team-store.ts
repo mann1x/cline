@@ -11,6 +11,7 @@ import { join } from "node:path";
 import type { TeamRuntimeState, TeamTeammateSpec } from "@cline/shared";
 import { resolveTeamDataDir } from "@cline/shared/storage";
 import type { TeamEvent } from "../../extensions/tools/team";
+import { reviveTeamStateDates } from "../../extensions/tools/team/team-state-dates";
 import type { TeamStore } from "../../types/storage";
 
 function nowIso(): string {
@@ -22,54 +23,6 @@ function sanitizeTeamName(name: string): string {
 		.toLowerCase()
 		.replace(/[^a-z0-9._-]+/g, "-")
 		.replace(/^-+|-+$/g, "");
-}
-
-function reviveTeamRuntimeStateDates(
-	state: TeamRuntimeState,
-): TeamRuntimeState {
-	return {
-		...state,
-		tasks: state.tasks.map((task) => ({
-			...task,
-			createdAt: new Date(task.createdAt),
-			updatedAt: new Date(task.updatedAt),
-		})),
-		mailbox: state.mailbox.map((message) => ({
-			...message,
-			sentAt: new Date(message.sentAt),
-			readAt: message.readAt ? new Date(message.readAt) : undefined,
-		})),
-		missionLog: state.missionLog.map((entry) => ({
-			...entry,
-			ts: new Date(entry.ts),
-		})),
-		runs: (state.runs ?? []).map((run) => ({
-			...run,
-			startedAt: new Date(run.startedAt),
-			endedAt: run.endedAt ? new Date(run.endedAt) : undefined,
-			nextAttemptAt: run.nextAttemptAt
-				? new Date(run.nextAttemptAt)
-				: undefined,
-			heartbeatAt: run.heartbeatAt ? new Date(run.heartbeatAt) : undefined,
-			lastProgressAt: run.lastProgressAt
-				? new Date(run.lastProgressAt)
-				: undefined,
-		})),
-		outcomes: (state.outcomes ?? []).map((outcome) => ({
-			...outcome,
-			createdAt: new Date(outcome.createdAt),
-			finalizedAt: outcome.finalizedAt
-				? new Date(outcome.finalizedAt)
-				: undefined,
-		})),
-		outcomeFragments: (state.outcomeFragments ?? []).map((fragment) => ({
-			...fragment,
-			createdAt: new Date(fragment.createdAt),
-			reviewedAt: fragment.reviewedAt
-				? new Date(fragment.reviewedAt)
-				: undefined,
-		})),
-	};
 }
 
 interface PersistedTeamEnvelope {
@@ -114,7 +67,7 @@ export class FileTeamStore implements TeamStore {
 	readState(teamName: string): TeamRuntimeState | undefined {
 		const envelope = this.readEnvelope(teamName);
 		return envelope?.teamState
-			? reviveTeamRuntimeStateDates(envelope.teamState)
+			? reviveTeamStateDates(envelope.teamState)
 			: undefined;
 	}
 
@@ -143,7 +96,7 @@ export class FileTeamStore implements TeamStore {
 		const envelope = this.readEnvelope(teamName);
 		return {
 			state: envelope?.teamState
-				? reviveTeamRuntimeStateDates(envelope.teamState)
+				? reviveTeamStateDates(envelope.teamState)
 				: undefined,
 			teammates: envelope?.teammates ?? [],
 			interruptedRunIds: [],

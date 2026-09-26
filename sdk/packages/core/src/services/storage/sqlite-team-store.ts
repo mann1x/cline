@@ -8,6 +8,7 @@ import {
 import { loadSqliteDb, nowIso, type SqliteDb } from "@cline/shared/db";
 import { resolveDbDataDir } from "@cline/shared/storage";
 import type { TeamEvent } from "../../extensions/tools/team";
+import { reviveTeamStateDates } from "../../extensions/tools/team/team-state-dates";
 import type { TeamStore } from "../../types/storage";
 
 function defaultTeamDir(): string {
@@ -105,54 +106,6 @@ function parseTeammatesJson(raw: string): TeamTeammateSpec[] {
 		out.push(spec);
 	}
 	return out;
-}
-
-function reviveTeamRuntimeStateDates(
-	state: TeamRuntimeState,
-): TeamRuntimeState {
-	return {
-		...state,
-		tasks: state.tasks.map((task) => ({
-			...task,
-			createdAt: new Date(task.createdAt),
-			updatedAt: new Date(task.updatedAt),
-		})),
-		mailbox: state.mailbox.map((message) => ({
-			...message,
-			sentAt: new Date(message.sentAt),
-			readAt: message.readAt ? new Date(message.readAt) : undefined,
-		})),
-		missionLog: state.missionLog.map((entry) => ({
-			...entry,
-			ts: new Date(entry.ts),
-		})),
-		runs: (state.runs ?? []).map((run) => ({
-			...run,
-			startedAt: new Date(run.startedAt),
-			endedAt: run.endedAt ? new Date(run.endedAt) : undefined,
-			nextAttemptAt: run.nextAttemptAt
-				? new Date(run.nextAttemptAt)
-				: undefined,
-			heartbeatAt: run.heartbeatAt ? new Date(run.heartbeatAt) : undefined,
-			lastProgressAt: run.lastProgressAt
-				? new Date(run.lastProgressAt)
-				: undefined,
-		})),
-		outcomes: (state.outcomes ?? []).map((outcome) => ({
-			...outcome,
-			createdAt: new Date(outcome.createdAt),
-			finalizedAt: outcome.finalizedAt
-				? new Date(outcome.finalizedAt)
-				: undefined,
-		})),
-		outcomeFragments: (state.outcomeFragments ?? []).map((fragment) => ({
-			...fragment,
-			createdAt: new Date(fragment.createdAt),
-			reviewedAt: fragment.reviewedAt
-				? new Date(fragment.reviewedAt)
-				: undefined,
-		})),
-	};
 }
 
 export class SqliteTeamStore implements TeamStore {
@@ -351,7 +304,7 @@ export class SqliteTeamStore implements TeamStore {
 			return undefined;
 		}
 		try {
-			return reviveTeamRuntimeStateDates(parsed);
+			return reviveTeamStateDates(parsed);
 		} catch {
 			return undefined;
 		}
