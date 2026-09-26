@@ -2339,3 +2339,66 @@ describe("MessageBuilder outdated-read rewrite batching (prefix-cache stability)
 		expect(serializedBlockAt(result, 2)).toContain("export const x = 1;");
 	});
 });
+
+// pandorum 2026-09-26: at a 5,243-byte threshold on a 65,536-token window,
+// 834 of 7,465 builds rewrote a read a few turns back -- swarm agents
+// re-reading the file they were editing -- and opencoti re-prefilled 499k
+// tokens behind those rewrites. With the window known, a turn stays a pure
+// append until the transcript is 40% of the window.
+describe("MessageBuilder stale-read rewrites under context pressure", () => {
+	const MID_CONTENT = (v: number) => `export const x = ${v};\n`.repeat(550); // ~11KB
+	const reads = (...ids: string[]): Message[] =>
+		ids.flatMap((id, index) => [
+			readToolUse(id),
+			readToolResult(id, MID_CONTENT(index + 1)),
+		]);
+
+	it("leaves an earlier read alone while the transcript is small", () => {
+		const builder = new MessageBuilder({ contextWindowTokens: 65_536 });
+		const messages: Message[] = [
+			{ role: "user", content: "task" },
+			...reads("t1", "t2"),
+		];
+		const request = builder.buildForApi(messages);
+		expect(serializedBlockAt(request, 2)).toContain("export const x = 1;");
+		expect(serializedBlockAt(request, 2)).not.toContain("outdated");
+	});
+
+	it("rewrites every stale read at once when the transcript reaches the pressure mark", () => {
+		const builder = new MessageBuilder({ contextWindowTokens: 65_536 });
+		const small: Message[] = [
+			{ role: "user", content: "task" },
+			...reads("t1", "t2", "t3"),
+		];
+		expect(serializedBlockAt(builder.buildForApi(small), 2)).not.toContain(
+			"outdated",
+		);
+		// ~105KB is 40% of a 65,536-token window at 4 bytes a token.
+		const large: Message[] = [
+			...small,
+			{ role: "user", content: "notes ".repeat(15_000) },
+		];
+		const request = builder.buildForApi(large);
+		expect(serializedBlockAt(request, 2)).toContain(
+			"outdated - see the latest file content",
+		);
+		expect(serializedBlockAt(request, 4)).toContain(
+			"outdated - see the latest file content",
+		);
+		expect(serializedBlockAt(request, 6)).toContain("export const x = 3;");
+	});
+
+	it("keeps the old rule when a byte threshold is named, the rollback lever", () => {
+		const builder = new MessageBuilder({
+			contextWindowTokens: 65_536,
+			minOutdatedRewriteBytes: 2_000,
+		});
+		const request = builder.buildForApi([
+			{ role: "user", content: "task" },
+			...reads("t1", "t2"),
+		]);
+		expect(serializedBlockAt(request, 2)).toContain(
+			"outdated - see the latest file content",
+		);
+	});
+});

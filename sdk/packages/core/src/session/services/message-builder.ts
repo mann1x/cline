@@ -76,6 +76,43 @@ const OUTDATED_REWRITE_CONTEXT_SHARE = 0.02;
 const MIN_OUTDATED_REWRITE_FLOOR_BYTES = 4_096;
 /** Never let stale content grow past this, however large the window. */
 const MIN_OUTDATED_REWRITE_CEILING_BYTES = 65_536;
+/**
+ * Share of the context window the transcript must fill, as it would be sent,
+ * before stale reads are rewritten at all.
+ *
+ * A rewrite breaks the prefix cache from the first rewritten read onward, and
+ * every server this talks to caches prefixes. Rewriting whenever a small share
+ * was reclaimable made it routine: on pandorum 2026-09-26, 834 of 7,465
+ * builds rewrote a read a few turns back -- swarm agents re-reading the file
+ * they were editing, at a 5,243-byte threshold on a 65,536-token window --
+ * and opencoti measured 499k tokens re-prefilled behind those rewrites. Now a
+ * turn is a pure append until the transcript is large enough for the stale
+ * copies to matter, and then every pending one goes at once. Well under the
+ * compaction trigger, since tool schemas and the system prompt, which are not
+ * in the transcript, share the window.
+ */
+export const OUTDATED_REWRITE_PRESSURE_SHARE = 0.4;
+
+/**
+ * Transcript bytes, as sent, past which stale reads are rewritten -- or
+ * `undefined` when the window is unknown and the byte threshold decides.
+ */
+export function resolveOutdatedRewritePressureBytes(
+	contextWindowTokens: number | undefined,
+): number | undefined {
+	if (
+		typeof contextWindowTokens !== "number" ||
+		!Number.isFinite(contextWindowTokens) ||
+		contextWindowTokens <= 0
+	) {
+		return undefined;
+	}
+	return Math.round(
+		contextWindowTokens *
+			APPROX_BYTES_PER_TOKEN *
+			OUTDATED_REWRITE_PRESSURE_SHARE,
+	);
+}
 
 /**
  * Scale the stale-read rewrite threshold to the model's context window.
@@ -136,6 +173,45 @@ function appendMessageBuilderTrace(entry: Record<string, unknown>): void {
 		// ignored
 	}
 }
+/**
+ * The transcript's text, in bytes, near enough for the rewrite's pressure
+ * test: what a provider is sent, bar framing.
+ */
+function estimateTranscriptBytes(messages: readonly Message[]): number {
+	let total = 0;
+	for (const message of messages) {
+		if (typeof message.content === "string") {
+			total += utf8ByteLength(message.content);
+			continue;
+		}
+		if (!Array.isArray(message.content)) {
+			continue;
+		}
+		for (const block of message.content as ContentBlock[]) {
+			const content = block as unknown as Record<string, unknown>;
+			if (typeof content.text === "string") {
+				total += utf8ByteLength(content.text);
+			} else if (typeof content.thinking === "string") {
+				total += utf8ByteLength(content.thinking);
+			} else if (block.type === "tool_use") {
+				total += utf8ByteLength(JSON.stringify(content.input ?? {}));
+			} else if (block.type === "tool_result") {
+				const result = content.content;
+				if (typeof result === "string") {
+					total += utf8ByteLength(result);
+				} else if (Array.isArray(result)) {
+					for (const entry of result as Array<Record<string, unknown>>) {
+						if (typeof entry.text === "string") {
+							total += utf8ByteLength(entry.text);
+						}
+					}
+				}
+			}
+		}
+	}
+	return total;
+}
+
 const OUTDATED_FILE_CONTENT = "[outdated - see the latest file content]";
 /**
  * The placeholder for a read that is *duplicated*, not superseded.
@@ -276,6 +352,8 @@ export class MessageBuilder {
 	private readonly maxAssistantTextChars: number;
 	private readonly maxAssistantToolMarkupChars: number;
 	private readonly minOutdatedRewriteBytes: number;
+	/** Set when the window is known and no byte threshold was named. */
+	private readonly outdatedRewritePressureBytes: number | undefined;
 	// Sticky rewrite decisions. Kept across resetIndexes because production
 	// rebuilds fresh Message objects; entries are revalidated/pruned per build.
 	private readonly committedOutdatedRewrites = new Map<string, Set<string>>();
@@ -308,8 +386,17 @@ export class MessageBuilder {
 		// host that names a number meant it. Only the fallback is scaled.
 		this.minOutdatedRewriteBytes = normalizeNonNegativeLimit(
 			options.minOutdatedRewriteBytes,
-			resolveMinOutdatedRewriteBytes(options.contextWindowTokens),
+			options.contextWindowTokens !== undefined &&
+				options.minOutdatedRewriteBytes === undefined
+				? MIN_OUTDATED_REWRITE_FLOOR_BYTES
+				: resolveMinOutdatedRewriteBytes(options.contextWindowTokens),
 		);
+		// A named threshold is the old rule, kept whole: the env var is the
+		// rollback lever.
+		this.outdatedRewritePressureBytes =
+			options.minOutdatedRewriteBytes === undefined
+				? resolveOutdatedRewritePressureBytes(options.contextWindowTokens)
+				: undefined;
 	}
 
 	resetConversationState(): void {
@@ -499,6 +586,9 @@ export class MessageBuilder {
 		const pending = new Map<string, Set<string>>();
 		const seenToolUseIds = new Set<string>();
 		let pendingBytes = 0;
+		// What the rewrites already made reclaim, so the pressure is measured
+		// on the transcript as it is sent.
+		let committedBytes = 0;
 		// Diagnostic counters. A live session sent twelve full copies of one
 		// file — 82% of a 128k context — while this rewrite produced not a
 		// single placeholder, and every reconstruction of that session in a
@@ -573,6 +663,12 @@ export class MessageBuilder {
 						this.committedOutdatedRewrites.delete(block.tool_use_id);
 					}
 				}
+				if (committed && committed.size > 0) {
+					committedBytes += this.estimateOutdatedReclaimBytes(
+						block.content,
+						committed,
+					);
+				}
 				if (newKeys.size === 0) {
 					continue;
 				}
@@ -599,8 +695,15 @@ export class MessageBuilder {
 			}
 		}
 
+		const sentBytes =
+			this.outdatedRewritePressureBytes === undefined
+				? undefined
+				: estimateTranscriptBytes(messages) - committedBytes;
 		const committing =
-			pending.size > 0 && pendingBytes >= this.minOutdatedRewriteBytes;
+			pending.size > 0 &&
+			pendingBytes >= this.minOutdatedRewriteBytes &&
+			(sentBytes === undefined ||
+				sentBytes >= (this.outdatedRewritePressureBytes ?? 0));
 		appendMessageBuilderTrace({
 			toolResults: seen.toolResults,
 			readResults: seen.readResults,
@@ -615,6 +718,9 @@ export class MessageBuilder {
 			pendingBlocks: pending.size,
 			pendingBytes,
 			threshold: this.minOutdatedRewriteBytes,
+			...(sentBytes !== undefined
+				? { sentBytes, pressureBytes: this.outdatedRewritePressureBytes }
+				: {}),
 			committing,
 			alreadyCommitted: this.committedOutdatedRewrites.size,
 		});
