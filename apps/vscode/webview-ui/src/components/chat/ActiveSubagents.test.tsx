@@ -162,6 +162,28 @@ describe("the working-agents strip", () => {
 		expect(screen.queryByText(/primary/)).not.toBeInTheDocument()
 	})
 
+	// An agent at its iteration cap is neither working nor queued: it waits for
+	// the lead, and its tag and its box say so.
+	it("says an agent at its iteration cap is awaiting the lead", () => {
+		render(
+			<ActiveSubagents
+				messages={[
+					statusMessage([
+						item({
+							index: 1,
+							agentName: "fixer",
+							maxIterations: 4,
+							awaitingLead: { iterations: 4, maxIterations: 4 },
+						}),
+					]),
+				]}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: "fixer (awaiting lead)" }))
+		expect(screen.getByText("awaiting lead (iteration cap 4)")).toBeInTheDocument()
+	})
+
 	// #78: the provider and model, beside the agent's name, while it runs.
 	it("names the provider and model an agent is running on", () => {
 		render(

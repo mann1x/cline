@@ -513,6 +513,17 @@ export interface SubagentStatusItem {
 	 * persisted with the task, so a swarm experiment can be reproduced.
 	 */
 	sampling?: SubagentSampling
+	/** The iteration cap the lead set on it, as it stands after any resume. */
+	maxIterations?: number
+	/**
+	 * Set while it is stopped at its iteration cap, waiting for the lead to
+	 * resume it (`resume_agent`) or stop it -- its work kept.
+	 */
+	awaitingLead?: { iterations: number; maxIterations: number }
+	/** Why it ended when that was not its own answer: the iteration cap. */
+	stopReason?: "iteration_cap"
+	/** How the lead's check on it came out, when the lead set one. */
+	oracle?: SubagentOracleResult
 	contextTokens: number
 	contextWindow: number
 	contextUsagePercentage: number
@@ -543,6 +554,21 @@ export interface SubagentStatusItem {
 	 * that refused it twelve times -- was visible in the logs and nowhere else.
 	 */
 	activity?: SubagentActivityEntry[]
+}
+
+/** The lead's check on a sub-agent (`check: {command, expect, must?}`), as its report states it. */
+export interface SubagentOracleResult {
+	status: "pass" | "fail" | "not_run"
+	command?: string
+	expect?: string
+	must?: "match" | "not_match"
+	/** `null` when it could not start, or was not run. */
+	exitCode: number | null
+	/** The end of its last run's output. */
+	output: string
+	runs?: number
+	/** Why it was not run, or what stopped it being re-run. */
+	reason?: string
 }
 
 export interface SubagentSampling {

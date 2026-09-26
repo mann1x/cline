@@ -5856,6 +5856,113 @@ describe("a batch member that ends before the call", () => {
 	})
 })
 
+describe("an agent at its iteration cap, and the lead's check", () => {
+	const send = (state: MessageTranslatorState, event: Record<string, unknown>) =>
+		translateSessionEvent(
+			{ type: "agent_event", payload: { sessionId: "session-1", event: event as unknown as AgentEvent } },
+			state,
+		)
+	const start = (state: MessageTranslatorState, input: Record<string, unknown>) =>
+		send(state, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-1",
+			input,
+		})
+	const update = (state: MessageTranslatorState, payload: Record<string, unknown>) =>
+		send(state, {
+			type: "content_update",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-1",
+			update: payload,
+		})
+
+	it("marks the row awaiting the lead at the cap, and clears it on resume", () => {
+		const state = new MessageTranslatorState()
+		start(state, { name: "fixer", task: "fix it" })
+		update(state, { awaitingLead: { iterations: 4, maxIterations: 4 } })
+		const [waiting] = state.getSpawnAgentItems()
+		expect(waiting?.awaitingLead).toEqual({ iterations: 4, maxIterations: 4 })
+		expect(waiting?.status).toBe("running")
+		expect(waiting?.activity?.at(-1)?.text).toBe("Awaiting lead (iteration cap 4)")
+
+		update(state, { awaitingLead: null })
+		expect(state.getSpawnAgentItems()[0]?.awaitingLead).toBeUndefined()
+		expect(state.getSpawnAgentItems()[0]?.activity?.at(-1)?.text).toBe("Resumed by the lead")
+	})
+
+	it("keeps the check's verdict, the cap and the stop reason from the report", () => {
+		const state = new MessageTranslatorState()
+		start(state, {
+			agents: [
+				{ name: "one", task: "a" },
+				{ name: "two", task: "b" },
+			],
+		})
+		update(state, {
+			member: 0,
+			finished: {
+				name: "one",
+				text: "done",
+				iterations: 7,
+				maxIterations: 10,
+				oracle: {
+					status: "fail",
+					command: "node t.js",
+					expect: "ok",
+					must: "match",
+					exitCode: 1,
+					output: "TypeError: x",
+					runs: 3,
+				},
+			},
+		})
+		update(state, {
+			member: 1,
+			finished: { name: "two", text: "half", iterations: 4, maxIterations: 4, stopReason: "iteration_cap" },
+		})
+		const [one, two] = state.getSpawnAgentItems()
+		expect(one).toMatchObject({
+			status: "completed",
+			maxIterations: 10,
+			oracle: { status: "fail", exitCode: 1, output: "TypeError: x", command: "node t.js" },
+		})
+		expect(two).toMatchObject({ status: "completed", stopReason: "iteration_cap", maxIterations: 4 })
+	})
+
+	// A round that returned with an agent still waiting: it is not a failure,
+	// and its row says what it is waiting for.
+	it("does not fail an agent the batch index lists as awaiting the lead", () => {
+		const state = new MessageTranslatorState()
+		start(state, { agents: [{ name: "one", task: "a" }] })
+		send(state, {
+			type: "content_end",
+			contentType: "tool",
+			toolName: "spawn_agent",
+			toolCallId: "call-1",
+			output: {
+				agents: [{ name: "one", status: "awaiting_lead", iterations: 4, maxIterations: 4, agentId: "a1" }],
+				results: [
+					{
+						name: "one",
+						text: "half",
+						iterations: 4,
+						maxIterations: 4,
+						state: "awaiting_lead",
+						stopReason: "iteration_cap",
+					},
+				],
+			},
+		})
+		const [one] = state.getSpawnAgentItems()
+		expect(one?.status).toBe("completed")
+		expect(one?.error).toBeUndefined()
+		expect(one?.awaitingLead).toEqual({ iterations: 4, maxIterations: 4 })
+	})
+})
+
 // ---------------------------------------------------------------------------
 // configuredAgentUsage
 // ---------------------------------------------------------------------------

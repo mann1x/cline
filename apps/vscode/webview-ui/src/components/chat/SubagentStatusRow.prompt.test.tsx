@@ -143,3 +143,61 @@ describe("a sub-agent spawned with a sampler", () => {
 		expect(line.getAttribute("title")).toBe("Temperature: model temperature unknown; kept the model's sampler")
 	})
 })
+
+describe("a sub-agent's row and the lead's controls", () => {
+	const row = (overrides: Record<string, unknown>) =>
+		({
+			ts: 1,
+			type: "say",
+			say: "subagent",
+			partial: true,
+			text: JSON.stringify({
+				status: "running",
+				total: 1,
+				completed: 0,
+				items: [
+					{
+						index: 1,
+						agentName: "fixer",
+						prompt: "fix it",
+						status: "running",
+						toolCalls: 0,
+						inputTokens: 0,
+						outputTokens: 0,
+						totalCost: 0,
+						contextTokens: 0,
+						contextWindow: 0,
+						contextUsagePercentage: 0,
+						...overrides,
+					},
+				],
+			}),
+		}) as ClineMessage
+
+	it("says it is awaiting the lead at its iteration cap", () => {
+		render(
+			<SubagentStatusRow
+				isLast={true}
+				lastModifiedMessage={undefined}
+				message={row({ maxIterations: 4, awaitingLead: { iterations: 4, maxIterations: 4 } })}
+			/>,
+		)
+		expect(screen.getByText("awaiting lead (iteration cap 4)")).toBeTruthy()
+	})
+
+	it("shows the check's verdict, with its output in the tooltip", () => {
+		render(
+			<SubagentStatusRow
+				isLast={true}
+				lastModifiedMessage={undefined}
+				message={row({
+					status: "completed",
+					result: "done",
+					oracle: { status: "fail", command: "node t.js", expect: "ok", exitCode: 1, output: "TypeError: x", runs: 3 },
+				})}
+			/>,
+		)
+		const verdict = screen.getByText("check: FAIL (exit 1)")
+		expect(verdict.getAttribute("title")).toContain("TypeError: x")
+	})
+})

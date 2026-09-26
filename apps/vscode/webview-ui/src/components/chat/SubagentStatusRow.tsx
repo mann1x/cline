@@ -18,6 +18,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react"
 import MarkdownBlock from "../common/MarkdownBlock"
 import { subagentCompactionDetail, subagentCompactionText } from "./subagentCompactions"
+import { subagentCapText, subagentOracleText, subagentOracleTitle } from "./subagentControls"
 import { subagentIdentity, subagentModelLabel, subagentSamplingText, subagentSamplingTitle } from "./subagentIdentity"
 
 interface SubagentStatusRowProps {
@@ -330,6 +331,10 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 					// drawn in the tooltip.
 					const samplingText = subagentSamplingText(entry.sampling)
 					const latestToolCallText = entry.latestToolCall?.trim() || ""
+					// What the lead's two controls did: the iteration cap (waiting
+					// for the lead, or stopped there) and the check's verdict.
+					const capText = subagentCapText(entry)
+					const oracleText = subagentOracleText(entry.oracle)
 					return (
 						<div
 							className="rounded-xs border border-editor-group-border px-2 py-1.5"
@@ -382,6 +387,22 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 									className="mt-0.5 text-[10px] opacity-60 min-w-0 truncate font-mono"
 									title={subagentSamplingTitle(entry.sampling)}>
 									{samplingText}
+								</div>
+							)}
+							{shouldShowStats && capText && (
+								<div className="mt-0.5 text-[10px] min-w-0 truncate text-[#e8912d]">{capText.text}</div>
+							)}
+							{shouldShowStats && oracleText && (
+								<div
+									className={`mt-0.5 text-[10px] min-w-0 truncate font-mono ${
+										entry.oracle?.status === "pass"
+											? "text-success"
+											: entry.oracle?.status === "fail"
+												? "text-error"
+												: "opacity-60"
+									}`}
+									title={subagentOracleTitle(entry.oracle)}>
+									{oracleText}
 								</div>
 							)}
 							{shouldShowStats && hasDetails && (

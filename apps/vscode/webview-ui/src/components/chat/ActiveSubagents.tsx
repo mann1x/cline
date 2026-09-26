@@ -1,11 +1,12 @@
 import type { ClineMessage, ClineSaySubagentStatus, SubagentActivityEntry, SubagentStatusItem } from "@shared/ExtensionMessage"
 import { StringRequest } from "@shared/proto/cline/common"
-import { ClockIcon, LoaderCircleIcon, RefreshCwIcon, SquareIcon, TriangleAlertIcon, XIcon } from "lucide-react"
+import { ClockIcon, LoaderCircleIcon, PauseIcon, RefreshCwIcon, SquareIcon, TriangleAlertIcon, XIcon } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { TaskServiceClient } from "@/services/grpc-client"
 import { subagentCompactionDetail, subagentCompactionText } from "./subagentCompactions"
+import { subagentCapText, subagentOracleText, subagentOracleTitle } from "./subagentControls"
 import { subagentIdentity, subagentModelLabel, subagentSamplingText, subagentSamplingTitle } from "./subagentIdentity"
 import { useSubagentLiveness } from "./subagentLiveness"
 import { useCurrentWarnings } from "./subagentWarning"
@@ -86,6 +87,10 @@ export function liveSubagentsFrom(messages: ClineMessage[]): SubagentStatusItem[
  * this strip exists.
  */
 function StatusIcon({ agent }: { agent: SubagentStatusItem }) {
+	// Stopped at its iteration cap: not working, and not waiting for a slot.
+	if (agent.awaitingLead) {
+		return <PauseIcon aria-label="awaiting lead" className={`size-3 shrink-0 ${WARN_TEXT}`} />
+	}
 	return agent.status === "running" ? (
 		<LoaderCircleIcon aria-label="running" className="size-3 shrink-0 animate-spin text-link" />
 	) : (
@@ -171,6 +176,8 @@ function AgentDetail({
 		Boolean,
 	)
 	const tail = outputTail(agent)
+	const cap = subagentCapText(agent)
+	const oracle = subagentOracleText(agent.oracle)
 
 	return (
 		<div className="mt-2 rounded-xs border border-editor-group-border bg-code px-2.5 py-2">
@@ -246,6 +253,13 @@ function AgentDetail({
 				</button>
 			</div>
 			{details.length > 0 && <div className="mt-1 truncate text-[10px] opacity-60">{details.join(" · ")}</div>}
+			{/* The lead's controls: at its iteration cap, waiting; its check. */}
+			{cap && <div className={`mt-1 truncate text-[10px] ${WARN_TEXT}`}>{cap.text}</div>}
+			{oracle && (
+				<div className="mt-1 truncate font-mono text-[10px] opacity-80" title={subagentOracleTitle(agent.oracle)}>
+					{oracle}
+				</div>
+			)}
 			{/* The sampler the lead set on it, as drawn for "random". */}
 			{sampling && (
 				<div className="mt-1 truncate font-mono text-[10px] opacity-60" title={subagentSamplingTitle(agent.sampling)}>
@@ -375,7 +389,7 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 						return (
 							<button
 								aria-expanded={isOpen}
-								aria-label={`${identity.label} (${agent.status === "running" ? "running" : "queued"})`}
+								aria-label={`${identity.label} (${agent.awaitingLead ? "awaiting lead" : agent.status === "running" ? "running" : "queued"})`}
 								className={`flex max-w-[12rem] cursor-pointer items-center gap-1 rounded-xs border px-1.5 py-[1px] text-left text-[10px] font-medium text-foreground ${
 									isOpen ? "ring-1 ring-link" : ""
 								}`}

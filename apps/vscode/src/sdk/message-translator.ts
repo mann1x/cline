@@ -53,6 +53,7 @@ import type {
 	ContextBreakdown,
 	ContextWindowGrant,
 	SubagentCompactionCause,
+	SubagentOracleResult,
 	SubagentSampling,
 	SubagentStatusItem,
 } from "@shared/ExtensionMessage"
@@ -334,7 +335,76 @@ export function readSubagentSampling(value: unknown): SubagentSampling | undefin
 	return Object.keys(sampling).length > 0 ? sampling : undefined
 }
 
+/**
+ * The lead's check as a report carries it (`AgentOracleResult` in core),
+ * keeping only the fields of the shape it should have. Exported for the tests.
+ */
+export function readSubagentOracle(value: unknown): SubagentOracleResult | undefined {
+	if (!value || typeof value !== "object") {
+		return undefined
+	}
+	const record = value as Record<string, unknown>
+	const status = record.status
+	if (status !== "pass" && status !== "fail" && status !== "not_run") {
+		return undefined
+	}
+	const text = (field: unknown) => (typeof field === "string" ? field : undefined)
+	const command = text(record.command)
+	const expect = text(record.expect)
+	const reason = text(record.reason)
+	return {
+		status,
+		exitCode: typeof record.exitCode === "number" && Number.isFinite(record.exitCode) ? record.exitCode : null,
+		output: text(record.output) ?? "",
+		...(command !== undefined ? { command } : {}),
+		...(expect !== undefined ? { expect } : {}),
+		...(record.must === "match" || record.must === "not_match" ? { must: record.must } : {}),
+		...(typeof record.runs === "number" ? { runs: record.runs } : {}),
+		...(reason ? { reason } : {}),
+	}
+}
+
+/**
+ * The iteration cap from a progress update or a report: the cap, the stop
+ * reason, and whether it is waiting for the lead. Exported for the tests.
+ */
+export function applySubagentIterationCap(entry: SubagentStatusItem, update: Record<string, unknown>): void {
+	const positive = (field: unknown) => (typeof field === "number" && Number.isFinite(field) && field > 0 ? field : undefined)
+	const cap = positive(update.maxIterations)
+	if (cap !== undefined) {
+		entry.maxIterations = cap
+	}
+	if (update.stopReason === "iteration_cap") {
+		entry.stopReason = "iteration_cap"
+	}
+	// Waiting, from the spawn tool's own update while the round is open...
+	const waiting = update.awaitingLead
+	if (waiting && typeof waiting === "object") {
+		const record = waiting as Record<string, unknown>
+		const maxIterations = positive(record.maxIterations) ?? entry.maxIterations ?? 0
+		const iterations = positive(record.iterations) ?? maxIterations
+		if (!entry.awaitingLead) {
+			pushSubagentActivity(entry, `Awaiting lead (iteration cap ${maxIterations})`, "warn")
+		}
+		entry.awaitingLead = { iterations, maxIterations }
+		entry.maxIterations = maxIterations
+	} else if (waiting === null && entry.awaitingLead) {
+		entry.awaitingLead = undefined
+		pushSubagentActivity(entry, "Resumed by the lead")
+	}
+	// ...or from a report that returned while it still waits.
+	if (update.state === "awaiting_lead") {
+		const maxIterations = cap ?? entry.maxIterations ?? 0
+		entry.awaitingLead = { iterations: positive(update.iterations) ?? maxIterations, maxIterations }
+	}
+}
+
 function applySpawnAgentOutput(entry: SubagentStatusItem, output: Record<string, unknown>): void {
+	applySubagentIterationCap(entry, output)
+	const oracle = readSubagentOracle(output.oracle)
+	if (oracle) {
+		entry.oracle = oracle
+	}
 	entry.result = typeof output.text === "string" ? output.text : undefined
 	const usage = output.usage as Record<string, unknown> | undefined
 	if (usage) {
@@ -2664,6 +2734,8 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						if (activity && typeof activity.text === "string") {
 							pushSubagentActivity(entry, activity.text, activity.severity === "warn" ? "warn" : undefined)
 						}
+						// Stopped at its iteration cap, waiting for the lead; or resumed.
+						if ("awaitingLead" in updateData) applySubagentIterationCap(entry, updateData)
 						if (typeof updateData.genTps === "number" && Number.isFinite(updateData.genTps))
 							entry.genTps = updateData.genTps
 						// Ended, on its own: a batch or swarm member's row finishes
@@ -2837,7 +2909,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 								const failure =
 									event.error ??
 									(typeof result?.error === "string" ? result.error : undefined) ??
-									(indexed && indexed.status !== "completed"
+									(indexed && indexed.status !== "completed" && indexed.status !== "awaiting_lead"
 										? (indexed.error ?? memberEntry.error ?? `Agent ${indexed.status}`)
 										: undefined)
 								if (failure) {
