@@ -451,6 +451,7 @@ export function createLocalWorkspaceLister(root: string): WorkspaceLister {
 export function createListFilesTool(options: ListFilesToolOptions): AgentTool {
 	return createTool({
 		name: LIST_FILES_TOOL_NAME,
+		readOnly: true,
 		description: LIST_FILES_TOOL_DESCRIPTION,
 		inputSchema: LIST_FILES_TOOL_INPUT_SCHEMA,
 		timeoutMs: 20_000,

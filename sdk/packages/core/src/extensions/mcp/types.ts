@@ -4,6 +4,8 @@ export interface McpToolDescriptor {
 	name: string;
 	description?: string;
 	inputSchema: Record<string, unknown>;
+	/** The server's `annotations.readOnlyHint`: the tool does not modify its environment. */
+	readOnlyHint?: boolean;
 }
 
 export interface McpToolCallRequest {

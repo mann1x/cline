@@ -355,6 +355,7 @@ class StdioMcpClient implements McpServerClient {
 				name?: string;
 				description?: string;
 				inputSchema?: Record<string, unknown>;
+				annotations?: { readOnlyHint?: unknown };
 			}>;
 		};
 		return (result.tools ?? [])
@@ -365,6 +366,7 @@ class StdioMcpClient implements McpServerClient {
 					name: string;
 					description?: string;
 					inputSchema: Record<string, unknown>;
+					annotations?: { readOnlyHint?: unknown };
 				} =>
 					typeof tool?.name === "string" &&
 					typeof tool.inputSchema === "object" &&
@@ -374,6 +376,9 @@ class StdioMcpClient implements McpServerClient {
 				name: tool.name,
 				description: tool.description,
 				inputSchema: tool.inputSchema,
+				...(tool.annotations?.readOnlyHint === true
+					? { readOnlyHint: true }
+					: {}),
 			}));
 	}
 
@@ -771,6 +776,9 @@ class SdkUrlMcpClient implements McpServerClient {
 					!Array.isArray(tool.inputSchema)
 						? tool.inputSchema
 						: {},
+				...(tool.annotations?.readOnlyHint === true
+					? { readOnlyHint: true }
+					: {}),
 			}));
 		} catch (error) {
 			return await this.handleOperationError(error);

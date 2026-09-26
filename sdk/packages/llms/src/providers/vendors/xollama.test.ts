@@ -4,7 +4,9 @@ import {
 	readXollamaModel,
 	resetXollamaProbes,
 	withXollamaRequestFields,
+	XOLLAMA_READ_ONLY_HEADER,
 	XOLLAMA_SESSION_HEADER,
+	xollamaReadOnlyHeaders,
 	xollamaSessionHeaders,
 } from "./xollama";
 
@@ -52,6 +54,66 @@ describe("the xOllama request fields", () => {
 		const body = JSON.stringify({ model: "m", messages: [] });
 		await wire("http://x/api/chat", { method: "POST", body });
 		expect(sent[0]?.body).toBe(body);
+	});
+});
+
+describe("the council's read-only tools", () => {
+	// #372 D2: researchers and critics get only what is marked; unmarked
+	// means write, so a missing mark costs a tool, never grants a write.
+	it("marks x_read_only on the tools named read-only, and only those", async () => {
+		const sent: RequestInit[] = [];
+		const wire = withXollamaRequestFields((async (_url, init) => {
+			sent.push(init ?? {});
+			return json({});
+		}) as typeof fetch);
+		const headers = xollamaReadOnlyHeaders([
+			{ name: "read_files", description: "", inputSchema: {}, readOnly: true },
+			{ name: "editor", description: "", inputSchema: {} },
+			{
+				name: "docs__search",
+				description: "",
+				inputSchema: {},
+				readOnly: true,
+				source: "mcp",
+			},
+		]);
+		await wire("http://x/api/chat", {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				model: "m",
+				messages: [],
+				tools: [
+					{
+						type: "function",
+						function: { name: "read_files", parameters: {} },
+					},
+					{ type: "function", function: { name: "editor", parameters: {} } },
+					{
+						type: "function",
+						function: { name: "docs__search", parameters: {} },
+					},
+				],
+			}),
+		});
+		const body = JSON.parse(String(sent[0]?.body));
+		expect(
+			body.tools.map(
+				(t: { function: { x_read_only?: boolean } }) => t.function.x_read_only,
+			),
+		).toEqual([true, undefined, true]);
+		expect(body.session_id).toBeUndefined();
+		expect(new Headers(sent[0]?.headers).has(XOLLAMA_READ_ONLY_HEADER)).toBe(
+			false,
+		);
+	});
+
+	it("names nothing when no tool is read-only", () => {
+		expect(
+			xollamaReadOnlyHeaders([
+				{ name: "editor", description: "", inputSchema: {} },
+			]),
+		).toEqual({});
 	});
 });
 

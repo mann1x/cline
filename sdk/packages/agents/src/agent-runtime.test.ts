@@ -787,6 +787,27 @@ describe("AgentRuntime", () => {
 		expect(result.outputText).toBe("done");
 	});
 
+	// xOllama's council offers its researchers and critics only the tools
+	// marked read-only (#372 D2), so the mark has to survive into the request.
+	it("sends a tool's read-only mark with its definition", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: "ok" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [{ ...createEchoTool(), readOnly: true }],
+		});
+
+		await runtime.run("Start");
+
+		expect(model.requests[0]?.tools).toEqual([
+			expect.objectContaining({ name: "echo", readOnly: true }),
+		]);
+	});
+
 	it("injects a pending user message after tool results and before the next model request", async () => {
 		// One pending message, as a queue-backed host delivers it: a mock that
 		// answered every poll would re-interject on the resume turn.

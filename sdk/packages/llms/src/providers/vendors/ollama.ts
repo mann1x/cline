@@ -48,6 +48,7 @@ import type { ProviderFactoryResult } from "./types";
 import {
 	withXollamaRequestFields,
 	XOLLAMA_DEFAULT_BASE_URL,
+	xollamaReadOnlyHeaders,
 	xollamaSessionHeaders,
 } from "./xollama";
 
@@ -1029,9 +1030,13 @@ export function buildOllamaStreamConfig(
 	const config = buildAiSdkStreamConfig(request, context);
 	// xOllama names the engine session on every turn, so opencoti keeps the
 	// session's slot and admits its turns as a running session's.
+	// Its council also reads which tools only read.
 	const sessionHeaders =
 		context.config?.providerId === "xollama"
-			? xollamaSessionHeaders(request.sessionId)
+			? {
+					...xollamaSessionHeaders(request.sessionId),
+					...xollamaReadOnlyHeaders(request.tools),
+				}
 			: {};
 	// Resolved from the request, not from `config.reasoning`: the portable
 	// resolver fills the latter with `medium` for a bare `enabled: true`, and

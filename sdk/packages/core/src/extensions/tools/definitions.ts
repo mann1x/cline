@@ -430,6 +430,7 @@ export function createReadFilesTool(
 
 	return createTool<ReadFilesInput, ToolOperationResult[]>({
 		name: "read_files",
+		readOnly: true,
 		description:
 			"Read the content of text or image files at the provided absolute paths, or return only an inclusive one-based line range when start_line/end_line are provided on the same file entry as its path. " +
 			"When you already know multiple files you need, read them together in one call, and call this tool in the same response as other independent tool calls. " +
@@ -502,6 +503,7 @@ export function createSearchTool(
 
 	return createTool<SearchCodebaseInput, ToolOperationResult[]>({
 		name: "search_codebase",
+		readOnly: true,
 		description:
 			"Perform regex pattern searches across the codebase. " +
 			"Supports multiple parallel searches. When several search patterns could be useful and do not depend on each other, run them together in one call, and call this tool in the same response as other independent tool calls. " +
@@ -761,6 +763,7 @@ export function createWebFetchTool(
 
 	return createTool<FetchWebContentInput, ToolOperationResult[]>({
 		name: "fetch_web_content",
+		readOnly: true,
 		description:
 			"Fetch content from URLs and analyze them using the provided prompts. " +
 			"Use for retrieving documentation, API references, or any web content. " +
@@ -1005,6 +1008,7 @@ export function createGrepTool(
 
 	return createTool<GrepToolInput, ToolOperationResult>({
 		name: "grep",
+		readOnly: true,
 		description:
 			"Search files for lines matching a pattern, as POSIX `grep` does. " +
 			"Give it a `pattern` and, optionally, `paths` — files or directories, defaulting to the workspace root searched recursively, skipping `node_modules`, `.git`, `dist` and the like. " +
@@ -1108,6 +1112,7 @@ export function createAwkTool(
 
 	return createTool<AwkToolInput, ToolOperationResult>({
 		name: "awk",
+		readOnly: true,
 		description:
 			"Run an `awk` program over one or more files. " +
 			"Send a `program` — `{print $1}`, `NR>1 {sum+=$2} END {print sum}`, `$3 ~ /error/ {print FILENAME, NR, $0}` — and the `files` to run it over. `field_separator` is `-F`; `variables` is `-v`. A program with only a BEGIN block needs no files. " +
@@ -1164,6 +1169,7 @@ export function createSkillsTool(
 
 	const tool = createTool<SkillsInput, string>({
 		name: "skills",
+		readOnly: true,
 		description: baseDescription,
 		inputSchema: zodToJsonSchema(SkillsInputSchema),
 		timeoutMs,

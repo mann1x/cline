@@ -37,6 +37,7 @@ function cloneTools(
 		name: tool.name,
 		description: tool.description,
 		inputSchema: tool.inputSchema,
+		...(tool.readOnlyHint ? { readOnlyHint: true } : {}),
 	}));
 }
 

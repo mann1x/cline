@@ -313,6 +313,7 @@ export function createAskLspTool(options: AskLspToolOptions): AgentTool {
 
 	return createTool({
 		name: ASK_LSP_TOOL_NAME,
+		readOnly: true,
 		description: ASK_LSP_TOOL_DESCRIPTION,
 		inputSchema: ASK_LSP_TOOL_INPUT_SCHEMA,
 		execute: async (rawInput: unknown) => {

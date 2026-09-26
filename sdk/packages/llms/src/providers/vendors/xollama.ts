@@ -11,8 +11,11 @@
 // - `/api/chat` takes a top-level `session_id`: the engine session, for
 //   opencoti's slot affinity and its running-session admission (0411: a
 //   session that keeps sending its id is never floor-refused mid-run).
+// - A tool's function object takes `x_read_only: true` (#372, D2): a council
+//   offers researchers and critics only those, and only the synthesizer
+//   writes. Unmarked means write.
 
-import type { BasicLogger } from "@cline/shared";
+import type { AgentToolDefinition, BasicLogger } from "@cline/shared";
 import { engineSessionId } from "./polykv-swarm";
 
 /** xOllama's default origin: its own port, so it can run beside a stock Ollama. */
@@ -24,6 +27,9 @@ export const XOLLAMA_DEFAULT_BASE_URL = "http://localhost:22434";
  * request gets that far; the layer moves it into the body and drops it.
  */
 export const XOLLAMA_SESSION_HEADER = "x-cerebriline-engine-session";
+
+/** The names of the request's read-only tools, as a JSON array. */
+export const XOLLAMA_READ_ONLY_HEADER = "x-cerebriline-read-only-tools";
 
 /** What `GET /api/xollama` answers. */
 export interface XollamaServerInfo {
@@ -141,6 +147,47 @@ export function xollamaSessionHeaders(
 		: {};
 }
 
+/** The request's read-only tools, named for the fetch layer to mark. */
+export function xollamaReadOnlyHeaders(
+	tools: readonly AgentToolDefinition[] | undefined,
+): Record<string, string> {
+	const names = (tools ?? [])
+		.filter((tool) => tool.readOnly === true)
+		.map((tool) => tool.name);
+	return names.length > 0
+		? { [XOLLAMA_READ_ONLY_HEADER]: JSON.stringify(names) }
+		: {};
+}
+
+function readOnlyNames(value: string | undefined): Set<string> {
+	if (!value) {
+		return new Set();
+	}
+	try {
+		const parsed = JSON.parse(value) as unknown;
+		return new Set(
+			Array.isArray(parsed)
+				? parsed.filter((n): n is string => typeof n === "string")
+				: [],
+		);
+	} catch {
+		return new Set();
+	}
+}
+
+/** `x_read_only` on each named tool's function object. */
+function markReadOnly(tools: unknown, names: Set<string>): unknown {
+	if (!Array.isArray(tools) || names.size === 0) {
+		return tools;
+	}
+	return tools.map((tool) => {
+		const fn = (tool as { function?: { name?: unknown } } | null)?.function;
+		return fn && typeof fn.name === "string" && names.has(fn.name)
+			? { ...tool, function: { ...fn, x_read_only: true } }
+			: tool;
+	});
+}
+
 function headerValue(
 	headers: RequestInit["headers"] | undefined,
 	name: string,
@@ -159,21 +206,24 @@ function headerValue(
 	return key ? record[key] : undefined;
 }
 
-function withoutHeader(
+function withoutHeaders(
 	headers: RequestInit["headers"] | undefined,
-	name: string,
+	names: readonly string[],
 ): RequestInit["headers"] | undefined {
 	if (!headers) {
 		return headers;
 	}
 	const copy = new Headers(headers);
-	copy.delete(name);
+	for (const name of names) {
+		copy.delete(name);
+	}
 	return copy;
 }
 
 /**
  * xOllama's request fields, added to each `/api/chat` body: `session_id` from
- * the request's session. A body that is not a chat body goes out untouched.
+ * the request's session, and `x_read_only` on its read-only tools. A body
+ * that is not a chat body goes out untouched.
  */
 export function withXollamaRequestFields(
 	baseFetch: typeof fetch,
@@ -181,20 +231,30 @@ export function withXollamaRequestFields(
 ): typeof fetch {
 	return (async (input, init) => {
 		const session = headerValue(init?.headers, XOLLAMA_SESSION_HEADER);
-		if (session === undefined) {
+		const readOnly = headerValue(init?.headers, XOLLAMA_READ_ONLY_HEADER);
+		if (session === undefined && readOnly === undefined) {
 			return baseFetch(input, init);
 		}
-		const headers = withoutHeader(init?.headers, XOLLAMA_SESSION_HEADER);
+		const headers = withoutHeaders(init?.headers, [
+			XOLLAMA_SESSION_HEADER,
+			XOLLAMA_READ_ONLY_HEADER,
+		]);
 		let body = init?.body;
 		if (typeof body === "string") {
 			try {
 				const parsed = JSON.parse(body) as Record<string, unknown>;
 				if (Array.isArray(parsed.messages)) {
-					body = JSON.stringify({ ...parsed, session_id: session });
+					body = JSON.stringify({
+						...parsed,
+						...(session !== undefined ? { session_id: session } : {}),
+						...(parsed.tools !== undefined
+							? { tools: markReadOnly(parsed.tools, readOnlyNames(readOnly)) }
+							: {}),
+					});
 				}
 			} catch {
 				options?.logger?.debug?.(
-					"[xollama] request body is not JSON; sent without session_id",
+					"[xollama] request body is not JSON; sent without xOllama fields",
 				);
 			}
 		}

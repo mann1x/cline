@@ -249,6 +249,15 @@ export interface AgentToolDefinition {
 	 * names, so `serverName__toolName` is not recoverable from the wire.
 	 */
 	source?: "mcp";
+	/**
+	 * The tool only reads: it changes no file and no state outside the
+	 * session. Unset means it may write.
+	 *
+	 * Read by xOllama's council (mail #372, D2): researchers and critics are
+	 * offered only the tools marked read-only, and only the synthesizer
+	 * writes. An MCP tool takes it from the server's `readOnlyHint`.
+	 */
+	readOnly?: boolean;
 	lifecycle?: {
 		/**
 		 * Whether a successful call to this tool completes the current run.

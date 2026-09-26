@@ -69,4 +69,22 @@ describe("createMcpTools", () => {
 		expect(tool.name).toBe("lsp__find_definition");
 		expect(tool.source).toBe("mcp");
 	});
+
+	// xOllama's council offers its readers only read-only tools (#372 D2); an
+	// MCP tool is one when its server says so, and only then.
+	it("takes readOnly from the server's readOnlyHint", async () => {
+		const tools = await createMcpTools({
+			serverName: "docs",
+			provider: {
+				listTools: async () => [
+					{ name: "search", inputSchema: {}, readOnlyHint: true },
+					{ name: "write", inputSchema: {} },
+				],
+				callTool: async () => ({ content: [] }),
+				// biome-ignore lint/suspicious/noExplicitAny: a stub provider, not the real transport
+			} as any,
+		});
+
+		expect(tools.map((tool) => tool.readOnly === true)).toEqual([true, false]);
+	});
 });

@@ -27,6 +27,11 @@ import type {
 import { describe, expect, it } from "vitest";
 import { readEngineTimings } from "../request-timings";
 import { createOllamaProviderModule } from "./ollama";
+import {
+	XOLLAMA_READ_ONLY_HEADER,
+	xollamaReadOnlyHeaders,
+	xollamaSessionHeaders,
+} from "./xollama";
 
 interface OllamaChatRequest {
 	model: string;
@@ -289,5 +294,76 @@ describe("ollama wire contract (real provider package)", () => {
 		// `ai-sdk.ts`, outside this vendor module) must not mask the failure
 		// by re-issuing the request; error finishes are never retried.
 		expect(requests).toHaveLength(1);
+	});
+});
+
+describe("xOllama wire fields (real provider package)", () => {
+	// The fetch layer edits the body the real converter produced, so this is
+	// the test that the shapes it looks for are the shapes that are sent.
+	it("sends session_id and marks x_read_only on the read-only tools", async () => {
+		const requests: OllamaChatRequest[] = [];
+		const sentHeaders: Headers[] = [];
+		const fetchStub = (async (input, init) => {
+			const url = typeof input === "string" ? input : String(input);
+			if (url.includes("/api/chat")) {
+				requests.push(JSON.parse(init?.body as string));
+				sentHeaders.push(new Headers(init?.headers));
+			}
+			return new Response(
+				`${[textChunk("hi"), DONE_CHUNK].map((l) => JSON.stringify(l)).join("\n")}\n`,
+				{ status: 200, headers: { "content-type": "application/x-ndjson" } },
+			);
+		}) as typeof fetch;
+		const module = await createOllamaProviderModule(
+			{
+				providerId: "xollama",
+				baseUrl: "http://gpu2:22434",
+				fetch: fetchStub,
+			} as GatewayResolvedProviderConfig,
+			{
+				provider: {
+					id: "xollama",
+					name: "xOllama",
+					defaultModelId: "",
+					models: [],
+				},
+				model: { id: "test-model", name: "test-model", providerId: "xollama" },
+			} as unknown as GatewayProviderContext,
+		);
+		const model = module.operations.language("test-model") as LanguageModelV4;
+		const schema = { type: "object" as const, properties: {} };
+		const result = await model.doStream({
+			prompt: userText("hello"),
+			tools: [
+				{ type: "function", name: "read_files", inputSchema: schema },
+				{ type: "function", name: "editor", inputSchema: schema },
+			],
+			headers: {
+				...xollamaSessionHeaders("lead"),
+				...xollamaReadOnlyHeaders([
+					{
+						name: "read_files",
+						description: "",
+						inputSchema: {},
+						readOnly: true,
+					},
+					{ name: "editor", description: "", inputSchema: {} },
+				]),
+			},
+		} as LanguageModelV4CallOptions);
+		const reader = result.stream.getReader();
+		while (!(await reader.read()).done) {}
+
+		expect(requests[0]?.session_id).toBe("lead");
+		const tools = requests[0]?.tools as Array<{
+			function: { name: string; x_read_only?: boolean };
+		}>;
+		expect(tools.map((t) => [t.function.name, t.function.x_read_only])).toEqual(
+			[
+				["read_files", true],
+				["editor", undefined],
+			],
+		);
+		expect(sentHeaders[0]?.has(XOLLAMA_READ_ONLY_HEADER)).toBe(false);
 	});
 });

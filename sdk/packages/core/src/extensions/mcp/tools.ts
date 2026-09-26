@@ -52,6 +52,7 @@ export async function createMcpTools(
 			// price. Every MCP tool the session sees is built here, the editor
 			// bridge included, so this is the one place that has to say so.
 			source: "mcp",
+			readOnly: descriptor.readOnlyHint === true,
 			timeoutMs: options.timeoutMs,
 			retryable: options.retryable,
 			maxRetries: options.maxRetries,

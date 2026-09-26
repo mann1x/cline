@@ -2731,6 +2731,8 @@ export class AgentRuntime {
 				name: tool.name,
 				description: tool.description,
 				inputSchema: tool.inputSchema,
+				// xOllama's council offers its readers only these (#372 D2).
+				...(tool.readOnly ? { readOnly: true } : {}),
 			})),
 			modelTools: this.config.modelTools,
 			signal: this.abortController?.signal,
