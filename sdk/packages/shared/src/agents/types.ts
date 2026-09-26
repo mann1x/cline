@@ -940,6 +940,14 @@ export interface AgentConfig {
 	 */
 	maxToolResultChars?: number;
 	/**
+	 * `false` stops the message builder rewriting a superseded file read to
+	 * `[outdated ...]`. For a model that keeps state keyed on the history --
+	 * an xOllama council hashes the messages its compaction replaced, and a
+	 * rewritten one drops that record -- every earlier message must go out as
+	 * it went out before. Omit for the builder's own rule.
+	 */
+	staleReadRewrites?: boolean;
+	/**
 	 * Sampling temperature per API call
 	 */
 	temperature?: number;

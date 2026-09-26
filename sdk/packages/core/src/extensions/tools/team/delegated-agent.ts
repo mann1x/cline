@@ -46,6 +46,7 @@ export type DelegatedAgentConnectionConfig = Pick<
 	| "thinkingBudgetTokens"
 	| "maxTokensPerTurn"
 	| "maxToolResultChars"
+	| "staleReadRewrites"
 	| "temperature"
 >;
 
@@ -352,6 +353,7 @@ export function createDelegatedAgentConfigProvider(
 			thinkingBudgetTokens: runtimeConfig.thinkingBudgetTokens,
 			maxTokensPerTurn: runtimeConfig.maxTokensPerTurn,
 			maxToolResultChars: runtimeConfig.maxToolResultChars,
+			staleReadRewrites: runtimeConfig.staleReadRewrites,
 			temperature: runtimeConfig.temperature,
 		}),
 		updateConnectionDefaults: (overrides) => {

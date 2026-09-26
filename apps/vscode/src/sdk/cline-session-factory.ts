@@ -37,6 +37,7 @@ import {
 	primeDeclaredNumCtx,
 	probeOpencotiProps,
 	readResolvedOllamaWindow,
+	readXollamaModel,
 	resolveAgentSlotLimit,
 	resolveDefaultMaxOutputTokens,
 	resolveLlamaCppThinkBudgetTokens,
@@ -2268,6 +2269,17 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 					tools: await resolveOllamaToolSupport(baseUrl, modelId),
 				}
 			: undefined
+	// An xOllama council compacts its conversation itself (xollama #370, D1),
+	// keyed on a hash of the messages its record replaced. Cerebriline's own
+	// compaction, the stale-read rewrite and the capped-thinking condenser
+	// would all hand it a history it did not fold, and it would fold again.
+	const councilModel =
+		sdkProviderId === "xollama" && modelId
+			? (await readXollamaModel(withOllamaNativeDefault(sdkProviderId, baseUrl), modelId, fetch))?.council === true
+			: false
+	if (councilModel) {
+		Logger.log(`[SessionFactory] ${modelId} is an xOllama council: it compacts server-side; client compaction is off`)
+	}
 	if (ollamaCapabilities?.images !== undefined || ollamaCapabilities?.tools !== undefined) {
 		const existing = knownModels?.[modelId]
 		const capabilities = new Set<string>(existing?.capabilities ?? [])
@@ -2549,7 +2561,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		// reasoning whatever the transcript is doing. Omitting the object when
 		// auto-condense was off silently took the condenser with it.
 		compaction: {
-			enabled: useAutoCondense,
+			enabled: useAutoCondense && !councilModel,
 			// `enabled` above is the only field here that means "automatic". It
 			// decides whether the transcript is compacted on its own; everything
 			// below decides *how* a compaction is done once one is happening, and
@@ -2593,7 +2605,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			// known, its presence at the end of the reasoning is the server
 			// saying it stopped there.
 			...(thinkingBudgetMessage ? { cappedThinkingBudgetMessage: thinkingBudgetMessage } : {}),
-			cappedThinkingEnabled,
+			cappedThinkingEnabled: cappedThinkingEnabled && !councilModel,
 			...(cappedThinkingPrompt ? { cappedThinkingPrompt } : {}),
 		},
 		disableMcpSettingsTools: true,
@@ -2601,6 +2613,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		...reasoningConfig,
 		...(maxTokensPerTurn !== undefined ? { maxTokensPerTurn } : {}),
 		...(maxToolResultChars !== undefined ? { maxToolResultChars: Math.floor(maxToolResultChars) } : {}),
+		...(councilModel ? { staleReadRewrites: false } : {}),
 		...(temperature !== undefined ? { temperature } : {}),
 		maxIterations: undefined,
 		logger: sdkLogger,

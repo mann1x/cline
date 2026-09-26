@@ -76,6 +76,13 @@ vi.mock("@/core/storage/StateManager", () => ({
 	},
 }))
 
+// The host's fetch, read from the global when called rather than when the
+// module loaded, so a test can stand a server up with `vi.stubGlobal`.
+vi.mock("@/shared/net", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/shared/net")>()),
+	fetch: ((...args: Parameters<typeof globalThis.fetch>) => globalThis.fetch(...args)) as typeof globalThis.fetch,
+}))
+
 vi.mock("@/services/logging/distinctId", () => ({
 	getDistinctId: mocks.getDistinctId,
 }))
@@ -2712,5 +2719,65 @@ describe("resolveCompactionPrompt", () => {
 	// built-in prompt.
 	it("is empty when neither says anything", () => {
 		expect(resolveCompactionPrompt({}, "council-writer", "")).toBe("")
+	})
+})
+
+// xollama #370, D1: a council compacts its conversation itself, keyed on a
+// hash of the messages its record replaced. Cerebriline hands it the history
+// as the user sees it -- no compaction, no stale-read rewrite, no condensed
+// thinking -- or the council finds its record stale and folds again.
+describe("an xOllama council model", () => {
+	function xollamaSession(council: boolean) {
+		LlmsModels.resetXollamaProbes()
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			actModeApiProvider: "xollama",
+			actModeApiModelId: "omni-council",
+		} as any)
+		mocks.providerSettingsManager.getProviderSettings.mockImplementation((providerId?: string) =>
+			providerId === "xollama"
+				? ({ provider: "xollama", model: "omni-council", baseUrl: "http://gpu2:22434", contextWindow: 32768 } as any)
+				: undefined,
+		)
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
+			key === "useAutoCondense" ? true : key === "subagentsEnabled" ? false : undefined,
+		)
+		const shows: string[] = []
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: unknown) => {
+				const url = String(input)
+				if (url.endsWith("/api/show")) {
+					shows.push(url)
+					return new Response(JSON.stringify(council ? { xollama: { council: { enabled: true } } } : {}), {
+						status: 200,
+						headers: { "content-type": "application/json" },
+					})
+				}
+				return new Response("not found", { status: 404 })
+			}),
+		)
+		return shows
+	}
+
+	afterEach(() => {
+		vi.unstubAllGlobals()
+		LlmsModels.resetXollamaProbes()
+	})
+
+	it("leaves the history to the council: no compaction, no rewrites", async () => {
+		const shows = xollamaSession(true)
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+		expect(config.providerId).toBe("xollama")
+		expect(shows).toContain("http://gpu2:22434/api/show")
+		expect(config.compaction?.enabled).toBe(false)
+		expect(config.compaction?.cappedThinkingEnabled).toBe(false)
+		expect(config.staleReadRewrites).toBe(false)
+	})
+
+	it("keeps Cerebriline's compaction for a plain model on xOllama", async () => {
+		xollamaSession(false)
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+		expect(config.compaction?.enabled).toBe(true)
+		expect(config.staleReadRewrites).toBeUndefined()
 	})
 })

@@ -45,6 +45,11 @@ import {
 } from "./ollama-stall-watchdog";
 import { rewriteOllamaChatBody } from "./ollama-tool-images";
 import type { ProviderFactoryResult } from "./types";
+import {
+	withXollamaRequestFields,
+	XOLLAMA_DEFAULT_BASE_URL,
+	xollamaSessionHeaders,
+} from "./xollama";
 
 /** See {@link OLLAMA_DEFAULT_CONTEXT_WINDOW} — re-exported under the wire-format name. */
 export const OLLAMA_DEFAULT_NUM_CTX = OLLAMA_DEFAULT_CONTEXT_WINDOW;
@@ -830,7 +835,11 @@ export async function createOllamaProviderModule(
 	// provider takes auth through headers rather than an `apiKey` field, so the
 	// bearer is built here; an explicitly configured header still wins.
 	const apiKey = await resolveApiKey(config);
-	const baseURL = normalizeOllamaBaseUrl(config.baseUrl);
+	// xOllama on its own port: an unset URL is Ollama's to the package below.
+	const xollama = config.providerId === "xollama";
+	const baseURL = normalizeOllamaBaseUrl(
+		config.baseUrl || (xollama ? XOLLAMA_DEFAULT_BASE_URL : undefined),
+	);
 	const headers = {
 		...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
 		...config.headers,
@@ -896,8 +905,15 @@ export async function createOllamaProviderModule(
 	// the same dispatcher and the same absent body timeout as the turns do. An
 	// unwrapped probe fetch puts undici's five-minute `headersTimeout` back on
 	// exactly the request most likely to exceed it.
+	// xOllama's own request fields, inside the timeout layer so the body the
+	// health probe and the image fold read is the one that is sent.
+	const wireFetch = xollama
+		? withXollamaRequestFields(ensureFetch(requestFetch), {
+				...(context.logger ? { logger: context.logger } : {}),
+			})
+		: ensureFetch(requestFetch);
 	const timeoutFetch = withOllamaResponseTimeout(
-		ensureFetch(requestFetch),
+		wireFetch,
 		readOllamaTimeoutMs(config),
 		streamDispatcher,
 		{ logger: context.logger },
@@ -1011,10 +1027,22 @@ export function buildOllamaStreamConfig(
 	context: GatewayProviderContext,
 ): Partial<CallSettings> {
 	const config = buildAiSdkStreamConfig(request, context);
+	// xOllama names the engine session on every turn, so opencoti keeps the
+	// session's slot and admits its turns as a running session's.
+	const sessionHeaders =
+		context.config?.providerId === "xollama"
+			? xollamaSessionHeaders(request.sessionId)
+			: {};
 	// Resolved from the request, not from `config.reasoning`: the portable
 	// resolver fills the latter with `medium` for a bare `enabled: true`, and
 	// Ollama can carry a level *and* a budget, so a level reaching the wire has
 	// to be one somebody actually chose.
 	const named = toAiSdkReasoning(request.reasoning);
-	return { ...config, reasoning: named };
+	return {
+		...config,
+		reasoning: named,
+		...(Object.keys(sessionHeaders).length > 0
+			? { headers: { ...config.headers, ...sessionHeaders } }
+			: {}),
+	};
 }

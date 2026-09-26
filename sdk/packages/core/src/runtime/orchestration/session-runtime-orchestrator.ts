@@ -655,6 +655,10 @@ export class SessionRuntime {
 			...(config.maxToolResultChars !== undefined
 				? { maxToolResultChars: config.maxToolResultChars }
 				: {}),
+			// Never rewritten: the model keeps state keyed on the history.
+			...(config.staleReadRewrites === false
+				? { minOutdatedRewriteBytes: Number.POSITIVE_INFINITY }
+				: {}),
 		});
 		this.contributionRegistry = createContributionRegistry<
 			AgentExtension,

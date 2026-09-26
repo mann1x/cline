@@ -62,6 +62,14 @@ export interface CoreModelConfig {
 	 */
 	maxToolResultChars?: number;
 	/**
+	 * `false` stops the message builder rewriting a superseded file read to
+	 * `[outdated ...]`. For a model that keeps state keyed on the history --
+	 * an xOllama council hashes the messages its compaction replaced, and a
+	 * rewritten one drops that record -- every earlier message must go out as
+	 * it went out before. Omit for the builder's own rule.
+	 */
+	staleReadRewrites?: boolean;
+	/**
 	 * Sampling temperature per API call.
 	 */
 	temperature?: number;
@@ -94,6 +102,7 @@ export type DelegatedAgentConnectionOverride = Pick<
 	// context window, and an Agents tab that names a window of its own has
 	// named a different budget with it. Absent, agents keep the session's.
 	| "maxToolResultChars"
+	| "staleReadRewrites"
 	// The tab's thinking, sampler temperature and output cap. Leaving these
 	// out handed every delegated agent the LEAD's: on 2026-09-23 an Agents
 	// tab with thinking off ran its opencoti agents at the lead's `high`, a

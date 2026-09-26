@@ -334,6 +334,15 @@ export {
 	rememberOpencotiSession,
 	reportPolykvNotice,
 } from "./providers/vendors/polykv-swarm";
+// xOllama: detection and per-model facts, read by the host at session build.
+export {
+	probeXollama,
+	readXollamaModel,
+	resetXollamaProbes,
+	XOLLAMA_DEFAULT_BASE_URL,
+	type XollamaModelInfo,
+	type XollamaServerInfo,
+} from "./providers/vendors/xollama";
 export { disposeLangfuseTelemetry } from "./services/langfuse-telemetry";
 export {
 	type AudioTranscriptionRequest,
