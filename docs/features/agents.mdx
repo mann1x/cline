@@ -482,7 +482,10 @@ Landed on 2026-09-26 in `fdee39e61`, `d8dcee6a3` and `e4893c1b1`. Available on `
 - A blocking round does not return while one of its agents waits.
 - While it waits, the agent's engine session is released. Its node lease is kept, so it resumes on the same model.
 - With no way to reach the lead, the agent is detached: its spawn returns with `state: "awaiting_lead"` and the agent stays suspended.
-- Stopping it (`stop_agents`, or the row's Stop) ends it with its work as its report.
+- A few turns before the cap (10% of it, between 1 and 5) the agent is told to wrap up and report.
+- Stopping it ends it with its work kept. When the lead stops it with `stop_agents`, it first gets one last turn, with no tools, to write its report. The row's Stop ends it at once.
+- `resume_agent` resumes several agents in one call, or every waiting one when `agent_ids` is left out. Without `extra_iterations`, each gets its spawn cap again (60, then 120, then 180).
+- The notice is rewritten when the lead reads it. Agents resumed or stopped since are left out, and the notice is dropped when none is still waiting.
 - The row shows "awaiting lead (iteration cap N)".
 - Teammates do not suspend. See the teammates section above.
 
@@ -512,7 +515,7 @@ Landed on 2026-09-26 in `fdee39e61`, `d8dcee6a3` and `e4893c1b1`. Available on `
 - "Run the qa agent with a check that `npm test` output does not match `failing`." (`must: "not_match"`)
 
 <Note>
-  The notice tells the lead to call `resume_agent(agent_id, extra_iterations)`. The resume primitive is on `main`, but the `resume_agent` **tool** is not registered yet. It is part of the rounds work below. Until then the lead's options at the cap are to stop the agent (its work kept) or to do the rest itself.
+  The check judges one agent's own copy, and a call-level `check` applies to every agent of the call. Give it per agent to the agents whose edits it measures. A review-only agent can never pass it.
 </Note>
 
 ### Expert escalation
@@ -550,7 +553,7 @@ A nudge fires one call earlier. Three refused edits in a row, or two discarded t
 - A hand-over whose expert delivered nothing is refunded, for example when the endpoint was down or the model was missing.
 - The user refusing an approval costs nothing.
 
-**The worker struggle supervisor** (`c8ef7aff4`) watches swarm workers only. It is not wired for `spawn_agent` agents yet, although its code comment says it covers both.
+**The worker struggle supervisor** (`c8ef7aff4`) watches every delegated agent: swarm workers, `spawn_agent` agents and configured agents. A stop holds the agent for the lead (`awaiting_lead`, struggling) instead of ending it.
 
 - **Nudge.** It nudges once, asking for a summary now, on any of:
   - a detector verdict from iteration 8;
@@ -560,21 +563,29 @@ A nudge fires one call earlier. Three refused edits in a row, or two discarded t
 
 **Example prompts:** the offer is evidence-driven, so you normally do not ask for it. You can say "If you get stuck on this, escalate to the expert with the goal of making test_parse pass."
 
-## In progress: lead control over rounds
+## Lead control over rounds
 
-The branch `feat/agent-rounds-control` implements the rest of the lead-agent-control spec. None of the following was on `main` when this page was written:
+Every delegation is a round with an id (`r3`), and each agent has one too (`r3-2`). The rounds are persisted with the session.
 
-- **Non-blocking rounds.** A `wait` field on batches and swarms, with swarms defaulting to the background. The report is delivered when the round completes, and `await_agents` blocks explicitly.
-- **A round registry,** persisted with the session so it survives compaction and reload.
-- **`agents_status`.** Read-only status per round, per node and per agent, including why each agent stopped. It is available in every mode, escalation included.
+- **`agents_status`** is read-only and asks no server anything. For every node it gives the slots in use and the queue. It also gives throughput in tokens per second over the last 5 minutes and over the node's active history, with a reliability rating, and on PolyKV the KV cells and compaction threshold (0.85 unless set). For each agent it gives:
+  - its **phase** and how long it has been in it: prefill, generating, thinking, a tool, compacting, or condensing capped thinking;
+  - its own KV cells against the threshold;
+  - its queue position, with a rough wait;
+  - its pace, and an ETA to its cap with a reliability rating.
 - **Controls:**
   - `requeue_agent` puts an agent back in the queue with its transcript;
-  - `restart_agent` restarts it from its original task, optionally with new instructions;
-  - `resume_agent` continues an agent in `awaiting_lead` with a raised cap;
-  - `retry_failed` restarts a round's failed agents from their stored tasks.
-- **`message_agents` and `stop_agents` outside the side turn,** for background rounds.
+  - `restart_agent` restarts it from its task;
+  - `resume_agent` continues waiting agents;
+  - `retry_failed` reruns a round's failed agents;
+  - `message_agents` leaves a message for running agents;
+  - `compact_agents` makes the named agents compact at their next turn. This gives back their KV cells without stopping them;
+  - `stop_agents` is described to the lead as a last resort.
+- **What the lead is told about the system.**
+  - Agents edit sandboxed copies, so parallel edits to one file are safe.
+  - Their edits come back as revisions, and the lead reviews, applies and reconciles them.
+  - The check is deterministic.
 
-By design, the lead will not be able to route an agent to a node, and agents will not get a wall-clock timeout.
+By design, the lead cannot route an agent to a node, and agents have no wall-clock timeout.
 
 ## When to use which
 
