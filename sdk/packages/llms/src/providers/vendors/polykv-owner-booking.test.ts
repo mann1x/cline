@@ -78,6 +78,8 @@ function engine(
 ) {
 	const calls: Call[] = [];
 	let nextPool = 0;
+	/** The pools this engine holds, listed as a real one lists them. */
+	const pools = new Map<number, number>();
 	let resizes = 0;
 	let workers = 0;
 	const fetchImpl = (async (input: unknown, init?: RequestInit) => {
@@ -99,13 +101,25 @@ function engine(
 					.join(""),
 			});
 		}
-		if (url.pathname === "/polykv/pools" && init?.method === "GET") {
-			return json({ pools: [] });
+		if (url.pathname === "/polykv/pools" && !init?.body) {
+			// A listing that left out a live pool would read as a restart that
+			// took it, and the owner would be closed and opened again.
+			return json({
+				pools: [...pools].map(([pool_id, parent]) => ({ pool_id, parent })),
+			});
 		}
 		if (url.pathname === "/polykv/pools" || url.pathname.endsWith("/fork")) {
-			return json({ pool_id: nextPool++, parent: -1, prefix_len: 9_554 });
+			const fork = /^\/polykv\/pools\/(\d+)\/fork$/.exec(url.pathname);
+			const parent = fork ? Number(fork[1]) : -1;
+			pools.set(nextPool, parent);
+			return json({ pool_id: nextPool++, parent, prefix_len: 9_554 });
 		}
-		if (/^\/polykv\/pools\/\d+\/(pin|unpin|release)$/.test(url.pathname)) {
+		const released = /^\/polykv\/pools\/(\d+)\/release$/.exec(url.pathname);
+		if (released) {
+			pools.delete(Number(released[1]));
+			return json({ ok: true });
+		}
+		if (/^\/polykv\/pools\/\d+\/(pin|unpin)$/.test(url.pathname)) {
 			return json({ ok: true });
 		}
 		if (/^\/sessions\/[^/]+\/close$/.test(url.pathname)) {

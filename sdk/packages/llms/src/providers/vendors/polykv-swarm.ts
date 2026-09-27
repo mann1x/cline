@@ -340,6 +340,8 @@ interface OwnerShard {
 	growing?: boolean;
 	/** When the engine last refused to grow it (`Date.now()`). */
 	growRefusedAt?: number;
+	/** When a grow of it last landed (`Date.now()`). */
+	grownAt?: number;
 }
 
 interface SwarmGroup {
@@ -1628,6 +1630,7 @@ async function growOwner(
 		shard.window = answer.windowNew;
 		shard.ceiling = Math.max(shard.ceiling ?? 0, answer.windowNew);
 		shard.growRefusedAt = undefined;
+		shard.grownAt = Date.now();
 		return true;
 	} finally {
 		shard.growing = false;
@@ -1782,15 +1785,32 @@ export async function growPolykvOwnerForWorker(
 	if (shortfall <= 0) {
 		return false;
 	}
-	const current = Math.max(refusal.cells, shard.window ?? 0);
-	shard.window = current;
 	const target = alignUp(refusal.cells + shortfall);
-	if (target <= current) {
-		// Grown meanwhile by another refused worker: send it again.
+	// Grown meanwhile by another refused worker -- a grow that landed after
+	// this refusal was answered: send it again. Only then. A window
+	// remembered larger than the refusal's is otherwise stale (a queued
+	// shrink applied at the owner's idle moment, a resize from elsewhere),
+	// and trusting it answered "grown meanwhile" to every refusal: 5,957
+	// immediate resends in 13 minutes on the dev xOllama, 2026-09-27, the
+	// owner never grown.
+	if (
+		shard.grownAt !== undefined &&
+		Date.now() - shard.grownAt < POLYKV_GROWN_MEANWHILE_MS &&
+		(shard.window ?? 0) >= target
+	) {
 		return true;
 	}
+	// The refusal's cell count is the engine's own, and newer than ours.
+	shard.window = refusal.cells;
 	return growOwner(group, shard, target, true);
 }
+
+/**
+ * How recent a landed grow must be for a refusal to count as answered by it:
+ * a request refused just before another worker's grow landed is sent again
+ * rather than grown twice.
+ */
+export const POLYKV_GROWN_MEANWHILE_MS = 5_000;
 
 /** The model's own per-session maximum, which is what an owner asks for. */
 async function sessionContextMax(group: SwarmGroup): Promise<number> {

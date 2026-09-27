@@ -35,6 +35,11 @@ function restartableEngine(
 		poolUnknown?: boolean;
 		/** `/kv` lists each owner that created a pool, at a 65,536-token window. */
 		ownerKv?: boolean;
+		/**
+		 * Worker refusals name the real owner, at this many cells (the engine's
+		 * own count) with none free, rather than an owner no one opened.
+		 */
+		refusalCells?: number;
 	} = {},
 ) {
 	const owners = new Set<string>();
@@ -199,7 +204,9 @@ function restartableEngine(
 					{
 						error: {
 							message:
-								"admission rejected: session allocation full (worker of 'x': 0 of 65536 cells free, needs 75)",
+								options.refusalCells !== undefined
+									? `admission rejected: session allocation full (worker of '${[...owners][0]}': 0 of ${options.refusalCells} cells free, needs 75)`
+									: "admission rejected: session allocation full (worker of 'x': 0 of 65536 cells free, needs 75)",
 						},
 					},
 					429,
@@ -498,6 +505,40 @@ describe("a started worker on a full window", () => {
 		const response = await pending;
 		expect(response.status).toBe(200);
 		expect(Date.now() - start).toBeGreaterThan(15 * 60_000);
+	});
+
+	// The dev xOllama, 2026-09-27: the owner was remembered at a window larger
+	// than the refusal's own cell count, every refusal read as "grown
+	// meanwhile", and the worker was sent again at once -- 5,957 refusals in
+	// 13 minutes, the owner never grown.
+	it("grows an owner the refusal says is smaller than remembered, and resends only after Retry-After", async () => {
+		const engine = restartableEngine({
+			features: ["kv_status_v1", "kv_resize_v1"],
+			refusalCells: 32_768,
+		});
+		await send(engine, "stale", agentBody("r", "t"));
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+		engine.refuseWorkers(3);
+		const sent = () =>
+			turns(engine).filter((call) =>
+				JSON.stringify(call.body.messages).includes("t2"),
+			).length;
+		const resizes = () =>
+			engine.calls.filter((call) => call.path === "/sessions/resize");
+		const pending = send(engine, "stale", agentBody("r", "t2"));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(sent()).toBe(1);
+		// Grown from the engine's 32,768 by what the worker is short.
+		expect(resizes()).toHaveLength(1);
+		expect(resizes()[0]?.body.num_ctx).toBe(33_024);
+		await vi.advanceTimersByTimeAsync(1_999);
+		expect(sent()).toBe(1);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(sent()).toBe(2);
+		await vi.advanceTimersByTimeAsync(POLYKV_ROOM_BACKOFF_MAX_MS);
+		const response = await pending;
+		expect(response.status).toBe(200);
+		expect(sent()).toBe(4);
 	});
 
 	it("backs off from the engine's figure to thirty seconds, never past it", () => {

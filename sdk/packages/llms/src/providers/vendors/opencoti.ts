@@ -1835,7 +1835,17 @@ function createWorkerFetch(options: {
 				// worker is short and send it again. The engine takes that only
 				// between the owner's requests, so on a busy swarm this is best
 				// effort -- the moves and the wait below are the rest of it.
+				const retryAfter = Number(response.headers.get("retry-after"));
+				const retryAfterMs =
+					Number.isFinite(retryAfter) && retryAfter > 0
+						? retryAfter * 1000
+						: 2000;
 				if (await growPolykvOwnerForWorker(options.worker.sessionId, text)) {
+					// Sent again after the refusal's own Retry-After, never at
+					// once: a grow the engine has not applied yet answers the
+					// resend with the same refusal, and an immediate resend is
+					// then a spin (xollama mail #445).
+					await abortableDelay(retryAfterMs, signal);
 					continue;
 				}
 				if (!ranOnce && !triedFresh) {
@@ -1849,30 +1859,13 @@ function createWorkerFetch(options: {
 				if (await movePolykvWorker(options.worker.sessionId)) {
 					continue;
 				}
-				const seconds = Number(response.headers.get("retry-after"));
 				reportPolykvRoomWait(options.worker.sessionId, {
 					waiting: true,
 					reason:
 						"Waiting for room on the server: this swarm's window is full, and it starts when another agent finishes.",
 				});
 				waits += 1;
-				await new Promise<void>((resolve, reject) => {
-					const handle = setTimeout(
-						resolve,
-						polykvRoomBackoffMs(
-							waits,
-							Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 2000,
-						),
-					);
-					signal?.addEventListener(
-						"abort",
-						() => {
-							clearTimeout(handle);
-							reject(signal.reason ?? new Error("aborted"));
-						},
-						{ once: true },
-					);
-				});
+				await abortableDelay(polykvRoomBackoffMs(waits, retryAfterMs), signal);
 			}
 		} catch (error) {
 			// Stopped, or a fault no wait covers: the attempt is over.
@@ -2482,4 +2475,26 @@ export async function renderOwnRootWithRequestFields(input: {
 	} finally {
 		OWN_ROOT_RENDERS.delete(input.sessionId);
 	}
+}
+
+/** Wait `ms`, or throw the signal's reason as soon as it aborts. */
+function abortableDelay(
+	ms: number,
+	signal?: AbortSignal | null,
+): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(signal.reason ?? new Error("aborted"));
+			return;
+		}
+		const handle = setTimeout(resolve, ms);
+		signal?.addEventListener(
+			"abort",
+			() => {
+				clearTimeout(handle);
+				reject(signal.reason ?? new Error("aborted"));
+			},
+			{ once: true },
+		);
+	});
 }
