@@ -1574,6 +1574,7 @@ describe("a team reloaded from its store", () => {
 				expect(listed).toEqual([
 					expect.objectContaining({ lastProgressAt: expect.any(String) }),
 				]);
+				store.close();
 			}
 		} finally {
 			rmSync(dir, { recursive: true, force: true });

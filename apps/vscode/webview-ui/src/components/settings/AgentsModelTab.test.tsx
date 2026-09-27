@@ -9,7 +9,13 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock("@/context/ExtensionStateContext", () => ({ useExtensionState: () => mocks.state }))
-vi.mock("@/services/grpc-client", () => ({ StateServiceClient: { updateSettings: mocks.updateSettings } }))
+// ModelsServiceClient is read by useProviderConfig inside the rendered tree.
+// This suite does not ask what that config holds, so the read never settles:
+// no rejection, and no state update after a test has unmounted.
+vi.mock("@/services/grpc-client", () => ({
+	StateServiceClient: { updateSettings: mocks.updateSettings },
+	ModelsServiceClient: { readProviderConfig: () => new Promise(() => {}) },
+}))
 vi.mock("@shared/proto/cline/state", () => ({ UpdateSettingsRequest: { create: (patch: unknown) => patch } }))
 // The real one renders the whole provider form; what this suite asks is which
 // snapshot it was handed and where its writes go.

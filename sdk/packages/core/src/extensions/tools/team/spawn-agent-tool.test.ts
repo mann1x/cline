@@ -1409,7 +1409,10 @@ describe("spawn_agent's iteration cap and check", () => {
 		expect(task).toContain("fix the braces");
 		expect(task).toContain("`echo all-good`");
 		expect(task).toContain("run_commands");
-		expect(launched).toEqual(["-c echo all-good"]);
+		// The check runs in the platform shell: `sh -c` here, `cmd /c` on Windows.
+		expect(launched).toEqual([
+			`${process.platform === "win32" ? "/c" : "-c"} echo all-good`,
+		]);
 		expect(output.oracle).toMatchObject({
 			status: "pass",
 			exitCode: 0,

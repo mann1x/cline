@@ -14,7 +14,17 @@ import { SqliteTeamStore } from "./sqlite-team-store";
 // Under the package, not the system temp dir: a scratch dir this test owns.
 const root = join(__dirname, `.team-events-retention-${process.pid}`);
 
+// Closed before the directory goes: Windows will not delete an open teams.db.
+const opened: { close(): void }[] = [];
+function track<T extends { close(): void }>(store: T): T {
+	opened.push(store);
+	return store;
+}
+
 afterAll(() => {
+	for (const store of opened) {
+		store.close();
+	}
 	rmSync(root, { recursive: true, force: true });
 });
 
@@ -41,12 +51,12 @@ describe.each([
 	[
 		"sqlite",
 		(dir: string, kept: Retention = retention) =>
-			new SqliteTeamStore({ teamDir: dir, ...kept }),
+			track(new SqliteTeamStore({ teamDir: dir, ...kept })),
 	],
 	[
 		"file",
 		(dir: string, kept: Retention = retention) =>
-			new FileTeamStore({ teamDir: dir, ...kept }),
+			track(new FileTeamStore({ teamDir: dir, ...kept })),
 	],
 ])("the %s team store's event log", (name, open) => {
 	it("keeps each team's newest events, and drops its oldest", () => {

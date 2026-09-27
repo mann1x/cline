@@ -36,7 +36,13 @@ const { FileTeamStore } = await import(
 // Under the package, not the system temp dir: a scratch dir this test owns.
 const dir = join(__dirname, `.team-state-dates-${process.pid}`);
 
+// Closed before the directory goes: Windows will not delete an open teams.db.
+const opened: { close(): void }[] = [];
+
 afterAll(() => {
+	for (const store of opened) {
+		store.close();
+	}
 	rmSync(dir, { recursive: true, force: true });
 });
 
@@ -77,6 +83,7 @@ describe("reviving a saved team's dates", () => {
 			new SqliteTeamStore({ teamDir: join(dir, "sqlite") }),
 			new FileTeamStore({ teamDir: join(dir, "file") }),
 		]) {
+			opened.push(store);
 			store.init();
 			store.persistRuntime("team", state, []);
 			const before = revived.calls;

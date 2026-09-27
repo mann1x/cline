@@ -55,6 +55,9 @@ export class FileTeamStore implements TeamStore {
 		this.eventsPrune = createPruneSchedule(options);
 	}
 
+	/** Nothing is held open between calls; present so both stores close alike. */
+	close(): void {}
+
 	init(): void {
 		this.ensureTeamDir();
 	}

@@ -12,16 +12,23 @@ import { SqliteTeamStore } from "./sqlite-team-store";
 describe("a persisted teammate's sampler", () => {
 	let dir: string;
 
+	const opened: SqliteTeamStore[] = [];
+
 	beforeEach(() => {
 		dir = fs.mkdtempSync(path.join(os.tmpdir(), "team-store-sampling-"));
 	});
 
 	afterEach(() => {
+		// Closed before the directory goes: Windows will not delete an open teams.db.
+		for (const store of opened.splice(0)) {
+			store.close();
+		}
 		fs.rmSync(dir, { recursive: true, force: true });
 	});
 
 	it("comes back with the drawn values and how they were drawn", () => {
 		const store = new SqliteTeamStore({ teamDir: dir });
+		opened.push(store);
 		store.init();
 		const state = {
 			tasks: [],
@@ -43,6 +50,7 @@ describe("a persisted teammate's sampler", () => {
 
 	it("drops a range it could not have drawn with", () => {
 		const store = new SqliteTeamStore({ teamDir: dir });
+		opened.push(store);
 		store.init();
 		store.persistRuntime(
 			"team",

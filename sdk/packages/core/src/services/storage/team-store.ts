@@ -23,6 +23,7 @@ export function createLocalTeamStore(options: SqliteTeamStoreOptions = {}): {
 	handleTeamEvent: FileTeamStore["handleTeamEvent"];
 	persistRuntime: FileTeamStore["persistRuntime"];
 	markInProgressRunsInterrupted: FileTeamStore["markInProgressRunsInterrupted"];
+	close(): void;
 } {
 	try {
 		const store = new SqliteTeamStore(options);

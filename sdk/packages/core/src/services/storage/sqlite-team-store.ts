@@ -126,6 +126,16 @@ export class SqliteTeamStore implements TeamStore {
 		this.getRawDb();
 	}
 
+	/**
+	 * Releases the database handle. The next call reopens it, so a store that
+	 * outlives this is still usable. Until it is called the process holds
+	 * teams.db open, which on Windows keeps its directory from being deleted.
+	 */
+	close(): void {
+		this.db?.close?.();
+		this.db = undefined;
+	}
+
 	private ensureTeamDir(): string {
 		if (!existsSync(this.teamDirPath)) {
 			mkdirSync(this.teamDirPath, { recursive: true });

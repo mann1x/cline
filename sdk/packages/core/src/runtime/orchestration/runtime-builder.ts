@@ -1605,6 +1605,9 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			},
 			shutdown: async (reason: string) => {
 				shutdownTeamRuntime(teamRuntime, reason);
+				// After the team runtime stops, so the events its shutdown
+				// persists are written first.
+				teamStore?.close();
 				this.teamRuntimeEntries.delete(registryKey);
 				await mcpShutdown?.();
 				for (const service of ownedUserInstructionServices) {
