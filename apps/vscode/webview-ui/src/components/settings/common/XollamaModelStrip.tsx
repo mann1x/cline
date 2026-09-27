@@ -112,7 +112,13 @@ export function describeXollamaModel(status: XollamaModelStatusResponse): string
 	if (status.engine !== "opencoti") {
 		return `Plain model with ${seats}, but served by ${status.engine}, which has no PolyKV. Nothing is pooled.`
 	}
-	return `Plain model with ${seats} for Cerebriline: it shares the system prompt and tools of every conversation through PolyKV.`
+	// Seats are pools alive at once (xollama model-settings.mdx, 509024be): a
+	// lead that books a window holds 2, each concurrent swarm tree 3.
+	const room =
+		status.clientPools < 5
+			? ` A lead that books a window holds 2 seats and each concurrent swarm 3, so ${status.clientPools} ${status.clientPools === 1 ? "seat is" : "seats are"} short of a lead and a swarm together (5); a swarm then gets fewer layers and shares less.`
+			: ""
+	return `Plain model with ${seats} for Cerebriline: it shares the system prompt and tools of every conversation through PolyKV.${room}`
 }
 
 /**

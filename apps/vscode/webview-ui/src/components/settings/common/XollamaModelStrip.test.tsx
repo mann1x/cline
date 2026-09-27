@@ -31,6 +31,8 @@ describe("what an xOllama model is", () => {
 		expect(describeXollamaModel(status({ clientPools: 2 }))).toContain("not running yet")
 		expect(describeXollamaModel(status({ clientPools: 2, engine: "llamacpp" }))).toContain("served by llamacpp")
 		expect(describeXollamaModel(status({ clientPools: 1, engine: "opencoti" }))).toContain("1 pool seat for Cerebriline")
+		expect(describeXollamaModel(status({ clientPools: 3, engine: "opencoti" }))).toContain("short of a lead and a swarm")
+		expect(describeXollamaModel(status({ clientPools: 5, engine: "opencoti" }))).not.toContain("short of")
 	})
 })
 
