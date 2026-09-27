@@ -91,7 +91,7 @@ a completion nudge; compaction trigger and progress fixes.
 **The atomic transaction protocol.** Edits land as a transaction with a readable
 base revision, `restore_file`, and an approved completion check — built after
 runs were found destroying files with repaired tool calls and declaring success
-on files that do not parse.
+on files that do not parse. How it works and every setting: [Change Protocol](../features/change-protocol.mdx).
 
 **Provider and config work for local serving.** Ollama and cloud-tag handling,
 per-profile config, a VS Code MCP bridge, capability-list fixes.

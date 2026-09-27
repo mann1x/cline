@@ -103,7 +103,7 @@ export function addRootOptions(cmd: Command): Command {
 			)
 			.option(
 				"--max-changes <n>",
-				"Changes the model may declare per transaction (default: 3)",
+				"Changes the model may declare per transaction (default: 6)",
 			)
 			.option(
 				"--max-transactions <n>",

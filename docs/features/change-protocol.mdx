@@ -1,0 +1,215 @@
+---
+title: "Change Protocol"
+sidebarTitle: "Change Protocol"
+description: "Judged, revertible transactions in Cerebriline: how the change protocol (the atomic transaction protocol) runs a task, where its check comes from, what it puts back, and every setting that controls it."
+---
+
+The change protocol runs a task as a series of **transactions**. In each one the model states a short plan, makes the changes, and submits them. A **check** then decides whether they worked. If the check passes, the work is kept and the task is done. If it fails, every file the transaction touched goes back to what it was. The next attempt starts from the same place, carrying a record of what was already tried.
+
+The rollback is the point of it. Across the harness campaign the protocol comes from, it was normal for a model to report success on a transaction that then failed the check. The model had fixed the error it was looking at, not the one the program still had. Without a rollback, each of those attempts leaves a half-fix on disk for the next one to build on.
+
+<Note>
+  The same feature has two names. The UI calls it the **Change Protocol**. The code, the stored settings (`atomicProtocolSettings`), the CLI flag (`--atomic`) and the logs (`[Atomic]`) call it the **atomic protocol** or **atomic transactions**. Everything on this page applies to both names.
+</Note>
+
+This page was checked against the code on `main` at `72f900c7` (2026-09-27). The implementation lives in `sdk/packages/core/src/runtime/atomic/`.
+
+## Status
+
+The protocol is **off by default**, and it is still being worked on. On the one controlled comparison so far, it made things worse:
+
+| Arm | Runs | Fixed | Editor calls | Wall time |
+|---|---|---|---|---|
+| Protocol off (`ARM=manual`) | 3 | 3 | 44–46 | 1120–3241 s |
+| Protocol on, with the check (`ARM=oracle`) | 3 | 1 | 43–222 | 2800–7202 s |
+
+Same 9B model, host, sampler, check and 7200 s cap for all six runs; the harness judged every run with the same check at the end. Two further findings come from the same work:
+- `restore_file` was called 132 times, and every call went back to the transaction's original. The finer-grained revisions it offers were never used.
+- Checks the model proposed took four to six times the model time of the self-declared verdict, and closed nothing.
+
+The protocol is worth engaging for a model or a task that breaks files and doesn't notice. It shouldn't be treated as a default improvement. [Improving it](#improving-it) lists what the measurements point at.
+
+## Turning it on
+
+| Where | Setting | Values | Default |
+|---|---|---|---|
+| VS Code, Settings → Features → Agent | **Change Protocol** | Off · On · Static | Off |
+| VS Code, the Auto-approve panel above the message box | **Change Protocol → Engage / Disengage** | per task, under **On** | not engaged |
+| CLI | `--atomic <mode>` | `off` · `static` | `off` |
+
+- **Off** does nothing. It is what every build before the protocol did.
+- **On** makes the protocol available, and you engage it per task from the Auto-approve panel. That panel is also where you name the task's own check, because a check is a decision about the bug in front of you, not about how you work. A new task always starts not engaged.
+- **Static** engages it on every task from the start, using the check set in Settings. Nothing in the chat can change it. This is the mode for measuring a model, because the run doesn't depend on what the panel happened to be showing.
+
+The CLI has only `off` and `static`. It accepts `on`, `auto` and `always` and treats them as `static`. A stored `auto` or `always` from an older build is read as `static` too.
+
+## How a task runs
+
+1. **The protocol arms, or stands down.** When the session starts, it looks for a check ([below](#where-the-check-comes-from)) and tells you in the chat what it found:
+   - *armed*, with the check that will judge each attempt;
+   - *armed with nothing to run*, when the model will propose a check or judge its own work;
+   - *stood down*, when nothing can be run and nobody is there to approve a proposal.
+2. **Transaction 1 opens.** The protocol takes a snapshot of the workspace ([what it covers](#limits)) and gives the model the rules, the change budget and the transaction budget.
+3. **The model plans.** It states up to *Changes per attempt* changes with the `plan` tool. Each change names where, what and why.
+4. **It runs the check first.** Where there is a check, the first edit of each transaction is refused once until the model has run `run_check`. That way it sees the failure in the check's own words before it forms a theory from the source.
+5. **It edits and re-checks.** `run_check` can be called as often as needed and settles nothing. It is the model's feedback loop.
+6. **It submits.** `submit_transaction`, with a one- or two-sentence account of the change, is the only thing that submits a transaction. Finishing a turn, or describing the work in prose, doesn't.
+7. **The transaction is judged.** The check runs once more and the transaction is **kept**, **rolled back** or **carried** ([below](#how-a-transaction-is-judged)).
+8. **The next transaction opens, or the task ends.** A kept transaction ends the task. Otherwise the next transaction opens with the full rules restated, plus the record of what was tried. When the last transaction fails, everything the check never passed is put back and the task stops.
+
+### Where the check comes from
+
+The first source that exists wins:
+
+1. **The task's own check**: the command you typed in the Auto-approve panel under **On**, or the Settings field under **Static**. CLI: `--oracle`.
+2. **A `package.json` script**: the first of `typecheck`, `check-types`, `tsc`, `test`, `build`, `lint`. It runs with the package manager the lockfile names: bun, pnpm, yarn, or npm when there is no lockfile.
+3. `cargo test --quiet`, when there is a `Cargo.toml` at the workspace root.
+4. `go test ./...`, when there is a `go.mod` at the workspace root.
+5. `python3 -m pytest -q`, when there is a `pyproject.toml`, `pytest.ini` or `tox.ini`.
+6. `npx tsc --noEmit`, when there is a `tsconfig.json`.
+7. `make test` or `make check`, when there is a Makefile with that target.
+8. **A check the model proposes**, when none of the above exists and there is someone to approve it ([below](#proposed-checks)).
+9. **The model's own account**, when nothing else is available.
+
+Your own check is always worth writing when you can. Detection answers "does this workspace still hold together", and a model can leave that green with the requested thing still broken: a typecheck passes over a game that no longer starts.
+
+Two forms are accepted in the check field:
+- **A shell line**, run as written through `sh -c` (`cmd /c` on Windows) from the workspace root, with pipes and environment. It passes on exit code 0. Add a **pattern** (CLI: `--oracle-expect`) when the command prints its verdict and exits 0 either way; the output must then also match that regular expression.
+- **`cline:page <file>`**, for example `cline:page index.html`. Cerebriline loads the file itself, runs its scripts and pumps 30 animation frames, with no browser and no shell. It fails if the file doesn't parse, throws while loading, throws in a frame, or never draws.
+
+A check has 120 seconds to finish, and at most 8,000 characters of its output are kept. A check that can't be started, times out or is killed counts as a failure, never a pass.
+
+## How a transaction is judged
+
+### Who judges
+
+Every verdict records its source, and the protocol never presents a weaker one as a stronger one:
+
+| Source | Meaning |
+|---|---|
+| `oracle` | A check ran and answered. |
+| `self-declared` | Nothing could be run. The verdict is the model's own account of whether its change worked. |
+| `undeclared` | Nothing could be run, and the model never said whether it worked. The files are kept rather than discarded over a sentence nobody wrote. |
+
+### What happens to the files
+
+| Outcome | When | Files |
+|---|---|---|
+| **Kept** | The check passed, or, with no check, the model said it worked | Stay. The task is done. |
+| **Rolled back** | The check failed | Every file the transaction touched returns to the transaction's base, and files it created are deleted. |
+| **Carried** | The check failed, but said something it had never said before in this run, and the transaction changed something | Stay on disk. The next transaction opens on top of them, and the rollback target stays where it was. |
+
+Carrying exists because some fixes take several steps, each one found because the previous step changed what the check complains about. A plain rollback throws each step away and makes the model find it again from the original file. A transaction is never carried when it was closed for the model (by a guard, or by you disengaging), or when it is the last transaction. In the last case there is no next transaction to build on, and leaving unverified work on disk would be worse than putting the files back.
+
+When a failed check's output looks like a syntax error, the protocol reports what it could not parse in the changed files before rolling them back. A check run against a file the engine refuses measures the refusal, not the fix.
+
+### A task with nothing to change
+
+A run that ends having changed nothing is not treated as a transaction. Answering a question about the code is a legitimate way to finish. The exception is when a check exists and currently fails: that means the defect is still there. The protocol then holds the transaction open, shows the model what the check reported, and asks for a plan.
+
+## The model's tools
+
+Added to the session while the protocol is engaged:
+
+| Tool | What it does |
+|---|---|
+| `plan` | States the plan (`changes`: where / what / why, numbered for the model), marks an item `done` or `failed`, and returns the whole plan with its state on every call. The plan survives a rollback: an item that landed and was rolled back comes back as work still to do, but stays on record as something that once worked. |
+| `run_check` | Runs the check against the files as they stand. It settles nothing, and the transaction stays open. |
+| `submit_transaction` | Submits the transaction with an `account` of what changed. The check runs and the verdict comes back in the same reply. |
+| `restore_file` | Puts one file back: `"original"` (the default) as the transaction opened it, `"last"` to undo only the most recent change, or `"#3"` for a numbered version. `find` searches a file's revisions without restoring anything. Restoring a file that didn't exist when the transaction opened deletes it. |
+| `propose_check` | Only when there is nothing to run and someone to approve. See [Proposed checks](#proposed-checks). |
+
+`read_files` also gains a `revision` parameter: `"base"` (or `"original"`) reads a file as the transaction opened it, `"last"` reads the version before the most recent change, and `"#3"` reads a numbered version.
+
+## Guards
+
+Every limit below is fixed in code; the only settings are in [Settings reference](#settings-reference).
+
+| Guard | Limit | What happens |
+|---|---|---|
+| Check before the first edit | Once per transaction, where there is a check | The first edit is refused until `run_check` has run, and the model is asked for its plan. |
+| Checks with no edit in between | 3 | The model is told the check has stopped telling it anything new. |
+| | 5 | The transaction is closed for the model and rolled back. |
+| `run_check` calls | 10 per transaction | Further calls are refused. |
+| `restore_file` calls | 27 per transaction | Further restores are refused. |
+| Restores that change nothing | 3 per transaction | Further no-op restores are refused. |
+| Restating the plan | 3 per transaction | Further restatements return the existing plan. |
+| Submitting with nothing changed, after working | 1 | The first empty submission is forgiven and the transaction stays open. The second spends it. |
+| Completion attempts in a transaction with no tool call at all | 6 | Held open, not spent, because a reasoning model thinking for several turns hasn't made an attempt. After six, the run ends and says why. |
+| Turns with no tool call at all | 3 | After three, the protocol judges the transaction itself, as if it had been submitted. |
+
+## Proposed checks
+
+Where nothing in the workspace can be run, the model may propose the check with `propose_check`. It can be one of two kinds:
+- **`page`**: Cerebriline loads a file and runs it, like `cline:page`.
+- **`command`**: a shell line. It can carry an `expect` pattern.
+
+The proposal comes with one sentence on what passing it proves.
+
+In VS Code the proposal comes to you in the chat, with two answers:
+- **Use this check** approves it.
+- **No — I'll say what I want** declines it. What you write goes back to the model.
+
+Until a check is approved, the model's own account is the verdict, and it is labelled as such.
+
+An approved check is **frozen** for the rest of the run. Otherwise a model that may re-propose after a failure can weaken the check until something passes. The freeze has a single escape. After *Attempts before a rethink* (default 2) discarded attempts in which the check never passed once, the model may replace it once. A check you wrote yourself, or one found in the workspace, is never reconsidered: it is the specification.
+
+Where nobody can be asked, such as the CLI or automation, proposals are off unless you pass `--propose-check auto`. That approves a proposal without asking.
+
+## Turning it off mid-task
+
+Under **On**, **Disengage** in the Auto-approve panel stops the protocol for the task. Any open transaction that has changed something is judged once first, and its files are put back if the check fails. That never happens while the model is mid-edit. The protocol's tools then refuse with a message saying you turned the protocol off, and the model is told to edit directly from then on.
+
+## Settings reference
+
+| Setting | VS Code | CLI | Default | Meaning |
+|---|---|---|---|---|
+| Mode | Settings → **Change Protocol** | `--atomic` | off | See [Turning it on](#turning-it-on). |
+| Check | Settings (Static) · Auto-approve panel (On) | `--oracle` | empty | Empty means "find something to run". |
+| Pattern | same places | `--oracle-expect` | empty | A regex the check's output must also match. |
+| Changes per attempt | Settings | `--max-changes` | 6 | How much one attempt should take on before it is judged. |
+| Attempts per task | Settings | `--max-transactions` | 6 | Transactions before the task stops. |
+| Model proposes the check | Settings (Static) · Auto-approve panel (On) | `--propose-check off\|auto` | on (VS Code) · off (CLI) | Off makes the model's own account the verdict where nothing can be run. |
+| Proposals you judge | Settings | `--max-check-proposals` | 2 | Proposals put to you before the run gives up on having a check. |
+| Attempts before a rethink | Settings | `--check-reconsider-after` | 2 | Discarded attempts, with the check never passing, before a proposed check may be replaced once. 0 keeps it frozen. |
+
+Under **Static** the check fields come from Settings and the chat panel is ignored. Under **On** they come from the task, and Settings' check fields are not inherited: an `On` task with no check of its own means "find something to run", not "use whatever was last typed into Settings". The limits come from Settings in both modes.
+
+*Changes per attempt* is a target, not a hard cap. Nothing stops the model mid-edit, and it doesn't reliably obey the count: an attempt asked for three changes has made twenty-six. What the number controls is how much unjudged work a rollback throws away. *Attempts per task* is enforced.
+
+## How it relates to other features
+
+- **Checkpoints.** The protocol's snapshot is its own copy of the files with a checksum manifest, with no git involved. It works in a directory that isn't a repository, and it can't silently revert nothing. Checkpoints separately keep a session-wide file history. `restore_file` and `read_files` revisions are offered when Checkpoints or the protocol is on. With the protocol off, `restore_file` returns to versions from the session history instead of the transaction.
+- **Escalation.** Discarded transactions count towards the struggle detector that offers `escalate`: two give a nudge. The last transaction's opening prompt can offer the expert while there is still a transaction to hold its work. While an expert is editing, the base model stands down from changes.
+- **Delegated agents.** `spawn_agent`'s `check: {command, expect, must?}` is this protocol's check runner applied to one agent. See [Delegated Agents](/features/agents).
+
+## Limits
+
+- The snapshot covers at most 5,000 files, 4 MiB per file and 128 MiB in total. It skips `.git`, `.hg`, `.svn`, `node_modules`, `dist`, `build`, `out`, `target`, `.venv`, `venv`, `__pycache__`, `.next`, `.turbo`, `.cache` and `coverage`. Files it doesn't cover are reported as not covered and are not rolled back.
+- The snapshot is taken at the start of every transaction and held in memory. That isn't worth it for a one-line edit, and it's one reason the protocol is off by default.
+- A check that exits 0 on a broken tree keeps every transaction. For such commands, add a pattern.
+
+## Improving it
+
+What the measurements so far point at, for the next releases:
+
+- **Controlled comparisons.** The only controlled comparison is 3 runs per arm, and the protocol lost it (1 of 3 fixed against 3 of 3). Any change should be judged against the `ARM=manual` control in `harness/`, not against an earlier version of the protocol.
+- **Finer-grained `restore_file`.** All 132 calls measured went to the original. The revision list the model is shown doesn't separate the versions enough to make `"last"` or a numbered version the obvious choice.
+- **Proposed checks.** They cost four to six times the model time of a self-declared verdict and closed nothing in the runs measured.
+- **The change budget.** It isn't obeyed, so the plan is often a declaration the model abandons. The rollback, not the budget, is what limits the damage.
+
+## For developers
+
+| File | What it is |
+|---|---|
+| `session-protocol.ts` | Builds a session: arms or stands down, wires the tools, judges submissions, disengages. |
+| `transaction-controller.ts` | Opens and settles transactions: verdict, carry, rollback, history. |
+| `protocol.ts` | Everything the model is told: opening rules, verdict lines, the stand-down text. |
+| `oracle.ts` · `page-check.ts` | Check discovery, running a command check, and the in-process page check. |
+| `snapshot.ts` | The copy-and-checksum snapshot the rollback restores. |
+| `plan-tool.ts` · `run-check-tool.ts` · `submit-transaction-tool.ts` · `restore-file-tool.ts` · `propose-check-tool.ts` · `proposal.ts` | The model's tools. |
+| `check-first-edits.ts` · `stalled-checks.ts` · `unparseable-change.ts` · `base-revision-reads.ts` | The guards, and the `revision` reads. |
+| `apps/vscode/src/shared/AtomicProtocolSettings.ts` | Stored settings, defaults, and how Settings and the task combine. |
+| `apps/vscode/src/sdk/check-approval.ts` | The approval question for a proposed check. |
+
+The test file beside each source file records the measured case it was written for. Read it before changing a threshold.

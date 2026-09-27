@@ -388,7 +388,7 @@ A 27B model on a local server fails in ways a frontier model does not, and often
 - **Tool calls read the shapes models actually send**, such as an array sent as a string or a single path where a list is expected. Refusals point at the character that went wrong.
 - **Reasoning replay per provider.** Whether earlier thinking is sent back to the model is decided from what the model measurably does, is adjustable per profile, and is inlined into the content when a chat template would drop it.
 - **Tool calls run as a batch.** Several independent calls in one message run in parallel. Writes to the same file are serialized, so no parallel edit is lost. A profile can set, or turn off, the size limit for a file read.
-- **Guards** catch reasoning loops, repeated calls, non-convergence and files changed behind the model's back. An atomic change protocol with `restore_file` undoes damage.
+- **Guards** catch reasoning loops, repeated calls, non-convergence and files changed behind the model's back. An atomic change protocol with `restore_file` undoes damage ([Change Protocol](docs/features/change-protocol.mdx)).
 - **Questions recommend an option.** When the model asks you to choose, it marks the option it would pick and lists it first. Optionally, **Jev** scores the options before they reach you.
 - **Generated images reach you on text-only models.** The model gets a text result and the chat shows the image.
 

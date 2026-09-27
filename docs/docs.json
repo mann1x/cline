@@ -158,7 +158,8 @@
 							"core-workflows/checkpoints",
 							"cli/agent-teams",
 							"features/subagents",
-							"features/agents"
+							"features/agents",
+							"features/change-protocol"
 						]
 					},
 					{
