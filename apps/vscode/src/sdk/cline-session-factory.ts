@@ -42,6 +42,9 @@ import {
 	resolveDefaultMaxOutputTokens,
 	resolveLlamaCppThinkBudgetTokens,
 	resolveLlamaCppThinkBudgetWindow,
+	resolveOllamaOrigin,
+	withXollamaAuth,
+	xollamaDrivesModel,
 } from "@cline/llms"
 import {
 	type AgentHooks,
@@ -2443,7 +2446,18 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		polykvPriorityZeroApplies({
 			enabled: polykvAgentsPriorityZeroSetting,
 			leadProviderId: sdkProviderId,
-			poolsEnabled: sdkProviderId === "opencoti" ? (await probeOpencotiProps(baseUrl, fetch)).poolsEnabled : false,
+			poolsEnabled:
+				sdkProviderId === "opencoti"
+					? (await probeOpencotiProps(baseUrl, fetch)).poolsEnabled
+					: sdkProviderId === "xollama" && modelId
+						? await xollamaDrivesModel(
+								resolveOllamaOrigin("xollama", baseUrl),
+								modelId,
+								withXollamaAuth(fetch, resolveOllamaOrigin("xollama", baseUrl), {
+									...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+								}),
+							).catch(() => false)
+						: false,
 		})
 	if (polykvAgentsPriorityZeroSetting) {
 		Logger.log(
@@ -2452,7 +2466,9 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 				: `[Agents] Priority 0 is on but does not apply: ${
 						sdkProviderId === "opencoti"
 							? "the Model's server did not confirm pools_enabled"
-							: `the Model provider is ${sdkProviderId}, not opencoti`
+							: sdkProviderId === "xollama"
+								? "the Model is not a plain xOllama model with client pool seats on a server that negotiates windows"
+								: `the Model provider is ${sdkProviderId}, not opencoti or xOllama`
 					}`,
 		)
 	}

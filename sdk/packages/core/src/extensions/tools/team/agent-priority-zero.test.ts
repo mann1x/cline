@@ -136,7 +136,20 @@ describe("the session's nodes with priority 0", () => {
 		).toEqual(nodes);
 	});
 
-	it("never put priority 0 on a lead that is not opencoti", () => {
+	// The host turns the setting on for xOllama only when the Model is a plain
+	// model whose engine the client drives.
+	it("put priority 0 on an xOllama lead the host turned it on for", () => {
+		const nodes = sessionAgentNodes({
+			...lead,
+			providerId: "xollama",
+			agentNodes: [node("n1", 1, 2)],
+			polykvAgentsPriorityZero: true,
+		});
+		expect(nodes.map((entry) => entry.id)).toEqual([POLYKV_LEAD_NODE_ID, "n1"]);
+		expect(nodes[0]?.connection).toMatchObject({ providerId: "xollama" });
+	});
+
+	it("never put priority 0 on a lead that is not opencoti or xOllama", () => {
 		const nodes = sessionAgentNodes({
 			...lead,
 			providerId: "ollama",

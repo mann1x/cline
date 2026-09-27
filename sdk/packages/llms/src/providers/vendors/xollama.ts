@@ -308,6 +308,30 @@ export function readXollamaModel(
 }
 
 /**
+ * Whether the client drives this model's engine, as it drives opencoti: a
+ * plain model (a council's pools are xOllama's) with seats for client pools,
+ * on a server that negotiates windows -- pooled turns are counted against the
+ * window each answer reports. Asked of `/api/show` and `/api/xollama`, both
+ * cached; it does not need the model loaded.
+ */
+export async function xollamaDrivesModel(
+	baseUrl: string | undefined,
+	modelId: string,
+	fetchImpl: typeof fetch,
+): Promise<boolean> {
+	const [model, server] = await Promise.all([
+		readXollamaModel(baseUrl, modelId, fetchImpl),
+		probeXollama(baseUrl, fetchImpl),
+	]);
+	return (
+		model !== undefined &&
+		!model.council &&
+		model.clientPools > 0 &&
+		server?.features.includes(XOLLAMA_CONTEXT_WINDOW_FEATURE) === true
+	);
+}
+
+/**
  * The provider's auth headers on every request to the xOllama server.
  *
  * xOllama can require a local key on every route (`api_key_v1`, #421):
@@ -782,6 +806,8 @@ export interface XollamaEngineRequest {
 	leadPool?: boolean;
 	/** A pool this session borrows rather than builds (never the lead's). */
 	borrowedPool?: string;
+	/** The session id core keys this conversation by (`polykvSessionId`). */
+	sessionKey?: string;
 }
 
 /** Top-level `placement` on a plain turn (client_placement_v1, #424). */
@@ -904,6 +930,13 @@ export function withXollamaRequestFields(
 				const placedOutside =
 					parsed.placement !== null && typeof parsed.placement === "object";
 				const engineRequest = options?.engine?.() ?? {};
+				// The session as core knows it (`polykvSessionId`), which the lead
+				// tree, the grant and the window floor are keyed by -- the header
+				// carries its wire form, where a `/` is a `~`.
+				const leadKey =
+					session !== undefined
+						? (engineRequest.sessionKey ?? session)
+						: undefined;
 				if (root !== undefined && typeof parsed.model === "string") {
 					rememberXollamaRunner(root, parsed.model, parsed);
 				}
@@ -924,7 +957,7 @@ export function withXollamaRequestFields(
 						? await leadPlacement(
 								root,
 								parsed,
-								session,
+								leadKey ?? session,
 								baseFetch,
 								options?.logger,
 								options?.pinPrefix !== false,
@@ -982,8 +1015,8 @@ export function withXollamaRequestFields(
 						XOLLAMA_CONTEXT_WINDOW_FEATURE,
 					) === true
 				) {
-					windowSession = session;
-					const ask = windowAsk(session, parsed, options.window);
+					windowSession = leadKey ?? session;
+					const ask = windowAsk(leadKey ?? session, parsed, options.window);
 					// The window is the private budget where the engine says so,
 					// and the pool's prefix rides above it: a new conversation
 					// books its window less what it shares, as on opencoti, or a
@@ -992,7 +1025,7 @@ export function withXollamaRequestFields(
 					if (
 						ask?.num_ctx !== undefined &&
 						lead?.sharedAboveBudget !== undefined &&
-						getPolykvGrantedWindow(session) === undefined
+						getPolykvGrantedWindow(leadKey ?? session) === undefined
 					) {
 						const budget = Math.max(1, ask.num_ctx - lead.sharedAboveBudget);
 						sharedAboveBudget = ask.num_ctx - budget;

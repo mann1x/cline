@@ -131,8 +131,8 @@ describe("minting an id", () => {
 })
 
 describe("Use PolyKV agents as Priority 0", () => {
-	// Priority 0 is the lead's own session: only an opencoti lead has one to
-	// lend, and only a server that confirmed pools can hold its agents.
+	// Priority 0 is the lead's own session: only a lead on an engine the client
+	// drives has one to lend, and only a confirmed one can hold its agents.
 	it("is available only for an opencoti Model whose server confirmed pools", () => {
 		expect(polykvPriorityZeroAvailable({ leadProviderId: "opencoti", poolsEnabled: true })).toBe(true)
 		expect(polykvPriorityZeroAvailable({ leadProviderId: "opencoti", poolsEnabled: false })).toBe(false)
@@ -140,6 +140,13 @@ describe("Use PolyKV agents as Priority 0", () => {
 		expect(polykvPriorityZeroAvailable({ leadProviderId: "opencoti", poolsEnabled: undefined })).toBe(false)
 		expect(polykvPriorityZeroAvailable({ leadProviderId: "ollama", poolsEnabled: true })).toBe(false)
 		expect(polykvPriorityZeroAvailable({ leadProviderId: undefined, poolsEnabled: true })).toBe(false)
+	})
+
+	// xOllama lends the window of a plain model whose engine the client drives;
+	// the host confirms the model and passes that as `poolsEnabled`.
+	it("is available for an xOllama Model the client drives", () => {
+		expect(polykvPriorityZeroAvailable({ leadProviderId: "xollama", poolsEnabled: true })).toBe(true)
+		expect(polykvPriorityZeroAvailable({ leadProviderId: "xollama", poolsEnabled: false })).toBe(false)
 	})
 
 	it("applies only when it is also switched on, and it is off by default", () => {

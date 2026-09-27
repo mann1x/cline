@@ -150,17 +150,20 @@ export function agentNodeLabels(nodes: readonly AgentNodeRecord[]): Record<strin
  * Both have to hold, and the panel and the host ask the same question so the
  * toggle is shown exactly when it would do something:
  *
- * - the **Model** provider -- the lead's -- is opencoti: priority 0 is the
- *   lead's own session, and no other provider has one to lend;
- * - that server's `/props` **confirmed** `pools_enabled`. Unknown is not yes:
- *   a server that could not be asked, or one booted without
- *   `--polykv-max-pools` (the default), fails on the first pool call.
+ * - the **Model** provider -- the lead's -- is opencoti, or xOllama: priority 0
+ *   is the lead's own session, and no other provider has one to lend;
+ * - that server **confirmed** it: on opencoti `/props` said `pools_enabled`; on
+ *   xOllama the Model is a plain model with client pool seats on a server that
+ *   negotiates windows. Unknown is not yes: a server that could not be asked,
+ *   or one booted without `--polykv-max-pools` (the default), fails on the
+ *   first pool call.
  */
 export function polykvPriorityZeroAvailable(input: {
 	leadProviderId: string | undefined
 	poolsEnabled: boolean | undefined
 }): boolean {
-	return input.leadProviderId?.trim().toLowerCase() === "opencoti" && input.poolsEnabled === true
+	const lead = input.leadProviderId?.trim().toLowerCase()
+	return (lead === "opencoti" || lead === "xollama") && input.poolsEnabled === true
 }
 
 /**

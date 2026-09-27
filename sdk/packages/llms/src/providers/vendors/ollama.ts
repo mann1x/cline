@@ -1035,6 +1035,9 @@ function xollamaEngineRequest(
 			: {}),
 		...(options.polykvLeadPool === false ? { leadPool: false } : {}),
 		...(live && live.layout !== "lead" ? { borrowedPool: live.poolId } : {}),
+		...(typeof sessionId === "string" && sessionId
+			? { sessionKey: sessionId }
+			: {}),
 	};
 }
 

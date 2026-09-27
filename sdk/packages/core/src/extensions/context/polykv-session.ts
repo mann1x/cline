@@ -16,14 +16,12 @@ import {
 	polykvEffectiveWindow,
 	polykvWorkerChargedTo,
 	probeOpencotiProps,
-	probeXollama,
 	readOpencotiKv,
-	readXollamaModel,
 	releasePolykvLead,
 	setPolykvSession,
 	withXollamaAuth,
-	XOLLAMA_CONTEXT_WINDOW_FEATURE,
 	XOLLAMA_DEFAULT_BASE_URL,
+	xollamaDrivesModel,
 	xollamaEngineFetch,
 	xollamaEngineRoot,
 } from "@cline/llms";
@@ -151,17 +149,15 @@ async function xollamaModelPools(
 	if (!config.modelId || config.polykv?.enabled === false) {
 		return false;
 	}
-	const baseUrl = config.baseUrl || XOLLAMA_DEFAULT_BASE_URL;
-	const fetchImpl = config.fetch ?? fetch;
-	const [model, server] = await Promise.all([
-		readXollamaModel(baseUrl, config.modelId, fetchImpl),
-		probeXollama(baseUrl, fetchImpl),
-	]);
-	return (
-		model !== undefined &&
-		!model.council &&
-		model.clientPools > 0 &&
-		server?.features.includes(XOLLAMA_CONTEXT_WINDOW_FEATURE) === true
+	const origin = config.baseUrl || XOLLAMA_DEFAULT_BASE_URL;
+	const headers = {
+		...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+		...(config.headers ?? {}),
+	};
+	return xollamaDrivesModel(
+		origin,
+		config.modelId,
+		withXollamaAuth(config.fetch ?? fetch, origin, headers),
 	);
 }
 

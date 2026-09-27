@@ -141,13 +141,20 @@ export const PRIMARY_OVERFLOW_NODE_ID = "primary";
  * swarm offer -- so none of them sees a different set of nodes than the one
  * agents are actually placed on.
  */
+/**
+ * Providers whose lead can lend its own window: opencoti, and xOllama on a
+ * plain model the client drives (the host confirms the model before it turns
+ * Priority 0 on).
+ */
+const POLYKV_LEAD_PROVIDERS = new Set(["opencoti", "xollama"]);
+
 export function sessionAgentNodes(
 	input: SessionAgentNodesInput,
 ): AgentNodeRuntimeConfig[] {
 	const listed = (input.agentNodes ?? []).filter((node) => !node.polykvLead);
 	if (
 		input.polykvAgentsPriorityZero !== true ||
-		input.providerId.trim().toLowerCase() !== "opencoti"
+		!POLYKV_LEAD_PROVIDERS.has(input.providerId.trim().toLowerCase())
 	) {
 		return [...listed];
 	}
