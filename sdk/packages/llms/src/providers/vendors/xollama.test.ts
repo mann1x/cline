@@ -286,11 +286,69 @@ describe("detecting xOllama", () => {
 			json({ xollama: { council: { enabled: true } } })) as typeof fetch;
 		expect(await readXollamaModel(undefined, "omni-council", show)).toEqual({
 			council: true,
+			clientPools: 0,
 		});
 		const plain = (async () => json({ details: {} })) as typeof fetch;
 		expect(await readXollamaModel(undefined, "qwen3:8b", plain)).toEqual({
 			council: false,
+			clientPools: 0,
 		});
+	});
+});
+
+describe("the council's own tool name", () => {
+	it("is left out of a council turn's tools, and kept on a plain model's", async () => {
+		const sent = async (council: boolean) => {
+			const chats: Record<string, unknown>[] = [];
+			const wire = withXollamaRequestFields((async (url, init) => {
+				if (String(url).endsWith("/api/show")) {
+					return json({ xollama: { council: { enabled: council } } });
+				}
+				if (String(url).endsWith("/api/xollama")) {
+					return json({ xollama: true, features: [] });
+				}
+				chats.push(JSON.parse(String(init?.body)));
+				return json({});
+			}) as typeof fetch);
+			await wire("http://gpu2:22434/api/chat", {
+				method: "POST",
+				body: JSON.stringify({
+					model: council ? "omni-council" : "qwen",
+					messages: [{ role: "user", content: "q" }],
+					tools: [
+						{ type: "function", function: { name: "council_evidence" } },
+						{ type: "function", function: { name: "read_files" } },
+					],
+				}),
+			});
+			resetXollamaProbes();
+			return (chats[0]?.tools as Array<{ function: { name: string } }>).map(
+				(tool) => tool.function.name,
+			);
+		};
+		expect(await sent(true)).toEqual(["read_files"]);
+		expect(await sent(false)).toEqual(["council_evidence", "read_files"]);
+	});
+});
+
+describe("a plain model's pool seats", () => {
+	it("reads session.client_pools, and anything else as none", async () => {
+		const seats = (value: unknown) =>
+			(async () =>
+				json({
+					xollama: { session: { client_pools: value } },
+				})) as typeof fetch;
+		expect(
+			(await readXollamaModel(undefined, "a", seats(4)))?.clientPools,
+		).toBe(4);
+		resetXollamaProbes();
+		expect(
+			(await readXollamaModel(undefined, "a", seats("4")))?.clientPools,
+		).toBe(0);
+		resetXollamaProbes();
+		expect(
+			(await readXollamaModel(undefined, "a", seats(-1)))?.clientPools,
+		).toBe(0);
 	});
 });
 

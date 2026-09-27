@@ -1,4 +1,4 @@
-import { readOpencotiStatus } from "@cline/llms"
+import { type OpencotiStatus, readOpencotiStatus } from "@cline/llms"
 import { StringRequest } from "@/shared/proto/cline/common"
 import { PolykvStatusResponse } from "@/shared/proto/cline/models"
 import { type ProviderCatalogController, parseProviderIdRequest } from "./providerCatalogShared"
@@ -32,7 +32,11 @@ export async function readPolykvStatus(
 ): Promise<PolykvStatusResponse> {
 	const providerId = parseProviderIdRequest(request.value, "value")
 	const config = controller.getProviderConfigStore().read(providerId)
-	const status = await readOpencotiStatus(config.baseUrl)
+	return toPolykvStatusProto(await readOpencotiStatus(config.baseUrl))
+}
+
+/** The status as the panel's message carries it; shared with the xOllama read. */
+export function toPolykvStatusProto(status: OpencotiStatus): PolykvStatusResponse {
 	return PolykvStatusResponse.create({
 		reachable: status.reachable,
 		release: status.release,

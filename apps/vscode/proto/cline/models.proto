@@ -102,6 +102,11 @@ service ModelsService {
   // it while the panel is open, and readOllamaAccount's /api/me is a signed
   // round trip to ollama.com that has no business on a poll.
   rpc readOllamaReachability(OllamaReachabilityRequest) returns (OllamaReachabilityResponse);
+  // What an xOllama model is, for the settings panel: a council (xOllama owns
+  // its pools and the lead sends it none), or a plain model with or without
+  // pool seats for the client's own pools; and, where the client drives
+  // PolyKV there, the engine's live status through /api/engine.
+  rpc readXollamaModelStatus(OllamaReachabilityRequest) returns (XollamaModelStatusResponse);
 }
 
 // What the recommendations list publishes about one model. Absent for a model
@@ -151,6 +156,20 @@ message OllamaReachabilityResponse {
   // Whether /api/tags lists the model. Absent when no model was named or the
   // server did not answer, which is not the same as false.
   optional bool model_found = 4;
+}
+
+message XollamaModelStatusResponse {
+  // Whether /api/show answered for the model.
+  bool reachable = 1;
+  bool council = 2;
+  // session.client_pools: pool seats kept for the client. 0 means every
+  // create would be refused, so the client pools nothing.
+  int32 client_pools = 3;
+  // The engine serving the model, when it is loaded ("opencoti", "llamacpp").
+  optional string engine = 4;
+  // The engine's PolyKV status, read only for a loaded plain opencoti model
+  // with seats: the one case in which the client drives PolyKV there.
+  optional PolykvStatusResponse polykv = 5;
 }
 
 message OllamaAccountResponse {

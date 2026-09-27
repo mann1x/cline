@@ -24,11 +24,25 @@ import { ModelsServiceClient } from "@/services/grpc-client"
  * monotonic stamps since boot rather than epoch seconds, so rendering either
  * the value or its distance from now gives a number that is simply wrong.
  */
-export const PolykvStatusStrip = ({ providerId }: { providerId: string }) => {
-	const [status, setStatus] = useState<PolykvStatusResponse | undefined>()
+export const PolykvStatusStrip = ({
+	providerId,
+	status: given,
+}: {
+	providerId: string
+	/**
+	 * A status already read, by a caller that knows where to ask: xOllama's is
+	 * one model's engine, reached through `/api/engine`, not the provider's URL.
+	 */
+	status?: PolykvStatusResponse
+}) => {
+	const [read, setStatus] = useState<PolykvStatusResponse | undefined>()
 	const [failed, setFailed] = useState(false)
+	const status = given ?? read
 
 	useEffect(() => {
+		if (given) {
+			return
+		}
 		let cancelled = false
 		ModelsServiceClient.readPolykvStatus(StringRequest.create({ value: providerId }))
 			.then((next) => {
@@ -44,7 +58,7 @@ export const PolykvStatusStrip = ({ providerId }: { providerId: string }) => {
 		return () => {
 			cancelled = true
 		}
-	}, [providerId])
+	}, [providerId, given])
 
 	if (failed || (status && !status.reachable)) {
 		return (

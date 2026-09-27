@@ -20,6 +20,7 @@ import { RequestTimingsToggle } from "../common/RequestTimingsToggle"
 import { SamplingSection } from "../common/SamplingSection"
 import { useSamplingWrite } from "../common/sampling-fields"
 import { readStoredThinkingLevel } from "../common/ThinkingBudgetField"
+import { XollamaModelStrip } from "../common/XollamaModelStrip"
 import OllamaModelPicker from "../OllamaModelPicker"
 import { useApiConfigurationScope } from "../utils/ApiConfigurationScopeContext"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
@@ -436,6 +437,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 			    none of it inferred from the model's name. */}
 			{/* The ollama.com account is Ollama's. */}
 			{providerId === "ollama" && <OllamaAccountStrip modelId={selectedModel.modelId || undefined} providerId="ollama" />}
+			{providerId === "xollama" && <XollamaModelStrip modelId={selectedModel.modelId || undefined} />}
 
 			{/* Thinking. Rendered only once the provider config has resolved, for
 			    the same reason as the context-window field below: mounting

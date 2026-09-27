@@ -28,9 +28,22 @@
 //   tools is a plain chat. Calls come back in `message.tool_calls` with
 //   member-keyed ids (`r1:…`, `s:…`) and `done_reason: "stop"`; the results go
 //   back as `tool` messages with those ids.
+// - PolyKV (#411, #414, #416): xOllama owns the pools of a council model and
+//   the lead sends it no pool controls. On any other model the client drives
+//   PolyKV itself, as against a bare opencoti, but only where the model has
+//   seats for it (`/api/show` `xollama.session.client_pools` > 0; the engine
+//   refuses every create otherwise). The control plane is `/api/engine`
+//   (`xollama-engine.ts`); a turn attaches with a top-level
+//   `placement: {pool_id}`.
 
-import type { AgentToolDefinition, BasicLogger } from "@cline/shared";
+import {
+	type AgentToolDefinition,
+	type BasicLogger,
+	flattenPromptEnvironment,
+} from "@cline/shared";
+import { hoistLeadEnvironment, prepareLeadPool } from "./polykv-lead";
 import { engineSessionId } from "./polykv-swarm";
+import { xollamaEngineFetch, xollamaEngineRoot } from "./xollama-engine";
 
 /** xOllama's default origin: its own port, so it can run beside a stock Ollama. */
 export const XOLLAMA_DEFAULT_BASE_URL = "http://localhost:22434";
@@ -82,6 +95,11 @@ export interface XollamaServerInfo {
 export interface XollamaModelInfo {
 	/** The model answers chat turns with its council. */
 	council: boolean;
+	/**
+	 * Pool seats the model keeps for a client's own pools
+	 * (`session.client_pools`). 0 on an older xOllama, which has none.
+	 */
+	clientPools: number;
 }
 
 function origin(baseUrl: string | undefined): string {
@@ -160,9 +178,19 @@ export function readXollamaModel(
 			return undefined;
 		}
 		const body = (await response.json()) as {
-			xollama?: { council?: { enabled?: unknown } };
+			xollama?: {
+				council?: { enabled?: unknown };
+				session?: { client_pools?: unknown };
+			};
 		};
-		return { council: body.xollama?.council?.enabled === true };
+		const seats = body.xollama?.session?.client_pools;
+		return {
+			council: body.xollama?.council?.enabled === true,
+			clientPools:
+				typeof seats === "number" && Number.isInteger(seats) && seats > 0
+					? seats
+					: 0,
+		};
 	})().catch(() => undefined);
 	modelInfo.set(key, read);
 	void read.then((info) => {
@@ -171,6 +199,18 @@ export function readXollamaModel(
 		}
 	});
 	return read;
+}
+
+/**
+ * Forget one model's `/api/show` answer, so the next read asks again. For the
+ * settings panel: a model given seats since it was read gets its pool on the
+ * next turn rather than after a reload.
+ */
+export function forgetXollamaModel(
+	baseUrl: string | undefined,
+	modelId: string,
+): void {
+	modelInfo.delete(`${origin(baseUrl)}::${modelId}`);
 }
 
 /** Forget what was read, for tests and for a server that was replaced. */
@@ -218,6 +258,26 @@ function readOnlyNames(value: string | undefined): Set<string> {
 }
 
 /** `x_read_only` on each named tool's function object. */
+/**
+ * The tool a council adds to its members' list and answers itself (#414): long
+ * tool results travel between members by reference through it. A client tool
+ * of the same name would be two tools under one name on a council turn.
+ */
+export const XOLLAMA_COUNCIL_TOOL = "council_evidence";
+
+/** The request's tools without one named like the council's own. */
+function withoutCouncilTool(tools: unknown): unknown[] | undefined {
+	if (!Array.isArray(tools)) {
+		return undefined;
+	}
+	const kept = tools.filter(
+		(tool) =>
+			(tool as { function?: { name?: unknown } } | null)?.function?.name !==
+			XOLLAMA_COUNCIL_TOOL,
+	);
+	return kept.length === tools.length ? undefined : kept;
+}
+
 function markReadOnly(tools: unknown, names: Set<string>): unknown {
 	if (!Array.isArray(tools) || names.size === 0) {
 		return tools;
@@ -529,6 +589,72 @@ function withCouncilStateFromJson(
 }
 
 /**
+ * The environment spans of a system turn, folded back into its text.
+ *
+ * Kept in the system prompt for xOllama (`ai-sdk.ts`) so a pooled lead turn
+ * can lift them into a turn of their own; every other turn sends exactly the
+ * text a provider without pooling would have. Replaces `messages` only when
+ * something changed, so an unmarked prompt goes out byte for byte.
+ */
+function flattenSystemEnvironment(body: Record<string, unknown>): void {
+	const messages = body.messages as Array<Record<string, unknown>>;
+	const system = messages[0];
+	if (system?.role !== "system" || typeof system.content !== "string") {
+		return;
+	}
+	const flat = flattenPromptEnvironment(system.content);
+	if (flat !== system.content) {
+		body.messages = [{ ...system, content: flat }, ...messages.slice(1)];
+	}
+}
+
+/**
+ * The lead conversation's pool on a plain model, as opencoti's lead tree
+ * builds it (`polykv-lead.ts`): the static system prompt and tools shared by
+ * every conversation on the model, rendered by xOllama and held once.
+ *
+ * Lifts the environment into its own turn (mutating `body`) only for a lead's
+ * request, and answers the placement to send, or nothing -- a model not
+ * loaded yet, an engine that is not opencoti, a refused create -- in which
+ * case the turn runs unpooled and the next one asks again. Never fails a turn.
+ */
+async function leadPlacement(
+	baseUrl: string,
+	body: Record<string, unknown>,
+	session: string,
+	baseFetch: typeof fetch,
+	logger: BasicLogger | undefined,
+): Promise<{ pool_id: number } | undefined> {
+	const probe = {
+		...body,
+		messages: [...(body.messages as unknown[])],
+	};
+	if (!hoistLeadEnvironment(probe)) {
+		return undefined;
+	}
+	try {
+		const attach = await prepareLeadPool({
+			baseUrl: xollamaEngineRoot(baseUrl, body.model as string),
+			fetch: xollamaEngineFetch(baseFetch),
+			body: probe,
+			sessionId: session,
+		});
+		if (!attach || !/^\d+$/.test(attach.poolId)) {
+			return undefined;
+		}
+		body.messages = probe.messages;
+		return { pool_id: Number(attach.poolId) };
+	} catch (error) {
+		logger?.debug?.(
+			`[xollama] lead pool unavailable, turn runs unpooled: ${
+				error instanceof Error ? error.message : String(error)
+			}`,
+		);
+		return undefined;
+	}
+}
+
+/**
  * xOllama's request fields, added to each `/api/chat` body: `session_id` from
  * the request's session, `x_read_only` on its read-only tools, and, for a
  * council model, the history without the council's past deliberation. A body
@@ -557,16 +683,46 @@ export function withXollamaRequestFields(
 		let stateKey: string | undefined;
 		try {
 			const parsed = JSON.parse(body) as Record<string, unknown>;
+			const original = parsed.messages;
 			if (Array.isArray(parsed.messages)) {
+				const model =
+					root !== undefined && typeof parsed.model === "string"
+						? await readXollamaModel(root, parsed.model, baseFetch)
+						: undefined;
 				// A delegated agent's turn is a plain chat, even on a council
 				// model: its history keeps its thinking and it sends no state.
 				const council =
+					model?.council === true && !isDelegatedEngineSession(session);
+				// The lead's pool, on a model that has seats for one. Any other
+				// turn has its environment folded back into the system text,
+				// which is what every provider but opencoti sends.
+				const placement =
+					!council &&
+					model !== undefined &&
+					model.clientPools > 0 &&
 					root !== undefined &&
-					typeof parsed.model === "string" &&
+					session !== undefined &&
 					!isDelegatedEngineSession(session)
-						? (await readXollamaModel(root, parsed.model, baseFetch))
-								?.council === true
-						: false;
+						? await leadPlacement(
+								root,
+								parsed,
+								session,
+								baseFetch,
+								options?.logger,
+							)
+						: undefined;
+				if (placement === undefined) {
+					flattenSystemEnvironment(parsed);
+				}
+				const councilSafe = council
+					? withoutCouncilTool(parsed.tools)
+					: undefined;
+				if (councilSafe !== undefined) {
+					options?.logger?.log(
+						`[xollama] a tool named "${XOLLAMA_COUNCIL_TOOL}" was left out of a council turn: the council answers that name itself`,
+					);
+					parsed.tools = councilSafe;
+				}
 				// Only where the server resumes: an older xOllama took no state.
 				const stateful =
 					council &&
@@ -579,9 +735,17 @@ export function withXollamaRequestFields(
 				}
 				const names = readOnlyNames(readOnly);
 				// A body with nothing to add goes out as it came, byte for byte.
-				if (council || session !== undefined || names.size > 0) {
+				if (
+					council ||
+					session !== undefined ||
+					names.size > 0 ||
+					placement !== undefined ||
+					councilSafe !== undefined ||
+					parsed.messages !== original
+				) {
 					body = JSON.stringify({
 						...parsed,
+						...(placement !== undefined ? { placement } : {}),
 						...(council ? { messages: withoutThinking(parsed.messages) } : {}),
 						...(session !== undefined ? { session_id: session } : {}),
 						...(parsed.tools !== undefined

@@ -342,6 +342,7 @@ export {
 } from "./providers/vendors/polykv-swarm";
 // xOllama: detection and per-model facts, read by the host at session build.
 export {
+	forgetXollamaModel,
 	probeXollama,
 	readXollamaModel,
 	resetXollamaProbes,
@@ -349,6 +350,12 @@ export {
 	type XollamaModelInfo,
 	type XollamaServerInfo,
 } from "./providers/vendors/xollama";
+// xOllama: a model's opencoti engine, addressed as a bare opencoti root.
+export {
+	readXollamaEngines,
+	xollamaEngineFetch,
+	xollamaEngineRoot,
+} from "./providers/vendors/xollama-engine";
 export { disposeLangfuseTelemetry } from "./services/langfuse-telemetry";
 export {
 	type AudioTranscriptionRequest,

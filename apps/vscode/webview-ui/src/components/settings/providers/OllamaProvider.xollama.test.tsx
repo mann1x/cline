@@ -26,6 +26,7 @@ vi.mock("@/services/grpc-client", () => ({
 		getOllamaModelParameters: mocks.getOllamaModelParameters,
 		getOllamaModels: mocks.getOllamaModels,
 		readOllamaAccount: async () => ({ reachable: false, models: [] }),
+		readXollamaModelStatus: async () => ({ reachable: false }),
 	},
 }))
 vi.mock("@/hooks/useProviderConfig", () => ({
