@@ -54,6 +54,13 @@ import { leadCanBeReached, sendLeadNudge } from "./agent-trouble";
 /** The tool the lead continues a waiting agent with (built on {@link resumeSuspended}). */
 export const RESUME_AGENT_TOOL_NAME = "resume_agent";
 
+/**
+ * What a resume adds when neither the lead names an amount nor the agent was
+ * spawned with a cap (a loop-guard or supervisor stop of an uncapped agent,
+ * where the amount is not used).
+ */
+export const DEFAULT_RESUME_ITERATIONS = 30;
+
 /** How long agents stopping together wait for each other's notice. */
 export const AWAITING_LEAD_BATCH_MS = 3_000;
 
@@ -85,6 +92,11 @@ export interface AwaitingLeadView {
 	iterations: number;
 	/** Its cap so far: the first one plus every raise. */
 	maxIterations: number;
+	/**
+	 * The cap it was spawned with: what a resume that names no amount adds
+	 * (60 -> 120 -> 180). Absent when it had none.
+	 */
+	firstCap?: number;
 	/** When it stopped at the cap. */
 	since: number;
 	/** Its spawn call has returned; a resume runs it in the background. */
@@ -125,7 +137,12 @@ export type AwaitingLeadEvent =
 
 type LeadDecision =
 	| { kind: "resume"; extraIterations: number; instructions?: string }
-	| { kind: "stop"; reason: string };
+	| {
+			kind: "stop";
+			reason: string;
+			/** The lead chose to end it: one last turn to write its report. */
+			report?: boolean;
+	  };
 
 interface Entry {
 	view: AwaitingLeadView;
@@ -140,6 +157,9 @@ const PENDING_NOTICES = new Map<
 	string,
 	{ views: AwaitingLeadView[]; timer: ReturnType<typeof setTimeout> }
 >();
+
+/** Views whose notice went out: a refreshed note lists only these. */
+const ANNOUNCED = new WeakSet<AwaitingLeadView>();
 
 function emit(event: AwaitingLeadEvent): void {
 	for (const listener of LISTENERS) {
@@ -212,6 +232,8 @@ export interface ResumeSuspendedResult {
 	ok: boolean;
 	message: string;
 	agent?: AwaitingLeadView;
+	/** The iterations it was given: the lead's amount, or its first cap. */
+	extraIterations?: number;
 	/**
 	 * For a detached agent: its run from here, to its end or its next stop at
 	 * the cap. Absent for an agent whose spawn call is still open -- that call
@@ -221,7 +243,8 @@ export interface ResumeSuspendedResult {
 }
 
 /**
- * Continue an agent waiting at its cap, with `extraIterations` more turns.
+ * Continue an agent waiting at its cap, with `extraIterations` more turns --
+ * by default as many as it was spawned with.
  *
  * The primitive `resume_agent` is built on. `idOrName` is the agent's id, its
  * row's id, or its name in the round; `sessionId` scopes the search to the
@@ -229,12 +252,15 @@ export interface ResumeSuspendedResult {
  */
 export function resumeSuspended(
 	idOrName: string,
-	extraIterations: number,
+	extraIterations: number | undefined,
 	sessionId?: string,
 	instructions?: string,
 ): ResumeSuspendedResult {
-	const extra = Math.floor(Number(extraIterations));
-	if (!Number.isFinite(extra) || extra < 1) {
+	const named =
+		extraIterations === undefined
+			? undefined
+			: Math.floor(Number(extraIterations));
+	if (named !== undefined && (!Number.isFinite(named) || named < 1)) {
 		return {
 			ok: false,
 			message: `extra_iterations must be a whole number of at least 1 (got ${String(extraIterations)}).`,
@@ -244,6 +270,7 @@ export function resumeSuspended(
 	if (!entry) {
 		return { ok: false, message: error ?? "Not found." };
 	}
+	const extra = named ?? entry.view.firstCap ?? DEFAULT_RESUME_ITERATIONS;
 	const agent = { ...entry.view };
 	const said = instructions?.trim();
 	entry.decide({
@@ -261,6 +288,7 @@ export function resumeSuspended(
 				: " Its report comes back with its round."
 		}`,
 		agent,
+		extraIterations: extra,
 		...(entry.completion ? { completion: entry.completion } : {}),
 	};
 }
@@ -271,7 +299,7 @@ export function resumeSuspended(
  */
 export function stopSuspended(
 	idOrName: string,
-	options: { sessionId?: string; reason?: string } = {},
+	options: { sessionId?: string; reason?: string; report?: boolean } = {},
 ): { ok: boolean; message: string; agent?: AwaitingLeadView } {
 	const { entry, error } = find(idOrName, options.sessionId);
 	if (!entry) {
@@ -281,6 +309,7 @@ export function stopSuspended(
 	entry.decide({
 		kind: "stop",
 		reason: options.reason ?? "stopped by the lead",
+		...(options.report ? { report: true } : {}),
 	});
 	return {
 		ok: true,
@@ -329,9 +358,9 @@ export function describeAwaitingLead(
 	return [
 		`${HARNESS_TAG} ${views.length} agent${views.length === 1 ? "" : "s"} stopped, waiting for you (work kept: transcript + files):`,
 		...lines,
-		`Decide: ${RESUME_AGENT_TOOL_NAME}(agent_id, extra_iterations, instructions?) continues${
+		`Decide: ${RESUME_AGENT_TOOL_NAME}(agent_ids?, extra_iterations?, instructions?) continues -- several in one call, all of them when agent_ids is left out; by default each gets its spawn cap again${
 			hints.length > 0 ? ` (${hints.join("; ")})` : ""
-		}; restart_agent(agent_id, instructions) starts over; stop_agents takes the work as is. Its round waits for you.`,
+		}; restart_agent(agent_id, instructions) starts over; stop_agents takes the work as is (one at its cap writes its report first). Its round waits for you.`,
 	].join("\n");
 }
 
@@ -355,7 +384,24 @@ function sendNotice(sessionId: string): void {
 		[...WAITING.values()].some((entry) => entry.view === view),
 	);
 	if (still.length > 0) {
-		sendLeadNudge(sessionId, describeAwaitingLead(still));
+		for (const view of still) {
+			ANNOUNCED.add(view);
+		}
+		// The note may wait behind the lead's turn, and the lead may resume
+		// or stop an agent in the meantime: it is rewritten from those still
+		// waiting when read, and dropped when none is. Every announced agent
+		// still waiting is listed, since this note replaces an earlier one.
+		sendLeadNudge(sessionId, describeAwaitingLead(still), {
+			noteKind: "awaiting",
+			refresh: () => {
+				const current = [...WAITING.values()]
+					.map((entry) => entry.view)
+					.filter(
+						(view) => view.sessionId === sessionId && ANNOUNCED.has(view),
+					);
+				return current.length > 0 ? describeAwaitingLead(current) : undefined;
+			},
+		});
 	}
 }
 
@@ -546,6 +592,58 @@ function oneLine(text: string, max: number): string {
 }
 
 /**
+ * The last turn of an agent the lead stopped at its cap: its report. At the
+ * cap an agent's last output is usually a tool call's preamble -- the lead
+ * got "Now let me check line 90" as the report of 60 iterations of work.
+ */
+export const FINAL_REPORT_NOTE = `${HARNESS_TAG} Your iteration budget is spent and the lead is taking your work as it is. Do not call any tool. In this one reply, report: what you changed (files and what for), what you verified and how, and what is still broken or unfinished -- exactly where you stopped.`;
+
+/** Turns before the cap at which an agent is told to wrap up. */
+export function capWarningMargin(cap: number): number {
+	return Math.min(5, Math.max(1, Math.round(cap * 0.1)));
+}
+
+/**
+ * A warning for an agent nearing its cap, once per run: finish and report,
+ * rather than be cut off mid-step. Fed the agent's events for its turn count;
+ * `take` is read at each turn boundary (`consumePendingUserMessage`). A
+ * resume starts a new run with its own allowance, and a new warning.
+ */
+export function createCapWarning(getCap: () => number | undefined): {
+	observe(event: { type: string; iteration?: number }): void;
+	take(): string | undefined;
+} {
+	let iteration = 0;
+	let warned = false;
+	return {
+		observe(event) {
+			if (
+				event.type !== "iteration_start" ||
+				typeof event.iteration !== "number"
+			) {
+				return;
+			}
+			if (event.iteration <= iteration) {
+				warned = false;
+			}
+			iteration = event.iteration;
+		},
+		take() {
+			const cap = getCap();
+			if (!cap || warned || iteration === 0) {
+				return undefined;
+			}
+			const left = cap - iteration;
+			if (left < 0 || left >= capWarningMargin(cap)) {
+				return undefined;
+			}
+			warned = true;
+			return `${HARNESS_TAG} This is turn ${iteration} of the ${cap} this run may take. Wrap up: finish the step you are on, then end with your answer -- what you changed, what you verified, and what remains. If you cannot finish in time, say exactly where you stopped; the lead may give you more turns.`;
+		},
+	};
+}
+
+/**
  * Run a delegated agent to its end, suspending it at its cap for the lead.
  *
  * Every spawn path runs its agent through this, so the cap behaves the same
@@ -556,6 +654,7 @@ export async function runDelegatedWithCap(
 	options: RunDelegatedWithCapOptions,
 ): Promise<DelegatedRunOutcome> {
 	let cap = options.agent.getMaxIterations?.() ?? options.maxIterations;
+	const firstCap = cap;
 	let iterations = 0;
 	let usage: AgentResult["usage"] | undefined;
 	let result = await options.start();
@@ -607,6 +706,7 @@ export async function runDelegatedWithCap(
 			...(options.cancelId ? { cancelId: options.cancelId } : {}),
 			iterations,
 			maxIterations: cap ?? iterations,
+			...(firstCap !== undefined ? { firstCap } : {}),
 			since: Date.now(),
 			detached,
 			...(reason === "looping" || reason === "struggling"
@@ -706,6 +806,27 @@ export async function runDelegatedWithCap(
 		fold(await options.agent.continue(resumeNote(extra, reason, instructions)));
 	};
 
+	/** One report-only turn; its answer replaces the cut-off last output. */
+	const finalReport = async (detached: boolean) => {
+		try {
+			options.agent.setMaxIterations?.(1);
+			const run = () => options.agent.continue(FINAL_REPORT_NOTE);
+			// A detached agent gave its engine session back: placed again.
+			const next = await (detached && options.resumeThrough
+				? options.resumeThrough(run)
+				: run());
+			if (next.text?.trim()) {
+				fold(next);
+			} else {
+				iterations += next.iterations;
+				usage = usage ? addUsage(usage, next.usage) : next.usage;
+			}
+		} catch {
+			// The work is kept either way; a report that could not be written
+			// leaves the last output as it was.
+		}
+	};
+
 	const leadListening = () =>
 		options.sessionId !== undefined && leadCanBeReached(options.sessionId);
 
@@ -715,6 +836,7 @@ export async function runDelegatedWithCap(
 				options,
 				suspend,
 				resume,
+				finalReport,
 				waitReason,
 				stopReasonFor,
 				outcome,
@@ -727,6 +849,9 @@ export async function runDelegatedWithCap(
 		const { decided } = suspend(false);
 		const decision = await decided;
 		if (decision.kind === "stop") {
+			if (decision.report && reason === "iteration_cap") {
+				await finalReport(false);
+			}
 			return outcome({ stopReason: stopReasonFor(reason) });
 		}
 		await resume(decision.extraIterations, decision.instructions);
@@ -745,6 +870,7 @@ function detach(
 		decided: Promise<LeadDecision>;
 	},
 	resume: (extra: number, instructions?: string) => Promise<void>,
+	finalReport: (detached: boolean) => Promise<void>,
 	waitReason: () => AwaitingLeadReason | undefined,
 	stopReasonFor: (
 		reason: AwaitingLeadReason | undefined,
@@ -762,6 +888,9 @@ function detach(
 		const waitingFor = waitReason();
 		const completion = decided.then(async (decision) => {
 			if (decision.kind === "stop") {
+				if (decision.report && waitingFor === "iteration_cap") {
+					await finalReport(true);
+				}
 				return outcome({ stopReason: stopReasonFor(waitingFor) });
 			}
 			try {

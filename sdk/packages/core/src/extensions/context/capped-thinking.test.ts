@@ -542,7 +542,12 @@ describe("reporting the note", () => {
 
 		// Either a note was produced and reported, or the model call failed and
 		// nothing was — but never a note that exists and is not reported.
-		for (const notice of notices) {
+		// The start is said first, for a delegated agent's status.
+		if (notices.length > 0) {
+			expect(notices[0]?.message).toBe("thinking-condensing");
+			expect(notices[0]?.metadata?.phase).toBe("started");
+		}
+		for (const notice of notices.slice(1)) {
 			expect(notice.message).toBe("thinking-condensed");
 			expect(typeof notice.metadata?.note).toBe("string");
 			expect(notice.metadata?.kind).toBe("capped_thinking");
@@ -587,7 +592,11 @@ describe("reporting the note", () => {
 		await prepareTurn({ messages, emitStatusNotice });
 		await prepareTurn({ messages, emitStatusNotice });
 
-		expect(notices).toHaveLength(1);
+		// One condensation started, one note said -- not one per turn.
+		expect(notices.map((notice) => notice.message)).toEqual([
+			"thinking-condensing",
+			"thinking-condensed",
+		]);
 	});
 });
 

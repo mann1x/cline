@@ -33,6 +33,7 @@ import {
 } from "./agent-check";
 import {
 	AGENT_CONTROLS_NOTE,
+	AGENT_SANDBOX_ROLE_NOTE,
 	AgentControlFields,
 	maxIterationsOf,
 } from "./agent-controls";
@@ -525,6 +526,7 @@ export function describeSpawnAgent(swarm: boolean, teammates = false): string {
 		SPAWN_AGENT_DESCRIPTION +
 		(teammates ? SPAWN_AGENT_TEAMMATES_NOTE : "") +
 		(swarm ? SPAWN_AGENT_SWARM_DESCRIPTION : "") +
+		AGENT_SANDBOX_ROLE_NOTE +
 		SPAWN_SAMPLING_NOTE +
 		AGENT_CONTROLS_NOTE +
 		DELEGATION_PACING_NOTE
@@ -1302,6 +1304,8 @@ async function runSpawnedAgent(
 	if (cancelId) {
 		context.emitUpdate?.({ cancelId });
 	}
+	// For the lead's status: its row of the server's `/kv`.
+	context.emitUpdate?.({ engineSessionId });
 	const parentAgentId = context.agentId;
 	// The lead's sampler, when it gave one. Carried as a build option, so a
 	// re-placement onto another node keeps it.
@@ -1701,10 +1705,10 @@ export function awaitingLeadNote(
 	outcome: DelegatedRunOutcome,
 ): string {
 	if (outcome.stopReason === "supervisor") {
-		return `\n\n---\n${name} was STRUGGLING: the struggle supervisor had told it to commit a SUMMARY of what it had, and stopped it when it went on probing. It is WAITING for you, its work kept (transcript and file changes). Call resume_agent(agent_id: "${agentId ?? name}", extra_iterations: <n>, instructions: "<what to settle for>") to continue it, or restart_agent(agent_id: "${agentId ?? name}", instructions: "...") to start it over; its report arrives when it finishes. Or stop it (stop_agents) to take the above as its report.`;
+		return `\n\n---\n${name} was STRUGGLING: the struggle supervisor had told it to commit a SUMMARY of what it had, and stopped it when it went on probing. It is WAITING for you, its work kept (transcript and file changes). Call resume_agent(agent_ids: ["${agentId ?? name}"], instructions: "<what to settle for>") to continue it, or restart_agent(agent_id: "${agentId ?? name}", instructions: "...") to start it over; its report arrives when it finishes. Or stop it (stop_agents) to take the above as its report.`;
 	}
 	if (outcome.stopReason === "loop_guard") {
-		return `\n\n---\n${name} was LOOPING: the loop guard stopped it for sending the same call again after its warning. It is WAITING for you, its work kept (transcript and file changes). Call resume_agent(agent_id: "${agentId ?? name}", extra_iterations: <n>, instructions: "<what to do instead>") to continue it, or restart_agent(agent_id: "${agentId ?? name}", instructions: "...") to start it over; its report arrives when it finishes. Or stop it (stop_agents) to take the above as its report.`;
+		return `\n\n---\n${name} was LOOPING: the loop guard stopped it for sending the same call again after its warning. It is WAITING for you, its work kept (transcript and file changes). Call resume_agent(agent_ids: ["${agentId ?? name}"], instructions: "<what to do instead>") to continue it, or restart_agent(agent_id: "${agentId ?? name}", instructions: "...") to start it over; its report arrives when it finishes. Or stop it (stop_agents) to take the above as its report.`;
 	}
-	return `\n\n---\n${name} reached its ${outcome.maxIterations ?? outcome.iterations}-iteration cap and is WAITING for you, its work kept (transcript and file changes). Call resume_agent(agent_id: "${agentId ?? name}", extra_iterations: <n>) to continue it from where it stopped; its report arrives when it finishes. Or stop it (stop_agents) to take the above as its report.`;
+	return `\n\n---\n${name} reached its ${outcome.maxIterations ?? outcome.iterations}-iteration cap and is WAITING for you, its work kept (transcript and file changes). Call resume_agent(agent_ids: ["${agentId ?? name}"]) to continue it from where it stopped with its spawn cap again (extra_iterations to give a different amount; one call resumes several); its report arrives when it finishes. Or stop it (stop_agents) to take the above as its report.`;
 }

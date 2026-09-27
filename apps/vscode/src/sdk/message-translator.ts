@@ -1872,7 +1872,8 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 		case "resume_agent":
 		case "retry_failed":
 		case "message_agents":
-		case "stop_agents": {
+		case "stop_agents":
+		case "compact_agents": {
 			// The lead acting on its agents: which agent, and what it did.
 			const reason = getStringField(parsedInput, "reason")?.trim()
 			const extra = Number(parsedInput?.extra_iterations)
@@ -1892,13 +1893,17 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 								? "Cerebriline ran its failed agents again:"
 								: toolName === "stop_agents"
 									? "Cerebriline stopped its agents:"
-									: "Cerebriline sent its agents a message:"
+									: toolName === "compact_agents"
+										? "Cerebriline compacted its agents' context:"
+										: "Cerebriline sent its agents a message:"
 			const path =
-				toolName === "message_agents" || toolName === "stop_agents"
+				toolName === "message_agents" || toolName === "stop_agents" || toolName === "compact_agents"
 					? named.length > 0
 						? named.join(", ")
 						: "every running agent"
-					: (describeAgentTargets(parsedInput) ?? "")
+					: toolName === "resume_agent"
+						? (describeAgentTargets(parsedInput) ?? "every agent waiting on it")
+						: (describeAgentTargets(parsedInput) ?? "")
 			const content =
 				toolName === "restart_agent"
 					? getStringField(parsedInput, "instructions")
@@ -2539,7 +2544,7 @@ function asFiniteNumber(value: unknown): number | undefined {
  * sdk/packages/core/src/extensions/context/compaction.ts (the compaction phase
  * slugs are handled above via parseCompactionNoticeMetadata instead).
  */
-const INTERNAL_STATUS_NOTICES = new Set(["compaction-budget-adjusted", "context-breakdown"])
+const INTERNAL_STATUS_NOTICES = new Set(["compaction-budget-adjusted", "context-breakdown", "thinking-condensing"])
 
 /**
  * Extract the fixed-price breakdown from a status notice's metadata.

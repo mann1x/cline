@@ -582,6 +582,8 @@ export class SessionRuntime {
 	private abortRequested = false;
 	/** Last abort reason requested for the active run. */
 	private abortReason: string | undefined;
+	/** Set by {@link requestCompaction}, taken by the next prepared turn. */
+	private compactionRequested = false;
 	/** Reference to the current run's `AgentRuntime` so `abort` can forward. */
 	private activeRuntime: AgentRuntime | null = null;
 	/** Promise returned from the current run so shutdown can await its drain. */
@@ -822,6 +824,27 @@ export class SessionRuntime {
 
 	getMaxIterations(): number | undefined {
 		return this.config.maxIterations;
+	}
+
+	/**
+	 * Compact before the next model request, as a manual compaction. For the
+	 * lead's `compact_agents`: frees the agent's KV cells without stopping it.
+	 * Takes effect at the agent's next turn; a run that has ended does it on
+	 * its next continuation.
+	 */
+	requestCompaction(): void {
+		this.compactionRequested = true;
+	}
+
+	/** Whether a compaction was asked for and not yet begun, for status. */
+	hasCompactionRequest(): boolean {
+		return this.compactionRequested;
+	}
+
+	private takeCompactionRequest(): boolean {
+		const requested = this.compactionRequested;
+		this.compactionRequested = false;
+		return requested;
 	}
 
 	clearHistory(): void {
@@ -1439,6 +1462,7 @@ export class SessionRuntime {
 					info: modelInfo,
 				},
 				overflowRecovery: context.overflowRecovery,
+				...(this.takeCompactionRequest() ? { compactionRequested: true } : {}),
 				emitStatusNotice: context.emitStatusNotice,
 			});
 			if (!result) {

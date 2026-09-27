@@ -31,6 +31,7 @@ import type {
 	TeamMemberSnapshot,
 	TeamRunRecord,
 } from "@cline/shared";
+import { POLYKV_COMPACTION_PRESSURE } from "../../context/polykv-session";
 import type { AgentNodeStatus } from "./agent-node-placement";
 import { MAX_NODE_PLACEMENT_ATTEMPTS } from "./agent-placement-queue";
 import {
@@ -43,7 +44,15 @@ import {
 	roundsFor,
 } from "./agent-rounds";
 import type { DelegatedAgentConfigProvider } from "./delegated-agent";
+import {
+	nodeKeyOf,
+	nodeRate,
+	type RateReliability,
+	RECENT_WINDOW_MS,
+	rateReliability,
+} from "./node-throughput";
 import { REFUSED_HOLD_MAX_MS } from "./placed-run";
+import type { AgentPhase } from "./subagent-progress";
 
 export const AGENTS_STATUS_TOOL_NAME = "agents_status";
 
@@ -110,6 +119,216 @@ function oneLine(text: string | undefined, max: number): string {
 	return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
+/**
+ * What the status knows beyond one record: where each node is and what its
+ * compaction threshold is, the order of the placement queue, and how fast
+ * agents have been finishing. Built once per call.
+ */
+export interface StatusContext {
+	/** By node id ("" for the session's single connection). */
+	nodes: Map<string, { baseUrl?: string; threshold: number; polykv: boolean }>;
+	/** Agent id -> its place in the placement queue, 1-based, and the length. */
+	queue: Map<string, number>;
+	queueLength: number;
+	/** Agents of this session that ended in the last five minutes. */
+	finishedRecently: number;
+}
+
+const PHASE_WORDS: Record<AgentPhase, string> = {
+	requesting: "waiting for the model's first token",
+	server_queued: "queued on the server",
+	prefill: "prefilling its prompt (no output while it runs)",
+	generating: "generating",
+	thinking: "thinking",
+	writing: "writing its answer",
+	tool: "running a tool",
+	compacting:
+		"COMPACTING its context: a summary call, no output and zero throughput until it ends -- progress, not a hang",
+	condensing_thinking:
+		"condensing capped thinking: a model call of its own, no output until it ends",
+	recovering: "recovering a failed turn",
+	waiting_room: "waiting for room on the server",
+};
+
+/** The phase of a live agent, with how long it has been in it. */
+function phaseLine(agent: RoundAgentRecord, now: number): string | undefined {
+	const phase = agent.phase;
+	if (
+		!phase ||
+		!LIVE_STATES.has(agent.state) ||
+		agent.state === "awaiting_lead"
+	) {
+		return undefined;
+	}
+	return `${PHASE_WORDS[phase.name] ?? phase.name}${
+		phase.detail ? ` (${oneLine(phase.detail, 100)})` : ""
+	}, for ${formatDuration(now - phase.since)}`;
+}
+
+/** A PolyKV node's compaction threshold: its own, or the default. */
+function thresholdOf(providerConfig: unknown): number {
+	const value = polykvSection(providerConfig)?.compactionPressureThreshold;
+	return typeof value === "number" && value > 0 && value <= 1
+		? value
+		: POLYKV_COMPACTION_PRESSURE;
+}
+
+/** The agent's own KV cells on its node, as the last `/kv` read gave them. */
+function kvLine(
+	agent: RoundAgentRecord,
+	ctx: StatusContext | undefined,
+): string | undefined {
+	const node = ctx?.nodes.get(agent.nodeId ?? "") ?? ctx?.nodes.get("");
+	if (!node?.polykv || !agent.engineSessionId) {
+		return undefined;
+	}
+	const kv = latestOpencotiKv(node.baseUrl);
+	const row = kv?.bySession?.[agent.engineSessionId];
+	if (!kv || !row) {
+		return undefined;
+	}
+	const share =
+		kv.booked > 0
+			? ` (${Math.round((row.window / kv.booked) * 100)}% of the node's bookings)`
+			: "";
+	const high = row.pressure >= node.threshold;
+	return `KV ${short(row.used)}/${short(row.window)} cells, pressure ${row.pressure.toFixed(2)} of its ${node.threshold} compaction threshold${share}${
+		high ? " -- at the threshold: it compacts on its own at its next turn" : ""
+	}`;
+}
+
+/** Iterations per minute: over the last five minutes, and since it started. */
+function paceOf(
+	agent: RoundAgentRecord,
+	now: number,
+): { recent?: number; overall?: number; minutes: number } {
+	const started = agent.startedAt;
+	const iterations = agent.iterations ?? 0;
+	if (started === undefined || iterations <= 0) {
+		return { minutes: 0 };
+	}
+	const minutes = (now - started) / 60_000;
+	const overall = minutes > 0 ? iterations / minutes : undefined;
+	const times = (agent.iterationTimes ?? []).filter(
+		(at) => now - at <= RECENT_WINDOW_MS,
+	);
+	const window = Math.min(RECENT_WINDOW_MS, now - started) / 60_000;
+	const recent =
+		times.length >= 2 && window > 0 ? times.length / window : undefined;
+	return {
+		...(recent !== undefined ? { recent } : {}),
+		...(overall !== undefined ? { overall } : {}),
+		minutes,
+	};
+}
+
+/** When a running agent reaches its cap at the pace it keeps, and how sure that is. */
+function etaLine(agent: RoundAgentRecord, now: number): string | undefined {
+	if (!LIVE_STATES.has(agent.state) || agent.state === "awaiting_lead") {
+		return undefined;
+	}
+	if (agent.state === "queued" || agent.startedAt === undefined) {
+		return undefined;
+	}
+	const pace = paceOf(agent, now);
+	const rate = pace.recent ?? pace.overall;
+	const paceText =
+		rate !== undefined
+			? `pace ${rate.toFixed(1)} it/min${
+					pace.recent !== undefined && pace.overall !== undefined
+						? ` last 5 min, ${pace.overall.toFixed(1)} since it started`
+						: ""
+				}`
+			: "pace not measured yet";
+	if (!agent.maxIterations) {
+		return `ETA: none -- it has no iteration cap and ends when it says it is done; ${paceText}`;
+	}
+	const left = agent.maxIterations - (agent.iterations ?? 0);
+	if (rate === undefined || rate <= 0) {
+		return `ETA: not yet (${left} iterations left to its cap; ${paceText})`;
+	}
+	const reliability: RateReliability = rateReliability(
+		pace.recent,
+		pace.overall,
+		Math.floor(pace.minutes),
+	);
+	return `ETA to its cap: ~${formatDuration((left / rate) * 60_000)} (${left} iterations left, ${paceText}; reliability ${reliability}). An agent usually finishes before its cap.`;
+}
+
+/** Where a queued agent stands, and a rough wait from how fast agents finish. */
+function queueLine(
+	agent: RoundAgentRecord,
+	ctx: StatusContext | undefined,
+): string | undefined {
+	const position = ctx?.queue.get(agent.id);
+	if (position === undefined || !ctx) {
+		return undefined;
+	}
+	const perMinute = ctx.finishedRecently / (RECENT_WINDOW_MS / 60_000);
+	const wait =
+		perMinute > 0
+			? `; agents have been finishing at ${perMinute.toFixed(1)}/min, so roughly ${formatDuration((position / perMinute) * 60_000)} to a start (reliability ${
+					ctx.finishedRecently >= 5 ? "medium" : "low"
+				})`
+			: "; no agent finished in the last 5 min, so no estimate of the wait";
+	return `queue: position ${position} of ${ctx.queueLength}${wait}`;
+}
+
+/** Build the context once per status call. */
+export function buildStatusContext(
+	rounds: AgentRounds,
+	provider: DelegatedAgentConfigProvider | undefined,
+	now: number,
+): StatusContext {
+	const nodes: StatusContext["nodes"] = new Map();
+	const runtime = provider?.getRuntimeConfig();
+	const described: AgentNodeStatus[] | undefined =
+		runtime?.nodePlacement?.describe?.();
+	for (const node of described ?? []) {
+		nodes.set(node.nodeId, {
+			baseUrl: node.baseUrl,
+			threshold: thresholdOf(node.providerConfig),
+			polykv: isPolykvNode(node),
+		});
+	}
+	const connection = provider?.getConnectionConfig();
+	if (connection) {
+		nodes.set("", {
+			baseUrl: connection.baseUrl,
+			threshold: thresholdOf(connection.providerConfig),
+			polykv: isPolykvNode(connection),
+		});
+	}
+	const agents = rounds.list().flatMap((round) => round.agents);
+	const queued = agents
+		.filter(
+			(agent) =>
+				agent.state === "queued" &&
+				agent.phase?.name !== "waiting_room" &&
+				agent.phase?.name !== "server_queued",
+		)
+		.sort((a, b) => a.queuedAt - b.queuedAt);
+	const queue = new Map(queued.map((agent, index) => [agent.id, index + 1]));
+	const finishedRecently = agents.filter(
+		(agent) =>
+			agent.endedAt !== undefined && now - agent.endedAt <= RECENT_WINDOW_MS,
+	).length;
+	return { nodes, queue, queueLength: queued.length, finishedRecently };
+}
+
+/** A node's throughput, as its agents produced it. */
+function throughputLine(key: string, now: number): string {
+	const rate = nodeRate(key, now);
+	if (!rate) {
+		return "throughput: nothing produced here yet";
+	}
+	return `throughput: ${rate.recentTps ?? 0} tok/s over the last 5 min, ${rate.historicalTps ?? 0} tok/s over ${rate.activeMinutes} active min (reliability ${rate.reliability}${
+		rate.reliability === "low"
+			? ": the recent rate is far from the node's usual -- compactions or prefills in progress drop it to zero for minutes"
+			: ""
+	})`;
+}
+
 /** The live state of an agent: its record, with its control's say. */
 
 /** The check (section E): what it runs, and what it said. */
@@ -160,14 +379,14 @@ export function describeReason(
 			if (agent.awaitingReason === "struggling") {
 				return `STRUGGLING: the struggle supervisor stopped it after it was told to commit a SUMMARY and went on, after ${agent.iterations ?? "?"} iterations, its work kept${
 					agent.stopDetail ? ` (${oneLine(agent.stopDetail, 200)})` : ""
-				}; resume_agent(agent_id, extra_iterations, instructions) continues it -- say what to settle for -- restart_agent(agent_id, instructions) starts it over, stop_agents takes its work as it is`;
+				}; resume_agent(agent_ids, instructions) continues it -- say what to settle for -- restart_agent(agent_id, instructions) starts it over, stop_agents takes its work as it is`;
 			}
 			if (agent.awaitingReason === "looping") {
 				return `LOOPING: the loop guard stopped it for sending the same call again after its warning, after ${agent.iterations ?? "?"} iterations, its work kept${
 					agent.stopDetail ? ` (${oneLine(agent.stopDetail, 200)})` : ""
-				}; resume_agent(agent_id, extra_iterations, instructions) continues it -- say what to do instead of that call -- restart_agent(agent_id, instructions) starts it over, stop_agents takes its work as it is`;
+				}; resume_agent(agent_ids, instructions) continues it -- say what to do instead of that call -- restart_agent(agent_id, instructions) starts it over, stop_agents takes its work as it is`;
 			}
-			return `stopped at its ${agent.maxIterations ?? "?"}-iteration cap after ${agent.iterations ?? agent.maxIterations ?? "?"} iterations, its work kept; resume_agent(agent_id, extra_iterations) continues it, stop_agents takes its work as it is, restart_agent starts it over`;
+			return `stopped at its ${agent.maxIterations ?? "?"}-iteration cap after ${agent.iterations ?? agent.maxIterations ?? "?"} iterations, its work kept; resume_agent(agent_ids) continues it with its spawn cap again (one call resumes several), stop_agents takes its work as it is, restart_agent starts it over`;
 		case "queued":
 			return agent.requeues > 0
 				? "queued again after a requeue, carrying its transcript"
@@ -306,6 +525,14 @@ function polykvLines(
 	} else {
 		lines.push("refusals: no /kv pressure read yet");
 	}
+	const threshold = thresholdOf(node.providerConfig);
+	lines.push(
+		`compaction threshold: ${threshold} KV pressure per agent (${
+			threshold === POLYKV_COMPACTION_PRESSURE
+				? "the default"
+				: "set on this node"
+		}); an agent at it compacts on its own, and the server frees cells itself`,
+	);
 	const kv = latestOpencotiKv(node.baseUrl);
 	if (kv) {
 		lines.push(
@@ -342,6 +569,7 @@ export function describeNodes(
 			`Nodes: none configured; agents run on the session's delegated connection, ${connection?.providerId}/${connection?.modelId}${
 				active !== undefined ? ` (${active} running)` : ""
 			}.`,
+			`  ${throughputLine(nodeKeyOf({ providerId: connection?.providerId, modelId: connection?.modelId }), now)}`,
 			...(isPolykvNode(node)
 				? polykvLines(node, now).map((line) => `  ${line}`)
 				: []),
@@ -368,6 +596,7 @@ export function describeNodes(
 				node.baseUrl ? ` at ${node.baseUrl}` : ""
 			} · ${reach} · ${capacity}${held}`,
 		);
+		lines.push(`    ${throughputLine(node.nodeId, now)}`);
 		if (isPolykvNode(node)) {
 			for (const line of polykvLines(node, now)) {
 				lines.push(`    ${line}`);
@@ -440,7 +669,22 @@ export function describeSummary(
 		}
 	}
 	lines.push("", ...describeNodes(options.configProvider?.(), now));
+	const ctx = buildStatusContext(rounds, options.configProvider?.(), now);
+	if (ctx.queueLength > 0) {
+		const perMinute = ctx.finishedRecently / (RECENT_WINDOW_MS / 60_000);
+		lines.push(
+			`Placement queue: ${ctx.queueLength} agent${ctx.queueLength === 1 ? "" : "s"} waiting; ${
+				perMinute > 0
+					? `agents have been finishing at ${perMinute.toFixed(1)}/min over the last 5 min`
+					: "none finished in the last 5 min"
+			}. agents_status(agent_id) gives one's position and a rough wait.`,
+		);
+	}
 	lines.push("", RETRY_POLICY_TEXT);
+	lines.push(
+		"",
+		"An agent with no output is not necessarily stuck: prefill, compaction and thinking condensation produce none, and a node's throughput drops to zero while they run. Stopping an agent is a last resort; to free KV cells, compact_agents on the agents holding the most.",
+	);
 	const team = teammateLines(options.teammates?.(), now);
 	if (team.length > 0) {
 		lines.push("", ...team);
@@ -453,7 +697,11 @@ export function describeSummary(
 }
 
 /** One line per agent of a round. */
-export function describeRound(round: RoundRecord, now: number): string {
+export function describeRound(
+	round: RoundRecord,
+	now: number,
+	ctx?: StatusContext,
+): string {
 	const lines = [roundLine(round, now)];
 	for (const agent of round.agents) {
 		const state = agent.state;
@@ -473,15 +721,26 @@ export function describeRound(round: RoundRecord, now: number): string {
 				? [`${agent.genTps} tok/s`]
 				: []),
 			...(agent.compactions ? [`${agent.compactions} compactions`] : []),
+			...(ctx?.queue.get(agent.id) !== undefined
+				? [`queue #${ctx.queue.get(agent.id)}`]
+				: []),
 		];
+		const phase = phaseLine(agent, now);
+		const kv = kvLine(agent, ctx);
 		const reason =
 			state === "running"
-				? agent.activity.at(-1)
-					? `last: ${oneLine(agent.activity.at(-1)?.text, 80)}`
-					: ""
+				? [
+						phase,
+						kv,
+						agent.activity.at(-1)
+							? `last: ${oneLine(agent.activity.at(-1)?.text, 80)}`
+							: "",
+					]
+						.filter(Boolean)
+						.join("; ")
 				: describeReason(agent, state, now);
 		lines.push(
-			`- ${agent.id} ${agent.name}: ${bits.join(" · ")}${reason ? ` -- ${oneLine(reason, 200)}` : ""}`,
+			`- ${agent.id} ${agent.name}: ${bits.join(" · ")}${reason ? ` -- ${oneLine(reason, 320)}` : ""}`,
 		);
 	}
 	return lines.join("\n");
@@ -492,6 +751,7 @@ export function describeAgent(
 	round: RoundRecord,
 	agent: RoundAgentRecord,
 	now: number,
+	ctx?: StatusContext,
 ): string {
 	const state = agent.state;
 	const lines = [
@@ -522,7 +782,7 @@ export function describeAgent(
 	const sampling = agent.samplingUsed;
 	lines.push(
 		[
-			`iterations: ${agent.iterations ?? 0} / ${agent.maxIterations ?? "default cap"}`,
+			`iterations: ${agent.iterations ?? 0} / ${agent.maxIterations ?? "no cap"}`,
 			`compactions: ${agent.compactions ?? 0}${causes ? ` (${causes})` : ""}`,
 			`sampling: ${
 				sampling &&
@@ -546,6 +806,19 @@ export function describeAgent(
 			`runs: ${agent.attempts}${agent.requeues > 0 ? `, requeued ${agent.requeues}x` : ""}`,
 		].join(" · "),
 	);
+	const phase = phaseLine(agent, now);
+	if (phase) {
+		lines.push(`doing: ${phase}`);
+	}
+	for (const line of [
+		kvLine(agent, ctx),
+		queueLine(agent, ctx),
+		etaLine(agent, now),
+	]) {
+		if (line) {
+			lines.push(line);
+		}
+	}
 	lines.push(describeCheck(agent));
 	if (agent.revisedInstructions) {
 		lines.push(
@@ -636,11 +909,12 @@ export function renderAgentsStatus(
 	]
 		.map((id) => id.trim())
 		.filter(Boolean);
+	const ctx = buildStatusContext(rounds, options.configProvider?.(), now);
 	if (ids.length > 0) {
 		const parts = ids.slice(0, DETAIL_MAX_AGENTS).map((id) => {
 			const found = rounds.findAgent(id);
 			if (found) {
-				return describeAgent(found.round, found.agent, now);
+				return describeAgent(found.round, found.agent, now, ctx);
 			}
 			return (
 				teammateDetail(options.teammates?.(), id, now) ??
@@ -663,7 +937,7 @@ export function renderAgentsStatus(
 				.slice(-10);
 			return `No round ${input.round_id.trim()}.${known.length > 0 ? ` Rounds: ${known.join(", ")}.` : ""}`;
 		}
-		return bound(describeRound(round, now));
+		return bound(describeRound(round, now, ctx));
 	}
 	return bound(describeSummary(rounds, options));
 }
@@ -671,8 +945,9 @@ export function renderAgentsStatus(
 export const AGENTS_STATUS_DESCRIPTION =
 	"What your delegated agents are doing, and why -- read-only, and safe to call as often as you like: it asks no server anything. " +
 	"With no arguments: every round (a spawn call) with its agents counted by state -- running, queued, waiting-infra, awaiting-lead, done, failed, cancelled -- and how long it has run; every node with what it runs, whether it answers, its slots in use and queue, its admission policy and recent refusals; and the retry policy. " +
-	"`round_id` lists that round's agents one per line. `agent_id` (or `agent_ids`) shows an agent in detail: its state and the reason (waiting on which node and why, its iteration cap, a context overflow, an engine error, cancelled by whom), node, model, window and tokens, recent speed, iterations against its cap, compactions by cause, sampler, check result, the tail of its output and activity, and its errors. " +
-	"Use it instead of waiting blind: it is how you decide whether to requeue, restart, resume or retry an agent.";
+	"Every node also shows its throughput (tokens per second over the last 5 minutes and over its history, with how far to trust it) and, on a PolyKV node, its KV cells and compaction threshold (0.85 unless the node sets it). " +
+	"`round_id` lists that round's agents one per line, with what each is doing now and its KV cells. `agent_id` (or `agent_ids`) shows an agent in detail: its state and the reason (waiting on which node and why, its iteration cap, a context overflow, an engine error, cancelled by whom), what it is doing and for how long (prefill, generating, thinking, a tool, compacting, condensing capped thinking), its KV cells against the threshold, its queue position and a rough wait, its pace and ETA to its cap with a reliability, node, model, window and tokens, compactions by cause, sampler, check result, the tail of its output and activity, and its errors. " +
+	"Use it instead of waiting blind: it is how you decide whether to requeue, restart, resume, compact or retry an agent. A silent agent that is compacting or prefilling is working.";
 
 export function createAgentsStatusTool(
 	options: AgentsStatusOptions,

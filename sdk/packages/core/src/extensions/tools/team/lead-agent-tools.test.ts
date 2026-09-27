@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	__resetAwaitingLead,
+	listAwaitingLead,
 	runDelegatedWithCap,
 } from "./agent-iteration-cap";
 import { __resetAgentRounds, roundsFor } from "./agent-rounds";
@@ -205,6 +206,50 @@ describe("resume_agent", () => {
 		stopLead();
 	});
 
+	it("resumes every agent waiting on you in one call, each by its spawn cap", async () => {
+		expect(await run("resume_agent", {})).toContain("No agent is waiting");
+		const stopLead = onLeadNudge("s1", () => {});
+		const runs = ["syntax-fix-1", "syntax-fix-2"].map((name) => {
+			let cap: number | undefined = 15;
+			return runDelegatedWithCap({
+				agent: {
+					getAgentId: () => `agent_${name}`,
+					getMaxIterations: () => cap,
+					setMaxIterations: (value) => {
+						cap = value;
+					},
+					continue: async () =>
+						({
+							text: "done",
+							finishReason: "completed",
+							iterations: 2,
+							usage: { inputTokens: 1, outputTokens: 1 },
+						}) as never,
+				},
+				start: async () =>
+					({
+						text: "half",
+						finishReason: "max_iterations",
+						iterations: 15,
+						usage: { inputTokens: 1, outputTokens: 1 },
+					}) as never,
+				name,
+				sessionId: "s1",
+			});
+		});
+		await vi.waitFor(() => expect(listAwaitingLead("s1")).toHaveLength(2));
+		const text = await run("resume_agent", {});
+		expect(text).toContain(
+			"Resumed syntax-fix-1 with 15 more iterations (cap now 30)",
+		);
+		expect(text).toContain(
+			"Resumed syntax-fix-2 with 15 more iterations (cap now 30)",
+		);
+		const outcomes = await Promise.all(runs);
+		expect(outcomes.map((outcome) => outcome.maxIterations)).toEqual([30, 30]);
+		stopLead();
+	});
+
 	it("refuses an agent that is not waiting, and a count that is not one", async () => {
 		await round();
 		expect(
@@ -263,6 +308,27 @@ describe("message_agents and stop_agents from the lead's turn", () => {
 		);
 		expect(control.signal?.aborted).toBe(true);
 		expect(subagentCancellation.stoppedBy("s1::c#0")).toBe("lead");
+	});
+});
+
+describe("compact_agents", () => {
+	// swarm 2026-09-27: the lead freed KV by cancelling agents; this frees it
+	// and keeps them.
+	it("asks a running agent to compact at its next turn, and says who it could not", async () => {
+		const { control } = await round();
+		const requestCompaction = vi.fn();
+		control.track({ getMessages: () => [], requestCompaction });
+		const text = await run("compact_agents", { agents: ["r1-1", "r1-2"] });
+		expect(text).toContain(
+			"Compacting 1 agent(s) before their next model request: r1-1 fixer-1.",
+		);
+		expect(text).toContain("r1-2 fixer-2 is failed: nothing to compact.");
+		expect(requestCompaction).toHaveBeenCalledTimes(1);
+		expect(control.signal?.aborted).not.toBe(true);
+	});
+
+	it("wants the agents named", async () => {
+		expect(await run("compact_agents", {})).toContain("name the agents");
 	});
 });
 

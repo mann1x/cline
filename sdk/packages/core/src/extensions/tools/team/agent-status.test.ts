@@ -1,5 +1,5 @@
 import { noteOpencotiPressure, resetOpencotiPressure } from "@cline/llms";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { __resetAgentRounds, roundsFor } from "./agent-rounds";
 import {
 	createAgentsStatusTool,
@@ -8,6 +8,7 @@ import {
 	STATUS_MAX_CHARS,
 } from "./agent-status";
 import type { DelegatedAgentConfigProvider } from "./delegated-agent";
+import { __resetNodeThroughput } from "./node-throughput";
 import { __resetSubagentCancellations } from "./subagent-cancellation";
 
 afterEach(() => {
@@ -226,7 +227,7 @@ describe("agents_status for one agent", () => {
 			{ sessionId: "s1", now: () => NOW },
 		);
 		expect(text).toContain(
-			"awaiting_lead: stopped at its 30-iteration cap after 30 iterations, its work kept; resume_agent(agent_id, extra_iterations) continues it",
+			"awaiting_lead: stopped at its 30-iteration cap after 30 iterations, its work kept; resume_agent(agent_ids) continues it with its spawn cap again",
 		);
 		expect(
 			renderAgentsStatus({}, { sessionId: "s1", now: () => NOW }),
@@ -358,5 +359,102 @@ describe("agents_status and the check", () => {
 			"check: FAIL (exit 1) -- `node t.js` must match /^OK/, judged 3 times",
 		);
 		expect(text).toContain("output (tail): SyntaxError at 12");
+	});
+});
+
+describe("agents_status: what an agent is doing, and when it will be done", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+		__resetNodeThroughput();
+	});
+
+	// swarm 2026-09-27: agents compacting read as stuck, and were cancelled.
+	it("says a silent agent is compacting, and how long it has been", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(NOW - 12 * 60_000);
+		const rounds = roundsFor("s1");
+		const handle = rounds.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: true,
+			agents: [
+				{ name: "busy", task: "t" },
+				{ name: "later", task: "t" },
+				{ name: "last", task: "t" },
+			],
+		});
+		const emits: Array<(update: unknown) => void> = [];
+		for (const index of [0, 1, 2]) {
+			void handle.run(index, context, (ctx) => {
+				if (ctx.emitUpdate) {
+					emits[index] = ctx.emitUpdate;
+				}
+				return new Promise(() => {});
+			});
+		}
+		const busy = emits[0];
+		busy?.({ queued: false, nodeId: "node-a", maxIterations: 60 });
+		// Ten iterations over ten minutes, a token count that rises with them.
+		for (let i = 1; i <= 10; i++) {
+			busy?.({ iterations: i, outputTokens: i * 1_200 });
+			vi.setSystemTime(NOW - (12 - i) * 60_000);
+		}
+		busy?.({
+			phase: { name: "compacting", detail: "cause: KV pressure on the server" },
+		});
+		emits[1]?.({ queued: true });
+		emits[2]?.({ queued: true });
+		vi.setSystemTime(NOW);
+
+		const detail = renderAgentsStatus(
+			{ agent_id: "busy" },
+			{ sessionId: "s1", now: () => NOW, configProvider: nodes() },
+		);
+		expect(detail).toContain(
+			"doing: COMPACTING its context: a summary call, no output and zero throughput until it ends -- progress, not a hang (cause: KV pressure on the server), for 2m00s",
+		);
+		// Three iterations began in the last five minutes, ten in twelve: the
+		// compaction slowed it, and the reliability says the two disagree.
+		expect(detail).toContain(
+			"ETA to its cap: ~1h23m (50 iterations left, pace 0.6 it/min last 5 min, 0.8 since it started; reliability medium)",
+		);
+
+		expect(
+			renderAgentsStatus(
+				{ agent_id: "last" },
+				{ sessionId: "s1", now: () => NOW, configProvider: nodes() },
+			),
+		).toContain("queue: position 2 of 2");
+
+		const summary = renderAgentsStatus(
+			{},
+			{ sessionId: "s1", now: () => NOW, configProvider: nodes() },
+		);
+		expect(summary).toMatch(/throughput: [\d.]+ tok\/s over the last 5 min/);
+		expect(summary).toContain(
+			"compaction threshold: 0.85 KV pressure per agent (the default)",
+		);
+		expect(summary).toContain("Placement queue: 2 agents waiting");
+		expect(summary).toContain("Stopping an agent is a last resort");
+	});
+
+	it("gives no ETA to an agent without a cap", async () => {
+		const rounds = roundsFor("s1");
+		const handle = rounds.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: true,
+			agents: [{ name: "open", task: "t" }],
+		});
+		void handle.run(0, context, (ctx) => {
+			ctx.emitUpdate?.({ queued: false, iterations: 3 });
+			return new Promise(() => {});
+		});
+		expect(
+			renderAgentsStatus(
+				{ agent_id: "open" },
+				{ sessionId: "s1", now: () => Date.now() + 60_000 },
+			),
+		).toContain("ETA: none -- it has no iteration cap");
 	});
 });

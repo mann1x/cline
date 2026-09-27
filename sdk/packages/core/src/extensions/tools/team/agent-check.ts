@@ -60,7 +60,7 @@ export const AgentCheckSchema = z
 			),
 	})
 	.describe(
-		"An oracle for the agent: run when it says it is done. On a fail it is shown the output and keeps working (within its iterations); the verdict is in its report.",
+		"A deterministic oracle for the agent: run on its own copy of the workspace when it says it is done. On a fail it is shown the output and keeps working (within its iterations); the verdict is in its report. Only for agents whose edits it measures -- a review-only agent can never pass it.",
 	);
 
 /** How the check came out, in the agent's report. */

@@ -34,8 +34,18 @@ export const LEAD_NUDGE_AFTER_MS = 10 * 60_000;
  */
 export const LEAD_NUDGE_BATCH_MS = 30_000;
 
+/**
+ * How a nudge waits for the lead: `awaiting` for the agents-waiting-on-you
+ * notice (one replaces another), and a `refresh` that rewrites it as it is
+ * read, or drops it once it no longer applies.
+ */
+export interface LeadNudgeOptions {
+	noteKind?: "awaiting";
+	refresh?: () => string | undefined;
+}
+
 /** Per-session listener: whoever can put a message in front of the lead. */
-type LeadNudgeListener = (text: string) => void;
+type LeadNudgeListener = (text: string, options?: LeadNudgeOptions) => void;
 
 const LEAD_NUDGE_LISTENERS = new Map<string, LeadNudgeListener>();
 
@@ -61,13 +71,17 @@ export function leadCanBeReached(sessionId: string): boolean {
 }
 
 /** Put a message in front of the lead. `false` when no host is listening. */
-export function sendLeadNudge(sessionId: string, text: string): boolean {
+export function sendLeadNudge(
+	sessionId: string,
+	text: string,
+	options?: LeadNudgeOptions,
+): boolean {
 	const listener = LEAD_NUDGE_LISTENERS.get(sessionId);
 	if (!listener) {
 		return false;
 	}
 	try {
-		listener(text);
+		listener(text, options);
 		return true;
 	} catch {
 		return false;

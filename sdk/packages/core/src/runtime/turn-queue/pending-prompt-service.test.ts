@@ -70,6 +70,48 @@ describe("PendingPromptService", () => {
 		expect(service.list(state).map(({ prompt }) => prompt)).toEqual(["typed"]);
 	});
 
+	it("rewrites a note at delivery, and drops one that no longer applies", () => {
+		const service = new PendingPromptService();
+		const state = createState();
+		let waiting = ["a", "b"];
+		const refresh = () =>
+			waiting.length > 0 ? `waiting: ${waiting.join(", ")}` : undefined;
+		service.enqueue(state, {
+			prompt: "waiting: a, b",
+			delivery: "steer",
+			origin: "harness",
+			noteKind: "awaiting",
+			refresh,
+		});
+		// A newer report replaces the older one while it waits.
+		waiting = ["a", "b", "c"];
+		service.enqueue(state, {
+			prompt: "waiting: a, b, c",
+			delivery: "steer",
+			origin: "harness",
+			noteKind: "awaiting",
+			refresh,
+		});
+		expect(state.pendingPrompts).toHaveLength(1);
+
+		// swarm 2026-09-27: the lead resumed b between the note and its read.
+		waiting = ["a", "c"];
+		expect(service.consumeSteer(state).entry?.prompt).toBe("waiting: a, c");
+
+		service.enqueue(state, {
+			prompt: "waiting: a",
+			delivery: "steer",
+			origin: "harness",
+			noteKind: "awaiting",
+			refresh,
+		});
+		service.enqueue(state, { prompt: "typed", delivery: "queue" });
+		waiting = [];
+		// Everyone was decided: the note is dropped and the next entry comes.
+		expect(service.shiftNext(state).entry?.prompt).toBe("typed");
+		expect(state.pendingPrompts).toHaveLength(0);
+	});
+
 	it("merges the runtime's notes while they wait: recaps join, a status report is replaced", () => {
 		const service = new PendingPromptService();
 		const state = createState();

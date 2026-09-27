@@ -58,6 +58,7 @@ import {
 } from "./agent-check";
 import {
 	AGENT_CONTROLS_NOTE,
+	AGENT_SANDBOX_ROLE_NOTE,
 	AgentControlFields,
 	maxIterationsOf,
 } from "./agent-controls";
@@ -851,6 +852,7 @@ export function createSpawnSwarmTool(
 			'`count: "max"` means as many as the server will take right now; that is what to pass when asked for as many agents as possible. ' +
 			"Workers start as the server admits them and the rest wait their turn, so a long task list or `max` overloads nothing; the round just takes longer. " +
 			"A swarm is one round: its workers are made for it, run once, and are gone when the digest comes back — there is nobody left to send a second task to. Work that is a known list of jobs, each wanting a worker you keep talking to, is a team instead. " +
+			AGENT_SANDBOX_ROLE_NOTE +
 			SPAWN_SAMPLING_NOTE +
 			AGENT_CONTROLS_NOTE +
 			"Output: `{digest, workers, pooled, usage}`. `digest` is the whole result — the workers' own transcripts are discarded, so nothing they saw reaches you except through it.",

@@ -15,6 +15,19 @@ import {
 const toolStart = (toolName: string): AgentEvent =>
 	({ type: "content_start", contentType: "tool", toolName }) as AgentEvent;
 
+/** Collects updates, leaving out the ones that only move the phase. */
+function collect(
+	into: Array<Record<string, unknown>>,
+): (update: unknown) => void {
+	return (update) => {
+		const record = update as Record<string, unknown>;
+		if (Object.keys(record).length === 1 && "phase" in record) {
+			return;
+		}
+		into.push(record);
+	};
+}
+
 describe("reporting what a sub-agent is doing", () => {
 	// The UI has read `latestToolCall` off the spawn tool's progress since the
 	// rich row was written, and no spawn path ever emitted any -- so it was
@@ -123,7 +136,7 @@ describe("the output tail", () => {
 		const updates: Array<Record<string, unknown>> = [];
 		let clock = 10_000;
 		const progress = createSubagentProgress(
-			(update) => updates.push(update as Record<string, unknown>),
+			collect(updates),
 			undefined,
 			() => clock,
 		);
@@ -144,7 +157,7 @@ describe("the output tail", () => {
 	it("says it is thinking when it has written nothing yet", () => {
 		const updates: Array<Record<string, unknown>> = [];
 		const progress = createSubagentProgress(
-			(update) => updates.push(update as Record<string, unknown>),
+			collect(updates),
 			undefined,
 			() => 0,
 		);
@@ -159,7 +172,7 @@ describe("the output tail", () => {
 		const updates: Array<Record<string, unknown>> = [];
 		let clock = 0;
 		const progress = createSubagentProgress(
-			(update) => updates.push(update as Record<string, unknown>),
+			collect(updates),
 			undefined,
 			() => clock,
 		);
@@ -191,7 +204,7 @@ describe("generation speed", () => {
 		const updates: Array<Record<string, unknown>> = [];
 		let clock = 0;
 		const progress = createSubagentProgress(
-			(update) => updates.push(update as Record<string, unknown>),
+			collect(updates),
 			undefined,
 			() => clock,
 		);
@@ -213,7 +226,7 @@ describe("generation speed", () => {
 		const updates: Array<Record<string, unknown>> = [];
 		let clock = 0;
 		const progress = createSubagentProgress(
-			(update) => updates.push(update as Record<string, unknown>),
+			collect(updates),
 			undefined,
 			() => clock,
 		);
@@ -302,6 +315,24 @@ describe("reporting what a sub-agent has spent", () => {
 			contextTokens: 6_300,
 		});
 	});
+
+	// swarm 2026-09-27: "window 107,452 of 65,536 tokens in use". The gateway's
+	// input count already holds the cached prefix; adding it again doubled it.
+	it("does not count the cached prefix twice", () => {
+		const emitUpdate = vi.fn();
+		const progress = createSubagentProgress(emitUpdate);
+		progress.observe({
+			type: "usage",
+			inputTokens: 52_000,
+			outputTokens: 1_200,
+			cacheReadTokens: 51_000,
+			totalInputTokens: 52_000,
+			totalOutputTokens: 1_200,
+		} as AgentEvent);
+		expect(emitUpdate).toHaveBeenCalledWith(
+			expect.objectContaining({ contextTokens: 53_200 }),
+		);
+	});
 });
 
 const compacted = (metadata: Record<string, unknown>): AgentEvent =>
@@ -373,7 +404,34 @@ describe("counting a sub-agent's compactions", () => {
 		progress.observe(compacted({ kind: "auto_compaction", phase: "skipped" }));
 		progress.observe(compacted({ kind: "context_breakdown" }));
 
-		expect(emitUpdate).not.toHaveBeenCalled();
+		// Only the phase moved: compacting, then back to its next request.
+		expect(emitUpdate.mock.calls.map(([update]) => update)).toEqual([
+			{
+				phase: {
+					name: "compacting",
+					detail: "cause: its own context threshold",
+				},
+			},
+			{ phase: { name: "requesting" } },
+		]);
+	});
+
+	// swarm 2026-09-27: the lead cancelled agents that were compacting, since
+	// nothing said a silent agent was busy.
+	it("says what the agent is doing: a tool, thinking, condensing", () => {
+		const emitUpdate = vi.fn();
+		const progress = createSubagentProgress(emitUpdate);
+		progress.observe({ type: "iteration_start", iteration: 1 } as AgentEvent);
+		progress.observe({
+			type: "content_start",
+			contentType: "reasoning",
+			reasoning: "hm",
+		} as never);
+		progress.observe(compacted({ kind: "capped_thinking", phase: "started" }));
+		const phases = emitUpdate.mock.calls
+			.map(([update]) => (update as { phase?: { name: string } }).phase?.name)
+			.filter(Boolean);
+		expect(phases).toEqual(["requesting", "thinking", "condensing_thinking"]);
 	});
 
 	it("does not disturb the tool count", () => {

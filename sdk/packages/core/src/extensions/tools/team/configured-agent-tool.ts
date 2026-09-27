@@ -18,7 +18,11 @@ import type { OracleSpawnWrapper } from "../../../runtime/atomic/oracle";
 import { createDelegatedStruggleSupervisor } from "../../../runtime/safety/worker-struggle";
 import { isPolykvProvider } from "../../context/polykv-session";
 import { createDelegatedAgentCheck, describeAgentCheck } from "./agent-check";
-import { AGENT_CONTROLS_NOTE, AgentControlFields } from "./agent-controls";
+import {
+	AGENT_CONTROLS_NOTE,
+	AGENT_SANDBOX_ROLE_NOTE,
+	AgentControlFields,
+} from "./agent-controls";
 import {
 	createDelegatedAgentLifetime,
 	type DelegatedRunOutcome,
@@ -469,7 +473,7 @@ export function createConfiguredAgentTools(
 				// on spawn_agent. Then in qjryk (2026-09-23) "several calls in one
 				// message" came out as one call per message, each waiting for the
 				// last -- so name the one call that is the whole fan-out.
-				description: `Use the "${config.name}" subagent: ${config.description} Each call runs one agent of this kind. For several, or several kinds at once, use one \`spawn_agent\` call with \`agents\` entries of \`type: "${config.name}"\` and a \`count\`. ${SPAWN_SAMPLING_NOTE}${AGENT_CONTROLS_NOTE}${DELEGATION_PACING_NOTE}`,
+				description: `Use the "${config.name}" subagent: ${config.description} Each call runs one agent of this kind. For several, or several kinds at once, use one \`spawn_agent\` call with \`agents\` entries of \`type: "${config.name}"\` and a \`count\`. ${AGENT_SANDBOX_ROLE_NOTE}${SPAWN_SAMPLING_NOTE}${AGENT_CONTROLS_NOTE}${DELEGATION_PACING_NOTE}`,
 				inputSchema: zodToJsonSchema(ConfiguredAgentInputSchema),
 				// A call of its own is a round of one; a call from a batch is
 				// already an agent of the batch's round.
@@ -572,6 +576,8 @@ export function createConfiguredAgentTools(
 				// every instance of this agent shares its system prompt and
 				// tools as one pool.
 				const engineSessionId = `${context.sessionId ?? "cerebriline"}~agent-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+				// For the lead's status: its row of the server's `/kv`.
+				context.emitUpdate?.({ engineSessionId });
 				// A background delegation gives it back while the user has the
 				// run paused; its next request books it again.
 				readDelegationEngineSession(context.metadata)?.(() =>

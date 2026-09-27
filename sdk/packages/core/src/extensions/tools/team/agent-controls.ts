@@ -17,7 +17,7 @@ export const MaxIterationsField = z
 	.union([z.number(), z.string()])
 	.optional()
 	.describe(
-		"Most iterations (model turns) this agent may take; omit for the default. At the cap it waits for you with its work kept.",
+		"Most iterations (model turns) this agent may take; omit for no cap. At the cap it waits for you with its work kept.",
 	);
 
 /** The two fields, for a tool schema that offers them. */
@@ -63,5 +63,14 @@ export function maxIterationsOf(input: unknown): number | undefined {
 	return readMaxIterations(record.max_iterations ?? record.maxIterations);
 }
 
+/**
+ * How the system works and what the lead's part in it is. Swarm 2026-09-27:
+ * the lead told 50 agents "DO NOT modify any file" for fear of concurrent
+ * edits, gave review-only agents a check they could never pass, and never
+ * applied a single revision -- it did not know that was its job.
+ */
+export const AGENT_SANDBOX_ROLE_NOTE =
+	"How agents work: each runs in its own sandboxed copy of the workspace, so any number may read and edit the same files at once -- there is no concurrency problem to avoid, and no reason to forbid edits. Your files stay unchanged: each agent's edits come back to you as revisions. You are the synthesizer, and nothing merges on its own: read each report, inspect its revisions (`read_files` with `revision`), apply what is right (`restore_file`), reconcile agents that disagree, and verify the result yourself. ";
+
 /** What a spawn tool's description says about the two controls. */
-export const AGENT_CONTROLS_NOTE = `Per agent, or for the whole call (an agent's own wins): \`max_iterations\` caps its model turns (omit for the default); an agent that reaches it is not lost -- it stops and waits for you with its work kept, and \`${RESUME_AGENT_TOOL_NAME}(agent_id, extra_iterations)\` continues it, or \`stop_agents\` takes its work as it is. An agent the loop guard stops for sending the same call again waits for you the same way, reported as looping: resume it with \`instructions\` saying what to do instead, or restart it. \`check: {command, expect, must?}\` is its oracle: when it says it is done, \`command\` runs in its own sandboxed copy of the workspace and must exit 0 with output matching the regex \`expect\` (\`must: "not_match"\`: not matching); on a fail it is shown the output and keeps working. It is told its check up front. Its report gives \`iterations\`/\`maxIterations\`, \`stopReason\` (\`iteration_cap\` or \`loop_guard\`) when either ended it, and \`oracle\` {status, exitCode, output}. `;
+export const AGENT_CONTROLS_NOTE = `Per agent, or for the whole call (an agent's own wins): \`max_iterations\` caps its model turns (omit for no cap); an agent that reaches it is not lost -- it stops and waits for you with its work kept, and \`${RESUME_AGENT_TOOL_NAME}(agent_ids?)\` continues it -- several in one call, each by its spawn cap again unless you give \`extra_iterations\` -- or \`stop_agents\` takes its work as it is. An agent the loop guard stops for sending the same call again waits for you the same way, reported as looping: resume it with \`instructions\` saying what to do instead, or restart it. \`check: {command, expect, must?}\` is its oracle, and it is deterministic: when it says it is done, \`command\` runs in its own sandboxed copy of the workspace and must exit 0 with output matching the regex \`expect\` (\`must: "not_match"\`: not matching); on a fail it is shown the output and keeps working. It judges only that agent's own copy -- not the merged result, which is yours to check -- and a call-level check applies to every agent of the call: give it per agent to those whose edits it measures, never to review or analysis agents, which cannot pass it. It is told its check up front. Its report gives \`iterations\`/\`maxIterations\`, \`stopReason\` (\`iteration_cap\` or \`loop_guard\`) when either ended it, and \`oracle\` {status, exitCode, output}. `;

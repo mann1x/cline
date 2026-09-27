@@ -259,6 +259,10 @@ export function watchPolykvRoom(
 			state.waiting
 				? {
 						queued: true,
+						phase: {
+							name: "waiting_room",
+							...(state.reason ? { detail: state.reason } : {}),
+						},
 						...(state.reason
 							? {
 									latestOutput: state.reason,
@@ -298,6 +302,22 @@ export function watchPolykvRoom(
 			emitUpdate({
 				latestOutput: describeOpencotiStreamPhase(phase),
 				latestOutputKind: "text",
+				phase:
+					phase.kind === "queued"
+						? { name: "server_queued" }
+						: phase.kind === "prefill"
+							? {
+									name: "prefill",
+									detail: `${phase.processed}/${phase.total} tokens`,
+								}
+							: {
+									name: "generating",
+									...(phase.decoded > 0
+										? {
+												detail: `${phase.decoded} tokens, nothing streamed yet`,
+											}
+										: {}),
+								},
 			});
 		} else if (phaseShown) {
 			// The stream produces again: its own output takes the line.
@@ -325,6 +345,85 @@ export function watchPolykvRoom(
  */
 export const DELEGATION_PACING_NOTE =
 	"Launching many is safe: the harness paces them. Each agent starts when a node has room for it and waits in a queue until then, so asking for more than can run at once overloads nothing -- it only means some start later. A call that waits returns when every agent in it has finished, and your next message is sent only after that -- so ask for the whole job at once: one `spawn_agent` call whose `agents` list holds every agent (a configured agent by `type`, several of one kind with `count`), or every call in the same message.";
+
+/**
+ * What an agent is doing right now, for the lead's `agents_status`: the
+ * stretch it is in, not its last event. A compaction or a condensation is a
+ * model call of its own that streams nothing the agent's row shows, and on a
+ * PolyKV node throughput drops to zero while it runs -- the lead read those
+ * silences as stuck agents and cancelled them (swarm 2026-09-27).
+ */
+export type AgentPhase =
+	| "requesting"
+	| "server_queued"
+	| "prefill"
+	| "generating"
+	| "thinking"
+	| "writing"
+	| "tool"
+	| "compacting"
+	| "condensing_thinking"
+	| "recovering"
+	| "waiting_room";
+
+/** The update that carries it: `{ phase: { name, detail? } }`. */
+export interface AgentPhaseUpdate {
+	name: AgentPhase;
+	detail?: string;
+}
+
+const RECOVERY_KINDS = new Set([
+	"empty_turn_recovery",
+	"max_tokens_turn_recovery",
+	"turn_fault_recovery",
+	"context_overflow_recovery",
+	"tool_call_parse_recovery",
+	"image_input_recovery",
+]);
+
+/** The phase a notice starts or ends, or `undefined` for one that says none. */
+export function phaseOfNotice(
+	event: AgentEvent,
+): AgentPhaseUpdate | "ended" | undefined {
+	if (event.type !== "notice") {
+		return undefined;
+	}
+	const metadata = event.metadata;
+	const kind = typeof metadata?.kind === "string" ? metadata.kind : undefined;
+	const phase = metadata?.phase;
+	if (!kind) {
+		return undefined;
+	}
+	if (kind === "capped_thinking") {
+		return phase === "started"
+			? {
+					name: "condensing_thinking",
+					detail:
+						"its thinking hit its budget; the reasoning is being condensed to a note",
+				}
+			: "ended";
+	}
+	if (COMPACTION_KIND_CAUSE[kind] !== undefined) {
+		if (phase === "started") {
+			const cause = COMPACTION_CAUSES.includes(
+				metadata?.cause as CompactionCause,
+			)
+				? (metadata?.cause as CompactionCause)
+				: COMPACTION_KIND_CAUSE[kind];
+			return {
+				name: "compacting",
+				detail: `cause: ${cause ? COMPACTION_CAUSE_LABEL[cause] : kind}`,
+			};
+		}
+		return phase === "completed" || phase === "skipped" || phase === "failed"
+			? "ended"
+			: undefined;
+	}
+	if (RECOVERY_KINDS.has(kind) && phase === "started") {
+		return { name: "recovering", detail: event.message };
+	}
+	return undefined;
+}
 
 /** One finished compaction, as the agent's row reports it. */
 export interface SubagentCompaction {
@@ -449,6 +548,15 @@ export function createSubagentProgress(
 	let deltas = 0;
 	let windowStart = Number.NaN;
 	let genTps: number | undefined;
+	// The stretch it is in, said once per change.
+	let phase: AgentPhaseUpdate | undefined;
+	const enter = (next: AgentPhaseUpdate) => {
+		if (phase?.name === next.name && phase.detail === next.detail) {
+			return;
+		}
+		phase = next;
+		emitUpdate?.({ phase: next });
+	};
 	const tail = (value: string) =>
 		value.length > SUBAGENT_OUTPUT_TAIL_CHARS
 			? value.slice(value.length - SUBAGENT_OUTPUT_TAIL_CHARS)
@@ -499,6 +607,12 @@ export function createSubagentProgress(
 			if (!emitUpdate) {
 				return;
 			}
+			const noticed = phaseOfNotice(event);
+			if (noticed === "ended") {
+				enter({ name: "requesting" });
+			} else if (noticed) {
+				enter(noticed);
+			}
 			if (compaction) {
 				compactions += 1;
 				compactionsByCause[compaction.cause] =
@@ -513,6 +627,7 @@ export function createSubagentProgress(
 			}
 			// Its turns, for the lead's status: iterations used against its cap.
 			if (event.type === "iteration_start") {
+				enter({ name: "requesting" });
 				emitUpdate({ iterations: event.iteration });
 				return;
 			}
@@ -524,10 +639,15 @@ export function createSubagentProgress(
 					inputTokens: event.totalInputTokens,
 					outputTokens: event.totalOutputTokens,
 					// The window it is using now: what this turn sent, and what
-					// it wrote on top.
+					// it wrote on top. The gateway's input count already holds
+					// the cached prefix (`normalizeUsage` takes the total), so
+					// the cache is added only where a provider reported it
+					// apart -- more cached than sent in all. Added on every turn
+					// it read "107,452 of 65,536 tokens" (swarm 2026-09-27).
 					contextTokens:
-						event.inputTokens +
-						(event.cacheReadTokens ?? 0) +
+						(event.inputTokens >= (event.cacheReadTokens ?? 0)
+							? event.inputTokens
+							: event.inputTokens + (event.cacheReadTokens ?? 0)) +
 						event.outputTokens,
 					...(event.totalCost !== undefined
 						? { totalCost: event.totalCost }
@@ -536,12 +656,14 @@ export function createSubagentProgress(
 				return;
 			}
 			if (event.type === "content_start" && event.contentType === "text") {
+				enter({ name: "writing" });
 				countDelta();
 				text = tail(text + (event.text ?? ""));
 				reportOutput(false);
 				return;
 			}
 			if (event.type === "content_start" && event.contentType === "reasoning") {
+				enter({ name: "thinking" });
 				countDelta();
 				reasoning = tail(reasoning + (event.reasoning ?? event.text ?? ""));
 				reportOutput(false);
@@ -562,6 +684,7 @@ export function createSubagentProgress(
 				if (toolsRunning > 0) {
 					toolsRunning -= 1;
 					if (toolsRunning === 0) {
+						enter({ name: "requesting" });
 						emitUpdate({ latestToolCall: null });
 					}
 				}
@@ -583,6 +706,7 @@ export function createSubagentProgress(
 			reasoning = "";
 			deltas = 0;
 			windowStart = Number.NaN;
+			enter({ name: "tool", detail: event.toolName });
 			emitUpdate({ latestToolCall: event.toolName, toolCalls });
 		},
 	};

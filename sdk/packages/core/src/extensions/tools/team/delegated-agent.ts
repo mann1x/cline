@@ -13,6 +13,7 @@ import { mergeAgentHooks } from "../../../hooks/hook-file-hooks";
 import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-orchestrator";
 import type { WorkerStruggleSupervisor } from "../../../runtime/safety/worker-struggle";
 import type { DelegatedAgentCheck } from "./agent-check";
+import { createCapWarning } from "./agent-iteration-cap";
 import type { AgentNodePlacement } from "./agent-node-placement";
 import type { AgentSlotGate, AgentSlotGateRegistry } from "./agent-slot-gate";
 import {
@@ -518,8 +519,21 @@ export function buildDelegatedAgentConfig(
 export function createDelegatedAgent(
 	options: BuildDelegatedAgentConfigOptions,
 ): SessionRuntime {
-	const config = buildDelegatedAgentConfig(options);
+	// Told to wrap up a few turns before its cap, once per run, so it ends
+	// with a report instead of being cut off mid-step.
+	let built: SessionRuntime | undefined;
+	const warning = createCapWarning(() => built?.getMaxIterations());
+	const config = buildDelegatedAgentConfig({
+		...options,
+		onEvent: (event) => {
+			options.onEvent?.(event);
+			warning.observe(event);
+		},
+		consumePendingUserMessage: async () =>
+			(await options.consumePendingUserMessage?.()) ?? warning.take(),
+	});
 	const session = new SessionRuntime(config);
+	built = session;
 	if (config.onEvent) {
 		session.subscribeEvents(config.onEvent);
 	}

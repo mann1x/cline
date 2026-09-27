@@ -3990,6 +3990,49 @@ describe("createContextCompactionPrepareTurn", () => {
 		assertBasicCompactionResult(result);
 	});
 
+	// compact_agents: the lead asks a delegated agent to give its KV cells
+	// back. The estimate says there is room; it compacts anyway, as manual.
+	it("compacts when the lead asked for it, as a manual compaction", async () => {
+		const emitStatusNotice = vi.fn();
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "anthropic",
+			modelId: "mock-model",
+			providerConfig: {
+				providerId: "anthropic",
+				modelId: "mock-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: { enabled: true, strategy: "basic" },
+			logger: undefined,
+		});
+
+		await prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			emitStatusNotice,
+			compactionRequested: true,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages: overflowRecoveryTranscript(),
+			apiMessages: overflowRecoveryTranscript(),
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: { id: "mock-model", maxInputTokens: 1_000_000 },
+			},
+		});
+
+		expect(emitStatusNotice).toHaveBeenCalledWith(
+			"compacting",
+			expect.objectContaining({
+				kind: "manual_compaction",
+				phase: "started",
+			}),
+		);
+	});
+
 	it("recovers by summarising rather than dropping turns when the summariser works", async () => {
 		// Basic compaction drops turns whole, and measured on live runs the model
 		// does not survive it: the transcript it wakes up in has the work but not

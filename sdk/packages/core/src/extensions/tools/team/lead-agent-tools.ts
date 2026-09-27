@@ -25,7 +25,12 @@
  */
 
 import type { AgentTool, AgentToolContext } from "@cline/shared";
-import { RESUME_AGENT_TOOL_NAME, resumeSuspended } from "./agent-iteration-cap";
+import {
+	listAwaitingLead,
+	RESUME_AGENT_TOOL_NAME,
+	resumeSuspended,
+	stopSuspended,
+} from "./agent-iteration-cap";
 import {
 	type AgentRounds,
 	LIVE_STATES,
@@ -42,6 +47,7 @@ export const RETRY_FAILED_TOOL_NAME = "retry_failed";
 export const MESSAGE_AGENTS_TOOL_NAME = "message_agents";
 export const STOP_AGENTS_TOOL_NAME = "stop_agents";
 export const AWAIT_AGENTS_TOOL_NAME = "await_agents";
+export const COMPACT_AGENTS_TOOL_NAME = "compact_agents";
 
 /**
  * The tools that act on agents, as opposed to looking at them. An
@@ -55,6 +61,7 @@ export const LEAD_CONTROL_TOOL_NAMES: ReadonlySet<string> = new Set([
 	MESSAGE_AGENTS_TOOL_NAME,
 	STOP_AGENTS_TOOL_NAME,
 	AWAIT_AGENTS_TOOL_NAME,
+	COMPACT_AGENTS_TOOL_NAME,
 ]);
 
 /**
@@ -201,7 +208,7 @@ export const RESTART_AGENT_DESCRIPTION =
 	"Start an agent over from its original task, discarding its transcript and its workspace changes. It keeps its place in the round, its check, its sampler (a random seed is drawn again) and its iteration cap. `instructions` are added to its task as revised instructions -- say what to do differently. Works on a running agent and on one that has finished, failed or been stopped; a finished agent's new report reaches you when it ends.";
 
 export const RESUME_AGENT_DESCRIPTION =
-	"Continue an agent that is waiting for you (awaiting_lead): one that stopped at its iteration cap, one the loop guard stopped for repeating the same call, or one the struggle supervisor stopped for grinding on after it was told to commit a SUMMARY. It carries on from where it stopped, with its transcript and its changes, and `extra_iterations` more turns. `instructions` are added as it resumes -- for a looping agent, say what to do instead of the call it repeated; for a struggling one, what to settle for. To take its work as it is instead, stop it (stop_agents); to start it over, restart_agent.";
+	"Continue agents that are waiting for you (awaiting_lead): stopped at their iteration cap, by the loop guard for repeating the same call, or by the struggle supervisor for grinding on after being told to commit a SUMMARY. Each carries on from where it stopped, with its transcript and its changes. One call takes several: `agent_ids`, or leave it out for every agent waiting on you. `extra_iterations` defaults to the cap each was spawned with (60 -> 120 -> 180). `instructions` are added as they resume -- for a looping agent, say what to do instead of the call it repeated; for a struggling one, what to settle for. To take the work as it is instead, stop_agents; to start over, restart_agent.";
 
 export const RETRY_FAILED_DESCRIPTION =
 	"Run a round's failed and cancelled agents again, each from the task it was originally given (and any revised instructions from a restart), with the same check, sampler and cap. `agent_ids` limits it to some of them. The round reports again when they finish. Infrastructure trouble never fails an agent -- it is retried on its own -- so what this reruns failed on its task: consider restart_agent with instructions for one that will fail the same way again.";
@@ -210,7 +217,10 @@ export const MESSAGE_AGENTS_DESCRIPTION =
 	"Leave a message for running agents. Each reads it at its next turn, between tool calls, and carries on with it in mind. Use it to pass on a change of plan, a constraint, or an answer.";
 
 export const STOP_AGENTS_DESCRIPTION =
-	"Stop running agents. A stopped agent reports as cancelled by you, with the work it had done so far; the rest of its round carries on. An agent waiting on you -- at its iteration cap, or stopped by the loop guard -- is ended with its work kept.";
+	"Stop running agents. A last resort: a stopped agent reports as cancelled by you, with only the work it had done so far, and its task is lost unless you run it again. Slowness and a full server are not reasons to stop one: the harness paces agents and retries refusals, the PolyKV server frees KV cells on its own, and while an agent compacts its throughput drops to zero for minutes -- that is progress, not a hang (agents_status shows each agent's phase). To free KV cells, compact_agents; to move an agent off a slow node, requeue_agent; to change its course, message_agents. The rest of its round carries on. An agent waiting on you at its iteration cap is ended with its work kept, after one last turn in which it writes its report; one stopped by the loop guard is ended with its work kept.";
+
+export const COMPACT_AGENTS_DESCRIPTION =
+	"Compact running agents' context, giving their KV cells back without stopping them -- what to do instead of stop_agents when a PolyKV node is short of cells. Each compacts before its next model request: a summary call during which its throughput is zero, often for minutes, and after which it carries on with a summary in place of its detailed history. Rarely needed: agents compact on their own when their node's KV pressure reaches its threshold (0.85 unless configured), and the server frees cells itself. Use it only on agents holding a large share of a node's cells while the node's pressure is near its threshold -- agents_status shows both. An agent already compacting, or waiting on you, is left as it is.";
 
 function textOf(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -350,54 +360,92 @@ export function createLeadAgentControlTools(
 			inputSchema: {
 				type: "object",
 				properties: {
-					agent_id: agentIdProperty,
+					agent_ids: {
+						type: "array",
+						items: { type: "string" },
+						description:
+							"The agents to resume, by id (r3-2) or name. Leave it out to resume every agent waiting on you.",
+					},
+					agent_id: {
+						...agentIdProperty,
+						description: `One agent; the same as agent_ids with one entry. ${agentIdProperty.description}`,
+					},
 					extra_iterations: {
 						type: "integer",
 						minimum: 1,
-						description: "How many more turns it may take.",
+						description:
+							"How many more turns each may take. Default: the cap each was spawned with.",
 					},
 					instructions: {
 						type: "string",
 						description:
-							"What it should do now, added to its conversation as it resumes. For an agent the loop guard stopped, say what to do instead of the call it repeated.",
+							"What they should do now, added to each one's conversation as it resumes. For an agent the loop guard stopped, say what to do instead of the call it repeated.",
 					},
 				},
-				required: ["agent_id", "extra_iterations"],
 			},
 			execute: async (input: unknown) => {
 				const record = (input ?? {}) as Record<string, unknown>;
-				const ref = textOf(record.agent_id) ?? "";
-				const extra = Math.floor(Number(record.extra_iterations));
-				if (!Number.isFinite(extra) || extra < 1) {
-					return `extra_iterations must be a whole number of at least 1 (got ${JSON.stringify(record.extra_iterations)}).`;
+				let extra: number | undefined;
+				if (
+					record.extra_iterations !== undefined &&
+					record.extra_iterations !== null
+				) {
+					extra = Math.floor(Number(record.extra_iterations));
+					if (!Number.isFinite(extra) || extra < 1) {
+						return `extra_iterations must be a whole number of at least 1 (got ${JSON.stringify(record.extra_iterations)}).`;
+					}
 				}
+				const instructions = textOf(record.instructions);
+				const named = [
+					...idsOf(record.agent_ids),
+					...(textOf(record.agent_id)
+						? [textOf(record.agent_id) as string]
+						: []),
+				];
 				// The cap's own registry holds the waiting agents
 				// (`agent-iteration-cap.ts`); it knows one by its row's id,
 				// its runtime id or its name. A round id resolves to the row.
-				const target = resolveAgent(sessionId, ref);
-				const resumed = resumeSuspended(
-					target?.cancelId ?? ref,
-					extra,
-					sessionId,
-					textOf(record.instructions),
-				);
-				if (!resumed.ok) {
-					return target
-						? `${target.label} is ${stateOf(target)}, not waiting on you (at its iteration cap, or stopped by the loop guard): there is nothing to resume.`
-						: resumed.message;
+				const refs =
+					named.length > 0
+						? named
+						: listAwaitingLead(sessionId).map((view) => view.agentId);
+				if (refs.length === 0) {
+					return "No agent is waiting on you: there is nothing to resume. agents_status lists what is running.";
 				}
-				if (
-					target?.agent &&
-					resumed.agent &&
-					((resumed.agent.reason !== "looping" &&
-						resumed.agent.reason !== "struggling") ||
-						target.agent.maxIterations !== undefined)
-				) {
-					target.agent.maxIterations = resumed.agent.maxIterations + extra;
+				const lines: string[] = [];
+				for (const ref of [...new Set(refs)]) {
+					const target = resolveAgent(sessionId, ref);
+					const resumed = resumeSuspended(
+						target?.cancelId ?? ref,
+						extra,
+						sessionId,
+						instructions,
+					);
+					if (!resumed.ok) {
+						lines.push(
+							target
+								? `${target.label} is ${stateOf(target)}, not waiting on you (at its iteration cap, or stopped by the loop guard): there is nothing to resume.`
+								: resumed.message,
+						);
+						continue;
+					}
+					const given = resumed.extraIterations ?? extra ?? 0;
+					if (
+						target?.agent &&
+						resumed.agent &&
+						((resumed.agent.reason !== "looping" &&
+							resumed.agent.reason !== "struggling") ||
+							target.agent.maxIterations !== undefined)
+					) {
+						target.agent.maxIterations = resumed.agent.maxIterations + given;
+					}
+					lines.push(
+						note(
+							target ? `${target.label}: ${resumed.message}` : resumed.message,
+						),
+					);
 				}
-				return note(
-					target ? `${target.label}: ${resumed.message}` : resumed.message,
-				);
+				return lines.join("\n");
 			},
 		} as AgentTool,
 		{
@@ -519,6 +567,64 @@ export function createLeadAgentMessagingTools(
 			},
 		} as AgentTool,
 		{
+			name: COMPACT_AGENTS_TOOL_NAME,
+			description: COMPACT_AGENTS_DESCRIPTION,
+			inputSchema: {
+				type: "object",
+				properties: {
+					agents: {
+						type: "array",
+						items: { type: "string" },
+						description:
+							"The agents to compact, by id (r3-2) or name. Name them: there is no 'all'.",
+					},
+				},
+				required: ["agents"],
+			},
+			execute: async (input: unknown) => {
+				const named = idsOf(
+					(input as { agents?: unknown } | undefined)?.agents,
+				);
+				if (named.length === 0) {
+					return "Nothing compacted: name the agents in `agents`. agents_status shows which hold the most KV cells.";
+				}
+				const { targets, unknown } = resolveTargets(sessionId, named);
+				const lines: string[] = [];
+				const asked: string[] = [];
+				for (const target of targets) {
+					const state = stateOf(target);
+					if (state === "awaiting_lead") {
+						lines.push(
+							`${target.label} is waiting on you: resume or stop it instead; it holds no running request.`,
+						);
+						continue;
+					}
+					if (target.agent?.phase?.name === "compacting") {
+						lines.push(`${target.label} is compacting already.`);
+						continue;
+					}
+					if (
+						target.cancelId &&
+						subagentCancellation.compact(target.cancelId)
+					) {
+						asked.push(target.label);
+						continue;
+					}
+					lines.push(
+						`${target.label} is ${state === "running" ? "not yet running a model" : state}: nothing to compact.`,
+					);
+				}
+				for (const ref of unknown) {
+					lines.push(notFound(sessionId, ref));
+				}
+				const head =
+					asked.length > 0
+						? `Compacting ${asked.length} agent(s) before their next model request: ${asked.join(", ")}. Their throughput is zero while it runs; agents_status shows the phase.`
+						: "Nothing compacted.";
+				return note([head, ...lines].join("\n"));
+			},
+		} as AgentTool,
+		{
 			name: STOP_AGENTS_TOOL_NAME,
 			description: STOP_AGENTS_DESCRIPTION,
 			inputSchema: {
@@ -528,10 +634,21 @@ export function createLeadAgentMessagingTools(
 			execute: async (input: unknown) => {
 				const { agents } = (input ?? {}) as { agents?: string[] };
 				const { targets, unknown } = resolveTargets(sessionId, agents);
-				const stopped = targets.filter(
-					(agent) =>
-						agent.cancelId &&
-						subagentCancellation.cancel(agent.cancelId, "lead"),
+				// One waiting at its cap is ended, not cancelled: it writes its
+				// report in one last turn and keeps its work (`stopSuspended`).
+				const stopped = targets.filter((agent) =>
+					stateOf(agent) === "awaiting_lead" &&
+					agent.agent?.awaitingReason !== "looping" &&
+					agent.agent?.awaitingReason !== "struggling"
+						? stopSuspended(agent.cancelId ?? agent.ref, {
+								sessionId,
+								reason: "stopped by the lead",
+								report: true,
+							}).ok ||
+							(!!agent.cancelId &&
+								subagentCancellation.cancel(agent.cancelId, "lead"))
+						: !!agent.cancelId &&
+							subagentCancellation.cancel(agent.cancelId, "lead"),
 				);
 				const missed = [
 					...unknown,

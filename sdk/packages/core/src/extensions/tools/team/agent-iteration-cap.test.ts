@@ -4,7 +4,9 @@ import { describeWorkerStop } from "../../../runtime/safety/worker-struggle-stop
 import {
 	__resetAwaitingLead,
 	type CappableAgent,
+	createCapWarning,
 	createDelegatedAgentLifetime,
+	FINAL_REPORT_NOTE,
 	flushAwaitingLeadNotices,
 	listAwaitingLead,
 	onAwaitingLead,
@@ -201,6 +203,62 @@ describe("an agent that reaches its iteration cap", () => {
 		expect(resumeSuspended("a", 0, "lead").ok).toBe(false);
 		stopSuspended("a", { sessionId: "lead" });
 		await running;
+	});
+
+	it("adds the cap it was spawned with when the lead names no amount", async () => {
+		listeningLead();
+		const agent = scriptedAgent(60, [
+			result("max_iterations", 60),
+			result("completed", 5, "done"),
+		]);
+		const running = runDelegatedWithCap({
+			agent,
+			start: async () => result("max_iterations", 60),
+			name: "a",
+			sessionId: "lead",
+		});
+		await vi.waitFor(() => expect(listAwaitingLead("lead")).toHaveLength(1));
+		expect(resumeSuspended("a", undefined, "lead").message).toContain(
+			"cap now 120",
+		);
+		await vi.waitFor(() =>
+			expect(listAwaitingLead("lead")[0]?.maxIterations).toBe(120),
+		);
+		expect(resumeSuspended("a", undefined, "lead").message).toContain(
+			"cap now 180",
+		);
+		const done = await running;
+		expect(agent.caps).toEqual([60, 60]);
+		expect(done.maxIterations).toBe(180);
+	});
+
+	it("rewrites its waiting note when the lead reads it, and drops it once none waits", async () => {
+		const notes: Array<{ text: string; refresh?: () => string | undefined }> =
+			[];
+		onLeadNudge("lead", (text, options) =>
+			notes.push({ text, refresh: options?.refresh }),
+		);
+		const runs = ["a", "b"].map((name) =>
+			runDelegatedWithCap({
+				agent: scriptedAgent(4, [result("completed", 1, "ok")]),
+				start: async () => result("max_iterations", 4),
+				name,
+				sessionId: "lead",
+			}),
+		);
+		await vi.waitFor(() => expect(listAwaitingLead("lead")).toHaveLength(2));
+		flushAwaitingLeadNotices();
+		expect(notes).toHaveLength(1);
+		const refresh = notes[0]?.refresh;
+		expect(refresh).toBeDefined();
+		resumeSuspended("a", 3, "lead");
+		const now = refresh?.() ?? "";
+		expect(now).toContain("1 agent stopped");
+		expect(now).toContain("- b (");
+		expect(now).not.toContain("- a (");
+		stopSuspended("b", { sessionId: "lead" });
+		expect(refresh?.()).toBeUndefined();
+		await Promise.all(runs);
 	});
 
 	it("runs a completed agent straight through", async () => {
@@ -538,5 +596,66 @@ describe("a detached agent's resume", () => {
 		expect(final?.result.text).toBe("done");
 		expect(order).toEqual(["placed", "released"]);
 		expect(agent.continued).toHaveLength(1);
+	});
+});
+
+describe("the end of an agent's budget", () => {
+	it("tells it to wrap up a few turns before its cap, once per run", () => {
+		let cap = 60;
+		const warning = createCapWarning(() => cap);
+		const said: string[] = [];
+		for (let i = 1; i <= 60; i++) {
+			warning.observe({ type: "iteration_start", iteration: i });
+			const note = warning.take();
+			if (note) {
+				said.push(`${i}: ${note}`);
+			}
+		}
+		expect(said).toHaveLength(1);
+		expect(said[0]).toMatch(
+			/^56: \[SYSTEM MESSAGE\] This is turn 56 of the 60/,
+		);
+		// A resume is a new run with its own allowance, and its own warning.
+		cap = 10;
+		const again: string[] = [];
+		for (let i = 1; i <= 10; i++) {
+			warning.observe({ type: "iteration_start", iteration: i });
+			const note = warning.take();
+			if (note) {
+				again.push(String(i));
+			}
+		}
+		expect(again).toEqual(["10"]);
+	});
+
+	it("says nothing to an agent without a cap", () => {
+		const warning = createCapWarning(() => undefined);
+		warning.observe({ type: "iteration_start", iteration: 500 });
+		expect(warning.take()).toBeUndefined();
+	});
+
+	// swarm 2026-09-27: a stopped agent's report was the preamble of the tool
+	// call its last turn made.
+	it("writes its report in one last turn when the lead ends it at its cap", async () => {
+		listeningLead();
+		const agent = scriptedAgent(4, [
+			result("completed", 1, "Changed a.js; b.js still fails at line 90."),
+		]);
+		const running = runDelegatedWithCap({
+			agent,
+			start: async () => result("max_iterations", 4, "Now let me check"),
+			name: "a",
+			sessionId: "lead",
+		});
+		await vi.waitFor(() => expect(listAwaitingLead("lead")).toHaveLength(1));
+		expect(stopSuspended("a", { sessionId: "lead", report: true }).ok).toBe(
+			true,
+		);
+		const done = await running;
+		expect(agent.continued).toEqual([FINAL_REPORT_NOTE]);
+		expect(agent.caps).toEqual([1]);
+		expect(done.result.text).toBe("Changed a.js; b.js still fails at line 90.");
+		expect(done.stopReason).toBe("iteration_cap");
+		expect(done.iterations).toBe(5);
 	});
 });

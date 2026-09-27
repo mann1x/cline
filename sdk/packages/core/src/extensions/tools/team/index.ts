@@ -9,6 +9,7 @@ export {
 } from "./agent-check";
 export {
 	AGENT_CONTROLS_NOTE,
+	AGENT_SANDBOX_ROLE_NOTE,
 	AgentControlFields,
 	maxIterationsOf,
 	readMaxIterations,

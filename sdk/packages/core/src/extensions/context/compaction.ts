@@ -101,6 +101,11 @@ export interface ContextPipelinePrepareTurnInput {
 	 * successful LLM request.
 	 */
 	overflowRecovery?: boolean;
+	/**
+	 * Someone asked for this compaction -- the lead, for a delegated agent
+	 * (`compact_agents`). Runs as a manual compaction on this turn.
+	 */
+	compactionRequested?: boolean;
 	emitStatusNotice?: (
 		message: string,
 		metadata?: Record<string, unknown>,
@@ -764,7 +769,8 @@ export function createContextCompactionPrepareTurn(
 			sessionId: config.sessionId,
 			providerConfig,
 			logger: config.logger,
-			grow: !turn.overflowRecovery && mode === "auto",
+			grow:
+				!turn.overflowRecovery && !turn.compactionRequested && mode === "auto",
 		}).catch(() => undefined);
 		// Sized against the window the server GRANTED, where one is known and
 		// smaller than the configured one. A conversation negotiated down to
@@ -790,7 +796,9 @@ export function createContextCompactionPrepareTurn(
 			);
 		const effectiveMode: CoreCompactionMode = context.overflowRecovery
 			? "overflow_recovery"
-			: mode;
+			: turn.compactionRequested
+				? "manual"
+				: mode;
 		const apiMessageTokens = context.apiMessages.reduce(
 			(total: number, message) => total + estimateMessageTokens(message),
 			0,

@@ -73,7 +73,10 @@ import {
 	agentEndpointKey,
 	delegationCanRunInParallel,
 } from "../../extensions/tools/team/agent-slot-gate";
-import { onLeadNudge } from "../../extensions/tools/team/agent-trouble";
+import {
+	type LeadNudgeOptions,
+	onLeadNudge,
+} from "../../extensions/tools/team/agent-trouble";
 import {
 	type BackgroundDelegationRegistry,
 	type BackgroundDelegationView,
@@ -2485,7 +2488,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 		this.leadNudgeUnsubscribes.get(sessionId)?.();
 		this.leadNudgeUnsubscribes.set(
 			sessionId,
-			onLeadNudge(sessionId, (text) => this.nudgeLead(sessionId, text)),
+			onLeadNudge(sessionId, (text, options) =>
+				this.nudgeLead(sessionId, text, options),
+			),
 		);
 		// A round the lead did not wait for reports on its own, at the lead's
 		// next boundary. What settled while nobody listened -- before a reload,
@@ -2831,7 +2836,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 	 * a side turn while the lead waits on its round -- where it can stop them
 	 * -- and queued for its next turn when there is no round to answer from.
 	 */
-	private nudgeLead(sessionId: string, text: string): void {
+	private nudgeLead(
+		sessionId: string,
+		text: string,
+		options?: LeadNudgeOptions,
+	): void {
 		const session = this.sessions.get(sessionId);
 		if (!session) {
 			return;
@@ -2839,13 +2848,15 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// Waiting on its agents (`await_agents`, a blocking spawn): the report
 		// goes to the lead itself, which is the one that can resume, restart or
 		// stop the agent. Its wait ends and the note is read right after it.
+		const note = {
+			prompt: text,
+			delivery: "steer" as const,
+			origin: "harness" as const,
+			noteKind: options?.noteKind ?? ("status" as const),
+			...(options?.refresh ? { refresh: options.refresh } : {}),
+		};
 		if (roundsFor(sessionId).leadAwaiting) {
-			this.pendingPromptsController.enqueue(sessionId, {
-				prompt: text,
-				delivery: "steer",
-				origin: "harness",
-				noteKind: "status",
-			});
+			this.pendingPromptsController.enqueue(sessionId, note);
 			roundsFor(sessionId).wakeAwaits();
 			return;
 		}
@@ -2858,12 +2869,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			this.answerSteerInSideTurn(session, text, "system");
 			return;
 		}
-		this.pendingPromptsController.enqueue(sessionId, {
-			prompt: text,
-			delivery: "steer",
-			origin: "harness",
-			noteKind: "status",
-		});
+		this.pendingPromptsController.enqueue(sessionId, note);
 	}
 
 	async runTurn(input: SendSessionInput): Promise<AgentResult | undefined> {

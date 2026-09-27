@@ -290,7 +290,12 @@ export function formatAgentControlInput(
 		case "requeue_agent":
 		case "restart_agent":
 		case "resume_agent": {
-			const agent = agents[0] ?? "";
+			const agent =
+				toolName === "resume_agent" && agents.length !== 1
+					? agents.length === 0
+						? "every waiting agent"
+						: agents.join(", ")
+					: (agents[0] ?? "");
 			const reason =
 				typeof record.reason === "string" && record.reason.trim()
 					? ` (${record.reason.trim()})`
@@ -303,7 +308,8 @@ export function formatAgentControlInput(
 		case "retry_failed":
 			return round ?? "";
 		case "message_agents":
-		case "stop_agents": {
+		case "stop_agents":
+		case "compact_agents": {
 			const named = Array.isArray(record.agents)
 				? record.agents.filter(
 						(entry): entry is string => typeof entry === "string",

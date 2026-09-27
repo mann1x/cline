@@ -333,20 +333,14 @@ Switching to act mode immediately starts executing the plan, so only call this a
 # tool: stop_agents
 {{DEFAULT}}
 
+# tool: compact_agents
+{{DEFAULT}}
+
 # tool: await_agents
 {{DEFAULT}}
 
 # tool: spawn_agent
-
-Spawn a sub-agent with a custom system prompt for specialised tasks. Call shape: `spawn_agent(knowledge?: {files?, text?}, instructions?: string, systemPrompt?: string, task?: string, name?: string, agents?: [{name?, task, instructions?, type?}])`.
-
-Use it when delegating work that benefits from focused expertise.
-
-**Structure the work in three parts, from most shared to least:** `knowledge` (files and notes the agents need — identical across them), `instructions` (the role — identical for every agent of the same kind), and each agent's `task` (what it alone does). Shared parts are loaded once for all agents that share them, so many agents cost little more than one. An entry in `agents` may name a configured agent in `type`; it then runs with that agent's own role and model.
-
-**Launching many is safe: the harness paces them.** Each agent starts when a node has room for it and waits in a queue until then, so asking for more than can run at once overloads nothing — it only means some start later. Do not hold back or split the work into waves: make every call the job needs in one message, and each returns its own result when its agent finishes.
-
-**Output:** `{text, iterations, finishReason, usage: {inputTokens, outputTokens}}` for a single agent; `{summary: {total, completed, errored, cancelled, byType, byFailureClass, totalIterations, totalTokens}, agents: [{name, status, failureClass?, line?, error?}], reports: [{name, text}], notShown?: {names}, usage}` for `agents` -- every agent is in `agents`; a report left out of `reports` to keep the result whole is listed in `notShown` and read with `read_agent_report(name)`. `failureClass` is `infra` (server, transport or refusal: worth running again as is) or `task` (the model, a tool or the iteration budget). Not merging is the way to get N separate reports: each agent of an `agents` call reports on its own, where `merge` returns one combined report. `text` is the sub-agent's final answer and the only part you need: it worked in its own context, so nothing it read or edited is visible to you except through `text`. It has already finished by the time you see this — there is nothing to poll and nothing to await. Give each sub-agent a short `name`: when several run at once it is the only thing telling their progress apart on screen.
+{{DEFAULT}}
 
 # tool: team_spawn_teammate
 {{DEFAULT}}

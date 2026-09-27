@@ -58,6 +58,10 @@ describe("watchPolykvRoom", () => {
 					latestOutput: "Waiting for room on the server.",
 					latestOutputKind: "text",
 					activity: { text: "Waiting for room on the server." },
+					phase: {
+						name: "waiting_room",
+						detail: "Waiting for room on the server.",
+					},
 				},
 			],
 			[{ queued: false }],
@@ -125,8 +129,20 @@ describe("watchPolykvRoom", () => {
 		phaseListeners.get("s9")?.(undefined);
 		phaseListeners.get("s9")?.(undefined);
 		expect(emitUpdate.mock.calls).toEqual([
-			[{ latestOutput: "phase queued", latestOutputKind: "text" }],
-			[{ latestOutput: "Prefilling 20481 / 41533", latestOutputKind: "text" }],
+			[
+				{
+					latestOutput: "phase queued",
+					latestOutputKind: "text",
+					phase: { name: "server_queued" },
+				},
+			],
+			[
+				{
+					latestOutput: "Prefilling 20481 / 41533",
+					latestOutputKind: "text",
+					phase: { name: "prefill", detail: "20481/41533 tokens" },
+				},
+			],
 			[{ latestOutput: "" }],
 		]);
 		for (const [update] of emitUpdate.mock.calls) {

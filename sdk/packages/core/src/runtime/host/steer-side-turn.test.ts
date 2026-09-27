@@ -251,6 +251,7 @@ describe("the side turn's view into the round", () => {
 		});
 		expect(offered).toEqual([
 			"message_agents",
+			"compact_agents",
 			"stop_agents",
 			"requeue_agent",
 			"restart_agent",

@@ -46,11 +46,13 @@ import {
 	failureClassOf,
 	type SpawnBatchFailureClass,
 } from "./batch-report";
+import { nodeKeyOf, noteNodeTokens } from "./node-throughput";
 import type { RealizedSpawnSampling, SpawnSampling } from "./spawn-sampling";
 import {
 	type SubagentStopActor,
 	subagentCancellation,
 } from "./subagent-cancellation";
+import type { AgentPhase, AgentPhaseUpdate } from "./subagent-progress";
 
 /** Which tool opened the round, which decides how an agent is run again. */
 export type RoundKind = "spawn_agent" | "swarm" | "configured";
@@ -180,6 +182,12 @@ export interface RoundAgentRecord extends RoundAgentSpec {
 	contextTokens?: number;
 	/** Recent generation speed, tokens per second. */
 	genTps?: number;
+	/** Its session on the engine: its row of a PolyKV server's `/kv`. */
+	engineSessionId?: string;
+	/** Start times of its latest iterations, for its pace. */
+	iterationTimes?: number[];
+	/** The stretch it is in while it runs, and since when. */
+	phase?: { name: AgentPhase; detail?: string; since: number };
 	iterations?: number;
 	toolCalls?: number;
 	compactions?: number;
@@ -360,6 +368,8 @@ export function roundsCompletionGuard(
 export const ROUND_OUTPUT_TAIL_CHARS = 1_500;
 /** Activity lines kept per agent. */
 export const ROUND_ACTIVITY_LIMIT = 20;
+/** Iteration start times kept per agent: enough for a five-minute pace. */
+const ITERATION_TIMES_KEPT = 40;
 const ROUND_ERROR_LIMIT = 5;
 const PERSIST_DEBOUNCE_MS = 1_000;
 
@@ -1134,6 +1144,8 @@ export class AgentRounds {
 		agent.genTps = undefined;
 		agent.compactions = undefined;
 		agent.compactionsByCause = undefined;
+		agent.phase = undefined;
+		agent.iterationTimes = undefined;
 	}
 
 	/** @internal */
@@ -1449,11 +1461,44 @@ export class RoundHandle {
 		agent.providerId = text("providerId") ?? agent.providerId;
 		agent.modelId = text("modelId") ?? agent.modelId;
 		agent.contextWindow = num("contextWindow") ?? agent.contextWindow;
+		// What it produced since the last report, counted to its node: the
+		// node's throughput for the lead's ETAs, whatever the provider.
+		const produced = num("outputTokens");
+		if (produced !== undefined && produced > (agent.outputTokens ?? 0)) {
+			noteNodeTokens(
+				nodeKeyOf(agent),
+				produced - (agent.outputTokens ?? 0),
+				at,
+			);
+		}
 		agent.inputTokens = num("inputTokens") ?? agent.inputTokens;
 		agent.outputTokens = num("outputTokens") ?? agent.outputTokens;
 		agent.contextTokens = num("contextTokens") ?? agent.contextTokens;
 		agent.genTps = num("genTps") ?? agent.genTps;
-		agent.iterations = num("iterations") ?? agent.iterations;
+		const phase = update.phase as Partial<AgentPhaseUpdate> | undefined;
+		if (phase && typeof phase === "object" && typeof phase.name === "string") {
+			const detail =
+				typeof phase.detail === "string" && phase.detail.trim()
+					? phase.detail.trim()
+					: undefined;
+			if (agent.phase?.name !== phase.name || agent.phase.detail !== detail) {
+				agent.phase = {
+					name: phase.name as AgentPhase,
+					...(detail ? { detail } : {}),
+					// A prefill's count moves every ping: the stretch began with
+					// its first one.
+					since: agent.phase?.name === phase.name ? agent.phase.since : at,
+				};
+			}
+		}
+		const iterations = num("iterations");
+		if (iterations !== undefined && iterations !== agent.iterations) {
+			agent.iterationTimes = [...(agent.iterationTimes ?? []), at].slice(
+				-ITERATION_TIMES_KEPT,
+			);
+		}
+		agent.engineSessionId = text("engineSessionId") ?? agent.engineSessionId;
+		agent.iterations = iterations ?? agent.iterations;
 		agent.toolCalls = num("toolCalls") ?? agent.toolCalls;
 		agent.maxIterations = num("maxIterations") ?? agent.maxIterations;
 		if (num("compactions") !== undefined) {

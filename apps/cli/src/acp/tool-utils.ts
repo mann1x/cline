@@ -29,6 +29,7 @@ const TOOL_KIND_MAP: Record<string, ToolKind> = {
 	message_agents: "think",
 	stop_agents: "think",
 	await_agents: "think",
+	compact_agents: "think",
 	NotebookEdit: "edit",
 	skills: "other",
 };

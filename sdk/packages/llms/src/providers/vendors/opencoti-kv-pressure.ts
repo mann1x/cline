@@ -207,6 +207,14 @@ export interface OpencotiKvCellsReading {
 	sessions: number;
 	cellsTotal?: number;
 	cellsFree?: number;
+	/**
+	 * Each session's own row, by engine session id: what the lead's status
+	 * shows per agent, so it can tell which agents hold the cells.
+	 */
+	bySession?: Record<
+		string,
+		{ used: number; window: number; pressure: number }
+	>;
 }
 
 const KV_BY_ROOT = new Map<string, OpencotiKvCellsReading>();
@@ -415,6 +423,12 @@ export async function readOpencotiKv(
 		at,
 		booked: allocations.reduce((sum, row) => sum + row.window, 0),
 		sessions: allocations.length,
+		bySession: Object.fromEntries(
+			allocations.map((row) => [
+				row.sessionId,
+				{ used: row.used, window: row.window, pressure: row.pressure },
+			]),
+		),
 		...(cellsTotal !== undefined ? { cellsTotal } : {}),
 		...(cellsFree !== undefined ? { cellsFree } : {}),
 	});

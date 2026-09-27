@@ -28,8 +28,17 @@ export type PendingPromptOrigin = "user" | "harness";
  * merged into one note (`mergeSideTurnRecaps`: the user's messages first,
  * the latest report on the agents whole). Measured
  * 2026-09-26: a lead held by its round collected seven separate recaps.
+ * An `awaiting` note lists the agents waiting on the lead; it is replaced
+ * too, and rewritten when it is read (`refresh`).
  */
-export type PendingPromptNoteKind = "status" | "recap";
+export type PendingPromptNoteKind = "status" | "recap" | "awaiting";
+
+/**
+ * Rewrites a harness note as it is delivered: what it says may have changed
+ * since it was queued. `undefined` drops it. Swarm 2026-09-27: 2 of 51 cap
+ * notes reached the lead after it had resumed the agents they named.
+ */
+export type PendingPromptRefresh = () => string | undefined;
 
 export interface PendingPromptEntry {
 	id: string;
@@ -41,6 +50,7 @@ export interface PendingPromptEntry {
 	origin?: PendingPromptOrigin;
 	/** For a harness note: what it is, so a later one of the same kind merges. */
 	noteKind?: PendingPromptNoteKind;
+	refresh?: PendingPromptRefresh;
 }
 
 export interface PendingPromptQueueState {
@@ -67,6 +77,7 @@ export interface PendingPromptEnqueueInput {
 	userFiles?: string[];
 	origin?: PendingPromptOrigin;
 	noteKind?: PendingPromptNoteKind;
+	refresh?: PendingPromptRefresh;
 }
 
 export interface PendingPromptConsumeResult {
@@ -161,8 +172,16 @@ export class PendingPromptService {
 		state: PendingPromptQueueState,
 		input: PendingPromptEnqueueInput,
 	): SessionPendingPrompt[] {
-		const { prompt, mode, delivery, userImages, userFiles, origin, noteKind } =
-			input;
+		const {
+			prompt,
+			mode,
+			delivery,
+			userImages,
+			userFiles,
+			origin,
+			noteKind,
+			refresh,
+		} = input;
 		if (origin === "harness" && noteKind) {
 			const waiting = state.pendingPrompts.find(
 				(queued) => queued.origin === "harness" && queued.noteKind === noteKind,
@@ -172,6 +191,7 @@ export class PendingPromptService {
 					noteKind === "recap"
 						? mergeSideTurnRecaps(waiting.prompt, prompt)
 						: prompt;
+				waiting.refresh = refresh;
 				return snapshotPrompts(state);
 			}
 		}
@@ -202,6 +222,7 @@ export class PendingPromptService {
 				userFiles,
 				...(origin === "harness" ? { origin } : {}),
 				...(origin === "harness" && noteKind ? { noteKind } : {}),
+				...(origin === "harness" && refresh ? { refresh } : {}),
 			};
 			if (delivery === "steer") {
 				state.pendingPrompts.unshift(newEntry);
@@ -213,19 +234,27 @@ export class PendingPromptService {
 	}
 
 	consumeSteer(state: PendingPromptQueueState): PendingPromptConsumeResult {
-		const steerIndex = state.pendingPrompts.findIndex(
-			(entry) => entry.delivery === "steer",
-		);
-		if (steerIndex < 0) {
-			return { prompts: snapshotPrompts(state) };
+		for (;;) {
+			const steerIndex = state.pendingPrompts.findIndex(
+				(entry) => entry.delivery === "steer",
+			);
+			if (steerIndex < 0) {
+				return { prompts: snapshotPrompts(state) };
+			}
+			const [entry] = state.pendingPrompts.splice(steerIndex, 1);
+			if (entry && deliverable(entry)) {
+				return { entry, prompts: snapshotPrompts(state) };
+			}
 		}
-		const [entry] = state.pendingPrompts.splice(steerIndex, 1);
-		return { entry, prompts: snapshotPrompts(state) };
 	}
 
 	shiftNext(state: PendingPromptQueueState): PendingPromptConsumeResult {
-		const entry = state.pendingPrompts.shift();
-		return { entry, prompts: snapshotPrompts(state) };
+		for (;;) {
+			const entry = state.pendingPrompts.shift();
+			if (!entry || deliverable(entry)) {
+				return { entry, prompts: snapshotPrompts(state) };
+			}
+		}
 	}
 
 	requeueFront(
@@ -294,6 +323,7 @@ export class PendingPromptsController {
 			userFiles?: string[];
 			origin?: PendingPromptOrigin;
 			noteKind?: PendingPromptNoteKind;
+			refresh?: PendingPromptRefresh;
 		},
 	): void {
 		const session = this.deps.getSession(sessionId);
@@ -312,8 +342,15 @@ export class PendingPromptsController {
 	consumeSteer(sessionId: string): PendingPromptEntry | undefined {
 		const session = this.deps.getSession(sessionId);
 		if (!session) return undefined;
+		const before = session.pendingPrompts.length;
 		const { entry: steer } = this.service.consumeSteer(session);
-		if (!steer) return undefined;
+		if (!steer) {
+			// A note that no longer applied may have been dropped.
+			if (session.pendingPrompts.length !== before) {
+				this.emitPrompts(session);
+			}
+			return undefined;
+		}
 		this.emitPrompts(session);
 		this.emitSubmitted(session, steer);
 		return steer;
@@ -376,8 +413,14 @@ export class PendingPromptsController {
 		if (!session.agent.canStartRun()) {
 			return;
 		}
+		const before = session.pendingPrompts.length;
 		const { entry: next } = this.service.shiftNext(session);
-		if (!next) return;
+		if (!next) {
+			if (session.pendingPrompts.length !== before) {
+				this.emitPrompts(session);
+			}
+			return;
+		}
 		this.emitPrompts(session);
 		this.emitSubmitted(session, next);
 		session.drainingPendingPrompts = true;
@@ -433,6 +476,25 @@ export class PendingPromptsController {
 			},
 		});
 	}
+}
+
+/** Rewrite a note for delivery; `false` when it no longer applies. */
+function deliverable(entry: PendingPromptEntry): boolean {
+	if (!entry.refresh) {
+		return true;
+	}
+	let next: string | undefined;
+	try {
+		next = entry.refresh();
+	} catch {
+		// A note that cannot rewrite itself goes out as it was queued.
+		return true;
+	}
+	if (next === undefined || next.trim() === "") {
+		return false;
+	}
+	entry.prompt = next;
+	return true;
 }
 
 function isErrorFinish(result: unknown): boolean {

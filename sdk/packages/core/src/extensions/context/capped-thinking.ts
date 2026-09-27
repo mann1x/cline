@@ -1029,6 +1029,13 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 		// wrong thing.
 		const reused = note !== undefined;
 		if (note === undefined) {
+			// For a delegated agent's status: a condensation is a model call
+			// of its own, and the agent says nothing while it runs.
+			emitStatusNotice?.("thinking-condensing", {
+				kind: "capped_thinking",
+				phase: "started",
+				thinkingChars: thinking.length,
+			});
 			note = await writeCappedThinkingNote({
 				thinking,
 				outcomes: collectToolOutcomes(messages, index),

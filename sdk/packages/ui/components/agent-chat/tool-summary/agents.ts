@@ -38,6 +38,7 @@ export const AGENT_CONTROL_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"message_agents",
 	"stop_agents",
 	"await_agents",
+	"compact_agents",
 ]);
 
 /** The row label for one of {@link AGENT_CONTROL_TOOL_NAMES}, or undefined. */
@@ -77,9 +78,14 @@ export function agentControlLabel(
 			if (toolName === "restart_agent") {
 				return `${verb("Restarting", "Restarted")} ${agent}`;
 			}
-			return `${verb("Resuming", "Resumed")} ${agent}${
-				Number.isFinite(extra) && extra > 0 ? ` (+${extra} iterations)` : ""
-			}`;
+			const resumed = ids(record, "agent_id", "agent_ids");
+			return `${verb("Resuming", "Resumed")} ${
+				resumed.length === 0
+					? "every waiting agent"
+					: resumed.length === 1
+						? agent
+						: listed(resumed)
+			}${Number.isFinite(extra) && extra > 0 ? ` (+${extra} iterations)` : ""}`;
 		}
 		case "retry_failed": {
 			const round =
@@ -93,6 +99,10 @@ export function agentControlLabel(
 				return `${verb("Messaging", "Messaged")} ${agents.length > 0 ? listed(agents) : "every running agent"}`;
 			}
 			return `${verb("Stopping", "Stopped")} ${agents.length > 0 ? listed(agents) : "every running agent"}`;
+		}
+		case "compact_agents": {
+			const agents = ids(record, "agent", "agents");
+			return `${verb("Compacting", "Compacted")} ${agents.length > 0 ? listed(agents) : "no agents"}`;
 		}
 		case "await_agents": {
 			const rounds = ids(record, "round_id", "round_ids");

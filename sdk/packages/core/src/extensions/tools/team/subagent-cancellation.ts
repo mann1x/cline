@@ -89,12 +89,24 @@ export interface SubagentCancellation {
 	 * for a turn the lead would not take until every agent had finished.
 	 */
 	message(id: string, text: string): boolean;
+	/**
+	 * Compact this agent's context before its next model request, as a manual
+	 * compaction: its KV cells are given back without stopping it. `false`
+	 * when nothing by that id is running or it has not started a model yet.
+	 */
+	compact(id: string): boolean;
 	/** The agents running for this session, with the names they were given. */
 	runningIn(
 		sessionId: string | undefined,
 	): Array<{ id: string; label: string }>;
 	/** Ids of the agents running right now. For tests and diagnostics. */
 	running(): string[];
+}
+
+/** The agent a segment runs: its transcript, and -- a `SessionRuntime` -- a compaction on request. */
+export interface TrackedAgent {
+	getMessages(): readonly unknown[];
+	requestCompaction?(): void;
 }
 
 interface RunningAgent {
@@ -115,7 +127,7 @@ interface RunningAgent {
 	/** Set by requeue, read by the segment it ends. */
 	requeue?: SubagentRequeueOptions;
 	/** The agent the current segment runs, for its transcript. */
-	tracked?: { getMessages(): readonly unknown[] };
+	tracked?: TrackedAgent;
 	/** Waiting on infrastructure: a requeue need not wait for a boundary. */
 	waitingInfra: boolean;
 }
@@ -155,7 +167,7 @@ export interface SubagentCancellationRegistration {
 		onRequeue?: (carry: SubagentRequeueCarry) => void | Promise<void>,
 	): Promise<T>;
 	/** The agent the current segment runs, so a requeue can take its transcript. */
-	track(agent: { getMessages(): readonly unknown[] }): void;
+	track(agent: TrackedAgent): void;
 	/** Waiting on infrastructure, or not: a requeue then stops it at once. */
 	setWaitingInfra(waiting: boolean): void;
 	/** What the lead added to the task when it last restarted this agent. */
@@ -446,6 +458,18 @@ export const subagentCancellation: SubagentCancellation = {
 			return false;
 		}
 		entry.inbox.push(text.trim());
+		return true;
+	},
+	compact(id: string): boolean {
+		const entry = RUNNING.get(id);
+		if (
+			!entry ||
+			entry.own.signal.aborted ||
+			!entry.tracked?.requestCompaction
+		) {
+			return false;
+		}
+		entry.tracked.requestCompaction();
 		return true;
 	},
 	runningIn(sessionId: string | undefined) {
