@@ -400,9 +400,15 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 				placeholder={`Default: ${DEFAULT_BASE_URLS[providerId]}`}
 			/>
 
-			{ollamaBaseUrl && (
+			{/* xOllama's key guards the server itself, its default local port
+			    included, so the field is there before any URL is typed. */}
+			{(ollamaBaseUrl || providerId === "xollama") && (
 				<ApiKeyField
-					helpText={`Optional API key for authenticated ${providerName} instances or cloud services. Leave empty for local installations.`}
+					helpText={
+						providerId === "xollama"
+							? 'The key set on the xOllama server with "xollama tweak server --api-key". Sent on every request, as Authorization: Bearer. Leave empty when the server has none. Not your ollama.com key.'
+							: `Optional API key for authenticated ${providerName} instances or cloud services. Leave empty for local installations.`
+					}
 					initialValue={savedApiKeyMask}
 					onChange={handleApiKeyChange}
 					placeholder="Enter API Key (optional)..."

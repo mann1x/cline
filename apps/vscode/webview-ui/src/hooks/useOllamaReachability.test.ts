@@ -28,6 +28,13 @@ describe("what the chat input says about its server", () => {
 		expect(local?.message).not.toContain("XOLLAMA_HOST")
 	})
 
+	it("tells a refused key from a server that is down", () => {
+		const problem = describeReachability("xollama", "m", answer({ reachable: false, error: "HTTP 401", unauthorized: true }))
+		expect(problem?.kind).toBe("auth")
+		expect(problem?.message).toContain("needs its API key")
+		expect(problem?.message).toContain("not an ollama.com key")
+	})
+
 	it("says when the server answers without the model", () => {
 		const problem = describeReachability("xollama", "omni-council", answer({ modelFound: false }))
 		expect(problem).toEqual({

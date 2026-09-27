@@ -1,4 +1,4 @@
-import { probeOllamaReachability } from "@cline/llms"
+import { probeOllamaReachability, withXollamaAuth, XOLLAMA_DEFAULT_BASE_URL } from "@cline/llms"
 import { OllamaReachabilityRequest, OllamaReachabilityResponse } from "@/shared/proto/cline/models"
 import { type ProviderCatalogController, parseProviderIdRequest } from "./providerCatalogShared"
 
@@ -19,11 +19,21 @@ export async function readOllamaReachability(
 ): Promise<OllamaReachabilityResponse> {
 	const providerId = parseProviderIdRequest(request.providerId, "providerId")
 	const config = controller.getProviderConfigStore().read(providerId)
-	const status = await probeOllamaReachability(providerId, config.baseUrl, request.modelId)
+	// A keyed xOllama answers every route 401 without its key. Ollama's key
+	// is an ollama.com one and its /api/tags needs none, so it is not sent.
+	const probeFetch =
+		providerId === "xollama" && config.apiKey
+			? withXollamaAuth(fetch, config.baseUrl || XOLLAMA_DEFAULT_BASE_URL, {
+					Authorization: `Bearer ${config.apiKey}`,
+					...config.headers,
+				})
+			: fetch
+	const status = await probeOllamaReachability(providerId, config.baseUrl, request.modelId, probeFetch)
 	return OllamaReachabilityResponse.create({
 		reachable: status.reachable,
 		baseUrl: status.baseUrl,
 		...(status.error !== undefined ? { error: status.error } : {}),
 		...(status.modelFound !== undefined ? { modelFound: status.modelFound } : {}),
+		...(status.unauthorized ? { unauthorized: true } : {}),
 	})
 }

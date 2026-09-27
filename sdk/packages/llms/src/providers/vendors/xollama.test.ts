@@ -5,6 +5,7 @@ import {
 	probeXollama,
 	readXollamaModel,
 	resetXollamaProbes,
+	withXollamaAuth,
 	withXollamaRequestFields,
 	XOLLAMA_READ_ONLY_HEADER,
 	XOLLAMA_SESSION_HEADER,
@@ -510,5 +511,46 @@ describe("the council's state (council_chat_state_v1)", () => {
 		const { chats, turn } = server([[]], { council: false });
 		await turn("lead-1");
 		expect(chats[0]).not.toHaveProperty("council_chat_state");
+	});
+});
+
+describe("xOllama's local API key", () => {
+	const seen = () => {
+		const calls: Array<{ url: string; auth: string | null }> = [];
+		const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+			calls.push({
+				url: String(input),
+				auth: new Headers(init?.headers).get("authorization"),
+			});
+			return json({});
+		}) as typeof fetch;
+		return { calls, fetchImpl };
+	};
+
+	it("goes on every request to the server, and nowhere else", async () => {
+		const { calls, fetchImpl } = seen();
+		const authed = withXollamaAuth(fetchImpl, "http://gpu2:22434/api", {
+			Authorization: "Bearer k1",
+		});
+		await authed("http://gpu2:22434/api/engine?model=m&endpoint=props");
+		await authed("http://gpu2:22434/api/show", { method: "POST" });
+		await authed("https://ollama.com/api/me", { method: "POST" });
+		expect(calls.map((c) => c.auth)).toEqual(["Bearer k1", "Bearer k1", null]);
+	});
+
+	it("leaves a header the request already carries", async () => {
+		const { calls, fetchImpl } = seen();
+		const authed = withXollamaAuth(fetchImpl, "http://gpu2:22434", {
+			Authorization: "Bearer k1",
+		});
+		await authed("http://gpu2:22434/api/chat", {
+			headers: { Authorization: "Bearer mine" },
+		});
+		expect(calls[0]?.auth).toBe("Bearer mine");
+	});
+
+	it("is the bare fetch when there is no key", () => {
+		const { fetchImpl } = seen();
+		expect(withXollamaAuth(fetchImpl, "http://gpu2:22434", {})).toBe(fetchImpl);
 	});
 });

@@ -4,6 +4,7 @@ import {
 	readXollamaEngines,
 	readXollamaModel,
 	resolveOllamaOrigin,
+	withXollamaAuth,
 	xollamaEngineFetch,
 	xollamaEngineRoot,
 } from "@cline/llms"
@@ -45,16 +46,21 @@ export async function readXollamaModelStatus(
 	}
 	const config = controller.getProviderConfigStore().read(providerId)
 	const origin = resolveOllamaOrigin(providerId, config.baseUrl)
+	// Its local key, when the server has one set: every route answers 401
+	// without it, /api/engine included.
+	const serverFetch = config.apiKey
+		? withXollamaAuth(fetch, origin, { Authorization: `Bearer ${config.apiKey}`, ...config.headers })
+		: fetch
 	forgetXollamaModel(origin, model)
-	const info = await readXollamaModel(origin, model, fetch)
+	const info = await readXollamaModel(origin, model, serverFetch)
 	if (!info) {
 		return XollamaModelStatusResponse.create({ reachable: false })
 	}
-	const engines = await readXollamaEngines(origin, fetch)
+	const engines = await readXollamaEngines(origin, serverFetch)
 	const engine = [...engines].find(([name]) => sameTag(name, model))?.[1]
 	const drives = !info.council && info.clientPools > 0 && engine === "opencoti"
 	const polykv = drives
-		? toPolykvStatusProto(await readOpencotiStatus(xollamaEngineRoot(origin, model), xollamaEngineFetch(fetch)))
+		? toPolykvStatusProto(await readOpencotiStatus(xollamaEngineRoot(origin, model), xollamaEngineFetch(serverFetch)))
 		: undefined
 	return XollamaModelStatusResponse.create({
 		reachable: true,

@@ -30,6 +30,12 @@ export interface OllamaReachability {
 	/** Why it did not answer: an HTTP status, a timeout, or the network's word. */
 	readonly error?: string;
 	/**
+	 * It answered, and refused the request for want of a key (401). xOllama
+	 * with a local key set answers every route so; the server is up and the
+	 * fix is in the provider's settings, not on the server.
+	 */
+	readonly unauthorized?: boolean;
+	/**
 	 * Whether the model is in `/api/tags`. Absent when no model was named or
 	 * the server did not answer -- not the same as `false`.
 	 */
@@ -106,6 +112,14 @@ export async function probeOllamaReachability(
 		});
 	} catch (error) {
 		return { reachable: false, baseUrl: origin, error: describeFailure(error) };
+	}
+	if (response.status === 401) {
+		return {
+			reachable: false,
+			baseUrl: origin,
+			error: "HTTP 401",
+			unauthorized: true,
+		};
 	}
 	if (!response.ok) {
 		return {

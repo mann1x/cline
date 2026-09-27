@@ -156,6 +156,8 @@ message OllamaReachabilityResponse {
   // Whether /api/tags lists the model. Absent when no model was named or the
   // server did not answer, which is not the same as false.
   optional bool model_found = 4;
+  // It answered 401: a keyed xOllama, and no key or the wrong one sent.
+  optional bool unauthorized = 5;
 }
 
 message XollamaModelStatusResponse {

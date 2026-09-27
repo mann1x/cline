@@ -96,6 +96,27 @@ describe("whether it answers", () => {
 		expect(result.error).toBe("no answer within 4s");
 	});
 
+	it("tells a refused key from a server that is not there", async () => {
+		const fetchImpl = (async () =>
+			new Response(JSON.stringify({ error: "unauthorized" }), {
+				status: 401,
+				headers: { "www-authenticate": 'Bearer realm="xollama"' },
+			})) as unknown as typeof fetch;
+		expect(
+			await probeOllamaReachability(
+				"xollama",
+				"http://gpu2:22434",
+				"m",
+				fetchImpl,
+			),
+		).toEqual({
+			reachable: false,
+			baseUrl: "http://gpu2:22434",
+			error: "HTTP 401",
+			unauthorized: true,
+		});
+	});
+
 	it("treats a non-Ollama answer as not reachable", async () => {
 		const fetchImpl = (async () =>
 			new Response("nope", { status: 404 })) as unknown as typeof fetch;

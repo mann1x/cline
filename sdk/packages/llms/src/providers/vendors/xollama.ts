@@ -202,6 +202,56 @@ export function readXollamaModel(
 }
 
 /**
+ * The provider's auth headers on every request to the xOllama server.
+ *
+ * xOllama can require a local key on every route (`api_key_v1`, #421):
+ * `Authorization: Bearer <key>`, `/api/engine` included. The chat itself gets
+ * it from the Ollama package's headers, but the rest of what this provider
+ * sends -- the feature and `/api/show` probes, the `num_ctx` and reinjection
+ * probes, the render-only chat and every `/api/engine` call of PolyKV -- goes
+ * through the bare fetch, and on a keyed server each of them is a 401.
+ *
+ * Only to that server's origin, so a key never travels with a request that
+ * happens to share the fetch. A header the request already carries wins: an
+ * explicit one is the caller's decision.
+ */
+export function withXollamaAuth(
+	baseFetch: typeof fetch,
+	baseUrl: string | undefined,
+	headers: Readonly<Record<string, string>>,
+): typeof fetch {
+	const names = Object.keys(headers);
+	if (names.length === 0) {
+		return baseFetch;
+	}
+	const home = origin(baseUrl);
+	return (async (input, init) => {
+		const url =
+			typeof input === "string"
+				? input
+				: input instanceof URL
+					? input.href
+					: (input as Request).url;
+		let sameOrigin = false;
+		try {
+			sameOrigin = new URL(url).origin === new URL(home).origin;
+		} catch {
+			sameOrigin = false;
+		}
+		if (!sameOrigin) {
+			return baseFetch(input, init);
+		}
+		const merged = new Headers(init?.headers);
+		for (const name of names) {
+			if (!merged.has(name)) {
+				merged.set(name, headers[name] as string);
+			}
+		}
+		return baseFetch(input, { ...init, headers: merged });
+	}) as typeof fetch;
+}
+
+/**
  * Forget one model's `/api/show` answer, so the next read asks again. For the
  * settings panel: a model given seats since it was read gets its pool on the
  * next turn rather than after a reload.

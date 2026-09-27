@@ -1481,7 +1481,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						ref={highlightLayerRef}
 						style={{
 							...(serverProblem
-								? serverProblem.kind === "down"
+								? serverProblem.kind !== "model"
 									? {
 											backgroundColor:
 												"var(--vscode-inputValidation-errorBackground, rgba(255, 0, 0, 0.1))",

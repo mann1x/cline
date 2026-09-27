@@ -23,8 +23,11 @@ export const RECHECK_WHILE_DOWN_MS = 15_000
 export const RECHECK_WHILE_UP_MS = 60_000
 
 export interface ReachabilityProblem {
-	/** "down": nothing answers. "model": the server answers without the model. */
-	kind: "down" | "model"
+	/**
+	 * "down": nothing answers. "auth": it answers, and refuses the key.
+	 * "model": the server answers without the model.
+	 */
+	kind: "down" | "auth" | "model"
 	/** The whole diagnosis, for the empty input's placeholder. */
 	message: string
 }
@@ -58,6 +61,12 @@ export function describeReachability(
 		return undefined
 	}
 	const label = PROVIDER_LABEL[providerId] ?? providerId
+	if (status.unauthorized) {
+		return {
+			kind: "auth",
+			message: `${label} at ${status.baseUrl} refused the request: it needs its API key (HTTP 401). Set the key in the provider settings — the one made with "xollama tweak server --api-key", not an ollama.com key.`,
+		}
+	}
 	if (!status.reachable) {
 		const why = status.error ? ` (${status.error})` : ""
 		const expose =

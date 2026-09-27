@@ -46,6 +46,7 @@ import {
 import { rewriteOllamaChatBody } from "./ollama-tool-images";
 import type { ProviderFactoryResult } from "./types";
 import {
+	withXollamaAuth,
 	withXollamaRequestFields,
 	XOLLAMA_DEFAULT_BASE_URL,
 	xollamaReadOnlyHeaders,
@@ -872,6 +873,15 @@ export async function createOllamaProviderModule(
 			? injectedFetch
 			: (suppliedFetch ?? injectedFetch);
 	const usingSuppliedFetch = requestFetch === suppliedFetch;
+	// xOllama's local key on everything this provider sends it, probes and
+	// PolyKV calls included, not only on the chat the package sends.
+	const serverFetch = xollama
+		? withXollamaAuth(
+				ensureFetch(requestFetch),
+				config.baseUrl || XOLLAMA_DEFAULT_BASE_URL,
+				headers,
+			)
+		: ensureFetch(requestFetch);
 	context.logger?.debug(
 		streamDispatcher
 			? `[ollama] stream dispatcher attached: undici body/headers timeouts disabled (fetch: ${
@@ -890,7 +900,7 @@ export async function createOllamaProviderModule(
 	await primeDeclaredNumCtx(
 		config.baseUrl,
 		context.model?.id,
-		ensureFetch(requestFetch),
+		serverFetch,
 		context.logger,
 	);
 	// Whether this server re-renders `thinking` back into the prompt, measured
@@ -909,10 +919,10 @@ export async function createOllamaProviderModule(
 	// xOllama's own request fields, inside the timeout layer so the body the
 	// health probe and the image fold read is the one that is sent.
 	const wireFetch = xollama
-		? withXollamaRequestFields(ensureFetch(requestFetch), {
+		? withXollamaRequestFields(serverFetch, {
 				...(context.logger ? { logger: context.logger } : {}),
 			})
-		: ensureFetch(requestFetch);
+		: serverFetch;
 	const timeoutFetch = withOllamaResponseTimeout(
 		wireFetch,
 		readOllamaTimeoutMs(config),
