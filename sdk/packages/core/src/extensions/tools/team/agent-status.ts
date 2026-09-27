@@ -544,6 +544,20 @@ function polykvLines(
 					: ""
 			} (read ${formatDuration(now - kv.at)} ago)`,
 		);
+		// Which of those bookings are this extension's own swarm owners. Left
+		// unsaid, a lead read "booked by 4 sessions, 0 free" as other people's
+		// sessions it could do nothing about, when all four were the owners
+		// its own agents ran in (pandorum .211, 2026-09-27).
+		const owners = Object.entries(kv.bySession ?? {}).filter(([id]) =>
+			id.includes("~polykv-owner-"),
+		);
+		if (owners.length > 0) {
+			const booked = owners.reduce((sum, [, row]) => sum + row.window, 0);
+			const used = owners.reduce((sum, [, row]) => sum + row.used, 0);
+			lines.push(
+				`  of which ${owners.length} ${owners.length === 1 ? "is a swarm owner" : "are swarm owners"} this extension opened for delegated agents: ${count(booked)} cells booked, ${count(used)} in use -- your own agents' cells, given back as those agents end`,
+			);
+		}
 	}
 	return lines;
 }

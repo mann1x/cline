@@ -1,4 +1,8 @@
-import { noteOpencotiPressure, resetOpencotiPressure } from "@cline/llms";
+import {
+	noteOpencotiPressure,
+	readOpencotiKv,
+	resetOpencotiPressure,
+} from "@cline/llms";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __resetAgentRounds, roundsFor } from "./agent-rounds";
 import {
@@ -115,6 +119,46 @@ async function swarmRound() {
 	handle.close();
 	return { rounds, handle };
 }
+
+describe("agents_status on a node its own swarm filled", () => {
+	it("says which bookings are this extension's own swarm owners", async () => {
+		const fetchImpl = (async (input: unknown) => {
+			const path = new URL(String(input)).pathname;
+			const body =
+				path === "/props"
+					? { features: ["kv_status_v1"] }
+					: {
+							cells_total: 1_048_576,
+							cells_free: 0,
+							allocations: [
+								{
+									session_id: "s1~polykv-owner-1",
+									window: 262_144,
+									used: 40_000,
+								},
+								{
+									session_id: "s1~polykv-owner-2",
+									window: 262_144,
+									used: 90_000,
+								},
+								{ session_id: "s1", window: 524_288, used: 60_000 },
+							],
+						};
+			return new Response(JSON.stringify(body), {
+				headers: { "content-type": "application/json" },
+			});
+		}) as unknown as typeof fetch;
+		await readOpencotiKv("http://engine:8241/v1", fetchImpl);
+		const text = renderAgentsStatus(
+			{},
+			{ sessionId: "s1", configProvider: nodes(), now: () => Date.now() },
+		);
+		expect(text).toContain("booked by 3 sessions of 1,048,576, 0 free");
+		expect(text).toContain(
+			"of which 2 are swarm owners this extension opened for delegated agents: 524,288 cells booked, 130,000 in use",
+		);
+	});
+});
 
 describe("agents_status with no arguments", () => {
 	it("counts each round's agents by state and says why the failed ones failed", async () => {
