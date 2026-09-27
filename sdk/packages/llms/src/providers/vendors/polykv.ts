@@ -927,6 +927,13 @@ export const OPENCOTI_FEATURES = {
 	 */
 	kvResizeDeferred: "kv_resize_deferred_v1",
 	/**
+	 * A busy session's resize applies while its requests run, when the new
+	 * window still covers what is used and what the running requests were
+	 * admitted with (patch 0422, b157, mail #460). Also learned per server
+	 * from a resize answer that says `live` -- see `opencotiResizesLive`.
+	 */
+	kvResizeLive: "kv_resize_live_v1",
+	/**
 	 * What the engine holds that nobody is charged for (b115, patch 0399,
 	 * mail #316): `idle_resident` on `/kv.pressure` and on the resize result
 	 * -- cells physically held by idle slots, a released worker's "ghost" --

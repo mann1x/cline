@@ -2,6 +2,7 @@ import {
 	latestOpencotiKv,
 	noteOpencotiRefusalPressure,
 	opencotiPendingResize,
+	opencotiResizesLive,
 	readOpencotiKv,
 	resizeOpencotiSession,
 } from "./opencoti-kv-pressure";
@@ -1505,9 +1506,18 @@ export function notePolykvOwnerWindow(
 export function polykvOwnerBooking(
 	perAgent: { ask: number; floor: number },
 	maximum: number,
+	/**
+	 * The agents waiting to be placed on it, where the engine resizes a busy
+	 * owner live: it is booked for them alone and grown as more arrive.
+	 * Absent: every agent the maximum can carry, which it cannot grow into
+	 * later while busy.
+	 */
+	waiting?: number,
 ): { window: number; windowMin: number; agents: number } {
 	const ask = Math.max(1, Math.min(perAgent.ask, maximum));
-	const agents = Math.max(1, Math.floor(maximum / ask));
+	const fits = Math.max(1, Math.floor(maximum / ask));
+	const agents =
+		waiting !== undefined ? Math.min(fits, Math.max(1, waiting)) : fits;
 	const window = Math.max(perAgent.floor, Math.min(maximum, agents * ask));
 	return { window, windowMin: Math.min(window, perAgent.floor), agents };
 }
@@ -1965,8 +1975,21 @@ async function openOwner(
 	// agent it can carry at the node's window (the engine's maximum at most),
 	// floored at the opening agent's share -- see polykvOwnerBooking. Without
 	// one, the engine's maximum floored at the owner minimum, as before.
+	// Where a busy owner grows and shrinks live (0422), it books only for the
+	// agents waiting to be placed on it and grows as more arrive: booked for
+	// every agent it might carry, four owners took the whole KV on pandorum
+	// .211 and sat a third full while 31 agents waited for a fifth.
+	const props = await probeOpencotiProps(group.root, group.fetch).catch(
+		() => undefined,
+	);
 	const booking = agentWindow
-		? polykvOwnerBooking(agentWindow, maximum)
+		? polykvOwnerBooking(
+				agentWindow,
+				maximum,
+				opencotiResizesLive(group.root, props?.features)
+					? Math.max(1, group.awaitingOwner.size)
+					: undefined,
+			)
 		: undefined;
 	const window = booking ? booking.window : maximum;
 	const windowMin = booking

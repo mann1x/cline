@@ -3,8 +3,11 @@ import { createOpencotiFetch } from "./opencoti";
 import {
 	latestOpencotiPressure,
 	opencotiPressureState,
+	opencotiResizesLive,
 	readOpencotiKv,
+	resetOpencotiPendingResizes,
 	resetOpencotiPressure,
+	resizeOpencotiSession,
 } from "./opencoti-kv-pressure";
 import { resetPolykvAvailability, resetPolykvSessions } from "./polykv";
 import {
@@ -209,6 +212,7 @@ beforeEach(() => {
 	resetPolykvAvailability();
 	resetPolykvSessions();
 	resetOpencotiPressure();
+	resetOpencotiPendingResizes();
 });
 
 afterEach(async () => {
@@ -542,5 +546,59 @@ describe("whether a lead has agents on an engine", () => {
 		expect(polykvLeadHasAgentsOn(GROUP, "http://elsewhere/v1")).toBe(false);
 		await releasePolykvAgent("agent-a");
 		expect(polykvLeadHasAgentsOn(GROUP, "http://engine/v1")).toBe(false);
+	});
+});
+
+// opencoti 0422 (mail #460): a busy owner grows and shrinks while its workers
+// run. An owner then books for the agents waiting on it, not for every agent
+// the maximum could carry -- on pandorum .211 four owners took the whole KV
+// and sat a third full while 31 agents waited for a fifth.
+describe("owners on an engine that resizes a busy owner live", () => {
+	it("books for the agents waiting, capped at what the maximum carries", () => {
+		expect(
+			polykvOwnerBooking({ ask: 65_536, floor: 40_000 }, 262_144, 1),
+		).toEqual({
+			window: 65_536,
+			windowMin: 40_000,
+			agents: 1,
+		});
+		expect(
+			polykvOwnerBooking({ ask: 65_536, floor: 40_000 }, 262_144, 10).window,
+		).toBe(262_144);
+	});
+
+	it("opens its owner for the one agent waiting, not the maximum", async () => {
+		const stub = engine({ features: [...FEATURES, "kv_resize_live_v1"] });
+		expect((await send(stub, "agent-a")).status).toBe(200);
+		const [open] = stub.opens();
+		expect(open?.body.num_ctx as number).toBeLessThan(262_144);
+	});
+
+	it("still books the maximum where a busy owner cannot be grown", async () => {
+		const stub = engine();
+		await send(stub, "agent-a");
+		expect(stub.opens()[0]?.body.num_ctx).toBe(262_144);
+	});
+
+	it("learns it from a resize answered live", async () => {
+		expect(opencotiResizesLive("http://live/v1")).toBe(false);
+		const fetchImpl = (async () =>
+			new Response(
+				JSON.stringify({
+					ok: true,
+					live: true,
+					window: 8_192,
+					window_new: 16_384,
+				}),
+				{ headers: { "content-type": "application/json" } },
+			)) as unknown as typeof fetch;
+		await resizeOpencotiSession({
+			baseUrl: "http://live/v1",
+			sessionId: "owner",
+			numCtx: 16_384,
+			fetch: fetchImpl,
+		});
+		expect(opencotiResizesLive("http://live/v1")).toBe(true);
+		expect(opencotiResizesLive("http://other/v1")).toBe(false);
 	});
 });

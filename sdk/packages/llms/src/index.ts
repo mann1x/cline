@@ -222,6 +222,7 @@ export {
 	opencotiPressureState,
 	opencotiRefusalsAreGlobal,
 	opencotiResizeRequest,
+	opencotiResizesLive,
 	parseOpencotiKvPressure,
 	parseOpencotiRefusalPressure,
 	readOpencotiKv,

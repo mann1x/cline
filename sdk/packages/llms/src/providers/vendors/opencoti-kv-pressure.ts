@@ -592,6 +592,26 @@ export function opencotiPendingResize(
 /** Test seam. */
 export function resetOpencotiPendingResizes(): void {
 	PENDING_RESIZES.clear();
+	LIVE_RESIZE_ROOTS.clear();
+}
+
+/** Servers that answered a resize of a busy session live (patch 0422). */
+const LIVE_RESIZE_ROOTS = new Set<string>();
+
+/**
+ * Whether this server resizes a busy session while its requests run: it
+ * says so in `/props` features, or a resize here already answered `live`
+ * (0422 answers a busy resize 200 `live: true`, and a shrink that does not
+ * fit yet 409 with `smallest_window_now`).
+ */
+export function opencotiResizesLive(
+	baseUrl: string,
+	features?: readonly string[],
+): boolean {
+	return (
+		hasOpencotiFeature(features, OPENCOTI_FEATURES.kvResizeLive) ||
+		LIVE_RESIZE_ROOTS.has(polykvRoot(baseUrl))
+	);
 }
 
 /** A resize the engine took. `cellsDelta` is negative for cells given back. */
@@ -731,6 +751,10 @@ export async function resizeOpencotiSession(options: {
 		return { ok: false, status: 0, kind: "transport" };
 	}
 	const body = isRecord(answer.json) ? answer.json : {};
+	const said = isRecord(body.error) ? body.error : body;
+	if (body.live === true || said.smallest_window_now !== undefined) {
+		LIVE_RESIZE_ROOTS.add(polykvRoot(options.baseUrl));
+	}
 	if (answer.ok && body.deferred === true) {
 		const pending =
 			finite(body.resize_pending) ?? Math.max(1, Math.floor(options.numCtx));
