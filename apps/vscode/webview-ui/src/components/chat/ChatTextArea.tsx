@@ -19,6 +19,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { usePlatform } from "@/context/PlatformContext"
 import { useNormalizedApiConfiguration } from "@/hooks/useNormalizedApiConfiguration"
+import { useOllamaReachability } from "@/hooks/useOllamaReachability"
 import { cn } from "@/lib/utils"
 import { FileServiceClient, StateServiceClient } from "@/services/grpc-client"
 import {
@@ -273,6 +274,9 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		const [searchLoading, setSearchLoading] = useState(false)
 		const [, metaKeyChar] = useMetaKeyDetection(platform)
 		const { selectedProvider, selectedModelId } = useNormalizedApiConfiguration(mode)
+		// Painted into the box itself: the tint stays while typing, the
+		// diagnosis takes the placeholder's place while the box is empty.
+		const serverProblem = useOllamaReachability(selectedProvider, selectedModelId)
 
 		// Fetch git commits when Git is selected or when typing a hash
 		useEffect(() => {
@@ -1473,8 +1477,24 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							"absolute bottom-2.5 top-2.5 whitespace-pre-wrap break-words rounded-xs overflow-hidden bg-input-background",
 							isTextAreaFocused ? "left-3.5 right-3.5" : "left-3.5 right-3.5 border border-input-border",
 						)}
+						data-server-problem={serverProblem?.kind}
 						ref={highlightLayerRef}
 						style={{
+							...(serverProblem
+								? serverProblem.kind === "down"
+									? {
+											backgroundColor:
+												"var(--vscode-inputValidation-errorBackground, rgba(255, 0, 0, 0.1))",
+											borderColor:
+												"var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground))",
+										}
+									: {
+											backgroundColor:
+												"var(--vscode-inputValidation-warningBackground, rgba(255, 200, 0, 0.1))",
+											borderColor:
+												"var(--vscode-inputValidation-warningBorder, var(--vscode-editorWarning-foreground))",
+										}
+								: {}),
 							position: "absolute",
 							pointerEvents: "none",
 							whiteSpace: "pre-wrap",
@@ -1518,7 +1538,9 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						onPaste={handlePaste}
 						onScroll={() => updateHighlights()}
 						onSelect={updateCursorPosition}
-						placeholder={showUnsupportedFileError || showDimensionError ? "" : placeholderText}
+						placeholder={
+							showUnsupportedFileError || showDimensionError ? "" : (serverProblem?.message ?? placeholderText)
+						}
 						ref={(el) => {
 							if (typeof ref === "function") {
 								ref(el)
@@ -1566,7 +1588,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						}}
 						value={inputValue}
 					/>
-					{!inputValue && selectedImages.length === 0 && selectedFiles.length === 0 && (
+					{!inputValue && !serverProblem && selectedImages.length === 0 && selectedFiles.length === 0 && (
 						<div className="text-xs absolute bottom-5 left-6.5 right-16 text-(--vscode-input-placeholderForeground)/50 whitespace-nowrap overflow-hidden text-ellipsis pointer-events-none z-1">
 							Type @ for context, / for slash commands & workflows, hold shift to drag in files/images
 						</div>

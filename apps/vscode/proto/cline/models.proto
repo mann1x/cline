@@ -96,6 +96,12 @@ service ModelsService {
   // SSH key; GET /api/experimental/model-recommendations, which needs no auth
   // and is re-served from a local cache; and GET /api/tags.
   rpc readOllamaAccount(StringRequest) returns (OllamaAccountResponse);
+  // Whether an Ollama or xOllama endpoint answers, for the chat input.
+  //
+  // One GET /api/tags with a short bound, and nothing else: the chat box polls
+  // it while the panel is open, and readOllamaAccount's /api/me is a signed
+  // round trip to ollama.com that has no business on a poll.
+  rpc readOllamaReachability(OllamaReachabilityRequest) returns (OllamaReachabilityResponse);
 }
 
 // What the recommendations list publishes about one model. Absent for a model
@@ -130,6 +136,23 @@ message OllamaCatalogModel {
 }
 
 // What the settings panel shows about an Ollama endpoint.
+message OllamaReachabilityRequest {
+  string provider_id = 1;
+  // The model the chat input would send to. Omit to ask about the server only.
+  optional string model_id = 2;
+}
+
+message OllamaReachabilityResponse {
+  bool reachable = 1;
+  // The origin asked, with the provider's default filled in for an unset URL.
+  string base_url = 2;
+  // Why it did not answer: an HTTP status, a timeout, or the network's code.
+  optional string error = 3;
+  // Whether /api/tags lists the model. Absent when no model was named or the
+  // server did not answer, which is not the same as false.
+  optional bool model_found = 4;
+}
+
 message OllamaAccountResponse {
   // Whether /api/tags answered. A server with no models and a server that is
   // not there are different things.

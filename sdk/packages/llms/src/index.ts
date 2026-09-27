@@ -195,6 +195,12 @@ export {
 	resolveLlamaCppThinkBudgetTokens,
 	resolveLlamaCppThinkBudgetWindow,
 } from "./providers/vendors/llamacpp-sampling";
+// Ollama and xOllama: whether the endpoint answers, for the chat input.
+export {
+	type OllamaReachability,
+	probeOllamaReachability,
+	resolveOllamaOrigin,
+} from "./providers/vendors/ollama-reachability";
 export {
 	getOpencotiWindowCeiling,
 	getOpencotiWindowFloor,
