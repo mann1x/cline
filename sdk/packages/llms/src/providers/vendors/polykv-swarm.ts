@@ -1942,6 +1942,8 @@ const NOT_TEMPLATE_FIELDS = new Set([
 	"stream_options",
 	"session_id",
 	"pool_id",
+	// Ollama's native chat names its pool and window here (xOllama).
+	"placement",
 	"num_ctx",
 	"num_ctx_min",
 	"shared_prefix_n_tokens",
@@ -1991,6 +1993,8 @@ export function templateSignature(
 		fields.reasoning_effort,
 		fields.reasoning_format,
 		fields.enable_thinking,
+		// Ollama's native switch, through xOllama: true, false or a level.
+		fields.think,
 		budget(fields.reasoning_budget_tokens),
 		budget(fields.reasoning_budget),
 		budget(fields.thinking_budget_tokens),

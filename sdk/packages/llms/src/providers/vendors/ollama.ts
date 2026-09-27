@@ -44,15 +44,24 @@ import {
 	withStallWatchdog,
 } from "./ollama-stall-watchdog";
 import { rewriteOllamaChatBody } from "./ollama-tool-images";
+import {
+	createPolykvWorkerFetch,
+	OLLAMA_WIRE_DIALECT,
+	readOpencotiRequestOptions,
+} from "./opencoti";
 import type { ProviderFactoryResult } from "./types";
 import {
+	probeXollama,
+	readXollamaModel,
 	readXollamaWindowOptions,
 	withXollamaAuth,
 	withXollamaRequestFields,
+	XOLLAMA_CONTEXT_WINDOW_FEATURE,
 	XOLLAMA_DEFAULT_BASE_URL,
 	xollamaReadOnlyHeaders,
 	xollamaSessionHeaders,
 } from "./xollama";
+import { xollamaEngineFetch, xollamaEngineRoot } from "./xollama-engine";
 
 /** See {@link OLLAMA_DEFAULT_CONTEXT_WINDOW} — re-exported under the wire-format name. */
 export const OLLAMA_DEFAULT_NUM_CTX = OLLAMA_DEFAULT_CONTEXT_WINDOW;
@@ -919,7 +928,7 @@ export async function createOllamaProviderModule(
 	// exactly the request most likely to exceed it.
 	// xOllama's own request fields, inside the timeout layer so the body the
 	// health probe and the image fold read is the one that is sent.
-	const wireFetch = xollama
+	const fieldsFetch = xollama
 		? withXollamaRequestFields(serverFetch, {
 				...(context.logger ? { logger: context.logger } : {}),
 				window: readXollamaWindowOptions(
@@ -928,6 +937,11 @@ export async function createOllamaProviderModule(
 				),
 			})
 		: serverFetch;
+	// A swarm agent on a plain xOllama model with pool seats runs as it would
+	// on opencoti: attached to its group's owner, through the engine proxy.
+	const wireFetch = xollama
+		? await xollamaWorkerFetch(config, context, fieldsFetch, serverFetch)
+		: fieldsFetch;
 	const timeoutFetch = withOllamaResponseTimeout(
 		wireFetch,
 		readOllamaTimeoutMs(config),
@@ -985,6 +999,62 @@ export async function createOllamaProviderModule(
 		},
 		buildStreamConfig: buildOllamaStreamConfig,
 	};
+}
+
+/**
+ * The swarm worker layer for a delegated agent on xOllama, or `fieldsFetch`
+ * itself where the agent is not one or the model cannot pool it.
+ *
+ * Pooled only where the engine is the client's to drive: a plain model (a
+ * council's pools are xOllama's), with seats for client pools, on a server
+ * that negotiates windows -- a worker is counted against the window its turn
+ * reports in `X-Context-Window`, and without the header every pooled turn
+ * reads as a pool the server lost.
+ *
+ * The worker layer sits outside xOllama's request fields, so the pool and
+ * window it places are on the body those fields see, and every call it makes
+ * to the engine goes through the same fields -- the render its pools are cut
+ * from included, which is what makes the render match the chat.
+ */
+async function xollamaWorkerFetch(
+	config: GatewayResolvedProviderConfig,
+	context: GatewayProviderContext,
+	fieldsFetch: typeof fetch,
+	serverFetch: typeof fetch,
+): Promise<typeof fetch> {
+	const modelId = context.model?.id;
+	const request = readOpencotiRequestOptions(context);
+	if (!modelId || !request.worker) {
+		return fieldsFetch;
+	}
+	const baseUrl = config.baseUrl || XOLLAMA_DEFAULT_BASE_URL;
+	const [model, server] = await Promise.all([
+		readXollamaModel(baseUrl, modelId, serverFetch),
+		probeXollama(baseUrl, serverFetch),
+	]);
+	if (
+		model === undefined ||
+		model.council ||
+		model.clientPools <= 0 ||
+		!server?.features.includes(XOLLAMA_CONTEXT_WINDOW_FEATURE)
+	) {
+		return fieldsFetch;
+	}
+	return createPolykvWorkerFetch({
+		fetch: xollamaEngineFetch(fieldsFetch),
+		worker: request.worker,
+		baseUrl: xollamaEngineRoot(baseUrl, modelId),
+		dialect: OLLAMA_WIRE_DIALECT,
+		...(request.workerMaxTokens !== undefined
+			? { workerMaxTokens: request.workerMaxTokens }
+			: {}),
+		...(request.agentWindow ? { agentWindow: request.agentWindow } : {}),
+		...(context.logger
+			? {
+					log: (message: string) => context.logger?.log(`[xollama] ${message}`),
+				}
+			: {}),
+	});
 }
 
 /**

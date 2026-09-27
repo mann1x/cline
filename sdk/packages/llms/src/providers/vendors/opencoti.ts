@@ -1361,10 +1361,128 @@ function whenBodyEnds(response: Response, end: () => void): Response {
 	});
 }
 
+/**
+ * Where a worker's request fields go on the wire.
+ *
+ * opencoti's chat is OpenAI-compatible and takes them at the top level. An
+ * xOllama engine is reached through Ollama's native `/api/chat`, which takes
+ * the pool and the window in `placement` and the output cap in
+ * `options.num_predict`, and streams NDJSON with no heartbeat to supervise.
+ * Everything else a worker does -- the tree, the owners, the waits -- is the
+ * engine's business and is the same on both.
+ */
+export interface PolykvWireDialect {
+	name: "openai" | "ollama";
+	setPool(wire: Record<string, unknown>, poolId: number): void;
+	poolOf(wire: Record<string, unknown>): number | undefined;
+	setWindow(wire: Record<string, unknown>, ask: number, floor?: number): void;
+	clearWindow(wire: Record<string, unknown>): void;
+	windowOf(wire: Record<string, unknown>): number | undefined;
+	declaresOutputCap(wire: Record<string, unknown>): boolean;
+	setOutputCap(wire: Record<string, unknown>, cap: number): void;
+	/** The engine's SSE heartbeat is ours to ask for and supervise. */
+	keepalive: boolean;
+}
+
+export const OPENAI_WIRE_DIALECT: PolykvWireDialect = {
+	name: "openai",
+	setPool: (wire, poolId) => {
+		wire.pool_id = poolId;
+	},
+	poolOf: (wire) =>
+		typeof wire.pool_id === "number" ? wire.pool_id : undefined,
+	setWindow: (wire, ask, floor) => {
+		wire.num_ctx = ask;
+		if (floor !== undefined) {
+			wire.num_ctx_min = floor;
+		}
+	},
+	clearWindow: (wire) => {
+		delete wire.num_ctx;
+		delete wire.num_ctx_min;
+	},
+	windowOf: (wire) =>
+		typeof wire.num_ctx === "number" ? wire.num_ctx : undefined,
+	declaresOutputCap: (wire) => declaresOutputCap(wire),
+	setOutputCap: (wire, cap) => {
+		wire.max_tokens = cap;
+	},
+	keepalive: true,
+};
+
+function placementOf(wire: Record<string, unknown>): Record<string, unknown> {
+	const placement =
+		wire.placement && typeof wire.placement === "object"
+			? { ...(wire.placement as Record<string, unknown>) }
+			: {};
+	wire.placement = placement;
+	return placement;
+}
+
+export const OLLAMA_WIRE_DIALECT: PolykvWireDialect = {
+	name: "ollama",
+	setPool: (wire, poolId) => {
+		placementOf(wire).pool_id = poolId;
+	},
+	poolOf: (wire) => {
+		const id = (wire.placement as { pool_id?: unknown } | undefined)?.pool_id;
+		return typeof id === "number" ? id : undefined;
+	},
+	setWindow: (wire, ask, floor) => {
+		const placement = placementOf(wire);
+		placement.num_ctx = ask;
+		if (floor !== undefined) {
+			placement.num_ctx_min = floor;
+		}
+	},
+	clearWindow: (wire) => {
+		if (wire.placement && typeof wire.placement === "object") {
+			const {
+				num_ctx: _ask,
+				num_ctx_min: _floor,
+				...rest
+			} = wire.placement as Record<string, unknown>;
+			if (Object.keys(rest).length > 0) {
+				wire.placement = rest;
+			} else {
+				delete wire.placement;
+			}
+		}
+	},
+	windowOf: (wire) => {
+		const ask = (wire.placement as { num_ctx?: unknown } | undefined)?.num_ctx;
+		return typeof ask === "number" ? ask : undefined;
+	},
+	declaresOutputCap: (wire) => {
+		const cap = (wire.options as { num_predict?: unknown } | undefined)
+			?.num_predict;
+		return typeof cap === "number" && Number.isFinite(cap) && cap > 0;
+	},
+	setOutputCap: (wire, cap) => {
+		wire.options = {
+			...((wire.options as Record<string, unknown> | undefined) ?? {}),
+			num_predict: cap,
+		};
+	},
+	keepalive: false,
+};
+
+/**
+ * A swarm worker's fetch (see {@link createWorkerFetch}), for a vendor other
+ * than opencoti's own: xOllama drives the same engine through its native API.
+ */
+export function createPolykvWorkerFetch(
+	options: Parameters<typeof createWorkerFetch>[0],
+): typeof fetch {
+	return createWorkerFetch(options);
+}
+
 function createWorkerFetch(options: {
 	fetch?: typeof fetch;
 	dispatcher?: unknown;
 	worker: PolykvWorkerSpec;
+	/** Where the pool and window go on the wire. opencoti's by default. */
+	dialect?: PolykvWireDialect;
 	baseUrl: string;
 	headers?: Record<string, string>;
 	onFacts?: (facts: OpencotiResponseFacts) => void;
@@ -1374,6 +1492,7 @@ function createWorkerFetch(options: {
 	log?: OpencotiLog;
 }): typeof fetch {
 	const base = options.fetch ?? fetch;
+	const dialect = options.dialect ?? OPENAI_WIRE_DIALECT;
 	/** The turn now in hand, as it went out and was answered. */
 	let sent: SentTurn = {};
 	const observed = (response: Response) =>
@@ -1538,13 +1657,12 @@ function createWorkerFetch(options: {
 				});
 				const wire: Record<string, unknown> = { ...body };
 				// A worker books nothing: its window is the owner's.
-				delete wire.num_ctx;
-				delete wire.num_ctx_min;
+				dialect.clearWindow(wire);
 				// P2: a worker always declares its output, so a refusal lands at
 				// arrival instead of after a prefill spent on a reply that cannot fit
 				// the owner's window. The gateway's cap is kept where it sent one.
-				if (!declaresOutputCap(wire)) {
-					wire.max_tokens = options.workerMaxTokens ?? 8_192;
+				if (!dialect.declaresOutputCap(wire)) {
+					dialect.setOutputCap(wire, options.workerMaxTokens ?? 8_192);
 				}
 				wire.session_id = attach.sessionId;
 				if (
@@ -1557,7 +1675,7 @@ function createWorkerFetch(options: {
 					continue;
 				}
 				if (attach.poolId !== undefined && /^\d+$/.test(attach.poolId)) {
-					wire.pool_id = Number(attach.poolId);
+					dialect.setPool(wire, Number(attach.poolId));
 				}
 				unpooledAsk = undefined;
 				if (
@@ -1573,12 +1691,15 @@ function createWorkerFetch(options: {
 					const features = await windowFeatures(options.baseUrl, base);
 					if (features.guaranteed) {
 						const granted = getPolykvGrantedWindow(options.worker.sessionId);
-						wire.num_ctx = granted ?? options.agentWindow.contextWindow;
-						if (features.atomic) {
-							wire.num_ctx_min =
-								granted ?? Math.min(agentFloor, wire.num_ctx as number);
-						}
-						unpooledAsk = wire.num_ctx as number;
+						const ask = granted ?? options.agentWindow.contextWindow;
+						dialect.setWindow(
+							wire,
+							ask,
+							features.atomic
+								? (granted ?? Math.min(agentFloor, ask))
+								: undefined,
+						);
+						unpooledAsk = ask;
 						// Its own booking now: the floor a pressure resize keeps, and
 						// the node window it grows back to. A first grant taken while
 						// pooled was the owner's and names no ask of its own.
@@ -1589,13 +1710,11 @@ function createWorkerFetch(options: {
 						);
 					}
 				}
-				const keepalive = (await keepaliveAdvertised(
-					options.baseUrl,
-					base,
-					wire,
-				))
-					? requestStreamKeepalive(wire)
-					: undefined;
+				const keepalive =
+					dialect.keepalive &&
+					(await keepaliveAdvertised(options.baseUrl, base, wire))
+						? requestStreamKeepalive(wire)
+						: undefined;
 				if (lent && !ranOnce && attach.poolId === undefined) {
 					// Priority 0 without a sub-pool is not priority 0: the lead's
 					// session is at its eight per slot, or the server's pool
@@ -1607,11 +1726,10 @@ function createWorkerFetch(options: {
 				}
 				noteWorkerAttach(options.log, options.worker, attach);
 				let response: Response;
+				const sentPool = dialect.poolOf(wire);
 				sent = {
 					generation: polykvRootGeneration(options.baseUrl),
-					...(typeof wire.pool_id === "number"
-						? { poolId: String(wire.pool_id) }
-						: {}),
+					...(sentPool !== undefined ? { poolId: String(sentPool) } : {}),
 				};
 				endAttempt = beginPolykvWorkerTurn(options.worker.sessionId);
 				try {

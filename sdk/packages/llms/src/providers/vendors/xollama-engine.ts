@@ -22,6 +22,14 @@
  * renders. The fields the pool code forwards are the chat body's own, options
  * included, so the render asks for the runner the chat will use -- a render
  * with a different `num_ctx` would reload the model.
+ *
+ * And one route is translated. A swarm opens an owner session with an
+ * OpenAI-shaped `POST /v1/chat/completions` (`polykv-swarm.ts`), which the
+ * engine proxy does not carry: it becomes a native `/api/chat` with the window
+ * in `placement` and a one-token cap. Its `options` and `think` are the ones
+ * the model's chats were last sent with (see {@link rememberXollamaRunner}):
+ * Ollama reloads a runner whose options differ, and an owner open that reloads
+ * the model under a running swarm drops every session on it.
  */
 
 const ENGINE_PATH = "/xollama-engine/";
@@ -166,6 +174,84 @@ async function render(
 	});
 }
 
+/** The runner a model's chats ask for, per origin and model. */
+const RUNNERS = new Map<
+	string,
+	{ options?: Record<string, unknown>; think?: unknown }
+>();
+
+const runnerKey = (origin: string, model: string) =>
+	`${originOf(origin)}\n${model}`;
+
+/**
+ * The `options` and `think` a chat on `model` went out with, so a request this
+ * module makes on its own asks for the same runner. `num_predict` is the
+ * turn's, not the runner's, and is left out.
+ */
+export function rememberXollamaRunner(
+	origin: string,
+	model: string,
+	body: Readonly<Record<string, unknown>>,
+): void {
+	const options =
+		body.options && typeof body.options === "object"
+			? { ...(body.options as Record<string, unknown>) }
+			: undefined;
+	if (options) {
+		delete options.num_predict;
+	}
+	RUNNERS.set(runnerKey(origin, model), {
+		...(options ? { options } : {}),
+		...(body.think !== undefined ? { think: body.think } : {}),
+	});
+}
+
+export function resetXollamaRunners(): void {
+	RUNNERS.clear();
+}
+
+/** An owner open, as the native chat xOllama carries to the engine. */
+async function openOwner(
+	baseFetch: typeof fetch,
+	origin: string,
+	model: string,
+	init: RequestInit | undefined,
+): Promise<Response> {
+	let body: Record<string, unknown>;
+	try {
+		body = JSON.parse(
+			typeof init?.body === "string" ? init.body : "{}",
+		) as Record<string, unknown>;
+	} catch {
+		return new Response("chat body is not JSON", { status: 400 });
+	}
+	const runner = RUNNERS.get(runnerKey(origin, model));
+	const placement: Record<string, unknown> = {};
+	for (const field of ["pool_id", "num_ctx", "num_ctx_min"] as const) {
+		if (typeof body[field] === "number") {
+			placement[field] = body[field];
+		}
+	}
+	const cap = typeof body.max_tokens === "number" ? body.max_tokens : 1;
+	return baseFetch(`${origin}/api/chat`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			model,
+			messages: body.messages,
+			...(body.tools !== undefined ? { tools: body.tools } : {}),
+			...(typeof body.session_id === "string"
+				? { session_id: body.session_id }
+				: {}),
+			...(Object.keys(placement).length > 0 ? { placement } : {}),
+			options: { ...(runner?.options ?? {}), num_predict: cap },
+			...(runner?.think !== undefined ? { think: runner.think } : {}),
+			stream: false,
+		}),
+		...(init?.signal ? { signal: init.signal } : {}),
+	});
+}
+
 /**
  * A fetch that serves engine roots through xOllama and passes every other
  * URL to `baseFetch` untouched.
@@ -178,6 +264,9 @@ export function xollamaEngineFetch(baseFetch: typeof fetch): typeof fetch {
 		}
 		if (target.endpoint === "apply-template") {
 			return render(baseFetch, target.origin, target.model, init);
+		}
+		if (target.endpoint === "v1/chat/completions") {
+			return openOwner(baseFetch, target.origin, target.model, init);
 		}
 		const query = new URLSearchParams(target.query);
 		query.set("model", target.model);

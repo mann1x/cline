@@ -53,7 +53,11 @@ import {
 	prepareLeadPool,
 } from "./polykv-lead";
 import { engineSessionId } from "./polykv-swarm";
-import { xollamaEngineFetch, xollamaEngineRoot } from "./xollama-engine";
+import {
+	rememberXollamaRunner,
+	xollamaEngineFetch,
+	xollamaEngineRoot,
+} from "./xollama-engine";
 
 /** xOllama's default origin: its own port, so it can run beside a stock Ollama. */
 export const XOLLAMA_DEFAULT_BASE_URL = "http://localhost:22434";
@@ -773,13 +777,20 @@ interface XollamaPlacement {
 	num_ctx_min?: number;
 }
 
+/** The lead's pool, and what of its window the pool already holds. */
+interface LeadAttach {
+	placement: XollamaPlacement;
+	/** The shared prefix, riding above a private budget where the engine says so. */
+	sharedAboveBudget?: number;
+}
+
 async function leadPlacement(
 	baseUrl: string,
 	body: Record<string, unknown>,
 	session: string,
 	baseFetch: typeof fetch,
 	logger: BasicLogger | undefined,
-): Promise<XollamaPlacement | undefined> {
+): Promise<LeadAttach | undefined> {
 	const probe = {
 		...body,
 		messages: [...(body.messages as unknown[])],
@@ -798,7 +809,12 @@ async function leadPlacement(
 			return undefined;
 		}
 		body.messages = probe.messages;
-		return { pool_id: Number(attach.poolId) };
+		return {
+			placement: { pool_id: Number(attach.poolId) },
+			...(attach.privateWindow && attach.sharedTokens > 0
+				? { sharedAboveBudget: attach.sharedTokens }
+				: {}),
+		};
 	} catch (error) {
 		logger?.debug?.(
 			`[xollama] lead pool unavailable, turn runs unpooled: ${
@@ -840,6 +856,7 @@ export function withXollamaRequestFields(
 		let windowSession: string | undefined;
 		let leadPooled = false;
 		let asked: number | undefined;
+		let sharedAboveBudget: number | undefined;
 		try {
 			const parsed = JSON.parse(body) as Record<string, unknown>;
 			const original = parsed.messages;
@@ -852,11 +869,20 @@ export function withXollamaRequestFields(
 				// model: its history keeps its thinking and it sends no state.
 				const council =
 					model?.council === true && !isDelegatedEngineSession(session);
+				// A swarm agent's turn arrives placed by the worker layer outside
+				// this one (`createPolykvWorkerFetch`): its pool and window are
+				// that layer's, and nothing here adds to them.
+				const placedOutside =
+					parsed.placement !== null && typeof parsed.placement === "object";
+				if (root !== undefined && typeof parsed.model === "string") {
+					rememberXollamaRunner(root, parsed.model, parsed);
+				}
 				// The lead's pool, on a model that has seats for one. Any other
 				// turn has its environment folded back into the system text,
 				// which is what every provider but opencoti sends.
-				let placement: XollamaPlacement | undefined =
+				const lead: LeadAttach | undefined =
 					!council &&
+					!placedOutside &&
 					model !== undefined &&
 					model.clientPools > 0 &&
 					root !== undefined &&
@@ -870,6 +896,7 @@ export function withXollamaRequestFields(
 								options?.logger,
 							)
 						: undefined;
+				let placement: XollamaPlacement | undefined = lead?.placement;
 				if (placement === undefined) {
 					flattenSystemEnvironment(parsed);
 				}
@@ -877,6 +904,7 @@ export function withXollamaRequestFields(
 				// The window, on any plain turn of a server that negotiates one.
 				if (
 					!council &&
+					!placedOutside &&
 					model !== undefined &&
 					root !== undefined &&
 					session !== undefined &&
@@ -887,6 +915,23 @@ export function withXollamaRequestFields(
 				) {
 					windowSession = session;
 					const ask = windowAsk(session, parsed, options.window);
+					// The window is the private budget where the engine says so,
+					// and the pool's prefix rides above it: a new conversation
+					// books its window less what it shares, as on opencoti, or a
+					// window as large as the engine's whole KV is refused once any
+					// pool holds a cell of it. A resume keeps its grant.
+					if (
+						ask?.num_ctx !== undefined &&
+						lead?.sharedAboveBudget !== undefined &&
+						getPolykvGrantedWindow(session) === undefined
+					) {
+						const budget = Math.max(1, ask.num_ctx - lead.sharedAboveBudget);
+						sharedAboveBudget = ask.num_ctx - budget;
+						ask.num_ctx = budget;
+						if (ask.num_ctx_min !== undefined) {
+							ask.num_ctx_min = Math.min(ask.num_ctx_min, budget);
+						}
+					}
 					if (ask) {
 						asked = ask.num_ctx;
 						placement = { ...(placement ?? {}), ...ask };
@@ -953,6 +998,9 @@ export function withXollamaRequestFields(
 		) {
 			recordPolykvGrantedWindow(windowSession, granted, {
 				...(asked !== undefined ? { asked } : {}),
+				...(sharedAboveBudget !== undefined
+					? { sharedTokens: sharedAboveBudget }
+					: {}),
 			});
 			// A lead holding a window can own its private sub-pool (the lead
 			// tree's `Ls`); without one it attaches the shared root alone.

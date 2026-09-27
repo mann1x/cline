@@ -1,7 +1,9 @@
 import { markPromptEnvironment } from "@cline/shared";
 import { afterEach, describe, expect, it } from "vitest";
+import { createPolykvWorkerFetch, OLLAMA_WIRE_DIALECT } from "./opencoti";
 import { getPolykvGrantedWindow, resetPolykvAvailability } from "./polykv";
 import { releaseAllPolykvLeads } from "./polykv-lead";
+import { releaseAllPolykvSwarms } from "./polykv-swarm";
 import {
 	readXollamaWindowOptions,
 	resetXollamaProbes,
@@ -12,6 +14,8 @@ import {
 import {
 	parseXollamaEngineUrl,
 	readXollamaEngines,
+	rememberXollamaRunner,
+	resetXollamaRunners,
 	xollamaEngineFetch,
 	xollamaEngineRoot,
 } from "./xollama-engine";
@@ -35,6 +39,8 @@ function stubXollama(
 		features?: string[];
 		/** The window each chat is granted, as X-Context-Window. */
 		grant?: number;
+		/** The engine's own `/props` features. */
+		engineFeatures?: string[];
 	} = {},
 ) {
 	const calls: Array<{
@@ -58,7 +64,7 @@ function stubXollama(
 				status: 200,
 				body: {
 					build_info: "opencoti-0.10.5-c8-2609270000001",
-					features: [],
+					features: options.engineFeatures ?? [],
 					opencoti: { boot_id: "boot-1", polykv: { pools_enabled: true } },
 				},
 			};
@@ -70,6 +76,21 @@ function stubXollama(
 				status: 200,
 				body: { pool_id: id, parent: -1, prefix_len: 100, prompt: body.prompt },
 			};
+		}
+		const forked = /^polykv\/pools\/(\d+)\/fork$/.exec(endpoint);
+		if (forked) {
+			const id = nextPool++;
+			pools.add(id);
+			return {
+				status: 200,
+				body: { pool_id: id, parent: Number(forked[1]), prefix_len: 200 },
+			};
+		}
+		if (/^polykv\/pools\/\d+\/(pin|unpin|release)$/.test(endpoint)) {
+			return { status: 200, body: { ok: true } };
+		}
+		if (/^sessions\/[^/]+\/close$/.test(endpoint)) {
+			return { status: 200, body: { found: true, released: true } };
 		}
 		if (endpoint === "polykv/pools") {
 			return {
@@ -148,6 +169,8 @@ function stubXollama(
 
 afterEach(async () => {
 	await releaseAllPolykvLeads().catch(() => undefined);
+	await releaseAllPolykvSwarms().catch(() => undefined);
+	resetXollamaRunners();
 	resetPolykvAvailability();
 	resetXollamaProbes();
 });
@@ -442,5 +465,154 @@ describe("the conversation's window on xOllama", () => {
 			agentWindow: { contextWindow: 65536, sharePercent: 40 },
 		});
 		expect(readXollamaWindowOptions(undefined, undefined)).toEqual({});
+	});
+});
+
+describe("a pooled lead's window on xOllama", () => {
+	it("books its private budget, the shared prefix riding above it", async () => {
+		const stub = stubXollama({
+			clientPools: 2,
+			grant: 32_000,
+			features: ["client_placement_v1", "chat_render_v1", "context_window_v1"],
+			engineFeatures: ["polykv_private_window_v1"],
+		});
+		const wire = withXollamaRequestFields(stub.fetchImpl, {
+			window: { dynamicContextSize: true, contextWindow: 32_768 },
+		});
+		await wire("http://gpu2:22434/api/chat", {
+			method: "POST",
+			headers: { [XOLLAMA_SESSION_HEADER]: "task-budget" },
+			body: JSON.stringify({
+				model: "m",
+				options: { num_ctx: 131_072 },
+				messages: [
+					{
+						role: "system",
+						content: `You are Cline.\n\n${markPromptEnvironment("Working directory", "/w/a")}`,
+					},
+					{ role: "user", content: "fix it" },
+				],
+			}),
+		});
+		const placement = (stub.chats[0] as { placement: Record<string, number> })
+			.placement;
+		expect(placement.pool_id).toBe(0);
+		// Measured live (omnimerge on the dev xOllama, 2026-09-27): the whole
+		// window asked beside a pool is refused, the pool holding cells of it.
+		expect(placement.num_ctx).toBeLessThan(32_768);
+		expect(placement.num_ctx_min).toBe(placement.num_ctx);
+		expect(getPolykvGrantedWindow("task-budget")).toBe(32_000);
+	});
+});
+
+describe("a swarm agent on a plain xOllama model", () => {
+	const ORIGIN = "http://xollama:22434";
+	const ROOT = xollamaEngineRoot(ORIGIN, "m");
+	const runner = { num_ctx: 65_536, temperature: 0.6 };
+	const pooledShape = [
+		{ role: "system", content: "base prompt" },
+		{ role: "user", content: "the shared file" },
+		{ role: "user", content: "role" },
+		{ role: "user", content: "task" },
+	];
+
+	it("opens an owner as a native chat that asks for the model's own runner", async () => {
+		const stub = stubXollama({ clientPools: 2, grant: 32_768 });
+		rememberXollamaRunner(ORIGIN, "m", {
+			options: { ...runner, num_predict: 4096 },
+			think: "high",
+		});
+		const response = await xollamaEngineFetch(stub.fetchImpl)(
+			`${ROOT}/v1/chat/completions`,
+			{
+				method: "POST",
+				body: JSON.stringify({
+					model: "m",
+					messages: [{ role: "system", content: "base prompt" }],
+					tools: [{ type: "function", function: { name: "read" } }],
+					session_id: "lead~polykv-owner-1",
+					num_ctx: 65_536,
+					num_ctx_min: 16_384,
+					max_tokens: 1,
+					stream: false,
+				}),
+			},
+		);
+		expect(response.headers.get("x-context-window")).toBe("32768");
+		expect(stub.chats).toEqual([
+			{
+				model: "m",
+				messages: [{ role: "system", content: "base prompt" }],
+				tools: [{ type: "function", function: { name: "read" } }],
+				session_id: "lead~polykv-owner-1",
+				placement: { num_ctx: 65_536, num_ctx_min: 16_384 },
+				// The runner the chats use, or the model reloads under the swarm.
+				options: { ...runner, num_predict: 1 },
+				think: "high",
+				stream: false,
+			},
+		]);
+	});
+
+	it("attaches the turn to its group's pool in placement, with its cap in options", async () => {
+		const stub = stubXollama({
+			clientPools: 2,
+			grant: 32_768,
+			features: ["client_placement_v1", "chat_render_v1", "context_window_v1"],
+		});
+		const fields = withXollamaRequestFields(stub.fetchImpl, {
+			window: { dynamicContextSize: true, contextWindow: 65_536 },
+		});
+		const worker = createPolykvWorkerFetch({
+			fetch: xollamaEngineFetch(fields),
+			worker: { group: "lead/1", sessionId: "agent-a", layers: 2 },
+			baseUrl: ROOT,
+			dialect: OLLAMA_WIRE_DIALECT,
+		});
+		const response = await worker(`${ORIGIN}/api/chat`, {
+			method: "POST",
+			headers: { [XOLLAMA_SESSION_HEADER]: "agent-a" },
+			body: JSON.stringify({
+				model: "m",
+				messages: pooledShape,
+				options: runner,
+				stream: true,
+			}),
+		});
+		expect(response.status).toBe(200);
+		// The answer reaches the SDK whole.
+		expect(JSON.parse(await response.text())).toMatchObject({ done: true });
+		const turn = stub.chats.at(-1) as Record<string, unknown>;
+		expect(turn.session_id).toBe("agent-a");
+		// The worker's placement, untouched by the fields layer: a pool, and no
+		// window of its own -- its window is its owner's.
+		expect(turn.placement).toEqual({ pool_id: expect.any(Number) });
+		expect(turn.pool_id).toBeUndefined();
+		expect(turn.max_tokens).toBeUndefined();
+		expect(turn.options).toEqual({ ...runner, num_predict: 8_192 });
+		// Its pools were cut from xOllama's rendering, never the engine's.
+		expect(stub.renders.length).toBeGreaterThan(0);
+		expect(stub.renders.every((render) => render.placement === undefined)).toBe(
+			true,
+		);
+	});
+});
+
+describe("the Ollama wire dialect", () => {
+	it("places the pool and window in placement and the cap in options", () => {
+		const wire: Record<string, unknown> = { options: { temperature: 1 } };
+		OLLAMA_WIRE_DIALECT.setWindow(wire, 65_536, 16_384);
+		OLLAMA_WIRE_DIALECT.setPool(wire, 3);
+		expect(OLLAMA_WIRE_DIALECT.declaresOutputCap(wire)).toBe(false);
+		OLLAMA_WIRE_DIALECT.setOutputCap(wire, 512);
+		expect(wire).toEqual({
+			options: { temperature: 1, num_predict: 512 },
+			placement: { num_ctx: 65_536, num_ctx_min: 16_384, pool_id: 3 },
+		});
+		expect(OLLAMA_WIRE_DIALECT.poolOf(wire)).toBe(3);
+		expect(OLLAMA_WIRE_DIALECT.windowOf(wire)).toBe(65_536);
+		OLLAMA_WIRE_DIALECT.clearWindow(wire);
+		expect(wire.placement).toEqual({ pool_id: 3 });
+		OLLAMA_WIRE_DIALECT.clearWindow({});
 	});
 });
