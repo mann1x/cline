@@ -128,6 +128,7 @@ class MockTeamStore {
 	}));
 	handleTeamEvent = vi.fn();
 	persistRuntime = vi.fn();
+	close = vi.fn();
 }
 
 vi.mock("../../services/storage/team-store", () => ({
@@ -314,6 +315,11 @@ describe("DefaultRuntimeBuilder team persistence boundary", () => {
 			expect.any(String),
 			expect.any(Object),
 			expect.arrayContaining([expect.objectContaining({ agentId: "w" })]),
+		);
+		// Closed only after the shutdown events were persisted.
+		expect(teamStoreInstance.close).toHaveBeenCalledOnce();
+		expect(teamStoreInstance.close.mock.invocationCallOrder[0]).toBeGreaterThan(
+			teamStoreInstance.persistRuntime.mock.invocationCallOrder.at(-1) ?? 0,
 		);
 	});
 
