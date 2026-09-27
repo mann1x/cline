@@ -159,3 +159,39 @@ jobs:
                   body_path: ${{ steps.build.outputs.notes-path }}
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+            # Same step as mann1x/osync's ci.yml, same webhook secret. A Discord
+            # failure is reported but does not undo the release, and with no
+            # secret configured the step warns and skips, so a fork or a clone
+            # still releases.
+            - name: Announce on Discord
+              continue-on-error: true
+              env:
+                  DISCORD_WEBHOOK: ${{ secrets.TECH_CORNER_DISCOWH }}
+                  TAG: ${{ steps.tag.outputs.tag }}
+                  NOTES_PATH: ${{ steps.build.outputs.notes-path }}
+              run: |
+                  if [ -z "$DISCORD_WEBHOOK" ]; then
+                    echo "::warning::Secret TECH_CORNER_DISCOWH is not set; skipping the Discord announcement"
+                    exit 0
+                  fi
+                  python3 - <<'PY' > discord.json
+                  import json, os
+                  tag = os.environ["TAG"]
+                  url = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/releases/tag/{tag}"
+                  notes = open(os.environ["NOTES_PATH"], encoding="utf-8").read().strip()
+                  limit = 3800  # Discord embed descriptions are limited to 4096 characters
+                  if len(notes) > limit:
+                      notes = notes[:limit].rsplit("\n", 1)[0] + f"\n\n… [full release notes]({url})"
+                  print(json.dumps({
+                      "username": "Cerebriline",
+                      "embeds": [{
+                          "title": f"Cerebriline {tag} released",
+                          "url": url,
+                          "description": notes,
+                          "color": 0x58B9FF,
+                      }],
+                  }))
+                  PY
+                  curl -fsS --retry 3 -H "Content-Type: application/json" -d @discord.json "$DISCORD_WEBHOOK"
+                  echo "Announced $TAG on Discord" >> "$GITHUB_STEP_SUMMARY"

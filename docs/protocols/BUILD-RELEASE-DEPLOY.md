@@ -391,6 +391,21 @@ The first release through this path is the one to watch: the Open VSX step is
 `continue-on-error`, so a rejection there will not fail the run and will not be
 obvious. Check the step's log once.
 
+**Discord.** The last step of `fork-release.yml` posts the release to the
+tech-corner channel: an embed titled `Cerebriline <tag> released`, linking the
+release, with the release notes as its body (cut at 3,800 characters with a
+link to the rest). It is the same step as `mann1x/osync`'s `ci.yml` and reads
+the same webhook, from the `TECH_CORNER_DISCOWH` repository secret. It is
+`continue-on-error`, and with no secret it warns and skips. A secret's value
+cannot be copied between repositories, so it is set here once by hand:
+
+```bash
+gh secret set TECH_CORNER_DISCOWH --repo mann1x/cline   # paste the webhook URL at the prompt
+```
+
+A release cut by hand with `gh release create` does not run the workflow and
+is not announced.
+
 **The VS Code Marketplace: no.** Upstream Cline is there and one of us there is
 enough. This is a decision rather than a constraint — since the rename to
 `mann1x.cerebriline` the extension *could* be published under its own publisher
