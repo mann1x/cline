@@ -8,7 +8,19 @@ import {
 	resetPolykvAvailability,
 	resetPolykvSessions,
 } from "@cline/llms";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+/** Whether the lead's swarm has agents on the engine; `undefined`: ask for real. */
+let leadAgents: boolean | undefined;
+vi.mock("@cline/llms", async (actual) => {
+	const llms = await actual<typeof import("@cline/llms")>();
+	return {
+		...llms,
+		polykvLeadHasAgentsOn: (group: string, baseUrl: string) =>
+			leadAgents ?? llms.polykvLeadHasAgentsOn(group, baseUrl),
+	};
+});
+
 import { createContextCompactionPrepareTurn } from "./compaction";
 import { KV_SHRINK_FILL, resetKvPressureState } from "./kv-pressure";
 import { clearPolykvAllocationCache } from "./polykv-session";
@@ -58,6 +70,8 @@ function engine(options: {
 	top?: Record<string, unknown>;
 	/** One answer per resize, in order; the last repeats. */
 	resize?: Array<(body: Record<string, unknown>) => Response>;
+	/** The session the row belongs to; default {@link SESSION}. */
+	session?: string;
 }) {
 	const calls: Call[] = [];
 	let resizes = 0;
@@ -79,7 +93,7 @@ function engine(options: {
 				allocations: [
 					{
 						...options.row,
-						session_id: SESSION,
+						session_id: options.session ?? SESSION,
 						window: options.row.window,
 						used: options.row.used,
 						pressure: options.row.used / options.row.window,
@@ -120,8 +134,11 @@ async function boundary(
 		compact?: () => Promise<{ messages: LlmsProviders.Message[] }>;
 		mode?: "auto" | "manual";
 		overflowRecovery?: boolean;
+		/** Run as this lead conversation: no engine session of its own. */
+		lead?: string;
 	} = {},
 ) {
+	const sessionId = options.lead ?? SESSION;
 	const diagnostics: Array<Record<string, unknown>> = [];
 	const lines: Array<{ message: string; severity?: string }> = [];
 	const logger = {
@@ -143,7 +160,7 @@ async function boundary(
 		{
 			providerId: "opencoti",
 			modelId: "m",
-			sessionId: SESSION,
+			sessionId,
 			providerConfig: {
 				providerId: "opencoti",
 				modelId: "m",
@@ -151,7 +168,7 @@ async function boundary(
 				fetch: fetchImpl,
 				// No pool tree: a window is booked, and resized, without one.
 				polykv: { enabled: false },
-				engineSessionId: SESSION,
+				...(options.lead ? {} : { engineSessionId: SESSION }),
 			} as unknown as LlmsProviders.ProviderConfig,
 			compaction: {
 				enabled: true,
@@ -167,7 +184,7 @@ async function boundary(
 	];
 	const result = await prepareTurn?.({
 		agentId: "agent-1",
-		conversationId: SESSION,
+		conversationId: sessionId,
 		parentAgentId: null,
 		iteration: 1,
 		abortSignal: new AbortController().signal,
@@ -206,6 +223,89 @@ afterEach(() => {
 
 const noWarnings = (lines: Array<{ severity?: string }>) =>
 	expect(lines.filter((line) => line.severity === "warn")).toEqual([]);
+
+describe("a lead's compaction on global pressure", () => {
+	const LEAD = "1790503776490_9jhpx";
+	beforeEach(() => {
+		recordPolykvGrantedWindow(LEAD, 262_144, { asked: 262_144 });
+		recordOpencotiWindowFloor(LEAD, 60_000);
+	});
+	afterEach(() => {
+		leadAgents = undefined;
+	});
+
+	// User ruling after pandorum .211: the lead gives up its context for the
+	// server only when its own agents need that engine's cells.
+	it("does not compact for pressure it has no agents in", async () => {
+		const stub = engine({
+			row: { window: 262_144, used: 150_000 },
+			pressure: ACTIVE,
+			session: LEAD,
+		});
+		const { found } = await boundary(stub.fetch, {
+			messageChars: 600_000,
+			lead: LEAD,
+		});
+		expect(found?.kvPressureState).toBe("active");
+		expect(found?.kvPressureCompaction).toBe(false);
+		expect(found?.shouldCompact).toBe(false);
+	});
+
+	it("compacts when its own agents wait on that engine", async () => {
+		const stub = engine({
+			row: { window: 262_144, used: 150_000 },
+			pressure: ACTIVE,
+			session: LEAD,
+		});
+		// A swarm agent of this lead placed on, or waiting for, that engine.
+		leadAgents = true;
+		const { found } = await boundary(stub.fetch, {
+			messageChars: 600_000,
+			lead: LEAD,
+		});
+		expect(found?.kvPressureCompaction).toBe(true);
+	});
+
+	it("never reads a PolyKV engine for a lead on another provider", async () => {
+		// The .211 lead ran on Ollama; its 50% compaction was the reply
+		// reserve, not the engine its agents ran on.
+		const stub = engine({
+			row: { window: 262_144, used: 150_000 },
+			pressure: ACTIVE,
+			session: LEAD,
+		});
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "ollama",
+			modelId: "m",
+			sessionId: LEAD,
+			providerConfig: {
+				providerId: "ollama",
+				modelId: "m",
+				baseUrl: "http://engine/v1",
+				fetch: stub.fetch,
+			} as unknown as LlmsProviders.ProviderConfig,
+			compaction: { enabled: true, strategy: "basic" } as never,
+		});
+		const messages: LlmsProviders.Message[] = [{ role: "user", content: "hi" }];
+		await prepareTurn?.({
+			agentId: "lead",
+			conversationId: LEAD,
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			systemPrompt: "s",
+			tools: [],
+			messages,
+			apiMessages: messages,
+			model: {
+				id: "m",
+				provider: "ollama",
+				info: { id: "m", contextWindow: 128_000 },
+			},
+		} as never);
+		expect(stub.calls).toEqual([]);
+	});
+});
 
 describe("compaction on global pressure", () => {
 	it("requests compaction at the turn boundary for an agent above its floor", async () => {

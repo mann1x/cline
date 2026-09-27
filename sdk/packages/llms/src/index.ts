@@ -322,6 +322,7 @@ export {
 	type PolykvWorkerAttach,
 	type PolykvWorkerSpec,
 	parseWorkerWindowFull,
+	polykvLeadHasAgentsOn,
 	polykvLeadLent,
 	polykvLeadReserveCells,
 	polykvOwnerAgentCapacity,

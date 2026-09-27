@@ -88,6 +88,22 @@ export function contextWindowSegments(used: number, breakdown?: ContextBreakdown
 	return segments
 }
 
+/**
+ * What the compaction marker says: where the conversation compacts, and why
+ * there. The threshold is not a fixed share of the window -- it is the window
+ * less the room held back for the next reply, sized from the recent turns --
+ * so a bar at half full can be at it (pandorum .211: one 83k-character tool
+ * call held half a 128k window back, and the lead compacted at 50%).
+ */
+export function compactAtTitle(compactAt: number, max: number, replyReserve?: number): string {
+	const share = max > 0 ? Math.round((compactAt / max) * 100) : 0
+	const why =
+		replyReserve !== undefined && replyReserve > 0
+			? `; ${Math.round(replyReserve).toLocaleString()} tokens are held back for the next reply, sized from the largest recent turns`
+			: ""
+	return `Compacts at ${Math.round(compactAt).toLocaleString()} tokens (${share}% of the window)${why}`
+}
+
 interface ContextWindowBarProps {
 	used: number
 	max: number
@@ -101,6 +117,10 @@ interface ContextWindowBarProps {
  */
 export const ContextWindowBar: React.FC<ContextWindowBarProps> = ({ used, max, breakdown }) => {
 	const segments = max > 0 ? contextWindowSegments(used, breakdown) : []
+	const compactAt =
+		max > 0 && breakdown?.compactAtTokens !== undefined && breakdown.compactAtTokens > 0
+			? Math.min(max, breakdown.compactAtTokens)
+			: undefined
 	const percent = (tokens: number) => (max > 0 ? Math.min(100, (tokens / max) * 100) : 0)
 
 	return (
@@ -125,6 +145,14 @@ export const ContextWindowBar: React.FC<ContextWindowBarProps> = ({ used, max, b
 				<div
 					data-segment="total"
 					style={{ width: `${percent(used)}%`, backgroundColor: CONTEXT_SEGMENT_COLORS.messages }}
+				/>
+			)}
+			{compactAt !== undefined && (
+				<div
+					className="absolute top-0 bottom-0 w-[2px]"
+					data-testid="context-window-compact-at"
+					style={{ left: `calc(${percent(compactAt)}% - 1px)`, backgroundColor: "var(--vscode-charts-orange)" }}
+					title={compactAtTitle(compactAt, max, breakdown?.replyReserveTokens)}
 				/>
 			)}
 		</div>

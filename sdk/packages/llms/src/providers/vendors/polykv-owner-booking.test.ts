@@ -7,11 +7,13 @@ import {
 } from "./opencoti-kv-pressure";
 import { resetPolykvAvailability, resetPolykvSessions } from "./polykv";
 import {
+	polykvLeadHasAgentsOn,
 	polykvOwnerAgentCapacity,
 	polykvOwnerBooking,
 	polykvOwnerWindowBounds,
 	polykvWorkerChargedTo,
 	releaseAllPolykvSwarms,
+	releasePolykvAgent,
 } from "./polykv-swarm";
 
 /**
@@ -488,5 +490,23 @@ describe("a grow the busy owner cannot take now (kv_resize_deferred_v1)", () => 
 		for (const grow of stub.resizes()) {
 			expect(grow.body).not.toHaveProperty("deferred");
 		}
+	});
+});
+
+// What the lead's pressure compaction asks before it gives up its context:
+// its own agents on that engine, and only those.
+describe("whether a lead has agents on an engine", () => {
+	it("is true while one of its agents is placed there, and false after", async () => {
+		const stub = engine();
+		expect(polykvLeadHasAgentsOn(GROUP, "http://engine/v1")).toBe(false);
+		await (await send(stub, "agent-a")).text();
+		expect(polykvLeadHasAgentsOn(GROUP, "http://engine/v1")).toBe(true);
+		// Another lead, or another engine: not this lead's agents.
+		expect(polykvLeadHasAgentsOn("another-lead", "http://engine/v1")).toBe(
+			false,
+		);
+		expect(polykvLeadHasAgentsOn(GROUP, "http://elsewhere/v1")).toBe(false);
+		await releasePolykvAgent("agent-a");
+		expect(polykvLeadHasAgentsOn(GROUP, "http://engine/v1")).toBe(false);
 	});
 });

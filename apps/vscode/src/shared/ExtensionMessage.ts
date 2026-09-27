@@ -739,6 +739,14 @@ export interface ContextBreakdown {
 	mcpToolSchemaTokens: number
 	toolCount: number
 	mcpToolCount: number
+	/**
+	 * The request size at which this conversation compacts, as core computed
+	 * it for this turn. Not a fixed share of the window: it moves with
+	 * {@link replyReserveTokens}.
+	 */
+	compactAtTokens?: number
+	/** The tokens held back for the next reply, sized from the recent turns. */
+	replyReserveTokens?: number
 }
 
 /**

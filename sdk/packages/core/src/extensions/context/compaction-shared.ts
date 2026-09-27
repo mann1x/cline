@@ -297,6 +297,13 @@ const COLD_START_OUTPUT_ROOM_WINDOW_SHARE = 0.25;
 const OUTPUT_ROOM_SAMPLE_TURNS = 12;
 
 /**
+ * The newest turns, whose largest always counts in full: see
+ * {@link resolveObservedOutputTokens}. Older than this, a single turn larger
+ * than every other is not what the next reply will cost.
+ */
+const OUTPUT_ROOM_RECENT_TURNS = 3;
+
+/**
  * Multiplier on the observed high-water turn.
  *
  * The next turn is not bounded by the last twelve, so the measurement is a
@@ -391,7 +398,17 @@ export function resolveObservedOutputTokens(
 	if (observed.length < 2) {
 		return undefined;
 	}
-	return Math.max(...observed);
+	// Newest first. The newest turns count at their full size: a long one there
+	// is a model that has changed register. Past them, one turn alone is an
+	// outlier and the second largest sets the room. pandorum .211: a single
+	// 83k-character spawn call (50 agents written out by hand) held half a
+	// 128k window back for the next twelve turns, and the lead compacted at
+	// 50% with the bar showing half full.
+	const recent = Math.max(...observed.slice(0, OUTPUT_ROOM_RECENT_TURNS));
+	const older = [...observed].sort((a, b) => b - a);
+	const typical =
+		older.length >= 4 ? (older[1] as number) : (older[0] as number);
+	return Math.max(recent, typical);
 }
 
 /**

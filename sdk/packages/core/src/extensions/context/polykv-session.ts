@@ -84,6 +84,8 @@ export interface PolykvProviderConfig {
 	 * rather than building a second, private tree for every agent.
 	 */
 	polykvWorker?: unknown;
+	/** Set on a delegated agent's config: the engine session its turns carry. */
+	engineSessionId?: string;
 }
 
 /**

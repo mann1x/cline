@@ -2764,6 +2764,45 @@ describe("translateSessionEvent — agent_event notice", () => {
 		})
 	})
 
+	// Where the conversation compacts, for the bar's marker: core's own figure,
+	// which moves with the room held back for the reply.
+	it("carries the compaction point and the reply reserve with the breakdown", () => {
+		const state = new MessageTranslatorState()
+		translateSessionEvent(
+			noticeEvent("context-breakdown", {
+				kind: "context_breakdown",
+				systemPromptTokens: 1_607,
+				builtinToolSchemaTokens: 9_054,
+				mcpToolSchemaTokens: 12_400,
+				toolCount: 41,
+				mcpToolCount: 28,
+				compactAtTokens: 64_000,
+				replyReserveTokens: 64_000,
+			}),
+			state,
+		)
+		const usage = translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "usage",
+						inputTokens: 60_000,
+						outputTokens: 120,
+						totalInputTokens: 60_000,
+						totalOutputTokens: 120,
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+		expect(JSON.parse(usage.messages[0].text ?? "{}").contextBreakdown).toMatchObject({
+			compactAtTokens: 64_000,
+			replyReserveTokens: 64_000,
+		})
+	})
+
 	// A breakdown missing a part would colour the bar with slices that do not
 	// add up to the overhead, which is a wrong picture rather than no picture.
 	it("ignores a breakdown notice that is missing a part", () => {

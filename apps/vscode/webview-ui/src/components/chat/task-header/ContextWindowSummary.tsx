@@ -5,7 +5,7 @@ import React, { memo, useCallback, useMemo, useState } from "react"
 import { formatLargeNumber as formatTokenNumber } from "@/utils/format"
 import { formatRate } from "@/utils/request-timings"
 import { describeConnection } from "./ConnectionBreakdown"
-import { CONTEXT_SEGMENT_COLORS } from "./ContextWindowBar"
+import { CONTEXT_SEGMENT_COLORS, compactAtTitle } from "./ContextWindowBar"
 
 interface TokenUsageInfoProps {
 	tokensIn?: number
@@ -243,6 +243,20 @@ export const ContextWindowSummary: React.FC<TaskContextWindowButtonsProps> = ({
 						<span>Remaining:</span>
 						<span className="font-mono">{formatTokenNumber(contextWindow - tokenUsed)}</span>
 					</div>
+					{breakdown?.compactAtTokens !== undefined && (
+						<div
+							className="flex justify-between"
+							title={compactAtTitle(breakdown.compactAtTokens, contextWindow, breakdown.replyReserveTokens)}>
+							<span>Compacts at:</span>
+							<span className="font-mono">{formatTokenNumber(breakdown.compactAtTokens)}</span>
+						</div>
+					)}
+					{breakdown?.replyReserveTokens !== undefined && (
+						<div className="flex justify-between">
+							<span>Held for the reply:</span>
+							<span className="font-mono">{formatTokenNumber(breakdown.replyReserveTokens)}</span>
+						</div>
+					)}
 				</div>
 			</AccordionItem>
 

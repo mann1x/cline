@@ -2592,7 +2592,17 @@ function parseContextBreakdownNoticeMetadata(metadata: unknown): ContextBreakdow
 	) {
 		return undefined
 	}
-	return { systemPromptTokens, builtinToolSchemaTokens, mcpToolSchemaTokens, toolCount, mcpToolCount }
+	const compactAtTokens = read("compactAtTokens")
+	const replyReserveTokens = read("replyReserveTokens")
+	return {
+		systemPromptTokens,
+		builtinToolSchemaTokens,
+		mcpToolSchemaTokens,
+		toolCount,
+		mcpToolCount,
+		...(compactAtTokens !== undefined && compactAtTokens > 0 ? { compactAtTokens } : {}),
+		...(replyReserveTokens !== undefined ? { replyReserveTokens } : {}),
+	}
 }
 
 /**

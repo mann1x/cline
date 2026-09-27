@@ -12,6 +12,7 @@ import {
 	type OpencotiResizeResult,
 	opencotiPendingResize,
 	opencotiPressureState,
+	polykvLeadHasAgentsOn,
 	polykvOwnerWindowBounds,
 	polykvWorkerChargedTo,
 	probeOpencotiProps,
@@ -251,7 +252,16 @@ export interface KvPressureTurn {
 	swaPressure?: boolean;
 	/** The SWA half as read, for the log. */
 	swa?: { cellsUsed: number; cellsTotal: number };
+	/**
+	 * The subject is a lead conversation's own booking, not a delegated
+	 * agent's: it compacts for the server only while its own agents need
+	 * this engine's cells (see {@link kvPressureWantsCompaction}).
+	 */
+	lead?: boolean;
 }
+
+/** A delegated agent's session, by its core or engine id. */
+const DELEGATED_SESSION = /^(?:agent|teammate)_|~agent-|~teammate-|:swarm:/;
 
 /** Per engine booking: a resize in flight, and what the engine has said. */
 interface SubjectState {
@@ -428,6 +438,14 @@ export async function beginKvPressureTurn(options: {
 			? { deferred: true }
 			: {}),
 	};
+	if (
+		subject.kind === "own" &&
+		!options.providerConfig.polykvWorker &&
+		!options.providerConfig.engineSessionId &&
+		!DELEGATED_SESSION.test(options.sessionId)
+	) {
+		turn.lead = true;
+	}
 	const row = snapshot?.allocations.find(
 		(entry) => entry.sessionId === subject.engineId,
 	);
@@ -574,6 +592,16 @@ export function kvPressureWantsCompaction(
 	const row = turn?.row;
 	const floor = turn?.subject.floor;
 	if (!turn || turn.state !== "active" || !row || floor === undefined) {
+		return false;
+	}
+	// A lead gives up its context to the server only for its own agents on
+	// this engine. Pressure from other sessions sharing the KV is theirs to
+	// answer with their own bookings; a lead with a reserved booking frees
+	// nothing for them by compacting (user ruling, 2026-09-27, after .211).
+	if (
+		turn.lead &&
+		!polykvLeadHasAgentsOn(turn.subject.grantKey, turn.baseUrl)
+	) {
 		return false;
 	}
 	if (row.window <= floor) {

@@ -1253,6 +1253,13 @@ export function createContextCompactionPrepareTurn(
 			mcpToolCount: mcpTools.length,
 			requestOverheadTokens,
 			maxInputTokens,
+			// Where the context bar marks that this conversation compacts, on the
+			// provider's scale as the bar's own count is: the threshold moves with
+			// the room held back for the reply, and a bar that showed only "50%
+			// of the window" said nothing about why it compacted there
+			// (pandorum .211).
+			compactAtTokens: Math.round(requestTriggerTokens),
+			replyReserveTokens: Math.round(outputRoomTokens),
 		});
 		if (effectiveMode === "auto" && !shouldCompact) {
 			// Nothing to compact, and possibly cells to give back: a context

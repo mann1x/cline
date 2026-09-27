@@ -2906,6 +2906,28 @@ export function polykvLeadLent(owner: string): boolean {
 	return busyLentShard(owner) !== undefined;
 }
 
+/**
+ * Whether the lead conversation `group` has agents on the engine at
+ * `baseUrl` now: placed on one of its swarm's owners, lent its own window, or
+ * waiting for an owner to open. Only then does the lead's own context compete
+ * with its own agents for that engine's cells.
+ */
+export function polykvLeadHasAgentsOn(group: string, baseUrl: string): boolean {
+	const root = polykvRoot(baseUrl);
+	for (const swarm of GROUPS.values()) {
+		if (swarm.root !== root || swarm.key.split("\n")[1] !== group) {
+			continue;
+		}
+		if (
+			swarm.awaitingOwner.size > 0 ||
+			swarm.shards.some((shard) => !shard.closed && shard.agents.size > 0)
+		) {
+			return true;
+		}
+	}
+	return false;
+}
+
 async function runDeferredLeadClose(sessionId: string): Promise<void> {
 	const close = DEFERRED_LEAD_CLOSES.get(sessionId);
 	DEFERRED_LEAD_CLOSES.delete(sessionId);

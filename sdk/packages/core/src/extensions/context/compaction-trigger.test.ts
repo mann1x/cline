@@ -427,6 +427,33 @@ describe("output room sized from what the session actually produces", () => {
 		).toBe(17_000);
 	});
 
+	it("does not let one old outlier set the room for twelve turns", () => {
+		// pandorum .211: the lead's 83k-character spawn call, nine turns back,
+		// and nothing else above 11k. Newest last, as a transcript runs.
+		const turns = [
+			turn(900),
+			turn(83_000),
+			turn(1_600),
+			turn(7_400),
+			turn(7_700),
+			turn(7_900),
+			turn(11_300),
+			turn(10_500),
+			turn(10_200),
+			turn(1_000),
+			turn(600),
+			turn(500),
+		];
+		expect(resolveObservedOutputTokens(turns, measure)).toBe(11_300);
+		// The same turn among the newest three still counts in full.
+		expect(
+			resolveObservedOutputTokens(
+				[...turns.slice(2), turn(83_000), turn(500)],
+				measure,
+			),
+		).toBe(83_000);
+	});
+
 	it("says nothing until there is a pattern", () => {
 		// The first turn of a session is routinely the smallest it will produce,
 		// and sizing a whole session's budget off it is how the second turn

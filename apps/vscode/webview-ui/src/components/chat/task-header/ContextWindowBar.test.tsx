@@ -1,7 +1,7 @@
 import type { ContextBreakdown } from "@shared/ExtensionMessage"
 import { render, screen } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
-import { CONTEXT_SEGMENT_COLORS, ContextWindowBar, contextWindowSegments } from "./ContextWindowBar"
+import { CONTEXT_SEGMENT_COLORS, ContextWindowBar, compactAtTitle, contextWindowSegments } from "./ContextWindowBar"
 
 /** pandorum's own numbers, from a 65,536-token window on 2026-09-19. */
 const PANDORUM: ContextBreakdown = {
@@ -76,5 +76,34 @@ describe("the context bar", () => {
 		expect(bar.children).toHaveLength(1)
 		expect(bar.children[0].getAttribute("data-segment")).toBe("total")
 		expect((bar.children[0] as HTMLElement).style.width).toBe(`${(30_000 / 65_536) * 100}%`)
+	})
+})
+
+// pandorum .211: the bar read half full and the lead compacted, because one
+// 83k-character tool call held half the window back for the reply. The bar
+// shows where it compacts, from core's own number.
+describe("the compaction marker", () => {
+	it("marks where the conversation compacts, and says why there", () => {
+		render(
+			<ContextWindowBar
+				breakdown={{ ...PANDORUM, compactAtTokens: 64_000, replyReserveTokens: 64_000 }}
+				max={128_000}
+				used={60_000}
+			/>,
+		)
+		const marker = screen.getByTestId("context-window-compact-at")
+		expect(marker.style.left).toBe("calc(50% - 1px)")
+		expect(marker.title).toBe(
+			"Compacts at 64,000 tokens (50% of the window); 64,000 tokens are held back for the next reply, sized from the largest recent turns",
+		)
+	})
+
+	it("draws no marker when core did not say", () => {
+		render(<ContextWindowBar breakdown={PANDORUM} max={128_000} used={60_000} />)
+		expect(screen.queryByTestId("context-window-compact-at")).toBeNull()
+	})
+
+	it("says the share without a reserve when none was sent", () => {
+		expect(compactAtTitle(115_200, 128_000)).toBe("Compacts at 115,200 tokens (90% of the window)")
 	})
 })
