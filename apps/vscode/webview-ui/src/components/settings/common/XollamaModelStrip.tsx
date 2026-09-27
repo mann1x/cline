@@ -113,11 +113,16 @@ export function describeXollamaModel(status: XollamaModelStatusResponse): string
 		return `Plain model with ${seats}, but served by ${status.engine}, which has no PolyKV. Nothing is pooled.`
 	}
 	// Seats are pools alive at once (xollama model-settings.mdx, 509024be): a
-	// lead that books a window holds 2, each concurrent swarm tree 3.
+	// lead that books a window holds 2, each concurrent swarm tree 3, and a
+	// continuation compaction freezes the lead into one more. eleven2go,
+	// 2026-09-27: with 5 seats a lead and one agent tree took all of them and
+	// the lead's compaction was refused "pool seq-id reservoir exhausted".
 	const room =
 		status.clientPools < 5
-			? ` A lead that books a window holds 2 seats and each concurrent swarm 3, so ${status.clientPools} ${status.clientPools === 1 ? "seat is" : "seats are"} short of a lead and a swarm together (5); a swarm then gets fewer layers and shares less.`
-			: ""
+			? ` A lead that books a window holds 2 seats, each concurrent swarm 3 and a lead's compaction 1 more, so ${status.clientPools} ${status.clientPools === 1 ? "seat is" : "seats are"} short of a lead and a swarm together (5); a swarm then gets fewer layers and shares less.`
+			: status.clientPools < 6
+				? ` A lead and a swarm take all ${status.clientPools}; a lead that compacts while its swarm runs needs one more (6), or its compaction runs without a frozen pool and prefills the transcript again.`
+				: ""
 	return `Plain model with ${seats} for Cerebriline: it shares the system prompt and tools of every conversation through PolyKV.${room}`
 }
 
