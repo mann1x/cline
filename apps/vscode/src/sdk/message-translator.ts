@@ -33,7 +33,13 @@ import {
 	parseOpencotiWindowUnavailable,
 	type MessageWithMetadata as SdkMessage,
 } from "@cline/llms"
-import { type AgentEvent, formatDisplayUserInput, type ProviderErrorClass, type RequestTimings } from "@cline/shared"
+import {
+	type AgentEvent,
+	formatDisplayUserInput,
+	isToolInputProgressUpdate,
+	type ProviderErrorClass,
+	type RequestTimings,
+} from "@cline/shared"
 import { COMMAND_OUTPUT_STRING } from "@shared/combineCommandSequences"
 import type {
 	ClineApiReqInfo,
@@ -589,6 +595,12 @@ function applySpawnAgentUpdate(entry: SubagentStatusItem, updateData: Record<str
 	// Stopped at its iteration cap, waiting for the lead; or resumed.
 	if ("awaitingLead" in updateData) applySubagentIterationCap(entry, updateData)
 	if (typeof updateData.genTps === "number" && Number.isFinite(updateData.genTps)) entry.genTps = updateData.genTps
+	// The stretch it is in -- prefill, queued on the server, compacting,
+	// writing a tool call -- so the row can say what a silence is.
+	const phase = updateData.phase as { name?: unknown; detail?: unknown } | undefined
+	if (phase && typeof phase.name === "string") {
+		entry.phase = { name: phase.name, ...(typeof phase.detail === "string" ? { detail: phase.detail } : {}) }
+	}
 	// Ended, on its own: a batch or swarm member's row finishes
 	// when that agent does, not with the call. Until then a done
 	// agent sat on a "running" row, its output showing, until the
@@ -3094,6 +3106,13 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 		}
 
 		case "content_update": {
+			// A tool call's arguments still streaming, before the tool exists:
+			// progress for an agent's own row (core's subagent-progress), and
+			// never a spawn tool's report -- the lead writing a spawn_agent
+			// call would otherwise be read as its agents' progress.
+			if (isToolInputProgressUpdate(event.update)) {
+				break
+			}
 			// spawn_agent progress updates → emit say:"subagent" with live stats.
 			// The SDK's spawn_agent tool may emit content_update events with
 			// sub-agent progress (iterations, tool calls, usage). We translate

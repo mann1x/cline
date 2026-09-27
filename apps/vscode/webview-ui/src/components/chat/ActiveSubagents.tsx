@@ -8,7 +8,7 @@ import { TaskServiceClient } from "@/services/grpc-client"
 import { subagentCompactionDetail, subagentCompactionText } from "./subagentCompactions"
 import { subagentCapText, subagentOracleText, subagentOracleTitle } from "./subagentControls"
 import { subagentIdentity, subagentModelLabel, subagentSamplingText, subagentSamplingTitle } from "./subagentIdentity"
-import { useSubagentLiveness } from "./subagentLiveness"
+import { isBusySilence, subagentPhaseLabel, useSubagentLiveness } from "./subagentLiveness"
 import { useCurrentWarnings } from "./subagentWarning"
 
 /**
@@ -162,13 +162,24 @@ function AgentDetail({
 }) {
 	const identity = subagentIdentity(agent.index, agent.agentName)
 	const node = nodeNameOf(agent)
-	const doing = agent.latestToolCall?.trim() || (agent.status === "pending" ? "queued" : "thinking")
+	const doing =
+		agent.latestToolCall?.trim() ||
+		(agent.status === "pending" ? "queued" : (subagentPhaseLabel(agent.phase) ?? "waiting for the model"))
 	const tools = `${agent.toolCalls} tool${agent.toolCalls === 1 ? "" : "s"}`
 	const compactions = subagentCompactionText(agent)
 	// A speed is only shown while output is arriving; with the deltas stopped
 	// the last figure is history, and the agent is idle (#77).
 	const liveness = useSubagentLiveness(agent)
-	const tps = agent.status === "running" && agent.genTps ? (liveness.tpsIdle ? "idle" : `~${agent.genTps} tok/s`) : ""
+	// "idle" only where a stop is news: through a prefill or a compaction the
+	// output is expected to stop, and the phase already says why.
+	const tps =
+		agent.status === "running" && agent.genTps
+			? liveness.tpsIdle
+				? isBusySilence(agent.phase)
+					? ""
+					: "idle"
+				: `~${agent.genTps} tok/s`
+			: ""
 	const silent = agent.status === "running" ? liveness.silentForSec : undefined
 	const model = subagentModelLabel(agent)
 	const sampling = subagentSamplingText(agent.sampling)
@@ -235,13 +246,20 @@ function AgentDetail({
 					</span>
 				)}
 				<span className="min-w-0 flex-1 truncate font-mono opacity-70">{doing}</span>
-				{silent !== undefined && (
-					<span
-						className={`shrink-0 tabular-nums ${WARN_TEXT}`}
-						title="Nothing has been reported by this agent for a while">
-						no activity for {silent}s
-					</span>
-				)}
+				{silent !== undefined &&
+					(isBusySilence(agent.phase) ? (
+						<span
+							className="shrink-0 tabular-nums opacity-70"
+							title="No output, and none expected: the server or a compaction is working">
+							{silent}s
+						</span>
+					) : (
+						<span
+							className={`shrink-0 tabular-nums ${WARN_TEXT}`}
+							title="Nothing has been reported by this agent for a while: no tokens, no tool call, no phase change">
+							no activity for {silent}s
+						</span>
+					))}
 				{node && <span className="max-w-[8rem] shrink-0 truncate opacity-70">on {node}</span>}
 				{tps && <span className="shrink-0 tabular-nums opacity-70">{tps}</span>}
 				<button

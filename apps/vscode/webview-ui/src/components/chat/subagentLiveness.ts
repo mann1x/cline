@@ -31,6 +31,8 @@ export function subagentActivityKey(agent: SubagentStatusItem): string {
 		agent.latestToolCall ?? "",
 		agent.latestOutput ?? "",
 		agent.genTps ?? 0,
+		agent.phase?.name ?? "",
+		agent.phase?.detail ?? "",
 		agent.activity?.length ?? 0,
 		lastActivity?.at ?? 0,
 	])
@@ -98,4 +100,65 @@ export function useSubagentLiveness(agent: SubagentStatusItem, now: () => number
 	}, [running])
 
 	return subagentLivenessAt(seen.current as SubagentLivenessSeen, at)
+}
+
+/**
+ * What the agent is doing, in a few words, from the phase core reports.
+ *
+ * The row used to say "thinking" whenever no tool was running -- on a node
+ * with thinking off, through a prefill, and while the model streamed a long
+ * tool call alike -- which named the one thing it was often not doing.
+ */
+export function subagentPhaseLabel(phase: SubagentStatusItem["phase"]): string | undefined {
+	if (!phase) {
+		return undefined
+	}
+	const detail = phase.detail ? ` ${phase.detail}` : ""
+	switch (phase.name) {
+		case "requesting":
+			return "waiting for the model"
+		case "server_queued":
+			return "queued on the server"
+		case "prefill":
+			return `prefilling${detail}`
+		case "generating":
+			return phase.detail ? `generating (${phase.detail})` : "generating"
+		case "thinking":
+			return "thinking"
+		case "writing":
+			return "writing"
+		case "writing_tool_call":
+			return `writing${detail} call`
+		case "tool":
+			return phase.detail ?? "running a tool"
+		case "compacting":
+			return "compacting its context"
+		case "condensing_thinking":
+			return "condensing its thinking"
+		case "recovering":
+			return "recovering a failed turn"
+		case "waiting_room":
+			return "waiting for room on the server"
+		default:
+			return undefined
+	}
+}
+
+/**
+ * Phases in which a silence is the work itself: the server is queuing,
+ * prefilling or generating without streaming, or a compaction is running.
+ * No output there is expected, and the row says which rather than warning.
+ */
+const BUSY_PHASES = new Set([
+	"server_queued",
+	"prefill",
+	"generating",
+	"compacting",
+	"condensing_thinking",
+	"recovering",
+	"waiting_room",
+])
+
+export function isBusySilence(phase: SubagentStatusItem["phase"]): boolean {
+	return phase !== undefined && BUSY_PHASES.has(phase.name)
 }

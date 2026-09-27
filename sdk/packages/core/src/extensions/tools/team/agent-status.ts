@@ -141,6 +141,8 @@ const PHASE_WORDS: Record<AgentPhase, string> = {
 	generating: "generating",
 	thinking: "thinking",
 	writing: "writing its answer",
+	writing_tool_call:
+		"writing a tool call (its arguments are streaming; no text output while it does)",
 	tool: "running a tool",
 	compacting:
 		"COMPACTING its context: a summary call, no output and zero throughput until it ends -- progress, not a hang",

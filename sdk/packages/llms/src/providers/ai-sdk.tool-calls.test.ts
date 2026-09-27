@@ -404,3 +404,57 @@ describe("a tool name the provider mis-sliced", () => {
 		expect(repaired).toBeNull();
 	});
 });
+
+describe("a tool call's arguments while they stream", () => {
+	// A model with thinking off that answers in tool calls streams no text and
+	// no reasoning; without this, the turn it spends writing a long call is
+	// silence to everything that watches it.
+	it("are reported as progress before the call, which arrives whole", async () => {
+		const chunk = (delta: unknown, finish: string | null = null) =>
+			`data: ${JSON.stringify({
+				id: "cmpl-1",
+				object: "chat.completion.chunk",
+				created: 1,
+				model: "test-model",
+				choices: [{ index: 0, delta, finish_reason: finish }],
+			})}\n\n`;
+		const body =
+			chunk({
+				role: "assistant",
+				tool_calls: [
+					{
+						index: 0,
+						id: "call_1",
+						type: "function",
+						function: { name: "run_commands", arguments: "" },
+					},
+				],
+			}) +
+			chunk({
+				tool_calls: [{ index: 0, function: { arguments: '{"commands":' } }],
+			}) +
+			chunk({
+				tool_calls: [{ index: 0, function: { arguments: '["ls"]}' } }],
+			}) +
+			chunk({}, "tool_calls") +
+			"data: [DONE]\n\n";
+
+		const events = await streamToolCallEvents(body, [RUN_COMMANDS_TOOL]);
+
+		const progress = events.filter(
+			(event) => event.type === "tool-input-progress",
+		);
+		expect(progress.length).toBeGreaterThanOrEqual(1);
+		expect(progress[0]).toMatchObject({
+			toolCallId: "call_1",
+			toolName: "run_commands",
+		});
+		const first = progress[0] as { inputChars: number; deltas: number };
+		expect(first.inputChars).toBeGreaterThan(0);
+		expect(first.deltas).toBeGreaterThan(0);
+		const at = (type: string) =>
+			events.findIndex((event) => event.type === type);
+		expect(at("tool-input-progress")).toBeLessThan(at("tool-call-delta"));
+		expect(findToolInput(events)).toEqual({ commands: ["ls"] });
+	});
+});

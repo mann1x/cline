@@ -58,6 +58,7 @@ import {
 	TASK_PROVIDER_REQUEST_STARTED_EVENT,
 	TASK_PROVIDER_STREAM_FAILED_EVENT,
 	TASK_PROVIDER_STREAM_STARTED_EVENT,
+	TOOL_INPUT_PROGRESS_KIND,
 	TOOL_REJECTION_SUFFIX,
 	trimNonEmpty,
 	unparsedToolCallInText,
@@ -2894,6 +2895,27 @@ export class AgentRuntime {
 						metadata: event.metadata,
 					});
 					reasoningLoop = reasoningLoopGuard?.push(event.text) ?? undefined;
+					break;
+				}
+				case "tool-input-progress": {
+					// Observational: the call is assembled from `tool-call-delta`
+					// alone. This only says that its arguments are streaming.
+					await this.emit({
+						type: "tool-updated",
+						snapshot: this.snapshot(),
+						iteration: this.state.iteration,
+						toolCall: {
+							type: "tool-call",
+							toolCallId: event.toolCallId,
+							toolName: event.toolName ?? "tool",
+							input: undefined,
+						},
+						update: {
+							kind: TOOL_INPUT_PROGRESS_KIND,
+							inputChars: event.inputChars,
+							deltas: event.deltas,
+						},
+					});
 					break;
 				}
 				case "tool-call-delta": {

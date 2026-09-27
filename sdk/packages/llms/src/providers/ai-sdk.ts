@@ -1244,6 +1244,13 @@ function buildRecoverableToolErrorMetadata(input: {
 	});
 }
 
+/**
+ * How often a streaming tool call's progress is reported. Each report travels
+ * to every agent row and the hub's event stream, so per-token would be a flood;
+ * this is often enough that a live call never reads as idle.
+ */
+export const TOOL_INPUT_PROGRESS_MS = 500;
+
 function resolveAiSdkSystemPrompt(
 	request: GatewayStreamRequest,
 ): string | undefined {
@@ -1746,10 +1753,64 @@ async function* emitAiSdkEvents(
 	// error parts are matched by ID because some providers omit the
 	// providerExecuted flag on the result half of the pair.
 	const observationalProviderToolCallIds = new Set<string>();
+	// A tool call's arguments as they stream, per call: reported as progress
+	// so a turn spent writing one long call reads as work, not silence.
+	const toolInputProgress = new Map<
+		string,
+		{ toolName?: string; chars: number; deltas: number; reportedAt: number }
+	>();
 
 	try {
 		if (stream.fullStream) {
 			for await (const part of stream.fullStream) {
+				if (
+					part.type === "tool-input-start" ||
+					part.type === "tool-input-delta"
+				) {
+					const id =
+						(part.id as string | undefined) ??
+						(part.toolCallId as string | undefined);
+					if (!id) {
+						continue;
+					}
+					let progress = toolInputProgress.get(id);
+					if (!progress) {
+						progress = {
+							chars: 0,
+							deltas: 0,
+							reportedAt: Number.NEGATIVE_INFINITY,
+						};
+						toolInputProgress.set(id, progress);
+					}
+					if (typeof part.toolName === "string") {
+						progress.toolName = part.toolName;
+					}
+					const delta =
+						part.type === "tool-input-delta"
+							? (part.delta as unknown)
+							: undefined;
+					if (typeof delta === "string" && delta.length > 0) {
+						firstContentAt ??= Date.now();
+						progress.chars += delta.length;
+						progress.deltas += 1;
+					}
+					const at = Date.now();
+					if (
+						progress.deltas > 0 &&
+						at - progress.reportedAt >= TOOL_INPUT_PROGRESS_MS
+					) {
+						progress.reportedAt = at;
+						yield {
+							type: "tool-input-progress",
+							toolCallId: id,
+							...(progress.toolName ? { toolName: progress.toolName } : {}),
+							inputChars: progress.chars,
+							deltas: progress.deltas,
+						};
+						progress.deltas = 0;
+					}
+					continue;
+				}
 				if (part.type === "text-delta") {
 					const text =
 						(part.textDelta as string | undefined) ??

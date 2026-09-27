@@ -6,7 +6,11 @@ import {
 	type PolykvReleaseResult,
 	releasePolykvAgent,
 } from "@cline/llms";
-import type { AgentEvent, TeamAgentActivity } from "@cline/shared";
+import {
+	type AgentEvent,
+	isToolInputProgressUpdate,
+	type TeamAgentActivity,
+} from "@cline/shared";
 import {
 	COMPACTION_CAUSES,
 	type CompactionCause,
@@ -360,6 +364,7 @@ export type AgentPhase =
 	| "generating"
 	| "thinking"
 	| "writing"
+	| "writing_tool_call"
 	| "tool"
 	| "compacting"
 	| "condensing_thinking"
@@ -540,6 +545,11 @@ export function createSubagentProgress(
 	// it is doing.
 	let text = "";
 	let reasoning = "";
+	// The tool call it is writing, while its arguments stream: a model with
+	// thinking off that answers in tool calls streams no text and no
+	// reasoning, and its longest turns -- an `editor` call carrying a whole
+	// file -- read as an idle agent without this.
+	let toolDraft: string | undefined;
 	let lastReport = Number.NEGATIVE_INFINITY;
 	// Generation speed, measured over each report window. A streamed delta is
 	// one token as the engines here send them (llama.cpp and ollama stream per
@@ -574,11 +584,12 @@ export function createSubagentProgress(
 		// A forced report ends a block: whatever comes next starts after a model
 		// round trip, which is not generation time.
 		windowStart = force ? Number.NaN : at;
-		const latestOutput = text.trim() ? text : reasoning;
+		const latestOutput = toolDraft ?? (text.trim() ? text : reasoning);
 		if (latestOutput.trim()) {
 			emitUpdate?.({
 				latestOutput: latestOutput.trim(),
-				latestOutputKind: text.trim() ? "text" : "reasoning",
+				latestOutputKind:
+					toolDraft !== undefined || text.trim() ? "text" : "reasoning",
 				...(genTps !== undefined ? { genTps } : {}),
 			});
 		}
@@ -627,6 +638,9 @@ export function createSubagentProgress(
 			}
 			// Its turns, for the lead's status: iterations used against its cap.
 			if (event.type === "iteration_start") {
+				// A call written last turn and never started (a refused parse)
+				// is not what it is doing now.
+				toolDraft = undefined;
 				enter({ name: "requesting" });
 				emitUpdate({ iterations: event.iteration });
 				return;
@@ -676,6 +690,23 @@ export function createSubagentProgress(
 				reportOutput(true);
 				return;
 			}
+			// A tool call's arguments streaming, before the tool starts: work,
+			// counted as generation like any other delta.
+			if (
+				event.type === "content_update" &&
+				event.contentType === "tool" &&
+				isToolInputProgressUpdate(event.update)
+			) {
+				const name = event.toolName ?? "tool";
+				enter({ name: "writing_tool_call", detail: name });
+				if (Number.isNaN(windowStart)) {
+					windowStart = now();
+				}
+				deltas += event.update.deltas;
+				toolDraft = `Writing ${name} call: ${Intl.NumberFormat("en-US").format(event.update.inputChars)} characters`;
+				reportOutput(false);
+				return;
+			}
 			// A tool ended: a sub-agent between tools is thinking rather than
 			// running the last one it finished, so the row stops naming it
 			// (`null` clears it). Only for a tool this observer saw start, and
@@ -704,6 +735,7 @@ export function createSubagentProgress(
 			// speed window: time spent running a tool is not generation.
 			text = "";
 			reasoning = "";
+			toolDraft = undefined;
 			deltas = 0;
 			windowStart = Number.NaN;
 			enter({ name: "tool", detail: event.toolName });

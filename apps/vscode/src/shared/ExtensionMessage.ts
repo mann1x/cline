@@ -543,6 +543,13 @@ export interface SubagentStatusItem {
 	/** Tokens per second it is generating at, measured over the last couple of seconds. */
 	genTps?: number
 	/**
+	 * The stretch it is in, as core's progress observer names it: `requesting`,
+	 * `server_queued`, `prefill`, `generating`, `thinking`, `writing`,
+	 * `writing_tool_call`, `tool`, `compacting`, `condensing_thinking`,
+	 * `recovering`, `waiting_room`. What a silence on the row means.
+	 */
+	phase?: { name: string; detail?: string }
+	/**
 	 * How to stop this agent, while it is running.
 	 *
 	 * Sent by the spawn tool that registered it rather than rebuilt here: a

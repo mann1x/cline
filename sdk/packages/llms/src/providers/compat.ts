@@ -560,6 +560,9 @@ function toApiStreamChunk(
 			return { type: "text", id, text: event.text };
 		case "media":
 			return { type: "media", id, media: event.media };
+		case "tool-input-progress":
+			// Progress only: the legacy stream has no place for it.
+			return undefined;
 		case "tool-result":
 			// Model-tool activity is available through the AgentModel/AgentRuntime
 			// event path. The legacy ApiStream contract has no observational tool

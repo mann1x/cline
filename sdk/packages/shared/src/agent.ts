@@ -455,6 +455,29 @@ export interface ToolCallRejection {
 	tool?: string;
 }
 
+/**
+ * The `update` of a `tool-updated` event that reports a tool call's arguments
+ * still streaming (`tool-input-progress`), before the tool has started. Every
+ * reader of tool updates that is not watching progress must skip it.
+ */
+export const TOOL_INPUT_PROGRESS_KIND = "input_progress";
+
+export interface ToolInputProgressUpdate {
+	kind: typeof TOOL_INPUT_PROGRESS_KIND;
+	inputChars: number;
+	deltas: number;
+}
+
+export function isToolInputProgressUpdate(
+	update: unknown,
+): update is ToolInputProgressUpdate {
+	return (
+		typeof update === "object" &&
+		update !== null &&
+		(update as { kind?: unknown }).kind === TOOL_INPUT_PROGRESS_KIND
+	);
+}
+
 export type AgentModelEvent =
 	| { type: "text-delta"; text: string }
 	| { type: "media"; media: GeneratedMedia }
@@ -474,6 +497,21 @@ export type AgentModelEvent =
 			metadata?: unknown;
 			/** Set when execution is owned by AI SDK or the model provider. */
 			execution?: ModelToolExecution;
+	  }
+	| {
+			/**
+			 * A tool call's arguments are still streaming. Observational only --
+			 * the call itself arrives whole as `tool-call-delta` -- so a turn
+			 * spent writing one long call (an `editor` with a whole file in it)
+			 * is visible as work rather than as silence. Throttled at the source.
+			 */
+			type: "tool-input-progress";
+			toolCallId: string;
+			toolName?: string;
+			/** Argument characters streamed so far for this call. */
+			inputChars: number;
+			/** Streamed deltas since the previous progress event: tokens, near enough. */
+			deltas: number;
 	  }
 	| {
 			type: "tool-result";

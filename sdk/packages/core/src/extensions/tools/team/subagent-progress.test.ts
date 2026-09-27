@@ -597,3 +597,67 @@ describe("an agent's engine session going back", () => {
 		expect(log).not.toHaveBeenCalled();
 	});
 });
+
+describe("a tool call still being written", () => {
+	const progressOf = (toolName: string, inputChars: number, deltas: number) =>
+		({
+			type: "content_update",
+			contentType: "tool",
+			toolName,
+			toolCallId: "c1",
+			update: { kind: "input_progress", inputChars, deltas },
+		}) as AgentEvent;
+
+	// A node with thinking off answers in tool calls: no text, no reasoning.
+	// Its longest turn -- an editor call carrying the whole file -- showed
+	// "thinking", no output, and "no activity" while 61k tokens went by
+	// (swarm on pandorum, 2026-09-27).
+	it("is work: a phase, a line on the row, and a speed", () => {
+		const updates: Array<Record<string, unknown>> = [];
+		const phases: unknown[] = [];
+		let clock = 0;
+		const progress = createSubagentProgress(
+			(update) => {
+				const record = update as Record<string, unknown>;
+				if ("phase" in record) {
+					phases.push(record.phase);
+				}
+				collect(updates)(update);
+			},
+			undefined,
+			() => clock,
+		);
+		progress.observe(progressOf("editor", 400, 100));
+		clock += 2_000;
+		progress.observe(progressOf("editor", 12_345, 60));
+
+		expect(phases).toContainEqual({
+			name: "writing_tool_call",
+			detail: "editor",
+		});
+		expect(updates.at(-1)).toMatchObject({
+			latestOutput: "Writing editor call: 12,345 characters",
+			latestOutputKind: "text",
+			genTps: 30,
+		});
+	});
+
+	it("gives the line back to the tool once it starts", () => {
+		const updates: Array<Record<string, unknown>> = [];
+		let clock = 0;
+		const progress = createSubagentProgress(
+			collect(updates),
+			undefined,
+			() => clock,
+		);
+		progress.observe(progressOf("editor", 400, 10));
+		progress.observe(toolStart("editor"));
+		clock += 3_000;
+		progress.observe({
+			type: "content_start",
+			contentType: "text",
+			text: "done",
+		} as AgentEvent);
+		expect(updates.at(-1)?.latestOutput).toBe("done");
+	});
+});

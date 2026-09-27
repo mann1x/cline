@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest"
 import {
+	isBusySilence,
 	SUBAGENT_SILENT_MS,
 	SUBAGENT_TPS_IDLE_MS,
 	subagentActivityKey,
 	subagentLivenessAt,
 	subagentOutputKey,
+	subagentPhaseLabel,
 } from "./subagentLiveness"
 
 const agent = {
@@ -45,5 +47,26 @@ describe("a running sub-agent's liveness (#77)", () => {
 	it("treats a finished compaction as activity", () => {
 		const compacted = { ...agent, compactions: 1 }
 		expect(subagentActivityKey(compacted)).not.toBe(subagentActivityKey(agent))
+	})
+})
+
+describe("what the row says the agent is doing", () => {
+	it("names the phase instead of calling every pause thinking", () => {
+		expect(subagentPhaseLabel({ name: "requesting" })).toBe("waiting for the model")
+		expect(subagentPhaseLabel({ name: "writing_tool_call", detail: "editor" })).toBe("writing editor call")
+		expect(subagentPhaseLabel({ name: "prefill", detail: "12000/61000 tokens" })).toBe("prefilling 12000/61000 tokens")
+		expect(subagentPhaseLabel({ name: "tool", detail: "read_files" })).toBe("read_files")
+		expect(subagentPhaseLabel(undefined)).toBeUndefined()
+		expect(subagentPhaseLabel({ name: "something-new" })).toBeUndefined()
+	})
+
+	it("treats a silence as expected only where the server or a compaction is working", () => {
+		for (const name of ["prefill", "server_queued", "generating", "compacting", "waiting_room"]) {
+			expect(isBusySilence({ name })).toBe(true)
+		}
+		for (const name of ["requesting", "writing", "writing_tool_call", "thinking", "tool"]) {
+			expect(isBusySilence({ name })).toBe(false)
+		}
+		expect(isBusySilence(undefined)).toBe(false)
 	})
 })
