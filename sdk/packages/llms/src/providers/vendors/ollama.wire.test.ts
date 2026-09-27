@@ -28,6 +28,7 @@ import { describe, expect, it } from "vitest";
 import { readEngineTimings } from "../request-timings";
 import { createOllamaProviderModule } from "./ollama";
 import {
+	resetXollamaProbes,
 	XOLLAMA_READ_ONLY_HEADER,
 	xollamaReadOnlyHeaders,
 	xollamaSessionHeaders,
@@ -365,5 +366,163 @@ describe("xOllama wire fields (real provider package)", () => {
 			],
 		);
 		expect(sentHeaders[0]?.has(XOLLAMA_READ_ONLY_HEADER)).toBe(false);
+	});
+
+	// The council answers a tool call with a lane-prefixed id and a plain
+	// "stop"; the lead must still see a tool call, under that id, and send its
+	// result back under it. The state-only chunk in front must not reach the
+	// stream as an empty message.
+	it("carries a council's tool call through under its own id, and the result back", async () => {
+		resetXollamaProbes();
+		const chats: OllamaChatRequest[] = [];
+		const toolCallAnswer = [
+			{
+				model: "omni-council",
+				created_at: "2024-01-01T00:00:00Z",
+				done: false,
+				council_chat_state: "AAA",
+				message: { role: "assistant", content: "" },
+			},
+			{
+				model: "omni-council",
+				created_at: "2024-01-01T00:00:00Z",
+				done: false,
+				message: {
+					role: "assistant",
+					content: "",
+					tool_calls: [
+						{
+							id: "r1:call_x",
+							function: { name: "read_files", arguments: { path: "a.ts" } },
+						},
+					],
+				},
+			},
+			{ ...DONE_CHUNK, model: "omni-council", council_chat_state: "BBB" },
+		];
+		const fetchStub = (async (input, init) => {
+			const url = typeof input === "string" ? input : String(input);
+			if (url.endsWith("/api/show")) {
+				return Response.json({ xollama: { council: { enabled: true } } });
+			}
+			if (url.endsWith("/api/xollama")) {
+				return Response.json({
+					xollama: true,
+					features: ["council_chat_state_v1", "council_tools_v1"],
+				});
+			}
+			const body = JSON.parse(init?.body as string) as OllamaChatRequest;
+			// The vendor's own capability probe is not a turn.
+			if (body.stream === false) {
+				return Response.json({ ...DONE_CHUNK, model: body.model });
+			}
+			chats.push(body);
+			const lines =
+				chats.length === 1 ? toolCallAnswer : [textChunk("ok"), DONE_CHUNK];
+			return new Response(
+				`${lines.map((l) => JSON.stringify(l)).join("\n")}\n`,
+				{
+					status: 200,
+					headers: { "content-type": "application/x-ndjson" },
+				},
+			);
+		}) as typeof fetch;
+		const module = await createOllamaProviderModule(
+			{
+				providerId: "xollama",
+				baseUrl: "http://gpu2:22434",
+				fetch: fetchStub,
+			} as GatewayResolvedProviderConfig,
+			{
+				provider: {
+					id: "xollama",
+					name: "xOllama",
+					defaultModelId: "",
+					models: [],
+				},
+				model: {
+					id: "omni-council",
+					name: "omni-council",
+					providerId: "xollama",
+				},
+			} as unknown as GatewayProviderContext,
+		);
+		const model = module.operations.language("omni-council") as LanguageModelV4;
+		const tools = [
+			{
+				type: "function" as const,
+				name: "read_files",
+				inputSchema: { type: "object" as const, properties: {} },
+			},
+		];
+		const first = await model.doStream({
+			prompt: userText("fix it"),
+			tools,
+			headers: xollamaSessionHeaders("lead"),
+		} as LanguageModelV4CallOptions);
+		const parts: LanguageModelV4StreamPart[] = [];
+		const reader = first.stream.getReader();
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			parts.push(value);
+		}
+
+		const call = parts.find((part) => part.type === "tool-call") as
+			| { toolCallId: string; toolName: string }
+			| undefined;
+		expect(call).toMatchObject({
+			toolCallId: "r1:call_x",
+			toolName: "read_files",
+		});
+		const finish = parts.find((part) => part.type === "finish") as {
+			finishReason: { unified: string };
+		};
+		expect(finish.finishReason.unified).toBe("tool-calls");
+		expect(chats[0]?.council_chat_state).toBe("");
+
+		const second = await model.doStream({
+			prompt: [
+				...userText("fix it"),
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool-call",
+							toolCallId: "r1:call_x",
+							toolName: "read_files",
+							input: { path: "a.ts" },
+						},
+					],
+				},
+				{
+					role: "tool",
+					content: [
+						{
+							type: "tool-result",
+							toolCallId: "r1:call_x",
+							toolName: "read_files",
+							output: { type: "text", value: "contents" },
+						},
+					],
+				},
+			],
+			tools,
+			headers: xollamaSessionHeaders("lead"),
+		} as LanguageModelV4CallOptions);
+		const drain = second.stream.getReader();
+		while (!(await drain.read()).done) {}
+
+		expect(chats[1]?.council_chat_state).toBe("BBB");
+		const assistant = chats[1]?.messages.find(
+			(m) => m.role === "assistant",
+		) as {
+			tool_calls?: Array<{ id?: string }>;
+		};
+		expect(assistant.tool_calls?.[0]?.id).toBe("r1:call_x");
+		expect(chats[1]?.messages.find((m) => m.role === "tool")).toMatchObject({
+			tool_call_id: "r1:call_x",
+			content: "contents",
+		});
 	});
 });

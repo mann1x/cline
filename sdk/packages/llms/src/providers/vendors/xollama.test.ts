@@ -319,3 +319,138 @@ describe("the Ollama vendor's stream config", () => {
 		).toBeUndefined();
 	});
 });
+
+describe("the council's state (council_chat_state_v1)", () => {
+	const ndjson = (lines: unknown[]) =>
+		new Response(`${lines.map((l) => JSON.stringify(l)).join("\n")}\n`, {
+			headers: { "content-type": "application/x-ndjson" },
+		});
+	/** A council server: what each chat request carried, and what it answers. */
+	const server = (
+		answers: unknown[][],
+		options: { features?: string[]; council?: boolean } = {},
+	) => {
+		const chats: Record<string, unknown>[] = [];
+		const wire = withXollamaRequestFields((async (url, init) => {
+			const path = String(url);
+			if (path.endsWith("/api/show")) {
+				return json({
+					xollama: { council: { enabled: options.council ?? true } },
+				});
+			}
+			if (path.endsWith("/api/xollama")) {
+				return json({
+					xollama: true,
+					features: options.features ?? ["council_chat_state_v1"],
+				});
+			}
+			chats.push(JSON.parse(String(init?.body)));
+			return ndjson(answers[chats.length - 1] ?? []);
+		}) as typeof fetch);
+		const turn = async (session?: string) => {
+			const response = await wire("http://gpu2:22434/api/chat", {
+				method: "POST",
+				headers: session ? { [XOLLAMA_SESSION_HEADER]: session } : {},
+				body: JSON.stringify({
+					model: "omni-council",
+					messages: [{ role: "user", content: "fix it" }],
+					tools: [{ type: "function", function: { name: "read_files" } }],
+				}),
+			});
+			return (await response.text())
+				.trim()
+				.split("\n")
+				.filter(Boolean)
+				.map((l) => JSON.parse(l));
+		};
+		return { chats, turn };
+	};
+
+	it("sends an empty state first, then the newest blob the server sent", async () => {
+		const { chats, turn } = server([
+			[
+				{
+					council_chat_state: "AAA",
+					message: { role: "assistant", content: "" },
+				},
+				{ message: { role: "assistant", content: "done." } },
+				{
+					done: true,
+					done_reason: "stop",
+					council_chat_state: "BBB",
+					message: { role: "assistant", content: "" },
+				},
+			],
+			[],
+		]);
+		const got = await turn("lead-1");
+		// The state-only chunk never reaches the chat; the done chunk does,
+		// without the blob.
+		expect(got).toEqual([
+			{ message: { role: "assistant", content: "done." } },
+			{
+				done: true,
+				done_reason: "stop",
+				message: { role: "assistant", content: "" },
+			},
+		]);
+		await turn("lead-1");
+		expect(chats.map((c) => c.council_chat_state)).toEqual(["", "BBB"]);
+	});
+
+	// #403: a connection dropped mid-turn resumes from the newest step.
+	it("keeps the newest blob of a turn that broke off", async () => {
+		const { chats, turn } = server([
+			[
+				{
+					council_chat_state: "after-plan",
+					message: { role: "assistant", content: "" },
+				},
+				{
+					council_chat_state: "after-r1",
+					message: { role: "assistant", content: "" },
+				},
+			],
+			[],
+		]);
+		await turn("lead-1");
+		await turn("lead-1");
+		expect(chats[1]?.council_chat_state).toBe("after-r1");
+	});
+
+	it("keeps one state per session", async () => {
+		const { chats, turn } = server([
+			[
+				{
+					done: true,
+					council_chat_state: "for-a",
+					message: { role: "assistant", content: "" },
+				},
+			],
+			[],
+		]);
+		await turn("lead-a");
+		await turn("lead-b");
+		expect(chats[1]?.council_chat_state).toBe("");
+	});
+
+	// The council is the lead's: an agent on the same model runs a plain chat
+	// (no state, so its tools do not reach the council; its thinking is kept).
+	it("sends no state for a delegated agent's turn", async () => {
+		const { chats, turn } = server([[]]);
+		await turn("lead-1~agent-abc123");
+		expect(chats[0]).not.toHaveProperty("council_chat_state");
+	});
+
+	it("sends no state to a server that does not resume councils", async () => {
+		const { chats, turn } = server([[]], { features: [] });
+		await turn("lead-1");
+		expect(chats[0]).not.toHaveProperty("council_chat_state");
+	});
+
+	it("sends no state for a plain model", async () => {
+		const { chats, turn } = server([[]], { council: false });
+		await turn("lead-1");
+		expect(chats[0]).not.toHaveProperty("council_chat_state");
+	});
+});

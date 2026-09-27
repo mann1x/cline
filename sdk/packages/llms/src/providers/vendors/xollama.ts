@@ -17,6 +17,17 @@
 // - `council_tags_v1` (#387): each thinking chunk of a council turn carries a
 //   top-level `council: {role, index, round}`, counted from 0, and holds one
 //   member's text. Content, state and done chunks carry none.
+// - `council_chat_state_v1` (#403): a council turn sends `council_chat_state`
+//   ("" the first time, then the newest blob the server sent). The server
+//   answers with the blob on a chunk of its own after each step, and on the
+//   done chunk. Resending the same request with the newest blob resumes a
+//   broken-off turn; a missing or foreign blob is a fresh start, never an
+//   error.
+// - `council_tools_v1` (#404, #406): tools reach the council only on a
+//   request that also carries `council_chat_state`. Without it a request with
+//   tools is a plain chat. Calls come back in `message.tool_calls` with
+//   member-keyed ids (`r1:…`, `s:…`) and `done_reason: "stop"`; the results go
+//   back as `tool` messages with those ids.
 
 import type { AgentToolDefinition, BasicLogger } from "@cline/shared";
 import { engineSessionId } from "./polykv-swarm";
@@ -33,6 +44,33 @@ export const XOLLAMA_SESSION_HEADER = "x-cerebriline-engine-session";
 
 /** The names of the request's read-only tools, as a JSON array. */
 export const XOLLAMA_READ_ONLY_HEADER = "x-cerebriline-read-only-tools";
+
+/** The feature that makes a council turn resumable and tool-capable. */
+export const XOLLAMA_COUNCIL_STATE_FEATURE = "council_chat_state_v1";
+
+/**
+ * A delegated agent's engine session: `~agent-`, `~teammate-` or a swarm
+ * worker's `:swarm:`. Its turns are plain chats even on a council model; the
+ * council is the lead's (user ruling, 2026-09-27).
+ */
+export function isDelegatedEngineSession(session: string | undefined): boolean {
+	return session !== undefined && /~agent-|~teammate-|:swarm:/.test(session);
+}
+
+/**
+ * The newest council state per server, model and session. Kept in memory: a
+ * lost blob is a fresh start on the server's side, not an error, so a reload
+ * costs at most a council step redone.
+ */
+const COUNCIL_STATES = new Map<string, string>();
+
+function councilStateKey(
+	root: string,
+	model: string,
+	session: string | undefined,
+): string {
+	return `${origin(root)}::${model}::${session ?? ""}`;
+}
 
 /** What `GET /api/xollama` answers. */
 export interface XollamaServerInfo {
@@ -139,6 +177,7 @@ export function readXollamaModel(
 export function resetXollamaProbes(): void {
 	serverInfo.clear();
 	modelInfo.clear();
+	COUNCIL_STATES.clear();
 }
 
 /** The session to name on the wire for a request's session. */
@@ -345,20 +384,50 @@ export class CouncilDeliberation {
 	}
 }
 
-/** Each tagged thinking chunk of an NDJSON chat stream, given its heading. */
-function withCouncilHeadings(response: Response): Response {
-	if (
-		!response.ok ||
-		!response.body ||
-		!/ndjson/i.test(response.headers.get("content-type") ?? "")
-	) {
+/**
+ * The council state a chunk carries, taken out of it. `drop` is a chunk that
+ * carried nothing else -- no text, thinking, tool call, or end -- and has no
+ * business reaching the chat.
+ */
+function takeCouncilState(chunk: Record<string, unknown>): {
+	state?: string;
+	rest: Record<string, unknown>;
+	drop: boolean;
+} {
+	if (typeof chunk.council_chat_state !== "string") {
+		return { rest: chunk, drop: false };
+	}
+	const { council_chat_state: state, ...rest } = chunk;
+	const message = rest.message as
+		| { content?: unknown; thinking?: unknown; tool_calls?: unknown }
+		| undefined;
+	const empty =
+		rest.done !== true &&
+		!(typeof message?.content === "string" && message.content !== "") &&
+		!(typeof message?.thinking === "string" && message.thinking !== "") &&
+		!(Array.isArray(message?.tool_calls) && message.tool_calls.length > 0);
+	return { state: state as string, rest, drop: empty };
+}
+
+/**
+ * Each tagged thinking chunk of an NDJSON chat stream, given its heading, and
+ * the council state taken out of the stream and handed to `onState`.
+ */
+function withCouncilHeadings(
+	response: Response,
+	onState?: (state: string) => void,
+): Response {
+	if (!response.ok || !response.body) {
 		return response;
+	}
+	if (!/ndjson/i.test(response.headers.get("content-type") ?? "")) {
+		return onState ? withCouncilStateFromJson(response, onState) : response;
 	}
 	const deliberation = new CouncilDeliberation();
 	const decoder = new TextDecoder();
 	const encoder = new TextEncoder();
 	let partial = "";
-	const line = (raw: string): string => {
+	const line = (raw: string): string | undefined => {
 		if (raw.trim() === "") {
 			return raw;
 		}
@@ -371,6 +440,20 @@ function withCouncilHeadings(response: Response): Response {
 		} catch {
 			return raw;
 		}
+		let changed = false;
+		if (
+			typeof (chunk as Record<string, unknown>).council_chat_state === "string"
+		) {
+			const taken = takeCouncilState(chunk as Record<string, unknown>);
+			if (taken.state !== undefined) {
+				onState?.(taken.state);
+			}
+			if (taken.drop) {
+				return undefined;
+			}
+			chunk = taken.rest as typeof chunk;
+			changed = true;
+		}
 		const tag = councilTagOf(chunk.council);
 		if (tag && typeof chunk.message?.thinking === "string") {
 			return JSON.stringify({
@@ -381,26 +464,63 @@ function withCouncilHeadings(response: Response): Response {
 				},
 			});
 		}
-		return raw;
+		return changed ? JSON.stringify(chunk) : raw;
 	};
+	const kept = (lines: string[]): string[] =>
+		lines.map(line).filter((l): l is string => l !== undefined);
 	const body = response.body.pipeThrough(
 		new TransformStream<Uint8Array, Uint8Array>({
 			transform(bytes, controller) {
 				partial += decoder.decode(bytes, { stream: true });
 				const lines = partial.split("\n");
 				partial = lines.pop() ?? "";
-				if (lines.length > 0) {
-					controller.enqueue(encoder.encode(`${lines.map(line).join("\n")}\n`));
+				const out = kept(lines);
+				if (out.length > 0) {
+					controller.enqueue(encoder.encode(`${out.join("\n")}\n`));
 				}
 			},
 			flush(controller) {
 				partial += decoder.decode();
 				if (partial !== "") {
-					controller.enqueue(encoder.encode(line(partial)));
+					const last = line(partial);
+					if (last !== undefined) {
+						controller.enqueue(encoder.encode(last));
+					}
 				}
 			},
 		}),
 	);
+	return new Response(body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers: response.headers,
+	});
+}
+
+/** A non-streamed chat answer: its council state kept, and taken out of it. */
+function withCouncilStateFromJson(
+	response: Response,
+	onState: (state: string) => void,
+): Response {
+	const read = response.text().then((text) => {
+		try {
+			const parsed = JSON.parse(text) as Record<string, unknown>;
+			const taken = takeCouncilState(parsed);
+			if (taken.state === undefined) {
+				return text;
+			}
+			onState(taken.state);
+			return JSON.stringify(taken.rest);
+		} catch {
+			return text;
+		}
+	});
+	const body = new ReadableStream<Uint8Array>({
+		async start(controller) {
+			controller.enqueue(new TextEncoder().encode(await read));
+			controller.close();
+		},
+	});
 	return new Response(body, {
 		status: response.status,
 		statusText: response.statusText,
@@ -434,14 +554,29 @@ export function withXollamaRequestFields(
 			XOLLAMA_READ_ONLY_HEADER,
 		]);
 		let body = init.body;
+		let stateKey: string | undefined;
 		try {
 			const parsed = JSON.parse(body) as Record<string, unknown>;
 			if (Array.isArray(parsed.messages)) {
+				// A delegated agent's turn is a plain chat, even on a council
+				// model: its history keeps its thinking and it sends no state.
 				const council =
-					root !== undefined && typeof parsed.model === "string"
+					root !== undefined &&
+					typeof parsed.model === "string" &&
+					!isDelegatedEngineSession(session)
 						? (await readXollamaModel(root, parsed.model, baseFetch))
 								?.council === true
 						: false;
+				// Only where the server resumes: an older xOllama took no state.
+				const stateful =
+					council &&
+					root !== undefined &&
+					(await probeXollama(root, baseFetch))?.features.includes(
+						XOLLAMA_COUNCIL_STATE_FEATURE,
+					) === true;
+				if (stateful && root !== undefined) {
+					stateKey = councilStateKey(root, parsed.model as string, session);
+				}
 				const names = readOnlyNames(readOnly);
 				// A body with nothing to add goes out as it came, byte for byte.
 				if (council || session !== undefined || names.size > 0) {
@@ -452,6 +587,10 @@ export function withXollamaRequestFields(
 						...(parsed.tools !== undefined
 							? { tools: markReadOnly(parsed.tools, names) }
 							: {}),
+						// "" the first time; then the newest blob, byte for byte.
+						...(stateKey !== undefined
+							? { council_chat_state: COUNCIL_STATES.get(stateKey) ?? "" }
+							: {}),
 					});
 				}
 			}
@@ -461,6 +600,19 @@ export function withXollamaRequestFields(
 			);
 		}
 		const response = await baseFetch(input, { ...init, headers, body });
-		return root === undefined ? response : withCouncilHeadings(response);
+		if (root === undefined) {
+			return response;
+		}
+		const key = stateKey;
+		// Every blob seen is kept, the last one winning: a turn that breaks
+		// off mid-deliberation resumes from the newest step it reached.
+		return withCouncilHeadings(
+			response,
+			key === undefined
+				? undefined
+				: (state) => {
+						COUNCIL_STATES.set(key, state);
+					},
+		);
 	}) as typeof fetch;
 }
