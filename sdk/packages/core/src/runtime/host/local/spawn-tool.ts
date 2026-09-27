@@ -5,7 +5,7 @@ import {
 } from "@cline/llms";
 import type { AgentEvent, AgentTool, TurnFaultRecovery } from "@cline/shared";
 import {
-	isPolykvProvider,
+	isPolykvWorkerProvider,
 	readPolykvCapacity,
 	releasePolykvPool,
 	snapshotPolykvSession,
@@ -663,7 +663,7 @@ export function createSessionSwarmTool(
 			});
 			const pooled =
 				!attached &&
-				isPolykvProvider({
+				isPolykvWorkerProvider({
 					providerId: connection.providerId,
 					baseUrl: connection.baseUrl,
 					polykv: (connection.providerConfig as { polykv?: never } | undefined)

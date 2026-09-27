@@ -114,6 +114,18 @@ function buildGatewayProviderOptions(
 		if (config.polykvLeadPool === false) {
 			options.polykvLeadPool = false;
 		}
+	} else if (
+		normalizeProviderId(config.providerId) === "xollama" &&
+		config.polykvWorker
+	) {
+		// A swarm agent on xOllama: the provider attaches it through the model's
+		// engine where the model pools clients, and sends it as a plain chat
+		// where it does not. The lead's own pool is the provider's business
+		// there, so nothing else of opencoti's session plumbing is lifted.
+		options.polykvWorker = {
+			...config.polykvWorker,
+			sessionId: config.engineSessionId || sessionId || auxiliarySessionId(),
+		};
 	}
 
 	if (config.providerId === "bedrock") {

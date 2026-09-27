@@ -39,7 +39,32 @@ function parseNumber(value: string | number | undefined): number | undefined {
 	return typeof parsed === "number" && Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
 }
 
-export const PolykvSection = ({ providerId }: { providerId: string }) => {
+/**
+ * Where the section is shown. xOllama drives the same engine for a plain model
+ * with client pool seats, but only some of opencoti's controls reach it: the
+ * lead's pool, the window, the agents' pools and their admission policy, the
+ * retry bound and swarms. Compaction on the engine's pressure and as a
+ * continuation, and the prefix pin, are opencoti's alone for now, and are not
+ * offered where they would read as set and do nothing.
+ */
+export type PolykvSectionEngine = "opencoti" | "xollama"
+
+export const PolykvSection = ({
+	providerId,
+	engine = "opencoti",
+	windowNegotiation = true,
+}: {
+	providerId: string
+	engine?: PolykvSectionEngine
+	/**
+	 * Whether the server books windows (xOllama's context_window_v1). Without
+	 * it there is no window to book, and no swarm: a pooled worker is counted
+	 * against the window its turns report.
+	 */
+	windowNegotiation?: boolean
+}) => {
+	const opencoti = engine === "opencoti"
+	const windows = opencoti || windowNegotiation
 	const { config, write } = useProviderConfig(providerId as never)
 	// What this panel has sent and not yet seen answered.
 	//
@@ -133,26 +158,36 @@ export const PolykvSection = ({ providerId }: { providerId: string }) => {
 					size="default"
 				/>
 			</div>
-			<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
-				Pins the system prompt and tool schemas on the server so every turn attaches to them instead of re-sending them,
-				and lets the engine decide how many agents may run at once against real KV headroom. Needs a server started with{" "}
-				<code>--polykv-max-pools</code>.
-			</p>
+			{opencoti ? (
+				<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+					Pins the system prompt and tool schemas on the server so every turn attaches to them instead of re-sending
+					them, and lets the engine decide how many agents may run at once against real KV headroom. Needs a server
+					started with <code>--polykv-max-pools</code>.
+				</p>
+			) : (
+				<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+					Shares this model's system prompt and tool schemas across every conversation, and runs agents on pools of the
+					model's engine, through xOllama. Uses the seats the model keeps for clients (<code>session.client_pools</code>
+					).
+				</p>
+			)}
 
 			{enabled && (
 				<div className="mt-[10px] pl-[10px] border-l border-(--vscode-panel-border)">
-					{toggle(
-						"pinPrefix",
-						"Keep the prefix resident",
-						"An unpinned pool that goes 60 seconds without a request is swept, and the next turn quietly pays the full prefill again.",
-						true,
-					)}
-					{numberField(
-						"compactionPressureThreshold",
-						"Compact at pool pressure",
-						"Default: 0.85",
-						"How full the engine must say the pool is before compacting, 0 to 1. This is the one figure in the compaction path that is measured rather than estimated — it comes from the thing holding the cells.",
-					)}
+					{opencoti &&
+						toggle(
+							"pinPrefix",
+							"Keep the prefix resident",
+							"An unpinned pool that goes 60 seconds without a request is swept, and the next turn quietly pays the full prefill again.",
+							true,
+						)}
+					{opencoti &&
+						numberField(
+							"compactionPressureThreshold",
+							"Compact at pool pressure",
+							"Default: 0.85",
+							"How full the engine must say the pool is before compacting, 0 to 1. This is the one figure in the compaction path that is measured rather than estimated — it comes from the thing holding the cells.",
+						)}
 					{numberField(
 						"targetTpsPerSession",
 						"Per-session throughput floor",
@@ -177,39 +212,45 @@ export const PolykvSection = ({ providerId }: { providerId: string }) => {
 						"Default: 0 (off)",
 						"Caps how many slots may be prefilling at once. Prompt processing is what stands between a new session and its first token, so a backlog here looks like the pool being full when it is not.",
 					)}
-					{toggle(
-						"dynamicContextSize",
-						"Book a context window",
-						"Asks the server to guarantee this model's context size for the conversation, so another session cannot take the cells out from under it. Off, the engine decides and a busy server serves the request best-effort; on, a server without room refuses at admission instead.",
-					)}
-					{polykv.dynamicContextSize === true &&
+					{windows &&
+						toggle(
+							"dynamicContextSize",
+							"Book a context window",
+							"Asks the server to guarantee this model's context size for the conversation, so another session cannot take the cells out from under it. Off, the engine decides and a busy server serves the request best-effort; on, a server without room refuses at admission instead.",
+						)}
+					{windows &&
+						polykv.dynamicContextSize === true &&
 						numberField(
 							"contextFloor",
 							"Never go below",
 							"Default: none — all or nothing",
 							"The smallest window still worth opening with, in tokens. If the full size is not free the server grants the largest that is, down to this; below it the conversation is refused rather than opened too small to be useful. Leave empty to accept only the full size.",
 						)}
-					{toggle(
-						"continuationCompaction",
-						"Compact as a continuation",
-						"Writes the compaction summary as the conversation's next turn and reviews it on frozen pools of the session, so the transcript is never sent again and nothing is booked beyond what each call needs. Off re-sends the transcript as text to a summarizer of its own.",
-						true,
-					)}
+					{opencoti &&
+						toggle(
+							"continuationCompaction",
+							"Compact as a continuation",
+							"Writes the compaction summary as the conversation's next turn and reviews it on frozen pools of the session, so the transcript is never sent again and nothing is booked beyond what each call needs. Off re-sends the transcript as text to a summarizer of its own.",
+							true,
+						)}
 					{toggle(
 						"overcommit",
 						"Bypass admission",
 						"Sends every request past the admission gate. The engine stops protecting the throughput floor, so sessions can make each other slow — deliberate, and visible here rather than silent.",
 					)}
-					{toggle(
-						"swarm",
-						"Allow swarms",
-						"Lets the model fan a task out across several agents that share a snapshot of this session's context and report one merged digest. Off by default: a swarm spends several agents' worth of tokens on a single turn.",
-					)}
+					{windows &&
+						toggle(
+							"swarm",
+							"Allow swarms",
+							"Lets the model fan a task out across several agents that share a snapshot of this session's context and report one merged digest. Off by default: a swarm spends several agents' worth of tokens on a single turn.",
+						)}
 					{/* What the configured server is actually doing, read once.
 					    It answers the question every field above raises — did
 					    any of this take effect — which no amount of settings
 					    copy can. */}
-					<PolykvStatusStrip providerId={providerId} />
+					{/* On xOllama the model strip above carries it: the status is
+					    the selected model's engine, not the server's root. */}
+					{opencoti && <PolykvStatusStrip providerId={providerId} />}
 				</div>
 			)}
 		</div>

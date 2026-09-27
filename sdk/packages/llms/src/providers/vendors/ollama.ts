@@ -935,6 +935,11 @@ export async function createOllamaProviderModule(
 					context.config?.options as Record<string, unknown> | undefined,
 					context.model?.contextWindow,
 				),
+				pooling:
+					(
+						(context.config?.options as Record<string, unknown> | undefined)
+							?.polykv as { enabled?: unknown } | undefined
+					)?.enabled !== false,
 			})
 		: serverFetch;
 	// A swarm agent on a plain xOllama model with pool seats runs as it would

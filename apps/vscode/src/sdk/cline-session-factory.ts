@@ -1426,10 +1426,12 @@ export async function buildDelegatedAgentConnection(
 	// floor is measured at the wire, where the system prompt, the tool schemas
 	// and the output cap are exact (`opencoti-agent-window.ts`). The Escalation
 	// tab resolves through here too and has no slider, so the expert is left
-	// as it was. Ollama and llama.cpp have no negotiation: the window is what
-	// is sent, and the share is inert.
+	// as it was. xOllama negotiates the same way on a plain model
+	// (context_window_v1), and its swarm workers are sized from the share too.
+	// Ollama and llama.cpp have no negotiation: the window is what is sent, and
+	// the share is inert.
 	const agentWindowOverride =
-		label === "Agents" && sdkProviderId === "opencoti"
+		label === "Agents" && (sdkProviderId === "opencoti" || sdkProviderId === "xollama")
 			? {
 					agentWindow: {
 						sharePercent: normalizeAgentWindowShare(

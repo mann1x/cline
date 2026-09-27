@@ -344,6 +344,26 @@ describe("the lead's pool on a plain xOllama model", () => {
 		).toContain("<environment>");
 	});
 
+	it("builds no pool where the profile switched PolyKV off", async () => {
+		const xo = stubXollama({ clientPools: 2 });
+		const wire = withXollamaRequestFields(xo.fetchImpl, { pooling: false });
+		await wire("http://gpu2:22434/api/chat", {
+			method: "POST",
+			headers: { [XOLLAMA_SESSION_HEADER]: "task-off" },
+			body: JSON.stringify({
+				model: "m",
+				messages: [
+					{ role: "system", content: system },
+					{ role: "user", content: "fix it" },
+				],
+			}),
+		});
+		expect(xo.chats[0]).not.toHaveProperty("placement");
+		expect(
+			xo.calls.some((c) => c.query.get("endpoint") === "polykv/pools"),
+		).toBe(false);
+	});
+
 	it("gives a delegated agent no lead pool", async () => {
 		const xo = stubXollama({ clientPools: 2 });
 		await chat(xo.fetchImpl, "task-1~agent-2");

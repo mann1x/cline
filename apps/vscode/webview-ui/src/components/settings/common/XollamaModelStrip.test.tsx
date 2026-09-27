@@ -80,6 +80,23 @@ describe("the window fields", () => {
 		expect(config.write).toHaveBeenCalledWith({ polykv: { dynamicContextSize: true } })
 	})
 
+	it("become the whole PolyKV section on a plain model with seats", async () => {
+		read.mockResolvedValue(status({ clientPools: 2, engine: "opencoti", windowNegotiation: true }))
+		render(<XollamaModelStrip modelId="m" />)
+		await screen.findByLabelText("PolyKV")
+		expect(screen.getByLabelText("Book a context window")).toBeTruthy()
+		expect(screen.getByLabelText("Allow swarms")).toBeTruthy()
+		expect(screen.getByText("Per-session throughput floor")).toBeTruthy()
+		// opencoti's alone: offered here they would read as set and do nothing.
+		expect(screen.queryByLabelText("Compact as a continuation")).toBeNull()
+		expect(screen.queryByLabelText("Keep the prefix resident")).toBeNull()
+		expect(screen.queryByText("Compact at pool pressure")).toBeNull()
+		// The model's engine status is the strip's, not the server root's.
+		expect(ModelsServiceClient.readPolykvStatus).not.toHaveBeenCalled()
+		fireEvent.click(screen.getByLabelText("Allow swarms"))
+		expect(config.write).toHaveBeenCalledWith({ polykv: { swarm: true } })
+	})
+
 	it("are not offered on a council, or by a server that cannot negotiate", async () => {
 		read.mockResolvedValue(status({ council: true, windowNegotiation: true }))
 		const council = render(<XollamaModelStrip modelId="c" />)

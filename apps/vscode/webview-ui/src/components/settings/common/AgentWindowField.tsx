@@ -22,7 +22,8 @@ const STEP_PERCENT = 5
  *
  * On the wire it is `num_ctx` = the node's window and `num_ctx_min` = this
  * floor: the engine grants the largest window that fits, never below it, and
- * below it the agent waits. Only opencoti negotiates; on Ollama and llama.cpp
+ * below it the agent waits. opencoti negotiates, and xOllama on a plain model
+ * (in `placement`, context_window_v1); on Ollama and llama.cpp
  * the node's window is simply what is sent, so the slider is shown disabled
  * and says so.
  *
@@ -35,7 +36,7 @@ export const AgentWindowField = ({
 	negotiates,
 }: {
 	providerId: string
-	/** Whether this node's provider negotiates a window (opencoti). */
+	/** Whether this node's provider negotiates a window (opencoti, xOllama). */
 	negotiates: boolean
 }) => {
 	const { config, write } = useProviderConfig(providerId as never)

@@ -834,7 +834,12 @@ async function leadPlacement(
  */
 export function withXollamaRequestFields(
 	baseFetch: typeof fetch,
-	options?: { logger?: BasicLogger; window?: XollamaWindowOptions },
+	options?: {
+		logger?: BasicLogger;
+		window?: XollamaWindowOptions;
+		/** The profile's PolyKV switch: off, the lead builds no pool. */
+		pooling?: boolean;
+	},
 ): typeof fetch {
 	return (async (input, init) => {
 		const session = headerValue(init?.headers, XOLLAMA_SESSION_HEADER);
@@ -883,6 +888,7 @@ export function withXollamaRequestFields(
 				const lead: LeadAttach | undefined =
 					!council &&
 					!placedOutside &&
+					options?.pooling !== false &&
 					model !== undefined &&
 					model.clientPools > 0 &&
 					root !== undefined &&
@@ -970,7 +976,12 @@ export function withXollamaRequestFields(
 						...parsed,
 						...(placement !== undefined ? { placement } : {}),
 						...(council ? { messages: withoutThinking(parsed.messages) } : {}),
-						...(session !== undefined ? { session_id: session } : {}),
+						// A placed body's session is the worker layer's: the engine
+						// session its pools and owner are charged to.
+						...(session !== undefined &&
+						!(placedOutside && typeof parsed.session_id === "string")
+							? { session_id: session }
+							: {}),
 						...(parsed.tools !== undefined
 							? { tools: markReadOnly(parsed.tools, names) }
 							: {}),

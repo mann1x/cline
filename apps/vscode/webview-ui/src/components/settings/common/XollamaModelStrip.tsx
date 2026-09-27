@@ -5,6 +5,7 @@ import { Switch } from "@/components/ui/switch"
 import { useProviderConfig } from "@/hooks/useProviderConfig"
 import { ModelsServiceClient } from "@/services/grpc-client"
 import { DebouncedTextField } from "./DebouncedTextField"
+import { PolykvSection } from "./PolykvSection"
 import { PolykvStatusStrip } from "./PolykvStatusStrip"
 
 type PolykvSettings = NonNullable<NonNullable<ReturnType<typeof useProviderConfig>["config"]>["polykv"]>
@@ -114,6 +115,15 @@ export function describeXollamaModel(status: XollamaModelStatusResponse): string
 	return `Plain model with ${seats} for Cerebriline: it shares the system prompt and tools of every conversation through PolyKV.`
 }
 
+/**
+ * Whether Cerebriline drives this model's pools: a plain model with seats for
+ * it, on an engine that has pools (or one not started yet, which on a model
+ * with seats is opencoti's).
+ */
+export function xollamaPoolsClients(status: XollamaModelStatusResponse): boolean {
+	return !status.council && status.clientPools > 0 && (status.engine === undefined || status.engine === "opencoti")
+}
+
 export const XollamaModelStrip = ({ modelId }: { modelId?: string }) => {
 	const [status, setStatus] = useState<XollamaModelStatusResponse | undefined>()
 
@@ -144,7 +154,11 @@ export const XollamaModelStrip = ({ modelId }: { modelId?: string }) => {
 	return (
 		<div className="mt-[6px] text-xs text-(--vscode-descriptionForeground)" data-testid="xollama-model-strip">
 			<div>{describeXollamaModel(status)}</div>
-			{!status.council && status.windowNegotiation && <XollamaWindowFields />}
+			{xollamaPoolsClients(status) ? (
+				<PolykvSection engine="xollama" providerId="xollama" windowNegotiation={status.windowNegotiation} />
+			) : (
+				!status.council && status.windowNegotiation && <XollamaWindowFields />
+			)}
 			{status.polykv && <PolykvStatusStrip providerId="xollama" status={status.polykv} />}
 		</div>
 	)

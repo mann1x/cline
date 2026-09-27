@@ -16,7 +16,7 @@ import {
 import { z } from "zod";
 import type { OracleSpawnWrapper } from "../../../runtime/atomic/oracle";
 import { createDelegatedStruggleSupervisor } from "../../../runtime/safety/worker-struggle";
-import { isPolykvProvider } from "../../context/polykv-session";
+import { isPolykvWorkerProvider } from "../../context/polykv-session";
 import { createDelegatedAgentCheck, describeAgentCheck } from "./agent-check";
 import {
 	AGENT_CONTROLS_NOTE,
@@ -657,7 +657,7 @@ export function createConfiguredAgentTools(
 						kind: "subagent",
 						prompt: config.systemPrompt,
 						engineSessionId,
-						...(isPolykvProvider({
+						...(isPolykvWorkerProvider({
 							providerId: runtimeConfig.providerId,
 							baseUrl: runtimeConfig.baseUrl,
 							polykv: (

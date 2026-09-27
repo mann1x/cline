@@ -17,6 +17,8 @@ import {
 	endAtTokenBoundary,
 	ensurePolykvPool,
 	isPolykvProvider,
+	isPolykvWorkerProvider,
+	polykvPoolsConfirmed,
 	polykvSaysCompact,
 	readPolykvAllocation,
 	readPolykvCapacity,
@@ -1252,10 +1254,13 @@ describe("the window compaction sizes against", () => {
 		);
 	});
 
-	it("belongs to opencoti alone", () => {
+	it("belongs to the engines that grant one: opencoti and xOllama", () => {
 		recordPolykvGrantedWindow("conv", 163_840);
 		expect(resolveGrantedContextWindow("conv", "ollama", 262_144)).toBe(
 			undefined,
+		);
+		expect(resolveGrantedContextWindow("conv", "xollama", 262_144)).toBe(
+			163_840,
 		);
 	});
 });
@@ -1271,5 +1276,60 @@ describe("closing a session that booked a window", () => {
 			providerConfig: provider(stub.fetch),
 		});
 		expect(getPolykvGrantedWindow("conv")).toBe(163_840);
+	});
+});
+
+describe("swarm agents on xOllama", () => {
+	const xollama = (show: Record<string, unknown>, features: string[]) =>
+		(async (input: unknown) => {
+			const path = new URL(String(input)).pathname;
+			const body =
+				path === "/api/show"
+					? { xollama: show }
+					: path === "/api/xollama"
+						? { xollama: true, features }
+						: { error: "no route" };
+			return new Response(JSON.stringify(body), {
+				status: path === "/api/show" || path === "/api/xollama" ? 200 : 404,
+				headers: { "content-type": "application/json" },
+			});
+		}) as unknown as typeof fetch;
+
+	it("makes every xOllama agent a worker candidate, and no lead", () => {
+		expect(isPolykvWorkerProvider({ providerId: "xollama" })).toBe(true);
+		expect(
+			isPolykvWorkerProvider({
+				providerId: "xollama",
+				polykv: { enabled: false },
+			}),
+		).toBe(false);
+		// The lead-session pool code speaks to an opencoti root.
+		expect(
+			isPolykvProvider({ providerId: "xollama", baseUrl: "http://x" }),
+		).toBe(false);
+	});
+
+	it("offers a swarm on a plain model with client seats and window negotiation", async () => {
+		const plain = { council: { enabled: false }, session: { client_pools: 2 } };
+		// A fresh server per case: the probes are cached per origin and model.
+		let server = 0;
+		const confirmed = (
+			show: Record<string, unknown>,
+			features = ["context_window_v1"],
+		) =>
+			polykvPoolsConfirmed({
+				providerId: "xollama",
+				baseUrl: `http://xo${++server}.lan:22434`,
+				modelId: "m",
+				fetch: xollama(show, features),
+			});
+		expect(await confirmed(plain)).toBe(true);
+		expect(await confirmed({ ...plain, council: { enabled: true } })).toBe(
+			false,
+		);
+		expect(await confirmed({ ...plain, session: { client_pools: 0 } })).toBe(
+			false,
+		);
+		expect(await confirmed(plain, [])).toBe(false);
 	});
 });

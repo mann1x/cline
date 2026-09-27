@@ -555,7 +555,10 @@ const ApiOptions = ({
 			    needs to the node's window. Shown on every node so the setting is
 			    findable; live only where the provider negotiates (opencoti). */}
 			{apiConfiguration && showModelOptions && isAgentNode && selectedProvider && (
-				<AgentWindowField negotiates={isOpencoti} providerId={selectedProvider} />
+				<AgentWindowField
+					negotiates={isOpencoti || (selectedProvider as string) === "xollama"}
+					providerId={selectedProvider}
+				/>
 			)}
 
 			{/* Every provider, for the same reason as the fields below: the tool

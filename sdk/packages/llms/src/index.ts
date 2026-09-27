@@ -347,6 +347,7 @@ export {
 	readXollamaModel,
 	resetXollamaProbes,
 	withXollamaAuth,
+	XOLLAMA_CONTEXT_WINDOW_FEATURE,
 	XOLLAMA_DEFAULT_BASE_URL,
 	type XollamaModelInfo,
 	type XollamaServerInfo,

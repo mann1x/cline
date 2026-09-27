@@ -170,6 +170,36 @@ describe("createAgentModelFromConfig", () => {
 	// Same lift, same failure shape: the PolyKV section is read off the options
 	// bag by the vendor, so a section that is never lifted into it configures
 	// nothing while sitting in providers.json looking configured.
+	// A swarm agent on xOllama: the provider decides per model whether it
+	// pools, so the worker spec has to reach it -- and nothing of the lead's
+	// opencoti session plumbing does.
+	it("lifts an xOllama swarm agent's worker spec, and only that", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+
+		createAgentModelFromConfig(
+			{
+				providerId: "xollama",
+				modelId: "m",
+				tools: [],
+				engineSessionId: "lead/1~agent-2",
+				polykvWorker: { group: "lead/1", layers: 2 },
+				providerConfig: { providerId: "xollama", modelId: "m" },
+			} as never,
+			undefined,
+		);
+
+		const [gateway] = gatewayMock.createGateway.mock.lastCall as unknown as [
+			{ providerConfigs: Array<{ options: Record<string, unknown> }> },
+		];
+		const options = gateway.providerConfigs[0]?.options;
+		expect(options?.polykvWorker).toEqual({
+			group: "lead/1",
+			layers: 2,
+			sessionId: "lead/1~agent-2",
+		});
+		expect(options?.polykvSessionId).toBeUndefined();
+	});
+
 	it("lifts the PolyKV section into the gateway options bag", async () => {
 		const { createAgentModelFromConfig } = await import("./handler-factory");
 

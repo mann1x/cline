@@ -23,7 +23,7 @@ import {
 import { z } from "zod";
 import type { OracleSpawnWrapper } from "../../../runtime/atomic/oracle";
 import { createDelegatedStruggleSupervisor } from "../../../runtime/safety/worker-struggle";
-import { isPolykvProvider } from "../../context/polykv-session";
+import { isPolykvWorkerProvider } from "../../context/polykv-session";
 import {
 	type AgentCheck,
 	type AgentOracleResult,
@@ -1338,7 +1338,7 @@ async function runSpawnedAgent(
 			knownModels: connection.knownModels,
 			maxIterations: maxIterations ?? provider.getRuntimeConfig().maxIterations,
 		});
-		const pooled = isPolykvProvider({
+		const pooled = isPolykvWorkerProvider({
 			providerId: connection.providerId,
 			baseUrl: connection.baseUrl,
 			polykv: (connection.providerConfig as { polykv?: never } | undefined)

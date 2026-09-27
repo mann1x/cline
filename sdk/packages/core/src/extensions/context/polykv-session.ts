@@ -16,9 +16,13 @@ import {
 	polykvEffectiveWindow,
 	polykvWorkerChargedTo,
 	probeOpencotiProps,
+	probeXollama,
 	readOpencotiKv,
+	readXollamaModel,
 	releasePolykvLead,
 	setPolykvSession,
+	XOLLAMA_CONTEXT_WINDOW_FEATURE,
+	XOLLAMA_DEFAULT_BASE_URL,
 } from "@cline/llms";
 import { type BasicLogger, hasPromptEnvironment } from "@cline/shared";
 
@@ -65,6 +69,8 @@ export const POLYKV_COMPACTION_PRESSURE = 0.85;
 export interface PolykvProviderConfig {
 	providerId?: string;
 	baseUrl?: string;
+	/** The model, where the provider pools per model (xOllama). */
+	modelId?: string;
 	headers?: Record<string, string>;
 	fetch?: typeof fetch;
 	/** The profile's PolyKV section. Absent means "never configured". */
@@ -111,9 +117,58 @@ export function isPolykvProvider(
  * the process, and an unreachable server answers `false`: "cannot ask" is not
  * "yes", which is the same reading the slot limit takes.
  */
+/**
+ * Whether a delegated agent on this profile runs as a swarm worker: opencoti
+ * with pooling on (see {@link isPolykvProvider}), or xOllama.
+ *
+ * xOllama is decided per model, and at the provider: a plain model with seats
+ * for client pools on a server that negotiates windows pools the agent through
+ * the model's engine, and any other model -- a council, one without seats --
+ * runs it as the plain chat it would have been. Only the worker is widened:
+ * the lead-session pool code in this module speaks to an opencoti root and has
+ * none on xOllama, where the provider builds the lead's pool itself.
+ */
+export function isPolykvWorkerProvider(
+	config: PolykvProviderConfig | undefined,
+): boolean {
+	return (
+		isPolykvProvider(config) ||
+		(config?.providerId !== undefined &&
+			normalizeProviderId(config.providerId) === "xollama" &&
+			config.polykv?.enabled !== false)
+	);
+}
+
+/** The xOllama half of {@link polykvPoolsConfirmed}: the model pools clients. */
+async function xollamaModelPools(
+	config: PolykvProviderConfig,
+): Promise<boolean> {
+	if (!config.modelId || config.polykv?.enabled === false) {
+		return false;
+	}
+	const baseUrl = config.baseUrl || XOLLAMA_DEFAULT_BASE_URL;
+	const fetchImpl = config.fetch ?? fetch;
+	const [model, server] = await Promise.all([
+		readXollamaModel(baseUrl, config.modelId, fetchImpl),
+		probeXollama(baseUrl, fetchImpl),
+	]);
+	return (
+		model !== undefined &&
+		!model.council &&
+		model.clientPools > 0 &&
+		server?.features.includes(XOLLAMA_CONTEXT_WINDOW_FEATURE) === true
+	);
+}
+
 export async function polykvPoolsConfirmed(
 	config: PolykvProviderConfig | undefined,
 ): Promise<boolean> {
+	if (
+		config?.providerId !== undefined &&
+		normalizeProviderId(config.providerId) === "xollama"
+	) {
+		return xollamaModelPools(config).catch(() => false);
+	}
 	if (!config || !isPolykvProvider(config)) {
 		return false;
 	}
@@ -547,9 +602,12 @@ export function resolveGrantedContextWindow(
 	providerId: string | undefined,
 	configuredWindow: number | undefined,
 ): number | undefined {
+	// xOllama records the window its engine granted a plain model's
+	// conversation (context_window_v1) under the same session.
 	if (
 		providerId === undefined ||
-		normalizeProviderId(providerId) !== "opencoti"
+		(normalizeProviderId(providerId) !== "opencoti" &&
+			normalizeProviderId(providerId) !== "xollama")
 	) {
 		return undefined;
 	}
