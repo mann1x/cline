@@ -3,6 +3,7 @@ import { createOpencotiFetch } from "./opencoti";
 import {
 	latestOpencotiPressure,
 	opencotiPressureState,
+	readOpencotiKv,
 	resetOpencotiPressure,
 } from "./opencoti-kv-pressure";
 import { resetPolykvAvailability, resetPolykvSessions } from "./polykv";
@@ -76,6 +77,8 @@ function engine(
 		resize?: Array<(body: Record<string, unknown>) => Response>;
 		/** Answers to worker turns, in order; the last repeats. Default: 200. */
 		worker?: Array<() => Response>;
+		/** `/kv` allocation rows, as the engine would list them now. */
+		kvRows?: () => Array<{ session_id: string; window: number; used: number }>;
 	} = {},
 ) {
 	const calls: Call[] = [];
@@ -94,7 +97,10 @@ function engine(
 			return json({ features: options.features ?? FEATURES });
 		}
 		if (url.pathname === "/kv") {
-			return json({ session_ctx_max: options.maximum ?? 262_144 });
+			return json({
+				session_ctx_max: options.maximum ?? 262_144,
+				...(options.kvRows ? { allocations: options.kvRows() } : {}),
+			});
 		}
 		if (url.pathname === "/apply-template") {
 			return json({
@@ -279,6 +285,34 @@ describe("placing agents on owners", () => {
 		]);
 		expect(polykvWorkerChargedTo("agent-a")).toBe(OWNER_1);
 		expect(polykvWorkerChargedTo("agent-b")).toBe(OWNER_1);
+		expect(polykvWorkerChargedTo("agent-c")).toBe(OWNER_2);
+	});
+
+	// pandorum .211: owners reserved a node window per agent and sat 14-46%
+	// used while 34 agents waited for a new owner. Placed by what the engine
+	// measured, the owner that has the room takes the agent.
+	it("places an agent on a full-by-count owner that the engine measures mostly empty", async () => {
+		const stub = engine({
+			maximum: 131_072,
+			kvRows: () => [{ session_id: OWNER_1, window: 131_072, used: 30_000 }],
+		});
+		await send(stub, "agent-a");
+		await send(stub, "agent-b");
+		await readOpencotiKv("http://engine/v1", stub.fetch);
+		expect((await send(stub, "agent-c")).status).toBe(200);
+		expect(stub.opens()).toHaveLength(1);
+		expect(polykvWorkerChargedTo("agent-c")).toBe(OWNER_1);
+	});
+
+	it("opens another owner when the measured room is short of the first turn", async () => {
+		const stub = engine({
+			maximum: 131_072,
+			kvRows: () => [{ session_id: OWNER_1, window: 131_072, used: 128_000 }],
+		});
+		await send(stub, "agent-a");
+		await send(stub, "agent-b");
+		await readOpencotiKv("http://engine/v1", stub.fetch);
+		await send(stub, "agent-c");
 		expect(polykvWorkerChargedTo("agent-c")).toBe(OWNER_2);
 	});
 

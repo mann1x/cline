@@ -1,4 +1,5 @@
 import {
+	latestOpencotiKv,
 	noteOpencotiRefusalPressure,
 	opencotiPendingResize,
 	readOpencotiKv,
@@ -342,6 +343,12 @@ interface OwnerShard {
 	growRefusedAt?: number;
 	/** When a grow of it last landed (`Date.now()`). */
 	grownAt?: number;
+	/**
+	 * Agents placed here that have not sent a turn yet -> the cells their
+	 * first turn needs. The engine's `used` does not count them until they
+	 * do; see {@link ownerMeasuredRoom}.
+	 */
+	firstNeed?: Map<string, number>;
 }
 
 interface SwarmGroup {
@@ -1560,6 +1567,85 @@ function ownerCapacity(shard: OwnerShard): number {
 	);
 }
 
+/**
+ * How old a `/kv` reading may be and still place agents by what the owner
+ * measurably holds. Older, the reservation count decides, as before.
+ */
+export const POLYKV_MEASURED_PLACEMENT_MAX_AGE_MS = 30_000;
+
+/** Characters per token for a newcomer's first-turn estimate: conservative. */
+const FIRST_TURN_CHARS_PER_TOKEN = 3;
+
+/** The reply room counted for a first turn that states no cap. */
+const FIRST_TURN_DEFAULT_REPLY = 8_192;
+
+/**
+ * The cells an agent's first turn takes on its owner: its prompt and its
+ * reply cap, never more than the node's window for one agent.
+ */
+export function polykvFirstTurnCells(
+	body: Record<string, unknown>,
+	perAgentAsk?: number,
+): number {
+	const prompt = Math.ceil(
+		(JSON.stringify(body.messages ?? []).length +
+			JSON.stringify(body.tools ?? []).length) /
+			FIRST_TURN_CHARS_PER_TOKEN,
+	);
+	const options = body.options as Record<string, unknown> | undefined;
+	const cap =
+		typeof body.max_tokens === "number"
+			? body.max_tokens
+			: typeof options?.num_predict === "number"
+				? options.num_predict
+				: FIRST_TURN_DEFAULT_REPLY;
+	const need = prompt + Math.max(0, cap);
+	return perAgentAsk !== undefined && perAgentAsk > 0
+		? Math.min(need, perAgentAsk)
+		: need;
+}
+
+/**
+ * The cells an owner can still give a newcomer, by what the engine measured
+ * it holding: its window, less its `used` on a fresh `/kv` reading, less the
+ * first turns of agents placed here that have not sent one yet. `undefined`
+ * with no fresh reading.
+ *
+ * pandorum .211: owners reserved a whole node window per agent, so 1,048,576
+ * cells placed 16 agents while the owners held 14-46% of their windows, and
+ * 34 agents waited 72 minutes for room that was booked and empty. The engine
+ * refuses a worker its owner cannot fit on every request (`session allocation
+ * full`), so placing by use is safe: an agent that outgrows its owner is
+ * grown for, moved, or waits (user ruling, 2026-09-27).
+ */
+function ownerMeasuredRoom(
+	group: SwarmGroup,
+	shard: OwnerShard,
+	now = Date.now(),
+): number | undefined {
+	if (shard.window === undefined) {
+		return undefined;
+	}
+	const reading = latestOpencotiKv(group.root);
+	const row = reading?.bySession?.[shard.sessionId];
+	if (
+		!reading ||
+		!row ||
+		now - reading.at > POLYKV_MEASURED_PLACEMENT_MAX_AGE_MS
+	) {
+		return undefined;
+	}
+	let pending = 0;
+	for (const [agent, need] of shard.firstNeed ?? []) {
+		if (!shard.agents.has(agent) || polykvWorkerStarted(agent)) {
+			shard.firstNeed?.delete(agent);
+			continue;
+		}
+		pending += need;
+	}
+	return Math.min(shard.window, row.window) - row.used - pending;
+}
+
 /** Resize targets are whole multiples of this, as the engine's grants are. */
 const OWNER_RESIZE_ALIGN = 256;
 const alignUp = (value: number): number =>
@@ -1690,18 +1776,35 @@ async function placeAgent(
 	body: Record<string, unknown>,
 	signal: AbortSignal | null | undefined,
 ): Promise<OwnerShard | undefined> {
+	const need = (shard: OwnerShard) =>
+		polykvFirstTurnCells(body, shard.perAgent?.ask);
 	const take = (shard: OwnerShard): OwnerShard => {
 		const previous = group.assigned.get(spec.sessionId);
 		if (previous && previous !== shard) {
 			previous.agents.delete(spec.sessionId);
 			previous.uses?.delete(spec.sessionId);
+			previous.firstNeed?.delete(spec.sessionId);
 		}
 		group.assigned.set(spec.sessionId, shard);
 		shard.agents.add(spec.sessionId);
+		if (!polykvWorkerStarted(spec.sessionId)) {
+			shard.firstNeed ??= new Map();
+			shard.firstNeed.set(spec.sessionId, need(shard));
+		}
 		return shard;
 	};
-	const roomy = (shard: OwnerShard) =>
-		!shard.closed && shard.agents.size < ownerCapacity(shard);
+	// The reservation count, or -- on a fresh reading -- what the owner
+	// measurably has left for this agent's first turn.
+	const roomy = (shard: OwnerShard) => {
+		if (shard.closed) {
+			return false;
+		}
+		if (shard.agents.size < ownerCapacity(shard)) {
+			return true;
+		}
+		const room = ownerMeasuredRoom(group, shard);
+		return room !== undefined && room >= need(shard);
+	};
 	while (true) {
 		const open = [...group.shards]
 			.reverse()
