@@ -172,6 +172,9 @@ message XollamaModelStatusResponse {
   // The engine's PolyKV status, read only for a loaded plain opencoti model
   // with seats: the one case in which the client drives PolyKV there.
   optional PolykvStatusResponse polykv = 5;
+  // The server negotiates a session's window (context_window_v1): a plain
+  // model's conversation can book one through placement.num_ctx.
+  bool window_negotiation = 6;
 }
 
 message OllamaAccountResponse {

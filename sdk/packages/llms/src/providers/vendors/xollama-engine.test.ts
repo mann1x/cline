@@ -1,11 +1,13 @@
 import { markPromptEnvironment } from "@cline/shared";
 import { afterEach, describe, expect, it } from "vitest";
-import { resetPolykvAvailability } from "./polykv";
+import { getPolykvGrantedWindow, resetPolykvAvailability } from "./polykv";
 import { releaseAllPolykvLeads } from "./polykv-lead";
 import {
+	readXollamaWindowOptions,
 	resetXollamaProbes,
 	withXollamaRequestFields,
 	XOLLAMA_SESSION_HEADER,
+	type XollamaWindowOptions,
 } from "./xollama";
 import {
 	parseXollamaEngineUrl,
@@ -26,7 +28,14 @@ const json = (value: unknown, status = 200) =>
  * chat that renders one delimited block per turn.
  */
 function stubXollama(
-	options: { clientPools?: number; council?: boolean; loaded?: boolean } = {},
+	options: {
+		clientPools?: number;
+		council?: boolean;
+		loaded?: boolean;
+		features?: string[];
+		/** The window each chat is granted, as X-Context-Window. */
+		grant?: number;
+	} = {},
 ) {
 	const calls: Array<{
 		path: string;
@@ -87,7 +96,7 @@ function stubXollama(
 		if (url.pathname === "/api/xollama") {
 			return json({
 				xollama: true,
-				features: ["client_placement_v1", "chat_render_v1"],
+				features: options.features ?? ["client_placement_v1", "chat_render_v1"],
 			});
 		}
 		if (url.pathname === "/api/engine") {
@@ -123,7 +132,12 @@ function stubXollama(
 				`${JSON.stringify({ done: true, message: { role: "assistant", content: "ok" } })}\n`,
 				{
 					status: 200,
-					headers: { "content-type": "application/x-ndjson" },
+					headers: {
+						"content-type": "application/x-ndjson",
+						...(options.grant !== undefined
+							? { "x-context-window": String(options.grant) }
+							: {}),
+					},
 				},
 			);
 		}
@@ -311,5 +325,122 @@ describe("the lead's pool on a plain xOllama model", () => {
 		const xo = stubXollama({ clientPools: 2 });
 		await chat(xo.fetchImpl, "task-1~agent-2");
 		expect(xo.chats[0]).not.toHaveProperty("placement");
+	});
+});
+
+describe("the conversation's window on xOllama", () => {
+	const WINDOW = ["client_placement_v1", "chat_render_v1", "context_window_v1"];
+	const turn = async (
+		fetchImpl: typeof fetch,
+		session: string,
+		window: XollamaWindowOptions,
+	) => {
+		const wire = withXollamaRequestFields(fetchImpl, { window });
+		const response = await wire("http://gpu2:22434/api/chat", {
+			method: "POST",
+			headers: { [XOLLAMA_SESSION_HEADER]: session },
+			body: JSON.stringify({
+				model: "m",
+				options: { num_ctx: 65536, num_predict: 4096 },
+				messages: [
+					{ role: "system", content: "You are Cline." },
+					{ role: "user", content: "fix it" },
+				],
+			}),
+		});
+		await response.text();
+	};
+
+	it("asks in placement, never through options.num_ctx, and keeps what was granted", async () => {
+		const xo = stubXollama({ features: WINDOW, grant: 32768 });
+		const window = {
+			dynamicContextSize: true,
+			contextFloor: 8192,
+			contextWindow: 65536,
+		};
+		await turn(xo.fetchImpl, "win-lead-1", window);
+		expect(xo.chats[0]).toMatchObject({
+			placement: { num_ctx: 65536, num_ctx_min: 8192 },
+			options: { num_ctx: 65536 },
+		});
+		expect(getPolykvGrantedWindow("win-lead-1")).toBe(32768);
+
+		// The resume rule: exactly the window it holds, or refuse.
+		await turn(xo.fetchImpl, "win-lead-1", window);
+		expect((xo.chats[1] as { placement?: unknown }).placement).toEqual({
+			num_ctx: 32768,
+			num_ctx_min: 32768,
+		});
+	});
+
+	it("is all or nothing without a floor", async () => {
+		const xo = stubXollama({ features: WINDOW });
+		await turn(xo.fetchImpl, "win-lead-2", {
+			dynamicContextSize: true,
+			contextWindow: 65536,
+		});
+		expect((xo.chats[0] as { placement?: unknown }).placement).toEqual({
+			num_ctx: 65536,
+			num_ctx_min: 65536,
+		});
+	});
+
+	it("floors an agent at its node's share, measured off the request", async () => {
+		const xo = stubXollama({ features: WINDOW });
+		await turn(xo.fetchImpl, "task~agent-1", {
+			contextWindow: 65536,
+			agentWindow: { contextWindow: 65536, sharePercent: 50 },
+		});
+		const placement = (
+			xo.chats[0] as { placement: { num_ctx: number; num_ctx_min: number } }
+		).placement;
+		expect(placement.num_ctx).toBe(65536);
+		expect(placement.num_ctx_min).toBeGreaterThan(0);
+		expect(placement.num_ctx_min).toBeLessThan(65536);
+	});
+
+	it("asks nothing where the profile did not, or the server cannot", async () => {
+		const off = stubXollama({ features: WINDOW, grant: 4096 });
+		await turn(off.fetchImpl, "win-lead-3", { contextWindow: 65536 });
+		expect(off.chats[0]).not.toHaveProperty("placement");
+		// A grant that comes back anyway is still the session's window.
+		expect(getPolykvGrantedWindow("win-lead-3")).toBe(4096);
+
+		// Another server at the same address: its features are read afresh.
+		resetXollamaProbes();
+		const old = stubXollama({ features: ["client_placement_v1"] });
+		await turn(old.fetchImpl, "win-lead-4", {
+			dynamicContextSize: true,
+			contextWindow: 65536,
+		});
+		expect(old.chats[0]).not.toHaveProperty("placement");
+	});
+
+	it("asks no window of a council", async () => {
+		const xo = stubXollama({ features: WINDOW, council: true, grant: 32768 });
+		await turn(xo.fetchImpl, "win-lead-5", {
+			dynamicContextSize: true,
+			contextWindow: 65536,
+		});
+		expect(xo.chats[0]).not.toHaveProperty("placement");
+		expect(getPolykvGrantedWindow("win-lead-5")).toBeUndefined();
+	});
+
+	it("reads the profile's section and the node's share off the provider options", () => {
+		expect(
+			readXollamaWindowOptions(
+				{
+					polykv: { dynamicContextSize: true, contextFloor: 8192.7 },
+					agentWindow: { sharePercent: 40 },
+				},
+				65536,
+			),
+		).toEqual({
+			dynamicContextSize: true,
+			contextFloor: 8192,
+			contextWindow: 65536,
+			agentWindow: { contextWindow: 65536, sharePercent: 40 },
+		});
+		expect(readXollamaWindowOptions(undefined, undefined)).toEqual({});
 	});
 });

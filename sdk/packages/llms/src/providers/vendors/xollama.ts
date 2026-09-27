@@ -41,7 +41,17 @@ import {
 	type BasicLogger,
 	flattenPromptEnvironment,
 } from "@cline/shared";
-import { hoistLeadEnvironment, prepareLeadPool } from "./polykv-lead";
+import {
+	agentWindowFloorForBody,
+	type OpencotiAgentWindow,
+	readOpencotiAgentWindow,
+} from "./opencoti-agent-window";
+import { getPolykvGrantedWindow, recordPolykvGrantedWindow } from "./polykv";
+import {
+	hoistLeadEnvironment,
+	markLeadWindowLive,
+	prepareLeadPool,
+} from "./polykv-lead";
 import { engineSessionId } from "./polykv-swarm";
 import { xollamaEngineFetch, xollamaEngineRoot } from "./xollama-engine";
 
@@ -60,6 +70,94 @@ export const XOLLAMA_READ_ONLY_HEADER = "x-cerebriline-read-only-tools";
 
 /** The feature that makes a council turn resumable and tool-capable. */
 export const XOLLAMA_COUNCIL_STATE_FEATURE = "council_chat_state_v1";
+
+/**
+ * The server passes the engine's granted window back as `X-Context-Window` and
+ * negotiates one from `placement.num_ctx` / `num_ctx_min` (#424).
+ */
+export const XOLLAMA_CONTEXT_WINDOW_FEATURE = "context_window_v1";
+
+/**
+ * What a conversation on xOllama asks of the engine's window, read off the
+ * provider config the way opencoti's is (`resolveOpencotiWindow`):
+ *
+ * - a session already granted a window asks for exactly that one again -- a
+ *   resumed conversation never negotiates down under a history that no longer
+ *   fits;
+ * - an agent on a node with an "Agent window" share asks for the node's
+ *   window, floored at its share measured off the request;
+ * - a conversation whose profile turned "Book a context window" on asks for
+ *   the model's window, floored at "Never go below" (all or nothing without);
+ * - anything else asks for nothing, and the engine decides.
+ *
+ * Never through `options.num_ctx`: that is the model load, and changing it
+ * reloads the runner (#424).
+ */
+export interface XollamaWindowOptions {
+	dynamicContextSize?: boolean;
+	contextFloor?: number;
+	contextWindow?: number;
+	agentWindow?: OpencotiAgentWindow;
+}
+
+export function readXollamaWindowOptions(
+	options: Readonly<Record<string, unknown>> | undefined,
+	contextWindow: number | undefined,
+): XollamaWindowOptions {
+	const polykv = (options?.polykv ?? {}) as {
+		dynamicContextSize?: unknown;
+		contextFloor?: unknown;
+	};
+	const agentWindow = readOpencotiAgentWindow(
+		options?.agentWindow,
+		contextWindow,
+	);
+	return {
+		...(polykv.dynamicContextSize === true ? { dynamicContextSize: true } : {}),
+		...(isPositive(polykv.contextFloor)
+			? { contextFloor: Math.floor(polykv.contextFloor) }
+			: {}),
+		...(isPositive(contextWindow)
+			? { contextWindow: Math.floor(contextWindow) }
+			: {}),
+		...(agentWindow ? { agentWindow } : {}),
+	};
+}
+
+function isPositive(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+/** The window fields of this turn's `placement`, or nothing to ask. */
+function windowAsk(
+	session: string,
+	body: Record<string, unknown>,
+	window: XollamaWindowOptions,
+): { num_ctx: number; num_ctx_min: number } | undefined {
+	const granted = getPolykvGrantedWindow(session);
+	if (granted !== undefined) {
+		return { num_ctx: granted, num_ctx_min: granted };
+	}
+	if (window.agentWindow) {
+		const cap = (body.options as { num_predict?: unknown } | undefined)
+			?.num_predict;
+		const floor = agentWindowFloorForBody(
+			body,
+			window.agentWindow,
+			isPositive(cap) ? Math.floor(cap) : undefined,
+		);
+		const ask = window.agentWindow.contextWindow;
+		return { num_ctx: ask, num_ctx_min: Math.min(floor ?? ask, ask) };
+	}
+	if (window.dynamicContextSize && window.contextWindow !== undefined) {
+		const ask = window.contextWindow;
+		return {
+			num_ctx: ask,
+			num_ctx_min: Math.min(window.contextFloor ?? ask, ask),
+		};
+	}
+	return undefined;
+}
 
 /**
  * A delegated agent's engine session: `~agent-`, `~teammate-` or a swarm
@@ -668,13 +766,20 @@ function flattenSystemEnvironment(body: Record<string, unknown>): void {
  * loaded yet, an engine that is not opencoti, a refused create -- in which
  * case the turn runs unpooled and the next one asks again. Never fails a turn.
  */
+/** Top-level `placement` on a plain turn (client_placement_v1, #424). */
+interface XollamaPlacement {
+	pool_id?: number;
+	num_ctx?: number;
+	num_ctx_min?: number;
+}
+
 async function leadPlacement(
 	baseUrl: string,
 	body: Record<string, unknown>,
 	session: string,
 	baseFetch: typeof fetch,
 	logger: BasicLogger | undefined,
-): Promise<{ pool_id: number } | undefined> {
+): Promise<XollamaPlacement | undefined> {
 	const probe = {
 		...body,
 		messages: [...(body.messages as unknown[])],
@@ -713,7 +818,7 @@ async function leadPlacement(
  */
 export function withXollamaRequestFields(
 	baseFetch: typeof fetch,
-	options?: { logger?: BasicLogger },
+	options?: { logger?: BasicLogger; window?: XollamaWindowOptions },
 ): typeof fetch {
 	return (async (input, init) => {
 		const session = headerValue(init?.headers, XOLLAMA_SESSION_HEADER);
@@ -731,6 +836,10 @@ export function withXollamaRequestFields(
 		]);
 		let body = init.body;
 		let stateKey: string | undefined;
+		/** The session whose granted window this turn's answer reports. */
+		let windowSession: string | undefined;
+		let leadPooled = false;
+		let asked: number | undefined;
 		try {
 			const parsed = JSON.parse(body) as Record<string, unknown>;
 			const original = parsed.messages;
@@ -746,7 +855,7 @@ export function withXollamaRequestFields(
 				// The lead's pool, on a model that has seats for one. Any other
 				// turn has its environment folded back into the system text,
 				// which is what every provider but opencoti sends.
-				const placement =
+				let placement: XollamaPlacement | undefined =
 					!council &&
 					model !== undefined &&
 					model.clientPools > 0 &&
@@ -763,6 +872,25 @@ export function withXollamaRequestFields(
 						: undefined;
 				if (placement === undefined) {
 					flattenSystemEnvironment(parsed);
+				}
+				leadPooled = placement !== undefined;
+				// The window, on any plain turn of a server that negotiates one.
+				if (
+					!council &&
+					model !== undefined &&
+					root !== undefined &&
+					session !== undefined &&
+					options?.window &&
+					(await probeXollama(root, baseFetch))?.features.includes(
+						XOLLAMA_CONTEXT_WINDOW_FEATURE,
+					) === true
+				) {
+					windowSession = session;
+					const ask = windowAsk(session, parsed, options.window);
+					if (ask) {
+						asked = ask.num_ctx;
+						placement = { ...(placement ?? {}), ...ask };
+					}
 				}
 				const councilSafe = council
 					? withoutCouncilTool(parsed.tools)
@@ -814,6 +942,24 @@ export function withXollamaRequestFields(
 			);
 		}
 		const response = await baseFetch(input, { ...init, headers, body });
+		// The window the engine granted this session, before the first byte.
+		// Absent is "no guaranteed window", not "unchanged" -- nothing is
+		// recorded then.
+		const granted = Number(response.headers.get("x-context-window"));
+		if (
+			windowSession !== undefined &&
+			Number.isInteger(granted) &&
+			granted > 0
+		) {
+			recordPolykvGrantedWindow(windowSession, granted, {
+				...(asked !== undefined ? { asked } : {}),
+			});
+			// A lead holding a window can own its private sub-pool (the lead
+			// tree's `Ls`); without one it attaches the shared root alone.
+			if (leadPooled) {
+				markLeadWindowLive(windowSession);
+			}
+		}
 		if (root === undefined) {
 			return response;
 		}

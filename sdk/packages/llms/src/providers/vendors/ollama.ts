@@ -46,6 +46,7 @@ import {
 import { rewriteOllamaChatBody } from "./ollama-tool-images";
 import type { ProviderFactoryResult } from "./types";
 import {
+	readXollamaWindowOptions,
 	withXollamaAuth,
 	withXollamaRequestFields,
 	XOLLAMA_DEFAULT_BASE_URL,
@@ -921,6 +922,10 @@ export async function createOllamaProviderModule(
 	const wireFetch = xollama
 		? withXollamaRequestFields(serverFetch, {
 				...(context.logger ? { logger: context.logger } : {}),
+				window: readXollamaWindowOptions(
+					context.config?.options as Record<string, unknown> | undefined,
+					context.model?.contextWindow,
+				),
 			})
 		: serverFetch;
 	const timeoutFetch = withOllamaResponseTimeout(

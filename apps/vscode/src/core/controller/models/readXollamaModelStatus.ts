@@ -1,5 +1,6 @@
 import {
 	forgetXollamaModel,
+	probeXollama,
 	readOpencotiStatus,
 	readXollamaEngines,
 	readXollamaModel,
@@ -56,7 +57,7 @@ export async function readXollamaModelStatus(
 	if (!info) {
 		return XollamaModelStatusResponse.create({ reachable: false })
 	}
-	const engines = await readXollamaEngines(origin, serverFetch)
+	const [engines, server] = await Promise.all([readXollamaEngines(origin, serverFetch), probeXollama(origin, serverFetch)])
 	const engine = [...engines].find(([name]) => sameTag(name, model))?.[1]
 	const drives = !info.council && info.clientPools > 0 && engine === "opencoti"
 	const polykv = drives
@@ -66,6 +67,7 @@ export async function readXollamaModelStatus(
 		reachable: true,
 		council: info.council,
 		clientPools: info.clientPools,
+		windowNegotiation: server?.features.includes("context_window_v1") === true,
 		...(engine !== undefined ? { engine } : {}),
 		...(polykv ? { polykv } : {}),
 	})

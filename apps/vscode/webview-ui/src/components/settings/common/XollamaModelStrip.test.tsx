@@ -1,11 +1,15 @@
 import { PolykvStatusResponse, XollamaModelStatusResponse } from "@shared/proto/cline/models"
-import { render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ModelsServiceClient } from "@/services/grpc-client"
 import { describeXollamaModel, XollamaModelStrip } from "./XollamaModelStrip"
 
 vi.mock("@/services/grpc-client", () => ({
 	ModelsServiceClient: { readXollamaModelStatus: vi.fn(), readPolykvStatus: vi.fn() },
+}))
+const config = vi.hoisted(() => ({ write: vi.fn(async () => undefined), polykv: {} as Record<string, unknown> }))
+vi.mock("@/hooks/useProviderConfig", () => ({
+	useProviderConfig: () => ({ config: { polykv: config.polykv }, write: config.write }),
 }))
 
 const read = vi.mocked(ModelsServiceClient.readXollamaModelStatus)
@@ -59,5 +63,33 @@ describe("the strip", () => {
 		const second = render(<XollamaModelStrip modelId="m" />)
 		await waitFor(() => expect(read).toHaveBeenCalled())
 		expect(second.container.textContent).toBe("")
+	})
+})
+
+describe("the window fields", () => {
+	beforeEach(() => {
+		read.mockReset()
+		config.write.mockClear()
+	})
+
+	it("offer booking a window on a plain model of a server that negotiates one, and write it to the section", async () => {
+		read.mockResolvedValue(status({ clientPools: 0, windowNegotiation: true }))
+		render(<XollamaModelStrip modelId="m" />)
+		const toggle = await screen.findByLabelText("Book a context window")
+		fireEvent.click(toggle)
+		expect(config.write).toHaveBeenCalledWith({ polykv: { dynamicContextSize: true } })
+	})
+
+	it("are not offered on a council, or by a server that cannot negotiate", async () => {
+		read.mockResolvedValue(status({ council: true, windowNegotiation: true }))
+		const council = render(<XollamaModelStrip modelId="c" />)
+		await waitFor(() => expect(screen.getByTestId("xollama-model-strip")).toBeTruthy())
+		expect(screen.queryByLabelText("Book a context window")).toBeNull()
+		council.unmount()
+
+		read.mockResolvedValue(status({ clientPools: 2 }))
+		render(<XollamaModelStrip modelId="m" />)
+		await waitFor(() => expect(screen.getByTestId("xollama-model-strip")).toBeTruthy())
+		expect(screen.queryByLabelText("Book a context window")).toBeNull()
 	})
 })
