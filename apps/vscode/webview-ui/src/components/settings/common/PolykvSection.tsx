@@ -40,12 +40,12 @@ function parseNumber(value: string | number | undefined): number | undefined {
 }
 
 /**
- * Where the section is shown. xOllama drives the same engine for a plain model
- * with client pool seats, but only some of opencoti's controls reach it: the
- * lead's pool, the window, the agents' pools and their admission policy, the
- * retry bound and swarms. Compaction on the engine's pressure and as a
- * continuation, and the prefix pin, are opencoti's alone for now, and are not
- * offered where they would read as set and do nothing.
+ * Where the section is shown. On xOllama a plain model with client pool seats
+ * is driven exactly as opencoti is -- the client reaches the model's engine
+ * through `/api/engine` -- so every control applies there too. What differs:
+ * the engine's status is the model strip's (the provider URL is not the
+ * engine), and window booking and swarms need the server's
+ * `context_window_v1`.
  */
 export type PolykvSectionEngine = "opencoti" | "xollama"
 
@@ -174,20 +174,18 @@ export const PolykvSection = ({
 
 			{enabled && (
 				<div className="mt-[10px] pl-[10px] border-l border-(--vscode-panel-border)">
-					{opencoti &&
-						toggle(
-							"pinPrefix",
-							"Keep the prefix resident",
-							"An unpinned pool that goes 60 seconds without a request is swept, and the next turn quietly pays the full prefill again.",
-							true,
-						)}
-					{opencoti &&
-						numberField(
-							"compactionPressureThreshold",
-							"Compact at pool pressure",
-							"Default: 0.85",
-							"How full the engine must say the pool is before compacting, 0 to 1. This is the one figure in the compaction path that is measured rather than estimated — it comes from the thing holding the cells.",
-						)}
+					{toggle(
+						"pinPrefix",
+						"Keep the prefix resident",
+						"An unpinned pool that goes 60 seconds without a request is swept, and the next turn quietly pays the full prefill again.",
+						true,
+					)}
+					{numberField(
+						"compactionPressureThreshold",
+						"Compact at pool pressure",
+						"Default: 0.85",
+						"How full the engine must say the pool is before compacting, 0 to 1. This is the one figure in the compaction path that is measured rather than estimated — it comes from the thing holding the cells.",
+					)}
 					{numberField(
 						"targetTpsPerSession",
 						"Per-session throughput floor",
@@ -226,13 +224,12 @@ export const PolykvSection = ({
 							"Default: none — all or nothing",
 							"The smallest window still worth opening with, in tokens. If the full size is not free the server grants the largest that is, down to this; below it the conversation is refused rather than opened too small to be useful. Leave empty to accept only the full size.",
 						)}
-					{opencoti &&
-						toggle(
-							"continuationCompaction",
-							"Compact as a continuation",
-							"Writes the compaction summary as the conversation's next turn and reviews it on frozen pools of the session, so the transcript is never sent again and nothing is booked beyond what each call needs. Off re-sends the transcript as text to a summarizer of its own.",
-							true,
-						)}
+					{toggle(
+						"continuationCompaction",
+						"Compact as a continuation",
+						"Writes the compaction summary as the conversation's next turn and reviews it on frozen pools of the session, so the transcript is never sent again and nothing is booked beyond what each call needs. Off re-sends the transcript as text to a summarizer of its own.",
+						true,
+					)}
 					{toggle(
 						"overcommit",
 						"Bypass admission",

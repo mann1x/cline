@@ -463,6 +463,32 @@ describe("the lead tree", () => {
 		).toBe(false);
 	});
 
+	// "Keep the prefix resident": pinned while this process has a conversation
+	// on it, so an idle pause past the engine's 60 s sweep keeps it; unpinned
+	// -- never released -- with the last one, and the sweep owns it again.
+	it("pins a shared root while it has a conversation, unless told not to", async () => {
+		const engine = stubEngine({ features: ["polykv_shared_root_v1"] });
+		await prepare(engine, "lead-1", hoisted("c:/one"));
+		const paths = () => engine.calls.map((call) => call.path);
+		expect(paths()).toContain("/polykv/pools/0/pin");
+		expect(paths()).not.toContain("/polykv/pools/0/unpin");
+		await releasePolykvLead("lead-1");
+		expect(paths()).toContain("/polykv/pools/0/unpin");
+		expect(paths()).not.toContain("/polykv/pools/0/release");
+
+		const off = stubEngine({ features: ["polykv_shared_root_v1"] });
+		await prepareLeadPool({
+			baseUrl: "http://engine-off/v1",
+			fetch: off.fetch,
+			body: hoisted("c:/one"),
+			sessionId: "lead-2",
+			pinPrefix: false,
+		});
+		expect(off.calls.some((call) => call.path.endsWith("/pin"))).toBe(false);
+		await releasePolykvLead("lead-2");
+		expect(off.calls.some((call) => call.path.endsWith("/unpin"))).toBe(false);
+	});
+
 	// With `num_ctx` as the private budget, a conversation books its window
 	// minus what it shares -- and a resumed one keeps what it was granted.
 	it("books the window minus the shared prefix where the server counts it privately", async () => {

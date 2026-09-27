@@ -488,6 +488,69 @@ describe("the conversation's window on xOllama", () => {
 	});
 });
 
+describe("what core puts on an xOllama call", () => {
+	const WINDOW = ["client_placement_v1", "chat_render_v1", "context_window_v1"];
+	const system = `You are Cline.\n\n${markPromptEnvironment("Working directory", "/w/a")}`;
+	const send = async (
+		stub: ReturnType<typeof stubXollama>,
+		engine: () => Record<string, unknown>,
+		session = "task-c",
+	) =>
+		withXollamaRequestFields(stub.fetchImpl, {
+			window: { dynamicContextSize: true, contextWindow: 65_536 },
+			engine: engine as never,
+		})("http://gpu2:22434/api/chat", {
+			method: "POST",
+			headers: { [XOLLAMA_SESSION_HEADER]: session },
+			body: JSON.stringify({
+				model: "m",
+				messages: [
+					{ role: "system", content: system },
+					{ role: "user", content: "summarize" },
+				],
+			}),
+		});
+
+	it("books a compaction call exactly, off the lead tree, and records no grant", async () => {
+		const stub = stubXollama({
+			clientPools: 3,
+			grant: 9_000,
+			features: WINDOW,
+		});
+		await send(stub, () => ({ booking: 9_000, leadPool: false }), "task-c1");
+		expect((stub.chats[0] as { placement: unknown }).placement).toEqual({
+			num_ctx: 9_000,
+			num_ctx_min: 9_000,
+		});
+		expect(
+			stub.calls.some((c) => c.query.get("endpoint") === "polykv/pools"),
+		).toBe(false);
+		expect(getPolykvGrantedWindow("task-c1")).toBeUndefined();
+	});
+
+	it("attaches a critic to the pool it borrows", async () => {
+		const stub = stubXollama({ clientPools: 3, features: WINDOW });
+		await send(
+			stub,
+			() => ({ borrowedPool: "7", leadPool: false }),
+			"task-c2~critic-first",
+		);
+		expect(
+			(stub.chats[0] as { placement: { pool_id?: number } }).placement.pool_id,
+		).toBe(7);
+	});
+
+	it("borrows nothing on a council", async () => {
+		const stub = stubXollama({
+			council: true,
+			clientPools: 3,
+			features: WINDOW,
+		});
+		await send(stub, () => ({ borrowedPool: "7", booking: 9_000 }), "task-c3");
+		expect(stub.chats[0]).not.toHaveProperty("placement");
+	});
+});
+
 describe("a pooled lead's window on xOllama", () => {
 	it("books its private budget, the shared prefix riding above it", async () => {
 		const stub = stubXollama({

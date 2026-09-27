@@ -87,10 +87,10 @@ describe("the window fields", () => {
 		expect(screen.getByLabelText("Book a context window")).toBeTruthy()
 		expect(screen.getByLabelText("Allow swarms")).toBeTruthy()
 		expect(screen.getByText("Per-session throughput floor")).toBeTruthy()
-		// opencoti's alone: offered here they would read as set and do nothing.
-		expect(screen.queryByLabelText("Compact as a continuation")).toBeNull()
-		expect(screen.queryByLabelText("Keep the prefix resident")).toBeNull()
-		expect(screen.queryByText("Compact at pool pressure")).toBeNull()
+		// Driven through the model's engine, as on opencoti.
+		expect(screen.getByLabelText("Compact as a continuation")).toBeTruthy()
+		expect(screen.getByLabelText("Keep the prefix resident")).toBeTruthy()
+		expect(screen.getByText("Compact at pool pressure")).toBeTruthy()
 		// The model's engine status is the strip's, not the server root's.
 		expect(ModelsServiceClient.readPolykvStatus).not.toHaveBeenCalled()
 		fireEvent.click(screen.getByLabelText("Allow swarms"))

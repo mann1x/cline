@@ -127,6 +127,8 @@ export interface OpencotiRequestOptions {
 	 * spans are a lead's; the rest ignore it.
 	 */
 	leadPool?: boolean;
+	/** "Keep the prefix resident": see `prepareLeadPool`'s `pinPrefix`. */
+	pinPrefix?: boolean;
 	/**
 	 * The context window to book, in tokens.
 	 *
@@ -577,6 +579,7 @@ export function createOpencotiFetch(options: {
 						...(options.headers ? { headers: options.headers } : {}),
 						body,
 						sessionId: extras.sessionId,
+						...(extras.pinPrefix === false ? { pinPrefix: false } : {}),
 					}).catch(() => undefined);
 					if (leadPool && /^\d+$/.test(leadPool.poolId)) {
 						body.pool_id = Number(leadPool.poolId);
@@ -2061,6 +2064,7 @@ export function readOpencotiRequestOptions(
 		sessionId
 			? { leadPool: true }
 			: {}),
+		...(settings?.pinPrefix === false ? { pinPrefix: false } : {}),
 		...(exactBooking !== undefined
 			? {
 					numCtx: exactBooking,

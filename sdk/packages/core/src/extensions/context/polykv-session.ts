@@ -21,8 +21,11 @@ import {
 	readXollamaModel,
 	releasePolykvLead,
 	setPolykvSession,
+	withXollamaAuth,
 	XOLLAMA_CONTEXT_WINDOW_FEATURE,
 	XOLLAMA_DEFAULT_BASE_URL,
+	xollamaEngineFetch,
+	xollamaEngineRoot,
 } from "@cline/llms";
 import { type BasicLogger, hasPromptEnvironment } from "@cline/shared";
 
@@ -71,6 +74,8 @@ export interface PolykvProviderConfig {
 	baseUrl?: string;
 	/** The model, where the provider pools per model (xOllama). */
 	modelId?: string;
+	/** The provider's key, which a keyed xOllama wants on its engine routes. */
+	apiKey?: string;
 	headers?: Record<string, string>;
 	fetch?: typeof fetch;
 	/** The profile's PolyKV section. Absent means "never configured". */
@@ -158,6 +163,48 @@ async function xollamaModelPools(
 		model.clientPools > 0 &&
 		server?.features.includes(XOLLAMA_CONTEXT_WINDOW_FEATURE) === true
 	);
+}
+
+/**
+ * The engine this config's PolyKV calls go to, as an opencoti-shaped config:
+ * opencoti's own, or on xOllama the selected model's engine behind
+ * `/api/engine` -- where the model is plain, keeps seats for clients and the
+ * server negotiates windows. `undefined` where there is no engine to drive.
+ *
+ * For the readers and the control plane only (`/kv`, `/capacity`, resizes,
+ * pools, session close): a chat still goes through the provider, whose own
+ * fetch speaks xOllama. So the result is never handed to a model factory.
+ */
+export async function resolvePolykvEngineConfig(
+	config: PolykvProviderConfig | undefined,
+): Promise<PolykvProviderConfig | undefined> {
+	if (config?.providerId === undefined) {
+		return undefined;
+	}
+	const id = normalizeProviderId(config.providerId);
+	if (id === "opencoti") {
+		return config.baseUrl ? config : undefined;
+	}
+	if (id !== "xollama" || !config.modelId) {
+		return undefined;
+	}
+	if (!(await xollamaModelPools(config).catch(() => false))) {
+		return undefined;
+	}
+	const origin = config.baseUrl || XOLLAMA_DEFAULT_BASE_URL;
+	const headers = {
+		...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+		...(config.headers ?? {}),
+	};
+	const { headers: _headers, ...rest } = config;
+	return {
+		...rest,
+		providerId: "opencoti",
+		baseUrl: xollamaEngineRoot(origin, config.modelId),
+		fetch: xollamaEngineFetch(
+			withXollamaAuth(config.fetch ?? fetch, origin, headers),
+		),
+	};
 }
 
 export async function polykvPoolsConfirmed(
@@ -410,10 +457,11 @@ export async function readPolykvCapacity(options: {
 	logger?: BasicLogger;
 }): Promise<PolykvCapacity | undefined> {
 	const state = getPolykvSession(options.sessionId);
-	if (!state || !isPolykvProvider(options.providerConfig)) {
+	if (!state || options.providerConfig.polykv?.enabled === false) {
 		return undefined;
 	}
-	const client = clientFor(options.providerConfig);
+	const engine = await resolvePolykvEngineConfig(options.providerConfig);
+	const client = engine ? clientFor(engine) : undefined;
 	if (!client) {
 		return undefined;
 	}
@@ -523,13 +571,11 @@ export async function readPolykvKvSnapshot(options: {
 	providerConfig: PolykvProviderConfig;
 	logger?: BasicLogger;
 }): Promise<OpencotiKvSnapshot | undefined> {
-	const config = options.providerConfig;
-	if (
-		!options.sessionId ||
-		!config.baseUrl ||
-		config.providerId === undefined ||
-		normalizeProviderId(config.providerId) !== "opencoti"
-	) {
+	if (!options.sessionId) {
+		return undefined;
+	}
+	const config = await resolvePolykvEngineConfig(options.providerConfig);
+	if (!config?.baseUrl) {
 		return undefined;
 	}
 	const cached = POLYKV_ALLOCATION_CACHE.get(options.sessionId);

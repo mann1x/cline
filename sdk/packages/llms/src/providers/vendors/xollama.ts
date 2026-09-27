@@ -46,6 +46,7 @@ import {
 	type OpencotiAgentWindow,
 	readOpencotiAgentWindow,
 } from "./opencoti-agent-window";
+import { recordOpencotiWindowFloor } from "./opencoti-kv-pressure";
 import { getPolykvGrantedWindow, recordPolykvGrantedWindow } from "./polykv";
 import {
 	hoistLeadEnvironment,
@@ -151,10 +152,13 @@ function windowAsk(
 			isPositive(cap) ? Math.floor(cap) : undefined,
 		);
 		const ask = window.agentWindow.contextWindow;
+		// The floor a pressure shrink may not go below (`kv-pressure.ts`).
+		recordOpencotiWindowFloor(session, floor);
 		return { num_ctx: ask, num_ctx_min: Math.min(floor ?? ask, ask) };
 	}
 	if (window.dynamicContextSize && window.contextWindow !== undefined) {
 		const ask = window.contextWindow;
+		recordOpencotiWindowFloor(session, window.contextFloor);
 		return {
 			num_ctx: ask,
 			num_ctx_min: Math.min(window.contextFloor ?? ask, ask),
@@ -770,6 +774,16 @@ function flattenSystemEnvironment(body: Record<string, unknown>): void {
  * loaded yet, an engine that is not opencoti, a refused create -- in which
  * case the turn runs unpooled and the next one asks again. Never fails a turn.
  */
+/** See `withXollamaRequestFields`' `engine` option. */
+export interface XollamaEngineRequest {
+	/** An exact booking, floored at itself: a compaction call's own window. */
+	booking?: number;
+	/** `false`: this call may not join the lead tree. */
+	leadPool?: boolean;
+	/** A pool this session borrows rather than builds (never the lead's). */
+	borrowedPool?: string;
+}
+
 /** Top-level `placement` on a plain turn (client_placement_v1, #424). */
 interface XollamaPlacement {
 	pool_id?: number;
@@ -790,6 +804,7 @@ async function leadPlacement(
 	session: string,
 	baseFetch: typeof fetch,
 	logger: BasicLogger | undefined,
+	pinPrefix: boolean,
 ): Promise<LeadAttach | undefined> {
 	const probe = {
 		...body,
@@ -804,6 +819,7 @@ async function leadPlacement(
 			fetch: xollamaEngineFetch(baseFetch),
 			body: probe,
 			sessionId: session,
+			...(pinPrefix ? {} : { pinPrefix: false }),
 		});
 		if (!attach || !/^\d+$/.test(attach.poolId)) {
 			return undefined;
@@ -839,6 +855,14 @@ export function withXollamaRequestFields(
 		window?: XollamaWindowOptions;
 		/** The profile's PolyKV switch: off, the lead builds no pool. */
 		pooling?: boolean;
+		/** "Keep the prefix resident"; on unless `false`. */
+		pinPrefix?: boolean;
+		/**
+		 * What core put on this call, read per request (the live pool moves):
+		 * a compaction call's exact booking, whether the lead tree may take it,
+		 * and a pool it borrows (a critic on the frozen P').
+		 */
+		engine?: () => XollamaEngineRequest;
 	},
 ): typeof fetch {
 	return (async (input, init) => {
@@ -879,6 +903,7 @@ export function withXollamaRequestFields(
 				// that layer's, and nothing here adds to them.
 				const placedOutside =
 					parsed.placement !== null && typeof parsed.placement === "object";
+				const engineRequest = options?.engine?.() ?? {};
 				if (root !== undefined && typeof parsed.model === "string") {
 					rememberXollamaRunner(root, parsed.model, parsed);
 				}
@@ -889,6 +914,8 @@ export function withXollamaRequestFields(
 					!council &&
 					!placedOutside &&
 					options?.pooling !== false &&
+					engineRequest.leadPool !== false &&
+					engineRequest.booking === undefined &&
 					model !== undefined &&
 					model.clientPools > 0 &&
 					root !== undefined &&
@@ -900,15 +927,51 @@ export function withXollamaRequestFields(
 								session,
 								baseFetch,
 								options?.logger,
+								options?.pinPrefix !== false,
 							)
 						: undefined;
 				let placement: XollamaPlacement | undefined = lead?.placement;
+				// A pool core froze for this call (P' of a continuation
+				// compaction), on a model the client pools.
+				if (
+					placement === undefined &&
+					!council &&
+					!placedOutside &&
+					model !== undefined &&
+					model.clientPools > 0 &&
+					engineRequest.borrowedPool !== undefined &&
+					/^\d+$/.test(engineRequest.borrowedPool)
+				) {
+					placement = { pool_id: Number(engineRequest.borrowedPool) };
+				}
 				if (placement === undefined) {
 					flattenSystemEnvironment(parsed);
 				}
 				leadPooled = placement !== undefined;
+				// A compaction call's exact booking: its own window, floored at
+				// itself, and never the session's grant (opencoti's transient
+				// booking).
+				const booking =
+					!council &&
+					!placedOutside &&
+					model !== undefined &&
+					engineRequest.booking !== undefined &&
+					root !== undefined &&
+					(await probeXollama(root, baseFetch))?.features.includes(
+						XOLLAMA_CONTEXT_WINDOW_FEATURE,
+					) === true
+						? engineRequest.booking
+						: undefined;
+				if (booking !== undefined) {
+					placement = {
+						...(placement ?? {}),
+						num_ctx: booking,
+						num_ctx_min: booking,
+					};
+				}
 				// The window, on any plain turn of a server that negotiates one.
 				if (
+					booking === undefined &&
 					!council &&
 					!placedOutside &&
 					model !== undefined &&

@@ -173,7 +173,7 @@ describe("createAgentModelFromConfig", () => {
 	// A swarm agent on xOllama: the provider decides per model whether it
 	// pools, so the worker spec has to reach it -- and nothing of the lead's
 	// opencoti session plumbing does.
-	it("lifts an xOllama swarm agent's worker spec, and only that", async () => {
+	it("lifts an xOllama swarm agent's worker spec and session", async () => {
 		const { createAgentModelFromConfig } = await import("./handler-factory");
 
 		createAgentModelFromConfig(
@@ -197,7 +197,7 @@ describe("createAgentModelFromConfig", () => {
 			layers: 2,
 			sessionId: "lead/1~agent-2",
 		});
-		expect(options?.polykvSessionId).toBeUndefined();
+		expect(options?.polykvSessionId).toBe("lead/1~agent-2");
 	});
 
 	it("lifts the PolyKV section into the gateway options bag", async () => {

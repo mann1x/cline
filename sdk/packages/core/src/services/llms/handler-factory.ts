@@ -95,7 +95,12 @@ function buildGatewayProviderOptions(
 	// messages and the vision probe all build a handler with no conversation,
 	// so this is reachable -- and on a shared server the session it corrupts
 	// belongs to somebody else.
-	if (normalizeProviderId(config.providerId) === "opencoti") {
+	// xOllama drives the same engine on a plain model: its provider reads the
+	// same keys (the worker, the live pool, a compaction's booking, whether the
+	// lead tree may take the call) and ignores them where the model is not
+	// one it pools.
+	const engineProvider = normalizeProviderId(config.providerId);
+	if (engineProvider === "opencoti" || engineProvider === "xollama") {
 		const engineSession =
 			config.engineSessionId || sessionId || auxiliarySessionId();
 		options.polykvSessionId = engineSession;
@@ -114,18 +119,6 @@ function buildGatewayProviderOptions(
 		if (config.polykvLeadPool === false) {
 			options.polykvLeadPool = false;
 		}
-	} else if (
-		normalizeProviderId(config.providerId) === "xollama" &&
-		config.polykvWorker
-	) {
-		// A swarm agent on xOllama: the provider attaches it through the model's
-		// engine where the model pools clients, and sends it as a plain chat
-		// where it does not. The lead's own pool is the provider's business
-		// there, so nothing else of opencoti's session plumbing is lifted.
-		options.polykvWorker = {
-			...config.polykvWorker,
-			sessionId: config.engineSessionId || sessionId || auxiliarySessionId(),
-		};
 	}
 
 	if (config.providerId === "bedrock") {

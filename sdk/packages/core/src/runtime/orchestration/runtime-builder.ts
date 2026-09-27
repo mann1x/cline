@@ -20,7 +20,7 @@ import {
 	type UserInstructionConfigService,
 } from "../../extensions/config";
 import {
-	isPolykvProvider,
+	isPolykvWorkerProvider,
 	polykvPoolsConfirmed,
 	readPolykvCapacity,
 } from "../../extensions/context/polykv-session";
@@ -937,7 +937,10 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		});
 		const polykvProviderConfig = config.providerConfig;
 		const polykvAdmission =
-			polykvProviderConfig && isPolykvProvider(polykvProviderConfig)
+			// opencoti, or an xOllama model whose engine the client drives:
+			// `readPolykvCapacity` resolves the engine and answers nothing
+			// where there is none, which admits as before.
+			polykvProviderConfig && isPolykvWorkerProvider(polykvProviderConfig)
 				? createAgentAdmissionController({
 						capacity: async () =>
 							admissionFromCapacity(

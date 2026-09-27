@@ -70,6 +70,7 @@ import {
 import { messagesToAgentMessages } from "../../runtime/config/agent-message-codec";
 import { createAgentModelFromConfig } from "../../services/llms/handler-factory";
 import type { ProviderConfig } from "../../types/provider-settings";
+import { resolvePolykvEngineConfig } from "./polykv-session";
 
 /** Which of the two shapes a compaction ran as. */
 export type ContinuationPath = "pooled" | "continuation";
@@ -561,23 +562,27 @@ export async function prepareCompactionContinuation(
 	let features: readonly string[] = [];
 	let poolsEnabled = false;
 	let held: OpencotiAllocation | undefined;
-	const opencoti = providerId === "opencoti" && Boolean(config.baseUrl);
+	// opencoti's server, or the model's engine behind xOllama. The calls
+	// themselves still go through the provider (`config`); only the pools,
+	// `/props` and `/kv` are read from the engine.
+	const engine = await resolvePolykvEngineConfig(config);
+	const opencoti = engine !== undefined;
 	const wireId = engineSessionId(
 		config.engineSessionId || input.sessionId || "",
 	);
-	if (opencoti && wireId) {
-		const props = await probeOpencotiProps(config.baseUrl, config.fetch).catch(
+	if (engine?.baseUrl && wireId) {
+		const props = await probeOpencotiProps(engine.baseUrl, engine.fetch).catch(
 			() => undefined,
 		);
 		features = props?.features ?? [];
 		poolsEnabled = props?.poolsEnabled === true;
 		client = createPolykvClient({
-			baseUrl: config.baseUrl as string,
-			...(config.fetch ? { fetch: config.fetch } : {}),
-			...(config.headers ? { headers: config.headers } : {}),
+			baseUrl: engine.baseUrl,
+			...(engine.fetch ? { fetch: engine.fetch } : {}),
+			...(engine.headers ? { headers: engine.headers } : {}),
 		});
 		const snapshot = hasOpencotiFeature(features, OPENCOTI_FEATURES.kvStatus)
-			? await readOpencotiKv(config.baseUrl, config.fetch).catch(
+			? await readOpencotiKv(engine.baseUrl, engine.fetch).catch(
 					() => undefined,
 				)
 			: undefined;
@@ -962,8 +967,11 @@ class Continuation implements CompactionContinuation {
 	private releasePPrimeLater = false;
 
 	private async readOwnerRoom(owner: string): Promise<number | undefined> {
-		const config = this.input.providerConfig;
-		const snapshot = await readOpencotiKv(config.baseUrl, config.fetch).catch(
+		const engine = await resolvePolykvEngineConfig(this.input.providerConfig);
+		if (!engine?.baseUrl) {
+			return undefined;
+		}
+		const snapshot = await readOpencotiKv(engine.baseUrl, engine.fetch).catch(
 			() => undefined,
 		);
 		const row = snapshot?.allocations.find(

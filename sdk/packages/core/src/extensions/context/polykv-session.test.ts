@@ -22,11 +22,13 @@ import {
 	polykvSaysCompact,
 	readPolykvAllocation,
 	readPolykvCapacity,
+	readPolykvKvSnapshot,
 	releasePolykvPool,
 	releasePolykvSession,
 	renderPolykvPrefixMessages,
 	repointPolykvAfterCompaction,
 	resolveGrantedContextWindow,
+	resolvePolykvEngineConfig,
 	snapshotPolykvSession,
 } from "./polykv-session";
 
@@ -1331,5 +1333,93 @@ describe("swarm agents on xOllama", () => {
 			false,
 		);
 		expect(await confirmed(plain, [])).toBe(false);
+	});
+});
+
+describe("the engine behind xOllama", () => {
+	const plain = { council: { enabled: false }, session: { client_pools: 3 } };
+	let server = 0;
+	const xollama = (show: Record<string, unknown>) => {
+		const seen: string[] = [];
+		const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+			const url = new URL(String(input));
+			seen.push(`${url.pathname}${url.search}`);
+			const headers = new Headers(init?.headers);
+			const json = (body: unknown) =>
+				new Response(JSON.stringify(body), {
+					headers: { "content-type": "application/json" },
+				});
+			if (url.pathname === "/api/show") return json({ xollama: show });
+			if (url.pathname === "/api/xollama")
+				return json({ xollama: true, features: ["context_window_v1"] });
+			if (url.searchParams.get("endpoint") === "props") {
+				return json({
+					status: 200,
+					body: { features: ["kv_status_v1"], opencoti: {} },
+				});
+			}
+			if (url.pathname === "/api/engine") {
+				return json({
+					status: 200,
+					body: {
+						auth: headers.get("authorization"),
+						allocations: [],
+						kv_pool_cells: 131_072,
+					},
+				});
+			}
+			return new Response("no", { status: 404 });
+		}) as unknown as typeof fetch;
+		return { seen, fetchImpl, baseUrl: `http://xo${++server}.lan:22434` };
+	};
+
+	it("is the selected model's engine, reached through /api/engine with the key", async () => {
+		const xo = xollama(plain);
+		const engine = await resolvePolykvEngineConfig({
+			providerId: "xollama",
+			baseUrl: xo.baseUrl,
+			modelId: "qwen3:8b",
+			apiKey: "k",
+			fetch: xo.fetchImpl,
+		});
+		expect(engine?.providerId).toBe("opencoti");
+		expect(engine?.baseUrl).toBe(`${xo.baseUrl}/xollama-engine/qwen3%3A8b`);
+		const snapshot = await readPolykvKvSnapshot({
+			sessionId: `kv-${server}`,
+			providerConfig: {
+				providerId: "xollama",
+				baseUrl: xo.baseUrl,
+				modelId: "qwen3:8b",
+				apiKey: "k",
+				fetch: xo.fetchImpl,
+			},
+		});
+		expect(snapshot).toBeDefined();
+		expect(xo.seen).toContain("/api/engine?model=qwen3%3A8b&endpoint=kv");
+	});
+
+	it("is nothing on a council, on a model without seats, or without a model", async () => {
+		for (const show of [
+			{ ...plain, council: { enabled: true } },
+			{ ...plain, session: { client_pools: 0 } },
+		]) {
+			const xo = xollama(show);
+			expect(
+				await resolvePolykvEngineConfig({
+					providerId: "xollama",
+					baseUrl: xo.baseUrl,
+					modelId: "m",
+					fetch: xo.fetchImpl,
+				}),
+			).toBeUndefined();
+		}
+		expect(
+			await resolvePolykvEngineConfig({ providerId: "xollama" }),
+		).toBeUndefined();
+	});
+
+	it("is opencoti's own server, unchanged", async () => {
+		const config = { providerId: "opencoti", baseUrl: "http://oc:8080" };
+		expect(await resolvePolykvEngineConfig(config)).toBe(config);
 	});
 });

@@ -49,6 +49,7 @@ import {
 	OLLAMA_WIRE_DIALECT,
 	readOpencotiRequestOptions,
 } from "./opencoti";
+import { getPolykvSession } from "./polykv";
 import type { ProviderFactoryResult } from "./types";
 import {
 	probeXollama,
@@ -58,6 +59,7 @@ import {
 	withXollamaRequestFields,
 	XOLLAMA_CONTEXT_WINDOW_FEATURE,
 	XOLLAMA_DEFAULT_BASE_URL,
+	type XollamaEngineRequest,
 	xollamaReadOnlyHeaders,
 	xollamaSessionHeaders,
 } from "./xollama";
@@ -940,6 +942,12 @@ export async function createOllamaProviderModule(
 						(context.config?.options as Record<string, unknown> | undefined)
 							?.polykv as { enabled?: unknown } | undefined
 					)?.enabled !== false,
+				pinPrefix:
+					(
+						(context.config?.options as Record<string, unknown> | undefined)
+							?.polykv as { pinPrefix?: unknown } | undefined
+					)?.pinPrefix !== false,
+				engine: () => xollamaEngineRequest(context),
 			})
 		: serverFetch;
 	// A swarm agent on a plain xOllama model with pool seats runs as it would
@@ -1003,6 +1011,30 @@ export async function createOllamaProviderModule(
 				}),
 		},
 		buildStreamConfig: buildOllamaStreamConfig,
+	};
+}
+
+/**
+ * What core put on this xOllama call for the engine, read per request: a
+ * compaction call's exact booking, whether the lead tree may take it, and a
+ * pool it borrows. The lead's own pool is never "borrowed": the provider
+ * builds that one itself.
+ */
+function xollamaEngineRequest(
+	context: GatewayProviderContext,
+): XollamaEngineRequest {
+	const options = (context.config?.options ?? {}) as Record<string, unknown>;
+	const booking = (options.polykvBooking as { numCtx?: unknown } | undefined)
+		?.numCtx;
+	const sessionId = options.polykvSessionId;
+	const live =
+		typeof sessionId === "string" ? getPolykvSession(sessionId) : undefined;
+	return {
+		...(typeof booking === "number" && Number.isInteger(booking) && booking > 0
+			? { booking }
+			: {}),
+		...(options.polykvLeadPool === false ? { leadPool: false } : {}),
+		...(live && live.layout !== "lead" ? { borrowedPool: live.poolId } : {}),
 	};
 }
 

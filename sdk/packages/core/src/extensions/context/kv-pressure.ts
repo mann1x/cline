@@ -5,7 +5,6 @@ import {
 	getPolykvWindowGrant,
 	hasOpencotiFeature,
 	latestOpencotiPressure,
-	normalizeProviderId,
 	notePolykvOwnerWindow,
 	OPENCOTI_FEATURES,
 	type OpencotiAllocation,
@@ -25,6 +24,7 @@ import {
 	clearPolykvAllocationCache,
 	type PolykvProviderConfig,
 	readPolykvKvSnapshot,
+	resolvePolykvEngineConfig,
 } from "./polykv-session";
 
 /**
@@ -393,13 +393,12 @@ export async function beginKvPressureTurn(options: {
 	 */
 	grow?: boolean;
 }): Promise<KvPressureTurn | undefined> {
-	const config = options.providerConfig;
-	if (
-		!options.sessionId ||
-		!config.baseUrl ||
-		config.providerId === undefined ||
-		normalizeProviderId(config.providerId) !== "opencoti"
-	) {
+	if (!options.sessionId) {
+		return undefined;
+	}
+	// opencoti's server, or the model's engine behind xOllama.
+	const config = await resolvePolykvEngineConfig(options.providerConfig);
+	if (!config?.baseUrl) {
 		return undefined;
 	}
 	const props = await probeOpencotiProps(config.baseUrl, config.fetch).catch(

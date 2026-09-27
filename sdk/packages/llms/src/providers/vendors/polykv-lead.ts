@@ -78,7 +78,14 @@ interface LeadRoot {
 	client: PolykvClient;
 	/** `undefined` when the root could not be pooled. */
 	pool?: Promise<
-		| { id: string; prompt: string; prefixLen: number; shared: boolean }
+		| {
+				id: string;
+				prompt: string;
+				prefixLen: number;
+				shared: boolean;
+				/** A shared root this process pinned ("Keep the prefix resident"). */
+				pinned?: boolean;
+		  }
 		| undefined
 	>;
 	sessions: Set<string>;
@@ -257,13 +264,14 @@ async function detach(lead: LeadSession): Promise<void> {
 		ROOTS.delete(root.key);
 		const pool = await root.pool?.catch(() => undefined);
 		// A shared root is every process's: another window may be attached to it
-		// right now. The engine's ephemeral sweep releases it once nothing is.
-		if (
-			pool &&
-			!pool.shared &&
-			root.generation === polykvRootGeneration(root.root)
-		) {
-			await releasePool(root.client, pool.id);
+		// right now. The engine's ephemeral sweep releases it once nothing is --
+		// after the pin this process put on it is taken off again.
+		if (pool && root.generation === polykvRootGeneration(root.root)) {
+			if (!pool.shared) {
+				await releasePool(root.client, pool.id);
+			} else if (pool.pinned) {
+				await root.client.unpin(pool.id).catch(() => undefined);
+			}
 		}
 	}
 }
@@ -305,6 +313,16 @@ interface PrepareLeadPoolOptions {
 	/** The conversation's session id, as the host knows it. */
 	sessionId: string;
 	now?: number;
+	/**
+	 * "Keep the prefix resident" (the PolyKV section's `pinPrefix`, on unless
+	 * it says off): pin a shared root while this process has a conversation on
+	 * it, so a pause past the engine's 60 s sweep does not cost the next turn
+	 * the render and prefill of the whole static prompt again. Taken off with
+	 * the last conversation, after which the sweep owns it as before. A process
+	 * that dies holding it leaves it pinned (`orphaned_pin` on the engine) until
+	 * the next process on that prompt finishes with it.
+	 */
+	pinPrefix?: boolean;
 }
 
 async function prepareLeadPoolOnce(
@@ -447,11 +465,19 @@ async function prepareLeadPoolOnce(
 						ephemeral: true,
 					})
 				: await root.client.createPool({ prompt, pin: true });
+			const pinned =
+				sharedRoot && options.pinPrefix !== false
+					? await root.client
+							.pin(pool.pool_id)
+							.then(() => true)
+							.catch(() => false)
+					: false;
 			return {
 				id: pool.pool_id,
 				prompt,
 				prefixLen: pool.prefix_len,
 				shared: sharedRoot,
+				...(pinned ? { pinned } : {}),
 			};
 		})().catch(() => {
 			root.refusedAt = now;
