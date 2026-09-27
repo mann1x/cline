@@ -5,9 +5,9 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.212] — 2026-09-27
+## [4.100.213] — 2026-09-27
 
-The first public release since 4.100.118. Builds 4.100.119 to 4.100.211 were
+The first public release since 4.100.118. Builds 4.100.119 to 4.100.212 were
 test builds and were never published, so everything they carried is collected
 here, grouped by what it changes for you. The major features:
 
@@ -450,6 +450,10 @@ instead of arguing, so it can check the working model without agreeing with it.
   takes another agent when the engine's latest reading shows room for that
   agent's first turn. An agent that later outgrows its owner grows it, moves,
   or waits.
+- **Owners book for the agents waiting, where the engine resizes live.** On
+  an opencoti that grows and shrinks a busy owner while its agents run (b157
+  and later), an owner is opened for the agents waiting to be placed on it
+  and grows as more arrive, instead of booking the engine's maximum up front.
 - **A full owner is grown once, not hammered.** A worker refused because its
   owner is full grows the owner from the engine's own cell count and is sent
   again after the refusal's `Retry-After`. A stale remembered window used to
@@ -494,7 +498,8 @@ instead of arguing, so it can check the working model without agreeing with it.
   and tools through PolyKV, as on opencoti. A council model's pools stay
   xOllama's, and Cerebriline sends it no pool controls. The xOllama settings
   show which case the selected model is in, and the engine's PolyKV status
-  where Cerebriline drives it.
+  where Cerebriline drives it. They ask for 6 pool seats: a lead and a swarm
+  take 5, and the lead's compaction needs one more.
 
 ### Conversation history and the home view
 
