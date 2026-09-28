@@ -262,6 +262,11 @@ export interface AgentNodePlacement {
 	/** The session's own delegated connection, for callers that skip placement. */
 	base: DelegatedAgentConfigProvider;
 	occupancy(): ReadonlyMap<string, number>;
+	/**
+	 * Whether a node other than `nodeId` has room now; see the queue's
+	 * `hasRoomElsewhere`. Optional for hand-built placements in tests.
+	 */
+	hasRoomElsewhere?(nodeId: string): boolean;
 	readonly waiting: number;
 	/**
 	 * Every node as the lead's status tool reports it: what it runs, how full
@@ -386,6 +391,7 @@ export function createAgentNodePlacement(input: {
 			placed(await queue.acquire(signal, options)),
 		base: input.base,
 		occupancy: () => queue.occupancy(),
+		hasRoomElsewhere: (nodeId) => queue.hasRoomElsewhere(nodeId),
 		get waiting() {
 			return queue.waiting;
 		},

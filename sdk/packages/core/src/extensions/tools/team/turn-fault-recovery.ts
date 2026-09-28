@@ -15,9 +15,10 @@
  *   listening again ten seconds after it restarted. A transport fault that
  *   repeats (any attempt after the first) then also backs off like a refusal:
  *   a stream the SDK cannot read comes from a server that answers `/health`.
- * - **Refusal**: back off, growing to {@link REFUSAL_BACKOFF_MAX_MS}. The
+ * - **Refusal**: when another node has room, move there (see `relocate`);
+ *   otherwise back off, growing to {@link REFUSAL_BACKOFF_MAX_MS}. The
  *   refusal thresholds (the tps floor, the allocation) are the user's own
- *   settings and are never touched from here; waiting is the only answer.
+ *   settings and are never touched from here.
  *
  * - **Eviction**: the engine dropped the turn's sequence to keep its batch
  *   alive (`kv_observable_v1`'s `evicted_kv_full`, or the text before it).
@@ -84,6 +85,16 @@ export interface TurnFaultRecoveryOptions {
 	isAdmitted?: () => boolean;
 	/** A transport fault was seen: take the node out of rotation for a while. */
 	onTransportFault?: () => void;
+	/**
+	 * A refused turn, on an admitted agent: move it to another node with room
+	 * instead of waiting here. `true` when it is being moved; `false` when no
+	 * other node has room (or the agent cannot be moved), and it waits.
+	 *
+	 * User ruling 2026-09-28: an agent the engine keeps refusing is moved,
+	 * by priority, to a node that is free. Before this only `requeue_agent`
+	 * moved an admitted agent, and the lead in h0o2o did it 21 times by hand.
+	 */
+	relocate?: (reason: string) => boolean;
 	/**
 	 * Told on every wait, and again on each health probe that finds the server
 	 * still gone: what the agent is waiting on. For whoever tracks how long an
@@ -246,16 +257,25 @@ export function createTurnFaultRecovery(
 			});
 			await sleep(waitMs, signal);
 		} else {
-			const waitMs = refusalBackoffMs(fault.attempt);
-			const line = `${where} refused the turn (${fault.message.trim().slice(0, 200)}); trying again in ${Math.round(waitMs / 1000)} s (refusal ${fault.attempt}).`;
-			options.logger?.log(`[Agents] ${options.label}: ${line}`);
-			// A refusal is pacing, not a fault: info, like the spawn-time one.
-			report(options.emitUpdate, line, "info", { queued: true });
 			options.onWaiting?.({
 				kind: "refusal",
 				where,
 				detail: fault.message,
 			});
+			// Told the wait first: a requeue that lands on a wait stops the
+			// segment at once, with no turn in flight to lose.
+			const refusal = fault.message.trim().slice(0, 200);
+			if (options.relocate?.(`${where} refused its turn: ${refusal}`)) {
+				const line = `${where} refused the turn (${refusal}); another node has room, so it moves there with its work so far.`;
+				options.logger?.log(`[Agents] ${options.label}: ${line}`);
+				report(options.emitUpdate, line, "info", { queued: true });
+				return false;
+			}
+			const waitMs = refusalBackoffMs(fault.attempt);
+			const line = `${where} refused the turn (${fault.message.trim().slice(0, 200)}); trying again in ${Math.round(waitMs / 1000)} s (refusal ${fault.attempt}).`;
+			options.logger?.log(`[Agents] ${options.label}: ${line}`);
+			// A refusal is pacing, not a fault: info, like the spawn-time one.
+			report(options.emitUpdate, line, "info", { queued: true });
 			await sleep(waitMs, signal);
 		}
 		if (signal?.aborted) {

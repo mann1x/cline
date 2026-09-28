@@ -243,6 +243,12 @@ export interface PlacedRunInput {
 	) => Promise<AgentResult>;
 	/** Told whenever the agent is waiting on a fault or a refusal. */
 	onWaiting?: (state: TurnFaultWait) => void;
+	/**
+	 * Move this running agent off `avoidNodeId`, with its transcript: the
+	 * path's requeue. Called only when another node has room. `false` when it
+	 * cannot be moved, and it waits where it is.
+	 */
+	relocate?: (avoidNodeId: string, reason: string) => boolean;
 	/** Seam for tests: the backoff between re-placements. */
 	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 	/** Between a failed spawn and the next placement: close its engine session. */
@@ -305,6 +311,23 @@ export async function runPlacedAgent(
 			// The node went away under a running agent: the next agent should
 			// not be sent there until it answers again.
 			onTransportFault: () => placed.markUnreachable(),
+			// Refused after admission, with room elsewhere: moved, not held.
+			// The node is held as a refusal before admission holds it, so the
+			// next agent is not sent straight back to it.
+			...(input.relocate && input.placement.hasRoomElsewhere
+				? {
+						relocate: (reason: string) => {
+							if (!input.placement.hasRoomElsewhere?.(placed.nodeId)) {
+								return false;
+							}
+							if (!input.relocate?.(placed.nodeId, reason)) {
+								return false;
+							}
+							placed.refused(NODE_REFUSED_HOLD_MS);
+							return true;
+						},
+					}
+				: {}),
 		});
 
 		let outcome: { result: AgentResult } | { error: unknown };

@@ -626,3 +626,57 @@ describe("a placement pinned to one node", () => {
 		expect(pinned).toBe("pinned");
 	});
 });
+
+describe("room on another node, for an agent a node refused", () => {
+	it("says yes only for a node other than the refusing one", async () => {
+		const queue = createAgentPlacementQueue([
+			node("n1", 1, 1),
+			node("n2", 2, 1),
+		]);
+		const first = await queue.acquire();
+		expect(first.nodeId).toBe("n1");
+		expect(queue.hasRoomElsewhere("n1")).toBe(true);
+		const second = await queue.acquire();
+		expect(second.nodeId).toBe("n2");
+		expect(queue.hasRoomElsewhere("n1")).toBe(false);
+		second.release();
+		expect(queue.hasRoomElsewhere("n1")).toBe(true);
+	});
+
+	it("does not count the refusing node's own free room", async () => {
+		const queue = createAgentPlacementQueue([
+			node("n1", 1, 4),
+			node("n2", 2, 1),
+		]);
+		await queue.acquire();
+		await queue.acquire();
+		await queue.acquire();
+		expect(queue.hasRoomElsewhere("n2")).toBe(true);
+		expect(queue.hasRoomElsewhere("n1")).toBe(true);
+		const single = createAgentPlacementQueue([node("n1", 1, 4)]);
+		await single.acquire();
+		expect(single.hasRoomElsewhere("n1")).toBe(false);
+	});
+
+	it("does not offer a node that is cooling off", async () => {
+		const queue = createAgentPlacementQueue([
+			node("n1", 1, 1),
+			node("n2", 2, 1),
+		]);
+		await queue.acquire();
+		queue.markUnreachable("n2");
+		expect(queue.hasRoomElsewhere("n1")).toBe(false);
+	});
+
+	it("takes nothing by asking", async () => {
+		const queue = createAgentPlacementQueue([
+			node("n1", 1, 1),
+			node("n2", 2, 1),
+		]);
+		await queue.acquire();
+		queue.hasRoomElsewhere("n1");
+		queue.hasRoomElsewhere("n1");
+		expect(queue.occupancy().get("n2") ?? 0).toBe(0);
+		expect((await queue.acquire()).nodeId).toBe("n2");
+	});
+});

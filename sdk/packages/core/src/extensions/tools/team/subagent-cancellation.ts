@@ -170,6 +170,11 @@ export interface SubagentCancellationRegistration {
 	track(agent: TrackedAgent): void;
 	/** Waiting on infrastructure, or not: a requeue then stops it at once. */
 	setWaitingInfra(waiting: boolean): void;
+	/**
+	 * Requeue this agent, as the lead's `requeue_agent` would: the harness's
+	 * own move off a node that refused it. `false` when it cannot be moved.
+	 */
+	requeue(options?: SubagentRequeueOptions): boolean;
 	/** What the lead added to the task when it last restarted this agent. */
 	readonly instructions: string | undefined;
 	/** The next message left for this agent, for its `consumePendingUserMessage`. */
@@ -213,6 +218,7 @@ export function registerSubagentCancellation(
 			continuable: (run) => run(undefined),
 			track: () => {},
 			setWaitingInfra: () => {},
+			requeue: () => false,
 			instructions: undefined,
 			takeMessage: () => undefined,
 			release: () => {},
@@ -346,6 +352,7 @@ export function registerSubagentCancellation(
 				entry.segment?.abort(requeueAbort());
 			}
 		},
+		requeue: (options) => subagentCancellation.requeue(id, options),
 		takeMessage: () => {
 			// The boundary: no tool call open, no request in flight. A requeue
 			// the lead asked for stops the segment here, with a whole

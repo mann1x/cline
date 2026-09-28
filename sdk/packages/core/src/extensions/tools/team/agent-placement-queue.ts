@@ -162,6 +162,15 @@ export interface AgentPlacementQueue {
 		signal?: AbortSignal,
 		options?: AcquireOptions,
 	): Promise<PlacementLease>;
+	/**
+	 * Would an agent be placed on a node other than `nodeId` right now?
+	 *
+	 * Asked by an admitted agent that `nodeId` has just refused a turn: if
+	 * another node has room it moves there, by the queue's own priority order,
+	 * instead of waiting on the node that said no. Nothing is taken; the move
+	 * itself goes through {@link acquire} at the front of the queue.
+	 */
+	hasRoomElsewhere(nodeId: string): boolean;
 	/** Agents waiting for a slot, for a status line. */
 	readonly waiting: number;
 	/** Node id to agents running on it now. A copy. */
@@ -478,6 +487,31 @@ export function createAgentPlacementQueue(
 					waiters.push(waiter);
 				}
 			});
+		},
+		hasRoomElsewhere: (nodeId) => {
+			if (!nodes.some((node) => node.id !== nodeId)) {
+				return false;
+			}
+			const result = placeAgent({
+				nodes: view().map((node) =>
+					node.id === nodeId
+						? { ...node, capacity: occupancy.get(node.id) ?? 0 }
+						: node,
+				),
+				occupancy,
+				state,
+				downUntil,
+				now: now(),
+			});
+			// Read only: the rotation state is not advanced by asking. A node in
+			// its cool-off is not room: placement falls back to one only when
+			// nothing else is up, and moving an agent onto it would be worse
+			// than waiting where it is.
+			return (
+				result.placement.kind !== "queued" &&
+				result.placement.nodeId !== nodeId &&
+				!isDown(result.placement.nodeId)
+			);
 		},
 		get waiting() {
 			return waiters.length;

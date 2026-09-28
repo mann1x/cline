@@ -357,6 +357,87 @@ describe("an agent whose node goes away before it starts", () => {
 		// Before admission the spawn queue owns the retry: it can re-place.
 		expect(before).toBe(false);
 	});
+
+	// User ruling 2026-09-28: an admitted agent a node refuses moves to a
+	// node with room, by priority, instead of waiting on the one that said no.
+	it("moves an admitted agent a node refused when another has room, and holds that node", async () => {
+		const { placement, log } = fakePlacement(["n1"]);
+		const asked: string[] = [];
+		const withRoom = {
+			...placement,
+			hasRoomElsewhere: (nodeId: string) => {
+				asked.push(nodeId);
+				return true;
+			},
+		};
+		const relocate = vi.fn(() => true);
+		let retried: boolean | undefined;
+		const run = vi.fn(
+			async (
+				_node: unknown,
+				admitted: () => void,
+				recover: TurnFaultRecovery,
+			) => {
+				admitted();
+				retried = await recover({
+					kind: "refusal",
+					message: "projected mean tps below floor",
+					attempt: 1,
+					iteration: 3,
+				});
+				return ok("moved");
+			},
+		);
+
+		await runPlacedAgent({
+			placement: withRoom,
+			label: "a",
+			run,
+			relocate,
+			sleep: async () => {},
+		});
+
+		expect(asked).toEqual(["n1"]);
+		expect(relocate).toHaveBeenCalledWith(
+			"n1",
+			expect.stringContaining("projected mean tps below floor"),
+		);
+		expect(retried).toBe(false);
+		expect(log).toContain("refused n1");
+	});
+
+	it("waits on its node when no other has room", async () => {
+		const { placement, log } = fakePlacement(["n1"]);
+		const relocate = vi.fn(() => true);
+		let retried: boolean | undefined;
+		const run = vi.fn(
+			async (
+				_node: unknown,
+				admitted: () => void,
+				recover: TurnFaultRecovery,
+			) => {
+				admitted();
+				retried = await recover({
+					kind: "refusal",
+					message: "projected mean tps below floor",
+					attempt: 1,
+					iteration: 3,
+				});
+				return ok("done");
+			},
+		);
+
+		await runPlacedAgent({
+			placement: { ...placement, hasRoomElsewhere: () => false },
+			label: "a",
+			run,
+			relocate,
+		});
+
+		expect(relocate).not.toHaveBeenCalled();
+		expect(retried).toBe(true);
+		expect(log).not.toContain("refused n1");
+	});
 });
 
 describe("telling a refusal from the agent's own failure", () => {

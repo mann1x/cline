@@ -879,6 +879,9 @@ export function createConfiguredAgentTools(
 											...(options.logger ? { logger: options.logger } : {}),
 											label: config.name,
 											onWaiting: trouble.waiting,
+											// Refused after admission with room elsewhere: moved.
+											relocate: (avoidNodeId, reason) =>
+												cancellation.requeue({ reason, avoidNodeId }),
 											...(carry
 												? {
 														requeued: carry.avoidNodeId

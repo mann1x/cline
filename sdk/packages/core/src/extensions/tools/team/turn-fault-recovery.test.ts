@@ -197,6 +197,58 @@ describe("waiting out a refused turn", () => {
 		// A refusal is the engine pacing its load: never a warning.
 		expect(updates[0]?.activity?.severity).not.toBe("warn");
 	});
+
+	// User ruling 2026-09-28: moved to a free node, not waited out.
+	it("moves the agent when another node has room, without waiting", async () => {
+		const order: string[] = [];
+		const waits: number[] = [];
+		const updates: Array<{ latestOutput?: string }> = [];
+		const recover = createTurnFaultRecovery({
+			label: "a",
+			where: () => "Node1",
+			emitUpdate: (update) => updates.push(update as never),
+			onWaiting: () => order.push("waiting"),
+			relocate: (reason) => {
+				order.push(`relocate:${reason}`);
+				return true;
+			},
+			sleep: async (ms) => {
+				waits.push(ms);
+			},
+		});
+
+		expect(
+			await recover(
+				fault({ kind: "refusal", message: "projected mean tps below floor" }),
+			),
+		).toBe(false);
+		expect(waits).toEqual([]);
+		// Told the wait first, so the requeue stops the segment at once.
+		expect(order).toEqual([
+			"waiting",
+			"relocate:Node1 refused its turn: projected mean tps below floor",
+		]);
+		expect(updates.at(-1)?.latestOutput).toContain(
+			"another node has room, so it moves there",
+		);
+	});
+
+	it("waits where it is when no other node has room", async () => {
+		const waits: number[] = [];
+		const recover = createTurnFaultRecovery({
+			label: "a",
+			where: () => "Node1",
+			relocate: () => false,
+			sleep: async (ms) => {
+				waits.push(ms);
+			},
+		});
+
+		expect(
+			await recover(fault({ kind: "refusal", message: "tps below floor" })),
+		).toBe(true);
+		expect(waits).toEqual([2_000]);
+	});
 });
 
 describe("why the server went away, as the row says it", () => {

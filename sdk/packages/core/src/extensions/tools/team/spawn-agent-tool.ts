@@ -1660,6 +1660,9 @@ async function runSpawnedAgent(
 								...(config.logger ? { logger: config.logger } : {}),
 								label: input.name ?? "a sub-agent",
 								onWaiting: trouble.waiting,
+								// Refused after admission with room elsewhere: moved.
+								relocate: (avoidNodeId, reason) =>
+									cancellation.requeue({ reason, avoidNodeId }),
 								...(carry
 									? {
 											requeued: carry.avoidNodeId

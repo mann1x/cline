@@ -872,6 +872,13 @@ export function createSessionSwarmTool(
 						...(config.logger ? { logger: config.logger } : {}),
 						label: `swarm worker ${request.name}`,
 						onWaiting: trouble.waiting,
+						// Refused after admission with room elsewhere: moved.
+						...(control
+							? {
+									relocate: (avoidNodeId: string, reason: string) =>
+										control.requeue({ reason, avoidNodeId }),
+								}
+							: {}),
 						...(carry
 							? {
 									requeued: carry.avoidNodeId
