@@ -341,7 +341,7 @@ export function describeAwaitingLead(
 		...looping.map(
 			(view) =>
 				`- ${view.name} (${view.agentId}): LOOPING, loop guard stopped it at iteration ${view.iterations}.${
-					view.detail ? ` Guard: ${oneLine(view.detail, 300)}` : ""
+					view.detail ? ` Guard: ${oneLine(view.detail, 600)}` : ""
 				}`,
 		),
 		...struggling.map(

@@ -85,7 +85,11 @@ Each entry takes these fields:
 - `instructions`, to override the shared role;
 - `type`, to run a configured agent by name (its own role and model);
 - `count`, to run the entry several times (at most 100 per entry). Copies are named `<name>-1`, `<name>-2`, and so on;
-- `temperature`, `seed`, `temperature_range`, `max_iterations` and `check`, which override the call-level values.
+- `temperature`, `seed`, `temperature_range` and `check`, which override the call-level values.
+
+**Same-named agents.** Since 2026-09-28, entries that share a name are renamed `<name>-1`, `<name>-2`, … in the order given, skipping names already used in the call. The call is not refused, and the result's `notes` (or the background acknowledgement's `note`) says what was renamed. A name used once is left alone.
+
+**Call-level `count`.** `count` at the call level applies only with `merge: true` and a single `task`. On a batch it is ignored, and since 2026-09-28 the result's notes say so. For N agents of one kind, put `count` on that entry.
 
 ```json
 {
@@ -110,9 +114,13 @@ Each entry takes these fields:
 **Failure classes.** An errored agent is classed as one of:
 
 - `infra`: the server, the transport, a refusal, an unreachable node, or a missing model. Nothing the agent did, and worth running again as is.
-- `task`: the model, a tool, the iteration budget (`max_iterations`), the mistake limit, or the loop guard. The job itself was not done.
+- `task`: the model, a tool, a configured agent's iteration cap, the mistake limit, or the loop guard. The job itself was not done.
 
-Since `8e284da5b` (2026-09-26) an agent stopped by the repeated-call loop guard is reported as errored (class `task`), not cancelled.
+Since `8e284da5b` (2026-09-26) an agent stopped by the repeated-call loop guard is reported as errored (class `task`), not cancelled. Since 2026-09-28 its error names the call it kept sending, for example `` it kept sending `editor` {path: "a.html", start_line: 94, …} ``, with each argument cut to 48 characters.
+
+**Cancelled agents.** Since 2026-09-28, an agent stopped before it wrote a report still has one. It holds its latest message, marked as partial findings, and a tally of the tools it called.
+
+**Sampler values.** Each report's facts line shows the seed and temperature the agent actually ran with. A drawn value is marked, for example `seed 1234 (random) temp 0.77 (random, ±30% of 0.7)`.
 
 **Example prompts**
 
@@ -149,13 +157,13 @@ what broke, with file:line and the failing output.
 | `providerId`, `modelId` | no | Override the profile's (or the session's) provider and model |
 | `tools` | no | Allowlist of tool names. Aliases like `bash` → `run_commands` are accepted |
 | `skills` | no | Skills the agent may load. Setting it also adds the `skills` tool |
-| `maxIterations` | no | Its iteration cap. A call's `max_iterations` wins over it |
+| `maxIterations` | no | Its iteration cap. The only way an agent gets one: the lead cannot set a cap |
 
 - **File types:** `.md`, `.markdown`, `.yml` and `.yaml` are read.
 - **Search order:** the workspace's `.cline/agents/` first, then the global `~/.cerebriline/agents/`. The global directory falls back to `~/.cline/agents/`, or `CEREBRILINE_DIR` / `CLINE_DIR` when set. The first file with a given name wins, compared case-insensitively.
 - **Loading:** files are read when a session starts, and only when Subagents is on.
 
-**Tool input:** `prompt`, plus optional `temperature`, `seed`, `temperature_range`, `max_iterations` and `check`.
+**Tool input:** `prompt`, plus optional `temperature`, `seed`, `temperature_range` and `check`.
 
 **Where it runs:**
 
@@ -165,7 +173,7 @@ what broke, with file:line and the failing output.
 **Example prompts**
 
 - "Ask the qa agent to check the last change."
-- "Run subagent_security_auditor on src/auth with max_iterations 25."
+- "Run subagent_security_auditor on src/auth, with a check that `npm test` exits 0."
 
 ## Teammates: the `team_*` tools
 
@@ -177,7 +185,7 @@ what broke, with file:line and the failing output.
 |---|---|---|
 | `team_spawn_teammate` | lead | `agentId`, `rolePrompt`, optional `temperature`/`seed`/`temperature_range` |
 | `team_shutdown_teammate` | lead | `agentId`, optional `reason`. The teammate's running task is stopped and its queued ones are cancelled. It takes no more tasks until it is spawned again under the same `agentId` |
-| `team_run_task` | lead | `agentId`, `task`, optional `taskId`, `runMode` (`sync` default / `async`), `continueConversation`, `max_iterations`. A sync answer is whole up to 1,000 characters; a longer one is its opening plus a full report to read with `read_agent_report` |
+| `team_run_task` | lead | `agentId`, `task`, optional `taskId`, `runMode` (`sync` default / `async`), `continueConversation`. A sync answer is whole up to 1,000 characters; a longer one is its opening plus a full report to read with `read_agent_report` |
 | `team_await_runs`, `team_list_runs`, `team_cancel_run` | lead | Wait for, list, or cancel async runs. The wait has no time limit: it ends when the runs do, or when the lead is stopped. Cancelling a running run stops the teammate's task, and the next one starts. Each finished run's answer (`resultSummary.text`) is whole up to 1,000 characters; a longer one is its opening plus a full report to read with `read_agent_report` |
 | `team_task` | any | Task board: `create`, `list`, `claim`, `complete`, `block`. Supports `dependsOn`. A teammate gets `list`, `claim`, `complete` and `block` |
 | `team_send_message`, `team_read_mailbox` | any | Mailbox. Unread mail is put at the head of the teammate's next run. A teammate writes to the lead as `lead` |
@@ -278,7 +286,6 @@ Teammates are off unless asked for, everywhere. In VS Code the **Teammates** set
     { "name": "a", "task": "Fix src/a.js" },
     { "name": "b", "task": "Fix src/b.js" }
   ],
-  "max_iterations": 30,
   "check": { "command": "node --check src/a.js && node --check src/b.js", "expect": "" }
 }
 ```
@@ -286,7 +293,7 @@ Teammates are off unless asked for, everywhere. In VS Code the **Teammates** set
 **Example prompts**
 
 - "Search the repo for every caller of parseConfig as a swarm, count max, and give me one merged answer."
-- "Run a swarm of 20 workers to fix the syntax errors in these files; give each max_iterations 30 and check that `node --check <file>` exits 0."
+- "Run a swarm of 20 workers to fix the syntax errors in these files; check that `node --check <file>` exits 0."
 
 <Note>
   The lead cannot choose a node. There is no node field on any spawn tool, by design: placement is the harness's job. To make a swarm run on Node1, give Node1 the best priority in the Agents tab (or turn the other nodes off).
@@ -466,15 +473,15 @@ Code: `team/spawn-sampling.ts`. This is available on `spawn_agent` (call and ent
 
 Each delegated agent counts its tool calls and compactions (`07b717e67`). Compactions are broken down by cause: auto, pressure, overflow or manual, with the last one's tokens before and after. They are shown on the agent's chat row and in the strip, for example "7 tools called · 3 compactions · 12,000 tokens", and saved with the task. Teammates count over their life and per task (`c0ebb71af`). The counts are not sent to the model, and the CLI has no per-agent display.
 
-### `max_iterations`, `awaiting_lead`, and the check
+### Iteration caps, `awaiting_lead`, and the check
 
-Landed on 2026-09-26 in `fdee39e61`, `d8dcee6a3` and `e4893c1b1`. Available on `spawn_agent` (call and entry), swarms (round and task), `subagent_<name>`, and `team_run_task`. An agent's own value wins over the call's.
+Landed on 2026-09-26 in `fdee39e61`, `d8dcee6a3` and `e4893c1b1`. `check` is available on `spawn_agent` (call and entry), swarms (round and task), and `subagent_<name>`. An agent's own value wins over the call's.
 
-**`max_iterations`** caps the agent's model turns.
+**No cap from the lead.** Since 2026-09-28 the lead cannot cap an agent's model turns. `max_iterations` is no longer offered on any spawn tool or on `team_run_task`, and a value the model sends anyway is ignored. In pandorum session h0o2o, the lead set a cap of 25 on every agent and then reported the caps as a harness fault.
 
-- It is read tolerantly: `"30"` works, and floats are floored. `0`, negatives and words are refused.
-- The default is no cap.
-- A run that runs out of turns now ends as `max_iterations`, not `error` (`fdee39e61`).
+- Agents run uncapped. A configured agent whose file sets `maxIterations` stops at that cap, and so does a teammate whose spec sets one.
+- **Every 60 iterations the lead is told** which agents are still running, how many iterations each has used, and its phase. The note is batched over 30 s. Nothing is stopped: the lead checks `agents_status`, then lets the agent run, redirects it with `message_agents`, or stops it with `stop_agents`.
+- A run that reaches a cap ends as `max_iterations`, not `error` (`fdee39e61`).
 
 **At the cap the agent waits (`awaiting_lead`).** The run is suspended with its transcript, overlay and place in the round kept.
 
@@ -504,14 +511,13 @@ Landed on 2026-09-26 in `fdee39e61`, `d8dcee6a3` and `e4893c1b1`. Available on `
     { "name": "fix-a", "task": "Fix the syntax errors in src/a.js" },
     { "name": "fix-b", "task": "Fix the syntax errors in src/b.js", "check": { "command": "node --check src/b.js", "expect": "" } }
   ],
-  "max_iterations": 30,
   "check": { "command": "node --check src/a.js", "expect": "" }
 }
 ```
 
 **Example prompts**
 
-- "Spawn one agent per file in broken/ to fix the syntax errors; give each max_iterations 30 and a check that `node --check <its file>` exits 0."
+- "Spawn one agent per file in broken/ to fix the syntax errors, each with a check that `node --check <its file>` exits 0."
 - "Run the qa agent with a check that `npm test` output does not match `failing`." (`must: "not_match"`)
 
 <Note>
@@ -558,7 +564,7 @@ A nudge fires one call earlier. Three refused edits in a row, or two discarded t
 - **Nudge.** It nudges once, asking for a summary now, on any of:
   - a detector verdict from iteration 8;
   - 3 of the last 6 turns out of thinking budget;
-  - reaching the non-progress mark: 20 turns, or half of `max_iterations`.
+  - reaching the non-progress mark: 20 turns, or half of its cap when it has one.
 - **Stop.** It stops the worker only if, after the nudge, it runs out of thinking budget twice more.
 
 **Example prompts:** the offer is evidence-driven, so you normally do not ask for it. You can say "If you get stuck on this, escalate to the expert with the goal of making test_parse pass."
@@ -600,7 +606,7 @@ By design, the lead cannot route an agent to a node, and agents have no wall-clo
 | Workers that remember earlier tasks, share a board and message each other | Teammates |
 | A stronger model to take over when the lead is stuck | Escalation |
 | A machine-checked "done" for each agent | `check` on the spawn call |
-| A bound on how long an agent may go | `max_iterations` |
+| To know when an agent has been going a long time | The every-60-iterations note to the lead; `agents_status` |
 | Several agents that sample differently | `seed: "random"`, `temperature: "random"` |
 
 Some rules of thumb:
@@ -620,7 +626,7 @@ Some rules of thumb:
 | **Node** | One endpoint and model that agents can be placed on, with a priority and a capacity |
 | **Priority 0** | The lead's own opencoti session, used for up to 8 agents ahead of every node |
 | **Owner / worker (PolyKV)** | The owner is an engine session whose booked window holds a pool tree. A worker attaches to that tree and books nothing of its own; its private part is charged to the owner |
-| **Awaiting lead** | The state of an agent suspended at its `max_iterations` cap, with its work kept, waiting for the lead to resume or stop it |
+| **Awaiting lead** | The state of an agent suspended at its iteration cap (a configured agent's `maxIterations`), with its work kept, waiting for the lead to resume or stop it |
 | **Failure class** | `infra` (server, transport, refusal: run it again as is) or `task` (model, tool, iteration budget: the job was not done) |
 | **Revision** | A changed file handed back from an agent's overlay, readable with `read_files revision:"#N"` and adoptable with `restore_file` |
 | **Check (oracle)** | A command plus a regex that decides whether an agent is done, run in the agent's sandbox |

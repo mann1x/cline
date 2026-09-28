@@ -43,6 +43,7 @@ import {
 	type DelegatedStopReason,
 	runDelegatedWithCap,
 } from "./agent-iteration-cap";
+import { describeRenamedAgents, uniqueAgentNames } from "./agent-names";
 import { summarizeForLead } from "./agent-reports";
 import {
 	type AgentFacts,
@@ -166,7 +167,7 @@ export const SpawnAgentInputSchema = z.object({
 	 * of the call, the seed offset by each agent's index. See `spawn-sampling.ts`.
 	 */
 	...SpawnSamplingFields,
-	/** Its iteration cap and its check; beside `agents`, every agent's default. */
+	/** Its check; beside `agents`, every agent's default. */
 	...AgentControlFields,
 	wait: z
 		.boolean()
@@ -219,9 +220,6 @@ export const SpawnAgentMemberSchema = z.object({
 	),
 	temperature_range: SpawnSamplingFields.temperature_range.describe(
 		"Percent this entry's agents' temperature is randomized by, over the call's `temperature_range`.",
-	),
-	max_iterations: AgentControlFields.max_iterations.describe(
-		"This entry's iteration cap, over the call's `max_iterations`.",
 	),
 	check: AgentControlFields.check.describe(
 		"This entry's check, over the call's `check`.",
@@ -294,6 +292,12 @@ export type SpawnAgentInput = z.infer<typeof SpawnAgentInputSchema> & {
 	agents?: SpawnAgentMember[];
 	merge?: boolean;
 	count?: number | "max";
+	/**
+	 * What the harness changed about the call while reading it, for the lead:
+	 * agents renamed apart, a field that does nothing here. Not part of the
+	 * schema -- set by `checkMembers`, reported with the call's result.
+	 */
+	setupNotes?: string[];
 };
 
 /** One agent of a batch, as reported back. */
@@ -639,6 +643,15 @@ export function readAgentsField(input: SpawnAgentInput): SpawnAgentInput {
 const AGENTS_SHAPE_HELP =
 	'Send `agents` as an array of objects, one per agent -- [{"name": "...", "task": "..."}, ...] -- and put `merge`, `count` and `knowledge` in fields of their own, not inside `agents`.';
 
+/**
+ * Said with every unknown `type`. A lead that sent `type: "agent"` on each
+ * entry -- reading it as "the kind of thing this is" -- lost a whole round to
+ * five identical refusals that did not say what the field is for (pandorum
+ * h0o2o, 2026-09-28).
+ */
+const TYPE_FIELD_HELP =
+	"`type` runs an entry as one of the configured agents above; leave it out to run a general agent on the call's `instructions` and the entry's `task`.";
+
 function checkMembers(input: SpawnAgentInput): SpawnAgentInput {
 	const members = (input.agents ?? []) as unknown[];
 	if (members.length === 0) {
@@ -652,10 +665,48 @@ function checkMembers(input: SpawnAgentInput): SpawnAgentInput {
 			);
 		}
 	});
+	const expanded = expandAgentCounts(input.agents as SpawnAgentMember[]);
+	// Named apart the way the host names their rows (`spawnBatchMembers`).
+	const { names, renamed } = uniqueAgentNames(expanded.map(memberName));
+	const notes = [
+		describeRenamedAgents(renamed),
+		// Only `merge` reads the call's `count`. With `agents` it did nothing,
+		// silently: asked for "10 of each of 5 types", a lead sent 25 entries
+		// and `count: "max"`, got 25, and blamed `max` (pandorum h0o2o).
+		input.count !== undefined && input.merge !== true
+			? `\`count\` at the call level only applies with \`merge: true\` and a single \`task\`, so it was ignored: ${expanded.length} agent${expanded.length === 1 ? "" : "s"} run, one per entry. For several agents of one kind, give that entry its own \`count\` (a number): five kinds with \`count: 10\` each is 50 agents.`
+			: undefined,
+	].filter((note): note is string => note !== undefined);
 	return {
 		...input,
-		agents: expandAgentCounts(input.agents as SpawnAgentMember[]),
+		agents: expanded.map((member, index) =>
+			renamed.length > 0 ? { ...member, name: names[index] } : member,
+		),
+		...(notes.length > 0
+			? { setupNotes: [...(input.setupNotes ?? []), ...notes] }
+			: {}),
 	};
+}
+
+/** The name an agent of a batch goes by: its own, else its type, else its place. */
+function memberName(member: SpawnAgentMember, index: number): string {
+	return member.name?.trim() || member.type?.trim() || `agent-${index + 1}`;
+}
+
+/** A call's result with the harness's notes about the call in front. */
+function withSetupNotes<T extends object>(
+	result: T,
+	notes: readonly string[] | undefined,
+): T {
+	if (!notes || notes.length === 0) {
+		return result;
+	}
+	const record = result as { note?: unknown };
+	return (
+		typeof record.note === "string"
+			? { ...result, note: `${notes.join(" ")} ${record.note}` }
+			: { ...result, notes: [...notes] }
+	) as T;
 }
 
 /**
@@ -688,7 +739,7 @@ export function toSwarmInput(
 					known.length > 0
 						? ` Configured agents: ${known.join(", ")}.`
 						: " None are configured."
-				}`,
+				} ${TYPE_FIELD_HELP}`,
 			);
 		}
 		// A swarm's workers share the lead's snapshot on the swarm's nodes. An
@@ -741,13 +792,23 @@ export function toSwarmInput(
 	};
 }
 
-/** `max_iterations` and `check`, read and passed on only when set. */
-export function controlFields(input: unknown): {
+/**
+ * `check`, and `max_iterations` only where the harness itself stored one,
+ * read and passed on only when set.
+ *
+ * A model's `max_iterations` is ignored, not refused: the field is no longer
+ * offered (see `AgentControlFields`), and a lead that still sends it from an
+ * older transcript should not lose the call over it.
+ */
+export function controlFields(
+	input: unknown,
+	options: { storedCap?: boolean } = {},
+): {
 	max_iterations?: number;
 	check?: AgentCheck;
 } {
 	const record = (input ?? {}) as { check?: unknown };
-	const maxIterations = maxIterationsOf(input);
+	const maxIterations = options.storedCap ? maxIterationsOf(input) : undefined;
 	const check = readAgentCheck(record.check);
 	return {
 		...(maxIterations !== undefined ? { max_iterations: maxIterations } : {}),
@@ -891,12 +952,15 @@ export function storedControls(agent: {
 	maxIterations?: number;
 	check?: unknown;
 }): { max_iterations?: number; check?: AgentCheck } {
-	return controlFields({
-		...(agent.maxIterations !== undefined
-			? { max_iterations: agent.maxIterations }
-			: {}),
-		...(agent.check !== undefined ? { check: agent.check } : {}),
-	});
+	return controlFields(
+		{
+			...(agent.maxIterations !== undefined
+				? { max_iterations: agent.maxIterations }
+				: {}),
+			...(agent.check !== undefined ? { check: agent.check } : {}),
+		},
+		{ storedCap: true },
+	);
 }
 
 /**
@@ -1121,7 +1185,7 @@ async function runSpawnBatch(
 					throw new Error(
 						`No configured agent named "${member.type}".${
 							known ? ` Configured agents: ${known}.` : " None are configured."
-						}`,
+						} ${TYPE_FIELD_HELP}`,
 					);
 				}
 				const output = (await tool.execute(
@@ -1187,17 +1251,20 @@ async function runSpawnBatch(
 	);
 	if (background) {
 		void runAll.finally(() => handle.close());
-		return backgroundAck(handle);
+		return withSetupNotes(backgroundAck(handle), input.setupNotes);
 	}
 	const leave = rounds.enterBlocking();
 	try {
 		if ((await rounds.untilWoken(runAll.then(() => handle.idle()))).woken) {
-			return wokenAck(handle);
+			return withSetupNotes(wokenAck(handle), input.setupNotes);
 		}
 		handle.delivered();
 		// Built to fit the tool-result cap and name every agent: a round of 75
 		// summaries was cut from the middle, and the lead lost the agents there.
-		return roundBatchReport(handle, context.sessionId);
+		return withSetupNotes(
+			roundBatchReport(handle, context.sessionId),
+			input.setupNotes,
+		);
 	} finally {
 		leave();
 		handle.close();

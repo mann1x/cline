@@ -71,7 +71,6 @@ import {
 	validateWithZod,
 	zodToJsonSchema,
 } from "@cline/shared";
-import { readMaxIterations } from "./agent-controls";
 import {
 	AGENT_SUMMARY_MAX_CHARS,
 	READ_AGENT_REPORT_TOOL_NAME,
@@ -801,12 +800,8 @@ export function createAgentTeamsTools(
 			inputSchema: zodToJsonSchema(TeamRunTaskInputSchema),
 			execute: async (input, context) => {
 				const validatedInput = validateWithZod(TeamRunTaskInputSchema, input);
-				// The lead's cap for this task; refused, not ignored, when it is
-				// not a number of turns.
-				const maxIterations = readMaxIterations(
-					validatedInput.max_iterations ??
-						(input as { maxIterations?: unknown }).maxIterations,
-				);
+				// No cap from the lead (user ruling, 2026-09-28): a teammate runs
+				// to its own, the one its spec sets, or uncapped.
 				if (validatedInput.runMode === "async") {
 					const run = options.runtime.startTeammateRun(
 						validatedInput.agentId,
@@ -816,7 +811,6 @@ export function createAgentTeamsTools(
 							fromAgentId: options.requesterId,
 							continueConversation:
 								validatedInput.continueConversation || undefined,
-							...(maxIterations !== undefined ? { maxIterations } : {}),
 						},
 					);
 					return validateWithZod(TeamRunTaskToolResultSchema, {
@@ -837,7 +831,6 @@ export function createAgentTeamsTools(
 					validatedInput.task,
 					validatedInput.taskId || null,
 					validatedInput.continueConversation === true,
-					maxIterations ?? null,
 				]);
 				const pendingRun = pendingSyncRuns.get(syncKey);
 				if (pendingRun) {
@@ -861,7 +854,6 @@ export function createAgentTeamsTools(
 							fromAgentId: options.requesterId,
 							continueConversation:
 								validatedInput.continueConversation || undefined,
-							...(maxIterations !== undefined ? { maxIterations } : {}),
 						},
 					);
 				const runPromise = (
@@ -879,7 +871,7 @@ export function createAgentTeamsTools(
 							status: "running" as const,
 							dispatched: true,
 							message: capped
-								? `${validatedInput.agentId} stopped at its iteration cap after ${result.iterations} iterations; its conversation is kept. To go on, run team_run_task again with continueConversation: true (and a higher max_iterations).`
+								? `${validatedInput.agentId} stopped at its iteration cap after ${result.iterations} iterations; its conversation is kept. To go on, run team_run_task again with continueConversation: true.`
 								: stopped
 									? `${validatedInput.agentId} was stopped before it finished; text is what it had written.`
 									: `Task dispatched to ${validatedInput.agentId} and completed in sync mode.`,
@@ -893,7 +885,6 @@ export function createAgentTeamsTools(
 								result.text,
 							),
 							iterations: result.iterations,
-							...(maxIterations !== undefined ? { maxIterations } : {}),
 							...(result.finishReason
 								? { finishReason: result.finishReason }
 								: {}),

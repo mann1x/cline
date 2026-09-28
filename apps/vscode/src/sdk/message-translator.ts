@@ -27,7 +27,13 @@
 // - SDK "ended" event → finalizes the session
 
 import type { CoreSessionEvent } from "@cline/core"
-import { describeRestoreTarget, PATCH_MARKERS, projectSessionMessagesForDisplay, readTaskProgress } from "@cline/core"
+import {
+	describeRestoreTarget,
+	PATCH_MARKERS,
+	projectSessionMessagesForDisplay,
+	readTaskProgress,
+	uniqueAgentNames,
+} from "@cline/core"
 import {
 	OPENCOTI_WINDOW_UNAVAILABLE_CODE,
 	parseOpencotiWindowUnavailable,
@@ -219,7 +225,8 @@ export function spawnBatchMembers(input: unknown): Array<{ task: string; name?: 
 	}
 	// `count` spelled out the way the tool does (`expandAgentCounts` in core):
 	// the rows are keyed by position after expansion, so both have to agree.
-	return agents.flatMap((entry, index) => {
+	// Then named apart the same way the tool names them (`uniqueAgentNames`).
+	const expanded = agents.flatMap((entry, index) => {
 		const member = (entry ?? {}) as { task?: unknown; name?: unknown; type?: unknown; count?: unknown }
 		const name =
 			typeof member.name === "string" && member.name.trim()
@@ -233,6 +240,8 @@ export function spawnBatchMembers(input: unknown): Array<{ task: string; name?: 
 			? [{ task, name }]
 			: Array.from({ length: count }, (_copy, copy) => ({ task, name: `${name}-${copy + 1}` }))
 	})
+	const { names } = uniqueAgentNames(expanded.map((member) => member.name))
+	return expanded.map((member, index) => ({ ...member, name: names[index] }))
 }
 
 export function spawnMemberKey(callId: string, index: number): string {

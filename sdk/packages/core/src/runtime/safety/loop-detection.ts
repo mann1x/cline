@@ -206,6 +206,43 @@ export function toolCallSignature(input: unknown): string {
 	}
 }
 
+/** Longest a string argument is quoted in {@link describeRepeatedCall}. */
+const REPEATED_CALL_VALUE_CHARS = 48;
+
+/**
+ * A repeated call as someone who did not make it can read it: the tool and
+ * its arguments, each string cut short.
+ *
+ * For the lead, whose "LOOPING" notice about a delegated agent used to say
+ * only that the loop guard fired. The agent knows what it was repeating; the
+ * lead deciding whether to resume it with other instructions did not, so it
+ * could only say "stop repeating" (pandorum h0o2o, 2026-09-28).
+ */
+export function describeRepeatedCall(name: string, input: unknown): string {
+	const quote = (value: unknown): string => {
+		if (typeof value === "string") {
+			const flat = value.replace(/\s+/g, " ").trim();
+			return JSON.stringify(
+				flat.length > REPEATED_CALL_VALUE_CHARS
+					? `${flat.slice(0, REPEATED_CALL_VALUE_CHARS - 1)}…`
+					: flat,
+			);
+		}
+		if (Array.isArray(value)) {
+			return `[${value.slice(0, 3).map(quote).join(", ")}${value.length > 3 ? ", …" : ""}]`;
+		}
+		if (value && typeof value === "object") {
+			const entries = Object.entries(value as Record<string, unknown>);
+			return `{${entries
+				.slice(0, 6)
+				.map(([key, inner]) => `${key}: ${quote(inner)}`)
+				.join(", ")}${entries.length > 6 ? ", …" : ""}}`;
+		}
+		return String(value);
+	};
+	return `\`${name}\` ${input == null ? "with no arguments" : quote(input)}`;
+}
+
 /**
  * The tools that change the workspace.
  *

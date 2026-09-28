@@ -185,9 +185,6 @@ export const TeamRunTaskInputSchema = z.object({
 	continueConversation: nullableOptional(z.boolean()).describe(
 		"If true, continue the teammate conversation; otherwise start fresh",
 	),
-	max_iterations: nullableOptional(z.union([z.number(), z.string()])).describe(
-		"Most iterations (model turns) for this task; omit for the teammate's own. At the cap the run stops with its conversation kept: run the task again with continueConversation to go on.",
-	),
 });
 
 export const TeamListRunsInputSchema = z.object({

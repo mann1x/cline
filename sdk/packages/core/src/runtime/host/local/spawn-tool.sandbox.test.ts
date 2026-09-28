@@ -156,7 +156,7 @@ describe("swarm workers on private workspaces", () => {
 	// The lead's check runs where the worker's shell runs: under its launcher,
 	// over its overlay. A fake launcher that cannot start proves the check went
 	// through it -- `echo ok` on the host would have passed.
-	it("runs a worker's check under the worker's own launcher, with its cap", async () => {
+	it("runs a worker's check under the worker's own launcher, uncapped", async () => {
 		const verdicts: unknown[] = [];
 		script = async () => {
 			const options = built.at(-1) as unknown as {
@@ -175,9 +175,10 @@ describe("swarm workers on private workspaces", () => {
 			},
 			{ agentId: "lead", toolCallId: "call-1" },
 		)) as { results?: Array<Record<string, unknown>> };
+		// The lead's cap is dropped (2026-09-28): workers run uncapped.
 		expect(
 			(built[0] as unknown as { maxIterations?: number }).maxIterations,
-		).toBe(5);
+		).toBeUndefined();
 		expect(String(verdicts[0])).toContain("could not be started");
 		expect(output.results?.[0]).toMatchObject({
 			oracle: { status: "fail", exitCode: null },

@@ -1238,6 +1238,11 @@ export {
 	validateAgentFields,
 	writeAgentFile,
 } from "./extensions/tools/team/agent-file";
+// Agents of one call named apart; the host applies it to its rows too.
+export {
+	describeRenamedAgents,
+	uniqueAgentNames,
+} from "./extensions/tools/team/agent-names";
 export {
 	type CreateAgentInput,
 	type CreateAgentOutput,

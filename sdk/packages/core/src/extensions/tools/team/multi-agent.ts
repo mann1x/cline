@@ -36,7 +36,11 @@ import {
 } from "@cline/shared";
 import { nanoid } from "nanoid";
 import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-orchestrator";
-import { type HandedRevision, handbackNote } from "./delegated-sandboxes";
+import {
+	type HandedRevision,
+	handbackNote,
+	partialFindings,
+} from "./delegated-sandboxes";
 import {
 	registerSubagentCancellation,
 	type SubagentCancellationRegistration,
@@ -1540,6 +1544,15 @@ export class AgentTeamsRuntime {
 			// become revisions in the lead's log now, and the result the lead is
 			// handed names them.
 			const handed = await this.handBackWorkspace(agentId);
+			// Stopped before it answered: its report is what its transcript
+			// already holds, the same material a capped agent's report is made
+			// of. Read before the handback note, which still sees no answer of the
+			// agent's own and so still calls its changes unvetted.
+			const stoppedUnanswered =
+				result.finishReason === "aborted" && !result.text.trim();
+			const partial = stoppedUnanswered
+				? partialFindings(agent.getMessages())
+				: "";
 			if (handed) {
 				result.text += handbackNote(
 					result.text,
@@ -1547,6 +1560,9 @@ export class AgentTeamsRuntime {
 					agentId,
 					handed,
 				);
+			}
+			if (partial) {
+				result.text = `${partial}${result.text}`;
 			}
 			const taskEndStatus = taskEndStatusFromResult(result);
 			this.emitEvent({

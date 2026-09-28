@@ -81,6 +81,7 @@ import {
 	normalizeConnectionUpdate,
 } from "../config/connection-update";
 import {
+	describeRepeatedCall,
 	LoopDetectionTracker,
 	loopResultSignature,
 	toolCallSignature,
@@ -460,6 +461,13 @@ const LOOP_HARD_ESCALATION_LIMIT = 2;
  */
 const LOOP_FINAL_WARNING =
 	"This is the last attempt that will be allowed with these arguments — the run stops if the same call comes back. Do not send it again. Change what the call does: a different range, different text, or a different tool. If it is not clear what still needs changing, re-read the file and compare it against what you set out to fix.";
+
+/** The first sentence of a loop verdict, for a one-line notice. */
+function firstSentence(text: string): string {
+	const flat = text.replace(/\s+/g, " ").trim();
+	const end = flat.search(/[.!?](\s|$)/);
+	return end >= 0 ? flat.slice(0, end + 1) : flat;
+}
 
 /**
  * Appended to the verdict that stops the run, so the abort names the loop.
@@ -1830,6 +1838,9 @@ export class SessionRuntime {
 			reason: "tool_execution_failed",
 			forceAtLimit: true,
 			details: `${diagnosis} ${LOOP_STOP_NOTICE}`,
+			// The abort reason is what a lead reads about a delegated agent the
+			// guard stopped, and until now it named no call at all.
+			abortDetail: `it kept sending ${describeRepeatedCall(toolName, input)}. ${firstSentence(diagnosis)}`,
 		});
 	}
 
@@ -1862,6 +1873,8 @@ export class SessionRuntime {
 		reason: "api_error" | "invalid_tool_call" | "tool_execution_failed";
 		details?: string;
 		forceAtLimit?: boolean;
+		/** Appended to the abort reason when this record stops the run. */
+		abortDetail?: string;
 	}): void {
 		if (this.trackerAbortInFlight) {
 			return;
@@ -1870,14 +1883,18 @@ export class SessionRuntime {
 			if (this.trackerAbortInFlight) {
 				return;
 			}
-			const outcome = await this.mistakeTracker.record(input);
+			const { abortDetail, ...record } = input;
+			const outcome = await this.mistakeTracker.record(record);
 			if (outcome.action === "stop") {
 				this.trackerAbortInFlight = true;
 				this.conversation.appendMessage({
 					role: "user",
 					content: [{ type: "text", text: outcome.message }],
 				});
-				this.activeRuntime?.abort(outcome.reason ?? outcome.message);
+				const reason = outcome.reason ?? outcome.message;
+				this.activeRuntime?.abort(
+					abortDetail ? `${reason}: ${abortDetail}` : reason,
+				);
 			}
 		});
 	}

@@ -6800,6 +6800,22 @@ describe("spawnBatchMembers", () => {
 		])
 	})
 
+	it("names same-named entries apart, as the tool renames them", () => {
+		expect(
+			spawnBatchMembers({
+				agents: [
+					{ name: "review", task: "a" },
+					{ name: "review", task: "b" },
+					{ name: "solo", task: "c" },
+				],
+			}),
+		).toEqual([
+			{ name: "review-1", task: "a" },
+			{ name: "review-2", task: "b" },
+			{ name: "solo", task: "c" },
+		])
+	})
+
 	it('leaves count: "max" and a lone agent to one row', () => {
 		expect(spawnBatchMembers({ merge: true, count: "max", task: "t" })).toBeUndefined()
 		expect(spawnBatchMembers({ task: "t" })).toBeUndefined()

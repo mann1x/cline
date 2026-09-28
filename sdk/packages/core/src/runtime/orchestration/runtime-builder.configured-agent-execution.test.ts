@@ -363,9 +363,9 @@ You are a reviewer.`,
 		await runtime.shutdown("test");
 	});
 
-	// The lead's per-agent controls reach a configured agent too: its cap over
-	// the file's, and its check stated in its task.
-	it("runs a configured agent with the lead's cap over its file's, and states its check", async () => {
+	// The lead's check reaches a configured agent and is stated in its task; a
+	// cap the lead sends is dropped (2026-09-28), so the file's cap stands.
+	it("runs a configured agent with its file's cap over the lead's, and states its check", async () => {
 		const { DefaultRuntimeBuilder } = await import("./runtime-builder");
 		const workspaceRoot = mkdtempSync(join(tmpdir(), "cline-agent-cap-"));
 		tempDirs.push(workspaceRoot);
@@ -406,8 +406,8 @@ You fix code.`,
 		const delegatedConfig = agentConstructorSpy.mock.calls.at(-1)?.[0] as
 			| AgentConfig
 			| undefined;
-		expect(delegatedConfig?.maxIterations).toBe(25);
-		expect(output.maxIterations).toBe(25);
+		expect(delegatedConfig?.maxIterations).toBe(4);
+		expect(output.maxIterations).toBe(4);
 		const prompt = runMock.mock.calls.at(-1)?.[0] as string;
 		expect(prompt).toContain("fix the braces");
 		expect(prompt).toContain("`node check.js`");

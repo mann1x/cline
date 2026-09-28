@@ -790,7 +790,9 @@ describe("spawn_swarm iteration cap and check", () => {
 		return { tool, seen };
 	}
 
-	it("gives each worker its task's cap and check, else the round's", async () => {
+	// The lead no longer caps workers (2026-09-28): a cap it sends is dropped,
+	// its check is kept.
+	it("gives each worker its task's check, else the round's, and no cap", async () => {
 		const { tool, seen } = controlsTool();
 		await call(tool, {
 			systemPrompt: "s",
@@ -807,15 +809,14 @@ describe("spawn_swarm iteration cap and check", () => {
 			],
 		} as never);
 		expect(seen).toEqual({
-			a: { maxIterations: 8, check: { command: "node t.js", expect: "^OK" } },
+			a: { check: { command: "node t.js", expect: "^OK" } },
 			b: {
-				maxIterations: 20,
 				check: { command: "make test", expect: "FAIL", must: "not_match" },
 			},
 		});
 	});
 
-	it("gives every worker of a counted task the round's cap", async () => {
+	it("gives no worker of a counted task the cap the model sent", async () => {
 		const { tool, seen } = controlsTool();
 		await call(tool, {
 			systemPrompt: "s",
@@ -824,8 +825,8 @@ describe("spawn_swarm iteration cap and check", () => {
 			max_iterations: 6,
 		} as never);
 		expect(seen).toEqual({
-			"worker-1": { maxIterations: 6 },
-			"worker-2": { maxIterations: 6 },
+			"worker-1": {},
+			"worker-2": {},
 		});
 	});
 

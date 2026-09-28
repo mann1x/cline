@@ -331,6 +331,60 @@ async function readIfPresent(
 	}
 }
 
+/** Longest a stopped agent's last message is quoted in its report. */
+const PARTIAL_FINDINGS_CHARS = 2_500;
+
+/**
+ * What an agent that was stopped before answering had got to, from its own
+ * transcript: its latest message, and what it called.
+ *
+ * A stopped agent reported only that it gave no answer, while an agent of the
+ * same round that ran into its cap wrote a full report -- and the stopped
+ * one's transcript held findings as good (pandorum h0o2o, 2026-09-28: the lead
+ * stopped 18 of 25 and got 18 disclaimers). A last turn to write one is not
+ * the answer: most were stopped *because* the server kept refusing them, and
+ * a final turn would be refused the same way. So this reads what is already
+ * there.
+ */
+export function partialFindings(messages: readonly unknown[]): string {
+	let latest = "";
+	const calls = new Map<string, number>();
+	for (const message of messages) {
+		const { role, content } = (message ?? {}) as {
+			role?: string;
+			content?: unknown;
+		};
+		if (role !== "assistant" || !Array.isArray(content)) {
+			continue;
+		}
+		for (const part of content as Array<Record<string, unknown>>) {
+			if (part?.type === "text" && typeof part.text === "string") {
+				if (part.text.trim()) {
+					latest = part.text.trim();
+				}
+			} else if (part?.type === "tool_use" && typeof part.name === "string") {
+				calls.set(part.name, (calls.get(part.name) ?? 0) + 1);
+			}
+		}
+	}
+	const tally = [...calls.entries()]
+		.sort((a, b) => b[1] - a[1])
+		.map(([name, count]) => `${name} ×${count}`)
+		.join(", ");
+	const quoted =
+		latest.length > PARTIAL_FINDINGS_CHARS
+			? `${latest.slice(0, PARTIAL_FINDINGS_CHARS - 1)}…`
+			: latest;
+	const lines = [
+		"It was stopped before it wrote a report. What it had got to, from its own transcript:",
+		quoted
+			? `Its latest message (partial findings, not a final report):\n${quoted}`
+			: "It had written no message yet.",
+		tally ? `Tool calls it made: ${tally}.` : "It had made no tool calls.",
+	];
+	return lines.join("\n\n");
+}
+
 /**
  * The note that tells the lead where an agent's work went, to append to the
  * agent's answer. Without it the lead reads or runs its own on-disk copy --

@@ -40,7 +40,9 @@ import type { AgentToolContext } from "@cline/shared";
 import { HARNESS_TAG } from "../../../runtime/turn-queue/harness-notes";
 import type { CompactionCause } from "../../context/compaction-cause";
 import type { AgentOracleResult } from "./agent-check";
+import { LEAD_ITERATION_NUDGE_EVERY } from "./agent-controls";
 import { type AwaitingLeadEvent, onAwaitingLead } from "./agent-iteration-cap";
+import { LEAD_NUDGE_BATCH_MS, sendLeadNudge } from "./agent-trouble";
 import {
 	buildSpawnBatchReport,
 	failureClassOf,
@@ -1153,6 +1155,33 @@ export class AgentRounds {
 		return this.now();
 	}
 
+	private milestones: IterationMilestone[] = [];
+	private milestoneTimer: ReturnType<typeof setTimeout> | undefined;
+
+	/**
+	 * An agent has run another {@link LEAD_ITERATION_NUDGE_EVERY} iterations:
+	 * tell the lead, with every other agent that crosses a line in the next
+	 * {@link LEAD_NUDGE_BATCH_MS}.
+	 *
+	 * This is what replaced the iteration cap the lead used to set (user
+	 * ruling, 2026-09-28): nothing stops the agent, the lead is asked to look.
+	 * @internal
+	 */
+	noteIterationMilestone(milestone: IterationMilestone): void {
+		this.milestones.push(milestone);
+		if (this.milestoneTimer) {
+			return;
+		}
+		this.milestoneTimer = setTimeout(() => {
+			this.milestoneTimer = undefined;
+			const due = this.milestones.splice(0);
+			if (due.length > 0) {
+				sendLeadNudge(this.sessionId, describeIterationMilestones(due));
+			}
+		}, LEAD_NUDGE_BATCH_MS);
+		(this.milestoneTimer as unknown as { unref?: () => void }).unref?.();
+	}
+
 	private newAgent(
 		roundId: string,
 		index: number,
@@ -1496,6 +1525,19 @@ export class RoundHandle {
 			agent.iterationTimes = [...(agent.iterationTimes ?? []), at].slice(
 				-ITERATION_TIMES_KEPT,
 			);
+			const before = agent.iterations ?? 0;
+			if (
+				Math.floor(iterations / LEAD_ITERATION_NUDGE_EVERY) >
+				Math.floor(before / LEAD_ITERATION_NUDGE_EVERY)
+			) {
+				this.rounds.noteIterationMilestone({
+					round: this.live.record.id,
+					id: agent.id,
+					name: agent.name,
+					iterations,
+					...(agent.phase?.name ? { phase: agent.phase.name } : {}),
+				});
+			}
 		}
 		agent.engineSessionId = text("engineSessionId") ?? agent.engineSessionId;
 		agent.iterations = iterations ?? agent.iterations;
@@ -2038,6 +2080,31 @@ function compactNumber(value: number): string {
 			: String(value);
 }
 
+/** One agent's crossing of an iteration line, for the lead's note. */
+export interface IterationMilestone {
+	round: string;
+	id: string;
+	name: string;
+	iterations: number;
+	phase?: string;
+}
+
+/** The note that asks the lead to look at agents that have run a long time. */
+export function describeIterationMilestones(
+	milestones: readonly IterationMilestone[],
+): string {
+	const one = milestones.length === 1;
+	const rounds = [...new Set(milestones.map((m) => m.round))];
+	return [
+		`${HARNESS_TAG} ${milestones.length} agent${one ? " has" : "s have"} been running a long time; nothing was stopped:`,
+		...milestones.map(
+			(m) =>
+				`- ${m.name} (${m.id}): ${m.iterations} iterations${m.phase ? `, now ${m.phase}` : ""}`,
+		),
+		`Check how ${one ? "it is" : "they are"} doing with ${rounds.map((r) => `agents_status(round_id: "${r}")`).join(" / ")}. Let ${one ? "it" : "them"} run, message_agents to redirect, or stop_agents to take the work as it is.`,
+	].join("\n");
+}
+
 /** The same facts on one line, for a round's per-agent report entries. */
 export function agentFactsLine(agent: RoundAgentRecord): string {
 	const parts: string[] = [
@@ -2072,9 +2139,19 @@ export function agentFactsLine(agent: RoundAgentRecord): string {
 	) {
 		parts.push(
 			[
-				sampling.seed !== undefined ? `seed ${sampling.seed}` : "",
+				sampling.seed !== undefined
+					? `seed ${sampling.seed}${sampling.seedRandom ? " (random)" : ""}`
+					: "",
 				sampling.temperature !== undefined
-					? `temp ${sampling.temperature}`
+					? `temp ${sampling.temperature}${
+							sampling.temperatureRange !== undefined
+								? ` (random, ±${sampling.temperatureRange}%${
+										sampling.temperatureBase !== undefined
+											? ` of ${sampling.temperatureBase}`
+											: ""
+									})`
+								: ""
+						}`
 					: "",
 			]
 				.filter(Boolean)

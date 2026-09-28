@@ -60,7 +60,6 @@ import {
 	AGENT_CONTROLS_NOTE,
 	AGENT_SANDBOX_ROLE_NOTE,
 	AgentControlFields,
-	maxIterationsOf,
 } from "./agent-controls";
 import type { DelegatedStopReason } from "./agent-iteration-cap";
 import {
@@ -124,9 +123,6 @@ export const SpawnSwarmInputSchema = z.object({
 				temperature_range: SpawnSamplingFields.temperature_range.describe(
 					"Percent this worker's temperature is randomized by, over the swarm's `temperature_range`.",
 				),
-				max_iterations: AgentControlFields.max_iterations.describe(
-					"This worker's iteration cap, over the swarm's `max_iterations`.",
-				),
 				check: AgentControlFields.check.describe(
 					"This worker's check, over the swarm's `check`.",
 				),
@@ -147,9 +143,6 @@ export const SpawnSwarmInputSchema = z.object({
 		'Sampling seed for the workers: worker i (from 0) gets seed + i, so they do not sample identically; "random" gives each its own. A task\'s own `seed` is used as given.',
 	),
 	temperature_range: SpawnSamplingFields.temperature_range,
-	max_iterations: AgentControlFields.max_iterations.describe(
-		"Every worker's iteration cap, unless its task sets its own.",
-	),
 	check: AgentControlFields.check.describe(
 		"Every worker's check, unless its task sets its own.",
 	),
@@ -577,18 +570,17 @@ function requestedWorkers(input: SpawnSwarmInput): Array<{
 	}));
 }
 
-/** A task's (or the round's) `max_iterations` and `check`, when set. */
+/**
+ * A task's (or the round's) `check`, when set. A model's `max_iterations` is
+ * ignored: workers run uncapped (see `AgentControlFields`).
+ */
 function workerControls(entry: unknown): {
 	maxIterations?: number;
 	check?: AgentCheck;
 } {
 	const record = (entry ?? {}) as { check?: unknown };
-	const maxIterations = maxIterationsOf(entry);
 	const check = readAgentCheck(record.check);
-	return {
-		...(maxIterations !== undefined ? { maxIterations } : {}),
-		...(check ? { check } : {}),
-	};
+	return check ? { check } : {};
 }
 
 /**

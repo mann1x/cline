@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LoopDetectionTracker } from "./loop-detection";
+import { describeRepeatedCall, LoopDetectionTracker } from "./loop-detection";
 
 /**
  * The case these cover is the one the consecutive counter missed.
@@ -551,5 +551,29 @@ describe("a call answered the same way but for the revision it names", () => {
 
 		expect(kinds).toContain("soft");
 		expect(kinds).not.toContain("hard");
+	});
+});
+
+describe("describeRepeatedCall", () => {
+	it("names the tool and quotes its arguments, each string cut short", () => {
+		const text = describeRepeatedCall("editor", {
+			path: "manic_miner.html",
+			start_line: 94,
+			new_text: "x".repeat(200),
+		});
+		expect(text).toContain(
+			'`editor` {path: "manic_miner.html", start_line: 94, new_text: "',
+		);
+		expect(text).toContain("…");
+		expect(text.length).toBeLessThan(140);
+	});
+
+	it("flattens whitespace and says when there are no arguments", () => {
+		expect(describeRepeatedCall("grep", { pattern: "a\n\n  b" })).toBe(
+			'`grep` {pattern: "a b"}',
+		);
+		expect(describeRepeatedCall("list", undefined)).toBe(
+			"`list` with no arguments",
+		);
 	});
 });

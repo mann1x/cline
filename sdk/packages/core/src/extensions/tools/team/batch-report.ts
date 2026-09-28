@@ -141,6 +141,8 @@ export interface SpawnBatchSummary {
 }
 
 export interface SpawnBatchReport {
+	/** What the harness changed about the call while reading it. */
+	notes?: string[];
 	summary: SpawnBatchSummary;
 	/**
 	 * One per agent, in the order asked for. An object normally; for a round

@@ -626,6 +626,32 @@ describe("an agent at its iteration cap", () => {
 		});
 	});
 
+	// pandorum h0o2o (2026-09-28): the lead asked for a random seed and
+	// temperature per agent and reported "no visibility into actual values used".
+	it("puts the sampler an agent ran with, and what was drawn, in its facts", async () => {
+		const rounds = new AgentRounds("s1");
+		const handle = rounds.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: false,
+			agents: [{ name: "a", task: "t" }],
+		});
+		await handle.run(0, context, async () => ({
+			text: "done",
+			finishReason: "completed",
+			sampling: {
+				seed: 1234,
+				seedRandom: true,
+				temperature: 0.77,
+				temperatureBase: 0.7,
+				temperatureRange: 30,
+			},
+		}));
+		expect(agentFactsLine(handle.agent(0) as never)).toContain(
+			"seed 1234 (random) temp 0.77 (random, ±30% of 0.7)",
+		);
+	});
+
 	it("records the check's verdict from the agent's result", async () => {
 		const rounds = new AgentRounds("s1");
 		const handle = rounds.open({

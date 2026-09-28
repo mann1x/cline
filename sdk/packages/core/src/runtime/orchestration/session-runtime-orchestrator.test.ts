@@ -2770,6 +2770,15 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 		expect(String(abortCalls[0])).not.toContain("(6)");
 	});
 
+	// pandorum h0o2o (2026-09-28): the lead read "LOOPING, loop guard stopped it
+	// at iteration 21" about three agents and could not tell what any of them
+	// had been repeating, so its resume instructions were generic. The abort
+	// reason is what that notice quotes.
+	it("names the repeated call in the abort reason", async () => {
+		const abortCalls = await runIdenticalCalls(4);
+		expect(String(abortCalls[0])).toContain("it kept sending `same` {a: 1}");
+	});
+
 	// The warning used to be appended to the conversation store, which the run
 	// had already snapshotted and would overwrite when it finished. Measured on
 	// a live session: the guard counted six refusals of one `editor` call, and

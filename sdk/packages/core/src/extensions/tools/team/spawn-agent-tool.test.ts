@@ -1319,7 +1319,9 @@ describe("spawn_agent's iteration cap and check", () => {
 		__resetAwaitingLead();
 	});
 
-	it("builds each agent with its own cap, an entry's over the call's", async () => {
+	// The lead no longer caps agents (2026-09-28): pandorum h0o2o's lead set 25
+	// on every agent and reported the caps as the harness's fault.
+	it("ignores a cap the model sends, at the call and on an entry", async () => {
 		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
 		runMock.mockResolvedValue(doneResult("ok", 1));
 		const tool = createSpawnAgentTool({
@@ -1338,31 +1340,30 @@ describe("spawn_agent's iteration cap and check", () => {
 			} as never,
 			{ agentId: "p", conversationId: "c", iteration: 1 } as never,
 		);
-		const caps = agentConstructorSpy.mock.calls
-			.map((call) => (call[0] as { maxIterations?: number }).maxIterations)
-			.sort((x, y) => (x ?? 0) - (y ?? 0));
-		expect(caps).toEqual([12, 30]);
+		const caps = agentConstructorSpy.mock.calls.map(
+			(call) => (call[0] as { maxIterations?: number }).maxIterations,
+		);
+		expect(caps).toEqual([undefined, undefined]);
 	});
 
-	it("refuses a cap that is not a number of turns", async () => {
+	it("does not refuse a call over a cap it ignores", async () => {
 		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		runMock.mockResolvedValue(doneResult("ok", 1));
 		const tool = createSpawnAgentTool({
 			configProvider: createDelegatedAgentConfigProvider({
 				providerId: "anthropic",
 				modelId: "m",
 			}),
 		});
-		await expect(
-			tool.execute(
-				{ task: "t", max_iterations: 0 } as never,
-				{
-					agentId: "p",
-					conversationId: "c",
-					iteration: 1,
-				} as never,
-			),
-		).rejects.toThrow(/max_iterations/);
-		expect(agentConstructorSpy).not.toHaveBeenCalled();
+		await tool.execute(
+			{ task: "t", max_iterations: 0 } as never,
+			{
+				agentId: "p",
+				conversationId: "c",
+				iteration: 1,
+			} as never,
+		);
+		expect(agentConstructorSpy).toHaveBeenCalledTimes(1);
 	});
 
 	it("tells the agent its check up front and judges it at completion, in its sandbox", async () => {
@@ -1501,11 +1502,13 @@ describe("spawn_agent's iteration cap and check", () => {
 				providerId: "anthropic",
 				modelId: "m",
 			}),
+			// The host's cap: the lead cannot set one.
+			defaultMaxIterations: 4,
 			onSubAgentEnd,
 			onSubAgentSettled,
 		});
 		const output = (await tool.execute(
-			{ name: "solo", task: "t", max_iterations: 4 } as never,
+			{ name: "solo", task: "t" } as never,
 			{
 				agentId: "p",
 				conversationId: "c",

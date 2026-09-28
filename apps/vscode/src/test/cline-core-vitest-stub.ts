@@ -142,6 +142,9 @@ export {
 	JEV_TOOL_NAME,
 	rankQuestionOptions,
 } from "../../../../sdk/packages/core/src/extensions/tools/jev"
+// From source: the host names a batch's rows with it and the tool names the
+// agents with it, and the two have to agree.
+export { uniqueAgentNames } from "../../../../sdk/packages/core/src/extensions/tools/team/agent-names"
 // Re-exported from source rather than stubbed: the session factory composes
 // its hook layers with it, so a fake would test the fake's composition.
 export { mergeAgentHooks } from "../../../../sdk/packages/core/src/hooks/hook-file-hooks"

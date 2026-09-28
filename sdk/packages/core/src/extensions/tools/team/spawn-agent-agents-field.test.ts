@@ -128,3 +128,45 @@ describe("a merged swarm entry naming a configured agent", () => {
 		).toThrow(/No configured agent named "ghost".*code-verifier/s);
 	});
 });
+
+// pandorum h0o2o (2026-09-28): 25 entries under 5 names, and a call-level
+// `count: "max"` the batch never read.
+describe("readAgentsField: names and the call's count", () => {
+	it("names duplicate agents apart and says so", () => {
+		const read = readAgentsField({
+			agents: [
+				{ name: "review", task: "a" },
+				{ name: "fix", task: "b" },
+				{ name: "review", task: "a" },
+			],
+		} as never);
+		expect(read.agents?.map((agent) => agent.name)).toEqual([
+			"review-1",
+			"fix",
+			"review-2",
+		]);
+		expect(read.setupNotes?.join(" ")).toContain('"review" x2');
+	});
+
+	it("says a call-level count does nothing without merge", () => {
+		const read = readAgentsField({
+			count: "max",
+			agents: [
+				{ name: "a", task: "a" },
+				{ name: "b", task: "b" },
+			],
+		} as never);
+		expect(read.agents).toHaveLength(2);
+		expect(read.setupNotes?.join(" ")).toContain(
+			"it was ignored: 2 agents run",
+		);
+	});
+
+	it("adds no notes to a call that needs none", () => {
+		const read = readAgentsField({
+			agents: [{ name: "a", task: "a", count: 2 }],
+		} as never);
+		expect(read.agents?.map((agent) => agent.name)).toEqual(["a-1", "a-2"]);
+		expect(read.setupNotes).toBeUndefined();
+	});
+});
