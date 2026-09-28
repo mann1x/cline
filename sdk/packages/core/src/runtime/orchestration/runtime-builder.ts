@@ -961,6 +961,15 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			polykvAdmission
 				? (key) => (key === polykvEndpointKey ? polykvAdmission : undefined)
 				: undefined,
+			// One agent at a time waits for admission, and only where PolyKV
+			// admits: a pools-confirmed engine. Elastic slots without pools,
+			// llama.cpp and Ollama take their agents together.
+			polykvProviderConfig && isPolykvWorkerProvider(polykvProviderConfig)
+				? (key) =>
+						key === polykvEndpointKey
+							? () => polykvPoolsConfirmed(polykvProviderConfig)
+							: undefined
+				: undefined,
 		);
 		// Spread, not a field list: the list here copied seven fields and
 		// dropped the tab's thinking, temperature and output cap, so the lead's

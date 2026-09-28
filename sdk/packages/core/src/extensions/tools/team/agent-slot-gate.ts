@@ -60,6 +60,16 @@ export interface AgentSlotGate {
 	canAdmitMore(): Promise<boolean>;
 }
 
+export interface AgentSlotGateOptions {
+	/**
+	 * Whether this endpoint's engine admits agents itself (opencoti or xOllama
+	 * with PolyKV pools). Asked on each start of an uncapped gate; where it
+	 * answers yes, one agent at a time waits for admission (see `run`).
+	 * Absent or no: every agent starts at once.
+	 */
+	paced?: () => Promise<boolean>;
+}
+
 /**
  * @param limit Most agents at once, or `undefined` for no gate of ours.
  * @param admission The engine's own answer, where there is one.
@@ -79,6 +89,7 @@ export interface AgentSlotGate {
 export function createAgentSlotGate(
 	limit: number | undefined,
 	admission?: AgentAdmissionController,
+	options?: AgentSlotGateOptions,
 ): AgentSlotGate {
 	// Identity for {@link heldGates}: one gate's slot says nothing about
 	// another's, and two gates in one registry must not be confused for each
@@ -87,9 +98,10 @@ export function createAgentSlotGate(
 
 	if (limit === undefined || !Number.isFinite(limit) || limit <= 0) {
 		let running = 0;
-		// One agent at a time between starting and being admitted.
+		// One agent at a time between starting and being admitted, where
+		// PolyKV admission lifted the cap (`options.paced`).
 		//
-		// With the cap lifted the engine is the only bound, and it answers one
+		// There the engine is the only bound, and it answers one
 		// arrival at a time: every agent that has not been admitted yet is a
 		// request asking the same gate the same question. Measured on pandorum
 		// (swarm ra0as, 4.100.214): 50 workers against one server with no
@@ -98,6 +110,11 @@ export function createAgentSlotGate(
 		// an uncapped node like this already; this is the same rule for the
 		// endpoint that has no nodes. The rest wait here, in order, and none of
 		// them sends anything until the one ahead is in.
+		// Only where PolyKV admission is what lifted the cap. Elastic slots
+		// without pools, a llama.cpp or an Ollama with parallel sessions: there
+		// is no admission to wait on, and the agents join together.
+		const paced = async (): Promise<boolean> =>
+			options?.paced ? await options.paced().catch(() => false) : false;
 		let probing = false;
 		const probeWaiters: Array<() => void> = [];
 		const takeProbe = async (): Promise<void> => {
@@ -138,8 +155,10 @@ export function createAgentSlotGate(
 						running -= 1;
 					}
 				}
-				await takeProbe();
-				let probeHeld = true;
+				let probeHeld = await paced();
+				if (probeHeld) {
+					await takeProbe();
+				}
 				const admitted = (): void => {
 					if (probeHeld) {
 						probeHeld = false;
@@ -418,6 +437,7 @@ export function createAgentSlotGateRegistry(
 	limit: number | undefined,
 	limits?: Readonly<Record<string, number>>,
 	admissionFor?: (key: string) => AgentAdmissionController | undefined,
+	pacedFor?: (key: string) => AgentSlotGateOptions["paced"],
 ): AgentSlotGateRegistry {
 	const gates = new Map<string, AgentSlotGate>();
 	const boundFor = (key: string): number | undefined => limits?.[key] ?? limit;
@@ -427,7 +447,12 @@ export function createAgentSlotGateRegistry(
 			if (existing) {
 				return existing;
 			}
-			const created = createAgentSlotGate(boundFor(key), admissionFor?.(key));
+			const paced = pacedFor?.(key);
+			const created = createAgentSlotGate(
+				boundFor(key),
+				admissionFor?.(key),
+				paced ? { paced } : undefined,
+			);
 			gates.set(key, created);
 			return created;
 		},

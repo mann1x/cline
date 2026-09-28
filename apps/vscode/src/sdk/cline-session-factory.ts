@@ -2183,6 +2183,9 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 				// "node off, never place". Opposite meanings for one number,
 				// so the elastic case is said as what it is -- no ceiling.
 				capacity: slots.limit === 0 ? Number.POSITIVE_INFINITY : slots.limit,
+				// Taking turns to be admitted is PolyKV's alone: elastic slots
+				// without pools admit nothing, so their agents join together.
+				...(slots.limit === 0 && slots.admission === "polykv" ? { pacedAdmission: true } : {}),
 				...(nodeLabels[node.id] ? { label: nodeLabels[node.id] } : {}),
 				connection,
 			})

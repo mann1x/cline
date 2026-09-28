@@ -898,6 +898,12 @@ export interface CoreSessionConfig
 		 * the first and silently took no agents at all.
 		 */
 		capacity: number;
+		/**
+		 * An uncapped node whose engine admits each agent itself (PolyKV). Only
+		 * these take agents one at a time, the next once the last is admitted;
+		 * any other uncapped node takes them together.
+		 */
+		pacedAdmission?: boolean;
 		/** What the settings panel calls it: `Node1`, `Node2`, `Node3`. */
 		label?: string;
 		connection: DelegatedAgentConnectionOverride;

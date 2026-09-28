@@ -48,6 +48,8 @@ export interface AgentNodeRuntimeConfig {
 	 * and for opencoti the sub-pools inside its one session.
 	 */
 	capacity: number;
+	/** See {@link AgentNode.pacedAdmission}: set by the host for PolyKV. */
+	pacedAdmission?: boolean;
 	/**
 	 * What the settings panel calls this node -- `Node1`, `Node2`, `Node3`.
 	 *
@@ -175,6 +177,9 @@ export function sessionAgentNodes(
 							input.overflowCapacity > 0
 								? input.overflowCapacity
 								: Number.POSITIVE_INFINITY,
+						// Priority 0 is on only with pools confirmed: this is
+						// the lead's PolyKV engine, which admits each agent.
+						pacedAdmission: true,
 						label: "Node1",
 						connection: {},
 					},
@@ -316,6 +321,7 @@ export function createAgentNodePlacement(input: {
 						? LEAD_PRIORITY
 						: Math.max(node.priority, LEAD_PRIORITY + 1),
 					capacity: node.capacity,
+					...(node.pacedAdmission ? { pacedAdmission: true } : {}),
 				}),
 		),
 		{

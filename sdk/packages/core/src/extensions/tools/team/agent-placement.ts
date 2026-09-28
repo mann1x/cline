@@ -45,6 +45,13 @@ export interface AgentNode {
 	 * readings of "no number", so they are spelled differently on purpose.
 	 */
 	capacity: number;
+	/**
+	 * An uncapped node whose engine admits each agent itself: opencoti with
+	 * PolyKV pools. Only such a node is paced one agent at a time (see
+	 * `agent-placement-queue`); an elastic node without pools, or any node the
+	 * host did not mark, takes its agents together.
+	 */
+	pacedAdmission?: boolean;
 }
 
 /** The tier that is the lead conversation's own PolyKV session (§9g). */

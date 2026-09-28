@@ -98,6 +98,8 @@ describe("resolveAgentSlotLimit", () => {
 		});
 
 		expect(resolved.limit).toBe(0);
+		// PolyKV admits each agent: they take turns asking.
+		expect(resolved.admission).toBe("polykv");
 		// `/props` sits beside `/v1`, not under it.
 		expect(fetchImpl.mock.calls[0]?.[0]).toBe("http://localhost:8080/props");
 	});
@@ -112,6 +114,8 @@ describe("resolveAgentSlotLimit", () => {
 			fetch: propsServer(ELASTIC_ON) as unknown as typeof fetch,
 		});
 		expect(resolved.limit).toBe(0);
+		// Elastic without pools admits nothing: its agents join together.
+		expect(resolved.admission).toBe("elastic");
 	});
 
 	// A number in the field is a number the user meant. On an elastic server it

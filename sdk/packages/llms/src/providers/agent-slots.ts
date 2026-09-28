@@ -76,6 +76,13 @@ export interface AgentSlotLimit {
 	 * one, leave every previous behaviour alone".
 	 */
 	limit: number;
+	/**
+	 * With `limit: 0`, what lifted the cap. `"polykv"` is the engine admitting
+	 * each agent itself, which is where agents take turns asking (one waiting
+	 * for admission per node). `"elastic"` is elastic slots without pools: no
+	 * admission to wait on, and agents join together.
+	 */
+	admission?: "polykv" | "elastic";
 	/** Why, in one line, for the log. Never a value the caller branches on. */
 	reason: string;
 }
@@ -123,6 +130,7 @@ export async function resolveAgentSlotLimit(input: {
 					}
 				: {
 						limit: 0,
+						admission: props.poolsEnabled ? "polykv" : "elastic",
 						reason: `opencoti has ${by} on; the engine decides, not a slot count`,
 					};
 		}

@@ -158,8 +158,10 @@ describe("createAgentSlotGate", () => {
 	it.each([
 		[0],
 		[undefined],
-	])("lets one agent at a time try admission at %s", async (limit) => {
-		const gate = createAgentSlotGate(limit);
+	])("lets one agent at a time try PolyKV admission at %s", async (limit) => {
+		const gate = createAgentSlotGate(limit, undefined, {
+			paced: async () => true,
+		});
 		const admits: Array<() => void> = [];
 		const blocks = [deferred(), deferred(), deferred()];
 		const started: number[] = [];
@@ -192,8 +194,34 @@ describe("createAgentSlotGate", () => {
 		await Promise.all(runs);
 	});
 
+	// Elastic slots without pools, llama.cpp, Ollama: nothing admits, so
+	// nothing waits its turn -- the agents join together.
+	it.each([
+		["no pacing asked", undefined],
+		["an engine without pools", { paced: async () => false }],
+	])("starts every agent at once with %s", async (_label, options) => {
+		const gate = createAgentSlotGate(0, undefined, options);
+		const started: number[] = [];
+		const blocks = [deferred(), deferred(), deferred()];
+		const runs = blocks.map((block, index) =>
+			gate.run(() => {
+				started.push(index);
+				return block.promise;
+			}),
+		);
+		await flush();
+		expect(started).toEqual([0, 1, 2]);
+		expect(await gate.canAdmitMore()).toBe(true);
+		for (const block of blocks) {
+			block.resolve();
+		}
+		await Promise.all(runs);
+	});
+
 	it("hands the turn on when an unadmitted agent throws", async () => {
-		const gate = createAgentSlotGate(0);
+		const gate = createAgentSlotGate(0, undefined, {
+			paced: async () => true,
+		});
 		const failing = gate.run(async () => {
 			throw new Error("refused");
 		});
@@ -203,7 +231,9 @@ describe("createAgentSlotGate", () => {
 	});
 
 	it("does not make a descendant wait for its turn to try", async () => {
-		const gate = createAgentSlotGate(0);
+		const gate = createAgentSlotGate(0, undefined, {
+			paced: async () => true,
+		});
 		const outer = gate.run(() =>
 			// Never admitted: the descendant must still run.
 			gate.run(async () => "inner"),

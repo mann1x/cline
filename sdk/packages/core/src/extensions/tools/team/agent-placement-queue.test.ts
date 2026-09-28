@@ -320,14 +320,16 @@ describe("taking an unreachable node out of the rotation", () => {
  * of the run -- the other 70 were queued on nodes, inside the engine, instead
  * of here where a free node could take them.
  */
-describe("an uncapped node, paced by admission", () => {
+describe("a PolyKV node, paced by admission", () => {
 	const lease = (queue: ReturnType<typeof createAgentPlacementQueue>) =>
 		queue.acquire();
+	const polykv = (id: string) => ({
+		...node(id, 1, Number.POSITIVE_INFINITY),
+		pacedAdmission: true,
+	});
 
 	it("takes one agent, and the next only once the engine admits it", async () => {
-		const queue = createAgentPlacementQueue([
-			node("oc", 1, Number.POSITIVE_INFINITY),
-		]);
+		const queue = createAgentPlacementQueue([polykv("oc")]);
 		const first = await lease(queue);
 		const second = track(queue);
 		await settle();
@@ -341,7 +343,7 @@ describe("an uncapped node, paced by admission", () => {
 
 	it("leaves the queue to a capped node that frees while it waits on admission", async () => {
 		const queue = createAgentPlacementQueue([
-			node("oc", 1, Number.POSITIVE_INFINITY),
+			polykv("oc"),
 			node("ollama", 1, 1),
 		]);
 		const a = await lease(queue);
@@ -360,10 +362,9 @@ describe("an uncapped node, paced by admission", () => {
 	});
 
 	it("holds a node that refused, and reopens it when one of its agents finishes", async () => {
-		const queue = createAgentPlacementQueue(
-			[node("oc", 1, Number.POSITIVE_INFINITY)],
-			{ schedule: () => {} },
-		);
+		const queue = createAgentPlacementQueue([polykv("oc")], {
+			schedule: () => {},
+		});
 		const running = await lease(queue);
 		running.admitted();
 		const refused = await lease(queue);
@@ -384,10 +385,10 @@ describe("an uncapped node, paced by admission", () => {
 	it("reopens a refused node when the hold ends, with nothing of ours to finish", async () => {
 		let clock = 0;
 		const timers: Array<() => void> = [];
-		const queue = createAgentPlacementQueue(
-			[node("oc", 1, Number.POSITIVE_INFINITY)],
-			{ now: () => clock, schedule: (fn) => timers.push(fn) },
-		);
+		const queue = createAgentPlacementQueue([polykv("oc")], {
+			now: () => clock,
+			schedule: (fn) => timers.push(fn),
+		});
 		const refused = await lease(queue);
 		refused.refused(5_000);
 		const next = track(queue);
@@ -417,6 +418,24 @@ describe("an uncapped node, paced by admission", () => {
 		clock = 5_000;
 		const later = await queue.acquire();
 		expect(later.nodeId).toBe("oc");
+	});
+	// Elastic slots without pools (and anything the host did not mark):
+	// nothing admits, so every agent joins at once.
+	it("puts every agent on an uncapped node without PolyKV at once", async () => {
+		const queue = createAgentPlacementQueue([
+			node("elastic", 1, Number.POSITIVE_INFINITY),
+		]);
+		const leases = await Promise.all([
+			lease(queue),
+			lease(queue),
+			lease(queue),
+		]);
+		expect(leases.map((entry) => entry.nodeId)).toEqual([
+			"elastic",
+			"elastic",
+			"elastic",
+		]);
+		expect(queue.occupancy().get("elastic")).toBe(3);
 	});
 });
 

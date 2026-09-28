@@ -16,9 +16,9 @@
  *   queue, so a slot freed in tier 1 takes the head of the queue back up to
  *   tier 1 rather than leaving it for tier 2 to fill.
  *
- * - **An uncapped node is paced by admission, one agent at a time.** A node
- *   with no ceiling (`Infinity`: an elastic or PolyKV opencoti, where the
- *   engine decides) takes one agent, and the next only once the engine has
+ * - **A PolyKV node is paced by admission, one agent at a time.** A node
+ *   with no ceiling whose engine admits each agent (`Infinity` with
+ *   `pacedAdmission`: a PolyKV opencoti) takes one agent, and the next only once the engine has
  *   admitted that one -- its first output is the proof. Before this an
  *   uncapped node "had room" by definition, so at t=0 every queued agent was
  *   leased to it and waited inside the engine instead of here. Measured in
@@ -294,7 +294,11 @@ export function createAgentPlacementQueue(
 	// Uncapped nodes: leases not yet admitted, and refusals still holding.
 	const unadmitted = new Map<string, number>();
 	const heldUntil = new Map<string, number>();
-	const isPaced = (node: AgentNode): boolean => node.capacity === Infinity;
+	// Paced only where the engine admits each agent itself (PolyKV). An
+	// elastic node without pools has no admission to wait on: its agents
+	// join together, like a node with a parallel-sessions count.
+	const isPaced = (node: AgentNode): boolean =>
+		node.capacity === Infinity && node.pacedAdmission === true;
 	// What placement sees. An uncapped node has room for exactly one agent
 	// the engine has not yet admitted, and none while a refusal holds it --
 	// said as a capacity so `placeAgent`'s tiers and round-robin still apply.
