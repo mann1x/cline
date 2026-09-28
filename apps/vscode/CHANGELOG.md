@@ -5,9 +5,9 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.214] — 2026-09-28
+## [4.100.215] — 2026-09-28
 
-The first public release since 4.100.118. Builds 4.100.119 to 4.100.213 were
+The first public release since 4.100.118. Builds 4.100.119 to 4.100.214 were
 test builds and were never published, so everything they carried is collected
 here, grouped by what it changes for you. The major features:
 
@@ -39,10 +39,14 @@ new guide, `docs/features/agents.mdx`.
   priority, and use a lower priority only when nothing above it has room.
 - **One queue for every node.** Agents wait in one queue, oldest first. When
   every node is busy the next agent waits instead of failing. A capped node
-  takes the next agent as soon as one of its own finishes. An uncapped node
-  (elastic or PolyKV opencoti) takes a new agent once the engine has started
-  generating for the previous one, so it can no longer take the whole round up
-  front while another node sits idle.
+  takes the next agent as soon as one of its own finishes. A PolyKV opencoti
+  node with no count takes a new agent once the engine has started generating
+  for the previous one, so it can no longer take the whole round up front while
+  another node sits idle. The same holds with no nodes at all: against a PolyKV
+  server, one agent at a time asks to be admitted and the rest wait their turn,
+  instead of every agent of a swarm asking at once. Anywhere else (elastic
+  slots without pools, llama.cpp, Ollama with parallel sessions) agents start
+  together.
 - **A node that can't run the agent steps aside.** A node that can't be
   reached, answers 502/504 from a gateway with nothing behind it, or lacks the
   model leaves the rotation for a cool-off, and the agent goes to the next node
@@ -198,7 +202,7 @@ several approaches.
 - **Configured agents get the full row**, named for what they are
   (`js-syntactic`, not `subagent_js_syntactic`), with the node shown by its tab
   name (`Node2`).
-- **Warnings mean something again.** An admission refusal is an info line, not
+- **Warnings mean something again.** A queued turn is an info line, not
   a warning. The ⚠ on a chip clears once the agent makes progress. A missing
   model and a server outage are still warnings.
 - **Smaller fixes.** An agent's window no longer counts its cached prefix
@@ -212,8 +216,16 @@ several approaches.
 - **Agents retry and never fail on infrastructure.** When the server restarts
   or the connection drops, an agent waits for the server's `/health` (backing
   off up to 30 s) and runs the failed turn again. There is no retry limit, and
-  Stop always wins. An admission refusal no longer ends an agent either. It
-  waits, backing off up to 60 s.
+  Stop always wins. A full server no longer ends an agent either. The turn
+  waits in the queue and retries, backing off up to 60 s.
+- **An admitted agent keeps its place.** Compacting an agent no longer ends
+  its session on the engine, so its next turn continues at once instead of
+  queueing for admission as if it were new. Before this, agents that had run
+  for hundreds of turns were held back for minutes after each compaction.
+- **A full server reads as a queue.** Agents' rows, the lead's reports and
+  `agents_status` say "queued" and "retry 3", and the engine's "admission
+  rejected" is quoted as "admission queued". A model told its agents were
+  "refused 13x" concluded the server was broken.
 - **The lead hears about a stuck agent.** After about 10 minutes of trouble,
   the lead gets one status message per agent and can message it, stop it, or
   carry on.
