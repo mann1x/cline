@@ -2767,6 +2767,22 @@ export function parseEscalationNoticeMetadata(
 			...(readEscalationUsage(metadata.usage) ?? {}),
 		}
 	}
+	if (metadata.kind === "escalation_failed") {
+		const changed = Array.isArray(metadata.changed)
+			? metadata.changed.filter((entry): entry is string => typeof entry === "string")
+			: []
+		const index = asFiniteNumber(metadata.index)
+		const of = asFiniteNumber(metadata.of)
+		return {
+			phase: "failed",
+			text: typeof metadata.reason === "string" ? metadata.reason : message,
+			...(index !== undefined ? { index } : {}),
+			...(of !== undefined ? { of } : {}),
+			...(changed.length > 0 ? { changed } : {}),
+			...(metadata.limitReached === true ? { limitReached: true } : {}),
+			...(readEscalationUsage(metadata.usage) ?? {}),
+		}
+	}
 	if (metadata.kind === "escalation_ended") {
 		return {
 			phase: "ended",
@@ -3743,7 +3759,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					const ts =
 						escalation.phase === "working"
 							? state.expertProgressTs()
-							: escalation.phase === "reply"
+							: escalation.phase === "reply" || escalation.phase === "failed"
 								? (state.takeOpenExpertProgressTs() ?? state.nextTs())
 								: state.nextTs()
 					messages.push({

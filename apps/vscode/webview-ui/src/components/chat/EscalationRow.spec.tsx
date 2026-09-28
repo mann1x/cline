@@ -96,6 +96,29 @@ describe("EscalationRow", () => {
 
 	// Virtuoso cannot measure a zero-height item, so a payload this row cannot
 	// read still has to render something.
+	it("says the expert hit its usage limit, and what it left changed", () => {
+		render(
+			<EscalationRow
+				message={row({
+					phase: "failed",
+					text: "you have reached your session usage limit",
+					limitReached: true,
+					changed: ["lib/d4/constants.ts"],
+				})}
+			/>,
+		)
+
+		expect(screen.getByText(/reached its usage limit/)).toBeTruthy()
+		expect(screen.getByText(/session usage limit/)).toBeTruthy()
+		expect(screen.getByText(/lib\/d4\/constants.ts/)).toBeTruthy()
+	})
+
+	it("says a failed run failed when it was not a limit", () => {
+		render(<EscalationRow message={row({ phase: "failed", text: "remote model is unavailable" })} />)
+
+		expect(screen.getByText(/The expert's run failed/)).toBeTruthy()
+	})
+
 	it("renders a spacer for a payload it cannot read", () => {
 		const { container } = render(
 			<EscalationRow message={{ ts: 1, type: "say", say: "escalation", text: "{" } as ClineMessage} />,

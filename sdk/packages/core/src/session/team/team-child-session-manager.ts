@@ -392,13 +392,14 @@ export class TeamChildSessionManager {
 			rootSessionId,
 		});
 		if (!subSessionId) return;
-		if (context.error) {
-			await this.applySubagentStatusBySessionId(subSessionId, "failed");
-			return;
-		}
+		// Kept on the failure path too. A run that failed after an hour of work
+		// is the one whose transcript is wanted: Chris's .213 expert thought and
+		// edited for 70 minutes, died on a usage limit, and left nothing to read.
+		// A run that threw has messages but no usage; its turns are stored as
+		// they are, without the latest turn's metering.
 		const persistedMessages = this.toPersistedMessages(
 			context.agentResult?.messages,
-			context.agentResult,
+			context.agentResult?.usage ? context.agentResult : undefined,
 		);
 		if (persistedMessages) {
 			await this.manifestStore.persistSessionMessages(
@@ -406,7 +407,14 @@ export class TeamChildSessionManager {
 				persistedMessages,
 			);
 		}
-		const reason = context.result?.finishReason ?? "completed";
+		if (context.error || context.agentResult?.finishReason === "error") {
+			await this.applySubagentStatusBySessionId(subSessionId, "failed");
+			return;
+		}
+		const reason =
+			context.result?.finishReason ??
+			context.agentResult?.finishReason ??
+			"completed";
 		await this.applySubagentStatusBySessionId(
 			subSessionId,
 			reason === "aborted" ? "cancelled" : "completed",

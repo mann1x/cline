@@ -3,6 +3,7 @@ import {
 	BrainIcon,
 	ChevronDownIcon,
 	ChevronRightIcon,
+	CircleAlertIcon,
 	LoaderIcon,
 	PauseIcon,
 	SendIcon,
@@ -164,6 +165,41 @@ export const EscalationRow = ({ message }: { message: ClineMessage }) => {
 				<div className="mt-1 ml-4 border-l-2 border-description/30 pl-2">
 					<MarkdownRow markdown={info.text} />
 				</div>
+			</div>
+		)
+	}
+
+	// The expert's run failed. It takes the working row over, so the spinner
+	// stops and the turn's spend is counted once. Before this the failure
+	// reached only the base model's tool result, and the row spun on.
+	if (info.phase === "failed") {
+		const elapsed = formatDuration(info.usage?.wallMs)
+		return (
+			<div className="py-1.5">
+				<div className="flex items-center gap-2 text-error">
+					<CircleAlertIcon className="size-3 shrink-0" />
+					<span className="min-w-0">
+						{info.limitReached
+							? "The expert stopped: its account reached its usage limit"
+							: "The expert's run failed"}
+					</span>
+					{info.usage ? (
+						<span className="flex items-center gap-2 text-xs text-description" title="What the failed turn spent">
+							<span>↑ {formatLargeNumber(info.usage.tokensIn)}</span>
+							<span>↓ {formatLargeNumber(info.usage.tokensOut)}</span>
+							{elapsed ? <span>{elapsed}</span> : null}
+						</span>
+					) : null}
+					<div className="flex-1 min-w-4 border-t border-description/30" />
+				</div>
+				<div className="mt-1 ml-4 border-l-2 border-description/30 pl-2 text-description break-words">
+					<MarkdownRow markdown={info.text} />
+				</div>
+				{info.changed?.length ? (
+					<div className="mt-1 ml-4 text-xs text-description">
+						Changed before it failed, not reviewed: {info.changed.join(", ")}
+					</div>
+				) : null}
 			</div>
 		)
 	}

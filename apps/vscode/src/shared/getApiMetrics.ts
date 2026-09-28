@@ -72,6 +72,13 @@ export interface ExpertApiMetrics {
 	wallMs: number
 	/** Turns asked of the expert across every escalation. */
 	requests: number
+	/**
+	 * The provider's words when the expert's account ran out of allowance, the
+	 * last time it did. Providers do not publish what is left of a limit (Ollama's
+	 * account API reports the plan, not usage), so this is the moment it ran
+	 * out, not a gauge.
+	 */
+	limitReached?: string
 }
 
 interface ApiMetrics {
@@ -135,6 +142,17 @@ export function getApiMetrics(messages: ClineMessage[]): ApiMetrics {
 			try {
 				const parsed = JSON.parse(message.text)
 				const usage = parsed?.usage
+				if (parsed?.phase === "failed" && parsed.limitReached === true) {
+					const expert = (result.expert ??= {
+						tokensIn: 0,
+						tokensOut: 0,
+						generateTokens: 0,
+						generateMs: 0,
+						wallMs: 0,
+						requests: 0,
+					})
+					expert.limitReached = typeof parsed.text === "string" ? parsed.text : "usage limit reached"
+				}
 				if (usage && typeof usage === "object") {
 					const expert = (result.expert ??= {
 						tokensIn: 0,

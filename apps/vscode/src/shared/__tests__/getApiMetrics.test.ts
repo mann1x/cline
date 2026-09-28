@@ -45,6 +45,27 @@ describe("getApiMetrics", () => {
 		assert.equal(metrics.expert?.requests, 1)
 	})
 
+	// A provider publishes no gauge of what is left, so the moment it ran out
+	// is what the header can show.
+	it("carries the provider's words when the expert hit its usage limit", () => {
+		const metrics = getApiMetrics([
+			{
+				ts: 1,
+				type: "say",
+				say: "escalation",
+				text: JSON.stringify({
+					phase: "failed",
+					text: "you have reached your session usage limit",
+					limitReached: true,
+					usage: { tokensIn: 3_200_000, tokensOut: 114_300, generateTokens: 0, generateMs: 0, wallMs: 0, requests: 30 },
+				}),
+			},
+		] as ClineMessage[])
+
+		assert.equal(metrics.expert?.limitReached, "you have reached your session usage limit")
+		assert.equal(metrics.expert?.tokensIn, 3_200_000)
+	})
+
 	// Every delivery of every escalation, summed. A task that escalated three
 	// times spent three times.
 	it("sums every delivery the expert made", () => {

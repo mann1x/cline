@@ -88,6 +88,11 @@ export const TaskTokenSummary = memo<TaskTokenSummaryProps>(
 							<span>↑ {formatTokenNumber(expert.tokensIn)}</span>
 							<span>↓ {formatTokenNumber(expert.tokensOut)}</span>
 							{expertRate && <span>{expertRate}</span>}
+							{expert.limitReached && (
+								<span className="text-error" title={expert.limitReached}>
+									usage limit reached
+								</span>
+							)}
 						</span>
 					)}
 				</div>

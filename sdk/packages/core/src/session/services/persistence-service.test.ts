@@ -577,6 +577,56 @@ describe("UnifiedSessionPersistenceService", () => {
 		},
 	);
 
+	// The expert of Chris's .213 escalation failed after 70 minutes and its
+	// transcript was dropped with the failure.
+	it("keeps a failed sub-agent's messages and marks it failed", async () => {
+		const sessionsDir = mkdtempSync(join(tmpdir(), "failed-agent-messages-"));
+		tempDirs.push(sessionsDir);
+		const service = new FileSessionService(sessionsDir);
+		const rootSessionId = "root-failed-session";
+		await service.createRootSessionWithArtifacts({
+			sessionId: rootSessionId,
+			source: SessionSource.CLI,
+			pid: process.pid,
+			interactive: false,
+			provider: "ollama",
+			model: "glm-5.3:cloud",
+			cwd: "/tmp/project",
+			workspaceRoot: "/tmp/project",
+			enableTools: true,
+			enableSpawn: true,
+			enableTeams: false,
+			prompt: "lead task",
+			startedAt: "2026-09-27T23:35:00.000Z",
+		});
+		const context = {
+			subAgentId: "expert-1",
+			conversationId: "conv-expert-1",
+			parentAgentId: "lead",
+			input: { name: "expert", task: "Realign the tiers." },
+		};
+		await service.handleSubAgentStart(rootSessionId, context);
+		await service.handleSubAgentEnd(rootSessionId, {
+			...context,
+			agentResult: {
+				messages: [
+					{ role: "user", content: "Realign the tiers." },
+					{ role: "assistant", content: "Working on constants.ts" },
+				],
+			} as never,
+			error: new Error("you have reached your session usage limit"),
+		});
+
+		const row = (await service.listSessions(10)).find(
+			(item) => item.agentId === "expert-1",
+		);
+		expect(row?.status).toBe("failed");
+		const payload = JSON.parse(
+			readFileSync(row?.messagesPath as string, "utf8"),
+		) as { messages: Array<Record<string, unknown>> };
+		expect(payload.messages).toHaveLength(2);
+	});
+
 	it("persists plain spawn_agent result usage on child messages", async () => {
 		const sessionsDir = mkdtempSync(join(tmpdir(), "spawn-agent-messages-"));
 		tempDirs.push(sessionsDir);

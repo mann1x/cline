@@ -2576,6 +2576,57 @@ describe("translateSessionEvent — agent_event notice", () => {
 		expect(later.messages[0].ts).not.toBe(first.messages[0].ts)
 	})
 
+	// Chris's .213 escalation hit a usage limit after 70 minutes, and the
+	// working row spun on: no event ever reached the chat.
+	it("ends the progress row with the failure, carrying its spend and the limit", () => {
+		const state = new MessageTranslatorState()
+		const working = translateSessionEvent(
+			noticeEvent("The expert is working: 33 tool calls so far.", {
+				kind: "expert_progress",
+				index: 1,
+				of: 3,
+				toolCalls: 33,
+				usage: {
+					inputTokens: 3_200_000,
+					outputTokens: 114_300,
+					generateTokens: 1,
+					generateMs: 1,
+					wallMs: 1,
+					requests: 30,
+				},
+			}),
+			state,
+		)
+		const failed = translateSessionEvent(
+			noticeEvent("The expert stopped: its account reached its usage limit.", {
+				kind: "escalation_failed",
+				index: 1,
+				of: 3,
+				reason: "you have reached your session usage limit",
+				changed: ["lib/d4/constants.ts"],
+				limitReached: true,
+				usage: {
+					inputTokens: 3_200_000,
+					outputTokens: 114_300,
+					generateTokens: 1,
+					generateMs: 1,
+					wallMs: 1,
+					requests: 30,
+				},
+			}),
+			state,
+		)
+
+		expect(failed.messages[0].ts).toBe(working.messages[0].ts)
+		expect(JSON.parse(failed.messages[0].text ?? "{}")).toMatchObject({
+			phase: "failed",
+			text: "you have reached your session usage limit",
+			changed: ["lib/d4/constants.ts"],
+			limitReached: true,
+			usage: { tokensIn: 3_200_000, tokensOut: 114_300 },
+		})
+	})
+
 	// The expert's own words. Each finished block is a row of its own: they are
 	// a transcript, and one that overwrote itself would only ever show its last
 	// line -- unlike the progress row above it, which is a live measurement and

@@ -193,6 +193,7 @@ import { createExpertMailbox } from "../escalation/expert-mailbox";
 import { createExpertNotes, withExpertNotes } from "../escalation/expert-notes";
 import { buildExpertPrompt } from "../escalation/expert-prompt";
 import { createExpertRevisions } from "../escalation/expert-revisions";
+import { withExpertTranscript } from "../escalation/expert-transcript";
 import { createForcedEscalation } from "../escalation/forced-escalation";
 import { createStandDown, withStandDown } from "../escalation/stand-down";
 import {
@@ -1720,7 +1721,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 							},
 						})
 					: expertToolsWithRevisions;
-				return createDelegatedAgent({
+				const expert = createDelegatedAgent({
 					kind: "subagent",
 					prompt: expertPrompt,
 					configProvider,
@@ -1742,6 +1743,25 @@ export class LocalRuntimeHost implements RuntimeHost {
 					...(expertMailbox
 						? { consumePendingUserMessage: () => expertMailbox.take() }
 						: {}),
+				});
+				// Saved like any delegated agent's, after every ask and on the
+				// failure path. The expert used to leave no transcript at all:
+				// Chris's .213 escalation thought for 70 minutes (one block was
+				// 237,700 characters), died on a usage limit, and the report
+				// held nothing of it to say whether it had been looping.
+				return withExpertTranscript(expert, {
+					start: (context) =>
+						subAgentDeps.invokeBackendOptional(
+							"handleSubAgentStart",
+							sessionId,
+							context,
+						),
+					end: (context) =>
+						subAgentDeps.invokeBackendOptional(
+							"handleSubAgentEnd",
+							sessionId,
+							context,
+						),
 				});
 			},
 			// Held to what the expert's endpoint will serve, which is not
@@ -1940,6 +1960,39 @@ export class LocalRuntimeHost implements RuntimeHost {
 						displayRole: "status",
 						message: event.message,
 						metadata: { kind: "escalation_message" },
+					});
+					return;
+				}
+				if (event.type === "escalation_failed") {
+					this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
+						type: "notice",
+						noticeType: "status",
+						displayRole: "status",
+						message: event.limitReached
+							? `The expert stopped: its account reached its usage limit. ${event.reason}`
+							: `The expert's run failed: ${event.reason}`,
+						metadata: {
+							kind: "escalation_failed",
+							index: event.index,
+							of: event.of,
+							reason: event.reason,
+							changed: event.changed,
+							limitReached: event.limitReached,
+							// Takes the progress row over, like a delivery: the
+							// turn's spend is counted once, from here.
+							...(event.usage
+								? {
+										usage: {
+											inputTokens: event.usage.inputTokens,
+											outputTokens: event.usage.outputTokens,
+											generateTokens: event.usage.generateTokens,
+											generateMs: event.usage.generateMs,
+											wallMs: event.usage.wallMs,
+											requests: event.usage.requests,
+										},
+									}
+								: {}),
+						},
 					});
 					return;
 				}

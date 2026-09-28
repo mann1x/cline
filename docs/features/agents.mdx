@@ -444,6 +444,8 @@ A failed turn is classed as one of two faults:
 - **Transport:** the server restarted or is shutting down, the connection was refused or reset, a 502/503/504, a stream the SDK cannot read, a failed shared batch, or the speculative sub-batch error. The agent waits for `/health` to answer, with backoff capped at 30 s, and sends the same turn again.
 - **Refusal:** an admission refusal, a rate limit, "session allocation full", or an engine partial eviction. The agent backs off from 2 s up to 60 s and sends again.
 
+**Moved to a free node.** Since 2026-09-28, when a node refuses a turn from an agent it had already admitted, and another node has room, the agent moves there instead of waiting. It keeps its transcript, as with `requeue_agent`. The node is chosen by the usual priority order, and a node in its cool-off does not count as room. The refusing node is held for 5 s, as after a refusal before admission. With no room elsewhere, the agent waits where it is, as before. Before this, only the lead could move an admitted agent: in pandorum session h0o2o it called `requeue_agent` 21 times by hand. A refusal before admission already went back to the front of the queue and onto any node with room.
+
 There is no attempt limit and no deadline. The refusal thresholds are your own settings and are never touched. A bad tool call, a context overflow, a 400 or an auth error is not a fault of this kind and still ends the run.
 
 **The lead nudge.** An agent that has waited without a break for **10 minutes** is reported to the lead once. Agents crossing the line within 30 s of each other are reported together. The report arrives as a side turn in which the lead can reply, `message_agents` or `stop_agents`. The agents keep retrying unless someone stops them.
@@ -557,6 +559,12 @@ A nudge fires one call earlier. Three refused edits in a row, or two discarded t
 
 - 3 hand-overs per task (`maxEscalations`, `--expert-max-escalations`) and 20 follow-ups per escalation.
 - A hand-over whose expert delivered nothing is refunded, for example when the endpoint was down or the model was missing.
+
+**When the expert's run fails.** Since 2026-09-28:
+
+- The chat says so. The "working" row becomes a failure row with the provider's reason. When the reason is the account's usage limit (a 402, or "usage limit"), the row says so, and the top panel's Expert line shows **usage limit reached**, with the provider's message on hover. Providers do not publish how much of a limit is left: Ollama's account API reports the plan, not usage. So the panel shows the moment the limit was hit, not a gauge.
+- The base model is told which files the expert changed before it failed. Its read receipts for those files are retired, instead of the tool result claiming that nothing changed. In Chris's 4.100.213 session, the expert rewrote nine files over 70 minutes before a usage limit stopped it. The base was told nothing had changed, and found the edits a turn later.
+- The expert's transcript is saved as a sub-agent session after every ask, and on failure too. A session report then includes it. Before this the expert left no transcript, and a failed sub-agent of any kind lost its messages.
 - The user refusing an approval costs nothing.
 
 **The worker struggle supervisor** (`c8ef7aff4`) watches every delegated agent: swarm workers, `spawn_agent` agents and configured agents. A stop holds the agent for the lead (`awaiting_lead`, struggling) instead of ending it.

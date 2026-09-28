@@ -114,6 +114,67 @@ $SecretPattern = 'key|token|secret|password|passwd|credential|authorization|bear
 # Copies one log into the report, keeping only the tail of a large one.
 # Returns $false, without a manifest line, when there is nothing to copy: the
 # VS Code logs asked for below are absent on plenty of healthy installs.
+# A log's real size and the time on its last line, read through a handle.
+#
+# Windows does not update a file's directory entry while another process holds
+# it open for writing, and VS Code holds the running window's log open for as
+# long as the window lives. So Get-ChildItem and Get-Item report that one log
+# as it was when it was created: 0 bytes and the window's start time. Chris's
+# report of 2026-09-28 lost the whole night that way. The window was reloaded
+# at 18:19, its new log was appended to until 04:24, and the collector skipped
+# it as empty and took the closed window's log instead. A handle opened with
+# FileShare ReadWrite reports the length as it is now, and every line of these
+# logs starts with its own timestamp, which cannot go stale.
+function Get-LogFacts {
+    param([string] $Path)
+
+    $facts = [pscustomobject]@{ Length = [int64]0; LastLine = $null }
+    try {
+        $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+        $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
+        try {
+            $facts.Length = $stream.Length
+            if ($stream.Length -gt 0) {
+                $take = [int] [math]::Min($stream.Length, 65536)
+                [void] $stream.Seek(-$take, [System.IO.SeekOrigin]::End)
+                $buffer = New-Object byte[] $take
+                $read = $stream.Read($buffer, 0, $take)
+                $text = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $read)
+                $found = [regex]::Matches($text, '(?m)^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z?)')
+                if ($found.Count -gt 0) {
+                    $last = $found[$found.Count - 1]
+                    $stamp = "$($last.Groups[1].Value)T$($last.Groups[2].Value)"
+                    $style = [System.Globalization.DateTimeStyles]::AdjustToUniversal
+                    if ($last.Groups[3].Value -eq 'Z') {
+                        $style = $style -bor [System.Globalization.DateTimeStyles]::AssumeUniversal
+                    } else {
+                        $style = $style -bor [System.Globalization.DateTimeStyles]::AssumeLocal
+                    }
+                    $parsed = [datetime]::MinValue
+                    if ([datetime]::TryParse($stamp, [System.Globalization.CultureInfo]::InvariantCulture, $style, [ref] $parsed)) {
+                        $facts.LastLine = $parsed
+                    }
+                }
+            }
+        } finally {
+            $stream.Dispose()
+        }
+    } catch {
+        # Unreadable is the same as absent for a report: nothing to copy.
+    }
+    return $facts
+}
+
+# When a log was last written, for ordering: its last line's time, or the
+# directory entry's when no line carries one.
+function Get-LogTime {
+    param($Item)
+
+    $facts = Get-LogFacts $Item.FullName
+    if ($facts.LastLine) { return $facts.LastLine }
+    return $Item.LastWriteTimeUtc
+}
+
 function Copy-LogTail {
     param(
         [string] $Source,
@@ -127,19 +188,43 @@ function Copy-LogTail {
     $maxLogBytes = 8MB
 
     if (-not (Test-Path -LiteralPath $Source)) { return $false }
-    $item = Get-Item -LiteralPath $Source -ErrorAction SilentlyContinue
-    if (-not $item -or $item.Length -le 0) { return $false }
+    # The length through a handle, not the directory entry: see Get-LogFacts.
+    $facts = Get-LogFacts $Source
+    if ($facts.Length -le 0) { return $false }
+    $when = if ($facts.LastLine) { $facts.LastLine.ToString('s') + 'Z' } else { (Get-Item -LiteralPath $Source).LastWriteTimeUtc.ToString('s') + 'Z' }
 
-    $kb = [math]::Round($item.Length / 1KB, 1)
-    if ($item.Length -gt $maxLogBytes) {
-        # -Tail counts lines, not bytes; 40k lines comfortably exceeds 8MB of
-        # this log's line length, so read back from the end and trim.
-        $tail = Get-Content -LiteralPath $Source -Tail 40000
-        Set-Content -LiteralPath $Destination -Value $tail -Encoding UTF8
-        Add-Item 'logs' "$Label <- $($item.LastWriteTime.ToString('s')) (tail of ${kb} KB)"
+    $kb = [math]::Round($facts.Length / 1KB, 1)
+    try {
+        # Read shared, so the file VS Code is still writing can be copied.
+        $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+        $in = [System.IO.File]::Open($Source, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
+        try {
+            $tailed = $in.Length -gt $maxLogBytes
+            if ($tailed) {
+                [void] $in.Seek(-$maxLogBytes, [System.IO.SeekOrigin]::End)
+                # Start at a whole line.
+                while ($in.Position -lt $in.Length) {
+                    $b = $in.ReadByte()
+                    if ($b -eq -1 -or $b -eq 10) { break }
+                }
+            }
+            $out = [System.IO.File]::Create($Destination)
+            try {
+                $in.CopyTo($out)
+            } finally {
+                $out.Dispose()
+            }
+        } finally {
+            $in.Dispose()
+        }
+    } catch {
+        Add-Note "  Could not copy ${Label}: $($_.Exception.Message)" 'DarkYellow'
+        return $false
+    }
+    if ($tailed) {
+        Add-Item 'logs' "$Label <- last line $when (tail of ${kb} KB)"
     } else {
-        Copy-Item -LiteralPath $Source -Destination $Destination
-        Add-Item 'logs' "$Label <- $($item.LastWriteTime.ToString('s')) (${kb} KB)"
+        Add-Item 'logs' "$Label <- last line $when (${kb} KB)"
     }
     return $true
 }
@@ -632,9 +717,10 @@ foreach ($dir in $sessionDirs) {
 # 2026-09-05 came without the log covering the incident it was about: Windows
 # does not update a file's directory entry while a handle is open on it, so the
 # log of the window running right now can look hours older than one that was
-# closed. The <stamp> in the path is written when the window starts and does
-# not lie, and it sorts chronologically as text, so the newest paths are taken
-# as well as the newest mtimes and the two lists are merged.
+# closed. The next fix sorted by path as well, but the directory entry also
+# lies about the length, so the running window's log read as 0 bytes and was
+# skipped as empty (Chris, 2026-09-28). Now every log is measured through a
+# handle and ordered by the timestamp on its own last line; see Get-LogFacts.
 #
 # Cline's own log also cannot see the two failures most likely to end with an
 # empty panel: the extension host dying, and the webview's renderer crashing.
@@ -662,29 +748,37 @@ foreach ($root in $logRoots) {
 }
 
 # Empty logs are skipped - launching VS Code creates one before anything is
-# written to it.
-$nonEmpty = @($clineLogs | Where-Object { $_.Length -gt 0 })
+# written to it. Measured through a handle: the directory entry of the log a
+# running window is writing says 0 bytes (see Get-LogFacts).
+$nonEmpty = @($clineLogs | Where-Object { (Get-LogFacts $_.FullName).Length -gt 0 })
 
 if ($nonEmpty.Count -gt 0) {
     $logTarget = Join-Path $staging 'logs'
     New-Item -ItemType Directory -Path $logTarget -Force | Out-Null
 
-    # Three windows' worth by path, because a reload mid-task splits the log in
-    # two and the interesting half is often the earlier one; then one more by
-    # mtime, which catches a window whose folder stamp is older but which has
-    # been written to more recently than the rest.
-    $picked = @()
-    foreach ($log in @($nonEmpty | Sort-Object FullName -Descending)) {
-        if ($picked.Count -ge 3) { break }
-        $picked += $log
-    }
-    foreach ($log in @($nonEmpty | Sort-Object LastWriteTime -Descending)) {
-        if ($picked.Count -ge 4) { break }
-        if (@($picked | ForEach-Object { $_.FullName }) -contains $log.FullName) { continue }
-        $picked += $log
-    }
+    # The four most recently written, by the time on each log's last line.
+    # Four, because a reload mid-task splits the log in two and the
+    # interesting half is often the earlier one. Not by path: `window10`
+    # sorts before `window2` as text. Not by mtime: the running window's is
+    # stale (see Get-LogFacts).
+    $picked = @($nonEmpty |
+        Sort-Object { Get-LogTime $_ } -Descending |
+        Select-Object -First 4)
+
+    # Every candidate, whether it was taken or not: what the directory said
+    # against what the file holds. When a report comes without the log that
+    # mattered, this says whether it existed and why it was passed over.
+    $logIndex = @($clineLogs | ForEach-Object {
+        $facts = Get-LogFacts $_.FullName
+        $taken = if (@($picked | ForEach-Object { $_.FullName }) -contains $_.FullName) { 'taken' } else { 'skipped' }
+        $last = if ($facts.LastLine) { $facts.LastLine.ToString('s') + 'Z' } else { '-' }
+        '{0}  dirLen={1}  realLen={2}  dirTime={3}Z  lastLine={4}  {5}' -f $_.FullName, $_.Length, $facts.Length, $_.LastWriteTimeUtc.ToString('s'), $last, $taken
+    })
+    Set-Content -LiteralPath (Join-Path $logTarget 'index.txt') -Value $logIndex -Encoding UTF8
+    Add-Item 'logs' "index.txt ($($clineLogs.Count) extension logs found, $($picked.Count) taken)"
 
     $index = 0
+    $copiedWindowLogs = @()
     foreach ($log in $picked) {
         $index += 1
         [void] (Copy-LogTail $log.FullName (Join-Path $logTarget "cline-output-$index.log") "cline-output-$index.log")
@@ -697,6 +791,12 @@ if ($nonEmpty.Count -gt 0) {
         # own log simply stops mid-line when that happens, which is what it
         # looks like from the inside and is not enough to tell it from a
         # window the user closed.
+        # Once per window: extension-host restarts in one window each get an
+        # output_logging folder of their own but share the window's
+        # exthost.log and renderer.log, and four picks from one window came
+        # back as four copies of the same two files.
+        if ($copiedWindowLogs -contains $exthostDir) { continue }
+        $copiedWindowLogs += $exthostDir
         [void] (Copy-LogTail (Join-Path $exthostDir 'exthost.log') (Join-Path $logTarget "vscode-exthost-$index.log") "vscode-exthost-$index.log")
 
         # And where a webview renderer crash is. An empty Cline panel with a
@@ -882,6 +982,8 @@ sessions/<id>/<id>.compaction.json  The compacted summary, if the task ran long
 sessions/<id>/<id>.json             Task metadata: timestamps, token counts.
 logs/cline-output-N.log             The extension's own log, newest first. A
                                     window reload splits one task across two.
+logs/index.txt                      Every extension log found, with its size
+                                    and last-line time, and whether it was taken.
 logs/vscode-exthost-N.log           VS Code's extension-host log for the same
                                     window: where a host that died says so.
 logs/vscode-renderer-N.log          VS Code's renderer log for that window:

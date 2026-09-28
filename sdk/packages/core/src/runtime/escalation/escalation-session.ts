@@ -39,6 +39,7 @@ import {
 	type EscalationRequest,
 } from "./escalate-tool";
 import { createEscalationController } from "./escalation-controller";
+import { ExpertRunFailedError } from "./expert-failure";
 import type { ExpertMailbox } from "./expert-mailbox";
 import type { ExpertNoteBatch, ExpertNotes } from "./expert-notes";
 import type { ExpertRevisions } from "./expert-revisions";
@@ -91,7 +92,25 @@ export type EscalationEvent =
 			lastTool?: string;
 			usage: ExpertUsage;
 	  }
-	| { type: "escalation_ended"; held: boolean; usage: ExpertUsage };
+	| { type: "escalation_ended"; held: boolean; usage: ExpertUsage }
+	| {
+			/**
+			 * The expert's run failed. Before this nothing reached the chat: the
+			 * base model read the failure in its tool result, and the user's
+			 * "working" row spun on (Chris's .213 session, a usage limit after
+			 * 70 minutes).
+			 */
+			type: "escalation_failed";
+			index: number;
+			of: number;
+			reason: string;
+			/** Workspace-relative paths the expert changed before it failed. */
+			changed: string[];
+			/** What the failed turn had spent, as its last progress report said. */
+			usage?: ExpertUsage;
+			/** The provider refused for the account's usage limit. */
+			limitReached: boolean;
+	  };
 
 /**
  * What the user said when the escalation was put to them.
@@ -248,6 +267,34 @@ function changedBetween(before: Snapshot, after: Snapshot): string[] {
 	return changed.sort();
 }
 
+/**
+ * The provider refused because the account ran out of allowance.
+ *
+ * Ollama's cloud says "you have reached your session usage limit" (and 402 on
+ * the wire); hosted APIs say quota or limit with a 402 or 429.
+ */
+export function isUsageLimit(reason: string): boolean {
+	return /usage limit|quota|\b402\b|payment required|upgrade for higher limits|insufficient (?:credit|balance)/i.test(
+		reason,
+	);
+}
+
+function withExpertChanges(
+	error: unknown,
+	changed: string[],
+	root: string,
+): unknown {
+	if (changed.length === 0) {
+		return error;
+	}
+	const message = error instanceof Error ? error.message : String(error);
+	return new ExpertRunFailedError(
+		message,
+		changed.map((path) => relative(root, path)),
+		{ cause: error },
+	);
+}
+
 function relative(root: string, absolute: string): string {
 	const prefix = root.endsWith("/") ? root : `${root}/`;
 	return absolute.startsWith(prefix) ? absolute.slice(prefix.length) : absolute;
@@ -272,6 +319,8 @@ export function createEscalationSession(
 	 * now rather than the one it was created for.
 	 */
 	let liveIndex = 0;
+	/** The running turn's spend, as the expert last reported it. */
+	let lastProgressUsage: ExpertUsage | undefined;
 
 	const controller = createEscalationController({
 		maxEscalations,
@@ -291,7 +340,8 @@ export function createEscalationSession(
 									kind: utterance.kind,
 									text: utterance.text,
 								}),
-							onProgress: (progress) =>
+							onProgress: (progress) => {
+								lastProgressUsage = progress.usage;
 								options.onEvent?.({
 									type: "expert_progress",
 									index: liveIndex,
@@ -299,7 +349,8 @@ export function createEscalationSession(
 									toolCalls: progress.toolCalls,
 									...(progress.lastTool ? { lastTool: progress.lastTool } : {}),
 									usage: progress.usage,
-								}),
+								});
+							},
 						}
 					: {}),
 			}),
@@ -332,7 +383,37 @@ export function createEscalationSession(
 		if (options.revisions && options.revisions.source.pending === undefined) {
 			options.revisions.open(before, controller.used || 1);
 		}
-		const reply = await ask();
+		let reply: { text: string; usage: ExpertUsage };
+		lastProgressUsage = undefined;
+		try {
+			reply = await ask();
+		} catch (error) {
+			// A run can fail after real work. Chris's .213 session: glm-5.3
+			// worked for 70 minutes, rewrote constants.ts and eight class files,
+			// then hit the account's usage limit -- and the base was told the
+			// escalation did not happen and that nothing had changed. It found
+			// the edits on disk a turn later and could not tell whose they
+			// were. So the diff runs on the failure path too: the read receipts
+			// go, and the error names the files.
+			const after = await takeSnapshot(options.workspaceRoot).catch(
+				() => undefined,
+			);
+			const changed = after ? changedBetween(before, after) : [];
+			for (const path of changed) {
+				options.forgetReads?.(path);
+			}
+			const reason = error instanceof Error ? error.message : String(error);
+			options.onEvent?.({
+				type: "escalation_failed",
+				index: liveIndex,
+				of: maxEscalations,
+				reason,
+				changed: changed.map((path) => relative(options.workspaceRoot, path)),
+				...(lastProgressUsage ? { usage: lastProgressUsage } : {}),
+				limitReached: isUsageLimit(reason),
+			});
+			throw withExpertChanges(error, changed, options.workspaceRoot);
+		}
 		const after = await takeSnapshot(options.workspaceRoot);
 		const changed = changedBetween(before, after);
 		for (const path of changed) {

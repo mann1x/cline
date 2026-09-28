@@ -4,7 +4,9 @@ import type { Snapshot } from "../atomic/snapshot";
 import { ESCALATE_TOOL_NAME } from "./escalate-tool";
 import {
 	createEscalationSession,
+	type EscalationEvent,
 	type EscalationSessionOptions,
+	isUsageLimit,
 } from "./escalation-session";
 import { createExpertMailbox } from "./expert-mailbox";
 import { createExpertNotes } from "./expert-notes";
@@ -390,6 +392,80 @@ describe("createEscalationSession", () => {
 		expect(result).not.toContain("THIS IS A DELIVERY");
 	});
 
+	it("names the files a failed expert changed instead of saying nothing changed", async () => {
+		let taken = 0;
+		const forgetReads = vi.fn();
+		const events: EscalationEvent[] = [];
+		const harness = build({
+			forgetReads,
+			onEvent: (event) => events.push(event),
+			takeSnapshot: async () =>
+				snapshotOf({
+					"/work/a.js": taken++ === 0 ? "before" : "after",
+					"/work/b.js": "same",
+				}),
+			openExpert: async () => ({
+				run: async (): Promise<AgentResult> =>
+					({
+						text: "you have reached your session usage limit",
+						iterations: 30,
+						finishReason: "error",
+						usage: { inputTokens: 0, outputTokens: 0 },
+					}) as AgentResult,
+				shutdown: vi.fn(async () => {}),
+			}),
+		});
+
+		const result = await harness.call({ goal: "realign the tiers" });
+
+		expect(result).toContain("The escalation did not happen");
+		expect(result).toContain(
+			"Before it failed, the expert changed 1 file: a.js",
+		);
+		expect(result).not.toContain("nothing about it has changed");
+		expect(forgetReads).toHaveBeenCalledWith("/work/a.js");
+		expect(forgetReads).not.toHaveBeenCalledWith("/work/b.js");
+		// And the chat is told, not only the base model.
+		expect(
+			events.find((event) => event.type === "escalation_failed"),
+		).toMatchObject({
+			type: "escalation_failed",
+			index: 1,
+			changed: ["a.js"],
+			limitReached: true,
+		});
+	});
+
+	it("reads a usage limit apart from any other failure", () => {
+		expect(
+			isUsageLimit(
+				"you (chaoscode) have reached your session usage limit, upgrade for higher limits",
+			),
+		).toBe(true);
+		expect(isUsageLimit("402 Payment Required")).toBe(true);
+		expect(isUsageLimit("remote model is unavailable")).toBe(false);
+		expect(isUsageLimit("429 Too Many Requests")).toBe(false);
+	});
+
+	it("still says nothing changed when a failed expert wrote nothing", async () => {
+		const harness = build({
+			openExpert: async () => ({
+				run: async (): Promise<AgentResult> =>
+					({
+						text: "remote model is unavailable",
+						iterations: 1,
+						finishReason: "error",
+						usage: { inputTokens: 0, outputTokens: 0 },
+					}) as AgentResult,
+				shutdown: vi.fn(async () => {}),
+			}),
+		});
+
+		const result = await harness.call({ goal: "fix line 90" });
+
+		expect(result).toContain("nothing about it has changed");
+	});
+
 	it("gives the escalation back when the expert's run failed", async () => {
 		let fail = true;
 		const prompts: string[] = [];
@@ -756,6 +832,38 @@ describe("the non-blocking hand-over", () => {
 
 		expect(standDown.engaged).toBe(false);
 		finish("done");
+	});
+
+	// Chris's .213 session: the expert rewrote nine files, then hit a usage
+	// limit, and the base was told nothing had changed.
+	it("names what a failed expert changed, through the wait", async () => {
+		let taken = 0;
+		const forgetReads = vi.fn();
+		const { escalate, watch } = buildDetached({
+			forgetReads,
+			takeSnapshot: async () =>
+				snapshotOf({ "/work/a.js": taken++ === 0 ? "before" : "after" }),
+			openExpert: async () => ({
+				run: async (): Promise<AgentResult> =>
+					({
+						text: "you have reached your session usage limit",
+						iterations: 30,
+						finishReason: "error",
+						usage: { inputTokens: 0, outputTokens: 0 },
+					}) as AgentResult,
+				shutdown: vi.fn(async () => {}),
+			}),
+		});
+		await escalate({ goal: "realign the tiers" });
+
+		const answer = await watch();
+
+		expect(answer).toContain("session usage limit");
+		expect(answer).toContain(
+			"Before it failed, the expert changed 1 file: a.js",
+		);
+		expect(answer).not.toContain("may still be working");
+		expect(forgetReads).toHaveBeenCalledWith("/work/a.js");
 	});
 
 	it("turns a failed hand-over into a result, and refunds it", async () => {

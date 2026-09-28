@@ -21,6 +21,7 @@
  */
 
 import { type AgentTool, createTool } from "@cline/shared";
+import { describeFailedExpertChanges } from "./expert-failure";
 
 export const ESCALATE_TOOL_NAME = "escalate";
 
@@ -199,7 +200,10 @@ export function createEscalateTool(options: EscalateToolOptions): AgentTool {
 			} catch (error) {
 				const reason = error instanceof Error ? error.message : String(error);
 				options.onError?.("[Escalation] the escalation did not happen", error);
-				return `The escalation did not happen: ${reason}\n\nCarry on without the expert — the task is still yours to finish, and nothing about it has changed.`;
+				const changes = describeFailedExpertChanges(error);
+				return changes
+					? `The escalation did not happen: ${reason}\n\n${changes}\n\nCarry on without the expert — the task is still yours to finish.`
+					: `The escalation did not happen: ${reason}\n\nCarry on without the expert — the task is still yours to finish, and nothing about it has changed.`;
 			}
 		},
 	});

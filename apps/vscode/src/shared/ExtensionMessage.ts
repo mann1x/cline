@@ -916,7 +916,7 @@ export interface ClineTransactionInfo {
  * expert figures on the task header's own token line.
  */
 export interface ClineEscalationInfo {
-	phase: "started" | "working" | "expert_thinking" | "expert_message" | "message" | "reply" | "ended"
+	phase: "started" | "working" | "expert_thinking" | "expert_message" | "message" | "reply" | "failed" | "ended"
 	/** Which escalation this is, and how many the task gets. On "started" and "working". */
 	index?: number
 	of?: number
@@ -926,8 +926,10 @@ export interface ClineEscalationInfo {
 	toolCalls?: number
 	/** The last of those, by name. On "working". */
 	lastTool?: string
-	/** Workspace-relative paths the expert changed. On "reply". */
+	/** Workspace-relative paths the expert changed. On "reply" and "failed". */
 	changed?: string[]
+	/** On "failed": the provider refused for the account's usage limit. */
+	limitReached?: boolean
 	/** Whether the conversation was held rather than released. On "ended". */
 	held?: boolean
 	/**

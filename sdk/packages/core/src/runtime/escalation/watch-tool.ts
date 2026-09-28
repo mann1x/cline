@@ -18,6 +18,7 @@
  */
 
 import { type AgentTool, createTool } from "@cline/shared";
+import { describeFailedExpertChanges } from "./expert-failure";
 
 export const WAIT_FOR_EXPERT_TOOL_NAME = "wait_for_expert";
 
@@ -54,6 +55,10 @@ export function createWaitForExpertTool(
 			} catch (error) {
 				const reason = error instanceof Error ? error.message : String(error);
 				options.onError?.("[Escalation] waiting for the expert failed", error);
+				const changes = describeFailedExpertChanges(error);
+				if (changes) {
+					return `The expert's run failed: ${reason}\n\n${changes}\n\nThe task is yours — carry on without the expert.`;
+				}
 				return `Waiting for the expert failed: ${reason}\n\nThe expert may still be working. The task is yours either way — carry on with what you can do without changing files, and call \`escalate\` with \`finished: true\` if you want to take the workspace back.`;
 			}
 		},
