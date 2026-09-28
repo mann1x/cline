@@ -524,8 +524,10 @@ describe("after a compaction", () => {
 		expect(paths.filter((p) => p.includes("/polykv/pools"))).toEqual([]);
 	});
 
-	// No booking: a close drops the slot's stale cells and books nothing.
-	it("closes an unbooked session to drop the replaced transcript's cells", async () => {
+	// No booking: the slot's stale cells go, and the session is NOT closed --
+	// a close ends it for the admission gate, and its next turn is then
+	// floor-gated as a new arrival (swarm ra0as, bug-3670).
+	it("erases an unbooked session's slot without closing the session", async () => {
 		const server = engine({ features: ["kv_status_v1"] });
 		const config = provider(server.fetch);
 		setPolykvSession("s1", { poolId: "pool-root", prefixTokens: 12_859 });
@@ -536,8 +538,8 @@ describe("after a compaction", () => {
 		});
 
 		const paths = server.calls.map((c) => `${c.method} ${c.path}`);
-		expect(paths).toContain("POST /sessions/s1/close");
-		expect(paths.some((p) => p.includes("/slots"))).toBe(false);
+		expect(paths).toContain("POST /slots/2?action=erase");
+		expect(paths.some((p) => p.endsWith("/close"))).toBe(false);
 	});
 
 	// A held booking is where the conversation goes on: closing it would give

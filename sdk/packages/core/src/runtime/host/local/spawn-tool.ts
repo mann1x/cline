@@ -918,8 +918,11 @@ export function createSessionSwarmTool(
 			// the room comes back when a running worker finishes. Waiting is
 			// the answer; failing the worker throws away a task the round was
 			// asked to do.
-			const runWorker = (carry: SubagentRequeueCarry | undefined) =>
-				retryWhileSessionFull(() => attempt(base, () => {}, undefined, carry), {
+			const runWorker = (
+				carry: SubagentRequeueCarry | undefined,
+				admitted: () => void,
+			) =>
+				retryWhileSessionFull(() => attempt(base, admitted, undefined, carry), {
 					onRetry: (retry, waitMs) =>
 						config.logger?.log?.(
 							`[PolyKV] ${request.name} refused: the session's window is full; waiting ${
@@ -930,11 +933,14 @@ export function createSessionSwarmTool(
 			// Off the queue the moment it has a slot, not when it ends.
 			result = withCapOutcome(
 				await continuable((carry) => {
-					const started = () => {
+					// Its first output lets the next worker at an uncapped
+					// endpoint try (`AgentSlotGate.run`): one asks the engine
+					// at a time, the rest wait their turn here.
+					const started = (admitted: () => void) => {
 						request.emitUpdate?.({ queued: false });
-						return runWorker(carry);
+						return runWorker(carry, admitted);
 					};
-					return slotGate ? slotGate.run(started) : started();
+					return slotGate ? slotGate.run(started) : started(() => {});
 				}),
 			);
 			if (realizedSampling) {

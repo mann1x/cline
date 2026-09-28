@@ -132,19 +132,91 @@ describe("createAgentSlotGate", () => {
 
 	// `0` is the host saying admission control decides -- opencoti with PolyKV
 	// on. Counting here would refuse work the server would have taken.
-	it.each([[0], [undefined]])("does not gate at %s", async (limit) => {
+	it.each([
+		[0],
+		[undefined],
+	])("does not bound admitted agents at %s", async (limit) => {
 		const gate = createAgentSlotGate(limit);
 		const blocks = [deferred(), deferred(), deferred()];
-		const runs = blocks.map((block) => gate.run(() => block.promise));
+		const runs = blocks.map((block) =>
+			gate.run((admitted) => {
+				admitted();
+				return block.promise;
+			}),
+		);
 
-		await Promise.resolve();
+		await flush();
 		expect(gate.active()).toBe(3);
 		for (const block of blocks) {
 			block.resolve();
 		}
 		await Promise.all(runs);
 	});
+
+	// Swarm ra0as (4.100.214): 50 workers, one server, no nodes -- all asked
+	// the engine at once and 17 waited past ten minutes. One asks at a time.
+	it.each([
+		[0],
+		[undefined],
+	])("lets one agent at a time try admission at %s", async (limit) => {
+		const gate = createAgentSlotGate(limit);
+		const admits: Array<() => void> = [];
+		const blocks = [deferred(), deferred(), deferred()];
+		const started: number[] = [];
+		const runs = blocks.map((block, index) =>
+			gate.run((admitted) => {
+				started.push(index);
+				admits[index] = admitted;
+				return block.promise;
+			}),
+		);
+
+		await flush();
+		expect(started).toEqual([0]);
+		expect(await gate.canAdmitMore()).toBe(false);
+
+		admits[0]?.();
+		await flush();
+		expect(started).toEqual([0, 1]);
+
+		// Ending without an output hands the turn on as well.
+		blocks[1]?.resolve();
+		await flush();
+		expect(started).toEqual([0, 1, 2]);
+		expect(gate.active()).toBe(2);
+
+		admits[2]?.();
+		expect(await gate.canAdmitMore()).toBe(true);
+		blocks[0]?.resolve();
+		blocks[2]?.resolve();
+		await Promise.all(runs);
+	});
+
+	it("hands the turn on when an unadmitted agent throws", async () => {
+		const gate = createAgentSlotGate(0);
+		const failing = gate.run(async () => {
+			throw new Error("refused");
+		});
+		const next = gate.run(async () => "next");
+		await expect(failing).rejects.toThrow("refused");
+		await expect(next).resolves.toBe("next");
+	});
+
+	it("does not make a descendant wait for its turn to try", async () => {
+		const gate = createAgentSlotGate(0);
+		const outer = gate.run(() =>
+			// Never admitted: the descendant must still run.
+			gate.run(async () => "inner"),
+		);
+		await expect(outer).resolves.toBe("inner");
+	});
 });
+
+async function flush(): Promise<void> {
+	for (let i = 0; i < 10; i += 1) {
+		await Promise.resolve();
+	}
+}
 
 describe("a gate with an admission controller", () => {
 	/** An admission controller whose answers a test can drive. */

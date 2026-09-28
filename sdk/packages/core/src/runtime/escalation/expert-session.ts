@@ -285,9 +285,11 @@ export function createExpertSession(
 			const startedAt = Date.now();
 			askStartedAt = startedAt;
 			const result = options.gate
-				? await options.gate.run(
-						() => runtime?.run(message) as Promise<AgentResult>,
-					)
+				? await options.gate.run((admitted) => {
+						// One session asked once at a time: nothing to pace behind.
+						admitted();
+						return runtime?.run(message) as Promise<AgentResult>;
+					})
 				: await runtime.run(message);
 			turn.wallMs = Date.now() - startedAt;
 			turn.asks = 1;

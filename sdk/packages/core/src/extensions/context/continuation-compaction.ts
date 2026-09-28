@@ -62,6 +62,7 @@ import {
 	type BasicLogger,
 	classifyTurnFault,
 	classifyTurnFaultError,
+	describeAdmissionWait,
 	hasPromptEnvironment,
 	type MessageWithMetadata,
 	type ProviderErrorClass,
@@ -597,7 +598,8 @@ export async function prepareCompactionContinuation(
 			reason =
 				"the engine does not advertise pools, sub-pools, session close and /kv";
 		} else if (input.kvPressureActive) {
-			reason = "the server is refusing bookings: no pools, no new bookings";
+			reason =
+				"the server is under KV pressure and queues new bookings: no pools, no new bookings";
 		} else {
 			path = "pooled";
 			reason = held
@@ -760,7 +762,7 @@ class Continuation implements CompactionContinuation {
 				// A refusal is the server's to have, and never the agent's
 				// failure: info, and wait.
 				this.logger?.log(
-					`[compaction] ${call.purpose} refused by the server; waiting ${wait}ms (${describe(error)})`,
+					`[compaction] ${call.purpose} queued by the server; retrying in ${wait}ms (${describeAdmissionWait(describe(error))})`,
 					{ severity: "info" },
 				);
 				await sleep(wait, this.input.abortSignal);
@@ -1288,14 +1290,17 @@ class Continuation implements CompactionContinuation {
 		}
 	}
 
-	private async closeSession(id: string): Promise<void> {
+	private async closeSession(
+		id: string,
+		options?: { keepRunning?: boolean },
+	): Promise<void> {
 		const client = this.state.client;
 		this.openSessions.delete(id);
 		if (!client) {
 			return;
 		}
 		try {
-			const report = await client.closeSessionReport(id);
+			const report = await client.closeSessionReport(id, options);
 			this.meter.released.push(
 				`session ${id}${report.found ? " (booking)" : ""}${report.kvDropped ? " (kv)" : ""}`,
 			);
@@ -1349,8 +1354,9 @@ class Continuation implements CompactionContinuation {
 		}
 		if (this.writerBooking !== undefined) {
 			// The writer's booking is this compaction's: closing it gives back
-			// the booking and the slot's cells together.
-			await this.closeSession(this.state.wireId);
+			// the booking and the slot's cells together. The session itself goes
+			// on, so the close asks to keep it running (see `eraseOwnSlot`).
+			await this.closeSession(this.state.wireId, { keepRunning: true });
 			this.unbook(this.writerBooking);
 			return;
 		}
@@ -1362,22 +1368,42 @@ class Continuation implements CompactionContinuation {
 			// Keep the booking -- the conversation goes on in it, and a closed
 			// one would have to be won back on the next turn -- and drop what
 			// the slot holds.
-			try {
-				const erased = await client.eraseSessionSlot(this.state.wireId);
-				this.meter.released.push(
-					erased === undefined
-						? `slot of ${this.state.wireId} (not resident)`
-						: `slot of ${this.state.wireId} (${erased} cells)`,
-				);
-			} catch (error) {
-				this.meter.leaked.push(
-					`slot of ${this.state.wireId}: ${describe(error)}`,
-				);
-			}
+			await this.eraseOwnSlot();
 			return;
 		}
-		// No booking: a close drops the slot's cells and books nothing.
-		await this.closeSession(this.state.wireId);
+		// No booking: the slot's cells go, and the session stays open.
+		await this.eraseOwnSlot();
+	}
+
+	/**
+	 * Drop the session's resident cells without closing it.
+	 *
+	 * This used to be a close, which drops the same cells -- and also ends the
+	 * session as far as the engine's admission gate is concerned. A running
+	 * session's next turn is a continuation there, let past the throughput
+	 * floor (bug-3670); a closed one's is a new arrival and is floor-gated.
+	 * Measured on pandorum (swarm ra0as, 4.100.214): every one of an agent's
+	 * re-admissions followed one of its compactions, and a busy server then
+	 * refused the agent's next turn for minutes at a time, 388 turns in all.
+	 * The conversation goes on after a compaction, so its session must too.
+	 */
+	private async eraseOwnSlot(): Promise<void> {
+		const client = this.state.client;
+		if (!client || !this.state.wireId) {
+			return;
+		}
+		try {
+			const erased = await client.eraseSessionSlot(this.state.wireId);
+			this.meter.released.push(
+				erased === undefined
+					? `slot of ${this.state.wireId} (not resident)`
+					: `slot of ${this.state.wireId} (${erased} cells)`,
+			);
+		} catch (error) {
+			this.meter.leaked.push(
+				`slot of ${this.state.wireId}: ${describe(error)}`,
+			);
+		}
 	}
 
 	async dispose(): Promise<void> {

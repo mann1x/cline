@@ -20,6 +20,7 @@
  * The agents keep retrying. Nothing here stops one: the lead may, and so may
  * the user.
  */
+import { describeAdmissionWait } from "@cline/shared";
 import { HARNESS_TAG } from "../../../runtime/turn-queue/harness-notes";
 import { FAILED_BATCH_REASON, type TurnFaultWait } from "./turn-fault-recovery";
 
@@ -126,7 +127,9 @@ export function describeTrouble(
 ): string {
 	const waited = `${minutes(now - record.since)} min`;
 	if (record.kind === "refusal") {
-		return `- ${record.name}: refused ${record.refusals}x by ${record.where}: "${record.detail.trim().slice(0, 160)}" (${waited})`;
+		// Queue words: "refused 13x" read to the lead as a broken node
+		// (swarm ra0as), and the agent is only waiting its turn.
+		return `- ${record.name}: queued by ${record.where}, ${record.refusals} ${record.refusals === 1 ? "retry" : "retries"}: "${describeAdmissionWait(record.detail.trim().slice(0, 160))}" (${waited})`;
 	}
 	if (record.detail === FAILED_BATCH_REASON) {
 		return `- ${record.name}: ${record.where} answers, its turns fail (${record.detail}, ${waited})`;
@@ -146,7 +149,7 @@ export function describeLeadNudge(
 ): string {
 	const count = records.length;
 	return [
-		`${HARNESS_TAG} ${count} agent${count === 1 ? "" : "s"} stalled >${minutes(LEAD_NUDGE_AFTER_MS)} min, still retrying; nothing stopped:`,
+		`${HARNESS_TAG} ${count} agent${count === 1 ? "" : "s"} waiting >${minutes(LEAD_NUDGE_AFTER_MS)} min for the server, still retrying; nothing stopped:`,
 		...records.map((record) => describeTrouble(record, now)),
 		"Options: let them retry; or stop_agents and do their tasks yourself when the round returns. The user can stop/restart them from their rows.",
 	].join("\n");

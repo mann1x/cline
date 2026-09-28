@@ -437,8 +437,18 @@ export interface PolykvClient {
 	 * affinity and no booking -- a pooled worker, a compaction critic -- answers
 	 * `found: false, kv_dropped: true`: nothing was booked, and its resident
 	 * cells are gone all the same.
+	 *
+	 * A close also ends the session's standing as a running one: the engine's
+	 * admission gate lets a running session's next turn through as a
+	 * continuation (bug-3670), and a closed session's next turn is gated as a
+	 * new arrival. `keepRunning` is for a close whose session goes on -- a
+	 * compaction giving back the booking its writer took -- and asks the
+	 * engine to keep that standing. An engine without it ignores the field.
 	 */
-	closeSessionReport(sessionId: string): Promise<PolykvCloseReport>;
+	closeSessionReport(
+		sessionId: string,
+		options?: { keepRunning?: boolean },
+	): Promise<PolykvCloseReport>;
 	/**
 	 * Drop the resident KV of the slot a session last ran in, keeping its
 	 * booking (`POST /slots/{id}?action=erase`). `undefined` when no slot names
@@ -1254,10 +1264,13 @@ export function createPolykvClient(options: PolykvClientOptions): PolykvClient {
 			);
 			return result?.found === true;
 		},
-		closeSessionReport: async (sessionId) => {
+		closeSessionReport: async (sessionId, options) => {
 			const result = await call<{ found?: boolean; kv_dropped?: boolean }>(
 				`/sessions/${encodeURIComponent(sessionId)}/close`,
-				{ method: "POST", body: {} },
+				{
+					method: "POST",
+					body: options?.keepRunning ? { keep_running: true } : {},
+				},
 			);
 			return {
 				found: result?.found === true,

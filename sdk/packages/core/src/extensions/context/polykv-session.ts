@@ -723,11 +723,14 @@ export async function repointPolykvAfterCompaction(options: {
 				`[PolyKV] After compaction: staying on pool ${state.poolId}; erased ${erased ?? 0} stale cells from the slot, booking kept`,
 			);
 		} else {
-			const report = await client.closeSessionReport(wireId);
+			// Erased, not closed: a close would end the session for the
+			// engine's admission gate, and its next turn -- this conversation
+			// going on -- would be floor-gated as a new arrival (bug-3670).
+			const erased = await client.eraseSessionSlot(wireId);
 			options.logger?.log?.(
 				`[PolyKV] After compaction: staying on pool ${state.poolId}; ${
-					report.kvDropped
-						? "dropped the slot's stale cells"
+					erased !== undefined
+						? `erased ${erased} stale cells from the slot`
 						: "no slot was resident"
 				}`,
 			);

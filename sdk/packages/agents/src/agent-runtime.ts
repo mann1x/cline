@@ -45,6 +45,7 @@ import {
 	captureTaskLifecycleEvent,
 	classifyTurnFault,
 	classifyTurnFaultError,
+	describeAdmissionWait,
 	estimateTokens,
 	isKvEviction,
 	isKvEvictionError,
@@ -2325,7 +2326,9 @@ export class AgentRuntime {
 				// A refusal is pacing, not a fault: info. A transport fault is a
 				// server gone, which is worth a warning.
 				this.config.logger?.log?.(
-					`Turn ${this.state.iteration} failed on a ${kind} fault (attempt ${attempt}): ${providerError}; waiting to send it again`,
+					kind === "refusal"
+						? `Turn ${this.state.iteration} queued by the server (retry ${attempt}): ${describeAdmissionWait(providerError)}; waiting to send it again`
+						: `Turn ${this.state.iteration} failed on a ${kind} fault (attempt ${attempt}): ${providerError}; waiting to send it again`,
 					{ severity: kind === "refusal" ? "info" : "warn" },
 				);
 			}
@@ -2336,7 +2339,7 @@ export class AgentRuntime {
 					? "the server evicted the turn to keep others alive (an engine bug) — waiting, then retrying"
 					: kind === "transport"
 						? "the server dropped the turn — waiting for it to come back, then retrying"
-						: "the server refused the turn for now — waiting, then retrying",
+						: "the server queued the turn — waiting for room, then retrying",
 				metadata: {
 					kind: "turn_fault_recovery",
 					reason: kind,

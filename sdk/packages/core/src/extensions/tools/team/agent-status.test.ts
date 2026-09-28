@@ -185,7 +185,7 @@ describe("agents_status with no arguments", () => {
 		);
 		expect(text).toContain("admission: floor 20 tok/s per session, enforced");
 		expect(text).toContain(
-			"refusals: 3 in the last 60 s, the last 4 s before the read, 377 since boot (read 2s ago)",
+			"admission queued: 3 in the last 60 s, the last 4 s before the read, 377 since boot (read 2s ago)",
 		);
 		expect(text).toMatch(/Node2 \[node-b\].*out of rotation until 10:00:30Z/);
 		// Not a PolyKV node: no admission lines under it.
@@ -231,7 +231,7 @@ describe("agents_status for one agent", () => {
 			"r1-2 fixer-2 (round r1, spawn_agent) -- waiting_infra",
 		);
 		expect(text).toContain(
-			'refused by Node1 (the admission floor: "projected mean tps below floor (18.2 < 20)"), retrying since',
+			'queued by Node1 (the admission floor: "projected mean tps below floor (18.2 < 20)"), retrying since',
 		);
 		expect(text).toContain("task: fix b.js");
 	});
@@ -360,7 +360,7 @@ describe("agents_status for a round", () => {
 			/^- r1-1 fixer-1: running · Node1 -- last: Ran npm test$/,
 		);
 		expect(lines[2]).toMatch(
-			/^- r1-2 fixer-2: waiting_infra -- waiting on infrastructure: refused by Node1/,
+			/^- r1-2 fixer-2: waiting_infra -- waiting on infrastructure: queued by Node1/,
 		);
 		expect(lines[3]).toMatch(
 			/^- r1-3 fixer-3: failed · Node1 · 40\/40 it · 250k\/9\.0k tok · 2 compactions -- reached its 40-iteration cap/,

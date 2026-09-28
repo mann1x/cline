@@ -192,7 +192,7 @@ describe("waiting out a refused turn", () => {
 		).toBe(true);
 		expect(waits).toEqual([4_000]);
 		expect(updates[0]?.latestOutput).toContain(
-			"Node1 refused the turn (pool 5 admission rejected: projected mean tps below floor)",
+			"Node1 queued the turn (pool 5 admission queued: projected mean tps below floor)",
 		);
 		// A refusal is the engine pacing its load: never a warning.
 		expect(updates[0]?.activity?.severity).not.toBe("warn");
@@ -226,7 +226,7 @@ describe("waiting out a refused turn", () => {
 		// Told the wait first, so the requeue stops the segment at once.
 		expect(order).toEqual([
 			"waiting",
-			"relocate:Node1 refused its turn: projected mean tps below floor",
+			"relocate:Node1 queued its turn: projected mean tps below floor",
 		]);
 		expect(updates.at(-1)?.latestOutput).toContain(
 			"another node has room, so it moves there",

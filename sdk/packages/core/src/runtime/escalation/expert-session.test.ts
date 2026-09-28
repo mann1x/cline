@@ -307,7 +307,7 @@ describe("createExpertSession", () => {
 			gate: {
 				run: async (task) => {
 					order.push("enter");
-					const result = await task();
+					const result = await task(() => {});
 					order.push("exit");
 					return result;
 				},

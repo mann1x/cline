@@ -37,8 +37,15 @@ const heldGates = new AsyncLocalStorage<ReadonlySet<symbol>>();
  * rather than inside a provider's socket where nothing can see it.
  */
 export interface AgentSlotGate {
-	/** Runs `task` when a slot is free. Slots are released on throw too. */
-	run<T>(task: () => Promise<T>): Promise<T>;
+	/**
+	 * Runs `task` when a slot is free. Slots are released on throw too.
+	 *
+	 * `admitted` is the task's to call on the agent's first output
+	 * (`isAdmissionEvent`). Where the engine decides admission, that call is
+	 * what lets the next agent start; a task that ends without calling it
+	 * releases its turn to try all the same.
+	 */
+	run<T>(task: (admitted: () => void) => Promise<T>): Promise<T>;
 	/** How many are running now. For diagnostics; never a scheduling input. */
 	active(): number;
 	/**
@@ -80,34 +87,89 @@ export function createAgentSlotGate(
 
 	if (limit === undefined || !Number.isFinite(limit) || limit <= 0) {
 		let running = 0;
+		// One agent at a time between starting and being admitted.
+		//
+		// With the cap lifted the engine is the only bound, and it answers one
+		// arrival at a time: every agent that has not been admitted yet is a
+		// request asking the same gate the same question. Measured on pandorum
+		// (swarm ra0as, 4.100.214): 50 workers against one server with no
+		// nodes, all started at once, 17 of them queued past ten minutes and
+		// one asked 65 times without ever starting. The placement queue paces
+		// an uncapped node like this already; this is the same rule for the
+		// endpoint that has no nodes. The rest wait here, in order, and none of
+		// them sends anything until the one ahead is in.
+		let probing = false;
+		const probeWaiters: Array<() => void> = [];
+		const takeProbe = async (): Promise<void> => {
+			if (!probing) {
+				probing = true;
+				return;
+			}
+			await new Promise<void>((resolve) => {
+				probeWaiters.push(resolve);
+			});
+			// Handed over: `probing` stayed set for this waiter.
+		};
+		const releaseProbe = (): void => {
+			// Handed to the next waiter rather than freed and re-taken, for the
+			// reason `release` below gives: a fresh caller must not slip in
+			// between the release and the woken waiter's continuation.
+			const next = probeWaiters.shift();
+			if (next) {
+				next();
+				return;
+			}
+			probing = false;
+		};
 		return {
 			run: async (task) => {
 				// A lifted cap is the host saying the engine decides, which is
 				// exactly the case where the engine's answer is the only bound
 				// there is. Re-entrancy is tracked here too, so a descendant
-				// is not admitted a second time.
+				// is not admitted a second time -- and it does not wait for the
+				// turn to try either: its ancestor is running, and queueing it
+				// behind agents that wait on that ancestor could never resolve.
 				const held = heldGates.getStore();
-				if (held?.has(token) || !admission) {
+				if (held?.has(token)) {
 					running += 1;
 					try {
-						return await (held?.has(token)
-							? task()
-							: heldGates.run(new Set([...(held ?? []), token]), task));
+						return await task(() => {});
 					} finally {
 						running -= 1;
 					}
 				}
-				await admission.acquire();
-				running += 1;
+				await takeProbe();
+				let probeHeld = true;
+				const admitted = (): void => {
+					if (probeHeld) {
+						probeHeld = false;
+						releaseProbe();
+					}
+				};
 				try {
-					return await heldGates.run(new Set([...(held ?? []), token]), task);
+					if (admission) {
+						await admission.acquire();
+					}
+					running += 1;
+					try {
+						return await heldGates.run(new Set([...(held ?? []), token]), () =>
+							task(admitted),
+						);
+					} finally {
+						running -= 1;
+						admission?.release();
+					}
 				} finally {
-					running -= 1;
-					admission.release();
+					// Ended without an output -- failed, stopped, or refused
+					// until it gave up the attempt: the next agent tries.
+					admitted();
 				}
 			},
 			active: () => running,
-			canAdmitMore: async () => admission?.canAdmitMore() ?? true,
+			// Not while one is still waiting to be let in: the next launch
+			// would only ask the same question beside it.
+			canAdmitMore: async () =>
+				!probing && (admission ? await admission.canAdmitMore() : true),
 		};
 	}
 
@@ -140,7 +202,7 @@ export function createAgentSlotGate(
 				// its own gate: a session already holding a slot affinity is a
 				// CONTINUATION, never an admission -- "gating it livelocks a
 				// pool under floor, its own agents' next turns would 429".
-				return task();
+				return task(() => {});
 			}
 			// Before the slot, not after: the point of asking is to not spend
 			// a slot on an agent the engine will not take.
@@ -158,7 +220,7 @@ export function createAgentSlotGate(
 			const nested = new Set(held ?? []);
 			nested.add(token);
 			try {
-				return await heldGates.run(nested, task);
+				return await heldGates.run(nested, () => task(() => {}));
 			} finally {
 				release();
 				admission?.release();

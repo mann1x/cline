@@ -26,10 +26,11 @@ import {
 	latestOpencotiPressure,
 	polykvAdmissionPolicy,
 } from "@cline/llms";
-import type {
-	AgentTool,
-	TeamMemberSnapshot,
-	TeamRunRecord,
+import {
+	type AgentTool,
+	describeAdmissionWait,
+	type TeamMemberSnapshot,
+	type TeamRunRecord,
 } from "@cline/shared";
 import { POLYKV_COMPACTION_PRESSURE } from "../../context/polykv-session";
 import type { AgentNodeStatus } from "./agent-node-placement";
@@ -69,7 +70,7 @@ const DETAIL_MAX_AGENTS = 6;
  * How the harness treats infrastructure trouble, in words, for the lead:
  * it must not try to route around a node itself (ruling 1).
  */
-export const RETRY_POLICY_TEXT = `Retry policy: refusals and unreachable nodes are retried with backoff -- a refused agent goes back to the front of the queue and the node is held for up to ${Math.round(REFUSED_HOLD_MAX_MS / 1000)} s; a node that does not answer is out of rotation and probed every few seconds until it does. Agents never fail on infrastructure, and there is no per-agent time limit. Only a node without the model is skipped for longer, and ${MAX_NODE_PLACEMENT_ATTEMPTS} of those in a row is the agent's own failure. Placement is the harness's: to move an agent, requeue it; it is never routed by hand.`;
+export const RETRY_POLICY_TEXT = `Retry policy: a full server queues agents, and queued turns and unreachable nodes are retried with backoff -- an agent queued before it starts goes back to the front of the queue and the node is held for up to ${Math.round(REFUSED_HOLD_MAX_MS / 1000)} s; only one agent per node asks for admission at a time, and an admitted agent keeps its place -- its next turns are continuations, and context pressure is met by compacting it; a node that does not answer is out of rotation and probed every few seconds until it does. Agents never fail on infrastructure, and there is no per-agent time limit. Only a node without the model is skipped for longer, and ${MAX_NODE_PLACEMENT_ATTEMPTS} of those in a row is the agent's own failure. Placement is the harness's: to move an agent, requeue it; it is never routed by hand.`;
 
 /** A teammate, as the team runtime reports it. */
 export interface TeammateStatusSource {
@@ -373,7 +374,7 @@ export function describeReason(
 					: /allocation|window|cells/i.test(wait.detail)
 						? "KV room: "
 						: "";
-				return `waiting on infrastructure: refused by ${wait.where} (${floor}"${oneLine(wait.detail, 160)}"), retrying ${since}`;
+				return `waiting on infrastructure: queued by ${wait.where} (${floor}"${oneLine(describeAdmissionWait(wait.detail), 160)}"), retrying ${since}`;
 			}
 			return `waiting on infrastructure: ${wait.where} ${oneLine(wait.detail, 80) || "not answering"}, retrying ${since}`;
 		}
@@ -502,8 +503,8 @@ function polykvLines(
 		lines.push(
 			`admission: floor ${policy.target_tps_per_session} tok/s per session, ${policy.mode ?? "advisory"}${
 				policy.mode === "enforced"
-					? " (a new agent that would push the projected mean below it is refused and retried)"
-					: " (reported, never refused)"
+					? " (a new agent that would push the projected mean below it is queued until there is room)"
+					: " (reported, never queued)"
 			}`,
 		);
 	} else {
@@ -518,14 +519,14 @@ function polykvLines(
 		const age = formatDuration(now - pressure.at);
 		const p = pressure.pressure;
 		lines.push(
-			`refusals: ${p.refused60s} in the last ${p.windowS} s${
+			`admission queued: ${p.refused60s} in the last ${p.windowS} s${
 				p.lastRefusalAgeS !== undefined
 					? `, the last ${Math.round(p.lastRefusalAgeS)} s before the read`
 					: ""
 			}${p.refusalsTotal !== undefined ? `, ${count(p.refusalsTotal)} since boot` : ""} (read ${age} ago)`,
 		);
 	} else {
-		lines.push("refusals: no /kv pressure read yet");
+		lines.push("admission queued: no /kv pressure read yet");
 	}
 	const threshold = thresholdOf(node.providerConfig);
 	lines.push(
@@ -602,7 +603,7 @@ export function describeNodes(
 				: "reachable";
 		const held =
 			node.heldUntil !== undefined
-				? `; held after a refusal until ${clock(node.heldUntil)}Z`
+				? `; held after queueing an agent until ${clock(node.heldUntil)}Z`
 				: "";
 		const capacity = Number.isFinite(node.capacity)
 			? `${node.running}/${node.capacity} slots in use`
@@ -960,7 +961,7 @@ export function renderAgentsStatus(
 
 export const AGENTS_STATUS_DESCRIPTION =
 	"What your delegated agents are doing, and why -- read-only, and safe to call as often as you like: it asks no server anything. " +
-	"With no arguments: every round (a spawn call) with its agents counted by state -- running, queued, waiting-infra, awaiting-lead, done, failed, cancelled -- and how long it has run; every node with what it runs, whether it answers, its slots in use and queue, its admission policy and recent refusals; and the retry policy. " +
+	"With no arguments: every round (a spawn call) with its agents counted by state -- running, queued, waiting-infra, awaiting-lead, done, failed, cancelled -- and how long it has run; every node with what it runs, whether it answers, its slots in use and queue, its admission policy and recent queued admissions; and the retry policy. " +
 	"Every node also shows its throughput (tokens per second over the last 5 minutes and over its history, with how far to trust it) and, on a PolyKV node, its KV cells and compaction threshold (0.85 unless the node sets it). " +
 	"`round_id` lists that round's agents one per line, with what each is doing now and its KV cells. `agent_id` (or `agent_ids`) shows an agent in detail: its state and the reason (waiting on which node and why, its iteration cap, a context overflow, an engine error, cancelled by whom), what it is doing and for how long (prefill, generating, thinking, a tool, compacting, condensing capped thinking), its KV cells against the threshold, its queue position and a rough wait, its pace and ETA to its cap with a reliability, node, model, window and tokens, compactions by cause, sampler, check result, the tail of its output and activity, and its errors. " +
 	"Use it instead of waiting blind: it is how you decide whether to requeue, restart, resume, compact or retry an agent. A silent agent that is compacting or prefilling is working.";

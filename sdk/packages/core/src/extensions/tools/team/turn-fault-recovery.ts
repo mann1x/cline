@@ -36,7 +36,11 @@ import {
 	sleepUnlessAborted,
 	waitForServerHealth,
 } from "@cline/llms";
-import type { TurnFault, TurnFaultRecovery } from "@cline/shared";
+import {
+	describeAdmissionWait,
+	type TurnFault,
+	type TurnFaultRecovery,
+} from "@cline/shared";
 import { recordEngineEviction } from "./engine-evictions";
 
 /** First wait after a refusal; doubles with each one in a row. */
@@ -253,26 +257,28 @@ export function createTurnFaultRecovery(
 			options.onWaiting?.({
 				kind: "refusal",
 				where,
-				detail: fault.message,
+				detail: describeAdmissionWait(fault.message),
 			});
 			await sleep(waitMs, signal);
 		} else {
+			// In queue words, never the engine's "rejected": everything below
+			// reaches an agent's row or the lead (`describeAdmissionWait`).
+			const queued = describeAdmissionWait(fault.message.trim().slice(0, 200));
 			options.onWaiting?.({
 				kind: "refusal",
 				where,
-				detail: fault.message,
+				detail: describeAdmissionWait(fault.message),
 			});
 			// Told the wait first: a requeue that lands on a wait stops the
 			// segment at once, with no turn in flight to lose.
-			const refusal = fault.message.trim().slice(0, 200);
-			if (options.relocate?.(`${where} refused its turn: ${refusal}`)) {
-				const line = `${where} refused the turn (${refusal}); another node has room, so it moves there with its work so far.`;
+			if (options.relocate?.(`${where} queued its turn: ${queued}`)) {
+				const line = `${where} queued the turn (${queued}); another node has room, so it moves there with its work so far.`;
 				options.logger?.log(`[Agents] ${options.label}: ${line}`);
 				report(options.emitUpdate, line, "info", { queued: true });
 				return false;
 			}
 			const waitMs = refusalBackoffMs(fault.attempt);
-			const line = `${where} refused the turn (${fault.message.trim().slice(0, 200)}); trying again in ${Math.round(waitMs / 1000)} s (refusal ${fault.attempt}).`;
+			const line = `${where} queued the turn (${queued}); retrying in ${Math.round(waitMs / 1000)} s (retry ${fault.attempt}).`;
 			options.logger?.log(`[Agents] ${options.label}: ${line}`);
 			// A refusal is pacing, not a fault: info, like the spawn-time one.
 			report(options.emitUpdate, line, "info", { queued: true });

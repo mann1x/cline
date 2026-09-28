@@ -226,7 +226,8 @@ describe("an agent through the spawn queue", () => {
 			{
 				kind: "refusal",
 				where: "oc",
-				detail: "pool 5 admission rejected: projected mean tps below floor",
+				// Queue words: the lead's report must not call it rejected.
+				detail: "pool 5 admission queued: projected mean tps below floor",
 			},
 		]);
 	});
@@ -515,13 +516,14 @@ describe("a resume after the call returned", () => {
 		const gated: string[] = [];
 		const through = resumePlacement({
 			slotGate: {
-				run: async <T>(fn: () => Promise<T>) => {
+				run: async <T>(fn: (admitted: () => void) => Promise<T>) => {
 					gated.push("in");
-					return await fn();
+					return await fn(() => gated.push("admitted"));
 				},
 			},
 		});
 		await through(async () => "ran");
-		expect(gated).toEqual(["in"]);
+		// Resumed is admitted already: the next agent is not held behind it.
+		expect(gated).toEqual(["in", "admitted"]);
 	});
 });

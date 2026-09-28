@@ -193,7 +193,7 @@ export function createRetryRateLimitMiddleware(
 				const asked = readRetryAfterMs(error);
 				const delayMs = Math.min(maxRetryAfterMs, asked ?? defaultRetryAfterMs);
 				logger?.log?.(
-					"Admission refused; waiting for the server's own retry-after",
+					"Admission queued; waiting for the server's own retry-after",
 					{
 						severity: "warn",
 						modelId,

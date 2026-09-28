@@ -910,10 +910,12 @@ export function createConfiguredAgentTools(
 										return { result: outcome.result, placed: outcome.placed };
 									}
 									const gate = endpointGate;
-									const run = () =>
-										attempt(provisional, () => {}, undefined, carry);
+									// Its first output lets the next agent at an uncapped
+									// endpoint try (`AgentSlotGate.run`).
+									const run = (admitted: () => void) =>
+										attempt(provisional, admitted, undefined, carry);
 									return {
-										result: gate ? await gate.run(run) : await run(),
+										result: gate ? await gate.run(run) : await run(() => {}),
 									};
 								},
 								(carry) =>

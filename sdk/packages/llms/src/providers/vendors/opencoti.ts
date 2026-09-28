@@ -1931,7 +1931,7 @@ function leadReserveRefusal(
 	return new Response(
 		JSON.stringify({
 			error: {
-				message: `admission rejected: session allocation full (worker of '${engineSessionId(owner)}': ${why}) — priority 0 is full; overflowing to the Agent Nodes`,
+				message: `admission queued: session allocation full (worker of '${engineSessionId(owner)}': ${why}) — priority 0 is full; overflowing to the Agent Nodes`,
 				type: "polykv_lead_reserve",
 			},
 		}),

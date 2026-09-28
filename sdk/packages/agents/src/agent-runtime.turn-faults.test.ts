@@ -425,7 +425,7 @@ describe("a turn the engine evicted", () => {
 		expect(
 			logged.some(
 				(line) =>
-					/refusal fault/.test(line.message) && line.severity === "info",
+					/queued by the server/.test(line.message) && line.severity === "info",
 			),
 		).toBe(true);
 	});

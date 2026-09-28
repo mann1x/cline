@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	classifyTurnFault,
 	classifyTurnFaultError,
+	describeAdmissionWait,
 	isKvEviction,
 	isKvEvictionError,
 } from "./turn-faults";
@@ -179,5 +180,38 @@ describe("what a failed turn was", () => {
 			classifyTurnFaultError(Object.assign(new Error("x"), { status: 429 })),
 		).toBe("refusal");
 		expect(classifyTurnFaultError(new Error("boom"))).toBeUndefined();
+	});
+});
+
+describe("describeAdmissionWait", () => {
+	// Swarm ra0as: "refused 13x ... admission rejected" read to the lead as a
+	// broken node. Nothing the agents or the lead are told says it now.
+	it("puts the engine's admission refusal in queue words", () => {
+		expect(
+			describeAdmissionWait(
+				"pool 20 admission rejected: projected mean tps below floor",
+			),
+		).toBe("pool 20 admission queued: projected mean tps below floor");
+		expect(describeAdmissionWait("Admission refused; waiting")).toBe(
+			"Admission queued; waiting",
+		);
+		expect(describeAdmissionWait("refused 3 refusals, one refusal")).toBe(
+			"queued 3 retries, one retry",
+		);
+		expect(describeAdmissionWait("Refused by the server")).toBe(
+			"Queued by the server",
+		);
+	});
+
+	it("leaves text with nothing to rewrite as it was", () => {
+		expect(describeAdmissionWait("context headroom exhausted")).toBe(
+			"context headroom exhausted",
+		);
+	});
+
+	it("still classifies the rewritten words as a refusal", () => {
+		expect(classifyTurnFault("admission queued: session allocation full")).toBe(
+			"refusal",
+		);
 	});
 });

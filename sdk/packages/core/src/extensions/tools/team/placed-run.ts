@@ -26,6 +26,7 @@ import {
 	type AgentResult,
 	classifyTurnFault,
 	classifyTurnFaultError,
+	describeAdmissionWait,
 	type TurnFaultRecovery,
 } from "@cline/shared";
 import type {
@@ -77,7 +78,7 @@ const REFUSAL = [
 	/\b429\b/,
 	/too many requests/i,
 	/rate[ _-]?limit/i,
-	/admission (?:rejected|refused)/i,
+	/admission (?:rejected|refused|queued)/i,
 	/\bsaturated\b/i,
 	// The pool owner's window, full until one of its workers finishes.
 	/session allocation full/i,
@@ -362,10 +363,10 @@ export async function runPlacedAgent(
 				input.onWaiting?.({
 					kind: "refusal",
 					where,
-					detail: refusalReason(failure),
+					detail: describeAdmissionWait(refusalReason(failure)),
 				});
 				input.logger?.log(
-					`[Agents] ${where} refused ${input.label} before starting it; back to the front of the queue, the node held up to ${Math.round(holdMs / 1000)} s (refusal ${refusals})`,
+					`[Agents] ${where} queued ${input.label} before starting it; back to the front of the queue, the node held up to ${Math.round(holdMs / 1000)} s (retry ${refusals})`,
 				);
 				// On the agent's row as well as in the log: a refused agent
 				// otherwise looks exactly like one that is working, and the
@@ -373,7 +374,9 @@ export async function runPlacedAgent(
 				// Not a warning: an admission refusal is the engine pacing its
 				// load, and waiting it out is the normal path (user ruling
 				// 2026-09-25). The row says what it is waiting for, plainly.
-				const refusedLine = `${where} refused it (refusal ${refusals}): ${refusalReason(failure)}; waiting for room, then trying again`;
+				// In queue words (`describeAdmissionWait`): a model that reads
+				// "rejected" takes the node for broken.
+				const refusedLine = `${where} queued it (retry ${refusals}): ${describeAdmissionWait(refusalReason(failure))}; waiting for room, then retrying`;
 				input.emitUpdate?.({
 					latestOutput: refusedLine,
 					latestOutputKind: "text",
@@ -476,7 +479,9 @@ export async function runPlacedAgent(
 export function resumePlacement(input: {
 	placement?: AgentNodePlacement;
 	nodeId?: string;
-	slotGate?: { run<T>(task: () => Promise<T>): Promise<T> };
+	slotGate?: {
+		run<T>(task: (admitted: () => void) => Promise<T>): Promise<T>;
+	};
 	signal?: () => AbortSignal | undefined;
 }): <T>(run: () => Promise<T>) => Promise<T> {
 	const { placement, nodeId, slotGate } = input;
@@ -495,7 +500,12 @@ export function resumePlacement(input: {
 		};
 	}
 	if (slotGate) {
-		return <T>(run: () => Promise<T>) => slotGate.run(run);
+		// Taken as admitted, like the node lease above: the engine held it.
+		return <T>(run: () => Promise<T>) =>
+			slotGate.run((admitted) => {
+				admitted();
+				return run();
+			});
 	}
 	return <T>(run: () => Promise<T>) => run();
 }

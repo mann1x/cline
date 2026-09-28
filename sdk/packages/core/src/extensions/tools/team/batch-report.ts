@@ -23,7 +23,7 @@
  * Nothing is left to middle truncation: the budget is measured on the JSON the
  * model will receive.
  */
-import { classifyTurnFault } from "@cline/shared";
+import { classifyTurnFault, describeAdmissionWait } from "@cline/shared";
 import type { AgentOracleResult } from "./agent-check";
 import {
 	READ_AGENT_REPORT_TOOL_NAME,
@@ -252,6 +252,22 @@ function oneLine(text: string | undefined, max: number): string | undefined {
 	return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
+/**
+ * An agent's error as the lead reads it: an admission wait in queue words
+ * (`describeAdmissionWait`), every other error as it was. Only the error --
+ * an agent's own report is the model's words, and "the parser rejected it"
+ * must stay what it says.
+ */
+function errorText(result: SpawnBatchMemberResult): string | undefined {
+	const error = result.error;
+	if (error === undefined) {
+		return result.text;
+	}
+	return classifyTurnFault(error) === "refusal"
+		? describeAdmissionWait(error)
+		: error;
+}
+
 function indexEntry(
 	result: SpawnBatchMemberResult,
 	lineChars: number,
@@ -261,7 +277,7 @@ function indexEntry(
 	const why =
 		status === "completed" || lineChars === 0
 			? undefined
-			: oneLine(result.error ?? result.text, Math.max(lineChars, 60));
+			: oneLine(errorText(result), Math.max(lineChars, 60));
 	const line =
 		status === "completed" ? oneLine(result.text, lineChars) : undefined;
 	return {
@@ -428,7 +444,7 @@ export function buildSpawnBatchReport(
 	const omitted: SpawnBatchMemberResult[] = [];
 	let used = jsonLength(report);
 	for (const result of results) {
-		const text = (result.text ?? result.error ?? "").trim();
+		const text = (result.text ?? errorText(result) ?? "").trim();
 		if (!text) {
 			continue;
 		}

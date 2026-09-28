@@ -158,7 +158,7 @@ const REFUSAL_PATTERNS: readonly RegExp[] = [
 	/projected mean tps below floor/i,
 	/context allocation exhausted/i,
 	/session allocation full/i,
-	/admission (?:rejected|refused)/i,
+	/admission (?:rejected|refused|queued)/i,
 	/\btoo many requests\b/i,
 	// opencoti's partial eviction (patch 0233): the node's KV could not fit
 	// another token, so it evicted the largest live sequence to keep the
@@ -175,6 +175,44 @@ const REFUSAL_PATTERNS: readonly RegExp[] = [
 	// its "Can't resume" card.
 	/\[opencoti_window_unavailable\b/,
 ];
+
+/**
+ * An admission wait, in the words agents and the lead are told it in.
+ *
+ * The engine words a full pool as a refusal -- `pool 20 admission rejected:
+ * projected mean tps below floor` -- and that is accurate for its own gate
+ * and wrong for everyone downstream of it. Nothing was rejected: the turn is
+ * waiting its turn, and it runs when the pool has room. Read as a refusal, a
+ * model concludes the node is broken; measured on pandorum (swarm ra0as,
+ * 4.100.214), the lead read "refused 13x by the server" as a fault in the
+ * PolyKV node rather than as the queue it is.
+ *
+ * So every line that quotes the engine, or says in our own words that a turn
+ * is waiting on admission, goes through this: "rejected" and "refused" are
+ * "queued", a "refusal" is a "retry". Log lines for people reading the
+ * engine's own log keep its words; what a model or an agent's row shows does
+ * not.
+ */
+export function describeAdmissionWait(text: string): string {
+	const keepCase = (word: string, replacement: string): string =>
+		/^[A-Z]/.test(word)
+			? replacement.charAt(0).toUpperCase() + replacement.slice(1)
+			: replacement;
+	return text
+		.replace(/\badmission (?:rejected|refused)\b/gi, (match) =>
+			keepCase(match, "admission queued"),
+		)
+		.replace(/\b(?:rejected|refused)\b/gi, (match) => keepCase(match, "queued"))
+		.replace(/\b(?:rejecting|refusing)\b/gi, (match) =>
+			keepCase(match, "queueing"),
+		)
+		.replace(/\b(?:rejections|refusals)\b/gi, (match) =>
+			keepCase(match, "retries"),
+		)
+		.replace(/\b(?:rejection|refusal)\b/gi, (match) =>
+			keepCase(match, "retry"),
+		);
+}
 
 /** Classify a failed turn from what the agent loop was told about it. */
 export function classifyTurnFault(

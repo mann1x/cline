@@ -62,6 +62,8 @@ function engine(options: EngineOptions = {}) {
 	const calls: string[] = [];
 	const pools = new Map<string, { pinned: boolean; parent: string }>();
 	const closed: string[] = [];
+	/** The closes that asked the engine to keep the session running. */
+	const keptRunning: string[] = [];
 	const erased: string[] = [];
 	let seq = 0;
 	const fetchImpl = (async (input: unknown, init?: RequestInit) => {
@@ -120,6 +122,9 @@ function engine(options: EngineOptions = {}) {
 		const close = /^\/sessions\/([^/]+)\/close$/.exec(url.pathname);
 		if (close) {
 			closed.push(decodeURIComponent(close[1]));
+			if (body.keep_running === true) {
+				keptRunning.push(decodeURIComponent(close[1]));
+			}
 			return Response.json({ found: true, kv_dropped: true });
 		}
 		if (url.pathname === "/slots") {
@@ -131,7 +136,7 @@ function engine(options: EngineOptions = {}) {
 		}
 		return new Response("not found", { status: 404 });
 	}) as unknown as typeof fetch;
-	return { fetch: fetchImpl, calls, pools, closed, erased };
+	return { fetch: fetchImpl, calls, pools, closed, keptRunning, erased };
 }
 
 const SUMMARY = [
@@ -484,8 +489,10 @@ describe("the pooled continuation on a session without a booking", () => {
 		expect(m.calls[0]?.providerConfig.polykvLeadPool).toBe(false);
 		await c?.afterWriter(SUMMARY.length, 2_000);
 		await c?.release();
-		// Its booking and its slot, together.
+		// Its booking and its slot, together -- and the session goes on, so
+		// the close asks to keep it running for the admission gate.
 		expect(server.closed).toContain("lead");
+		expect(server.keptRunning).toEqual(["lead"]);
 		expect(server.erased).toEqual([]);
 		expect(c?.meter.peakBookedCells).toBe(booking);
 		expectNothingLeft(server);
@@ -525,6 +532,10 @@ describe("the pooled continuation on a session without a booking", () => {
 		}
 		await c?.dispose();
 		expectNothingLeft(server);
+		// Swarm ra0as: the worker's own session was closed here, and every
+		// re-admission followed a compaction. Erased, never closed.
+		expect(server.erased).toEqual(["lead"]);
+		expect(server.closed).not.toContain("lead");
 	});
 });
 

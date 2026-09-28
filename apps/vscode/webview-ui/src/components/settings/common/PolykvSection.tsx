@@ -190,7 +190,7 @@ export const PolykvSection = ({
 						"targetTpsPerSession",
 						"Per-session throughput floor",
 						"Default: the engine's",
-						"Tokens per second the engine protects for each session. A new session that would push the projected mean below this is refused rather than admitted, which is what stops one more agent making every agent slow.",
+						"Tokens per second the engine protects for each session. A new session that would push the projected mean below this waits in the queue until there is room, which is what stops one more agent making every agent slow. A session already running is never held back by it.",
 					)}
 					{numberField(
 						"guaranteeMinSessions",
@@ -222,7 +222,7 @@ export const PolykvSection = ({
 							"contextFloor",
 							"Never go below",
 							"Default: none — all or nothing",
-							"The smallest window still worth opening with, in tokens. If the full size is not free the server grants the largest that is, down to this; below it the conversation is refused rather than opened too small to be useful. Leave empty to accept only the full size.",
+							"The smallest window still worth opening with, in tokens. If the full size is not free the server grants the largest that is, down to this; below it the conversation is not opened rather than opened too small to be useful. Leave empty to accept only the full size.",
 						)}
 					{toggle(
 						"continuationCompaction",

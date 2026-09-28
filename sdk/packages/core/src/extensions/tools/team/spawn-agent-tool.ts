@@ -1690,9 +1690,13 @@ async function runSpawnedAgent(
 						// the toolset costs the server nothing, and holding a slot across it
 						// would leave the endpoint idle while a slot was booked.
 						const slotGate = config.configProvider.getRuntimeConfig().slotGate;
-						const run = () =>
-							attempt(config.configProvider, () => {}, undefined, carry);
-						return { result: slotGate ? await slotGate.run(run) : await run() };
+						// Its first output is what lets the next agent at an
+						// uncapped endpoint try (`AgentSlotGate.run`).
+						const run = (admitted: () => void) =>
+							attempt(config.configProvider, admitted, undefined, carry);
+						return {
+							result: slotGate ? await slotGate.run(run) : await run(() => {}),
+						};
 					},
 					(carry) =>
 						requeued(context.emitUpdate, engineSessionId, carry.reason),

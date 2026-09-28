@@ -58,10 +58,12 @@ describe("telling the lead about agents stuck for a long time", () => {
 		const text = sent[0] ?? "";
 		expect(text).toMatch(/^\[SYSTEM MESSAGE\] /);
 		expect(text).toContain(
-			`code-correctness-2: refused 14x by Node1: "${TPS}" (`,
+			`code-correctness-2: queued by Node1, 14 retries: "pool 5 admission queued: projected mean tps below floor" (`,
 		);
 		expect(text).toContain("still retrying");
 		expect(text).toContain("nothing stopped");
+		// Swarm ra0as: "refused 13x ... rejected" read as a broken node.
+		expect(text).not.toMatch(/refus|reject/i);
 		expect(text).toContain("stop_agents and do their tasks yourself");
 		watch.dispose();
 	});
@@ -115,7 +117,7 @@ describe("telling the lead about agents stuck for a long time", () => {
 			LEAD_NUDGE_AFTER_MS + LEAD_NUDGE_BATCH_MS,
 		);
 		expect(sent).toHaveLength(1);
-		expect(sent[0]).toContain("2 agents stalled");
+		expect(sent[0]).toContain("2 agents waiting");
 		expect(sent[0]).toContain("- a:");
 		expect(sent[0]).toContain("- b:");
 		a.dispose();
