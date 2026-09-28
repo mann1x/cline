@@ -5,9 +5,9 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.213] — 2026-09-27
+## [4.100.214] — 2026-09-28
 
-The first public release since 4.100.118. Builds 4.100.119 to 4.100.212 were
+The first public release since 4.100.118. Builds 4.100.119 to 4.100.213 were
 test builds and were never published, so everything they carried is collected
 here, grouped by what it changes for you. The major features:
 
@@ -46,7 +46,10 @@ new guide, `docs/features/agents.mdx`.
 - **A node that can't run the agent steps aside.** A node that can't be
   reached, answers 502/504 from a gateway with nothing behind it, or lacks the
   model leaves the rotation for a cool-off, and the agent goes to the next node
-  with room. A refused agent returns to the front of the queue. An agent that
+  with room. A refused agent returns to the front of the queue. An agent a
+  node refuses after it has started moves to another node with room, by
+  priority, carrying its transcript, instead of waiting on the node that said
+  no. An agent that
   failed after it had started is never re-run elsewhere, because that would
   repeat its edits.
 - **Use PolyKV agents as Priority 0.** Off by default. It appears in the Agents
@@ -274,8 +277,13 @@ several approaches.
   (several agents by default, `wait: false` on any spawn or configured agent)
   is delivered when it settles. `await_agents` waits for rounds on purpose. The
   lead can't finish its task while a round is still out.
-- **A cap and a check per agent.** `max_iterations` caps an agent's turns, per
-  agent or for the whole call. `check: {command, expect}` is run at each attempt
+- **A check per agent, and no cap from the lead.** The lead can no longer cap
+  an agent's turns: `max_iterations` is gone from every spawn tool and from
+  `team_run_task`, and a value the model sends anyway is ignored. A configured
+  agent whose file sets `maxIterations` still stops at it. Instead, the lead is
+  told every 60 iterations which agents are still running, and nothing is
+  stopped. In a test run the lead set a cap of 25 on every agent and then
+  reported the caps as a fault. `check: {command, expect}` is run at each attempt
   to finish, inside the agent's sandbox, over its copy. A failing check shows
   the agent the output and it keeps working. Where no sandbox can run it, the
   check isn't run on your machine and the report says so.
@@ -288,8 +296,7 @@ several approaches.
   new session.
 - **One `resume_agent` call resumes several agents,** or every waiting agent
   when none is named. Without `extra_iterations`, each agent gets its spawn
-  cap again: 60, then 120, then 180. An agent spawned without
-  `max_iterations` still has no cap.
+  cap again: 60, then 120, then 180.
 - **An agent is told to wrap up a few turns before its cap.** If the lead stops
   one at its cap, it gets one last turn to write its report, instead of handing
   back the preamble of its last tool call.
@@ -303,6 +310,17 @@ several approaches.
   failure notices no longer appear in the lead's conversation.
 - Polling tools (`agents_status`, `await_agents` and the team listings) no
   longer trip the repeated-call guard.
+- **The loop guard names the call.** An agent it stops is reported with the
+  call it kept sending, for example `` `editor` {path: "a.html", …} ``.
+- **A cancelled agent still has a report**, holding its latest message, marked
+  as partial findings, and a count of the tools it called.
+- **Each report shows the sampler an agent ran with**, marking a drawn value:
+  `seed 1234 (random) temp 0.77 (random, ±30% of 0.7)`.
+- **Same-named agents are renamed**, `review-1`, `review-2`, …, and the lead is
+  told, instead of five agents answering to one name.
+- **A `count` the lead put on the call is reported as ignored** on a batch; it
+  applies only to a swarm with one task. `count` on an entry is how to run
+  several of one kind.
 
 ### Teammates
 
@@ -531,6 +549,14 @@ instead of arguing, so it can check the working model without agreeing with it.
   "Refused edits in a row", and `--struggle-failed-transactions` in the CLI.
   It counts transactions the model discarded, which is how a model failing
   the change protocol shows up, since its tool calls themselves succeed.
+- **A failed expert run is shown in the chat.** The "working" row becomes a
+  failure row with the provider's reason. When the expert's account reached its
+  usage limit, the row says so and the task header's Expert line shows **usage
+  limit reached**. The base model is told which files the expert changed before
+  it failed, instead of being told nothing changed.
+- **The expert's transcript is saved** with the task after every ask, and when
+  it fails, so a report includes it. A failed agent of any kind keeps its
+  transcript now.
 
 ### Questions and images
 
@@ -725,7 +751,11 @@ instead of arguing, so it can check the working model without agreeing with it.
 ### Reports
 
 `Collect-CerebrilineReport.ps1` collects logs and settings from a renamed
-install, and says when both `~/.cline` and `~/.cerebriline` exist.
+install, and says when both `~/.cline` and `~/.cerebriline` exist. It now
+finds the log of the window that is still open: Windows reports a file VS Code
+is writing as empty, and the collector used to skip it. Logs are picked by the
+time of their last line, each window's VS Code logs are taken once, and
+`logs/index.txt` lists every log found and whether it was taken.
 
 ## [4.100.118] — 2026-09-15
 
