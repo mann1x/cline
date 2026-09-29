@@ -34,6 +34,16 @@ describe("default tool presets", () => {
 		}
 	});
 
+	it("states extract_document in every preset, and leaves it out of minimal", () => {
+		for (const [name, preset] of Object.entries(ToolPresets)) {
+			expect(
+				typeof (preset as Record<string, unknown>).enableExtractDocument,
+				`preset '${name}' leaves enableExtractDocument to the default`,
+			).toBe("boolean");
+		}
+		expect(ToolPresets.minimal.enableExtractDocument).toBe(false);
+	});
+
 	it("explicitly configures ask_question across presets", () => {
 		expect(ToolPresets.search.enableAskQuestion).toBe(false);
 		expect(ToolPresets.act.enableAskQuestion).toBe(true);

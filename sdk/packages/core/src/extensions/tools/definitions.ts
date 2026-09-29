@@ -54,6 +54,8 @@ import {
 	describeEditorArgumentGap,
 	type EditFileInput,
 	EditFileInputSchema,
+	type ExtractDocumentInput,
+	ExtractDocumentInputSchema,
 	type FetchWebContentInput,
 	FetchWebContentInputSchema,
 	GrepInputSchema,
@@ -90,6 +92,7 @@ import type {
 	CreateDefaultToolsOptions,
 	DefaultToolsConfig,
 	EditorExecutor,
+	ExtractDocumentExecutor,
 	FileReadExecutor,
 	GrepExecutor,
 	SearchExecutor,
@@ -1045,6 +1048,59 @@ export function createGrepTool(
 }
 
 /**
+ * Create the extract_document tool.
+ *
+ * A reader, and flagged `readOnly`, although it writes: what it writes is its
+ * own output (the text and the pictures of the document it was asked to
+ * read), inside the workspace, never a file the user made.
+ */
+export function createExtractDocumentTool(
+	executor: ExtractDocumentExecutor,
+	config: Pick<DefaultToolsConfig, "cwd" | "extractDocumentTimeoutMs"> = {},
+): AgentTool<ExtractDocumentInput, ToolOperationResult> {
+	const timeoutMs = config.extractDocumentTimeoutMs ?? 180_000;
+	const cwd = config.cwd ?? process.cwd();
+
+	return createTool<ExtractDocumentInput, ToolOperationResult>({
+		name: "extract_document",
+		readOnly: true,
+		description:
+			"Read a document that is not plain text: PDF, Word (DOCX and 97-2003 DOC), PowerPoint (PPTX, PPT), Excel (XLSX, XLS), OpenDocument (ODT, ODP, ODS, ODG), RTF, CSV, HTML, and ebooks (EPUB, MOBI, AZW, AZW3, FB2). " +
+			"`read_files` cannot read these: it returns their bytes as garbage text. " +
+			'It returns the document as markdown (or plain text with `format: "text"`) and writes the whole text to a file, with the pictures inside the document saved beside it in an `images` folder and linked from the text. ' +
+			"The output goes to `.cline/extracted/<document name>/` in the workspace; pass `output_dir` only when the user asks for it somewhere else in the workspace. " +
+			"Use `range` to read part of a long document: pages of a PDF, slides, sheets, or chapters of an ebook. " +
+			'`images: "inline"` also attaches the first few pictures to the result, when you can see images; `images: "none"` skips them. ' +
+			"The first lines of the result say what the document is: its format, title and author, how many pages, slides, sheets or chapters it has, the table of contents of an ebook, and which PDF pages are scanned images of text, whose words are then not in the text. " +
+			`Output: a single ${TOOL_RESULT_ENVELOPE} \`query\` is \`extract_document:<path>\` and \`result\` holds that summary, then the text. ` +
+			"A long text is cut at `max_chars` and says where the rest is. A document with no text still has `success: true`, and the result says so.",
+		inputSchema: zodToJsonSchema(ExtractDocumentInputSchema),
+		timeoutMs,
+		retryable: false,
+		maxRetries: 0,
+		execute: async (input, context) => {
+			const validated = validateWithZod(ExtractDocumentInputSchema, input);
+			const query = `extract_document:${validated.path}`;
+			try {
+				const result = await withTimeout(
+					executor(validated, cwd, context),
+					timeoutMs,
+					`extract_document timed out after ${timeoutMs}ms`,
+				);
+				return { query, result, success: true };
+			} catch (error) {
+				return {
+					query,
+					result: "",
+					error: `extract_document failed: ${formatError(error)}`,
+					success: false,
+				};
+			}
+		},
+	});
+}
+
+/**
  * Create the sed tool.
  */
 export function createSedTool(
@@ -1324,6 +1380,7 @@ export function createDefaultTools(
 		enableGrep = true,
 		enableSed = true,
 		enableAwk = true,
+		enableExtractDocument = false,
 		enableSkills = true,
 		enableAskQuestion = true,
 		enableSubmitAndExit = false,
@@ -1372,6 +1429,11 @@ export function createDefaultTools(
 	}
 	if (enableAwk && executors.awk) {
 		tools.push(createAwkTool(executors.awk, config));
+	}
+
+	// Off unless the preset and the host both ask for it.
+	if (enableExtractDocument && executors.extractDocument) {
+		tools.push(createExtractDocumentTool(executors.extractDocument, config));
 	}
 
 	// Add skills tool if enabled and executor provided

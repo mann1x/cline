@@ -354,6 +354,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		subagentsEnabled: false,
 		subagentCommandsEnabled: false,
 		teammatesEnabled: false,
+		extractDocumentEnabled: false,
 		polykvAgentsPriorityZero: false,
 		agentModelOverride: "",
 		strongNudgesEnabled: true,

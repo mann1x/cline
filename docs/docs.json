@@ -159,7 +159,8 @@
 							"cli/agent-teams",
 							"features/subagents",
 							"features/agents",
-							"features/change-protocol"
+							"features/change-protocol",
+							"features/document-reader"
 						]
 					},
 					{

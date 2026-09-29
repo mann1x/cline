@@ -20,6 +20,7 @@ export {
 	createAwkTool,
 	createDefaultTools,
 	createEditorTool,
+	createExtractDocumentTool,
 	createGrepTool,
 	createReadFilesTool,
 	createSearchTool,
@@ -39,6 +40,7 @@ export {
 	createAwkExecutor,
 	createDefaultExecutors,
 	createDefaultShellExecutor,
+	createDocumentExtractExecutor,
 	createEditorExecutor,
 	createFileReadExecutor,
 	createGrepExecutor,
@@ -47,7 +49,10 @@ export {
 	createSedExecutor,
 	createShellExecutor,
 	createWebFetchExecutor,
+	DEFAULT_EXTRACTION_DIR,
 	type DefaultExecutorsOptions,
+	DOCUMENT_EXTENSIONS,
+	type DocumentExtractExecutorOptions,
 	type EditorExecutorOptions,
 	type FileReadExecutorOptions,
 	type GrepExecutorOptions,
@@ -120,6 +125,8 @@ export {
 	type AwkToolInput,
 	type EditFileInput,
 	EditFileInputSchema,
+	type ExtractDocumentInput,
+	ExtractDocumentInputSchema,
 	type FetchWebContentInput,
 	FetchWebContentInputSchema,
 	GrepInputSchema,
@@ -271,6 +278,8 @@ export function createBuiltinTools(
 		// pointing the reader somewhere of its own.
 		fileRead: {
 			...(toolsConfig.cwd ? { cwd: toolsConfig.cwd } : {}),
+			// So a binary document is pointed at the tool only when there is one.
+			documentReader: toolsConfig.enableExtractDocument === true,
 			...executorOptions.fileRead,
 		},
 	};

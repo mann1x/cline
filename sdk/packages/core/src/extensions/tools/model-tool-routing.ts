@@ -44,6 +44,7 @@ const TOOL_NAME_TO_FLAG: Record<
 		| "enableGrep"
 		| "enableSed"
 		| "enableAwk"
+		| "enableExtractDocument"
 		| "enableSkills"
 		| "enableAskQuestion"
 		| "enableSubmitAndExit"
@@ -58,6 +59,7 @@ const TOOL_NAME_TO_FLAG: Record<
 	grep: "enableGrep",
 	sed: "enableSed",
 	awk: "enableAwk",
+	extract_document: "enableExtractDocument",
 	skills: "enableSkills",
 	ask_question: "enableAskQuestion",
 	submit_and_exit: "enableSubmitAndExit",

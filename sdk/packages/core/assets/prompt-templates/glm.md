@@ -317,3 +317,6 @@ It is read-only, and deliberately so: output redirection, pipes, `system()` and 
 
 Output: a single `{query, result, success, error?}` for the whole call. `query` is `awk:<program>`; `result` is everything the program printed. A failed call has `success: false` and the reason in `error`. A program that printed nothing is still `success: true` — that is the program's answer, not a failure.
 {{DEFAULT}}
+
+# tool: extract_document
+{{DEFAULT}}

@@ -314,3 +314,6 @@ Run an `awk` program over one or more files. Send a `program` — `{print $1}`, 
 This is the tool for questions about columns and totals, where grep would only hand you the lines and leave you to count them yourself: summing a column, pulling fields out of a delimited file, counting occurrences per key. It is read-only, and deliberately so — output redirection, pipes, `system()` and `getline` are refused rather than quietly ignored. Use `sed` or `editor` to change a file. It runs in-process rather than through the shell, so it needs no binary installed and behaves the same on every platform.
 
 Output: a single `{query, result, success, error?}`. `query` is `awk:<program>`; `result` is everything the program printed. A failed entry has `success: false` with the reason in `error`. A program that printed nothing is still `success: true` — that is the program's answer, not a failure.
+
+# tool: extract_document
+{{DEFAULT}}

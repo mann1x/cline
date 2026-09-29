@@ -456,3 +456,6 @@ Use it for questions about columns and totals, where `grep` would only find the 
 **Read-only by design.** Output redirection, pipes, `system()` and `getline` are all refused rather than quietly ignored. Use `sed` or `editor` to change a file — `awk` here answers questions, it does not write answers back.
 
 **Output:** a single `{query, result, success, error?}` object. A failed entry has `success: false` and the reason in `error`. `query` is `awk:<program>` and `result` is everything the program printed. A program that printed nothing still has `success: true` — that is the program's answer, not a failure.
+
+# tool: extract_document
+{{DEFAULT}}

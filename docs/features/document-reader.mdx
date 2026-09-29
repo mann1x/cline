@@ -1,0 +1,89 @@
+---
+title: "Document Reader"
+sidebarTitle: "Document Reader"
+description: "The extract_document tool: how Cerebriline reads PDFs, Office files and ebooks into text and pictures, where it writes them, and how to turn it on."
+---
+
+`read_files` reads text. A PDF, a Word document or an EPUB read that way comes back as unreadable bytes. The **Document Reader** adds a tool, `extract_document`, that converts these documents to Markdown (or plain text) and writes their pictures out as image files the model can open.
+
+The tool is **off by default**. It is a niche tool, and each tool the model is offered costs space in every request, so it is only offered once you turn it on.
+
+## Turning it on
+
+- **VS Code:** Settings > Features > **Document Reader**.
+- **CLI:** pass `--documents`, or set `CLINE_DOCUMENTS=1`.
+
+When it is off and the model tries `read_files` on a document, the model is told what the file is and that you can turn the Document Reader on. It does not receive the bytes. When it is on, `read_files` points the model to `extract_document` instead.
+
+Delegated agents (`spawn_agent`, swarms, teammates) get the tool when the session has it and their preset allows it. They read and write through the same sandboxed overlay as every other delegated tool.
+
+## What it reads
+
+| Kind | Formats |
+|---|---|
+| PDF | `.pdf`, including encrypted files when the password is given |
+| Word | `.docx` `.docm` `.dotx`, and Word 97-2003 `.doc` `.dot` |
+| PowerPoint | `.pptx` `.pptm` `.ppsx`, and PowerPoint 97-2003 `.ppt` `.pps` |
+| Excel | `.xlsx` `.xlsm`, and Excel 97-2003 `.xls` |
+| OpenDocument | `.odt` `.odp` `.ods` `.odg` |
+| Other text documents | `.rtf` `.csv` `.html` `.htm` `.xhtml` |
+| Ebooks | `.epub`, `.mobi` `.prc` `.azw`, `.azw3` `.kf8`, `.fb2` |
+
+The format is decided by the file's bytes, not its name. A `.doc` that is really a DOCX or an RTF is read as what it is, and so is a `.mobi` that is a KF8 book.
+
+Formats it does not read return a reason instead of a generic error. These include DjVu, CHM, LIT, LRF, KFX, Apple Pages/Keynote/Numbers, XLSB and Works files. Comic archives (CBZ/CBR) are planned. DRM-protected ebooks (Kindle encryption, EPUB `rights.xml` or LCP) are named as such and not read.
+
+## What it writes
+
+By default, everything goes to `.cline/extracted/<document name>/` in the workspace:
+
+```
+.cline/extracted/report/
+├── report.md            # the whole text; report.3-7.md when a range was read
+└── images/
+    ├── image1.png
+    ├── image2.jpg
+    └── index.json       # every picture: file, type, size, and where it came from
+```
+
+The whole text is always written to the file. The tool result returns up to `max_chars` of it (60,000 by default) and says where the rest is. Pictures are linked from the Markdown by their relative path, and duplicates are written once.
+
+The model can write somewhere else with `output_dir`, as long as it is inside the workspace. It is told to do so only when you ask for another place.
+
+## Parameters
+
+| Parameter | Values | Default |
+|---|---|---|
+| `path` | The document, absolute or relative to the workspace root | required |
+| `format` | `"markdown"` keeps headings, lists, tables and picture links. `"text"` gives the words only. | `"markdown"` |
+| `range` | One-based pages (PDF), slides (PPTX, ODP), sheets (XLSX, ODS) or chapters (ebooks): `"1-5"`, `"3"`, `"1-5,9,12-"` | the whole document |
+| `images` | `"files"` writes pictures to `images/`. `"inline"` also attaches the first few to the result, for a model that can see images. `"none"` skips pictures. | `"files"` |
+| `output_dir` | A folder inside the workspace | `.cline/extracted/<name>/` |
+| `password` | The password of an encrypted PDF or Office file | none |
+| `max_chars` | 1,000 to 400,000 | 60,000 |
+
+`images: "inline"` attaches up to four pictures, and only when the current model accepts image input. Each must be PNG, JPEG, GIF or WebP, at most 1.5 MB, and not smaller than 32 pixels on both sides. For a model without vision, the result says so and the pictures stay on disk.
+
+## Scanned pages
+
+Some PDF pages are photographs of text. Each PDF page is classified on its own, and the result header names these pages:
+
+- **Scanned:** a picture covers at least half the page, and there are fewer than 100 visible characters. A scan with a stamped page number still counts. A text layer that is mostly private-use or replacement characters counts too, since it is unreadable.
+- **Already recognized:** a scan with an invisible OCR text layer (PDF render mode 3). That text is kept and returned.
+- **Drawn as shapes:** at least 200 path operations with no text and no pictures. These are charts or outlined lettering; there is nothing to extract.
+
+In this release, scanned pages are only reported. The page images are written to `images/`, so a vision model can look at them. Built-in OCR (tesseract, English bundled) and vision-model recognition are planned for the next phase.
+
+## Pictures from older Office files
+
+Word, Excel and PowerPoint 97-2003 files are read by [office_oxide](https://github.com/yfedoseev/office_oxide), bundled as WebAssembly. Their pictures are extracted. Windows metafiles (EMF/WMF), which are stored compressed, are decompressed. For `.doc`, pictures that office_oxide does not place in the text are found in the file and listed under **Pictures not placed in the text**. EMF, WMF, TIFF, BMP and PICT pictures are written as files, but a model cannot view them directly, and the result counts them.
+
+## Plan mode
+
+In plan mode, `extract_document` writes only to its default folder. A call with `output_dir` is stopped, and the model is told to call again without it.
+
+## Limits
+
+- Files larger than 200 MB are not read.
+- Office containers (DOCX, PPTX, XLSX, ODF) are limited to 256 MB decompressed and 20,000 entries, which guards against zip bombs.
+- A single call times out after three minutes.

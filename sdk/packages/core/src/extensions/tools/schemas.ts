@@ -1184,3 +1184,69 @@ export const SedInputUnionSchema = SedInputSchema.extend({
 export const AwkInputUnionSchema = AwkInputSchema.extend({
 	files: listOrSingle("The files to read.").optional(),
 });
+
+/**
+ * Schema for the extract_document tool input.
+ *
+ * Every optional field takes `null` as well as absence: models send
+ * `"range": null` for "no range", and a strict optional would fail the whole
+ * call on it.
+ */
+export const ExtractDocumentInputSchema = z.object({
+	path: z
+		.string()
+		.min(1)
+		.max(INPUT_ARG_CHAR_LIMIT)
+		.describe(
+			"The document to read: an absolute path, or one relative to the workspace root.",
+		),
+	format: z
+		.enum(["markdown", "text"])
+		.nullable()
+		.optional()
+		.describe(
+			'"markdown" (default) keeps headings, lists, tables and picture links; "text" is the words only.',
+		),
+	range: z
+		.string()
+		.max(200)
+		.nullable()
+		.optional()
+		.describe(
+			'Which pages (PDF), slides (PPTX, ODP), sheets (XLSX, ODS) or chapters (EPUB, MOBI, AZW3, FB2) to read, one-based: "1-5", "3", "1-5,9,12-". Omit to read the whole document.',
+		),
+	images: z
+		.enum(["files", "inline", "none"])
+		.nullable()
+		.optional()
+		.describe(
+			'"files" (default) writes the pictures to an images folder beside the text and links them from it; "inline" does that and also attaches the first few to this result, for a model that can see images; "none" skips pictures.',
+		),
+	output_dir: z
+		.string()
+		.max(INPUT_ARG_CHAR_LIMIT)
+		.nullable()
+		.optional()
+		.describe(
+			"Where to write the text and pictures, inside the workspace. Omit for .cline/extracted/<document name>/; set it only when the user asks for another place.",
+		),
+	password: z
+		.string()
+		.max(1000)
+		.nullable()
+		.optional()
+		.describe(
+			"The password of an encrypted PDF or Office document, when the user has given one.",
+		),
+	max_chars: z.coerce
+		.number()
+		.int()
+		.min(1000)
+		.max(400_000)
+		.nullable()
+		.optional()
+		.describe(
+			"How much of the text to return in this result: 1000 to 400000 characters, 60000 when omitted. The whole text is always written to the file.",
+		),
+});
+export type ExtractDocumentInput = z.infer<typeof ExtractDocumentInputSchema>;

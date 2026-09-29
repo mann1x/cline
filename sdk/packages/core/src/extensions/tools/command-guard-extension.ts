@@ -70,6 +70,32 @@ export function createPlanModeCommandGuardExtension(
 			return undefined;
 		}
 
+		// `extract_document` writes, but only its own output: the text and the
+		// pictures of the document it read. Plan mode keeps that in the default
+		// extraction folder, so the one input that could put files anywhere
+		// else in the workspace waits for Act mode.
+		if (context.tool.name === DefaultToolNames.EXTRACT_DOCUMENT) {
+			const input = context.input as { output_dir?: unknown } | undefined;
+			if (typeof input?.output_dir === "string" && input.output_dir.trim()) {
+				capturePlanModeCommandBlocked(options.telemetry, {
+					tool_name: "extract_document",
+					blocked_construct: "extract_document output_dir",
+					command_count: 1,
+					agent_id: context.snapshot.agentId,
+					conversation_id: context.snapshot.conversationId,
+					run_id: context.snapshot.runId,
+					iteration: context.snapshot.iteration,
+					tool_call_id: context.toolCall.toolCallId,
+				});
+				return {
+					skip: true,
+					reason:
+						"In plan mode, extract_document writes only to its default folder, .cline/extracted/. Call it again without output_dir; the text and pictures can go elsewhere once the user switches to Act mode.",
+				};
+			}
+			return undefined;
+		}
+
 		if (context.tool.name !== DefaultToolNames.RUN_COMMANDS) {
 			return undefined;
 		}

@@ -32,6 +32,9 @@ export const ToolPresets = {
 		enableGrep: true,
 		enableSed: true,
 		enableAwk: true,
+		// Offered only where the user turned it on (the session's
+		// `enableExtractDocument`); here it says the mode allows it.
+		enableExtractDocument: true,
 		enableSkills: true,
 		enableAskQuestion: true,
 		enableSubmitAndExit: false,
@@ -58,6 +61,9 @@ export const ToolPresets = {
 		enableGrep: true,
 		enableSed: true,
 		enableAwk: true,
+		// A reader: it writes only its own extraction, and the plan-mode
+		// guard keeps that in the default folder.
+		enableExtractDocument: true,
 		enableSkills: true,
 		enableAskQuestion: true,
 		enableSubmitAndExit: false,
@@ -81,6 +87,7 @@ export const ToolPresets = {
 		enableGrep: true,
 		enableSed: false,
 		enableAwk: true,
+		enableExtractDocument: true,
 		enableSkills: false,
 		enableAskQuestion: false,
 		enableSubmitAndExit: false,
@@ -101,6 +108,7 @@ export const ToolPresets = {
 		enableGrep: false,
 		enableSed: false,
 		enableAwk: false,
+		enableExtractDocument: false,
 		enableSkills: false,
 		enableAskQuestion: false,
 		enableSubmitAndExit: false,
@@ -122,6 +130,7 @@ export const ToolPresets = {
 		enableGrep: true,
 		enableSed: true,
 		enableAwk: true,
+		enableExtractDocument: true,
 		enableSkills: false,
 		enableAskQuestion: false,
 		enableSubmitAndExit: true,

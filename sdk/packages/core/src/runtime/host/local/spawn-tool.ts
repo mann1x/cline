@@ -319,6 +319,13 @@ export function createSessionSpawnTool(
 						cwd: config.cwd,
 						telemetry: config.telemetry,
 						...ToolPresets[resolveToolPresetName({ mode: config.mode })],
+						// The preset says the mode allows it; the session says whether
+						// it is on. The lead's list applies this through its tool
+						// policies, which this list is not filtered by.
+						enableExtractDocument:
+							config.enableExtractDocument === true &&
+							ToolPresets[resolveToolPresetName({ mode: config.mode })]
+								.enableExtractDocument,
 						// Sandboxed agents build overlay-backed executors from options
 						// and take no lead overrides; the shell is last, so it beats
 						// the mode preset.
@@ -562,6 +569,10 @@ export function createSessionSwarmTool(
 							cwd: config.cwd,
 							telemetry: config.telemetry,
 							...ToolPresets[resolveToolPresetName({ mode: config.mode })],
+							enableExtractDocument:
+								config.enableExtractDocument === true &&
+								ToolPresets[resolveToolPresetName({ mode: config.mode })]
+									.enableExtractDocument,
 							// Over its overlay when it has one; otherwise the lead's
 							// executors and no shell, since an unsandboxed
 							// `run_commands` would write straight to the real

@@ -1785,6 +1785,18 @@ describe("buildSessionConfig", () => {
 		expect(config.enableAgentTeams).toBe(true)
 	})
 
+	// The Document Reader switch is the only thing that offers extract_document;
+	// core withholds it otherwise, for the lead and every delegated agent.
+	it("offers extract_document only once the Document Reader switch is on", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation(() => undefined)
+		expect((await buildSessionConfig({ cwd: "/tmp/workspace" })).enableExtractDocument).toBe(false)
+
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
+			key === "extractDocumentEnabled" ? true : undefined,
+		)
+		expect((await buildSessionConfig({ cwd: "/tmp/workspace" })).enableExtractDocument).toBe(true)
+	})
+
 	// Teammates sits under Subagents and means nothing without it.
 	it("offers no teams with Teammates on and Subagents off", async () => {
 		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) =>

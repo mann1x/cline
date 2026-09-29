@@ -16,6 +16,7 @@ import type {
 	ApplyPatchInput,
 	AwkToolInput,
 	EditFileInput,
+	ExtractDocumentInput,
 	GrepToolInput,
 	ReadFileRequest,
 	SedToolInput,
@@ -209,6 +210,16 @@ export type AwkExecutor = (
 ) => Promise<string>;
 
 /**
+ * Executor for `extract_document`: a document to markdown or text, its
+ * pictures written as files. Returns image parts too when `images: "inline"`.
+ */
+export type ExtractDocumentExecutor = (
+	input: ExtractDocumentInput,
+	cwd: string,
+	context: AgentToolContext,
+) => Promise<FileReadResultContent>;
+
+/**
  * Executor for apply_patch operations
  *
  * @param input - apply_patch command payload
@@ -310,6 +321,8 @@ export interface ToolExecutors {
 	sed?: SedExecutor;
 	/** In-process awk implementation */
 	awk?: AwkExecutor;
+	/** Document to text/markdown, pictures to files */
+	extractDocument?: ExtractDocumentExecutor;
 	/** Apply patch implementation */
 	applyPatch?: ApplyPatchExecutor;
 	/** Skill invocation implementation */
@@ -337,6 +350,7 @@ export type DefaultToolName =
 	| "grep"
 	| "sed"
 	| "awk"
+	| "extract_document"
 	| "skills"
 	| "ask_question"
 	| "submit_and_exit";
@@ -412,6 +426,13 @@ export interface DefaultToolsConfig {
 	 * @default true
 	 */
 	enableAwk?: boolean;
+
+	/**
+	 * Enable the extract_document tool. Off unless asked for: it is a niche
+	 * reader, and a session pays for its schema on every request.
+	 * @default false
+	 */
+	enableExtractDocument?: boolean;
 
 	/**
 	 * Enable the skills tool
@@ -490,6 +511,14 @@ export interface DefaultToolsConfig {
 	 * @default 30000
 	 */
 	textToolsTimeoutMs?: number;
+
+	/**
+	 * Timeout for extract_document, in milliseconds. Long, because a
+	 * several-hundred-page PDF with pictures is minutes of work, not seconds.
+	 *
+	 * @default 180000
+	 */
+	extractDocumentTimeoutMs?: number;
 
 	/**
 	 * Timeout for skills operations in milliseconds

@@ -416,6 +416,11 @@ const USER_SETTINGS_FIELDS = {
 	// user who never touched it gets none either. Only meaningful with
 	// subagents on.
 	teammatesEnabled: { default: false as boolean },
+	// Whether the model is offered `extract_document`, which reads PDFs, Office
+	// files and ebooks to text and their pictures to files. Off by default: a
+	// niche reader whose schema every request would otherwise carry. Applies to
+	// the lead and every agent it delegates to.
+	extractDocumentEnabled: { default: false as boolean },
 	// A global model for delegated agents, overriding the session's own model for
 	// them only. Empty means agents run on the session's model. One value on the
 	// session's provider — not per-provider, and it never touches the lead.

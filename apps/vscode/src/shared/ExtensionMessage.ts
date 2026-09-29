@@ -225,6 +225,8 @@ export interface ExtensionState {
 	subagentCommandsEnabled?: boolean
 	/** Whether the lead is offered the team_* tools; see state-keys.ts. */
 	teammatesEnabled?: boolean
+	/** Whether the model is offered extract_document; see state-keys.ts. */
+	extractDocumentEnabled?: boolean
 	/** "Use PolyKV agents as Priority 0"; see state-keys.ts. */
 	polykvAgentsPriorityZero?: boolean
 	agentModelOverride?: string

@@ -103,6 +103,26 @@ describe("plan-mode command-guard extension", () => {
 		expect(result).toBeUndefined();
 	});
 
+	it("keeps extract_document in its default folder in plan mode", async () => {
+		const extension = createPlanModeCommandGuardExtension();
+		const elsewhere = await runBeforeTool(
+			extension,
+			makeContext("extract_document", {
+				path: "book.epub",
+				output_dir: "docs/book",
+			}),
+		);
+		expect(elsewhere?.skip).toBe(true);
+		expect(elsewhere?.reason).toContain("without output_dir");
+		expect(elsewhere?.reason).not.toMatch(/refus|reject/i);
+
+		const byDefault = await runBeforeTool(
+			extension,
+			makeContext("extract_document", { path: "book.epub" }),
+		);
+		expect(byDefault).toBeUndefined();
+	});
+
 	it("reports a blocked sed write to telemetry as sed, not run_commands", async () => {
 		const telemetry = makeTelemetryStub();
 		const extension = createPlanModeCommandGuardExtension({ telemetry });

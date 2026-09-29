@@ -216,6 +216,9 @@ It cannot write, and that is deliberate rather than incidental: output redirecti
 
 Output: a single `{query, result, success, error?}`. `query` is `awk:<program>`; `result` is everything the program printed. A program that printed nothing still returns `success: true` — that is the program's answer, not a failure.
 
+# tool: extract_document
+{{DEFAULT}}
+
 # tool: fetch_web_content
 Fetches web pages — documentation, API references, changelogs — and extracts from each what you ask for.
 

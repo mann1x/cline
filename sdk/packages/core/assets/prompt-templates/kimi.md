@@ -385,3 +385,6 @@ Example:
   "field_separator": ","
 }
 ```
+
+# tool: extract_document
+{{DEFAULT}}

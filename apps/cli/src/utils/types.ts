@@ -102,6 +102,11 @@ export interface ParsedArgs {
 	 * extension's Teammates setting -- eighteen tools in every request.
 	 */
 	teammates?: boolean;
+	/**
+	 * `--documents`: offer `extract_document`. Off by default, as in the
+	 * extension's Document Reader setting.
+	 */
+	documents?: boolean;
 	acpMode: boolean;
 	model?: string;
 	provider?: string;

@@ -2220,6 +2220,11 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	if (subagentsEnabled) {
 		Logger.log(`[Agents] Teammates ${teammatesEnabled ? "enabled" : "disabled"}`)
 	}
+	// Whether the model is offered extract_document (PDFs, Office files and
+	// ebooks to text). Off by default; core applies it to every delegated agent
+	// as well as the lead.
+	const extractDocumentEnabled =
+		input.taskSettings?.extractDocumentEnabled ?? stateManager.getGlobalSettingsKey("extractDocumentEnabled") ?? false
 	// Whether a turn that calls nothing is nudged to continue even when
 	// nothing says work is unfinished. On by default, which is what the
 	// extension did before this was a setting.
@@ -2574,6 +2579,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			? join(HostProvider.get().extensionFsPath, "assets", "sandbox")
 			: undefined,
 		strongNudges: strongNudgesEnabled,
+		enableExtractDocument: extractDocumentEnabled,
 		// Sent whether or not auto compaction is on. `enabled` is the only thing
 		// that decides whether the transcript gets compacted — the runtime
 		// returns no compaction pass without it — but this object is also where

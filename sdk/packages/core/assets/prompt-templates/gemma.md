@@ -335,3 +335,6 @@ Run an `awk` program over one or more files. This runs in-process and behaves id
 - **Constraints:** Read-only. Output redirection, pipes, `system()`, and `getline` are refused.
 - **Output:** A single `{query, result, success, error?}` object. `result` contains everything the program printed. A program that prints nothing is still `success: true`.
 {{DEFAULT}}
+
+# tool: extract_document
+{{DEFAULT}}

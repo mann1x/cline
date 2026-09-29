@@ -14,6 +14,7 @@ import { resolveExistingFilePath } from "@cline/shared/storage";
 import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
 import type { ReadFileRequest } from "../schemas";
 import type { FileReadExecutor } from "../types";
+import { unreadableDocumentMessage } from "./document/formats";
 import { withFileLock } from "./file-locks";
 import {
 	MAX_LINE_CHARS,
@@ -23,6 +24,18 @@ import {
 } from "./output-limits";
 import { type ReadReceipts, readFileStamp } from "./read-receipts";
 import type { ReadLedger } from "./unchanged-reads";
+
+/** The first bytes of a file, enough to tell a binary document by. */
+async function readHead(filePath: string): Promise<Uint8Array> {
+	const handle = await fs.open(filePath, "r");
+	try {
+		const buffer = new Uint8Array(512);
+		const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+		return buffer.subarray(0, bytesRead);
+	} finally {
+		await handle.close();
+	}
+}
 
 const IMAGE_MEDIA_TYPES = new Map<string, string>([
 	[".gif", "image/gif"],
@@ -102,6 +115,14 @@ export interface FileReadExecutorOptions {
 	 * file the agent deleted reads as absent.
 	 */
 	overlay?: AgentOverlay;
+
+	/**
+	 * Whether `extract_document` is offered beside this reader. A binary
+	 * document (PDF, Office, OpenDocument, ebook) is never returned as text;
+	 * this decides whether the explanation points at the tool or at the
+	 * setting that turns it on.
+	 */
+	documentReader?: boolean;
 }
 
 // `receipts`, `cwd` and `readLedger` are deliberately outside the defaults: there is no
@@ -112,7 +133,10 @@ export interface FileReadExecutorOptions {
 // `readLedger` is absent for the same reason as `receipts`: without one, every
 // read returns the content, which is what a standalone executor should do.
 const DEFAULT_FILE_READ_OPTIONS: Required<
-	Omit<FileReadExecutorOptions, "receipts" | "cwd" | "readLedger" | "overlay">
+	Omit<
+		FileReadExecutorOptions,
+		"receipts" | "cwd" | "readLedger" | "overlay" | "documentReader"
+	>
 > = {
 	maxFileSizeBytes: 10_000_000, // 10MB default limit
 	encoding: "utf-8", // Default to UTF-8 encoding
@@ -381,7 +405,13 @@ async function readTextWindow(
 export function createFileReadExecutor(
 	options: FileReadExecutorOptions = {},
 ): FileReadExecutor {
-	const { receipts, cwd, readLedger, overlay } = options;
+	const {
+		receipts,
+		cwd,
+		readLedger,
+		overlay,
+		documentReader = false,
+	} = options;
 	const { maxFileSizeBytes, encoding, includeLineNumbers, maxReadChars } = {
 		...DEFAULT_FILE_READ_OPTIONS,
 		...options,
@@ -434,6 +464,17 @@ export function createFileReadExecutor(
 					mediaType: imageMediaType,
 				},
 			];
+		}
+
+		// A PDF or an Office file read as text is kilobytes of noise the model
+		// then reasons about. Told what it is instead.
+		const unreadable = unreadableDocumentMessage(
+			resolvedPath,
+			await readHead(resolvedPath),
+			documentReader,
+		);
+		if (unreadable) {
+			throw new Error(unreadable);
 		}
 
 		if (stat.size > MAX_TEXT_STREAM_BYTES) {

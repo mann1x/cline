@@ -1409,6 +1409,10 @@ export async function runCli(): Promise<void> {
 			// `/team` prompt still turns them on for its own run (see
 			// `teamsForRewrittenPrompt`).
 			enableAgentTeams: !isYoloMode && teammatesRequested(args),
+			// The document reader, off unless asked for: `--documents` or
+			// CLINE_DOCUMENTS=1, mirroring the extension's Document Reader setting.
+			enableExtractDocument:
+				args.documents === true || process.env.CLINE_DOCUMENTS?.trim() === "1",
 			// Let a delegated agent run commands in the overlay sandbox, off by
 			// default (as in the desktop app) and opted into with
 			// CLINE_SUBAGENT_COMMANDS=1. The binaries dir is always resolved: the

@@ -248,6 +248,10 @@ export function addRootOptions(cmd: Command): Command {
 				"Offer the team tools: durable named teammates that take tasks one at a time and coordinate through a mailbox and a task board. Adds 18 tools to every request. Off by default; CLINE_TEAMMATES=1 does the same, and a /team prompt turns them on for that run",
 			)
 			.option(
+				"--documents",
+				"Offer extract_document, which reads PDF, Word, PowerPoint, Excel (current and 97-2003), OpenDocument, RTF and ebooks (EPUB, MOBI, AZW3, FB2) to text and writes their pictures to files under .cline/extracted/. Off by default; CLINE_DOCUMENTS=1 does the same",
+			)
+			.option(
 				"--worktree",
 				`Auto-create a detached git worktree under ${configDirDefault()}/worktrees/ and run the task there`,
 			)
@@ -507,6 +511,7 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 	if (opts.hooksDir !== undefined) result.hooksDir = opts.hooksDir;
 	if (opts.worktree !== undefined) result.worktree = !!opts.worktree;
 	if (opts.teammates !== undefined) result.teammates = !!opts.teammates;
+	if (opts.documents !== undefined) result.documents = !!opts.documents;
 	if (opts.cwd !== undefined) result.cwd = opts.cwd;
 	if (opts.teamName !== undefined) result.teamName = opts.teamName;
 	if (opts.system !== undefined) result.systemPrompt = opts.system;

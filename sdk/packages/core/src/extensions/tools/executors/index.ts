@@ -14,6 +14,10 @@ import {
 } from "./apply-patch";
 import { type AwkExecutorOptions, createAwkExecutor } from "./awk";
 import { createShellExecutor, type ShellExecutorOptions } from "./bash";
+import {
+	createDocumentExtractExecutor,
+	type DocumentExtractExecutorOptions,
+} from "./document-extract";
 import { createEditorExecutor, type EditorExecutorOptions } from "./editor";
 import {
 	createFileReadExecutor,
@@ -43,6 +47,12 @@ export {
 	createShellExecutor,
 	type ShellExecutorOptions,
 } from "./bash";
+export { DOCUMENT_EXTENSIONS } from "./document/formats";
+export {
+	createDocumentExtractExecutor,
+	DEFAULT_EXTRACTION_DIR,
+	type DocumentExtractExecutorOptions,
+} from "./document-extract";
 export { createEditorExecutor, type EditorExecutorOptions } from "./editor";
 export {
 	createFileReadExecutor,
@@ -79,6 +89,7 @@ export interface DefaultExecutorsOptions {
 	grep?: GrepExecutorOptions;
 	sed?: SedExecutorOptions;
 	awk?: AwkExecutorOptions;
+	extractDocument?: DocumentExtractExecutorOptions;
 
 	/**
 	 * Record of what has been read, shared by the reader and the editor.
@@ -185,5 +196,11 @@ export function createDefaultExecutors(
 		grep: shown(createGrepExecutor({ ...options.grep, receipts, overlay })),
 		sed: shown(createSedExecutor({ ...options.sed, receipts, overlay })),
 		awk: shown(createAwkExecutor({ ...options.awk, receipts, overlay })),
+		// Reads through the overlay like the reader, and writes its extraction
+		// into it like the editor: a delegated agent's copy of a document's text
+		// is its own until the lead takes its changes.
+		extractDocument: shown(
+			createDocumentExtractExecutor({ ...options.extractDocument, overlay }),
+		),
 	};
 }

@@ -85,6 +85,18 @@ const agentFeatures: FeatureToggle[] = [
 		settingKey: "teammatesEnabled",
 	},
 	{
+		// Off by default, like Teammates and for the same reason: its schema is
+		// in every request that offers it, and most sessions never open a PDF.
+		// The description names what it reads because "documents" alone does
+		// not say whether a .doc or a Kindle book counts.
+		id: "extract-document",
+		label: "Document Reader",
+		description:
+			"Let the model read documents that are not plain text: PDF, Word (DOCX and DOC), PowerPoint (PPTX and PPT), Excel (XLSX and XLS), OpenDocument, RTF, and ebooks (EPUB, MOBI, AZW3, FB2). The text is written to .cline/extracted/ in the workspace, with the pictures from the document saved beside it. Applies to subagents too.",
+		stateKey: "extractDocumentEnabled",
+		settingKey: "extractDocumentEnabled",
+	},
+	{
 		// Default on: it is what every build did before the switch existed, and
 		// inside a coding task it is the right reading -- a turn that called
 		// nothing is nearly always one that should have acted, a needless nudge
@@ -267,6 +279,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		subagentsEnabled,
 		subagentCommandsEnabled,
 		teammatesEnabled,
+		extractDocumentEnabled,
 		agentModelOverride,
 		strongNudgesEnabled,
 		worktreesEnabled,
@@ -284,6 +297,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		subagentsEnabled,
 		subagentCommandsEnabled,
 		teammatesEnabled,
+		extractDocumentEnabled,
 		// `?? true` rather than a bare read: the default is on, and an
 		// extension state that predates the key must not render as off.
 		strongNudgesEnabled: strongNudgesEnabled ?? true,

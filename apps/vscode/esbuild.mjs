@@ -244,10 +244,41 @@ function copyGrammars(destDir) {
 	}
 }
 
+/**
+ * Put office_oxide's WebAssembly module beside the bundle.
+ *
+ * It is how `extract_document` reads Word, Excel and PowerPoint 97-2003 files.
+ * Core vendors it under `assets/office-oxide/` (built by
+ * `sdk/packages/core/scripts/build-office-oxide.sh`) and looks for it in
+ * `office-oxide/` next to itself first, which after bundling is `dist/`.
+ * Missing is not fatal: the tool then says legacy Office files cannot be read,
+ * and every other format still works.
+ */
+function copyOfficeOxide(destDir) {
+	const candidates = [
+		path.join(__dirname, "node_modules", "@cline", "core", "assets", "office-oxide"),
+		path.resolve(__dirname, "..", "..", "sdk", "packages", "core", "assets", "office-oxide"),
+	]
+	const from = candidates.find((candidate) => fs.existsSync(path.join(candidate, "office_oxide_bg.wasm")))
+	if (!from) {
+		console.warn("[office-oxide] office_oxide_bg.wasm not found; legacy Office files will not be readable")
+		return
+	}
+	const into = path.join(destDir, "office-oxide")
+	fs.mkdirSync(into, { recursive: true })
+	let bytes = 0
+	for (const name of fs.readdirSync(from)) {
+		fs.copyFileSync(path.join(from, name), path.join(into, name))
+		bytes += fs.statSync(path.join(into, name)).size
+	}
+	console.log(`[office-oxide] ${(bytes / 1024 / 1024).toFixed(1)} MB -> ${into}`)
+}
+
 async function main() {
 	const config = standalone ? standaloneConfig : e2eBuild ? e2eBuildConfig : extensionConfig
 	if (!e2eBuild) {
 		copyGrammars(path.resolve(__dirname, destDir))
+		copyOfficeOxide(path.resolve(__dirname, destDir))
 	}
 	const extensionCtx = await esbuild.context(config)
 	if (watch) {

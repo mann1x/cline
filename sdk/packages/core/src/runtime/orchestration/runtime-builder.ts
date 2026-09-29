@@ -46,6 +46,7 @@ import {
 	type ToolRoutingRule,
 } from "../../extensions/tools";
 import { createPlanModeCommandGuardExtension } from "../../extensions/tools/command-guard-extension";
+import { DefaultToolNames } from "../../extensions/tools/constants";
 import {
 	AgentTeamsRuntime,
 	agentEndpointKey,
@@ -300,6 +301,15 @@ function createBuiltinToolsList(
 			...preset,
 			enableSkills: !!skillsExecutor,
 			...toolRoutingConfig,
+			// The preset allows it; the session's policies say whether it is on.
+			// Resolved here rather than left to the filter below, so that
+			// read_files knows whether it can point a PDF at it.
+			enableExtractDocument:
+				preset.enableExtractDocument === true &&
+				isToolEnabledByPolicies(
+					DefaultToolNames.EXTRACT_DOCUMENT,
+					toolPolicies,
+				),
 			// Last, so it beats both the mode preset and any model routing rule
 			// that re-enables run_commands: a delegated agent whose workspace
 			// cannot launch a command gets no shell, or it escapes to the real
@@ -686,9 +696,18 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			modelTools.push({ name: "image_generation", outputFormat: "png" });
 		}
 		const workspaceConfigRoot = config.workspaceRoot ?? config.cwd;
+		// `extract_document` is in every mode's preset but offered only where the
+		// session turns it on. Withheld here, at the one policy set the lead's
+		// tools, configured agents and teammates are all filtered by, so no
+		// delegated path can acquire it on its own.
 		const effectiveToolPolicies = withProfileToolSelection(
 			input.toolPolicies ?? config.toolPolicies,
-			config.providerConfig?.tools?.disabled,
+			config.enableExtractDocument === true
+				? config.providerConfig?.tools?.disabled
+				: [
+						...(config.providerConfig?.tools?.disabled ?? []),
+						DefaultToolNames.EXTRACT_DOCUMENT,
+					],
 		);
 		const fileReadMaxChars = resolveFileReadMaxChars(
 			config.providerConfig?.tools,

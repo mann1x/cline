@@ -90,6 +90,37 @@ describe("DefaultRuntimeBuilder", () => {
 		expect(names).not.toContain("spawn_agent");
 	});
 
+	describe("extract_document", () => {
+		it("is withheld unless the session turns it on", async () => {
+			const off = await new DefaultRuntimeBuilder().build({
+				config: makeBaseConfig(),
+			});
+			expect(off.tools.map((tool) => tool.name)).not.toContain(
+				"extract_document",
+			);
+			const on = await new DefaultRuntimeBuilder().build({
+				config: makeBaseConfig({ enableExtractDocument: true }),
+			});
+			expect(on.tools.map((tool) => tool.name)).toContain("extract_document");
+		});
+
+		it("stays withheld where the profile names it, even when turned on", async () => {
+			const runtime = await new DefaultRuntimeBuilder().build({
+				config: makeBaseConfig({
+					enableExtractDocument: true,
+					providerConfig: {
+						providerId: "anthropic",
+						modelId: "claude-sonnet-4-6",
+						tools: { disabled: ["extract_document"] },
+					},
+				}),
+			});
+			expect(runtime.tools.map((tool) => tool.name)).not.toContain(
+				"extract_document",
+			);
+		});
+	});
+
 	describe("the profile's tool selection", () => {
 		it("withholds the tools the provider config names", async () => {
 			const withEverything = await new DefaultRuntimeBuilder().build({

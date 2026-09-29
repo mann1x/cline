@@ -595,3 +595,6 @@ Run an `awk` program over one or more files. This is the tool for column-based q
 }
 ```
 {{DEFAULT}}
+
+# tool: extract_document
+{{DEFAULT}}

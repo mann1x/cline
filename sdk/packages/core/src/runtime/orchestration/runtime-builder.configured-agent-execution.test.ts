@@ -257,7 +257,12 @@ Write a concise commit message.`,
 				maxIterations: 3,
 				parentAgentId: "parent-agent",
 				requestToolApproval,
-				toolPolicies: effectiveToolPolicies,
+				// The Document Reader is off in this session, so its tool is disabled
+				// on top of the caller's policies.
+				toolPolicies: {
+					...effectiveToolPolicies,
+					extract_document: { enabled: false },
+				},
 			}),
 		);
 		// This build is given no delegated sandboxes, so the agent has no private

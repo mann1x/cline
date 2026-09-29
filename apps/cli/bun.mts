@@ -140,6 +140,18 @@ const cliBootstrapPath = join(
 );
 mkdirSync(dirname(cliBootstrapPath), { recursive: true });
 copyFileSync(coreBootstrapPath, cliBootstrapPath);
+// office_oxide's WebAssembly module, which extract_document reads Word, Excel
+// and PowerPoint 97-2003 files with. Core looks for it in `office-oxide/`
+// beside the bundle; without it only those three formats are unreadable.
+const officeOxideSource = join(
+	rootDir,
+	"../../sdk/packages/core/assets/office-oxide",
+);
+if (existsSync(officeOxideSource)) {
+	cpSync(officeOxideSource, join(rootDir, "./dist/office-oxide"), {
+		recursive: true,
+	});
+}
 
 if (existsSync(hubWebviewDistPath)) {
 	mkdirSync(dirname(cliHubWebviewDistPath), { recursive: true });

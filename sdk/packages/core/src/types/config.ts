@@ -289,6 +289,12 @@ export interface CoreRuntimeFeatures {
 	 * opposite -- see `completionPolicy.strongNudges`.
 	 */
 	strongNudges?: boolean;
+	/**
+	 * Whether `extract_document` is offered, to the lead and to every agent it
+	 * delegates to. Off unless set: the tool is a niche reader, and each request
+	 * that offers it pays for its schema.
+	 */
+	enableExtractDocument?: boolean;
 	disableMcpSettingsTools?: boolean;
 	yolo?: boolean;
 }

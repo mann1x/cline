@@ -149,6 +149,9 @@ This tool is read-only, and that is enforced rather than assumed: output redirec
 
 Output: a single `{query, result, success, error?}`. `query` is `awk:<program>`. `result` is everything the program printed. A program that printed nothing has `success: true` — that is the program's answer.
 
+# tool: extract_document
+{{DEFAULT}}
+
 # tool: fetch_web_content
 Fetch web pages and extract information using a prompt. Each request needs a `url` and a `prompt` describing what to extract. Batch independent URLs into one call, together with other independent tool calls in the same response.
 

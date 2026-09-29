@@ -329,6 +329,7 @@ message Settings {
   optional string agent_model_override = 223;
   optional bool polykv_agents_priority_zero = 224;
   optional bool teammates_enabled = 225;
+  optional bool extract_document_enabled = 226;
 }
 
 message State {
@@ -469,6 +470,8 @@ message UpdateSettingsRequest {
   optional bool polykv_agents_priority_zero = 85;
   // The team_* tools (durable teammates, mailbox, task board). Off by default.
   optional bool teammates_enabled = 86;
+  // Whether the model is offered extract_document. Off by default.
+  optional bool extract_document_enabled = 87;
   optional int32 subagent_terminal_output_line_limit = 30;
   optional string cline_env = 31;
   optional OnboardingModelGroup onboarding_models = 33;
