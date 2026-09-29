@@ -215,3 +215,27 @@ describe("describeAdmissionWait", () => {
 		);
 	});
 });
+
+describe("a response the client could not parse", () => {
+	// pandorum 2026-09-29: opencoti's dying responses ended 7 agents as failed.
+	it.each([
+		"terminated: HTTPParserError: Response does not match the HTTP/1.1 protocol (Content-Length can't be present with Transfer-Encoding)",
+		"Error: terminated: other side closed",
+		"HPE_INVALID_CONSTANT",
+	])("is a transport fault: %s", (message) => {
+		expect(classifyTurnFault(message)).toBe("transport");
+	});
+
+	it("walks to it on the cause chain", () => {
+		const error = Object.assign(new TypeError("terminated"), {
+			cause: Object.assign(
+				new Error("Response does not match the HTTP/1.1 protocol"),
+				{
+					code: "HPE_UNEXPECTED_CONTENT_LENGTH",
+					name: "HTTPParserError",
+				},
+			),
+		});
+		expect(classifyTurnFaultError(error)).toBe("transport");
+	});
+});

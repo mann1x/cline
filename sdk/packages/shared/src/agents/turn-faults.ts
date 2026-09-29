@@ -49,6 +49,16 @@ const TRANSPORT_PATTERNS: readonly RegExp[] = [
 	/\bcannot connect to api\b/i,
 	/^fetch failed$/i,
 	/^terminated$/i,
+	// undici ends a body stream it can no longer read with "terminated" and
+	// the cause after it. Measured on pandorum (2026-09-29 04:25:30Z): opencoti
+	// broke its responses a minute before it segfaulted, and 7 agents ended on
+	// "terminated: HTTPParserError: Response does not match the HTTP/1.1
+	// protocol (...)" as failures, while the ones whose socket simply stopped
+	// waited for the server as they should. A response the client cannot
+	// parse is the server's fault, never the model's.
+	/^(?:error:\s*)?terminated:/i,
+	/\bHTTPParserError\b/,
+	/\bHPE_[A-Z_]+\b/,
 	/^(?:network|connection) (?:error|failure|lost|reset)$/i,
 	/^(?:(?:error:\s*)?(?:502|503|504)\s*)?(?:bad gateway|service unavailable|gateway time-?out)$/i,
 	/^no healthy upstream$/i,
