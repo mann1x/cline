@@ -22,6 +22,11 @@ service TaskService {
   // fan-out of five where one agent grinds has four finished reports, and
   // cancelling the session throws them away along with the lead's context.
   rpc cancelSubagent(StringRequest) returns (Empty);
+  // Stop one sub-agent, gracefully unless `immediate`: it finishes the step
+  // it is in, then gets one turn with no tools to report where it stopped.
+  // `immediate` is cancelSubagent -- also how one already stopping
+  // gracefully is ended at once.
+  rpc stopSubagent(StopSubagentRequest) returns (Empty);
   // Abandon one running sub-agent's current attempt and start it again from
   // its task, in the same place in its round -- for an agent stuck on a stream
   // the server dropped, or looping. Stop loses the task; this keeps it.
@@ -71,6 +76,13 @@ service TaskService {
 }
 
 // One task's footprint on disk, split by what wrote it.
+// Which sub-agent to stop, by its spawn tool's id, and how.
+message StopSubagentRequest {
+  Metadata metadata = 1;
+  string id = 2;
+  bool immediate = 3;
+}
+
 // One stretch of a sub-agent's stream: consecutive output of one kind.
 message SubagentOutputChunk {
   // "reasoning", "text" or "tool".

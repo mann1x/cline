@@ -50,6 +50,10 @@ import { isWorkerStruggleStop } from "../../../runtime/safety/worker-struggle-st
 import { HARNESS_TAG } from "../../../runtime/turn-queue/harness-notes";
 import type { AgentOracleResult, DelegatedAgentCheck } from "./agent-check";
 import { leadCanBeReached, sendLeadNudge } from "./agent-trouble";
+import {
+	type SubagentStopActor,
+	subagentCancellation,
+} from "./subagent-cancellation";
 
 /** The tool the lead continues a waiting agent with (built on {@link resumeSuspended}). */
 export const RESUME_AGENT_TOOL_NAME = "resume_agent";
@@ -111,7 +115,12 @@ export interface AwaitingLeadView {
 }
 
 /** Why an agent's run came to an end, as far as the cap is concerned. */
-export type DelegatedStopReason = "iteration_cap" | "loop_guard" | "supervisor";
+export type DelegatedStopReason =
+	| "iteration_cap"
+	| "loop_guard"
+	| "supervisor"
+	/** Stopped gracefully: its last turn was a report, and it ends on that. */
+	| "wrap_up";
 
 /** A delegated run, with what the cap and the check made of it. */
 export interface DelegatedRunOutcome {
@@ -322,6 +331,52 @@ export function stopSuspended(
 		}; its work so far is its report.`,
 		agent,
 	};
+}
+
+/** What a stop did: asked for a report, ended it, or found nothing to stop. */
+export type SubagentStopOutcome = "graceful" | "stopped" | "not_running";
+
+/**
+ * Stop one agent, the one way every control does it -- the lead's
+ * `stop_agents`, the row's Stop and the panel's Stop all.
+ *
+ * Graceful by default: a running agent finishes its step and reports
+ * (`subagentCancellation.wrapUp`), one waiting on the lead writes its report
+ * where it stopped. `immediate` ends it at once, work kept and no report --
+ * also the way to end one already stopping gracefully. A running agent whose
+ * path has no segment to take a report turn is stopped at once.
+ */
+export function stopSubagent(options: {
+	cancelId?: string;
+	/** Its id or name, for one waiting on the lead that has no cancel id. */
+	ref?: string;
+	sessionId?: string;
+	by: SubagentStopActor;
+	immediate?: boolean;
+}): SubagentStopOutcome {
+	const key = options.cancelId ?? options.ref;
+	const waiting = key ? find(key, options.sessionId).entry : undefined;
+	if (waiting) {
+		waiting.decide({
+			kind: "stop",
+			reason:
+				options.by === "user" ? "stopped by the user" : "stopped by the lead",
+			...(options.immediate ? {} : { report: true }),
+		});
+		return options.immediate ? "stopped" : "graceful";
+	}
+	if (!options.cancelId) {
+		return "not_running";
+	}
+	if (
+		!options.immediate &&
+		subagentCancellation.wrapUp(options.cancelId, options.by)
+	) {
+		return "graceful";
+	}
+	return subagentCancellation.cancel(options.cancelId, options.by)
+		? "stopped"
+		: "not_running";
 }
 
 /** The notice for agents that stopped at their cap, as the lead reads it. */
@@ -598,6 +653,57 @@ function oneLine(text: string, max: number): string {
  */
 export const FINAL_REPORT_NOTE = `${HARNESS_TAG} Your iteration budget is spent and the lead is taking your work as it is. Do not call any tool. In this one reply, report: what you changed (files and what for), what you verified and how, and what is still broken or unfinished -- exactly where you stopped.`;
 
+/**
+ * The last turn of an agent stopped gracefully while it was working: what it
+ * has, before it goes. A stop that aborted it outright left the lead its file
+ * changes and no word of what they were (13 of 15 agents, swarm czbnh).
+ */
+export function wrapUpNote(by: "lead" | "user" | undefined): string {
+	return `${HARNESS_TAG} The ${by === "user" ? "user" : "lead"} is stopping you now and taking your work as it is. Do not call any tool. In this one reply, report: what you changed (files and what for), what you found, what you verified and how, and what is still broken or unfinished -- exactly where you stopped.`;
+}
+
+/** The report turn for an agent stopped while it waited on the lead. */
+function stopReportNote(reason: AwaitingLeadReason | undefined): string {
+	return reason === "looping"
+		? `${HARNESS_TAG} You were stopped for repeating the same call, and the lead is taking your work as it is. Do not call any tool. In this one reply, report: what you changed (files and what for), what you found, what you verified and how, and what is still broken or unfinished -- exactly where you stopped.`
+		: reason === "struggling"
+			? `${HARNESS_TAG} You were stopped for grinding on, and the lead is taking your work as it is. Do not call any tool. In this one reply, report: what you changed (files and what for), what you found, what you verified and how, and what is still broken or unfinished -- exactly where you stopped.`
+			: FINAL_REPORT_NOTE;
+}
+
+/** What the lead reads above a graceful stop's report. */
+export function wrapUpHeading(by: "lead" | "user" | undefined): string {
+	return `[Stopped by the ${by === "user" ? "user" : "lead"} before it finished. This is its report of where it stopped -- partial work, not a finished task.]`;
+}
+
+/**
+ * A graceful stop's last turn, run on the transcript the stopped segment
+ * left: one reply, no check, no cap to wait at. Its answer is the agent's
+ * report; with none, the run reads as stopped with no answer, as an
+ * outright stop does.
+ */
+export async function runWrapUpReport(options: {
+	agent: CappableAgent & { restore(messages: never): void };
+	messages: readonly unknown[];
+	by: "lead" | "user" | undefined;
+}): Promise<DelegatedRunOutcome> {
+	options.agent.restore(options.messages as never);
+	options.agent.setMaxIterations?.(1);
+	const result = await options.agent.continue(wrapUpNote(options.by));
+	const text = result.text?.trim();
+	return {
+		result: text
+			? {
+					...result,
+					text: `${wrapUpHeading(options.by)}\n\n${text}`,
+					finishReason: "completed",
+				}
+			: { ...result, finishReason: "aborted" },
+		iterations: result.iterations,
+		stopReason: "wrap_up",
+	};
+}
+
 /** Turns before the cap at which an agent is told to wrap up. */
 export function capWarningMargin(cap: number): number {
 	return Math.min(5, Math.max(1, Math.round(cap * 0.1)));
@@ -807,10 +913,13 @@ export async function runDelegatedWithCap(
 	};
 
 	/** One report-only turn; its answer replaces the cut-off last output. */
-	const finalReport = async (detached: boolean) => {
+	const finalReport = async (
+		detached: boolean,
+		reason: AwaitingLeadReason | undefined,
+	) => {
 		try {
 			options.agent.setMaxIterations?.(1);
-			const run = () => options.agent.continue(FINAL_REPORT_NOTE);
+			const run = () => options.agent.continue(stopReportNote(reason));
 			// A detached agent gave its engine session back: placed again.
 			const next = await (detached && options.resumeThrough
 				? options.resumeThrough(run)
@@ -849,8 +958,8 @@ export async function runDelegatedWithCap(
 		const { decided } = suspend(false);
 		const decision = await decided;
 		if (decision.kind === "stop") {
-			if (decision.report && reason === "iteration_cap") {
-				await finalReport(false);
+			if (decision.report) {
+				await finalReport(false, reason);
 			}
 			return outcome({ stopReason: stopReasonFor(reason) });
 		}
@@ -870,7 +979,10 @@ function detach(
 		decided: Promise<LeadDecision>;
 	},
 	resume: (extra: number, instructions?: string) => Promise<void>,
-	finalReport: (detached: boolean) => Promise<void>,
+	finalReport: (
+		detached: boolean,
+		reason: AwaitingLeadReason | undefined,
+	) => Promise<void>,
 	waitReason: () => AwaitingLeadReason | undefined,
 	stopReasonFor: (
 		reason: AwaitingLeadReason | undefined,
@@ -888,8 +1000,8 @@ function detach(
 		const waitingFor = waitReason();
 		const completion = decided.then(async (decision) => {
 			if (decision.kind === "stop") {
-				if (decision.report && waitingFor === "iteration_cap") {
-					await finalReport(true);
+				if (decision.report) {
+					await finalReport(true, waitingFor);
 				}
 				return outcome({ stopReason: stopReasonFor(waitingFor) });
 			}

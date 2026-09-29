@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+	__resetAgentRounds,
+	AgentRounds,
 	type RoundAgentRecord,
 	recordAgentFinalSpend,
 	recordAgentSpend,
@@ -59,5 +61,35 @@ describe("an agent's spend", () => {
 		recordAgentSpend(agent, { inputTokens: 1_000, outputTokens: 50 });
 		expect(agent.inputTokens).toBe(8_000);
 		expect(agent.outputTokens).toBe(350);
+	});
+});
+
+// A graceful stop answers with where it stopped: not a finished task.
+describe("an agent stopped gracefully", () => {
+	it("is recorded as cancelled, its report kept as its result", async () => {
+		__resetAgentRounds();
+		const rounds = new AgentRounds("s-wrap");
+		const handle = rounds.open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: false,
+			agents: [{ name: "a", task: "t" }],
+		});
+		await handle.run(
+			0,
+			{ agentId: "lead", conversationId: "c", iteration: 1 } as never,
+			async () => ({
+				text: "[Stopped by the lead before it finished.]\n\nChanged line 32.",
+				finishReason: "completed",
+				iterations: 5,
+				stopReason: "wrap_up",
+				usage: { inputTokens: 10, outputTokens: 2 },
+			}),
+		);
+		expect(handle.agent(0)).toMatchObject({
+			state: "cancelled",
+			stopReason: "cancelled_by_lead",
+			stopDetail: "stopped gracefully; its report is partial work",
+		});
 	});
 });

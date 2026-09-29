@@ -36,6 +36,7 @@ import {
 } from "@cline/shared";
 import { nanoid } from "nanoid";
 import { SessionRuntime } from "../../../runtime/orchestration/session-runtime-orchestrator";
+import { wrapUpHeading, wrapUpNote } from "./agent-iteration-cap";
 import {
 	type HandedRevision,
 	handbackNote,
@@ -654,6 +655,8 @@ interface TeamMemberState extends TeamMemberSnapshot {
 	runningCount: number;
 	abortRequested?: boolean;
 	abortReason?: string;
+	/** Its current task ended on a graceful stop's report: who asked. */
+	wrappedUpBy?: "lead" | "user";
 	lastMissionStep: number;
 	lastMissionAt: number;
 	pendingSteerMessage?: string;
@@ -1282,7 +1285,10 @@ export class AgentTeamsRuntime {
 			const by = control.id
 				? subagentCancellation.stoppedBy(control.id)
 				: undefined;
-			if (by && !member.abortRequested) {
+			// A graceful stop ends only this stretch: the next is its report.
+			const wrappingUp =
+				control.id !== undefined && subagentCancellation.wrappingUp(control.id);
+			if (by && !member.abortRequested && !wrappingUp) {
 				member.abortRequested = true;
 				member.abortReason =
 					by === "lead" ? "Stopped by the lead." : "Stopped by the user.";
@@ -1305,6 +1311,26 @@ export class AgentTeamsRuntime {
 		try {
 			control.track(agent);
 			if ("carry" in input) {
+				if (input.carry.wrapUp) {
+					member.wrappedUpBy = input.carry.wrapUp;
+					// A graceful stop: one reply, no tools, and the task ends on
+					// it. The teammate outlives the task, so its cap is put back.
+					const cap = agent.getMaxIterations();
+					agent.setMaxIterations(1);
+					try {
+						const result = await agent.continue(wrapUpNote(input.carry.wrapUp));
+						const text = result.text?.trim();
+						return text
+							? {
+									...result,
+									text: `${wrapUpHeading(input.carry.wrapUp)}\n\n${text}`,
+									finishReason: "completed",
+								}
+							: result;
+					} finally {
+						agent.setMaxIterations(cap);
+					}
+				}
 				return await agent.continue(teammateRequeueNote(input.carry.reason));
 			}
 			return input.continueConversation
@@ -1447,6 +1473,7 @@ export class AgentTeamsRuntime {
 
 		member.abortRequested = false;
 		member.abortReason = undefined;
+		member.wrappedUpBy = undefined;
 		member.runningCount++;
 		member.status = "running";
 		// Each task counts from nothing; the life count goes on.
@@ -1836,6 +1863,17 @@ export class AgentTeamsRuntime {
 					: {}),
 			});
 			if (this.runs.get(run.id)?.status !== "running") {
+				return;
+			}
+			const wrappedUpBy = this.members.get(run.agentId)?.wrappedUpBy;
+			// Stopped gracefully: not done, but it answered -- where it
+			// stopped. Kept as its result, for the lead to read.
+			if (wrappedUpBy && result.finishReason !== "aborted") {
+				this.cancelRun(
+					run.id,
+					`Stopped gracefully by the ${wrappedUpBy}; its result is its report of where it stopped.`,
+				);
+				run.result = result;
 				return;
 			}
 			const cancellationReason = this.members.get(run.agentId)?.abortReason;

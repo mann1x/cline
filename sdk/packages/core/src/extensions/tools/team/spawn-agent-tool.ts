@@ -30,6 +30,7 @@ import {
 	createDelegatedAgentCheck,
 	describeAgentCheck,
 	readAgentCheck,
+	reviewOnlyCheckWarning,
 } from "./agent-check";
 import {
 	AGENT_CONTROLS_NOTE,
@@ -42,6 +43,7 @@ import {
 	type DelegatedRunOutcome,
 	type DelegatedStopReason,
 	runDelegatedWithCap,
+	runWrapUpReport,
 } from "./agent-iteration-cap";
 import { describeRenamedAgents, uniqueAgentNames } from "./agent-names";
 import { summarizeForLead } from "./agent-reports";
@@ -55,7 +57,11 @@ import {
 	reportWaits,
 	roundsFor,
 } from "./agent-rounds";
-import { createAgentTroubleWatch, roomWaitTrouble } from "./agent-trouble";
+import {
+	createAgentTroubleWatch,
+	roomWaitTrouble,
+	sendLeadNudge,
+} from "./agent-trouble";
 import { buildSpawnBatchReport, type SpawnBatchReport } from "./batch-report";
 import type { ConfiguredAgentConfig } from "./configured-agent-config";
 import {
@@ -998,6 +1004,21 @@ export function wokenAck(handle: RoundHandle): SpawnBackgroundAck {
 	};
 }
 
+/**
+ * Tell the lead, as it spawns them, about agents whose check they cannot
+ * pass by doing what they were asked (`reviewOnlyCheckWarning`). A nudge
+ * reaches it on its next turn, and ends the wait of a call that blocks.
+ */
+function warnReviewOnlyChecks(
+	sessionId: string | undefined,
+	members: Parameters<typeof reviewOnlyCheckWarning>[0],
+): void {
+	const warning = reviewOnlyCheckWarning(members);
+	if (warning && sessionId) {
+		sendLeadNudge(sessionId, warning);
+	}
+}
+
 /** One agent: a round of one, blocking unless `wait: false`. */
 async function runSingleSpawn(
 	config: SpawnAgentToolConfig,
@@ -1007,6 +1028,14 @@ async function runSingleSpawn(
 	// Refused before a round is opened: a check that cannot parse.
 	const controls = controlFields(input);
 	const maxIterations = controls.max_iterations ?? config.defaultMaxIterations;
+	warnReviewOnlyChecks(context.sessionId, [
+		{
+			name: input.name?.trim() || "agent",
+			task: input.task,
+			...(input.instructions ? { instructions: input.instructions } : {}),
+			...(controls.check ? { check: controls.check } : {}),
+		},
+	]);
 	const rounds = roundsFor(context.sessionId);
 	const background = input.wait === false;
 	const name = input.name?.trim() || "agent";
@@ -1105,6 +1134,17 @@ async function runSpawnBatch(
 		...callControls,
 		...controlFields(member),
 	}));
+	warnReviewOnlyChecks(
+		context.sessionId,
+		members.map((member, index) => ({
+			name: member.name?.trim() || `agent-${index + 1}`,
+			task: member.task,
+			...(member.instructions ? { instructions: member.instructions } : {}),
+			...(memberControls[index]?.check
+				? { check: memberControls[index]?.check }
+				: {}),
+		})),
+	);
 	const rounds = roundsFor(context.sessionId);
 	// Several agents are a long job: the lead is not held for it (ruling 2 of
 	// the lead-control spec). Measured 2026-09-26: a 75-agent batch left the
@@ -1424,14 +1464,23 @@ async function runSpawnedAgent(
 		// A random temperature is drawn around the model's own: read it from
 		// the server now if nothing local states it.
 		await primeModelTemperature(sampling, connection);
+		// A graceful stop's report turn is not a completion to judge.
+		if (carry?.wrapUp && carry.messages.length === 0) {
+			throw new DOMException(
+				"The sub-agent was stopped before it started.",
+				"AbortError",
+			);
+		}
 		// Fresh per attempt: a restarted agent is judged from its own start.
-		const check = controls.check
-			? createDelegatedAgentCheck({
-					check: controls.check,
-					cwd: sandbox?.cwd ?? provider.getRuntimeConfig().cwd ?? process.cwd(),
-					...(sandbox ? { wrapSpawn: sandbox.wrapSpawn } : {}),
-				})
-			: undefined;
+		const check =
+			controls.check && !carry?.wrapUp
+				? createDelegatedAgentCheck({
+						check: controls.check,
+						cwd:
+							sandbox?.cwd ?? provider.getRuntimeConfig().cwd ?? process.cwd(),
+						...(sandbox ? { wrapSpawn: sandbox.wrapSpawn } : {}),
+					})
+				: undefined;
 		// The struggle layer the swarm's workers have: one nudge to commit a
 		// SUMMARY, then a stop the lead decides on. Fresh per attempt.
 		const struggle = createDelegatedStruggleSupervisor({
@@ -1513,41 +1562,47 @@ async function runSpawnedAgent(
 			}
 		}
 		// At its cap it waits for the lead, work kept; see
-		// `agent-iteration-cap.ts`.
-		const outcome = await runDelegatedWithCap({
-			agent,
-			start: async () => {
-				if (carry && carry.messages.length > 0) {
-					// Requeued: it carries on from its own transcript on its new
-					// placement, rather than starting its task over.
-					agent.restore(carry.messages as never);
-					return await agent.continue(requeueNote(carry.reason));
-				}
-				return layout.pinnedHead.length > 0
-					? await agent.runWithHead(layout.pinnedHead, layout.task)
-					: await agent.run(layout.task);
-			},
-			name: input.name ?? "agent",
-			supervisor: struggle,
-			...(maxIterations !== undefined ? { maxIterations } : {}),
-			...(context.sessionId ? { sessionId: context.sessionId } : {}),
-			...(cancelId ? { cancelId } : {}),
-			...(cancellation.signal ? { signal: cancellation.signal } : {}),
-			...(context.emitUpdate ? { emitUpdate: context.emitUpdate } : {}),
-			...(check ? { check } : {}),
-			releaseEngineSession: () => releasePolykvAgent(engineSessionId),
-			lifetime,
-			onDetachedFinish: (final) => finishDetached(final),
-			// Resumed after the call returned: back through its placement.
-			resumeThrough: resumePlacement({
-				...(placement ? { placement } : {}),
-				...(nodeId ? { nodeId } : {}),
-				...(config.configProvider.getRuntimeConfig().slotGate
-					? { slotGate: config.configProvider.getRuntimeConfig().slotGate }
-					: {}),
-				signal: () => cancellation.signal,
-			}),
-		});
+		// `agent-iteration-cap.ts`. Stopped gracefully, it reports and ends.
+		const outcome = carry?.wrapUp
+			? await runWrapUpReport({
+					agent,
+					messages: carry.messages,
+					by: carry.wrapUp,
+				})
+			: await runDelegatedWithCap({
+					agent,
+					start: async () => {
+						if (carry && carry.messages.length > 0) {
+							// Requeued: it carries on from its own transcript on its new
+							// placement, rather than starting its task over.
+							agent.restore(carry.messages as never);
+							return await agent.continue(requeueNote(carry.reason));
+						}
+						return layout.pinnedHead.length > 0
+							? await agent.runWithHead(layout.pinnedHead, layout.task)
+							: await agent.run(layout.task);
+					},
+					name: input.name ?? "agent",
+					supervisor: struggle,
+					...(maxIterations !== undefined ? { maxIterations } : {}),
+					...(context.sessionId ? { sessionId: context.sessionId } : {}),
+					...(cancelId ? { cancelId } : {}),
+					...(cancellation.signal ? { signal: cancellation.signal } : {}),
+					...(context.emitUpdate ? { emitUpdate: context.emitUpdate } : {}),
+					...(check ? { check } : {}),
+					releaseEngineSession: () => releasePolykvAgent(engineSessionId),
+					lifetime,
+					onDetachedFinish: (final) => finishDetached(final),
+					// Resumed after the call returned: back through its placement.
+					resumeThrough: resumePlacement({
+						...(placement ? { placement } : {}),
+						...(nodeId ? { nodeId } : {}),
+						...(config.configProvider.getRuntimeConfig().slotGate
+							? { slotGate: config.configProvider.getRuntimeConfig().slotGate }
+							: {}),
+						signal: () => cancellation.signal,
+					}),
+				});
 		capOutcome = outcome;
 		if (outcome.state === "awaiting_lead") {
 			return outcome.result;

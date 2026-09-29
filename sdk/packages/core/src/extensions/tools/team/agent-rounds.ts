@@ -1878,6 +1878,15 @@ export class RoundHandle {
 			// Ended where the struggle supervisor stopped it, likewise.
 			end.state = "failed";
 			end.reason = "struggling";
+		} else if (output.stopReason === "wrap_up") {
+			// Stopped gracefully: it answered, but with where it stopped, not
+			// with a finished task.
+			end.state = "cancelled";
+			end.reason =
+				stoppedBy === "user" ? "cancelled_by_user" : "cancelled_by_lead";
+			end.detail = output.text?.trim()
+				? "stopped gracefully; its report is partial work"
+				: "stopped gracefully; it wrote no report";
 		}
 		agent.maxIterations = output.maxIterations ?? agent.maxIterations;
 		agent.state = end.state;

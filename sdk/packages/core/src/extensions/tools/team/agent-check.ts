@@ -29,6 +29,7 @@ import {
 	runOracle,
 	shellOracle,
 } from "../../../runtime/atomic/oracle";
+import { HARNESS_TAG } from "../../../runtime/turn-queue/harness-notes";
 
 /** What the lead writes: a command, a pattern, and which way it must go. */
 export interface AgentCheck {
@@ -373,4 +374,50 @@ export function createDelegatedAgentCheck(
 			].join("\n");
 		},
 	};
+}
+
+/** A task that reads as reviewing and reporting. */
+const REVIEW_WORDS =
+	/\b(review(?:s|er|ers|ing)?|audit(?:s|or|ing)?|analy[sz](?:e|es|is|ing)|inspect(?:s|ing)?|assess(?:es|ing|ment)?|evaluat(?:e|es|ing|ion)|report)\b/i;
+/** A task that asks for changes. Any of these and it is not review-only. */
+const EDIT_WORDS =
+	/\b(fix(?:es|ed|ing)?|repair(?:s|ing)?|edit(?:s|ing)?|modify|change (?:it|the|them)|implement(?:s|ing)?|rewrite|refactor(?:s|ing)?|patch(?:es|ing)?|apply|resolve (?:the|it|them|all|any)|make (?:it|the) (?:work|pass|run))\b/i;
+
+/** Its task reads as review and report only, with nothing to change. */
+export function isReviewOnlyTask(text: string): boolean {
+	return REVIEW_WORDS.test(text) && !EDIT_WORDS.test(text);
+}
+
+/**
+ * Agents given a check they cannot pass by doing what they were asked.
+ *
+ * A check judges an agent's copy of the workspace, so it measures edits; a
+ * reviewer's job leaves the copy as it was, and every "done" is sent back to
+ * work by a check that still fails. Six reviewers in swarm czbnh ended on a
+ * failing check after editing the file they were told to review, and ground
+ * on until the lead stopped them. Warned, not refused: the heuristic reads
+ * words, and the lead may mean it.
+ */
+export function reviewOnlyCheckWarning(
+	members: ReadonlyArray<{
+		name: string;
+		task: string;
+		instructions?: string;
+		check?: AgentCheck;
+	}>,
+): string | undefined {
+	const flagged = members.filter(
+		(member) =>
+			member.check !== undefined &&
+			isReviewOnlyTask(`${member.task}\n${member.instructions ?? ""}`),
+	);
+	if (flagged.length === 0) {
+		return undefined;
+	}
+	const commands = [...new Set(flagged.map((member) => member.check?.command))];
+	return [
+		`${HARNESS_TAG} Check on review-only agents: ${flagged.map((member) => member.name).join(", ")}.`,
+		`- Their task is to review and report, but their check (\`${commands.join("`, `")}\`) judges their copy of the workspace: it fails until they change it, and each "done" is sent back to work.`,
+		"- A reviewer then edits what it was told to review, or grinds. Restart them without the check, or make their task a fix.",
+	].join("\n");
 }

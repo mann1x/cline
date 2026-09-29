@@ -13,6 +13,7 @@ const agentConstructorSpy = vi.fn();
 const continueMock = vi.fn();
 const setMaxIterationsMock = vi.fn();
 const abortMock = vi.fn();
+const restoreMock = vi.fn();
 
 vi.mock("../../../runtime/orchestration/session-runtime-orchestrator", () => {
 	return {
@@ -59,6 +60,14 @@ vi.mock("../../../runtime/orchestration/session-runtime-orchestrator", () => {
 
 			abort(reason?: unknown): void {
 				abortMock(reason);
+			}
+
+			getMessages(): unknown[] {
+				return ["turn-1", "turn-2"];
+			}
+
+			restore(messages: unknown[]): void {
+				restoreMock(messages);
 			}
 		},
 	};
@@ -1693,5 +1702,76 @@ describe("spawn_agent in the background", () => {
 		await vi.waitFor(() => expect(rounds.get("r1")?.status).toBe("done"));
 		expect(delivered).toEqual(["r1"]);
 		__resetAgentRounds();
+	});
+});
+
+// swarm czbnh: 13 agents stopped by the lead left their file changes and no
+// word of what they were. Stopped gracefully, one reports where it stopped.
+describe("a spawned agent stopped gracefully", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("finishes its step, reports from its transcript with no check, and ends on the report", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const { subagentCancelId, subagentCancellation } = await import(
+			"./subagent-cancellation.js"
+		);
+		const id = subagentCancelId("s-graceful", "call-1") as string;
+		runMock.mockImplementation(async () => {
+			const config = agentConstructorSpy.mock.calls.at(-1)?.[0] as {
+				consumePendingUserMessage?: () => Promise<string | undefined>;
+			};
+			expect(subagentCancellation.wrapUp(id, "user")).toBe(true);
+			// Its next turn boundary.
+			await config.consumePendingUserMessage?.();
+			return {
+				text: "",
+				iterations: 4,
+				finishReason: "aborted",
+				usage: { inputTokens: 1, outputTokens: 1 },
+			};
+		});
+		continueMock.mockResolvedValue({
+			text: "Balanced the braces in update(); the check still fails.",
+			iterations: 1,
+			finishReason: "completed",
+			usage: { inputTokens: 2, outputTokens: 2 },
+		});
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "lead-model",
+			}),
+		});
+		const output = (await tool.execute(
+			{
+				systemPrompt: "p",
+				task: "Fix the braces.",
+				check: { command: "node run.js", expect: "ok" },
+			},
+			{
+				agentId: "parent",
+				conversationId: "c",
+				iteration: 1,
+				sessionId: "s-graceful",
+				toolCallId: "call-1",
+			} as never,
+		)) as { text: string; stopReason?: string };
+
+		expect(restoreMock).toHaveBeenCalledWith(["turn-1", "turn-2"]);
+		expect(setMaxIterationsMock).toHaveBeenCalledWith(1);
+		expect(String(continueMock.mock.calls[0]?.[0])).toContain(
+			"The user is stopping you now",
+		);
+		// The report turn is not a completion for the check to judge.
+		const built = agentConstructorSpy.mock.calls.map(
+			(call) => (call[0] as { completionPolicy?: unknown }).completionPolicy,
+		);
+		expect(built).toHaveLength(2);
+		expect(built[0]).toBeDefined();
+		expect(built[1]).toBeUndefined();
+		expect(output.text).toContain("Stopped by the user before it finished");
+		expect(output.text).toContain("Balanced the braces");
 	});
 });

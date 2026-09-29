@@ -512,7 +512,7 @@ Landed on 2026-09-26 in `fdee39e61`, `d8dcee6a3` and `e4893c1b1`. `check` is ava
 - While it waits, the agent's engine session is released. Its node lease is kept, so it resumes on the same model.
 - With no way to reach the lead, the agent is detached: its spawn returns with `state: "awaiting_lead"` and the agent stays suspended.
 - A few turns before the cap (10% of it, between 1 and 5) the agent is told to wrap up and report.
-- Stopping it ends it with its work kept. When the lead stops it with `stop_agents`, it first gets one last turn, with no tools, to write its report. The row's Stop ends it at once.
+- Stopping it ends it with its work kept. A graceful stop (the default) first gives it one last turn, with no tools, to write its report. This applies whether it waits at its cap, was stopped by the loop guard, or was stopped by the struggle supervisor. An immediate stop ends it at once. See "Stopping an agent" below.
 - `resume_agent` resumes several agents in one call, or every waiting one when `agent_ids` is left out. Without `extra_iterations`, each gets its spawn cap again (60, then 120, then 180).
 - The notice is rewritten when the lead reads it. Agents resumed or stopped since are left out, and the notice is dropped when none is still waiting.
 - The row shows "awaiting lead (iteration cap N)".
@@ -545,6 +545,8 @@ Landed on 2026-09-26 in `fdee39e61`, `d8dcee6a3` and `e4893c1b1`. `check` is ava
 <Note>
   The check judges one agent's own copy, and a call-level `check` applies to every agent of the call. Give it per agent to the agents whose edits it measures. A review-only agent can never pass it.
 </Note>
+
+**The review-only warning.** At spawn, `spawn_agent` looks for agents that have a check but whose task and instructions only review and report. That means a word such as review, audit, analyse, inspect, assess, evaluate or report, and no edit word such as fix, repair, edit, modify, implement, rewrite, refactor, patch or apply. When it finds any, the lead is sent one `[SYSTEM MESSAGE]` naming them and the check. The message says that each "done" will be sent back to work, and suggests a restart without the check, or making the task a fix. It is a warning only: the spawn goes ahead. Swarm czbnh is the case: nine reviewers were given the game's run check, and six of them ended on a failing check after editing the file they were told to review.
 
 ### Expert escalation
 
@@ -613,13 +615,29 @@ Every delegation is a round with an id (`r3`), and each agent has one too (`r3-2
   - `retry_failed` reruns a round's failed agents;
   - `message_agents` leaves a message for running agents;
   - `compact_agents` makes the named agents compact at their next turn. This gives back their KV cells without stopping them;
-  - `stop_agents` is described to the lead as a last resort.
+  - `stop_agents` is described to the lead as a last resort. It is graceful unless `immediate: true`; see below.
 - **What the lead is told about the system.**
   - Agents edit sandboxed copies, so parallel edits to one file are safe.
   - Their edits come back as revisions, and the lead reviews, applies and reconciles them.
   - The check is deterministic.
 
 By design, the lead cannot route an agent to a node, and agents have no wall-clock timeout.
+
+### Stopping an agent
+
+A stop is **graceful** or **immediate**. Before this, a stop aborted a running agent outright: the lead got its file changes and no word of what they were. That was 13 of the 15 agents in swarm czbnh.
+
+- **Graceful.** The agent finishes the step it is in and stops at its next turn boundary, or at once if it is only waiting on the server. It then gets one turn with no tools and no check to report what it changed, found and verified, and where it stopped. Its report is its result. The report opens with "Stopped by the lead (or user) before it finished", so it does not read as a finished task. The round records the agent as cancelled ("stopped gracefully; its report is partial work"), and its file changes are kept as revisions. If the report turn writes nothing, it reads as a stop with no answer.
+- **Immediate.** It ends at once, with its file changes kept and no report. This is also how to end an agent that is already stopping gracefully.
+- **How long.** A graceful stop lasts one step plus one reply. On a slow node, or with a looping model, that can be minutes.
+- **Mechanism.** A graceful stop reuses the requeue path (`subagentCancellation.wrapUp`). The segment ends at the boundary, its transcript is carried over, and the next segment runs the report turn (`runWrapUpReport`) instead of the cap loop. A requeue asked for while one is pending is refused, so the report turn is never replaced. An agent whose path has no segment to take the report turn is stopped at once.
+- **Teammates.** A teammate's task ends on its report and is recorded as cancelled, with the report kept as its result. The teammate's iteration cap is restored after the report turn.
+- **The lead.** `stop_agents` is graceful by default. Pass `immediate: true` to end at once.
+- **You.** An agent's Stop and the strip's Stop all both ask first:
+  - **Stop gracefully**, **Stop now** or **Keep running**, with the warning that a graceful stop can take a long time for a slow or looping agent.
+  - While a graceful stop runs, the button reads "Stopping gracefully…". Press it again to get **Stop now** or **Keep waiting**.
+  - Stop all asks the same about every agent that can be stopped. Once all of them are stopping gracefully, it asks only whether to stop them now.
+- **One function.** `stopSubagent` in `agent-iteration-cap.ts` is the stop for all three controls. The host reaches it through `TaskService.stopSubagent {id, immediate}`.
 
 ## When to use which
 

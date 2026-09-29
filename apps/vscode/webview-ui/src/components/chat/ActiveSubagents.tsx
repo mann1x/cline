@@ -1,5 +1,6 @@
 import type { ClineMessage, ClineSaySubagentStatus, SubagentActivityEntry, SubagentStatusItem } from "@shared/ExtensionMessage"
 import { StringRequest } from "@shared/proto/cline/common"
+import { StopSubagentRequest } from "@shared/proto/cline/task"
 import {
 	ClockIcon,
 	LoaderCircleIcon,
@@ -156,6 +157,91 @@ export function AgentActivity({ activity }: { activity: readonly SubagentActivit
 	)
 }
 
+/** How an agent was asked to stop. */
+type StopMode = "graceful" | "immediate"
+
+/** What a stop dialog is for: one agent, or every agent that can be stopped. */
+type StopTarget = { kind: "one"; cancelId: string; label: string } | { kind: "all" }
+
+/** The dialog's two questions: how to stop, or whether to cut a graceful stop short. */
+interface StopDialogView {
+	phase: "choose" | "escalate"
+	title: string
+	body: string
+	count: number
+}
+
+/**
+ * Which question a press asks. The first press chooses graceful or
+ * immediate; a press on agents that are all stopping gracefully asks
+ * whether to end them at once.
+ */
+export function stopDialogView(
+	target: StopTarget,
+	stoppable: readonly SubagentStatusItem[],
+	stopping: ReadonlyMap<string, StopMode>,
+): StopDialogView {
+	const graceful =
+		target.kind === "one"
+			? stopping.get(target.cancelId) === "graceful"
+			: stoppable.length > 0 && stoppable.every((agent) => stopping.get(agent.cancelId as string) === "graceful")
+	const count = target.kind === "one" ? 1 : stoppable.length
+	if (graceful) {
+		return {
+			phase: "escalate",
+			title:
+				target.kind === "one"
+					? `${target.label} is stopping gracefully`
+					: `${count === 1 ? "1 agent is" : `${count} agents are`} stopping gracefully`,
+			body: `${target.kind === "one" ? "It is" : "They are"} finishing the current step, then writing a report for the lead. Stop now ends ${target.kind === "one" ? "it" : "them"} at once: file changes are kept, but there is no report.`,
+			count,
+		}
+	}
+	return {
+		phase: "choose",
+		title: target.kind === "one" ? `Stop ${target.label}?` : "Stop all agents?",
+		body: `${target.kind === "all" ? `${count === 1 ? "The agent that is" : `All ${count} agents that are`} running or queued will be stopped. ` : ""}Gracefully: ${target.kind === "one" ? "it finishes" : "each finishes"} the step it is in, then writes a report of what it changed, found and verified, which the lead gets as its result. On a slow node or with a looping model this can take a long time -- press Stop again to end it at once. Now: it ends immediately; its file changes are kept, but there is no report.`,
+		count,
+	}
+}
+
+function StopDialog({
+	target,
+	view,
+	onChoose,
+	onClose,
+}: {
+	target: StopTarget | undefined
+	view: StopDialogView | undefined
+	onChoose: (mode: StopMode) => void
+	onClose: () => void
+}) {
+	const many = target?.kind === "all" && (view?.count ?? 0) > 1
+	return (
+		<Dialog onOpenChange={(open) => !open && onClose()} open={target !== undefined && view !== undefined}>
+			<DialogContent>
+				<DialogHeader>
+					<DialogTitle className="text-sm">{view?.title}</DialogTitle>
+					<DialogDescription className="text-xs">{view?.body}</DialogDescription>
+				</DialogHeader>
+				<DialogFooter className="gap-2">
+					<Button onClick={onClose} size="sm" variant="secondary">
+						{view?.phase === "escalate" ? "Keep waiting" : "Keep running"}
+					</Button>
+					<Button onClick={() => onChoose("immediate")} size="sm" variant="danger">
+						{many ? "Stop all now" : "Stop now"}
+					</Button>
+					{view?.phase === "choose" && (
+						<Button onClick={() => onChoose("graceful")} size="sm">
+							{many ? "Stop all gracefully" : "Stop gracefully"}
+						</Button>
+					)}
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
+	)
+}
+
 function AgentDetail({
 	agent,
 	onClose,
@@ -170,7 +256,8 @@ function AgentDetail({
 	onClose: () => void
 	onStop?: () => void
 	onRestart?: () => void
-	stopping: boolean
+	/** How it was asked to stop, while it is stopping. */
+	stopping: StopMode | undefined
 	restarting: boolean
 	/** Showing the live stream in place of its instructions, activity and output. */
 	inspecting: boolean
@@ -227,12 +314,18 @@ function AgentDetail({
 					<button
 						aria-label={`Stop ${identity.label}`}
 						className="flex shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-editor-group-border bg-transparent px-1.5 py-[1px] text-foreground opacity-80 hover:opacity-100 disabled:cursor-default disabled:opacity-40"
-						disabled={stopping}
+						disabled={stopping === "immediate"}
 						onClick={onStop}
-						title={stopping ? `Stopping ${identity.label}…` : `Stop ${identity.label}`}
+						title={
+							stopping === "graceful"
+								? `${identity.label} is finishing its step to report. Press to stop it at once.`
+								: stopping
+									? `Stopping ${identity.label}…`
+									: `Stop ${identity.label}`
+						}
 						type="button">
 						<SquareIcon className="size-2.5 fill-current" />
-						<span>{stopping ? "Stopping…" : "Stop"}</span>
+						<span>{stopping === "graceful" ? "Stopping gracefully…" : stopping ? "Stopping…" : "Stop"}</span>
 					</button>
 				)}
 				{/* Start it again from its task, keeping its place in the round:
@@ -242,7 +335,7 @@ function AgentDetail({
 					<button
 						aria-label={`Restart ${identity.label}`}
 						className="flex shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-editor-group-border bg-transparent px-1.5 py-[1px] text-foreground opacity-80 hover:opacity-100 disabled:cursor-default disabled:opacity-40"
-						disabled={stopping || restarting}
+						disabled={stopping !== undefined || restarting}
 						onClick={onRestart}
 						title={
 							restarting
@@ -370,21 +463,23 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 		setOpenIndex((previous) => (previous === index ? undefined : index))
 	}, [])
 
-	// Which agents have been asked to stop. The tag stays until the agent
-	// actually ends -- an abort is a request, and the run may be inside a
-	// model call that has to come back first -- so without this the button
-	// would look like it had done nothing and invite a second press.
-	const [stopping, setStopping] = useState<ReadonlySet<string>>(new Set())
-	const stop = useCallback((cancelId: string) => {
-		setStopping((previous) => new Set(previous).add(cancelId))
-		TaskServiceClient.cancelSubagent(StringRequest.create({ value: cancelId })).catch((error) => {
-			console.error("Failed to stop sub-agent:", error)
-			setStopping((previous) => {
-				const next = new Set(previous)
-				next.delete(cancelId)
-				return next
-			})
-		})
+	// Which agents have been asked to stop, and how. The tag stays until the
+	// agent actually ends -- a stop is a request, and a graceful one lasts a
+	// whole step and a report -- so without it the button would look like it
+	// had done nothing. A graceful stop can still be made immediate.
+	const [stopping, setStopping] = useState<ReadonlyMap<string, StopMode>>(new Map())
+	const stop = useCallback((cancelId: string, mode: StopMode) => {
+		setStopping((previous) => new Map(previous).set(cancelId, mode))
+		TaskServiceClient.stopSubagent(StopSubagentRequest.create({ id: cancelId, immediate: mode === "immediate" })).catch(
+			(error) => {
+				console.error("Failed to stop sub-agent:", error)
+				setStopping((previous) => {
+					const next = new Map(previous)
+					next.delete(cancelId)
+					return next
+				})
+			},
+		)
 	}, [])
 
 	// Which agents were just asked to restart. Cleared after a few seconds: a
@@ -407,15 +502,28 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 	}, [])
 
 	// The safety stop: every agent that can be stopped, after a confirmation.
-	// A round of 75 has no other way out short of cancelling the task.
-	const [confirmingStopAll, setConfirmingStopAll] = useState(false)
-	const stoppable = agents.filter((agent) => agent.cancelId !== undefined && !stopping.has(agent.cancelId))
-	const stopAll = useCallback(() => {
-		setConfirmingStopAll(false)
-		for (const agent of stoppable) {
-			stop(agent.cancelId as string)
-		}
-	}, [stoppable, stop])
+	// A round of 75 has no other way out short of cancelling the task. Asked
+	// how: gracefully, or at once -- and asked again, while agents stop
+	// gracefully, whether to end them at once.
+	const [confirming, setConfirming] = useState<StopTarget | undefined>(undefined)
+	const stoppable = agents.filter((agent) => agent.cancelId !== undefined && stopping.get(agent.cancelId) !== "immediate")
+	const confirm = useCallback(
+		(mode: StopMode) => {
+			const target = confirming
+			setConfirming(undefined)
+			if (!target) {
+				return
+			}
+			const ids = target.kind === "one" ? [target.cancelId] : stoppable.map((agent) => agent.cancelId as string)
+			for (const id of ids) {
+				// Graceful leaves one already stopping gracefully as it is.
+				if (mode === "immediate" || !stopping.has(id)) {
+					stop(id, mode)
+				}
+			}
+		},
+		[confirming, stoppable, stopping, stop],
+	)
 
 	if (agents.length === 0) {
 		return null
@@ -443,7 +551,7 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 						<button
 							aria-label="Stop all agents"
 							className="mr-1 flex shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-editor-group-border bg-transparent px-1.5 py-[1px] text-[10px] text-foreground opacity-80 hover:opacity-100"
-							onClick={() => setConfirmingStopAll(true)}
+							onClick={() => setConfirming({ kind: "all" })}
 							title="Stop every running and queued agent"
 							type="button">
 							<SquareIcon className="size-2.5 fill-current" />
@@ -473,28 +581,12 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 						)
 					})}
 				</div>
-				<Dialog onOpenChange={setConfirmingStopAll} open={confirmingStopAll}>
-					<DialogContent>
-						<DialogHeader>
-							<DialogTitle className="text-sm">Stop all agents?</DialogTitle>
-							<DialogDescription className="text-xs">
-								{stoppable.length === 1
-									? "The agent that is running or queued will be stopped."
-									: `All ${stoppable.length} agents that are running or queued will be stopped.`}{" "}
-								Work they have not reported yet is lost. The lead conversation keeps going and gets their results
-								as stopped.
-							</DialogDescription>
-						</DialogHeader>
-						<DialogFooter className="gap-2">
-							<Button onClick={() => setConfirmingStopAll(false)} size="sm" variant="secondary">
-								Keep running
-							</Button>
-							<Button onClick={stopAll} size="sm" variant="danger">
-								Stop {stoppable.length === 1 ? "agent" : `${stoppable.length} agents`}
-							</Button>
-						</DialogFooter>
-					</DialogContent>
-				</Dialog>
+				<StopDialog
+					onChoose={confirm}
+					onClose={() => setConfirming(undefined)}
+					target={confirming}
+					view={confirming ? stopDialogView(confirming, stoppable, stopping) : undefined}
+				/>
 				{open && (
 					<AgentDetail
 						agent={open}
@@ -503,12 +595,17 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 						onInspect={setInspecting}
 						{...(open.cancelId
 							? {
-									onStop: () => stop(open.cancelId as string),
+									onStop: () =>
+										setConfirming({
+											kind: "one",
+											cancelId: open.cancelId as string,
+											label: subagentIdentity(open.index, open.agentName).label,
+										}),
 									onRestart: () => restart(open.cancelId as string),
 								}
 							: {})}
 						restarting={open.cancelId !== undefined && restarting.has(open.cancelId)}
-						stopping={open.cancelId !== undefined && stopping.has(open.cancelId)}
+						stopping={open.cancelId !== undefined ? stopping.get(open.cancelId) : undefined}
 					/>
 				)}
 			</div>

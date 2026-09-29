@@ -39,11 +39,18 @@ export interface SubagentRequeueCarry {
 	messages: readonly unknown[];
 	reason?: string;
 	avoidNodeId?: string;
+	/**
+	 * A graceful stop: the next segment is one report turn on this
+	 * transcript, and the agent ends on it. Who asked, for its report.
+	 */
+	wrapUp?: SubagentStopActor;
 }
 
 /** The live control state of one agent, for the lead's status tool. */
 export interface SubagentControlState {
 	label: string;
+	/** A graceful stop was asked for: it is finishing its step, then reports. */
+	wrapUpPending: boolean;
 	/** A requeue was asked for and has not yet happened. */
 	requeuePending: boolean;
 	/** Waiting on infrastructure right now (a refusal, a server gone). */
@@ -75,6 +82,19 @@ export interface SubagentCancellation {
 	 * nothing by that id is running.
 	 */
 	requeue(id: string, options?: SubagentRequeueOptions): boolean;
+	/**
+	 * Stop this agent gracefully: at its next turn boundary -- or at once, if
+	 * it is only waiting on infrastructure -- it is given one turn, with no
+	 * tools, to report what it has, and it ends on that report. `false` when
+	 * nothing by that id is running, or it runs outside a segment that could
+	 * take the report turn; stop it with `cancel` then.
+	 *
+	 * Slow by nature: the step it is in finishes first, and on a slow node or
+	 * a looping model that can take minutes. `cancel` still ends it at once.
+	 */
+	wrapUp(id: string, by?: SubagentStopActor): boolean;
+	/** A graceful stop has been asked for this agent and not yet ended it. */
+	wrappingUp(id: string): boolean;
 	/** What a live agent's controls are doing, or undefined when not running. */
 	inspect(id: string): SubagentControlState | undefined;
 	/**
@@ -128,6 +148,8 @@ interface RunningAgent {
 	segment?: AbortController;
 	/** Set by requeue, read by the segment it ends. */
 	requeue?: SubagentRequeueOptions;
+	/** Set by a graceful stop, with the requeue that carries it. */
+	wrapUp?: SubagentStopActor;
 	/** The agent the current segment runs, for its transcript. */
 	tracked?: TrackedAgent;
 	/** Waiting on infrastructure: a requeue need not wait for a boundary. */
@@ -138,6 +160,17 @@ interface RunningAgent {
 const STOPPED_BY = new Map<string, SubagentStopActor>();
 
 const RUNNING = new Map<string, RunningAgent>();
+
+function recordStop(id: string, by: SubagentStopActor): void {
+	STOPPED_BY.set(id, by);
+	// Bounded: a report reads it once, right after the stop.
+	if (STOPPED_BY.size > 2_000) {
+		const oldest = STOPPED_BY.keys().next().value;
+		if (oldest !== undefined) {
+			STOPPED_BY.delete(oldest);
+		}
+	}
+}
 
 export interface SubagentCancellationRegistration {
 	/** What it is registered under: its row's id and the controls'. */
@@ -331,6 +364,7 @@ export function registerSubagentCancellation(
 						...(requeue.avoidNodeId
 							? { avoidNodeId: requeue.avoidNodeId }
 							: {}),
+						...(entry.wrapUp ? { wrapUp: entry.wrapUp } : {}),
 					};
 					entry.segment = undefined;
 					await onRequeue?.(carry);
@@ -397,14 +431,7 @@ export const subagentCancellation: SubagentCancellation = {
 			return false;
 		}
 		if (!entry.own.signal.aborted) {
-			STOPPED_BY.set(id, by);
-			// Bounded: a report reads it once, right after the stop.
-			if (STOPPED_BY.size > 2_000) {
-				const oldest = STOPPED_BY.keys().next().value;
-				if (oldest !== undefined) {
-					STOPPED_BY.delete(oldest);
-				}
-			}
+			recordStop(id, by);
 		}
 		entry.own.abort(
 			new DOMException(
@@ -426,6 +453,7 @@ export const subagentCancellation: SubagentCancellation = {
 		}
 		entry.restartRequested = true;
 		entry.requeue = undefined;
+		entry.wrapUp = undefined;
 		// Before its first attempt there is nothing to abandon: it will start
 		// clean anyway, so the request is simply spent on that attempt.
 		entry.attempt?.abort(
@@ -440,6 +468,10 @@ export const subagentCancellation: SubagentCancellation = {
 		if (!entry || entry.own.signal.aborted || !entry.segment) {
 			return false;
 		}
+		// Stopping gracefully: its next segment is its report, wherever it runs.
+		if (entry.wrapUp) {
+			return false;
+		}
 		entry.requeue = { ...(options ?? {}) };
 		// Nothing in flight to lose while it only waits on the server or the
 		// queue: stop the segment now rather than at a boundary that is not
@@ -449,6 +481,26 @@ export const subagentCancellation: SubagentCancellation = {
 		}
 		return true;
 	},
+	wrapUp(id: string, by: SubagentStopActor = "user"): boolean {
+		const entry = RUNNING.get(id);
+		if (!entry || entry.own.signal.aborted || !entry.segment) {
+			return false;
+		}
+		if (entry.wrapUp) {
+			return true;
+		}
+		entry.wrapUp = by;
+		entry.requeue = { reason: "stopping gracefully" };
+		recordStop(id, by);
+		if (entry.waitingInfra) {
+			entry.segment.abort(requeueAbort());
+		}
+		return true;
+	},
+	wrappingUp(id: string): boolean {
+		const entry = RUNNING.get(id);
+		return !!entry && !entry.own.signal.aborted && entry.wrapUp !== undefined;
+	},
 	inspect(id: string): SubagentControlState | undefined {
 		const entry = RUNNING.get(id);
 		if (!entry || entry.own.signal.aborted) {
@@ -456,6 +508,7 @@ export const subagentCancellation: SubagentCancellation = {
 		}
 		return {
 			label: entry.label,
+			wrapUpPending: entry.wrapUp !== undefined,
 			requeuePending: Boolean(entry.requeue),
 			waitingInfra: entry.waitingInfra,
 		};

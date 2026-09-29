@@ -29,7 +29,7 @@ import {
 	listAwaitingLead,
 	RESUME_AGENT_TOOL_NAME,
 	resumeSuspended,
-	stopSuspended,
+	stopSubagent,
 } from "./agent-iteration-cap";
 import {
 	type AgentRounds,
@@ -184,6 +184,20 @@ function notFound(sessionId: string, ref: string): string {
 	}`;
 }
 
+/** One target of `stop_agents`, through the stop every control uses. */
+function stopAgent(
+	target: ResolvedAgent,
+	options: { sessionId: string; by: "lead"; immediate: boolean },
+) {
+	return stopSubagent({
+		...(target.cancelId ? { cancelId: target.cancelId } : {}),
+		ref: target.ref,
+		sessionId: options.sessionId,
+		by: options.by,
+		immediate: options.immediate,
+	});
+}
+
 function stateOf(target: ResolvedAgent): string {
 	return target.agent?.state ?? "running";
 }
@@ -217,7 +231,7 @@ export const MESSAGE_AGENTS_DESCRIPTION =
 	"Leave a message for running agents. Each reads it at its next turn, between tool calls, and carries on with it in mind. Use it to pass on a change of plan, a constraint, or an answer.";
 
 export const STOP_AGENTS_DESCRIPTION =
-	"Stop running agents. A last resort: a stopped agent reports as cancelled by you, with only the work it had done so far, and its task is lost unless you run it again. Slowness and a full server are not reasons to stop one: the harness paces agents and retries refusals, the PolyKV server frees KV cells on its own, and while an agent compacts its throughput drops to zero for minutes -- that is progress, not a hang (agents_status shows each agent's phase). To free KV cells, compact_agents; to move an agent off a slow node, requeue_agent; to change its course, message_agents. The rest of its round carries on. An agent waiting on you at its iteration cap is ended with its work kept, after one last turn in which it writes its report; one stopped by the loop guard is ended with its work kept.";
+	"Stop agents. A last resort: its task ends unfinished, and is lost unless you run it again. Slowness and a full server are not reasons to stop one: the harness paces agents and retries refusals, the PolyKV server frees KV cells on its own, and while an agent compacts its throughput drops to zero for minutes -- that is progress, not a hang (agents_status shows each agent's phase). To free KV cells, compact_agents; to move an agent off a slow node, requeue_agent; to change its course, message_agents. The rest of its round carries on. By default the stop is graceful: the agent finishes the step it is in, then gets one turn with no tools to report what it changed, found and verified, and where it stopped -- its report reaches you as its result, marked as partial work, and its file changes are kept. That takes as long as its step plus one reply, minutes on a slow node or a looping model. `immediate: true` ends it at once, with its file changes and no report -- also the way to end one already stopping gracefully. An agent waiting on you (at its cap, looping, struggling) is ended where it stopped, after the same report turn unless `immediate`.";
 
 export const COMPACT_AGENTS_DESCRIPTION =
 	"Compact running agents' context, giving their KV cells back without stopping them -- what to do instead of stop_agents when a PolyKV node is short of cells. Each compacts before its next model request: a summary call during which its throughput is zero, often for minutes, and after which it carries on with a summary in place of its detailed history. Rarely needed: agents compact on their own when their node's KV pressure reaches its threshold (0.85 unless configured), and the server frees cells itself. Use it only on agents holding a large share of a node's cells while the node's pressure is near its threshold -- agents_status shows both. An agent already compacting, or waiting on you, is left as it is.";
@@ -629,37 +643,50 @@ export function createLeadAgentMessagingTools(
 			description: STOP_AGENTS_DESCRIPTION,
 			inputSchema: {
 				type: "object",
-				properties: { agents: agentsProperty },
+				properties: {
+					agents: agentsProperty,
+					immediate: {
+						type: "boolean",
+						description:
+							"End them at once, with no report turn. Default false: a graceful stop.",
+					},
+				},
 			},
 			execute: async (input: unknown) => {
-				const { agents } = (input ?? {}) as { agents?: string[] };
+				const { agents, immediate } = (input ?? {}) as {
+					agents?: string[];
+					immediate?: boolean;
+				};
 				const { targets, unknown } = resolveTargets(sessionId, agents);
-				// One waiting at its cap is ended, not cancelled: it writes its
-				// report in one last turn and keeps its work (`stopSuspended`).
-				const stopped = targets.filter((agent) =>
-					stateOf(agent) === "awaiting_lead" &&
-					agent.agent?.awaitingReason !== "looping" &&
-					agent.agent?.awaitingReason !== "struggling"
-						? stopSuspended(agent.cancelId ?? agent.ref, {
-								sessionId,
-								reason: "stopped by the lead",
-								report: true,
-							}).ok ||
-							(!!agent.cancelId &&
-								subagentCancellation.cancel(agent.cancelId, "lead"))
-						: !!agent.cancelId &&
-							subagentCancellation.cancel(agent.cancelId, "lead"),
-				);
-				const missed = [
-					...unknown,
-					...targets
-						.filter((agent) => !stopped.includes(agent))
-						.map((agent) => `${agent.label} (not running)`),
-				];
+				const graceful: string[] = [];
+				const stopped: string[] = [];
+				const missed: string[] = [...unknown];
+				for (const agent of targets) {
+					const outcome = stopAgent(agent, {
+						sessionId,
+						by: "lead",
+						immediate: immediate === true,
+					});
+					if (outcome === "graceful") {
+						graceful.push(agent.label);
+					} else if (outcome === "stopped") {
+						stopped.push(agent.label);
+					} else {
+						missed.push(`${agent.label} (not running)`);
+					}
+				}
 				return note(
-					`Stopped ${stopped.length} agent(s): ${
-						stopped.map((agent) => agent.label).join(", ") || "none"
-					}.${missed.length > 0 ? ` Not stopped: ${missed.join(", ")}.` : ""}`,
+					[
+						graceful.length > 0
+							? `Stopping ${graceful.length} agent(s) gracefully: ${graceful.join(", ")}. Each finishes its current step and writes a report of where it stopped; it reaches you as its result. \`stop_agents\` with \`immediate: true\` ends one at once.`
+							: "",
+						stopped.length > 0 || graceful.length === 0
+							? `Stopped ${stopped.length} agent(s)${immediate ? " at once" : ""}: ${stopped.join(", ") || "none"}.`
+							: "",
+						missed.length > 0 ? `Not stopped: ${missed.join(", ")}.` : "",
+					]
+						.filter(Boolean)
+						.join(" "),
 				);
 			},
 		} as AgentTool,

@@ -27,6 +27,7 @@ import {
 	createDelegatedAgentLifetime,
 	type DelegatedRunOutcome,
 	runDelegatedWithCap,
+	runWrapUpReport,
 } from "./agent-iteration-cap";
 import { summarizeForLead } from "./agent-reports";
 import {
@@ -637,13 +638,21 @@ export function createConfiguredAgentTools(
 					});
 					// A random temperature is drawn around the model's own.
 					await primeModelTemperature(sampling, runtimeConfig);
-					const check = controls.check
-						? createDelegatedAgentCheck({
-								check: controls.check,
-								cwd: sandbox?.cwd ?? runtimeConfig.cwd ?? process.cwd(),
-								...(sandbox ? { wrapSpawn: sandbox.wrapSpawn } : {}),
-							})
-						: undefined;
+					// A graceful stop's report turn is not a completion to judge.
+					if (carry?.wrapUp && carry.messages.length === 0) {
+						throw new DOMException(
+							"The sub-agent was stopped before it started.",
+							"AbortError",
+						);
+					}
+					const check =
+						controls.check && !carry?.wrapUp
+							? createDelegatedAgentCheck({
+									check: controls.check,
+									cwd: sandbox?.cwd ?? runtimeConfig.cwd ?? process.cwd(),
+									...(sandbox ? { wrapSpawn: sandbox.wrapSpawn } : {}),
+								})
+							: undefined;
 					// The struggle layer the swarm's workers have: one nudge to
 					// commit a SUMMARY, then a stop the lead decides on.
 					const struggle = createDelegatedStruggleSupervisor({
@@ -739,39 +748,53 @@ export function createConfiguredAgentTools(
 							}
 						}
 					}
-					// At its cap it waits for the lead, work kept.
-					const outcome = await runDelegatedWithCap({
-						agent: subAgent,
-						start: async () => {
-							if (carry && carry.messages.length > 0) {
-								// Requeued: it carries on from its own transcript.
-								subAgent.restore(carry.messages as never);
-								return await subAgent.continue(requeueNote(carry.reason));
-							}
-							return await subAgent.run(
-								withRevisedInstructions(prompt, cancellation.instructions),
-							);
-						},
-						name: config.name,
-						supervisor: struggle,
-						...(maxIterations !== undefined ? { maxIterations } : {}),
-						...(context.sessionId ? { sessionId: context.sessionId } : {}),
-						...(cancelId ? { cancelId } : {}),
-						...(cancellation.signal ? { signal: cancellation.signal } : {}),
-						...(context.emitUpdate ? { emitUpdate: context.emitUpdate } : {}),
-						...(check ? { check } : {}),
-						releaseEngineSession: () => releasePolykvAgent(engineSessionId),
-						lifetime,
-						onDetachedFinish: async (final) => {
-							await notifyEnd(buildOutput(final.result, final), final.result);
-						},
-						// Resumed after the call returned: back through its placement.
-						resumeThrough: resumePlacement({
-							...(placement && nodeId ? { placement, nodeId } : {}),
-							...(!placement && endpointGate ? { slotGate: endpointGate } : {}),
-							signal: () => cancellation.signal,
-						}),
-					});
+					// At its cap it waits for the lead, work kept. Stopped
+					// gracefully, it reports and ends.
+					const outcome = carry?.wrapUp
+						? await runWrapUpReport({
+								agent: subAgent,
+								messages: carry.messages,
+								by: carry.wrapUp,
+							})
+						: await runDelegatedWithCap({
+								agent: subAgent,
+								start: async () => {
+									if (carry && carry.messages.length > 0) {
+										// Requeued: it carries on from its own transcript.
+										subAgent.restore(carry.messages as never);
+										return await subAgent.continue(requeueNote(carry.reason));
+									}
+									return await subAgent.run(
+										withRevisedInstructions(prompt, cancellation.instructions),
+									);
+								},
+								name: config.name,
+								supervisor: struggle,
+								...(maxIterations !== undefined ? { maxIterations } : {}),
+								...(context.sessionId ? { sessionId: context.sessionId } : {}),
+								...(cancelId ? { cancelId } : {}),
+								...(cancellation.signal ? { signal: cancellation.signal } : {}),
+								...(context.emitUpdate
+									? { emitUpdate: context.emitUpdate }
+									: {}),
+								...(check ? { check } : {}),
+								releaseEngineSession: () => releasePolykvAgent(engineSessionId),
+								lifetime,
+								onDetachedFinish: async (final) => {
+									await notifyEnd(
+										buildOutput(final.result, final),
+										final.result,
+									);
+								},
+								// Resumed after the call returned: back through its placement.
+								resumeThrough: resumePlacement({
+									...(placement && nodeId ? { placement, nodeId } : {}),
+									...(!placement && endpointGate
+										? { slotGate: endpointGate }
+										: {}),
+									signal: () => cancellation.signal,
+								}),
+							});
 					capOutcome = outcome;
 					if (outcome.state === "awaiting_lead") {
 						return outcome.result;

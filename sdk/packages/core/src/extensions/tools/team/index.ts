@@ -28,6 +28,8 @@ export {
 	type ResumeSuspendedResult,
 	resumeSuspended,
 	runDelegatedWithCap,
+	type SubagentStopOutcome,
+	stopSubagent,
 	stopSuspended,
 } from "./agent-iteration-cap";
 export {

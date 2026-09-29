@@ -2,9 +2,13 @@ import type { ClineMessage, SubagentStatusItem } from "@shared/ExtensionMessage"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-const mocks = vi.hoisted(() => ({ cancelSubagent: vi.fn(), restartSubagent: vi.fn() }))
+const mocks = vi.hoisted(() => ({ cancelSubagent: vi.fn(), restartSubagent: vi.fn(), stopSubagent: vi.fn() }))
 vi.mock("@/services/grpc-client", () => ({
-	TaskServiceClient: { cancelSubagent: mocks.cancelSubagent, restartSubagent: mocks.restartSubagent },
+	TaskServiceClient: {
+		cancelSubagent: mocks.cancelSubagent,
+		restartSubagent: mocks.restartSubagent,
+		stopSubagent: mocks.stopSubagent,
+	},
 }))
 
 import { ActiveSubagents, liveSubagentsFrom } from "./ActiveSubagents"
@@ -398,12 +402,12 @@ describe("the working-agents strip", () => {
 describe("stopping a running agent", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
-		mocks.cancelSubagent.mockResolvedValue(undefined)
+		mocks.stopSubagent.mockResolvedValue(undefined)
 	})
 
 	// Inside the agent's box, below its name: the stop is a decision about one
-	// agent, taken after looking at it.
-	it("stops the agent whose box is open, by the id that agent announced", () => {
+	// agent, taken after looking at it -- and how, asked every time.
+	it("asks how, then stops the agent whose box is open, by the id it announced", () => {
 		render(
 			<ActiveSubagents
 				messages={[
@@ -419,24 +423,73 @@ describe("stopping a running agent", () => {
 		expect(screen.queryByRole("button", { name: /^Stop (?!all agents)/ })).not.toBeInTheDocument()
 		fireEvent.click(screen.getByRole("button", { name: /^html/ }))
 		fireEvent.click(screen.getByRole("button", { name: "Stop html" }))
+		expect(mocks.stopSubagent).not.toHaveBeenCalled()
+		expect(screen.getByText(/can take a long time/)).toBeInTheDocument()
+		fireEvent.click(screen.getByRole("button", { name: "Stop gracefully" }))
 
-		expect(mocks.cancelSubagent).toHaveBeenCalledTimes(1)
-		expect(mocks.cancelSubagent.mock.calls[0][0]).toMatchObject({ value: "s1::call-2" })
+		expect(mocks.stopSubagent).toHaveBeenCalledTimes(1)
+		expect(mocks.stopSubagent.mock.calls[0][0]).toMatchObject({ id: "s1::call-2", immediate: false })
 	})
 
-	// An abort is a request: the run may be inside a model call that has to
-	// come back first, so the agent stays. Without this the button looks like
-	// it did nothing and invites a second press.
-	it("will not be pressed twice", () => {
+	it("stops at once when asked to", () => {
 		render(<ActiveSubagents messages={[statusMessage([item({ index: 1, agentName: "js", cancelId: "s1::c" })])]} />)
 
 		fireEvent.click(screen.getByRole("button", { name: /^js/ }))
-		const button = screen.getByRole("button", { name: "Stop js" })
-		fireEvent.click(button)
-		fireEvent.click(button)
+		fireEvent.click(screen.getByRole("button", { name: "Stop js" }))
+		fireEvent.click(screen.getByRole("button", { name: "Stop now" }))
 
-		expect(mocks.cancelSubagent).toHaveBeenCalledTimes(1)
-		expect(button).toBeDisabled()
+		expect(mocks.stopSubagent.mock.calls[0][0]).toMatchObject({ id: "s1::c", immediate: true })
+		// An immediate stop is a request too: the button is not pressed twice.
+		expect(screen.getByRole("button", { name: "Stop js" })).toBeDisabled()
+	})
+
+	// A graceful stop lasts a step and a report; the user can cut it short.
+	it("offers an immediate stop, or to keep waiting, when pressed during a graceful stop", () => {
+		render(<ActiveSubagents messages={[statusMessage([item({ index: 1, agentName: "js", cancelId: "s1::c" })])]} />)
+
+		fireEvent.click(screen.getByRole("button", { name: /^js/ }))
+		fireEvent.click(screen.getByRole("button", { name: "Stop js" }))
+		fireEvent.click(screen.getByRole("button", { name: "Stop gracefully" }))
+		expect(screen.getByText("Stopping gracefully…")).toBeInTheDocument()
+
+		fireEvent.click(screen.getByRole("button", { name: "Stop js" }))
+		expect(screen.getByText("js is stopping gracefully")).toBeInTheDocument()
+		expect(screen.queryByRole("button", { name: "Stop gracefully" })).not.toBeInTheDocument()
+		fireEvent.click(screen.getByRole("button", { name: "Keep waiting" }))
+		expect(mocks.stopSubagent).toHaveBeenCalledTimes(1)
+
+		fireEvent.click(screen.getByRole("button", { name: "Stop js" }))
+		fireEvent.click(screen.getByRole("button", { name: "Stop now" }))
+		expect(mocks.stopSubagent).toHaveBeenCalledTimes(2)
+		expect(mocks.stopSubagent.mock.calls[1][0]).toMatchObject({ id: "s1::c", immediate: true })
+	})
+
+	it("stops every agent the same way from Stop all, and asks again while they stop gracefully", () => {
+		render(
+			<ActiveSubagents
+				messages={[
+					statusMessage([
+						item({ index: 1, agentName: "a", cancelId: "s1::a" }),
+						item({ index: 2, agentName: "b", cancelId: "s1::b" }),
+					]),
+				]}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: "Stop all agents" }))
+		fireEvent.click(screen.getByRole("button", { name: "Stop all gracefully" }))
+		expect(mocks.stopSubagent.mock.calls.map((call) => call[0])).toEqual([
+			expect.objectContaining({ id: "s1::a", immediate: false }),
+			expect.objectContaining({ id: "s1::b", immediate: false }),
+		])
+
+		fireEvent.click(screen.getByRole("button", { name: "Stop all agents" }))
+		expect(screen.getByText("2 agents are stopping gracefully")).toBeInTheDocument()
+		fireEvent.click(screen.getByRole("button", { name: "Stop all now" }))
+		expect(mocks.stopSubagent.mock.calls.slice(2).map((call) => call[0])).toEqual([
+			expect.objectContaining({ id: "s1::a", immediate: true }),
+			expect.objectContaining({ id: "s1::b", immediate: true }),
+		])
 	})
 
 	// A run recorded before agents carried a stop id has nothing to send.
@@ -500,8 +553,8 @@ describe("the agent's box, first row", () => {
 
 describe("stopping every agent at once", () => {
 	beforeEach(() => {
-		mocks.cancelSubagent.mockReset()
-		mocks.cancelSubagent.mockResolvedValue({})
+		mocks.stopSubagent.mockReset()
+		mocks.stopSubagent.mockResolvedValue({})
 	})
 
 	const round = () =>
@@ -516,14 +569,15 @@ describe("stopping every agent at once", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Stop all agents" }))
 		expect(screen.getByText("Stop all agents?")).toBeTruthy()
 		fireEvent.click(screen.getByRole("button", { name: "Keep running" }))
-		expect(mocks.cancelSubagent).not.toHaveBeenCalled()
+		expect(mocks.stopSubagent).not.toHaveBeenCalled()
 	})
 
 	it("stops every running and queued agent that can be stopped once confirmed", () => {
 		render(<ActiveSubagents messages={[round()]} />)
 		fireEvent.click(screen.getByRole("button", { name: "Stop all agents" }))
-		fireEvent.click(screen.getByRole("button", { name: "Stop 2 agents" }))
-		expect(mocks.cancelSubagent.mock.calls.map(([request]) => request.value)).toEqual(["s::c#0", "s::c#1"])
+		expect(screen.getByText(/All 2 agents that are running or queued will be stopped/)).toBeTruthy()
+		fireEvent.click(screen.getByRole("button", { name: "Stop all now" }))
+		expect(mocks.stopSubagent.mock.calls.map(([request]) => request.id)).toEqual(["s::c#0", "s::c#1"])
 	})
 
 	it("offers no stop-all when nothing can be stopped", () => {

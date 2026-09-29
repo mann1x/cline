@@ -74,6 +74,8 @@ vi.mock("../../../runtime/orchestration/session-runtime-orchestrator", () => ({
 			continue: vi.fn((message?: string) => start("continue", message)),
 			restore: vi.fn((messages: unknown[]) => fake.restored.push(messages)),
 			canStartRun: vi.fn(() => !settle),
+			getMaxIterations: vi.fn(() => undefined),
+			setMaxIterations: vi.fn(),
 			getAgentId: vi.fn(() => "runtime-id"),
 			getConversationId: vi.fn(() => "conv"),
 			getMessages: vi.fn(() => [{ role: "user", content: "earlier" }]),
@@ -166,9 +168,9 @@ describe("the lead's controls on a teammate's task", () => {
 		runtime.startTeammateRun("w", "task two");
 		await vi.waitFor(() => expect(w.calls).toHaveLength(1));
 
-		const said = await call("stop_agents", { agents: ["w"] });
+		const said = await call("stop_agents", { agents: ["w"], immediate: true });
 
-		expect(said).toMatch(/Stopped 1 agent\(s\): w/);
+		expect(said).toMatch(/Stopped 1 agent\(s\) at once: w/);
 		expect(w.aborts).toBe(1);
 		await vi.waitFor(() => expect(w.calls).toHaveLength(2));
 		const stopped = runtime.getRun(first.id);
@@ -183,7 +185,7 @@ describe("the lead's controls on a teammate's task", () => {
 		const sync = runtime.routeToTeammate("w", "sync task");
 		await vi.waitFor(() => expect(w.calls).toHaveLength(1));
 
-		await call("stop_agents", {});
+		await call("stop_agents", { immediate: true });
 
 		await expect(sync).resolves.toEqual(
 			expect.objectContaining({ finishReason: "aborted" }),
@@ -191,6 +193,34 @@ describe("the lead's controls on a teammate's task", () => {
 		expect(runtime.getSnapshot().members).toContainEqual(
 			expect.objectContaining({ agentId: "w", status: "idle" }),
 		);
+	});
+
+	// Graceful by default: its step, then one turn to report where it stopped.
+	it("stop_agents lets it report at its next boundary, and the task ends on the report", async () => {
+		const { runtime, spawn, call } = team();
+		const w = spawn("w");
+		const first = runtime.startTeammateRun("w", "task one");
+		await vi.waitFor(() => expect(w.calls).toHaveLength(1));
+
+		const said = await call("stop_agents", { agents: ["w"] });
+		expect(said).toMatch(/Stopping 1 agent\(s\) gracefully: w/);
+		expect(w.aborts).toBe(0);
+
+		await w.boundary();
+		await vi.waitFor(() => expect(w.calls).toHaveLength(2));
+		expect(w.calls[1]).toMatchObject({ kind: "continue" });
+		expect(w.calls[1]?.message).toContain("The lead is stopping you now");
+		w.finish("Fixed two of the three bugs.");
+
+		await vi.waitFor(() =>
+			expect(runtime.getRun(first.id)?.status).not.toBe("running"),
+		);
+		const run = runtime.getRun(first.id);
+		expect(run?.status).toBe("cancelled");
+		expect(run?.error).toMatch(/Stopped gracefully by the lead/);
+		const report = (run?.result as { text?: string } | undefined)?.text;
+		expect(report).toContain("Fixed two of the three bugs.");
+		expect(report).toContain("Stopped by the lead before it finished");
 	});
 
 	it("message_agents leaves the message for its next turn boundary", async () => {
