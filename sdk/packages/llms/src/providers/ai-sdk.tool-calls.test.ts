@@ -456,5 +456,12 @@ describe("a tool call's arguments while they stream", () => {
 			events.findIndex((event) => event.type === type);
 		expect(at("tool-input-progress")).toBeLessThan(at("tool-call-delta"));
 		expect(findToolInput(events)).toEqual({ commands: ["ls"] });
+		// The text itself, for the row's Inspect view. The second delta lands
+		// inside the throttle window: only the flush at the end of the
+		// arguments reports it.
+		const text = progress
+			.map((event) => (event as { inputText?: string }).inputText ?? "")
+			.join("");
+		expect(text).toBe('{"commands":["ls"]}');
 	});
 });

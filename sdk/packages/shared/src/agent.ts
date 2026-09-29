@@ -466,6 +466,8 @@ export interface ToolInputProgressUpdate {
 	kind: typeof TOOL_INPUT_PROGRESS_KIND;
 	inputChars: number;
 	deltas: number;
+	/** The argument text streamed since the previous progress update. */
+	inputText?: string;
 }
 
 export function isToolInputProgressUpdate(
@@ -512,6 +514,12 @@ export type AgentModelEvent =
 			inputChars: number;
 			/** Streamed deltas since the previous progress event: tokens, near enough. */
 			deltas: number;
+			/**
+			 * The argument text streamed since the previous progress event, for
+			 * a view of the stream itself. The call is still assembled from
+			 * `tool-call-delta` alone.
+			 */
+			inputText?: string;
 	  }
 	| {
 			type: "tool-result";

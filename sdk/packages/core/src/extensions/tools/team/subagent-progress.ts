@@ -16,6 +16,7 @@ import {
 	type CompactionCause,
 } from "../../context/compaction-cause";
 import type { RealizedSpawnSampling } from "./spawn-sampling";
+import { subagentOutput } from "./subagent-output";
 
 /**
  * What a delegated agent is doing, reported on the tool call that started it.
@@ -530,8 +531,16 @@ export function createSubagentProgress(
 	options?: {
 		/** Told of each completed compaction, row or no row. */
 		onCompaction?: (compaction: SubagentCompaction) => void;
+		/**
+		 * The agent's `subagentCancellation` id: its whole current step is
+		 * kept under it for the row's Inspect view.
+		 */
+		outputId?: string;
 	},
 ): SubagentProgress {
+	const output = options?.outputId
+		? subagentOutput.writer(options.outputId)
+		: undefined;
 	let toolCalls = 0;
 	// Compactions it has finished, in total and by why they ran: an agent
 	// given a small window is watched for exactly this.
@@ -641,6 +650,9 @@ export function createSubagentProgress(
 				// A call written last turn and never started (a refused parse)
 				// is not what it is doing now.
 				toolDraft = undefined;
+				// A new request: what the last one generated stays on screen
+				// while its tools ran, and ends here.
+				output?.step();
 				enter({ name: "requesting" });
 				emitUpdate({ iterations: event.iteration });
 				return;
@@ -672,6 +684,7 @@ export function createSubagentProgress(
 			if (event.type === "content_start" && event.contentType === "text") {
 				enter({ name: "writing" });
 				countDelta();
+				output?.append({ kind: "text", text: event.text ?? "" });
 				text = tail(text + (event.text ?? ""));
 				reportOutput(false);
 				return;
@@ -679,6 +692,10 @@ export function createSubagentProgress(
 			if (event.type === "content_start" && event.contentType === "reasoning") {
 				enter({ name: "thinking" });
 				countDelta();
+				output?.append({
+					kind: "reasoning",
+					text: event.reasoning ?? event.text ?? "",
+				});
 				reasoning = tail(reasoning + (event.reasoning ?? event.text ?? ""));
 				reportOutput(false);
 				return;
@@ -703,6 +720,14 @@ export function createSubagentProgress(
 					windowStart = now();
 				}
 				deltas += event.update.deltas;
+				if (event.update.inputText) {
+					output?.append({
+						kind: "tool",
+						text: event.update.inputText,
+						toolName: name,
+						...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+					});
+				}
 				toolDraft = `Writing ${name} call: ${Intl.NumberFormat("en-US").format(event.update.inputChars)} characters`;
 				reportOutput(false);
 				return;

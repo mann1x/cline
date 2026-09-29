@@ -18,6 +18,8 @@
  * no-op rather than an error.
  */
 
+import { subagentOutput } from "./subagent-output";
+
 /** Who stopped an agent, for the reason its report gives. */
 export type SubagentStopActor = "user" | "lead";
 
@@ -367,6 +369,8 @@ export function registerSubagentCancellation(
 			parent?.removeEventListener("abort", onParentAbort);
 			if (RUNNING.get(id) === entry) {
 				RUNNING.delete(id);
+				// Its stream for the Inspect view goes with it.
+				subagentOutput.release(id);
 			}
 		},
 	};

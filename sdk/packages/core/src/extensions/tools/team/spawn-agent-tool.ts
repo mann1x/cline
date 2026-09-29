@@ -1332,15 +1332,18 @@ async function runSpawnedAgent(
 	const lead = context.sessionId ?? "cerebriline";
 	// What it is doing, on the tool call that started it. Nothing else
 	// reports a running sub-agent to the user at all.
+	// Its own abort signal, so a runaway agent can be stopped without
+	// cancelling the session and the siblings that are working.
+	const cancelId = subagentCancelId(context.sessionId, context.toolCallId);
 	const progress = createSubagentProgress(
 		context.emitUpdate,
 		config.onSubAgentEvent,
 		Date.now,
-		{ onCompaction: compactionLogger(input.name ?? "agent", config.logger) },
+		{
+			onCompaction: compactionLogger(input.name ?? "agent", config.logger),
+			...(cancelId ? { outputId: cancelId } : {}),
+		},
 	);
-	// Its own abort signal, so a runaway agent can be stopped without
-	// cancelling the session and the siblings that are working.
-	const cancelId = subagentCancelId(context.sessionId, context.toolCallId);
 	const cancellation = registerSubagentCancellation(
 		cancelId,
 		context.signal,

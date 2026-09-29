@@ -587,6 +587,7 @@ export function createSessionSwarmTool(
 					`swarm worker ${request.name}`,
 					config.logger,
 				),
+				...(control?.id ? { outputId: control.id } : {}),
 			},
 		);
 		// How long it has been stuck, for the lead: after long enough without

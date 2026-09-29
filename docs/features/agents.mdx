@@ -480,6 +480,17 @@ Code: `team/spawn-sampling.ts`. This is available on `spawn_agent` (call and ent
 
 Each delegated agent counts its tool calls and compactions (`07b717e67`). Compactions are broken down by cause: auto, pressure, overflow or manual, with the last one's tokens before and after. They are shown on the agent's chat row and in the strip, for example "7 tools called · 3 compactions · 12,000 tokens", and saved with the task. Teammates count over their life and per task (`c0ebb71af`). The counts are not sent to the model, and the CLI has no per-agent display.
 
+### Inspecting an agent's live output
+
+An agent's Output line in the panel above the chat is a status: "Prefilling 39,050 / 56,042", "Writing editor call: 8,327 characters", or the last 400 characters of its text. The **Inspect** button (magnifier) beside "Output" replaces the agent's instructions, Activity and Output with what the model is generating, as it generates it. Back returns to them.
+
+- **What it shows:** thinking (italic), answer text, and the arguments of each tool call as they are written, under the tool's name.
+- **How much:** the current step, meaning everything since the agent's latest model request began, up to 64 KB. The call it just wrote stays visible while the tool runs. It clears when the next request starts.
+- **Following:** the view stays on the newest output. Scroll up to stop following, and scroll back to the bottom to resume.
+- **Across agents:** Inspect stays on as you click from one agent's tag to another, and turns off when the panel closes.
+- **Cost:** only an agent being inspected streams. Core keeps each agent's step (`subagentOutput`, keyed by the Stop button's id) and drops it when the agent ends. The host streams it over `TaskService.subscribeSubagentOutput`, batched every 100 ms. Tool-call argument text comes from `tool-input-progress.inputText`, flushed at `tool-input-end` so the tail of a call is not lost.
+- Needs an agent the row can stop; rows recorded before agents carried a stop id have no Inspect.
+
 ### Iteration caps, `awaiting_lead`, and the check
 
 Landed on 2026-09-26 in `fdee39e61`, `d8dcee6a3` and `e4893c1b1`. `check` is available on `spawn_agent` (call and entry), swarms (round and task), and `subagent_<name>`. An agent's own value wins over the call's.

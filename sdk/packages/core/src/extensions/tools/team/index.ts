@@ -140,3 +140,9 @@ export {
 	subagentCancelId,
 	subagentCancellation,
 } from "./subagent-cancellation";
+export {
+	SUBAGENT_OUTPUT_STEP_CHARS,
+	type SubagentOutputChunk,
+	type SubagentOutputEvent,
+	subagentOutput,
+} from "./subagent-output";

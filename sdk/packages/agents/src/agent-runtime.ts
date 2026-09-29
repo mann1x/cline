@@ -2917,6 +2917,7 @@ export class AgentRuntime {
 							kind: TOOL_INPUT_PROGRESS_KIND,
 							inputChars: event.inputChars,
 							deltas: event.deltas,
+							...(event.inputText ? { inputText: event.inputText } : {}),
 						},
 					});
 					break;

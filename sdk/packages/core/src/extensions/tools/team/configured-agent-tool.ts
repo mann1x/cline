@@ -570,7 +570,10 @@ export function createConfiguredAgentTools(
 					context.emitUpdate,
 					options.onSubAgentEvent,
 					Date.now,
-					{ onCompaction: compactionLogger(config.name, options.logger) },
+					{
+						onCompaction: compactionLogger(config.name, options.logger),
+						...(cancelId ? { outputId: cancelId } : {}),
+					},
 				);
 				// Its own engine session, never the lead's; on a PolyKV node
 				// every instance of this agent shares its system prompt and

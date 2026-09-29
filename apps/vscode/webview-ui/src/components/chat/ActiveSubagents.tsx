@@ -1,10 +1,20 @@
 import type { ClineMessage, ClineSaySubagentStatus, SubagentActivityEntry, SubagentStatusItem } from "@shared/ExtensionMessage"
 import { StringRequest } from "@shared/proto/cline/common"
-import { ClockIcon, LoaderCircleIcon, PauseIcon, RefreshCwIcon, SquareIcon, TriangleAlertIcon, XIcon } from "lucide-react"
+import {
+	ClockIcon,
+	LoaderCircleIcon,
+	PauseIcon,
+	RefreshCwIcon,
+	SearchIcon,
+	SquareIcon,
+	TriangleAlertIcon,
+	XIcon,
+} from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { TaskServiceClient } from "@/services/grpc-client"
+import { AgentInspect } from "./AgentInspect"
 import { subagentCompactionDetail, subagentCompactionText } from "./subagentCompactions"
 import { subagentCapText, subagentOracleText, subagentOracleTitle } from "./subagentControls"
 import { subagentIdentity, subagentModelLabel, subagentSamplingText, subagentSamplingTitle } from "./subagentIdentity"
@@ -152,6 +162,8 @@ function AgentDetail({
 	onRestart,
 	stopping,
 	restarting,
+	inspecting,
+	onInspect,
 }: {
 	agent: SubagentStatusItem
 	onClose: () => void
@@ -159,6 +171,9 @@ function AgentDetail({
 	onRestart?: () => void
 	stopping: boolean
 	restarting: boolean
+	/** Showing the live stream in place of its instructions, activity and output. */
+	inspecting: boolean
+	onInspect: (inspecting: boolean) => void
 }) {
 	const identity = subagentIdentity(agent.index, agent.agentName)
 	const node = nodeNameOf(agent)
@@ -284,21 +299,47 @@ function AgentDetail({
 					{sampling}
 				</div>
 			)}
-			{/* What it was asked to do. */}
-			<div className="mt-1.5 max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[11px] text-foreground opacity-90">
-				{agent.prompt}
-			</div>
-			<AgentActivity activity={agent.activity ?? []} />
-			{tail && (
-				<div className="mt-1.5">
-					<div className="text-[10px] opacity-60">{agent.latestOutputKind === "reasoning" ? "Thinking" : "Output"}</div>
-					<pre
-						className={`m-0 max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[10px] ${
-							agent.latestOutputKind === "reasoning" ? "italic opacity-60" : "opacity-80"
-						}`}>
-						{tail}
-					</pre>
-				</div>
+			{/* The live stream, over what it was asked, what it did and its
+			    output line: the stream needs the room. Needs the id the
+			    host keeps the stream under, as the stop does. */}
+			{inspecting && agent.cancelId ? (
+				<AgentInspect agent={{ ...agent, cancelId: agent.cancelId }} onBack={() => onInspect(false)} />
+			) : (
+				<>
+					{/* What it was asked to do. */}
+					<div className="mt-1.5 max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[11px] text-foreground opacity-90">
+						{agent.prompt}
+					</div>
+					<AgentActivity activity={agent.activity ?? []} />
+					{(tail || agent.cancelId) && (
+						<div className="mt-1.5">
+							<div className="flex items-center gap-2">
+								<div className="text-[10px] opacity-60">
+									{agent.latestOutputKind === "reasoning" ? "Thinking" : "Output"}
+								</div>
+								{agent.cancelId && (
+									<button
+										aria-label={`Inspect ${identity.label}'s live output`}
+										className="flex shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-editor-group-border bg-transparent px-1.5 py-[1px] text-[10px] text-foreground opacity-80 hover:opacity-100"
+										onClick={() => onInspect(true)}
+										title="Show what the model is generating, as it generates it: thinking, answer and tool calls"
+										type="button">
+										<SearchIcon className="size-2.5" />
+										<span>Inspect</span>
+									</button>
+								)}
+							</div>
+							{tail && (
+								<pre
+									className={`m-0 max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[10px] ${
+										agent.latestOutputKind === "reasoning" ? "italic opacity-60" : "opacity-80"
+									}`}>
+									{tail}
+								</pre>
+							)}
+						</div>
+					)}
+				</>
 			)}
 		</div>
 	)
@@ -308,6 +349,14 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 	const agents = useMemo(() => liveSubagentsFrom(messages), [messages])
 	const hasWarning = useCurrentWarnings(agents)
 	const [openIndex, setOpenIndex] = useState<number | undefined>(undefined)
+	// Kept while moving from one agent's tag to the next, so several streams
+	// can be looked at in turn; gone with the panel.
+	const [inspecting, setInspecting] = useState(false)
+	useEffect(() => {
+		if (openIndex === undefined) {
+			setInspecting(false)
+		}
+	}, [openIndex])
 
 	// An agent that finishes while its panel is open would otherwise leave the
 	// panel showing a running agent that is not running any more.
@@ -449,7 +498,9 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 				{open && (
 					<AgentDetail
 						agent={open}
+						inspecting={inspecting}
 						onClose={() => setOpenIndex(undefined)}
+						onInspect={setInspecting}
 						{...(open.cancelId
 							? {
 									onStop: () => stop(open.cancelId as string),

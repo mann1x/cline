@@ -1757,8 +1757,39 @@ async function* emitAiSdkEvents(
 	// so a turn spent writing one long call reads as work, not silence.
 	const toolInputProgress = new Map<
 		string,
-		{ toolName?: string; chars: number; deltas: number; reportedAt: number }
+		{
+			toolName?: string;
+			chars: number;
+			deltas: number;
+			reportedAt: number;
+			/** Argument text since the last report, for a view of the stream. */
+			pending: string;
+		}
 	>();
+	const reportToolInput = (
+		id: string,
+		progress: {
+			toolName?: string;
+			chars: number;
+			deltas: number;
+			reportedAt: number;
+			pending: string;
+		},
+		at: number,
+	) => {
+		progress.reportedAt = at;
+		const report = {
+			type: "tool-input-progress" as const,
+			toolCallId: id,
+			...(progress.toolName ? { toolName: progress.toolName } : {}),
+			inputChars: progress.chars,
+			deltas: progress.deltas,
+			...(progress.pending ? { inputText: progress.pending } : {}),
+		};
+		progress.deltas = 0;
+		progress.pending = "";
+		return report;
+	};
 
 	try {
 		if (stream.fullStream) {
@@ -1779,6 +1810,7 @@ async function* emitAiSdkEvents(
 							chars: 0,
 							deltas: 0,
 							reportedAt: Number.NEGATIVE_INFINITY,
+							pending: "",
 						};
 						toolInputProgress.set(id, progress);
 					}
@@ -1793,21 +1825,27 @@ async function* emitAiSdkEvents(
 						firstContentAt ??= Date.now();
 						progress.chars += delta.length;
 						progress.deltas += 1;
+						progress.pending += delta;
 					}
 					const at = Date.now();
 					if (
 						progress.deltas > 0 &&
 						at - progress.reportedAt >= TOOL_INPUT_PROGRESS_MS
 					) {
-						progress.reportedAt = at;
-						yield {
-							type: "tool-input-progress",
-							toolCallId: id,
-							...(progress.toolName ? { toolName: progress.toolName } : {}),
-							inputChars: progress.chars,
-							deltas: progress.deltas,
-						};
-						progress.deltas = 0;
+						yield reportToolInput(id, progress, at);
+					}
+					continue;
+				}
+				// The end of a call's arguments: what streamed since the last
+				// report would otherwise never be seen -- the call arrives whole
+				// and the tool starts.
+				if (part.type === "tool-input-end") {
+					const id =
+						(part.id as string | undefined) ??
+						(part.toolCallId as string | undefined);
+					const progress = id ? toolInputProgress.get(id) : undefined;
+					if (id && progress && (progress.deltas > 0 || progress.pending)) {
+						yield reportToolInput(id, progress, Date.now());
 					}
 					continue;
 				}
