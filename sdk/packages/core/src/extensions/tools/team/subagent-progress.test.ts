@@ -333,6 +333,25 @@ describe("reporting what a sub-agent has spent", () => {
 			expect.objectContaining({ contextTokens: 53_200 }),
 		);
 	});
+
+	// swarm czbnh: 4,055 tokens out after 28 compactions it never counted. A
+	// compaction's calls are its spend and not its window.
+	it("counts a compaction's calls in the totals and not as the window", () => {
+		const emitUpdate = vi.fn();
+		const progress = createSubagentProgress(emitUpdate);
+		progress.observe({
+			type: "usage",
+			auxiliary: true,
+			inputTokens: 31_000,
+			outputTokens: 900,
+			totalInputTokens: 120_000,
+			totalOutputTokens: 6_000,
+		} as AgentEvent);
+		expect(emitUpdate).toHaveBeenCalledWith({
+			inputTokens: 120_000,
+			outputTokens: 6_000,
+		});
+	});
 });
 
 const compacted = (metadata: Record<string, unknown>): AgentEvent =>

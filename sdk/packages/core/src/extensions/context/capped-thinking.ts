@@ -27,6 +27,7 @@ import type {
 	DiscardedTurnCondensation,
 	DiscardedTurnInput,
 	MessageWithMetadata,
+	PrepareTurnUsage,
 } from "@cline/shared";
 import type { CoreCompactionSummarizerConfig } from "../../types/config";
 import type { ProviderConfig } from "../../types/provider-settings";
@@ -682,6 +683,8 @@ type PrepareTurnInput = {
 		message: string,
 		metadata?: Record<string, unknown>,
 	) => void;
+	/** Where the condensation's own call is counted, as the agent's spend. */
+	reportUsage?: (usage: PrepareTurnUsage) => void;
 };
 type PrepareTurnResult =
 	| { messages?: readonly MessageWithMetadata[] }
@@ -704,6 +707,7 @@ async function writeCappedThinkingNote(options: {
 	config: CappedThinkingCondenserConfig;
 	providerConfig: ProviderConfig;
 	partialAnswer?: string;
+	reportUsage?: (usage: PrepareTurnUsage) => void;
 }): Promise<string> {
 	const request = buildCappedThinkingRequest({
 		thinking: options.thinking,
@@ -751,6 +755,22 @@ async function writeCappedThinkingNote(options: {
 			}
 			if (chunk.type === "text") {
 				text += chunk.text;
+				continue;
+			}
+			if (chunk.type === "usage") {
+				options.reportUsage?.({
+					inputTokens: chunk.inputTokens,
+					outputTokens: chunk.outputTokens,
+					...(chunk.cacheReadTokens !== undefined
+						? { cacheReadTokens: chunk.cacheReadTokens }
+						: {}),
+					...(chunk.cacheWriteTokens !== undefined
+						? { cacheWriteTokens: chunk.cacheWriteTokens }
+						: {}),
+					...(chunk.totalCost !== undefined
+						? { totalCost: chunk.totalCost }
+						: {}),
+				});
 				continue;
 			}
 			if (chunk.type === "done" && !chunk.success && chunk.error) {
@@ -984,6 +1004,7 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 	const condense = async (
 		messages: MessageWithMetadata[],
 		emitStatusNotice?: PrepareTurnInput["emitStatusNotice"],
+		reportUsage?: PrepareTurnInput["reportUsage"],
 	): Promise<MessageWithMetadata[]> => {
 		const lookup = locateCappedThinking(messages, config.budgetTokens, {
 			budgetMessage: config.budgetMessage,
@@ -1041,6 +1062,7 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 				outcomes: collectToolOutcomes(messages, index),
 				config,
 				providerConfig,
+				...(reportUsage ? { reportUsage } : {}),
 			});
 			condensed.set(thinking, note);
 		}
@@ -1098,7 +1120,11 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 	};
 
 	return (async (context: PrepareTurnInput) => {
-		const messages = await condense(context.messages, context.emitStatusNotice);
+		const messages = await condense(
+			context.messages,
+			context.emitStatusNotice,
+			context.reportUsage,
+		);
 		const result = (await (
 			inner as unknown as
 				| ((input: PrepareTurnInput) => Promise<PrepareTurnResult>)

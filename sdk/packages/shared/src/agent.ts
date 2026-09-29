@@ -352,6 +352,13 @@ export interface AgentRuntimePrepareTurnContext {
 		message: string,
 		metadata?: Record<string, unknown>,
 	) => void;
+	/**
+	 * Count what preparing the turn spent on the model: a compaction's
+	 * summary, its critics, its retrospective. Added to the agent's totals as
+	 * auxiliary usage -- spent on its behalf, but not a request of its own, so
+	 * it says nothing about the window the agent is using.
+	 */
+	reportUsage?: (usage: Partial<AgentUsage>) => void;
 }
 
 export interface AgentRuntimePrepareTurnResult {
@@ -1080,6 +1087,12 @@ export type AgentRuntimeEvent =
 			type: "usage-updated";
 			snapshot: AgentRuntimeStateSnapshot;
 			usage: AgentUsage;
+			/**
+			 * Spent on the agent's behalf outside its own requests -- a
+			 * compaction's calls. Counted in `usage` like any other; not a
+			 * request, so neither the window it is using nor a request row.
+			 */
+			auxiliary?: boolean;
 			/**
 			 * The one request whose usage this update carries, timed.
 			 *

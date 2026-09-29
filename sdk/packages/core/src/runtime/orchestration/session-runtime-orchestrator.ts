@@ -1472,6 +1472,7 @@ export class SessionRuntime {
 				overflowRecovery: context.overflowRecovery,
 				...(this.takeCompactionRequest() ? { compactionRequested: true } : {}),
 				emitStatusNotice: context.emitStatusNotice,
+				reportUsage: context.reportUsage,
 			});
 			if (!result) {
 				return undefined;

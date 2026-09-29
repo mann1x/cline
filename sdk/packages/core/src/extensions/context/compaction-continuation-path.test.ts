@@ -44,6 +44,7 @@ vi.mock("./continuation-compaction", async (importOriginal) => {
 								: "## Goal\nShip the feature; finish it next.",
 						reasoningChars: 0,
 						timings: { engine: "ollama", promptTokens: 900, cachedTokens: 860 },
+						usage: { inputTokens: 900, outputTokens: 120 },
 					};
 				},
 			}),
@@ -57,6 +58,12 @@ function summarizerHandler(
 		createMessage: vi.fn(() =>
 			(async function* () {
 				yield { type: "text", id: "s", text };
+				yield {
+					type: "usage",
+					id: "s",
+					inputTokens: 4_000,
+					outputTokens: 300,
+				};
 				yield { type: "done", id: "s", success: true };
 			})(),
 		),
@@ -68,6 +75,10 @@ async function compact(
 	maxInputTokens = 3_000,
 	log = vi.fn(),
 	pinnedHead?: LlmsProviders.Message[],
+	reportUsage?: (usage: {
+		inputTokens?: number;
+		outputTokens?: number;
+	}) => void,
 ) {
 	const messages: LlmsProviders.Message[] = [
 		{ role: "user", content: "Original task" },
@@ -102,6 +113,7 @@ async function compact(
 		messages,
 		apiMessages: messages,
 		...(pinnedHead ? { pinnedHead } : {}),
+		...(reportUsage ? { reportUsage } : {}),
 		model: {
 			id: "mock-model",
 			provider: providerId,
@@ -143,6 +155,42 @@ describe("compaction on a prompt-cache provider", () => {
 			/^\[compaction\] path=continuation \(prompt-cache continuation\) prefill=\d+/,
 		);
 		expect(line).toContain("cache_n writer=860/");
+	});
+
+	// swarm czbnh: html-review-2 read 4,055 tokens out after 28 compactions.
+	// Every call a compaction makes is the agent's spend, counted as it ends.
+	it("reports every call it makes as the agent's spend", async () => {
+		const reportUsage = vi.fn();
+		await compact(
+			{ providerId: "ollama" },
+			3_000,
+			vi.fn(),
+			undefined,
+			reportUsage,
+		);
+
+		expect(reportUsage.mock.calls.map((call) => call[0])).toEqual(
+			modelCalls.map(() => ({ inputTokens: 900, outputTokens: 120 })),
+		);
+		expect(reportUsage).toHaveBeenCalledTimes(4);
+	});
+
+	it("reports the transcript-as-text summary's spend too", async () => {
+		modelBehaviour.fail = (call) =>
+			call.purpose === "writer" ? new Error("400 template error") : undefined;
+		const reportUsage = vi.fn();
+		await compact(
+			{ providerId: "ollama" },
+			3_000,
+			vi.fn(),
+			undefined,
+			reportUsage,
+		);
+
+		expect(reportUsage).toHaveBeenCalledWith({
+			inputTokens: 4_000,
+			outputTokens: 300,
+		});
 	});
 
 	// A keep-tail result still over the trigger is rescued without the tail.

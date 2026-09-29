@@ -185,6 +185,13 @@ export interface AgentUsageEvent extends AgentEventMetadata {
 	/** What this turn's request cost in time. See `RequestTimings`. */
 	timings?: RequestTimings;
 
+	/**
+	 * Spent on the agent's behalf outside its own requests -- a compaction's
+	 * calls. In the totals like any other usage; not a request, so it is not
+	 * the window the agent is using and gets no request row.
+	 */
+	auxiliary?: boolean;
+
 	/** Accumulated totals */
 	totalInputTokens: number;
 	totalCacheReadTokens?: number;
@@ -771,11 +778,22 @@ export interface AgentPrepareTurnContext {
 		message: string,
 		metadata?: Record<string, unknown>,
 	) => void;
+	/** Count what preparing the turn spent on the model. See `AgentRuntimePrepareTurnContext`. */
+	reportUsage?: (usage: PrepareTurnUsage) => void;
 }
 
 export interface AgentPrepareTurnResult {
 	messages?: MessageWithMetadata[];
 	systemPrompt?: string;
+}
+
+/** Tokens a turn's preparation spent: a compaction's calls, summed. */
+export interface PrepareTurnUsage {
+	inputTokens?: number;
+	outputTokens?: number;
+	cacheReadTokens?: number;
+	cacheWriteTokens?: number;
+	totalCost?: number;
 }
 
 // =============================================================================

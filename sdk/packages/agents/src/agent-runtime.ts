@@ -3310,6 +3310,10 @@ export class AgentRuntime {
 					metadata,
 				});
 			},
+			// A compaction's calls, as each finishes: the agent's to pay for.
+			reportUsage: (usage) => {
+				void this.updateUsage(usage, undefined, { auxiliary: true });
+			},
 		});
 		if (requireSmallerRequest) {
 			// Only retry a provider-rejected overflow with a request that is
@@ -3377,7 +3381,9 @@ export class AgentRuntime {
 	private async updateUsage(
 		usage: Partial<AgentUsage>,
 		timings?: RequestTimings,
+		options?: { auxiliary?: boolean },
 	): Promise<void> {
+		const auxiliary = options?.auxiliary === true;
 		this.state.usage = {
 			inputTokens: this.state.usage.inputTokens + (usage.inputTokens ?? 0),
 			outputTokens: this.state.usage.outputTokens + (usage.outputTokens ?? 0),
@@ -3396,7 +3402,9 @@ export class AgentRuntime {
 		if (timings) {
 			this.state.lastRequestTimings = timings;
 		}
-		if (usage.inputTokens !== undefined) {
+		// Not the agent's request: a compaction's call says nothing about the
+		// window the agent's next request will be sized against.
+		if (usage.inputTokens !== undefined && !auxiliary) {
 			this.lastRequestTokens =
 				(usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
 		}
@@ -3405,6 +3413,7 @@ export class AgentRuntime {
 			snapshot: this.snapshot(),
 			usage: cloneUsage(this.state.usage),
 			...(timings ? { timings } : {}),
+			...(auxiliary ? { auxiliary: true } : {}),
 		});
 	}
 

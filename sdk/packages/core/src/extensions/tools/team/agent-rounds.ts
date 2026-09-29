@@ -371,6 +371,107 @@ export const ROUND_OUTPUT_TAIL_CHARS = 1_500;
 /** Activity lines kept per agent. */
 export const ROUND_ACTIVITY_LIMIT = 20;
 /** Iteration start times kept per agent: enough for a five-minute pace. */
+/**
+ * An agent's spend, kept whole across everything that restarts its counters.
+ *
+ * The totals an agent reports are its runtime's, and a runtime is not the
+ * agent: a requeue or a restart builds a new one that counts from zero, and
+ * the record took each report as the figure. `base` is what earlier runtimes
+ * spent; `seen` is the last figure the current one reported. A report below
+ * `seen` is a new runtime, not a refund.
+ */
+interface SpendLedger {
+	base: { input: number; output: number };
+	seen: { input: number; output: number };
+	/** `base` when the current run began: the finish reports that run whole. */
+	runBase: { input: number; output: number };
+}
+const spendLedgers = new WeakMap<RoundAgentRecord, SpendLedger>();
+
+function spendLedger(agent: RoundAgentRecord): SpendLedger {
+	let ledger = spendLedgers.get(agent);
+	if (!ledger) {
+		// A record read back from disk carries its totals and no ledger: what
+		// it already shows is the base anything further adds to.
+		const shown = {
+			input: agent.inputTokens ?? 0,
+			output: agent.outputTokens ?? 0,
+		};
+		ledger = {
+			base: shown,
+			seen: { input: 0, output: 0 },
+			runBase: { ...shown },
+		};
+		spendLedgers.set(agent, ledger);
+	}
+	return ledger;
+}
+
+/** One runtime's cumulative report, folded into the agent's lifetime totals. */
+export function recordAgentSpend(
+	agent: RoundAgentRecord,
+	report: { inputTokens?: number; outputTokens?: number },
+): void {
+	const ledger = spendLedger(agent);
+	const fold = (key: "input" | "output", value: number | undefined) => {
+		if (value === undefined) {
+			return;
+		}
+		if (value < ledger.seen[key]) {
+			ledger.base[key] += ledger.seen[key];
+		}
+		ledger.seen[key] = value;
+	};
+	fold("input", report.inputTokens);
+	fold("output", report.outputTokens);
+	if (report.inputTokens !== undefined || agent.inputTokens !== undefined) {
+		agent.inputTokens = ledger.base.input + ledger.seen.input;
+	}
+	if (report.outputTokens !== undefined || agent.outputTokens !== undefined) {
+		agent.outputTokens = ledger.base.output + ledger.seen.output;
+	}
+}
+
+/**
+ * A run's end, reported whole: the finish sums every segment the run took
+ * (`runDelegatedWithCap` folds each `continue` into it), so it is added to
+ * what earlier runs spent rather than folded like a live report -- which
+ * would count the segments already folded a second time. The larger of the
+ * two stands, so a finish that summed less than was seen lowers nothing.
+ */
+export function recordAgentFinalSpend(
+	agent: RoundAgentRecord,
+	usage: { inputTokens?: number; outputTokens?: number },
+): void {
+	const ledger = spendLedger(agent);
+	const settle = (key: "input" | "output", value: number | undefined) => {
+		const live = ledger.base[key] + ledger.seen[key];
+		const whole =
+			value === undefined ? live : Math.max(live, ledger.runBase[key] + value);
+		ledger.base[key] = whole;
+		ledger.seen[key] = 0;
+		return whole;
+	};
+	const input = settle("input", usage.inputTokens);
+	const output = settle("output", usage.outputTokens);
+	ledger.runBase = { input, output };
+	if (usage.inputTokens !== undefined || agent.inputTokens !== undefined) {
+		agent.inputTokens = input;
+	}
+	if (usage.outputTokens !== undefined || agent.outputTokens !== undefined) {
+		agent.outputTokens = output;
+	}
+}
+
+/** A new run of the same agent: what it spent so far stays spent. */
+function carrySpendIntoNextRun(agent: RoundAgentRecord): void {
+	const ledger = spendLedger(agent);
+	ledger.base.input += ledger.seen.input;
+	ledger.base.output += ledger.seen.output;
+	ledger.seen = { input: 0, output: 0 };
+	ledger.runBase = { ...ledger.base };
+}
+
 const ITERATION_TIMES_KEPT = 40;
 const ROUND_ERROR_LIMIT = 5;
 const PERSIST_DEBOUNCE_MS = 1_000;
@@ -1140,8 +1241,9 @@ export class AgentRounds {
 		agent.outputTail = undefined;
 		agent.iterations = undefined;
 		agent.toolCalls = undefined;
-		agent.inputTokens = undefined;
-		agent.outputTokens = undefined;
+		// Not cleared: a restarted agent has still spent what it spent, and
+		// its totals are the agent's, not the attempt's.
+		carrySpendIntoNextRun(agent);
 		agent.contextTokens = undefined;
 		agent.genTps = undefined;
 		agent.compactions = undefined;
@@ -1492,16 +1594,18 @@ export class RoundHandle {
 		agent.contextWindow = num("contextWindow") ?? agent.contextWindow;
 		// What it produced since the last report, counted to its node: the
 		// node's throughput for the lead's ETAs, whatever the provider.
-		const produced = num("outputTokens");
-		if (produced !== undefined && produced > (agent.outputTokens ?? 0)) {
+		const producedBefore = agent.outputTokens ?? 0;
+		recordAgentSpend(agent, {
+			inputTokens: num("inputTokens"),
+			outputTokens: num("outputTokens"),
+		});
+		if ((agent.outputTokens ?? 0) > producedBefore) {
 			noteNodeTokens(
 				nodeKeyOf(agent),
-				produced - (agent.outputTokens ?? 0),
+				(agent.outputTokens ?? 0) - producedBefore,
 				at,
 			);
 		}
-		agent.inputTokens = num("inputTokens") ?? agent.inputTokens;
-		agent.outputTokens = num("outputTokens") ?? agent.outputTokens;
 		agent.contextTokens = num("contextTokens") ?? agent.contextTokens;
 		agent.genTps = num("genTps") ?? agent.genTps;
 		const phase = update.phase as Partial<AgentPhaseUpdate> | undefined;
@@ -1783,8 +1887,7 @@ export class RoundHandle {
 		agent.waiting = undefined;
 		agent.iterations = output.iterations ?? agent.iterations;
 		if (output.usage) {
-			agent.inputTokens = output.usage.inputTokens ?? agent.inputTokens;
-			agent.outputTokens = output.usage.outputTokens ?? agent.outputTokens;
+			recordAgentFinalSpend(agent, output.usage);
 		}
 		if (output.model) {
 			agent.providerId = output.model.provider;

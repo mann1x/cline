@@ -35,6 +35,8 @@ import {
 	serializeReasoningWithOutcomes,
 } from "./compaction-shared";
 import {
+	addCallUsage,
+	type CompactionCallUsage,
 	type CompactionContinuation,
 	type CompactionMeter,
 	meterCall,
@@ -251,6 +253,7 @@ async function generateSummary(options: {
 	let reasoningChars = 0;
 	let incompleteReason: string | undefined;
 	let promptTokens: number | undefined;
+	let usage: CompactionCallUsage | undefined;
 	for await (const chunk of handler.createMessage(options.systemPrompt, [
 		{ role: "user", content: options.request },
 	])) {
@@ -266,6 +269,19 @@ async function generateSummary(options: {
 			promptTokens =
 				(chunk.requestInputTokens ?? chunk.inputTokens) -
 				(chunk.cacheReadTokens ?? 0);
+			usage = addCallUsage(usage, {
+				inputTokens: chunk.inputTokens,
+				outputTokens: chunk.outputTokens,
+				...(chunk.cacheReadTokens !== undefined
+					? { cacheReadTokens: chunk.cacheReadTokens }
+					: {}),
+				...(chunk.cacheWriteTokens !== undefined
+					? { cacheWriteTokens: chunk.cacheWriteTokens }
+					: {}),
+				...(chunk.totalCost !== undefined
+					? { totalCost: chunk.totalCost }
+					: {}),
+			});
 			continue;
 		}
 		if (chunk.type === "done") {
@@ -275,7 +291,7 @@ async function generateSummary(options: {
 			incompleteReason = chunk.incompleteReason ?? incompleteReason;
 		}
 	}
-	meterCall(options.meter, undefined, promptTokens);
+	meterCall(options.meter, undefined, promptTokens, usage);
 	options.logger?.debug("Generated compaction summary", {
 		outputChars: text.length,
 		reasoningChars,

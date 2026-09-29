@@ -337,6 +337,7 @@ async function projectAgentEvent(
 							? { reasoningTokens: agentEvent.reasoningTokens }
 							: {}),
 						...(agentEvent.timings ? { timings: agentEvent.timings } : {}),
+						...(agentEvent.auxiliary ? { auxiliary: true } : {}),
 					},
 					totals: {
 						inputTokens: agentEvent.totalInputTokens,

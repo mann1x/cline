@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { TaskServiceClient } from "@/services/grpc-client"
 import { AgentInspect } from "./AgentInspect"
+import { subagentTokenParts } from "./SubagentStatusRow"
 import { subagentCompactionDetail, subagentCompactionText } from "./subagentCompactions"
 import { subagentCapText, subagentOracleText, subagentOracleTitle } from "./subagentControls"
 import { subagentIdentity, subagentModelLabel, subagentSamplingText, subagentSamplingTitle } from "./subagentIdentity"
@@ -198,9 +199,8 @@ function AgentDetail({
 	const silent = agent.status === "running" ? liveness.silentForSec : undefined
 	const model = subagentModelLabel(agent)
 	const sampling = subagentSamplingText(agent.sampling)
-	const details = [agent.contextTokens ? `${Intl.NumberFormat("en-US").format(agent.contextTokens)} tokens` : ""].filter(
-		Boolean,
-	)
+	// What it spent, in and out -- priced apart -- and the window it holds now.
+	const details = subagentTokenParts(agent).filter((part) => part !== "0 tokens")
 	const tail = outputTail(agent)
 	const cap = subagentCapText(agent)
 	const oracle = subagentOracleText(agent.oracle)

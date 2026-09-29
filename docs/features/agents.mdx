@@ -478,7 +478,11 @@ Code: `team/spawn-sampling.ts`. This is available on `spawn_agent` (call and ent
 
 ### Compaction and tool counters
 
-Each delegated agent counts its tool calls and compactions (`07b717e67`). Compactions are broken down by cause: auto, pressure, overflow or manual, with the last one's tokens before and after. They are shown on the agent's chat row and in the strip, for example "7 tools called · 3 compactions · 12,000 tokens", and saved with the task. Teammates count over their life and per task (`c0ebb71af`). The counts are not sent to the model, and the CLI has no per-agent display.
+Each delegated agent counts its tool calls and compactions (`07b717e67`). Compactions are broken down by cause: auto, pressure, overflow or manual, with the last one's tokens before and after. They are shown on the agent's chat row and in the strip, for example "7 tools called · 3 compactions · 40,000 in / 1,200 out · 12,000 in context", and saved with the task. Teammates count over their life and per task (`c0ebb71af`).
+
+The row shows two token figures, because they are different numbers. In and out are what the agent spent over its whole run, kept apart because a per-token price charges them at different rates. The context is the window it is using now.
+
+The spend covers everything done for the agent: its own requests, plus every call its compactions make (summary, critics, retrospective) and its thinking condensations. The runtime starts counting from zero on each `continue` (a resume, a final report) and on a requeue or restart, so the round record adds each new run to what came before and never lowers a total. The lead's own compaction calls go into the task totals on the lead's connection. They are recorded without a request row, so they are never read as the window. The counts are not sent to the model, and the CLI has no per-agent display.
 
 ### Inspecting an agent's live output
 

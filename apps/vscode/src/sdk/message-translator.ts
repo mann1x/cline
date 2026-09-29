@@ -3814,6 +3814,29 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 			// api_req_started message's ClineApiReqInfo, so emit a follow-up
 			// api_req_started update carrying the usage data for cost display.
 			const usageEvent = normalizeUsageEvent(event)
+			// A compaction's calls: the task's to pay for, but not a request of
+			// the conversation. As a request row it would be read as the
+			// window -- every reader of the context takes the last one -- so it
+			// goes in as a usage record, on the lead's own connection.
+			if (event.auxiliary) {
+				messages.push({
+					ts: state.nextTs(),
+					type: "say",
+					say: "subagent_usage" as ClineSay,
+					text: JSON.stringify({
+						source: "compaction",
+						tokensIn: usageEvent.tokensIn,
+						tokensOut: usageEvent.tokensOut,
+						cacheWrites: usageEvent.cacheWrites,
+						cacheReads: usageEvent.cacheReads,
+						cost: usageEvent.totalCost,
+						...(state.activeProviderId() ? { providerId: state.activeProviderId() } : {}),
+						...(state.activeModelId() ? { modelId: state.activeModelId() } : {}),
+					}),
+					partial: false,
+				})
+				break
+			}
 			const apiReqInfo: ClineApiReqInfo = {
 				tokensIn: usageEvent.tokensIn,
 				tokensOut: usageEvent.tokensOut,

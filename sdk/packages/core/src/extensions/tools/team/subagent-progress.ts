@@ -661,6 +661,18 @@ export function createSubagentProgress(
 			// agent ran, so every row read "0 tokens" until -- and, since the row
 			// counts the context, also after -- it finished.
 			if (event.type === "usage") {
+				// A compaction's calls, spent for it: in the totals, but not a
+				// request of its own, so not the window it is using.
+				if (event.auxiliary) {
+					emitUpdate({
+						inputTokens: event.totalInputTokens,
+						outputTokens: event.totalOutputTokens,
+						...(event.totalCost !== undefined
+							? { totalCost: event.totalCost }
+							: {}),
+					});
+					return;
+				}
 				emitUpdate({
 					inputTokens: event.totalInputTokens,
 					outputTokens: event.totalOutputTokens,

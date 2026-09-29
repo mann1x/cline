@@ -477,6 +477,49 @@ describe("AgentRuntime", () => {
 		expect(addedMessages.map((message) => message.role)).toEqual(["user"]);
 	});
 
+	it("counts what preparing a turn spent, apart from the request it prepared", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{ type: "usage", usage: { inputTokens: 1_000, outputTokens: 50 } },
+				{ type: "text-delta", text: "done" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		// A compaction's calls, reported as each one finished.
+		const prepareTurn = vi.fn(
+			async (context: {
+				reportUsage?: (usage: {
+					inputTokens?: number;
+					outputTokens?: number;
+				}) => void;
+			}) => {
+				context.reportUsage?.({ inputTokens: 30_000, outputTokens: 900 });
+				context.reportUsage?.({ inputTokens: 31_000, outputTokens: 400 });
+				return undefined;
+			},
+		);
+		const runtime = new AgentRuntime({ model, prepareTurn });
+		const updates: Array<{ auxiliary?: boolean; output: number }> = [];
+		runtime.subscribe((event) => {
+			if (event.type === "usage-updated") {
+				updates.push({
+					...(event.auxiliary ? { auxiliary: true } : {}),
+					output: event.usage.outputTokens,
+				});
+			}
+		});
+
+		const result = await runtime.run("Hi");
+
+		expect(result.usage.inputTokens).toBe(62_000);
+		expect(result.usage.outputTokens).toBe(1_350);
+		expect(updates).toEqual([
+			{ auxiliary: true, output: 900 },
+			{ auxiliary: true, output: 1_300 },
+			{ output: 1_350 },
+		]);
+	});
+
 	it("recovers from a context-window overflow with a forced compaction and one retry", async () => {
 		const longPrompt = `Please review this: ${"lots of context ".repeat(50)}`;
 		const overflowEvent: AgentModelEvent = {

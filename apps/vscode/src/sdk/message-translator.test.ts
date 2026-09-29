@@ -1230,6 +1230,41 @@ describe("translateSessionEvent — a teammate's events", () => {
 	})
 })
 
+// swarm czbnh: a compaction's calls were never counted anywhere. The lead's
+// are the task's to pay for, but a request row would be read as the window.
+describe("translateSessionEvent — a compaction's usage", () => {
+	it("is a usage record on the lead's connection, not a request row", () => {
+		const state = new MessageTranslatorState()
+		const result = translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "session-1",
+					event: {
+						type: "usage",
+						auxiliary: true,
+						inputTokens: 31_000,
+						outputTokens: 900,
+						cacheReadTokens: 30_000,
+						totalInputTokens: 31_000,
+						totalOutputTokens: 900,
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+		expect(result.messages).toHaveLength(1)
+		expect(result.messages[0]).toMatchObject({ type: "say", say: "subagent_usage" })
+		expect(JSON.parse(result.messages[0].text ?? "{}")).toMatchObject({
+			source: "compaction",
+			tokensIn: 1_000,
+			tokensOut: 900,
+			cacheReads: 30_000,
+		})
+		expect(result.messages.some((message) => message.say === "api_req_started")).toBe(false)
+	})
+})
+
 // A background round (4.100.201) closes its spawn_agent call at once, so
 // "hide everything while a spawn is open" no longer covers its agents: 50
 // agents' text, reasoning and tool rows rendered in the lead's chat, their

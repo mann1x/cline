@@ -168,6 +168,17 @@ export interface ContinuationCallResult {
 	reasoningChars: number;
 	incompleteReason?: string;
 	timings?: RequestTimings;
+	/** What the call spent, as the provider reported it. */
+	usage?: CompactionCallUsage;
+}
+
+/** One call's tokens, as a provider reports them for billing. */
+export interface CompactionCallUsage {
+	inputTokens?: number;
+	outputTokens?: number;
+	cacheReadTokens?: number;
+	cacheWriteTokens?: number;
+	totalCost?: number;
 }
 
 /** The one seam every call goes through; tests replace it. */
@@ -270,6 +281,7 @@ export const defaultContinuationModel: ContinuationModel = async (
 	let reasoningChars = 0;
 	let incompleteReason: string | undefined;
 	let timings: RequestTimings | undefined;
+	let usage: CompactionCallUsage | undefined;
 	for await (const event of stream) {
 		switch (event.type) {
 			case "text-delta":
@@ -282,6 +294,7 @@ export const defaultContinuationModel: ContinuationModel = async (
 				if (event.timings) {
 					timings = event.timings;
 				}
+				usage = addCallUsage(usage, event.usage);
 				break;
 			case "finish":
 				if (event.reason === "error") {
@@ -298,8 +311,40 @@ export const defaultContinuationModel: ContinuationModel = async (
 				break;
 		}
 	}
-	return { text: text.trim(), reasoningChars, incompleteReason, timings };
+	return {
+		text: text.trim(),
+		reasoningChars,
+		incompleteReason,
+		timings,
+		...(usage ? { usage } : {}),
+	};
 };
+
+/** Two reports of usage as one. A provider may report a call in parts. */
+export function addCallUsage(
+	into: CompactionCallUsage | undefined,
+	next: CompactionCallUsage | undefined,
+): CompactionCallUsage | undefined {
+	if (!next) {
+		return into;
+	}
+	const sum = (a?: number, b?: number) =>
+		a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0);
+	const out: CompactionCallUsage = {};
+	for (const key of [
+		"inputTokens",
+		"outputTokens",
+		"cacheReadTokens",
+		"cacheWriteTokens",
+		"totalCost",
+	] as const) {
+		const value = sum(into?.[key], next[key]);
+		if (value !== undefined) {
+			out[key] = value;
+		}
+	}
+	return out;
+}
 
 /** Prompt tokens the engine actually evaluated for one call. */
 export function evaluatedPromptTokens(
@@ -323,6 +368,18 @@ export function evaluatedPromptTokens(
 export interface CompactionMeter {
 	/** Prompt tokens evaluated across every call of the compaction. */
 	prefillTokens: number;
+	/**
+	 * What every call of the compaction spent, as the providers reported it:
+	 * the prompt sent (cached or not) and what was written. Not the prefill
+	 * above -- that is what the engine had to evaluate -- but what a per-token
+	 * price is charged on, and what the agent's own totals count.
+	 */
+	usage?: CompactionCallUsage;
+	/**
+	 * Told each call's usage as the call finishes, so the agent it ran for
+	 * counts it -- live, and whether or not the compaction then succeeds.
+	 */
+	onUsage?: (usage: CompactionCallUsage) => void;
 	/** Calls that reported nothing to count. */
 	unmeasuredCalls: number;
 	calls: number;
@@ -343,8 +400,11 @@ export interface CompactionMeter {
 	notes: string[];
 }
 
-export function createCompactionMeter(): CompactionMeter {
+export function createCompactionMeter(
+	onUsage?: (usage: CompactionCallUsage) => void,
+): CompactionMeter {
 	return {
+		...(onUsage ? { onUsage } : {}),
 		prefillTokens: 0,
 		unmeasuredCalls: 0,
 		calls: 0,
@@ -361,11 +421,20 @@ export function meterCall(
 	meter: CompactionMeter | undefined,
 	timings: RequestTimings | undefined,
 	fallbackPromptTokens?: number,
+	usage?: CompactionCallUsage,
 ): void {
 	if (!meter) {
 		return;
 	}
 	meter.calls += 1;
+	meter.usage = addCallUsage(meter.usage, usage);
+	if (usage && meter.onUsage) {
+		try {
+			meter.onUsage(usage);
+		} catch {
+			// Counting is the host's business; it does not fail a compaction.
+		}
+	}
 	const evaluated = evaluatedPromptTokens(timings) ?? fallbackPromptTokens;
 	if (evaluated === undefined) {
 		meter.unmeasuredCalls += 1;
@@ -745,7 +814,7 @@ class Continuation implements CompactionContinuation {
 		for (let waits = 0; ; waits += 1) {
 			try {
 				const result = await model(call, this.logger);
-				meterCall(this.meter, result.timings);
+				meterCall(this.meter, result.timings, undefined, result.usage);
 				return result;
 			} catch (error) {
 				if (this.input.abortSignal?.aborted) {

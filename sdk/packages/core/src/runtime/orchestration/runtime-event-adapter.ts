@@ -299,7 +299,11 @@ export class RuntimeEventAdapter {
 			case "tool-finished":
 				return this.translateToolFinished(event);
 			case "usage-updated":
-				return this.translateUsage(event.usage, event.timings);
+				return this.translateUsage(
+					event.usage,
+					event.timings,
+					event.auxiliary === true,
+				);
 			case "status-notice":
 				return [
 					{
@@ -413,6 +417,7 @@ export class RuntimeEventAdapter {
 	private translateUsage(
 		next: AgentUsage,
 		timings?: RequestTimings,
+		auxiliary = false,
 	): AgentEvent[] {
 		const deltaInput = next.inputTokens - this.lastUsage.inputTokens;
 		const deltaOutput = next.outputTokens - this.lastUsage.outputTokens;
@@ -453,6 +458,7 @@ export class RuntimeEventAdapter {
 					deltaReasoning === 0 ? undefined : Math.max(0, deltaReasoning),
 				// Not a delta: this update carries exactly one request's timings.
 				...(timings ? { timings } : {}),
+				...(auxiliary ? { auxiliary: true } : {}),
 				totalInputTokens: next.inputTokens,
 				totalOutputTokens: next.outputTokens,
 				totalCacheReadTokens:

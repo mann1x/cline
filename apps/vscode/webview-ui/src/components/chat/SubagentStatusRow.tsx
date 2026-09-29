@@ -87,18 +87,33 @@ export function subagentStatsText(entry: {
 	outputTokens?: number
 	totalCost?: number
 }): string {
-	// The context it holds, when that was reported; otherwise what it spent.
-	// A finished agent's report carries the second only, and read "0 tokens".
-	const tokens = entry.contextTokens || (entry.inputTokens ?? 0) + (entry.outputTokens ?? 0)
 	return [
 		`${formatCount(entry.toolCalls)} tools called`,
 		// How many times it compacted, beside the tools -- only once it has.
 		subagentCompactionText(entry),
-		`${formatCount(tokens)} tokens`,
+		...subagentTokenParts(entry),
 		entry.totalCost ? formatCost(entry.totalCost) : "",
 	]
 		.filter(Boolean)
 		.join(" · ")
+}
+
+/**
+ * What an agent spent, in and out, and the context it holds -- two different
+ * numbers that one "tokens" figure used to stand for by turns.
+ *
+ * In and out apart because a per-token price charges them at very different
+ * rates. Both are the agent's whole run, its compactions included; the context
+ * is the window it is using now, and is gone once it has finished.
+ */
+export function subagentTokenParts(entry: { contextTokens?: number; inputTokens?: number; outputTokens?: number }): string[] {
+	const spent =
+		entry.inputTokens || entry.outputTokens
+			? `${formatCount(entry.inputTokens)} in / ${formatCount(entry.outputTokens)} out`
+			: ""
+	const context = entry.contextTokens ? `${formatCount(entry.contextTokens)} in context` : ""
+	const parts = [spent, context].filter(Boolean)
+	return parts.length > 0 ? parts : ["0 tokens"]
 }
 
 /**

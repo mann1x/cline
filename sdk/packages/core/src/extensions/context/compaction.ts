@@ -12,6 +12,7 @@ import {
 	type MessageWithMetadata,
 	measureRequestInputChars,
 	measureRequestReasoningChars,
+	type PrepareTurnUsage,
 } from "@cline/shared";
 import {
 	captureCompactionBudgetEmergency,
@@ -119,6 +120,13 @@ export interface ContextPipelinePrepareTurnInput {
 		message: string,
 		metadata?: Record<string, unknown>,
 	) => void;
+	/**
+	 * Count what this preparation spent on the model. Every call of a
+	 * compaction goes here, whether or not it produced a transcript: the
+	 * agent's row read 4,055 tokens out after 28 compactions whose summaries
+	 * and critics it never counted (swarm czbnh, 2026-09-29).
+	 */
+	reportUsage?: (usage: PrepareTurnUsage) => void;
 }
 
 export interface ContextPipelinePrepareTurnResult {
@@ -1407,7 +1415,7 @@ export function createContextCompactionPrepareTurn(
 
 		// What this compaction costs, on whichever path it takes: the line it
 		// logs, and the numbers a live gate compares before and after.
-		const meter = createCompactionMeter();
+		const meter = createCompactionMeter(context.reportUsage);
 		const builtinOptions: BuiltinCompactionStrategyOptions = {
 			context: compactionContext,
 			providerConfig: {

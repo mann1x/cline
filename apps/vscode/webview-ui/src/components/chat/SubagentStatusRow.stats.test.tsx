@@ -32,7 +32,7 @@ describe("what a finished sub-agent reports", () => {
 
 	it("still says what a run cost when it cost something", () => {
 		expect(subagentStatsText(entry({ toolCalls: 4, contextTokens: 12_000, totalCost: 0.0312 }))).toBe(
-			"4 tools called · 12,000 tokens · $0.03",
+			"4 tools called · 12,000 in context · $0.03",
 		)
 	})
 
@@ -42,8 +42,18 @@ describe("what a finished sub-agent reports", () => {
 	// or finished. A finished report carries what it spent and no context.
 	it("counts what the agent spent when no context size was reported", () => {
 		expect(subagentStatsText(entry({ toolCalls: 7, inputTokens: 40_000, outputTokens: 1_200 }))).toBe(
-			"7 tools called · 41,200 tokens",
+			"7 tools called · 40,000 in / 1,200 out",
 		)
+	})
+
+	// swarm czbnh: "140 tools called · 28 compactions · 57,401 tokens" -- the
+	// window, read as what it spent. In and out are priced apart.
+	it("says what it spent in and out, beside the context it holds", () => {
+		expect(
+			subagentStatsText(
+				entry({ toolCalls: 140, compactions: 28, inputTokens: 6_467_699, outputTokens: 48_210, contextTokens: 57_401 }),
+			),
+		).toBe("140 tools called · 28 compactions · 6,467,699 in / 48,210 out · 57,401 in context")
 	})
 
 	it("does not round a real price down to nothing", () => {
@@ -64,16 +74,16 @@ describe("how many times a sub-agent compacted", () => {
 
 	it("is said beside the tool count once it has compacted", () => {
 		expect(subagentStatsText(entry({ toolCalls: 7, contextTokens: 12_000, compactions: 1 }))).toBe(
-			"7 tools called · 1 compaction · 12,000 tokens",
+			"7 tools called · 1 compaction · 12,000 in context",
 		)
 		expect(subagentStatsText(entry({ toolCalls: 7, contextTokens: 12_000, ...compacted }))).toBe(
-			"7 tools called · 3 compactions · 12,000 tokens",
+			"7 tools called · 3 compactions · 12,000 in context",
 		)
 	})
 
 	it("is not said at all by an agent that never compacted", () => {
 		expect(subagentStatsText(entry({ toolCalls: 7, contextTokens: 12_000, compactions: 0 }))).toBe(
-			"7 tools called · 12,000 tokens",
+			"7 tools called · 12,000 in context",
 		)
 	})
 
@@ -110,7 +120,7 @@ describe("how many times a sub-agent compacted", () => {
 			}),
 		) as ClineMessage
 		render(<SubagentStatusRow isLast={false} message={saved} />)
-		const stats = screen.getByText("7 tools called · 3 compactions · 12,000 tokens")
+		const stats = screen.getByText("7 tools called · 3 compactions · 12,000 in context")
 		expect(stats.getAttribute("title")).toContain("2 × server KV pressure")
 	})
 })
