@@ -1,4 +1,4 @@
-import { setCompactionStrategyGlobally, setModelToolEnabledGlobally } from "@cline/core"
+import { parseOcrLanguages, setCompactionStrategyGlobally, setModelToolEnabledGlobally } from "@cline/core"
 import { readAtomicProtocolMode } from "@shared/AtomicProtocolSettings"
 import { Empty } from "@shared/proto/cline/common"
 import { PlanActMode, McpDisplayMode as ProtoMcpDisplayMode, UpdateSettingsRequest } from "@shared/proto/cline/state"
@@ -7,6 +7,7 @@ import { OpenaiReasoningEffort } from "@shared/storage/types"
 import { TelemetrySetting } from "@shared/TelemetrySetting"
 import { asUpdateChannel } from "@shared/UpdateSettings"
 import { ClineEnv } from "@/config"
+import { installDocumentReaderLanguages } from "@/sdk/document-reader-languages"
 import { updateQaCredentials } from "@/sdk/qa-credentials-store"
 import { McpDisplayMode } from "@/shared/McpDisplayMode"
 import { Logger } from "@/shared/services/Logger"
@@ -239,6 +240,24 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		}
 		if (request.extractDocumentEnabled !== undefined) {
 			controller.stateManager.setGlobalState("extractDocumentEnabled", !!request.extractDocumentEnabled)
+		}
+		if (request.extractDocumentOcr !== undefined) {
+			const engine = ["tesseract", "vision", "off"].includes(request.extractDocumentOcr)
+				? request.extractDocumentOcr
+				: "tesseract"
+			controller.stateManager.setGlobalState("extractDocumentOcr", engine)
+		}
+		if (request.extractDocumentOcrLanguages !== undefined) {
+			const languages = parseOcrLanguages(request.extractDocumentOcrLanguages)
+			const stored = (languages.length ? languages : ["eng"]).join(",")
+			controller.stateManager.setGlobalState("extractDocumentOcrLanguages", stored)
+			// Downloaded now, not at the first scanned page: the user is here and
+			// can see a failure, and a session should never fetch what nobody
+			// asked for mid-task.
+			void installDocumentReaderLanguages(stored.split(","))
+		}
+		if (request.extractDocumentDescribeImages !== undefined) {
+			controller.stateManager.setGlobalState("extractDocumentDescribeImages", !!request.extractDocumentDescribeImages)
 		}
 		if (request.polykvAgentsPriorityZero !== undefined) {
 			controller.stateManager.setGlobalState("polykvAgentsPriorityZero", !!request.polykvAgentsPriorityZero)

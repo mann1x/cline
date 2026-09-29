@@ -1058,7 +1058,9 @@ export function createExtractDocumentTool(
 	executor: ExtractDocumentExecutor,
 	config: Pick<DefaultToolsConfig, "cwd" | "extractDocumentTimeoutMs"> = {},
 ): AgentTool<ExtractDocumentInput, ToolOperationResult> {
-	const timeoutMs = config.extractDocumentTimeoutMs ?? 180_000;
+	// Recognition is the slow part: up to 40 scanned pages through tesseract,
+	// or 12 through a vision model, a request each.
+	const timeoutMs = config.extractDocumentTimeoutMs ?? 600_000;
 	const cwd = config.cwd ?? process.cwd();
 
 	return createTool<ExtractDocumentInput, ToolOperationResult>({
@@ -1071,7 +1073,7 @@ export function createExtractDocumentTool(
 			"The output goes to `.cline/extracted/<document name>/` in the workspace; pass `output_dir` only when the user asks for it somewhere else in the workspace. " +
 			"Use `range` to read part of a long document: pages of a PDF, slides, sheets, or chapters of an ebook. " +
 			'`images: "inline"` also attaches the first few pictures to the result, when you can see images; `images: "none"` skips them. ' +
-			"The first lines of the result say what the document is: its format, title and author, how many pages, slides, sheets or chapters it has, the table of contents of an ebook, and which PDF pages are scanned images of text, whose words are then not in the text. " +
+			"The first lines of the result say what the document is: its format, title and author, how many pages, slides, sheets or chapters it has, the table of contents of an ebook, and which PDF pages are scanned images of text. Their text is recognized (OCR) and marked as such, or the result says why it was not; `ocr` picks how. " +
 			`Output: a single ${TOOL_RESULT_ENVELOPE} \`query\` is \`extract_document:<path>\` and \`result\` holds that summary, then the text. ` +
 			"A long text is cut at `max_chars` and says where the rest is. A document with no text still has `success: true`, and the result says so.",
 		inputSchema: zodToJsonSchema(ExtractDocumentInputSchema),

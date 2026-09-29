@@ -107,6 +107,12 @@ export interface ParsedArgs {
 	 * extension's Document Reader setting.
 	 */
 	documents?: boolean;
+	/** `--ocr`: how extract_document reads scanned pages. */
+	ocr?: string;
+	/** `--ocr-languages`: tesseract languages, such as "eng+deu". */
+	ocrLanguages?: string;
+	/** `--describe-images`: the vision model describes extracted pictures. */
+	describeImages?: boolean;
 	acpMode: boolean;
 	model?: string;
 	provider?: string;

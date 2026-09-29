@@ -10,8 +10,8 @@ The tool is **off by default**. It is a niche tool, and each tool the model is o
 
 ## Turning it on
 
-- **VS Code:** Settings > Features > **Document Reader**.
-- **CLI:** pass `--documents`, or set `CLINE_DOCUMENTS=1`.
+- **VS Code:** Settings > Features > **Document Reader**. Its own settings appear under the switch once it is on: how scanned pages are read, the recognition languages, and picture descriptions.
+- **CLI:** pass `--documents`, or set `CLINE_DOCUMENTS=1`. `--ocr`, `--ocr-languages` and `--describe-images` are the same three settings.
 
 When it is off and the model tries `read_files` on a document, the model is told what the file is and that you can turn the Document Reader on. It does not receive the bytes. When it is on, `read_files` points the model to `extract_document` instead.
 
@@ -43,7 +43,7 @@ By default, everything goes to `.cline/extracted/<document name>/` in the worksp
 └── images/
     ├── image1.png
     ├── image2.jpg
-    └── index.json       # every picture: file, type, size, and where it came from
+    └── index.json       # every picture: file, type, size, where it came from, and its description
 ```
 
 The whole text is always written to the file. The tool result returns up to `max_chars` of it (60,000 by default) and says where the rest is. Pictures are linked from the Markdown by their relative path, and duplicates are written once.
@@ -60,6 +60,9 @@ The model can write somewhere else with `output_dir`, as long as it is inside th
 | `images` | `"files"` writes pictures to `images/`. `"inline"` also attaches the first few to the result, for a model that can see images. `"none"` skips pictures. | `"files"` |
 | `output_dir` | A folder inside the workspace | `.cline/extracted/<name>/` |
 | `password` | The password of an encrypted PDF or Office file | none |
+| `ocr` | How scanned PDF pages are read: `"auto"` follows the setting, `"tesseract"`, `"vision"`, or `"none"` | `"auto"` |
+| `ocr_languages` | tesseract language codes, such as `"eng+deu"` | the setting |
+| `describe_images` | Have the vision model describe the pictures | the setting |
 | `max_chars` | 1,000 to 400,000 | 60,000 |
 
 `images: "inline"` attaches up to four pictures, and only when the current model accepts image input. Each must be PNG, JPEG, GIF or WebP, at most 1.5 MB, and not smaller than 32 pixels on both sides. For a model without vision, the result says so and the pictures stay on disk.
@@ -72,7 +75,37 @@ Some PDF pages are photographs of text. Each PDF page is classified on its own, 
 - **Already recognized:** a scan with an invisible OCR text layer (PDF render mode 3). That text is kept and returned.
 - **Drawn as shapes:** at least 200 path operations with no text and no pictures. These are charts or outlined lettering; there is nothing to extract.
 
-In this release, scanned pages are only reported. The page images are written to `images/`, so a vision model can look at them. Built-in OCR (tesseract, English bundled) and vision-model recognition are planned for the next phase.
+Scanned pages are then read with text recognition (OCR). The recognized text goes into the page's section, under a line naming what read it, such as `[Text recognized from the page image by tesseract (eng, 95% confidence)]`. The result header says which pages were recognized and which were not, and why.
+
+Pages are read from the images they are drawn from, including bilevel scans stored as CCITT or JBIG2 and JPEG 2000 images. pdf.js's own WebAssembly decoders ship with the tool for these.
+
+### How pages are read
+
+The **Scanned pages** setting (CLI: `--ocr`) chooses the engine:
+
+| Setting | What reads the page |
+|---|---|
+| **Tesseract** (default) | [tesseract](https://github.com/naptha/tesseract.js) on your machine, as WebAssembly. No request leaves the machine. |
+| **Vision model** | The model on the Vision tab of the API settings (CLI: `--vision-model`), asked to transcribe the page. It reads handwriting, columns and tables better, and each page is a request. With no vision model, a session model that can see images is handed the page images and reads them itself. With neither, tesseract reads the pages, and the result says so. |
+| **Off** | Nothing. Scanned pages are named in the header and their words are not in the text. |
+
+The model can choose per call with `ocr`: `"vision"` for a page tesseract read badly, `"none"` to skip recognition. `ocr` does not override **Off**.
+
+### Languages
+
+tesseract reads English out of the box: the English model (tessdata best_int, 3 MB) ships with the tool. Add other languages under **Recognition languages**, or with `--ocr-languages eng+deu` in the CLI. Each one is downloaded once, 2 to 5 MB, from jsDelivr's copy of the tesseract.js language data into `tessdata/` in the Cerebriline data directory. The extension downloads a language when you add it and tells you whether it worked. The CLI downloads languages before the session starts. A session never downloads anything by itself: a language that is asked for but not installed is named in the result.
+
+Every language you add makes recognition slower, so pick only the ones your documents use.
+
+### Per-call bounds
+
+One call reads at most 40 scanned pages with tesseract, 12 with a vision model, or 4 handed to the session's model. The header names the pages past the bound, and a `range` reads them.
+
+## Picture descriptions
+
+With **Describe pictures** on (CLI: `--describe-images`, per call `describe_images`), the vision model describes each picture the reader extracts: what kind of picture it is, what it shows, its text, and for a chart its axes and trend. The description is stored in `images/index.json` as `description`, and a shortened form (up to 300 characters) becomes the picture's alt text in the Markdown. That way a model that cannot see images still learns what the pictures show.
+
+Up to 16 pictures are described per call. Pictures smaller than 48 pixels on both sides, formats a model cannot view, and the images scanned pages are drawn from are skipped. Describing needs a vision model; without one, the result says so.
 
 ## Pictures from older Office files
 
@@ -86,4 +119,4 @@ In plan mode, `extract_document` writes only to its default folder. A call with 
 
 - Files larger than 200 MB are not read.
 - Office containers (DOCX, PPTX, XLSX, ODF) are limited to 256 MB decompressed and 20,000 entries, which guards against zip bombs.
-- A single call times out after three minutes.
+- A single call times out after ten minutes, which leaves room for 40 recognized pages.

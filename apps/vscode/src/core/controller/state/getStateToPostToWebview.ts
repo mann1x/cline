@@ -82,6 +82,9 @@ export async function getStateToPostToWebview(controller: {
 	const subagentCommandsEnabled = stateManager.getGlobalSettingsKey("subagentCommandsEnabled")
 	const teammatesEnabled = stateManager.getGlobalSettingsKey("teammatesEnabled")
 	const extractDocumentEnabled = stateManager.getGlobalSettingsKey("extractDocumentEnabled")
+	const extractDocumentOcr = stateManager.getGlobalSettingsKey("extractDocumentOcr")
+	const extractDocumentOcrLanguages = stateManager.getGlobalSettingsKey("extractDocumentOcrLanguages")
+	const extractDocumentDescribeImages = stateManager.getGlobalSettingsKey("extractDocumentDescribeImages")
 	const polykvAgentsPriorityZero = stateManager.getGlobalSettingsKey("polykvAgentsPriorityZero")
 	const agentModelOverride = stateManager.getGlobalSettingsKey("agentModelOverride")
 	const strongNudgesEnabled = stateManager.getGlobalSettingsKey("strongNudgesEnabled")
@@ -221,6 +224,9 @@ export async function getStateToPostToWebview(controller: {
 		subagentCommandsEnabled,
 		teammatesEnabled,
 		extractDocumentEnabled,
+		extractDocumentOcr,
+		extractDocumentOcrLanguages,
+		extractDocumentDescribeImages,
 		polykvAgentsPriorityZero,
 		agentModelOverride,
 		strongNudgesEnabled,

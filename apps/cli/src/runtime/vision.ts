@@ -25,6 +25,15 @@ const VISION_SYSTEM_PROMPT =
 	"Be specific and complete, and do not speculate about what the code behind it might be doing. " +
 	"Write plain prose with no preamble.";
 
+/**
+ * For an image that comes with its own instruction (a scanned page to
+ * transcribe, a document's picture to describe): the answer is then the
+ * instruction's result alone, with none of the screen-description framing.
+ */
+const INSTRUCTED_SYSTEM_PROMPT =
+	"You read images for another AI model that cannot see them. " +
+	"Follow the instruction exactly and reply with its result only, with no preamble.";
+
 /** Guards against a describer that never returns and stalls the whole turn. */
 const VISION_REQUEST_TIMEOUT_MS = 120_000;
 
@@ -71,16 +80,22 @@ async function describeOne(
 	const timeout = setTimeout(() => abort.abort(), VISION_REQUEST_TIMEOUT_MS);
 	try {
 		const stream = await model.stream({
-			systemPrompt: VISION_SYSTEM_PROMPT,
+			systemPrompt: image.instruction
+				? INSTRUCTED_SYSTEM_PROMPT
+				: VISION_SYSTEM_PROMPT,
 			messages: [
 				{
 					role: "user",
 					content: [
 						{
 							type: "text",
-							text: image.context
-								? `Describe this image. For context, the tool that produced it also reported:\n\n${image.context}`
-								: "Describe this image.",
+							text: image.instruction
+								? image.context
+									? `${image.instruction}\n\nContext:\n${image.context}`
+									: image.instruction
+								: image.context
+									? `Describe this image. For context, the tool that produced it also reported:\n\n${image.context}`
+									: "Describe this image.",
 						},
 						{
 							type: "image",

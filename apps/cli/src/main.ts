@@ -1,7 +1,12 @@
 import { fstatSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename } from "node:path";
-import type { CheckApprover, ToolPolicy } from "@cline/core";
+import type {
+	CheckApprover,
+	DocumentReaderSettings,
+	ToolPolicy,
+} from "@cline/core";
+import { installOcrLanguages, parseOcrLanguages } from "@cline/core";
 import { resolveAgentSlotLimit } from "@cline/llms";
 
 import { registerDisposable } from "@cline/shared";
@@ -65,7 +70,7 @@ import {
 	getCliTelemetryService,
 	identifyTelemetryAccount,
 } from "./utils/telemetry";
-import type { Config } from "./utils/types";
+import type { Config, ParsedArgs } from "./utils/types";
 import { runConnectWizard } from "./wizards/connect";
 import { runMcpWizard } from "./wizards/mcp";
 import { runScheduleWizard } from "./wizards/schedule";
@@ -1411,8 +1416,10 @@ export async function runCli(): Promise<void> {
 			enableAgentTeams: !isYoloMode && teammatesRequested(args),
 			// The document reader, off unless asked for: `--documents` or
 			// CLINE_DOCUMENTS=1, mirroring the extension's Document Reader setting.
-			enableExtractDocument:
-				args.documents === true || process.env.CLINE_DOCUMENTS?.trim() === "1",
+			enableExtractDocument: documentsRequested(args),
+			...(documentsRequested(args)
+				? { documentReader: await cliDocumentReader(args, loggerAdapter.core) }
+				: {}),
 			// Let a delegated agent run commands in the overlay sandbox, off by
 			// default (as in the desktop app) and opted into with
 			// CLINE_SUBAGENT_COMMANDS=1. The binaries dir is always resolved: the
@@ -1769,4 +1776,45 @@ export async function runCli(): Promise<void> {
 	} finally {
 		stopUserInstructionService();
 	}
+}
+
+function documentsRequested(args: ParsedArgs): boolean {
+	return args.documents === true || process.env.CLINE_DOCUMENTS?.trim() === "1";
+}
+
+/**
+ * The Document Reader's settings from the command line, with any OCR language
+ * that is not installed yet downloaded now, before the session starts: a
+ * scanned page mid-task is no place to find out a download failed.
+ */
+async function cliDocumentReader(
+	args: ParsedArgs,
+	logger: { log?: (message: string) => void },
+): Promise<DocumentReaderSettings> {
+	const ocr =
+		args.ocr === "vision" || args.ocr === "off" ? args.ocr : "tesseract";
+	if (args.ocr && args.ocr !== ocr) {
+		process.stderr.write(
+			`--ocr ${args.ocr} is not an engine; using tesseract. Use tesseract, vision or off.\n`,
+		);
+	}
+	const ocrLanguages = parseOcrLanguages(args.ocrLanguages ?? "eng");
+	if (ocr !== "off" && ocrLanguages.some((code) => code !== "eng")) {
+		const result = await installOcrLanguages(ocrLanguages);
+		if (result.installed.length) {
+			logger.log?.(
+				`[Documents] Installed OCR language(s): ${result.installed.join(", ")}`,
+			);
+		}
+		for (const failure of result.failed) {
+			process.stderr.write(
+				`OCR language ${failure.language} was not installed: ${failure.reason}\n`,
+			);
+		}
+	}
+	return {
+		ocr,
+		ocrLanguages: ocrLanguages.length ? ocrLanguages : ["eng"],
+		describePictures: args.describeImages === true,
+	};
 }

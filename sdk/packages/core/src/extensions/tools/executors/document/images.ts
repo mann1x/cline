@@ -23,6 +23,8 @@ export interface ExtractedImage {
 	source?: string;
 	/** The document's own alt text or caption, when it carries one. */
 	alt?: string;
+	/** What the vision model saw in it, when descriptions were asked for. */
+	description?: string;
 	/**
 	 * Set for a format no model can view (EMF, WMF, PICT, TIFF, BMP): the file is
 	 * kept, but it is not a picture anyone downstream can look at as it is.

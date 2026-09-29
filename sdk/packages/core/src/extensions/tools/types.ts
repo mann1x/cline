@@ -514,9 +514,10 @@ export interface DefaultToolsConfig {
 
 	/**
 	 * Timeout for extract_document, in milliseconds. Long, because a
-	 * several-hundred-page PDF with pictures is minutes of work, not seconds.
+	 * several-hundred-page PDF with pictures is minutes of work, and each
+	 * scanned page read by a vision model is a request.
 	 *
-	 * @default 180000
+	 * @default 600000
 	 */
 	extractDocumentTimeoutMs?: number;
 

@@ -20,6 +20,10 @@ import {
 	type ToolExecutors,
 	ToolPresets,
 } from "../../../extensions/tools";
+import {
+	type DocumentExtractExecutorOptions,
+	documentReaderExecutorOptions,
+} from "../../../extensions/tools/executors/document-extract";
 import type {
 	SubAgentEndContext,
 	SubAgentSettledContext,
@@ -140,16 +144,23 @@ export type { DelegatedSandboxProvider };
 export function delegatedToolOptions(
 	workspace: DelegatedWorkspace | undefined,
 	leadExecutors: Partial<ToolExecutors> | undefined,
+	/** The lead's document reader settings and vision model, when the tool is on. */
+	extractDocument?: DocumentExtractExecutorOptions,
 ): {
 	executorOptions?: DelegatedWorkspace["executorOptions"];
 	executors?: Partial<ToolExecutors>;
 	enableBash?: false;
 } {
+	const documents = extractDocument ? { extractDocument } : {};
 	if (!workspace) {
-		return { executors: leadExecutors, enableBash: false };
+		return {
+			executors: leadExecutors,
+			enableBash: false,
+			...(extractDocument ? { executorOptions: documents } : {}),
+		};
 	}
 	return {
-		executorOptions: workspace.executorOptions,
+		executorOptions: { ...workspace.executorOptions, ...documents },
 		...(workspace.allowCommands ? {} : { enableBash: false }),
 	};
 }
@@ -329,7 +340,11 @@ export function createSessionSpawnTool(
 						// Sandboxed agents build overlay-backed executors from options
 						// and take no lead overrides; the shell is last, so it beats
 						// the mode preset.
-						...delegatedToolOptions(workspace, toolExecutors),
+						...delegatedToolOptions(
+							workspace,
+							toolExecutors,
+							documentReaderExecutorOptions(config),
+						),
 					}),
 					config.extraTools,
 				)
@@ -577,7 +592,11 @@ export function createSessionSwarmTool(
 							// executors and no shell, since an unsandboxed
 							// `run_commands` would write straight to the real
 							// workspace (escape-critical).
-							...delegatedToolOptions(workspace, toolExecutors),
+							...delegatedToolOptions(
+								workspace,
+								toolExecutors,
+								documentReaderExecutorOptions(config),
+							),
 						}),
 						config.extraTools,
 					),

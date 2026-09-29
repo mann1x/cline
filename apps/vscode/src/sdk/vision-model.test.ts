@@ -1,7 +1,18 @@
 import type { ApiConfiguration } from "@shared/api"
 import { captureApiConfigurationSnapshot } from "@shared/api-config-snapshot"
-import { describe, expect, it } from "vitest"
-import { buildVisionApiConfiguration } from "./vision-model"
+import { describe, expect, it, vi } from "vitest"
+import { buildVisionApiConfiguration, createVisionImageDescriber } from "./vision-model"
+
+const requests = vi.hoisted(() => [] as { system: string; content: Array<Record<string, unknown>> }[])
+vi.mock("./sdk-api-handler", () => ({
+	buildApiHandler: () => ({
+		setAbortSignal: () => {},
+		async *createMessage(system: string, messages: Array<{ content: Array<Record<string, unknown>> }>) {
+			requests.push({ system, content: messages[0]?.content ?? [] })
+			yield { type: "text", text: "the answer" }
+		},
+	}),
+}))
 
 function storedSnapshot(configuration: Partial<ApiConfiguration>): string {
 	return JSON.stringify(captureApiConfigurationSnapshot(configuration as ApiConfiguration, "act"))
@@ -55,5 +66,25 @@ describe("buildVisionApiConfiguration", () => {
 
 	it("survives a stored value that is not a snapshot at all", () => {
 		expect(buildVisionApiConfiguration({} as ApiConfiguration, "{broken")).toBeUndefined()
+	})
+})
+
+describe("createVisionImageDescriber", () => {
+	it("describes a screenshot when the image carries no instruction", async () => {
+		requests.length = 0
+		const describe = createVisionImageDescriber({} as ApiConfiguration)
+		expect(await describe([{ image: "AAAA", context: "console: ok" }])).toEqual(["the answer"])
+		expect(requests[0]?.system).toContain("describing an image for another AI model")
+		expect(requests[0]?.content[0]?.text).toContain("Describe this image.")
+	})
+
+	// extract_document hands a scanned page over to be transcribed, not described:
+	// the screen-description framing would come back as a description of a page.
+	it("follows an image's own instruction, with its context after it", async () => {
+		requests.length = 0
+		const describe = createVisionImageDescriber({} as ApiConfiguration)
+		await describe([{ image: "AAAA", instruction: "Transcribe all of its text.", context: "From a.pdf, page 3." }])
+		expect(requests[0]?.system).toContain("Follow the instruction exactly")
+		expect(requests[0]?.content[0]?.text).toBe("Transcribe all of its text.\n\nContext:\nFrom a.pdf, page 3.")
 	})
 })

@@ -1,10 +1,15 @@
 /**
- * PDF through unpdf (pdf.js, serverless build: no canvas, no worker file).
+ * PDF through pdf.js (`pdfjs-dist`, legacy build, in this thread: no canvas,
+ * no worker file). See `pdfjs.ts` for why not unpdf.
  */
 
-import type { getDocumentProxy } from "unpdf";
-import type { DocumentReadResult, ReadOptions } from "./formats";
+import type {
+	PDFDocumentProxy,
+	PDFPageProxy,
+} from "pdfjs-dist/legacy/build/pdf.mjs";
+import type { DocumentReadResult, PageImage, ReadOptions } from "./formats";
 import { imageMarkdown } from "./images";
+import { loadPdfjs, pdfjsDocumentOptions } from "./pdfjs";
 
 /**
  * A page with less visible text than this, and most of its area covered by
@@ -25,6 +30,16 @@ const SCANNED_COVERAGE = 0.5;
 const VECTOR_PATH_OPS = 200;
 /** Images this small are rules, bullets and spacers. */
 const MIN_IMAGE_SIDE = 4;
+/**
+ * A picture covering less of a scanned page than this is a logo or a stamp,
+ * not the page: recognizing it adds noise and costs a second pass.
+ */
+const OCR_MIN_COVERAGE = 0.1;
+
+/** pdf.js's `ImageKind`: how an image's pixels are laid out. */
+const GRAYSCALE_1BPP = 1;
+const RGB_24BPP = 2;
+const RGBA_32BPP = 3;
 
 type Matrix = [number, number, number, number, number, number];
 
@@ -40,25 +55,40 @@ function multiply(a: Matrix, b: readonly number[]): Matrix {
 	];
 }
 
+/** Pixels as pdf.js decodes them. */
+interface DecodedImage {
+	width: number;
+	height: number;
+	/** An `ImageKind`; image masks are 1 bit per pixel, like GRAYSCALE_1BPP. */
+	kind?: number;
+	data?: Uint8Array | Uint8ClampedArray;
+}
+
+/** An image the page paints: by name in the page's objects, or inline. */
+type ImageDraw =
+	| { key: string; area: number }
+	| { image: DecodedImage; mask: boolean; area: number };
+
 interface PageShape {
 	/** Share of the page covered by images, 0-1. */
 	coverage: number;
 	/** Whether text is drawn in render mode 3 (invisible): an OCR layer. */
 	invisibleText: boolean;
 	pathOps: number;
+	pageArea: number;
+	draws: ImageDraw[];
 }
 
 /**
- * What a page draws: how much of it is pictures, and whether it hides text.
+ * What a page draws: how much of it is pictures, which pictures, and whether
+ * it hides text.
  *
  * Read from the operator list rather than guessed from the text: a picture's
  * area on the page is its transform's determinant, since pdf.js paints every
  * image into the unit square.
  */
 async function measurePage(
-	page: Awaited<
-		ReturnType<Awaited<ReturnType<typeof getDocumentProxy>>["getPage"]>
-	>,
+	page: PDFPageProxy,
 	ops: Record<string, number>,
 ): Promise<PageShape> {
 	const [x0, y0, x1, y1] = page.view as [number, number, number, number];
@@ -69,9 +99,11 @@ async function measurePage(
 	let imageArea = 0;
 	let invisibleText = false;
 	let pathOps = 0;
+	const draws: ImageDraw[] = [];
 	for (let i = 0; i < list.fnArray.length; i++) {
 		const fn = list.fnArray[i];
 		const args = list.argsArray[i] as unknown[];
+		const area = () => Math.abs(ctm[0] * ctm[3] - ctm[1] * ctm[2]);
 		if (fn === ops.save) {
 			stack.push(ctm);
 		} else if (fn === ops.restore) {
@@ -82,11 +114,26 @@ async function measurePage(
 			if (args[0] === 3) invisibleText = true;
 		} else if (
 			fn === ops.paintImageXObject ||
-			fn === ops.paintInlineImageXObject ||
-			fn === ops.paintImageXObjectRepeat ||
-			fn === ops.paintImageMaskXObject
+			fn === ops.paintImageXObjectRepeat
 		) {
-			imageArea += Math.abs(ctm[0] * ctm[3] - ctm[1] * ctm[2]);
+			imageArea += area();
+			if (typeof args[0] === "string") {
+				draws.push({ key: args[0], area: area() / pageArea });
+			}
+		} else if (fn === ops.paintInlineImageXObject) {
+			imageArea += area();
+			draws.push({
+				image: args[0] as DecodedImage,
+				mask: false,
+				area: area() / pageArea,
+			});
+		} else if (fn === ops.paintImageMaskXObject) {
+			imageArea += area();
+			draws.push({
+				image: args[0] as DecodedImage,
+				mask: true,
+				area: area() / pageArea,
+			});
 		} else if (fn === ops.constructPath) {
 			pathOps++;
 		}
@@ -95,6 +142,8 @@ async function measurePage(
 		coverage: Math.min(1, imageArea / pageArea),
 		invisibleText,
 		pathOps,
+		pageArea,
+		draws,
 	};
 }
 
@@ -108,28 +157,70 @@ function isGarbled(text: string): boolean {
 	const letters = text.replace(/\s/g, "");
 	if (letters.length < 20) return false;
 	// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are part of what a garbled layer is made of
-	const bad = letters.match(/[\uE000-\uF8FF\uFFFD\u0000-\u0008]/g)?.length ?? 0;
+	const bad = letters.match(/[-�\u0000-\u0008]/g)?.length ?? 0;
 	return bad / letters.length > 0.3;
 }
 
+function objectOf(
+	page: PDFPageProxy,
+	key: string,
+): Promise<DecodedImage | null> {
+	const objects = key.startsWith("g_") ? page.commonObjs : page.objs;
+	return new Promise((resolve) => {
+		try {
+			objects.get(key, (value: unknown) =>
+				resolve((value as DecodedImage) ?? null),
+			);
+		} catch {
+			resolve(null);
+		}
+	});
+}
+
+/**
+ * An image's pixels as a PNG, or undefined for a layout this cannot write.
+ *
+ * One bit per pixel (a bilevel scan, or a stencil mask) is widened to 8-bit
+ * gray. pdf.js packs both with 1 for paper and 0 for ink, each row padded to a
+ * byte.
+ */
 function toPng(
 	encodePng: typeof import("fast-png").encode,
-	image: {
-		data: Uint8ClampedArray;
-		width: number;
-		height: number;
-		channels: 1 | 3 | 4;
-	},
-): Uint8Array {
+	image: DecodedImage,
+	mask: boolean,
+): Uint8Array | undefined {
+	const { width, height, data } = image;
+	if (!data || !width || !height) return undefined;
+	const bilevel = mask || image.kind === GRAYSCALE_1BPP;
+	if (bilevel) {
+		const row = (width + 7) >> 3;
+		if (data.length < row * height) return undefined;
+		const gray = new Uint8Array(width * height);
+		for (let y = 0; y < height; y++) {
+			const offset = y * row;
+			for (let x = 0; x < width; x++) {
+				gray[y * width + x] =
+					((data[offset + (x >> 3)] ?? 0) >> (7 - (x & 7))) & 1 ? 255 : 0;
+			}
+		}
+		return encodePng({ width, height, data: gray, channels: 1, depth: 8 });
+	}
+	const channels =
+		image.kind === RGB_24BPP
+			? 3
+			: image.kind === RGBA_32BPP
+				? 4
+				: data.length / (width * height);
+	if (channels !== 1 && channels !== 3 && channels !== 4) return undefined;
 	return encodePng({
-		width: image.width,
-		height: image.height,
+		width,
+		height,
 		data: new Uint8Array(
-			image.data.buffer,
-			image.data.byteOffset,
-			image.data.byteLength,
+			data.buffer,
+			data.byteOffset,
+			width * height * channels,
 		),
-		channels: image.channels,
+		channels,
 		depth: 8,
 	});
 }
@@ -154,30 +245,47 @@ export async function readPdf(
 	data: Uint8Array,
 	options: ReadOptions,
 ): Promise<DocumentReadResult> {
-	// Loaded on first use: pdf.js is megabytes of code a session that never
-	// reads a PDF should not pay for at startup.
-	const { extractImages, getDocumentProxy, getMeta, getResolvedPDFJS } =
-		await import("unpdf");
+	const pdfjs = await loadPdfjs();
 	const { encode: encodePng } = await import("fast-png");
-	let pdf: Awaited<ReturnType<typeof getDocumentProxy>>;
+	const task = pdfjs.getDocument({
+		...pdfjsDocumentOptions(),
+		// A copy: pdf.js takes ownership of what it is given.
+		data: data.slice(),
+		...(options.password ? { password: options.password } : {}),
+	});
+	let pdf: PDFDocumentProxy;
 	try {
-		pdf = await getDocumentProxy(data, {
-			...(options.password ? { password: options.password } : {}),
-			// Font data is needed only to draw glyphs; text extraction reads the
-			// mapping without it.
-			disableFontFace: true,
-		});
+		pdf = await task.promise;
 	} catch (error) {
+		await task.destroy().catch(() => {});
 		throw passwordError(error, options.password) ?? error;
 	}
-	const { OPS } = await getResolvedPDFJS();
-	const ops = OPS as unknown as Record<string, number>;
-	const meta = await getMeta(pdf).catch(() => undefined);
+	try {
+		return await readPages(
+			pdf,
+			pdfjs.OPS as unknown as Record<string, number>,
+			encodePng,
+			options,
+		);
+	} finally {
+		// Ends the in-thread worker and frees the parsed document.
+		await task.destroy().catch(() => {});
+	}
+}
+
+async function readPages(
+	pdf: PDFDocumentProxy,
+	ops: Record<string, number>,
+	encodePng: typeof import("fast-png").encode,
+	options: ReadOptions,
+): Promise<DocumentReadResult> {
+	const meta = await pdf.getMetadata().catch(() => undefined);
 	const info = (meta?.info ?? {}) as Record<string, unknown>;
 
 	const total = pdf.numPages;
 	const read: number[] = [];
 	const scannedPages: number[] = [];
+	const recognizedPages: number[] = [];
 	const ocrLayerPages: number[] = [];
 	const vectorPages: number[] = [];
 	const parts: string[] = [];
@@ -199,14 +307,15 @@ export async function readPdf(
 			.trim();
 		const shape = await measurePage(page, ops);
 		const visibleChars = text.replace(/\s/g, "").length;
-		const scanned = shape.coverage >= SCANNED_COVERAGE;
-		if (scanned && shape.invisibleText && visibleChars > 0) {
+		const covered = shape.coverage >= SCANNED_COVERAGE;
+		let scanned = false;
+		if (covered && shape.invisibleText && visibleChars > 0) {
 			ocrLayerPages.push(number);
 		} else if (
-			scanned &&
+			covered &&
 			(visibleChars < SCANNED_TEXT_CHARS || isGarbled(text))
 		) {
-			scannedPages.push(number);
+			scanned = true;
 		} else if (
 			visibleChars === 0 &&
 			shape.coverage === 0 &&
@@ -214,41 +323,77 @@ export async function readPdf(
 		) {
 			vectorPages.push(number);
 		} else if (isGarbled(text)) {
-			scannedPages.push(number);
+			scanned = true;
+		}
+		if (scanned) scannedPages.push(number);
+
+		// Decoded once, for the images folder and for recognition both.
+		const wantPixels = options.wantImages || (scanned && !!options.recognize);
+		const pictures: (PageImage & { stem: string })[] = [];
+		if (wantPixels) {
+			let n = 0;
+			for (const draw of shape.draws) {
+				const decoded =
+					"key" in draw ? await objectOf(page, draw.key) : draw.image;
+				if (
+					!decoded ||
+					decoded.width < MIN_IMAGE_SIDE ||
+					decoded.height < MIN_IMAGE_SIDE
+				)
+					continue;
+				const png = toPng(encodePng, decoded, "mask" in draw && draw.mask);
+				if (!png) continue;
+				n++;
+				pictures.push({
+					png,
+					width: decoded.width,
+					height: decoded.height,
+					coverage: draw.area,
+					stem: `p${number}-${n}`,
+				});
+			}
+		}
+
+		let recognized: string | undefined;
+		if (scanned && options.recognize) {
+			const pageImages = pictures.filter(
+				(picture) => picture.coverage >= OCR_MIN_COVERAGE,
+			);
+			const result =
+				pageImages.length > 0
+					? await options.recognize(number, pageImages)
+					: undefined;
+			if (result?.text.trim()) {
+				recognizedPages.push(number);
+				recognized = `[Text recognized from the page image by ${result.by}]\n\n${result.text.trim()}`;
+			}
 		}
 
 		const links: string[] = [];
 		if (options.wantImages) {
-			const images = await extractImages(pdf, number).catch(() => []);
-			let n = 0;
-			for (const image of images) {
-				if (image.width < MIN_IMAGE_SIDE || image.height < MIN_IMAGE_SIDE)
-					continue;
-				n++;
+			for (const picture of pictures) {
 				const added = options.images.add({
-					data: toPng(encodePng, image),
-					stem: `p${number}-${n}`,
+					data: picture.png,
+					stem: picture.stem,
 					mediaType: "image/png",
-					width: image.width,
-					height: image.height,
+					width: picture.width,
+					height: picture.height,
 					source: `page ${number}`,
 				});
 				if (added) links.push(imageMarkdown(added));
 			}
 		}
 		parts.push(
-			[`## Page ${number}`, text, ...links]
+			[`## Page ${number}`, text, recognized ?? "", ...links]
 				.filter((part) => part.length > 0)
 				.join("\n\n"),
 		);
 		page.cleanup();
 	}
-	// Ends the in-process worker and frees the parsed document.
-	await pdf.loadingTask.destroy();
 
 	return {
 		markdown: parts.join("\n\n"),
-		reader: "unpdf (pdf.js)",
+		reader: "pdf.js",
 		...(typeof info.Title === "string" && info.Title.trim()
 			? { title: info.Title.trim() }
 			: {}),
@@ -257,6 +402,7 @@ export async function readPdf(
 			: {}),
 		units: { name: "page", total, read },
 		...(scannedPages.length ? { scannedPages } : {}),
+		...(recognizedPages.length ? { recognizedPages } : {}),
 		...(ocrLayerPages.length ? { ocrLayerPages } : {}),
 		...(vectorPages.length ? { vectorPages } : {}),
 	};

@@ -15,6 +15,7 @@ import PromptTemplatesSection from "../PromptTemplatesSection"
 import QaCredentialsField from "../QaCredentialsField"
 import Section from "../Section"
 import { updateSetting } from "../utils/settingsHandlers"
+import { DocumentReaderOptions } from "./DocumentReaderOptions"
 
 // Reusable checkbox component for feature settings
 interface FeatureCheckboxProps {
@@ -92,7 +93,7 @@ const agentFeatures: FeatureToggle[] = [
 		id: "extract-document",
 		label: "Document Reader",
 		description:
-			"Let the model read documents that are not plain text: PDF, Word (DOCX and DOC), PowerPoint (PPTX and PPT), Excel (XLSX and XLS), OpenDocument, RTF, and ebooks (EPUB, MOBI, AZW3, FB2). The text is written to .cline/extracted/ in the workspace, with the pictures from the document saved beside it. Applies to subagents too.",
+			"Let the model read documents that are not plain text: PDF, Word (DOCX and DOC), PowerPoint (PPTX and PPT), Excel (XLSX and XLS), OpenDocument, RTF, and ebooks (EPUB, MOBI, AZW3, FB2). The text is written to .cline/extracted/ in the workspace, with the pictures from the document saved beside it. Scanned PDF pages are read with text recognition (OCR). Applies to subagents too.",
 		stateKey: "extractDocumentEnabled",
 		settingKey: "extractDocumentEnabled",
 	},
@@ -280,6 +281,9 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		subagentCommandsEnabled,
 		teammatesEnabled,
 		extractDocumentEnabled,
+		extractDocumentOcr,
+		extractDocumentOcrLanguages,
+		extractDocumentDescribeImages,
 		agentModelOverride,
 		strongNudgesEnabled,
 		worktreesEnabled,
@@ -322,14 +326,22 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 							className="relative p-3 pt-0 my-3 rounded-md border border-editor-widget-border/50"
 							id="agent-features">
 							{agentFeatures.map((feature) => (
-								<FeatureRow
-									checked={featureState[feature.stateKey]}
-									description={feature.description}
-									isVisible={featureVisibility[feature.stateKey] ?? true}
-									key={feature.id}
-									label={feature.label}
-									onChange={(checked) => updateSetting(feature.settingKey, checked)}
-								/>
+								<div key={feature.id}>
+									<FeatureRow
+										checked={featureState[feature.stateKey]}
+										description={feature.description}
+										isVisible={featureVisibility[feature.stateKey] ?? true}
+										label={feature.label}
+										onChange={(checked) => updateSetting(feature.settingKey, checked)}
+									/>
+									{feature.id === "extract-document" && extractDocumentEnabled && (
+										<DocumentReaderOptions
+											describeImages={extractDocumentDescribeImages}
+											languages={extractDocumentOcrLanguages}
+											ocr={extractDocumentOcr}
+										/>
+									)}
+								</div>
 							))}
 							<div className="space-y-2 py-3">
 								<Label className="text-sm font-medium text-foreground" htmlFor="agent-model-override">

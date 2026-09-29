@@ -2,6 +2,11 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { getGeneratedModelsForProvider, MODEL_COLLECTIONS_BY_PROVIDER_ID } from "@cline/llms"
 import { createFileReadExecutor } from "../../../../sdk/packages/core/src/extensions/tools/executors/file-read"
 
+export {
+	installOcrLanguages,
+	parseOcrLanguages,
+} from "../../../../sdk/packages/core/src/extensions/tools/executors/document/ocr"
+
 export interface OAuthCredentials {
 	accessToken?: string
 	refreshToken?: string

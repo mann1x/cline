@@ -1238,6 +1238,28 @@ export const ExtractDocumentInputSchema = z.object({
 		.describe(
 			"The password of an encrypted PDF or Office document, when the user has given one.",
 		),
+	ocr: z
+		.enum(["auto", "tesseract", "vision", "none"])
+		.nullable()
+		.optional()
+		.describe(
+			'How scanned PDF pages are read: "auto" (default) uses the user\'s setting; "tesseract" recognizes text on this machine; "vision" asks the vision model, which reads handwriting and complex layouts better; "none" skips it.',
+		),
+	ocr_languages: z
+		.string()
+		.max(200)
+		.nullable()
+		.optional()
+		.describe(
+			'tesseract language codes for the scanned pages, such as "eng+deu"; omit for the user\'s setting.',
+		),
+	describe_images: z
+		.boolean()
+		.nullable()
+		.optional()
+		.describe(
+			"Have the vision model describe each extracted picture, into images/index.json and the alt text; omit for the user's setting.",
+		),
 	max_chars: z.coerce
 		.number()
 		.int()

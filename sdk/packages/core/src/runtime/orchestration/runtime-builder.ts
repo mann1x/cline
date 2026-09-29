@@ -48,6 +48,10 @@ import {
 import { createPlanModeCommandGuardExtension } from "../../extensions/tools/command-guard-extension";
 import { DefaultToolNames } from "../../extensions/tools/constants";
 import {
+	type DocumentExtractExecutorOptions,
+	documentReaderExecutorOptions,
+} from "../../extensions/tools/executors/document-extract";
+import {
 	AgentTeamsRuntime,
 	agentEndpointKey,
 	agentSlotLimitsByEndpoint,
@@ -264,6 +268,8 @@ function createBuiltinToolsList(
 	 * straight against the real workspace (escape-critical).
 	 */
 	delegated?: { workspace?: DelegatedWorkspace },
+	/** The session's document reader settings and vision model, when the tool is on. */
+	extractDocument?: DocumentExtractExecutorOptions,
 ): AgentTool[] {
 	const preset = ToolPresets[resolveToolPresetName({ mode })];
 	const toolRoutingConfig = resolveToolRoutingConfig(
@@ -283,6 +289,7 @@ function createBuiltinToolsList(
 						// The overlay and the launcher-rooted shell. Not the lead's
 						// read receipts: this agent's reads are not the lead's.
 						...delegated.workspace.executorOptions,
+						...(extractDocument ? { extractDocument } : {}),
 						...(fileReadMaxChars !== undefined
 							? { fileRead: { maxReadChars: fileReadMaxChars } }
 							: {}),
@@ -294,6 +301,7 @@ function createBuiltinToolsList(
 						// `grep`/`sed`/`awk` guard against a registry nothing ever
 						// writes to.
 						...(readReceipts ? { receipts: readReceipts } : {}),
+						...(extractDocument ? { extractDocument } : {}),
 						...(fileReadMaxChars !== undefined
 							? { fileRead: { maxReadChars: fileReadMaxChars } }
 							: {}),
@@ -889,6 +897,8 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 					input.runCommandExecutionController,
 					input.readReceipts,
 					fileReadMaxChars,
+					undefined,
+					documentReaderExecutorOptions(config),
 				),
 			);
 			const agentPluginMcpServers = pluginsEnabled
@@ -1191,6 +1201,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 										input.readReceipts,
 										fileReadMaxChars,
 										{ workspace },
+										documentReaderExecutorOptions(config),
 									),
 									config.extraTools,
 								),
@@ -1394,6 +1405,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 											.delegatedSandboxes?.()
 											.openSync(teammateSandboxKey(agentId)),
 									},
+									documentReaderExecutorOptions(config),
 								)
 						: undefined,
 					teammateConfigProvider: delegatedAgentConfigProvider,

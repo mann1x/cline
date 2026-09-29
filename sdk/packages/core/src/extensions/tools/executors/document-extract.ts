@@ -27,9 +27,18 @@ import {
 	VIEWABLE_MEDIA_TYPES,
 } from "./document/images";
 import { readLegacyOffice } from "./document/legacy";
+import type { DocumentReaderSettings } from "./document/ocr";
 import { readOffice } from "./document/office";
 import { readPdf } from "./document/pdf";
 import { formatUnits, parseUnitRange } from "./document/range";
+import {
+	altTextOf,
+	DESCRIBE_LIMIT,
+	type DescribeImages,
+	describePictures,
+	planRecognition,
+	type RecognitionPlan,
+} from "./document/recognition";
 
 /** Where extractions go when the call names no `output_dir`. */
 export const DEFAULT_EXTRACTION_DIR = path.join(".cline", "extracted");
@@ -41,6 +50,14 @@ export interface DocumentExtractExecutorOptions {
 	overlay?: AgentOverlay;
 	/** @default 200 MB */
 	maxFileSizeBytes?: number;
+	/** The user's Document Reader settings: how scanned pages are read, and descriptions. */
+	reader?: DocumentReaderSettings;
+	/**
+	 * The session's vision model (the Vision tab, or the CLI's
+	 * `--vision-model`), when there is one: it reads scanned pages for
+	 * `ocr: "vision"` and describes pictures.
+	 */
+	describeImages?: DescribeImages;
 }
 
 const DEFAULT_MAX_FILE_BYTES = 200 * 1024 * 1024;
@@ -49,6 +66,28 @@ const INLINE_IMAGE_LIMIT = 4;
 const INLINE_IMAGE_BYTES = 1_500_000;
 /** Pictures smaller than this on both sides are not worth a look. */
 const INLINE_MIN_SIDE = 32;
+/** A scanned page handed to the model to read: larger than a picture, still bounded. */
+const PAGE_IMAGE_BYTES = 3_500_000;
+/** Pictures smaller than this on both sides are bullets and icons, not worth describing. */
+const DESCRIBE_MIN_SIDE = 48;
+
+/**
+ * The executor options a session's configuration gives the tool: the user's
+ * settings and the session's vision model. The same for the lead and every
+ * agent it delegates to, so a delegated agent reads a scan the way the lead
+ * would.
+ */
+export function documentReaderExecutorOptions(config: {
+	enableExtractDocument?: boolean;
+	documentReader?: DocumentReaderSettings;
+	describeImages?: DescribeImages;
+}): DocumentExtractExecutorOptions | undefined {
+	if (config.enableExtractDocument !== true) return undefined;
+	return {
+		...(config.documentReader ? { reader: config.documentReader } : {}),
+		...(config.describeImages ? { describeImages: config.describeImages } : {}),
+	};
+}
 
 function isInside(root: string, target: string): boolean {
 	const rel = path.relative(root, target);
@@ -141,7 +180,8 @@ async function read(
 export function createDocumentExtractExecutor(
 	options: DocumentExtractExecutorOptions = {},
 ): ExtractDocumentExecutor {
-	const { overlay } = options;
+	const { overlay, describeImages } = options;
+	const settings = options.reader ?? {};
 	const maxFileSizeBytes = options.maxFileSizeBytes ?? DEFAULT_MAX_FILE_BYTES;
 
 	return async (input, callCwd, context) => {
@@ -205,6 +245,18 @@ export function createDocumentExtractExecutor(
 
 		const wantImages = input.images !== "none";
 		const images = new ImageCollector("images");
+		const modelSupportsImages = context.metadata?.modelSupportsImages === true;
+		// Only a PDF has scanned pages to read.
+		const recognition: RecognitionPlan | undefined =
+			format === "pdf"
+				? planRecognition({
+						request: input.ocr ?? undefined,
+						languages: input.ocr_languages ?? undefined,
+						settings,
+						describeImages,
+						modelSupportsImages,
+					})
+				: undefined;
 		let result: DocumentReadResult;
 		try {
 			result = await read(sourcePath, data, format, {
@@ -213,14 +265,26 @@ export function createDocumentExtractExecutor(
 				...(input.password ? { password: input.password } : {}),
 				...(range ? { selects: range.selects } : {}),
 				scratchDir,
+				...(recognition?.recognize ? { recognize: recognition.recognize } : {}),
 			});
 		} finally {
 			await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => {});
+			await recognition?.close();
 		}
+
+		const describeNote = await describeExtractedPictures({
+			wanted:
+				wantImages &&
+				(input.describe_images ?? settings.describePictures ?? false),
+			describeImages,
+			images,
+			result,
+			documentName: shown(cwd, requested),
+		});
 
 		const suffix = range ? `.${range.spec.replace(/[^0-9,-]/g, "")}` : "";
 		const asText = input.format === "text";
-		const markdown = tidyMarkdown(result.markdown);
+		const markdown = tidyMarkdown(describeNote.markdown ?? result.markdown);
 		const body = asText ? markdownToText(markdown) : markdown;
 		const documentFile = path.join(
 			outputDir,
@@ -258,6 +322,13 @@ export function createDocumentExtractExecutor(
 			range: range?.spec,
 			bodyChars: body.length,
 			wantImages,
+			notes: [
+				...(recognition?.notes(
+					result.scannedPages ?? [],
+					result.recognizedPages ?? [],
+				) ?? []),
+				...(describeNote.note ? [describeNote.note] : []),
+			],
 		});
 		const maxChars = input.max_chars ?? 60_000;
 		const cut = body.length > maxChars;
@@ -272,15 +343,31 @@ export function createDocumentExtractExecutor(
 				: []),
 		].join("\n\n");
 
-		if (input.images !== "inline" || images.images.length === 0) {
+		const pages = (recognition?.attachments ?? []).filter(
+			(page) => page.png.byteLength <= PAGE_IMAGE_BYTES,
+		);
+		const inline = input.images === "inline" && images.images.length > 0;
+		if (!inline && pages.length === 0) {
 			return text;
 		}
-		if (context.metadata?.modelSupportsImages !== true) {
+		if (!modelSupportsImages) {
 			return `${text}\n\n[images: "inline" attaches nothing here: this model does not take image input. The pictures are the files listed above.]`;
 		}
 		const attached: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		for (const { image, data: bytes } of images.entries()) {
-			if (attached.length > INLINE_IMAGE_LIMIT) break;
+		for (const page of pages) {
+			attached.push({
+				type: "text",
+				text: `Scanned page ${page.page}, to read:`,
+			});
+			attached.push({
+				type: "image",
+				data: Buffer.from(page.png).toString("base64"),
+				mediaType: "image/png",
+			});
+		}
+		const pictureStart = attached.length;
+		for (const { image, data: bytes } of inline ? images.entries() : []) {
+			if (attached.length - pictureStart >= INLINE_IMAGE_LIMIT * 2) break;
 			if (
 				!VIEWABLE_MEDIA_TYPES.has(image.mediaType) ||
 				bytes.byteLength > INLINE_IMAGE_BYTES
@@ -320,6 +407,8 @@ function describe(input: {
 	range?: string;
 	bodyChars: number;
 	wantImages: boolean;
+	/** Recognition and description, said by the parts that did them. */
+	notes: readonly string[];
 }): string {
 	const { cwd, result } = input;
 	const lines = [
@@ -349,11 +438,7 @@ function describe(input: {
 			`Contents:\n${shownContents.map((entry) => `  ${entry}`).join("\n")}${result.contents.length > shownContents.length ? `\n  … ${result.contents.length - shownContents.length} more` : ""}`,
 		);
 	}
-	if (result.scannedPages?.length) {
-		lines.push(
-			`Scanned pages ${formatUnits(result.scannedPages)}: an image of text with no text layer, so their words are not in this text. ${input.wantImages ? "Their page images are in the images folder; " : 'Call again without images: "none" to get their page images; '}text recognition (OCR) is not available yet.`,
-		);
-	}
+	for (const note of input.notes) lines.push(note);
 	if (result.ocrLayerPages?.length) {
 		lines.push(
 			`Pages ${formatUnits(result.ocrLayerPages)} are scans that already carry a recognized text layer; that text is included.`,
@@ -374,4 +459,79 @@ function describe(input: {
 		`Wrote ${shown(cwd, input.documentFile)} (${input.bodyChars.toLocaleString("en-US")} characters). ${imageLine}`,
 	);
 	return lines.join("\n");
+}
+
+function escapeRegExp(text: string): string {
+	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Descriptions of the document's pictures by the vision model, written into
+ * each picture's index entry and, shortened, into its alt text.
+ *
+ * Not the pictures a scanned page is drawn from: those are the page, and its
+ * text is what recognition is for.
+ */
+async function describeExtractedPictures(input: {
+	wanted: boolean;
+	describeImages: DescribeImages | undefined;
+	images: ImageCollector;
+	result: DocumentReadResult;
+	documentName: string;
+}): Promise<{ markdown?: string; note?: string }> {
+	if (!input.wanted || input.images.images.length === 0) return {};
+	if (!input.describeImages) {
+		return {
+			note: "Pictures were not described: no vision model is configured (the Vision tab of the API settings, or the CLI's --vision-model).",
+		};
+	}
+	const scanned = new Set(
+		(input.result.scannedPages ?? []).map((page) => `page ${page}`),
+	);
+	const candidates = input.images
+		.entries()
+		.filter(
+			({ image }) =>
+				VIEWABLE_MEDIA_TYPES.has(image.mediaType) &&
+				!(image.source && scanned.has(image.source)) &&
+				!(
+					image.width &&
+					image.height &&
+					image.width < DESCRIBE_MIN_SIDE &&
+					image.height < DESCRIBE_MIN_SIDE
+				),
+		);
+	if (candidates.length === 0) return {};
+	const chosen = candidates.slice(0, DESCRIBE_LIMIT);
+	const descriptions = await describePictures(
+		input.describeImages,
+		chosen.map(({ image, data }) => ({
+			link: image.link,
+			mediaType: image.mediaType,
+			data,
+			...(image.source ? { source: image.source } : {}),
+		})),
+		input.documentName,
+	);
+	let markdown = input.result.markdown;
+	let described = 0;
+	chosen.forEach(({ image }, index) => {
+		const description = descriptions[index];
+		if (!description) return;
+		described++;
+		image.description = description;
+		const alt = altTextOf(description);
+		markdown = markdown.replace(
+			new RegExp(`!\\[[^\\]]*\\]\\(${escapeRegExp(image.link)}\\)`, "g"),
+			() => `![${alt}](${image.link})`,
+		);
+	});
+	const beyond =
+		candidates.length > chosen.length
+			? ` One call describes at most ${DESCRIBE_LIMIT}; the rest have none.`
+			: "";
+	return {
+		markdown,
+		note: `${described} of ${candidates.length} picture(s) described by the vision model, in the index and the alt text.${beyond}`,
+	};
 }

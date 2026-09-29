@@ -252,6 +252,18 @@ export function addRootOptions(cmd: Command): Command {
 				"Offer extract_document, which reads PDF, Word, PowerPoint, Excel (current and 97-2003), OpenDocument, RTF and ebooks (EPUB, MOBI, AZW3, FB2) to text and writes their pictures to files under .cline/extracted/. Off by default; CLINE_DOCUMENTS=1 does the same",
 			)
 			.option(
+				"--ocr <engine>",
+				'How extract_document reads a scanned PDF page: "tesseract" (the default, on this machine), "vision" (the --vision-model, or the session model when it can see), or "off"',
+			)
+			.option(
+				"--ocr-languages <codes>",
+				'tesseract languages for scanned pages, such as "eng+deu". English ships with the CLI; any other is downloaded once into the data directory before the session starts',
+			)
+			.option(
+				"--describe-images",
+				"Have the --vision-model describe each picture extract_document writes, into its images/index.json and alt text",
+			)
+			.option(
 				"--worktree",
 				`Auto-create a detached git worktree under ${configDirDefault()}/worktrees/ and run the task there`,
 			)
@@ -512,6 +524,11 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 	if (opts.worktree !== undefined) result.worktree = !!opts.worktree;
 	if (opts.teammates !== undefined) result.teammates = !!opts.teammates;
 	if (opts.documents !== undefined) result.documents = !!opts.documents;
+	if (opts.ocr !== undefined) result.ocr = String(opts.ocr);
+	if (opts.ocrLanguages !== undefined)
+		result.ocrLanguages = String(opts.ocrLanguages);
+	if (opts.describeImages !== undefined)
+		result.describeImages = !!opts.describeImages;
 	if (opts.cwd !== undefined) result.cwd = opts.cwd;
 	if (opts.teamName !== undefined) result.teamName = opts.teamName;
 	if (opts.system !== undefined) result.systemPrompt = opts.system;

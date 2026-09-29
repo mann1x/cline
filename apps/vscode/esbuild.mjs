@@ -274,11 +274,31 @@ function copyOfficeOxide(destDir) {
 	console.log(`[office-oxide] ${(bytes / 1024 / 1024).toFixed(1)} MB -> ${into}`)
 }
 
+/**
+ * The Document Reader's data files: pdf.js's decoders and character maps,
+ * tesseract's worker and core, and the English OCR model. Written by core's
+ * own script, which the CLI build runs too, so both ship the same layout.
+ */
+async function writeDocumentReaderAssets(destDir) {
+	const candidates = [
+		path.join(__dirname, "node_modules", "@cline", "core", "scripts", "document-reader-assets.mjs"),
+		path.resolve(__dirname, "..", "..", "sdk", "packages", "core", "scripts", "document-reader-assets.mjs"),
+	]
+	const script = candidates.find((candidate) => fs.existsSync(candidate))
+	if (!script) {
+		console.warn("[documents] core's document-reader-assets.mjs not found; scanned pages will not be readable")
+		return
+	}
+	const { writeDocumentReaderAssets: write } = await import(script)
+	await write(destDir, { esbuild })
+}
+
 async function main() {
 	const config = standalone ? standaloneConfig : e2eBuild ? e2eBuildConfig : extensionConfig
 	if (!e2eBuild) {
 		copyGrammars(path.resolve(__dirname, destDir))
 		copyOfficeOxide(path.resolve(__dirname, destDir))
+		await writeDocumentReaderAssets(path.resolve(__dirname, destDir))
 	}
 	const extensionCtx = await esbuild.context(config)
 	if (watch) {

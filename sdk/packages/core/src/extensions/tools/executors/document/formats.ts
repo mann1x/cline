@@ -212,6 +212,29 @@ export interface ReadOptions {
 	selects?: (unit: number) => boolean;
 	/** A scratch directory inside the extraction directory, removed afterwards. */
 	scratchDir: string;
+	/**
+	 * Reads the text of a scanned page from its pictures (OCR). Undefined when
+	 * recognition is off; resolves undefined for a page it did not read.
+	 */
+	recognize?: (
+		page: number,
+		images: readonly PageImage[],
+	) => Promise<RecognizedText | undefined>;
+}
+
+/** A picture a scanned page is drawn from, as a PNG. */
+export interface PageImage {
+	png: Uint8Array;
+	width: number;
+	height: number;
+	/** Share of the page it covers, 0-1. */
+	coverage: number;
+}
+
+export interface RecognizedText {
+	text: string;
+	/** Who read it, for the page's note: `tesseract (eng, 91%)`, `the vision model`. */
+	by: string;
 }
 
 export interface DocumentReadResult {
@@ -225,6 +248,8 @@ export interface DocumentReadResult {
 	contents?: string[];
 	/** Pages whose text is an image of text, for OCR. */
 	scannedPages?: number[];
+	/** Scanned pages whose text was recognized here, by `ReadOptions.recognize`. */
+	recognizedPages?: number[];
 	/** Pages scanned with a hidden text layer already on them. */
 	ocrLayerPages?: number[];
 	/** Pages drawn as shapes: no text and no pictures to read. */

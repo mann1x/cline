@@ -6,7 +6,7 @@ import {
 	readdirSync,
 	statSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { $ } from "bun";
 
@@ -152,6 +152,39 @@ if (existsSync(officeOxideSource)) {
 		recursive: true,
 	});
 }
+
+// The Document Reader's other data files: pdf.js's decoders and character
+// maps, tesseract's worker and core, and the English OCR model. Written by
+// core's script, as for the extension. Its worker is bundled through Bun.build,
+// which takes esbuild's plugin shape; only `build` is adapted.
+const { writeDocumentReaderAssets } = await import(
+	join(rootDir, "../../sdk/packages/core/scripts/document-reader-assets.mjs")
+);
+await writeDocumentReaderAssets(join(rootDir, "./dist"), {
+	esbuild: {
+		build: async (options: {
+			entryPoints: string[];
+			outfile: string;
+			minify?: boolean;
+			external?: string[];
+			plugins?: unknown[];
+		}) => {
+			const built = await Bun.build({
+				entrypoints: options.entryPoints,
+				outdir: dirname(options.outfile),
+				naming: basename(options.outfile),
+				target: "node",
+				format: "cjs",
+				minify: options.minify ?? false,
+				external: options.external ?? [],
+				plugins: (options.plugins ?? []) as never,
+			});
+			if (!built.success) {
+				throw new AggregateError(built.logs, "tesseract worker bundle failed");
+			}
+		},
+	},
+});
 
 if (existsSync(hubWebviewDistPath)) {
 	mkdirSync(dirname(cliHubWebviewDistPath), { recursive: true });

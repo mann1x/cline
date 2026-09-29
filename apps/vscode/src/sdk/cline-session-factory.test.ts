@@ -1797,6 +1797,26 @@ describe("buildSessionConfig", () => {
 		expect((await buildSessionConfig({ cwd: "/tmp/workspace" })).enableExtractDocument).toBe(true)
 	})
 
+	// The reader's own settings travel with it, and only with it.
+	it("passes the Document Reader's OCR and description settings to core", async () => {
+		const stored: Record<string, unknown> = {
+			extractDocumentEnabled: true,
+			extractDocumentOcr: "vision",
+			extractDocumentOcrLanguages: "eng,deu",
+			extractDocumentDescribeImages: true,
+		}
+		// The mock's type was inferred from boolean settings; these are strings too.
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) => stored[key] as boolean | undefined)
+		expect((await buildSessionConfig({ cwd: "/tmp/workspace" })).documentReader).toEqual({
+			ocr: "vision",
+			ocrLanguages: ["eng", "deu"],
+			describePictures: true,
+		})
+
+		stored.extractDocumentEnabled = false
+		expect((await buildSessionConfig({ cwd: "/tmp/workspace" })).documentReader).toBeUndefined()
+	})
+
 	// Teammates sits under Subagents and means nothing without it.
 	it("offers no teams with Teammates on and Subagents off", async () => {
 		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) =>

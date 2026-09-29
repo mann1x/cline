@@ -421,6 +421,15 @@ const USER_SETTINGS_FIELDS = {
 	// niche reader whose schema every request would otherwise carry. Applies to
 	// the lead and every agent it delegates to.
 	extractDocumentEnabled: { default: false as boolean },
+	// How the Document Reader reads a scanned PDF page: "tesseract" on this
+	// machine, "vision" through the Vision tab's model (or the session's model
+	// when it can see and there is none), or "off".
+	extractDocumentOcr: { default: "tesseract" as string },
+	// tesseract languages, comma-separated. English ships with the extension;
+	// any other is downloaded into the data directory when it is added here.
+	extractDocumentOcrLanguages: { default: "eng" as string },
+	// Whether the vision model describes each picture the reader extracts.
+	extractDocumentDescribeImages: { default: false as boolean },
 	// A global model for delegated agents, overriding the session's own model for
 	// them only. Empty means agents run on the session's model. One value on the
 	// session's provider — not per-provider, and it never touches the lead.

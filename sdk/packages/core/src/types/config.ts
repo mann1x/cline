@@ -17,6 +17,7 @@ import type {
 	SessionWorkspaceConfig,
 } from "@cline/shared";
 import type { CompactionRevisions } from "../extensions/context/compaction-revisions";
+import type { DocumentReaderSettings } from "../extensions/tools/executors/document/ocr";
 import type { ToolRoutingRule } from "../extensions/tools/model-tool-routing";
 import type { QaCredential } from "../extensions/tools/qa-credentials";
 import type { TaskProgressState } from "../extensions/tools/task-progress";
@@ -295,6 +296,12 @@ export interface CoreRuntimeFeatures {
 	 * that offers it pays for its schema.
 	 */
 	enableExtractDocument?: boolean;
+	/**
+	 * How `extract_document` reads scanned pages (tesseract, the vision model,
+	 * or not at all) and whether it describes pictures. Read only when the
+	 * tool is on; the vision model is `describeImages`.
+	 */
+	documentReader?: DocumentReaderSettings;
 	disableMcpSettingsTools?: boolean;
 	yolo?: boolean;
 }

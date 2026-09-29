@@ -388,6 +388,12 @@ export interface AgentImageToDescribe {
 	mediaType?: string;
 	/** Text that accompanied the image, e.g. the tool's console output. */
 	context?: string;
+	/**
+	 * What to do with the image, in place of describing it: transcribing a
+	 * scanned page, say. The answer is then that alone, with no description
+	 * around it. `context` still goes along.
+	 */
+	instruction?: string;
 }
 
 export type ProviderErrorClass =

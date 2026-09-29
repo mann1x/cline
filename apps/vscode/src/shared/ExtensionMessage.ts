@@ -227,6 +227,12 @@ export interface ExtensionState {
 	teammatesEnabled?: boolean
 	/** Whether the model is offered extract_document; see state-keys.ts. */
 	extractDocumentEnabled?: boolean
+	/** How the Document Reader reads scanned pages; see state-keys.ts. */
+	extractDocumentOcr?: string
+	/** tesseract languages, comma-separated; see state-keys.ts. */
+	extractDocumentOcrLanguages?: string
+	/** Whether the vision model describes extracted pictures; see state-keys.ts. */
+	extractDocumentDescribeImages?: boolean
 	/** "Use PolyKV agents as Priority 0"; see state-keys.ts. */
 	polykvAgentsPriorityZero?: boolean
 	agentModelOverride?: string

@@ -19,6 +19,7 @@ import {
 	getProviderAuthHandler,
 	mergeAgentHooks,
 	type ProviderSettings,
+	parseOcrLanguages,
 	readCompactionStrategyGlobally,
 	resolveProviderApiKeyFromSettings,
 	type StartSessionResult,
@@ -2225,6 +2226,14 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// as well as the lead.
 	const extractDocumentEnabled =
 		input.taskSettings?.extractDocumentEnabled ?? stateManager.getGlobalSettingsKey("extractDocumentEnabled") ?? false
+	// How it reads a scanned page and whether it describes pictures. The vision
+	// model it uses for both is the describer installed below, when the Vision
+	// tab names one.
+	const documentReader = {
+		ocr: readOcrEngine(stateManager.getGlobalSettingsKey("extractDocumentOcr")),
+		ocrLanguages: parseOcrLanguages(stateManager.getGlobalSettingsKey("extractDocumentOcrLanguages") ?? "eng"),
+		describePictures: stateManager.getGlobalSettingsKey("extractDocumentDescribeImages") === true,
+	}
 	// Whether a turn that calls nothing is nudged to continue even when
 	// nothing says work is unfinished. On by default, which is what the
 	// extension did before this was a setting.
@@ -2580,6 +2589,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			: undefined,
 		strongNudges: strongNudgesEnabled,
 		enableExtractDocument: extractDocumentEnabled,
+		...(extractDocumentEnabled ? { documentReader } : {}),
 		// Sent whether or not auto compaction is on. `enabled` is the only thing
 		// that decides whether the transcript gets compacted — the runtime
 		// returns no compaction pass without it — but this object is also where
@@ -2777,4 +2787,9 @@ export function createHistoryItemFromSession(sessionId: string, prompt: string, 
 		modelId,
 		cwdOnTaskInitialization: cwd,
 	}
+}
+
+/** The stored OCR engine, with anything unrecognized read as the default. */
+function readOcrEngine(value: string | undefined): "tesseract" | "vision" | "off" {
+	return value === "vision" || value === "off" ? value : "tesseract"
 }
