@@ -123,6 +123,33 @@ describe("the pinned head", () => {
 		expect(result?.messages).toEqual([turn("K"), turn("R"), turn("summary")]);
 	});
 
+	// The continuation writer sends `apiMessages` as the request that continues
+	// the agent's cached conversation. With the head taken off it opened with
+	// the agent's own turns right after the pool, matched the slot's cache for
+	// only the pool's 10,436 tokens, and prefilled 40-55k tokens on every
+	// compaction (pandorum swarm, 2026-09-29: writer=10436/57068).
+	it("hands compaction the head the request still opens with", async () => {
+		let seen: { api?: unknown[]; head?: unknown[] } = {};
+		const prepare = pinConversationHead(
+			async (input: {
+				messages: readonly unknown[];
+				apiMessages?: readonly unknown[];
+				pinnedHead?: readonly unknown[];
+			}) => {
+				seen = {
+					...(input.apiMessages ? { api: [...input.apiMessages] } : {}),
+					...(input.pinnedHead ? { head: [...input.pinnedHead] } : {}),
+				};
+				return { messages: [turn("summary")] };
+			},
+			["K", "R"],
+		);
+		const whole = [turn("K"), turn("R"), turn("task"), turn("work")];
+		await prepare?.({ messages: whole, apiMessages: whole });
+		expect(seen.api).toEqual([turn("task"), turn("work")]);
+		expect(seen.head).toEqual([turn("K"), turn("R")]);
+	});
+
 	it("passes a conversation whose head has already changed through untouched", async () => {
 		let seen: unknown[] = [];
 		const prepare = pinConversationHead(

@@ -67,6 +67,7 @@ async function compact(
 	providerConfig: Record<string, unknown>,
 	maxInputTokens = 3_000,
 	log = vi.fn(),
+	pinnedHead?: LlmsProviders.Message[],
 ) {
 	const messages: LlmsProviders.Message[] = [
 		{ role: "user", content: "Original task" },
@@ -100,6 +101,7 @@ async function compact(
 		tools: [],
 		messages,
 		apiMessages: messages,
+		...(pinnedHead ? { pinnedHead } : {}),
 		model: {
 			id: "mock-model",
 			provider: providerId,
@@ -165,6 +167,47 @@ describe("compaction on a prompt-cache provider", () => {
 		expect(line).toContain(
 			"path=fallback (continuation wrote no usable summary; transcript as text)",
 		);
+	});
+
+	// A pooled sub-agent's requests open with its shared head, which
+	// compaction is not shown. The writer continues what the slot holds, so it
+	// must send the head too: without it the writer matched only the pool and
+	// prefilled the transcript again (pandorum swarm, 2026-09-29:
+	// writer=10436/57068 on almost every compaction).
+	it("sends the pinned head in front of the writer's transcript", async () => {
+		const head: LlmsProviders.Message[] = [
+			{ role: "user", content: "# Shared knowledge" },
+			{ role: "user", content: "Your role" },
+		];
+		await compact({ providerId: "ollama" }, 3_000, vi.fn(), head);
+
+		const writer = modelCalls.find((call) => call.purpose === "writer");
+		expect(writer?.messages.slice(0, 2)).toEqual(head);
+		expect(writer?.messages[2]).toMatchObject({ content: "Original task" });
+	});
+
+	// The transcript-as-text summary sends a summarizer's system prompt, never
+	// the agent's, so the agent's pool cannot be a prefix of it: attached, it
+	// shared 5 or 6 tokens and put "Pool 4 shared only 5 of its 10,436
+	// tokens" on the agent's row (pandorum swarm, 2026-09-29). It stays in the
+	// agent's session, so it is not a new admission.
+	it("sends the text summary without the agent's pool, in its session", async () => {
+		modelBehaviour.fail = (call) =>
+			call.purpose === "writer" ? new Error("400 template error") : undefined;
+		await compact({
+			providerId: "ollama",
+			engineSessionId: "lead~agent-1",
+			polykvWorker: { group: "lead", layers: 3 },
+		});
+
+		expect(createHandlerMock).toHaveBeenCalled();
+		for (const [config] of createHandlerMock.mock.calls) {
+			expect(config).not.toHaveProperty("polykvWorker");
+			expect(config).toMatchObject({
+				engineSessionId: "lead~agent-1",
+				polykvLeadPool: false,
+			});
+		}
 	});
 
 	it("compacts from the transcript when the setting is off", async () => {

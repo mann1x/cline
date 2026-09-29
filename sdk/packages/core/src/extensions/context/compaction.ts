@@ -89,6 +89,15 @@ export interface ContextPipelinePrepareTurnInput {
 	iteration: number;
 	messages: CoreCompactionContext["messages"];
 	apiMessages: CoreCompactionContext["messages"];
+	/**
+	 * Turns the wire request opens with that compaction must not see: a
+	 * pooled sub-agent's shared head (`pinConversationHead`). Taken off
+	 * `messages` and `apiMessages` so nothing folds or rewrites them, and put
+	 * back in front wherever the request itself is rebuilt or measured -- the
+	 * continuation writer continues the conversation the slot holds, head
+	 * included.
+	 */
+	pinnedHead?: CoreCompactionContext["messages"];
 	abortSignal: AbortSignal;
 	systemPrompt: string;
 	tools: unknown[];
@@ -799,7 +808,11 @@ export function createContextCompactionPrepareTurn(
 			: turn.compactionRequested
 				? "manual"
 				: mode;
-		const apiMessageTokens = context.apiMessages.reduce(
+		// The request as it goes out: the pinned head is part of it.
+		const wireMessages = context.pinnedHead?.length
+			? [...context.pinnedHead, ...context.apiMessages]
+			: context.apiMessages;
+		const apiMessageTokens = wireMessages.reduce(
 			(total: number, message) => total + estimateMessageTokens(message),
 			0,
 		);
@@ -841,7 +854,7 @@ export function createContextCompactionPrepareTurn(
 		const requestChars = measureRequestInputChars(
 			{
 				systemPrompt: context.systemPrompt,
-				messages: context.apiMessages,
+				messages: wireMessages,
 				tools: context.tools,
 			},
 			{ reasoningHistory },
@@ -851,7 +864,7 @@ export function createContextCompactionPrepareTurn(
 			measureRequestReasoningChars(
 				{
 					systemPrompt: context.systemPrompt,
-					messages: context.apiMessages,
+					messages: wireMessages,
 					tools: context.tools,
 				},
 				{ reasoningHistory },
@@ -1427,7 +1440,10 @@ export function createContextCompactionPrepareTurn(
 				sessionId: config.sessionId,
 				systemPrompt: context.systemPrompt,
 				tools: context.tools ?? [],
-				apiMessages: context.apiMessages,
+				// What the slot holds, head included: the writer continues it.
+				// Without the head it matched only the pool and prefilled the
+				// whole transcript again on every compaction.
+				apiMessages: wireMessages,
 				contextWindow: context.model.info?.contextWindow,
 				requestTokens: triggerInputTokens,
 				...(observedRequestTokens !== undefined

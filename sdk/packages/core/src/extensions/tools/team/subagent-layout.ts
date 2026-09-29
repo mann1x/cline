@@ -242,7 +242,11 @@ type PrepareTurn<I, R> = (input: I) => Promise<R | undefined>;
  * it went would be worse than leaving the pipeline to see the whole thing.
  */
 export function pinConversationHead<
-	I extends { messages: readonly unknown[]; apiMessages?: readonly unknown[] },
+	I extends {
+		messages: readonly unknown[];
+		apiMessages?: readonly unknown[];
+		pinnedHead?: readonly unknown[];
+	},
 	R extends { messages: readonly unknown[] },
 >(
 	prepare: PrepareTurn<I, R> | undefined,
@@ -260,11 +264,17 @@ export function pinConversationHead<
 			return prepare(input);
 		}
 		const head = input.messages.slice(0, pinned.length);
+		const apiHeaded = input.apiMessages && startsWithHead(input.apiMessages);
 		const result = await prepare({
 			...input,
 			messages: input.messages.slice(pinned.length),
-			...(input.apiMessages && startsWithHead(input.apiMessages)
-				? { apiMessages: input.apiMessages.slice(pinned.length) }
+			...(apiHeaded
+				? {
+						apiMessages: input.apiMessages?.slice(pinned.length),
+						// The request still opens with it: a compaction that
+						// continues the conversation must send it.
+						pinnedHead: input.apiMessages?.slice(0, pinned.length),
+					}
 				: {}),
 		});
 		if (!result) {

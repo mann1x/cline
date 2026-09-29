@@ -237,7 +237,16 @@ async function generateSummary(options: {
 	/** Where the prompt this call paid for is counted. */
 	meter?: CompactionMeter;
 }): Promise<SummaryGenerationResult> {
-	const handler = await createHandlerAsync(options.providerConfig);
+	// A summarizer's system prompt, never the conversation's: the session's
+	// pool cannot be a prefix of this request. Attached anyway, it shared the
+	// 5 or 6 tokens of the template header -- "Pool 4 shared only 5 of its
+	// 10,436 tokens" on the agent's row (pandorum swarm, 2026-09-29). The
+	// session stays: the call runs on the agent's admission, not a new one.
+	const { polykvWorker: _pool, ...unpooled } = options.providerConfig;
+	const handler = await createHandlerAsync({
+		...unpooled,
+		polykvLeadPool: false,
+	});
 	let text = "";
 	let reasoningChars = 0;
 	let incompleteReason: string | undefined;
