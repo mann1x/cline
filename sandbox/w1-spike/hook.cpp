@@ -136,11 +136,6 @@ static void LogLine(const wchar_t* tag, const wchar_t* path, size_t len) {
     LeaveCriticalSection(&g_logLock);
 }
 
-static void LogObjectName(const wchar_t* tag, POBJECT_ATTRIBUTES oa) {
-    if (!oa || !oa->ObjectName || !oa->ObjectName->Buffer) return;
-    LogLine(tag, oa->ObjectName->Buffer, oa->ObjectName->Length / sizeof(wchar_t));
-}
-
 // ---- Overlay decision: workspace root -> agent overlay ---------------------
 //
 // NT absolute paths look like \??\C:\dir\file. If the open targets a path under
@@ -322,6 +317,31 @@ static bool OverlayFor(const wchar_t* logicalWin, wchar_t* ovOut, size_t cap) {
     return UnderWorkspace(logicalWin, ovOut, cap, &rest);
 }
 
+// Is a full Win32 path at or below `root` (a Win32 path, no trailing slash)?
+static bool UnderRoot(const wchar_t* win, const wchar_t* root) {
+    if (root[0] == L'\0') return false;
+    size_t rl = wcslen(root);
+    if (_wcsnicmp(win, root, rl) != 0) return false;
+    return win[rl] == L'\0' || win[rl] == L'\\';  // component boundary
+}
+
+// Log an open only when it targets the workspace or the overlay. Every other
+// open -- DLL loads, a shell profile's conda hook, the runtime's own files --
+// is not what the log is for, and it was nearly all of it: 1.23 million lines
+// and 201 MB for one agent, of which 8 of 1,252 processes touched the
+// workspace (pandorum swarm, 2026-09-29). Relative opens are placed through the
+// handle registry as the redirect decision places them; one relative to a
+// directory nobody tracks is outside both roots by construction.
+static void LogIfTargeted(const wchar_t* tag, POBJECT_ATTRIBUTES oa) {
+    if (g_logPath[0] == L'\0') return;
+    wchar_t win[1024];
+    if (!ExtractLogicalPath(oa, win, _countof(win))) return;
+    if (!UnderRoot(win, g_wsRoot) && !UnderRoot(win, g_overlayRoot)) return;
+    wchar_t nt[1030];
+    int n = _snwprintf_s(nt, _countof(nt), _TRUNCATE, L"\\??\\%s", win);
+    if (n > 0) LogLine(tag, nt, (size_t)n);
+}
+
 // Decide + perform overlay routing for a logical path. Returns true and fills
 // ntOut/outName (an NT path) when the open should be redirected to the overlay.
 // A DELETE-access open counts as a write (via wantsWrite), so it copies up and
@@ -396,7 +416,7 @@ static NTSTATUS NTAPI Hook_NtCreateFile(
     bool isDir = (CreateOptions & 0x00000001) != 0;  // FILE_DIRECTORY_FILE
     if (!g_inHook) {
         g_inHook = 1;
-        LogObjectName(L"NtCreateFile", ObjectAttributes);
+        LogIfTargeted(L"NtCreateFile", ObjectAttributes);
         bool wantsWrite = WantsWriteAccess(DesiredAccess) || DispositionCreates(CreateDisposition);
         if (ResolveOpen(ObjectAttributes, wantsWrite, rw, _countof(rw), &localName,
                         logical, _countof(logical))) {
@@ -440,7 +460,7 @@ static NTSTATUS NTAPI Hook_NtOpenFile(
     bool isDir = (OpenOptions & 0x00000001) != 0;  // FILE_DIRECTORY_FILE
     if (!g_inHook) {
         g_inHook = 1;
-        LogObjectName(L"NtOpenFile", ObjectAttributes);
+        LogIfTargeted(L"NtOpenFile", ObjectAttributes);
         bool wantsWrite = WantsWriteAccess(DesiredAccess);  // NtOpenFile never creates
         if (ResolveOpen(ObjectAttributes, wantsWrite, rw, _countof(rw), &localName,
                         logical, _countof(logical))) {

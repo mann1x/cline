@@ -1,10 +1,11 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setUpDelegatedSandbox } from "../../extensions/tools/team/agent-sandbox-executors";
 import { createRevisionLog } from "../atomic/file-revisions";
-import { createAgentSandbox } from "./agent-sandbox";
+import { archiveSandboxLog, createAgentSandbox } from "./agent-sandbox";
 
 describe("createAgentSandbox", () => {
 	let base: string;
@@ -85,6 +86,38 @@ describe("createAgentSandbox", () => {
 		await sandbox.overlay.write("b.txt", "new");
 		await sandbox.dispose();
 		await expect(fs.access(ov)).rejects.toThrow();
+	});
+
+	// The trace is the record of what the agent's commands touched; it is
+	// kept, compressed, instead of being deleted with the overlay (a 201 MB
+	// trace was 9 MB at gzip level 1).
+	it("dispose keeps the sandbox log as a gzip archive", async () => {
+		const sandbox = await createAgentSandbox({
+			workspaceRoot: ws,
+			overlayRoot: ov,
+		});
+		const log = `${ov}.sandbox.log`;
+		const trace = Buffer.from(
+			"123\tREDIRECT-R\t\\??\\C:\\ov\r\n".repeat(500),
+			"utf16le",
+		);
+		await fs.writeFile(log, trace);
+		await sandbox.dispose();
+
+		await expect(fs.access(log)).rejects.toThrow();
+		const archived = await fs.readFile(`${log}.gz`);
+		expect(archived.length).toBeLessThan(trace.length / 10);
+		expect(gunzipSync(archived).equals(trace)).toBe(true);
+	});
+
+	it("leaves nothing for an empty or absent log", async () => {
+		const log = path.join(base, "empty.sandbox.log");
+		await fs.writeFile(log, "");
+		await archiveSandboxLog(log);
+		await archiveSandboxLog(path.join(base, "absent.sandbox.log"));
+		expect(
+			(await fs.readdir(base)).filter((name) => name.includes("sandbox.log")),
+		).toEqual([]);
 	});
 });
 

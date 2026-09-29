@@ -12,8 +12,10 @@
  * When it does not, `wrapSpawn` is undefined and the caller withholds
  * `run_commands` rather than letting a command escape to the workspace.
  */
-import { mkdirSync } from "node:fs";
+import { createReadStream, createWriteStream, mkdirSync } from "node:fs";
 import * as fs from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
+import { createGzip, constants as zlibConstants } from "node:zlib";
 import { AgentOverlay, type OverlayChange } from "./overlay-fs";
 
 /** The native command-sandbox binary and its hook library. */
@@ -124,8 +126,45 @@ function buildAgentSandbox(options: CreateAgentSandboxOptions): AgentSandbox {
 		changedFiles: () => overlay.changedFiles(),
 		dispose: async () => {
 			await fs.rm(overlayRoot, { recursive: true, force: true });
-			// The sibling log too, or it outlives the overlay it belongs to.
-			await fs.rm(logPath, { force: true }).catch(() => {});
+			// The sibling log is kept, compressed: it is the record of what the
+			// agent's commands touched and where they were redirected.
+			await archiveSandboxLog(logPath);
 		},
 	};
+}
+
+/**
+ * Replace a finished sandbox log with `<log>.gz`, at gzip's fastest level.
+ *
+ * The trace is UTF-16 lines of the same few paths, and it compresses about
+ * 22x at level 1 (201 MB to 9 MB in a second, measured on a pandorum swarm
+ * log); the higher levels bought 5% more for the same time. Only once the
+ * agent is gone: every process in its tree appends to the plain file while it
+ * runs. A log that cannot be compressed is left as it is rather than lost,
+ * and an empty or absent one leaves nothing behind.
+ */
+export async function archiveSandboxLog(logPath: string): Promise<void> {
+	const size = await fs
+		.stat(logPath)
+		.then((stat) => stat.size)
+		.catch(() => -1);
+	if (size < 0) {
+		return;
+	}
+	if (size === 0) {
+		await fs.rm(logPath, { force: true }).catch(() => {});
+		return;
+	}
+	const archive = `${logPath}.gz`;
+	try {
+		await pipeline(
+			createReadStream(logPath),
+			createGzip({ level: zlibConstants.Z_BEST_SPEED }),
+			createWriteStream(archive),
+		);
+	} catch {
+		await fs.rm(archive, { force: true }).catch(() => {});
+		return;
+	}
+	await fs.rm(logPath, { force: true }).catch(() => {});
 }

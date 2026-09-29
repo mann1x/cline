@@ -156,6 +156,17 @@ with `CEREBRILINE_WS_ROOT` and `CEREBRILINE_OVERLAY_ROOT` set, and optionally
 the Windows backend needs and every other backend ignores; it stays positional so
 one `wrapSpawn` shape drives every platform.
 
+On Windows `<log>` is a UTF-16 trace, one `pid<TAB>operation<TAB>path` line
+per event:
+- the `NtCreateFile` / `NtOpenFile` calls that target the workspace or the
+  overlay (other opens, such as DLL loads and a shell profile's own start-up,
+  are not logged);
+- every `REDIRECT-R` / `REDIRECT-W`;
+- `RENAME-SRC` / `RENAME-DST` and `WHITEOUT`.
+
+When the agent ends, Cerebriline replaces the log with `<log>.gz` (gzip level 1)
+rather than deleting it.
+
 ## Build
 
 ```
