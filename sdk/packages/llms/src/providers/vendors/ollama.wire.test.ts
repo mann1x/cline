@@ -88,8 +88,12 @@ async function streamThroughVendor({
 	// first test in the file would see it.
 	const fetchStub = (async (input, init) => {
 		const url = typeof input === "string" ? input : String(input);
-		if (url.includes("/api/chat")) {
-			requests.push(JSON.parse(init?.body as string));
+		// Nor the re-injection probe, which posts to the same path unstreamed.
+		const sent = url.includes("/api/chat")
+			? (JSON.parse(init?.body as string) as OllamaChatRequest)
+			: undefined;
+		if (sent && sent.stream !== false) {
+			requests.push(sent);
 		}
 		const body = `${responseLines.map((line) => JSON.stringify(line)).join("\n")}\n`;
 		return new Response(body, {
@@ -306,8 +310,12 @@ describe("xOllama wire fields (real provider package)", () => {
 		const sentHeaders: Headers[] = [];
 		const fetchStub = (async (input, init) => {
 			const url = typeof input === "string" ? input : String(input);
-			if (url.includes("/api/chat")) {
-				requests.push(JSON.parse(init?.body as string));
+			const sent = url.includes("/api/chat")
+				? (JSON.parse(init?.body as string) as OllamaChatRequest)
+				: undefined;
+			// The vendor's own capability probe is not a turn.
+			if (sent && sent.stream !== false) {
+				requests.push(sent);
 				sentHeaders.push(new Headers(init?.headers));
 			}
 			return new Response(

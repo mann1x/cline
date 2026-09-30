@@ -41,7 +41,11 @@ async function wireBody(
 	const fetchStub = (async (input: unknown, init?: RequestInit) => {
 		const url = typeof input === "string" ? input : String(input);
 		if (url.includes("/api/chat")) {
-			bodies.push(JSON.parse(String(init?.body)));
+			const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+			// Not the vendor's re-injection probe, which posts here unstreamed.
+			if (body.stream !== false) {
+				bodies.push(body);
+			}
 			return new Response(
 				`${JSON.stringify({ model: "m", created_at: "2024-01-01T00:00:00Z", done: true, done_reason: "stop", message: { role: "assistant", content: "ok" }, prompt_eval_count: 1, eval_count: 1 })}\n`,
 				{ status: 200, headers: { "content-type": "application/x-ndjson" } },

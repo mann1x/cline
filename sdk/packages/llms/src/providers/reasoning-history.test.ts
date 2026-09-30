@@ -90,6 +90,35 @@ describe("the ollama probe measures the prompt rather than naming the renderer",
 		expect(probed.think).toBe(true);
 	});
 
+	it("posts to /api/chat from the origin a user configures", async () => {
+		// The URL arrives as configured: a bare origin, as native.sh and the
+		// plugin both pass it. The probe used to post to `<origin>/chat`, which
+		// Ollama 404s, so it never measured anything.
+		const urls: string[] = [];
+		const fetchImpl = async (url: string) => {
+			urls.push(String(url));
+			return new Response(JSON.stringify({ prompt_eval_count: 40 }), {
+				status: 200,
+			});
+		};
+		for (const configured of [
+			"http://h:22434",
+			"http://h:22434/",
+			"http://h:22434/api",
+			"http://h:22434/v1",
+		]) {
+			resetReasoningReinjection();
+			await primeOllamaReinjection(
+				configured,
+				"m",
+				fetchImpl as unknown as typeof fetch,
+			);
+			// Keyed by the URL as configured, which is what every reader passes.
+			expect(cachedReinjection(configured, "m")?.reinjects).toBe(false);
+		}
+		expect(new Set(urls)).toEqual(new Set(["http://h:22434/api/chat"]));
+	});
+
 	it("calls an unchanged prompt length a refusal, whatever the renderer is named", async () => {
 		const counts = [31, 31];
 		const fetchImpl = async () =>

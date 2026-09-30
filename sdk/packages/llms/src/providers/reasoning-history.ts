@@ -67,6 +67,20 @@ function root(baseUrl: string | undefined): string {
 }
 
 /**
+ * Ollama's API root for a configured base URL: the origin, then `/api` once.
+ *
+ * The probe is handed the URL as configured, which is usually a bare origin
+ * (`http://host:11434`), so `root()` alone posted to `<origin>/chat`. Ollama
+ * answers that with a 404, and the probe measured nothing on any host,
+ * leaving every Ollama model at "unproven". This is the same rule as the
+ * vendor's `normalizeOllamaBaseUrl`, restated here because that module
+ * imports this one.
+ */
+function ollamaApiRoot(baseUrl: string | undefined): string {
+	return `${root(baseUrl).replace(/\/(?:v1|api)$/, "")}/api`;
+}
+
+/**
  * What was measured for this endpoint and model, if anything.
  *
  * Synchronous on purpose. The compaction pipeline has to measure the request
@@ -162,7 +176,7 @@ export async function primeOllamaReinjection(
 		if (thinking !== undefined) {
 			assistant.thinking = thinking;
 		}
-		const response = await fetchImpl(`${root(baseUrl)}/chat`, {
+		const response = await fetchImpl(`${ollamaApiRoot(baseUrl)}/chat`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
