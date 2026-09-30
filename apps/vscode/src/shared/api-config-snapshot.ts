@@ -529,7 +529,57 @@ function providerConfigsEqual(stored: Record<string, unknown> | undefined, panel
 	// profile's overrides as `selectedModelOverrides` and its window as
 	// `contextWindow`, and the same settings under the tab's keys are not a
 	// change to the profile.
-	return sameValues(profileProviderConfigFromScope(stored ?? {}), profileProviderConfigFromScope(panel))
+	return sameValues(
+		withoutUnsetValues(profileProviderConfigFromScope(stored ?? {})),
+		withoutUnsetValues(profileProviderConfigFromScope(panel)),
+	)
+}
+
+/**
+ * Numbers whose `0` is the store's "unset" -- the clears in
+ * {@link PROVIDER_CONFIG_CLEARS} -- and lists whose empty form is the default.
+ */
+const UNSET_WHEN_ZERO = new Set(["contextWindow", "maxToolResultChars", "parallelSessions"])
+const UNSET_WHEN_EMPTY_LIST = new Set(["stop", "capabilities"])
+
+/**
+ * A provider config without the values that only spell "unset".
+ *
+ * Two configurations that say the same thing in different words are not a
+ * change. pandorum, 2026-09-30: every load of "opencoti / node1 v6" into its
+ * Agents node asked to be updated, because the node's own fields had written
+ * `parallelSessions: 0`, `sampling: { stop: [] }` and `capabilities: []`
+ * where the profile had nothing -- each the unset spelling of its field. An
+ * empty section is its clear too (`sampling: {}`, `tools: {}`). Other empty
+ * lists are kept: an empty selection is not the same as no selection.
+ */
+function withoutUnsetValues(config: Record<string, unknown>): Record<string, unknown> {
+	const kept: Record<string, unknown> = {}
+	for (const [key, value] of Object.entries(config)) {
+		if (value === undefined || value === null) {
+			continue
+		}
+		if (UNSET_WHEN_ZERO.has(key) && value === 0) {
+			continue
+		}
+		if (Array.isArray(value)) {
+			if (value.length === 0 && UNSET_WHEN_EMPTY_LIST.has(key)) {
+				continue
+			}
+			kept[key] = value
+			continue
+		}
+		if (typeof value === "object") {
+			const inner = withoutUnsetValues(value as Record<string, unknown>)
+			if (Object.keys(inner).length === 0) {
+				continue
+			}
+			kept[key] = inner
+			continue
+		}
+		kept[key] = value
+	}
+	return kept
 }
 
 /**

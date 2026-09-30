@@ -183,6 +183,30 @@ describe("apiConfigurationSnapshotsEqual", () => {
 	it("treats an absent provider config and an empty one as the same", () => {
 		expect(apiConfigurationSnapshotsEqual({ global: {}, mode: {} }, { global: {}, mode: {}, providerConfig: {} })).toBe(true)
 	})
+
+	// pandorum, 2026-09-30: an opencoti Agents node asked to be updated on
+	// every load, over values that only spell "unset".
+	it("does not count the unset spelling of a field as a change", () => {
+		const profile = { global: {}, mode: {}, providerConfig: { baseUrl: "http://x", modelOverrides: { temperature: 0.7 } } }
+		const panel = {
+			global: {},
+			mode: {},
+			providerConfig: {
+				baseUrl: "http://x",
+				parallelSessions: 0,
+				sampling: { stop: [] },
+				tools: {},
+				modelOverrides: { temperature: 0.7, capabilities: [] },
+			},
+		}
+		expect(apiConfigurationSnapshotsEqual(profile, panel)).toBe(true)
+	})
+
+	it("still counts a field set to its unset spelling from a value", () => {
+		const profile = { global: {}, mode: {}, providerConfig: { parallelSessions: 3 } }
+		const panel = { global: {}, mode: {}, providerConfig: { parallelSessions: 0 } }
+		expect(apiConfigurationSnapshotsEqual(profile, panel)).toBe(false)
+	})
 })
 
 describe("the provider config a profile carries", () => {

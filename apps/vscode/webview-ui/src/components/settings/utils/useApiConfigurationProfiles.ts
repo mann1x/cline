@@ -22,12 +22,13 @@ import {
 	SCOPED_MODEL_OVERRIDES_KEY,
 	scopedProviderConfigFromProfile,
 } from "@shared/api-config-snapshot"
+import { toLegacyApiProvider } from "@shared/model-catalog/provider-helpers"
 import { CommitModelSelectionRequest } from "@shared/proto/cline/models"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import type { Mode } from "@shared/storage/types"
 import { useCallback, useMemo } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
-import { getActiveProviderAndModelId } from "@/hooks/useNormalizedApiConfiguration"
+import { getActiveProviderAndModelId, modelIdFieldFor } from "@/hooks/useNormalizedApiConfiguration"
 import {
 	readProviderConfig,
 	toProtobufProviderModelOverrides,
@@ -153,7 +154,7 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 			// vision or agents model — and left the dirty check comparing this tab
 			// against the shared entry, which is a tab that looks unsaved whenever
 			// the main model's window differs from its own.
-			return parseApiConfigurationSnapshot(storedSnapshot) ?? EMPTY_SNAPSHOT
+			return withScopedModelSelection(parseApiConfigurationSnapshot(storedSnapshot) ?? EMPTY_SNAPSHOT)
 		}
 		const base = captureApiConfigurationSnapshot(apiConfiguration, scopeMode)
 		const captured = captureProviderConfigSnapshot(providerConfig, scopeMode)
@@ -464,6 +465,33 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 		saveProfile,
 		deleteProfile,
 	}
+}
+
+/**
+ * A scoped tab's snapshot with its picked model in the provider's model field.
+ *
+ * The tab's picker writes `providerConfig.selectedModelId` and nothing else,
+ * while a profile carries the model in the mode fields (`apiModelId` for
+ * opencoti) and drops `selectedModelId` as bookkeeping. So a model picked on
+ * an Agents node was lost on "Update": the profile was saved with the model
+ * the mode field still named -- pandorum, 2026-09-30: omni v6 picked on
+ * "node1 v6", v9-agentic saved, and v9-agentic back on the next load of it.
+ * The same gap hid the change from the dirty check.
+ */
+export function withScopedModelSelection(snapshot: ApiConfigurationSnapshot): ApiConfigurationSnapshot {
+	const selected = (snapshot.providerConfig as Record<string, unknown> | undefined)?.selectedModelId
+	const provider = snapshot.mode?.apiProvider
+	if (typeof selected !== "string" || !selected || typeof provider !== "string" || !provider) {
+		return snapshot
+	}
+	if (toLegacyApiProvider(provider) === "vscode-lm") {
+		return snapshot
+	}
+	const field = modelIdFieldFor(provider)
+	if (snapshot.mode[field] === selected) {
+		return snapshot
+	}
+	return { ...snapshot, mode: { ...snapshot.mode, [field]: selected } }
 }
 
 /**

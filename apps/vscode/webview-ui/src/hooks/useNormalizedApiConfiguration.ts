@@ -43,37 +43,56 @@ export function getActiveProviderAndModelId(
 	) as ApiProvider
 	const modeFields = getModeSpecificFields(apiConfiguration, mode)
 
-	const providerSpecificModelIds: Partial<Record<string, string | undefined>> = {
-		cline: modeFields.clineModelId,
-		"cline-pass": modeFields.clinePassModelId,
-		deepseek: modeFields.apiModelId,
-		openai: modeFields.openAiModelId,
-		openrouter: modeFields.openRouterModelId,
-		requesty: modeFields.requestyModelId,
-		litellm: modeFields.liteLlmModelId,
-		"vercel-ai-gateway": modeFields.vercelAiGatewayModelId,
-		ollama: modeFields.ollamaModelId,
-		lmstudio: modeFields.lmStudioModelId,
-		groq: modeFields.groqModelId,
-		baseten: modeFields.basetenModelId,
-		huggingface: modeFields.huggingFaceModelId,
-		hicap: modeFields.hicapModelId,
-		aihubmix: modeFields.aihubmixModelId,
-		nousResearch: modeFields.nousResearchModelId,
-		oca: modeFields.ocaModelId,
-		"huawei-cloud-maas": modeFields.huaweiCloudMaasModelId,
-		together: modeFields.togetherModelId,
-		fireworks: modeFields.fireworksModelId,
-		sapaicore: modeFields.apiModelId,
-		"vscode-lm": modeFields.vsCodeLmModelSelector
-			? `${modeFields.vsCodeLmModelSelector.vendor}/${modeFields.vsCodeLmModelSelector.family}`
-			: undefined,
-	}
+	const modelId =
+		provider === "vscode-lm"
+			? modeFields.vsCodeLmModelSelector
+				? `${modeFields.vsCodeLmModelSelector.vendor}/${modeFields.vsCodeLmModelSelector.family}`
+				: undefined
+			: (modeFields[modelIdFieldFor(provider)] as string | undefined)
 
-	return {
-		provider,
-		modelId: Object.hasOwn(providerSpecificModelIds, provider) ? providerSpecificModelIds[provider] : modeFields.apiModelId,
-	}
+	return { provider, modelId }
+}
+
+/**
+ * The per-provider model-id fields, by provider. A provider not listed keeps
+ * its model in the shared `apiModelId`. `vscode-lm` is absent on purpose: it
+ * stores a selector object, not an id.
+ */
+const PROVIDER_MODEL_ID_FIELDS = {
+	cline: "clineModelId",
+	"cline-pass": "clinePassModelId",
+	deepseek: "apiModelId",
+	openai: "openAiModelId",
+	openrouter: "openRouterModelId",
+	requesty: "requestyModelId",
+	litellm: "liteLlmModelId",
+	"vercel-ai-gateway": "vercelAiGatewayModelId",
+	ollama: "ollamaModelId",
+	lmstudio: "lmStudioModelId",
+	groq: "groqModelId",
+	baseten: "basetenModelId",
+	huggingface: "huggingFaceModelId",
+	hicap: "hicapModelId",
+	aihubmix: "aihubmixModelId",
+	nousResearch: "nousResearchModelId",
+	oca: "ocaModelId",
+	"huawei-cloud-maas": "huaweiCloudMaasModelId",
+	together: "togetherModelId",
+	fireworks: "fireworksModelId",
+	sapaicore: "apiModelId",
+} as const satisfies Record<string, keyof ReturnType<typeof getModeSpecificFields>>
+
+/**
+ * The mode field that holds a provider's selected model id -- the name a
+ * snapshot's `mode` record files it under, and the `ApiConfiguration` field
+ * once prefixed with `planMode`/`actMode`. Not meaningful for `vscode-lm`,
+ * whose selection is a selector object rather than an id; callers skip it.
+ */
+export function modelIdFieldFor(provider: string): keyof ReturnType<typeof getModeSpecificFields> {
+	const legacy = toLegacyApiProvider(provider) as string
+	return Object.hasOwn(PROVIDER_MODEL_ID_FIELDS, legacy)
+		? PROVIDER_MODEL_ID_FIELDS[legacy as keyof typeof PROVIDER_MODEL_ID_FIELDS]
+		: "apiModelId"
 }
 
 /**

@@ -1,5 +1,5 @@
 import { renderHook, waitFor } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { registerPendingEdit } from "../pendingEdits"
 import { useApiConfigurationProfiles } from "../useApiConfigurationProfiles"
 
@@ -300,5 +300,76 @@ describe("useApiConfigurationProfiles — loading a profile", () => {
 			expect(flush).not.toHaveBeenCalled()
 			unregister()
 		})
+	})
+})
+
+/**
+ * An Agents node on opencoti, as pandorum held it on 2026-09-30: the node's
+ * picker had written omni v6 to `selectedModelId` only, the mode field still
+ * named v9-agentic, and the node's own fields had written the unset spellings
+ * `parallelSessions: 0`, `sampling: { stop: [] }` and `capabilities: []`.
+ */
+describe("useApiConfigurationProfiles — an Agents node", () => {
+	const V6 = "/mnt/sdc/opencoti-models/sdc-ml/omnimerge-v6/Qwen3.8-27B-Omnimerge-v6-Q6_K-AC.gguf"
+	const V9 = "/mnt/sdc/ml/v9build/v9-agentic-GGUF/v9-agentic-bf16-Q4_K_M-AC.gguf"
+	const nodeProfile = (model: string) => ({
+		name: "opencoti / node1",
+		updatedAt: 3,
+		snapshot: {
+			global: {},
+			mode: { apiModelId: model, apiProvider: "opencoti" },
+			providerConfig: {
+				baseUrl: "http://192.168.178.2:8240",
+				polykv: { enabled: true, targetTpsPerSession: 25 },
+				modelOverrides: { contextWindow: 256000, capabilities: [], temperature: 0.7 },
+			},
+		},
+	})
+	const node = {
+		global: {},
+		mode: { apiModelId: V9, apiProvider: "opencoti" },
+		providerConfig: {
+			baseUrl: "http://192.168.178.2:8240",
+			parallelSessions: 0,
+			sampling: { stop: [] },
+			polykv: { targetTpsPerSession: 25, enabled: true },
+			contextWindow: 256000,
+			selectedModelOverrides: { contextWindow: 256000, temperature: 0.7 },
+			selectedModelId: V6,
+		},
+	}
+	const saved = { ...extensionState }
+
+	beforeEach(() => {
+		vi.clearAllMocks()
+		updateSettings.mockResolvedValue(undefined)
+		Object.assign(extensionState, {
+			agentsModeApiConfiguration: JSON.stringify(node),
+			activeApiConfigurationProfile: JSON.stringify({ agents: "opencoti / node1" }),
+		})
+	})
+
+	afterEach(() => {
+		Object.assign(extensionState, saved)
+	})
+
+	it("is not dirty against a profile naming the model its picker holds", () => {
+		extensionState.apiConfigurationProfiles = JSON.stringify([nodeProfile(V6)])
+		const { result } = renderHook(() => useApiConfigurationProfiles({ kind: "agents" }))
+
+		expect(result.current.isDirty).toBe(false)
+	})
+
+	it("sees a model picked on the node as a change, and saves that model", async () => {
+		extensionState.apiConfigurationProfiles = JSON.stringify([nodeProfile(V9)])
+		const { result } = renderHook(() => useApiConfigurationProfiles({ kind: "agents" }))
+
+		expect(result.current.isDirty).toBe(true)
+		await result.current.saveProfile("opencoti / node1")
+
+		const profiles = JSON.parse(updateSettings.mock.calls.at(-1)[0].apiConfigurationProfiles)
+		const profile = profiles.find((entry: { name: string }) => entry.name === "opencoti / node1")
+		expect(profile.snapshot.mode.apiModelId).toBe(V6)
+		expect(profile.snapshot.providerConfig.selectedModelId).toBeUndefined()
 	})
 })
