@@ -54,11 +54,29 @@ export const JEV_DEFAULT_TIMEOUT_MS = 15_000;
 export const JEV_MAX_PART_CHARS = 12_000;
 export const JEV_MAX_QUESTIONS = 10;
 
+/**
+ * Which server's rules an endpoint follows.
+ *
+ * Ollama (0.35 and later, and xollama) serves the same request and answer at
+ * `/v1/systemone`, field for field, and computes score and confidence the same
+ * way. What differs is what it accepts and how it refuses (decision/ and
+ * server/routes.go upstream): the body is capped at 64 KiB, a choice at 26
+ * options, errors are 400/404/413 with `{"error": …}` instead of 401/422/429/529,
+ * no key is needed, and only a local model it has pulled can answer.
+ */
+export type JevDialect = "typesafe" | "ollama";
+
 /** Where Jev is and how sure an answer has to be before it counts. */
 export interface JevEndpoint {
-	apiKey: string;
-	/** Defaults to {@link JEV_DEFAULT_BASE_URL}. */
+	/** Sent as a bearer token when set. TypeSafe needs one; Ollama none. */
+	apiKey?: string;
+	/**
+	 * Defaults to {@link JEV_DEFAULT_BASE_URL}. A custom one may be a server
+	 * root (`http://host:11434`), its `/v1`, or the full `/v1/systemone`.
+	 */
 	baseUrl?: string;
+	/** Known ahead, for tests; otherwise found by {@link detectJevDialect}. */
+	dialect?: JevDialect;
 	/** Defaults to {@link JEV_DEFAULT_MODEL}. Pin a version to keep tuned floors valid. */
 	model?: string;
 	/** Confidence at or above which an answer is acted on. */
@@ -120,8 +138,204 @@ export class JevError extends Error {
 /** Delays before the second and third attempt on a 429 or 529. */
 const RETRY_DELAYS_MS = [400, 1_200];
 
+/** Ollama's `http.MaxBytesReader` on `/v1/systemone`. */
+export const OLLAMA_JEV_MAX_BODY_BYTES = 64 * 1024;
+/** Ollama answers each option with one letter, A to Z. */
+export const OLLAMA_JEV_MAX_OPTIONS = 26;
+
 function trimSlash(url: string): string {
 	return url.replace(/\/+$/, "");
+}
+
+/** The URLs an endpoint is called at. */
+export interface JevRoutes {
+	systemone: string;
+	models: string;
+	/** The server root, where Ollama answers `/api/version` and `/api/tags`. */
+	root: string;
+	/** Anything but TypeSafe's own API. */
+	custom: boolean;
+}
+
+/**
+ * Where to call, from what the user typed.
+ *
+ * TypeSafe's SDK takes the API base (`…/v1`), Ollama's blog post the server
+ * root (`TYPESAFE_BASE_URL=http://localhost:11434`), and a pasted curl line the
+ * full path. All three name one endpoint, so all three are accepted.
+ */
+export function resolveJevRoutes(baseUrl?: string): JevRoutes {
+	const typed = trimSlash(
+		trimSlash(baseUrl?.trim() ?? "").replace(/\/systemone$/i, ""),
+	);
+	const custom = typed !== "" && typed !== JEV_DEFAULT_BASE_URL;
+	let api = custom ? typed : JEV_DEFAULT_BASE_URL;
+	if (!/\/v1$/i.test(api)) {
+		api = `${api}/v1`;
+	}
+	return {
+		systemone: `${api}/systemone`,
+		models: `${api}/models`,
+		root: api.replace(/\/v1$/i, ""),
+		custom,
+	};
+}
+
+const dialects = new Map<string, JevDialect>();
+
+/**
+ * The largest state, in bytes of JSON, that fitted each Ollama model's window,
+ * keyed by server root and model. Learned from the server's own refusal, since
+ * the window is whatever that server loaded the model with.
+ */
+const stateCeilings = new Map<string, number>();
+
+/** Forget what was learned about each endpoint, for tests. */
+export function resetJevDialectCache(): void {
+	dialects.clear();
+	stateCeilings.clear();
+}
+
+/**
+ * Ollama's refusal of a prompt longer than the loaded context window, which it
+ * never truncates: `prompt 0 has 12215 tokens; expected 1–8194`.
+ */
+const OVERFLOW = /prompt \d+ has (\d+) tokens; expected 1\s*[–-]\s*(\d+)/;
+
+/**
+ * Whether an endpoint is TypeSafe's or Ollama's, asked of the server.
+ *
+ * TypeSafe's own URL needs no asking. Any other is asked once for
+ * `/api/version`, which every Ollama answers and nothing else does; the answer
+ * is kept per server. A probe that could not connect is not kept, so a server
+ * started after the first call is still recognised, and until then the call
+ * goes out under TypeSafe's rules, which only means looser bounds.
+ */
+export async function detectJevDialect(
+	endpoint: Pick<JevEndpoint, "baseUrl" | "dialect">,
+	options: Pick<JevCallOptions, "fetchImpl" | "signal"> = {},
+): Promise<JevDialect> {
+	if (endpoint.dialect) {
+		return endpoint.dialect;
+	}
+	const routes = resolveJevRoutes(endpoint.baseUrl);
+	if (!routes.custom) {
+		return "typesafe";
+	}
+	const known = dialects.get(routes.root);
+	if (known) {
+		return known;
+	}
+	const fetchImpl = options.fetchImpl ?? fetch;
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), 3_000);
+	const onAbort = () => controller.abort();
+	options.signal?.addEventListener("abort", onAbort);
+	try {
+		const response = await fetchImpl(`${routes.root}/api/version`, {
+			signal: controller.signal,
+		});
+		let dialect: JevDialect = "typesafe";
+		if (response.ok) {
+			const body = (await response.json().catch(() => undefined)) as
+				| { version?: unknown }
+				| undefined;
+			if (typeof body?.version === "string") {
+				dialect = "ollama";
+			}
+		}
+		dialects.set(routes.root, dialect);
+		return dialect;
+	} catch {
+		return "typesafe";
+	} finally {
+		clearTimeout(timer);
+		options.signal?.removeEventListener("abort", onAbort);
+	}
+}
+
+function byteLength(text: string): number {
+	return new TextEncoder().encode(text).length;
+}
+
+/** Every string in a state cut by `factor`, head and tail kept. */
+function shrinkState(state: unknown, factor: number): unknown {
+	if (typeof state === "string") {
+		return boundJevText(
+			state,
+			Math.max(200, Math.floor(state.length * factor)),
+		);
+	}
+	if (Array.isArray(state)) {
+		return state.map((value) => shrinkState(value, factor));
+	}
+	if (state && typeof state === "object") {
+		return Object.fromEntries(
+			Object.entries(state).map(([key, value]) => [
+				key,
+				shrinkState(value, factor),
+			]),
+		);
+	}
+	return state;
+}
+
+/**
+ * The request body, fitted to Ollama's 64 KiB when it is Ollama.
+ *
+ * Only the state is cut: the questions are what was asked. The bound is bytes,
+ * not characters, and JSON escaping and non-ASCII text both widen a string, so
+ * the body is measured and cut again until it fits.
+ */
+function buildBody(
+	model: string,
+	request: { state: unknown; questions: Record<string, JevQuestion> },
+	dialect: JevDialect,
+	stateCeiling?: number,
+): { body: string; stateBytes: number } {
+	let state = request.state;
+	const measure = () => byteLength(JSON.stringify(state) ?? "");
+	if (dialect === "ollama" && stateCeiling !== undefined) {
+		for (let attempt = 0; attempt < 6 && measure() > stateCeiling; attempt++) {
+			state = shrinkState(state, (stateCeiling / measure()) * 0.95);
+		}
+	}
+	let body = JSON.stringify({ state, model, questions: request.questions });
+	if (dialect !== "ollama") {
+		return { body, stateBytes: measure() };
+	}
+	for (let attempt = 0; attempt < 6; attempt++) {
+		const size = byteLength(body);
+		if (size <= OLLAMA_JEV_MAX_BODY_BYTES) {
+			return { body, stateBytes: measure() };
+		}
+		state = shrinkState(state, (OLLAMA_JEV_MAX_BODY_BYTES / size) * 0.9);
+		body = JSON.stringify({ state, model, questions: request.questions });
+	}
+	if (byteLength(body) <= OLLAMA_JEV_MAX_BODY_BYTES) {
+		return { body, stateBytes: measure() };
+	}
+	throw new JevError(
+		"The questions alone are larger than Ollama's 64 KiB request limit. Ask fewer or shorter questions.",
+	);
+}
+
+function checkOptionCounts(
+	questions: Record<string, JevQuestion>,
+	dialect: JevDialect,
+): void {
+	if (dialect !== "ollama") {
+		return;
+	}
+	for (const [name, question] of Object.entries(questions)) {
+		if (question.type !== "choice") continue;
+		const count = Object.keys(question.criteria ?? {}).length;
+		if (count > OLLAMA_JEV_MAX_OPTIONS) {
+			throw new JevError(
+				`Choice \`${name}\` has ${count} options; this endpoint (Ollama) takes at most ${OLLAMA_JEV_MAX_OPTIONS}. Split it into smaller choices.`,
+			);
+		}
+	}
 }
 
 function defaultSleep(ms: number): Promise<void> {
@@ -150,14 +364,23 @@ export async function evaluateJev(
 	);
 	const onAbort = () => controller.abort();
 	options.signal?.addEventListener("abort", onAbort);
-	const url = `${trimSlash(endpoint.baseUrl || JEV_DEFAULT_BASE_URL)}/systemone`;
-	const body = JSON.stringify({
-		state: request.state,
-		model: endpoint.model || JEV_DEFAULT_MODEL,
-		questions: request.questions,
-	});
+	const url = resolveJevRoutes(endpoint.baseUrl).systemone;
+	const model = endpoint.model || JEV_DEFAULT_MODEL;
 
 	try {
+		const dialect = await detectJevDialect(endpoint, {
+			fetchImpl,
+			signal: controller.signal,
+		});
+		checkOptionCounts(request.questions, dialect);
+		const ceilingKey = `${resolveJevRoutes(endpoint.baseUrl).root} ${model}`;
+		let built = buildBody(
+			model,
+			request,
+			dialect,
+			stateCeilings.get(ceilingKey),
+		);
+		let overflows = 0;
 		for (let attempt = 0; ; attempt++) {
 			let response: Response;
 			try {
@@ -165,9 +388,11 @@ export async function evaluateJev(
 					method: "POST",
 					headers: {
 						"Content-Type": "application/json",
-						Authorization: `Bearer ${endpoint.apiKey}`,
+						...(endpoint.apiKey
+							? { Authorization: `Bearer ${endpoint.apiKey}` }
+							: {}),
 					},
-					body,
+					body: built.body,
 					signal: controller.signal,
 				});
 			} catch (error) {
@@ -203,8 +428,30 @@ export async function evaluateJev(
 				continue;
 			}
 			const detail = (await response.text().catch(() => "")).slice(0, 400);
+			// Over the model's window: cut the state to the share of it that
+			// fits, remember that size for this server and model, and ask again.
+			// The rest of the prompt is fixed, so the cut is deeper than the
+			// ratio, and a second refusal cuts again from the new measurement.
+			const overflow =
+				dialect === "ollama" && response.status === 400
+					? OVERFLOW.exec(errorDetail(detail))
+					: null;
+			if (overflow && overflows < 3) {
+				const [have, limit] = [Number(overflow[1]), Number(overflow[2])];
+				const ceiling = Math.floor(built.stateBytes * (limit / have) * 0.8);
+				if (have > limit && ceiling >= 400) {
+					overflows++;
+					stateCeilings.set(ceilingKey, ceiling);
+					built = buildBody(model, request, dialect, ceiling);
+					continue;
+				}
+			}
 			throw new JevError(
-				describeStatus(response.status, detail),
+				describeStatus(response.status, detail, {
+					dialect,
+					custom: resolveJevRoutes(endpoint.baseUrl).custom,
+					model,
+				}),
 				response.status,
 			);
 		}
@@ -214,10 +461,118 @@ export async function evaluateJev(
 	}
 }
 
-function describeStatus(status: number, detail: string): string {
+/**
+ * The decision models an endpoint serves, for the Jev tab's picker.
+ *
+ * Ollama lists every model it has, so only those whose `capabilities` include
+ * `decision` are offered (`/api/tags`; its `/v1/models` carries no
+ * capabilities). TypeSafe's `/v1/models` is `{models: [{name}]}`; an
+ * OpenAI-shaped `{data: [{id}]}` from another compatible server is read too.
+ * Empty on any failure: the field still takes a typed name.
+ */
+export async function listJevModels(
+	endpoint: Pick<JevEndpoint, "apiKey" | "baseUrl" | "dialect">,
+	options: Pick<JevCallOptions, "fetchImpl" | "signal"> = {},
+): Promise<string[]> {
+	const fetchImpl = options.fetchImpl ?? fetch;
+	const routes = resolveJevRoutes(endpoint.baseUrl);
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), 10_000);
+	const onAbort = () => controller.abort();
+	options.signal?.addEventListener("abort", onAbort);
+	const headers: Record<string, string> = endpoint.apiKey
+		? { Authorization: `Bearer ${endpoint.apiKey}` }
+		: {};
+	try {
+		const dialect = await detectJevDialect(endpoint, {
+			fetchImpl,
+			signal: controller.signal,
+		});
+		if (dialect === "ollama") {
+			const response = await fetchImpl(`${routes.root}/api/tags`, {
+				headers,
+				signal: controller.signal,
+			});
+			if (!response.ok) return [];
+			const body = (await response.json()) as {
+				models?: { name?: unknown; capabilities?: unknown }[];
+			};
+			return uniqueNames(
+				(body.models ?? [])
+					.filter(
+						(model) =>
+							Array.isArray(model.capabilities) &&
+							model.capabilities.includes("decision"),
+					)
+					.map((model) => model.name),
+			);
+		}
+		const response = await fetchImpl(routes.models, {
+			headers,
+			signal: controller.signal,
+		});
+		if (!response.ok) return [];
+		const body = (await response.json()) as
+			| { models?: { name?: unknown }[]; data?: { id?: unknown }[] }
+			| { name?: unknown }[];
+		if (Array.isArray(body)) {
+			return uniqueNames(body.map((model) => model?.name));
+		}
+		return uniqueNames([
+			...(body.models ?? []).map((model) => model?.name),
+			...(body.data ?? []).map((model) => model?.id),
+		]);
+	} catch {
+		return [];
+	} finally {
+		clearTimeout(timer);
+		options.signal?.removeEventListener("abort", onAbort);
+	}
+}
+
+function uniqueNames(values: unknown[]): string[] {
+	return [
+		...new Set(
+			values.filter(
+				(value): value is string =>
+					typeof value === "string" && value.trim() !== "",
+			),
+		),
+	].sort();
+}
+
+/** Ollama's `{"error": "…"}`, or the body as it came. */
+function errorDetail(detail: string): string {
+	try {
+		const parsed = JSON.parse(detail) as { error?: unknown };
+		if (typeof parsed?.error === "string") return parsed.error;
+	} catch {
+		// not JSON: the text is the detail
+	}
+	return detail;
+}
+
+function describeStatus(
+	status: number,
+	rawDetail: string,
+	where: { dialect: JevDialect; custom: boolean; model: string },
+): string {
+	const detail = errorDetail(rawDetail);
+	if (where.dialect === "ollama") {
+		switch (status) {
+			case 400:
+				return `The Jev endpoint (Ollama) rejected the request (400): ${detail || "no detail given"}`;
+			case 404:
+				return `The Jev endpoint (Ollama) has no model "${where.model}" (404). Pull a decision model there (nimble, tev1 or tev1:0.8b) and pick it on the Jev tab.`;
+			case 413:
+				return "The request was over the Jev endpoint's (Ollama) 64 KiB limit (413).";
+		}
+	}
 	switch (status) {
 		case 401:
-			return "Jev refused the API key (401). The key is set on the Jev tab of the API configuration settings.";
+			return where.custom
+				? "The Jev endpoint refused the API key (401). The custom endpoint's key is set on the Jev tab of the API configuration settings."
+				: "Jev refused the API key (401). The key is set on the Jev tab of the API configuration settings.";
 		case 422:
 			return `Jev rejected the request as malformed (422): ${detail || "no detail given"}`;
 		case 429:

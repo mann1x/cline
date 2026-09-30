@@ -110,6 +110,7 @@ message Secrets {
   optional string qa_credentials = 51;
   optional string image_gen_api_key = 52;
   optional string jev_api_key = 53;
+  optional string jev_custom_api_key = 54;
 }
 
 // NOTE: Add new fields under API_HANDLER_SETTINGS_FIELDS or USER_SETTINGS_FIELDS
@@ -527,6 +528,8 @@ message UpdateSettingsRequest {
   optional string jev_settings = 81;
   // Write-only like the image key: empty clears it, unset leaves it alone.
   optional string jev_api_key = 82;
+  // Write-only, like jev_api_key: the key for a custom Jev endpoint.
+  optional string jev_custom_api_key = 91;
   optional EditVerificationSettings edit_verification_settings = 57;
   // A change to the stored set. Sent only when the user edits it; values
   // travel in this direction and never the other.

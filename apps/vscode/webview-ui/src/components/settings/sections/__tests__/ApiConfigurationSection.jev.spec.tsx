@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import ApiConfigurationSection from "../ApiConfigurationSection"
 
-const state = { jevEnabled: false, jevApiKeySet: false }
+const state = { jevEnabled: false, jevApiKeySet: false, jevSettings: "" }
 
 vi.mock("@/context/ExtensionStateContext", () => ({
 	useExtensionState: () => ({
@@ -16,7 +16,7 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 		imageGenEnabled: false,
 		imageGenEndpoint: "",
 		jevEnabled: state.jevEnabled,
-		jevSettings: "",
+		jevSettings: state.jevSettings,
 		jevApiKeySet: state.jevApiKeySet,
 		mode: "act",
 		apiConfiguration: {},
@@ -39,12 +39,13 @@ describe("ApiConfigurationSection: Jev", () => {
 	beforeEach(() => {
 		state.jevEnabled = false
 		state.jevApiKeySet = false
+		state.jevSettings = ""
 	})
 
 	it("offers the checkbox below image generation, with no tab until it is ticked", () => {
 		render(<ApiConfigurationSection />)
 
-		expect(screen.getByText("Use Jev for confidence")).toBeTruthy()
+		expect(screen.getByText("Use Typesafe's Jev API for confidence")).toBeTruthy()
 		expect(screen.queryByText("Jev")).toBeNull()
 	})
 
@@ -63,5 +64,21 @@ describe("ApiConfigurationSection: Jev", () => {
 		render(<ApiConfigurationSection />)
 
 		expect(screen.queryByText(/No Jev API key is stored/)).toBeNull()
+	})
+
+	// A custom endpoint needs no TypeSafe key, but it does need a model.
+	it("asks a custom endpoint for a model, not for TypeSafe's key", () => {
+		state.jevEnabled = true
+		state.jevSettings = JSON.stringify({ baseUrl: "http://localhost:11434" })
+		render(<ApiConfigurationSection />)
+		expect(screen.queryByText(/No Jev API key is stored/)).toBeNull()
+		expect(screen.getByText(/No model is set for the custom Jev endpoint/)).toBeTruthy()
+	})
+
+	it("is configured by a custom endpoint and its model alone", () => {
+		state.jevEnabled = true
+		state.jevSettings = JSON.stringify({ baseUrl: "http://localhost:11434", customModel: "nimble" })
+		render(<ApiConfigurationSection />)
+		expect(screen.queryByText(/No model is set|No Jev API key/)).toBeNull()
 	})
 })

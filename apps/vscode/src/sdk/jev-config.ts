@@ -13,24 +13,52 @@ export function readJevApiKey(): string | undefined {
 	return StateManager.get().getSecretKey("jevApiKey")?.trim() || undefined
 }
 
+/** The one key for every custom endpoint; optional, since Ollama needs none. */
+export function readJevCustomApiKey(): string | undefined {
+	return StateManager.get().getSecretKey("jevCustomApiKey")?.trim() || undefined
+}
+
 /**
- * Where to call Jev, or nothing when it is not both enabled and keyed.
+ * Where to call Jev, or nothing when it is not both enabled and configured.
  *
  * Both, not either: the checkbox is what the user decides, and a key left
  * stored after they unticked it must not keep conversation text flowing to a
  * hosted service. The image tool's gate read only its endpoint, and a stored
  * one kept `generate_image` offered with its box unticked.
+ *
+ * Configured means one of two things. With no custom URL it is TypeSafe, which
+ * needs its key. With one it is that server with its own model and, if set,
+ * the custom key -- never TypeSafe's, which must not reach a server the user
+ * typed in -- and it needs a model named, since TypeSafe's names mean nothing
+ * to Ollama.
  */
 export function readJevEndpoint(): JevEndpoint | undefined {
 	const state = StateManager.get()
 	if (state.getGlobalSettingsKey("jevEnabled") !== true) {
 		return undefined
 	}
+	const settings = readJevSettings()
+	const tuning = {
+		floor: settings.floor,
+		highStakesFloor: settings.highStakesFloor,
+		timeoutMs: settings.timeoutMs,
+	}
+	if (settings.baseUrl) {
+		if (!settings.customModel) {
+			return undefined
+		}
+		const apiKey = readJevCustomApiKey()
+		return {
+			baseUrl: settings.baseUrl,
+			model: settings.customModel,
+			...(apiKey ? { apiKey } : {}),
+			...tuning,
+		}
+	}
 	const apiKey = readJevApiKey()
 	if (!apiKey) {
 		return undefined
 	}
-	const settings = readJevSettings()
 	return {
 		apiKey,
 		model: settings.model,

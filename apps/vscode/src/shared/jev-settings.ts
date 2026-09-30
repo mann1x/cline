@@ -8,8 +8,17 @@
 
 /** Jev's configuration, as the Jev tab stores it. */
 export interface JevSettings {
-	/** A pinned version keeps tuned floors valid; `jev-latest` moves with releases. */
+	/** TypeSafe's model. A pinned version keeps tuned floors valid; `jev-latest` moves with releases. */
 	model: string
+	/**
+	 * A custom endpoint that speaks TypeSafe's Jev API: Ollama, xollama or a
+	 * third party. Empty means TypeSafe itself. Set, it switches the model and
+	 * the key to {@link customModel} and the custom key, so neither TypeSafe's
+	 * key nor its model name is ever sent anywhere else.
+	 */
+	baseUrl: string
+	/** The model on the custom endpoint, such as Ollama's `nimble`. */
+	customModel: string
 	floor: number
 	highStakesFloor: number
 	timeoutMs: number
@@ -21,6 +30,8 @@ export interface JevSettings {
 
 export const DEFAULT_JEV_SETTINGS: JevSettings = {
 	model: "jev-latest",
+	baseUrl: "",
+	customModel: "",
 	floor: 0.6,
 	highStakesFloor: 0.85,
 	timeoutMs: 15_000,
@@ -49,8 +60,11 @@ export function parseJevSettings(raw: string | undefined): JevSettings {
 		typeof parsed.timeoutMs === "number" && Number.isFinite(parsed.timeoutMs) && parsed.timeoutMs >= 1_000
 			? Math.min(parsed.timeoutMs, 120_000)
 			: DEFAULT_JEV_SETTINGS.timeoutMs
+	const text = (value: unknown) => (typeof value === "string" ? value.trim() : "")
 	return {
 		model,
+		baseUrl: text(parsed.baseUrl),
+		customModel: text(parsed.customModel),
 		floor: unitInterval(parsed.floor, DEFAULT_JEV_SETTINGS.floor),
 		highStakesFloor: unitInterval(parsed.highStakesFloor, DEFAULT_JEV_SETTINGS.highStakesFloor),
 		timeoutMs,

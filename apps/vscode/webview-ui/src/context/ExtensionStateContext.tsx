@@ -325,6 +325,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		jevEnabled: false,
 		jevSettings: "",
 		jevApiKeySet: false,
+		jevCustomApiKeySet: false,
 		editVerificationSettings: DEFAULT_EDIT_VERIFICATION_SETTINGS,
 		atomicProtocolSettings: DEFAULT_ATOMIC_PROTOCOL_SETTINGS,
 		atomicProtocolSession: DEFAULT_ATOMIC_PROTOCOL_SESSION,

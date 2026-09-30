@@ -1,4 +1,5 @@
 import { PRIMARY_AGENT_NODE_ID } from "@shared/agent-nodes"
+import { parseJevSettings } from "@shared/jev-settings"
 import { resolveScopedModelStatus } from "@shared/model-scope-config"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { useState } from "react"
@@ -61,6 +62,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		imageGenEndpoint,
 		jevEnabled,
 		jevApiKeySet,
+		jevSettings,
 		mode,
 		apiConfiguration,
 	} = useExtensionState()
@@ -85,8 +87,10 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 	// Read from the stored record rather than `resolveScopedModelStatus`, which
 	// knows about provider snapshots and this is not one.
 	const imageGenUnconfigured = imageGenEnabled && !isImageEndpointComplete(imageGenEndpoint)
-	// And of Jev, which needs nothing but a key.
-	const jevUnconfigured = jevEnabled && !jevApiKeySet
+	// And of Jev: TypeSafe needs its key; a custom endpoint needs a model named,
+	// and a key only if that server asks for one.
+	const jevStored = parseJevSettings(jevSettings)
+	const jevUnconfigured = jevEnabled && (jevStored.baseUrl ? !jevStored.customModel : !jevApiKeySet)
 	const [currentTab, setCurrentTab] = useState<ConfigTab>(mode)
 	// Which agent node the Agents tab is showing. Held here rather than inside
 	// that tab because the profile bar is rendered above it and has to point at
@@ -446,18 +450,20 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 										throw error
 									}
 								}}>
-								Use Jev for confidence
+								Use Typesafe's Jev API for confidence
 							</SettingsCheckbox>
 							<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
-								Asks Jev, TypeSafe's scoring model, how sure to be. The model gets a <code>jev</code> tool for
-								when it is unsure of your request, a fact or a choice. The harness also uses Jev to score a
-								question's options before you see it, and a task's complexity before it is escalated. The Jev tab
-								holds the key and the confidence floors.
+								Asks Jev, TypeSafe's scoring model, or another Typesafe's Jev API compatible endpoint, such as
+								Ollama, how sure to be. The model gets a <code>jev</code> tool for when it is unsure of your
+								request, a fact or a choice. The harness also uses it to score a question's options before you see
+								it, and a task's complexity before it is escalated. The Jev tab holds the endpoint, the key and
+								the confidence floors.
 							</p>
 							{jevUnconfigured ? (
 								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
-									No Jev API key is stored, so nothing is scored and the tool is not offered. Set one on the Jev
-									tab.
+									{jevStored.baseUrl
+										? "No model is set for the custom Jev endpoint, so nothing is scored and the tool is not offered. Pick one on the Jev tab."
+										: "No Jev API key is stored, so nothing is scored and the tool is not offered. Set one on the Jev tab, or a custom endpoint."}
 								</p>
 							) : null}
 						</div>

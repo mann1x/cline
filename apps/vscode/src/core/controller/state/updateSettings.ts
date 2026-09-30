@@ -123,6 +123,9 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.jevApiKey !== undefined) {
 			controller.stateManager.setSecret("jevApiKey", request.jevApiKey.trim() || undefined)
 		}
+		if (request.jevCustomApiKey !== undefined) {
+			controller.stateManager.setSecret("jevCustomApiKey", request.jevCustomApiKey.trim() || undefined)
+		}
 		if (request.apiConfigurationProfiles !== undefined) {
 			controller.stateManager.setGlobalState("apiConfigurationProfiles", request.apiConfigurationProfiles)
 		}

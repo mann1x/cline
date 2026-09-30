@@ -22,6 +22,9 @@ service ModelsService {
   // carries the base URL; the key is read from secret storage here, because the
   // settings view has never been told it.
   rpc getImageGenerationModels(StringRequest) returns (StringArray);
+  // Fetches the decision models a Jev endpoint serves. The request carries the
+  // custom base URL, empty for TypeSafe; the matching key is read here.
+  rpc getJevModels(StringRequest) returns (StringArray);
   // Fetches available models from VS Code LM API
   rpc getVsCodeLmModels(EmptyRequest) returns (VsCodeLmModelsArray);
   // Refreshes and returns OpenRouter models

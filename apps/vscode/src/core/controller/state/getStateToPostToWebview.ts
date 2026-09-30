@@ -21,7 +21,7 @@ import type { ExtensionState, Platform } from "@shared/ExtensionMessage"
 import { ClineEnv } from "@/config"
 import { ExtensionRegistryInfo } from "@/registry"
 import { readImageGenerationApiKey } from "@/sdk/image-generation-config"
-import { readJevApiKey } from "@/sdk/jev-config"
+import { readJevApiKey, readJevCustomApiKey } from "@/sdk/jev-config"
 import { readQaCredentialNames } from "@/sdk/qa-credentials-store"
 import { BannerService } from "@/services/banner/BannerService"
 import { featureFlagsService } from "@/services/feature-flags"
@@ -251,6 +251,7 @@ export async function getStateToPostToWebview(controller: {
 		jevSettings,
 		// The same rule as the image key.
 		jevApiKeySet: readJevApiKey() !== undefined,
+		jevCustomApiKeySet: readJevCustomApiKey() !== undefined,
 		editVerificationSettings,
 		atomicProtocolSettings,
 		escalationSettings,

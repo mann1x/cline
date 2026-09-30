@@ -115,6 +115,8 @@ export interface ExtensionState {
 	jevSettings: string
 	/** Whether a Jev key is stored. Never the key itself. */
 	jevApiKeySet: boolean
+	/** Whether a key for a custom Jev endpoint is stored. Never the key itself. */
+	jevCustomApiKeySet: boolean
 	/** Whether a run may finish with a file it changed and never checked. */
 	editVerificationSettings: EditVerificationSettings
 	/** Whether a task runs as judged, revertible transactions. */

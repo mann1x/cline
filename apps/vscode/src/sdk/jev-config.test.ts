@@ -5,6 +5,7 @@ const stored = {
 	enabled: undefined as boolean | undefined,
 	settings: "" as string,
 	apiKey: undefined as string | undefined,
+	customApiKey: undefined as string | undefined,
 }
 
 vi.mock("@/core/storage/StateManager", () => ({
@@ -12,7 +13,8 @@ vi.mock("@/core/storage/StateManager", () => ({
 		get: () => ({
 			getGlobalSettingsKey: (key: string) =>
 				key === "jevEnabled" ? stored.enabled : key === "jevSettings" ? stored.settings : undefined,
-			getSecretKey: (key: string) => (key === "jevApiKey" ? stored.apiKey : undefined),
+			getSecretKey: (key: string) =>
+				key === "jevApiKey" ? stored.apiKey : key === "jevCustomApiKey" ? stored.customApiKey : undefined,
 		}),
 	},
 }))
@@ -28,6 +30,7 @@ beforeEach(() => {
 	stored.enabled = undefined
 	stored.settings = ""
 	stored.apiKey = undefined
+	stored.customApiKey = undefined
 })
 
 describe("the Jev defaults", () => {
@@ -72,6 +75,33 @@ describe("readJevEndpoint", () => {
 
 		stored.apiKey = " sk "
 		expect(readJevEndpoint()).toMatchObject({ apiKey: "sk", model: "jev-latest", floor: 0.6 })
+	})
+
+	// TypeSafe's key goes to TypeSafe only; a custom URL takes its own key and model.
+	it("sends a custom endpoint its own key and model, never TypeSafe's", () => {
+		stored.enabled = true
+		stored.apiKey = "sk-typesafe"
+		stored.settings = JSON.stringify({ baseUrl: "http://solidpc:11434", model: "jev-1.13.0" })
+		expect(readJevEndpoint()).toBeUndefined()
+
+		stored.settings = JSON.stringify({ baseUrl: " http://solidpc:11434 ", customModel: " nimble ", floor: 0.7 })
+		const endpoint = readJevEndpoint()
+		expect(endpoint).toMatchObject({ baseUrl: "http://solidpc:11434", model: "nimble", floor: 0.7 })
+		expect(endpoint).not.toHaveProperty("apiKey")
+
+		stored.customApiKey = "sk-custom"
+		expect(readJevEndpoint()?.apiKey).toBe("sk-custom")
+
+		// And with no custom URL the custom key is not what TypeSafe gets.
+		stored.settings = JSON.stringify({ customModel: "nimble" })
+		expect(readJevEndpoint()).toMatchObject({ apiKey: "sk-typesafe", model: "jev-latest" })
+		expect(readJevEndpoint()).not.toHaveProperty("baseUrl")
+	})
+
+	it("needs no key at all for a custom endpoint", () => {
+		stored.enabled = true
+		stored.settings = JSON.stringify({ baseUrl: "http://localhost:11434", customModel: "tev1:0.8b" })
+		expect(isJevConfigured()).toBe(true)
 	})
 })
 

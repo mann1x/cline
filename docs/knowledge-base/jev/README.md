@@ -102,6 +102,8 @@ https://docs.typesafe.ai/concepts/use-case-map, https://docs.typesafe.ai/model-j
   and classification using confidence. Each gets its mechanism, question shapes and
   example thresholds, plus the skill-suggestion and function-calling cookbooks. All the
   docs' example code is Python.
+- **[ollama.md](ollama.md)**: Ollama 0.35's `/v1/systemone` and its models, the
+  differences from TypeSafe's API, and how the client branches on each.
 - **[limits-and-caveats.md](limits-and-caveats.md)**: the nine `jev-1.13` jaggedness
   failure modes (including accuracy loss from irrelevant state); structural
   non-invariants; run-to-run variation; calibration caveats; language; input limits;

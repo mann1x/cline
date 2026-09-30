@@ -538,6 +538,9 @@ const SECRETS_KEYS = [
 	"imageGenApiKey",
 	// The Jev key, a secret for the same reason.
 	"jevApiKey",
+	// The key for a custom Jev endpoint (Ollama, xollama, a third party). One
+	// for every custom URL, and never TypeSafe's: that one goes only to TypeSafe.
+	"jevCustomApiKey",
 	"openai-codex-oauth-credentials", // JSON blob containing OAuth tokens for OpenAI Codex (ChatGPT subscription)
 	"wandbApiKey",
 ] as const
@@ -581,7 +584,7 @@ export type RemoteConfigFields = GlobalStateAndSettings & RemoteConfigExtra
  * exact leak the feature exists to prevent. These are stored the same way and
  * left out of the API configuration, because they are not one.
  */
-export const NonApiHandlerSecretKeys = new Set<string>(["qaCredentials", "imageGenApiKey", "jevApiKey"])
+export const NonApiHandlerSecretKeys = new Set<string>(["qaCredentials", "imageGenApiKey", "jevApiKey", "jevCustomApiKey"])
 
 export type Secrets = { [K in (typeof SecretKeys)[number]]: string | undefined }
 export type LocalState = { [K in (typeof LocalStateKeys)[number]]: ClineRulesToggles }
