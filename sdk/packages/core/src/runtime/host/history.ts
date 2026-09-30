@@ -1,9 +1,13 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type * as LlmsProviders from "@cline/llms";
 import { formatDisplayUserInput, normalizeUserInput } from "@cline/shared";
 import { resolveSessionDataDir } from "@cline/shared/storage";
 import { toSessionRecord } from "../../services/session-data";
+import {
+	parseSubSessionId,
+	parseTeamTaskSubSessionId,
+} from "../../session/models/session-graph";
 import type { SessionManifest } from "../../session/models/session-manifest";
 import { SessionManifestSchema } from "../../session/models/session-manifest";
 import type { SessionRow } from "../../session/models/session-row";
@@ -105,6 +109,14 @@ function extractSessionRecencyToken(sessionId: string): number {
 export function manifestToSessionRecord(
 	manifest: SessionManifest,
 ): SessionRecord {
+	// A manifest carries no lineage, but a child session's id does
+	// (`<root>__<agent>`, `<root>__teamtask__…`). Read as a root session, every
+	// agent of a swarm whose sessions have manifests of their own was listed as
+	// a conversation of its own -- pandorum, 2026-09-30: fifteen
+	// "task/correctness A" and siblings under one meta-experiment.
+	const parentSessionId =
+		parseTeamTaskSubSessionId(manifest.session_id)?.rootSessionId ??
+		parseSubSessionId(manifest.session_id)?.rootSessionId;
 	return {
 		sessionId: manifest.session_id,
 		source: manifest.source,
@@ -122,7 +134,8 @@ export function manifestToSessionRecord(
 		enableTools: manifest.enable_tools,
 		enableSpawn: manifest.enable_spawn,
 		enableTeams: manifest.enable_teams,
-		isSubagent: false,
+		isSubagent: parentSessionId !== undefined,
+		...(parentSessionId !== undefined ? { parentSessionId } : {}),
 		prompt: manifest.prompt,
 		metadata: manifest.metadata,
 		messagesPath: manifest.messages_path,
@@ -445,7 +458,10 @@ export async function listSessionHistory(
 			? await listManifestHistoryRows(Math.min(Math.max(limit * 2, 100), 500))
 			: [];
 	const merged = new Map<string, SessionRecord>();
-	for (const row of [...backendRows, ...manifestRows]) {
+	for (const row of [
+		...backendRows,
+		...manifestRows.filter((row) => includeSubagents || !row.isSubagent),
+	]) {
 		if (merged.has(row.sessionId)) {
 			continue;
 		}
@@ -457,11 +473,45 @@ export async function listSessionHistory(
 			: Array.from(merged.values())
 					.sort((left, right) => right.startedAt.localeCompare(left.startedAt))
 					.slice(0, limit);
-	const projectedRows = await projectLegacyRunningRowsAsIdle(host, rows);
+	const projectedRows = await Promise.all(
+		(await projectLegacyRunningRowsAsIdle(host, rows)).map(datedByLastActivity),
+	);
 	if (options.hydrate === false) {
 		return projectedRows.map((row) => normalizeHistoryRow(row));
 	}
 	return await hydrateSessionHistory(host, projectedRows);
+}
+
+/** Written by `reconcileDeadRunningSession` on the rows it closes. */
+const STALE_SESSION_RECONCILER = "stale_session_reconciler";
+
+/**
+ * A session the dead-process sweep closed, dated by its last activity.
+ *
+ * The sweep runs when a host starts and finds a session still marked running
+ * whose process is gone -- after every window reload, for one. Its write
+ * stamps `updated_at` with the moment of the sweep, and before 2026-10-01 it
+ * stamped `ended_at` with it too, so every conversation open at a reload
+ * moved to the top of the history under the reload's date (pandorum: sixteen
+ * rows at 00:01 for a run that stopped at 19:09). A closed conversation is
+ * dated by when it last did something: its end, and for a row whose end is
+ * the sweep's own timestamp, the last write to its transcript.
+ */
+async function datedByLastActivity(row: SessionRecord): Promise<SessionRecord> {
+	const metadata = row.metadata as Record<string, unknown> | undefined;
+	if (metadata?.terminal_marker_source !== STALE_SESSION_RECONCILER) {
+		return row;
+	}
+	let endedAt = row.endedAt ?? undefined;
+	if (endedAt && endedAt === metadata.terminal_marker_at && row.messagesPath) {
+		const written = await stat(row.messagesPath)
+			.then((info) => info.mtime.toISOString())
+			.catch(() => undefined);
+		if (written && written < endedAt && written >= row.startedAt) {
+			endedAt = written;
+		}
+	}
+	return endedAt ? { ...row, endedAt, updatedAt: endedAt } : row;
 }
 
 async function readManifestMessagesPath(

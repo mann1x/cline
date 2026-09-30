@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import { dirname } from "node:path";
 import type * as LlmsProviders from "@cline/llms";
 import type { AgentResult, BasicLogger } from "@cline/shared";
@@ -483,6 +484,11 @@ export class UnifiedSessionPersistenceService {
 
 		const detectedAt = nowIso();
 		const reason = UnifiedSessionPersistenceService.STALE_REASON;
+		// The session ended when it last did something, not when this sweep
+		// noticed: the sweep runs at host start, so stamping its own time dated
+		// every conversation open at a reload by the reload. The detection time
+		// stays in `terminal_marker_at`.
+		const endedAt = lastActivityAt(row, detectedAt);
 
 		for (let attempt = 0; attempt < OCC_MAX_RETRIES; attempt++) {
 			const latest = await this.adapter.getSession(row.sessionId);
@@ -500,7 +506,7 @@ export class UnifiedSessionPersistenceService {
 			const changed = await this.adapter.updateSession({
 				sessionId: latest.sessionId,
 				status: "failed",
-				endedAt: detectedAt,
+				endedAt,
 				exitCode: 1,
 				metadata: nextMetadata,
 				expectedStatusLock: latest.statusLock,
@@ -514,7 +520,7 @@ export class UnifiedSessionPersistenceService {
 
 			const manifest = buildManifestFromRow(latest, {
 				status: "failed",
-				endedAt: detectedAt,
+				endedAt,
 				exitCode: 1,
 				metadata: nextMetadata,
 			});
@@ -532,7 +538,7 @@ export class UnifiedSessionPersistenceService {
 			return {
 				...latest,
 				status: "failed",
-				endedAt: detectedAt,
+				endedAt,
 				exitCode: 1,
 				metadata: nextMetadata,
 				statusLock: changed.statusLock,
@@ -668,4 +674,23 @@ export class UnifiedSessionPersistenceService {
 			await this.manifestStore.deleteSessionCompactionState(sessionId);
 		} catch {}
 	}
+}
+
+/**
+ * When a session last did something: the later of its row's last write and
+ * its transcript's, never after `ceiling` (the sweep's own time).
+ */
+function lastActivityAt(row: SessionRow, ceiling: string): string {
+	let latest = row.updatedAt || row.startedAt;
+	if (row.messagesPath) {
+		try {
+			const written = statSync(row.messagesPath).mtime.toISOString();
+			if (written > latest) {
+				latest = written;
+			}
+		} catch {
+			// No transcript to read: the row's own time stands.
+		}
+	}
+	return latest && latest < ceiling ? latest : ceiling;
 }

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -479,6 +479,108 @@ describe("session history", () => {
 				metadata: expect.objectContaining({ title: "backend title" }),
 			}),
 		]);
+	});
+
+	// pandorum, 2026-09-30: a swarm whose agents had manifests of their own
+	// listed each agent as a conversation ("task/correctness A" x3, ...).
+	it("keeps a child session's manifest out of the history", async () => {
+		tempSessionDataDir = await mkdtemp(join(tmpdir(), "cline-core-history-"));
+		process.env.CLINE_SESSION_DATA_DIR = tempSessionDataDir;
+		await writeManifest("1790788253165_0yfml", { prompt: "meta-experiment" });
+		await writeManifest("1790788253165_0yfml__agent_1790788440406_8nqhb9", {
+			prompt: "task/correctness A",
+		});
+		const host = {
+			listSessions: vi.fn().mockResolvedValue([]),
+			readSessionMessages: vi.fn().mockResolvedValue([]),
+		};
+
+		const rows = await listSessionHistory(host, {
+			includeManifestFallback: true,
+			hydrate: false,
+		});
+		expect(rows.map((row) => row.sessionId)).toEqual(["1790788253165_0yfml"]);
+
+		const withChildren = await listSessionHistory(host, {
+			includeManifestFallback: true,
+			includeSubagents: true,
+			hydrate: false,
+		});
+		expect(
+			withChildren.find((row) => row.sessionId.includes("__agent_")),
+		).toMatchObject({
+			isSubagent: true,
+			parentSessionId: "1790788253165_0yfml",
+		});
+	});
+
+	// The sweep that closes a dead process's sessions runs at host start, and
+	// its write stamps the sweep's own time: every conversation open at a
+	// window reload was dated by the reload (pandorum, 2026-10-01 00:01).
+	it("dates a session the dead-process sweep closed by its last activity", async () => {
+		const messagesPath = await writeMessagesFile("swept.messages.json");
+		const lastWrite = new Date("2026-09-30T17:09:38.000Z");
+		await utimes(messagesPath, lastWrite, lastWrite);
+		const sweptAt = "2026-09-30T22:01:44.545Z";
+		const rows = await listSessionHistory(
+			{
+				listSessions: vi.fn().mockResolvedValue([
+					createRow({
+						sessionId: "1790788253165_0yfml",
+						startedAt: "2026-09-30T17:10:53.521Z",
+						status: "failed",
+						endedAt: sweptAt,
+						updatedAt: sweptAt,
+						messagesPath,
+						metadata: {
+							terminal_marker_source: "stale_session_reconciler",
+							terminal_marker_at: sweptAt,
+						},
+					}),
+					createRow({
+						sessionId: "closed_normally",
+						status: "completed",
+						endedAt: "2026-09-30T10:00:00.000Z",
+						updatedAt: "2026-09-30T23:00:00.000Z",
+					}),
+				]),
+				readSessionMessages: vi.fn().mockResolvedValue([]),
+			},
+			{ hydrate: false },
+		);
+
+		// The transcript was last written before the session's recorded start
+		// here, so it is not trusted: the end stays, but it dates the row.
+		expect(rows[0]).toMatchObject({ endedAt: sweptAt, updatedAt: sweptAt });
+		// A row the sweep did not touch keeps its own dates.
+		expect(rows[1]).toMatchObject({ updatedAt: "2026-09-30T23:00:00.000Z" });
+
+		const later = new Date("2026-09-30T19:09:38.000Z");
+		await utimes(messagesPath, later, later);
+		const corrected = await listSessionHistory(
+			{
+				listSessions: vi.fn().mockResolvedValue([
+					createRow({
+						sessionId: "1790788253165_0yfml",
+						startedAt: "2026-09-30T17:10:53.521Z",
+						status: "failed",
+						endedAt: sweptAt,
+						updatedAt: sweptAt,
+						messagesPath,
+						metadata: {
+							terminal_marker_source: "stale_session_reconciler",
+							terminal_marker_at: sweptAt,
+						},
+					}),
+				]),
+				readSessionMessages: vi.fn().mockResolvedValue([]),
+			},
+			{ hydrate: false },
+		);
+		expect(corrected[0]).toMatchObject({
+			endedAt: "2026-09-30T19:09:38.000Z",
+			updatedAt: "2026-09-30T19:09:38.000Z",
+		});
 	});
 
 	it("merges manifest fallback rows when the backend list is short", async () => {

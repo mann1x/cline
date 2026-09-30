@@ -4,6 +4,7 @@ import {
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
@@ -368,6 +369,56 @@ describe("UnifiedSessionPersistenceService", () => {
 					'"reason":"failed_external_process_exit"',
 				);
 			}
+		},
+		15_000,
+	);
+
+	sqliteIt(
+		"ends a dead session at its last activity, not at the sweep",
+		async () => {
+			// pandorum, 2026-10-01: the sweep ran at a window reload and stamped
+			// its own time as every open conversation's end, so the history
+			// dated a run that stopped at 19:09 by the 00:01 reload.
+			const dbDir = mkdtempSync(join(tmpdir(), "stale-session-activity-db-"));
+			const sessionsDir = mkdtempSync(
+				join(tmpdir(), "stale-session-activity-sessions-"),
+			);
+			tempDirs.push(dbDir, sessionsDir);
+			const store = new SqliteSessionStore({ sessionsDir: dbDir });
+			stores.push(store);
+			const service = new CoreSessionService(store, {
+				sessionArtifactsDir: sessionsDir,
+			});
+			const artifacts = await service.createRootSessionWithArtifacts({
+				sessionId: "stale-activity-session",
+				source: SessionSource.CLI,
+				pid: 999_999_999,
+				interactive: false,
+				provider: "mock-provider",
+				model: "mock-model",
+				cwd: "/tmp/project",
+				workspaceRoot: "/tmp/project",
+				enableTools: true,
+				enableSpawn: true,
+				enableTeams: false,
+				prompt: "hello",
+				startedAt: "2026-01-01T00:00:00.000Z",
+			});
+			// The transcript's last write, after the row's own and a moment
+			// before the sweep -- as when a run writes its messages to the end.
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			writeFileSync(artifacts.messagesPath, '{"version":1,"messages":[]}\n');
+			const lastWrite = statSync(artifacts.messagesPath).mtime.toISOString();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+
+			await service.reconcileDeadSessions();
+
+			const [row] = await service.listSessions(10);
+			expect(row?.status).toBe("failed");
+			expect(row?.endedAt).toBe(lastWrite);
+			const marker = (row?.metadata as Record<string, unknown> | null)
+				?.terminal_marker_at as string;
+			expect(marker > (row?.endedAt ?? "")).toBe(true);
 		},
 		15_000,
 	);
