@@ -6,6 +6,12 @@ export {
 	installOcrLanguages,
 	parseOcrLanguages,
 } from "../../../../sdk/packages/core/src/extensions/tools/executors/document/ocr"
+export {
+	resolveSessionOutputCap,
+	resolveSessionThinkBudgetMessage,
+	resolveSessionThinkingAllowance,
+	sessionThinkingEngine,
+} from "../../../../sdk/packages/core/src/services/llms/session-budget"
 
 export interface OAuthCredentials {
 	accessToken?: string

@@ -313,6 +313,142 @@ export function parseDeclaredTemperature(payload: unknown): number | undefined {
 	return Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+const declaredThinkBudgetMessage = new Map<string, string | null>();
+
+/**
+ * The model's own `think_budget_message`, if it has been looked up and it has
+ * one: what the server appends to reasoning it cuts at the budget. The
+ * capped-thinking detector matches it at the end of a think to tell a turn the
+ * server cut from one that simply thought for a long time.
+ */
+export function readDeclaredThinkBudgetMessage(
+	baseUrl: string | undefined,
+	modelId: string | undefined,
+): string | undefined {
+	if (!modelId) {
+		return undefined;
+	}
+	return (
+		declaredThinkBudgetMessage.get(declaredKey(baseUrl, modelId)) ?? undefined
+	);
+}
+
+/**
+ * Parse `think_budget_message` out of the `parameters` block. The value is
+ * prose, so it is quoted, with the Modelfile's backslash escapes.
+ */
+export function parseDeclaredThinkBudgetMessage(
+	payload: unknown,
+): string | undefined {
+	if (!payload || typeof payload !== "object") {
+		return undefined;
+	}
+	const parameters = (payload as { parameters?: unknown }).parameters;
+	if (typeof parameters !== "string") {
+		return undefined;
+	}
+	const found = parameters.match(
+		/^[ \t]*think_budget_message[ \t]+(.*\S)[ \t]*$/m,
+	);
+	if (!found?.[1]) {
+		return undefined;
+	}
+	const quoted = /^"(.*)"$/.exec(found[1]);
+	const value = (quoted?.[1] ?? found[1]).replace(/\\(.)/g, (_m, c: string) =>
+		c === "n" ? "\n" : c === "t" ? "\t" : c === "r" ? "\r" : c,
+	);
+	return value.trim() || undefined;
+}
+
+/** The think budget the server resolves for a request, from `/api/show`. */
+export interface OllamaThinkBudget {
+	/** The level or count the server reported it from. */
+	level: string;
+	budgetTokens: number;
+}
+
+/**
+ * Ask the server what think budget it will hold a request to.
+ *
+ * `/api/show` given the request's `think` and options answers with
+ * `think_budget_tokens` on the think-budget builds, which is the number the
+ * server enforces -- a level's share of `min(num_predict, num_ctx)`, or the
+ * model's own `think_budget` where no level outranks it. Asked rather than
+ * computed so every host states the number the server enforces. An older
+ * build answers without the field: nothing to report, which is `undefined`
+ * rather than a guess.
+ */
+export async function probeOllamaThinkBudget(
+	baseUrl: string | undefined,
+	modelId: string,
+	query: { think?: string; numPredict?: number; numCtx?: number },
+	fetchImpl: typeof fetch,
+	attempts = 3,
+): Promise<OllamaThinkBudget | undefined> {
+	const model = modelId.trim();
+	if (!model) {
+		return undefined;
+	}
+	const root = normalizeOllamaBaseUrl(baseUrl) ?? "http://localhost:11434/api";
+	const options: Record<string, number> = {};
+	if (
+		query.numPredict &&
+		Number.isFinite(query.numPredict) &&
+		query.numPredict > 0
+	) {
+		options.num_predict = Math.floor(query.numPredict);
+	}
+	if (query.numCtx && Number.isFinite(query.numCtx) && query.numCtx > 0) {
+		options.num_ctx = Math.floor(query.numCtx);
+	}
+	const body = JSON.stringify({
+		model,
+		...(query.think ? { think: query.think } : {}),
+		...(Object.keys(options).length > 0 ? { options } : {}),
+	});
+	for (let attempt = 1; attempt <= attempts; attempt++) {
+		try {
+			const response = await fetchImpl(`${root}/show`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body,
+				signal: AbortSignal.timeout(2_000 * attempt),
+			});
+			if (!response.ok) {
+				throw new Error(`/api/show returned ${response.status}`);
+			}
+			const payload = (await response.json()) as {
+				think_budget?: unknown;
+				think_budget_tokens?: unknown;
+			};
+			const tokens = payload?.think_budget_tokens;
+			if (
+				typeof tokens !== "number" ||
+				!Number.isFinite(tokens) ||
+				tokens <= 0
+			) {
+				return undefined;
+			}
+			const raw = payload.think_budget;
+			const level =
+				typeof raw === "string"
+					? raw.trim()
+					: typeof raw === "number"
+						? String(raw)
+						: "";
+			return {
+				level: level || "unspecified",
+				budgetTokens: Math.floor(tokens),
+			};
+		} catch {
+			if (attempt < attempts) {
+				await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+			}
+		}
+	}
+	return undefined;
+}
+
 /** Parse `num_ctx` out of the `parameters` block `/api/show` returns. */
 export function parseDeclaredNumCtx(payload: unknown): number | undefined {
 	if (!payload || typeof payload !== "object") {
@@ -372,6 +508,7 @@ export async function primeDeclaredNumCtx(
 			declaredFamily.set(key, null);
 			declaredTrainedCtx.set(key, null);
 			declaredTemperature.set(key, null);
+			declaredThinkBudgetMessage.set(key, null);
 			await account;
 			return;
 		}
@@ -391,11 +528,16 @@ export async function primeDeclaredNumCtx(
 		const trained = parseDeclaredTrainedCtx(payload);
 		declaredTrainedCtx.set(key, trained ?? null);
 		declaredTemperature.set(key, parseDeclaredTemperature(payload) ?? null);
+		declaredThinkBudgetMessage.set(
+			key,
+			parseDeclaredThinkBudgetMessage(payload) ?? null,
+		);
 	} catch {
 		declaredNumCtx.set(key, null);
 		declaredFamily.set(key, null);
 		declaredTrainedCtx.set(key, null);
 		declaredTemperature.set(key, null);
+		declaredThinkBudgetMessage.set(key, null);
 	}
 	await account;
 	const resolved = readResolvedOllamaWindow(baseUrl, modelId);
@@ -415,6 +557,7 @@ export function resetDeclaredNumCtx(): void {
 	declaredFamily.clear();
 	declaredTrainedCtx.clear();
 	declaredTemperature.clear();
+	declaredThinkBudgetMessage.clear();
 	resetOllamaAccountStatus();
 }
 

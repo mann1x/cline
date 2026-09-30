@@ -1418,6 +1418,17 @@ export type {
 	RegisterModelInput,
 	RegisterProviderInput,
 } from "./services/llms/runtime-types";
+// One session's output cap and thinking allowance, resolved by the same rule on
+// every host so the CLI (and the harness) sends what the plugin sends.
+export {
+	resolveSessionOutputCap,
+	resolveSessionThinkBudgetMessage,
+	resolveSessionThinkingAllowance,
+	type SessionOutputCapInput,
+	type SessionThinkingEngine,
+	type SessionThinkingInput,
+	sessionThinkingEngine,
+} from "./services/llms/session-budget";
 export {
 	TelemetryService,
 	type TelemetryServiceOptions,

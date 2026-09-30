@@ -22,6 +22,8 @@ import {
 	parseOcrLanguages,
 	readCompactionStrategyGlobally,
 	resolveProviderApiKeyFromSettings,
+	resolveSessionOutputCap,
+	resolveSessionThinkingAllowance,
 	type StartSessionResult,
 	type StruggleThresholds,
 	toProviderConfig,
@@ -34,15 +36,11 @@ import {
 	MODEL_COLLECTIONS_BY_PROVIDER_ID,
 	normalizeParallelSessions,
 	OLLAMA_DEFAULT_CONTEXT_WINDOW,
-	OLLAMA_DEFAULT_REASONING_EFFORT,
 	primeDeclaredNumCtx,
 	probeOpencotiProps,
 	readResolvedOllamaWindow,
 	readXollamaModel,
 	resolveAgentSlotLimit,
-	resolveDefaultMaxOutputTokens,
-	resolveLlamaCppThinkBudgetTokens,
-	resolveLlamaCppThinkBudgetWindow,
 	resolveOllamaOrigin,
 	withXollamaAuth,
 	xollamaDrivesModel,
@@ -56,7 +54,6 @@ import {
 	normalizeAgentWindowShare,
 	type PromptTemplateCompactionId,
 	type RenderedPromptTemplate,
-	resolveOutputBudgetTokens,
 } from "@cline/shared"
 import { agentNodeLabels, PRIMARY_AGENT_NODE_ID, parseAgentNodes, polykvPriorityZeroApplies } from "@shared/agent-nodes"
 import type { ApiConfiguration } from "@shared/api"
@@ -510,28 +507,21 @@ export async function resolveThinkingAllowance(
 	// The level this session will send. The vendor fills in its default when
 	// nothing set one, so that is the level to ask about — asking about "no
 	// level" would answer for a request this session never makes.
-	const think = reasoning.reasoningEffort ?? OLLAMA_DEFAULT_REASONING_EFFORT
-	// A configured num_predict is the cap the server will apply; the agent's own
-	// per-turn cap only stands in when nothing more specific was set.
-	const effectiveNumPredict = numPredict ?? outputCap
-
-	if (engine === "llamacpp") {
-		// A configured `thinkBudget` may be a bare token count, in which case it
-		// is the answer and no level is involved. Same tri-valued field the
-		// sampler reads, resolved by the same function, so the prompt cannot
-		// state a bound different from the one on the wire.
-		const level = configuredBudget || think
-		const budgetTokens = resolveLlamaCppThinkBudgetTokens(
-			level,
-			resolveLlamaCppThinkBudgetWindow(contextWindow, effectiveNumPredict),
-		)
-		return budgetTokens === undefined ? undefined : { level, budgetTokens }
-	}
-
-	return resolveOllamaThinkBudget(baseUrl, modelId, {
-		think,
-		numPredict: effectiveNumPredict,
-		numCtx: contextWindow,
+	// Core's rule, shared with the CLI. The level defaults inside it, the
+	// configured num_predict outranks the session cap, and Ollama is asked
+	// rather than computed for.
+	return resolveSessionThinkingAllowance({
+		providerId: toSdkProviderId(providerId),
+		modelId,
+		baseUrl,
+		thinking: reasoning.thinking,
+		reasoningEffort: reasoning.reasoningEffort,
+		configuredThinkBudget: configuredBudget,
+		configuredNumPredict: numPredict,
+		outputCap,
+		contextWindow,
+		fetchImpl: fetch,
+		probeOllama: resolveOllamaThinkBudget,
 	})
 }
 
@@ -1833,18 +1823,14 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// publishes no cap of its own, and stating the flat anchor here would put a
 	// smaller number in the prompt than the server enforces on every local model
 	// with a window wider than 128k.
-	const sessionOutputCap =
-		explicitOutputCap ??
-		resolveOutputBudgetTokens({
-			mode: outputBudget?.mode ?? "auto",
-			maxTokens: outputBudget?.maxTokens,
-			contextWindow: sessionContextWindow,
-			modelMaxOutputTokens: positiveFiniteNumber(committedRuntimeModel?.modelInfo?.maxTokens),
-		}) ??
-		resolveDefaultMaxOutputTokens({
-			contextWindow: sessionContextWindow,
-			maxOutputTokens: positiveFiniteNumber(committedRuntimeModel?.modelInfo?.maxTokens),
-		})
+	// Core's rule, which the CLI resolves by too: the harness has to send what
+	// the plugin sends, or a change measured on one misleads the other.
+	const sessionOutputCap = resolveSessionOutputCap({
+		configuredNumPredict: explicitOutputCap,
+		outputBudget,
+		contextWindow: sessionContextWindow,
+		modelMaxOutputTokens: positiveFiniteNumber(committedRuntimeModel?.modelInfo?.maxTokens),
+	})
 
 	// Tell the model about the cap its reply will actually be truncated at.
 	try {

@@ -1,4 +1,7 @@
-import { resolveProviderRequestHeaders } from "@cline/llms";
+import {
+	readResolvedOllamaWindow,
+	resolveProviderRequestHeaders,
+} from "@cline/llms";
 import type {
 	AgentConfig,
 	AgentEvent,
@@ -15,6 +18,7 @@ import type {
 } from "@cline/shared";
 import {
 	hasRuntimeConfigExtension,
+	isOllamaNativeProvider,
 	withOutputBudgetSection,
 } from "@cline/shared";
 import { version as corePackageVersion } from "../../package.json";
@@ -62,6 +66,11 @@ import {
 	filterExtensionToolRegistrations,
 	resolveDisabledAgentPluginNames,
 } from "./global-settings";
+import {
+	resolveSessionOutputCap,
+	resolveSessionThinkBudgetMessage,
+	resolveSessionThinkingAllowance,
+} from "./llms/session-budget";
 import { hasRuntimeHooks, mergeAgentExtensions } from "./session-data";
 import type { ProviderSettingsManager } from "./storage/provider-settings-manager";
 import { InMemoryWorkspaceManager } from "./workspace/workspace-manager";
@@ -239,6 +248,106 @@ function buildProviderConfig(
 		providerConfig.fetch = resolvedFetch;
 	}
 	return providerConfig;
+}
+
+const positiveNumber = (value: unknown): number | undefined =>
+	typeof value === "number" && Number.isFinite(value) && value > 0
+		? value
+		: undefined;
+
+/**
+ * The plugin's output cap and thinking allowance, for a host that did not
+ * resolve its own.
+ *
+ * The VS Code factory resolves both and hands them over on
+ * `config.providerConfig`; nothing here touches that. Every other host -- the
+ * CLI, and so every harness run -- used to get the stored profile's numbers
+ * alone, and a profile that names no window has no `auto` cap to take: the
+ * gateway fell back to a quarter of the window and the level to a quarter of
+ * that, half what the plugin sends for the same model. The window is the
+ * session's, in the factory's order: the configured one, then the one the
+ * model declares, then the catalog's.
+ */
+async function applySessionBudget(
+	providerConfig: ProviderConfig,
+	config: CoreSessionConfig,
+	stored: ProviderSettings | undefined,
+): Promise<
+	| {
+			contextWindow: number | undefined;
+			thinking: { level: string; budgetTokens: number } | undefined;
+			budgetMessage: string | undefined;
+	  }
+	| undefined
+> {
+	const hostResolved =
+		config.providerConfig?.providerId === config.providerId &&
+		positiveNumber(config.providerConfig?.defaultMaxOutputTokens) !== undefined;
+	if (hostResolved) {
+		return undefined;
+	}
+	const modelId = config.modelId;
+	const baseUrl = providerConfig.baseUrl;
+	const known = providerConfig.knownModels?.[modelId] as
+		| { contextWindow?: number; maxTokens?: number }
+		| undefined;
+	const contextWindow =
+		positiveNumber(stored?.contextWindow) ??
+		(isOllamaNativeProvider(config.providerId)
+			? readResolvedOllamaWindow(baseUrl, modelId)
+			: undefined) ??
+		positiveNumber(known?.contextWindow);
+	const sampling = stored?.sampling;
+	const outputCap = resolveSessionOutputCap({
+		configuredNumPredict: sampling?.numPredict,
+		maxTokensPerTurn: config.maxTokensPerTurn,
+		outputBudget: stored?.outputBudget,
+		contextWindow,
+		modelMaxOutputTokens: known?.maxTokens,
+	});
+	providerConfig.defaultMaxOutputTokens = outputCap;
+	let thinking: { level: string; budgetTokens: number } | undefined;
+	try {
+		thinking = await resolveSessionThinkingAllowance({
+			providerId: config.providerId,
+			modelId,
+			baseUrl,
+			thinking: providerConfig.thinking,
+			reasoningEffort: providerConfig.reasoningEffort,
+			configuredThinkBudget: sampling?.thinkBudget,
+			configuredNumPredict: sampling?.numPredict,
+			outputCap,
+			contextWindow,
+			fetchImpl: providerConfig.fetch ?? fetch,
+		});
+	} catch {
+		// Advisory, as in the factory: the session runs without a stated bound.
+		thinking = undefined;
+	}
+	// A count the user typed is the answer and is kept.
+	if (
+		thinking &&
+		positiveNumber(stored?.reasoning?.budgetTokens) === undefined
+	) {
+		providerConfig.thinkingBudgetTokens = thinking.budgetTokens;
+	}
+	config.logger?.log(
+		`Output budget: cap=${outputCap} contextWindow=${contextWindow ?? "unknown"}` +
+			(thinking
+				? ` thinking=${thinking.budgetTokens} (${thinking.level})`
+				: ""),
+		{ severity: "info" },
+	);
+	return {
+		contextWindow,
+		thinking,
+		budgetMessage: resolveSessionThinkBudgetMessage({
+			providerId: config.providerId,
+			modelId,
+			baseUrl,
+			configuredMessage: sampling?.thinkBudgetMessage,
+		}),
+	};
 }
 
 export interface PrepareLocalRuntimeBootstrapOptions {
@@ -480,6 +589,11 @@ export async function prepareLocalRuntimeBootstrap(
 		modelCatalogDefaults,
 		defaultFetch,
 	);
+	const sessionBudget = await applySessionBudget(
+		providerConfig,
+		baseConfig,
+		providerSettingsManager.getProviderSettings(baseConfig.providerId),
+	);
 	const hooks = mergeAgentHooks([
 		baseConfig.hooks,
 		baseConfig.checkpoint?.enabled === true
@@ -498,6 +612,18 @@ export async function prepareLocalRuntimeBootstrap(
 		providerConfig,
 		workspaceMetadata,
 		hooks,
+		// The budget message arms the capped-thinking detector's exact match.
+		// Only the factory set it, so on the CLI the detector fell back to
+		// guessing at the wording.
+		...(sessionBudget?.budgetMessage &&
+		!baseConfig.compaction?.cappedThinkingBudgetMessage
+			? {
+					compaction: {
+						...(baseConfig.compaction ?? {}),
+						cappedThinkingBudgetMessage: sessionBudget.budgetMessage,
+					},
+				}
+			: {}),
 		// Every host's session is built here, which is why the Output Budget
 		// section is stated here. It used to be assembled in the VS Code
 		// factory and nowhere else, so at one and the same commit the plugin
@@ -511,16 +637,19 @@ export async function prepareLocalRuntimeBootstrap(
 			? {
 					systemPrompt: withOutputBudgetSection(baseConfig.systemPrompt, {
 						outputCap: providerConfig.defaultMaxOutputTokens,
-						contextWindow: providerConfig.maxInputTokens,
-						...(providerConfig.thinkingBudgetTokens &&
-						providerConfig.reasoningEffort
-							? {
-									thinking: {
-										level: providerConfig.reasoningEffort,
-										budgetTokens: providerConfig.thinkingBudgetTokens,
-									},
-								}
-							: {}),
+						contextWindow:
+							sessionBudget?.contextWindow ?? providerConfig.maxInputTokens,
+						...(sessionBudget?.thinking
+							? { thinking: sessionBudget.thinking }
+							: providerConfig.thinkingBudgetTokens &&
+									providerConfig.reasoningEffort
+								? {
+										thinking: {
+											level: providerConfig.reasoningEffort,
+											budgetTokens: providerConfig.thinkingBudgetTokens,
+										},
+									}
+								: {}),
 					}),
 				}
 			: {}),

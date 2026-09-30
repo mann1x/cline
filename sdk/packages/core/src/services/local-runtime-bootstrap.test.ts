@@ -502,6 +502,98 @@ describe("prepareLocalRuntimeBootstrap", () => {
 		expect(bootstrap.providerConfig.fetch).toBe(customFetch);
 	});
 
+	// The harness case: the CLI hands over the window the model declares and
+	// stores none, and used to get the gateway's quarter-window fallback -- half
+	// the budget the plugin sends for the same model.
+	it("resolves the plugin's output cap and thinking allowance for a host that did not", async () => {
+		const { prepareLocalRuntimeBootstrap } = await import(
+			"./local-runtime-bootstrap"
+		);
+		const showFetch = vi.fn(
+			async (_url: string | URL | Request, _init?: RequestInit) =>
+				new Response(
+					JSON.stringify({
+						think_budget: "medium",
+						think_budget_tokens: 24_000,
+					}),
+				),
+		);
+		const input = createStartInput();
+		const bootstrap = await prepareLocalRuntimeBootstrap({
+			input: {
+				...input,
+				config: {
+					...input.config,
+					providerId: "ollama",
+					modelId: "omni",
+					reasoningEffort: "medium",
+					knownModels: { omni: { id: "omni", contextWindow: 196_608 } },
+				},
+			} as never,
+			sessionId: "sess-budget",
+			providerSettingsManager: createProviderSettingsManager({
+				provider: "ollama",
+				model: "omni",
+				baseUrl: "http://e2g:22434",
+			} as ProviderSettings) as never,
+			defaultTelemetry: undefined,
+			defaultToolPolicies: undefined,
+			defaultFetch: showFetch as unknown as typeof fetch,
+			onPluginEvent: () => {},
+			onTeamEvent: () => {},
+			createSpawnTool,
+			readSessionMetadata: async () => undefined,
+			writeSessionMetadata: async () => {},
+		});
+
+		expect(bootstrap.providerConfig.defaultMaxOutputTokens).toBe(96_000);
+		expect(bootstrap.providerConfig.thinkingBudgetTokens).toBe(24_000);
+		const body = JSON.parse(String(showFetch.mock.calls[0]?.[1]?.body));
+		expect(body.options).toEqual({ num_predict: 96_000, num_ctx: 196_608 });
+		expect(bootstrap.config.systemPrompt).toMatch(
+			/# Output Budget[\s\S]*96[,.]?000[\s\S]*24[,.]?000/,
+		);
+	});
+
+	it("leaves a host's own resolved cap alone", async () => {
+		const { prepareLocalRuntimeBootstrap } = await import(
+			"./local-runtime-bootstrap"
+		);
+		const showFetch = vi.fn();
+		const input = createStartInput();
+		const bootstrap = await prepareLocalRuntimeBootstrap({
+			input: {
+				...input,
+				config: {
+					...input.config,
+					providerId: "ollama",
+					modelId: "omni",
+					knownModels: { omni: { id: "omni", contextWindow: 196_608 } },
+					providerConfig: {
+						providerId: "ollama",
+						modelId: "omni",
+						defaultMaxOutputTokens: 5_000,
+						thinkingBudgetTokens: 1_250,
+					},
+				},
+			} as never,
+			sessionId: "sess-host",
+			providerSettingsManager: createProviderSettingsManager() as never,
+			defaultTelemetry: undefined,
+			defaultToolPolicies: undefined,
+			defaultFetch: showFetch as unknown as typeof fetch,
+			onPluginEvent: () => {},
+			onTeamEvent: () => {},
+			createSpawnTool,
+			readSessionMetadata: async () => undefined,
+			writeSessionMetadata: async () => {},
+		});
+
+		expect(bootstrap.providerConfig.defaultMaxOutputTokens).toBe(5_000);
+		expect(bootstrap.providerConfig.thinkingBudgetTokens).toBe(1_250);
+		expect(showFetch).not.toHaveBeenCalled();
+	});
+
 	it("prefers per-session config fetch over defaultFetch", async () => {
 		const { prepareLocalRuntimeBootstrap } = await import(
 			"./local-runtime-bootstrap"

@@ -140,9 +140,12 @@ export {
 	hasOllamaFetch,
 	hasOllamaNoStreamTimeoutDispatcher,
 	OLLAMA_DEFAULT_REASONING_EFFORT,
+	type OllamaThinkBudget,
+	parseDeclaredThinkBudgetMessage,
 	// A host that resolves the context window itself has to be able to ask the
 	// server what the model declares, and to ask before the first request.
 	primeDeclaredNumCtx,
+	probeOllamaThinkBudget,
 	// Answered by the same `/api/show` as the window: a prompt template matches
 	// on the model's architecture, and a local model's name does not carry one.
 	readDeclaredFamily,
@@ -150,6 +153,7 @@ export {
 	// The Modelfile's own temperature: what a spawn's `temperature: "random"`
 	// randomizes around.
 	readDeclaredTemperature,
+	readDeclaredThinkBudgetMessage,
 	// The window to actually load with, from every source the server offers.
 	// A cloud model declares no `num_ctx`, so this is the only one of the three
 	// that answers for one.

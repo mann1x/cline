@@ -1557,7 +1557,7 @@ describe("LocalRuntimeHost", () => {
 		expect(sessionService.persistSessionMessages).toHaveBeenCalledWith(
 			sessionId,
 			initialMessages,
-			"You are a test agent",
+			expect.stringMatching(/^You are a test agent\n\n# Output Budget\n/),
 		);
 		expect(sessionService.updateSessionStatus).not.toHaveBeenCalled();
 		await expect(manager.readLiveSessionMessages(sessionId)).resolves.toEqual(
@@ -1572,7 +1572,7 @@ describe("LocalRuntimeHost", () => {
 			expect.arrayContaining(
 				continuedMessages.map((message) => expect.objectContaining(message)),
 			),
-			"You are a test agent",
+			expect.stringMatching(/^You are a test agent\n\n# Output Budget\n/),
 		);
 		await expect(manager.getSession(sessionId)).resolves.toMatchObject({
 			sessionId,
@@ -2262,7 +2262,7 @@ describe("LocalRuntimeHost", () => {
 			1,
 			sessionId,
 			messages,
-			"You are a test agent",
+			expect.stringMatching(/^You are a test agent\n\n# Output Budget\n/),
 		);
 		expect(order).toEqual(["persist", "run-return", "persist"]);
 		expect(logger.error).toHaveBeenCalledWith(
@@ -4234,7 +4234,7 @@ describe("LocalRuntimeHost", () => {
 		expect(sessionService.persistSessionMessages).toHaveBeenCalledWith(
 			sessionId,
 			[{ role: "user", content: "slow" }],
-			"You are a test agent",
+			expect.stringMatching(/^You are a test agent\n\n# Output Budget\n/),
 		);
 
 		await expect(
@@ -4492,7 +4492,7 @@ describe("LocalRuntimeHost", () => {
 		expect(persistSessionMessages).toHaveBeenCalledWith(
 			sessionId,
 			renderedMessages,
-			"You are a test agent",
+			expect.stringMatching(/^You are a test agent\n\n# Output Budget\n/),
 		);
 		expect(sessionService.updateSessionStatus).toHaveBeenCalledWith(
 			sessionId,
@@ -4564,7 +4564,7 @@ describe("LocalRuntimeHost", () => {
 		expect(persistSessionMessages).toHaveBeenCalledWith(
 			sessionId,
 			userOnlyMessages,
-			"You are a test agent",
+			expect.stringMatching(/^You are a test agent\n\n# Output Budget\n/),
 		);
 		const persisted = persistSessionMessages.mock.calls[0]?.[1] as Array<{
 			role?: string;
