@@ -15,6 +15,10 @@
  * xOllama -- so the probe asks the server the chat would have asked.
  */
 
+import {
+	parseOllamaRecommendations,
+	unpulledCloudModels,
+} from "./ollama-account";
 import { XOLLAMA_DEFAULT_BASE_URL } from "./xollama";
 
 /** Where `ollama-ai-provider-v2` sends a request with no base URL. */
@@ -139,9 +143,42 @@ export async function probeOllamaReachability(
 		// It answered, which is what was asked; the list is a bonus.
 		return { reachable: true, baseUrl: origin };
 	}
+	if (tagNames(payload).some((name) => sameTag(name, model))) {
+		return { reachable: true, baseUrl: origin, modelFound: true };
+	}
+	// Not pulled is not missing for a cloud model the server offers: it is
+	// fetched on first use (`unpulledCloudModels`). Asked only on a miss, so a
+	// pulled model costs no second request.
 	return {
 		reachable: true,
 		baseUrl: origin,
-		modelFound: tagNames(payload).some((name) => sameTag(name, model)),
+		modelFound: await offeredUnpulled(origin, model, fetchImpl),
 	};
+}
+
+async function offeredUnpulled(
+	origin: string,
+	model: string,
+	fetchImpl: typeof fetch,
+): Promise<boolean> {
+	try {
+		const response = await fetchImpl(
+			`${origin}/api/experimental/model-recommendations`,
+			{
+				method: "GET",
+				signal: AbortSignal.timeout(OLLAMA_REACHABILITY_TIMEOUT_MS),
+			},
+		);
+		if (!response.ok) {
+			return false;
+		}
+		return unpulledCloudModels(
+			parseOllamaRecommendations(await response.json()),
+			[],
+		).some((entry) => sameTag(entry.name, model));
+	} catch {
+		// The tags answered and do not have it; an unanswered second question
+		// does not overturn that.
+		return false;
+	}
 }

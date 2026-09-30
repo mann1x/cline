@@ -1,3 +1,4 @@
+import { parseOllamaRecommendations, unpulledCloudModels } from "@cline/llms"
 import { StringArray, StringRequest } from "@shared/proto/cline/common"
 import axios from "axios"
 import { ensureBaseUrlScheme } from "@/sdk/cline-session-factory"
@@ -23,10 +24,25 @@ export async function getOllamaModels(_controller: Controller, request: StringRe
 
 		const response = await axios.get(`${baseUrl}/api/tags`, getAxiosSettings())
 		const modelsArray = response.data?.models?.map((model: any) => model.name) || []
-		const models = [...new Set<string>(modelsArray)].sort()
+		const models = [...new Set<string>([...modelsArray, ...(await offeredCloudModels(baseUrl))])].sort()
 
 		return StringArray.create({ values: models })
 	} catch (_error) {
 		return StringArray.create({ values: [] })
+	}
+}
+
+/**
+ * The cloud models the server offers without having pulled them, so the picker
+ * can complete them: `glm-5.3-flash:cloud` runs on a signed-in server with no
+ * pull, and was not in the list because `/api/tags` does not carry it
+ * (`unpulledCloudModels`). Nothing when the server has no recommendations.
+ */
+async function offeredCloudModels(baseUrl: string): Promise<string[]> {
+	try {
+		const response = await axios.get(`${baseUrl}/api/experimental/model-recommendations`, getAxiosSettings())
+		return unpulledCloudModels(parseOllamaRecommendations(response.data), []).map((entry) => entry.name)
+	} catch {
+		return []
 	}
 }

@@ -757,6 +757,12 @@ export interface ContextBreakdown {
 	compactAtTokens?: number
 	/** The tokens held back for the next reply, sized from the recent turns. */
 	replyReserveTokens?: number
+	/**
+	 * The window this session runs on, as core resolved it. What the context
+	 * bar measures against: the panel's selected model is whatever the settings
+	 * show now, which is not the session's once another profile is loaded.
+	 */
+	contextWindowTokens?: number
 }
 
 /**

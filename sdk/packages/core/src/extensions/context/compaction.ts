@@ -1281,6 +1281,14 @@ export function createContextCompactionPrepareTurn(
 			// (pandorum .211).
 			compactAtTokens: Math.round(requestTriggerTokens),
 			replyReserveTokens: Math.round(outputRoomTokens),
+			// The window this session runs on. The bar used to read the settings
+			// panel's selected model instead, so it showed 128k and then 65.5k
+			// for a session running at 512,000 as the panel moved on to other
+			// profiles (pandorum, 2026-09-30).
+			...(typeof context.model.info?.contextWindow === "number" &&
+			context.model.info.contextWindow > 0
+				? { contextWindowTokens: context.model.info.contextWindow }
+				: {}),
 		});
 		if (effectiveMode === "auto" && !shouldCompact) {
 			// Nothing to compact, and possibly cells to give back: a context

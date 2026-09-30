@@ -73,6 +73,13 @@ export interface OllamaCatalogEntry {
 	readonly remoteModel?: string;
 	readonly family?: string;
 	readonly capabilities: readonly string[];
+	/**
+	 * `false` for a cloud model the server offers but has not pulled: listed
+	 * by its recommendations and absent from `/api/tags`. Ollama fetches its
+	 * manifest on the first request, so it is as usable as a pulled one.
+	 * Absent for every entry `/api/tags` itself lists.
+	 */
+	readonly pulled?: false;
 }
 
 export interface OllamaAccountStatus {
@@ -209,6 +216,43 @@ export function parseOllamaRecommendations(
 		});
 	}
 	return parsed;
+}
+
+/**
+ * The cloud models a server offers without having pulled them.
+ *
+ * pandorum, 2026-09-30: `glm-5.3-flash:cloud` headed the recommendations, ran
+ * a session with its 1M window, and was not among the 166 tags -- so the chat
+ * box said the server did not have it, the settings strip had nothing to say
+ * about it, and the picker could not offer it. A cloud recommendation needs no
+ * pull: the server fetches its manifest on first use.
+ *
+ * Cloud recommendations only. A local one (it carries a `vram_bytes`) does
+ * need a pull, and its absence from the tags is the truth. The name suffix is
+ * the only mark a recommendation has, so it decides here; `remote_host`, the
+ * real discriminator, exists only once a model is pulled.
+ */
+export function unpulledCloudModels(
+	recommendations: readonly OllamaRecommendation[],
+	catalog: readonly OllamaCatalogEntry[],
+): OllamaCatalogEntry[] {
+	const listed = new Set(catalog.map((entry) => entry.name));
+	const seen = new Set<string>();
+	const offered: OllamaCatalogEntry[] = [];
+	for (const recommendation of recommendations) {
+		const name = recommendation.model;
+		if (
+			recommendation.vramBytes !== undefined ||
+			!looksLikeCloudName(name) ||
+			listed.has(name) ||
+			seen.has(name)
+		) {
+			continue;
+		}
+		seen.add(name);
+		offered.push({ name, cloud: true, capabilities: [], pulled: false });
+	}
+	return offered;
 }
 
 /** Read `GET /api/tags`. */
@@ -349,14 +393,16 @@ export async function readOllamaAccountStatus(
 	if (!tags || tags.status !== 200) {
 		return UNREACHABLE;
 	}
+	const recommended =
+		recommendations?.status === 200
+			? parseOllamaRecommendations(recommendations.body)
+			: [];
+	const catalog = parseOllamaCatalog(tags.body);
 	return {
 		reachable: true,
 		account: me ? parseOllamaWhoami(me.status, me.body) : UNREACHABLE_ACCOUNT,
-		recommendations:
-			recommendations?.status === 200
-				? parseOllamaRecommendations(recommendations.body)
-				: [],
-		models: parseOllamaCatalog(tags.body),
+		recommendations: recommended,
+		models: [...catalog, ...unpulledCloudModels(recommended, catalog)],
 	};
 }
 

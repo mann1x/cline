@@ -172,10 +172,12 @@ export {
 	type OllamaAccountStatus,
 	type OllamaCatalogEntry,
 	type OllamaRecommendation,
+	parseOllamaRecommendations,
 	primeOllamaAccountStatus,
 	readOllamaAccountCache,
 	readOllamaAccountStatus,
 	readOllamaCloudFlag,
 	readOllamaRecommendation,
 	resetOllamaAccountStatus,
+	unpulledCloudModels,
 } from "./providers/vendors/ollama-account";

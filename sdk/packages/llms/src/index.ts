@@ -110,6 +110,7 @@ export {
 	type OllamaThinkBudget,
 	type ProviderApiLine,
 	parseDeclaredThinkBudgetMessage,
+	parseOllamaRecommendations,
 	primeDeclaredNumCtx,
 	primeOllamaAccountStatus,
 	probeOllamaThinkBudget,
@@ -127,6 +128,7 @@ export {
 	resolveProviderApiLineBaseUrl,
 	setOllamaFetch,
 	setOllamaNoStreamTimeoutDispatcher,
+	unpulledCloudModels,
 } from "./providers";
 export {
 	type AgentSlotLimit,

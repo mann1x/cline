@@ -272,14 +272,21 @@ export const PROVIDER_CONFIG_CLEARS: Readonly<Record<string, unknown>> = {
  * profile's `last` or `none`. `""` is the panel's own clear-to-Automatic, so
  * the load says the same thing the dropdown says.
  *
- * `enabled`, `effort` and `budgetTokens` are not listed: absent means unset for
- * all three, and the store has no sentinel that restores unset without also
- * meaning something else (`effort: "none"` additionally forces `enabled:false`).
- * A profile that carries the section but not those keeps whatever the section
- * being cleared-then-written already settled.
+ * `effort` is the other. A profile saved with thinking on and no level carries
+ * `reasoning: { enabled: true }`, and merged as-is it kept the previous
+ * profile's level -- measured on pandorum: "jprime" loaded after the glm
+ * profile ran at High, and reported unsaved changes the moment it loaded,
+ * because the panel held a level the profile never had. `""` is the store's
+ * "no level chosen" (not `"none"`, which also switches thinking off), the same
+ * value the level picker's Default writes.
+ *
+ * `enabled` and `budgetTokens` are not listed: absent means unset for both,
+ * and the store has no sentinel that restores unset without also meaning
+ * something else. A profile that carries the section but not those keeps
+ * whatever the section being cleared-then-written already settled.
  */
 const PROVIDER_CONFIG_SECTION_CLEARS: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
-	reasoning: { reasoningHistory: "" },
+	reasoning: { reasoningHistory: "", effort: "" },
 }
 
 /**

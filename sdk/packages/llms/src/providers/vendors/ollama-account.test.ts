@@ -10,6 +10,7 @@ import {
 	readOllamaCloudFlag,
 	readOllamaRecommendation,
 	resetOllamaAccountStatus,
+	unpulledCloudModels,
 } from "./ollama-account";
 
 /**
@@ -234,7 +235,8 @@ describe("reading a whole endpoint", () => {
 		);
 
 		expect(status.reachable).toBe(true);
-		expect(status.models).toHaveLength(3);
+		// The three tags and the two cloud recommendations not among them.
+		expect(status.models).toHaveLength(5);
 		expect(status.recommendations).toHaveLength(3);
 		expect(status.account.plan).toBe("pro");
 	});
@@ -256,7 +258,35 @@ describe("reading a whole endpoint", () => {
 
 		expect(status.account.signedIn).toBe(false);
 		expect(status.recommendations).toHaveLength(3);
-		expect(status.models).toHaveLength(3);
+		// The three tags and the two cloud recommendations not among them.
+		expect(status.models).toHaveLength(5);
+	});
+
+	// pandorum, 2026-09-30: glm-5.3-flash:cloud ran a session and was not
+	// among the tags, so every reader called it missing.
+	it("offers the cloud recommendations a server has not pulled", async () => {
+		const status = await readOllamaAccountStatus(
+			"http://localhost:11434",
+			stub({
+				"/api/tags": { status: 200, body: TAGS },
+				"/api/experimental/model-recommendations": {
+					status: 200,
+					body: RECOMMENDATIONS,
+				},
+				"/api/me": { status: 200, body: ME },
+			}),
+		);
+
+		const unpulled = status.models.filter((model) => model.pulled === false);
+		expect(unpulled.map((model) => model.name)).toEqual([
+			"glm-5.3-flash:cloud",
+			"gemma4:31b-cloud",
+		]);
+		expect(unpulled.every((model) => model.cloud)).toBe(true);
+		// A local recommendation needs a pull; its absence is the truth.
+		expect(status.models.some((model) => model.name === "gemma4:26b")).toBe(
+			false,
+		);
 	});
 
 	it("reports an unreachable server as unreachable, not as empty", async () => {
@@ -306,5 +336,27 @@ describe("reading a whole endpoint", () => {
 		expect(readOllamaCloudFlag("http://elsewhere:11434", "gemma4:31b")).toBe(
 			undefined,
 		);
+	});
+});
+
+describe("cloud models offered without a pull", () => {
+	it("skips what the catalog already lists, local recommendations, and repeats", () => {
+		const offered = unpulledCloudModels(
+			[
+				{ model: "glm-5.3-flash:cloud" },
+				{ model: "glm-5.3-flash:cloud" },
+				{ model: "kimi-k2.6:cloud" },
+				{ model: "gemma4:26b", vramBytes: 19_000_000_000 },
+			],
+			[{ name: "kimi-k2.6:cloud", cloud: true, capabilities: [] }],
+		);
+		expect(offered).toEqual([
+			{
+				name: "glm-5.3-flash:cloud",
+				cloud: true,
+				capabilities: [],
+				pulled: false,
+			},
+		]);
 	});
 });

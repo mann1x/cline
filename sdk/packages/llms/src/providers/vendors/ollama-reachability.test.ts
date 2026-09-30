@@ -60,6 +60,42 @@ describe("whether it answers", () => {
 		expect(result.modelFound).toBe(false);
 	});
 
+	// pandorum, 2026-09-30: the chat box said the server did not have
+	// glm-5.3-flash:cloud while a session was running on it.
+	it("counts a cloud model the server offers but has not pulled", async () => {
+		const asked: string[] = [];
+		const fetchImpl = (async (url: string) => {
+			asked.push(url);
+			return url.endsWith("/api/tags")
+				? Response.json({ models: [{ name: "qwen3:latest" }] })
+				: Response.json({
+						recommendations: [
+							{ model: "glm-5.3-flash:cloud", context_length: 1048576 },
+							{ model: "gemma4:26b", vram_bytes: 19000000000 },
+						],
+					});
+		}) as unknown as typeof fetch;
+		const cloud = await probeOllamaReachability(
+			"ollama",
+			"http://gpu2:11434",
+			"glm-5.3-flash:cloud",
+			fetchImpl,
+		);
+		expect(cloud.modelFound).toBe(true);
+		expect(asked).toEqual([
+			"http://gpu2:11434/api/tags",
+			"http://gpu2:11434/api/experimental/model-recommendations",
+		]);
+		// A local recommendation does need a pull.
+		const local = await probeOllamaReachability(
+			"ollama",
+			"http://gpu2:11434",
+			"gemma4:26b",
+			fetchImpl,
+		);
+		expect(local.modelFound).toBe(false);
+	});
+
 	it("says nothing about the model when none was named", async () => {
 		const result = await probeOllamaReachability(
 			"ollama",

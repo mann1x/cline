@@ -252,6 +252,9 @@ export function spawnMemberKey(callId: string, index: number): string {
 /** Entries an agent's activity keeps: enough to see a pattern, not a transcript. */
 export const SUBAGENT_ACTIVITY_LIMIT = 12
 
+/** The streaming-tool key for a tool event that carries no call id. */
+const ANONYMOUS_TOOL_CALL = ""
+
 /**
  * Add a line to an agent's activity. A repeat of the last line is dropped, so
  * a tool called ten times running is one line, not ten.
@@ -699,12 +702,21 @@ export class MessageTranslatorState {
 	private streamingReasoningTs: number | undefined
 	/** Accumulated streaming reasoning text (SDK reasoning events are deltas) */
 	private streamingReasoningText = ""
-	/** Current streaming tool message timestamp */
-	private streamingToolTs: number | undefined
-	/** Stored tool input from content_start — used at content_end which doesn't carry input */
-	private streamingToolInput: unknown | undefined
-	/** Stored tool name from content_start — used at content_end for consistency */
-	private streamingToolName: string | undefined
+	/**
+	 * Each tool call's row, input and name, from its content_start until its
+	 * content_end (which does not carry the input).
+	 *
+	 * Per call, not one slot. Tools in a batch run in parallel, so a batch's
+	 * starts arrive before its ends: with one slot the second call's start
+	 * took the first call's row and overwrote its input, and the ends then
+	 * found the wrong input or none -- a read card with no paths, and a command
+	 * card showing only its output (pandorum, 2026-09-30). The accessors below
+	 * act on the call selected by `selectStreamingToolCall`, so the branches
+	 * that use them did not change.
+	 */
+	private streamingTools = new Map<string, { ts?: number; input?: unknown; name?: string }>()
+	/** The call the streaming-tool accessors act on. */
+	private streamingToolCallId = ANONYMOUS_TOOL_CALL
 	/** Approved tool-call ids mapped to the approval row that should be updated in place. */
 	private approvedToolMessageTsByCallId = new Map<string, number>()
 	/**
@@ -933,18 +945,34 @@ export class MessageTranslatorState {
 		return ts
 	}
 
+	/** Selects the tool call the streaming-tool accessors act on. */
+	selectStreamingToolCall(toolCallId: string | undefined): void {
+		this.streamingToolCallId = toolCallId || ANONYMOUS_TOOL_CALL
+	}
+
+	private streamingTool(): { ts?: number; input?: unknown; name?: string } {
+		let slot = this.streamingTools.get(this.streamingToolCallId)
+		if (!slot) {
+			slot = {}
+			this.streamingTools.set(this.streamingToolCallId, slot)
+		}
+		return slot
+	}
+
 	/** Get streaming tool ts */
 	getStreamingToolTs(): number {
-		if (!this.streamingToolTs) {
-			this.streamingToolTs = this.nextTs()
+		const slot = this.streamingTool()
+		if (!slot.ts) {
+			slot.ts = this.nextTs()
 		}
-		return this.streamingToolTs
+		return slot.ts
 	}
 
 	/** Store tool input from content_start for use at content_end */
 	setStreamingToolContext(toolName: string, input: unknown): void {
-		this.streamingToolName = toolName
-		this.streamingToolInput = input
+		const slot = this.streamingTool()
+		slot.name = toolName
+		slot.input = input
 	}
 
 	/** Remember the approval prompt row for a tool call after the user approves it. */
@@ -995,25 +1023,23 @@ export class MessageTranslatorState {
 
 	/** Force the active tool stream to update a known row instead of minting a new row. */
 	setStreamingToolTs(ts: number): void {
-		this.streamingToolTs = ts
+		this.streamingTool().ts = ts
 	}
 
 	/** Get the stored tool input (from content_start) */
 	getStreamingToolInput(): unknown | undefined {
-		return this.streamingToolInput
+		return this.streamingTools.get(this.streamingToolCallId)?.input
 	}
 
 	/** Get the stored tool name (from content_start) */
 	getStreamingToolName(): string | undefined {
-		return this.streamingToolName
+		return this.streamingTools.get(this.streamingToolCallId)?.name
 	}
 
 	/** Clear streaming tool */
 	clearStreamingTool(): number {
-		const ts = this.streamingToolTs ?? this.nextTs()
-		this.streamingToolTs = undefined
-		this.streamingToolInput = undefined
-		this.streamingToolName = undefined
+		const ts = this.streamingTools.get(this.streamingToolCallId)?.ts ?? this.nextTs()
+		this.streamingTools.delete(this.streamingToolCallId)
 		return ts
 	}
 
@@ -1453,9 +1479,8 @@ export class MessageTranslatorState {
 		this.iterationToolCalls = 0
 		this.streamingTextTs = undefined
 		this.streamingReasoningTs = undefined
-		this.streamingToolTs = undefined
-		this.streamingToolInput = undefined
-		this.streamingToolName = undefined
+		this.streamingTools.clear()
+		this.streamingToolCallId = ANONYMOUS_TOOL_CALL
 		this.clearApprovedToolMessageTs()
 		this.deniedToolApprovalsByCallId.clear()
 		this.clearSpawnAgents()
@@ -2603,6 +2628,7 @@ function parseContextBreakdownNoticeMetadata(metadata: unknown): ContextBreakdow
 	}
 	const compactAtTokens = read("compactAtTokens")
 	const replyReserveTokens = read("replyReserveTokens")
+	const contextWindowTokens = read("contextWindowTokens")
 	return {
 		systemPromptTokens,
 		builtinToolSchemaTokens,
@@ -2611,6 +2637,7 @@ function parseContextBreakdownNoticeMetadata(metadata: unknown): ContextBreakdow
 		mcpToolCount,
 		...(compactAtTokens !== undefined && compactAtTokens > 0 ? { compactAtTokens } : {}),
 		...(replyReserveTokens !== undefined ? { replyReserveTokens } : {}),
+		...(contextWindowTokens !== undefined && contextWindowTokens > 0 ? { contextWindowTokens } : {}),
 	}
 }
 
@@ -2953,6 +2980,9 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 
 	switch (event.type) {
 		case "content_start": {
+			if (event.contentType === "tool") {
+				state.selectStreamingToolCall(event.toolCallId)
+			}
 			switch (event.contentType) {
 				case "text": {
 					// The SDK emits MULTIPLE content_start events for streaming text,
@@ -3141,6 +3171,9 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 		}
 
 		case "content_update": {
+			if (event.contentType === "tool") {
+				state.selectStreamingToolCall(event.toolCallId)
+			}
 			// A tool call's arguments still streaming, before the tool exists:
 			// progress for an agent's own row (core's subagent-progress), and
 			// never a spawn tool's report -- the lead writing a spawn_agent
@@ -3234,6 +3267,9 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 		}
 
 		case "content_end": {
+			if (event.contentType === "tool") {
+				state.selectStreamingToolCall(event.toolCallId)
+			}
 			switch (event.contentType) {
 				case "text": {
 					const ts = state.clearStreamingText()

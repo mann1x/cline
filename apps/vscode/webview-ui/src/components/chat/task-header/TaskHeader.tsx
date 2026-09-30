@@ -237,7 +237,10 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 							cacheWrites={cacheWrites}
 							contextBreakdown={contextBreakdown}
 							contextTokensUsed={contextTokensUsed}
-							contextWindow={selectedModelInfo?.contextWindow}
+							// The session's own window first: the selected model is the
+							// settings panel's, which moves on whenever another profile is
+							// loaded while this task runs.
+							contextWindow={contextBreakdown?.contextWindowTokens ?? selectedModelInfo?.contextWindow}
 							contextWindowGrant={contextWindowGrant}
 							generateMs={generateMs}
 							generateTokens={generateTokens}

@@ -44,10 +44,15 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 
 	// Reopening the field after the panel has changed should offer a name for
 	// what is in it now, not the one suggested the last time it was opened.
+	//
+	// The loaded profile's own name first, edited or not: "Save as…" from a
+	// profile is most often a variant of it, and the generated name threw away
+	// the one the user had chosen. The generated name is for a panel that is
+	// not loaded from any profile.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `suggestedName` tracks the panel and changes as the user types, so depending on it would overwrite the name being typed on every keystroke -- the suggestion is read once, when the field opens.
 	useEffect(() => {
 		if (isNaming) {
-			setDraftName(suggestedName)
+			setDraftName(activeName || suggestedName)
 		}
 	}, [isNaming])
 
@@ -108,6 +113,29 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 	}
 
 	/**
+	 * Ctrl+C / Cmd+C on the picker, which the copy event above does not see.
+	 *
+	 * With the dropdown focused and nothing selected there is no copy to
+	 * answer: the webview dispatches no `copy` event without a selection, so
+	 * the handler above only ever ran from a context menu. The key itself is
+	 * the reliable signal.
+	 */
+	const copyProfileNameOnKey = (event: React.KeyboardEvent) => {
+		if (
+			!activeName ||
+			!(event.ctrlKey || event.metaKey) ||
+			event.altKey ||
+			event.shiftKey ||
+			event.key.toLowerCase() !== "c" ||
+			(window.getSelection()?.toString() ?? "") !== ""
+		) {
+			return
+		}
+		event.preventDefault()
+		void navigator.clipboard?.writeText(activeName).catch(() => undefined)
+	}
+
+	/**
 	 * Applies a profile, asking first if that would lose something.
 	 *
 	 * Revert never asks: saying it is how the user asks to discard. Load does,
@@ -148,7 +176,11 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 				    off — the more profiles are saved, the more of the list is lost.
 				    This is the container the provider dropdowns already use, one step
 				    higher, and it also pins the list to open downward. */}
-				<DropdownContainer className="flex-1 min-w-[140px]" onCopy={copyProfileName} zIndex={DROPDOWN_Z_INDEX + 1}>
+				<DropdownContainer
+					className="flex-1 min-w-[140px]"
+					onCopy={copyProfileName}
+					onKeyDown={copyProfileNameOnKey}
+					zIndex={DROPDOWN_Z_INDEX + 1}>
 					<VSCodeDropdown
 						className="w-full"
 						id="api-config-profile"

@@ -6559,5 +6559,7 @@ describe("the estimator asks about the request, not just the provider", () => {
 				breakdown.builtinToolSchemaTokens +
 				breakdown.mcpToolSchemaTokens,
 		).toBe(breakdown.requestOverheadTokens);
+		// The session's window, which the context bar measures against.
+		expect(breakdown.contextWindowTokens).toBe(65_536);
 	});
 });

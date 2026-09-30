@@ -2864,6 +2864,7 @@ describe("translateSessionEvent — agent_event notice", () => {
 				mcpToolCount: 28,
 				compactAtTokens: 64_000,
 				replyReserveTokens: 64_000,
+				contextWindowTokens: 512_000,
 			}),
 			state,
 		)
@@ -2886,6 +2887,9 @@ describe("translateSessionEvent — agent_event notice", () => {
 		expect(JSON.parse(usage.messages[0].text ?? "{}").contextBreakdown).toMatchObject({
 			compactAtTokens: 64_000,
 			replyReserveTokens: 64_000,
+			// The session's window, which the bar measures against rather than the
+			// settings panel's selected model (pandorum, 2026-09-30).
+			contextWindowTokens: 512_000,
 		})
 	})
 
@@ -3489,6 +3493,65 @@ describe("translateSessionEvent — text streaming", () => {
 	// ---------------------------------------------------------------------------
 	// command content_end — output formatting
 	// ---------------------------------------------------------------------------
+
+	// A batch's tools run in parallel, so every start arrives before the first
+	// end. With one streaming slot the second start took the first call's row
+	// and input: pandorum (2026-09-30) showed a read card with no paths and a
+	// command card with only its output.
+	describe("translateSessionEvent — overlapping tool calls", () => {
+		const toolEvent = (event: Record<string, unknown>): CoreSessionEvent => ({
+			type: "agent_event",
+			payload: { sessionId: "s1", event: { contentType: "tool", ...event } as AgentEvent },
+		})
+
+		it("keeps each call's own input and row", () => {
+			const state = new MessageTranslatorState()
+			const startCommand = translateSessionEvent(
+				toolEvent({
+					type: "content_start",
+					toolName: "run_commands",
+					toolCallId: "c1",
+					input: { commands: ["./run_game manic_miner.html"] },
+				}),
+				state,
+			)
+			const startRead = translateSessionEvent(
+				toolEvent({
+					type: "content_start",
+					toolName: "read_files",
+					toolCallId: "c2",
+					input: { files: [{ path: "manic_miner.html" }] },
+				}),
+				state,
+			)
+			const endCommand = translateSessionEvent(
+				toolEvent({
+					type: "content_end",
+					toolName: "run_commands",
+					toolCallId: "c1",
+					output: [{ query: "./run_game manic_miner.html", result: '{"ok":false}', success: true }],
+				}),
+				state,
+			)
+			const endRead = translateSessionEvent(
+				toolEvent({
+					type: "content_end",
+					toolName: "read_files",
+					toolCallId: "c2",
+					output: [{ query: "manic_miner.html", result: "<html>", success: true }],
+				}),
+				state,
+			)
+
+			const command = endCommand.messages.find((message) => message.say === "command")
+			expect(command?.text?.startsWith("./run_game manic_miner.html")).toBe(true)
+			expect(command?.ts).toBe(startCommand.messages.at(-1)?.ts)
+			const read = endRead.messages.find((message) => message.say === "tool")
+			expect(read?.text).toContain("manic_miner.html")
+			expect(read?.ts).toBe(startRead.messages.at(-1)?.ts)
+			expect(read?.ts).not.toBe(command?.ts)
+		})
+	})
 
 	describe("translateSessionEvent — command content_end output formatting", () => {
 		it("formats ToolOperationResult[] as raw text, not JSON", () => {

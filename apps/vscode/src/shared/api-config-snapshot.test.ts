@@ -355,10 +355,20 @@ describe("the provider config a profile carries", () => {
 		expect(patch.reasoning).toEqual({ enabled: true, effort: "high", reasoningHistory: "" })
 	})
 
+	it("clears the thinking level a profile is silent about", () => {
+		// pandorum, 2026-09-30: "jprime" carries `reasoning: { enabled: true }`
+		// and no level. Loaded after a profile on High, the merge kept High, and
+		// the bar said "unsaved changes" the moment the load finished.
+		const patch = providerConfigPatchForProfile({ reasoning: { enabled: true } })
+
+		expect(patch.reasoning).toEqual({ enabled: true, effort: "", reasoningHistory: "" })
+	})
+
 	it("keeps the reasoning replay a profile does carry", () => {
 		const patch = providerConfigPatchForProfile({ reasoning: { reasoningHistory: "last" } })
 
-		expect(patch.reasoning).toEqual({ reasoningHistory: "last" })
+		// The level is cleared beside it: the profile names no level.
+		expect(patch.reasoning).toEqual({ reasoningHistory: "last", effort: "" })
 	})
 
 	it("keeps a sampler the profile does carry", () => {

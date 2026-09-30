@@ -241,4 +241,35 @@ describe("ApiConfigProfileBar", () => {
 
 		expect(setData).toHaveBeenCalledWith("text/plain", "local-qwen")
 	})
+
+	// The webview dispatches no copy event with nothing selected, so the key is
+	// what has to be answered (pandorum, 2026-09-30: Ctrl+C copied nothing).
+	it("copies the selected profile's name on Ctrl+C", async () => {
+		const writeText = vi.fn().mockResolvedValue(undefined)
+		Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } })
+		render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+
+		fireEvent.keyDown(document.getElementById("api-config-profile") as HTMLElement, { key: "c", ctrlKey: true })
+
+		expect(writeText).toHaveBeenCalledWith("local-qwen")
+	})
+
+	// "Save as…" from a profile is most often a variant of it.
+	it("offers the loaded profile's name to Save as, edited or not", () => {
+		profilesHook.isDirty = true
+		render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+
+		fireEvent.click(screen.getByText("Save as…"))
+
+		expect(screen.getByPlaceholderText("Profile name")).toHaveValue("local-qwen")
+	})
+
+	it("offers a generated name when no profile is loaded", () => {
+		profilesHook.activeName = ""
+		render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+
+		fireEvent.click(screen.getByText("Save as…"))
+
+		expect(screen.getByPlaceholderText("Profile name")).toHaveValue("ollama · qwen3")
+	})
 })
