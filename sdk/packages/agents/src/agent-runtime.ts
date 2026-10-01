@@ -27,6 +27,7 @@ import type {
 	AgentUsage,
 	AgentRuntimeConfig as BaseAgentRuntimeConfig,
 	CaptureTaskLifecycleEventInput,
+	OutputTokenSplit,
 	ProviderErrorClass,
 	RequestTimings,
 	TelemetryProperties,
@@ -65,6 +66,7 @@ import {
 	unparsedToolCallInText,
 } from "@cline/shared";
 import { nanoid } from "nanoid";
+import { emptyOutputChannelTally, splitOutputTokens } from "./output-split";
 import {
 	DEFAULT_REASONING_LOOP_GUARD,
 	describeReasoningLoop,
@@ -656,6 +658,16 @@ function createMessage(
 		createdAt: Date.now(),
 		metadata,
 	};
+}
+
+function toolInputLength(assembly: PendingToolAssembly): number {
+	if (assembly.inputText) return assembly.inputText.length;
+	if (assembly.inputValue === undefined) return 0;
+	try {
+		return JSON.stringify(assembly.inputValue)?.length ?? 0;
+	} catch {
+		return 0;
+	}
 }
 
 function cloneUsage(usage: AgentUsage): AgentUsage {
@@ -2822,6 +2834,10 @@ export class AgentRuntime {
 		let finishReason: AgentModelFinishReason = "stop";
 		let accumulatedText = "";
 		let accumulatedReasoning = "";
+		// What this request's output went to, for the usage event's split. Reset
+		// once a usage event has claimed it, in case a stream reports twice.
+		let channelTally = emptyOutputChannelTally();
+		let toolInputCharsClaimed = 0;
 		const reasoningLoopConfig = this.config.reasoningLoopDetection;
 		// Undefined means on, unlike `execution.loopDetection` next to it: this
 		// one guards spend, and a guard nobody enabled protects nobody.
@@ -2836,6 +2852,8 @@ export class AgentRuntime {
 			switch (event.type) {
 				case "text-delta": {
 					accumulatedText += event.text;
+					channelTally.textDeltas += 1;
+					channelTally.textChars += event.text.length;
 					const last = sequence.at(-1);
 					if (last?.type === "part" && last.part.type === "text") {
 						last.part.text += event.text;
@@ -2872,6 +2890,8 @@ export class AgentRuntime {
 				}
 				case "reasoning-delta": {
 					accumulatedReasoning += event.text;
+					channelTally.reasoningDeltas += 1;
+					channelTally.reasoningChars += event.text.length;
 					const last = sequence.at(-1);
 					if (last?.type === "part" && last.part.type === "reasoning") {
 						last.part.text += event.text;
@@ -3021,7 +3041,24 @@ export class AgentRuntime {
 					break;
 				}
 				case "usage": {
-					await this.updateUsage(event.usage, event.timings);
+					// Tool arguments are measured whole, from what has been assembled:
+					// Ollama sends them in one piece, other providers in fragments.
+					const toolInputChars = [...toolAssemblies.values()].reduce(
+						(sum, assembly) => sum + toolInputLength(assembly),
+						0,
+					);
+					channelTally.toolInputChars = Math.max(
+						0,
+						toolInputChars - toolInputCharsClaimed,
+					);
+					const outputSplit = splitOutputTokens({
+						outputTokens: event.usage.outputTokens,
+						providerReasoningTokens: event.usage.reasoningTokenCount,
+						tally: channelTally,
+					});
+					toolInputCharsClaimed = toolInputChars;
+					channelTally = emptyOutputChannelTally();
+					await this.updateUsage(event.usage, event.timings, { outputSplit });
 					break;
 				}
 				case "finish": {
@@ -3381,7 +3418,7 @@ export class AgentRuntime {
 	private async updateUsage(
 		usage: Partial<AgentUsage>,
 		timings?: RequestTimings,
-		options?: { auxiliary?: boolean },
+		options?: { auxiliary?: boolean; outputSplit?: OutputTokenSplit },
 	): Promise<void> {
 		const auxiliary = options?.auxiliary === true;
 		this.state.usage = {
@@ -3413,6 +3450,7 @@ export class AgentRuntime {
 			snapshot: this.snapshot(),
 			usage: cloneUsage(this.state.usage),
 			...(timings ? { timings } : {}),
+			...(options?.outputSplit ? { outputSplit: options.outputSplit } : {}),
 			...(auxiliary ? { auxiliary: true } : {}),
 		});
 	}

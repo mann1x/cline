@@ -63,6 +63,7 @@ import type {
 	AgentToolResultPart,
 	AgentUsage,
 	LegacyAgentUsage,
+	OutputTokenSplit,
 	RequestTimings,
 } from "@cline/shared";
 
@@ -303,6 +304,7 @@ export class RuntimeEventAdapter {
 					event.usage,
 					event.timings,
 					event.auxiliary === true,
+					event.outputSplit,
 				);
 			case "status-notice":
 				return [
@@ -418,6 +420,7 @@ export class RuntimeEventAdapter {
 		next: AgentUsage,
 		timings?: RequestTimings,
 		auxiliary = false,
+		outputSplit?: OutputTokenSplit,
 	): AgentEvent[] {
 		const deltaInput = next.inputTokens - this.lastUsage.inputTokens;
 		const deltaOutput = next.outputTokens - this.lastUsage.outputTokens;
@@ -458,6 +461,8 @@ export class RuntimeEventAdapter {
 					deltaReasoning === 0 ? undefined : Math.max(0, deltaReasoning),
 				// Not a delta: this update carries exactly one request's timings.
 				...(timings ? { timings } : {}),
+				// Nor this: it is measured on the one request's stream.
+				...(outputSplit ? { outputSplit } : {}),
 				...(auxiliary ? { auxiliary: true } : {}),
 				totalInputTokens: next.inputTokens,
 				totalOutputTokens: next.outputTokens,

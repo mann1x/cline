@@ -172,6 +172,30 @@ export interface RequestTimings {
  * `./agents/types`). The old, host-facing shape is
  * retained for `AgentResult`/`AgentUsageEvent` consumers via the facade.
  */
+/**
+ * One request's output, split by the channel it went to.
+ *
+ * `outputTokens` is one number for thinking, answer text and tool-call
+ * arguments together, and on a thinking model most of it is thinking. Ollama
+ * and llama.cpp report no per-channel count, so the split is measured on the
+ * stream, and `method` says how:
+ *  - `provider`: the provider reported its reasoning tokens; the rest is split
+ *    between text and tool input by characters.
+ *  - `stream-chunks`: the stream ran about one token per delta (Ollama,
+ *    llama.cpp), so the thinking and text deltas are counted, and tool input is
+ *    what remains of `outputTokens`: the arguments, which Ollama sends whole,
+ *    and the call markup around them.
+ *  - `chars-share`: the deltas were coarser than tokens, so `outputTokens` is
+ *    shared out by each channel's characters. An estimate.
+ * The three always sum to the request's `outputTokens`.
+ */
+export interface OutputTokenSplit {
+	reasoningTokens: number;
+	textTokens: number;
+	toolInputTokens: number;
+	method: "provider" | "stream-chunks" | "chars-share";
+}
+
 export interface AgentUsage extends AgentTokenUsage {
 	totalCost?: number;
 }
@@ -1109,6 +1133,8 @@ export type AgentRuntimeEvent =
 			 * than accumulates.
 			 */
 			timings?: RequestTimings;
+			/** The same request's output by channel. See `OutputTokenSplit`. */
+			outputSplit?: OutputTokenSplit;
 	  }
 	| {
 			type: "turn-finished";

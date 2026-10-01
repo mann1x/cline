@@ -17,6 +17,7 @@ import type {
 	AgentTool,
 	DiscardedTurnCondensation,
 	DiscardedTurnInput,
+	OutputTokenSplit,
 	ProviderErrorClass,
 	RequestTimings,
 } from "../agent";
@@ -184,6 +185,12 @@ export interface AgentUsageEvent extends AgentEventMetadata {
 	reasoningTokens?: number;
 	/** What this turn's request cost in time. See `RequestTimings`. */
 	timings?: RequestTimings;
+	/**
+	 * This turn's output by channel: thinking, answer text, tool-call input.
+	 * Sums to `outputTokens`. Absent on calls made outside the agent's own
+	 * stream, such as compaction's. See `OutputTokenSplit`.
+	 */
+	outputSplit?: OutputTokenSplit;
 
 	/**
 	 * Spent on the agent's behalf outside its own requests -- a compaction's

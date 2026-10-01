@@ -337,6 +337,9 @@ async function projectAgentEvent(
 							? { reasoningTokens: agentEvent.reasoningTokens }
 							: {}),
 						...(agentEvent.timings ? { timings: agentEvent.timings } : {}),
+						...(agentEvent.outputSplit
+							? { outputSplit: agentEvent.outputSplit }
+							: {}),
 						...(agentEvent.auxiliary ? { auxiliary: true } : {}),
 					},
 					totals: {

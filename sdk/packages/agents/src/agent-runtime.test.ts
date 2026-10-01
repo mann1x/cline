@@ -520,6 +520,59 @@ describe("AgentRuntime", () => {
 		]);
 	});
 
+	it("splits each request's output into thinking, text and tool input", async () => {
+		const model = new ScriptedModel([
+			() => [
+				...Array.from({ length: 30 }, () => ({
+					type: "reasoning-delta" as const,
+					text: "abc ",
+				})),
+				...Array.from({ length: 5 }, () => ({
+					type: "text-delta" as const,
+					text: "ok ",
+				})),
+				// Arguments in one piece, as Ollama sends them.
+				{
+					type: "tool-call-delta",
+					toolCallId: "call_1",
+					toolName: "missing_tool",
+					input: { path: "manic_miner.html" },
+				},
+				{ type: "usage", usage: { inputTokens: 1_000, outputTokens: 45 } },
+				{ type: "finish", reason: "tool-calls" },
+			],
+			() => [
+				{ type: "text-delta", text: "done" },
+				{ type: "usage", usage: { inputTokens: 1_100, outputTokens: 1 } },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model });
+		const splits: unknown[] = [];
+		runtime.subscribe((event) => {
+			if (event.type === "usage-updated") {
+				splits.push(event.outputSplit);
+			}
+		});
+
+		await runtime.run("Hi");
+
+		expect(splits).toEqual([
+			{
+				reasoningTokens: 30,
+				textTokens: 5,
+				toolInputTokens: 10,
+				method: "stream-chunks",
+			},
+			{
+				reasoningTokens: 0,
+				textTokens: 1,
+				toolInputTokens: 0,
+				method: "stream-chunks",
+			},
+		]);
+	});
+
 	it("recovers from a context-window overflow with a forced compaction and one retry", async () => {
 		const longPrompt = `Please review this: ${"lots of context ".repeat(50)}`;
 		const overflowEvent: AgentModelEvent = {

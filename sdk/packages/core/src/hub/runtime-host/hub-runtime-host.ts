@@ -533,6 +533,14 @@ function usageEventFromPayload(payload: Record<string, unknown> | undefined): {
 				delta?.timings && typeof delta.timings === "object"
 					? (delta.timings as Extract<AgentEvent, { type: "usage" }>["timings"])
 					: undefined,
+			...(delta?.outputSplit && typeof delta.outputSplit === "object"
+				? {
+						outputSplit: delta.outputSplit as Extract<
+							AgentEvent,
+							{ type: "usage" }
+						>["outputSplit"],
+					}
+				: {}),
 			...(delta?.auxiliary === true ? { auxiliary: true } : {}),
 			totalInputTokens: usageMetric(totals, "inputTokens"),
 			totalOutputTokens: usageMetric(totals, "outputTokens"),

@@ -42,6 +42,10 @@ import {
 	CLI_DEFAULT_LOOP_DETECTION,
 } from "./defaults";
 import { describeAbortSource, resolveMistakeLimitDecision } from "./format";
+import {
+	addUsageToOutputSplit,
+	createOutputSplitTotals,
+} from "./output-split-totals";
 import { buildUserInputMessage } from "./prompt";
 import { subscribeToAgentEvents } from "./session-events";
 
@@ -199,12 +203,16 @@ export async function runAgent(
 	});
 
 	let reasoningChunkCount = 0;
+	const outputSplit = createOutputSplitTotals();
 	let redactedReasoningChunkCount = 0;
 	const displayedErrorMessages = new Set<string>();
 	const shouldZeroCost = await shouldZeroClineFreeModelCost(config);
 
 	const onAgentEvent = (rawEvent: AgentEvent): void => {
 		const event = zeroCliAgentEventCost(rawEvent, shouldZeroCost);
+		if (event.type === "usage") {
+			addUsageToOutputSplit(outputSplit, event);
+		}
 		if (event.type === "content_start" && event.contentType === "reasoning") {
 			reasoningChunkCount += 1;
 			if (event.redacted) {
@@ -400,6 +408,9 @@ export async function runAgent(
 				iterations: result.iterations,
 				usage,
 				...(aggregateUsage ? { aggregateUsage } : {}),
+				// Every agent's usage events, summed by channel: what the run's
+				// output was spent on. See `output-split-totals.ts`.
+				outputSplit,
 				durationMs: result.durationMs,
 				text: result.text,
 				model: result.model,
