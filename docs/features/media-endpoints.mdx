@@ -85,6 +85,7 @@ With both flags, the file says which tools are offered and each one tries the se
 - The top-level `baseUrl`, `apiKey` and `useProvider` apply to every section. A section can override them.
 - A section is on when it is an object or `true`. Leave it out, or set it to `false`, to leave its tool out.
 - `image` offers both image tools. Set `"edit": false` to keep only `generate_image`, or `"edit": { "baseUrl": ..., "model": ... }` to send edits elsewhere.
+- `--media-provider` alone leaves a tool out when the provider has several models for it, because the model is never guessed. Name one in the file, for example `{ "image": { "model": "flux2-klein" } }`, and pass both flags.
 - A file that cannot be read or is not JSON stops the run with an error.
 
 The run's log has one `[media]` line per tool, saying where it goes or why it was left out.
