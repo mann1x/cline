@@ -317,8 +317,12 @@ export function createGenerateVideoTool(
 			callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
 			if (callerSignal?.aborted) deadline.abort();
 			const signal = deadline.signal;
+			// Which of the two ended it matters to whoever reads the reply: a
+			// stop is the user's, the limit is this tool's.
 			const stopped = () =>
-				`The video generation was stopped before it finished (the limit is ${Math.round(timeoutMs / 60_000)} min).`;
+				callerSignal?.aborted
+					? "The video generation was stopped before it finished, and its job was cancelled."
+					: `The video generation did not finish within ${Math.round(timeoutMs / 60_000)} minutes, so its job was cancelled.`;
 
 			let jobId: string | undefined;
 			let finished = false;
@@ -405,7 +409,7 @@ export function createGenerateVideoTool(
 					}
 					const status =
 						job.status === "queued"
-							? `Waiting for the video engine${job.queue_position ? ` (${job.queue_position} ahead)` : ""}.`
+							? `Waiting for the video engine${job.queue_position ? ` (position ${job.queue_position} in its queue)` : ""}.`
 							: `Rendering the clip${typeof job.progress === "number" ? `: ${Math.round(job.progress)}%` : ""}.`;
 					if (status !== lastStatus) {
 						lastStatus = status;

@@ -158,7 +158,7 @@ describe("generate_video", () => {
 		);
 		expect(updates).toEqual([
 			{ status: "Waiting for the video engine." },
-			{ status: "Waiting for the video engine (1 ahead)." },
+			{ status: "Waiting for the video engine (position 1 in its queue)." },
 			{ status: "Rendering the clip: 45%." },
 		]);
 	});
@@ -251,7 +251,9 @@ describe("generate_video", () => {
 		const { run, written } = tool(fetchImpl, {
 			sleep: async () => stop.abort(),
 		});
-		expect(await run({ prompt: "x" }, stop.signal)).toContain("was stopped");
+		expect(await run({ prompt: "x" }, stop.signal)).toBe(
+			"The video generation was stopped before it finished, and its job was cancelled.",
+		);
 		await Promise.resolve();
 		expect(written).toHaveLength(0);
 		expect(calls.at(-1)).toMatchObject({
