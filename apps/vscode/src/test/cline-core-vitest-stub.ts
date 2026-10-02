@@ -114,6 +114,12 @@ export {
 	parseAskLspRequest,
 } from "../../../../sdk/packages/core/src/extensions/tools/ask-lsp"
 export {
+	SYNTHESIZE_SPEECH_TOOL_DESCRIPTION,
+	SYNTHESIZE_SPEECH_TOOL_NAME,
+	TRANSCRIBE_AUDIO_TOOL_DESCRIPTION,
+	TRANSCRIBE_AUDIO_TOOL_NAME,
+} from "../../../../sdk/packages/core/src/extensions/tools/audio-tools"
+export {
 	BROWSER_ACTIONS,
 	BROWSER_TOOL_DESCRIPTION,
 	BROWSER_TOOL_INPUT_SCHEMA,

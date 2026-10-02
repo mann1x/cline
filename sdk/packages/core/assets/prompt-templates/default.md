@@ -236,6 +236,31 @@ Arguments:
 
 How far an edit goes depends on the backend: some follow the instruction, others redraw over the source and only make small changes. Look at the result before relying on it. This costs real time — seconds to a minute per image — and on a hosted backend it costs money.
 
+# tool: transcribe_audio
+Transcribe an audio file in the workspace to text. Use it to read a recording you would otherwise have to ask the user to describe: a meeting, a voice note, the audio of a demo.
+
+Arguments:
+- `path` — the audio file, relative to the workspace (wav, mp3, flac, ogg, m4a, webm).
+- `format` — `text` (the default), `srt` or `vtt` for subtitles with timestamps, or `verbose_json` for segments with start and end times.
+- `language` — the spoken language as a two-letter code, e.g. `en`. Optional; the model detects it when omitted.
+- `translate` — true to get the text in English whatever language is spoken. Optional.
+- `prompt` — names and terms the recording uses, to help spelling. Optional.
+- `output` — a workspace path to write the transcript to. Optional. Give one for a long recording or for subtitles: the transcript is saved there and only its beginning is returned to you.
+
+Output: the transcript as plain text. Without `output`, a very long transcript is cut and the cut is stated. A long recording takes minutes.
+
+# tool: synthesize_speech
+Turn text into spoken audio and save it as a file in the workspace. Use it for a voice-over, a spoken prompt, or an audio version of something you wrote.
+
+Arguments:
+- `text` — what to say. Write it as it should be spoken: spell out abbreviations and numbers that must be read a particular way.
+- `path` — where to save it, relative to the workspace. Optional; defaults to a file under `.cline/generated-audio/`. The extension is corrected to match the audio the backend returns.
+- `voice` — the voice to use. Optional; the configured default is used when omitted. Backends name their own voices, and most accept the OpenAI names (alloy, echo, fable, onyx, nova, shimmer).
+- `speed` — speaking rate, 1 is normal, e.g. 1.25. Optional.
+- `format` — `wav`, `mp3`, `flac`, `opus` or `pcm`. Optional, and a backend that cannot encode it returns what it can; the reply says which.
+
+Output: the saved path, the audio format and its length. You do not hear the result, so say what you asked for when reporting it. A long text takes a while.
+
 # tool: jev
 Get a calibrated confidence score from Jev, an external scoring model, before acting on something you are not sure of. Jev reads the context you give it and answers typed questions with probabilities; it writes no text and cannot explain itself.
 

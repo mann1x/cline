@@ -111,6 +111,9 @@ message Secrets {
   optional string image_gen_api_key = 52;
   optional string jev_api_key = 53;
   optional string jev_custom_api_key = 54;
+  optional string audio_stt_api_key = 55;
+  optional string audio_tts_api_key = 56;
+  optional string video_api_key = 57;
 }
 
 // NOTE: Add new fields under API_HANDLER_SETTINGS_FIELDS or USER_SETTINGS_FIELDS
@@ -334,6 +337,10 @@ message Settings {
   optional string extract_document_ocr = 227;
   optional string extract_document_ocr_languages = 228;
   optional bool extract_document_describe_images = 229;
+  optional bool audio_enabled = 230;
+  optional bool video_enabled = 231;
+  optional string audio_endpoints = 232;
+  optional string video_endpoint = 233;
 }
 
 message State {
@@ -524,6 +531,16 @@ message UpdateSettingsRequest {
   // Write-only, and travelling in this direction only: an empty string clears
   // the stored key, and an unset field leaves it alone.
   optional string image_gen_api_key = 64;
+  // The Audio tab: the switch, the two endpoints as one JSON record, and the
+  // two keys, write-only like the image key.
+  optional bool audio_enabled = 92;
+  optional string audio_endpoints = 93;
+  optional string audio_stt_api_key = 94;
+  optional string audio_tts_api_key = 95;
+  // The Video tab, likewise.
+  optional bool video_enabled = 96;
+  optional string video_endpoint = 97;
+  optional string video_api_key = 98;
   optional bool jev_enabled = 80;
   optional string jev_settings = 81;
   // Write-only like the image key: empty clears it, unset leaves it alone.

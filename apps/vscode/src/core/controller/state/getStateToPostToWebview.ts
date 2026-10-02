@@ -102,6 +102,12 @@ export async function getStateToPostToWebview(controller: {
 	const escalationModeApiConfiguration = stateManager.getGlobalSettingsKey("escalationModeApiConfiguration")
 	const imageGenEnabled = stateManager.getGlobalSettingsKey("imageGenEnabled")
 	const imageGenEndpoint = stateManager.getGlobalSettingsKey("imageGenEndpoint")
+	const audioEnabled = stateManager.getGlobalSettingsKey("audioEnabled")
+	const audioEndpoints = stateManager.getGlobalSettingsKey("audioEndpoints")
+	const videoEnabled = stateManager.getGlobalSettingsKey("videoEnabled")
+	const videoEndpoint = stateManager.getGlobalSettingsKey("videoEndpoint")
+	const secretSet = (key: "audioSttApiKey" | "audioTtsApiKey" | "videoApiKey") =>
+		Boolean(stateManager.getSecretKey(key)?.trim())
 	const jevEnabled = stateManager.getGlobalSettingsKey("jevEnabled")
 	const jevSettings = stateManager.getGlobalSettingsKey("jevSettings")
 	const editVerificationSettings = stateManager.getGlobalSettingsKey("editVerificationSettings")
@@ -247,6 +253,13 @@ export async function getStateToPostToWebview(controller: {
 		// Whether a key is stored, never the key: this object is serialised into
 		// the one `state_json` string the webview holds.
 		imageGenApiKeySet: readImageGenerationApiKey() !== undefined,
+		audioEnabled,
+		audioEndpoints,
+		audioSttApiKeySet: secretSet("audioSttApiKey"),
+		audioTtsApiKeySet: secretSet("audioTtsApiKey"),
+		videoEnabled,
+		videoEndpoint,
+		videoApiKeySet: secretSet("videoApiKey"),
 		jevEnabled,
 		jevSettings,
 		// The same rule as the image key.

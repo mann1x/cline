@@ -316,6 +316,12 @@ Reach for it the moment you are about to do one of these by hand:
 # tool: edit_image
 {{DEFAULT}}
 
+# tool: transcribe_audio
+{{DEFAULT}}
+
+# tool: synthesize_speech
+{{DEFAULT}}
+
 # tool: jev
 {{DEFAULT}}
 

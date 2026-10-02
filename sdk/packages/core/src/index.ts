@@ -1113,6 +1113,26 @@ export {
 	type ParsedAskLspRequest,
 	parseAskLspRequest,
 } from "./extensions/tools/ask-lsp";
+// Text to and from sound: transcription and speech on the OpenAI audio routes.
+export {
+	audioExtension,
+	createSynthesizeSpeechTool,
+	createTranscribeAudioTool,
+	listSpeechVoices,
+	type SpeechEndpoint,
+	type SpeechVoices,
+	SYNTHESIZE_SPEECH_TOOL_DESCRIPTION,
+	SYNTHESIZE_SPEECH_TOOL_INPUT_SCHEMA,
+	SYNTHESIZE_SPEECH_TOOL_NAME,
+	type SynthesizeSpeechToolOptions,
+	sniffAudioExtension,
+	TRANSCRIBE_AUDIO_TOOL_DESCRIPTION,
+	TRANSCRIBE_AUDIO_TOOL_INPUT_SCHEMA,
+	TRANSCRIBE_AUDIO_TOOL_NAME,
+	type TranscribeAudioToolOptions,
+	type TranscriptionEndpoint,
+	wavSeconds,
+} from "./extensions/tools/audio-tools";
 // The browser and the language-server tools. Both were the extension's alone,
 // and that was the difference between the two hosts: the CLI could not check
 // that a page runs, and could not ask what a symbol means. Each takes its host

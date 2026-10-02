@@ -411,6 +411,12 @@ It is the wrong tool for text that is not a symbol: strings, comments, config ke
 # tool: edit_image
 {{DEFAULT}}
 
+# tool: transcribe_audio
+{{DEFAULT}}
+
+# tool: synthesize_speech
+{{DEFAULT}}
+
 # tool: jev
 {{DEFAULT}}
 

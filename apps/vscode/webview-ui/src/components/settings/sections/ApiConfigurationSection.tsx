@@ -1,4 +1,5 @@
 import { PRIMARY_AGENT_NODE_ID } from "@shared/agent-nodes"
+import { audioEndpointsConfigured, parseAudioEndpoints } from "@shared/audio-endpoints"
 import { parseJevSettings } from "@shared/jev-settings"
 import { resolveScopedModelStatus } from "@shared/model-scope-config"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
@@ -9,6 +10,7 @@ import { TabButton } from "../../mcp/configuration/McpConfigurationView"
 import AgentsModelTab from "../AgentsModelTab"
 import ApiConfigProfileBar from "../ApiConfigProfileBar"
 import ApiOptions from "../ApiOptions"
+import AudioTab from "../AudioTab"
 import { SettingsCheckbox } from "../common/SettingsCheckbox"
 import EscalationModelTab from "../EscalationModelTab"
 import ImageGenModelTab from "../ImageGenModelTab"
@@ -64,6 +66,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		escalationModeApiConfiguration,
 		imageGenEnabled,
 		imageGenEndpoint,
+		audioEnabled,
+		audioEndpoints,
 		jevEnabled,
 		jevApiKeySet,
 		jevSettings,
@@ -91,6 +95,9 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 	// Read from the stored record rather than `resolveScopedModelStatus`, which
 	// knows about provider snapshots and this is not one.
 	const imageGenUnconfigured = imageGenEnabled && !isImageEndpointComplete(imageGenEndpoint)
+	// And of the audio endpoints: neither tool is offered while the tab names
+	// nowhere to send either.
+	const audioUnconfigured = audioEnabled && !audioEndpointsConfigured(parseAudioEndpoints(audioEndpoints))
 	// And of Jev: TypeSafe needs its key; a custom endpoint needs a model named,
 	// and a key only if that server asks for one.
 	const jevStored = parseJevSettings(jevSettings)
@@ -119,6 +126,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		(currentTab === "agents" && !agentsModelEnabled) ||
 		(currentTab === "escalation" && !escalationModelEnabled) ||
 		(currentTab === "imagegen" && !imageGenEnabled) ||
+		(currentTab === "audio" && !audioEnabled) ||
+		currentTab === "video" ||
 		(currentTab === "jev" && !jevEnabled)
 	const activeTab: ConfigTab = scopedTabOff ? mode : currentTab
 	// The feature toggles belong to the Model tab and are shown only there.
@@ -136,10 +145,11 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		agentsModelEnabled ||
 		escalationModelEnabled ||
 		imageGenEnabled ||
+		audioEnabled ||
 		jevEnabled
 	// One profile list for every tab; only the target changes with the tab. The
-	// Images tab is not in it: a profile is a provider and a model for a
-	// conversation, and that tab configures neither.
+	// Images and Audio tabs are not in it: a profile is a provider and a model for a
+	// conversation, and those tabs configure neither.
 	const profileScope: ApiConfigurationProfileScope =
 		activeTab === "vision"
 			? { kind: "vision" }
@@ -147,7 +157,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 				? { kind: "agents", nodeId: agentNodeId }
 				: activeTab === "escalation"
 					? { kind: "escalation" }
-					: { kind: "mode", mode: activeTab === "imagegen" || activeTab === "jev" ? mode : activeTab }
+					: { kind: "mode", mode: isModelTab(activeTab) ? activeTab : mode }
 
 	return (
 		<div>
@@ -248,6 +258,18 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 									Images
 								</TabButton>
 							) : null}
+							{audioEnabled ? (
+								<TabButton
+									disabled={activeTab === "audio"}
+									isActive={activeTab === "audio"}
+									onClick={() => switchPanel("audio")}
+									style={{
+										opacity: 1,
+										cursor: "pointer",
+									}}>
+									Audio
+								</TabButton>
+							) : null}
 							{jevEnabled ? (
 								<TabButton
 									disabled={activeTab === "jev"}
@@ -272,10 +294,16 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								<EscalationModelTab />
 							) : activeTab === "imagegen" ? (
 								<ImageGenModelTab />
+							) : activeTab === "audio" ? (
+								<AudioTab />
 							) : activeTab === "jev" ? (
 								<JevTab />
 							) : (
-								<ApiOptions currentMode={activeTab} initialModelTab={initialModelTab} showModelOptions={true} />
+								<ApiOptions
+									currentMode={isModelTab(activeTab) ? activeTab : mode}
+									initialModelTab={initialModelTab}
+									showModelOptions={true}
+								/>
 							)}
 						</div>
 					</div>
@@ -439,6 +467,37 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 									The Images tab names neither the session's provider nor an endpoint with a model, so the tool
 									is not offered at all and the model is never told it could make one. Set one on the Images
 									tab.
+								</p>
+							) : null}
+						</div>
+
+						<div className="mb-[5px]">
+							<SettingsCheckbox
+								checked={audioEnabled}
+								className="mb-[5px]"
+								onChange={async (checked: boolean) => {
+									try {
+										await StateServiceClient.updateSettings(
+											UpdateSettingsRequest.create({ audioEnabled: checked }),
+										)
+									} catch (error) {
+										console.error("Failed to update the audio setting:", error)
+										throw error
+									}
+								}}>
+								Use an endpoint for audio processing
+							</SettingsCheckbox>
+							<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+								Offers <code>transcribe_audio</code>, which turns a recording in the workspace into text or
+								subtitles, and <code>synthesize_speech</code>, which turns text into an audio file there. The
+								Audio tab names a speech-to-text and a text-to-speech endpoint: the session's own opencoti or
+								xOllama provider when it has the engine, or any endpoint serving the OpenAI audio API. Each tool
+								is offered once its endpoint is named, whether or not the server is up yet.
+							</p>
+							{audioUnconfigured ? (
+								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
+									The Audio tab names neither the session's provider nor an endpoint with a model, so neither
+									tool is offered. Set one on the Audio tab.
 								</p>
 							) : null}
 						</div>

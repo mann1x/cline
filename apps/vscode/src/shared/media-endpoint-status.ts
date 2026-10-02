@@ -31,6 +31,12 @@ export interface MediaEndpointStatus {
 	}
 	/** The tool is not offered, and this is why. */
 	disabled?: string
+	/**
+	 * A speech endpoint's voices and formats. Only in the answer to
+	 * `speech:voices`, which is asked on request: listing them can start the
+	 * engine.
+	 */
+	voices?: { voices: string[]; default?: string; formats: string[] }
 }
 
 export function parseMediaEndpointStatus(raw: string | undefined): MediaEndpointStatus {

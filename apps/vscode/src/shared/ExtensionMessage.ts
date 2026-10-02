@@ -109,6 +109,19 @@ export interface ExtensionState {
 	imageGenEndpoint: string
 	/** Whether a key is stored for that endpoint. Never the key itself. */
 	imageGenApiKeySet: boolean
+	/** Whether the audio tools are offered, pointed at the endpoints below. */
+	audioEnabled: boolean
+	/** JSON for the Audio tab: the speech-to-text and text-to-speech endpoints. */
+	audioEndpoints: string
+	/** Whether a key is stored for each audio endpoint. Never the keys. */
+	audioSttApiKeySet: boolean
+	audioTtsApiKeySet: boolean
+	/** Whether `generate_video` is offered, pointed at the endpoint below. */
+	videoEnabled: boolean
+	/** JSON for the Video tab: the endpoint, the model and the defaults. */
+	videoEndpoint: string
+	/** Whether a key is stored for the video endpoint. Never the key. */
+	videoApiKeySet: boolean
 	/** Whether `jev` is offered and the harness's Jev hooks run. */
 	jevEnabled: boolean
 	/** JSON `JevSettings` (model, floors, timeout, hook switches). */

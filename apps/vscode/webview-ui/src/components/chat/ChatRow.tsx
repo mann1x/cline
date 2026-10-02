@@ -129,6 +129,8 @@ const GENERIC_TOOL_VERBS: Record<string, string> = {
 	image_generation: "Cerebriline generated an image:",
 	jev: "Cerebriline asked Jev how sure to be:",
 	plan: "Cerebriline wrote down the plan:",
+	synthesize_speech: "Cerebriline made spoken audio:",
+	transcribe_audio: "Cerebriline transcribed audio:",
 	propose_check: "Cerebriline proposed a check:",
 	// The fallback only. A restore names the version it went back to, and the
 	// translator puts that sentence on the row as `headline`; this is what a

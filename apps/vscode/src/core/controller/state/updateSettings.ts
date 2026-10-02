@@ -113,6 +113,28 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.imageGenApiKey !== undefined) {
 			controller.stateManager.setSecret("imageGenApiKey", request.imageGenApiKey.trim() || undefined)
 		}
+		if (request.audioEnabled !== undefined) {
+			controller.stateManager.setGlobalState("audioEnabled", request.audioEnabled)
+		}
+		if (request.audioEndpoints !== undefined) {
+			controller.stateManager.setGlobalState("audioEndpoints", request.audioEndpoints)
+		}
+		// Write-only like the image key: empty clears it, unset leaves it alone.
+		if (request.audioSttApiKey !== undefined) {
+			controller.stateManager.setSecret("audioSttApiKey", request.audioSttApiKey.trim() || undefined)
+		}
+		if (request.audioTtsApiKey !== undefined) {
+			controller.stateManager.setSecret("audioTtsApiKey", request.audioTtsApiKey.trim() || undefined)
+		}
+		if (request.videoEnabled !== undefined) {
+			controller.stateManager.setGlobalState("videoEnabled", request.videoEnabled)
+		}
+		if (request.videoEndpoint !== undefined) {
+			controller.stateManager.setGlobalState("videoEndpoint", request.videoEndpoint)
+		}
+		if (request.videoApiKey !== undefined) {
+			controller.stateManager.setSecret("videoApiKey", request.videoApiKey.trim() || undefined)
+		}
 		if (request.jevEnabled !== undefined) {
 			controller.stateManager.setGlobalState("jevEnabled", request.jevEnabled)
 		}

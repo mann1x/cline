@@ -1,5 +1,6 @@
-import { listMediaModels, MEDIA_KINDS, type MediaKind } from "@cline/core"
+import { listMediaModels, listSpeechVoices, MEDIA_KINDS, type MediaKind } from "@cline/core"
 import { String as ProtoString, StringRequest } from "@shared/proto/cline/common"
+import { readSpeechTab, readTranscriptionTab } from "@/sdk/audio-config"
 import { readImageEditTab, readImageGenerationTab } from "@/sdk/image-generation-config"
 import { type MediaTabSettings, probeMediaServer, readLeadMediaProvider, resolveMediaTab } from "@/sdk/media-endpoint-config"
 import type { MediaEndpointStatus } from "@/shared/media-endpoint-status"
@@ -9,6 +10,28 @@ import { Controller } from ".."
 const TABS: Partial<Record<MediaKind, () => MediaTabSettings>> = {
 	image_generation: readImageGenerationTab,
 	image_edit: readImageEditTab,
+	transcription: readTranscriptionTab,
+	speech: readSpeechTab,
+}
+
+/** Asked when the user opens the voice picker, never when the pane opens. */
+const SPEECH_VOICES_REQUEST = "speech:voices"
+
+/**
+ * The voices of the endpoint `synthesize_speech` resolves to. Resolved with
+ * the audio switches ignored, so the picker fills while the tool is off.
+ */
+async function readSpeechVoices(): Promise<MediaEndpointStatus> {
+	try {
+		const resolved = await resolveMediaTab("speech", readSpeechTab(), readLeadMediaProvider())
+		if ("disabled" in resolved) {
+			return { disabled: resolved.disabled }
+		}
+		const voices = await listSpeechVoices(resolved.endpoint, resolved.server)
+		return voices ? { voices } : {}
+	} catch (error) {
+		return { disabled: error instanceof Error ? error.message : String(error) }
+	}
 }
 
 /**
@@ -20,6 +43,9 @@ const TABS: Partial<Record<MediaKind, () => MediaTabSettings>> = {
  * tab says is what the next session does.
  */
 export async function readMediaEndpoint(_controller: Controller, request: StringRequest): Promise<ProtoString> {
+	if (request.value === SPEECH_VOICES_REQUEST) {
+		return ProtoString.create({ value: JSON.stringify(await readSpeechVoices()) })
+	}
 	const kind = request.value as MediaKind
 	const status: MediaEndpointStatus = {}
 	const tab = MEDIA_KINDS.includes(kind) ? TABS[kind]?.() : undefined

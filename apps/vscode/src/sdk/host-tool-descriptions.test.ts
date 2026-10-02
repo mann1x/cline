@@ -17,7 +17,11 @@ import {
 	JEV_TOOL_NAME,
 	LIST_FILES_TOOL_INPUT_SCHEMA,
 	LIST_FILES_TOOL_NAME,
+	SYNTHESIZE_SPEECH_TOOL_DESCRIPTION,
+	SYNTHESIZE_SPEECH_TOOL_NAME,
 	summarizeToolCallSignatures,
+	TRANSCRIBE_AUDIO_TOOL_DESCRIPTION,
+	TRANSCRIBE_AUDIO_TOOL_NAME,
 } from "@cline/core"
 import { describe, expect, it } from "vitest"
 import { CHECK_FILE_TOOL_DESCRIPTION, CHECK_FILE_TOOL_INPUT_SCHEMA, CHECK_FILE_TOOL_NAME } from "./check-file-tool"
@@ -65,6 +69,11 @@ describe("host tool descriptions in default.md", () => {
 
 	it("reproduces edit_image verbatim", () => {
 		expect(shipped?.tools[EDIT_IMAGE_TOOL_NAME]).toBe(EDIT_IMAGE_TOOL_DESCRIPTION.trim())
+	})
+
+	it("reproduces the audio tools verbatim", () => {
+		expect(shipped?.tools[TRANSCRIBE_AUDIO_TOOL_NAME]).toBe(TRANSCRIBE_AUDIO_TOOL_DESCRIPTION.trim())
+		expect(shipped?.tools[SYNTHESIZE_SPEECH_TOOL_NAME]).toBe(SYNTHESIZE_SPEECH_TOOL_DESCRIPTION.trim())
 	})
 
 	// Same position as generate_image: offered by this host, text in core.

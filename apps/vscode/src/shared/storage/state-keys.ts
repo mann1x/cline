@@ -300,6 +300,12 @@ const USER_SETTINGS_FIELDS = {
 	// a machine until someone stands one up, and a tool that always fails is
 	// worse than an absent one.
 	imageGenEnabled: { default: false as boolean },
+	// Offer `transcribe_audio` and `synthesize_speech`, each pointed at an
+	// OpenAI-compatible audio endpoint. Off by default for the image tool's
+	// reason: nothing serves these on a machine until someone stands one up.
+	audioEnabled: { default: false as boolean },
+	// Offer `generate_video`, pointed at an OpenAI-compatible videos endpoint.
+	videoEnabled: { default: false as boolean },
 	// Offer `jev`, and let the harness ask Jev (TypeSafe's scoring model) for
 	// a confidence before a question reaches the user and before an
 	// escalation. Off by default: it is a paid, hosted service, and turning it
@@ -332,6 +338,12 @@ const USER_SETTINGS_FIELDS = {
 	// second model in the conversation, and the provider list a snapshot carries
 	// has no image models in it. The key is not here -- it is a secret.
 	imageGenEndpoint: { default: "" as string },
+	// JSON `{useProvider, stt: {baseUrl, model, disabled}, tts: {baseUrl, model,
+	// voice, format, disabled}}` for the Audio tab, round-tripped whole. The two
+	// keys are secrets.
+	audioEndpoints: { default: "" as string },
+	// JSON `{useProvider, baseUrl, model, size, seconds}` for the Video tab.
+	videoEndpoint: { default: "" as string },
 	// JSON `{model, floor, highStakesFloor, timeoutMs, rankQuestions,
 	// appraiseEscalation}` for Jev, round-tripped whole by its tab like the
 	// image endpoint above. The key is not here -- it is a secret.
@@ -536,6 +548,11 @@ const SECRETS_KEYS = [
 	// snapshot travels to the webview as one `state_json` string, and this must
 	// never be in it. The webview is told whether one is set, and nothing else.
 	"imageGenApiKey",
+	// The keys for the two audio endpoints and the video endpoint, secrets for
+	// the same reason.
+	"audioSttApiKey",
+	"audioTtsApiKey",
+	"videoApiKey",
 	// The Jev key, a secret for the same reason.
 	"jevApiKey",
 	// The key for a custom Jev endpoint (Ollama, xollama, a third party). One
@@ -584,7 +601,15 @@ export type RemoteConfigFields = GlobalStateAndSettings & RemoteConfigExtra
  * exact leak the feature exists to prevent. These are stored the same way and
  * left out of the API configuration, because they are not one.
  */
-export const NonApiHandlerSecretKeys = new Set<string>(["qaCredentials", "imageGenApiKey", "jevApiKey", "jevCustomApiKey"])
+export const NonApiHandlerSecretKeys = new Set<string>([
+	"qaCredentials",
+	"imageGenApiKey",
+	"audioSttApiKey",
+	"audioTtsApiKey",
+	"videoApiKey",
+	"jevApiKey",
+	"jevCustomApiKey",
+])
 
 export type Secrets = { [K in (typeof SecretKeys)[number]]: string | undefined }
 export type LocalState = { [K in (typeof LocalStateKeys)[number]]: ClineRulesToggles }

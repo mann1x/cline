@@ -201,6 +201,12 @@ Query the language servers for semantic information. Use this instead of `search
 # tool: edit_image
 {{DEFAULT}}
 
+# tool: transcribe_audio
+{{DEFAULT}}
+
+# tool: synthesize_speech
+{{DEFAULT}}
+
 # tool: jev
 {{DEFAULT}}
 

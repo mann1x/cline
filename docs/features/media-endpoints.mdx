@@ -4,7 +4,7 @@ sidebarTitle: "Media Endpoints"
 description: "How Cerebriline's media tools find a server: the session's own opencoti or xOllama provider when it serves the kind, a typed endpoint otherwise, and no tool when neither is configured."
 ---
 
-A media tool sends its request to a server that speaks OpenAI's media routes. Today these are `generate_image` and `edit_image`. Speech-to-text, text-to-speech and video generation are planned and will use the same rule.
+A media tool sends its request to a server that speaks OpenAI's media routes. Today these are `generate_image`, `edit_image`, `transcribe_audio` and `synthesize_speech`. Video generation is planned and will use the same rule.
 
 ## Images
 
@@ -18,6 +18,19 @@ Tick **Use an endpoint for image generation and editing** on the API configurati
 Edits go where generation goes. To send them elsewhere, name an **Edit endpoint** or an **Edit model** on the tab; the tab's one API key is sent to both. Untick **Also offer image editing** to keep `generate_image` without `edit_image`.
 
 How far an edit goes depends on the model. An instruction-edit model such as FLUX.2 klein or Qwen-Image follows the prompt. A plain diffusion model redraws over the source and makes smaller changes.
+
+## Audio
+
+Tick **Use an endpoint for audio processing** on the API configuration panel, then fill in the Audio tab. It holds two endpoints, because speech-to-text and text-to-speech are often two servers. Each has its own URL, API key and model, and its own switch.
+
+| Tool | What it does | Route |
+|---|---|---|
+| `transcribe_audio` | Turns an audio file in the workspace into text. It can return plain text, or write subtitles (`srt`, `vtt`) or the timed segments (`verbose_json`) to a file. It can also translate to English. | `POST <endpoint>/audio/transcriptions`, or `/audio/translations` |
+| `synthesize_speech` | Turns text into an audio file in the workspace. | `POST <endpoint>/audio/speech` |
+
+The Audio tab also sets a **Default voice** and a **Default format** for calls that name none. Open the voice field to list the engine's voices. Only opencoti and xOllama can list them, and xOllama starts the speech engine to answer, so the list is fetched when you open the field and not before. For any other server, type the voice name.
+
+Audio is never re-encoded. The file is named from the bytes that come back, so asking for `mp3` from an engine that only encodes WAV gives a `.wav` file. An engine that refuses the format asked for is asked once more for its own default.
 
 ## Which server a tool uses
 

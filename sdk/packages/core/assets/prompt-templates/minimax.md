@@ -302,6 +302,12 @@ This costs real time — seconds to a minute per image — and on a hosted backe
 # tool: edit_image
 {{DEFAULT}}
 
+# tool: transcribe_audio
+{{DEFAULT}}
+
+# tool: synthesize_speech
+{{DEFAULT}}
+
 # tool: jev
 {{DEFAULT}}
 

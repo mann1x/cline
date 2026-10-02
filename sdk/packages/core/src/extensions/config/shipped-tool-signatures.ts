@@ -16,6 +16,12 @@
  */
 
 import {
+	SYNTHESIZE_SPEECH_TOOL_INPUT_SCHEMA,
+	SYNTHESIZE_SPEECH_TOOL_NAME,
+	TRANSCRIBE_AUDIO_TOOL_INPUT_SCHEMA,
+	TRANSCRIBE_AUDIO_TOOL_NAME,
+} from "../tools/audio-tools";
+import {
 	createApplyPatchTool,
 	createAskQuestionTool,
 	createAwkTool,
@@ -81,6 +87,14 @@ export const HOST_TOOL_INPUT_SCHEMAS: readonly {
 	{
 		name: EDIT_IMAGE_TOOL_NAME,
 		inputSchema: EDIT_IMAGE_TOOL_INPUT_SCHEMA,
+	},
+	{
+		name: TRANSCRIBE_AUDIO_TOOL_NAME,
+		inputSchema: TRANSCRIBE_AUDIO_TOOL_INPUT_SCHEMA,
+	},
+	{
+		name: SYNTHESIZE_SPEECH_TOOL_NAME,
+		inputSchema: SYNTHESIZE_SPEECH_TOOL_INPUT_SCHEMA,
 	},
 	// Likewise `jev`: host-contributed, schema defined in core.
 	{
