@@ -1,6 +1,6 @@
 import { listMediaModels, MEDIA_KINDS, type MediaKind } from "@cline/core"
 import { String as ProtoString, StringRequest } from "@shared/proto/cline/common"
-import { readImageGenerationTab } from "@/sdk/image-generation-config"
+import { readImageEditTab, readImageGenerationTab } from "@/sdk/image-generation-config"
 import { type MediaTabSettings, probeMediaServer, readLeadMediaProvider, resolveMediaTab } from "@/sdk/media-endpoint-config"
 import type { MediaEndpointStatus } from "@/shared/media-endpoint-status"
 import { Controller } from ".."
@@ -8,6 +8,7 @@ import { Controller } from ".."
 /** The tab that configures each kind. A kind with no tab yet has no entry. */
 const TABS: Partial<Record<MediaKind, () => MediaTabSettings>> = {
 	image_generation: readImageGenerationTab,
+	image_edit: readImageEditTab,
 }
 
 /**
@@ -37,6 +38,11 @@ export async function readMediaEndpoint(_controller: Controller, request: String
 				// to the image engine is not a choice here.
 				models: serves ? listMediaModels({ ...probe, models: probe.models.filter((m) => m.kinds) }, kind) : [],
 			}
+		}
+		// What the typed endpoint itself lists for this kind, for the picker.
+		const typedProbe = tab.baseUrl?.trim() ? await probeMediaServer(tab.baseUrl, tab.apiKey) : undefined
+		if (typedProbe) {
+			status.typedModels = listMediaModels(typedProbe, kind)
 		}
 		const resolved = await resolveMediaTab(kind, tab, provider)
 		if ("disabled" in resolved) {

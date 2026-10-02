@@ -124,6 +124,7 @@ const GENERIC_TOOL_VERBS: Record<string, string> = {
 	// before the rename still renders its sentence rather than a bare name.
 	code_intel: "Cerebriline asked the language server:",
 	commit: "Cerebriline committed:",
+	edit_image: "Cerebriline edited an image:",
 	generate_image: "Cerebriline generated an image:",
 	image_generation: "Cerebriline generated an image:",
 	jev: "Cerebriline asked Jev how sure to be:",

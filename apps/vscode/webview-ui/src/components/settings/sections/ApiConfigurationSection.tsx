@@ -424,14 +424,15 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 										throw error
 									}
 								}}>
-								Use an endpoint for image generation
+								Use an endpoint for image generation and editing
 							</SettingsCheckbox>
 							<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
 								Offers the <code>generate_image</code> tool, which turns a description into a picture and saves it
-								into the workspace — an app icon, a placeholder sprite, a mockup of a layout before it is built.
-								The Images tab names where to generate them: the session's own opencoti or xOllama provider when
-								it has an image engine, or any endpoint serving the OpenAI images API, local or hosted. Nothing is
-								called until the model asks for a picture.
+								into the workspace — an app icon, a placeholder sprite, a mockup of a layout before it is built —
+								and <code>edit_image</code>, which changes a picture that is already there. The Images tab names
+								where to generate them: the session's own opencoti or xOllama provider when it has an image
+								engine, or any endpoint serving the OpenAI images API, local or hosted. Nothing is called until
+								the model asks for a picture.
 							</p>
 							{imageGenUnconfigured ? (
 								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">

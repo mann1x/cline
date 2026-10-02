@@ -132,6 +132,10 @@ export {
 // a string with no imports of its own, so a fake would only test the fake.
 export { describeDelimiterBalance } from "../../../../sdk/packages/core/src/extensions/tools/delimiter-balance"
 export {
+	EDIT_IMAGE_TOOL_DESCRIPTION,
+	EDIT_IMAGE_TOOL_NAME,
+} from "../../../../sdk/packages/core/src/extensions/tools/image-edit"
+export {
 	createGenerateImageTool,
 	GENERATE_IMAGE_TOOL_DESCRIPTION,
 	GENERATE_IMAGE_TOOL_INPUT_SCHEMA,

@@ -19,7 +19,20 @@ import { type MediaTabSettings, resolveMediaTab } from "./media-endpoint-config"
  */
 
 /** What is stored, whether or not it is complete enough to call. */
-export function readStoredEndpoint(): { baseUrl: string; model: string; size?: string; useProvider?: boolean } | undefined {
+export interface StoredImageEndpoint {
+	baseUrl: string
+	model: string
+	size?: string
+	useProvider?: boolean
+	/** `edit_image` is offered unless this is set. */
+	editDisabled?: boolean
+	/** Where edits go, when not where generation goes. */
+	editBaseUrl?: string
+	/** The model that edits, when not the one that generates. */
+	editModel?: string
+}
+
+export function readStoredEndpoint(): StoredImageEndpoint | undefined {
 	const raw = StateManager.get().getGlobalSettingsKey("imageGenEndpoint")
 	if (!raw) {
 		return undefined
@@ -34,7 +47,7 @@ export function readStoredEndpoint(): { baseUrl: string; model: string; size?: s
 	if (typeof parsed !== "object" || parsed === null) {
 		return undefined
 	}
-	const record = parsed as { baseUrl?: unknown; model?: unknown; size?: unknown; useProvider?: unknown }
+	const record = parsed as Record<keyof StoredImageEndpoint, unknown>
 	const text = (value: unknown) => (typeof value === "string" ? value.trim() : "")
 	const size = text(record.size)
 	return {
@@ -42,6 +55,9 @@ export function readStoredEndpoint(): { baseUrl: string; model: string; size?: s
 		model: text(record.model),
 		...(size ? { size } : {}),
 		...(record.useProvider === true ? { useProvider: true } : {}),
+		...(record.editDisabled === true ? { editDisabled: true } : {}),
+		...(text(record.editBaseUrl) ? { editBaseUrl: text(record.editBaseUrl) } : {}),
+		...(text(record.editModel) ? { editModel: text(record.editModel) } : {}),
 	}
 }
 
@@ -82,6 +98,45 @@ export async function resolveImageGeneration(provider?: MediaSessionProvider): P
 	}
 	const stored = readStoredEndpoint()
 	const resolved = await resolveMediaTab("image_generation", readImageGenerationTab(), provider)
+	if ("disabled" in resolved) {
+		return resolved
+	}
+	return {
+		...resolved,
+		endpoint: { ...resolved.endpoint, ...(stored?.size ? { size: stored.size } : {}) },
+	}
+}
+
+/**
+ * The Images tab's edit half. An edit goes where generation goes unless the
+ * tab names another endpoint or another model for it: FLUX.2 klein and
+ * Qwen-Image do both, and a server with one image engine has one answer. The
+ * key is the tab's one key either way.
+ */
+export function readImageEditTab(): MediaTabSettings {
+	const stored = readStoredEndpoint()
+	return {
+		useProvider: stored?.useProvider,
+		baseUrl: stored?.editBaseUrl || stored?.baseUrl,
+		model: stored?.editModel || stored?.model,
+		apiKey: readImageGenerationApiKey(),
+	}
+}
+
+/**
+ * Where `edit_image` goes for this session, or why it is not offered: the
+ * Images box ticked, editing not switched off on the tab, and then the same
+ * rule as generation.
+ */
+export async function resolveImageEdit(provider?: MediaSessionProvider): Promise<ResolvedImageGeneration> {
+	if (StateManager.get().getGlobalSettingsKey("imageGenEnabled") !== true) {
+		return { disabled: "image generation is switched off" }
+	}
+	const stored = readStoredEndpoint()
+	if (stored?.editDisabled) {
+		return { disabled: "image editing is switched off on the Images tab" }
+	}
+	const resolved = await resolveMediaTab("image_edit", readImageEditTab(), provider)
 	if ("disabled" in resolved) {
 		return resolved
 	}

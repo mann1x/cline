@@ -37,7 +37,7 @@ export { normalizeBaseUrl };
  * Declared here as it is in `browser.ts`, and for the same reason: this is the
  * shape a tool result takes, not something `@cline/shared` publishes.
  */
-type ToolOutput =
+export type ToolOutput =
 	| string
 	| Array<
 			| { type: "text"; text: string }
@@ -232,7 +232,7 @@ export function parseSize(size: unknown): string | undefined {
 	return match ? `${match[1]}x${match[2]}` : undefined;
 }
 
-interface ImagesApiResponse {
+export interface ImagesApiResponse {
 	data?: Array<{
 		b64_json?: string;
 		url?: string;
@@ -353,6 +353,74 @@ export async function readGeneratedImage(
 }
 
 /**
+ * Write the image and say what happened, for every tool that makes one.
+ *
+ * A path the model chose is the model's business, extension and all. One the
+ * tool made up says `.png` before anything knows what came back, and a vector
+ * model returns an SVG.
+ */
+export async function saveAndReportImage(input: {
+	image: { data: Buffer; mediaType: string };
+	/** "Generated" or "Edited": the first word of the report. */
+	verb: string;
+	askedPath: string | undefined;
+	requestedPath: string;
+	absolutePath: string;
+	size?: string;
+	revisedPrompt?: string;
+	writeFile: (absolutePath: string, data: Buffer) => Promise<void>;
+	context:
+		| {
+				metadata?: Record<string, unknown>;
+				emitUpdate?: (update: unknown) => void;
+		  }
+		| undefined;
+}): Promise<ToolOutput> {
+	const { image, context } = input;
+	let requestedPath = input.requestedPath;
+	let writePath = input.absolutePath;
+	if (input.askedPath === undefined) {
+		const extension = extensionForMediaType(image.mediaType);
+		if (!requestedPath.endsWith(extension)) {
+			requestedPath = requestedPath.replace(/\.png$/, extension);
+			writePath = input.absolutePath.replace(/\.png$/, extension);
+		}
+	}
+	await input.writeFile(writePath, image.data);
+
+	const text =
+		`${input.verb} and saved to \`${requestedPath}\`` +
+		`${input.size ? ` (${input.size})` : ""}.` +
+		`${input.revisedPrompt ? `\n\nThe backend rewrote the prompt as: ${input.revisedPrompt}` : ""}`;
+
+	// Same rule the browser tool applies to screenshots: an image sent to a
+	// text-only model spends the context window on something it cannot read.
+	if (context?.metadata?.modelSupportsImages !== true) {
+		// #53: the person watching still sees it. A tool's update goes to its
+		// row and never into the transcript, so the image is shown there while
+		// the model gets text alone.
+		context?.emitUpdate?.({
+			displayImages: [
+				{
+					type: "image",
+					data: image.data.toString("base64"),
+					mediaType: image.mediaType,
+				},
+			],
+		});
+		return `${text}\n\nYou cannot see images, so look at the file only if you need to — describe what you asked for when reporting this.`;
+	}
+	return [
+		{ type: "text", text },
+		{
+			type: "image",
+			data: image.data.toString("base64"),
+			mediaType: image.mediaType,
+		},
+	];
+}
+
+/**
  * Create the `generate_image` tool.
  *
  * The host is expected to omit this tool entirely when no endpoint is
@@ -391,7 +459,7 @@ export function createGenerateImageTool(
 				typeof request.path === "string" && request.path.trim()
 					? request.path.trim()
 					: undefined;
-			let requestedPath = askedPath ?? defaultImagePath(prompt, Date.now());
+			const requestedPath = askedPath ?? defaultImagePath(prompt, Date.now());
 			const absolutePath = resolveInsideWorkspace(options.cwd, requestedPath);
 			if (!absolutePath) {
 				return `\`${requestedPath}\` is outside the workspace. Save the image somewhere under the project.`;
@@ -448,50 +516,17 @@ export function createGenerateImageTool(
 					return image.error;
 				}
 
-				// A path the model chose is the model's business, extension and
-				// all. One this tool made up says `.png` before anything knows
-				// what came back, and a vector model returns an SVG.
-				let writePath = absolutePath;
-				if (askedPath === undefined) {
-					const extension = extensionForMediaType(image.mediaType);
-					if (!requestedPath.endsWith(extension)) {
-						requestedPath = requestedPath.replace(/\.png$/, extension);
-						writePath = absolutePath.replace(/\.png$/, extension);
-					}
-				}
-				await options.writeFile(writePath, image.data);
-
-				const text =
-					`Generated and saved to \`${requestedPath}\`` +
-					`${size ? ` (${size})` : ""}.` +
-					`${body.data?.[0]?.revised_prompt ? `\n\nThe backend rewrote the prompt as: ${body.data[0].revised_prompt}` : ""}`;
-
-				// Same rule the browser tool applies to screenshots: an image
-				// sent to a text-only model spends the context window on
-				// something it cannot read.
-				if (context?.metadata?.modelSupportsImages !== true) {
-					// #53: the person watching still sees it. A tool's update
-					// goes to its row and never into the transcript, so the
-					// image is shown there while the model gets text alone.
-					context?.emitUpdate?.({
-						displayImages: [
-							{
-								type: "image",
-								data: image.data.toString("base64"),
-								mediaType: image.mediaType,
-							},
-						],
-					});
-					return `${text}\n\nYou cannot see images, so look at the file only if you need to — describe what you asked for when reporting this.`;
-				}
-				return [
-					{ type: "text", text },
-					{
-						type: "image",
-						data: image.data.toString("base64"),
-						mediaType: image.mediaType,
-					},
-				];
+				return await saveAndReportImage({
+					image,
+					verb: "Generated",
+					askedPath,
+					requestedPath,
+					absolutePath,
+					size,
+					revisedPrompt: body.data?.[0]?.revised_prompt,
+					writeFile: options.writeFile,
+					context,
+				});
 			} catch (error) {
 				if (error instanceof MediaRequestTimeoutError || signal?.aborted) {
 					return `Image generation was stopped before it finished (the limit is ${Math.round(timeoutMs / 1000)}s).`;

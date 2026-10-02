@@ -1,6 +1,8 @@
+import { readFile } from "node:fs/promises"
 import {
 	createAskLspTool,
 	createBrowserTool,
+	createEditImageTool,
 	createGenerateImageTool,
 	createJevTool,
 	createListFilesTool,
@@ -18,7 +20,7 @@ import type { McpHub } from "@/services/mcp/McpHub"
 import { resolveMcpServerTimeoutMs } from "@/services/mcp/timeout"
 import { Logger } from "@/shared/services/Logger"
 import { createCheckFileTool } from "./check-file-tool"
-import { resolveImageGeneration } from "./image-generation-config"
+import { resolveImageEdit, resolveImageGeneration } from "./image-generation-config"
 import { isJevConfigured, readJevEndpoint } from "./jev-config"
 import { readQaCredentials } from "./qa-credentials-store"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
@@ -202,6 +204,30 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 					const resolved = await resolveImageGeneration(options?.sessionProvider)
 					return "disabled" in resolved ? undefined : resolved.endpoint
 				},
+				writeFile: writeGeneratedImage,
+				onError: (message, error) => Logger.error(`${message}:`, error),
+			}),
+		)
+	}
+
+	// `edit_image` is the same switch's other tool: the Images box, with editing
+	// not switched off on the tab, and the endpoint the tab names for edits --
+	// the generation endpoint unless it says otherwise.
+	const imageEdit = await resolveImageEdit(options?.sessionProvider)
+	if ("disabled" in imageEdit) {
+		Logger.log(`[VscodeRuntimeTools] edit_image omitted: ${imageEdit.disabled}`)
+	} else {
+		Logger.log(
+			`[VscodeRuntimeTools] edit_image uses the ${imageEdit.source === "provider" ? "session's provider" : "typed endpoint"} (${imageEdit.server}), model ${imageEdit.endpoint.model}${imageEdit.warning ? `; ${imageEdit.warning}` : ""}`,
+		)
+		tools.push(
+			createEditImageTool({
+				cwd: options?.cwd ?? process.cwd(),
+				getEndpoint: async () => {
+					const resolved = await resolveImageEdit(options?.sessionProvider)
+					return "disabled" in resolved ? undefined : resolved.endpoint
+				},
+				readFile: (absolutePath) => readFile(absolutePath),
 				writeFile: writeGeneratedImage,
 				onError: (message, error) => Logger.error(`${message}:`, error),
 			}),

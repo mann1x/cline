@@ -18,6 +18,8 @@ export interface MediaEndpointStatus {
 		/** The models there that serve this kind. */
 		models: string[]
 	}
+	/** The models the typed endpoint lists for this kind, when it answers. */
+	typedModels?: string[]
 	/** The tool is offered, and this is where it goes. */
 	resolved?: {
 		source: "provider" | "typed"

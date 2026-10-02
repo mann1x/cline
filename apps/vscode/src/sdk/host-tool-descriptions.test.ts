@@ -7,6 +7,8 @@ import {
 	BROWSER_TOOL_DESCRIPTION,
 	BROWSER_TOOL_INPUT_SCHEMA,
 	BROWSER_TOOL_NAME,
+	EDIT_IMAGE_TOOL_DESCRIPTION,
+	EDIT_IMAGE_TOOL_NAME,
 	GENERATE_IMAGE_TOOL_DESCRIPTION,
 	GENERATE_IMAGE_TOOL_NAME,
 	getBuiltinPromptTemplates,
@@ -59,6 +61,10 @@ describe("host tool descriptions in default.md", () => {
 	// because what makes it drift is a change to this host's tool set.
 	it("reproduces generate_image verbatim", () => {
 		expect(shipped?.tools[GENERATE_IMAGE_TOOL_NAME]).toBe(GENERATE_IMAGE_TOOL_DESCRIPTION.trim())
+	})
+
+	it("reproduces edit_image verbatim", () => {
+		expect(shipped?.tools[EDIT_IMAGE_TOOL_NAME]).toBe(EDIT_IMAGE_TOOL_DESCRIPTION.trim())
 	})
 
 	// Same position as generate_image: offered by this host, text in core.

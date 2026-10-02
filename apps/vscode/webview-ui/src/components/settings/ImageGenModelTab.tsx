@@ -1,4 +1,3 @@
-import { type MediaEndpointStatus, parseMediaEndpointStatus } from "@shared/media-endpoint-status"
 import { StringRequest } from "@shared/proto/cline/common"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { VSCodeLink } from "@vscode/webview-ui-toolkit/react"
@@ -6,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { ModelsServiceClient, StateServiceClient } from "@/services/grpc-client"
 import { DebouncedTextField } from "./common/DebouncedTextField"
+import { MediaEndpointStatusLines, mediaPickerModels, useMediaEndpointStatus } from "./common/MediaEndpointStatus"
 import { SettingsCheckbox } from "./common/SettingsCheckbox"
 import OllamaModelPicker from "./OllamaModelPicker"
 
@@ -16,14 +16,13 @@ interface StoredEndpoint {
 	size?: string
 	/** Use the session's own opencoti or xOllama when it generates images. */
 	useProvider?: boolean
+	/** `edit_image` is offered unless this is set. */
+	editDisabled?: boolean
+	/** Where edits go, when not where generation goes. */
+	editBaseUrl?: string
+	/** The model that edits, when not the one that generates. */
+	editModel?: string
 }
-
-const SERVER_NAMES = {
-	opencoti: "opencoti",
-	xollama: "xOllama",
-	openai: "OpenAI-compatible",
-	unknown: "not answering",
-} as const
 
 function parseStored(raw: string): StoredEndpoint {
 	if (!raw) {
@@ -36,6 +35,9 @@ function parseStored(raw: string): StoredEndpoint {
 			model: typeof parsed.model === "string" ? parsed.model : "",
 			...(typeof parsed.size === "string" && parsed.size ? { size: parsed.size } : {}),
 			...(parsed.useProvider === true ? { useProvider: true } : {}),
+			...(parsed.editDisabled === true ? { editDisabled: true } : {}),
+			...(typeof parsed.editBaseUrl === "string" && parsed.editBaseUrl ? { editBaseUrl: parsed.editBaseUrl } : {}),
+			...(typeof parsed.editModel === "string" && parsed.editModel ? { editModel: parsed.editModel } : {}),
 		}
 	} catch {
 		return { baseUrl: "", model: "" }
@@ -62,7 +64,9 @@ const ImageGenModelTab = () => {
 	const { imageGenEndpoint, imageGenApiKeySet } = useExtensionState()
 	const stored = useMemo(() => parseStored(imageGenEndpoint), [imageGenEndpoint])
 	const [models, setModels] = useState<string[]>([])
-	const [status, setStatus] = useState<MediaEndpointStatus>({})
+	const statusTrigger = `${imageGenEndpoint}|${imageGenApiKeySet}`
+	const status = useMediaEndpointStatus("image_generation", statusTrigger)
+	const editStatus = useMediaEndpointStatus("image_edit", statusTrigger)
 
 	const save = useCallback(
 		async (patch: Partial<StoredEndpoint>) => {
@@ -75,6 +79,9 @@ const ImageGenModelTab = () => {
 							model: next.model,
 							...(next.size ? { size: next.size } : {}),
 							...(next.useProvider ? { useProvider: true } : {}),
+							...(next.editDisabled ? { editDisabled: true } : {}),
+							...(next.editBaseUrl?.trim() ? { editBaseUrl: next.editBaseUrl.trim() } : {}),
+							...(next.editModel?.trim() ? { editModel: next.editModel.trim() } : {}),
 						}),
 					}),
 				)
@@ -114,26 +121,9 @@ const ImageGenModelTab = () => {
 		void requestModels()
 	}, [requestModels])
 
-	// What the next session will do with this tab, asked of the host: it holds
-	// the session provider's key and can ask each server what it serves. Asked
-	// again whenever what is stored changes, never on an interval.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: the stored record is the trigger, not an input
-	useEffect(() => {
-		let current = true
-		ModelsServiceClient.readMediaEndpoint(StringRequest.create({ value: "image_generation" }))
-			.then((response) => {
-				if (current) {
-					setStatus(parseMediaEndpointStatus(response?.value))
-				}
-			})
-			.catch((error) => console.error("Failed to read the image endpoint status:", error))
-		return () => {
-			current = false
-		}
-	}, [imageGenEndpoint, imageGenApiKeySet])
-
 	const onProvider = status.resolved?.source === "provider"
 	const pickerModels = onProvider ? (status.provider?.models ?? []) : models
+	const editModels = mediaPickerModels(editStatus)
 
 	return (
 		<div className="flex flex-col gap-3">
@@ -148,33 +138,14 @@ const ImageGenModelTab = () => {
 					ticked, a session running on such a provider generates images there and the endpoint below is the fallback: it
 					is used when the session runs on anything else, or on a server that has no image engine.
 				</p>
-				{stored.useProvider && status.provider ? (
-					<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
-						{status.provider.serves
-							? `The current provider is ${SERVER_NAMES[status.provider.server]} and generates images.`
-							: status.provider.server === "openai"
-								? "The current provider is neither opencoti nor xOllama, so the endpoint below is used."
-								: `The current provider is ${SERVER_NAMES[status.provider.server]} but has no image engine loaded, so the endpoint below is used.`}
-					</p>
-				) : null}
-				{status.resolved ? (
-					<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
-						<code>generate_image</code> goes to{" "}
-						{status.resolved.source === "provider" ? "the session's provider" : "the endpoint below"} (
-						{SERVER_NAMES[status.resolved.server]}), model <code>{status.resolved.model}</code>.
-						{status.resolved.warning ? (
-							<span className="text-(--vscode-editorWarning-foreground)">
-								{" "}
-								The tool is still offered, but {status.resolved.warning}. Untick "Use an endpoint for image
-								generation" if you do not want it.
-							</span>
-						) : null}
-					</p>
-				) : status.disabled ? (
-					<p className="text-xs mt-1 text-(--vscode-errorForeground)">
-						<code>generate_image</code> is not offered: {status.disabled}.
-					</p>
-				) : null}
+				<MediaEndpointStatusLines
+					lacks="no image engine loaded"
+					serves="generates images"
+					status={status}
+					toggle="Use an endpoint for image generation and editing"
+					tool="generate_image"
+					useProvider={stored.useProvider === true}
+				/>
 			</div>
 
 			<DebouncedTextField
@@ -237,6 +208,63 @@ const ImageGenModelTab = () => {
 				Used when the model does not ask for one, as <code>WIDTHxHEIGHT</code>. Leave empty to let the backend choose, and
 				expect it to round whatever you give it to a shape it supports.
 			</p>
+
+			<div className="mt-2 pt-3 border-t border-(--vscode-panel-border)">
+				<SettingsCheckbox
+					checked={stored.editDisabled !== true}
+					onChange={(checked) => void save({ editDisabled: !checked })}>
+					Also offer image editing
+				</SettingsCheckbox>
+				<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
+					Offers the <code>edit_image</code> tool, which changes an image already in the workspace by instruction and
+					saves the result as a new file. Edits go where generation goes unless you name another endpoint or model
+					below. How far an edit goes is the model's: FLUX.2 klein and Qwen-Image follow the instruction, a plain
+					diffusion model redraws over the source.
+				</p>
+				{stored.editDisabled ? null : (
+					<MediaEndpointStatusLines
+						lacks="no image model that edits"
+						serves="edits images"
+						status={editStatus}
+						toggle="Also offer image editing"
+						tool="edit_image"
+						useProvider={stored.useProvider === true}
+					/>
+				)}
+			</div>
+
+			{stored.editDisabled ? null : (
+				<>
+					<DebouncedTextField
+						className="w-full"
+						initialValue={stored.editBaseUrl ?? ""}
+						onChange={(value) => void save({ editBaseUrl: value })}
+						placeholder="Same as the endpoint above">
+						<span className="font-medium">Edit endpoint</span>
+					</DebouncedTextField>
+					<p className="text-xs -mt-2 text-(--vscode-descriptionForeground)">
+						Cerebriline calls <code>POST &lt;endpoint&gt;/images/edits</code>. Leave empty when the server above edits
+						too. The API key above is sent to this endpoint as well.
+					</p>
+
+					<div>
+						<label className="font-medium text-sm block mb-1" htmlFor="image-edit-model">
+							Edit model
+						</label>
+						<OllamaModelPicker
+							ollamaModels={editModels}
+							onModelChange={(value) => void save({ editModel: value })}
+							placeholder="Same as the model above"
+							selectedModelId={stored.editModel ?? ""}
+						/>
+						<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
+							{editModels.length > 0
+								? `${editModels.length} model${editModels.length === 1 ? "" : "s"} listed for edits. Leave empty to use the generation model.`
+								: "Leave empty to use the generation model, or type a name; it is sent as given."}
+						</p>
+					</div>
+				</>
+			)}
 		</div>
 	)
 }

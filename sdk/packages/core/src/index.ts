@@ -1166,6 +1166,15 @@ export {
 	parseOcrLanguages,
 	resolveOcrDataDir,
 } from "./extensions/tools/executors/document/ocr";
+// The other half of the images API: change a picture that already exists.
+export {
+	createEditImageTool,
+	EDIT_IMAGE_TOOL_DESCRIPTION,
+	EDIT_IMAGE_TOOL_INPUT_SCHEMA,
+	EDIT_IMAGE_TOOL_NAME,
+	type EditImageToolOptions,
+	parseImagePaths,
+} from "./extensions/tools/image-edit";
 // Image generation. Cline could write the CSS for a theme and had nothing to
 // say about what it looked like; this is the tool that makes one. It speaks the
 // OpenAI images API because that is what every local image server already

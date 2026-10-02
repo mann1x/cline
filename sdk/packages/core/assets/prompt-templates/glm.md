@@ -181,6 +181,9 @@ Output: plain text, one result per line as `file:line:column` followed by the so
 # tool: generate_image
 {{DEFAULT}}
 
+# tool: edit_image
+{{DEFAULT}}
+
 # tool: jev
 {{DEFAULT}}
 

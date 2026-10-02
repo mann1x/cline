@@ -4,7 +4,20 @@ sidebarTitle: "Media Endpoints"
 description: "How Cerebriline's media tools find a server: the session's own opencoti or xOllama provider when it serves the kind, a typed endpoint otherwise, and no tool when neither is configured."
 ---
 
-A media tool sends its request to a server that speaks OpenAI's media routes. Today that is `generate_image`. Image editing, speech-to-text, text-to-speech and video generation are planned and will use the same rule.
+A media tool sends its request to a server that speaks OpenAI's media routes. Today these are `generate_image` and `edit_image`. Speech-to-text, text-to-speech and video generation are planned and will use the same rule.
+
+## Images
+
+Tick **Use an endpoint for image generation and editing** on the API configuration panel, then fill in the Images tab.
+
+| Tool | What it does | Route |
+|---|---|---|
+| `generate_image` | Makes an image from a description and saves it into the workspace. | `POST <endpoint>/images/generations` |
+| `edit_image` | Changes an image already in the workspace by instruction and saves the result as a new file. It takes one or more images (the first is edited, the rest are references) and an optional mask. | `POST <endpoint>/images/edits` |
+
+Edits go where generation goes. To send them elsewhere, name an **Edit endpoint** or an **Edit model** on the tab; the tab's one API key is sent to both. Untick **Also offer image editing** to keep `generate_image` without `edit_image`.
+
+How far an edit goes depends on the model. An instruction-edit model such as FLUX.2 klein or Qwen-Image follows the prompt. A plain diffusion model redraws over the source and makes smaller changes.
 
 ## Which server a tool uses
 

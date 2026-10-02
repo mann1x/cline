@@ -38,7 +38,7 @@ vi.mock("@/shared/services/Logger", () => ({
 	Logger: { log: () => {}, warn: () => {}, error: () => {} },
 }))
 
-import { readStoredEndpoint, resolveImageGeneration } from "./image-generation-config"
+import { readStoredEndpoint, resolveImageEdit, resolveImageGeneration } from "./image-generation-config"
 
 const plain: MediaEndpointProbe = { server: "openai", kinds: {}, models: [] }
 const opencoti: MediaEndpointProbe = {
@@ -164,5 +164,52 @@ describe("the session's own provider", () => {
 		servers["http://bs2:8244"] = plain
 		stored.endpoint = JSON.stringify({ baseUrl: "", model: "", useProvider: true })
 		expect(await resolveImageGeneration(lead)).toEqual({ disabled: "no endpoint is configured" })
+	})
+})
+
+describe("resolveImageEdit", () => {
+	it("goes where generation goes unless the tab says otherwise", async () => {
+		stored.endpoint = JSON.stringify({ baseUrl: "http://localhost:8080", model: "klein", size: "512x512" })
+		expect(await resolveImageEdit()).toEqual({
+			endpoint: { baseUrl: "http://localhost:8080", model: "klein", size: "512x512" },
+			source: "typed",
+			server: "openai",
+		})
+
+		servers["http://edits:9000"] = plain
+		stored.endpoint = JSON.stringify({
+			baseUrl: "http://localhost:8080",
+			model: "z-image",
+			editBaseUrl: "http://edits:9000",
+			editModel: "kontext",
+		})
+		expect(await resolveImageEdit()).toMatchObject({ endpoint: { baseUrl: "http://edits:9000", model: "kontext" } })
+	})
+
+	it("is off with editing switched off on the tab, or with the Images box unticked", async () => {
+		stored.endpoint = JSON.stringify({ baseUrl: "http://localhost:8080", model: "klein", editDisabled: true })
+		expect(await resolveImageEdit()).toEqual({ disabled: "image editing is switched off on the Images tab" })
+		// Generation is untouched by that switch.
+		expect(await resolveImageGeneration()).toMatchObject({ source: "typed" })
+
+		stored.endpoint = JSON.stringify({ baseUrl: "http://localhost:8080", model: "klein" })
+		stored.enabled = false
+		expect(await resolveImageEdit()).toEqual({ disabled: "image generation is switched off" })
+	})
+
+	it("uses the session's provider only when it edits", async () => {
+		const lead = { providerId: "opencoti", baseUrl: "http://bs2:8244", modelId: "qwen3-14b" }
+		stored.endpoint = JSON.stringify({ baseUrl: "http://localhost:8080", model: "klein", useProvider: true })
+		servers["http://bs2:8244"] = opencoti
+		expect(await resolveImageEdit(lead)).toMatchObject({ source: "provider", endpoint: { model: "klein" } })
+
+		// An image engine with no vision encoder generates and does not edit.
+		servers["http://bs2:8244"] = {
+			...opencoti,
+			kinds: { ...opencoti.kinds, image_edit: false },
+			models: [{ id: "qwen3-14b" }, { id: "klein", kinds: ["image_generation"] }],
+		}
+		expect(await resolveImageEdit(lead)).toMatchObject({ source: "typed" })
+		expect(await resolveImageGeneration(lead)).toMatchObject({ source: "provider" })
 	})
 })

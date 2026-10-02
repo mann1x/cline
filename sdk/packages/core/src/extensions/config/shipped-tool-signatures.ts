@@ -31,6 +31,10 @@ import {
 	createWebFetchTool,
 } from "../tools/definitions";
 import {
+	EDIT_IMAGE_TOOL_INPUT_SCHEMA,
+	EDIT_IMAGE_TOOL_NAME,
+} from "../tools/image-edit";
+import {
 	GENERATE_IMAGE_TOOL_INPUT_SCHEMA,
 	GENERATE_IMAGE_TOOL_NAME,
 } from "../tools/image-generation";
@@ -73,6 +77,10 @@ export const HOST_TOOL_INPUT_SCHEMAS: readonly {
 	{
 		name: GENERATE_IMAGE_TOOL_NAME,
 		inputSchema: GENERATE_IMAGE_TOOL_INPUT_SCHEMA,
+	},
+	{
+		name: EDIT_IMAGE_TOOL_NAME,
+		inputSchema: EDIT_IMAGE_TOOL_INPUT_SCHEMA,
 	},
 	// Likewise `jev`: host-contributed, schema defined in core.
 	{

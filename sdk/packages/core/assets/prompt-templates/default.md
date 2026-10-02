@@ -222,6 +222,20 @@ Arguments:
 
 This costs real time — seconds to a minute per image — and on a hosted backend it costs money. Generate one image and look at it before generating variations.
 
+# tool: edit_image
+Edit an existing image in the workspace according to a text instruction and save the result as a new file. Use it to change a picture you already have rather than generate a different one: recolour or restyle an icon, change one element of a mockup, combine a subject with a background.
+
+The result is written to a file and, if you can see images, returned to you as well — so you can check the edit and try again with a changed instruction if it is wrong. The source images are never modified.
+
+Arguments:
+- `prompt` — what to change, as an instruction: "make the background transparent", "replace the red door with a blue one". Say what must stay the same when it matters.
+- `images` — the image files to edit, as workspace paths. The first is the image being edited; any others are references the model may draw from (a style, a subject to place). Most backends take one to three.
+- `mask` — optional workspace path of a mask image the same size as the first image. Only the masked region is changed.
+- `path` — where to save the result, relative to the workspace. Optional; defaults to a file under `.cline/generated-images/`.
+- `size` — `WxH` in pixels, e.g. `1024x1024`. Optional, and the backend may round it or keep the source's size.
+
+How far an edit goes depends on the backend: some follow the instruction, others redraw over the source and only make small changes. Look at the result before relying on it. This costs real time — seconds to a minute per image — and on a hosted backend it costs money.
+
 # tool: jev
 Get a calibrated confidence score from Jev, an external scoring model, before acting on something you are not sure of. Jev reads the context you give it and answers typed questions with probabilities; it writes no text and cannot explain itself.
 

@@ -198,6 +198,9 @@ Query the language servers for semantic information. Use this instead of `search
 # tool: generate_image
 {{DEFAULT}}
 
+# tool: edit_image
+{{DEFAULT}}
+
 # tool: jev
 {{DEFAULT}}
 

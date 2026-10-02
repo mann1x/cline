@@ -106,6 +106,7 @@ const HOST_TOOL_NAMES = [
 	"switch_to_act_mode",
 	"browser",
 	"generate_image",
+	"edit_image",
 	"jev",
 ];
 
