@@ -253,7 +253,7 @@ describe("resolveMediaEndpoint", () => {
 		});
 	});
 
-	it("is disabled with no typed URL, a dead one, or a kind the server lacks", async () => {
+	it("is disabled only with no typed URL or no model", async () => {
 		await load();
 		const base = { kind: "speech" as const, useProvider: false, probe };
 		expect(await resolveMediaEndpoint(base)).toEqual({
@@ -262,16 +262,38 @@ describe("resolveMediaEndpoint", () => {
 		expect(
 			await resolveMediaEndpoint({
 				...base,
+				typed: { baseUrl: "http://e2g:22434" },
+			}),
+		).toEqual({ disabled: "the endpoint has no model named" });
+	});
+
+	// These servers may be started on request, so a typed endpoint is offered
+	// whatever it says at session start. The tab's switch is the off switch.
+	it("offers a typed endpoint that is down, or lacks the kind, with a warning", async () => {
+		await load();
+		const base = { kind: "speech" as const, useProvider: false, probe };
+		expect(
+			await resolveMediaEndpoint({
+				...base,
 				typed: { baseUrl: "http://gone:1", model: "m" },
 			}),
-		).toEqual({ disabled: "the endpoint at http://gone:1 does not answer" });
+		).toEqual({
+			endpoint: { baseUrl: "http://gone:1", model: "m" },
+			source: "typed",
+			server: "unknown",
+			warning: "the endpoint at http://gone:1 does not answer right now",
+		});
 		expect(
 			await resolveMediaEndpoint({
 				...base,
 				typed: { baseUrl: "http://e2g:22434", model: "omni:latest" },
 			}),
 		).toEqual({
-			disabled: "the xollama server at http://e2g:22434 does not serve this",
+			endpoint: { baseUrl: "http://e2g:22434", model: "omni:latest" },
+			source: "typed",
+			server: "xollama",
+			warning:
+				"the xollama server at http://e2g:22434 does not serve this right now",
 		});
 	});
 });

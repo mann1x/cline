@@ -42,7 +42,12 @@ export async function readMediaEndpoint(_controller: Controller, request: String
 		if ("disabled" in resolved) {
 			status.disabled = resolved.disabled
 		} else {
-			status.resolved = { source: resolved.source, server: resolved.server, model: resolved.endpoint.model }
+			status.resolved = {
+				source: resolved.source,
+				server: resolved.server,
+				model: resolved.endpoint.model,
+				...(resolved.warning ? { warning: resolved.warning } : {}),
+			}
 		}
 	} catch (error) {
 		status.disabled = error instanceof Error ? error.message : String(error)

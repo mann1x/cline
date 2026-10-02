@@ -51,7 +51,7 @@ export function readImageGenerationApiKey(): string | undefined {
 }
 
 export type ResolvedImageGeneration =
-	| { endpoint: ImageGenerationEndpoint; source: "provider" | "typed"; server: MediaServer }
+	| { endpoint: ImageGenerationEndpoint; source: "provider" | "typed"; server: MediaServer | "unknown"; warning?: string }
 	| { disabled: string }
 
 /**
@@ -59,10 +59,11 @@ export type ResolvedImageGeneration =
  *
  * The box ticked, and then the owner's rule: the session's own opencoti or
  * xOllama when the tab says to use it and it generates images; the typed
- * endpoint otherwise; and nothing when that is empty or does not answer. The
- * box used to be read by nothing but the settings panel, so a stored endpoint
- * kept the tool offered after the user unticked it; and a stored endpoint that
- * was down kept it offered to fail.
+ * endpoint otherwise; and nothing when that names no URL or no model. A typed
+ * endpoint that is down is still offered -- it may be started on request --
+ * and the box is how the user says they do not want the tool. The box used to
+ * be read by nothing but the settings panel, so a stored endpoint kept the tool
+ * offered after the user unticked it.
  */
 /** The Images tab, as the shared resolution takes a tab. */
 export function readImageGenerationTab(): MediaTabSettings {

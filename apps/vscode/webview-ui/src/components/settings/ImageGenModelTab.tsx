@@ -18,7 +18,12 @@ interface StoredEndpoint {
 	useProvider?: boolean
 }
 
-const SERVER_NAMES = { opencoti: "opencoti", xollama: "xOllama", openai: "OpenAI-compatible" } as const
+const SERVER_NAMES = {
+	opencoti: "opencoti",
+	xollama: "xOllama",
+	openai: "OpenAI-compatible",
+	unknown: "not answering",
+} as const
 
 function parseStored(raw: string): StoredEndpoint {
 	if (!raw) {
@@ -157,6 +162,13 @@ const ImageGenModelTab = () => {
 						<code>generate_image</code> goes to{" "}
 						{status.resolved.source === "provider" ? "the session's provider" : "the endpoint below"} (
 						{SERVER_NAMES[status.resolved.server]}), model <code>{status.resolved.model}</code>.
+						{status.resolved.warning ? (
+							<span className="text-(--vscode-editorWarning-foreground)">
+								{" "}
+								The tool is still offered, but {status.resolved.warning}. Untick "Use an endpoint for image
+								generation" if you do not want it.
+							</span>
+						) : null}
 					</p>
 				) : status.disabled ? (
 					<p className="text-xs mt-1 text-(--vscode-errorForeground)">

@@ -94,10 +94,16 @@ describe("resolveImageGeneration", () => {
 		expect(await resolveImageGeneration()).toEqual({ disabled: "no endpoint is configured" })
 	})
 
-	// The owner's rule: an endpoint that does not work disables the tool.
-	it("is not offered when the endpoint does not answer", async () => {
+	// The owner's rule: an endpoint may be started on request, so one that is
+	// down is still offered. The box is the off switch.
+	it("is offered when the endpoint does not answer, with a warning", async () => {
 		stored.endpoint = JSON.stringify({ baseUrl: "http://down:1", model: "z-image" })
-		expect(await resolveImageGeneration()).toEqual({ disabled: "the endpoint at http://down:1 does not answer" })
+		expect(await resolveImageGeneration()).toEqual({
+			endpoint: { baseUrl: "http://down:1", model: "z-image" },
+			source: "typed",
+			server: "unknown",
+			warning: "the endpoint at http://down:1 does not answer right now",
+		})
 	})
 
 	// Stored JSON that will not parse is a settings file someone edited, not a

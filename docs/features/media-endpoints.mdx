@@ -1,7 +1,7 @@
 ---
 title: "Media Endpoints"
 sidebarTitle: "Media Endpoints"
-description: "How Cerebriline's media tools find a server: the session's own opencoti or xOllama provider when it serves the kind, a typed endpoint otherwise, and no tool when neither answers."
+description: "How Cerebriline's media tools find a server: the session's own opencoti or xOllama provider when it serves the kind, a typed endpoint otherwise, and no tool when neither is configured."
 ---
 
 A media tool sends its request to a server that speaks OpenAI's media routes. Today that is `generate_image`. Image editing, speech-to-text, text-to-speech and video generation are planned and will use the same rule.
@@ -12,7 +12,9 @@ Each media tab on the API configuration panel has a checkbox, **Use the session'
 
 1. **The session's provider**, when the box is ticked, the provider is an opencoti or xOllama server, and that server serves this kind of media. One opencoti process can serve the chat model and every media engine at once, and an xOllama model can carry media engines.
 2. **The typed endpoint**, when the session runs on any other provider, or on an opencoti or xOllama that does not serve this kind.
-3. **No tool.** If the typed URL is empty, has no model, or the server does not answer, the tool is not offered and the model is never told it exists.
+3. **No tool.** If the typed URL is empty or has no model, the tool is not offered and the model is never told it exists.
+
+A typed endpoint that is down, or that says it does not serve this kind, is still offered: these servers may be started on request. The tab shows a warning, and a call made while the server is down tells the model so. To stop offering a tool, untick its "Use an endpoint for …" box.
 
 The tab shows which of these applies now, and why a tool is not offered.
 

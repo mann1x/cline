@@ -20,8 +20,14 @@
  *  1. with the "use the configured provider" flag on, the session's own
  *     opencoti or xOllama provider, when it serves this kind;
  *  2. otherwise the typed URL;
- *  3. a typed URL that is empty, or an endpoint that does not answer, means the
- *     tool is not offered.
+ *  3. a typed URL that is empty, or names no model, means the tool is not
+ *     offered.
+ *
+ * A typed endpoint that does not answer is still offered (owner, 2026-10-02):
+ * these servers may be started on request, and a tool left out at session
+ * start stays out for the whole session. The tab's own switch is how a user
+ * says they do not want the tool. What the probe found is a warning, not a
+ * gate.
  */
 
 export type MediaKind =
@@ -289,7 +295,10 @@ export type ResolvedMediaEndpoint =
 	| {
 			endpoint: MediaEndpoint;
 			source: "provider" | "typed";
-			server: MediaServer;
+			/** `unknown` is a typed endpoint that did not answer the probe. */
+			server: MediaServer | "unknown";
+			/** Why a call may fail right now. The tool is offered all the same. */
+			warning?: string;
 	  }
 	| { disabled: string };
 
@@ -356,19 +365,25 @@ export async function resolveMediaEndpoint(
 		return { disabled: "the endpoint has no model named" };
 	}
 	const apiKey = input.typed?.apiKey?.trim() || undefined;
+	const endpoint = { baseUrl, model: named, ...(apiKey ? { apiKey } : {}) };
 	const probe = await input.probe(baseUrl, apiKey);
 	if (!probe) {
-		return { disabled: `the endpoint at ${baseUrl} does not answer` };
-	}
-	if (probe.kinds[input.kind] === false) {
 		return {
-			disabled: `the ${probe.server} server at ${baseUrl} does not serve this`,
+			endpoint,
+			source: "typed",
+			server: "unknown",
+			warning: `the endpoint at ${baseUrl} does not answer right now`,
 		};
 	}
 	return {
-		endpoint: { baseUrl, model: named, ...(apiKey ? { apiKey } : {}) },
+		endpoint,
 		source: "typed",
 		server: probe.server,
+		...(probe.kinds[input.kind] === false
+			? {
+					warning: `the ${probe.server} server at ${baseUrl} does not serve this right now`,
+				}
+			: {}),
 	};
 }
 

@@ -184,14 +184,14 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 	// worse than an absent one. Offered as soon as an endpoint and a model are
 	// configured, and not before. Where it goes is the Images tab's answer: the
 	// session's own opencoti or xOllama when the tab says so and it draws, the
-	// typed endpoint otherwise -- and an endpoint that does not answer is no
-	// endpoint, so the tool is left out rather than offered to fail.
+	// typed endpoint otherwise. A typed endpoint that is down is offered all the
+	// same: it may be started on request, and the box is the off switch.
 	const imageGeneration = await resolveImageGeneration(options?.sessionProvider)
 	if ("disabled" in imageGeneration) {
 		Logger.log(`[VscodeRuntimeTools] generate_image omitted: ${imageGeneration.disabled}`)
 	} else {
 		Logger.log(
-			`[VscodeRuntimeTools] generate_image uses the ${imageGeneration.source === "provider" ? "session's provider" : "typed endpoint"} (${imageGeneration.server}), model ${imageGeneration.endpoint.model}`,
+			`[VscodeRuntimeTools] generate_image uses the ${imageGeneration.source === "provider" ? "session's provider" : "typed endpoint"} (${imageGeneration.server}), model ${imageGeneration.endpoint.model}${imageGeneration.warning ? `; ${imageGeneration.warning}` : ""}`,
 		)
 		tools.push(
 			createGenerateImageTool({

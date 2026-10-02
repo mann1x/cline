@@ -19,7 +19,14 @@ export interface MediaEndpointStatus {
 		models: string[]
 	}
 	/** The tool is offered, and this is where it goes. */
-	resolved?: { source: "provider" | "typed"; server: "opencoti" | "xollama" | "openai"; model: string }
+	resolved?: {
+		source: "provider" | "typed"
+		/** `unknown` is a typed endpoint that did not answer. */
+		server: "opencoti" | "xollama" | "openai" | "unknown"
+		model: string
+		/** Why a call may fail right now; the tool is offered all the same. */
+		warning?: string
+	}
 	/** The tool is not offered, and this is why. */
 	disabled?: string
 }
