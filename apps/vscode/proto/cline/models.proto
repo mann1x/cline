@@ -22,6 +22,12 @@ service ModelsService {
   // carries the base URL; the key is read from secret storage here, because the
   // settings view has never been told it.
   rpc getImageGenerationModels(StringRequest) returns (StringArray);
+  // Where one kind of media tool would go right now, and why. The request
+  // names the kind (image_generation, image_edit, transcription, speech,
+  // video); the answer is JSON (`MediaEndpointStatus` in
+  // shared/media-endpoint-status.ts): whether the session's provider serves
+  // the kind, which endpoint the tool resolves to, and the models to offer.
+  rpc readMediaEndpoint(StringRequest) returns (String);
   // Fetches the decision models a Jev endpoint serves. The request carries the
   // custom base URL, empty for TypeSafe; the matching key is read here.
   rpc getJevModels(StringRequest) returns (StringArray);

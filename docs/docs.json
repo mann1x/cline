@@ -160,7 +160,8 @@
 							"features/subagents",
 							"features/agents",
 							"features/change-protocol",
-							"features/document-reader"
+							"features/document-reader",
+							"features/media-endpoints"
 						]
 					},
 					{

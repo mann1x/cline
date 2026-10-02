@@ -31,18 +31,22 @@ interface ApiConfigurationSectionProps {
  * model rather than a mode of the session's.
  */
 
-/** Whether the stored image endpoint names both a URL and a model. */
+/**
+ * Whether the Images tab says where to generate: a URL and a model, or the
+ * session's own provider. Whether that provider draws is the tab's to say.
+ */
 function isImageEndpointComplete(raw: string): boolean {
 	if (!raw) {
 		return false
 	}
 	try {
-		const parsed = JSON.parse(raw) as { baseUrl?: unknown; model?: unknown }
+		const parsed = JSON.parse(raw) as { baseUrl?: unknown; model?: unknown; useProvider?: unknown }
 		return (
-			typeof parsed?.baseUrl === "string" &&
-			parsed.baseUrl.trim() !== "" &&
-			typeof parsed?.model === "string" &&
-			parsed.model.trim() !== ""
+			parsed?.useProvider === true ||
+			(typeof parsed?.baseUrl === "string" &&
+				parsed.baseUrl.trim() !== "" &&
+				typeof parsed?.model === "string" &&
+				parsed.model.trim() !== "")
 		)
 	} catch {
 		return false
@@ -425,13 +429,15 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 							<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
 								Offers the <code>generate_image</code> tool, which turns a description into a picture and saves it
 								into the workspace — an app icon, a placeholder sprite, a mockup of a layout before it is built.
-								The Images tab names where to generate them: any endpoint serving the OpenAI images API, local or
-								hosted. Nothing is called until the model asks for a picture.
+								The Images tab names where to generate them: the session's own opencoti or xOllama provider when
+								it has an image engine, or any endpoint serving the OpenAI images API, local or hosted. Nothing is
+								called until the model asks for a picture.
 							</p>
 							{imageGenUnconfigured ? (
 								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
-									The Images tab does not name both an endpoint and a model, so the tool is not offered at all
-									and the model is never told it could make one. Fill in both on the Images tab.
+									The Images tab names neither the session's provider nor an endpoint with a model, so the tool
+									is not offered at all and the model is never told it could make one. Set one on the Images
+									tab.
 								</p>
 							) : null}
 						</div>

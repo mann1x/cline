@@ -5,6 +5,7 @@ import {
 	createJevTool,
 	createListFilesTool,
 	createMcpTools,
+	type MediaSessionProvider,
 } from "@cline/core"
 import type { AgentTool, AgentToolContext } from "@cline/shared"
 import { createVscodeBrowserDriver, isBrowserToolEnabled } from "@/hosts/vscode/browser-support"
@@ -17,7 +18,7 @@ import type { McpHub } from "@/services/mcp/McpHub"
 import { resolveMcpServerTimeoutMs } from "@/services/mcp/timeout"
 import { Logger } from "@/shared/services/Logger"
 import { createCheckFileTool } from "./check-file-tool"
-import { isImageGenerationConfigured, readImageGenerationEndpoint } from "./image-generation-config"
+import { resolveImageGeneration } from "./image-generation-config"
 import { isJevConfigured, readJevEndpoint } from "./jev-config"
 import { readQaCredentials } from "./qa-credentials-store"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
@@ -76,6 +77,11 @@ export interface VscodeExtraToolsOptions {
 	foregroundCommands?: SdkForegroundCommandCoordinator
 	/** Files read this session; see `ListFilesToolOptions.getReadPaths`. */
 	getReadPaths?: () => string[]
+	/**
+	 * The provider this session runs on. A media tool may be served by it: an
+	 * opencoti or xOllama that generates images needs no second endpoint.
+	 */
+	sessionProvider?: MediaSessionProvider
 }
 
 export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExtraToolsOptions): Promise<AgentTool[]> {
@@ -176,12 +182,26 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 	// is the one with nowhere to go by default: there is no image endpoint on a
 	// machine until someone stands one up, and a tool that always fails is
 	// worse than an absent one. Offered as soon as an endpoint and a model are
-	// configured, and not before.
-	if (isImageGenerationConfigured()) {
+	// configured, and not before. Where it goes is the Images tab's answer: the
+	// session's own opencoti or xOllama when the tab says so and it draws, the
+	// typed endpoint otherwise -- and an endpoint that does not answer is no
+	// endpoint, so the tool is left out rather than offered to fail.
+	const imageGeneration = await resolveImageGeneration(options?.sessionProvider)
+	if ("disabled" in imageGeneration) {
+		Logger.log(`[VscodeRuntimeTools] generate_image omitted: ${imageGeneration.disabled}`)
+	} else {
+		Logger.log(
+			`[VscodeRuntimeTools] generate_image uses the ${imageGeneration.source === "provider" ? "session's provider" : "typed endpoint"} (${imageGeneration.server}), model ${imageGeneration.endpoint.model}`,
+		)
 		tools.push(
 			createGenerateImageTool({
 				cwd: options?.cwd ?? process.cwd(),
-				getEndpoint: readImageGenerationEndpoint,
+				// Resolved again per call: the tab can change mid-session, and
+				// the probe behind it is cached.
+				getEndpoint: async () => {
+					const resolved = await resolveImageGeneration(options?.sessionProvider)
+					return "disabled" in resolved ? undefined : resolved.endpoint
+				},
 				writeFile: writeGeneratedImage,
 				onError: (message, error) => Logger.error(`${message}:`, error),
 			}),

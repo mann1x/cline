@@ -192,6 +192,12 @@ export class VscodeSessionHost implements SdkSessionHost {
 				vscodeTerminalExecutionMode: getEffectiveTerminalExecutionMode(requestedTerminalExecutionMode),
 				foregroundCommands: options.foregroundCommands,
 				getReadPaths: options.getReadPaths,
+				sessionProvider: {
+					providerId: inputWithRemoteConfig.config.providerId,
+					baseUrl: inputWithRemoteConfig.config.baseUrl,
+					apiKey: inputWithRemoteConfig.config.apiKey,
+					modelId: inputWithRemoteConfig.config.modelId,
+				},
 			})
 			// The focus-chain settings have been reachable in the UI all
 			// along — enabled by default, with a reminder interval — while

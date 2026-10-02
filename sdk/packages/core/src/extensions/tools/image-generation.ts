@@ -23,6 +23,13 @@
 
 import * as nodePath from "node:path";
 import { type AgentTool, createTool } from "@cline/shared";
+import {
+	MediaRequestTimeoutError,
+	normalizeBaseUrl,
+	sendMediaRequest,
+} from "./media-endpoint";
+
+export { normalizeBaseUrl };
 
 /**
  * A text part, optionally followed by an image the model can actually see.
@@ -145,18 +152,19 @@ export function selectImageGenerationModels(payload: unknown): string[] {
 
 export interface GenerateImageToolOptions {
 	cwd: string;
-	getEndpoint: () => ImageGenerationEndpoint | undefined;
+	/**
+	 * May be asynchronous: a host that resolves the endpoint against the
+	 * session's own provider has to ask that server what it serves.
+	 */
+	getEndpoint: () =>
+		| ImageGenerationEndpoint
+		| undefined
+		| Promise<ImageGenerationEndpoint | undefined>;
 	writeFile: (absolutePath: string, data: Buffer) => Promise<void>;
 	fetchImpl?: typeof fetch;
 	/** Milliseconds before a generation is abandoned. Defaults to 3 minutes. */
 	timeoutMs?: number;
 	onError?: (message: string, error: unknown) => void;
-}
-
-/** `.../v1`, whether or not the user typed it. */
-export function normalizeBaseUrl(baseUrl: string): string {
-	const trimmed = baseUrl.trim().replace(/\/+$/, "");
-	return /\/v\d+$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
 }
 
 /**
@@ -370,7 +378,7 @@ export function createGenerateImageTool(
 				return "`generate_image` needs a `prompt`: describe what to draw, including the style and the background.";
 			}
 
-			const endpoint = options.getEndpoint();
+			const endpoint = await options.getEndpoint();
 			if (!endpoint?.baseUrl || !endpoint.model) {
 				return (
 					"No image generation endpoint is configured, so no image was generated. " +
@@ -390,17 +398,14 @@ export function createGenerateImageTool(
 			}
 
 			const size = parseSize(request.size) ?? parseSize(endpoint.size);
-			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort(), timeoutMs);
-			// The caller's cancellation has to reach the request too, or a
-			// stopped task sits waiting on a minute of image generation.
-			const onAbort = () => controller.abort();
-			context?.signal?.addEventListener("abort", onAbort);
+			// The caller's cancellation reaches the request, or a stopped task
+			// sits waiting on a minute of image generation.
+			const signal = context?.signal;
 
 			try {
-				const response = await fetchImpl(
+				const response = await sendMediaRequest(
 					`${normalizeBaseUrl(endpoint.baseUrl)}/images/generations`,
-					{
+					() => ({
 						method: "POST",
 						headers: {
 							"Content-Type": "application/json",
@@ -415,21 +420,30 @@ export function createGenerateImageTool(
 							response_format: "b64_json",
 							...(size ? { size } : {}),
 						}),
-						signal: controller.signal,
+					}),
+					{
+						fetchImpl,
+						signal,
+						attemptTimeoutMs: timeoutMs,
+						// A busy engine is a queue, not a failure: say so on the
+						// tool's row and ask again when the server said to.
+						onBusy: (waitMs) =>
+							context?.emitUpdate?.({
+								status: `The image engine is busy; asking again in ${Math.round(waitMs / 1000)}s.`,
+							}),
 					},
 				);
 
+				if (response.status === 503) {
+					return "The image engine is still busy with other requests after a long wait, so no image was generated. Nothing is wrong with the request; try again later.";
+				}
 				if (!response.ok) {
 					const detail = (await response.text().catch(() => "")).slice(0, 400);
 					return `The image endpoint refused the request (HTTP ${response.status}).${detail ? `\n\n${detail}` : ""}`;
 				}
 
 				const body = (await response.json()) as ImagesApiResponse;
-				const image = await readGeneratedImage(
-					body,
-					fetchImpl,
-					controller.signal,
-				);
+				const image = await readGeneratedImage(body, fetchImpl, signal);
 				if ("error" in image) {
 					return image.error;
 				}
@@ -479,15 +493,12 @@ export function createGenerateImageTool(
 					},
 				];
 			} catch (error) {
-				if (controller.signal.aborted) {
+				if (error instanceof MediaRequestTimeoutError || signal?.aborted) {
 					return `Image generation was stopped before it finished (the limit is ${Math.round(timeoutMs / 1000)}s).`;
 				}
 				options.onError?.("[generate_image] request failed", error);
 				const message = error instanceof Error ? error.message : String(error);
 				return `Could not reach the image endpoint: ${message}`;
-			} finally {
-				clearTimeout(timer);
-				context?.signal?.removeEventListener("abort", onAbort);
 			}
 		},
 	});

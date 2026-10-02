@@ -1245,6 +1245,30 @@ export {
 	renderMatches,
 	type WorkspaceLister,
 } from "./extensions/tools/list-files";
+// Where a media tool sends its request: the session's own opencoti or xOllama
+// when it serves the kind, the typed endpoint otherwise, and no tool at all
+// when neither answers.
+export {
+	listMediaModels,
+	MEDIA_KINDS,
+	type MediaEndpoint,
+	type MediaEndpointProbe,
+	type MediaKind,
+	type MediaModel,
+	type MediaProbeOptions,
+	type MediaRequestOptions,
+	MediaRequestTimeoutError,
+	type MediaServer,
+	type MediaSessionProvider,
+	mediaKindsOfModelRow,
+	mediaServerOrigin,
+	probeMediaEndpoint,
+	type ResolvedMediaEndpoint,
+	type ResolveMediaEndpointInput,
+	resolveMediaEndpoint,
+	retryAfterMs,
+	sendMediaRequest,
+} from "./extensions/tools/media-endpoint";
 export {
 	commandText,
 	describeQaCredentials,

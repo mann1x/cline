@@ -1,0 +1,37 @@
+---
+title: "Media Endpoints"
+sidebarTitle: "Media Endpoints"
+description: "How Cerebriline's media tools find a server: the session's own opencoti or xOllama provider when it serves the kind, a typed endpoint otherwise, and no tool when neither answers."
+---
+
+A media tool sends its request to a server that speaks OpenAI's media routes. Today that is `generate_image`. Image editing, speech-to-text, text-to-speech and video generation are planned and will use the same rule.
+
+## Which server a tool uses
+
+Each media tab on the API configuration panel has a checkbox, **Use the session's opencoti or xOllama provider when it …**, and an endpoint of its own (URL, key, model). When a session starts, each tool is resolved in this order:
+
+1. **The session's provider**, when the box is ticked, the provider is an opencoti or xOllama server, and that server serves this kind of media. One opencoti process can serve the chat model and every media engine at once, and an xOllama model can carry media engines.
+2. **The typed endpoint**, when the session runs on any other provider, or on an opencoti or xOllama that does not serve this kind.
+3. **No tool.** If the typed URL is empty, has no model, or the server does not answer, the tool is not offered and the model is never told it exists.
+
+The tab shows which of these applies now, and why a tool is not offered.
+
+## How a server is recognised
+
+| Server | How it is recognised | How it says what it serves |
+|---|---|---|
+| opencoti | `GET /props` carries a `features` array | `images_generate_v1`, `images_edit_v1`, `audio_transcriptions_v1`, `audio_speech_v1`, `videos_generate_v1` |
+| xOllama | `GET /api/xollama` answers | each media model's `/v1/models` row lists `capabilities` and its input and output modalities |
+| anything else | `GET /v1/models` answers | it does not say; it is taken to serve what it is asked for |
+
+On opencoti and xOllama a kind the server does not list is treated as not served. On any other server nothing is assumed either way.
+
+## Choosing the model on the session's provider
+
+The model field on the tab names the model. If it is empty, the session's own model is used when it serves the kind, and otherwise the only model that does. When several models serve the kind and none is named, the tool is not offered and the tab says so.
+
+## When an engine is busy
+
+opencoti and xOllama run one request per engine and answer `503` with `Retry-After` to the rest. The tool waits and asks again, for up to 30 minutes, and reports only then that the engine is still busy. Other refusals are not retried: `400` means the model does not do this, `404` means no such model, and `500` means the engine failed.
+
+The time limit on a request (3 minutes for an image) counts the work, not the time spent waiting in the queue.

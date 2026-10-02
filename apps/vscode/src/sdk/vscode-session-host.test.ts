@@ -219,6 +219,8 @@ describe("VscodeSessionHost telemetry wiring", () => {
 			cwd: "/workspace",
 			getTerminalManager: undefined,
 			vscodeTerminalExecutionMode: undefined,
+			// The session's own provider, which a media tool may be served by.
+			sessionProvider: { providerId: undefined, baseUrl: undefined, apiKey: undefined, modelId: undefined },
 		})
 		expect(result.source).toBe("vscode")
 		expect(result.config.extensions).toEqual([{ name: "remote-config" }])

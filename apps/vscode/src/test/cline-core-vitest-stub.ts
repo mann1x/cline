@@ -153,6 +153,12 @@ export {
 	JEV_TOOL_NAME,
 	rankQuestionOptions,
 } from "../../../../sdk/packages/core/src/extensions/tools/jev"
+export {
+	listMediaModels,
+	MEDIA_KINDS,
+	probeMediaEndpoint,
+	resolveMediaEndpoint,
+} from "../../../../sdk/packages/core/src/extensions/tools/media-endpoint"
 // From source: the host names a batch's rows with it and the tool names the
 // agents with it, and the two have to agree.
 export { uniqueAgentNames } from "../../../../sdk/packages/core/src/extensions/tools/team/agent-names"
