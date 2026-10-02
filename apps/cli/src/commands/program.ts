@@ -150,6 +150,14 @@ export function addRootOptions(cmd: Command): Command {
 				"Context window for the agents model; omit to use whatever that model declares",
 			)
 			.option(
+				"--media-provider",
+				"Offer the media tools (generate_image, edit_image, transcribe_audio, synthesize_speech, generate_video) the session's own opencoti or xOllama serves",
+			)
+			.option(
+				"--media-config <file>",
+				"JSON file naming the media endpoints: where each media tool sends its requests, and which are offered. See the Media Endpoints documentation",
+			)
+			.option(
 				"--expert-model <model-id>",
 				"Model the `escalate` tool hands a stuck task to (same provider). Without this there is no expert and the escalation paths stay closed",
 			)
@@ -543,6 +551,10 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 		result.expertMaxEscalations = opts.expertMaxEscalations;
 	if (opts.expertMaxFollowUps !== undefined)
 		result.expertMaxFollowUps = opts.expertMaxFollowUps;
+	if (opts.mediaProvider !== undefined)
+		result.mediaProvider = !!opts.mediaProvider;
+	if (typeof opts.mediaConfig === "string")
+		result.mediaConfig = opts.mediaConfig;
 	if (opts.expertCloseAfter !== undefined)
 		result.expertCloseAfter = !!opts.expertCloseAfter;
 	if (opts.struggleFailedCalls !== undefined)

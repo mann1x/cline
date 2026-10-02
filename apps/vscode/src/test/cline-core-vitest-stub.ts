@@ -169,6 +169,12 @@ export {
 	probeMediaEndpoint,
 	resolveMediaEndpoint,
 } from "../../../../sdk/packages/core/src/extensions/tools/media-endpoint"
+// From source: which media tools a configuration makes is core's decision, and
+// the host's tests are about the configuration it reads.
+export {
+	createMediaTools,
+	resolveMediaTool,
+} from "../../../../sdk/packages/core/src/extensions/tools/media-tools"
 // From source: the host names a batch's rows with it and the tool names the
 // agents with it, and the two have to agree.
 export { uniqueAgentNames } from "../../../../sdk/packages/core/src/extensions/tools/team/agent-names"

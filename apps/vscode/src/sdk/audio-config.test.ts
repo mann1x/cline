@@ -13,8 +13,11 @@ vi.mock("@/core/storage/StateManager", () => ({
 	},
 }))
 
-import { resolveSpeech, resolveTranscription } from "./audio-config"
 import { resetMediaProbes } from "./media-endpoint-config"
+import { resolveExtensionMediaTool } from "./media-tools-config"
+
+const resolveTranscription = (provider?: undefined) => resolveExtensionMediaTool("transcribe_audio", provider)
+const resolveSpeech = (provider?: undefined) => resolveExtensionMediaTool("synthesize_speech", provider)
 
 const store = (value: unknown) => {
 	state.settings.audioEndpoints = JSON.stringify(value)
@@ -75,9 +78,9 @@ describe("the audio endpoints", () => {
 			stt: { baseUrl: "http://127.0.0.1:9", model: "whisper", disabled: true },
 			tts: { baseUrl: "http://127.0.0.1:9", model: "outetts" },
 		})
-		expect(await resolveTranscription(undefined)).toEqual({ disabled: "speech-to-text is switched off on the Audio tab" })
+		expect(await resolveTranscription(undefined)).toEqual({ disabled: "speech-to-text is switched off" })
 		expect(await resolveSpeech(undefined)).toHaveProperty("endpoint")
 		state.settings.audioEnabled = false
-		expect(await resolveSpeech(undefined)).toEqual({ disabled: "audio processing is switched off" })
+		expect(await resolveSpeech(undefined)).toEqual({ disabled: "text-to-speech is switched off" })
 	})
 })

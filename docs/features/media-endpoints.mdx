@@ -60,6 +60,35 @@ A typed endpoint that is down, or that says it does not serve this kind, is stil
 
 The tab shows which of these applies now, and why a tool is not offered.
 
+## From the CLI
+
+The CLI has no settings tabs, so it takes the same configuration from two flags. Both hosts hand it to the same builder, so a CLI run offers the tools the extension would for the same settings. With neither flag, no media tool is offered.
+
+| Flag | Environment variable | What it does |
+|---|---|---|
+| `--media-provider` | `CLINE_MEDIA_PROVIDER=1` | Offers every media tool that the session's own opencoti or xOllama serves. This is the "use the session's provider" box, ticked on every tab. |
+| `--media-config <file>` | `CLINE_MEDIA_CONFIG` | A JSON file naming the endpoints. Only the sections in the file are offered. |
+
+With both flags, the file says which tools are offered and each one tries the session's provider first.
+
+```json
+{
+  "baseUrl": "http://127.0.0.1:8080",
+  "apiKey": "sk-...",
+  "image": { "model": "flux2-klein", "size": "1024x1024" },
+  "transcription": { "model": "whisper-large-v3-turbo" },
+  "speech": { "model": "outetts", "voice": "alloy", "format": "wav" },
+  "video": { "baseUrl": "http://127.0.0.1:8090", "model": "wan2.1", "seconds": 3 }
+}
+```
+
+- The top-level `baseUrl`, `apiKey` and `useProvider` apply to every section. A section can override them.
+- A section is on when it is an object or `true`. Leave it out, or set it to `false`, to leave its tool out.
+- `image` offers both image tools. Set `"edit": false` to keep only `generate_image`, or `"edit": { "baseUrl": ..., "model": ... }` to send edits elsewhere.
+- A file that cannot be read or is not JSON stops the run with an error.
+
+The run's log has one `[media]` line per tool, saying where it goes or why it was left out.
+
 ## How a server is recognised
 
 | Server | How it is recognised | How it says what it serves |

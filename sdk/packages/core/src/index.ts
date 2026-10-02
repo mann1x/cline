@@ -1298,6 +1298,20 @@ export {
 	retryAfterMs,
 	sendMediaRequest,
 } from "./extensions/tools/media-endpoint";
+// The five media tools as one set: the hosts differ only in how they read it.
+export {
+	type CreateMediaToolsOptions,
+	createMediaProbeCache,
+	createMediaTools,
+	MEDIA_TOOL_NAMES,
+	type MediaProbe,
+	type MediaSectionSettings,
+	type MediaToolName,
+	type MediaToolsConfig,
+	parseMediaToolsConfig,
+	type ResolvedMediaTool,
+	resolveMediaTool,
+} from "./extensions/tools/media-tools";
 export {
 	commandText,
 	describeQaCredentials,

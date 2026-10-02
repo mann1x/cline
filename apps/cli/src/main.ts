@@ -1467,6 +1467,31 @@ export async function runCli(): Promise<void> {
 				`[Vision] Describer installed: provider=${provider} model=${visionModelId}`,
 			);
 		}
+		// The media tools, off unless asked for: `--media-provider`,
+		// `--media-config`, or their environment variables. Built by the same
+		// function the extension uses, from the same shape of configuration, so
+		// a run here offers what the plugin would. Asked of the endpoint this
+		// session runs on, which is why it waits for `config`.
+		const { createCliMediaTools } = await import("./runtime/media-tools");
+		const mediaTools = await createCliMediaTools({
+			args,
+			cwd,
+			provider: {
+				providerId: config.providerId,
+				...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+				...(config.apiKey ? { apiKey: config.apiKey } : {}),
+				modelId: config.modelId,
+			},
+			log: (message) => loggerAdapter.core.log(message),
+			onError: (message, error) =>
+				loggerAdapter.core.log(
+					`${message}: ${error instanceof Error ? error.message : String(error)}`,
+				),
+		});
+		if (mediaTools.length > 0) {
+			config.extraTools = [...(config.extraTools ?? []), ...mediaTools];
+		}
+
 		// Delegated agents on a model of their own. The same shape the extension's
 		// Agents tab produces, read at the same place in core: only the fields
 		// named here replace the session's, so an agents model given without a

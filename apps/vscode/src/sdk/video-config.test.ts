@@ -14,7 +14,9 @@ vi.mock("@/core/storage/StateManager", () => ({
 }))
 
 import { resetMediaProbes } from "./media-endpoint-config"
-import { resolveVideoGeneration } from "./video-config"
+import { resolveExtensionMediaTool } from "./media-tools-config"
+
+const resolveVideoGeneration = (provider?: undefined) => resolveExtensionMediaTool("generate_video", provider)
 
 describe("the video endpoint", () => {
 	beforeEach(() => {

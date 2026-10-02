@@ -2,14 +2,10 @@ import { readFile } from "node:fs/promises"
 import {
 	createAskLspTool,
 	createBrowserTool,
-	createEditImageTool,
-	createGenerateImageTool,
-	createGenerateVideoTool,
 	createJevTool,
 	createListFilesTool,
 	createMcpTools,
-	createSynthesizeSpeechTool,
-	createTranscribeAudioTool,
+	createMediaTools,
 	type MediaSessionProvider,
 } from "@cline/core"
 import type { AgentTool, AgentToolContext } from "@cline/shared"
@@ -22,13 +18,12 @@ import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTermin
 import type { McpHub } from "@/services/mcp/McpHub"
 import { resolveMcpServerTimeoutMs } from "@/services/mcp/timeout"
 import { Logger } from "@/shared/services/Logger"
-import { resolveSpeech, resolveTranscription } from "./audio-config"
 import { createCheckFileTool } from "./check-file-tool"
-import { resolveImageEdit, resolveImageGeneration } from "./image-generation-config"
 import { isJevConfigured, readJevEndpoint } from "./jev-config"
+import { probeMediaServer, readLeadMediaProvider } from "./media-endpoint-config"
+import { readMediaToolsConfig } from "./media-tools-config"
 import { readQaCredentials } from "./qa-credentials-store"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
-import { resolveVideoGeneration } from "./video-config"
 import { createVscodeLmMcpTools } from "./vscode-lm-mcp-tools"
 import { createVscodeRunCommandsTool, VSCODE_FOREGROUND_RUN_COMMANDS_TIMEOUT_MS } from "./vscode-run-commands-tool"
 
@@ -193,117 +188,24 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 	// session's own opencoti or xOllama when the tab says so and it draws, the
 	// typed endpoint otherwise. A typed endpoint that is down is offered all the
 	// same: it may be started on request, and the box is the off switch.
-	const imageGeneration = await resolveImageGeneration(options?.sessionProvider)
-	if ("disabled" in imageGeneration) {
-		Logger.log(`[VscodeRuntimeTools] generate_image omitted: ${imageGeneration.disabled}`)
-	} else {
-		Logger.log(
-			`[VscodeRuntimeTools] generate_image uses the ${imageGeneration.source === "provider" ? "session's provider" : "typed endpoint"} (${imageGeneration.server}), model ${imageGeneration.endpoint.model}${imageGeneration.warning ? `; ${imageGeneration.warning}` : ""}`,
-		)
-		tools.push(
-			createGenerateImageTool({
-				cwd: options?.cwd ?? process.cwd(),
-				// Resolved again per call: the tab can change mid-session, and
-				// the probe behind it is cached.
-				getEndpoint: async () => {
-					const resolved = await resolveImageGeneration(options?.sessionProvider)
-					return "disabled" in resolved ? undefined : resolved.endpoint
-				},
-				writeFile: writeGeneratedImage,
-				onError: (message, error) => Logger.error(`${message}:`, error),
-			}),
-		)
-	}
-
-	// `edit_image` is the same switch's other tool: the Images box, with editing
-	// not switched off on the tab, and the endpoint the tab names for edits --
-	// the generation endpoint unless it says otherwise.
-	const imageEdit = await resolveImageEdit(options?.sessionProvider)
-	if ("disabled" in imageEdit) {
-		Logger.log(`[VscodeRuntimeTools] edit_image omitted: ${imageEdit.disabled}`)
-	} else {
-		Logger.log(
-			`[VscodeRuntimeTools] edit_image uses the ${imageEdit.source === "provider" ? "session's provider" : "typed endpoint"} (${imageEdit.server}), model ${imageEdit.endpoint.model}${imageEdit.warning ? `; ${imageEdit.warning}` : ""}`,
-		)
-		tools.push(
-			createEditImageTool({
-				cwd: options?.cwd ?? process.cwd(),
-				getEndpoint: async () => {
-					const resolved = await resolveImageEdit(options?.sessionProvider)
-					return "disabled" in resolved ? undefined : resolved.endpoint
-				},
-				readFile: (absolutePath) => readFile(absolutePath),
-				writeFile: writeGeneratedImage,
-				onError: (message, error) => Logger.error(`${message}:`, error),
-			}),
-		)
-	}
-
-	// The audio pair, under "Use an endpoint for audio processing": each tool
-	// has its own endpoint on the Audio tab and is resolved on its own, so a
-	// machine with a Whisper server and no speech engine gets one of the two.
-	const transcription = await resolveTranscription(options?.sessionProvider)
-	if ("disabled" in transcription) {
-		Logger.log(`[VscodeRuntimeTools] transcribe_audio omitted: ${transcription.disabled}`)
-	} else {
-		Logger.log(
-			`[VscodeRuntimeTools] transcribe_audio uses the ${transcription.source === "provider" ? "session's provider" : "typed endpoint"} (${transcription.server}), model ${transcription.endpoint.model}${transcription.warning ? `; ${transcription.warning}` : ""}`,
-		)
-		tools.push(
-			createTranscribeAudioTool({
-				cwd: options?.cwd ?? process.cwd(),
-				getEndpoint: async () => {
-					const resolved = await resolveTranscription(options?.sessionProvider)
-					return "disabled" in resolved ? undefined : resolved.endpoint
-				},
-				readFile: (absolutePath) => readFile(absolutePath),
-				writeFile: writeGeneratedImage,
-				onError: (message, error) => Logger.error(`${message}:`, error),
-			}),
-		)
-	}
-	const speech = await resolveSpeech(options?.sessionProvider)
-	if ("disabled" in speech) {
-		Logger.log(`[VscodeRuntimeTools] synthesize_speech omitted: ${speech.disabled}`)
-	} else {
-		Logger.log(
-			`[VscodeRuntimeTools] synthesize_speech uses the ${speech.source === "provider" ? "session's provider" : "typed endpoint"} (${speech.server}), model ${speech.endpoint.model}${speech.warning ? `; ${speech.warning}` : ""}`,
-		)
-		tools.push(
-			createSynthesizeSpeechTool({
-				cwd: options?.cwd ?? process.cwd(),
-				getEndpoint: async () => {
-					const resolved = await resolveSpeech(options?.sessionProvider)
-					return "disabled" in resolved ? undefined : resolved.endpoint
-				},
-				writeFile: writeGeneratedImage,
-				onError: (message, error) => Logger.error(`${message}:`, error),
-			}),
-		)
-	}
-
-	// And video, under "Use an endpoint for video generation". A clip is a job
-	// on the server, so the tool polls, and deletes its job when it is stopped.
-	const video = await resolveVideoGeneration(options?.sessionProvider)
-	if ("disabled" in video) {
-		Logger.log(`[VscodeRuntimeTools] generate_video omitted: ${video.disabled}`)
-	} else {
-		Logger.log(
-			`[VscodeRuntimeTools] generate_video uses the ${video.source === "provider" ? "session's provider" : "typed endpoint"} (${video.server}), model ${video.endpoint.model}${video.warning ? `; ${video.warning}` : ""}`,
-		)
-		tools.push(
-			createGenerateVideoTool({
-				cwd: options?.cwd ?? process.cwd(),
-				getEndpoint: async () => {
-					const resolved = await resolveVideoGeneration(options?.sessionProvider)
-					return "disabled" in resolved ? undefined : resolved.endpoint
-				},
-				readFile: (absolutePath) => readFile(absolutePath),
-				writeFile: writeGeneratedImage,
-				onError: (message, error) => Logger.error(`${message}:`, error),
-			}),
-		)
-	}
+	//
+	// All five media tools are built by core from one configuration, which is
+	// the three tabs read by `readMediaToolsConfig`. The CLI calls the same
+	// builder with a configuration from a file, so the hosts cannot disagree
+	// about which tools a setting makes. Read again per call: a tab can change
+	// mid-session, and the probe behind the resolution is cached.
+	tools.push(
+		...(await createMediaTools({
+			cwd: options?.cwd ?? process.cwd(),
+			getConfig: readMediaToolsConfig,
+			provider: options?.sessionProvider ?? readLeadMediaProvider(),
+			probe: probeMediaServer,
+			readFile: (absolutePath) => readFile(absolutePath),
+			writeFile: writeGeneratedImage,
+			onError: (message, error) => Logger.error(`${message}:`, error),
+			log: (message) => Logger.log(`[VscodeRuntimeTools] ${message}`),
+		})),
+	)
 
 	// `jev` is off by default for a different reason from `generate_image`: it
 	// sends parts of the conversation to a hosted, paid service, so it is the

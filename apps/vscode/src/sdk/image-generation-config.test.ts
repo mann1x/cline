@@ -1,4 +1,4 @@
-import type { MediaEndpointProbe, MediaKind, MediaSessionProvider } from "@cline/core"
+import type { MediaEndpointProbe, MediaSessionProvider } from "@cline/core"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const stored = { endpoint: "" as string, apiKey: undefined as string | undefined, enabled: true as boolean | undefined }
@@ -16,29 +16,20 @@ vi.mock("@/core/storage/StateManager", () => ({
 // What answers at each base URL. A URL with no entry is a server that is down.
 const servers: Record<string, MediaEndpointProbe> = {}
 
-vi.mock("./media-endpoint-config", async () => {
-	const core = await import("@cline/core")
-	return {
-		resolveMediaTab: (
-			kind: MediaKind,
-			tab: { useProvider?: boolean; baseUrl?: string; model?: string; apiKey?: string },
-			provider?: MediaSessionProvider,
-		) =>
-			core.resolveMediaEndpoint({
-				kind,
-				useProvider: tab.useProvider === true,
-				provider,
-				typed: tab,
-				probe: async (baseUrl: string) => servers[baseUrl],
-			}),
-	}
-})
+vi.mock("./media-endpoint-config", () => ({
+	probeMediaServer: async (baseUrl: string) => servers[baseUrl],
+	readLeadMediaProvider: () => undefined,
+}))
 
 vi.mock("@/shared/services/Logger", () => ({
 	Logger: { log: () => {}, warn: () => {}, error: () => {} },
 }))
 
-import { readStoredEndpoint, resolveImageEdit, resolveImageGeneration } from "./image-generation-config"
+import { readStoredEndpoint } from "./image-generation-config"
+import { resolveExtensionMediaTool } from "./media-tools-config"
+
+const resolveImageGeneration = (provider?: MediaSessionProvider) => resolveExtensionMediaTool("generate_image", provider)
+const resolveImageEdit = (provider?: MediaSessionProvider) => resolveExtensionMediaTool("edit_image", provider)
 
 const plain: MediaEndpointProbe = { server: "openai", kinds: {}, models: [] }
 const opencoti: MediaEndpointProbe = {
@@ -188,13 +179,13 @@ describe("resolveImageEdit", () => {
 
 	it("is off with editing switched off on the tab, or with the Images box unticked", async () => {
 		stored.endpoint = JSON.stringify({ baseUrl: "http://localhost:8080", model: "klein", editDisabled: true })
-		expect(await resolveImageEdit()).toEqual({ disabled: "image editing is switched off on the Images tab" })
+		expect(await resolveImageEdit()).toEqual({ disabled: "image editing is switched off" })
 		// Generation is untouched by that switch.
 		expect(await resolveImageGeneration()).toMatchObject({ source: "typed" })
 
 		stored.endpoint = JSON.stringify({ baseUrl: "http://localhost:8080", model: "klein" })
 		stored.enabled = false
-		expect(await resolveImageEdit()).toEqual({ disabled: "image generation is switched off" })
+		expect(await resolveImageEdit()).toEqual({ disabled: "image editing is switched off" })
 	})
 
 	it("uses the session's provider only when it edits", async () => {

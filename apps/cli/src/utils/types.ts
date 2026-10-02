@@ -198,6 +198,13 @@ export interface ParsedArgs {
 	/** Release the expert's conversation at the end of each escalation. */
 	expertCloseAfter?: boolean;
 	/**
+	 * `--media-provider`: offer the media tools the session's own opencoti or
+	 * xOllama serves. The extension's "use the session's provider" box.
+	 */
+	mediaProvider?: boolean;
+	/** `--media-config`: a JSON file naming the media endpoints. */
+	mediaConfig?: string;
+	/**
 	 * When a run counts as stuck, and how often it may be offered the expert.
 	 * Strings, from the flags; absent leaves core's own operating point in
 	 * place. They are here because finding their defaults is a measurement,
