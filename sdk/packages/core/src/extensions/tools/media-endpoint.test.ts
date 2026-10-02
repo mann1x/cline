@@ -253,6 +253,57 @@ describe("resolveMediaEndpoint", () => {
 		});
 	});
 
+	it("takes the model the server's operator marked as the default for the kind", async () => {
+		const marked = await probeMediaEndpoint("http://e2g:22499", {
+			fetchImpl: server({
+				"/api/xollama": { xollama: true, version: "0.34.4", features: [] },
+				"/v1/models": {
+					data: [
+						{
+							id: "mannix/flux2-klein:4b",
+							capabilities: ["image_generation", "image_edit"],
+							// `video` is not a kind this model serves, so it is dropped.
+							default_for: ["image_generation", "image_edit", "video"],
+						},
+						{
+							id: "mannix/z-image:turbo",
+							capabilities: ["image_generation", "image_edit"],
+						},
+					],
+				},
+			}),
+		});
+		expect(marked?.models).toEqual([
+			{
+				id: "mannix/flux2-klein:4b",
+				kinds: ["image_generation", "image_edit"],
+				defaultFor: ["image_generation", "image_edit"],
+			},
+			{ id: "mannix/z-image:turbo", kinds: ["image_generation", "image_edit"] },
+		]);
+		const input = {
+			kind: "image_edit" as const,
+			useProvider: true,
+			provider: {
+				providerId: "ollama",
+				baseUrl: "http://e2g:22499",
+				modelId: "omni:latest",
+			},
+			probe: async () => marked,
+		};
+		expect(await resolveMediaEndpoint(input)).toMatchObject({
+			source: "provider",
+			endpoint: { model: "mannix/flux2-klein:4b" },
+		});
+		// A model the tab names still comes first.
+		expect(
+			await resolveMediaEndpoint({
+				...input,
+				typed: { model: "mannix/z-image:turbo" },
+			}),
+		).toMatchObject({ endpoint: { model: "mannix/z-image:turbo" } });
+	});
+
 	it("is disabled only with no typed URL or no model", async () => {
 		await load();
 		const base = { kind: "speech" as const, useProvider: false, probe };

@@ -85,7 +85,7 @@ With both flags, the file says which tools are offered and each one tries the se
 - The top-level `baseUrl`, `apiKey` and `useProvider` apply to every section. A section can override them.
 - A section is on when it is an object or `true`. Leave it out, or set it to `false`, to leave its tool out.
 - `image` offers both image tools. Set `"edit": false` to keep only `generate_image`, or `"edit": { "baseUrl": ..., "model": ... }` to send edits elsewhere.
-- `--media-provider` alone leaves a tool out when the provider has several models for it, because the model is never guessed. Name one in the file, for example `{ "image": { "model": "flux2-klein" } }`, and pass both flags.
+- `--media-provider` alone leaves a tool out when the provider has several models for it and marks none as its default, because the model is never guessed. Name one in the file, for example `{ "video": { "model": "wan2.1" } }`, and pass both flags.
 - A file that cannot be read or is not JSON stops the run with an error.
 
 The run's log has one `[media]` line per tool, saying where it goes or why it was left out.
@@ -102,7 +102,14 @@ On opencoti and xOllama a kind the server does not list is treated as not served
 
 ## Choosing the model on the session's provider
 
-The model field on the tab names the model. If it is empty, the session's own model is used when it serves the kind, and otherwise the only model that does. When several models serve the kind and none is named, the tool is not offered and the tab says so.
+The model is chosen in this order:
+
+1. The model named on the tab (or in the CLI's file).
+2. The session's own model, when it serves the kind.
+3. The model the server marks as its default for the kind. On xOllama the operator sets this with `XOLLAMA_MEDIA_DEFAULTS`, and the model's `/v1/models` row then carries `default_for`.
+4. The only model that serves the kind.
+
+When several models serve the kind, none is named and none is marked as the default, the tool is not offered and the tab says so. The model is never guessed.
 
 ## When an engine is busy
 

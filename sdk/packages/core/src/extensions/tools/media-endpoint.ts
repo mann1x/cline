@@ -58,6 +58,11 @@ export interface MediaModel {
 	id: string;
 	/** What the server says this model serves. Absent when it says nothing. */
 	kinds?: MediaKind[];
+	/**
+	 * The kinds this model is the server's default for: xOllama's
+	 * `default_for`, set by whoever runs the server. Only ever kinds it serves.
+	 */
+	defaultFor?: MediaKind[];
 }
 
 export interface MediaEndpointProbe {
@@ -162,7 +167,15 @@ function modelsOfListing(payload: unknown): MediaModel[] {
 		const id = (row as { id?: unknown })?.id;
 		if (typeof id !== "string" || !id.trim()) continue;
 		const kinds = mediaKindsOfModelRow(row);
-		models.set(id.trim(), { id: id.trim(), ...(kinds ? { kinds } : {}) });
+		const marked = (row as { default_for?: unknown }).default_for;
+		const defaultFor = Array.isArray(marked)
+			? (kinds ?? []).filter((kind) => marked.includes(kind))
+			: [];
+		models.set(id.trim(), {
+			id: id.trim(),
+			...(kinds ? { kinds } : {}),
+			...(defaultFor.length > 0 ? { defaultFor } : {}),
+		});
 	}
 	return [...models.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
@@ -304,7 +317,8 @@ export type ResolvedMediaEndpoint =
 
 /**
  * The model to ask on the session's provider: the one the tab names, then the
- * session's own, then the only one there is. Never a guess among several.
+ * session's own, then the one the server's operator marked as its default for
+ * this kind, then the only one there is. Never a guess among several.
  */
 function providerModel(
 	probe: MediaEndpointProbe,
@@ -317,6 +331,9 @@ function providerModel(
 		id ? serving.find((model) => model.id === id)?.id : undefined;
 	if (serves(named)) return named;
 	if (serves(sessionModel)) return sessionModel;
+	// The operator's choice, not ours: one model marked as the default.
+	const marked = serving.filter((model) => model.defaultFor?.includes(kind));
+	if (marked.length === 1) return marked[0]?.id;
 	if (serving.length === 1) return serving[0]?.id;
 	// opencoti loads one engine per kind, and an older build's listing may not
 	// carry capabilities: the feature flag already said the kind is served.
