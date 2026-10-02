@@ -108,3 +108,5 @@ The model field on the tab names the model. If it is empty, the session's own mo
 opencoti and xOllama run one request per engine and answer `503` with `Retry-After` to the rest. The tool waits and asks again, for up to 30 minutes, and reports only then that the engine is still busy. Other refusals are not retried: `400` means the model does not do this, `404` means no such model, and `500` means the engine failed.
 
 The time limit on a request (3 minutes for an image) counts the work, not the time spent waiting in the queue.
+
+While a tool waits, its row in the chat says what it is waiting for: that the engine is busy and when it will be asked again, or a video job's place in the queue and its progress.

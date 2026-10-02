@@ -838,6 +838,11 @@ export const ChatRowContent = memo(
 									<span className="ph-no-capture font-medium break-all">{tool.path}</span>
 								</div>
 							) : null}
+							{/* What a running tool is waiting for: a busy engine, a
+							    render's progress. Only while the row is partial. */}
+							{message.partial && tool.status ? (
+								<div className="text-xs mt-1 text-(--vscode-descriptionForeground)">{tool.status}</div>
+							) : null}
 							{tool.content ? (
 								<CodeAccordian
 									code={tool.content}

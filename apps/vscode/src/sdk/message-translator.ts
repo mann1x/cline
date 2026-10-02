@@ -724,6 +724,8 @@ export class MessageTranslatorState {
 	 * data URLs: shown under the tool's row when it ends.
 	 */
 	private displayImagesByCallId = new Map<string, string[]>()
+	/** The partial row of each running generic tool call, for its status line. */
+	private genericToolRows = new Map<string, { ts: number; row: ClineSayTool }>()
 	/**
 	 * The in-flight compaction divider's ts, so the "completed"/"skipped" notice
 	 * (or a turn error/abort) updates the same row in place. Deliberately NOT
@@ -1455,6 +1457,25 @@ export class MessageTranslatorState {
 	 * conversation, so it deliberately does NOT touch turn-outcome signals such as
 	 * `attemptCompletionSeen` — those are scoped to the whole turn and survive its iterations.
 	 */
+	/**
+	 * Remember a generic tool's partial row while the tool runs, so a status
+	 * the tool reports -- a busy engine, a render's progress -- can be shown on
+	 * that row rather than nowhere.
+	 */
+	noteGenericToolRow(toolCallId: string, ts: number, row: ClineSayTool): void {
+		this.genericToolRows.set(toolCallId, { ts, row })
+	}
+
+	getGenericToolRow(toolCallId: string): { ts: number; row: ClineSayTool } | undefined {
+		return this.genericToolRows.get(toolCallId)
+	}
+
+	dropGenericToolRow(toolCallId: string | undefined): void {
+		if (toolCallId) {
+			this.genericToolRows.delete(toolCallId)
+		}
+	}
+
 	/** Keep images a tool sent for the user alone, until its row is built. */
 	addToolDisplayImages(toolCallId: string, images: string[]): void {
 		if (images.length === 0) {
@@ -3157,6 +3178,9 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					// content_start would mint streaming ids that content_end cannot
 					// reproduce for files ≥2, orphaning those partial rows (cline#9904).
 					const sayTool = toDisplaySayTool(sdkToolToClineSayTool(toolName, input), state.currentCwd())
+					if (event.toolCallId) {
+						state.noteGenericToolRow(event.toolCallId, state.getStreamingToolTs(), sayTool)
+					}
 					messages.push({
 						ts: state.getStreamingToolTs(),
 						type: "say",
@@ -3260,6 +3284,26 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 				state.addToolDisplayImages(event.toolCallId, extractToolOutputImages(displayUpdate.displayImages))
 			}
 
+			// What a long-running tool says it is waiting for: a media engine
+			// that is busy, a video job's queue position and progress. Shown on
+			// the tool's own partial row, which otherwise sits unchanged for the
+			// minutes a render takes and reads as a hang. These are a handful of
+			// lines per call, not a stream; a command's output chunks carry no
+			// `status` and are still not forwarded.
+			const statusUpdate = event.update as { status?: unknown } | undefined
+			if (event.toolCallId && typeof statusUpdate?.status === "string" && statusUpdate.status.trim()) {
+				const running = state.getGenericToolRow(event.toolCallId)
+				if (running) {
+					messages.push({
+						ts: running.ts,
+						type: "say",
+						say: "tool",
+						text: JSON.stringify({ ...running.row, status: statusUpdate.status.trim() }),
+						partial: true,
+					})
+				}
+			}
+
 			// For all other tools, content_update is otherwise ignored — the
 			// content_start message with partial=true is sufficient until
 			// content_end finalizes it.
@@ -3269,6 +3313,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 		case "content_end": {
 			if (event.contentType === "tool") {
 				state.selectStreamingToolCall(event.toolCallId)
+				state.dropGenericToolRow(event.toolCallId)
 			}
 			switch (event.contentType) {
 				case "text": {

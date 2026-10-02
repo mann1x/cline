@@ -457,6 +457,11 @@ export interface ClineSayTool {
 	 * never happened.
 	 */
 	headline?: string
+	/**
+	 * What a running tool says it is waiting for, shown on its partial row: a
+	 * busy media engine, a video job's progress. Never on a finished row.
+	 */
+	status?: string
 }
 
 // must keep in sync with system prompt

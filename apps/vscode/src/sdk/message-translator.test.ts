@@ -5057,6 +5057,77 @@ describe("a generated image the model could not be sent", () => {
 	})
 })
 
+describe("a running tool's status", () => {
+	const send = (state: MessageTranslatorState, event: Record<string, unknown>) =>
+		translateSessionEvent(
+			{ type: "agent_event", payload: { sessionId: "session-1", event: event as unknown as AgentEvent } },
+			state,
+		).messages
+
+	it("is shown on the tool's own partial row, and is gone when the tool ends", () => {
+		const state = new MessageTranslatorState()
+		const started = send(state, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "generate_video",
+			toolCallId: "vid-1",
+			input: { prompt: "a lighthouse at dusk" },
+		})
+		const updated = send(state, {
+			type: "content_update",
+			contentType: "tool",
+			toolName: "generate_video",
+			toolCallId: "vid-1",
+			update: { status: "Rendering the clip: 45%." },
+		})
+		expect(updated).toHaveLength(1)
+		expect(updated[0]).toMatchObject({ ts: started[0]?.ts, say: "tool", partial: true })
+		expect(JSON.parse(updated[0]?.text ?? "{}")).toMatchObject({
+			tool: "generate_video",
+			status: "Rendering the clip: 45%.",
+		})
+
+		const ended = send(state, {
+			type: "content_end",
+			contentType: "tool",
+			toolName: "generate_video",
+			toolCallId: "vid-1",
+			output: "Generated and saved to `clip.mp4` (mp4, 2 KB).",
+		})
+		expect(ended.some((message) => (message.text ?? "").includes("Rendering the clip"))).toBe(false)
+		// A late update for a call that has ended has no row to go on.
+		expect(
+			send(state, {
+				type: "content_update",
+				contentType: "tool",
+				toolName: "generate_video",
+				toolCallId: "vid-1",
+				update: { status: "Rendering the clip: 80%." },
+			}),
+		).toHaveLength(0)
+	})
+
+	it("does not forward updates that carry no status", () => {
+		const state = new MessageTranslatorState()
+		send(state, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "generate_image",
+			toolCallId: "img-1",
+			input: { prompt: "x" },
+		})
+		expect(
+			send(state, {
+				type: "content_update",
+				contentType: "tool",
+				toolName: "generate_image",
+				toolCallId: "img-1",
+				update: { stream: "stdout", chunk: "noise" },
+			}),
+		).toHaveLength(0)
+	})
+})
+
 describe("browser screenshots reach the transcript", () => {
 	const PNG = "iVBORw0KGgoAAAANSUhEUg"
 
