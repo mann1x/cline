@@ -51,6 +51,10 @@ import { createLeadAgentTools } from "../tools/team/lead-agent-tools";
 import { createSpawnAgentTool } from "../tools/team/spawn-agent-tool";
 import { createAgentTeamsTools } from "../tools/team/team-tools";
 import {
+	GENERATE_VIDEO_TOOL_INPUT_SCHEMA,
+	GENERATE_VIDEO_TOOL_NAME,
+} from "../tools/video-generation";
+import {
 	summarizeToolCallSignatures,
 	type ToolCallSignature,
 } from "./prompt-template-review";
@@ -95,6 +99,10 @@ export const HOST_TOOL_INPUT_SCHEMAS: readonly {
 	{
 		name: SYNTHESIZE_SPEECH_TOOL_NAME,
 		inputSchema: SYNTHESIZE_SPEECH_TOOL_INPUT_SCHEMA,
+	},
+	{
+		name: GENERATE_VIDEO_TOOL_NAME,
+		inputSchema: GENERATE_VIDEO_TOOL_INPUT_SCHEMA,
 	},
 	// Likewise `jev`: host-contributed, schema defined in core.
 	{

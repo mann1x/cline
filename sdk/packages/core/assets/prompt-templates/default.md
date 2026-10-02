@@ -261,6 +261,21 @@ Arguments:
 
 Output: the saved path, the audio format and its length. You do not hear the result, so say what you asked for when reporting it. A long text takes a while.
 
+# tool: generate_video
+Generate a short video clip from a text description and save it as a file in the workspace. Use it for a few seconds of footage you would otherwise have to ask the user to make elsewhere: a background loop, a product shot, a placeholder for a scene, an animated version of an image you already have.
+
+The clip is written to a file and its path is returned. You cannot watch it, so tell the user where it is and let them judge it.
+
+Arguments:
+- `prompt` — what the clip shows: the subject, what moves and how, the camera, the style. One scene; these models do not follow a storyboard.
+- `image` — optional workspace path of an image to start from. The clip animates it. Only some video models take one; the backend says so if it does not.
+- `path` — where to save the clip, relative to the workspace. Optional; defaults to a file under `.cline/generated-videos/`.
+- `size` — `WxH` in pixels, e.g. `832x480`. Optional; the backend has a default and supports only a few shapes.
+- `seconds` — the length of the clip. Optional; a few seconds is what these models make, and longer costs more than proportionally.
+- `seed` — optional integer. The same request with the same seed gives the same clip.
+
+This is slow: a clip takes from most of a minute to many minutes, and on a hosted backend it costs money. Generate one only when the task needs it, and do not retry to "improve" a clip you have not been told is wrong.
+
 # tool: jev
 Get a calibrated confidence score from Jev, an external scoring model, before acting on something you are not sure of. Jev reads the context you give it and answers typed questions with probabilities; it writes no text and cannot explain itself.
 

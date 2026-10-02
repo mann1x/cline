@@ -11,6 +11,8 @@ import {
 	EDIT_IMAGE_TOOL_NAME,
 	GENERATE_IMAGE_TOOL_DESCRIPTION,
 	GENERATE_IMAGE_TOOL_NAME,
+	GENERATE_VIDEO_TOOL_DESCRIPTION,
+	GENERATE_VIDEO_TOOL_NAME,
 	getBuiltinPromptTemplates,
 	HOST_TOOL_INPUT_SCHEMAS,
 	JEV_TOOL_DESCRIPTION,
@@ -74,6 +76,10 @@ describe("host tool descriptions in default.md", () => {
 	it("reproduces the audio tools verbatim", () => {
 		expect(shipped?.tools[TRANSCRIBE_AUDIO_TOOL_NAME]).toBe(TRANSCRIBE_AUDIO_TOOL_DESCRIPTION.trim())
 		expect(shipped?.tools[SYNTHESIZE_SPEECH_TOOL_NAME]).toBe(SYNTHESIZE_SPEECH_TOOL_DESCRIPTION.trim())
+	})
+
+	it("reproduces generate_video verbatim", () => {
+		expect(shipped?.tools[GENERATE_VIDEO_TOOL_NAME]).toBe(GENERATE_VIDEO_TOOL_DESCRIPTION.trim())
 	})
 
 	// Same position as generate_image: offered by this host, text in core.

@@ -4,6 +4,7 @@ import {
 	createBrowserTool,
 	createEditImageTool,
 	createGenerateImageTool,
+	createGenerateVideoTool,
 	createJevTool,
 	createListFilesTool,
 	createMcpTools,
@@ -27,6 +28,7 @@ import { resolveImageEdit, resolveImageGeneration } from "./image-generation-con
 import { isJevConfigured, readJevEndpoint } from "./jev-config"
 import { readQaCredentials } from "./qa-credentials-store"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
+import { resolveVideoGeneration } from "./video-config"
 import { createVscodeLmMcpTools } from "./vscode-lm-mcp-tools"
 import { createVscodeRunCommandsTool, VSCODE_FOREGROUND_RUN_COMMANDS_TIMEOUT_MS } from "./vscode-run-commands-tool"
 
@@ -274,6 +276,29 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 					const resolved = await resolveSpeech(options?.sessionProvider)
 					return "disabled" in resolved ? undefined : resolved.endpoint
 				},
+				writeFile: writeGeneratedImage,
+				onError: (message, error) => Logger.error(`${message}:`, error),
+			}),
+		)
+	}
+
+	// And video, under "Use an endpoint for video generation". A clip is a job
+	// on the server, so the tool polls, and deletes its job when it is stopped.
+	const video = await resolveVideoGeneration(options?.sessionProvider)
+	if ("disabled" in video) {
+		Logger.log(`[VscodeRuntimeTools] generate_video omitted: ${video.disabled}`)
+	} else {
+		Logger.log(
+			`[VscodeRuntimeTools] generate_video uses the ${video.source === "provider" ? "session's provider" : "typed endpoint"} (${video.server}), model ${video.endpoint.model}${video.warning ? `; ${video.warning}` : ""}`,
+		)
+		tools.push(
+			createGenerateVideoTool({
+				cwd: options?.cwd ?? process.cwd(),
+				getEndpoint: async () => {
+					const resolved = await resolveVideoGeneration(options?.sessionProvider)
+					return "disabled" in resolved ? undefined : resolved.endpoint
+				},
+				readFile: (absolutePath) => readFile(absolutePath),
 				writeFile: writeGeneratedImage,
 				onError: (message, error) => Logger.error(`${message}:`, error),
 			}),

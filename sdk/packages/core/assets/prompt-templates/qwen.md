@@ -322,6 +322,9 @@ Reach for it the moment you are about to do one of these by hand:
 # tool: synthesize_speech
 {{DEFAULT}}
 
+# tool: generate_video
+{{DEFAULT}}
+
 # tool: jev
 {{DEFAULT}}
 

@@ -3,15 +3,17 @@ import { String as ProtoString, StringRequest } from "@shared/proto/cline/common
 import { readSpeechTab, readTranscriptionTab } from "@/sdk/audio-config"
 import { readImageEditTab, readImageGenerationTab } from "@/sdk/image-generation-config"
 import { type MediaTabSettings, probeMediaServer, readLeadMediaProvider, resolveMediaTab } from "@/sdk/media-endpoint-config"
+import { readVideoTab } from "@/sdk/video-config"
 import type { MediaEndpointStatus } from "@/shared/media-endpoint-status"
 import { Controller } from ".."
 
-/** The tab that configures each kind. A kind with no tab yet has no entry. */
-const TABS: Partial<Record<MediaKind, () => MediaTabSettings>> = {
+/** The tab that configures each kind. */
+const TABS: Record<MediaKind, () => MediaTabSettings> = {
 	image_generation: readImageGenerationTab,
 	image_edit: readImageEditTab,
 	transcription: readTranscriptionTab,
 	speech: readSpeechTab,
+	video: readVideoTab,
 }
 
 /** Asked when the user opens the voice picker, never when the pane opens. */

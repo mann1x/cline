@@ -3,6 +3,7 @@ import { audioEndpointsConfigured, parseAudioEndpoints } from "@shared/audio-end
 import { parseJevSettings } from "@shared/jev-settings"
 import { resolveScopedModelStatus } from "@shared/model-scope-config"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
+import { parseVideoEndpoint, videoEndpointConfigured } from "@shared/video-endpoint"
 import { useState } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { StateServiceClient } from "@/services/grpc-client"
@@ -21,6 +22,7 @@ import { flushPendingEdits } from "../utils/pendingEdits"
 import { syncModeConfigurations } from "../utils/providerUtils"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
 import type { ApiConfigurationProfileScope } from "../utils/useApiConfigurationProfiles"
+import VideoTab from "../VideoTab"
 import VisionModelTab from "../VisionModelTab"
 
 interface ApiConfigurationSectionProps {
@@ -68,6 +70,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		imageGenEndpoint,
 		audioEnabled,
 		audioEndpoints,
+		videoEnabled,
+		videoEndpoint,
 		jevEnabled,
 		jevApiKeySet,
 		jevSettings,
@@ -98,6 +102,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 	// And of the audio endpoints: neither tool is offered while the tab names
 	// nowhere to send either.
 	const audioUnconfigured = audioEnabled && !audioEndpointsConfigured(parseAudioEndpoints(audioEndpoints))
+	const videoUnconfigured = videoEnabled && !videoEndpointConfigured(parseVideoEndpoint(videoEndpoint))
 	// And of Jev: TypeSafe needs its key; a custom endpoint needs a model named,
 	// and a key only if that server asks for one.
 	const jevStored = parseJevSettings(jevSettings)
@@ -127,7 +132,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		(currentTab === "escalation" && !escalationModelEnabled) ||
 		(currentTab === "imagegen" && !imageGenEnabled) ||
 		(currentTab === "audio" && !audioEnabled) ||
-		currentTab === "video" ||
+		(currentTab === "video" && !videoEnabled) ||
 		(currentTab === "jev" && !jevEnabled)
 	const activeTab: ConfigTab = scopedTabOff ? mode : currentTab
 	// The feature toggles belong to the Model tab and are shown only there.
@@ -146,9 +151,10 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		escalationModelEnabled ||
 		imageGenEnabled ||
 		audioEnabled ||
+		videoEnabled ||
 		jevEnabled
 	// One profile list for every tab; only the target changes with the tab. The
-	// Images and Audio tabs are not in it: a profile is a provider and a model for a
+	// Images, Audio and Video tabs are not in it: a profile is a provider and a model for a
 	// conversation, and those tabs configure neither.
 	const profileScope: ApiConfigurationProfileScope =
 		activeTab === "vision"
@@ -270,6 +276,18 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 									Audio
 								</TabButton>
 							) : null}
+							{videoEnabled ? (
+								<TabButton
+									disabled={activeTab === "video"}
+									isActive={activeTab === "video"}
+									onClick={() => switchPanel("video")}
+									style={{
+										opacity: 1,
+										cursor: "pointer",
+									}}>
+									Video
+								</TabButton>
+							) : null}
 							{jevEnabled ? (
 								<TabButton
 									disabled={activeTab === "jev"}
@@ -296,6 +314,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								<ImageGenModelTab />
 							) : activeTab === "audio" ? (
 								<AudioTab />
+							) : activeTab === "video" ? (
+								<VideoTab />
 							) : activeTab === "jev" ? (
 								<JevTab />
 							) : (
@@ -498,6 +518,37 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
 									The Audio tab names neither the session's provider nor an endpoint with a model, so neither
 									tool is offered. Set one on the Audio tab.
+								</p>
+							) : null}
+						</div>
+
+						<div className="mb-[5px]">
+							<SettingsCheckbox
+								checked={videoEnabled}
+								className="mb-[5px]"
+								onChange={async (checked: boolean) => {
+									try {
+										await StateServiceClient.updateSettings(
+											UpdateSettingsRequest.create({ videoEnabled: checked }),
+										)
+									} catch (error) {
+										console.error("Failed to update the video setting:", error)
+										throw error
+									}
+								}}>
+								Use an endpoint for video generation
+							</SettingsCheckbox>
+							<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+								Offers the <code>generate_video</code> tool, which turns a description, and optionally a starting
+								image, into a short clip saved into the workspace. The Video tab names where to render it: the
+								session's own opencoti or xOllama provider when it has a video engine, or any endpoint serving the
+								OpenAI videos API. A clip takes from most of a minute to many, and nothing is called until the
+								model asks for one.
+							</p>
+							{videoUnconfigured ? (
+								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
+									The Video tab names neither the session's provider nor an endpoint with a model, so the tool
+									is not offered. Set one on the Video tab.
 								</p>
 							) : null}
 						</div>

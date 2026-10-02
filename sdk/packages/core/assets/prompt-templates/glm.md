@@ -190,6 +190,9 @@ Output: plain text, one result per line as `file:line:column` followed by the so
 # tool: synthesize_speech
 {{DEFAULT}}
 
+# tool: generate_video
+{{DEFAULT}}
+
 # tool: jev
 {{DEFAULT}}
 

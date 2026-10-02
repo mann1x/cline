@@ -4,7 +4,7 @@ sidebarTitle: "Media Endpoints"
 description: "How Cerebriline's media tools find a server: the session's own opencoti or xOllama provider when it serves the kind, a typed endpoint otherwise, and no tool when neither is configured."
 ---
 
-A media tool sends its request to a server that speaks OpenAI's media routes. Today these are `generate_image`, `edit_image`, `transcribe_audio` and `synthesize_speech`. Video generation is planned and will use the same rule.
+A media tool sends its request to a server that speaks OpenAI's media routes. These are `generate_image`, `edit_image`, `transcribe_audio`, `synthesize_speech` and `generate_video`. All five find their server by the same rule.
 
 ## Images
 
@@ -31,6 +31,22 @@ Tick **Use an endpoint for audio processing** on the API configuration panel, th
 The Audio tab also sets a **Default voice** and a **Default format** for calls that name none. Open the voice field to list the engine's voices. Only opencoti and xOllama can list them, and xOllama starts the speech engine to answer, so the list is fetched when you open the field and not before. For any other server, type the voice name.
 
 Audio is never re-encoded. The file is named from the bytes that come back, so asking for `mp3` from an engine that only encodes WAV gives a `.wav` file. An engine that refuses the format asked for is asked once more for its own default.
+
+## Video
+
+Tick **Use an endpoint for video generation** on the API configuration panel, then fill in the Video tab: the endpoint, its API key, the model, and the default size, length and format for calls that name none.
+
+`generate_video` turns a description into a short clip and saves it into the workspace. It can also start from an image in the workspace, on a model that takes one.
+
+A clip is a job on the server, not a single request:
+
+1. `POST <endpoint>/videos` creates the job and returns its id.
+2. `GET <endpoint>/videos/<id>` is asked every five seconds until the job is `completed`. The chat shows the queue position and the progress.
+3. `GET <endpoint>/videos/<id>/content` downloads the clip.
+
+The tool waits up to 60 minutes for a clip, queueing included. If you stop the task, or that limit passes, the tool deletes its job so the engine does not keep rendering a clip nobody is waiting for. A job that fails reports the engine's reason.
+
+The file is named from the bytes that come back. opencoti writes `mp4` when its codec sidecar is loaded and `avi` when it is not, so a clip asked for as `clip.mp4` may be saved as `clip.avi`; the reply says so.
 
 ## Which server a tool uses
 

@@ -126,18 +126,19 @@ const GENERIC_TOOL_VERBS: Record<string, string> = {
 	commit: "Cerebriline committed:",
 	edit_image: "Cerebriline edited an image:",
 	generate_image: "Cerebriline generated an image:",
+	generate_video: "Cerebriline generated a video:",
 	image_generation: "Cerebriline generated an image:",
 	jev: "Cerebriline asked Jev how sure to be:",
 	plan: "Cerebriline wrote down the plan:",
-	synthesize_speech: "Cerebriline made spoken audio:",
-	transcribe_audio: "Cerebriline transcribed audio:",
 	propose_check: "Cerebriline proposed a check:",
 	// The fallback only. A restore names the version it went back to, and the
 	// translator puts that sentence on the row as `headline`; this is what a
 	// row from before that change still says.
 	restore_file: "Cerebriline put this file back as the transaction found it:",
 	run_check: "Cerebriline ran the check:",
+	synthesize_speech: "Cerebriline made spoken audio:",
 	tasks: "Cerebriline updated its task list:",
+	transcribe_audio: "Cerebriline transcribed audio:",
 }
 
 function toolVerbForDisplay(toolName: string): string {

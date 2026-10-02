@@ -109,6 +109,7 @@ const HOST_TOOL_NAMES = [
 	"edit_image",
 	"transcribe_audio",
 	"synthesize_speech",
+	"generate_video",
 	"jev",
 ];
 

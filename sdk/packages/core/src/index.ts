@@ -1333,6 +1333,17 @@ export type {
 	ConfiguredAgentSummary,
 	DelegateToConfiguredAgentInput,
 } from "./extensions/tools/team/delegate-to-agent";
+// A clip from a description: the OpenAI videos job routes.
+export {
+	createGenerateVideoTool,
+	defaultVideoPath,
+	GENERATE_VIDEO_TOOL_DESCRIPTION,
+	GENERATE_VIDEO_TOOL_INPUT_SCHEMA,
+	GENERATE_VIDEO_TOOL_NAME,
+	type GenerateVideoToolOptions,
+	sniffVideoExtension,
+	type VideoGenerationEndpoint,
+} from "./extensions/tools/video-generation";
 // The transaction's base revision: what every file said when the open
 // transaction started. Read through `read_files` with `revision: "base"`, and
 // written back over one file by `restore_file`. Both exist only while the

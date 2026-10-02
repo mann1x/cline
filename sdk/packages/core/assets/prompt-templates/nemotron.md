@@ -246,6 +246,9 @@ Output: plain text, one result per line as `file:line:column` followed by that s
 # tool: synthesize_speech
 {{DEFAULT}}
 
+# tool: generate_video
+{{DEFAULT}}
+
 # tool: jev
 {{DEFAULT}}
 
