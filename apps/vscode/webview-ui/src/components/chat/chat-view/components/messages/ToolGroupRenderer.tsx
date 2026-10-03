@@ -53,7 +53,7 @@ const getActivityText = (tool: ClineSayTool): string | null => {
 		}
 		case "listFilesTopLevel":
 		case "listFilesRecursive":
-			return tool.path ? `Exploring ${cleanedPath}/...` : null
+			return `Exploring ${tool.filePattern ? `${tool.filePattern} in ` : ""}${tool.path && tool.path !== "." ? `${tool.path}/` : "./"}...`
 		case "searchFiles":
 			return tool.regex ? `Searching ${formatSearchRegex(tool.regex, tool.path || "", tool.filePattern)}...` : null
 		case "listCodeDefinitionNames":
@@ -296,14 +296,17 @@ function parseToolSafe(text: string | undefined): ClineSayTool {
 /**
  * Get display info for a tool.
  */
-function getToolDisplayInfo(tool: ClineSayTool) {
+export function getToolDisplayInfo(tool: ClineSayTool) {
 	const icon = getIconByToolName(tool.tool)
 	const filePath = tool.path || ""
-	// Listing the workspace root arrives with an empty path, and the bare "/"
-	// that produced was stripped back to nothing by the path cleaner — the row
-	// rendered as "Cerebriline read 1 folder:" naming no folder at all. `searchFiles`
-	// below already guarded this case; the three list tools did not.
-	const folderPath = filePath ? `${filePath}/` : "./"
+	// A folder row always names its folder. The host sends the workspace
+	// folder's name for a listing of the root; with nothing sent at all it is
+	// "./". The text is given as `displayText` because the path cleaner strips
+	// every leading non-alphanumeric: it turned "./" back into nothing, and
+	// "Cerebriline read 3 folders:" was followed by three empty lines
+	// (pandorum, 2026-10-03: `list_files {}` and two globs).
+	const folderPath = filePath && filePath !== "." ? `${filePath.replace(/[\\/]+$/, "")}/` : "./"
+	const folderText = tool.filePattern ? `${tool.filePattern} in ${folderPath}` : folderPath
 
 	switch (tool.tool) {
 		case "readFile": {
@@ -319,11 +322,11 @@ function getToolDisplayInfo(tool: ClineSayTool) {
 			}
 		}
 		case "listFilesTopLevel":
-			return { icon, path: folderPath, label: "listed" }
+			return { icon, path: folderPath, label: "listed", displayText: folderText }
 		case "listFilesRecursive":
-			return { icon, path: folderPath, label: "listed recursively" }
+			return { icon, path: folderPath, label: "listed recursively", displayText: folderText }
 		case "listCodeDefinitionNames":
-			return { icon, path: folderPath, label: "definitions" }
+			return { icon, path: folderPath, label: "definitions", displayText: folderText }
 		case "searchFiles":
 			return {
 				icon,

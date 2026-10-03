@@ -1541,6 +1541,9 @@ const FILESYSTEM_PATH_TOOLS: ReadonlySet<ClineSayTool["tool"]> = new Set([
 	"searchFiles",
 ])
 
+/** The tools whose path is a directory, and whose missing path means the workspace root. */
+const LIST_TOOLS = new Set<string>(["listFilesTopLevel", "listFilesRecursive", "listCodeDefinitionNames"])
+
 /**
  * Relativize a ClineSayTool's filesystem paths against the task cwd before it
  * is shown in the chat view, restoring the classic extension's getReadablePath
@@ -1567,9 +1570,12 @@ function toDisplaySayTool(sayTool: ClineSayTool, cwd: string | undefined): Cline
 			content: openTarget,
 		}
 	}
+	// A listing with no path is the workspace root: named as the cwd is when
+	// it is given outright, rather than left empty for the row to draw blank.
+	const listsRoot = LIST_TOOLS.has(sayTool.tool) && (!sayTool.path || sayTool.path === "." || sayTool.path === "./")
 	return {
 		...sayTool,
-		path: toDisplayPath(sayTool.path, cwd),
+		path: toDisplayPath(listsRoot ? cwd : sayTool.path, cwd),
 		// apply_patch payloads carry "*** Update File: <path>" markers that
 		// DiffEditRow renders as the diff headers, so relativize those too.
 		content: relativizePatchPaths(sayTool.content, cwd),
@@ -1666,9 +1672,13 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 		case "list_files": {
 			const dirPath = getStringField(parsedInput, "path") ?? ""
 			const recursive = getBooleanField(parsedInput, "recursive") ?? false
+			// A glob searches the whole workspace and `path` is ignored: the row
+			// names the glob, or three searches read as three unnamed folders.
+			const pattern = getStringField(parsedInput, "pattern")?.trim()
 			return {
 				tool: recursive ? "listFilesRecursive" : "listFilesTopLevel",
-				path: dirPath,
+				path: pattern ? "" : dirPath,
+				...(pattern ? { filePattern: pattern } : {}),
 			}
 		}
 

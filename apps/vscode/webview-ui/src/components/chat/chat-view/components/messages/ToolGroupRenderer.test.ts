@@ -1,6 +1,6 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import { describe, expect, it } from "vitest"
-import { buildToolsWithReasoning, getToolGroupSummaryFromParsedTools } from "./ToolGroupRenderer"
+import { buildToolsWithReasoning, getToolDisplayInfo, getToolGroupSummaryFromParsedTools } from "./ToolGroupRenderer"
 
 const readToolMessage = (
 	ts: number,
@@ -55,5 +55,23 @@ describe("getToolGroupSummaryFromParsedTools", () => {
 		])
 
 		expect(getToolGroupSummaryFromParsedTools(tools.map((tool) => tool.parsedTool))).toBe("Cerebriline read 1 file")
+	})
+})
+
+describe("getToolDisplayInfo", () => {
+	const shown = (tool: Parameters<typeof getToolDisplayInfo>[0]) => getToolDisplayInfo(tool)?.displayText
+
+	it("names the folder of every listing, the workspace root included", () => {
+		expect(shown({ tool: "listFilesTopLevel", path: "" })).toBe("./")
+		expect(shown({ tool: "listFilesTopLevel", path: "." })).toBe("./")
+		expect(shown({ tool: "listFilesTopLevel", path: "test" })).toBe("test/")
+		expect(shown({ tool: "listFilesRecursive", path: "src/sdk/" })).toBe("src/sdk/")
+		expect(shown({ tool: "listFilesTopLevel", path: "C:/Users/manni/other" })).toBe("C:/Users/manni/other/")
+		expect(shown({ tool: "listCodeDefinitionNames", path: "" })).toBe("./")
+	})
+
+	it("names the glob a listing searched for", () => {
+		expect(shown({ tool: "listFilesTopLevel", path: "test", filePattern: "**/*.html" })).toBe("**/*.html in test/")
+		expect(shown({ tool: "listFilesTopLevel", path: "", filePattern: "**/run_game.js" })).toBe("**/run_game.js in ./")
 	})
 })

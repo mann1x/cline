@@ -5294,6 +5294,17 @@ describe("tool display paths are relativized to the cwd", () => {
 		expect(tool.content).not.toContain(CWD)
 	})
 
+	it("names the workspace folder for a listing with no path, and carries its glob", () => {
+		const shown = (input: Record<string, unknown>) =>
+			parseTool(translateSessionEvent(toolEvent("content_start", "list_files", input), stateWithCwd()).messages[0].text)
+		expect(shown({}).path).toBe("project")
+		expect(shown({ path: "." }).path).toBe("project")
+		expect(shown({ path: "src" }).path).toBe("src")
+		const glob = shown({ pattern: "**/*.html" })
+		expect(glob.path).toBe("project")
+		expect(glob.filePattern).toBe("**/*.html")
+	})
+
 	it("renders the cwd itself as its basename", () => {
 		const state = stateWithCwd()
 		const result = translateSessionEvent(toolEvent("content_start", "list_files", { path: CWD }), state)
