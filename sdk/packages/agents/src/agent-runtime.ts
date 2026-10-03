@@ -267,6 +267,59 @@ const EMPTY_TURN_REMINDER =
 	"Do not try to reproduce it. Take the smallest useful next step instead: make one tool call, or write one short paragraph. " +
 	"If the work you were planning does not fit in one reply, do the part that fits, call the tools it needs, and continue in the next turn.";
 
+/**
+ * Sent when a turn was thinking and nothing else.
+ *
+ * Not the empty-turn case: the message has a part, the reasoning, so nothing
+ * treats it as wasted, and with no tool call and no nudge left to send the
+ * run simply ended on it. Measured on pandorum session k3ba1 (2026-10-03): 13 of 15 agents ended
+ * this way, each reported as "ended without an answer of its own".
+ */
+const THINKING_ONLY_REMINDER =
+	"[SYSTEM] Your last reply was thinking only: no answer and no tool call arrived. " +
+	"End your thinking, then either make one tool call or write your answer. Keep the thinking short.";
+
+/**
+ * The same, when the thinking held the end of a tool call: the call was
+ * written before the thinking channel was closed, so it was never a call.
+ * Telling the model that is the whole difference -- "thinking only" reads as
+ * "think less", and what it has to do is write the same call somewhere else.
+ */
+const TOOL_CALL_IN_THINKING_REMINDER =
+	"[SYSTEM] Your last reply ended inside your thinking: the tool call you wrote there was part of the thinking, so it never ran and nothing was changed by it. " +
+	"Close your thinking first, then send that one call again as an actual tool call. Keep the thinking short.";
+
+/** How many thinking-only turns in a row are taken again before the run ends on one. */
+const THINKING_ONLY_RETRY_BUDGET = 3;
+
+/** Tool-call markup, as the templates this fork runs write it. */
+const TOOL_CALL_MARKUP = /<\/?tool_call>|<\/function>|<function=|<\/parameter>/;
+
+/** Thinking, and neither an answer nor a call. */
+function thinkingOnlyTurn(
+	message: AgentMessage,
+): { toolCallInThinking: boolean } | undefined {
+	let reasoning = "";
+	for (const part of message.content) {
+		if (part.type === "reasoning") {
+			const text = (part as { text?: unknown }).text;
+			reasoning += typeof text === "string" ? text : "";
+			continue;
+		}
+		if (part.type === "text") {
+			if (((part as { text?: unknown }).text as string | undefined)?.trim()) {
+				return undefined;
+			}
+			continue;
+		}
+		// A tool call, an image, anything else: the turn delivered something.
+		return undefined;
+	}
+	return reasoning.trim()
+		? { toolCallInThinking: TOOL_CALL_MARKUP.test(reasoning) }
+		: undefined;
+}
+
 const TOOL_CALL_UNPARSABLE_REMINDER =
 	"[SYSTEM] Your last tool call did not parse, so it never ran and nothing was changed by it. " +
 	"The text you wrote before it is still here and still correct — the call around it was malformed, most often because it was cut short. " +
@@ -1023,6 +1076,8 @@ export class AgentRuntime {
 	 * any turn that reaches the tool-call stage, malformed or not.
 	 */
 	private toolCallParseRetries = 0;
+	/** Thinking-only turns taken again, in a row; see `THINKING_ONLY_REMINDER`. */
+	private thinkingOnlyRetries = 0;
 	/**
 	 * The cap that truncated the last turn, when the cap was the request's own.
 	 *
@@ -2030,6 +2085,47 @@ export class AgentRuntime {
 						await this.addUserReminderMessage(boundaryMessage);
 						continue;
 					}
+					// Nothing above claimed the turn, so the run ends here -- unless
+					// the turn was thinking and nothing else, which is not an answer
+					// to end on. Last, so every guard that already speaks to a
+					// silent turn (the no-tool-call nudge, non-convergence, the
+					// completion boundary) has had it first.
+					// Not a turn the reasoning loop guard cut: that one is thinking
+					// only because the guard ended it, and the guard has its own
+					// streak and its own end.
+					const thinkingOnly =
+						message.metadata?.modelToolActivities ||
+						this.reasoningLoopStreak > 0
+							? undefined
+							: thinkingOnlyTurn(message);
+					if (
+						thinkingOnly &&
+						this.thinkingOnlyRetries < THINKING_ONLY_RETRY_BUDGET
+					) {
+						this.thinkingOnlyRetries += 1;
+						await this.emit({
+							type: "status-notice",
+							snapshot: this.snapshot(),
+							message: thinkingOnly.toolCallInThinking
+								? "the model wrote its tool call inside its thinking — asking for it again"
+								: "the model's turn was thinking only — asking for an answer",
+							metadata: {
+								kind: "thinking_only_recovery",
+								reason: "thinking_only_recovery",
+								phase: "started",
+								iteration: this.state.iteration,
+								attempt: this.thinkingOnlyRetries,
+								maxAttempts: THINKING_ONLY_RETRY_BUDGET,
+								toolCallInThinking: thinkingOnly.toolCallInThinking,
+							},
+						});
+						await this.addUserReminderMessage(
+							thinkingOnly.toolCallInThinking
+								? TOOL_CALL_IN_THINKING_REMINDER
+								: THINKING_ONLY_REMINDER,
+						);
+						continue;
+					}
 					const result = this.finishRun("completed", finalAssistantMessage);
 					await this.callAfterRunHooks(result);
 					await this.emit({
@@ -2044,6 +2140,7 @@ export class AgentRuntime {
 				// consecutive-silence budget starts over.
 				this.hasCalledAnyTool = true;
 				this.consecutiveNoToolCallNudges = 0;
+				this.thinkingOnlyRetries = 0;
 				this.consecutiveNoToolCallTurns = 0;
 				this.noToolCallStreakReasoningChars = 0;
 				// Same for truncation: a turn that reached its tool calls did not
