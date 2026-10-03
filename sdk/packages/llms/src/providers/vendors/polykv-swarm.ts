@@ -1778,6 +1778,33 @@ async function growOwnerForAgent(
 }
 
 /**
+ * The longest placement waits for the agents already seated to start before
+ * it opens another owner anyway. An agent that cannot start -- refused, or
+ * queued behind the engine's slots -- must not hold every other agent of the
+ * burst back for good.
+ */
+export const POLYKV_SEED_WAIT_MAX_MS = 120_000;
+
+/** How often placement looks whether the seated agents have started. */
+export const POLYKV_SEED_POLL_MS = 100;
+
+/**
+ * Whether an agent other than `self` is seated on one of `open` and has not
+ * sent a turn yet. Its owner's room is not known until it has: the engine
+ * counts what an owner holds, and an agent that has not run holds nothing.
+ */
+function seedPending(open: readonly OwnerShard[], self: string): boolean {
+	for (const shard of open) {
+		for (const agent of shard.agents) {
+			if (agent !== self && !polykvWorkerStarted(agent)) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+/**
  * The owner a new agent goes on, with the agent already counted on it.
  *
  * The newest open owner with room for one more at the node's window; else an
@@ -1824,6 +1851,15 @@ async function placeAgent(
 		const room = ownerMeasuredRoom(group, shard);
 		return room !== undefined && room >= need(shard);
 	};
+	// A burst is seated one agent at a time. An owner is full at window/ask
+	// agents by count -- one, where the node's window is the engine's
+	// per-session maximum -- so agents arriving together each opened an
+	// owner, back to back, before any of them had run: six owners for
+	// fifteen agents on bs2:8244 (2026-10-03), role-mates apart, each
+	// owner's two shared pools built six times. Its real room is what the
+	// engine measures once its agent runs, so the next owner waits for that.
+	let waitedMs = 0;
+	let measured = false;
 	while (true) {
 		const open = [...group.shards]
 			.reverse()
@@ -1847,6 +1883,21 @@ async function placeAgent(
 		}
 		if (found) {
 			return take(found);
+		}
+		if (open.length > 0 && waitedMs < POLYKV_SEED_WAIT_MAX_MS) {
+			if (seedPending(open, spec.sessionId)) {
+				measured = false;
+				await sleep(POLYKV_SEED_POLL_MS, signal);
+				waitedMs += POLYKV_SEED_POLL_MS;
+				continue;
+			}
+			if (!measured) {
+				// Everyone seated has started: ask what the owners hold now,
+				// once, and look again before opening another.
+				measured = true;
+				await readOpencotiKv(group.root, group.fetch).catch(() => undefined);
+				continue;
+			}
 		}
 		if (await growOwnerForAgent(group, open)) {
 			continue;

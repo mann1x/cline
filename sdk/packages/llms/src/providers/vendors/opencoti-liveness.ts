@@ -62,6 +62,18 @@ export function opencotiKeepaliveDeadMs(pingSeconds: number): number {
 }
 
 /**
+ * The longest a stream may stay silent while the server still answers.
+ *
+ * A silent stream on a server that answers is one of two things: the server is
+ * busy and not pinging, or this connection is dead and the server is fine. The
+ * first is waited out -- an abort there throws away a turn that is queued and
+ * will run. The second cannot be told from the first by asking the server, so
+ * it is bounded by time: ten minutes, the engine's own backstop for a
+ * reservation nothing released.
+ */
+export const OPENCOTI_SILENT_ALIVE_MAX_MS = 600_000;
+
+/**
  * The server went silent past three keepalive periods.
  *
  * Carries `code: "ETIMEDOUT"` and says so in its message, because both are
@@ -397,6 +409,19 @@ export interface KeepaliveSupervision {
 	/** Told once, when the silence has outlasted three periods. */
 	onDead?: (error: OpencotiServerSilentError) => void;
 	/**
+	 * Asked when the silence has outlasted three periods, before the stream is
+	 * given up: does the server answer at all? `true` keeps the stream open for
+	 * another three periods, up to {@link OPENCOTI_SILENT_ALIVE_MAX_MS} of
+	 * silence. Absent, the silence alone decides, as it did.
+	 *
+	 * bs2:8244, 2026-10-03: the server stopped pinging every open stream at
+	 * once and went on answering `/health`. Ten queued turns were aborted in
+	 * three seconds and sent again, thirty times in one round, and each abort
+	 * left a reservation on the engine for 600 s. The pool the turns were
+	 * queued on filled with them.
+	 */
+	stillAlive?: () => Promise<boolean>;
+	/**
 	 * Told the phase each keepalive comment names, and `undefined` once the
 	 * stream produces again (or ends). Per comment; the receiver throttles.
 	 */
@@ -482,12 +507,11 @@ export async function superviseKeepaliveStream(
 		}
 		return new Promise((resolve, reject) => {
 			let settled = false;
-			const handle = setTimer(() => {
-				if (settled) {
-					return;
-				}
+			let silentMs = 0;
+			let handle: unknown;
+			const die = () => {
 				settled = true;
-				const error = new OpencotiServerSilentError(deadMs);
+				const error = new OpencotiServerSilentError(silentMs);
 				reader.cancel(error).catch(() => {});
 				try {
 					options.onDead?.(error);
@@ -495,7 +519,40 @@ export async function superviseKeepaliveStream(
 					// Reporting the death must not change it.
 				}
 				reject(error);
-			}, deadMs);
+			};
+			const onSilence = () => {
+				if (settled) {
+					return;
+				}
+				silentMs += deadMs;
+				if (
+					!options.stillAlive ||
+					silentMs + deadMs > OPENCOTI_SILENT_ALIVE_MAX_MS
+				) {
+					die();
+					return;
+				}
+				// Busy, or gone? A server that answers is busy: the turn it
+				// holds is queued and will run, so the stream stays open.
+				options.stillAlive().then(
+					(alive) => {
+						if (settled) {
+							return;
+						}
+						if (alive) {
+							handle = setTimer(onSilence, deadMs);
+						} else {
+							die();
+						}
+					},
+					() => {
+						if (!settled) {
+							die();
+						}
+					},
+				);
+			};
+			handle = setTimer(onSilence, deadMs);
 			reader.read().then(
 				(result) => {
 					if (!settled) {

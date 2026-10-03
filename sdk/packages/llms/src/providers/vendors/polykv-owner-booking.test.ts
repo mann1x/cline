@@ -430,6 +430,52 @@ describe("placing an agent where its role's pool already is", () => {
 	});
 });
 
+// pecyh again: with the node's window at the engine's per-session maximum an
+// owner is full at one agent by count, so a burst opened one owner per agent
+// back to back, in arrival order, before any of them had sent a turn: six
+// owners, the three agents of a role on three of them. An owner's real room is
+// known only once its agent runs.
+describe("a burst of agents", () => {
+	const turnsAndOpens = (stub: ReturnType<typeof engine>) =>
+		stub.calls
+			.filter((call) => call.path === "/v1/chat/completions")
+			.map((call) => (call.body.max_tokens === 1 ? "open" : "turn"));
+
+	it("starts an agent on an owner before it opens the next one", async () => {
+		const stub = engine({
+			maximum: NODE_WINDOW,
+			// Full, as measured: the second agent does need an owner of its own.
+			kvRows: () => [
+				{ session_id: OWNER_1, window: NODE_WINDOW, used: 64_000 },
+			],
+		});
+		const responses = await Promise.all([
+			send(stub, "s1", "role A"),
+			send(stub, "s2", "role A"),
+		]);
+		expect(responses.map((r) => r.status)).toEqual([200, 200]);
+		expect(turnsAndOpens(stub)).toEqual(["open", "turn", "open", "turn"]);
+	});
+
+	it("seats the burst on the owner it has, once that owner is measured to have the room", async () => {
+		const stub = engine({
+			maximum: NODE_WINDOW,
+			kvRows: () => [{ session_id: OWNER_1, window: NODE_WINDOW, used: 9_000 }],
+		});
+		const agents = ["m1", "m2", "m3"];
+		const responses = await Promise.all(
+			agents.map((agent) => send(stub, agent, "role A")),
+		);
+		expect(responses.map((r) => r.status)).toEqual([200, 200, 200]);
+		expect(stub.opens()).toHaveLength(1);
+		for (const agent of agents) {
+			expect(polykvWorkerChargedTo(agent)).toBe(OWNER_1);
+		}
+		// One chain, shared: a root, the knowledge and the role, once.
+		expect(poolCreates(stub)).toBe(3);
+	});
+});
+
 describe("a worker refused because its owner is full", () => {
 	it("grows the owner by the shortfall and runs the worker, and reads no global pressure in it", async () => {
 		const stub = engine({

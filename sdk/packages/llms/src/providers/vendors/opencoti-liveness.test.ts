@@ -4,6 +4,7 @@ import { createOpencotiFetch } from "./opencoti";
 import {
 	describeOpencotiStreamPhase,
 	OPENCOTI_KEEPALIVE_PING_SECONDS,
+	OPENCOTI_SILENT_ALIVE_MAX_MS,
 	OpencotiServerSilentError,
 	type OpencotiStreamPhase,
 	opencotiKeepaliveDeadMs,
@@ -524,6 +525,70 @@ describe("a server that stops sending", () => {
 		})();
 		await vi.advanceTimersByTimeAsync(10_000 + 36_000);
 		expect(await rest).toBeInstanceOf(OpencotiServerSilentError);
+	});
+
+	// pandorum pecyh, bs2:8244, 2026-10-03: the server stopped pinging every
+	// open stream at once for over 35 s while it went on answering /health.
+	// Ten queued turns were aborted within three seconds and sent again, 30
+	// times in the round; each abort left a reservation holding a recurrent
+	// state cell for 600 s, and the pool they were queued on filled with them.
+	it("keeps a silent stream open while the server still answers", async () => {
+		const { response, state } = timedStream(
+			[
+				{ afterMs: 0, chunk: ": keepalive queued\n\n" },
+				{ afterMs: 100_000, chunk: delta("late") },
+			],
+			{ end: true },
+		);
+		const dead: unknown[] = [];
+		let asked = 0;
+		const pending = superviseKeepaliveStream(response, {
+			pingSeconds: 10,
+			onDead: (error) => dead.push(error),
+			stillAlive: async () => {
+				asked += 1;
+				return true;
+			},
+		});
+		await vi.advanceTimersByTimeAsync(101_000);
+		const supervised = await pending;
+		expect(dead).toEqual([]);
+		expect(state.cancelled).toBe(false);
+		expect(asked).toBe(2);
+		expect(await supervised.text()).toContain('"late"');
+	});
+
+	it("is dead at the first silence when the server does not answer either", async () => {
+		const { response, state } = timedStream([
+			{ afterMs: 0, chunk: ": keepalive queued\n\n" },
+		]);
+		const outcome = superviseKeepaliveStream(response, {
+			pingSeconds: 10,
+			stillAlive: async () => false,
+		}).then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		await vi.advanceTimersByTimeAsync(36_000);
+		expect(await outcome).toBeInstanceOf(OpencotiServerSilentError);
+		expect(state.cancelled).toBe(true);
+	});
+
+	it("gives up on a stream silent past the cap, though the server answers: the connection is dead", async () => {
+		const { response, state } = timedStream([
+			{ afterMs: 0, chunk: ": keepalive queued\n\n" },
+		]);
+		const outcome = superviseKeepaliveStream(response, {
+			pingSeconds: 10,
+			stillAlive: async () => true,
+		}).then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		await vi.advanceTimersByTimeAsync(OPENCOTI_SILENT_ALIVE_MAX_MS - 40_000);
+		expect(state.cancelled).toBe(false);
+		await vi.advanceTimersByTimeAsync(80_000);
+		expect(await outcome).toBeInstanceOf(OpencotiServerSilentError);
 	});
 
 	it("is not armed when the pings are off", async () => {

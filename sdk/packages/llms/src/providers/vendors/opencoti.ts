@@ -15,7 +15,7 @@ import { sleep as abortableSleep } from "../middleware/backoff";
 import { DEFAULT_MAX_RETRY_AFTER_MS } from "../middleware/retry-rate-limit";
 import { splitToolImagesMiddleware } from "../middleware/split-tool-images";
 import { primeTemplateReinjection } from "../reasoning-history";
-import { waitForServerHealth } from "../server-health";
+import { probeServerHealth, waitForServerHealth } from "../server-health";
 import { llamaCppTimingsMetadataExtractor } from "./llamacpp-timings";
 import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
 import {
@@ -668,6 +668,15 @@ export function createOpencotiFetch(options: {
 								notePolykvServerFault(options.baseUrl);
 							}
 						},
+						// Silent but answering is busy: the turn stays queued there.
+						...(options.baseUrl
+							? {
+									stillAlive: serverStillAnswers(options.baseUrl, {
+										fetch: base,
+										...(options.headers ? { headers: options.headers } : {}),
+									}),
+								}
+							: {}),
 					})
 				: response;
 		};
@@ -1295,6 +1304,22 @@ function noteBootId(
 }
 
 /** Statuses that mean the server behind the address did not answer. */
+/**
+ * Whether the server behind `baseUrl` answers `/health` now: what a silent
+ * stream's watchdog asks before it gives the stream up. A probe that fails or
+ * times out is "no" -- the silence then stands as the death it looks like.
+ */
+function serverStillAnswers(
+	baseUrl: string,
+	options: { fetch?: typeof fetch; headers?: Record<string, string> },
+): () => Promise<boolean> {
+	return () =>
+		probeServerHealth(polykvRoot(baseUrl), {
+			...(options.fetch ? { fetch: options.fetch } : {}),
+			...(options.headers ? { headers: options.headers } : {}),
+		});
+}
+
 const SERVER_FAULT_STATUSES = new Set([502, 503, 504]);
 
 /**
@@ -1755,6 +1780,10 @@ function createWorkerFetch(options: {
 							onPhase: (phase) =>
 								reportPolykvStreamPhase(options.worker.sessionId, phase),
 							onDead: () => notePolykvServerFault(options.baseUrl),
+							stillAlive: serverStillAnswers(options.baseUrl, {
+								fetch: base,
+								...(options.headers ? { headers: options.headers } : {}),
+							}),
 						});
 					}
 				} catch (error) {

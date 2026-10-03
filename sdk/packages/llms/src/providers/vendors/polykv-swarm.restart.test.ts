@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpencotiFetch } from "./opencoti";
+import { OPENCOTI_SILENT_ALIVE_MAX_MS } from "./opencoti-liveness";
 import { resetPolykvAvailability } from "./polykv";
 import {
 	invalidatePolykvRoot,
@@ -419,7 +420,10 @@ afterEach(async () => {
 });
 
 describe("a started worker whose server goes away", () => {
-	it("waits for /health and sends the same turn again", async () => {
+	// The server answers /health throughout, so the silence is waited out as a
+	// busy server up to the cap; past it the connection is the dead thing, and
+	// the turn is sent again.
+	it("waits out the cap on a server that answers, then sends the same turn again", async () => {
 		const engine = restartableEngine();
 		await send(engine, "w1", agentBody("r", "t"));
 		engine.down();
@@ -788,7 +792,10 @@ describe("a worker's heartbeat that stops", () => {
 		vi.useRealTimers();
 	});
 
-	it("waits for /health and sends the same turn again", async () => {
+	// The server answers /health throughout, so the silence is waited out as a
+	// busy server up to the cap; past it the connection is the dead thing, and
+	// the turn is sent again.
+	it("waits out the cap on a server that answers, then sends the same turn again", async () => {
 		const engine = restartableEngine({ features: ["stream_keepalive_v1"] });
 		const body = { ...agentBody("r", "t"), stream: true };
 		await send(engine, "hb-dead", body);
@@ -801,6 +808,8 @@ describe("a worker's heartbeat that stops", () => {
 		try {
 			const pending = send(engine, "hb-dead", body);
 			await vi.advanceTimersByTimeAsync(40_000);
+			expect(waits).toEqual([]);
+			await vi.advanceTimersByTimeAsync(OPENCOTI_SILENT_ALIVE_MAX_MS);
 			const response = await pending;
 			expect(response.status).toBe(200);
 			expect(await response.text()).toContain("data: [DONE]");
