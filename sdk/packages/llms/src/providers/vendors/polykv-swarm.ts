@@ -1887,6 +1887,15 @@ async function placeAgent(
 		if (open.length > 0 && waitedMs < POLYKV_SEED_WAIT_MAX_MS) {
 			if (seedPending(open, spec.sessionId)) {
 				measured = false;
+				// Held here, client-side, for as long as the agent ahead takes to
+				// seed: its row said "running" with nothing under it for up to
+				// eight minutes (pandorum a1d3x, 2026-10-03). Reported once; the
+				// response to its own turn ends the wait.
+				reportPolykvRoomWait(spec.sessionId, {
+					waiting: true,
+					reason:
+						"Waiting for a pool: another agent of this swarm is seeding the shared prefix on the server, and this one is placed once it has.",
+				});
 				await sleep(POLYKV_SEED_POLL_MS, signal);
 				waitedMs += POLYKV_SEED_POLL_MS;
 				continue;

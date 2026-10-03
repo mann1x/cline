@@ -583,6 +583,11 @@ function applySpawnAgentUpdate(entry: SubagentStatusItem, updateData: Record<str
 	// showed every agent at work while most of them were queued.
 	if (updateData.queued === true && entry.status === "running") entry.status = "pending"
 	if (updateData.queued === false && entry.status === "pending") entry.status = "running"
+	// Waiting on the server -- a refusal, an outage -- is what its round
+	// records as `waiting_infra`: queued on the row too, until the server
+	// produces for it again (`waiting: null`).
+	if (updateData.waiting && typeof updateData.waiting === "object" && entry.status === "running") entry.status = "pending"
+	if (updateData.waiting === null && entry.status === "pending") entry.status = "running"
 	// The node it runs on, known at placement -- not only at the
 	// end, when it no longer explains anything.
 	if (typeof updateData.nodeId === "string") entry.nodeId = updateData.nodeId

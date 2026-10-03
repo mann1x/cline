@@ -144,6 +144,7 @@ export function AgentActivity({ activity }: { activity: readonly SubagentActivit
 				{activity.map((entry, index) => (
 					<li
 						className={`flex gap-1.5 ${entry.severity === "warn" ? WARN_TEXT : "opacity-80"}`}
+						data-copy-row
 						key={`${entry.at}-${index}`}>
 						<span className="shrink-0 tabular-nums opacity-70">{clockOf(entry.at)}</span>
 						{entry.severity === "warn" && (
@@ -298,7 +299,7 @@ function AgentDetail({
 			    the stop, how far it has got, what it is doing, where and how
 			    fast. The stop is absent on a run recorded before agents carried
 			    a stop id, rather than shown and doing nothing. */}
-			<div className="flex items-center gap-2 text-[10px]">
+			<div className="flex items-center gap-2 text-[10px]" data-copy-row>
 				<StatusIcon agent={agent} />
 				<span
 					className="inline-block min-w-0 shrink truncate rounded-xs border px-1.5 py-[1px] font-medium text-foreground"
@@ -314,6 +315,7 @@ function AgentDetail({
 					<button
 						aria-label={`Stop ${identity.label}`}
 						className="flex shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-editor-group-border bg-transparent px-1.5 py-[1px] text-foreground opacity-80 hover:opacity-100 disabled:cursor-default disabled:opacity-40"
+						data-copy-skip
 						disabled={stopping === "immediate"}
 						onClick={onStop}
 						title={
@@ -335,6 +337,7 @@ function AgentDetail({
 					<button
 						aria-label={`Restart ${identity.label}`}
 						className="flex shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-editor-group-border bg-transparent px-1.5 py-[1px] text-foreground opacity-80 hover:opacity-100 disabled:cursor-default disabled:opacity-40"
+						data-copy-skip
 						disabled={stopping !== undefined || restarting}
 						onClick={onRestart}
 						title={
@@ -373,6 +376,7 @@ function AgentDetail({
 				<button
 					aria-label="Close agent details"
 					className="shrink-0 cursor-pointer border-0 bg-transparent p-0 text-foreground opacity-60 hover:opacity-100"
+					data-copy-skip
 					onClick={onClose}
 					type="button">
 					<XIcon className="size-3" />
@@ -406,7 +410,7 @@ function AgentDetail({
 					<AgentActivity activity={agent.activity ?? []} />
 					{(tail || agent.cancelId) && (
 						<div className="mt-1.5">
-							<div className="flex items-center gap-2">
+							<div className="flex items-center gap-2" data-copy-row>
 								<div className="text-[10px] opacity-60">
 									{agent.latestOutputKind === "reasoning" ? "Thinking" : "Output"}
 								</div>
@@ -414,6 +418,7 @@ function AgentDetail({
 									<button
 										aria-label={`Inspect ${identity.label}'s live output`}
 										className="flex shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-editor-group-border bg-transparent px-1.5 py-[1px] text-[10px] text-foreground opacity-80 hover:opacity-100"
+										data-copy-skip
 										onClick={() => onInspect(true)}
 										title="Show what the model is generating, as it generates it: thinking, answer and tool calls"
 										type="button">
@@ -537,8 +542,12 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 		<div className="shrink-0">
 			{/* Bounded, and scrolling inside itself: fifty tags and an open
 			    agent must not push the conversation off the screen. */}
-			<div className="mx-3 mt-1.5 mb-2 max-h-[40vh] overflow-y-auto rounded-xs border border-editor-group-border bg-code/70 px-2.5 py-2">
-				<div className="flex flex-wrap items-center gap-1">
+			{/* Copied row by row (`compactCopyText`): the browser's own copy
+			    puts every flex item on a line of its own. */}
+			<div
+				className="mx-3 mt-1.5 mb-2 max-h-[40vh] overflow-y-auto rounded-xs border border-editor-group-border bg-code/70 px-2.5 py-2"
+				data-copy-compact>
+				<div className="flex flex-wrap items-center gap-1" data-copy-row>
 					<span className="mr-1 text-xs font-medium text-description">
 						{agents.length === 1 ? "1 agent working" : `${agents.length} agents working`}
 						{queued > 0 && running > 0 && (
@@ -551,6 +560,7 @@ export function ActiveSubagents({ messages }: { messages: ClineMessage[] }) {
 						<button
 							aria-label="Stop all agents"
 							className="mr-1 flex shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-editor-group-border bg-transparent px-1.5 py-[1px] text-[10px] text-foreground opacity-80 hover:opacity-100"
+							data-copy-skip
 							onClick={() => setConfirming({ kind: "all" })}
 							title="Stop every running and queued agent"
 							type="button">

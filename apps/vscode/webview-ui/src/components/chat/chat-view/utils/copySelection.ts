@@ -52,6 +52,127 @@ export function prefersPlainText(range: Range, getComputedStyle: (element: Eleme
 	return false
 }
 
+/** Marks a container whose copies are built row by row; see {@link compactCopyText}. */
+export const COPY_COMPACT_ATTR = "data-copy-compact"
+/** Marks an element that is one line of text however it is laid out. */
+export const COPY_ROW_ATTR = "data-copy-row"
+/** Marks a control whose label is not part of what the panel says. */
+export const COPY_SKIP_ATTR = "data-copy-skip"
+
+const BLOCK_TAGS = new Set(["DIV", "OL", "UL", "LI", "P", "PRE", "SECTION", "H1", "H2", "H3", "H4", "H5", "H6", "TABLE", "TR"])
+
+function elementOf(node: Node): Element | null {
+	return node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement
+}
+
+/** Whether the selection lies in a container that asked for row-by-row copies. */
+export function inCompactCopyArea(range: Range): boolean {
+	return !!elementOf(range.commonAncestorContainer)?.closest(`[${COPY_COMPACT_ATTR}]`)
+}
+
+/** Whitespace is the text's own in a `pre` and in anything styled like one. */
+function isVerbatim(element: Element): boolean {
+	return element.tagName === "PRE" || /(^|\s)whitespace-pre/.test(element.getAttribute("class") ?? "")
+}
+
+/** A row's text: its pieces on one line, a space between them. */
+function rowText(node: Node): string {
+	const pieces: string[] = []
+	const visit = (current: Node) => {
+		if (current.nodeType === Node.TEXT_NODE) {
+			const text = current.textContent ?? ""
+			if (text.trim()) {
+				pieces.push(text.trim())
+			}
+			return
+		}
+		if (current.nodeType !== Node.ELEMENT_NODE && current.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) {
+			return
+		}
+		if (current.nodeType === Node.ELEMENT_NODE && (current as Element).hasAttribute(COPY_SKIP_ATTR)) {
+			return
+		}
+		for (const child of Array.from(current.childNodes)) {
+			visit(child)
+		}
+	}
+	visit(node)
+	return pieces.join(" ")
+}
+
+/**
+ * The text of a selection in a panel made of rows, one line per row.
+ *
+ * `Selection.toString()` follows the layout: every flex item is a block, so
+ * an activity entry -- its time, its warning icon, its text, three items of
+ * one flex row -- came out on three lines, with blank lines between the
+ * panel's sections. Pasted into a chat box, the first of those newlines sent
+ * the message (pandorum, 2026-10-03, the agents panel). So here the markup
+ * says what a line is: a `data-copy-row` element is one line, a block is its
+ * own line, a `pre` keeps its text as written, and no blank line is added.
+ */
+export function compactCopyText(range: Range): string {
+	const lines: string[] = []
+	let inline = ""
+	const flush = () => {
+		if (inline.trim()) {
+			lines.push(inline.trim())
+		}
+		inline = ""
+	}
+	const visit = (node: Node) => {
+		if (node.nodeType === Node.TEXT_NODE) {
+			inline += (node.textContent ?? "").replace(/\s+/g, " ")
+			return
+		}
+		if (node.nodeType !== Node.ELEMENT_NODE) {
+			return
+		}
+		const element = node as Element
+		if (element.hasAttribute(COPY_SKIP_ATTR)) {
+			return
+		}
+		if (element.hasAttribute(COPY_ROW_ATTR)) {
+			flush()
+			const text = rowText(element)
+			if (text) {
+				lines.push(text)
+			}
+			return
+		}
+		if (isVerbatim(element)) {
+			flush()
+			const text = (element.textContent ?? "").replace(/^\n+|\s+$/g, "")
+			if (text) {
+				lines.push(text)
+			}
+			return
+		}
+		const block = BLOCK_TAGS.has(element.tagName)
+		if (block) {
+			flush()
+		}
+		for (const child of Array.from(element.childNodes)) {
+			visit(child)
+		}
+		if (block) {
+			flush()
+		}
+	}
+	// A selection inside one row has no row element in its fragment: the row
+	// is an ancestor of everything selected.
+	const row = elementOf(range.commonAncestorContainer)?.closest(`[${COPY_ROW_ATTR}]`)
+	const fragment = range.cloneContents()
+	if (row) {
+		return rowText(fragment)
+	}
+	for (const child of Array.from(fragment.childNodes)) {
+		visit(child)
+	}
+	flush()
+	return lines.join("\n")
+}
+
 /**
  * The text for a selection, or nothing if there is no usable one.
  *
@@ -75,6 +196,9 @@ export function copyTextForSelection(
 
 	if (prefersPlainText(range, getComputedStyle)) {
 		return selection.toString() || null
+	}
+	if (inCompactCopyArea(range)) {
+		return compactCopyText(range) || null
 	}
 	if (!formatted) {
 		// The tail only, for the same reason as below: a newline pasted into

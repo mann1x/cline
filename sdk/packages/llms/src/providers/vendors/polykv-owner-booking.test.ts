@@ -11,6 +11,7 @@ import {
 } from "./opencoti-kv-pressure";
 import { resetPolykvAvailability, resetPolykvSessions } from "./polykv";
 import {
+	onPolykvRoomWait,
 	polykvLeadHasAgentsOn,
 	polykvOwnerAgentCapacity,
 	polykvOwnerBooking,
@@ -455,6 +456,30 @@ describe("a burst of agents", () => {
 		]);
 		expect(responses.map((r) => r.status)).toEqual([200, 200]);
 		expect(turnsAndOpens(stub)).toEqual(["open", "turn", "open", "turn"]);
+	});
+
+	it("says an agent is waiting while the one ahead of it seeds", async () => {
+		const stub = engine({
+			maximum: NODE_WINDOW,
+			kvRows: () => [{ session_id: OWNER_1, window: NODE_WINDOW, used: 9_000 }],
+		});
+		const seen: Record<string, boolean[]> = { w1: [], w2: [] };
+		const stops = Object.keys(seen).map((agent) =>
+			onPolykvRoomWait(agent, (state) => seen[agent]?.push(state.waiting)),
+		);
+		try {
+			await Promise.all([
+				send(stub, "w1", "role A"),
+				send(stub, "w2", "role A"),
+			]);
+		} finally {
+			for (const stop of stops) {
+				stop();
+			}
+		}
+		// The first is placed at once; the second is held, and then sent.
+		expect(seen.w1).toEqual([]);
+		expect(seen.w2).toEqual([true, false]);
 	});
 
 	it("seats the burst on the owner it has, once that owner is measured to have the room", async () => {

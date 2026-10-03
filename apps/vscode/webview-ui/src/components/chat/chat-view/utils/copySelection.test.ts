@@ -142,3 +142,54 @@ describe("Copy Formatted", () => {
 		expect(JSON.parse(body.dataset.vscodeContext ?? "{}")).toEqual({ preventDefaultContextMenuItems: false })
 	})
 })
+
+describe("a copy out of a panel of rows", () => {
+	const PANEL = `<div data-copy-compact>
+		<div data-copy-row class="flex"><span>brace-fix-1</span><button data-copy-skip><span>Stop</span></button><span>3 tools</span><span>on bs2</span></div>
+		<div class="whitespace-pre-wrap">Fix the braces.\nReport back.</div>
+		<div>
+			<div>Activity</div>
+			<ol>
+				<li data-copy-row class="flex"><span>01:33:32 PM</span><svg></svg><span>Queued by the server (retry 3)</span></li>
+				<li data-copy-row class="flex"><span>01:33:40 PM</span><span>Placed on bs2</span></li>
+			</ol>
+		</div>
+		<div><div class="flex"><div>Output</div><button data-copy-skip><span>Inspect</span></button></div><pre>line one\n\nline three\n</pre></div>
+	</div>`
+
+	/** A selection over `pick(panel)`, the panel being in the document. */
+	function select(pick: (panel: HTMLElement) => Node) {
+		const host = document.createElement("div")
+		host.innerHTML = PANEL
+		document.body.appendChild(host)
+		const range = document.createRange()
+		range.selectNodeContents(pick(host.firstElementChild as HTMLElement))
+		const selection = { rangeCount: 1, getRangeAt: () => range, toString: () => "layout text" } as unknown as Selection
+		return copyTextForSelection(selection, (el: Element) => window.getComputedStyle(el))
+	}
+
+	it("is one line per row, with no blank lines and no control labels", () => {
+		expect(select((panel) => panel)).toBe(
+			[
+				"brace-fix-1 3 tools on bs2",
+				"Fix the braces.",
+				"Report back.",
+				"Activity",
+				"01:33:32 PM Queued by the server (retry 3)",
+				"01:33:40 PM Placed on bs2",
+				"Output",
+				"line one",
+				"",
+				"line three",
+			].join("\n"),
+		)
+	})
+
+	it("keeps a selection inside one row on one line", () => {
+		expect(select((panel) => panel.querySelector("li") as Node)).toBe("01:33:32 PM Queued by the server (retry 3)")
+	})
+
+	it("ends where the text ends", () => {
+		expect(select((panel) => panel.querySelector("ol") as Node)).not.toMatch(/\n$/)
+	})
+})

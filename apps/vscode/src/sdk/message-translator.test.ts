@@ -5908,6 +5908,12 @@ describe("a sub-agent's placement, while it runs", () => {
 			nodeLabel: "Node3",
 			genTps: 21.5,
 		})
+
+		// Placed, and then held by the server: queued again until it answers.
+		update(state, { waiting: { kind: "refusal", where: "the server", detail: "admission queued" } })
+		expect(state.getSpawnAgentItems()[0]?.status).toBe("pending")
+		update(state, { waiting: null })
+		expect(state.getSpawnAgentItems()[0]?.status).toBe("running")
 	})
 
 	// #77: the last tool stayed on the row while the agent went back to thinking.
