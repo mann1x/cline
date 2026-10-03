@@ -53,6 +53,7 @@ import { VscodeWebviewProvider } from "./hosts/vscode/VscodeWebviewProvider"
 import { exportVSCodeStorageToSharedFiles } from "./hosts/vscode/vscode-to-file-migration"
 import { ExtensionRegistryInfo } from "./registry"
 import { AuthService, LogoutReason } from "./sdk/auth-service"
+import { startMemoryLog } from "./sdk/extension-memory-log"
 import { installOllamaStreamDispatcher, reportOllamaStreamDispatcher } from "./sdk/ollama-stream-dispatcher"
 import { telemetryService } from "./services/telemetry"
 import type { RolloutBundleActivation } from "./services/telemetry/rollout-metadata"
@@ -101,6 +102,10 @@ export async function activate(context: vscode.ExtensionContext) {
 	// `activate`, then from `setupHostProvider`, each time still ahead of the
 	// subscriber and each time silently producing nothing.
 	reportOllamaStreamDispatcher()
+
+	// The host's memory, now and every five minutes: a baseline to read a
+	// later figure against.
+	startMemoryLog(context)
 
 	// Terminals outlive the extension host: the window owns them, while the
 	// reuse bookkeeping is a static that starts empty here. Anything named
