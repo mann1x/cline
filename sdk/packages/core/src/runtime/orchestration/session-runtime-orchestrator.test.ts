@@ -2043,6 +2043,54 @@ describe("SessionRuntime.shutdown", () => {
 // ---------------------------------------------------------------------------
 
 describe("SessionRuntime.subscribeEvents", () => {
+	it("still delivers a tool's updates after the run that started it has ended", async () => {
+		// A background round outlives the lead's run: its agents' rows are
+		// updated through the spawn call's `emitUpdate`, on that run's runtime.
+		const { deps, listeners } = withFakeRuntime();
+		const session = new SessionRuntime(makeAgentConfig(), deps);
+		const received: AgentEvent[] = [];
+		session.subscribeEvents((event) => received.push(event));
+
+		await session.run("spawn a round in the background");
+		received.length = 0;
+
+		const late: AgentRuntimeEvent[] = [
+			{
+				type: "tool-updated",
+				snapshot: makeSnapshot(),
+				iteration: 1,
+				toolCall: {
+					type: "tool-call",
+					toolCallId: "call_spawn",
+					toolName: "spawn_agent",
+					input: {},
+				},
+				update: { member: 0, finished: { finishReason: "aborted" } },
+			} as unknown as AgentRuntimeEvent,
+			// Anything else from an ended run is a straggler, and stays dropped.
+			{
+				type: "turn-started",
+				snapshot: makeSnapshot(),
+				iteration: 2,
+			} as unknown as AgentRuntimeEvent,
+		];
+		for (const event of late) {
+			for (const listener of listeners) {
+				listener(event);
+			}
+		}
+
+		expect(received).toHaveLength(1);
+		expect(received[0]).toEqual(
+			expect.objectContaining({
+				type: "content_update",
+				contentType: "tool",
+				toolCallId: "call_spawn",
+				update: { member: 0, finished: { finishReason: "aborted" } },
+			}),
+		);
+	});
+
 	it("makes assistant messages visible to getMessages as soon as the runtime emits them", async () => {
 		const userMessage = makeAgentMessage("msg_user", "user", "go");
 		const assistantMessage = makeAgentMessage(

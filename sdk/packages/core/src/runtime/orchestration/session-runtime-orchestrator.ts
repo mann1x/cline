@@ -1298,6 +1298,21 @@ export class SessionRuntime {
 			thrownError = error instanceof Error ? error : new Error(String(error));
 		} finally {
 			unsubscribe();
+			// A tool can outlive the run that called it: a round spawned in the
+			// background keeps reporting through its call's `emitUpdate`, which
+			// emits on this runtime. With nothing subscribed, its agents' rows
+			// froze the moment the lead's turn ended or was cancelled -- agents
+			// stopped from the panel after that ended and still read as running
+			// or queued (pandorum, 2026-10-03). Only tool updates are followed:
+			// everything else from an ended run is a straggler.
+			runtime.subscribe((event: AgentRuntimeEvent) => {
+				if (event.type !== "tool-updated") {
+					return;
+				}
+				for (const legacy of this.eventAdapter.translate(event)) {
+					this.emitLegacyEvent(legacy);
+				}
+			});
 			this.config.abortSignal?.removeEventListener(
 				"abort",
 				this.handleExternalAbort,
