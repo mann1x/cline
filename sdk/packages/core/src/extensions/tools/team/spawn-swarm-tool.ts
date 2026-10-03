@@ -137,7 +137,7 @@ export const SpawnSwarmInputSchema = z.object({
 			'How many workers to run on `task`. "max" means as many as the server will take right now; a number is an upper bound, and the server may allow fewer.',
 		),
 	temperature: SpawnSamplingFields.temperature.describe(
-		"Sampling temperature for every worker, over their model's own. \"random\": each worker gets the model's own +/- `temperature_range`%. Omit to keep the model's.",
+		"Sampling temperature for every worker, over their model's own. \"random\": each worker draws within 2% of its model's own temperature (a model at 1.0 gets 0.98 to 1.02); that narrow band is the intended variation. Omit to keep the model's.",
 	),
 	seed: SpawnSamplingFields.seed.describe(
 		'Sampling seed for the workers: worker i (from 0) gets seed + i, so they do not sample identically; "random" gives each its own. A task\'s own `seed` is used as given.',

@@ -12,13 +12,16 @@ import {
 	DEFAULT_TEMPERATURE_RANGE_PERCENT,
 	describeRealizedSampling,
 	drawSpawnSampling,
+	MAX_TEMPERATURE_RANGE_PERCENT,
 	modelTemperatureOf,
 	primeModelTemperature,
 	RANDOM_SEED_LIMIT,
 	type RealizedSpawnSampling,
 	readSpawnSampling,
 	realizeSpawnSampling,
+	SPAWN_SAMPLING_NOTE,
 	type SpawnSamplingDraw,
+	SpawnSamplingFields,
 	samplingForCopy,
 	UNKNOWN_MODEL_TEMPERATURE_NOTE,
 } from "./spawn-sampling";
@@ -438,14 +441,56 @@ describe('temperature: "random"', () => {
 	it("randomizes around the model's own when only a range is given", () => {
 		const { realized } = buildWith(
 			WITH_MODEL_TEMPERATURE,
-			{ temperature_range: "50%" },
+			{ temperature_range: "5%" },
 			() => 0,
 		);
 		expect(realized).toEqual({
-			temperature: 0.35,
+			temperature: 0.665,
 			temperatureBase: 0.7,
-			temperatureRange: 50,
+			temperatureRange: 5,
 		});
+	});
+
+	it("holds a range over the limit to the limit, and says so", () => {
+		// The lead's own input on 2026-10-03: it judged 2% "effectively no
+		// variation" and asked for 60, and an agent ran at 0.595 on a model
+		// whose temperature is 1.
+		const random = seededRandom(7);
+		for (let index = 0; index < 50; index += 1) {
+			const { realized } = buildWith(
+				{ ...WITH_MODEL_TEMPERATURE, temperature: 1 },
+				{ temperature: "random", temperature_range: 60 },
+				random,
+			);
+			expect(realized).toMatchObject({
+				temperatureBase: 1,
+				temperatureRange: MAX_TEMPERATURE_RANGE_PERCENT,
+				note: "temperature_range 60% is over the 10% limit; used 10%",
+			});
+			expect(realized?.temperature).toBeGreaterThanOrEqual(0.9);
+			expect(realized?.temperature).toBeLessThanOrEqual(1.1);
+		}
+	});
+
+	it("draws within 0.98 and 1.02 of a model at 1 when no range is given", () => {
+		const random = seededRandom(3);
+		for (let index = 0; index < 50; index += 1) {
+			const { realized } = buildWith(
+				{ ...WITH_MODEL_TEMPERATURE, temperature: 1 },
+				{ temperature: "random" },
+				random,
+			);
+			expect(realized?.note).toBeUndefined();
+			expect(realized?.temperature).toBeGreaterThanOrEqual(0.98);
+			expect(realized?.temperature).toBeLessThanOrEqual(1.02);
+		}
+	});
+
+	it("tells the lead the narrow band is the intended one", () => {
+		expect(SPAWN_SAMPLING_NOTE).toContain("0.98 to 1.02");
+		expect(SpawnSamplingFields.temperature_range.description).toContain(
+			"only when the user states a number",
+		);
 	});
 
 	it("keeps a number without a range fixed", () => {

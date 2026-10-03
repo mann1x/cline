@@ -19,11 +19,16 @@
  *
  * - `seed: "random"` gives each agent its own independent seed.
  * - `temperature: "random"` gives each agent a draw from its model's own
- *   temperature +/- `temperature_range` percent (2 when not given). The
- *   model's own is read, never guessed (see {@link modelTemperatureOf}); when
- *   nothing states it the agent keeps the model's sampler and the row says so.
+ *   temperature +/- `temperature_range` percent (2 when not given, so a model
+ *   at 1 draws 0.98 to 1.02). The model's own is read, never guessed (see
+ *   {@link modelTemperatureOf}); when nothing states it the agent keeps the
+ *   model's sampler and the row says so.
  * - A numeric `temperature` with a `temperature_range` is randomized around
  *   that number; `temperature_range` alone around the model's own.
+ * - The range is the user's to widen, and only so far: a request over
+ *   {@link MAX_TEMPERATURE_RANGE_PERCENT} is held to it and the row says so.
+ *   A lead once judged 2% "effectively no variation", asked for 60 on its own
+ *   and ran an agent at 0.595 on a model validated at 1.
  *
  * The lead's request is drawn once per agent ({@link drawSpawnSampling}) --
  * so a re-placement keeps the draw -- and realized at build, where the
@@ -48,12 +53,20 @@ export const SPAWN_RANDOM = "random" as const;
 /** Percent a random temperature may move either way when no range is given. */
 export const DEFAULT_TEMPERATURE_RANGE_PERCENT = 2;
 
+/** The widest a random temperature may move either way, whatever is asked. */
+export const MAX_TEMPERATURE_RANGE_PERCENT = 10;
+
 /** Seeds drawn for `seed: "random"` are in [0, this). Fits a signed int32. */
 export const RANDOM_SEED_LIMIT = 2 ** 31;
 
 /** The info line an agent gets when "random" had no temperature to start from. */
 export const UNKNOWN_MODEL_TEMPERATURE_NOTE =
 	"model temperature unknown; kept the model's sampler";
+
+/** The info line an agent gets when its range was held to the limit. */
+export function rangeOverLimitNote(requested: number): string {
+	return `temperature_range ${requested}% is over the ${MAX_TEMPERATURE_RANGE_PERCENT}% limit; used ${MAX_TEMPERATURE_RANGE_PERCENT}%`;
+}
 
 /** What a lead asked for: as the tool input states it, after tolerant reading. */
 export interface SpawnSampling {
@@ -78,7 +91,13 @@ export interface SpawnSamplingDraw {
 	 * Randomize the temperature: `base` (or, absent, the model's own) moved by
 	 * `draw * range` percent, `draw` uniform in [-1, 1].
 	 */
-	temperatureRandom?: { base?: number; range: number; draw: number };
+	temperatureRandom?: {
+		base?: number;
+		range: number;
+		draw: number;
+		/** What was asked for, when it was over the limit and `range` is not it. */
+		requestedRange?: number;
+	};
 }
 
 /** What one agent ran with, for its row, its result and its record. */
@@ -104,7 +123,7 @@ export const SpawnSamplingFields = {
 		.union([z.number().nonnegative(), z.literal(SPAWN_RANDOM)])
 		.optional()
 		.describe(
-			"Sampling temperature for this agent, over its model's own. \"random\": the model's own temperature +/- `temperature_range`% per agent. Omit to keep the model's.",
+			"Sampling temperature for this agent, over its model's own. \"random\": each agent draws within 2% of its model's own temperature (a model at 1.0 gets 0.98 to 1.02); that narrow band is the intended variation and keeps agents on the model's validated sampler. Omit to keep the model's.",
 		),
 	seed: z
 		.union([z.number().int(), z.literal(SPAWN_RANDOM)])
@@ -118,13 +137,12 @@ export const SpawnSamplingFields = {
 		.max(100)
 		.optional()
 		.describe(
-			"Percent (default 2) each agent's temperature is randomized by, either way, around `temperature` -- or around the model's own when `temperature` is omitted or \"random\".",
+			`Percent each agent's temperature is randomized by, either way, around \`temperature\` -- or around the model's own when \`temperature\` is omitted or "random". Set it only when the user states a number; left out, 2 applies. Held to ${MAX_TEMPERATURE_RANGE_PERCENT} at most.`,
 		),
 };
 
 /** The one line each spawn tool's description gives the options. */
-export const SPAWN_SAMPLING_NOTE =
-	'Optional `temperature` and `seed` set the sampler for the agents they cover, over their model\'s own; omit them to keep the model\'s. A `seed` that covers several agents is offset by each agent\'s index among them (seed, seed+1, ...), so they do not sample identically. Either may be "random": `seed: "random"` gives each agent its own seed; `temperature: "random"` gives each the model\'s temperature +/- `temperature_range` percent (default 2), and a numeric `temperature` with `temperature_range` is randomized around that number. ';
+export const SPAWN_SAMPLING_NOTE = `Optional \`temperature\` and \`seed\` set the sampler for the agents they cover, over their model's own; omit them to keep the model's. A \`seed\` that covers several agents is offset by each agent's index among them (seed, seed+1, ...), so they do not sample identically. Either may be "random": \`seed: "random"\` gives each agent its own seed; \`temperature: "random"\` gives each a draw within 2% of its model's temperature (a model at 1.0 gets 0.98 to 1.02), which is the intended variation. Set \`temperature_range\` only when the user states a number: it is the percent to draw within, around a numeric \`temperature\` or the model's own, held to ${MAX_TEMPERATURE_RANGE_PERCENT} at most. `;
 
 function isFiniteNumber(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value);
@@ -269,12 +287,17 @@ export function drawSpawnSampling(
 		sampling.temperature === SPAWN_RANDOM ||
 		sampling.temperature_range !== undefined;
 	if (randomize) {
+		const requested =
+			sampling.temperature_range ?? DEFAULT_TEMPERATURE_RANGE_PERCENT;
 		draw.temperatureRandom = {
 			...(typeof sampling.temperature === "number"
 				? { base: sampling.temperature }
 				: {}),
-			range: sampling.temperature_range ?? DEFAULT_TEMPERATURE_RANGE_PERCENT,
+			range: Math.min(requested, MAX_TEMPERATURE_RANGE_PERCENT),
 			draw: random() * 2 - 1,
+			...(requested > MAX_TEMPERATURE_RANGE_PERCENT
+				? { requestedRange: requested }
+				: {}),
 		};
 	} else if (typeof sampling.temperature === "number") {
 		draw.temperature = sampling.temperature;
@@ -388,9 +411,16 @@ export function realizeSpawnSampling(
 	if (random) {
 		const base = random.base ?? modelTemperature;
 		realized.temperatureRange = random.range;
-		if (base === undefined) {
-			realized.note = UNKNOWN_MODEL_TEMPERATURE_NOTE;
-		} else {
+		const notes = [
+			random.requestedRange !== undefined
+				? rangeOverLimitNote(random.requestedRange)
+				: "",
+			base === undefined ? UNKNOWN_MODEL_TEMPERATURE_NOTE : "",
+		].filter(Boolean);
+		if (notes.length > 0) {
+			realized.note = notes.join("; ");
+		}
+		if (base !== undefined) {
 			realized.temperatureBase = base;
 			realized.temperature = roundTemperature(
 				base * (1 + (random.draw * random.range) / 100),

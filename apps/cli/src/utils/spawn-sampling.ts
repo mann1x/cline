@@ -26,12 +26,18 @@ export function formatSpawnSampling(value: unknown): string | undefined {
 		);
 	}
 	if (typeof sampling.temperature === "number") {
-		const drawn =
+		// A note beside a temperature is the range having been held to its
+		// limit: the line says so, or the lead's 60 reads as an honoured 10.
+		const detail = [
 			typeof sampling.temperatureBase === "number" &&
 			typeof sampling.temperatureRange === "number"
-				? ` (${sampling.temperatureBase} ±${sampling.temperatureRange}%)`
-				: "";
-		parts.push(`T ${sampling.temperature}${drawn}`);
+				? `${sampling.temperatureBase} ±${sampling.temperatureRange}%`
+				: "",
+			typeof sampling.note === "string" ? sampling.note : "",
+		].filter(Boolean);
+		parts.push(
+			`T ${sampling.temperature}${detail.length > 0 ? ` (${detail.join("; ")})` : ""}`,
+		);
 	} else if (typeof sampling.note === "string" && sampling.note) {
 		parts.push(`T model (${sampling.note})`);
 	}

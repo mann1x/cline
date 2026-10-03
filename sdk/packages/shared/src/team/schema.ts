@@ -78,7 +78,7 @@ export const TeamSpawnTeammateInputSchema = z
 		temperature: nullableOptional(
 			z.union([z.number().nonnegative(), z.string()]),
 		).describe(
-			"Sampling temperature for this teammate, over its model's own. \"random\": the model's own +/- `temperature_range`%. Omit to keep the model's.",
+			"Sampling temperature for this teammate, over its model's own. \"random\": a draw within 2% of the model's own temperature (a model at 1.0 gets 0.98 to 1.02); that narrow band is the intended variation. Omit to keep the model's.",
 		),
 		seed: nullableOptional(z.union([z.number().int(), z.string()])).describe(
 			'Sampling seed for this teammate. "random" draws one. Omit to leave it unset.',
@@ -86,7 +86,7 @@ export const TeamSpawnTeammateInputSchema = z
 		temperature_range: nullableOptional(
 			z.union([z.number().min(0).max(100), z.string()]),
 		).describe(
-			"Percent (default 2) the temperature is randomized by, around `temperature` or the model's own.",
+			"Percent the temperature is randomized by, around `temperature` or the model's own. Set it only when the user states a number; left out, 2 applies. Held to 10 at most.",
 		),
 	})
 	.strict();

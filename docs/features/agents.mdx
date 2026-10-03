@@ -469,9 +469,11 @@ Code: `team/spawn-sampling.ts`. This is available on `spawn_agent` (call and ent
 
 - **Leave them out** and the model's own sampler applies. Nothing is written that you did not ask for.
 - **`seed`** as a number: agents covered by one call or entry get seed, seed+1, …, by index. `"random"` gives each agent an independent seed.
-- **`temperature`** as a number is used as given. `"random"` draws each agent's temperature from the model's own ± `temperature_range` percent (default 2).
+- **`temperature`** as a number is used as given. `"random"` draws each agent's temperature from the model's own ± `temperature_range` percent. The default is 2, so a model at 1.0 draws 0.98 to 1.02.
   - The model's own temperature is read, never guessed. When nothing states it, the agent keeps the model's sampler and its row says so.
-- **`temperature_range`** (0-100) with a numeric `temperature` randomizes around that number. Given alone, it randomizes around the model's own.
+- **`temperature_range`** with a numeric `temperature` randomizes around that number. Given alone, it randomizes around the model's own.
+  - It is capped at 10. A larger value is held to 10 and the agent's row says so: `temperature_range 60% is over the 10% limit; used 10%`.
+  - The lead is told to set it only when you state a number. Before 2026-10-03 it could widen the range on its own: one lead asked for 60 and ran agents between 0.6 and 1.6 on a model validated at 1.
 - The value each agent actually ran with is shown on its row and in its result. For a teammate it is also saved in its spec, and restored rather than drawn again.
 
 **Example prompt:** "Spawn 5 agents on the same bug with seed random and temperature 0.7, temperature_range 10."

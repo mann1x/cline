@@ -2,6 +2,19 @@ import { describe, expect, it } from "vitest";
 import { formatSpawnSampling, spawnSamplingLines } from "./spawn-sampling";
 
 describe("formatSpawnSampling", () => {
+	it("says when the range was held to the limit", () => {
+		expect(
+			formatSpawnSampling({
+				temperature: 0.94,
+				temperatureBase: 1,
+				temperatureRange: 10,
+				note: "temperature_range 60% is over the 10% limit; used 10%",
+			}),
+		).toBe(
+			"T 0.94 (1 ±10%; temperature_range 60% is over the 10% limit; used 10%)",
+		);
+	});
+
 	it("carries the drawn detail on the line, having no tooltip", () => {
 		expect(
 			formatSpawnSampling({
