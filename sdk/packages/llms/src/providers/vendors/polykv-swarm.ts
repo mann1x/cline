@@ -311,6 +311,12 @@ interface OwnerShard {
 	failed?: Map<string, { at: number; reason: string }>;
 	/** Agent session -> the layer keys its last request resolved. */
 	uses?: Map<string, string[]>;
+	/**
+	 * Agent session -> the layer keys its chain will have, from the moment it
+	 * is seated: before its pools are built, so the next agent of its role can
+	 * be seated beside it. Read only for agents still in `agents`.
+	 */
+	seated?: Map<string, string[]>;
 	/** Pool creates in flight -> the parent each forks from. */
 	creating?: Map<Promise<unknown>, string | undefined>;
 	/** A release of this owner's spare pools, when one is running. */
@@ -1788,6 +1794,7 @@ async function placeAgent(
 ): Promise<OwnerShard | undefined> {
 	const need = (shard: OwnerShard) =>
 		polykvFirstTurnCells(body, shard.perAgent?.ask);
+	const keys = chainKeysOf(body, spec.layers);
 	const take = (shard: OwnerShard): OwnerShard => {
 		const previous = group.assigned.get(spec.sessionId);
 		if (previous && previous !== shard) {
@@ -1797,6 +1804,8 @@ async function placeAgent(
 		}
 		group.assigned.set(spec.sessionId, shard);
 		shard.agents.add(spec.sessionId);
+		shard.seated ??= new Map();
+		shard.seated.set(spec.sessionId, keys);
 		if (!polykvWorkerStarted(spec.sessionId)) {
 			shard.firstNeed ??= new Map();
 			shard.firstNeed.set(spec.sessionId, need(shard));
@@ -1819,7 +1828,23 @@ async function placeAgent(
 		const open = [...group.shards]
 			.reverse()
 			.filter((candidate) => !candidate.closed && !candidate.borrowed);
-		const found = open.find(roomy);
+		// Among the owners with room, the one that already has the most of
+		// this agent's chain: a pool exists to be shared, and an owner chosen
+		// only for its room builds the role's pool again for one agent
+		// (pecyh, 2026-10-03: 14 role pools for 14 agents). Newest first on a
+		// tie, as before.
+		let found: OwnerShard | undefined;
+		let depth = -1;
+		for (const candidate of open) {
+			if (!roomy(candidate)) {
+				continue;
+			}
+			const shared = chainDepthOn(candidate, keys);
+			if (shared > depth) {
+				found = candidate;
+				depth = shared;
+			}
+		}
 		if (found) {
 			return take(found);
 		}
@@ -2430,6 +2455,54 @@ function buildLayer(options: {
 }
 
 /** What {@link ensureChain} resolved for one request. */
+/**
+ * The layer keys of a request's chain, root first: one per shared turn, each
+ * a hash of the chain of turns up to it. Two agents share a pool exactly
+ * where their keys are equal.
+ */
+function chainKeysOf(body: Record<string, unknown>, layers: number): string[] {
+	const messages = body.messages as unknown[];
+	let key = hashString(
+		JSON.stringify([
+			body.model ?? "",
+			(body.tools as unknown[] | undefined) ?? [],
+			templateSignature(templateFieldsOf(body)),
+		]),
+	);
+	const keys: string[] = [];
+	for (let depth = 0; depth <= layers; depth++) {
+		key = hashString(`${key}\n${JSON.stringify(messages[depth])}`);
+		keys.push(key);
+	}
+	return keys;
+}
+
+/**
+ * How much of an agent's chain `shard` already has or is about to: the number
+ * of its layers, from the root, that a pool there holds or that an agent
+ * seated there will build. A chain's keys are cumulative, so the deepest key
+ * found is the depth shared.
+ */
+function chainDepthOn(shard: OwnerShard, keys: readonly string[]): number {
+	const present = (key: string) => {
+		if (shard.pools.has(key)) {
+			return true;
+		}
+		for (const [agent, wanted] of shard.seated ?? []) {
+			if (shard.agents.has(agent) && wanted.includes(key)) {
+				return true;
+			}
+		}
+		return false;
+	};
+	for (let depth = keys.length - 1; depth >= 0; depth--) {
+		if (present(keys[depth] as string)) {
+			return depth + 1;
+		}
+	}
+	return 0;
+}
+
 interface ChainResult {
 	/** The deepest pool the request can attach to. */
 	poolId?: string;
@@ -2461,9 +2534,7 @@ async function ensureChain(
 	const tools = body.tools as unknown[] | undefined;
 	let parent: string | undefined;
 	const fields = templateFieldsOf(body);
-	let key = hashString(
-		JSON.stringify([body.model ?? "", tools ?? [], templateSignature(fields)]),
-	);
+	const chainKeys = chainKeysOf(body, layers);
 	const keys: string[] = [];
 	// What this agent resolved last time stays counted as in use until this
 	// resolve is done, so a reclaim meanwhile does not take it.
@@ -2477,7 +2548,7 @@ async function ensureChain(
 		return { ...result, keys };
 	};
 	for (let depth = 0; depth <= layers; depth++) {
-		key = hashString(`${key}\n${JSON.stringify(messages[depth])}`);
+		const key = chainKeys[depth] as string;
 		let pending = shard.pools.get(key);
 		if (!pending) {
 			const failed = shard.failed?.get(key);

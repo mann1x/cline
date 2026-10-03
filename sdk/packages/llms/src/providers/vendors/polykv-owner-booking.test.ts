@@ -181,20 +181,20 @@ function engine(
 	};
 }
 
-function agentBody() {
+function agentBody(role = "the role") {
 	return {
 		model: "m",
 		messages: [
 			{ role: "system", content: "You are an agent." },
 			{ role: "user", content: "the shared knowledge" },
-			{ role: "user", content: "the role" },
+			{ role: "user", content: role },
 			{ role: "user", content: "the task" },
 		],
 		max_tokens: 8_192,
 	};
 }
 
-function send(stub: ReturnType<typeof engine>, agent: string) {
+function send(stub: ReturnType<typeof engine>, agent: string, role?: string) {
 	return createOpencotiFetch({
 		fetch: stub.fetch,
 		baseUrl: "http://engine/v1",
@@ -204,8 +204,15 @@ function send(stub: ReturnType<typeof engine>, agent: string) {
 		},
 	})("http://engine/v1/chat/completions", {
 		method: "POST",
-		body: JSON.stringify(agentBody()),
+		body: JSON.stringify(agentBody(role)),
 	});
+}
+
+/** Pools the engine was asked to make: roots and forks. */
+function poolCreates(stub: ReturnType<typeof engine>) {
+	return stub.calls.filter(
+		(call) => call.path === "/polykv/pools" || call.path.endsWith("/fork"),
+	).length;
 }
 
 beforeEach(() => {
@@ -376,6 +383,50 @@ describe("placing agents on owners", () => {
 			OWNER_2,
 		]);
 		expect(polykvWorkerChargedTo("agent-b")).toBe(OWNER_2);
+	});
+});
+
+// pandorum pecyh, 2026-10-03: 15 agents of five roles, three per role, on six
+// owners. Each agent went to the newest owner with room, whatever it held, so
+// the three agents of a role sat on three owners and each built the role's
+// pool again: 14 role pools for 14 agents, every one used by a single agent,
+// 26 pools in all. A pool exists to be shared.
+describe("placing an agent where its role's pool already is", () => {
+	it("joins the owner that holds its role's pool, not the newest with room", async () => {
+		const stub = engine({ maximum: 131_072 });
+		await send(stub, "a1", "role A");
+		await send(stub, "a2", "role A");
+		await send(stub, "b1", "role B");
+		expect(polykvWorkerChargedTo("b1")).toBe(OWNER_2);
+		// A seat frees on the first owner: both have room now.
+		await releasePolykvAgent("a2");
+		const before = poolCreates(stub);
+		await send(stub, "a3", "role A");
+		expect(polykvWorkerChargedTo("a3")).toBe(OWNER_1);
+		expect(poolCreates(stub)).toBe(before);
+	});
+
+	it("joins the owner an agent of its role is seated on, before that pool is built", async () => {
+		const stub = engine({ maximum: 131_072 });
+		await send(stub, "a1", "role A");
+		await send(stub, "a2", "role A");
+		await send(stub, "b1", "role B");
+		await releasePolykvAgent("a2");
+		// Two of role B and one of role A arrive at once: one seat on each owner
+		// is free, and a third agent needs a new owner.
+		await Promise.all([send(stub, "a3", "role A"), send(stub, "b2", "role B")]);
+		expect(polykvWorkerChargedTo("a3")).toBe(OWNER_1);
+		expect(polykvWorkerChargedTo("b2")).toBe(OWNER_2);
+	});
+
+	it("still takes a seat on another owner when its role's owner is full", async () => {
+		const stub = engine({ maximum: 131_072 });
+		await send(stub, "a1", "role A");
+		await send(stub, "a2", "role A");
+		await send(stub, "b1", "role B");
+		expect((await send(stub, "a3", "role A")).status).toBe(200);
+		expect(polykvWorkerChargedTo("a3")).toBe(OWNER_2);
+		expect(stub.opens()).toHaveLength(2);
 	});
 });
 
