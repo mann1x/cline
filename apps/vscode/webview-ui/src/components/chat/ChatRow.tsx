@@ -57,7 +57,9 @@ import EmptyTurnRow from "./EmptyTurnRow"
 import ErrorRow from "./ErrorRow"
 import EscalationRow from "./EscalationRow"
 import { FeatureTip } from "./FeatureTip"
+import { HarnessNoteRow } from "./HarnessNoteRow"
 import HookMessage from "./HookMessage"
+import { readHarnessNote } from "./harnessNote"
 import { MarkdownRow } from "./MarkdownRow"
 import NewTaskPreview from "./NewTaskPreview"
 import OutputLimitRetryRow from "./OutputLimitRetryRow"
@@ -1197,7 +1199,12 @@ export const ChatRowContent = memo(
 						return <TransactionRow message={message} />
 					case "escalation":
 						return <EscalationRow message={message} />
-					default:
+					default: {
+						// A note the harness sent the model: one line, the rest folded.
+						const harnessNote = readHarnessNote(message.text)
+						if (harnessNote) {
+							return <HarnessNoteRow note={harnessNote} />
+						}
 						return (
 							<div>
 								{title && (
@@ -1211,6 +1218,7 @@ export const ChatRowContent = memo(
 								</div>
 							</div>
 						)
+					}
 				}
 			case "ask":
 				switch (message.ask) {

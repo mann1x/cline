@@ -918,7 +918,11 @@ describe("createSpawnAgentTool", () => {
 			status: "errored",
 			failureClass: "task",
 		});
-		expect((output.agents[1] as SpawnBatchIndexEntry).error).toContain(
+		// Said once, in its report: the index does not repeat a shown report.
+		expect(output.agents[1] as SpawnBatchIndexEntry).not.toHaveProperty(
+			"error",
+		);
+		expect(output.reports[1]?.text).toContain(
 			'No configured agent named "nonexistent"',
 		);
 		expect(output.reports[1]?.text).toContain("js_syntactic");

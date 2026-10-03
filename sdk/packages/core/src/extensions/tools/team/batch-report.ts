@@ -22,6 +22,13 @@
  *
  * Nothing is left to middle truncation: the budget is measured on the JSON the
  * model will receive.
+ *
+ * And each thing is said once. A round of 15 on one model came back as 16,000
+ * characters, shown whole in the chat as well: the model's path 15 times, 12
+ * copies of one "ended early" paragraph, and every agent's opening words a
+ * second time in the index above its report. So a model every agent ran on is
+ * named once (`ranOn`), a text an earlier report already carries is a pointer
+ * to it, and the index gives a line only for an agent whose report is not shown.
  */
 import { classifyTurnFault, describeAdmissionWait } from "@cline/shared";
 import type { AgentOracleResult } from "./agent-check";
@@ -144,6 +151,8 @@ export interface SpawnBatchReport {
 	/** What the harness changed about the call while reading it. */
 	notes?: string[];
 	summary: SpawnBatchSummary;
+	/** What every agent ran on, when it is the same: left out of each `facts`. */
+	ranOn?: string;
 	/**
 	 * One per agent, in the order asked for. An object normally; for a round
 	 * too large for that, `name|status` or `name|status|failureClass`.
@@ -353,6 +362,26 @@ function filedName(
 	return recordAgentReport(sessionId, result.name, text);
 }
 
+/** The end of a facts line that says where the agent ran: ` · on <where>`. */
+const RAN_ON = / · on (.+)$/;
+
+/**
+ * Where every agent ran, when all of them say so and say the same -- and it
+ * is worth saying once: two agents or more.
+ */
+function sharedRanOn(
+	results: readonly SpawnBatchMemberResult[],
+): string | undefined {
+	if (results.length < 2) {
+		return undefined;
+	}
+	const first = results[0]?.facts?.match(RAN_ON)?.[1];
+	return first !== undefined &&
+		results.every((result) => result.facts?.match(RAN_ON)?.[1] === first)
+		? first
+		: undefined;
+}
+
 function jsonLength(value: unknown): number {
 	return JSON.stringify(value).length;
 }
@@ -434,24 +463,33 @@ export function buildSpawnBatchReport(
 		}
 	}
 
+	const ranOn = sharedRanOn(results);
 	const report: SpawnBatchReport = {
 		...(round ? { round } : {}),
 		summary,
+		...(ranOn ? { ranOn } : {}),
 		agents,
 		reports: [],
 		usage,
 	};
 	const omitted: SpawnBatchMemberResult[] = [];
 	let used = jsonLength(report);
-	for (const result of results) {
-		const text = (result.text ?? errorText(result) ?? "").trim();
-		if (!text) {
+	// Shown reports by position, and the first to carry each text.
+	const shown = new Set<number>();
+	const firstWith = new Map<string, string>();
+	for (const [position, result] of results.entries()) {
+		const own = (result.text ?? errorText(result) ?? "").trim();
+		if (!own) {
 			continue;
 		}
+		const earlier = firstWith.get(own);
+		const pointer = earlier ? `same as ${earlier}` : undefined;
+		const text = pointer && pointer.length < own.length ? pointer : own;
+		const facts = ranOn ? result.facts?.replace(RAN_ON, "") : result.facts;
 		const entry = {
 			name: result.name,
 			...(result.id ? { id: result.id } : {}),
-			...(result.facts ? { facts: result.facts } : {}),
+			...(facts ? { facts } : {}),
 			text,
 			...(result.oracle
 				? {
@@ -468,10 +506,23 @@ export function buildSpawnBatchReport(
 		if (used + cost + reserve <= budget) {
 			report.reports.push(entry);
 			used += cost;
+			shown.add(position);
+			if (!earlier) {
+				firstWith.set(own, result.name);
+			}
 		} else {
 			omitted.push(result);
 		}
 	}
+	// A shown report's opening words are in `reports`; the index does not
+	// say them again. Only ever smaller, so the budget above still holds.
+	report.agents = report.agents.map((entry, position) => {
+		if (typeof entry === "string" || !shown.has(position)) {
+			return entry;
+		}
+		const { line: _line, error: _error, ...rest } = entry;
+		return rest;
+	});
 	if (omitted.length > 0) {
 		report.notShown = {
 			names: omitted.map((result) => filedName(sessionId, result)),

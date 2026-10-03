@@ -125,9 +125,12 @@ describe("an `agents` call's result", () => {
 	it("never cuts a report from the middle: each shown report is whole", () => {
 		const round = round1tmrl();
 		const report = buildSpawnBatchReport(round, "lead");
+		const textOf = (name: string) =>
+			round.find((entry) => entry.name === name)?.text?.trim();
 		for (const shown of report.reports) {
-			const original = round.find((entry) => entry.name === shown.name);
-			expect(shown.text).toBe(original?.text?.trim());
+			// Whole, or a pointer to an earlier report that carries the same text.
+			const same = shown.text.match(/^same as (.+)$/)?.[1];
+			expect(textOf(shown.name)).toBe(same ? textOf(same) : shown.text);
 		}
 	});
 
@@ -368,5 +371,86 @@ describe("a round's report", () => {
 			id: "r2-2",
 			facts: "failed (iteration_cap) · 40/40 iterations",
 		});
+	});
+});
+
+describe("a round's report says each thing once", () => {
+	const MODEL =
+		"/mnt/sdc/opencoti-models/sdc-ml/omnimerge-v6/Qwen3.8-27B-Omnimerge-v6-Q6_K-AC.gguf";
+	const ABORTED =
+		"---\nThis agent ended early (aborted) without an answer of its own, so it may not have finished. Do not treat its run as successful.";
+
+	/** pandorum's pecyh round r1, in shape: one model, most agents cancelled. */
+	function roundPecyh(): SpawnBatchMemberResult[] {
+		const out: SpawnBatchMemberResult[] = [];
+		for (let i = 0; i < 15; i += 1) {
+			const cancelled = i % 5 !== 0;
+			out.push({
+				name: `review-${i + 1}`,
+				id: `r1-${i + 1}`,
+				facts: `cancelled (cancelled_by_lead) · 4 iterations · seed ${1000 + i} (random) · on ${MODEL}`,
+				...(cancelled
+					? { error: ABORTED, stop: "cancelled_by_lead" }
+					: {
+							text: `Finding ${i}: brace missing.`,
+							finishReason: "completed",
+						}),
+				iterations: 4,
+				usage: { inputTokens: 40_000, outputTokens: 500 },
+			});
+		}
+		return out;
+	}
+
+	it("names a model every agent ran on once, not in each facts line", () => {
+		const report = buildSpawnBatchReport(roundPecyh(), "s", undefined, "r1");
+		expect(report.ranOn).toBe(MODEL);
+		expect(JSON.stringify(report).split(MODEL)).toHaveLength(2);
+		expect(report.reports[0]?.facts).toBe(
+			"cancelled (cancelled_by_lead) · 4 iterations · seed 1000 (random)",
+		);
+	});
+
+	it("keeps the model in the facts when the agents ran on different ones", () => {
+		const results = roundPecyh();
+		results[3] = { ...results[3], facts: "done · on other-model" } as never;
+		const report = buildSpawnBatchReport(results, "s", undefined, "r1");
+		expect(report.ranOn).toBeUndefined();
+		expect(report.reports[0]?.facts).toContain(`on ${MODEL}`);
+	});
+
+	it("does not repeat a shown report as a line in the index", () => {
+		const report = buildSpawnBatchReport(roundPecyh(), "s", undefined, "r1");
+		expect(report.reports).toHaveLength(15);
+		for (const entry of report.agents) {
+			expect(entry).not.toHaveProperty("line");
+			expect(entry).not.toHaveProperty("error");
+		}
+	});
+
+	it("keeps the index line of an agent whose report did not fit", () => {
+		const report = buildSpawnBatchReport(round1tmrl(), "s");
+		const hidden = new Set(
+			(report.notShown?.names ?? []).map((name) => name.split("#")[0]),
+		);
+		expect(hidden.size).toBeGreaterThan(0);
+		const withLine = report.agents.filter(
+			(entry) =>
+				typeof entry === "object" && (entry.line ?? entry.error) !== undefined,
+		);
+		expect(withLine.length).toBeGreaterThan(0);
+		for (const entry of withLine) {
+			expect(hidden.has((entry as { name: string }).name)).toBe(true);
+		}
+	});
+
+	it("writes a text several agents share once, and points the others at it", () => {
+		const report = buildSpawnBatchReport(roundPecyh(), "s", undefined, "r1");
+		const texts = report.reports.map((entry) => entry.text);
+		expect(texts.filter((text) => text === ABORTED)).toHaveLength(1);
+		expect(texts.filter((text) => text === "same as review-2")).toHaveLength(
+			11,
+		);
+		expect(texts).toContain("Finding 0: brace missing.");
 	});
 });
