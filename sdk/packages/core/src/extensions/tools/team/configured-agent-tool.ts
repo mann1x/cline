@@ -96,6 +96,7 @@ import {
 	restarted,
 	watchPolykvRoom,
 } from "./subagent-progress";
+import { memberUsage } from "./token-split";
 import { createTurnFaultRecovery } from "./turn-fault-recovery";
 
 const CONFIGURED_AGENT_TOOL_NAME_PREFIX = "subagent_";
@@ -819,10 +820,7 @@ export function createConfiguredAgentTools(
 							: result.text,
 					iterations: result.iterations,
 					finishReason: result.finishReason,
-					usage: {
-						inputTokens: result.usage.inputTokens,
-						outputTokens: result.usage.outputTokens,
-					},
+					usage: memberUsage(result.usage),
 					// A configured agent is the case where this matters most:
 					// its file may name a provider of its own, so its tokens
 					// can be billed where the session's are not, or the

@@ -667,6 +667,9 @@ export function createSubagentProgress(
 					emitUpdate({
 						inputTokens: event.totalInputTokens,
 						outputTokens: event.totalOutputTokens,
+						...(event.totalCacheReadTokens !== undefined
+							? { cachedTokens: event.totalCacheReadTokens }
+							: {}),
 						...(event.totalCost !== undefined
 							? { totalCost: event.totalCost }
 							: {}),
@@ -676,6 +679,9 @@ export function createSubagentProgress(
 				emitUpdate({
 					inputTokens: event.totalInputTokens,
 					outputTokens: event.totalOutputTokens,
+					...(event.totalCacheReadTokens !== undefined
+						? { cachedTokens: event.totalCacheReadTokens }
+						: {}),
 					// The window it is using now: what this turn sent, and what
 					// it wrote on top. The gateway's input count already holds
 					// the cached prefix (`normalizeUsage` takes the total), so

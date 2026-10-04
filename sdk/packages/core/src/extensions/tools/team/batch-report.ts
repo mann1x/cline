@@ -37,6 +37,7 @@ import {
 	recordAgentReport,
 } from "./agent-reports";
 import { isNodeUnreachable } from "./node-reachability";
+import { type MemberUsage, splitInputTokens } from "./token-split";
 
 /**
  * The most the whole result may take, in characters of its JSON.
@@ -75,7 +76,7 @@ export interface SpawnBatchMemberResult {
 	text?: string;
 	finishReason?: string;
 	iterations?: number;
-	usage?: { inputTokens?: number; outputTokens?: number };
+	usage?: Partial<MemberUsage>;
 	/** Set when the agent could not be run or threw. */
 	error?: string;
 	/** Its own id, for `resume_agent` and the status tool. */
@@ -144,7 +145,13 @@ export interface SpawnBatchSummary {
 	 */
 	evicted: number;
 	totalIterations: number;
-	totalTokens: { input: number; output: number };
+	/** `cached` and `fresh` split `input`; absent when no agent reported a cache figure. */
+	totalTokens: {
+		input: number;
+		output: number;
+		cached?: number;
+		fresh?: number;
+	};
 }
 
 export interface SpawnBatchReport {
@@ -176,7 +183,7 @@ export interface SpawnBatchReport {
 		names: string[];
 		note: string;
 	};
-	usage: { inputTokens: number; outputTokens: number };
+	usage: MemberUsage;
 }
 
 /** Messages that mean the server or the way to it failed, not the agent. */
@@ -432,12 +439,29 @@ export function buildSpawnBatchReport(
 		}
 		summary.evicted += result.evicted ?? 0;
 		summary.totalIterations += result.iterations ?? 0;
-		summary.totalTokens.input += result.usage?.inputTokens ?? 0;
+		const split = splitInputTokens(
+			result.usage?.inputTokens ?? 0,
+			result.usage?.cachedInputTokens,
+		);
+		summary.totalTokens.input += split.input;
 		summary.totalTokens.output += result.usage?.outputTokens ?? 0;
+		if (split.cached !== undefined) {
+			summary.totalTokens.cached =
+				(summary.totalTokens.cached ?? 0) + split.cached;
+		}
+	}
+	// Fresh is what was not cached, of the agents that said: an agent with no
+	// cache figure is all fresh for this purpose.
+	if (summary.totalTokens.cached !== undefined) {
+		summary.totalTokens.fresh =
+			summary.totalTokens.input - summary.totalTokens.cached;
 	}
 	const usage = {
 		inputTokens: summary.totalTokens.input,
 		outputTokens: summary.totalTokens.output,
+		...(summary.totalTokens.cached !== undefined
+			? { cachedInputTokens: summary.totalTokens.cached }
+			: {}),
 	};
 
 	const notShownNote = `Not shown to keep this result whole; read each with ${READ_AGENT_REPORT_TOOL_NAME}(name).`;

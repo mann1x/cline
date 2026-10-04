@@ -55,6 +55,7 @@ import {
 	subagentCancellation,
 } from "./subagent-cancellation";
 import type { AgentPhase, AgentPhaseUpdate } from "./subagent-progress";
+import { type MemberUsage, memberUsage, splitInputTokens } from "./token-split";
 
 /** Which tool opened the round, which decides how an agent is run again. */
 export type RoundKind = "spawn_agent" | "swarm" | "configured";
@@ -181,6 +182,12 @@ export interface RoundAgentRecord extends RoundAgentSpec {
 	contextWindow?: number;
 	inputTokens?: number;
 	outputTokens?: number;
+	/**
+	 * How much of `inputTokens` the provider served from its cache (the KV
+	 * cache on a local server, a billed cache read on a cloud one). Absent
+	 * when the provider reported none: unknown, not zero.
+	 */
+	cachedTokens?: number;
 	contextTokens?: number;
 	/** Recent generation speed, tokens per second. */
 	genTps?: number;
@@ -267,7 +274,7 @@ export interface RoundMemberOutput {
 	text?: string;
 	iterations?: number;
 	finishReason?: string;
-	usage?: { inputTokens?: number; outputTokens?: number };
+	usage?: Partial<MemberUsage>;
 	error?: string;
 	model?: { id: string; provider: string };
 	nodeId?: string;
@@ -380,11 +387,13 @@ export const ROUND_ACTIVITY_LIMIT = 20;
  * spent; `seen` is the last figure the current one reported. A report below
  * `seen` is a new runtime, not a refund.
  */
+type SpendKey = "input" | "output" | "cached";
+type Spend = Record<SpendKey, number>;
 interface SpendLedger {
-	base: { input: number; output: number };
-	seen: { input: number; output: number };
+	base: Spend;
+	seen: Spend;
 	/** `base` when the current run began: the finish reports that run whole. */
-	runBase: { input: number; output: number };
+	runBase: Spend;
 }
 const spendLedgers = new WeakMap<RoundAgentRecord, SpendLedger>();
 
@@ -396,10 +405,11 @@ function spendLedger(agent: RoundAgentRecord): SpendLedger {
 		const shown = {
 			input: agent.inputTokens ?? 0,
 			output: agent.outputTokens ?? 0,
+			cached: agent.cachedTokens ?? 0,
 		};
 		ledger = {
 			base: shown,
-			seen: { input: 0, output: 0 },
+			seen: { input: 0, output: 0, cached: 0 },
 			runBase: { ...shown },
 		};
 		spendLedgers.set(agent, ledger);
@@ -407,13 +417,29 @@ function spendLedger(agent: RoundAgentRecord): SpendLedger {
 	return ledger;
 }
 
+function agentTokenSplit(agent: RoundAgentRecord): {
+	input: number;
+	cached?: number;
+	fresh?: number;
+	output: number;
+} {
+	return {
+		...splitInputTokens(agent.inputTokens ?? 0, agent.cachedTokens),
+		output: agent.outputTokens ?? 0,
+	};
+}
+
 /** One runtime's cumulative report, folded into the agent's lifetime totals. */
 export function recordAgentSpend(
 	agent: RoundAgentRecord,
-	report: { inputTokens?: number; outputTokens?: number },
+	report: {
+		inputTokens?: number;
+		outputTokens?: number;
+		cachedTokens?: number;
+	},
 ): void {
 	const ledger = spendLedger(agent);
-	const fold = (key: "input" | "output", value: number | undefined) => {
+	const fold = (key: SpendKey, value: number | undefined) => {
 		if (value === undefined) {
 			return;
 		}
@@ -424,6 +450,10 @@ export function recordAgentSpend(
 	};
 	fold("input", report.inputTokens);
 	fold("output", report.outputTokens);
+	fold("cached", report.cachedTokens);
+	if (report.cachedTokens !== undefined || agent.cachedTokens !== undefined) {
+		agent.cachedTokens = ledger.base.cached + ledger.seen.cached;
+	}
 	if (report.inputTokens !== undefined || agent.inputTokens !== undefined) {
 		agent.inputTokens = ledger.base.input + ledger.seen.input;
 	}
@@ -441,10 +471,10 @@ export function recordAgentSpend(
  */
 export function recordAgentFinalSpend(
 	agent: RoundAgentRecord,
-	usage: { inputTokens?: number; outputTokens?: number },
+	usage: Partial<MemberUsage>,
 ): void {
 	const ledger = spendLedger(agent);
-	const settle = (key: "input" | "output", value: number | undefined) => {
+	const settle = (key: SpendKey, value: number | undefined) => {
 		const live = ledger.base[key] + ledger.seen[key];
 		const whole =
 			value === undefined ? live : Math.max(live, ledger.runBase[key] + value);
@@ -454,7 +484,14 @@ export function recordAgentFinalSpend(
 	};
 	const input = settle("input", usage.inputTokens);
 	const output = settle("output", usage.outputTokens);
-	ledger.runBase = { input, output };
+	const cached = settle("cached", usage.cachedInputTokens);
+	ledger.runBase = { input, output, cached };
+	if (
+		usage.cachedInputTokens !== undefined ||
+		agent.cachedTokens !== undefined
+	) {
+		agent.cachedTokens = cached;
+	}
 	if (usage.inputTokens !== undefined || agent.inputTokens !== undefined) {
 		agent.inputTokens = input;
 	}
@@ -468,7 +505,8 @@ function carrySpendIntoNextRun(agent: RoundAgentRecord): void {
 	const ledger = spendLedger(agent);
 	ledger.base.input += ledger.seen.input;
 	ledger.base.output += ledger.seen.output;
-	ledger.seen = { input: 0, output: 0 };
+	ledger.base.cached += ledger.seen.cached;
+	ledger.seen = { input: 0, output: 0, cached: 0 };
 	ledger.runBase = { ...ledger.base };
 }
 
@@ -1598,6 +1636,7 @@ export class RoundHandle {
 		recordAgentSpend(agent, {
 			inputTokens: num("inputTokens"),
 			outputTokens: num("outputTokens"),
+			cachedTokens: num("cachedTokens"),
 		});
 		if ((agent.outputTokens ?? 0) > producedBefore) {
 			noteNodeTokens(
@@ -1806,10 +1845,7 @@ export class RoundHandle {
 				text: final.result.text,
 				iterations: final.iterations,
 				finishReason: final.result.finishReason,
-				usage: {
-					inputTokens: final.result.usage.inputTokens,
-					outputTokens: final.result.usage.outputTokens,
-				},
+				usage: memberUsage(final.result.usage),
 				...(final.maxIterations !== undefined
 					? { maxIterations: final.maxIterations }
 					: {}),
@@ -2161,10 +2197,7 @@ export function agentFacts(
 			: {}),
 		...(agent.inputTokens !== undefined || agent.outputTokens !== undefined
 			? {
-					tokens: {
-						input: agent.inputTokens ?? 0,
-						output: agent.outputTokens ?? 0,
-					},
+					tokens: agentTokenSplit(agent),
 				}
 			: {}),
 		...(agent.compactions
@@ -2228,8 +2261,13 @@ export function agentFactsLine(agent: RoundAgentRecord): string {
 		);
 	}
 	if (agent.inputTokens !== undefined || agent.outputTokens !== undefined) {
+		const split = agentTokenSplit(agent);
 		parts.push(
-			`${compactNumber(agent.inputTokens ?? 0)} in / ${compactNumber(agent.outputTokens ?? 0)} out tokens`,
+			`${compactNumber(split.input)} in${
+				split.cached !== undefined
+					? ` (${compactNumber(split.cached)} cached, ${compactNumber(split.fresh ?? 0)} fresh)`
+					: ""
+			} / ${compactNumber(split.output)} out tokens`,
 		);
 	}
 	if (agent.compactions) {

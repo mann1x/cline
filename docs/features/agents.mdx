@@ -539,6 +539,30 @@ The row shows two token figures, because they are different numbers. In and out 
 
 The spend covers everything done for the agent: its own requests, plus every call its compactions make (summary, critics, retrospective) and its thinking condensations. The runtime starts counting from zero on each `continue` (a resume, a final report) and on a requeue or restart, so the round record adds each new run to what came before and never lowers a total. The lead's own compaction calls go into the task totals on the lead's connection. They are recorded without a request row, so they are never read as the window. The counts are not sent to the model, and the CLI has no per-agent display.
 
+### Token figures: input, cached, fresh
+
+**What it does.** Every agent result states its input tokens with the cached part named, since 4.100.234:
+
+- `inputTokens` (`input` in the round totals) is every prompt the agent sent, summed over its turns.
+- `cachedInputTokens` (`cached`) is the part of that the server already had and did not read again.
+- `fresh` is input minus cached. This is the figure that measures work.
+
+**Why.** An agent re-sends its whole conversation every turn. One that sends a 30k prefix twenty times reports 600k input tokens, of which the server read perhaps 20k. Without the split the lead read the total as cost (lead report, swarm wlafh).
+
+**Where the figure comes from:**
+
+| Provider | Field |
+|---|---|
+| opencoti and other llama.cpp servers | `usage.prompt_tokens_details.cached_tokens` |
+| Ollama (the fork) | `prompt_eval_cached_count` |
+| Cloud providers | their own cache-read counts |
+
+**Limits:**
+
+- A provider that reports no cache figure leaves `cached` and `fresh` out. Absent means unknown, not zero.
+- In the round totals an agent with no cache figure counts as all fresh.
+- For a PolyKV worker the pool's shared prefix is part of the cached figure. The pool-shared count on its own (`n_pool_shared`) is not in the report.
+
 ### Inspecting an agent's live output
 
 An agent's Output line in the panel above the chat is a status: "Prefilling 39,050 / 56,042", "Writing editor call: 8,327 characters", or the last 400 characters of its text. The **Inspect** button (magnifier) beside "Output" replaces the agent's instructions, Activity and Output with what the model is generating, as it generates it. Back returns to them.

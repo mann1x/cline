@@ -85,6 +85,7 @@ import {
 	subagentCancelId,
 } from "./subagent-cancellation";
 import { reportSubagentFinished, restarted } from "./subagent-progress";
+import { memberUsage } from "./token-split";
 
 export const SpawnSwarmInputSchema = z.object({
 	systemPrompt: z
@@ -174,7 +175,11 @@ export interface SpawnSwarmOutput {
 	 * result to read a count from -- the number is what was reported, not an
 	 * estimate of what was spent.
 	 */
-	usage: { inputTokens: number; outputTokens: number };
+	usage: {
+		inputTokens: number;
+		outputTokens: number;
+		cachedInputTokens?: number;
+	};
 	/**
 	 * One report per requested worker, in the order they were asked for.
 	 *
@@ -629,10 +634,7 @@ function swarmMemberOutput(
 		text: result.text,
 		finishReason: result.finishReason,
 		iterations: result.iterations,
-		usage: {
-			inputTokens: result.usage?.inputTokens ?? 0,
-			outputTokens: result.usage?.outputTokens ?? 0,
-		},
+		usage: memberUsage(result.usage),
 		...(result.model
 			? { model: { provider: result.model.provider, id: result.model.id } }
 			: {}),
@@ -1026,6 +1028,7 @@ export function createSpawnSwarmTool(
 			const runRound = async (): Promise<SpawnSwarmOutput> => {
 				const reports: SwarmMemberReport[] = [];
 				let inputTokens = 0;
+				let cachedInputTokens: number | undefined;
 				let outputTokens = 0;
 				// The supervisor. Launch while the engine says yes and work is
 				// left; when it says no, wait for a worker to finish or for the
@@ -1134,6 +1137,10 @@ export function createSpawnSwarmTool(
 										handbacks.push({ name: worker.name, handed });
 									}
 									inputTokens += result.usage?.inputTokens ?? 0;
+									if (result.usage?.cacheReadTokens !== undefined) {
+										cachedInputTokens =
+											(cachedInputTokens ?? 0) + result.usage.cacheReadTokens;
+									}
 									outputTokens += result.usage?.outputTokens ?? 0;
 									results.push(
 										withControls(digestOf(worker.name, result), result),
@@ -1246,7 +1253,11 @@ export function createSpawnSwarmTool(
 					digest: renderWorkDigest(digest) + swarmHandbackNote(handbacks),
 					workers: started,
 					pooled: snapshot !== undefined,
-					usage: { inputTokens, outputTokens },
+					usage: {
+						inputTokens,
+						outputTokens,
+						...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+					},
 					agents: handle.record.agents.map((agent) => ({
 						id: agent.id,
 						name: agent.name,
