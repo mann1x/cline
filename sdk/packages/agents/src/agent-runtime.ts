@@ -108,6 +108,44 @@ function timingTrace(line: string): void {
 	).process?.stderr?.write?.(`[timing] ${new Date().toISOString()} ${line}\n`);
 }
 
+/** Most characters of one call's arguments written to the log. */
+export const TOOL_ARGUMENTS_LOG_CHARS = 32_000;
+
+/**
+ * One log line with a tool call's arguments as the model sent them, before
+ * they are parsed, repaired or validated. The session file keeps only what
+ * came out of that, and the log kept only the tool's name: a lead that said
+ * it had sent `count: 3` could not be checked against the wire (pandorum
+ * xs8kv, 2026-10-04). Long arguments keep their head and tail, and the line
+ * says how long they were.
+ */
+export function describeToolArguments(
+	iteration: number,
+	toolName: string,
+	toolCallId: string,
+	inputText: string,
+	parsedInput: unknown,
+): string {
+	let raw = inputText;
+	let source = "raw";
+	if (!raw.trim()) {
+		// A provider that hands the call over already parsed sends no text.
+		source = "parsed";
+		try {
+			raw = JSON.stringify(parsedInput) ?? "";
+		} catch {
+			raw = String(parsedInput);
+		}
+	}
+	const flat = raw.replace(/\r?\n/g, "\\n");
+	const head = Math.floor(TOOL_ARGUMENTS_LOG_CHARS * 0.75);
+	const shown =
+		flat.length <= TOOL_ARGUMENTS_LOG_CHARS
+			? flat
+			: `${flat.slice(0, head)} …[${flat.length - TOOL_ARGUMENTS_LOG_CHARS} characters not logged]… ${flat.slice(-(TOOL_ARGUMENTS_LOG_CHARS - head))}`;
+	return `[tool-args] iter=${iteration} ${toolName} id=${toolCallId} ${source} chars=${flat.length} ${shown}`;
+}
+
 const MAX_TOKENS_INCOMPLETE_TURN_MESSAGE =
 	"Model reached the maximum output token limit before completing the turn";
 
@@ -3203,6 +3241,15 @@ export class AgentRuntime {
 				continue;
 			}
 			const parsed = parseToolInput(assembly, finishReason);
+			this.config.logger?.debug?.(
+				describeToolArguments(
+					this.state.iteration,
+					assembly.toolName,
+					assembly.toolCallId,
+					assembly.inputText,
+					parsed.input,
+				),
+			);
 			if (parsed.reason) {
 				invalidToolCalls.push({
 					toolCallId: assembly.toolCallId,

@@ -162,6 +162,27 @@ describe("readAgentsField: names and the call's count", () => {
 		);
 	});
 
+	it("says when several entries carry no count", () => {
+		// pandorum xs8kv: planned 5 x count 3, sent no count, blamed the tool.
+		const read = readAgentsField({
+			agents: [
+				{ name: "a", task: "a" },
+				{ name: "b", task: "b" },
+			],
+		} as never);
+		expect(read.setupNotes?.join(" ")).toContain(
+			"2 entries, no `count` on any: one agent each, 2 in all",
+		);
+		const counted = readAgentsField({
+			agents: [
+				{ name: "a", task: "a", count: 3 },
+				{ name: "b", task: "b" },
+			],
+		} as never);
+		expect(counted.agents).toHaveLength(4);
+		expect(counted.setupNotes).toBeUndefined();
+	});
+
 	it("adds no notes to a call that needs none", () => {
 		const read = readAgentsField({
 			agents: [{ name: "a", task: "a", count: 2 }],

@@ -680,6 +680,15 @@ function checkMembers(input: SpawnAgentInput): SpawnAgentInput {
 		input.count !== undefined && input.merge !== true
 			? `\`count\` at the call level only applies with \`merge: true\` and a single \`task\`, so it was ignored: ${expanded.length} agent${expanded.length === 1 ? "" : "s"} run, one per entry. For several agents of one kind, give that entry its own \`count\` (a number): five kinds with \`count: 10\` each is 50 agents.`
 			: undefined,
+		// A lead planned "5 entries x count 3", wrote the entries without
+		// `count`, got 5 agents and reported that the harness had ignored it
+		// (pandorum xs8kv). Said here, the omission is its own to see.
+		members.length > 1 &&
+		members.every(
+			(member) => (member as { count?: unknown } | null)?.count === undefined,
+		)
+			? `${members.length} entries, no \`count\` on any: one agent each, ${expanded.length} in all. For several agents of one kind, put \`count\` on that entry.`
+			: undefined,
 	].filter((note): note is string => note !== undefined);
 	return {
 		...input,

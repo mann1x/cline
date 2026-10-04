@@ -593,6 +593,8 @@ Landed on 2026-09-26 in `fdee39e61`, `d8dcee6a3` and `e4893c1b1`. `check` is ava
 
 - Agents run uncapped. A configured agent whose file sets `maxIterations` stops at that cap, and so does a teammate whose spec sets one.
 - **Every 60 iterations the lead is told** which agents are still running, how many iterations each has used, how many of its tool calls failed, and what it is doing. `agents_status` shows the same failed-call count per agent. The note is batched over 30 s. Nothing is stopped: the lead checks `agents_status`, then lets the agent run, redirects it with `message_agents`, or stops it with `stop_agents`.
+- **A call with several entries and no `count`** says so in its result since 4.100.239: "5 entries, no `count` on any: one agent each, 5 in all". A lead that planned a `count` and left it out sees that it did.
+- **Tool arguments in the log.** Since 4.100.239 every tool call, the lead's and each agent's, writes one debug line `[tool-args] iter=N <tool> id=<call id> raw chars=N <arguments>`: the arguments as the model sent them, before parsing or repair. Arguments over 32,000 characters keep their head and tail, with the full length stated.
 - A run that reaches a cap ends as `max_iterations`, not `error` (`fdee39e61`).
 
 **At the cap the agent waits (`awaiting_lead`).** The run is suspended with its transcript, overlay and place in the round kept.
