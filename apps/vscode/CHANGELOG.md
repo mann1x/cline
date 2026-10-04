@@ -679,59 +679,78 @@ instead of arguing, so it can check the working model without agreeing with it.
   MiB). It acts only when the cache does not fit in VRAM. It is the engine's
   feature; Cerebriline needs no setting for it.
 
-  Measured on the opencoti engine, which is the engine xOllama runs:
-  Qwen3.8-27B OmniMerge v6 at IQ2_M (a hybrid: 16 attention and 48 linear
-  layers), a 131,072-token context, q4_0 KV, on an RTX PRO 6000 under CUDA
-  with VRAM capped at 11,500 MiB to stand in for a 12 GB card (opencoti build
-  `2610042139001`, 2026-10-04, drafter off). Generation in tok/s at each
-  prompt depth:
+  **What the rolling window buys on a 12 GB card.** A 27B model with a
+  131,072-token context wants about 12 GiB of video memory, which leaves no
+  room on a 12 GB card. There are two ways to make it fit in about 10 GiB:
 
-  | Prompt tokens | No cap, all in VRAM | 11.5 GB cap, rolling window | Same VRAM, 10 of 64 layers in RAM | Prefill tok/s (no cap / window / layers in RAM) |
-  |---|---|---|---|---|
-  | 8,091 | 89.1 | 88.7 | 5.0 | 3055 / 3070 / 1538 |
-  | 16,086 | 88.3 | 87.9 | 4.7 | 3100 / 3111 / 1682 |
-  | 30,486 | 85.4 | 82.8 | 4.5 | 2982 / 2839 / 1640 |
-  | 45,051 | 83.7 | 75.4 | 4.1 | 2841 / 2547 / 1601 |
-  | 59,196 | 81.9 | 69.7 | 3.8 | 2722 / 2366 / 1562 |
-  | 73,841 | 79.3 | 54.4 | 3.6 | 2609 / 2223 / 1511 |
-  | 88,115 | 78.0 | 42.1 | 3.4 | 2510 / 2121 / 1440 |
-  | 102,504 | 75.7 | 33.6 | 3.2 | 2415 / 2023 / 1425 |
-  | 116,821 | 74.0 | 28.3 | 3.1 | 2327 / 1943 / 1401 |
-  | 126,050 | 73.0 | 24.4 | 3.2 | 2275 / 1892 / 1375 |
+  - **Rolling window:** the whole model stays on the GPU. The oldest part of
+    the conversation's cache is kept in system RAM and streamed to the GPU as
+    it is needed.
+  - **Layers in RAM:** the usual way. Part of the model (here 10 of its 64
+    layers) runs on the CPU.
 
-  "No cap" is the ceiling: the model and its whole cache in VRAM, which a 12
-  GB card cannot hold. The two capped columns are the choices such a card has.
-  While the cache still fits under the cap (8k and 16k here) the window costs
-  nothing: generation and prefill match the uncapped engine. With one or two
-  windows in host RAM it gives up 10 to 15%, and from there generation falls
-  with depth, to 24.4 tok/s at 126k. Moving ten layers to RAM at the same VRAM
-  gives 3 to 5 tok/s at every depth, so the window is 7 to 18 times faster.
-  Prefill with the window in use is 83 to 95% of the uncapped prefill.
+  | Setup | Video memory used | Fits a 12 GB card |
+  |---|---|---|
+  | Everything in video memory (the reference) | 11.9 GiB (12,196 MiB) | No |
+  | Rolling window | 9.9 GiB (10,142 MiB) | Yes |
+  | 10 of 64 layers in RAM | 10.1 GiB (10,322 MiB) | Yes |
 
-  **With the model's own drafter on** (NextN, the engine's default), same
-  engine and setup. The drafter keeps its own cache in VRAM, so under the 11.5
-  GB cap the window is in use from the first tokens:
+  Speed while answering, in tokens per second, as the conversation grows:
 
-  | Prompt tokens | No cap, all in VRAM | 11.5 GB cap, rolling window | Same VRAM, 10 of 64 layers in RAM | Prefill tok/s (no cap / window / layers in RAM) |
-  |---|---|---|---|---|
-  | 8,091 | 122.6 | 117.0 | 4.6 | 2649 / 2257 / 1355 |
-  | 16,086 | 193.9 | 172.6 | 5.5 | 2701 / 2269 / 1431 |
-  | 30,486 | 144.2 | 125.6 | 23.3 * | 2585 / 2171 / 1376 |
-  | 45,051 | 153.5 | 120.3 | 4.2 | 2446 / 2065 / 1365 |
-  | 59,196 | 130.2 | 74.3 | 3.6 | 2324 / 1960 / 1303 |
-  | 73,841 | 155.5 | 66.0 | 3.9 | 2203 / 1863 / 1272 |
-  | 88,115 | 117.5 | 55.4 | 3.0 | 2122 / 1788 / 1252 |
-  | 102,504 | 107.2 | 45.4 | 3.4 | 2031 / 1703 / 1212 |
-  | 116,821 | 124.8 | 41.2 | 2.6 | 1939 / 1643 / 1168 |
-  | 126,050 | 103.9 | 42.5 | 3.3 | 1888 / 1603 / 1148 |
+  | Conversation size (tokens) | Everything in video memory | Rolling window | 10 of 64 layers in RAM |
+  |---|---|---|---|
+  | 8,091 | 89.1 | 88.7 | 5.0 |
+  | 16,086 | 88.3 | 87.9 | 4.7 |
+  | 30,486 | 85.4 | 82.8 | 4.5 |
+  | 45,051 | 83.7 | 75.4 | 4.1 |
+  | 59,196 | 81.9 | 69.7 | 3.8 |
+  | 73,841 | 79.3 | 54.4 | 3.6 |
+  | 88,115 | 78.0 | 42.1 | 3.4 |
+  | 102,504 | 75.7 | 33.6 | 3.2 |
+  | 116,821 | 74.0 | 28.3 | 3.1 |
+  | 126,050 | 73.0 | 24.4 | 3.2 |
+
+  - **Short conversations lose nothing.** Up to about 16,000 tokens the
+    rolling window is as fast as having everything in video memory.
+  - **Long conversations slow down gradually.** At 59,000 tokens it is 15%
+    slower than the reference, at 126,000 tokens about a third of its speed.
+  - **It is far faster than the usual way.** With layers in RAM the same model
+    answers at 3 to 5 tokens per second at every size. The rolling window is 7
+    to 18 times faster while using slightly less video memory.
+  - **Reading a prompt** runs at 1,892 to 3,111 tokens per second with the
+    rolling window, against 2,275 to 3,100 for the reference and 1,375 to
+    1,682 with layers in RAM.
+
+  **With the model's built-in drafter.** OmniMerge v6 carries a small helper
+  that guesses several tokens ahead (MTP), and the engine uses it by default.
+  It makes answers faster, and it needs video memory of its own, so on the 12
+  GB budget the rolling window is in use from the start of the conversation:
+
+  | Conversation size (tokens) | Everything in video memory | Rolling window | 10 of 64 layers in RAM |
+  |---|---|---|---|
+  | 8,091 | 122.6 | 117.0 | 4.6 |
+  | 16,086 | 193.9 | 172.6 | 5.5 |
+  | 30,486 | 144.2 | 125.6 | 23.3 * |
+  | 45,051 | 153.5 | 120.3 | 4.2 |
+  | 59,196 | 130.2 | 74.3 | 3.6 |
+  | 73,841 | 155.5 | 66.0 | 3.9 |
+  | 88,115 | 117.5 | 55.4 | 3.0 |
+  | 102,504 | 107.2 | 45.4 | 3.4 |
+  | 116,821 | 124.8 | 41.2 | 2.6 |
+  | 126,050 | 103.9 | 42.5 | 3.3 |
 
   \* an outlier reading.
 
-  Drafter figures move with how many drafted tokens are accepted, so they vary
-  from row to row more than the table above; each row is one run. Under the
-  cap the drafter still pays at every depth: 42 to 173 tok/s with it against
-  24 to 89 without. The capped engine is 5 to 13% behind the uncapped one up
-  to 30k tokens and further behind as the prompt grows.
+  - **The drafter pays on a 12 GB budget too.** With the rolling window the
+    model answers at 42 to 173 tokens per second with the drafter, against 24
+    to 89 without it.
+  - **These figures jump around more.** How much the drafter helps depends on
+    the text being written, and each row is a single run.
+
+  How it was measured: the opencoti engine (the engine xOllama runs), build
+  `2610042139001`, 2026-10-04, on an RTX PRO 6000 under CUDA limited to 11,500
+  MiB to act as a 12 GB card. Model: Qwen3.8-27B OmniMerge v6 at IQ2_M, cache
+  quantized to q4_0, 256 tokens generated per row.
 
 ### Conversation history and the home view
 
