@@ -677,9 +677,47 @@ instead of arguing, so it can check the working model without agreeing with it.
   cache in host RAM and stream it through VRAM while the model computes
   (`kv.rolling_window` in a model's configuration: `on`, `off` or a size in
   MiB). It acts only when the cache does not fit in VRAM. It is the engine's
-  feature; Cerebriline needs no setting for it. Measured on the engine with a
-  Radeon RX 9070 XT (16 GB, Vulkan, Windows 11, PCIe 5.0 x16, q4_0 KV, a
-  40,960-token context, about a third of it resident in VRAM):
+  feature; Cerebriline needs no setting for it. The figures below were
+  measured on the opencoti engine, which is the engine xOllama runs.
+
+  **A 27B model on a 12 GB budget.** Qwen3.8-27B OmniMerge v6 at IQ2_M (a
+  hybrid: 16 attention and 48 linear layers), a 131,072-token context, q4_0
+  KV, VRAM capped at 11,500 MiB to stand in for a 12 GB card, a 256 MiB
+  window. On a Radeon RX 9070 XT (Vulkan, Windows 11, PCIe 5.0 x16),
+  generation in tok/s at each prompt depth:
+
+  | Prompt tokens | No cap, all in VRAM | 11.5 GB cap, rolling window | 11.5 GB cap, 10 of 64 layers in RAM | Prefill tok/s (no cap / window / layers in RAM) |
+  |---|---|---|---|---|
+  | 30,506 | 35.1 | 26.8 | 6.7 | 620 / 602 / 548 |
+  | 44,947 | 33.9 | 24.2 | 6.4 | 585 / 558 / 510 |
+  | 59,039 | 32.9 | 21.7 | 20.7 * | 540 / 513 / 473 |
+  | 73,532 | 32.0 | 19.6 | 5.6 | 501 / 474 / 442 |
+  | 87,986 | 31.0 | 17.8 | 5.6 | 466 / 440 / 414 |
+  | 102,383 | 30.1 | 16.3 | 4.3 | 437 / 410 / 389 |
+  | 116,544 | 29.4 | 15.1 | 2.9 * | 409 / 385 / 367 |
+  | 130,765 | 28.6 | 14.0 | 4.2 | 385 / 361 / 348 |
+
+  \* outlier readings in that run.
+
+  "No cap" is the ceiling: the 16 GB card holding everything, which a 12 GB
+  card cannot do at these depths. The two capped columns are the choices a 12
+  GB card has. The window keeps every layer on the GPU and costs about 4.9 ms
+  per token for each extra window of context read from host RAM; moving layers
+  to RAM is 3 to 5 times slower at every depth, and prefill is within 6% of
+  the uncapped run. This ladder was measured on 2026-10-01, before a fix to
+  the hybrid model's window path, and was not run again, so its window column
+  is on the low side.
+
+  On the fixed path (2026-10-02, opencoti build `2610020826001`), the same
+  model and cap on an RTX PRO 6000 at a 70k-token prompt generated 77.7 tok/s
+  under CUDA and 59.0 tok/s under Vulkan, with every recall probe correct.
+  With the model's own NextN drafter (MTP) it reached 158.8 and 71.1 tok/s on
+  that prompt, which drafts well; read those as "works and is fast", not as a
+  general ratio.
+
+  **Smaller models on the same card.** RX 9070 XT (16 GB, Vulkan, Windows 11,
+  PCIe 5.0 x16), q4_0 KV, a 40,960-token context, about a third of it
+  resident in VRAM:
 
   | Model, prompt | Whole cache in VRAM | Rolling window | Same VRAM, layers in RAM |
   |---|---|---|---|
