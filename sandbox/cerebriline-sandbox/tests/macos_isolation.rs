@@ -133,3 +133,90 @@ fn m1_isolates_the_workspace_and_produces_the_change_set() {
 
     fs::remove_dir_all(&base).ok();
 }
+
+/// Write confinement: the command reads the system, writes its copy of the
+/// workspace and the temp folder, and is refused elsewhere, the home folder
+/// included. The base sits in the home folder because the temp folder stays
+/// writable under confinement.
+#[test]
+fn m1_confines_writes_to_the_workspace_and_temp() {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+    let base = home.join(format!(
+        ".cbl-confine-m1-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let ws = base.join("ws");
+    let ov = base.join("ov");
+    let outside = base.join("outside");
+    let log = base.join("ov.sandbox.log");
+    fs::create_dir_all(&ws).unwrap();
+    fs::create_dir_all(&ov).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    write(&outside, "readable.txt", "READ-THROUGH\n");
+
+    let script = "\
+        echo W > made.txt && echo ws-write-ok;\
+        echo O > \"$OUTSIDE/escaped.txt\" 2>/dev/null && echo OUTSIDE-WRITTEN || echo outside-denied;\
+        if echo H > \"$HOME/.cbl-confine-escape-$$\" 2>/dev/null; then echo HOME-WRITTEN; rm -f \"$HOME/.cbl-confine-escape-$$\"; else echo home-denied; fi;\
+        T=$(mktemp /tmp/cbl-confine-XXXXXX) && echo T > \"$T\" && echo tmp-write-ok && rm -f \"$T\";\
+        T2=$(mktemp) && echo tmpdir-write-ok && rm -f \"$T2\";\
+        cat \"$OUTSIDE/readable.txt\";\
+        /bin/sh -c 'echo G > \"$OUTSIDE/grandchild.txt\"' 2>/dev/null && echo GRANDCHILD-WRITTEN || echo grandchild-denied;\
+        exit 7";
+    let run = |confine: bool| {
+        let mut cmd = Command::new(BIN);
+        cmd.arg("unused-hook")
+            .arg(&log)
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .env("CEREBRILINE_WS_ROOT", &ws)
+            .env("CEREBRILINE_OVERLAY_ROOT", &ov)
+            .env("OUTSIDE", &outside);
+        if confine {
+            cmd.env("CEREBRILINE_SANDBOX_CONFINE", "1");
+        } else {
+            cmd.env_remove("CEREBRILINE_SANDBOX_CONFINE");
+        }
+        cmd.output().expect("failed to run cerebriline-sandbox")
+    };
+
+    let out = run(true);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if out.status.code() == Some(71) {
+        eprintln!("skipping: the launcher could not set the sandbox up\n{stderr}");
+        fs::remove_dir_all(&base).ok();
+        return;
+    }
+    assert_eq!(
+        out.status.code(),
+        Some(7),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(stdout.contains("ws-write-ok"), "{stdout}{stderr}");
+    assert!(stdout.contains("tmp-write-ok"), "{stdout}{stderr}");
+    assert!(stdout.contains("tmpdir-write-ok"), "{stdout}{stderr}");
+    assert!(stdout.contains("READ-THROUGH"), "{stdout}{stderr}");
+    assert!(stdout.contains("outside-denied"), "{stdout}");
+    assert!(stdout.contains("home-denied"), "{stdout}");
+    assert!(stdout.contains("grandchild-denied"), "{stdout}");
+    assert!(!outside.join("escaped.txt").exists());
+    assert!(!outside.join("grandchild.txt").exists());
+    assert!(
+        !ws.join("made.txt").exists(),
+        "the workspace itself was written"
+    );
+    assert_eq!(read(&ov, "made.txt").as_deref(), Some("W\n"));
+
+    // The control: without the flag the same command writes outside.
+    let out = run(false);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(stdout.contains("OUTSIDE-WRITTEN"), "control run: {stdout}");
+
+    fs::remove_dir_all(&base).ok();
+}

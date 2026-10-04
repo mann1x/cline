@@ -129,11 +129,22 @@ fn run_in_clone(cfg: &Config, ws_root: &Path, clone_dir: &Path) -> i32 {
     // A workspace-rooted program path is rewritten too, so `/ws/bin/tool` runs the
     // clone's copy; a bare name (`node`, `sh`) is left for PATH resolution.
     let program = rewrite_one(program, ws_root, clone_dir);
-    match Command::new(&program)
-        .args(&args)
-        .current_dir(clone_dir)
-        .status()
-    {
+    let mut command = if crate::confine_requested() {
+        // Escape-critical: a profile that cannot be built runs nothing.
+        let profile = match confine_profile(clone_dir) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("cerebriline-sandbox: cannot build the confinement profile: {e}");
+                return 71;
+            }
+        };
+        let mut c = Command::new(SANDBOX_EXEC);
+        c.arg("-p").arg(profile).arg(&program);
+        c
+    } else {
+        Command::new(&program)
+    };
+    match command.args(&args).current_dir(clone_dir).status() {
         Ok(status) => status.code().unwrap_or_else(|| {
             // Killed by a signal: mirror the shell convention (128 + signal) so the
             // caller sees a non-zero code rather than a false success.
@@ -145,6 +156,56 @@ fn run_in_clone(cfg: &Config, ws_root: &Path, clone_dir: &Path) -> i32 {
             127
         }
     }
+}
+
+/// The system's own sandbox launcher. Apple marks it deprecated and ships it on
+/// every release; it is what applies a Seatbelt profile to a process tree
+/// without an entitlement or a signed helper.
+const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+
+/// Where a confined command may write besides its clone of the workspace: the
+/// temp folders, by their real paths (`/tmp` is a link into `/private`), and
+/// `/dev` for the null device and terminals.
+const WRITABLE_ROOTS: [&str; 4] = [
+    "/private/tmp",
+    "/private/var/tmp",
+    "/private/var/folders",
+    "/dev",
+];
+
+/// The Seatbelt profile for write confinement: everything is allowed except
+/// writing, and writing is allowed again in the clone and the temp folders.
+/// The last rule that matches wins. A child inherits the profile and cannot
+/// drop it.
+fn confine_profile(clone_dir: &Path) -> io::Result<String> {
+    // The profile matches resolved paths: a clone under a linked folder would
+    // not match its own name.
+    let clone = fs::canonicalize(clone_dir)?;
+    let mut profile =
+        String::from("(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write*");
+    profile.push_str(&format!(
+        "\n  (subpath {})",
+        sbpl_string(&clone.to_string_lossy())
+    ));
+    for root in WRITABLE_ROOTS {
+        profile.push_str(&format!("\n  (subpath {})", sbpl_string(root)));
+    }
+    profile.push_str(")\n");
+    Ok(profile)
+}
+
+/// A string literal in the profile language: quoted, with `"` and `\` escaped.
+fn sbpl_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        if ch == '"' || ch == '\\' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out.push('"');
+    out
 }
 
 /// Rewrite any argument that begins with the workspace root to the clone root, so

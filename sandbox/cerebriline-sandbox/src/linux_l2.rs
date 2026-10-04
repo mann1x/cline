@@ -75,6 +75,32 @@ const SYS_NEWFSTATAT: u64 = 262;
 const SYS_RENAMEAT2: u64 = 316;
 const SYS_STATX: u64 = 332;
 const SYS_FACCESSAT2: u64 = 439;
+// Syscalls that change the filesystem by path and are only refused, never
+// rewritten: under confinement a path outside the workspace and the temp
+// folders gets EACCES.
+const SYS_TRUNCATE: u64 = 76;
+const SYS_CREAT: u64 = 85;
+const SYS_LINK: u64 = 86;
+const SYS_SYMLINK: u64 = 88;
+const SYS_CHMOD: u64 = 90;
+const SYS_CHOWN: u64 = 92;
+const SYS_LCHOWN: u64 = 94;
+const SYS_MKNOD: u64 = 133;
+const SYS_MOUNT: u64 = 165;
+const SYS_UMOUNT2: u64 = 166;
+const SYS_SETXATTR: u64 = 188;
+const SYS_LSETXATTR: u64 = 189;
+const SYS_REMOVEXATTR: u64 = 197;
+const SYS_LREMOVEXATTR: u64 = 198;
+const SYS_MKNODAT: u64 = 259;
+const SYS_FCHOWNAT: u64 = 260;
+const SYS_LINKAT: u64 = 265;
+const SYS_SYMLINKAT: u64 = 266;
+const SYS_FCHMODAT: u64 = 268;
+const SYS_UTIMENSAT: u64 = 280;
+const SYS_OPENAT2: u64 = 437;
+const SYS_FCHMODAT2: u64 = 452;
+const EACCES: i64 = 13;
 
 const AT_FDCWD: i64 = -100;
 
@@ -138,6 +164,8 @@ struct TraceeState {
 pub struct L2 {
     ws_root: PathBuf,
     overlay_root: PathBuf,
+    /// Refuse writes outside the workspace and the temp folders.
+    confine: bool,
     states: HashMap<c_int, TraceeState>,
 }
 
@@ -180,6 +208,7 @@ pub fn run(cfg: &Config) -> i32 {
     let mut l2 = L2 {
         ws_root,
         overlay_root,
+        confine: crate::confine_requested(),
         states: HashMap::new(),
     };
     l2.supervise(pid)
@@ -289,7 +318,81 @@ impl L2 {
         self.handle_entry(pid, &mut regs);
     }
 
+    /// Under confinement: whether this syscall would change something outside
+    /// the workspace and the temp folders. It is then refused with EACCES.
+    ///
+    /// The check is on the path as written, made absolute and normalised: a
+    /// symbolic link in a writable folder that points outside is followed by
+    /// the kernel and not seen here, and a second thread can swap the path
+    /// between this check and the kernel reading it. L1 has neither gap; this
+    /// backend is the fallback for hosts where L1 cannot run.
+    fn refused(&self, pid: c_int, regs: &UserRegs) -> bool {
+        // Mounting is never part of a coding command, and for a user who is
+        // root it would be the way around every path check below.
+        if matches!(regs.orig_rax, SYS_MOUNT | SYS_UMOUNT2) {
+            return true;
+        }
+        let at = |reg: u64| reg as i64;
+        // (path pointer, dirfd) of every path the syscall may change.
+        let targets: Vec<(u64, i64)> = match regs.orig_rax {
+            SYS_OPEN if matches!(OpenIntent::from_flags(regs.rsi), OpenIntent::Write) => {
+                vec![(regs.rdi, AT_FDCWD)]
+            }
+            SYS_OPENAT if matches!(OpenIntent::from_flags(regs.rdx), OpenIntent::Write) => {
+                vec![(regs.rsi, at(regs.rdi))]
+            }
+            // openat2 carries its flags in a struct; its first field is them.
+            SYS_OPENAT2 => match read_u64(pid, regs.rdx) {
+                Some(flags) if matches!(OpenIntent::from_flags(flags), OpenIntent::Write) => {
+                    vec![(regs.rsi, at(regs.rdi))]
+                }
+                _ => vec![],
+            },
+            SYS_CREAT | SYS_TRUNCATE | SYS_MKDIR | SYS_RMDIR | SYS_UNLINK | SYS_CHMOD
+            | SYS_CHOWN | SYS_LCHOWN | SYS_MKNOD | SYS_SETXATTR | SYS_LSETXATTR
+            | SYS_REMOVEXATTR | SYS_LREMOVEXATTR => vec![(regs.rdi, AT_FDCWD)],
+            SYS_MKDIRAT | SYS_UNLINKAT | SYS_MKNODAT | SYS_FCHOWNAT | SYS_FCHMODAT
+            | SYS_FCHMODAT2 | SYS_UTIMENSAT => vec![(regs.rsi, at(regs.rdi))],
+            SYS_RENAME => vec![(regs.rdi, AT_FDCWD), (regs.rsi, AT_FDCWD)],
+            SYS_RENAMEAT | SYS_RENAMEAT2 => {
+                vec![(regs.rsi, at(regs.rdi)), (regs.r10, at(regs.rdx))]
+            }
+            // The new name is what is created; the old one is only read.
+            SYS_LINK | SYS_SYMLINK => vec![(regs.rsi, AT_FDCWD)],
+            SYS_LINKAT => vec![(regs.r10, at(regs.rdx))],
+            SYS_SYMLINKAT => vec![(regs.rdx, at(regs.rsi))],
+            _ => vec![],
+        };
+        targets.into_iter().any(|(ptr, dirfd)| {
+            // A null path (utimensat on the descriptor itself) names no file.
+            if ptr == 0 {
+                return false;
+            }
+            let Some(raw) = read_string(pid, ptr) else {
+                return false;
+            };
+            match self.absolutise(pid, dirfd, &raw) {
+                Some(abs) => !self.writable(&abs),
+                None => false,
+            }
+        })
+    }
+
+    /// Where a confined command may write: its workspace (redirected into the
+    /// overlay), the overlay itself, the temp folders, and the kernel trees.
+    fn writable(&self, abs: &Path) -> bool {
+        resolve::locate(&self.ws_root, &self.overlay_root, abs).inside
+            || abs.starts_with(&self.overlay_root)
+            || ["/tmp", "/var/tmp", "/dev", "/proc", "/sys"]
+                .iter()
+                .any(|root| abs.starts_with(root))
+    }
+
     fn handle_entry(&mut self, pid: c_int, regs: &mut UserRegs) {
+        if self.confine && self.refused(pid, regs) {
+            self.neutralise(pid, regs, -EACCES);
+            return;
+        }
         let nr = regs.orig_rax;
         match nr {
             // Single absolute-or-cwd path in rdi.
@@ -615,6 +718,17 @@ fn event_new_pid(pid: c_int) -> Option<c_int> {
 }
 
 /// Read a NUL-terminated string from the tracee's memory via /proc/pid/mem.
+/// One 64-bit word of the tracee's memory.
+fn read_u64(pid: c_int, addr: u64) -> Option<u64> {
+    if addr == 0 {
+        return None;
+    }
+    let mem = fs::File::open(format!("/proc/{pid}/mem")).ok()?;
+    let mut buf = [0u8; 8];
+    mem.read_exact_at(&mut buf, addr).ok()?;
+    Some(u64::from_ne_bytes(buf))
+}
+
 fn read_string(pid: c_int, addr: u64) -> Option<Vec<u8>> {
     if addr == 0 {
         return None;

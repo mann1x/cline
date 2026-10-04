@@ -24,7 +24,7 @@ use std::os::raw::{c_char, c_int, c_ulong, c_void};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use crate::{overlay, Config};
+use crate::{confine, overlay, Config};
 
 // The libc entry points the backend needs, declared directly so the crate has
 // no external dependency and builds with a bare toolchain, offline. Rust links
@@ -229,6 +229,14 @@ fn child_setup_and_exec(cfg: &Config, ws_root: &Path, overlay_root: &Path, scrat
     // Run the command in a grandchild so this process survives it to reconcile.
     let gpid = unsafe { fork() };
     if gpid == 0 {
+        // The command alone is confined: this process keeps its writable view
+        // of the overlay root for the reconcile below.
+        if crate::confine_requested() {
+            if let Err(e) = confine::apply(&[ws_root]) {
+                eprintln!("cerebriline-sandbox: confining the command failed: {e}");
+                std::process::exit(71);
+            }
+        }
         if let Err(e) = std::env::set_current_dir(ws_root) {
             eprintln!("cerebriline-sandbox: chdir to workspace failed: {e}");
             std::process::exit(127);

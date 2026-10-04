@@ -33,6 +33,11 @@ mod overlay;
 #[cfg(target_os = "linux")]
 mod linux;
 
+// Write confinement (read-only system, writable workspace and temp), shared by
+// the Linux backends.
+#[cfg(target_os = "linux")]
+mod confine;
+
 // The L2 (ptrace) backend and its resolver are x86_64-only for now.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod linux_l2;
@@ -50,6 +55,17 @@ mod macos;
 mod windows;
 
 use std::path::PathBuf;
+
+/// Whether the caller asked for write confinement
+/// (`CEREBRILINE_SANDBOX_CONFINE=1`): the command tree may read the system and
+/// may write only the workspace and the temp folders. Each backend enforces it
+/// with what its platform gives an unprivileged process; one that cannot
+/// refuses the command rather than run it unconfined.
+pub fn confine_requested() -> bool {
+    std::env::var("CEREBRILINE_SANDBOX_CONFINE")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
 
 /// The resolved launch request.
 pub struct Config {

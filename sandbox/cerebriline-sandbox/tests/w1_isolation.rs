@@ -211,3 +211,160 @@ fn w1_finds_a_workspace_program_by_its_bare_name() {
 
     fs::remove_dir_all(&base).ok();
 }
+
+/// Write confinement: at Low integrity the command reads the system, writes
+/// its copy of the workspace and the temp folder it was given, and Windows
+/// refuses the rest: the profile, any other folder, `HKCU`. In swarm wlafh an
+/// agent appended to the user's `PATH` and another copied a program into the
+/// profile; both are writes this refuses.
+#[test]
+fn w1_confines_writes_to_the_workspace_and_temp() {
+    let hook = match std::env::var("CEREBRILINE_TEST_HOOK_DLL") {
+        Ok(p) if !p.is_empty() && Path::new(&p).exists() => p,
+        _ => {
+            eprintln!("skipping: CEREBRILINE_TEST_HOOK_DLL not set or the DLL is missing");
+            return;
+        }
+    };
+
+    let base = unique_dir("confine");
+    let ws = base.join("ws");
+    let ov = base.join("ov");
+    let tmp = base.join("tmp");
+    let outside = base.join("outside");
+    let log = base.join("run.log");
+    for dir in [&ws, &ov, &tmp, &outside] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    write(&outside, "readable.txt", "READ-THROUGH\r\n");
+    let profile = PathBuf::from(std::env::var("USERPROFILE").unwrap());
+    let escape = profile.join(format!("cbl-confine-escape-{}.txt", std::process::id()));
+    let key = format!(
+        "HKCU\\Software\\CerebrilineConfineTest{}",
+        std::process::id()
+    );
+
+    // No quotes in the script: the launcher joins argv without escaping them,
+    // and none of these paths holds a space.
+    let script = format!(
+        "echo W> made.txt && echo ws-write-ok \
+         & (echo O> %OUTSIDE%\\escaped.txt) 2>nul && echo OUTSIDE-WRITTEN || echo outside-denied \
+         & (echo H> {escape}) 2>nul && echo HOME-WRITTEN || echo home-denied \
+         & (echo T> %TMP%\\t.txt) 2>nul && echo tmp-write-ok || echo TMP-DENIED \
+         & type %OUTSIDE%\\readable.txt \
+         & reg add {key} /v t /d 1 /f >nul 2>nul && echo REG-WRITTEN || echo reg-denied \
+         & whoami /groups | findstr /c:Mandatory",
+        escape = escape.display(),
+    );
+    let run = |confine: bool, args: &[&str]| {
+        let mut cmd = Command::new(BIN);
+        cmd.arg(&hook)
+            .arg(&log)
+            .args(args)
+            .current_dir(&ws)
+            .env("CEREBRILINE_WS_ROOT", &ws)
+            .env("CEREBRILINE_OVERLAY_ROOT", &ov)
+            .env("CEREBRILINE_SANDBOX_LOG", &log)
+            .env("OUTSIDE", &outside)
+            .env("TMP", &tmp)
+            .env("TEMP", &tmp);
+        if confine {
+            cmd.env("CEREBRILINE_SANDBOX_CONFINE", "1")
+                .env("CEREBRILINE_SANDBOX_TMP", &tmp);
+        } else {
+            cmd.env_remove("CEREBRILINE_SANDBOX_CONFINE");
+        }
+        cmd.output().expect("failed to run cerebriline-sandbox")
+    };
+    let cleanup = || {
+        fs::remove_file(&escape).ok();
+        Command::new("reg")
+            .args(["delete", &key, "/f"])
+            .output()
+            .ok();
+    };
+
+    let out = run(true, &["cmd", "/c", &script]);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if out.status.code() == Some(3) {
+        eprintln!("skipping: Detours could not start the injected child on this host\n{stderr}");
+        cleanup();
+        fs::remove_dir_all(&base).ok();
+        return;
+    }
+    let escaped_home = escape.exists();
+    let escaped_reg = Command::new("reg")
+        .args(["query", &key])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    cleanup();
+
+    assert!(
+        stdout.contains("Low Mandatory Level"),
+        "the command must run at Low integrity; stdout: {stdout} stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("ws-write-ok"),
+        "the workspace must be writable: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("tmp-write-ok"),
+        "the temp folder must be writable: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("READ-THROUGH"),
+        "the system must be readable: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("outside-denied"),
+        "a write outside must be refused: {stdout}"
+    );
+    assert!(
+        stdout.contains("home-denied"),
+        "a write to the profile must be refused: {stdout}"
+    );
+    assert!(
+        stdout.contains("reg-denied"),
+        "a write to HKCU must be refused: {stdout}"
+    );
+    assert!(
+        !outside.join("escaped.txt").exists(),
+        "a write escaped the sandbox"
+    );
+    assert!(!escaped_home, "a write reached the profile");
+    assert!(!escaped_reg, "a write reached HKCU");
+    assert!(
+        !ws.join("made.txt").exists(),
+        "the workspace itself was written"
+    );
+    assert!(
+        ov.join("made.txt").exists(),
+        "the workspace write must land in the overlay"
+    );
+
+    // The agents' shell on Windows is PowerShell: it has to start at Low.
+    let out = run(
+        true,
+        &[
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "Write-Output PS-RAN",
+        ],
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("PS-RAN"),
+        "PowerShell must run confined; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The control: without the flag the same command writes outside.
+    let out = run(false, &["cmd", "/c", &script]);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    cleanup();
+    assert!(stdout.contains("OUTSIDE-WRITTEN"), "control run: {stdout}");
+
+    fs::remove_dir_all(&base).ok();
+}
