@@ -39,11 +39,17 @@ Linux x64 and arm64 (with a ptrace fallback), APFS clonefile on macOS Apple
 Silicon and Intel, and Detours injection on Windows x64. All six launchers are
 built and verified on native CI runners and ship in the extension.
 
+Their commands are write-confined by default: an agent can read the machine and
+write only its workspace copy and the temp folder, with no setup and no
+administrator rights.
+
 **Watch and steer them.** A strip above the chat shows each running agent: its
 node, model, current tool, speed and recent activity, with Stop, Restart and Stop
 all. Send a message mid-round and the lead answers at once. An agent never fails
 on a server restart or refusal. It waits and runs its turn again, and every
-agent's report reaches the lead.
+agent's report reaches the lead. Token figures say how much of an agent's input
+was served from cache and from a shared pool, failed tool calls are counted, and
+**Inspect** shows what an agent's model is generating as it generates it.
 
 **Sampling per agent.** Spawn tools take an optional `temperature` and `seed`
 (offset per agent in a fan-out); leave them out and the model's sampler applies.
@@ -70,8 +76,20 @@ gates. A 9B model and a frontier model do not need the same instructions.
 **Questions that recommend.** When the model asks you to choose, it marks the
 option it would pick and lists it first. Optionally, Jev scores the options.
 
-**Image generation.** Generate images in the conversation, and see them there even
-when the working model is text-only.
+**Media tools: images, audio, video.** Generate an image or edit one in the
+workspace, turn speech into text or subtitles, turn text into speech, and
+generate a video clip. A session on an opencoti or xOllama server that serves
+the media uses that server; otherwise each kind has an endpoint of its own.
+Generated images show in the conversation even when the working model is
+text-only.
+
+**Document Reader.** PDFs, Office files (current and 97-2003), OpenDocument and
+ebooks are read into Markdown with their pictures, and scanned pages are read
+with OCR on your machine or by a vision model. Off by default.
+
+**Jev on your own server.** Jev, the outside scoring model, can run from any
+endpoint that speaks TypeSafe's Jev API, including Ollama 0.35's
+`/v1/systemone` with local decision models, and xOllama.
 
 **Conversation history.** Tag conversations and filter by `#tag`, see what model
 and settings a session ran with, and check its size on disk.
@@ -136,7 +154,7 @@ check will simply find nothing to report.
 ## Works with any model
 
 Cerebriline talks to local servers (Ollama, LM Studio, llama.cpp,
-opencoti-llamafile) and to hosted providers (Anthropic, OpenAI, Google,
+opencoti-llamafile, xOllama) and to hosted providers (Anthropic, OpenAI, Google,
 OpenRouter, and more). The point of the fork is that the small local ones work
 too, so three local engines get more than a generic OpenAI-compatible client
 here.
@@ -205,6 +223,39 @@ so fifty agents fit in one window. **Book a context window** guarantees the
 context size, and a reopened conversation gets the same window back or a **Can't
 resume** card instead of a silent truncation. Admission refusals are waited out,
 and a server restart is detected and recovered from rather than failing the turn.
+
+## xOllama: councils, media engines and the KV rolling window
+
+**https://github.com/mann1x/xollama**
+
+xOllama is an Ollama fork that runs opencoti as its engine, on Ollama's native
+API and its own port (22434). It has a provider of its own here.
+
+- **Council models** deliberate with a planner, researchers, critics and a
+  synthesizer, run your tools, and compact their own conversation.
+- **PolyKV** shares the system prompt and tools across conversations on models
+  that keep pool seats for the client.
+- **Media engines** on a model serve the image, audio and video tools with no
+  second endpoint, and its `/v1/systemone` serves Jev.
+- **The KV rolling window.** When the KV cache does not fit in VRAM, the engine
+  keeps part of it in host RAM and streams it through VRAM while the model
+  computes, instead of moving model layers to RAM (`kv.rolling_window` in the
+  model's configuration).
+
+Measured on the engine with a Radeon RX 9070 XT (16 GB, Vulkan, Windows 11,
+PCIe 5.0 x16), q4_0 KV, a 40,960-token context with about a third resident:
+
+| Model, prompt | Whole cache in VRAM | Rolling window | Same VRAM, layers in RAM |
+|---|---|---|---|
+| Qwen3-8B Q8_0, 18k tokens | 58.9 tok/s | 55.8 tok/s | 19.7 tok/s |
+| Qwen3-8B Q8_0, 37k tokens | 50.4 tok/s | 37.3 tok/s | 13.5 tok/s |
+| Qwen2.5-14B Q4_K_M, 15k tokens | 53.3 tok/s | 51.3 tok/s | 14.9 tok/s |
+| Qwen2.5-14B Q4_K_M, 29k tokens | 46.8 tok/s | 33.3 tok/s | 9.8 tok/s |
+
+The window used about 0.8 to 1.2 GiB less VRAM than the resident arm, and prompt
+processing stayed within 10% of it. One machine, one card, opencoti build
+`2610011612001`. On Radeon under Windows, use AMD Software 26.9.2 or later for
+Vulkan.
 
 ## Not affiliated with Cline
 

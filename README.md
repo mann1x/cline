@@ -254,6 +254,7 @@ Cerebriline is not locked to a single AI provider. Use whichever model fits your
 | Ollama / LM Studio | Run local models on your machine |
 | llama.cpp | `llama-server`, with the server's own timings read back |
 | opencoti-llamafile | Single-file engine with PolyKV agentic KV pools |
+| xOllama | Ollama-API server on the opencoti engine: councils, PolyKV, media engines |
 | Any OpenAI-compatible API | Self-hosted or third-party endpoints |
 
 ### Ollama: install the thinking-budget build
@@ -296,6 +297,29 @@ What the provider does with the engine:
 - **Admission and liveness.** An admission refusal is waited out using the server's `Retry-After` instead of failing. Streams use the server's heartbeat, a server silent for 35 s is treated as down, and the server's boot id is checked on every response. After a restart, pools are rebuilt and turns are retried.
 - **A status strip** under the PolyKV section shows the server's KV ledger, per-session windows and the admission floors in force.
 
+### xOllama: councils, media engines and the KV rolling window
+
+**https://github.com/mann1x/xollama**
+
+xOllama is an Ollama fork that runs opencoti as its engine. It speaks Ollama's native API on its own port (22434), so it sits beside a stock Ollama. It has a provider of its own here, with its own settings.
+
+- **Council models.** A model the server reports as a council deliberates with a planner, researchers, critics and a synthesizer. Each member's deliberation appears under its own heading in the thinking block. The council runs your tools, with read-only tools marked for researchers and critics so only the synthesizer writes, and it compacts its own conversation.
+- **PolyKV on plain models.** On a model that keeps pool seats for the client, conversations share the system prompt and tools through PolyKV, as on opencoti.
+- **Media engines.** A model that carries image, audio or video engines serves the [media tools](#media-tools-images-audio-video) with no second endpoint.
+- **Jev.** xOllama serves Ollama's `/v1/systemone`, so the Jev tab can point at it and score with a local decision model.
+- **The KV rolling window.** When the KV cache does not fit in VRAM, the engine keeps part of it in host RAM and streams it through VRAM while the model computes, instead of moving model layers to RAM. Set `kv.rolling_window` in the model's configuration (`on`, `off`, or a size in MiB). It is the engine's feature, and Cerebriline needs no setting for it.
+
+Measured on the engine with a Radeon RX 9070 XT (16 GB, Vulkan, Windows 11, PCIe 5.0 x16), q4_0 KV, a 40,960-token context with about a third of it resident in VRAM:
+
+| Model, prompt | Whole cache in VRAM | Rolling window | Same VRAM, layers in RAM |
+|---|---|---|---|
+| Qwen3-8B Q8_0, 18k tokens | 58.9 tok/s | 55.8 tok/s | 19.7 tok/s |
+| Qwen3-8B Q8_0, 37k tokens | 50.4 tok/s | 37.3 tok/s | 13.5 tok/s |
+| Qwen2.5-14B Q4_K_M, 15k tokens | 53.3 tok/s | 51.3 tok/s | 14.9 tok/s |
+| Qwen2.5-14B Q4_K_M, 29k tokens | 46.8 tok/s | 33.3 tok/s | 9.8 tok/s |
+
+The window arm used about 0.8 GiB (8B) and 1.2 GiB (14B) less VRAM than the resident arm. Prompt processing stayed within 10% of resident, and the link carried the window at about 55 GB/s. At the same VRAM, moving layers to RAM was 2.6 to 3.7 times slower per token than the window. One machine, one card, opencoti build `2610011612001`. On Radeon under Windows, use AMD Software 26.9.2 or later for Vulkan.
+
 ## Extend With Plugins or MCP Servers
 
 Extend Cerebriline's capabilities with plugins. Using the SDK, register tools and lifecycle hooks programmatically through the plugin system for logging, auditing, policy enforcement, or adding domain-specific capabilities. Simple plugin example below.
@@ -335,6 +359,9 @@ Turn on **Subagents** in Features and the model can hand work to sub-agents with
 - **Watch and steer.** A strip above the chat shows every running agent: its node, model, current tool, speed and recent activity, with **Stop**, **Restart** and **Stop all**. A message you send during a round is answered at once, and the lead can pass it to its agents or stop them.
 - **Resilient rounds.** An agent never fails on infrastructure. After a server restart, a dropped connection or an admission refusal, it waits for the server and runs its turn again. The lead hears about an agent that has been stuck for a while. An agent that keeps running out its thinking budget is nudged once and then stopped, and it still reports.
 - **Sampling per spawn.** `spawn_agent` (swarms included), teammates and configured agents take an optional `temperature` and `seed`. Leave them out and the model's own sampler applies. A seed that covers several agents is offset per agent (seed, seed+1, …). `"random"` draws a seed or a temperature per agent. A random temperature stays within 2% of the model's own (0.98 to 1.02 at 1.0); `temperature_range` widens that when you ask for it, up to 10%.
+- **Token figures you can read.** An agent's input is every prompt it sent, summed over its turns, and most of it is served from the server's cache. Reports and rows read "N in (X cached, Y of it from the pool, Z fresh) / M out", and count how many of an agent's tool calls failed.
+- **Inspect.** A button on an agent's row shows what its model is generating as it generates it: thinking, text and tool-call arguments.
+- **Graceful stops.** Stopping an agent lets it finish its turn and report its partial work, unless you ask for an immediate stop.
 - **Every report reaches the lead.** Each agent writes a short summary, and the lead reads any full report with `read_agent_report`. A question from an agent goes to the lead, not to you.
 
 Every agent feature (sub-agents, configured agents, teammates, swarms, `create_agent`, `/delegate`, nodes, the sandbox, `max_iterations` and `check`, escalation), with how it works and example prompts: [`docs/features/agents.mdx`](docs/features/agents.mdx).
@@ -351,6 +378,8 @@ Every delegated agent (`spawn_agent` agents, swarm workers, teammates and config
 | Linux | x64 | **L2:** ptrace path rewriting, used automatically where user namespaces are blocked (AppArmor) or overlayfs can't mount |
 | macOS | Apple Silicon, Intel | **M1:** an APFS `clonefile` copy of the workspace |
 | Windows | x64 | **W1:** Microsoft Detours injection that redirects file access into the overlay |
+
+**Write confinement** is on by default for those commands: an agent may read the whole machine and write only its copy of the workspace and the temp folder. It needs no setup and no administrator rights: a read-only mount namespace on Linux, a `sandbox-exec` profile on macOS, and a Low integrity token on Windows. One switch on the model tab covers every agent provider. The lead's own commands can be confined the same way; that is off by default, because package managers and git write outside the workspace.
 
 One Rust binary chooses the backend at runtime. All six launchers are built and verified on native CI runners for each OS and architecture, and they ship inside the `.vsix`. Where no launcher covers your platform the agent gets no shell, never an unsandboxed one. Design and build notes: [`sandbox/cerebriline-sandbox/README.md`](sandbox/cerebriline-sandbox/README.md).
 
@@ -377,6 +406,23 @@ When the working model is stuck, a stronger **expert** model (the Escalation tab
 
 **Jev** also works outside escalation. With *Use Jev for confidence* ticked, the model can call a `jev` tool when it is unsure of a reading, a fact or a choice, and Jev scores the options of a question before it reaches you. Nothing is sent until the box is ticked and a key is stored.
 
+**Jev on your own server.** The Jev tab takes any endpoint that speaks TypeSafe's Jev API. Ollama 0.35 serves it at `/v1/systemone` with local decision models (`nimble`, `tev1`), and xOllama carries the same code. Point the tab at the server and pick a model from the list; no key is needed, and TypeSafe's key is never sent to another server. The state sent is fitted to Ollama's body limit and to the model's loaded context window.
+
+## Media Tools: Images, Audio, Video
+
+Five tools reach a media server that speaks OpenAI's media routes: `generate_image`, `edit_image`, `transcribe_audio`, `synthesize_speech` and `generate_video`.
+
+- **Images.** Generate an image, or edit one already in the workspace by instruction, with reference images and an optional mask.
+- **Audio.** Speech-to-text returns text, subtitles (`srt`, `vtt`) or timed segments, and can translate to English. Text-to-speech writes an audio file, with a default voice and format.
+- **Video.** A description, or an image in the workspace, becomes a clip. The chat shows the job's queue position and progress, and stopping the task deletes the job.
+- **Where a tool goes.** A session on an opencoti or xOllama server that serves that kind of media uses that server. Otherwise each tab has an endpoint of its own. With neither, the tool is not offered and the model is never told it exists.
+
+In the CLI: `--media-provider`, or `--media-config <file>`. Guide: [`docs/features/media-endpoints.mdx`](docs/features/media-endpoints.mdx).
+
+## Document Reader
+
+`extract_document` reads PDFs, Word, PowerPoint and Excel files (current and 97-2003 formats), OpenDocument, RTF, HTML and ebooks into Markdown, and writes their pictures out as files. Scanned pages are read with Tesseract on your machine, or by a vision model when one is configured. It is off by default: Settings > Features > **Document Reader**, or `--documents`. Guide: [`docs/features/document-reader.mdx`](docs/features/document-reader.mdx).
+
 ## Built for Small Models
 
 A 27B model on a local server fails in ways a frontier model does not, and often silently. Most of what this fork adds exists because a measurement found one of those failures:
@@ -390,6 +436,7 @@ A 27B model on a local server fails in ways a frontier model does not, and often
 - **Tool calls run as a batch.** Several independent calls in one message run in parallel. Writes to the same file are serialized, so no parallel edit is lost. A profile can set, or turn off, the size limit for a file read.
 - **Guards** catch reasoning loops, repeated calls, non-convergence and files changed behind the model's back. An atomic change protocol with `restore_file` undoes damage ([Change Protocol](docs/features/change-protocol.mdx)).
 - **Questions recommend an option.** When the model asks you to choose, it marks the option it would pick and lists it first. Optionally, **Jev** scores the options before they reach you.
+- **Output you can account for.** Every request's output is split into thinking, answer text and tool-call arguments, and the log records each tool call's arguments as the model sent them.
 - **Generated images reach you on text-only models.** The model gets a text result and the chat shows the image.
 
 ## Conversation History

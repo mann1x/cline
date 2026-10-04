@@ -5,9 +5,9 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.216] — 2026-09-29
+## [4.100.239] — 2026-10-04
 
-The first public release since 4.100.118. Builds 4.100.119 to 4.100.215 were
+The first public release since 4.100.118. Builds 4.100.119 to 4.100.238 were
 test builds and were never published, so everything they carried is collected
 here, grouped by what it changes for you. The major features:
 
@@ -25,6 +25,15 @@ here, grouped by what it changes for you. The major features:
 - **The Compaction Council.** Every summary is reviewed against the
   conversation before it replaces it.
 - **xOllama**, an Ollama-API provider for council chat.
+- **Media tools.** Image generation and editing, speech-to-text,
+  text-to-speech and video generation, each from an endpoint you name or from
+  the session's own opencoti or xOllama server.
+- **The Document Reader.** PDFs, Office files and ebooks read into Markdown,
+  with OCR for scanned pages.
+- **Write confinement.** A delegated agent's commands can read the machine and
+  write only its workspace copy and the temp folder.
+- **Jev on your own server.** The Jev tab takes any endpoint that speaks
+  TypeSafe's Jev API, including Ollama 0.35's `/v1/systemone`.
 
 Everything about agents, swarms and teammates, with example prompts, is in the
 new guide, `docs/features/agents.mdx`.
@@ -120,6 +129,16 @@ new guide, `docs/features/agents.mdx`.
 - **Delegated agents get `check_file`, `ask_lsp` and `list_files`.** Their
   instructions named `check_file`, but until now they didn't have it.
 
+- **A random temperature stays near the model's own.** `"random"` draws
+  within 2% of the model's temperature (0.98 to 1.02 at 1.0).
+  `temperature_range` widens it, up to 10%.
+- **Several entries with no `count`** are named in the result ("5 entries, no
+  `count` on any: one agent each"), so a lead that meant to send a `count`
+  sees that it did not.
+- **A thinking-only turn is asked again.** An agent whose turn held only
+  thinking, with its tool call written inside the thinking, used to end with
+  nothing to report. It is now asked again.
+
 ### Swarms
 
 A swarm is many agents working from what the lead already knows, returning one
@@ -210,6 +229,37 @@ several approaches.
   long sub-agent prompt. A price of
   `$0.00` is no longer shown. The task header's connection count opens into
   each provider and model, its role, and what it spent.
+
+- **Inspect.** A button beside an agent's Output shows what its model is
+  generating as it generates it: thinking, answer text and each tool call's
+  arguments, for the current step.
+- **Token figures say what was cached.** An agent's input is every prompt it
+  sent, summed over its turns, so it grows fast and most of it is served from
+  the server's cache. Reports, `agents_status` and the agent's row now read
+  "N in (X cached, Y of it from the pool, Z fresh) / M out". The pool part is
+  what a PolyKV pool shared with other agents. Compaction calls are counted,
+  and totals survive a requeue or a restart.
+- **Output split.** Every request's output is split into thinking, answer text
+  and tool-call arguments, in the usage events and in the CLI's run result.
+- **Failed calls are counted.** `agents_status` and the long-running note show
+  how many of an agent's tool calls failed, for example "22 of 95 tool calls
+  failed".
+- **Stops are graceful.** `stop_agents`, the row's **Stop** and **Stop all**
+  let the agent finish its turn and write a report of its partial work.
+  `immediate: true`, or **Stop now**, ends it at once.
+- **A message is never left waiting behind a round.** A message sent while the
+  lead is about to wait on its agents ends that wait, and it is read first.
+- **Notes that ask nothing do not interrupt.** A note that agents are only
+  queued by the server no longer ends the lead's wait. It is read with
+  whatever ends the wait next, and names who is still queued then.
+- **After two hours with nowhere to run**, the lead is told again and asked to
+  ask you or take the tasks back. Nothing is stopped.
+- **A background round's rows keep updating** after the lead's own run ends,
+  and **Stop all** works on them.
+- **A round's report says each thing once.** A model every agent ran on is
+  named once, a repeated text reads "same as <name>", and the chat shows the
+  round as one line ("15 agents, 3 completed, 12 cancelled") with the full
+  note behind a toggle.
 
 ### Agents that survive a server restart
 
@@ -392,6 +442,78 @@ several approaches.
   `read_files revision` and `restore_file` stay available for the agents'
   revisions.
 - Deleting a conversation also removes its agents' overlays and transcripts.
+- **Write confinement.** With **Agents can run commands** on, an agent's
+  commands may read the whole machine and write only its copy of the workspace
+  and the temp folder. It is on by default, with one switch on the model tab
+  for every agent provider. Two agents in an earlier run had changed the
+  user's `PATH` and copied a 104 MB program into the profile to get a check
+  to pass, and reported "no file changes". It needs no setup and no
+  administrator rights: a read-only mount namespace on Linux (path checks
+  under ptrace where namespaces are blocked), a `sandbox-exec` profile on
+  macOS, and a Low integrity token on Windows.
+- **The lead can be confined too.** Off by default, because package managers
+  and git write outside the workspace. When on, the lead's commands write the
+  workspace in place and nothing else.
+- **A Windows escape is closed.** A command that wrote a file by a relative
+  path (`echo x> file`) wrote the real workspace, not the agent's copy.
+- **Agent revisions read correctly.** An agent's version of a file is listed
+  as held, not as the file on disk. `read_files` takes a `revision` written on
+  a single file entry. A command that only reads a file no longer records a
+  revision.
+- **A check whose program the shell cannot find** is reported as the
+  environment's fault, not as the agent's work failing.
+
+### Media tools: images, audio, video
+
+Five tools reach a media server that speaks OpenAI's media routes. Each is
+offered only when it has somewhere to go. Guide:
+`docs/features/media-endpoints.mdx`.
+
+- **`generate_image` and `edit_image`.** Editing is new: it changes an image
+  already in the workspace by instruction and saves the result as a new file.
+  It takes reference images and an optional mask. The Images tab can send
+  edits to their own endpoint or model.
+- **`transcribe_audio`** turns an audio file into text, subtitles (`srt`,
+  `vtt`) or timed segments, and can translate to English.
+  **`synthesize_speech`** turns text into an audio file. The Audio tab holds
+  one endpoint for each, with a default voice and format. The voice list is
+  read from the engine on opencoti and xOllama.
+- **`generate_video`** turns a description, or an image in the workspace, into
+  a clip. A clip is a job on the server: the chat row shows its queue position
+  and progress, the tool waits up to 60 minutes, and stopping the task deletes
+  the job so nothing keeps rendering.
+- **One rule for where a tool goes.** With the tab's box ticked, a session on
+  an opencoti or xOllama server that serves that kind of media uses that
+  server, with no URL typed twice. Otherwise the tab's own endpoint is used.
+  With neither, the tool is not offered. A typed endpoint that is down is
+  still offered, because these servers may be started on request; the
+  "Use an endpoint for …" box is the off switch.
+- **A busy engine is waited out.** A `503` with `Retry-After` is retried for
+  up to 30 minutes, and the row says what it is waiting for.
+- **Files are named from the bytes that come back.** Asking for `mp3` from an
+  engine that only encodes WAV gives a `.wav` file, and the reply says so.
+- **In the CLI:** `--media-provider` offers every tool the session's opencoti
+  or xOllama serves, and `--media-config <file>` names the endpoints.
+
+### The Document Reader
+
+`extract_document` converts documents to Markdown or text and writes their
+pictures out as image files. It is off by default: Settings > Features >
+**Document Reader**, or `--documents` in the CLI. Guide:
+`docs/features/document-reader.mdx`.
+
+- **What it reads:** PDF (encrypted too, with the password), Word, PowerPoint
+  and Excel in both the current and the 97-2003 formats, OpenDocument, RTF,
+  CSV, HTML, and ebooks (EPUB, MOBI/AZW, AZW3, FB2, with DRM detected and
+  reported).
+- **Scanned pages are read.** Tesseract runs on your machine with English
+  bundled and other languages downloaded once. With a vision endpoint
+  configured, the vision model transcribes each page instead. Recognized text
+  is marked as such, and a page that could not be read says why.
+- **Pictures can be described** by the vision model. The description becomes
+  the picture's alt text.
+- **`read_files` no longer returns a document's bytes.** It names what the
+  file is and points to the tool, or to the setting when the tool is off.
 
 ### Jev: a confidence score before acting
 
@@ -422,6 +544,19 @@ instead of arguing, so it can check the working model without agreeing with it.
   model's own account and the harness's counts, a disagreement between the
   story and the numbers is itself shown.
 - Both of the last two are switches on the Jev tab, on by default once Jev is.
+- **Jev on your own server.** The Jev tab has a **Typesafe's Jev API
+  endpoint** field. Empty keeps TypeSafe with its key and model. A URL
+  switches to that server, with a model and a key of its own, so TypeSafe's key
+  is only ever sent to TypeSafe. The model field is a picker: TypeSafe's
+  models, or on Ollama the models whose capabilities include `decision`.
+- **Ollama 0.35's `/v1/systemone`** speaks the same API with local decision
+  models, and xOllama carries the same code. The server root, its `/v1` or the
+  full path all work. No key is needed. The state sent is fitted to Ollama's
+  64 KiB body limit and to the model's loaded context window: when Ollama
+  answers that the prompt is too long, the state is cut, the call is sent
+  again and the size is remembered. A missing model is named with the command
+  to pull it. Checked live against xOllama with `nimble`, `tev1` and
+  `tev1:0.8b`.
 
 ### opencoti and PolyKV
 
@@ -532,6 +667,31 @@ instead of arguing, so it can check the working model without agreeing with it.
   show which case the selected model is in, and the engine's PolyKV status
   where Cerebriline drives it. They ask for 6 pool seats: a lead and a swarm
   take 5, and the lead's compaction needs one more.
+
+- **xOllama as a media server.** A session on an xOllama model that carries
+  media engines uses them for the image, audio and video tools without a
+  second endpoint (see Media tools above).
+- **Jev from xOllama.** xOllama serves Ollama's `/v1/systemone`, so the Jev
+  tab can point at it.
+- **The KV rolling window.** xOllama's opencoti engine can keep part of the KV
+  cache in host RAM and stream it through VRAM while the model computes
+  (`kv.rolling_window` in a model's configuration: `on`, `off` or a size in
+  MiB). It acts only when the cache does not fit in VRAM. It is the engine's
+  feature; Cerebriline needs no setting for it. Measured on the engine with a
+  Radeon RX 9070 XT (16 GB, Vulkan, Windows 11, PCIe 5.0 x16, q4_0 KV, a
+  40,960-token context, about a third of it resident in VRAM):
+
+  | Model, prompt | Whole cache in VRAM | Rolling window | Same VRAM, layers in RAM |
+  |---|---|---|---|
+  | Qwen3-8B Q8_0, 18k tokens | 58.9 tok/s | 55.8 tok/s | 19.7 tok/s |
+  | Qwen3-8B Q8_0, 37k tokens | 50.4 tok/s | 37.3 tok/s | 13.5 tok/s |
+  | Qwen2.5-14B Q4_K_M, 15k tokens | 53.3 tok/s | 51.3 tok/s | 14.9 tok/s |
+  | Qwen2.5-14B Q4_K_M, 29k tokens | 46.8 tok/s | 33.3 tok/s | 9.8 tok/s |
+
+  The window arm used about 0.8 GiB (8B) and 1.2 GiB (14B) less VRAM than the
+  resident arm. Prompt processing stayed within 10% of resident (1,660 to
+  1,022 tok/s against 1,642 to 1,125 on the 8B). The link carried the window
+  at about 55 GB/s. One machine, one card, opencoti build `2610011612001`.
 
 ### Conversation history and the home view
 
@@ -761,6 +921,27 @@ instead of arguing, so it can check the working model without agreeing with it.
   server was asked, what came back, and where to fix it. It clears by itself
   within 15 seconds of the server coming back. A server without the selected
   model gets the warning tint.
+
+- **A resumed conversation keeps its compaction.** Reopening a compacted
+  conversation after a reload sent the whole transcript again (134.5k tokens
+  into a 128k window in one case). The saved compaction is now carried across.
+- **The context bar measures the session's own window**, not the model
+  selected in the settings panel.
+- **A running tool's status is shown on its row**: a busy engine and when it
+  is asked again, a video job's place in the queue.
+- **A folder row always names its folder** and its glob.
+- **History lists conversations only.** Agents' sessions are no longer listed
+  as conversations of their own, and sessions closed after a crash are dated
+  by their last activity.
+- **Profiles.** A profile saved with thinking on and no level no longer reads
+  as unsaved when loaded. An Agents node's profile keeps the model picked for
+  it. A cloud model Ollama offers but has not pulled is listed and usable.
+- **The CLI sizes the output budget like the extension**: three quarters of
+  the window under the 96,000 ceiling, with the matching thinking budget.
+  Before, CLI runs thought on half the extension's budget.
+- **Tool arguments in the log.** Every tool call writes one debug line with
+  its arguments as the model sent them, before parsing or repair.
+- **Extension host memory** is logged at start and every five minutes.
 
 ### Reports
 
