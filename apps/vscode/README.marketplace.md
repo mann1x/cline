@@ -263,7 +263,7 @@ at 11,500 MiB to stand in for a 12 GB card (opencoti build `2610041714001`,
 
 "No cap" is the ceiling: the model and its whole cache in VRAM (12,196 MiB),
 which a 12 GB card cannot hold. The two capped columns are the choices such a
-card has, and both use about 10.2 GiB. Up to about 30k tokens nothing is read
+card has, and both use about 10 GiB. Up to about 30k tokens nothing is read
 from host RAM and the capped engine is within 10% of the uncapped one. With one
 or two windows in host RAM it gives up 11 to 16%, and from there generation
 falls with depth, to 25.7 tok/s at 126k. Moving ten layers to RAM at the same

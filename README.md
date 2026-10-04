@@ -324,7 +324,7 @@ Measured on the opencoti engine, which is the engine xOllama runs: Qwen3.8-27B O
 | 116,821 | 73.8 | 29.6 | 3.2 | 2329 / 1878 / 1536 |
 | 126,050 | 72.9 | 25.7 | 3.0 | 2276 / 1835 / 1488 |
 
-"No cap" is the ceiling: the model and its whole cache in VRAM (12,196 MiB), which a 12 GB card cannot hold. The two capped columns are the choices such a card has, and both use about 10.2 GiB. Up to about 30k tokens nothing is read from host RAM and the capped engine is within 10% of the uncapped one. With one or two windows in host RAM it gives up 11 to 16%, and from there generation falls with depth, to 25.7 tok/s at 126k. Moving ten layers to RAM at the same VRAM gives 3 to 5 tok/s at every depth, so the window is 8 to 18 times faster. Prefill under the cap is 75 to 81% of the uncapped prefill. On Radeon under Windows, use AMD Software 26.9.2 or later for Vulkan.
+"No cap" is the ceiling: the model and its whole cache in VRAM (12,196 MiB), which a 12 GB card cannot hold. The two capped columns are the choices such a card has, and both use about 10 GiB. Up to about 30k tokens nothing is read from host RAM and the capped engine is within 10% of the uncapped one. With one or two windows in host RAM it gives up 11 to 16%, and from there generation falls with depth, to 25.7 tok/s at 126k. Moving ten layers to RAM at the same VRAM gives 3 to 5 tok/s at every depth, so the window is 8 to 18 times faster. Prefill under the cap is 75 to 81% of the uncapped prefill. On Radeon under Windows, use AMD Software 26.9.2 or later for Vulkan.
 
 ## Extend With Plugins or MCP Servers
 
