@@ -293,8 +293,9 @@ Drafter figures move with how many drafted tokens are accepted, so they vary
 from row to row more than the table above; each row is one run. Under the cap
 the drafter still pays at every depth: 42 to 173 tok/s with it against 24 to 89
 without. The capped engine is 5 to 13% behind the uncapped one up to 30k tokens
-and further behind as the prompt grows. On Radeon under
-Windows, use AMD Software 26.9.2 or later for Vulkan.
+and further behind as the prompt grows.
+
+On Radeon under Windows, use AMD Software 26.9.2 or later for Vulkan.
 
 ## Models
 
