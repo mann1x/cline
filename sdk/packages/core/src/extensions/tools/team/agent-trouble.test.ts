@@ -3,6 +3,7 @@ import {
 	createAgentTroubleWatch,
 	LEAD_NUDGE_AFTER_MS,
 	LEAD_NUDGE_BATCH_MS,
+	NO_NODE_AFTER_MS,
 	onLeadNudge,
 	roomWaitTrouble,
 	sendLeadNudge,
@@ -168,5 +169,129 @@ describe("telling the lead about agents stuck for a long time", () => {
 		expect(roomWaitTrouble("Waiting for room on the server").kind).toBe(
 			"refusal",
 		);
+	});
+});
+
+/**
+ * Pandorum's wlafh run: the server died, ten agents waited for it for six
+ * hours and the lead sat in `await_agents` after its one ten-minute report.
+ * The user's ruling: an agent with nowhere to run for two hours is a second
+ * report, asking the lead to ask the user or to do the work itself when that
+ * fits the request.
+ */
+describe("telling the lead again when agents have had no node for two hours", () => {
+	it("asks the lead to ask the user or do the work itself", async () => {
+		const sent: string[] = [];
+		const watch = watchFor("gamelogic-2", sent);
+		watch.waiting({
+			kind: "transport",
+			where: "the server",
+			detail: "not answering",
+		});
+		await vi.advanceTimersByTimeAsync(NO_NODE_AFTER_MS - 60_000);
+		expect(sent).toHaveLength(1);
+		await vi.advanceTimersByTimeAsync(60_000 + LEAD_NUDGE_BATCH_MS);
+
+		expect(sent).toHaveLength(2);
+		const text = sent[1] ?? "";
+		expect(text).toMatch(/^\[SYSTEM MESSAGE\] 1 agent with no node/);
+		expect(text).toContain(">120 min");
+		expect(text).toContain("- gamelogic-2: the server unreachable");
+		expect(text).toContain("ask_question");
+		expect(text).toContain("stop_agents");
+		expect(text).toContain("only if that fits what the user asked");
+		watch.dispose();
+	});
+
+	it("puts every agent that crossed two hours into one report", async () => {
+		const sent: string[] = [];
+		const first = watchFor("syntax-2", sent);
+		const second = watchFor("braces-1", sent);
+		first.waiting({ kind: "refusal", where: "Node1", detail: TPS });
+		second.waiting({
+			kind: "transport",
+			where: "the server",
+			detail: "not answering",
+		});
+		await vi.advanceTimersByTimeAsync(NO_NODE_AFTER_MS + LEAD_NUDGE_BATCH_MS);
+
+		expect(sent).toHaveLength(2);
+		expect(sent[1]).toMatch(/^\[SYSTEM MESSAGE\] 2 agents with no node/);
+		expect(sent[1]).toContain("- syntax-2:");
+		expect(sent[1]).toContain("- braces-1:");
+		first.dispose();
+		second.dispose();
+	});
+
+	it("reports the agents left when the first one to cross ten minutes has ended", async () => {
+		const sent: string[] = [];
+		const first = watchFor("syntax-2", sent);
+		const second = watchFor("braces-1", sent);
+		const down = {
+			kind: "transport" as const,
+			where: "the server",
+			detail: "not answering",
+		};
+		first.waiting(down);
+		second.waiting(down);
+		await vi.advanceTimersByTimeAsync(
+			LEAD_NUDGE_AFTER_MS + LEAD_NUDGE_BATCH_MS,
+		);
+		first.dispose();
+		await vi.advanceTimersByTimeAsync(NO_NODE_AFTER_MS);
+
+		expect(sent).toHaveLength(2);
+		expect(sent[1]).toMatch(/^\[SYSTEM MESSAGE\] 1 agent with no node/);
+		expect(sent[1]).toContain("- braces-1:");
+		second.dispose();
+	});
+
+	it("says nothing more when the agent got a turn through in between", async () => {
+		const sent: string[] = [];
+		const watch = watchFor("htmldom-1", sent);
+		watch.waiting({ kind: "refusal", where: "Node1", detail: TPS });
+		await vi.advanceTimersByTimeAsync(NO_NODE_AFTER_MS - 60_000);
+		watch.progressed();
+		watch.waiting({ kind: "refusal", where: "Node1", detail: TPS });
+		await vi.advanceTimersByTimeAsync(NO_NODE_AFTER_MS - 60_000);
+
+		expect(sent).toHaveLength(1);
+		watch.dispose();
+	});
+
+	it("still reports two hours without a node for an agent already reported at ten minutes of an earlier wait", async () => {
+		const sent: string[] = [];
+		const watch = watchFor("correctness-3", sent);
+		watch.waiting({ kind: "refusal", where: "Node1", detail: TPS });
+		await vi.advanceTimersByTimeAsync(
+			LEAD_NUDGE_AFTER_MS + LEAD_NUDGE_BATCH_MS,
+		);
+		watch.progressed();
+		expect(sent).toHaveLength(1);
+
+		watch.waiting({
+			kind: "transport",
+			where: "the server",
+			detail: "not answering",
+		});
+		await vi.advanceTimersByTimeAsync(NO_NODE_AFTER_MS + LEAD_NUDGE_BATCH_MS);
+
+		expect(sent).toHaveLength(2);
+		expect(sent[1]).toContain("with no node");
+		watch.dispose();
+	});
+
+	it("reports it once per agent", async () => {
+		const sent: string[] = [];
+		const watch = watchFor("syntax-1", sent);
+		watch.waiting({
+			kind: "transport",
+			where: "the server",
+			detail: "not answering",
+		});
+		await vi.advanceTimersByTimeAsync(3 * NO_NODE_AFTER_MS);
+
+		expect(sent).toHaveLength(2);
+		watch.dispose();
 	});
 });

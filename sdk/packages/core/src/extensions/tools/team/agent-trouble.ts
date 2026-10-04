@@ -17,6 +17,13 @@
  * `stop_agents` (see `steer-side-turn.ts`) -- and the lead's next real turn is
  * told what was said.
  *
+ * An agent still waiting after {@link NO_NODE_AFTER_MS} has had nowhere to run
+ * for hours, and a lead that answered the first report with "let them retry"
+ * then waits with it for as long as the node stays away (pandorum's wlafh
+ * run: six hours). It is reported a second time, once per agent, and this
+ * report asks for a decision: ask the user, or take the tasks back when doing
+ * them itself fits what the user asked.
+ *
  * The agents keep retrying. Nothing here stops one: the lead may, and so may
  * the user.
  */
@@ -26,6 +33,12 @@ import { FAILED_BATCH_REASON, type TurnFaultWait } from "./turn-fault-recovery";
 
 /** Continuous waiting after which the lead is told about an agent. */
 export const LEAD_NUDGE_AFTER_MS = 10 * 60_000;
+
+/**
+ * Continuous waiting after which an agent counts as having no node to run on,
+ * and the lead is asked to decide instead of waiting on.
+ */
+export const NO_NODE_AFTER_MS = 2 * 60 * 60_000;
 
 /**
  * How long the first overdue agent waits for others to join its report.
@@ -100,6 +113,8 @@ interface TroubleRecord {
 	refusals: number;
 	/** Told the lead already; never twice for one agent. */
 	nudged: boolean;
+	/** Told the lead it has had no node for hours; never twice either. */
+	escalated: boolean;
 }
 
 interface SessionTrouble {
@@ -155,6 +170,25 @@ export function describeLeadNudge(
 	].join("\n");
 }
 
+/** The second report: these agents have had nowhere to run for hours. */
+export function describeNoNodeNudge(
+	records: ReadonlyArray<
+		Pick<
+			TroubleRecord,
+			"name" | "since" | "kind" | "where" | "detail" | "refusals"
+		>
+	>,
+	now: number,
+	afterMs = NO_NODE_AFTER_MS,
+): string {
+	const count = records.length;
+	return [
+		`${HARNESS_TAG} ${count} agent${count === 1 ? "" : "s"} with no node to run on for >${minutes(afterMs)} min, still retrying; nothing stopped:`,
+		...records.map((record) => describeTrouble(record, now)),
+		"Waiting on may never end. Decide now: ask the user how to proceed (ask_question); or stop_agents and do their tasks yourself, only if that fits what the user asked.",
+	].join("\n");
+}
+
 function sessionOf(sessionId: string): SessionTrouble {
 	let session = SESSIONS.get(sessionId);
 	if (!session) {
@@ -192,6 +226,7 @@ export interface AgentTroubleWatchOptions {
 	/** Seams for tests. */
 	now?: () => number;
 	nudgeAfterMs?: number;
+	noNodeAfterMs?: number;
 	batchMs?: number;
 	/** Where the report goes; defaults to the session's lead listener. */
 	send?: (sessionId: string, text: string) => boolean;
@@ -205,10 +240,12 @@ export function createAgentTroubleWatch(
 	const sessionId = options.sessionId;
 	const now = options.now ?? Date.now;
 	const nudgeAfterMs = options.nudgeAfterMs ?? LEAD_NUDGE_AFTER_MS;
+	const noNodeAfterMs = options.noNodeAfterMs ?? NO_NODE_AFTER_MS;
 	const batchMs = options.batchMs ?? LEAD_NUDGE_BATCH_MS;
 	const send = options.send ?? sendLeadNudge;
 	let record: TroubleRecord | undefined;
 	let nudgedOnce = false;
+	let escalatedOnce = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
 	const clearTimer = () => {
@@ -218,6 +255,19 @@ export function createAgentTroubleWatch(
 		}
 	};
 
+	const armFor = (deadline: number) => {
+		timer = setTimeout(overdue, Math.max(0, deadline - now()));
+		unref(timer);
+	};
+
+	/** Wake at the next line this stretch has yet to cross. */
+	const arm = () => {
+		if (timer || !record || record.escalated) {
+			return;
+		}
+		armFor(record.since + (record.nudged ? noNodeAfterMs : nudgeAfterMs));
+	};
+
 	const flush = (id: string) => {
 		const session = SESSIONS.get(id);
 		if (!session) {
@@ -225,38 +275,62 @@ export function createAgentTroubleWatch(
 		}
 		session.flush = undefined;
 		const at = now();
-		const overdue = [...session.records].filter(
-			(entry) => !entry.nudged && at - entry.since >= nudgeAfterMs,
+		const noNode = [...session.records].filter(
+			(entry) => !entry.escalated && at - entry.since >= noNodeAfterMs,
 		);
-		if (overdue.length === 0) {
-			return;
+		const overdue = [...session.records].filter(
+			(entry) =>
+				!entry.nudged &&
+				!noNode.includes(entry) &&
+				at - entry.since >= nudgeAfterMs,
+		);
+		for (const entry of noNode) {
+			entry.nudged = true;
+			entry.escalated = true;
 		}
 		for (const entry of overdue) {
 			entry.nudged = true;
 		}
-		const text = describeLeadNudge(overdue, at);
-		options.logger?.log(`[Agents] telling the lead: ${text}`);
-		send(id, text);
+		for (const text of [
+			overdue.length > 0 ? describeLeadNudge(overdue, at) : undefined,
+			noNode.length > 0
+				? describeNoNodeNudge(noNode, at, noNodeAfterMs)
+				: undefined,
+		]) {
+			if (text) {
+				options.logger?.log(`[Agents] telling the lead: ${text}`);
+				send(id, text);
+			}
+		}
 		if (session.records.size === 0) {
 			SESSIONS.delete(id);
 		}
 	};
 
-	const overdue = () => {
+	function overdue() {
 		timer = undefined;
-		if (!sessionId || !record || record.nudged) {
+		if (!sessionId || !record || record.escalated) {
 			return;
+		}
+		// Each watch keeps its own wake-up for the two-hour line: the flush
+		// below belongs to whichever agent crossed first, and that one may end.
+		const noNodeAt = record.since + noNodeAfterMs;
+		if (now() < noNodeAt) {
+			armFor(noNodeAt);
+			if (record.nudged) {
+				return;
+			}
 		}
 		const session = sessionOf(sessionId);
 		if (!session.flush) {
 			session.flush = setTimeout(() => flush(sessionId), batchMs);
 			unref(session.flush);
 		}
-	};
+	}
 
 	return {
 		waiting: (state) => {
-			if (!sessionId || nudgedOnce) {
+			if (!sessionId || (nudgedOnce && escalatedOnce)) {
 				return;
 			}
 			if (!record) {
@@ -267,7 +341,9 @@ export function createAgentTroubleWatch(
 					where: state.where,
 					detail: state.detail,
 					refusals: 0,
-					nudged: false,
+					// One ten-minute report per agent, across its stretches.
+					nudged: nudgedOnce,
+					escalated: escalatedOnce,
 				};
 				sessionOf(sessionId).records.add(record);
 			}
@@ -277,18 +353,13 @@ export function createAgentTroubleWatch(
 			if (state.kind === "refusal") {
 				record.refusals += 1;
 			}
-			if (!timer) {
-				timer = setTimeout(
-					overdue,
-					Math.max(0, record.since + nudgeAfterMs - now()),
-				);
-				unref(timer);
-			}
+			arm();
 		},
 		progressed: () => {
 			clearTimer();
 			if (record && sessionId) {
 				nudgedOnce ||= record.nudged;
+				escalatedOnce ||= record.escalated;
 				SESSIONS.get(sessionId)?.records.delete(record);
 			}
 			record = undefined;

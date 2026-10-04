@@ -455,6 +455,8 @@ There is no attempt limit and no deadline. The refusal thresholds are your own s
 
 **The lead nudge.** An agent that has waited without a break for **10 minutes** is reported to the lead once. Agents crossing the line within 30 s of each other are reported together. The report arrives as a side turn in which the lead can reply, `message_agents` or `stop_agents`. The agents keep retrying unless someone stops them.
 
+**The no-node report.** An agent still waiting after **2 hours** without a break has had nowhere to run, and waiting on may never end. The lead is told a second time, once per agent, with the agents that crossed the line together in one report. This report asks for a decision: ask you how to proceed (`ask_question`), or `stop_agents` and do their tasks itself, only if that fits what you asked. Nothing is stopped by the report itself; the agents keep retrying until the lead or you stop them.
+
 **Example prompt:** "If any agent is stuck on the server for more than 10 minutes, stop it and do its task yourself."
 
 ### Watching and steering a round
