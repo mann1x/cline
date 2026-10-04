@@ -209,6 +209,28 @@ fn w1_finds_a_workspace_program_by_its_bare_name() {
         "a name in neither layer must not be found"
     );
 
+    // A relative path resolves against the working directory's handle, which
+    // the loader opened before the hooks existed. Such a write went to the
+    // lead's workspace, with no trace in the log (pandorum probe, 2026-10-04).
+    let out = run("echo R> rel.txt && echo A>> tool.cmd && type rel.txt");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains('R'),
+        "a file written by a relative path must read back"
+    );
+    assert!(
+        !ws.join("rel.txt").exists(),
+        "a relative write reached the lead's workspace"
+    );
+    assert!(
+        ov.join("rel.txt").exists(),
+        "a relative write must land in the overlay"
+    );
+    assert_eq!(
+        fs::read_to_string(ws.join("tool.cmd")).unwrap(),
+        "@echo TOOL-RAN\r\n",
+        "a relative append changed the lead's file"
+    );
+
     fs::remove_dir_all(&base).ok();
 }
 

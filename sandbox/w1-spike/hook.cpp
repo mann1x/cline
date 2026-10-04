@@ -243,7 +243,7 @@ static bool LookupHandle(HANDLE h, wchar_t* out, size_t cap) {
 
 static void UnregisterDir(HANDLE h) {
     EnterCriticalSection(&g_regLock);
-    for (int i = 0; i < 512; ++i) {
+    for (int i = 0; i < 1024; ++i) {
         if (g_reg[i].h == h) { g_reg[i].h = nullptr; g_reg[i].logical[0] = L'\0'; break; }
     }
     LeaveCriticalSection(&g_regLock);
@@ -283,6 +283,17 @@ static void RemoveWhiteout(const wchar_t* ovPath) {
     if (WhiteoutPath(ovPath, wh, _countof(wh))) DeleteFileW(wh);
 }
 
+// The Win32 path a handle points to, for a handle the registry does not know.
+// `\\?\C:\dir` comes back as `C:\dir`; anything else (a UNC share, a device)
+// is not a path the workspace root can be compared with.
+static bool FinalPathOf(HANDLE h, wchar_t* out, size_t cap) {
+    wchar_t raw[1024];
+    DWORD n = GetFinalPathNameByHandleW(h, raw, _countof(raw), 0 /*VOLUME_NAME_DOS*/);
+    if (n < 7 || n >= _countof(raw)) return false;
+    if (wcsncmp(raw, L"\\\\?\\", 4) != 0 || raw[5] != L':') return false;
+    return wcscpy_s(out, cap, raw + 4) == 0;
+}
+
 // ---- Logical path extraction -----------------------------------------------
 //
 // Produce the full Win32 path an open targets. Absolute opens carry \??\C:\...;
@@ -296,7 +307,16 @@ static bool ExtractLogicalPath(POBJECT_ATTRIBUTES oa, wchar_t* out, size_t cap) 
 
     if (oa->RootDirectory != nullptr) {
         wchar_t base[1024];
-        if (!LookupDir(oa->RootDirectory, base, _countof(base))) return false;
+        if (!LookupDir(oa->RootDirectory, base, _countof(base))) {
+            // A directory handle opened before the hooks were attached: above
+            // all the process's working directory, which the loader opens
+            // first. Every relative path in the command's own folder resolves
+            // against it, so leaving these alone sent `echo x> file` to the
+            // lead's workspace instead of the overlay. Ask the system where
+            // the handle points and track it from here on.
+            if (!FinalPathOf(oa->RootDirectory, base, _countof(base))) return false;
+            RegisterHandle(oa->RootDirectory, true, base);
+        }
         // Relative name has no \??\ prefix; join with a separator.
         if (nmlen > 0 && nm[0] == L'\\')
             return _snwprintf_s(out, cap, _TRUNCATE, L"%s%.*s", base, nmlen, nm) > 0;
