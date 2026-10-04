@@ -244,12 +244,31 @@ API and its own port (22434). It has a provider of its own here.
 
 Measured on the opencoti engine, which is the engine xOllama runs: Qwen3.8-27B
 OmniMerge v6 at IQ2_M (a hybrid: 16 attention and 48 linear layers), a
-131,072-token context, q4_0 KV, VRAM capped at 11,500 MiB to stand in for a 12
-GB card, a 256 MiB window. At a 70k-token prompt on an RTX PRO 6000 (opencoti
-build `2610020826001`, 2026-10-02) it generated 77.7 tok/s under CUDA and 59.0
-tok/s under Vulkan, with every recall probe correct. With the model's own NextN
-drafter (MTP) it reached 158.8 and 71.1 tok/s on that prompt, which drafts well;
-read those as "works and is fast", not as a general ratio. On Radeon under
+131,072-token context, q4_0 KV, on an RTX PRO 6000 under CUDA with VRAM capped
+at 11,500 MiB to stand in for a 12 GB card (opencoti build `2610041714001`,
+2026-10-04, drafter off). Generation in tok/s at each prompt depth:
+
+| Prompt tokens | No cap, all in VRAM | 11.5 GB cap, rolling window | Same VRAM, 10 of 64 layers in RAM | Prefill tok/s (no cap / window / layers in RAM) |
+|---|---|---|---|---|
+| 8,091 | 89.2 | 81.0 | 4.8 | 3055 / 2307 / 1702 |
+| 16,086 | 88.0 | 83.1 | 4.5 | 3101 / 2478 / 1779 |
+| 30,486 | 85.4 | 80.8 | 4.4 | 2984 / 2427 / 1740 |
+| 45,051 | 83.4 | 74.0 | 4.0 | 2840 / 2309 / 1747 |
+| 59,196 | 81.8 | 69.0 | 3.8 | 2721 / 2202 / 1648 |
+| 73,841 | 79.2 | 57.3 | 3.6 | 2610 / 2103 / 1648 |
+| 88,115 | 77.8 | 43.8 | 3.4 | 2513 / 2026 / 1612 |
+| 102,504 | 75.6 | 35.1 | 3.2 | 2417 / 1949 / 1563 |
+| 116,821 | 73.8 | 29.6 | 3.2 | 2329 / 1878 / 1536 |
+| 126,050 | 72.9 | 25.7 | 3.0 | 2276 / 1835 / 1488 |
+
+"No cap" is the ceiling: the model and its whole cache in VRAM (12,196 MiB),
+which a 12 GB card cannot hold. The two capped columns are the choices such a
+card has, and both use about 10.2 GiB. Up to about 30k tokens nothing is read
+from host RAM and the capped engine is within 10% of the uncapped one. With one
+or two windows in host RAM it gives up 11 to 16%, and from there generation
+falls with depth, to 25.7 tok/s at 126k. Moving ten layers to RAM at the same
+VRAM gives 3 to 5 tok/s at every depth, so the window is 8 to 18 times faster.
+Prefill under the cap is 75 to 81% of the uncapped prefill. On Radeon under
 Windows, use AMD Software 26.9.2 or later for Vulkan.
 
 ## Models
