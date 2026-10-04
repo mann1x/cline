@@ -561,7 +561,15 @@ The spend covers everything done for the agent: its own requests, plus every cal
 
 - A provider that reports no cache figure leaves `cached` and `fresh` out. Absent means unknown, not zero.
 - In the round totals an agent with no cache figure counts as all fresh.
-- For a PolyKV worker the pool's shared prefix is part of the cached figure. The pool-shared count on its own (`n_pool_shared`) is not in the report.
+- The pool share has no total in the round summary; it is per agent.
+
+**PolyKV pool share (since 4.100.235).** For an agent attached to a pool, `tokens.poolShared` is the part of its cached input that came from the shared pool: the engine's `n_pool_shared` on each response, summed over the agent's requests. What is cached beyond it is the agent's own earlier turns. It is absent off PolyKV, and on a server that does not put the `opencoti` block on its responses.
+
+**Where it shows:**
+
+- the lead's result: `usage.cachedInputTokens`, `agent.tokens` `{input, cached, fresh, poolShared, output}`, and the round's `totalTokens`;
+- `agents_status` for one agent: `tokens: 600k in (580k cached, 400k of it from the pool) / 12k out`;
+- the Agents panel row: `600k in (580k cached, 400k pool) / 12k out`.
 
 ### Inspecting an agent's live output
 

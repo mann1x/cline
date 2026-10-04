@@ -85,6 +85,8 @@ export function subagentStatsText(entry: {
 	contextTokens?: number
 	inputTokens?: number
 	outputTokens?: number
+	cachedTokens?: number
+	poolSharedTokens?: number
 	totalCost?: number
 }): string {
 	return [
@@ -106,10 +108,25 @@ export function subagentStatsText(entry: {
  * rates. Both are the agent's whole run, its compactions included; the context
  * is the window it is using now, and is gone once it has finished.
  */
-export function subagentTokenParts(entry: { contextTokens?: number; inputTokens?: number; outputTokens?: number }): string[] {
+export function subagentTokenParts(entry: {
+	contextTokens?: number
+	inputTokens?: number
+	outputTokens?: number
+	cachedTokens?: number
+	poolSharedTokens?: number
+}): string[] {
+	// The input is every prompt it sent, summed: mostly a prefix the server
+	// already had. The cached part is said beside it, and the pool's share of
+	// that on PolyKV, so the total is not read as work done.
+	const cached =
+		entry.cachedTokens !== undefined && entry.inputTokens
+			? ` (${formatCount(entry.cachedTokens)} cached${
+					entry.poolSharedTokens ? `, ${formatCount(entry.poolSharedTokens)} pool` : ""
+				})`
+			: ""
 	const spent =
 		entry.inputTokens || entry.outputTokens
-			? `${formatCount(entry.inputTokens)} in / ${formatCount(entry.outputTokens)} out`
+			? `${formatCount(entry.inputTokens)} in${cached} / ${formatCount(entry.outputTokens)} out`
 			: ""
 	const context = entry.contextTokens ? `${formatCount(entry.contextTokens)} in context` : ""
 	const parts = [spent, context].filter(Boolean)

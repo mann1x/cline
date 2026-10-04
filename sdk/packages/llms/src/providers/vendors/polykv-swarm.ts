@@ -3361,6 +3361,50 @@ export function reportPolykvNotice(
 	}
 }
 
+const POOL_SHARE_LISTENERS = new Map<string, Set<(tokens: number) => void>>();
+
+/**
+ * Hear how much of a request's prompt came from its pool, per response.
+ *
+ * The engine reports it on the response (`opencoti.n_pool_shared`): the pool
+ * prefix a worker attached to and never prefilled. It is part of what the
+ * server counts as cached, and the only figure that says how much of the
+ * cache was the shared pool and how much the agent's own earlier turns.
+ */
+export function onPolykvPoolShare(
+	sessionId: string,
+	listener: (tokens: number) => void,
+): () => void {
+	const key = engineSessionId(sessionId);
+	let listeners = POOL_SHARE_LISTENERS.get(key);
+	if (!listeners) {
+		listeners = new Set();
+		POOL_SHARE_LISTENERS.set(key, listeners);
+	}
+	listeners.add(listener);
+	return () => {
+		listeners?.delete(listener);
+		if (listeners?.size === 0) {
+			POOL_SHARE_LISTENERS.delete(key);
+		}
+	};
+}
+
+/** One response's pool share, for whoever is counting that session's. */
+export function reportPolykvPoolShare(sessionId: string, tokens: number): void {
+	const listeners = POOL_SHARE_LISTENERS.get(engineSessionId(sessionId));
+	if (!listeners || !Number.isFinite(tokens) || tokens <= 0) {
+		return;
+	}
+	for (const listener of listeners) {
+		try {
+			listener(tokens);
+		} catch {
+			// A listener's fault is not the request's.
+		}
+	}
+}
+
 export interface PolykvRoomWait {
 	/** `true` while the request is held client-side, `false` once it is sent. */
 	waiting: boolean;

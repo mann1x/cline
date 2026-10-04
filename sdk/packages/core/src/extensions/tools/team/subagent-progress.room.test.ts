@@ -9,7 +9,12 @@ const noticeListeners = new Map<
 	(notice: { severity: string; text: string }) => void
 >();
 const phaseListeners = new Map<string, (phase: unknown) => void>();
+const poolShareListeners = new Map<string, (tokens: number) => void>();
 vi.mock("@cline/llms", () => ({
+	onPolykvPoolShare: (id: string, listener: (tokens: number) => void) => {
+		poolShareListeners.set(id, listener);
+		return () => poolShareListeners.delete(id);
+	},
 	describeOpencotiStreamPhase: (phase: {
 		kind: string;
 		processed?: number;
@@ -41,6 +46,19 @@ vi.mock("@cline/llms", () => ({
 import { watchPolykvRoom } from "./subagent-progress";
 
 describe("watchPolykvRoom", () => {
+	it("sums the pool share of its requests on the row, and stops with it", () => {
+		const emitUpdate = vi.fn();
+		const stop = watchPolykvRoom("pool-share", emitUpdate);
+		poolShareListeners.get("pool-share")?.(5_000);
+		poolShareListeners.get("pool-share")?.(5_000);
+		expect(emitUpdate.mock.calls).toEqual([
+			[{ poolSharedTokens: 5_000 }],
+			[{ poolSharedTokens: 10_000 }],
+		]);
+		stop();
+		expect(poolShareListeners.has("pool-share")).toBe(false);
+	});
+
 	it("turns a wait for room into queued, and its end into running", () => {
 		const emitUpdate = vi.fn();
 		const stop = watchPolykvRoom("s1", emitUpdate);

@@ -79,6 +79,7 @@ import {
 	readPolykvLeadRoom,
 	rememberOpencotiSession,
 	reportPolykvNotice,
+	reportPolykvPoolShare,
 	reportPolykvRoomWait,
 	reportPolykvStreamPhase,
 	templateFieldsOf,
@@ -1085,6 +1086,9 @@ function noticeDivergence(
 				severity: "warn",
 				text: poolDivergenceNotice(facts),
 			});
+		}
+		if (sessionId !== undefined && facts.poolSharedTokens !== undefined) {
+			reportPolykvPoolShare(sessionId, facts.poolSharedTokens);
 		}
 		onFacts?.(facts);
 	};

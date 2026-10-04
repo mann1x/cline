@@ -62,4 +62,15 @@ describe("an agent's cached tokens across runtimes", () => {
 		recordAgentSpend(agent, { inputTokens: 100, outputTokens: 10 });
 		expect(agent.cachedTokens).toBeUndefined();
 	});
+
+	it("sums the pool share over runtimes and keeps it through the finish", () => {
+		const agent = {} as Parameters<typeof recordAgentSpend>[0];
+		recordAgentSpend(agent, { poolSharedTokens: 5_000 });
+		recordAgentSpend(agent, { poolSharedTokens: 10_000 });
+		// A new runtime's tally starts again.
+		recordAgentSpend(agent, { poolSharedTokens: 5_000 });
+		expect(agent.poolSharedTokens).toBe(15_000);
+		recordAgentFinalSpend(agent, { inputTokens: 40_000, outputTokens: 10 });
+		expect(agent.poolSharedTokens).toBe(15_000);
+	});
 });

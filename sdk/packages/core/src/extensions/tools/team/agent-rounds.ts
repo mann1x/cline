@@ -188,6 +188,12 @@ export interface RoundAgentRecord extends RoundAgentSpec {
 	 * when the provider reported none: unknown, not zero.
 	 */
 	cachedTokens?: number;
+	/**
+	 * Of the cached input, what came from a PolyKV pool the agent attached to
+	 * (the engine's `n_pool_shared`, summed over its requests). Absent off
+	 * PolyKV.
+	 */
+	poolSharedTokens?: number;
 	contextTokens?: number;
 	/** Recent generation speed, tokens per second. */
 	genTps?: number;
@@ -387,7 +393,7 @@ export const ROUND_ACTIVITY_LIMIT = 20;
  * spent; `seen` is the last figure the current one reported. A report below
  * `seen` is a new runtime, not a refund.
  */
-type SpendKey = "input" | "output" | "cached";
+type SpendKey = "input" | "output" | "cached" | "pool";
 type Spend = Record<SpendKey, number>;
 interface SpendLedger {
 	base: Spend;
@@ -406,10 +412,11 @@ function spendLedger(agent: RoundAgentRecord): SpendLedger {
 			input: agent.inputTokens ?? 0,
 			output: agent.outputTokens ?? 0,
 			cached: agent.cachedTokens ?? 0,
+			pool: agent.poolSharedTokens ?? 0,
 		};
 		ledger = {
 			base: shown,
-			seen: { input: 0, output: 0, cached: 0 },
+			seen: { input: 0, output: 0, cached: 0, pool: 0 },
 			runBase: { ...shown },
 		};
 		spendLedgers.set(agent, ledger);
@@ -421,10 +428,14 @@ function agentTokenSplit(agent: RoundAgentRecord): {
 	input: number;
 	cached?: number;
 	fresh?: number;
+	poolShared?: number;
 	output: number;
 } {
 	return {
 		...splitInputTokens(agent.inputTokens ?? 0, agent.cachedTokens),
+		...(agent.poolSharedTokens !== undefined
+			? { poolShared: agent.poolSharedTokens }
+			: {}),
 		output: agent.outputTokens ?? 0,
 	};
 }
@@ -436,6 +447,7 @@ export function recordAgentSpend(
 		inputTokens?: number;
 		outputTokens?: number;
 		cachedTokens?: number;
+		poolSharedTokens?: number;
 	},
 ): void {
 	const ledger = spendLedger(agent);
@@ -451,6 +463,13 @@ export function recordAgentSpend(
 	fold("input", report.inputTokens);
 	fold("output", report.outputTokens);
 	fold("cached", report.cachedTokens);
+	fold("pool", report.poolSharedTokens);
+	if (
+		report.poolSharedTokens !== undefined ||
+		agent.poolSharedTokens !== undefined
+	) {
+		agent.poolSharedTokens = ledger.base.pool + ledger.seen.pool;
+	}
 	if (report.cachedTokens !== undefined || agent.cachedTokens !== undefined) {
 		agent.cachedTokens = ledger.base.cached + ledger.seen.cached;
 	}
@@ -485,7 +504,9 @@ export function recordAgentFinalSpend(
 	const input = settle("input", usage.inputTokens);
 	const output = settle("output", usage.outputTokens);
 	const cached = settle("cached", usage.cachedInputTokens);
-	ledger.runBase = { input, output, cached };
+	// The pool share has no finish figure: what the live reports summed stands.
+	const pool = settle("pool", undefined);
+	ledger.runBase = { input, output, cached, pool };
 	if (
 		usage.cachedInputTokens !== undefined ||
 		agent.cachedTokens !== undefined
@@ -506,7 +527,8 @@ function carrySpendIntoNextRun(agent: RoundAgentRecord): void {
 	ledger.base.input += ledger.seen.input;
 	ledger.base.output += ledger.seen.output;
 	ledger.base.cached += ledger.seen.cached;
-	ledger.seen = { input: 0, output: 0, cached: 0 };
+	ledger.base.pool += ledger.seen.pool;
+	ledger.seen = { input: 0, output: 0, cached: 0, pool: 0 };
 	ledger.runBase = { ...ledger.base };
 }
 
@@ -1637,6 +1659,7 @@ export class RoundHandle {
 			inputTokens: num("inputTokens"),
 			outputTokens: num("outputTokens"),
 			cachedTokens: num("cachedTokens"),
+			poolSharedTokens: num("poolSharedTokens"),
 		});
 		if ((agent.outputTokens ?? 0) > producedBefore) {
 			noteNodeTokens(
@@ -2265,7 +2288,11 @@ export function agentFactsLine(agent: RoundAgentRecord): string {
 		parts.push(
 			`${compactNumber(split.input)} in${
 				split.cached !== undefined
-					? ` (${compactNumber(split.cached)} cached, ${compactNumber(split.fresh ?? 0)} fresh)`
+					? ` (${compactNumber(split.cached)} cached${
+							split.poolShared !== undefined
+								? `, ${compactNumber(split.poolShared)} of it from the pool`
+								: ""
+						}, ${compactNumber(split.fresh ?? 0)} fresh)`
 					: ""
 			} / ${compactNumber(split.output)} out tokens`,
 		);

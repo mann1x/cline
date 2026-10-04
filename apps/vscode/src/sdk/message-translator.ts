@@ -558,6 +558,8 @@ function applySpawnAgentUpdate(entry: SubagentStatusItem, updateData: Record<str
 	applySubagentCompactions(entry, updateData)
 	if (typeof updateData.inputTokens === "number") entry.inputTokens = updateData.inputTokens
 	if (typeof updateData.outputTokens === "number") entry.outputTokens = updateData.outputTokens
+	if (typeof updateData.cachedTokens === "number") entry.cachedTokens = updateData.cachedTokens
+	if (typeof updateData.poolSharedTokens === "number") entry.poolSharedTokens = updateData.poolSharedTokens
 	if (typeof updateData.totalCost === "number") entry.totalCost = updateData.totalCost
 	if (typeof updateData.contextTokens === "number") entry.contextTokens = updateData.contextTokens
 	if (typeof updateData.contextWindow === "number") entry.contextWindow = updateData.contextWindow
@@ -652,6 +654,7 @@ function applySpawnAgentOutput(entry: SubagentStatusItem, output: Record<string,
 	if (usage) {
 		if (typeof usage.inputTokens === "number") entry.inputTokens = usage.inputTokens
 		if (typeof usage.outputTokens === "number") entry.outputTokens = usage.outputTokens
+		if (typeof usage.cachedInputTokens === "number") entry.cachedTokens = usage.cachedInputTokens
 	}
 	// Which connection it actually ran on. Agents can be
 	// given one of their own, and a configured agent may

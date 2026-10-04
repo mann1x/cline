@@ -1,6 +1,7 @@
 import {
 	describeOpencotiStreamPhase,
 	onPolykvNotice,
+	onPolykvPoolShare,
 	onPolykvRoomWait,
 	onPolykvStreamPhase,
 	type PolykvReleaseResult,
@@ -295,6 +296,13 @@ export function watchPolykvRoom(
 			},
 		});
 	});
+	// How much of each prompt came from its pool, summed over its requests:
+	// the part of its cached input that was the shared prefix.
+	let poolSharedTokens = 0;
+	const stopPoolShare = onPolykvPoolShare(engineSessionId, (tokens) => {
+		poolSharedTokens += tokens;
+		emitUpdate({ poolSharedTokens });
+	});
 	// What its request is doing on the server while the stream is silent --
 	// queued, prefilling n of N, generating with nothing to show -- from the
 	// heartbeat's comments. In place, on the row's current line, not on its
@@ -333,6 +341,7 @@ export function watchPolykvRoom(
 	return () => {
 		stopRoom();
 		stopNotices();
+		stopPoolShare();
 		stopPhase();
 	};
 }

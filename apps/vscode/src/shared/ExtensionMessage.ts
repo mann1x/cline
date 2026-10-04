@@ -562,6 +562,10 @@ export interface SubagentStatusItem {
 	stopReason?: "iteration_cap" | "loop_guard" | "supervisor"
 	/** How the lead's check on it came out, when the lead set one. */
 	oracle?: SubagentOracleResult
+	/** Of its input tokens, what the provider served from its cache. Absent when not reported. */
+	cachedTokens?: number
+	/** Of the cached input, what came from a PolyKV pool. Absent off PolyKV. */
+	poolSharedTokens?: number
 	contextTokens: number
 	contextWindow: number
 	contextUsagePercentage: number

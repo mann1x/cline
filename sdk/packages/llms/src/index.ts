@@ -314,6 +314,7 @@ export {
 	notePolykvOwnerWindow,
 	notePolykvServerFault,
 	onPolykvNotice,
+	onPolykvPoolShare,
 	onPolykvRoomWait,
 	onPolykvStreamPhase,
 	POLYKV_LEAD_SUBPOOL_CAP,
@@ -347,6 +348,7 @@ export {
 	releasePolykvSwarmsOf,
 	rememberOpencotiSession,
 	reportPolykvNotice,
+	reportPolykvPoolShare,
 } from "./providers/vendors/polykv-swarm";
 // xOllama: detection and per-model facts, read by the host at session build.
 export {

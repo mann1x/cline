@@ -786,7 +786,15 @@ export function describeAgent(
 			`node: ${agent.nodeLabel ?? agent.nodeId ?? "(not placed)"}`,
 			`model: ${model || "(not yet known)"}`,
 			...(window ? [window] : []),
-			`tokens: ${count(agent.inputTokens ?? 0)} in / ${count(agent.outputTokens ?? 0)} out`,
+			`tokens: ${count(agent.inputTokens ?? 0)} in${
+				agent.cachedTokens !== undefined
+					? ` (${count(agent.cachedTokens)} cached${
+							agent.poolSharedTokens !== undefined
+								? `, ${count(agent.poolSharedTokens)} of it from the pool`
+								: ""
+						})`
+					: ""
+			} / ${count(agent.outputTokens ?? 0)} out`,
 			...(agent.genTps !== undefined
 				? [`speed: ${agent.genTps} tok/s (recent)`]
 				: []),

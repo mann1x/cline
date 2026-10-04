@@ -175,3 +175,15 @@ describe("a teammate's row", () => {
 		expect(container.querySelector(".animate-spin")).not.toBeNull()
 	})
 })
+
+describe("the cached part of an agent's input", () => {
+	it("is said beside the input total, with the pool's share on PolyKV", () => {
+		expect(
+			subagentStatsText({ inputTokens: 600_000, outputTokens: 12_000, cachedTokens: 580_000, poolSharedTokens: 400_000 }),
+		).toMatch(/in \(.*cached, .*pool\) \/ .*out/)
+	})
+
+	it("is left out when the provider reported no cache figure", () => {
+		expect(subagentStatsText({ inputTokens: 600, outputTokens: 12 })).not.toMatch(/cached/)
+	})
+})
