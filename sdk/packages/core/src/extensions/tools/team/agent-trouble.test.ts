@@ -65,8 +65,32 @@ describe("telling the lead about agents stuck for a long time", () => {
 		expect(text).toContain("nothing stopped");
 		// Swarm ra0as: "refused 13x ... rejected" read as a broken node.
 		expect(text).not.toMatch(/refus|reject/i);
-		expect(text).toContain("stop_agents and do their tasks yourself");
+		// wlafh: a queued agent is paced, not broken, and stopping it throws
+		// its work away. Taking the tasks back is not offered for a queue.
+		expect(text).toContain("queued, not broken");
+		expect(text).not.toContain("do their tasks yourself");
 		watch.dispose();
+	});
+
+	it("offers to take the tasks back only when a server is gone", async () => {
+		const sent: string[] = [];
+		const gone = watchFor("review-1", sent);
+		const queued = watchFor("review-2", sent);
+		gone.waiting({
+			kind: "transport",
+			where: "the server",
+			detail: "not answering",
+		});
+		queued.waiting({ kind: "refusal", where: "Node1", detail: TPS });
+		await vi.advanceTimersByTimeAsync(
+			LEAD_NUDGE_AFTER_MS + LEAD_NUDGE_BATCH_MS,
+		);
+
+		expect(sent).toHaveLength(1);
+		expect(sent[0]).toContain("stop_agents and do their tasks yourself");
+		expect(sent[0]).toContain("The queued ones are placed");
+		gone.dispose();
+		queued.dispose();
 	});
 
 	it("names an unreachable node and since when", async () => {

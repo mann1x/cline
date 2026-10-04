@@ -15,6 +15,7 @@
 #include <detours.h>
 #include <cstdio>
 #include <cwchar>
+#include <cwctype>  // towupper
 #include <cstdlib>  // _countof
 
 // ---- Minimal NT types (we only touch the fields we read) -------------------
@@ -81,6 +82,15 @@ typedef NTSTATUS(NTAPI* PFN_NtQueryDirectoryFileEx)(
 #define STATUS_OBJECT_NAME_NOT_FOUND ((NTSTATUS)0xC0000034L)
 #define STATUS_NO_MORE_FILES         ((NTSTATUS)0x80000006L)
 #define STATUS_BUFFER_OVERFLOW       ((NTSTATUS)0x80000005L)
+#define STATUS_NO_SUCH_FILE          ((NTSTATUS)0xC000000FL)
+
+// ntdll's own matcher for a directory query's pattern, DOS wildcards included
+// (`*`, `?`, and the `<`, `>`, `"` that FindFirstFile translates to).
+typedef BOOLEAN(NTAPI* PFN_RtlIsNameInExpression)(
+    PUNICODE_STRING Expression, PUNICODE_STRING Name, BOOLEAN IgnoreCase, PWCH UpcaseTable);
+typedef WCHAR(NTAPI* PFN_RtlUpcaseUnicodeChar)(WCHAR);
+static PFN_RtlIsNameInExpression Real_RtlIsNameInExpression = nullptr;
+static PFN_RtlUpcaseUnicodeChar  Real_RtlUpcaseUnicodeChar = nullptr;
 
 // ---- Real function pointers ------------------------------------------------
 
@@ -609,8 +619,52 @@ static void BuildMergedNames(const wchar_t* wsDir, const wchar_t* ovDir, NameLis
     if (wh.buf) HeapFree(GetProcessHeap(), 0, wh.buf);
 }
 
+// Whether a query pattern asks for everything.
+static bool PatternIsAll(PUNICODE_STRING pattern) {
+    return !pattern || !pattern->Buffer || !pattern->Length ||
+           (pattern->Length == sizeof(wchar_t) && pattern->Buffer[0] == L'*');
+}
+
+// Keep the names the pattern matches. Returns false when the pattern cannot be
+// evaluated here (the query is then left to the real directory, as before).
+static bool FilterNames(NameList* nl, PUNICODE_STRING pattern) {
+    wchar_t up[260];
+    USHORT chars = pattern->Length / sizeof(wchar_t);
+    if (chars == 0 || chars >= _countof(up)) return false;
+    bool wild = false;
+    for (USHORT i = 0; i < chars; ++i) {
+        wchar_t c = pattern->Buffer[i];
+        if (c == L'*' || c == L'?' || c == L'<' || c == L'>' || c == L'"') wild = true;
+        up[i] = Real_RtlUpcaseUnicodeChar ? Real_RtlUpcaseUnicodeChar(c) : (wchar_t)towupper(c);
+    }
+    up[chars] = 0;
+    if (wild && !Real_RtlIsNameInExpression) return false;
+    UNICODE_STRING expr;
+    expr.Buffer = up; expr.Length = (USHORT)(chars * sizeof(wchar_t)); expr.MaximumLength = expr.Length;
+    int kept = 0;
+    for (int i = 0; i < nl->count; ++i) {
+        wchar_t* name = nl->buf + (size_t)i * 260;
+        bool match;
+        if (wild) {
+            UNICODE_STRING n;
+            n.Buffer = name; n.Length = (USHORT)(wcslen(name) * sizeof(wchar_t)); n.MaximumLength = n.Length;
+            match = Real_RtlIsNameInExpression(&expr, &n, TRUE, nullptr) != 0;
+        } else {
+            match = _wcsicmp(name, up) == 0;
+        }
+        if (match) {
+            if (kept != i) wcscpy_s(nl->buf + (size_t)kept * 260, 260, name);
+            kept++;
+        }
+    }
+    nl->count = kept;
+    return true;
+}
+
 // Per-handle enumeration cursor over a merged name list.
-struct EnumState { HANDLE h; NameList names; int idx; };
+// `started`: a listing has been built for this handle. The kernel keeps the
+// pattern of a handle's first query for every later one, and so do we.
+struct EnumState { HANDLE h; NameList names; int idx; bool started; };
 static EnumState g_enum[256];
 static CRITICAL_SECTION g_enumLock;
 
@@ -621,6 +675,7 @@ static EnumState* EnumGet(HANDLE h, bool create) {
     if (!found && create)
         for (int i = 0; i < 256; ++i) if (g_enum[i].h == nullptr) {
             g_enum[i].h = h; g_enum[i].names = { nullptr, 0, 0 }; g_enum[i].idx = 0;
+            g_enum[i].started = false;
             found = &g_enum[i]; break;
         }
     LeaveCriticalSection(&g_enumLock);
@@ -631,7 +686,8 @@ static void EnumFree(HANDLE h) {
     EnterCriticalSection(&g_enumLock);
     for (int i = 0; i < 256; ++i) if (g_enum[i].h == h) {
         if (g_enum[i].names.buf) HeapFree(GetProcessHeap(), 0, g_enum[i].names.buf);
-        g_enum[i].h = nullptr; g_enum[i].names = { nullptr, 0, 0 }; g_enum[i].idx = 0; break;
+        g_enum[i].h = nullptr; g_enum[i].names = { nullptr, 0, 0 }; g_enum[i].idx = 0;
+        g_enum[i].started = false; break;
     }
     LeaveCriticalSection(&g_enumLock);
 }
@@ -696,17 +752,32 @@ static NTSTATUS MergedServe(HANDLE h, PVOID buffer, ULONG length, ULONG cls,
     if (!LookupDir(h, logical, _countof(logical))) return 0;      // not a tracked ws dir
     if (!OverlayFor(logical, ovDir, _countof(ovDir))) return 0;
     if (!FileExists(ovDir)) return 0;                             // nothing to merge
-    if (pattern && pattern->Buffer && pattern->Length &&
-        !(pattern->Length == sizeof(wchar_t) && pattern->Buffer[0] == L'*')) return 0;  // specific query
-
-    *handled = true;
+    // A query for one name used to be left to the real handle. That handle is
+    // the OVERLAY directory (a workspace directory with an overlay is opened
+    // there), which holds only what the agent changed: a program that was in the
+    // workspace all along was "not found" by cmd's lookup of a bare command
+    // name, which is a FindFirstFile on that name (swarm wlafh, run_game.exe).
+    // A named query is answered from the merged listing like any other.
     EnumState* st = EnumGet(h, true);
-    if (!st) { *info = 0; return STATUS_NO_MORE_FILES; }
-    if (restart || (st->names.buf == nullptr && st->idx == 0)) {
-        if (st->names.buf) { HeapFree(GetProcessHeap(), 0, st->names.buf); st->names = { nullptr, 0, 0 }; }
-        st->idx = 0;
-        BuildMergedNames(logical, ovDir, &st->names);
+    if (!st) {
+        if (!PatternIsAll(pattern)) return 0;
+        *handled = true; *info = 0; return STATUS_NO_MORE_FILES;
     }
+    bool first = !st->started;
+    if (restart || first) {
+        NameList fresh = { nullptr, 0, 0 };
+        BuildMergedNames(logical, ovDir, &fresh);
+        if (!PatternIsAll(pattern) && !FilterNames(&fresh, pattern)) {
+            if (fresh.buf) HeapFree(GetProcessHeap(), 0, fresh.buf);
+            if (first) EnumFree(h);
+            return 0;                                              // pattern we cannot evaluate
+        }
+        if (st->names.buf) HeapFree(GetProcessHeap(), 0, st->names.buf);
+        st->names = fresh;
+        st->idx = 0;
+        st->started = true;
+    }
+    *handled = true;
 
     BYTE* base = (BYTE*)buffer;
     ULONG used = 0;
@@ -730,8 +801,12 @@ static NTSTATUS MergedServe(HANDLE h, PVOID buffer, ULONG length, ULONG cls,
     }
 
     *info = used;
-    if (packed == 0)
-        return (st->idx < st->names.count) ? STATUS_BUFFER_OVERFLOW : STATUS_NO_MORE_FILES;
+    if (packed == 0) {
+        if (st->idx < st->names.count) return STATUS_BUFFER_OVERFLOW;
+        // Nothing matched at all on the first query: FindFirstFile reads this
+        // one as "file not found", and NO_MORE_FILES as an empty directory.
+        return (first && st->names.count == 0) ? STATUS_NO_SUCH_FILE : STATUS_NO_MORE_FILES;
+    }
     return 0;  // STATUS_SUCCESS
 }
 
@@ -937,6 +1012,8 @@ static void AttachHooks() {
     Real_NtQueryFullAttributesFile = (PFN_NtQueryFullAttributesFile)GetProcAddress(ntdll, "NtQueryFullAttributesFile");
     Real_NtQueryDirectoryFile = (PFN_NtQueryDirectoryFile)GetProcAddress(ntdll, "NtQueryDirectoryFile");
     Real_NtQueryDirectoryFileEx = (PFN_NtQueryDirectoryFileEx)GetProcAddress(ntdll, "NtQueryDirectoryFileEx");
+    Real_RtlIsNameInExpression = (PFN_RtlIsNameInExpression)GetProcAddress(ntdll, "RtlIsNameInExpression");
+    Real_RtlUpcaseUnicodeChar = (PFN_RtlUpcaseUnicodeChar)GetProcAddress(ntdll, "RtlUpcaseUnicodeChar");
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());

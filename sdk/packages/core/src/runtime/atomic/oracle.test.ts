@@ -167,6 +167,22 @@ describe("a check that reports its verdict and exits zero anyway", () => {
 		});
 	});
 
+	it("matches a pattern across the lines of the output", async () => {
+		// The wlafh lead's check held only because its program printed one line.
+		await withWorkspace(
+			{ "check.js": 'console.log("ok: true\\nframes: 400\\nplaying: true")' },
+			async (root) => {
+				const oracle = await discoverCommandOracle(root, {
+					manual: `${process.execPath} check.js`,
+					expect: "ok: true.*playing: true",
+				});
+				const verdict = await runOracle(oracle as Oracle);
+
+				expect(verdict.passed).toBe(true);
+			},
+		);
+	});
+
 	it("passes the same command once the output says so", async () => {
 		await withWorkspace({ "check.js": reports("true") }, async (root) => {
 			const oracle = await discoverCommandOracle(root, {

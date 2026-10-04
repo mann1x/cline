@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import type { OracleSpawnWrapper } from "../../../runtime/atomic/oracle";
 import {
 	AGENT_CHECK_MAX_IDENTICAL_FAILS,
+	AGENT_CHECK_MAX_UNRESOLVED,
+	checkCommandUnresolved,
 	createDelegatedAgentCheck,
 	describeAgentCheck,
 	readAgentCheck,
@@ -167,6 +169,57 @@ describe("the check at the agent's completion attempt", () => {
 			runs: AGENT_CHECK_MAX_IDENTICAL_FAILS,
 		});
 		expect(check.result()?.reason).toContain("same failing output");
+	});
+
+	/**
+	 * Swarm wlafh: the check's shell did not find `run_game.exe`, five fixers
+	 * were sent back to work, and three changed the host to get past it.
+	 */
+	it("tells the agent a program the shell did not find is not its work to fix", async () => {
+		const notFound =
+			"'run_game.exe' is not recognized as an internal or external command,\r\noperable program or batch file.";
+		const check = createDelegatedAgentCheck({
+			check: { command: "run_game.exe page.html", expect: "ok" },
+			cwd: "/w",
+			wrapSpawn: (spec) => spec,
+			run: async () => ({
+				passed: false,
+				exitCode: 1,
+				output: notFound,
+				timedOut: false,
+			}),
+		});
+
+		const first = await check.onCompletionAttempt({});
+		expect(first).toContain("Your check could not run");
+		expect(first).toContain("Do not change the system");
+		expect(first).not.toContain("Fix what it reports");
+
+		for (let i = 1; i < AGENT_CHECK_MAX_UNRESOLVED; i += 1) {
+			expect(await check.onCompletionAttempt({})).toBeUndefined();
+		}
+		expect(check.result()).toMatchObject({
+			status: "not_run",
+			runs: AGENT_CHECK_MAX_UNRESOLVED,
+		});
+		expect(check.result()?.reason).toContain(
+			"did not find the check's program",
+		);
+	});
+
+	it("knows each shell's way of saying the program was not found", () => {
+		const says = (output: string, exitCode: number | null = 1) =>
+			checkCommandUnresolved({ output, exitCode });
+		expect(
+			says(
+				"run_game.exe : The term 'run_game.exe' is not recognized as the name of a cmdlet, function",
+			),
+		).toBe(true);
+		expect(says("sh: 1: run_game: not found", 127)).toBe(true);
+		// A program that ran and failed, whatever it printed.
+		expect(says("user: not found", 1)).toBe(false);
+		expect(says("3 tests failed", 1)).toBe(false);
+		expect(says("", null)).toBe(false);
 	});
 
 	it("judges nothing once closed: the lead's summary is not an attempt", async () => {

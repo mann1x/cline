@@ -5,7 +5,11 @@ import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setUpDelegatedSandbox } from "../../extensions/tools/team/agent-sandbox-executors";
 import { createRevisionLog } from "../atomic/file-revisions";
-import { archiveSandboxLog, createAgentSandbox } from "./agent-sandbox";
+import {
+	archiveSandboxLog,
+	createAgentSandbox,
+	withWorkspaceOnPath,
+} from "./agent-sandbox";
 
 describe("createAgentSandbox", () => {
 	let base: string;
@@ -75,7 +79,29 @@ describe("createAgentSandbox", () => {
 		expect(wrapped?.env.CEREBRILINE_WS_ROOT).toBe(ws);
 		expect(wrapped?.env.CEREBRILINE_OVERLAY_ROOT).toBe(ov);
 		expect(wrapped?.env.CEREBRILINE_SANDBOX_LOG).toBe(logPath);
-		expect(wrapped?.env.PATH).toBe("/bin");
+		// The workspace goes last on the search path: a program beside the
+		// files is found by its bare name, and shadows no system command.
+		expect(wrapped?.env.PATH).toBe(`/bin${path.delimiter}${ws}`);
+	});
+
+	it("puts the workspace on the search path whatever the shell's own lookup does", () => {
+		// Windows: the key is `Path`, and the comparison ignores case.
+		expect(
+			withWorkspaceOnPath(
+				{},
+				"C:\\Users\\m\\repo",
+				{ Path: "C:\\Windows;C:\\Tools" },
+				"win32",
+			),
+		).toEqual({ Path: "C:\\Windows;C:\\Tools;C:\\Users\\m\\repo" });
+		const already = { Path: "C:\\Windows;c:\\users\\m\\REPO" };
+		expect(
+			withWorkspaceOnPath(already, "C:\\Users\\m\\repo", {}, "win32"),
+		).toBe(already);
+		expect(withWorkspaceOnPath({ PATH: "/bin" }, "/w", {}, "linux")).toEqual({
+			PATH: "/bin:/w",
+		});
+		expect(withWorkspaceOnPath({}, "/w", {}, "linux")).toEqual({ PATH: "/w" });
 	});
 
 	it("dispose removes the overlay directory", async () => {

@@ -234,6 +234,16 @@ export interface OracleSources {
 	expect?: string;
 }
 
+/**
+ * Flags an `expect` pattern is compiled with: `s`, so `.` crosses line ends.
+ *
+ * A check's output is several lines more often than one, and a pattern written
+ * as `"ok":true.*"passed":23` means "this, then later that" to whoever wrote
+ * it. Without the flag it only held while the program printed one line (the
+ * wlafh lead noticed it had been lucky).
+ */
+export const ORACLE_EXPECT_FLAGS = "s";
+
 export function shellOracle(
 	line: string,
 	cwd: string,
@@ -541,7 +551,7 @@ function outputSaysItPassed(oracle: CommandOracle, output: string): boolean {
 		return true;
 	}
 	try {
-		const found = new RegExp(oracle.expect).test(output);
+		const found = new RegExp(oracle.expect, ORACLE_EXPECT_FLAGS).test(output);
 		return oracle.must === "not_match" ? !found : found;
 	} catch {
 		return false;

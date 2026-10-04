@@ -79,6 +79,8 @@ It returns `{text, iterations, maxIterations?, finishReason, stopReason?, state?
 
 Added in `a7f892531` (2026-09-23, "one global spawn queue; batch spawn_agent; swarms on any node"), extended in `addb27abc` (same day). One call starts the whole fan-out. `knowledge` and `instructions` are stated once and shared.
 
+**N agents of one kind are one entry.** Three reports from each of five kinds is five entries with `count: 3`, not 15 entries. The same holds with `merge: true`. The tool description has led with this since 4.100.232: a lead asked for "3 reports per type" wrote 15 entries by hand.
+
 Each entry takes these fields:
 
 - `name` and `task`;
@@ -411,7 +413,8 @@ Keys: `model` (required), `url`, `provider`, `priority` (1-10, default 1), `capa
 - Reads fall through to your files. Writes, deletes and renames stay in the agent's copy under the session directory.
 - The overlay is pure TypeScript and always on, on every platform.
 - The file tools (`read_files`, `editor`, `apply_patch`, `grep`, `sed`, `awk`) are built over it.
-- Paths outside the workspace are not isolated.
+- Paths outside the workspace are not isolated. An agent's command can write anywhere your user can, and can change the registry and the persistent environment. In session wlafh one agent appended the workspace to the User `PATH` and another copied a program into `~/.local/bin`; neither showed in its "no file changes" report. A sandbox that confines writes to the workspace and the temp folder is planned.
+- Every sub-agent is told to make no lasting change to the system (environment variables, `PATH`, links, installed programs, registry, user configuration, files outside the workspace and the temp folder) unless its task or role asks for it, and to report what is in its way instead (since 4.100.232). This is an instruction, not a guard.
 - When the agent ends, whether it finished, failed or was stopped, each changed file comes back to the lead as a revision attributed to that agent. The lead reads a revision with `read_files` and `revision: "#N"`, and adopts it with `restore_file`. Nothing is applied automatically.
 - A teammate hands back after every run.
 
@@ -455,6 +458,8 @@ There is no attempt limit and no deadline. The refusal thresholds are your own s
 
 **The lead nudge.** An agent that has waited without a break for **10 minutes** is reported to the lead once. Agents crossing the line within 30 s of each other are reported together. The report arrives as a side turn in which the lead can reply, `message_agents` or `stop_agents`. The agents keep retrying unless someone stops them.
 
+**What the report offers.** For agents that are only queued, the report says they are queued, not broken, and that the server places them as it frees up: wait, and stop one only if its work is no longer needed. Taking the tasks back (`stop_agents` and do them yourself) is offered only when a server is unreachable or its turns fail. Before 4.100.232 it was offered for queued agents too, and a lead that followed it would have thrown away their work.
+
 **The no-node report.** An agent still waiting after **2 hours** without a break has had nowhere to run, and waiting on may never end. The lead is told a second time, once per agent, with the agents that crossed the line together in one report. This report asks for a decision: ask you how to proceed (`ask_question`), or `stop_agents` and do their tasks itself, only if that fits what you asked. Nothing is stopped by the report itself; the agents keep retrying until the lead or you stop them.
 
 **Example prompt:** "If any agent is stuck on the server for more than 10 minutes, stop it and do its task yourself."
@@ -479,6 +484,16 @@ Code: `team/spawn-sampling.ts`. This is available on `spawn_agent` (call and ent
 - The value each agent actually ran with is shown on its row and in its result. For a teammate it is also saved in its spec, and restored rather than drawn again.
 
 **Example prompt:** "Spawn 5 agents on the same bug with seed random and temperature 0.7, temperature_range 10."
+
+#### Why several agents on the same task
+
+Identical instructions with a random seed and a ±2% temperature do not produce identical work. In pandorum session wlafh (2026-10-03) one call ran 15 agents on one 164-line HTML game: three each of five kinds, same role and task within a kind, on one model (Omnimerge-v6 27B). The seeds were all distinct and the temperatures fell between 0.980 and 1.008. What the lead measured when it merged the 15 reports:
+
+- **Agents of a kind agree on what is wrong and differ in how they prove it.** The three correctness reviewers took 2, 4 and 16 iterations (71k to 488k input tokens). The 16-iteration one built a headless simulation and gave the best-evidenced report; the 2-iteration one read the code once and still found two critical issues nobody else had. Turns spent did not predict findings.
+- **Agreement from independent methods is a control.** The six fixers all answered "the file is already valid, no change", by three different routes: a V8 parse plus a custom scanner, raw delimiter counts plus `node --check`, and a manual read. One answer reached three ways is worth more than one answer.
+- **The outlier can be the one that is right.** Four agents estimated how often the player spawns trapped in rock: 64%, 40%, 40% and 16%. The lead re-derived it from the code, and the 64% was correct: the other three had missed a case. A majority vote would have picked the wrong number, and a single agent would have had a one-in-four chance of the right one.
+
+So the copies buy three things: findings one sample misses, a cross-check on the ones they share, and disagreements that tell the lead where to look itself. The lead still has to adjudicate; counting votes is not enough.
 
 ### Compaction and tool counters
 
@@ -528,6 +543,9 @@ Landed on 2026-09-26 in `fdee39e61`, `d8dcee6a3` and `e4893c1b1`. `check` is ava
 - It must exit 0, and its stdout+stderr must match the regex `expect`. With `must: "not_match"` the output must not match. An empty `expect` means "exit 0".
 - On a fail the agent is shown the output and keeps working.
 - After three identical failing outputs in a row it is let finish, and the verdict stays `fail`.
+- **`.` in `expect` crosses line ends** (since 4.100.232; the pattern is compiled with the `s` flag), so `"ok":true.*"passed":23` holds when the two are on different lines. The same applies to the change protocol's check.
+- **Where it runs.** The working directory is the workspace, seen through the agent's copy, and the workspace is the last entry of the search path (since 4.100.232). A program that sits in the workspace is found by its bare name in every shell: `run_game.exe page.html`, not only `.\run_game.exe page.html`. The agent's own `run_commands` get the same search path.
+- **A program the shell cannot find is not the agent's to fix.** When the check's output is the shell's "not recognized" or "not found" (cmd, PowerShell, or sh exit 127), the agent is told the check could not run and not to change the system to get past it. On the second such run it is let finish and the check is recorded as **not run**, with the reason. Before 4.100.232 this counted as a failing check: in session wlafh five of six fixers were sent back to work by it and spent 11 to 18 iterations on the environment.
 - Without a command sandbox (the setting is off, or there is no launcher) the check is **not** run on the host. The report says "not run: no command sandbox".
 - The verdict (`status`, `exitCode`, output tail) is in the report and on the row.
 

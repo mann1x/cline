@@ -63,6 +63,40 @@ export interface CreateAgentSandboxOptions {
 	binaries?: SandboxBinaries;
 }
 
+/**
+ * The environment with the workspace as the last entry of the search path.
+ *
+ * A command's working directory is the workspace, and whoever writes
+ * `run_game.exe page.html` means the program beside the page. cmd looks in the
+ * working directory by listing it, PowerShell and sh do not look there at all;
+ * on the search path the program is opened by its full name in every shell.
+ * Last, so nothing in the workspace shadows a system command.
+ */
+export function withWorkspaceOnPath(
+	env: Record<string, string>,
+	workspaceRoot: string,
+	inherited: NodeJS.ProcessEnv = process.env,
+	platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
+	const separator = platform === "win32" ? ";" : ":";
+	const isPath = (key: string) =>
+		platform === "win32" ? key.toLowerCase() === "path" : key === "PATH";
+	const key =
+		Object.keys(env).find(isPath) ??
+		Object.keys(inherited).find(isPath) ??
+		(platform === "win32" ? "Path" : "PATH");
+	const current = env[key] ?? inherited[key] ?? "";
+	const entries = current.split(separator).filter((entry) => entry !== "");
+	const same = (entry: string) =>
+		platform === "win32"
+			? entry.toLowerCase() === workspaceRoot.toLowerCase()
+			: entry === workspaceRoot;
+	if (entries.some(same)) {
+		return env;
+	}
+	return { ...env, [key]: [...entries, workspaceRoot].join(separator) };
+}
+
 export async function createAgentSandbox(
 	options: CreateAgentSandboxOptions,
 ): Promise<AgentSandbox> {
@@ -111,7 +145,7 @@ function buildAgentSandbox(options: CreateAgentSandboxOptions): AgentSandbox {
 				// resolve there; the hook maps them into the overlay.
 				cwd: workspaceRoot,
 				env: {
-					...spec.env,
+					...withWorkspaceOnPath(spec.env, workspaceRoot),
 					CEREBRILINE_WS_ROOT: workspaceRoot,
 					CEREBRILINE_OVERLAY_ROOT: overlayRoot,
 					CEREBRILINE_SANDBOX_LOG: logPath,

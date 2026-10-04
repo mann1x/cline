@@ -24,6 +24,7 @@
 import { z } from "zod";
 import {
 	DEFAULT_ORACLE_TIMEOUT_MS,
+	ORACLE_EXPECT_FLAGS,
 	type OracleSpawnWrapper,
 	type OracleVerdict,
 	runOracle,
@@ -46,12 +47,12 @@ export const AgentCheckSchema = z
 		command: z
 			.string()
 			.describe(
-				"A shell command, run in the agent's own copy of the workspace.",
+				"A shell command, run with the agent's own copy of the workspace as its working directory; a program in the workspace is found by its bare name.",
 			),
 		expect: z
 			.string()
 			.describe(
-				"A regular expression the command's output (stdout+stderr) is matched against.",
+				"A regular expression the command's output (stdout+stderr) is matched against. `.` matches line ends too, so `a.*b` holds across lines.",
 			),
 		must: z
 			.enum(["match", "not_match"])
@@ -95,6 +96,39 @@ export const AGENT_CHECK_OUTPUT_TAIL_CHARS = 1_500;
  * stalled-check rule. The agent is let finish; the verdict stays `fail`.
  */
 export const AGENT_CHECK_MAX_IDENTICAL_FAILS = 3;
+
+/**
+ * Failing runs in a row where the shell did not find the check's program,
+ * after which the agent is let finish and the check counts as not run.
+ */
+export const AGENT_CHECK_MAX_UNRESOLVED = 2;
+
+/**
+ * The shell saying it could not find the program to run: cmd, PowerShell, sh.
+ *
+ * That is a statement about where the check runs, not about the agent's work.
+ * In swarm wlafh five of six fixers were sent back to work by it, spent 11 to
+ * 18 iterations on the environment, and three changed the host to get past it
+ * (the user's PATH, a hard link in `~/.local/bin`, a re-created program).
+ */
+const UNRESOLVED_COMMAND =
+	/is not recognized as an internal or external command|is not recognized as the name of a cmdlet|CommandNotFoundException/i;
+/** What sh exits with when it finds no such program. */
+const SH_COMMAND_NOT_FOUND = 127;
+
+/** Whether a failed run says the shell never found the program. */
+export function checkCommandUnresolved(verdict: {
+	exitCode: number | null;
+	output: string;
+}): boolean {
+	if (verdict.exitCode === 0 || verdict.exitCode === null) {
+		return false;
+	}
+	return (
+		verdict.exitCode === SH_COMMAND_NOT_FOUND ||
+		UNRESOLVED_COMMAND.test(verdict.output)
+	);
+}
 
 /** The reason a check is not run when the agent has no sandboxed shell. */
 export const AGENT_CHECK_NO_SANDBOX = "no command sandbox";
@@ -168,7 +202,7 @@ export function readAgentCheck(raw: unknown): AgentCheck | undefined {
 		expect = slashed[1];
 	}
 	try {
-		new RegExp(expect);
+		new RegExp(expect, ORACLE_EXPECT_FLAGS);
 	} catch (error) {
 		throw new Error(
 			`\`check.expect\` is not a valid regular expression (${
@@ -345,6 +379,27 @@ export function createDelegatedAgentCheck(
 			identicalFails =
 				verdict.output === lastFailOutput ? identicalFails + 1 : 1;
 			lastFailOutput = verdict.output;
+			if (checkCommandUnresolved(verdict)) {
+				if (identicalFails >= AGENT_CHECK_MAX_UNRESOLVED) {
+					// Not the agent's to fix: it finishes, and the lead reads why.
+					latest = {
+						...record(verdict),
+						status: "not_run",
+						reason: `the shell did not find the check's program (${identicalFails} runs); the agent was let finish`,
+					};
+					return undefined;
+				}
+				const unresolved = record(verdict);
+				return [
+					`Your check could not run: the shell did not find the program in \`${check.command}\`.`,
+					"Its output (end):",
+					"```",
+					unresolved.output,
+					"```",
+					"This is about where the check runs, not about your work. Do not change the system to make it resolve: no PATH or other environment changes, no links, no copies of the program.",
+					"If your task is to produce that program, produce it in the workspace and finish again. Otherwise finish again with your report and say the check could not run; it is then recorded as not run.",
+				].join("\n");
+			}
 			if (identicalFails >= AGENT_CHECK_MAX_IDENTICAL_FAILS) {
 				// Nothing moved between the last runs: let it finish, failed.
 				record(

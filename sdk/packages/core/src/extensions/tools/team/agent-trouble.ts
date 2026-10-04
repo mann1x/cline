@@ -163,10 +163,18 @@ export function describeLeadNudge(
 	now: number,
 ): string {
 	const count = records.length;
+	const queued = records.filter((record) => record.kind === "refusal").length;
+	// A queued agent is being paced, and stopping it throws its work away for
+	// nothing (the wlafh lead was offered that twice and rightly declined).
+	// Taking the tasks back is only worth saying for a server that is gone.
+	const options =
+		queued === count
+			? "They are queued, not broken: the server places them as it frees up, and nothing is lost. Wait for them; stop one only if you no longer need its work."
+			: `Options: let them retry; or stop_agents and do their tasks yourself when the round returns.${queued > 0 ? " The queued ones are placed as the server frees up: leave them." : ""} The user can stop/restart them from their rows.`;
 	return [
 		`${HARNESS_TAG} ${count} agent${count === 1 ? "" : "s"} waiting >${minutes(LEAD_NUDGE_AFTER_MS)} min for the server, still retrying; nothing stopped:`,
 		...records.map((record) => describeTrouble(record, now)),
-		"Options: let them retry; or stop_agents and do their tasks yourself when the round returns. The user can stop/restart them from their rows.",
+		options,
 	].join("\n");
 }
 

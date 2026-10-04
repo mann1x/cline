@@ -135,3 +135,79 @@ fn w1_isolates_the_workspace_and_produces_the_change_set() {
 
     fs::remove_dir_all(&base).ok();
 }
+
+/// A lookup by name in a workspace directory sees the workspace, not only the
+/// overlay. cmd finds a bare command name with a FindFirstFile on that name in
+/// the working directory; the hook left such a query to the overlay directory,
+/// which holds only what the agent changed, so a program that had been in the
+/// workspace all along was "not recognized" (swarm wlafh, `run_game.exe`).
+#[test]
+fn w1_finds_a_workspace_program_by_its_bare_name() {
+    let hook = match std::env::var("CEREBRILINE_TEST_HOOK_DLL") {
+        Ok(p) if !p.is_empty() && Path::new(&p).exists() => p,
+        _ => {
+            eprintln!("skipping: CEREBRILINE_TEST_HOOK_DLL not set or the DLL is missing");
+            return;
+        }
+    };
+
+    let base = unique_dir("byname");
+    let ws = base.join("ws");
+    let ov = base.join("ov");
+    let log = base.join("run.log");
+    fs::create_dir_all(&ws).unwrap();
+    fs::create_dir_all(&ov).unwrap();
+    write(&ws, "tool.cmd", "@echo TOOL-RAN\r\n");
+    write(&ws, "gone.txt", "X\r\n");
+    // The agent deleted gone.txt and created made.txt: both live in the overlay.
+    write(&ov, ".wh.gone.txt", "");
+    write(&ov, "made.txt", "Y\r\n");
+
+    let run = |line: &str| {
+        Command::new(BIN)
+            .arg(&hook)
+            .arg(&log)
+            .arg("cmd")
+            .arg("/c")
+            .arg(line)
+            .current_dir(&ws)
+            .env("CEREBRILINE_WS_ROOT", &ws)
+            .env("CEREBRILINE_OVERLAY_ROOT", &ov)
+            .env("CEREBRILINE_SANDBOX_LOG", &log)
+            .output()
+            .expect("failed to run cerebriline-sandbox")
+    };
+
+    let out = run("tool.cmd");
+    if out.status.code() == Some(3) {
+        eprintln!("skipping: Detours could not start the injected child on this host");
+        fs::remove_dir_all(&base).ok();
+        return;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stdout.contains("TOOL-RAN"),
+        "a program in the workspace must be found by its bare name; stdout: {stdout} stderr: {stderr}"
+    );
+
+    let out = run("if exist gone.txt (echo PRESENT) else (echo ABSENT)");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("ABSENT"),
+        "a file the agent deleted must not be found by name"
+    );
+
+    let out = run("if exist made.txt (echo PRESENT) else (echo ABSENT)");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("PRESENT"),
+        "a file the agent created must be found by name"
+    );
+
+    let out = run("if exist nothere.txt (echo PRESENT) else (echo ABSENT)");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("ABSENT"),
+        "a name in neither layer must not be found"
+    );
+
+    fs::remove_dir_all(&base).ok();
+}
