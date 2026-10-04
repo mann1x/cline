@@ -324,7 +324,28 @@ Measured on the opencoti engine, which is the engine xOllama runs: Qwen3.8-27B O
 | 116,821 | 74.0 | 28.3 | 3.1 | 2327 / 1943 / 1401 |
 | 126,050 | 73.0 | 24.4 | 3.2 | 2275 / 1892 / 1375 |
 
-"No cap" is the ceiling: the model and its whole cache in VRAM, which a 12 GB card cannot hold. The two capped columns are the choices such a card has. While the cache still fits under the cap (8k and 16k here) the window costs nothing: generation and prefill match the uncapped engine. With one or two windows in host RAM it gives up 10 to 15%, and from there generation falls with depth, to 24.4 tok/s at 126k. Moving ten layers to RAM at the same VRAM gives 3 to 5 tok/s at every depth, so the window is 7 to 18 times faster. Prefill with the window in use is 83 to 95% of the uncapped prefill. On Radeon under Windows, use AMD Software 26.9.2 or later for Vulkan.
+"No cap" is the ceiling: the model and its whole cache in VRAM, which a 12 GB card cannot hold. The two capped columns are the choices such a card has. While the cache still fits under the cap (8k and 16k here) the window costs nothing: generation and prefill match the uncapped engine. With one or two windows in host RAM it gives up 10 to 15%, and from there generation falls with depth, to 24.4 tok/s at 126k. Moving ten layers to RAM at the same VRAM gives 3 to 5 tok/s at every depth, so the window is 7 to 18 times faster. Prefill with the window in use is 83 to 95% of the uncapped prefill.
+
+**With the model's own drafter on** (NextN, the engine's default), same engine and setup. The drafter keeps its own cache in VRAM, so under the 11.5 GB cap the window is in use from the first tokens:
+
+| Prompt tokens | No cap, all in VRAM | 11.5 GB cap, rolling window | Same VRAM, 10 of 64 layers in RAM | Prefill tok/s (no cap / window / layers in RAM) |
+|---|---|---|---|---|
+| 8,091 | 122.6 | 117.0 | 4.6 | 2649 / 2257 / 1355 |
+| 16,086 | 193.9 | 172.6 | 5.5 | 2701 / 2269 / 1431 |
+| 30,486 | 144.2 | 125.6 | 23.3 * | 2585 / 2171 / 1376 |
+| 45,051 | 153.5 | 120.3 | 4.2 | 2446 / 2065 / 1365 |
+| 59,196 | 130.2 | 74.3 | 3.6 | 2324 / 1960 / 1303 |
+| 73,841 | 155.5 | 66.0 | 3.9 | 2203 / 1863 / 1272 |
+| 88,115 | 117.5 | 55.4 | 3.0 | 2122 / 1788 / 1252 |
+| 102,504 | 107.2 | 45.4 | 3.4 | 2031 / 1703 / 1212 |
+| 116,821 | 124.8 | 41.2 | 2.6 | 1939 / 1643 / 1168 |
+| 126,050 | 103.9 | 42.5 | 3.3 | 1888 / 1603 / 1148 |
+
+\* an outlier reading.
+
+Drafter figures move with how many drafted tokens are accepted, so they vary from row to row more than the table above; each row is one run. Under the cap the drafter still pays at every depth: 42 to 173 tok/s with it against 24 to 89 without. The capped engine is 5 to 13% behind the uncapped one up to 30k tokens and further behind as the prompt grows.
+
+On Radeon under Windows, use AMD Software 26.9.2 or later for Vulkan.
 
 ## Extend With Plugins or MCP Servers
 
