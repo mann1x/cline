@@ -283,15 +283,53 @@ static void RemoveWhiteout(const wchar_t* ovPath) {
     if (WhiteoutPath(ovPath, wh, _countof(wh))) DeleteFileW(wh);
 }
 
-// The Win32 path a handle points to, for a handle the registry does not know.
-// `\\?\C:\dir` comes back as `C:\dir`; anything else (a UNC share, a device)
-// is not a path the workspace root can be compared with.
-static bool FinalPathOf(HANDLE h, wchar_t* out, size_t cap) {
+// The Win32 path the system reports for a handle: `\\?\C:\dir` comes back as
+// `C:\dir`. Anything else (a UNC share, a device) is not a path the workspace
+// root can be compared with.
+static bool ReportedPathOf(HANDLE h, wchar_t* out, size_t cap) {
     wchar_t raw[1024];
     DWORD n = GetFinalPathNameByHandleW(h, raw, _countof(raw), 0 /*VOLUME_NAME_DOS*/);
     if (n < 7 || n >= _countof(raw)) return false;
     if (wcsncmp(raw, L"\\\\?\\", 4) != 0 || raw[5] != L':') return false;
     return wcscpy_s(out, cap, raw + 4) == 0;
+}
+
+// The workspace root as the system reports it. The root arrives spelled the
+// way the caller wrote it, and a reported path is the long, link-free form:
+// a root given as `C:\Users\RUNNER~1\...`, or through a junction, shares no
+// prefix with it (CI run 37177372103). 0 = not asked yet, 1 = being filled,
+// 2 = ready.
+static wchar_t g_wsRootReported[1024] = L"";
+static volatile LONG g_wsRootReportedState = 0;
+
+static bool UnderRoot(const wchar_t* win, const wchar_t* root);
+
+static void EnsureWsRootReported() {
+    if (InterlockedCompareExchange(&g_wsRootReportedState, 1, 0) != 0) return;
+    // Opened past the hooks: with them, a workspace root that has an overlay
+    // opens as the overlay directory, and that is the path we would get.
+    int was = g_inHook;
+    g_inHook = 1;
+    HANDLE h = CreateFileW(g_wsRoot, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+        if (ReportedPathOf(h, g_wsRootReported, _countof(g_wsRootReported)))
+            InterlockedExchange(&g_wsRootReportedState, 2);
+        CloseHandle(h);
+    }
+    g_inHook = was;
+}
+
+// The path of a handle the registry does not know, in the workspace root's own
+// spelling when it lies under the workspace.
+static bool FinalPathOf(HANDLE h, wchar_t* out, size_t cap) {
+    wchar_t reported[1024];
+    if (!ReportedPathOf(h, reported, _countof(reported))) return false;
+    EnsureWsRootReported();
+    if (g_wsRootReportedState == 2 && UnderRoot(reported, g_wsRootReported))
+        return _snwprintf_s(out, cap, _TRUNCATE, L"%s%s", g_wsRoot,
+                            reported + wcslen(g_wsRootReported)) > 0;
+    return wcscpy_s(out, cap, reported) == 0;
 }
 
 // ---- Logical path extraction -----------------------------------------------
