@@ -422,6 +422,15 @@ const USER_SETTINGS_FIELDS = {
 	// where there is no launcher (or this is off) it gets no shell rather than one
 	// pointed at the real workspace. Independent of which model the agent runs on.
 	subagentCommandsEnabled: { default: false as boolean },
+	// Whether a delegated agent's commands are confined: they read the system
+	// and write only their copy of the workspace and a temp folder. On by
+	// default; agents run unattended, and in swarm wlafh two of them changed the
+	// host (the user's PATH, a 104 MB copy in the profile). One switch for every
+	// agent, whichever provider runs it.
+	subagentSandboxConfine: { default: true as boolean },
+	// The same confinement for the lead's own commands. Off by default: package
+	// managers and git write outside the workspace, and the user decides.
+	leadSandboxConfine: { default: false as boolean },
 	// Whether the lead is offered the `team_*` tools: durable named teammates
 	// with a mailbox and a task board. Off by default -- eighteen tools in every
 	// request that most sessions never call. An absent value reads as off, so a

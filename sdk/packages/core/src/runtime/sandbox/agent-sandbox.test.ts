@@ -7,7 +7,9 @@ import { setUpDelegatedSandbox } from "../../extensions/tools/team/agent-sandbox
 import { createRevisionLog } from "../atomic/file-revisions";
 import {
 	archiveSandboxLog,
+	confinementEnv,
 	createAgentSandbox,
+	createLeadConfinement,
 	withWorkspaceOnPath,
 } from "./agent-sandbox";
 
@@ -258,5 +260,104 @@ describe("hand-back into the lead's revision log", () => {
 			"DOOMED",
 		);
 		await expect(fs.access(path.join(ws, "fresh.txt"))).rejects.toThrow();
+	});
+});
+
+describe("write confinement", () => {
+	it("tells the launcher to confine, with a temp folder of its own on Windows", () => {
+		expect(confinementEnv("/x/ov.tmp", "linux")).toEqual({
+			CEREBRILINE_SANDBOX_CONFINE: "1",
+		});
+		expect(confinementEnv("C:\\x\\ov.tmp", "win32")).toEqual({
+			CEREBRILINE_SANDBOX_CONFINE: "1",
+			CEREBRILINE_SANDBOX_TMP: "C:\\x\\ov.tmp",
+			TEMP: "C:\\x\\ov.tmp",
+			TMP: "C:\\x\\ov.tmp",
+		});
+	});
+
+	const binaries = {
+		launcher: "/bin/launcher",
+		hook: "/bin/hook",
+		platforms: [process.platform],
+	};
+	const spec = { executable: "sh", args: ["-c", "true"], cwd: "/ws", env: {} };
+
+	it("confines an agent's commands unless told not to", async () => {
+		const base = await fs.mkdtemp(path.join(os.tmpdir(), "agent-confine-"));
+		try {
+			const on = await createAgentSandbox({
+				workspaceRoot: base,
+				overlayRoot: path.join(base, "on"),
+				binaries,
+			});
+			expect(on.wrapSpawn?.(spec).env.CEREBRILINE_SANDBOX_CONFINE).toBe("1");
+			const off = await createAgentSandbox({
+				workspaceRoot: base,
+				overlayRoot: path.join(base, "off"),
+				binaries,
+				confine: false,
+			});
+			expect(
+				off.wrapSpawn?.(spec).env.CEREBRILINE_SANDBOX_CONFINE,
+			).toBeUndefined();
+		} finally {
+			await fs.rm(base, { recursive: true, force: true });
+		}
+	});
+
+	it("leaves the lead's commands alone when its confinement is off", () => {
+		expect(
+			createLeadConfinement({
+				enabled: false,
+				workspaceRoot: "/ws",
+				binaries,
+				tempRoot: "/t",
+			}),
+		).toBeUndefined();
+	});
+
+	it("runs the lead's commands in direct mode, in the caller's folder", () => {
+		const wrap = createLeadConfinement({
+			enabled: true,
+			workspaceRoot: "/ws",
+			binaries,
+			tempRoot: "/t",
+			platform: process.platform,
+		});
+		const out = wrap?.({ ...spec, cwd: "/ws/sub", env: { A: "1" } });
+		expect(out?.executable).toBe("/bin/launcher");
+		expect(out?.args).toEqual(["/bin/hook", "", "sh", "-c", "true"]);
+		expect(out?.cwd).toBe("/ws/sub");
+		expect(out?.env).toMatchObject({
+			A: "1",
+			CEREBRILINE_WS_ROOT: "/ws",
+			CEREBRILINE_SANDBOX_DIRECT: "1",
+		});
+		expect(out?.env.CEREBRILINE_OVERLAY_ROOT).toBeUndefined();
+	});
+
+	it("gives the lead a temp folder of its own on Windows", () => {
+		const wrap = createLeadConfinement({
+			enabled: true,
+			workspaceRoot: "C:\\ws",
+			binaries: { ...binaries, platforms: ["win32"] },
+			tempRoot: "C:\\t",
+			platform: "win32",
+		});
+		expect(wrap?.(spec).env).toMatchObject({
+			CEREBRILINE_SANDBOX_TMP: "C:\\t",
+			TEMP: "C:\\t",
+			TMP: "C:\\t",
+		});
+	});
+
+	it("refuses the command when confinement is on and there is no launcher", () => {
+		const wrap = createLeadConfinement({
+			enabled: true,
+			workspaceRoot: "/ws",
+			tempRoot: "/t",
+		});
+		expect(() => wrap?.(spec)).toThrow(/was not run/);
 	});
 });

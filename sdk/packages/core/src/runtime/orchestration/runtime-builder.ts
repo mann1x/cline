@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DEFAULT_MAX_NO_TOOL_CALL_NUDGES } from "@cline/agents";
 import { supportsModelTool } from "@cline/llms";
 import type {
@@ -101,6 +103,8 @@ import {
 } from "../../services/global-settings";
 import { createLocalTeamStore } from "../../services/storage/team-store";
 import type { CoreAgentMode, CoreSessionConfig } from "../../types/config";
+import { createLeadConfinement } from "../sandbox/agent-sandbox";
+import { resolveSandboxBinaries } from "../sandbox/sandbox-binaries";
 import type {
 	RuntimeBuilder,
 	RuntimeBuilderInput,
@@ -270,6 +274,11 @@ function createBuiltinToolsList(
 	delegated?: { workspace?: DelegatedWorkspace },
 	/** The session's document reader settings and vision model, when the tool is on. */
 	extractDocument?: DocumentExtractExecutorOptions,
+	/**
+	 * The lead's command confinement (`leadSandboxConfine`), when on. Never
+	 * applied to a delegated agent, whose workspace brings its own launcher.
+	 */
+	leadWrapSpawn?: ReturnType<typeof createLeadConfinement>,
 ): AgentTool[] {
 	const preset = ToolPresets[resolveToolPresetName({ mode })];
 	const toolRoutingConfig = resolveToolRoutingConfig(
@@ -295,7 +304,10 @@ function createBuiltinToolsList(
 							: {}),
 					}
 				: {
-						bash: { executionController: runCommandExecutionController },
+						bash: {
+							executionController: runCommandExecutionController,
+							...(leadWrapSpawn ? { wrapSpawn: leadWrapSpawn } : {}),
+						},
 						// One registry for every tool that reads or writes a file.
 						// Without this the host's reader records into its own and
 						// `grep`/`sed`/`awk` guard against a registry nothing ever
@@ -899,6 +911,12 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 					fileReadMaxChars,
 					undefined,
 					documentReaderExecutorOptions(config),
+					createLeadConfinement({
+						enabled: config.leadSandboxConfine === true,
+						workspaceRoot: config.workspaceRoot ?? config.cwd,
+						binaries: resolveSandboxBinaries(config.sandboxBinariesDir),
+						tempRoot: join(tmpdir(), "cerebriline-sandbox-tmp"),
+					}),
 				),
 			);
 			const agentPluginMcpServers = pluginsEnabled

@@ -271,6 +271,19 @@ export interface CoreRuntimeFeatures {
 	 */
 	subagentCommandsEnabled?: boolean;
 	/**
+	 * Whether a delegated agent's commands are confined: the system is readable
+	 * and only the workspace (the agent's copy of it) and a temp folder are
+	 * writable. On unless set to `false`. It covers every delegated agent,
+	 * whichever provider it runs on.
+	 */
+	subagentSandboxConfine?: boolean;
+	/**
+	 * The same confinement for the lead's own commands, with the workspace
+	 * writable in place. Off unless set to `true`: tools that write outside the
+	 * workspace (a package cache, a global git config) fail under it.
+	 */
+	leadSandboxConfine?: boolean;
+	/**
 	 * Directory holding the native command-sandbox binaries (per platform:
 	 * `cerebriline-sandbox-<arch>` on Linux, `-darwin-<arch>` on macOS,
 	 * `cerebriline-sandbox.exe` + `hook.dll` on Windows), which the host ships.

@@ -2199,6 +2199,10 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// pointed at the real workspace.
 	const subagentCommandsEnabled =
 		input.taskSettings?.subagentCommandsEnabled ?? stateManager.getGlobalSettingsKey("subagentCommandsEnabled") ?? false
+	// Write confinement. Absent reads as the default on each side: on for the
+	// agents, off for the lead.
+	const subagentSandboxConfine = stateManager.getGlobalSettingsKey("subagentSandboxConfine") !== false
+	const leadSandboxConfine = stateManager.getGlobalSettingsKey("leadSandboxConfine") === true
 	// Whether the lead is offered the team_* tools. Its own setting, off by
 	// default: eighteen tools in every request that most sessions never call.
 	// Absent reads as off. Only meaningful with subagents on.
@@ -2563,6 +2567,8 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		enableAgentTeams: subagentsEnabled && teammatesEnabled,
 		// Whether those delegated agents are offered a (sandboxed) shell.
 		subagentCommandsEnabled,
+		subagentSandboxConfine,
+		leadSandboxConfine,
 		// Where the shipped command-sandbox binaries live. The host resolves the
 		// actual files under here per platform; absent binaries just mean no
 		// delegated shell, so pointing at the folder is safe before it is filled.

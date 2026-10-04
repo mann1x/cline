@@ -259,6 +259,13 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.subagentCommandsEnabled !== undefined) {
 			controller.stateManager.setGlobalState("subagentCommandsEnabled", !!request.subagentCommandsEnabled)
 		}
+		// Write confinement, for the agents' commands and for the lead's.
+		if (request.subagentSandboxConfine !== undefined) {
+			controller.stateManager.setGlobalState("subagentSandboxConfine", !!request.subagentSandboxConfine)
+		}
+		if (request.leadSandboxConfine !== undefined) {
+			controller.stateManager.setGlobalState("leadSandboxConfine", !!request.leadSandboxConfine)
+		}
 		// Update the "Teammates" setting
 		if (request.teammatesEnabled !== undefined) {
 			controller.stateManager.setGlobalState("teammatesEnabled", !!request.teammatesEnabled)

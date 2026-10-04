@@ -361,6 +361,8 @@ export const ExtensionStateContextProvider: React.FC<{
 		webSearchEnabled: false,
 		subagentsEnabled: false,
 		subagentCommandsEnabled: false,
+		subagentSandboxConfine: true,
+		leadSandboxConfine: false,
 		teammatesEnabled: false,
 		extractDocumentEnabled: false,
 		extractDocumentOcr: "tesseract",

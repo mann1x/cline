@@ -456,7 +456,8 @@ fn w1_direct_writes_the_workspace_in_place_and_nothing_else() {
     );
     assert_eq!(
         fs::read_to_string(ws.join("sub").join("kept.txt")).unwrap(),
-        "K\r\nA\r\nA\r\n",
+        // cmd keeps the space before `&&` in what `echo` writes.
+        "K\r\nA \r\nA \r\n",
         "a file that was there before must be writable"
     );
 

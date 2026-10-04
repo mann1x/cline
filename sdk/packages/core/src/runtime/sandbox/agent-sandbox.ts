@@ -61,6 +61,37 @@ export interface CreateAgentSandboxOptions {
 	overlayRoot: string;
 	/** The native binaries; absent means tools-only isolation, no sandboxed commands. */
 	binaries?: SandboxBinaries;
+	/**
+	 * Confine the agent's commands: they read the system and write only the
+	 * workspace (their overlay) and a temp folder. On unless set to `false`.
+	 *
+	 * The overlay keeps an agent's work off the lead's files and says nothing
+	 * about the rest of the machine. In swarm wlafh one agent appended to the
+	 * user's PATH and another copied a program into the home folder, and their
+	 * reports said "no file changes".
+	 */
+	confine?: boolean;
+}
+
+/**
+ * What the launcher is told to confine a command (see `confine.rs`,
+ * `windows.rs` and `macos.rs` in `sandbox/cerebriline-sandbox`).
+ *
+ * On Linux and macOS the system temp folder stays writable as it is. On
+ * Windows the user's `%TEMP%` is not writable to a low-integrity process and
+ * relabelling it would change the user's system, so the agent gets a temp
+ * folder of its own beside its overlay, which the launcher labels.
+ */
+export function confinementEnv(
+	tempRoot: string,
+	platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
+	return {
+		CEREBRILINE_SANDBOX_CONFINE: "1",
+		...(platform === "win32"
+			? { CEREBRILINE_SANDBOX_TMP: tempRoot, TEMP: tempRoot, TMP: tempRoot }
+			: {}),
+	};
 }
 
 /**
@@ -118,6 +149,10 @@ export function createAgentSandboxSync(
 
 function buildAgentSandbox(options: CreateAgentSandboxOptions): AgentSandbox {
 	const { workspaceRoot, overlayRoot, binaries } = options;
+	const confine = options.confine !== false;
+	// A sibling of the overlay root, like the log: inside it, the agent's temp
+	// files would be handed back to the lead as its changes.
+	const tempRoot = `${overlayRoot}.tmp`;
 	const overlay = new AgentOverlay(workspaceRoot, overlayRoot);
 	// A sibling of the overlay root, never inside it: the overlay is the mirror
 	// of the workspace, and a log written into it would surface in the agent's
@@ -149,6 +184,7 @@ function buildAgentSandbox(options: CreateAgentSandboxOptions): AgentSandbox {
 					CEREBRILINE_WS_ROOT: workspaceRoot,
 					CEREBRILINE_OVERLAY_ROOT: overlayRoot,
 					CEREBRILINE_SANDBOX_LOG: logPath,
+					...(confine ? confinementEnv(tempRoot) : {}),
 				},
 			})
 		: undefined;
@@ -160,6 +196,7 @@ function buildAgentSandbox(options: CreateAgentSandboxOptions): AgentSandbox {
 		changedFiles: () => overlay.changedFiles(),
 		dispose: async () => {
 			await fs.rm(overlayRoot, { recursive: true, force: true });
+			await fs.rm(tempRoot, { recursive: true, force: true });
 			// The sibling log is kept, compressed: it is the record of what the
 			// agent's commands touched and where they were redirected.
 			await archiveSandboxLog(logPath);
@@ -201,4 +238,59 @@ export async function archiveSandboxLog(logPath: string): Promise<void> {
 		return;
 	}
 	await fs.rm(logPath, { force: true }).catch(() => {});
+}
+
+/**
+ * The lead's own commands, confined: a wrapper for its command executor, or
+ * undefined when confinement is off.
+ *
+ * The launcher runs in direct mode. There is no overlay, because the lead's
+ * changes are the user's: the command writes the workspace in place and a
+ * temp folder, and the rest of the system is read-only to it.
+ *
+ * With confinement on and no launcher for this platform the wrapper throws,
+ * so the command fails with the reason. Running it unconfined would be the
+ * one outcome the setting exists to prevent.
+ */
+export function createLeadConfinement(options: {
+	enabled: boolean;
+	workspaceRoot: string;
+	binaries?: SandboxBinaries;
+	/** Windows only: the temp folder the launcher makes writable. */
+	tempRoot: string;
+	platform?: NodeJS.Platform;
+}): ((spec: SpawnSpec) => SpawnSpec) | undefined {
+	if (!options.enabled) {
+		return undefined;
+	}
+	const platform = options.platform ?? process.platform;
+	const binaries = options.binaries;
+	const supported =
+		binaries != null && (binaries.platforms ?? ["win32"]).includes(platform);
+	return (spec) => {
+		if (!supported || !binaries) {
+			throw new Error(
+				'Command confinement is on for this model and the sandbox launcher is not available on this platform, so the command was not run. Turn off "Confine this model\'s own commands" in the model settings to run commands unconfined.',
+			);
+		}
+		return {
+			executable: binaries.launcher,
+			// No trace log: under confinement the launcher could not write one
+			// outside the workspace, and inside it would be the user's file.
+			args: [binaries.hook, "", spec.executable, ...spec.args],
+			cwd: spec.cwd,
+			env: {
+				...spec.env,
+				CEREBRILINE_WS_ROOT: options.workspaceRoot,
+				CEREBRILINE_SANDBOX_DIRECT: "1",
+				...(platform === "win32"
+					? {
+							CEREBRILINE_SANDBOX_TMP: options.tempRoot,
+							TEMP: options.tempRoot,
+							TMP: options.tempRoot,
+						}
+					: {}),
+			},
+		};
+	};
 }

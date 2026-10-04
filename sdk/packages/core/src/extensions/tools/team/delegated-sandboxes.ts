@@ -244,6 +244,7 @@ export function createDelegatedSandboxes(
 				workspaceRoot: provider.workspaceRoot,
 				overlayRoot: overlayRootFor(key),
 				...(provider.binaries ? { binaries: provider.binaries } : {}),
+				...(provider.confine === false ? { confine: false } : {}),
 			});
 			return register(key, setup).workspace;
 		},
@@ -252,6 +253,7 @@ export function createDelegatedSandboxes(
 				workspaceRoot: provider.workspaceRoot,
 				overlayRoot: overlayRootFor(key),
 				...(provider.binaries ? { binaries: provider.binaries } : {}),
+				...(provider.confine === false ? { confine: false } : {}),
 			});
 			return register(key, setup).workspace;
 		},

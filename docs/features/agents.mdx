@@ -16,10 +16,14 @@ Cerebriline, the mann1x fork of Cline, can hand work to other agents in four way
 |---|---|---|---|
 | VS Code, Settings → Features | **Subagents** (`subagentsEnabled`) | off | Turns on `spawn_agent`, configured agents, `create_agent` and, for now, the `team_*` tools |
 | VS Code, Settings → Features | **Agents can run commands** (`subagentCommandsEnabled`) | off | Gives delegated agents a sandboxed shell (see [Sandbox](#every-agent-works-in-a-sandbox)) |
+| VS Code, Settings → Models | **Confine agents' commands to the workspace and temp folder** (`subagentSandboxConfine`) | on | An agent's commands read the system and write only its workspace copy and a temp folder (see [Write confinement](#write-confinement)) |
+| VS Code, Settings → Models | **Confine this model's own commands the same way** (`leadSandboxConfine`) | off | The same for the lead's own commands, with the workspace written in place |
 | VS Code, opencoti provider, PolyKV section | **Allow swarms** (`polykv.swarm`) | off | Adds `merge` and `count` to `spawn_agent` |
 | VS Code, Agents tab | **Use PolyKV agents as Priority 0** (`polykvAgentsPriorityZero`) | off | Runs up to 8 agents inside the lead's own opencoti session |
 | CLI | none | on | `spawn_agent` and the team tools are on unless you run with `--yolo` |
 | CLI | `CLINE_SUBAGENT_COMMANDS=1` (env) | unset | The CLI's equivalent of **Agents can run commands** |
+| CLI | `CLINE_SUBAGENT_CONFINE=0` (env) | unset | Turns the agents' write confinement off |
+| CLI | `CLINE_LEAD_CONFINE=1` (env) | unset | Turns the lead's write confinement on |
 
 The Subagents toggle is necessary but not always sufficient. `spawn_agent` and the team tools are also withheld when delegation cannot run in parallel: the profile's **Parallel Sessions** must be above 1, or the agent nodes together must have a capacity above 1. Configured agents (`subagent_<name>`) are offered as soon as the toggle is on. The reasoning is that an endpoint serving one request at a time would run the agents one after another, not side by side.
 
@@ -413,8 +417,8 @@ Keys: `model` (required), `url`, `provider`, `priority` (1-10, default 1), `capa
 - Reads fall through to your files. Writes, deletes and renames stay in the agent's copy under the session directory.
 - The overlay is pure TypeScript and always on, on every platform.
 - The file tools (`read_files`, `editor`, `apply_patch`, `grep`, `sed`, `awk`) are built over it.
-- Paths outside the workspace are not isolated. An agent's command can write anywhere your user can, and can change the registry and the persistent environment. In session wlafh one agent appended the workspace to the User `PATH` and another copied a program into `~/.local/bin`; neither showed in its "no file changes" report. A sandbox that confines writes to the workspace and the temp folder is planned.
-- Every sub-agent is told to make no lasting change to the system (environment variables, `PATH`, links, installed programs, registry, user configuration, files outside the workspace and the temp folder) unless its task or role asks for it, and to report what is in its way instead (since 4.100.232). This is an instruction, not a guard.
+- The overlay isolates the workspace only. What an agent's command may write outside it is decided by [write confinement](#write-confinement), which is on by default.
+- Every sub-agent is told to make no lasting change to the system (environment variables, `PATH`, links, installed programs, registry, user configuration, files outside the workspace and the temp folder) unless its task or role asks for it, and to report what is in its way instead (since 4.100.232). This is an instruction; the guard is [write confinement](#write-confinement). The same instruction tells it that a refused write outside the workspace and the temp folder is the confinement, not a fault to work around.
 - When the agent ends, whether it finished, failed or was stopped, each changed file comes back to the lead as a revision attributed to that agent. The lead reads a revision with `read_files` and `revision: "#N"`, and adopts it with `restore_file`. Nothing is applied automatically.
 - A teammate hands back after every run.
 
@@ -428,6 +432,38 @@ Keys: `model` (required), `url`, `provider`, `priority` (1-10, default 1), `capa
 | Windows x64 | W1: Detours injection |
 
 Where there is no launcher, or the setting is off, the agent gets no shell. It never gets an unsandboxed one.
+
+#### Write confinement
+
+**What it does.** A confined command reads the whole system and writes only the workspace and a temp folder. Every other write is refused by the operating system: your profile, other folders, shell start-up files, and on Windows the registry (`HKCU` included, so no persistent `PATH` or environment change).
+
+**Why.** The overlay keeps an agent off your workspace files and said nothing about the rest of the machine. In session wlafh (2026-10-03) one agent appended the workspace to the User `PATH` and another copied a 104 MB program into `~/.local/bin`, and both reported "no file changes". Agents run unattended, so their confinement is on by default.
+
+**Settings**, both on the Models tab, since 4.100.233:
+
+- **Confine agents' commands to the workspace and temp folder**, on by default. One switch for every delegated agent: the ones on the lead's own provider (PolyKV or not) and the ones on the **Use a different model for subagents and teammates** provider. The agent's workspace is its overlay copy.
+- **Confine this model's own commands the same way**, off by default. The lead's commands write the workspace in place. Package managers that keep a cache in your profile and git settings outside the workspace fail under it, which is why it is yours to turn on. With it on and no launcher for the platform, the command is not run and says so.
+
+**How.** Nothing is installed and no administrator right is used. The command runs as you, with rights taken away:
+
+| OS | Mechanism | Temp folder |
+|---|---|---|
+| Linux, L1 | A second mount namespace in which every mount is read-only except the workspace and the temp folders; capabilities dropped so it cannot be undone | `/tmp`, `/var/tmp` |
+| Linux, L2 | The ptrace supervisor refuses path-changing system calls outside the workspace and the temp folders, and `mount` | `/tmp`, `/var/tmp` |
+| macOS | `sandbox-exec` with a profile that denies file writes except under the workspace copy and the temp folders | `/private/tmp`, `/private/var/tmp`, `/private/var/folders` |
+| Windows | The command starts at Low integrity; Windows refuses writes to anything not labelled Low | A folder of its own beside the agent's overlay, set as `TEMP` and `TMP` |
+
+**Limits:**
+
+- Reads are not restricted. A confined command can read anything you can.
+- Network access is not restricted.
+- Linux L2 checks the path as written: a symbolic link inside the workspace that points outside is followed.
+- `/proc`, `/sys` and `/dev` stay as they are on Linux.
+- Windows, lead only: the first confined command labels the workspace folder Low, and it stays so. Any low-integrity program you run can write that folder from then on.
+- The lead's approved check command and the editor's own file tools are not commands and are not confined.
+- Only commands are confined. An agent's file tools were already limited to its overlay.
+
+**Windows, relative paths (fixed in 4.100.233).** A command's write to a relative path in its own folder (`echo x> file`) bypassed the overlay and wrote your real workspace, with no line in the sandbox trace. The working folder's handle exists before the hook loads, so the hook could not place the path. Absolute paths, and tools that resolve paths themselves (PowerShell, Node), were not affected.
 
 **Limits:**
 

@@ -80,6 +80,8 @@ export async function getStateToPostToWebview(controller: {
 	const webSearchEnabled = isModelToolEnabledGlobally("web_search")
 	const subagentsEnabled = stateManager.getGlobalSettingsKey("subagentsEnabled")
 	const subagentCommandsEnabled = stateManager.getGlobalSettingsKey("subagentCommandsEnabled")
+	const subagentSandboxConfine = stateManager.getGlobalSettingsKey("subagentSandboxConfine")
+	const leadSandboxConfine = stateManager.getGlobalSettingsKey("leadSandboxConfine")
 	const teammatesEnabled = stateManager.getGlobalSettingsKey("teammatesEnabled")
 	const extractDocumentEnabled = stateManager.getGlobalSettingsKey("extractDocumentEnabled")
 	const extractDocumentOcr = stateManager.getGlobalSettingsKey("extractDocumentOcr")
@@ -228,6 +230,8 @@ export async function getStateToPostToWebview(controller: {
 		webSearchEnabled,
 		subagentsEnabled,
 		subagentCommandsEnabled,
+		subagentSandboxConfine,
+		leadSandboxConfine,
 		teammatesEnabled,
 		extractDocumentEnabled,
 		extractDocumentOcr,

@@ -41,6 +41,11 @@ export interface DelegatedSandboxProvider {
 	/** The native command-sandbox binaries, when present for this platform. */
 	binaries?: SandboxBinaries;
 	/**
+	 * Confine every agent's commands to its workspace copy and a temp folder.
+	 * On unless `false` (the host's `subagentSandboxConfine`).
+	 */
+	confine?: boolean;
+	/**
 	 * A private overlay directory for the agent behind this spawning tool call.
 	 * Distinct per call, and in persistent storage — copy-ups can be large, and
 	 * tmpfs would lose them and pressure RAM.
@@ -58,6 +63,8 @@ export interface DelegatedSandboxOptions {
 	 * this platform — means the agent gets file isolation but no shell.
 	 */
 	binaries?: SandboxBinaries;
+	/** Confine the agent's commands to the workspace and temp; on unless `false`. */
+	confine?: boolean;
 	/**
 	 * Executor tuning to carry over from the lead (timeouts, limits, shell). The
 	 * overlay and the shell wrapper are set on top and win over anything here.
@@ -85,6 +92,7 @@ export async function setUpDelegatedSandbox(
 			workspaceRoot: options.workspaceRoot,
 			overlayRoot: options.overlayRoot,
 			binaries: options.binaries,
+			confine: options.confine,
 		}),
 		options.base,
 	);
@@ -99,6 +107,7 @@ export function setUpDelegatedSandboxSync(
 			workspaceRoot: options.workspaceRoot,
 			overlayRoot: options.overlayRoot,
 			binaries: options.binaries,
+			confine: options.confine,
 		}),
 		options.base,
 	);

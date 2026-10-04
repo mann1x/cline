@@ -238,6 +238,10 @@ export interface ExtensionState {
 	webSearchEnabled?: boolean
 	subagentsEnabled?: boolean
 	subagentCommandsEnabled?: boolean
+	/** Agents' commands write only the workspace copy and temp; see state-keys.ts. */
+	subagentSandboxConfine?: boolean
+	/** The same for the lead's own commands; see state-keys.ts. */
+	leadSandboxConfine?: boolean
 	/** Whether the lead is offered the team_* tools; see state-keys.ts. */
 	teammatesEnabled?: boolean
 	/** Whether the model is offered extract_document; see state-keys.ts. */

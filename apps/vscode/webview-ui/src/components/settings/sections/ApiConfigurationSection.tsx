@@ -64,6 +64,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		visionModeApiConfiguration,
 		agentsModelEnabled,
 		agentsModeApiConfiguration,
+		subagentSandboxConfine,
+		leadSandboxConfine,
 		escalationModelEnabled,
 		escalationModeApiConfiguration,
 		imageGenEnabled,
@@ -456,6 +458,53 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 									the session's model. Pick a provider <em>and</em> a model on the Agents tab.
 								</p>
 							) : null}
+						</div>
+
+						<div className="mb-[5px]">
+							<SettingsCheckbox
+								checked={subagentSandboxConfine !== false}
+								className="mb-[5px]"
+								onChange={async (checked: boolean) => {
+									try {
+										await StateServiceClient.updateSettings(
+											UpdateSettingsRequest.create({ subagentSandboxConfine: checked }),
+										)
+									} catch (error) {
+										console.error("Failed to update the agents' sandbox setting:", error)
+										throw error
+									}
+								}}>
+								Confine agents' commands to the workspace and temp folder
+							</SettingsCheckbox>
+							<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+								An agent's commands can read the whole system and write only its private copy of the workspace and
+								a temp folder. Writes anywhere else — your profile, other folders, on Windows the registry — are
+								refused. It applies to every agent, whichever model or provider runs it. Turn it off only for a
+								task whose commands must change the system.
+							</p>
+						</div>
+
+						<div className="mb-[5px]">
+							<SettingsCheckbox
+								checked={leadSandboxConfine === true}
+								className="mb-[5px]"
+								onChange={async (checked: boolean) => {
+									try {
+										await StateServiceClient.updateSettings(
+											UpdateSettingsRequest.create({ leadSandboxConfine: checked }),
+										)
+									} catch (error) {
+										console.error("Failed to update the lead's sandbox setting:", error)
+										throw error
+									}
+								}}>
+								Confine this model's own commands the same way
+							</SettingsCheckbox>
+							<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+								Off by default. Commands write the workspace in place and a temp folder, nothing else: package
+								managers that keep a cache in your profile, and git settings outside the workspace, will fail. On
+								Windows the workspace folder is marked writable for low-integrity programs, and stays so.
+							</p>
 						</div>
 
 						<div className="mb-[5px]">

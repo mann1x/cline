@@ -1427,6 +1427,11 @@ export async function runCli(): Promise<void> {
 			// only when this flag and a platform launcher are both present.
 			subagentCommandsEnabled:
 				process.env.CLINE_SUBAGENT_COMMANDS?.trim() === "1",
+			// Write confinement: on for agents unless CLINE_SUBAGENT_CONFINE=0,
+			// off for the lead unless CLINE_LEAD_CONFINE=1.
+			subagentSandboxConfine:
+				process.env.CLINE_SUBAGENT_CONFINE?.trim() !== "0",
+			leadSandboxConfine: process.env.CLINE_LEAD_CONFINE?.trim() === "1",
 			sandboxBinariesDir: resolveSandboxBinariesDir(),
 			enableTools: true,
 			cwd,
