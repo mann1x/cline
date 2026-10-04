@@ -46,6 +46,8 @@ export interface SdkSessionHost {
 	 */
 	readLiveMessages?(sessionId: string): Promise<SdkInitialMessages>
 	updateSessionCompactionState?(sessionId: string, state: SessionCompactionState): Promise<{ updated: boolean }>
+	/** The session's saved compaction, when it has one. */
+	readSessionCompactionState?(sessionId: string): Promise<SessionCompactionState | undefined>
 	/** The configured agents this session can hand work to. */
 	listConfiguredAgents?(sessionId: string): Promise<ConfiguredAgentSummary[]>
 	/** Run one of them on a task, without asking the lead model first. */

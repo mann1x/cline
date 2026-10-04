@@ -13,6 +13,7 @@ import { McpHub } from "@/services/mcp/McpHub"
 import { Logger } from "@/shared/services/Logger"
 import type { ActiveSession } from "./cline-session-factory"
 import { hydrateWindowGrant, persistWindowGrants } from "./context-window-grant"
+import { takeRebasedCompaction } from "./resumed-compaction"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
 import { buildToolPolicies } from "./sdk-tool-policies"
 import type { SdkSessionHost } from "./session-host"
@@ -207,8 +208,14 @@ export class SdkSessionLifecycle {
 		// again, with whatever is configured now -- and with the window it was
 		// granted, which it must ask for again.
 		const recordedSettings = captureSessionSettings(startInput.config?.providerId, requestedSessionId)
+		// A compaction the history loader rebased onto the reshaped transcript
+		// (see `resumed-compaction.ts`); core's own copy no longer fits it.
+		const carried = (startInput as { initialCompactionState?: unknown }).initialCompactionState
+			? undefined
+			: takeRebasedCompaction(requestedSessionId, (startInput as { initialMessages?: readonly unknown[] }).initialMessages)
 		const startResult = await sdkHost.start({
 			...startInput,
+			...(carried ? { initialCompactionState: carried } : {}),
 			...(toolPolicies ? { toolPolicies } : {}),
 			...(recordedSettings
 				? {

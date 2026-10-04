@@ -207,6 +207,12 @@ export {
 	StoredModelEntrySchema,
 	syncStoredProviderRegistration,
 } from "../../../../sdk/packages/core/src/services/providers/local-provider-registry"
+// From source: `resumed-compaction.ts` rebases a saved compaction with these,
+// and a stub that always "projects" would pass a test of exactly that.
+export {
+	createSessionCompactionState,
+	projectSessionCompactionState,
+} from "../../../../sdk/packages/core/src/session/models/session-compaction"
 
 export type GlobalCompactionStrategy = "basic" | "agentic"
 
