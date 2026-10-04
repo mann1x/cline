@@ -2471,6 +2471,12 @@ export class LocalRuntimeHost implements RuntimeHost {
 			agent.subscribeEvents(agentConfig.onEvent);
 		}
 		this.sideTurnConfigs.set(sessionId, agentConfig as AgentConfig);
+		// A wait on the agents that begins with a steer already queued ends at
+		// once: the steer is read at the boundary right after.
+		roundsFor(sessionId).messageWaiting = () =>
+			this.sessions
+				.get(sessionId)
+				?.pendingPrompts.some((entry) => entry.delivery === "steer") === true;
 		// Agents stuck for a long time are reported to the lead (see
 		// `agent-trouble.ts`): in a side turn while its round runs, where it
 		// may stop them and take their tasks back; queued otherwise.

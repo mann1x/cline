@@ -504,6 +504,7 @@ There is no attempt limit and no deadline. The refusal thresholds are your own s
 
 - **The strip above the chat.** It shows each running agent with its node, model, current tool, speed and activity, plus Stop, Restart and Stop all.
 - **Side turn.** A message you send while the lead waits on a round is answered at once by a short run of the lead's model (at most 4 turns) on a copy of its conversation. In that side turn the lead can reply, `message_agents` (the message is read at the agent's next turn), or `stop_agents`. The lead's next real turn is told what was said.
+- **A message sent while the lead is writing.** It is queued and read at the lead's next turn boundary. If the lead calls `await_agents` in that same step, the wait ends at once so the message is read (since 4.100.236; before, it stayed queued until the round ended).
 - **Questions go to the lead.** A question from an agent goes to the lead, not to you.
 
 ### Sampling: `temperature`, `seed`, `"random"`, `temperature_range`

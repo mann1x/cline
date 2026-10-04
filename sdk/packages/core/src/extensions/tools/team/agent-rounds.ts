@@ -878,12 +878,39 @@ export class AgentRounds {
 		}
 	}
 
+	/**
+	 * Whether a message for the lead is already queued, as the host knows it.
+	 *
+	 * A wait is ended when a message is queued. One queued a moment earlier,
+	 * while the lead was still writing the turn in which it then called
+	 * `await_agents`, woke nothing: the wait began after it. The user's
+	 * second message sat in the queue for the rest of the round, under a
+	 * lead that read as "monitoring" (pandorum, session wlafh, 2026-10-04
+	 * 05:33:46Z).
+	 */
+	messageWaiting: (() => boolean) | undefined;
+
 	/** Register a wait on the agents that a message for the lead ends. */
 	onWake(wake: () => void): () => void {
 		this.wakers.add(wake);
-		return () => {
+		const off = () => {
 			this.wakers.delete(wake);
 		};
+		let waiting = false;
+		try {
+			waiting = this.messageWaiting?.() === true;
+		} catch {
+			// The probe's fault is not the wait's.
+		}
+		if (waiting) {
+			// After the caller has its `off`: the wait ends on its own terms.
+			queueMicrotask(() => {
+				if (this.wakers.has(wake)) {
+					wake();
+				}
+			});
+		}
+		return off;
 	}
 
 	/**

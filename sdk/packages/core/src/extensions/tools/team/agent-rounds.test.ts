@@ -858,4 +858,19 @@ describe("a blocking round woken by a message for the lead", () => {
 		expect(result).toEqual({ woken: false, value: 7 });
 		expect(rounds.leadAwaiting).toBe(false);
 	});
+
+	it("ends a wait that begins with a message already queued", async () => {
+		const rounds = new AgentRounds("s1");
+		let queued = true;
+		rounds.messageWaiting = () => queued;
+		const never = new Promise<number>(() => {});
+		expect(await rounds.untilWoken(never)).toEqual({ woken: true });
+		expect(rounds.leadAwaiting).toBe(false);
+		// Read at the boundary: the next wait is a real one.
+		queued = false;
+		expect(await rounds.untilWoken(Promise.resolve(7))).toEqual({
+			woken: false,
+			value: 7,
+		});
+	});
 });
