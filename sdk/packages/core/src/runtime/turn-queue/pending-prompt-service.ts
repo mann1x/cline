@@ -31,7 +31,7 @@ export type PendingPromptOrigin = "user" | "harness";
  * An `awaiting` note lists the agents waiting on the lead; it is replaced
  * too, and rewritten when it is read (`refresh`).
  */
-export type PendingPromptNoteKind = "status" | "recap" | "awaiting";
+export type PendingPromptNoteKind = "status" | "recap" | "awaiting" | "queued";
 
 /**
  * Rewrites a harness note as it is delivered: what it says may have changed

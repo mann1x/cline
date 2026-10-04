@@ -179,6 +179,7 @@ export function createDelegatedSandboxes(
 			log.seed(absolutePath, await readIfPresent(absolutePath), "session");
 			const revision = log.record(absolutePath, body, by, {
 				intent: `${change.kind} by delegated agent — held as a revision, not written to disk`,
+				held: true,
 			});
 			entry.handed.set(change.rel, print);
 			if (revision) {
@@ -202,7 +203,10 @@ export function createDelegatedSandboxes(
 				absolutePath,
 				await readIfPresent(absolutePath),
 				by,
-				{ intent: "reverted by delegated agent — held as a revision" },
+				{
+					intent: "reverted by delegated agent — held as a revision",
+					held: true,
+				},
 			);
 			if (revision) {
 				handed.push({ rel, index: revision.index, kind: "reverted" });

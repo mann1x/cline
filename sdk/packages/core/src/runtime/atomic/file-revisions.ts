@@ -61,6 +61,8 @@ export interface FileRevision {
 	readonly bytes: number;
 	/** Content released to stay under the memory cap; the entry remains. */
 	readonly dropped: boolean;
+	/** Kept for reading and restoring, never written to this workspace. */
+	readonly held?: boolean;
 	/**
 	 * The earliest revision holding exactly these bytes, when it is not this
 	 * one.
@@ -143,6 +145,12 @@ export interface RevisionNote {
 	readonly summary?: string;
 	/** What the checker said about this file afterwards, when it said anything. */
 	readonly check?: string;
+	/**
+	 * The content was never written to this workspace: a delegated agent's
+	 * version, kept so the lead can read or restore it. The file on disk is
+	 * still the newest revision that is not held.
+	 */
+	readonly held?: boolean;
 }
 
 /** Longest note kept. A list of forty of these is read by a 9B model. */
@@ -228,6 +236,7 @@ interface MutableRevision {
 	/** Whether the file existed at all, kept once the body is released. */
 	existed: boolean;
 	sameAs?: number;
+	held?: boolean;
 }
 
 /**
@@ -447,6 +456,7 @@ export function createRevisionLog(
 		lines: entry.lines,
 		bytes: entry.bytes,
 		dropped: entry.dropped,
+		...(entry.held ? { held: true } : {}),
 		...(entry.sameAs === undefined ? {} : { sameAs: entry.sameAs }),
 	});
 
@@ -592,6 +602,7 @@ export function createRevisionLog(
 			bytes: body?.byteLength ?? 0,
 			dropped: false,
 			existed: body !== undefined,
+			...(note?.held ? { held: true } : {}),
 			...(earlier ? { sameAs: earlier.index } : {}),
 		};
 		entries.push(entry);
@@ -604,6 +615,16 @@ export function createRevisionLog(
 		enforceCap(entries);
 		enforceTotalCap();
 		return frozen(entry);
+	};
+
+	/** The newest revision that was written to the workspace. */
+	const onDisk = (
+		entries: readonly MutableRevision[],
+	): MutableRevision | undefined => {
+		for (let i = entries.length - 1; i >= 0; i--) {
+			if (!entries[i]?.held) return entries[i];
+		}
+		return undefined;
 	};
 
 	return {
@@ -626,8 +647,13 @@ export function createRevisionLog(
 					summary: ORIGIN_LABELS.transaction.absent,
 				});
 			}
-			const current = logs.get(absolutePath);
-			const newest = current?.[current.length - 1];
+			const current = logs.get(absolutePath) ?? [];
+			// A write is compared with what is on disk, and a held revision is
+			// not: with an agent's version newest in the list, a command that
+			// only read the file would otherwise be recorded as having changed
+			// it back. A held one is compared with the entry before it, so the
+			// same handed-back content is not listed twice in a row.
+			const newest = note?.held ? current[current.length - 1] : onDisk(current);
 			if (newest && newest.hash === hashOf(body)) return undefined;
 			return append(absolutePath, body, by, note);
 		},
@@ -648,10 +674,12 @@ export function createRevisionLog(
 			if (parsed === "original") {
 				index = 1;
 			} else if (parsed === "last") {
-				// The state BEFORE the most recent change. The newest revision is
-				// what is on disk, so restoring to it would be a no-op every time
-				// -- which is not what "revert the last change" means.
-				index = Math.max(1, entries.length - 1);
+				// The state BEFORE the most recent change. The newest revision
+				// written here is what is on disk, so restoring to it would be a
+				// no-op every time -- which is not what "revert the last change"
+				// means. Held revisions never reached the disk and are skipped.
+				const written = entries.filter((entry) => !entry.held);
+				index = written[Math.max(0, written.length - 2)]?.index ?? 1;
 			} else {
 				index = parsed;
 			}
@@ -749,12 +777,14 @@ export function describeRevisions(
 		revisions.length <= limit
 			? newestFirst
 			: [...newestFirst.slice(0, limit - 1), "gap", oldest];
+	// An agent's held revision is newer than the file and is not the file.
+	const onDiskIndex = [...revisions].reverse().find((r) => !r.held)?.index;
 	const lines = shown.map((revision) => {
 		if (revision === "gap") {
 			const hidden = revisions.length - limit;
 			return `  …  ${hidden + 1} older revision${hidden === 0 ? "" : "s"} not listed — ask for one by number`;
 		}
-		const newest = revision.index === revisions.length;
+		const newest = revision.index === onDiskIndex;
 		const what =
 			revision.index === 1
 				? `${ORIGINAL_REVISION} (${revision.by})`

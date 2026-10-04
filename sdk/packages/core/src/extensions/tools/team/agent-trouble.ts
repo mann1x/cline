@@ -54,8 +54,15 @@ export const LEAD_NUDGE_BATCH_MS = 30_000;
  * read, or drops it once it no longer applies.
  */
 export interface LeadNudgeOptions {
-	noteKind?: "awaiting";
+	noteKind?: "awaiting" | "queued";
 	refresh?: () => string | undefined;
+	/**
+	 * Nothing in it asks the lead to decide anything, so it does not end a
+	 * wait on the agents: it is read with whatever ends that wait next. In
+	 * wlafh r3 three "queued, not broken: wait for them" notes each ended an
+	 * `await_agents` that the lead could only call again.
+	 */
+	quiet?: boolean;
 }
 
 /** Per-session listener: whoever can put a message in front of the lead. */
@@ -237,7 +244,11 @@ export interface AgentTroubleWatchOptions {
 	noNodeAfterMs?: number;
 	batchMs?: number;
 	/** Where the report goes; defaults to the session's lead listener. */
-	send?: (sessionId: string, text: string) => boolean;
+	send?: (
+		sessionId: string,
+		text: string,
+		options?: LeadNudgeOptions,
+	) => boolean;
 	/** For when no lead could be reached: the log still says it. */
 	logger?: { log: (message: string) => void };
 }
@@ -299,15 +310,38 @@ export function createAgentTroubleWatch(
 		for (const entry of overdue) {
 			entry.nudged = true;
 		}
-		for (const text of [
-			overdue.length > 0 ? describeLeadNudge(overdue, at) : undefined,
-			noNode.length > 0
-				? describeNoNodeNudge(noNode, at, noNodeAfterMs)
-				: undefined,
-		]) {
+		// Agents the server has queued are being paced: the note says to wait,
+		// so it waits too, and says who is still queued when it is read.
+		const onlyQueued =
+			overdue.length > 0 && overdue.every((entry) => entry.kind === "refusal");
+		const stillQueued = (): string | undefined => {
+			const live = SESSIONS.get(id);
+			const waiting = live
+				? [...live.records].filter(
+						(entry) =>
+							entry.nudged && !entry.escalated && entry.kind === "refusal",
+					)
+				: [];
+			return waiting.length > 0 ? describeLeadNudge(waiting, now()) : undefined;
+		};
+		const notes: [string | undefined, LeadNudgeOptions | undefined][] = [
+			[
+				overdue.length > 0 ? describeLeadNudge(overdue, at) : undefined,
+				onlyQueued
+					? { noteKind: "queued", quiet: true, refresh: stillQueued }
+					: undefined,
+			],
+			[
+				noNode.length > 0
+					? describeNoNodeNudge(noNode, at, noNodeAfterMs)
+					: undefined,
+				undefined,
+			],
+		];
+		for (const [text, how] of notes) {
 			if (text) {
 				options.logger?.log(`[Agents] telling the lead: ${text}`);
-				send(id, text);
+				send(id, text, how);
 			}
 		}
 		if (session.records.size === 0) {

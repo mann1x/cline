@@ -119,7 +119,9 @@ Added to the session while the protocol is engaged:
 | `restore_file` | Puts one file back: `"original"` (the default) as the transaction opened it, `"last"` to undo only the most recent change, or `"#3"` for a numbered version. `find` searches a file's revisions without restoring anything. Restoring a file that didn't exist when the transaction opened deletes it. |
 | `propose_check` | Only when there is nothing to run and someone to approve. See [Proposed checks](#proposed-checks). |
 
-`read_files` also gains a `revision` parameter: `"base"` (or `"original"`) reads a file as the transaction opened it, `"last"` reads the version before the most recent change, and `"#3"` reads a numbered version.
+`read_files` also gains a `revision` parameter: `"base"` (or `"original"`) reads a file as the transaction opened it, `"last"` reads the version before the most recent change, and `"#3"` reads a numbered version. Since 4.100.238 a `revision` written on one entry of `files` applies to that entry; before, it was ignored and the file on disk was returned.
+
+**Held revisions.** A delegated agent's version of a file is listed as a revision without being written to the workspace. It is marked held: the "on disk now" mark stays on the newest revision that was written, a command that leaves the file unchanged records nothing, and `"last"` counts only revisions that were written. Applying a held revision with `restore_file` is a write and gets its own number.
 
 ## Guards
 

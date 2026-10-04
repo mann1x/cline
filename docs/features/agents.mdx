@@ -494,6 +494,8 @@ There is no attempt limit and no deadline. The refusal thresholds are your own s
 
 **The lead nudge.** An agent that has waited without a break for **10 minutes** is reported to the lead once. Agents crossing the line within 30 s of each other are reported together. The report arrives as a side turn in which the lead can reply, `message_agents` or `stop_agents`. The agents keep retrying unless someone stops them.
 
+Since 4.100.238 a report in which every agent is only queued by the server (admission floor, pool seeding) does not end the lead's `await_agents` or start a side turn: it asks for no decision. It is read with whatever ends the wait next, rewritten then to name the agents still queued, and dropped if none is. A report naming an unreachable or failing server, and the two-hour report, still end the wait.
+
 **What the report offers.** For agents that are only queued, the report says they are queued, not broken, and that the server places them as it frees up: wait, and stop one only if its work is no longer needed. Taking the tasks back (`stop_agents` and do them yourself) is offered only when a server is unreachable or its turns fail. Before 4.100.232 it was offered for queued agents too, and a lead that followed it would have thrown away their work.
 
 **The no-node report.** An agent still waiting after **2 hours** without a break has had nowhere to run, and waiting on may never end. The lead is told a second time, once per agent, with the agents that crossed the line together in one report. This report asks for a decision: ask you how to proceed (`ask_question`), or `stop_agents` and do their tasks itself, only if that fits what you asked. Nothing is stopped by the report itself; the agents keep retrying until the lead or you stop them.
@@ -590,7 +592,7 @@ Landed on 2026-09-26 in `fdee39e61`, `d8dcee6a3` and `e4893c1b1`. `check` is ava
 **No cap from the lead.** Since 2026-09-28 the lead cannot cap an agent's model turns. `max_iterations` is no longer offered on any spawn tool or on `team_run_task`, and a value the model sends anyway is ignored. In pandorum session h0o2o, the lead set a cap of 25 on every agent and then reported the caps as a harness fault.
 
 - Agents run uncapped. A configured agent whose file sets `maxIterations` stops at that cap, and so does a teammate whose spec sets one.
-- **Every 60 iterations the lead is told** which agents are still running, how many iterations each has used, and its phase. The note is batched over 30 s. Nothing is stopped: the lead checks `agents_status`, then lets the agent run, redirects it with `message_agents`, or stops it with `stop_agents`.
+- **Every 60 iterations the lead is told** which agents are still running, how many iterations each has used, how many of its tool calls failed, and what it is doing. `agents_status` shows the same failed-call count per agent. The note is batched over 30 s. Nothing is stopped: the lead checks `agents_status`, then lets the agent run, redirects it with `message_agents`, or stops it with `stop_agents`.
 - A run that reaches a cap ends as `max_iterations`, not `error` (`fdee39e61`).
 
 **At the cap the agent waits (`awaiting_lead`).** The run is suspended with its transcript, overlay and place in the round kept.

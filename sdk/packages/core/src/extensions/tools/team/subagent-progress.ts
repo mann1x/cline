@@ -551,6 +551,9 @@ export function createSubagentProgress(
 		? subagentOutput.writer(options.outputId)
 		: undefined;
 	let toolCalls = 0;
+	// Calls that came back failed or refused. Iterations alone do not tell a
+	// long task from a stuck one (wlafh r3: 22 of braces-2's 95 calls failed).
+	let toolFailures = 0;
 	// Compactions it has finished, in total and by why they ran: an agent
 	// given a small window is watched for exactly this.
 	let compactions = 0;
@@ -764,6 +767,10 @@ export function createSubagentProgress(
 			// (`null` clears it). Only for a tool this observer saw start, and
 			// only once the last of a parallel batch is done (#77).
 			if (event.type === "content_end" && event.contentType === "tool") {
+				if (toolFailed(event.error, event.output)) {
+					toolFailures += 1;
+					emitUpdate({ toolFailures });
+				}
 				if (toolsRunning > 0) {
 					toolsRunning -= 1;
 					if (toolsRunning === 0) {
@@ -809,6 +816,22 @@ export function createSubagentProgress(
 export interface ActivityCounter {
 	observe(event: AgentEvent): boolean;
 	snapshot(): TeamAgentActivity;
+}
+
+/**
+ * Whether a finished tool call failed: an error, or a result that says so.
+ * The file and command tools report a refusal as `success: false` in their
+ * output rather than as an error.
+ */
+export function toolFailed(error: unknown, output: unknown): boolean {
+	if (typeof error === "string" && error.trim()) {
+		return true;
+	}
+	const failed = (entry: unknown): boolean =>
+		!!entry &&
+		typeof entry === "object" &&
+		(entry as { success?: unknown }).success === false;
+	return Array.isArray(output) ? output.some(failed) : failed(output);
 }
 
 export function createActivityCounter(

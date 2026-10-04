@@ -196,6 +196,45 @@ describe("describeRevisions", () => {
 	});
 });
 
+/**
+ * wlafh r3: six agents' versions were newest in the lead's list. The newest
+ * was labelled "on disk now" over a file nobody had written, and a command
+ * that only read the file was recorded as revision #8.
+ */
+describe("revisions an agent hands back without writing them", () => {
+	const held = { intent: "modified by delegated agent", held: true };
+
+	it("leaves the on-disk mark on the newest revision that was written", () => {
+		const log = createRevisionLog();
+		log.seed(FILE, body("one\n"));
+		log.record(FILE, body("agent a\n"), "agent:a", held);
+		log.record(FILE, body("agent b\n"), "agent:b", held);
+		const lines = describeRevisions("f.html", log.revisions(FILE)).split("\n");
+		expect(lines.find((l) => l.includes("#3"))).not.toContain("on disk now");
+		expect(lines.find((l) => l.includes("#1"))).toContain("on disk now");
+	});
+
+	it("records nothing when the file on disk is what it was", () => {
+		const log = createRevisionLog();
+		log.seed(FILE, body("one\n"));
+		log.record(FILE, body("agent a\n"), "agent:a", held);
+		expect(log.record(FILE, body("one\n"), "run_commands")).toBeUndefined();
+		expect(log.revisions(FILE)).toHaveLength(2);
+	});
+
+	it("records applying a held revision as a write", () => {
+		const log = createRevisionLog();
+		log.seed(FILE, body("one\n"));
+		log.record(FILE, body("agent a\n"), "agent:a", held);
+		const made = log.record(FILE, body("agent a\n"), "restore_file");
+		expect(made?.index).toBe(3);
+		expect(made?.sameAs).toBe(2);
+		// "last" undoes that write: back to what was on disk before it.
+		const last = log.resolve(FILE, "last");
+		expect(last.kind === "found" && last.revision.index).toBe(1);
+	});
+});
+
 describe("describeRevisions ordering", () => {
 	it("lists newest first and keeps #1 as the floor", () => {
 		const log = createRevisionLog();

@@ -199,6 +199,39 @@ function revisionOf(input: unknown): {
 	return { revision, rest };
 }
 
+/**
+ * A call whose file entries carry their own `revision`, as one call per run
+ * of entries that want the same one. Nothing when no entry carries one.
+ */
+function splitPerFileRevisions(input: unknown): unknown[] | undefined {
+	if (!input || typeof input !== "object" || Array.isArray(input)) {
+		return undefined;
+	}
+	const { files, revision, ...others } = input as Record<string, unknown>;
+	if (!Array.isArray(files)) return undefined;
+	const own = (entry: unknown): unknown =>
+		entry && typeof entry === "object" && !Array.isArray(entry)
+			? (entry as Record<string, unknown>).revision
+			: undefined;
+	if (!files.some((entry) => typeof own(entry) === "string")) {
+		return undefined;
+	}
+	const runs: { revision: unknown; files: unknown[] }[] = [];
+	for (const entry of files) {
+		const wanted = typeof own(entry) === "string" ? own(entry) : revision;
+		const { revision: _dropped, ...bare } = entry as Record<string, unknown>;
+		const file = typeof own(entry) === "string" ? bare : entry;
+		const open = runs[runs.length - 1];
+		if (open && open.revision === wanted) open.files.push(file);
+		else runs.push({ revision: wanted, files: [file] });
+	}
+	return runs.map((run) => ({
+		...others,
+		files: run.files,
+		...(run.revision === undefined ? {} : { revision: run.revision }),
+	}));
+}
+
 function withRevisionProperty(
 	schema: Record<string, unknown>,
 	wording: RevisionWording,
@@ -463,7 +496,23 @@ export function withBaseRevisionReads<T extends AgentToolDefinition>(
 				wording.description +
 				(overlay ? overlay.wording.description : ""),
 			inputSchema: withRevisionProperty(original.inputSchema, wording, overlay),
-			execute: async (input: unknown, context: AgentToolContext) => {
+			execute: async function execute(
+				input: unknown,
+				context: AgentToolContext,
+			): Promise<unknown> {
+				// `revision` written on a file entry instead of beside `files` is
+				// the same request. It used to be dropped, and the read answered
+				// with the file on disk under a call that named a revision.
+				const runs = splitPerFileRevisions(input);
+				if (runs) {
+					const merged: unknown[] = [];
+					for (const run of runs) {
+						const part = await execute(run, context);
+						if (Array.isArray(part)) merged.push(...part);
+						else merged.push(part);
+					}
+					return merged;
+				}
 				const active = live();
 				const { revision, rest } = revisionOf(input);
 				const place = placeOf(active.source);

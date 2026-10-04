@@ -205,6 +205,8 @@ export interface RoundAgentRecord extends RoundAgentSpec {
 	phase?: { name: AgentPhase; detail?: string; since: number };
 	iterations?: number;
 	toolCalls?: number;
+	/** Of those, the calls that came back failed or refused. */
+	toolFailures?: number;
 	compactions?: number;
 	compactionsByCause?: Partial<Record<CompactionCause, number>>;
 	/** The sampler it actually ran with. */
@@ -1328,6 +1330,7 @@ export class AgentRounds {
 		agent.outputTail = undefined;
 		agent.iterations = undefined;
 		agent.toolCalls = undefined;
+		agent.toolFailures = undefined;
 		// Not cleared: a restarted agent has still spent what it spent, and
 		// its totals are the agent's, not the attempt's.
 		carrySpendIntoNextRun(agent);
@@ -1729,12 +1732,19 @@ export class RoundHandle {
 					name: agent.name,
 					iterations,
 					...(agent.phase?.name ? { phase: agent.phase.name } : {}),
+					...((num("toolCalls") ?? agent.toolCalls)
+						? { toolCalls: num("toolCalls") ?? agent.toolCalls }
+						: {}),
+					...((num("toolFailures") ?? agent.toolFailures)
+						? { toolFailures: num("toolFailures") ?? agent.toolFailures }
+						: {}),
 				});
 			}
 		}
 		agent.engineSessionId = text("engineSessionId") ?? agent.engineSessionId;
 		agent.iterations = iterations ?? agent.iterations;
 		agent.toolCalls = num("toolCalls") ?? agent.toolCalls;
+		agent.toolFailures = num("toolFailures") ?? agent.toolFailures;
 		agent.maxIterations = num("maxIterations") ?? agent.maxIterations;
 		if (num("compactions") !== undefined) {
 			agent.compactions = num("compactions");
@@ -2282,6 +2292,31 @@ export interface IterationMilestone {
 	name: string;
 	iterations: number;
 	phase?: string;
+	toolCalls?: number;
+	toolFailures?: number;
+}
+
+/**
+ * What an agent is doing, in a note the lead reads cold. The bare phase name
+ * `requesting` was read as "asking for more iterations" (wlafh r3).
+ */
+const MILESTONE_PHASE_WORDS: Record<string, string> = {
+	requesting: "waiting for the model",
+	server_queued: "queued on the server",
+	prefill: "prefilling its prompt",
+	writing_tool_call: "writing a tool call",
+	tool: "running a tool",
+};
+
+/** `22 of 95 tool calls failed`, when any did. */
+export function toolFailureNote(
+	toolCalls: number | undefined,
+	toolFailures: number | undefined,
+): string | undefined {
+	if (!toolFailures) return undefined;
+	return toolCalls && toolCalls >= toolFailures
+		? `${toolFailures} of ${toolCalls} tool calls failed`
+		: `${toolFailures} tool calls failed`;
 }
 
 /** The note that asks the lead to look at agents that have run a long time. */
@@ -2294,7 +2329,15 @@ export function describeIterationMilestones(
 		`${HARNESS_TAG} ${milestones.length} agent${one ? " has" : "s have"} been running a long time; nothing was stopped:`,
 		...milestones.map(
 			(m) =>
-				`- ${m.name} (${m.id}): ${m.iterations} iterations${m.phase ? `, now ${m.phase}` : ""}`,
+				`- ${m.name} (${m.id}): ${[
+					`${m.iterations} iterations`,
+					toolFailureNote(m.toolCalls, m.toolFailures),
+					m.phase
+						? `now ${MILESTONE_PHASE_WORDS[m.phase] ?? m.phase}`
+						: undefined,
+				]
+					.filter(Boolean)
+					.join(", ")}`,
 		),
 		`Check how ${one ? "it is" : "they are"} doing with ${rounds.map((r) => `agents_status(round_id: "${r}")`).join(" / ")}. Let ${one ? "it" : "them"} run, message_agents to redirect, or stop_agents to take the work as it is.`,
 	].join("\n");

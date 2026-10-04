@@ -2476,7 +2476,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 		roundsFor(sessionId).messageWaiting = () =>
 			this.sessions
 				.get(sessionId)
-				?.pendingPrompts.some((entry) => entry.delivery === "steer") === true;
+				?.pendingPrompts.some(
+					(entry) =>
+						entry.delivery === "steer" &&
+						(entry as { noteKind?: string }).noteKind !== "queued",
+				) === true;
 		// Agents stuck for a long time are reported to the lead (see
 		// `agent-trouble.ts`): in a side turn while its round runs, where it
 		// may stop them and take their tasks back; queued otherwise.
@@ -2852,10 +2856,14 @@ export class LocalRuntimeHost implements RuntimeHost {
 		};
 		if (roundsFor(sessionId).leadAwaiting) {
 			this.pendingPromptsController.enqueue(sessionId, note);
-			roundsFor(sessionId).wakeAwaits();
+			// A note that asks for nothing is read with whatever ends the wait.
+			if (!options?.quiet) {
+				roundsFor(sessionId).wakeAwaits();
+			}
 			return;
 		}
 		if (
+			!options?.quiet &&
 			!session.agent.canStartRun() &&
 			this.sideTurnConfigs.has(sessionId) &&
 			roundsFor(sessionId).leadBlocked &&

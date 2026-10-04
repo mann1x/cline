@@ -543,7 +543,11 @@ export function createRestoreFileTool(
 			const discarded =
 				current === undefined
 					? "it had been deleted"
-					: describeDiscarded(current, target);
+					: describeDiscarded(
+							current,
+							target,
+							history[0]?.body !== undefined && current.equals(history[0].body),
+						);
 
 			return [
 				`\`${display}\` is back to ${targetLabel}: ${restoredLines} lines, ${discarded}.${made ? ` That is now revision #${made.index}.` : ""} Every line number you read before this now points somewhere else, so read the file again before you edit it. ${describeBudget(spentIn, snapshot !== undefined)}`,
@@ -624,9 +628,13 @@ function describeRestoreHabit(spent: number): string | undefined {
 	].join(" ");
 }
 
-function describeDiscarded(current: Buffer, base: Buffer): string {
+function describeDiscarded(
+	current: Buffer,
+	base: Buffer,
+	untouched = false,
+): string {
 	if (!isTextBody(current) || !isTextBody(base)) {
-		return "your changes to it are gone";
+		return untouched ? "replacing the original" : "your changes to it are gone";
 	}
 	const before = current.toString("utf8");
 	const after = base.toString("utf8");
@@ -636,7 +644,13 @@ function describeDiscarded(current: Buffer, base: Buffer): string {
 		delta === 0
 			? "the same number of lines"
 			: `${Math.abs(delta)} line${Math.abs(delta) === 1 ? "" : "s"} ${delta > 0 ? "more" : "fewer"}`;
-	return line > 0
-		? `discarding what you had made of it, which had ${size} and first differed at line ${line}`
+	// Applying an agent's held revision over a file nobody here edited
+	// discards nobody's work, and saying it does sends the model looking for
+	// edits it never made.
+	const what = untouched
+		? "replacing the original, which you had not changed"
 		: "discarding what you had made of it";
+	return line > 0
+		? `${what}, which had ${size} and first differed at line ${line}`
+		: what;
 }

@@ -166,6 +166,28 @@ describe("reading the version this transaction started from", () => {
 		});
 	});
 
+	it("takes a revision written on a file entry", async () => {
+		// wlafh r3: `files: [{ path, revision: "#4" }]` was served from disk,
+		// and the lead compared an agent's work against the original.
+		await withWorkspace({ "game.html": "original\n" }, async (root) => {
+			const snapshot = await takeSnapshot(root);
+			await fs.writeFile(path.join(root, "game.html"), "wrecked\n", "utf8");
+			const [tool] = withBaseRevisionReads(
+				[readTool(createReadReceipts(), root)],
+				{ pending: snapshot, transaction: 1, revisions: createRevisionLog() },
+			);
+
+			const results = await call(tool, {
+				files: [{ path: "game.html", revision: "base" }, { path: "game.html" }],
+			});
+
+			expect(results).toHaveLength(2);
+			expect(results[0]?.result).toContain("original");
+			expect(results[0]?.result).not.toContain("wrecked");
+			expect(results[1]?.result).toContain("wrecked");
+		});
+	});
+
 	it("passes the shapes that cannot carry a revision straight through", async () => {
 		// `read_files` accepts a bare path and a bare array. Neither has anywhere
 		// to put a revision, and neither must be mangled on the way past.

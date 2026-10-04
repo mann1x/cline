@@ -72,6 +72,37 @@ describe("telling the lead about agents stuck for a long time", () => {
 		watch.dispose();
 	});
 
+	it("does not end the lead's wait for agents that are only queued", async () => {
+		// wlafh r3: three notes saying "wait for them" each ended an
+		// await_agents the lead could only call again.
+		const how: unknown[] = [];
+		const watch = createAgentTroubleWatch({
+			sessionId: "lead-quiet",
+			name: "syntax-1",
+			send: (_id, _text, options) => {
+				how.push(options);
+				return true;
+			},
+		});
+		watch.waiting({ kind: "refusal", where: "Node1", detail: TPS });
+		await vi.advanceTimersByTimeAsync(
+			LEAD_NUDGE_AFTER_MS + LEAD_NUDGE_BATCH_MS,
+		);
+
+		expect(how).toHaveLength(1);
+		const options = how[0] as {
+			quiet?: boolean;
+			noteKind?: string;
+			refresh?: () => string | undefined;
+		};
+		expect(options.quiet).toBe(true);
+		expect(options.noteKind).toBe("queued");
+		// Read later, it names who is still queued, and is dropped once none is.
+		expect(options.refresh?.()).toContain("syntax-1: queued by Node1");
+		watch.dispose();
+		expect(options.refresh?.()).toBeUndefined();
+	});
+
 	it("offers to take the tasks back only when a server is gone", async () => {
 		const sent: string[] = [];
 		const gone = watchFor("review-1", sent);

@@ -43,6 +43,7 @@ import {
 	type RoundAgentRecord,
 	type RoundRecord,
 	roundsFor,
+	toolFailureNote,
 } from "./agent-rounds";
 import type { DelegatedAgentConfigProvider } from "./delegated-agent";
 import {
@@ -736,6 +737,9 @@ export function describeRound(
 				: []),
 			...(agent.genTps !== undefined && LIVE_STATES.has(state)
 				? [`${agent.genTps} tok/s`]
+				: []),
+			...(agent.toolFailures
+				? [`${toolFailureNote(agent.toolCalls, agent.toolFailures)}`]
 				: []),
 			...(agent.compactions ? [`${agent.compactions} compactions`] : []),
 			...(ctx?.queue.get(agent.id) !== undefined

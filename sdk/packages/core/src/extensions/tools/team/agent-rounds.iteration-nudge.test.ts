@@ -70,4 +70,24 @@ describe("the lead's note about long-running agents", () => {
 		expect(text).toContain("- a (r2-1): 60 iterations, now thinking");
 		expect(text).toContain("- b (r2-2): 120 iterations");
 	});
+
+	it("says how many calls failed, and never the bare word requesting", () => {
+		// wlafh r3: "60 iterations, now requesting" was read as an agent
+		// asking for more iterations.
+		const text = describeIterationMilestones([
+			{
+				round: "r3",
+				id: "r3-11",
+				name: "braces-2",
+				iterations: 60,
+				phase: "requesting",
+				toolCalls: 58,
+				toolFailures: 14,
+			},
+		]);
+		expect(text).toContain(
+			"- braces-2 (r3-11): 60 iterations, 14 of 58 tool calls failed, now waiting for the model",
+		);
+		expect(text).not.toContain("now requesting");
+	});
 });
