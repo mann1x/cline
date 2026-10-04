@@ -390,3 +390,75 @@ fn w1_confines_writes_to_the_workspace_and_temp() {
 
     fs::remove_dir_all(&base).ok();
 }
+
+/// Direct mode, the lead's: no hook and no overlay. The command runs at Low
+/// integrity and writes the workspace in place, which the launcher labels,
+/// and the temp folder it was given.
+#[test]
+fn w1_direct_writes_the_workspace_in_place_and_nothing_else() {
+    let base = unique_dir("direct");
+    let ws = base.join("ws");
+    let tmp = base.join("tmp");
+    let outside = base.join("outside");
+    fs::create_dir_all(ws.join("sub")).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    write(&ws, "sub\\kept.txt", "K\r\n");
+    write(&outside, "readable.txt", "READ-THROUGH\r\n");
+
+    let script = "echo W> made.txt && echo ws-write-ok \
+         & echo A>> sub\\kept.txt && echo existing-write-ok \
+         & (echo O> %OUTSIDE%\\escaped.txt) 2>nul && echo OUTSIDE-WRITTEN || echo outside-denied \
+         & (echo T> %TMP%\\t.txt) 2>nul && echo tmp-write-ok || echo TMP-DENIED \
+         & type %OUTSIDE%\\readable.txt \
+         & whoami /groups | findstr /c:Mandatory";
+    let run = || {
+        Command::new(BIN)
+            .arg("unused-hook")
+            .arg(base.join("direct.log"))
+            .args(["cmd", "/c", script])
+            .current_dir(&ws)
+            .env("CEREBRILINE_WS_ROOT", &ws)
+            .env("CEREBRILINE_SANDBOX_DIRECT", "1")
+            .env("CEREBRILINE_SANDBOX_TMP", &tmp)
+            .env_remove("CEREBRILINE_OVERLAY_ROOT")
+            .env("OUTSIDE", &outside)
+            .env("TMP", &tmp)
+            .env("TEMP", &tmp)
+            .output()
+            .expect("failed to run cerebriline-sandbox")
+    };
+    // Twice: the second run finds the workspace already labelled.
+    for round in 0..2 {
+        let out = run();
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        for marker in [
+            "Low Mandatory Level",
+            "ws-write-ok",
+            "existing-write-ok",
+            "tmp-write-ok",
+            "READ-THROUGH",
+            "outside-denied",
+        ] {
+            assert!(
+                stdout.contains(marker),
+                "round {round}: missing {marker}: {stdout}{stderr}"
+            );
+        }
+    }
+    assert!(
+        !outside.join("escaped.txt").exists(),
+        "a write escaped the sandbox"
+    );
+    assert!(
+        ws.join("made.txt").exists(),
+        "the workspace must be written in place"
+    );
+    assert_eq!(
+        fs::read_to_string(ws.join("sub").join("kept.txt")).unwrap(),
+        "K\r\nA\r\nA\r\n",
+        "a file that was there before must be writable"
+    );
+
+    fs::remove_dir_all(&base).ok();
+}

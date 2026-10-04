@@ -220,3 +220,73 @@ fn m1_confines_writes_to_the_workspace_and_temp() {
 
     fs::remove_dir_all(&base).ok();
 }
+
+/// Direct mode, the lead's: no clone, the workspace written in place, the
+/// rest of the system read-only.
+#[test]
+fn m1_direct_writes_the_workspace_in_place_and_nothing_else() {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+    let base = home.join(format!(
+        ".cbl-direct-m1-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let ws = base.join("ws");
+    let outside = base.join("outside");
+    fs::create_dir_all(&ws).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    write(&outside, "readable.txt", "READ-THROUGH\n");
+
+    let script = "\
+        echo W > made.txt && echo ws-write-ok;\
+        echo O > \"$OUTSIDE/escaped.txt\" 2>/dev/null && echo OUTSIDE-WRITTEN || echo outside-denied;\
+        if echo H > \"$HOME/.cbl-direct-escape-$$\" 2>/dev/null; then echo HOME-WRITTEN; rm -f \"$HOME/.cbl-direct-escape-$$\"; else echo home-denied; fi;\
+        T=$(mktemp) && echo tmpdir-write-ok && rm -f \"$T\";\
+        cat \"$OUTSIDE/readable.txt\";\
+        exit 7";
+    let out = Command::new(BIN)
+        .arg("unused-hook")
+        .arg(base.join("direct.log"))
+        .arg("/bin/sh")
+        .arg("-c")
+        .arg(script)
+        .current_dir(&ws)
+        .env("CEREBRILINE_WS_ROOT", &ws)
+        .env("CEREBRILINE_SANDBOX_DIRECT", "1")
+        .env_remove("CEREBRILINE_OVERLAY_ROOT")
+        .env("OUTSIDE", &outside)
+        .output()
+        .expect("failed to run cerebriline-sandbox");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let written = fs::read_to_string(ws.join("made.txt")).ok();
+    let escaped = outside.join("escaped.txt").exists();
+    fs::remove_dir_all(&base).ok();
+
+    assert_eq!(
+        out.status.code(),
+        Some(7),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+    for marker in [
+        "ws-write-ok",
+        "tmpdir-write-ok",
+        "READ-THROUGH",
+        "outside-denied",
+        "home-denied",
+    ] {
+        assert!(
+            stdout.contains(marker),
+            "missing {marker}: {stdout}{stderr}"
+        );
+    }
+    assert!(!escaped, "a write escaped the sandbox");
+    assert_eq!(
+        written.as_deref(),
+        Some("W\n"),
+        "the workspace must be written in place"
+    );
+}

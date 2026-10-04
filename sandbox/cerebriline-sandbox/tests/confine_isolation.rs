@@ -145,6 +145,96 @@ fn check(backend: &str) {
     fs::remove_dir_all(&base).ok();
 }
 
+/// Direct mode, the lead's: no overlay, the workspace written in place, the
+/// rest of the system read-only, and the command still the user it was.
+fn check_direct(backend: &str) {
+    let base = home_dir(&format!("direct-{backend}"));
+    let ws = base.join("ws");
+    let outside = base.join("outside");
+    fs::create_dir_all(&ws).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    write(&outside, "readable.txt", "READ-THROUGH\n");
+    write(&ws, "kept.txt", "K\n");
+
+    let script = format!("echo A >> kept.txt; echo \"uid=$(id -u)\"; {SCRIPT}");
+    let out = Command::new(BIN)
+        .arg("unused-hook")
+        .arg(base.join("direct.log"))
+        .arg("sh")
+        .arg("-c")
+        .arg(&script)
+        .current_dir(&ws)
+        .env("CEREBRILINE_WS_ROOT", &ws)
+        .env("CEREBRILINE_SANDBOX_DIRECT", "1")
+        .env_remove("CEREBRILINE_OVERLAY_ROOT")
+        .env_remove("CEREBRILINE_SANDBOX_CONFINE")
+        .env("CEREBRILINE_SANDBOX_BACKEND", backend)
+        .env("WS", &ws)
+        .env("OUTSIDE", &outside)
+        .output()
+        .expect("failed to run cerebriline-sandbox");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if out.status.code() == Some(71) {
+        eprintln!("skipping direct {backend}: the launcher could not set the sandbox up\n{stderr}");
+        fs::remove_dir_all(&base).ok();
+        return;
+    }
+    assert_eq!(
+        out.status.code(),
+        Some(7),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+    for marker in [
+        "ws-write-ok",
+        "tmp-write-ok",
+        "READ-THROUGH",
+        "outside-denied",
+        "home-denied",
+        "remount-denied",
+    ] {
+        assert!(
+            stdout.contains(marker),
+            "missing {marker}: {stdout}{stderr}"
+        );
+    }
+    let uid = String::from_utf8_lossy(&Command::new("id").arg("-u").output().unwrap().stdout)
+        .trim()
+        .to_string();
+    assert!(
+        stdout.contains(&format!("uid={uid}")),
+        "the command must stay the same user: {stdout}"
+    );
+    assert!(
+        !outside.join("escaped.txt").exists(),
+        "a write escaped the sandbox"
+    );
+    // In place: there is no copy to hand back.
+    assert_eq!(
+        fs::read_to_string(ws.join("made.txt")).ok().as_deref(),
+        Some("W\n"),
+        "the workspace must be written in place"
+    );
+    assert_eq!(
+        fs::read_to_string(ws.join("kept.txt")).ok().as_deref(),
+        Some("K\nA\n"),
+        "a relative write must reach the workspace"
+    );
+
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn l1_direct_writes_the_workspace_in_place_and_nothing_else() {
+    check_direct("l1");
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn l2_direct_writes_the_workspace_in_place_and_nothing_else() {
+    check_direct("l2");
+}
+
 #[test]
 fn l1_confines_writes_to_the_workspace_and_temp() {
     check("l1");

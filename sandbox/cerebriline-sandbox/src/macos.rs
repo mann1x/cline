@@ -92,6 +92,40 @@ pub fn run(cfg: &Config) -> i32 {
 }
 
 /// A hidden, unique sibling of the workspace, on the same volume.
+/// Direct mode: the command runs under the confinement profile with no clone.
+/// It keeps the caller's working directory and writes the workspace in place.
+pub fn run_direct(cfg: &Config) -> i32 {
+    if cfg.command.is_empty() {
+        eprintln!("cerebriline-sandbox: no command given");
+        return 64;
+    }
+    // Escape-critical: a profile that cannot be built runs nothing.
+    let profile = match confine_profile(&cfg.ws_root) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("cerebriline-sandbox: cannot build the confinement profile: {e}");
+            return 71;
+        }
+    };
+    let program = &cfg.command[0];
+    match Command::new(SANDBOX_EXEC)
+        .arg("-p")
+        .arg(profile)
+        .arg(program)
+        .args(&cfg.command[1..])
+        .status()
+    {
+        Ok(status) => status.code().unwrap_or_else(|| {
+            use std::os::unix::process::ExitStatusExt;
+            status.signal().map(|s| 128 + s).unwrap_or(1)
+        }),
+        Err(e) => {
+            eprintln!("cerebriline-sandbox: failed to run {program}: {e}");
+            127
+        }
+    }
+}
+
 fn clone_path(ws_root: &Path) -> io::Result<PathBuf> {
     let parent = ws_root
         .parent()

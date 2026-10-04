@@ -158,6 +158,16 @@ extern "system" {
         dacl: *mut c_void,
         sacl: *mut c_void,
     ) -> u32;
+    fn GetNamedSecurityInfoW(
+        name: *const u16,
+        object_type: u32,
+        info: u32,
+        owner: *mut *mut c_void,
+        group: *mut *mut c_void,
+        dacl: *mut *mut c_void,
+        sacl: *mut *mut c_void,
+        descriptor: *mut *mut c_void,
+    ) -> u32;
 }
 
 extern "system" {
@@ -314,6 +324,147 @@ fn label_tree_low(root: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Whether a path already carries a mandatory label at Low or below.
+fn labelled_low(path: &Path) -> bool {
+    const SYSTEM_MANDATORY_LABEL_ACE_TYPE: u8 = 0x11;
+    const LOW_RID: u32 = 0x1000;
+    let name = to_utf16_null(&path.to_string_lossy());
+    let mut sacl: *mut c_void = std::ptr::null_mut();
+    let mut descriptor: *mut c_void = std::ptr::null_mut();
+    let rc = unsafe {
+        GetNamedSecurityInfoW(
+            name.as_ptr(),
+            SE_FILE_OBJECT,
+            LABEL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut sacl,
+            &mut descriptor,
+        )
+    };
+    if rc != 0 {
+        return false;
+    }
+    // An ACL is an 8-byte header (the ACE count at offset 4) and its ACEs. A
+    // label ACE is a 4-byte header, a 4-byte mask and the SID, whose one
+    // sub-authority (the level) sits 8 bytes into it.
+    let low = !sacl.is_null()
+        && unsafe {
+            let acl = sacl as *const u8;
+            let count = std::ptr::read_unaligned(acl.add(4) as *const u16);
+            let ace = acl.add(8);
+            count >= 1
+                && *ace == SYSTEM_MANDATORY_LABEL_ACE_TYPE
+                && *ace.add(9) == 1
+                && std::ptr::read_unaligned(ace.add(16) as *const u32) <= LOW_RID
+        };
+    if !descriptor.is_null() {
+        unsafe { LocalFree(descriptor) };
+    }
+    low
+}
+
+/// Label the workspace Low, once. The root is labelled last and is what the
+/// next run checks, so a walk that was interrupted is repeated. What an
+/// in-process tool or the editor writes there afterwards inherits the label.
+/// An entry that cannot be labelled (open elsewhere, not the user's) stays
+/// read-only to the command; the count is reported.
+fn label_workspace_low(root: &Path) -> Result<(), String> {
+    if labelled_low(root) {
+        return Ok(());
+    }
+    let mut skipped = 0usize;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            // A link is not followed: its target may be outside the workspace.
+            if kind.is_symlink() {
+                continue;
+            }
+            if label_low(&path, kind.is_dir()).is_err() {
+                skipped += 1;
+                continue;
+            }
+            if kind.is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+    if skipped > 0 {
+        eprintln!(
+            "cerebriline-sandbox: {skipped} entries in the workspace could not be made writable to the confined command"
+        );
+    }
+    label_low(root, true)
+}
+
+/// Direct mode's preparation: the workspace itself is what the command writes.
+fn prepare_direct(cfg: &Config) -> Result<(), String> {
+    label_workspace_low(&cfg.ws_root)?;
+    if let Some(tmp) = std::env::var_os("CEREBRILINE_SANDBOX_TMP").filter(|v| !v.is_empty()) {
+        label_tree_low(Path::new(&tmp))?;
+    }
+    let token = low_integrity_token()?;
+    LOW_TOKEN.store(token, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Direct mode: the command starts at Low integrity with no hook. It writes
+/// the workspace in place, which this labels Low the first time (a lasting
+/// change to the folder: any low-integrity program of the same user may write
+/// it from then on), and the temp folder it was given.
+pub fn run_direct(cfg: &Config) -> i32 {
+    if cfg.command.is_empty() {
+        eprintln!("cerebriline-sandbox: no command given");
+        return 64;
+    }
+    // Escape-critical: asked to confine and unable to, nothing is started.
+    if let Err(e) = prepare_direct(cfg) {
+        eprintln!("cerebriline-sandbox: cannot confine the command: {e}");
+        return 71;
+    }
+    let mut cmd = command_line(&cfg.command);
+    let mut si: StartupInfoW = unsafe { std::mem::zeroed() };
+    si.cb = std::mem::size_of::<StartupInfoW>() as u32;
+    let mut pi: ProcessInformation = unsafe { std::mem::zeroed() };
+    let ok = unsafe {
+        CreateProcessAsUserW(
+            LOW_TOKEN.load(Ordering::SeqCst),
+            std::ptr::null(),
+            cmd.as_mut_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            TRUE,
+            CREATE_DEFAULT_ERROR_MODE | CREATE_UNICODE_ENVIRONMENT,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            &si,
+            &mut pi,
+        )
+    };
+    if ok == 0 {
+        let err = unsafe { GetLastError() };
+        eprintln!("cerebriline-sandbox: CreateProcessAsUserW failed: {err}");
+        return 3;
+    }
+    unsafe { WaitForSingleObject(pi.h_process, INFINITE) };
+    let mut code: u32 = 0;
+    unsafe { GetExitCodeProcess(pi.h_process, &mut code) };
+    unsafe {
+        CloseHandle(pi.h_thread);
+        CloseHandle(pi.h_process);
+    }
+    code as i32
 }
 
 /// Everything the confined command writes, labelled before it starts.

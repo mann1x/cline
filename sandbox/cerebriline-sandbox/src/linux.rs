@@ -155,6 +155,66 @@ pub fn run(cfg: &Config) -> i32 {
     code
 }
 
+/// Direct mode: confine the command with no overlay. It keeps the caller's
+/// working directory and its own uid, writes the workspace in place and the
+/// temp folders, and finds the rest of the system read-only.
+///
+/// The uid is mapped to itself, not to root as under the overlay: the lead's
+/// tools (git, ssh) check who owns their files. The capabilities the remounts
+/// need exist in a new user namespace whatever the mapping, until the exec.
+pub fn run_direct(cfg: &Config) -> i32 {
+    let euid = unsafe { geteuid() };
+    let egid = unsafe { getegid() };
+    if unsafe { unshare(CLONE_NEWUSER | CLONE_NEWNS) } != 0 {
+        eprintln!(
+            "cerebriline-sandbox: unshare(user|mount) failed: {}",
+            io::Error::last_os_error()
+        );
+        return 71;
+    }
+    if let Err(e) = write_proc("/proc/self/setgroups", "deny") {
+        eprintln!("cerebriline-sandbox: setgroups deny failed: {e}");
+        return 71;
+    }
+    if let Err(e) = write_proc("/proc/self/uid_map", &format!("{euid} {euid} 1\n")) {
+        eprintln!("cerebriline-sandbox: uid_map failed: {e}");
+        return 71;
+    }
+    if let Err(e) = write_proc("/proc/self/gid_map", &format!("{egid} {egid} 1\n")) {
+        eprintln!("cerebriline-sandbox: gid_map failed: {e}");
+        return 71;
+    }
+    let cwd = std::env::current_dir().ok();
+    // Escape-critical: asked to confine and unable to, nothing is run.
+    if let Err(e) = confine::apply(&[cfg.ws_root.as_path()]) {
+        eprintln!("cerebriline-sandbox: confining the command failed: {e}");
+        return 71;
+    }
+    // The working directory was entered before the workspace became a mount of
+    // its own: it still names the mount underneath, now read-only, and a
+    // relative write there is refused. Enter it again by its path.
+    if let Some(cwd) = cwd {
+        if let Err(e) = std::env::set_current_dir(&cwd) {
+            eprintln!(
+                "cerebriline-sandbox: chdir to {} failed: {e}",
+                cwd.display()
+            );
+            return 127;
+        }
+    }
+    log_line(
+        cfg,
+        &format!("DIRECT ws={} cmd={:?}", cfg.ws_root.display(), cfg.command),
+    );
+    exec(&cfg.command);
+    eprintln!(
+        "cerebriline-sandbox: exec {:?} failed: {}",
+        cfg.command.first(),
+        io::Error::last_os_error()
+    );
+    127
+}
+
 /// The child: become root in a new user namespace, mount a tmpfs for the overlay
 /// upper, mount the overlay over the workspace, run the command in a grandchild,
 /// then reconcile the upper into the persistent overlay root. Returns the code

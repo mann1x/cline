@@ -166,6 +166,9 @@ pub struct L2 {
     overlay_root: PathBuf,
     /// Refuse writes outside the workspace and the temp folders.
     confine: bool,
+    /// No overlay: nothing is redirected, the workspace is written in place.
+    /// Always confined, which is the only reason to trace the command at all.
+    direct: bool,
     states: HashMap<c_int, TraceeState>,
 }
 
@@ -174,9 +177,12 @@ pub struct L2 {
 pub fn run(cfg: &Config) -> i32 {
     let ws_root = cfg.ws_root.clone();
     let overlay_root = cfg.overlay_root.clone();
-    if let Err(e) = fs::create_dir_all(&overlay_root) {
-        eprintln!("cerebriline-sandbox: cannot create the overlay root: {e}");
-        return 71;
+    let direct = crate::direct_requested();
+    if !direct {
+        if let Err(e) = fs::create_dir_all(&overlay_root) {
+            eprintln!("cerebriline-sandbox: cannot create the overlay root: {e}");
+            return 71;
+        }
     }
 
     // SAFETY: single-threaded; the child only does async-signal-safe work
@@ -191,7 +197,8 @@ pub fn run(cfg: &Config) -> i32 {
                 std::ptr::null_mut(),
             );
         }
-        if std::env::set_current_dir(&ws_root).is_err() {
+        // Direct mode keeps the caller's working directory.
+        if !direct && std::env::set_current_dir(&ws_root).is_err() {
             std::process::exit(127);
         }
         exec(&cfg.command);
@@ -208,7 +215,8 @@ pub fn run(cfg: &Config) -> i32 {
     let mut l2 = L2 {
         ws_root,
         overlay_root,
-        confine: crate::confine_requested(),
+        confine: direct || crate::confine_requested(),
+        direct,
         states: HashMap::new(),
     };
     l2.supervise(pid)
@@ -381,8 +389,13 @@ impl L2 {
     /// Where a confined command may write: its workspace (redirected into the
     /// overlay), the overlay itself, the temp folders, and the kernel trees.
     fn writable(&self, abs: &Path) -> bool {
-        resolve::locate(&self.ws_root, &self.overlay_root, abs).inside
-            || abs.starts_with(&self.overlay_root)
+        let workspace = if self.direct {
+            abs.starts_with(&self.ws_root)
+        } else {
+            resolve::locate(&self.ws_root, &self.overlay_root, abs).inside
+                || abs.starts_with(&self.overlay_root)
+        };
+        workspace
             || ["/tmp", "/var/tmp", "/dev", "/proc", "/sys"]
                 .iter()
                 .any(|root| abs.starts_with(root))
@@ -391,6 +404,9 @@ impl L2 {
     fn handle_entry(&mut self, pid: c_int, regs: &mut UserRegs) {
         if self.confine && self.refused(pid, regs) {
             self.neutralise(pid, regs, -EACCES);
+            return;
+        }
+        if self.direct {
             return;
         }
         let nr = regs.orig_rax;

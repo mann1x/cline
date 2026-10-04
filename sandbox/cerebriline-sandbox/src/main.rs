@@ -67,6 +67,17 @@ pub fn confine_requested() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the caller asked for direct mode (`CEREBRILINE_SANDBOX_DIRECT=1`):
+/// the command runs confined with no overlay. It writes the workspace in
+/// place and the temp folders, and nothing else. This is the lead's mode: its
+/// changes are the user's, so there is no copy to hand back, and the reason to
+/// run it through the launcher at all is the confinement.
+pub fn direct_requested() -> bool {
+    std::env::var("CEREBRILINE_SANDBOX_DIRECT")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
+
 /// The resolved launch request.
 pub struct Config {
     /// The injected hook DLL the Windows (W1) backend loads into the child. It is
@@ -77,6 +88,7 @@ pub struct Config {
     /// The lead's workspace; the overlay's lower layer.
     pub ws_root: PathBuf,
     /// The agent's private overlay directory; the hand-back is read from here.
+    /// Empty in direct mode, which has none.
     pub overlay_root: PathBuf,
     /// Optional trace log path.
     pub log: Option<PathBuf>,
@@ -99,7 +111,11 @@ fn parse() -> Result<Config, String> {
     let command = args[3..].to_vec();
 
     let ws_root = env_path("CEREBRILINE_WS_ROOT")?;
-    let overlay_root = env_path("CEREBRILINE_OVERLAY_ROOT")?;
+    let overlay_root = if direct_requested() {
+        PathBuf::new()
+    } else {
+        env_path("CEREBRILINE_OVERLAY_ROOT")?
+    };
     let log = std::env::var("CEREBRILINE_SANDBOX_LOG")
         .ok()
         .or(Some(log_arg))
@@ -156,12 +172,19 @@ fn main() {
         // forces one (`l1`/`l2`); `auto` (the default) uses L1 when unprivileged
         // user namespaces are available and L2 otherwise.
         let backend = std::env::var("CEREBRILINE_SANDBOX_BACKEND").unwrap_or_default();
+        let l1 = |cfg: &Config| {
+            if direct_requested() {
+                linux::run_direct(cfg)
+            } else {
+                linux::run(cfg)
+            }
+        };
         let code = match backend.as_str() {
             "l2" => run_l2(&cfg),
-            "l1" => linux::run(&cfg),
+            "l1" => l1(&cfg),
             _ => {
                 if linux::userns_available() {
-                    linux::run(&cfg)
+                    l1(&cfg)
                 } else {
                     run_l2(&cfg)
                 }
@@ -176,6 +199,9 @@ fn main() {
     // symmetry but there is only one backend to name here.
     #[cfg(target_os = "macos")]
     {
+        if direct_requested() {
+            std::process::exit(macos::run_direct(&cfg));
+        }
         std::process::exit(macos::run(&cfg));
     }
 
@@ -184,6 +210,9 @@ fn main() {
     // into every child, so the whole tree runs sandboxed.
     #[cfg(windows)]
     {
+        if direct_requested() {
+            std::process::exit(windows::run_direct(&cfg));
+        }
         std::process::exit(windows::run(&cfg));
     }
 
