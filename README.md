@@ -314,11 +314,13 @@ xOllama is an Ollama fork that runs opencoti as its engine. It speaks Ollama's n
 - **Rolling window:** the whole model stays on the GPU. The oldest part of the conversation's cache is kept in system RAM and streamed to the GPU as it is needed.
 - **Layers in RAM:** the usual way. Part of the model (here 10 of its 64 layers) runs on the CPU.
 
-| Setup | Video memory used | Fits a 12 GB card |
-|---|---|---|
-| Everything in video memory (the reference) | 11.9 GiB (12,196 MiB) | No |
-| Rolling window | 9.9 GiB (10,142 MiB) | Yes |
-| 10 of 64 layers in RAM | 10.1 GiB (10,322 MiB) | Yes |
+| Setup | Video memory used | System RAM used | Fits a 12 GB card |
+|---|---|---|---|
+| Everything in video memory (the reference) | 11.9 GiB (12,196 MiB) | 0.4 GiB | No |
+| Rolling window | 9.9 GiB (10,140 MiB) | 2.2 GiB | Yes |
+| 10 of 64 layers in RAM | 10.1 GiB (10,322 MiB) | 2.9 GiB | Yes |
+
+Memory is what the engine holds once the model is loaded, before the first request. The system RAM of the layers-in-RAM setup includes the 2.1 GiB of the model file that those layers read.
 
 Speed while answering, in tokens per second, as the conversation grows:
 
@@ -341,6 +343,14 @@ Speed while answering, in tokens per second, as the conversation grows:
 - **Reading a prompt** runs at 1,892 to 3,111 tokens per second with the rolling window, against 2,275 to 3,100 for the reference and 1,375 to 1,682 with layers in RAM.
 
 **With the model's built-in drafter.** OmniMerge v6 carries a small helper that guesses several tokens ahead (MTP), and the engine uses it by default. It makes answers faster, and it needs video memory of its own, so on the 12 GB budget the rolling window is in use from the start of the conversation:
+
+| Setup, with the drafter | Video memory used | System RAM used | Fits a 12 GB card |
+|---|---|---|---|
+| Everything in video memory (the reference) | 13.1 GiB (13,412 MiB) | 0.6 GiB | No |
+| Rolling window | 10.7 GiB (10,930 MiB) | 2.9 GiB | Yes |
+| 10 of 64 layers in RAM | 11.2 GiB (11,498 MiB) | 3.2 GiB | Yes |
+
+Of that, the drafter takes 751 MiB of video memory in each setup. Speed while answering, in tokens per second:
 
 | Conversation size (tokens) | Everything in video memory | Rolling window | 10 of 64 layers in RAM |
 |---|---|---|---|
