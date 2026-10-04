@@ -309,37 +309,7 @@ xOllama is an Ollama fork that runs opencoti as its engine. It speaks Ollama's n
 - **Jev.** xOllama serves Ollama's `/v1/systemone`, so the Jev tab can point at it and score with a local decision model.
 - **The KV rolling window.** When the KV cache does not fit in VRAM, the engine keeps part of it in host RAM and streams it through VRAM while the model computes, instead of moving model layers to RAM. Set `kv.rolling_window` in the model's configuration (`on`, `off`, or a size in MiB). It is the engine's feature, and Cerebriline needs no setting for it.
 
-The figures below were measured on the opencoti engine, which is the engine xOllama runs.
-
-**A 27B model on a 12 GB budget.** Qwen3.8-27B OmniMerge v6 at IQ2_M (a hybrid: 16 attention and 48 linear layers), a 131,072-token context, q4_0 KV, VRAM capped at 11,500 MiB to stand in for a 12 GB card, a 256 MiB window. On a Radeon RX 9070 XT (Vulkan, Windows 11, PCIe 5.0 x16), generation in tok/s at each prompt depth:
-
-| Prompt tokens | No cap, all in VRAM | 11.5 GB cap, rolling window | 11.5 GB cap, 10 of 64 layers in RAM | Prefill tok/s (no cap / window / layers in RAM) |
-|---|---|---|---|---|
-| 30,506 | 35.1 | 26.8 | 6.7 | 620 / 602 / 548 |
-| 44,947 | 33.9 | 24.2 | 6.4 | 585 / 558 / 510 |
-| 59,039 | 32.9 | 21.7 | 20.7 * | 540 / 513 / 473 |
-| 73,532 | 32.0 | 19.6 | 5.6 | 501 / 474 / 442 |
-| 87,986 | 31.0 | 17.8 | 5.6 | 466 / 440 / 414 |
-| 102,383 | 30.1 | 16.3 | 4.3 | 437 / 410 / 389 |
-| 116,544 | 29.4 | 15.1 | 2.9 * | 409 / 385 / 367 |
-| 130,765 | 28.6 | 14.0 | 4.2 | 385 / 361 / 348 |
-
-\* outlier readings in that run.
-
-"No cap" is the ceiling: the 16 GB card holding everything, which a 12 GB card cannot do at these depths. The two capped columns are the choices a 12 GB card has. The window keeps every layer on the GPU and gives up 1 to 3 tok/s for each further 14k tokens of prompt; moving layers to RAM is 3 to 4 times slower at every depth, and prefill is within 7% of the uncapped run. This ladder was measured on 2026-10-01, before a fix to the hybrid model's window path, and was not run again, so its window column is on the low side.
-
-On the fixed path (2026-10-02, opencoti build `2610020826001`), the same model and cap on an RTX PRO 6000 at a 70k-token prompt generated 77.7 tok/s under CUDA and 59.0 tok/s under Vulkan, with every recall probe correct. With the model's own NextN drafter (MTP) it reached 158.8 and 71.1 tok/s on that prompt, which drafts well; read those as "works and is fast", not as a general ratio.
-
-**Smaller models on the same card.** RX 9070 XT (16 GB, Vulkan, Windows 11, PCIe 5.0 x16), q4_0 KV, a 40,960-token context with about a third of it resident in VRAM:
-
-| Model, prompt | Whole cache in VRAM | Rolling window | Same VRAM, layers in RAM |
-|---|---|---|---|
-| Qwen3-8B Q8_0, 18k tokens | 58.9 tok/s | 55.8 tok/s | 19.7 tok/s |
-| Qwen3-8B Q8_0, 37k tokens | 50.4 tok/s | 37.3 tok/s | 13.5 tok/s |
-| Qwen2.5-14B Q4_K_M, 15k tokens | 53.3 tok/s | 51.3 tok/s | 14.9 tok/s |
-| Qwen2.5-14B Q4_K_M, 29k tokens | 46.8 tok/s | 33.3 tok/s | 9.8 tok/s |
-
-The window arm used about 0.8 GiB (8B) and 1.2 GiB (14B) less VRAM than the resident arm. Prompt processing stayed within 10% of resident, and the link carried the window at about 55 GB/s. At the same VRAM, moving layers to RAM was 2.6 to 3.7 times slower per token than the window. One machine, one card, opencoti build `2610011612001`. On Radeon under Windows, use AMD Software 26.9.2 or later for Vulkan.
+Measured on the opencoti engine, which is the engine xOllama runs: Qwen3.8-27B OmniMerge v6 at IQ2_M (a hybrid: 16 attention and 48 linear layers), a 131,072-token context, q4_0 KV, VRAM capped at 11,500 MiB to stand in for a 12 GB card, a 256 MiB window. At a 70k-token prompt on an RTX PRO 6000 (opencoti build `2610020826001`, 2026-10-02) it generated 77.7 tok/s under CUDA and 59.0 tok/s under Vulkan, with every recall probe correct. With the model's own NextN drafter (MTP) it reached 158.8 and 71.1 tok/s on that prompt, which drafts well; read those as "works and is fast", not as a general ratio. On Radeon under Windows, use AMD Software 26.9.2 or later for Vulkan.
 
 ## Extend With Plugins or MCP Servers
 
