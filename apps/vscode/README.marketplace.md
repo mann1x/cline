@@ -252,6 +252,17 @@ drafter (MTP) it reached 158.8 and 71.1 tok/s on that prompt, which drafts well;
 read those as "works and is fast", not as a general ratio. On Radeon under
 Windows, use AMD Software 26.9.2 or later for Vulkan.
 
+## Models
+
+Cerebriline is developed and measured against these models, published by the same author. Each is on Hugging Face and in the Ollama library.
+
+| Model | What it is | Hugging Face | Ollama |
+|---|---|---|---|
+| **OmniMerge v6** | Qwen3.8-27B merge, vision, with its own MTP drafter head | [weights](https://huggingface.co/ManniX-ITA/Qwen3.8-27B-Omnimerge-v6) · [GGUF with MTP](https://huggingface.co/ManniX-ITA/Qwen3.8-27B-Omnimerge-v6-MTP-GGUF) | [`mannix/omnimerge-v6`](https://ollama.com/mannix/omnimerge-v6) |
+| **OmniMerge v4** | Qwen3.6-27B merge, vision | [weights](https://huggingface.co/ManniX-ITA/Qwen3.6-27B-Omnimerge-v4) · [GGUF](https://huggingface.co/ManniX-ITA/Qwen3.6-27B-Omnimerge-v4-GGUF) | [`mannix/omnimerge-v4`](https://ollama.com/mannix/omnimerge-v4) |
+| **OmniMerge v4 MTP** | OmniMerge v4 with the MTP drafter head for speculative decoding | [GGUF with MTP](https://huggingface.co/ManniX-ITA/Qwen3.6-27B-Omnimerge-v4-MTP-GGUF) | [`mannix/omnimerge-v4-mtp`](https://ollama.com/mannix/omnimerge-v4-mtp) |
+| **JackOD 9B Coder** | Qwen3.5-9B, agentic coding and tool calling | [weights](https://huggingface.co/ManniX-ITA/JackOD-9B-Coder) · [GGUF with MTP](https://huggingface.co/ManniX-ITA/JackOD-9B-Coder-MTP-GGUF) | [`mannix/JackOD-9B-Coder`](https://ollama.com/mannix/JackOD-9B-Coder) |
+
 ## Not affiliated with Cline
 
 Cerebriline is an independent fork published by [mann1x](https://github.com/mann1x).

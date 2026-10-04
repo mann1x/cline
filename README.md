@@ -430,6 +430,17 @@ A 27B model on a local server fails in ways a frontier model does not, and often
 - **Output you can account for.** Every request's output is split into thinking, answer text and tool-call arguments, and the log records each tool call's arguments as the model sent them.
 - **Generated images reach you on text-only models.** The model gets a text result and the chat shows the image.
 
+## Models
+
+Cerebriline is developed and measured against these models, published by the same author. Each is on Hugging Face and in the Ollama library.
+
+| Model | What it is | Hugging Face | Ollama |
+|---|---|---|---|
+| **OmniMerge v6** | Qwen3.8-27B merge, vision, with its own MTP drafter head | [weights](https://huggingface.co/ManniX-ITA/Qwen3.8-27B-Omnimerge-v6) · [GGUF with MTP](https://huggingface.co/ManniX-ITA/Qwen3.8-27B-Omnimerge-v6-MTP-GGUF) | [`mannix/omnimerge-v6`](https://ollama.com/mannix/omnimerge-v6) |
+| **OmniMerge v4** | Qwen3.6-27B merge, vision | [weights](https://huggingface.co/ManniX-ITA/Qwen3.6-27B-Omnimerge-v4) · [GGUF](https://huggingface.co/ManniX-ITA/Qwen3.6-27B-Omnimerge-v4-GGUF) | [`mannix/omnimerge-v4`](https://ollama.com/mannix/omnimerge-v4) |
+| **OmniMerge v4 MTP** | OmniMerge v4 with the MTP drafter head for speculative decoding | [GGUF with MTP](https://huggingface.co/ManniX-ITA/Qwen3.6-27B-Omnimerge-v4-MTP-GGUF) | [`mannix/omnimerge-v4-mtp`](https://ollama.com/mannix/omnimerge-v4-mtp) |
+| **JackOD 9B Coder** | Qwen3.5-9B, agentic coding and tool calling | [weights](https://huggingface.co/ManniX-ITA/JackOD-9B-Coder) · [GGUF with MTP](https://huggingface.co/ManniX-ITA/JackOD-9B-Coder-MTP-GGUF) | [`mannix/JackOD-9B-Coder`](https://ollama.com/mannix/JackOD-9B-Coder) |
+
 ## Conversation History
 
 - **Tags.** Right-click a conversation to tag it, then type `#tag` in the history search or click a chip to filter, with **Any / All**. The home view's recent list shows tags too.
