@@ -443,10 +443,12 @@ node sdk/scripts/smoke-cerebriline.mjs --dir <that dir>      # installs the tarb
 ```
 
 `cerebriline-sdk-publish.yml` runs those on every `v*` tag and then publishes
-in dependency order. It needs the `NPM_TOKEN` repository secret (an automation
-token for the `@cerebriline` scope); without it the job fails on this
-repository rather than passing quietly. To publish for an existing tag, or to
-rehearse:
+in dependency order. **No npm token is stored**: the job uses npm's trusted
+publishing (GitHub OIDC). Each of the five packages names this workflow as its
+trusted publisher on npmjs.com (package → Settings → Trusted Publisher →
+GitHub Actions: `mann1x` / `cline` / `cerebriline-sdk-publish.yml`). A package
+must exist before it can be given one, so the first version of each was
+published by hand. To publish for an existing tag, or to rehearse:
 
 ```bash
 gh workflow run cerebriline-sdk-publish.yml --repo mann1x/cline -f tag=v4.100.240 -f dry_run=true

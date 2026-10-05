@@ -11,11 +11,16 @@
 # order. A version that is already on npm is skipped, so a run that stopped
 # halfway can simply be run again.
 #
-# Needs the repository secret `NPM_TOKEN`: an npm automation token allowed to
-# publish to the `@cerebriline` scope. Set once by hand:
-#   gh secret set NPM_TOKEN --repo mann1x/cline
-# With no token, a fork or a clone warns and stops before publishing; on this
-# repository that is an error, so a release is never taken for published.
+# No npm token is stored anywhere. Publishing uses npm's trusted publishing:
+# this job proves to npm, through GitHub's OIDC token, that it is this
+# workflow in this repository, and npm accepts a publish for the packages that
+# name it as their trusted publisher. That is configured once per package on
+# npmjs.com (package -> Settings -> Trusted Publisher -> GitHub Actions):
+#   organization or user  mann1x
+#   repository            cline
+#   workflow filename     cerebriline-sdk-publish.yml
+# A package has to exist before it can be given a trusted publisher, so the
+# very first version of each of the five was published by hand.
 
 name: Cerebriline SDK Publish
 
@@ -90,9 +95,19 @@ jobs:
             - name: Install the tarballs and load them
               run: node sdk/scripts/smoke-cerebriline.mjs --dir "$RUNNER_TEMP/cerebriline-sdk"
 
+            - name: Check the tooling for trusted publishing
+              if: github.event.inputs.dry_run != 'true'
+              run: |
+                  if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+                    echo "::error::GitHub's OIDC token is unavailable; this job needs 'id-token: write'."
+                    exit 1
+                  fi
+                  # Trusted publishing arrived in npm 11.5.1.
+                  npm install -g npm@latest
+                  echo "npm $(npm --version)"
+
             - name: Publish to npm
               env:
-                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
                   VERSION: ${{ steps.tag.outputs.version }}
                   DRY_RUN: ${{ github.event.inputs.dry_run }}
               run: |
@@ -100,12 +115,8 @@ jobs:
                     echo "Dry run: packed and tested, nothing published" | tee -a "$GITHUB_STEP_SUMMARY"
                     exit 0
                   fi
-                  if [ -z "$NODE_AUTH_TOKEN" ]; then
-                    if [ "$GITHUB_REPOSITORY" = "mann1x/cline" ]; then
-                      echo "::error::Secret NPM_TOKEN is not set; @cerebriline/sdk $VERSION was NOT published."
-                      exit 1
-                    fi
-                    echo "::warning::Secret NPM_TOKEN is not set; skipping the npm publish"
+                  if [ "$GITHUB_REPOSITORY" != "mann1x/cline" ]; then
+                    echo "::warning::Only mann1x/cline is a trusted publisher of @cerebriline; skipping the npm publish"
                     exit 0
                   fi
                   # Dependency order: each needs the ones before it to exist on npm.
@@ -114,6 +125,6 @@ jobs:
                       echo "@cerebriline/$name@$VERSION is already on npm; skipped" | tee -a "$GITHUB_STEP_SUMMARY"
                       continue
                     fi
-                    npm publish "$RUNNER_TEMP/cerebriline-sdk/cerebriline-$name-$VERSION.tgz" --access public --provenance
+                    npm publish "$RUNNER_TEMP/cerebriline-sdk/cerebriline-$name-$VERSION.tgz" --access public
                     echo "Published @cerebriline/$name@$VERSION" | tee -a "$GITHUB_STEP_SUMMARY"
                   done
