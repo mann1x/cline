@@ -161,9 +161,12 @@ jobs:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
             # Same step as mann1x/osync's ci.yml, same webhook secret. A Discord
-            # failure is reported but does not undo the release, and with no
-            # secret configured the step warns and skips, so a fork or a clone
-            # still releases.
+            # failure is reported but does not undo the release. With no secret
+            # a fork or a clone warns and skips; on this repository a missing
+            # secret fails the step, so it shows red on a release that still
+            # completes. It used to skip there too and report success, which is
+            # how v4.100.239 went out unannounced. `fork-announce.yml` posts
+            # for a release that already exists.
             - name: Announce on Discord
               continue-on-error: true
               env:
@@ -172,6 +175,10 @@ jobs:
                   NOTES_PATH: ${{ steps.build.outputs.notes-path }}
               run: |
                   if [ -z "$DISCORD_WEBHOOK" ]; then
+                    if [ "$GITHUB_REPOSITORY" = "mann1x/cline" ]; then
+                      echo "::error::Secret TECH_CORNER_DISCOWH is not set; $TAG was NOT announced on Discord. Set it and run fork-announce.yml."
+                      exit 1
+                    fi
                     echo "::warning::Secret TECH_CORNER_DISCOWH is not set; skipping the Discord announcement"
                     exit 0
                   fi

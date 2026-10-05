@@ -1,0 +1,63 @@
+# Announce an existing fork release on Discord, without building anything.
+#
+# The release workflow announces as its last step. This is the way back when
+# that step did not post: v4.100.239 went out with `TECH_CORNER_DISCOWH` never
+# set on this repository, the step warned, skipped and reported success, and
+# the only other route was to run the whole release again.
+#
+# The text is the published release's own body, so the announcement cannot
+# differ from the release page.
+
+name: Fork Announce
+
+on:
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Published release to announce (e.g. v4.100.239)"
+                required: true
+                type: string
+
+permissions:
+    contents: read
+
+jobs:
+    announce:
+        name: Announce the release on Discord
+        runs-on: ubuntu-latest
+        steps:
+            - name: Announce on Discord
+              env:
+                  DISCORD_WEBHOOK: ${{ secrets.TECH_CORNER_DISCOWH }}
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  TAG: ${{ github.event.inputs.tag }}
+              run: |
+                  if [ -z "$DISCORD_WEBHOOK" ]; then
+                    echo "::error::Secret TECH_CORNER_DISCOWH is not set on $GITHUB_REPOSITORY; nothing was announced"
+                    exit 1
+                  fi
+                  gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body,isDraft \
+                    > release.json
+                  python3 - <<'PY' > discord.json
+                  import json, os
+                  tag = os.environ["TAG"]
+                  url = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/releases/tag/{tag}"
+                  release = json.load(open("release.json", encoding="utf-8"))
+                  if release["isDraft"]:
+                      raise SystemExit(f"{tag} is a draft; publish it first")
+                  notes = release["body"].strip()
+                  limit = 3800  # Discord embed descriptions are limited to 4096 characters
+                  if len(notes) > limit:
+                      notes = notes[:limit].rsplit("\n", 1)[0] + f"\n\n… [full release notes]({url})"
+                  print(json.dumps({
+                      "username": "Cerebriline",
+                      "embeds": [{
+                          "title": f"Cerebriline {tag} released",
+                          "url": url,
+                          "description": notes,
+                          "color": 0x58B9FF,
+                      }],
+                  }))
+                  PY
+                  curl -fsS --retry 3 -H "Content-Type: application/json" -d @discord.json "$DISCORD_WEBHOOK"
+                  echo "Announced $TAG on Discord" >> "$GITHUB_STEP_SUMMARY"

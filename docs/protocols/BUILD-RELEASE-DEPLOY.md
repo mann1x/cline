@@ -396,12 +396,27 @@ tech-corner channel: an embed titled `Cerebriline <tag> released`, linking the
 release, with the release notes as its body (cut at 3,800 characters with a
 link to the rest). It is the same step as `mann1x/osync`'s `ci.yml` and reads
 the same webhook, from the `TECH_CORNER_DISCOWH` repository secret. It is
-`continue-on-error`, and with no secret it warns and skips. A secret's value
-cannot be copied between repositories, so it is set here once by hand:
+`continue-on-error`. With no secret a fork warns and skips; on `mann1x/cline`
+the step fails, red on a run that still completes. A secret's value cannot be
+copied between repositories, so it is set here once by hand:
 
 ```bash
 gh secret set TECH_CORNER_DISCOWH --repo mann1x/cline   # paste the webhook URL at the prompt
 ```
+
+A release that went out unannounced is announced afterwards, from the published
+release's own notes, without building anything:
+
+```bash
+gh workflow run fork-announce.yml --repo mann1x/cline -f tag=v4.100.239
+```
+
+> **Read the step's log, not its tick.** v4.100.239 (2026-10-05) was the first
+> release through this step and the secret had never been set: the step logged
+> "skipping the Discord announcement" and reported success, and the release was
+> called announced from the green tick. After a release, the log must contain
+> `Announced <tag> on Discord`; check with
+> `gh secret list --repo mann1x/cline` before tagging.
 
 A release cut by hand with `gh release create` does not run the workflow and
 is not announced.
