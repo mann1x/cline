@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
 	audioExtension,
@@ -278,8 +278,8 @@ describe("synthesize_speech", () => {
 			JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)).response_format,
 		).toBe("mp3");
 		const [saved] = Object.keys(written);
-		expect(saved).toMatch(
-			/^\/ws\/\.cline\/generated-audio\/good-morning-everyone-\d+\.mp3$/,
+		expect(relative(at(), saved ?? "").replaceAll("\\", "/")).toMatch(
+			/^\.cline\/generated-audio\/good-morning-everyone-\d+\.mp3$/,
 		);
 	});
 
