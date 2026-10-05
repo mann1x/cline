@@ -5,7 +5,7 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.239] — 2026-10-04
+## [4.100.239] — 2026-10-05
 
 The first public release since 4.100.118. Builds 4.100.119 to 4.100.238 were
 test builds and were never published, so everything they carried is collected
@@ -760,8 +760,7 @@ instead of arguing, so it can check the working model without agreeing with it.
   - **These figures jump around more.** How much the drafter helps depends on
     the text being written, and each row is a single run.
 
-  How it was measured: the opencoti engine (the engine xOllama runs), build
-  `2610042139001`, 2026-10-04, on an RTX PRO 6000 under CUDA limited to 11,500
+  How it was measured: the opencoti engine (the engine xOllama runs), release 0.10.5-c8, 2026-10-04, on an RTX PRO 6000 under CUDA limited to 11,500
   MiB to act as a 12 GB card. Model: Qwen3.8-27B OmniMerge v6 at IQ2_M, cache
   quantized to q4_0, 256 tokens generated per row.
 

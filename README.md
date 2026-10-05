@@ -370,7 +370,7 @@ Of that, the drafter takes 751 MiB of video memory in each setup. Speed while an
 - **The drafter pays on a 12 GB budget too.** With the rolling window the model answers at 42 to 173 tokens per second with the drafter, against 24 to 89 without it.
 - **These figures jump around more.** How much the drafter helps depends on the text being written, and each row is a single run.
 
-How it was measured: the opencoti engine (the engine xOllama runs), build `2610042139001`, 2026-10-04, on an RTX PRO 6000 under CUDA limited to 11,500 MiB to act as a 12 GB card. Model: Qwen3.8-27B OmniMerge v6 at IQ2_M, cache quantized to q4_0, 256 tokens generated per row.
+How it was measured: the opencoti engine (the engine xOllama runs), release 0.10.5-c8, 2026-10-04, on an RTX PRO 6000 under CUDA limited to 11,500 MiB to act as a 12 GB card. Model: Qwen3.8-27B OmniMerge v6 at IQ2_M, cache quantized to q4_0, 256 tokens generated per row.
 
 On Radeon under Windows, use AMD Software 26.9.2 or later for Vulkan.
 
