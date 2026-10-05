@@ -1,0 +1,119 @@
+# Publish the SDK to npm as `@cerebriline/*`, once per Cerebriline release.
+#
+# Upstream publishes the same five packages as `@cline/*`, nightly, from
+# `sdk-publish.yml`; that job only runs on `cline/cline`. This is the fork's
+# own: its scope, its version (the release's), and only when a release is
+# tagged. The source keeps upstream's package names and they are renamed on
+# the packed output by `sdk/scripts/pack-cerebriline.mjs`, which explains why.
+#
+# Order of work: build, pack, install the tarballs into an empty project and
+# load them (`smoke-cerebriline.mjs`), and only then publish, in dependency
+# order. A version that is already on npm is skipped, so a run that stopped
+# halfway can simply be run again.
+#
+# Needs the repository secret `NPM_TOKEN`: an npm automation token allowed to
+# publish to the `@cerebriline` scope. Set once by hand:
+#   gh secret set NPM_TOKEN --repo mann1x/cline
+# With no token, a fork or a clone warns and stops before publishing; on this
+# repository that is an error, so a release is never taken for published.
+
+name: Cerebriline SDK Publish
+
+on:
+    push:
+        tags:
+            - "v*"
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Existing release tag to publish the SDK for (e.g. v4.100.240)"
+                required: true
+                type: string
+            ref:
+                description: "Commit or branch to build from, when it is not the tag itself (the tag still names the version)"
+                required: false
+                type: string
+            dry_run:
+                description: "Build, pack and test, but publish nothing"
+                required: false
+                type: boolean
+                default: false
+
+permissions:
+    contents: read
+    id-token: write
+
+jobs:
+    publish:
+        name: Pack, test and publish the SDK
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Resolve the tag
+              id: tag
+              env:
+                  EVENT: ${{ github.event_name }}
+                  INPUT_TAG: ${{ github.event.inputs.tag }}
+              run: |
+                  if [ "$EVENT" = "workflow_dispatch" ]; then TAG="$INPUT_TAG"; else TAG="${GITHUB_REF#refs/tags/}"; fi
+                  if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
+                    echo "::error::tag '$TAG' must match vX.Y.Z"
+                    exit 1
+                  fi
+                  echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+                  echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+            - uses: actions/checkout@v4
+              with:
+                  # `ref` exists for a release tagged before this workflow did:
+                  # its tree has no pack script to run.
+                  ref: ${{ github.event.inputs.ref || steps.tag.outputs.tag }}
+
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: "1.3.13"
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "24.x"
+                  registry-url: "https://registry.npmjs.org"
+
+            - name: Install dependencies
+              run: bun install --frozen-lockfile
+
+            - name: Build the SDK
+              run: bun run build:sdk
+
+            - name: Pack as @cerebriline
+              run: node sdk/scripts/pack-cerebriline.mjs --version "${{ steps.tag.outputs.version }}" --out "$RUNNER_TEMP/cerebriline-sdk"
+
+            - name: Install the tarballs and load them
+              run: node sdk/scripts/smoke-cerebriline.mjs --dir "$RUNNER_TEMP/cerebriline-sdk"
+
+            - name: Publish to npm
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+                  VERSION: ${{ steps.tag.outputs.version }}
+                  DRY_RUN: ${{ github.event.inputs.dry_run }}
+              run: |
+                  if [ "$DRY_RUN" = "true" ]; then
+                    echo "Dry run: packed and tested, nothing published" | tee -a "$GITHUB_STEP_SUMMARY"
+                    exit 0
+                  fi
+                  if [ -z "$NODE_AUTH_TOKEN" ]; then
+                    if [ "$GITHUB_REPOSITORY" = "mann1x/cline" ]; then
+                      echo "::error::Secret NPM_TOKEN is not set; @cerebriline/sdk $VERSION was NOT published."
+                      exit 1
+                    fi
+                    echo "::warning::Secret NPM_TOKEN is not set; skipping the npm publish"
+                    exit 0
+                  fi
+                  # Dependency order: each needs the ones before it to exist on npm.
+                  for name in shared llms agents core sdk; do
+                    if npm view "@cerebriline/$name@$VERSION" version >/dev/null 2>&1; then
+                      echo "@cerebriline/$name@$VERSION is already on npm; skipped" | tee -a "$GITHUB_STEP_SUMMARY"
+                      continue
+                    fi
+                    npm publish "$RUNNER_TEMP/cerebriline-sdk/cerebriline-$name-$VERSION.tgz" --access public --provenance
+                    echo "Published @cerebriline/$name@$VERSION" | tee -a "$GITHUB_STEP_SUMMARY"
+                  done

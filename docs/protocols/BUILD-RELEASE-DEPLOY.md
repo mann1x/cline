@@ -426,6 +426,45 @@ enough. This is a decision rather than a constraint — since the rename to
 `mann1x.cerebriline` the extension *could* be published under its own publisher
 — so if it is ever revisited, revisit it here.
 
+## The SDK on npm: `@cerebriline/*`
+
+The five SDK packages (`shared`, `llms`, `agents`, `core`, `sdk`) are published
+to npm under the fork's scope, **one version per Cerebriline release, with the
+release's number**. Not nightly: between releases `main` carries test builds.
+
+The source keeps upstream's names (`@cline/*`), which are imported in several
+hundred files; renaming them there would make every upstream merge conflict.
+`@cline` on npm is upstream's. So the rename is done on the packed output:
+
+```bash
+bun run build:sdk
+node sdk/scripts/pack-cerebriline.mjs --version 4.100.240 --out <dir on a real disk>
+node sdk/scripts/smoke-cerebriline.mjs --dir <that dir>      # installs the tarballs in an empty project and loads them
+```
+
+`cerebriline-sdk-publish.yml` runs those on every `v*` tag and then publishes
+in dependency order. It needs the `NPM_TOKEN` repository secret (an automation
+token for the `@cerebriline` scope); without it the job fails on this
+repository rather than passing quietly. To publish for an existing tag, or to
+rehearse:
+
+```bash
+gh workflow run cerebriline-sdk-publish.yml --repo mann1x/cline -f tag=v4.100.240 -f dry_run=true
+```
+
+After a release, check the log for `Published @cerebriline/sdk@<version>` and
+`npm view @cerebriline/sdk version`.
+
+Known limits, 2026-10-05:
+
+- **Plugins written for upstream do not load.** The plugin loader treats
+  `@cline/*` imports as provided by the host and strips them at install; the
+  renamed host provides `@cerebriline/*`. Not yet mapped.
+- `@cerebriline/shared/types` has declarations only, and
+  `@cerebriline/core/services/feature-flags/posthog` needs the optional peer
+  `posthog-node`. Both are as upstream publishes them.
+- The CLI (`@cline/cli`) is not part of this.
+
 ## What installing does NOT touch
 
 The harness runs the **CLI** (`apps/cli/src/index.ts`) on solidPC, not the VS
