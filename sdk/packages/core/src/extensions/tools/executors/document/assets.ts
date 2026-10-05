@@ -64,7 +64,9 @@ export function resolvePdfjsCmapDirectory(): string | undefined {
 		"pdfjs/cmaps",
 		"pdfjs-dist",
 		"cmaps",
-		"Identity-H.bcmap",
+		// A file pdf.js ships: `Identity-H` is built in and has no file, and
+		// probing for it meant the maps were never found.
+		"UniJIS-UCS2-H.bcmap",
 	);
 }
 

@@ -17,6 +17,15 @@ describe("pdf.js asset directories", () => {
 		expect(asDirectoryUrl(undefined)).toBeUndefined();
 	});
 
+	it("are both found: the decoders and the character maps", () => {
+		// The maps were probed for by a file pdf.js does not ship, so CJK
+		// text was read without them everywhere.
+		const options = pdfjsDocumentOptions();
+		expect(options.wasmUrl).toBeDefined();
+		expect(options.cMapUrl).toBeDefined();
+		expect(options.cMapPacked).toBe(true);
+	});
+
 	it("are handed to pdf.js in that form", () => {
 		const options = pdfjsDocumentOptions();
 		for (const key of ["wasmUrl", "cMapUrl"]) {

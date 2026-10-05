@@ -85,6 +85,11 @@ export async function readOffice(
 	let ast: OfficeParserAST;
 	try {
 		ast = await OfficeParser.parseOffice(Buffer.from(data), {
+			// The format is already decided, from the bytes and the name. Left
+			// to officeparser it is guessed again with `file-type`, which does
+			// not load from a bundle: RTF, CSV and HTML, which have no ZIP
+			// signature to fall back on, then fail as "auto-detection failed".
+			fileType: format as never,
 			extractAttachments: options.wantImages,
 			decompressionLimits: DECOMPRESSION_LIMITS,
 			...(options.password ? { password: options.password } : {}),
