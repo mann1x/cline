@@ -9,7 +9,6 @@
  * page image out.
  */
 
-import { sep } from "node:path";
 import { resolvePdfjsCmapDirectory, resolvePdfjsWasmDirectory } from "./assets";
 
 export type Pdfjs = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -174,9 +173,17 @@ function installDomMatrix(): void {
 	host.DOMMatrix = AffineMatrix;
 }
 
-function asDirectoryUrl(directory: string | undefined): string | undefined {
-	// pdf.js appends a file name to these, so the separator must be there.
-	return directory ? `${directory.replace(/[\\/]+$/, "")}${sep}` : undefined;
+/**
+ * A directory in the form pdf.js takes: ending in a forward slash.
+ *
+ * pdf.js appends a file name to it and refuses anything else ("must include
+ * trailing slash"), so the platform separator is wrong on Windows, where it
+ * failed every PDF. Node reads `C:\\dir/file` there without complaint.
+ */
+export function asDirectoryUrl(
+	directory: string | undefined,
+): string | undefined {
+	return directory ? `${directory.replace(/[\\/]+$/, "")}/` : undefined;
 }
 
 /** What every document is opened with: decoders and character maps found. */

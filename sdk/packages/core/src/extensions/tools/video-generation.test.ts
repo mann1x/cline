@@ -1,8 +1,12 @@
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
 	createGenerateVideoTool,
 	sniffVideoExtension,
 } from "./video-generation";
+
+/** A path under the test workspace, in the running platform's form. */
+const at = (...parts: string[]) => resolve("/work", ...parts);
 
 const MP4 = Buffer.concat([
 	Buffer.from([0, 0, 0, 0x20]),
@@ -72,7 +76,7 @@ function tool(
 	const written: Array<{ path: string; data: Buffer }> = [];
 	const updates: unknown[] = [];
 	const created = createGenerateVideoTool({
-		cwd: "/work",
+		cwd: at(),
 		getEndpoint: () => ({
 			baseUrl: "http://host:1",
 			model: "wan2.1",
@@ -151,7 +155,7 @@ describe("generate_video", () => {
 			"GET http://host:1/v1/videos/video_1/content",
 		]);
 		expect(written).toHaveLength(1);
-		expect(written[0]?.path).toBe("/work/out/clip.mp4");
+		expect(written[0]?.path).toBe(at("out/clip.mp4"));
 		expect(written[0]?.data.equals(MP4)).toBe(true);
 		expect(result).toContain(
 			"saved to `out/clip.mp4` (mp4, 832x480, 2 s, 16 fps, 2 KB)",
@@ -171,7 +175,7 @@ describe("generate_video", () => {
 		});
 		const { run, written } = tool(fetchImpl);
 		const result = await run({ prompt: "x", path: "clip.mp4" });
-		expect(written[0]?.path).toBe("/work/clip.avi");
+		expect(written[0]?.path).toBe(at("clip.avi"));
 		expect(result).toContain(
 			"saved as `clip.avi` so its name matches its contents",
 		);

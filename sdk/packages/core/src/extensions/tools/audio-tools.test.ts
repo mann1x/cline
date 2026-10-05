@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
 	audioExtension,
@@ -7,6 +8,9 @@ import {
 	sniffAudioExtension,
 	wavSeconds,
 } from "./audio-tools";
+
+/** A path under the test workspace, in the running platform's form. */
+const at = (...parts: string[]) => resolve("/ws", ...parts);
 
 /** A WAV of `seconds` of 24 kHz mono 16-bit silence. */
 function wav(seconds: number): Buffer {
@@ -65,13 +69,13 @@ describe("transcribe_audio", () => {
 	) => {
 		const written: Record<string, string> = {};
 		const tool = createTranscribeAudioTool({
-			cwd: "/ws",
+			cwd: at(),
 			getEndpoint: () => ({
 				baseUrl: "http://e2g:22434/api",
 				model: "mannix/whisper:large-v3-turbo",
 			}),
 			readFile: async (path) => {
-				if (path !== "/ws/talk.wav") throw new Error("ENOENT");
+				if (path !== at("talk.wav")) throw new Error("ENOENT");
 				return wav(0.2);
 			},
 			writeFile: async (path, data) => {
@@ -131,7 +135,7 @@ describe("transcribe_audio", () => {
 			{ path: "talk.wav", output: "notes/talk.txt" },
 			{} as never,
 		);
-		expect(written["/ws/notes/talk.txt"]).toBe(`${long}\n`);
+		expect(written[at("notes/talk.txt")]).toBe(`${long}\n`);
 		expect(output).toContain("saved 4999 characters to `notes/talk.txt`");
 		expect(output).toContain("[The rest is in the file.]");
 	});
@@ -173,7 +177,7 @@ describe("synthesize_speech", () => {
 	) => {
 		const written: Record<string, Buffer> = {};
 		const tool = createSynthesizeSpeechTool({
-			cwd: "/ws",
+			cwd: at(),
 			getEndpoint: () => ({
 				baseUrl: "http://e2g:22434",
 				model: "mannix/outetts:0.3",
@@ -212,7 +216,7 @@ describe("synthesize_speech", () => {
 			voice: "nova",
 			speed: 1.25,
 		});
-		expect(written["/ws/out/hello.wav"]?.length).toBe(wav(2).length);
+		expect(written[at("out/hello.wav")]?.length).toBe(wav(2).length);
 		expect(output).toBe(
 			"Synthesized and saved to `out/hello.wav` (wav, 2.0 s, 94 KB, voice nova).",
 		);
@@ -228,7 +232,7 @@ describe("synthesize_speech", () => {
 			{ text: "Hello.", path: "hello.mp3", format: "mp3" },
 			{} as never,
 		);
-		expect(Object.keys(written)).toEqual(["/ws/hello.wav"]);
+		expect(Object.keys(written)).toEqual([at("hello.wav")]);
 		expect(output).toContain("saved to `hello.wav`");
 		expect(output).toContain("returned wav, not the mp3 that was asked for");
 		expect(output).toContain("so its name matches its contents");
@@ -260,7 +264,7 @@ describe("synthesize_speech", () => {
 			{ model: "mannix/outetts:0.3", input: "Hello.", response_format: "mp3" },
 			{ model: "mannix/outetts:0.3", input: "Hello." },
 		]);
-		expect(Object.keys(written)).toEqual(["/ws/hello.wav"]);
+		expect(Object.keys(written)).toEqual([at("hello.wav")]);
 		expect(output).toContain("returned wav, not the mp3 that was asked for");
 	});
 

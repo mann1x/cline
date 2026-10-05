@@ -1,5 +1,9 @@
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createEditImageTool, parseImagePaths } from "./image-edit";
+
+/** A path under the test workspace, in the running platform's form. */
+const at = (...parts: string[]) => resolve("/ws", ...parts);
 
 /** The smallest thing the sniffer calls a PNG. */
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]);
@@ -8,11 +12,14 @@ const RESULT = PNG.toString("base64");
 
 function makeTool(
 	fetchImpl: typeof fetch,
-	files: Record<string, Buffer> = { "/ws/icon.png": PNG, "/ws/ref.jpg": JPEG },
+	files: Record<string, Buffer> = {
+		[at("icon.png")]: PNG,
+		[at("ref.jpg")]: JPEG,
+	},
 ) {
 	const written: Record<string, Buffer> = {};
 	const tool = createEditImageTool({
-		cwd: "/ws",
+		cwd: at(),
 		getEndpoint: async () => ({
 			baseUrl: "http://e2g:22434",
 			model: "mannix/flux2-klein:4b",
@@ -66,7 +73,7 @@ describe("edit_image", () => {
 		]);
 		expect(form.get("mask")).toBeNull();
 
-		expect(written["/ws/out/icon.png"]).toEqual(PNG);
+		expect(written[at("out/icon.png")]).toEqual(PNG);
 		expect(output).toEqual([
 			{
 				type: "text",
@@ -79,8 +86,8 @@ describe("edit_image", () => {
 	it("sends a mask when one is named, and accepts a single path as a string", async () => {
 		const fetchImpl = ok();
 		const { tool } = makeTool(fetchImpl as unknown as typeof fetch, {
-			"/ws/icon.png": PNG,
-			"/ws/mask.png": PNG,
+			[at("icon.png")]: PNG,
+			[at("mask.png")]: PNG,
 		});
 		await tool.execute(
 			{ prompt: "remove the door", images: "icon.png", mask: "mask.png" },
@@ -118,8 +125,8 @@ describe("edit_image", () => {
 	it("refuses what it cannot send, before calling anything", async () => {
 		const fetchImpl = ok();
 		const { tool } = makeTool(fetchImpl as unknown as typeof fetch, {
-			"/ws/icon.png": PNG,
-			"/ws/notes.txt": Buffer.from("hello"),
+			[at("icon.png")]: PNG,
+			[at("notes.txt")]: Buffer.from("hello"),
 		});
 		const run = (input: object) => tool.execute(input, {} as never);
 		expect(await run({ images: ["icon.png"] })).toContain("needs a `prompt`");
