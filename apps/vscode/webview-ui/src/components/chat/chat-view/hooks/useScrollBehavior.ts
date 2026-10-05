@@ -4,7 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useEvent } from "react-use"
 import { ListRange, VirtuosoHandle } from "react-virtuoso"
 import { ScrollBehavior } from "../types/chatTypes"
-import { type ScrollPosition, shouldStopFollowing } from "../utils/scrollFollowing"
+import {
+	distanceFromBottom,
+	isScrollKey,
+	type ReaderScrollIntent,
+	readerIsScrolling,
+	type ScrollPosition,
+	shouldStopFollowing,
+} from "../utils/scrollFollowing"
 
 // Height of the sticky user message header (padding + content)
 const STICKY_HEADER_HEIGHT = 32
@@ -187,7 +194,45 @@ export function useScrollBehavior(
 		// wheel handler below covers only one of them, which is why the chat
 		// snapped back to the bottom on a drag. See utils/scrollFollowing.ts
 		// for why both halves of the test are needed.
+		//
+		// Positions alone cannot say who moved the view, and the list moves it
+		// up by itself (see `readerIsScrolling`). So the reader's hand is
+		// tracked here, and a move up with no hand on it is undone instead of
+		// being taken for the reader leaving.
+		const intent: ReaderScrollIntent = { pointerHeld: false, lastInputAt: 0 }
+		const noteInput = () => {
+			intent.lastInputAt = Date.now()
+		}
+		const handlePointerDown = () => {
+			intent.pointerHeld = true
+			noteInput()
+		}
+		const handlePointerRelease = () => {
+			if (intent.pointerHeld) {
+				intent.pointerHeld = false
+				// A click on the track keeps scrolling after the button is up.
+				noteInput()
+			}
+		}
+		// A release over the scrollbar does not always arrive as `pointerup`;
+		// a move with no button down is the same news.
+		const handlePointerMove = (event: PointerEvent) => {
+			if (intent.pointerHeld && event.buttons === 0) {
+				handlePointerRelease()
+			}
+		}
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (!isScrollKey(event.key)) {
+				return
+			}
+			const target = event.target as Node | null
+			if (!target || target === document.body || scrollContainer.contains(target)) {
+				noteInput()
+			}
+		}
+
 		let previousPosition: ScrollPosition | undefined
+		let repinFrame: number | undefined
 		const handleScroll = () => {
 			const position: ScrollPosition = {
 				scrollTop: scrollableElement.scrollTop,
@@ -195,19 +240,56 @@ export function useScrollBehavior(
 				clientHeight: scrollableElement.clientHeight,
 			}
 			if (shouldStopFollowing(previousPosition, position)) {
-				stopFollowing()
+				if (readerIsScrolling(intent, Date.now())) {
+					stopFollowing()
+				} else if (!disableAutoScrollRef.current) {
+					// biome-ignore lint/plugin: the webview has no Logger service; this line is how an unattended move shows up in the webview's devtools, the only evidence of a fault that depends on the monitor
+					console.debug(
+						`[scroll] view moved up ${Math.round((previousPosition?.scrollTop ?? 0) - position.scrollTop)}px to ${Math.round(distanceFromBottom(position))}px from the bottom with no reader input; still following`,
+					)
+					// Nothing else is certain to pin again: the turn may be over.
+					if (repinFrame === undefined) {
+						repinFrame = requestAnimationFrame(() => {
+							repinFrame = undefined
+							if (!disableAutoScrollRef.current) {
+								virtuosoRef.current?.scrollTo({ top: Number.MAX_SAFE_INTEGER, behavior: "auto" })
+							}
+						})
+					}
+				}
 			}
 			previousPosition = position
 			checkScrolledPastUserMessage()
 		}
 
 		scrollableElement.addEventListener("scroll", handleScroll, { passive: true })
+		scrollableElement.addEventListener("pointerdown", handlePointerDown, { passive: true })
+		scrollableElement.addEventListener("wheel", noteInput, { passive: true })
+		scrollableElement.addEventListener("touchstart", noteInput, { passive: true })
+		scrollableElement.addEventListener("touchmove", noteInput, { passive: true })
+		window.addEventListener("pointerup", handlePointerRelease, { passive: true })
+		window.addEventListener("pointercancel", handlePointerRelease, { passive: true })
+		window.addEventListener("pointermove", handlePointerMove, { passive: true })
+		window.addEventListener("blur", handlePointerRelease)
+		window.addEventListener("keydown", handleKeyDown, { passive: true })
 
 		// Also check on mount and when dependencies change
 		checkScrolledPastUserMessage()
 
 		return () => {
+			if (repinFrame !== undefined) {
+				cancelAnimationFrame(repinFrame)
+			}
 			scrollableElement.removeEventListener("scroll", handleScroll)
+			scrollableElement.removeEventListener("pointerdown", handlePointerDown)
+			scrollableElement.removeEventListener("wheel", noteInput)
+			scrollableElement.removeEventListener("touchstart", noteInput)
+			scrollableElement.removeEventListener("touchmove", noteInput)
+			window.removeEventListener("pointerup", handlePointerRelease)
+			window.removeEventListener("pointercancel", handlePointerRelease)
+			window.removeEventListener("pointermove", handlePointerMove)
+			window.removeEventListener("blur", handlePointerRelease)
+			window.removeEventListener("keydown", handleKeyDown)
 		}
 	}, [checkScrolledPastUserMessage, stopFollowing])
 

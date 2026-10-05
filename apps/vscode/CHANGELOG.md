@@ -5,6 +5,21 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.240] — 2026-10-05
+
+### The chat keeps following on every monitor
+
+On some screens the chat stopped following the newest message by itself: at the
+end of a turn the view stayed where it was and **Jump to present** had to be
+clicked every time, with nobody having scrolled. It showed on one monitor and
+not on another of the same machine.
+
+Any upward move of the view was taken for the reader scrolling away, including
+moves the reader did not make. The chat now stops following
+only when there is a hand on it: dragging the scrollbar, the mouse wheel, a
+scrolling key or a touch. A move with no hand on it is undone and the chat
+keeps following.
+
 ## [4.100.239] — 2026-10-05
 
 The first public release since 4.100.118. Builds 4.100.119 to 4.100.238 were

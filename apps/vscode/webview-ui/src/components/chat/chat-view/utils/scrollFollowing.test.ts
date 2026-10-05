@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { AT_BOTTOM_THRESHOLD_PX, distanceFromBottom, shouldStopFollowing } from "./scrollFollowing"
+import {
+	AT_BOTTOM_THRESHOLD_PX,
+	distanceFromBottom,
+	isScrollKey,
+	READER_SCROLL_WINDOW_MS,
+	readerIsScrolling,
+	shouldStopFollowing,
+} from "./scrollFollowing"
 
 const at = (scrollTop: number, scrollHeight = 10_000, clientHeight = 800) => ({
 	scrollTop,
@@ -43,5 +50,25 @@ describe("shouldStopFollowing", () => {
 
 	it("has nothing to say about the first scroll it sees", () => {
 		expect(shouldStopFollowing(undefined, at(0))).toBe(false)
+	})
+})
+
+describe("readerIsScrolling", () => {
+	it("is true while a pointer is held on the scroller, however long", () => {
+		expect(readerIsScrolling({ pointerHeld: true, lastInputAt: 0 }, 60_000)).toBe(true)
+	})
+
+	it("is true for a moment after a wheel, a key or a release", () => {
+		expect(readerIsScrolling({ pointerHeld: false, lastInputAt: 10_000 }, 10_000 + READER_SCROLL_WINDOW_MS)).toBe(true)
+	})
+
+	it("is false once the reader's hand has been off the view", () => {
+		expect(readerIsScrolling({ pointerHeld: false, lastInputAt: 10_000 }, 10_001 + READER_SCROLL_WINDOW_MS)).toBe(false)
+		expect(readerIsScrolling({ pointerHeld: false, lastInputAt: 0 }, Date.now())).toBe(false)
+	})
+
+	it("knows the keys that scroll", () => {
+		expect(["PageUp", "ArrowUp", "Home", " "].every(isScrollKey)).toBe(true)
+		expect(["a", "Enter", "Shift"].some(isScrollKey)).toBe(false)
 	})
 })
