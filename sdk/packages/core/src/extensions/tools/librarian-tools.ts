@@ -19,9 +19,13 @@ import {
 	type BookMetadata,
 	type Catalogue,
 	type LibraryBook,
+	normalizeTitle,
 	TRASH_DAYS,
 } from "../../services/retrieval/catalogue";
-import { textFingerprint } from "../../services/retrieval/fingerprint";
+import {
+	fingerprintSimilarity,
+	textFingerprint,
+} from "../../services/retrieval/fingerprint";
 import {
 	crawlSite,
 	mapSite,
@@ -85,7 +89,7 @@ const SAME_TEXT = 0.9;
 const NO_SCRAPER =
 	"Web scraping is not set up for this session. The user sets the endpoint under Settings > Features and allows it in the API configuration; do not call this again in this task.";
 
-interface ReadSource {
+export interface ReadSource {
 	file: string;
 	name: string;
 	sha256: string;
@@ -302,6 +306,52 @@ function judge(
 	};
 }
 
+/**
+ * What the files of one batch have to do with each other: a folder of ebooks
+ * often holds the same book twice, and the Library cannot say so about files
+ * it does not hold yet.
+ */
+export function compareBatch(
+	sources: readonly ReadSource[],
+): Map<string, string[]> {
+	const notes = new Map<string, string[]>();
+	const note = (file: string, line: string) => {
+		notes.set(file, [...(notes.get(file) ?? []), line]);
+	};
+	for (let a = 0; a < sources.length; a++) {
+		for (let b = a + 1; b < sources.length; b++) {
+			const one = sources[a];
+			const other = sources[b];
+			let relation: string | undefined;
+			if (one.sha256 === other.sha256) {
+				relation = "is the same file as";
+			} else {
+				const similarity = fingerprintSimilarity(
+					one.fingerprint,
+					other.fingerprint,
+				);
+				const sameTitle =
+					one.document.title !== undefined &&
+					other.document.title !== undefined &&
+					normalizeTitle(one.document.title) ===
+						normalizeTitle(other.document.title);
+				if (similarity >= SAME_TEXT) {
+					relation = `is the same book (${Math.round(similarity * 100)}% of the text) as`;
+				} else if (similarity >= 0.3) {
+					relation = `shares ${Math.round(similarity * 100)}% of its text, so is probably another version of,`;
+				} else if (sameTitle) {
+					relation = `has the same title as, and ${Math.round(similarity * 100)}% of its text in common with,`;
+				}
+			}
+			if (relation) {
+				note(one.file, `IN THIS BATCH: ${relation} ${other.name}.`);
+				note(other.file, `IN THIS BATCH: ${relation} ${one.name}.`);
+			}
+		}
+	}
+	return notes;
+}
+
 function metadataFrom(request: Record<string, unknown>): BookMetadata {
 	const metadata: BookMetadata = {};
 	const authors = strings(request.authors ?? request.author);
@@ -432,37 +482,55 @@ function createLibraryCheckTool(options: CreateLibraryToolsOptions): AgentTool {
 			const lines: string[] = [];
 			const { files, notes } = await resolveFiles(options.cwd, paths);
 			lines.push(...notes);
+			const read: ReadSource[] = [];
+			const unread = new Map<string, string>();
 			for (const file of files) {
 				if (context?.signal?.aborted) break;
 				try {
-					const read = await readSource(file, config, library);
-					const judged = judge(catalogue, {
-						sha256: read.sha256,
-						title: read.document.title,
-						authors: read.document.author ? [read.document.author] : [],
-						isbn: read.isbn,
-						fingerprint: read.fingerprint,
-					});
-					const words = read.document.markdown.split(/\s+/).length;
-					lines.push(
-						`${file}`,
-						`  ${[
-							read.document.title
-								? `title "${read.document.title}"`
-								: "no title in the file",
-							read.document.author ? `by ${read.document.author}` : undefined,
-							read.isbn ? `ISBN ${read.isbn}` : undefined,
-							`${words.toLocaleString("en-US")} words`,
-							plural(read.document.images.length, "picture"),
-						]
-							.filter(Boolean)
-							.join(", ")}`,
-						`  ${judged.line}`,
-						...read.document.notes.map((note) => `  ${note}`),
-					);
+					read.push(await readSource(file, config, library));
 				} catch (error) {
-					lines.push(`${file}`, `  could not be read: ${errorText(error)}`);
+					unread.set(file, errorText(error));
 				}
+			}
+			const batch = compareBatch(read);
+			for (const file of files) {
+				const source = read.find((entry) => entry.file === file);
+				if (!source) {
+					if (unread.has(file)) {
+						lines.push(file, `  could not be read: ${unread.get(file)}`);
+					}
+					continue;
+				}
+				const judged = judge(catalogue, {
+					sha256: source.sha256,
+					title: source.document.title,
+					authors: source.document.author ? [source.document.author] : [],
+					isbn: source.isbn,
+					fingerprint: source.fingerprint,
+				});
+				const words = source.document.markdown.split(/\s+/).length;
+				lines.push(
+					file,
+					`  ${[
+						source.document.title
+							? `title "${source.document.title}"`
+							: "no title in the file",
+						source.document.author ? `by ${source.document.author}` : undefined,
+						source.isbn ? `ISBN ${source.isbn}` : undefined,
+						`${words.toLocaleString("en-US")} words`,
+						plural(source.document.images.length, "picture"),
+					]
+						.filter(Boolean)
+						.join(", ")}`,
+					`  ${judged.line}`,
+					...(batch.get(file) ?? []).map((line) => `  ${line}`),
+					...source.document.notes.map((note) => `  ${note}`),
+				);
+			}
+			if (batch.size > 0) {
+				lines.push(
+					"Files that are the same book go in one library_add call, as its sources, or only one of them is added. Files that are versions of one book are the user's to decide on: ask before adding more than one.",
+				);
 			}
 			for (const link of links) {
 				lines.push(link, `  ${judge(catalogue, { url: link }).line}`);

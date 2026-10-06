@@ -285,6 +285,31 @@ describe("the Library tools", () => {
 		);
 	});
 
+	it("says what the files of one batch have to do with each other", async () => {
+		write("in/engine.md", BOOK);
+		write("in/engine-copy.md", BOOK);
+		write("in/engine.txt", `${BOOK}\n\nTranscribed.`);
+		write(
+			"in/engine-2nd.md",
+			`${BOOK}\n${chapter(4, "the gearbox")}\n${chapter(5, "the brakes")}`,
+		);
+		write("in/bread.md", `# Bread\n\n${chapter(1, "sourdough starters")}`);
+		const checked = await call("library_check", { paths: ["in"] });
+		expect(checked).toContain("IN THIS BATCH: is the same file as engine.md.");
+		expect(checked).toMatch(
+			/IN THIS BATCH: is the same book \(\d+% of the text\) as engine\.txt\./,
+		);
+		expect(checked).toMatch(
+			/IN THIS BATCH: shares \d+% of its text, so is probably another version of, engine-2nd\.md\./,
+		);
+		expect(checked).toContain("ask before adding more than one");
+		const bread = checked.slice(
+			checked.indexOf("bread.md"),
+			checked.indexOf("engine-2nd.md"),
+		);
+		expect(bread).not.toContain("IN THIS BATCH");
+	});
+
 	it("adds nothing over a book that looks the same until told what to do", async () => {
 		write("engine.md", BOOK);
 		await addBook();
