@@ -72,7 +72,9 @@ For the workspace that is open, the list has two columns:
 
 The choice is kept per workspace. The model's tools take no memory name, so a model cannot read from, or write to, a memory that is not ticked for its workspace. `forget` removes a note only from the memory the workspace stores to; a note in a memory that is only read is yours to remove.
 
-When the open workspace has no memory of its own, the panel offers **Create a memory for this workspace**, named after the folder. A memory made that way is ticked for recall; where notes are stored stays as it was until you move it.
+When the open workspace has no memory of its own, the panel offers **Create a memory for this workspace**, named after the folder. **New memory** makes one under any name. Either way the new memory is ticked for recall in the open workspace; where notes are stored stays as it was until you move it.
+
+**Rename** gives a memory another name. Its notes stay as they are, and it stays ticked in every workspace that used it. **Delete** removes a memory and all its notes, after a second click that says how many. Main can be neither renamed nor deleted.
 
 A workspace is its folder path. The same repository opened from another folder is another workspace, and starts on Main.
 
@@ -110,7 +112,6 @@ To find notes by meaning as well, tick **Use an embedding model** in the API con
 - The same note kept twice in the same memory is kept once.
 - Notes are not synced between machines. They live in the data folder of the machine that made them.
 - The panel lists memories and counts their notes, not the notes themselves. Ask the model: *"list your notes"*.
-- A memory cannot be renamed yet. Export it, import it under the new name, and delete the old one.
 
 ## In the CLI
 
