@@ -101,9 +101,11 @@ A long milestone will outgrow one conversation. That is expected and harmless: t
 
 The steps are written so that work which should start with a clean context can be given to one:
 
-- **With sub-agents** (you have `spawn_agent`): research, each task, and the plan reviews run in their own agents, as the phase skills describe. You stay the lead: you read the files, hand out the work, and check what comes back.
+- **With sub-agents** (you have `spawn_agent`): research, each task, and the plan reviews run in their own agents, as the phase skills describe. You stay the lead: you read the files, hand out the work, and check what comes back. An agent's changes can only be brought back with `restore_file`, which exists when Checkpoints or the change protocol is on. If you have `spawn_agent` and not `restore_file`, say so before the first task is executed, and do not execute with agents until the user has turned Checkpoints on or told you to work without agents.
 - **With teammates as well** (you have the `team_*` tools): slices that do not depend on each other can run side by side, one teammate per slice, and a reviewer can stay with a slice. `sdd-execute` says how.
 - **With neither**: do each step yourself, one at a time.
+
+With git available, a slice can also be built in its own worktree and merged when it is verified (`sdd-execute` and `sdd-verify` say how). It is optional, and skipped when the project is not a git repository.
 
 Never assume an agent's claim. A task is done when its verification passed in the real workspace, and not before.
 

@@ -74,13 +74,55 @@ Exactly this, and nothing from the conversation:
 9. **Secrets:** never print, invent or commit one. If a credential is missing, stop and ask.
 10. Do not push, publish, open issues or change anything outside the project without the user's explicit yes.
 
+## Git isolation (optional)
+
+A slice can be built in its own git worktree, on its own branch, so the user's working copy stays exactly as it is until the slice is verified. It is optional: when it is not possible, say once why and carry on without it.
+
+**Whether to use it.** Read "Isolation" in the working agreements in `PROJECT.md`. If it is not there, ask once, at the first task of the first slice (worktree, or none), and record the answer. With "none", skip this section.
+
+**Whether it is possible.** Check with git before the slice's first task:
+
+```
+git rev-parse --is-inside-work-tree      # must print true
+git rev-parse --verify HEAD              # the repository must have a commit
+git status --porcelain                   # must list nothing outside .sdd/
+git worktree list                        # the git here must know worktrees
+```
+
+Uncommitted changes outside `.sdd/` would not be in the worktree, so the slice would be built without them: tell the user and let them commit or stash, or go on without isolation. If the project is not a git repository, or any check fails and cannot be put right by the user, go ahead without isolation and note it in `STATE.md`. Do not run `git init`, commit the user's changes or stash them yourself.
+
+**Create it** at the slice's first task:
+
+```
+git worktree add -b sdd/M001-S01 .sdd/worktrees/M001-S01 HEAD
+```
+
+and keep it out of the user's commits by adding the line `.sdd/worktrees/` to `.git/info/exclude` (not to their `.gitignore`). If the branch or the folder already exists, the slice was started before: use it, do not recreate it.
+
+**Work in it.**
+
+- Every product file of the slice is read and changed under `.sdd/worktrees/M001-S01/`, and every build, test and verification command runs from that folder. A task plan's paths are relative to it.
+- A fresh worktree has no installed dependencies and no ignored files (no `node_modules`, no virtual environment, no `.env`). Install from the lockfile before the first verification, and tell the user if the project needs a local file that is not in git.
+- **The planning files are the ones in the main checkout's `.sdd/`.** The worktree may contain an older copy of `.sdd/`; never read or write that copy.
+- After each task that passed its verification, commit in the worktree: the summary's first line as the message, and a trailer `SDD-Task: M001/S01/T01`. These commits are on the slice's branch and do not touch the user's branch, so they are made whatever the working agreements say about committing.
+- With a sub-agent, give it the worktree paths; its changes are adopted into the worktree, and the verification is run again there.
+- With teammates running slices side by side, each slice has its own worktree. That is what keeps them apart.
+
+The slice is merged back, and the worktree removed, when it is closed (`sdd-verify`). Never delete a worktree or its branch while it holds work that has not been merged, and never push.
+
 ## Who executes
 
 **With sub-agents (you have `spawn_agent`) — preferred.** A task done in a fresh context is done against the plan and nothing else.
 
+**First check that you can take the agent's work back.** An agent works on its own copy, and its changes return as revisions that are adopted with `restore_file`. That tool exists only when Checkpoints or the change protocol is turned on. Look at your tools: if you have `spawn_agent` and do **not** have `restore_file`, do not start. Stop and tell the user:
+
+> Sub-agents are on, but Checkpoints are off, so I could not bring an agent's changes back into your project. Turn on Checkpoints (or the change protocol) in the settings and run this again. Or tell me to go ahead without agents, and I will do the tasks myself in this conversation.
+
+Go on without agents only after they say so; then record "Agents: not used (no checkpoints)" in the working agreements so the question is not asked at every task.
+
 1. Spawn one agent. Its task is the task plan's text and the rules above; its knowledge files are the plan's inputs plus the slice plan, `DECISIONS.md` and `KNOWLEDGE.md`. If the plan's verification is a command, give it as the agent's `check` (`command`, and `expect` when the output must show something), so "done" is tested and not claimed.
 2. Ask it to end its report with: files changed, each verification command with its exit code and what the output showed, deviations from the plan, known issues, decisions made, and whether it found a blocker.
-3. The agent worked on its own copy of the project. Its changed files come back as revisions. **Read them** (at least the diff of each against what the plan asked for), then adopt them into the workspace with `restore_file`. If you have no tool to adopt revisions, do not use an agent for execution: execute the task yourself.
+3. The agent worked on its own copy of the project. Its changed files come back as revisions. **Read them** (at least the diff of each against what the plan asked for), then adopt them into the workspace with `restore_file`.
 4. **Run the plan's verification again in the real workspace.** The agent's check passed on its copy; the task is done when it passes here.
 5. You write the summary and tick the box. An agent's files under `.sdd/` are not adopted.
 

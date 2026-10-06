@@ -192,9 +192,10 @@ The four `tdd-` skills are a set for test-driven development. Start with `tdd-wi
 
 The seven `sdd-` skills are a set for spec-driven development, after [Get Shit Done (GSD 2)](https://getshitdone.help/): discuss what is wanted, plan it as milestones, slices and tasks, execute one task at a time, and verify at every level. Start with `sdd-wizard`. The plan and its records are kept as files in a `.sdd/` folder in the project, which is what lets the work continue in a new chat or be handed to an agent.
 
-- With **Subagents** on, research, each task and the plan reviews run in agents with a fresh context. A task's changes come back as revisions that the lead reads and adopts, so Checkpoints or the change protocol must be on for that; without them the lead does the task itself.
+- With **Subagents** on, research, each task and the plan reviews run in agents with a fresh context. A task's changes come back as revisions that the lead reads and adopts, so Checkpoints or the change protocol must be on for that. With Subagents on and Checkpoints off, the skill stops before the first task and asks you to turn Checkpoints on, or to tell it to work without agents.
 - With **Teammates** on as well, slices that do not depend on each other can run side by side, one teammate per slice, and a reviewer can stay with a slice.
 - With neither, the lead does each step itself.
+- In a git repository, a slice can be built in its own worktree (`.sdd/worktrees/<slice>/`, branch `sdd/<slice>`) and squash-merged into your branch when it is verified, so your working copy is untouched until then. It is asked once and optional; where git is missing, or the working copy has uncommitted changes you do not want to commit, the work goes on without it.
 
 The set is not compatible with a `.gsd/` folder: GSD keeps its state in a database and regenerates its files from it.
 

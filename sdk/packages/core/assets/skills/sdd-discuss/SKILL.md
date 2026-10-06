@@ -119,7 +119,7 @@ Recheck the size estimate from Stage 1 against everything learned, and say so if
 ## Who it is for
 ## Current state            <- what exists and works today
 ## Milestones               <- M001 <title>: <one line> (status); later ones as one line each
-## Working agreements       <- e.g. commit after each task: yes/no; test command; anything the user asked for
+## Working agreements       <- commit after each task: yes/no; Isolation: worktree | none (asked at the first slice); test command; anything the user asked for
 ## Later                    <- ideas set aside, so they are not lost
 ```
 

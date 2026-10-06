@@ -66,7 +66,7 @@ Every check is recorded with what was run and what was seen. For each, choose th
 
 ## Part A: Close a slice
 
-1. **Run the slice verification** from `S##-PLAN.md`, all of it, in the workspace. If a check fails, fix it and run again; a fix here is small and within the slice. If it cannot be fixed within the slice's plan, stop: the slice is not done, and the task that owns the failure is reopened or the slice replanned (`sdd-plan`).
+1. **Run the slice verification** from `S##-PLAN.md`, all of it, in the workspace (in the slice's worktree, if it was built in one; see "Merging an isolated slice" below). If a check fails, fix it and run again; a fix here is small and within the slice. If it cannot be fixed within the slice's plan, stop: the slice is not done, and the task that owns the failure is reopened or the slice replanned (`sdd-plan`).
 2. **Check the goal, not the tasks:** is the slice's goal now true, end to end? Is each requirement it owns demonstrably met?
 3. **Write `S##-SUMMARY.md`**, compressing the task summaries. It is read by whoever plans the slices after this one:
 
@@ -96,6 +96,25 @@ Every check is recorded with what was run and what was seen. For each, choose th
    - does every success criterion still belong to some unchecked slice, or is it already proved?
 
    The usual answer is that the roadmap stands, and one line saying so is the right output. Change it only on evidence. When it must change, rewrite only unchecked slices, never completed ones, and tell the user what changed and why; a change to scope or to a requirement needs their agreement first.
+
+### Merging an isolated slice
+
+When the slice was built in a worktree (`.sdd/worktrees/M001-S01/`, branch `sdd/M001-S01`), steps 1 to 5 are run there. After the slice is ticked:
+
+1. Make sure everything in the worktree is committed on its branch.
+2. In the main checkout, on the branch the user was on, check `git status --porcelain`: if they have uncommitted changes outside `.sdd/`, stop and ask before merging.
+3. The first time, ask whether to merge verified slices without asking again, and record the answer under "Isolation" in the working agreements. Then:
+
+```
+git merge --squash sdd/M001-S01
+git commit -m "<the slice summary's first line>"
+```
+
+4. **If the merge conflicts, stop.** Show the conflicting files and what each side changed. Do not resolve by taking one side wholesale, and do not abort the user's own work. Resolve with the user, or leave the slice unmerged and say so in `STATE.md`.
+5. If the user's branch had moved since the worktree was created, run the slice verification once more on the merged result. A failure here is fixed before going on.
+6. Only when the merge commit exists: `git worktree remove .sdd/worktrees/M001-S01` and `git branch -D sdd/M001-S01`. If the removal is refused because something is uncommitted there, look at what it is; do not force it.
+
+Slices that ran side by side are merged one after another, each verified on the result of the one before. Never push.
 
 With sub-agents, steps 1 and 5 can each be given to an agent with a fresh context, which is a better witness than whoever built the slice. With a slice reviewer teammate, ask it for its findings before step 2.
 

@@ -56,7 +56,8 @@ If there is no `.sdd/` folder, say that spec-driven development has not been sta
 - a task ticked with no summary, or a summary with the task unticked;
 - a slice ticked whose tasks are not all ticked, or with no slice summary;
 - a slice in progress whose dependency is unchecked;
-- an active requirement that no slice of the roadmap owns.
+- an active requirement that no slice of the roadmap owns;
+- a worktree under `.sdd/worktrees/` (see `git worktree list`) for a slice that is already ticked, or a ticked slice whose branch was never merged.
 
 Report any of these as an inconsistency. Do not repair them here.
 
@@ -78,6 +79,7 @@ Next: execute T02 (sdd-execute)
 Requirements: 6 validated, 5 active, 2 deferred
 Waiting on you: <acceptance checks marked NEEDS-HUMAN, open questions, a missing credential>
 Blocked: <what, or "no">
+Isolation: <the slice's worktree and branch, and whether it has unmerged commits; or "none">
 Inconsistencies: <what was found, or "none">
 ```
 
