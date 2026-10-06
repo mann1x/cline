@@ -5,10 +5,13 @@ import {
 	type LibraryToolsConfig,
 	lanceDbInstallBytes,
 	lanceDbUnsupportedReason,
+	type MemorySettings,
+	type MemoryToolsConfig,
 	parseOcrLanguages,
 	type RetrievalEndpoint,
 	resolveLanceDbRuntimeDirectory,
 	resolveLibrarySettings,
+	resolveMemorySettings,
 } from "@cline/core"
 import { StateManager } from "@/core/storage/StateManager"
 import { HostProvider } from "@/hosts/host-provider"
@@ -116,6 +119,35 @@ export function readLibraryToolsConfig(): LibraryToolsConfig | undefined {
 			ocrLanguages: parseOcrLanguages(state.getGlobalSettingsKey("extractDocumentOcrLanguages") ?? "eng"),
 		},
 	}
+}
+
+/** Memory's settings in use: what is stored, over the defaults. */
+export function readMemorySettings(): MemorySettings {
+	const state = StateManager.get()
+	let stored: Record<string, unknown> = {}
+	try {
+		const parsed = JSON.parse(state.getGlobalSettingsKey("memorySettings") || "{}")
+		if (typeof parsed === "object" && parsed !== null) {
+			stored = parsed as Record<string, unknown>
+		}
+	} catch {
+		// Unreadable storage is the defaults.
+	}
+	return { ...resolveMemorySettings(stored), enabled: state.getGlobalSettingsKey("memoryEnabled") === true }
+}
+
+/**
+ * Undefined while Memory is off. It uses the Embedding tab's models, the
+ * same ones the Library does: one embedding model, one set of vectors each.
+ */
+export function readMemoryToolsConfig(): MemoryToolsConfig | undefined {
+	const settings = readMemorySettings()
+	if (!settings.enabled) {
+		return undefined
+	}
+	const embedding = readEmbeddingEndpoint()
+	const reranker = readRerankingEndpoint()
+	return { settings, ...(embedding ? { embedding } : {}), ...(reranker ? { reranker } : {}) }
 }
 
 let installing: Promise<void> | undefined

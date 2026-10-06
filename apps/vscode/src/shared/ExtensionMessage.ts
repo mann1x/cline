@@ -127,6 +127,10 @@ export interface ExtensionState {
 	libraryEnabled: boolean
 	/** JSON `LibrarySettings`, complete: the stored values over the defaults. */
 	librarySettings: string
+	/** Whether Memory and its tools are on. */
+	memoryEnabled: boolean
+	/** JSON `MemorySettings`, complete: the stored values over the defaults. */
+	memorySettings: string
 	/** Whether `generate_video` is offered, pointed at the endpoint below. */
 	videoEnabled: boolean
 	/** JSON for the Video tab: the endpoint, the model and the defaults. */

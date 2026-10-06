@@ -202,6 +202,12 @@ export interface ParsedArgs {
 	 * xOllama serves. The extension's "use the session's provider" box.
 	 */
 	mediaProvider?: boolean;
+	/**
+	 * `--memory` (or `CLINE_MEMORY=1`): offer `remember`, `recall` and
+	 * `forget`, the extension's Memory switch. Notes are kept in the data
+	 * folder, so `--data-dir` decides which notes a run sees.
+	 */
+	memory?: boolean;
 	/** `--media-config`: a JSON file naming the media endpoints. */
 	mediaConfig?: string;
 	/**

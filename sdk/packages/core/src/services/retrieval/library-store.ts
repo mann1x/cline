@@ -369,6 +369,13 @@ export class LibraryStore {
 		});
 	}
 
+	getDocument(documentId: number): LibraryDocument | undefined {
+		const row = this.db
+			.prepare("SELECT * FROM documents WHERE id = ?")
+			.get(documentId);
+		return row ? this.toDocument(row) : undefined;
+	}
+
 	/** A document's chunks, in order: what is embedded. */
 	documentChunks(documentId: number): LibraryHit[] {
 		return this.db

@@ -1005,8 +1005,11 @@ export async function loadOpenTelemetryAdapter() {
 export { Agent, createAgentRuntime } from "@cline/agents";
 export {
 	DEFAULT_LIBRARY_SETTINGS,
+	DEFAULT_MEMORY_SETTINGS,
 	type LibrarySettings,
+	type MemorySettings,
 	resolveLibrarySettings,
+	resolveMemorySettings,
 } from "@cline/shared";
 export {
 	createCappedThinkingNoteWriter,
@@ -1331,6 +1334,14 @@ export {
 	type ResolvedMediaTool,
 	resolveMediaTool,
 } from "./extensions/tools/media-tools";
+// Memory: notes kept between tasks, on the Library's retrieval core.
+export {
+	type CreateMemoryToolsOptions,
+	createMemoryTools,
+	MEMORY_TOOL_NAMES,
+	type MemoryToolName,
+	type MemoryToolsConfig,
+} from "./extensions/tools/memory-tools";
 export {
 	commandText,
 	describeQaCredentials,
@@ -1576,6 +1587,16 @@ export type {
 	LibraryDocument,
 	LibraryHit,
 } from "./services/retrieval/library-store";
+export {
+	MEMORY_MAX_CHARS,
+	Memory,
+	type MemoryEndpoints,
+	type MemoryItem,
+	type MemoryScope,
+	type RecalledMemory,
+	resolveMemoryDirectory,
+	sharedMemory,
+} from "./services/retrieval/memory";
 export type {
 	RetrievedHit,
 	RetrieveResult,

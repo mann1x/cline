@@ -1497,6 +1497,40 @@ export async function runCli(): Promise<void> {
 			config.extraTools = [...(config.extraTools ?? []), ...mediaTools];
 		}
 
+		// Memory, off unless asked for: `--memory` or `CLINE_MEMORY=1`. The same
+		// tools the extension offers, on the defaults of its Memory panel. An
+		// embedding model is named by environment, as there is no Embedding tab
+		// here; without one, notes are found by keyword.
+		if (args.memory === true || process.env.CLINE_MEMORY === "1") {
+			const { createMemoryTools, DEFAULT_MEMORY_SETTINGS } = await import(
+				"@cline/core"
+			);
+			const embeddingBaseUrl = process.env.CLINE_EMBEDDING_BASE_URL?.trim();
+			const embeddingModel = process.env.CLINE_EMBEDDING_MODEL?.trim();
+			const embeddingApiKey = process.env.CLINE_EMBEDDING_API_KEY?.trim();
+			const memoryTools = createMemoryTools({
+				cwd,
+				getConfig: () => ({
+					settings: { ...DEFAULT_MEMORY_SETTINGS, enabled: true },
+					...(embeddingBaseUrl && embeddingModel
+						? {
+								embedding: {
+									baseUrl: embeddingBaseUrl,
+									model: embeddingModel,
+									...(embeddingApiKey ? { apiKey: embeddingApiKey } : {}),
+								},
+							}
+						: {}),
+				}),
+				log: (message) => loggerAdapter.core.log(message),
+				onError: (message, error) =>
+					loggerAdapter.core.log(
+						`${message}: ${error instanceof Error ? error.message : String(error)}`,
+					),
+			});
+			config.extraTools = [...(config.extraTools ?? []), ...memoryTools];
+		}
+
 		// `sdd`, the spec-driven engine, when any of the spec-driven skills is
 		// turned on, as in the extension: the skills say how to work that way,
 		// the tool keeps the plan and the order of the work.

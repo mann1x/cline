@@ -328,6 +328,8 @@ export const ExtensionStateContextProvider: React.FC<{
 		rerankingApiKeySet: false,
 		libraryEnabled: false,
 		librarySettings: "",
+		memoryEnabled: false,
+		memorySettings: "",
 		audioEnabled: false,
 		audioEndpoints: "",
 		audioSttApiKeySet: false,

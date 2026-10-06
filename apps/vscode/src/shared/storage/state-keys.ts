@@ -313,6 +313,9 @@ const USER_SETTINGS_FIELDS = {
 	// The Library: documents kept for retrieval, and the three tools the model
 	// has on it. Off by default; it works on keywords alone when on.
 	libraryEnabled: { default: false as boolean },
+	// Memory: notes the model keeps between tasks (`remember`, `recall`,
+	// `forget`). Off by default; like the Library it works on keywords alone.
+	memoryEnabled: { default: false as boolean },
 	// Offer `jev`, and let the harness ask Jev (TypeSafe's scoring model) for
 	// a confidence before a question reaches the user and before an
 	// escalation. Off by default: it is a paid, hosted service, and turning it
@@ -358,6 +361,8 @@ const USER_SETTINGS_FIELDS = {
 	// JSON `LibrarySettings` (`@cline/shared`): chunking and retrieval, as the
 	// Library panel stores them. Empty means the defaults.
 	librarySettings: { default: "" as string },
+	// JSON `MemorySettings` (`@cline/shared`), as the Memory panel stores them.
+	memorySettings: { default: "" as string },
 	// JSON `{model, floor, highStakesFloor, timeoutMs, rankQuestions,
 	// appraiseEscalation}` for Jev, round-tripped whole by its tab like the
 	// image endpoint above. The key is not here -- it is a secret.

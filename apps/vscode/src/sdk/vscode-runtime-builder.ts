@@ -7,6 +7,7 @@ import {
 	createListFilesTool,
 	createMcpTools,
 	createMediaTools,
+	createMemoryTools,
 	createSddTools,
 	type MediaSessionProvider,
 } from "@cline/core"
@@ -22,7 +23,7 @@ import { resolveMcpServerTimeoutMs } from "@/services/mcp/timeout"
 import { Logger } from "@/shared/services/Logger"
 import { createCheckFileTool } from "./check-file-tool"
 import { isJevConfigured, readJevEndpoint } from "./jev-config"
-import { readLibraryToolsConfig } from "./library-config"
+import { readLibraryToolsConfig, readMemoryToolsConfig } from "./library-config"
 import { probeMediaServer, readLeadMediaProvider } from "./media-endpoint-config"
 import { readMediaToolsConfig } from "./media-tools-config"
 import { readQaCredentials } from "./qa-credentials-store"
@@ -228,6 +229,17 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 		...createLibraryTools({
 			cwd: options?.cwd ?? process.cwd(),
 			getConfig: readLibraryToolsConfig,
+			onError: (message, error) => Logger.error(`${message}:`, error),
+			log: (message) => Logger.log(`[VscodeRuntimeTools] ${message}`),
+		}),
+	)
+
+	// Memory's three tools, when the Memory panel has it on: what the model
+	// keeps from one task to the next, per project and for all of them.
+	tools.push(
+		...createMemoryTools({
+			cwd: options?.cwd ?? process.cwd(),
+			getConfig: readMemoryToolsConfig,
 			onError: (message, error) => Logger.error(`${message}:`, error),
 			log: (message) => Logger.log(`[VscodeRuntimeTools] ${message}`),
 		}),

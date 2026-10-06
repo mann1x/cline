@@ -151,6 +151,12 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.librarySettings !== undefined) {
 			controller.stateManager.setGlobalState("librarySettings", request.librarySettings)
 		}
+		if (request.memoryEnabled !== undefined) {
+			controller.stateManager.setGlobalState("memoryEnabled", request.memoryEnabled)
+		}
+		if (request.memorySettings !== undefined) {
+			controller.stateManager.setGlobalState("memorySettings", request.memorySettings)
+		}
 		if (request.videoEnabled !== undefined) {
 			controller.stateManager.setGlobalState("videoEnabled", request.videoEnabled)
 		}

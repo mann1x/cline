@@ -22,7 +22,7 @@ import { ClineEnv } from "@/config"
 import { ExtensionRegistryInfo } from "@/registry"
 import { readImageGenerationApiKey } from "@/sdk/image-generation-config"
 import { readJevApiKey, readJevCustomApiKey } from "@/sdk/jev-config"
-import { readLibrarySettings } from "@/sdk/library-config"
+import { readLibrarySettings, readMemorySettings } from "@/sdk/library-config"
 import { readQaCredentialNames } from "@/sdk/qa-credentials-store"
 import { BannerService } from "@/services/banner/BannerService"
 import { featureFlagsService } from "@/services/feature-flags"
@@ -275,6 +275,8 @@ export async function getStateToPostToWebview(controller: {
 		libraryEnabled,
 		// Complete, so the panel shows the value in use and never restates a default.
 		librarySettings: JSON.stringify(readLibrarySettings()),
+		memoryEnabled: stateManager.getGlobalSettingsKey("memoryEnabled"),
+		memorySettings: JSON.stringify(readMemorySettings()),
 		jevEnabled,
 		jevSettings,
 		// The same rule as the image key.

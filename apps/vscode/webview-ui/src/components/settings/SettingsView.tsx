@@ -3,6 +3,7 @@ import { isClineInternalTester } from "@shared/internal/account"
 import { ResetStateRequest } from "@shared/proto/cline/state"
 import type { UserOrganization } from "@shared/proto/index.cline"
 import {
+	Brain,
 	CheckCheck,
 	FlaskConical,
 	HardDriveDownload,
@@ -30,6 +31,7 @@ import DebugSection from "./sections/DebugSection"
 import FeatureSettingsSection from "./sections/FeatureSettingsSection"
 import GeneralSettingsSection from "./sections/GeneralSettingsSection"
 import LibrarySettingsSection from "./sections/LibrarySettingsSection"
+import MemorySettingsSection from "./sections/MemorySettingsSection"
 import { RemoteConfigSection } from "./sections/RemoteConfigSection"
 import TerminalSettingsSection from "./sections/TerminalSettingsSection"
 import { flushPendingEdits } from "./utils/pendingEdits"
@@ -37,7 +39,16 @@ import { flushPendingEdits } from "./utils/pendingEdits"
 const IS_DEV = process.env.IS_DEV
 
 // Tab definitions
-type SettingsTabID = "api-config" | "features" | "library" | "terminal" | "general" | "about" | "debug" | "remote-config"
+type SettingsTabID =
+	| "api-config"
+	| "features"
+	| "library"
+	| "memory"
+	| "terminal"
+	| "general"
+	| "about"
+	| "debug"
+	| "remote-config"
 interface SettingsTab {
 	id: SettingsTabID
 	name: string
@@ -68,6 +79,13 @@ const SETTINGS_TABS: SettingsTab[] = [
 		tooltipText: "Library Settings",
 		headerText: "Library",
 		icon: LibraryBig,
+	},
+	{
+		id: "memory",
+		name: "Memory",
+		tooltipText: "Memory Settings",
+		headerText: "Memory",
+		icon: Brain,
 	},
 	{
 		id: "terminal",
@@ -140,6 +158,7 @@ const SettingsView = ({ onDone, targetSection }: SettingsViewProps) => {
 			general: GeneralSettingsSection,
 			features: FeatureSettingsSection,
 			library: LibrarySettingsSection,
+			memory: MemorySettingsSection,
 			terminal: TerminalSettingsSection,
 			"remote-config": RemoteConfigSection,
 			about: AboutSection,

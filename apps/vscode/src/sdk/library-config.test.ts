@@ -18,7 +18,14 @@ vi.mock("@/core/storage/StateManager", () => ({
 
 import { DEFAULT_LIBRARY_SETTINGS } from "@cline/core"
 import { embeddingEndpointConfigured, parseRetrievalEndpoints, rerankingEndpointConfigured } from "@/shared/retrieval-endpoints"
-import { readEmbeddingEndpoint, readLibrarySettings, readLibraryToolsConfig, readRerankingEndpoint } from "./library-config"
+import {
+	readEmbeddingEndpoint,
+	readLibrarySettings,
+	readLibraryToolsConfig,
+	readMemorySettings,
+	readMemoryToolsConfig,
+	readRerankingEndpoint,
+} from "./library-config"
 
 const store = (value: unknown) => {
 	state.settings.retrievalEndpoints = JSON.stringify(value)
@@ -131,5 +138,43 @@ describe("the Library's configuration", () => {
 		expect(readLibraryToolsConfig()?.documentReader).toEqual({ ocr: "tesseract", ocrLanguages: ["eng", "deu"] })
 		state.settings.extractDocumentOcr = "off"
 		expect(readLibraryToolsConfig()?.documentReader?.ocr).toBe("off")
+	})
+})
+
+describe("Memory's configuration", () => {
+	beforeEach(() => {
+		state.settings = {}
+		state.secrets = {}
+		state.api = {}
+	})
+
+	it("is off until Memory is turned on, whatever the Library is", () => {
+		state.settings = { libraryEnabled: true }
+		expect(readMemoryToolsConfig()).toBeUndefined()
+		expect(readMemorySettings()).toMatchObject({ enabled: false, recallCount: 5, defaultScope: "project" })
+	})
+
+	it("takes its own settings and the Embedding tab's models", () => {
+		state.settings = {
+			memoryEnabled: true,
+			memorySettings: JSON.stringify({ recallCount: 8, defaultScope: "global", enabled: false }),
+			embeddingEnabled: true,
+			retrievalEndpoints: JSON.stringify({
+				embedding: { baseUrl: "http://h:1", model: "bge-m3" },
+				reranking: { baseUrl: "http://r:2", model: "rr", enabled: true },
+			}),
+		}
+		expect(readMemoryToolsConfig()).toEqual({
+			settings: { enabled: true, recallCount: 8, relevanceThreshold: 0, defaultScope: "global" },
+			embedding: { baseUrl: "http://h:1", model: "bge-m3" },
+			reranker: { baseUrl: "http://r:2", model: "rr" },
+		})
+	})
+
+	it("works on keywords alone with no embedding model", () => {
+		state.settings = { memoryEnabled: true }
+		expect(readMemoryToolsConfig()).toEqual({
+			settings: { enabled: true, recallCount: 5, relevanceThreshold: 0, defaultScope: "project" },
+		})
 	})
 })

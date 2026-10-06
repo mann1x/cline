@@ -518,6 +518,11 @@ export {
 	resolveLibrarySettings,
 } from "./retrieval/library-settings";
 export {
+	DEFAULT_MEMORY_SETTINGS,
+	type MemorySettings,
+	resolveMemorySettings,
+} from "./retrieval/memory-settings";
+export {
 	CLINE_DEFAULT_RPC_ADDRESS,
 	CLINE_DEFAULT_RPC_PORT,
 	CLINE_HUB_DEV_PORT,

@@ -178,6 +178,7 @@ export {
 	createMediaTools,
 	resolveMediaTool,
 } from "../../../../sdk/packages/core/src/extensions/tools/media-tools"
+export { createMemoryTools } from "../../../../sdk/packages/core/src/extensions/tools/memory-tools"
 export { createSddTools } from "../../../../sdk/packages/core/src/extensions/tools/sdd-tool"
 // From source: the host names a batch's rows with it and the tool names the
 // agents with it, and the two have to agree.
@@ -225,6 +226,7 @@ export {
 	projectSessionCompactionState,
 } from "../../../../sdk/packages/core/src/session/models/session-compaction"
 export { DEFAULT_LIBRARY_SETTINGS, resolveLibrarySettings } from "../../../../sdk/packages/shared/src/retrieval/library-settings"
+export { DEFAULT_MEMORY_SETTINGS, resolveMemorySettings } from "../../../../sdk/packages/shared/src/retrieval/memory-settings"
 
 export type GlobalCompactionStrategy = "basic" | "agentic"
 

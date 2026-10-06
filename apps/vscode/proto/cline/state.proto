@@ -349,6 +349,8 @@ message Settings {
   optional bool library_enabled = 237;
   optional string retrieval_endpoints = 238;
   optional string library_settings = 239;
+  optional bool memory_enabled = 240;
+  optional string memory_settings = 241;
 }
 
 message State {
@@ -558,6 +560,9 @@ message UpdateSettingsRequest {
   // The Library panel: the switch, and its settings as one JSON record.
   optional bool library_enabled = 105;
   optional string library_settings = 106;
+  // The Memory panel, likewise.
+  optional bool memory_enabled = 107;
+  optional string memory_settings = 108;
   optional bool jev_enabled = 80;
   optional string jev_settings = 81;
   // Write-only like the image key: empty clears it, unset leaves it alone.
