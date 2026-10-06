@@ -70,6 +70,26 @@ export function memorySelectionFor(
 		: { ...DEFAULT_MEMORY_SELECTION, recall: [MAIN_MEMORY] };
 }
 
+/**
+ * Every workspace's choice with a memory's old name replaced by its new one,
+ * so a renamed memory stays ticked wherever it was.
+ */
+export function renameMemoryInSelections(
+	selections: Record<string, MemorySelection>,
+	from: string,
+	to: string,
+): Record<string, MemorySelection> {
+	return Object.fromEntries(
+		Object.entries(selections).map(([workspace, selection]) => [
+			workspace,
+			{
+				store: selection.store === from ? to : selection.store,
+				recall: selection.recall.map((name) => (name === from ? to : name)),
+			},
+		]),
+	);
+}
+
 function resolveSelections(raw: unknown): Record<string, MemorySelection> {
 	const selections: Record<string, MemorySelection> = {};
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {

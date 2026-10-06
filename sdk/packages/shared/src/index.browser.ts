@@ -416,6 +416,7 @@ export {
 	type MemorySettings,
 	memorySelectionFor,
 	memoryWorkspaceKey,
+	renameMemoryInSelections,
 	resolveMemorySettings,
 } from "./retrieval/memory-settings";
 export { CLINE_DEFAULT_RPC_ADDRESS, CLINE_DEFAULT_RPC_PORT } from "./rpc";

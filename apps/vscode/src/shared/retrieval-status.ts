@@ -52,6 +52,7 @@ export type RetrievalAction =
 	| { action: "status" }
 	| { action: "installVectors" }
 	| { action: "createMemory"; name: string; forWorkspace?: boolean }
+	| { action: "renameMemory"; name: string; to: string }
 	| { action: "deleteMemory"; name: string }
 	| { action: "exportMemory"; name: string }
 	| { action: "importMemory"; into?: string }

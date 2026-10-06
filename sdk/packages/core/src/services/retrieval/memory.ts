@@ -214,6 +214,38 @@ export class Memory {
 		) as MemoryInfo;
 	}
 
+	/**
+	 * Give a memory another name. Its notes, their ids and their vectors stay
+	 * as they are. The main memory keeps its name: everything starts on it.
+	 */
+	renameMemory(from: string, to: string): MemoryInfo {
+		this.migrate();
+		const name = normalizeMemoryName(to);
+		if (!name) throw new Error("A memory needs a name.");
+		if (from === MAIN_MEMORY) {
+			throw new Error("The main memory cannot be renamed.");
+		}
+		const collection = this.library.store
+			.listCollections()
+			.find((entry) => entry.name === from);
+		if (!collection) throw new Error(`There is no memory named "${from}".`);
+		if (name !== from) {
+			if (this.listMemories().some((memory) => memory.name === name)) {
+				throw new Error(`There is already a memory named "${name}".`);
+			}
+			this.library.store.renameCollection(collection.id, name);
+			const registry = this.readRegistry();
+			if (registry[from]) {
+				registry[name] = registry[from];
+				delete registry[from];
+				this.writeRegistry(registry);
+			}
+		}
+		return this.listMemories().find(
+			(memory) => memory.name === name,
+		) as MemoryInfo;
+	}
+
 	/** Delete a memory and every note in it. The main memory stays. */
 	async deleteMemory(name: string): Promise<number> {
 		this.migrate();

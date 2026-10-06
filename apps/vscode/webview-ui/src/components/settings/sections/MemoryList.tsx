@@ -9,6 +9,8 @@ interface MemoryListProps {
 	/** What this workspace's sessions use now. */
 	selection: MemorySelection
 	onSelect: (next: MemorySelection) => void
+	/** A memory has a new name: every workspace's choice has to follow it. */
+	onRenamed: (from: string, to: string) => void
 }
 
 /** The name a workspace's own memory is offered under: its folder's. */
@@ -19,11 +21,12 @@ const workspaceMemoryName = (name: string) => name.trim() || "workspace"
  * workspace's sessions may do with each: search it (any number), and keep
  * new notes in it (exactly one).
  */
-const MemoryList = ({ retrieval, selection, onSelect }: MemoryListProps) => {
+const MemoryList = ({ retrieval, selection, onSelect, onRenamed }: MemoryListProps) => {
 	const { status, busy, run, message, error } = retrieval
 	const [newName, setNewName] = useState("")
 	const [nameFieldKey, setNameFieldKey] = useState(0)
 	const [confirmDelete, setConfirmDelete] = useState<string>()
+	const [renaming, setRenaming] = useState<{ name: string; to: string }>()
 
 	if (!status) {
 		return null
@@ -45,14 +48,26 @@ const MemoryList = ({ retrieval, selection, onSelect }: MemoryListProps) => {
 	const create = async (name: string, forWorkspace: boolean) => {
 		const result = await run({ action: "createMemory", name, ...(forWorkspace ? { forWorkspace: true } : {}) })
 		if (result?.ok) {
-			// Made for this workspace: searched here from now on. Where notes
-			// are kept is left as it was, for the user to move.
+			// A memory just made is searched here from now on, whichever way
+			// it was made. Where notes are kept is left as it was, for the
+			// user to move.
 			const made = result.status.memory.memories.find((memory) => !names.has(memory.name))
-			if (made && forWorkspace) {
+			if (made) {
 				onSelect({ store, recall: [...recall, made.name] })
 			}
 			setNewName("")
 			setNameFieldKey((key) => key + 1)
+		}
+	}
+	const rename = async () => {
+		if (!renaming) return
+		const { name, to } = renaming
+		const result = await run({ action: "renameMemory", name, to })
+		if (result?.ok) {
+			setRenaming(undefined)
+			// The name it was actually given: trimmed, and cut to length.
+			const now = result.status.memory.memories.find((memory) => !names.has(memory.name))
+			if (now) onRenamed(name, now.name)
 		}
 	}
 	const remove = async (name: string) => {
@@ -97,7 +112,21 @@ const MemoryList = ({ retrieval, selection, onSelect }: MemoryListProps) => {
 					{memories.map((memory) => (
 						<tr className="border-t border-(--vscode-panel-border)" key={memory.name}>
 							<td className="py-1 pr-2">
-								<div>{memory.main ? "Main" : memory.name}</div>
+								{renaming?.name === memory.name ? (
+									<input
+										aria-label={`New name for ${memory.name}`}
+										className="w-full bg-(--vscode-input-background) text-(--vscode-input-foreground) border border-(--vscode-input-border) px-1"
+										maxLength={60}
+										onChange={(event) => setRenaming({ name: memory.name, to: event.target.value })}
+										onKeyDown={(event) => {
+											if (event.key === "Enter") void rename()
+											if (event.key === "Escape") setRenaming(undefined)
+										}}
+										value={renaming.to}
+									/>
+								) : (
+									<div>{memory.main ? "Main" : memory.name}</div>
+								)}
 								<div className="text-(--vscode-descriptionForeground)">
 									{memory.main
 										? "the memory every workspace starts on"
@@ -127,7 +156,19 @@ const MemoryList = ({ retrieval, selection, onSelect }: MemoryListProps) => {
 								/>
 							</td>
 							<td className="py-1 text-right whitespace-nowrap">
-								{confirmDelete === memory.name ? (
+								{renaming?.name === memory.name ? (
+									<>
+										<VSCodeButton
+											appearance="secondary"
+											disabled={busy || renaming.to.trim() === ""}
+											onClick={() => void rename()}>
+											Save
+										</VSCodeButton>{" "}
+										<VSCodeButton appearance="icon" onClick={() => setRenaming(undefined)}>
+											Cancel
+										</VSCodeButton>
+									</>
+								) : confirmDelete === memory.name ? (
 									<>
 										<VSCodeButton
 											appearance="secondary"
@@ -148,6 +189,15 @@ const MemoryList = ({ retrieval, selection, onSelect }: MemoryListProps) => {
 											title={`Write "${memory.name}" to a file`}>
 											Export
 										</VSCodeButton>
+										{memory.main ? null : (
+											<VSCodeButton
+												appearance="icon"
+												disabled={busy}
+												onClick={() => setRenaming({ name: memory.name, to: memory.name })}
+												title={`Give "${memory.name}" another name`}>
+												Rename
+											</VSCodeButton>
+										)}
 										{memory.main ? null : (
 											<VSCodeButton
 												appearance="icon"

@@ -206,6 +206,57 @@ describe("the Memory panel", () => {
 		expect(await screen.findByText('Made the memory "tally".')).toBeTruthy()
 	})
 
+	it("ticks a memory made by name for recall too", async () => {
+		state.memoryEnabled = true
+		respond = (action) => {
+			if (action.action === "createMemory") {
+				status.memory.memories.push({ name: String(action.name), main: false, notes: 0, createdAt: "" })
+			}
+			return { ok: true }
+		}
+		render(<MemorySettingsSection renderSectionHeader={header} />)
+		const field = await screen.findByPlaceholderText("A name, e.g. a client or a topic")
+		fireEvent.change(field, { target: { value: "acme" } })
+		fireEvent.input(field, { target: { value: "acme" } })
+		await waitFor(() => {
+			fireEvent.click(screen.getByText("Create"))
+			expect(actions).toContainEqual({ action: "createMemory", name: "acme" })
+		})
+		await waitFor(() => expect(updateSettings).toHaveBeenCalled())
+		expect(saved().selections["c:/dev/tally"]).toEqual({ store: "main", recall: ["main", "acme"] })
+	})
+
+	it("renames a memory and carries the new name into every workspace's choice", async () => {
+		state.memoryEnabled = true
+		status.memory.memories.push({ name: "acme", main: false, notes: 5, createdAt: "" })
+		state.memorySettings = JSON.stringify({
+			selections: {
+				"c:/dev/tally": { store: "acme", recall: ["main", "acme"] },
+				"/elsewhere": { store: "main", recall: ["acme"] },
+			},
+		})
+		respond = (action) => {
+			if (action.action === "renameMemory") {
+				status.memory.memories = status.memory.memories.map((memory) =>
+					memory.name === "acme" ? { ...memory, name: "Acme Corp" } : memory,
+				)
+				return { ok: true, message: 'Renamed "acme" to "Acme Corp".' }
+			}
+			return { ok: true }
+		}
+		render(<MemorySettingsSection renderSectionHeader={header} />)
+		// Main has no Rename: there is one button, the other memory's.
+		fireEvent.click(await screen.findByText("Rename"))
+		fireEvent.change(screen.getByLabelText("New name for acme"), { target: { value: "Acme Corp" } })
+		fireEvent.click(screen.getByText("Save"))
+		await waitFor(() => expect(actions).toContainEqual({ action: "renameMemory", name: "acme", to: "Acme Corp" }))
+		await waitFor(() => expect(updateSettings).toHaveBeenCalled())
+		expect(saved().selections).toEqual({
+			"c:/dev/tally": { store: "Acme Corp", recall: ["main", "Acme Corp"] },
+			"/elsewhere": { store: "main", recall: ["Acme Corp"] },
+		})
+	})
+
 	it("deletes a memory only after a second click that says how many notes go, and moves the choice off it", async () => {
 		state.memoryEnabled = true
 		status.memory.memories.push({ name: "acme", main: false, notes: 5, createdAt: "" })

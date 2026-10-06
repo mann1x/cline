@@ -9,6 +9,7 @@ import {
 	type MemorySettings,
 	memorySelectionFor,
 	memoryWorkspaceKey,
+	renameMemoryInSelections,
 	resolveMemorySettings,
 } from "@cline/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -61,6 +62,26 @@ describe("resolveMemorySettings", () => {
 	});
 });
 
+describe("renameMemoryInSelections", () => {
+	it("carries a new name into every workspace's choice", () => {
+		expect(
+			renameMemoryInSelections(
+				{
+					"/a": { store: "acme", recall: ["main", "acme"] },
+					"/b": { store: "main", recall: ["acme"] },
+					"/c": { store: "main", recall: ["main"] },
+				},
+				"acme",
+				"Acme Corp",
+			),
+		).toEqual({
+			"/a": { store: "Acme Corp", recall: ["main", "Acme Corp"] },
+			"/b": { store: "main", recall: ["Acme Corp"] },
+			"/c": { store: "main", recall: ["main"] },
+		});
+	});
+});
+
 describe("Memory", () => {
 	let root: string;
 	let memory: Memory;
@@ -102,6 +123,34 @@ describe("Memory", () => {
 			'already a memory named "acme"',
 		);
 		expect(() => memory.createMemory({ name: "   " })).toThrow("needs a name");
+	});
+
+	it("renames a memory, keeping its notes, their ids and the workspace it was made for", async () => {
+		memory.createMemory({ name: "acme", workspace: "/work/acme" });
+		memory.createMemory({ name: "tally" });
+		await memory.remember({
+			text: "Deploys go out on Fridays.",
+			memory: "acme",
+		});
+		expect(memory.renameMemory("acme", "  Acme   Corp ")).toMatchObject({
+			name: "Acme Corp",
+			notes: 1,
+			workspace: "/work/acme",
+		});
+		expect(memory.list({ memories: ["Acme Corp"] })).toMatchObject([
+			{ id: "m1", memory: "Acme Corp" },
+		]);
+		expect(memory.list({ memories: ["acme"] })).toEqual([]);
+		// The same name is no change; a taken one, the main one and a missing one are refused.
+		expect(memory.renameMemory("tally", "tally").name).toBe("tally");
+		expect(() => memory.renameMemory("tally", "Acme Corp")).toThrow(
+			"already a memory",
+		);
+		expect(() => memory.renameMemory("main", "other")).toThrow(
+			"cannot be renamed",
+		);
+		expect(() => memory.renameMemory("gone", "x")).toThrow("no memory");
+		expect(() => memory.renameMemory("tally", " ")).toThrow("needs a name");
 	});
 
 	it("deletes a memory with its notes", async () => {

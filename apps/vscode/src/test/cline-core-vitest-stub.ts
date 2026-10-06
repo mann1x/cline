@@ -235,6 +235,7 @@ export {
 	MAIN_MEMORY,
 	memorySelectionFor,
 	memoryWorkspaceKey,
+	renameMemoryInSelections,
 	resolveMemorySettings,
 } from "../../../../sdk/packages/shared/src/retrieval/memory-settings"
 

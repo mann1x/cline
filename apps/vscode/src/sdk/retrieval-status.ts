@@ -79,6 +79,10 @@ async function act(request: RetrievalAction): Promise<string | undefined> {
 			const made = memory.createMemory({ name: request.name, ...(workspace ? { workspace } : {}) })
 			return `Made the memory "${made.name}".`
 		}
+		case "renameMemory": {
+			const renamed = memory.renameMemory(request.name, request.to)
+			return renamed.name === request.name ? undefined : `Renamed "${request.name}" to "${renamed.name}".`
+		}
 		case "deleteMemory": {
 			const notes = await memory.deleteMemory(request.name)
 			return `Deleted the memory "${request.name}" and its ${notes} note${notes === 1 ? "" : "s"}.`

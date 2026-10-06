@@ -93,6 +93,14 @@ describe("what the Library and Memory panels ask of the host", () => {
 		expect((await act({ action: "importMemory" })).error).toContain("not an exported memory")
 	})
 
+	it("renames a memory and says what it is called now", async () => {
+		const renamed = await act({ action: "renameMemory", name: "tally", to: " Tally  app " })
+		expect(renamed).toMatchObject({ ok: true, message: 'Renamed "tally" to "Tally app".' })
+		expect(renamed.status.memory.memories).toMatchObject([{ name: "main" }, { name: "Tally app", workspace: "c:/dev/tally" }])
+		expect((await act({ action: "renameMemory", name: "main", to: "x" })).error).toContain("cannot be renamed")
+		await act({ action: "renameMemory", name: "Tally app", to: "tally" })
+	})
+
 	it("deletes a memory and its notes, never the main one", async () => {
 		const deleted = await act({ action: "deleteMemory", name: "tally" })
 		expect(deleted.message).toBe('Deleted the memory "tally" and its 1 note.')

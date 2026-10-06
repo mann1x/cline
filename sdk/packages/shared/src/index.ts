@@ -526,6 +526,7 @@ export {
 	type MemorySettings,
 	memorySelectionFor,
 	memoryWorkspaceKey,
+	renameMemoryInSelections,
 	resolveMemorySettings,
 } from "./retrieval/memory-settings";
 export {

@@ -3,6 +3,7 @@ import {
 	type MemorySelection,
 	type MemorySettings,
 	memorySelectionFor,
+	renameMemoryInSelections,
 	resolveMemorySettings,
 } from "@cline/shared"
 import { parseApiConfigurationProfiles } from "@shared/api-config-profiles"
@@ -109,6 +110,9 @@ const MemorySettingsSection = ({ renderSectionHeader }: MemorySettingsSectionPro
 
 						{workspaceKey !== undefined ? (
 							<MemoryList
+								onRenamed={(from, to) =>
+									void save({ selections: renameMemoryInSelections(settings.selections, from, to) })
+								}
 								onSelect={(next: MemorySelection) =>
 									void save({ selections: { ...settings.selections, [workspaceKey]: next } })
 								}
