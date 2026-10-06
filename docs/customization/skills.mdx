@@ -170,7 +170,11 @@ Cerebriline ships with a small set of skills. They are listed first in the Skill
 | Skill | What it does | Ships |
 |---|---|---|
 | `mandatory-qa-prompt-and-issue-resolution` | After a change to code or configuration, asks whether to run QA on it, runs a QA plan fitted to the change, reports, and asks whether to fix what it found | off |
-| `docker-compose-deploy` | Deploys the open project to local Docker Desktop, from its compose file or its Dockerfile, and verifies the deployment | off |
+| `build-project` | Builds the open project the way the repo defines (its README, CI, scripts or manifest), and its Docker image when there is a Dockerfile or compose file | off |
+| `docker-compose-deploy` | Deploys the open project to local Docker, from its compose file or its Dockerfile, and verifies the deployment | off |
+| `run-project` | Starts the open project (its containers, or its own start command), waits until it answers and opens it in the browser | off |
+
+`build-project`, `docker-compose-deploy` and `run-project` refer to each other and are meant to be turned on together, though each works alone.
 
 A built-in skill can be turned on and off and opened to read. It cannot be edited or deleted, because an update replaces its file. For the same reason the switch is kept in your settings (`bundledSkills` in the global settings file) and survives updates; a skill that ships off stays off until you turn it on.
 
