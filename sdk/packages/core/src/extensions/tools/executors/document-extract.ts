@@ -288,6 +288,12 @@ export async function readDocumentForBook(
 		maxFileSizeBytes?: number;
 		reader?: DocumentReaderSettings;
 		describeImages?: DescribeImages;
+		/**
+		 * Take the pictures out as well. Off for a read that only compares
+		 * text: a scanned book is a picture a page, a gigabyte of them decoded.
+		 * @default true
+		 */
+		pictures?: boolean;
 	},
 ): Promise<BookDocument> {
 	const stat = await fs.stat(filePath).catch(() => undefined);
@@ -325,7 +331,7 @@ export async function readDocumentForBook(
 	try {
 		result = await read(filePath, data, verdict.format, {
 			images,
-			wantImages: true,
+			wantImages: options.pictures ?? true,
 			scratchDir,
 			...(recognition?.recognize ? { recognize: recognition.recognize } : {}),
 		});

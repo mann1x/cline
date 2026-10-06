@@ -189,11 +189,39 @@ type TesseractWorker = Awaited<
 	ReturnType<typeof import("tesseract.js")["createWorker"]>
 >;
 
+/** How long one page may take: a full page is seconds, a dense one tens. */
+const RECOGNIZE_LIMIT_MS = 180_000;
+/** How long starting the worker may take: it loads a 10 MB language model. */
+const OPEN_LIMIT_MS = 120_000;
+const CLOSE_LIMIT_MS = 10_000;
+
+/**
+ * A promise with a limit. tesseract runs in a worker thread, and a worker
+ * that dies (out of memory, most often) answers nothing: the call it was
+ * serving stays open for good.
+ */
+function within<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	return Promise.race([
+		work,
+		new Promise<never>((_resolve, reject) => {
+			timer = setTimeout(
+				() => reject(new Error(`${what} gave no answer in ${ms / 1000}s`)),
+				ms,
+			);
+		}),
+	]).finally(() => clearTimeout(timer));
+}
+
 /** One tesseract worker, for every page of one call. */
 export class TesseractReader {
+	/** Why the worker is gone, once it is: nothing more is asked of it. */
+	private dead: Error | undefined;
+
 	private constructor(
 		private readonly worker: TesseractWorker,
 		readonly languages: readonly string[],
+		private readonly failure: { error?: Error; raise?: (error: Error) => void },
 	) {}
 
 	static async open(
@@ -206,33 +234,76 @@ export class TesseractReader {
 		const tesseract =
 			(loaded as unknown as { default?: typeof loaded }).default ?? loaded;
 		const workerPath = resolveTesseractWorker();
-		const worker = await tesseract.createWorker(
-			languages.join("+"),
-			tesseract.OEM.LSTM_ONLY,
-			{
+		const failure: { error?: Error; raise?: (error: Error) => void } = {};
+		const worker = await within(
+			tesseract.createWorker(languages.join("+"), tesseract.OEM.LSTM_ONLY, {
 				langPath,
 				gzip: true,
 				// Not "write", the default: it caches each model into the process's
 				// working directory, which here is the user's workspace.
 				cacheMethod: "none",
 				...(workerPath ? { workerPath } : {}),
-				errorHandler: () => {},
-			},
+				// The worker's own errors arrive here and nowhere else: without
+				// this the page being read would wait on a worker that is gone.
+				errorHandler: (problem: unknown) => {
+					const error =
+						problem instanceof Error
+							? problem
+							: new Error(`the OCR worker failed: ${String(problem)}`);
+					failure.error = error;
+					failure.raise?.(error);
+				},
+			}),
+			OPEN_LIMIT_MS,
+			"Starting the OCR worker",
 		);
-		return new TesseractReader(worker, languages);
+		return new TesseractReader(worker, languages, failure);
 	}
 
 	async recognize(
 		png: Uint8Array,
 	): Promise<{ text: string; confidence: number }> {
-		const { data } = await this.worker.recognize(Buffer.from(png));
-		return {
-			text: data.text ?? "",
-			confidence: Math.round(data.confidence ?? 0),
-		};
+		if (this.dead) throw this.dead;
+		if (this.failure.error) {
+			this.dead = this.failure.error;
+			throw this.dead;
+		}
+		try {
+			const { data } = await within(
+				Promise.race([
+					this.worker.recognize(Buffer.from(png)),
+					new Promise<never>((_resolve, reject) => {
+						this.failure.raise = reject;
+					}),
+				]),
+				RECOGNIZE_LIMIT_MS,
+				"The OCR worker",
+			);
+			return {
+				text: data.text ?? "",
+				confidence: Math.round(data.confidence ?? 0),
+			};
+		} catch (error) {
+			// One page that fails to read is the worker's answer and it goes on.
+			// A worker that is silent or gone is not asked again: every later
+			// page would wait out the same limit.
+			if (
+				this.failure.error ||
+				(error instanceof Error && /gave no answer/.test(error.message))
+			) {
+				this.dead = error instanceof Error ? error : new Error(String(error));
+			}
+			throw error;
+		} finally {
+			this.failure.raise = undefined;
+		}
 	}
 
 	async close(): Promise<void> {
-		await this.worker.terminate().catch(() => {});
+		await within(
+			this.worker.terminate(),
+			CLOSE_LIMIT_MS,
+			"Stopping the OCR worker",
+		).catch(() => {});
 	}
 }

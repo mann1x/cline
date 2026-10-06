@@ -176,15 +176,23 @@ async function resolveFiles(
 	return { files, notes };
 }
 
-/** A file as text, with its pictures, its hash and its fingerprint. Read once a session. */
+/**
+ * A file as text, with its hash and its fingerprint, and with its pictures
+ * when they are asked for.
+ *
+ * Comparing reads the text alone and is kept for the session. Adding reads
+ * the pictures too and is not kept: a scanned book is a picture a page, over
+ * a gigabyte decoded, and a few of those held at once is the whole process.
+ */
 async function readSource(
 	file: string,
 	config: LibraryToolsConfig,
 	library: Library,
+	pictures: boolean,
 ): Promise<ReadSource> {
 	const stat = await fs.stat(file);
 	const key = `${file}:${stat.size}:${stat.mtimeMs}`;
-	const cached = readCache.get(key);
+	const cached = pictures ? undefined : readCache.get(key);
 	if (cached) return cached;
 	const extension = path.extname(file).toLowerCase();
 	let document: BookDocument;
@@ -192,6 +200,7 @@ async function readSource(
 		document = await readDocumentForBook(file, {
 			scratchDir: path.join(library.directory, "scratch"),
 			reader: config.documentReader,
+			pictures,
 		});
 	} else {
 		if (stat.size > MAX_TEXT_FILE_BYTES) {
@@ -229,7 +238,8 @@ async function readSource(
 		isbn: findIsbn(document.markdown),
 		fingerprint: textFingerprint(document.markdown),
 	};
-	if (readCache.size > 32) readCache.clear();
+	if (pictures) return read;
+	if (readCache.size > 64) readCache.clear();
 	readCache.set(key, read);
 	return read;
 }
@@ -487,7 +497,7 @@ function createLibraryCheckTool(options: CreateLibraryToolsOptions): AgentTool {
 			for (const file of files) {
 				if (context?.signal?.aborted) break;
 				try {
-					read.push(await readSource(file, config, library));
+					read.push(await readSource(file, config, library, false));
 				} catch (error) {
 					unread.set(file, errorText(error));
 				}
@@ -622,7 +632,7 @@ function createLibraryAddTool(options: CreateLibraryToolsOptions): AgentTool {
 			for (const file of files) {
 				if (context?.signal?.aborted) return "Stopped; nothing was added.";
 				try {
-					read.push(await readSource(file, config, library));
+					read.push(await readSource(file, config, library, true));
 				} catch (error) {
 					lines.push(`${file}: not read, ${errorText(error)}`);
 				}

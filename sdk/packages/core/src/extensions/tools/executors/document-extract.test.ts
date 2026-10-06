@@ -18,6 +18,7 @@ import { parseUnitRange } from "./document/range";
 import {
 	createDocumentExtractExecutor,
 	markdownToText,
+	readDocumentForBook,
 } from "./document-extract";
 import { createFileReadExecutor } from "./file-read";
 
@@ -152,6 +153,21 @@ describe("extract_document", () => {
 			/damaged: it ends before its index/,
 		);
 		expect(Date.now() - started).toBeLessThan(5_000);
+	});
+
+	it("reads a book's text alone when the pictures are not wanted", async () => {
+		const file = join(workspace, place("probe.epub"));
+		const scratchDir = join(workspace, "scratch");
+		const whole = await readDocumentForBook(file, { scratchDir });
+		const text = await readDocumentForBook(file, {
+			scratchDir,
+			pictures: false,
+		});
+		expect(whole.images.length).toBeGreaterThanOrEqual(2);
+		expect(text.images).toEqual([]);
+		expect(text.markdown).toContain(
+			"First paragraph with a red picture below.",
+		);
 	});
 
 	it("takes an ebook's pictures before the reader deletes them", async () => {

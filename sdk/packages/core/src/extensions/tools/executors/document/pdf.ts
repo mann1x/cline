@@ -161,18 +161,28 @@ function isGarbled(text: string): boolean {
 	return bad / letters.length > 0.3;
 }
 
+/** How long one picture may take to decode before it is left out. */
+const IMAGE_DECODE_LIMIT_MS = 60_000;
+
 function objectOf(
 	page: PDFPageProxy,
 	key: string,
 ): Promise<DecodedImage | null> {
 	const objects = key.startsWith("g_") ? page.commonObjs : page.objs;
 	return new Promise((resolve) => {
+		// pdf.js calls back when the picture is decoded, and never when its
+		// decoder failed: without a limit one such picture holds the whole read.
+		const timer = setTimeout(() => resolve(null), IMAGE_DECODE_LIMIT_MS);
+		const done = (value: DecodedImage | null) => {
+			clearTimeout(timer);
+			resolve(value);
+		};
 		try {
 			objects.get(key, (value: unknown) =>
-				resolve((value as DecodedImage) ?? null),
+				done((value as DecodedImage) ?? null),
 			);
 		} catch {
-			resolve(null);
+			done(null);
 		}
 	});
 }
