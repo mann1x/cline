@@ -120,6 +120,28 @@ defaults are a starting point and will be tuned.
 
 Not yet: the Library in the CLI, and adding documents from the panel itself.
 
+### Memory
+
+Notes the model keeps from one task to the next, so what it worked out once is
+not worked out again: a decision and its reason, how the project is built and
+tested, a convention, something you said you prefer. Turn it on under
+**Settings > Memory**, a panel of its own beside Library.
+
+The model gets three tools: `remember` keeps a note, `recall` returns the notes
+that best match a question, and `forget` removes one that no longer holds. A
+note belongs to the project it was made in or to every project; a recall looks
+in both and never in another project's. Notes are kept in Cerebriline's data
+folder, not in your repository.
+
+Notes are found by keyword, and by meaning as well once an embedding model is
+named on the **Embedding** tab, which Memory shares with the Library.
+
+The model decides when to recall. It is told to look at the start of a task,
+but nothing recalls for it yet; if a task depends on an earlier note, say
+"check your notes first".
+
+In the CLI, `--memory` offers the same tools.
+
 ## [4.100.240] — 2026-10-05
 
 ### The chat keeps following on every monitor

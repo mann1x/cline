@@ -162,6 +162,7 @@
 							"features/change-protocol",
 							"features/document-reader",
 							"features/library",
+							"features/memory",
 							"features/media-endpoints"
 						]
 					},

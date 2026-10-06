@@ -1,0 +1,64 @@
+---
+title: "Memory"
+sidebarTitle: "Memory"
+description: "Notes the model keeps from one task to the next: how to turn it on, what gets kept, where notes live, and how they are found again."
+---
+
+**Memory** lets the model keep notes between tasks, so what it worked out once does not have to be worked out again: a decision and its reason, how the project is built and tested, a convention, something you said you prefer, a trap that cost time.
+
+Memory is **off by default**. Notes are kept in Cerebriline's data folder, not in your project, so nothing is added to the repository.
+
+## Turning it on
+
+Open **Settings > Memory** and tick **Enable Memory**. It applies from the next task.
+
+The model then has three tools:
+
+| Tool | What it does |
+| --- | --- |
+| `remember` | Keeps one note, with a few tags to find it by. |
+| `recall` | Returns the notes that best match a question, best first, each with its id, date, scope and tags. With no question it lists the newest notes. |
+| `forget` | Removes a note by its id, when it no longer holds. |
+
+You can simply say so: *"remember that we run the tests with node --test, not jest"*, *"what do you know about how this project is deployed?"*, *"forget the note about the staging server"*.
+
+The model decides when to call these. It is told to look for notes at the start of a task and before deciding something, but nothing recalls for it: a model that does not ask does not get its notes. If a task depends on something noted earlier, say *"check your notes first"*.
+
+## Project notes and global notes
+
+Every note has a scope.
+
+| Scope | Seen in |
+| --- | --- |
+| **project** | Only the workspace it was made in. How this project is built, its conventions, its decisions. |
+| **global** | Every project. Your own preferences. |
+
+A recall looks in the current project's notes and in the global ones, and never in another project's. The model chooses the scope when it keeps a note; **Where a note is kept when the model does not say** in the panel decides the rest, and starts on *This project*.
+
+A project is the workspace folder. Open the same repository from a different folder and its project notes are not there; global notes are.
+
+## How notes are found
+
+By keyword, with nothing to download and no model to configure.
+
+To find notes by meaning as well, tick **Use an embedding model** in the API configuration and name the model on the **Embedding** tab. Memory and the [Library](/features/library) share that tab: one embedding model and one optional reranking model serve both, and both use the same LanceDB download. A note kept before an embedding model was named is found by keyword until the next note is kept, which embeds the ones still waiting.
+
+## Settings
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| Enable Memory | off | Offers the three tools. |
+| Where a note is kept when the model does not say | This project | The scope of a note the model gave no scope. |
+| Notes a recall returns | 5 | The most notes one recall gives the model. Each one takes room in the conversation. |
+| Relevance threshold | 0 | With a reranking model, notes scored below this are left out. 0 keeps them all. Without a reranker it has no effect. |
+
+## Limits
+
+- A note is at most 4,000 characters and is kept whole; it is not cut into passages.
+- The same note kept twice in the same scope is kept once.
+- Notes are not synced between machines. They live in the data folder of the machine that made them.
+- There is no list of notes in the panel yet. Ask the model: *"list your notes"*.
+
+## In the CLI
+
+`--memory` (or `CLINE_MEMORY=1`) offers the same tools on the panel's defaults. An embedding model is named by environment: `CLINE_EMBEDDING_BASE_URL`, `CLINE_EMBEDDING_MODEL` and, where the endpoint needs one, `CLINE_EMBEDDING_API_KEY`. Notes are kept under `--data-dir`.
