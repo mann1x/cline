@@ -51,7 +51,15 @@ describe("what the Library and Memory panels ask of the host", () => {
 		const status = await readRetrievalStatus()
 		expect(status.lancedb).toMatchObject({ version: "0.39.0", installed: false, working: false, installing: false })
 		expect(status.embeddingModel).toBeUndefined()
-		expect(status.library).toEqual({ enabled: false, collections: 0, documents: 0, passages: 0, embeddedDocuments: 0 })
+		expect(status.library).toEqual({
+			enabled: false,
+			collections: 0,
+			documents: 0,
+			passages: 0,
+			embeddedDocuments: 0,
+			vectorSets: [],
+		})
+		expect(status.embedJobs).toEqual({})
 		expect(status.memory).toMatchObject({ enabled: false, notes: 0, memories: [{ name: "main", main: true, notes: 0 }] })
 		expect(status.workspace).toEqual({ path: "C:\\Dev\\tally", key: "c:/dev/tally", name: "tally" })
 	})
@@ -106,6 +114,16 @@ describe("what the Library and Memory panels ask of the host", () => {
 		expect(deleted.message).toBe('Deleted the memory "tally" and its 1 note.')
 		expect(deleted.status.memory.memories.map((memory) => memory.name)).toEqual(["main"])
 		expect((await act({ action: "deleteMemory", name: "main" })).error).toContain("cannot be deleted")
+	})
+
+	it("will not start embedding with no embedding model, and says which thing is missing", async () => {
+		const result = await act({ action: "embedNow", target: "library" })
+		expect(result.ok).toBe(false)
+		expect(result.error).toContain("is not ticked")
+		expect(result.status.embedJobs).toEqual({})
+		expect((await act({ action: "deleteVectors", target: "memory", table: "vectors_x_3" })).error).toBe(
+			"There is no such set of vectors.",
+		)
 	})
 
 	it("answers a request it cannot read with the status and the reason", async () => {

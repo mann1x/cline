@@ -1,7 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { basename } from "node:path"
 import { lanceDbStatus, memoryWorkspaceKey, resolveLanceDbRuntimeDirectory, sharedLibrary, sharedMemory } from "@cline/core"
-import type { RetrievalAction, RetrievalActionResult, RetrievalStatus } from "@shared/retrieval-status"
+import type { RetrievalAction, RetrievalActionResult, RetrievalEmbedJob, RetrievalStatus } from "@shared/retrieval-status"
+import { Logger } from "@shared/services/Logger"
 import { getCwd } from "@utils/path"
 import { HostProvider } from "@/hosts/host-provider"
 import {
@@ -27,6 +28,62 @@ import {
  * never shows a state older than the thing it just did.
  */
 
+const embedJobs: { library?: RetrievalEmbedJob; memory?: RetrievalEmbedJob } = {}
+
+/**
+ * Give vectors to everything in a store that has none for the embedding
+ * model now set. Started from a panel and followed through the status: for
+ * a library of books it runs for a long while, and it is the user who
+ * decides when, not a task that happens to add a document.
+ */
+function startEmbedding(target: "library" | "memory"): string | undefined {
+	if (embedJobs[target]?.running) {
+		return undefined
+	}
+	const embedding = readEmbeddingEndpoint()
+	if (!embedding) {
+		throw new Error(describeEmbeddingEndpoint().problem ?? "No embedding model is set.")
+	}
+	const job: RetrievalEmbedJob = { target, running: true, done: 0, total: 0 }
+	embedJobs[target] = job
+	const run =
+		target === "library"
+			? sharedLibrary().embedPending({
+					embedding,
+					settings: readLibrarySettings(),
+					probe: true,
+					onProgress: (progress) => {
+						job.done = progress.documentIndex + 1
+						job.total = progress.documentCount
+					},
+				})
+			: sharedMemory().embedPending({
+					embedding,
+					probe: true,
+					onProgress: (progress) => {
+						job.done = progress.done
+						job.total = progress.total
+					},
+				})
+	const what = target === "library" ? "document" : "note"
+	void run
+		.then((result) => {
+			job.result = result.skipped
+				? `Nothing was embedded: ${result.skipped}`
+				: result.documents === 0
+					? `Every ${what} already has vectors for ${embedding.model}.`
+					: `Embedded ${result.documents} ${what}${result.documents === 1 ? "" : "s"} with ${embedding.model}.`
+		})
+		.catch((error) => {
+			job.error = `Embedding stopped after ${job.done} ${what}${job.done === 1 ? "" : "s"}: ${error instanceof Error ? error.message : String(error)}. What was done is kept; run it again to carry on.`
+			Logger.warn(`[Library] ${job.error}`)
+		})
+		.finally(() => {
+			job.running = false
+		})
+	return undefined
+}
+
 export async function readRetrievalStatus(): Promise<RetrievalStatus> {
 	const path = await getCwd()
 	const embedding = readEmbeddingEndpoint()
@@ -34,6 +91,14 @@ export async function readRetrievalStatus(): Promise<RetrievalStatus> {
 	const libraryCounts = sharedLibrary().store.counts(embedding?.model)
 	const memory = sharedMemory()
 	const memoryCounts = memory.counts(embedding?.model)
+	// Opening LanceDB is what listing its sets takes; where it does not load,
+	// there are none to list and the box above says why.
+	const [libraryVectorSets, memoryVectorSets] = await Promise.all([
+		sharedLibrary()
+			.vectorSets(embedding?.model)
+			.catch(() => []),
+		memory.vectorSets(embedding?.model).catch(() => []),
+	])
 	return {
 		lancedb: {
 			...lanceDbStatus({ directory: resolveLanceDbRuntimeDirectory() }),
@@ -49,13 +114,16 @@ export async function readRetrievalStatus(): Promise<RetrievalStatus> {
 			documents: libraryCounts.documents,
 			passages: libraryCounts.chunks,
 			embeddedDocuments: libraryCounts.embeddedDocuments,
+			vectorSets: libraryVectorSets,
 		},
 		memory: {
 			enabled: readMemorySettings().enabled,
 			memories: memory.listMemories(),
 			notes: memoryCounts.notes,
 			embeddedNotes: memoryCounts.embeddedNotes,
+			vectorSets: memoryVectorSets,
 		},
+		embedJobs: { ...embedJobs },
 		// The folder's name from either kind of separator: the host's own basename knows only its own.
 		workspace: {
 			path,
@@ -84,6 +152,15 @@ async function act(request: RetrievalAction, outcome: Outcome): Promise<string |
 		case "checkEmbedding":
 			outcome.check = await checkEmbeddingEndpoint()
 			return undefined
+		case "embedNow":
+			return startEmbedding(request.target)
+		case "deleteVectors": {
+			const store = request.target === "library" ? sharedLibrary() : memory
+			if (!(await store.deleteVectorSet(request.table))) {
+				throw new Error("There is no such set of vectors.")
+			}
+			return "Deleted that set of vectors. Its documents are embedded again if its model is set again."
+		}
 		case "checkReranking":
 			outcome.check = await checkRerankingEndpoint()
 			return undefined

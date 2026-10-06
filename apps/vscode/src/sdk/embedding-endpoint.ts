@@ -1,4 +1,11 @@
-import { embedTexts, type RetrievalEndpoint, rerankDocuments, resolveRetrievalBaseUrl } from "@cline/core"
+import {
+	embedTexts,
+	type RetrievalEndpoint,
+	rerankDocuments,
+	resolveRetrievalBaseUrl,
+	sharedLibrary,
+	sharedMemory,
+} from "@cline/core"
 import type { RetrievalEmbeddingModels, RetrievalEmbeddingState, RetrievalEndpointCheck } from "@shared/retrieval-status"
 import axios from "axios"
 import { StateManager } from "@/core/storage/StateManager"
@@ -180,6 +187,14 @@ export async function checkEmbeddingEndpoint(): Promise<RetrievalEndpointCheck> 
 	const started = Date.now()
 	try {
 		const result = await embedTexts(endpoint, ["Cerebriline checks that this model embeds."], { maxAttempts: 1 })
+		// The size it returns now, recorded as a search would: if it changed,
+		// the panels show at once that everything has to be embedded again.
+		try {
+			sharedLibrary().store.noteDimension(described.model, result.dimension)
+			sharedMemory().noteDimension(described.model, result.dimension)
+		} catch {
+			// The check's own answer stands whether or not it could be recorded.
+		}
 		const where = described.source === "provider" ? "the session's provider" : "the typed endpoint"
 		return {
 			ok: true,

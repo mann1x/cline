@@ -123,6 +123,14 @@ const SCHEMA = [
 		embedded_at TEXT NOT NULL,
 		PRIMARY KEY (document_id, model)
 	)`,
+	// The size of the vectors each embedding model was last seen to return.
+	// "Embedded" means embedded at that size: the same model name coming back
+	// with another size is a set of vectors that has yet to be made.
+	`CREATE TABLE IF NOT EXISTS embedding_dimensions (
+		model TEXT PRIMARY KEY,
+		dimension INTEGER NOT NULL,
+		seen_at TEXT NOT NULL
+	)`,
 	// unicode61 and no stemmer: a library is not all in one language.
 	`CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 		text, context,
@@ -399,20 +407,78 @@ export class LibraryStore {
 	}
 
 	/** Documents with chunks and no vectors yet for this model, oldest first. */
+	/**
+	 * The documents with no vectors for this model at the size it returns
+	 * now. The size is the one last seen (`noteDimension`) unless given; a
+	 * model never seen has no size to hold a document to.
+	 */
 	documentsWithoutEmbedding(
 		model: string,
 		collectionIds: readonly number[] = [],
+		dimension: number | undefined = this.knownDimension(model),
 	): LibraryDocument[] {
 		return this.db
 			.prepare(
 				`SELECT d.* FROM documents d
 				WHERE d.chunk_count > 0
-				AND NOT EXISTS (SELECT 1 FROM document_embeddings e WHERE e.document_id = d.id AND e.model = ?)
+				AND NOT EXISTS (
+					SELECT 1 FROM document_embeddings e
+					WHERE e.document_id = d.id AND e.model = ?
+					${dimension !== undefined ? "AND e.dimension = ?" : ""}
+				)
 				${collectionIds.length > 0 ? `AND d.collection_id IN (${collectionIds.map(() => "?").join(",")})` : ""}
 				ORDER BY d.id`,
 			)
-			.all(model, ...collectionIds)
+			.all(
+				model,
+				...(dimension !== undefined ? [dimension] : []),
+				...collectionIds,
+			)
 			.map((row) => this.toDocument(row));
+	}
+
+	/** Record the vector size a model returned. True when it differs from the last one seen. */
+	noteDimension(model: string, dimension: number): boolean {
+		const known = this.knownDimension(model);
+		if (known === dimension) return false;
+		this.db
+			.prepare(
+				`INSERT INTO embedding_dimensions(model, dimension, seen_at) VALUES (?, ?, ?)
+				ON CONFLICT(model) DO UPDATE SET dimension = excluded.dimension, seen_at = excluded.seen_at`,
+			)
+			.run(model, dimension, new Date().toISOString());
+		return known !== undefined;
+	}
+
+	knownDimension(model: string): number | undefined {
+		const row = this.db
+			.prepare("SELECT dimension FROM embedding_dimensions WHERE model = ?")
+			.get(model);
+		return row ? Number(row.dimension) : undefined;
+	}
+
+	/** Every model and size documents are recorded as embedded with, and how many. */
+	embeddingSets(): { model: string; dimension: number; documents: number }[] {
+		return this.db
+			.prepare(
+				`SELECT model, dimension, COUNT(*) AS n FROM document_embeddings
+				GROUP BY model, dimension ORDER BY model, dimension`,
+			)
+			.all()
+			.map((row) => ({
+				model: String(row.model),
+				dimension: Number(row.dimension),
+				documents: Number(row.n),
+			}));
+	}
+
+	/** Forget that documents were embedded with this model at this size: their vectors are gone. */
+	forgetEmbeddings(model: string, dimension: number): void {
+		this.db
+			.prepare(
+				"DELETE FROM document_embeddings WHERE model = ? AND dimension = ?",
+			)
+			.run(model, dimension);
 	}
 
 	markEmbedded(documentId: number, model: string, dimension: number): void {
@@ -425,7 +491,12 @@ export class LibraryStore {
 	}
 
 	/** Totals, and how many documents have vectors for this model. */
-	counts(model?: string): {
+	counts(
+		model?: string,
+		dimension: number | undefined = model
+			? this.knownDimension(model)
+			: undefined,
+	): {
 		collections: number;
 		documents: number;
 		chunks: number;
@@ -438,10 +509,16 @@ export class LibraryStore {
 			documents: one("SELECT COUNT(*) AS n FROM documents"),
 			chunks: one("SELECT COUNT(*) AS n FROM chunks"),
 			embeddedDocuments: model
-				? one(
-						"SELECT COUNT(*) AS n FROM document_embeddings WHERE model = ?",
-						model,
-					)
+				? dimension !== undefined
+					? one(
+							"SELECT COUNT(*) AS n FROM document_embeddings WHERE model = ? AND dimension = ?",
+							model,
+							dimension,
+						)
+					: one(
+							"SELECT COUNT(*) AS n FROM document_embeddings WHERE model = ?",
+							model,
+						)
 				: 0,
 		};
 	}

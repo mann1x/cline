@@ -33,7 +33,14 @@ const baseStatus = () => ({
 		model: "",
 		problem: "No embedding model is named on the Embedding tab: the field is empty.",
 	} as Record<string, unknown>,
-	library: { enabled: true, collections: 1, documents: 3, passages: 40, embeddedDocuments: 0 },
+	library: {
+		enabled: true,
+		collections: 1,
+		documents: 3,
+		passages: 40,
+		embeddedDocuments: 0,
+		vectorSets: [] as Array<Record<string, unknown>>,
+	},
 	memory: {
 		enabled: true,
 		memories: [{ name: "main", main: true, notes: 2, createdAt: "2026-10-06T00:00:00.000Z" }] as Array<
@@ -41,7 +48,9 @@ const baseStatus = () => ({
 		>,
 		notes: 2,
 		embeddedNotes: 0,
+		vectorSets: [] as Array<Record<string, unknown>>,
 	},
+	embedJobs: {} as Record<string, Record<string, unknown>>,
 	workspace: { path: "C:\\Dev\\tally", key: "c:/dev/tally", name: "tally" },
 })
 let status = baseStatus()
@@ -183,5 +192,76 @@ describe("the Library panel", () => {
 		render(<LibrarySettingsSection renderSectionHeader={header} />)
 		expect(await screen.findByText("Downloading LanceDB 0.39.0: package 5 of 27")).toBeTruthy()
 		expect(screen.queryByText(/^Download LanceDB/)).toBeNull()
+	})
+
+	const working = () => {
+		status = baseStatus()
+		status.lancedb = { ...status.lancedb, installed: true, working: true }
+		status.embeddingModel = "bge-m3"
+		actions.length = 0
+		state.libraryEnabled = true
+	}
+
+	it("offers to embed what has no vectors for the model now set, and says what that costs meanwhile", async () => {
+		working()
+		status.library.embeddedDocuments = 1
+		render(<LibrarySettingsSection renderSectionHeader={header} />)
+		fireEvent.click(await screen.findByText(/Embed 2 documents now/))
+		await waitFor(() => expect(actions).toContainEqual({ action: "embedNow", target: "library" }))
+		expect(screen.getByText(/2 of 3 documents have no vectors for bge-m3 and are found by keyword only\./)).toBeTruthy()
+	})
+
+	it("shows a run's progress in place of the button, and how the last one ended", async () => {
+		working()
+		status.embedJobs = { library: { target: "library", running: true, done: 1, total: 3 } }
+		const { unmount } = render(<LibrarySettingsSection renderSectionHeader={header} />)
+		expect(await screen.findByText("Embedding with bge-m3: 1 of 3 documents…")).toBeTruthy()
+		expect(screen.queryByText(/documents now/)).toBeNull()
+		unmount()
+
+		working()
+		status.library.embeddedDocuments = 1
+		status.embedJobs = {
+			library: { target: "library", running: false, done: 1, total: 3, error: "Embedding stopped after 1 document: 503." },
+		}
+		render(<LibrarySettingsSection renderSectionHeader={header} />)
+		expect(await screen.findByText("Embedding stopped after 1 document: 503.")).toBeTruthy()
+		expect(screen.getByText(/Embed 2 documents now/)).toBeTruthy()
+	})
+
+	it("lists the sets of vectors on disk, and deletes one not in use after a second click", async () => {
+		working()
+		status.library.embeddedDocuments = 3
+		status.library.vectorSets = [
+			{
+				table: "vectors_bge_m3_1024",
+				model: "bge-m3",
+				dimension: 1024,
+				vectors: 40,
+				documents: 3,
+				bytes: 3 * 1024 * 1024,
+				current: true,
+			},
+			{
+				table: "vectors_old_768",
+				model: "old-embed",
+				dimension: 768,
+				vectors: 38,
+				documents: 3,
+				bytes: 2048,
+				current: false,
+			},
+		]
+		render(<LibrarySettingsSection renderSectionHeader={header} />)
+		expect(await screen.findByText("bge-m3, 1024 dimensions, 40 vectors, 3 MB (in use)")).toBeTruthy()
+		expect(screen.getByText("old-embed, 768 dimensions, 38 vectors, 2 KB")).toBeTruthy()
+		// Only the set not in use can be deleted.
+		expect(screen.getAllByText("Delete")).toHaveLength(1)
+		fireEvent.click(screen.getByText("Delete"))
+		expect(actions.some((action) => action.action === "deleteVectors")).toBe(false)
+		fireEvent.click(screen.getByText("Delete 38 vectors"))
+		await waitFor(() =>
+			expect(actions).toContainEqual({ action: "deleteVectors", target: "library", table: "vectors_old_768" }),
+		)
 	})
 })

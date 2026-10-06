@@ -27,7 +27,12 @@ import {
 } from "@cline/shared";
 import { resolveClineDataDir } from "@cline/shared/storage";
 import type { RetrievalEndpoint } from "./embedding-client";
-import { Library, type LibraryOptions } from "./library";
+import {
+	type EmbedPendingResult,
+	Library,
+	type LibraryOptions,
+	type LibraryVectorSet,
+} from "./library";
 import type { LibraryDocument } from "./library-store";
 
 export interface MemoryItem {
@@ -533,6 +538,41 @@ export class Memory {
 		this.migrate();
 		const counts = this.library.store.counts(model);
 		return { notes: counts.documents, embeddedNotes: counts.embeddedDocuments };
+	}
+
+	/** Give vectors to every note that has none for this embedding model. */
+	embedPending(options: {
+		embedding: RetrievalEndpoint;
+		onProgress?: (progress: { done: number; total: number }) => void;
+		probe?: boolean;
+		signal?: AbortSignal;
+	}): Promise<EmbedPendingResult> {
+		this.migrate();
+		return this.library.embedPending({
+			embedding: options.embedding,
+			settings: NOTE_SETTINGS,
+			probe: options.probe,
+			signal: options.signal,
+			onProgress: (progress) =>
+				options.onProgress?.({
+					done: progress.documentIndex + 1,
+					total: progress.documentCount,
+				}),
+		});
+	}
+
+	/** The sets of vectors the notes have, one per embedding model and size. */
+	vectorSets(current?: string): Promise<LibraryVectorSet[]> {
+		return this.library.vectorSets(current);
+	}
+
+	deleteVectorSet(table: string): Promise<boolean> {
+		return this.library.deleteVectorSet(table);
+	}
+
+	/** Record the vector size a model returned, as a search would. */
+	noteDimension(model: string, dimension: number): void {
+		this.library.store.noteDimension(model, dimension);
 	}
 
 	/** Whether notes can be found by meaning here now, and if not, why. */

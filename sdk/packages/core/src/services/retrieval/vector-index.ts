@@ -183,6 +183,45 @@ export class VectorIndex implements VectorSearcher {
 		return table ? await table.countRows() : 0;
 	}
 
+	/**
+	 * Remove these documents' vectors from one model's table only. For
+	 * embedding a document again: its vectors for other models are not this
+	 * run's to touch, and deleting them empties a set the store still counts.
+	 */
+	async deleteDocumentsIn(
+		model: string,
+		dimension: number,
+		documentIds: readonly number[],
+	): Promise<void> {
+		if (documentIds.length === 0) return;
+		const table = await this.table(model, dimension);
+		await table?.delete(`document_id IN (${integers(documentIds)})`);
+	}
+
+	/** Every set of vectors there is: its table, the size of its vectors, and how many. */
+	async sets(): Promise<{ table: string; dimension: number; rows: number }[]> {
+		const sets: { table: string; dimension: number; rows: number }[] = [];
+		for (const name of await this.tableNames()) {
+			const table = this.tables.get(name) ?? (await this.db.openTable(name));
+			this.tables.set(name, table);
+			sets.push({
+				table: name,
+				dimension: Number(name.slice(name.lastIndexOf("_") + 1)) || 0,
+				rows: await table.countRows(),
+			});
+		}
+		return sets;
+	}
+
+	/** Delete a whole set of vectors. */
+	async dropSet(table: string): Promise<boolean> {
+		if (!(await this.tableNames()).includes(table)) return false;
+		this.tables.get(table)?.close?.();
+		this.tables.delete(table);
+		await this.db.dropTable(table);
+		return true;
+	}
+
 	/** Remove the vectors of these documents, in every table. */
 	async deleteDocuments(documentIds: readonly number[]): Promise<void> {
 		if (documentIds.length === 0) return;

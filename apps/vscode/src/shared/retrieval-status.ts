@@ -61,13 +61,51 @@ export interface RetrievalEndpointCheck {
 	detail: string
 }
 
+/** One set of vectors on disk: an embedding model at one vector size. */
+export interface RetrievalVectorSet {
+	table: string
+	model: string
+	dimension: number
+	vectors: number
+	documents: number
+	bytes: number
+	/** The set the embedding model now set writes to and searches. */
+	current: boolean
+}
+
+/** A run that gives vectors to what has none, started from a panel. */
+export interface RetrievalEmbedJob {
+	target: "library" | "memory"
+	running: boolean
+	done: number
+	total: number
+	/** How the last run ended, when it has. */
+	result?: string
+	error?: string
+}
+
 export interface RetrievalStatus {
 	lancedb: RetrievalLanceDbStatus
 	/** The embedding model in use, when one is configured. */
 	embeddingModel?: string
 	embedding: RetrievalEmbeddingState
-	library: { enabled: boolean; collections: number; documents: number; passages: number; embeddedDocuments: number }
-	memory: { enabled: boolean; memories: RetrievalMemoryInfo[]; notes: number; embeddedNotes: number }
+	library: {
+		enabled: boolean
+		collections: number
+		documents: number
+		passages: number
+		embeddedDocuments: number
+		vectorSets: RetrievalVectorSet[]
+	}
+	memory: {
+		enabled: boolean
+		memories: RetrievalMemoryInfo[]
+		notes: number
+		embeddedNotes: number
+		vectorSets: RetrievalVectorSet[]
+	}
+	/** The embedding runs started from the panels, one per store. */
+	embedJobs: { library?: RetrievalEmbedJob; memory?: RetrievalEmbedJob }
 	/** The workspace the panel is open in. */
 	workspace: { path: string; key: string; name: string }
 }
@@ -89,6 +127,8 @@ export type RetrievalAction =
 	| { action: "embeddingModels" }
 	| { action: "checkEmbedding" }
 	| { action: "checkReranking" }
+	| { action: "embedNow"; target: "library" | "memory" }
+	| { action: "deleteVectors"; target: "library" | "memory"; table: string }
 	| { action: "createMemory"; name: string; forWorkspace?: boolean }
 	| { action: "renameMemory"; name: string; to: string }
 	| { action: "deleteMemory"; name: string }

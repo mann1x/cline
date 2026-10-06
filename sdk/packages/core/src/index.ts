@@ -1586,6 +1586,7 @@ export {
 	type LibraryDocumentText,
 	type LibraryOptions,
 	type LibrarySearchOptions,
+	type LibraryVectorSet,
 	resolveLanceDbRuntimeDirectory,
 	resolveLibraryDirectory,
 	sharedLibrary,

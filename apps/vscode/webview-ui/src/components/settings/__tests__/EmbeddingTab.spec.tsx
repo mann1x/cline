@@ -16,6 +16,11 @@ const host = {
 	check: undefined as Record<string, unknown> | undefined,
 	embedding: { enabled: true, useProvider: false, model: "" } as Record<string, unknown>,
 	actions: [] as string[],
+	// As the host always sends them: both stores, empty.
+	stores: {
+		library: { documents: 0, embeddedDocuments: 0, vectorSets: [] },
+		memory: { notes: 0, embeddedNotes: 0, vectorSets: [] },
+	} as Record<string, unknown>,
 }
 const retrievalAction = vi.fn(async (request: { value: string }) => {
 	const { action } = JSON.parse(request.value)
@@ -25,7 +30,7 @@ const retrievalAction = vi.fn(async (request: { value: string }) => {
 			ok: true,
 			...(action === "embeddingModels" && host.models ? { models: host.models } : {}),
 			...(action.startsWith("check") && host.check ? { check: host.check } : {}),
-			status: { lancedb: { installing: false }, embedding: host.embedding },
+			status: { lancedb: { installing: false }, embedding: host.embedding, embedJobs: {}, ...host.stores },
 		}),
 	}
 })
@@ -51,6 +56,10 @@ describe("the Embedding tab", () => {
 		host.check = undefined
 		host.embedding = { enabled: true, useProvider: false, model: "" }
 		host.actions = []
+		host.stores = {
+			library: { documents: 0, embeddedDocuments: 0, vectorSets: [] },
+			memory: { notes: 0, embeddedNotes: 0, vectorSets: [] },
+		}
 	})
 
 	it("shows the embedding fields, and the reranker's only once it is ticked", () => {
@@ -155,5 +164,32 @@ describe("the Embedding tab", () => {
 		fireEvent.click(screen.getByText("Check the reranking model"))
 		expect(await screen.findByText(/Works\. bge-reranker-v2-m3 reranks/)).toBeTruthy()
 		expect(host.actions).toContain("checkReranking")
+	})
+
+	it("says what a change of model leaves to embed, and that the old vectors are kept", async () => {
+		state.retrievalEndpoints = JSON.stringify({ embedding: { baseUrl: "http://o", model: "bge-m3" } })
+		host.stores = {
+			embeddingModel: "bge-m3",
+			library: { documents: 12, embeddedDocuments: 0, vectorSets: [{ table: "vectors_old_768", current: false }] },
+			memory: { notes: 1, embeddedNotes: 0, vectorSets: [] },
+		}
+		render(<EmbeddingTab />)
+		expect(
+			await screen.findByText(
+				"12 documents and 1 note have no vectors for bge-m3 yet and are found by keyword only. Embed them from Settings > Library and Settings > Memory. The vectors made with the model used before are kept, so going back to it needs nothing.",
+			),
+		).toBeTruthy()
+	})
+
+	it("says nothing about embedding when everything has vectors", async () => {
+		state.retrievalEndpoints = JSON.stringify({ embedding: { baseUrl: "http://o", model: "bge-m3" } })
+		host.stores = {
+			embeddingModel: "bge-m3",
+			library: { documents: 12, embeddedDocuments: 12, vectorSets: [] },
+			memory: { notes: 1, embeddedNotes: 1, vectorSets: [] },
+		}
+		render(<EmbeddingTab />)
+		await waitFor(() => expect(host.actions).toContain("status"))
+		expect(screen.queryByText(/found by keyword only/)).toBeNull()
 	})
 })

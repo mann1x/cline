@@ -7,7 +7,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_LIBRARY_SETTINGS, type LibrarySettings } from "@cline/shared";
 import { resolveClineDataDir } from "@cline/shared/storage";
@@ -26,7 +26,7 @@ import {
 	LibraryStore,
 } from "./library-store";
 import { type RetrieveResult, retrieve } from "./retrieve";
-import { VectorIndex } from "./vector-index";
+import { VectorIndex, vectorTableName } from "./vector-index";
 
 export function resolveLibraryDirectory(): string {
 	return join(resolveClineDataDir(), "library");
@@ -71,6 +71,12 @@ export interface EmbedPendingOptions {
 	install?: boolean;
 	onInstallProgress?: (progress: LanceDbInstallProgress) => void;
 	onProgress?: (progress: EmbedProgress) => void;
+	/**
+	 * Ask the model for one vector first, to learn the size it returns now.
+	 * For a run the user asked for: without it, a model that changed size
+	 * since everything was embedded looks finished until the next search.
+	 */
+	probe?: boolean;
 	signal?: AbortSignal;
 }
 
@@ -80,6 +86,34 @@ export interface EmbedPendingResult {
 	dimension?: number;
 	/** Why nothing was embedded, when that is so. */
 	skipped?: string;
+}
+
+export interface LibraryVectorSet {
+	/** What `deleteVectorSet` takes. */
+	table: string;
+	model: string;
+	dimension: number;
+	vectors: number;
+	/** Documents recorded as embedded with it. */
+	documents: number;
+	bytes: number;
+	/** The set the embedding model now set writes to and searches. */
+	current: boolean;
+}
+
+function directoryBytes(path: string): number {
+	let total = 0;
+	try {
+		for (const entry of readdirSync(path, { withFileTypes: true })) {
+			const child = join(path, entry.name);
+			total += entry.isDirectory()
+				? directoryBytes(child)
+				: statSync(child).size;
+		}
+	} catch {
+		// Not there, or not readable: nothing to count.
+	}
+	return total;
 }
 
 export interface LibrarySearchOptions {
@@ -215,7 +249,15 @@ export class Library {
 	): Promise<EmbedPendingResult> {
 		const settings = options.settings ?? DEFAULT_LIBRARY_SETTINGS;
 		const model = options.embedding.model;
-		const pending = this.store.documentsWithoutEmbedding(
+		if (options.probe) {
+			const probed = await embedTexts(options.embedding, ["size"], {
+				prefix: settings.embeddingDocumentPrefix || undefined,
+				signal: options.signal,
+				fetch: this.fetch,
+			});
+			this.store.noteDimension(model, probed.dimension);
+		}
+		let pending = this.store.documentsWithoutEmbedding(
 			model,
 			options.collectionIds,
 		);
@@ -239,8 +281,10 @@ export class Library {
 			};
 		}
 		let chunksDone = 0;
+		let documentsDone = 0;
 		let dimension: number | undefined;
-		for (const [documentIndex, document] of pending.entries()) {
+		for (let at = 0; at < pending.length; at += 1) {
+			const document = pending[at];
 			options.signal?.throwIfAborted();
 			const chunks = this.store.documentChunks(document.id);
 			const embedded = await embedTexts(
@@ -255,30 +299,93 @@ export class Library {
 				},
 			);
 			dimension = embedded.dimension;
-			// What an earlier, unfinished run wrote for this document.
-			await index.deleteDocuments([document.id]);
+			// The model answers with another size than it last did: a re-pulled
+			// tag, a truncated variant. Everything counted as embedded was
+			// embedded at the old size, so the list of what is left is made
+			// again, against the size it returns now.
+			const resized = this.store.noteDimension(model, embedded.dimension);
+			// What an earlier, unfinished run wrote for this document, in this
+			// model's own set only: its vectors for other models stay.
+			await index.deleteDocumentsIn(model, embedded.dimension, [document.id]);
 			await index.add(
 				model,
-				chunks.map((chunk, at) => ({
+				chunks.map((chunk, n) => ({
 					chunkId: chunk.chunkId,
 					collectionId: chunk.collectionId,
 					documentId: chunk.documentId,
-					vector: embedded.vectors[at],
+					vector: embedded.vectors[n],
 				})),
 			);
 			this.store.markEmbedded(document.id, model, embedded.dimension);
 			chunksDone += chunks.length;
+			documentsDone += 1;
+			if (resized) {
+				pending = this.store.documentsWithoutEmbedding(
+					model,
+					options.collectionIds,
+					embedded.dimension,
+				);
+				at = -1;
+			}
 			options.onProgress?.({
 				document,
-				documentIndex,
-				documentCount: pending.length,
+				documentIndex: documentsDone - 1,
+				documentCount: resized
+					? documentsDone + pending.length
+					: Math.max(pending.length, documentsDone),
 				chunksDone,
 			});
 		}
 		if (dimension !== undefined) {
 			await index.optimize(model, dimension);
 		}
-		return { documents: pending.length, chunks: chunksDone, dimension };
+		return { documents: documentsDone, chunks: chunksDone, dimension };
+	}
+
+	/**
+	 * The sets of vectors on disk: one per embedding model and vector size.
+	 * A change of model starts a new set and keeps the old one, so going back
+	 * costs nothing -- and so they add up until one is deleted.
+	 */
+	async vectorSets(current?: string): Promise<LibraryVectorSet[]> {
+		const index = await this.vectors().catch(() => undefined);
+		if (!index) return [];
+		const recorded = this.store.embeddingSets();
+		const inUse = current
+			? vectorTableName(current, this.store.knownDimension(current) ?? -1)
+			: undefined;
+		const sets: LibraryVectorSet[] = [];
+		for (const set of await index.sets()) {
+			const known = recorded.filter(
+				(entry) => vectorTableName(entry.model, entry.dimension) === set.table,
+			);
+			sets.push({
+				table: set.table,
+				// The model's own name, when the store still has it; the table
+				// only keeps a simplified spelling.
+				model: known[0]?.model ?? set.table.replace(/^vectors_/, ""),
+				dimension: set.dimension,
+				vectors: set.rows,
+				documents: known.reduce((sum, entry) => sum + entry.documents, 0),
+				bytes: directoryBytes(
+					join(this.directory, "vectors", `${set.table}.lance`),
+				),
+				current: set.table === inUse,
+			});
+		}
+		return sets;
+	}
+
+	/** Delete one set of vectors, and forget that its documents were embedded with it. */
+	async deleteVectorSet(table: string): Promise<boolean> {
+		const index = await this.vectors().catch(() => undefined);
+		if (!index || !(await index.dropSet(table))) return false;
+		for (const entry of this.store.embeddingSets()) {
+			if (vectorTableName(entry.model, entry.dimension) === table) {
+				this.store.forgetEmbeddings(entry.model, entry.dimension);
+			}
+		}
+		return true;
 	}
 
 	async search(
@@ -298,7 +405,14 @@ export class Library {
 		const result = await retrieve(query, {
 			store: this.store,
 			collectionIds: options.collectionIds,
-			vectors: index,
+			// The query's vector says what size the model returns now, which
+			// is how a change of size is noticed without a request of its own.
+			vectors: index && {
+				search: (model, vector, searchOptions) => {
+					this.store.noteDimension(model, vector.length);
+					return index.search(model, vector, searchOptions);
+				},
+			},
 			embedding: options.embedding && {
 				...options.embedding,
 				queryPrefix: settings.embeddingQueryPrefix || undefined,

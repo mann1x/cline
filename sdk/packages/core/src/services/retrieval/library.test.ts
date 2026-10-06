@@ -207,6 +207,128 @@ describe("Library", () => {
 			expect(await index?.count("toy")).toBe(3);
 		});
 
+		/** The toy embedder, with its vectors padded to another size. */
+		const sized = (dimension: number) =>
+			(async (_input: string | URL | Request, init?: RequestInit) => {
+				const input = JSON.parse(String(init?.body)).input as string[];
+				return Response.json({
+					data: input.map((text, index) => ({
+						index,
+						embedding: [
+							...toyVector(text),
+							...new Array(dimension - 3).fill(0),
+						],
+					})),
+				});
+			}) as typeof fetch;
+
+		it("keeps one model's vectors when another model embeds the same documents", async () => {
+			const { send, state } = embedder();
+			open(send, runtimeDirectory);
+			await fill();
+			await library.embedPending({ embedding });
+			const other = { ...embedding, model: "other" };
+			expect((await library.embedPending({ embedding: other })).documents).toBe(
+				3,
+			);
+			const index = await library.vectors();
+			// The first model's set is whole: going back to it costs nothing.
+			expect(await index?.count("toy")).toBe(3);
+			expect(await index?.count("other")).toBe(3);
+			const before = state.requests;
+			expect((await library.embedPending({ embedding })).documents).toBe(0);
+			expect(state.requests).toBe(before);
+			const result = await library.search("overheating", { embedding });
+			expect(result.hits[0].source).toBe("cooling.md");
+			expect(result.notes).toEqual([]);
+		});
+
+		it("embeds again when the same model comes back with another vector size", async () => {
+			open(embedder().send, runtimeDirectory);
+			await fill();
+			await library.embedPending({ embedding });
+			await library.close();
+
+			// The same name, five numbers instead of three.
+			open(sized(5), runtimeDirectory);
+			// Nothing has said so yet: by its records everything is embedded.
+			expect((await library.embedPending({ embedding })).documents).toBe(0);
+			// A search does: its own vector is the new size, and finds no set of it.
+			const stale = await library.search("overheating", { embedding });
+			expect(stale.mode).toBe("keyword");
+			expect(stale.notes[0]).toContain("embedded with toy yet");
+			expect(library.store.counts("toy").embeddedDocuments).toBe(0);
+			// And now the documents are known to be waiting.
+			expect(await library.embedPending({ embedding })).toMatchObject({
+				documents: 3,
+				dimension: 5,
+			});
+			expect(library.store.counts("toy").embeddedDocuments).toBe(3);
+			const found = await library.search("overheating", { embedding });
+			expect(found.hits[0].source).toBe("cooling.md");
+			expect(found.hits[0].vectorRank).toBe(1);
+		});
+
+		it("learns the new size at once when asked to look first", async () => {
+			open(embedder().send, runtimeDirectory);
+			await fill();
+			await library.embedPending({ embedding });
+			await library.close();
+			open(sized(4), runtimeDirectory);
+			expect(
+				await library.embedPending({ embedding, probe: true }),
+			).toMatchObject({ documents: 3, dimension: 4 });
+		});
+
+		it("lists the sets of vectors, and deletes one so that its documents are embedded again", async () => {
+			const { send } = embedder();
+			open(send, runtimeDirectory);
+			await fill();
+			await library.embedPending({ embedding });
+			await library.embedPending({
+				embedding: { ...embedding, model: "Other/Model:v2" },
+			});
+			const sets = await library.vectorSets("toy");
+			expect(
+				sets.map(({ bytes, ...set }) => ({ ...set, onDisk: bytes > 0 })),
+			).toEqual([
+				{
+					table: "vectors_other_model_v2_3",
+					// Its own name, not the table's spelling of it.
+					model: "Other/Model:v2",
+					dimension: 3,
+					vectors: 3,
+					documents: 3,
+					current: false,
+					onDisk: true,
+				},
+				{
+					table: "vectors_toy_3",
+					model: "toy",
+					dimension: 3,
+					vectors: 3,
+					documents: 3,
+					current: true,
+					onDisk: true,
+				},
+			]);
+			expect(await library.deleteVectorSet("vectors_other_model_v2_3")).toBe(
+				true,
+			);
+			expect(await library.deleteVectorSet("vectors_nope_3")).toBe(false);
+			expect((await library.vectorSets("toy")).map((set) => set.table)).toEqual(
+				["vectors_toy_3"],
+			);
+			expect(library.store.counts("Other/Model:v2").embeddedDocuments).toBe(0);
+			expect(
+				(
+					await library.embedPending({
+						embedding: { ...embedding, model: "Other/Model:v2" },
+					})
+				).documents,
+			).toBe(3);
+		});
+
 		it("removes vectors with their document, and replaces them with its new text", async () => {
 			const { send } = embedder();
 			open(send, runtimeDirectory);

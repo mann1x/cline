@@ -94,6 +94,24 @@ const EmbeddingTab = () => {
 
 	const useProvider = stored.useProvider === true
 	const embeddingState = retrieval.status?.embedding
+	// What a change of model leaves to do, said where the model is changed.
+	const status = retrieval.status
+	const waitingDocuments = status ? Math.max(0, status.library.documents - status.library.embeddedDocuments) : 0
+	const waitingNotes = status ? Math.max(0, status.memory.notes - status.memory.embeddedNotes) : 0
+	const otherSets = status
+		? [...(status.library.vectorSets ?? []), ...(status.memory.vectorSets ?? [])].some((set) => !set.current)
+		: false
+	const waitingLine =
+		status?.embeddingModel && waitingDocuments + waitingNotes > 0
+			? `${[
+					waitingDocuments > 0 ? `${waitingDocuments} document${waitingDocuments === 1 ? "" : "s"}` : "",
+					waitingNotes > 0 ? `${waitingNotes} note${waitingNotes === 1 ? "" : "s"}` : "",
+				]
+					.filter(Boolean)
+					.join(
+						" and ",
+					)} ${waitingDocuments + waitingNotes === 1 ? "has" : "have"} no vectors for ${status.embeddingModel} yet and ${waitingDocuments + waitingNotes === 1 ? "is" : "are"} found by keyword only. Embed them from Settings > Library and Settings > Memory.${otherSets ? " The vectors made with the model used before are kept, so going back to it needs nothing." : ""}`
+			: undefined
 	// A list worth a dropdown: the server answered with at least one model.
 	const listed = models !== undefined && models.models.length > 0
 	const rerankingOn = stored.reranking.enabled === true
@@ -208,6 +226,8 @@ const EmbeddingTab = () => {
 				type="password">
 				<span className="font-medium">API key</span>
 			</DebouncedTextField>
+
+			{waitingLine ? <p className="text-xs text-(--vscode-descriptionForeground)">{waitingLine}</p> : null}
 
 			<div>
 				<VSCodeButton

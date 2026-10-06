@@ -19,7 +19,8 @@ export interface RetrievalStatusHandle {
 /**
  * The engine under the Library and Memory panels, as the host reports it:
  * read when the panel opens, again after everything the panel does, and
- * every two seconds while LanceDB is downloading.
+ * every two seconds while LanceDB is downloading or documents are being
+ * embedded.
  */
 export function useRetrievalStatus(): RetrievalStatusHandle {
 	const [status, setStatus] = useState<RetrievalStatus>()
@@ -70,7 +71,11 @@ export function useRetrievalStatus(): RetrievalStatusHandle {
 		}
 	}, [call])
 
-	const installing = status?.lancedb.installing === true
+	// Anything the host is still doing is followed until it is done.
+	const installing =
+		status?.lancedb.installing === true ||
+		status?.embedJobs?.library?.running === true ||
+		status?.embedJobs?.memory?.running === true
 	useEffect(() => {
 		if (!installing) {
 			return

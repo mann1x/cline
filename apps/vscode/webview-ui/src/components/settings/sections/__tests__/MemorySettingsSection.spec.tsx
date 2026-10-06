@@ -34,7 +34,14 @@ const baseStatus = () => ({
 		model: "",
 		problem: "No embedding model is named on the Embedding tab: the field is empty.",
 	} as Record<string, unknown>,
-	library: { enabled: true, collections: 1, documents: 3, passages: 40, embeddedDocuments: 0 },
+	library: {
+		enabled: true,
+		collections: 1,
+		documents: 3,
+		passages: 40,
+		embeddedDocuments: 0,
+		vectorSets: [] as Array<Record<string, unknown>>,
+	},
 	memory: {
 		enabled: true,
 		memories: [{ name: "main", main: true, notes: 2, createdAt: "2026-10-06T00:00:00.000Z" }] as Array<
@@ -42,7 +49,9 @@ const baseStatus = () => ({
 		>,
 		notes: 2,
 		embeddedNotes: 0,
+		vectorSets: [] as Array<Record<string, unknown>>,
 	},
+	embedJobs: {} as Record<string, Record<string, unknown>>,
 	workspace: { path: "C:\\Dev\\tally", key: "c:/dev/tally", name: "tally" },
 })
 let status = baseStatus()
