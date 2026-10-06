@@ -187,6 +187,14 @@ A damaged EPUB is reported as damaged at once. A file cut short while it was
 copied, downloaded or unpacked used to hold `extract_document` for its full
 ten minutes, and the librarian for longer, with nothing shown.
 
+Pictures can be described after a book is added. A book added with no vision
+model set kept its pictures with only their captions, and the one way to get
+descriptions was to add the whole book again. The librarian can now describe
+the pictures of a book that is already in the Library: they are shown to the
+vision model from the book's folder, and the descriptions go beside the
+pictures in its text, after the caption. It works a batch at a time and goes
+on where it stopped.
+
 An import shows what it is doing. While the librarian checks or adds files,
 its row lists every file: waiting, where it is (`page 312 of 769, recognizing
 text, 705 pictures`), done, or failed with the reason, and **NOT MOVING** with
