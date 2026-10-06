@@ -30,7 +30,7 @@ vi.mock("@/hosts/host-provider", () => ({
 	},
 }))
 
-import { sharedMemory } from "@cline/core"
+import { sharedLibrary, sharedMemory } from "@cline/core"
 import { readRetrievalStatus, runRetrievalAction } from "./retrieval-status"
 
 describe("what the Library and Memory panels ask of the host", () => {
@@ -42,9 +42,12 @@ describe("what the Library and Memory panels ask of the host", () => {
 		process.env.CEREBRILINE_DATA_DIR = join(root, "data")
 	})
 	afterAll(async () => {
+		// Both stores, before their folder goes: Windows will not delete a
+		// database that is open, and the status opens the Library's as well.
 		await sharedMemory().close()
+		await sharedLibrary().close()
 		delete process.env.CEREBRILINE_DATA_DIR
-		rmSync(root, { recursive: true, force: true })
+		rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
 	})
 
 	it("reports LanceDB as not downloaded, the stores as empty, and the workspace by its key", async () => {

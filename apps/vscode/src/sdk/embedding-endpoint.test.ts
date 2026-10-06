@@ -1,5 +1,8 @@
+import { mkdtempSync, rmSync } from "node:fs"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 const state = vi.hoisted(() => ({
@@ -18,6 +21,7 @@ vi.mock("@/core/storage/StateManager", () => ({
 	},
 }))
 
+import { sharedLibrary, sharedMemory } from "@cline/core"
 import {
 	checkEmbeddingEndpoint,
 	checkRerankingEndpoint,
@@ -93,13 +97,22 @@ describe("the embedding endpoint, as a panel needs to know it", () => {
 	let a: { server: Server; url: string }
 	let b: { server: Server; url: string }
 
+	let data: string
+
 	beforeAll(async () => {
+		// A check records the vector size in the stores: theirs, not the machine's.
+		data = mkdtempSync(join(tmpdir(), "embedding-endpoint-"))
+		process.env.CEREBRILINE_DATA_DIR = data
 		a = await serve(ollama)
 		b = await serve(llamacpp)
 	})
-	afterAll(() => {
+	afterAll(async () => {
 		a.server.close()
 		b.server.close()
+		await sharedMemory().close()
+		await sharedLibrary().close()
+		delete process.env.CEREBRILINE_DATA_DIR
+		rmSync(data, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
 	})
 	beforeEach(() => {
 		state.settings = {}
