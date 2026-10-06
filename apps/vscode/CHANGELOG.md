@@ -5,6 +5,28 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.241] — 2026-10-06
+
+### Built-in skills
+
+Cerebriline now ships with skills of its own. They appear in the Skills tab
+under **Built-in Skills** with nothing to install, in the extension, the CLI and
+the SDK alike.
+
+The first two are Chris's:
+
+- **mandatory-qa-prompt-and-issue-resolution** asks, after a change to code or
+  configuration, whether to run QA on it, runs a QA plan fitted to the change
+  and reports, then asks whether to fix what it found.
+- **docker-compose-deploy** deploys the open project to local Docker Desktop
+  from its compose file or its Dockerfile, and verifies the deployment.
+
+Both ship turned off: turn on the ones you want. A built-in skill can be
+switched on and off and opened to read, but not edited or deleted, since an
+update replaces it. The switch is kept in your settings and survives updates.
+To change what one does, create your own skill with the same name; yours
+replaces it.
+
 ## [4.100.240] — 2026-10-05
 
 ### The chat keeps following on every monitor
