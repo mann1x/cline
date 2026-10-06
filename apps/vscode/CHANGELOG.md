@@ -68,7 +68,9 @@ For spec-driven development, after [Get Shit Done (GSD 2)](https://getshitdone.h
 The plan and its records live in a `.sdd/` folder in your project, so the work
 continues in a new chat. With Subagents on, each task runs in an agent with a
 fresh context and its changes are checked before they are adopted; with
-Teammates on as well, independent slices can run side by side.
+Teammates on as well, independent slices can run side by side. In a git
+repository a slice can be built in its own worktree and merged when it is
+verified, so your working copy is untouched until then.
 
 All ship turned off: turn on the ones you want. A built-in skill can be
 switched on and off and opened to read, but not edited or deleted, since an
