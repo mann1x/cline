@@ -93,6 +93,8 @@ It searches for the topic, chooses the links that are about it, reads them and m
 
 reads the book's links again and lists the pages that are new or have changed, without changing the book. *"Update it"* brings them in. A page that no longer exists stays in the book.
 
+A page counts as changed when its text has: a page that differs only in a view counter or a date does not, and a page that looks changed is read a second time before it is reported, because a page caught half loaded reads like another text.
+
 This needs a [Firecrawl](https://github.com/firecrawl/firecrawl) endpoint, which reads pages in a real browser, so pages built by JavaScript are read too. Two switches, both needed, because pages are fetched from the open web on your behalf:
 
 1. **Settings > Features > Web scraping for the librarian**: the endpoint's address, its key if it needs one, and how far a crawl may go. **Check** reads one page and shows what came back.
