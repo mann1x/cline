@@ -633,6 +633,36 @@ function createLibraryAddTool(options: CreateLibraryToolsOptions): AgentTool {
 				);
 			}
 
+			// Files that are versions of one work are not put in one book
+			// unasked: which to keep, and whether together, is the user's.
+			if (ifExists === "stop") {
+				const versions: string[] = [];
+				for (let a = 0; a < read.length; a++) {
+					for (let b = a + 1; b < read.length; b++) {
+						const similarity = fingerprintSimilarity(
+							read[a].fingerprint,
+							read[b].fingerprint,
+						);
+						if (
+							read[a].sha256 !== read[b].sha256 &&
+							similarity >= 0.3 &&
+							similarity < SAME_TEXT
+						) {
+							versions.push(
+								`${read[a].name} and ${read[b].name} share ${Math.round(similarity * 100)}% of their text`,
+							);
+						}
+					}
+				}
+				if (versions.length > 0) {
+					return [
+						"Nothing was added. These files look like different versions of one work, not one book in several formats:",
+						...versions.map((line) => `- ${line}`),
+						'Tell the user and ask: keep them as separate books (one library_add call each, the second with if_exists "new_version"), keep only one, or put them together in this one book (call again with if_exists "add_anyway").',
+					].join("\n");
+				}
+			}
+
 			// Is it here already. Each file is judged, and the book by its title.
 			const metadata = metadataFrom(request);
 			const judgedFiles = read.map((source) => ({

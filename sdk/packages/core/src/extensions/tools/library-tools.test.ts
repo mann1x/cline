@@ -337,6 +337,34 @@ describe("the Library tools", () => {
 		expect(library.catalogue.books()).toHaveLength(2);
 	});
 
+	it("does not put two versions of a work in one book unasked", async () => {
+		write("engine.md", BOOK);
+		write(
+			"engine-2nd.md",
+			`${BOOK}\n${chapter(4, "the gearbox")}\n${chapter(5, "the brakes")}`,
+		);
+		write("engine.txt", `${BOOK}\n\nTranscribed.`);
+		const both = { paths: ["engine.md", "engine-2nd.md"] };
+		const stopped = await addBook(both);
+		expect(stopped).toContain("different versions of one work");
+		expect(stopped).toMatch(
+			/engine\.md and engine-2nd\.md share \d+% of their text/,
+		);
+		expect(library.catalogue.books()).toEqual([]);
+		// The same book in two formats is one book, with no question asked.
+		expect(await addBook({ paths: ["engine.md", "engine.txt"] })).toContain(
+			"2 sources added",
+		);
+		// And told to, the versions go together.
+		expect(
+			await call("library_add", {
+				book: "#1",
+				...both,
+				if_exists: "add_anyway",
+			}),
+		).toContain("1 source added");
+	});
+
 	it("replaces a book by moving the old one to the trash", async () => {
 		write("engine.md", BOOK);
 		await addBook();
