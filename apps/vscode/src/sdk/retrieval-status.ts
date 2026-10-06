@@ -5,6 +5,12 @@ import type { RetrievalAction, RetrievalActionResult, RetrievalStatus } from "@s
 import { getCwd } from "@utils/path"
 import { HostProvider } from "@/hosts/host-provider"
 import {
+	checkEmbeddingEndpoint,
+	checkRerankingEndpoint,
+	describeEmbeddingEndpoint,
+	listConfiguredEmbeddingModels,
+} from "./embedding-endpoint"
+import {
 	installLibraryVectors,
 	libraryVectorsInstallState,
 	readEmbeddingEndpoint,
@@ -36,6 +42,7 @@ export async function readRetrievalStatus(): Promise<RetrievalStatus> {
 			...(install.lastError ? { lastInstallError: install.lastError } : {}),
 		},
 		...(embedding ? { embeddingModel: embedding.model } : {}),
+		embedding: describeEmbeddingEndpoint(),
 		library: {
 			enabled: readLibrarySettings().enabled,
 			collections: libraryCounts.collections,
@@ -64,10 +71,21 @@ export async function readRetrievalStatus(): Promise<RetrievalStatus> {
 
 const fileName = (name: string) => `${name.replace(/[^\p{L}\p{N}._-]+/gu, "-").replace(/^-+|-+$/g, "") || "memory"}.memory.json`
 
-async function act(request: RetrievalAction): Promise<string | undefined> {
+type Outcome = Pick<RetrievalActionResult, "models" | "check">
+
+async function act(request: RetrievalAction, outcome: Outcome): Promise<string | undefined> {
 	const memory = sharedMemory()
 	switch (request.action) {
 		case "status":
+			return undefined
+		case "embeddingModels":
+			outcome.models = await listConfiguredEmbeddingModels()
+			return undefined
+		case "checkEmbedding":
+			outcome.check = await checkEmbeddingEndpoint()
+			return undefined
+		case "checkReranking":
+			outcome.check = await checkRerankingEndpoint()
 			return undefined
 		case "installVectors":
 			// Not awaited: it is a download of hundreds of megabytes, and the
@@ -130,9 +148,10 @@ async function act(request: RetrievalAction): Promise<string | undefined> {
 export async function runRetrievalAction(raw: string): Promise<RetrievalActionResult> {
 	let message: string | undefined
 	let error: string | undefined
+	const outcome: Outcome = {}
 	try {
 		const request = JSON.parse(raw || "{}") as RetrievalAction
-		message = await act(request)
+		message = await act(request, outcome)
 	} catch (cause) {
 		error = cause instanceof Error ? cause.message : String(cause)
 	}
@@ -140,6 +159,7 @@ export async function runRetrievalAction(raw: string): Promise<RetrievalActionRe
 		ok: error === undefined,
 		...(message ? { message } : {}),
 		...(error ? { error } : {}),
+		...outcome,
 		status: await readRetrievalStatus(),
 	}
 }

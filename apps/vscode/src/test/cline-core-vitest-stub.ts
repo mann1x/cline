@@ -213,6 +213,11 @@ export {
 	syncStoredProviderRegistration,
 } from "../../../../sdk/packages/core/src/services/providers/local-provider-registry"
 export {
+	embedTexts,
+	rerankDocuments,
+	resolveRetrievalBaseUrl,
+} from "../../../../sdk/packages/core/src/services/retrieval/embedding-client"
+export {
 	installLanceDb,
 	isLanceDbInstalled,
 	lanceDbInstallBytes,

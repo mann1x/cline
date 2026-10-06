@@ -27,6 +27,12 @@ const baseStatus = () => ({
 		installing: false,
 	} as Record<string, unknown>,
 	embeddingModel: undefined as string | undefined,
+	embedding: {
+		enabled: true,
+		useProvider: true,
+		model: "",
+		problem: "No embedding model is named on the Embedding tab: the field is empty.",
+	} as Record<string, unknown>,
 	library: { enabled: true, collections: 1, documents: 3, passages: 40, embeddedDocuments: 0 },
 	memory: {
 		enabled: true,
@@ -145,6 +151,10 @@ describe("the Library panel", () => {
 		render(<LibrarySettingsSection renderSectionHeader={header} />)
 		expect(await screen.findByText("LanceDB 0.39.0 is not downloaded")).toBeTruthy()
 		expect(screen.getByText("3 documents in 1 collection, 40 passages")).toBeTruthy()
+		// What stops embedding is said, not a general pointer at the settings.
+		expect(
+			screen.getByText("none in use. No embedding model is named on the Embedding tab: the field is empty."),
+		).toBeTruthy()
 		fireEvent.click(screen.getByText("Download LanceDB (about 209 MB)"))
 		await waitFor(() => expect(actions).toContainEqual({ action: "installVectors" }))
 	})

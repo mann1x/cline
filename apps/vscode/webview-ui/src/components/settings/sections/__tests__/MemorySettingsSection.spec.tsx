@@ -28,6 +28,12 @@ const baseStatus = () => ({
 		installing: false,
 	} as Record<string, unknown>,
 	embeddingModel: undefined as string | undefined,
+	embedding: {
+		enabled: true,
+		useProvider: true,
+		model: "",
+		problem: "No embedding model is named on the Embedding tab: the field is empty.",
+	} as Record<string, unknown>,
 	library: { enabled: true, collections: 1, documents: 3, passages: 40, embeddedDocuments: 0 },
 	memory: {
 		enabled: true,

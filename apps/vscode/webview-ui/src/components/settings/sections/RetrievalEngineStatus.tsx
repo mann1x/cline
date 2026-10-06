@@ -53,7 +53,7 @@ const RetrievalEngineStatus = ({ retrieval, kind }: RetrievalEngineStatusProps) 
 	if (!status) {
 		return <p className="text-xs text-(--vscode-descriptionForeground)">Reading the search engine's status…</p>
 	}
-	const { lancedb, embeddingModel } = status
+	const { lancedb, embeddingModel, embedding } = status
 	const described = describeLanceDb(lancedb)
 	const canDownload = !lancedb.installed && !lancedb.installing && !lancedb.unsupported
 	const stored =
@@ -81,7 +81,7 @@ const RetrievalEngineStatus = ({ retrieval, kind }: RetrievalEngineStatusProps) 
 				<span className="text-(--vscode-descriptionForeground)">Embedding model: </span>
 				{embeddingModel
 					? `${embeddingModel}, ${embedded} of ${total} ${kind === "library" ? "documents" : "notes"} have vectors`
-					: "none set. Tick “Use an embedding model” in the API configuration and name one on its Embedding tab."}
+					: `none in use. ${embedding.problem ?? "Name one on the Embedding tab of the API configuration."}`}
 			</div>
 			{lancedb.lastInstallError && !lancedb.installing && !lancedb.installed ? (
 				<div className={TONE.bad}>The last download failed: {lancedb.lastInstallError}</div>
