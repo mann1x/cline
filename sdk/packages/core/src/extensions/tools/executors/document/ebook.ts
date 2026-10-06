@@ -62,6 +62,66 @@ function epubDrm(data: Uint8Array): boolean {
 	);
 }
 
+/**
+ * Why an EPUB cannot be opened as the ZIP it is, or nothing when it can.
+ *
+ * A ZIP's index is at its end, so a file cut short while it was copied,
+ * downloaded or unpacked has its first entries and no index. lingo-reader
+ * does not survive that: its loader drops the ZIP reader's error and the
+ * promise it returned never settles, so the read would wait until the tool's
+ * limit with nothing to say.
+ */
+export function epubZipFault(data: Uint8Array): string | undefined {
+	const bytes = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+	if (bytes.length < 22 || bytes.readUInt32LE(0) !== 0x04034b50) {
+		return "it does not start as a ZIP archive, which every EPUB is";
+	}
+	// The end record is 22 bytes and at most a 65,535-byte comment follows it.
+	const end = bytes.lastIndexOf(
+		Buffer.from([0x50, 0x4b, 0x05, 0x06]),
+		bytes.length - 22,
+	);
+	if (end < 0 || end < bytes.length - 22 - 0xffff) {
+		return `it ends before its index (${bytes.length.toLocaleString("en-US")} bytes), so it was cut short when it was copied, downloaded or unpacked`;
+	}
+	const size = bytes.readUInt32LE(end + 12);
+	const offset = bytes.readUInt32LE(end + 16);
+	// 0xFFFFFFFF hands the real numbers to a ZIP64 record this does not read.
+	if (offset !== 0xffffffff && size !== 0xffffffff && offset + size > end) {
+		return "its index points past the end of the file, so part of it is missing";
+	}
+	return undefined;
+}
+
+/** How long opening a book may take: it reads an index, not the chapters. */
+const OPEN_LIMIT_MS = 120_000;
+
+/**
+ * An open that answers or fails. lingo-reader can leave a promise unsettled
+ * on a damaged file; this turns the silence into an error.
+ */
+async function opened<T>(open: Promise<T>): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			open,
+			new Promise<never>((_resolve, reject) => {
+				timer = setTimeout(
+					() =>
+						reject(
+							new Error(
+								`The book could not be opened: the reader gave no answer in ${OPEN_LIMIT_MS / 1000}s, which is what it does with a damaged file. Check that the file is complete.`,
+							),
+						),
+					OPEN_LIMIT_MS,
+				);
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 function tocTitles(
 	items: { label: string; children?: unknown[] }[],
 	depth = 0,
@@ -161,6 +221,14 @@ export async function readEbook(
 			"This EPUB is DRM-protected (Adobe ADEPT or Readium LCP). It can be read only in a reader app licensed for it.",
 		);
 	}
+	if (format === "epub") {
+		const fault = epubZipFault(data);
+		if (fault) {
+			throw new Error(
+				`This EPUB is damaged: ${fault}. Nothing can be read from it; get the file again.`,
+			);
+		}
+	}
 
 	const resources = options.scratchDir;
 	// Loaded on first use, like every reader here.
@@ -172,10 +240,14 @@ export async function readEbook(
 	let book: LingoBook;
 	let reader: string;
 	if (format === "epub") {
-		book = (await initEpubFile(filePath, resources)) as unknown as LingoBook;
+		book = (await opened<unknown>(
+			initEpubFile(filePath, resources),
+		)) as unknown as LingoBook;
 		reader = "lingo-reader (EPUB)";
 	} else if (format === "fb2") {
-		book = (await initFb2File(filePath, resources)) as unknown as LingoBook;
+		book = (await opened<unknown>(
+			initFb2File(filePath, resources),
+		)) as unknown as LingoBook;
 		reader = "lingo-reader (FB2)";
 	} else {
 		// A `.mobi` from calibre carries both a MOBI 6 and a KF8 book, and an
@@ -185,10 +257,14 @@ export async function readEbook(
 				? [initKf8File, initMobiFile]
 				: [initMobiFile, initKf8File];
 		try {
-			book = (await first(filePath, resources)) as unknown as LingoBook;
+			book = (await opened<unknown>(
+				first(filePath, resources),
+			)) as unknown as LingoBook;
 			reader = `lingo-reader (${first === initKf8File ? "KF8" : "MOBI"})`;
 		} catch {
-			book = (await second(filePath, resources)) as unknown as LingoBook;
+			book = (await opened<unknown>(
+				second(filePath, resources),
+			)) as unknown as LingoBook;
 			reader = `lingo-reader (${second === initKf8File ? "KF8" : "MOBI"})`;
 		}
 	}

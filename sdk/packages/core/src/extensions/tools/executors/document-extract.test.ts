@@ -5,6 +5,8 @@ import {
 	readdirSync,
 	readFileSync,
 	rmSync,
+	statSync,
+	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -132,6 +134,24 @@ describe("extract_document", () => {
 		expect(result).toMatch(/\d+ chapters?\./);
 		expect(result).toContain("First paragraph with a red picture below.");
 		expect(result).not.toMatch(/<\/?p>/);
+	});
+
+	it("says an EPUB cut short is damaged instead of waiting on it", async () => {
+		// The first two thirds of a real book: entries, and no index at the end.
+		const whole = place("probe.epub");
+		const cut = "cut.epub";
+		writeFileSync(
+			join(workspace, cut),
+			readFileSync(join(workspace, whole)).subarray(
+				0,
+				Math.floor(statSync(join(workspace, whole)).size * 0.66),
+			),
+		);
+		const started = Date.now();
+		await expect(run({ path: cut })).rejects.toThrow(
+			/damaged: it ends before its index/,
+		);
+		expect(Date.now() - started).toBeLessThan(5_000);
 	});
 
 	it("takes an ebook's pictures before the reader deletes them", async () => {
