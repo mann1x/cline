@@ -161,6 +161,7 @@
 							"features/agents",
 							"features/change-protocol",
 							"features/document-reader",
+							"features/library",
 							"features/media-endpoints"
 						]
 					},

@@ -78,6 +78,41 @@ update replaces it. The switch is kept in your settings and survives updates.
 To change what one does, create your own skill with the same name; yours
 replaces it.
 
+### The Library
+
+A place for the documents you want the model to be able to look things up in:
+books, manuals, papers, notes. Turn it on under **Settings > Library**, which is
+a panel of its own beside Features and Terminal.
+
+The model gets three tools. `add_to_library` takes files and folders: text and
+Markdown as they are, and PDF, Office, OpenDocument and ebooks through the
+Document Reader. `search_library` returns the passages that best answer a
+question, each with the document and section it is from. `list_library` says
+what is there. The Library is kept in Cerebriline's data folder and is the same
+in every workspace.
+
+It works on keyword search alone, with nothing to download and no model to
+configure.
+
+To search by meaning as well, tick **Use an embedding model** in the API
+configuration and name the model on the new **Embedding** tab: on the session's
+own provider, or on any endpoint that serves the OpenAI embeddings API (Ollama,
+opencoti, llama.cpp, LM Studio, hosted services). The same tab takes an
+optional **reranking model**, which reads the best passages against the
+question and puts them in order.
+
+The first time the box is ticked, Cerebriline downloads LanceDB, where the
+vectors are kept: 200 to 390 MB depending on the platform, once, with every
+file checked against a known checksum. It is not available on Intel Macs, where
+the Library stays on keywords.
+
+The panel holds how documents are split (passage size, overlap, at headings
+first) and how they are searched (hybrid search, the balance between meaning
+and keywords, how many passages are kept, the relevance threshold). The
+defaults are a starting point and will be tuned.
+
+Not yet: the Library in the CLI, and adding documents from the panel itself.
+
 ## [4.100.240] — 2026-10-05
 
 ### The chat keeps following on every monitor

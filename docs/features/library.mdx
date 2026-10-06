@@ -1,0 +1,93 @@
+---
+title: "Library"
+sidebarTitle: "Library"
+description: "A place for the documents you want the model to look things up in: how to turn it on, how documents are split and searched, and how to add an embedding and a reranking model."
+---
+
+The **Library** holds documents you want the model to be able to look things up in: books, manuals, papers, notes. The model adds documents to it, and later asks it questions and gets back the passages that answer them, each with the document and section it came from.
+
+The Library is **off by default**, is kept in Cerebriline's data folder, and is the same in every workspace: a book added while working on one project is there in the next.
+
+## Turning it on
+
+Open **Settings > Library** and tick **Enable the Library**. It applies from the next task.
+
+The model then has three tools:
+
+| Tool | What it does |
+| --- | --- |
+| `add_to_library` | Adds files or folders to a collection. Text and Markdown are taken as they are; PDF, Word, PowerPoint, Excel, OpenDocument, RTF, HTML and ebooks (EPUB, MOBI, AZW3, FB2) are read by the [Document Reader](/features/document-reader). |
+| `search_library` | Returns the passages that best match a question, best first. |
+| `list_library` | Lists the collections, or the documents of one. |
+
+Ask in plain words: *"add the manuals folder to the library"*, *"look in the library for how the coolant pump comes off"*.
+
+A file added again with the same content is left alone. A file that changed is replaced. A folder adds the documents and text files inside it, up to 500 per call, and skips hidden folders and `node_modules`.
+
+Documents are grouped in **collections**, which the model names when it adds (`default` when it names none) and can search one at a time.
+
+## Search by keyword
+
+With nothing else configured, the Library is searched by keyword. This needs no model and no download, works the moment a document is added, and is very good at names, codes and exact phrases. Words that appear almost everywhere in the Library are left out of a query, since they say nothing about which passage is wanted.
+
+## Search by meaning
+
+A keyword search cannot find a passage that answers a question in different words. An **embedding model** can.
+
+1. In **Settings > API Configuration**, tick **Use an embedding model**.
+2. On the **Embedding** tab that appears, name the model, and either tick **Embed on the session's provider** or type an endpoint.
+
+Any server that speaks the OpenAI embeddings API works: Ollama, opencoti, llama.cpp, LM Studio, or a hosted service. On Ollama, for example, `snowflake-arctic-embed2`, `bge-m3`, `qwen3-embedding:0.6b` or `nomic-embed-text`.
+
+The first time the box is ticked, Cerebriline downloads **LanceDB**, the database the vectors are kept in. It is 200 to 390 MB depending on your platform, is fetched once, from the npm registry, into Cerebriline's data folder, and each file is checked against a known checksum before it is used. It is not available on Intel Macs; there the Library stays on keywords.
+
+Documents are embedded when they are added. Documents that were added before an embedding model was set are embedded the next time something is added. If embedding is interrupted, it continues from the document it stopped at.
+
+Changing the embedding model keeps the vectors already made and starts a new set, because vectors from two models cannot be compared.
+
+## Reranking
+
+A **reranking model** reads each of the best passages together with the question and scores how well it answers. It is slower than the search and far better at putting passages in order.
+
+On the Embedding tab, tick **Use a reranking model** and name the model and its endpoint. Cerebriline calls `POST <endpoint>/rerank`, which llama.cpp (`llama-server --reranking`), opencoti, Jina, Cohere and text-embeddings-inference serve. `bge-reranker-v2-m3` is a good general choice.
+
+<Note>
+Ollama has no rerank route. A reranker pulled with Ollama has to be served by one of the servers above. With llama.cpp, start the server with a batch as large as its context (for example `-c 8192 -ub 8192`): its default batch of 512 tokens is smaller than a passage, and Cerebriline then gives the reranker only the beginning of the longer passages.
+</Note>
+
+Reranking also works without an embedding model, over the keyword results.
+
+## Settings
+
+All in **Settings > Library**.
+
+**Splitting documents.** A document is cut into passages, and passages are what is searched and returned.
+
+| Setting | Default | |
+| --- | --- | --- |
+| Passage size is measured in | Characters | Or tokens, estimated. |
+| Split at headings first | On | A passage does not run across a heading, and keeps the headings it sits under. |
+| Passage size | 1500 | |
+| Overlap | 100 | Repeated at the start of the next passage, so a sentence cut at the border is whole in one of them. |
+| Smallest passage | 0 | Shorter passages are joined to a neighbour under the same heading. 0 is off. |
+
+These apply to documents added from then on. Add a document again to split it anew.
+
+**Searching.**
+
+| Setting | Default | |
+| --- | --- | --- |
+| Hybrid search | On | With an embedding model, search by keyword and by meaning and merge the two. Off, by meaning alone. |
+| Match file names, titles and headings too | On | A keyword also counts in the document's name and the headings above a passage. |
+| Balance | 50% / 50% | How much each ranking counts when they are merged. |
+| Passages kept from the search | 5 | |
+| Passages kept after reranking | 3 | |
+| Relevance threshold | 0 | Passages the reranker scores below this are dropped. 0 keeps them all. |
+
+**Requests.** How many passages go in one embedding or reranking request, how many embedding requests run at once, and a prefix for questions and for passages, for the embedding models that were trained with one (`query: ` and `passage: ` for the E5 family). Leave the prefixes empty unless the model's card asks for them.
+
+## What it does not do yet
+
+- The Library is offered in the VS Code extension. The CLI does not have it yet.
+- Documents are added by the model, on request. There is no file picker in the panel yet.
+- Scanned pages are read with the Document Reader's OCR, which reads a limited number of pages per document.
