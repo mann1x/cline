@@ -62,7 +62,38 @@ function peekResult(providerId: string, entries: Array<[string, ModelInfo]>, def
 	}
 }
 
+const sessionWindow = vi.fn(async (): Promise<number | undefined> => undefined)
+vi.mock("@/sdk/cline-session-factory", () => ({
+	resolveOllamaSessionContextWindow: (...args: unknown[]) => sessionWindow(...(args as [])),
+}))
+
 describe("resolveModelInfo", () => {
+	it("answers with the window the session will run with, not the catalog's", async () => {
+		const { resolveModelInfo } = await import("../resolveModelInfo")
+		const store = makeStore({ providerId: parseProviderId("ollama") })
+		const catalog = makeCatalog()
+		vi.mocked(catalog.peekModels).mockReturnValue(
+			peekResult(
+				"ollama",
+				[["deepseek-v4.1-flash:cloud", { name: "deepseek", supportsPromptCache: false, contextWindow: 128_000 }]],
+				"deepseek-v4.1-flash:cloud",
+			),
+		)
+		const controller = {
+			...makeController(store, catalog),
+			stateManager: { setGlobalStateBatch: vi.fn(), getApiConfiguration: () => ({}) },
+		}
+		sessionWindow.mockResolvedValueOnce(512_000)
+		const set = await resolveModelInfo(controller, { providerId: "ollama", modelId: "deepseek-v4.1-flash:cloud" })
+		expect(set.modelInfo?.contextWindow).toBe(512_000)
+		expect(sessionWindow).toHaveBeenLastCalledWith({}, "ollama", "deepseek-v4.1-flash:cloud")
+
+		// Nothing set and nothing declared: the catalog's number stays.
+		sessionWindow.mockResolvedValueOnce(undefined)
+		const unset = await resolveModelInfo(controller, { providerId: "ollama", modelId: "deepseek-v4.1-flash:cloud" })
+		expect(unset.modelInfo?.contextWindow).toBe(128_000)
+	})
+
 	it("returns committed-selection source when a matching selection exists", async () => {
 		const { resolveModelInfo } = await import("../resolveModelInfo")
 		const providerId = parseProviderId("deepseek")

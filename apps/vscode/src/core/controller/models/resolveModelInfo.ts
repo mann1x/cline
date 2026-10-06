@@ -1,8 +1,13 @@
+import { resolveOllamaSessionContextWindow } from "@/sdk/cline-session-factory"
 import type { ProviderModelsResult } from "@/sdk/model-catalog/contracts"
 import { providerAllowsCustomModelIds } from "@/sdk/model-catalog/custom-model-ids"
 import { ResolveModelInfoRequest, ResolveModelInfoResponse } from "@/shared/proto/cline/models"
 import { toProtobufModelInfo } from "@/shared/proto-conversions/models/typeConversion"
-import { type ProviderCatalogController, parseProviderIdRequest } from "./providerCatalogShared"
+import {
+	hasProviderCatalogStateController,
+	type ProviderCatalogController,
+	parseProviderIdRequest,
+} from "./providerCatalogShared"
 
 /**
  * Resolve a single (provider, model) pair for the webview's status /
@@ -35,6 +40,40 @@ import { type ProviderCatalogController, parseProviderIdRequest } from "./provid
  * placeholder rather than fabricating a model info.
  */
 export async function resolveModelInfo(
+	controller: ProviderCatalogController,
+	request: ResolveModelInfoRequest,
+): Promise<ResolveModelInfoResponse> {
+	return withSessionContextWindow(controller, await resolveCatalogModelInfo(controller, request))
+}
+
+/**
+ * The window the session will run with, over the one the catalog names.
+ *
+ * On Ollama the two differ whenever the user has set a window: the catalog
+ * has a default for a model it has never heard of, and the session reads the
+ * setting. Every consumer of this answer shows the model as it will run.
+ */
+async function withSessionContextWindow(
+	controller: ProviderCatalogController,
+	response: ResolveModelInfoResponse,
+): Promise<ResolveModelInfoResponse> {
+	if (!response.modelInfo || !hasProviderCatalogStateController(controller)) {
+		return response
+	}
+	const config = controller.stateManager.getApiConfiguration?.()
+	if (!config) {
+		return response
+	}
+	const contextWindow = await resolveOllamaSessionContextWindow(config, response.providerId, response.modelId).catch(
+		() => undefined,
+	)
+	if (contextWindow === undefined || contextWindow === response.modelInfo.contextWindow) {
+		return response
+	}
+	return ResolveModelInfoResponse.create({ ...response, modelInfo: { ...response.modelInfo, contextWindow } })
+}
+
+async function resolveCatalogModelInfo(
 	controller: ProviderCatalogController,
 	request: ResolveModelInfoRequest,
 ): Promise<ResolveModelInfoResponse> {

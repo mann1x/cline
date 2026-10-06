@@ -868,6 +868,45 @@ type OllamaProviderConfig = {
 }
 
 /**
+ * The window a session on an Ollama-native provider will run with, for a
+ * surface that shows it before any session exists: the user's setting, else
+ * what the model declares, else nothing (the caller keeps what it had).
+ *
+ * The task header's bar asked the model catalog instead, which knows neither:
+ * on pandorum a model set to 512,000 showed 128k on every new and every
+ * reopened session, until the first request's own measurement replaced it.
+ */
+export async function resolveOllamaSessionContextWindow(
+	config: ApiConfiguration,
+	providerId: string,
+	modelId: string | undefined,
+): Promise<number | undefined> {
+	if (!isOllamaNativeProvider(toSdkProviderId(providerId))) {
+		return undefined
+	}
+	let configured: number | undefined
+	try {
+		const value = getProviderSettingsManager().getProviderSettings(providerId)?.contextWindow
+		configured = typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined
+	} catch {
+		// Unreadable settings: the model's own answer is next.
+	}
+	if (configured === undefined && providerId === "ollama") {
+		const parsed = Number(config.ollamaApiOptionsCtxNum?.trim() || Number.NaN)
+		configured = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined
+	}
+	if (configured !== undefined) {
+		return configured
+	}
+	if (!modelId) {
+		return undefined
+	}
+	return positiveFiniteNumber(
+		await resolveOllamaContextWindow(resolveBaseUrl(providerId, config), modelId).catch(() => undefined),
+	)
+}
+
+/**
  * Resolve the user's "Model Context Window" setting for Ollama and surface it
  * as the selected model's `contextWindow`. The gateway carries it on the
  * resolved model definition, and the Ollama vendor maps it onto the wire as

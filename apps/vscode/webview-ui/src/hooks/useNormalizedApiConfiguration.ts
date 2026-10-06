@@ -137,7 +137,9 @@ export function useNormalizedApiConfiguration(mode: Mode): NormalizedApiConfig {
 		return () => {
 			cancelled = true
 		}
-	}, [provider, modelId])
+		// The window the user sets for Ollama is part of the answer: asked
+		// again when it changes, or the header keeps the one before the edit.
+	}, [provider, modelId, apiConfiguration?.ollamaApiOptionsCtxNum])
 
 	return useMemo(() => {
 		if (!resolvedInfo || resolvedInfo.source === "unknown" || !resolvedInfo.modelInfo) {
