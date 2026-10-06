@@ -856,7 +856,7 @@ function createLibraryAddTool(options: CreateLibraryToolsOptions): AgentTool {
 				const describe =
 					config.settings.describeImages &&
 					config.settings.describeImagesLimit > 0
-						? options.getDescribeImages?.()
+						? await options.getDescribeImages?.()
 						: undefined;
 				let added = 0;
 				let passages = 0;
@@ -951,7 +951,7 @@ function createLibraryAddTool(options: CreateLibraryToolsOptions): AgentTool {
 					summary.push(
 						describe
 							? `${plural(pictures, "picture")} kept, ${described} described${undescribed > 0 ? `; ${undescribed} have no description` : ""}.`
-							: `${plural(pictures, "picture")} kept, none described: ${config.settings.describeImages ? "no vision model is set (Settings > Library, or the Vision tab)" : "describing pictures is turned off in Settings > Library"}.`,
+							: `${plural(pictures, "picture")} kept, none described: ${config.settings.describeImages ? "no model that reads images is set (Settings > Library, or the Vision tab) and this conversation's model is not reported as reading images" : "describing pictures is turned off in Settings > Library"}.`,
 					);
 				}
 				for (const book of replaced) {
@@ -998,9 +998,9 @@ async function describeBookPicturesLater(
 	const catalogue = library.catalogue;
 	const book = oneBook(catalogue, text(request.book));
 	if (typeof book === "string") return book;
-	const describe = options.getDescribeImages?.();
+	const describe = await options.getDescribeImages?.();
 	if (!describe) {
-		return "No vision model is set, so no picture can be described. The user sets one in Settings > Library (the profile whose model describes pictures) or on the Vision tab. Nothing was changed.";
+		return "No model that reads images is available, so no picture can be described: none is set in Settings > Library (the profile whose model describes pictures) or on the Vision tab, and the model of this conversation is not reported as reading images. Nothing was changed.";
 	}
 	const sources = catalogue.sources(book.id);
 	const directory = catalogue.bookDirectory(book);

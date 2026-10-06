@@ -199,7 +199,7 @@ const LibrarySettingsSection = ({ renderSectionHeader }: LibrarySettingsSectionP
 									) : null}
 									<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
 										{settings.imageProfile === "" || imageProfileMissing
-											? "With no profile picked, the model on the Vision tab of the API configuration is used; with none there either, pictures are kept without a description."
+											? "With no profile picked, the model on the Vision tab of the API configuration is used; with none there either, the model of the conversation is used when its server reports that it reads images. Otherwise pictures are kept without a description."
 											: "One of the profiles saved in the API configuration: a cheap, fast model that reads images. Its provider, model, window and sampler are used; the key is the one stored for that provider."}
 									</p>
 								</div>

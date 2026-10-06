@@ -6,6 +6,7 @@ import { snapshotProviderId } from "@shared/model-scope-config"
 import { Logger } from "@shared/services/Logger"
 import { getProviderModelIdKey } from "@shared/storage/provider-keys"
 import { SecretKeys } from "@shared/storage/state-keys"
+import type { Mode } from "@shared/storage/types"
 import { buildApiHandler } from "./sdk-api-handler"
 
 /**
@@ -126,12 +127,14 @@ export const buildVisionApiConfiguration = buildScopedApiConfiguration
 export function createVisionImageDescriber(
 	configuration: ApiConfiguration,
 	visionProviderSettings?: Record<string, unknown>,
+	// A scoped configuration writes both modes alike; the session's own does not.
+	mode: Mode = "act",
 ): (images: readonly AgentImageToDescribe[]) => Promise<readonly (string | undefined)[]> {
 	return async (images) => {
 		// Built from the vision tab's own provider entry, so the base URL,
 		// context window and sampler are the ones configured for this model
 		// rather than the primary model's.
-		const handler = buildApiHandler(configuration, "act", {
+		const handler = buildApiHandler(configuration, mode, {
 			visionProviderSettings,
 		})
 		const descriptions: (string | undefined)[] = []

@@ -16,7 +16,7 @@ import {
 	resolveScrapeSettings,
 	type ScrapeSettings,
 } from "@cline/core"
-import type { AgentImageToDescribe } from "@cline/shared"
+import { type AgentImageToDescribe, isOllamaNativeProvider } from "@cline/shared"
 import { findApiConfigurationProfile, parseApiConfigurationProfiles } from "@shared/api-config-profiles"
 import { resolveVisionModelStatus } from "@shared/vision-config"
 import { StateManager } from "@/core/storage/StateManager"
@@ -24,7 +24,8 @@ import { HostProvider } from "@/hosts/host-provider"
 import { ShowMessageType } from "@/shared/proto/host/window"
 import { embeddingEndpointConfigured, parseRetrievalEndpoints, rerankingEndpointConfigured } from "@/shared/retrieval-endpoints"
 import { Logger } from "@/shared/services/Logger"
-import { ensureBaseUrlScheme } from "./cline-session-factory"
+import { ensureBaseUrlScheme, ollamaNativeBaseUrl, resolveBaseUrl, resolveModelId } from "./cline-session-factory"
+import { resolveImageSupport } from "./image-support"
 import { readLeadMediaProvider } from "./media-endpoint-config"
 import { buildScopedApiConfiguration, buildVisionApiConfiguration, createVisionImageDescriber } from "./vision-model"
 
@@ -139,11 +140,47 @@ type ImageDescriber = (images: readonly AgentImageToDescribe[]) => Promise<reado
 
 /**
  * The model that describes a book's pictures: the saved profile the Library
- * panel names, and without one the Vision tab's model. `undefined` when
- * neither is there, and the pictures are then kept without descriptions.
- * Read when a book is added, so a profile picked mid-session is the one used.
+ * panel names, without one the Vision tab's model, and without that the
+ * session's own model when its server says it reads images. `undefined` when
+ * none of the three is there, and the pictures are then kept without
+ * descriptions. Read when a book is added, so a profile picked mid-session is
+ * the one used.
+ *
+ * The third was missing. A session on `deepseek-v4.1-flash:cloud`, which
+ * Ollama reports as `vision`, was told no vision model was set: a second model
+ * was demanded of someone whose first could already do the job.
  */
-export function readLibraryImageDescriber(): ImageDescriber | undefined {
+export async function readLibraryImageDescriber(): Promise<ImageDescriber | undefined> {
+	return readNamedImageDescriber() ?? (await readSessionImageDescriber())
+}
+
+/**
+ * The session's own model as the describer, when it is known to read images.
+ *
+ * Known, not assumed: the catalog's default for a model it has never heard of
+ * is optimistic, and a describer that cannot see returns nothing for every
+ * picture of a book. So only a server's own "yes" counts here.
+ */
+async function readSessionImageDescriber(): Promise<ImageDescriber | undefined> {
+	const state = StateManager.get()
+	const configuration = state.getApiConfiguration()
+	const mode = state.getGlobalSettingsKey("mode") === "plan" ? "plan" : "act"
+	const provider = mode === "plan" ? configuration.planModeApiProvider : configuration.actModeApiProvider
+	if (!provider) {
+		return undefined
+	}
+	const model = resolveModelId(provider, mode, configuration)
+	const baseUrl = isOllamaNativeProvider(provider)
+		? ollamaNativeBaseUrl(provider, configuration)
+		: resolveBaseUrl(provider, configuration)
+	if ((await resolveImageSupport(provider, baseUrl, model)) !== "yes") {
+		return undefined
+	}
+	Logger.log(`[Library] Pictures are described by the session's own model: provider=${provider} model=${model}`)
+	return createVisionImageDescriber(configuration, undefined, mode)
+}
+
+function readNamedImageDescriber(): ImageDescriber | undefined {
 	const state = StateManager.get()
 	const primary = state.getApiConfiguration()
 	const named = readLibrarySettings().imageProfile

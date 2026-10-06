@@ -501,7 +501,7 @@ describe("the Library tools", () => {
 				action: "describe_pictures",
 				book: "#1",
 			}),
-		).toContain("No vision model is set");
+		).toContain("No model that reads images is available");
 
 		// One picture a call when that is the limit, and the next call goes on.
 		let asked = 0;

@@ -16,10 +16,14 @@ vi.mock("@/core/storage/StateManager", () => ({
 	},
 }))
 
+const imageSupport = vi.hoisted(() => ({ resolve: vi.fn() }))
+vi.mock("./image-support", () => ({ resolveImageSupport: imageSupport.resolve }))
+
 import { DEFAULT_LIBRARY_SETTINGS } from "@cline/core"
 import { embeddingEndpointConfigured, parseRetrievalEndpoints, rerankingEndpointConfigured } from "@/shared/retrieval-endpoints"
 import {
 	readEmbeddingEndpoint,
+	readLibraryImageDescriber,
 	readLibrarySettings,
 	readLibraryToolsConfig,
 	readMemorySettings,
@@ -198,5 +202,32 @@ describe("Memory's configuration", () => {
 				hydeProfile: "",
 			},
 		})
+	})
+})
+
+// Measured on pandorum: a session on `deepseek-v4.1-flash:cloud`, which Ollama
+// reports as `vision`, was told no vision model was set.
+describe("the model that describes a book's pictures", () => {
+	beforeEach(() => {
+		state.settings = {}
+		state.api = {
+			actModeApiProvider: "ollama",
+			actModeOllamaModelId: "deepseek-v4.1-flash:cloud",
+			ollamaBaseUrl: "http://192.168.178.25:11434",
+		}
+		imageSupport.resolve.mockReset()
+	})
+
+	it("is the session's own model when nothing else is named and its server says it reads images", async () => {
+		imageSupport.resolve.mockResolvedValue("yes")
+
+		expect(await readLibraryImageDescriber()).toBeTypeOf("function")
+		expect(imageSupport.resolve).toHaveBeenCalledWith("ollama", "http://192.168.178.25:11434", "deepseek-v4.1-flash:cloud")
+	})
+
+	it.each(["no", "unknown"])("is nobody when the session's model answers %s", async (answer) => {
+		imageSupport.resolve.mockResolvedValue(answer)
+
+		expect(await readLibraryImageDescriber()).toBeUndefined()
 	})
 })

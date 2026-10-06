@@ -66,8 +66,14 @@ export interface CreateLibraryToolsOptions {
 	getConfig: () => LibraryToolsConfig | undefined;
 	/** @default the shared Library of the data folder */
 	library?: Library;
-	/** The model that describes a book's pictures, read when a book is added. */
-	getDescribeImages?: () => DescribeImages | undefined;
+	/**
+	 * The model that describes a book's pictures, read when a book is added.
+	 * May take a moment: a host can ask a server whether a model reads images.
+	 */
+	getDescribeImages?: () =>
+		| DescribeImages
+		| undefined
+		| Promise<DescribeImages | undefined>;
 	/** Whether the librarian's tools are offered. @default the librarian skill is on */
 	librarian?: boolean;
 	onError?: (message: string, error: unknown) => void;
