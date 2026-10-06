@@ -22,7 +22,39 @@ The model then has three tools:
 
 You can simply say so: *"remember that we run the tests with node --test, not jest"*, *"what do you know about how this project is deployed?"*, *"forget the note about the staging server"*.
 
-The model decides when to call these. It is told to look for notes at the start of a task and before deciding something, but nothing recalls for it: a model that does not ask does not get its notes. If a task depends on something noted earlier, say *"check your notes first"*.
+## Automatic recall
+
+With **Recall automatically** on, which it is by default, Memory is searched with every message you send, at the start of a task and after it. The notes that are about the message are put beside it for the model, so they arrive without the model having to ask. Small models seldom call `recall` on their own.
+
+You see one line in the chat, for instance *Recalled 2 notes from Memory (m3, m1)*. The model sees the notes themselves, marked as noted in earlier tasks and to be checked before they are relied on.
+
+- A note is given to a task once. If the conversation is compacted later, the model can still call `recall`.
+- A message shorter than 12 characters ("yes", "continue") is not searched with.
+- A search that fails, or a server that is down, never holds up a message: it goes to the model without notes.
+
+A search always returns its best matches, however poor. So a note is attached only when something says it is about your message:
+
+| With | A note is attached when |
+| --- | --- |
+| Keyword search only | it shares at least two meaningful words with the message |
+| An embedding model | the above, or it is close to the message by meaning |
+| A reranking model | the reranker scored it at or above the **relevance threshold** |
+
+The model still has `recall`, and its own searches are not filtered this way: it asked.
+
+### Expanding the question (HyDE)
+
+A message and the note that answers it often share no words: *"how do I check my changes before I commit?"* against *"tests are run with node --test"*. With **Expand the question first (HyDE)** on, a second model writes the short note that would answer your message, Memory is searched again with that, and the two results are merged.
+
+The hypothetical note is grounded: the second model is given the notes the first search returned, or the newest notes when it returned none, and told to use only what is in them. Asked to imagine a note about a project's own names from nothing, a model invents one about something else.
+
+Pick the model under **Profile whose model writes it**: one of the profiles saved in the API configuration. Its provider, model, window and sampler are used; the key is the one stored for that provider. It adds one short model call to every message, so a cheap, fast model is the right choice, and a small cloud model is the usual one.
+
+- Until a profile is picked, Memory is searched with your message alone.
+- The call has 20 seconds. If it fails, is empty or runs out of time, the first search stands.
+- The same message with the same notes is not expanded twice in a session.
+
+HyDE (Hypothetical Document Embeddings) is from Gao, Ma, Lin and Callan, *Precise Zero-Shot Dense Retrieval without Relevance Labels* (2022). The order of work here (search first, expand grounded on what was found, search again, merge) is the one [claude-hooks](https://github.com/mann1x/claude-hooks) uses.
 
 ## Project notes and global notes
 
@@ -49,6 +81,9 @@ To find notes by meaning as well, tick **Use an embedding model** in the API con
 | --- | --- | --- |
 | Enable Memory | off | Offers the three tools. |
 | Where a note is kept when the model does not say | This project | The scope of a note the model gave no scope. |
+| Recall automatically | on | Searches Memory with every message you send and gives the model the notes about it. |
+| Expand the question first (HyDE) | off | Has a second model write the note that would answer the message, and searches with that as well. |
+| Profile whose model writes it | none | The saved profile used for the expansion. |
 | Notes a recall returns | 5 | The most notes one recall gives the model. Each one takes room in the conversation. |
 | Relevance threshold | 0 | With a reranking model, notes scored below this are left out. 0 keeps them all. Without a reranker it has no effect. |
 
@@ -61,4 +96,4 @@ To find notes by meaning as well, tick **Use an embedding model** in the API con
 
 ## In the CLI
 
-`--memory` (or `CLINE_MEMORY=1`) offers the same tools on the panel's defaults. An embedding model is named by environment: `CLINE_EMBEDDING_BASE_URL`, `CLINE_EMBEDDING_MODEL` and, where the endpoint needs one, `CLINE_EMBEDDING_API_KEY`. Notes are kept under `--data-dir`.
+`--memory` (or `CLINE_MEMORY=1`) offers the same tools on the panel's defaults, with automatic recall; `CLINE_MEMORY_AUTO_RECALL=0` turns that off. `CLINE_MEMORY_HYDE_MODEL` names a model on the session's provider to write the expansion. An embedding model is named by environment: `CLINE_EMBEDDING_BASE_URL`, `CLINE_EMBEDDING_MODEL` and, where the endpoint needs one, `CLINE_EMBEDDING_API_KEY`. Notes are kept under `--data-dir`.
