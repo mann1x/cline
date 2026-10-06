@@ -50,6 +50,11 @@ export interface AddDocumentResult {
 	outcome: "added" | "replaced" | "unchanged";
 	/** The ids given to the chunks, in order. Empty for "unchanged". */
 	chunkIds: number[];
+	/**
+	 * For "replaced": the id the document had before. Its chunks are gone, and
+	 * whatever else was kept under that id (its vectors) is the caller's to remove.
+	 */
+	replacedDocumentId?: number;
 }
 
 export interface KeywordSearchOptions {
@@ -108,6 +113,16 @@ const SCHEMA = [
 		headings TEXT NOT NULL DEFAULT '[]'
 	)`,
 	"CREATE INDEX IF NOT EXISTS chunks_by_document ON chunks(document_id, ord)",
+	// Which documents have their vectors written, per embedding model. The
+	// vectors themselves are elsewhere; a row here is written only after all
+	// of a document's vectors are, so an interrupted run is simply resumed.
+	`CREATE TABLE IF NOT EXISTS document_embeddings (
+		document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+		model TEXT NOT NULL,
+		dimension INTEGER NOT NULL,
+		embedded_at TEXT NOT NULL,
+		PRIMARY KEY (document_id, model)
+	)`,
 	// unicode61 and no stemmer: a library is not all in one language.
 	`CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 		text, context,
@@ -340,6 +355,7 @@ export class LibraryStore {
 				document,
 				outcome: existing ? "replaced" : "added",
 				chunkIds,
+				replacedDocumentId: existing?.id,
 			};
 		});
 	}
@@ -351,6 +367,65 @@ export class LibraryStore {
 				.run(documentId);
 			this.db.prepare("DELETE FROM documents WHERE id = ?").run(documentId);
 		});
+	}
+
+	/** A document's chunks, in order: what is embedded. */
+	documentChunks(documentId: number): LibraryHit[] {
+		return this.db
+			.prepare(
+				`SELECT k.*, d.source, d.title FROM chunks k JOIN documents d ON d.id = k.document_id
+				WHERE k.document_id = ? ORDER BY k.ord`,
+			)
+			.all(documentId)
+			.map((row) => this.toHit(row, 0));
+	}
+
+	/** Documents with chunks and no vectors yet for this model, oldest first. */
+	documentsWithoutEmbedding(
+		model: string,
+		collectionIds: readonly number[] = [],
+	): LibraryDocument[] {
+		return this.db
+			.prepare(
+				`SELECT d.* FROM documents d
+				WHERE d.chunk_count > 0
+				AND NOT EXISTS (SELECT 1 FROM document_embeddings e WHERE e.document_id = d.id AND e.model = ?)
+				${collectionIds.length > 0 ? `AND d.collection_id IN (${collectionIds.map(() => "?").join(",")})` : ""}
+				ORDER BY d.id`,
+			)
+			.all(model, ...collectionIds)
+			.map((row) => this.toDocument(row));
+	}
+
+	markEmbedded(documentId: number, model: string, dimension: number): void {
+		this.db
+			.prepare(
+				`INSERT INTO document_embeddings(document_id, model, dimension, embedded_at) VALUES (?, ?, ?, ?)
+				ON CONFLICT(document_id, model) DO UPDATE SET dimension = excluded.dimension, embedded_at = excluded.embedded_at`,
+			)
+			.run(documentId, model, dimension, new Date().toISOString());
+	}
+
+	/** Totals, and how many documents have vectors for this model. */
+	counts(model?: string): {
+		collections: number;
+		documents: number;
+		chunks: number;
+		embeddedDocuments: number;
+	} {
+		const one = (sql: string, ...args: unknown[]) =>
+			Number(this.db.prepare(sql).get(...args)?.n ?? 0);
+		return {
+			collections: one("SELECT COUNT(*) AS n FROM collections"),
+			documents: one("SELECT COUNT(*) AS n FROM documents"),
+			chunks: one("SELECT COUNT(*) AS n FROM chunks"),
+			embeddedDocuments: model
+				? one(
+						"SELECT COUNT(*) AS n FROM document_embeddings WHERE model = ?",
+						model,
+					)
+				: 0,
+		};
 	}
 
 	private toHit(row: Record<string, unknown>, score: number): LibraryHit {
