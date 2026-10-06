@@ -1,4 +1,10 @@
-import { DEFAULT_MEMORY_SETTINGS, type MemorySettings, resolveMemorySettings } from "@cline/shared"
+import {
+	DEFAULT_MEMORY_SETTINGS,
+	type MemorySelection,
+	type MemorySettings,
+	memorySelectionFor,
+	resolveMemorySettings,
+} from "@cline/shared"
 import { parseApiConfigurationProfiles } from "@shared/api-config-profiles"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { embeddingEndpointConfigured, parseRetrievalEndpoints } from "@shared/retrieval-endpoints"
@@ -10,6 +16,9 @@ import { StateServiceClient } from "@/services/grpc-client"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import { SettingsCheckbox } from "../common/SettingsCheckbox"
 import Section from "../Section"
+import { useRetrievalStatus } from "../utils/useRetrievalStatus"
+import MemoryList from "./MemoryList"
+import RetrievalEngineStatus from "./RetrievalEngineStatus"
 
 interface MemorySettingsSectionProps {
 	renderSectionHeader: (tabId: string) => JSX.Element | null
@@ -42,6 +51,9 @@ const MemorySettingsSection = ({ renderSectionHeader }: MemorySettingsSectionPro
 	)
 	// A profile deleted after it was picked: still shown, so it can be seen
 	// to be gone rather than silently reading as "none".
+	const retrieval = useRetrievalStatus()
+	const workspaceKey = retrieval.status?.workspace.key
+	const selection = useMemo(() => memorySelectionFor(settings, workspaceKey), [settings, workspaceKey])
 	const hydeProfileMissing = settings.hydeProfile !== "" && !profileNames.includes(settings.hydeProfile)
 
 	const save = useCallback(
@@ -93,6 +105,18 @@ const MemorySettingsSection = ({ renderSectionHeader }: MemorySettingsSectionPro
 
 				{memoryEnabled ? (
 					<>
+						<RetrievalEngineStatus kind="memory" retrieval={retrieval} />
+
+						{workspaceKey !== undefined ? (
+							<MemoryList
+								onSelect={(next: MemorySelection) =>
+									void save({ selections: { ...settings.selections, [workspaceKey]: next } })
+								}
+								retrieval={retrieval}
+								selection={selection}
+							/>
+						) : null}
+
 						<div>
 							<SettingsCheckbox
 								checked={settings.autoRecall}
@@ -153,26 +177,6 @@ const MemorySettingsSection = ({ renderSectionHeader }: MemorySettingsSectionPro
 								) : null}
 							</div>
 						) : null}
-
-						<div>
-							<label className="font-medium text-sm block mb-1" htmlFor="memory-default-scope">
-								Where a note is kept when the model does not say
-							</label>
-							<VSCodeDropdown
-								className="w-full"
-								id="memory-default-scope"
-								onChange={(event: any) =>
-									void save({ defaultScope: event.target.value === "global" ? "global" : "project" })
-								}
-								value={settings.defaultScope}>
-								<VSCodeOption value="project">This project</VSCodeOption>
-								<VSCodeOption value="global">Every project</VSCodeOption>
-							</VSCodeDropdown>
-							<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
-								A project note is seen only in the workspace it was made in. A note for every project is seen
-								everywhere, which suits your own preferences. A recall looks in both.
-							</p>
-						</div>
 
 						<DebouncedTextField
 							className="w-full"

@@ -216,9 +216,11 @@ export {
 	installLanceDb,
 	isLanceDbInstalled,
 	lanceDbInstallBytes,
+	lanceDbStatus,
 	lanceDbUnsupportedReason,
 } from "../../../../sdk/packages/core/src/services/retrieval/lancedb-runtime"
-export { resolveLanceDbRuntimeDirectory } from "../../../../sdk/packages/core/src/services/retrieval/library"
+export { resolveLanceDbRuntimeDirectory, sharedLibrary } from "../../../../sdk/packages/core/src/services/retrieval/library"
+export { sharedMemory } from "../../../../sdk/packages/core/src/services/retrieval/memory"
 export { createMemoryRecaller } from "../../../../sdk/packages/core/src/services/retrieval/memory-recall"
 // From source: `resumed-compaction.ts` rebases a saved compaction with these,
 // and a stub that always "projects" would pass a test of exactly that.
@@ -227,7 +229,14 @@ export {
 	projectSessionCompactionState,
 } from "../../../../sdk/packages/core/src/session/models/session-compaction"
 export { DEFAULT_LIBRARY_SETTINGS, resolveLibrarySettings } from "../../../../sdk/packages/shared/src/retrieval/library-settings"
-export { DEFAULT_MEMORY_SETTINGS, resolveMemorySettings } from "../../../../sdk/packages/shared/src/retrieval/memory-settings"
+export {
+	DEFAULT_MEMORY_SELECTION,
+	DEFAULT_MEMORY_SETTINGS,
+	MAIN_MEMORY,
+	memorySelectionFor,
+	memoryWorkspaceKey,
+	resolveMemorySettings,
+} from "../../../../sdk/packages/shared/src/retrieval/memory-settings"
 
 export type GlobalCompactionStrategy = "basic" | "agentic"
 

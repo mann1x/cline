@@ -151,7 +151,7 @@ describe("Memory's configuration", () => {
 	it("is off until Memory is turned on, whatever the Library is", () => {
 		state.settings = { libraryEnabled: true }
 		expect(readMemoryToolsConfig()).toBeUndefined()
-		expect(readMemorySettings()).toMatchObject({ enabled: false, recallCount: 5, defaultScope: "project" })
+		expect(readMemorySettings()).toMatchObject({ enabled: false, recallCount: 5, selections: {} })
 	})
 
 	it("takes its own settings and the Embedding tab's models", () => {
@@ -159,7 +159,7 @@ describe("Memory's configuration", () => {
 			memoryEnabled: true,
 			memorySettings: JSON.stringify({
 				recallCount: 8,
-				defaultScope: "global",
+				selections: { "C:\\Dev\\App": { store: "app", recall: ["app", "main"] } },
 				enabled: false,
 				hyde: true,
 				hydeProfile: " cheap cloud ",
@@ -175,7 +175,7 @@ describe("Memory's configuration", () => {
 				enabled: true,
 				recallCount: 8,
 				relevanceThreshold: 0,
-				defaultScope: "global",
+				selections: { "c:/dev/app": { store: "app", recall: ["app", "main"] } },
 				autoRecall: true,
 				hyde: true,
 				hydeProfile: "cheap cloud",
@@ -192,7 +192,7 @@ describe("Memory's configuration", () => {
 				enabled: true,
 				recallCount: 5,
 				relevanceThreshold: 0,
-				defaultScope: "project",
+				selections: {},
 				autoRecall: true,
 				hyde: false,
 				hydeProfile: "",

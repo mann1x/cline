@@ -519,8 +519,13 @@ export {
 	resolveLibrarySettings,
 } from "./retrieval/library-settings";
 export {
+	DEFAULT_MEMORY_SELECTION,
 	DEFAULT_MEMORY_SETTINGS,
+	MAIN_MEMORY,
+	type MemorySelection,
 	type MemorySettings,
+	memorySelectionFor,
+	memoryWorkspaceKey,
 	resolveMemorySettings,
 } from "./retrieval/memory-settings";
 export {

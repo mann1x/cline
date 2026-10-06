@@ -9,6 +9,8 @@ import { StateServiceClient } from "@/services/grpc-client"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import { SettingsCheckbox } from "../common/SettingsCheckbox"
 import Section from "../Section"
+import { useRetrievalStatus } from "../utils/useRetrievalStatus"
+import RetrievalEngineStatus from "./RetrievalEngineStatus"
 
 interface LibrarySettingsSectionProps {
 	renderSectionHeader: (tabId: string) => JSX.Element | null
@@ -39,6 +41,7 @@ const hint = "text-xs -mt-2 text-(--vscode-descriptionForeground)"
  */
 const LibrarySettingsSection = ({ renderSectionHeader }: LibrarySettingsSectionProps) => {
 	const { libraryEnabled, librarySettings, embeddingEnabled, retrievalEndpoints } = useExtensionState()
+	const retrieval = useRetrievalStatus()
 	const settings = useMemo(() => parseLibrarySettings(librarySettings), [librarySettings])
 	const endpoints = useMemo(() => parseRetrievalEndpoints(retrievalEndpoints), [retrievalEndpoints])
 	const embedding = embeddingEnabled && embeddingEndpointConfigured(endpoints)
@@ -113,6 +116,8 @@ const LibrarySettingsSection = ({ renderSectionHeader }: LibrarySettingsSectionP
 
 				{libraryEnabled ? (
 					<>
+						<RetrievalEngineStatus kind="library" retrieval={retrieval} />
+
 						<div className="pt-3 border-t border-(--vscode-panel-border) font-medium">Splitting documents</div>
 						<p className={hint}>
 							A document is cut into passages, and passages are what is searched and returned. These apply to

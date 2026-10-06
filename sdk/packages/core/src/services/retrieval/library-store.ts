@@ -228,6 +228,17 @@ export class LibraryStore {
 		return found;
 	}
 
+	/** Give a collection another name. The documents and vectors stay as they are. */
+	renameCollection(collectionId: number, name: string): void {
+		const trimmed = name.trim();
+		if (!trimmed) {
+			throw new Error("A collection needs a name.");
+		}
+		this.db
+			.prepare("UPDATE collections SET name = ? WHERE id = ?")
+			.run(trimmed, collectionId);
+	}
+
 	listCollections(): LibraryCollection[] {
 		return this.db
 			.prepare(

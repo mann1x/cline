@@ -252,6 +252,57 @@ export function loadLanceDb(
 	}
 }
 
+/** Where LanceDB stands here: for a settings panel, and for a bug report. */
+export interface LanceDbStatus {
+	/** The version this build installs. */
+	version: string;
+	platform: string;
+	installed: boolean;
+	/** Installed, and the native library loaded in this process. */
+	working: boolean;
+	/** Why it did not load, when it is installed and did not. */
+	error?: string;
+	/** Why it cannot run here at all. */
+	unsupported?: string;
+	/** What a download unpacks to, when known. */
+	installBytes?: number;
+	root: string;
+}
+
+/**
+ * Whether LanceDB is installed and actually loads. Loading is the part
+ * worth checking: the files being there says nothing about whether this
+ * process, with its Node and its C library, can open the native library.
+ */
+export function lanceDbStatus(
+	options: Pick<LanceDbRuntimeOptions, "directory" | "manifest">,
+): LanceDbStatus {
+	const manifest = options.manifest ?? LANCEDB_RUNTIME_MANIFEST;
+	const unsupported = lanceDbUnsupportedReason({ manifest });
+	const installBytes = lanceDbInstallBytes({ manifest });
+	const base = {
+		version: manifest.version,
+		platform: currentPlatformKey(),
+		root: lanceDbRuntimeRoot(options),
+		...(unsupported ? { unsupported } : {}),
+		...(installBytes ? { installBytes } : {}),
+	};
+	if (!isLanceDbInstalled(options)) {
+		return { ...base, installed: false, working: false };
+	}
+	try {
+		loadLanceDb(options);
+		return { ...base, installed: true, working: true };
+	} catch (error) {
+		return {
+			...base,
+			installed: true,
+			working: false,
+			error: error instanceof Error ? error.message : String(error),
+		};
+	}
+}
+
 /** Install if needed, then load. */
 export async function ensureLanceDb(
 	options: LanceDbRuntimeOptions,

@@ -1005,9 +1005,14 @@ export async function loadOpenTelemetryAdapter() {
 export { Agent, createAgentRuntime } from "@cline/agents";
 export {
 	DEFAULT_LIBRARY_SETTINGS,
+	DEFAULT_MEMORY_SELECTION,
 	DEFAULT_MEMORY_SETTINGS,
 	type LibrarySettings,
+	MAIN_MEMORY,
+	type MemorySelection,
 	type MemorySettings,
+	memorySelectionFor,
+	memoryWorkspaceKey,
 	resolveLibrarySettings,
 	resolveMemorySettings,
 } from "@cline/shared";
@@ -1341,6 +1346,7 @@ export {
 	MEMORY_TOOL_NAMES,
 	type MemoryToolName,
 	type MemoryToolsConfig,
+	resolveMemoryAccess,
 } from "./extensions/tools/memory-tools";
 export {
 	commandText,
@@ -1566,8 +1572,10 @@ export {
 	installLanceDb,
 	isLanceDbInstalled,
 	type LanceDbInstallProgress,
+	type LanceDbStatus,
 	LanceDbUnavailableError,
 	lanceDbInstallBytes,
+	lanceDbStatus,
 	lanceDbUnsupportedReason,
 } from "./services/retrieval/lancedb-runtime";
 export {
@@ -1588,11 +1596,15 @@ export type {
 	LibraryHit,
 } from "./services/retrieval/library-store";
 export {
+	MEMORY_EXPORT_FORMAT,
 	MEMORY_MAX_CHARS,
+	MEMORY_NAME_MAX_CHARS,
 	Memory,
 	type MemoryEndpoints,
+	type MemoryExport,
+	type MemoryInfo,
 	type MemoryItem,
-	type MemoryScope,
+	normalizeMemoryName,
 	type RecalledMemory,
 	resolveMemoryDirectory,
 	sharedMemory,

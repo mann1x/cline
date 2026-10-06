@@ -151,6 +151,21 @@ export function readMemoryToolsConfig(): MemoryToolsConfig | undefined {
 }
 
 let installing: Promise<void> | undefined
+let installProgress: { packageIndex: number; packageCount: number } | undefined
+let lastInstallError: string | undefined
+
+/** For the panels: whether a download is running, how far it is, and why the last one failed. */
+export function libraryVectorsInstallState(): {
+	installing: boolean
+	progress?: { packageIndex: number; packageCount: number }
+	lastError?: string
+} {
+	return {
+		installing: installing !== undefined,
+		...(installProgress ? { progress: installProgress } : {}),
+		...(lastInstallError ? { lastError: lastInstallError } : {}),
+	}
+}
 
 /**
  * Download LanceDB, which holds the Library's vectors, when "Use an embedding
@@ -181,7 +196,13 @@ export function installLibraryVectors(): Promise<void> {
 				type: ShowMessageType.INFORMATION,
 				message: `Library: downloading LanceDB${size} for search by meaning. Keyword search works meanwhile.`,
 			})
-			await installLanceDb({ directory })
+			lastInstallError = undefined
+			await installLanceDb({
+				directory,
+				onProgress: (progress) => {
+					installProgress = { packageIndex: progress.packageIndex, packageCount: progress.packageCount }
+				},
+			})
 			Logger.log("[Library] LanceDB installed")
 			HostProvider.window.showMessage({
 				type: ShowMessageType.INFORMATION,
@@ -189,13 +210,15 @@ export function installLibraryVectors(): Promise<void> {
 			})
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error)
+			lastInstallError = reason
 			Logger.warn(`[Library] LanceDB was not installed: ${reason}`)
 			HostProvider.window.showMessage({
 				type: ShowMessageType.ERROR,
-				message: `Library: LanceDB could not be installed (${reason}). Search stays on keywords; untick and tick "Use an embedding model" to try again.`,
+				message: `Library: LanceDB could not be installed (${reason}). Search stays on keywords; the Download button in Settings > Library tries again.`,
 			})
 		} finally {
 			installing = undefined
+			installProgress = undefined
 		}
 	})()
 	return installing

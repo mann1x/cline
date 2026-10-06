@@ -32,7 +32,10 @@
  */
 
 import { RECALLED_MEMORY_TAG } from "@cline/shared";
-import type { MemoryToolsConfig } from "../../extensions/tools/memory-tools";
+import {
+	type MemoryToolsConfig,
+	resolveMemoryAccess,
+} from "../../extensions/tools/memory-tools";
 import { queryTerms } from "./library-store";
 import { type Memory, type RecalledMemory, sharedMemory } from "./memory";
 
@@ -80,7 +83,7 @@ export type MemoryQueryExpander = (input: {
 export interface MemoryRecallInput {
 	/** The user's message, as typed. */
 	prompt: string;
-	/** The workspace, which is what "this project" means. */
+	/** The workspace, which decides the memories that are searched. */
 	cwd: string;
 	/** Notes already given to a session are not given to it again. */
 	sessionId?: string;
@@ -195,7 +198,7 @@ export function formatRecalledMemory(items: RecalledMemory[]): string {
 		"",
 		...items.map(
 			(item) =>
-				`[${item.id}] ${item.createdAt.slice(0, 10)}, ${item.scope}${item.tags.length ? `, tags: ${item.tags.join(", ")}` : ""}\n${item.text}`,
+				`[${item.id}] ${item.createdAt.slice(0, 10)}, ${item.memory}${item.tags.length ? `, tags: ${item.tags.join(", ")}` : ""}\n${item.text}`,
 		),
 		`</${RECALLED_MEMORY_TAG}>`,
 	].join("\n");
@@ -268,11 +271,11 @@ export function createMemoryRecaller(
 		if (question.length < MEMORY_RECALL_MIN_PROMPT_CHARS) return undefined;
 		const memory = options.memory ?? sharedMemory();
 		const query = clampRecallQuery(question);
+		let memories: string[] = [];
 		const search = async (text: string) => {
 			const found = (
 				await memory.recall(text, {
-					project: input.cwd,
-					scope: "all",
+					memories,
 					settings: config.settings,
 					endpoints: config,
 				})
@@ -283,6 +286,8 @@ export function createMemoryRecaller(
 			};
 		};
 		try {
+			memories = resolveMemoryAccess(memory, config.settings, input.cwd).recall;
+			if (memories.length === 0) return undefined;
 			const raw = await search(query);
 			let items = raw.about;
 			let expanded = false;
@@ -300,9 +305,7 @@ export function createMemoryRecaller(
 					// least speak the project's language. No notes at all: no
 					// expansion, there is nothing it could find.
 					const grounding =
-						raw.found.length > 0
-							? raw.found
-							: memory.list({ project: input.cwd, scope: "all" });
+						raw.found.length > 0 ? raw.found : memory.list({ memories });
 					const note =
 						grounding.length > 0
 							? await expand(expander, query, grounding)

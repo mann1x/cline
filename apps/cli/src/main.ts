@@ -1507,6 +1507,7 @@ export async function runCli(): Promise<void> {
 				createMemoryRecaller,
 				createMemoryTools,
 				DEFAULT_MEMORY_SETTINGS,
+				memoryWorkspaceKey,
 			} = await import("@cline/core");
 			const embeddingBaseUrl = process.env.CLINE_EMBEDDING_BASE_URL?.trim();
 			const embeddingModel = process.env.CLINE_EMBEDDING_MODEL?.trim();
@@ -1514,12 +1515,26 @@ export async function runCli(): Promise<void> {
 			// The expansion (HyDE): a second model on the session's own provider,
 			// named by environment. The extension picks a saved profile instead.
 			const hydeModel = process.env.CLINE_MEMORY_HYDE_MODEL?.trim();
+			// Which memories this run uses: one to store to, any number to
+			// search. The extension keeps this per workspace in its Memory
+			// panel; here it is said per run. Both default to the main memory.
+			const storeMemory = process.env.CLINE_MEMORY_STORE?.trim() || "main";
+			const recallMemories = (process.env.CLINE_MEMORY_RECALL ?? storeMemory)
+				.split(",")
+				.map((name) => name.trim())
+				.filter(Boolean);
 			const getConfig = () => ({
 				settings: {
 					...DEFAULT_MEMORY_SETTINGS,
 					enabled: true,
 					autoRecall: process.env.CLINE_MEMORY_AUTO_RECALL !== "0",
 					hyde: !!hydeModel,
+					selections: {
+						[memoryWorkspaceKey(cwd)]: {
+							store: storeMemory,
+							recall: recallMemories,
+						},
+					},
 				},
 				...(embeddingBaseUrl && embeddingModel
 					? {

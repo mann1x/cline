@@ -37,6 +37,9 @@ service StateService {
   rpc refreshRemoteConfig(EmptyRequest) returns (Empty);
   rpc testOtelConnection(EmptyRequest) returns (TestConnectionResult);
   rpc testPromptUploading(EmptyRequest) returns (TestConnectionResult);
+  // The Library and Memory panels: LanceDB's status and download, and
+  // making, deleting, exporting and importing a memory. JSON in, JSON out.
+  rpc retrievalAction(StringRequest) returns (String);
 }
 
 message AutoApprovalActions {

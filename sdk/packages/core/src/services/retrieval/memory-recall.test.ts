@@ -26,16 +26,19 @@ describe("automatic recall", () => {
 	beforeEach(async () => {
 		root = mkdtempSync(join(tmpdir(), "memory-recall-"));
 		memory = new Memory({ directory: root });
-		settings = { ...DEFAULT_MEMORY_SETTINGS, enabled: true };
+		memory.createMemory({ name: "tally", workspace: project });
+		settings = {
+			...DEFAULT_MEMORY_SETTINGS,
+			enabled: true,
+			selections: { [project]: { store: "tally", recall: ["tally", "main"] } },
+		};
 		await memory.remember({
 			text: "Tests are run with node --test, never with jest: jest broke the ESM build twice.",
-			scope: "project",
-			project,
+			memory: "tally",
 			tags: ["testing"],
 		});
 		await memory.remember({
 			text: "The user wants two-space indentation in every project.",
-			scope: "global",
 			tags: ["style"],
 		});
 	});
@@ -94,7 +97,7 @@ describe("automatic recall", () => {
 		expect((await recall({ ...ask, sessionId: "s2" }))?.ids).toEqual(["m1"]);
 	});
 
-	it("keeps another project's notes out", async () => {
+	it("searches only the memories the workspace is allowed", async () => {
 		const result = await recaller()({
 			prompt: "How are the tests run here, with jest?",
 			cwd: "/work/other",
@@ -218,7 +221,7 @@ describe("the pieces of automatic recall", () => {
 		const note = (text: string, extra: object = {}) => ({
 			id: "m1",
 			text,
-			scope: "project" as const,
+			memory: "main",
 			tags: [],
 			createdAt: "2026-10-06T00:00:00.000Z",
 			...extra,
@@ -263,7 +266,7 @@ describe("the pieces of automatic recall", () => {
 		const note = (id: string) => ({
 			id,
 			text: id,
-			scope: "project" as const,
+			memory: "main",
 			tags: [],
 			createdAt: "2026-10-06T00:00:00.000Z",
 		});
