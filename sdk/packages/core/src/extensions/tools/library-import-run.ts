@@ -44,6 +44,8 @@ const LOG_EVERY_MS = 60_000;
 const MIN_EMIT_GAP_MS = 400;
 
 const active = new Set<LibraryImportRun>();
+/** The host is described in the log once: what a stalled read ran on. */
+let environmentLogged = false;
 
 /**
  * Cancels every librarian call that is reading files. Each one ends as a
@@ -138,6 +140,14 @@ export class LibraryImportRun {
 		this.timer = setInterval(() => this.tick(), TICK_MS);
 		(this.timer as { unref?: () => void }).unref?.();
 		active.add(this);
+		if (!environmentLogged) {
+			environmentLogged = true;
+			const host = globalThis as Record<string, unknown>;
+			const versions = process.versions as Record<string, string | undefined>;
+			this.log?.(
+				`[library] host: node ${versions.node}, electron ${versions.electron ?? "no"}, process.type ${String((process as { type?: string }).type ?? "none")}, ${process.platform} ${process.arch}; globals: ${["window", "navigator", "Worker", "OffscreenCanvas", "ImageDecoder", "createImageBitmap", "DOMMatrix"].map((name) => `${name}=${typeof host[name]}`).join(" ")}`,
+			);
+		}
 		this.emit(true);
 	}
 
@@ -208,6 +218,9 @@ export class LibraryImportRun {
 	done(file: string, outcome: string, problems: readonly string[] = []): void {
 		const entry = this.entry(file);
 		if (!entry) return;
+		for (const problem of problems) {
+			this.log?.(`[library] ${entry.name} left out: ${problem}`);
+		}
 		entry.state = "done";
 		entry.endedAt = Date.now();
 		entry.stage = undefined;
@@ -221,6 +234,7 @@ export class LibraryImportRun {
 	fail(file: string, why: string): void {
 		const entry = this.entry(file);
 		if (!entry) return;
+		this.log?.(`[library] ${entry.name} failed: ${why}`);
 		entry.state = "failed";
 		entry.endedAt = Date.now();
 		entry.why = why;

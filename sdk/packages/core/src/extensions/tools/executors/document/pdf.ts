@@ -315,7 +315,11 @@ async function readPages(
 		options.signal?.throwIfAborted();
 		progress(number);
 		read.push(number);
+		// Each wait is named before it starts: a read that stops moving then
+		// says which of them it is waiting on.
+		progress(number, "opening the page");
 		const page = await pdf.getPage(number);
+		progress(number, "reading its text");
 		const content = await page.getTextContent();
 		let text = "";
 		for (const item of content.items as { str?: string; hasEOL?: boolean }[]) {
@@ -327,7 +331,9 @@ async function readPages(
 			.replace(/[ \t]+\n/g, "\n")
 			.replace(/\n{3,}/g, "\n\n")
 			.trim();
+		progress(number, "reading its layout");
 		const shape = await measurePage(page, ops);
+		progress(number);
 		const visibleChars = text.replace(/\s/g, "").length;
 		const covered = shape.coverage >= SCANNED_COVERAGE;
 		let scanned = false;
@@ -354,12 +360,26 @@ async function readPages(
 		const pictures: (PageImage & { stem: string })[] = [];
 		if (wantPixels) {
 			let n = 0;
+			let asked = 0;
 			for (const draw of shape.draws) {
+				asked++;
+				if ("key" in draw) {
+					progress(
+						number,
+						`decoding picture ${asked} of ${shape.draws.length}`,
+					);
+				}
 				const decoded =
 					"key" in draw ? await objectOf(page, draw.key) : draw.image;
 				if (decoded === "no answer") {
+					const key = "key" in draw ? draw.key : "";
+					const objects = key.startsWith("g_") ? page.commonObjs : page.objs;
+					let known = "unknown";
+					try {
+						known = objects.has(key) ? "delivered late" : "never delivered";
+					} catch {}
 					options.problems?.push(
-						`page ${number}: a picture was left out, the PDF decoder gave no answer for it in ${IMAGE_DECODE_LIMIT_MS / 1000}s`,
+						`page ${number}: picture ${asked} of ${shape.draws.length} (${key}) was left out, the PDF decoder gave no answer for it in ${IMAGE_DECODE_LIMIT_MS / 1000}s (${known})`,
 					);
 					continue;
 				}
@@ -421,6 +441,7 @@ async function readPages(
 				if (added) links.push(imageMarkdown(added));
 			}
 		}
+		progress(number);
 		parts.push(
 			[`## Page ${number}`, text, recognized ?? "", ...links]
 				.filter((part) => part.length > 0)

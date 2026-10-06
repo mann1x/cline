@@ -544,8 +544,16 @@ function createLibraryCheckTool(options: CreateLibraryToolsOptions): AgentTool {
 							readSource(file, config, library, false, run),
 						);
 						read.push(source);
-						// Compared, not imported: what a check leaves unread is not a loss.
-						run.done(file, readOutcome(source));
+						// Compared, not imported: the pages past the recognition
+						// limit of a comparison are not a loss. Anything else that
+						// could not be read is said.
+						run.done(
+							file,
+							readOutcome(source),
+							source.document.problems.filter(
+								(problem) => !/past the \d+ pages recognized/.test(problem),
+							),
+						);
 					} catch (error) {
 						if (run.isCancelled) break;
 						unread.set(file, errorText(error));
