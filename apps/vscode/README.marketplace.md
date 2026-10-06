@@ -87,6 +87,29 @@ text-only.
 ebooks are read into Markdown with their pictures, and scanned pages are read
 with OCR on your machine or by a vision model. Off by default.
 
+**The Library.** Ebooks, manuals, papers, notes and web pages the model can
+look things up in, arranged as sections, shelves and books. `search_library`
+returns the passages that answer a question with the book and chapter each is
+from. Ask the model to act as a librarian and it catalogues your files, skips
+duplicates and asks before adding another edition. A long import shows every
+file's progress, can be cancelled, and ends with a report of everything left
+out. Pictures are described by a model that reads images, and only models
+that report a vision capability are offered for it. Keyword search needs
+nothing; an embedding model adds search by meaning. Off by default.
+[Guide](https://github.com/mann1x/cline/blob/main/docs/features/library.mdx).
+
+**Memory.** Notes the model keeps from one task to the next, in any number of
+memories chosen per workspace. `remember`, `recall` and `forget`, and the notes
+about each message you send are put beside it automatically. Off by default.
+[Guide](https://github.com/mann1x/cline/blob/main/docs/features/memory.mdx).
+
+**Built-in skills.** Sixteen skills ship with the extension, all turned off:
+QA and Docker deployment (by Chris), build and run, a test-driven set
+(`tdd-wizard` and three more), a spec-driven set after Get Shit Done
+(`sdd-wizard` and six more, with the plan kept in a database behind one tool),
+and the librarian.
+[Guide](https://github.com/mann1x/cline/blob/main/docs/customization/skills.mdx).
+
 **Jev on your own server.** Jev, the outside scoring model, can run from any
 endpoint that speaks TypeSafe's Jev API, including Ollama 0.35's
 `/v1/systemone` with local decision models, and xOllama.

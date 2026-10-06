@@ -36,6 +36,8 @@ The open source coding agent in your IDE and terminal.
 - **[Sub-agents across your machines](#sub-agents-across-your-machines).** Agent nodes with priorities, one queue, swarms on shared KV pools, and rounds that survive a server restart.
 - **[Compaction Council](#compaction-council).** Every summary is checked by two reviewers, each holding half the transcript, before it replaces the conversation.
 - **[Escalation, scored by Jev](#escalation-to-a-stronger-model-scored-by-jev).** A stronger model takes over the edit when the working model is stuck. The hand-over is offered on measurements and scored by an independent model.
+- **[The Library](#the-library) and [Memory](#memory).** Books the model can search, catalogued by a librarian, and notes it keeps from one task to the next.
+- **[Built-in skills](#built-in-skills).** Sixteen ship with it: QA and deployment, test-driven and spec-driven development, and the librarian.
 - **[Built for small models](#built-for-small-models).** Per-family prompt templates, one output budget, tolerant tool calls and guards against measured failure modes.
 
 <br>
@@ -476,6 +478,38 @@ In the CLI: `--media-provider`, or `--media-config <file>`. Guide: [`docs/featur
 ## Document Reader
 
 `extract_document` reads PDFs, Word, PowerPoint and Excel files (current and 97-2003 formats), OpenDocument, RTF, HTML and ebooks into Markdown, and writes their pictures out as files. Scanned pages are read with Tesseract on your machine, or by a vision model when one is configured. It is off by default: Settings > Features > **Document Reader**, or `--documents`. Guide: [`docs/features/document-reader.mdx`](docs/features/document-reader.mdx).
+
+## The Library
+
+A place for what you want the model to be able to look things up in: ebooks, manuals, papers, notes and web pages. It is arranged as **sections**, **shelves** and **books**, kept in Cerebriline's data folder and shared by every workspace. A book keeps the files it was made from, the text read out of them, and their pictures with a description of each.
+
+- **Search.** The model always has `search_library`, which returns the passages that best answer a question with the book and chapter each is from, and `list_library`. It works on keyword search alone, with nothing to download. Name an embedding model on the **Embedding** tab to search by meaning as well, and optionally a reranking model.
+- **The librarian.** Ask *"act as a librarian, catalogue these ebooks and add them to the Library"*: the model reads each file, works out its title, authors and edition, writes a description and shelves it. Duplicates are skipped, and for another edition or translation it asks you first.
+- **Imports you can watch.** A long import lists every file with where it is, can be cancelled from its row, and ends with a report of every page or picture that was left out and why.
+- **Pictures.** They are described by a model that reads images: a saved profile, the Vision tab's model, or the conversation's own model when it reads images. Only models that report a vision capability are offered. Descriptions can be added to a book later without reading it again.
+- **Books from the web.** *"Create a book on GitHub recipes for Godot development"*: the librarian searches, picks the links, reads the pages through a [Firecrawl](https://github.com/firecrawl/firecrawl) endpoint and makes the book, and can check it for news later.
+- **Nothing is lost.** Deleted books go to a trash for 30 days, and the Library or any part of it can be exported to one file and imported elsewhere.
+
+It is off by default: **Settings > Library**, or `--library` and `--librarian` in the CLI. Guide: [`docs/features/library.mdx`](docs/features/library.mdx).
+
+## Memory
+
+Notes the model keeps from one task to the next: a decision and its reason, how the project is built and tested, a convention, something you said you prefer. The model gets `remember`, `recall` and `forget`, and with every message you send the notes that are about it are put beside the message, with a line in the chat saying which.
+
+There can be any number of memories. For each workspace you tick the ones its tasks may recall from and pick the one new notes are stored in. Notes are found by keyword, and by meaning with an embedding model. **Expand the question first (HyDE)** has a second model write the note that would answer your message and searches again with it, which finds notes that share its meaning and none of its words (HyDE, Gao et al., 2022, in the order of work [claude-hooks](https://github.com/mann1x/claude-hooks) uses).
+
+It is off by default: **Settings > Memory**, or `--memory`. Guide: [`docs/features/memory.mdx`](docs/features/memory.mdx).
+
+## Built-in Skills
+
+Cerebriline ships with skills of its own, listed under **Built-in Skills** in the Skills tab with nothing to install, in the extension, the CLI and the SDK. All ship turned off.
+
+- **Deploying and running:** `mandatory-qa-prompt-and-issue-resolution` and `docker-compose-deploy` (both by Chris), `build-project`, `run-project`.
+- **Test-driven development:** `tdd-wizard`, `tdd-gen`, `tdd-test`, `tdd-coverage`, after Duke Harewood's "[Test-Driven Development with Claude Code: Practical Guide](https://aiskill.market/blog/tdd-with-claude-code)".
+- **Spec-driven development:** `sdd-wizard`, `sdd-discuss`, `sdd-plan`, `sdd-execute`, `sdd-verify`, `sdd-quick`, `sdd-status`, after [Get Shit Done (GSD 2)](https://getshitdone.help/). The plan is kept in a database in your project and worked through one tool, `sdd`, which gives the model the step that is due and refuses one out of turn.
+- **The librarian**, which runs the Library.
+
+A built-in skill can be switched on and off and read, not edited; create a skill of your own with the same name to replace it. Guide: [`docs/customization/skills.mdx`](docs/customization/skills.mdx).
 
 ## Built for Small Models
 
