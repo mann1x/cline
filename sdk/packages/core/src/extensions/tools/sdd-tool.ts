@@ -163,22 +163,44 @@ export interface SddToolOptions {
 const str = (value: unknown): string | undefined =>
 	typeof value === "string" ? value : undefined;
 
-/** Arrays arrive as arrays, or from a small model as a JSON string of one. */
-function list<T>(value: unknown): T[] {
+/**
+ * Arrays arrive as arrays, or from a small model as a JSON string of one.
+ * A string that is not valid JSON is refused by name: read as "no items" it
+ * sends the model looking for a fault that is not the one it made.
+ */
+function list<T>(value: unknown, what = "list"): T[] {
 	if (Array.isArray(value)) return value as T[];
-	if (typeof value === "string" && value.trim().startsWith("[")) {
+	if (value === undefined || value === null || value === "") return [];
+	if (typeof value !== "string") {
+		throw new SddRuleError(
+			`${what} must be a list, e.g. [ {...}, {...} ]. It arrived as ${typeof value}.`,
+		);
+	}
+	const text = value.trim();
+	// The one slip that is safe to put right: a complete list with its last
+	// bracket left off.
+	for (const candidate of [text, `${text}]`]) {
 		try {
-			const parsed = JSON.parse(value);
+			const parsed = JSON.parse(candidate);
 			if (Array.isArray(parsed)) return parsed as T[];
+			if (parsed && typeof parsed === "object") return [parsed as T];
 		} catch {
-			// Not a list.
+			// Tried the next reading.
 		}
 	}
-	return [];
+	let reason = "it is not valid JSON";
+	try {
+		JSON.parse(text);
+	} catch (error) {
+		reason = error instanceof Error ? error.message : reason;
+	}
+	throw new SddRuleError(
+		`${what} arrived as text that could not be read (${reason}). Send ${what} as a list of objects, not as one long string: every object closed with } before the next begins, and the list closed with ]. Nothing was recorded; send the whole call again.`,
+	);
 }
 
 function slices(value: unknown): SliceInput[] {
-	return list<Record<string, unknown>>(value).map((entry) => ({
+	return list<Record<string, unknown>>(value, "slices").map((entry) => ({
 		title: str(entry.title) ?? "",
 		goal: str(entry.goal),
 		demo: str(entry.demo),
@@ -188,7 +210,7 @@ function slices(value: unknown): SliceInput[] {
 }
 
 function tasks(value: unknown): TaskInput[] {
-	return list<Record<string, unknown>>(value).map((entry) => ({
+	return list<Record<string, unknown>>(value, "tasks").map((entry) => ({
 		title: str(entry.title) ?? "",
 		steps: Array.isArray(entry.steps)
 			? entry.steps.map((step, index) => `${index + 1}. ${step}`).join("\n")
@@ -310,7 +332,7 @@ export function runSddAction(
 			engine.completeSlice({
 				slice: str(input.slice),
 				summary: str(input.summary) ?? "",
-				uat: list<Record<string, unknown>>(input.uat).map((entry) => ({
+				uat: list<Record<string, unknown>>(input.uat, "uat").map((entry) => ({
 					check: str(entry.check) ?? "",
 					result: (str(entry.result) ?? "fail") as UatResult,
 					note: str(entry.note),

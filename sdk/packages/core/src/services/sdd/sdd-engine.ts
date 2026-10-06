@@ -1036,10 +1036,12 @@ export class SddEngine {
 		evidence: string;
 	}): void {
 		const task = this.taskOf(input.task);
-		if (task.status !== "in_progress") {
-			throw new SddRuleError(
-				`${task.id} is ${task.status === "pending" ? "not started; call start_task first" : task.status}.`,
-			);
+		// A task that is due and was done without being announced is still done
+		// in its turn: starting it here keeps the order and spares a round trip.
+		if (task.status === "pending") {
+			this.startTask(`${task.milestone}/${task.slice}/${task.id}`);
+		} else if (task.status !== "in_progress") {
+			throw new SddRuleError(`${task.id} is ${task.status}.`);
 		}
 		const summary = need(input.summary, "A summary of what was changed");
 		const evidence = need(

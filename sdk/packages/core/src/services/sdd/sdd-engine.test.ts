@@ -206,9 +206,6 @@ describe("the spec-driven engine", () => {
 			engine.planSlice({ tasks: [{ title: "a", steps: "do", verify: " " }] }),
 		).toThrow(/command that proves task "a"/);
 		engine.planSlice({ tasks: [task("a"), task("b")] });
-		expect(() => engine.completeTask({ summary: "x", evidence: "y" })).toThrow(
-			/not started; call start_task/,
-		);
 		expect(() => engine.startTask("T02")).toThrow(/T01 "a" comes first/);
 		engine.startTask();
 		expect(() => engine.completeTask({ summary: "x", evidence: "" })).toThrow(
@@ -229,6 +226,27 @@ describe("the spec-driven engine", () => {
 		expect(() => engine.startTask("T09")).toThrow(
 			/no task T09 in M001\/S01. Its tasks: T01, T02/,
 		);
+	});
+
+	it("completes a due task that was never announced, and still keeps the order", () => {
+		toRoadmap();
+		engine.planSlice({ tasks: [task("a"), task("b")] });
+		engine.completeTask({ summary: "Did a.", evidence: "3 passed" });
+		expect(engine.tasks("M001", "S01").map((entry) => entry.status)).toEqual([
+			"done",
+			"pending",
+		]);
+		expect(engine.journal(2).map((entry) => entry.action)).toEqual([
+			"complete_task",
+			"start_task",
+		]);
+		// Not out of turn, and not without evidence.
+		expect(() =>
+			engine.completeTask({ task: "T02", summary: "x", evidence: "" }),
+		).toThrow(/output of `npm test`/);
+		expect(() =>
+			engine.completeTask({ task: "T01", summary: "x", evidence: "y" }),
+		).toThrow(/T01 is done/);
 	});
 
 	it("a slice can only depend on one listed before it", () => {
@@ -519,6 +537,46 @@ describe("the sdd tool", () => {
 		expect(await call({ action: "approve", what: "everything" })).toMatch(
 			/approve needs what/,
 		);
+	});
+
+	it("says so when a list arrives as text that cannot be read, and repairs only a missing last bracket", async () => {
+		await call({
+			action: "set_project",
+			name: "Todo",
+			description: "A todo list.",
+		});
+		await call({ action: "add_requirement", title: "Add a todo" });
+		await call({ action: "add_milestone", title: "V1", context: "CLI." });
+		await call({ action: "approve", what: "requirements" });
+		await call({
+			action: "plan_milestone",
+			slices: [{ title: "Adding", requirements: ["R001"] }],
+		});
+		await call({ action: "approve", what: "roadmap" });
+		// As qwen3.5:9b sent it: objects closed in the wrong place.
+		const broken = await call({
+			action: "plan_slice",
+			tasks:
+				'[{"title":"a","steps":"do","verify":"npm test"},"expect":"x","title":"b"}]',
+		});
+		expect(broken).toMatch(
+			/^Not done: tasks arrived as text that could not be read \(/,
+		);
+		expect(broken).toContain(
+			"Send tasks as a list of objects, not as one long string",
+		);
+		expect(broken).not.toContain("at least one task");
+		expect(await call({ action: "plan_slice", tasks: 7 })).toMatch(
+			/tasks must be a list.*arrived as number/,
+		);
+		// A complete list with only its last bracket missing is read.
+		expect(
+			await call({
+				action: "plan_slice",
+				tasks:
+					'[{"title":"a","steps":"do","verify":"npm test"},{"title":"b","steps":"do","verify":"npm test"}',
+			}),
+		).toMatch(/^Planned T01, T02\./);
 	});
 
 	it("takes lists as JSON text and steps as a list, as small models send them", async () => {
