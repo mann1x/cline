@@ -11,6 +11,7 @@ import { mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_LIBRARY_SETTINGS, type LibrarySettings } from "@cline/shared";
 import { resolveClineDataDir } from "@cline/shared/storage";
+import { Catalogue } from "./catalogue";
 import { chunkText } from "./chunker";
 import { embedTexts, type RetrievalEndpoint } from "./embedding-client";
 import {
@@ -131,6 +132,7 @@ export class Library {
 	private readonly runtimeDirectory: string;
 	private readonly fetch?: typeof fetch;
 	private index?: Promise<VectorIndex>;
+	private shelves?: Catalogue;
 
 	constructor(options: LibraryOptions = {}) {
 		this.directory = options.directory ?? resolveLibraryDirectory();
@@ -139,6 +141,15 @@ export class Library {
 		this.fetch = options.fetch;
 		mkdirSync(this.directory, { recursive: true });
 		this.store = new LibraryStore(join(this.directory, "library.db"));
+	}
+
+	/**
+	 * The sections, shelves and books. Made on first use: Memory keeps its
+	 * notes in a store of the same kind and has no shelves.
+	 */
+	get catalogue(): Catalogue {
+		this.shelves ??= new Catalogue(this);
+		return this.shelves;
 	}
 
 	/** Whether vectors can be used here now, and if not, why. */

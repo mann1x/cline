@@ -204,7 +204,12 @@ export class LibraryStore {
 		this.db.close?.();
 	}
 
-	private transaction<T>(run: () => T): T {
+	/** The database itself, for the catalogue kept in the same file. */
+	get database(): SqliteDb {
+		return this.db;
+	}
+
+	transaction<T>(run: () => T): T {
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
 			const result = run();
