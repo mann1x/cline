@@ -219,6 +219,7 @@ export {
 	lanceDbUnsupportedReason,
 } from "../../../../sdk/packages/core/src/services/retrieval/lancedb-runtime"
 export { resolveLanceDbRuntimeDirectory } from "../../../../sdk/packages/core/src/services/retrieval/library"
+export { createMemoryRecaller } from "../../../../sdk/packages/core/src/services/retrieval/memory-recall"
 // From source: `resumed-compaction.ts` rebases a saved compaction with these,
 // and a stub that always "projects" would pass a test of exactly that.
 export {

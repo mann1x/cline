@@ -92,6 +92,7 @@ import { createEscalationApprover } from "./escalation-approval"
 import { buildAgentHooks } from "./hooks-adapter"
 import { appraiseEscalationWithJev, buildJevPromptSection, isJevConfigured, readJevSettings } from "./jev-config"
 import { readTaskHistory, resolveDataDir } from "./legacy-state-reader"
+import { createSessionMemoryRecaller } from "./memory-recall"
 import type { ResolvedModelSelection } from "./model-catalog/contracts"
 import { nonNegativeFiniteNumber, positiveFiniteNumber, toSdkApiFormat } from "./model-catalog/model-values"
 import { parseProviderId } from "./model-catalog/provider-id"
@@ -2666,6 +2667,10 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			logger: sdkLogger,
 		},
 		hooks: composeSessionHooks(buildAgentHooks(StateManager.get()), cwd, renderedTemplate),
+		// Memory's automatic recall. Always installed: it reads the Memory
+		// panel on every message, so turning Memory on takes effect in a
+		// running task, and it does nothing while Memory is off.
+		recallMemory: createSessionMemoryRecaller(apiConfig),
 		...(visionApiConfiguration
 			? {
 					describeImages: createVisionImageDescriber(visionApiConfiguration, visionProviderSettings),

@@ -131,6 +131,8 @@ export type PreparedTurnInput = {
 	prompt: string;
 	userImages?: string[];
 	userFiles?: string[];
+	/** What Memory recalled for this message, to tell the user once the session is on record. */
+	recallSummary?: string;
 };
 
 // ── Persistence interfaces ────────────────────────────────────────────

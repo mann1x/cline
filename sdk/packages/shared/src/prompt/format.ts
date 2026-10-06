@@ -446,8 +446,18 @@ export function announcedIntentWithoutActing(
  */
 export function stripModeNotices(input?: string): string {
 	if (!input?.trim()) return "";
-	return removeTagElements(input, "mode_notice").trim();
+	return removeTagElements(
+		removeTagElements(input, "mode_notice"),
+		RECALLED_MEMORY_TAG,
+	).trim();
 }
+
+/**
+ * The element Memory's automatic recall puts after the user's own words. Like
+ * a mode notice it is for the model, not something the user typed, so it is
+ * taken out wherever the message is shown or a title is made from it.
+ */
+export const RECALLED_MEMORY_TAG = "recalled_memory";
 
 // indexOf-based rather than a regex: a lazy dot-all pattern re-scans to the
 // end of the string from every unmatched opening tag, which is polynomial on

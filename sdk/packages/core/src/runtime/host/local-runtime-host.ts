@@ -3817,6 +3817,17 @@ export class LocalRuntimeHost implements RuntimeHost {
 		}
 		await this.ensureSessionPersisted(session);
 		this.emitPendingAtomicStatus(session);
+		// Said to the user, who does not see the notes themselves: they are
+		// taken out of the message wherever it is shown.
+		if (preparedInput.recallSummary) {
+			this.eventBridge.dispatchAgentEvent(session.sessionId, session.config, {
+				type: "notice",
+				noticeType: "status",
+				displayRole: "status",
+				message: preparedInput.recallSummary,
+				metadata: { kind: "memory_recall" },
+			});
+		}
 		// A seeded session (fork, checkpoint restore, missing-session
 		// recovery) materializes at start, before any prompt exists, so its
 		// row is created promptless. Backfill it with the first user prompt,
@@ -4212,8 +4223,19 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// what to do before touching anything, and a model that has already read
 		// the request has already started planning against it.
 		const openingRules = session.atomicProtocol?.takeOpeningRules();
+		// Memory, searched with the user's own words -- not with the files a
+		// mention pulled in -- and put after them: the request is read first,
+		// the notes as what is known about it.
+		const recalled = await session.config.recallMemory?.({
+			prompt: normalizedPrompt,
+			cwd: session.config.cwd,
+			sessionId: session.sessionId,
+		});
+		const body = recalled?.context
+			? `${enriched.prompt}\n\n${recalled.context}`
+			: enriched.prompt;
 		const prompt = formatModePrompt(
-			openingRules ? `${openingRules}\n\n${enriched.prompt}` : enriched.prompt,
+			openingRules ? `${openingRules}\n\n${body}` : body,
 			input.mode ?? session.config.mode,
 		);
 		const explicitUserFiles = this.resolveAbsoluteFilePaths(
@@ -4232,6 +4254,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			prompt,
 			userImages: input.userImages,
 			userFiles: mergedUserFiles.length > 0 ? mergedUserFiles : undefined,
+			...(recalled?.summary ? { recallSummary: recalled.summary } : {}),
 		};
 	}
 

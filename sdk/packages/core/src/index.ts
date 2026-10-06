@@ -1597,6 +1597,17 @@ export {
 	resolveMemoryDirectory,
 	sharedMemory,
 } from "./services/retrieval/memory";
+export {
+	buildHydeUserPrompt,
+	type CreateMemoryRecallerOptions,
+	clampRecallQuery,
+	createMemoryRecaller,
+	HYDE_SYSTEM_PROMPT,
+	type MemoryQueryExpander,
+	type MemoryRecaller,
+	type MemoryRecallInput,
+	type MemoryRecallResult,
+} from "./services/retrieval/memory-recall";
 export type {
 	RetrievedHit,
 	RetrieveResult,

@@ -39,6 +39,8 @@ export interface MemoryItem {
 export interface RecalledMemory extends MemoryItem {
 	/** The reranker's score, 0 to 1, when there was one. */
 	relevance?: number;
+	/** Cosine similarity to the query, when the note was found by meaning. */
+	similarity?: number;
 }
 
 export interface MemoryEndpoints {
@@ -219,6 +221,7 @@ export class Memory {
 				...(hit.rerankScore !== undefined
 					? { relevance: hit.rerankScore }
 					: {}),
+				...(hit.similarity !== undefined ? { similarity: hit.similarity } : {}),
 			});
 		}
 		return { items, notes: result.notes };

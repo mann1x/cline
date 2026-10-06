@@ -15,6 +15,18 @@ export interface MemorySettings {
 	relevanceThreshold: number;
 	/** Where `remember` keeps a note when the model does not say. */
 	defaultScope: "project" | "global";
+	/**
+	 * Look in Memory for every message the user sends and put what is found
+	 * beside it, so the notes arrive without the model having to ask.
+	 */
+	autoRecall: boolean;
+	/**
+	 * Before the automatic search, have a second model write the note that
+	 * would answer the message, and search with that as well (HyDE).
+	 */
+	hyde: boolean;
+	/** The saved profile whose model writes it. Empty: none chosen. */
+	hydeProfile: string;
 }
 
 export const DEFAULT_MEMORY_SETTINGS: MemorySettings = {
@@ -22,6 +34,9 @@ export const DEFAULT_MEMORY_SETTINGS: MemorySettings = {
 	recallCount: 5,
 	relevanceThreshold: 0,
 	defaultScope: "project",
+	autoRecall: true,
+	hyde: false,
+	hydeProfile: "",
 };
 
 /** Stored settings, whatever shape they are in, as settings that can be used. */
@@ -41,5 +56,9 @@ export function resolveMemorySettings(
 			? Math.min(1, Math.max(0, threshold))
 			: d.relevanceThreshold,
 		defaultScope: s.defaultScope === "global" ? "global" : "project",
+		autoRecall: typeof s.autoRecall === "boolean" ? s.autoRecall : d.autoRecall,
+		hyde: typeof s.hyde === "boolean" ? s.hyde : d.hyde,
+		hydeProfile:
+			typeof s.hydeProfile === "string" ? s.hydeProfile.trim() : d.hydeProfile,
 	};
 }

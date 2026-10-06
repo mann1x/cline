@@ -1,4 +1,5 @@
 import { DEFAULT_MEMORY_SETTINGS, type MemorySettings, resolveMemorySettings } from "@cline/shared"
+import { parseApiConfigurationProfiles } from "@shared/api-config-profiles"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { embeddingEndpointConfigured, parseRetrievalEndpoints } from "@shared/retrieval-endpoints"
 import { VSCodeDropdown, VSCodeOption } from "@vscode/webview-ui-toolkit/react"
@@ -31,10 +32,17 @@ export function parseMemorySettings(raw: string | undefined): MemorySettings {
  * to configure here about models: one embedding model serves both.
  */
 const MemorySettingsSection = ({ renderSectionHeader }: MemorySettingsSectionProps) => {
-	const { memoryEnabled, memorySettings, embeddingEnabled, retrievalEndpoints } = useExtensionState()
+	const { memoryEnabled, memorySettings, embeddingEnabled, retrievalEndpoints, apiConfigurationProfiles } = useExtensionState()
 	const settings = useMemo(() => parseMemorySettings(memorySettings), [memorySettings])
 	const endpoints = useMemo(() => parseRetrievalEndpoints(retrievalEndpoints), [retrievalEndpoints])
 	const embedding = embeddingEnabled && embeddingEndpointConfigured(endpoints)
+	const profileNames = useMemo(
+		() => parseApiConfigurationProfiles(apiConfigurationProfiles).map((profile) => profile.name),
+		[apiConfigurationProfiles],
+	)
+	// A profile deleted after it was picked: still shown, so it can be seen
+	// to be gone rather than silently reading as "none".
+	const hydeProfileMissing = settings.hydeProfile !== "" && !profileNames.includes(settings.hydeProfile)
 
 	const save = useCallback(
 		async (patch: Partial<MemorySettings>) => {
@@ -85,6 +93,67 @@ const MemorySettingsSection = ({ renderSectionHeader }: MemorySettingsSectionPro
 
 				{memoryEnabled ? (
 					<>
+						<div>
+							<SettingsCheckbox
+								checked={settings.autoRecall}
+								onChange={(checked) => void save({ autoRecall: checked })}>
+								Recall automatically
+							</SettingsCheckbox>
+							<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
+								Memory is searched with every message you send, at the start of a task and after it, and the notes
+								that are about it are put beside the message for the model. You see a line saying which notes; the
+								model sees the notes. A note is given to a task once. Without this the model has to call{" "}
+								<code>recall</code> itself, which small models seldom do.
+							</p>
+						</div>
+
+						{settings.autoRecall ? (
+							<div>
+								<SettingsCheckbox checked={settings.hyde} onChange={(checked) => void save({ hyde: checked })}>
+									Expand the question first (HyDE)
+								</SettingsCheckbox>
+								<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
+									A second model writes the note that would answer your message, from the notes the first search
+									found, and Memory is searched again with it. It finds notes that share the meaning of a
+									message and none of its words. It adds one short model call to each message, so pick a cheap,
+									fast model: a small cloud model is the usual choice.
+								</p>
+								{settings.hyde ? (
+									<div className="mt-2">
+										<label className="font-medium text-sm block mb-1" htmlFor="memory-hyde-profile">
+											Profile whose model writes it
+										</label>
+										<VSCodeDropdown
+											className="w-full"
+											id="memory-hyde-profile"
+											onChange={(event: any) =>
+												void save({ hydeProfile: String(event.target.value ?? "") })
+											}
+											value={settings.hydeProfile}>
+											<VSCodeOption value="">None</VSCodeOption>
+											{hydeProfileMissing ? (
+												<VSCodeOption value={settings.hydeProfile}>
+													{settings.hydeProfile} (deleted)
+												</VSCodeOption>
+											) : null}
+											{profileNames.map((name) => (
+												<VSCodeOption key={name} value={name}>
+													{name}
+												</VSCodeOption>
+											))}
+										</VSCodeDropdown>
+										<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
+											{profileNames.length === 0
+												? "There are no saved profiles yet. Save one in the API configuration: set the provider and model you want for this, then use Save as profile."
+												: settings.hydeProfile === "" || hydeProfileMissing
+													? "Until a saved profile is picked, Memory is searched with your message alone."
+													: "One of the profiles saved in the API configuration. Its provider, model, window and sampler are used; the key is the one stored for that provider."}
+										</p>
+									</div>
+								) : null}
+							</div>
+						) : null}
+
 						<div>
 							<label className="font-medium text-sm block mb-1" htmlFor="memory-default-scope">
 								Where a note is kept when the model does not say

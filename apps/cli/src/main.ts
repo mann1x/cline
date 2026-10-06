@@ -1502,33 +1502,74 @@ export async function runCli(): Promise<void> {
 		// embedding model is named by environment, as there is no Embedding tab
 		// here; without one, notes are found by keyword.
 		if (args.memory === true || process.env.CLINE_MEMORY === "1") {
-			const { createMemoryTools, DEFAULT_MEMORY_SETTINGS } = await import(
-				"@cline/core"
-			);
+			const {
+				createAgentModelFromConfig,
+				createMemoryRecaller,
+				createMemoryTools,
+				DEFAULT_MEMORY_SETTINGS,
+			} = await import("@cline/core");
 			const embeddingBaseUrl = process.env.CLINE_EMBEDDING_BASE_URL?.trim();
 			const embeddingModel = process.env.CLINE_EMBEDDING_MODEL?.trim();
 			const embeddingApiKey = process.env.CLINE_EMBEDDING_API_KEY?.trim();
+			// The expansion (HyDE): a second model on the session's own provider,
+			// named by environment. The extension picks a saved profile instead.
+			const hydeModel = process.env.CLINE_MEMORY_HYDE_MODEL?.trim();
+			const getConfig = () => ({
+				settings: {
+					...DEFAULT_MEMORY_SETTINGS,
+					enabled: true,
+					autoRecall: process.env.CLINE_MEMORY_AUTO_RECALL !== "0",
+					hyde: !!hydeModel,
+				},
+				...(embeddingBaseUrl && embeddingModel
+					? {
+							embedding: {
+								baseUrl: embeddingBaseUrl,
+								model: embeddingModel,
+								...(embeddingApiKey ? { apiKey: embeddingApiKey } : {}),
+							},
+						}
+					: {}),
+			});
+			const memoryLog = (message: string) => loggerAdapter.core.log(message);
 			const memoryTools = createMemoryTools({
 				cwd,
-				getConfig: () => ({
-					settings: { ...DEFAULT_MEMORY_SETTINGS, enabled: true },
-					...(embeddingBaseUrl && embeddingModel
-						? {
-								embedding: {
-									baseUrl: embeddingBaseUrl,
-									model: embeddingModel,
-									...(embeddingApiKey ? { apiKey: embeddingApiKey } : {}),
-								},
-							}
-						: {}),
-				}),
-				log: (message) => loggerAdapter.core.log(message),
+				getConfig,
+				log: memoryLog,
 				onError: (message, error) =>
 					loggerAdapter.core.log(
 						`${message}: ${error instanceof Error ? error.message : String(error)}`,
 					),
 			});
 			config.extraTools = [...(config.extraTools ?? []), ...memoryTools];
+			config.recallMemory = createMemoryRecaller({
+				getConfig,
+				log: memoryLog,
+				getExpander: () =>
+					hydeModel
+						? async ({ system, prompt, signal }) => {
+								const model = createAgentModelFromConfig(
+									{ ...config, modelId: hydeModel } as never,
+									loggerAdapter.core,
+									undefined,
+									{ auxiliary: true },
+								);
+								const stream = await model.stream({
+									systemPrompt: system,
+									messages: [
+										{ role: "user", content: [{ type: "text", text: prompt }] },
+									] as never,
+									tools: [],
+									signal,
+								});
+								let text = "";
+								for await (const event of stream) {
+									if (event.type === "text-delta") text += event.text;
+								}
+								return text.trim() || undefined;
+							}
+						: undefined,
+			});
 		}
 
 		// `sdd`, the spec-driven engine, when any of the spec-driven skills is

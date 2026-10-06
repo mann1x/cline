@@ -848,6 +848,13 @@ export interface CoreSessionConfig
 	/** See `AgentConfig.alwaysDescribeImages`. */
 	alwaysDescribeImages?: boolean;
 	/**
+	 * Memory's automatic recall: asked with every message the user sends,
+	 * and what it returns is put after the message. Absent: nothing is
+	 * recalled for the model, which can still call `recall` itself. It never
+	 * throws and never fails a turn. See `createMemoryRecaller`.
+	 */
+	recallMemory?: import("../services/retrieval/memory-recall").MemoryRecaller;
+	/**
 	 * Run subagents and teammates on this connection instead of the session's.
 	 *
 	 * Omitted means what it always meant: they inherit the lead's. See

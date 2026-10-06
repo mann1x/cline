@@ -157,7 +157,13 @@ describe("Memory's configuration", () => {
 	it("takes its own settings and the Embedding tab's models", () => {
 		state.settings = {
 			memoryEnabled: true,
-			memorySettings: JSON.stringify({ recallCount: 8, defaultScope: "global", enabled: false }),
+			memorySettings: JSON.stringify({
+				recallCount: 8,
+				defaultScope: "global",
+				enabled: false,
+				hyde: true,
+				hydeProfile: " cheap cloud ",
+			}),
 			embeddingEnabled: true,
 			retrievalEndpoints: JSON.stringify({
 				embedding: { baseUrl: "http://h:1", model: "bge-m3" },
@@ -165,7 +171,15 @@ describe("Memory's configuration", () => {
 			}),
 		}
 		expect(readMemoryToolsConfig()).toEqual({
-			settings: { enabled: true, recallCount: 8, relevanceThreshold: 0, defaultScope: "global" },
+			settings: {
+				enabled: true,
+				recallCount: 8,
+				relevanceThreshold: 0,
+				defaultScope: "global",
+				autoRecall: true,
+				hyde: true,
+				hydeProfile: "cheap cloud",
+			},
 			embedding: { baseUrl: "http://h:1", model: "bge-m3" },
 			reranker: { baseUrl: "http://r:2", model: "rr" },
 		})
@@ -174,7 +188,15 @@ describe("Memory's configuration", () => {
 	it("works on keywords alone with no embedding model", () => {
 		state.settings = { memoryEnabled: true }
 		expect(readMemoryToolsConfig()).toEqual({
-			settings: { enabled: true, recallCount: 5, relevanceThreshold: 0, defaultScope: "project" },
+			settings: {
+				enabled: true,
+				recallCount: 5,
+				relevanceThreshold: 0,
+				defaultScope: "project",
+				autoRecall: true,
+				hyde: false,
+				hydeProfile: "",
+			},
 		})
 	})
 })
