@@ -308,6 +308,8 @@ export async function readDocumentForBook(
 		/** Stops the read at the next page or chapter; the read throws. */
 		signal?: AbortSignal;
 		onProgress?: (progress: ReadProgress) => void;
+		/** Lines for the log: what the decoder warned about, a picture asked for twice. */
+		onNote?: (line: string) => void;
 	},
 ): Promise<BookDocument> {
 	const stat = await fs.stat(filePath).catch(() => undefined);
@@ -356,6 +358,7 @@ export async function readDocumentForBook(
 			problems,
 			...(options.signal ? { signal: options.signal } : {}),
 			...(options.onProgress ? { onProgress: options.onProgress } : {}),
+			...(options.onNote ? { onNote: options.onNote } : {}),
 			...(recognition?.recognize ? { recognize: recognition.recognize } : {}),
 		});
 	} finally {

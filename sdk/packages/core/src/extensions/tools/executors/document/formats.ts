@@ -229,6 +229,11 @@ export interface ReadOptions {
 	 * taken out, and why. The reader appends; nothing is left out silently.
 	 */
 	problems?: string[];
+	/**
+	 * Lines for the log, not for the reader of the document: what the PDF
+	 * decoder warned about, a picture that needed asking for twice.
+	 */
+	onNote?: (line: string) => void;
 }
 
 /** Where a read is. */

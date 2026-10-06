@@ -233,6 +233,7 @@ async function readSource(
 						signal: run.signal,
 						onProgress: (progress: ReadProgress) =>
 							run.progress(file, progress),
+						onNote: (line: string) => run.note(file, line),
 					}
 				: {}),
 		});

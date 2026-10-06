@@ -161,18 +161,56 @@ function isGarbled(text: string): boolean {
 	return bad / letters.length > 0.3;
 }
 
-/** How long one picture may take to decode before it is left out. */
+/**
+ * How long a picture is waited for before it is asked for again. One is
+ * decoded in well under a second; the largest, a page with a mask twice its
+ * size, in a few.
+ */
+const IMAGE_FIRST_WAIT_MS = 20_000;
+/** How long the second request may take before the picture is left out. */
 const IMAGE_DECODE_LIMIT_MS = 60_000;
+
+/**
+ * pdf.js's warnings, handed to whoever is reading. It prints them with
+ * `console.log`, and prints nothing at the verbosity documents are opened
+ * with; a read that wants them raises it and listens here.
+ */
+const warningListeners = new Set<(line: string) => void>();
+let plainConsoleLog: typeof console.log | undefined;
+
+function listenForWarnings(listener: (line: string) => void): () => void {
+	warningListeners.add(listener);
+	if (!plainConsoleLog) {
+		const original = console.log;
+		plainConsoleLog = original;
+		console.log = (...args: unknown[]) => {
+			const first = typeof args[0] === "string" ? args[0] : "";
+			if (first.startsWith("Warning: ")) {
+				for (const each of warningListeners) each(first.slice(9));
+				return;
+			}
+			original(...args);
+		};
+	}
+	return () => {
+		warningListeners.delete(listener);
+		if (warningListeners.size === 0 && plainConsoleLog) {
+			console.log = plainConsoleLog;
+			plainConsoleLog = undefined;
+		}
+	};
+}
 
 function objectOf(
 	page: PDFPageProxy,
 	key: string,
+	waitMs: number,
 ): Promise<DecodedImage | null | "no answer"> {
 	const objects = key.startsWith("g_") ? page.commonObjs : page.objs;
 	return new Promise((resolve) => {
 		// pdf.js calls back when the picture is decoded, and never when its
 		// decoder failed: without a limit one such picture holds the whole read.
-		const timer = setTimeout(() => resolve("no answer"), IMAGE_DECODE_LIMIT_MS);
+		const timer = setTimeout(() => resolve("no answer"), waitMs);
 		const done = (value: DecodedImage | null) => {
 			clearTimeout(timer);
 			resolve(value);
@@ -257,8 +295,20 @@ export async function readPdf(
 ): Promise<DocumentReadResult> {
 	const pdfjs = await loadPdfjs();
 	const { encode: encodePng } = await import("fast-png");
+	// A read that keeps notes hears what the decoder warns about, each
+	// warning once: a picture it could not decode says why there and nowhere
+	// else.
+	const heard = new Set<string>();
+	const stopListening = options.onNote
+		? listenForWarnings((line) => {
+				if (heard.size >= 60 || heard.has(line)) return;
+				heard.add(line);
+				options.onNote?.(`pdf.js: ${line}`);
+			})
+		: undefined;
 	const task = pdfjs.getDocument({
 		...pdfjsDocumentOptions(),
+		...(options.onNote ? { verbosity: 1 } : {}),
 		// A copy: pdf.js takes ownership of what it is given.
 		data: data.slice(),
 		...(options.password ? { password: options.password } : {}),
@@ -268,6 +318,7 @@ export async function readPdf(
 		pdf = await task.promise;
 	} catch (error) {
 		await task.destroy().catch(() => {});
+		stopListening?.();
 		throw passwordError(error, options.password) ?? error;
 	}
 	try {
@@ -280,6 +331,7 @@ export async function readPdf(
 	} finally {
 		// Ends the in-thread worker and frees the parsed document.
 		await task.destroy().catch(() => {});
+		stopListening?.();
 	}
 }
 
@@ -369,20 +421,51 @@ async function readPages(
 						`decoding picture ${asked} of ${shape.draws.length}`,
 					);
 				}
-				const decoded =
-					"key" in draw ? await objectOf(page, draw.key) : draw.image;
-				if (decoded === "no answer") {
-					const key = "key" in draw ? draw.key : "";
-					const objects = key.startsWith("g_") ? page.commonObjs : page.objs;
-					let known = "unknown";
-					try {
-						known = objects.has(key) ? "delivered late" : "never delivered";
-					} catch {}
-					options.problems?.push(
-						`page ${number}: picture ${asked} of ${shape.draws.length} (${key}) was left out, the PDF decoder gave no answer for it in ${IMAGE_DECODE_LIMIT_MS / 1000}s (${known})`,
+				let decoded =
+					"key" in draw
+						? await objectOf(page, draw.key, IMAGE_FIRST_WAIT_MS)
+						: draw.image;
+				if (decoded === "no answer" && "key" in draw) {
+					// Asked for again: the page's pictures are dropped and its
+					// drawing read once more, which makes the decoder send them
+					// afresh. A picture that then arrives is kept like any other.
+					const { key } = draw;
+					options.onNote?.(
+						`page ${number}: picture ${asked} of ${shape.draws.length} (${key}) did not arrive in ${IMAGE_FIRST_WAIT_MS / 1000}s; asking for the page's pictures again`,
 					);
-					continue;
+					progress(
+						number,
+						`decoding picture ${asked} of ${shape.draws.length} again`,
+					);
+					page.cleanup();
+					const again = await Promise.race([
+						page.getOperatorList().then(() => true),
+						new Promise<false>((resolve) =>
+							setTimeout(() => resolve(false), IMAGE_DECODE_LIMIT_MS),
+						),
+					]).catch(() => false);
+					decoded = again
+						? await objectOf(page, key, IMAGE_DECODE_LIMIT_MS)
+						: "no answer";
+					if (decoded === "no answer") {
+						const objects = key.startsWith("g_") ? page.commonObjs : page.objs;
+						let known = "unknown";
+						try {
+							known = objects.has(key) ? "delivered late" : "never delivered";
+						} catch {}
+						options.problems?.push(
+							`page ${number}: picture ${asked} of ${shape.draws.length} (${key}) was left out, the PDF decoder gave no answer for it when asked twice (${again ? known : "the page's drawing did not come back either"})`,
+						);
+						options.onNote?.(
+							`page ${number}: picture ${asked} (${key}) left out after the second request`,
+						);
+						continue;
+					}
+					options.onNote?.(
+						`page ${number}: picture ${asked} (${key}) arrived on the second request`,
+					);
 				}
+				if (decoded === "no answer") continue;
 				if (!decoded) {
 					options.problems?.push(
 						`page ${number}: a picture was left out, the PDF decoder could not decode it`,

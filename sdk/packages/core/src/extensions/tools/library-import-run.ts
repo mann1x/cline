@@ -202,6 +202,11 @@ export class LibraryImportRun {
 		this.emit(false);
 	}
 
+	/** A line about a file for the log alone. */
+	note(file: string, line: string): void {
+		this.log?.(`[library] ${this.entry(file)?.name ?? file}: ${line}`);
+	}
+
 	/** What a file is doing after it was read: "describing pictures". */
 	stage(file: string, stage: string | undefined): void {
 		const entry = this.entry(file);
