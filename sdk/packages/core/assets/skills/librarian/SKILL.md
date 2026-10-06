@@ -54,6 +54,16 @@ scraping. If they are not in your tools, say so and work with files.
 6. **Report what you did**, book by book, at the end: added where, skipped
    and why, what you need the user to decide.
 
+## Pictures with no description
+
+A book added while no vision model was set has pictures without
+descriptions. Do not add the book again for that. Use `library_organize`
+with action `describe_pictures` and the `book`: it describes the pictures
+already kept with the book and writes the descriptions into its text. One
+call describes a limited number and says how many are left; call it again
+to go on. It is one request to the vision model per picture, so for a book
+with hundreds of pictures tell the user the number before starting.
+
 ## Reports, and cancelled calls
 
 `library_check`, `library_add` and `library_web_book` end with a `REPORT`:

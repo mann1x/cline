@@ -274,6 +274,8 @@ export interface BookDocument extends DocumentText {
 		height?: number;
 		origin?: string;
 		description?: string;
+		/** `description` is a vision model's, not the caption the document gave. */
+		described?: boolean;
 	}[];
 	/** Pages or chapters it has, and how many were read. */
 	units?: { name: string; total: number; read: number };
@@ -454,6 +456,7 @@ export async function describeBookPictures(
 		if (!description) return;
 		described++;
 		image.description = description;
+		image.described = true;
 		const alt = altTextOf(description);
 		book.markdown = book.markdown.replace(
 			new RegExp(

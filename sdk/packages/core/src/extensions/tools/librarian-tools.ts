@@ -13,7 +13,11 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type AgentTool, createTool } from "@cline/shared";
+import {
+	type AgentTool,
+	type AgentToolContext,
+	createTool,
+} from "@cline/shared";
 import {
 	type BookMatch,
 	type BookMetadata,
@@ -39,6 +43,8 @@ import {
 	DOCUMENT_EXTENSIONS,
 	type ReadProgress,
 } from "./executors/document/formats";
+import { VIEWABLE_MEDIA_TYPES } from "./executors/document/images";
+import { altTextOf, describePicture } from "./executors/document/recognition";
 import {
 	type BookDocument,
 	describeBookPictures,
@@ -971,6 +977,187 @@ function createLibraryAddTool(options: CreateLibraryToolsOptions): AgentTool {
 	});
 }
 
+/** A picture too small to be one: a rule, a bullet, an icon. */
+const DESCRIBE_MIN_SIDE = 48;
+
+/**
+ * Describe the pictures of a book that is already in the Library.
+ *
+ * A book added with no vision model set has its pictures and no words for
+ * them. They are in its folder, so the model is asked about each one there,
+ * and what it says goes where adding would have put it: with the picture,
+ * and into the text beside the picture's link, which is indexed again.
+ */
+async function describeBookPicturesLater(
+	options: CreateLibraryToolsOptions,
+	config: LibraryToolsConfig,
+	library: Library,
+	request: Record<string, unknown>,
+	context: AgentToolContext | undefined,
+): Promise<string> {
+	const catalogue = library.catalogue;
+	const book = oneBook(catalogue, text(request.book));
+	if (typeof book === "string") return book;
+	const describe = options.getDescribeImages?.();
+	if (!describe) {
+		return "No vision model is set, so no picture can be described. The user sets one in Settings > Library (the profile whose model describes pictures) or on the Vision tab. Nothing was changed.";
+	}
+	const sources = catalogue.sources(book.id);
+	const directory = catalogue.bookDirectory(book);
+	const all = catalogue.images(book.id);
+	const waiting = all.filter(
+		(image) =>
+			!image.described &&
+			VIEWABLE_MEDIA_TYPES.has(image.mediaType) &&
+			!(
+				image.width &&
+				image.height &&
+				image.width < DESCRIBE_MIN_SIDE &&
+				image.height < DESCRIBE_MIN_SIDE
+			),
+	);
+	const have = all.filter((image) => image.described).length;
+	if (waiting.length === 0) {
+		return `"${book.title}" (#${book.id}) has ${plural(all.length, "picture")}, ${have} described, and none left that can be: the rest are too small to be pictures or in a format the model cannot be shown.`;
+	}
+	const asked = Number(request.limit);
+	const limit =
+		Number.isFinite(asked) && asked > 0
+			? Math.round(asked)
+			: Math.max(1, config.settings.describeImagesLimit);
+	const chosen = waiting.slice(0, limit);
+	const bySource = new Map<number, typeof chosen>();
+	for (const image of chosen) {
+		bySource.set(image.sourceId, [
+			...(bySource.get(image.sourceId) ?? []),
+			image,
+		]);
+	}
+	const label = (id: string) =>
+		sources.find((source) => String(source.id) === id)?.name ?? `source ${id}`;
+	const run = new LibraryImportRun(
+		`Describing ${plural(chosen.length, "picture")} of "${book.title}"`,
+		[...bySource.keys()].map(String),
+		context,
+		options.log,
+		label,
+	);
+	let described = 0;
+	let passages = 0;
+	try {
+		for (const [sourceId, images] of bySource) {
+			if (run.isCancelled) break;
+			const key = String(sourceId);
+			run.start(key);
+			const done: { imageId: number; description: string; alt: string }[] = [];
+			const leftOut: string[] = [];
+			let number = 0;
+			for (const image of images) {
+				if (run.isCancelled) break;
+				number++;
+				run.stage(
+					key,
+					`describing picture ${number} of ${images.length}${image.origin ? ` (${image.origin})` : ""}`,
+				);
+				try {
+					const data = await fs.readFile(path.join(directory, image.file));
+					// Its caption in the book, when it has one: the model is told
+					// it, and it stays in front of what the model says.
+					// "Image", "Figure 3": what a converter writes when the book
+					// gave the picture no words. Not a caption.
+					const given = image.description?.trim();
+					const caption =
+						given &&
+						!/^(image|img|picture|pic|figure|fig|photo|cover|graphic|illustration)\.?\s*[\d.-]*$/i.test(
+							given,
+						)
+							? given
+							: undefined;
+					const description = await run.guard(
+						describePicture(
+							describe,
+							{
+								link: image.file,
+								mediaType: image.mediaType,
+								data,
+								source: [
+									image.origin,
+									caption ? `captioned "${caption.slice(0, 200)}"` : undefined,
+								]
+									.filter(Boolean)
+									.join(", "),
+							},
+							label(key),
+						),
+					);
+					if (description) {
+						const said = altTextOf(description);
+						done.push({
+							imageId: image.id,
+							description:
+								caption && !description.includes(caption)
+									? `${caption}\n\n${description}`
+									: description,
+							alt:
+								caption && !said.includes(caption)
+									? `${altTextOf(caption)} — ${said}`
+									: said,
+						});
+					} else {
+						leftOut.push(
+							`${image.file}${image.origin ? ` (${image.origin})` : ""}: the vision model gave no description`,
+						);
+					}
+				} catch (error) {
+					if (run.isCancelled) break;
+					leftOut.push(
+						`${image.file}${image.origin ? ` (${image.origin})` : ""}: ${errorText(error)}`,
+					);
+				}
+			}
+			// What was described is kept, whether or not the call goes on.
+			if (done.length > 0) {
+				run.stage(key, "writing the descriptions into its text");
+				const result = await catalogue.describeSourceImages(
+					sourceId,
+					done,
+					config.settings,
+				);
+				described += result.described;
+				passages += result.passages;
+			}
+			if (run.isCancelled) break;
+			run.done(
+				key,
+				`${done.length} of ${plural(images.length, "picture")} described`,
+				leftOut,
+			);
+		}
+		const left = waiting.length - described;
+		const summary = [
+			`"${book.title}" (#${book.id}): ${plural(described, "picture")} described${passages ? `, its text indexed again as ${plural(passages, "passage")}` : ""}. ${left > 0 ? `${left} more have no description yet: call describe_pictures again to go on.` : "Every picture that can be described now is."}`,
+		];
+		if (run.isCancelled) {
+			throw run.cancellation([
+				`${plural(described, "description")} from this call are kept; ${left} pictures of the book still have none.`,
+			]);
+		}
+		if (described > 0) {
+			const embedded = await embedNew(
+				library,
+				config,
+				[book.collectionId],
+				options,
+				run.signal,
+			);
+			if (embedded) summary.push(embedded);
+		}
+		return [...summary, "", ...run.report()].join("\n");
+	} finally {
+		run.close();
+	}
+}
+
 function createLibraryOrganizeTool(
 	options: CreateLibraryToolsOptions,
 ): AgentTool {
@@ -982,6 +1169,7 @@ function createLibraryOrganizeTool(
 - move_book (book, shelf, section?) · update_book (book, title?, description?, authors?, edition?, year?, language?, isbn?, publisher?, tags?) · delete_book (book) · restore_book (book, shelf?)
 - merge_books (book, into): every source of \`book\` moves into \`into\`
 - remove_source (source) · restore_source (source): by the source number list_library gives for a book
+- describe_pictures (book, limit?): has the vision model describe the pictures of a book that have no description yet, and puts the descriptions into the book's text so they are found by search. The book is not read again: its pictures are already kept. Call it again to go on where it stopped
 Nothing here is final: a deleted book, the books of a deleted shelf or section, and a removed source go to the trash for ${TRASH_DAYS} days, where restore_book and restore_source find them. Emptying the trash is the user's, in Settings.`,
 		inputSchema: {
 			type: "object",
@@ -1002,6 +1190,7 @@ Nothing here is final: a deleted book, the books of a deleted shelf or section, 
 						"merge_books",
 						"remove_source",
 						"restore_source",
+						"describe_pictures",
 					],
 				},
 				section: { type: "string" },
@@ -1018,6 +1207,11 @@ Nothing here is final: a deleted book, the books of a deleted shelf or section, 
 					description: "merge_books: the book that receives.",
 				},
 				source: { type: "integer", description: "A source's number." },
+				limit: {
+					type: "integer",
+					description:
+						"describe_pictures: how many pictures to describe in this call. Each is one request to the vision model.",
+				},
 				name: { type: "string", description: "The new name." },
 				to_section: {
 					type: "string",
@@ -1037,13 +1231,22 @@ Nothing here is final: a deleted book, the books of a deleted shelf or section, 
 		},
 		timeoutMs: LONG_CALL_MS,
 		retryable: false,
-		execute: async (input: unknown): Promise<string> => {
+		execute: async (input: unknown, context): Promise<string> => {
 			const config = activeConfig(options);
 			if (!config) return LIBRARY_OFF;
 			const request = (input ?? {}) as Record<string, unknown>;
 			const library = options.library ?? sharedLibrary();
 			const catalogue = library.catalogue;
 			const action = text(request.action);
+			if (action === "describe_pictures") {
+				return describeBookPicturesLater(
+					options,
+					config,
+					library,
+					request,
+					context,
+				);
+			}
 			const sectionName = text(request.section);
 			const shelfName = text(request.shelf);
 			const section = () => {

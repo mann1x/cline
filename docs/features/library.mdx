@@ -75,6 +75,12 @@ A book's pictures are always taken out and kept with it. With **Describe the pic
 
 **Profile whose model describes them** picks one of the profiles saved in the API configuration: a cheap, fast model that reads images is the right choice, since every picture is one request. With no profile picked, the model on the **Vision** tab is used; with none there either, pictures are kept without a description. **Pictures described per file** (40) limits how many of one file's pictures are described.
 
+### Describing the pictures later
+
+A book added while no vision model was set has its pictures and no descriptions: at most the caption the book gave them. Set the vision model, then ask the librarian to describe the pictures of the book. It uses `library_organize` with the action `describe_pictures`, which does not read the book again: the pictures are already in the book's folder. Each one is shown to the vision model, and what it says is kept with the picture and written into the book's text beside it, after the caption when there is one, so the picture is found by what it shows.
+
+One call describes up to **Pictures described per file** pictures (or the `limit` it is given) and says how many are left; asking again goes on from there. A picture the model has already described is not asked about twice. Every picture is one request to the vision model, so a scanned book, where each page is a picture, is as many requests as it has pages.
+
 ### Watching an import, and cancelling it
 
 Reading a book takes minutes: every page of a PDF, and every scanned page through text recognition. While `library_check` or `library_add` runs, its row in the chat shows one line per file: waiting, where it is (`page 312 of 769, recognizing text, 705 pictures`) and for how long, done with what it came to, or failed with the reason. A file that has not moved for a minute says **NOT MOVING** and for how long.

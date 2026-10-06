@@ -340,6 +340,26 @@ export interface PictureToDescribe {
  * Descriptions of a document's pictures, one request each, in order.
  * `undefined` for any the vision model could not describe.
  */
+/**
+ * One picture described, or the reason it was not. For a caller that has to
+ * say why: `describePictures` keeps the answers and drops the reasons.
+ */
+export async function describePicture(
+	describeImages: DescribeImages,
+	picture: PictureToDescribe,
+	documentName: string,
+): Promise<string | undefined> {
+	const [description] = await describeImages([
+		{
+			image: Buffer.from(picture.data).toString("base64"),
+			mediaType: picture.mediaType,
+			instruction: DESCRIBE_INSTRUCTION,
+			context: `From ${documentName}${picture.source ? `, ${picture.source}` : ""}.`,
+		},
+	]);
+	return description?.trim() || undefined;
+}
+
 export async function describePictures(
 	describeImages: DescribeImages,
 	pictures: readonly PictureToDescribe[],

@@ -3,6 +3,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
+	readFileSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -476,6 +477,83 @@ describe("the Library tools", () => {
 			await call("search_library", { query: "cutaway thermostat housing" }),
 		).toContain("[1]");
 		// Turned off, the pictures are kept and not described.
+		vision = undefined;
+	});
+
+	it("describes the pictures of a book added without a vision model, without reading it again", async () => {
+		write("engine.md", BOOK);
+		await addBook();
+		await call("library_add", {
+			book: "#1",
+			paths: [join(FIXTURES, "probe.epub")],
+			if_exists: "add_anyway",
+		});
+		const before = library.catalogue.images(1);
+		expect(before.length).toBeGreaterThanOrEqual(2);
+		expect(before.every((image) => !image.described)).toBe(true);
+		expect(
+			await call("search_library", { query: "cutaway thermostat housing" }),
+		).not.toContain("It shows the spring");
+
+		// No model: said, and nothing changed.
+		expect(
+			await call("library_organize", {
+				action: "describe_pictures",
+				book: "#1",
+			}),
+		).toContain("No vision model is set");
+
+		// One picture a call when that is the limit, and the next call goes on.
+		let asked = 0;
+		vision = async (images) =>
+			images.map(() => {
+				asked++;
+				return asked === 2
+					? ""
+					: "A cutaway drawing of a thermostat housing. It shows the spring.";
+			});
+		const sourcesBefore = library.catalogue
+			.sources(1)
+			.map((source) => source.id);
+		const first = await call("library_organize", {
+			action: "describe_pictures",
+			book: "#1",
+			limit: 1,
+		});
+		expect(first).toContain("1 picture described");
+		expect(first).toMatch(/\d+ more have no description yet/);
+		expect(first).toMatch(/REPORT: 1 of 1 done/);
+		const rest = await call("library_organize", {
+			action: "describe_pictures",
+			book: "#1",
+			limit: 50,
+		});
+		// The one the model said nothing about is reported, not passed over.
+		expect(rest).toContain("left out:");
+		expect(rest).toContain("the vision model gave no description");
+		const after = library.catalogue.images(1);
+		expect(after.filter((image) => image.described).length).toBe(
+			before.length - 1,
+		);
+		// The same sources, not a second import.
+		expect(library.catalogue.sources(1).map((source) => source.id)).toEqual(
+			sourcesBefore,
+		);
+		// In the text beside the picture, and found by search.
+		const epub = library.catalogue
+			.sources(1)
+			.find((source) => source.name === "probe.epub");
+		const text = readFileSync(
+			join(
+				library.catalogue.bookDirectory(library.catalogue.book(1) as never),
+				epub?.textFile ?? "",
+			),
+			"utf8",
+		);
+		expect(text).toContain("![A cutaway drawing of a thermostat housing.");
+		expect(
+			await call("search_library", { query: "cutaway thermostat housing" }),
+		).toContain("It shows the spring");
 		vision = undefined;
 	});
 

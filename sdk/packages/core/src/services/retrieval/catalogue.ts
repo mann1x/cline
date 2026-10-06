@@ -195,7 +195,10 @@ export interface BookImage {
 	height?: number;
 	/** Where in the source it was: `page 7`, `chapter 2`. */
 	origin?: string;
+	/** What a vision model said it shows, or failing that its caption in the book. */
 	description?: string;
+	/** A vision model has described it: `description` is not just its caption. */
+	described: boolean;
 }
 
 export interface SourceImageInput {
@@ -207,6 +210,8 @@ export interface SourceImageInput {
 	height?: number;
 	origin?: string;
 	description?: string;
+	/** `description` is a vision model's, not the caption the book gave it. */
+	described?: boolean;
 }
 
 export interface AddSourceInput {
@@ -393,6 +398,15 @@ export class Catalogue {
 		this.db = library.store.database;
 		this.booksDirectory = join(library.directory, "books");
 		for (const statement of SCHEMA) this.db.exec(statement);
+		// Whether a vision model has described the picture. A caption out of
+		// the book is kept in `description` too, and is not that.
+		try {
+			this.db.exec(
+				"ALTER TABLE book_images ADD COLUMN described INTEGER NOT NULL DEFAULT 0",
+			);
+		} catch {
+			// The column is there: a Library opened before.
+		}
 		mkdirSync(this.booksDirectory, { recursive: true });
 		this.adoptLegacyCollections();
 	}
@@ -950,6 +964,7 @@ export class Catalogue {
 			...(row.width != null ? { width: Number(row.width) } : {}),
 			...(row.height != null ? { height: Number(row.height) } : {}),
 			...(typeof row.origin === "string" ? { origin: row.origin } : {}),
+			described: Number(row.described ?? 0) === 1,
 			...(typeof row.description === "string"
 				? { description: row.description }
 				: {}),
@@ -1068,8 +1083,8 @@ export class Catalogue {
 		for (const picture of pictures) {
 			this.db
 				.prepare(
-					`INSERT INTO book_images(book_id, source_id, sha256, file, media_type, bytes, width, height, origin, description)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					`INSERT INTO book_images(book_id, source_id, sha256, file, media_type, bytes, width, height, origin, description, described)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				)
 				.run(
 					bookId,
@@ -1082,6 +1097,7 @@ export class Catalogue {
 					picture.height ?? null,
 					picture.origin ?? null,
 					picture.description ?? null,
+					picture.described ? 1 : 0,
 				);
 		}
 		this.db
@@ -1211,9 +1227,113 @@ export class Catalogue {
 		);
 		if (!row) throw new Error("No such picture.");
 		this.db
-			.prepare("UPDATE book_images SET description = ? WHERE id = ?")
-			.run(description.trim() || null, imageId);
+			.prepare(
+				"UPDATE book_images SET description = ?, described = ? WHERE id = ?",
+			)
+			.run(description.trim() || null, description.trim() ? 1 : 0, imageId);
 		this.writeBookFile(Number(row.book_id));
+	}
+
+	/**
+	 * Give pictures of one source their descriptions after the fact: each is
+	 * kept with its picture, written into the source's text where the picture
+	 * is linked, and the source is indexed again so the words can be found.
+	 *
+	 * This is what adding a book does when a vision model is set; it lets a
+	 * book added without one be completed without reading the book again.
+	 */
+	async describeSourceImages(
+		sourceId: number,
+		described: readonly { imageId: number; description: string; alt: string }[],
+		settings: LibrarySettings = DEFAULT_LIBRARY_SETTINGS,
+	): Promise<{ described: number; passages: number }> {
+		const source = this.source(sourceId);
+		if (!source) throw new Error("No such source.");
+		const book = this.book(source.bookId);
+		if (!book) throw new Error("Its book is gone.");
+		const images = new Map(
+			this.images(book.id)
+				.filter((image) => image.sourceId === sourceId)
+				.map((image) => [image.id, image]),
+		);
+		const file = source.textFile
+			? join(this.bookDirectory(book), source.textFile)
+			: undefined;
+		let text =
+			file && existsSync(file) ? readFileSync(file, "utf8") : undefined;
+		let count = 0;
+		for (const entry of described) {
+			const image = images.get(entry.imageId);
+			const description = entry.description.trim();
+			if (!image || !description) continue;
+			this.db
+				.prepare(
+					"UPDATE book_images SET description = ?, described = 1 WHERE id = ?",
+				)
+				.run(description, image.id);
+			count++;
+			if (text !== undefined) {
+				const link = `(${image.file})`;
+				const alt = entry.alt.replace(/[[\]\n]/g, " ").trim();
+				// Every place the picture is linked: `![anything](images/<hash>)`.
+				let from = 0;
+				let rebuilt = "";
+				for (;;) {
+					const at = text.indexOf(link, from);
+					if (at < 0) break;
+					const open = text.lastIndexOf("![", at);
+					const close = text.lastIndexOf("]", at);
+					if (
+						open >= from &&
+						close === at - 1 &&
+						!text.slice(open, close).includes("\n")
+					) {
+						rebuilt += `${text.slice(from, open)}![${alt}]${link}`;
+					} else {
+						rebuilt += text.slice(from, at + link.length);
+					}
+					from = at + link.length;
+				}
+				text = rebuilt + text.slice(from);
+			}
+		}
+		if (count === 0) return { described: 0, passages: 0 };
+		let passages = 0;
+		if (file && text !== undefined) {
+			writeFileSync(file, text);
+			const current =
+				source.documentId !== undefined
+					? this.library.store.getDocument(source.documentId)
+					: undefined;
+			if (current && !source.removedAt) {
+				// The same name in the same collection: its passages are replaced.
+				const added = await this.library.addDocument(
+					`book:${book.uid}`,
+					{
+						source: current.source,
+						title: current.title ?? book.title,
+						text,
+						bytes: source.bytes,
+					},
+					settings,
+				);
+				passages = added.chunkIds.length;
+				this.db
+					.prepare(
+						"UPDATE book_sources SET document_id = ?, fingerprint = ? WHERE id = ?",
+					)
+					.run(
+						added.document.id,
+						JSON.stringify(textFingerprint(text)),
+						sourceId,
+					);
+			}
+		}
+		this.db
+			.prepare("UPDATE books SET updated_at = ? WHERE id = ?")
+			.run(now(), book.id);
+		this.writeBookFile(book.id);
+		return { described: count, passages };
 	}
 
 	/**
@@ -1646,8 +1766,8 @@ export class Catalogue {
 			if (sourceId === undefined) continue;
 			this.db
 				.prepare(
-					`INSERT INTO book_images(book_id, source_id, sha256, file, media_type, bytes, width, height, origin, description)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					`INSERT INTO book_images(book_id, source_id, sha256, file, media_type, bytes, width, height, origin, description, described)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				)
 				.run(
 					book.id,
@@ -1660,6 +1780,7 @@ export class Catalogue {
 					image.height ?? null,
 					image.origin ?? null,
 					image.description ?? null,
+					image.described ? 1 : 0,
 				);
 		}
 		this.writeBookFile(book.id);
