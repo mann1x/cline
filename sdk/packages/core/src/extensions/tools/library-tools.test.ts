@@ -660,6 +660,57 @@ describe("the Library tools", () => {
 			).toContain("needs a `url`");
 		});
 
+		it("reports every link, read or not, and shows them on the row", async () => {
+			delete pages["https://example.com/b"];
+			const updates: { status?: string }[] = [];
+			const made = String(
+				await tools().library_web_book.execute(
+					{
+						action: "create",
+						title: "Godot-Github",
+						description:
+							"Recipes for Godot from GitHub. Tilemaps and navigation.",
+						section: "Games",
+						shelf: "Godot",
+						links: ["https://example.com/a", "https://example.com/b"],
+					},
+					{
+						...CONTEXT,
+						emitUpdate: (update: unknown) => updates.push(update as never),
+					},
+				),
+			);
+			expect(made).toMatch(/REPORT: 1 of 2 done, 1 failed/);
+			expect(made).toContain("- https://example.com/a: 1 page read");
+			expect(made).toMatch(/- https:\/\/example\.com\/b: FAILED, /);
+			expect(updates.at(-1)?.status).toContain(
+				"✓ https://example.com/a: 1 page read",
+			);
+			expect(updates.at(-1)?.status).toContain("✗ https://example.com/b: ");
+		});
+
+		it("keeps no book and fails with the report when it is cancelled", async () => {
+			const stop = new AbortController();
+			stop.abort();
+			await expect(
+				tools().library_web_book.execute(
+					{
+						action: "create",
+						title: "Godot-Github",
+						description:
+							"Recipes for Godot from GitHub. Tilemaps and navigation.",
+						section: "Games",
+						shelf: "Godot",
+						links: ["https://example.com/a"],
+					},
+					{ ...CONTEXT, signal: stop.signal },
+				),
+			).rejects.toThrow(
+				/was cancelled[\s\S]*No page was stored, so the book was not kept\.[\s\S]*- https:\/\/example\.com\/a: NOT READ/,
+			);
+			expect(library.catalogue.books()).toHaveLength(0);
+		});
+
 		it("makes a book from links and keeps the query and the links with it", async () => {
 			const made = await create();
 			expect(made).toContain('"Godot-Github" (#1): 2 pages read in');

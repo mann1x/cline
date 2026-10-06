@@ -81,6 +81,8 @@ Reading a book takes minutes: every page of a PDF, and every scanned page throug
 
 **Cancel import**, on the same row, ends the call. It ends as a failed tool call, and the model is given the whole report: which files were read, which were not, where the one in progress had got to, and whether anything reached the Library. The run goes on, so the model tells you and asks what to do next.
 
+`library_web_book` shows the same with a line per link: how many pages of a crawl are read so far, and when it is cancelled a new book with no page stored is not kept.
+
 Every call ends with that report, cancelled or not. It lists each file and, under it, everything that was left out of it with the reason: a scanned page whose text could not be recognized, a picture that could not be decoded or got no description. A book added to the Library is read whole: every scanned page is recognized, not the first forty an ordinary `extract_document` call reads.
 
 The same lines go to the log once a minute, so a call that stops moving leaves a record of the file and the page it stopped on.

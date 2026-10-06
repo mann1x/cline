@@ -56,8 +56,8 @@ scraping. If they are not in your tools, say so and work with files.
 
 ## Reports, and cancelled calls
 
-`library_check` and `library_add` end with a `REPORT`: a line for every
-file, and under it a `left out:` line for each page or picture that is
+`library_check`, `library_add` and `library_web_book` end with a `REPORT`:
+a line for every file or link, and under it a `left out:` line for each page or picture that is
 not in the book, with the reason. Read it. Pass on to the user every
 file that failed and everything that was left out; do not say a book was
 added in full when the report says otherwise.

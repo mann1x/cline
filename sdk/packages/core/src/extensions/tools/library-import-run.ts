@@ -113,10 +113,12 @@ export class LibraryImportRun {
 		files: readonly string[],
 		private readonly context: AgentToolContext | undefined,
 		private readonly log?: (message: string) => void,
+		/** What an item is called on its line. @default the file's name */
+		label: (item: string) => string = (item) => path.basename(item),
 	) {
 		this.entries = files.map((file) => ({
 			file,
-			name: path.basename(file),
+			name: label(file),
 			state: "waiting" as FileState,
 			problems: [],
 		}));

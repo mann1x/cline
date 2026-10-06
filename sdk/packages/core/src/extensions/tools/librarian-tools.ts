@@ -1424,6 +1424,8 @@ interface Gathered {
 	attempted: Set<string>;
 	/** False when the page budget or the time limit cut the reading short. */
 	complete: boolean;
+	/** Per link that was read: the pages it gave, and the pages under it that were not read. */
+	perLink: Map<string, { pages: number; problems: string[] }>;
 }
 
 /**
@@ -1440,6 +1442,7 @@ async function gather(
 	depth: number,
 	budget: number,
 	signal?: AbortSignal,
+	run?: LibraryImportRun,
 ): Promise<Gathered> {
 	const scrape = config.scrape;
 	if (!scrape) throw new Error(NO_SCRAPER);
@@ -1449,7 +1452,10 @@ async function gather(
 		notes: [],
 		attempted: new Set(),
 		complete: true,
+		perLink: new Map(),
 	};
+	const guard = <T>(work: Promise<T>): Promise<T> =>
+		run ? run.guard(work) : work;
 	const seen = new Set<string>();
 	const take = (page: ScrapedPage) => {
 		if (seen.has(page.url) || gathered.pages.length >= budget) return;
@@ -1467,17 +1473,49 @@ async function gather(
 			break;
 		}
 		gathered.attempted.add(link);
+		run?.start(link);
+		const before = gathered.pages.length;
 		try {
 			if (depth <= 0) {
-				take(await scrapePage(scrape, link, { ...(signal ? { signal } : {}) }));
-			} else {
-				const crawled = await crawlSite(scrape, link, {
-					limit: left,
-					depth,
-					...(signal ? { signal } : {}),
+				take(
+					await guard(
+						scrapePage(scrape, link, { ...(signal ? { signal } : {}) }),
+					),
+				);
+				gathered.perLink.set(link, {
+					pages: gathered.pages.length - before,
+					problems: [],
 				});
+			} else {
+				const crawled = await guard(
+					crawlSite(scrape, link, {
+						limit: left,
+						depth,
+						...(signal ? { signal } : {}),
+						onProgress: (done, total) =>
+							run?.progress(link, {
+								unit: "page",
+								at: done,
+								total,
+								pictures: 0,
+							}),
+					}),
+				);
 				for (const page of crawled.pages) take(page);
 				gathered.failed.push(...crawled.failed);
+				gathered.perLink.set(link, {
+					pages: gathered.pages.length - before,
+					problems: [
+						...crawled.failed.map(
+							(failure) => `${failure.url} was not read: ${failure.reason}`,
+						),
+						...(crawled.unfinished
+							? [
+									"the crawl was still running at the time limit, so pages it had not reached are missing",
+								]
+							: []),
+					],
+				});
 				if (crawled.unfinished || crawled.pages.length >= left) {
 					gathered.complete = false;
 				}
@@ -1487,9 +1525,14 @@ async function gather(
 					);
 				}
 			}
+			run?.stage(
+				link,
+				`read, ${plural(gathered.pages.length - before, "page")}; waiting to be stored`,
+			);
 		} catch (error) {
-			if (signal?.aborted) throw error;
+			if (signal?.aborted || run?.isCancelled) throw error;
 			gathered.failed.push({ url: link, reason: errorText(error) });
+			run?.fail(link, errorText(error));
 		}
 	}
 	return gathered;
@@ -1556,7 +1599,32 @@ If a book already has the same links or title, create adds nothing and says so.`
 			const library = options.library ?? sharedLibrary();
 			const catalogue = library.catalogue;
 			const action = text(request.action);
-			const signal = context?.signal;
+			let run: LibraryImportRun | undefined;
+			/** A run for these links, shown on the row; its signal stops the reading. */
+			const begin = (what: string, items: readonly string[]) => {
+				run = new LibraryImportRun(
+					what,
+					items,
+					context,
+					options.log,
+					(link) => link,
+				);
+				return run;
+			};
+			/** Each link that was read comes to its count, with what was not read under it. */
+			const settle = (
+				active: LibraryImportRun,
+				gathered: Gathered,
+				verb: string,
+			) => {
+				for (const [link, entry] of gathered.perLink) {
+					active.done(
+						link,
+						`${plural(entry.pages, "page")} ${verb}`,
+						entry.problems,
+					);
+				}
+			};
 			const given = strings(request.links);
 			const links = given
 				.map(cleanLink)
@@ -1672,8 +1740,36 @@ If a book already has the same links or title, create adds nothing and says so.`
 							`New book #${book.id} "${book.title}" on ${place.label}${place.made.length ? ` (made ${place.made.join(" and ")})` : ""}.`,
 						);
 					}
-					const gathered = await gather(config, links, depth, limit, signal);
-					const counts = await store(book, gathered);
+					const active = begin(
+						`Reading ${plural(links.length, "link")}${depth > 0 ? `, ${depth} deep` : ""}`,
+						links,
+					);
+					let gathered: Gathered;
+					let counts: Awaited<ReturnType<typeof store>>;
+					try {
+						gathered = await gather(
+							config,
+							links,
+							depth,
+							limit,
+							active.signal,
+							active,
+						);
+						for (const link of gathered.perLink.keys()) {
+							active.stage(link, "storing its pages in the book");
+						}
+						counts = await store(book, gathered);
+					} catch (error) {
+						if (!active.isCancelled) throw error;
+						const kept = catalogue.sources(book.id).length;
+						if (action === "create" && kept === 0) catalogue.trashBook(book.id);
+						throw active.cancellation([
+							action === "create" && kept === 0
+								? "No page was stored, so the book was not kept."
+								: `"${book.title}" (#${book.id}) has ${plural(kept, "page")} in the Library; the pages of this call that are not listed as read below are not in it.`,
+						]);
+					}
+					settle(active, gathered, "read");
 					const web = book.metadata.web ?? { links: [] };
 					catalogue.updateBook(book.id, {
 						metadata: {
@@ -1699,6 +1795,8 @@ If a book already has the same links or title, create adds nothing and says so.`
 						return [
 							"No page could be read, so the book was not kept.",
 							...failures(gathered),
+							"",
+							...active.report(),
 						].join("\n");
 					}
 					const embedded = await embedNew(
@@ -1706,10 +1804,10 @@ If a book already has the same links or title, create adds nothing and says so.`
 						config,
 						[book.collectionId],
 						options,
-						signal,
+						active.signal,
 					);
 					if (embedded) summary.push(embedded);
-					return summary.join("\n");
+					return [...summary, "", ...active.report()].join("\n");
 				}
 				if (action === "check" || action === "update") {
 					const found = oneBook(catalogue, text(request.book));
@@ -1728,13 +1826,28 @@ If a book already has the same links or title, create adds nothing and says so.`
 								? (web.crawl?.limit ?? config.scrape.maxPages)
 								: web.links.length,
 					);
-					const gathered = await gather(
-						config,
+					const active = begin(
+						`${action === "check" ? "Checking" : "Updating"} "${found.title}": ${plural(web.links.length, "link")}${depth > 0 ? `, ${depth} deep` : ""}`,
 						web.links,
-						depth,
-						limit,
-						signal,
 					);
+					const signal = active.signal;
+					let gathered: Gathered;
+					try {
+						gathered = await gather(
+							config,
+							web.links,
+							depth,
+							limit,
+							signal,
+							active,
+						);
+					} catch (error) {
+						if (!active.isCancelled) throw error;
+						throw active.cancellation([
+							`"${found.title}" (#${found.id}) is as it was: nothing was brought in.`,
+						]);
+					}
+					settle(active, gathered, "read again");
 					const have = new Map(
 						catalogue
 							.sources(found.id)
@@ -1799,7 +1912,7 @@ If a book already has the same links or title, create adds nothing and says so.`
 								'Action "update" brings the new and changed pages in.',
 							);
 						}
-						return report.join("\n");
+						return [...report, "", ...active.report()].join("\n");
 					}
 					const counts = await store(found, {
 						...gathered,
@@ -1821,12 +1934,16 @@ If a book already has the same links or title, create adds nothing and says so.`
 						);
 						if (embedded) report.push(embedded);
 					}
-					return report.join("\n");
+					return [...report, "", ...active.report()].join("\n");
 				}
 				return 'Say `action`: "create", "add", "check" or "update".';
 			} catch (error) {
+				// A cancelled call fails as a tool call, with its report.
+				if ((run as LibraryImportRun | undefined)?.isCancelled) throw error;
 				options.onError?.(`[library] library_web_book ${action} failed`, error);
 				return `Not done: ${errorText(error)}`;
+			} finally {
+				(run as LibraryImportRun | undefined)?.close();
 			}
 		},
 	});
