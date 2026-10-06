@@ -1261,6 +1261,15 @@ export {
 	resetJevDialectCache,
 	resolveJevRoutes,
 } from "./extensions/tools/jev";
+// The Library: documents kept for retrieval, and the tools the model has on it.
+export {
+	type CreateLibraryToolsOptions,
+	createLibraryTools,
+	DEFAULT_LIBRARY_COLLECTION,
+	LIBRARY_TOOL_NAMES,
+	type LibraryToolName,
+	type LibraryToolsConfig,
+} from "./extensions/tools/library-tools";
 // The workspace lister, and the tool that reads it. Both hosts install this:
 // the reflex it displaces -- `ls`, `dir /s` -- is not VS Code's, it is any
 // model that has no other way to find out what exists.
@@ -1512,6 +1521,53 @@ export {
 	type SessionThinkingInput,
 	sessionThinkingEngine,
 } from "./services/llms/session-budget";
+export {
+	type EmbedOptions,
+	type EmbedResult,
+	embedTexts,
+	isInputTooLarge,
+	type RerankOptions,
+	type RetrievalEndpoint,
+	RetrievalEndpointError,
+	rerankDocuments,
+	resolveRetrievalBaseUrl,
+} from "./services/retrieval/embedding-client";
+export {
+	currentPlatformKey,
+	ensureLanceDb,
+	installLanceDb,
+	isLanceDbInstalled,
+	type LanceDbInstallProgress,
+	LanceDbUnavailableError,
+	lanceDbInstallBytes,
+	lanceDbUnsupportedReason,
+} from "./services/retrieval/lancedb-runtime";
+export {
+	type EmbedPendingOptions,
+	type EmbedPendingResult,
+	type EmbedProgress,
+	Library,
+	type LibraryDocumentText,
+	type LibraryOptions,
+	type LibrarySearchOptions,
+	resolveLanceDbRuntimeDirectory,
+	resolveLibraryDirectory,
+	sharedLibrary,
+} from "./services/retrieval/library";
+export {
+	DEFAULT_LIBRARY_SETTINGS,
+	type LibrarySettings,
+	resolveLibrarySettings,
+} from "./services/retrieval/library-settings";
+export type {
+	LibraryCollection,
+	LibraryDocument,
+	LibraryHit,
+} from "./services/retrieval/library-store";
+export type {
+	RetrievedHit,
+	RetrieveResult,
+} from "./services/retrieval/retrieve";
 export {
 	TelemetryService,
 	type TelemetryServiceOptions,

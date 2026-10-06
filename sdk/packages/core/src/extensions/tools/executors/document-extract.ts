@@ -177,6 +177,92 @@ async function read(
 	}
 }
 
+export interface DocumentText {
+	/** The document as markdown. */
+	markdown: string;
+	format: DocumentFormat;
+	title?: string;
+	author?: string;
+	bytes: number;
+	/** What was skipped or could not be read, in sentences. */
+	notes: string[];
+}
+
+/**
+ * A document's text, and nothing written anywhere: what the Library indexes.
+ *
+ * The same readers as the tool, without the pictures. Scanned pages are read
+ * when the settings name an engine that needs no model in the conversation
+ * (tesseract, or the vision model when one is given).
+ */
+export async function readDocumentText(
+	filePath: string,
+	options: {
+		/** Removed afterwards. Not the system temp directory: a book's pages can be large. */
+		scratchDir: string;
+		maxFileSizeBytes?: number;
+		reader?: DocumentReaderSettings;
+		describeImages?: DescribeImages;
+	},
+): Promise<DocumentText> {
+	const stat = await fs.stat(filePath).catch(() => undefined);
+	if (!stat?.isFile()) {
+		throw new Error(`No file at ${filePath}.`);
+	}
+	const limit = options.maxFileSizeBytes ?? DEFAULT_MAX_FILE_BYTES;
+	if (stat.size > limit) {
+		throw new Error(
+			`${filePath} is ${formatBytes(stat.size)}, past the ${formatBytes(limit)} the Document Reader reads.`,
+		);
+	}
+	const data = new Uint8Array(await fs.readFile(filePath));
+	const verdict = detectFormat(filePath, data.subarray(0, 512));
+	if ("unsupported" in verdict) {
+		throw new Error(verdict.unsupported);
+	}
+	const recognition =
+		verdict.format === "pdf"
+			? planRecognition({
+					request: undefined,
+					languages: undefined,
+					settings: options.reader ?? {},
+					describeImages: options.describeImages,
+					modelSupportsImages: false,
+				})
+			: undefined;
+	const scratchDir = path.join(
+		options.scratchDir,
+		`.scratch-${randomBytes(4).toString("hex")}`,
+	);
+	await fs.mkdir(scratchDir, { recursive: true });
+	let result: DocumentReadResult;
+	try {
+		result = await read(filePath, data, verdict.format, {
+			images: new ImageCollector("images"),
+			wantImages: false,
+			scratchDir,
+			...(recognition?.recognize ? { recognize: recognition.recognize } : {}),
+		});
+	} finally {
+		await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => {});
+		await recognition?.close();
+	}
+	return {
+		markdown: tidyMarkdown(result.markdown),
+		format: verdict.format,
+		...(result.title ? { title: result.title } : {}),
+		...(result.author ? { author: result.author } : {}),
+		bytes: stat.size,
+		notes: [
+			...(recognition?.notes(
+				result.scannedPages ?? [],
+				result.recognizedPages ?? [],
+			) ?? []),
+			...(result.notes ?? []),
+		],
+	};
+}
+
 export function createDocumentExtractExecutor(
 	options: DocumentExtractExecutorOptions = {},
 ): ExtractDocumentExecutor {

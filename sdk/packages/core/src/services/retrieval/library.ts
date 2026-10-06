@@ -95,7 +95,8 @@ export interface LibrarySearchOptions {
 
 export class Library {
 	readonly store: LibraryStore;
-	private readonly directory: string;
+	/** Where this Library is kept. */
+	readonly directory: string;
 	private readonly runtimeDirectory: string;
 	private readonly fetch?: typeof fetch;
 	private index?: Promise<VectorIndex>;
@@ -327,4 +328,17 @@ export class Library {
 		this.index = undefined;
 		this.store.close();
 	}
+}
+
+const shared = new Map<string, Library>();
+
+/** The one Library of a folder in this process: SQLite and LanceDB are opened once. */
+export function sharedLibrary(options: LibraryOptions = {}): Library {
+	const directory = options.directory ?? resolveLibraryDirectory();
+	let library = shared.get(directory);
+	if (!library) {
+		library = new Library({ ...options, directory });
+		shared.set(directory, library);
+	}
+	return library;
 }

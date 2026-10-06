@@ -74,7 +74,9 @@ export async function extractTarGz(
 		try {
 			for await (const chunk of source) {
 				if (!gunzip.write(chunk)) {
-					await new Promise((resolve) => gunzip.once("drain", resolve));
+					await new Promise<void>((resolve) =>
+						gunzip.once("drain", () => resolve()),
+					);
 				}
 			}
 			gunzip.end();
@@ -113,7 +115,9 @@ export async function extractTarGz(
 				remaining -= take.length;
 				if (out) {
 					if (!out.write(take)) {
-						await new Promise((resolve) => out?.once("drain", resolve));
+						await new Promise<void>((resolve) => {
+							out?.once("drain", () => resolve());
+						});
 					}
 				} else if (collect) {
 					collect.push(Buffer.from(take));
