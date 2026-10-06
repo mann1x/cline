@@ -13,15 +13,23 @@ Cerebriline now ships with skills of its own. They appear in the Skills tab
 under **Built-in Skills** with nothing to install, in the extension, the CLI and
 the SDK alike.
 
-The first two are Chris's:
+Four to start with:
 
-- **mandatory-qa-prompt-and-issue-resolution** asks, after a change to code or
-  configuration, whether to run QA on it, runs a QA plan fitted to the change
-  and reports, then asks whether to fix what it found.
-- **docker-compose-deploy** deploys the open project to local Docker Desktop
-  from its compose file or its Dockerfile, and verifies the deployment.
+- **mandatory-qa-prompt-and-issue-resolution** (Chris) asks, after a change to
+  code or configuration, whether to run QA on it, runs a QA plan fitted to the
+  change and reports, then asks whether to fix what it found.
+- **docker-compose-deploy** (Chris) deploys the open project to local Docker
+  from its compose file or its Dockerfile, and verifies the deployment. Its
+  commands now work in bash as well as PowerShell, and its reachability check
+  waits for the app to come up.
+- **build-project** builds the open project the way the repo defines, and its
+  Docker image when it has one.
+- **run-project** starts the open project, waits until it answers and opens it
+  in the browser.
 
-Both ship turned off: turn on the ones you want. A built-in skill can be
+The last three refer to each other and are meant to be turned on together.
+
+All ship turned off: turn on the ones you want. A built-in skill can be
 switched on and off and opened to read, but not edited or deleted, since an
 update replaces it. The switch is kept in your settings and survives updates.
 To change what one does, create your own skill with the same name; yours
