@@ -105,6 +105,12 @@ in every workspace.
 It works on keyword search alone, with nothing to download and no model to
 configure.
 
+The Library and Memory panels each show a **Search engine** box: what is
+stored, whether LanceDB is downloaded and working and which version, the
+embedding model in use, and how much of what is stored has vectors. It has a
+**Download LanceDB** button; enabling the Library or Memory alone downloads
+nothing.
+
 To search by meaning as well, tick **Use an embedding model** in the API
 configuration and name the model on the new **Embedding** tab: on the session's
 own provider, or on any endpoint that serves the OpenAI embeddings API (Ollama,
@@ -132,10 +138,16 @@ tested, a convention, something you said you prefer. Turn it on under
 **Settings > Memory**, a panel of its own beside Library.
 
 The model gets three tools: `remember` keeps a note, `recall` returns the notes
-that best match a question, and `forget` removes one that no longer holds. A
-note belongs to the project it was made in or to every project; a recall looks
-in both and never in another project's. Notes are kept in Cerebriline's data
-folder, not in your repository.
+that best match a question, and `forget` removes one that no longer holds.
+Notes are kept in Cerebriline's data folder, not in your repository.
+
+There can be any number of memories: **Main**, which every workspace starts on,
+and whichever others you make. The panel lists them all, whichever workspace is
+open, and for the open workspace you tick the memories its tasks may **recall**
+from (any number) and pick the one new notes are **stored** in. The model
+cannot reach a memory you did not tick. A workspace with no memory of its own
+is offered one, named after its folder. A memory can be exported to a file and
+imported again, here or on another machine.
 
 Notes are found by keyword, and by meaning as well once an embedding model is
 named on the **Embedding** tab, which Memory shares with the Library.

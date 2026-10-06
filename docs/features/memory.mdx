@@ -16,7 +16,7 @@ The model then has three tools:
 
 | Tool | What it does |
 | --- | --- |
-| `remember` | Keeps one note, with a few tags to find it by. |
+| `remember` | Keeps one note, with a few tags to find it by, in the memory this workspace stores to. |
 | `recall` | Returns the notes that best match a question, best first, each with its id, date, scope and tags. With no question it lists the newest notes. |
 | `forget` | Removes a note by its id, when it no longer holds. |
 
@@ -56,22 +56,39 @@ Pick the model under **Profile whose model writes it**: one of the profiles save
 
 HyDE (Hypothetical Document Embeddings) is from Gao, Ma, Lin and Callan, *Precise Zero-Shot Dense Retrieval without Relevance Labels* (2022). The order of work here (search first, expand grounded on what was found, search again, merge) is the one [claude-hooks](https://github.com/mann1x/claude-hooks) uses.
 
-## Project notes and global notes
+## Memories
 
-Every note has a scope.
+There can be any number of memories. They are all kept in one place, Cerebriline's data folder, and **Settings > Memory** lists every one of them whichever workspace is open.
 
-| Scope | Seen in |
-| --- | --- |
-| **project** | Only the workspace it was made in. How this project is built, its conventions, its decisions. |
-| **global** | Every project. Your own preferences. |
+- **Main** is there from the start and cannot be deleted. Every workspace starts on it, for storing and for recall.
+- Any other memory is one you make: for a workspace, for a client, for a topic, or imported from a file.
 
-A recall looks in the current project's notes and in the global ones, and never in another project's. The model chooses the scope when it keeps a note; **Where a note is kept when the model does not say** in the panel decides the rest, and starts on *This project*.
+For the workspace that is open, the list has two columns:
 
-A project is the workspace folder. Open the same repository from a different folder and its project notes are not there; global notes are.
+| Column | What it sets | How many |
+| --- | --- | --- |
+| **Recall** | The memories this workspace's tasks may search. | Any number |
+| **Store** | The memory new notes are kept in. | Exactly one |
+
+The choice is kept per workspace. The model's tools take no memory name, so a model cannot read from, or write to, a memory that is not ticked for its workspace. `forget` removes a note only from the memory the workspace stores to; a note in a memory that is only read is yours to remove.
+
+When the open workspace has no memory of its own, the panel offers **Create a memory for this workspace**, named after the folder. A memory made that way is ticked for recall; where notes are stored stays as it was until you move it.
+
+A workspace is its folder path. The same repository opened from another folder is another workspace, and starts on Main.
+
+### Export and import
+
+**Export** writes a memory to a `.memory.json` file: the notes, their tags and the day each was noted. **Import…** reads such a file into a memory of the file's name, making it if it is not there. A note already present is left alone, so reading the same file twice adds nothing. Vectors are not in the file; they are made again where it is read.
+
+### If you used Memory before this build
+
+The first build had a global part and a part per workspace. They are brought over the first time Memory is opened: the global part is **Main**, and each workspace's part is a memory named after its folder. Those are not ticked for recall automatically. Tick them for the workspaces that should see them.
 
 ## How notes are found
 
 By keyword, with nothing to download and no model to configure.
+
+The **Search engine** box at the top of the panel says where things stand: how many notes are stored, whether LanceDB (which holds the vectors) is downloaded and loads, its version, the embedding model in use, and how many notes have vectors. **Download LanceDB** fetches it (200 to 390 MB, depending on the platform). Ticking **Use an embedding model** in the API configuration fetches it too; enabling Memory alone does not.
 
 To find notes by meaning as well, tick **Use an embedding model** in the API configuration and name the model on the **Embedding** tab. Memory and the [Library](/features/library) share that tab: one embedding model and one optional reranking model serve both, and both use the same LanceDB download. A note kept before an embedding model was named is found by keyword until the next note is kept, which embeds the ones still waiting.
 
@@ -80,7 +97,7 @@ To find notes by meaning as well, tick **Use an embedding model** in the API con
 | Setting | Default | What it does |
 | --- | --- | --- |
 | Enable Memory | off | Offers the three tools. |
-| Where a note is kept when the model does not say | This project | The scope of a note the model gave no scope. |
+| Recall / Store, per memory | Main for both | Which memories this workspace searches, and the one it stores to. |
 | Recall automatically | on | Searches Memory with every message you send and gives the model the notes about it. |
 | Expand the question first (HyDE) | off | Has a second model write the note that would answer the message, and searches with that as well. |
 | Profile whose model writes it | none | The saved profile used for the expansion. |
@@ -92,8 +109,9 @@ To find notes by meaning as well, tick **Use an embedding model** in the API con
 - A note is at most 4,000 characters and is kept whole; it is not cut into passages.
 - The same note kept twice in the same scope is kept once.
 - Notes are not synced between machines. They live in the data folder of the machine that made them.
-- There is no list of notes in the panel yet. Ask the model: *"list your notes"*.
+- The panel lists memories and counts their notes, not the notes themselves. Ask the model: *"list your notes"*.
+- A memory cannot be renamed yet. Export it, import it under the new name, and delete the old one.
 
 ## In the CLI
 
-`--memory` (or `CLINE_MEMORY=1`) offers the same tools on the panel's defaults, with automatic recall; `CLINE_MEMORY_AUTO_RECALL=0` turns that off. `CLINE_MEMORY_HYDE_MODEL` names a model on the session's provider to write the expansion. An embedding model is named by environment: `CLINE_EMBEDDING_BASE_URL`, `CLINE_EMBEDDING_MODEL` and, where the endpoint needs one, `CLINE_EMBEDDING_API_KEY`. Notes are kept under `--data-dir`.
+`--memory` (or `CLINE_MEMORY=1`) offers the same tools on the panel's defaults, on the main memory unless `CLINE_MEMORY_STORE` names another to store to and `CLINE_MEMORY_RECALL` a comma-separated list to search, with automatic recall; `CLINE_MEMORY_AUTO_RECALL=0` turns that off. `CLINE_MEMORY_HYDE_MODEL` names a model on the session's provider to write the expansion. An embedding model is named by environment: `CLINE_EMBEDDING_BASE_URL`, `CLINE_EMBEDDING_MODEL` and, where the endpoint needs one, `CLINE_EMBEDDING_API_KEY`. Notes are kept under `--data-dir`.

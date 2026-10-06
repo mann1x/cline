@@ -26,6 +26,10 @@ A file added again with the same content is left alone. A file that changed is r
 
 Documents are grouped in **collections**, which the model names when it adds (`default` when it names none) and can search one at a time.
 
+## The search engine box
+
+At the top of **Settings > Library**, once the Library is on, a box says where search stands: how many documents, collections and passages are stored, whether LanceDB is downloaded and loads, its version, the embedding model in use and how many documents have vectors. **Download LanceDB** fetches it. Enabling the Library alone does not download anything: keyword search needs nothing.
+
 ## Search by keyword
 
 With nothing else configured, the Library is searched by keyword. This needs no model and no download, works the moment a document is added, and is very good at names, codes and exact phrases. Words that appear almost everywhere in the Library are left out of a query, since they say nothing about which passage is wanted.
