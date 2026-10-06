@@ -252,6 +252,14 @@ The approach is HyDE (Gao et al., 2022), in the order of work
 
 In the CLI, `--memory` offers the same tools and the automatic recall.
 
+### Fixes
+
+The context bar shows the window the model will run with. On Ollama and
+xOllama it showed the catalog's number (128k for a model the catalog does not
+know) on a new session and on a reopened one, until the first request replaced
+it with the configured one. Sessions were never run at the wrong size: only the
+bar was.
+
 ## [4.100.240] — 2026-10-05
 
 ### The chat keeps following on every monitor
