@@ -280,6 +280,20 @@ down. They were left open until the process ended. They are kept in the data
 folder, not in the extension's, and are written so that a crash or a forced
 update loses at most the change in progress.
 
+A model named on the Vision tab, or in a saved profile, is sent to the server
+that tab or profile names. With the session on one xOllama server and the
+Vision tab on another, the picture describer asked the session's server for
+the vision model and was told it was not found; every picture came back
+without a description.
+
+Only models that read images are offered for describing pictures. On the
+Vision tab, the Ollama and xOllama model list leaves out the models the server
+reports as having no vision capability, and says how many it left out. In the
+Library panel, the list of profiles leaves out the ones whose model reports
+none. A model already chosen that cannot read images is kept in view with a
+warning. The server is the one asked (Ollama, xOllama, llama.cpp and
+opencoti report it); a model nothing is known about stays on the list.
+
 ## [4.100.240] — 2026-10-05
 
 ### The chat keeps following on every monitor
