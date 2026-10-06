@@ -193,6 +193,10 @@ text, 705 pictures`), done, or failed with the reason, and **NOT MOVING** with
 the time when a file has stopped. **Cancel import** on that row ends the call
 as a failure, and the model gets the full report and asks you how to go on.
 
+Making a book from web pages, and checking or updating one, does the same
+with a line per link: pages read so far while a site is crawled, and each
+page under it that could not be read.
+
 Every check and every add ends with a report for the model: each file, and
 under it every page or picture that was left out, with the reason. Nothing is
 left out silently.
