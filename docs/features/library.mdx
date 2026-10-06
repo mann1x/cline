@@ -1,10 +1,10 @@
 ---
 title: "Library"
 sidebarTitle: "Library"
-description: "A place for the documents you want the model to look things up in: how to turn it on, how documents are split and searched, and how to add an embedding and a reranking model."
+description: "Sections, shelves and books the model can look things up in: the librarian that catalogues ebooks and web pages, how duplicates and other editions are told apart, the trash, export and import, and how the Library is searched."
 ---
 
-The **Library** holds documents you want the model to be able to look things up in: books, manuals, papers, notes. The model adds documents to it, and later asks it questions and gets back the passages that answer them, each with the document and section it came from.
+The **Library** holds what you want the model to be able to look things up in: ebooks, manuals, papers, notes, web pages. It is arranged like a library: **sections**, **shelves** in each section, and **books** on the shelves. The model searches it and gets back the passages that answer a question, each with the book and chapter it came from. With the librarian turned on, the model also runs it: it catalogues what you give it, puts each book on the right shelf, and tells you when a book is already there.
 
 The Library is **off by default**, is kept in Cerebriline's data folder, and is the same in every workspace: a book added while working on one project is there in the next.
 
@@ -12,23 +12,121 @@ The Library is **off by default**, is kept in Cerebriline's data folder, and is 
 
 Open **Settings > Library** and tick **Enable the Library**. It applies from the next task.
 
-The model then has three tools:
+The model then has two tools:
 
 | Tool | What it does |
 | --- | --- |
-| `add_to_library` | Adds files or folders to a collection. Text and Markdown are taken as they are; PDF, Word, PowerPoint, Excel, OpenDocument, RTF, HTML and ebooks (EPUB, MOBI, AZW3, FB2) are read by the [Document Reader](/features/document-reader). |
-| `search_library` | Returns the passages that best match a question, best first. |
-| `list_library` | Lists the collections, or the documents of one. |
+| `search_library` | Returns the passages that best match a question, best first. It can be limited to shelves or to books. |
+| `list_library` | Shows the sections and shelves, the books on a shelf, or one book in full: what it is and what it was made from. |
 
-Ask in plain words: *"add the manuals folder to the library"*, *"look in the library for how the coolant pump comes off"*.
+These read the Library and never change it. Changing it is the librarian's.
 
-A file added again with the same content is left alone. A file that changed is replaced. A folder adds the documents and text files inside it, up to 500 per call, and skips hidden folders and `node_modules`.
+## Sections, shelves and books
 
-Documents are grouped in **collections**, which the model names when it adds (`default` when it names none) and can search one at a time.
+A **book** is whatever was put in it, and it need not be one file:
+
+- the **original files**, copied into the Library and named by their sha256, so a file is recognised whatever it is called;
+- the **text** read out of each, which is what is searched;
+- the **pictures** taken out of the files, each with a description when a vision model is set;
+- a **description** of the book, and what is known about it: authors, edition, year, language, ISBN, publisher, tags;
+- for a book made from the web, the **query** it was made for and the **links** it started from.
+
+All of it is in one folder per book, with a `book.json` that says what the folder holds. The folder is the book: it is what an export carries.
+
+## The librarian
+
+Tick **Let the model act as librarian** in **Settings > Library**. That turns on the built-in `librarian` skill and gives the model the tools that change the Library:
+
+| Tool | What it does |
+| --- | --- |
+| `library_check` | Reads files, or takes links or a title, and says for each whether it is already in the Library. Changes nothing. |
+| `library_add` | Makes one book from files, or adds files to an existing book. Makes the section and shelf if they are missing. |
+| `library_organize` | Creates, renames, moves and deletes sections, shelves and books; merges two books; takes a source out of a book and puts it back. |
+| `library_transfer` | Exports and imports. |
+| `web_scrape` | Searches the web, lists a site's pages, reads one page. Only with [web scraping](#books-from-the-web) set up. |
+| `library_web_book` | Makes a book from web pages, checks it for news, updates it. Only with web scraping set up. |
+
+Then ask for it in plain words:
+
+> Act as a librarian: catalogue the ebooks in `~/Downloads/ebooks` and add them to the Library.
+
+The librarian looks at what shelves there are, reads each file, and for each one that is new works out its title, authors and edition, writes a short description, picks the shelf it belongs on (making a shelf or section only when none fits) and adds it. At the end it reports what went where and what it skipped.
+
+Files are read by the [Document Reader](/features/document-reader): PDF, Word, PowerPoint, Excel, OpenDocument, RTF, HTML and ebooks (EPUB, MOBI, AZW3, FB2). Text and Markdown are taken as they are.
+
+### Is it already there
+
+Before anything is added, each file is compared with what the Library holds, in four ways:
+
+| What matches | What it means |
+| --- | --- |
+| The same file, byte for byte | A duplicate. It is skipped. |
+| The same ISBN | The same edition in another file or format. |
+| The same title, or title and author | The same book or another edition of it. |
+| Most of the text | 90% and more in common is the same book in another file. Less than that is another edition, a revision or another translation. |
+
+The text comparison needs no model: each book has a fingerprint of its text, so the same book as a PDF and as an EPUB is recognised though no byte of the two files is the same. The files of one request are compared with each other as well, so a folder that holds the same book twice is told so before anything is added.
+
+When a file looks like **another version** of a book that is there, the librarian adds nothing and asks you: keep both, or replace the old one. Replacing moves the old book to the trash.
+
+### Pictures
+
+A book's pictures are always taken out and kept with it. With **Describe the pictures of a book as it is added** on, each is described by a vision model and the description becomes part of the page the picture is on, so a figure can be found by what it shows.
+
+**Profile whose model describes them** picks one of the profiles saved in the API configuration: a cheap, fast model that reads images is the right choice, since every picture is one request. With no profile picked, the model on the **Vision** tab is used; with none there either, pictures are kept without a description. **Pictures described per file** (40) limits how many of one file's pictures are described.
+
+### Nothing is deleted by the model
+
+A book the model deletes goes to the **trash**. So do the books on a shelf or in a section it deletes, and a source it takes out of a book. They stay there for **30 days**, out of every search, and can be put back by the model or by you. After 30 days they are deleted.
+
+Emptying the trash, and deleting one book from it for good, is in **Settings > Library** only. The model has no tool for it.
+
+## Books from the web
+
+The librarian can make a book from web pages:
+
+> Create a book on GitHub recipes for Godot development, call it Godot-Github.
+
+It searches for the topic, chooses the links that are about it, reads them and makes the book. Or give it the links yourself. Either way the book keeps the **query** and the **links**, which is what lets it be brought up to date later, and what stops the same book being made twice:
+
+> Is there anything new for Godot-Github?
+
+reads the book's links again and lists the pages that are new or have changed, without changing the book. *"Update it"* brings them in. A page that no longer exists stays in the book.
+
+This needs a [Firecrawl](https://github.com/firecrawl/firecrawl) endpoint, which reads pages in a real browser, so pages built by JavaScript are read too. Two switches, both needed, because pages are fetched from the open web on your behalf:
+
+1. **Settings > Features > Web scraping for the librarian**: the endpoint's address, its key if it needs one, and how far a crawl may go. **Check** reads one page and shows what came back.
+2. **Allow web scraping**, in the API configuration.
+
+Without both, the two web tools are never offered to the model, librarian or not.
+
+| Setting | Default | |
+| --- | --- | --- |
+| Pages one book may read in a call | 100 | The librarian asks for a page count per book; this is the most it gets. |
+| Links deep a crawl may follow | 3 | 0 reads only the links given. |
+
+Pages are asked for as HTML and converted to Markdown by Cerebriline, which keeps fenced code blocks and their language. Firecrawl's own Markdown loses them.
+
+## The shelves in Settings
+
+Once the Library is on, **Settings > Library** shows the shelves: each section, its shelves with how many books they hold, and under an opened shelf its books. Everything the librarian can do can be done there by hand:
+
+- **New section**, **New shelf**, and **Rename** on each.
+- A shelf is moved to another section, and a book to another shelf, with the dropdown beside it.
+- **Details** on a book shows its description, the folder it is kept in, how many pictures it has and how many are described, and its sources, each with **Remove** or **Restore**.
+- **Delete** asks once more, and sends to the trash.
+- **Trash** lists what was deleted, where it stood, and the day it is deleted for good, with **Restore**, **Delete** and **Empty**.
+- Problems are listed under the shelves: a book with no sources, a file missing from a book's folder.
+
+## Export and import
+
+**Export all…** writes the whole Library to one file. **Export** on a section, a shelf or a book writes just that. **Import…** reads such a file in: sections and shelves are made where they are missing, and a book that is already there is left alone. The librarian does the same with `library_transfer`, and can also replace an existing book or bring the file's in beside it as a copy.
+
+The file is a gzipped tar of the books' folders: the original files, their text, pictures and descriptions, and where each book stood. **Vectors are not in it.** They are made again where the file is imported, with the embedding model set there, so a file exported with one model works in a Library that uses another.
 
 ## The search engine box
 
-At the top of **Settings > Library**, once the Library is on, a box says where search stands: how many documents, collections and passages are stored, whether LanceDB is downloaded and loads, its version, the embedding model in use and how many documents have vectors. **Download LanceDB** fetches it. Enabling the Library alone does not download anything: keyword search needs nothing.
+At the top of **Settings > Library**, once the Library is on, a box says where search stands: how many books, sources and passages are stored, whether LanceDB is downloaded and loads, its version, the embedding model in use and how many documents have vectors. **Download LanceDB** fetches it. Enabling the Library alone does not download anything: keyword search needs nothing.
 
 ## Choosing and checking the embedding model
 
@@ -108,8 +206,13 @@ These apply to documents added from then on. Add a document again to split it an
 
 **Requests.** How many passages go in one embedding or reranking request, how many embedding requests run at once, and a prefix for questions and for passages, for the embedding models that were trained with one (`query: ` and `passage: ` for the E5 family). Leave the prefixes empty unless the model's card asks for them.
 
+## In the CLI
+
+`--library` offers `search_library` and `list_library`. `--librarian` adds the librarian's tools. The embedding model is named by `CLINE_EMBEDDING_BASE_URL` and `CLINE_EMBEDDING_MODEL`, the scraping endpoint by `CLINE_SCRAPE_BASE_URL` (and `CLINE_SCRAPE_API_KEY`, `CLINE_SCRAPE_MAX_PAGES`, `CLINE_SCRAPE_MAX_DEPTH`), and pictures are described by `--vision-model`.
+
 ## What it does not do yet
 
-- The Library is offered in the VS Code extension. The CLI does not have it yet.
-- Documents are added by the model, on request. There is no file picker in the panel yet.
+- Books are added by the librarian, on request. There is no file picker in the panel; the panel imports an exported file.
+- A book made from the web is checked for news when you ask. Nothing checks on a schedule.
 - Scanned pages are read with the Document Reader's OCR, which reads a limited number of pages per document.
+- A Library from before it had shelves keeps its documents: each old collection becomes a shelf in a section named **General**, holding one book. Those books record where their files were and do not hold a copy of them.
