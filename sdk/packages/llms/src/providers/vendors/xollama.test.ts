@@ -354,7 +354,12 @@ describe("a plain model's pool seats", () => {
 });
 
 describe("the Ollama vendor's stream config", () => {
-	it("names the session for xOllama, and never for Ollama", async () => {
+	// The import is the slow part: the vendor module is loaded here for the
+	// first time, and on a busy machine that alone ran past the default five
+	// seconds (2 of 3 runs, load average 9.8). The bound is for the load.
+	it("names the session for xOllama, and never for Ollama", {
+		timeout: 60_000,
+	}, async () => {
 		const { buildOllamaStreamConfig } = await import("./ollama");
 		const request = {
 			providerId: "xollama",
