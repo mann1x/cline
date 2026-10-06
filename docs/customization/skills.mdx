@@ -173,8 +173,14 @@ Cerebriline ships with a small set of skills. They are listed first in the Skill
 | `build-project` | Builds the open project the way the repo defines (its README, CI, scripts or manifest), and its Docker image when there is a Dockerfile or compose file | off |
 | `docker-compose-deploy` | Deploys the open project to local Docker, from its compose file or its Dockerfile, and verifies the deployment | off |
 | `run-project` | Starts the open project (its containers, or its own start command), waits until it answers and opens it in the browser | off |
+| `tdd-wizard` | Starts a project or feature test-first: learns about the project, takes or writes a specification with you, develops the test cases, generates, validates and writes the tests, then offers the next phases | off |
+| `tdd-gen` | Writes the implementation that makes existing tests pass, without changing the tests, then tidies up on green | off |
+| `tdd-test` | Runs the project's tests the way the repo defines, all or a named file or test, and reports failures | off |
+| `tdd-coverage` | Runs coverage, lists what is below the threshold (80% unless the repo sets one) and proposes a test for each gap | off |
 
 `build-project`, `docker-compose-deploy` and `run-project` refer to each other and are meant to be turned on together, though each works alone.
+
+The four `tdd-` skills are a set for test-driven development. Start with `tdd-wizard`; it hands over to the other three, and each of them can also be used by itself, for example `/tdd-gen tests/unit/user-service.test.ts`. The set follows the workflow in "[Test-Driven Development with Claude Code: Practical Guide](https://aiskill.market/blog/tdd-with-claude-code)" by Duke Harewood (aiskill.market, January 28, 2026); each skill credits it.
 
 A built-in skill can be turned on and off and opened to read. It cannot be edited or deleted, because an update replaces its file. For the same reason the switch is kept in your settings (`bundledSkills` in the global settings file) and survives updates; a skill that ships off stays off until you turn it on.
 
