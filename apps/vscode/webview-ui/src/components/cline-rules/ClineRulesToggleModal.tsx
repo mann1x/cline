@@ -55,6 +55,9 @@ const ClineRulesToggleModal: React.FC = () => {
 	const [globalSkills, setGlobalSkills] = useState<SkillInfo[]>([])
 	const [localSkills, setLocalSkills] = useState<SkillInfo[]>([])
 	const [bundledSkills, setBundledSkills] = useState<SkillInfo[]>([])
+	// Built-in and Global are long lists that push each other off the panel, so
+	// one is open at a time: opening one closes the other.
+	const [openSkillGroup, setOpenSkillGroup] = useState<"bundled" | "global" | null>("global")
 
 	const isWindows = !isMacOSOrLinux()
 	const [isVisible, setIsVisible] = useState(false)
@@ -819,8 +822,14 @@ const ClineRulesToggleModal: React.FC = () => {
 								{/* Built-in Skills Section (shipped with the extension) */}
 								{bundledSkills.length > 0 && (
 									<div className="mb-3">
-										<div className="text-sm font-normal mb-2">Built-in Skills</div>
-										<div className="flex flex-col gap-0">
+										<SkillGroupHeader
+											count={bundledSkills.length}
+											enabledCount={bundledSkills.filter((skill) => skill.enabled).length}
+											onToggle={() => setOpenSkillGroup(openSkillGroup === "bundled" ? null : "bundled")}
+											open={openSkillGroup === "bundled"}
+											title="Built-in Skills"
+										/>
+										<div className={openSkillGroup === "bundled" ? "flex flex-col gap-0" : "hidden"}>
 											{[...bundledSkills]
 												.sort((a, b) => a.name.localeCompare(b.name))
 												.map((skill) => (
@@ -840,8 +849,16 @@ const ClineRulesToggleModal: React.FC = () => {
 
 								{/* Global Skills Section */}
 								<div className="mb-3">
-									<div className="text-sm font-normal mb-2">Global Skills</div>
-									<div className="flex flex-col gap-0">
+									<SkillGroupHeader
+										count={globalSkills.filter((s) => !s.path.startsWith("remote:")).length}
+										enabledCount={
+											globalSkills.filter((s) => !s.path.startsWith("remote:") && s.enabled).length
+										}
+										onToggle={() => setOpenSkillGroup(openSkillGroup === "global" ? null : "global")}
+										open={openSkillGroup === "global"}
+										title="Global Skills"
+									/>
+									<div className={openSkillGroup === "global" ? "flex flex-col gap-0" : "hidden"}>
 										{globalSkills
 											.filter((s) => !s.path.startsWith("remote:"))
 											.sort((a, b) => a.name.localeCompare(b.name))
@@ -886,6 +903,37 @@ const ClineRulesToggleModal: React.FC = () => {
 		</div>
 	)
 }
+
+/**
+ * The heading of a skill list that opens and closes. It says how many skills
+ * the list holds and how many are on, so a closed list still answers "is
+ * anything in there turned on".
+ */
+export const SkillGroupHeader = ({
+	title,
+	count,
+	enabledCount,
+	open,
+	onToggle,
+}: {
+	title: string
+	count: number
+	enabledCount: number
+	open: boolean
+	onToggle: () => void
+}) => (
+	<button
+		aria-expanded={open}
+		className="flex items-center gap-1 w-full text-left text-sm font-normal mb-2 p-0 bg-transparent border-0 cursor-pointer text-(--vscode-foreground) hover:opacity-80"
+		onClick={onToggle}
+		type="button">
+		<span className={`codicon codicon-chevron-${open ? "down" : "right"}`} />
+		<span>{title}</span>
+		<span className="text-xs text-(--vscode-descriptionForeground)">
+			{count === 0 ? "none" : `${count}, ${enabledCount} on`}
+		</span>
+	</button>
+)
 
 const StyledTabButton = styled.button<{ $isActive: boolean }>`
 	background: none;
