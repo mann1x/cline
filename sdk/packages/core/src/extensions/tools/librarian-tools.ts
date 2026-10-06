@@ -1303,7 +1303,18 @@ interface Gathered {
 	pages: ScrapedPage[];
 	failed: ScrapeFailure[];
 	notes: string[];
+	/** The links that were asked for, read or not. */
+	attempted: Set<string>;
+	/** False when the page budget or the time limit cut the reading short. */
+	complete: boolean;
 }
+
+/**
+ * A page read again is "changed" only when its text is: sites rewrite
+ * counters, dates and recommendations on every load, and a book checked for
+ * news would otherwise report every such page every time.
+ */
+const UNCHANGED_TEXT = 0.95;
 
 /** Read the links, and what they link to as deep as asked, within the page budget. */
 async function gather(
@@ -1315,7 +1326,13 @@ async function gather(
 ): Promise<Gathered> {
 	const scrape = config.scrape;
 	if (!scrape) throw new Error(NO_SCRAPER);
-	const gathered: Gathered = { pages: [], failed: [], notes: [] };
+	const gathered: Gathered = {
+		pages: [],
+		failed: [],
+		notes: [],
+		attempted: new Set(),
+		complete: true,
+	};
 	const seen = new Set<string>();
 	const take = (page: ScrapedPage) => {
 		if (seen.has(page.url) || gathered.pages.length >= budget) return;
@@ -1326,11 +1343,13 @@ async function gather(
 		signal?.throwIfAborted();
 		const left = budget - gathered.pages.length;
 		if (left <= 0) {
+			gathered.complete = false;
 			gathered.notes.push(
-				`Stopped at ${budget} pages, the most one book takes in a call; ${link} and what follows were not read.`,
+				`Stopped at ${budget} pages, the user's limit for one call (Settings > Features); ${link} and what follows were not read.`,
 			);
 			break;
 		}
+		gathered.attempted.add(link);
 		try {
 			if (depth <= 0) {
 				take(await scrapePage(scrape, link, { ...(signal ? { signal } : {}) }));
@@ -1342,6 +1361,9 @@ async function gather(
 				});
 				for (const page of crawled.pages) take(page);
 				gathered.failed.push(...crawled.failed);
+				if (crawled.unfinished || crawled.pages.length >= left) {
+					gathered.complete = false;
+				}
 				if (crawled.unfinished) {
 					gathered.notes.push(
 						`The crawl from ${link} was still running at the time limit; what it had read is kept.`,
@@ -1580,10 +1602,14 @@ If a book already has the same links or title, create adds nothing and says so.`
 						return `"${found.title}" was not made from web links, so there is nothing to check it against. For a book made from files, library_check a newer file against it.`;
 					}
 					const depth = clampDepth(web.crawl?.depth ?? 0);
+					// Given links are all read, whatever the book's first call
+					// was limited to; a crawl keeps the size it was made with.
 					const limit = clampLimit(
 						Number.isFinite(askedLimit) && askedLimit > 0
 							? askedLimit
-							: (web.crawl?.limit ?? config.scrape.maxPages),
+							: depth > 0
+								? (web.crawl?.limit ?? config.scrape.maxPages)
+								: web.links.length,
 					);
 					const gathered = await gather(
 						config,
@@ -1599,14 +1625,49 @@ If a book already has the same links or title, create adds nothing and says so.`
 							.map((source) => [source.url as string, source]),
 					);
 					const fresh = gathered.pages.filter((page) => !have.has(page.url));
-					const changed = gathered.pages.filter((page) => {
+					const differing = gathered.pages.filter((page) => {
 						const source = have.get(page.url);
 						return source !== undefined && source.sha256 !== page.sha256;
 					});
+					const differs = (page: ScrapedPage) => {
+						const source = have.get(page.url);
+						if (!source || source.sha256 === page.sha256) return false;
+						const before = source.fingerprint ?? [];
+						const now = textFingerprint(page.markdown);
+						return (
+							before.length === 0 ||
+							now.length === 0 ||
+							fingerprintSimilarity(before, now) < UNCHANGED_TEXT
+						);
+					};
+					// A page that looks changed is read once more before it is
+					// called so: a page caught half loaded reads as another text,
+					// and the second reading is the one that is kept.
+					const changed: ScrapedPage[] = [];
+					for (const page of differing.filter(differs)) {
+						signal?.throwIfAborted();
+						const again = await scrapePage(config.scrape, page.url, {
+							...(signal ? { signal } : {}),
+						}).catch(() => undefined);
+						if (!again) changed.push(page);
+						else if (differs(again)) changed.push(again);
+					}
+					const trivial = differing.length - changed.length;
 					const readNow = new Set(gathered.pages.map((page) => page.url));
-					const gone = [...have.keys()].filter((url) => !readNow.has(url));
+					const refused = new Set(
+						gathered.failed.map((failure) => failure.url),
+					);
+					// "Gone" is said only of a page that was asked for and did not
+					// come back: one the budget never reached is not gone.
+					const gone = [...have.keys()].filter(
+						(url) =>
+							!readNow.has(url) &&
+							(refused.has(url) ||
+								(gathered.complete &&
+									(depth > 0 || gathered.attempted.has(url)))),
+					);
 					const report = [
-						`"${found.title}" (#${found.id}), ${plural(gathered.pages.length, "page")} read from ${plural(web.links.length, "link")}: ${fresh.length} new, ${changed.length} changed, ${gathered.pages.length - fresh.length - changed.length} the same${gone.length ? `, ${gone.length} no longer found` : ""}.`,
+						`"${found.title}" (#${found.id}), ${plural(gathered.pages.length, "page")} read from ${plural(web.links.length, "link")}: ${fresh.length} new, ${changed.length} changed, ${gathered.pages.length - fresh.length - changed.length} the same${trivial ? ` (${trivial} of them differ only in details such as dates and counters)` : ""}${gone.length ? `, ${gone.length} no longer found` : ""}.`,
 						...fresh.map(
 							(page) =>
 								`  new: ${page.url}${page.title ? ` — ${page.title}` : ""}`,

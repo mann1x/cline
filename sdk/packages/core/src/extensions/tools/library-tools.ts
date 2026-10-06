@@ -321,7 +321,7 @@ export function describeBook(catalogue: Catalogue, book: LibraryBook): string {
 	if (web) {
 		if (web.query) lines.push(`Made from the search: ${web.query}`);
 		lines.push(
-			`Links it started from${web.crawl ? ` (crawled ${web.crawl.depth ?? 0} deep, up to ${web.crawl.limit ?? "?"} pages)` : ""}:`,
+			`Links it started from${web.crawl?.depth ? ` (each followed ${web.crawl.depth} deep, up to ${web.crawl.limit ?? "?"} pages)` : ""}:`,
 			...web.links.map((link) => `  ${link}`),
 		);
 		if (web.checkedAt) {

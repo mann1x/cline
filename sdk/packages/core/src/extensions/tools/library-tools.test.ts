@@ -28,7 +28,7 @@ describe("the Library tools", () => {
 	let library: Library;
 	let config: LibraryToolsConfig | undefined;
 	let librarian: boolean;
-	let pages: Record<string, string>;
+	let pages: Record<string, string | (() => string)>;
 	let requests: string[];
 	let vision: DescribeImages | undefined;
 
@@ -55,7 +55,8 @@ describe("the Library tools", () => {
 				`${init?.method ?? "GET"} ${url.replace("http://scrape.test", "")}`,
 			);
 			if (url.endsWith("/v2/scrape")) {
-				const html = pages[body.url];
+				const held = pages[body.url];
+				const html = typeof held === "function" ? held() : held;
 				return Response.json(
 					html
 						? {
@@ -95,8 +96,8 @@ describe("the Library tools", () => {
 			}
 			if (url.includes("/v2/crawl/job1")) {
 				const skip = Number(new URL(url).searchParams.get("skip"));
-				const all = Object.entries(pages).map(([link, html]) => ({
-					html,
+				const all = Object.entries(pages).map(([link, held]) => ({
+					html: typeof held === "function" ? held() : held,
 					metadata: {
 						sourceURL: link,
 						title: `Title of ${link}`,
@@ -667,6 +668,75 @@ describe("the Library tools", () => {
 			);
 			expect(library.catalogue.sources(1)).toHaveLength(2);
 			expect(library.catalogue.book(1)?.metadata.web?.checkedAt).toBeTruthy();
+		});
+
+		it("does not call a page gone because the page budget stopped short of it", async () => {
+			for (const name of ["c", "d", "e", "f"]) {
+				pages[`https://example.com/${name}`] = page(`topic ${name}`);
+			}
+			const links = ["a", "b", "c", "d", "e"].map(
+				(name) => `https://example.com/${name}`,
+			);
+			await create({ links: links.slice(0, 2) });
+			await call("library_web_book", {
+				action: "add",
+				book: "#1",
+				links: links.slice(2),
+			});
+			// Six links against a limit of five pages a call.
+			await call("library_web_book", {
+				action: "add",
+				book: "#1",
+				links: ["https://example.com/f"],
+			});
+			const checked = await call("library_web_book", {
+				action: "check",
+				book: "#1",
+			});
+			expect(checked).toContain(
+				"5 pages read from 6 links: 0 new, 0 changed, 5 the same.",
+			);
+			expect(checked).toContain("Stopped at 5 pages");
+			expect(checked).not.toContain("no longer found");
+			// A page that is asked for and does not come back is gone, and kept.
+			delete pages["https://example.com/b"];
+			const gone = await call("library_web_book", {
+				action: "check",
+				book: "#1",
+			});
+			expect(gone).toContain("1 no longer found");
+			expect(gone).toContain("not found now (kept): https://example.com/b");
+		});
+
+		it("does not call a page changed for a counter or a date", async () => {
+			await create();
+			pages["https://example.com/a"] =
+				`${page("terrain")}<p>Read 1,204 times. Updated today.</p>`;
+			const checked = await call("library_web_book", {
+				action: "check",
+				book: "#1",
+			});
+			expect(checked).toContain(
+				"0 new, 0 changed, 2 the same (1 of them differ only in details such as dates and counters).",
+			);
+			expect(
+				await call("library_web_book", { action: "update", book: "#1" }),
+			).toContain("Brought in: 0 new, 0 replaced");
+		});
+
+		it("reads a page that looks changed once more before saying so", async () => {
+			await create();
+			// Caught half loaded once, then as it was.
+			let reads = 0;
+			const whole = page("terrain");
+			pages["https://example.com/a"] = () =>
+				reads++ === 0 ? "<h1>terrain</h1><p>Loading…</p>" : whole;
+			const checked = await call("library_web_book", {
+				action: "check",
+				book: "#1",
+			});
+			expect(checked).toContain("0 new, 0 changed, 2 the same");
+			expect(reads).toBe(2);
 		});
 
 		it("follows links as deep as asked, within the user's limits", async () => {
