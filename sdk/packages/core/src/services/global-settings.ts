@@ -47,6 +47,12 @@ const ModelToolSettingsSchema = z
 	)
 	.optional();
 
+/** The user's on/off choice per bundled skill, keyed by lower-cased name. */
+const BundledSkillSettingsSchema = z
+	.record(z.string(), z.object({ enabled: z.boolean() }).strip())
+	.optional()
+	.catch(undefined);
+
 export type GlobalCompactionStrategy = z.infer<
 	typeof GlobalCompactionStrategySchema
 >;
@@ -71,6 +77,7 @@ export const GlobalSettingsSchema = z
 		tools: ModelToolSettingsSchema,
 		disabledPlugins: GlobalSettingsStringListSchema.optional(),
 		disabledAgentPlugins: GlobalSettingsStringListSchema.optional(),
+		bundledSkills: BundledSkillSettingsSchema,
 	})
 	.strip()
 	.transform((settings) => {
@@ -86,6 +93,7 @@ export const GlobalSettingsSchema = z
 			tools?: ModelToolSettings;
 			disabledPlugins?: string[];
 			disabledAgentPlugins?: string[];
+			bundledSkills?: Record<string, { enabled: boolean }>;
 		} = {
 			autoUpdateEnabled: settings.autoUpdateEnabled,
 			telemetryOptOut: settings.telemetryOptOut,
@@ -116,6 +124,12 @@ export const GlobalSettingsSchema = z
 		}
 		if (settings.disabledAgentPlugins?.length) {
 			normalized.disabledAgentPlugins = settings.disabledAgentPlugins;
+		}
+		if (
+			settings.bundledSkills &&
+			Object.keys(settings.bundledSkills).length > 0
+		) {
+			normalized.bundledSkills = settings.bundledSkills;
 		}
 		return normalized;
 	});

@@ -36,8 +36,20 @@ const RuleRow: React.FC<{
 	toggleRule: (rulePath: string, enabled: boolean) => void
 	isRemote?: boolean
 	alwaysEnabled?: boolean
+	/** A real file that can be opened and toggled but not edited or deleted, e.g. a built-in skill. */
+	readOnly?: boolean
 	onDeleteSkill?: () => void
-}> = ({ rulePath, enabled, isGlobal, toggleRule, ruleType, isRemote = false, alwaysEnabled = false, onDeleteSkill }) => {
+}> = ({
+	rulePath,
+	enabled,
+	isGlobal,
+	toggleRule,
+	ruleType,
+	isRemote = false,
+	alwaysEnabled = false,
+	readOnly = false,
+	onDeleteSkill,
+}) => {
 	const displayName = getDisplayNameFromPath(rulePath)
 	const skillDisplayName = getSkillDisplayNameFromSkillMdPath(rulePath)
 
@@ -164,19 +176,21 @@ const RuleRow: React.FC<{
 						title={isDisabled ? "This rule is required and cannot be disabled" : undefined}
 					/>
 					<Button
-						aria-label={isRemote ? `View ${ruleType} file` : `Edit ${ruleType} file`}
+						aria-label={isRemote || readOnly ? `View ${ruleType} file` : `Edit ${ruleType} file`}
 						onClick={handleEditClick}
 						size="xs"
-						title={isRemote ? `View ${ruleType} file (read-only)` : `Edit ${ruleType} file`}
+						title={isRemote || readOnly ? `View ${ruleType} file (read-only)` : `Edit ${ruleType} file`}
 						variant="icon">
-						{isRemote ? <EyeIcon /> : <PenIcon />}
+						{isRemote || readOnly ? <EyeIcon /> : <PenIcon />}
 					</Button>
 					<Button
 						aria-label={`Delete ${ruleType} file`}
-						disabled={isRemote}
+						disabled={isRemote || readOnly}
 						onClick={handleDeleteClick}
 						size="xs"
-						title={`Delete ${ruleType} file`}
+						title={
+							readOnly ? `Built-in ${ruleType}s cannot be deleted; turn it off instead` : `Delete ${ruleType} file`
+						}
 						variant="icon">
 						<Trash2Icon />
 					</Button>

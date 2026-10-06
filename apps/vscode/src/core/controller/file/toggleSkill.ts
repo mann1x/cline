@@ -1,3 +1,4 @@
+import { setBundledSkillEnabledByPath } from "@cline/core"
 import { setSkillDisabledInFrontmatter } from "@core/context/instructions/user-instructions/skills"
 import { SkillsToggles, ToggleSkillRequest } from "@shared/proto/cline/file"
 import { Logger } from "@/shared/services/Logger"
@@ -28,6 +29,18 @@ export async function toggleSkill(controller: Controller, request: ToggleSkillRe
 
 	// Remote skills are identified by a "remote:" path prefix. They use a separate toggle store
 	// keyed by skill name (the part after "remote:") rather than the file path.
+	// A skill shipped with the extension keeps its state in the global settings:
+	// its file is replaced by every update, so nothing is written to it and it
+	// has no entry in the toggle stores below.
+	if (!skillPath.startsWith("remote:") && (await setBundledSkillEnabledByPath(skillPath, enabled))) {
+		await controller.postStateToWebview()
+		return SkillsToggles.create({
+			globalSkillsToggles: globalToggles,
+			localSkillsToggles: localToggles,
+			remoteSkillsToggles: remoteToggles,
+		})
+	}
+
 	if (skillPath.startsWith("remote:")) {
 		const name = skillPath.replace("remote:", "")
 		remoteToggles = { ...remoteToggles, [name]: enabled }

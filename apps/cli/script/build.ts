@@ -299,6 +299,15 @@ for (const item of targets) {
 		}
 	}
 
+	// The skills that ship with the product, next to the binary: core looks
+	// for `bundled-skills` beside the executable (resolveBundledSkillsDirectory).
+	const bundledSkillsSrc = join(rootDir, "sdk/packages/core/assets/skills");
+	if (existsSync(bundledSkillsSrc)) {
+		cpSync(bundledSkillsSrc, join(cliDir, `dist/${dirName}/bundled-skills`), {
+			recursive: true,
+		});
+	}
+
 	// Generate platform package.json
 	await Bun.write(
 		join(cliDir, `dist/${dirName}/package.json`),

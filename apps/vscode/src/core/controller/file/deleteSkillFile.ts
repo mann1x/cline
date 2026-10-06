@@ -1,3 +1,4 @@
+import { isBundledSkillPath } from "@cline/core"
 import { DeleteSkillRequest, SkillsToggles } from "@shared/proto/cline/file"
 import fs from "fs/promises"
 import path from "path"
@@ -20,6 +21,10 @@ export async function deleteSkillFile(controller: Controller, request: DeleteSki
 			isGlobal: typeof isGlobal === "boolean" ? isGlobal : `Invalid: ${typeof isGlobal}`,
 		})
 		throw new Error("Missing or invalid parameters for deleteSkillFile")
+	}
+
+	if (isBundledSkillPath(skillPath)) {
+		throw new Error("This skill ships with Cerebriline and cannot be deleted. Turn it off instead.")
 	}
 
 	// Get the skill directory (skillPath points to SKILL.md, so get parent)

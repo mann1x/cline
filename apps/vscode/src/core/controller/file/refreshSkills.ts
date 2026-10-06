@@ -31,6 +31,10 @@ export async function refreshSkills(controller: Controller): Promise<RefreshedSk
 		.filter((skill) => skill.source === "workspace" || skill.source === "workspace-plugin")
 		.map(coreSkillToSkillInfo)
 
+	// Shipped with the extension. Listed on their own: they can be turned on
+	// and off but not edited or deleted, since an update replaces the files.
+	const bundledSkills = settingsSnapshot.skills.filter((skill) => skill.source === "builtin").map(coreSkillToSkillInfo)
+
 	// Add remote skills from remote config.
 	// Precedence: remote (enterprise) > disk-global (user) > project (workspace).
 	// Remote entries are appended to globalSkills[] and split into the dedicated "Enterprise Skills"
@@ -56,5 +60,6 @@ export async function refreshSkills(controller: Controller): Promise<RefreshedSk
 	return RefreshedSkills.create({
 		globalSkills,
 		localSkills,
+		bundledSkills,
 	})
 }

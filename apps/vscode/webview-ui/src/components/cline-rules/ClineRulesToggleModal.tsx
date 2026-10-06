@@ -54,6 +54,7 @@ const ClineRulesToggleModal: React.FC = () => {
 	>([])
 	const [globalSkills, setGlobalSkills] = useState<SkillInfo[]>([])
 	const [localSkills, setLocalSkills] = useState<SkillInfo[]>([])
+	const [bundledSkills, setBundledSkills] = useState<SkillInfo[]>([])
 
 	const isWindows = !isMacOSOrLinux()
 	const [isVisible, setIsVisible] = useState(false)
@@ -170,6 +171,7 @@ const ClineRulesToggleModal: React.FC = () => {
 					if (!isCancelled) {
 						setGlobalSkills(response.globalSkills || [])
 						setLocalSkills(response.localSkills || [])
+						setBundledSkills(response.bundledSkills || [])
 					}
 				})
 				.catch((error) => {
@@ -369,6 +371,7 @@ const ClineRulesToggleModal: React.FC = () => {
 					setLocalSkillsToggles(response.localSkillsToggles)
 				}
 				// Update local skills state
+				setBundledSkills((prev) => prev.map((s) => (s.path === skillPath ? { ...s, enabled } : s)))
 				if (skillPath.startsWith("remote:")) {
 					setGlobalSkills((prev) => prev.map((s) => (s.path === skillPath ? { ...s, enabled } : s)))
 				} else if (isGlobal) {
@@ -809,6 +812,28 @@ const ClineRulesToggleModal: React.FC = () => {
 														/>
 													)
 												})}
+										</div>
+									</div>
+								)}
+
+								{/* Built-in Skills Section (shipped with the extension) */}
+								{bundledSkills.length > 0 && (
+									<div className="mb-3">
+										<div className="text-sm font-normal mb-2">Built-in Skills</div>
+										<div className="flex flex-col gap-0">
+											{[...bundledSkills]
+												.sort((a, b) => a.name.localeCompare(b.name))
+												.map((skill) => (
+													<RuleRow
+														enabled={skill.enabled}
+														isGlobal={true}
+														key={skill.path}
+														readOnly={true}
+														rulePath={skill.path}
+														ruleType="skill"
+														toggleRule={(_path, enabled) => toggleSkill(true, skill.path, enabled)}
+													/>
+												))}
 										</div>
 									</div>
 								)}

@@ -19,6 +19,7 @@ import {
 	type UserInstructionConfigService,
 	type WorkflowConfig,
 } from "../extensions/config";
+import { setBundledSkillEnabled } from "../extensions/config/bundled-skills";
 import { toggleSkillFrontmatter } from "../extensions/config/skill-frontmatter-toggle";
 import {
 	hasMcpSettingsFile,
@@ -550,9 +551,10 @@ export class CoreSettingsService {
 						path: record.filePath,
 						enabled: skill.disabled !== true,
 						kind: "skill",
-						source:
-							pluginOwner?.source ??
-							detectSource(record.filePath, workspaceRoot),
+						source: skill.bundled
+							? "builtin"
+							: (pluginOwner?.source ??
+								detectSource(record.filePath, workspaceRoot)),
 						description: skill.description,
 						pluginName: pluginOwner?.pluginName,
 						pluginPath: pluginOwner?.pluginPath,
@@ -694,7 +696,13 @@ export class CoreSettingsService {
 						`Cannot determine toggle state for skill '${input.id ?? input.name ?? basename(input.path ?? "")}'; provide an explicit enabled value or a resolvable workspace context.`,
 					);
 				}
-				await toggleSkillFrontmatter({ filePath, enabled });
+				if (record?.item.bundled) {
+					// An update replaces a bundled skill's file, so the choice
+					// is kept in the settings and the file is left alone.
+					setBundledSkillEnabled(record.item.name, enabled);
+				} else {
+					await toggleSkillFrontmatter({ filePath, enabled });
+				}
 				await service?.refreshType("skill");
 				return {
 					snapshot: await this.list({

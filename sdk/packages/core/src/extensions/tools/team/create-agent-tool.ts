@@ -7,10 +7,11 @@
  * directory is not somewhere it would guess, and the VS Code editor that knows
  * both is reachable only by a human with a mouse.
  *
- * A tool rather than a skill because skills have to be installed by hand --
- * `resolveSkillsConfigSearchPaths` looks only in the workspace and the Cline
- * data directory -- so a skill that teaches this would need the user to already
- * know the thing it was going to tell them.
+ * A tool rather than a skill because, when this was written, skills had to be
+ * installed by hand, so a skill that taught this would have needed the user to
+ * already know the thing it was going to tell them. Skills can ship with the
+ * product now (`bundled-skills.ts`); the tool stays, since it also writes the
+ * file.
  */
 
 import { access } from "node:fs/promises";

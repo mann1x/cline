@@ -275,6 +275,30 @@ function copyOfficeOxide(destDir) {
 }
 
 /**
+ * Put the skills that ship with the product beside the bundle.
+ *
+ * Core keeps them in `assets/skills/`, one folder per skill, and looks for
+ * them in `bundled-skills/` next to itself first, which after bundling is
+ * `dist/`. Missing is not fatal: the extension then offers no built-in skills.
+ */
+function copyBundledSkills(destDir) {
+	const candidates = [
+		path.join(__dirname, "node_modules", "@cline", "core", "assets", "skills"),
+		path.resolve(__dirname, "..", "..", "sdk", "packages", "core", "assets", "skills"),
+	]
+	const from = candidates.find((candidate) => fs.existsSync(candidate))
+	if (!from) {
+		console.warn("[skills] core's assets/skills not found; no built-in skills will be offered")
+		return
+	}
+	const into = path.join(destDir, "bundled-skills")
+	fs.rmSync(into, { recursive: true, force: true })
+	fs.cpSync(from, into, { recursive: true })
+	const count = fs.readdirSync(into).filter((name) => fs.existsSync(path.join(into, name, "SKILL.md"))).length
+	console.log(`[skills] ${count} built-in skills -> ${into}`)
+}
+
+/**
  * The Document Reader's data files: pdf.js's decoders and character maps,
  * tesseract's worker and core, and the English OCR model. Written by core's
  * own script, which the CLI build runs too, so both ship the same layout.
@@ -298,6 +322,7 @@ async function main() {
 	if (!e2eBuild) {
 		copyGrammars(path.resolve(__dirname, destDir))
 		copyOfficeOxide(path.resolve(__dirname, destDir))
+		copyBundledSkills(path.resolve(__dirname, destDir))
 		await writeDocumentReaderAssets(path.resolve(__dirname, destDir))
 	}
 	const extensionCtx = await esbuild.context(config)

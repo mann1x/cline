@@ -1,3 +1,13 @@
+---
+name: mandatory-qa-prompt-and-issue-resolution
+description: >-
+  After any change to code or configuration, asks whether to run QA on it
+  (yes, no, or always for the session), runs a QA plan fitted to the change and
+  reports the result, then asks whether to fix what the QA found. Use whenever
+  you create, modify or delete a code or configuration file.
+disabled: true
+---
+
 # Rule: Mandatory QA Prompt & Issue Resolution Flow
 
 Whenever you modify, create, or delete any code or configuration file in the project, you must manage post-change validation using the following two-stage process.

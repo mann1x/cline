@@ -3,6 +3,12 @@ export {
 	getBuiltinPromptTemplates,
 } from "./builtin-templates";
 export {
+	BUNDLED_SKILLS_DIRECTORY_NAME,
+	isBundledSkillPath,
+	resolveBundledSkillsDirectory,
+	setBundledSkillEnabled,
+} from "./bundled-skills";
+export {
 	auditCompactionSections,
 	BUILTIN_COMPACTION_PROMPTS,
 	buildCompactionTranslationRequest,
@@ -89,6 +95,7 @@ export {
 	resolveSkillsConfigSearchPaths,
 	resolveWorkflowsConfigSearchPaths,
 	SKILLS_CONFIG_DIRECTORY_NAME,
+	setBundledSkillEnabledByPath,
 	WORKFLOWS_CONFIG_DIRECTORY_NAME,
 } from "./user-instruction-config-loader";
 export type {

@@ -446,6 +446,7 @@ message SkillInfo {
 message RefreshedSkills {
   repeated SkillInfo global_skills = 1;
   repeated SkillInfo local_skills = 2;
+  repeated SkillInfo bundled_skills = 3; // Shipped with the extension: toggled in settings, never edited or deleted
 }
 
 // Maps from skill path to enabled/disabled status

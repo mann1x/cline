@@ -163,6 +163,19 @@ When a global skill and project skill have the same name, the global skill takes
 
 Version control your project skills by committing `.cline/skills/`. Your team can share, review, and improve them together.
 
+## Built-in Skills
+
+Cerebriline ships with a small set of skills. They are listed first in the Skills tab, under **Built-in Skills**, and need no installation: the extension, the CLI and the SDK all carry them.
+
+| Skill | What it does | Ships |
+|---|---|---|
+| `mandatory-qa-prompt-and-issue-resolution` | After a change to code or configuration, asks whether to run QA on it, runs a QA plan fitted to the change, reports, and asks whether to fix what it found | off |
+| `docker-compose-deploy` | Deploys the open project to local Docker Desktop, from its compose file or its Dockerfile, and verifies the deployment | off |
+
+A built-in skill can be turned on and off and opened to read. It cannot be edited or deleted, because an update replaces its file. For the same reason the switch is kept in your settings (`bundledSkills` in the global settings file) and survives updates; a skill that ships off stays off until you turn it on.
+
+To change what a built-in skill does, create a skill of your own with the same name, globally or in the project. Yours replaces the built-in one.
+
 ## Bundling Supporting Files
 
 Skills can include additional files that Cline accesses only when needed.

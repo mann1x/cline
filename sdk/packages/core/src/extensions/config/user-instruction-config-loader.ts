@@ -26,6 +26,12 @@ import {
 } from "../agent-plugin";
 import { resolveAgentPluginSkillDirectories } from "../plugin/plugin-config-loader";
 import {
+	isBundledSkillEnabled,
+	isBundledSkillPath,
+	resolveBundledSkillsDirectory,
+	setBundledSkillEnabled,
+} from "./bundled-skills";
+import {
 	type UnifiedConfigDefinition,
 	type UnifiedConfigFileCandidate,
 	type UnifiedConfigFileContext,
@@ -57,6 +63,11 @@ export interface SkillConfig {
 	disabled?: boolean;
 	instructions: string;
 	frontmatter: Record<string, unknown>;
+	/**
+	 * Shipped with the product. Its file is never written: `disabled` here is
+	 * the user's setting, or the frontmatter's default where they made none.
+	 */
+	bundled?: boolean;
 	source?: {
 		type: "agent-plugin";
 		pluginName: string;
@@ -102,6 +113,11 @@ export interface CreateInstructionWatcherOptions {
 
 export interface CreateSkillsConfigDefinitionOptions {
 	directories?: ReadonlyArray<string>;
+	/**
+	 * Where the skills shipped with the product are. Undefined means core's
+	 * own; `false` leaves them out. Not used when `directories` is given.
+	 */
+	bundledSkillsDirectory?: string | false;
 	workspacePath?: string;
 	includePluginSkills?: boolean;
 	pluginSkillDirectories?: ReadonlyArray<string>;
@@ -156,6 +172,51 @@ function dedupeDirectoryPaths(directories: ReadonlyArray<string>): string[] {
 	return deduped;
 }
 
+function resolveBundledDirectoryOption(
+	options?: CreateSkillsConfigDefinitionOptions,
+): string | undefined {
+	if (options?.directories || options?.bundledSkillsDirectory === false) {
+		return undefined;
+	}
+	return options?.bundledSkillsDirectory ?? resolveBundledSkillsDirectory();
+}
+
+/**
+ * Mark a skill as shipped with the product. `disabled` becomes a read of the
+ * setting rather than a value: the file does not change when the user turns
+ * the skill off, so nothing would tell a running watcher to parse it again,
+ * and a stored value would stay as it was until the next start.
+ */
+function asBundledSkill(skill: SkillConfig): SkillConfig {
+	const enabledByDefault = skill.disabled !== true;
+	const bundled: SkillConfig = { ...skill, bundled: true };
+	Object.defineProperty(bundled, "disabled", {
+		enumerable: true,
+		get: () =>
+			isBundledSkillEnabled(skill.name, enabledByDefault) ? undefined : true,
+	});
+	return bundled;
+}
+
+/**
+ * Turn a bundled skill on or off, given its `SKILL.md`. False when the path
+ * is not a bundled skill's, so a caller can fall back to the frontmatter.
+ */
+export async function setBundledSkillEnabledByPath(
+	filePath: string,
+	enabled: boolean,
+): Promise<boolean> {
+	if (!isBundledSkillPath(filePath)) {
+		return false;
+	}
+	const skill = parseSkillConfigFromMarkdown(
+		await readFile(filePath, "utf8"),
+		basename(dirname(filePath)),
+	);
+	setBundledSkillEnabled(skill.name, enabled);
+	return true;
+}
+
 function resolveSkillDirectories(
 	options?: CreateSkillsConfigDefinitionOptions,
 ): string[] {
@@ -163,6 +224,12 @@ function resolveSkillDirectories(
 		...(options?.directories ??
 			resolveSkillsConfigSearchPaths(options?.workspacePath)),
 	];
+	const bundled = resolveBundledDirectoryOption(options);
+	if (bundled) {
+		// First: a later directory replaces an earlier one's skill of the same
+		// name, so the user's own copy of a bundled skill wins.
+		directories.unshift(bundled);
+	}
 	if (options?.pluginSkillDirectories) {
 		directories.push(...options.pluginSkillDirectories);
 	} else if (options?.includePluginSkills) {
@@ -597,6 +664,7 @@ export function createSkillsConfigDefinition(
 	options?: CreateSkillsConfigDefinitionOptions,
 ): UnifiedConfigDefinition<"skill", SkillConfig> {
 	const directories = resolveSkillDirectories(options);
+	const bundledDirectory = resolveBundledDirectoryOption(options);
 	const agentPluginSkillsByDirectory = new Map(
 		(options?.agentPluginSkills ?? []).map((skill) => [
 			resolve(skill.directoryPath),
@@ -626,10 +694,14 @@ export function createSkillsConfigDefinition(
 				resolve(context.directoryPath),
 			);
 			if (!agentPluginSkill) {
-				return parseSkillConfigFromMarkdown(
+				const skill = parseSkillConfigFromMarkdown(
 					context.content,
 					basename(context.directoryPath),
 				);
+				if (!isBundledSkillPath(context.filePath, bundledDirectory)) {
+					return skill;
+				}
+				return asBundledSkill(skill);
 			}
 			const parsed = parseAgentSkillMarkdown(
 				context.content,
