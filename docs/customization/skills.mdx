@@ -177,10 +177,26 @@ Cerebriline ships with a small set of skills. They are listed first in the Skill
 | `tdd-gen` | Writes the implementation that makes existing tests pass, without changing the tests, then tidies up on green | off |
 | `tdd-test` | Runs the project's tests the way the repo defines, all or a named file or test, and reports failures | off |
 | `tdd-coverage` | Runs coverage, lists what is below the threshold (80% unless the repo sets one) and proposes a test for each gap | off |
+| `sdd-wizard` | The front door of spec-driven development: reads the planning files, says where the work stands and runs the next step, one at a time or in auto mode | off |
+| `sdd-discuss` | Turns an idea into an agreed specification by conversation: project brief, numbered requirements, milestone context | off |
+| `sdd-plan` | Plans a milestone as a roadmap of demoable slices, or one slice as small, fully specified tasks; replans after a blocker | off |
+| `sdd-execute` | Executes one planned task, verifies it and records the evidence | off |
+| `sdd-verify` | Closes a slice (verification, summary, acceptance script, roadmap reassessment) or validates and completes a milestone | off |
+| `sdd-quick` | A small, self-contained change without the planning, with a written record | off |
+| `sdd-status` | Read-only report of where the work stands and what is next | off |
 
 `build-project`, `docker-compose-deploy` and `run-project` refer to each other and are meant to be turned on together, though each works alone.
 
 The four `tdd-` skills are a set for test-driven development. Start with `tdd-wizard`; it hands over to the other three, and each of them can also be used by itself, for example `/tdd-gen tests/unit/user-service.test.ts`. The set follows the workflow in "[Test-Driven Development with Claude Code: Practical Guide](https://aiskill.market/blog/tdd-with-claude-code)" by Duke Harewood (aiskill.market, January 28, 2026); each skill credits it.
+
+
+The seven `sdd-` skills are a set for spec-driven development, after [Get Shit Done (GSD 2)](https://getshitdone.help/): discuss what is wanted, plan it as milestones, slices and tasks, execute one task at a time, and verify at every level. Start with `sdd-wizard`. The plan and its records are kept as files in a `.sdd/` folder in the project, which is what lets the work continue in a new chat or be handed to an agent.
+
+- With **Subagents** on, research, each task and the plan reviews run in agents with a fresh context. A task's changes come back as revisions that the lead reads and adopts, so Checkpoints or the change protocol must be on for that; without them the lead does the task itself.
+- With **Teammates** on as well, slices that do not depend on each other can run side by side, one teammate per slice, and a reviewer can stay with a slice.
+- With neither, the lead does each step itself.
+
+The set is not compatible with a `.gsd/` folder: GSD keeps its state in a database and regenerates its files from it.
 
 A built-in skill can be turned on and off and opened to read. It cannot be edited or deleted, because an update replaces its file. For the same reason the switch is kept in your settings (`bundledSkills` in the global settings file) and survives updates; a skill that ships off stays off until you turn it on.
 
