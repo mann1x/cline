@@ -402,6 +402,11 @@ export {
 	VertexModelSchema,
 	VertexSettingsSchema,
 } from "./remote-config/schema";
+export {
+	DEFAULT_LIBRARY_SETTINGS,
+	type LibrarySettings,
+	resolveLibrarySettings,
+} from "./retrieval/library-settings";
 export { CLINE_DEFAULT_RPC_ADDRESS, CLINE_DEFAULT_RPC_PORT } from "./rpc";
 export type {
 	AddProviderActionRequest,

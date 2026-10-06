@@ -163,6 +163,9 @@ export {
 	JEV_TOOL_NAME,
 	rankQuestionOptions,
 } from "../../../../sdk/packages/core/src/extensions/tools/jev"
+// From source: the Library's defaults are the panel's defaults, and a stub
+// of them would let the two drift apart unseen.
+export { createLibraryTools } from "../../../../sdk/packages/core/src/extensions/tools/library-tools"
 export {
 	listMediaModels,
 	MEDIA_KINDS,
@@ -207,12 +210,20 @@ export {
 	StoredModelEntrySchema,
 	syncStoredProviderRegistration,
 } from "../../../../sdk/packages/core/src/services/providers/local-provider-registry"
+export {
+	installLanceDb,
+	isLanceDbInstalled,
+	lanceDbInstallBytes,
+	lanceDbUnsupportedReason,
+} from "../../../../sdk/packages/core/src/services/retrieval/lancedb-runtime"
+export { resolveLanceDbRuntimeDirectory } from "../../../../sdk/packages/core/src/services/retrieval/library"
 // From source: `resumed-compaction.ts` rebases a saved compaction with these,
 // and a stub that always "projects" would pass a test of exactly that.
 export {
 	createSessionCompactionState,
 	projectSessionCompactionState,
 } from "../../../../sdk/packages/core/src/session/models/session-compaction"
+export { DEFAULT_LIBRARY_SETTINGS, resolveLibrarySettings } from "../../../../sdk/packages/shared/src/retrieval/library-settings"
 
 export type GlobalCompactionStrategy = "basic" | "agentic"
 

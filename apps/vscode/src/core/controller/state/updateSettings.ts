@@ -8,6 +8,7 @@ import { TelemetrySetting } from "@shared/TelemetrySetting"
 import { asUpdateChannel } from "@shared/UpdateSettings"
 import { ClineEnv } from "@/config"
 import { installDocumentReaderLanguages } from "@/sdk/document-reader-languages"
+import { installLibraryVectors } from "@/sdk/library-config"
 import { updateQaCredentials } from "@/sdk/qa-credentials-store"
 import { McpDisplayMode } from "@/shared/McpDisplayMode"
 import { Logger } from "@/shared/services/Logger"
@@ -125,6 +126,30 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		}
 		if (request.audioTtsApiKey !== undefined) {
 			controller.stateManager.setSecret("audioTtsApiKey", request.audioTtsApiKey.trim() || undefined)
+		}
+		if (request.embeddingEnabled !== undefined) {
+			controller.stateManager.setGlobalState("embeddingEnabled", request.embeddingEnabled)
+			// Fetched when the box is ticked, like an OCR language: the user is
+			// looking at the setting, and a task never downloads anything.
+			if (request.embeddingEnabled) {
+				void installLibraryVectors()
+			}
+		}
+		if (request.retrievalEndpoints !== undefined) {
+			controller.stateManager.setGlobalState("retrievalEndpoints", request.retrievalEndpoints)
+		}
+		// Write-only like the image key: empty clears it, unset leaves it alone.
+		if (request.embeddingApiKey !== undefined) {
+			controller.stateManager.setSecret("embeddingApiKey", request.embeddingApiKey.trim() || undefined)
+		}
+		if (request.rerankingApiKey !== undefined) {
+			controller.stateManager.setSecret("rerankingApiKey", request.rerankingApiKey.trim() || undefined)
+		}
+		if (request.libraryEnabled !== undefined) {
+			controller.stateManager.setGlobalState("libraryEnabled", request.libraryEnabled)
+		}
+		if (request.librarySettings !== undefined) {
+			controller.stateManager.setGlobalState("librarySettings", request.librarySettings)
 		}
 		if (request.videoEnabled !== undefined) {
 			controller.stateManager.setGlobalState("videoEnabled", request.videoEnabled)

@@ -3,6 +3,7 @@ import { audioEndpointsConfigured, parseAudioEndpoints } from "@shared/audio-end
 import { parseJevSettings } from "@shared/jev-settings"
 import { resolveScopedModelStatus } from "@shared/model-scope-config"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
+import { embeddingEndpointConfigured, parseRetrievalEndpoints } from "@shared/retrieval-endpoints"
 import { parseVideoEndpoint, videoEndpointConfigured } from "@shared/video-endpoint"
 import { useState } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
@@ -13,6 +14,7 @@ import ApiConfigProfileBar from "../ApiConfigProfileBar"
 import ApiOptions from "../ApiOptions"
 import AudioTab from "../AudioTab"
 import { SettingsCheckbox } from "../common/SettingsCheckbox"
+import EmbeddingTab from "../EmbeddingTab"
 import EscalationModelTab from "../EscalationModelTab"
 import ImageGenModelTab from "../ImageGenModelTab"
 import JevTab from "../JevTab"
@@ -74,6 +76,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		audioEndpoints,
 		videoEnabled,
 		videoEndpoint,
+		embeddingEnabled,
+		retrievalEndpoints,
 		jevEnabled,
 		jevApiKeySet,
 		jevSettings,
@@ -105,6 +109,9 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 	// nowhere to send either.
 	const audioUnconfigured = audioEnabled && !audioEndpointsConfigured(parseAudioEndpoints(audioEndpoints))
 	const videoUnconfigured = videoEnabled && !videoEndpointConfigured(parseVideoEndpoint(videoEndpoint))
+	// And of the embedding model: nothing is embedded, and every search stays
+	// on keywords, while the tab names no model or nowhere to ask for it.
+	const embeddingUnconfigured = embeddingEnabled && !embeddingEndpointConfigured(parseRetrievalEndpoints(retrievalEndpoints))
 	// And of Jev: TypeSafe needs its key; a custom endpoint needs a model named,
 	// and a key only if that server asks for one.
 	const jevStored = parseJevSettings(jevSettings)
@@ -135,6 +142,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		(currentTab === "imagegen" && !imageGenEnabled) ||
 		(currentTab === "audio" && !audioEnabled) ||
 		(currentTab === "video" && !videoEnabled) ||
+		(currentTab === "embedding" && !embeddingEnabled) ||
 		(currentTab === "jev" && !jevEnabled)
 	const activeTab: ConfigTab = scopedTabOff ? mode : currentTab
 	// The feature toggles belong to the Model tab and are shown only there.
@@ -154,6 +162,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		imageGenEnabled ||
 		audioEnabled ||
 		videoEnabled ||
+		embeddingEnabled ||
 		jevEnabled
 	// One profile list for every tab; only the target changes with the tab. The
 	// Images, Audio and Video tabs are not in it: a profile is a provider and a model for a
@@ -290,6 +299,18 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 									Video
 								</TabButton>
 							) : null}
+							{embeddingEnabled ? (
+								<TabButton
+									disabled={activeTab === "embedding"}
+									isActive={activeTab === "embedding"}
+									onClick={() => switchPanel("embedding")}
+									style={{
+										opacity: 1,
+										cursor: "pointer",
+									}}>
+									Embedding
+								</TabButton>
+							) : null}
 							{jevEnabled ? (
 								<TabButton
 									disabled={activeTab === "jev"}
@@ -318,6 +339,8 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								<AudioTab />
 							) : activeTab === "video" ? (
 								<VideoTab />
+							) : activeTab === "embedding" ? (
+								<EmbeddingTab />
 							) : activeTab === "jev" ? (
 								<JevTab />
 							) : (
@@ -598,6 +621,37 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
 									The Video tab names neither the session's provider nor an endpoint with a model, so the tool
 									is not offered. Set one on the Video tab.
+								</p>
+							) : null}
+						</div>
+
+						<div className="mb-[5px]">
+							<SettingsCheckbox
+								checked={embeddingEnabled}
+								className="mb-[5px]"
+								onChange={async (checked: boolean) => {
+									try {
+										await StateServiceClient.updateSettings(
+											UpdateSettingsRequest.create({ embeddingEnabled: checked }),
+										)
+									} catch (error) {
+										console.error("Failed to update the embedding setting:", error)
+										throw error
+									}
+								}}>
+								Use an embedding model
+							</SettingsCheckbox>
+							<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+								Lets the Library be searched by meaning as well as by keyword, so a question finds the passage
+								that answers it even when the two share no words. The Embedding tab names the embedding model, on
+								the session's own provider or on any endpoint serving the OpenAI embeddings API, and optionally a
+								reranking model that puts the best passages in order. Ticking this downloads LanceDB once, 200 to
+								390 MB depending on the platform; the Library itself is turned on under Settings &gt; Library.
+							</p>
+							{embeddingUnconfigured ? (
+								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">
+									The Embedding tab names no model, or nowhere to ask for it, so nothing is embedded and the
+									Library is searched by keyword only. Set one on the Embedding tab.
 								</p>
 							) : null}
 						</div>

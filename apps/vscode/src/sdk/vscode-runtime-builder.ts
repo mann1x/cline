@@ -3,6 +3,7 @@ import {
 	createAskLspTool,
 	createBrowserTool,
 	createJevTool,
+	createLibraryTools,
 	createListFilesTool,
 	createMcpTools,
 	createMediaTools,
@@ -20,6 +21,7 @@ import { resolveMcpServerTimeoutMs } from "@/services/mcp/timeout"
 import { Logger } from "@/shared/services/Logger"
 import { createCheckFileTool } from "./check-file-tool"
 import { isJevConfigured, readJevEndpoint } from "./jev-config"
+import { readLibraryToolsConfig } from "./library-config"
 import { probeMediaServer, readLeadMediaProvider } from "./media-endpoint-config"
 import { readMediaToolsConfig } from "./media-tools-config"
 import { readQaCredentials } from "./qa-credentials-store"
@@ -205,6 +207,18 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 			onError: (message, error) => Logger.error(`${message}:`, error),
 			log: (message) => Logger.log(`[VscodeRuntimeTools] ${message}`),
 		})),
+	)
+
+	// The Library's three tools, when the Library panel has it on. They work on
+	// keywords alone; the Embedding tab adds search by meaning. Whether it is on
+	// is read again on every call, like the media tabs.
+	tools.push(
+		...createLibraryTools({
+			cwd: options?.cwd ?? process.cwd(),
+			getConfig: readLibraryToolsConfig,
+			onError: (message, error) => Logger.error(`${message}:`, error),
+			log: (message) => Logger.log(`[VscodeRuntimeTools] ${message}`),
+		}),
 	)
 
 	// `jev` is off by default for a different reason from `generate_image`: it

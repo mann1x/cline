@@ -306,6 +306,13 @@ const USER_SETTINGS_FIELDS = {
 	audioEnabled: { default: false as boolean },
 	// Offer `generate_video`, pointed at an OpenAI-compatible videos endpoint.
 	videoEnabled: { default: false as boolean },
+	// "Use an embedding model": the Library (and later Memory) searches by
+	// meaning as well as by keyword, with the endpoints on the Embedding tab.
+	// Off by default: nothing embeds on a machine until a model is pulled.
+	embeddingEnabled: { default: false as boolean },
+	// The Library: documents kept for retrieval, and the three tools the model
+	// has on it. Off by default; it works on keywords alone when on.
+	libraryEnabled: { default: false as boolean },
 	// Offer `jev`, and let the harness ask Jev (TypeSafe's scoring model) for
 	// a confidence before a question reaches the user and before an
 	// escalation. Off by default: it is a paid, hosted service, and turning it
@@ -344,6 +351,13 @@ const USER_SETTINGS_FIELDS = {
 	audioEndpoints: { default: "" as string },
 	// JSON `{useProvider, baseUrl, model, size, seconds}` for the Video tab.
 	videoEndpoint: { default: "" as string },
+	// JSON `{useProvider, embedding: {baseUrl, model}, reranking: {baseUrl,
+	// model, enabled}}` for the Embedding tab, round-tripped whole. The two keys
+	// are secrets.
+	retrievalEndpoints: { default: "" as string },
+	// JSON `LibrarySettings` (`@cline/shared`): chunking and retrieval, as the
+	// Library panel stores them. Empty means the defaults.
+	librarySettings: { default: "" as string },
 	// JSON `{model, floor, highStakesFloor, timeoutMs, rankQuestions,
 	// appraiseEscalation}` for Jev, round-tripped whole by its tab like the
 	// image endpoint above. The key is not here -- it is a secret.
@@ -562,6 +576,8 @@ const SECRETS_KEYS = [
 	"audioSttApiKey",
 	"audioTtsApiKey",
 	"videoApiKey",
+	"embeddingApiKey",
+	"rerankingApiKey",
 	// The Jev key, a secret for the same reason.
 	"jevApiKey",
 	// The key for a custom Jev endpoint (Ollama, xollama, a third party). One
@@ -616,6 +632,8 @@ export const NonApiHandlerSecretKeys = new Set<string>([
 	"audioSttApiKey",
 	"audioTtsApiKey",
 	"videoApiKey",
+	"embeddingApiKey",
+	"rerankingApiKey",
 	"jevApiKey",
 	"jevCustomApiKey",
 ])

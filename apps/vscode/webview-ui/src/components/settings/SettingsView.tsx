@@ -7,6 +7,7 @@ import {
 	FlaskConical,
 	HardDriveDownload,
 	Info,
+	LibraryBig,
 	type LucideIcon,
 	SlidersHorizontal,
 	SquareTerminal,
@@ -28,6 +29,7 @@ import ApiConfigurationSection from "./sections/ApiConfigurationSection"
 import DebugSection from "./sections/DebugSection"
 import FeatureSettingsSection from "./sections/FeatureSettingsSection"
 import GeneralSettingsSection from "./sections/GeneralSettingsSection"
+import LibrarySettingsSection from "./sections/LibrarySettingsSection"
 import { RemoteConfigSection } from "./sections/RemoteConfigSection"
 import TerminalSettingsSection from "./sections/TerminalSettingsSection"
 import { flushPendingEdits } from "./utils/pendingEdits"
@@ -35,7 +37,7 @@ import { flushPendingEdits } from "./utils/pendingEdits"
 const IS_DEV = process.env.IS_DEV
 
 // Tab definitions
-type SettingsTabID = "api-config" | "features" | "terminal" | "general" | "about" | "debug" | "remote-config"
+type SettingsTabID = "api-config" | "features" | "library" | "terminal" | "general" | "about" | "debug" | "remote-config"
 interface SettingsTab {
 	id: SettingsTabID
 	name: string
@@ -59,6 +61,13 @@ const SETTINGS_TABS: SettingsTab[] = [
 		tooltipText: "Feature Settings",
 		headerText: "Feature Settings",
 		icon: CheckCheck,
+	},
+	{
+		id: "library",
+		name: "Library",
+		tooltipText: "Library Settings",
+		headerText: "Library",
+		icon: LibraryBig,
 	},
 	{
 		id: "terminal",
@@ -130,6 +139,7 @@ const SettingsView = ({ onDone, targetSection }: SettingsViewProps) => {
 			"api-config": ApiConfigurationSection,
 			general: GeneralSettingsSection,
 			features: FeatureSettingsSection,
+			library: LibrarySettingsSection,
 			terminal: TerminalSettingsSection,
 			"remote-config": RemoteConfigSection,
 			about: AboutSection,

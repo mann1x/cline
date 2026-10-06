@@ -1004,6 +1004,11 @@ export async function loadOpenTelemetryAdapter() {
 }
 export { Agent, createAgentRuntime } from "@cline/agents";
 export {
+	DEFAULT_LIBRARY_SETTINGS,
+	type LibrarySettings,
+	resolveLibrarySettings,
+} from "@cline/shared";
+export {
 	createCappedThinkingNoteWriter,
 	createCappedThinkingPrepareTurn,
 	DEFAULT_CAPPED_THINKING_PROMPT,
@@ -1554,11 +1559,6 @@ export {
 	resolveLibraryDirectory,
 	sharedLibrary,
 } from "./services/retrieval/library";
-export {
-	DEFAULT_LIBRARY_SETTINGS,
-	type LibrarySettings,
-	resolveLibrarySettings,
-} from "./services/retrieval/library-settings";
 export type {
 	LibraryCollection,
 	LibraryDocument,

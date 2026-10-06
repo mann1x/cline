@@ -8,12 +8,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentToolContext } from "@cline/shared";
+import { DEFAULT_LIBRARY_SETTINGS, type LibrarySettings } from "@cline/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Library } from "../../services/retrieval/library";
-import {
-	DEFAULT_LIBRARY_SETTINGS,
-	type LibrarySettings,
-} from "../../services/retrieval/library-settings";
 import { createLibraryTools, type LibraryToolsConfig } from "./library-tools";
 
 const FIXTURES = join(__dirname, "..", "..", "..", "fixtures", "documents");

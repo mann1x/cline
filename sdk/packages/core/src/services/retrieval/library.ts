@@ -9,6 +9,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { DEFAULT_LIBRARY_SETTINGS, type LibrarySettings } from "@cline/shared";
 import { resolveClineDataDir } from "@cline/shared/storage";
 import { chunkText } from "./chunker";
 import { embedTexts, type RetrievalEndpoint } from "./embedding-client";
@@ -19,10 +20,6 @@ import {
 	lanceDbUnsupportedReason,
 	loadLanceDb,
 } from "./lancedb-runtime";
-import {
-	DEFAULT_LIBRARY_SETTINGS,
-	type LibrarySettings,
-} from "./library-settings";
 import {
 	type AddDocumentResult,
 	type LibraryDocument,

@@ -22,6 +22,7 @@ import { ClineEnv } from "@/config"
 import { ExtensionRegistryInfo } from "@/registry"
 import { readImageGenerationApiKey } from "@/sdk/image-generation-config"
 import { readJevApiKey, readJevCustomApiKey } from "@/sdk/jev-config"
+import { readLibrarySettings } from "@/sdk/library-config"
 import { readQaCredentialNames } from "@/sdk/qa-credentials-store"
 import { BannerService } from "@/services/banner/BannerService"
 import { featureFlagsService } from "@/services/feature-flags"
@@ -108,7 +109,10 @@ export async function getStateToPostToWebview(controller: {
 	const audioEndpoints = stateManager.getGlobalSettingsKey("audioEndpoints")
 	const videoEnabled = stateManager.getGlobalSettingsKey("videoEnabled")
 	const videoEndpoint = stateManager.getGlobalSettingsKey("videoEndpoint")
-	const secretSet = (key: "audioSttApiKey" | "audioTtsApiKey" | "videoApiKey") =>
+	const embeddingEnabled = stateManager.getGlobalSettingsKey("embeddingEnabled")
+	const retrievalEndpoints = stateManager.getGlobalSettingsKey("retrievalEndpoints")
+	const libraryEnabled = stateManager.getGlobalSettingsKey("libraryEnabled")
+	const secretSet = (key: "audioSttApiKey" | "audioTtsApiKey" | "videoApiKey" | "embeddingApiKey" | "rerankingApiKey") =>
 		Boolean(stateManager.getSecretKey(key)?.trim())
 	const jevEnabled = stateManager.getGlobalSettingsKey("jevEnabled")
 	const jevSettings = stateManager.getGlobalSettingsKey("jevSettings")
@@ -264,6 +268,13 @@ export async function getStateToPostToWebview(controller: {
 		videoEnabled,
 		videoEndpoint,
 		videoApiKeySet: secretSet("videoApiKey"),
+		embeddingEnabled,
+		retrievalEndpoints,
+		embeddingApiKeySet: secretSet("embeddingApiKey"),
+		rerankingApiKeySet: secretSet("rerankingApiKey"),
+		libraryEnabled,
+		// Complete, so the panel shows the value in use and never restates a default.
+		librarySettings: JSON.stringify(readLibrarySettings()),
 		jevEnabled,
 		jevSettings,
 		// The same rule as the image key.

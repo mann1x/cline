@@ -116,6 +116,17 @@ export interface ExtensionState {
 	/** Whether a key is stored for each audio endpoint. Never the keys. */
 	audioSttApiKeySet: boolean
 	audioTtsApiKeySet: boolean
+	/** "Use an embedding model": semantic search for the Library, on the endpoints below. */
+	embeddingEnabled: boolean
+	/** JSON for the Embedding tab: the embedding and reranking endpoints. */
+	retrievalEndpoints: string
+	/** Whether a key is stored for each of them. Never the keys. */
+	embeddingApiKeySet: boolean
+	rerankingApiKeySet: boolean
+	/** Whether the Library and its tools are on. */
+	libraryEnabled: boolean
+	/** JSON `LibrarySettings`, complete: the stored values over the defaults. */
+	librarySettings: string
 	/** Whether `generate_video` is offered, pointed at the endpoint below. */
 	videoEnabled: boolean
 	/** JSON for the Video tab: the endpoint, the model and the defaults. */

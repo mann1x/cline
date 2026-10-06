@@ -114,6 +114,8 @@ message Secrets {
   optional string audio_stt_api_key = 55;
   optional string audio_tts_api_key = 56;
   optional string video_api_key = 57;
+  optional string embedding_api_key = 58;
+  optional string reranking_api_key = 59;
 }
 
 // NOTE: Add new fields under API_HANDLER_SETTINGS_FIELDS or USER_SETTINGS_FIELDS
@@ -343,6 +345,10 @@ message Settings {
   optional string video_endpoint = 233;
   optional bool subagent_sandbox_confine = 234;
   optional bool lead_sandbox_confine = 235;
+  optional bool embedding_enabled = 236;
+  optional bool library_enabled = 237;
+  optional string retrieval_endpoints = 238;
+  optional string library_settings = 239;
 }
 
 message State {
@@ -543,6 +549,15 @@ message UpdateSettingsRequest {
   optional bool video_enabled = 96;
   optional string video_endpoint = 97;
   optional string video_api_key = 98;
+  // The Embedding tab: the switch, the two endpoints as one JSON record, and
+  // the two keys, write-only like the image key.
+  optional bool embedding_enabled = 101;
+  optional string retrieval_endpoints = 102;
+  optional string embedding_api_key = 103;
+  optional string reranking_api_key = 104;
+  // The Library panel: the switch, and its settings as one JSON record.
+  optional bool library_enabled = 105;
+  optional string library_settings = 106;
   optional bool jev_enabled = 80;
   optional string jev_settings = 81;
   // Write-only like the image key: empty clears it, unset leaves it alone.

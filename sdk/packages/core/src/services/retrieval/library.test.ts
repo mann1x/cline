@@ -1,13 +1,13 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isLanceDbInstalled } from "./lancedb-runtime";
-import { Library } from "./library";
 import {
 	DEFAULT_LIBRARY_SETTINGS,
 	resolveLibrarySettings,
-} from "./library-settings";
+} from "@cline/shared";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { isLanceDbInstalled } from "./lancedb-runtime";
+import { Library } from "./library";
 
 const runtimeDirectory = process.env.CEREBRILINE_LANCEDB_RUNTIME;
 const lanceAvailable = Boolean(

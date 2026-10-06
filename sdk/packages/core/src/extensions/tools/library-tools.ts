@@ -9,10 +9,14 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type AgentTool, createTool } from "@cline/shared";
+import {
+	type AgentTool,
+	createTool,
+	type LibrarySettings,
+} from "@cline/shared";
 import type { RetrievalEndpoint } from "../../services/retrieval/embedding-client";
 import { type Library, sharedLibrary } from "../../services/retrieval/library";
-import type { LibrarySettings } from "../../services/retrieval/library-settings";
+
 import type { RetrieveResult } from "../../services/retrieval/retrieve";
 import { DOCUMENT_EXTENSIONS } from "./executors/document/formats";
 import type { DocumentReaderSettings } from "./executors/document/ocr";
