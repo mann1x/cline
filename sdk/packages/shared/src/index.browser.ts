@@ -419,6 +419,11 @@ export {
 	renameMemoryInSelections,
 	resolveMemorySettings,
 } from "./retrieval/memory-settings";
+export {
+	DEFAULT_SCRAPE_SETTINGS,
+	resolveScrapeSettings,
+	type ScrapeSettings,
+} from "./retrieval/scrape-settings";
 export { CLINE_DEFAULT_RPC_ADDRESS, CLINE_DEFAULT_RPC_PORT } from "./rpc";
 export type {
 	AddProviderActionRequest,

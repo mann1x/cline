@@ -263,6 +263,153 @@ export async function readDocumentText(
 	};
 }
 
+export interface BookDocument extends DocumentText {
+	/** The pictures inside it, with their bytes; the markdown links them as `images/<file>`. */
+	images: {
+		file: string;
+		data: Uint8Array;
+		mediaType: string;
+		width?: number;
+		height?: number;
+		origin?: string;
+		description?: string;
+	}[];
+}
+
+/**
+ * A document as the Library keeps a book: its text and its pictures.
+ * Nothing is written anywhere; the caller puts the pictures where the book
+ * is kept, and `describeBookPictures` has a vision model look at them.
+ */
+export async function readDocumentForBook(
+	filePath: string,
+	options: {
+		scratchDir: string;
+		maxFileSizeBytes?: number;
+		reader?: DocumentReaderSettings;
+		describeImages?: DescribeImages;
+	},
+): Promise<BookDocument> {
+	const stat = await fs.stat(filePath).catch(() => undefined);
+	if (!stat?.isFile()) {
+		throw new Error(`No file at ${filePath}.`);
+	}
+	const limit = options.maxFileSizeBytes ?? DEFAULT_MAX_FILE_BYTES;
+	if (stat.size > limit) {
+		throw new Error(
+			`${filePath} is ${formatBytes(stat.size)}, past the ${formatBytes(limit)} the Document Reader reads.`,
+		);
+	}
+	const data = new Uint8Array(await fs.readFile(filePath));
+	const verdict = detectFormat(filePath, data.subarray(0, 512));
+	if ("unsupported" in verdict) {
+		throw new Error(verdict.unsupported);
+	}
+	const recognition =
+		verdict.format === "pdf"
+			? planRecognition({
+					request: undefined,
+					languages: undefined,
+					settings: options.reader ?? {},
+					describeImages: options.describeImages,
+					modelSupportsImages: false,
+				})
+			: undefined;
+	const scratchDir = path.join(
+		options.scratchDir,
+		`.scratch-${randomBytes(4).toString("hex")}`,
+	);
+	await fs.mkdir(scratchDir, { recursive: true });
+	const images = new ImageCollector("images");
+	let result: DocumentReadResult;
+	try {
+		result = await read(filePath, data, verdict.format, {
+			images,
+			wantImages: true,
+			scratchDir,
+			...(recognition?.recognize ? { recognize: recognition.recognize } : {}),
+		});
+	} finally {
+		await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => {});
+		await recognition?.close();
+	}
+	return {
+		markdown: tidyMarkdown(result.markdown),
+		format: verdict.format,
+		...(result.title ? { title: result.title } : {}),
+		...(result.author ? { author: result.author } : {}),
+		bytes: stat.size,
+		notes: [
+			...(recognition?.notes(
+				result.scannedPages ?? [],
+				result.recognizedPages ?? [],
+			) ?? []),
+			...(result.notes ?? []),
+		],
+		images: images.entries().map(({ image, data: bytes }) => ({
+			file: image.file,
+			data: bytes,
+			mediaType: image.mediaType,
+			...(image.width ? { width: image.width } : {}),
+			...(image.height ? { height: image.height } : {}),
+			...(image.source ? { origin: image.source } : {}),
+			...((image.description ?? image.alt)
+				? { description: image.description ?? image.alt }
+				: {}),
+		})),
+	};
+}
+
+/**
+ * Have the vision model describe a book's pictures: each description is kept
+ * with its picture and becomes the alt text where the text shows it, so a
+ * search for what a figure shows finds the page it is on. Resolves with how
+ * many were described and how many could have been.
+ */
+export async function describeBookPictures(
+	book: BookDocument,
+	describeImages: DescribeImages,
+	options: { documentName: string; limit?: number },
+): Promise<{ described: number; candidates: number }> {
+	const candidates = book.images.filter(
+		(image) =>
+			VIEWABLE_MEDIA_TYPES.has(image.mediaType) &&
+			!(
+				image.width &&
+				image.height &&
+				image.width < DESCRIBE_MIN_SIDE &&
+				image.height < DESCRIBE_MIN_SIDE
+			),
+	);
+	const chosen = candidates.slice(0, options.limit ?? 40);
+	const descriptions = await describePictures(
+		describeImages,
+		chosen.map((image) => ({
+			link: `images/${image.file}`,
+			mediaType: image.mediaType,
+			data: image.data,
+			...(image.origin ? { source: image.origin } : {}),
+		})),
+		options.documentName,
+	);
+	let described = 0;
+	chosen.forEach((image, index) => {
+		const description = descriptions[index];
+		if (!description) return;
+		described++;
+		image.description = description;
+		const alt = altTextOf(description);
+		book.markdown = book.markdown.replace(
+			new RegExp(
+				`!\\[[^\\]]*\\]\\(${escapeRegExp(`images/${image.file}`)}\\)`,
+				"g",
+			),
+			() => `![${alt}](images/${image.file})`,
+		);
+	});
+	return { described, candidates: candidates.length };
+}
+
 export function createDocumentExtractExecutor(
 	options: DocumentExtractExecutorOptions = {},
 ): ExtractDocumentExecutor {
@@ -564,6 +711,8 @@ async function describeExtractedPictures(input: {
 	images: ImageCollector;
 	result: DocumentReadResult;
 	documentName: string;
+	/** @default DESCRIBE_LIMIT */
+	limit?: number;
 }): Promise<{ markdown?: string; note?: string }> {
 	if (!input.wanted || input.images.images.length === 0) return {};
 	if (!input.describeImages) {
@@ -588,7 +737,8 @@ async function describeExtractedPictures(input: {
 				),
 		);
 	if (candidates.length === 0) return {};
-	const chosen = candidates.slice(0, DESCRIBE_LIMIT);
+	const limit = input.limit ?? DESCRIBE_LIMIT;
+	const chosen = candidates.slice(0, limit);
 	const descriptions = await describePictures(
 		input.describeImages,
 		chosen.map(({ image, data }) => ({
@@ -614,7 +764,7 @@ async function describeExtractedPictures(input: {
 	});
 	const beyond =
 		candidates.length > chosen.length
-			? ` One call describes at most ${DESCRIBE_LIMIT}; the rest have none.`
+			? ` One call describes at most ${limit}; the rest have none.`
 			: "";
 	return {
 		markdown,

@@ -1276,10 +1276,16 @@ export {
 } from "./extensions/tools/jev";
 // The Library: documents kept for retrieval, and the tools the model has on it.
 export {
+	createLibrarianTools,
+	LIBRARIAN_TOOL_NAMES,
+} from "./extensions/tools/librarian-tools";
+export {
 	type CreateLibraryToolsOptions,
 	createLibraryTools,
-	DEFAULT_LIBRARY_COLLECTION,
+	isLibrarianEnabled,
+	LIBRARIAN_SKILL_NAME,
 	LIBRARY_TOOL_NAMES,
+	type LibraryScrapeConfig,
 	type LibraryToolName,
 	type LibraryToolsConfig,
 } from "./extensions/tools/library-tools";
@@ -1556,6 +1562,22 @@ export {
 	sessionThinkingEngine,
 } from "./services/llms/session-budget";
 export {
+	BOOK_FORMAT,
+	type BookImage,
+	type BookMatch,
+	type BookMetadata,
+	type BookSource,
+	type BookWebOrigin,
+	Catalogue,
+	type CatalogueProblem,
+	type ExportScope,
+	LIBRARY_EXPORT_FORMAT,
+	type LibraryBook,
+	type LibrarySection,
+	type LibraryShelf,
+	TRASH_DAYS,
+} from "./services/retrieval/catalogue";
+export {
 	type EmbedOptions,
 	type EmbedResult,
 	embedTexts,
@@ -1566,6 +1588,17 @@ export {
 	rerankDocuments,
 	resolveRetrievalBaseUrl,
 } from "./services/retrieval/embedding-client";
+export {
+	crawlSite,
+	htmlToMarkdown,
+	mapSite,
+	type ScrapedPage,
+	type ScrapeEndpoint,
+	ScrapeError,
+	scrapePage,
+	searchWeb,
+	type WebSearchHit,
+} from "./services/retrieval/firecrawl";
 export {
 	currentPlatformKey,
 	ensureLanceDb,

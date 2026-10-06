@@ -33,6 +33,15 @@ export interface LibrarySettings {
 	topKReranker: number;
 	relevanceThreshold: number;
 	rerankingBatchSize: number;
+	/** Have a vision model describe the pictures of a book as it is added. */
+	describeImages: boolean;
+	/**
+	 * The saved profile whose model describes them. Empty is the session's own
+	 * vision model, when it has one.
+	 */
+	imageProfile: string;
+	/** Pictures described per file added, at most. */
+	describeImagesLimit: number;
 }
 
 export const DEFAULT_LIBRARY_SETTINGS: LibrarySettings = {
@@ -53,6 +62,9 @@ export const DEFAULT_LIBRARY_SETTINGS: LibrarySettings = {
 	topKReranker: 3,
 	relevanceThreshold: 0,
 	rerankingBatchSize: 32,
+	describeImages: true,
+	imageProfile: "",
+	describeImagesLimit: 40,
 };
 
 function integer(value: unknown, fallback: number, min: number, max: number) {
@@ -119,6 +131,14 @@ export function resolveLibrarySettings(
 			d.rerankingBatchSize,
 			1,
 			1024,
+		),
+		describeImages: flag(s.describeImages, d.describeImages),
+		imageProfile: text(s.imageProfile, d.imageProfile).trim(),
+		describeImagesLimit: integer(
+			s.describeImagesLimit,
+			d.describeImagesLimit,
+			0,
+			1000,
 		),
 	};
 }
