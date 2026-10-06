@@ -68,7 +68,7 @@ export function buildSdkProviderConfig(
 
 	const apiKey = resolveApiKey(providerId, configuration)
 	const modelId = resolveModelId(providerId, mode, configuration)
-	const baseUrl = resolveBaseUrl(providerId, configuration)
+	const baseUrl = resolveBaseUrl(providerId, configuration, options?.visionProviderSettings)
 
 	const reasoningEffort = mode === "plan" ? configuration.planModeReasoningEffort : configuration.actModeReasoningEffort
 	const legacyThinkingBudgetTokens =

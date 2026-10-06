@@ -113,6 +113,31 @@ export interface RetrievalStatus {
 	scrape: ScrapeState
 }
 
+/** Whether a model reads images: what its server says, or that it does not say. */
+export type ImageSupport = "yes" | "no" | "unknown"
+
+export interface ImageModelChoice {
+	provider: string
+	model: string
+	images: ImageSupport
+}
+
+/** What each place a picture-describing model can be named would run. */
+export interface RetrievalImageSupport {
+	/** The Vision tab's model, when the tab names one. */
+	visionTab?: ImageModelChoice
+	/** Every saved profile, in the order they are stored. */
+	profiles: Array<ImageModelChoice & { name: string }>
+}
+
+/** One server's models, split by what it reports about each. */
+export interface RetrievalImageModels {
+	/** False when the server does not say; nothing may be hidden then. */
+	reported: boolean
+	vision: string[]
+	notVision: string[]
+}
+
 export interface RetrievalActionResult {
 	ok: boolean
 	/** What happened, for the panel to show. */
@@ -121,6 +146,8 @@ export interface RetrievalActionResult {
 	/** What an asking action answered with: a model list, or a check's result. */
 	models?: RetrievalEmbeddingModels
 	check?: RetrievalEndpointCheck
+	imageSupport?: RetrievalImageSupport
+	imageModels?: RetrievalImageModels
 	/** What a listing action answered with. */
 	books?: LibraryBookView[]
 	book?: LibraryBookDetails
@@ -133,6 +160,8 @@ export type RetrievalAction =
 	| { action: "embeddingModels" }
 	| { action: "checkEmbedding" }
 	| { action: "checkReranking" }
+	| { action: "imageSupport" }
+	| { action: "imageModels"; providerId: string; baseUrl?: string }
 	| { action: "embedNow"; target: "library" | "memory" }
 	| { action: "deleteVectors"; target: "library" | "memory"; table: string }
 	| { action: "createMemory"; name: string; forWorkspace?: boolean }

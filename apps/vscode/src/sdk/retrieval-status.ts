@@ -11,6 +11,7 @@ import {
 	describeEmbeddingEndpoint,
 	listConfiguredEmbeddingModels,
 } from "./embedding-endpoint"
+import { listImageModels, readImageSupport } from "./image-support"
 import { readLibraryCatalogue, readScrapeState, runLibraryAction } from "./library-catalogue"
 import {
 	installLibraryVectors,
@@ -142,7 +143,7 @@ export async function readRetrievalStatus(): Promise<RetrievalStatus> {
 
 const fileName = (name: string) => `${name.replace(/[^\p{L}\p{N}._-]+/gu, "-").replace(/^-+|-+$/g, "") || "memory"}.memory.json`
 
-type Outcome = Pick<RetrievalActionResult, "models" | "check" | "books" | "book">
+type Outcome = Pick<RetrievalActionResult, "models" | "check" | "books" | "book" | "imageSupport" | "imageModels">
 
 async function act(request: RetrievalAction, outcome: Outcome): Promise<string | undefined> {
 	const memory = sharedMemory()
@@ -151,6 +152,12 @@ async function act(request: RetrievalAction, outcome: Outcome): Promise<string |
 			return undefined
 		case "embeddingModels":
 			outcome.models = await listConfiguredEmbeddingModels()
+			return undefined
+		case "imageSupport":
+			outcome.imageSupport = await readImageSupport()
+			return undefined
+		case "imageModels":
+			outcome.imageModels = await listImageModels(request.providerId, request.baseUrl)
 			return undefined
 		case "checkEmbedding":
 			outcome.check = await checkEmbeddingEndpoint()

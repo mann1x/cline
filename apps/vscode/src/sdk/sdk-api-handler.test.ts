@@ -135,6 +135,26 @@ describe("buildSdkProviderConfig", () => {
 		expect(providerConfig.modelInfo).toMatchObject({ id: "vision.gguf", contextWindow: 32_768, maxInputTokens: 32_768 })
 	})
 
+	// Measured on pandorum: the Vision tab held xOllama at one host, the
+	// session's xOllama entry in providers.json named another, and the
+	// describer asked the session's host for a model it did not have.
+	it("sends a scoped configuration to the base URL its own snapshot holds", () => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue({ baseUrl: "http://192.168.178.161:22434" })
+
+		const scoped = buildSdkProviderConfig(
+			{ actModeApiProvider: "xollama" as never, actModeApiModelId: "v7-coder_tb:vision-iq4_nl" },
+			"act",
+			{ visionProviderSettings: { baseUrl: "http://192.168.178.2:11433" } },
+		)
+		const shared = buildSdkProviderConfig(
+			{ actModeApiProvider: "xollama" as never, actModeApiModelId: "v7-coder_tb:vision-iq4_nl" },
+			"act",
+		)
+
+		expect(scoped.baseUrl).toContain("192.168.178.2:11433")
+		expect(shared.baseUrl).toContain("192.168.178.161:22434")
+	})
+
 	it("leaves the catalog's window alone when the vision tab names none", () => {
 		const providerConfig = buildSdkProviderConfig(
 			{ actModeApiProvider: "opencoti" as never, actModeApiModelId: "vision.gguf" },

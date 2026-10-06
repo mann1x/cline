@@ -23,6 +23,7 @@ import { readStoredThinkingLevel } from "../common/ThinkingBudgetField"
 import { XollamaModelStrip } from "../common/XollamaModelStrip"
 import OllamaModelPicker from "../OllamaModelPicker"
 import { useApiConfigurationScope } from "../utils/ApiConfigurationScopeContext"
+import { modelsThatMayReadImages, useImageModels, VISION_SCOPE_KEY } from "../utils/imageSupport"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
 import { useProviderApiKeyField } from "../utils/useProviderApiKeyField"
 
@@ -310,6 +311,19 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 		requestOllamaModels()
 	}, [requestOllamaModels])
 
+	// On the Vision tab the model is there to read pictures, so the ones the
+	// server reports as unable to are left out. The server is the one asked:
+	// `/api/tags` lists `capabilities` per model, and a name says nothing —
+	// `omnimerge-v6-mtp_tb:27b-q4km-128k` was picked for the job and has no
+	// vision head. Models the server says nothing about stay listed.
+	const describesPictures = scope?.scopeKey === VISION_SCOPE_KEY
+	const imageModels = useImageModels(providerId, lookupBaseUrl || undefined, describesPictures)
+	const offeredModels = useMemo(
+		() => (describesPictures ? modelsThatMayReadImages(ollamaModels, imageModels, selectedModel.modelId) : ollamaModels),
+		[describesPictures, ollamaModels, imageModels, selectedModel.modelId],
+	)
+	const hiddenModels = ollamaModels.length - offeredModels.length
+
 	// What the selected model's own Modelfile sets, so a blank field can say
 	// which value it is leaving in force instead of only that it is leaving one.
 	const [modelParameters, setModelParameters] = useState<Record<string, string>>({})
@@ -421,7 +435,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 				<span className="font-semibold">Model</span>
 			</label>
 			<OllamaModelPicker
-				ollamaModels={ollamaModels}
+				ollamaModels={offeredModels}
 				onFocus={requestOllamaModels}
 				onModelChange={(modelId) => {
 					const trimmedModelId = modelId.trim()
@@ -500,6 +514,13 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 						</div>
 					)}
 				</div>
+			)}
+
+			{hiddenModels > 0 && (
+				<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
+					Only models that read images are listed: {hiddenModels} on this server report no vision capability and are
+					left out.
+				</p>
 			)}
 
 			{/* Show status message based on model availability */}

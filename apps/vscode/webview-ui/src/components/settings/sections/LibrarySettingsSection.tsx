@@ -10,6 +10,7 @@ import { StateServiceClient } from "@/services/grpc-client"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import { SettingsCheckbox } from "../common/SettingsCheckbox"
 import Section from "../Section"
+import { profilesThatMayReadImages, useImageSupport } from "../utils/imageSupport"
 import { useRetrievalStatus } from "../utils/useRetrievalStatus"
 import LibraryBrowser from "./LibraryBrowser"
 import RetrievalEngineStatus from "./RetrievalEngineStatus"
@@ -42,8 +43,14 @@ const hint = "text-xs -mt-2 text-(--vscode-descriptionForeground)"
  * configuration, with the other models.
  */
 const LibrarySettingsSection = ({ renderSectionHeader }: LibrarySettingsSectionProps) => {
-	const { libraryEnabled, librarySettings, embeddingEnabled, retrievalEndpoints, apiConfigurationProfiles } =
-		useExtensionState()
+	const {
+		libraryEnabled,
+		librarySettings,
+		embeddingEnabled,
+		retrievalEndpoints,
+		apiConfigurationProfiles,
+		visionModeApiConfiguration,
+	} = useExtensionState()
 	const retrieval = useRetrievalStatus()
 	const settings = useMemo(() => parseLibrarySettings(librarySettings), [librarySettings])
 	const endpoints = useMemo(() => parseRetrievalEndpoints(retrievalEndpoints), [retrievalEndpoints])
@@ -55,6 +62,19 @@ const LibrarySettingsSection = ({ renderSectionHeader }: LibrarySettingsSectionP
 	)
 	// A profile deleted after it was picked is still shown, as gone.
 	const imageProfileMissing = settings.imageProfile !== "" && !profileNames.includes(settings.imageProfile)
+	// Only profiles whose model may read images are offered: each one's server
+	// is asked, and a reported "no" leaves the profile out. The one already
+	// picked stays, marked, so a wrong choice is visible instead of blanked.
+	const imageSupport = useImageSupport(`${apiConfigurationProfiles ?? ""}\n${visionModeApiConfiguration ?? ""}`)
+	const imageProfiles = useMemo(
+		() => profilesThatMayReadImages(profileNames, imageSupport, settings.imageProfile),
+		[profileNames, imageSupport, settings.imageProfile],
+	)
+	const hiddenProfiles = profileNames.length - imageProfiles.length
+	const describer =
+		settings.imageProfile === "" || imageProfileMissing
+			? imageSupport?.visionTab
+			: imageSupport?.profiles.find((profile) => profile.name === settings.imageProfile)
 
 	const save = useCallback(
 		async (patch: Partial<LibrarySettings>) => {
@@ -157,12 +177,26 @@ const LibrarySettingsSection = ({ renderSectionHeader }: LibrarySettingsSectionP
 												{settings.imageProfile} (deleted)
 											</VSCodeOption>
 										) : null}
-										{profileNames.map((name) => (
-											<VSCodeOption key={name} value={name}>
-												{name}
+										{imageProfiles.map((profile) => (
+											<VSCodeOption key={profile.name} value={profile.name}>
+												{profile.name}
+												{profile.images === "no" ? " (does not read images)" : ""}
 											</VSCodeOption>
 										))}
 									</VSCodeDropdown>
+									{describer?.images === "no" ? (
+										<p className="text-xs mt-1 text-(--vscode-errorForeground)" role="alert">
+											{describer.model} does not read images: its server reports no vision capability, so
+											pictures would be kept without a description. Pick another.
+										</p>
+									) : null}
+									{hiddenProfiles > 0 ? (
+										<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
+											{hiddenProfiles === 1
+												? "1 saved profile is left out: its model reports no vision capability."
+												: `${hiddenProfiles} saved profiles are left out: their models report no vision capability.`}
+										</p>
+									) : null}
 									<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
 										{settings.imageProfile === "" || imageProfileMissing
 											? "With no profile picked, the model on the Vision tab of the API configuration is used; with none there either, pictures are kept without a description."

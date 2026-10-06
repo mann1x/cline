@@ -963,7 +963,7 @@ export function resolveOllamaProviderConfig(
 	// A cloud model declares no `num_ctx` at all -- its `/api/show` carries no
 	// `parameters` block -- so this reads the published window from the
 	// recommendations list, or the trained one from `model_info`, for those.
-	const declaredContextWindow = readResolvedOllamaWindow(ollamaNativeBaseUrl(providerId, config), modelId)
+	const declaredContextWindow = readResolvedOllamaWindow(ollamaNativeBaseUrl(providerId, config, overrideSettings), modelId)
 	const contextWindow = settingsContextWindow ?? legacyContextWindow ?? declaredContextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW
 	const timeoutMs = config.requestTimeoutMs
 	return {
@@ -979,14 +979,29 @@ export function resolveOllamaProviderConfig(
  * by it, so it is not normalized here. xOllama's is its configured base URL,
  * else its default port.
  */
-export function ollamaNativeBaseUrl(providerId: string, config: ApiConfiguration): string | undefined {
+export function ollamaNativeBaseUrl(
+	providerId: string,
+	config: ApiConfiguration,
+	scopedSettings?: Record<string, unknown>,
+): string | undefined {
 	if (providerId === "ollama") {
 		return config.ollamaBaseUrl
 	}
-	return withOllamaNativeDefault(providerId, resolveBaseUrl(providerId, config))
+	return withOllamaNativeDefault(providerId, resolveBaseUrl(providerId, config, scopedSettings))
 }
 
-export function resolveBaseUrl(providerId: string, config: ApiConfiguration): string | undefined {
+/**
+ * `scopedSettings` is the provider entry a scoped configuration holds in its
+ * own snapshot — the Vision tab's, or a saved profile's. Its base URL goes
+ * ahead of `providers.json`, whose entry belongs to the session's model: a
+ * Vision tab on xOllama at one host, with the session on xOllama at another,
+ * sent its model to the session's host and got "model not found" back.
+ */
+export function resolveBaseUrl(
+	providerId: string,
+	config: ApiConfiguration,
+	scopedSettings?: Record<string, unknown>,
+): string | undefined {
 	const baseUrlMap: Record<string, keyof ApiConfiguration> = {
 		anthropic: "anthropicBaseUrl",
 		openai: "openAiBaseUrl",
@@ -1011,6 +1026,14 @@ export function resolveBaseUrl(providerId: string, config: ApiConfiguration): st
 		if (fromState) {
 			return fromState
 		}
+	}
+
+	const scoped = normalizeSdkBaseUrl(
+		providerId,
+		typeof scopedSettings?.baseUrl === "string" ? scopedSettings.baseUrl : undefined,
+	)
+	if (scoped) {
+		return scoped
 	}
 
 	// SDK-backed providers save their base URL in providers.json instead of
@@ -2020,8 +2043,12 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 					| undefined)
 			: undefined
 		const visionContextWindow = visionProviderSettings?.contextWindow
+		const visionBaseUrl = visionProvider
+			? resolveBaseUrl(visionProvider, visionApiConfiguration, visionProviderSettings)
+			: undefined
 		Logger.log(
 			`[Vision] Describer installed: provider=${visionProvider} model=${resolvedVisionModel ?? "unset"}` +
+				(visionBaseUrl ? ` baseUrl=${visionBaseUrl}` : "") +
 				(typeof visionContextWindow === "number" ? ` contextWindow=${visionContextWindow}` : ""),
 		)
 	}
