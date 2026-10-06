@@ -1497,6 +1497,74 @@ export async function runCli(): Promise<void> {
 			config.extraTools = [...(config.extraTools ?? []), ...mediaTools];
 		}
 
+		// The Library, off unless asked for: `--library` or `CLINE_LIBRARY=1`
+		// offers search_library and list_library; `--librarian` (or
+		// `CLINE_LIBRARIAN=1`) adds the librarian's tools, as the extension does
+		// when that skill is on. The scraping endpoint is named by environment,
+		// as there is no Features panel here. Pictures are described by
+		// `--vision-model` when one is given.
+		const librarian =
+			args.librarian === true || process.env.CLINE_LIBRARIAN === "1";
+		if (
+			librarian ||
+			args.library === true ||
+			process.env.CLINE_LIBRARY === "1"
+		) {
+			const {
+				createLibraryTools,
+				DEFAULT_LIBRARY_SETTINGS,
+				DEFAULT_SCRAPE_SETTINGS,
+			} = await import("@cline/core");
+			const embeddingBaseUrl = process.env.CLINE_EMBEDDING_BASE_URL?.trim();
+			const embeddingModel = process.env.CLINE_EMBEDDING_MODEL?.trim();
+			const embeddingApiKey = process.env.CLINE_EMBEDDING_API_KEY?.trim();
+			const scrapeBaseUrl = process.env.CLINE_SCRAPE_BASE_URL?.trim();
+			const scrapeApiKey = process.env.CLINE_SCRAPE_API_KEY?.trim();
+			const limit = (value: string | undefined, fallback: number) => {
+				const parsed = Number(value);
+				return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+			};
+			const libraryTools = createLibraryTools({
+				cwd,
+				librarian,
+				getConfig: () => ({
+					settings: { ...DEFAULT_LIBRARY_SETTINGS, enabled: true },
+					...(embeddingBaseUrl && embeddingModel
+						? {
+								embedding: {
+									baseUrl: embeddingBaseUrl,
+									model: embeddingModel,
+									...(embeddingApiKey ? { apiKey: embeddingApiKey } : {}),
+								},
+							}
+						: {}),
+					...(scrapeBaseUrl
+						? {
+								scrape: {
+									baseUrl: scrapeBaseUrl,
+									...(scrapeApiKey ? { apiKey: scrapeApiKey } : {}),
+									maxPages: limit(
+										process.env.CLINE_SCRAPE_MAX_PAGES,
+										DEFAULT_SCRAPE_SETTINGS.maxPages,
+									),
+									maxDepth: limit(
+										process.env.CLINE_SCRAPE_MAX_DEPTH,
+										DEFAULT_SCRAPE_SETTINGS.maxDepth,
+									),
+								},
+							}
+						: {}),
+				}),
+				getDescribeImages: () => config.describeImages,
+				log: (message) => loggerAdapter.core.log(message),
+				onError: (message, error) =>
+					loggerAdapter.core.log(
+						`${message}: ${error instanceof Error ? error.message : String(error)}`,
+					),
+			});
+			config.extraTools = [...(config.extraTools ?? []), ...libraryTools];
+		}
+
 		// Memory, off unless asked for: `--memory` or `CLINE_MEMORY=1`. The same
 		// tools the extension offers, on the defaults of its Memory panel. An
 		// embedding model is named by environment, as there is no Embedding tab

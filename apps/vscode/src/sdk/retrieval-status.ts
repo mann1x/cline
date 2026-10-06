@@ -11,6 +11,7 @@ import {
 	describeEmbeddingEndpoint,
 	listConfiguredEmbeddingModels,
 } from "./embedding-endpoint"
+import { readLibraryCatalogue, readScrapeState, runLibraryAction } from "./library-catalogue"
 import {
 	installLibraryVectors,
 	libraryVectorsInstallState,
@@ -124,6 +125,8 @@ export async function readRetrievalStatus(): Promise<RetrievalStatus> {
 			vectorSets: memoryVectorSets,
 		},
 		embedJobs: { ...embedJobs },
+		catalogue: await readLibraryCatalogue(),
+		scrape: readScrapeState(),
 		// The folder's name from either kind of separator: the host's own basename knows only its own.
 		workspace: {
 			path,
@@ -139,7 +142,7 @@ export async function readRetrievalStatus(): Promise<RetrievalStatus> {
 
 const fileName = (name: string) => `${name.replace(/[^\p{L}\p{N}._-]+/gu, "-").replace(/^-+|-+$/g, "") || "memory"}.memory.json`
 
-type Outcome = Pick<RetrievalActionResult, "models" | "check">
+type Outcome = Pick<RetrievalActionResult, "models" | "check" | "books" | "book">
 
 async function act(request: RetrievalAction, outcome: Outcome): Promise<string | undefined> {
 	const memory = sharedMemory()
@@ -217,7 +220,7 @@ async function act(request: RetrievalAction, outcome: Outcome): Promise<string |
 			return `Read ${basename(path)} into "${result.memory}"${result.created ? ", a new memory" : ""}: ${result.added} added, ${result.unchanged} already there${result.skipped ? `, ${result.skipped} skipped (empty or too long)` : ""}.`
 		}
 		default:
-			throw new Error("Unknown action.")
+			return runLibraryAction(request, outcome)
 	}
 }
 

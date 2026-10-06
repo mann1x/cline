@@ -119,6 +119,7 @@ message Secrets {
   optional string video_api_key = 57;
   optional string embedding_api_key = 58;
   optional string reranking_api_key = 59;
+  optional string scrape_api_key = 60;
 }
 
 // NOTE: Add new fields under API_HANDLER_SETTINGS_FIELDS or USER_SETTINGS_FIELDS
@@ -354,6 +355,8 @@ message Settings {
   optional string library_settings = 239;
   optional bool memory_enabled = 240;
   optional string memory_settings = 241;
+  optional string scrape_settings = 242;
+  optional bool scrape_allowed = 243;
 }
 
 message State {

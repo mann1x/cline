@@ -208,6 +208,16 @@ export interface ParsedArgs {
 	 * folder, so `--data-dir` decides which notes a run sees.
 	 */
 	memory?: boolean;
+	/**
+	 * `--library` (or `CLINE_LIBRARY=1`): offer `search_library` and
+	 * `list_library`, the extension's Library switch.
+	 */
+	library?: boolean;
+	/**
+	 * `--librarian` (or `CLINE_LIBRARIAN=1`): also offer the librarian's
+	 * tools, as the extension does when that skill is on.
+	 */
+	librarian?: boolean;
 	/** `--media-config`: a JSON file naming the media endpoints. */
 	mediaConfig?: string;
 	/**

@@ -16,6 +16,7 @@ import QaCredentialsField from "../QaCredentialsField"
 import Section from "../Section"
 import { updateSetting } from "../utils/settingsHandlers"
 import { DocumentReaderOptions } from "./DocumentReaderOptions"
+import ScrapeSettings from "./ScrapeSettings"
 
 // Reusable checkbox component for feature settings
 interface FeatureCheckboxProps {
@@ -343,6 +344,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 									)}
 								</div>
 							))}
+							<ScrapeSettings />
 							<div className="space-y-2 py-3">
 								<Label className="text-sm font-medium text-foreground" htmlFor="agent-model-override">
 									Agents model

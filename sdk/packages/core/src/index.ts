@@ -1007,6 +1007,7 @@ export {
 	DEFAULT_LIBRARY_SETTINGS,
 	DEFAULT_MEMORY_SELECTION,
 	DEFAULT_MEMORY_SETTINGS,
+	DEFAULT_SCRAPE_SETTINGS,
 	type LibrarySettings,
 	MAIN_MEMORY,
 	type MemorySelection,
@@ -1015,6 +1016,8 @@ export {
 	memoryWorkspaceKey,
 	resolveLibrarySettings,
 	resolveMemorySettings,
+	resolveScrapeSettings,
+	type ScrapeSettings,
 } from "@cline/shared";
 export {
 	createCappedThinkingNoteWriter,

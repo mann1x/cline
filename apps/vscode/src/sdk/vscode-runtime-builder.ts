@@ -23,7 +23,7 @@ import { resolveMcpServerTimeoutMs } from "@/services/mcp/timeout"
 import { Logger } from "@/shared/services/Logger"
 import { createCheckFileTool } from "./check-file-tool"
 import { isJevConfigured, readJevEndpoint } from "./jev-config"
-import { readLibraryToolsConfig, readMemoryToolsConfig } from "./library-config"
+import { readLibraryImageDescriber, readLibraryToolsConfig, readMemoryToolsConfig } from "./library-config"
 import { probeMediaServer, readLeadMediaProvider } from "./media-endpoint-config"
 import { readMediaToolsConfig } from "./media-tools-config"
 import { readQaCredentials } from "./qa-credentials-store"
@@ -222,13 +222,15 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 		}),
 	)
 
-	// The Library's three tools, when the Library panel has it on. They work on
-	// keywords alone; the Embedding tab adds search by meaning. Whether it is on
-	// is read again on every call, like the media tabs.
+	// The Library's tools, when the Library panel has it on: search and list
+	// always, and the librarian's when that skill is on. They work on keywords
+	// alone; the Embedding tab adds search by meaning. Whether it is on is read
+	// again on every call, like the media tabs.
 	tools.push(
 		...createLibraryTools({
 			cwd: options?.cwd ?? process.cwd(),
 			getConfig: readLibraryToolsConfig,
+			getDescribeImages: readLibraryImageDescriber,
 			onError: (message, error) => Logger.error(`${message}:`, error),
 			log: (message) => Logger.log(`[VscodeRuntimeTools] ${message}`),
 		}),

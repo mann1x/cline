@@ -150,6 +150,14 @@ export function addRootOptions(cmd: Command): Command {
 				"Context window for the agents model; omit to use whatever that model declares",
 			)
 			.option(
+				"--library",
+				"Let the model search the Library (search_library, list_library). Embedding model from CLINE_EMBEDDING_BASE_URL and CLINE_EMBEDDING_MODEL; keyword search without them",
+			)
+			.option(
+				"--librarian",
+				"Also let the model add to and reorganise the Library (implies --library). Web scraping through the Firecrawl endpoint in CLINE_SCRAPE_BASE_URL, with CLINE_SCRAPE_API_KEY when it needs one",
+			)
+			.option(
 				"--memory",
 				"Let the model keep notes between tasks (remember, recall, forget). Embedding model from CLINE_EMBEDDING_BASE_URL and CLINE_EMBEDDING_MODEL; keyword search without them",
 			)
@@ -556,6 +564,8 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 	if (opts.expertMaxFollowUps !== undefined)
 		result.expertMaxFollowUps = opts.expertMaxFollowUps;
 	if (opts.memory !== undefined) result.memory = !!opts.memory;
+	if (opts.library !== undefined) result.library = !!opts.library;
+	if (opts.librarian !== undefined) result.librarian = !!opts.librarian;
 	if (opts.mediaProvider !== undefined)
 		result.mediaProvider = !!opts.mediaProvider;
 	if (typeof opts.mediaConfig === "string")

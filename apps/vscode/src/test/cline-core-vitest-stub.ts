@@ -68,6 +68,7 @@ export {
 	getBuiltinPromptTemplateSource,
 	getBuiltinPromptTemplates,
 } from "../../../../sdk/packages/core/src/extensions/config/builtin-templates"
+export { setBundledSkillEnabled } from "../../../../sdk/packages/core/src/extensions/config/bundled-skills"
 // Prompt templates are re-exported from source rather than stubbed: the
 // session factory both resolves a template and layers its hooks into the
 // stack, and a stub that returned nothing would let a broken layering pass.
@@ -165,7 +166,11 @@ export {
 } from "../../../../sdk/packages/core/src/extensions/tools/jev"
 // From source: the Library's defaults are the panel's defaults, and a stub
 // of them would let the two drift apart unseen.
-export { createLibraryTools } from "../../../../sdk/packages/core/src/extensions/tools/library-tools"
+export {
+	createLibraryTools,
+	isLibrarianEnabled,
+	LIBRARIAN_SKILL_NAME,
+} from "../../../../sdk/packages/core/src/extensions/tools/library-tools"
 export {
 	listMediaModels,
 	MEDIA_KINDS,
@@ -212,11 +217,13 @@ export {
 	StoredModelEntrySchema,
 	syncStoredProviderRegistration,
 } from "../../../../sdk/packages/core/src/services/providers/local-provider-registry"
+export { TRASH_DAYS } from "../../../../sdk/packages/core/src/services/retrieval/catalogue"
 export {
 	embedTexts,
 	rerankDocuments,
 	resolveRetrievalBaseUrl,
 } from "../../../../sdk/packages/core/src/services/retrieval/embedding-client"
+export { scrapePage } from "../../../../sdk/packages/core/src/services/retrieval/firecrawl"
 export {
 	installLanceDb,
 	isLanceDbInstalled,
@@ -243,6 +250,7 @@ export {
 	renameMemoryInSelections,
 	resolveMemorySettings,
 } from "../../../../sdk/packages/shared/src/retrieval/memory-settings"
+export { resolveScrapeSettings } from "../../../../sdk/packages/shared/src/retrieval/scrape-settings"
 
 export type GlobalCompactionStrategy = "basic" | "agentic"
 

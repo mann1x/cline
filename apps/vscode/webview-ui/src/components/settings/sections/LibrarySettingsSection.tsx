@@ -1,4 +1,5 @@
 import { DEFAULT_LIBRARY_SETTINGS, type LibrarySettings, resolveLibrarySettings } from "@cline/shared"
+import { parseApiConfigurationProfiles } from "@shared/api-config-profiles"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { embeddingEndpointConfigured, parseRetrievalEndpoints, rerankingEndpointConfigured } from "@shared/retrieval-endpoints"
 import { VSCodeDropdown, VSCodeOption } from "@vscode/webview-ui-toolkit/react"
@@ -10,6 +11,7 @@ import { DebouncedTextField } from "../common/DebouncedTextField"
 import { SettingsCheckbox } from "../common/SettingsCheckbox"
 import Section from "../Section"
 import { useRetrievalStatus } from "../utils/useRetrievalStatus"
+import LibraryBrowser from "./LibraryBrowser"
 import RetrievalEngineStatus from "./RetrievalEngineStatus"
 
 interface LibrarySettingsSectionProps {
@@ -40,12 +42,19 @@ const hint = "text-xs -mt-2 text-(--vscode-descriptionForeground)"
  * configuration, with the other models.
  */
 const LibrarySettingsSection = ({ renderSectionHeader }: LibrarySettingsSectionProps) => {
-	const { libraryEnabled, librarySettings, embeddingEnabled, retrievalEndpoints } = useExtensionState()
+	const { libraryEnabled, librarySettings, embeddingEnabled, retrievalEndpoints, apiConfigurationProfiles } =
+		useExtensionState()
 	const retrieval = useRetrievalStatus()
 	const settings = useMemo(() => parseLibrarySettings(librarySettings), [librarySettings])
 	const endpoints = useMemo(() => parseRetrievalEndpoints(retrievalEndpoints), [retrievalEndpoints])
 	const embedding = embeddingEnabled && embeddingEndpointConfigured(endpoints)
 	const reranking = embeddingEnabled && rerankingEndpointConfigured(endpoints)
+	const profileNames = useMemo(
+		() => parseApiConfigurationProfiles(apiConfigurationProfiles).map((profile) => profile.name),
+		[apiConfigurationProfiles],
+	)
+	// A profile deleted after it was picked is still shown, as gone.
+	const imageProfileMissing = settings.imageProfile !== "" && !profileNames.includes(settings.imageProfile)
 
 	const save = useCallback(
 		async (patch: Partial<LibrarySettings>) => {
@@ -98,11 +107,11 @@ const LibrarySettingsSection = ({ renderSectionHeader }: LibrarySettingsSectionP
 						Enable the Library
 					</SettingsCheckbox>
 					<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
-						A place for the documents you want the model to be able to look things up in: books, manuals, papers,
-						notes. The model gets <code>add_to_library</code>, which takes files and folders (text and markdown as
-						they are; PDF, Office and ebooks through the Document Reader), <code>search_library</code>, which returns
-						the passages that best answer a question, and <code>list_library</code>. The Library is kept in
-						Cerebriline's data folder and is the same in every workspace. It applies from the next task.
+						A place for what you want the model to be able to look things up in: ebooks, manuals, papers, notes and
+						web pages, kept as books on shelves, in sections. The model gets <code>search_library</code>, which
+						returns the passages that best answer a question, and <code>list_library</code>. Adding and reorganising
+						is the librarian's, below. A book keeps its original files, their text and their pictures; the Library is
+						in Cerebriline's data folder and is the same in every workspace. It applies from the next task.
 					</p>
 					{libraryEnabled ? (
 						<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
@@ -117,6 +126,56 @@ const LibrarySettingsSection = ({ renderSectionHeader }: LibrarySettingsSectionP
 				{libraryEnabled ? (
 					<>
 						<RetrievalEngineStatus kind="library" retrieval={retrieval} />
+
+						<LibraryBrowser retrieval={retrieval} />
+
+						<div className="pt-3 border-t border-(--vscode-panel-border) font-medium">Pictures</div>
+						<SettingsCheckbox
+							checked={settings.describeImages}
+							onChange={(checked) => void save({ describeImages: checked })}>
+							Describe the pictures of a book as it is added
+						</SettingsCheckbox>
+						<p className={hint}>
+							A book's pictures are always taken out and kept with it. Described, a figure can be found by what it
+							shows: the description becomes part of the page it is on. Each picture is one request to a vision
+							model.
+						</p>
+						{settings.describeImages ? (
+							<>
+								<div>
+									<label className="font-medium text-sm block mb-1" htmlFor="library-image-profile">
+										Profile whose model describes them
+									</label>
+									<VSCodeDropdown
+										className="w-full"
+										id="library-image-profile"
+										onChange={(event: any) => void save({ imageProfile: String(event.target.value ?? "") })}
+										value={settings.imageProfile}>
+										<VSCodeOption value="">The Vision tab's model</VSCodeOption>
+										{imageProfileMissing ? (
+											<VSCodeOption value={settings.imageProfile}>
+												{settings.imageProfile} (deleted)
+											</VSCodeOption>
+										) : null}
+										{profileNames.map((name) => (
+											<VSCodeOption key={name} value={name}>
+												{name}
+											</VSCodeOption>
+										))}
+									</VSCodeDropdown>
+									<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
+										{settings.imageProfile === "" || imageProfileMissing
+											? "With no profile picked, the model on the Vision tab of the API configuration is used; with none there either, pictures are kept without a description."
+											: "One of the profiles saved in the API configuration: a cheap, fast model that reads images. Its provider, model, window and sampler are used; the key is the one stored for that provider."}
+									</p>
+								</div>
+								{number(
+									"describeImagesLimit",
+									"Pictures described per file",
+									"The first this many pictures of each file are described; the rest are kept without. Bullets and icons are skipped.",
+								)}
+							</>
+						) : null}
 
 						<div className="pt-3 border-t border-(--vscode-panel-border) font-medium">Splitting documents</div>
 						<p className={hint}>

@@ -108,6 +108,9 @@ export interface RetrievalStatus {
 	embedJobs: { library?: RetrievalEmbedJob; memory?: RetrievalEmbedJob }
 	/** The workspace the panel is open in. */
 	workspace: { path: string; key: string; name: string }
+	/** The Library's sections and shelves. */
+	catalogue: LibraryCatalogueView
+	scrape: ScrapeState
 }
 
 export interface RetrievalActionResult {
@@ -118,6 +121,9 @@ export interface RetrievalActionResult {
 	/** What an asking action answered with: a model list, or a check's result. */
 	models?: RetrievalEmbeddingModels
 	check?: RetrievalEndpointCheck
+	/** What a listing action answered with. */
+	books?: LibraryBookView[]
+	book?: LibraryBookDetails
 	status: RetrievalStatus
 }
 
@@ -134,3 +140,116 @@ export type RetrievalAction =
 	| { action: "deleteMemory"; name: string }
 	| { action: "exportMemory"; name: string }
 	| { action: "importMemory"; into?: string }
+	| LibraryAction
+
+// ---- the Library's shelves, for the panel that browses them ----
+
+export interface LibraryShelfView {
+	id: number
+	sectionId: number
+	name: string
+	description: string
+	books: number
+	passages: number
+}
+
+export interface LibrarySectionView {
+	id: number
+	name: string
+	description: string
+	shelves: LibraryShelfView[]
+}
+
+export interface LibraryBookView {
+	id: number
+	title: string
+	description: string
+	shelfId?: number
+	authors?: string[]
+	edition?: string
+	year?: number
+	sources: number
+	passages: number
+	/** Made from web pages. */
+	web: boolean
+	updatedAt: string
+	trashedAt?: string
+	/** Where a trashed book stood, as "Section / Shelf". */
+	trashedFrom?: string
+	/** The day the trash lets go of it. */
+	purgedOn?: string
+}
+
+export interface LibrarySourceView {
+	id: number
+	kind: "file" | "web" | "text"
+	name: string
+	url?: string
+	bytes: number
+	addedAt: string
+	removedAt?: string
+}
+
+export interface LibraryBookDetails extends LibraryBookView {
+	/** The book's folder on disk. */
+	directory: string
+	metadata: Record<string, unknown>
+	sourceList: LibrarySourceView[]
+	pictures: number
+	describedPictures: number
+}
+
+export interface LibraryCatalogueView {
+	sections: LibrarySectionView[]
+	books: number
+	trash: number
+	problems: string[]
+	/** The librarian skill is on, so the model can add to and reorganise the Library. */
+	librarian: boolean
+	trashDays: number
+}
+
+/** The scraping endpoint as it is set up, and what stops it when something does. */
+export interface ScrapeState {
+	enabled: boolean
+	/** The tick in the API configuration. */
+	allowed: boolean
+	baseUrl: string
+	maxPages: number
+	maxDepth: number
+	keySet: boolean
+	problem?: string
+}
+
+export type LibraryAction =
+	| { action: "libraryBooks"; shelfId: number }
+	| { action: "libraryTrash" }
+	| { action: "libraryBook"; bookId: number }
+	| { action: "librarySection"; op: "create" | "update" | "delete"; id?: number; name?: string; description?: string }
+	| {
+			action: "libraryShelf"
+			op: "create" | "update" | "delete"
+			id?: number
+			sectionId?: number
+			name?: string
+			description?: string
+	  }
+	| { action: "libraryBookEdit"; bookId: number; title?: string; description?: string; shelfId?: number }
+	| { action: "libraryBookDelete"; bookId: number }
+	| { action: "libraryBookRestore"; bookId: number }
+	| { action: "libraryBookPurge"; bookId: number }
+	| { action: "libraryEmptyTrash" }
+	| { action: "librarySource"; op: "remove" | "restore"; sourceId: number }
+	| { action: "libraryExport"; sectionId?: number; shelfId?: number; bookId?: number }
+	| { action: "libraryImport"; existing?: "skip" | "replace" | "copy" }
+	| { action: "setLibrarian"; enabled: boolean }
+	| {
+			action: "setScrape"
+			enabled?: boolean
+			allowed?: boolean
+			baseUrl?: string
+			maxPages?: number
+			maxDepth?: number
+			apiKey?: string
+	  }
+	| { action: "checkScrape" }

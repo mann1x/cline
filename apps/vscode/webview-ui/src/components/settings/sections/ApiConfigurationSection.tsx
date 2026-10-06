@@ -24,6 +24,7 @@ import { flushPendingEdits } from "../utils/pendingEdits"
 import { syncModeConfigurations } from "../utils/providerUtils"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
 import type { ApiConfigurationProfileScope } from "../utils/useApiConfigurationProfiles"
+import { useRetrievalStatus } from "../utils/useRetrievalStatus"
 import VideoTab from "../VideoTab"
 import VisionModelTab from "../VisionModelTab"
 
@@ -84,6 +85,7 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		mode,
 		apiConfiguration,
 	} = useExtensionState()
+	const retrieval = useRetrievalStatus()
 	// Enabled with nothing on the Vision tab describes nothing. Said here
 	// because this is where it is switched on, and because the alternative was
 	// finding out from a failed run: the primary model gets the image, and a
@@ -655,6 +657,24 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 								</p>
 							) : null}
 						</div>
+
+						{retrieval.status?.scrape.enabled ? (
+							<div className="mb-[5px]">
+								<SettingsCheckbox
+									checked={retrieval.status.scrape.allowed}
+									className="mb-[5px]"
+									onChange={async (checked: boolean) => {
+										await retrieval.run({ action: "setScrape", allowed: checked })
+									}}>
+									Allow web scraping
+								</SettingsCheckbox>
+								<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
+									Lets a task acting as librarian search the web, read pages and crawl sites through the
+									scraping endpoint set under Settings &gt; Features, to make books for the Library. Pages are
+									fetched from the open web on your behalf. Unticked, the web tools are never offered.
+								</p>
+							</div>
+						) : null}
 
 						<div className="mb-[5px]">
 							<SettingsCheckbox

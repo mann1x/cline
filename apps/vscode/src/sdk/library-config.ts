@@ -1,6 +1,7 @@
 import {
 	installLanceDb,
 	isLanceDbInstalled,
+	type LibraryScrapeConfig,
 	type LibrarySettings,
 	type LibraryToolsConfig,
 	lanceDbInstallBytes,
@@ -12,7 +13,12 @@ import {
 	resolveLanceDbRuntimeDirectory,
 	resolveLibrarySettings,
 	resolveMemorySettings,
+	resolveScrapeSettings,
+	type ScrapeSettings,
 } from "@cline/core"
+import type { AgentImageToDescribe } from "@cline/shared"
+import { findApiConfigurationProfile, parseApiConfigurationProfiles } from "@shared/api-config-profiles"
+import { resolveVisionModelStatus } from "@shared/vision-config"
 import { StateManager } from "@/core/storage/StateManager"
 import { HostProvider } from "@/hosts/host-provider"
 import { ShowMessageType } from "@/shared/proto/host/window"
@@ -20,6 +26,7 @@ import { embeddingEndpointConfigured, parseRetrievalEndpoints, rerankingEndpoint
 import { Logger } from "@/shared/services/Logger"
 import { ensureBaseUrlScheme } from "./cline-session-factory"
 import { readLeadMediaProvider } from "./media-endpoint-config"
+import { buildScopedApiConfiguration, buildVisionApiConfiguration, createVisionImageDescriber } from "./vision-model"
 
 /**
  * The Library panel and the Embedding tab as the one configuration core
@@ -94,6 +101,84 @@ export function readRerankingEndpoint(): RetrievalEndpoint | undefined {
 	}
 }
 
+/** The scraper's settings in use: what is stored, over the defaults. */
+export function readScrapeSettings(): ScrapeSettings {
+	let stored: Record<string, unknown> = {}
+	try {
+		const parsed = JSON.parse(StateManager.get().getGlobalSettingsKey("scrapeSettings") || "{}")
+		if (typeof parsed === "object" && parsed !== null) {
+			stored = parsed as Record<string, unknown>
+		}
+	} catch {
+		// Unreadable storage is the defaults.
+	}
+	return resolveScrapeSettings(stored)
+}
+
+/**
+ * The scraping endpoint, when it may be used: turned on with an address
+ * under Features, and allowed in the API configuration. Either one missing
+ * and the librarian has no web tools.
+ */
+export function readScrapeConfig(): LibraryScrapeConfig | undefined {
+	const state = StateManager.get()
+	const settings = readScrapeSettings()
+	if (!settings.enabled || !settings.baseUrl || state.getGlobalSettingsKey("scrapeAllowed") !== true) {
+		return undefined
+	}
+	const apiKey = state.getSecretKey("scrapeApiKey")?.trim() || undefined
+	return {
+		baseUrl: ensureBaseUrlScheme(settings.baseUrl),
+		maxPages: settings.maxPages,
+		maxDepth: settings.maxDepth,
+		...(apiKey ? { apiKey } : {}),
+	}
+}
+
+type ImageDescriber = (images: readonly AgentImageToDescribe[]) => Promise<readonly (string | undefined)[]>
+
+/**
+ * The model that describes a book's pictures: the saved profile the Library
+ * panel names, and without one the Vision tab's model. `undefined` when
+ * neither is there, and the pictures are then kept without descriptions.
+ * Read when a book is added, so a profile picked mid-session is the one used.
+ */
+export function readLibraryImageDescriber(): ImageDescriber | undefined {
+	const state = StateManager.get()
+	const primary = state.getApiConfiguration()
+	const named = readLibrarySettings().imageProfile
+	if (named) {
+		const profile = findApiConfigurationProfile(
+			parseApiConfigurationProfiles(state.getGlobalSettingsKey("apiConfigurationProfiles")),
+			named,
+		)
+		const configuration = profile ? buildScopedApiConfiguration(primary, JSON.stringify(profile.snapshot)) : undefined
+		if (profile && configuration) {
+			return createVisionImageDescriber(
+				configuration,
+				profile.snapshot.providerConfig as Record<string, unknown> | undefined,
+			)
+		}
+		Logger.warn(`[Library] The profile "${named}" named for describing pictures is gone or names no provider`)
+	}
+	const snapshot = state.getGlobalSettingsKey("visionModeApiConfiguration")
+	if (resolveVisionModelStatus(state.getGlobalSettingsKey("visionModelEnabled"), snapshot) !== "ready") {
+		return undefined
+	}
+	const configuration = buildVisionApiConfiguration(primary, snapshot)
+	if (!configuration) {
+		return undefined
+	}
+	let providerSettings: Record<string, unknown> | undefined
+	try {
+		const held = typeof snapshot === "string" && snapshot ? JSON.parse(snapshot)?.providerConfig : undefined
+		providerSettings = held && typeof held === "object" ? (held as Record<string, unknown>) : undefined
+	} catch {
+		providerSettings = undefined
+	}
+	return createVisionImageDescriber(configuration, providerSettings)
+}
+
 function readOcrEngine(value: string | undefined): "tesseract" | "vision" | "off" {
 	return value === "vision" || value === "off" ? value : "tesseract"
 }
@@ -107,6 +192,7 @@ export function readLibraryToolsConfig(): LibraryToolsConfig | undefined {
 	const state = StateManager.get()
 	const embedding = readEmbeddingEndpoint()
 	const reranker = readRerankingEndpoint()
+	const scrape = readScrapeConfig()
 	// A book is read the way the Document Reader is set to read. The vision
 	// engine needs a model in the conversation, which indexing has not got.
 	const ocr = readOcrEngine(state.getGlobalSettingsKey("extractDocumentOcr"))
@@ -114,6 +200,7 @@ export function readLibraryToolsConfig(): LibraryToolsConfig | undefined {
 		settings,
 		...(embedding ? { embedding } : {}),
 		...(reranker ? { reranker } : {}),
+		...(scrape ? { scrape } : {}),
 		documentReader: {
 			ocr: ocr === "vision" ? "tesseract" : ocr,
 			ocrLanguages: parseOcrLanguages(state.getGlobalSettingsKey("extractDocumentOcrLanguages") ?? "eng"),

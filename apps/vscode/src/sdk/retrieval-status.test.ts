@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 
 const host = vi.hoisted(() => ({
 	settings: {} as Record<string, unknown>,
+	secrets: {} as Record<string, string | undefined>,
 	cwd: "C:\\Dev\\tally",
 	savePath: undefined as string | undefined,
 	openPath: undefined as string | undefined,
@@ -14,8 +15,14 @@ vi.mock("@/core/storage/StateManager", () => ({
 	StateManager: {
 		get: () => ({
 			getGlobalSettingsKey: (key: string) => host.settings[key],
-			getSecretKey: () => undefined,
+			getSecretKey: (key: string) => host.secrets[key],
 			getApiConfiguration: () => ({}),
+			setGlobalState: (key: string, value: unknown) => {
+				host.settings[key] = value
+			},
+			setSecret: (key: string, value: string | undefined) => {
+				host.secrets[key] = value
+			},
 		}),
 	},
 }))
@@ -134,5 +141,135 @@ describe("what the Library and Memory panels ask of the host", () => {
 		expect(result.ok).toBe(false)
 		expect(result.status.memory.memories).toHaveLength(1)
 		expect((await act({ action: "nonsense" })).error).toBe("Unknown action.")
+	})
+	describe("the Library's shelves", () => {
+		const PROSE = Array.from({ length: 60 }, (_unused, n) => `Sentence ${n} about tilemap layers and their cells.`).join(" ")
+
+		it("starts with no shelves, no trash, and the librarian off", async () => {
+			const { catalogue, scrape } = await readRetrievalStatus()
+			expect(catalogue).toEqual({ sections: [], books: 0, trash: 0, problems: [], librarian: false, trashDays: 30 })
+			expect(scrape).toEqual({ enabled: false, allowed: false, baseUrl: "", maxPages: 100, maxDepth: 3, keySet: false })
+		})
+
+		it("makes sections and shelves, lists a shelf's books, and edits and moves a book", async () => {
+			const made = await act({ action: "librarySection", op: "create", name: "Game development" })
+			const section = made.status.catalogue.sections[0]
+			await act({ action: "libraryShelf", op: "create", sectionId: section.id, name: "Godot" })
+			const other = await act({ action: "libraryShelf", op: "create", sectionId: section.id, name: "Unity" })
+			const [godot, unity] = other.status.catalogue.sections[0].shelves
+			const catalogue = sharedLibrary().catalogue
+			const book = catalogue.createBook({ shelfId: godot.id, title: "Tilemaps", metadata: { authors: ["A. Writer"] } })
+			await catalogue.addSource(book.id, { kind: "text", name: "notes", text: PROSE })
+
+			const listed = await act({ action: "libraryBooks", shelfId: godot.id })
+			expect(listed.books).toMatchObject([{ title: "Tilemaps", authors: ["A. Writer"], sources: 1, web: false }])
+			expect(listed.status.catalogue).toMatchObject({ books: 1, trash: 0 })
+
+			await act({ action: "libraryBookEdit", bookId: book.id, title: "Godot Tilemaps", shelfId: unity.id })
+			expect((await act({ action: "libraryBooks", shelfId: unity.id })).books).toMatchObject([{ title: "Godot Tilemaps" }])
+			const details = await act({ action: "libraryBook", bookId: book.id })
+			expect(details.book).toMatchObject({
+				title: "Godot Tilemaps",
+				pictures: 0,
+				sourceList: [{ kind: "text", name: "notes" }],
+			})
+			expect(details.book?.directory).toContain(join("library", "books"))
+
+			const renamed = await act({ action: "libraryShelf", op: "update", id: unity.id, name: "Engines" })
+			expect(renamed.status.catalogue.sections[0].shelves.map((shelf) => shelf.name)).toEqual(["Engines", "Godot"])
+			expect((await act({ action: "librarySection", op: "create", name: " " })).error).toContain("needs a name")
+		})
+
+		it("sends a deleted book to the trash, and deletes for good only from there", async () => {
+			const [book] = sharedLibrary().catalogue.books()
+			expect((await act({ action: "libraryBookPurge", bookId: book.id })).error).toContain("Only a book in the trash")
+			const deleted = await act({ action: "libraryBookDelete", bookId: book.id })
+			expect(deleted.message).toContain("is in the trash for 30 days")
+			expect(deleted.status.catalogue).toMatchObject({ books: 0, trash: 1 })
+			const trash = await act({ action: "libraryTrash" })
+			expect(trash.books).toMatchObject([{ title: "Godot Tilemaps", trashedFrom: "Game development / Engines" }])
+			expect(trash.books?.[0].purgedOn).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+			const restored = await act({ action: "libraryBookRestore", bookId: book.id })
+			expect(restored.message).toContain("is back on Game development / Engines")
+			expect(restored.status.catalogue).toMatchObject({ books: 1, trash: 0 })
+		})
+
+		it("exports a shelf to the file chosen and reads it back in", async () => {
+			const [book] = sharedLibrary().catalogue.books()
+			host.savePath = join(root, "engines.library.tar.gz")
+			const exported = await act({ action: "libraryExport", shelfId: book.shelfId })
+			expect(exported.message).toContain("Wrote 1 book")
+			host.openPath = host.savePath
+			expect((await act({ action: "libraryImport" })).message).toContain('left out "Godot Tilemaps" (it is already here)')
+			const copied = await act({ action: "libraryImport", existing: "copy" })
+			expect(copied.message).toBe("Imported 1 book.")
+			expect(copied.status.catalogue.books).toBe(2)
+			host.savePath = undefined
+			expect((await act({ action: "libraryExport" })).message).toBeUndefined()
+		})
+
+		it("empties the trash when asked to", async () => {
+			const books = sharedLibrary().catalogue.books()
+			await act({ action: "libraryBookDelete", bookId: books[1].id })
+			const emptied = await act({ action: "libraryEmptyTrash" })
+			expect(emptied.message).toBe("The trash is empty: 1 book deleted.")
+			expect(emptied.status.catalogue).toMatchObject({ books: 1, trash: 0 })
+		})
+
+		it("turns the librarian on and off", async () => {
+			expect((await act({ action: "setLibrarian", enabled: true })).status.catalogue.librarian).toBe(true)
+			expect((await act({ action: "setLibrarian", enabled: false })).status.catalogue.librarian).toBe(false)
+		})
+
+		it("keeps the scraper's settings, never its key, and says what stops it", async () => {
+			const set = await act({
+				action: "setScrape",
+				enabled: true,
+				baseUrl: "192.168.178.2:3002",
+				maxPages: 50,
+				apiKey: " k ",
+			})
+			expect(set.status.scrape).toEqual({
+				enabled: true,
+				allowed: false,
+				baseUrl: "192.168.178.2:3002",
+				maxPages: 50,
+				maxDepth: 3,
+				keySet: true,
+				problem: "Not allowed yet: tick “Allow web scraping” in the API configuration.",
+			})
+			expect(JSON.stringify(set)).not.toContain('"k"')
+			expect(host.secrets.scrapeApiKey).toBe("k")
+			const allowed = await act({ action: "setScrape", allowed: true })
+			expect(allowed.status.scrape.problem).toBeUndefined()
+			expect(allowed.status.scrape.maxPages).toBe(50)
+		})
+
+		it("checks the scraping endpoint with one real request", async () => {
+			const seen: { url: string; key: string }[] = []
+			const realFetch = globalThis.fetch
+			globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+				seen.push({ url: String(input), key: (init?.headers as Record<string, string>).Authorization })
+				return Response.json({
+					success: true,
+					data: {
+						html: "<h1>Example Domain</h1>",
+						metadata: { sourceURL: "https://example.com/", title: "Example Domain" },
+					},
+				})
+			}) as typeof fetch
+			try {
+				const checked = await act({ action: "checkScrape" })
+				expect(checked.check).toEqual({
+					ok: true,
+					detail: "Read https://example.com/ (“Example Domain”): 16 characters.",
+				})
+				expect(seen).toEqual([{ url: "http://192.168.178.2:3002/v2/scrape", key: "Bearer k" }])
+				globalThis.fetch = (async () => new Response("no", { status: 401 })) as unknown as typeof fetch
+				expect((await act({ action: "checkScrape" })).check).toMatchObject({ ok: false })
+			} finally {
+				globalThis.fetch = realFetch
+			}
+		})
 	})
 })

@@ -8,6 +8,7 @@ const state = {
 	librarySettings: "",
 	embeddingEnabled: false,
 	retrievalEndpoints: "",
+	apiConfigurationProfiles: "",
 }
 
 vi.mock("@/context/ExtensionStateContext", () => ({
@@ -52,10 +53,19 @@ const baseStatus = () => ({
 	},
 	embedJobs: {} as Record<string, Record<string, unknown>>,
 	workspace: { path: "C:\\Dev\\tally", key: "c:/dev/tally", name: "tally" },
+	catalogue: {
+		sections: [] as Array<Record<string, unknown>>,
+		books: 0,
+		trash: 0,
+		problems: [] as string[],
+		librarian: false,
+		trashDays: 30,
+	},
+	scrape: { enabled: false, allowed: false, baseUrl: "", maxPages: 100, maxDepth: 3, keySet: false } as Record<string, unknown>,
 })
 let status = baseStatus()
 const actions: Array<Record<string, unknown>> = []
-const respond: (action: Record<string, unknown>) => Record<string, unknown> = () => ({ ok: true })
+let respond: (action: Record<string, unknown>) => Record<string, unknown> = () => ({ ok: true })
 const retrievalAction = vi.fn(async (request: { value: string }) => {
 	const action = JSON.parse(request.value)
 	actions.push(action)
@@ -85,6 +95,10 @@ describe("the Library panel", () => {
 		state.librarySettings = ""
 		state.embeddingEnabled = false
 		state.retrievalEndpoints = ""
+		state.apiConfigurationProfiles = ""
+		status = baseStatus()
+		actions.length = 0
+		respond = () => ({ ok: true })
 		updateSettings.mockClear()
 	})
 
@@ -263,5 +277,211 @@ describe("the Library panel", () => {
 		await waitFor(() =>
 			expect(actions).toContainEqual({ action: "deleteVectors", target: "library", table: "vectors_old_768" }),
 		)
+	})
+
+	describe("the shelves", () => {
+		const shelved = () => {
+			status.catalogue = {
+				sections: [
+					{
+						id: 1,
+						name: "Game development",
+						description: "",
+						shelves: [
+							{ id: 10, sectionId: 1, name: "Godot", description: "", books: 1, passages: 40 },
+							{ id: 11, sectionId: 1, name: "Unity", description: "", books: 0, passages: 0 },
+						],
+					},
+				],
+				books: 1,
+				trash: 1,
+				problems: ['"Empty" has no sources'],
+				librarian: false,
+				trashDays: 30,
+			}
+			const book = {
+				id: 5,
+				title: "Godot Tilemaps",
+				description: "How tilemaps work.",
+				shelfId: 10,
+				authors: ["A. Writer"],
+				edition: "2nd",
+				sources: 2,
+				passages: 40,
+				web: false,
+				updatedAt: "",
+			}
+			respond = (action) =>
+				action.action === "libraryBooks"
+					? { ok: true, books: action.shelfId === 10 ? [book] : [] }
+					: action.action === "libraryTrash"
+						? {
+								ok: true,
+								books: [
+									{
+										...book,
+										id: 6,
+										title: "Old Notes",
+										shelfId: undefined,
+										trashedAt: "2026-10-01T00:00:00.000Z",
+										trashedFrom: "Game development / Godot",
+										purgedOn: "2026-10-31",
+									},
+								],
+							}
+						: action.action === "libraryBook"
+							? {
+									ok: true,
+									book: {
+										...book,
+										directory: "C:/data/library/books/abc",
+										metadata: {},
+										pictures: 3,
+										describedPictures: 2,
+										sourceList: [
+											{ id: 7, kind: "file", name: "tilemaps.epub", bytes: 2_500_000, addedAt: "" },
+											{
+												id: 8,
+												kind: "web",
+												name: "Recipes",
+												url: "https://example.com/r",
+												bytes: 900,
+												addedAt: "",
+												removedAt: "2026-10-02",
+											},
+										],
+									},
+								}
+							: { ok: true, message: "Done." }
+		}
+		const open = async () => {
+			state.libraryEnabled = true
+			shelved()
+			render(<LibrarySettingsSection renderSectionHeader={header} />)
+			await screen.findByText("Game development")
+		}
+		const sent = (name: string) => actions.filter((action) => action.action === name)
+
+		it("says nothing is on the shelves yet, and offers the librarian", async () => {
+			state.libraryEnabled = true
+			render(<LibrarySettingsSection renderSectionHeader={header} />)
+			expect(await screen.findByText(/Nothing on the shelves yet/)).toBeTruthy()
+			expect(screen.getByText("0 sections, 0 shelves, 0 books")).toBeTruthy()
+			fireEvent.click(screen.getByText("Let the model act as librarian"))
+			await waitFor(() => expect(sent("setLibrarian")).toEqual([{ action: "setLibrarian", enabled: true }]))
+		})
+
+		it("lists sections and shelves with their counts, and what is wrong", async () => {
+			await open()
+			expect(screen.getByText("1 section, 2 shelves, 1 book")).toBeTruthy()
+			expect(screen.getByText("· 1 book")).toBeTruthy()
+			expect(screen.getByText("· 0 books")).toBeTruthy()
+			expect(screen.getByText('"Empty" has no sources')).toBeTruthy()
+			expect(screen.getByText(/1 book, each kept 30 days/)).toBeTruthy()
+		})
+
+		it("opens a shelf to its books, and a book to what it was made from", async () => {
+			await open()
+			fireEvent.click(screen.getByText("Godot"))
+			expect(await screen.findByText("Godot Tilemaps")).toBeTruthy()
+			expect(screen.getByText("(2nd)")).toBeTruthy()
+			expect(screen.getByText(/A\. Writer · 2 sources, 40 passages/)).toBeTruthy()
+			fireEvent.click(screen.getByText("Details"))
+			expect(await screen.findByText("How tilemaps work.")).toBeTruthy()
+			expect(screen.getByText("C:/data/library/books/abc")).toBeTruthy()
+			expect(screen.getByText(/3 pictures, 2 described/)).toBeTruthy()
+			expect(screen.getByText(/tilemaps\.epub/)).toBeTruthy()
+			// A source taken out is shown struck through, with the way back.
+			fireEvent.click(screen.getByText("Restore"))
+			await waitFor(() => expect(sent("librarySource")).toEqual([{ action: "librarySource", op: "restore", sourceId: 8 }]))
+		})
+
+		it("makes a section and a shelf by name", async () => {
+			await open()
+			fireEvent.click(screen.getByText("New section"))
+			const field = screen.getByLabelText("Name of the new section")
+			fireEvent.change(field, { target: { value: "Cooking" } })
+			fireEvent.keyDown(field, { key: "Enter" })
+			await waitFor(() =>
+				expect(sent("librarySection")).toEqual([{ action: "librarySection", op: "create", name: "Cooking" }]),
+			)
+			fireEvent.click(screen.getByText("New shelf"))
+			fireEvent.change(screen.getByLabelText("Name of the new shelf in Game development"), {
+				target: { value: "Unreal" },
+			})
+			fireEvent.click(screen.getByText("Save"))
+			await waitFor(() =>
+				expect(sent("libraryShelf")).toEqual([{ action: "libraryShelf", op: "create", sectionId: 1, name: "Unreal" }]),
+			)
+			expect(await screen.findByText("Done.")).toBeTruthy()
+		})
+
+		it("renames and moves a book, and deletes it only after a second click", async () => {
+			await open()
+			fireEvent.click(screen.getByText("Godot"))
+			await screen.findByText("Godot Tilemaps")
+			fireEvent.change(screen.getByLabelText("Shelf of Godot Tilemaps"), { target: { value: "11" } })
+			await waitFor(() => expect(sent("libraryBookEdit")).toEqual([{ action: "libraryBookEdit", bookId: 5, shelfId: 11 }]))
+			const row = screen.getByText("Godot Tilemaps").closest("div.py-1") as HTMLElement
+			fireEvent.click(Array.from(row.querySelectorAll("vscode-button")).find((b) => b.textContent === "Delete") as Element)
+			expect(sent("libraryBookDelete")).toEqual([])
+			fireEvent.click(screen.getByText("Move to trash"))
+			await waitFor(() => expect(sent("libraryBookDelete")).toEqual([{ action: "libraryBookDelete", bookId: 5 }]))
+		})
+
+		it("shows the trash with the day each book goes, restores, and empties after a second click", async () => {
+			await open()
+			fireEvent.click(screen.getByText("Trash"))
+			expect(await screen.findByText("Old Notes")).toBeTruthy()
+			expect(screen.getByText(/was on Game development \/ Godot · deleted for good on 2026-10-31/)).toBeTruthy()
+			fireEvent.click(screen.getByText("Restore"))
+			await waitFor(() => expect(sent("libraryBookRestore")).toEqual([{ action: "libraryBookRestore", bookId: 6 }]))
+			fireEvent.click(screen.getByText("Empty"))
+			expect(sent("libraryEmptyTrash")).toEqual([])
+			fireEvent.click(screen.getByText("Delete 1 book for good"))
+			await waitFor(() => expect(sent("libraryEmptyTrash")).toHaveLength(1))
+		})
+
+		it("imports, and exports the Library, a section or a shelf", async () => {
+			await open()
+			fireEvent.click(screen.getByText("Import…"))
+			fireEvent.click(screen.getByText("Export all…"))
+			await waitFor(() => expect(sent("libraryExport")).toEqual([{ action: "libraryExport" }]))
+			expect(sent("libraryImport")).toEqual([{ action: "libraryImport" }])
+			const exports = screen.getAllByText("Export")
+			fireEvent.click(exports[0])
+			fireEvent.click(exports[1])
+			await waitFor(() =>
+				expect(sent("libraryExport").slice(1)).toEqual([
+					{ action: "libraryExport", sectionId: 1 },
+					{ action: "libraryExport", shelfId: 10 },
+				]),
+			)
+		})
+	})
+
+	describe("pictures", () => {
+		it("describes pictures with the Vision tab's model until a profile is picked", async () => {
+			state.libraryEnabled = true
+			state.apiConfigurationProfiles = JSON.stringify([{ name: "cheap vision", snapshot: {} }])
+			render(<LibrarySettingsSection renderSectionHeader={header} />)
+			expect(screen.getByText(/With no profile picked, the model on the Vision tab/)).toBeTruthy()
+			const dropdown = document.getElementById("library-image-profile") as HTMLSelectElement
+			dropdown.value = "cheap vision"
+			fireEvent.change(dropdown)
+			await waitFor(() => expect(updateSettings).toHaveBeenCalled())
+			expect(lastSaved().imageProfile).toBe("cheap vision")
+		})
+
+		it("shows a deleted profile as deleted, and hides the choice when describing is off", () => {
+			state.libraryEnabled = true
+			state.librarySettings = JSON.stringify({ imageProfile: "gone" })
+			const { unmount } = render(<LibrarySettingsSection renderSectionHeader={header} />)
+			expect(screen.getByText("gone (deleted)")).toBeTruthy()
+			unmount()
+			state.librarySettings = JSON.stringify({ describeImages: false })
+			render(<LibrarySettingsSection renderSectionHeader={header} />)
+			expect(document.getElementById("library-image-profile")).toBeNull()
+		})
 	})
 })

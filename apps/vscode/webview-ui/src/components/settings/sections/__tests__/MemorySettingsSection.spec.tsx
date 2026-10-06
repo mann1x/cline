@@ -53,6 +53,15 @@ const baseStatus = () => ({
 	},
 	embedJobs: {} as Record<string, Record<string, unknown>>,
 	workspace: { path: "C:\\Dev\\tally", key: "c:/dev/tally", name: "tally" },
+	catalogue: {
+		sections: [] as Array<Record<string, unknown>>,
+		books: 0,
+		trash: 0,
+		problems: [] as string[],
+		librarian: false,
+		trashDays: 30,
+	},
+	scrape: { enabled: false, allowed: false, baseUrl: "", maxPages: 100, maxDepth: 3, keySet: false } as Record<string, unknown>,
 })
 let status = baseStatus()
 const actions: Array<Record<string, unknown>> = []

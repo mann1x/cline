@@ -14,6 +14,8 @@ export interface RetrievalStatusHandle {
 	error: string | undefined
 	busy: boolean
 	run: (action: RetrievalAction) => Promise<RetrievalActionResult | undefined>
+	/** Ask for something without it counting as an action: no busy state, and the last message stays. */
+	ask: (action: RetrievalAction) => Promise<RetrievalActionResult | undefined>
 }
 
 /**
@@ -84,5 +86,5 @@ export function useRetrievalStatus(): RetrievalStatusHandle {
 		return () => clearInterval(timer)
 	}, [installing, call])
 
-	return { status, message, error, busy, run }
+	return { status, message, error, busy, run, ask: call }
 }

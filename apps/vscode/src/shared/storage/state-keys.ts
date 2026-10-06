@@ -363,6 +363,13 @@ const USER_SETTINGS_FIELDS = {
 	librarySettings: { default: "" as string },
 	// JSON `MemorySettings` (`@cline/shared`), as the Memory panel stores them.
 	memorySettings: { default: "" as string },
+	// Web scraping for the librarian. `scrapeSettings` is JSON `ScrapeSettings`
+	// (`@cline/shared`): the Firecrawl endpoint and how far a crawl may go, set
+	// under Features. `scrapeAllowed` is the tick in the API configuration that
+	// lets a session use it; both are needed, because pages are fetched from
+	// the open web on the user's behalf.
+	scrapeSettings: { default: "" as string },
+	scrapeAllowed: { default: false as boolean },
 	// JSON `{model, floor, highStakesFloor, timeoutMs, rankQuestions,
 	// appraiseEscalation}` for Jev, round-tripped whole by its tab like the
 	// image endpoint above. The key is not here -- it is a secret.
@@ -583,6 +590,8 @@ const SECRETS_KEYS = [
 	"videoApiKey",
 	"embeddingApiKey",
 	"rerankingApiKey",
+	// The scraping endpoint's key.
+	"scrapeApiKey",
 	// The Jev key, a secret for the same reason.
 	"jevApiKey",
 	// The key for a custom Jev endpoint (Ollama, xollama, a third party). One
@@ -639,6 +648,7 @@ export const NonApiHandlerSecretKeys = new Set<string>([
 	"videoApiKey",
 	"embeddingApiKey",
 	"rerankingApiKey",
+	"scrapeApiKey",
 	"jevApiKey",
 	"jevCustomApiKey",
 ])
