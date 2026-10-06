@@ -177,7 +177,7 @@ Cerebriline ships with a small set of skills. They are listed first in the Skill
 | `tdd-gen` | Writes the implementation that makes existing tests pass, without changing the tests, then tidies up on green | off |
 | `tdd-test` | Runs the project's tests the way the repo defines, all or a named file or test, and reports failures | off |
 | `tdd-coverage` | Runs coverage, lists what is below the threshold (80% unless the repo sets one) and proposes a test for each gap | off |
-| `sdd-wizard` | The front door of spec-driven development: reads the planning files, says where the work stands and runs the next step, one at a time or in auto mode | off |
+| `sdd-wizard` | The front door of spec-driven development: asks where the work stands, says so and runs the next step, one at a time or in auto mode | off |
 | `sdd-discuss` | Turns an idea into an agreed specification by conversation: project brief, numbered requirements, milestone context | off |
 | `sdd-plan` | Plans a milestone as a roadmap of demoable slices, or one slice as small, fully specified tasks; replans after a blocker | off |
 | `sdd-execute` | Executes one planned task, verifies it and records the evidence | off |
@@ -190,14 +190,18 @@ Cerebriline ships with a small set of skills. They are listed first in the Skill
 The four `tdd-` skills are a set for test-driven development. Start with `tdd-wizard`; it hands over to the other three, and each of them can also be used by itself, for example `/tdd-gen tests/unit/user-service.test.ts`. The set follows the workflow in "[Test-Driven Development with Claude Code: Practical Guide](https://aiskill.market/blog/tdd-with-claude-code)" by Duke Harewood (aiskill.market, January 28, 2026); each skill credits it.
 
 
-The seven `sdd-` skills are a set for spec-driven development, after [Get Shit Done (GSD 2)](https://getshitdone.help/): discuss what is wanted, plan it as milestones, slices and tasks, execute one task at a time, and verify at every level. Start with `sdd-wizard`. The plan and its records are kept as files in a `.sdd/` folder in the project, which is what lets the work continue in a new chat or be handed to an agent.
+The seven `sdd-` skills are a set for spec-driven development, after [Get Shit Done (GSD 2)](https://getshitdone.help/): discuss what is wanted, plan it as milestones, slices and tasks, execute one task at a time, and verify at every level. Start with `sdd-wizard`.
+
+Turning on any of the seven also gives the model a tool, `sdd`, from the next task on. The plan is kept in a database in the project, `.sdd/sdd.db`, and the tool is the only way to it. The model asks the tool what the next step is and gets the one step that is due with everything it needs: the task's steps, its files, the command that proves it. A step out of turn is refused with the reason: a roadmap before you approved the requirements, a second task while one is in progress, a task marked done without the output of its verification command, a slice closed on a failed acceptance check. This is what lets a small model keep its place through a long piece of work, and what lets the work continue in a new chat.
+
+The markdown beside the database (`PROJECT.md`, `REQUIREMENTS.md`, `DECISIONS.md`, a folder per milestone with its roadmap, plans and summaries) is written by the tool after every change, for you to read and to review in a diff. Editing it changes nothing: it is overwritten. To keep the plan with the project, commit the `.sdd/` folder, database included.
 
 - With **Subagents** on, research, each task and the plan reviews run in agents with a fresh context. A task's changes come back as revisions that the lead reads and adopts, so Checkpoints or the change protocol must be on for that. With Subagents on and Checkpoints off, the skill stops before the first task and asks you to turn Checkpoints on, or to tell it to work without agents.
 - With **Teammates** on as well, slices that do not depend on each other can run side by side, one teammate per slice, and a reviewer can stay with a slice.
 - With neither, the lead does each step itself.
 - In a git repository, a slice can be built in its own worktree (`.sdd/worktrees/<slice>/`, branch `sdd/<slice>`) and squash-merged into your branch when it is verified, so your working copy is untouched until then. It is asked once and optional; where git is missing, or the working copy has uncommitted changes you do not want to commit, the work goes on without it.
 
-The set is not compatible with a `.gsd/` folder: GSD keeps its state in a database and regenerates its files from it.
+The set is not compatible with a `.gsd/` folder. It works the way GSD does, with a database that says which step is due and files written from it, but with its own engine and its own folder.
 
 A built-in skill can be turned on and off and opened to read. It cannot be edited or deleted, because an update replaces its file. For the same reason the switch is kept in your settings (`bundledSkills` in the global settings file) and survives updates; a skill that ships off stays off until you turn it on.
 

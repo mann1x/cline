@@ -65,8 +65,15 @@ For spec-driven development, after [Get Shit Done (GSD 2)](https://getshitdone.h
 - **sdd-quick** is for a small change that needs none of that, and
   **sdd-status** reports where things stand.
 
-The plan and its records live in a `.sdd/` folder in your project, so the work
-continues in a new chat. With Subagents on, each task runs in an agent with a
+The plan is kept in a database in your project (`.sdd/sdd.db`), and turning on
+any of the seven gives the model one tool, `sdd`, to work it. The model asks
+what the next step is and is given the one that is due, with the task's steps,
+its files and the command that proves it. A step out of turn is refused with
+the reason: no roadmap before you approved the requirements, no task marked
+done without the output of its verification, no slice closed on a failed
+acceptance check. A small model no longer has to keep its place by reading and
+ticking files. The markdown beside the database is written from it after every
+change, for you to read and review; the work continues in a new chat. With Subagents on, each task runs in an agent with a
 fresh context and its changes are checked before they are adopted; with
 Teammates on as well, independent slices can run side by side. In a git
 repository a slice can be built in its own worktree and merged when it is
