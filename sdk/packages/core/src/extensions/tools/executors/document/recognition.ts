@@ -64,6 +64,14 @@ export interface RecognitionPlan {
 		scannedPages: readonly number[],
 		recognizedPages: readonly number[],
 	): string[];
+	/**
+	 * Every scanned page that has no recognized text, with the reason, a line
+	 * each. `notes` is the summary a reader skims; this is the whole account.
+	 */
+	problems(
+		scannedPages: readonly number[],
+		recognizedPages: readonly number[],
+	): string[];
 	close(): Promise<void>;
 }
 
@@ -73,6 +81,12 @@ interface PlanInput {
 	settings: DocumentReaderSettings;
 	describeImages?: DescribeImages;
 	modelSupportsImages: boolean;
+	/**
+	 * How many scanned pages are recognized. A book kept in the Library is
+	 * read whole: its call is long by design and reports as it goes.
+	 * @default the engine's per-call limit
+	 */
+	pageLimit?: number;
 }
 
 type Engine =
@@ -136,11 +150,13 @@ export function planRecognition(input: PlanInput): RecognitionPlan {
 	let used = 0;
 
 	const limit =
-		engine.kind === "tesseract"
-			? TESSERACT_PAGE_LIMIT
-			: engine.kind === "vision"
-				? VISION_PAGE_LIMIT
-				: SELF_PAGE_LIMIT;
+		input.pageLimit !== undefined
+			? input.pageLimit
+			: engine.kind === "tesseract"
+				? TESSERACT_PAGE_LIMIT
+				: engine.kind === "vision"
+					? VISION_PAGE_LIMIT
+					: SELF_PAGE_LIMIT;
 
 	const recognize =
 		engine.kind === "none"
@@ -250,6 +266,27 @@ export function planRecognition(input: PlanInput): RecognitionPlan {
 				);
 			}
 			return notes;
+		},
+		problems(scannedPages, recognizedPages) {
+			const lines: string[] = [];
+			const reasons = new Map<number, string>();
+			for (const line of failed) {
+				const match = /^page (\d+): ([\s\S]*)$/.exec(line);
+				if (match) reasons.set(Number(match[1]), match[2] ?? "");
+			}
+			const general = failed.filter((line) => !/^page \d+: /.test(line));
+			for (const page of scannedPages) {
+				if (recognizedPages.includes(page)) continue;
+				const why = skipped.includes(page)
+					? `past the ${limit} pages recognized in one call`
+					: (reasons.get(page) ??
+						general[0] ??
+						(engine.kind === "none"
+							? engine.reason
+							: "nothing readable was found on it"));
+				lines.push(`page ${page}: a scan with no recognized text, ${why}`);
+			}
+			return lines;
 		},
 		async close() {
 			if (reader) await (await reader.catch(() => undefined))?.close();

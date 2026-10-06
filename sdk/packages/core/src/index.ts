@@ -1283,6 +1283,10 @@ export {
 	LIBRARIAN_TOOL_NAMES,
 } from "./extensions/tools/librarian-tools";
 export {
+	cancelLibraryImports,
+	hasActiveLibraryImports,
+} from "./extensions/tools/library-import-run";
+export {
 	type CreateLibraryToolsOptions,
 	createLibraryTools,
 	isLibrarianEnabled,

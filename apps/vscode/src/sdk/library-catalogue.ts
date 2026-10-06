@@ -1,4 +1,5 @@
 import {
+	cancelLibraryImports,
 	isLibrarianEnabled,
 	LIBRARIAN_SKILL_NAME,
 	type LibraryBook,
@@ -215,6 +216,10 @@ export async function runLibraryAction(request: LibraryAction, outcome: Outcome)
 			}
 			await catalogue.purgeBook(found.id)
 			return `"${found.title}" is deleted.`
+		}
+		case "libraryCancelImport": {
+			const cancelled = cancelLibraryImports()
+			return cancelled > 0 ? "The import is cancelled; the model gets its report." : "No import is running."
 		}
 		case "libraryEmptyTrash": {
 			const purged = await catalogue.purgeTrash(0)

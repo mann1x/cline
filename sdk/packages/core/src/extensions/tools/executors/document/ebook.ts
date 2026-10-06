@@ -302,7 +302,14 @@ export async function readEbook(
 		for (let index = 0; index < spine.length; index++) {
 			const number = index + 1;
 			if (options.selects && !options.selects(number)) continue;
+			options.signal?.throwIfAborted();
 			chapterNumber = number;
+			options.onProgress?.({
+				unit: "chapter",
+				at: number,
+				total: spine.length,
+				pictures: byPath.size,
+			});
 			read.push(number);
 			const chapter = await book.loadChapter(
 				(spine[index] as { id: string }).id,

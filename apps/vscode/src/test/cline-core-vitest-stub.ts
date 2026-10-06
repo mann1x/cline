@@ -164,6 +164,10 @@ export {
 	JEV_TOOL_NAME,
 	rankQuestionOptions,
 } from "../../../../sdk/packages/core/src/extensions/tools/jev"
+export {
+	cancelLibraryImports,
+	hasActiveLibraryImports,
+} from "../../../../sdk/packages/core/src/extensions/tools/library-import-run"
 // From source: the Library's defaults are the panel's defaults, and a stub
 // of them would let the two drift apart unseen.
 export {

@@ -20,6 +20,7 @@ import {
 	detectFormat,
 	FORMAT_LABELS,
 	type ReadOptions,
+	type ReadProgress,
 } from "./document/formats";
 import {
 	type ExtractedImage,
@@ -274,6 +275,16 @@ export interface BookDocument extends DocumentText {
 		origin?: string;
 		description?: string;
 	}[];
+	/** Pages or chapters it has, and how many were read. */
+	units?: { name: string; total: number; read: number };
+	/** Scanned pages, and how many of them had their text recognized. */
+	scanned?: { pages: number; recognized: number };
+	/**
+	 * Everything that was left out, a line each: a scanned page with no
+	 * recognized text, a picture that could not be taken out. Empty when the
+	 * whole document was read.
+	 */
+	problems: string[];
 }
 
 /**
@@ -294,6 +305,9 @@ export async function readDocumentForBook(
 		 * @default true
 		 */
 		pictures?: boolean;
+		/** Stops the read at the next page or chapter; the read throws. */
+		signal?: AbortSignal;
+		onProgress?: (progress: ReadProgress) => void;
 	},
 ): Promise<BookDocument> {
 	const stat = await fs.stat(filePath).catch(() => undefined);
@@ -319,8 +333,14 @@ export async function readDocumentForBook(
 					settings: options.reader ?? {},
 					describeImages: options.describeImages,
 					modelSupportsImages: false,
+					// A book kept in the Library is read whole, however long that
+					// is. A read that only compares text keeps the usual limit.
+					...(options.pictures === false
+						? {}
+						: { pageLimit: Number.POSITIVE_INFINITY }),
 				})
 			: undefined;
+	const problems: string[] = [];
 	const scratchDir = path.join(
 		options.scratchDir,
 		`.scratch-${randomBytes(4).toString("hex")}`,
@@ -333,6 +353,9 @@ export async function readDocumentForBook(
 			images,
 			wantImages: options.pictures ?? true,
 			scratchDir,
+			problems,
+			...(options.signal ? { signal: options.signal } : {}),
+			...(options.onProgress ? { onProgress: options.onProgress } : {}),
 			...(recognition?.recognize ? { recognize: recognition.recognize } : {}),
 		});
 	} finally {
@@ -351,6 +374,30 @@ export async function readDocumentForBook(
 				result.recognizedPages ?? [],
 			) ?? []),
 			...(result.notes ?? []),
+		],
+		...(result.units
+			? {
+					units: {
+						name: result.units.name,
+						total: result.units.total,
+						read: result.units.read.length,
+					},
+				}
+			: {}),
+		...(result.scannedPages?.length
+			? {
+					scanned: {
+						pages: result.scannedPages.length,
+						recognized: result.recognizedPages?.length ?? 0,
+					},
+				}
+			: {}),
+		problems: [
+			...(recognition?.problems(
+				result.scannedPages ?? [],
+				result.recognizedPages ?? [],
+			) ?? []),
+			...problems,
 		],
 		images: images.entries().map(({ image, data: bytes }) => ({
 			file: image.file,

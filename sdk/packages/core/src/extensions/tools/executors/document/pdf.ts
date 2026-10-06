@@ -167,12 +167,12 @@ const IMAGE_DECODE_LIMIT_MS = 60_000;
 function objectOf(
 	page: PDFPageProxy,
 	key: string,
-): Promise<DecodedImage | null> {
+): Promise<DecodedImage | null | "no answer"> {
 	const objects = key.startsWith("g_") ? page.commonObjs : page.objs;
 	return new Promise((resolve) => {
 		// pdf.js calls back when the picture is decoded, and never when its
 		// decoder failed: without a limit one such picture holds the whole read.
-		const timer = setTimeout(() => resolve(null), IMAGE_DECODE_LIMIT_MS);
+		const timer = setTimeout(() => resolve("no answer"), IMAGE_DECODE_LIMIT_MS);
 		const done = (value: DecodedImage | null) => {
 			clearTimeout(timer);
 			resolve(value);
@@ -300,8 +300,20 @@ async function readPages(
 	const vectorPages: number[] = [];
 	const parts: string[] = [];
 
+	let taken = 0;
+	const progress = (at: number, activity?: string) =>
+		options.onProgress?.({
+			unit: "page",
+			at,
+			total,
+			pictures: taken,
+			...(activity ? { activity } : {}),
+		});
+
 	for (let number = 1; number <= total; number++) {
 		if (options.selects && !options.selects(number)) continue;
+		options.signal?.throwIfAborted();
+		progress(number);
 		read.push(number);
 		const page = await pdf.getPage(number);
 		const content = await page.getTextContent();
@@ -345,15 +357,30 @@ async function readPages(
 			for (const draw of shape.draws) {
 				const decoded =
 					"key" in draw ? await objectOf(page, draw.key) : draw.image;
-				if (
-					!decoded ||
-					decoded.width < MIN_IMAGE_SIDE ||
-					decoded.height < MIN_IMAGE_SIDE
-				)
+				if (decoded === "no answer") {
+					options.problems?.push(
+						`page ${number}: a picture was left out, the PDF decoder gave no answer for it in ${IMAGE_DECODE_LIMIT_MS / 1000}s`,
+					);
+					continue;
+				}
+				if (!decoded) {
+					options.problems?.push(
+						`page ${number}: a picture was left out, the PDF decoder could not decode it`,
+					);
+					continue;
+				}
+				// Rules, bullets and icons: not pictures of the book.
+				if (decoded.width < MIN_IMAGE_SIDE || decoded.height < MIN_IMAGE_SIDE)
 					continue;
 				const png = toPng(encodePng, decoded, "mask" in draw && draw.mask);
-				if (!png) continue;
+				if (!png) {
+					options.problems?.push(
+						`page ${number}: a ${decoded.width}x${decoded.height} picture was left out, its pixel layout is one this cannot write`,
+					);
+					continue;
+				}
 				n++;
+				taken++;
 				pictures.push({
 					png,
 					width: decoded.width,
@@ -369,6 +396,7 @@ async function readPages(
 			const pageImages = pictures.filter(
 				(picture) => picture.coverage >= OCR_MIN_COVERAGE,
 			);
+			if (pageImages.length > 0) progress(number, "recognizing text");
 			const result =
 				pageImages.length > 0
 					? await options.recognize(number, pageImages)

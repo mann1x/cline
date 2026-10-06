@@ -3308,7 +3308,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 			// minutes a render takes and reads as a hang. These are a handful of
 			// lines per call, not a stream; a command's output chunks carry no
 			// `status` and are still not forwarded.
-			const statusUpdate = event.update as { status?: unknown } | undefined
+			const statusUpdate = event.update as { status?: unknown; cancellable?: unknown } | undefined
 			if (event.toolCallId && typeof statusUpdate?.status === "string" && statusUpdate.status.trim()) {
 				const running = state.getGenericToolRow(event.toolCallId)
 				if (running) {
@@ -3316,7 +3316,11 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						ts: running.ts,
 						type: "say",
 						say: "tool",
-						text: JSON.stringify({ ...running.row, status: statusUpdate.status.trim() }),
+						text: JSON.stringify({
+							...running.row,
+							status: statusUpdate.status.trim(),
+							...(typeof statusUpdate.cancellable === "string" ? { cancellable: statusUpdate.cancellable } : {}),
+						}),
 						partial: true,
 					})
 				}

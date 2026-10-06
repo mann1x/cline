@@ -239,6 +239,8 @@ export type LibraryAction =
 	| { action: "libraryBookRestore"; bookId: number }
 	| { action: "libraryBookPurge"; bookId: number }
 	| { action: "libraryEmptyTrash" }
+	/** Cancels the librarian calls that are reading files; each fails with its report. */
+	| { action: "libraryCancelImport" }
 	| { action: "librarySource"; op: "remove" | "restore"; sourceId: number }
 	| { action: "libraryExport"; sectionId?: number; shelfId?: number; bookId?: number }
 	| { action: "libraryImport"; existing?: "skip" | "replace" | "copy" }

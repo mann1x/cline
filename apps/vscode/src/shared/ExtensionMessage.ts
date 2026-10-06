@@ -481,6 +481,12 @@ export interface ClineSayTool {
 	 * busy media engine, a video job's progress. Never on a finished row.
 	 */
 	status?: string
+	/**
+	 * A running tool the user can cancel from its row, and what cancels it:
+	 * `library-import` is a librarian call that is reading files. Cancelled,
+	 * the tool fails with its full report and the run goes on.
+	 */
+	cancellable?: string
 }
 
 // must keep in sync with system prompt

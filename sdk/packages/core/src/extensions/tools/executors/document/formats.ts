@@ -220,6 +220,27 @@ export interface ReadOptions {
 		page: number,
 		images: readonly PageImage[],
 	) => Promise<RecognizedText | undefined>;
+	/** Stops the read at the next page or chapter; the read throws. */
+	signal?: AbortSignal;
+	/** Called as the read moves: once a page or chapter, and around recognition. */
+	onProgress?: (progress: ReadProgress) => void;
+	/**
+	 * Everything the read left out, a line each: a picture that could not be
+	 * taken out, and why. The reader appends; nothing is left out silently.
+	 */
+	problems?: string[];
+}
+
+/** Where a read is. */
+export interface ReadProgress {
+	unit: UnitName;
+	/** The page or chapter being read, from 1. */
+	at: number;
+	total: number;
+	/** Pictures taken out so far. */
+	pictures: number;
+	/** What it is doing there, when that is more than reading: "recognizing text". */
+	activity?: string;
 }
 
 /** A picture a scanned page is drawn from, as a PNG. */

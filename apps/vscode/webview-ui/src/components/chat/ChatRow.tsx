@@ -45,7 +45,7 @@ import McpResourceRow from "@/components/mcp/configuration/tabs/installed/server
 import McpToolRow from "@/components/mcp/configuration/tabs/installed/server-row/McpToolRow"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { cn } from "@/lib/utils"
-import { FileServiceClient, UiServiceClient } from "@/services/grpc-client"
+import { FileServiceClient, StateServiceClient, UiServiceClient } from "@/services/grpc-client"
 import { findMatchingResourceOrTemplate } from "@/utils/mcp"
 import CodeAccordian, { cleanPathPrefix } from "../common/CodeAccordian"
 import BrowserScreenshotRow from "./BrowserScreenshotRow"
@@ -843,7 +843,23 @@ export const ChatRowContent = memo(
 							{/* What a running tool is waiting for: a busy engine, a
 							    render's progress. Only while the row is partial. */}
 							{message.partial && tool.status ? (
-								<div className="text-xs mt-1 text-(--vscode-descriptionForeground)">{tool.status}</div>
+								<div className="text-xs mt-1 text-(--vscode-descriptionForeground) whitespace-pre-wrap break-words">
+									{tool.status}
+								</div>
+							) : null}
+							{/* A librarian call reading files: cancelled, it fails with
+							    its full report and the model is told what was read. */}
+							{message.partial && tool.cancellable === "library-import" ? (
+								<button
+									className="mt-1.5 text-xs px-2 py-0.5 rounded-xs border border-editor-group-border bg-transparent text-(--vscode-foreground) cursor-pointer hover:bg-(--vscode-toolbar-hoverBackground)"
+									onClick={() => {
+										void StateServiceClient.retrievalAction(
+											StringRequest.create({ value: JSON.stringify({ action: "libraryCancelImport" }) }),
+										).catch(() => {})
+									}}
+									type="button">
+									Cancel import
+								</button>
 							) : null}
 							{tool.content ? (
 								<CodeAccordian

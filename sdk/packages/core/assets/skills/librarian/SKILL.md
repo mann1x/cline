@@ -54,6 +54,20 @@ scraping. If they are not in your tools, say so and work with files.
 6. **Report what you did**, book by book, at the end: added where, skipped
    and why, what you need the user to decide.
 
+## Reports, and cancelled calls
+
+`library_check` and `library_add` end with a `REPORT`: a line for every
+file, and under it a `left out:` line for each page or picture that is
+not in the book, with the reason. Read it. Pass on to the user every
+file that failed and everything that was left out; do not say a book was
+added in full when the report says otherwise.
+
+The user can cancel a call while it runs. It then fails, and its error is
+the report: what was read, what was not, where the file in progress had
+got to, and whether anything is in the Library. Do not retry it by
+yourself and do not go on to the next book. Tell the user what the report
+says and ask how to go on.
+
 ## Cataloguing files ("catalogue these ebooks")
 
 For a folder or a list of files:

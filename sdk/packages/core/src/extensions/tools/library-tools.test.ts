@@ -240,6 +240,58 @@ describe("the Library tools", () => {
 		expect(details).toContain("source 1: engine.md [file");
 	});
 
+	it("ends with a report of every file, and shows where it is as it goes", async () => {
+		write("engine.md", BOOK);
+		const updates: { status?: string; cancellable?: string }[] = [];
+		const context = {
+			...CONTEXT,
+			emitUpdate: (update: unknown) => updates.push(update as never),
+		};
+		const added = String(
+			await tools().library_add.execute(
+				{
+					paths: ["engine.md", "missing-folder"],
+					title: "Engine care",
+					description: "How to keep an engine running. Covers oil and belts.",
+					section: "Workshop",
+					shelf: "Engines",
+				},
+				context,
+			),
+		);
+		expect(added).toMatch(/REPORT: 1 of 1 done/);
+		expect(added).toMatch(/- engine\.md: added, [\d,]+ words, \d+ passages?/);
+		expect(updates.length).toBeGreaterThan(1);
+		expect(
+			updates.every((update) => update.cancellable === "library-import"),
+		).toBe(true);
+		expect(
+			updates.some((update) => /▶ engine\.md/.test(update.status ?? "")),
+		).toBe(true);
+		expect(updates.at(-1)?.status).toContain("✓ engine.md: added");
+	});
+
+	it("fails with the whole report when the import is cancelled", async () => {
+		write("engine.md", BOOK);
+		const stop = new AbortController();
+		stop.abort();
+		await expect(
+			tools().library_add.execute(
+				{
+					paths: ["engine.md"],
+					title: "Engine care",
+					description: "How to keep an engine running. Covers oil and belts.",
+					section: "Workshop",
+					shelf: "Engines",
+				},
+				{ ...CONTEXT, signal: stop.signal },
+			),
+		).rejects.toThrow(
+			/was cancelled: the run was stopped[\s\S]*Nothing was added to the Library\.[\s\S]*- engine\.md: NOT READ/,
+		);
+		expect(await call("list_library", {})).not.toContain("Engine care");
+	});
+
 	it("needs a title, a description and a shelf for a new book", async () => {
 		write("engine.md", BOOK);
 		expect(await call("library_add", { paths: ["engine.md"] })).toContain(
