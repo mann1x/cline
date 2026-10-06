@@ -7,7 +7,7 @@ import {
 } from "@cline/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isLanceDbInstalled } from "./lancedb-runtime";
-import { Library } from "./library";
+import { closeSharedLibraries, Library, sharedLibrary } from "./library";
 
 const runtimeDirectory = process.env.CEREBRILINE_LANCEDB_RUNTIME;
 const lanceAvailable = Boolean(
@@ -76,6 +76,27 @@ describe("resolveLibrarySettings", () => {
 		expect(settings.topKReranker).toBe(3);
 		expect(settings.splitter).toBe("characters");
 		expect(settings.hybridSearch).toBe(true);
+	});
+});
+
+describe("closeSharedLibraries", () => {
+	it("closes what the process opened, and the next use opens it afresh", async () => {
+		const root = await mkdtemp(join(tmpdir(), "library-shared-"));
+		try {
+			const directory = join(root, "library");
+			const first = sharedLibrary({ directory });
+			first.store.listCollections();
+			expect(sharedLibrary({ directory })).toBe(first);
+			await closeSharedLibraries();
+			// Closed: on Windows the folder could not be removed otherwise.
+			expect(() => first.store.listCollections()).toThrow();
+			const second = sharedLibrary({ directory });
+			expect(second).not.toBe(first);
+			expect(Array.isArray(second.store.listCollections())).toBe(true);
+			await closeSharedLibraries();
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 });
 

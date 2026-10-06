@@ -454,6 +454,16 @@ export class Library {
 
 const shared = new Map<string, Library>();
 
+/**
+ * Closes every Library this process opened. For shutdown: the SQLite file is
+ * checkpointed and released, and the next `sharedLibrary()` opens it afresh.
+ */
+export async function closeSharedLibraries(): Promise<void> {
+	const open = [...shared.values()];
+	shared.clear();
+	await Promise.all(open.map((library) => library.close().catch(() => {})));
+}
+
 /** The one Library of a folder in this process: SQLite and LanceDB are opened once. */
 export function sharedLibrary(options: LibraryOptions = {}): Library {
 	const directory = options.directory ?? resolveLibraryDirectory();

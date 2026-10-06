@@ -235,8 +235,12 @@ export {
 	lanceDbStatus,
 	lanceDbUnsupportedReason,
 } from "../../../../sdk/packages/core/src/services/retrieval/lancedb-runtime"
-export { resolveLanceDbRuntimeDirectory, sharedLibrary } from "../../../../sdk/packages/core/src/services/retrieval/library"
-export { sharedMemory } from "../../../../sdk/packages/core/src/services/retrieval/memory"
+export {
+	closeSharedLibraries,
+	resolveLanceDbRuntimeDirectory,
+	sharedLibrary,
+} from "../../../../sdk/packages/core/src/services/retrieval/library"
+export { closeSharedMemories, sharedMemory } from "../../../../sdk/packages/core/src/services/retrieval/memory"
 export { createMemoryRecaller } from "../../../../sdk/packages/core/src/services/retrieval/memory-recall"
 // From source: `resumed-compaction.ts` rebases a saved compaction with these,
 // and a stub that always "projects" would pass a test of exactly that.

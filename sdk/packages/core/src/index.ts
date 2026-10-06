@@ -1619,6 +1619,7 @@ export {
 	lanceDbUnsupportedReason,
 } from "./services/retrieval/lancedb-runtime";
 export {
+	closeSharedLibraries,
 	type EmbedPendingOptions,
 	type EmbedPendingResult,
 	type EmbedProgress,
@@ -1637,6 +1638,7 @@ export type {
 	LibraryHit,
 } from "./services/retrieval/library-store";
 export {
+	closeSharedMemories,
 	MEMORY_EXPORT_FORMAT,
 	MEMORY_MAX_CHARS,
 	MEMORY_NAME_MAX_CHARS,

@@ -680,6 +680,8 @@ export function createSkillsConfigDefinition(
 		directories: managedRoot
 			? dedupeDirectoryPaths([...directories, managedRoot])
 			: directories,
+		// They ship inside the program's own folder and change only with it.
+		...(bundledDirectory ? { unwatchedDirectories: [bundledDirectory] } : {}),
 		discoverFiles: (directoryPath) => {
 			const agentPluginSkill = agentPluginSkillsByDirectory.get(
 				resolve(directoryPath),

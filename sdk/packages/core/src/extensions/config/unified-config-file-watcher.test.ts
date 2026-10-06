@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	rename,
+	rm,
+	unlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -110,6 +117,62 @@ describe("UnifiedConfigFileWatcher", () => {
 			);
 		} finally {
 			unsubscribe();
+		}
+	}, 15_000);
+
+	it("reads a directory that ships with the program without holding it open", async () => {
+		const tempRoot = await mkdtemp(
+			join(tmpdir(), "core-unified-config-watcher-"),
+		);
+		tempRoots.push(tempRoot);
+		// As in the VS Code extension: the bundled files are inside the
+		// program's own folder, the user's are somewhere else.
+		const shipped = join(tempRoot, "program", "bundled");
+		const own = join(tempRoot, "user");
+		await mkdir(shipped, { recursive: true });
+		await mkdir(own, { recursive: true });
+		await writeFile(join(shipped, "a.profile"), "name: Shipped\n\nBody.");
+		await writeFile(join(own, "b.profile"), "name: Own\n\nBody.");
+
+		const watcher = new UnifiedConfigFileWatcher([
+			{
+				type: "profile" as const,
+				directories: [shipped, own],
+				unwatchedDirectories: [shipped],
+				includeFile: (fileName) => fileName.endsWith(".profile"),
+				parseFile: (context) => parseTestProfileConfig(context.content),
+				resolveId: (config) => config.name.toLowerCase(),
+			},
+		]);
+		const events: Array<
+			UnifiedConfigWatcherEvent<"profile", TestProfileConfig>
+		> = [];
+		const unsubscribe = watcher.subscribe((event) => events.push(event));
+		try {
+			await watcher.start();
+			await waitForEvent(
+				events,
+				(event) => event.kind === "upsert" && event.record.id === "shipped",
+			);
+			await waitForEvent(
+				events,
+				(event) => event.kind === "upsert" && event.record.id === "own",
+			);
+			const watched = [
+				...(
+					watcher as unknown as { watchersByDirectory: Map<string, unknown> }
+				).watchersByDirectory.keys(),
+			];
+			expect(watched).toContain(own);
+			expect(watched.some((directory) => directory.startsWith(shipped))).toBe(
+				false,
+			);
+			// The check Windows makes on a reinstall: the program's folder can
+			// be renamed while this is running.
+			await rename(join(tempRoot, "program"), join(tempRoot, "program-old"));
+		} finally {
+			unsubscribe();
+			watcher.stop();
 		}
 	}, 15_000);
 

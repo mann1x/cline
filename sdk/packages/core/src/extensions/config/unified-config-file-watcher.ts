@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { type FSWatcher, watch } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 export interface UnifiedConfigFileContext<TType extends string = string> {
 	type: TType;
@@ -23,6 +23,18 @@ export interface UnifiedConfigDefinition<
 > {
 	type: TType;
 	directories: ReadonlyArray<string>;
+	/**
+	 * Directories that are read and never watched, with everything under
+	 * them: files that ship with the program and change only when it is
+	 * replaced.
+	 *
+	 * A watcher is an open handle on the directory, and on Windows a folder
+	 * with an open handle anywhere inside it cannot be renamed. The bundled
+	 * skills live inside the VS Code extension's own folder, so watching them
+	 * made every reinstall of the running version fail with `EPERM: rename`
+	 * and "Please restart VS Code before reinstalling".
+	 */
+	unwatchedDirectories?: ReadonlyArray<string>;
 	discoverFiles?: (
 		directoryPath: string,
 	) => Promise<ReadonlyArray<UnifiedConfigFileCandidate>>;
@@ -111,6 +123,8 @@ export class UnifiedConfigFileWatcher<
 	private readonly baseTypesByDirectory = new Map<string, Set<TType>>();
 	private watchedTypesByDirectory = new Map<string, Set<TType>>();
 	private readonly discoveredDirectoriesByType = new Map<TType, Set<string>>();
+	/** Read, never watched: see `UnifiedConfigDefinition.unwatchedDirectories`. */
+	private readonly unwatchedRoots = new Set<string>();
 	private readonly definitionsByType = new Map<
 		TType,
 		UnifiedConfigDefinition<TType, TItem>
@@ -143,6 +157,9 @@ export class UnifiedConfigFileWatcher<
 			this.definitionsByType.set(definition.type, definition);
 			this.recordsByType.set(definition.type, new Map());
 			this.discoveredDirectoriesByType.set(definition.type, new Set());
+			for (const directoryPath of definition.unwatchedDirectories ?? []) {
+				this.unwatchedRoots.add(resolve(directoryPath));
+			}
 			for (const directoryPath of definition.directories) {
 				const existing = this.baseTypesByDirectory.get(directoryPath);
 				if (existing) {
@@ -449,9 +466,26 @@ export class UnifiedConfigFileWatcher<
 		return { records, discoveredDirectories };
 	}
 
+	private isUnwatched(directoryPath: string): boolean {
+		if (this.unwatchedRoots.size === 0) {
+			return false;
+		}
+		const target = resolve(directoryPath);
+		for (const root of this.unwatchedRoots) {
+			const within = relative(root, target);
+			if (within === "" || (!within.startsWith("..") && !isAbsolute(within))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private buildDesiredTypesByDirectory(): Map<string, Set<TType>> {
 		const desired = new Map<string, Set<TType>>();
 		for (const [directoryPath, types] of this.baseTypesByDirectory.entries()) {
+			if (this.isUnwatched(directoryPath)) {
+				continue;
+			}
 			desired.set(directoryPath, new Set(types));
 		}
 		for (const [
@@ -459,6 +493,9 @@ export class UnifiedConfigFileWatcher<
 			directories,
 		] of this.discoveredDirectoriesByType.entries()) {
 			for (const directoryPath of directories) {
+				if (this.isUnwatched(directoryPath)) {
+					continue;
+				}
 				const existing = desired.get(directoryPath);
 				if (existing) {
 					existing.add(type);

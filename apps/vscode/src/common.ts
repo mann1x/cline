@@ -2,7 +2,7 @@ import path from "node:path"
 import { WebviewProvider } from "./core/webview"
 import "./utils/path" // necessary to have access to String.prototype.toPosix
 
-import { setSdkLogger } from "@cline/core"
+import { closeSharedLibraries, closeSharedMemories, setSdkLogger } from "@cline/core"
 import { HostProvider } from "@/hosts/host-provider"
 import { resolveDataDir } from "@/sdk/legacy-state-reader"
 import { Logger } from "@/shared/services/Logger"
@@ -193,6 +193,10 @@ export async function tearDown(): Promise<void> {
 		HookDiscoveryCache.getInstance().dispose()
 		// Stop periodic temp file cleanup
 		ClineTempManager.stopPeriodicCleanup()
+		// The Library's and Memory's databases: checkpointed and released, so
+		// nothing of theirs is open when the window or the extension goes.
+		await closeSharedLibraries().catch(() => {})
+		await closeSharedMemories().catch(() => {})
 	} finally {
 		try {
 			await StateManager.get().flushPendingState()

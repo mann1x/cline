@@ -587,6 +587,13 @@ export class Memory {
 
 const shared = new Map<string, Memory>();
 
+/** Closes every Memory this process opened. For shutdown, like `closeSharedLibraries`. */
+export async function closeSharedMemories(): Promise<void> {
+	const open = [...shared.values()];
+	shared.clear();
+	await Promise.all(open.map((memory) => memory.close().catch(() => {})));
+}
+
 /** The one Memory of a folder in this process. */
 export function sharedMemory(options: LibraryOptions = {}): Memory {
 	const directory = options.directory ?? resolveMemoryDirectory();
