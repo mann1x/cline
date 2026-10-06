@@ -123,6 +123,12 @@ shows only its embedding models. **Check the embedding model** and **Check the
 reranking model** each make one real request and show what came back, so you
 know whether the session's provider embeds before relying on it.
 
+Changing the embedding model starts a new set of vectors and keeps the old one,
+so search keeps working and going back costs nothing. The panels show how many
+documents or notes still have no vectors for the model now set, with **Embed
+now** to fill them and a list of the sets on disk, each with its size and a
+delete.
+
 The first time the box is ticked, Cerebriline downloads LanceDB, where the
 vectors are kept: 200 to 390 MB depending on the platform, once, with every
 file checked against a known checksum. It is not available on Intel Macs, where

@@ -38,6 +38,16 @@ On the **Embedding** tab of the API configuration, the model is picked from the 
 
 Nothing is embedded until a model is named. The search engine box in the Library and Memory panels says which one thing is missing: the box, the address, or the model.
 
+## Changing the embedding model
+
+Vectors from two models cannot be compared, so each embedding model has its own set of vectors, and so does each vector size of the same model. Changing the model does not break search: it starts a new set, and until that set is filled the documents are found by keyword only.
+
+- **Embed N documents now**, in the search engine box, fills the set for the model now set. It shows its progress, and if it stops (a server that went away), what was done is kept and running it again carries on. Left alone, documents are embedded the next time one is added.
+- **Vectors on disk** lists every set with its model, vector size, count and space. A set not in use is kept, so going back to its model needs nothing. **Delete** removes one; its documents are embedded again if its model is ever set again.
+- The same model returning vectors of another size, after a tag was pulled again for instance, is noticed at the next search or check, and its documents are then counted as waiting.
+
+The Memory panel has the same box for the notes.
+
 ## Search by keyword
 
 With nothing else configured, the Library is searched by keyword. This needs no model and no download, works the moment a document is added, and is very good at names, codes and exact phrases. Words that appear almost everywhere in the Library are left out of a query, since they say nothing about which passage is wanted.
