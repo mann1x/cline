@@ -1344,6 +1344,18 @@ export {
 	referencedCredentialNames,
 	resolveCredentialEnv,
 } from "./extensions/tools/qa-credentials";
+// The spec-driven engine and its one tool.
+export {
+	createSddTool,
+	createSddTools,
+	isSddEnabled,
+	runSddAction,
+	SDD_ACTIONS,
+	SDD_SKILL_NAMES,
+	SDD_TOOL_NAME,
+	type SddAction,
+	type SddToolOptions,
+} from "./extensions/tools/sdd-tool";
 export {
 	type AgentFileFields,
 	agentFileName,
@@ -1568,6 +1580,18 @@ export type {
 	RetrievedHit,
 	RetrieveResult,
 } from "./services/retrieval/retrieve";
+export {
+	SDD_DATABASE,
+	SDD_DIRECTORY,
+	SddEngine,
+	type SddMilestone,
+	type SddNext,
+	type SddRequirement,
+	SddRuleError,
+	type SddSlice,
+	type SddStep,
+	type SddTask,
+} from "./services/sdd/sdd-engine";
 export {
 	TelemetryService,
 	type TelemetryServiceOptions,

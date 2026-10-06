@@ -2,8 +2,8 @@
 name: sdd-verify
 description: >-
   Verifies spec-driven work at the level that is due: closes a finished slice
-  by running its verification, writing its summary and an acceptance script,
-  running the acceptance checks and reassessing the rest of the roadmap; or
+  by running its verification and its acceptance checks, recording its
+  summary and reassessing the rest of the roadmap; or
   audits a finished milestone against its success criteria and requirements
   and completes it only when everything is proved. Use when every task of a
   slice is done, when every slice of a milestone is done, when sdd-wizard says
@@ -14,43 +14,30 @@ disabled: true
 
 # Skill: Verify
 
-Checks that what was built is what was promised. Tasks passing one by one does not show that the slice works, and slices passing does not show that the milestone delivers; this skill is where the assembled thing is tested against the plan and the result written down.
+Checks that what was built is what was promised. Tasks passing one by one does not show that the slice works, and slices passing does not show that the milestone delivers; this skill is where the assembled thing is tested against the plan and the result recorded.
 
 Part of the spec-driven set: `sdd-wizard` (where am I, what is next), `sdd-discuss`, `sdd-plan`, `sdd-execute`, `sdd-verify`, `sdd-quick`, `sdd-status`. Each works when the others are off; where this skill hands over to one that is not enabled, do that step directly by the rules given here.
 
-## The `.sdd/` folder
+## The `sdd` tool
 
-Everything this workflow knows is in files under `.sdd/` in the project. There is no other memory: a new chat, or an agent given one task, knows only what these files say. Read them; do not rely on what was said earlier in a conversation.
+The plan is kept in a database in the project (`.sdd/sdd.db`), and you reach it only through the **`sdd` tool**. The database is the truth: what is wanted, the milestones, their slices and tasks, what was proved, and which step is due.
 
-```
-.sdd/
-  PROJECT.md        what the project is and how it stands now; the working agreements
-  REQUIREMENTS.md   the requirements, R001...: active, validated, deferred, out of scope
-  DECISIONS.md      decisions, D001...: what was chosen and why; only ever added to
-  KNOWLEDGE.md      project rules, gotchas and patterns found along the way
-  STATE.md          where the work stands and what the next step is
-  quick/Q001-SUMMARY.md
-  milestones/M001/
-    M001-CONTEXT.md      the agreed scope and goals of the milestone
-    M001-ROADMAP.md      its slices, as a checklist
-    M001-VALIDATION.md   the audit at its end
-    M001-SUMMARY.md      written when it is complete
-    slices/S01/
-      S01-RESEARCH.md  S01-PLAN.md  S01-REPLAN.md
-      S01-SUMMARY.md   S01-UAT.md   S01-UAT-RESULT.md
-      tasks/T01-PLAN.md  tasks/T01-SUMMARY.md
-```
-
+- **`sdd` with action `next`** answers with the one step that is due and everything that step needs. Call it when you start and whenever you are unsure. Do not work out the next step yourself, and do not rely on what was said earlier in a conversation.
+- Every other action records one thing and answers with the next step. An action out of turn is **refused**, with the reason and what to do instead. Do what it says; do not look for a way round it.
+- The markdown under `.sdd/` (`PROJECT.md`, `REQUIREMENTS.md`, `DECISIONS.md`, `KNOWLEDGE.md`, `STATE.md`, and a folder per milestone with its roadmap, plans and summaries) is **written by the tool** from the database, for people to read and review. Read it when it helps. **Never edit it**: an edit is overwritten, and the plan does not change.
+- The tool gives the ids: `M001` (milestone), `S01` (slice), `T01` (task), `R001` (requirement), `D001` (decision).
 - A **milestone** is a deliverable someone could ship. A **slice** is a vertical piece of it that can be demonstrated on its own. A **task** is one unit of work small enough to do, verify and describe in one sitting.
-- Ids are fixed once given: `M001`, `S01`, `T01`, `R001`, `D001`. Never renumber.
-- A checked box (`- [x]`) in a roadmap or a slice plan means done **and** verified. Summaries, validations and checked items are the record: never rewrite them.
-- `STATE.md` is a convenience and can be stale. The files that exist and the boxes that are checked are the truth; when they disagree with `STATE.md`, they win and `STATE.md` is corrected.
+- Only you, the lead, call `sdd`. An agent or a teammate given a task works on the code and reports; it does not record anything.
+
+If you do not have a tool called `sdd`, this skill cannot run. Say so: the tool is offered when a task starts with a spec-driven skill turned on, so the user starts a new task. Do not imitate the tool by writing the files yourself.
 
 ## Which verification is due
 
-- Every task of the active slice is checked, and the slice is unchecked in the roadmap → **Part A**.
-- Every slice of the milestone is checked, and there is no `VALIDATION`, or the last one asked for remediation that is now done → **Part B**.
-- The validation passed and there is no milestone `SUMMARY` → **Part C**.
+Call `sdd` with action `next`:
+
+- `close_slice` → **Part A**.
+- `validate_milestone` → **Part B**.
+- `complete_milestone` → **Part C**.
 
 ## The three levels of proof
 
@@ -66,107 +53,70 @@ Every check is recorded with what was run and what was seen. For each, choose th
 
 ## Part A: Close a slice
 
-1. **Run the slice verification** from `S##-PLAN.md`, all of it, in the workspace (in the slice's worktree, if it was built in one; see "Merging an isolated slice" below). If a check fails, fix it and run again; a fix here is small and within the slice. If it cannot be fixed within the slice's plan, stop: the slice is not done, and the task that owns the failure is reopened or the slice replanned (`sdd-plan`).
+1. **Run the slice's verification**, all of it, in the workspace (in the slice's worktree, if it was built in one; see "Merging an isolated slice" below): the project's tests, and each task's `Verify` command again now that they are all in. If a check fails, fix it and run again; a fix here is small and within the slice. If it cannot be fixed within the slice's plan, stop: the slice is not done, and it is replanned (`sdd-plan`).
 2. **Check the goal, not the tasks:** is the slice's goal now true, end to end? Is each requirement it owns demonstrably met?
-3. **Write `S##-SUMMARY.md`**, compressing the task summaries. It is read by whoever plans the slices after this one:
+3. **Run the acceptance checks.** Write the cases for this slice, specific to what it built: each with its preconditions, its steps and the expected result, starting from the slice's demo. Run each, and note how it was checked and what was observed. Each ends as `pass`, `fail` or `needs_human`.
+4. **Close it** with `sdd` action **`complete_slice`**:
+   - `summary`: one line saying what a user can now do; what was delivered; the requirements met, with the evidence; and **forward intelligence** for the slices after this one — what is fragile, where the result differs from what the roadmap assumed, and what a later slice will trip over;
+   - `uat`: one entry per acceptance check, `{check, result, note}`.
 
-```markdown
-# S01 <title>: Summary
-<one line: what a user can now do>
-## Delivered
-## Requirements                 <- R ids advanced or validated, with the evidence
-## Verification evidence
-| Check | Command | Exit | Result |
-## Forward intelligence         <- for the slices after this one
-- Fragile: <what will break if touched carelessly>
-- Changed: <where the result differs from what the roadmap assumed>
-- Watch out: <gotchas a later slice will meet>
-## Known issues and follow-ups
-```
+   The tool refuses to close a slice with a task not done, with no acceptance checks, or with a check that failed. A failed check means new tasks: `replan_slice`, execute them, and close again. A `needs_human` check does not stop the slice; tell the user exactly what to try, and how.
 
-4. **Write `S##-UAT.md`**: the acceptance script for this slice, specific to what it built. Numbered cases, each with its preconditions, steps and expected result. Not a generic template.
-5. **Run the acceptance script** and write `S##-UAT-RESULT.md`: per case, how it was checked, what was observed, and the verdict; then the overall verdict: PASS if every required case passed, FAIL if any failed, PARTIAL if some need a human or could not be run. With FAIL, the slice is not closed: go back to step 1. With PARTIAL, list exactly what the user needs to try, and how.
-6. **Update the register:** move each requirement this slice proved to "Validated" in `REQUIREMENTS.md` with its evidence; append decisions to `DECISIONS.md` and lessons to `KNOWLEDGE.md`, only where they would save a later step real work; refresh "Current state" in `PROJECT.md`.
-7. **Tick the slice** in the roadmap. Only now.
-8. **Reassess the roadmap.** Read the summary just written against the slices still unchecked:
+   Closing the slice marks the requirements it owns as validated.
+5. **Record what was learned:** decisions with `add_decision`, lessons with `add_knowledge`, only where they would save a later step real work.
+6. **Reassess the roadmap.** Read the summary just recorded against the slices still to be built:
 
    - did this slice settle the risk it was meant to?
    - did a new risk appear that should change the order?
    - are the boundaries between slices still what the roadmap says?
-   - does every success criterion still belong to some unchecked slice, or is it already proved?
 
-   The usual answer is that the roadmap stands, and one line saying so is the right output. Change it only on evidence. When it must change, rewrite only unchecked slices, never completed ones, and tell the user what changed and why; a change to scope or to a requirement needs their agreement first.
+   The usual answer is that the roadmap stands, and one line saying so is the right output. Change it only on evidence, and only with the user's agreement: `add_slices` for new ones, `remove_slice` for one that is no longer needed and has no work in it. Completed slices are never changed.
 
 ### Merging an isolated slice
 
-When the slice was built in a worktree (`.sdd/worktrees/M001-S01/`, branch `sdd/M001-S01`), steps 1 to 5 are run there. After the slice is ticked:
+When the slice was built in a worktree (`.sdd/worktrees/M001-S01/`, branch `sdd/M001-S01`), steps 1 to 3 are run there. After the slice is closed:
 
 1. Make sure everything in the worktree is committed on its branch.
 2. In the main checkout, on the branch the user was on, check `git status --porcelain`: if they have uncommitted changes outside `.sdd/`, stop and ask before merging.
-3. The first time, ask whether to merge verified slices without asking again, and record the answer under "Isolation" in the working agreements. Then:
+3. The first time, ask whether to merge verified slices without asking again, and record the answer under "Isolation" in the working agreements (`sdd` action `set_project`). Then:
 
 ```
 git merge --squash sdd/M001-S01
 git commit -m "<the slice summary's first line>"
 ```
 
-4. **If the merge conflicts, stop.** Show the conflicting files and what each side changed. Do not resolve by taking one side wholesale, and do not abort the user's own work. Resolve with the user, or leave the slice unmerged and say so in `STATE.md`.
+4. **If the merge conflicts, stop.** Show the conflicting files and what each side changed. Do not resolve by taking one side wholesale, and do not abort the user's own work. Resolve with the user, or leave the slice unmerged, say so, and keep it with `sdd` action `capture` so it is not forgotten.
 5. If the user's branch had moved since the worktree was created, run the slice verification once more on the merged result. A failure here is fixed before going on.
 6. Only when the merge commit exists: `git worktree remove .sdd/worktrees/M001-S01` and `git branch -D sdd/M001-S01`. If the removal is refused because something is uncommitted there, look at what it is; do not force it.
 
 Slices that ran side by side are merged one after another, each verified on the result of the one before. Never push.
 
-With sub-agents, steps 1 and 5 can each be given to an agent with a fresh context, which is a better witness than whoever built the slice. With a slice reviewer teammate, ask it for its findings before step 2.
+With sub-agents, steps 1 and 3 can each be given to an agent with a fresh context, which is a better witness than whoever built the slice. With a slice reviewer teammate, ask it for its findings before step 2.
 
 ## Part B: Validate the milestone
 
-An audit, not a rerun. Read the roadmap, every slice summary and acceptance result, the requirements and the decisions, and check:
+An audit, not a rerun. `next` lists the requirements the milestone promised. Read the roadmap, every slice summary and acceptance result (under `.sdd/milestones/M###/`), the requirements and the decisions, and check:
 
-1. **Success criteria:** for each one in the roadmap, the evidence that it is met, from summaries, acceptance results or by running it now. No evidence means not met.
-2. **Slice delivery:** for each slice, does its summary show what its "Demo" line promised?
+1. **Success criteria:** for each one in the milestone's context, the evidence that it is met, from summaries, acceptance results or by running it now. No evidence means not met.
+2. **Slice delivery:** for each slice, does its summary show what its demo promised?
 3. **Integration:** do the boundaries line up? What one slice produces, the next actually consumes?
-4. **Requirements:** every active requirement of the milestone is validated, or explicitly deferred with a reason.
+4. **Requirements:** every requirement of the milestone is validated, or explicitly deferred with a reason.
 5. **Operational proof:** build it, start it, and walk the main flow end to end, now.
-6. **Real change:** the milestone produced code, not only planning files.
+6. **Real change:** the milestone produced code, not only a plan.
 
-Write `M###-VALIDATION.md` with the checklist, a table of slices against their claims, the integration findings, the requirement coverage, and a verdict:
+Record it with `sdd` action **`validate_milestone`**: `findings` (the checklist, each slice against its claim, the integration findings, the requirement coverage) and a `verdict`:
 
-- **pass:** everything is proved;
-- **needs-attention:** small gaps that do not block; they are listed and carried into the summary;
-- **needs-remediation:** something promised is not delivered. Add the remediation slices to the roadmap as new unchecked slices, tell the user, and the next step is planning them (`sdd-plan`). Validation runs again after they are done.
+- **`pass`:** everything is proved. Small gaps that do not block are listed in the findings and carried into the summary.
+- **`needs_remediation`:** something promised is not delivered. Give `remediation`: the slices that fix it, in the form of a roadmap's slices. They are added to the roadmap, the next step is planning them (`sdd-plan`), and the audit runs again when they are done. Tell the user.
 
 ## Part C: Complete the milestone
 
-Only with a passing validation. If any success criterion is unmet, any slice unchecked, or no code was changed, the milestone is **not** complete: say exactly that, list what is missing, and stop. There is no override.
+Only with a passing audit; the tool refuses otherwise, and there is no override. If no code was changed, the milestone is **not** complete: say exactly that, and stop.
 
-Otherwise write `M###-SUMMARY.md`:
+Call `sdd` action **`complete_milestone`** with `summary`: one line; what was built; each success criterion with its evidence; the requirements validated, deferred and changed; the key decisions and whether each still looks right; the key files; the lessons; the follow-ups.
 
-```markdown
-# M001 <title>: Summary
-<one line>
-## What was built
-## Success criteria             <- each, with its evidence
-## Requirements                 <- validated, deferred, changed
-## Key decisions                <- and whether each still looks right
-## Key files
-## Lessons                      <- the cross-cutting ones also go to KNOWLEDGE.md
-## Follow-ups
-```
-
-Then refresh `PROJECT.md` as a whole (current state, the milestone marked complete, what comes next), and tell the user what they now have and how to try it. Commit only if the working agreements say to. Never push, tag or publish without their explicit yes.
-
-Finish by rewriting `.sdd/STATE.md` (short, whole file):
-
-```markdown
-# State
-Updated: <date>
-Milestone: M001 <title>, <phase: discussing | planning | executing | validating | complete>
-Slice: S02 <title>, <planning | executing | closing>      (or: none)
-Task: T03 <title>                                          (or: none)
-Next: <the one next step, and the skill that does it>
-Blocked: <what, or "no">
-```
+Then tell the user what they now have and how to try it. Commit only if the working agreements say to. Never push, tag or publish without their explicit yes.
 
 ## Credits
 
-Adapted from [Get Shit Done (GSD 2)](https://getshitdone.help/), source at [gsd-build/GSD-2](https://github.com/gsd-build/GSD-2). The milestone, slice and task hierarchy, the planning files and the order of the phases are GSD's. GSD is a program that keeps its state in a database and dispatches each step itself; these skills keep the state in the files alone, in a folder of their own (`.sdd/`), and are not compatible with a `.gsd/` folder.
+Adapted from [Get Shit Done (GSD 2)](https://getshitdone.help/), source at [gsd-build/GSD-2](https://github.com/gsd-build/GSD-2). The milestone, slice and task hierarchy, the order of the phases, and keeping the plan in a database that says which step is due are GSD's. These skills use their own engine and their own folder (`.sdd/`), and are not compatible with a `.gsd/` folder.

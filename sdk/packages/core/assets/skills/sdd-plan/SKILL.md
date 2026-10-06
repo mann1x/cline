@@ -14,50 +14,37 @@ disabled: true
 
 # Skill: Plan
 
-Plans the work so that whoever executes it needs nothing but the plan. It works at two levels and picks the one that is due: a **milestone** becomes a roadmap of slices; a **slice** becomes tasks. No product code is written here.
+Plans the work so that whoever executes it needs nothing but the plan. It works at two levels and does the one that is due: a **milestone** becomes a roadmap of slices; a **slice** becomes tasks. No product code is written here.
 
 Part of the spec-driven set: `sdd-wizard` (where am I, what is next), `sdd-discuss`, `sdd-plan`, `sdd-execute`, `sdd-verify`, `sdd-quick`, `sdd-status`. Each works when the others are off; where this skill hands over to one that is not enabled, do that step directly by the rules given here.
 
-## The `.sdd/` folder
+## The `sdd` tool
 
-Everything this workflow knows is in files under `.sdd/` in the project. There is no other memory: a new chat, or an agent given one task, knows only what these files say. Read them; do not rely on what was said earlier in a conversation.
+The plan is kept in a database in the project (`.sdd/sdd.db`), and you reach it only through the **`sdd` tool**. The database is the truth: what is wanted, the milestones, their slices and tasks, what was proved, and which step is due.
 
-```
-.sdd/
-  PROJECT.md        what the project is and how it stands now; the working agreements
-  REQUIREMENTS.md   the requirements, R001...: active, validated, deferred, out of scope
-  DECISIONS.md      decisions, D001...: what was chosen and why; only ever added to
-  KNOWLEDGE.md      project rules, gotchas and patterns found along the way
-  STATE.md          where the work stands and what the next step is
-  quick/Q001-SUMMARY.md
-  milestones/M001/
-    M001-CONTEXT.md      the agreed scope and goals of the milestone
-    M001-ROADMAP.md      its slices, as a checklist
-    M001-VALIDATION.md   the audit at its end
-    M001-SUMMARY.md      written when it is complete
-    slices/S01/
-      S01-RESEARCH.md  S01-PLAN.md  S01-REPLAN.md
-      S01-SUMMARY.md   S01-UAT.md   S01-UAT-RESULT.md
-      tasks/T01-PLAN.md  tasks/T01-SUMMARY.md
-```
-
+- **`sdd` with action `next`** answers with the one step that is due and everything that step needs. Call it when you start and whenever you are unsure. Do not work out the next step yourself, and do not rely on what was said earlier in a conversation.
+- Every other action records one thing and answers with the next step. An action out of turn is **refused**, with the reason and what to do instead. Do what it says; do not look for a way round it.
+- The markdown under `.sdd/` (`PROJECT.md`, `REQUIREMENTS.md`, `DECISIONS.md`, `KNOWLEDGE.md`, `STATE.md`, and a folder per milestone with its roadmap, plans and summaries) is **written by the tool** from the database, for people to read and review. Read it when it helps. **Never edit it**: an edit is overwritten, and the plan does not change.
+- The tool gives the ids: `M001` (milestone), `S01` (slice), `T01` (task), `R001` (requirement), `D001` (decision).
 - A **milestone** is a deliverable someone could ship. A **slice** is a vertical piece of it that can be demonstrated on its own. A **task** is one unit of work small enough to do, verify and describe in one sitting.
-- Ids are fixed once given: `M001`, `S01`, `T01`, `R001`, `D001`. Never renumber.
-- A checked box (`- [x]`) in a roadmap or a slice plan means done **and** verified. Summaries, validations and checked items are the record: never rewrite them.
-- `STATE.md` is a convenience and can be stale. The files that exist and the boxes that are checked are the truth; when they disagree with `STATE.md`, they win and `STATE.md` is corrected.
+- Only you, the lead, call `sdd`. An agent or a teammate given a task works on the code and reports; it does not record anything.
+
+If you do not have a tool called `sdd`, this skill cannot run. Say so: the tool is offered when a task starts with a spec-driven skill turned on, so the user starts a new task. Do not imitate the tool by writing the files yourself.
 
 ## Which plan is due
 
-- The milestone has a `CONTEXT` and no `ROADMAP` → **Part A**.
-- There is a roadmap, and the first unchecked slice whose dependencies are checked has no `PLAN` → **Part B** for that slice.
-- A task summary reports a blocker → **Part C**.
-- The validation says needs-remediation → **Part A**, for the remediation slices only.
+Call `sdd` with action `next`:
 
-If there is no approved context yet, planning has nothing to stand on: say so and send the user to `sdd-discuss`.
+- `plan_milestone` → **Part A**.
+- `approve_roadmap` → show the roadmap and ask (the end of Part A).
+- `plan_slice` → **Part B**, for the slice it names. Slices added by a failed audit are planned the same way.
+- `replan_slice` → **Part C**.
+
+If `next` says `discuss_project`, `discuss_milestone` or `approve_requirements`, planning has nothing to stand on yet: say so and go to `sdd-discuss`.
 
 ## Part A: The roadmap
 
-Read `M###-CONTEXT.md`, `REQUIREMENTS.md`, `DECISIONS.md`, `KNOWLEDGE.md`, the summaries of earlier milestones, and the code this milestone will touch. Research to the depth the uncertainty deserves: a small feature in a known codebase needs a look at the relevant files; new technology or an unfamiliar system needs the documentation read and the alternatives weighed. With sub-agents, give a broad survey to one and have it report the files, the patterns and the natural seams.
+Read the milestone's context and the requirements (in the answer of `next`, and in `.sdd/REQUIREMENTS.md`, `.sdd/DECISIONS.md`, `.sdd/KNOWLEDGE.md`), the summaries of earlier milestones, and the code this milestone will touch. Research to the depth the uncertainty deserves: a small feature in a known codebase needs a look at the relevant files; new technology or an unfamiliar system needs the documentation read and the alternatives weighed. With sub-agents, give a broad survey to one and have it report the files, the patterns and the natural seams.
 
 Then cut the milestone into slices, by these rules:
 
@@ -67,61 +54,41 @@ Then cut the milestone into slices, by these rules:
 - **Every active requirement of this milestone lands somewhere:** owned by a slice, or explicitly deferred, blocked with a reason, or moved out of scope. A requirement that silently belongs to nothing is a planning failure.
 - **Dependencies are stated**, and nothing depends on a later slice.
 
-Show the roadmap in the chat as a table (slice, title, risk, depends on, what can be demonstrated) and **get the user's approval before writing it**. Then write `.sdd/milestones/M###/M###-ROADMAP.md`:
+Record it with `sdd` action **`plan_milestone`**, `slices` in order, each with:
 
-```markdown
-# M001 <title>: Roadmap
-## Success criteria          <- from the context; each observable
-- <criterion>
-## Slices
-- [ ] **S01 <title>**  risk: high | medium | low; depends: none
-  Demo: <what a person can see or do when it is done>
-  Proves: <the risk or requirements this slice settles>  (R001, R004)
-- [ ] **S02 <title>**  risk: medium; depends: S01
-  Demo: ...
-## Boundaries                <- what each slice produces that a later one consumes
-- S01 produces: <interface, table, module>; consumed by: S02
-## Verification
-- Contract: <unit tests, types, lint: the command>
-- Integration: <what proves the parts work together>
-- Operational: <build, start, the end-to-end flow>
-## Definition of done
-## Requirement coverage      <- every active R id → its slice, or deferred/blocked/out with the reason
-```
+- `title`;
+- `goal`: what is true when the slice is done, the risk it settles (high, medium or low), and what it produces that a later slice consumes;
+- `demo`: what a person can see or do when it is done;
+- `depends`: the earlier slices it needs, e.g. `["S01"]`;
+- `requirements`: the requirement ids it delivers, e.g. `["R001", "R004"]`.
 
-Record the structural choices (the order and why, technology picked, scope left out) in `DECISIONS.md`. If the milestone needs credentials or accounts the user must provide, list them now, with where each is obtained, so they are ready before execution; never invent or write a secret value.
+The tool refuses a roadmap in which an active requirement belongs to no slice, or a slice depends on a later one. Fix the roadmap, or with the user's agreement defer the requirement (`update_requirement`), and call again.
 
-A roadmap with a single slice goes straight on to Part B in the same sitting.
+Then **show the roadmap to the user** as a table (slice, title, risk, depends on, what can be demonstrated) and ask whether to build it this way. To change it, call `plan_milestone` again: it replaces the roadmap as long as it is not approved. When the user agrees, call **`approve`** with `what: "roadmap"`. Never before.
+
+Record the structural choices (the order and why, technology picked, scope left out) with `add_decision`. If the milestone needs credentials or accounts the user must provide, list them now, with where each is obtained, so they are ready before execution; never invent or write a secret value.
+
+A roadmap with a single slice goes straight on to Part B in the same sitting, once it is approved.
 
 ## Part B: One slice
 
-Slices are planned one at a time, when they are due, so that each plan can use what the earlier slices found.
+Slices are planned one at a time, when they are due, so that each plan can use what the earlier slices found. The tool refuses to plan a slice before its turn.
 
 ### B1. Research
 
-Read the slice's roadmap entry, the summaries of the slices it depends on (their **Forward intelligence** above all), the context, and the requirements it owns. Then look at the code. Match the depth to the work:
+`next` gives the slice's goal, its demo, and the summaries of the slices already done. Read those, the requirements it owns, and then the code. Match the depth to the work:
 
-- **light:** well-understood work on patterns the codebase already has. Fifteen lines saying "this is straightforward, follow the pattern in `<file>`" is the right research document.
+- **light:** well-understood work on patterns the codebase already has. Fifteen lines saying "this is straightforward, follow the pattern in `<file>`" is the right research.
 - **targeted:** known technology that is new to this codebase.
 - **deep:** new technology, an unfamiliar API, a risky integration, unclear scope.
 
-Write `S##-RESEARCH.md` for the planner, who may have no memory of the exploration:
+Write the research as text, for a planner who has no memory of the exploration: what exists (the specific files and what is in them), the patterns to follow, the seams where the work divides into tasks, what to build or prove first, the pitfalls, and the commands that verify the slice. It goes into `plan_slice` as `research`.
 
-```markdown
-# S01 Research
-## What exists               <- the specific files and what is in them
-## Patterns to follow
-## Seams                     <- where the work naturally divides into tasks
-## Build or prove first
-## Pitfalls and constraints
-## How to verify the slice   <- the commands
-```
-
-With sub-agents, research is one agent's job: it reads and reports; you write the file from its report.
+With sub-agents, research is one agent's job: it reads and reports; you record its report.
 
 ### B2. Tasks
 
-Break the slice into tasks. Each task plan is the **whole contract** for whoever executes it: they will see that file and a line about the slice's goal, and nothing else. So everything needed is in it.
+Break the slice into tasks. Each task is the **whole contract** for whoever executes it: they are given that task and a line about the slice's goal, and nothing else. So everything needed is in it.
 
 - **Size:** two to five steps and three to eight files. Ten steps or twelve files means it is two tasks.
 - **Order:** each task's output unblocks the next. If the slice has tests, the first task creates them, failing.
@@ -129,40 +96,17 @@ Break the slice into tasks. Each task plan is the **whole contract** for whoever
 - **Done is checkable:** a command that exits 0, or an observable result. Not "works correctly".
 - **Real, not stubbed:** a task that says "create a login endpoint" means one that authenticates against a real store. Mocks belong in tests.
 
-Write `S##-PLAN.md`:
+Each task has:
 
-```markdown
-# S01 <title>: Plan
-Goal: <what is true when this slice is done>
-Requirements: R001, R004
-## Tasks
-- [ ] **T01 <title>**: <one line>  (depends: none)
-- [ ] **T02 <title>**: <one line>  (depends: T01)
-## Slice verification        <- run when every task is done
-- `<command>` exits 0
-- <observable check>
-## Acceptance                <- what a person will be shown or asked to try
-```
-
-and one `tasks/T##-PLAN.md` per task:
-
-```markdown
-# T01 <title>
-Slice goal: <one line>
-## Inputs                    <- files to read first, exact paths
-## Outputs                   <- files to create or change, exact paths
-## Steps
-1. ...
-## Must have                 <- behaviours that have to hold, including the error cases
-## Verify
-- `<command>`  → expect: exit 0, <what the output shows>
-## Done when                 <- observable and checkable
-## Out of scope              <- what this task must not touch
-```
+- `title`;
+- `steps`: the numbered steps; then **Must have** (the behaviours that have to hold, including the error cases), **Done when** (observable and checkable) and **Out of scope** (what this task must not touch);
+- `files`: the files to read first and the files to create or change, exact paths;
+- `verify`: the **one command** whose output proves the task. Required: the tool refuses a task without it;
+- `expect`: what that output shows when the task is done (exit 0, "12 passed").
 
 ### B3. Audit the plan
 
-Before finishing, check, and fix the plan files if a check fails:
+Before recording it, check, and fix the plan if a check fails:
 
 1. **If every task were done exactly as written, would the slice goal be true?**
 2. Every requirement the slice owns has a task that advances it, and a verification that would prove it.
@@ -177,30 +121,20 @@ Then review the plan for what plans usually miss. With sub-agents, run these as 
 - **Load:** is there a volume or timing the plan ignores?
 - **Negative tests:** do the tests cover what must be refused, not only what must work?
 
-A flag does not block. Write the flagged handling into the task plan it belongs to, and note the review's results at the end of `S##-PLAN.md`.
+A flag does not block. Write the flagged handling into the `steps` of the task it belongs to.
 
-Record any structural decision in `DECISIONS.md`.
+Then record the plan with `sdd` action **`plan_slice`**: `research` and `tasks`, in order. Record any structural decision with `add_decision`.
 
 ## Part C: Replan after a blocker
 
 A blocker is a finding that makes the remaining plan invalid: the API does not do what was assumed, a capability is missing, the architecture cannot take it. A bug or a failing test is not a blocker; that is ordinary work.
 
-Read the blocker in the task summary and the slice's state. Completed tasks are history: do not touch them. Rewrite only the unchecked tasks, giving new tasks ids that continue from the highest existing one. Write `S##-REPLAN.md` (what was found, what changes, why) and update `S##-PLAN.md`. If the finding changes what the slice can deliver, or touches a requirement, stop and tell the user before going on.
+`next` gives the blocker as the executor reported it. Read the slice's state. Then call `sdd` action **`replan_slice`** with `reason` (what was found, what changes, why) and the new `tasks`. Tasks already done are kept as they are; the tool replaces only the ones that are not, and numbers the new ones after them.
 
-Finish by rewriting `.sdd/STATE.md` (short, whole file):
+If `next` says the slice was already replanned once, it needs the user: put the blocker to them before planning again. If the finding changes what the slice can deliver, or touches a requirement, stop and tell the user before going on.
 
-```markdown
-# State
-Updated: <date>
-Milestone: M001 <title>, <phase: discussing | planning | executing | validating | complete>
-Slice: S02 <title>, <planning | executing | closing>      (or: none)
-Task: T03 <title>                                          (or: none)
-Next: <the one next step, and the skill that does it>
-Blocked: <what, or "no">
-```
-
-Then say what was planned and what the next step is. Commit `.sdd/` only if the working agreements say to commit.
+Then say what was planned and what `sdd` says the next step is. Commit `.sdd/` only if the working agreements say to commit.
 
 ## Credits
 
-Adapted from [Get Shit Done (GSD 2)](https://getshitdone.help/), source at [gsd-build/GSD-2](https://github.com/gsd-build/GSD-2). The milestone, slice and task hierarchy, the planning files and the order of the phases are GSD's. GSD is a program that keeps its state in a database and dispatches each step itself; these skills keep the state in the files alone, in a folder of their own (`.sdd/`), and are not compatible with a `.gsd/` folder.
+Adapted from [Get Shit Done (GSD 2)](https://getshitdone.help/), source at [gsd-build/GSD-2](https://github.com/gsd-build/GSD-2). The milestone, slice and task hierarchy, the order of the phases, and keeping the plan in a database that says which step is due are GSD's. These skills use their own engine and their own folder (`.sdd/`), and are not compatible with a `.gsd/` folder.

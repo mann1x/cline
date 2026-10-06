@@ -7,6 +7,7 @@ import {
 	createListFilesTool,
 	createMcpTools,
 	createMediaTools,
+	createSddTools,
 	type MediaSessionProvider,
 } from "@cline/core"
 import type { AgentTool, AgentToolContext } from "@cline/shared"
@@ -207,6 +208,17 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 			onError: (message, error) => Logger.error(`${message}:`, error),
 			log: (message) => Logger.log(`[VscodeRuntimeTools] ${message}`),
 		})),
+	)
+
+	// `sdd`, the spec-driven engine, when any of the spec-driven skills is
+	// turned on: the skills say how to work that way, the tool keeps the plan
+	// and the order of the work.
+	tools.push(
+		...createSddTools({
+			cwd: options?.cwd ?? process.cwd(),
+			onError: (message, error) => Logger.error(`${message}:`, error),
+			log: (message) => Logger.log(`[VscodeRuntimeTools] ${message}`),
+		}),
 	)
 
 	// The Library's three tools, when the Library panel has it on. They work on

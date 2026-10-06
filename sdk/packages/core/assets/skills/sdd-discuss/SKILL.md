@@ -4,7 +4,7 @@ description: >-
   Turns an idea into an agreed specification, by conversation: asks for the
   vision, reflects it back, reads the codebase, asks focused rounds of
   questions until the goals, scope, users, definition of done, risks and
-  external systems are clear, then writes the project brief, the numbered
+  external systems are clear, then records the project brief, the numbered
   requirements and the milestone context for the user to approve. Use at the
   start of a project or of a new milestone, when the user wants to discuss or
   change what is being built, or when sdd-wizard finds nothing planned yet.
@@ -13,44 +13,29 @@ disabled: true
 
 # Skill: Discuss
 
-The first phase of spec-driven development. Its product is agreement, written down: what is being built, for whom, and what "done" means. Everything later is planned and checked against what this writes. No code is written here.
+The first phase of spec-driven development. Its product is agreement, on the record: what is being built, for whom, and what "done" means. Everything later is planned and checked against what this records. No code is written here.
 
 Part of the spec-driven set: `sdd-wizard` (where am I, what is next), `sdd-discuss`, `sdd-plan`, `sdd-execute`, `sdd-verify`, `sdd-quick`, `sdd-status`. Each works when the others are off; where this skill hands over to one that is not enabled, do that step directly by the rules given here.
 
-## The `.sdd/` folder
+## The `sdd` tool
 
-Everything this workflow knows is in files under `.sdd/` in the project. There is no other memory: a new chat, or an agent given one task, knows only what these files say. Read them; do not rely on what was said earlier in a conversation.
+The plan is kept in a database in the project (`.sdd/sdd.db`), and you reach it only through the **`sdd` tool**. The database is the truth: what is wanted, the milestones, their slices and tasks, what was proved, and which step is due.
 
-```
-.sdd/
-  PROJECT.md        what the project is and how it stands now; the working agreements
-  REQUIREMENTS.md   the requirements, R001...: active, validated, deferred, out of scope
-  DECISIONS.md      decisions, D001...: what was chosen and why; only ever added to
-  KNOWLEDGE.md      project rules, gotchas and patterns found along the way
-  STATE.md          where the work stands and what the next step is
-  quick/Q001-SUMMARY.md
-  milestones/M001/
-    M001-CONTEXT.md      the agreed scope and goals of the milestone
-    M001-ROADMAP.md      its slices, as a checklist
-    M001-VALIDATION.md   the audit at its end
-    M001-SUMMARY.md      written when it is complete
-    slices/S01/
-      S01-RESEARCH.md  S01-PLAN.md  S01-REPLAN.md
-      S01-SUMMARY.md   S01-UAT.md   S01-UAT-RESULT.md
-      tasks/T01-PLAN.md  tasks/T01-SUMMARY.md
-```
-
+- **`sdd` with action `next`** answers with the one step that is due and everything that step needs. Call it when you start and whenever you are unsure. Do not work out the next step yourself, and do not rely on what was said earlier in a conversation.
+- Every other action records one thing and answers with the next step. An action out of turn is **refused**, with the reason and what to do instead. Do what it says; do not look for a way round it.
+- The markdown under `.sdd/` (`PROJECT.md`, `REQUIREMENTS.md`, `DECISIONS.md`, `KNOWLEDGE.md`, `STATE.md`, and a folder per milestone with its roadmap, plans and summaries) is **written by the tool** from the database, for people to read and review. Read it when it helps. **Never edit it**: an edit is overwritten, and the plan does not change.
+- The tool gives the ids: `M001` (milestone), `S01` (slice), `T01` (task), `R001` (requirement), `D001` (decision).
 - A **milestone** is a deliverable someone could ship. A **slice** is a vertical piece of it that can be demonstrated on its own. A **task** is one unit of work small enough to do, verify and describe in one sitting.
-- Ids are fixed once given: `M001`, `S01`, `T01`, `R001`, `D001`. Never renumber.
-- A checked box (`- [x]`) in a roadmap or a slice plan means done **and** verified. Summaries, validations and checked items are the record: never rewrite them.
-- `STATE.md` is a convenience and can be stale. The files that exist and the boxes that are checked are the truth; when they disagree with `STATE.md`, they win and `STATE.md` is corrected.
+- Only you, the lead, call `sdd`. An agent or a teammate given a task works on the code and reports; it does not record anything.
+
+If you do not have a tool called `sdd`, this skill cannot run. Say so: the tool is offered when a task starts with a spec-driven skill turned on, so the user starts a new task. Do not imitate the tool by writing the files yourself.
 
 ## How to hold the conversation
 
 - **Reflect before asking.** Show that you understood before you ask for more.
 - **Investigate before asking.** Do not ask what the repository or the documentation can answer.
 - **Ask in small rounds:** one to three questions on one topic, with choices where the likely answers are few and your recommendation first. Use the question tool if you have one. Never a questionnaire.
-- **Use the user's words** in what you write down. Downstream steps see only the files; a paraphrase loses what the user stressed.
+- **Use the user's words** in what you record. Later steps see only the record; a paraphrase loses what the user stressed.
 - **Do not shrink the vision.** Do not ask for "the minimum version" or talk the user down. What is large or risky is placed in a later milestone, not cut.
 - **A missing answer is not a yes.** The two approvals below cannot be skipped or assumed.
 
@@ -64,13 +49,13 @@ Ask what they want to build, or what this milestone is for. Then reflect it back
 
 Have them confirm or correct it before going on.
 
-For a vision that is clearly several milestones, map them first: a name, one line of intent and the dependencies for each. Then discuss the first in depth; the others get one line each in `PROJECT.md` and are discussed when their turn comes.
+For a vision that is clearly several milestones, map them first: a name, one line of intent and the dependencies for each. Then discuss the first in depth; the others are kept one line each (`sdd` action `capture`) and are discussed when their turn comes.
 
 ## Stage 2: Investigate
 
 Before the first question round, look:
 
-- **an existing project:** its README, manifest, layout, tests, the code this work will touch, and any `.sdd/` files from earlier milestones (`DECISIONS.md` and `KNOWLEDGE.md` above all);
+- **an existing project:** its README, manifest, layout, tests, the code this work will touch, and what earlier milestones recorded (`.sdd/DECISIONS.md` and `.sdd/KNOWLEDGE.md` above all);
 - **an unfamiliar library or service:** its documentation, not your memory of it;
 - **a new project:** what the user already has, and the usual shape of this kind of thing.
 
@@ -87,7 +72,7 @@ Continue until all six are clear enough to explain to a stranger:
 5. **The biggest unknowns and risks:** technical, and otherwise.
 6. **What it touches outside itself:** services, APIs, data, credentials, other systems.
 
-Ask about what is out of scope as deliberately as about what is in. Do not ask "shall we wrap up?" after each round; go on until the six are covered or the user wants to stop. After every second round, save what is confirmed so far to `.sdd/milestones/M###/M###-CONTEXT-DRAFT.md`, so an interrupted conversation loses nothing.
+Ask about what is out of scope as deliberately as about what is in. Do not ask "shall we wrap up?" after each round; go on until the six are covered or the user wants to stop. As soon as the first of these is confirmed, record the project with `sdd` action `set_project`, and call it again as more becomes clear: it replaces what was recorded, so an interrupted conversation loses nothing.
 
 ## Stage 4: Depth check
 
@@ -97,59 +82,27 @@ Print a structured summary of the six points, in the user's terms, and ask them 
 
 Research briefly what such a thing normally needs that nobody mentioned: the behaviours users will expect, the standard pitfalls of the domain, what is commonly forgotten (errors, empty states, permissions, limits). Offer these as candidates; the user decides which are in.
 
-Then draft the requirements and show the whole table in the chat **before writing the file**:
+Then draft the requirements and show the whole table in the chat **before recording any**:
 
-| ID | Requirement | Source | Status |
-|---|---|---|---|
-| R001 | one behaviour, stated so it can be proved | user / research / inferred | active / deferred / out of scope |
+| Requirement | Source | Status |
+|---|---|---|
+| one behaviour, stated so it can be proved | user / research / inferred | active / deferred / out of scope |
 
 Each requirement is one testable behaviour: a situation and an observable result. "Fast" is not a requirement; "the list of 10,000 rows appears within one second" is.
 
-**This is the second approval.** The user confirms, changes or adds. Only then write.
+**This is the second approval.** The user confirms, changes or adds.
 
-## Stage 6: Write
+## Stage 6: Record
 
-Recheck the size estimate from Stage 1 against everything learned, and say so if it changed. Then write:
+Recheck the size estimate from Stage 1 against everything learned, and say so if it changed. Ask once, for the working agreements, whether they want a commit after each completed task. Then record, in this order, one `sdd` call each:
 
-**`.sdd/PROJECT.md`** (create, or refresh the whole file):
-
-```markdown
-# <Project>
-## What it is
-## Who it is for
-## Current state            <- what exists and works today
-## Milestones               <- M001 <title>: <one line> (status); later ones as one line each
-## Working agreements       <- commit after each task: yes/no; Isolation: worktree | none (asked at the first slice); test command; anything the user asked for
-## Later                    <- ideas set aside, so they are not lost
-```
-
-Ask once, for the working agreements, whether they want a commit after each completed task. Record the answer; do not commit otherwise.
-
-**`.sdd/REQUIREMENTS.md`:**
+1. **`set_project`** with `name`, `description` (what it is, who it is for, and what exists and works today), and `agreements` (commit after each task: yes or no; the test command; isolation, asked at the first slice; anything else the user asked for).
+2. **`add_requirement`** once per requirement: `title` (the behaviour, in one line), `description` (the situation and the observable result, and where it came from), and `status` when it is not active (`deferred`, `out_of_scope`). The tool numbers them.
+3. **`add_decision`** once per choice made in the discussion: `title`, `choice`, and `why` (including what was set aside).
+4. **`add_milestone`** with `title` and `context`. The context is the brief for everything that follows; write it with these headings, in the user's words:
 
 ```markdown
-# Requirements
-## Active
-- **R001** <requirement>  (source: user; milestone: M001; slice: unassigned)
-## Validated               <- moved here, with the evidence, when proved
-## Deferred
-## Out of scope
-```
-
-**`.sdd/DECISIONS.md`** (append, never rewrite), for each choice made in the discussion:
-
-```markdown
-## D001 <short title>  (<date>, scope: project | M001 | S02)
-Chose: <what>
-Because: <why>
-Instead of: <what was set aside>
-```
-
-**`.sdd/milestones/M###/M###-CONTEXT.md`**, the authoritative brief for everything that follows, then delete the draft:
-
-```markdown
-# M001 <title>: Context
-## Goal                    <- in the user's words
+## Goal
 ## Why
 ## Who it is for
 ## In scope
@@ -158,30 +111,19 @@ Instead of: <what was set aside>
 ## Unknowns and risks
 ## External systems        <- including any credential that will be needed, and who provides it
 ## Constraints
-## Requirements covered    <- R ids
 ## Open questions
 ```
 
-Create `.sdd/KNOWLEDGE.md` with a heading if it does not exist.
+5. **`approve`** with `what: "requirements"` — only because the user approved them in Stage 5. If they have not, do not call it; `next` will ask for it.
 
-Finish by rewriting `.sdd/STATE.md` (short, whole file):
+Later milestones that were mapped in Stage 1 are kept with `capture`, one line each. Only one milestone is open at a time.
 
-```markdown
-# State
-Updated: <date>
-Milestone: M001 <title>, <phase: discussing | planning | executing | validating | complete>
-Slice: S02 <title>, <planning | executing | closing>      (or: none)
-Task: T03 <title>                                          (or: none)
-Next: <the one next step, and the skill that does it>
-Blocked: <what, or "no">
-```
-
-Then say what was written and that the next step is planning the milestone (`sdd-plan`). Commit `.sdd/` only if the working agreements say to commit.
+Then say what was recorded and what `sdd` says is next, which is planning the milestone (`sdd-plan`). Commit `.sdd/` only if the working agreements say to commit.
 
 ## Changing course later
 
-When the user comes back to change what is wanted mid-project, run the same conversation, shorter: reflect, ask only what the change leaves unclear, show the changed requirements, get approval, update `REQUIREMENTS.md`, the context and a `DECISIONS.md` entry. Slices already completed are not edited. The roadmap's remaining slices are then revised by `sdd-plan`.
+When the user comes back to change what is wanted mid-project, run the same conversation, shorter: reflect, ask only what the change leaves unclear, show the changed requirements, get approval. Then record it: `add_requirement` and `update_requirement` (a requirement no longer wanted becomes `deferred` or `out_of_scope`; it is not deleted), `update_milestone` for the context, and `add_decision` for the change itself. A new active requirement takes back the approval, so call `approve` again once the user agrees. Slices already completed are not changed. The slices still to be built are then revised by `sdd-plan`.
 
 ## Credits
 
-Adapted from [Get Shit Done (GSD 2)](https://getshitdone.help/), source at [gsd-build/GSD-2](https://github.com/gsd-build/GSD-2). The milestone, slice and task hierarchy, the planning files and the order of the phases are GSD's. GSD is a program that keeps its state in a database and dispatches each step itself; these skills keep the state in the files alone, in a folder of their own (`.sdd/`), and are not compatible with a `.gsd/` folder.
+Adapted from [Get Shit Done (GSD 2)](https://getshitdone.help/), source at [gsd-build/GSD-2](https://github.com/gsd-build/GSD-2). The milestone, slice and task hierarchy, the order of the phases, and keeping the plan in a database that says which step is due are GSD's. These skills use their own engine and their own folder (`.sdd/`), and are not compatible with a `.gsd/` folder.

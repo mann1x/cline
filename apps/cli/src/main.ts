@@ -1497,6 +1497,22 @@ export async function runCli(): Promise<void> {
 			config.extraTools = [...(config.extraTools ?? []), ...mediaTools];
 		}
 
+		// `sdd`, the spec-driven engine, when any of the spec-driven skills is
+		// turned on, as in the extension: the skills say how to work that way,
+		// the tool keeps the plan and the order of the work.
+		const { createSddTools } = await import("@cline/core");
+		const sddTools = createSddTools({
+			cwd,
+			log: (message) => loggerAdapter.core.log(message),
+			onError: (message, error) =>
+				loggerAdapter.core.log(
+					`${message}: ${error instanceof Error ? error.message : String(error)}`,
+				),
+		});
+		if (sddTools.length > 0) {
+			config.extraTools = [...(config.extraTools ?? []), ...sddTools];
+		}
+
 		// Delegated agents on a model of their own. The same shape the extension's
 		// Agents tab produces, read at the same place in core: only the fields
 		// named here replace the session's, so an agents model given without a
