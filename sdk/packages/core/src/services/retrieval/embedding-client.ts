@@ -110,6 +110,24 @@ function wait(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
+/**
+ * Whether the server refused an input for its size. llama.cpp reports that
+ * as a 500, which would otherwise read as a server worth asking again.
+ */
+export function isInputTooLarge(error: unknown): boolean {
+	return (
+		error instanceof RetrievalEndpointError &&
+		/too (?:large|long)|exceeds?\b|maximum (?:context|sequence)/i.test(
+			error.message,
+		)
+	);
+}
+
+function isWorthRetrying(error: RetrievalEndpointError): boolean {
+	if (isInputTooLarge(error)) return false;
+	return error.status === 429 || (error.status ?? 500) >= 500;
+}
+
 async function postJson(
 	url: string,
 	endpoint: RetrievalEndpoint,
@@ -143,13 +161,13 @@ async function postJson(
 				text,
 			);
 			// The request itself is wrong: asking again changes nothing.
-			if (response.status !== 429 && response.status < 500) {
+			if (!isWorthRetrying(failure)) {
 				throw failure;
 			}
 		} catch (error) {
 			if (options.signal?.aborted) throw error;
 			if (error instanceof RetrievalEndpointError && error.status) {
-				if (error.status !== 429 && error.status < 500) throw error;
+				if (!isWorthRetrying(error)) throw error;
 				failure = error;
 			} else {
 				failure = new RetrievalEndpointError(

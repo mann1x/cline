@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	embedTexts,
+	isInputTooLarge,
 	RetrievalEndpointError,
 	rerankDocuments,
 	resolveRetrievalBaseUrl,
@@ -184,5 +185,24 @@ describe("rerankDocuments", () => {
 		await expect(
 			rerankDocuments(endpoint, "q", ["a", "b"], { fetch }),
 		).rejects.toThrow("malformed score");
+	});
+
+	it("does not ask again when the server says the input is too large", async () => {
+		// llama.cpp answers 500 for this; it is the request that is wrong.
+		let calls = 0;
+		const send = (async () => {
+			calls++;
+			return new Response(
+				'{"error":{"code":500,"message":"input (543 tokens) is too large to process. increase the physical batch size (current batch size: 512)"}}',
+				{ status: 500 },
+			);
+		}) as typeof fetch;
+		const error = await rerankDocuments(endpoint, "q", ["a"], {
+			fetch: send,
+			retryDelayMs: 1,
+		}).catch((caught) => caught);
+		expect(calls).toBe(1);
+		expect(isInputTooLarge(error)).toBe(true);
+		expect(isInputTooLarge(new Error("too large"))).toBe(false);
 	});
 });
