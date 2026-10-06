@@ -30,6 +30,14 @@ Documents are grouped in **collections**, which the model names when it adds (`d
 
 At the top of **Settings > Library**, once the Library is on, a box says where search stands: how many documents, collections and passages are stored, whether LanceDB is downloaded and loads, its version, the embedding model in use and how many documents have vectors. **Download LanceDB** fetches it. Enabling the Library alone does not download anything: keyword search needs nothing.
 
+## Choosing and checking the embedding model
+
+On the **Embedding** tab of the API configuration, the model is picked from the server's own list when it gives one. An Ollama or xOllama says which of its models embed, so the list holds those only. Any other server lists all its models, with nothing to tell a chat model from an embedding one, and the tab says so. **Type a name…** is always there.
+
+**Check the embedding model** embeds one sentence and shows what came back: the address that was used, whether it was the session's provider, the size of the vectors, or the server's refusal. Use it after ticking **Embed on the session's provider**: a server can list a model and still refuse to embed with it. **Check the reranking model** does the same with two passages and a question.
+
+Nothing is embedded until a model is named. The search engine box in the Library and Memory panels says which one thing is missing: the box, the address, or the model.
+
 ## Search by keyword
 
 With nothing else configured, the Library is searched by keyword. This needs no model and no download, works the moment a document is added, and is very good at names, codes and exact phrases. Words that appear almost everywhere in the Library are left out of a query, since they say nothing about which passage is wanted.

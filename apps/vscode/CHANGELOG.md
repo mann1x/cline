@@ -118,6 +118,11 @@ opencoti, llama.cpp, LM Studio, hosted services). The same tab takes an
 optional **reranking model**, which reads the best passages against the
 question and puts them in order.
 
+The embedding model is picked from the server's own list: an Ollama or xOllama
+shows only its embedding models. **Check the embedding model** and **Check the
+reranking model** each make one real request and show what came back, so you
+know whether the session's provider embeds before relying on it.
+
 The first time the box is ticked, Cerebriline downloads LanceDB, where the
 vectors are kept: 200 to 390 MB depending on the platform, once, with every
 file checked against a known checksum. It is not available on Intel Macs, where
