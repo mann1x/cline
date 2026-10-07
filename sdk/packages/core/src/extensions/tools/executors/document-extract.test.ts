@@ -155,6 +155,22 @@ describe("extract_document", () => {
 		expect(Date.now() - started).toBeLessThan(5_000);
 	});
 
+	it("reads an EPUB whose package files use namespace prefixes", async () => {
+		// Measured on a real shelf: 21 of 35 books in one import failed on this
+		// ("reading 'navMap'", "reading 'metadata'"), and 300 of 7,157 EPUBs
+		// across the whole share on it and its neighbours below.
+		const book = await readDocumentForBook(
+			join(workspace, place("prefixed.epub")),
+			{ scratchDir: join(workspace, "scratch") },
+		);
+		expect(book.title).toBe("Prefixed Probe");
+		expect(book.author).toBe("A. Writer");
+		expect(book.markdown).toContain(
+			"Every element here is written with a namespace prefix.",
+		);
+		await book.release();
+	});
+
 	it("reads a book's text alone when the pictures are not wanted", async () => {
 		const file = join(workspace, place("probe.epub"));
 		const scratchDir = join(workspace, "scratch");

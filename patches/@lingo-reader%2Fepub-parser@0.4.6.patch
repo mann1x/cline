@@ -1,0 +1,402 @@
+diff --git a/node_modules/@lingo-reader/epub-parser/.bun-tag-31087b8c9c07aba4 b/.bun-tag-31087b8c9c07aba4
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@lingo-reader/epub-parser/.bun-tag-fbf2a588ae473b5d b/.bun-tag-fbf2a588ae473b5d
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/dist/index.browser.js b/dist/index.browser.js
+index 809f59be22629b262a9a80ef1e1f07c665517717..9487093880dc3177fba1717acba50b6c22947cc1 100644
+--- a/dist/index.browser.js
++++ b/dist/index.browser.js
+@@ -134,6 +134,15 @@ const resourceExtensionToMimeType = {
+ };
+ const savedResourceMediaTypePrefixes = new Set(Object.values(resourceExtensionToMimeType));
+ const prefixMatch = /(?!xmlns)^.*:/;
++// The package document and the NCX may write their elements with a prefix
++// bound to their namespace (`<opf:package>`, `<ncx:navMap>`, `<ns0:package>`
++// from Python's ElementTree), which is valid XML and was read as no package
++// and no table of contents. Element prefixes are dropped, as for
++// encryption.xml: metadata is matched by its local name already, and
++// attributes keep theirs (`opf:role`).
++const packageXmlOptions = {
++  tagNameProcessors: [(str) => str.replace(prefixMatch, "")]
++};
+ function extractEncryptionKeys(options) {
+   const encryptionKeys = {};
+   if (options.rsaPrivateKey) {
+@@ -495,6 +504,8 @@ function parseSpine(spineAST, manifest) {
+     const $ = itemref.$;
+     if ($.idref) {
+       const element = manifest[$.idref];
++      // A chapter the manifest does not list is skipped, not fatal.
++      if (!element) continue;
+       spine.push({
+         ...element,
+         href: `epub:${element.href}`,
+@@ -511,8 +522,9 @@ function parseSpine(spineAST, manifest) {
+ function parseGuide(guideAST, baseDir) {
+   const guide = [];
+   const references = guideAST.reference;
++  // An empty <guide/> is a list of no landmarks, not a broken book.
+   if (!references) {
+-    throw new Error("Within the package there may be one guide element, containing one or more reference elements.");
++    return guide;
+   }
+   for (const reference of references) {
+     const element = reference.$;
+@@ -540,7 +552,7 @@ function parseCollection(collectionAST, contentBaseDir) {
+ }
+ function parseNavMap(navMap, hrefToIdMap, ncxBaseDir) {
+   const output = [];
+-  walkNavMap(output, navMap.navPoint, hrefToIdMap, ncxBaseDir);
++  walkNavMap(output, navMap?.navPoint ?? [], hrefToIdMap, ncxBaseDir);
+   return output;
+ }
+ function walkNavMap(output, navPoints, hrefToIdMap, ncxBaseDir) {
+@@ -771,12 +783,20 @@ function transformHTML(html, htmlDir, resourceSaveDir) {
+     const links = head[1].match(/<link[^>]*>/g);
+     if (links) {
+       for (const link of links) {
+-        const linkHref = link.match(/href="([^"]*)"/)[1];
++        const linkHref = link.match(/href=["']([^"']*)["']/)?.[1];
++        if (!linkHref) continue;
+         if (linkHref.endsWith(".css")) {
+           const cssFilePath = shared.path.joinPosix(htmlDir, linkHref);
+           const cssName = cssFilePath.replace(/\//g, "_");
+           let realPath = shared.path.resolve(resourceSaveDir, cssName);
+-          let fileContent = new TextDecoder().decode(readFileSync(realPath));
++          let fileContent;
++          try {
++            fileContent = new TextDecoder().decode(readFileSync(realPath));
++          } catch {
++            // A stylesheet the book links and does not carry: the chapter
++            // reads without it.
++            continue;
++          }
+           fileContent = fileContent.replace(/url\(([^)]*)\)/g, (_, url) => {
+             url = url.replace(/['"]/g, "");
+             const realUrl = getResourceUrl(url.trim(), shared.path.dirname(cssFilePath), resourceSaveDir);
+@@ -947,7 +967,7 @@ class EpubFile {
+     const mimetype = await this.zip.readFile("mimetype");
+     this.mimeType = parseMimeType(mimetype);
+     const containerXml = await this.zip.readFile("meta-inf/container.xml");
+-    const containerAST = await shared.parsexml(containerXml);
++    const containerAST = await shared.parsexml(containerXml, packageXmlOptions);
+     this.opfPath = parseContainer(containerAST);
+     this.opfDir = shared.path.dirname(this.opfPath);
+     if (this.zip.hasFile("meta-inf/encryption.xml")) {
+@@ -965,7 +985,7 @@ class EpubFile {
+    */
+   async parseRootFile() {
+     const rootFileOPF = await this.zip.readFile(this.opfPath);
+-    const xml = await shared.parsexml(rootFileOPF);
++    const xml = await shared.parsexml(rootFileOPF, packageXmlOptions);
+     const rootFile = xml.package;
+     let tocPath = "";
+     if (rootFile.metadata) {
+@@ -1001,7 +1021,7 @@ class EpubFile {
+     if (tocPath.length > 0) {
+       const tocDir = shared.path.dirname(tocPath);
+       const tocNcxFile = await this.zip.readFile(tocPath);
+-      const ncx = (await shared.parsexml(tocNcxFile)).ncx;
++      const ncx = (await shared.parsexml(tocNcxFile, packageXmlOptions)).ncx;
+       if (ncx.navMap)
+         this.navMap = parseNavMap(ncx.navMap[0], this.hrefToIdMap, tocDir);
+       if (ncx.pageList)
+diff --git a/dist/index.browser.mjs b/dist/index.browser.mjs
+index cec5e8af18ab8249253cb992ec0e173910f6323f..a14051d00f8fa3b941ec2647b9200e40f2f9fb3d 100644
+--- a/dist/index.browser.mjs
++++ b/dist/index.browser.mjs
+@@ -132,6 +132,15 @@ const resourceExtensionToMimeType = {
+ };
+ const savedResourceMediaTypePrefixes = new Set(Object.values(resourceExtensionToMimeType));
+ const prefixMatch = /(?!xmlns)^.*:/;
++// The package document and the NCX may write their elements with a prefix
++// bound to their namespace (`<opf:package>`, `<ncx:navMap>`, `<ns0:package>`
++// from Python's ElementTree), which is valid XML and was read as no package
++// and no table of contents. Element prefixes are dropped, as for
++// encryption.xml: metadata is matched by its local name already, and
++// attributes keep theirs (`opf:role`).
++const packageXmlOptions = {
++  tagNameProcessors: [(str) => str.replace(prefixMatch, "")]
++};
+ function extractEncryptionKeys(options) {
+   const encryptionKeys = {};
+   if (options.rsaPrivateKey) {
+@@ -493,6 +502,8 @@ function parseSpine(spineAST, manifest) {
+     const $ = itemref.$;
+     if ($.idref) {
+       const element = manifest[$.idref];
++      // A chapter the manifest does not list is skipped, not fatal.
++      if (!element) continue;
+       spine.push({
+         ...element,
+         href: `epub:${element.href}`,
+@@ -509,8 +520,9 @@ function parseSpine(spineAST, manifest) {
+ function parseGuide(guideAST, baseDir) {
+   const guide = [];
+   const references = guideAST.reference;
++  // An empty <guide/> is a list of no landmarks, not a broken book.
+   if (!references) {
+-    throw new Error("Within the package there may be one guide element, containing one or more reference elements.");
++    return guide;
+   }
+   for (const reference of references) {
+     const element = reference.$;
+@@ -538,7 +550,7 @@ function parseCollection(collectionAST, contentBaseDir) {
+ }
+ function parseNavMap(navMap, hrefToIdMap, ncxBaseDir) {
+   const output = [];
+-  walkNavMap(output, navMap.navPoint, hrefToIdMap, ncxBaseDir);
++  walkNavMap(output, navMap?.navPoint ?? [], hrefToIdMap, ncxBaseDir);
+   return output;
+ }
+ function walkNavMap(output, navPoints, hrefToIdMap, ncxBaseDir) {
+@@ -769,12 +781,20 @@ function transformHTML(html, htmlDir, resourceSaveDir) {
+     const links = head[1].match(/<link[^>]*>/g);
+     if (links) {
+       for (const link of links) {
+-        const linkHref = link.match(/href="([^"]*)"/)[1];
++        const linkHref = link.match(/href=["']([^"']*)["']/)?.[1];
++        if (!linkHref) continue;
+         if (linkHref.endsWith(".css")) {
+           const cssFilePath = path.joinPosix(htmlDir, linkHref);
+           const cssName = cssFilePath.replace(/\//g, "_");
+           let realPath = path.resolve(resourceSaveDir, cssName);
+-          let fileContent = new TextDecoder().decode(readFileSync(realPath));
++          let fileContent;
++          try {
++            fileContent = new TextDecoder().decode(readFileSync(realPath));
++          } catch {
++            // A stylesheet the book links and does not carry: the chapter
++            // reads without it.
++            continue;
++          }
+           fileContent = fileContent.replace(/url\(([^)]*)\)/g, (_, url) => {
+             url = url.replace(/['"]/g, "");
+             const realUrl = getResourceUrl(url.trim(), path.dirname(cssFilePath), resourceSaveDir);
+@@ -945,7 +965,7 @@ class EpubFile {
+     const mimetype = await this.zip.readFile("mimetype");
+     this.mimeType = parseMimeType(mimetype);
+     const containerXml = await this.zip.readFile("meta-inf/container.xml");
+-    const containerAST = await parsexml(containerXml);
++    const containerAST = await parsexml(containerXml, packageXmlOptions);
+     this.opfPath = parseContainer(containerAST);
+     this.opfDir = path.dirname(this.opfPath);
+     if (this.zip.hasFile("meta-inf/encryption.xml")) {
+@@ -963,7 +983,7 @@ class EpubFile {
+    */
+   async parseRootFile() {
+     const rootFileOPF = await this.zip.readFile(this.opfPath);
+-    const xml = await parsexml(rootFileOPF);
++    const xml = await parsexml(rootFileOPF, packageXmlOptions);
+     const rootFile = xml.package;
+     let tocPath = "";
+     if (rootFile.metadata) {
+@@ -999,7 +1019,7 @@ class EpubFile {
+     if (tocPath.length > 0) {
+       const tocDir = path.dirname(tocPath);
+       const tocNcxFile = await this.zip.readFile(tocPath);
+-      const ncx = (await parsexml(tocNcxFile)).ncx;
++      const ncx = (await parsexml(tocNcxFile, packageXmlOptions)).ncx;
+       if (ncx.navMap)
+         this.navMap = parseNavMap(ncx.navMap[0], this.hrefToIdMap, tocDir);
+       if (ncx.pageList)
+diff --git a/dist/index.node.js b/dist/index.node.js
+index 52ea2dda29000f73051ab72499b34651e47bf290..d7f59b4efc00fc49ba25e51a5183529de7b3bded 100644
+--- a/dist/index.node.js
++++ b/dist/index.node.js
+@@ -132,6 +132,15 @@ const resourceExtensionToMimeType = {
+ };
+ const savedResourceMediaTypePrefixes = new Set(Object.values(resourceExtensionToMimeType));
+ const prefixMatch = /(?!xmlns)^.*:/;
++// The package document and the NCX may write their elements with a prefix
++// bound to their namespace (`<opf:package>`, `<ncx:navMap>`, `<ns0:package>`
++// from Python's ElementTree), which is valid XML and was read as no package
++// and no table of contents. Element prefixes are dropped, as for
++// encryption.xml: metadata is matched by its local name already, and
++// attributes keep theirs (`opf:role`).
++const packageXmlOptions = {
++  tagNameProcessors: [(str) => str.replace(prefixMatch, "")]
++};
+ function extractEncryptionKeys(options) {
+   const encryptionKeys = {};
+   if (options.rsaPrivateKey) {
+@@ -449,6 +458,8 @@ function parseSpine(spineAST, manifest) {
+     const $ = itemref.$;
+     if ($.idref) {
+       const element = manifest[$.idref];
++      // A chapter the manifest does not list is skipped, not fatal.
++      if (!element) continue;
+       spine.push({
+         ...element,
+         href: `epub:${element.href}`,
+@@ -465,8 +476,9 @@ function parseSpine(spineAST, manifest) {
+ function parseGuide(guideAST, baseDir) {
+   const guide = [];
+   const references = guideAST.reference;
++  // An empty <guide/> is a list of no landmarks, not a broken book.
+   if (!references) {
+-    throw new Error("Within the package there may be one guide element, containing one or more reference elements.");
++    return guide;
+   }
+   for (const reference of references) {
+     const element = reference.$;
+@@ -494,7 +506,7 @@ function parseCollection(collectionAST, contentBaseDir) {
+ }
+ function parseNavMap(navMap, hrefToIdMap, ncxBaseDir) {
+   const output = [];
+-  walkNavMap(output, navMap.navPoint, hrefToIdMap, ncxBaseDir);
++  walkNavMap(output, navMap?.navPoint ?? [], hrefToIdMap, ncxBaseDir);
+   return output;
+ }
+ function walkNavMap(output, navPoints, hrefToIdMap, ncxBaseDir) {
+@@ -713,12 +725,20 @@ function transformHTML(html, htmlDir, resourceSaveDir) {
+     const links = head[1].match(/<link[^>]*>/g);
+     if (links) {
+       for (const link of links) {
+-        const linkHref = link.match(/href="([^"]*)"/)[1];
++        const linkHref = link.match(/href=["']([^"']*)["']/)?.[1];
++        if (!linkHref) continue;
+         if (linkHref.endsWith(".css")) {
+           const cssFilePath = shared.path.joinPosix(htmlDir, linkHref);
+           const cssName = cssFilePath.replace(/\//g, "_");
+           let realPath = shared.path.resolve(resourceSaveDir, cssName);
+-          let fileContent = new TextDecoder().decode(readFileSync(realPath));
++          let fileContent;
++          try {
++            fileContent = new TextDecoder().decode(readFileSync(realPath));
++          } catch {
++            // A stylesheet the book links and does not carry: the chapter
++            // reads without it.
++            continue;
++          }
+           fileContent = fileContent.replace(/url\(([^)]*)\)/g, (_, url) => {
+             url = url.replace(/['"]/g, "");
+             const realUrl = getResourceUrl(url.trim(), shared.path.dirname(cssFilePath), resourceSaveDir);
+@@ -878,7 +898,7 @@ class EpubFile {
+     const mimetype = await this.zip.readFile("mimetype");
+     this.mimeType = parseMimeType(mimetype);
+     const containerXml = await this.zip.readFile("meta-inf/container.xml");
+-    const containerAST = await shared.parsexml(containerXml);
++    const containerAST = await shared.parsexml(containerXml, packageXmlOptions);
+     this.opfPath = parseContainer(containerAST);
+     this.opfDir = shared.path.dirname(this.opfPath);
+     if (this.zip.hasFile("meta-inf/encryption.xml")) {
+@@ -896,7 +916,7 @@ class EpubFile {
+    */
+   async parseRootFile() {
+     const rootFileOPF = await this.zip.readFile(this.opfPath);
+-    const xml = await shared.parsexml(rootFileOPF);
++    const xml = await shared.parsexml(rootFileOPF, packageXmlOptions);
+     const rootFile = xml.package;
+     let tocPath = "";
+     if (rootFile.metadata) {
+@@ -932,7 +952,7 @@ class EpubFile {
+     if (tocPath.length > 0) {
+       const tocDir = shared.path.dirname(tocPath);
+       const tocNcxFile = await this.zip.readFile(tocPath);
+-      const ncx = (await shared.parsexml(tocNcxFile)).ncx;
++      const ncx = (await shared.parsexml(tocNcxFile, packageXmlOptions)).ncx;
+       if (ncx.navMap)
+         this.navMap = parseNavMap(ncx.navMap[0], this.hrefToIdMap, tocDir);
+       if (ncx.pageList)
+diff --git a/dist/index.node.mjs b/dist/index.node.mjs
+index 3e22a9fa12213e95856722dbdc9bb446b289cd48..fd18fb35db3c2a78864a8fb809a7222626274e1d 100644
+--- a/dist/index.node.mjs
++++ b/dist/index.node.mjs
+@@ -130,6 +130,15 @@ const resourceExtensionToMimeType = {
+ };
+ const savedResourceMediaTypePrefixes = new Set(Object.values(resourceExtensionToMimeType));
+ const prefixMatch = /(?!xmlns)^.*:/;
++// The package document and the NCX may write their elements with a prefix
++// bound to their namespace (`<opf:package>`, `<ncx:navMap>`, `<ns0:package>`
++// from Python's ElementTree), which is valid XML and was read as no package
++// and no table of contents. Element prefixes are dropped, as for
++// encryption.xml: metadata is matched by its local name already, and
++// attributes keep theirs (`opf:role`).
++const packageXmlOptions = {
++  tagNameProcessors: [(str) => str.replace(prefixMatch, "")]
++};
+ function extractEncryptionKeys(options) {
+   const encryptionKeys = {};
+   if (options.rsaPrivateKey) {
+@@ -447,6 +456,8 @@ function parseSpine(spineAST, manifest) {
+     const $ = itemref.$;
+     if ($.idref) {
+       const element = manifest[$.idref];
++      // A chapter the manifest does not list is skipped, not fatal.
++      if (!element) continue;
+       spine.push({
+         ...element,
+         href: `epub:${element.href}`,
+@@ -463,8 +474,9 @@ function parseSpine(spineAST, manifest) {
+ function parseGuide(guideAST, baseDir) {
+   const guide = [];
+   const references = guideAST.reference;
++  // An empty <guide/> is a list of no landmarks, not a broken book.
+   if (!references) {
+-    throw new Error("Within the package there may be one guide element, containing one or more reference elements.");
++    return guide;
+   }
+   for (const reference of references) {
+     const element = reference.$;
+@@ -492,7 +504,7 @@ function parseCollection(collectionAST, contentBaseDir) {
+ }
+ function parseNavMap(navMap, hrefToIdMap, ncxBaseDir) {
+   const output = [];
+-  walkNavMap(output, navMap.navPoint, hrefToIdMap, ncxBaseDir);
++  walkNavMap(output, navMap?.navPoint ?? [], hrefToIdMap, ncxBaseDir);
+   return output;
+ }
+ function walkNavMap(output, navPoints, hrefToIdMap, ncxBaseDir) {
+@@ -711,12 +723,20 @@ function transformHTML(html, htmlDir, resourceSaveDir) {
+     const links = head[1].match(/<link[^>]*>/g);
+     if (links) {
+       for (const link of links) {
+-        const linkHref = link.match(/href="([^"]*)"/)[1];
++        const linkHref = link.match(/href=["']([^"']*)["']/)?.[1];
++        if (!linkHref) continue;
+         if (linkHref.endsWith(".css")) {
+           const cssFilePath = path.joinPosix(htmlDir, linkHref);
+           const cssName = cssFilePath.replace(/\//g, "_");
+           let realPath = path.resolve(resourceSaveDir, cssName);
+-          let fileContent = new TextDecoder().decode(readFileSync(realPath));
++          let fileContent;
++          try {
++            fileContent = new TextDecoder().decode(readFileSync(realPath));
++          } catch {
++            // A stylesheet the book links and does not carry: the chapter
++            // reads without it.
++            continue;
++          }
+           fileContent = fileContent.replace(/url\(([^)]*)\)/g, (_, url) => {
+             url = url.replace(/['"]/g, "");
+             const realUrl = getResourceUrl(url.trim(), path.dirname(cssFilePath), resourceSaveDir);
+@@ -876,7 +896,7 @@ class EpubFile {
+     const mimetype = await this.zip.readFile("mimetype");
+     this.mimeType = parseMimeType(mimetype);
+     const containerXml = await this.zip.readFile("meta-inf/container.xml");
+-    const containerAST = await parsexml(containerXml);
++    const containerAST = await parsexml(containerXml, packageXmlOptions);
+     this.opfPath = parseContainer(containerAST);
+     this.opfDir = path.dirname(this.opfPath);
+     if (this.zip.hasFile("meta-inf/encryption.xml")) {
+@@ -894,7 +914,7 @@ class EpubFile {
+    */
+   async parseRootFile() {
+     const rootFileOPF = await this.zip.readFile(this.opfPath);
+-    const xml = await parsexml(rootFileOPF);
++    const xml = await parsexml(rootFileOPF, packageXmlOptions);
+     const rootFile = xml.package;
+     let tocPath = "";
+     if (rootFile.metadata) {
+@@ -930,7 +950,7 @@ class EpubFile {
+     if (tocPath.length > 0) {
+       const tocDir = path.dirname(tocPath);
+       const tocNcxFile = await this.zip.readFile(tocPath);
+-      const ncx = (await parsexml(tocNcxFile)).ncx;
++      const ncx = (await parsexml(tocNcxFile, packageXmlOptions)).ncx;
+       if (ncx.navMap)
+         this.navMap = parseNavMap(ncx.navMap[0], this.hrefToIdMap, tocDir);
+       if (ncx.pageList)
