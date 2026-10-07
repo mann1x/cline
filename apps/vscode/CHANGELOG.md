@@ -90,6 +90,19 @@ The reminder of the checklist, written to the model every few calls, no
 longer shows at the end of a tool's **Report**. It used to end every third
 import report with "Task progress (0/0 done)".
 
+### Files up to 1 GB are read, and the limit is a setting
+
+The Document Reader refused any file over 200 MB, a limit from when books
+were read inside the extension itself. Each file is read in a process of its
+own now, so the limit is 1 GB, and **Largest file to read** sets it: in the
+Document Reader's options and in **Settings > Library**, one setting shown in
+both. A file over it is refused by name, and the message says where to change
+it.
+
+Measured on the largest books of a real shelf: a 228 MB EPUB read in 3 s with
+812 MB of memory at its peak, a 411 MB scanned PDF in 80 s with 2.6 GB. Two
+files are read at once, so lower the limit on a machine with little memory.
+
 ## [4.100.241] — 2026-10-06
 
 ### Built-in skills
