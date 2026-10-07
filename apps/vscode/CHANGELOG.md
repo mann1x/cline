@@ -5,6 +5,32 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.242] — 2026-10-07
+
+### Documents are read in a process of their own
+
+Reading a book used to happen inside the session's own process, which in VS
+Code is the extension host that every installed extension shares. A long
+scanned PDF is hundreds of megabytes of decoding and text recognition, and when
+that process ran out of memory the whole host went down: the conversation
+stopped, and every other extension restarted with it.
+
+Each document is now read in a separate process, started for that one file and
+gone when it has answered. This covers `library_check`, `library_add` and
+`extract_document`, for every format, in the extension and the CLI.
+
+- A reader that runs out of memory, or stops for any other reason, is one file
+  that was not read. The call's report names the file, the page it stopped on
+  and why, and goes on with the rest. The session is not affected.
+- Progress, cancelling, and the vision model reading scanned pages all work as
+  before.
+- At most two documents are read at once, however many a single turn asks for.
+- The log says, for each file, how long the read took and how much memory it
+  needed at its peak.
+
+Where a reader process cannot be started, the document is read in the session's
+own process as before, and the log says so.
+
 ## [4.100.241] — 2026-10-06
 
 ### Built-in skills
