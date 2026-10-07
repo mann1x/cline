@@ -322,6 +322,10 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.extractDocumentDescribeImages !== undefined) {
 			controller.stateManager.setGlobalState("extractDocumentDescribeImages", !!request.extractDocumentDescribeImages)
 		}
+		// A size, so zero or less is not "no limit": it is ignored.
+		if (request.extractDocumentMaxFileMb !== undefined && request.extractDocumentMaxFileMb > 0) {
+			controller.stateManager.setGlobalState("extractDocumentMaxFileMb", Math.round(request.extractDocumentMaxFileMb))
+		}
 		if (request.polykvAgentsPriorityZero !== undefined) {
 			controller.stateManager.setGlobalState("polykvAgentsPriorityZero", !!request.polykvAgentsPriorityZero)
 		}

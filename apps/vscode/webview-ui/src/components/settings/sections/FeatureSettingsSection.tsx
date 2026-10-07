@@ -285,6 +285,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		extractDocumentOcr,
 		extractDocumentOcrLanguages,
 		extractDocumentDescribeImages,
+		extractDocumentMaxFileMb,
 		agentModelOverride,
 		strongNudgesEnabled,
 		worktreesEnabled,
@@ -339,6 +340,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 										<DocumentReaderOptions
 											describeImages={extractDocumentDescribeImages}
 											languages={extractDocumentOcrLanguages}
+											maxFileMb={extractDocumentMaxFileMb}
 											ocr={extractDocumentOcr}
 										/>
 									)}

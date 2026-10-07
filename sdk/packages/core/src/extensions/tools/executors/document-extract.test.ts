@@ -17,6 +17,8 @@ import { detectFormat } from "./document/formats";
 import { parseUnitRange } from "./document/range";
 import {
 	createDocumentExtractExecutor,
+	DEFAULT_MAX_FILE_MB,
+	documentReaderLimitBytes,
 	markdownToText,
 	readDocumentForBook,
 } from "./document-extract";
@@ -293,6 +295,44 @@ describe("extract_document", () => {
 		const djvu = join(workspace, "book.djvu");
 		copyFileSync(join(FIXTURES, "probe.pdf"), djvu);
 		await expect(run({ path: "book.djvu" })).rejects.toThrow(/DjVu/);
+	});
+});
+
+describe("the largest file read", () => {
+	it("is 1 GB unless the setting says otherwise", () => {
+		expect(DEFAULT_MAX_FILE_MB).toBe(1024);
+		expect(documentReaderLimitBytes(undefined, undefined)).toBe(1024 ** 3);
+		expect(documentReaderLimitBytes(undefined, { maxFileMb: 300 })).toBe(
+			300 * 1024 * 1024,
+		);
+		// Nothing readable is no limit at all: the default stands.
+		for (const maxFileMb of [0, -5, Number.NaN]) {
+			expect(documentReaderLimitBytes(undefined, { maxFileMb })).toBe(
+				1024 ** 3,
+			);
+		}
+		expect(documentReaderLimitBytes(10, { maxFileMb: 300 })).toBe(10);
+	});
+
+	it("refuses a larger file by name, and says where the limit is set", async () => {
+		const file = join(workspace, place("probe.docx"));
+		const reader = { maxFileMb: 1 / 1024 }; // 1 KB
+		await expect(
+			readDocumentForBook(file, {
+				scratchDir: join(workspace, "scratch"),
+				reader,
+			}),
+		).rejects.toThrow(
+			/probe\.docx is .*, past the 1 KB the Document Reader reads\. The limit is "Largest file to read" in Settings > Library\./,
+		);
+		const extract = createDocumentExtractExecutor({ cwd: workspace, reader });
+		await expect(
+			extract(
+				{ path: "probe.docx" } as ExtractDocumentInput,
+				workspace,
+				{} as AgentToolContext,
+			),
+		).rejects.toThrow(/Largest file to read/);
 	});
 });
 

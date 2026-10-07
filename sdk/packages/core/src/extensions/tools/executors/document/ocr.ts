@@ -34,6 +34,11 @@ export interface DocumentReaderSettings {
 	ocrDataDir?: string;
 	/** Describe extracted pictures with the vision model. @default false */
 	describePictures?: boolean;
+	/**
+	 * The largest file read, in MB; a larger one is refused by name.
+	 * @default 1024
+	 */
+	maxFileMb?: number;
 }
 
 export const BUNDLED_OCR_LANGUAGE = "eng";

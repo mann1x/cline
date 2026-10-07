@@ -12,6 +12,7 @@ import { SettingsCheckbox } from "../common/SettingsCheckbox"
 import Section from "../Section"
 import { profilesThatMayReadImages, useImageSupport } from "../utils/imageSupport"
 import { useRetrievalStatus } from "../utils/useRetrievalStatus"
+import { ReaderFileLimit } from "./DocumentReaderOptions"
 import LibraryBrowser from "./LibraryBrowser"
 import RetrievalEngineStatus from "./RetrievalEngineStatus"
 
@@ -50,6 +51,7 @@ const LibrarySettingsSection = ({ renderSectionHeader }: LibrarySettingsSectionP
 		retrievalEndpoints,
 		apiConfigurationProfiles,
 		visionModeApiConfiguration,
+		extractDocumentMaxFileMb,
 	} = useExtensionState()
 	const retrieval = useRetrievalStatus()
 	const settings = useMemo(() => parseLibrarySettings(librarySettings), [librarySettings])
@@ -210,6 +212,9 @@ const LibrarySettingsSection = ({ renderSectionHeader }: LibrarySettingsSectionP
 								)}
 							</>
 						) : null}
+
+						<div className="pt-3 border-t border-(--vscode-panel-border) font-medium">Reading files</div>
+						<ReaderFileLimit id="library-max-file-mb" value={extractDocumentMaxFileMb} />
 
 						<div className="pt-3 border-t border-(--vscode-panel-border) font-medium">Splitting documents</div>
 						<p className={hint}>

@@ -279,6 +279,20 @@ describe("the Library panel", () => {
 		)
 	})
 
+	it("sets the largest file the reader takes, 1 GB until changed", async () => {
+		state.libraryEnabled = true
+		render(<LibrarySettingsSection renderSectionHeader={header} />)
+		const field = (await screen.findByLabelText("Largest file to read (MB)")) as HTMLInputElement
+		expect(field.value).toBe("1024")
+		fireEvent.change(field, { target: { value: "0" } })
+		fireEvent.blur(field)
+		expect(field.value).toBe("1024")
+		expect(updateSettings.mock.calls.some(([request]) => request.extractDocumentMaxFileMb !== undefined)).toBe(false)
+		fireEvent.change(field, { target: { value: "2048" } })
+		fireEvent.blur(field)
+		await waitFor(() => expect(updateSettings.mock.calls.at(-1)?.[0]).toMatchObject({ extractDocumentMaxFileMb: 2048 }))
+	})
+
 	describe("the shelves", () => {
 		const shelved = () => {
 			status.catalogue = {

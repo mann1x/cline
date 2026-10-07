@@ -38,7 +38,7 @@ export interface DocumentExtractExecutorOptions {
 	cwd?: string;
 	/** A delegated agent's overlay: reads fall through, writes stay private. */
 	overlay?: AgentOverlay;
-	/** @default 200 MB */
+	/** Over the reader's `maxFileMb` setting. @default 1 GB */
 	maxFileSizeBytes?: number;
 	/** The user's Document Reader settings: how scanned pages are read, and descriptions. */
 	reader?: DocumentReaderSettings;
@@ -50,7 +50,39 @@ export interface DocumentExtractExecutorOptions {
 	describeImages?: DescribeImages;
 }
 
-const DEFAULT_MAX_FILE_BYTES = 200 * 1024 * 1024;
+/**
+ * The largest file read unless the settings say otherwise.
+ *
+ * 200 MB once, when a book was read inside the session's own process and one
+ * large enough could take it down. Each is read in a process of its own now,
+ * and out of memory there is one file's error. Measured with that reader on
+ * the largest books of a real shelf: a 228 MB EPUB, 812 MB at its peak in 3 s;
+ * a 411 MB PDF, 2.6 GB in 80 s.
+ */
+export const DEFAULT_MAX_FILE_MB = 1024;
+
+/** Names the setting, so the refusal says how to get past it. */
+function tooLarge(file: string, size: number, limit: number): string {
+	return `${file} is ${formatBytes(size)}, past the ${formatBytes(limit)} the Document Reader reads. The limit is "Largest file to read" in Settings > Library.`;
+}
+
+/** The limit in bytes: an explicit one, else the setting, else the default. */
+export function documentReaderLimitBytes(
+	maxFileSizeBytes: number | undefined,
+	reader: DocumentReaderSettings | undefined,
+): number {
+	if (maxFileSizeBytes !== undefined) {
+		return maxFileSizeBytes;
+	}
+	const mb = reader?.maxFileMb;
+	return (
+		(typeof mb === "number" && Number.isFinite(mb) && mb > 0
+			? mb
+			: DEFAULT_MAX_FILE_MB) *
+		1024 *
+		1024
+	);
+}
 /** How many pictures `images: "inline"` attaches, and how large each may be. */
 const INLINE_IMAGE_LIMIT = 4;
 const INLINE_IMAGE_BYTES = 1_500_000;
@@ -104,7 +136,10 @@ function stemOf(filePath: string): string {
 function formatBytes(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
 	if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-	return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+	if (bytes < 1024 * 1024 * 1024) {
+		return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+	}
+	return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
 /**
@@ -176,11 +211,12 @@ export async function readDocumentText(
 	if (!stat?.isFile()) {
 		throw new Error(`No file at ${filePath}.`);
 	}
-	const limit = options.maxFileSizeBytes ?? DEFAULT_MAX_FILE_BYTES;
+	const limit = documentReaderLimitBytes(
+		options.maxFileSizeBytes,
+		options.reader,
+	);
 	if (stat.size > limit) {
-		throw new Error(
-			`${filePath} is ${formatBytes(stat.size)}, past the ${formatBytes(limit)} the Document Reader reads.`,
-		);
+		throw new Error(tooLarge(filePath, stat.size, limit));
 	}
 	const read = await readDocumentJob(
 		{
@@ -297,11 +333,12 @@ export async function readDocumentForBook(
 	if (!stat?.isFile()) {
 		throw new Error(`No file at ${filePath}.`);
 	}
-	const limit = options.maxFileSizeBytes ?? DEFAULT_MAX_FILE_BYTES;
+	const limit = documentReaderLimitBytes(
+		options.maxFileSizeBytes,
+		options.reader,
+	);
 	if (stat.size > limit) {
-		throw new Error(
-			`${filePath} is ${formatBytes(stat.size)}, past the ${formatBytes(limit)} the Document Reader reads.`,
-		);
+		throw new Error(tooLarge(filePath, stat.size, limit));
 	}
 	await sweepAbandonedReads(options.scratchDir);
 	const read = await readDocumentJob(
@@ -428,7 +465,10 @@ export function createDocumentExtractExecutor(
 ): ExtractDocumentExecutor {
 	const { overlay, describeImages } = options;
 	const settings = options.reader ?? {};
-	const maxFileSizeBytes = options.maxFileSizeBytes ?? DEFAULT_MAX_FILE_BYTES;
+	const maxFileSizeBytes = documentReaderLimitBytes(
+		options.maxFileSizeBytes,
+		settings,
+	);
 
 	return async (input, callCwd, context) => {
 		// `cwd` is taken per call; the creation-time one is the fallback.
@@ -450,9 +490,7 @@ export function createDocumentExtractExecutor(
 			throw new Error(`${input.path} is a directory, not a document.`);
 		}
 		if (stat.size > maxFileSizeBytes) {
-			throw new Error(
-				`${input.path} is ${formatBytes(stat.size)}, past the ${formatBytes(maxFileSizeBytes)} this tool reads.`,
-			);
+			throw new Error(tooLarge(input.path, stat.size, maxFileSizeBytes));
 		}
 		const range = parseUnitRange(input.range ?? undefined);
 

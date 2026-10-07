@@ -62,6 +62,46 @@ interface DocumentReaderOptionsProps {
 	ocr: string | undefined
 	languages: string | undefined
 	describeImages: boolean | undefined
+	maxFileMb: number | undefined
+}
+
+/** The reader's own default, `DEFAULT_MAX_FILE_MB` in core. */
+export const DEFAULT_READER_MAX_FILE_MB = 1024
+
+/**
+ * The largest file the Document Reader reads. One setting for extract_document
+ * and the Library, shown in both places: the Library reads without
+ * extract_document being on.
+ */
+export const ReaderFileLimit = ({ value, id }: { value: number | undefined; id: string }) => {
+	const current = value && value > 0 ? value : DEFAULT_READER_MAX_FILE_MB
+	return (
+		<div className="space-y-1">
+			<Label className="text-sm font-medium text-foreground" htmlFor={id}>
+				Largest file to read (MB)
+			</Label>
+			<Input
+				defaultValue={String(current)}
+				id={id}
+				key={current}
+				min={1}
+				onBlur={(event) => {
+					const next = Math.round(Number(event.target.value))
+					if (Number.isFinite(next) && next > 0 && next !== current) {
+						updateSetting("extractDocumentMaxFileMb", next)
+					} else {
+						event.target.value = String(current)
+					}
+				}}
+				type="number"
+			/>
+			<p className="text-xs text-muted-foreground">
+				A larger file is refused by name and nothing of it is read. Each file is read in a process of its own, two at a
+				time: a 400 MB scanned PDF needed 2.6 GB of memory there, a 230 MB EPUB under 1 GB. Lower it on a machine with
+				little memory.
+			</p>
+		</div>
+	)
 }
 
 /**
@@ -71,7 +111,7 @@ interface DocumentReaderOptionsProps {
  * sends the whole list, and building it from the state alone would read the
  * value from before the previous click until the host echoes it back.
  */
-export const DocumentReaderOptions = memo(({ ocr, languages, describeImages }: DocumentReaderOptionsProps) => {
+export const DocumentReaderOptions = memo(({ ocr, languages, describeImages, maxFileMb }: DocumentReaderOptionsProps) => {
 	const [selected, setSelected] = useState<string[]>(() => parseLanguageList(languages))
 	const extra = selected.filter((code) => !LISTED.has(code))
 
@@ -156,6 +196,7 @@ export const DocumentReaderOptions = memo(({ ocr, languages, describeImages }: D
 				Have the vision model describe each picture the reader extracts, up to 16 per document. The description is stored
 				in the pictures' index.json and used as their alt text. Needs a model on the Vision tab.
 			</p>
+			<ReaderFileLimit id="extract-document-max-file-mb" value={maxFileMb} />
 		</div>
 	)
 })

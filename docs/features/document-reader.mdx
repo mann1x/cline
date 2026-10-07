@@ -123,6 +123,6 @@ In plan mode, `extract_document` writes only to its default folder. A call with 
 
 ## Limits
 
-- Files larger than 200 MB are not read.
+- Files larger than **Largest file to read** are refused by name: 1 GB unless changed, in the Document Reader's options or in Settings > Library (the same setting). Each file is read in a process of its own, two at a time; a 400 MB scanned PDF needed 2.6 GB of memory there, so lower it on a machine with little memory.
 - Office containers (DOCX, PPTX, XLSX, ODF) are limited to 256 MB decompressed and 20,000 entries, which guards against zip bombs.
 - A single call times out after ten minutes, which leaves room for 40 recognized pages.

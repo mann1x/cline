@@ -267,6 +267,8 @@ export interface ExtensionState {
 	extractDocumentOcrLanguages?: string
 	/** Whether the vision model describes extracted pictures; see state-keys.ts. */
 	extractDocumentDescribeImages?: boolean
+	/** The largest file the Document Reader reads, in MB. */
+	extractDocumentMaxFileMb?: number
 	/** "Use PolyKV agents as Priority 0"; see state-keys.ts. */
 	polykvAgentsPriorityZero?: boolean
 	agentModelOverride?: string

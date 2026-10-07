@@ -2290,6 +2290,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		ocr: readOcrEngine(stateManager.getGlobalSettingsKey("extractDocumentOcr")),
 		ocrLanguages: parseOcrLanguages(stateManager.getGlobalSettingsKey("extractDocumentOcrLanguages") ?? "eng"),
 		describePictures: stateManager.getGlobalSettingsKey("extractDocumentDescribeImages") === true,
+		maxFileMb: stateManager.getGlobalSettingsKey("extractDocumentMaxFileMb"),
 	}
 	// Whether a turn that calls nothing is nudged to continue even when
 	// nothing says work is unfinished. On by default, which is what the

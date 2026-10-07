@@ -241,6 +241,7 @@ export function readLibraryToolsConfig(): LibraryToolsConfig | undefined {
 		documentReader: {
 			ocr: ocr === "vision" ? "tesseract" : ocr,
 			ocrLanguages: parseOcrLanguages(state.getGlobalSettingsKey("extractDocumentOcrLanguages") ?? "eng"),
+			maxFileMb: state.getGlobalSettingsKey("extractDocumentMaxFileMb"),
 		},
 	}
 }

@@ -477,6 +477,8 @@ const USER_SETTINGS_FIELDS = {
 	extractDocumentOcrLanguages: { default: "eng" as string },
 	// Whether the vision model describes each picture the reader extracts.
 	extractDocumentDescribeImages: { default: false as boolean },
+	// The largest file the Document Reader reads, in MB, for extract_document and the Library.
+	extractDocumentMaxFileMb: { default: 1024 as number },
 	// A global model for delegated agents, overriding the session's own model for
 	// them only. Empty means agents run on the session's model. One value on the
 	// session's provider — not per-provider, and it never touches the lead.

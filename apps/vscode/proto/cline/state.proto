@@ -357,6 +357,7 @@ message Settings {
   optional string memory_settings = 241;
   optional string scrape_settings = 242;
   optional bool scrape_allowed = 243;
+  optional int32 extract_document_max_file_mb = 244;
 }
 
 message State {
@@ -505,6 +506,8 @@ message UpdateSettingsRequest {
   optional string extract_document_ocr_languages = 89;
   // Whether the vision model describes extracted pictures.
   optional bool extract_document_describe_images = 90;
+  // The largest file the Document Reader reads, in MB.
+  optional int32 extract_document_max_file_mb = 109;
   optional int32 subagent_terminal_output_line_limit = 30;
   optional string cline_env = 31;
   optional OnboardingModelGroup onboarding_models = 33;

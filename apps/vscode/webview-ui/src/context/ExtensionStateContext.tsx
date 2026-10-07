@@ -376,6 +376,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		extractDocumentOcr: "tesseract",
 		extractDocumentOcrLanguages: "eng",
 		extractDocumentDescribeImages: false,
+		extractDocumentMaxFileMb: 1024,
 		polykvAgentsPriorityZero: false,
 		agentModelOverride: "",
 		strongNudgesEnabled: true,

@@ -88,6 +88,7 @@ export async function getStateToPostToWebview(controller: {
 	const extractDocumentOcr = stateManager.getGlobalSettingsKey("extractDocumentOcr")
 	const extractDocumentOcrLanguages = stateManager.getGlobalSettingsKey("extractDocumentOcrLanguages")
 	const extractDocumentDescribeImages = stateManager.getGlobalSettingsKey("extractDocumentDescribeImages")
+	const extractDocumentMaxFileMb = stateManager.getGlobalSettingsKey("extractDocumentMaxFileMb")
 	const polykvAgentsPriorityZero = stateManager.getGlobalSettingsKey("polykvAgentsPriorityZero")
 	const agentModelOverride = stateManager.getGlobalSettingsKey("agentModelOverride")
 	const strongNudgesEnabled = stateManager.getGlobalSettingsKey("strongNudgesEnabled")
@@ -241,6 +242,7 @@ export async function getStateToPostToWebview(controller: {
 		extractDocumentOcr,
 		extractDocumentOcrLanguages,
 		extractDocumentDescribeImages,
+		extractDocumentMaxFileMb,
 		polykvAgentsPriorityZero,
 		agentModelOverride,
 		strongNudgesEnabled,

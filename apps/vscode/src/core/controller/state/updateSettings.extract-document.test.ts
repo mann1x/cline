@@ -87,3 +87,20 @@ describe("updateSettings — the Document Reader's own settings", () => {
 		assert.equal(written(controller, "extractDocumentDescribeImages"), true)
 	})
 })
+
+// The largest file read is a size: a zero or a negative is a slip of the
+// field, never "no limit", and a fraction is rounded to whole MB.
+describe("updateSettings — the largest file the reader takes", () => {
+	it("stores a size in whole MB, and nothing for zero or less", async () => {
+		for (const [sent, stored] of [
+			[2048, 2048],
+			[300.4, 300],
+			[0, undefined],
+			[-1, undefined],
+		] as const) {
+			const controller = makeController()
+			await updateSettings(controller, UpdateSettingsRequest.create({ extractDocumentMaxFileMb: sent }))
+			assert.equal(written(controller, "extractDocumentMaxFileMb"), stored, `sent ${sent}`)
+		}
+	})
+})
