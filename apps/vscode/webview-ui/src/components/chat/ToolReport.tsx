@@ -3,14 +3,27 @@ import { memo, useState } from "react"
 import { CopyButton } from "@/components/common/CopyButton"
 
 /**
+ * The checklist reminder core appends to a tool's result every few calls. It
+ * is written to the model, about the model's own list, and is not part of what
+ * the tool did: shown here it ended every third import report.
+ */
+const TASK_PROGRESS_REMINDER = /\s*<task_progress>[\s\S]*?<\/task_progress>\s*/g
+
+export const reportText = (report: string) => report.replace(TASK_PROGRESS_REMINDER, "\n").trim()
+
+/**
  * What a finished tool that reported its progress came to, kept on its row.
  *
  * An import's report lists every file and what was left out of it, and was
  * gone the moment the call ended. Collapsed to its first line, so a run of
  * imports stays short, and copyable whole.
  */
-const ToolReport = ({ report }: { report: string }) => {
+const ToolReport = ({ report: sent }: { report: string }) => {
 	const [open, setOpen] = useState(false)
+	const report = reportText(sent)
+	if (!report) {
+		return null
+	}
 	const lines = report.split("\n")
 	const headline = lines.find((line) => line.trim())?.trim() ?? ""
 	return (

@@ -571,3 +571,98 @@ describe("checklists sent in a container other than a string", () => {
 		expect(readTaskProgress({ task_progress: {} })).toBeUndefined();
 	});
 });
+
+/**
+ * Every list deepseek-v4 sent on pandorum (4.100.242, session ujw41): real
+ * arrays to the task_progress tool, the JSON text of an array to the library
+ * tools, and never a box. All of them parsed to zero items, so the panel drew
+ * nothing and every third library report ended "Task progress (0/0 done)".
+ */
+describe("lists sent without boxes", () => {
+	const sent = [
+		"Verify epub-parse fix on previously-failed epubs",
+		"Data & AI: import remaining books",
+		"Report",
+	];
+	const open = sent.map((item) => `- [ ] ${item}`).join("\n");
+
+	it("reads every entry of an array as an open item", () => {
+		expect(readTaskProgress({ task_progress: sent })).toBe(open);
+		expect(buildTaskProgressState(open)).toMatchObject({
+			total: 3,
+			completed: 0,
+		});
+	});
+
+	it("reads the JSON text of an array as the array", () => {
+		expect(readTaskProgress({ task_progress: JSON.stringify(sent) })).toBe(
+			open,
+		);
+	});
+
+	it("keeps a mark an entry carries, with or without the dash, and drops bullets", () => {
+		expect(
+			readTaskProgress({
+				task_progress: ["[x] Inventory", "- [X] Check", "1. Add", "* Report"],
+			}),
+		).toBe("- [x] Inventory\n- [x] Check\n- [ ] Add\n- [ ] Report");
+	});
+
+	it("does not tick an item from its wording", () => {
+		expect(
+			readTaskProgress({ task_progress: ["Data & AI: done (all imported)"] }),
+		).toBe("- [ ] Data & AI: done (all imported)");
+	});
+
+	it("reads lines with no box as open items, but one sentence as no list", () => {
+		expect(
+			readTaskProgress({ task_progress: "- Inventory\n- Add books\nReport" }),
+		).toBe("- [ ] Inventory\n- [ ] Add books\n- [ ] Report");
+		expect(
+			buildTaskProgressState(
+				readTaskProgress({ task_progress: "I am working on it" }) ?? "",
+			).total,
+		).toBe(0);
+	});
+
+	it("leaves a list with boxes as written, heading and all", () => {
+		const written = "Plan:\n- [x] a\n- [ ] b";
+		expect(readTaskProgress({ task_progress: written })).toBe(written);
+	});
+
+	it("reminds with boxes the model can tick, never with an empty list", () => {
+		const tracker = new TaskProgressTracker({ reminderInterval: 1 });
+		tracker.recordToolCall({ task_progress: JSON.stringify(sent) });
+		expect(tracker.recordToolCall({})).toContain(
+			"Task progress (0/3 done, 3 remaining):\n- [ ] Verify",
+		);
+
+		const empty = new TaskProgressTracker({ reminderInterval: 1 });
+		empty.recordToolCall({ task_progress: "I am working on it" });
+		expect(empty.getState()?.total).toBe(0);
+		expect(empty.recordToolCall({})).toBeUndefined();
+	});
+
+	it("is recorded by the task_progress tool, which refused all 14 arrays", async () => {
+		const { createTaskProgressTool } = await import("./definitions");
+		const tool = createTaskProgressTool();
+		expect(
+			(tool.inputSchema.properties as Record<string, { type: unknown }>)[
+				TASK_PROGRESS_PARAM
+			].type,
+		).toEqual(["string", "array"]);
+		const [answer] = await tool.execute(
+			{ task_progress: sent },
+			{} as AgentToolContext,
+		);
+		expect(answer).toMatchObject({
+			success: true,
+			result: "Checklist recorded: 3 items, 0 done.",
+		});
+		const [none] = await tool.execute(
+			{ task_progress: [] },
+			{} as AgentToolContext,
+		);
+		expect(none.success).toBe(false);
+	});
+});

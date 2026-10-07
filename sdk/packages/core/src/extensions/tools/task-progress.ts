@@ -67,6 +67,7 @@ export const TASK_PROGRESS_PARAM_DESCRIPTION = [
 	"steps you have since discovered. Send the list in full every time; it",
 	"replaces the previous one rather than appending to it.",
 	'Format: one item per line, "- [ ] pending" or "- [x] done".',
+	'As an array, one entry per item, each starting "[ ] " or "[x] ".',
 ].join(" ");
 
 /** A single parsed checklist line. */
@@ -122,8 +123,10 @@ export function withTaskProgressParam(
  */
 function checklistLine(entry: unknown): string | undefined {
 	if (typeof entry === "string") {
-		const trimmed = entry.trim();
-		return trimmed === "" ? undefined : trimmed;
+		// An entry is an item whatever it looks like: `["Inventory", "Report"]`
+		// is a two-item list, and kept as bare text it parsed to none (pandorum
+		// 4.100.242, deepseek: every list it sent, 0 items, nothing on screen).
+		return itemLine(entry);
 	}
 	if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
 		return undefined;
@@ -142,9 +145,30 @@ function checklistLine(entry: unknown): string | undefined {
 	// An entry that already carries its own marker keeps it: re-marking
 	// `- [x] Fix` as `- [ ] - [x] Fix` is how a tolerant reader loses the state
 	// it was widened to preserve.
-	return /^- \[( |x|X)\]/.test(text.trim())
-		? text.trim()
+	return /^(?:[-*]\s*)?\[( |x|X)\]/.test(text.trim())
+		? itemLine(text)
 		: `- [${done ? "x" : " "}] ${text.trim()}`;
+}
+
+/**
+ * One item as a checklist line. A mark it carries is kept, with or without
+ * the leading dash (`[x] Fix`, `- [x] Fix`); a list bullet or number it
+ * carries is dropped; anything else is an open item. Nothing is ticked from
+ * the wording: "(done)" in the text is the model's note, not a mark.
+ */
+function itemLine(text: string): string | undefined {
+	const trimmed = text.trim();
+	if (trimmed === "") {
+		return undefined;
+	}
+	const marked = /^(?:[-*]\s*)?\[( |x|X)\]\s*(.*)$/.exec(trimmed);
+	if (marked) {
+		return marked[2].trim() === ""
+			? undefined
+			: `- [${marked[1] === " " ? " " : "x"}] ${marked[2].trim()}`;
+	}
+	const bare = trimmed.replace(/^(?:[-*•]|\d+[.)])\s+/, "").trim();
+	return bare === "" ? undefined : `- [ ] ${bare}`;
 }
 
 /**
@@ -179,7 +203,36 @@ export function readTaskProgress(input: unknown): string | undefined {
 function readChecklistValue(value: unknown, depth: number): string | undefined {
 	if (typeof value === "string") {
 		const trimmed = value.trim();
-		return trimmed === "" ? undefined : trimmed;
+		if (trimmed === "") {
+			return undefined;
+		}
+		// The array, sent as the JSON text of an array: the shape the same model
+		// used on every library tool while sending real arrays to task_progress.
+		if (trimmed.startsWith("[") && trimmed.endsWith("]") && depth < 2) {
+			try {
+				const parsed: unknown = JSON.parse(trimmed);
+				if (Array.isArray(parsed)) {
+					return readChecklistValue(parsed, depth + 1);
+				}
+			} catch {
+				// A markdown line can start with "[" too: read it as text.
+			}
+		}
+		// Several lines with no boxes at all are a list of open items, one a
+		// line. One line with no box is a sentence ("I am working on it"), not
+		// a list, and a list with some boxes keeps only those lines (see
+		// parseTaskProgress): there the unmarked lines are heading and prose.
+		const rows = trimmed.split("\n").filter((line) => line.trim() !== "");
+		if (
+			rows.length > 1 &&
+			!rows.some((line) => /^\s*[-*]\s*\[( |x|X)\]/.test(line))
+		) {
+			return rows
+				.map(itemLine)
+				.filter((line): line is string => line !== undefined)
+				.join("\n");
+		}
+		return trimmed;
 	}
 	if (Array.isArray(value)) {
 		const lines = value
@@ -499,8 +552,10 @@ export class TaskProgressTracker {
 		// than twice in consecutive turns.
 		this.callsSinceReminder = 0;
 		this.writesSinceReminder = 0;
-		// Nothing left to chase — reminding would only re-send a finished list.
-		if (this.state.total > 0 && this.state.completed >= this.state.total) {
+		// Nothing left to chase — reminding would only re-send a finished list,
+		// and a list with no items is nothing at all ("Task progress (0/0 done)"
+		// in every third library report on pandorum).
+		if (this.state.total === 0 || this.state.completed >= this.state.total) {
 			return undefined;
 		}
 		return buildTaskProgressReminder(this.state);

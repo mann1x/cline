@@ -81,6 +81,8 @@ import {
 	withNewTextAlias,
 } from "./schemas";
 import {
+	buildTaskProgressState,
+	readTaskProgress,
 	TASK_PROGRESS_PARAM,
 	TASK_PROGRESS_PARAM_DESCRIPTION,
 	withTaskProgressCapture,
@@ -729,7 +731,10 @@ export function createTaskProgressTool(): AgentTool<
 			type: "object",
 			properties: {
 				[TASK_PROGRESS_PARAM]: {
-					type: "string",
+					// The same reader as the parameter on every other tool: this tool
+					// read strings only, and refused all 14 arrays deepseek sent it.
+					type: ["string", "array"],
+					items: { type: "string" },
 					description: TASK_PROGRESS_PARAM_DESCRIPTION,
 				},
 			},
@@ -738,15 +743,16 @@ export function createTaskProgressTool(): AgentTool<
 		retryable: false,
 		maxRetries: 0,
 		execute: async (input) => {
-			const checklist = input?.[TASK_PROGRESS_PARAM];
-			const recorded = typeof checklist === "string" && checklist.trim() !== "";
+			const checklist = readTaskProgress(input);
+			const state =
+				checklist === undefined ? undefined : buildTaskProgressState(checklist);
 			return [
 				{
 					query: "task_progress",
-					result: recorded
-						? "Checklist recorded."
+					result: state?.total
+						? `Checklist recorded: ${state.total} item${state.total === 1 ? "" : "s"}, ${state.completed} done.`
 						: "No checklist sent, so nothing changed. Send the list as the `task_progress` argument.",
-					success: recorded,
+					success: Boolean(state?.total),
 				},
 			];
 		},
