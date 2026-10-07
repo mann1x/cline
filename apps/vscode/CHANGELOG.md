@@ -76,6 +76,20 @@ title, and it asks a question with **Yes** and **No** before anything moves:
 "Move "Godot Tilemaps" to the trash? It is kept there 30 days." Removing a
 shelf or section says how many books go to the trash with it.
 
+### The checklist reads lists without boxes
+
+A model that kept its checklist as a plain list, `["Inventory the books",
+"Import Data & AI", "Report"]`, had it read as nothing: no checklist at the
+top of the task, and the `task_progress` tool answering "No checklist sent"
+to every list it was given. Each entry is now an item, open unless it starts
+with `[x]`, and the same goes for the list sent as the text of an array, or
+as plain lines with no boxes. Nothing is ticked from the wording: "Data & AI:
+done" stays open until the model ticks it.
+
+The reminder of the checklist, written to the model every few calls, no
+longer shows at the end of a tool's **Report**. It used to end every third
+import report with "Task progress (0/0 done)".
+
 ## [4.100.241] — 2026-10-06
 
 ### Built-in skills
