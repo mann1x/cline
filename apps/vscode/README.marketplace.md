@@ -85,15 +85,19 @@ text-only.
 
 **Document Reader.** PDFs, Office files (current and 97-2003), OpenDocument and
 ebooks are read into Markdown with their pictures, and scanned pages are read
-with OCR on your machine or by a vision model. Off by default.
+with OCR on your machine or by a vision model. Each file is read in a process
+of its own, so one that runs out of memory fails alone; files up to 1 GB are
+read, and the limit is a setting. Off by default.
 
 **The Library.** Ebooks, manuals, papers, notes and web pages the model can
 look things up in, arranged as sections, shelves and books. `search_library`
 returns the passages that answer a question with the book and chapter each is
 from. Ask the model to act as a librarian and it catalogues your files, skips
-duplicates and asks before adding another edition. A long import shows every
-file's progress, can be cancelled, and ends with a report of everything left
-out. Pictures are described by a model that reads images, and only models
+duplicates and asks before adding another edition; documents that only share
+text, such as manuals for different products, are told apart by the running
+heads on their pages. A long import shows every file's progress, can be
+cancelled, and ends with a report of everything left out that stays on its row.
+Export the whole Library, or any mix of sections, shelves and books you tick. Pictures are described by a model that reads images, and only models
 that report a vision capability are offered for it. Keyword search needs
 nothing; an embedding model adds search by meaning. Off by default.
 [Guide](https://github.com/mann1x/cline/blob/main/docs/features/library.mdx).

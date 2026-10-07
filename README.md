@@ -477,18 +477,18 @@ In the CLI: `--media-provider`, or `--media-config <file>`. Guide: [`docs/featur
 
 ## Document Reader
 
-`extract_document` reads PDFs, Word, PowerPoint and Excel files (current and 97-2003 formats), OpenDocument, RTF, HTML and ebooks into Markdown, and writes their pictures out as files. Scanned pages are read with Tesseract on your machine, or by a vision model when one is configured. It is off by default: Settings > Features > **Document Reader**, or `--documents`. Guide: [`docs/features/document-reader.mdx`](docs/features/document-reader.mdx).
+`extract_document` reads PDFs, Word, PowerPoint and Excel files (current and 97-2003 formats), OpenDocument, RTF, HTML and ebooks into Markdown, and writes their pictures out as files. Scanned pages are read with Tesseract on your machine, or by a vision model when one is configured. Each file is read in a process of its own, so a document that runs out of memory fails alone and the session carries on; files up to 1 GB are read, and **Largest file to read** sets the limit. It is off by default: Settings > Features > **Document Reader**, or `--documents`. Guide: [`docs/features/document-reader.mdx`](docs/features/document-reader.mdx).
 
 ## The Library
 
 A place for what you want the model to be able to look things up in: ebooks, manuals, papers, notes and web pages. It is arranged as **sections**, **shelves** and **books**, kept in Cerebriline's data folder and shared by every workspace. A book keeps the files it was made from, the text read out of them, and their pictures with a description of each.
 
 - **Search.** The model always has `search_library`, which returns the passages that best answer a question with the book and chapter each is from, and `list_library`. It works on keyword search alone, with nothing to download. Name an embedding model on the **Embedding** tab to search by meaning as well, and optionally a reranking model.
-- **The librarian.** Ask *"act as a librarian, catalogue these ebooks and add them to the Library"*: the model reads each file, works out its title, authors and edition, writes a description and shelves it. Duplicates are skipped, and for another edition or translation it asks you first.
-- **Imports you can watch.** A long import lists every file with where it is, can be cancelled from its row, and ends with a report of every page or picture that was left out and why.
+- **The librarian.** Ask *"act as a librarian, catalogue these ebooks and add them to the Library"*: the model reads each file, works out its title, authors and edition, writes a description and shelves it. Duplicates are skipped, and for another edition or translation it asks you first. Documents that only share text, such as one manufacturer's manuals for different products, are told apart by the running heads on their pages and are not taken for versions of one another.
+- **Imports you can watch.** A long import lists every file with where it is, can be cancelled from its row, and ends with a report of every page or picture that was left out and why, which stays on the call's row, collapsed, to read or copy.
 - **Pictures.** They are described by a model that reads images: a saved profile, the Vision tab's model, or the conversation's own model when it reads images. Only models that report a vision capability are offered. Descriptions can be added to a book later without reading it again.
 - **Books from the web.** *"Create a book on GitHub recipes for Godot development"*: the librarian searches, picks the links, reads the pages through a [Firecrawl](https://github.com/firecrawl/firecrawl) endpoint and makes the book, and can check it for news later.
-- **Nothing is lost.** Deleted books go to a trash for 30 days, and the Library or any part of it can be exported to one file and imported elsewhere.
+- **Nothing is lost.** Deleted books go to a trash for 30 days, after a Yes. The Library, or any mix of sections, shelves and books you tick, can be exported to one file and imported elsewhere.
 
 It is off by default: **Settings > Library**, or `--library` and `--librarian` in the CLI. Guide: [`docs/features/library.mdx`](docs/features/library.mdx).
 
