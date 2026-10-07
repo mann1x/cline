@@ -62,6 +62,20 @@ button. Before, the progress lines went with the call and the row was left
 with nothing but the file names, so a run with many failures could not be
 reviewed.
 
+### Export what you tick, and delete with a Yes
+
+In **Settings > Library**, the **Export** button on every section, shelf and
+book is gone. Each has a box to tick instead, and the boxes mix: some books
+from one shelf, a whole shelf from another section and a whole section can go
+into one file. A section or shelf partly ticked shows a partly filled box.
+**Export all…** is now **Export…**: with nothing ticked it writes the whole
+Library, with something ticked only that, and the line under it says which.
+
+**Delete** is a trash-bin button, which leaves the row more room for the
+title, and it asks a question with **Yes** and **No** before anything moves:
+"Move "Godot Tilemaps" to the trash? It is kept there 30 days." Removing a
+shelf or section says how many books go to the trash with it.
+
 ## [4.100.241] — 2026-10-06
 
 ### Built-in skills
