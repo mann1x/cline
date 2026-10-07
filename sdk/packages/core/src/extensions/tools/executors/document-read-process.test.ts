@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
 import {
 	existsSync,
+	mkdirSync,
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	rmSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,7 +22,7 @@ import {
 	resetReaderProcessState,
 	resolveReaderChild,
 } from "./document/read-process";
-import { readDocumentForBook } from "./document-extract";
+import { readDocumentForBook, sweepAbandonedReads } from "./document-extract";
 
 const FIXTURES = join(
 	__dirname,
@@ -158,12 +160,16 @@ describe("the reader process", () => {
 			expect(there.markdown).toBe(here.markdown);
 			expect(there.images.length).toBe(here.images.length);
 			expect(there.images.length).toBeGreaterThan(0);
-			expect(there.images.map((image) => Buffer.from(image.data))).toEqual(
-				here.images.map((image) => Buffer.from(image.data)),
+			expect(there.images.map((image) => readFileSync(image.path))).toEqual(
+				here.images.map((image) => readFileSync(image.path)),
 			);
 			expect(there.units).toEqual(here.units);
 			expect(progress.length).toBeGreaterThan(0);
-			// Nothing of the read is left behind.
+			// The pictures are files until the book is filed, and then nothing
+			// of the read is left behind.
+			expect(there.images.every((image) => existsSync(image.path))).toBe(true);
+			await Promise.all([here.release(), there.release()]);
+			expect(there.images.some((image) => existsSync(image.path))).toBe(false);
 			expect(
 				readdirSync(dir).filter((name) => name.startsWith(".scratch")),
 			).toEqual([]);
@@ -304,6 +310,47 @@ describe("the reader process", () => {
 		await readDocumentJob(job(), { onNote: (line) => later.push(line) });
 		expect(later).toEqual([]);
 	}, 60_000);
+});
+
+describe("a book's pictures", () => {
+	it("are held as files, not bytes, until release", async () => {
+		setEnv(DOCUMENT_READER_IN_PROCESS_ENV, "1");
+		const book = await readDocumentForBook(join(FIXTURES, "probe.pdf"), {
+			scratchDir: dir,
+		});
+		expect(book.images.length).toBeGreaterThan(0);
+		for (const image of book.images) {
+			expect(image).not.toHaveProperty("data");
+			expect(readFileSync(image.path).byteLength).toBeGreaterThan(0);
+		}
+		await book.release();
+		expect(readdirSync(dir)).toEqual([]);
+	});
+
+	it("are not held at all when a read takes none", async () => {
+		setEnv(DOCUMENT_READER_IN_PROCESS_ENV, "1");
+		const book = await readDocumentForBook(join(FIXTURES, "probe.pdf"), {
+			scratchDir: dir,
+			pictures: false,
+		});
+		expect(book.images).toEqual([]);
+		expect(readdirSync(dir)).toEqual([]);
+	});
+
+	it("left behind by a session that died are swept, and no others", async () => {
+		const old = join(dir, ".scratch-dead");
+		const fresh = join(dir, ".scratch-live");
+		const other = join(dir, "kept");
+		for (const at of [old, fresh, other]) {
+			mkdirSync(at);
+			writeFileSync(join(at, "0"), "x");
+		}
+		const long = new Date(Date.now() - 7 * 60 * 60_000);
+		utimesSync(old, long, long);
+		utimesSync(other, long, long);
+		await sweepAbandonedReads(dir);
+		expect(readdirSync(dir).sort()).toEqual([".scratch-live", "kept"]);
+	});
 });
 
 describe("describeReaderExit", () => {

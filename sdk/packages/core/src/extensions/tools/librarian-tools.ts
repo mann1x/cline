@@ -265,6 +265,7 @@ async function readSource(
 			notes: [],
 			images: [],
 			problems: [],
+			release: async () => {},
 		};
 	}
 	if (!document.markdown.trim()) {
@@ -971,6 +972,8 @@ function createLibraryAddTool(options: CreateLibraryToolsOptions): AgentTool {
 				}
 				return [...summary, ...lines, "", ...run.report()].join("\n");
 			} finally {
+				// The pictures were held on disk until filed; filed or not, they go.
+				await Promise.all(read.map((source) => source.document.release()));
 				run.close();
 			}
 		},

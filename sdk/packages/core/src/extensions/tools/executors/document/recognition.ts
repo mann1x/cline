@@ -332,7 +332,8 @@ async function recognizeWithVision(
 export interface PictureToDescribe {
 	link: string;
 	mediaType: string;
-	data: Uint8Array;
+	/** The bytes, or where to read them when they are asked for: one picture in memory at a time. */
+	data: Uint8Array | (() => Promise<Uint8Array>);
 	source?: string;
 }
 
@@ -344,6 +345,9 @@ export interface PictureToDescribe {
  * One picture described, or the reason it was not. For a caller that has to
  * say why: `describePictures` keeps the answers and drops the reasons.
  */
+const bytesOf = async (picture: PictureToDescribe): Promise<Uint8Array> =>
+	typeof picture.data === "function" ? await picture.data() : picture.data;
+
 export async function describePicture(
 	describeImages: DescribeImages,
 	picture: PictureToDescribe,
@@ -351,7 +355,7 @@ export async function describePicture(
 ): Promise<string | undefined> {
 	const [description] = await describeImages([
 		{
-			image: Buffer.from(picture.data).toString("base64"),
+			image: Buffer.from(await bytesOf(picture)).toString("base64"),
 			mediaType: picture.mediaType,
 			instruction: DESCRIBE_INSTRUCTION,
 			context: `From ${documentName}${picture.source ? `, ${picture.source}` : ""}.`,
@@ -370,7 +374,7 @@ export async function describePictures(
 		try {
 			const [description] = await describeImages([
 				{
-					image: Buffer.from(picture.data).toString("base64"),
+					image: Buffer.from(await bytesOf(picture)).toString("base64"),
 					mediaType: picture.mediaType,
 					instruction: DESCRIBE_INSTRUCTION,
 					context: `From ${documentName}${picture.source ? `, ${picture.source}` : ""}.`,

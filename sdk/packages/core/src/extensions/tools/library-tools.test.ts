@@ -476,6 +476,12 @@ describe("the Library tools", () => {
 		expect(
 			await call("search_library", { query: "cutaway thermostat housing" }),
 		).toContain("[1]");
+		// The pictures were held on disk only until they were filed.
+		expect(
+			readdirSync(join(library.directory, "scratch")).filter((name) =>
+				name.startsWith(".scratch-"),
+			),
+		).toEqual([]);
 		// Turned off, the pictures are kept and not described.
 		vision = undefined;
 	});

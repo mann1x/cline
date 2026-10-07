@@ -204,7 +204,9 @@ export interface BookImage {
 export interface SourceImageInput {
 	/** The name the source's text links it by: `images/<file>`. */
 	file: string;
-	data: Uint8Array;
+	/** The picture's bytes, or `path`: a file holding them, read when it is filed. */
+	data?: Uint8Array;
+	path?: string;
 	mediaType: string;
 	width?: number;
 	height?: number;
@@ -1023,19 +1025,33 @@ export class Catalogue {
 		// Pictures are kept by content, so two sources with the same figure
 		// share one file; the text is pointed at the names they have here.
 		let text = input.text;
-		const pictures: (SourceImageInput & { sha256: string; kept: string })[] =
-			[];
+		// Kept without their bytes: those are written, and not held.
+		const pictures: (Omit<SourceImageInput, "data" | "path"> & {
+			sha256: string;
+			kept: string;
+			bytes: number;
+		})[] = [];
 		for (const image of input.images ?? []) {
-			const hash = createHash("sha256").update(image.data).digest("hex");
+			// One picture in memory at a time: a scanned book has one a page.
+			const data =
+				image.data ?? (image.path ? readFileSync(image.path) : undefined);
+			if (!data) continue;
+			const hash = createHash("sha256").update(data).digest("hex");
 			const extension =
 				IMAGE_EXTENSIONS[image.mediaType] ??
 				(extname(image.file).slice(1).toLowerCase() || "bin");
 			const kept = `images/${hash}.${extension}`;
 			if (!existsSync(join(directory, kept))) {
-				writeFileSync(join(directory, kept), image.data);
+				writeFileSync(join(directory, kept), data);
 			}
 			text = text.split(`(images/${image.file})`).join(`(${kept})`);
-			pictures.push({ ...image, sha256: hash, kept });
+			const { data: _bytes, path: _held, ...described } = image;
+			pictures.push({
+				...described,
+				bytes: data.byteLength,
+				sha256: hash,
+				kept,
+			});
 		}
 		const textFile = `text/${sha256}.md`;
 		writeFileSync(join(directory, textFile), text);
@@ -1092,7 +1108,7 @@ export class Catalogue {
 					picture.sha256,
 					picture.kept,
 					picture.mediaType,
-					picture.data.byteLength,
+					picture.bytes,
 					picture.width ?? null,
 					picture.height ?? null,
 					picture.origin ?? null,

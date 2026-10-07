@@ -22,7 +22,7 @@ import {
 import { type ExtractedImage, VIEWABLE_MEDIA_TYPES } from "./document/images";
 import type { DocumentReaderSettings } from "./document/ocr";
 import { formatUnits, parseUnitRange } from "./document/range";
-import { readDocumentJob } from "./document/read-process";
+import { type HeldRead, readDocumentJob } from "./document/read-process";
 import {
 	altTextOf,
 	DESCRIBE_LIMIT,
@@ -197,6 +197,7 @@ export async function readDocumentText(
 		},
 		options.describeImages ? { describeImages: options.describeImages } : {},
 	);
+	await read.release();
 	const { result } = read;
 	return {
 		markdown: tidyMarkdown(result.markdown),
@@ -209,10 +210,14 @@ export async function readDocumentText(
 }
 
 export interface BookDocument extends DocumentText {
-	/** The pictures inside it, with their bytes; the markdown links them as `images/<file>`. */
+	/**
+	 * The pictures inside it; the markdown links them as `images/<file>`.
+	 * Each one's bytes are in the file at `path`, not in memory: a scanned
+	 * book is a picture a page. They are there until `release`.
+	 */
 	images: {
 		file: string;
-		data: Uint8Array;
+		path: string;
 		mediaType: string;
 		width?: number;
 		height?: number;
@@ -231,12 +236,42 @@ export interface BookDocument extends DocumentText {
 	 * whole document was read.
 	 */
 	problems: string[];
+	/**
+	 * Removes the pictures' files. Called once the book is filed or given
+	 * up, on every path; a session that dies first leaves them for
+	 * `sweepAbandonedReads`.
+	 */
+	release(): Promise<void>;
+}
+
+/** How old a read's scratch directory is before nothing can still be using it. */
+const ABANDONED_READ_MS = 6 * 60 * 60_000;
+
+/**
+ * Remove scratch directories that reads left behind: a session that ended
+ * between reading a book and filing it never released its pictures.
+ */
+export async function sweepAbandonedReads(
+	scratchDir: string,
+	olderThanMs: number = ABANDONED_READ_MS,
+): Promise<void> {
+	const names = await fs.readdir(scratchDir).catch(() => [] as string[]);
+	const now = Date.now();
+	for (const name of names) {
+		if (!name.startsWith(".scratch-")) continue;
+		const at = path.join(scratchDir, name);
+		const stat = await fs.stat(at).catch(() => undefined);
+		if (stat && now - stat.mtimeMs > olderThanMs) {
+			await fs.rm(at, { recursive: true, force: true }).catch(() => {});
+		}
+	}
 }
 
 /**
  * A document as the Library keeps a book: its text and its pictures.
- * Nothing is written anywhere; the caller puts the pictures where the book
- * is kept, and `describeBookPictures` has a vision model look at them.
+ * Nothing is written anywhere the caller sees; the caller puts the pictures
+ * where the book is kept, `describeBookPictures` has a vision model look at
+ * them, and `release` removes them.
  */
 export async function readDocumentForBook(
 	filePath: string,
@@ -268,6 +303,7 @@ export async function readDocumentForBook(
 			`${filePath} is ${formatBytes(stat.size)}, past the ${formatBytes(limit)} the Document Reader reads.`,
 		);
 	}
+	await sweepAbandonedReads(options.scratchDir);
 	const read = await readDocumentJob(
 		{
 			filePath,
@@ -293,6 +329,8 @@ export async function readDocumentForBook(
 			...(options.onNote ? { onNote: options.onNote } : {}),
 		},
 	);
+	// Nothing to hold: the scratch directory goes now.
+	if (read.images.length === 0) await read.release();
 	const { result } = read;
 	return {
 		markdown: tidyMarkdown(result.markdown),
@@ -319,9 +357,10 @@ export async function readDocumentForBook(
 				}
 			: {}),
 		problems: [...read.recognitionProblems, ...read.problems],
-		images: read.images.map(({ image, data: bytes }) => ({
+		release: read.images.length === 0 ? async () => {} : read.release,
+		images: read.images.map(({ image, file }) => ({
 			file: image.file,
-			data: bytes,
+			path: file,
 			mediaType: image.mediaType,
 			...(image.width ? { width: image.width } : {}),
 			...(image.height ? { height: image.height } : {}),
@@ -360,7 +399,7 @@ export async function describeBookPictures(
 		chosen.map((image) => ({
 			link: `images/${image.file}`,
 			mediaType: image.mediaType,
-			data: image.data,
+			data: () => fs.readFile(image.path),
 			...(image.origin ? { source: image.origin } : {}),
 		})),
 		options.documentName,
@@ -462,125 +501,141 @@ export function createDocumentExtractExecutor(
 			},
 			describeImages ? { describeImages } : {},
 		);
-		const { format, result, images } = read;
-		const pictures = images.map((entry) => entry.image);
-
-		const describeNote = await describeExtractedPictures({
-			wanted:
-				wantImages &&
-				(input.describe_images ?? settings.describePictures ?? false),
-			describeImages,
-			images,
-			result,
-			documentName: shown(cwd, requested),
-		});
-
-		const suffix = range ? `.${range.spec.replace(/[^0-9,-]/g, "")}` : "";
-		const asText = input.format === "text";
-		const markdown = tidyMarkdown(describeNote.markdown ?? result.markdown);
-		const body = asText ? markdownToText(markdown) : markdown;
-		const documentFile = path.join(
-			outputDir,
-			`${stemOf(requested)}${suffix}.${asText ? "txt" : "md"}`,
-		);
-		await writeFile(documentFile, `${body}\n`);
-		for (const { image, data: bytes } of images) {
-			await writeFile(path.join(outputDir, "images", image.file), bytes);
+		const fileBytes = stat.size;
+		// The pictures are files in the scratch directory until this call is
+		// done with them, and are read one at a time.
+		try {
+			return await answer(read);
+		} finally {
+			await read.release();
 		}
-		const indexFile = path.join(outputDir, "images", `index${suffix}.json`);
-		if (pictures.length > 0) {
-			await writeFile(
-				indexFile,
-				`${JSON.stringify(
-					{
-						document: shown(cwd, requested),
-						images: pictures.map(({ sha1: _sha1, ...image }) => image),
-					},
-					null,
-					2,
-				)}\n`,
+
+		async function answer(
+			read: HeldRead,
+		): Promise<string | (TextContent | ImageContent)[]> {
+			const { format, result, images } = read;
+			const pictures = images.map((entry) => entry.image);
+
+			const describeNote = await describeExtractedPictures({
+				wanted:
+					wantImages &&
+					(input.describe_images ?? settings.describePictures ?? false),
+				describeImages,
+				images,
+				result,
+				documentName: shown(cwd, requested),
+			});
+
+			const suffix = range ? `.${range.spec.replace(/[^0-9,-]/g, "")}` : "";
+			const asText = input.format === "text";
+			const markdown = tidyMarkdown(describeNote.markdown ?? result.markdown);
+			const body = asText ? markdownToText(markdown) : markdown;
+			const documentFile = path.join(
+				outputDir,
+				`${stemOf(requested)}${suffix}.${asText ? "txt" : "md"}`,
 			);
-		}
+			await writeFile(documentFile, `${body}\n`);
+			for (const { image, file } of images) {
+				await writeFile(
+					path.join(outputDir, "images", image.file),
+					await fs.readFile(file),
+				);
+			}
+			const indexFile = path.join(outputDir, "images", `index${suffix}.json`);
+			if (pictures.length > 0) {
+				await writeFile(
+					indexFile,
+					`${JSON.stringify(
+						{
+							document: shown(cwd, requested),
+							images: pictures.map(({ sha1: _sha1, ...image }) => image),
+						},
+						null,
+						2,
+					)}\n`,
+				);
+			}
 
-		const header = describe({
-			cwd,
-			requested,
-			bytes: stat.size,
-			format,
-			result,
-			images: pictures,
-			documentFile,
-			indexFile,
-			outputDir,
-			range: range?.spec,
-			bodyChars: body.length,
-			wantImages,
-			notes: [
-				...read.recognitionNotes,
-				...(describeNote.note ? [describeNote.note] : []),
-			],
-		});
-		const maxChars = input.max_chars ?? 60_000;
-		const cut = body.length > maxChars;
-		const text = [
-			header,
-			"---",
-			cut ? body.slice(0, maxChars) : body || "(The document has no text.)",
-			...(cut
-				? [
-						`[Cut at ${maxChars.toLocaleString("en-US")} of ${body.length.toLocaleString("en-US")} characters. The whole text is in ${shown(cwd, documentFile)}: read the rest with read_files and start_line, or call again with a narrower range.]`,
-					]
-				: []),
-		].join("\n\n");
+			const header = describe({
+				cwd,
+				requested,
+				bytes: fileBytes,
+				format,
+				result,
+				images: pictures,
+				documentFile,
+				indexFile,
+				outputDir,
+				range: range?.spec,
+				bodyChars: body.length,
+				wantImages,
+				notes: [
+					...read.recognitionNotes,
+					...(describeNote.note ? [describeNote.note] : []),
+				],
+			});
+			const maxChars = input.max_chars ?? 60_000;
+			const cut = body.length > maxChars;
+			const text = [
+				header,
+				"---",
+				cut ? body.slice(0, maxChars) : body || "(The document has no text.)",
+				...(cut
+					? [
+							`[Cut at ${maxChars.toLocaleString("en-US")} of ${body.length.toLocaleString("en-US")} characters. The whole text is in ${shown(cwd, documentFile)}: read the rest with read_files and start_line, or call again with a narrower range.]`,
+						]
+					: []),
+			].join("\n\n");
 
-		const pages = read.attachments.filter(
-			(page) => page.png.byteLength <= PAGE_IMAGE_BYTES,
-		);
-		const inline = input.images === "inline" && pictures.length > 0;
-		if (!inline && pages.length === 0) {
-			return text;
+			const pages = read.attachments.filter(
+				(page) => page.png.byteLength <= PAGE_IMAGE_BYTES,
+			);
+			const inline = input.images === "inline" && pictures.length > 0;
+			if (!inline && pages.length === 0) {
+				return text;
+			}
+			if (!modelSupportsImages) {
+				return `${text}\n\n[images: "inline" attaches nothing here: this model does not take image input. The pictures are the files listed above.]`;
+			}
+			const attached: (TextContent | ImageContent)[] = [{ type: "text", text }];
+			for (const page of pages) {
+				attached.push({
+					type: "text",
+					text: `Scanned page ${page.page}, to read:`,
+				});
+				attached.push({
+					type: "image",
+					data: Buffer.from(page.png).toString("base64"),
+					mediaType: "image/png",
+				});
+			}
+			const pictureStart = attached.length;
+			for (const { image, file } of inline ? images : []) {
+				if (attached.length - pictureStart >= INLINE_IMAGE_LIMIT * 2) break;
+				if (
+					!VIEWABLE_MEDIA_TYPES.has(image.mediaType) ||
+					image.bytes > INLINE_IMAGE_BYTES
+				)
+					continue;
+				if (
+					image.width &&
+					image.height &&
+					image.width < INLINE_MIN_SIDE &&
+					image.height < INLINE_MIN_SIDE
+				)
+					continue;
+				attached.push({
+					type: "text",
+					text: `${image.link}${image.source ? ` (${image.source})` : ""}:`,
+				});
+				attached.push({
+					type: "image",
+					data: (await fs.readFile(file)).toString("base64"),
+					mediaType: image.mediaType,
+				});
+			}
+			return attached;
 		}
-		if (!modelSupportsImages) {
-			return `${text}\n\n[images: "inline" attaches nothing here: this model does not take image input. The pictures are the files listed above.]`;
-		}
-		const attached: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		for (const page of pages) {
-			attached.push({
-				type: "text",
-				text: `Scanned page ${page.page}, to read:`,
-			});
-			attached.push({
-				type: "image",
-				data: Buffer.from(page.png).toString("base64"),
-				mediaType: "image/png",
-			});
-		}
-		const pictureStart = attached.length;
-		for (const { image, data: bytes } of inline ? images : []) {
-			if (attached.length - pictureStart >= INLINE_IMAGE_LIMIT * 2) break;
-			if (
-				!VIEWABLE_MEDIA_TYPES.has(image.mediaType) ||
-				bytes.byteLength > INLINE_IMAGE_BYTES
-			)
-				continue;
-			if (
-				image.width &&
-				image.height &&
-				image.width < INLINE_MIN_SIDE &&
-				image.height < INLINE_MIN_SIDE
-			)
-				continue;
-			attached.push({
-				type: "text",
-				text: `${image.link}${image.source ? ` (${image.source})` : ""}:`,
-			});
-			attached.push({
-				type: "image",
-				data: Buffer.from(bytes).toString("base64"),
-				mediaType: image.mediaType,
-			});
-		}
-		return attached;
 	};
 }
 
@@ -665,7 +720,7 @@ function escapeRegExp(text: string): string {
 async function describeExtractedPictures(input: {
 	wanted: boolean;
 	describeImages: DescribeImages | undefined;
-	images: readonly { image: ExtractedImage; data: Uint8Array }[];
+	images: readonly { image: ExtractedImage; file: string }[];
 	result: DocumentReadResult;
 	documentName: string;
 	/** @default DESCRIBE_LIMIT */
@@ -696,10 +751,10 @@ async function describeExtractedPictures(input: {
 	const chosen = candidates.slice(0, limit);
 	const descriptions = await describePictures(
 		input.describeImages,
-		chosen.map(({ image, data }) => ({
+		chosen.map(({ image, file }) => ({
 			link: image.link,
 			mediaType: image.mediaType,
-			data,
+			data: () => fs.readFile(file),
 			...(image.source ? { source: image.source } : {}),
 		})),
 		input.documentName,

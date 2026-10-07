@@ -24,13 +24,32 @@ import { basename, join } from "node:path";
 import { CLINE_JS_RUNTIME_PATH_ENV } from "../../../../runtime/tools/subprocess-sandbox";
 import { moduleDirectory } from "./assets";
 import type { ReadProgress } from "./formats";
+import type { ExtractedImage } from "./images";
 import {
 	type ReadJob,
 	type ReadJobHooks,
 	type ReadJobResult,
 	runReadJob,
 } from "./read-job";
-import type { ChildMessage, ParentMessage } from "./read-protocol";
+import {
+	type ChildMessage,
+	type ParentMessage,
+	READ_OUTPUT_DIRECTORY,
+} from "./read-protocol";
+
+/**
+ * A read whose pictures are files, not bytes: a scanned book is a picture a
+ * page, hundreds of megabytes that the session has no reason to hold. They
+ * stay in the job's scratch directory until `release`, which the caller
+ * calls once it has done with them, on every path.
+ */
+export interface HeldRead extends Omit<ReadJobResult, "images"> {
+	images: { image: ExtractedImage; file: string }[];
+	release(): Promise<void>;
+}
+
+/** What the reader answered, before the scratch directory is handed over. */
+type Answer = Omit<HeldRead, "release">;
 
 /** Names the file that runs in the reader process, for a host that keeps it elsewhere. */
 export const DOCUMENT_READER_CHILD_ENV = "CLINE_DOCUMENT_READER_CHILD";
@@ -176,7 +195,7 @@ async function readInReaderProcess(
 	child: string,
 	job: ReadJob,
 	hooks: ReadJobHooks,
-): Promise<ReadJobResult> {
+): Promise<Answer> {
 	const runtime = readerRuntime();
 	if (!runtime) {
 		throw new ReaderNotStarted(
@@ -200,7 +219,7 @@ async function readInReaderProcess(
 		if (proc.connected) proc.send(message, () => {});
 	};
 
-	return await new Promise<ReadJobResult>((resolve, reject) => {
+	return await new Promise<Answer>((resolve, reject) => {
 		let ready = false;
 		let answered = false;
 		let settled = false;
@@ -321,26 +340,11 @@ async function readInReaderProcess(
 				case "done": {
 					answered = true;
 					send({ type: "received" });
-					const { images, usage, type: _type, ...rest } = message;
+					const { usage, type: _type, ...rest } = message;
 					hooks.onNote?.(
 						`read in a process of its own (pid ${proc.pid}): ${(usage.ms / 1000).toFixed(1)}s, ${usage.peakRssMb} MB at its peak`,
 					);
-					Promise.all(
-						images.map(async ({ image, file }) => ({
-							image,
-							data: new Uint8Array(await fs.readFile(file)),
-						})),
-					).then(
-						(read) => finish(() => resolve({ ...rest, images: read })),
-						(error: unknown) =>
-							finish(() =>
-								reject(
-									new Error(
-										`the reader's pictures could not be collected: ${error instanceof Error ? error.message : String(error)}`,
-									),
-								),
-							),
-					);
+					finish(() => resolve(rest));
 					return;
 				}
 			}
@@ -358,43 +362,63 @@ export function resetReaderProcessState(): void {
 	cannotStart = undefined;
 }
 
+/** A read done here: its pictures are written out, so both kinds of read hand back files. */
+async function heldHere(job: ReadJob, done: ReadJobResult): Promise<Answer> {
+	const outputDir = join(job.scratchDir, READ_OUTPUT_DIRECTORY);
+	await fs.mkdir(outputDir, { recursive: true });
+	const images: Answer["images"] = [];
+	for (const [index, { image, data }] of done.images.entries()) {
+		const file = join(outputDir, String(index));
+		await fs.writeFile(file, data);
+		images.push({ image, file });
+	}
+	return { ...done, images };
+}
+
 /**
- * Read one document. `job.scratchDir` is created here and removed afterwards,
- * whatever happens to the read.
+ * Read one document. `job.scratchDir` is created here; it holds the
+ * pictures until the result's `release`, and is removed here when the read
+ * fails.
  */
 export async function readDocumentJob(
 	job: ReadJob,
 	hooks: ReadJobHooks = {},
-): Promise<ReadJobResult> {
+): Promise<HeldRead> {
 	await fs.mkdir(job.scratchDir, { recursive: true });
+	const release = () =>
+		fs.rm(job.scratchDir, { recursive: true, force: true }).catch(() => {});
 	try {
-		const child = cannotStart ? undefined : resolveReaderChild();
-		if (!child) {
-			if (!saidWhyInProcess) {
-				saidWhyInProcess = true;
-				hooks.onNote?.(
-					`read in the session's own process: ${cannotStart ? `the reader process could not be started (${cannotStart})` : "no reader process is shipped with this build"}`,
-				);
-			}
-			return await runReadJob(job, hooks);
-		}
-		const release = await takeTurn(hooks.signal);
-		try {
-			return await readInReaderProcess(child, job, hooks);
-		} catch (error) {
-			if (!(error instanceof ReaderNotStarted)) throw error;
-			cannotStart = error.message;
+		const answer = await readAnswer(job, hooks);
+		return { ...answer, release };
+	} catch (error) {
+		await release();
+		throw error;
+	}
+}
+
+async function readAnswer(job: ReadJob, hooks: ReadJobHooks): Promise<Answer> {
+	const child = cannotStart ? undefined : resolveReaderChild();
+	if (!child) {
+		if (!saidWhyInProcess) {
 			saidWhyInProcess = true;
 			hooks.onNote?.(
-				`the reader process could not be started (${error.message}); read in the session's own process instead`,
+				`read in the session's own process: ${cannotStart ? `the reader process could not be started (${cannotStart})` : "no reader process is shipped with this build"}`,
 			);
-			return await runReadJob(job, hooks);
-		} finally {
-			release();
 		}
+		return heldHere(job, await runReadJob(job, hooks));
+	}
+	const release = await takeTurn(hooks.signal);
+	try {
+		return await readInReaderProcess(child, job, hooks);
+	} catch (error) {
+		if (!(error instanceof ReaderNotStarted)) throw error;
+		cannotStart = error.message;
+		saidWhyInProcess = true;
+		hooks.onNote?.(
+			`the reader process could not be started (${error.message}); read in the session's own process instead`,
+		);
+		return heldHere(job, await runReadJob(job, hooks));
 	} finally {
-		await fs
-			.rm(job.scratchDir, { recursive: true, force: true })
-			.catch(() => {});
+		release();
 	}
 }

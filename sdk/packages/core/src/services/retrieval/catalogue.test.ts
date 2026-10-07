@@ -96,6 +96,22 @@ describe("the Library's catalogue", () => {
 		expect(described.sources[0].sha256).toBe(added.source.sha256);
 		expect(described.images[0].description).toBe("A grid of tiles.");
 
+		// A picture held as a file is filed from it, as one given as bytes is.
+		const held = file("held.png", "held picture bytes");
+		const fromFile = await catalogue.addSource(book.id, {
+			kind: "text",
+			name: "notes",
+			text: `${PROSE} more\n\n![held](images/h.png)`,
+			images: [{ file: "h.png", path: held, mediaType: "image/png" }],
+		});
+		const filed = catalogue
+			.images(book.id)
+			.find((picture) => picture.sourceId === fromFile.source.id);
+		expect(filed?.bytes).toBe("held picture bytes".length);
+		expect(readFileSync(join(directory, filed?.file ?? ""), "utf8")).toBe(
+			"held picture bytes",
+		);
+
 		// The same file again is left alone.
 		const again = await catalogue.addSource(book.id, {
 			kind: "file",
