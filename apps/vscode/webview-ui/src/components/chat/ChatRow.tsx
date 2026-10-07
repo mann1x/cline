@@ -72,6 +72,7 @@ import SearchResultsDisplay from "./SearchResultsDisplay"
 import SubagentStatusRow from "./SubagentStatusRow"
 import ThinkingCondensedRow from "./ThinkingCondensedRow"
 import { ThinkingRow } from "./ThinkingRow"
+import ToolReport from "./ToolReport"
 import TransactionRow from "./TransactionRow"
 import UserMessage from "./UserMessage"
 
@@ -869,6 +870,9 @@ export const ChatRowContent = memo(
 									path={tool.path || tool.tool}
 								/>
 							) : null}
+							{/* What it came to, once it is done: the progress above
+							    goes when the call ends, the report stays. */}
+							{!message.partial && tool.report ? <ToolReport report={tool.report} /> : null}
 						</div>
 					)
 			}

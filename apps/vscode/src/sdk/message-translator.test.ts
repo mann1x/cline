@@ -3031,6 +3031,91 @@ describe("translateSessionEvent — agent_event content_update", () => {
 	})
 })
 
+describe("translateSessionEvent — a tool that reported its progress", () => {
+	const send = (state: MessageTranslatorState, event: Record<string, unknown>) =>
+		translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: { sessionId: "session-1", event: event as unknown as AgentEvent },
+			} as CoreSessionEvent,
+			state,
+		).messages
+	const rowOf = (messages: { say?: string; text?: string; partial?: boolean }[]) =>
+		JSON.parse(messages.find((message) => message.say === "tool" && !message.partial)?.text ?? "{}")
+
+	it("keeps what it came to on its finished row", () => {
+		const state = new MessageTranslatorState()
+		send(state, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "library_check",
+			toolCallId: "import-1",
+			input: { paths: ["m:/Books/a.epub", "m:/Books/b.epub"] },
+		})
+		send(state, {
+			type: "content_update",
+			contentType: "tool",
+			toolName: "library_check",
+			toolCallId: "import-1",
+			update: { status: "Checking 2 files: 1 of 2 done", cancellable: "library-import" },
+		})
+		const report = "Checking 2 files ended: 1 of 2 done, 1 failed\nb.epub failed: no reader"
+		const end = send(state, {
+			type: "content_end",
+			contentType: "tool",
+			toolName: "library_check",
+			toolCallId: "import-1",
+			output: report,
+		})
+		expect(rowOf(end).report).toBe(report)
+	})
+
+	it("keeps a cancelled import's report, which arrives as its error", () => {
+		const state = new MessageTranslatorState()
+		send(state, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "library_add",
+			toolCallId: "import-2",
+			input: { paths: ["a.pdf"] },
+		})
+		send(state, {
+			type: "content_update",
+			contentType: "tool",
+			toolName: "library_add",
+			toolCallId: "import-2",
+			update: { status: "Adding 1 file", cancellable: "library-import" },
+		})
+		const end = send(state, {
+			type: "content_end",
+			contentType: "tool",
+			toolName: "library_add",
+			toolCallId: "import-2",
+			error: "Cancelled by the user.\na.pdf: not read",
+		})
+		expect(rowOf(end).report).toBe("Cancelled by the user.\na.pdf: not read")
+	})
+
+	it("leaves a tool that reported nothing as it was", () => {
+		const state = new MessageTranslatorState()
+		send(state, {
+			type: "content_start",
+			contentType: "tool",
+			toolName: "library_check",
+			toolCallId: "quiet-1",
+			input: { paths: ["a.md"] },
+		})
+		const end = send(state, {
+			type: "content_end",
+			contentType: "tool",
+			toolName: "library_check",
+			toolCallId: "quiet-1",
+			output: "a.md: not in the Library.",
+		})
+		expect(rowOf(end)).not.toHaveProperty("report")
+	})
+})
+
 // ---------------------------------------------------------------------------
 // translateSessionEvent — agent_event (usage)
 // ---------------------------------------------------------------------------

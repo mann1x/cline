@@ -734,6 +734,8 @@ export class MessageTranslatorState {
 	private displayImagesByCallId = new Map<string, string[]>()
 	/** The partial row of each running generic tool call, for its status line. */
 	private genericToolRows = new Map<string, { ts: number; row: ClineSayTool }>()
+	/** Tool calls that reported progress on their row: their output stays on it. */
+	private toolsThatReported = new Set<string>()
 	/**
 	 * The in-flight compaction divider's ts, so the "completed"/"skipped" notice
 	 * (or a turn error/abort) updates the same row in place. Deliberately NOT
@@ -1476,6 +1478,15 @@ export class MessageTranslatorState {
 
 	getGenericToolRow(toolCallId: string): { ts: number; row: ClineSayTool } | undefined {
 		return this.genericToolRows.get(toolCallId)
+	}
+
+	noteToolReported(toolCallId: string): void {
+		this.toolsThatReported.add(toolCallId)
+	}
+
+	/** Whether the call reported progress; asked once, at its end. */
+	takeToolReported(toolCallId: string | undefined): boolean {
+		return toolCallId !== undefined && this.toolsThatReported.delete(toolCallId)
 	}
 
 	dropGenericToolRow(toolCallId: string | undefined): void {
@@ -3311,6 +3322,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 			const statusUpdate = event.update as { status?: unknown; cancellable?: unknown } | undefined
 			if (event.toolCallId && typeof statusUpdate?.status === "string" && statusUpdate.status.trim()) {
 				const running = state.getGenericToolRow(event.toolCallId)
+				state.noteToolReported(event.toolCallId)
 				if (running) {
 					messages.push({
 						ts: running.ts,
@@ -3700,6 +3712,15 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					}
 
 					const sayTool = toDisplaySayTool(sdkToolToClineSayTool(toolName, storedInput), state.currentCwd())
+					// A tool that reported its progress -- an import reading files --
+					// keeps what it came to. Its progress lines go when it ends, and
+					// without this the row was left with nothing but its path.
+					if (state.takeToolReported(event.toolCallId)) {
+						const report = (event.error ?? extractToolOutputText(event.output) ?? "").trim()
+						if (report) {
+							sayTool.report = report
+						}
+					}
 					// If there's an error, include it in the tool message
 					if (event.error) {
 						messages.push({

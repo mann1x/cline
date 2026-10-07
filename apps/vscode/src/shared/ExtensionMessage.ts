@@ -487,6 +487,13 @@ export interface ClineSayTool {
 	 * the tool fails with its full report and the run goes on.
 	 */
 	cancellable?: string
+	/**
+	 * What a tool that reported its progress came to: its output, or its
+	 * error. Kept on its finished row, collapsed, because the progress lines
+	 * go when the call ends and an import's report is the one record of
+	 * which files failed and why.
+	 */
+	report?: string
 }
 
 // must keep in sync with system prompt
