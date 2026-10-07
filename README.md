@@ -311,68 +311,167 @@ xOllama is an Ollama fork that runs opencoti as its engine. It speaks Ollama's n
 - **Jev.** xOllama serves Ollama's `/v1/systemone`, so the Jev tab can point at it and score with a local decision model.
 - **The KV rolling window.** When the KV cache does not fit in VRAM, the engine keeps part of it in host RAM and streams it through VRAM while the model computes, instead of moving model layers to RAM. Set `kv.rolling_window` in the model's configuration (`on`, `off`, or a size in MiB). It is the engine's feature, and Cerebriline needs no setting for it.
 
-**What the rolling window buys on a 12 GB card.** A 27B model with a 131,072-token context wants about 12 GiB of video memory, which leaves no room on a 12 GB card. There are two ways to make it fit in about 10 GiB:
+**What the rolling window buys on a smaller card.** The engine can be given a video memory cap, and the measurements below use one to make a large card behave like a smaller one: 11.5 GB for a 12 GB card, 14.5 GB for a 16 GB card, 21 GB for a 24 GB card. Under the cap the engine keeps as much of the conversation's cache on the GPU as fits — C cells, read from each run's log — and reads the rest from system RAM on every token. The model itself stays on the GPU. Two comparisons are shown:
 
-- **Rolling window:** the whole model stays on the GPU. The oldest part of the conversation's cache is kept in system RAM and streamed to the GPU as it is needed.
-- **Layers in RAM:** the usual way. Part of the model (here 10 of its 64 layers) runs on the CPU.
+- **Uncapped:** the same model with all the video memory it wants, the big-card reference.
+- **Layers in RAM:** no cap, but enough of the model's layers on the CPU (`-ngl`) to fit the same card, the usual way.
 
-| Setup | Video memory used | System RAM used | Fits a 12 GB card |
-|---|---|---|---|
-| Everything in video memory (the reference) | 11.9 GiB (12,196 MiB) | 0.4 GiB | No |
-| Rolling window | 9.9 GiB (10,140 MiB) | 2.2 GiB | Yes |
-| 10 of 64 layers in RAM | 10.1 GiB (10,322 MiB) | 2.9 GiB | Yes |
+"Below the limit" means the conversation plus the 256 generated tokens fits in C. There the rolling window answers within 2% of uncapped, and its output is identical: the largest difference in any token's log-probability was 0.000000 at 8,000 tokens on the RX 9070 XT, with both cache types. Reading the prompt below the limit can be up to 14% slower. A capped run reads the quantized cache directly instead of converting it to f16, because the conversion buffer would take video memory from C.
 
-Memory is what the engine holds once the model is loaded, before the first request. The system RAM of the layers-in-RAM setup includes the 2.1 GiB of the model file that those layers read.
+Each row is one request: a fresh prompt of the given length, with no prompt cache and the same prompts on every setup, then 256 tokens with greedy decoding. Answering is tokens per second over those 256 tokens, reading is the prompt's prefill speed, and every cell is a single run.
 
-Speed while answering, in tokens per second, as the conversation grows:
+#### RTX PRO 6000 under Linux, as a 12 GB card (cap 11.5 GB): OmniMerge v6 IQ2_M, 27B hybrid
 
-| Conversation size (tokens) | Everything in video memory | Rolling window | 10 of 64 layers in RAM |
-|---|---|---|---|
-| 8,091 | 89.1 | 88.7 | 5.0 |
-| 16,086 | 88.3 | 87.9 | 4.7 |
-| 30,486 | 85.4 | 82.8 | 4.5 |
-| 45,051 | 83.7 | 75.4 | 4.1 |
-| 59,196 | 81.9 | 69.7 | 3.8 |
-| 73,841 | 79.3 | 54.4 | 3.6 |
-| 88,115 | 78.0 | 42.1 | 3.4 |
-| 102,504 | 75.7 | 33.6 | 3.2 |
-| 116,821 | 74.0 | 28.3 | 3.1 |
-| 126,050 | 73.0 | 24.4 | 3.2 |
+Cache q4_0, CUDA. C = 58,112 cells.
 
-- **Short conversations lose nothing.** Up to about 16,000 tokens the rolling window is as fast as having everything in video memory.
-- **Long conversations slow down gradually.** At 59,000 tokens it is 15% slower than the reference, at 126,000 tokens about a third of its speed.
-- **It is far faster than the usual way.** With layers in RAM the same model answers at 3 to 5 tokens per second at every size. The rolling window is 7 to 18 times faster while using slightly less video memory.
-- **Reading a prompt** runs at 1,892 to 3,111 tokens per second with the rolling window, against 2,275 to 3,100 for the reference and 1,375 to 1,682 with layers in RAM.
+| Conversation (tokens) | Below the limit? | Answering: rolling window | uncapped | layers in RAM | Reading: rolling window | uncapped | layers in RAM |
+|---|---|---|---|---|---|---|---|
+| 8,185 | yes | 90.4 | 90.7 | 6.8 | 3,030 | 3,057 | 1,730 |
+| 30,668 | yes | 86.8 | 87.1 | 6.0 | 2,872 | 2,978 | 1,817 |
+| 59,162 | no | 82.5 | 83.1 | 5.3 | 2,554 | 2,719 | 1,711 |
+| 88,243 | no | 73.3 | 78.8 | 4.7 | 2,174 | 2,516 | 1,627 |
+| 126,373 | no | 40.5 | 73.8 | 4.1 | 1,826 | 2,278 | 1,508 |
 
-**With the model's built-in drafter.** OmniMerge v6 carries a small helper that guesses several tokens ahead (MTP), and the engine uses it by default. It makes answers faster, and it needs video memory of its own, so on the 12 GB budget the rolling window is in use from the start of the conversation:
+Cache q4_0, Vulkan. C = 39,936 cells.
 
-| Setup, with the drafter | Video memory used | System RAM used | Fits a 12 GB card |
-|---|---|---|---|
-| Everything in video memory (the reference) | 13.1 GiB (13,412 MiB) | 0.6 GiB | No |
-| Rolling window | 10.7 GiB (10,930 MiB) | 2.9 GiB | Yes |
-| 10 of 64 layers in RAM | 11.2 GiB (11,498 MiB) | 3.2 GiB | Yes |
+| Conversation (tokens) | Below the limit? | Answering: rolling window | uncapped | Reading: rolling window | uncapped |
+|---|---|---|---|---|---|
+| 8,185 | yes | 67.4 | 67.3 | 2,168 | 2,174 |
+| 30,668 | yes | 63.5 | 63.0 | 1,850 | 1,853 |
+| 59,162 | no | 55.7 | 58.7 | 1,441 | 1,525 |
+| 88,243 | no | 51.2 | 55.3 | 1,227 | 1,292 |
+| 126,373 | no | 32.7 | 50.7 | 1,025 | 1,077 |
 
-Of that, the drafter takes 751 MiB of video memory in each setup. Speed while answering, in tokens per second:
+Cache KVarN 4-bit, CUDA. C = 61,056 cells. KVarN keeps its records in groups of 128 cells, and its window is flexible: 399 groups (51,072 cells) are the window. While no cell lies past them, the 78 groups the read slots will need stay on the device too, so C is the larger figure of 477 groups. Past it, those groups move to system RAM and their memory becomes the read slots.
 
-| Conversation size (tokens) | Everything in video memory | Rolling window | 10 of 64 layers in RAM |
-|---|---|---|---|
-| 8,091 | 122.6 | 117.0 | 4.6 |
-| 16,086 | 193.9 | 172.6 | 5.5 |
-| 30,486 | 144.2 | 125.6 | 23.3 * |
-| 45,051 | 153.5 | 120.3 | 4.2 |
-| 59,196 | 130.2 | 74.3 | 3.6 |
-| 73,841 | 155.5 | 66.0 | 3.9 |
-| 88,115 | 117.5 | 55.4 | 3.0 |
-| 102,504 | 107.2 | 45.4 | 3.4 |
-| 116,821 | 124.8 | 41.2 | 2.6 |
-| 126,050 | 103.9 | 42.5 | 3.3 |
+| Conversation (tokens) | Below the limit? | Answering: rolling window | uncapped | Reading: rolling window | uncapped |
+|---|---|---|---|---|---|
+| 8,185 | yes | 90.4 | 90.5 | 2,995 | 2,992 |
+| 30,668 | yes | 82.3 | 82.3 | 2,902 | 2,890 |
+| 59,162 | yes | 76.5 | 76.6 | 2,585 | 2,575 |
+| 88,243 | no | 56.7 | 71.7 | 2,226 | 2,304 |
+| 126,373 | no | 34.3 | 64.0 | 1,865 | 2,033 |
 
-\* an outlier reading.
+Cache KVarN 4-bit, Vulkan. C = 66,048 cells (482 + 34 = 516 groups).
 
-- **The drafter pays on a 12 GB budget too.** With the rolling window the model answers at 42 to 173 tokens per second with the drafter, against 24 to 89 without it.
-- **These figures jump around more.** How much the drafter helps depends on the text being written, and each row is a single run.
+| Conversation (tokens) | Below the limit? | Answering: rolling window | uncapped | Reading: rolling window | uncapped |
+|---|---|---|---|---|---|
+| 8,185 | yes | 58.5 | 57.9 | 1,538 | 1,534 |
+| 30,668 | yes | 41.9 | 41.8 | 1,459 | 1,457 |
+| 59,162 | yes | 30.8 | 30.8 | 1,342 | 1,341 |
+| 88,243 | no | 20.6 | 24.2 | 1,236 | 1,241 |
+| 126,373 | no | 14.5 | 19.1 | 1,115 | 1,127 |
 
-How it was measured: the opencoti engine (the engine xOllama runs), release 0.10.5-c8, 2026-10-04, on an RTX PRO 6000 under CUDA limited to 11,500 MiB to act as a 12 GB card. Model: Qwen3.8-27B OmniMerge v6 at IQ2_M, cache quantized to q4_0, 256 tokens generated per row.
+Cache f16, CUDA, as a control. C = 7,680 cells. An f16 cache is four times the bytes of q4_0, so under the same cap only 7,680 cells stay on the GPU, and every token moves four times as much over the link. Use q4_0 or KVarN with the rolling window.
+
+| Conversation (tokens) | Below the limit? | Answering: rolling window | uncapped | Reading: rolling window | uncapped |
+|---|---|---|---|---|---|
+| 8,185 | no | 91.2 | 92.1 | 3,018 | 3,149 |
+| 30,668 | no | 33.6 | 84.7 | 2,669 | 3,101 |
+| 59,162 | no | 15.3 | 76.3 | 2,354 | 2,839 |
+| 88,243 | no | 9.9 | 69.4 | 2,051 | 2,566 |
+| 126,373 | no | 6.7 | 62.0 | 1,735 | 2,241 |
+
+**With the model's built-in drafter.** OmniMerge v6 carries a small helper that guesses several tokens ahead (MTP), and the engine uses it by default. Its own cache stays on the GPU, so under the 11.5 GB cap the model's cache gets 1,536 cells on CUDA and 256 on Vulkan, and the rolling window is in use from the start of the conversation. With the drafter, answering speed follows how many of the guessed tokens are accepted, and that depends on the text being written, which can differ between two runs of the same engine. Compare rows only where the acceptance columns agree. At 59,162 tokens on CUDA the rolling-window run wrote a continuation that repeats the prompt, and the drafter copied it (12.75 tokens accepted per guess against 2.50). That row shows the text, not the engine.
+
+Cache q4_0, CUDA. C = 1,536 cells.
+
+| Conversation (tokens) | Answering: rolling window | uncapped | Reading: rolling window | uncapped | Acceptance (tokens per guess): rolling window | uncapped |
+|---|---|---|---|---|---|---|
+| 8,185 | 100.3 | 129.9 | 2,148 | 2,638 | 0.55 (2.63) | 0.52 (2.55) |
+| 30,668 | 110.7 | 189.2 | 2,086 | 2,573 | 0.97 (3.91) | 0.96 (3.86) |
+| 59,162 | 210.8 | 120.0 | 1,911 | 2,319 | 0.97 (12.75) | 0.50 (2.50) |
+| 88,243 | 40.5 | 107.5 | 1,757 | 2,115 | 0.48 (2.44) | 0.42 (2.85) |
+| 126,373 | 31.6 | 116.2 | 1,584 | 1,896 | 0.48 (2.43) | 0.56 (3.06) |
+
+Cache q4_0, Vulkan. C = 256 cells.
+
+| Conversation (tokens) | Answering: rolling window | uncapped | Reading: rolling window | uncapped | Acceptance (tokens per guess): rolling window | uncapped |
+|---|---|---|---|---|---|---|
+| 8,185 | 56.1 | 70.5 | 1,716 | 1,992 | 0.54 (2.62) | 0.55 (2.63) |
+| 30,668 | 68.1 | 94.2 | 1,563 | 1,715 | 0.96 (3.86) | 0.96 (3.86) |
+| 59,162 | 34.9 | 59.3 | 1,347 | 1,409 | 0.49 (2.47) | 0.56 (2.68) |
+| 88,243 | 28.6 | 51.8 | 1,155 | 1,193 | 0.48 (2.44) | 0.52 (2.68) |
+| 126,373 | 23.3 | 42.7 | 941 | 991 | 0.38 (2.62) | 0.43 (2.54) |
+
+#### RTX PRO 6000 under Linux, as a 16 GB card (cap 14.5 GB): Qwen2.5-14B-Instruct-1M Q6_K
+
+Cache q4_0, CUDA. C = 41,984 cells.
+
+| Conversation (tokens) | Below the limit? | Answering: rolling window | uncapped | layers in RAM | Reading: rolling window | uncapped | layers in RAM |
+|---|---|---|---|---|---|---|---|
+| 8,058 | yes | 91.4 | 91.3 | 12.9 | 5,325 | 5,595 | 2,169 |
+| 30,144 | yes | 80.2 | 80.1 | 5.4 | 3,616 | 4,203 | 1,895 |
+| 49,913 | no | 70.0 | 73.2 | 3.7 | 2,702 | 3,261 | 1,648 |
+| 70,099 | no | 35.9 | 66.6 | 2.6 | 2,125 | 2,664 | 1,468 |
+| 88,206 | no | 21.3 | 61.6 | 1.9 | 1,792 | 2,290 | 1,330 |
+
+Cache q4_0, Vulkan. C = 36,608 cells.
+
+| Conversation (tokens) | Below the limit? | Answering: rolling window | uncapped | Reading: rolling window | uncapped |
+|---|---|---|---|---|---|
+| 8,058 | yes | 84.6 | 86.1 | 4,988 | 5,039 |
+| 30,144 | yes | 72.7 | 73.2 | 3,722 | 3,729 |
+| 49,913 | no | 57.6 | 64.9 | 2,649 | 2,998 |
+| 70,099 | no | 29.1 | 58.0 | 2,013 | 2,493 |
+| 88,206 | no | 18.8 | 53.0 | 1,674 | 2,167 |
+
+#### RTX PRO 6000 under Linux, as a 24 GB card (cap 21 GB): Gemma 4 31B Q4_K_M
+
+Gemma 4 has two caches. The sliding-window layers' cache stays on the GPU in full, and C is the global-attention layers' cache.
+
+Cache q4_0, CUDA. C = 16,640 cells.
+
+| Conversation (tokens) | Below the limit? | Answering: rolling window | uncapped | layers in RAM | Reading: rolling window | uncapped | layers in RAM |
+|---|---|---|---|---|---|---|---|
+| 7,216 | yes | 52.6 | 52.6 | 10.5 | 3,104 | 3,122 | 1,097 |
+| 27,075 | no | 48.7 | 50.4 | 8.2 | 2,651 | 2,885 | 1,103 |
+| 45,032 | no | 45.1 | 48.6 | 6.9 | 2,312 | 2,610 | 1,066 |
+| 63,017 | no | 41.7 | 46.9 | 6.0 | 2,030 | 2,393 | 973 |
+| 79,275 | no | 34.5 | 45.7 | 5.3 | 1,822 | 2,223 | 987 |
+
+Cache q4_0, Vulkan. C = 256 cells: under this cap on Vulkan the global layers' budget holds only 256 cells, so the rolling window is in use from the first token.
+
+| Conversation (tokens) | Below the limit? | Answering: rolling window | uncapped | Reading: rolling window | uncapped |
+|---|---|---|---|---|---|
+| 7,216 | no | 50.4 | 51.9 | 1,978 | 2,258 |
+| 27,075 | no | 47.9 | 50.2 | 1,517 | 1,597 |
+| 45,032 | no | 45.2 | 48.7 | 1,173 | 1,245 |
+| 63,017 | no | 36.0 | 47.0 | 952 | 1,015 |
+| 79,275 | no | 28.9 | 46.0 | 811 | 869 |
+
+#### RX 9070 XT (16 GB) under Windows 11, Vulkan, as a 12 GB card (cap 11.5 GB): OmniMerge v6 IQ2_M
+
+The same model and cap as above, on an AMD card. Under the same cap less is left for the cache here (1,293 MiB free after loading, against 1,788 MiB on the RTX PRO 6000 with CUDA), so far less of it stays on the GPU.
+
+Cache q4_0. C = 9,728 cells.
+
+| Conversation (tokens) | Below the limit? | Answering: rolling window | uncapped | layers in RAM | Reading: rolling window | uncapped | layers in RAM |
+|---|---|---|---|---|---|---|---|
+| 8,185 | yes | 36.5 | 36.4 | 6.8 | 747 | 744 | 581 |
+| 30,668 | no | 33.6 | 34.6 | 6.1 | 611 | 640 | 530 |
+| 59,162 | no | 31.6 | 32.7 | 5.4 | 508 | 541 | 460 |
+| 88,243 | no | 29.3 | 30.7 | 4.8 | 433 | 467 | 406 |
+| 126,373 | no | 23.8 | 28.6 | 4.2 | 364 | 395 | 350 |
+
+Cache KVarN 4-bit. C = 29,696 cells (179 groups in the window, plus 53 for the read slots while no cell lies past them).
+
+| Conversation (tokens) | Below the limit? | Answering: rolling window | uncapped | Reading: rolling window | uncapped |
+|---|---|---|---|---|---|
+| 8,185 | yes | 33.8 | 33.8 | 721 | 722 |
+| 30,668 | no | 23.3 | 24.7 | 666 | 671 |
+| 59,162 | no | 15.8 | 19.4 | 603 | 609 |
+| 88,243 | no | 11.9 | 15.9 | 550 | 557 |
+| 126,373 | no | 9.1 | 13.0 | 491 | 498 |
+
+What the tables say:
+
+- **Below the limit the rolling window costs nothing.** Answering is within 2% of the uncapped card, and the output is the same.
+- **Past the limit it slows gradually.** OmniMerge v6 with a q4_0 cache under CUDA answers at 82.5 tokens per second at 59,000 tokens (uncapped: 83.1) and at 40.5 at 126,000 tokens (uncapped: 73.8).
+- **It is far faster than the usual way.** Against layers in RAM on the same budget, the rolling window answers 10 to 16 times faster for OmniMerge v6 and 7 to 19 times faster for the 14B under CUDA, 5 to 7 times faster for Gemma 4, and 5 to 6 times faster on the RX 9070 XT.
+- **Quantize the cache.** With an f16 cache the cap leaves only 7,680 cells, and answering falls to 6.7 tokens per second at 126,000 tokens, against 40.5 with q4_0.
+
+How it was measured: the opencoti engine (the engine xOllama runs), release 0.10.5-c10, 2026-10-07. On the RTX PRO 6000 (PCIe 5.0): the development engine 2610071819001 with the published libraries. On the RX 9070 XT (PCIe 5.0 x16, Windows 11): the c10 release engine 2610072136001. Both are the same source apart from the version line. The same tables are in the release's [USAGE.md §3.3](https://huggingface.co/ManniX-ITA/opencoti-llamafile/blob/main/USAGE.md).
 
 On Radeon under Windows, use AMD Software 26.9.2 or later for Vulkan.
 

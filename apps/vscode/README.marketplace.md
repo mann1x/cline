@@ -269,90 +269,53 @@ API and its own port (22434). It has a provider of its own here.
   computes, instead of moving model layers to RAM (`kv.rolling_window` in the
   model's configuration).
 
-**What the rolling window buys on a 12 GB card.** A 27B model with a
-131,072-token context wants about 12 GiB of video memory, which leaves no room
-on a 12 GB card. There are two ways to make it fit in about 10 GiB:
+**What the rolling window buys on a smaller card.** The measurements below cap
+a large card's video memory to make it behave like a smaller one: 11.5 GB for a
+12 GB card. Under the cap the engine keeps as much of the conversation's cache
+on the GPU as fits (C cells) and reads the rest from system RAM on every token.
+The model stays on the GPU. "Uncapped" is the same model with all the video
+memory it wants; "layers in RAM" fits the same card the usual way, with part of
+the model on the CPU. "Below the limit" means the conversation plus the 256
+generated tokens fits in C: there the rolling window answers within 2% of
+uncapped, with identical output.
 
-- **Rolling window:** the whole model stays on the GPU. The oldest part of the
-  conversation's cache is kept in system RAM and streamed to the GPU as it is
-  needed.
-- **Layers in RAM:** the usual way. Part of the model (here 10 of its 64 layers)
-  runs on the CPU.
+OmniMerge v6 IQ2_M (27B) on an RTX PRO 6000 under Linux, cache q4_0, CUDA,
+C = 58,112 cells. Answering and reading the prompt, in tokens per second:
 
-| Setup | Video memory used | System RAM used | Fits a 12 GB card |
-|---|---|---|---|
-| Everything in video memory (the reference) | 11.9 GiB (12,196 MiB) | 0.4 GiB | No |
-| Rolling window | 9.9 GiB (10,140 MiB) | 2.2 GiB | Yes |
-| 10 of 64 layers in RAM | 10.1 GiB (10,322 MiB) | 2.9 GiB | Yes |
+| Conversation (tokens) | Below the limit? | Answering: rolling window | uncapped | layers in RAM | Reading: rolling window | uncapped | layers in RAM |
+|---|---|---|---|---|---|---|---|
+| 8,185 | yes | 90.4 | 90.7 | 6.8 | 3,030 | 3,057 | 1,730 |
+| 30,668 | yes | 86.8 | 87.1 | 6.0 | 2,872 | 2,978 | 1,817 |
+| 59,162 | no | 82.5 | 83.1 | 5.3 | 2,554 | 2,719 | 1,711 |
+| 88,243 | no | 73.3 | 78.8 | 4.7 | 2,174 | 2,516 | 1,627 |
+| 126,373 | no | 40.5 | 73.8 | 4.1 | 1,826 | 2,278 | 1,508 |
 
-Memory is what the engine holds once the model is loaded, before the first
-request. The system RAM of the layers-in-RAM setup includes the 2.1 GiB of the
-model file that those layers read.
+The same model and cap on an RX 9070 XT (16 GB) under Windows 11, Vulkan,
+cache q4_0. Less is left for the cache here, so C = 9,728 cells:
 
-Speed while answering, in tokens per second, as the conversation grows:
+| Conversation (tokens) | Below the limit? | Answering: rolling window | uncapped | layers in RAM | Reading: rolling window | uncapped | layers in RAM |
+|---|---|---|---|---|---|---|---|
+| 8,185 | yes | 36.5 | 36.4 | 6.8 | 747 | 744 | 581 |
+| 30,668 | no | 33.6 | 34.6 | 6.1 | 611 | 640 | 530 |
+| 59,162 | no | 31.6 | 32.7 | 5.4 | 508 | 541 | 460 |
+| 88,243 | no | 29.3 | 30.7 | 4.8 | 433 | 467 | 406 |
+| 126,373 | no | 23.8 | 28.6 | 4.2 | 364 | 395 | 350 |
 
-| Conversation size (tokens) | Everything in video memory | Rolling window | 10 of 64 layers in RAM |
-|---|---|---|---|
-| 8,091 | 89.1 | 88.7 | 5.0 |
-| 16,086 | 88.3 | 87.9 | 4.7 |
-| 30,486 | 85.4 | 82.8 | 4.5 |
-| 45,051 | 83.7 | 75.4 | 4.1 |
-| 59,196 | 81.9 | 69.7 | 3.8 |
-| 73,841 | 79.3 | 54.4 | 3.6 |
-| 88,115 | 78.0 | 42.1 | 3.4 |
-| 102,504 | 75.7 | 33.6 | 3.2 |
-| 116,821 | 74.0 | 28.3 | 3.1 |
-| 126,050 | 73.0 | 24.4 | 3.2 |
+- **Below the limit the rolling window costs nothing**, and past it it slows
+  gradually.
+- **It is far faster than the usual way**: 10 to 16 times faster than layers in
+  RAM for OmniMerge v6 under CUDA, 5 to 6 times on the RX 9070 XT.
+- **Quantize the cache.** With f16 the same cap leaves 7,680 cells, and
+  answering falls to 6.7 tokens per second at 126,000 tokens, against 40.5 with
+  q4_0.
 
-- **Short conversations lose nothing.** Up to about 16,000 tokens the rolling
-  window is as fast as having everything in video memory.
-- **Long conversations slow down gradually.** At 59,000 tokens it is 15% slower
-  than the reference, at 126,000 tokens about a third of its speed.
-- **It is far faster than the usual way.** With layers in RAM the same model
-  answers at 3 to 5 tokens per second at every size. The rolling window is 7 to
-  18 times faster while using slightly less video memory.
-- **Reading a prompt** runs at 1,892 to 3,111 tokens per second with the rolling
-  window, against 2,275 to 3,100 for the reference and 1,375 to 1,682 with
-  layers in RAM.
-
-**With the model's built-in drafter.** OmniMerge v6 carries a small helper that
-guesses several tokens ahead (MTP), and the engine uses it by default. It makes
-answers faster, and it needs video memory of its own, so on the 12 GB budget the
-rolling window is in use from the start of the conversation:
-
-| Setup, with the drafter | Video memory used | System RAM used | Fits a 12 GB card |
-|---|---|---|---|
-| Everything in video memory (the reference) | 13.1 GiB (13,412 MiB) | 0.6 GiB | No |
-| Rolling window | 10.7 GiB (10,930 MiB) | 2.9 GiB | Yes |
-| 10 of 64 layers in RAM | 11.2 GiB (11,498 MiB) | 3.2 GiB | Yes |
-
-Of that, the drafter takes 751 MiB of video memory in each setup. Speed while
-answering, in tokens per second:
-
-| Conversation size (tokens) | Everything in video memory | Rolling window | 10 of 64 layers in RAM |
-|---|---|---|---|
-| 8,091 | 122.6 | 117.0 | 4.6 |
-| 16,086 | 193.9 | 172.6 | 5.5 |
-| 30,486 | 144.2 | 125.6 | 23.3 * |
-| 45,051 | 153.5 | 120.3 | 4.2 |
-| 59,196 | 130.2 | 74.3 | 3.6 |
-| 73,841 | 155.5 | 66.0 | 3.9 |
-| 88,115 | 117.5 | 55.4 | 3.0 |
-| 102,504 | 107.2 | 45.4 | 3.4 |
-| 116,821 | 124.8 | 41.2 | 2.6 |
-| 126,050 | 103.9 | 42.5 | 3.3 |
-
-\* an outlier reading.
-
-- **The drafter pays on a 12 GB budget too.** With the rolling window the model
-  answers at 42 to 173 tokens per second with the drafter, against 24 to 89
-  without it.
-- **These figures jump around more.** How much the drafter helps depends on the
-  text being written, and each row is a single run.
-
-How it was measured: the opencoti engine (the engine xOllama runs), release 0.10.5-c8, 2026-10-04, on an RTX PRO 6000 under CUDA limited to 11,500 MiB
-to act as a 12 GB card. Model: Qwen3.8-27B OmniMerge v6 at IQ2_M, cache
-quantized to q4_0, 256 tokens generated per row.
+The full tables, with Vulkan on NVIDIA, the KVarN cache, the MTP drafter,
+Qwen2.5-14B at 16 GB and Gemma 4 31B at 24 GB, are in the
+[README on GitHub](https://github.com/mann1x/cline#xollama-councils-media-engines-and-the-kv-rolling-window)
+and in opencoti's
+[USAGE.md §3.3](https://huggingface.co/ManniX-ITA/opencoti-llamafile/blob/main/USAGE.md).
+Measured with the opencoti engine (the engine xOllama runs), release
+0.10.5-c10, 2026-10-07; every cell is a single run.
 
 On Radeon under Windows, use AMD Software 26.9.2 or later for Vulkan.
 
