@@ -1,30 +1,48 @@
 diff --git a/node_modules/@lingo-reader/epub-parser/.bun-tag-31087b8c9c07aba4 b/.bun-tag-31087b8c9c07aba4
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@lingo-reader/epub-parser/.bun-tag-4fc1907277dd33af b/.bun-tag-4fc1907277dd33af
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@lingo-reader/epub-parser/.bun-tag-fbf2a588ae473b5d b/.bun-tag-fbf2a588ae473b5d
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/index.browser.js b/dist/index.browser.js
-index 809f59be22629b262a9a80ef1e1f07c665517717..9487093880dc3177fba1717acba50b6c22947cc1 100644
+index 809f59be22629b262a9a80ef1e1f07c665517717..4709d92628e7df61871f18f5283766693ef33abd 100644
 --- a/dist/index.browser.js
 +++ b/dist/index.browser.js
-@@ -134,6 +134,15 @@ const resourceExtensionToMimeType = {
+@@ -134,6 +134,30 @@ const resourceExtensionToMimeType = {
  };
  const savedResourceMediaTypePrefixes = new Set(Object.values(resourceExtensionToMimeType));
  const prefixMatch = /(?!xmlns)^.*:/;
-+// The package document and the NCX may write their elements with a prefix
-+// bound to their namespace (`<opf:package>`, `<ncx:navMap>`, `<ns0:package>`
-+// from Python's ElementTree), which is valid XML and was read as no package
-+// and no table of contents. Element prefixes are dropped, as for
-+// encryption.xml: metadata is matched by its local name already, and
-+// attributes keep theirs (`opf:role`).
-+const packageXmlOptions = {
-+  tagNameProcessors: [(str) => str.replace(prefixMatch, "")]
-+};
++// The container, the package document and the NCX may write their elements
++// with a prefix bound to their namespace (`<opf:package>`, `<ncx:navMap>`,
++// `<ns0:package>` from Python's ElementTree, `<odfc:container>`), which is
++// valid XML and was read as no package and no table of contents. Exactly the
++// prefixes the file binds to those namespaces are dropped. Others stay:
++// `<meta>` is read by its exact name, and a stray `<dc:meta>` taken for one
++// broke a book that opened before.
++const packageNamespaces = /* @__PURE__ */ new Set([
++  "http://www.idpf.org/2007/opf",
++  "http://www.daisy.org/z3986/2005/ncx",
++  "urn:oasis:names:tc:opendocument:xmlns:container"
++]);
++function packageXmlOptions(xml) {
++  const prefixes = /* @__PURE__ */ new Set();
++  for (const bound of String(xml).matchAll(/xmlns:([\w.-]+)\s*=\s*["']([^"']*)["']/g)) {
++    if (packageNamespaces.has(bound[2].trim().replace(/\/+$/, ""))) prefixes.add(bound[1]);
++  }
++  return {
++    tagNameProcessors: [(str) => {
++      const colon = str.indexOf(":");
++      return colon > 0 && prefixes.has(str.slice(0, colon)) ? str.slice(colon + 1) : str;
++    }]
++  };
++}
  function extractEncryptionKeys(options) {
    const encryptionKeys = {};
    if (options.rsaPrivateKey) {
-@@ -495,6 +504,8 @@ function parseSpine(spineAST, manifest) {
+@@ -495,6 +519,8 @@ function parseSpine(spineAST, manifest) {
      const $ = itemref.$;
      if ($.idref) {
        const element = manifest[$.idref];
@@ -33,7 +51,7 @@ index 809f59be22629b262a9a80ef1e1f07c665517717..9487093880dc3177fba1717acba50b6c
        spine.push({
          ...element,
          href: `epub:${element.href}`,
-@@ -511,8 +522,9 @@ function parseSpine(spineAST, manifest) {
+@@ -511,8 +537,9 @@ function parseSpine(spineAST, manifest) {
  function parseGuide(guideAST, baseDir) {
    const guide = [];
    const references = guideAST.reference;
@@ -44,7 +62,7 @@ index 809f59be22629b262a9a80ef1e1f07c665517717..9487093880dc3177fba1717acba50b6c
    }
    for (const reference of references) {
      const element = reference.$;
-@@ -540,7 +552,7 @@ function parseCollection(collectionAST, contentBaseDir) {
+@@ -540,7 +567,7 @@ function parseCollection(collectionAST, contentBaseDir) {
  }
  function parseNavMap(navMap, hrefToIdMap, ncxBaseDir) {
    const output = [];
@@ -53,7 +71,7 @@ index 809f59be22629b262a9a80ef1e1f07c665517717..9487093880dc3177fba1717acba50b6c
    return output;
  }
  function walkNavMap(output, navPoints, hrefToIdMap, ncxBaseDir) {
-@@ -771,12 +783,20 @@ function transformHTML(html, htmlDir, resourceSaveDir) {
+@@ -771,12 +798,20 @@ function transformHTML(html, htmlDir, resourceSaveDir) {
      const links = head[1].match(/<link[^>]*>/g);
      if (links) {
        for (const link of links) {
@@ -76,54 +94,69 @@ index 809f59be22629b262a9a80ef1e1f07c665517717..9487093880dc3177fba1717acba50b6c
            fileContent = fileContent.replace(/url\(([^)]*)\)/g, (_, url) => {
              url = url.replace(/['"]/g, "");
              const realUrl = getResourceUrl(url.trim(), shared.path.dirname(cssFilePath), resourceSaveDir);
-@@ -947,7 +967,7 @@ class EpubFile {
+@@ -947,7 +982,7 @@ class EpubFile {
      const mimetype = await this.zip.readFile("mimetype");
      this.mimeType = parseMimeType(mimetype);
      const containerXml = await this.zip.readFile("meta-inf/container.xml");
 -    const containerAST = await shared.parsexml(containerXml);
-+    const containerAST = await shared.parsexml(containerXml, packageXmlOptions);
++    const containerAST = await shared.parsexml(containerXml, packageXmlOptions(containerXml));
      this.opfPath = parseContainer(containerAST);
      this.opfDir = shared.path.dirname(this.opfPath);
      if (this.zip.hasFile("meta-inf/encryption.xml")) {
-@@ -965,7 +985,7 @@ class EpubFile {
+@@ -965,7 +1000,7 @@ class EpubFile {
     */
    async parseRootFile() {
      const rootFileOPF = await this.zip.readFile(this.opfPath);
 -    const xml = await shared.parsexml(rootFileOPF);
-+    const xml = await shared.parsexml(rootFileOPF, packageXmlOptions);
++    const xml = await shared.parsexml(rootFileOPF, packageXmlOptions(rootFileOPF));
      const rootFile = xml.package;
      let tocPath = "";
      if (rootFile.metadata) {
-@@ -1001,7 +1021,7 @@ class EpubFile {
+@@ -1001,7 +1036,7 @@ class EpubFile {
      if (tocPath.length > 0) {
        const tocDir = shared.path.dirname(tocPath);
        const tocNcxFile = await this.zip.readFile(tocPath);
 -      const ncx = (await shared.parsexml(tocNcxFile)).ncx;
-+      const ncx = (await shared.parsexml(tocNcxFile, packageXmlOptions)).ncx;
++      const ncx = (await shared.parsexml(tocNcxFile, packageXmlOptions(tocNcxFile))).ncx;
        if (ncx.navMap)
          this.navMap = parseNavMap(ncx.navMap[0], this.hrefToIdMap, tocDir);
        if (ncx.pageList)
 diff --git a/dist/index.browser.mjs b/dist/index.browser.mjs
-index cec5e8af18ab8249253cb992ec0e173910f6323f..a14051d00f8fa3b941ec2647b9200e40f2f9fb3d 100644
+index cec5e8af18ab8249253cb992ec0e173910f6323f..b9b4c0f647cf2fe0dd0232a2c21a860d1f1447bc 100644
 --- a/dist/index.browser.mjs
 +++ b/dist/index.browser.mjs
-@@ -132,6 +132,15 @@ const resourceExtensionToMimeType = {
+@@ -132,6 +132,30 @@ const resourceExtensionToMimeType = {
  };
  const savedResourceMediaTypePrefixes = new Set(Object.values(resourceExtensionToMimeType));
  const prefixMatch = /(?!xmlns)^.*:/;
-+// The package document and the NCX may write their elements with a prefix
-+// bound to their namespace (`<opf:package>`, `<ncx:navMap>`, `<ns0:package>`
-+// from Python's ElementTree), which is valid XML and was read as no package
-+// and no table of contents. Element prefixes are dropped, as for
-+// encryption.xml: metadata is matched by its local name already, and
-+// attributes keep theirs (`opf:role`).
-+const packageXmlOptions = {
-+  tagNameProcessors: [(str) => str.replace(prefixMatch, "")]
-+};
++// The container, the package document and the NCX may write their elements
++// with a prefix bound to their namespace (`<opf:package>`, `<ncx:navMap>`,
++// `<ns0:package>` from Python's ElementTree, `<odfc:container>`), which is
++// valid XML and was read as no package and no table of contents. Exactly the
++// prefixes the file binds to those namespaces are dropped. Others stay:
++// `<meta>` is read by its exact name, and a stray `<dc:meta>` taken for one
++// broke a book that opened before.
++const packageNamespaces = /* @__PURE__ */ new Set([
++  "http://www.idpf.org/2007/opf",
++  "http://www.daisy.org/z3986/2005/ncx",
++  "urn:oasis:names:tc:opendocument:xmlns:container"
++]);
++function packageXmlOptions(xml) {
++  const prefixes = /* @__PURE__ */ new Set();
++  for (const bound of String(xml).matchAll(/xmlns:([\w.-]+)\s*=\s*["']([^"']*)["']/g)) {
++    if (packageNamespaces.has(bound[2].trim().replace(/\/+$/, ""))) prefixes.add(bound[1]);
++  }
++  return {
++    tagNameProcessors: [(str) => {
++      const colon = str.indexOf(":");
++      return colon > 0 && prefixes.has(str.slice(0, colon)) ? str.slice(colon + 1) : str;
++    }]
++  };
++}
  function extractEncryptionKeys(options) {
    const encryptionKeys = {};
    if (options.rsaPrivateKey) {
-@@ -493,6 +502,8 @@ function parseSpine(spineAST, manifest) {
+@@ -493,6 +517,8 @@ function parseSpine(spineAST, manifest) {
      const $ = itemref.$;
      if ($.idref) {
        const element = manifest[$.idref];
@@ -132,7 +165,7 @@ index cec5e8af18ab8249253cb992ec0e173910f6323f..a14051d00f8fa3b941ec2647b9200e40
        spine.push({
          ...element,
          href: `epub:${element.href}`,
-@@ -509,8 +520,9 @@ function parseSpine(spineAST, manifest) {
+@@ -509,8 +535,9 @@ function parseSpine(spineAST, manifest) {
  function parseGuide(guideAST, baseDir) {
    const guide = [];
    const references = guideAST.reference;
@@ -143,7 +176,7 @@ index cec5e8af18ab8249253cb992ec0e173910f6323f..a14051d00f8fa3b941ec2647b9200e40
    }
    for (const reference of references) {
      const element = reference.$;
-@@ -538,7 +550,7 @@ function parseCollection(collectionAST, contentBaseDir) {
+@@ -538,7 +565,7 @@ function parseCollection(collectionAST, contentBaseDir) {
  }
  function parseNavMap(navMap, hrefToIdMap, ncxBaseDir) {
    const output = [];
@@ -152,7 +185,7 @@ index cec5e8af18ab8249253cb992ec0e173910f6323f..a14051d00f8fa3b941ec2647b9200e40
    return output;
  }
  function walkNavMap(output, navPoints, hrefToIdMap, ncxBaseDir) {
-@@ -769,12 +781,20 @@ function transformHTML(html, htmlDir, resourceSaveDir) {
+@@ -769,12 +796,20 @@ function transformHTML(html, htmlDir, resourceSaveDir) {
      const links = head[1].match(/<link[^>]*>/g);
      if (links) {
        for (const link of links) {
@@ -175,54 +208,69 @@ index cec5e8af18ab8249253cb992ec0e173910f6323f..a14051d00f8fa3b941ec2647b9200e40
            fileContent = fileContent.replace(/url\(([^)]*)\)/g, (_, url) => {
              url = url.replace(/['"]/g, "");
              const realUrl = getResourceUrl(url.trim(), path.dirname(cssFilePath), resourceSaveDir);
-@@ -945,7 +965,7 @@ class EpubFile {
+@@ -945,7 +980,7 @@ class EpubFile {
      const mimetype = await this.zip.readFile("mimetype");
      this.mimeType = parseMimeType(mimetype);
      const containerXml = await this.zip.readFile("meta-inf/container.xml");
 -    const containerAST = await parsexml(containerXml);
-+    const containerAST = await parsexml(containerXml, packageXmlOptions);
++    const containerAST = await parsexml(containerXml, packageXmlOptions(containerXml));
      this.opfPath = parseContainer(containerAST);
      this.opfDir = path.dirname(this.opfPath);
      if (this.zip.hasFile("meta-inf/encryption.xml")) {
-@@ -963,7 +983,7 @@ class EpubFile {
+@@ -963,7 +998,7 @@ class EpubFile {
     */
    async parseRootFile() {
      const rootFileOPF = await this.zip.readFile(this.opfPath);
 -    const xml = await parsexml(rootFileOPF);
-+    const xml = await parsexml(rootFileOPF, packageXmlOptions);
++    const xml = await parsexml(rootFileOPF, packageXmlOptions(rootFileOPF));
      const rootFile = xml.package;
      let tocPath = "";
      if (rootFile.metadata) {
-@@ -999,7 +1019,7 @@ class EpubFile {
+@@ -999,7 +1034,7 @@ class EpubFile {
      if (tocPath.length > 0) {
        const tocDir = path.dirname(tocPath);
        const tocNcxFile = await this.zip.readFile(tocPath);
 -      const ncx = (await parsexml(tocNcxFile)).ncx;
-+      const ncx = (await parsexml(tocNcxFile, packageXmlOptions)).ncx;
++      const ncx = (await parsexml(tocNcxFile, packageXmlOptions(tocNcxFile))).ncx;
        if (ncx.navMap)
          this.navMap = parseNavMap(ncx.navMap[0], this.hrefToIdMap, tocDir);
        if (ncx.pageList)
 diff --git a/dist/index.node.js b/dist/index.node.js
-index 52ea2dda29000f73051ab72499b34651e47bf290..d7f59b4efc00fc49ba25e51a5183529de7b3bded 100644
+index 52ea2dda29000f73051ab72499b34651e47bf290..3fbc9b5fe4dc236e6e3a827a0b16b886f170355c 100644
 --- a/dist/index.node.js
 +++ b/dist/index.node.js
-@@ -132,6 +132,15 @@ const resourceExtensionToMimeType = {
+@@ -132,6 +132,30 @@ const resourceExtensionToMimeType = {
  };
  const savedResourceMediaTypePrefixes = new Set(Object.values(resourceExtensionToMimeType));
  const prefixMatch = /(?!xmlns)^.*:/;
-+// The package document and the NCX may write their elements with a prefix
-+// bound to their namespace (`<opf:package>`, `<ncx:navMap>`, `<ns0:package>`
-+// from Python's ElementTree), which is valid XML and was read as no package
-+// and no table of contents. Element prefixes are dropped, as for
-+// encryption.xml: metadata is matched by its local name already, and
-+// attributes keep theirs (`opf:role`).
-+const packageXmlOptions = {
-+  tagNameProcessors: [(str) => str.replace(prefixMatch, "")]
-+};
++// The container, the package document and the NCX may write their elements
++// with a prefix bound to their namespace (`<opf:package>`, `<ncx:navMap>`,
++// `<ns0:package>` from Python's ElementTree, `<odfc:container>`), which is
++// valid XML and was read as no package and no table of contents. Exactly the
++// prefixes the file binds to those namespaces are dropped. Others stay:
++// `<meta>` is read by its exact name, and a stray `<dc:meta>` taken for one
++// broke a book that opened before.
++const packageNamespaces = /* @__PURE__ */ new Set([
++  "http://www.idpf.org/2007/opf",
++  "http://www.daisy.org/z3986/2005/ncx",
++  "urn:oasis:names:tc:opendocument:xmlns:container"
++]);
++function packageXmlOptions(xml) {
++  const prefixes = /* @__PURE__ */ new Set();
++  for (const bound of String(xml).matchAll(/xmlns:([\w.-]+)\s*=\s*["']([^"']*)["']/g)) {
++    if (packageNamespaces.has(bound[2].trim().replace(/\/+$/, ""))) prefixes.add(bound[1]);
++  }
++  return {
++    tagNameProcessors: [(str) => {
++      const colon = str.indexOf(":");
++      return colon > 0 && prefixes.has(str.slice(0, colon)) ? str.slice(colon + 1) : str;
++    }]
++  };
++}
  function extractEncryptionKeys(options) {
    const encryptionKeys = {};
    if (options.rsaPrivateKey) {
-@@ -449,6 +458,8 @@ function parseSpine(spineAST, manifest) {
+@@ -449,6 +473,8 @@ function parseSpine(spineAST, manifest) {
      const $ = itemref.$;
      if ($.idref) {
        const element = manifest[$.idref];
@@ -231,7 +279,7 @@ index 52ea2dda29000f73051ab72499b34651e47bf290..d7f59b4efc00fc49ba25e51a5183529d
        spine.push({
          ...element,
          href: `epub:${element.href}`,
-@@ -465,8 +476,9 @@ function parseSpine(spineAST, manifest) {
+@@ -465,8 +491,9 @@ function parseSpine(spineAST, manifest) {
  function parseGuide(guideAST, baseDir) {
    const guide = [];
    const references = guideAST.reference;
@@ -242,7 +290,7 @@ index 52ea2dda29000f73051ab72499b34651e47bf290..d7f59b4efc00fc49ba25e51a5183529d
    }
    for (const reference of references) {
      const element = reference.$;
-@@ -494,7 +506,7 @@ function parseCollection(collectionAST, contentBaseDir) {
+@@ -494,7 +521,7 @@ function parseCollection(collectionAST, contentBaseDir) {
  }
  function parseNavMap(navMap, hrefToIdMap, ncxBaseDir) {
    const output = [];
@@ -251,7 +299,7 @@ index 52ea2dda29000f73051ab72499b34651e47bf290..d7f59b4efc00fc49ba25e51a5183529d
    return output;
  }
  function walkNavMap(output, navPoints, hrefToIdMap, ncxBaseDir) {
-@@ -713,12 +725,20 @@ function transformHTML(html, htmlDir, resourceSaveDir) {
+@@ -713,12 +740,20 @@ function transformHTML(html, htmlDir, resourceSaveDir) {
      const links = head[1].match(/<link[^>]*>/g);
      if (links) {
        for (const link of links) {
@@ -274,54 +322,69 @@ index 52ea2dda29000f73051ab72499b34651e47bf290..d7f59b4efc00fc49ba25e51a5183529d
            fileContent = fileContent.replace(/url\(([^)]*)\)/g, (_, url) => {
              url = url.replace(/['"]/g, "");
              const realUrl = getResourceUrl(url.trim(), shared.path.dirname(cssFilePath), resourceSaveDir);
-@@ -878,7 +898,7 @@ class EpubFile {
+@@ -878,7 +913,7 @@ class EpubFile {
      const mimetype = await this.zip.readFile("mimetype");
      this.mimeType = parseMimeType(mimetype);
      const containerXml = await this.zip.readFile("meta-inf/container.xml");
 -    const containerAST = await shared.parsexml(containerXml);
-+    const containerAST = await shared.parsexml(containerXml, packageXmlOptions);
++    const containerAST = await shared.parsexml(containerXml, packageXmlOptions(containerXml));
      this.opfPath = parseContainer(containerAST);
      this.opfDir = shared.path.dirname(this.opfPath);
      if (this.zip.hasFile("meta-inf/encryption.xml")) {
-@@ -896,7 +916,7 @@ class EpubFile {
+@@ -896,7 +931,7 @@ class EpubFile {
     */
    async parseRootFile() {
      const rootFileOPF = await this.zip.readFile(this.opfPath);
 -    const xml = await shared.parsexml(rootFileOPF);
-+    const xml = await shared.parsexml(rootFileOPF, packageXmlOptions);
++    const xml = await shared.parsexml(rootFileOPF, packageXmlOptions(rootFileOPF));
      const rootFile = xml.package;
      let tocPath = "";
      if (rootFile.metadata) {
-@@ -932,7 +952,7 @@ class EpubFile {
+@@ -932,7 +967,7 @@ class EpubFile {
      if (tocPath.length > 0) {
        const tocDir = shared.path.dirname(tocPath);
        const tocNcxFile = await this.zip.readFile(tocPath);
 -      const ncx = (await shared.parsexml(tocNcxFile)).ncx;
-+      const ncx = (await shared.parsexml(tocNcxFile, packageXmlOptions)).ncx;
++      const ncx = (await shared.parsexml(tocNcxFile, packageXmlOptions(tocNcxFile))).ncx;
        if (ncx.navMap)
          this.navMap = parseNavMap(ncx.navMap[0], this.hrefToIdMap, tocDir);
        if (ncx.pageList)
 diff --git a/dist/index.node.mjs b/dist/index.node.mjs
-index 3e22a9fa12213e95856722dbdc9bb446b289cd48..fd18fb35db3c2a78864a8fb809a7222626274e1d 100644
+index 3e22a9fa12213e95856722dbdc9bb446b289cd48..323a8fd41f29aad93dc95c1b713938c33aab7a06 100644
 --- a/dist/index.node.mjs
 +++ b/dist/index.node.mjs
-@@ -130,6 +130,15 @@ const resourceExtensionToMimeType = {
+@@ -130,6 +130,30 @@ const resourceExtensionToMimeType = {
  };
  const savedResourceMediaTypePrefixes = new Set(Object.values(resourceExtensionToMimeType));
  const prefixMatch = /(?!xmlns)^.*:/;
-+// The package document and the NCX may write their elements with a prefix
-+// bound to their namespace (`<opf:package>`, `<ncx:navMap>`, `<ns0:package>`
-+// from Python's ElementTree), which is valid XML and was read as no package
-+// and no table of contents. Element prefixes are dropped, as for
-+// encryption.xml: metadata is matched by its local name already, and
-+// attributes keep theirs (`opf:role`).
-+const packageXmlOptions = {
-+  tagNameProcessors: [(str) => str.replace(prefixMatch, "")]
-+};
++// The container, the package document and the NCX may write their elements
++// with a prefix bound to their namespace (`<opf:package>`, `<ncx:navMap>`,
++// `<ns0:package>` from Python's ElementTree, `<odfc:container>`), which is
++// valid XML and was read as no package and no table of contents. Exactly the
++// prefixes the file binds to those namespaces are dropped. Others stay:
++// `<meta>` is read by its exact name, and a stray `<dc:meta>` taken for one
++// broke a book that opened before.
++const packageNamespaces = /* @__PURE__ */ new Set([
++  "http://www.idpf.org/2007/opf",
++  "http://www.daisy.org/z3986/2005/ncx",
++  "urn:oasis:names:tc:opendocument:xmlns:container"
++]);
++function packageXmlOptions(xml) {
++  const prefixes = /* @__PURE__ */ new Set();
++  for (const bound of String(xml).matchAll(/xmlns:([\w.-]+)\s*=\s*["']([^"']*)["']/g)) {
++    if (packageNamespaces.has(bound[2].trim().replace(/\/+$/, ""))) prefixes.add(bound[1]);
++  }
++  return {
++    tagNameProcessors: [(str) => {
++      const colon = str.indexOf(":");
++      return colon > 0 && prefixes.has(str.slice(0, colon)) ? str.slice(colon + 1) : str;
++    }]
++  };
++}
  function extractEncryptionKeys(options) {
    const encryptionKeys = {};
    if (options.rsaPrivateKey) {
-@@ -447,6 +456,8 @@ function parseSpine(spineAST, manifest) {
+@@ -447,6 +471,8 @@ function parseSpine(spineAST, manifest) {
      const $ = itemref.$;
      if ($.idref) {
        const element = manifest[$.idref];
@@ -330,7 +393,7 @@ index 3e22a9fa12213e95856722dbdc9bb446b289cd48..fd18fb35db3c2a78864a8fb809a72226
        spine.push({
          ...element,
          href: `epub:${element.href}`,
-@@ -463,8 +474,9 @@ function parseSpine(spineAST, manifest) {
+@@ -463,8 +489,9 @@ function parseSpine(spineAST, manifest) {
  function parseGuide(guideAST, baseDir) {
    const guide = [];
    const references = guideAST.reference;
@@ -341,7 +404,7 @@ index 3e22a9fa12213e95856722dbdc9bb446b289cd48..fd18fb35db3c2a78864a8fb809a72226
    }
    for (const reference of references) {
      const element = reference.$;
-@@ -492,7 +504,7 @@ function parseCollection(collectionAST, contentBaseDir) {
+@@ -492,7 +519,7 @@ function parseCollection(collectionAST, contentBaseDir) {
  }
  function parseNavMap(navMap, hrefToIdMap, ncxBaseDir) {
    const output = [];
@@ -350,7 +413,7 @@ index 3e22a9fa12213e95856722dbdc9bb446b289cd48..fd18fb35db3c2a78864a8fb809a72226
    return output;
  }
  function walkNavMap(output, navPoints, hrefToIdMap, ncxBaseDir) {
-@@ -711,12 +723,20 @@ function transformHTML(html, htmlDir, resourceSaveDir) {
+@@ -711,12 +738,20 @@ function transformHTML(html, htmlDir, resourceSaveDir) {
      const links = head[1].match(/<link[^>]*>/g);
      if (links) {
        for (const link of links) {
@@ -373,30 +436,30 @@ index 3e22a9fa12213e95856722dbdc9bb446b289cd48..fd18fb35db3c2a78864a8fb809a72226
            fileContent = fileContent.replace(/url\(([^)]*)\)/g, (_, url) => {
              url = url.replace(/['"]/g, "");
              const realUrl = getResourceUrl(url.trim(), path.dirname(cssFilePath), resourceSaveDir);
-@@ -876,7 +896,7 @@ class EpubFile {
+@@ -876,7 +911,7 @@ class EpubFile {
      const mimetype = await this.zip.readFile("mimetype");
      this.mimeType = parseMimeType(mimetype);
      const containerXml = await this.zip.readFile("meta-inf/container.xml");
 -    const containerAST = await parsexml(containerXml);
-+    const containerAST = await parsexml(containerXml, packageXmlOptions);
++    const containerAST = await parsexml(containerXml, packageXmlOptions(containerXml));
      this.opfPath = parseContainer(containerAST);
      this.opfDir = path.dirname(this.opfPath);
      if (this.zip.hasFile("meta-inf/encryption.xml")) {
-@@ -894,7 +914,7 @@ class EpubFile {
+@@ -894,7 +929,7 @@ class EpubFile {
     */
    async parseRootFile() {
      const rootFileOPF = await this.zip.readFile(this.opfPath);
 -    const xml = await parsexml(rootFileOPF);
-+    const xml = await parsexml(rootFileOPF, packageXmlOptions);
++    const xml = await parsexml(rootFileOPF, packageXmlOptions(rootFileOPF));
      const rootFile = xml.package;
      let tocPath = "";
      if (rootFile.metadata) {
-@@ -930,7 +950,7 @@ class EpubFile {
+@@ -930,7 +965,7 @@ class EpubFile {
      if (tocPath.length > 0) {
        const tocDir = path.dirname(tocPath);
        const tocNcxFile = await this.zip.readFile(tocPath);
 -      const ncx = (await parsexml(tocNcxFile)).ncx;
-+      const ncx = (await parsexml(tocNcxFile, packageXmlOptions)).ncx;
++      const ncx = (await parsexml(tocNcxFile, packageXmlOptions(tocNcxFile))).ncx;
        if (ncx.navMap)
          this.navMap = parseNavMap(ncx.navMap[0], this.hrefToIdMap, tocDir);
        if (ncx.pageList)
