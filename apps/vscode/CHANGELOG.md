@@ -37,6 +37,31 @@ gone when it has answered. This covers `library_check`, `library_add` and
 Where a reader process cannot be started, the document is read in the session's
 own process as before, and the log says so.
 
+### EPUBs that would not open
+
+About one EPUB in twenty-five failed to open with "Cannot read properties of
+undefined (reading 'navMap')" or "(reading 'metadata')": in one import, 21 of 35
+books. The files were fine. Their package files write each element with a
+namespace prefix (`<opf:package>`, `<ncx:navMap>`, `<ns0:package>`,
+`<odfc:container>`), which is valid and which the EPUB parser did not
+understand. They now open, as do books with an empty table of contents or an
+empty guide, a chapter listed in the reading order but missing from the book,
+or a link to a stylesheet the book does not carry.
+
+Measured on a shelf of 7,157 EPUBs, each opened and every chapter loaded
+with the old parser and the new one: 512 books that failed now open, and no
+book that opened before fails now. The 37 that still fail are damaged (cut
+short, not a ZIP archive, broken XML) or encrypted, and each says so.
+
+### The import report stays
+
+When `library_check`, `library_add` or another call that shows live progress
+ends, its row now keeps what it came to: a **Report** line under the call,
+collapsed to its first line, that opens to the whole report and has a copy
+button. Before, the progress lines went with the call and the row was left
+with nothing but the file names, so a run with many failures could not be
+reviewed.
+
 ## [4.100.241] — 2026-10-06
 
 ### Built-in skills
