@@ -83,6 +83,8 @@ One call describes up to **Pictures described per file** pictures (or the `limit
 
 ### Watching an import, and cancelling it
 
+Each file is read in a process of its own, started for it and gone when it has answered, at most two at a time. A book too large to decode, or a reader that stops for any other reason, is one file that failed with the reason and the page it stopped on; the session and the other files in the call carry on.
+
 Reading a book takes minutes: every page of a PDF, and every scanned page through text recognition. While `library_check` or `library_add` runs, its row in the chat shows one line per file: waiting, where it is (`page 312 of 769, recognizing text, 705 pictures`) and for how long, done with what it came to, or failed with the reason. A file that has not moved for a minute says **NOT MOVING** and for how long.
 
 **Cancel import**, on the same row, ends the call. It ends as a failed tool call, and the model is given the whole report: which files were read, which were not, where the one in progress had got to, and whether anything reached the Library. The run goes on, so the model tells you and asks what to do next.

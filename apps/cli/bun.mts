@@ -140,6 +140,31 @@ const cliBootstrapPath = join(
 );
 mkdirSync(dirname(cliBootstrapPath), { recursive: true });
 copyFileSync(coreBootstrapPath, cliBootstrapPath);
+// The Document Reader reads each document in a process of its own, so a PDF
+// that exhausts memory ends that process and not the session. Bundled whole:
+// the published CLI has no node_modules to find pdf.js in.
+const readerChild = await Bun.build({
+	entrypoints: [
+		join(
+			rootDir,
+			"../../sdk/packages/core/src/extensions/tools/executors/document/read-child.ts",
+		),
+	],
+	outdir: "./dist",
+	naming: "document-reader-child.js",
+	target: "node",
+	format: "esm",
+	sourcemap,
+	packages: "bundle",
+	banner:
+		'import { createRequire as __clineCreateRequire } from "node:module"; const require = __clineCreateRequire(import.meta.url);',
+});
+if (!readerChild.success) {
+	throw new AggregateError(
+		readerChild.logs,
+		"document reader process bundle failed",
+	);
+}
 // office_oxide's WebAssembly module, which extract_document reads Word, Excel
 // and PowerPoint 97-2003 files with. Core looks for it in `office-oxide/`
 // beside the bundle; without it only those three formats are unreadable.

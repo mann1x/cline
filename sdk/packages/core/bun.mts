@@ -73,6 +73,14 @@ const builds: Parameters<typeof Bun.build>[0][] = [
 		outdir: "./dist/services/feature-flags",
 		...buildConfig,
 	},
+	// The Document Reader's own process (`executors/document/read-process.ts`
+	// starts it): emitted beside index.js, which is where core looks for it.
+	{
+		entrypoints: ["./src/extensions/tools/executors/document/read-child.ts"],
+		outdir: "./dist",
+		naming: "document-reader-child.js",
+		...buildConfig,
+	},
 	// The plugin sandbox bootstrap runs in an isolated child process via
 	// SubprocessSandbox and must be emitted as a separate executable entrypoint.
 	{

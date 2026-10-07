@@ -111,6 +111,12 @@ Up to 16 pictures are described per call. Pictures smaller than 48 pixels on bot
 
 Word, Excel and PowerPoint 97-2003 files are read by [office_oxide](https://github.com/yfedoseev/office_oxide), bundled as WebAssembly. Their pictures are extracted. Windows metafiles (EMF/WMF), which are stored compressed, are decompressed. For `.doc`, pictures that office_oxide does not place in the text are found in the file and listed under **Pictures not placed in the text**. EMF, WMF, TIFF, BMP and PICT pictures are written as files, but a model cannot view them directly, and the result counts them.
 
+## Where the reading happens
+
+Each document is read in a process of its own, started for that file and gone when it has answered. Decoding a long PDF and recognizing its scanned pages takes hundreds of megabytes; in VS Code the session runs inside the extension host, which every extension shares, so that work is kept out of it. A document too large to decode fails as one tool call with the reason and the page it stopped on, and the session carries on. At most two documents are read at once.
+
+Three environment variables change this, for a host that needs to: `CLINE_DOCUMENT_READER_IN_PROCESS=1` reads in the session's own process, `CLINE_DOCUMENT_READER_PROCESSES` sets how many readers run at once, and `CLINE_DOCUMENT_READER_CHILD` names the reader's file when it is not beside the bundle.
+
 ## Plan mode
 
 In plan mode, `extract_document` writes only to its default folder. A call with `output_dir` is stopped, and the model is told to call again without it.

@@ -317,6 +317,35 @@ async function writeDocumentReaderAssets(destDir) {
 	await write(destDir, { esbuild })
 }
 
+/**
+ * The Document Reader's own process. Core reads each document in a process
+ * started for it, so a PDF that exhausts memory ends that process and not the
+ * extension host every extension shares. The file it runs is core's, bundled
+ * here whole (the VSIX has no `node_modules`) and written beside extension.js,
+ * which is where core looks for it and where the reader's data files are.
+ */
+async function buildDocumentReaderChild(destDir) {
+	const candidates = [
+		path.join(__dirname, "node_modules", "@cline", "core", "dist", "document-reader-child.js"),
+		path.resolve(__dirname, "..", "..", "sdk", "packages", "core", "dist", "document-reader-child.js"),
+	]
+	const entry = candidates.find((candidate) => fs.existsSync(candidate))
+	if (!entry) {
+		throw new Error(
+			"[documents] core's document-reader-child.js not found: run `bun run build:sdk` first. Without it documents are read inside the extension host.",
+		)
+	}
+	await esbuild.build({
+		...baseConfig,
+		entryPoints: [entry],
+		outfile: path.join(destDir, "document-reader-child.cjs"),
+		logLevel: "warning",
+	})
+	console.log(
+		`[documents] reader process: ${(fs.statSync(path.join(destDir, "document-reader-child.cjs")).size / 1048576).toFixed(1)} MB`,
+	)
+}
+
 async function main() {
 	const config = standalone ? standaloneConfig : e2eBuild ? e2eBuildConfig : extensionConfig
 	if (!e2eBuild) {
@@ -324,6 +353,7 @@ async function main() {
 		copyOfficeOxide(path.resolve(__dirname, destDir))
 		copyBundledSkills(path.resolve(__dirname, destDir))
 		await writeDocumentReaderAssets(path.resolve(__dirname, destDir))
+		await buildDocumentReaderChild(path.resolve(__dirname, destDir))
 	}
 	const extensionCtx = await esbuild.context(config)
 	if (watch) {

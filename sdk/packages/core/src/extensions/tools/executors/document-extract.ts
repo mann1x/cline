@@ -13,32 +13,21 @@ import * as path from "node:path";
 import type { ImageContent, TextContent } from "@cline/shared";
 import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
 import type { ExtractDocumentExecutor } from "../types";
-import { readEbook } from "./document/ebook";
 import {
 	type DocumentFormat,
 	type DocumentReadResult,
-	detectFormat,
 	FORMAT_LABELS,
-	type ReadOptions,
 	type ReadProgress,
 } from "./document/formats";
-import {
-	type ExtractedImage,
-	ImageCollector,
-	VIEWABLE_MEDIA_TYPES,
-} from "./document/images";
-import { readLegacyOffice } from "./document/legacy";
+import { type ExtractedImage, VIEWABLE_MEDIA_TYPES } from "./document/images";
 import type { DocumentReaderSettings } from "./document/ocr";
-import { readOffice } from "./document/office";
-import { readPdf } from "./document/pdf";
 import { formatUnits, parseUnitRange } from "./document/range";
+import { readDocumentJob } from "./document/read-process";
 import {
 	altTextOf,
 	DESCRIBE_LIMIT,
 	type DescribeImages,
 	describePictures,
-	planRecognition,
-	type RecognitionPlan,
 } from "./document/recognition";
 
 /** Where extractions go when the call names no `output_dir`. */
@@ -155,29 +144,6 @@ export function tidyMarkdown(markdown: string): string {
 		.trim();
 }
 
-async function read(
-	filePath: string,
-	data: Uint8Array,
-	format: DocumentFormat,
-	options: ReadOptions,
-): Promise<DocumentReadResult> {
-	switch (format) {
-		case "pdf":
-			return readPdf(data, options);
-		case "doc":
-		case "xls":
-		case "ppt":
-			return readLegacyOffice(data, format, options);
-		case "epub":
-		case "mobi":
-		case "azw3":
-		case "fb2":
-			return readEbook(filePath, data, format, options);
-		default:
-			return readOffice(data, format, options);
-	}
-}
-
 export interface DocumentText {
 	/** The document as markdown. */
 	markdown: string;
@@ -216,51 +182,29 @@ export async function readDocumentText(
 			`${filePath} is ${formatBytes(stat.size)}, past the ${formatBytes(limit)} the Document Reader reads.`,
 		);
 	}
-	const data = new Uint8Array(await fs.readFile(filePath));
-	const verdict = detectFormat(filePath, data.subarray(0, 512));
-	if ("unsupported" in verdict) {
-		throw new Error(verdict.unsupported);
-	}
-	const recognition =
-		verdict.format === "pdf"
-			? planRecognition({
-					request: undefined,
-					languages: undefined,
-					settings: options.reader ?? {},
-					describeImages: options.describeImages,
-					modelSupportsImages: false,
-				})
-			: undefined;
-	const scratchDir = path.join(
-		options.scratchDir,
-		`.scratch-${randomBytes(4).toString("hex")}`,
-	);
-	await fs.mkdir(scratchDir, { recursive: true });
-	let result: DocumentReadResult;
-	try {
-		result = await read(filePath, data, verdict.format, {
-			images: new ImageCollector("images"),
+	const read = await readDocumentJob(
+		{
+			filePath,
 			wantImages: false,
-			scratchDir,
-			...(recognition?.recognize ? { recognize: recognition.recognize } : {}),
-		});
-	} finally {
-		await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => {});
-		await recognition?.close();
-	}
+			scratchDir: path.join(
+				options.scratchDir,
+				`.scratch-${randomBytes(4).toString("hex")}`,
+			),
+			recognition: {
+				settings: options.reader ?? {},
+				modelSupportsImages: false,
+			},
+		},
+		options.describeImages ? { describeImages: options.describeImages } : {},
+	);
+	const { result } = read;
 	return {
 		markdown: tidyMarkdown(result.markdown),
-		format: verdict.format,
+		format: read.format,
 		...(result.title ? { title: result.title } : {}),
 		...(result.author ? { author: result.author } : {}),
 		bytes: stat.size,
-		notes: [
-			...(recognition?.notes(
-				result.scannedPages ?? [],
-				result.recognizedPages ?? [],
-			) ?? []),
-			...(result.notes ?? []),
-		],
+		notes: [...read.recognitionNotes, ...(result.notes ?? [])],
 	};
 }
 
@@ -324,62 +268,39 @@ export async function readDocumentForBook(
 			`${filePath} is ${formatBytes(stat.size)}, past the ${formatBytes(limit)} the Document Reader reads.`,
 		);
 	}
-	const data = new Uint8Array(await fs.readFile(filePath));
-	const verdict = detectFormat(filePath, data.subarray(0, 512));
-	if ("unsupported" in verdict) {
-		throw new Error(verdict.unsupported);
-	}
-	const recognition =
-		verdict.format === "pdf"
-			? planRecognition({
-					request: undefined,
-					languages: undefined,
-					settings: options.reader ?? {},
-					describeImages: options.describeImages,
-					modelSupportsImages: false,
-					// A book kept in the Library is read whole, however long that
-					// is. A read that only compares text keeps the usual limit.
-					...(options.pictures === false
-						? {}
-						: { pageLimit: Number.POSITIVE_INFINITY }),
-				})
-			: undefined;
-	const problems: string[] = [];
-	const scratchDir = path.join(
-		options.scratchDir,
-		`.scratch-${randomBytes(4).toString("hex")}`,
-	);
-	await fs.mkdir(scratchDir, { recursive: true });
-	const images = new ImageCollector("images");
-	let result: DocumentReadResult;
-	try {
-		result = await read(filePath, data, verdict.format, {
-			images,
+	const read = await readDocumentJob(
+		{
+			filePath,
 			wantImages: options.pictures ?? true,
-			scratchDir,
-			problems,
+			scratchDir: path.join(
+				options.scratchDir,
+				`.scratch-${randomBytes(4).toString("hex")}`,
+			),
+			recognition: {
+				settings: options.reader ?? {},
+				modelSupportsImages: false,
+				// A book kept in the Library is read whole, however long that
+				// is. A read that only compares text keeps the usual limit.
+				...(options.pictures === false ? {} : { everyPage: true }),
+			},
+		},
+		{
+			...(options.describeImages
+				? { describeImages: options.describeImages }
+				: {}),
 			...(options.signal ? { signal: options.signal } : {}),
 			...(options.onProgress ? { onProgress: options.onProgress } : {}),
 			...(options.onNote ? { onNote: options.onNote } : {}),
-			...(recognition?.recognize ? { recognize: recognition.recognize } : {}),
-		});
-	} finally {
-		await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => {});
-		await recognition?.close();
-	}
+		},
+	);
+	const { result } = read;
 	return {
 		markdown: tidyMarkdown(result.markdown),
-		format: verdict.format,
+		format: read.format,
 		...(result.title ? { title: result.title } : {}),
 		...(result.author ? { author: result.author } : {}),
 		bytes: stat.size,
-		notes: [
-			...(recognition?.notes(
-				result.scannedPages ?? [],
-				result.recognizedPages ?? [],
-			) ?? []),
-			...(result.notes ?? []),
-		],
+		notes: [...read.recognitionNotes, ...(result.notes ?? [])],
 		...(result.units
 			? {
 					units: {
@@ -397,14 +318,8 @@ export async function readDocumentForBook(
 					},
 				}
 			: {}),
-		problems: [
-			...(recognition?.problems(
-				result.scannedPages ?? [],
-				result.recognizedPages ?? [],
-			) ?? []),
-			...problems,
-		],
-		images: images.entries().map(({ image, data: bytes }) => ({
+		problems: [...read.recognitionProblems, ...read.problems],
+		images: read.images.map(({ image, data: bytes }) => ({
 			file: image.file,
 			data: bytes,
 			mediaType: image.mediaType,
@@ -500,12 +415,6 @@ export function createDocumentExtractExecutor(
 				`${input.path} is ${formatBytes(stat.size)}, past the ${formatBytes(maxFileSizeBytes)} this tool reads.`,
 			);
 		}
-		const data = new Uint8Array(await fs.readFile(sourcePath));
-		const verdict = detectFormat(requested, data.subarray(0, 512));
-		if ("unsupported" in verdict) {
-			throw new Error(verdict.unsupported);
-		}
-		const { format } = verdict;
 		const range = parseUnitRange(input.range ?? undefined);
 
 		// Output stays inside the workspace, for the lead and every delegated
@@ -533,36 +442,28 @@ export function createDocumentExtractExecutor(
 		const scratchDir = path.dirname(
 			overlay ? await overlay.resolveWrite(scratchTarget) : scratchTarget,
 		);
-		await fs.mkdir(scratchDir, { recursive: true });
 
 		const wantImages = input.images !== "none";
-		const images = new ImageCollector("images");
 		const modelSupportsImages = context.metadata?.modelSupportsImages === true;
-		// Only a PDF has scanned pages to read.
-		const recognition: RecognitionPlan | undefined =
-			format === "pdf"
-				? planRecognition({
-						request: input.ocr ?? undefined,
-						languages: input.ocr_languages ?? undefined,
-						settings,
-						describeImages,
-						modelSupportsImages,
-					})
-				: undefined;
-		let result: DocumentReadResult;
-		try {
-			result = await read(sourcePath, data, format, {
-				images,
+		const read = await readDocumentJob(
+			{
+				filePath: sourcePath,
+				namedAs: requested,
 				wantImages,
 				...(input.password ? { password: input.password } : {}),
-				...(range ? { selects: range.selects } : {}),
+				...(range ? { range: range.spec } : {}),
 				scratchDir,
-				...(recognition?.recognize ? { recognize: recognition.recognize } : {}),
-			});
-		} finally {
-			await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => {});
-			await recognition?.close();
-		}
+				recognition: {
+					...(input.ocr ? { request: input.ocr } : {}),
+					...(input.ocr_languages ? { languages: input.ocr_languages } : {}),
+					settings,
+					modelSupportsImages,
+				},
+			},
+			describeImages ? { describeImages } : {},
+		);
+		const { format, result, images } = read;
+		const pictures = images.map((entry) => entry.image);
 
 		const describeNote = await describeExtractedPictures({
 			wanted:
@@ -583,17 +484,17 @@ export function createDocumentExtractExecutor(
 			`${stemOf(requested)}${suffix}.${asText ? "txt" : "md"}`,
 		);
 		await writeFile(documentFile, `${body}\n`);
-		for (const { image, data: bytes } of images.entries()) {
+		for (const { image, data: bytes } of images) {
 			await writeFile(path.join(outputDir, "images", image.file), bytes);
 		}
 		const indexFile = path.join(outputDir, "images", `index${suffix}.json`);
-		if (images.images.length > 0) {
+		if (pictures.length > 0) {
 			await writeFile(
 				indexFile,
 				`${JSON.stringify(
 					{
 						document: shown(cwd, requested),
-						images: images.images.map(({ sha1: _sha1, ...image }) => image),
+						images: pictures.map(({ sha1: _sha1, ...image }) => image),
 					},
 					null,
 					2,
@@ -607,7 +508,7 @@ export function createDocumentExtractExecutor(
 			bytes: stat.size,
 			format,
 			result,
-			images: images.images,
+			images: pictures,
 			documentFile,
 			indexFile,
 			outputDir,
@@ -615,10 +516,7 @@ export function createDocumentExtractExecutor(
 			bodyChars: body.length,
 			wantImages,
 			notes: [
-				...(recognition?.notes(
-					result.scannedPages ?? [],
-					result.recognizedPages ?? [],
-				) ?? []),
+				...read.recognitionNotes,
 				...(describeNote.note ? [describeNote.note] : []),
 			],
 		});
@@ -635,10 +533,10 @@ export function createDocumentExtractExecutor(
 				: []),
 		].join("\n\n");
 
-		const pages = (recognition?.attachments ?? []).filter(
+		const pages = read.attachments.filter(
 			(page) => page.png.byteLength <= PAGE_IMAGE_BYTES,
 		);
-		const inline = input.images === "inline" && images.images.length > 0;
+		const inline = input.images === "inline" && pictures.length > 0;
 		if (!inline && pages.length === 0) {
 			return text;
 		}
@@ -658,7 +556,7 @@ export function createDocumentExtractExecutor(
 			});
 		}
 		const pictureStart = attached.length;
-		for (const { image, data: bytes } of inline ? images.entries() : []) {
+		for (const { image, data: bytes } of inline ? images : []) {
 			if (attached.length - pictureStart >= INLINE_IMAGE_LIMIT * 2) break;
 			if (
 				!VIEWABLE_MEDIA_TYPES.has(image.mediaType) ||
@@ -767,13 +665,13 @@ function escapeRegExp(text: string): string {
 async function describeExtractedPictures(input: {
 	wanted: boolean;
 	describeImages: DescribeImages | undefined;
-	images: ImageCollector;
+	images: readonly { image: ExtractedImage; data: Uint8Array }[];
 	result: DocumentReadResult;
 	documentName: string;
 	/** @default DESCRIBE_LIMIT */
 	limit?: number;
 }): Promise<{ markdown?: string; note?: string }> {
-	if (!input.wanted || input.images.images.length === 0) return {};
+	if (!input.wanted || input.images.length === 0) return {};
 	if (!input.describeImages) {
 		return {
 			note: "Pictures were not described: no vision model is configured (the Vision tab of the API settings, or the CLI's --vision-model).",
@@ -782,19 +680,17 @@ async function describeExtractedPictures(input: {
 	const scanned = new Set(
 		(input.result.scannedPages ?? []).map((page) => `page ${page}`),
 	);
-	const candidates = input.images
-		.entries()
-		.filter(
-			({ image }) =>
-				VIEWABLE_MEDIA_TYPES.has(image.mediaType) &&
-				!(image.source && scanned.has(image.source)) &&
-				!(
-					image.width &&
-					image.height &&
-					image.width < DESCRIBE_MIN_SIDE &&
-					image.height < DESCRIBE_MIN_SIDE
-				),
-		);
+	const candidates = input.images.filter(
+		({ image }) =>
+			VIEWABLE_MEDIA_TYPES.has(image.mediaType) &&
+			!(image.source && scanned.has(image.source)) &&
+			!(
+				image.width &&
+				image.height &&
+				image.width < DESCRIBE_MIN_SIDE &&
+				image.height < DESCRIBE_MIN_SIDE
+			),
+	);
 	if (candidates.length === 0) return {};
 	const limit = input.limit ?? DESCRIBE_LIMIT;
 	const chosen = candidates.slice(0, limit);
