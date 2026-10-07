@@ -1,6 +1,6 @@
 import type { LibraryBookDetails, LibraryBookView, LibrarySectionView, LibraryShelfView } from "@shared/retrieval-status"
 import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { SettingsCheckbox } from "../common/SettingsCheckbox"
 import type { RetrievalStatusHandle } from "../utils/useRetrievalStatus"
 
@@ -26,8 +26,153 @@ const muted = "text-(--vscode-descriptionForeground)"
 const input =
 	"flex-1 min-w-0 bg-(--vscode-input-background) text-(--vscode-input-foreground) border border-(--vscode-input-border) px-1"
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
+/** "Its 1 book goes to", "Its 3 books go to". */
+const goTo = (books: number) => `Its ${count(books, "book")} ${books === 1 ? "goes" : "go"} to`
 const kb = (bytes: number) =>
 	bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`
+
+/**
+ * What is ticked for export. A ticked section stands for every shelf in it
+ * and a ticked shelf for every book on it, so a whole is never also listed
+ * by its parts.
+ */
+export interface Picked {
+	sections: ReadonlySet<number>
+	shelves: ReadonlySet<number>
+	/** Book id → the shelf it is on. */
+	books: ReadonlyMap<number, number>
+}
+export type Tick = "all" | "some" | "none"
+export const NOTHING_PICKED: Picked = { sections: new Set(), shelves: new Set(), books: new Map() }
+
+/** Folds ticks into the largest whole they make, and drops what is gone. */
+export function tidyPicked(picked: Picked, sections: readonly LibrarySectionView[]): Picked {
+	const shelfIds = new Set(sections.flatMap((section) => section.shelves.map((shelf) => shelf.id)))
+	const wholeSections = new Set([...picked.sections].filter((id) => sections.some((section) => section.id === id)))
+	const wholeShelves = new Set([...picked.shelves].filter((id) => shelfIds.has(id)))
+	const books = new Map([...picked.books].filter(([, shelfId]) => shelfIds.has(shelfId)))
+	for (const section of sections) {
+		for (const shelf of section.shelves) {
+			const on = [...books].filter(([, shelfId]) => shelfId === shelf.id).map(([id]) => id)
+			if (shelf.books > 0 && on.length >= shelf.books) wholeShelves.add(shelf.id)
+			if (wholeSections.has(section.id) || wholeShelves.has(shelf.id)) for (const id of on) books.delete(id)
+		}
+		const filled = section.shelves.filter((shelf) => shelf.books > 0)
+		if (filled.length > 0 && filled.every((shelf) => wholeShelves.has(shelf.id))) wholeSections.add(section.id)
+		if (wholeSections.has(section.id)) for (const shelf of section.shelves) wholeShelves.delete(shelf.id)
+	}
+	return { sections: wholeSections, shelves: wholeShelves, books }
+}
+
+export function shelfTick(picked: Picked, section: LibrarySectionView, shelf: LibraryShelfView): Tick {
+	if (picked.sections.has(section.id) || picked.shelves.has(shelf.id)) return "all"
+	return [...picked.books.values()].includes(shelf.id) ? "some" : "none"
+}
+
+export function sectionTick(picked: Picked, section: LibrarySectionView): Tick {
+	if (picked.sections.has(section.id)) return "all"
+	return section.shelves.some((shelf) => shelfTick(picked, section, shelf) !== "none") ? "some" : "none"
+}
+
+/** A partly ticked section or shelf is ticked whole by a click; a whole one is cleared. */
+export function toggleSection(picked: Picked, section: LibrarySectionView, sections: readonly LibrarySectionView[]): Picked {
+	const wholeSections = new Set(picked.sections)
+	const wholeShelves = new Set(picked.shelves)
+	const books = new Map(picked.books)
+	const shelfIds = new Set(section.shelves.map((shelf) => shelf.id))
+	if (sectionTick(picked, section) === "all") wholeSections.delete(section.id)
+	else wholeSections.add(section.id)
+	for (const id of shelfIds) wholeShelves.delete(id)
+	for (const [id, shelfId] of books) if (shelfIds.has(shelfId)) books.delete(id)
+	return tidyPicked({ sections: wholeSections, shelves: wholeShelves, books }, sections)
+}
+
+/** Unticking part of a whole leaves the rest of it ticked. */
+function splitSection(picked: Picked, section: LibrarySectionView): Picked {
+	if (!picked.sections.has(section.id)) return picked
+	const wholeSections = new Set(picked.sections)
+	wholeSections.delete(section.id)
+	return {
+		...picked,
+		sections: wholeSections,
+		shelves: new Set([...picked.shelves, ...section.shelves.filter((shelf) => shelf.books > 0).map((shelf) => shelf.id)]),
+	}
+}
+
+export function toggleShelf(
+	picked: Picked,
+	section: LibrarySectionView,
+	shelf: LibraryShelfView,
+	sections: readonly LibrarySectionView[],
+): Picked {
+	const split = splitSection(picked, section)
+	const wholeShelves = new Set(split.shelves)
+	const books = new Map([...split.books].filter(([, shelfId]) => shelfId !== shelf.id))
+	if (shelfTick(picked, section, shelf) === "all") wholeShelves.delete(shelf.id)
+	else wholeShelves.add(shelf.id)
+	return tidyPicked({ ...split, shelves: wholeShelves, books }, sections)
+}
+
+export function bookTicked(picked: Picked, section: LibrarySectionView, book: LibraryBookView): boolean {
+	return (
+		picked.sections.has(section.id) ||
+		(book.shelfId !== undefined && picked.shelves.has(book.shelfId)) ||
+		picked.books.has(book.id)
+	)
+}
+
+/** `onShelf` is every book on the book's shelf, to tick the others when one leaves a whole shelf. */
+export function toggleBook(
+	picked: Picked,
+	section: LibrarySectionView,
+	book: LibraryBookView,
+	onShelf: readonly LibraryBookView[],
+	sections: readonly LibrarySectionView[],
+): Picked {
+	const shelfId = book.shelfId
+	if (shelfId === undefined) return picked
+	if (!bookTicked(picked, section, book)) {
+		return tidyPicked({ ...picked, books: new Map([...picked.books, [book.id, shelfId]]) }, sections)
+	}
+	const split = splitSection(picked, section)
+	const wholeShelves = new Set(split.shelves)
+	const books = new Map(split.books)
+	if (wholeShelves.delete(shelfId)) {
+		for (const other of onShelf) books.set(other.id, shelfId)
+	}
+	books.delete(book.id)
+	return tidyPicked({ ...split, shelves: wholeShelves, books }, sections)
+}
+
+/** The checkbox a section, shelf or book is ticked with: on, off, or partly. */
+const TickBox = ({
+	tick,
+	label,
+	disabled,
+	onToggle,
+}: {
+	tick: Tick
+	label: string
+	disabled?: boolean
+	onToggle: () => void
+}) => {
+	const box = useRef<HTMLInputElement>(null)
+	useEffect(() => {
+		if (box.current) box.current.indeterminate = tick === "some"
+	}, [tick])
+	return (
+		<input
+			aria-label={label}
+			checked={tick === "all"}
+			className="m-0 shrink-0 cursor-pointer align-middle accent-(--vscode-checkbox-selectBackground) disabled:cursor-default"
+			disabled={disabled}
+			onChange={onToggle}
+			ref={box}
+			title={disabled ? "Nothing here to export" : label}
+			type="checkbox"
+		/>
+	)
+}
 
 /**
  * The Library's shelves: sections, the shelves in them, the books on a
@@ -40,6 +185,7 @@ const LibraryBrowser = ({ retrieval }: LibraryBrowserProps) => {
 	const [books, setBooks] = useState<LibraryBookView[]>([])
 	const [details, setDetails] = useState<LibraryBookDetails>()
 	const [pending, setPending] = useState<Pending>()
+	const [picked, setPicked] = useState<Picked>(NOTHING_PICKED)
 
 	const load = useCallback(
 		async (shelfId: number | undefined) => {
@@ -48,7 +194,16 @@ const LibraryBrowser = ({ retrieval }: LibraryBrowserProps) => {
 				return
 			}
 			const result = await ask(shelfId === TRASH ? { action: "libraryTrash" } : { action: "libraryBooks", shelfId })
-			setBooks(result?.books ?? [])
+			const loaded = result?.books ?? []
+			setBooks(loaded)
+			if (shelfId !== TRASH) {
+				// A book ticked on this shelf that is no longer on it, moved or deleted, is not exported.
+				const here = new Set(loaded.map((book) => book.id))
+				setPicked((current) => {
+					const books = new Map([...current.books].filter(([id, on]) => on !== shelfId || here.has(id)))
+					return books.size === current.books.size ? current : { ...current, books }
+				})
+			}
 		},
 		[ask],
 	)
@@ -63,6 +218,28 @@ const LibraryBrowser = ({ retrieval }: LibraryBrowserProps) => {
 	const shelves = catalogue.sections.flatMap((section) =>
 		section.shelves.map((shelf) => ({ ...shelf, label: `${section.name} / ${shelf.name}` })),
 	)
+	const ticked = tidyPicked(picked, catalogue.sections)
+	const tickedCount = ticked.sections.size + ticked.shelves.size + ticked.books.size
+	const tickedSummary = [
+		ticked.sections.size ? count(ticked.sections.size, "section") : "",
+		ticked.shelves.size ? count(ticked.shelves.size, "shelf", "shelves") : "",
+		ticked.books.size ? count(ticked.books.size, "book") : "",
+	]
+		.filter(Boolean)
+		.join(", ")
+	const exportPicked = () =>
+		void run(
+			tickedCount > 0
+				? {
+						action: "libraryExport",
+						selection: {
+							sectionIds: [...ticked.sections],
+							shelfIds: [...ticked.shelves],
+							bookIds: [...ticked.books.keys()],
+						},
+					}
+				: { action: "libraryExport" },
+		)
 
 	/** Do it, then show the open shelf as it now is. */
 	const act = async (action: Parameters<typeof run>[0]) => {
@@ -109,22 +286,40 @@ const LibraryBrowser = ({ retrieval }: LibraryBrowserProps) => {
 			</span>
 		) : null
 
-	const confirm = (label: string, yes: () => void) => (
-		<span className="whitespace-nowrap">
-			<VSCodeButton appearance="secondary" disabled={busy} onClick={yes}>
-				{label}
-			</VSCodeButton>{" "}
-			<VSCodeButton appearance="icon" onClick={() => setPending(undefined)}>
-				Keep
-			</VSCodeButton>
-		</span>
+	/** Asked under the row it is about, answered Yes or No. */
+	const confirm = (question: string, yes: () => void) => (
+		<div className="flex flex-wrap items-center gap-2 my-1 px-2 py-1 bg-(--vscode-inputValidation-warningBackground) border border-(--vscode-inputValidation-warningBorder)">
+			<span className="flex-1 min-w-0 break-words">{question}</span>
+			<span className="whitespace-nowrap">
+				<VSCodeButton disabled={busy} onClick={yes}>
+					Yes
+				</VSCodeButton>{" "}
+				<VSCodeButton appearance="secondary" onClick={() => setPending(undefined)}>
+					No
+				</VSCodeButton>
+			</span>
+		</div>
+	)
+	const trashButton = (label: string, ask: Pending) => (
+		<VSCodeButton appearance="icon" aria-label={label} disabled={busy} onClick={() => setPending(ask)} title={label}>
+			<span className="codicon codicon-trash" />
+		</VSCodeButton>
 	)
 
-	const bookRow = (book: LibraryBookView) => {
+	const bookRow = (book: LibraryBookView, section?: LibrarySectionView) => {
 		const trashed = book.trashedAt !== undefined
 		return (
 			<div className="py-1 border-t border-(--vscode-panel-border)" key={book.id}>
 				<div className="flex items-start gap-2">
+					{section && !trashed ? (
+						<span className="pt-0.5">
+							<TickBox
+								label={`Export "${book.title}"`}
+								onToggle={() => setPicked(toggleBook(ticked, section, book, books, catalogue.sections))}
+								tick={bookTicked(ticked, section, book) ? "all" : "none"}
+							/>
+						</span>
+					) : null}
 					<div className="flex-1 min-w-0">
 						{pending?.kind === "renameBook" && pending.id === book.id ? (
 							nameField(
@@ -147,11 +342,7 @@ const LibraryBrowser = ({ retrieval }: LibraryBrowserProps) => {
 						</div>
 					</div>
 					<div className="text-right whitespace-nowrap">
-						{pending?.kind === "deleteBook" && pending.id === book.id ? (
-							confirm("Move to trash", () => void act({ action: "libraryBookDelete", bookId: book.id }))
-						) : pending?.kind === "purgeBook" && pending.id === book.id ? (
-							confirm("Delete for good", () => void act({ action: "libraryBookPurge", bookId: book.id }))
-						) : trashed ? (
+						{trashed ? (
 							<>
 								<VSCodeButton
 									appearance="icon"
@@ -160,13 +351,7 @@ const LibraryBrowser = ({ retrieval }: LibraryBrowserProps) => {
 									title={`Put "${book.title}" back on its shelf`}>
 									Restore
 								</VSCodeButton>
-								<VSCodeButton
-									appearance="icon"
-									disabled={busy}
-									onClick={() => setPending({ kind: "purgeBook", id: book.id })}
-									title={`Delete "${book.title}" for good`}>
-									Delete
-								</VSCodeButton>
+								{trashButton(`Delete "${book.title}" for good`, { kind: "purgeBook", id: book.id })}
 							</>
 						) : (
 							<>
@@ -182,23 +367,23 @@ const LibraryBrowser = ({ retrieval }: LibraryBrowserProps) => {
 									onClick={() => setPending({ kind: "renameBook", id: book.id, value: book.title })}>
 									Rename
 								</VSCodeButton>
-								<VSCodeButton
-									appearance="icon"
-									disabled={busy}
-									onClick={() => void run({ action: "libraryExport", bookId: book.id })}
-									title={`Write "${book.title}" to a file`}>
-									Export
-								</VSCodeButton>
-								<VSCodeButton
-									appearance="icon"
-									disabled={busy}
-									onClick={() => setPending({ kind: "deleteBook", id: book.id })}>
-									Delete
-								</VSCodeButton>
+								{trashButton(`Move "${book.title}" to the trash`, { kind: "deleteBook", id: book.id })}
 							</>
 						)}
 					</div>
 				</div>
+				{pending?.kind === "deleteBook" && pending.id === book.id
+					? confirm(
+							`Move "${book.title}" to the trash? It is kept there ${catalogue.trashDays} days.`,
+							() => void act({ action: "libraryBookDelete", bookId: book.id }),
+						)
+					: null}
+				{pending?.kind === "purgeBook" && pending.id === book.id
+					? confirm(
+							`Delete "${book.title}" for good? This cannot be undone.`,
+							() => void act({ action: "libraryBookPurge", bookId: book.id }),
+						)
+					: null}
 				{!trashed && shelves.length > 1 ? (
 					<label className={`flex items-center gap-1 mt-1 ${muted}`}>
 						Shelf
@@ -262,6 +447,12 @@ const LibraryBrowser = ({ retrieval }: LibraryBrowserProps) => {
 	const shelfRow = (section: LibrarySectionView, shelf: LibraryShelfView) => (
 		<div className="pl-3" key={shelf.id}>
 			<div className="flex items-center gap-2 py-0.5">
+				<TickBox
+					disabled={shelf.books === 0}
+					label={`Export the shelf "${shelf.name}"`}
+					onToggle={() => setPicked(toggleShelf(ticked, section, shelf, catalogue.sections))}
+					tick={shelfTick(ticked, section, shelf)}
+				/>
 				{pending?.kind === "renameShelf" && pending.id === shelf.id ? (
 					nameField(
 						`New name for ${shelf.name}`,
@@ -281,60 +472,52 @@ const LibraryBrowser = ({ retrieval }: LibraryBrowserProps) => {
 					</button>
 				)}
 				<span className="whitespace-nowrap">
-					{pending?.kind === "deleteShelf" && pending.id === shelf.id ? (
-						confirm(
-							shelf.books > 0 ? `Remove, ${count(shelf.books, "book")} to trash` : "Remove shelf",
-							() => void act({ action: "libraryShelf", op: "delete", id: shelf.id }),
-						)
-					) : (
-						<>
-							{catalogue.sections.length > 1 ? (
-								<select
-									aria-label={`Section of ${shelf.name}`}
-									className="bg-(--vscode-dropdown-background) text-(--vscode-dropdown-foreground) border border-(--vscode-dropdown-border) align-middle"
-									disabled={busy}
-									onChange={(event) =>
-										void act({
-											action: "libraryShelf",
-											op: "update",
-											id: shelf.id,
-											sectionId: Number(event.target.value),
-										})
-									}
-									title="Move this shelf to another section"
-									value={section.id}>
-									{catalogue.sections.map((entry) => (
-										<option key={entry.id} value={entry.id}>
-											{entry.name}
-										</option>
-									))}
-								</select>
-							) : null}
-							<VSCodeButton
-								appearance="icon"
-								disabled={busy}
-								onClick={() => setPending({ kind: "renameShelf", id: shelf.id, value: shelf.name })}>
-								Rename
-							</VSCodeButton>
-							<VSCodeButton
-								appearance="icon"
-								disabled={busy || shelf.books === 0}
-								onClick={() => void run({ action: "libraryExport", shelfId: shelf.id })}>
-								Export
-							</VSCodeButton>
-							<VSCodeButton
-								appearance="icon"
-								disabled={busy}
-								onClick={() => setPending({ kind: "deleteShelf", id: shelf.id })}>
-								Delete
-							</VSCodeButton>
-						</>
-					)}
+					{catalogue.sections.length > 1 ? (
+						<select
+							aria-label={`Section of ${shelf.name}`}
+							className="bg-(--vscode-dropdown-background) text-(--vscode-dropdown-foreground) border border-(--vscode-dropdown-border) align-middle"
+							disabled={busy}
+							onChange={(event) =>
+								void act({
+									action: "libraryShelf",
+									op: "update",
+									id: shelf.id,
+									sectionId: Number(event.target.value),
+								})
+							}
+							title="Move this shelf to another section"
+							value={section.id}>
+							{catalogue.sections.map((entry) => (
+								<option key={entry.id} value={entry.id}>
+									{entry.name}
+								</option>
+							))}
+						</select>
+					) : null}
+					<VSCodeButton
+						appearance="icon"
+						disabled={busy}
+						onClick={() => setPending({ kind: "renameShelf", id: shelf.id, value: shelf.name })}>
+						Rename
+					</VSCodeButton>
+					{trashButton(`Remove the shelf "${shelf.name}"`, { kind: "deleteShelf", id: shelf.id })}
 				</span>
 			</div>
+			{pending?.kind === "deleteShelf" && pending.id === shelf.id
+				? confirm(
+						shelf.books > 0
+							? `Remove the shelf "${shelf.name}"? ${goTo(shelf.books)} the trash for ${catalogue.trashDays} days.`
+							: `Remove the empty shelf "${shelf.name}"?`,
+						() => void act({ action: "libraryShelf", op: "delete", id: shelf.id }),
+					)
+				: null}
 			{open === shelf.id ? (
 				<div className="pl-4 pb-1">
-					{books.length === 0 ? <div className={muted}>No books on this shelf.</div> : books.map(bookRow)}
+					{books.length === 0 ? (
+						<div className={muted}>No books on this shelf.</div>
+					) : (
+						books.map((book) => bookRow(book, section))
+					)}
 				</div>
 			) : null}
 		</div>
@@ -376,10 +559,25 @@ const LibraryBrowser = ({ retrieval }: LibraryBrowserProps) => {
 				<VSCodeButton
 					appearance="secondary"
 					disabled={busy || catalogue.books === 0}
-					onClick={() => void run({ action: "libraryExport" })}>
-					Export all…
+					onClick={exportPicked}
+					title={tickedCount > 0 ? `Export what is ticked: ${tickedSummary}` : "Export the whole Library"}>
+					Export…
 				</VSCodeButton>
 			</div>
+			{catalogue.books > 0 ? (
+				<div className={`flex flex-wrap items-center gap-2 ${muted}`}>
+					{tickedCount > 0 ? (
+						<>
+							<span>Export… writes what is ticked: {tickedSummary}.</span>
+							<VSCodeButton appearance="icon" onClick={() => setPicked(NOTHING_PICKED)}>
+								Clear
+							</VSCodeButton>
+						</>
+					) : (
+						<span>Export… writes the whole Library. Tick sections, shelves or books to export only those.</span>
+					)}
+				</div>
+			) : null}
 			{pending?.kind === "newSection" ? (
 				<div className="flex">
 					{nameField(
@@ -397,6 +595,12 @@ const LibraryBrowser = ({ retrieval }: LibraryBrowserProps) => {
 			{catalogue.sections.map((section) => (
 				<div className="border border-(--vscode-panel-border) rounded-sm p-2" key={section.id}>
 					<div className="flex items-center gap-2">
+						<TickBox
+							disabled={section.shelves.every((shelf) => shelf.books === 0)}
+							label={`Export the section "${section.name}"`}
+							onToggle={() => setPicked(toggleSection(ticked, section, catalogue.sections))}
+							tick={sectionTick(ticked, section)}
+						/>
 						{pending?.kind === "renameSection" && pending.id === section.id ? (
 							nameField(
 								`New name for ${section.name}`,
@@ -406,43 +610,32 @@ const LibraryBrowser = ({ retrieval }: LibraryBrowserProps) => {
 							<span className="flex-1 min-w-0 font-medium break-words">{section.name}</span>
 						)}
 						<span className="whitespace-nowrap">
-							{pending?.kind === "deleteSection" && pending.id === section.id ? (
-								confirm(
-									`Remove with ${count(section.shelves.length, "shelf", "shelves")}`,
-									() => void act({ action: "librarySection", op: "delete", id: section.id }),
-								)
-							) : (
-								<>
-									<VSCodeButton
-										appearance="icon"
-										disabled={busy}
-										onClick={() => setPending({ kind: "newShelf", sectionId: section.id, value: "" })}>
-										New shelf
-									</VSCodeButton>
-									<VSCodeButton
-										appearance="icon"
-										disabled={busy}
-										onClick={() =>
-											setPending({ kind: "renameSection", id: section.id, value: section.name })
-										}>
-										Rename
-									</VSCodeButton>
-									<VSCodeButton
-										appearance="icon"
-										disabled={busy || section.shelves.every((shelf) => shelf.books === 0)}
-										onClick={() => void run({ action: "libraryExport", sectionId: section.id })}>
-										Export
-									</VSCodeButton>
-									<VSCodeButton
-										appearance="icon"
-										disabled={busy}
-										onClick={() => setPending({ kind: "deleteSection", id: section.id })}>
-										Delete
-									</VSCodeButton>
-								</>
-							)}
+							<VSCodeButton
+								appearance="icon"
+								disabled={busy}
+								onClick={() => setPending({ kind: "newShelf", sectionId: section.id, value: "" })}>
+								New shelf
+							</VSCodeButton>
+							<VSCodeButton
+								appearance="icon"
+								disabled={busy}
+								onClick={() => setPending({ kind: "renameSection", id: section.id, value: section.name })}>
+								Rename
+							</VSCodeButton>
+							{trashButton(`Remove the section "${section.name}"`, { kind: "deleteSection", id: section.id })}
 						</span>
 					</div>
+					{pending?.kind === "deleteSection" && pending.id === section.id
+						? (() => {
+								const inIt = section.shelves.reduce((sum, shelf) => sum + shelf.books, 0)
+								return confirm(
+									`Remove the section "${section.name}" and its ${count(section.shelves.length, "shelf", "shelves")}?${
+										inIt > 0 ? ` ${goTo(inIt)} the trash for ${catalogue.trashDays} days.` : ""
+									}`,
+									() => void act({ action: "librarySection", op: "delete", id: section.id }),
+								)
+							})()
+						: null}
 					{pending?.kind === "newShelf" && pending.sectionId === section.id ? (
 						<div className="flex pl-3 py-0.5">
 							{nameField(
@@ -472,18 +665,17 @@ const LibraryBrowser = ({ retrieval }: LibraryBrowserProps) => {
 								· {count(catalogue.trash, "book")}, each kept {catalogue.trashDays} days
 							</span>
 						</button>
-						{pending?.kind === "emptyTrash" ? (
-							confirm(
-								`Delete ${count(catalogue.trash, "book")} for good`,
+						<VSCodeButton appearance="icon" disabled={busy} onClick={() => setPending({ kind: "emptyTrash" })}>
+							Empty
+						</VSCodeButton>
+					</div>
+					{pending?.kind === "emptyTrash"
+						? confirm(
+								`Delete the ${count(catalogue.trash, "book")} in the trash for good? This cannot be undone.`,
 								() => void act({ action: "libraryEmptyTrash" }),
 							)
-						) : (
-							<VSCodeButton appearance="icon" disabled={busy} onClick={() => setPending({ kind: "emptyTrash" })}>
-								Empty
-							</VSCodeButton>
-						)}
-					</div>
-					{open === TRASH ? <div className="pl-4">{books.map(bookRow)}</div> : null}
+						: null}
+					{open === TRASH ? <div className="pl-4">{books.map((book) => bookRow(book))}</div> : null}
 				</div>
 			) : null}
 

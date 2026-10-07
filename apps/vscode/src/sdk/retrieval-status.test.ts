@@ -8,6 +8,8 @@ const host = vi.hoisted(() => ({
 	secrets: {} as Record<string, string | undefined>,
 	cwd: "C:\\Dev\\tally",
 	savePath: undefined as string | undefined,
+	/** The file name the save dialog was opened with. */
+	offeredName: undefined as string | undefined,
 	openPath: undefined as string | undefined,
 }))
 
@@ -31,7 +33,10 @@ vi.mock("@/hosts/host-provider", () => ({
 	HostProvider: {
 		window: {
 			showMessage: async () => ({}),
-			showSaveDialog: async () => ({ selectedPath: host.savePath }),
+			showSaveDialog: async (request: { options?: { defaultPath?: string } }) => {
+				host.offeredName = request.options?.defaultPath
+				return { selectedPath: host.savePath }
+			},
 			showOpenDialogue: async () => ({ paths: host.openPath ? [host.openPath] : [] }),
 		},
 	},
@@ -206,6 +211,20 @@ describe("what the Library and Memory panels ask of the host", () => {
 			expect(copied.status.catalogue.books).toBe(2)
 			host.savePath = undefined
 			expect((await act({ action: "libraryExport" })).message).toBeUndefined()
+			expect(host.offeredName).toBe("library.library.tar.gz")
+
+			// What is ticked: one thing names the file, several are a "selection".
+			const shelfId = book.shelfId as number
+			host.savePath = join(root, "picked.library.tar.gz")
+			const one = await act({ action: "libraryExport", selection: { bookIds: [book.id] } })
+			expect(one.message).toContain("Wrote 1 book")
+			expect(host.offeredName).toBe("Godot-Tilemaps.library.tar.gz")
+			const both = await act({ action: "libraryExport", selection: { shelfIds: [shelfId], bookIds: [book.id] } })
+			expect(both.message).toContain("Wrote 2 books")
+			expect(host.offeredName).toBe("selection.library.tar.gz")
+			// Nothing ticked is the whole Library.
+			await act({ action: "libraryExport", selection: {} })
+			expect(host.offeredName).toBe("library.library.tar.gz")
 		})
 
 		it("empties the trash when asked to", async () => {

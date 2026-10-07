@@ -236,7 +236,22 @@ export async function runLibraryAction(request: LibraryAction, outcome: Outcome)
 		case "libraryExport": {
 			let name = "library"
 			let scope: Parameters<typeof catalogue.export>[0] = { library: true }
-			if (request.bookId !== undefined) {
+			const picked = request.selection
+			const pickedCount =
+				(picked?.sectionIds?.length ?? 0) + (picked?.shelfIds?.length ?? 0) + (picked?.bookIds?.length ?? 0)
+			if (picked && pickedCount > 0) {
+				// One thing ticked names the file after it; several are "selection".
+				const only =
+					pickedCount > 1
+						? undefined
+						: picked.bookIds?.length
+							? catalogue.book(picked.bookIds[0])?.title
+							: picked.shelfIds?.length
+								? catalogue.shelf(picked.shelfIds[0])?.name
+								: catalogue.sections().find((section) => section.id === picked.sectionIds?.[0])?.name
+				name = only ?? "selection"
+				scope = { selection: picked }
+			} else if (request.bookId !== undefined) {
 				name = book(request.bookId).title
 				scope = { bookId: request.bookId }
 			} else if (request.shelfId !== undefined) {

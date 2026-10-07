@@ -268,7 +268,20 @@ export type ExportScope =
 	| { library: true }
 	| { sectionId: number }
 	| { shelfId: number }
-	| { bookId: number };
+	| { bookId: number }
+	/**
+	 * Whatever was ticked, together: whole sections, whole shelves and single
+	 * books, from anywhere in the Library. A section or shelf brings
+	 * everything on it; a book alone brings its shelf and section with only
+	 * that book on them.
+	 */
+	| { selection: ExportSelection };
+
+export interface ExportSelection {
+	sectionIds?: readonly number[];
+	shelfIds?: readonly number[];
+	bookIds?: readonly number[];
+}
 
 export interface ExportResult {
 	file: string;
@@ -1571,21 +1584,42 @@ export class Catalogue {
 	 */
 	async export(scope: ExportScope, file: string): Promise<ExportResult> {
 		const sections = this.sections();
+		// Everything is one selection: the single scopes are selections of one.
+		const selection: ExportSelection =
+			"selection" in scope
+				? scope.selection
+				: "sectionId" in scope
+					? { sectionIds: [scope.sectionId] }
+					: "shelfId" in scope
+						? { shelfIds: [scope.shelfId] }
+						: "bookId" in scope
+							? { bookIds: [scope.bookId] }
+							: {};
+		const all = "library" in scope;
+		const wholeSections = new Set(selection.sectionIds ?? []);
+		const wholeShelves = new Set(selection.shelfIds ?? []);
+		const singleBooks = new Set(selection.bookIds ?? []);
+		const bookShelves = new Set(
+			[...singleBooks]
+				.map((id) => this.book(id))
+				.filter((book) => book && !book.trashedAt)
+				.map((book) => book?.shelfId),
+		);
+		/** Every book on it goes, or only the ones ticked. */
+		const whole = (sectionId: number, shelfId: number) =>
+			all || wholeSections.has(sectionId) || wholeShelves.has(shelfId);
 		const wanted = sections
 			.map((section) => ({
 				section,
-				shelves: section.shelves.filter((shelf) => {
-					if ("library" in scope) return true;
-					if ("sectionId" in scope) return section.id === scope.sectionId;
-					if ("shelfId" in scope) return shelf.id === scope.shelfId;
-					return this.book(scope.bookId)?.shelfId === shelf.id;
-				}),
+				shelves: section.shelves.filter(
+					(shelf) => whole(section.id, shelf.id) || bookShelves.has(shelf.id),
+				),
 			}))
 			.filter(
 				(entry) =>
 					entry.shelves.length > 0 ||
-					"library" in scope ||
-					("sectionId" in scope && entry.section.id === scope.sectionId),
+					all ||
+					wholeSections.has(entry.section.id),
 			);
 		const manifest: ExportManifest = {
 			format: LIBRARY_EXPORT_FORMAT,
@@ -1600,7 +1634,7 @@ export class Catalogue {
 				description: section.description,
 				shelves: shelves.map((shelf) => {
 					const onShelf = this.books({ shelfId: shelf.id }).filter(
-						(book) => !("bookId" in scope) || book.id === scope.bookId,
+						(book) => whole(section.id, shelf.id) || singleBooks.has(book.id),
 					);
 					books.push(...onShelf);
 					return {
@@ -1613,6 +1647,9 @@ export class Catalogue {
 		}
 		if ("bookId" in scope && books.length === 0) {
 			throw new Error("No such book, or it is in the trash.");
+		}
+		if ("selection" in scope && manifest.sections.length === 0) {
+			throw new Error("Nothing selected that is in the Library.");
 		}
 		const self = this;
 		function* entries(): Generator<TarEntry> {

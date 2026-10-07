@@ -416,47 +416,104 @@ describe("the Library panel", () => {
 			expect(await screen.findByText("Done.")).toBeTruthy()
 		})
 
-		it("renames and moves a book, and deletes it only after a second click", async () => {
+		it("renames and moves a book, and moves it to the trash only after a Yes", async () => {
 			await open()
 			fireEvent.click(screen.getByText("Godot"))
 			await screen.findByText("Godot Tilemaps")
 			fireEvent.change(screen.getByLabelText("Shelf of Godot Tilemaps"), { target: { value: "11" } })
 			await waitFor(() => expect(sent("libraryBookEdit")).toEqual([{ action: "libraryBookEdit", bookId: 5, shelfId: 11 }]))
-			const row = screen.getByText("Godot Tilemaps").closest("div.py-1") as HTMLElement
-			fireEvent.click(Array.from(row.querySelectorAll("vscode-button")).find((b) => b.textContent === "Delete") as Element)
+			const trash = screen.getByLabelText('Move "Godot Tilemaps" to the trash')
+			fireEvent.click(trash)
+			expect(screen.getByText('Move "Godot Tilemaps" to the trash? It is kept there 30 days.')).toBeTruthy()
+			fireEvent.click(screen.getByText("No"))
+			expect(screen.queryByText(/to the trash\? It is kept/)).toBeNull()
 			expect(sent("libraryBookDelete")).toEqual([])
-			fireEvent.click(screen.getByText("Move to trash"))
+			fireEvent.click(trash)
+			fireEvent.click(screen.getByText("Yes"))
 			await waitFor(() => expect(sent("libraryBookDelete")).toEqual([{ action: "libraryBookDelete", bookId: 5 }]))
 		})
 
-		it("shows the trash with the day each book goes, restores, and empties after a second click", async () => {
+		it("asks before removing a shelf or a section, and says where their books go", async () => {
+			await open()
+			fireEvent.click(screen.getByLabelText('Remove the shelf "Godot"'))
+			expect(screen.getByText('Remove the shelf "Godot"? Its 1 book goes to the trash for 30 days.')).toBeTruthy()
+			fireEvent.click(screen.getByLabelText('Remove the section "Game development"'))
+			expect(screen.queryByText(/Remove the shelf "Godot"\?/)).toBeNull()
+			expect(
+				screen.getByText(
+					'Remove the section "Game development" and its 2 shelves? Its 1 book goes to the trash for 30 days.',
+				),
+			).toBeTruthy()
+			fireEvent.click(screen.getByText("Yes"))
+			await waitFor(() => expect(sent("librarySection")).toEqual([{ action: "librarySection", op: "delete", id: 1 }]))
+		})
+
+		it("shows the trash with the day each book goes, restores, and empties after a Yes", async () => {
 			await open()
 			fireEvent.click(screen.getByText("Trash"))
 			expect(await screen.findByText("Old Notes")).toBeTruthy()
 			expect(screen.getByText(/was on Game development \/ Godot · deleted for good on 2026-10-31/)).toBeTruthy()
+			// A book in the trash is not exported, so it has no box to tick.
+			expect(screen.queryByLabelText('Export "Old Notes"')).toBeNull()
 			fireEvent.click(screen.getByText("Restore"))
 			await waitFor(() => expect(sent("libraryBookRestore")).toEqual([{ action: "libraryBookRestore", bookId: 6 }]))
 			fireEvent.click(screen.getByText("Empty"))
 			expect(sent("libraryEmptyTrash")).toEqual([])
-			fireEvent.click(screen.getByText("Delete 1 book for good"))
+			expect(screen.getByText("Delete the 1 book in the trash for good? This cannot be undone.")).toBeTruthy()
+			fireEvent.click(screen.getByText("Yes"))
 			await waitFor(() => expect(sent("libraryEmptyTrash")).toHaveLength(1))
 		})
 
-		it("imports, and exports the Library, a section or a shelf", async () => {
+		it("imports, and exports the whole Library until something is ticked", async () => {
 			await open()
 			fireEvent.click(screen.getByText("Import…"))
-			fireEvent.click(screen.getByText("Export all…"))
-			await waitFor(() => expect(sent("libraryExport")).toEqual([{ action: "libraryExport" }]))
 			expect(sent("libraryImport")).toEqual([{ action: "libraryImport" }])
-			const exports = screen.getAllByText("Export")
-			fireEvent.click(exports[0])
-			fireEvent.click(exports[1])
+			expect(screen.queryByText("Export all…")).toBeNull()
+			expect(screen.queryByText("Export")).toBeNull()
+			expect(screen.getByText(/Export… writes the whole Library/)).toBeTruthy()
+			fireEvent.click(screen.getByText("Export…"))
+			await waitFor(() => expect(sent("libraryExport")).toEqual([{ action: "libraryExport" }]))
+			// An empty shelf has nothing to export.
+			expect((screen.getByLabelText('Export the shelf "Unity"') as HTMLInputElement).disabled).toBe(true)
+			// Godot's one book ticked is all the section holds: the section is ticked whole.
+			fireEvent.click(screen.getByText("Godot"))
+			fireEvent.click(await screen.findByLabelText('Export "Godot Tilemaps"'))
+			const section = screen.getByLabelText('Export the section "Game development"') as HTMLInputElement
+			expect(section.checked).toBe(true)
+			expect(screen.getByText("Export… writes what is ticked: 1 section.")).toBeTruthy()
+			fireEvent.click(screen.getByText("Export…"))
 			await waitFor(() =>
-				expect(sent("libraryExport").slice(1)).toEqual([
-					{ action: "libraryExport", sectionId: 1 },
-					{ action: "libraryExport", shelfId: 10 },
+				expect(sent("libraryExport")[1]).toEqual({
+					action: "libraryExport",
+					selection: { sectionIds: [1], shelfIds: [], bookIds: [] },
+				}),
+			)
+			fireEvent.click(screen.getByText("Clear"))
+			expect(section.checked).toBe(false)
+			expect(screen.getByText(/Export… writes the whole Library/)).toBeTruthy()
+		})
+
+		it("shows a shelf and section partly ticked, and exports only the ticked book", async () => {
+			state.libraryEnabled = true
+			shelved()
+			status.catalogue.sections[0].shelves[0].books = 2
+			render(<LibrarySettingsSection renderSectionHeader={header} />)
+			await screen.findByText("Game development")
+			fireEvent.click(screen.getByText("Godot"))
+			fireEvent.click(await screen.findByLabelText('Export "Godot Tilemaps"'))
+			const shelf = screen.getByLabelText('Export the shelf "Godot"') as HTMLInputElement
+			const section = screen.getByLabelText('Export the section "Game development"') as HTMLInputElement
+			expect([shelf.checked, shelf.indeterminate]).toEqual([false, true])
+			expect([section.checked, section.indeterminate]).toEqual([false, true])
+			fireEvent.click(screen.getByText("Export…"))
+			await waitFor(() =>
+				expect(sent("libraryExport")).toEqual([
+					{ action: "libraryExport", selection: { sectionIds: [], shelfIds: [], bookIds: [5] } },
 				]),
 			)
+			// A partly ticked shelf is ticked whole by a click.
+			fireEvent.click(shelf)
+			expect([shelf.checked, shelf.indeterminate]).toEqual([true, false])
 		})
 	})
 

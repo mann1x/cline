@@ -318,6 +318,39 @@ describe("the Library's catalogue", () => {
 		expect(catalogue.book(two.id)?.trashedAt).toBeTruthy();
 	});
 
+	it("exports a mixed selection: a whole shelf and one book from elsewhere", async () => {
+		const catalogue = library.catalogue;
+		const godot = shelf();
+		catalogue.createBook({ shelfId: godot.id, title: "Tilemaps" });
+		catalogue.createBook({ shelfId: godot.id, title: "Shaders" });
+		const cooking = shelf("Home", "Cooking");
+		const bread = catalogue.createBook({ shelfId: cooking.id, title: "Bread" });
+		catalogue.createBook({ shelfId: cooking.id, title: "Soup" });
+		catalogue.createBook({
+			shelfId: shelf("Home", "Garden").id,
+			title: "Roses",
+		});
+		const archive = join(root, "selection.cbl.tar.gz");
+		const exported = await catalogue.export(
+			{ selection: { shelfIds: [godot.id], bookIds: [bread.id] } },
+			archive,
+		);
+		expect(exported.books).toBe(3);
+
+		const other = new Library({ directory: join(root, "other") });
+		try {
+			const result = await other.catalogue.import(archive);
+			expect(
+				result.imported.map((entry) => `${entry.shelf}/${entry.title}`).sort(),
+			).toEqual(["Cooking/Bread", "Godot/Shaders", "Godot/Tilemaps"]);
+		} finally {
+			await other.close();
+		}
+		await expect(
+			catalogue.export({ selection: {} }, join(root, "none.tar.gz")),
+		).rejects.toThrow("Nothing selected");
+	});
+
 	it("exports a shelf and reads it into another Library, files and all", async () => {
 		const catalogue = library.catalogue;
 		const place = shelf();

@@ -271,7 +271,14 @@ export type LibraryAction =
 	/** Cancels the librarian calls that are reading files; each fails with its report. */
 	| { action: "libraryCancelImport" }
 	| { action: "librarySource"; op: "remove" | "restore"; sourceId: number }
-	| { action: "libraryExport"; sectionId?: number; shelfId?: number; bookId?: number }
+	| {
+			action: "libraryExport"
+			sectionId?: number
+			shelfId?: number
+			bookId?: number
+			/** Ticked in the browser: whole sections and shelves, and single books. Empty or absent is the whole Library. */
+			selection?: { sectionIds?: number[]; shelfIds?: number[]; bookIds?: number[] }
+	  }
 	| { action: "libraryImport"; existing?: "skip" | "replace" | "copy" }
 	| { action: "setLibrarian"; enabled: boolean }
 	| {
