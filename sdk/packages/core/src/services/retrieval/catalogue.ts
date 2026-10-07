@@ -31,6 +31,7 @@ import { DEFAULT_LIBRARY_SETTINGS, type LibrarySettings } from "@cline/shared";
 import type { SqliteDb } from "@cline/shared/db";
 import { fingerprintSimilarity, textFingerprint } from "./fingerprint";
 import type { Library } from "./library";
+import { runningHeads } from "./running-heads";
 import { extractTarGz } from "./tar-extract";
 import { type TarEntry, writeTarGz } from "./tar-write";
 
@@ -249,8 +250,13 @@ export interface BookMatch {
 		| "same title and author"
 		| "same title"
 		| "similar text";
-	/** For "similar text": the share of the text the two have in common, 0 to 1. */
+	/**
+	 * The share of the text the two have in common, 0 to 1: for "similar
+	 * text", and for a title match when both have text to compare.
+	 */
 	similarity?: number;
+	/** The running heads of `source`, when it has pages: what document it is. */
+	runningHeads?: string[];
 }
 
 export interface FindSimilarInput {
@@ -1106,6 +1112,7 @@ export class Catalogue {
 				JSON.stringify({
 					...(input.title ? { title: input.title } : {}),
 					...input.metadata,
+					runningHeads: runningHeads(text),
 				}),
 			);
 		const sourceId = Number(inserted.lastInsertRowid);
@@ -1473,46 +1480,79 @@ export class Catalogue {
 			if (input.url && book.metadata.web?.links?.includes(input.url)) {
 				push({ book, reason: "same link" });
 			}
-			if (title && normalizeTitle(book.title) === title) {
-				const theirs = (book.metadata.authors ?? []).map(normalizeTitle);
-				const shared = authors.some((author) => theirs.includes(author));
-				push({
-					book,
-					reason: shared ? "same title and author" : "same title",
-				});
-			}
 		}
+		// Each book's closest source by text, whatever the share: a title match
+		// is weighed by it as well (a set's title on every volume, with 2% of
+		// the text in common, says nothing).
+		const best = new Map<number, { source: BookSource; similarity: number }>();
 		if (input.fingerprint && input.fingerprint.length > 0) {
-			const floor = input.minSimilarity ?? 0.3;
-			const best = new Map<
-				number,
-				{ source: BookSource; similarity: number }
-			>();
 			for (const source of sourceRows) {
 				if (!source.fingerprint?.length) continue;
 				const similarity = fingerprintSimilarity(
 					input.fingerprint,
 					source.fingerprint,
 				);
-				if (similarity < floor) continue;
 				const known = best.get(source.bookId);
 				if (!known || known.similarity < similarity) {
 					best.set(source.bookId, { source, similarity });
 				}
 			}
-			for (const [bookId, found] of best) {
-				const book = books.get(bookId);
-				if (book) {
-					push({
-						book,
+		}
+		const closest = (book: LibraryBook) => {
+			const found = best.get(book.id);
+			return found
+				? {
 						source: found.source,
-						reason: "similar text",
 						similarity: found.similarity,
-					});
-				}
+						runningHeads: this.sourceRunningHeads(book, found.source),
+					}
+				: {};
+		};
+		for (const book of books.values()) {
+			if (title && normalizeTitle(book.title) === title) {
+				const theirs = (book.metadata.authors ?? []).map(normalizeTitle);
+				const shared = authors.some((author) => theirs.includes(author));
+				push({
+					book,
+					reason: shared ? "same title and author" : "same title",
+					...closest(book),
+				});
+			}
+		}
+		const floor = input.minSimilarity ?? 0.3;
+		for (const [bookId, found] of best) {
+			const book = books.get(bookId);
+			if (book && found.similarity >= floor) {
+				push({ book, reason: "similar text", ...closest(book) });
 			}
 		}
 		return matches;
+	}
+
+	/**
+	 * A source's running heads. Kept in its metadata from when it was added;
+	 * a source added before that has them read from its text once, here, and
+	 * kept. Empty for a source with no pages, or no text left to read.
+	 */
+	private sourceRunningHeads(book: LibraryBook, source: BookSource): string[] {
+		const kept = source.metadata.runningHeads;
+		if (Array.isArray(kept)) {
+			return kept.filter((head): head is string => typeof head === "string");
+		}
+		let heads: string[] = [];
+		if (source.textFile) {
+			const file = join(this.bookDirectory(book), source.textFile);
+			try {
+				heads = runningHeads(readFileSync(file, "utf8"));
+			} catch {
+				return [];
+			}
+		}
+		source.metadata = { ...source.metadata, runningHeads: heads };
+		this.db
+			.prepare("UPDATE book_sources SET metadata = ? WHERE id = ?")
+			.run(JSON.stringify(source.metadata), source.id);
+		return heads;
 	}
 
 	// ---- the book's own file --------------------------------------------

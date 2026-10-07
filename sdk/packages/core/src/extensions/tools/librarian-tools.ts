@@ -40,6 +40,10 @@ import {
 } from "../../services/retrieval/firecrawl";
 import { type Library, sharedLibrary } from "../../services/retrieval/library";
 import {
+	runningHeads,
+	sameDocument,
+} from "../../services/retrieval/running-heads";
+import {
 	DOCUMENT_EXTENSIONS,
 	type ReadProgress,
 } from "./executors/document/formats";
@@ -95,6 +99,10 @@ const SKIPPED_DIRECTORIES = new Set(["node_modules", ".git"]);
 const LONG_CALL_MS = 60 * 60_000;
 /** Text this much the same is the same book; less, another edition of it. */
 const SAME_TEXT = 0.9;
+/** Less text than this in common, and a shared title is a coincidence. */
+const TITLE_NEEDS_TEXT = 0.1;
+/** Less than this, and two texts are not compared at all. */
+const RELATED_TEXT = 0.3;
 
 const NO_SCRAPER =
 	"Web scraping is not set up for this session. The user sets the endpoint under Settings > Features and allows it in the API configuration; do not call this again in this task.";
@@ -106,6 +114,8 @@ export interface ReadSource {
 	document: BookDocument;
 	isbn?: string;
 	fingerprint: number[];
+	/** The lines on most of its pages: which document it is, see running-heads.ts. */
+	runningHeads: string[];
 }
 
 const readCache = new Map<string, ReadSource>();
@@ -280,6 +290,7 @@ async function readSource(
 		document,
 		isbn: findIsbn(document.markdown),
 		fingerprint: textFingerprint(document.markdown),
+		runningHeads: runningHeads(document.markdown),
 	};
 	if (pictures) return read;
 	if (readCache.size > 64) readCache.clear();
@@ -312,12 +323,14 @@ function judge(
 		authors?: readonly string[];
 		isbn?: string;
 		fingerprint?: readonly number[];
+		runningHeads?: readonly string[];
 	},
 	exceptBookId?: number,
 ): Judged {
 	const matches = catalogue
 		.findSimilar(input)
-		.filter((match) => match.book.id !== exceptBookId);
+		.filter((match) => match.book.id !== exceptBookId)
+		.filter((match) => countsAsVersion(match, input.runningHeads));
 	if (matches.length === 0) {
 		return { verdict: "new", matches, line: "not in the Library." };
 	}
@@ -364,6 +377,60 @@ function judge(
  * often holds the same book twice, and the Library cannot say so about files
  * it does not hold yet.
  */
+/**
+ * Whether a match by title or by text is evidence of another version. A
+ * shared title with almost no text in common is a coincidence of metadata
+ * (every volume of AMD's programmer's manual carries the set's title), and
+ * text in common between two documents whose running heads name different
+ * documents is reuse, not revision (two processors' references, 77% alike).
+ * The same file, link or ISBN always counts, and so does near-identical text.
+ */
+function countsAsVersion(
+	match: BookMatch,
+	heads: readonly string[] | undefined,
+): boolean {
+	if (
+		match.reason === "similar text" ||
+		match.reason.startsWith("same title")
+	) {
+		if ((match.similarity ?? 0) >= SAME_TEXT) return true;
+		if (sameDocument(heads, match.runningHeads) === false) return false;
+	}
+	if (match.reason.startsWith("same title")) {
+		return (
+			match.similarity === undefined || match.similarity >= TITLE_NEEDS_TEXT
+		);
+	}
+	return true;
+}
+
+/**
+ * How two files read in one batch relate, or undefined when they do not
+ * enough to say: by the same rules as a file against the Library.
+ */
+function batchRelation(one: ReadSource, other: ReadSource): string | undefined {
+	if (one.sha256 === other.sha256) return "is the same file as";
+	const similarity = fingerprintSimilarity(one.fingerprint, other.fingerprint);
+	const percent = Math.round(similarity * 100);
+	if (similarity >= SAME_TEXT) {
+		return `is the same book (${percent}% of the text) as`;
+	}
+	if (sameDocument(one.runningHeads, other.runningHeads) === false) {
+		return undefined;
+	}
+	if (similarity >= RELATED_TEXT) {
+		return `shares ${percent}% of its text, so is probably another version of,`;
+	}
+	const sameTitle =
+		one.document.title !== undefined &&
+		other.document.title !== undefined &&
+		normalizeTitle(one.document.title) === normalizeTitle(other.document.title);
+	if (sameTitle && similarity >= TITLE_NEEDS_TEXT) {
+		return `has the same title as, and ${percent}% of its text in common with,`;
+	}
+	return undefined;
+}
+
 export function compareBatch(
 	sources: readonly ReadSource[],
 ): Map<string, string[]> {
@@ -375,27 +442,7 @@ export function compareBatch(
 		for (let b = a + 1; b < sources.length; b++) {
 			const one = sources[a];
 			const other = sources[b];
-			let relation: string | undefined;
-			if (one.sha256 === other.sha256) {
-				relation = "is the same file as";
-			} else {
-				const similarity = fingerprintSimilarity(
-					one.fingerprint,
-					other.fingerprint,
-				);
-				const sameTitle =
-					one.document.title !== undefined &&
-					other.document.title !== undefined &&
-					normalizeTitle(one.document.title) ===
-						normalizeTitle(other.document.title);
-				if (similarity >= SAME_TEXT) {
-					relation = `is the same book (${Math.round(similarity * 100)}% of the text) as`;
-				} else if (similarity >= 0.3) {
-					relation = `shares ${Math.round(similarity * 100)}% of its text, so is probably another version of,`;
-				} else if (sameTitle) {
-					relation = `has the same title as, and ${Math.round(similarity * 100)}% of its text in common with,`;
-				}
-			}
+			const relation = batchRelation(one, other);
 			if (relation) {
 				note(one.file, `IN THIS BATCH: ${relation} ${other.name}.`);
 				note(other.file, `IN THIS BATCH: ${relation} ${one.name}.`);
@@ -587,6 +634,7 @@ function createLibraryCheckTool(options: CreateLibraryToolsOptions): AgentTool {
 					authors: source.document.author ? [source.document.author] : [],
 					isbn: source.isbn,
 					fingerprint: source.fingerprint,
+					runningHeads: source.runningHeads,
 				});
 				const words = source.document.markdown.split(/\s+/).length;
 				lines.push(
@@ -746,8 +794,10 @@ function createLibraryAddTool(options: CreateLibraryToolsOptions): AgentTool {
 							);
 							if (
 								read[a].sha256 !== read[b].sha256 &&
-								similarity >= 0.3 &&
-								similarity < SAME_TEXT
+								similarity >= RELATED_TEXT &&
+								similarity < SAME_TEXT &&
+								sameDocument(read[a].runningHeads, read[b].runningHeads) !==
+									false
 							) {
 								versions.push(
 									`${read[a].name} and ${read[b].name} share ${Math.round(similarity * 100)}% of their text`,
@@ -776,6 +826,7 @@ function createLibraryAddTool(options: CreateLibraryToolsOptions): AgentTool {
 							title: target ? undefined : text(request.title),
 							authors: metadata.authors,
 							fingerprint: source.fingerprint,
+							runningHeads: source.runningHeads,
 						},
 						target?.id,
 					),

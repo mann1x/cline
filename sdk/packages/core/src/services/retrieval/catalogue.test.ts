@@ -288,6 +288,55 @@ describe("the Library's catalogue", () => {
 		).toBeTruthy();
 	});
 
+	it("keeps a source's running heads, and weighs a title match by the text", async () => {
+		const catalogue = library.catalogue;
+		const paged = (head: string) =>
+			Array.from(
+				{ length: 8 },
+				(_u, n) => `## Page ${n + 1}\n\n${head}\n${PROSE} ${n}.\n${n + 1}\n`,
+			).join("\n");
+		const head = "24592 rev 3.23 amd64 technology";
+		const book = catalogue.createBook({
+			shelfId: shelf().id,
+			title: "AMD64 Architecture Programmer's Manual",
+		});
+		const { source } = await catalogue.addSource(book.id, {
+			kind: "file",
+			name: "v1.pdf",
+			path: file("v1.pdf", "bytes"),
+			text: paged("24592 Rev 3.23 AMD64 Technology"),
+		});
+		expect(catalogue.sources(book.id)[0].metadata.runningHeads).toEqual([head]);
+		// Every volume of the set carries its title, and almost none of its text.
+		const [title] = catalogue.findSimilar({
+			title: "AMD64 Architecture Programmer's Manual",
+			fingerprint: textFingerprint(
+				"An unrelated text about bread and ovens and flour and salt and water.",
+			),
+		});
+		expect(title).toMatchObject({
+			reason: "same title",
+			similarity: 0,
+			runningHeads: [head],
+		});
+		// Added before heads were kept: read from its text once, and kept.
+		(
+			catalogue as unknown as {
+				db: { prepare(sql: string): { run(...values: unknown[]): void } };
+			}
+		).db
+			.prepare("UPDATE book_sources SET metadata = '{}' WHERE id = ?")
+			.run(source.id);
+		const [text] = catalogue.findSimilar({
+			fingerprint: textFingerprint(paged("24592 Rev 3.23 AMD64 Technology")),
+		});
+		expect(text).toMatchObject({
+			reason: "similar text",
+			runningHeads: [head],
+		});
+		expect(catalogue.sources(book.id)[0].metadata.runningHeads).toEqual([head]);
+	});
+
 	it("tells the same text in another layout from another text", () => {
 		const flowed = textFingerprint(PROSE.replace(/\. /g, ".\n\n"));
 		expect(fingerprintSimilarity(textFingerprint(PROSE), flowed)).toBe(1);

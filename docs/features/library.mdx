@@ -62,10 +62,12 @@ Before anything is added, each file is compared with what the Library holds, in 
 | --- | --- |
 | The same file, byte for byte | A duplicate. It is skipped. |
 | The same ISBN | The same edition in another file or format. |
-| The same title, or title and author | The same book or another edition of it. |
-| Most of the text | 90% and more in common is the same book in another file. Less than that is another edition, a revision or another translation. |
+| The same title, or title and author | The same book or another edition of it, when the texts have at least 10% in common. |
+| Most of the text | 90% and more in common is the same book in another file. From 30%, another edition, a revision or another translation, unless the running heads say it is a different document (below). |
 
 The text comparison needs no model: each book has a fingerprint of its text, so the same book as a PDF and as an EPUB is recognised though no byte of the two files is the same. The files of one request are compared with each other as well, so a folder that holds the same book twice is told so before anything is added.
+
+Text in common says two documents are related, not that one is a version of the other. Technical documentation reuses whole chapters: two of AMD's processor references, for different processors, have 77% of their text in common, more than two revisions of one revision guide (68%). So a document with pages is also known by its **running heads**, the lines printed on most of its pages, such as `56683 Rev 1.04 - Nov 2021 Revision Guide for AMD Family 19h Models 00h-0Fh`. Their identifying part, the numbers once the revision and the date are left out, is compared: when it differs, the two are different documents however much text they share, and neither is reported as a version of the other. A title in a file's metadata is weighed the same way: every volume of a manual can carry the title of the whole set, so a shared title with almost no text in common is not a match.
 
 When a file looks like **another version** of a book that is there, the librarian adds nothing and asks you: keep both, or replace the old one. Replacing moves the old book to the trash.
 

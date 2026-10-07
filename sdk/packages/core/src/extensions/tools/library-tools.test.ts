@@ -364,6 +364,107 @@ describe("the Library tools", () => {
 		expect(bread).not.toContain("IN THIS BATCH");
 	});
 
+	/**
+	 * Two processors' references from AMD's folder: most of the register text
+	 * is the same, the running head on every page is not. And revisions of one
+	 * of them, where only the revision and the date change.
+	 */
+	const manual = (head: string, ...subjects: string[]) =>
+		[
+			"# Processor Programming Reference",
+			...[
+				"the core registers",
+				"the machine check registers",
+				"the power management registers",
+				...subjects,
+			].map(
+				(subject, page) =>
+					`## Page ${page + 1}\n\n${head}\n${chapter(page + 1, subject)}\n${page + 1}`,
+			),
+		].join("\n\n");
+
+	it("does not take documents that share their text for versions when their running heads name different ones", async () => {
+		write(
+			"amd/55803.md",
+			manual(
+				"55803 Rev 0.54 - Sep 12, 2019 PPR for AMD Family 17h Model 31h B0",
+				"the memory controller of model 31h",
+			),
+		);
+		write(
+			"amd/56176.md",
+			manual(
+				"56176 Rev 3.06 - Jul 17, 2019 PPR for AMD Family 17h Model 71h B0",
+				"the memory controller of model 71h",
+			),
+		);
+		write(
+			"amd/56176-3.07.md",
+			manual(
+				"56176 Rev 3.07 - Mar 2, 2020 PPR for AMD Family 17h Model 71h B0",
+				"the memory controller of model 71h",
+				"the errata of revision 3.07",
+			),
+		);
+		const checked = await call("library_check", { paths: ["amd"] });
+		const of = (name: string) =>
+			checked
+				.split("\n")
+				.slice(checked.split("\n").findIndex((line) => line.endsWith(name)))
+				.slice(1)
+				.join("\n")
+				.split(/\n(?=\S)/)[0];
+		expect(of("55803.md")).toContain("not in the Library.");
+		expect(of("55803.md")).not.toContain("IN THIS BATCH");
+		expect(of("56176.md")).toMatch(
+			/IN THIS BATCH: shares \d+% of its text, so is probably another version of, 56176-3\.07\.md\./,
+		);
+		expect(of("56176.md")).not.toContain("55803");
+
+		// The same against the Library: one is added, the other is not its version.
+		expect(
+			await call("library_add", {
+				paths: ["amd/55803.md"],
+				title: "PPR for AMD Family 17h Model 31h",
+				description: "Registers of Family 17h Model 31h.",
+				section: "Development",
+				shelf: "AMD",
+				authors: ["AMD"],
+			}),
+		).toContain("New book #1");
+		const again = await call("library_check", { paths: ["amd/56176.md"] });
+		expect(again).toContain("not in the Library.");
+		expect(
+			await call("library_add", {
+				paths: ["amd/56176.md"],
+				title: "PPR for AMD Family 17h Model 71h",
+				description: "Registers of Family 17h Model 71h.",
+				section: "Development",
+				shelf: "AMD",
+				authors: ["AMD"],
+			}),
+		).toContain("New book #2");
+		expect(
+			await call("library_check", { paths: ["amd/56176-3.07.md"] }),
+		).toContain("ANOTHER VERSION, it seems: similar text");
+	});
+
+	it("does not take a shared title for a version when the texts have almost nothing in common", async () => {
+		const set = "AMD64 Architecture Programmer's Manual, Volumes 1-5";
+		write(
+			"v1.md",
+			`# ${set}\n\n${chapter(1, "the application programming model")}`,
+		);
+		// Another volume: its own subject, in its own words.
+		write(
+			"v2.md",
+			`# ${set}\n\n${Array.from({ length: 40 }, (_u, i) => `Interrupt vector ${i} reaches the local APIC once gate descriptor ${i * 7} permits delivery.`).join(" ")}`,
+		);
+		const checked = await call("library_check", { paths: ["v1.md", "v2.md"] });
+		expect(checked).toContain(`title "${set}"`);
+		expect(checked).not.toContain("IN THIS BATCH");
+	});
+
 	it("adds nothing over a book that looks the same until told what to do", async () => {
 		write("engine.md", BOOK);
 		await addBook();
