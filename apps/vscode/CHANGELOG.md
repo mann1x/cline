@@ -103,6 +103,28 @@ Measured on the largest books of a real shelf: a 228 MB EPUB read in 3 s with
 812 MB of memory at its peak, a 411 MB scanned PDF in 80 s with 2.6 GB. Two
 files are read at once, so lower the limit on a machine with little memory.
 
+### Related documents are no longer taken for versions
+
+The Library's duplicate check took documents that share much of their text
+for versions of one another. A folder of AMD's processor manuals showed why
+that is wrong: the references for two different processors share 77% of
+their text, because whole register chapters are reused, more than two
+revisions of one revision guide do (68%). Every pair was reported as
+"probably another version", and the model stopped to ask.
+
+A document with pages is now also known by its running heads, the line
+printed on most of its pages ("56683 Rev 1.04 - Nov 2021 Revision Guide for
+AMD Family 19h Models 00h-0Fh"). When their identifying part differs, the
+documents are different, however much text they share, and nothing is
+reported. Between revisions only the revision and the date change, so those
+are still found. A shared title with almost no text in common no longer
+counts either: every volume of the AMD64 programmer's manual carries the
+title of the whole set.
+
+On that folder of 61 manuals, the pairs reported went from every processor
+reference against every other to the ones that matter: the same file twice,
+revisions of one document, and parts of one volume.
+
 ## [4.100.241] — 2026-10-06
 
 ### Built-in skills
