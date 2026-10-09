@@ -1,10 +1,18 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { basename } from "node:path"
-import { lanceDbStatus, memoryWorkspaceKey, resolveLanceDbRuntimeDirectory, sharedLibrary, sharedMemory } from "@cline/core"
+import {
+	lanceDbStatus,
+	memoryWorkspaceKey,
+	resolveLanceDbRuntimeDirectory,
+	sharedCodeIndex,
+	sharedLibrary,
+	sharedMemory,
+} from "@cline/core"
 import type { RetrievalAction, RetrievalActionResult, RetrievalEmbedJob, RetrievalStatus } from "@shared/retrieval-status"
 import { Logger } from "@shared/services/Logger"
 import { getCwd } from "@utils/path"
 import { HostProvider } from "@/hosts/host-provider"
+import { readCodeIndexStatus, vscodeCodeSearch } from "./code-search"
 import {
 	checkEmbeddingEndpoint,
 	checkRerankingEndpoint,
@@ -128,6 +136,7 @@ export async function readRetrievalStatus(): Promise<RetrievalStatus> {
 		embedJobs: { ...embedJobs },
 		catalogue: await readLibraryCatalogue(),
 		scrape: readScrapeState(),
+		codeIndex: readCodeIndexStatus(path),
 		// The folder's name from either kind of separator: the host's own basename knows only its own.
 		workspace: {
 			path,
@@ -179,6 +188,25 @@ async function act(request: RetrievalAction, outcome: Outcome): Promise<string |
 			// panel follows it through the status.
 			void installLibraryVectors()
 			return undefined
+		case "codeIndexRefresh": {
+			const root = await getCwd()
+			if (!vscodeCodeSearch().available(root)) {
+				throw new Error(
+					describeEmbeddingEndpoint().problem ??
+						(readEmbeddingEndpoint() ? "This folder's code index is not turned on." : "No embedding model is set."),
+				)
+			}
+			// Not awaited: a large folder takes minutes, and the panel follows it.
+			void vscodeCodeSearch().refresh(root)
+			return undefined
+		}
+		case "codeIndexDelete": {
+			const root = await getCwd()
+			if (vscodeCodeSearch().state(root).running) {
+				throw new Error("The index is being built. Delete it once that has finished.")
+			}
+			return (await sharedCodeIndex().remove(root)) ? "Deleted this folder's code index." : "This folder has no code index."
+		}
 		case "createMemory": {
 			const workspace = request.forWorkspace ? await getCwd() : undefined
 			const made = memory.createMemory({ name: request.name, ...(workspace ? { workspace } : {}) })

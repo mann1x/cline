@@ -131,6 +131,7 @@ export {
 	splitDataUrl,
 	toNavigableUrl,
 } from "../../../../sdk/packages/core/src/extensions/tools/browser"
+export { createCodeSearch } from "../../../../sdk/packages/core/src/extensions/tools/code-search"
 // Likewise, and for a sharper reason. The delimiter scan moved out of the
 // extension and into core, and the three extension files that call it were
 // repointed at `@cline/core` — which under vitest is this file. Absent here the
@@ -222,6 +223,7 @@ export {
 	syncStoredProviderRegistration,
 } from "../../../../sdk/packages/core/src/services/providers/local-provider-registry"
 export { TRASH_DAYS } from "../../../../sdk/packages/core/src/services/retrieval/catalogue"
+export { closeSharedCodeIndex, sharedCodeIndex } from "../../../../sdk/packages/core/src/services/retrieval/code-index"
 export {
 	embedTexts,
 	rerankDocuments,

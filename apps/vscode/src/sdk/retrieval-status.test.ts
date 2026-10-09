@@ -42,7 +42,7 @@ vi.mock("@/hosts/host-provider", () => ({
 	},
 }))
 
-import { sharedLibrary, sharedMemory } from "@cline/core"
+import { closeSharedCodeIndex, sharedLibrary, sharedMemory } from "@cline/core"
 import { readRetrievalStatus, runRetrievalAction } from "./retrieval-status"
 
 describe("what the Library and Memory panels ask of the host", () => {
@@ -58,6 +58,7 @@ describe("what the Library and Memory panels ask of the host", () => {
 		// database that is open, and the status opens the Library's as well.
 		await sharedMemory().close()
 		await sharedLibrary().close()
+		await closeSharedCodeIndex()
 		delete process.env.CEREBRILINE_DATA_DIR
 		rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
 	})
@@ -139,6 +140,57 @@ describe("what the Library and Memory panels ask of the host", () => {
 		expect((await act({ action: "deleteVectors", target: "memory", table: "vectors_x_3" })).error).toBe(
 			"There is no such set of vectors.",
 		)
+	})
+
+	it("builds the open folder's code index only once it is ticked and a model is set", async () => {
+		const before = { cwd: host.cwd, settings: { ...host.settings } }
+		const folder = mkdtempSync(join(tmpdir(), "retrieval-status-code-"))
+		writeFileSync(
+			join(folder, "invoice.ts"),
+			"export const invoiceTotal = (lines: number[]) => lines.reduce((a, b) => a + b, 0)\n",
+		)
+		host.cwd = folder
+		try {
+			expect((await readRetrievalStatus()).codeIndex).toEqual({ enabled: false, files: 0, passages: 0, running: false })
+			// Not ticked: nothing is read, whatever is asked.
+			const refused = await act({ action: "codeIndexRefresh" })
+			expect(refused.ok).toBe(false)
+			expect(refused.status.codeIndex.files).toBe(0)
+
+			// Ticked with no embedding model: still nothing, and the reason is the model.
+			host.settings.librarySettings = JSON.stringify({ codeIndexWorkspaces: [`${folder}/`] })
+			const noModel = await act({ action: "codeIndexRefresh" })
+			expect(noModel.error).toContain("is not ticked")
+			expect(noModel.status.codeIndex).toMatchObject({ enabled: true, files: 0 })
+
+			host.settings.embeddingEnabled = true
+			host.settings.retrievalEndpoints = JSON.stringify({
+				useProvider: false,
+				embedding: { baseUrl: "http://127.0.0.1:9", model: "embed-test" },
+			})
+			expect((await act({ action: "codeIndexRefresh" })).ok).toBe(true)
+			// Followed through the status, as the panel does.
+			let status = (await readRetrievalStatus()).codeIndex
+			for (let tries = 0; status.running && tries < 200; tries++) {
+				await new Promise((resolve) => setTimeout(resolve, 25))
+				status = (await readRetrievalStatus()).codeIndex
+			}
+			expect(status).toMatchObject({ enabled: true, files: 1, running: false })
+			expect(status.passages).toBeGreaterThan(0)
+			// LanceDB is not downloaded here, and the panel is told so.
+			expect(status.problem).toContain("LanceDB")
+
+			// Unticked, the index is kept until it is deleted.
+			host.settings.librarySettings = JSON.stringify({ codeIndexWorkspaces: [] })
+			expect((await readRetrievalStatus()).codeIndex).toMatchObject({ enabled: false, files: 1 })
+			const deleted = await act({ action: "codeIndexDelete" })
+			expect(deleted.message).toBe("Deleted this folder's code index.")
+			expect(deleted.status.codeIndex.files).toBe(0)
+		} finally {
+			host.cwd = before.cwd
+			host.settings = before.settings
+			rmSync(folder, { recursive: true, force: true })
+		}
 	})
 
 	it("answers a request it cannot read with the status and the reason", async () => {

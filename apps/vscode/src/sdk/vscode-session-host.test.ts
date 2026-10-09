@@ -35,6 +35,12 @@ vi.mock("@/core/storage/StateManager", () => ({
 	},
 }))
 
+// The code index is its own subject (code-search.test.ts): here it is a
+// folder that is not opted in.
+vi.mock("./code-search", () => ({
+	vscodeCodeSearch: () => ({ available: () => false, search: async () => "" }),
+	refreshCodeIndexInBackground: () => {},
+}))
 vi.mock("./vscode-runtime-builder", () => ({
 	createVscodeExtraTools: mockCreateVscodeExtraTools,
 }))
@@ -159,8 +165,10 @@ describe("VscodeSessionHost telemetry wiring", () => {
 			mcpHub: {} as any,
 		})
 
+		// Only the code search, which replaces none of the defaults: core
+		// spreads its own executors underneath whatever a host names.
 		const capabilities = mockClineCoreCreate.mock.calls[0][0].capabilities
-		expect(capabilities.toolExecutors).toBeUndefined()
+		expect(Object.keys(capabilities.toolExecutors)).toEqual(["semanticSearch"])
 	})
 
 	it("waits for policy readiness before selecting and applying remote config", async () => {

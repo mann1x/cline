@@ -1,8 +1,14 @@
-import { DEFAULT_LIBRARY_SETTINGS, type LibrarySettings, resolveLibrarySettings } from "@cline/shared"
+import {
+	DEFAULT_LIBRARY_SETTINGS,
+	isCodeIndexWorkspace,
+	type LibrarySettings,
+	normalizeWorkspaceFolder,
+	resolveLibrarySettings,
+} from "@cline/shared"
 import { parseApiConfigurationProfiles } from "@shared/api-config-profiles"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { embeddingEndpointConfigured, parseRetrievalEndpoints, rerankingEndpointConfigured } from "@shared/retrieval-endpoints"
-import { VSCodeDropdown, VSCodeOption } from "@vscode/webview-ui-toolkit/react"
+import { VSCodeButton, VSCodeDropdown, VSCodeOption } from "@vscode/webview-ui-toolkit/react"
 import { useCallback, useMemo } from "react"
 import { Slider } from "@/components/ui/slider"
 import { useExtensionState } from "@/context/ExtensionStateContext"
@@ -111,6 +117,31 @@ const LibrarySettingsSection = ({ renderSectionHeader }: LibrarySettingsSectionP
 
 	const unit = settings.splitter === "tokens" ? "tokens" : "characters"
 
+	// The code index is the open folder's, and a choice made per folder.
+	const folder = retrieval.status?.workspace.path ?? ""
+	const codeIndex = retrieval.status?.codeIndex
+	const codeIndexed = folder !== "" && isCodeIndexWorkspace(settings, folder)
+	const setCodeIndexed = async (checked: boolean) => {
+		if (folder === "") {
+			return
+		}
+		const others = settings.codeIndexWorkspaces.filter(
+			(entry) => normalizeWorkspaceFolder(entry) !== normalizeWorkspaceFolder(folder),
+		)
+		await save({ codeIndexWorkspaces: checked ? [...others, folder] : others })
+		// Saved first: the host reads the list to decide whether to build.
+		await (checked && embedding ? retrieval.run({ action: "codeIndexRefresh" }) : retrieval.ask({ action: "status" }))
+	}
+	const codeIndexLine = !codeIndex
+		? ""
+		: codeIndex.running
+			? codeIndex.progress && codeIndex.progress.total > 0
+				? `${codeIndex.progress.phase === "reading" ? "Reading" : "Embedding"} file ${codeIndex.progress.done} of ${codeIndex.progress.total}…`
+				: "Reading the folder…"
+			: codeIndex.files > 0
+				? `${codeIndex.files.toLocaleString()} files, ${codeIndex.passages.toLocaleString()} passages.`
+				: "Nothing is indexed yet."
+
 	return (
 		<div>
 			{renderSectionHeader("library")}
@@ -142,6 +173,71 @@ const LibrarySettingsSection = ({ renderSectionHeader }: LibrarySettingsSectionP
 								: "Searching by keyword. Tick “Use an embedding model” in the API configuration to search by meaning as well"}
 							{reranking ? `, and reranking with ${endpoints.reranking.model}.` : "."}
 						</p>
+					) : null}
+				</div>
+
+				<div className="pt-3 border-t border-(--vscode-panel-border)">
+					<div className="font-medium mb-2">Code search by meaning</div>
+					<SettingsCheckbox checked={codeIndexed} onChange={setCodeIndexed}>
+						Index the code of this folder
+						{retrieval.status?.workspace.name ? ` (${retrieval.status.workspace.name})` : ""}
+					</SettingsCheckbox>
+					<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
+						Lets the model find code by describing it: <code>search_codebase</code> gains a <code>semantic</code> mode
+						that takes a question in plain words and returns the passages that best match, each with its file and
+						lines. For when the model does not know what a thing is called; a regex search and the language server are
+						still what it uses when it does. Every source file of the folder is sent to the embedding model set in the
+						API configuration, so it is off until ticked, and ticked per folder. Files that <code>.gitignore</code>{" "}
+						leaves out are left out, and so are lockfiles, generated files and anything over 256 KB. The index is
+						brought up to date when a task starts, and applies from the next task. It does not need the Library to be
+						on.
+					</p>
+					{codeIndexed ? (
+						<>
+							{embedding ? null : (
+								<p className="text-xs mt-1 text-(--vscode-errorForeground)">
+									No embedding model is set: tick “Use an embedding model” in the API configuration and name
+									one. Until then the model is not offered the mode.
+								</p>
+							)}
+							<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">{codeIndexLine}</p>
+							{codeIndex?.problem && !codeIndex.running ? (
+								<p className="text-xs mt-1 text-(--vscode-errorForeground)">
+									The last run stopped short: {codeIndex.problem}
+									{retrieval.status?.lancedb.installed === false
+										? " LanceDB holds the vectors; download it here, then update the index."
+										: ""}
+								</p>
+							) : null}
+							<div className="flex gap-2 mt-2">
+								<VSCodeButton
+									appearance="secondary"
+									disabled={!embedding || codeIndex?.running === true || retrieval.busy}
+									onClick={() => void retrieval.run({ action: "codeIndexRefresh" })}>
+									Update now
+								</VSCodeButton>
+								{retrieval.status?.lancedb.installed === false && !retrieval.status.lancedb.unsupported ? (
+									<VSCodeButton
+										appearance="secondary"
+										disabled={retrieval.status.lancedb.installing || retrieval.busy}
+										onClick={() => void retrieval.run({ action: "installVectors" })}>
+										{retrieval.status.lancedb.installing ? "Downloading LanceDB…" : "Download LanceDB"}
+									</VSCodeButton>
+								) : null}
+							</div>
+						</>
+					) : codeIndex && codeIndex.files > 0 ? (
+						<div className="mt-2">
+							<p className="text-xs mb-2 text-(--vscode-descriptionForeground)">
+								An index of {codeIndex.files.toLocaleString()} files is kept from when this was on.
+							</p>
+							<VSCodeButton
+								appearance="secondary"
+								disabled={retrieval.busy}
+								onClick={() => void retrieval.run({ action: "codeIndexDelete" })}>
+								Delete the index
+							</VSCodeButton>
+						</div>
 					) : null}
 				</div>
 

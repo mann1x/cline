@@ -48,6 +48,7 @@ import type { McpHub } from "@/services/mcp/McpHub"
 import { Logger } from "@/shared/services/Logger"
 import { createCheckApprover } from "./check-approval"
 import { CHECK_FILE_TOOL_NAME } from "./check-file-tool"
+import { refreshCodeIndexInBackground, vscodeCodeSearch } from "./code-search"
 import type { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
 import type { SdkSessionHost } from "./session-host"
 import { asChatAsker } from "./user-choice"
@@ -165,6 +166,9 @@ export class VscodeSessionHost implements SdkSessionHost {
 		if (options.readFileExecutor) {
 			toolExecutors.readFile = options.readFileExecutor
 		}
+		// Asked per session whether its folder is indexed: `search_codebase`
+		// gains `mode: "semantic"` only where the user opted the folder in.
+		toolExecutors.semanticSearch = vscodeCodeSearch()
 		if (options.getTerminalManager) {
 			// Setting bash to undefined suppresses the SDK's createShellTool():
 			// createDefaultTools() checks `enableBash && executors.bash` — falsy
@@ -186,6 +190,9 @@ export class VscodeSessionHost implements SdkSessionHost {
 				? await remoteConfigIntegration.applyToStartSessionInput(input)
 				: input
 			const requestedTerminalExecutionMode = StateManager.get().getGlobalStateKey("vscodeTerminalExecutionMode")
+			if (inputWithRemoteConfig.config.cwd) {
+				refreshCodeIndexInBackground(inputWithRemoteConfig.config.cwd)
+			}
 			const extraTools = await createVscodeExtraTools(options.mcpHub, {
 				cwd: inputWithRemoteConfig.config.cwd,
 				getTerminalManager: options.getTerminalManager,

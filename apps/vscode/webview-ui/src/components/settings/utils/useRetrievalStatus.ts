@@ -77,7 +77,8 @@ export function useRetrievalStatus(): RetrievalStatusHandle {
 	const installing =
 		status?.lancedb.installing === true ||
 		status?.embedJobs?.library?.running === true ||
-		status?.embedJobs?.memory?.running === true
+		status?.embedJobs?.memory?.running === true ||
+		status?.codeIndex?.running === true
 	useEffect(() => {
 		if (!installing) {
 			return

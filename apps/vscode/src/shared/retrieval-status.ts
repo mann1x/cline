@@ -84,6 +84,21 @@ export interface RetrievalEmbedJob {
 	error?: string
 }
 
+/** The index of the open folder's code, searched by meaning through search_codebase. */
+export interface RetrievalCodeIndexStatus {
+	/** Ticked for this folder. Searching it also takes an embedding model. */
+	enabled: boolean
+	files: number
+	passages: number
+	/** Being brought up to date now. */
+	running: boolean
+	progress?: { phase: "reading" | "embedding"; done: number; total: number }
+	/** Why the last run stopped short. */
+	problem?: string
+	/** When the last run finished, in epoch milliseconds. */
+	finishedAt?: number
+}
+
 export interface RetrievalStatus {
 	lancedb: RetrievalLanceDbStatus
 	/** The embedding model in use, when one is configured. */
@@ -108,6 +123,7 @@ export interface RetrievalStatus {
 	embedJobs: { library?: RetrievalEmbedJob; memory?: RetrievalEmbedJob }
 	/** The workspace the panel is open in. */
 	workspace: { path: string; key: string; name: string }
+	codeIndex: RetrievalCodeIndexStatus
 	/** The Library's sections and shelves. */
 	catalogue: LibraryCatalogueView
 	scrape: ScrapeState
@@ -169,6 +185,10 @@ export type RetrievalAction =
 	| { action: "deleteMemory"; name: string }
 	| { action: "exportMemory"; name: string }
 	| { action: "importMemory"; into?: string }
+	/** Bring the open folder's code index up to date; followed through the status. */
+	| { action: "codeIndexRefresh" }
+	/** Forget the open folder's code index: its files, passages and vectors. */
+	| { action: "codeIndexDelete" }
 	| LibraryAction
 
 // ---- the Library's shelves, for the panel that browses them ----
