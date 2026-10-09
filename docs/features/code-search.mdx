@@ -52,8 +52,14 @@ Untick the box. The model stops being offered the mode from the next task. The i
 
 The index is in Cerebriline's data folder, under `code-index`, not in your project. It is much larger than the code it covers: about 200 MB for 14 MB of source (close to a thousand files) with a 1,024-dimension embedding model, and the first run on that folder took a little over five minutes on a local embedding server.
 
+## Agents
+
+Agents the lead starts are offered the mode too, in a folder that is indexed. An agent works in its own copy of the folder, and the index is the lead's: a passage is found as the lead's files had it when the index was last updated, and its lines are given as they are in the agent's copy. What an agent has written itself is not in the index until its work is taken back and the index is updated.
+
+## In the CLI
+
+`--code-index` (or `CLINE_CODE_INDEX=1`) turns it on for the folder the run is in. The embedding model is named by `CLINE_EMBEDDING_BASE_URL` and `CLINE_EMBEDDING_MODEL` (and `CLINE_EMBEDDING_API_KEY` where the server needs one); without them the flag says so and does nothing. The first time, it downloads LanceDB into the data folder. Indexing runs beside the task, so a short run can end before a large folder is done; the next run carries on from where it stopped.
+
 ## What it does not do yet
 
-- Agents started by the lead work in their own copy of the folder and are not offered the mode. The lead is.
-- The CLI has no switch for it.
 - A folder is indexed as one: there is no per-subfolder choice beyond `.gitignore`.
