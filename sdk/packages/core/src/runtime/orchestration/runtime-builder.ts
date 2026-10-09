@@ -47,6 +47,7 @@ import {
 	ToolPresets,
 	type ToolRoutingRule,
 } from "../../extensions/tools";
+import { semanticSearchForAgent } from "../../extensions/tools/code-search";
 import { createPlanModeCommandGuardExtension } from "../../extensions/tools/command-guard-extension";
 import { DefaultToolNames } from "../../extensions/tools/constants";
 import {
@@ -345,7 +346,18 @@ function createBuiltinToolsList(
 					: {}),
 				// The lead's disk-backed overrides would re-point a sandboxed
 				// agent's tools at the real workspace.
-				...(delegated?.workspace ? {} : (executorOverrides ?? {})),
+				// The code search is the exception: it only reads, and reads
+				// through the agent's own copy.
+				...(delegated?.workspace
+					? executorOverrides?.semanticSearch
+						? {
+								semanticSearch: semanticSearchForAgent(
+									executorOverrides.semanticSearch,
+									delegated.workspace.executorOptions.overlay,
+								),
+							}
+						: {}
+					: (executorOverrides ?? {})),
 			},
 		}),
 		toolPolicies,

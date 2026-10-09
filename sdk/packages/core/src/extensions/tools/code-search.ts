@@ -47,6 +47,11 @@ export interface CreateCodeSearchOptions {
 	getConfig: () => CodeSearchConfig;
 	/** @default the shared code index of the data folder */
 	index?: CodeIndex;
+	/**
+	 * Download LanceDB, which holds the vectors, when it is not installed. For
+	 * a host with no panel to offer the download from. @default false
+	 */
+	install?: boolean;
 	log?: (message: string) => void;
 }
 
@@ -121,6 +126,7 @@ export function createCodeSearch(options: CreateCodeSearchOptions): CodeSearch {
 				const embedded = await index().embed(root, {
 					embedding,
 					settings: config.settings,
+					...(options.install ? { install: true } : {}),
 					onProgress: (done, total) =>
 						set({
 							running: true,
@@ -151,7 +157,7 @@ export function createCodeSearch(options: CreateCodeSearchOptions): CodeSearch {
 		available: (cwd) => codeSearchAvailable(options.getConfig(), cwd),
 		refresh,
 		state,
-		async search(query, cwd) {
+		async search(query, cwd, _context, searchOptions) {
 			const config = options.getConfig();
 			if (!codeSearchAvailable(config, cwd)) {
 				throw new Error(
@@ -162,6 +168,9 @@ export function createCodeSearch(options: CreateCodeSearchOptions): CodeSearch {
 				settings: config.settings,
 				embedding: config.embedding,
 				reranker: config.reranker,
+				...(searchOptions?.readFile
+					? { readFile: searchOptions.readFile }
+					: {}),
 			});
 			const current = state(cwd);
 			const notes = [...result.notes];
@@ -183,5 +192,29 @@ export function createCodeSearch(options: CreateCodeSearchOptions): CodeSearch {
 				? `${body}\n\n${notes.map((note) => `Note: ${note}`).join("\n")}`
 				: body;
 		},
+	};
+}
+
+/**
+ * The lead's code search as a delegated agent uses it.
+ *
+ * An agent is built without the lead's executors, so that none of them points
+ * its file tools at the real workspace. This one only reads, and what it reads
+ * for line numbers goes through the agent's own copy of the folder: a passage
+ * in a file the agent has edited is given the lines it is on there.
+ */
+export function semanticSearchForAgent(
+	lead: SemanticSearchExecutor | undefined,
+	overlay: { read(path: string): Promise<Buffer> } | undefined,
+): SemanticSearchExecutor | undefined {
+	if (!lead) return undefined;
+	if (!overlay) return lead;
+	return {
+		available: (cwd) => lead.available(cwd),
+		search: (query, cwd, context) =>
+			lead.search(query, cwd, context, {
+				readFile: async (absolutePath) =>
+					(await overlay.read(absolutePath)).toString("utf8"),
+			}),
 	};
 }

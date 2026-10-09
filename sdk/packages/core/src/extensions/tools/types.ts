@@ -103,7 +103,17 @@ export interface SemanticSearchExecutor {
 		query: string,
 		cwd: string,
 		context: AgentToolContext,
+		options?: SemanticSearchOptions,
 	): Promise<string>;
+}
+
+export interface SemanticSearchOptions {
+	/**
+	 * Read a file of the folder as the caller sees it, by absolute path. A
+	 * delegated agent works on its own copy: the lines a passage is on are the
+	 * lines of that copy, not of the lead's file.
+	 */
+	readFile?: (absolutePath: string) => Promise<string | undefined>;
 }
 
 /**

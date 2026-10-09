@@ -142,6 +142,8 @@ export interface CodeSearchOptions {
 	reranker?: RetrievalEndpoint;
 	/** Passages returned. @default 8 */
 	limit?: number;
+	/** How the folder's files are read for line numbers. @default from disk */
+	readFile?: (absolutePath: string) => Promise<string | undefined>;
 	signal?: AbortSignal;
 }
 
@@ -384,7 +386,10 @@ export class CodeIndex {
 			if (!files.has(hit.source)) {
 				files.set(
 					hit.source,
-					await readFile(join(root, hit.source), "utf8").catch(() => undefined),
+					await (options.readFile
+						? options.readFile(join(root, hit.source))
+						: readFile(join(root, hit.source), "utf8")
+					).catch(() => undefined),
 				);
 			}
 			const current = files.get(hit.source);

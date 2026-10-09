@@ -8,6 +8,7 @@ import {
 	type CodeSearchConfig,
 	codeSearchAvailable,
 	createCodeSearch,
+	semanticSearchForAgent,
 } from "./code-search";
 import { createSearchTool } from "./definitions";
 
@@ -120,6 +121,70 @@ describe("code search", () => {
 		await expect(search.search("x", workspace, context)).rejects.toThrow(
 			/turned off/,
 		);
+	});
+});
+
+describe("a delegated agent's code search", () => {
+	const lead = {
+		available: (cwd: string) => cwd === "/ws",
+		search: vi.fn(async (..._args: unknown[]) => "hits"),
+	};
+
+	it("is absent when the lead has none, and the lead's own without an overlay", () => {
+		expect(semanticSearchForAgent(undefined, undefined)).toBeUndefined();
+		expect(semanticSearchForAgent(lead, undefined)).toBe(lead);
+	});
+
+	it("answers for the same folders and reads lines through the agent's copy", async () => {
+		const overlay = {
+			read: vi.fn(async (path: string) => Buffer.from(`agent copy of ${path}`)),
+		};
+		const agent = semanticSearchForAgent(lead, overlay);
+
+		expect(agent?.available("/ws")).toBe(true);
+		expect(agent?.available("/elsewhere")).toBe(false);
+		await agent?.search("q", "/ws", context);
+
+		const options = lead.search.mock.calls[0]?.[3] as {
+			readFile: (path: string) => Promise<string | undefined>;
+		};
+		expect(await options.readFile("/ws/a.ts")).toBe("agent copy of /ws/a.ts");
+		expect(overlay.read).toHaveBeenCalledWith("/ws/a.ts");
+	});
+
+	it("gives a passage the lines it is on in the agent's edited copy", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "code-search-agent-"));
+		const workspace = await mkdtemp(join(tmpdir(), "code-search-agent-ws-"));
+		const index = new CodeIndex({ directory });
+		try {
+			const passage =
+				"export function invoiceTotal(lines: number[]) {\n\treturn 0;\n}";
+			await writeFile(join(workspace, "invoice.ts"), passage);
+			await index.sync(workspace);
+			const settings = {
+				...DEFAULT_LIBRARY_SETTINGS,
+				codeIndexWorkspaces: [workspace],
+			};
+			const search = createCodeSearch({
+				getConfig: () => ({ settings, embedding }),
+				index,
+			});
+			// The agent put three lines above it; the lead's file has not moved.
+			const agent = semanticSearchForAgent(search, {
+				read: async () => Buffer.from(`// a\n// b\n// c\n${passage}`),
+			});
+
+			expect(await search.search("invoiceTotal", workspace, context)).toContain(
+				"invoice.ts:1-3",
+			);
+			expect(await agent?.search("invoiceTotal", workspace, context)).toContain(
+				"invoice.ts:4-6",
+			);
+		} finally {
+			await index.close();
+			await rm(directory, { recursive: true, force: true });
+			await rm(workspace, { recursive: true, force: true });
+		}
 	});
 });
 

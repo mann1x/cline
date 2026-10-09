@@ -1198,6 +1198,7 @@ export {
 	codeSearchAvailable,
 	createCodeSearch,
 	formatCodeHits,
+	semanticSearchForAgent,
 } from "./extensions/tools/code-search";
 // The bracket scanner is host-independent and two hosts want it: the checker
 // above, and VS Code's own `check_file`, which pairs it with the language
@@ -1419,6 +1420,10 @@ export type {
 	ConfiguredAgentSummary,
 	DelegateToConfiguredAgentInput,
 } from "./extensions/tools/team/delegate-to-agent";
+export type {
+	SemanticSearchExecutor,
+	SemanticSearchOptions,
+} from "./extensions/tools/types";
 // A clip from a description: the OpenAI videos job routes.
 export {
 	createGenerateVideoTool,

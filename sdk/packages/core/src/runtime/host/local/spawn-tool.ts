@@ -20,6 +20,7 @@ import {
 	type ToolExecutors,
 	ToolPresets,
 } from "../../../extensions/tools";
+import { semanticSearchForAgent } from "../../../extensions/tools/code-search";
 import {
 	type DocumentExtractExecutorOptions,
 	documentReaderExecutorOptions,
@@ -159,8 +160,15 @@ export function delegatedToolOptions(
 			...(extractDocument ? { executorOptions: documents } : {}),
 		};
 	}
+	// None of the lead's executors, which would point the agent's file tools
+	// at the real workspace -- except the code search, which only reads.
+	const semanticSearch = semanticSearchForAgent(
+		leadExecutors?.semanticSearch,
+		workspace.executorOptions.overlay,
+	);
 	return {
 		executorOptions: { ...workspace.executorOptions, ...documents },
+		...(semanticSearch ? { executors: { semanticSearch } } : {}),
 		...(workspace.allowCommands ? {} : { enableBash: false }),
 	};
 }
