@@ -24,7 +24,7 @@ import type {
 import type { MarkerlessCompletionCause } from "@/services/telemetry/TelemetryService"
 import { Logger } from "@/shared/services/Logger"
 import { Osc633EventType, Osc633Parser } from "./osc633Parser"
-import { classifyShellPrompt, getLastLine } from "./shellPromptHeuristics"
+import { classifyShellPrompt, getLastLine, isPowerShellContinuationPrompt } from "./shellPromptHeuristics"
 import { shouldFallBackToTerminalSnapshot, terminalSnapshotFallbackMessage } from "./terminal-output-fallback"
 
 /** Outcome of racing one stream read against command-completion signals. */
@@ -34,6 +34,15 @@ type StreamReadOutcome =
 	| { kind: "executionEnd" }
 	| { kind: "idle" }
 	| { kind: "terminalClosed" }
+
+/** How long the clipboard snapshot of the terminal may take before it is given up on. */
+const TERMINAL_SNAPSHOT_TIMEOUT_MS = 5_000
+
+const INCOMPLETE_INPUT_MESSAGE =
+	"[The command was NOT run. The shell read it as unfinished and stopped at its continuation prompt (>>), waiting for more input: a quote, bracket or here-string in the command is not closed. The pending input was cancelled. In PowerShell a backslash does not escape a quote: inside '...' write '' for a quote, inside \"...\" write `\" . For text with many quotes, write it to a file with the editor and read the file in the command.]"
+
+const SHELL_NEVER_STARTED_MESSAGE =
+	"[The shell did not start this command within 30 seconds and printed nothing. The usual cause is an unfinished command line (an unclosed quote, bracket or here-string) that left the shell waiting for more input; check the quoting before sending it again. The terminal was set aside and the next command gets a fresh one.]"
 
 /**
  * VscodeTerminalProcess - Manages command execution in VSCode's integrated terminal.
@@ -81,10 +90,36 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 			return
 		}
 
+		// The snapshot goes through the clipboard and three workbench commands,
+		// none of which is bounded. It is a fallback for a command that already
+		// failed to report, so it must not be the thing that holds the command
+		// open: pandorum 2026-10-09, a command the shell never started stayed
+		// "running" for the full 300 s with nothing logged after it was sent.
+		const snapshotWithin = async (): Promise<string> => {
+			let timer: NodeJS.Timeout | undefined
+			try {
+				return await Promise.race([
+					getLatestTerminalOutput(),
+					new Promise<string>((resolve) => {
+						timer = setTimeout(() => {
+							Logger.warn(
+								`[TerminalProcess] Reading the terminal's contents did not finish within ${TERMINAL_SNAPSHOT_TIMEOUT_MS}ms; continuing without them`,
+							)
+							resolve("")
+						}, TERMINAL_SNAPSHOT_TIMEOUT_MS)
+					}),
+				])
+			} finally {
+				if (timer) {
+					clearTimeout(timer)
+				}
+			}
+		}
+
 		// When command does not produce any output, we can assume the shell integration API failed and as a fallback return the current terminal contents
 		const returnCurrentTerminalContents = async () => {
 			try {
-				const terminalSnapshot = await getLatestTerminalOutput()
+				const terminalSnapshot = await snapshotWithin()
 				if (terminalSnapshot && terminalSnapshot.trim()) {
 					this.emit("line", terminalSnapshotFallbackMessage(terminalSnapshot))
 				}
@@ -198,6 +233,9 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 			// commonly an ssh session started from this terminal, where the
 			// remote shell emits no OSC 633 sequences.
 			let completedWithoutMarkers = false
+			// The shell took the line as unfinished and is at its continuation
+			// prompt: nothing ran, and nothing will until the input is cancelled.
+			let incompleteInput = false
 			let markerlessCause: MarkerlessCompletionCause | undefined
 			let markerlessQuietMs = 0
 			let receivedAnyData = false
@@ -234,6 +272,12 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 					// HTML/XML tag, a progress meter — so it's only trusted once
 					// the full quiet timeout has elapsed, same as no match at all.
 					const promptCandidate = getLastLine(stripAnsi(preCommandBuffer))
+					if (isPowerShellContinuationPrompt(promptCandidate)) {
+						incompleteInput = true
+						completedWithoutMarkers = true
+						markerlessCause = "incomplete_input"
+						break
+					}
 					const promptStrength = classifyShellPrompt(promptCandidate)
 					const quietTimeoutReached = markerlessQuietMs >= MARKERLESS_MAX_QUIET_TIME
 					if (promptStrength === "strong" || quietTimeoutReached) {
@@ -339,6 +383,22 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 				}
 			}
 
+			if (completedWithoutMarkers) {
+				Logger.log(
+					`[TerminalProcess] Command ended without a completion marker (cause=${markerlessCause}, quiet=${markerlessQuietMs}ms, data=${receivedAnyData})`,
+				)
+			}
+			if (incompleteInput) {
+				// Ctrl+C drops the pending input and returns the shell to its
+				// prompt, so the terminal is usable and the next command is not
+				// appended to this one.
+				try {
+					terminal.sendText("\u0003", false)
+				} catch (error) {
+					Logger.warn("[TerminalProcess] Could not cancel the unfinished input", error)
+				}
+			}
+
 			closeDisposable.dispose()
 			this.activeCloseDisposable = undefined
 			// Release the stream iterator. On the markerless/terminal-closed
@@ -393,7 +453,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 			// shells where shell integration is present but not emitting markers),
 			// emit the buffered pre-C text as a fallback so the user still gets
 			// output.
-			if (!didSeeCommandExecuted && preCommandBuffer.trim()) {
+			if (!didSeeCommandExecuted && preCommandBuffer.trim() && !incompleteInput) {
 				const fallbackData = stripAnsi(preCommandBuffer)
 				if (fallbackData) {
 					this.fullOutput += fallbackData
@@ -420,7 +480,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 			})
 
 			// the command process is finished, let's check the output to see if we need to use the terminal capture fallback
-			if (!this.fullOutput.trim() && captureFailed) {
+			if (!this.fullOutput.trim() && captureFailed && !incompleteInput) {
 				// No output captured via shell integration, trying fallback
 				telemetryService.captureTerminalOutputFailure(
 					terminalClosed ? TerminalOutputFailureReason.TERMINAL_CLOSED : TerminalOutputFailureReason.TIMEOUT,
@@ -438,7 +498,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 				if (!terminalClosed) {
 					await returnCurrentTerminalContents()
 					// Check if fallback worked
-					const terminalSnapshot = await getLatestTerminalOutput()
+					const terminalSnapshot = await snapshotWithin()
 					if (terminalSnapshot && terminalSnapshot.trim()) {
 						telemetryService.captureTerminalExecution(true, "vscode", "clipboard", fallbackDetails)
 					} else {
@@ -478,6 +538,10 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 			if (terminalClosed) {
 				this.terminalClosedMidCommand = true
 				this.emit("line", "[The terminal closed while the command was running; output may be incomplete.]")
+			} else if (incompleteInput) {
+				this.emit("line", INCOMPLETE_INPUT_MESSAGE)
+			} else if (completedWithoutMarkers && markerlessCause === "no_data") {
+				this.emit("line", SHELL_NEVER_STARTED_MESSAGE)
 			} else if (completedWithoutMarkers) {
 				this.emit(
 					"line",
@@ -496,7 +560,9 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 			// is inside an ssh session) must not be reused for later commands:
 			// tell the manager to evict it without conflating this path with the
 			// sendText fallback, which has different cleanup semantics.
-			if (completedWithoutMarkers) {
+			// Not after an unfinished input: its markers are fine, the shell just
+			// never ran anything, and the cancel above put it back at its prompt.
+			if (completedWithoutMarkers && !incompleteInput) {
 				this.markCommandUnobserved("markerlessShellIntegration")
 			}
 			this.emit("completed", this.getCompletionDetails())
@@ -512,7 +578,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 			// For terminals without shell integration, also try to capture terminal content
 			await returnCurrentTerminalContents()
 			// Check if clipboard fallback worked
-			const terminalSnapshot = await getLatestTerminalOutput()
+			const terminalSnapshot = await snapshotWithin()
 			if (terminalSnapshot && terminalSnapshot.trim()) {
 				telemetryService.captureTerminalExecution(true, "vscode", "clipboard", {
 					terminalExecutionMode: "vscodeTerminal",

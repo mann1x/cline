@@ -84,3 +84,15 @@ export function classifyShellPrompt(lastLine: string): ShellPromptStrength {
 export function looksLikeShellPrompt(lastLine: string): boolean {
 	return classifyShellPrompt(lastLine) !== "none"
 }
+
+/**
+ * Whether a line is PowerShell's continuation prompt: the shell took the line
+ * as unfinished -- an unclosed quote, bracket or here-string -- and is waiting
+ * for the rest instead of running anything.
+ *
+ * Exactly `>>`, because that is what PowerShell prints and little else does.
+ * bash's `>` is left alone: it is also the last character of ordinary output.
+ */
+export function isPowerShellContinuationPrompt(lastLine: string): boolean {
+	return /^>>$/.test(lastLine.trim())
+}

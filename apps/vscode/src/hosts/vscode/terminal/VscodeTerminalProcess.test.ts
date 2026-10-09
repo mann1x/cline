@@ -586,6 +586,34 @@ describe("TerminalProcess (Integration Tests)", () => {
 				.should.be.true()
 		})
 
+		it("reports an unfinished command at the >> prompt and cancels it", async () => {
+			// pandorum 2026-10-09: a `powershell -Command "..."` with an unclosed
+			// quote. PowerShell stopped at `>>`, nothing ran, and the tool waited
+			// 300 seconds before giving up.
+			const terminal = TerminalRegistry.createTerminal().terminal
+			createdTerminals.push(terminal)
+			stubHangingShellIntegration(terminal, ["powershell -Command \"$line = 'abc\n", ">> "])
+			const sendText = sandbox.stub(terminal, "sendText")
+
+			const emitSpy = sandbox.spy(process, "emit")
+			const runPromise = process.run(terminal, "powershell -Command \"$line = 'abc")
+
+			// One idle period after the data (3s), plus the exit-code race.
+			await sandbox.clock.tickAsync(15_000)
+			await runPromise
+			;(emitSpy as sinon.SinonSpy).calledWith("completed").should.be.true()
+			const lines = (emitSpy as sinon.SinonSpy)
+				.getCalls()
+				.filter((call) => call.args[0] === "line")
+				.map((call) => String(call.args[1]))
+			lines.some((line) => line.includes("The command was NOT run")).should.be.true()
+			// The echo of the broken command is not handed back as its output.
+			lines.some((line) => line.includes("$line = 'abc")).should.be.false()
+			sendText.calledWith("\u0003", false).should.be.true()
+			// Its shell integration is fine, so the terminal stays in the pool.
+			;(emitSpy as sinon.SinonSpy).calledWith("unobserved_command").should.be.false()
+		})
+
 		it("should complete when no data ever arrives", async () => {
 			const terminal = TerminalRegistry.createTerminal().terminal
 			createdTerminals.push(terminal)

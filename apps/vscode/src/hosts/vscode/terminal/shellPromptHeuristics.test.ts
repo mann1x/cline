@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { classifyShellPrompt, getLastLine, looksLikeShellPrompt } from "./shellPromptHeuristics"
+import { classifyShellPrompt, getLastLine, isPowerShellContinuationPrompt, looksLikeShellPrompt } from "./shellPromptHeuristics"
 
 describe("getLastLine", () => {
 	it("returns the whole string when there are no newlines", () => {
@@ -85,5 +85,22 @@ describe("classifyShellPrompt", () => {
 		["a nested-shell prompt fragment", "> "],
 	])("classifies %s as weak, not strong", (_name, line) => {
 		expect(classifyShellPrompt(line)).toBe("weak")
+	})
+})
+
+describe("isPowerShellContinuationPrompt", () => {
+	it("recognises the prompt PowerShell stops at when a command is unfinished", () => {
+		expect(isPowerShellContinuationPrompt(">> ")).toBe(true)
+		expect(isPowerShellContinuationPrompt(">>")).toBe(true)
+	})
+
+	it.each([
+		["a PowerShell prompt", "PS C:\\Users\\manni>"],
+		["a Python REPL prompt", ">>>"],
+		["a bash continuation prompt", "> "],
+		["output that ends with it", "a >> b.txt"],
+		["nothing", ""],
+	])("does not take %s for it", (_name, line) => {
+		expect(isPowerShellContinuationPrompt(line)).toBe(false)
 	})
 })

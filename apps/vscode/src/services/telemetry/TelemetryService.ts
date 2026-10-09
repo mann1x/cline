@@ -53,7 +53,7 @@ export type VscodeOutputMethod = "shell_integration" | "markerless_heuristic" | 
  *   MARKERLESS_MAX_QUIET_TIME without a confident prompt match.
  * - "no_data": no output ever arrived and the full quiet time elapsed.
  */
-export type MarkerlessCompletionCause = "prompt_quiet" | "max_quiet_time" | "no_data"
+export type MarkerlessCompletionCause = "prompt_quiet" | "max_quiet_time" | "no_data" | "incomplete_input"
 
 /**
  * Standalone-specific output capture methods
