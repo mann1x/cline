@@ -1,0 +1,59 @@
+---
+title: "Code search by meaning"
+sidebarTitle: "Code search by meaning"
+description: "An index of a folder's code that the model searches by describing what it is looking for: how to turn it on for a folder, what is indexed, when it is updated, and how it sits beside regex search and the language server."
+---
+
+The model has three ways to find code. `search_codebase` matches a pattern, which is exact and fast when the name is known. `ask_lsp` asks the language server where a symbol is defined, used and implemented, which is exact when the symbol is known. Neither helps when the model knows what a piece of code *does* and not what it is *called*: "where is a user's password checked", "what retries a failed upload".
+
+**Code search by meaning** covers that case. The folder's source files are split into passages, each passage is turned into a vector by an embedding model, and a question is answered with the passages closest to it.
+
+It is **off by default**, and turned on **per folder**.
+
+## Turning it on
+
+1. Set an embedding model: in **Settings > API Configuration**, tick **Use an embedding model** and name one on the **Embedding** tab. This is the same model the [Library](/features/library) and [Memory](/features/memory) use, and the same one-time download of LanceDB.
+2. Open **Settings > Library** in the folder you want indexed and tick **Index the code of this folder**.
+
+Indexing starts at once and the panel shows how far it is. The Library itself does not have to be on.
+
+It is a choice per folder because building the index sends every source file of the folder to the embedding model. With a model on your own machine nothing leaves it; with a hosted one, the code does.
+
+## What the model gets
+
+No new tool. In a folder that is indexed, `search_codebase` gains a `mode`:
+
+| `mode` | The queries are | Answered with |
+| --- | --- | --- |
+| `regex` (the default) | Patterns | The matching lines, as before |
+| `semantic` | Questions or descriptions in plain words | The passages that best match, each with its file and lines |
+
+In a folder that is not indexed the tool is exactly what it was: the mode is not in its description, so the model is never offered a search that cannot answer.
+
+A search made while the index is still being built is answered from what is in so far, and says that files may be missing. Until the first vectors exist it falls back to keywords and says so.
+
+## What is indexed
+
+- The files `.gitignore` leaves in. Ignored files are not read.
+- Text files up to 256 KB. Binary files, lockfiles, minified and generated files, and source maps are left out.
+- At most 20,000 files per folder.
+
+Passages are 1,500 characters with a small overlap, and that does not follow the Library's chunk settings: line numbers have to stay exact.
+
+## When it is updated
+
+When a task starts in the folder, and when you press **Update now**. Only files whose size or modification time changed are read again, and only their passages are embedded again, so after the first run an update takes a moment. Files that were deleted are dropped.
+
+It is not updated while a task runs. A passage from a file the task has since edited is still returned, with its lines when the passage can still be found in the file and without them when it cannot.
+
+## Turning it off
+
+Untick the box. The model stops being offered the mode from the next task. The index is kept, in case you tick the box again, until you press **Delete the index**.
+
+The index is in Cerebriline's data folder, under `code-index`, not in your project.
+
+## What it does not do yet
+
+- Agents started by the lead work in their own copy of the folder and are not offered the mode. The lead is.
+- The CLI has no switch for it.
+- A folder is indexed as one: there is no per-subfolder choice beyond `.gitignore`.
