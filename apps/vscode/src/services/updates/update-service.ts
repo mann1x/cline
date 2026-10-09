@@ -45,6 +45,13 @@ let activeContext: vscode.ExtensionContext | undefined
 const FIRST_CHECK_DELAY_MS = 20_000
 
 /**
+ * How often a window that stays open asks again. The throttle in
+ * `shouldCheckNow` still decides whether a tick reaches GitHub, so this is the
+ * resolution of the daily check and not its rate.
+ */
+const RECHECK_TICK_MS = 60 * 60 * 1000
+
+/**
  * Read from the plugin's own settings store, which is where the panel writes.
  *
  * Not `workspace.getConfiguration`. This was a `contributes.configuration`
@@ -186,6 +193,15 @@ export async function installAvailableUpdate(): Promise<void> {
 	await checkForUpdates(context, { manual: true, install: true })
 }
 
+/** Check now, whatever the schedule says, and say what was found. The About tab's button. */
+export async function checkForUpdatesNow(): Promise<void> {
+	const context = activeContext
+	if (!context) {
+		return
+	}
+	await checkForUpdates(context, { manual: true })
+}
+
 /**
  * @param manual A check the user asked for: ignores the throttle, and says so
  * when there is nothing to report. The scheduled check stays silent instead,
@@ -278,15 +294,29 @@ export async function checkForUpdates(
 /**
  * Arm the scheduled check.
  *
- * One check per activation, delayed, and then the throttle in `shouldCheckNow`
- * decides whether it does anything. There is no interval timer: a window that
- * stays open for a week is not the case worth serving, and a timer is a
- * disposable that has to be got right for no benefit.
+ * One check shortly after activation, then one tick an hour; the throttle in
+ * `shouldCheckNow` decides whether a tick does anything, so GitHub is still
+ * asked once a day.
+ *
+ * There was no interval at first, on the reasoning that a window open for a
+ * week was not worth serving. It is the common case: reported 2026-10-09, a
+ * window open since the day before never heard of the release published that
+ * evening, because the only check it would ever make had already run.
  */
 export function registerUpdateChecks(context: vscode.ExtensionContext): void {
 	activeContext = context
 	const timer = setTimeout(() => {
 		void checkForUpdates(context)
 	}, FIRST_CHECK_DELAY_MS)
-	context.subscriptions.push(new vscode.Disposable(() => clearTimeout(timer)))
+	const recheck = setInterval(() => {
+		void checkForUpdates(context)
+	}, RECHECK_TICK_MS)
+	// Never the reason the extension host stays alive.
+	recheck.unref?.()
+	context.subscriptions.push(
+		new vscode.Disposable(() => {
+			clearTimeout(timer)
+			clearInterval(recheck)
+		}),
+	)
 }

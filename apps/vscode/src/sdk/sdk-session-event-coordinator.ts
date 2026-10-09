@@ -146,6 +146,19 @@ export class SdkSessionEventCoordinator {
 		}
 
 		if (result.messages.length > 0) {
+			// Counted where they are shown, so the history list's number is the
+			// number of red rows in the conversation and not a second opinion.
+			const errorsShown = countErrorsShown(result.messages)
+			if (errorsShown > 0) {
+				Promise.resolve(
+					this.options.taskHistory.recordTaskErrors(
+						this.options.getTask()?.taskId ?? this.options.sessions.getActiveSession()?.sessionId,
+						errorsShown,
+					),
+				).catch((error) => {
+					Logger.error("[SdkController] Failed to persist the task's error count:", error)
+				})
+			}
 			this.options.messages.appendAndEmit(result.messages, event)
 		}
 
@@ -379,4 +392,26 @@ export class SdkSessionEventCoordinator {
 			)
 		}
 	}
+}
+
+/**
+ * The messages in a batch that a user reads as an error: a red error row, a
+ * failed request, a run stopped at the mistake limit. A partial message is a
+ * row still being written and is counted when it is complete.
+ */
+export function countErrorsShown(
+	messages: ReadonlyArray<{ type?: string; say?: string; ask?: string; partial?: boolean }>,
+): number {
+	let count = 0
+	for (const message of messages) {
+		if (message.partial === true) {
+			continue
+		}
+		if (message.type === "say" && message.say === "error") {
+			count += 1
+		} else if (message.type === "ask" && (message.ask === "api_req_failed" || message.ask === "mistake_limit_reached")) {
+			count += 1
+		}
+	}
+	return count
 }

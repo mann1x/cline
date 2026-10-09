@@ -185,6 +185,13 @@ const HistoryViewItem = ({
 							<div className="line-clamp-1 overflow-hidden break-words whitespace-pre-wrap flex-1 min-w-0">
 								<span className="ph-no-capture">{item.task}</span>
 							</div>
+							{(item.errorCount ?? 0) > 0 && (
+								<span
+									className="text-xs rounded px-1.5 py-0.5 bg-error/15 text-error flex-shrink-0"
+									title="Errors shown in this conversation: failed tool calls, failed requests and stopped runs">
+									{item.errorCount} {item.errorCount === 1 ? "error" : "errors"}
+								</span>
+							)}
 							{item.isLegacy && (
 								<span className="text-xs uppercase rounded px-1.5 py-0.5 bg-accent/20 text-description flex-shrink-0">
 									Legacy

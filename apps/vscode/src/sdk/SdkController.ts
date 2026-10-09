@@ -2222,6 +2222,7 @@ export class Controller {
 					metadataBoolean(metadata, "legacyTask") === true ||
 					metadataBoolean(metadata, "migratedFromLegacyTask") === true,
 				tags: metadataTags(metadata),
+				errorCount: metadataNumber(metadata, "errorCount") ?? 0,
 				// Rendered here rather than in the webview: which of these are
 				// worth showing is a fact about providers.json, and the list is
 				// bounded by the page size rather than by the whole history.
@@ -2264,6 +2265,7 @@ export class Controller {
 					// The running task has no session record to read yet.
 					settings: [],
 					tags: [],
+					errorCount: 0,
 				})
 			}
 		}

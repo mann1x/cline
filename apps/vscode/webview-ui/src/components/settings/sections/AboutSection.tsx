@@ -1,4 +1,7 @@
-import { VSCodeLink } from "@vscode/webview-ui-toolkit/react"
+import { EmptyRequest } from "@shared/proto/cline/common"
+import { VSCodeButton, VSCodeLink } from "@vscode/webview-ui-toolkit/react"
+import { useState } from "react"
+import { UiServiceClient } from "@/services/grpc-client"
 import Section from "../Section"
 
 interface AboutSectionProps {
@@ -13,6 +16,15 @@ const VARIANT_LABELS: Record<"legacy" | "next", string> = {
 }
 
 const AboutSection = ({ version, extensionVariant, renderSectionHeader }: AboutSectionProps) => {
+	const [checking, setChecking] = useState(false)
+	const checkForUpdates = () => {
+		setChecking(true)
+		UiServiceClient.checkForUpdatesNow(EmptyRequest.create({}))
+			.catch(console.error)
+			// The answer is a VS Code notification; the button only needs to
+			// show that the click was taken.
+			.finally(() => setTimeout(() => setChecking(false), 1500))
+	}
 	return (
 		<div>
 			{renderSectionHeader("about")}
@@ -31,6 +43,15 @@ const AboutSection = ({ version, extensionVariant, renderSectionHeader }: AboutS
 						tasks step-by-step with tools that let him create & edit files, explore large projects, use the browser,
 						and execute terminal commands (after you grant permission).
 					</p>
+
+					<div className="flex items-center gap-3">
+						<VSCodeButton appearance="secondary" disabled={checking} onClick={checkForUpdates}>
+							{checking ? "Checking…" : "Check for updates"}
+						</VSCodeButton>
+						<span className="text-xs text-description">
+							Asks GitHub for the latest release now. The answer appears as a notification.
+						</span>
+					</div>
 
 					<h3 className="text-md font-semibold">Community & Support</h3>
 					<p>

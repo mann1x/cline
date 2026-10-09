@@ -25,6 +25,12 @@ export type HistoryItem = {
 	 */
 	apiProvider?: string
 	isLegacy?: boolean
+	/**
+	 * How many errors the conversation showed: failed tool calls, provider
+	 * errors, a stopped run. Counted as they happen, so it is absent for tasks
+	 * recorded before the count existed.
+	 */
+	errorCount?: number
 
 	/**
 	 * What the session ran with, as label/value rows ready to display.

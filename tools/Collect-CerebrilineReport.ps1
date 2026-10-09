@@ -371,6 +371,9 @@ function Get-SessionSummary {
         Provider = [string](Get-JsonField $meta 'provider' 'unknown')
         Model    = [string](Get-JsonField $meta 'model' 'unknown')
         Status   = [string](Get-JsonField $meta 'status')
+        # Counted by the extension as the conversation shows them (4.100.244
+        # on). -1 for a session recorded before that, which is not "none".
+        Errors   = [int](Get-JsonField (Get-JsonField $meta 'metadata' $null) 'errorCount' -1)
         Cwd      = [string](Get-JsonField $meta 'cwd')
         Task     = (([string](Get-JsonField $meta 'prompt')) -replace '\s+', ' ').Trim()
         Bytes    = $bytes
@@ -394,10 +397,12 @@ function Format-Column {
 function Format-SessionRow {
     param($Session)
 
-    '{0}  {1}  {2}  {3}  {4}' -f
+    $errors = if ($Session.Errors -lt 0) { '      -' } elseif ($Session.Errors -eq 0) { '      0' } else { '{0,3} ERR' -f $Session.Errors }
+    '{0}  {1}  {2}  {3}  {4}  {5}' -f
         $Session.When.ToString('yyyy-MM-dd HH:mm'),
         (Format-Column $Session.Model 28),
         (Format-Column $Session.Status 9),
+        $errors,
         (Format-Size $Session.Bytes),
         (Format-Column $Session.Task 46)
 }
@@ -547,8 +552,8 @@ function Select-SessionsConsole {
 
     Add-Note ''
     Add-Note 'Sessions on this machine, newest first:' 'Cyan'
-    Add-Note ('      {0}  {1}  {2}  {3}  {4}' -f
-        'started         ', (Format-Column 'model' 28), (Format-Column 'status' 9), 'size   ', 'task') 'DarkGray'
+    Add-Note ('      {0}  {1}  {2}  {3}  {4}  {5}' -f
+        'started         ', (Format-Column 'model' 28), (Format-Column 'status' 9), ' errors', 'size     ', 'task') 'DarkGray'
     for ($i = 0; $i -lt $Sessions.Count; $i++) {
         Add-Note ('  {0,2}. {1}' -f ($i + 1), (Format-SessionRow $Sessions[$i]))
     }
@@ -919,7 +924,7 @@ $environment = [ordered]@{
     # exthost/renderer logs, which are the only record of the two failures
     # that end with a blank panel -- a report at 1.0.0 cannot answer that
     # question no matter how carefully it is read.
-    scriptVersion     = '1.1.0'
+    scriptVersion     = '1.2.0'
     computerName      = $env:COMPUTERNAME
     powerShell        = $PSVersionTable.PSVersion.ToString()
     os                = "$($os.Caption) $($os.Version)"
@@ -945,6 +950,7 @@ $environment = [ordered]@{
             provider = $_.Provider
             model    = $_.Model
             status   = $_.Status
+            errors   = $_.Errors
             cwd      = $_.Cwd
             task     = $_.Task
         }

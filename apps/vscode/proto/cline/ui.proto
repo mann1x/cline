@@ -323,6 +323,9 @@ service UiService {
   // Install the release the last update check found. The home-page banner's
   // button; the same work the notification's "Install" does.
   rpc installAvailableUpdate(EmptyRequest) returns (Empty);
+  // Ask GitHub for the latest release now, whatever the schedule says. The
+  // About tab's button; the answer arrives as a notification.
+  rpc checkForUpdatesNow(EmptyRequest) returns (Empty);
 
   // Tracks intent signals before task creation or first model activity
   rpc trackIntent(IntentEvent) returns (Empty);

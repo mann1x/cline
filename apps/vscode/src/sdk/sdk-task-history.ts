@@ -118,6 +118,8 @@ export function historyItemToSessionMetadata(item: HistoryItem, fallbackModelId?
 		cacheReads: item.cacheReads ?? 0,
 		modelId: item.modelId ?? fallbackModelId ?? "",
 		legacyTask: item.isLegacy ?? false,
+		// Only when known, for the reason given for the tags below.
+		...(item.errorCount !== undefined ? { errorCount: item.errorCount } : {}),
 		// Only when the caller has them. This is spread over the stored
 		// metadata, so writing a default here would erase the tags of any
 		// conversation updated through an item that was built without them.
@@ -217,6 +219,7 @@ export function sessionHistoryRecordToHistoryItem(item: SessionHistoryRecord): H
 		isLegacy:
 			metadataBoolean(metadata, "legacyTask") === true || metadataBoolean(metadata, "migratedFromLegacyTask") === true,
 		tags: metadataTags(metadata),
+		errorCount: metadataNumber(metadata, "errorCount"),
 	}
 }
 
@@ -747,6 +750,40 @@ export class SdkTaskHistory {
 		return (await this.listHistory()).map(sessionHistoryRecordToHistoryItem)
 	}
 
+	/**
+	 * One read-modify-write of a task's record at a time.
+	 *
+	 * Usage and the error count are both added to a record that is read, changed
+	 * and written back. Two of those overlapping is one of them lost: the second
+	 * writes the value it read before the first landed.
+	 */
+	private recordWrites: Promise<void> = Promise.resolve()
+	private serialRecordWrite(work: () => Promise<void>): Promise<void> {
+		const next = this.recordWrites.then(work, work)
+		this.recordWrites = next.catch(() => undefined)
+		return next
+	}
+
+	/**
+	 * Add to the count of errors a conversation showed, for the history list.
+	 *
+	 * The list is where someone looks for the run that went wrong, to send its
+	 * logs; without a count every row looks the same until it is opened.
+	 */
+	async recordTaskErrors(taskId: string | undefined, count: number): Promise<void> {
+		if (!taskId || count <= 0) {
+			return
+		}
+		await this.serialRecordWrite(async () => {
+			const historyItem = await this.findHistoryItem(taskId)
+			if (!historyItem || historyItem.isLegacy) {
+				return
+			}
+			historyItem.errorCount = (historyItem.errorCount ?? 0) + count
+			await this.updateTaskHistoryItem(historyItem)
+		})
+	}
+
 	async updateTaskUsage(taskId: string | undefined, usage: TaskUsage): Promise<void> {
 		Logger.log(
 			`[SdkController] Task usage: tokensIn=${usage.tokensIn}, tokensOut=${usage.tokensOut}, cost=${usage.totalCost ?? 0}`,
@@ -755,7 +792,10 @@ export class SdkTaskHistory {
 		if (!taskId) {
 			return
 		}
+		await this.serialRecordWrite(() => this.addTaskUsage(taskId, usage))
+	}
 
+	private async addTaskUsage(taskId: string, usage: TaskUsage): Promise<void> {
 		const historyItem = await this.findHistoryItem(taskId)
 		if (!historyItem) {
 			return

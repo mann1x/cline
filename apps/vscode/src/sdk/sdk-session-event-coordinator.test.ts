@@ -515,6 +515,7 @@ function makeCoordinator(input: Partial<MakeCoordinatorInput> = {}) {
 		},
 		taskHistory: {
 			updateTaskUsage: vi.fn(),
+			recordTaskErrors: vi.fn(),
 		},
 		getTask: vi.fn(() => input.task),
 		postStateToWebview: vi.fn().mockResolvedValue(undefined),
@@ -574,3 +575,19 @@ interface MakeCoordinatorInput {
 		}
 	}
 }
+
+describe("countErrorsShown", () => {
+	it("counts the rows a user reads as an error, and not a row still being written", async () => {
+		const { countErrorsShown } = await import("./sdk-session-event-coordinator")
+		expect(
+			countErrorsShown([
+				{ type: "say", say: "error", partial: false },
+				{ type: "say", say: "error", partial: true },
+				{ type: "say", say: "text" },
+				{ type: "ask", ask: "api_req_failed" },
+				{ type: "ask", ask: "mistake_limit_reached" },
+				{ type: "ask", ask: "followup" },
+			]),
+		).toBe(3)
+	})
+})

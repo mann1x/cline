@@ -200,6 +200,9 @@ message TaskItem {
   repeated TaskSettingRow settings = 14;
   // Labels the user gave the task.
   repeated string tags = 15;
+  // How many errors the conversation showed. 0 for tasks recorded before the
+  // count existed.
+  int32 error_count = 16;
 }
 
 // One line of the history list's hover card.
