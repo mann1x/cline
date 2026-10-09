@@ -1047,6 +1047,11 @@ export interface AgentConfig {
 	 */
 	toolPolicies?: Record<string, ToolPolicy>;
 	/**
+	 * Why a tool this session does not offer is absent, by tool name. A call
+	 * to one of these is answered with the reason.
+	 */
+	unavailableToolReasons?: Record<string, string>;
+	/**
 	 * Optional callback to request client approval when a tool policy disables auto-approval.
 	 */
 	requestToolApproval?: (
@@ -1395,6 +1400,7 @@ export const AgentConfigSchema = z.object({
 			}),
 		)
 		.optional(),
+	unavailableToolReasons: z.record(z.string(), z.string()).optional(),
 	requestToolApproval: z
 		.function()
 		.input([

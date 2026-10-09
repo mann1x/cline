@@ -3422,6 +3422,48 @@ describe("AgentRuntime", () => {
 		expect(executeTool).not.toHaveBeenCalled();
 	});
 
+	it("answers a call to a withheld tool with the reason it is withheld", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{
+					type: "tool-call-delta",
+					toolCallId: "call_withheld",
+					toolName: "spawn_agent",
+					inputText: '{"task":"x"}',
+					metadata: {
+						inputParseError:
+							"Tool call spawn_agent was rejected before execution: AI_NoSuchToolError",
+					},
+				},
+				{ type: "finish", reason: "tool-calls" },
+			],
+			(request) => {
+				const toolResult = request.messages.at(-1)?.content[0];
+				expect(toolResult).toMatchObject({
+					type: "tool-result",
+					isError: true,
+					output: {
+						error:
+							'Tool "spawn_agent" is not offered in this session: one request at a time.',
+					},
+				});
+				return [
+					{ type: "text-delta", text: "recovered" },
+					{ type: "finish", reason: "stop" },
+				];
+			},
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			unavailableToolReasons: { spawn_agent: "one request at a time." },
+		});
+
+		const result = await runtime.run("Start");
+
+		expect(result.outputText).toBe("recovered");
+	});
+
 	it("accepts corrected full argument snapshots for the same streamed tool call", async () => {
 		const model = new ScriptedModel([
 			() => [

@@ -66,6 +66,8 @@ export interface BuiltRuntime {
 	configuredAgents?: readonly ConfiguredAgentConfig[];
 	extensions?: AgentConfig["extensions"];
 	completionPolicy?: AgentConfig["completionPolicy"];
+	/** Why a tool this session withholds is absent, by tool name. */
+	unavailableToolReasons?: Record<string, string>;
 	registerLeadAgent?: (agent: LeadAgentHandle) => void;
 	shutdown: (reason: string) => Promise<void> | void;
 }

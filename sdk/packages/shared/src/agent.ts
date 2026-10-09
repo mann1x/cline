@@ -960,6 +960,12 @@ export interface AgentRuntimeConfig {
 	 */
 	maxParallelToolCalls?: number;
 	toolPolicies?: Record<string, ToolPolicy>;
+	/**
+	 * Why a tool this session does not offer is absent, by tool name. A call
+	 * to one of these is answered with the reason instead of the bare
+	 * "unavailable tool" rejection, which tells a model nothing it can act on.
+	 */
+	unavailableToolReasons?: Record<string, string>;
 	toolContextMetadata?: Record<string, unknown>;
 	requestToolApproval?: (
 		request: ToolApprovalRequest,

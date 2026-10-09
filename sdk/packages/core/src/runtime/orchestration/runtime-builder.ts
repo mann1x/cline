@@ -610,6 +610,56 @@ export function resolveSessionAgentNodes(
 	}) as NonNullable<CoreSessionConfig["agentNodes"]>;
 }
 
+/**
+ * What to tell a model that calls a delegation tool this session withholds.
+ *
+ * The rejection it got before named every tool on offer and no cause, so it
+ * read as a transient failure and the same call came back. This says why, what
+ * to do instead, and that asking again will not change the answer.
+ */
+export function describeWithheldDelegationTools(input: {
+	offered: readonly string[];
+	subagentsEnabled: boolean;
+	serialised: boolean;
+	multipleNodes: boolean;
+}): Record<string, string> {
+	const offered = new Set(input.offered);
+	const withheld = ["spawn_agent", "spawn_swarm"].filter(
+		(name) => !offered.has(name),
+	);
+	if (withheld.length === 0) {
+		return {};
+	}
+	let why: string;
+	if (!input.subagentsEnabled) {
+		why = "sub-agents are switched off in this session's settings.";
+	} else if (input.serialised) {
+		why = `${
+			input.multipleNodes
+				? "every configured node serves 1 request at a time"
+				: "this endpoint serves 1 request at a time"
+		}, so a spawned agent would run after you rather than beside you.`;
+	} else {
+		return {};
+	}
+	const configured = input.offered.filter((name) =>
+		name.startsWith("subagent_"),
+	);
+	const instead =
+		configured.length > 0
+			? `Do the work yourself, or hand one job at a time to a configured agent: ${configured.join(", ")}.`
+			: "Do the work yourself.";
+	const remedy = input.subagentsEnabled
+		? `Only the user can change this, by raising the profile's parallel sessions${input.multipleNodes ? " or a node's capacity" : ""}.`
+		: "Only the user can change this, in the settings.";
+	const reasons: Record<string, string> = {};
+	for (const name of withheld) {
+		reasons[name] =
+			`${why} ${instead} Do not call ${name} again in this session; it will be refused the same way. ${remedy}`;
+	}
+	return reasons;
+}
+
 function normalizeConfig(
 	config: CoreSessionConfig,
 ): Required<
@@ -1129,7 +1179,12 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			);
 		}
 		// Tools that are simply absent are their own kind of confusion, so the
-		// one place that knows why says so.
+		// one place that knows why says so -- in the log here, and to the model
+		// when it calls one anyway (`unavailableToolReasons` below).
+		const delegationSerialised = !delegationCanRunInParallel({
+			maxConcurrentAgents: config.maxConcurrentAgents,
+			nodes: resolveSessionAgentNodes(config),
+		});
 		if (
 			!delegationCanRunInParallel({
 				maxConcurrentAgents: config.maxConcurrentAgents,
@@ -1636,9 +1691,19 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			...(config.strongNudges === false ? { strongNudges: false } : {}),
 		};
 
+		const unavailableToolReasons = describeWithheldDelegationTools({
+			offered: finalTools.map((tool) => tool.name),
+			subagentsEnabled: normalized.enableSpawnAgent,
+			serialised: delegationSerialised,
+			multipleNodes: (config.agentNodes?.length ?? 0) > 1,
+		});
+
 		return {
 			tools: finalTools,
 			modelTools,
+			...(Object.keys(unavailableToolReasons).length > 0
+				? { unavailableToolReasons }
+				: {}),
 			// Carried out so a host can delegate to one by name. The tools above
 			// are what the model sees; this is what the user wrote.
 			configuredAgents: configuredAgents.configs,

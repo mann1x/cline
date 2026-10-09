@@ -3711,6 +3711,17 @@ export class AgentRuntime {
 		if (typeof metadata?.inputParseError === "string") {
 			skipReason = metadata.inputParseError;
 		}
+		// A tool the session withholds on purpose has a reason, and the reason
+		// is the only part of the rejection a model can act on. Reported
+		// 2026-10-09: `spawn_agent` withheld on a one-request endpoint, the
+		// rejection listed forty tool names and no cause, and the model sent the
+		// same call again.
+		const unavailableReason = tool
+			? undefined
+			: this.config.unavailableToolReasons?.[toolCall.toolName];
+		if (unavailableReason) {
+			skipReason = `Tool "${toolCall.toolName}" is not offered in this session: ${unavailableReason}`;
+		}
 
 		const toolSource =
 			metadata?.toolSource &&

@@ -160,6 +160,7 @@ export function createAgentRuntimeConfig(
 		// the same request and nothing bounded a batch once it was parallel.
 		maxParallelToolCalls: agentConfig.maxParallelToolCalls,
 		toolPolicies: agentConfig.toolPolicies,
+		unavailableToolReasons: agentConfig.unavailableToolReasons,
 		toolContextMetadata: input.toolContextMetadata,
 		requestToolApproval: agentConfig.requestToolApproval,
 	};

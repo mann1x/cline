@@ -56,6 +56,30 @@ describe("delegation tools against the endpoint's slot count", () => {
 		expect(teamToolsIn(runtime.tools)).toEqual([]);
 	});
 
+	it("says why spawn_agent is absent, for the model that calls it anyway", async () => {
+		// Reported 2026-10-09: the rejection listed every tool on offer and no
+		// cause, and the model sent the same call again.
+		const runtime = await new DefaultRuntimeBuilder().build({
+			config: makeBaseConfig({ maxConcurrentAgents: 1 }),
+			createSpawnTool: () => stubSpawnTool(),
+		});
+
+		const reason = runtime.unavailableToolReasons?.spawn_agent;
+		expect(reason).toContain("serves 1 request at a time");
+		expect(reason).toContain("Do not call spawn_agent again");
+		expect(reason).toContain("parallel sessions");
+	});
+
+	it("gives no reason for a tool that is offered", async () => {
+		const runtime = await new DefaultRuntimeBuilder().build({
+			config: makeBaseConfig({ maxConcurrentAgents: 4 }),
+			createSpawnTool: () => stubSpawnTool(),
+		});
+
+		expect(names(runtime.tools)).toContain("spawn_agent");
+		expect(runtime.unavailableToolReasons?.spawn_agent).toBeUndefined();
+	});
+
 	it("offers them once the endpoint serves more than one", async () => {
 		const runtime = await new DefaultRuntimeBuilder().build({
 			config: makeBaseConfig({ maxConcurrentAgents: 3 }),

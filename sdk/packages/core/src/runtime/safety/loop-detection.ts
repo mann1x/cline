@@ -314,6 +314,29 @@ function normalizeResultSignature(raw: string): string {
 	return raw.replace(/#\d+/g, "#n");
 }
 
+/**
+ * A call that moves its own subject, so the same arguments ask a new question
+ * every time: `browser` `scroll_down` shows the next viewport, and reading a
+ * long page is that one call sent again and again. The consecutive rule's
+ * premise -- "the arguments have not changed, so neither will the result" --
+ * is false for it. Reported 2026-10-09: seven scrolls down one dashboard, a
+ * different screenshot after each, and the run stopped at the seventh.
+ *
+ * Only the consecutive rule is lifted. The answer is still compared, so a
+ * scroll that has reached the end of the page -- same screenshot, same console
+ * -- is caught by the no-progress cycle like any other call.
+ */
+export function callMovesItsOwnSubject(call: LoopDetectionCall): boolean {
+	if (call.name !== "browser") {
+		return false;
+	}
+	const action =
+		call.input && typeof call.input === "object"
+			? (call.input as { action?: unknown }).action
+			: undefined;
+	return action === "scroll_down" || action === "scroll_up";
+}
+
 export interface LoopCheckResult {
 	softWarning: boolean;
 	hardEscalation: boolean;
@@ -536,6 +559,13 @@ ${steeringFor(cycle.repeats, call.name)}`,
 			};
 		}
 
+		if (callMovesItsOwnSubject(call)) {
+			// Still an interruption of any other call's run of repeats.
+			this.state.lastToolName = call.name;
+			this.state.lastToolSignature = signature;
+			this.state.consecutiveIdenticalCount = 1;
+			return { kind: "ok" };
+		}
 		const result = checkRepeatedToolCall(
 			this.state,
 			call.name,

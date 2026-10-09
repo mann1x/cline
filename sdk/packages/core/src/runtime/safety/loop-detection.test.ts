@@ -34,6 +34,42 @@ describe("LoopDetectionTracker", () => {
 		}
 	});
 
+	it("lets the browser scroll down a long page with the same call", () => {
+		// Reported 2026-10-09: seven `scroll_down` calls down one dashboard, a
+		// different screenshot after each, and the run was stopped as a loop.
+		const tracker = new LoopDetectionTracker();
+		const scroll = { name: "browser", input: { action: "scroll_down" } };
+		for (let viewport = 0; viewport < 12; viewport += 1) {
+			expect(tracker.inspect(scroll).kind).toBe("ok");
+			tracker.noteOutcome(true, false, `screenshot ${viewport}`);
+		}
+	});
+
+	it("still warns when scrolling keeps showing the same thing", () => {
+		const tracker = new LoopDetectionTracker();
+		const scroll = { name: "browser", input: { action: "scroll_down" } };
+		const kinds: string[] = [];
+		for (let attempt = 0; attempt < 5; attempt += 1) {
+			kinds.push(tracker.inspect(scroll).kind);
+			tracker.noteOutcome(true, false, "the bottom of the page");
+		}
+		expect(kinds).toContain("soft");
+	});
+
+	it("still counts a browser call that does not move the page", () => {
+		const tracker = new LoopDetectionTracker();
+		const open = {
+			name: "browser",
+			input: { action: "open", url: "http://localhost:8080/" },
+		};
+		const kinds: string[] = [];
+		for (let attempt = 0; attempt < 8; attempt += 1) {
+			kinds.push(tracker.inspect(open).kind);
+			tracker.noteOutcome(true, false, `load ${attempt}`);
+		}
+		expect(kinds).toContain("hard");
+	});
+
 	it("stops a call that keeps failing even when other calls interrupt it", () => {
 		const tracker = new LoopDetectionTracker();
 

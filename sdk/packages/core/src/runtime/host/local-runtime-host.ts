@@ -2319,6 +2319,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 			initialMessages: bootstrap.effectiveInput.initialMessages,
 			userFileContentLoader: loadUserFileContent,
 			toolPolicies: bootstrap.toolPolicies,
+			...(runtime.unavailableToolReasons
+				? { unavailableToolReasons: runtime.unavailableToolReasons }
+				: {}),
 			requestToolApproval: bootstrap.requestToolApproval
 				? async (request) => {
 						const requestToolApproval = bootstrap.requestToolApproval;
