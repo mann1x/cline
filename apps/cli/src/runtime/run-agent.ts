@@ -37,6 +37,7 @@ import {
 import type { Config } from "../utils/types";
 import { shouldShowCliUsageCost } from "../utils/usage-cost-display";
 import { setActiveRuntimeAbort } from "./active-runtime";
+import { getCliCodeSearch } from "./code-search";
 import {
 	CLI_DEFAULT_CHECKPOINT_CONFIG,
 	CLI_DEFAULT_LOOP_DETECTION,
@@ -180,6 +181,8 @@ export async function runAgent(
 	const toolExecutors = {
 		...(canAskFollowUps ? { askQuestion: askQuestionInTerminal } : {}),
 		submit: submitAndExitInTerminal,
+		// `--code-index`: search_codebase's semantic mode for this folder.
+		...(getCliCodeSearch() ? { semanticSearch: getCliCodeSearch() } : {}),
 	};
 	const sessionManager = await createCliCore({
 		capabilities: {

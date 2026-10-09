@@ -1497,6 +1497,21 @@ export async function runCli(): Promise<void> {
 			config.extraTools = [...(config.extraTools ?? []), ...mediaTools];
 		}
 
+		// The code index, off unless asked for: `--code-index` or
+		// `CLINE_CODE_INDEX=1` gives search_codebase its semantic mode for
+		// this folder. Off by default for the reason it is a tick per folder
+		// in the extension: indexing sends every source file to the embedder.
+		if (args.codeIndex === true || process.env.CLINE_CODE_INDEX === "1") {
+			const { enableCliCodeSearch } = await import("./runtime/code-search");
+			await enableCliCodeSearch({
+				cwd,
+				embeddingBaseUrl: process.env.CLINE_EMBEDDING_BASE_URL?.trim(),
+				embeddingModel: process.env.CLINE_EMBEDDING_MODEL?.trim(),
+				embeddingApiKey: process.env.CLINE_EMBEDDING_API_KEY?.trim(),
+				warn: (message) => process.stderr.write(`${message}\n`),
+			});
+		}
+
 		// The Library, off unless asked for: `--library` or `CLINE_LIBRARY=1`
 		// offers search_library and list_library; `--librarian` (or
 		// `CLINE_LIBRARIAN=1`) adds the librarian's tools, as the extension does

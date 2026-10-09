@@ -218,6 +218,13 @@ export interface ParsedArgs {
 	 * tools, as the extension does when that skill is on.
 	 */
 	librarian?: boolean;
+	/**
+	 * `--code-index` (or `CLINE_CODE_INDEX=1`): index this folder's code and
+	 * give `search_codebase` a `semantic` mode, the extension's "Index the code
+	 * of this folder" switch. Needs `CLINE_EMBEDDING_BASE_URL` and
+	 * `CLINE_EMBEDDING_MODEL`.
+	 */
+	codeIndex?: boolean;
 	/** `--media-config`: a JSON file naming the media endpoints. */
 	mediaConfig?: string;
 	/**

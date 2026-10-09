@@ -36,6 +36,7 @@ import { setActiveCliSession } from "../../utils/output";
 import { loadInteractiveResumeMessages } from "../../utils/resume";
 import type { Config } from "../../utils/types";
 import { markAbortInProgress } from "../active-runtime";
+import { getCliCodeSearch } from "../code-search";
 import type {
 	PendingPromptSnapshot,
 	PendingPromptSubmittedEvent,
@@ -171,6 +172,7 @@ export function createInteractiveSessionRuntime(input: {
 						return Promise.resolve(options[0] ?? "");
 					},
 					submit: submitAndExitInTerminal,
+					...(getCliCodeSearch() ? { semanticSearch: getCliCodeSearch() } : {}),
 				},
 				requestToolApproval: input.requestToolApproval,
 			},

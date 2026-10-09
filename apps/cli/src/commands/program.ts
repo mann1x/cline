@@ -158,6 +158,10 @@ export function addRootOptions(cmd: Command): Command {
 				"Also let the model add to and reorganise the Library (implies --library). Web scraping through the Firecrawl endpoint in CLINE_SCRAPE_BASE_URL, with CLINE_SCRAPE_API_KEY when it needs one",
 			)
 			.option(
+				"--code-index",
+				'Index this folder\'s code and let the model search it by meaning (search_codebase mode "semantic"). Sends every source file to the embedding model in CLINE_EMBEDDING_BASE_URL and CLINE_EMBEDDING_MODEL, which it needs. Downloads LanceDB (200 to 390 MB, once) into the data folder',
+			)
+			.option(
 				"--memory",
 				"Let the model keep notes between tasks (remember, recall, forget). Embedding model from CLINE_EMBEDDING_BASE_URL and CLINE_EMBEDDING_MODEL; keyword search without them",
 			)
@@ -566,6 +570,7 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 	if (opts.memory !== undefined) result.memory = !!opts.memory;
 	if (opts.library !== undefined) result.library = !!opts.library;
 	if (opts.librarian !== undefined) result.librarian = !!opts.librarian;
+	if (opts.codeIndex !== undefined) result.codeIndex = !!opts.codeIndex;
 	if (opts.mediaProvider !== undefined)
 		result.mediaProvider = !!opts.mediaProvider;
 	if (typeof opts.mediaConfig === "string")
