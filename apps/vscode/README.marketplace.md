@@ -102,6 +102,13 @@ that report a vision capability are offered for it. Keyword search needs
 nothing; an embedding model adds search by meaning. Off by default.
 [Guide](https://github.com/mann1x/cline/blob/main/docs/features/library.mdx).
 
+**Code search by meaning.** Tick a folder and its code is indexed with your
+embedding model: `search_codebase` gains a `semantic` mode that takes a question
+in plain words and returns the passages that match, with file and lines. For
+when the model knows what code does and not what it is called. Off by default,
+on per folder.
+[Guide](https://github.com/mann1x/cline/blob/main/docs/features/code-search.mdx).
+
 **Memory.** Notes the model keeps from one task to the next, in any number of
 memories chosen per workspace. `remember`, `recall` and `forget`, and the notes
 about each message you send are put beside it automatically. Off by default.

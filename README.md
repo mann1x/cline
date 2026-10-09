@@ -591,6 +591,8 @@ A place for what you want the model to be able to look things up in: ebooks, man
 
 It is off by default: **Settings > Library**, or `--library` and `--librarian` in the CLI. Guide: [`docs/features/library.mdx`](docs/features/library.mdx).
 
+**Code search by meaning.** With an embedding model set, **Settings > Library > Index the code of this folder** indexes the folder's source files, and `search_codebase` gains a `semantic` mode: the query is a question in plain words and the answer is the passages that best match, each with its file and lines. It is for when the model knows what a piece of code does and not what it is called; regex search and `ask_lsp` are still what it uses when it does. Off by default and on per folder, because indexing sends every source file to the embedding model. Guide: [`docs/features/code-search.mdx`](docs/features/code-search.mdx).
+
 ## Memory
 
 Notes the model keeps from one task to the next: a decision and its reason, how the project is built and tested, a convention, something you said you prefer. The model gets `remember`, `recall` and `forget`, and with every message you send the notes that are about it are put beside the message, with a line in the chat saying which.
