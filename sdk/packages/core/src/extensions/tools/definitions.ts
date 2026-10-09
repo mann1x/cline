@@ -99,6 +99,7 @@ import type {
 	GrepExecutor,
 	SearchExecutor,
 	SedExecutor,
+	SemanticSearchExecutor,
 	ShellExecutor,
 	SkillsExecutorWithMetadata,
 	ToolOperationResult,
@@ -494,6 +495,9 @@ export function createReadFilesTool(
 	});
 }
 
+const SEMANTIC_MODE_PARAMETER =
+	'"regex" (the default) matches each query as a pattern. "semantic" answers each query from an index of this workspace\'s code by meaning: write the query as a question or a description in plain words ("where is a user\'s password checked"), and get back the passages that best match, each with its file and lines. Use "semantic" when you do not know the name to search for; use "regex" when you do. `context_lines` and `max_per_file` apply to "regex" only.';
+
 /**
  * Create the search_codebase tool
  *
@@ -502,9 +506,28 @@ export function createReadFilesTool(
 export function createSearchTool(
 	executor: SearchExecutor,
 	config: Pick<DefaultToolsConfig, "cwd" | "searchTimeoutMs"> = {},
+	semantic?: SemanticSearchExecutor["search"],
 ): AgentTool<SearchCodebaseInput, ToolOperationResult[]> {
 	const timeoutMs = config.searchTimeoutMs ?? 30000;
 	const cwd = config.cwd ?? process.cwd();
+	// The mode exists only where the workspace is indexed. Without the index
+	// the schema and the description are exactly what they were, so a session
+	// that has none pays nothing for it and is not offered a mode that fails.
+	const baseSchema = zodToJsonSchema(SearchCodebaseInputSchema);
+	const inputSchema = semantic
+		? {
+				...baseSchema,
+				properties: {
+					...(baseSchema as { properties?: Record<string, unknown> })
+						.properties,
+					mode: {
+						type: "string",
+						enum: ["regex", "semantic"],
+						description: SEMANTIC_MODE_PARAMETER,
+					},
+				},
+			}
+		: baseSchema;
 
 	return createTool<SearchCodebaseInput, ToolOperationResult[]>({
 		name: "search_codebase",
@@ -515,8 +538,11 @@ export function createSearchTool(
 			"Use for finding code patterns, function definitions, class names, imports, etc. " +
 			"It reports one match per file by default, which answers which files mention something. To find every occurrence inside a file — how many times a name appears and where each one is — raise `max_per_file`. `context_lines` sets how many lines are shown either side of a match, 2 by default. " +
 			`Output beyond ~${Math.round(MAX_SEARCH_OUTPUT_CHARS / 1000)}k characters per query is middle-truncated; narrow patterns beat broad ones. ` +
+			(semantic
+				? 'This workspace\'s code is also indexed by meaning: `mode: "semantic"` takes questions in plain words instead of patterns, for when you do not know what the thing is called. '
+				: "") +
 			`Output: one object per pattern — ${TOOL_RESULT_ENVELOPE} \`query\` is the pattern you sent and \`result\` is the matching lines with their file paths. A pattern that matched nothing still has \`success: true\` with an empty \`result\`; that is an answer, not a failure, and re-running it will not change it.`,
-		inputSchema: zodToJsonSchema(SearchCodebaseInputSchema),
+		inputSchema,
 		timeoutMs: timeoutMs * 2,
 		retryable: true,
 		maxRetries: 1,
@@ -526,6 +552,35 @@ export function createSearchTool(
 			// shape the model chose is no longer this function's problem.
 			const validated = validateWithZod(SearchCodebaseUnionInputSchema, input);
 			const queries = validated.queries;
+			// Read from the raw input: the union keeps only the fields it names.
+			const mode =
+				input && typeof input === "object" && !Array.isArray(input)
+					? (input as { mode?: unknown }).mode
+					: undefined;
+			if (semantic && mode === "semantic") {
+				return Promise.all(
+					queries.map(async (query): Promise<ToolOperationResult> => {
+						try {
+							return {
+								query,
+								result: await withTimeout(
+									semantic(query, cwd, context),
+									timeoutMs,
+									`Search timed out after ${timeoutMs}ms`,
+								),
+								success: true,
+							};
+						} catch (error) {
+							return {
+								query,
+								result: "",
+								error: `Search by meaning failed: ${formatError(error)}. Search with a regex instead.`,
+								success: false,
+							};
+						}
+					}),
+				);
+			}
 			// Left undefined when neither was sent, so the executor keeps applying
 			// its own defaults rather than being handed two explicit undefineds.
 			const queryOptions =
@@ -1405,7 +1460,15 @@ export function createDefaultTools(
 
 	// Add search_codebase tool if enabled and executor provided
 	if (enableSearch && executors.search) {
-		tools.push(createSearchTool(executors.search, config));
+		tools.push(
+			createSearchTool(
+				executors.search,
+				config,
+				executors.semanticSearch?.available(config.cwd ?? process.cwd())
+					? executors.semanticSearch.search
+					: undefined,
+			),
+		);
 	}
 
 	// Add run_commands tool if enabled and executor provided

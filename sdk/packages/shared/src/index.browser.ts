@@ -405,7 +405,9 @@ export {
 } from "./remote-config/schema";
 export {
 	DEFAULT_LIBRARY_SETTINGS,
+	isCodeIndexWorkspace,
 	type LibrarySettings,
+	normalizeWorkspaceFolder,
 	resolveLibrarySettings,
 } from "./retrieval/library-settings";
 export {

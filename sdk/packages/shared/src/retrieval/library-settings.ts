@@ -42,6 +42,11 @@ export interface LibrarySettings {
 	imageProfile: string;
 	/** Pictures described per file added, at most. */
 	describeImagesLimit: number;
+	/**
+	 * Workspace folders whose code is indexed for search by meaning. Opt-in per
+	 * folder: indexing sends every source file in it to the embedding model.
+	 */
+	codeIndexWorkspaces: string[];
 }
 
 export const DEFAULT_LIBRARY_SETTINGS: LibrarySettings = {
@@ -65,6 +70,7 @@ export const DEFAULT_LIBRARY_SETTINGS: LibrarySettings = {
 	describeImages: true,
 	imageProfile: "",
 	describeImagesLimit: 40,
+	codeIndexWorkspaces: [],
 };
 
 function integer(value: unknown, fallback: number, min: number, max: number) {
@@ -140,5 +146,33 @@ export function resolveLibrarySettings(
 			0,
 			1000,
 		),
+		codeIndexWorkspaces: Array.isArray(s.codeIndexWorkspaces)
+			? [
+					...new Set(
+						s.codeIndexWorkspaces.filter(
+							(entry): entry is string =>
+								typeof entry === "string" && entry.trim() !== "",
+						),
+					),
+				]
+			: [],
 	};
+}
+
+/** One spelling of a folder, so the same folder is found however it was written. */
+export function normalizeWorkspaceFolder(folder: string): string {
+	const slashed = folder.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+	// A drive letter means Windows, where paths differ only by case.
+	return /^[A-Za-z]:/.test(slashed) ? slashed.toLowerCase() : slashed;
+}
+
+/** Whether a folder's code is opted in to the code index. */
+export function isCodeIndexWorkspace(
+	settings: Pick<LibrarySettings, "codeIndexWorkspaces">,
+	folder: string,
+): boolean {
+	const wanted = normalizeWorkspaceFolder(folder);
+	return settings.codeIndexWorkspaces.some(
+		(entry) => normalizeWorkspaceFolder(entry) === wanted,
+	);
 }

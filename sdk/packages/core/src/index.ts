@@ -1188,6 +1188,17 @@ export {
 	LINT_COMMAND_FILE_PLACEHOLDER,
 	type LintCommandResult,
 } from "./extensions/tools/check-file";
+// The code index: a workspace's code searched by meaning, through search_codebase.
+export {
+	type CodeIndexProgress,
+	type CodeIndexRefreshState,
+	type CodeSearch,
+	type CodeSearchConfig,
+	type CreateCodeSearchOptions,
+	codeSearchAvailable,
+	createCodeSearch,
+	formatCodeHits,
+} from "./extensions/tools/code-search";
 // The bracket scanner is host-independent and two hosts want it: the checker
 // above, and VS Code's own `check_file`, which pairs it with the language
 // servers this one has no access to.
@@ -1584,6 +1595,21 @@ export {
 	type LibraryShelf,
 	TRASH_DAYS,
 } from "./services/retrieval/catalogue";
+export {
+	CODE_INDEX_MAX_FILE_BYTES,
+	CODE_INDEX_MAX_FILES,
+	type CodeHit,
+	CodeIndex,
+	type CodeIndexOptions,
+	type CodeIndexStatus,
+	type CodeSearchResult,
+	type CodeSyncResult,
+	closeSharedCodeIndex,
+	codeCollectionName,
+	isIndexableCodePath,
+	resolveCodeIndexDirectory,
+	sharedCodeIndex,
+} from "./services/retrieval/code-index";
 export {
 	type EmbedOptions,
 	type EmbedResult,

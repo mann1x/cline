@@ -180,6 +180,7 @@ export type {
 	GrepExecutor,
 	SearchExecutor,
 	SedExecutor,
+	SemanticSearchExecutor,
 	ShellExecutionOptions,
 	ShellExecutor,
 	SkillsExecutor,

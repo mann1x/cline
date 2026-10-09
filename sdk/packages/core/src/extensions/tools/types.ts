@@ -89,6 +89,24 @@ export type SearchExecutor = (
 ) => Promise<string>;
 
 /**
+ * Search of the workspace's code by meaning, for `search_codebase`'s
+ * `mode: "semantic"`. A host supplies it only where the workspace is indexed:
+ * its presence is what adds the mode to the tool.
+ */
+export interface SemanticSearchExecutor {
+	/**
+	 * Asked once, when a session's tools are built: whether this folder is
+	 * indexed. One host serves many workspaces, so the answer is per folder.
+	 */
+	available(cwd: string): boolean;
+	search(
+		query: string,
+		cwd: string,
+		context: AgentToolContext,
+	): Promise<string>;
+}
+
+/**
  * Per-call execution options for a shell executor.
  */
 export interface ShellExecutionOptions {
@@ -309,6 +327,8 @@ export interface ToolExecutors {
 	readFile?: FileReadExecutor;
 	/** Codebase search implementation */
 	search?: SearchExecutor;
+	/** Code search by meaning; adds `mode: "semantic"` to search_codebase */
+	semanticSearch?: SemanticSearchExecutor;
 	/** Shell command execution implementation */
 	bash?: ShellExecutor;
 	/** Web content fetching implementation */
