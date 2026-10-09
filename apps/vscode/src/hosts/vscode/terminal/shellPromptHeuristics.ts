@@ -96,3 +96,16 @@ export function looksLikeShellPrompt(lastLine: string): boolean {
 export function isPowerShellContinuationPrompt(lastLine: string): boolean {
 	return /^>>$/.test(lastLine.trim())
 }
+
+/**
+ * Whether a line is a Windows shell's own prompt: `PS C:\path>` or `C:\path>`,
+ * optionally behind an environment tag such as `(venv)`.
+ *
+ * Narrower than {@link classifyShellPrompt}'s "strong", on purpose. It is used
+ * while a command is believed to be running, where a line of ordinary output
+ * ending in `$` or `#` must not be taken for the shell coming back.
+ */
+export function isWindowsShellPrompt(lastLine: string): boolean {
+	const line = lastLine.trim()
+	return /^(\([^)]*\)\s*)?(PS\s+)?[A-Za-z]:\\[^<>|"]*>$/.test(line)
+}

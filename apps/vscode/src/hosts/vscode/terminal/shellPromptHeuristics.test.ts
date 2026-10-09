@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test"
-import { classifyShellPrompt, getLastLine, isPowerShellContinuationPrompt, looksLikeShellPrompt } from "./shellPromptHeuristics"
+import {
+	classifyShellPrompt,
+	getLastLine,
+	isPowerShellContinuationPrompt,
+	isWindowsShellPrompt,
+	looksLikeShellPrompt,
+} from "./shellPromptHeuristics"
 
 describe("getLastLine", () => {
 	it("returns the whole string when there are no newlines", () => {
@@ -102,5 +108,26 @@ describe("isPowerShellContinuationPrompt", () => {
 		["nothing", ""],
 	])("does not take %s for it", (_name, line) => {
 		expect(isPowerShellContinuationPrompt(line)).toBe(false)
+	})
+})
+
+describe("isWindowsShellPrompt", () => {
+	it.each([
+		["PowerShell", "PS C:\\Users\\manni\\source\\repos\\test> "],
+		["PowerShell in a virtualenv", "(venv) PS D:\\work>"],
+		["cmd", "C:\\Users\\manni>"],
+	])("recognises a %s prompt", (_name, line) => {
+		expect(isWindowsShellPrompt(line)).toBe(true)
+	})
+
+	it.each([
+		["a bash prompt", "user@host:~$ "],
+		["output ending in a hash", "### done #"],
+		["an HTML tag", "<div>"],
+		["a redirect in output", "C:\\tmp\\a.txt > C:\\tmp\\b.txt"],
+		["a continuation prompt", ">> "],
+		["nothing", ""],
+	])("does not take %s for one", (_name, line) => {
+		expect(isWindowsShellPrompt(line)).toBe(false)
 	})
 })

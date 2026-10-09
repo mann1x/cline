@@ -669,6 +669,82 @@ describe("TerminalProcess (Integration Tests)", () => {
 			;(emitSpy as sinon.SinonSpy).calledWith("unobserved_command").should.be.false()
 		})
 
+		// microsoft/vscode#316556, #250764: for some multi-line commands VS Code
+		// never closes the stream and never fires the end event, although the
+		// command has finished.
+		it("finishes on the end marker when the stream stays open after it", async () => {
+			const terminal = TerminalRegistry.createTerminal().terminal
+			createdTerminals.push(terminal)
+			const mockExecuteCommand = sandbox.stub().returns({
+				read: () => createHangingStream([OSC633_C, "all done\n", OSC633_D]),
+			})
+			sandbox.stub(terminal, "shellIntegration").get(() => ({ executeCommand: mockExecuteCommand }))
+
+			const emitSpy = sandbox.spy(process, "emit")
+			const runPromise = process.run(terminal, "multi\nline")
+
+			// The grace after the marker (2s), plus the exit-code race.
+			await sandbox.clock.tickAsync(2_000 + EXIT_CODE_EVENT_TIMEOUT_MS + 1_000)
+			await runPromise
+			;(emitSpy as sinon.SinonSpy).calledWith("line", "all done").should.be.true()
+			;(emitSpy as sinon.SinonSpy).calledWith("completed").should.be.true()
+			;(emitSpy as sinon.SinonSpy).calledWith("unobserved_command").should.be.false()
+		})
+
+		it("finishes when the shell is back at its prompt and nothing reports the end", async () => {
+			const terminal = TerminalRegistry.createTerminal().terminal
+			createdTerminals.push(terminal)
+			const mockExecuteCommand = sandbox.stub().returns({
+				read: () => createHangingStream([OSC633_C, "tests passed\n", "PS C:\\Users\\manni\\source\\repos\\test> "]),
+			})
+			sandbox.stub(terminal, "shellIntegration").get(() => ({ executeCommand: mockExecuteCommand }))
+
+			const emitSpy = sandbox.spy(process, "emit")
+			const runPromise = process.run(terminal, "npm test")
+
+			// Not before the prompt has sat there for the full quiet period.
+			await sandbox.clock.tickAsync(8_000)
+			;(emitSpy as sinon.SinonSpy).calledWith("completed").should.be.false()
+
+			await sandbox.clock.tickAsync(2_000 + EXIT_CODE_EVENT_TIMEOUT_MS + 1_000)
+			await runPromise
+			const lines = (emitSpy as sinon.SinonSpy)
+				.getCalls()
+				.filter((call) => call.args[0] === "line")
+				.map((call) => String(call.args[1]))
+			lines.should.containEql("tests passed")
+			lines.some((line) => line.includes("the shell is back at its prompt")).should.be.true()
+			;(emitSpy as sinon.SinonSpy).calledWith("completed").should.be.true()
+		})
+
+		// microsoft/vscode#324392: the command runs, only the start event arrives.
+		it("says the output was not delivered when the command started and nothing else arrived", async () => {
+			const terminal = TerminalRegistry.createTerminal().terminal
+			createdTerminals.push(terminal)
+			const mockExecution = { read: () => createHangingStream([]) }
+			sandbox.stub(terminal, "shellIntegration").get(() => ({ executeCommand: sandbox.stub().returns(mockExecution) }))
+			let startListener: ((e: vscode.TerminalShellExecutionStartEvent) => unknown) | undefined
+			sandbox.stub(vscode.window, "onDidStartTerminalShellExecution").callsFake((listener) => {
+				startListener = listener
+				return { dispose: () => {} }
+			})
+
+			const emitSpy = sandbox.spy(process, "emit")
+			const runPromise = process.run(terminal, "( python3 -c 'print(1)' )")
+			await sandbox.clock.tickAsync(0)
+			startListener?.({ terminal, execution: mockExecution } as unknown as vscode.TerminalShellExecutionStartEvent)
+
+			await sandbox.clock.tickAsync(60_000)
+			await runPromise
+			const lines = (emitSpy as sinon.SinonSpy)
+				.getCalls()
+				.filter((call) => call.args[0] === "line")
+				.map((call) => String(call.args[1]))
+			lines.some((line) => line.includes("delivered none of its output")).should.be.true()
+			lines.some((line) => line.includes("did not start this command")).should.be.false()
+			;(emitSpy as sinon.SinonSpy).calledWith("completed").should.be.true()
+		})
+
 		it("should complete when the terminal closes mid-command", async () => {
 			const terminal = TerminalRegistry.createTerminal().terminal
 			createdTerminals.push(terminal)

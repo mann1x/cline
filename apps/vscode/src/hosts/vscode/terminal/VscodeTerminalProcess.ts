@@ -24,7 +24,7 @@ import type {
 import type { MarkerlessCompletionCause } from "@/services/telemetry/TelemetryService"
 import { Logger } from "@/shared/services/Logger"
 import { Osc633EventType, Osc633Parser } from "./osc633Parser"
-import { classifyShellPrompt, getLastLine, isPowerShellContinuationPrompt } from "./shellPromptHeuristics"
+import { classifyShellPrompt, getLastLine, isPowerShellContinuationPrompt, isWindowsShellPrompt } from "./shellPromptHeuristics"
 import { shouldFallBackToTerminalSnapshot, terminalSnapshotFallbackMessage } from "./terminal-output-fallback"
 
 /** Outcome of racing one stream read against command-completion signals. */
@@ -37,6 +37,24 @@ type StreamReadOutcome =
 
 /** How long the clipboard snapshot of the terminal may take before it is given up on. */
 const TERMINAL_SNAPSHOT_TIMEOUT_MS = 5_000
+
+/**
+ * How long the stream and the end event get to close a command whose end
+ * marker has already been read from the stream.
+ */
+const POST_FINISH_GRACE_MS = 2_000
+
+/**
+ * How long the shell's own prompt must sit unchanged at the end of a running
+ * command's output before the command is taken to have ended.
+ */
+const PROMPT_RETURN_QUIET_MS = 10_000
+
+const PROMPT_RETURNED_MESSAGE =
+	"[VS Code did not report this command's end, but the shell is back at its prompt and has printed nothing for 10 seconds, so the command is treated as finished. Its exit code is unknown. (VS Code loses the end signal for some multi-line and subshell commands: microsoft/vscode#250764, #316556.)]"
+
+const OUTPUT_NOT_DELIVERED_MESSAGE =
+	"[The command was started, but VS Code delivered none of its output and never reported its end (a known VS Code fault with multi-line and ( ... ) subshell commands: microsoft/vscode#324392). It may have run to completion. What follows, if anything, is the terminal's visible contents, which can include earlier commands. To get a reliable result, send the command on one line, or put the script in a file and run the file.]"
 
 const INCOMPLETE_INPUT_MESSAGE =
 	"[The command was NOT run. The shell read it as unfinished and stopped at its continuation prompt (>>), waiting for more input: a quote, bracket or here-string in the command is not closed. The pending input was cancelled. In PowerShell a backslash does not escape a quote: inside '...' write '' for a quote, inside \"...\" write `\" . For text with many quotes, write it to a file with the editor and read the file in the command.]"
@@ -163,6 +181,16 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 			// has shell integration present but may never trigger this event for that
 			// execution. That case is bounded by the exit-code race below, not by
 			// feature-detecting the event itself.
+			// Whether VS Code saw the shell start this execution. It is the one
+			// signal that still arrives when the stream and the end event are both
+			// lost (microsoft/vscode#324392), and it never arrives for input the
+			// shell did not run, so it tells "ran, unreported" from "never ran".
+			let executionStarted = false
+			const startEventDisposable = vscode.window.onDidStartTerminalShellExecution((e) => {
+				if (e.terminal === terminal && e.execution === execution) {
+					executionStarted = true
+				}
+			})
 			const resolveExecutionEnd = Promise.withResolvers<number | undefined>()
 			const endEventDisposable = vscode.window.onDidEndTerminalShellExecution((e) => {
 				if (e.terminal === terminal && e.execution === execution) {
@@ -236,6 +264,13 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 			// The shell took the line as unfinished and is at its continuation
 			// prompt: nothing ran, and nothing will until the input is cancelled.
 			let incompleteInput = false
+			// The end marker was read from the stream, which then stayed open.
+			let didSeeCommandFinished = false
+			// No end of any kind, but the shell's prompt came back and stayed.
+			let promptReturned = false
+			// The last of everything printed since the command started, to see
+			// whether it ends on the shell's prompt.
+			let postCommandTail = ""
 			let markerlessCause: MarkerlessCompletionCause | undefined
 			let markerlessQuietMs = 0
 			let receivedAnyData = false
@@ -246,11 +281,21 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 				// seen the markers are trusted to delimit the command — however
 				// long and quiet it runs — and only terminal closure can
 				// interrupt the read.
-				const idleTimeoutMs = didSeeCommandExecuted
-					? undefined
-					: receivedAnyData
+				//
+				// Two exceptions, both for an end VS Code is known to lose. The end
+				// marker already read from the stream means the command is over
+				// whatever the stream does next. And the shell's own prompt as the
+				// last thing printed, unchanged for a while, means the same with
+				// less certainty -- so it waits longer and says so in the result.
+				const idleTimeoutMs = !didSeeCommandExecuted
+					? receivedAnyData
 						? MARKERLESS_IDLE_TIMEOUT
 						: MARKERLESS_FIRST_DATA_TIMEOUT
+					: didSeeCommandFinished
+						? POST_FINISH_GRACE_MS
+						: isWindowsShellPrompt(getLastLine(stripAnsi(postCommandTail)))
+							? PROMPT_RETURN_QUIET_MS
+							: undefined
 				const outcome = await readNext(idleTimeoutMs)
 
 				if (outcome.kind === "streamEnd" || outcome.kind === "executionEnd") {
@@ -258,6 +303,15 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 				}
 				if (outcome.kind === "terminalClosed") {
 					Logger.warn("[TerminalProcess] Terminal closed while a command was running")
+					break
+				}
+				if (outcome.kind === "idle" && didSeeCommandFinished) {
+					Logger.log("[TerminalProcess] End marker read, but the stream stayed open; finishing the command")
+					break
+				}
+				if (outcome.kind === "idle" && didSeeCommandExecuted) {
+					promptReturned = true
+					Logger.log("[TerminalProcess] No end reported, but the shell is back at its prompt; finishing the command")
 					break
 				}
 				if (outcome.kind === "idle") {
@@ -316,6 +370,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 							inCommandOutput = true
 							preCommandBuffer = "" // discard pre-C text (was prompt/echo)
 						} else if (seg.event.type === Osc633EventType.CommandFinished) {
+							didSeeCommandFinished = true
 							inCommandOutput = false
 							if (seg.event.exitCode !== undefined) {
 								this.exitCode = seg.event.exitCode
@@ -323,6 +378,9 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 						}
 					} else {
 						// Text segment
+						if (didSeeCommandExecuted) {
+							postCommandTail = (postCommandTail + seg.text).slice(-2000)
+						}
 						if (inCommandOutput) {
 							chunkOutput += seg.text
 						} else if (!didSeeCommandExecuted) {
@@ -385,7 +443,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 
 			if (completedWithoutMarkers) {
 				Logger.log(
-					`[TerminalProcess] Command ended without a completion marker (cause=${markerlessCause}, quiet=${markerlessQuietMs}ms, data=${receivedAnyData})`,
+					`[TerminalProcess] Command ended without a completion marker (cause=${markerlessCause}, quiet=${markerlessQuietMs}ms, data=${receivedAnyData}, started=${executionStarted})`,
 				)
 			}
 			if (incompleteInput) {
@@ -430,6 +488,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 				}),
 			])
 			endEventDisposable.dispose()
+			startEventDisposable.dispose()
 			this.activeEndEventDisposable = undefined
 
 			if (exitCodeEventTimedOut) {
@@ -540,8 +599,10 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 				this.emit("line", "[The terminal closed while the command was running; output may be incomplete.]")
 			} else if (incompleteInput) {
 				this.emit("line", INCOMPLETE_INPUT_MESSAGE)
+			} else if (promptReturned) {
+				this.emit("line", PROMPT_RETURNED_MESSAGE)
 			} else if (completedWithoutMarkers && markerlessCause === "no_data") {
-				this.emit("line", SHELL_NEVER_STARTED_MESSAGE)
+				this.emit("line", executionStarted ? OUTPUT_NOT_DELIVERED_MESSAGE : SHELL_NEVER_STARTED_MESSAGE)
 			} else if (completedWithoutMarkers) {
 				this.emit(
 					"line",
