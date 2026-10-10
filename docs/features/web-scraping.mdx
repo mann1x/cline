@@ -64,7 +64,7 @@ Two numbers decide how far a crawl goes.
 | | Depth | Pages |
 | --- | --- | --- |
 | `web_scrape` `crawl`, when the model names none | 1 | 25 |
-| `library_web_book`, when the model names none | 0: only the links given | the most your setting allows |
+| `library_web_book`, when the model names none | 0: only the links given | one per link given; with a depth, the most your setting allows |
 | The most either can get (your settings) | 3 | 100 |
 
 The last row is **Settings > Features > Web scraping**: "Links deep a crawl may follow" (0 to 10) and "Pages one crawl or book may read in a call" (1 to 5,000). The model can ask for less than these, never more: a request for 500 pages with a setting of 100 reads 100.
