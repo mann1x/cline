@@ -244,7 +244,30 @@ describe("web_scrape for any task", () => {
 			JSON.parse(readFileSync(join(root, "site", ".scrape.json"), "utf8"));
 		expect(record().assetsLeft).toEqual(["https://example.com/3.png"]);
 
-		// Continued: only the file that was left out is fetched.
+		expect(report).toContain("Stop here and report.");
+		expect(report).toContain("resuming now fetches nothing more");
+
+		// Resumed with the limit as it was: the folder already holds what one
+		// crawl may fetch, so nothing more is fetched.
+		direct = [];
+		const again = await run({ action: "crawl", save_to: "site", resume: true });
+		expect(direct).toEqual([]);
+		expect(again.startsWith("NOT COMPLETE:")).toBe(true);
+		expect(again).toContain("2 files in all, resumes included");
+		expect(record().assetsLeft).toEqual(["https://example.com/3.png"]);
+
+		// A markdown reading is not a way to get the file either.
+		expect(
+			await run({
+				action: "read",
+				url: "https://example.com/3.png",
+				save_to: "site/example.com/3.png",
+			}),
+		).toContain("`save_to` has to end in .md");
+		expect(direct).toEqual([]);
+
+		// The user raises the limit: only the file that was left out is fetched.
+		scrape = { ...(scrape as LibraryScrapeConfig), maxFiles: 3 };
 		direct = [];
 		const resumed = await run({
 			action: "crawl",

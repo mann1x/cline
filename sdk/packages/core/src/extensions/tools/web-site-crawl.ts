@@ -277,7 +277,7 @@ function indexFile(record: SiteRecord): string {
 		"",
 		`${plural(pages.length, "page")}${record.content === "site" ? ` and ${plural(assets.length, "file")} they use` : ""}. ${
 			record.unread.length || record.assetsLeft.length
-				? `Not complete: ${plural(record.unread.length, "linked page")} not read, ${plural(record.assetsLeft.length, "file")} not fetched. A crawl into this folder with \`resume\` continues it.`
+				? `Not complete: ${plural(record.unread.length, "linked page")} not read, ${plural(record.assetsLeft.length, "file")} not fetched. A crawl into this folder with \`resume\` continues it, once the limit that stopped it allows more.`
 				: "Nothing known is missing."
 		}`,
 		"",
@@ -549,6 +549,10 @@ export async function crawlToFolder(
 				else delete record.assets[address];
 			}),
 		);
+		const savedBytes = Object.values(record.assets).reduce(
+			(sum, asset) => sum + asset.bytes,
+			0,
+		);
 		const retry = request.resume
 			? [
 					...record.assetsLeft,
@@ -563,9 +567,11 @@ export async function crawlToFolder(
 			})),
 			{
 				root: target,
-				maxAssets: maxFiles,
+				// The limits are the folder's, not the call's: what earlier calls
+				// saved counts, or resuming in a loop would walk past them.
+				maxAssets: Math.max(0, maxFiles - onDisk.size),
 				maxAssetBytes: maxFileMb * 1_048_576,
-				maxTotalBytes: maxTotalMb * 1_048_576,
+				maxTotalBytes: Math.max(0, maxTotalMb * 1_048_576 - savedBytes),
 				have: (address) => onDisk.get(address),
 				also: retry,
 				...(request.signal ? { signal: request.signal } : {}),
@@ -626,12 +632,12 @@ export async function crawlToFolder(
 	}
 	if (mirror && mirror.leftForCount > 0) {
 		alerts.push(
-			`- Files: ${plural(mirror.leftForCount, "file")} ${mirror.leftForCount === 1 ? "was" : "were"} not fetched, because one crawl may fetch ${plural(maxFiles, "file")} ("Files one site crawl may fetch").`,
+			`- Files: ${plural(mirror.leftForCount, "file")} ${mirror.leftForCount === 1 ? "was" : "were"} not fetched, because one crawl may fetch ${plural(maxFiles, "file")} in all, resumes included ("Files one site crawl may fetch").`,
 		);
 	}
 	if (mirror && mirror.leftForSize > 0) {
 		alerts.push(
-			`- Size: ${plural(mirror.leftForSize, "file")} ${mirror.leftForSize === 1 ? "was" : "were"} not fetched, because one crawl may fetch ${maxTotalMb} MB in all ("Most one site crawl may fetch in all").`,
+			`- Size: ${plural(mirror.leftForSize, "file")} ${mirror.leftForSize === 1 ? "was" : "were"} not fetched, because one crawl may fetch ${maxTotalMb} MB in all, resumes included ("Most one site crawl may fetch in all").`,
 		);
 	}
 	if (mirror && mirror.tooLarge > 0) {
@@ -645,7 +651,9 @@ export async function crawlToFolder(
 				"NOT COMPLETE: a limit the user set stopped this crawl before everything was fetched. Do not report the scrape as complete. Your reply must tell the user what was left out and which setting raises it (Settings > Features > Web scraping; only the user can change it):",
 				...alerts,
 				canContinue
-					? `To continue without fetching again what is already saved, call crawl with save_to "${folder}" and resume: true.`
+					? pageLimitReached || unfinished
+						? `Stop here and report. If the user asks for more, crawl with save_to "${folder}" and resume: true: it reads the next pages and fetches nothing that is already saved.`
+						: `Stop here and report. The limit counts everything saved in the folder, so resuming now fetches nothing more, and fetching the missing files another way (\`read\`, the browser, a command) goes around a limit that is the user's to set. When the user says the limit is raised, crawl with save_to "${folder}" and resume: true.`
 					: "The pages read link to no other page of this site, and no file was left out, so there may be nothing more to fetch.",
 				"",
 			]

@@ -186,7 +186,9 @@ export const NO_TOOL_CALL_NUDGE_MESSAGE =
 	"[SYSTEM] Your last message contained no tool calls, so the run was about to end. " +
 	"If the task is not finished, continue now by emitting the tool calls it needs - do not " +
 	"describe what you are going to do without doing it. If the task really is finished, " +
-	"say so in one short sentence.";
+	"say so in one short sentence. If it stopped at a limit, a refusal or anything else " +
+	"only the user can change, and you have told the user so, that is finished too: say so " +
+	"in one short sentence and do not look for a way around it.";
 
 /**
  * The third branch, for a model that was trying to ask the user something.
