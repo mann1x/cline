@@ -203,6 +203,8 @@ describe("strong coding nudges", () => {
 			"All three files have been updated.\n\nThe task is complete.",
 			// Session 3o4bp: the word in bold, then a summary.
 			"The web scraping of `https://zentimings.com` is now **complete**.\n\n### Scrape Details:\n- **Status:** Complete\n- **Files Fetched:** 20 files\n\nYou can find the overview in:\n**`zentimings_scrape/index.md`**",
+			// Session xkuuh: the same claim in the first person.
+			"I have successfully completed the web scraping of `https://zentimings.com/`.\n\n### Summary of Work:\n1.  **Mapped the Site**: one main page.\n2.  **Crawled the Site**: 22 files.\n\n- **Documentation**: `index.md` lists every captured file.",
 		]) {
 			const model = new ScriptedModel(["!work", report]);
 			const runtime = new AgentRuntime({
@@ -301,6 +303,8 @@ describe("strong coding nudges", () => {
 			"",
 			"I fetched the page. Next, I will download the stylesheets.",
 			"The page is saved. Should I fetch the pictures too?",
+			"I have finished the first page. Next, I will fetch the second.",
+			"The page is fetched and I have finished reading it. Two stylesheets are still missing.",
 		]) {
 			const model = new ScriptedModel(["!work", reply, "Done."]);
 			const runtime = new AgentRuntime({

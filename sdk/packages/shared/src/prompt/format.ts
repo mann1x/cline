@@ -483,9 +483,13 @@ export function answersCompletionNudge(text: string | undefined): boolean {
  *   should not: the evidence is the tool's, which reported the stop
  *   (`AgentToolContext.reportStoppedForUser`). Then any report that neither
  *   promises more nor asks something ends the run; that is `reportsOutcome`.
+ * - xkuuh: "I have successfully completed the web scraping of ...", then a
+ *   summary, nudged. The same claim in the first person. It counts only as
+ *   how the message opens: "I have finished reading the file" in the middle
+ *   of a status is not a claim about the task.
  */
 const COMPLETION_STATEMENT =
-	/(?:^done\b|\b(?:is|are|was|were|has been|have been) (?:now |all |fully |successfully )?(?:complete|completed|finished|done)\b)/i;
+	/(?:^done\b|^i(?:'ve| have) (?:now |fully |successfully )?(?:completed|finished)\b|\b(?:is|are|was|were|has been|have been) (?:now |all |fully |successfully )?(?:complete|completed|finished|done)\b)/i;
 
 function endsOnPromiseOrQuestion(trimmed: string): boolean {
 	return (
