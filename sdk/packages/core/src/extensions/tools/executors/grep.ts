@@ -151,6 +151,35 @@ async function collectFiles(
 	return found.sort();
 }
 
+/** The most of one line that is printed; a longer one is cut around its match. */
+const MAX_SHOWN_LINE_CHARS = 400;
+
+/**
+ * One line as it is printed: whole, or for a long one the part around its
+ * match with where that is.
+ *
+ * A minified script is a few lines of tens of thousands of characters. Printed
+ * whole, the first of them was larger than the whole output allowance, so it
+ * was dropped, everything after it with it, and the search answered "No match"
+ * for text that was there -- on pandorum, 2026-10-10, `question` in a file with
+ * eight lines holding it, while `grayed out`, which only a short line holds,
+ * was found. A model that has just read the word in the file does not believe
+ * that, and searched the same file fourteen times.
+ */
+function shownLine(line: string, regex: RegExp, isHit: boolean): string {
+	if (line.length <= MAX_SHOWN_LINE_CHARS) {
+		return line;
+	}
+	const match = isHit ? regex.exec(line) : null;
+	const at = match?.index ?? 0;
+	const start = Math.max(0, at - Math.floor(MAX_SHOWN_LINE_CHARS / 3));
+	const end = Math.min(line.length, start + MAX_SHOWN_LINE_CHARS);
+	const where = match
+		? `match at column ${(at + 1).toLocaleString("en-US")} of a line of ${line.length.toLocaleString("en-US")} characters`
+		: `a line of ${line.length.toLocaleString("en-US")} characters`;
+	return `${start > 0 ? "…" : ""}${line.slice(start, end)}${end < line.length ? "…" : ""}  [${where}; characters ${(start + 1).toLocaleString("en-US")}-${end.toLocaleString("en-US")} shown]`;
+}
+
 function looksBinary(content: string): boolean {
 	// A NUL in the first few KB, which is how grep decides. The escape matters:
 	// writing the byte itself puts a real NUL in this source file, and then grep
@@ -291,14 +320,19 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 				const isHit = hits.includes(index);
 				// grep separates a context line with `-` and a match with `:`.
 				const separator = isHit ? ":" : "-";
+				const text = shownLine(fileLines[index] as string, regex, isHit);
 				push(
 					showLineNumbers
-						? `${shown}${separator}${index + 1}${separator}${fileLines[index]}`
-						: `${shown}${separator}${fileLines[index]}`,
+						? `${shown}${separator}${index + 1}${separator}${text}`
+						: `${shown}${separator}${text}`,
 				);
 			}
 		}
 
+		if (lines.length === 0 && totalMatches > 0) {
+			// Found, and nothing fitted the output: never "No match".
+			return `${totalMatches} matching line${totalMatches === 1 ? "" : "s"} in ${filesWithMatches} file${filesWithMatches === 1 ? "" : "s"}, but the output allowance of ${limit} characters has no room for them — narrow the pattern, or pass fewer paths.`;
+		}
 		if (lines.length === 0) {
 			// An empty result is an answer, not a failure — saying so stops a model
 			// re-running the same search expecting a different outcome.

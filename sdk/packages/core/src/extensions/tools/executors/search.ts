@@ -10,7 +10,7 @@ import * as path from "node:path";
 import type { AgentToolContext } from "@cline/shared";
 import { getFileIndex } from "../../../services/workspace";
 import type { SearchExecutor, SearchQueryOptions } from "../types";
-import { MAX_LINE_CHARS, MAX_SEARCH_OUTPUT_CHARS } from "./output-limits";
+import { MAX_SEARCH_OUTPUT_CHARS } from "./output-limits";
 
 /**
  * Cap on buffered `rg --json` stdout. Each event embeds the full text of its
@@ -21,6 +21,31 @@ import { MAX_LINE_CHARS, MAX_SEARCH_OUTPUT_CHARS } from "./output-limits";
  * MAX_SEARCH_OUTPUT_CHARS anyway, so output past this is never shown.
  */
 const MAX_RG_STDOUT_CHARS = 10 * 1024 * 1024;
+
+/** The most of one line that is printed. */
+const MAX_SHOWN_LINE_CHARS = 400;
+
+/**
+ * One line cut to what a reader can use: the matching line around its match
+ * (`column`, from 1), a neighbour from its start.
+ *
+ * A minified script is a few lines of tens of thousands of characters, and a
+ * match with two lines of context either side is five of them. One search for
+ * `question` in a scraped site returned 49,782 characters, twice, each line
+ * cut from its start so that the match at column 3,110 was not in it
+ * (pandorum, 2026-10-10).
+ */
+function fitLine(text: string, column?: number): string {
+	if (text.length <= MAX_SHOWN_LINE_CHARS) {
+		return text;
+	}
+	const start =
+		column === undefined
+			? 0
+			: Math.max(0, column - 1 - Math.floor(MAX_SHOWN_LINE_CHARS / 3));
+	const end = Math.min(text.length, start + MAX_SHOWN_LINE_CHARS);
+	return `${start > 0 ? "…" : ""}${text.slice(start, end)}${end < text.length ? "…" : ""}  [a line of ${text.length.toLocaleString("en-US")} characters; ${(start + 1).toLocaleString("en-US")}-${end.toLocaleString("en-US")} shown]`;
+}
 
 /**
  * Options for the search executor
@@ -248,6 +273,11 @@ function searchWithRipgrep(
 			if (code === 0 || code === 1) {
 				try {
 					const matches: SearchMatch[] = [];
+					// Context lines arrive before their match. They belong to the
+					// next match of the same file, never to the last match of the
+					// file before it.
+					let before: string[] = [];
+					let lastInFile: SearchMatch | undefined;
 					// Drop the trailing partial event left behind by the stdout cap.
 					const lines = stdout
 						.slice(0, stdout.lastIndexOf("\n") + 1)
@@ -258,27 +288,46 @@ function searchWithRipgrep(
 						if (matches.length >= maxResults) break;
 
 						const json = JSON.parse(line);
-						if (json.type === "match") {
+						if (json.type === "begin") {
+							before = [];
+							lastInFile = undefined;
+						} else if (json.type === "match") {
 							const matchData = json.data;
-							const contextLines: string[] = [];
+							const shownLines: string[] = before;
+							before = [];
 
 							if (json.data.submatches && json.data.submatches.length > 0) {
 								const submatch = json.data.submatches[0];
-								matches.push({
+								// The matching line itself, around its match.
+								const matched = String(matchData.lines?.text ?? "").replace(
+									/\r?\n$/,
+									"",
+								);
+								if (matched) {
+									shownLines.push(
+										`> ${matchData.line_number}: ${fitLine(matched, (submatch?.start ?? 0) + 1)}`,
+									);
+								}
+								lastInFile = {
 									file: matchData.path.text,
 									line: matchData.line_number,
 									column: (submatch?.start ?? 0) + 1,
 									match: submatch?.match?.text ?? "",
-									context: contextLines,
-								});
+									context: shownLines,
+								};
+								matches.push(lastInFile);
 							}
-						} else if (json.type === "context" && matches.length > 0) {
-							const lastMatch = matches[matches.length - 1];
-							const prefix =
-								json.data.line_number === lastMatch.line ? ">" : " ";
-							lastMatch.context.push(
-								`${prefix} ${json.data.line_number}: ${json.data.lines?.text ?? json.data.line?.text ?? ""}`,
-							);
+						} else if (json.type === "context") {
+							const shown = `  ${json.data.line_number}: ${fitLine(String(json.data.lines?.text ?? json.data.line?.text ?? "").replace(/\r?\n$/, ""))}`;
+							if (
+								lastInFile &&
+								json.data.line_number > lastInFile.line &&
+								json.data.line_number - lastInFile.line <= contextLines
+							) {
+								lastInFile.context.push(shown);
+							} else {
+								before.push(shown);
+							}
 						}
 					}
 
@@ -460,7 +509,7 @@ export function createSearchExecutor(
 						for (let i = contextStart; i <= contextEnd; i++) {
 							const prefix = i === lineIdx ? ">" : " ";
 							contextLinesArr.push(
-								`${prefix} ${i + 1}: ${lines[i].slice(0, MAX_LINE_CHARS)}`,
+								`${prefix} ${i + 1}: ${fitLine(lines[i] as string, i === lineIdx ? match.index + 1 : undefined)}`,
 							);
 						}
 

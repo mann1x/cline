@@ -38,6 +38,32 @@ describe("grep", () => {
 		expect(output).not.toContain("THE QUICK");
 	});
 
+	// A minified script: lines of tens of thousands of characters. The first
+	// match was larger than the whole output allowance and the answer was "No
+	// match" (pandorum, 2026-10-10).
+	it("finds text in a very long line and shows the part around it", async () => {
+		const long = `${"a=1;".repeat(20_000)}{id:"x",question:"Why?"}${"b=2;".repeat(20_000)}`;
+		await fs.writeFile(join(dir, "min.js"), `${long}\nshort question here\n`);
+
+		const result = await grep({ pattern: "question", paths: ["min.js"] });
+
+		expect(result).toContain("2 matching lines in 1 file");
+		expect(result).toContain('{id:"x",question:"Why?"}');
+		expect(result).toContain(
+			"match at column 80,009 of a line of 160,024 characters",
+		);
+		expect(result).toContain("min.js:2:short question here");
+		// The excerpt, not the line.
+		expect(result.length).toBeLessThan(1500);
+	});
+
+	it("never says no match when the output has no room for what matched", async () => {
+		const tight = createGrepExecutor({ cwd: dir, maxOutputChars: 10 });
+		const result = await tight({ pattern: "quick", paths: ["sample.txt"] });
+		expect(result).not.toContain("No match");
+		expect(result).toContain("1 matching line in 1 file");
+	});
+
 	it("ignores case when asked", async () => {
 		const output = await grep({
 			pattern: "the",
