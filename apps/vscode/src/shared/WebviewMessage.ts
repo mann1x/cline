@@ -1,5 +1,6 @@
 export interface WebviewMessage {
-	type: "grpc_request" | "grpc_request_cancel"
+	/** `dock_chat` comes from the sidebar's placeholder while the chat is undocked. */
+	type: "grpc_request" | "grpc_request_cancel" | "dock_chat"
 	grpc_request?: GrpcRequest
 	grpc_request_cancel?: GrpcCancel
 }

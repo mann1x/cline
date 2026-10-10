@@ -2,12 +2,14 @@ import { sendShowWebviewEvent } from "@core/controller/ui/subscribeToShowWebview
 import { WebviewProvider } from "@core/webview"
 import * as vscode from "vscode"
 import { handleGrpcRequest, handleGrpcRequestCancel } from "@/core/controller/grpc-handler"
+import { getNonce } from "@/core/webview/getNonce"
 import { HostProvider } from "@/hosts/host-provider"
 import { ExtensionRegistryInfo } from "@/registry"
 import { telemetryService } from "@/services/telemetry"
 import type { ExtensionMessage } from "@/shared/ExtensionMessage"
 import { Logger } from "@/shared/services/Logger"
 import { WebviewMessage } from "@/shared/WebviewMessage"
+import { setUndockedChatPanel } from "./undocked-chat"
 
 /*
 https://github.com/microsoft/vscode-webview-ui-toolkit-samples/blob/main/default/weather-webview/src/providers/WeatherViewProvider.ts
@@ -19,27 +21,168 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 	// views based on their id, and updating the id would break existing instances of the extension.
 	public static readonly SIDEBAR_ID = ExtensionRegistryInfo.views.Sidebar
 
+	/** The `viewType` of the undocked chat's editor panel. Matches the `when` clauses in package.json. */
+	public static readonly UNDOCKED_PANEL_ID = ExtensionRegistryInfo.views.UndockedChat
+
 	private webview?: vscode.WebviewView
 	private disposables: vscode.Disposable[] = []
 	private hasResolvedView = false
+	/**
+	 * The chat as an editor tab in a window of its own, while undocked. There is
+	 * one chat app at a time: undocked it runs here and the sidebar shows a
+	 * placeholder, so the controller never has two views to keep in step.
+	 */
+	private panel?: vscode.WebviewPanel
+	private panelDisposables: vscode.Disposable[] = []
+
+	/** The webview the chat app is running in: the undocked panel if there is one, else the sidebar. */
+	private get chatWebview(): vscode.Webview | undefined {
+		return this.panel?.webview ?? this.webview?.webview
+	}
 
 	override getWebviewUrl(path: string) {
-		if (!this.webview) {
+		const webview = this.chatWebview
+		if (!webview) {
 			throw new Error("Webview not initialized")
 		}
-		const uri = this.webview.webview.asWebviewUri(vscode.Uri.file(path))
-		return uri.toString()
+		return webview.asWebviewUri(vscode.Uri.file(path)).toString()
 	}
 
 	override getCspSource() {
-		if (!this.webview) {
+		const webview = this.chatWebview
+		if (!webview) {
 			throw new Error("Webview not initialized")
 		}
-		return this.webview.webview.cspSource
+		return webview.cspSource
 	}
 
 	override isVisible() {
-		return this.webview?.visible || false
+		return this.panel ? this.panel.visible : this.webview?.visible || false
+	}
+
+	public get isUndocked(): boolean {
+		return this.panel !== undefined
+	}
+
+	/**
+	 * Bring the undocked chat forward. Returns false when the chat is docked,
+	 * for a caller that then shows the sidebar as it always did.
+	 */
+	public revealUndocked(preserveFocus = false): boolean {
+		if (!this.panel) {
+			return false
+		}
+		this.panel.reveal(undefined, preserveFocus)
+		return true
+	}
+
+	private chatHtml(): Promise<string> | string {
+		return this.context.extensionMode === vscode.ExtensionMode.Development ? this.getHMRHtmlContent() : this.getHtmlContent()
+	}
+
+	/**
+	 * Move the chat into a window of its own. VS Code has no call that opens a
+	 * floating window, so the chat is opened as an editor tab and that tab is
+	 * moved out with the workbench's own command. If the move is refused the
+	 * chat stays as an editor tab, which still frees the sidebar.
+	 */
+	public async undock(): Promise<void> {
+		if (this.panel) {
+			this.panel.reveal()
+			return
+		}
+		const panel = vscode.window.createWebviewPanel(
+			VscodeWebviewProvider.UNDOCKED_PANEL_ID,
+			"Cerebriline",
+			{ viewColumn: vscode.ViewColumn.Active, preserveFocus: false },
+			{
+				enableScripts: true,
+				retainContextWhenHidden: true,
+				localResourceRoots: [vscode.Uri.file(HostProvider.get().extensionFsPath)],
+			},
+		)
+		this.panel = panel
+		// The sidebar's first load clears stale task state. With the chat already
+		// running here, a sidebar opened for the first time later must not.
+		if (!this.hasResolvedView) {
+			this.hasResolvedView = true
+			this.controller.clearTask()
+		}
+		panel.webview.onDidReceiveMessage((message) => this.handleWebviewMessage(message), null, this.panelDisposables)
+		panel.onDidDispose(
+			() => {
+				// Closing the window is docking.
+				if (this.panel === panel) {
+					void this.dock()
+				}
+			},
+			null,
+			this.panelDisposables,
+		)
+		setUndockedChatPanel(() => panel.viewColumn)
+		await vscode.commands.executeCommand("setContext", ExtensionRegistryInfo.contextKeys.ChatUndocked, true)
+		panel.webview.html = await this.chatHtml()
+		if (this.webview) {
+			this.webview.webview.html = this.getUndockedPlaceholderHtml()
+		}
+		try {
+			await vscode.commands.executeCommand("workbench.action.moveEditorToNewWindow")
+		} catch (error) {
+			Logger.warn(`[VscodeWebviewProvider] Could not move the chat to its own window; it stays as an editor tab: ${error}`)
+		}
+		Logger.log("[VscodeWebviewProvider] Chat undocked")
+	}
+
+	/** Bring the chat back into the sidebar. The conversation is the controller's, so it carries on. */
+	public async dock(): Promise<void> {
+		const panel = this.panel
+		if (!panel) {
+			return
+		}
+		this.panel = undefined
+		while (this.panelDisposables.length) {
+			this.panelDisposables.pop()?.dispose()
+		}
+		setUndockedChatPanel(undefined)
+		try {
+			panel.dispose()
+		} catch {
+			// Already gone: docking was triggered by the window being closed.
+		}
+		await vscode.commands.executeCommand("setContext", ExtensionRegistryInfo.contextKeys.ChatUndocked, false)
+		if (this.webview) {
+			this.webview.webview.html = await this.chatHtml()
+		}
+		await vscode.commands.executeCommand(`${VscodeWebviewProvider.SIDEBAR_ID}.focus`)
+		Logger.log("[VscodeWebviewProvider] Chat docked")
+	}
+
+	private getUndockedPlaceholderHtml(): string {
+		const nonce = getNonce()
+		return /*html*/ `
+			<!DOCTYPE html>
+			<html lang="en">
+				<head>
+					<meta charset="utf-8">
+					<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+					<title>Cerebriline</title>
+					<style>
+						body { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 32px 16px; color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); text-align: center; }
+						p { margin: 0; color: var(--vscode-descriptionForeground); }
+						button { padding: 6px 14px; border: none; border-radius: 2px; cursor: pointer; color: var(--vscode-button-foreground); background: var(--vscode-button-background); font-family: inherit; font-size: inherit; }
+						button:hover { background: var(--vscode-button-hoverBackground); }
+					</style>
+				</head>
+				<body>
+					<p>The chat is open in its own window.</p>
+					<button id="dock">Dock chat here</button>
+					<script nonce="${nonce}">
+						const vscode = acquireVsCodeApi()
+						document.getElementById("dock").addEventListener("click", () => vscode.postMessage({ type: "dock_chat" }))
+					</script>
+				</body>
+			</html>
+		`
 	}
 
 	public getWebview(): vscode.WebviewView | undefined {
@@ -65,10 +208,8 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 			localResourceRoots: [vscode.Uri.file(HostProvider.get().extensionFsPath)],
 		}
 
-		webviewView.webview.html =
-			this.context.extensionMode === vscode.ExtensionMode.Development
-				? await this.getHMRHtmlContent()
-				: this.getHtmlContent()
+		// Undocked, the chat app is running in its own window; see `panel`.
+		webviewView.webview.html = this.panel ? this.getUndockedPlaceholderHtml() : await this.chatHtml()
 
 		// Sets up an event listener to listen for messages passed from the webview view context
 		// and executes code based on the message that is received
@@ -184,6 +325,10 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 				}
 				break
 			}
+			case "dock_chat": {
+				await this.dock()
+				break
+			}
 			default: {
 				Logger.error("Received unhandled WebviewMessage type:", JSON.stringify(message))
 			}
@@ -197,7 +342,7 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 	 * @returns A thenable that resolves to a boolean indicating success, or undefined if the webview is not available
 	 */
 	private async postMessageToWebview(message: ExtensionMessage): Promise<boolean | undefined> {
-		return this.webview?.webview.postMessage(message)
+		return this.chatWebview?.postMessage(message)
 	}
 
 	/**
@@ -218,6 +363,13 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 	}
 
 	override async dispose() {
+		const panel = this.panel
+		this.panel = undefined
+		while (this.panelDisposables.length) {
+			this.panelDisposables.pop()?.dispose()
+		}
+		setUndockedChatPanel(undefined)
+		panel?.dispose()
 		this.disposeView()
 		await super.dispose()
 	}

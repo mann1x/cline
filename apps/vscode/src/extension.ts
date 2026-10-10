@@ -167,6 +167,8 @@ export async function activate(context: vscode.ExtensionContext) {
 	)
 	context.subscriptions.push(vscode.commands.registerCommand(commands.SettingsButton, () => sendSettingsButtonClickedEvent()))
 	context.subscriptions.push(vscode.commands.registerCommand(commands.HistoryButton, () => sendHistoryButtonClickedEvent()))
+	context.subscriptions.push(vscode.commands.registerCommand(commands.UndockChat, () => webview.undock()))
+	context.subscriptions.push(vscode.commands.registerCommand(commands.DockChat, () => webview.dock()))
 	context.subscriptions.push(vscode.commands.registerCommand(commands.AccountButton, () => sendAccountButtonClickedEvent()))
 	context.subscriptions.push(vscode.commands.registerCommand(commands.WorktreesButton, () => sendWorktreesButtonClickedEvent()))
 	// Cerebriline is not on the Marketplace -- upstream Cline is, and one of us
@@ -392,7 +394,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
 			// Show the webview
 			const webviewView = webview.getWebview()
-			if (webviewView) {
+			if (webview.revealUndocked(preserveEditorFocus)) {
+				// Undocked: the chat's own window came forward.
+			} else if (webviewView) {
 				if (preserveEditorFocus) {
 					// Only make webview visible without forcing focus
 					webviewView.show(false)

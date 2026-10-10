@@ -30,6 +30,8 @@ const ClineCommands = {
 	MarketplaceButton: prefix + ".marketplaceButtonClicked",
 	SettingsButton: prefix + ".settingsButtonClicked",
 	HistoryButton: prefix + ".historyButtonClicked",
+	UndockChat: prefix + ".undockChat",
+	DockChat: prefix + ".dockChat",
 	AccountButton: prefix + ".accountButtonClicked",
 	WorktreesButton: prefix + ".worktreesButtonClicked",
 	TerminalOutput: prefix + ".addTerminalOutputToChat",
@@ -55,6 +57,8 @@ const ClineCommands = {
  */
 const ClineViewIds = {
 	Sidebar: prefix + ".SidebarProvider",
+	/** The undocked chat's editor panel `viewType`; used in `activeWebviewPanelId` when clauses. */
+	UndockedChat: prefix + ".undockedChat",
 }
 
 /** The `contributes.walkthroughs[].id` this extension declares. */
@@ -67,6 +71,7 @@ const WALKTHROUGH_ID = "CerebrilineWalkthrough"
 const ClineContextKeys = {
 	DevMode: prefix + ".isDevMode",
 	GeneratingCommit: prefix + ".isGeneratingCommit",
+	ChatUndocked: prefix + ".chatUndocked",
 }
 
 /**

@@ -134,6 +134,7 @@ export const TextEditorLineNumbersStyle = { Off: 0, On: 1, Relative: 2 }
 export const TextEditorRevealType = { Default: 0, InCenter: 1, InCenterIfOutsideViewport: 2, AtTop: 3 }
 export const OverviewRulerLane = { Left: 1, Center: 2, Right: 4, Full: 7 }
 export const DecorationRangeBehavior = { OpenOpen: 0, ClosedClosed: 1, OpenClosed: 2, ClosedOpen: 3 }
+export const ViewColumn = { Active: -1, Beside: -2, One: 1, Two: 2, Three: 3 }
 export const EndOfLine = { LF: 1, CRLF: 2 }
 export const QuickPickItemKind = { Separator: -1, Default: 0 }
 export const InputBoxValidationSeverity = { Info: 1, Warning: 2, Error: 3 }

@@ -148,6 +148,18 @@
 				"icon": "$(history)"
 			},
 			{
+				"command": "cerebriline.undockChat",
+				"title": "Undock Chat into Its Own Window",
+				"category": "Cerebriline",
+				"icon": "$(link-external)"
+			},
+			{
+				"command": "cerebriline.dockChat",
+				"title": "Dock Chat Back into the Sidebar",
+				"category": "Cerebriline",
+				"icon": "$(layout-sidebar-right)"
+			},
+			{
 				"command": "cerebriline.accountButtonClicked",
 				"title": "Account",
 				"icon": "$(account)"
@@ -295,6 +307,48 @@
 					"command": "cerebriline.settingsButtonClicked",
 					"group": "navigation@6",
 					"when": "view == cerebriline.SidebarProvider"
+				},
+				{
+					"command": "cerebriline.undockChat",
+					"group": "navigation@7",
+					"when": "view == cerebriline.SidebarProvider && !cerebriline.chatUndocked"
+				},
+				{
+					"command": "cerebriline.dockChat",
+					"group": "navigation@7",
+					"when": "view == cerebriline.SidebarProvider && cerebriline.chatUndocked"
+				}
+			],
+			"editor/title": [
+				{
+					"command": "cerebriline.plusButtonClicked",
+					"group": "navigation@1",
+					"when": "activeWebviewPanelId == cerebriline.undockedChat"
+				},
+				{
+					"command": "cerebriline.marketplaceButtonClicked",
+					"group": "navigation@2",
+					"when": "activeWebviewPanelId == cerebriline.undockedChat"
+				},
+				{
+					"command": "cerebriline.historyButtonClicked",
+					"group": "navigation@3",
+					"when": "activeWebviewPanelId == cerebriline.undockedChat"
+				},
+				{
+					"command": "cerebriline.accountButtonClicked",
+					"group": "navigation@5",
+					"when": "activeWebviewPanelId == cerebriline.undockedChat"
+				},
+				{
+					"command": "cerebriline.settingsButtonClicked",
+					"group": "navigation@6",
+					"when": "activeWebviewPanelId == cerebriline.undockedChat"
+				},
+				{
+					"command": "cerebriline.dockChat",
+					"group": "navigation@7",
+					"when": "activeWebviewPanelId == cerebriline.undockedChat"
 				}
 			],
 			"editor/context": [
@@ -342,6 +396,14 @@
 				}
 			],
 			"commandPalette": [
+				{
+					"command": "cerebriline.undockChat",
+					"when": "!cerebriline.chatUndocked"
+				},
+				{
+					"command": "cerebriline.dockChat",
+					"when": "cerebriline.chatUndocked"
+				},
 				{
 					"command": "cerebriline.generateGitCommitMessage",
 					"when": "config.git.enabled && !cerebriline.isGeneratingCommit"

@@ -1,4 +1,5 @@
 import * as vscode from "vscode"
+import { editorColumnOutsideUndockedChat } from "@/hosts/vscode/undocked-chat"
 import { CommentReviewController, type ReviewComment } from "@/integrations/editor/CommentReviewController"
 import { Logger } from "@/shared/services/Logger"
 import { DIFF_VIEW_URI_SCHEME } from "../VscodeDiffContentProvider"
@@ -150,10 +151,12 @@ export class VscodeCommentReviewController extends CommentReviewController imple
 			// Show the document and scroll to the comment
 			// Use the start of the range so the comment appears in center (not the code block)
 			const commentPosition = new vscode.Range(range.start, range.start)
+			const viewColumn = editorColumnOutsideUndockedChat()
 			const editor = await vscode.window.showTextDocument(doc, {
 				selection: commentPosition,
 				preserveFocus: false,
 				preview: true,
+				...(viewColumn !== undefined ? { viewColumn } : {}),
 			})
 
 			// Reveal with the start position in center so the comment bubble is visible

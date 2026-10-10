@@ -1,4 +1,5 @@
 import * as vscode from "vscode"
+import { editorColumnOutsideUndockedChat } from "@/hosts/vscode/undocked-chat"
 import { buildEditPreviewAnimation, EditPreview, type EditPreviewContent } from "@/integrations/editor/EditPreview"
 import { Logger } from "@/shared/services/Logger"
 import { DecorationController } from "./DecorationController"
@@ -89,9 +90,11 @@ export class VscodeEditPreview extends EditPreview {
 		// The right side starts as the original; the animation sweeps the new content in.
 		editPreviewContentProvider.set(this.rightUri, content.leftContent)
 
+		const viewColumn = editorColumnOutsideUndockedChat()
 		await vscode.commands.executeCommand("vscode.diff", this.leftUri, this.rightUri, content.title, {
 			preview: false,
 			preserveFocus: true,
+			...(viewColumn !== undefined ? { viewColumn } : {}),
 		})
 
 		// Fire-and-forget: the approval ask should render while the animation plays,

@@ -1,4 +1,5 @@
 import * as vscode from "vscode"
+import { editorColumnOutsideUndockedChat } from "@/hosts/vscode/undocked-chat"
 import { ShowTextDocumentRequest, TextEditorInfo } from "@/shared/proto/host/window"
 import { arePathsEqual } from "@/utils/path"
 
@@ -34,6 +35,13 @@ export async function showTextDocument(request: ShowTextDocumentRequest): Promis
 	}
 	if (request.options?.viewColumn !== undefined) {
 		options.viewColumn = request.options.viewColumn
+	}
+	if (options.viewColumn === undefined) {
+		// Undocked, the active group is the chat's own window.
+		const outsideChat = editorColumnOutsideUndockedChat()
+		if (outsideChat !== undefined) {
+			options.viewColumn = outsideChat
+		}
 	}
 
 	const editor = await vscode.window.showTextDocument(uri, options)
