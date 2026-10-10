@@ -45,7 +45,7 @@ const LIBRARIAN_DESCRIPTION =
 	'Look at the web before making a book from it. "search": find pages for a topic, with their titles and what they are about. "map": the pages of a site, by their links, without reading them. "read": one page as markdown, to judge whether it belongs in the book. Rendered in a browser, so pages built by JavaScript are read too. Use it to choose the links; library_web_book reads them into the Library.';
 
 const GENERAL_DESCRIPTION =
-	'Read the web through a browser, so pages built by JavaScript are read too. "search": find pages for a topic, with their titles and what they are about. "map": the pages of a site, by their links, without reading them. "read": one page as markdown; with `save_to` it is written to that file and only its outline is returned. "crawl": read a page and the pages it links to, as deep and as many as asked, and write each as a markdown file under the folder `save_to`, with an `index.md` listing them; the pages are not returned, read the files you need afterwards. A crawl stays below the address it starts from (from /docs/ it reads /docs/...), unless `whole_site` is true. Map a site before crawling it, to choose where to start, `include_paths` and a sensible `limit`.';
+	'Read the web through a browser, so pages built by JavaScript are read too. Asked to scrape, copy or download a site, `crawl` it with `save_to`: the result of a scrape is the files, and your reply says where they are. "search": find pages for a topic, with their titles and what they are about. "map": the pages of a site, by their links, without reading them. "read": one page as markdown; with `save_to` it is written to that file and only its outline is returned. "crawl": read a page and the pages it links to, as deep and as many as asked, and write each as a markdown file under the folder `save_to`, with an `index.md` listing them; the pages are not returned, read the files you need afterwards. A crawl stays below the address it starts from (from /docs/ it reads /docs/...), unless `whole_site` is true. Map a site before crawling it, to choose where to start, `include_paths` and a sensible `limit`.';
 
 function text(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
@@ -141,6 +141,43 @@ function pageFile(page: ScrapedPage): string {
 		page.markdown.trimEnd(),
 		"",
 	].join("\n");
+}
+
+/**
+ * Where the links of the pages read lead: pages of the same site that were
+ * not read, and other sites. It is what tells "the site has no more pages"
+ * from "the crawl stopped short" -- the two read the same from a page count.
+ */
+export function linkCensus(
+	pages: readonly ScrapedPage[],
+	start: string,
+): { unread: string[]; elsewhere: string[] } {
+	let host = "";
+	try {
+		host = new URL(start).host.replace(/^www\./, "");
+	} catch {
+		// No host to compare with: every link counts as elsewhere.
+	}
+	const key = (link: string) => link.replace(/\/+$/, "");
+	const read = new Set(pages.map((page) => key(page.url)));
+	const unread = new Set<string>();
+	const elsewhere = new Set<string>();
+	for (const page of pages) {
+		for (const raw of page.links ?? []) {
+			const link = cleanLink(raw);
+			if (!link) continue;
+			const there = new URL(link).host.replace(/^www\./, "");
+			if (there !== host) elsewhere.add(there);
+			else if (!read.has(key(link))) unread.add(link);
+		}
+	}
+	return { unread: [...unread], elsewhere: [...elsewhere] };
+}
+
+function sitesLine(hosts: readonly string[], most = 8): string {
+	return hosts.length === 0
+		? ""
+		: ` (${hosts.slice(0, most).join(", ")}${hosts.length > most ? `, and ${hosts.length - most} more` : ""})`;
 }
 
 function outline(markdown: string, most = 40): string[] {
@@ -267,7 +304,27 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 						...(signal ? { signal } : {}),
 					});
 					if (links.length === 0) {
-						return `No links found from ${url}. Try the site's front page, or read the page and follow what it links to.`;
+						// A site with one page maps to nothing. Its own links say
+						// whether that is what this is.
+						const page = await scrapePage(scrape, url, {
+							links: true,
+							...(signal ? { signal } : {}),
+						}).catch(() => undefined);
+						if (!page) {
+							return `No pages found for ${url}, and the page itself could not be read. Check the address.`;
+						}
+						const census = linkCensus([page], url);
+						if (census.unread.length > 0) {
+							return [
+								`The site's map is empty, but ${url} links to ${plural(census.unread.length, "page")} of the same site:`,
+								...census.unread.slice(0, 200),
+							].join("\n");
+						}
+						return `${url} is a site of one page: it links to no other page of its own.${
+							census.elsewhere.length
+								? ` Its ${plural(census.elsewhere.length, "other link")} go to other sites${sitesLine(census.elsewhere)}.`
+								: ""
+						} Read it${general ? ", or crawl it to save it" : ""}; there is nothing more to map.`;
 					}
 					return [`${plural(links.length, "page")} of ${url}:`, ...links].join(
 						"\n",
@@ -333,6 +390,7 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 					...(include.length ? { includePaths: include } : {}),
 					...(exclude.length ? { excludePaths: exclude } : {}),
 					...(request.whole_site === true ? { entireDomain: true } : {}),
+					links: true,
 					...(signal ? { signal } : {}),
 					onProgress: (done, total) => {
 						if (Date.now() - lastUpdate < 2000) return;
@@ -342,6 +400,23 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 						});
 					},
 				});
+				// Fewer pages than asked for is either the whole site or a crawl
+				// that stopped short; the links of what was read say which.
+				const census = linkCensus(crawl.pages, url);
+				const whyItEnded = (): string => {
+					const elsewhere = census.elsewhere.length
+						? ` Links to other sites${sitesLine(census.elsewhere)} are not followed.`
+						: "";
+					if (census.unread.length === 0) {
+						return `That is the whole site from this address: every page of it that these pages link to was read.${elsewhere}`;
+					}
+					const wholeSite = request.whole_site === true;
+					return `${plural(census.unread.length, "more page")} of this site ${census.unread.length === 1 ? "is" : "are"} linked and ${census.unread.length === 1 ? "was" : "were"} not read: ${
+						wholeSite
+							? `deeper than depth ${asked.depth}`
+							: `deeper than depth ${asked.depth}, or not below ${url} (\`whole_site\` follows those)`
+					}. For example ${census.unread.slice(0, 5).join(", ")}.${elsewhere}`;
+				};
 				await fs.mkdir(target, { recursive: true });
 				const taken = new Set<string>(["index.md"]);
 				const folder =
@@ -372,7 +447,10 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 						? [
 								`The page limit was reached, so the site may have more. The user's ceiling is ${plural(scrape.maxPages, "page")} and depth ${scrape.maxDepth}.`,
 							]
-						: []),
+						: crawl.unfinished
+							? []
+							: [whyItEnded()]),
+					"Each page is saved whole, with its address and title at the top: the files do not need reading back to check them.",
 				];
 				await fs.writeFile(
 					path.join(target, "index.md"),

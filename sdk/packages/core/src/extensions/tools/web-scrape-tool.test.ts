@@ -12,12 +12,17 @@ import {
 
 const CONTEXT = { agentId: "a", conversationId: "c", iteration: 1 } as never;
 
-const pages: Record<string, string> = {
+const PAGES: Record<string, string> = {
 	"https://example.com/": "<h1>Home</h1><p>Welcome.</p>",
 	"https://example.com/docs/intro.html":
 		"<h1>Intro</h1><h2>Setup</h2><p>Install it.</p>",
 	"https://example.com/docs/api?v=2": "<h1>API</h1><p>Calls.</p>",
 };
+
+let pages: Record<string, string>;
+/** What each page links to, as the endpoint reports it. */
+let links: Record<string, string[]>;
+let mapped: string[];
 
 let root: string;
 let crawlBody: Record<string, unknown> | undefined;
@@ -26,6 +31,9 @@ let scrape: LibraryScrapeConfig | undefined;
 beforeEach(() => {
 	root = mkdtempSync(join(tmpdir(), "web-scrape-"));
 	crawlBody = undefined;
+	pages = { ...PAGES };
+	links = {};
+	mapped = [];
 	scrape = {
 		baseUrl: "http://scrape.test",
 		maxPages: 2,
@@ -40,10 +48,14 @@ beforeEach(() => {
 		const body = JSON.parse(String(init?.body ?? "{}"));
 		const entry = (link: string) => ({
 			html: pages[link],
+			links: links[link] ?? [],
 			metadata: { sourceURL: link, title: `Title of ${link}`, statusCode: 200 },
 		});
 		if (url.endsWith("/v2/scrape")) {
 			return Response.json({ success: true, data: entry(body.url) });
+		}
+		if (url.endsWith("/v2/map")) {
+			return Response.json({ success: true, links: mapped });
 		}
 		if (url.endsWith("/v2/crawl")) {
 			crawlBody = body;
@@ -148,6 +160,58 @@ describe("web_scrape for any task", () => {
 		expect(index).toContain("](example.com/docs/intro.md)");
 		// The pages themselves are not returned.
 		expect(report).not.toContain("Install it.");
+	});
+
+	it("says a site of one page is one, instead of an empty map", async () => {
+		links["https://example.com/"] = [
+			"https://github.com/x/y",
+			"https://discord.gg/z",
+			"https://example.com/#top",
+		];
+		const report = await run({ action: "map", url: "https://example.com" });
+		expect(report).toContain("is a site of one page");
+		expect(report).toContain("github.com, discord.gg");
+		expect(report).toContain("nothing more to map");
+		// A map that missed pages the front page links to lists them.
+		links["https://example.com/"] = ["https://example.com/docs/intro.html"];
+		expect(await run({ action: "map", url: "https://example.com" })).toContain(
+			"links to 1 page of the same site:\nhttps://example.com/docs/intro.html",
+		);
+	});
+
+	it("says why a crawl ended before its limit", async () => {
+		scrape = { ...(scrape as LibraryScrapeConfig), maxPages: 100 };
+		const only = { "https://example.com/": pages["https://example.com/"] };
+		for (const link of Object.keys(pages)) {
+			if (!(link in only)) delete pages[link];
+		}
+		links["https://example.com/"] = ["https://github.com/x/y"];
+		const whole = await run({
+			action: "crawl",
+			url: "https://example.com/",
+			save_to: "one",
+		});
+		expect(whole).toContain(
+			"1 page of https://example.com/ written under one/",
+		);
+		expect(whole).toContain("That is the whole site from this address");
+		expect(whole).toContain(
+			"Links to other sites (github.com) are not followed.",
+		);
+		expect(whole).toContain("do not need reading back");
+		// Pages of the site that were linked and not read are named.
+		links["https://example.com/"] = ["https://example.com/blog/a"];
+		const short = await run({
+			action: "crawl",
+			url: "https://example.com/",
+			depth: 0,
+			save_to: "two",
+		});
+		expect(short).toContain(
+			"1 more page of this site is linked and was not read",
+		);
+		expect(short).toContain("https://example.com/blog/a");
+		expect(short).toContain("`whole_site` follows those");
 	});
 
 	it("needs a folder inside the workspace to crawl into", async () => {

@@ -45,6 +45,8 @@ export interface CrawlOptions {
 	 * address it starts from: from `/docs/intro` it never reaches `/docs/api`.
 	 */
 	entireDomain?: boolean;
+	/** Also give each page's links, to tell what a crawl left unread. */
+	links?: boolean;
 	signal?: AbortSignal;
 	fetch?: typeof fetch;
 	/** How long to wait for the crawl. @default 20 minutes */
@@ -299,7 +301,10 @@ export async function crawlSite(
 				? { excludePaths: options.excludePaths }
 				: {}),
 			...(options.entireDomain ? { crawlEntireDomain: true } : {}),
-			scrapeOptions: { formats: ["html"], onlyMainContent: true },
+			scrapeOptions: {
+				formats: options.links ? ["html", "links"] : ["html"],
+				onlyMainContent: true,
+			},
 		},
 		options,
 	);
