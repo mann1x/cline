@@ -706,8 +706,7 @@ export async function crawlToFolder(
 			: `${plural(pages.length, "page")} of ${url} written under ${folder}/ (${characters.toLocaleString("en-US")} characters; depth ${depth}, at most ${plural(limit, "page")}).`,
 		...ending,
 		...mirrorLines,
-		"Everything is saved whole: the files do not need reading back to check them.",
-		`The list is in ${folder}/index.md.`,
+		`Everything is saved whole, and ${folder}/index.md lists it for the user: neither it nor the files need reading back to check them.`,
 		...rows.slice(0, shown),
 		...(rows.length > shown
 			? [`[${rows.length - shown} more in index.md.]`]
