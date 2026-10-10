@@ -3,6 +3,7 @@ import {
 	clampMessageHistoryLimit,
 	MAX_MESSAGE_HISTORY_ENTRY_CHARS,
 	type MessageHistoryCursor,
+	messageHistoryDirection,
 	pushMessageHistory,
 	stepMessageHistory,
 } from "./message-history"
@@ -49,6 +50,37 @@ describe("message history", () => {
 		}
 		expect(seen).toEqual(["third", "second", "first", "first", "second", "third", "typing"])
 		expect(cursor).toBeUndefined()
+	})
+
+	it("takes Ctrl with the arrows on every platform, and nothing with Shift or Alt", () => {
+		const box = { mac: false, walking: false, selectionStart: 3, selectionEnd: 3, length: 9 }
+		const key = { key: "ArrowUp", ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }
+		expect(messageHistoryDirection(key, box)).toBe("up")
+		expect(messageHistoryDirection({ ...key, key: "ArrowDown" }, { ...box, mac: true })).toBe("down")
+		expect(messageHistoryDirection({ ...key, shiftKey: true }, box)).toBeUndefined()
+		expect(messageHistoryDirection({ ...key, altKey: true }, box)).toBeUndefined()
+		expect(messageHistoryDirection({ ...key, ctrlKey: false }, box)).toBeUndefined()
+		expect(messageHistoryDirection({ ...key, key: "a" }, box)).toBeUndefined()
+	})
+
+	it("takes Cmd on macOS only where the caret jump has nowhere to go", () => {
+		const up = { key: "ArrowUp", ctrlKey: false, metaKey: true, shiftKey: false, altKey: false }
+		const down = { ...up, key: "ArrowDown" }
+		const box = { mac: true, walking: false, selectionStart: 4, selectionEnd: 4, length: 9 }
+		// Mid-text: the caret jumps, as in any text box.
+		expect(messageHistoryDirection(up, box)).toBeUndefined()
+		expect(messageHistoryDirection(down, box)).toBeUndefined()
+		expect(messageHistoryDirection(up, { ...box, selectionStart: 0, selectionEnd: 0 })).toBe("up")
+		expect(messageHistoryDirection(down, { ...box, selectionStart: 9, selectionEnd: 9 })).toBe("down")
+		// A selection reaching the edge is still a selection.
+		expect(messageHistoryDirection(up, { ...box, selectionStart: 0, selectionEnd: 4 })).toBeUndefined()
+		// An empty box is at both edges.
+		expect(messageHistoryDirection(up, { ...box, selectionStart: 0, selectionEnd: 0, length: 0 })).toBe("up")
+		// Walking: every press continues the walk.
+		expect(messageHistoryDirection(up, { ...box, walking: true })).toBe("up")
+		expect(messageHistoryDirection(down, { ...box, walking: true })).toBe("down")
+		// Not on other platforms, where the key is the Windows or Super key.
+		expect(messageHistoryDirection(up, { ...box, mac: false, selectionStart: 0, selectionEnd: 0 })).toBeUndefined()
 	})
 
 	it("does nothing going down from the box, or with no history", () => {

@@ -82,3 +82,46 @@ export function stepMessageHistory(
 	}
 	return { cursor: { index, stash: cursor.stash }, text: history[index] as string }
 }
+
+export interface MessageHistoryKey {
+	key: string
+	ctrlKey: boolean
+	metaKey: boolean
+	shiftKey: boolean
+	altKey: boolean
+}
+
+/**
+ * Which way a key walks the history, if it does.
+ *
+ * Ctrl+Up / Ctrl+Down everywhere. On macOS those belong to Mission Control,
+ * so Cmd+Up / Cmd+Down do it there -- but in a text box those two already
+ * jump the caret to the start and the end of the text. So Cmd is taken only
+ * where that jump has nowhere to go: Up with the caret at the start, Down
+ * with it at the end, and either while a walk is under way. In a box holding
+ * text, the first Cmd+Up moves the caret as it always did and the second one
+ * walks.
+ */
+export function messageHistoryDirection(
+	event: MessageHistoryKey,
+	box: { mac: boolean; walking: boolean; selectionStart: number; selectionEnd: number; length: number },
+): "up" | "down" | undefined {
+	if (event.shiftKey || event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) {
+		return undefined
+	}
+	const direction = event.key === "ArrowUp" ? "up" : "down"
+	if (event.ctrlKey && !event.metaKey) {
+		return direction
+	}
+	if (!box.mac || !event.metaKey || event.ctrlKey) {
+		return undefined
+	}
+	if (box.walking) {
+		return direction
+	}
+	const collapsed = box.selectionStart === box.selectionEnd
+	if (direction === "up") {
+		return collapsed && box.selectionStart === 0 ? "up" : undefined
+	}
+	return collapsed && box.selectionEnd === box.length ? "down" : undefined
+}

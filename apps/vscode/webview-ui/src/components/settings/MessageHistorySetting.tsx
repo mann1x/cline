@@ -13,7 +13,8 @@ import { updateSetting } from "./utils/settingsHandlers"
  * want their messages kept means none of them.
  */
 const MessageHistorySetting: React.FC = () => {
-	const { messageHistoryEnabled, messageHistoryLimit } = useExtensionState()
+	const { messageHistoryEnabled, messageHistoryLimit, platform } = useExtensionState()
+	const keys = platform === "darwin" ? "Cmd+Up and Cmd+Down" : "Ctrl+Up and Ctrl+Down"
 	const enabled = messageHistoryEnabled !== false
 	const limit = messageHistoryLimit ?? DEFAULT_MESSAGE_HISTORY_LIMIT
 
@@ -25,9 +26,11 @@ const MessageHistorySetting: React.FC = () => {
 				<span className="text-base font-medium">Message history</span>
 			</VSCodeCheckbox>
 			<p className="text-sm text-description mt-1">
-				Keeps the messages you send and what you have typed but not sent. Ctrl+Up and Ctrl+Down in the message box walk
-				through the sent messages, and an unsent message is still there after the window reloads. Switching this off
-				deletes what was kept.
+				Keeps the messages you send and what you have typed but not sent. {keys} in the message box walk through the sent
+				messages, and an unsent message is still there after the window reloads.
+				{platform === "darwin" &&
+					" In a box that holds text, Cmd+Up first moves the caret to the start, as it does in any text box, and walks from there."}{" "}
+				Switching this off deletes what was kept.
 			</p>
 			{enabled && (
 				<div className="mt-2 flex items-center gap-2">

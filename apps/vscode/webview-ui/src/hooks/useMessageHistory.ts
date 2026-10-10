@@ -2,6 +2,7 @@ import {
 	type MessageHistoryAction,
 	type MessageHistoryCursor,
 	type MessageHistorySnapshot,
+	messageHistoryDirection,
 	pushMessageHistory,
 	stepMessageHistory,
 } from "@shared/message-history"
@@ -21,12 +22,14 @@ const DRAFT_SAVE_DELAY_MS = 500
  *   the box opens empty: after a window reload, or a closed and reopened panel.
  * - Ctrl+Up and Ctrl+Down walk the messages sent before. Ctrl rather than the
  *   bare arrows, which move the caret in a box of several lines and choose in
- *   the mention and command menus.
+ *   the mention and command menus. On macOS, Cmd as well: see
+ *   `messageHistoryDirection` for when.
  *
  * Off, nothing is read, kept or bound.
  */
 export function useMessageHistory(inputValue: string, setInputValue: (value: string) => void) {
-	const { messageHistoryEnabled, messageHistoryLimit } = useExtensionState()
+	const { messageHistoryEnabled, messageHistoryLimit, platform } = useExtensionState()
+	const mac = platform === "darwin"
 	const enabled = messageHistoryEnabled !== false
 	const limit = messageHistoryLimit ?? 50
 
@@ -104,22 +107,21 @@ export function useMessageHistory(inputValue: string, setInputValue: (value: str
 	/** Ctrl+Up / Ctrl+Down. True when the key was taken. */
 	const onKeyDown = useCallback(
 		(event: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
-			if (
-				!enabled ||
-				!event.ctrlKey ||
-				event.shiftKey ||
-				event.altKey ||
-				event.metaKey ||
-				(event.key !== "ArrowUp" && event.key !== "ArrowDown")
-			) {
+			if (!enabled) {
 				return false
 			}
-			const step = stepMessageHistory(
-				history.current,
-				cursor.current,
-				event.key === "ArrowUp" ? "up" : "down",
-				current.current,
-			)
+			const box = event.currentTarget
+			const direction = messageHistoryDirection(event, {
+				mac,
+				walking: cursor.current !== undefined,
+				selectionStart: box.selectionStart ?? 0,
+				selectionEnd: box.selectionEnd ?? 0,
+				length: box.value.length,
+			})
+			if (!direction) {
+				return false
+			}
+			const step = stepMessageHistory(history.current, cursor.current, direction, current.current)
 			// Taken even when there is nowhere to go, so the key never falls
 			// through to something else at the end of the list.
 			event.preventDefault()
@@ -131,7 +133,7 @@ export function useMessageHistory(inputValue: string, setInputValue: (value: str
 			}
 			return true
 		},
-		[enabled, setInputValue],
+		[enabled, mac, setInputValue],
 	)
 
 	/** A message is being sent: add it and drop the draft. */
