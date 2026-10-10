@@ -33,7 +33,7 @@ Untick it and every task is offered the general `web_scrape` tool, whether the L
 | `search` | Finds pages for a topic, with their titles and what they are about. | `query`; `limit` (results, default 10, at most 50). |
 | `map` | Lists the pages of a site by their links, without reading them. | `url`; `limit` (links, default 200, at most 2,000). |
 | `read` | Returns one page as markdown. | `url`; `max_chars` (how much is returned, default 12,000). General tool: `save_to`, a file to write the whole page to; then only its headings are returned. |
-| `crawl` | Reads a page and the pages it links to, and writes each as a markdown file. General tool only. | `url`, `save_to` (a folder, required), `depth`, `limit`, `whole_site`, `include_paths`, `exclude_paths`. |
+| `crawl` | Reads a page and the pages it links to, and saves the site under a folder. General tool only. | `url`, `save_to` (a folder, required), `content`, `depth`, `limit`, `whole_site`, `include_paths`, `exclude_paths`. |
 
 A map of a site that has one page says so, and names the other sites the page links to.
 
@@ -43,14 +43,38 @@ The librarian's tool for making a book from web pages and keeping it up to date.
 
 ## Crawling a site into files
 
-A crawl is for work that is not the Library's: a site you want reworked, or knowledge you want kept as files.
+A crawl saves a site into a folder of the workspace. By default it saves **the site itself**, unaltered, so the pages can be reworked or used as the source of new ones:
 
-> Crawl the docs of https://example.com/docs into `reference/example`, then write me a summary of how its plugin system works.
+> Scrape https://example.com into `source/example`.
 
-- Each page becomes one file, named after its address: `reference/example/example.com/docs/plugins.md`. The file starts with the page's address and title.
-- `index.md` in the folder lists every page read, and every page that could not be read with the reason.
-- The pages are not returned to the model, so a crawl of a hundred pages does not fill its context. It reads the files it needs afterwards.
+For each page:
+
+| File | What it is |
+| --- | --- |
+| `example.com/docs/plugins.html` | The page exactly as the site served it, byte for byte. |
+| `example.com/docs/plugins.rendered.html` | The page as the browser held it after its scripts ran. On a site built by JavaScript the served page is a shell of a few lines, and this one is the page you see. |
+| `example.com/docs/plugins.md` | A markdown reading of the page, with its address and title at the top. |
+
+And once for the whole crawl, every file the pages use: stylesheets, scripts, pictures, fonts, icons and media, each at the path the site has it (`example.com/assets/app.js`). Files from other hosts, such as a font service, go under that host's own folder (`fonts.gstatic.com/...`). Fonts and pictures named inside a stylesheet are fetched too.
+
+`index.md` in the folder lists every page in each of its forms, every file fetched, and everything that could not be read or fetched with the reason.
+
+What to know:
+
+- **Nothing is rewritten.** Links inside a saved page still point where the site pointed them. A page that asks for `/assets/app.js` will not find it when opened straight from disk; the files are there to be worked from.
+- **The pages come through the scraping endpoint; the other files do not.** Firecrawl returns a page's content, not its stylesheets. Those are fetched directly from the site by the machine the extension runs on.
+- If the site refuses the direct request for a page, only its rendered form is saved, as `.html`, and the result says so.
+- A file is fetched once however many pages use it. One file may be up to 25 MB, and one crawl fetches at most 2,000 files and 300 MB; what is left out is counted in the result.
+- The files are not returned to the model, so a large crawl does not fill its context. It reads the ones it needs afterwards.
 - `save_to` has to be inside the workspace.
+
+### Text only
+
+For knowledge you want kept as notes, ask for the text:
+
+> Crawl the docs of https://example.com/docs into `reference/example` as text only, then summarise how its plugin system works.
+
+The model sets `content` to `text`, and the crawl saves the markdown files and `index.md` alone. Nothing is fetched from the site directly.
 
 ## Depth and page count
 
@@ -75,7 +99,7 @@ Say the numbers in your message. The model passes them to the tool as `depth` an
 
 > Crawl https://example.com/docs into `reference/example`, 2 links deep, at most 60 pages.
 
-> Read only the front page of https://example.com and save it to `notes/example.md`.
+> Scrape only the front page of https://example.com into `source/example`.
 
 > Make a book from https://example.com/guide, following its links one level, no more than 40 pages.
 
@@ -104,8 +128,9 @@ When a crawl ends, the tool tells the model which of three things happened, and 
 ## Limits
 
 - The general tool is the lead's. Agents the lead starts are not offered it.
-- Pages are saved as markdown. Pictures, stylesheets and scripts are not downloaded.
-- Pages are asked for as HTML and converted to markdown by Cerebriline, which keeps fenced code blocks and their language.
+- `read` saves markdown only. To save one page with its files, crawl it with a depth of 0.
+- Content that only loads after a click or a scroll, and files a script asks for by a name it builds at run time, are not found.
+- The markdown is converted from the page's HTML by Cerebriline, which keeps fenced code blocks and their language.
 
 ## CLI
 
