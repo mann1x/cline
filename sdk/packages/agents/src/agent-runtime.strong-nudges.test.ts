@@ -298,6 +298,42 @@ describe("strong coding nudges", () => {
 		}
 	});
 
+	// Session xkuuh: the checklist reminder and the nudge arrived together,
+	// the model answered the nudge ("The task is finished.") and left the box
+	// unticked, and the checklist had to ask again.
+	it("leaves the question to the host's guard when it asks on the same turn", async () => {
+		let asked = 0;
+		const model = new ScriptedModel([
+			"!work",
+			"Yes, there are several questions in the scraped site.",
+			"!tick",
+			"The task is finished.",
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [ECHO],
+			completionPolicy: {
+				maxNoToolCallNudges: 1,
+				completionGuard: () =>
+					asked++ === 0
+						? "[SYSTEM] CHECKLIST: one item is unticked"
+						: undefined,
+			},
+		});
+
+		await runtime.run("is there any question in the scraped website?");
+
+		expect(
+			nudges(model).filter((nudge) => nudge.includes("CHECKLIST")),
+		).not.toHaveLength(0);
+		expect(
+			nudges(model).filter((nudge) =>
+				nudge.includes("contained no tool calls"),
+			),
+		).toHaveLength(0);
+		expect(model.requests).toHaveLength(4);
+	});
+
 	it("still asks a run that worked and then promised, asked or went quiet", async () => {
 		for (const reply of [
 			"",

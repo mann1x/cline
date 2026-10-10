@@ -1358,11 +1358,22 @@ export class AgentRuntime {
 		return message && message.length > 0 ? message : undefined;
 	}
 
-	private getCompletionReminderMessages(): string[] {
-		return [
-			this.getCompletionToolReminderMessage(),
-			this.config.completionPolicy?.completionGuard?.(),
-		].filter((message): message is string => Boolean(message));
+	/**
+	 * The completion-tool reminder and the host's guard, and whether the guard
+	 * spoke: it names open work itself, so the general nudge stands down for
+	 * it (see `getNoToolCallNudgeMessage`).
+	 */
+	private getCompletionReminderMessages(): {
+		messages: string[];
+		guardAsked: boolean;
+	} {
+		const guard = this.config.completionPolicy?.completionGuard?.();
+		return {
+			messages: [this.getCompletionToolReminderMessage(), guard].filter(
+				(message): message is string => Boolean(message),
+			),
+			guardAsked: Boolean(guard),
+		};
 	}
 
 	/**
@@ -1371,6 +1382,7 @@ export class AgentRuntime {
 	 */
 	private async getNoToolCallNudgeMessage(
 		text?: string,
+		guardAsked = false,
 	): Promise<string | undefined> {
 		const budget = this.config.completionPolicy?.maxNoToolCallNudges ?? 0;
 		if (this.consecutiveNoToolCallNudges >= budget) {
@@ -1390,6 +1402,17 @@ export class AgentRuntime {
 		// the only thing here that can tell them apart.
 		const unstarted =
 			await this.config.completionPolicy?.describeUnstartedWork?.();
+		// The host's guard is asking on this same turn, by name: "these items
+		// are still unticked; tick them with a tool call, or do them now". The
+		// general nudge asks the same question with a different answer ("if the
+		// task really is finished, say so in one short sentence"), and a model
+		// given both took the second: session xkuuh (pandorum, 2026-10-10)
+		// replied "The task is finished." with the box still unticked and was
+		// asked about the checklist again. One question, from whoever knows
+		// what is open. Not counted against the budget: nothing was asked here.
+		if (guardAsked && !unstarted) {
+			return undefined;
+		}
 		// Asked once already, worked since, and this is the one short sentence
 		// the question asked for. Only after tool calls: back-to-back silent
 		// turns keep the budget they always had. The host naming unstarted
@@ -2039,7 +2062,8 @@ export class AgentRuntime {
 						nudge: string;
 						detail?: Record<string, unknown>;
 					}> = [];
-					reminders.push(...this.getCompletionReminderMessages());
+					const completionReminders = this.getCompletionReminderMessages();
+					reminders.push(...completionReminders.messages);
 					// A message sent while the run was going answers to the user, and
 					// answering it is a turn with nothing to call — which is how a run
 					// ends. Measured: asked "how many lines is manic_miner.html?" in
@@ -2051,8 +2075,10 @@ export class AgentRuntime {
 						reminders.push(STEER_RESUME_REMINDER);
 					}
 					const finalText = textFromMessage(finalAssistantMessage);
-					const noToolCallNudge =
-						await this.getNoToolCallNudgeMessage(finalText);
+					const noToolCallNudge = await this.getNoToolCallNudgeMessage(
+						finalText,
+						completionReminders.guardAsked,
+					);
 					if (noToolCallNudge) {
 						this.noToolCallNudgeAsked = true;
 						this.consecutiveNoToolCallNudges += 1;
