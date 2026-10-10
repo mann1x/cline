@@ -92,6 +92,8 @@ export async function getStateToPostToWebview(controller: {
 	const polykvAgentsPriorityZero = stateManager.getGlobalSettingsKey("polykvAgentsPriorityZero")
 	const agentModelOverride = stateManager.getGlobalSettingsKey("agentModelOverride")
 	const strongNudgesEnabled = stateManager.getGlobalSettingsKey("strongNudgesEnabled")
+	const messageHistoryEnabled = stateManager.getGlobalSettingsKey("messageHistoryEnabled")
+	const messageHistoryLimit = stateManager.getGlobalSettingsKey("messageHistoryLimit")
 	const userInfo = stateManager.getGlobalStateKey("userInfo")
 	const mcpMarketplaceEnabled = stateManager.getGlobalStateKey("mcpMarketplaceEnabled")
 	const mcpDisplayMode = stateManager.getGlobalStateKey("mcpDisplayMode")
@@ -246,6 +248,8 @@ export async function getStateToPostToWebview(controller: {
 		polykvAgentsPriorityZero,
 		agentModelOverride,
 		strongNudgesEnabled,
+		messageHistoryEnabled,
+		messageHistoryLimit,
 		userInfo,
 		mcpMarketplaceEnabled,
 		mcpDisplayMode,

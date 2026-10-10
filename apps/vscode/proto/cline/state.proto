@@ -40,6 +40,8 @@ service StateService {
   // The Library and Memory panels: LanceDB's status and download, and
   // making, deleting, exporting and importing a memory. JSON in, JSON out.
   rpc retrievalAction(StringRequest) returns (String);
+  // The message box's history and draft: a JSON action in, the snapshot out.
+  rpc messageHistoryAction(StringRequest) returns (String);
 }
 
 message AutoApprovalActions {
@@ -358,6 +360,8 @@ message Settings {
   optional string scrape_settings = 242;
   optional bool scrape_allowed = 243;
   optional int32 extract_document_max_file_mb = 244;
+  optional bool message_history_enabled = 245;
+  optional int32 message_history_limit = 246;
 }
 
 message State {
@@ -592,6 +596,8 @@ message UpdateSettingsRequest {
   // to keep in step for no gain.
   optional string update_channel = 69;
   optional bool strong_nudges_enabled = 73;
+  optional bool message_history_enabled = 110;
+  optional int32 message_history_limit = 111;
   // Two reviewers correct the compaction summary against one half of the
   // transcript each, and a synthesiser merges their corrections.
   optional bool council_compaction_enabled = 74;

@@ -380,6 +380,8 @@ export const ExtensionStateContextProvider: React.FC<{
 		polykvAgentsPriorityZero: false,
 		agentModelOverride: "",
 		strongNudgesEnabled: true,
+		messageHistoryEnabled: true,
+		messageHistoryLimit: 50,
 		worktreesEnabled: { user: true, featureFlag: false },
 		favoritedModelIds: [],
 		lastDismissedInfoBannerVersion: 0,

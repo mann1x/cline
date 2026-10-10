@@ -1,5 +1,6 @@
 import { parseOcrLanguages, setCompactionStrategyGlobally, setModelToolEnabledGlobally } from "@cline/core"
 import { readAtomicProtocolMode } from "@shared/AtomicProtocolSettings"
+import { clampMessageHistoryLimit, pushMessageHistory } from "@shared/message-history"
 import { Empty } from "@shared/proto/cline/common"
 import { PlanActMode, McpDisplayMode as ProtoMcpDisplayMode, UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { convertProtoToApiProvider } from "@shared/proto-conversions/models/api-configuration-conversion"
@@ -379,6 +380,26 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 
 		if (request.translateCompactionPrompts !== undefined) {
 			controller.stateManager.setGlobalState("translateCompactionPrompts", request.translateCompactionPrompts)
+		}
+
+		// Off deletes what was kept: someone who switches the history off does
+		// not expect last week's messages to still be in a file.
+		if (request.messageHistoryEnabled !== undefined) {
+			const enabled = !!request.messageHistoryEnabled
+			controller.stateManager.setGlobalState("messageHistoryEnabled", enabled)
+			if (!enabled) {
+				controller.stateManager.setGlobalState("messageHistory", [])
+				controller.stateManager.setGlobalState("messageDraft", "")
+			}
+		}
+
+		if (request.messageHistoryLimit !== undefined) {
+			const limit = clampMessageHistoryLimit(request.messageHistoryLimit)
+			controller.stateManager.setGlobalState("messageHistoryLimit", limit)
+			controller.stateManager.setGlobalState(
+				"messageHistory",
+				pushMessageHistory(controller.stateManager.getGlobalStateKey("messageHistory") ?? [], "", limit),
+			)
 		}
 
 		if (request.showRequestTimings !== undefined) {

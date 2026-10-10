@@ -18,6 +18,7 @@ import { getModeSpecificFields } from "@/components/settings/utils/providerUtils
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { usePlatform } from "@/context/PlatformContext"
+import { useMessageHistory } from "@/hooks/useMessageHistory"
 import { useNormalizedApiConfiguration } from "@/hooks/useNormalizedApiConfiguration"
 import { useOllamaReachability } from "@/hooks/useOllamaReachability"
 import { cn } from "@/lib/utils"
@@ -474,8 +475,20 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			},
 			[setInputValue, slashCommandsQuery, cursorPosition],
 		)
+		const messageHistory = useMessageHistory(inputValue, setInputValue)
+		const recordSent = messageHistory.recordSent
+		const onHistoryKeyDown = messageHistory.onKeyDown
+		const sendMessage = useCallback(() => {
+			recordSent(inputValue)
+			onSend()
+		}, [recordSent, inputValue, onSend])
 		const handleKeyDown = useCallback(
 			(event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+				// Ctrl+Up / Ctrl+Down walk the sent messages. Not while a menu is
+				// open: the arrows choose in it, with or without Ctrl.
+				if (!showSlashCommandsMenu && !showContextMenu && onHistoryKeyDown(event)) {
+					return
+				}
 				const isSelectAllShortcut =
 					(event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "a"
 				if (isSelectAllShortcut) {
@@ -608,7 +621,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						// blur desyncs it permanently (programmatic .focus() on an
 						// already-focused element never re-fires onFocus), which hides the
 						// plan/act mode outline until a real blur/refocus cycle.
-						onSend()
+						sendMessage()
 					}
 				}
 
@@ -677,7 +690,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				}
 			},
 			[
-				onSend,
+				sendMessage,
+				onHistoryKeyDown,
 				showContextMenu,
 				searchQuery,
 				selectedMenuIndex,
@@ -1619,7 +1633,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								data-testid="send-button"
 								onClick={() => {
 									if (!sendingDisabled) {
-										onSend()
+										sendMessage()
 									}
 								}}
 							/>

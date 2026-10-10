@@ -273,6 +273,8 @@ export interface ExtensionState {
 	polykvAgentsPriorityZero?: boolean
 	agentModelOverride?: string
 	strongNudgesEnabled?: boolean
+	messageHistoryEnabled?: boolean
+	messageHistoryLimit?: number
 	worktreesEnabled?: ClineFeatureSetting
 	favoritedModelIds: string[]
 	// NEW: Add workspace information

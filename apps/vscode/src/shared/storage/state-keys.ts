@@ -20,6 +20,7 @@ import { DEFAULT_ESCALATION_SETTINGS, type EscalationSettings } from "@shared/Es
 import { DEFAULT_FOCUS_CHAIN_SETTINGS, FocusChainSettings } from "@shared/FocusChainSettings"
 import { HistoryItem } from "@shared/HistoryItem"
 import { DEFAULT_MCP_DISPLAY_MODE, McpDisplayMode } from "@shared/McpDisplayMode"
+import { DEFAULT_MESSAGE_HISTORY_LIMIT } from "@shared/message-history"
 import { toLegacyApiProvider } from "@shared/model-catalog/provider-helpers"
 import { GlobalInstructionsFile } from "@shared/remote-config/schema"
 import { Mode } from "@shared/storage/types"
@@ -92,6 +93,10 @@ const GLOBAL_STATE_FIELDS = {
 	welcomeViewCompleted: { default: undefined as boolean | undefined },
 	mcpDisplayMode: { default: DEFAULT_MCP_DISPLAY_MODE as McpDisplayMode },
 	multiRootEnabled: { default: true as boolean },
+	// The message box's history (oldest first) and unsent draft. Empty while
+	// `messageHistoryEnabled` is off. See `shared/message-history.ts`.
+	messageHistory: { default: [] as string[] },
+	messageDraft: { default: "" as string },
 	lastDismissedInfoBannerVersion: { default: 0 as number },
 	lastDismissedModelBannerVersion: { default: 0 as number },
 	lastDismissedCliBannerVersion: { default: 0 as number },
@@ -490,6 +495,10 @@ const USER_SETTINGS_FIELDS = {
 	// opencoti and its `/props` confirms `pools_enabled`.
 	polykvAgentsPriorityZero: { default: false as boolean },
 	strongNudgesEnabled: { default: true as boolean },
+	// Keep sent messages and the unsent draft of the message box. Off stores
+	// nothing and deletes what was stored.
+	messageHistoryEnabled: { default: true as boolean },
+	messageHistoryLimit: { default: DEFAULT_MESSAGE_HISTORY_LIMIT as number },
 	worktreesEnabled: { default: false as boolean },
 	preferredLanguage: { default: "English" as string },
 	mode: { default: "act" as Mode },
