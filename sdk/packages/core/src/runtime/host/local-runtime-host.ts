@@ -4489,9 +4489,14 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// is the one place every ended session passes through.
 		await releasePolykvSession({
 			sessionId: session.sessionId,
-			providerConfig: (session.config.providerConfig ?? {
+			// The model too: on xOllama the close goes to that model's engine.
+			providerConfig: {
 				providerId: session.config.providerId,
-			}) as never,
+				modelId: session.config.modelId,
+				...(session.config.baseUrl ? { baseUrl: session.config.baseUrl } : {}),
+				...(session.config.apiKey ? { apiKey: session.config.apiKey } : {}),
+				...(session.config.providerConfig ?? {}),
+			} as never,
 			logger: session.config.logger,
 		});
 

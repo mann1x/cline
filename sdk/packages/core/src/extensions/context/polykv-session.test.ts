@@ -643,6 +643,55 @@ describe("ending the session", () => {
 		expect(server.calls.filter((c) => c.path !== "/props")).toHaveLength(0);
 	});
 
+	// Pandorum, 2026-10-10: xOllama's own root answers 404 to `/props`, so the
+	// close was skipped, and every new conversation waited five minutes for
+	// the window of the one just closed.
+	it("closes the engine session of an xOllama conversation through /api/engine", async () => {
+		const seen: string[] = [];
+		const fetchStub = (async (
+			input: string | URL | Request,
+			init?: RequestInit,
+		) => {
+			const url = String(input);
+			seen.push(`${init?.method ?? "GET"} ${url}`);
+			return Response.json({ released: true });
+		}) as typeof fetch;
+
+		await releasePolykvSession({
+			sessionId: "1791630034949_ds2zi",
+			providerConfig: {
+				providerId: "xollama",
+				baseUrl: "http://xo.test:22434",
+				modelId: "v9:q4",
+				fetch: fetchStub,
+			},
+		});
+
+		expect(seen).toHaveLength(1);
+		expect(seen[0]).toContain("POST http://xo.test:22434/api/engine");
+		expect(decodeURIComponent(seen[0] as string)).toContain("model=v9:q4");
+		expect(decodeURIComponent(seen[0] as string)).toContain(
+			"endpoint=sessions/1791630034949_ds2zi/close",
+		);
+		// Never xOllama's own root: it has no such routes.
+		expect(seen.join("\n")).not.toContain("/props");
+	});
+
+	it("leaves an xOllama session with no model alone", async () => {
+		const seen: string[] = [];
+		await releasePolykvSession({
+			sessionId: "s1",
+			providerConfig: {
+				providerId: "xollama",
+				fetch: (async (input: string | URL | Request) => {
+					seen.push(String(input));
+					return Response.json({});
+				}) as typeof fetch,
+			},
+		});
+		expect(seen).toHaveLength(0);
+	});
+
 	// A session can hold a booked WINDOW without holding a pool -- pooling off,
 	// or a window asked for before a pool was ever built. Gating the close on
 	// pool state would leak exactly those, and they are the expensive ones:

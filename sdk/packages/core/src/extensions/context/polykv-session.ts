@@ -205,6 +205,64 @@ export async function resolvePolykvEngineConfig(
 	};
 }
 
+/**
+ * The window half of {@link releasePolykvSession} on xOllama: the engine's
+ * close route, through `/api/engine` for the session's model.
+ *
+ * Not gated on the model pooling clients. A plain model with no client seats
+ * still books a window per session, and a close the engine has no session for
+ * answers "nothing held", which costs one request.
+ */
+async function closeXollamaSessionWindow(
+	sessionId: string,
+	options: {
+		providerConfig: PolykvProviderConfig;
+		logger?: BasicLogger;
+	},
+): Promise<void> {
+	const config = options.providerConfig;
+	if (!config.modelId) {
+		return;
+	}
+	const origin = config.baseUrl || XOLLAMA_DEFAULT_BASE_URL;
+	const headers = {
+		...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+		...(config.headers ?? {}),
+	};
+	const client = createPolykvClient({
+		baseUrl: xollamaEngineRoot(origin, config.modelId),
+		fetch: xollamaEngineFetch(
+			withXollamaAuth(config.fetch ?? fetch, origin, headers),
+		),
+	});
+	const close = async (): Promise<void> => {
+		try {
+			const released = await client.closeSession(engineSessionId(sessionId));
+			options.logger?.log(
+				released
+					? `[xOllama] Closed engine session ${sessionId}: its window is free for the next conversation`
+					: `[xOllama] The engine held no window for session ${sessionId}`,
+			);
+		} catch (error) {
+			options.logger?.log(
+				`[xOllama] Could not close engine session ${sessionId}; its window stays booked until the idle TTL: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+				{ severity: "warn" },
+			);
+		}
+	};
+	// Agents running as sub-pools of this session keep it open until the last
+	// of them is done, as on opencoti.
+	if (deferPolykvLeadClose(sessionId, close)) {
+		options.logger?.log(
+			`[xOllama] Session ${sessionId} ended with priority-0 agents still running in it; its window is closed after the last of them`,
+		);
+		return;
+	}
+	await close();
+}
+
 export async function polykvPoolsConfirmed(
 	config: PolykvProviderConfig | undefined,
 ): Promise<boolean> {
@@ -786,6 +844,20 @@ export async function releasePolykvSession(options: {
 	// conversation continued after its close must ask for exactly that one
 	// (the resume rule). Forgetting it made the next turn a new session that
 	// negotiated down -- a silent shrink under a history that no longer fits.
+	// xOllama keeps the window on the model's engine, behind `/api/engine`,
+	// and its own root has neither `/props` nor the close route: the probe
+	// below answered 404 there and the session was never closed. A user who
+	// ended one conversation and opened another then waited out the idle TTL
+	// of the one they had just closed -- five minutes, every time, with the
+	// model loaded (pandorum, 2026-10-10: 87,906 of 96,000 cells still booked
+	// by the conversation closed three seconds earlier).
+	if (
+		options.providerConfig.providerId !== undefined &&
+		normalizeProviderId(options.providerConfig.providerId) === "xollama"
+	) {
+		await closeXollamaSessionWindow(sessionId, options);
+		return;
+	}
 	const client = clientFor(options.providerConfig);
 	if (!client) {
 		return;
