@@ -246,7 +246,11 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 							census.elsewhere.length
 								? ` Its ${plural(census.elsewhere.length, "other link")} go to other sites${sitesLine(census.elsewhere)}.`
 								: ""
-						} Read it${general ? ", or crawl it to save it" : ""}; there is nothing more to map.`;
+						} There is nothing more to map. ${
+							general
+								? "To scrape or save the site, `crawl` it with `save_to`: one page is still a site, and the crawl saves the page as it is with its stylesheets, scripts and pictures. `read` gives only its text."
+								: "Read it."
+						}`;
 					}
 					return [`${plural(links.length, "page")} of ${url}:`, ...links].join(
 						"\n",
@@ -275,6 +279,9 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 						return [
 							head,
 							`Written to ${path.relative(options.cwd, target).split(path.sep).join("/")}.`,
+							// Session trtxu: asked to scrape a one-page site, the model
+							// read it to a file and called that the scrape.
+							"This is the page's text only, as markdown. If the user asked to scrape, copy or download the site, that is `crawl` with `save_to`: the page as it is, with its stylesheets, scripts and pictures.",
 							...outline(page.markdown),
 						].join("\n");
 					}

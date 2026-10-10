@@ -421,6 +421,8 @@ describe("web_scrape for any task", () => {
 		expect(report).toContain("is a site of one page");
 		expect(report).toContain("github.com, discord.gg");
 		expect(report).toContain("nothing more to map");
+		// One page is still a site: a scrape of it is a crawl, not a read.
+		expect(report).toContain("To scrape or save the site, `crawl` it");
 		// A map that missed pages the front page links to lists them.
 		links["https://example.com/"] = ["https://example.com/docs/intro.html"];
 		expect(await run({ action: "map", url: "https://example.com" })).toContain(
@@ -488,6 +490,7 @@ describe("web_scrape for any task", () => {
 			save_to: "notes/intro.md",
 		});
 		expect(report).toContain("Written to notes/intro.md.");
+		expect(report).toContain("This is the page's text only");
 		expect(report).toContain("## Setup");
 		expect(report).not.toContain("Install it.");
 		expect(readFileSync(join(root, "notes", "intro.md"), "utf8")).toContain(
