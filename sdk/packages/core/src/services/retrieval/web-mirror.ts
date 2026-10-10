@@ -40,6 +40,13 @@ export interface MirrorOptions extends MirrorLimits {
 	fetch?: typeof fetch;
 	signal?: AbortSignal;
 	onProgress?: (done: number, known: number) => void;
+	/**
+	 * The file already saved for an address, from an earlier crawl into the
+	 * same folder: it is not fetched again.
+	 */
+	have?: (url: string) => string | undefined;
+	/** Files to fetch besides those the pages name: what an earlier crawl left. */
+	also?: readonly string[];
 }
 
 export interface MirroredPage {
@@ -59,6 +66,15 @@ export interface MirrorReport {
 	failed: { url: string; reason: string }[];
 	/** Files left out because a limit was reached. */
 	skipped: number;
+	/** Their addresses, for a later crawl to fetch. */
+	left: string[];
+	/** How many of them the limit of files stopped, and how many the total size. */
+	leftForCount: number;
+	leftForSize: number;
+	/** Files over the size one file may have; they are in `failed` too. */
+	tooLarge: number;
+	/** Files an earlier crawl had already saved. */
+	reused: number;
 	bytes: number;
 }
 
@@ -366,24 +382,37 @@ export async function mirrorSite(
 		assets: [],
 		failed: [],
 		skipped: 0,
+		left: [],
+		leftForCount: 0,
+		leftForSize: 0,
+		tooLarge: 0,
+		reused: 0,
 		bytes: 0,
 	};
 	const pageUrls = new Set(pages.map((page) => page.url.replace(/#.*$/, "")));
 	/** Files to fetch, with how many stylesheets deep they were found. */
 	const queue: { url: string; depth: number }[] = [];
 	const seen = new Set<string>();
+	let queued = 0;
 	const want = (url: string, depth: number) => {
 		if (seen.has(url) || pageUrls.has(url)) return;
 		seen.add(url);
-		if (seen.size > maxAssets) {
-			report.skipped += 1;
+		if (options.have?.(url) !== undefined) {
+			report.reused += 1;
 			return;
 		}
+		if (queued >= maxAssets) {
+			report.skipped += 1;
+			report.leftForCount += 1;
+			report.left.push(url);
+			return;
+		}
+		queued += 1;
 		queue.push({ url, depth });
 	};
+	for (const url of options.also ?? []) want(url, 0);
 	let done = 0;
-	const progress = () =>
-		options.onProgress?.(done, pages.length + Math.min(seen.size, maxAssets));
+	const progress = () => options.onProgress?.(done, pages.length + queued);
 
 	const savePage = async (page: MirrorPage) => {
 		const relative = mirrorPath(page.url, "page");
@@ -428,6 +457,8 @@ export async function mirrorSite(
 	const saveAsset = async (item: { url: string; depth: number }) => {
 		if (report.bytes >= maxTotalBytes) {
 			report.skipped += 1;
+			report.leftForSize += 1;
+			report.left.push(item.url);
 			return;
 		}
 		try {
@@ -457,7 +488,9 @@ export async function mirrorSite(
 			}
 		} catch (error) {
 			options.signal?.throwIfAborted();
-			report.failed.push({ url: item.url, reason: reason(error) });
+			const why = reason(error);
+			if (why.includes("over the limit for one file")) report.tooLarge += 1;
+			report.failed.push({ url: item.url, reason: why });
 		}
 		done += 1;
 		progress();

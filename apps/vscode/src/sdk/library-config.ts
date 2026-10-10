@@ -133,6 +133,9 @@ export function readScrapeConfig(): LibraryScrapeConfig | undefined {
 		maxPages: settings.maxPages,
 		maxDepth: settings.maxDepth,
 		librarianOnly: settings.librarianOnly,
+		maxFiles: settings.maxFiles,
+		maxFileMb: settings.maxFileMb,
+		maxTotalMb: settings.maxTotalMb,
 		...(apiKey ? { apiKey } : {}),
 	}
 }

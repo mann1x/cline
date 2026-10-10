@@ -20,7 +20,7 @@ const ScrapeSettings = () => {
 		return null
 	}
 	const { scrape } = status
-	const limit = (key: "maxPages" | "maxDepth", label: string, fallback: number) => (
+	const limit = (key: "maxPages" | "maxDepth" | "maxFiles" | "maxFileMb" | "maxTotalMb", label: string, fallback: number) => (
 		<DebouncedTextField
 			className="w-full"
 			initialValue={String(scrape[key])}
@@ -87,6 +87,18 @@ const ScrapeSettings = () => {
 						The model asks for a depth and a page count per crawl or book; these are the most it gets. A crawl reads
 						pages from the open web on your behalf, from the machine the endpoint runs on.
 					</p>
+					{scrape.librarianOnly ? null : (
+						<>
+							{limit("maxFiles", "Files one site crawl may fetch", 2000)}
+							{limit("maxFileMb", "Largest file fetched (MB)", 25)}
+							{limit("maxTotalMb", "Most one site crawl may fetch in all (MB)", 300)}
+							<p className={muted}>
+								A site crawl saves each page with the stylesheets, scripts, pictures and fonts it uses. These
+								files are fetched from the site by this machine, not through the endpoint. What a limit leaves out
+								is counted in the crawl's result.
+							</p>
+						</>
+					)}
 					<div className="flex items-center gap-2">
 						<VSCodeButton
 							appearance="secondary"

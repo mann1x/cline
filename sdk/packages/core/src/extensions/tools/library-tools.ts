@@ -47,6 +47,14 @@ export interface LibraryScrapeConfig extends ScrapeEndpoint {
 	 * scraping is the librarian's only.
 	 */
 	librarianOnly?: boolean;
+	/**
+	 * What a site crawl may fetch besides its pages: how many files, how
+	 * large one may be and how much in all, in megabytes. Absent, the
+	 * defaults of `ScrapeSettings`.
+	 */
+	maxFiles?: number;
+	maxFileMb?: number;
+	maxTotalMb?: number;
 }
 
 export interface LibraryToolsConfig {

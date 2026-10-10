@@ -271,14 +271,18 @@ async function toPage(
 export async function scrapePage(
 	endpoint: ScrapeEndpoint,
 	url: string,
-	options: RequestOptions & { links?: boolean } = {},
+	options: RequestOptions & { links?: boolean; rawHtml?: boolean } = {},
 ): Promise<ScrapedPage> {
 	const answer = await call(
 		endpoint,
 		"/v2/scrape",
 		{
 			url,
-			formats: options.links ? ["html", "links"] : ["html"],
+			formats: [
+				"html",
+				...(options.links ? ["links"] : []),
+				...(options.rawHtml ? ["rawHtml"] : []),
+			],
 			onlyMainContent: true,
 		},
 		options,

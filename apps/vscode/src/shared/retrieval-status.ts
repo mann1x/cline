@@ -268,6 +268,10 @@ export interface ScrapeState {
 	maxDepth: number
 	/** Scraping is the librarian's only; off, every task gets `web_scrape`. */
 	librarianOnly: boolean
+	/** What a site crawl may fetch besides its pages. */
+	maxFiles: number
+	maxFileMb: number
+	maxTotalMb: number
 	keySet: boolean
 	problem?: string
 }
@@ -311,6 +315,9 @@ export type LibraryAction =
 			maxPages?: number
 			maxDepth?: number
 			librarianOnly?: boolean
+			maxFiles?: number
+			maxFileMb?: number
+			maxTotalMb?: number
 			apiKey?: string
 	  }
 	| { action: "checkScrape" }

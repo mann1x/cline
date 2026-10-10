@@ -1556,6 +1556,18 @@ export async function runCli(): Promise<void> {
 								DEFAULT_SCRAPE_SETTINGS.maxDepth,
 							),
 							librarianOnly: false,
+							maxFiles: most(
+								process.env.CLINE_SCRAPE_MAX_FILES,
+								DEFAULT_SCRAPE_SETTINGS.maxFiles,
+							),
+							maxFileMb: most(
+								process.env.CLINE_SCRAPE_MAX_FILE_MB,
+								DEFAULT_SCRAPE_SETTINGS.maxFileMb,
+							),
+							maxTotalMb: most(
+								process.env.CLINE_SCRAPE_MAX_TOTAL_MB,
+								DEFAULT_SCRAPE_SETTINGS.maxTotalMb,
+							),
 						}),
 						log: (message) => loggerAdapter.core.log(message),
 						onError: (message, error) =>

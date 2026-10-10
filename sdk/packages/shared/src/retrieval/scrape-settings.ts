@@ -17,6 +17,12 @@ export interface ScrapeSettings {
 	 * general `web_scrape` that can also crawl a site into files.
 	 */
 	librarianOnly: boolean;
+	/** Files one crawl fetches besides its pages, at most. */
+	maxFiles: number;
+	/** One fetched file's size in megabytes, at most. */
+	maxFileMb: number;
+	/** Everything one crawl fetches, in megabytes, at most. */
+	maxTotalMb: number;
 }
 
 export const DEFAULT_SCRAPE_SETTINGS: ScrapeSettings = {
@@ -25,6 +31,9 @@ export const DEFAULT_SCRAPE_SETTINGS: ScrapeSettings = {
 	maxPages: 100,
 	maxDepth: 3,
 	librarianOnly: true,
+	maxFiles: 2000,
+	maxFileMb: 25,
+	maxTotalMb: 300,
 };
 
 /** Stored settings, whatever shape they are in, as settings that can be used. */
@@ -51,5 +60,8 @@ export function resolveScrapeSettings(
 		maxDepth: integer(s.maxDepth, d.maxDepth, 0, 10),
 		librarianOnly:
 			typeof s.librarianOnly === "boolean" ? s.librarianOnly : d.librarianOnly,
+		maxFiles: integer(s.maxFiles, d.maxFiles, 0, 100_000),
+		maxFileMb: integer(s.maxFileMb, d.maxFileMb, 1, 2048),
+		maxTotalMb: integer(s.maxTotalMb, d.maxTotalMb, 1, 102_400),
 	};
 }

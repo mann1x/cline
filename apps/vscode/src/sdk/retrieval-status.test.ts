@@ -212,6 +212,9 @@ describe("what the Library and Memory panels ask of the host", () => {
 				maxPages: 100,
 				maxDepth: 3,
 				librarianOnly: true,
+				maxFiles: 2000,
+				maxFileMb: 25,
+				maxTotalMb: 300,
 				keySet: false,
 			})
 		})
@@ -315,6 +318,9 @@ describe("what the Library and Memory panels ask of the host", () => {
 				maxPages: 50,
 				maxDepth: 3,
 				librarianOnly: true,
+				maxFiles: 2000,
+				maxFileMb: 25,
+				maxTotalMb: 300,
 				keySet: true,
 				problem: "Not allowed yet: tick “Allow web scraping” in the API configuration.",
 			})
@@ -330,6 +336,10 @@ describe("what the Library and Memory panels ask of the host", () => {
 				librarianOnly: false,
 				maxDepth: 2,
 			})
+			// What a site crawl may fetch, kept like the rest.
+			expect(
+				(await act({ action: "setScrape", maxFiles: 500, maxFileMb: 10, maxTotalMb: 100 })).status.scrape,
+			).toMatchObject({ maxFiles: 500, maxFileMb: 10, maxTotalMb: 100, maxDepth: 2 })
 		})
 
 		it("checks the scraping endpoint with one real request", async () => {

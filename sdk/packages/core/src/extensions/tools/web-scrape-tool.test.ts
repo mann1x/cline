@@ -198,6 +198,114 @@ describe("web_scrape for any task", () => {
 		expect(index).toContain("## Files the pages use (4)");
 	});
 
+	it("holds a site crawl to the user's limit of files", async () => {
+		site = {
+			"https://example.com/": {
+				body: '<img src="/1.png"><img src="/2.png"><img src="/3.png">',
+				type: "text/html",
+			},
+			"https://example.com/1.png": { body: "1", type: "image/png" },
+			"https://example.com/2.png": { body: "2", type: "image/png" },
+			"https://example.com/3.png": { body: "3", type: "image/png" },
+		};
+		scrape = {
+			...(scrape as LibraryScrapeConfig),
+			maxPages: 100,
+			maxFiles: 2,
+		};
+		pages = { "https://example.com/": PAGES["https://example.com/"] as string };
+		const report = await run({
+			action: "crawl",
+			url: "https://example.com/",
+			save_to: "site",
+		});
+		expect(report).toContain("2 files they use");
+		// The limit is the first thing said, as something to pass on.
+		expect(report.startsWith("LIMIT REACHED. Tell the user")).toBe(true);
+		expect(report).toContain(
+			"1 file was not fetched, because one crawl may fetch 2 files",
+		);
+		expect(report).toContain('save_to "site" and resume: true');
+		const record = () =>
+			JSON.parse(readFileSync(join(root, "site", ".scrape.json"), "utf8"));
+		expect(record().assetsLeft).toEqual(["https://example.com/3.png"]);
+
+		// Continued: only the file that was left out is fetched.
+		direct = [];
+		const resumed = await run({
+			action: "crawl",
+			save_to: "site",
+			resume: true,
+		});
+		expect(direct).toEqual(["https://example.com/3.png"]);
+		expect(resumed).not.toContain("LIMIT REACHED");
+		expect(resumed).toContain("Resumed the crawl of https://example.com/");
+		expect(resumed).toContain("the 1 page already saved was not read again");
+		expect(record().assetsLeft).toEqual([]);
+		expect(Object.keys(record().assets)).toHaveLength(3);
+		expect(
+			readFileSync(join(root, "site", "example.com", "3.png"), "utf8"),
+		).toBe("3");
+	});
+
+	it("continues a crawl from the pages it had not read", async () => {
+		links = {
+			"https://example.com/": [
+				"https://example.com/docs/intro.html",
+				"https://example.com/docs/api?v=2",
+				"https://elsewhere.test/x",
+			],
+		};
+		scrape = { ...(scrape as LibraryScrapeConfig), maxPages: 1 };
+		const first = await run({
+			action: "crawl",
+			content: "text",
+			url: "https://example.com/",
+			save_to: "site",
+		});
+		expect(first.startsWith("LIMIT REACHED.")).toBe(true);
+		expect(first).toContain("the limit of 1 page for this call was reached");
+		expect(first).toContain("2 more pages of the site are linked and not read");
+		const record = () =>
+			JSON.parse(readFileSync(join(root, "site", ".scrape.json"), "utf8"));
+		expect(record().unread).toHaveLength(2);
+
+		crawlBody = undefined;
+		const second = await run({
+			action: "crawl",
+			save_to: "site",
+			resume: true,
+		});
+		// No new crawl: the one page is read on its own.
+		expect(crawlBody).toBeUndefined();
+		expect(second).toContain("1 more page read");
+		expect(second).toContain("2 pages there now");
+		expect(second.startsWith("LIMIT REACHED.")).toBe(true);
+		expect(Object.keys(record().pages)).toEqual([
+			"https://example.com/",
+			"https://example.com/docs/intro.html",
+		]);
+		expect(record().unread).toEqual(["https://example.com/docs/api?v=2"]);
+
+		const third = await run({
+			action: "crawl",
+			save_to: "site",
+			resume: true,
+		});
+		expect(third).not.toContain("LIMIT REACHED");
+		expect(Object.keys(record().pages)).toHaveLength(3);
+		expect(record().unread).toEqual([]);
+		const index = readFileSync(join(root, "site", "index.md"), "utf8");
+		expect(index).toContain("3 pages");
+		expect(index).toContain("Nothing known is missing.");
+	});
+
+	it("says there is nothing to resume in a folder without a crawl", async () => {
+		expect(
+			await run({ action: "crawl", save_to: "nowhere", resume: true }),
+		).toContain("no earlier crawl in nowhere/ to resume");
+	});
+
 	it("keeps the rendered page when the site refuses a direct request", async () => {
 		scrape = { ...(scrape as LibraryScrapeConfig), maxPages: 100 };
 		pages = { "https://example.com/": PAGES["https://example.com/"] as string };
@@ -234,7 +342,7 @@ describe("web_scrape for any task", () => {
 		expect(report).toContain(
 			"2 pages of https://example.com/ written under site/",
 		);
-		expect(report).toContain("The page limit was reached");
+		expect(report).toContain("the limit of 2 pages for this call was reached");
 		const intro = readFileSync(
 			join(root, "site", "example.com", "docs", "intro.md"),
 			"utf8",

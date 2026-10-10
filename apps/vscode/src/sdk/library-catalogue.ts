@@ -101,6 +101,9 @@ export function readScrapeState(): ScrapeState {
 		maxPages: settings.maxPages,
 		maxDepth: settings.maxDepth,
 		librarianOnly: settings.librarianOnly,
+		maxFiles: settings.maxFiles,
+		maxFileMb: settings.maxFileMb,
+		maxTotalMb: settings.maxTotalMb,
 		keySet: Boolean(state.getSecretKey("scrapeApiKey")?.trim()),
 		...(problem ? { problem } : {}),
 	}
@@ -318,6 +321,9 @@ export async function runLibraryAction(request: LibraryAction, outcome: Outcome)
 					maxPages: request.maxPages ?? current.maxPages,
 					maxDepth: request.maxDepth ?? current.maxDepth,
 					librarianOnly: request.librarianOnly ?? current.librarianOnly,
+					maxFiles: request.maxFiles ?? current.maxFiles,
+					maxFileMb: request.maxFileMb ?? current.maxFileMb,
+					maxTotalMb: request.maxTotalMb ?? current.maxTotalMb,
 				}),
 			)
 			if (request.allowed !== undefined) {
