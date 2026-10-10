@@ -1,0 +1,39 @@
+# Signs in as the Entra application that publishes to the VS Code Marketplace
+# and prints the ID the publisher's Members page wants. No secret is stored:
+# the run's GitHub identity token is exchanged for an Entra one, and only a
+# job in the `marketplace` environment of this repository can do that.
+#
+# Run it by hand: once to get the member ID, and whenever publishing fails
+# with an authorization error, to see which half is refusing.
+name: Marketplace identity
+
+on:
+    workflow_dispatch:
+
+permissions:
+    id-token: write
+    contents: read
+
+jobs:
+    identity:
+        runs-on: ubuntu-latest
+        environment: marketplace
+        steps:
+            - uses: azure/login@v2
+              with:
+                  client-id: ${{ vars.AZURE_CLIENT_ID }}
+                  tenant-id: ${{ vars.AZURE_TENANT_ID }}
+                  allow-no-subscriptions: true
+
+            # 499b84ac-... is Azure DevOps, which the Marketplace authenticates
+            # through. `id` in the answer is the member ID.
+            - name: Marketplace member ID
+              run: |
+                  az rest --method get \
+                    --resource 499b84ac-1321-427f-aa17-267ca6975798 \
+                    --url "https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=7.1-preview.3"
+
+            # Fails until the ID above is a member of the publisher.
+            - name: Publisher access
+              if: always()
+              run: npx --yes @vscode/vsce@3.9.2 verify-pat mann1x --azure-credential
