@@ -114,11 +114,11 @@ memories chosen per workspace. `remember`, `recall` and `forget`, and the notes
 about each message you send are put beside it automatically. Off by default.
 [Guide](https://github.com/mann1x/cline/blob/main/docs/features/memory.mdx).
 
-**Built-in skills.** Sixteen skills ship with the extension, all turned off:
+**Built-in skills.** Seventeen skills ship with the extension, all turned off:
 QA and Docker deployment (by Chris), build and run, a test-driven set
 (`tdd-wizard` and three more), a spec-driven set after Get Shit Done
 (`sdd-wizard` and six more, with the plan kept in a database behind one tool),
-and the librarian.
+the librarian, and browser automation through the Playwright MCP server.
 [Guide](https://github.com/mann1x/cline/blob/main/docs/customization/skills.mdx).
 
 **Jev on your own server.** Jev, the outside scoring model, can run from any

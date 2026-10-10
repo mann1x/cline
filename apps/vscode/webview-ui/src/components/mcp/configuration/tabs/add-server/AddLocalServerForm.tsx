@@ -80,6 +80,20 @@ export function parseEnvLines(input: string): Record<string, string> {
 }
 
 /**
+ * Servers worth one click. A preset only fills the form: what is added is what
+ * the fields show, and it can be changed first.
+ */
+export const LOCAL_SERVER_PRESETS = [
+	{
+		label: "Playwright",
+		description: "Drives a real browser: open pages, click, fill forms, read what a page shows.",
+		serverName: "playwright",
+		command: "npx",
+		args: "@playwright/mcp@latest",
+	},
+] as const
+
+/**
  * Add a server Cerebriline launches itself and talks to over stdio.
  *
  * The settings file has always taken these; the only way to add one was to open
@@ -143,6 +157,31 @@ const AddLocalServerForm = ({ onCancel, onServerAdded }: AddLocalServerFormProps
 				Add an MCP server that Cerebriline runs on this machine. Give it the command that starts the server and any
 				arguments it takes — for example <code>npx</code> with <code>-y @azure/mcp@latest</code>, or <code>dnx</code> with{" "}
 				<code>NuGet.Mcp.Server</code>.
+			</div>
+
+			<div className="mb-3">
+				<div className="text-(--vscode-descriptionForeground) text-xs mb-1">Presets</div>
+				<div className="flex flex-wrap gap-2">
+					{LOCAL_SERVER_PRESETS.map((preset) => (
+						<VSCodeButton
+							appearance="secondary"
+							disabled={isSubmitting}
+							key={preset.serverName}
+							onClick={() => {
+								setServerName(preset.serverName)
+								setCommand(preset.command)
+								setArgs(preset.args)
+								setError("")
+							}}
+							title={preset.description}>
+							{preset.label}
+						</VSCodeButton>
+					))}
+				</div>
+				<div className="text-(--vscode-descriptionForeground) text-xs mt-1">
+					A preset fills in the fields below. The built-in <code>browser-automation</code> skill (Skills tab) teaches
+					the model to use Playwright.
+				</div>
 			</div>
 
 			<form onSubmit={handleSubmit}>

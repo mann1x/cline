@@ -37,7 +37,7 @@ The open source coding agent in your IDE and terminal.
 - **[Compaction Council](#compaction-council).** Every summary is checked by two reviewers, each holding half the transcript, before it replaces the conversation.
 - **[Escalation, scored by Jev](#escalation-to-a-stronger-model-scored-by-jev).** A stronger model takes over the edit when the working model is stuck. The hand-over is offered on measurements and scored by an independent model.
 - **[The Library](#the-library) and [Memory](#memory).** Books the model can search, catalogued by a librarian, and notes it keeps from one task to the next.
-- **[Built-in skills](#built-in-skills).** Sixteen ship with it: QA and deployment, test-driven and spec-driven development, and the librarian.
+- **[Built-in skills](#built-in-skills).** Seventeen ship with it: QA and deployment, test-driven and spec-driven development, the librarian and browser automation.
 - **[Built for small models](#built-for-small-models).** Per-family prompt templates, one output budget, tolerant tool calls and guards against measured failure modes.
 
 <br>
@@ -617,6 +617,7 @@ Cerebriline ships with skills of its own, listed under **Built-in Skills** in th
 - **Test-driven development:** `tdd-wizard`, `tdd-gen`, `tdd-test`, `tdd-coverage`, after Duke Harewood's "[Test-Driven Development with Claude Code: Practical Guide](https://aiskill.market/blog/tdd-with-claude-code)".
 - **Spec-driven development:** `sdd-wizard`, `sdd-discuss`, `sdd-plan`, `sdd-execute`, `sdd-verify`, `sdd-quick`, `sdd-status`, after [Get Shit Done (GSD 2)](https://getshitdone.help/). The plan is kept in a database in your project and worked through one tool, `sdd`, which gives the model the step that is due and refuses one out of turn.
 - **The librarian**, which runs the Library.
+- **Browser automation:** `browser-automation` drives a real browser through the [Playwright MCP server](https://github.com/microsoft/playwright-mcp), which is a preset under **MCP Servers > Add Local**.
 
 A built-in skill can be switched on and off and read, not edited; create a skill of your own with the same name to replace it. Guide: [`docs/customization/skills.mdx`](docs/customization/skills.mdx).
 

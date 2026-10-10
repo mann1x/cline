@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { parseCommandArgs, parseEnvLines } from "./AddLocalServerForm"
+import { LOCAL_SERVER_PRESETS, parseCommandArgs, parseEnvLines } from "./AddLocalServerForm"
 
 /**
  * The arguments are typed as a line of shell, and stored as a list. Nothing
@@ -50,5 +50,19 @@ describe("parseEnvLines", () => {
 
 	it("ignores a line with no key", () => {
 		expect(parseEnvLines("=orphan\nA=1")).toEqual({ A: "1" })
+	})
+})
+
+describe("LOCAL_SERVER_PRESETS", () => {
+	it("fills the form with the Playwright server's own start command", () => {
+		const playwright = LOCAL_SERVER_PRESETS.find((preset) => preset.serverName === "playwright")
+		expect(playwright?.command).toBe("npx")
+		expect(parseCommandArgs(playwright?.args ?? "")).toEqual(["@playwright/mcp@latest"])
+	})
+
+	it("names each server so its tools read as <name>__<tool>", () => {
+		for (const preset of LOCAL_SERVER_PRESETS) {
+			expect(preset.serverName).toMatch(/^[a-z0-9_-]+$/)
+		}
 	})
 })
