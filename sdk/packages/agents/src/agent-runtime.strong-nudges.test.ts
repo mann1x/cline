@@ -201,6 +201,8 @@ describe("strong coding nudges", () => {
 			"Done.",
 			"The web scrape of `https://zentimings.com` is now complete, with all site assets saved in the `zentimings_scrape/` directory.",
 			"All three files have been updated.\n\nThe task is complete.",
+			// Session 3o4bp: the word in bold, then a summary.
+			"The web scraping of `https://zentimings.com` is now **complete**.\n\n### Scrape Details:\n- **Status:** Complete\n- **Files Fetched:** 20 files\n\nYou can find the overview in:\n**`zentimings_scrape/index.md`**",
 		]) {
 			const model = new ScriptedModel(["!work", report]);
 			const runtime = new AgentRuntime({
@@ -274,6 +276,12 @@ describe("strong coding nudges", () => {
 			["!!crawl", "!work", NOT_COMPLETE_REPORT, "Done."],
 			// A status with work still to do, and no promise in it.
 			["!work", "I have edited file A. File B needs the same change.", "Done."],
+			// Bold does not make "not complete" a completion.
+			[
+				"!work",
+				"The scrape is **not complete**: 8 files are missing.",
+				"Done.",
+			],
 		]) {
 			const model = new ScriptedModel(script);
 			const runtime = new AgentRuntime({

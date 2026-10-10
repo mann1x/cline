@@ -497,9 +497,13 @@ function endsOnPromiseOrQuestion(trimmed: string): boolean {
 /** Says the work is complete, and ends neither on a promise nor a question. */
 export function claimsCompletion(text: string | undefined): boolean {
 	const trimmed = text?.trim();
+	if (!trimmed) {
+		return false;
+	}
+	// Models set the word in bold: "is now **complete**" (session 3o4bp).
+	const plain = trimmed.replace(/[*_`]/g, "");
 	return (
-		!!trimmed &&
-		(CLAIMS_COMPLETION.test(trimmed) || COMPLETION_STATEMENT.test(trimmed)) &&
+		(CLAIMS_COMPLETION.test(plain) || COMPLETION_STATEMENT.test(plain)) &&
 		!endsOnPromiseOrQuestion(trimmed)
 	);
 }
