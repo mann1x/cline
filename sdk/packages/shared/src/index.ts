@@ -380,6 +380,7 @@ export {
 	ANNOUNCED_INTENT_NUDGE_PREFIX,
 	ASK_QUESTION_NUDGE_CLAUSE,
 	announcedIntentWithoutActing,
+	answersCompletionNudge,
 	buildAnnouncedIntentNudge,
 	buildNonConvergenceNudge,
 	buildUnparsedToolCallNudge,

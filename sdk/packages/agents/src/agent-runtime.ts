@@ -38,6 +38,7 @@ import type {
 import {
 	ASK_QUESTION_NUDGE_CLAUSE,
 	announcedIntentWithoutActing,
+	answersCompletionNudge,
 	buildAnnouncedIntentNudge,
 	buildNonConvergenceNudge,
 	buildUnparsedToolCallNudge,
@@ -1058,6 +1059,14 @@ export class AgentRuntime {
 	/** Consecutive turns nudged for producing no tool calls; reset by any turn that does. */
 	private consecutiveNoToolCallNudges = 0;
 	/**
+	 * Whether this run has already been asked if it is finished.
+	 *
+	 * Not reset by a turn that calls tools, unlike the count above: a model
+	 * that answers the question by checking its work and then says it is done
+	 * has answered, and is not asked again.
+	 */
+	private noToolCallNudgeAsked = false;
+	/**
 	 * Whether this run has ever called a tool.
 	 *
 	 * Separates a task in progress from a conversation. Never reset: a run that
@@ -1368,6 +1377,18 @@ export class AgentRuntime {
 		// the only thing here that can tell them apart.
 		const unstarted =
 			await this.config.completionPolicy?.describeUnstartedWork?.();
+		// Asked once already, worked since, and this is the one short sentence
+		// the question asked for. Only after tool calls: back-to-back silent
+		// turns keep the budget they always had. The host naming unstarted
+		// work still outranks it.
+		if (
+			this.noToolCallNudgeAsked &&
+			this.consecutiveNoToolCallNudges === 0 &&
+			!unstarted &&
+			answersCompletionNudge(text)
+		) {
+			return undefined;
+		}
 		// A turn that called nothing is not automatically a turn that failed to
 		// act. Asked which capital belongs to which country, or talked through a
 		// design, a model answers and stops -- and every branch of the message
@@ -1703,6 +1724,7 @@ export class AgentRuntime {
 		this.compactBeforeNextTurn = false;
 		this.imageRecoveryAttempted = false;
 		this.steerAwaitingResume = false;
+		this.noToolCallNudgeAsked = false;
 
 		try {
 			await this.callBeforeRunHooks();
@@ -2001,6 +2023,7 @@ export class AgentRuntime {
 					const noToolCallNudge =
 						await this.getNoToolCallNudgeMessage(finalText);
 					if (noToolCallNudge) {
+						this.noToolCallNudgeAsked = true;
 						this.consecutiveNoToolCallNudges += 1;
 						reminders.push(noToolCallNudge);
 						firedNudges.push({

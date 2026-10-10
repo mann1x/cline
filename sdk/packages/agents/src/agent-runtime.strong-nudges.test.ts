@@ -53,6 +53,49 @@ class ActsOnceModel implements AgentModel {
 	}
 }
 
+/** Says each line in turn; a line starting with `!` is a tool call instead. */
+class ScriptedModel implements AgentModel {
+	public readonly requests: AgentModelRequest[] = [];
+	private turn = 0;
+
+	constructor(private readonly script: readonly string[]) {}
+
+	async stream(
+		request: AgentModelRequest,
+	): Promise<AsyncIterable<AgentModelEvent>> {
+		this.requests.push(request);
+		const index = this.turn++;
+		const line = this.script[Math.min(index, this.script.length - 1)] ?? "";
+		return (async function* () {
+			if (line.startsWith("!")) {
+				yield {
+					type: "tool-call-delta",
+					toolCallId: `call_${index}`,
+					toolName: "echo",
+					inputText: '{"text":"hi"}',
+				} as AgentModelEvent;
+				yield { type: "finish", reason: "tool-calls" } as AgentModelEvent;
+				return;
+			}
+			yield { type: "text-delta", text: line } as AgentModelEvent;
+		})();
+	}
+}
+
+/** The reminders the model had been sent by its last turn, each counted once. */
+function asked(model: { requests: AgentModelRequest[] }): number {
+	return nudges({ requests: model.requests.slice(-1) }).length;
+}
+
+const ECHO = {
+	name: "echo",
+	description: "Echo input text",
+	inputSchema: { type: "object" },
+	async execute(input: { text: string }) {
+		return { echoed: input.text };
+	},
+};
+
 /** Every `[SYSTEM]` reminder the runtime fed back to the model. */
 function nudges(model: { requests: AgentModelRequest[] }): string[] {
 	const out: string[] = [];
@@ -160,6 +203,65 @@ describe("strong coding nudges", () => {
 		await runtime.run("do the thing");
 
 		expect(nudges(model)).toHaveLength(1);
+	});
+
+	// Session qjzln: a summary, a nudge, a check of the files, "it is complete",
+	// a second nudge, another check, a third.
+	it("takes one short sentence after a check as the answer to the nudge", async () => {
+		const model = new ScriptedModel([
+			"Here is a long summary of the page.\n\nIt has several parts.",
+			"!check",
+			"The web scraping of zentimings.com is complete.",
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [ECHO],
+			completionPolicy: { maxNoToolCallNudges: 1 },
+		});
+
+		await runtime.run("make a web scraping of zentimings.com");
+
+		expect(asked(model)).toBe(1);
+		expect(model.requests).toHaveLength(3);
+	});
+
+	it("still asks again when what follows the check is not that sentence", async () => {
+		for (const reply of [
+			"Let me also write a script for it.",
+			"Should I save it somewhere else?",
+			"The scrape is complete.\n\nHere is everything that was found, at length.",
+		]) {
+			const model = new ScriptedModel([
+				"Here is a summary.",
+				"!check",
+				reply,
+				"Done.",
+			]);
+			const runtime = new AgentRuntime({
+				model,
+				tools: [ECHO],
+				completionPolicy: { maxNoToolCallNudges: 1 },
+			});
+
+			await runtime.run("make a web scraping of zentimings.com");
+
+			// A promise draws the announced-intent nudge as well.
+			expect(asked(model), reply).toBeGreaterThanOrEqual(2);
+		}
+	});
+
+	it("asks a run that was never asked, however short its last word", async () => {
+		const model = new ScriptedModel(["!work", "Done."]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [ECHO],
+			completionPolicy: { maxNoToolCallNudges: 1 },
+		});
+
+		await runtime.run("do the thing");
+
+		expect(asked(model)).toBe(1);
+		expect(model.requests).toHaveLength(3);
 	});
 
 	it("names the unstarted work even when switched off", async () => {

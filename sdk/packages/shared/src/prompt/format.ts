@@ -437,6 +437,31 @@ export function announcedIntentWithoutActing(
 	return ANNOUNCED_INTENT.test(tail) ? trimmed : undefined;
 }
 
+/** The most a "one short sentence" answer runs to, with room for a path. */
+const NUDGE_ANSWER_MAX_CHARS = 300;
+
+/**
+ * Whether a turn that called nothing is the answer the no-tool-call nudge
+ * asked for: "If the task really is finished, say so in one short sentence."
+ *
+ * Short, one paragraph, not a question, and not a promise of more work. Used
+ * only for a run that has already been asked once: the silence budget starts
+ * over whenever the model calls a tool, so a model that answered the first
+ * nudge by checking its work was asked again when it then said it was done,
+ * and again after that (session qjzln, 2026-10-10: three nudges in a
+ * one-minute task that was finished at the first).
+ */
+export function answersCompletionNudge(text: string | undefined): boolean {
+	const trimmed = text?.trim();
+	return (
+		!!trimmed &&
+		trimmed.length <= NUDGE_ANSWER_MAX_CHARS &&
+		!/\n\s*\n/.test(trimmed) &&
+		!trimmed.endsWith("?") &&
+		announcedIntentWithoutActing(trimmed) === undefined
+	);
+}
+
 /**
  * Removes runtime-generated <mode_notice> elements (content included): they
  * are not user-typed text and must not render as such. Deliberately NOT part
