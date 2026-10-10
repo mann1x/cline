@@ -28,6 +28,7 @@ import { getLatestAnnouncementId } from "./utils/announcements"
 import { arePathsEqual } from "./utils/path"
 
 let logFileSink: LogFileSink | undefined
+let stopWatchingSharedState: (() => void) | undefined
 
 /**
  * Performs intialization for Cerebriline that is common to all platforms.
@@ -90,6 +91,9 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	const webview = HostProvider.get().createWebviewProvider()
 
 	const stateManager = StateManager.get()
+	// Settings are shared with every other window: show a change made there.
+	stateManager.registerCallbacks({ onSyncExternalChange: () => webview.controller.postStateToWebview() })
+	stopWatchingSharedState = stateManager.watchExternalChanges()
 	// Non-blocking announcement check and display
 	showVersionUpdateAnnouncement(stateManager)
 	// Check if this workspace was opened from worktree quick launch
@@ -177,6 +181,8 @@ async function checkWorktreeAutoOpen(stateManager: StateManager): Promise<void> 
  */
 export async function tearDown(): Promise<void> {
 	try {
+		stopWatchingSharedState?.()
+		stopWatchingSharedState = undefined
 		AgentConfigLoader.getInstance()?.dispose()
 		PostHogClientProvider.getInstance().dispose()
 		telemetryService.dispose()

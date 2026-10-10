@@ -719,18 +719,26 @@ export class SdkTaskHistory {
 		return (await this.listHistory()).map(sessionHistoryRecordToHistoryItem)
 	}
 
-	async deleteAllTaskHistory(options: { preserveFavorites?: boolean } = {}): Promise<number> {
+	async deleteAllTaskHistory(
+		options: {
+			preserveFavorites?: boolean
+			/** Conversations to leave alone, e.g. one another window has open. */
+			keep?: (sessionId: string) => boolean
+		} = {},
+	): Promise<number> {
 		const history = await this.listHistory({ hydrate: false })
-		const tasksToDelete = options.preserveFavorites
-			? history.filter(
-					(item) =>
-						!(
-							metadataBoolean(item.metadata, "isFavorited") ??
-							metadataBoolean(item.metadata, "is_favorited") ??
-							false
-						),
-				)
-			: history
+		const tasksToDelete = (
+			options.preserveFavorites
+				? history.filter(
+						(item) =>
+							!(
+								metadataBoolean(item.metadata, "isFavorited") ??
+								metadataBoolean(item.metadata, "is_favorited") ??
+								false
+							),
+					)
+				: history
+		).filter((item) => !options.keep?.(item.sessionId))
 
 		let deletedCount = 0
 		for (const item of tasksToDelete) {

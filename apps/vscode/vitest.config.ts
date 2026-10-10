@@ -24,6 +24,8 @@ export default defineConfig({
 			"src/shared/services/log-file-sink.test.ts",
 			"src/shared/api-config-snapshot.test.ts",
 			"src/shared/storage/non-api-handler-secrets.test.ts",
+			"src/shared/storage/ClineFileStorage.test.ts",
+			"src/core/storage/__tests__/state-manager-shared.test.ts",
 			"src/shared/api-config-profiles.test.ts",
 			"src/shared/vision-config.test.ts",
 			"src/shared/agent-nodes.test.ts",

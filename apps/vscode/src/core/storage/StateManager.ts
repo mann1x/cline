@@ -50,6 +50,15 @@ export interface PersistenceErrorEvent {
  * isolation between concurrent instances. Task-specific state is independent anyway since
  * each window typically runs different tasks.
  */
+/**
+ * State that belongs to the window showing it, although it is stored in the
+ * shared file so a reload brings it back. Another window's value is never
+ * taken over while this one is open: switching one window to Plan must not
+ * switch a conversation running in another, and a message being typed in one
+ * must not appear in the other's input box.
+ */
+const WINDOW_LOCAL_KEYS: ReadonlySet<string> = new Set(["mode", "messageDraft"])
+
 export class StateManager {
 	private static instance: StateManager | null = null
 
@@ -140,6 +149,78 @@ export class StateManager {
 		}
 		if (callbacks.onSyncExternalChange) {
 			this.onSyncExternalChange = callbacks.onSyncExternalChange
+		}
+	}
+
+	/**
+	 * Follow what other windows and the CLI write to the shared state files.
+	 * Their changes replace this window's cached values, except for a key this
+	 * window is about to write itself and the keys in {@link WINDOW_LOCAL_KEYS}.
+	 * Returns a function that stops it.
+	 */
+	public watchExternalChanges(): () => void {
+		const { globalStateBackingStore, secrets, workspaceState } = this.storage
+		const stops = [
+			globalStateBackingStore.onDidChangeExternally((keys) => {
+				void this.adoptExternalGlobalState(keys)
+			}),
+			secrets.onDidChangeExternally((keys) => {
+				this.adoptExternal(keys, readSecretsFromStorage(secrets), this.secretsCache, this.pendingSecrets)
+			}),
+			workspaceState.onDidChangeExternally((keys) => {
+				this.adoptExternal(
+					keys,
+					readWorkspaceStateFromStorage(workspaceState),
+					this.workspaceStateCache,
+					this.pendingWorkspaceState,
+				)
+			}),
+			globalStateBackingStore.watchExternalChanges(),
+			secrets.watchExternalChanges(),
+			workspaceState.watchExternalChanges(),
+		]
+		return () => {
+			for (const stop of stops) {
+				stop()
+			}
+		}
+	}
+
+	private async adoptExternalGlobalState(keys: readonly string[]): Promise<void> {
+		try {
+			// Read through the same decoding as startup: defaults, transforms and
+			// the computed properties all apply to a value that came from disk.
+			const fresh = await readGlobalStateFromStorage(this.storage.globalState)
+			this.adoptExternal(
+				keys.filter((key) => !WINDOW_LOCAL_KEYS.has(key)),
+				fresh,
+				this.globalStateCache,
+				this.pendingGlobalState,
+			)
+		} catch (error) {
+			Logger.error("[StateManager] Failed to take over another window's state change:", error)
+		}
+	}
+
+	private adoptExternal<C extends object>(
+		keys: readonly string[],
+		fresh: C,
+		cache: C,
+		pending: ReadonlySet<PropertyKey>,
+	): void {
+		let adopted = false
+		for (const key of keys) {
+			// What this window is about to write wins over what another wrote.
+			if (pending.has(key) || !(key in fresh)) {
+				continue
+			}
+			;(cache as Record<string, unknown>)[key] = (fresh as Record<string, unknown>)[key]
+			adopted = true
+		}
+		if (adopted && this.isInitialized) {
+			void Promise.resolve(this.onSyncExternalChange?.()).catch((error) => {
+				Logger.error("[StateManager] Failed to sync another window's state change:", error)
+			})
 		}
 	}
 

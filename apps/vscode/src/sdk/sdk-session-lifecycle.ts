@@ -68,6 +68,12 @@ export interface SdkSessionLifecycleOptions {
 	 */
 	consumeModeSwitchNotice?: (sessionId: string) => ModeSwitchNotice | null
 	onDidBecomeIdle?: () => void
+	/**
+	 * Throws when another window has this conversation open. Asked before a
+	 * session is started on an existing id, the last point at which this
+	 * window can still decline to drive a conversation that is not its own.
+	 */
+	assertConversationFree?: (sessionId: string) => void
 }
 
 export class SdkSessionLifecycle {
@@ -182,6 +188,7 @@ export class SdkSessionLifecycle {
 		// see pendingStops. A fresh id cannot conflict, so it never waits.
 		const requestedSessionId = startInput.config?.sessionId?.trim()
 		if (requestedSessionId) {
+			this.options.assertConversationFree?.(requestedSessionId)
 			await this.waitForPendingStop(requestedSessionId)
 		}
 

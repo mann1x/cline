@@ -5,6 +5,7 @@
 // cancelTask, …) to the Cerebriline SDK (@cline/core) and bridges SDK events to
 // the webview's gRPC streams.
 
+import { randomUUID } from "node:crypto"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
 import type { BackgroundDelegationView, ConfiguredAgentDelegationResult, ConfiguredAgentSummary } from "@cline/core"
@@ -54,6 +55,7 @@ import type { ClineExtensionContext } from "@/shared/cline"
 import { toLegacyApiProvider } from "@/shared/model-catalog/provider-helpers"
 import { ShowMessageRequest, ShowMessageType } from "@/shared/proto/host/window"
 import { Logger } from "@/shared/services/Logger"
+import { resolveDataDirFromEnv } from "@/shared/storage/storage-context"
 import { isClineManagedProvider } from "@/shared/utils/cline"
 import { getDesktopDir } from "@/utils/path"
 import { ClineAccountService } from "./account-service"
@@ -61,6 +63,7 @@ import { AuthService, LogoutReason } from "./auth-service"
 import { BUILTIN_SLASH_COMMANDS } from "./builtin-slash-commands"
 import { buildStartSessionInput, createHistoryItemFromSession } from "./cline-session-factory"
 import { readContextWindowGrant } from "./context-window-grant"
+import { ConversationLocks, describeHeldConversation } from "./conversation-lock"
 import { isStorePagedHistoryQuery, selectHistoryPage } from "./history-query"
 import { rankQuestionWithJev } from "./jev-question-ranking"
 import { MessageTranslatorState, reshapeErrorForWebview } from "./message-translator"
@@ -274,6 +277,17 @@ export class Controller {
 	private userInstructionServiceRoot?: string
 	private isDisposed = false
 
+	/**
+	 * This window's claims on the conversations it shows; see `conversation-lock.ts`.
+	 * The window id is new on every activation, so a reloaded window does not
+	 * pass for the one whose claims it finds on disk.
+	 */
+	private readonly conversationLocks = new ConversationLocks({
+		dir: path.join(resolveDataDirFromEnv(), "locks", "conversations"),
+		windowId: randomUUID(),
+		getWorkspace: () => this.lastKnownWorkspaceRoot,
+	})
+
 	// Synchronous snapshot of getWorkspaceRoot()'s latest result, for the message
 	// translator (which runs synchronously and relativizes the tool paths shown in
 	// the chat view). Warmed in the constructor and refreshed on every call.
@@ -416,6 +430,7 @@ export class Controller {
 		})
 		this.sessions = new SdkSessionLifecycle({
 			mcpHub: this.mcpHub,
+			assertConversationFree: (sessionId) => this.assertConversationFree(sessionId),
 			telemetry: this.sdkTelemetry.telemetry,
 			requestToolApproval: (request) => this.interactions.handleRequestToolApproval(request),
 			// The model's own questions only, and the only place that is so:
@@ -999,6 +1014,7 @@ export class Controller {
 	}
 
 	async dispose(): Promise<void> {
+		this.conversationLocks.dispose()
 		this.providerConfigStoreSubscription.dispose()
 		// Clear the remote config timer to prevent stale fetches
 		if (this.remoteConfigTimer) {
@@ -2027,6 +2043,9 @@ export class Controller {
 	 * replace it.
 	 */
 	async showTaskWithId(taskId: string): Promise<TaskResponse> {
+		// Synchronous, so the view generation below is still taken at the
+		// moment of the request.
+		this.assertConversationFree(taskId, { tellUser: true })
 		const historyItem = await this.taskControl.showTaskWithId(taskId)
 		if (!historyItem) {
 			throw new Error(`Task not found in history: ${taskId}`)
@@ -2291,14 +2310,42 @@ export class Controller {
 	}
 
 	async deleteTaskFromState(id: string): Promise<HistoryItem[]> {
+		this.assertConversationFree(id, { tellUser: true, claim: false })
 		return this.taskHistory.deleteTaskFromState(id)
+	}
+
+	/**
+	 * Throws when another window has `conversationId` open. Opening, resuming
+	 * or deleting it here would have two windows working one transcript.
+	 */
+	private assertConversationFree(conversationId: string, options: { tellUser?: boolean; claim?: boolean } = {}): void {
+		// Claiming in the same step leaves no gap for a second window to pass
+		// the same check; the claim then follows what the window shows.
+		const holder =
+			options.claim === false
+				? this.conversationLocks.holderOf(conversationId)
+				: this.conversationLocks.tryAcquire(conversationId)
+		if (!holder) {
+			return
+		}
+		const message = describeHeldConversation(holder)
+		Logger.warn(`[SdkController] ${conversationId} is held by another window (pid ${holder.pid}): refused`)
+		if (options.tellUser) {
+			void HostProvider.window.showMessage({ type: ShowMessageType.WARNING, message })
+		}
+		throw new Error(message)
+	}
+
+	/** Claim what this window shows and runs, and let go of what it no longer does. */
+	private syncConversationLocks(): void {
+		const ids = [this.task?.taskId, this.sessions.getActiveSession()?.sessionId]
+		this.conversationLocks.hold(ids.filter((id): id is string => !!id))
 	}
 
 	async deleteAllTaskHistory(): Promise<DeleteAllTaskHistoryCount> {
 		await this.clearTask()
 
 		const taskHistory = await this.taskHistory.listHistory({ hydrate: false })
-		const totalTasks = taskHistory.length
 
 		const userChoice = (
 			await HostProvider.window.showMessage(
@@ -2326,6 +2373,7 @@ export class Controller {
 			if (hasFavoritedTasks) {
 				const tasksDeleted = await this.taskHistory.deleteAllTaskHistory({
 					preserveFavorites: true,
+					keep: (id) => !!this.conversationLocks.holderOf(id),
 				})
 				await this.postStateToWebview()
 				return DeleteAllTaskHistoryCount.create({ tasksDeleted })
@@ -2347,11 +2395,12 @@ export class Controller {
 			}
 		}
 
-		const tasksDeleted = await this.taskHistory.deleteAllTaskHistory()
-		await this.postStateToWebview()
-		return DeleteAllTaskHistoryCount.create({
-			tasksDeleted: tasksDeleted || totalTasks,
+		// A conversation open in another window is not this window's to delete.
+		const tasksDeleted = await this.taskHistory.deleteAllTaskHistory({
+			keep: (id) => !!this.conversationLocks.holderOf(id),
 		})
+		await this.postStateToWebview()
+		return DeleteAllTaskHistoryCount.create({ tasksDeleted })
 	}
 
 	async updateTaskHistory(item: HistoryItem): Promise<HistoryItem[]> {
@@ -2414,6 +2463,9 @@ export class Controller {
 
 	/** Build the current ExtensionState and push it to the webview immediately. */
 	private async flushStateToWebview(): Promise<void> {
+		// Every change of task or session ends in a state post, so this is
+		// where the claims are brought in line with what the window shows.
+		this.syncConversationLocks()
 		// Import dynamically to avoid circular deps
 		const { sendStateUpdate } = await import("@core/controller/state/subscribeToState")
 		const state = await this.getStateToPostToWebview()
