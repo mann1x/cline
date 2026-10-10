@@ -593,6 +593,8 @@ It is off by default: **Settings > Library**, or `--library` and `--librarian` i
 
 **Code search by meaning.** With an embedding model set, **Settings > Library > Index the code of this folder** indexes the folder's source files, and `search_codebase` gains a `semantic` mode: the query is a question in plain words and the answer is the passages that best match, each with its file and lines. It is for when the model knows what a piece of code does and not what it is called; regex search and `ask_lsp` are still what it uses when it does. Off by default and on per folder, because indexing sends every source file to the embedding model. Guide: [`docs/features/code-search.mdx`](docs/features/code-search.mdx).
 
+**Web scraping.** With a [Firecrawl](https://github.com/firecrawl/firecrawl) endpoint set under **Settings > Features > Web scraping** and allowed in the API configuration, the model can search the web, read pages and crawl a site. By default only the librarian uses it, to make books. Untick **Only for the librarian** and every task gets a `web_scrape` tool that can also crawl a site into markdown files in the workspace: a site to rework, or knowledge to keep on disk. `--web-scrape` in the CLI. Guide: [`docs/features/web-scraping.mdx`](docs/features/web-scraping.mdx).
+
 ## Memory
 
 Notes the model keeps from one task to the next: a decision and its reason, how the project is built and tested, a convention, something you said you prefer. The model gets `remember`, `recall` and `forget`, and with every message you send the notes that are about it are put beside the message, with a line in the chat saying which.

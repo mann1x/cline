@@ -1,0 +1,53 @@
+---
+title: "Web scraping"
+sidebarTitle: "Web scraping"
+description: "Let the model search the web, read pages and crawl a site through a Firecrawl endpoint: for the librarian only, or as a general tool that writes a site's pages into the workspace."
+---
+
+With a [Firecrawl](https://github.com/firecrawl/firecrawl) endpoint, the model can search the web, list a site's pages, read a page, and crawl a site. Pages are read in a real browser, so pages built by JavaScript are read too.
+
+It is **off by default**, and it takes two switches, because pages are fetched from the open web on your behalf:
+
+1. **Settings > Features > Web scraping**: the endpoint's address, its key if it needs one, and how far a crawl may go. **Check** reads one page and shows what came back.
+2. **Allow web scraping**, in the API configuration.
+
+Without both, no web tool is ever offered to the model.
+
+## Who may scrape
+
+**Only for the librarian** is ticked by default. Then scraping is used by the [librarian](/features/library#books-from-the-web) alone, to make a book from web pages and to check it for news later.
+
+Untick it and every task is offered a `web_scrape` tool, whether the Library is on or not. The change takes effect in the next task.
+
+## What the general tool does
+
+| Action | |
+| --- | --- |
+| `search` | Finds pages for a topic, with their titles and what they are about. |
+| `map` | Lists the pages of a site by their links, without reading them. |
+| `read` | Returns one page as markdown. With `save_to`, writes it to that file and returns its headings only. |
+| `crawl` | Reads a page and the pages it links to, and writes each as a markdown file under the folder `save_to`. |
+
+A crawl is for work that is not the Library's: a site you want reworked, or knowledge you want kept as files.
+
+> Crawl the docs of https://example.com/docs into `reference/example`, then write me a summary of how its plugin system works.
+
+- Each page becomes one file, named after its address: `reference/example/example.com/docs/plugins.md`. The file starts with the page's address and title.
+- `index.md` in the folder lists every page read, and every page that could not be read with the reason.
+- The pages are not returned to the model, so a crawl of a hundred pages does not fill its context. It reads the files it needs afterwards.
+- A crawl stays below the address it starts from: from `/docs/` it reads `/docs/...`. `whole_site` lets it follow links anywhere on the site.
+- `include_paths` and `exclude_paths` (regular expressions) keep a crawl to one part of a site.
+- `save_to` has to be inside the workspace.
+
+The model asks for a depth and a page count per crawl. The settings are the most it gets:
+
+| Setting | Default | |
+| --- | --- | --- |
+| Pages one crawl or book may read in a call | 100 | A crawl asks for 25 unless the model says otherwise. |
+| Links deep a crawl may follow | 3 | A crawl asks for 1 unless the model says otherwise. 0 reads only the starting page. |
+
+The tool is the lead's. Agents the lead starts are not offered it.
+
+## CLI
+
+`--web-scrape` (or `CLINE_WEB_SCRAPE=1`) offers the general tool, writing under the folder the run is in. The endpoint is named by `CLINE_SCRAPE_BASE_URL`, with `CLINE_SCRAPE_API_KEY`, `CLINE_SCRAPE_MAX_PAGES` and `CLINE_SCRAPE_MAX_DEPTH` when needed. Without the switch, scraping is the librarian's only (`--librarian`).
