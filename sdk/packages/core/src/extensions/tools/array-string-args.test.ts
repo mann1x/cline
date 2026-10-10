@@ -228,6 +228,43 @@ describe("list arguments sent as a bare string", () => {
 		).toThrow(MALFORMED_ARRAY_MESSAGE);
 	});
 
+	// Pandorum, 2026-10-10, sessions onak1 and xkuuh.
+	it("takes `patterns` or `queries` for grep's `pattern`", () => {
+		expect(
+			validateWithZod(GrepInputUnionSchema, { queries: ["question:"] }),
+		).toMatchObject({ pattern: "question:" });
+		const several = validateWithZod(GrepInputUnionSchema, {
+			extended: true,
+			patterns: ["\\?", "How[ ?]", "What[ ?]"],
+		});
+		expect(several).toMatchObject({
+			pattern: "\\?|How[ ?]|What[ ?]",
+			extended: true,
+		});
+		expect(
+			validateWithZod(GrepInputUnionSchema, { patterns: ["a", "b"] }),
+		).toMatchObject({ pattern: "a|b", extended: true });
+		// A given pattern is never replaced.
+		expect(
+			validateWithZod(GrepInputUnionSchema, {
+				pattern: "kept",
+				patterns: ["other"],
+			}),
+		).toMatchObject({ pattern: "kept" });
+	});
+
+	it("still asks for `pattern` when several literal texts cannot be one", () => {
+		expect(() =>
+			validateWithZod(GrepInputUnionSchema, {
+				fixed: true,
+				patterns: ["a|b", "c"],
+			}),
+		).toThrow("Missing required argument `pattern`");
+		expect(() =>
+			validateWithZod(GrepInputUnionSchema, { extended: true }),
+		).toThrow("Missing required argument `pattern`");
+	});
+
 	it("takes a single file for sed", () => {
 		expect(
 			validateWithZod(SedInputUnionSchema, {

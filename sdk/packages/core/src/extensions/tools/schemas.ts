@@ -1171,11 +1171,50 @@ export type SubmitInput = z.infer<typeof SubmitInputSchema>;
  * canonical schema's own, so the parsed output is the canonical type already --
  * no pipe back through it, which `z.coerce` fields make ill-typed anyway.
  */
-export const GrepInputUnionSchema = GrepInputSchema.extend({
-	paths: listOrSingle(
-		"Files or directories to search. Defaults to the workspace root, searched recursively.",
-	).optional(),
-});
+/**
+ * `patterns` or `queries` in place of `pattern`.
+ *
+ * `search_codebase` takes `queries` and `read_files` takes `files`, so a model
+ * writes the plural here too: three calls in two sessions on pandorum,
+ * 2026-10-10 (onak1, xkuuh), each answered "Missing required argument
+ * `pattern`". One entry is the pattern. Several are alternatives, which only
+ * an extended expression can say, so they are joined with `|` and read as
+ * one; with `fixed` there is no such syntax and the call is left to fail.
+ */
+function pluralGrepPattern(input: unknown): unknown {
+	if (input === null || typeof input !== "object" || Array.isArray(input)) {
+		return input;
+	}
+	const args = input as Record<string, unknown>;
+	if (typeof args.pattern === "string") {
+		return input;
+	}
+	const plural = args.patterns ?? args.queries;
+	const list = (typeof plural === "string" ? [plural] : plural) as unknown;
+	if (
+		!Array.isArray(list) ||
+		list.length === 0 ||
+		!list.every((entry) => typeof entry === "string" && entry.length > 0)
+	) {
+		return input;
+	}
+	if (list.length === 1) {
+		return { ...args, pattern: list[0] };
+	}
+	if (args.fixed === true) {
+		return input;
+	}
+	return { ...args, pattern: list.join("|"), extended: true };
+}
+
+export const GrepInputUnionSchema = z.preprocess(
+	pluralGrepPattern,
+	GrepInputSchema.extend({
+		paths: listOrSingle(
+			"Files or directories to search. Defaults to the workspace root, searched recursively.",
+		).optional(),
+	}),
+);
 
 export const SedInputUnionSchema = SedInputSchema.extend({
 	files: listOrSingle("The files to transform."),
