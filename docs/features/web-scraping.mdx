@@ -135,11 +135,11 @@ With **Only for the librarian** unticked, **Settings > Features > Web scraping**
 | Largest file fetched (MB) | 25 | 1 to 2,048. A larger file is skipped and listed with the reason. |
 | Most one site crawl may fetch in all (MB) | 300 | 1 to 102,400. |
 
-The model cannot raise them. In the CLI they are `CLINE_SCRAPE_MAX_FILES`, `CLINE_SCRAPE_MAX_FILE_MB` and `CLINE_SCRAPE_MAX_TOTAL_MB`.
+The model cannot raise them, and they count everything saved in the crawl's folder: resuming a crawl does not start the count again. In the CLI they are `CLINE_SCRAPE_MAX_FILES`, `CLINE_SCRAPE_MAX_FILE_MB` and `CLINE_SCRAPE_MAX_TOTAL_MB`.
 
 ## When a limit stops a crawl
 
-The model is told first, before anything else in the result: which limit was reached (pages for the call, the crawl's time, the number of files, the total size, or files over the size for one file), how much was left out, and which setting raises it. It is asked to pass that on, so the reply to a crawl that stopped short says so. `index.md` in the folder lists what was not read and not fetched.
+The model is told first and last in the result, and told to stop there rather than fetch the missing files some other way: which limit was reached (pages for the call, the crawl's time, the number of files, the total size, or files over the size for one file), how much was left out, and which setting raises it. It is asked to pass that on, so the reply to a crawl that stopped short says so. `index.md` in the folder lists what was not read and not fetched.
 
 ## Continuing a crawl
 
@@ -154,7 +154,7 @@ Each resume reads as many pages as one call may (the model's `limit`, capped by 
 ## Limits
 
 - The general tool is the lead's. Agents the lead starts are not offered it.
-- `read` saves markdown only. To save one page with its files, crawl it with a depth of 0.
+- `read` saves markdown only, and only to a `.md` file. To save one page with its files, crawl it with a depth of 0.
 - Content that only loads after a click or a scroll, and files a script asks for by a name it builds at run time, are not found.
 - The markdown is converted from the page's HTML by Cerebriline, which keeps fenced code blocks and their language.
 
