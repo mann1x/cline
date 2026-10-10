@@ -225,6 +225,8 @@ export interface ParsedArgs {
 	 * `CLINE_EMBEDDING_MODEL`.
 	 */
 	codeIndex?: boolean;
+	/** Offer the general `web_scrape` tool (search, map, read, crawl to files). */
+	webScrape?: boolean;
 	/** `--media-config`: a JSON file naming the media endpoints. */
 	mediaConfig?: string;
 	/**

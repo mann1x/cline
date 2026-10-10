@@ -8,10 +8,10 @@ import { useRetrievalStatus } from "../utils/useRetrievalStatus"
 const muted = "text-xs text-(--vscode-descriptionForeground)"
 
 /**
- * Web scraping for the librarian: the Firecrawl endpoint pages are read
- * through, and how far one crawl may go. Setting it up here is half of it;
- * the other half is the tick in the API configuration that allows a session
- * to use it.
+ * Web scraping: the Firecrawl endpoint pages are read through, who may use
+ * it, and how far one crawl may go. Setting it up here is half of it; the
+ * other half is the tick in the API configuration that allows a session to
+ * use it.
  */
 const ScrapeSettings = () => {
 	const { status, busy, run } = useRetrievalStatus()
@@ -40,16 +40,30 @@ const ScrapeSettings = () => {
 				onChange={async (checked) => {
 					await run({ action: "setScrape", enabled: checked })
 				}}>
-				Web scraping for the librarian
+				Web scraping
 			</SettingsCheckbox>
 			<p className={`mt-1 ${muted}`}>
-				Lets the librarian search the web, read pages and crawl a site through a{" "}
-				<a href="https://github.com/firecrawl/firecrawl">Firecrawl</a> endpoint, to make a book from web pages and to
-				check it for news later. The tools reach a task only when the librarian is on (Settings &gt; Library) and “Allow
+				Lets the model search the web, read pages and crawl a site through a{" "}
+				<a href="https://github.com/firecrawl/firecrawl">Firecrawl</a> endpoint. The tools reach a task only when “Allow
 				web scraping” is ticked in the API configuration; otherwise they are never offered.
 			</p>
 			{scrape.enabled ? (
 				<div className="flex flex-col gap-2 mt-2">
+					<div>
+						<SettingsCheckbox
+							checked={scrape.librarianOnly}
+							onChange={async (checked) => {
+								await run({ action: "setScrape", librarianOnly: checked })
+							}}>
+							Only for the librarian
+						</SettingsCheckbox>
+						<p className={`mt-1 ${muted}`}>
+							{scrape.librarianOnly
+								? "Scraping is used only by the librarian (Settings > Library), to make a book from web pages and to check it for news later."
+								: "Every task is offered a web_scrape tool: search, list a site's pages, read a page, and crawl a site into markdown files in the workspace. The librarian uses it too."}{" "}
+							Takes effect in the next task.
+						</p>
+					</div>
 					<DebouncedTextField
 						className="w-full"
 						initialValue={scrape.baseUrl}
@@ -67,11 +81,11 @@ const ScrapeSettings = () => {
 						type="password">
 						<span className="font-medium">API key</span>
 					</DebouncedTextField>
-					{limit("maxPages", "Pages one book may read in a call", 100)}
+					{limit("maxPages", "Pages one crawl or book may read in a call", 100)}
 					{limit("maxDepth", "Links deep a crawl may follow", 3)}
 					<p className={muted}>
-						The librarian asks for a depth and a page count per book; these are the most it gets. A crawl reads pages
-						from the open web on your behalf, from the machine the endpoint runs on.
+						The model asks for a depth and a page count per crawl or book; these are the most it gets. A crawl reads
+						pages from the open web on your behalf, from the machine the endpoint runs on.
 					</p>
 					<div className="flex items-center gap-2">
 						<VSCodeButton

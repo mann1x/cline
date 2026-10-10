@@ -1520,6 +1520,52 @@ export async function runCli(): Promise<void> {
 		// `--vision-model` when one is given.
 		const librarian =
 			args.librarian === true || process.env.CLINE_LIBRARIAN === "1";
+		// `--web-scrape` (or `CLINE_WEB_SCRAPE=1`): the general `web_scrape`,
+		// for a task that is not the Library's. Without it, scraping is the
+		// librarian's only, as in the extension.
+		const webScrape =
+			args.webScrape === true || process.env.CLINE_WEB_SCRAPE === "1";
+		if (webScrape) {
+			const { createWebScrapeTools, DEFAULT_SCRAPE_SETTINGS } = await import(
+				"@cline/core"
+			);
+			const baseUrl = process.env.CLINE_SCRAPE_BASE_URL?.trim();
+			const apiKey = process.env.CLINE_SCRAPE_API_KEY?.trim();
+			const most = (value: string | undefined, fallback: number) => {
+				const parsed = Number(value);
+				return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+			};
+			if (!baseUrl) {
+				process.stderr.write(
+					"--web-scrape needs CLINE_SCRAPE_BASE_URL (a Firecrawl endpoint); web_scrape is not offered.\n",
+				);
+			} else {
+				config.extraTools = [
+					...(config.extraTools ?? []),
+					...createWebScrapeTools({
+						cwd,
+						getScrape: () => ({
+							baseUrl,
+							...(apiKey ? { apiKey } : {}),
+							maxPages: most(
+								process.env.CLINE_SCRAPE_MAX_PAGES,
+								DEFAULT_SCRAPE_SETTINGS.maxPages,
+							),
+							maxDepth: most(
+								process.env.CLINE_SCRAPE_MAX_DEPTH,
+								DEFAULT_SCRAPE_SETTINGS.maxDepth,
+							),
+							librarianOnly: false,
+						}),
+						log: (message) => loggerAdapter.core.log(message),
+						onError: (message, error) =>
+							loggerAdapter.core.log(
+								`${message}: ${error instanceof Error ? error.message : String(error)}`,
+							),
+					}),
+				];
+			}
+		}
 		if (
 			librarian ||
 			args.library === true ||
@@ -1566,6 +1612,7 @@ export async function runCli(): Promise<void> {
 										process.env.CLINE_SCRAPE_MAX_DEPTH,
 										DEFAULT_SCRAPE_SETTINGS.maxDepth,
 									),
+									librarianOnly: !webScrape,
 								},
 							}
 						: {}),

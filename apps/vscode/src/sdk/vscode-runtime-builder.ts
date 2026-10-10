@@ -9,6 +9,7 @@ import {
 	createMediaTools,
 	createMemoryTools,
 	createSddTools,
+	createWebScrapeTools,
 	type MediaSessionProvider,
 } from "@cline/core"
 import type { AgentTool, AgentToolContext } from "@cline/shared"
@@ -23,7 +24,7 @@ import { resolveMcpServerTimeoutMs } from "@/services/mcp/timeout"
 import { Logger } from "@/shared/services/Logger"
 import { createCheckFileTool } from "./check-file-tool"
 import { isJevConfigured, readJevEndpoint } from "./jev-config"
-import { readLibraryImageDescriber, readLibraryToolsConfig, readMemoryToolsConfig } from "./library-config"
+import { readLibraryImageDescriber, readLibraryToolsConfig, readMemoryToolsConfig, readScrapeConfig } from "./library-config"
 import { probeMediaServer, readLeadMediaProvider } from "./media-endpoint-config"
 import { readMediaToolsConfig } from "./media-tools-config"
 import { readQaCredentials } from "./qa-credentials-store"
@@ -231,6 +232,19 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 			cwd: options?.cwd ?? process.cwd(),
 			getConfig: readLibraryToolsConfig,
 			getDescribeImages: readLibraryImageDescriber,
+			onError: (message, error) => Logger.error(`${message}:`, error),
+			log: (message) => Logger.log(`[VscodeRuntimeTools] ${message}`),
+		}),
+	)
+
+	// `web_scrape` for any task, when scraping is set up under Features,
+	// allowed in the API configuration, and not kept for the librarian: search,
+	// map, read, and a crawl that writes a site's pages into the workspace.
+	// It does not need the Library.
+	tools.push(
+		...createWebScrapeTools({
+			cwd: options?.cwd ?? process.cwd(),
+			getScrape: readScrapeConfig,
 			onError: (message, error) => Logger.error(`${message}:`, error),
 			log: (message) => Logger.log(`[VscodeRuntimeTools] ${message}`),
 		}),

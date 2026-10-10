@@ -669,9 +669,10 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 									Allow web scraping
 								</SettingsCheckbox>
 								<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
-									Lets a task acting as librarian search the web, read pages and crawl sites through the
-									scraping endpoint set under Settings &gt; Features, to make books for the Library. Pages are
-									fetched from the open web on your behalf. Unticked, the web tools are never offered.
+									{retrieval.status.scrape.librarianOnly
+										? "Lets a task acting as librarian search the web, read pages and crawl sites through the scraping endpoint set under Settings > Features, to make books for the Library."
+										: "Lets a task search the web, read pages and crawl sites into files in the workspace, through the scraping endpoint set under Settings > Features."}{" "}
+									Pages are fetched from the open web on your behalf. Unticked, the web tools are never offered.
 								</p>
 							</div>
 						) : null}

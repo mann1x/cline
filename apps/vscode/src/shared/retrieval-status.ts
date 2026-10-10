@@ -266,6 +266,8 @@ export interface ScrapeState {
 	baseUrl: string
 	maxPages: number
 	maxDepth: number
+	/** Scraping is the librarian's only; off, every task gets `web_scrape`. */
+	librarianOnly: boolean
 	keySet: boolean
 	problem?: string
 }
@@ -308,6 +310,7 @@ export type LibraryAction =
 			baseUrl?: string
 			maxPages?: number
 			maxDepth?: number
+			librarianOnly?: boolean
 			apiKey?: string
 	  }
 	| { action: "checkScrape" }

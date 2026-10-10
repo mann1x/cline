@@ -1435,6 +1435,11 @@ export {
 	sniffVideoExtension,
 	type VideoGenerationEndpoint,
 } from "./extensions/tools/video-generation";
+export {
+	createWebScrapeTools,
+	WEB_SCRAPE_TOOL_NAME,
+	type WebScrapeToolOptions,
+} from "./extensions/tools/web-scrape-tool";
 // The transaction's base revision: what every file said when the open
 // transaction started. Read through `read_files` with `revision: "base"`, and
 // written back over one file by `restore_file`. Both exist only while the

@@ -363,7 +363,7 @@ const USER_SETTINGS_FIELDS = {
 	librarySettings: { default: "" as string },
 	// JSON `MemorySettings` (`@cline/shared`), as the Memory panel stores them.
 	memorySettings: { default: "" as string },
-	// Web scraping for the librarian. `scrapeSettings` is JSON `ScrapeSettings`
+	// Web scraping. `scrapeSettings` is JSON `ScrapeSettings`
 	// (`@cline/shared`): the Firecrawl endpoint and how far a crawl may go, set
 	// under Features. `scrapeAllowed` is the tick in the API configuration that
 	// lets a session use it; both are needed, because pages are fetched from

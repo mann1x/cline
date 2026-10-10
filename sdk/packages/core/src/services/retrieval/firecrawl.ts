@@ -40,6 +40,11 @@ export interface CrawlOptions {
 	/** Only paths matching these (regular expressions), when given. */
 	includePaths?: readonly string[];
 	excludePaths?: readonly string[];
+	/**
+	 * Follow links anywhere on the site. Without it a crawl stays below the
+	 * address it starts from: from `/docs/intro` it never reaches `/docs/api`.
+	 */
+	entireDomain?: boolean;
 	signal?: AbortSignal;
 	fetch?: typeof fetch;
 	/** How long to wait for the crawl. @default 20 minutes */
@@ -293,6 +298,7 @@ export async function crawlSite(
 			...(options.excludePaths?.length
 				? { excludePaths: options.excludePaths }
 				: {}),
+			...(options.entireDomain ? { crawlEntireDomain: true } : {}),
 			scrapeOptions: { formats: ["html"], onlyMainContent: true },
 		},
 		options,

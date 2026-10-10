@@ -205,7 +205,15 @@ describe("what the Library and Memory panels ask of the host", () => {
 		it("starts with no shelves, no trash, and the librarian off", async () => {
 			const { catalogue, scrape } = await readRetrievalStatus()
 			expect(catalogue).toEqual({ sections: [], books: 0, trash: 0, problems: [], librarian: false, trashDays: 30 })
-			expect(scrape).toEqual({ enabled: false, allowed: false, baseUrl: "", maxPages: 100, maxDepth: 3, keySet: false })
+			expect(scrape).toEqual({
+				enabled: false,
+				allowed: false,
+				baseUrl: "",
+				maxPages: 100,
+				maxDepth: 3,
+				librarianOnly: true,
+				keySet: false,
+			})
 		})
 
 		it("makes sections and shelves, lists a shelf's books, and edits and moves a book", async () => {
@@ -306,6 +314,7 @@ describe("what the Library and Memory panels ask of the host", () => {
 				baseUrl: "192.168.178.2:3002",
 				maxPages: 50,
 				maxDepth: 3,
+				librarianOnly: true,
 				keySet: true,
 				problem: "Not allowed yet: tick “Allow web scraping” in the API configuration.",
 			})
@@ -314,6 +323,13 @@ describe("what the Library and Memory panels ask of the host", () => {
 			const allowed = await act({ action: "setScrape", allowed: true })
 			expect(allowed.status.scrape.problem).toBeUndefined()
 			expect(allowed.status.scrape.maxPages).toBe(50)
+			// Offered to every task only once the user says so, and it stays said.
+			const general = await act({ action: "setScrape", librarianOnly: false })
+			expect(general.status.scrape.librarianOnly).toBe(false)
+			expect((await act({ action: "setScrape", maxDepth: 2 })).status.scrape).toMatchObject({
+				librarianOnly: false,
+				maxDepth: 2,
+			})
 		})
 
 		it("checks the scraping endpoint with one real request", async () => {

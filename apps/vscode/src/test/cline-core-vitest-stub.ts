@@ -197,6 +197,7 @@ export {
 	GENERATE_VIDEO_TOOL_DESCRIPTION,
 	GENERATE_VIDEO_TOOL_NAME,
 } from "../../../../sdk/packages/core/src/extensions/tools/video-generation"
+export { createWebScrapeTools } from "../../../../sdk/packages/core/src/extensions/tools/web-scrape-tool"
 // Re-exported from source rather than stubbed: the session factory composes
 // its hook layers with it, so a fake would test the fake's composition.
 export { mergeAgentHooks } from "../../../../sdk/packages/core/src/hooks/hook-file-hooks"

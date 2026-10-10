@@ -41,6 +41,12 @@ export interface LibraryScrapeConfig extends ScrapeEndpoint {
 	maxPages: number;
 	/** How many links deep a crawl follows. */
 	maxDepth: number;
+	/**
+	 * `false`: every task is offered the general `web_scrape`
+	 * (`web-scrape-tool.ts`), which the librarian then uses too. Otherwise
+	 * scraping is the librarian's only.
+	 */
+	librarianOnly?: boolean;
 }
 
 export interface LibraryToolsConfig {

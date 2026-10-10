@@ -32,11 +32,9 @@ import {
 } from "../../services/retrieval/fingerprint";
 import {
 	crawlSite,
-	mapSite,
 	type ScrapedPage,
 	type ScrapeFailure,
 	scrapePage,
-	searchWeb,
 } from "../../services/retrieval/firecrawl";
 import { type Library, sharedLibrary } from "../../services/retrieval/library";
 import {
@@ -69,6 +67,7 @@ import {
 	strings,
 	text,
 } from "./library-tools";
+import { cleanLink, createWebScrapeTool, NO_SCRAPER } from "./web-scrape-tool";
 
 export const LIBRARIAN_TOOL_NAMES = [
 	"library_check",
@@ -103,9 +102,6 @@ const SAME_TEXT = 0.9;
 const TITLE_NEEDS_TEXT = 0.1;
 /** Less than this, and two texts are not compared at all. */
 const RELATED_TEXT = 0.3;
-
-const NO_SCRAPER =
-	"Web scraping is not set up for this session. The user sets the endpoint under Settings > Features and allows it in the API configuration; do not call this again in this task.";
 
 export interface ReadSource {
 	file: string;
@@ -1579,106 +1575,15 @@ function createLibraryTransferTool(
 	});
 }
 
-function cleanLink(link: string): string | undefined {
-	try {
-		const url = new URL(link.trim());
-		if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
-		url.hash = "";
-		return url.toString();
-	} catch {
-		return undefined;
-	}
-}
-
-function createWebScrapeTool(options: CreateLibraryToolsOptions): AgentTool {
-	return createTool({
-		name: "web_scrape",
-		description:
-			'Look at the web before making a book from it. "search": find pages for a topic, with their titles and what they are about. "map": the pages of a site, by their links, without reading them. "read": one page as markdown, to judge whether it belongs in the book. Rendered in a browser, so pages built by JavaScript are read too. Use it to choose the links; library_web_book reads them into the Library.',
-		inputSchema: {
-			type: "object",
-			properties: {
-				action: { type: "string", enum: ["search", "map", "read"] },
-				query: { type: "string", description: "search: what to find." },
-				url: { type: "string", description: "map: a site. read: a page." },
-				limit: {
-					type: "integer",
-					description:
-						"search: results (default 10). map: links (default 200).",
-				},
-				max_chars: {
-					type: "integer",
-					description: "read: how much of the page to return (default 12000).",
-				},
-			},
-			required: ["action"],
-		},
-		readOnly: true,
-		timeoutMs: 5 * 60_000,
-		retryable: false,
-		execute: async (input: unknown, context): Promise<string> => {
-			const config = activeConfig(options);
-			if (!config) return LIBRARY_OFF;
-			if (!config.scrape) return NO_SCRAPER;
-			const request = (input ?? {}) as Record<string, unknown>;
-			const action = text(request.action);
-			const limit = Number(request.limit);
-			const signal = context?.signal;
-			try {
-				if (action === "search") {
-					const query = text(request.query);
-					if (!query) return "`search` needs a `query`.";
-					const hits = await searchWeb(config.scrape, query, {
-						limit:
-							Number.isFinite(limit) && limit > 0 ? Math.min(50, limit) : 10,
-						...(signal ? { signal } : {}),
-					});
-					if (hits.length === 0) return `Nothing found for "${query}".`;
-					return [
-						`${plural(hits.length, "result")} for "${query}":`,
-						...hits.map(
-							(hit) =>
-								`- ${hit.url}\n  ${hit.title ?? ""}${hit.description ? ` — ${hit.description.slice(0, 240)}` : ""}`,
-						),
-					].join("\n");
-				}
-				const url = cleanLink(text(request.url));
-				if (!url)
-					return `\`${action}\` needs a \`url\` starting with http:// or https://.`;
-				if (action === "map") {
-					const links = await mapSite(config.scrape, url, {
-						limit:
-							Number.isFinite(limit) && limit > 0 ? Math.min(2000, limit) : 200,
-						...(signal ? { signal } : {}),
-					});
-					if (links.length === 0) {
-						return `No links found from ${url}. Try the site's front page, or read the page and follow what it links to.`;
-					}
-					return [`${plural(links.length, "page")} of ${url}:`, ...links].join(
-						"\n",
-					);
-				}
-				if (action === "read") {
-					const page = await scrapePage(config.scrape, url, {
-						...(signal ? { signal } : {}),
-					});
-					const max = Number(request.max_chars);
-					const cut = Number.isFinite(max) && max > 0 ? max : 12_000;
-					return [
-						`${page.url}${page.title ? ` — ${page.title}` : ""} (${page.markdown.length.toLocaleString("en-US")} characters)`,
-						"---",
-						page.markdown.slice(0, cut),
-						...(page.markdown.length > cut
-							? [`[Cut at ${cut.toLocaleString("en-US")} characters.]`]
-							: []),
-					].join("\n");
-				}
-				return 'Say `action`: "search", "map" or "read".';
-			} catch (error) {
-				options.onError?.(`[library] web_scrape ${action} failed`, error);
-				return `Not done: ${errorText(error)}`;
-			}
-		},
+/** The librarian's `web_scrape`: look, to choose what a book is made from. */
+function createLibrarianWebScrapeTool(
+	options: CreateLibraryToolsOptions,
+): AgentTool {
+	return createWebScrapeTool({
+		cwd: options.cwd,
+		getScrape: () => activeConfig(options)?.scrape,
+		unavailable: () => (activeConfig(options) ? undefined : LIBRARY_OFF),
+		...(options.onError ? { onError: options.onError } : {}),
 	});
 }
 
@@ -2229,7 +2134,14 @@ export function createLibrarianTools(
 		createLibraryOrganizeTool(options),
 		createLibraryTransferTool(options),
 		...(config?.scrape
-			? [createWebScrapeTool(options), createLibraryWebBookTool(options)]
+			? [
+					// With the general tool offered to the task, that is the one
+					// the librarian looks with: one `web_scrape`, not two.
+					...(config.scrape.librarianOnly === false
+						? []
+						: [createLibrarianWebScrapeTool(options)]),
+					createLibraryWebBookTool(options),
+				]
 			: []),
 	];
 }

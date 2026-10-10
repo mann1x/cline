@@ -1,6 +1,6 @@
 /**
- * The web scraper's settings: the Firecrawl endpoint the librarian reads
- * pages through, and how far one crawl may go.
+ * The web scraper's settings: the Firecrawl endpoint pages are read through,
+ * who may use it, and how far one crawl may go.
  */
 
 export interface ScrapeSettings {
@@ -12,6 +12,11 @@ export interface ScrapeSettings {
 	maxPages: number;
 	/** How many links deep a crawl follows from where it starts. */
 	maxDepth: number;
+	/**
+	 * Only the librarian scrapes, to make books. Off, every task is offered a
+	 * general `web_scrape` that can also crawl a site into files.
+	 */
+	librarianOnly: boolean;
 }
 
 export const DEFAULT_SCRAPE_SETTINGS: ScrapeSettings = {
@@ -19,6 +24,7 @@ export const DEFAULT_SCRAPE_SETTINGS: ScrapeSettings = {
 	baseUrl: "",
 	maxPages: 100,
 	maxDepth: 3,
+	librarianOnly: true,
 };
 
 /** Stored settings, whatever shape they are in, as settings that can be used. */
@@ -43,5 +49,7 @@ export function resolveScrapeSettings(
 		baseUrl: typeof s.baseUrl === "string" ? s.baseUrl.trim() : d.baseUrl,
 		maxPages: integer(s.maxPages, d.maxPages, 1, 5000),
 		maxDepth: integer(s.maxDepth, d.maxDepth, 0, 10),
+		librarianOnly:
+			typeof s.librarianOnly === "boolean" ? s.librarianOnly : d.librarianOnly,
 	};
 }

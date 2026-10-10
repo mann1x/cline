@@ -119,7 +119,7 @@ export function readScrapeSettings(): ScrapeSettings {
 /**
  * The scraping endpoint, when it may be used: turned on with an address
  * under Features, and allowed in the API configuration. Either one missing
- * and the librarian has no web tools.
+ * and nobody has web tools. `librarianOnly` says who gets them.
  */
 export function readScrapeConfig(): LibraryScrapeConfig | undefined {
 	const state = StateManager.get()
@@ -132,6 +132,7 @@ export function readScrapeConfig(): LibraryScrapeConfig | undefined {
 		baseUrl: ensureBaseUrlScheme(settings.baseUrl),
 		maxPages: settings.maxPages,
 		maxDepth: settings.maxDepth,
+		librarianOnly: settings.librarianOnly,
 		...(apiKey ? { apiKey } : {}),
 	}
 }
