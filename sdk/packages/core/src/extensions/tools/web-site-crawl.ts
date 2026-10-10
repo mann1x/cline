@@ -185,6 +185,8 @@ export interface CrawlToFolderRequest {
 	resume: boolean;
 	signal?: AbortSignal;
 	emit?: (status: string) => void;
+	/** A text file the crawl wrote or rewrote, by absolute path. */
+	wrote?: (file: string) => void;
 }
 
 async function readRecord(target: string): Promise<SiteRecord | undefined> {
@@ -515,6 +517,7 @@ export async function crawlToFolder(
 		const file = path.join(target, ...name.split("/"));
 		await fs.mkdir(path.dirname(file), { recursive: true });
 		await fs.writeFile(file, pageFile(page), "utf8");
+		request.wrote?.(file);
 		characters += page.markdown.length;
 		record.pages[page.url] = {
 			...(page.title ? { title: page.title } : {}),
@@ -593,6 +596,8 @@ export async function crawlToFolder(
 		"utf8",
 	);
 	await fs.writeFile(path.join(target, "index.md"), indexFile(record), "utf8");
+	request.wrote?.(path.join(target, "index.md"));
+	request.wrote?.(path.join(target, SITE_RECORD_FILE));
 
 	const failedNow = [
 		...pageFailures.map((failure) => `- ${failure.url}: ${failure.reason}`),
@@ -637,7 +642,7 @@ export async function crawlToFolder(
 	const canContinue = record.unread.length > 0 || record.assetsLeft.length > 0;
 	const alertBlock = alerts.length
 		? [
-				"LIMIT REACHED. Tell the user what was left out and why; these are the user's own limits, under Settings > Features > Web scraping, and only the user can raise them:",
+				"NOT COMPLETE: a limit the user set stopped this crawl before everything was fetched. Do not report the scrape as complete. Your reply must tell the user what was left out and which setting raises it (Settings > Features > Web scraping; only the user can change it):",
 				...alerts,
 				canContinue
 					? `To continue without fetching again what is already saved, call crawl with save_to "${folder}" and resume: true.`
@@ -655,7 +660,9 @@ export async function crawlToFolder(
 			? []
 			: record.unread.length === 0
 				? [
-						`That is the whole site from this address: every page of it that the pages read link to was read.${elsewhere}`,
+						alerts.length
+							? `No page is missing: every page of the site that the pages read link to was read.${elsewhere}`
+							: `That is the whole site from this address: every page of it that the pages read link to was read.${elsewhere}`,
 					]
 				: [
 						`${plural(record.unread.length, "more page")} of this site ${record.unread.length === 1 ? "is" : "are"} linked and ${record.unread.length === 1 ? "was" : "were"} not read: ${
@@ -671,9 +678,14 @@ export async function crawlToFolder(
 		const renderedOnly = mirror.pages.filter(
 			(page) => !page.served && page.rendered,
 		);
-		mirrorLines.push(
-			`The site itself is saved unaltered beside the markdown: ${plural(served, "page")} as served (.html), ${plural(mirror.pages.filter((page) => page.rendered).length, "page")} as rendered in the browser (${served ? ".rendered.html" : ".html"}), and ${plural(mirror.assets.length, "file")} they use (stylesheets, scripts, pictures, fonts), ${megabytes(mirror.bytes)} fetched, each at the path the site has it under its host's folder.`,
-		);
+		if (mirror.pages.length === 0) {
+			mirrorLines.push(
+				`${plural(mirror.assets.length, "file")} the pages use ${mirror.assets.length === 1 ? "was" : "were"} fetched (${megabytes(mirror.bytes)}), each at the path the site has it under its host's folder.`,
+			);
+		} else
+			mirrorLines.push(
+				`The site itself is saved unaltered beside the markdown: ${plural(served, "page")} as served (.html), ${plural(mirror.pages.filter((page) => page.rendered).length, "page")} as rendered in the browser (${served ? ".rendered.html" : ".html"}), and ${plural(mirror.assets.length, "file")} they use (stylesheets, scripts, pictures, fonts), ${megabytes(mirror.bytes)} fetched, each at the path the site has it under its host's folder.`,
+			);
 		if (mirror.reused > 0) {
 			mirrorLines.push(
 				`${plural(mirror.reused, "file")} already in the folder ${mirror.reused === 1 ? "was" : "were"} not fetched again.`,
@@ -702,11 +714,13 @@ export async function crawlToFolder(
 	return [
 		...alertBlock,
 		request.resume
-			? `Resumed the crawl of ${url} in ${folder}/: ${plural(pages.length, "more page")} read (${characters.toLocaleString("en-US")} characters), ${plural(total, "page")} there now; the ${plural(alreadyPages, "page")} already saved ${alreadyPages === 1 ? "was" : "were"} not read again.`
+			? pages.length === 0
+				? `Resumed the crawl of ${url} in ${folder}/: no page was left to read; the ${plural(alreadyPages, "page")} already saved ${alreadyPages === 1 ? "was" : "were"} not read again.`
+				: `Resumed the crawl of ${url} in ${folder}/: ${plural(pages.length, "more page")} read (${characters.toLocaleString("en-US")} characters), ${plural(total, "page")} there now; the ${plural(alreadyPages, "page")} already saved ${alreadyPages === 1 ? "was" : "were"} not read again.`
 			: `${plural(pages.length, "page")} of ${url} written under ${folder}/ (${characters.toLocaleString("en-US")} characters; depth ${depth}, at most ${plural(limit, "page")}).`,
 		...ending,
 		...mirrorLines,
-		`Everything is saved whole, and ${folder}/index.md lists it for the user: neither it nor the files need reading back to check them.`,
+		`${alerts.length ? "What was fetched" : "Everything"} is saved whole, and ${folder}/index.md lists it for the user: neither it nor the files need reading back to check them.`,
 		...rows.slice(0, shown),
 		...(rows.length > shown
 			? [`[${rows.length - shown} more in index.md.]`]
@@ -718,6 +732,12 @@ export async function crawlToFolder(
 					...(failedNow.length > 20
 						? [`[${failedNow.length - 20} more in index.md.]`]
 						: []),
+				]
+			: []),
+		// Said again last, where it is read just before the reply is written.
+		...(alerts.length
+			? [
+					"Reminder: this crawl is NOT complete. Say so in your reply, with what was left out.",
 				]
 			: []),
 	].join("\n");

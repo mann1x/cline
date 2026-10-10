@@ -50,13 +50,19 @@ export interface WebScrapeToolOptions {
 	/** The general tool: `crawl`, and `save_to`. @default false, the librarian's */
 	general?: boolean;
 	onError?: (message: string, error: unknown) => void;
+	/**
+	 * A text file the tool wrote, by absolute path. The host forgets what it
+	 * knew of the file, so a later read is not told that something outside the
+	 * session changed it.
+	 */
+	onWrote?: (file: string) => void;
 }
 
 const LIBRARIAN_DESCRIPTION =
 	'Look at the web before making a book from it. "search": find pages for a topic, with their titles and what they are about. "map": the pages of a site, by their links, without reading them. "read": one page as markdown, to judge whether it belongs in the book. Rendered in a browser, so pages built by JavaScript are read too. Use it to choose the links; library_web_book reads them into the Library.';
 
 const GENERAL_DESCRIPTION =
-	'Read the web through a browser, so pages built by JavaScript are read too. Asked to scrape, copy, mirror or download a site, `crawl` it with `save_to`: the result of a scrape is the files, and your reply says where they are. "search": find pages for a topic, with their titles and what they are about. "map": the pages of a site, by their links, without reading them. "read": one page as markdown; with `save_to` it is written to that file and only its outline is returned. "crawl": read a page and the pages it links to, as deep and as many as asked, and save them under the folder `save_to`. By default (`content` "site") that is the site itself, unaltered: each page as the site served it (`.html`) and as the browser rendered it (`.rendered.html`), every stylesheet, script, picture and font the pages use at the path the site has it, and a markdown reading of each page (`.md`); use it for a site that is to be reworked or used as the source of new pages. `content` "text" saves the markdown alone, for notes and reference. `index.md` lists everything; the files are not returned, read the ones you need afterwards. A crawl stays below the address it starts from (from /docs/ it reads /docs/...), unless `whole_site` is true. Map a site before crawling it, to choose where to start, `include_paths` and a sensible `limit`. The user sets how many pages and files, and how much, one crawl may fetch. When a crawl stops at one of those limits its result begins with LIMIT REACHED: say so to the user, with what was left out. A crawl can be continued: `crawl` again with the same `save_to` and `resume` true reads the pages and fetches the files that are missing, and nothing that is already saved.';
+	'Read the web through a browser, so pages built by JavaScript are read too. Asked to scrape, copy, mirror or download a site, `crawl` it with `save_to`: the result of a scrape is the files, and your reply says where they are. "search": find pages for a topic, with their titles and what they are about. "map": the pages of a site, by their links, without reading them. "read": one page as markdown; with `save_to` it is written to that file and only its outline is returned. "crawl": read a page and the pages it links to, as deep and as many as asked, and save them under the folder `save_to`. By default (`content` "site") that is the site itself, unaltered: each page as the site served it (`.html`) and as the browser rendered it (`.rendered.html`), every stylesheet, script, picture and font the pages use at the path the site has it, and a markdown reading of each page (`.md`); use it for a site that is to be reworked or used as the source of new pages. `content` "text" saves the markdown alone, for notes and reference. `index.md` lists everything; the files are not returned, read the ones you need afterwards. A crawl stays below the address it starts from (from /docs/ it reads /docs/...), unless `whole_site` is true. Map a site before crawling it, to choose where to start, `include_paths` and a sensible `limit`. The user sets how many pages and files, and how much, one crawl may fetch. When a crawl stops at one of those limits its result begins with NOT COMPLETE: do not report the scrape as complete, and tell the user what was left out and which setting raises it. A crawl can be continued: `crawl` again with the same `save_to` and `resume` true reads the pages and fetches the files that are missing, and nothing that is already saved.';
 
 function text(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
@@ -259,6 +265,7 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 					if (target) {
 						await fs.mkdir(path.dirname(target), { recursive: true });
 						await fs.writeFile(target, pageFile(page), "utf8");
+						options.onWrote?.(target);
 						return [
 							head,
 							`Written to ${path.relative(options.cwd, target).split(path.sep).join("/")}.`,
@@ -301,6 +308,7 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 					resume,
 					...(signal ? { signal } : {}),
 					emit: (status) => context?.emitUpdate?.({ status }),
+					...(options.onWrote ? { wrote: options.onWrote } : {}),
 				});
 			} catch (error) {
 				options.onError?.(`[web_scrape] ${action} failed`, error);

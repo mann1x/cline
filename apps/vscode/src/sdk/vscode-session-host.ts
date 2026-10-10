@@ -199,6 +199,7 @@ export class VscodeSessionHost implements SdkSessionHost {
 				vscodeTerminalExecutionMode: getEffectiveTerminalExecutionMode(requestedTerminalExecutionMode),
 				foregroundCommands: options.foregroundCommands,
 				getReadPaths: options.getReadPaths,
+				forgetReads: options.forgetReads,
 				sessionProvider: {
 					providerId: inputWithRemoteConfig.config.providerId,
 					baseUrl: inputWithRemoteConfig.config.baseUrl,

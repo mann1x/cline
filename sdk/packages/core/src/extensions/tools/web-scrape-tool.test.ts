@@ -35,6 +35,7 @@ let scrape: LibraryScrapeConfig | undefined;
 beforeEach(() => {
 	root = mkdtempSync(join(tmpdir(), "web-scrape-"));
 	crawlBody = undefined;
+	wrote = [];
 	pages = { ...PAGES };
 	links = {};
 	site = {};
@@ -109,8 +110,16 @@ afterEach(() => {
 	rmSync(root, { recursive: true, force: true });
 });
 
+/** The files the tool said it wrote. */
+let wrote: string[] = [];
+
 const general = () =>
-	createWebScrapeTool({ cwd: root, getScrape: () => scrape, general: true });
+	createWebScrapeTool({
+		cwd: root,
+		getScrape: () => scrape,
+		general: true,
+		onWrote: (file) => wrote.push(file),
+	});
 const run = async (input: Record<string, unknown>) =>
 	String(await general().execute(input, CONTEXT));
 
@@ -221,11 +230,16 @@ describe("web_scrape for any task", () => {
 		});
 		expect(report).toContain("2 files they use");
 		// The limit is the first thing said, as something to pass on.
-		expect(report.startsWith("LIMIT REACHED. Tell the user")).toBe(true);
+		expect(report.startsWith("NOT COMPLETE: a limit the user set")).toBe(true);
 		expect(report).toContain(
 			"1 file was not fetched, because one crawl may fetch 2 files",
 		);
 		expect(report).toContain('save_to "site" and resume: true');
+		// Not called the whole site while files are missing, and said again last.
+		expect(report).not.toContain("That is the whole site");
+		expect(report).toContain("What was fetched is saved whole");
+		expect(report.trimEnd().endsWith("with what was left out.")).toBe(true);
+		expect(wrote).toContain(join(root, "site", "index.md"));
 		const record = () =>
 			JSON.parse(readFileSync(join(root, "site", ".scrape.json"), "utf8"));
 		expect(record().assetsLeft).toEqual(["https://example.com/3.png"]);
@@ -238,9 +252,12 @@ describe("web_scrape for any task", () => {
 			resume: true,
 		});
 		expect(direct).toEqual(["https://example.com/3.png"]);
-		expect(resumed).not.toContain("LIMIT REACHED");
-		expect(resumed).toContain("Resumed the crawl of https://example.com/");
-		expect(resumed).toContain("the 1 page already saved was not read again");
+		expect(resumed).not.toContain("NOT COMPLETE");
+		expect(resumed).toContain(
+			"Resumed the crawl of https://example.com/ in site/: no page was left to read; the 1 page already saved was not read again.",
+		);
+		expect(resumed).toContain("1 file the pages use was fetched");
+		expect(resumed).not.toContain("0 pages");
 		expect(record().assetsLeft).toEqual([]);
 		expect(Object.keys(record().assets)).toHaveLength(3);
 		expect(
@@ -263,7 +280,7 @@ describe("web_scrape for any task", () => {
 			url: "https://example.com/",
 			save_to: "site",
 		});
-		expect(first.startsWith("LIMIT REACHED.")).toBe(true);
+		expect(first.startsWith("NOT COMPLETE:")).toBe(true);
 		expect(first).toContain("the limit of 1 page for this call was reached");
 		expect(first).toContain("2 more pages of the site are linked and not read");
 		const record = () =>
@@ -280,7 +297,7 @@ describe("web_scrape for any task", () => {
 		expect(crawlBody).toBeUndefined();
 		expect(second).toContain("1 more page read");
 		expect(second).toContain("2 pages there now");
-		expect(second.startsWith("LIMIT REACHED.")).toBe(true);
+		expect(second.startsWith("NOT COMPLETE:")).toBe(true);
 		expect(Object.keys(record().pages)).toEqual([
 			"https://example.com/",
 			"https://example.com/docs/intro.html",
@@ -292,7 +309,7 @@ describe("web_scrape for any task", () => {
 			save_to: "site",
 			resume: true,
 		});
-		expect(third).not.toContain("LIMIT REACHED");
+		expect(third).not.toContain("NOT COMPLETE");
 		expect(Object.keys(record().pages)).toHaveLength(3);
 		expect(record().unread).toEqual([]);
 		const index = readFileSync(join(root, "site", "index.md"), "utf8");

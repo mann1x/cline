@@ -84,6 +84,8 @@ export interface VscodeExtraToolsOptions {
 	foregroundCommands?: SdkForegroundCommandCoordinator
 	/** Files read this session; see `ListFilesToolOptions.getReadPaths`. */
 	getReadPaths?: () => string[]
+	/** Drop what the session knows of a file a tool rewrote; see `WebScrapeToolOptions.onWrote`. */
+	forgetReads?: (absolutePath: string) => void
 	/**
 	 * The provider this session runs on. A media tool may be served by it: an
 	 * opencoti or xOllama that generates images needs no second endpoint.
@@ -246,6 +248,7 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 			cwd: options?.cwd ?? process.cwd(),
 			getScrape: readScrapeConfig,
 			onError: (message, error) => Logger.error(`${message}:`, error),
+			...(options?.forgetReads ? { onWrote: options.forgetReads } : {}),
 			log: (message) => Logger.log(`[VscodeRuntimeTools] ${message}`),
 		}),
 	)
