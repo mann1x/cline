@@ -24,36 +24,10 @@ class OneNoteModel implements AgentModel {
 	}
 }
 
-/** Talks on the first turn, calls a tool on the second, then talks again. */
-class ActsOnceModel implements AgentModel {
-	public readonly requests: AgentModelRequest[] = [];
-	private turn = 0;
-
-	async stream(
-		request: AgentModelRequest,
-	): Promise<AsyncIterable<AgentModelEvent>> {
-		this.requests.push(request);
-		const acts = this.turn++ === 0;
-		return (async function* () {
-			if (acts) {
-				yield {
-					type: "tool-call-delta",
-					toolCallId: "call_1",
-					toolName: "echo",
-					inputText: '{"text":"hi"}',
-				} as AgentModelEvent;
-				yield { type: "finish", reason: "tool-calls" } as AgentModelEvent;
-				return;
-			}
-			yield {
-				type: "text-delta",
-				text: "The capital of Italy is Rome.",
-			} as AgentModelEvent;
-		})();
-	}
-}
-
-/** Says each line in turn; a line starting with `!` is a tool call instead. */
+/**
+ * Says each line in turn; a line starting with `!` is a tool call instead,
+ * and one starting with `!!` a call of the tool that stops at a user's limit.
+ */
 class ScriptedModel implements AgentModel {
 	public readonly requests: AgentModelRequest[] = [];
 	private turn = 0;
@@ -71,7 +45,7 @@ class ScriptedModel implements AgentModel {
 				yield {
 					type: "tool-call-delta",
 					toolCallId: `call_${index}`,
-					toolName: "echo",
+					toolName: line.startsWith("!!") ? "limited" : "echo",
 					inputText: '{"text":"hi"}',
 				} as AgentModelEvent;
 				yield { type: "finish", reason: "tool-calls" } as AgentModelEvent;
@@ -81,6 +55,23 @@ class ScriptedModel implements AgentModel {
 		})();
 	}
 }
+
+/** A tool that stops at a limit only the user can change, and says so. */
+const LIMITED = {
+	name: "limited",
+	description: "Fetch within the user's limit",
+	inputSchema: { type: "object" },
+	async execute(
+		_input: unknown,
+		context?: { reportStoppedForUser?: (reason: string) => void },
+	) {
+		context?.reportStoppedForUser?.("the user's file limit");
+		return "NOT COMPLETE: the user's limit left 8 files out.";
+	},
+};
+
+const NOT_COMPLETE_REPORT =
+	"The web scraping has been saved to `zentimings_scrape`, but it is **not complete**.\n\nThe file limit left 8 files out.\n\nRaise it under Settings > Features > Web scraping and ask me to resume.";
 
 /** The reminders the model had been sent by its last turn, each counted once. */
 function asked(model: { requests: AgentModelRequest[] }): number {
@@ -196,14 +187,13 @@ describe("strong coding nudges", () => {
 		expect(nudges(model)).toHaveLength(1);
 	});
 
-	// Pandorum, 2026-10-10. ndhh9: a correct "not complete" report was nudged
-	// and the model went around the user's limit. 7pfjl: one sentence saying
-	// the scrape was complete was nudged for a turn that changed nothing.
-	it("takes a report after work as the end of the run", async () => {
+	// Pandorum, 2026-10-10, session 7pfjl: one sentence saying the scrape was
+	// complete was nudged, for a turn that changed nothing.
+	it("takes a statement that the work is complete as the end of the run", async () => {
 		for (const report of [
 			"Done.",
 			"The web scrape of `https://zentimings.com` is now complete, with all site assets saved in the `zentimings_scrape/` directory.",
-			"The web scraping has been saved to `zentimings_scrape`, but it is **not complete**.\n\nThe file limit left 8 files out.\n\nRaise it under Settings > Features > Web scraping and ask me to resume.",
+			"All three files have been updated.\n\nThe task is complete.",
 		]) {
 			const model = new ScriptedModel(["!work", report]);
 			const runtime = new AgentRuntime({
@@ -216,6 +206,44 @@ describe("strong coding nudges", () => {
 
 			expect(nudges(model), report).toHaveLength(0);
 			expect(model.requests, report).toHaveLength(2);
+		}
+	});
+
+	// Session ndhh9: a correct "not complete" report was nudged, and the model
+	// went around the user's limit to make it untrue.
+	it("takes a report as the end of the run when a tool stopped at the user's limit", async () => {
+		const model = new ScriptedModel(["!!crawl", NOT_COMPLETE_REPORT]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [ECHO, LIMITED],
+			completionPolicy: { maxNoToolCallNudges: 1 },
+		});
+
+		await runtime.run("make a web scraping of zentimings.com");
+
+		expect(nudges(model)).toHaveLength(0);
+		expect(model.requests).toHaveLength(2);
+	});
+
+	it("asks about the same report when no tool said it had stopped", async () => {
+		for (const script of [
+			// Nothing reported a stop.
+			["!work", NOT_COMPLETE_REPORT, "Done."],
+			// One did, and the run has called something else since.
+			["!!crawl", "!work", NOT_COMPLETE_REPORT, "Done."],
+			// A status with work still to do, and no promise in it.
+			["!work", "I have edited file A. File B needs the same change.", "Done."],
+		]) {
+			const model = new ScriptedModel(script);
+			const runtime = new AgentRuntime({
+				model,
+				tools: [ECHO, LIMITED],
+				completionPolicy: { maxNoToolCallNudges: 1 },
+			});
+
+			await runtime.run("do the thing");
+
+			expect(nudges(model), script.join(" / ")).toHaveLength(1);
 		}
 	});
 

@@ -45,6 +45,7 @@ import {
 	captureAgentUnexpectedReasoningTokens,
 	captureSdkError,
 	captureTaskLifecycleEvent,
+	claimsCompletion,
 	classifyTurnFault,
 	classifyTurnFaultError,
 	describeAdmissionWait,
@@ -1070,6 +1071,13 @@ export class AgentRuntime {
 	/** Whether this run has called a tool; see `reportsOutcome`. */
 	private calledToolThisRun = false;
 	/**
+	 * The iteration in which a tool last said it stopped at something only
+	 * the user can change, and the last iteration that called tools. Equal
+	 * means nothing has been called since.
+	 */
+	private stoppedForUserAt: number | undefined;
+	private lastToolIteration: number | undefined;
+	/**
 	 * Whether this run has ever called a tool.
 	 *
 	 * Separates a task in progress from a conversation. Never reset: a run that
@@ -1392,16 +1400,20 @@ export class AgentRuntime {
 		) {
 			return undefined;
 		}
-		// Worked, then wrote its report: that is how a run ends. The nudge is
-		// for the model that worked and then wrote nothing, promised more, or
-		// asked something no one will read. Not after a nudge already sent:
-		// the answer to that one is judged above.
+		// Worked, then reported: that is how a run ends. Two cases only -- the
+		// reply says the work is complete, or the last tool to run said it
+		// stopped at something only the user can change and the reply reports
+		// that. A prose status with work still to do is neither, and is asked
+		// as before. Not after a nudge already sent: the answer to that one is
+		// judged above.
 		if (
 			this.calledToolThisRun &&
 			this.consecutiveNoToolCallNudges === 0 &&
 			!this.noToolCallNudgeAsked &&
 			!unstarted &&
-			reportsOutcome(text)
+			(claimsCompletion(text) ||
+				(this.stoppedForUserAt === this.lastToolIteration &&
+					reportsOutcome(text)))
 		) {
 			return undefined;
 		}
@@ -1742,6 +1754,8 @@ export class AgentRuntime {
 		this.steerAwaitingResume = false;
 		this.noToolCallNudgeAsked = false;
 		this.calledToolThisRun = false;
+		this.stoppedForUserAt = undefined;
+		this.lastToolIteration = undefined;
 
 		try {
 			await this.callBeforeRunHooks();
@@ -2218,6 +2232,7 @@ export class AgentRuntime {
 				// consecutive-silence budget starts over.
 				this.hasCalledAnyTool = true;
 				this.calledToolThisRun = true;
+				this.lastToolIteration = this.state.iteration;
 				this.consecutiveNoToolCallNudges = 0;
 				this.thinkingOnlyRetries = 0;
 				this.consecutiveNoToolCallTurns = 0;
@@ -3922,6 +3937,9 @@ export class AgentRuntime {
 					signal: this.abortController?.signal,
 					metadata: this.config.toolContextMetadata,
 					snapshot: this.snapshot(),
+					reportStoppedForUser: () => {
+						this.stoppedForUserAt = this.state.iteration;
+					},
 					emitUpdate: (update: unknown) => {
 						void this.emit({
 							type: "tool-updated",

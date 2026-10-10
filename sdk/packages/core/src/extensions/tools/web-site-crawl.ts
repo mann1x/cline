@@ -187,6 +187,8 @@ export interface CrawlToFolderRequest {
 	emit?: (status: string) => void;
 	/** A text file the crawl wrote or rewrote, by absolute path. */
 	wrote?: (file: string) => void;
+	/** The crawl stopped at a limit of the user's; see `reportStoppedForUser`. */
+	stopped?: (reason: string) => void;
 }
 
 async function readRecord(target: string): Promise<SiteRecord | undefined> {
@@ -646,6 +648,9 @@ export async function crawlToFolder(
 		);
 	}
 	const canContinue = record.unread.length > 0 || record.assetsLeft.length > 0;
+	if (alerts.length) {
+		request.stopped?.("a web scraping limit the user set");
+	}
 	const alertBlock = alerts.length
 		? [
 				"NOT COMPLETE: a limit the user set stopped this crawl before everything was fetched. Do not report the scrape as complete. Your reply must tell the user what was left out and which setting raises it (Settings > Features > Web scraping; only the user can change it):",

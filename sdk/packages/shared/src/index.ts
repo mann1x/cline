@@ -384,6 +384,7 @@ export {
 	buildAnnouncedIntentNudge,
 	buildNonConvergenceNudge,
 	buildUnparsedToolCallNudge,
+	claimsCompletion,
 	createModeSwitchNoticeTracker,
 	formatDisplayUserInput,
 	formatFileContentBlock,

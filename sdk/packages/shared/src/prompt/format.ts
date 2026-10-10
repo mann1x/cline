@@ -465,30 +465,49 @@ export function answersCompletionNudge(text: string | undefined): boolean {
 }
 
 /**
- * Whether a turn that called nothing, after the run has worked, reads as the
- * run's report rather than as a model that went quiet.
+ * Whether a turn that called nothing, after the run has worked, is the run's
+ * report rather than a model that went quiet. Two narrow cases; everything
+ * else is nudged as before, including a prose status with work still to do.
  *
- * The no-tool-call nudge was built for the second: tools called, then a turn
- * with nothing in it. Sent after a report it asks a question that has just
- * been answered, and its first clause ("if the task is not finished, continue
- * now") is an instruction a model follows. Pandorum, 2026-10-10, session
- * ndhh9: a crawl stopped at the user's file limit, the model said so in a
- * correct four-paragraph reply, was nudged, and went back to fetch the files
- * some other way. Session 7pfjl: nudged after "The web scrape ... is now
- * complete", one sentence, for a turn that changed nothing.
+ * The no-tool-call nudge was built for the model that worked and then
+ * stopped. Sent after a report it asks a question that has just been
+ * answered, and its first clause ("if the task is not finished, continue
+ * now") is an instruction a model follows. Pandorum, 2026-10-10:
  *
- * A report is any text that does not end on a promise of more work and does
- * not ask something. The promise has a nudge of its own
- * (`announcedIntentWithoutActing`), and a question written as prose reaches
- * nobody, which the nudge is the only thing to say.
+ * - 7pfjl: "The web scrape ... is now complete", one sentence, nudged for a
+ *   turn that changed nothing. A reply that says the work is complete has
+ *   answered; that is `claimsCompletion`.
+ * - ndhh9: a crawl stopped at the user's file limit, the model said so in a
+ *   correct four-paragraph reply, was nudged, and went back to fetch the
+ *   files some other way. Nothing in such a reply says "complete", and it
+ *   should not: the evidence is the tool's, which reported the stop
+ *   (`AgentToolContext.reportStoppedForUser`). Then any report that neither
+ *   promises more nor asks something ends the run; that is `reportsOutcome`.
  */
-export function reportsOutcome(text: string | undefined): boolean {
+const COMPLETION_STATEMENT =
+	/(?:^done\b|\b(?:is|are|was|were|has been|have been) (?:now |all |fully |successfully )?(?:complete|completed|finished|done)\b)/i;
+
+function endsOnPromiseOrQuestion(trimmed: string): boolean {
+	return (
+		trimmed.slice(-300).includes("?") ||
+		ANNOUNCED_INTENT.test(trimmed.slice(-400))
+	);
+}
+
+/** Says the work is complete, and ends neither on a promise nor a question. */
+export function claimsCompletion(text: string | undefined): boolean {
 	const trimmed = text?.trim();
 	return (
 		!!trimmed &&
-		!trimmed.slice(-300).includes("?") &&
-		!ANNOUNCED_INTENT.test(trimmed.slice(-400))
+		(CLAIMS_COMPLETION.test(trimmed) || COMPLETION_STATEMENT.test(trimmed)) &&
+		!endsOnPromiseOrQuestion(trimmed)
 	);
+}
+
+/** Any text that ends neither on a promise nor a question. */
+export function reportsOutcome(text: string | undefined): boolean {
+	const trimmed = text?.trim();
+	return !!trimmed && !endsOnPromiseOrQuestion(trimmed);
 }
 
 /**

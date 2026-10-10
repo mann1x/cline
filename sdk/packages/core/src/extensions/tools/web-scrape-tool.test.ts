@@ -10,7 +10,15 @@ import {
 	workspacePath,
 } from "./web-scrape-tool";
 
-const CONTEXT = { agentId: "a", conversationId: "c", iteration: 1 } as never;
+/** What the tool told the runtime it had stopped at. */
+let stops: string[] = [];
+
+const CONTEXT = {
+	agentId: "a",
+	conversationId: "c",
+	iteration: 1,
+	reportStoppedForUser: (reason: string) => stops.push(reason),
+} as never;
 
 const PAGES: Record<string, string> = {
 	"https://example.com/": "<h1>Home</h1><p>Welcome.</p>",
@@ -36,6 +44,7 @@ beforeEach(() => {
 	root = mkdtempSync(join(tmpdir(), "web-scrape-"));
 	crawlBody = undefined;
 	wrote = [];
+	stops = [];
 	pages = { ...PAGES };
 	links = {};
 	site = {};
@@ -245,6 +254,8 @@ describe("web_scrape for any task", () => {
 		expect(record().assetsLeft).toEqual(["https://example.com/3.png"]);
 
 		expect(report).toContain("Stop here and report.");
+		// The runtime is told too, so the report is not answered with a nudge.
+		expect(stops).toEqual(["a web scraping limit the user set"]);
 		expect(report).toContain("resuming now fetches nothing more");
 
 		// Resumed with the limit as it was: the folder already holds what one
@@ -276,6 +287,7 @@ describe("web_scrape for any task", () => {
 		});
 		expect(direct).toEqual(["https://example.com/3.png"]);
 		expect(resumed).not.toContain("NOT COMPLETE");
+		expect(stops).toHaveLength(2);
 		expect(resumed).toContain(
 			"Resumed the crawl of https://example.com/ in site/: no page was left to read; the 1 page already saved was not read again.",
 		);

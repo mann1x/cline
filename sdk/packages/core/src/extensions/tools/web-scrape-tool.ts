@@ -315,6 +315,7 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 					...(signal ? { signal } : {}),
 					emit: (status) => context?.emitUpdate?.({ status }),
 					...(options.onWrote ? { wrote: options.onWrote } : {}),
+					stopped: (reason) => context?.reportStoppedForUser?.(reason),
 				});
 			} catch (error) {
 				options.onError?.(`[web_scrape] ${action} failed`, error);

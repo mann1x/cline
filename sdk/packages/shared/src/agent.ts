@@ -325,6 +325,15 @@ export interface AgentToolContext {
 	metadata?: Record<string, unknown>;
 	snapshot?: AgentRuntimeStateSnapshot;
 	emitUpdate?: (update: unknown) => void;
+	/**
+	 * Says that this call stopped at something only the user can change: a
+	 * limit they set, a permission they have not given. The result tells the
+	 * model to report it; this tells the runtime, so that the report is taken
+	 * as the end of the run and not answered with "if the task is not
+	 * finished, continue now" -- which a model reads as an order to get past
+	 * the thing that stopped it. Holds until the run calls another tool.
+	 */
+	reportStoppedForUser?: (reason: string) => void;
 }
 
 export interface AgentTool<TInput = unknown, TOutput = unknown>
