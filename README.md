@@ -72,10 +72,8 @@ AI coding assistant in your editor.
 Create files, run commands, browse the web,
 and use tools with human-in-the-loop approval.
 
-<!--
-<a href="https://marketplace.visualstudio.com/items?itemName=saoudrizwan.claude-dev">Install from VS Marketplace</a>
-<br><br> 
--->
+<a href="https://marketplace.visualstudio.com/items?itemName=mann1x.cerebriline">Install from VS Marketplace</a>
+<br><br>
 </td>
 
 </td>
@@ -110,8 +108,16 @@ npm install @cline/sdk
 
 ## Install
 
-Cerebriline is not on the VS Code Marketplace — upstream Cline is there, and one
-of us is enough. There are two ways to get it.
+There are three ways to get it.
+
+**From the VS Code Marketplace** ([`mann1x.cerebriline`](https://marketplace.visualstudio.com/items?itemName=mann1x.cerebriline)).
+In VS Code, search for **Cerebriline** in the Extensions panel, or:
+
+```
+code --install-extension mann1x.cerebriline
+```
+
+VS Code then keeps it up to date.
 
 **From Open VSX** ([`mann1x.cerebriline`](https://open-vsx.org/extension/mann1x/cerebriline)).
 This is the gallery **VSCodium, Cursor, Windsurf and Gitpod** use, so on those
@@ -122,7 +128,7 @@ it in the Extensions panel, or:
 codium --install-extension mann1x.cerebriline
 ```
 
-Stock VS Code does not read Open VSX, so on it use the `.vsix` below.
+Stock VS Code does not read Open VSX: use the Marketplace above, or the `.vsix` below.
 
 **From the `.vsix`.** Download it from the
 [latest release](https://github.com/mann1x/cline/releases/latest) and install:
@@ -154,7 +160,7 @@ without you asking unless you choose **Auto**.
 | **Auto** | check daily and install a newer release as soon as it is found, then offer to reload |
 
 There is also a **Cerebriline: Check for Updates** command for checking on
-demand. If you installed from Open VSX your editor already keeps it current,
+demand. If you installed from the Marketplace or Open VSX your editor already keeps it current,
 and this check will simply find nothing to report.
 
 ### Upgrading from the mann1x Cline fork

@@ -152,14 +152,14 @@ per-profile configuration, and a VS Code MCP bridge.
 
 ## Install
 
-From the Open VSX Registry, in VSCodium, Cursor, Windsurf, Gitpod, or any editor
-that uses it:
+From the VS Code Marketplace, or from the Open VSX Registry in VSCodium, Cursor,
+Windsurf, Gitpod, or any editor that uses it:
 
 ```
 ext install mann1x.cerebriline
 ```
 
-For stock VS Code, download the `.vsix` from the
+Or download the `.vsix` from the
 [latest release](https://github.com/mann1x/cline/releases/latest) and install it
 with **Extensions: Install from VSIX…**, or:
 
@@ -182,7 +182,7 @@ the SHA-256 published with that release before anything is installed.
 | **Notify** *(default)* | check daily and tell you; nothing downloads until you say so |
 | **Auto** | install a newer release as soon as it is found, then offer to reload |
 
-If you installed from Open VSX your editor already keeps it current, and this
+If you installed from the Marketplace or Open VSX your editor already keeps it current, and this
 check will simply find nothing to report.
 
 ## Works with any model
