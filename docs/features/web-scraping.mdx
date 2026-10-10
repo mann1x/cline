@@ -1,7 +1,7 @@
 ---
 title: "Web scraping"
 sidebarTitle: "Web scraping"
-description: "Let the model search the web, read pages and crawl a site through a Firecrawl endpoint: for the librarian only, or as a general tool that writes a site's pages into the workspace."
+description: "Let the model search the web, read pages and crawl a site through a Firecrawl endpoint: the tools, how to ask for a depth and a page count, the defaults, and the limits you set."
 ---
 
 With a [Firecrawl](https://github.com/firecrawl/firecrawl) endpoint, the model can search the web, list a site's pages, read a page, and crawl a site. Pages are read in a real browser, so pages built by JavaScript are read too.
@@ -17,16 +17,31 @@ Without both, no web tool is ever offered to the model.
 
 **Only for the librarian** is ticked by default. Then scraping is used by the [librarian](/features/library#books-from-the-web) alone, to make a book from web pages and to check it for news later.
 
-Untick it and every task is offered a `web_scrape` tool, whether the Library is on or not. The change takes effect in the next task.
+Untick it and every task is offered the general `web_scrape` tool, whether the Library is on or not. The change takes effect in the next task.
 
-## What the general tool does
+| | Only for the librarian (default) | Unticked |
+| --- | --- | --- |
+| `web_scrape` | The librarian's: `search`, `map`, `read`. | The general one: `search`, `map`, `read`, `crawl`, and saving to files. Any task. |
+| `library_web_book` | With the librarian on. | With the librarian on. |
 
-| Action | |
-| --- | --- |
-| `search` | Finds pages for a topic, with their titles and what they are about. |
-| `map` | Lists the pages of a site by their links, without reading them. |
-| `read` | Returns one page as markdown. With `save_to`, writes it to that file and returns its headings only. |
-| `crawl` | Reads a page and the pages it links to, and writes each as a markdown file under the folder `save_to`. |
+## The tools
+
+### `web_scrape`
+
+| Action | What it does | What it takes |
+| --- | --- | --- |
+| `search` | Finds pages for a topic, with their titles and what they are about. | `query`; `limit` (results, default 10, at most 50). |
+| `map` | Lists the pages of a site by their links, without reading them. | `url`; `limit` (links, default 200, at most 2,000). |
+| `read` | Returns one page as markdown. | `url`; `max_chars` (how much is returned, default 12,000). General tool: `save_to`, a file to write the whole page to; then only its headings are returned. |
+| `crawl` | Reads a page and the pages it links to, and writes each as a markdown file. General tool only. | `url`, `save_to` (a folder, required), `depth`, `limit`, `whole_site`, `include_paths`, `exclude_paths`. |
+
+A map of a site that has one page says so, and names the other sites the page links to.
+
+### `library_web_book`
+
+The librarian's tool for making a book from web pages and keeping it up to date. It is described under [Books from the web](/features/library#books-from-the-web). It takes `links`, `depth` and `limit`, and reads the pages into the Library, not into files.
+
+## Crawling a site into files
 
 A crawl is for work that is not the Library's: a site you want reworked, or knowledge you want kept as files.
 
@@ -35,19 +50,63 @@ A crawl is for work that is not the Library's: a site you want reworked, or know
 - Each page becomes one file, named after its address: `reference/example/example.com/docs/plugins.md`. The file starts with the page's address and title.
 - `index.md` in the folder lists every page read, and every page that could not be read with the reason.
 - The pages are not returned to the model, so a crawl of a hundred pages does not fill its context. It reads the files it needs afterwards.
-- A crawl stays below the address it starts from: from `/docs/` it reads `/docs/...`. `whole_site` lets it follow links anywhere on the site.
-- `include_paths` and `exclude_paths` (regular expressions) keep a crawl to one part of a site.
 - `save_to` has to be inside the workspace.
 
-The model asks for a depth and a page count per crawl. The settings are the most it gets:
+## Depth and page count
 
-| Setting | Default | |
+Two numbers decide how far a crawl goes.
+
+- **Depth** is how many links away from the starting page the crawl follows. 0 reads the starting page only. 1 also reads the pages it links to. 2 also reads the pages those link to.
+- **Page count** is the most pages one call reads, whatever the depth.
+
+### Defaults
+
+| | Depth | Pages |
 | --- | --- | --- |
-| Pages one crawl or book may read in a call | 100 | A crawl asks for 25 unless the model says otherwise. |
-| Links deep a crawl may follow | 3 | A crawl asks for 1 unless the model says otherwise. 0 reads only the starting page. |
+| `web_scrape` `crawl`, when the model names none | 1 | 25 |
+| `library_web_book`, when the model names none | 0: only the links given | the most your setting allows |
+| The most either can get (your settings) | 3 | 100 |
 
-The tool is the lead's. Agents the lead starts are not offered it.
+The last row is **Settings > Features > Web scraping**: "Links deep a crawl may follow" (0 to 10) and "Pages one crawl or book may read in a call" (1 to 5,000). The model can ask for less than these, never more: a request for 500 pages with a setting of 100 reads 100.
+
+### Asking for them
+
+Say the numbers in your message. The model passes them to the tool as `depth` and `limit`:
+
+> Crawl https://example.com/docs into `reference/example`, 2 links deep, at most 60 pages.
+
+> Read only the front page of https://example.com and save it to `notes/example.md`.
+
+> Make a book from https://example.com/guide, following its links one level, no more than 40 pages.
+
+If you name no numbers, the defaults above apply. To go beyond 3 links deep or 100 pages in one call, raise the two settings first.
+
+### Where a crawl goes
+
+A crawl stays **below the address it starts from**: started at `https://example.com/docs/`, it reads `https://example.com/docs/...` and nothing else on the site. Started at one page such as `/docs/intro`, it usually reads that page alone.
+
+- Start at the section you want, or at the front page for the whole site.
+- Or say "the whole site": the model sets `whole_site`, and the crawl follows links anywhere on the same site.
+- "Only the API pages" or "skip the blog" become `include_paths` and `exclude_paths`, regular expressions matched against each page's path.
+
+> Crawl the whole site of https://example.com into `site`, skip everything under /blog, at most 80 pages.
+
+Links to other sites are never followed.
+
+### What the result says
+
+When a crawl ends, the tool tells the model which of three things happened, and the model can tell you:
+
+- **The page limit was reached**: the site may have more. Ask again with a higher count, or raise the setting.
+- **That is the whole site from this address**: every page the crawled pages link to was read.
+- **N more pages of this site are linked and were not read**, with examples: they are deeper than the depth asked for, or not below the starting address. Ask for more depth, or for the whole site.
+
+## Limits
+
+- The general tool is the lead's. Agents the lead starts are not offered it.
+- Pages are saved as markdown. Pictures, stylesheets and scripts are not downloaded.
+- Pages are asked for as HTML and converted to markdown by Cerebriline, which keeps fenced code blocks and their language.
 
 ## CLI
 
-`--web-scrape` (or `CLINE_WEB_SCRAPE=1`) offers the general tool, writing under the folder the run is in. The endpoint is named by `CLINE_SCRAPE_BASE_URL`, with `CLINE_SCRAPE_API_KEY`, `CLINE_SCRAPE_MAX_PAGES` and `CLINE_SCRAPE_MAX_DEPTH` when needed. Without the switch, scraping is the librarian's only (`--librarian`).
+`--web-scrape` (or `CLINE_WEB_SCRAPE=1`) offers the general tool, writing under the folder the run is in. The endpoint is named by `CLINE_SCRAPE_BASE_URL`, with `CLINE_SCRAPE_API_KEY` when it needs one. `CLINE_SCRAPE_MAX_PAGES` (default 100) and `CLINE_SCRAPE_MAX_DEPTH` (default 3) are the two limits. Without the switch, scraping is the librarian's only (`--librarian`).

@@ -129,6 +129,8 @@ Without both, the two web tools are never offered to the model, librarian or not
 | Pages one crawl or book may read in a call | 100 | The librarian asks for a page count per book; this is the most it gets. |
 | Links deep a crawl may follow | 3 | 0 reads only the links given. |
 
+Unless you say otherwise, a book reads only the links it is given (depth 0), up to the page limit. Say the numbers to change that: *"follow its links one level, no more than 40 pages"*. [Web scraping](/features/web-scraping#depth-and-page-count) explains depth, page counts and where a crawl goes.
+
 Pages are asked for as HTML and converted to Markdown by Cerebriline, which keeps fenced code blocks and their language. Firecrawl's own Markdown loses them.
 
 ## The shelves in Settings
