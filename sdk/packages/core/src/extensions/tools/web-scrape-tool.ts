@@ -4,8 +4,11 @@
  * Two shapes of one tool. The librarian's looks at the web to choose what a
  * book is made from: search, map, read. The general one is offered to any
  * task when the user turns "Only for the librarian" off, and adds what a task
- * outside the Library needs: a crawl of a site, and saving what was read as
- * markdown files in the workspace -- a site to rework, notes to keep on disk.
+ * outside the Library needs: a crawl that saves a site into the workspace.
+ * By default that is the site itself -- every page as it was served and as
+ * the browser rendered it, with the stylesheets, scripts, pictures and fonts
+ * it uses -- beside a markdown reading of each page; `content: "text"` keeps
+ * the markdown alone, for notes.
  *
  * The lead's only: it is not in `DELEGATED_HOST_TOOLS`, so a delegated agent,
  * whose writes go through its overlay, is never handed a tool that writes to
@@ -22,6 +25,10 @@ import {
 	scrapePage,
 	searchWeb,
 } from "../../services/retrieval/firecrawl";
+import {
+	type MirrorReport,
+	mirrorSite,
+} from "../../services/retrieval/web-mirror";
 import type { LibraryScrapeConfig } from "./library-tools";
 
 export const WEB_SCRAPE_TOOL_NAME = "web_scrape";
@@ -45,7 +52,7 @@ const LIBRARIAN_DESCRIPTION =
 	'Look at the web before making a book from it. "search": find pages for a topic, with their titles and what they are about. "map": the pages of a site, by their links, without reading them. "read": one page as markdown, to judge whether it belongs in the book. Rendered in a browser, so pages built by JavaScript are read too. Use it to choose the links; library_web_book reads them into the Library.';
 
 const GENERAL_DESCRIPTION =
-	'Read the web through a browser, so pages built by JavaScript are read too. Asked to scrape, copy or download a site, `crawl` it with `save_to`: the result of a scrape is the files, and your reply says where they are. "search": find pages for a topic, with their titles and what they are about. "map": the pages of a site, by their links, without reading them. "read": one page as markdown; with `save_to` it is written to that file and only its outline is returned. "crawl": read a page and the pages it links to, as deep and as many as asked, and write each as a markdown file under the folder `save_to`, with an `index.md` listing them; the pages are not returned, read the files you need afterwards. A crawl stays below the address it starts from (from /docs/ it reads /docs/...), unless `whole_site` is true. Map a site before crawling it, to choose where to start, `include_paths` and a sensible `limit`.';
+	'Read the web through a browser, so pages built by JavaScript are read too. Asked to scrape, copy, mirror or download a site, `crawl` it with `save_to`: the result of a scrape is the files, and your reply says where they are. "search": find pages for a topic, with their titles and what they are about. "map": the pages of a site, by their links, without reading them. "read": one page as markdown; with `save_to` it is written to that file and only its outline is returned. "crawl": read a page and the pages it links to, as deep and as many as asked, and save them under the folder `save_to`. By default (`content` "site") that is the site itself, unaltered: each page as the site served it (`.html`) and as the browser rendered it (`.rendered.html`), every stylesheet, script, picture and font the pages use at the path the site has it, and a markdown reading of each page (`.md`); use it for a site that is to be reworked or used as the source of new pages. `content` "text" saves the markdown alone, for notes and reference. `index.md` lists everything; the files are not returned, read the ones you need afterwards. A crawl stays below the address it starts from (from /docs/ it reads /docs/...), unless `whole_site` is true. Map a site before crawling it, to choose where to start, `include_paths` and a sensible `limit`.';
 
 function text(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
@@ -239,6 +246,12 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 								description:
 									"crawl: never paths matching these regular expressions.",
 							},
+							content: {
+								type: "string",
+								enum: ["site", "text"],
+								description:
+									'crawl: "site" (default) saves the pages unaltered with their stylesheets, scripts, pictures and fonts, and a markdown reading of each; "text" saves the markdown alone.',
+							},
 							whole_site: {
 								type: "boolean",
 								description:
@@ -381,6 +394,8 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 						),
 					),
 				};
+				// The site itself unless only its text was asked for.
+				const wholeSite = text(request.content) !== "text";
 				const include = strings(request.include_paths);
 				const exclude = strings(request.exclude_paths);
 				const started = Date.now();
@@ -391,6 +406,7 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 					...(exclude.length ? { excludePaths: exclude } : {}),
 					...(request.whole_site === true ? { entireDomain: true } : {}),
 					links: true,
+					...(wholeSite ? { rawHtml: true } : {}),
 					...(signal ? { signal } : {}),
 					onProgress: (done, total) => {
 						if (Date.now() - lastUpdate < 2000) return;
@@ -410,9 +426,9 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 					if (census.unread.length === 0) {
 						return `That is the whole site from this address: every page of it that these pages link to was read.${elsewhere}`;
 					}
-					const wholeSite = request.whole_site === true;
+					const anywhere = request.whole_site === true;
 					return `${plural(census.unread.length, "more page")} of this site ${census.unread.length === 1 ? "is" : "are"} linked and ${census.unread.length === 1 ? "was" : "were"} not read: ${
-						wholeSite
+						anywhere
 							? `deeper than depth ${asked.depth}`
 							: `deeper than depth ${asked.depth}, or not below ${url} (\`whole_site\` follows those)`
 					}. For example ${census.unread.slice(0, 5).join(", ")}.${elsewhere}`;
@@ -433,9 +449,87 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 						`- [${page.title || page.url}](${name}) — ${page.url} (${page.markdown.length.toLocaleString("en-US")} characters)`,
 					);
 				}
-				const failed = crawl.failed.map(
-					(failure) => `- ${failure.url}: ${failure.reason}`,
-				);
+				// The pages as they are and the files they use, fetched from the
+				// site itself: the endpoint gives content, not stylesheets.
+				let mirror: MirrorReport | undefined;
+				if (wholeSite && crawl.pages.length > 0) {
+					let lastMirrorUpdate = 0;
+					mirror = await mirrorSite(
+						crawl.pages.map((page) => ({
+							url: page.url,
+							...(page.rawHtml ? { rawHtml: page.rawHtml } : {}),
+						})),
+						{
+							root: target,
+							...(signal ? { signal } : {}),
+							onProgress: (done, known) => {
+								if (Date.now() - lastMirrorUpdate < 2000) return;
+								lastMirrorUpdate = Date.now();
+								context?.emitUpdate?.({
+									status: `Saving ${url}: ${done} of ${known} pages and files, ${Math.round((Date.now() - started) / 1000)} s`,
+								});
+							},
+						},
+					);
+				}
+				const megabytes = (bytes: number) =>
+					bytes >= 1_048_576
+						? `${(bytes / 1_048_576).toFixed(1)} MB`
+						: `${Math.max(1, Math.round(bytes / 1024))} KB`;
+				const mirrorLines: string[] = [];
+				if (mirror) {
+					const served = mirror.pages.filter((page) => page.served).length;
+					const renderedOnly = mirror.pages.filter(
+						(page) => !page.served && page.rendered,
+					);
+					mirrorLines.push(
+						`The site itself is saved unaltered beside the markdown: ${plural(served, "page")} as served (.html), ${plural(mirror.pages.filter((page) => page.rendered).length, "page")} as rendered in the browser (${served ? ".rendered.html" : ".html"}), and ${plural(mirror.assets.length, "file")} they use (stylesheets, scripts, pictures, fonts), ${megabytes(mirror.bytes)} in all, each at the path the site has it under its host's folder.`,
+					);
+					if (renderedOnly.length > 0) {
+						mirrorLines.push(
+							`${plural(renderedOnly.length, "page")} could not be fetched directly (${renderedOnly[0]?.problem ?? "refused"}), so only the rendered form is saved for ${renderedOnly.length === 1 ? "it" : "them"}.`,
+						);
+					}
+					if (mirror.skipped > 0) {
+						mirrorLines.push(
+							`${plural(mirror.skipped, "file")} were left out: the limit of files or of total size for one crawl was reached.`,
+						);
+					}
+					mirrorLines.push(
+						"Links inside the saved pages are as the site wrote them; nothing was rewritten.",
+					);
+				}
+				const failed = [
+					...crawl.failed.map(
+						(failure) => `- ${failure.url}: ${failure.reason}`,
+					),
+					...(mirror?.failed ?? []).map(
+						(failure) => `- ${failure.url}: ${failure.reason}`,
+					),
+				];
+				const mirrorIndex = mirror
+					? [
+							"",
+							"## Pages as they are",
+							"",
+							...mirror.pages.map(
+								(page) =>
+									`- ${page.url}: ${[
+										page.served ? `[as served](${page.served})` : "",
+										page.rendered ? `[as rendered](${page.rendered})` : "",
+									]
+										.filter(Boolean)
+										.join(", ")}`,
+							),
+							"",
+							`## Files the pages use (${mirror.assets.length})`,
+							"",
+							...mirror.assets.map(
+								(asset) =>
+									`- [${asset.file}](${asset.file}) — ${asset.url} (${megabytes(asset.bytes)})`,
+							),
+						]
+					: [];
 				const summary = [
 					`${plural(crawl.pages.length, "page")} of ${url} written under ${folder}/ (${characters.toLocaleString("en-US")} characters; depth ${asked.depth}, at most ${plural(asked.limit, "page")}).`,
 					...(crawl.unfinished
@@ -450,7 +544,8 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 						: crawl.unfinished
 							? []
 							: [whyItEnded()]),
-					"Each page is saved whole, with its address and title at the top: the files do not need reading back to check them.",
+					...mirrorLines,
+					"Everything is saved whole: the files do not need reading back to check them.",
 				];
 				await fs.writeFile(
 					path.join(target, "index.md"),
@@ -459,8 +554,12 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 						"",
 						...summary,
 						"",
+						...(mirror ? ["## Pages as markdown", ""] : []),
 						...rows,
-						...(failed.length ? ["", "## Not read", "", ...failed] : []),
+						...mirrorIndex,
+						...(failed.length
+							? ["", "## Not read or not fetched", "", ...failed]
+							: []),
 						"",
 					].join("\n"),
 					"utf8",
@@ -479,9 +578,23 @@ export function createWebScrapeTool(options: WebScrapeToolOptions): AgentTool {
 					...(rows.length > shown
 						? [`[${rows.length - shown} more in index.md.]`]
 						: []),
+					...(mirror
+						? [
+								"As they are:",
+								...mirror.pages
+									.slice(0, 20)
+									.map(
+										(page) =>
+											`- ${[page.served, page.rendered].filter(Boolean).join(", ")}`,
+									),
+								...(mirror.pages.length > 20
+									? [`[${mirror.pages.length - 20} more in index.md.]`]
+									: []),
+							]
+						: []),
 					...(failed.length
 						? [
-								`Not read (${failed.length}):`,
+								`Not read or not fetched (${failed.length}):`,
 								...failed.slice(0, 20),
 								...(failed.length > 20
 									? [`[${failed.length - 20} more in index.md.]`]

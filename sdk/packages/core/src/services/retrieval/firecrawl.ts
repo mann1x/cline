@@ -25,6 +25,11 @@ export interface ScrapedPage {
 	sha256: string;
 	/** The links on the page, when they were asked for. */
 	links?: string[];
+	/**
+	 * The whole page as the browser held it after its scripts ran, when it
+	 * was asked for: every tag, nothing cleaned out.
+	 */
+	rawHtml?: string;
 }
 
 export interface ScrapeFailure {
@@ -47,6 +52,8 @@ export interface CrawlOptions {
 	entireDomain?: boolean;
 	/** Also give each page's links, to tell what a crawl left unread. */
 	links?: boolean;
+	/** Also give each page whole, as rendered (`ScrapedPage.rawHtml`). */
+	rawHtml?: boolean;
 	signal?: AbortSignal;
 	fetch?: typeof fetch;
 	/** How long to wait for the crawl. @default 20 minutes */
@@ -254,6 +261,9 @@ async function toPage(
 					),
 				}
 			: {}),
+		...(typeof data.rawHtml === "string" && data.rawHtml
+			? { rawHtml: data.rawHtml }
+			: {}),
 	};
 }
 
@@ -302,7 +312,11 @@ export async function crawlSite(
 				: {}),
 			...(options.entireDomain ? { crawlEntireDomain: true } : {}),
 			scrapeOptions: {
-				formats: options.links ? ["html", "links"] : ["html"],
+				formats: [
+					"html",
+					...(options.links ? ["links"] : []),
+					...(options.rawHtml ? ["rawHtml"] : []),
+				],
 				onlyMainContent: true,
 			},
 		},

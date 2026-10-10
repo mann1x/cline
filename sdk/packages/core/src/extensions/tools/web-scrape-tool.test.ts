@@ -24,6 +24,10 @@ let pages: Record<string, string>;
 let links: Record<string, string[]>;
 let mapped: string[];
 
+/** What the site answers when asked directly, by address. */
+let site: Record<string, { body: string; type: string }>;
+let direct: string[];
+
 let root: string;
 let crawlBody: Record<string, unknown> | undefined;
 let scrape: LibraryScrapeConfig | undefined;
@@ -33,6 +37,8 @@ beforeEach(() => {
 	crawlBody = undefined;
 	pages = { ...PAGES };
 	links = {};
+	site = {};
+	direct = [];
 	mapped = [];
 	scrape = {
 		baseUrl: "http://scrape.test",
@@ -45,9 +51,26 @@ beforeEach(() => {
 		init?: RequestInit,
 	) => {
 		const url = String(input);
+		// The site itself, asked directly for a page or one of its files.
+		if (url.startsWith("https://example.com/")) {
+			direct.push(url);
+			const held = site[url];
+			return held
+				? new Response(held.body, {
+						status: 200,
+						headers: { "content-type": held.type },
+					})
+				: new Response("no", { status: 404 });
+		}
 		const body = JSON.parse(String(init?.body ?? "{}"));
 		const entry = (link: string) => ({
 			html: pages[link],
+			...(crawlBody?.scrapeOptions &&
+			(crawlBody.scrapeOptions as { formats: string[] }).formats.includes(
+				"rawHtml",
+			)
+				? { rawHtml: `<html><body>rendered ${link}</body></html>` }
+				: {}),
 			links: links[link] ?? [],
 			metadata: { sourceURL: link, title: `Title of ${link}`, statusCode: 200 },
 		});
@@ -127,9 +150,72 @@ describe("web_scrape for any task", () => {
 		expect(general().readOnly).toBeFalsy();
 	});
 
-	it("crawls a site into markdown files, held to the user's ceiling", async () => {
+	it("saves the site itself by default: pages as they are and the files they use", async () => {
+		const served =
+			'<html><head><link rel="stylesheet" href="/css/site.css?v=3"><script src="app.js"></script></head><body><img src="/img/logo.png"><a href="/docs/intro.html">docs</a></body></html>';
+		site = {
+			"https://example.com/": { body: served, type: "text/html" },
+			"https://example.com/css/site.css?v=3": {
+				body: "@font-face{src:url(../fonts/a.woff2)} body{background:url('/img/bg.png')}",
+				type: "text/css",
+			},
+			"https://example.com/app.js": { body: "boot()", type: "text/javascript" },
+			"https://example.com/img/logo.png": { body: "PNG", type: "image/png" },
+			"https://example.com/fonts/a.woff2": { body: "FONT", type: "font/woff2" },
+		};
+		scrape = { ...(scrape as LibraryScrapeConfig), maxPages: 100 };
+		pages = { "https://example.com/": PAGES["https://example.com/"] as string };
 		const report = await run({
 			action: "crawl",
+			url: "https://example.com/",
+			save_to: "site",
+		});
+		const file = (name: string) =>
+			readFileSync(join(root, "site", "example.com", name), "utf8");
+		// Byte for byte as served, and as the browser held it.
+		expect(file("index.html")).toBe(served);
+		expect(file("index.rendered.html")).toContain(
+			"rendered https://example.com/",
+		);
+		expect(file("css/site.css")).toContain("@font-face");
+		expect(file("app.js")).toBe("boot()");
+		expect(file("img/logo.png")).toBe("PNG");
+		// Found inside the stylesheet.
+		expect(file("fonts/a.woff2")).toBe("FONT");
+		// The markdown reading is still there.
+		expect(file("index.md")).toContain("# Home");
+		expect(report).toContain("1 page as served (.html)");
+		expect(report).toContain("4 files they use");
+		expect(report).toContain("nothing was rewritten");
+		// A file the site does not have is named, and nothing else stops.
+		expect(report).toContain(
+			"https://example.com/img/bg.png: the site answered HTTP 404",
+		);
+		// The page it links to is a page, not a file: not fetched as one.
+		expect(direct).not.toContain("https://example.com/docs/intro.html");
+		const index = readFileSync(join(root, "site", "index.md"), "utf8");
+		expect(index).toContain("[as served](example.com/index.html)");
+		expect(index).toContain("## Files the pages use (4)");
+	});
+
+	it("keeps the rendered page when the site refuses a direct request", async () => {
+		scrape = { ...(scrape as LibraryScrapeConfig), maxPages: 100 };
+		pages = { "https://example.com/": PAGES["https://example.com/"] as string };
+		const report = await run({
+			action: "crawl",
+			url: "https://example.com/",
+			save_to: "site",
+		});
+		expect(
+			readFileSync(join(root, "site", "example.com", "index.html"), "utf8"),
+		).toContain("rendered https://example.com/");
+		expect(report).toContain("could not be fetched directly");
+	});
+
+	it("crawls a site into markdown files alone when asked for its text", async () => {
+		const report = await run({
+			action: "crawl",
+			content: "text",
 			url: "https://example.com/",
 			limit: 50,
 			depth: 9,
@@ -160,6 +246,9 @@ describe("web_scrape for any task", () => {
 		expect(index).toContain("](example.com/docs/intro.md)");
 		// The pages themselves are not returned.
 		expect(report).not.toContain("Install it.");
+		// Text alone: the site was never asked for anything.
+		expect(direct).toEqual([]);
+		expect(report).not.toContain("as served");
 	});
 
 	it("says a site of one page is one, instead of an empty map", async () => {
@@ -188,6 +277,7 @@ describe("web_scrape for any task", () => {
 		links["https://example.com/"] = ["https://github.com/x/y"];
 		const whole = await run({
 			action: "crawl",
+			content: "text",
 			url: "https://example.com/",
 			save_to: "one",
 		});
@@ -203,6 +293,7 @@ describe("web_scrape for any task", () => {
 		links["https://example.com/"] = ["https://example.com/blog/a"];
 		const short = await run({
 			action: "crawl",
+			content: "text",
 			url: "https://example.com/",
 			depth: 0,
 			save_to: "two",
