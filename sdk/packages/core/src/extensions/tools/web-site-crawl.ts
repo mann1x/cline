@@ -674,7 +674,7 @@ export async function crawlToFolder(
 			: record.unread.length === 0
 				? [
 						alerts.length
-							? `No page is missing: every page of the site that the pages read link to was read.${elsewhere}`
+							? `Every page was read, but ${plural(record.assetsLeft.length, "file")} the pages need ${record.assetsLeft.length === 1 ? "is" : "are"} missing (stylesheets, scripts, pictures or fonts), so the saved site is not all there and will not display as the original does.${elsewhere}`
 							: `That is the whole site from this address: every page of it that the pages read link to was read.${elsewhere}`,
 					]
 				: [
