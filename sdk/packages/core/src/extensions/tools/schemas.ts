@@ -1179,7 +1179,8 @@ export type SubmitInput = z.infer<typeof SubmitInputSchema>;
  * 2026-10-10 (onak1, xkuuh), each answered "Missing required argument
  * `pattern`". One entry is the pattern. Several are alternatives, which only
  * an extended expression can say, so they are joined with `|` and read as
- * one; with `fixed` there is no such syntax and the call is left to fail.
+ * one. With `fixed` each is literal text: its syntax characters are escaped
+ * and the list is searched as alternatives all the same.
  */
 function pluralGrepPattern(input: unknown): unknown {
 	if (input === null || typeof input !== "object" || Array.isArray(input)) {
@@ -1202,7 +1203,14 @@ function pluralGrepPattern(input: unknown): unknown {
 		return { ...args, pattern: list[0] };
 	}
 	if (args.fixed === true) {
-		return input;
+		return {
+			...args,
+			pattern: list
+				.map((entry: string) => entry.replace(/[.[\]\\*^$+?(){}|]/g, "\\$&"))
+				.join("|"),
+			extended: true,
+			fixed: false,
+		};
 	}
 	return { ...args, pattern: list.join("|"), extended: true };
 }

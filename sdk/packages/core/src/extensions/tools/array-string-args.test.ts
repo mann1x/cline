@@ -253,13 +253,17 @@ describe("list arguments sent as a bare string", () => {
 		).toMatchObject({ pattern: "kept" });
 	});
 
-	it("still asks for `pattern` when several literal texts cannot be one", () => {
-		expect(() =>
+	it("searches several literal texts as alternatives", () => {
+		expect(
 			validateWithZod(GrepInputUnionSchema, {
 				fixed: true,
-				patterns: ["a|b", "c"],
+				patterns: ["a|b", "c(1)"],
 			}),
-		).toThrow("Missing required argument `pattern`");
+		).toMatchObject({
+			pattern: "a\\|b|c\\(1\\)",
+			extended: true,
+			fixed: false,
+		});
 		expect(() =>
 			validateWithZod(GrepInputUnionSchema, { extended: true }),
 		).toThrow("Missing required argument `pattern`");
