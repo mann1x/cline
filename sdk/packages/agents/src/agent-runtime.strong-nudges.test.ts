@@ -25,8 +25,8 @@ class OneNoteModel implements AgentModel {
 }
 
 /**
- * Says each line in turn; a line starting with `!` is a tool call instead,
- * and one starting with `!!` a call of the tool that stops at a user's limit.
+ * Says each line in turn; a line starting with `!` is a tool call instead:
+ * `!!` of the tool that stops at a user's limit, `!look` of a read-only one.
  */
 class ScriptedModel implements AgentModel {
 	public readonly requests: AgentModelRequest[] = [];
@@ -45,7 +45,11 @@ class ScriptedModel implements AgentModel {
 				yield {
 					type: "tool-call-delta",
 					toolCallId: `call_${index}`,
-					toolName: line.startsWith("!!") ? "limited" : "echo",
+					toolName: line.startsWith("!!")
+						? "limited"
+						: line === "!look"
+							? "look"
+							: "echo",
 					inputText: '{"text":"hi"}',
 				} as AgentModelEvent;
 				yield { type: "finish", reason: "tool-calls" } as AgentModelEvent;
@@ -86,6 +90,9 @@ const ECHO = {
 		return { echoed: input.text };
 	},
 };
+
+/** Looks, changes nothing. */
+const LOOK = { ...ECHO, name: "look", readOnly: true };
 
 /** Every `[SYSTEM]` reminder the runtime fed back to the model. */
 function nudges(model: { requests: AgentModelRequest[] }): string[] {
@@ -212,24 +219,58 @@ describe("strong coding nudges", () => {
 	// Session ndhh9: a correct "not complete" report was nudged, and the model
 	// went around the user's limit to make it untrue.
 	it("takes a report as the end of the run when a tool stopped at the user's limit", async () => {
-		const model = new ScriptedModel(["!!crawl", NOT_COMPLETE_REPORT]);
+		for (const script of [
+			["!!crawl", NOT_COMPLETE_REPORT],
+			// Session eyyof: it looked at what was saved, and tried the tool
+			// again, before reporting. Neither is other work.
+			["!!crawl", "!look", "!look", "!!crawl", NOT_COMPLETE_REPORT],
+		]) {
+			const model = new ScriptedModel(script);
+			const runtime = new AgentRuntime({
+				model,
+				tools: [ECHO, LOOK, LIMITED],
+				completionPolicy: { maxNoToolCallNudges: 1 },
+			});
+
+			await runtime.run("make a web scraping of zentimings.com");
+
+			expect(nudges(model), script.join(" / ")).toHaveLength(0);
+			expect(model.requests, script.join(" / ")).toHaveLength(script.length);
+		}
+	});
+
+	// Session eyyof, second message: after a first message that was nudged.
+	it("takes the completion statement of a follow-up message too", async () => {
+		const model = new ScriptedModel([
+			"!!crawl",
+			"!look",
+			NOT_COMPLETE_REPORT,
+			"!!crawl",
+			"!look",
+			"The web scraping of [zentimings.com](https://zentimings.com) is complete. All 22 identified files have been successfully fetched and saved in the `zentimings_scrape` directory.",
+			"The task is finished.",
+		]);
 		const runtime = new AgentRuntime({
 			model,
-			tools: [ECHO, LIMITED],
+			tools: [ECHO, LOOK, LIMITED],
 			completionPolicy: { maxNoToolCallNudges: 1 },
 		});
 
 		await runtime.run("make a web scraping of zentimings.com");
+		const first = model.requests.length;
+		await runtime.continue("i raised the limit resume the scraping");
 
+		// No nudge in either: a report after the stop, then a completion.
+		expect(first).toBe(3);
+		expect(model.requests.length - first).toBe(3);
 		expect(nudges(model)).toHaveLength(0);
-		expect(model.requests).toHaveLength(2);
 	});
 
 	it("asks about the same report when no tool said it had stopped", async () => {
 		for (const script of [
 			// Nothing reported a stop.
 			["!work", NOT_COMPLETE_REPORT, "Done."],
-			// One did, and the run has called something else since.
+			// One did, and the run has done other work since.
 			["!!crawl", "!work", NOT_COMPLETE_REPORT, "Done."],
 			// A status with work still to do, and no promise in it.
 			["!work", "I have edited file A. File B needs the same change.", "Done."],

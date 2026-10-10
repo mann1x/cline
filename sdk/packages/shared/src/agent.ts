@@ -331,7 +331,8 @@ export interface AgentToolContext {
 	 * model to report it; this tells the runtime, so that the report is taken
 	 * as the end of the run and not answered with "if the task is not
 	 * finished, continue now" -- which a model reads as an order to get past
-	 * the thing that stopped it. Holds until the run calls another tool.
+	 * the thing that stopped it. Holds until the run does other work: a
+	 * successful call of a different tool that is not read-only.
 	 */
 	reportStoppedForUser?: (reason: string) => void;
 }
