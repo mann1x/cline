@@ -64,7 +64,7 @@ What to know:
 - **Nothing is rewritten.** Links inside a saved page still point where the site pointed them. A page that asks for `/assets/app.js` will not find it when opened straight from disk; the files are there to be worked from.
 - **The pages come through the scraping endpoint; the other files do not.** Firecrawl returns a page's content, not its stylesheets. Those are fetched directly from the site by the machine the extension runs on.
 - If the site refuses the direct request for a page, only its rendered form is saved, as `.html`, and the result says so.
-- A file is fetched once however many pages use it. One file may be up to 25 MB, and one crawl fetches at most 2,000 files and 300 MB; what is left out is counted in the result.
+- A file is fetched once however many pages use it. How many files, how large and how much in all are [settings](#limits-of-a-site-crawl); what a limit leaves out is counted in the result.
 - The files are not returned to the model, so a large crawl does not fill its context. It reads the ones it needs afterwards.
 - `save_to` has to be inside the workspace.
 
@@ -124,6 +124,32 @@ When a crawl ends, the tool tells the model which of three things happened, and 
 - **The page limit was reached**: the site may have more. Ask again with a higher count, or raise the setting.
 - **That is the whole site from this address**: every page the crawled pages link to was read.
 - **N more pages of this site are linked and were not read**, with examples: they are deeper than the depth asked for, or not below the starting address. Ask for more depth, or for the whole site.
+
+## Limits of a site crawl
+
+With **Only for the librarian** unticked, **Settings > Features > Web scraping** shows three more limits. They apply to the files a site crawl fetches besides its pages:
+
+| Setting | Default | Range |
+| --- | --- | --- |
+| Files one site crawl may fetch | 2,000 | 0 to 100,000. 0 saves the pages and no other file. |
+| Largest file fetched (MB) | 25 | 1 to 2,048. A larger file is skipped and listed with the reason. |
+| Most one site crawl may fetch in all (MB) | 300 | 1 to 102,400. |
+
+The model cannot raise them. In the CLI they are `CLINE_SCRAPE_MAX_FILES`, `CLINE_SCRAPE_MAX_FILE_MB` and `CLINE_SCRAPE_MAX_TOTAL_MB`.
+
+## When a limit stops a crawl
+
+The model is told first, before anything else in the result: which limit was reached (pages for the call, the crawl's time, the number of files, the total size, or files over the size for one file), how much was left out, and which setting raises it. It is asked to pass that on, so the reply to a crawl that stopped short says so. `index.md` in the folder lists what was not read and not fetched.
+
+## Continuing a crawl
+
+A crawl leaves a record in its folder, `.scrape.json`: the pages read, the files fetched, the pages that are linked and were not read, and the files a limit left out. Ask to continue ("resume the crawl in `site/`", "carry on with the scrape") and the model crawls the same folder with `resume`:
+
+- Pages already saved are not read again, and files already in the folder are not fetched again.
+- The pages that were linked and not read are read, up to the page limit of the call, with the same scope as the first crawl (below the starting address or the whole site, and the same path filters).
+- Files a limit left out, and files and pages that failed last time, are tried again.
+
+Each resume reads as many pages as one call may (the model's `limit`, capped by **Pages one crawl or book may read in a call**), so a large site is finished over several, or in one after raising the limit. A new crawl into a folder that holds an earlier one reads the pages afresh and still reuses the files that are there. Deleting `.scrape.json` makes the folder a fresh start.
 
 ## Limits
 
