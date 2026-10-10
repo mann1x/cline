@@ -3,7 +3,7 @@ import { readFile as readFileFromDisk } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type * as LlmsProviders from "@cline/llms";
-import { releasePolykvSwarmsOf } from "@cline/llms";
+import { onXollamaSideCall, releasePolykvSwarmsOf } from "@cline/llms";
 import {
 	type AgentConfig,
 	type AgentEvent,
@@ -528,6 +528,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 	// Serializes manifest read-modify-writes per session; see mutateSessionManifest.
 	private readonly manifestMutationQueues = new Map<string, Promise<void>>();
 	private readonly usageBySession = new Map<string, SessionAccumulatedUsage>();
+	/** Per session: the listener for its background requests' waits. */
+	private readonly sideCallUnsubscribes = new Map<string, () => void>();
 	private readonly aggregateUsageBySession = new Map<
 		string,
 		SessionAccumulatedUsage
@@ -1042,7 +1044,27 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// Compaction is assembled before the runtime is built, not after,
 		// because building the runtime is what creates this session's delegated
 		// agents -- and they need a pipeline of their own to hand over here.
-		const compact = createContextCompactionPrepareTurn(configWithProvider);
+		const compact = createContextCompactionPrepareTurn(configWithProvider, {
+			// The lead's summaries are written for this conversation.
+			sideCallOf: sessionId,
+		});
+		// A background request of this conversation that waits for room on the
+		// server waits inside the provider's fetch: without a row here the
+		// chat shows nothing for as long as it lasts (run peh2v, four silent
+		// pauses of five minutes).
+		this.sideCallUnsubscribes.get(sessionId)?.();
+		this.sideCallUnsubscribes.set(
+			sessionId,
+			onXollamaSideCall(sessionId, (event) => {
+				this.eventBridge.dispatchAgentEvent(sessionId, configWithProvider, {
+					type: "notice",
+					noticeType: "status",
+					displayRole: "status",
+					message: event.message,
+					metadata: { kind: "side_call_room", state: event.kind },
+				});
+			}),
+		);
 		const cappedThinkingConfig = {
 			// Ahead of compaction: a condensed turn is a smaller turn, so
 			// whatever compaction then decides, it decides about a
@@ -4561,6 +4583,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 		this.leadNudgeUnsubscribes.delete(session.sessionId);
 		clearAgentReports(session.sessionId);
 		this.sideTurns.delete(session.sessionId);
+		this.sideCallUnsubscribes.get(session.sessionId)?.();
+		this.sideCallUnsubscribes.delete(session.sessionId);
 		this.sessions.delete(session.sessionId);
 		this.emit({
 			type: "ended",
@@ -4659,6 +4683,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// idle TTL: its agents were stopped above, and their own releases land
 		// whenever their aborts do -- or never, on a path that throws first.
 		void releasePolykvSwarmsOf(session.sessionId).catch(() => undefined);
+		this.sideCallUnsubscribes.get(session.sessionId)?.();
+		this.sideCallUnsubscribes.delete(session.sessionId);
 		this.sessions.delete(session.sessionId);
 		if (cleanupErrors.length > 0) {
 			throw cleanupErrors[0];

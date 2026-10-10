@@ -353,6 +353,7 @@ export {
 // xOllama: detection and per-model facts, read by the host at session build.
 export {
 	forgetXollamaModel,
+	onXollamaSideCall,
 	probeXollama,
 	readXollamaModel,
 	resetXollamaProbes,
@@ -361,6 +362,7 @@ export {
 	XOLLAMA_DEFAULT_BASE_URL,
 	type XollamaModelInfo,
 	type XollamaServerInfo,
+	type XollamaSideCallEvent,
 	xollamaDrivesModel,
 } from "./providers/vendors/xollama";
 // xOllama: a model's opencoti engine, addressed as a bare opencoti root.

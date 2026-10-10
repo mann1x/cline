@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { recordPolykvGrantedWindow, resetPolykvSessions } from "./polykv";
 import {
 	largestAdmissible,
+	onXollamaSideCall,
 	resetXollamaConversationRequests,
 	resetXollamaProbes,
 	sideCallBlockedByOwnConversation,
@@ -15,11 +16,23 @@ afterEach(() => {
 	resetPolykvSessions();
 });
 
-const json = (value: unknown, status = 200) =>
+const json = (
+	value: unknown,
+	status = 200,
+	headers: Record<string, string> = {},
+) =>
 	new Response(JSON.stringify(value), {
 		status,
-		headers: { "content-type": "application/json" },
+		headers: { "content-type": "application/json", ...headers },
 	});
+
+/** The 429 a negotiating request gets: the engine's number is a header. */
+const refused = (largest: number | null = 10_614) =>
+	json(
+		{ error: REFUSAL },
+		429,
+		largest === null ? {} : { "x-context-largest-admissible": String(largest) },
+	);
 
 const PROMPT_TOKENS = 10_842;
 const OUTPUT = 4_000;
@@ -109,7 +122,7 @@ describe("a call outside its conversation on xOllama", () => {
 
 	it("closes the idle conversation when its booking is what blocks the call", async () => {
 		const stub = server([
-			() => json({ error: REFUSAL }, 429),
+			() => refused(),
 			() => json({ message: { content: "note" } }),
 		]);
 		const wire = withXollamaRequestFields(stub.fetch, {
@@ -129,7 +142,7 @@ describe("a call outside its conversation on xOllama", () => {
 
 	it("leaves the conversation alone when someone else holds the room", async () => {
 		const stub = server([
-			() => json({ error: REFUSAL }, 429),
+			() => refused(),
 			() => json({ message: { content: "note" } }),
 		]);
 		const wire = withXollamaRequestFields(stub.fetch, {
@@ -153,9 +166,9 @@ describe("a call outside its conversation on xOllama", () => {
 		const stub = server([
 			// The conversation's turn: answered, its body not yet read.
 			() => json({ message: { content: "turn" } }),
-			() => json({ error: REFUSAL }, 429),
+			() => refused(),
 			() => json({ message: { content: "note" } }),
-			() => json({ error: REFUSAL }, 429),
+			() => refused(),
 			() => json({ message: { content: "note" } }),
 		]);
 		recordPolykvGrantedWindow("conv", 85_386);
@@ -177,19 +190,119 @@ describe("a call outside its conversation on xOllama", () => {
 		expect(closes(stub.engine)).toContain("sessions/conv/close");
 	});
 
-	it("leaves a call that names no conversation as it was", async () => {
-		const stub = server([() => json({ message: { content: "title" } })]);
+	it("books a call that names no conversation, and closes nothing for it", async () => {
+		const stub = server([
+			() => refused(),
+			() => json({ message: { content: "title" } }),
+		]);
+		recordPolykvGrantedWindow("conv", 85_386);
 		const wire = withXollamaRequestFields(stub.fetch);
-		await wire("http://x/api/chat", { method: "POST", body: sideBody() });
-		expect(JSON.stringify(stub.chats[0])).toBe(sideBody());
-		expect(stub.engine).toEqual([]);
+		const response = await wire("http://x/api/chat", {
+			method: "POST",
+			body: sideBody(),
+		});
+		expect(response.status).toBe(200);
+		expect(stub.chats[0]?.placement).toEqual({
+			num_ctx: NEED,
+			num_ctx_min: NEED,
+		});
+		expect(closes(stub.engine)).toEqual([]);
+		expect(JSON.stringify(stub.chats[1])).toBe(sideBody());
 	});
 
-	it("reads the engine's largest admissible window out of a refusal", () => {
-		expect(largestAdmissible(REFUSAL)).toBe(10_614);
-		expect(
-			largestAdmissible("the engine has had no room for this request for 2m0s"),
-		).toBeUndefined();
+	it("leaves the conversation alone when the engine names no figure", async () => {
+		const stub = server([
+			() => refused(null),
+			() => json({ message: { content: "note" } }),
+		]);
+		const wire = withXollamaRequestFields(stub.fetch, {
+			engine: () => ({ sideCallOf: "conv" }),
+		});
+		recordPolykvGrantedWindow("conv", 85_386);
+		await wire("http://x/api/chat", { method: "POST", body: sideBody() });
+		// The prose says 10,614; only the header is read.
+		expect(closes(stub.engine)).toEqual([]);
+		expect(stub.chats[1]?.placement).toBeUndefined();
+	});
+
+	it("sends a booked call again without its booking when it fails otherwise", async () => {
+		const stub = server([
+			() => json({ error: "the request exceeds the context" }, 400),
+			() => json({ message: { content: "note" } }),
+		]);
+		const wire = withXollamaRequestFields(stub.fetch, {
+			engine: () => ({ sideCallOf: "conv" }),
+		});
+		recordPolykvGrantedWindow("conv", 85_386);
+		const response = await wire("http://x/api/chat", {
+			method: "POST",
+			body: sideBody(),
+		});
+		expect(response.status).toBe(200);
+		expect(JSON.stringify(stub.chats[1])).toBe(sideBody());
+		// Its own booking went back; the conversation's did not.
+		expect(closes(stub.engine)).toEqual([
+			`sessions/${String(stub.chats[0]?.session_id)}/close`,
+		]);
+	});
+
+	it("leaves a call with an image as it was", async () => {
+		const stub = server([() => json({ message: { content: "seen" } })]);
+		const wire = withXollamaRequestFields(stub.fetch);
+		const body = JSON.stringify({
+			model: "m",
+			messages: [{ role: "user", content: "what is this", images: ["aGk="] }],
+			options: { num_predict: OUTPUT },
+		});
+		await wire("http://x/api/chat", { method: "POST", body });
+		expect(JSON.stringify(stub.chats[0])).toBe(body);
+	});
+
+	it("tells the conversation's chat about a close and about a wait", async () => {
+		const events: string[] = [];
+		const stop = onXollamaSideCall("conv", (event) => {
+			events.push(event.kind);
+		});
+		recordPolykvGrantedWindow("conv", 85_386);
+		const closing = server([
+			() => refused(),
+			() => json({ message: { content: "note" } }),
+		]);
+		await withXollamaRequestFields(closing.fetch, {
+			engine: () => ({ sideCallOf: "conv" }),
+		})("http://x/api/chat", { method: "POST", body: sideBody() });
+		expect(events).toEqual(["closed"]);
+		// 100 free and 85,386 of ours: closing would do it, so it is the
+		// conversation's case again -- unless the room is someone else's.
+		recordPolykvGrantedWindow("other", 2_000);
+		const waiting = server([
+			() => refused(),
+			() => json({ message: { content: "note" } }),
+		]);
+		await withXollamaRequestFields(waiting.fetch, {
+			engine: () => ({ sideCallOf: "other" }),
+		})("http://x/api/chat", { method: "POST", body: sideBody() });
+		expect(events).toEqual(["closed"]);
+		const seen: string[] = [];
+		const stopOther = onXollamaSideCall("other", (event) => {
+			seen.push(event.kind);
+		});
+		const again = server([
+			() => refused(),
+			() => json({ message: { content: "note" } }),
+		]);
+		await withXollamaRequestFields(again.fetch, {
+			engine: () => ({ sideCallOf: "other" }),
+		})("http://x/api/chat", { method: "POST", body: sideBody() });
+		expect(seen).toEqual(["waiting", "sent"]);
+		stop();
+		stopOther();
+	});
+
+	it("reads the engine's largest admissible window from the header only", () => {
+		expect(largestAdmissible(refused(1_192))).toBe(1_192);
+		expect(largestAdmissible(refused(0))).toBe(0);
+		expect(largestAdmissible(refused(null))).toBeUndefined();
 	});
 
 	it("names the conversation's own idle booking, and nothing else", () => {

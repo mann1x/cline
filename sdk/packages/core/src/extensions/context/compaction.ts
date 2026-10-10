@@ -191,6 +191,12 @@ export interface ContextCompactionPrepareTurnOptions {
 	 * visibility is. See {@link createCompactionJournal}.
 	 */
 	journal?: CompactionJournal;
+	/**
+	 * The conversation the summaries are written for
+	 * (`ProviderConfig.sideCallOf`). Set for the lead only: an agent's summary
+	 * must never close the lead.
+	 */
+	sideCallOf?: string;
 }
 
 /**
@@ -751,12 +757,15 @@ export function createContextCompactionPrepareTurn(
 		return undefined;
 	}
 
-	const providerConfig =
+	const baseProviderConfig =
 		config.providerConfig ??
 		({
 			providerId: config.providerId,
 			modelId: config.modelId,
 		} as ProviderConfig);
+	const providerConfig: ProviderConfig = options.sideCallOf
+		? { ...baseProviderConfig, sideCallOf: options.sideCallOf }
+		: baseProviderConfig;
 	// The key the gateway filed this agent's measurements under (see
 	// `createAgentModelFromConfig`): its own engine session, else the session.
 	const measurementsKey = providerConfig.engineSessionId || config.sessionId;
