@@ -56,6 +56,7 @@ import {
 	NO_TOOL_CALL_NUDGE_MESSAGE,
 	normalizeJsonLikeStringsForSchema,
 	omitUndefinedValues,
+	reportsOutcome,
 	TASK_CANCELLED_EVENT,
 	TASK_FIRST_CHUNK_RECEIVED_EVENT,
 	TASK_PROVIDER_REQUEST_STARTED_EVENT,
@@ -1066,6 +1067,8 @@ export class AgentRuntime {
 	 * has answered, and is not asked again.
 	 */
 	private noToolCallNudgeAsked = false;
+	/** Whether this run has called a tool; see `reportsOutcome`. */
+	private calledToolThisRun = false;
 	/**
 	 * Whether this run has ever called a tool.
 	 *
@@ -1386,6 +1389,19 @@ export class AgentRuntime {
 			this.consecutiveNoToolCallNudges === 0 &&
 			!unstarted &&
 			answersCompletionNudge(text)
+		) {
+			return undefined;
+		}
+		// Worked, then wrote its report: that is how a run ends. The nudge is
+		// for the model that worked and then wrote nothing, promised more, or
+		// asked something no one will read. Not after a nudge already sent:
+		// the answer to that one is judged above.
+		if (
+			this.calledToolThisRun &&
+			this.consecutiveNoToolCallNudges === 0 &&
+			!this.noToolCallNudgeAsked &&
+			!unstarted &&
+			reportsOutcome(text)
 		) {
 			return undefined;
 		}
@@ -1725,6 +1741,7 @@ export class AgentRuntime {
 		this.imageRecoveryAttempted = false;
 		this.steerAwaitingResume = false;
 		this.noToolCallNudgeAsked = false;
+		this.calledToolThisRun = false;
 
 		try {
 			await this.callBeforeRunHooks();
@@ -2200,6 +2217,7 @@ export class AgentRuntime {
 				// A turn that calls tools is a turn that is working, so the
 				// consecutive-silence budget starts over.
 				this.hasCalledAnyTool = true;
+				this.calledToolThisRun = true;
 				this.consecutiveNoToolCallNudges = 0;
 				this.thinkingOnlyRetries = 0;
 				this.consecutiveNoToolCallTurns = 0;

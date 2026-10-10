@@ -465,6 +465,33 @@ export function answersCompletionNudge(text: string | undefined): boolean {
 }
 
 /**
+ * Whether a turn that called nothing, after the run has worked, reads as the
+ * run's report rather than as a model that went quiet.
+ *
+ * The no-tool-call nudge was built for the second: tools called, then a turn
+ * with nothing in it. Sent after a report it asks a question that has just
+ * been answered, and its first clause ("if the task is not finished, continue
+ * now") is an instruction a model follows. Pandorum, 2026-10-10, session
+ * ndhh9: a crawl stopped at the user's file limit, the model said so in a
+ * correct four-paragraph reply, was nudged, and went back to fetch the files
+ * some other way. Session 7pfjl: nudged after "The web scrape ... is now
+ * complete", one sentence, for a turn that changed nothing.
+ *
+ * A report is any text that does not end on a promise of more work and does
+ * not ask something. The promise has a nudge of its own
+ * (`announcedIntentWithoutActing`), and a question written as prose reaches
+ * nobody, which the nudge is the only thing to say.
+ */
+export function reportsOutcome(text: string | undefined): boolean {
+	const trimmed = text?.trim();
+	return (
+		!!trimmed &&
+		!trimmed.slice(-300).includes("?") &&
+		!ANNOUNCED_INTENT.test(trimmed.slice(-400))
+	);
+}
+
+/**
  * Removes runtime-generated <mode_notice> elements (content included): they
  * are not user-typed text and must not render as such. Deliberately NOT part
  * of normalizeUserInput -- that function also sanitizes outbound prompts

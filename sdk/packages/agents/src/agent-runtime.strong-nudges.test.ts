@@ -180,29 +180,67 @@ describe("strong coding nudges", () => {
 		expect(seen.join("\n")).toContain("called nothing");
 	});
 
-	it("still nudges once the run has called something, when switched off", async () => {
+	it("still nudges a run that worked and then said nothing, when switched off", async () => {
 		// A run that has already acted is a working run, so a silent turn in it
 		// is a stop rather than an answer -- the distinction the flag draws is
 		// between a conversation and a task, and one tool call settles it.
-		const model = new ActsOnceModel();
+		const model = new ScriptedModel(["!work", "", "Done."]);
 		const runtime = new AgentRuntime({
 			model,
-			tools: [
-				{
-					name: "echo",
-					description: "Echo input text",
-					inputSchema: { type: "object" },
-					async execute(input: { text: string }) {
-						return { echoed: input.text };
-					},
-				},
-			],
+			tools: [ECHO],
 			completionPolicy: { maxNoToolCallNudges: 1, strongNudges: false },
 		});
 
 		await runtime.run("do the thing");
 
 		expect(nudges(model)).toHaveLength(1);
+	});
+
+	// Pandorum, 2026-10-10. ndhh9: a correct "not complete" report was nudged
+	// and the model went around the user's limit. 7pfjl: one sentence saying
+	// the scrape was complete was nudged for a turn that changed nothing.
+	it("takes a report after work as the end of the run", async () => {
+		for (const report of [
+			"Done.",
+			"The web scrape of `https://zentimings.com` is now complete, with all site assets saved in the `zentimings_scrape/` directory.",
+			"The web scraping has been saved to `zentimings_scrape`, but it is **not complete**.\n\nThe file limit left 8 files out.\n\nRaise it under Settings > Features > Web scraping and ask me to resume.",
+		]) {
+			const model = new ScriptedModel(["!work", report]);
+			const runtime = new AgentRuntime({
+				model,
+				tools: [ECHO],
+				completionPolicy: { maxNoToolCallNudges: 1 },
+			});
+
+			await runtime.run("make a web scraping of zentimings.com");
+
+			expect(nudges(model), report).toHaveLength(0);
+			expect(model.requests, report).toHaveLength(2);
+		}
+	});
+
+	it("still asks a run that worked and then promised, asked or went quiet", async () => {
+		for (const reply of [
+			"",
+			"I fetched the page. Next, I will download the stylesheets.",
+			"The page is saved. Should I fetch the pictures too?",
+		]) {
+			const model = new ScriptedModel(["!work", reply, "Done."]);
+			const runtime = new AgentRuntime({
+				model,
+				tools: [ECHO],
+				completionPolicy: { maxNoToolCallNudges: 1 },
+			});
+
+			await runtime.run("make a web scraping of zentimings.com");
+
+			expect(
+				nudges(model).filter((nudge) =>
+					nudge.includes("contained no tool calls"),
+				),
+				reply,
+			).not.toHaveLength(0);
+		}
 	});
 
 	// Session qjzln: a summary, a nudge, a check of the files, "it is complete",
@@ -248,20 +286,6 @@ describe("strong coding nudges", () => {
 			// A promise draws the announced-intent nudge as well.
 			expect(asked(model), reply).toBeGreaterThanOrEqual(2);
 		}
-	});
-
-	it("asks a run that was never asked, however short its last word", async () => {
-		const model = new ScriptedModel(["!work", "Done."]);
-		const runtime = new AgentRuntime({
-			model,
-			tools: [ECHO],
-			completionPolicy: { maxNoToolCallNudges: 1 },
-		});
-
-		await runtime.run("do the thing");
-
-		expect(asked(model)).toBe(1);
-		expect(model.requests).toHaveLength(3);
 	});
 
 	it("names the unstarted work even when switched off", async () => {
