@@ -1001,6 +1001,16 @@ describe("the opencoti session on a config-only handler", () => {
 		});
 	});
 
+	it("carries the conversation a call outside it is made for", async () => {
+		const { buildGatewayConfig } = await import("./compat");
+		const config = buildGatewayConfig({
+			providerId: "xollama",
+			modelId: "m",
+			sideCallOf: "conv-7",
+		} as never);
+		expect(config.options).toMatchObject({ polykvSideCallOf: "conv-7" });
+	});
+
 	it("adds nothing for a config with no engine session", async () => {
 		const { buildGatewayConfig } = await import("./compat");
 		const config = buildGatewayConfig({

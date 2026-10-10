@@ -291,6 +291,32 @@ describe("createAgentModelFromConfig", () => {
 		expect(options.polykvSessionId).toBe("conv-7");
 	});
 
+	// A capped-thinking note is built from a config alone: the conversation
+	// it is written for has to travel in the vendor's bag (`xollama.ts`).
+	it("lifts the conversation a side call is made for", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+
+		createAgentModelFromConfig(
+			{
+				providerId: "xollama",
+				modelId: "m",
+				tools: [],
+				providerConfig: {
+					providerId: "xollama",
+					modelId: "m",
+					sideCallOf: "conv-7",
+				},
+			} as never,
+			undefined,
+		);
+
+		const calls = gatewayMock.createGateway.mock.calls as unknown as Array<
+			[{ providerConfigs: Array<{ options?: Record<string, unknown> }> }]
+		>;
+		const options = calls[calls.length - 1][0].providerConfigs[0].options ?? {};
+		expect(options.polykvSideCallOf).toBe("conv-7");
+	});
+
 	// Only opencoti has a pool tree to confuse, and putting the key on every
 	// other provider's bag would be noise that reads as meaningful.
 	it("adds no session key for a provider with no pool tree", async () => {

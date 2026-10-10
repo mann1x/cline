@@ -119,6 +119,10 @@ function buildGatewayProviderOptions(
 		if (config.polykvLeadPool === false) {
 			options.polykvLeadPool = false;
 		}
+		// The conversation a call outside it is made for (`xollama.ts`).
+		if (config.sideCallOf) {
+			options.polykvSideCallOf = config.sideCallOf;
+		}
 	}
 
 	if (config.providerId === "bedrock") {

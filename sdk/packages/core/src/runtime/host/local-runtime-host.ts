@@ -1078,6 +1078,17 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// where the turns that actually end at the budget message go.
 		const condenseDiscardedReasoning =
 			createCappedThinkingNoteWriter(cappedThinkingConfig);
+		// The lead's own: its notes say which conversation they are written
+		// for, so a note refused for room that conversation holds idle is not
+		// waited out for the engine's idle TTL. A delegated agent's are not
+		// marked -- its note must never close the lead's session.
+		const leadCappedThinkingConfig = {
+			...cappedThinkingConfig,
+			sideCallOf: sessionId,
+		};
+		const condenseLeadDiscardedReasoning = createCappedThinkingNoteWriter(
+			leadCappedThinkingConfig,
+		);
 		const runtime = await this.runtimeBuilder.build({
 			...bootstrap.runtimeBuilderInput,
 			distinctId: this.distinctId,
@@ -2285,7 +2296,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 					}
 				},
 			}),
-			cappedThinkingConfig,
+			leadCappedThinkingConfig,
 		);
 
 		const agentConfig = {
@@ -2310,7 +2321,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			maxIterations: configWithProvider.maxIterations,
 			execution: configWithProvider.execution,
 			prepareTurn,
-			condenseDiscardedReasoning,
+			condenseDiscardedReasoning: condenseLeadDiscardedReasoning,
 			tools: toolsWithStandDown,
 			modelTools: runtime.modelTools,
 			hooks: bootstrap.hooks,

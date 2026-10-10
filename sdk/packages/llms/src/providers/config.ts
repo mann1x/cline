@@ -384,6 +384,14 @@ export interface ProviderOptions {
 	 * the lead's sub-pool, which is not the pool it was asked to attach to.
 	 */
 	polykvLeadPool?: boolean;
+	/**
+	 * The conversation these requests are made for, when they run outside it:
+	 * a capped-thinking note, its retrospective. On xOllama such a call books
+	 * its own exact window, and where that window does not fit beside this
+	 * conversation's idle booking, the conversation's engine session is closed
+	 * to make room (`xollama.ts`, `settleSideCall`). Inert elsewhere.
+	 */
+	sideCallOf?: string;
 	/** Which tools this configuration withholds from its sessions. */
 	tools?: ToolSelectionOptions;
 	/**

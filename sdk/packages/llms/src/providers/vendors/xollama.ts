@@ -47,13 +47,17 @@ import {
 	readOpencotiAgentWindow,
 } from "./opencoti-agent-window";
 import { recordOpencotiWindowFloor } from "./opencoti-kv-pressure";
-import { getPolykvGrantedWindow, recordPolykvGrantedWindow } from "./polykv";
+import {
+	createPolykvClient,
+	getPolykvGrantedWindow,
+	recordPolykvGrantedWindow,
+} from "./polykv";
 import {
 	hoistLeadEnvironment,
 	markLeadWindowLive,
 	prepareLeadPool,
 } from "./polykv-lead";
-import { engineSessionId } from "./polykv-swarm";
+import { engineSessionId, reportPolykvRoomWait } from "./polykv-swarm";
 import {
 	rememberXollamaRunner,
 	xollamaEngineFetch,
@@ -808,6 +812,255 @@ export interface XollamaEngineRequest {
 	borrowedPool?: string;
 	/** The session id core keys this conversation by (`polykvSessionId`). */
 	sessionKey?: string;
+	/**
+	 * The conversation this call is made for, on a call outside it: a
+	 * capped-thinking note, a summary (`ProviderConfig.sideCallOf`).
+	 */
+	sideCallOf?: string;
+}
+
+/**
+ * Room for a call made outside the conversation it serves.
+ *
+ * A conversation keeps its booked window while it is idle, until it is closed
+ * or the engine's idle TTL (300 s) runs out. A capped-thinking note or a
+ * summary is a session of its own, so on a window the conversation has booked
+ * nearly whole it is refused -- and xOllama waits a plain request out for two
+ * minutes, answers 503, and the client asks again: five silent minutes per
+ * call, ended only by the TTL dropping the conversation's cache anyway
+ * (run peh2v: 604 refusals, eight 503s, four pauses of 306-336 s).
+ *
+ * So the call goes out with an exact booking, which xOllama answers at once
+ * (429 with the engine's own message) instead of waiting out. The
+ * conversation's session is closed in ONE case only (user ruling, 2026-10-10):
+ * the engine's numbers say the call does not fit now and would fit with that
+ * conversation's booking returned, and none of the conversation's own
+ * requests is running. Its cache is lost then as it would have been at the
+ * TTL. Every other refusal is sent again as the plain request it used to be,
+ * and waits as it used to.
+ */
+const SIDE_CALL_SLACK_TOKENS = 256;
+
+/** Requests running now, per conversation (core's session key). */
+const CONVERSATION_REQUESTS = new Map<string, number>();
+
+function conversationRequestStarted(key: string): () => void {
+	CONVERSATION_REQUESTS.set(key, (CONVERSATION_REQUESTS.get(key) ?? 0) + 1);
+	let ended = false;
+	return () => {
+		if (ended) {
+			return;
+		}
+		ended = true;
+		const left = (CONVERSATION_REQUESTS.get(key) ?? 1) - 1;
+		if (left > 0) {
+			CONVERSATION_REQUESTS.set(key, left);
+		} else {
+			CONVERSATION_REQUESTS.delete(key);
+		}
+	};
+}
+
+/** Whether a request of this conversation is running in this process. */
+export function xollamaConversationBusy(key: string): boolean {
+	return (CONVERSATION_REQUESTS.get(key) ?? 0) > 0;
+}
+
+/** Test seam: forget every running request. */
+export function resetXollamaConversationRequests(): void {
+	CONVERSATION_REQUESTS.clear();
+}
+
+/** `response`, calling `done` once when its body ends, fails or is dropped. */
+function whenBodyEnds(response: Response, done: () => void): Response {
+	if (!response.body) {
+		done();
+		return response;
+	}
+	const reader = response.body.getReader();
+	const stream = new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			try {
+				const { done: end, value } = await reader.read();
+				if (end) {
+					done();
+					controller.close();
+					return;
+				}
+				controller.enqueue(value);
+			} catch (error) {
+				done();
+				controller.error(error);
+			}
+		},
+		cancel(reason) {
+			done();
+			return reader.cancel(reason);
+		},
+	});
+	return new Response(stream, {
+		status: response.status,
+		statusText: response.statusText,
+		headers: response.headers,
+	});
+}
+
+/** The cells a side call needs: its prompt, its output cap and the template. */
+async function sideCallNeed(
+	baseUrl: string,
+	body: Record<string, unknown>,
+	baseFetch: typeof fetch,
+): Promise<number | undefined> {
+	const cap = (body.options as { num_predict?: unknown } | undefined)
+		?.num_predict;
+	if (!isPositive(cap) || typeof body.model !== "string") {
+		return undefined;
+	}
+	const text = [
+		...(body.messages as Array<{ content?: unknown }>).map((message) =>
+			typeof message?.content === "string"
+				? message.content
+				: JSON.stringify(message?.content ?? ""),
+		),
+		...(body.tools !== undefined ? [JSON.stringify(body.tools)] : []),
+	].join("\n");
+	try {
+		const tokens = await createPolykvClient({
+			baseUrl: xollamaEngineRoot(baseUrl, body.model),
+			fetch: xollamaEngineFetch(baseFetch),
+		}).tokenize(text);
+		return Array.isArray(tokens)
+			? tokens.length + Math.floor(cap) + SIDE_CALL_SLACK_TOKENS
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** A refusal's own words: xOllama answers `{"error": "..."}`. */
+function refusalText(body: string): string {
+	try {
+		const parsed = JSON.parse(body) as { error?: unknown };
+		return typeof parsed?.error === "string" ? parsed.error : body;
+	} catch {
+		return body;
+	}
+}
+
+/** The largest window the engine said it would admit, out of a refusal. */
+export function largestAdmissible(message: string): number | undefined {
+	const match = /largest admissible (\d+)/.exec(message);
+	return match ? Number(match[1]) : undefined;
+}
+
+/**
+ * Whether a refused side call is the one case its conversation is closed for:
+ * it does not fit now, it fits with the conversation's booking returned, and
+ * the conversation is idle.
+ */
+export function sideCallBlockedByOwnConversation(options: {
+	need: number;
+	largest: number | undefined;
+	conversationWindow: number | undefined;
+	conversationBusy: boolean;
+	delegated: boolean;
+}): boolean {
+	return (
+		options.largest !== undefined &&
+		options.conversationWindow !== undefined &&
+		!options.conversationBusy &&
+		!options.delegated &&
+		options.largest < options.need &&
+		options.largest + options.conversationWindow >= options.need
+	);
+}
+
+/** Give a side call's own booking back; the idle TTL is the net under it. */
+function closeSideSession(
+	baseUrl: string,
+	model: string,
+	session: string,
+	baseFetch: typeof fetch,
+): void {
+	void createPolykvClient({
+		baseUrl: xollamaEngineRoot(baseUrl, model),
+		fetch: xollamaEngineFetch(baseFetch),
+	})
+		.closeSession(session)
+		.catch(() => undefined);
+}
+
+/**
+ * A side call's answer: its booking returned when it ends, and a refusal
+ * settled -- the conversation closed in the one case, the plain request sent
+ * in every other.
+ */
+async function settleSideCall(
+	response: Response,
+	side: {
+		need: number;
+		session: string;
+		conversation: string;
+		model: string;
+		plainBody: string;
+	},
+	io: {
+		root: string;
+		baseFetch: typeof fetch;
+		/** The request as it was refused: with its booking. */
+		bookedBody: string;
+		send: (body: string) => Promise<Response>;
+		logger: BasicLogger | undefined;
+	},
+): Promise<Response> {
+	const release = () =>
+		closeSideSession(io.root, side.model, side.session, io.baseFetch);
+	if (response.status !== 429) {
+		return whenBodyEnds(response, release);
+	}
+	const reason = refusalText(await response.text().catch(() => ""));
+	const largest = largestAdmissible(reason);
+	const window = getPolykvGrantedWindow(side.conversation);
+	const own = sideCallBlockedByOwnConversation({
+		need: side.need,
+		largest,
+		conversationWindow: window,
+		conversationBusy: xollamaConversationBusy(side.conversation),
+		delegated: isDelegatedEngineSession(engineSessionId(side.conversation)),
+	});
+	if (own) {
+		let found = false;
+		try {
+			found = (
+				await createPolykvClient({
+					baseUrl: xollamaEngineRoot(io.root, side.model),
+					fetch: xollamaEngineFetch(io.baseFetch),
+				}).closeSessionReport(engineSessionId(side.conversation))
+			).found;
+		} catch {
+			found = false;
+		}
+		if (found) {
+			const said = `A request outside the conversation (${side.need} tokens) did not fit beside the conversation's idle window (${window} booked, ${largest} free). The conversation's engine session was closed to make room; its next turn re-reads the prompt.`;
+			io.logger?.log(`[xollama] ${said}`);
+			const again = await io.send(io.bookedBody);
+			if (again.status !== 429) {
+				return whenBodyEnds(again, release);
+			}
+		}
+	}
+	// Not the conversation's own idle booking, or the close freed nothing:
+	// the plain request, which xOllama waits out as it always did.
+	const waiting = `A request outside the conversation is waiting for room on the server${
+		reason ? `: ${reason.slice(0, 300)}` : ""
+	}`;
+	io.logger?.log(`[xollama] ${waiting}`);
+	reportPolykvRoomWait(side.conversation, { waiting: true, reason: waiting });
+	try {
+		return await io.send(side.plainBody);
+	} finally {
+		reportPolykvRoomWait(side.conversation, { waiting: false });
+	}
 }
 
 /** Top-level `placement` on a plain turn (client_placement_v1, #424). */
@@ -912,6 +1165,19 @@ export function withXollamaRequestFields(
 		let leadPooled = false;
 		let asked: number | undefined;
 		let sharedAboveBudget: number | undefined;
+		/** A call outside its conversation, sent with its own exact booking. */
+		let side:
+			| {
+					need: number;
+					session: string;
+					conversation: string;
+					model: string;
+					/** The request without the booking: what a refusal falls back to. */
+					plainBody: string;
+			  }
+			| undefined;
+		/** The conversation this request belongs to, while it runs. */
+		let conversationKey: string | undefined;
 		try {
 			const parsed = JSON.parse(body) as Record<string, unknown>;
 			const original = parsed.messages;
@@ -1039,6 +1305,33 @@ export function withXollamaRequestFields(
 						placement = { ...(placement ?? {}), ...ask };
 					}
 				}
+				if (session !== undefined && !isDelegatedEngineSession(session)) {
+					conversationKey = leadKey ?? session;
+				}
+				// A call outside its conversation: its own exact booking, so a
+				// refusal is answered at once. See `SIDE_CALL_SLACK_TOKENS`.
+				let sideNeed: number | undefined;
+				if (
+					session === undefined &&
+					engineRequest.sideCallOf !== undefined &&
+					placement === undefined &&
+					!council &&
+					!placedOutside &&
+					model !== undefined &&
+					root !== undefined &&
+					(await probeXollama(root, baseFetch))?.features.includes(
+						XOLLAMA_CONTEXT_WINDOW_FEATURE,
+					) === true
+				) {
+					sideNeed = await sideCallNeed(root, parsed, baseFetch);
+				}
+				const sideSession =
+					sideNeed !== undefined
+						? `cerebriline-side-${Math.random().toString(36).slice(2, 10)}`
+						: undefined;
+				if (sideNeed !== undefined) {
+					placement = { num_ctx: sideNeed, num_ctx_min: sideNeed };
+				}
 				const councilSafe = council
 					? withoutCouncilTool(parsed.tools)
 					: undefined;
@@ -1068,9 +1361,31 @@ export function withXollamaRequestFields(
 					councilSafe !== undefined ||
 					parsed.messages !== original
 				) {
+					if (
+						sideNeed !== undefined &&
+						sideSession !== undefined &&
+						engineRequest.sideCallOf !== undefined
+					) {
+						side = {
+							need: sideNeed,
+							session: sideSession,
+							conversation: engineRequest.sideCallOf,
+							model: parsed.model as string,
+							plainBody:
+								names.size > 0 || parsed.messages !== original
+									? JSON.stringify({
+											...parsed,
+											...(parsed.tools !== undefined
+												? { tools: markReadOnly(parsed.tools, names) }
+												: {}),
+										})
+									: init.body,
+						};
+					}
 					body = JSON.stringify({
 						...parsed,
 						...(placement !== undefined ? { placement } : {}),
+						...(sideSession !== undefined ? { session_id: sideSession } : {}),
 						...(council ? { messages: withoutThinking(parsed.messages) } : {}),
 						// A placed body's session is the worker layer's: the engine
 						// session its pools and owner are charged to.
@@ -1093,7 +1408,29 @@ export function withXollamaRequestFields(
 				"[xollama] request body is not JSON; sent without xOllama fields",
 			);
 		}
-		const response = await baseFetch(input, { ...init, headers, body });
+		const requestEnded =
+			conversationKey !== undefined
+				? conversationRequestStarted(conversationKey)
+				: undefined;
+		let response: Response;
+		try {
+			response = await baseFetch(input, { ...init, headers, body });
+			if (side !== undefined && root !== undefined) {
+				response = await settleSideCall(response, side, {
+					root,
+					baseFetch,
+					bookedBody: body,
+					send: (sent) => baseFetch(input, { ...init, headers, body: sent }),
+					logger: options?.logger,
+				});
+			}
+		} catch (error) {
+			requestEnded?.();
+			throw error;
+		}
+		if (requestEnded !== undefined) {
+			response = whenBodyEnds(response, requestEnded);
+		}
 		// The window the engine granted this session, before the first byte.
 		// Absent is "no guaranteed window", not "unchanged" -- nothing is
 		// recorded then.

@@ -528,6 +528,7 @@ export function buildGatewayConfig(config: ProviderConfig) {
 			// may join the lead tree. See `continuation-compaction.ts`.
 			...(config.polykvBooking ? { polykvBooking: config.polykvBooking } : {}),
 			...(config.polykvLeadPool === false ? { polykvLeadPool: false } : {}),
+			...(config.sideCallOf ? { polykvSideCallOf: config.sideCallOf } : {}),
 			region: config.region ?? config.gcp?.region,
 			project: config.gcp?.projectId,
 			projectId: config.gcp?.projectId,

@@ -669,6 +669,11 @@ export interface CappedThinkingCondenserConfig {
 	/** Absent when no provider is resolved yet; the condenser then stands down. */
 	providerConfig?: ProviderConfig;
 	summarizer?: CoreCompactionSummarizerConfig;
+	/**
+	 * The conversation the notes are written for (`ProviderConfig.sideCallOf`).
+	 * Set for the lead only: an agent's note must never close the lead.
+	 */
+	sideCallOf?: string;
 	logger?: BasicLogger;
 }
 
@@ -731,6 +736,9 @@ async function writeCappedThinkingNote(options: {
 			maxOutputTokens: resolveCondensedThinkingOutputCap(
 				options.providerConfig,
 			),
+			...(options.config.sideCallOf
+				? { sideCallOf: options.config.sideCallOf }
+				: {}),
 		};
 		const handler = await createHandlerAsync(summarizerConfig);
 		let text = "";
@@ -921,6 +929,9 @@ async function writeDiscardedRetrospective(options: {
 			maxOutputTokens: resolveCondensedThinkingOutputCap(
 				options.providerConfig,
 			),
+			...(options.config.sideCallOf
+				? { sideCallOf: options.config.sideCallOf }
+				: {}),
 		};
 		const handler = await createHandlerAsync(summarizerConfig);
 		let text = "";

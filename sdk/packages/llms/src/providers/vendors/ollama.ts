@@ -1181,6 +1181,9 @@ function xollamaEngineRequest(
 		...(typeof sessionId === "string" && sessionId
 			? { sessionKey: sessionId }
 			: {}),
+		...(typeof options.polykvSideCallOf === "string" && options.polykvSideCallOf
+			? { sideCallOf: options.polykvSideCallOf }
+			: {}),
 	};
 }
 
