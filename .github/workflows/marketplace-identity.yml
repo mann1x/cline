@@ -26,12 +26,16 @@ jobs:
                   allow-no-subscriptions: true
 
             # 499b84ac-... is Azure DevOps, which the Marketplace authenticates
-            # through. `id` in the answer is the member ID.
+            # through. `authenticatedUser.id` in the answer is the member ID.
             - name: Marketplace member ID
               run: |
-                  az rest --method get \
-                    --resource 499b84ac-1321-427f-aa17-267ca6975798 \
-                    --url "https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=7.1-preview.3"
+                  for host in marketplace.visualstudio.com app.vssps.visualstudio.com; do
+                    echo "== $host"
+                    az rest --method get \
+                      --resource 499b84ac-1321-427f-aa17-267ca6975798 \
+                      --url "https://$host/_apis/connectionData?api-version=7.1-preview.1" \
+                      --query "{authenticatedUser: authenticatedUser, authorizedUser: authorizedUser}" || true
+                  done
 
             # Fails until the ID above is a member of the publisher.
             - name: Publisher access
