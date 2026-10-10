@@ -397,7 +397,7 @@ describe("web_scrape for any task", () => {
 			"Links to other sites (github.com) are not followed.",
 		);
 		expect(whole).toContain(
-			"site/index.md lists it for the user: neither it nor the files need reading back",
+			"one/index.md lists it for the user: neither it nor the files need reading back",
 		);
 		// Pages of the site that were linked and not read are named.
 		links["https://example.com/"] = ["https://example.com/blog/a"];
