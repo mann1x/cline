@@ -50,6 +50,7 @@ import {
 	dropsTailAtThisCompaction,
 	findLatestSummaryIndex,
 	getCompactionSummaryMetadata,
+	isToolResultOnlyUserMessage,
 	type MeasureReportedTokens,
 	resolveCompactionTriggerTokens,
 	resolveEffectiveMaxInputTokens,
@@ -566,6 +567,80 @@ function resolveManualMessageTargetTokens(input: {
  * has an answer for any window.
  */
 export const COMPACTION_TARGET_CONTENT_SHARE = 0.25;
+
+/**
+ * The most of the free content a recovery compaction may leave in place.
+ *
+ * A recovery runs because a reply did not fit, so what it leaves has to have
+ * room for one. Its target used to be capped only by the trigger, which is
+ * nine tenths of the window: measured (harness run 0428, 2026-10-11, window
+ * 85,106), each recovery left 53,345 tokens in the request, the retried turn
+ * wrote 22,361 and read a 6,000-token result, and the turn after that was cut
+ * off again -- three times running. Half the content leaves that turn its
+ * room; an ordinary compaction aims at a quarter.
+ */
+export const OVERFLOW_RECOVERY_CONTENT_SHARE = 0.5;
+
+/**
+ * A summarised recovery transcript, cut down to the recovery target.
+ *
+ * The summarising attempt keeps a tail of recent turns after its summary, and
+ * with a tail of large turns it comes back over the target. It used to be
+ * thrown away for that and basic compaction used in its place -- five model
+ * calls and about 200 seconds, three times in one run, for a transcript that
+ * had the work in it and none of the reasons. The summary is the part worth
+ * having, so the tail gives way instead: the leading compaction messages
+ * stay, and the tail keeps its newest turns for as long as they fit.
+ *
+ * `undefined` when there is no summary at the head or it does not fit by
+ * itself: then basic compaction is no worse and needs nothing checked.
+ */
+export function trimSummarisedTailToTarget(
+	messages: readonly MessageWithMetadata[] | undefined,
+	targetTokens: number,
+	estimate: (message: MessageWithMetadata) => number,
+): MessageWithMetadata[] | undefined {
+	if (!messages?.length) {
+		return undefined;
+	}
+	let headEnd = 0;
+	while (
+		headEnd < messages.length &&
+		String(
+			(messages[headEnd].metadata as { kind?: unknown } | undefined)?.kind ??
+				"",
+		).startsWith("compaction")
+	) {
+		headEnd += 1;
+	}
+	if (headEnd === 0) {
+		return undefined;
+	}
+	let total = 0;
+	for (let index = 0; index < headEnd; index += 1) {
+		total += estimate(messages[index]);
+	}
+	if (total > targetTokens) {
+		return undefined;
+	}
+	let start = messages.length;
+	for (let index = messages.length - 1; index >= headEnd; index -= 1) {
+		const cost = estimate(messages[index]);
+		if (total + cost > targetTokens) {
+			break;
+		}
+		total += cost;
+		start = index;
+	}
+	// A tool result cannot open the tail: the call it answers was cut.
+	while (
+		start < messages.length &&
+		isToolResultOnlyUserMessage(messages[start])
+	) {
+		start += 1;
+	}
+	return [...messages.slice(0, headEnd), ...messages.slice(start)];
+}
 
 /**
  * How many tokens of transcript a compaction should leave.
@@ -1361,6 +1436,18 @@ export function createContextCompactionPrepareTurn(
 				messageTriggerTokens,
 				manualTargetRatio: options.manualTargetRatio,
 			});
+			if (effectiveMode === "overflow_recovery") {
+				// Never looser than before, and no longer allowed to sit at the
+				// trigger: the turn being retried needs room to be written in.
+				messageTargetTokens = Math.min(
+					messageTargetTokens,
+					resolveMessageTargetTokens({
+						maxInputTokens,
+						requestOverheadTokens,
+						share: OVERFLOW_RECOVERY_CONTENT_SHARE,
+					}),
+				);
+			}
 			requestTargetTokens = requestOverheadTokens + messageTargetTokens;
 		}
 
@@ -1780,9 +1867,29 @@ export function createContextCompactionPrepareTurn(
 							(summarised?.messages?.length ?? 0) > 0 &&
 							summarisedTokens < messageInputTokens &&
 							summarisedTokens <= messageTargetTokens;
+						const trimmed = acceptable
+							? undefined
+							: trimSummarisedTailToTarget(
+									summarised?.messages,
+									messageTargetTokens,
+									estimateMessageTokens,
+								);
 						if (acceptable) {
 							result = summarised;
 							executedStrategy = strategy;
+						} else if (trimmed && summarised) {
+							result = { ...summarised, messages: trimmed };
+							executedStrategy = strategy;
+							config.logger?.log(
+								`${strategy} compaction came back over the recovery target; kept its summary and shortened the tail`,
+								{
+									severity: "warn",
+									summarisedTokens,
+									keptMessages: trimmed.length,
+									summarisedMessageCount: summarised.messages?.length ?? 0,
+									messageTargetTokens,
+								},
+							);
 						} else {
 							config.logger?.log(
 								`${strategy} compaction did not produce an acceptable overflow-recovery transcript; keeping the basic one`,

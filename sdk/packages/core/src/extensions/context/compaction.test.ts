@@ -18,6 +18,8 @@ import {
 	createCompactionStateAwarePrepareTurn,
 	createContextCompactionPrepareTurn,
 	createImportedHistoryCompactionPrepareTurn,
+	OVERFLOW_RECOVERY_CONTENT_SHARE,
+	trimSummarisedTailToTarget,
 } from "./compaction";
 import {
 	buildSummaryMessage,
@@ -338,6 +340,79 @@ function runForcedBasicCompaction(
 	});
 	return result?.messages ?? messages;
 }
+
+describe("a summarised recovery transcript over its target", () => {
+	const summary = {
+		role: "user",
+		content: "summary of the work so far",
+		metadata: { kind: "compaction_summary" },
+	} as unknown as LlmsProviders.Message;
+	const retrospective = {
+		role: "assistant",
+		content: [{ type: "text", text: "what I learned" }],
+		metadata: { kind: "compaction_retrospective" },
+	} as unknown as LlmsProviders.Message;
+	const call = (id: string): LlmsProviders.Message =>
+		({
+			role: "assistant",
+			content: [{ type: "tool_use", id, name: "editor", input: { path: id } }],
+		}) as LlmsProviders.Message;
+	const result = (id: string, size: number): LlmsProviders.Message =>
+		({
+			role: "user",
+			content: [
+				{ type: "tool_result", tool_use_id: id, content: "y".repeat(size) },
+			],
+		}) as LlmsProviders.Message;
+
+	// Harness run 0428: the summary was written (five model calls) and then
+	// dropped whole because the tail after it was too big.
+	it("keeps the summary and the newest turns that fit", () => {
+		const messages = [
+			summary,
+			retrospective,
+			call("old"),
+			result("old", 3_000),
+			call("new"),
+			result("new", 500),
+		];
+		const trimmed = trimSummarisedTailToTarget(
+			messages,
+			1_500,
+			estimateJsonTokens,
+		);
+		const text = JSON.stringify(trimmed);
+
+		expect(trimmed?.[0]).toBe(summary);
+		expect(trimmed?.[1]).toBe(retrospective);
+		expect(text).toContain('"new"');
+		expect(text).not.toContain('"old"');
+	});
+
+	it("does not open the tail on a result whose call was cut", () => {
+		const messages = [summary, call("a"), result("a", 400), result("b", 100)];
+		const trimmed = trimSummarisedTailToTarget(
+			messages,
+			estimateJsonTokens(summary) + estimateJsonTokens(result("b", 100)) + 10,
+			estimateJsonTokens,
+		);
+
+		expect(trimmed).toEqual([summary]);
+	});
+
+	it("declines when there is no summary to keep, or it does not fit", () => {
+		expect(
+			trimSummarisedTailToTarget(
+				[call("a"), result("a", 10)],
+				10_000,
+				estimateJsonTokens,
+			),
+		).toBeUndefined();
+		expect(
+			trimSummarisedTailToTarget([summary, call("a")], 5, estimateJsonTokens),
+		).toBeUndefined();
+	});
+});
 
 describe("basic compaction run again on its own output", () => {
 	function pair(index: number): LlmsProviders.Message[] {
@@ -4337,6 +4412,77 @@ describe("createContextCompactionPrepareTurn", () => {
 
 		expect(createHandlerMock).toHaveBeenCalled();
 		expect(JSON.stringify(result?.messages)).toContain("Ship the feature");
+	});
+
+	it("aims a recovery at half the free content, not at the trigger", async () => {
+		// Harness run 0428: three recoveries each left the request at 53,345 of
+		// an 85,106 window, and the retried turn overflowed again every time.
+		const emitStatusNotice = vi.fn();
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "anthropic",
+			modelId: "mock-model",
+			providerConfig: {
+				providerId: "anthropic",
+				modelId: "mock-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: { enabled: true, strategy: "basic" },
+			logger: undefined,
+		});
+		const messages: MessageWithMetadata[] = [
+			{ role: "user", content: "Initial request" },
+			...Array.from({ length: 30 }, (_, index) => [
+				{
+					role: "assistant" as const,
+					content: [
+						{
+							type: "tool_use" as const,
+							id: `tool-${index}`,
+							name: "read_files",
+							input: { file_paths: [`/tmp/${index}.ts`] },
+						},
+					],
+				},
+				{
+					role: "user" as const,
+					content: [
+						{
+							type: "tool_result" as const,
+							tool_use_id: `tool-${index}`,
+							name: "tool",
+							content: "z".repeat(4_000),
+						},
+					],
+				},
+			]).flat(),
+		] as MessageWithMetadata[];
+		const maxInputTokens = 20_000;
+
+		await prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			emitStatusNotice,
+			overflowRecovery: true,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages,
+			apiMessages: messages,
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: { id: "mock-model", maxInputTokens },
+			},
+		});
+
+		const started = emitStatusNotice.mock.calls.find(
+			(call) => call[0] === "overflow-recovery-compacting",
+		)?.[1] as { messageTargetTokens: number };
+		expect(started.messageTargetTokens).toBeGreaterThan(0);
+		expect(started.messageTargetTokens).toBeLessThanOrEqual(
+			maxInputTokens * OVERFLOW_RECOVERY_CONTENT_SHARE,
+		);
 	});
 
 	it("skips overflow-recovery compaction when there is nothing to remove", async () => {
