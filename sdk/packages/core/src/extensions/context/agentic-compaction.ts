@@ -13,11 +13,13 @@ import {
 } from "./budget-projection";
 import { countCapEvents, synthesizeCapThoughts } from "./cap-thoughts";
 import {
+	buildRetrospectiveTurn,
 	buildSummaryMessage,
 	buildSummaryRequest,
 	buildThinkingSummaryRequest,
 	CHARS_PER_TOKEN,
 	collectUserRequests,
+	composeRetrospective,
 	type EstimateMessageTokens,
 	ensureFilesSection,
 	estimateTokens,
@@ -25,6 +27,7 @@ import {
 	findCutPlan,
 	findLatestSummaryIndex,
 	getCompactionSummaryMetadata,
+	isRetrospectiveTurn,
 	type MeasureReportedTokens,
 	planFullCut,
 	type RecencyBounds,
@@ -609,10 +612,14 @@ export async function runAgenticCompaction(options: {
 	const previousLedgerEntries =
 		previousSummaryMetadata?.toolLedgerEntries ?? [];
 	const generation = (previousSummaryMetadata?.generation ?? 0) + 1;
-	const newMessagesToFold =
+	// Without the previous generation's retrospective turn: its content is
+	// handed to the next retrospective as `previousThinkingSummary` already,
+	// and folded as a turn it would be read a second time as fresh reasoning.
+	const newMessagesToFold = (
 		latestSummaryIndex >= 0
 			? messagesToSummarize.slice(latestSummaryIndex + 1)
-			: messagesToSummarize;
+			: messagesToSummarize
+	).filter((message) => !isRetrospectiveTurn(message));
 	if (newMessagesToFold.length === 0) {
 		return undefined;
 	}
@@ -1168,6 +1175,17 @@ export async function runAgenticCompaction(options: {
 				0,
 			));
 	const tokensBefore = measureReported(messages);
+	const harnessThoughts = synthesizeCapThoughts(
+		// Counted over the whole transcript since the last compaction, kept
+		// tail included: the events are what the harness saw, and a turn does
+		// not stop having been discarded because it is recent.
+		countCapEvents(options.context.messages),
+	);
+	const keptTail = messages
+		.slice(cutIndex)
+		.filter((message) => !isRetrospectiveTurn(message));
+	const retrospective = composeRetrospective(thinkingSummary, harnessThoughts);
+	const retrospectiveAsTurn = retrospective.length > 0 && keptTail.length > 0;
 	const resultMessages = [
 		buildSummaryMessage({
 			summary: reviewedSummary,
@@ -1176,12 +1194,8 @@ export async function runAgenticCompaction(options: {
 			userRunSpan: countUserRunMessages(messagesToSummarize),
 			generation,
 			thinkingSummary,
-			// Counted over the whole transcript since the last compaction,
-			// kept tail included: the events are what the harness saw, and a
-			// turn does not stop having been discarded because it is recent.
-			harnessThoughts: synthesizeCapThoughts(
-				countCapEvents(options.context.messages),
-			),
+			harnessThoughts,
+			retrospectiveAsTurn,
 			toolLedger: ledgerEnabled
 				? renderToolLedger(
 						ledgerEntries.filter((entry) =>
@@ -1199,7 +1213,10 @@ export async function runAgenticCompaction(options: {
 			),
 		}),
 		...(pinnedMessage ? [pinnedMessage] : []),
-		...messages.slice(cutIndex),
+		// After the pinned prompt, not before it: a user turn after this one
+		// is what takes its reasoning out of the prompt.
+		...(retrospectiveAsTurn ? [buildRetrospectiveTurn(retrospective)] : []),
+		...keptTail,
 	];
 	const tokensAfter = measureReported(resultMessages);
 	options.logger?.debug("Performed agentic compaction", {

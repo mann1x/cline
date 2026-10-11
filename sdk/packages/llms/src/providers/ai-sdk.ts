@@ -783,7 +783,7 @@ function buildAiSdkRuntimeContext(
 	};
 }
 
-function toAiSdkMessages(
+export function toAiSdkMessages(
 	messages: readonly AgentMessage[],
 	systemPrompt?: string,
 	options?: {
@@ -812,8 +812,21 @@ function toAiSdkMessages(
 	const normalizedMessages: AiSdkFormatterMessage[] = [];
 
 	for (const [messageIndex, message] of messages.entries()) {
+		// A turn whose reasoning the harness wrote and wants kept -- the
+		// retrospective after a compaction. Under `last` on the transport's
+		// own field it is sent as reasoning although it is not the newest;
+		// under anything else it goes out as the turn's text, so it is never
+		// dropped and never offered as unsigned reasoning to an API that did
+		// not ask for reasoning back.
+		const pinnedReasoning =
+			(message.metadata as { pinnedReasoning?: unknown } | undefined)
+				?.pinnedReasoning === true;
+		const pinnedAsText =
+			pinnedReasoning &&
+			!(reasoningHistory === "last" && plan.channel !== "inline");
 		const includeReasoning =
 			reasoningHistory === "all" ||
+			pinnedReasoning ||
 			(reasoningHistory === "last" && messageIndex === lastReasoningIndex);
 		const content: AiSdkFormatterPart[] = [];
 		let skippedReasoning = false;
@@ -830,6 +843,13 @@ function toAiSdkMessages(
 			if (part.type === "reasoning") {
 				if (!includeReasoning) {
 					skippedReasoning = true;
+					continue;
+				}
+				if (pinnedAsText) {
+					const text = sanitizeSurrogates(part.text).trim();
+					if (text.length > 0) {
+						content.push({ type: "text", text: `${text}\n\n` });
+					}
 					continue;
 				}
 				if (plan.channel === "inline") {

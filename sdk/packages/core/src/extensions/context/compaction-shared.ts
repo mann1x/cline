@@ -2305,6 +2305,64 @@ export function resolveSummarizerConfig(options: {
 	);
 }
 
+/** The retrospective and what the harness adds to it, as one text. */
+export function composeRetrospective(
+	thinkingSummary: string | undefined,
+	harnessThoughts: string | undefined,
+): string {
+	return [thinkingSummary?.trim(), harnessThoughts?.trim()]
+		.filter((part): part is string => !!part)
+		.join("\n\n");
+}
+
+/** Marks the synthetic turn below, for the code that has to recognise it. */
+export const COMPACTION_RETROSPECTIVE_KIND = "compaction_retrospective";
+
+export function isRetrospectiveTurn(message: MessageWithMetadata): boolean {
+	return (
+		(message.metadata as { kind?: string } | undefined)?.kind ===
+		COMPACTION_RETROSPECTIVE_KIND
+	);
+}
+
+/**
+ * The retrospective as a turn of the model's own, carried as its reasoning.
+ *
+ * As a text block in the summary it is something the model is told. The point
+ * of it is the opposite: that the model comes back from a compaction having
+ * already thought about how the work has been going -- including what the
+ * harness saw and it could not -- and acts on that as it acts on any thought
+ * of its own. That needs an assistant turn, because reasoning is only valid
+ * on one; a reasoning part on the summary itself, which has the user role,
+ * failed at the wire the first time it was tried.
+ *
+ * `pinnedReasoning` is what keeps it there. The replay policy sends back only
+ * the newest reasoning, and this turn stops being the newest on the very next
+ * request; the provider layer honours the pin where the server renders the
+ * field, and sends the same words as the turn's text where it does not, so
+ * the retrospective is never dropped and never sent as unsigned reasoning to
+ * an API that would refuse it.
+ *
+ * Only with a kept tail. A request cannot end on an assistant message, and a
+ * harness note appended after it would put a user turn between it and the
+ * model's next thought -- which, on the servers this is for, is exactly what
+ * removes earlier reasoning from the prompt.
+ */
+export function buildRetrospectiveTurn(text: string): MessageWithMetadata {
+	return {
+		role: "assistant",
+		content: [
+			{ type: "thinking", thinking: text },
+			{ type: "text", text: "I am picking the work back up from here." },
+		],
+		metadata: {
+			kind: COMPACTION_RETROSPECTIVE_KIND,
+			pinnedReasoning: true,
+			userRunSpan: 0,
+		},
+	};
+}
+
 export function buildSummaryMessage(options: {
 	summary: string;
 	fileOps: FileOperationSummary;
@@ -2323,6 +2381,11 @@ export function buildSummaryMessage(options: {
 	 * would be restated as if it still described the work.
 	 */
 	harnessThoughts?: string;
+	/**
+	 * The retrospective travels in a turn of its own, as that turn's reasoning
+	 * (see {@link buildRetrospectiveTurn}), so it is left out of this message.
+	 */
+	retrospectiveAsTurn?: boolean;
 	/**
 	 * The measured record of the tool calls being folded, appended after the
 	 * summary — see {@link renderToolLedger}.
@@ -2344,9 +2407,9 @@ export function buildSummaryMessage(options: {
 	userRequestBudgetChars?: number;
 }): MessageWithMetadata {
 	const thinkingSummary = options.thinkingSummary?.trim();
-	const shownRetrospective = [thinkingSummary, options.harnessThoughts?.trim()]
-		.filter((part): part is string => !!part)
-		.join("\n\n");
+	const shownRetrospective = options.retrospectiveAsTurn
+		? ""
+		: composeRetrospective(thinkingSummary, options.harnessThoughts);
 	const toolLedger = options.toolLedger?.trim();
 	// What is shown is also what is stored, and stored is what the next
 	// generation carries. Keeping the untouched originals in metadata was the
