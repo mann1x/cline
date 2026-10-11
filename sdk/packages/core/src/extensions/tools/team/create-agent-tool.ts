@@ -15,7 +15,12 @@
  */
 
 import { access } from "node:fs/promises";
-import { type AgentTool, createTool, zodToJsonSchema } from "@cline/shared";
+import {
+	type AgentTool,
+	createTool,
+	validateWithZod,
+	zodToJsonSchema,
+} from "@cline/shared";
 import { resolveAgentConfigSearchPaths } from "@cline/shared/storage";
 import { z } from "zod";
 import { type AgentFileFields, writeAgentFile } from "./agent-file";
@@ -108,7 +113,12 @@ export function createCreateAgentTool(options: {
 			"each one becomes a subagent_<name> tool and can run on its own model. " +
 			"Use this when the user asks for an agent, a specialist, or a helper for a kind of task.",
 		inputSchema: zodToJsonSchema(CreateAgentInputSchema),
-		execute: async (input) => {
+		execute: async (rawInput) => {
+			// Checked here because nothing upstream of a tool checks its
+			// arguments: a call without `description` reached the file writer
+			// and came back as "Cannot read properties of undefined (reading
+			// 'trim')", which tells a model nothing about what to send instead.
+			const input = validateWithZod(CreateAgentInputSchema, rawInput);
 			const scope = input.scope ?? "workspace";
 			const searchPaths = resolveAgentConfigSearchPaths(options.workspaceRoot);
 			// resolveAgentConfigSearchPaths puts the workspace directory first when
