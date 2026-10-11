@@ -308,6 +308,155 @@ export interface UnparsedToolCall {
 	 * data inside that parameter, it is the model starting over.
 	 */
 	readonly restarts: number;
+	/**
+	 * What exactly is wrong with the block, as a sentence for the model.
+	 *
+	 * Only when it can be pointed at. "Could not be read" tells a model that it
+	 * failed and nothing about how, and the answer to that, measured, is the
+	 * same block again: 9 of 21 unreadable gemma calls directly followed
+	 * another one carrying the same payload.
+	 */
+	readonly defect?: string;
+	/** How the string delimiter is described to this dialect's model. */
+	readonly dialect?: "qwen" | "gemma";
+}
+
+/** Gemma's call markers. The close is not the mirror image of the open. */
+const GEMMA_TOOL_CALL_OPEN_TAG = "<|tool_call>";
+const GEMMA_TOOL_CALL_CLOSE_TAG = "<tool_call|>";
+/** The one token gemma opens and closes every string argument with. */
+const GEMMA_STRING_DELIMITER = '<|"|>';
+/** An attempted gemma call names a function straight after the opening. */
+const GEMMA_CALL_PATTERN = /<\|tool_call>\s*call:([A-Za-z_][\w.-]*)\s*\{/g;
+
+/**
+ * The stub an unreadable call is replaced with in the transcript.
+ *
+ * The raw block is not kept. Left in place it is the largest thing in the
+ * request, it is written in the model's own call syntax with no result after
+ * it, and the model copies it: one session wrote the same 20,000-character
+ * call five times running, each failing at the same character.
+ */
+export function describeUnreadableToolCallStub(
+	found: UnparsedToolCall,
+): string {
+	const called = found.name ? `\`${found.name}\`` : "a tool";
+	return `(A call to ${called} was written here but could not be read, so nothing ran. Its text is not kept.)`;
+}
+
+function quoteForNudge(text: string): string {
+	return JSON.stringify(text.replace(/\s+/g, " ").trim());
+}
+
+/**
+ * Where a gemma call's arguments stop making sense, in words.
+ *
+ * Not a parser: it never builds a value. It walks the string delimiters in
+ * order and stops at the first place the text between two of them cannot be
+ * what it claims to be. Built from the 21 unreadable calls of one day's runs
+ * (pandorum, 2026-10-10): 15 closed a string with a backtick, 2 dropped the
+ * comma between two arguments, 2 began a second call inside an open string,
+ * one closed a string with \`</code>\` and one never opened it.
+ */
+function describeGemmaDefect(args: string): string | undefined {
+	const positions: number[] = [];
+	for (
+		let at = args.indexOf(GEMMA_STRING_DELIMITER);
+		at !== -1;
+		at = args.indexOf(
+			GEMMA_STRING_DELIMITER,
+			at + GEMMA_STRING_DELIMITER.length,
+		)
+	) {
+		positions.push(at);
+	}
+	const keyBefore = (index: number): string | undefined =>
+		/([A-Za-z_]\w*)\s*:\s*$/.exec(
+			args.slice(Math.max(0, index - 80), index),
+		)?.[1];
+	// A value that closes a string it never opened. Looked for only once the
+	// walk below has lost its place, because a payload is free to contain
+	// text of this shape.
+	const bareValue = (): string | undefined => {
+		const bare =
+			/([A-Za-z_]\w*)\s*:\s*(?!<\|"\|>)([^,{}[\]<]{1,60})<\|"\|>/.exec(args);
+		return bare
+			? `The value of \`${bare[1]}\` (${quoteForNudge(bare[2])}) closes a string it never opened.`
+			: undefined;
+	};
+	for (let pair = 0; pair + 1 < positions.length; pair += 2) {
+		const open = positions[pair];
+		const close = positions[pair + 1];
+		const key = keyBefore(open);
+		const value = args.slice(open + GEMMA_STRING_DELIMITER.length, close);
+		// The string ran on into the next argument's name: what should have
+		// closed it was something else, and the reader only stopped at the
+		// delimiter that was meant to open the next value.
+		const swallowed = /([^\s,]{0,12})\s*,\s*([A-Za-z_]\w*)\s*:\s*$/.exec(value);
+		if (swallowed && key) {
+			const wrong = swallowed[1];
+			const closedWith = wrong
+				? `you wrote ${quoteForNudge(wrong.slice(-8))} where its closing delimiter belongs`
+				: "its closing delimiter is missing";
+			return `The string for \`${key}\` was never closed: ${closedWith}, just before \`${swallowed[2]}\`. A string argument ends with the same delimiter that opened it and with nothing else - not a backtick, not a quote, not a tag.`;
+		}
+		const after = args.slice(close + GEMMA_STRING_DELIMITER.length);
+		const next = /^\s*(\S)/.exec(after)?.[1];
+		if (next && !",}]".includes(next)) {
+			const nextKey = /^\s*([A-Za-z_]\w*)\s*:/.exec(after)?.[1];
+			if (!nextKey) {
+				const bare = bareValue();
+				if (bare) {
+					return bare;
+				}
+			}
+			return nextKey && key
+				? `There is no comma between \`${key}\` and \`${nextKey}\`. Every argument is separated from the next by a comma.`
+				: `After the string for \`${key ?? "an argument"}\` closes, the call continues with ${quoteForNudge(after.slice(0, 24))} where a comma or the end of the call belongs.`;
+		}
+	}
+	if (positions.length % 2 === 1) {
+		const key = keyBefore(positions[positions.length - 1]);
+		return `The string for \`${key ?? "the last argument"}\` was opened and never closed.`;
+	}
+	return bareValue();
+}
+
+function unparsedGemmaToolCallInText(
+	text: string,
+): UnparsedToolCall | undefined {
+	const calls = [...text.matchAll(GEMMA_CALL_PATTERN)];
+	if (calls.length === 0) {
+		return undefined;
+	}
+	const name = calls[calls.length - 1]?.[1];
+	// A second opening while the first call's string is still unterminated is
+	// the model starting over, the same signature the qwen scan reads.
+	let restarts = 0;
+	for (let index = 1; index < calls.length; index += 1) {
+		const between = text.slice(
+			calls[index - 1].index ?? 0,
+			calls[index].index ?? 0,
+		);
+		const delimiters = between.split(GEMMA_STRING_DELIMITER).length - 1;
+		if (delimiters % 2 === 1 || !between.includes(GEMMA_TOOL_CALL_CLOSE_TAG)) {
+			restarts += 1;
+		}
+	}
+	const last = calls[calls.length - 1];
+	const start = (last.index ?? 0) + last[0].length;
+	const end = text.indexOf(GEMMA_TOOL_CALL_CLOSE_TAG, start);
+	const defect =
+		restarts > 0
+			? undefined
+			: describeGemmaDefect(text.slice(start, end === -1 ? undefined : end));
+	return {
+		blocks: calls.length,
+		restarts,
+		dialect: "gemma",
+		...(name ? { name } : {}),
+		...(defect ? { defect } : {}),
+	};
 }
 
 /**
@@ -336,11 +485,20 @@ export function unparsedToolCallInText(
 	// Both tags, not just the opening one: a model asked how tool calls work
 	// writes `<tool_call>` in a sentence, and that is prose about a call rather
 	// than an attempt at one. An attempt names a function.
-	if (
-		!text ||
-		!text.includes(TOOL_CALL_OPEN_TAG) ||
-		!FUNCTION_OPEN_PATTERN.test(text)
-	) {
+	if (!text) {
+		return undefined;
+	}
+	// xOllama's gemma parser does the same thing as the qwen one for the same
+	// reason, in gemma's own syntax, and this scan did not know it: 21 such
+	// turns in one day were each answered with "your last message contained no
+	// tool calls".
+	if (text.includes(GEMMA_TOOL_CALL_OPEN_TAG)) {
+		const gemma = unparsedGemmaToolCallInText(text);
+		if (gemma) {
+			return gemma;
+		}
+	}
+	if (!text.includes(TOOL_CALL_OPEN_TAG) || !FUNCTION_OPEN_PATTERN.test(text)) {
 		return undefined;
 	}
 	let blocks = 0;
@@ -369,20 +527,30 @@ export function unparsedToolCallInText(
 	const restarts = Math.min(Math.max(blocks - 1, 0), unterminated);
 	const named = [...text.matchAll(/<function=([^\s>]+)\s*>/g)];
 	const name = named[named.length - 1]?.[1];
-	return { blocks, restarts, ...(name ? { name } : {}) };
+	return { blocks, restarts, dialect: "qwen", ...(name ? { name } : {}) };
 }
 
 export function buildUnparsedToolCallNudge(found: UnparsedToolCall): string {
 	const called = found.name ? `\`${found.name}\`` : "a tool";
+	const gemma = found.dialect === "gemma";
+	const part = gemma ? "string argument" : "parameter";
 	const restarted =
 		found.restarts > 0
-			? ` You began ${called} and then, part-way through a parameter you never closed, started the whole call again${found.restarts > 1 ? `, ${found.restarts} times over` : ""}. The reader cannot tell an abandoned call from the value of the parameter it was abandoned inside, so all of it came back as text.`
-			: ` It named ${called}, but the block was not well formed and could not be read.`;
+			? ` You began ${called} and then, part-way through a ${part} you never closed, started the whole call again${found.restarts > 1 ? `, ${found.restarts} times over` : ""}. The reader cannot tell an abandoned call from the value of the ${part} it was abandoned inside, so all of it came back as text.`
+			: found.defect
+				? ` It named ${called}. ${found.defect}`
+				: ` It named ${called}, but the block was not well formed and could not be read.`;
+	const how = gemma
+		? " Write the call again, once: every string argument opens and closes with the same string delimiter, arguments are separated by commas, and the call is closed after the last one."
+		: " Emit the call once, in one clean block: open it, give each parameter and close each parameter, then close the function and the call.";
 	return (
 		UNPARSED_TOOL_CALL_NUDGE_PREFIX +
 		restarted +
 		" Nothing ran, so nothing has changed on disk." +
-		" Emit the call once, in one clean block: open it, give each parameter and close each parameter, then close the function and the call." +
+		// The block is gone from the transcript, and a model told about text
+		// it cannot find spends the turn looking for it.
+		" The call is not in this conversation any more, so do not look for it or copy it: write it fresh." +
+		how +
 		" Do not restart a call once you have begun it - finish it, or send nothing and start the next turn fresh."
 	);
 }

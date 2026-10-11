@@ -1373,7 +1373,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			uncheckedEditsGuard,
 			checklistCloseOutGuard,
 		].filter((guard): guard is () => string | undefined => guard !== undefined);
-		const completionPolicyWithChecklistCloseOut =
+		const completionPolicyWithGuards =
 			composedGuards.length > 0
 				? {
 						...runtime.completionPolicy,
@@ -1388,6 +1388,17 @@ export class LocalRuntimeHost implements RuntimeHost {
 						},
 					}
 				: runtime.completionPolicy;
+		// The checklist's mid-run reminders, delivered after a turn's tools.
+		const existingAfterToolsReminder =
+			runtime.completionPolicy?.afterToolsReminder;
+		const completionPolicyWithChecklistCloseOut = taskProgressTracker
+			? {
+					...completionPolicyWithGuards,
+					afterToolsReminder: () =>
+						existingAfterToolsReminder?.() ??
+						taskProgressTracker.takePendingReminder(),
+				}
+			: completionPolicyWithGuards;
 		// The change protocol, where the user has asked for it. It settles at the
 		// boundary rather than through a guard because it decides by running a
 		// command, and because a transaction has to be judged on the deliberate

@@ -928,6 +928,18 @@ export interface AgentRuntimeConfig {
 			| string
 			| undefined;
 		/**
+		 * A reminder the host wants in front of the model once a turn's tool
+		 * calls have run. Read after every such turn and consumed by the read.
+		 *
+		 * There was no channel for this. A host that noticed something during a
+		 * tool call could append to that call's result, and only when the
+		 * result was a plain string -- which the editor, the reader and the
+		 * command runner do not return. The checklist reminder was built on
+		 * that and reached no model in the sessions it was checked against
+		 * (pandorum, 2026-10-10: none in 371 tool calls).
+		 */
+		afterToolsReminder?: () => string | undefined;
+		/**
 		 * How many consecutive turns that produce no tool calls may be nudged to
 		 * continue before the run is allowed to end. Zero (the default) keeps the
 		 * standard contract: a turn with no tool calls completes the run.

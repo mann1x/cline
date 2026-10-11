@@ -390,6 +390,7 @@ export {
 	buildUnparsedToolCallNudge,
 	claimsCompletion,
 	createModeSwitchNoticeTracker,
+	describeUnreadableToolCallStub,
 	formatDisplayUserInput,
 	formatFileContentBlock,
 	formatModeSwitchNotice,

@@ -464,10 +464,47 @@ export interface TaskProgressTrackerOptions {
  * carried a checklist — a model that has stopped updating the list is exactly
  * the one that needs to see it again.
  */
+/**
+ * The nudge for a file changed outside the checklist.
+ *
+ * Two situations, one rule: a call that changes a file is work on a step, so
+ * if no step is open the list is wrong. Either there is no list at all, or the
+ * list says everything is done and the work has carried on. Measured over 22
+ * v9-agentic sessions (pandorum, 2026-10-10): 12 of the 15 that edited never
+ * sent a list; one sent a single item at its 5th call, ticked it at its 6th
+ * and made 7 of its 10 edits afterwards; another re-sent the same finished
+ * one-item list 16 times across five more edits.
+ *
+ * Reads never trigger it. A run that only looks may simply be finished.
+ */
+export function buildUntrackedEditNudge(
+	kind: "missing" | "finished",
+	path: string | undefined,
+): string {
+	const changed = path ? `\`${path}\`` : "a file";
+	if (kind === "missing") {
+		return [
+			`[SYSTEM] You just changed ${changed} and this task has no checklist.`,
+			"Changing a file is work on a step, and that step is not written down anywhere.",
+			"On your next tool call, send `task_progress` with every step this task needs: the one you are working on unticked (`- [ ] ...`), the ones already finished ticked (`- [x] ...`).",
+			"It rides along on the call you were going to make anyway and costs no extra step.",
+		].join(" ");
+	}
+	return [
+		`[SYSTEM] Your checklist says every step is done, and you just changed ${changed}.`,
+		"That change is work on a step the list does not have.",
+		"On your next tool call, send `task_progress` again with that step added and unticked (`- [ ] ...`). Tick a step only after the work for it has been checked, not when you start it.",
+	].join(" ");
+}
+
 export class TaskProgressTracker {
 	private state: TaskProgressState | undefined;
 	private callsSinceReminder = 0;
 	private writesSinceReminder = 0;
+	/** Edits made since a list with an open step was last sent. */
+	private untrackedEdits = 0;
+	/** A reminder waiting for the turn's tool calls to finish. */
+	private pending: string | undefined;
 	private readonly reminderInterval: number;
 	private readonly writeInterval: number;
 	private readonly onUpdate: ((state: TaskProgressState) => void) | undefined;
@@ -518,6 +555,14 @@ export class TaskProgressTracker {
 	 */
 	recordToolCall(input: unknown, toolName?: string): string | undefined {
 		const markdown = readTaskProgress(input);
+		const isWrite =
+			toolName !== undefined && WRITE_CLASS_TOOL_NAMES.has(toolName);
+		// As the list stood before this call. A call that does a step's work
+		// and ticks it in the same breath is the ordinary way a list is
+		// finished; a call that edits after the list was already finished is
+		// the one that needs saying something about.
+		const hadNoList = !this.hasItems();
+		const wasFinished = this.isFinished();
 		if (markdown !== undefined) {
 			const next = buildTaskProgressState(markdown);
 			// An unparseable value is still worth storing for display, but it must
@@ -528,12 +573,20 @@ export class TaskProgressTracker {
 			}
 			this.callsSinceReminder = 0;
 			this.writesSinceReminder = 0;
+			if (this.hasItems() && !this.isFinished()) {
+				this.untrackedEdits = 0;
+			} else if (isWrite && wasFinished) {
+				this.noteUntrackedEdit("finished", input);
+			}
 			return undefined;
 		}
 
 		this.callsSinceReminder += 1;
-		if (toolName !== undefined && WRITE_CLASS_TOOL_NAMES.has(toolName)) {
+		if (isWrite) {
 			this.writesSinceReminder += 1;
+			if (hadNoList || wasFinished) {
+				this.noteUntrackedEdit(hadNoList ? "missing" : "finished", input);
+			}
 		}
 		// Only if it has been already provided: with no list there is nothing to
 		// remind anyone of, and a nudge made of nothing reads as a reprimand.
@@ -559,6 +612,63 @@ export class TaskProgressTracker {
 			return undefined;
 		}
 		return buildTaskProgressReminder(this.state);
+	}
+
+	private hasItems(): boolean {
+		return this.state !== undefined && this.state.total > 0;
+	}
+
+	private isFinished(): boolean {
+		return (
+			this.state !== undefined &&
+			this.state.total > 0 &&
+			this.state.completed >= this.state.total
+		);
+	}
+
+	/**
+	 * Count an edit made with no step open, and queue the nudge when one is due.
+	 *
+	 * The first such edit, then every `writeInterval` after it: said once it
+	 * can be missed, said on every edit it is noise the model learns to skip.
+	 */
+	private noteUntrackedEdit(
+		kind: "missing" | "finished",
+		input: unknown,
+	): void {
+		this.untrackedEdits += 1;
+		const interval = Math.max(1, this.writeInterval);
+		if ((this.untrackedEdits - 1) % interval !== 0) {
+			return;
+		}
+		const path =
+			typeof input === "object" && input !== null
+				? (input as { path?: unknown }).path
+				: undefined;
+		this.pending = buildUntrackedEditNudge(
+			kind,
+			typeof path === "string" && path.trim() ? path.trim() : undefined,
+		);
+	}
+
+	/**
+	 * Hold a reminder for delivery after the turn's tool calls.
+	 *
+	 * For the reminders that could not be appended to a result because the
+	 * result is not text. An untracked-edit nudge already waiting is kept: it
+	 * is the more specific of the two.
+	 */
+	queueReminder(reminder: string): void {
+		if (this.pending === undefined) {
+			this.pending = `[SYSTEM] ${reminder.trim()}`;
+		}
+	}
+
+	/** The reminder waiting to be delivered, cleared by the read. */
+	takePendingReminder(): string | undefined {
+		const pending = this.pending;
+		this.pending = undefined;
+		return pending;
 	}
 }
 
@@ -590,7 +700,15 @@ export function withTaskProgressCapture<TInput, TOutput>(
 		execute: async (input, context) => {
 			const reminder = tracker.recordToolCall(input, tool.name);
 			const result = await tool.execute(input, context);
-			if (reminder === undefined || typeof result !== "string") {
+			if (reminder === undefined) {
+				return result;
+			}
+			if (typeof result !== "string") {
+				// Structured output has a shape its caller parses, so the
+				// reminder is not appended to it -- and it used to be dropped
+				// here instead, on the editor, the reader and the command
+				// runner, which is every tool a working run calls.
+				tracker.queueReminder(reminder);
 				return result;
 			}
 			return `${result}${reminder}` as TOutput;

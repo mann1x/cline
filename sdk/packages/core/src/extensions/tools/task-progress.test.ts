@@ -666,3 +666,87 @@ describe("lists sent without boxes", () => {
 		expect(none.success).toBe(false);
 	});
 });
+
+describe("an edit made outside the checklist", () => {
+	const edit = (extra: Record<string, unknown> = {}) => ({
+		path: "manic_miner.html",
+		new_text: "x",
+		...extra,
+	});
+
+	it("is called out on the first edit of a run that has no list", () => {
+		const tracker = new TaskProgressTracker();
+		tracker.recordToolCall({ files: ["a"] }, "read_files");
+		expect(tracker.takePendingReminder()).toBeUndefined();
+
+		tracker.recordToolCall(edit(), "editor");
+		const nudge = tracker.takePendingReminder() ?? "";
+		expect(nudge.startsWith("[SYSTEM] ")).toBe(true);
+		expect(nudge).toContain("`manic_miner.html`");
+		expect(nudge).toContain("no checklist");
+		// Consumed by the read.
+		expect(tracker.takePendingReminder()).toBeUndefined();
+	});
+
+	it("is not repeated on every edit", () => {
+		const tracker = new TaskProgressTracker({ writeInterval: 3 });
+		const fired = [1, 2, 3, 4, 5].map(() => {
+			tracker.recordToolCall(edit(), "editor");
+			return tracker.takePendingReminder() !== undefined;
+		});
+		expect(fired).toEqual([true, false, false, true, false]);
+	});
+
+	it("is called out when the list was already finished — the one-item list ticked at once", () => {
+		const tracker = new TaskProgressTracker();
+		tracker.recordToolCall(
+			edit({ [TASK_PROGRESS_PARAM]: "- [ ] Fix syntax errors" }),
+			"editor",
+		);
+		// Doing a step's work and ticking it in the same call is how a list
+		// is finished, and says nothing.
+		tracker.recordToolCall(
+			edit({ [TASK_PROGRESS_PARAM]: "- [x] Fix syntax errors" }),
+			"editor",
+		);
+		expect(tracker.takePendingReminder()).toBeUndefined();
+
+		// The next edit is work the list does not have, re-sent or not.
+		tracker.recordToolCall(
+			edit({ [TASK_PROGRESS_PARAM]: "- [x] Fix syntax errors" }),
+			"editor",
+		);
+		expect(tracker.takePendingReminder()).toContain("every step is done");
+	});
+
+	it("stops once a step is open again, and never fires on reads", () => {
+		const tracker = new TaskProgressTracker();
+		tracker.recordToolCall(
+			edit({ [TASK_PROGRESS_PARAM]: "- [x] one\n- [ ] two" }),
+			"editor",
+		);
+		tracker.recordToolCall(edit(), "editor");
+		tracker.recordToolCall({ files: ["a"] }, "read_files");
+		expect(tracker.takePendingReminder()).toBeUndefined();
+	});
+
+	it("holds a reminder for a tool whose result is not text instead of dropping it", async () => {
+		const tracker = new TaskProgressTracker({ reminderInterval: 1 });
+		const structured: AgentTool<unknown, unknown> = {
+			name: "read_files",
+			description: "read",
+			inputSchema: { type: "object", properties: {} },
+			execute: async () => [{ query: "a", result: "b" }],
+		};
+		const wrapped = withTaskProgressCapture(structured, tracker);
+		await wrapped.execute(
+			{ [TASK_PROGRESS_PARAM]: "- [ ] one" },
+			{} as AgentToolContext,
+		);
+		const out = await wrapped.execute({}, {} as AgentToolContext);
+		expect(out).toEqual([{ query: "a", result: "b" }]);
+		const held = tracker.takePendingReminder() ?? "";
+		expect(held.startsWith("[SYSTEM] ")).toBe(true);
+		expect(held).toContain("- [ ] one");
+	});
+});

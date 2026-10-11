@@ -11,6 +11,7 @@ import {
 	type BudgetProjectionResult,
 	buildBudgetProjection,
 } from "./budget-projection";
+import { countCapEvents, synthesizeCapThoughts } from "./cap-thoughts";
 import {
 	buildSummaryMessage,
 	buildSummaryRequest,
@@ -33,6 +34,7 @@ import {
 	resolveThinkingSummaryMaxTokens,
 	serializeConversation,
 	serializeReasoningWithOutcomes,
+	withoutTrailingSpoiledTurn,
 } from "./compaction-shared";
 import {
 	addCallUsage,
@@ -131,7 +133,7 @@ export const SUMMARIZER_SYSTEM_PROMPTS = {
 	// pass that must not carry specifics: they are in the summary already, and
 	// repeating them spends the budget twice for one fact.
 	retrospective:
-		"You are assessing your own reasoning on work that is about to be discarded. This is judgement, not a record — what happened is written up separately. Be terse, and say only what you would want to know before starting the next hour of this task.",
+		"You are saying, in your own voice and in the present tense, how your work on this task is going, from your own reasoning on the part of it that is about to be discarded. This is what you think of it, not a record — what happened is written up separately. Plain prose, first person, short: only what you want in mind before the next hour of this task.",
 } as const;
 
 /**
@@ -541,7 +543,8 @@ export async function runAgenticCompaction(options: {
 	/** Where this compaction's prefill is counted, on either path. */
 	meter?: CompactionMeter;
 }): Promise<CoreCompactionResult | undefined> {
-	const messages = options.context.messages;
+	// N-1: a spoiled turn at the end is neither kept nor summarised.
+	const messages = withoutTrailingSpoiledTurn(options.context.messages);
 	const continuation = options.continuation;
 	const meter = continuation?.meter ?? options.meter;
 	if (messages.length < 2) {
@@ -1173,6 +1176,12 @@ export async function runAgenticCompaction(options: {
 			userRunSpan: countUserRunMessages(messagesToSummarize),
 			generation,
 			thinkingSummary,
+			// Counted over the whole transcript since the last compaction,
+			// kept tail included: the events are what the harness saw, and a
+			// turn does not stop having been discarded because it is recent.
+			harnessThoughts: synthesizeCapThoughts(
+				countCapEvents(options.context.messages),
+			),
 			toolLedger: ledgerEnabled
 				? renderToolLedger(
 						ledgerEntries.filter((entry) =>

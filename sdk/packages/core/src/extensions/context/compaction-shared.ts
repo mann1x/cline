@@ -1227,6 +1227,64 @@ export function findLastAssistantIndex(
 	return -1;
 }
 
+/** What the agent runtime stamps on a turn whose content it replaced. */
+export function isSpoiledTurn(message: MessageWithMetadata): boolean {
+	const spoiled = (message.metadata as { spoiledTurn?: unknown } | undefined)
+		?.spoiledTurn;
+	return typeof spoiled === "object" && spoiled !== null;
+}
+
+function isHarnessReminder(message: MessageWithMetadata): boolean {
+	const metadata = message.metadata as
+		| { userRunSpan?: unknown; displayRole?: unknown }
+		| undefined;
+	return (
+		message.role === "user" &&
+		metadata?.userRunSpan === 0 &&
+		metadata?.displayRole === "system"
+	);
+}
+
+/**
+ * The transcript without a spoiled turn at its end.
+ *
+ * A turn that looped in its reasoning, or wrote a tool call nothing could
+ * read, has already had that content replaced by a note. If it is also the
+ * last thing in the transcript when compaction runs, it is the newest message
+ * and so the first one the recency tail keeps -- and what the model then reads
+ * straight after its replay is a turn in which it did nothing but fail.
+ * Measured before the content was replaced at all (pandorum, 2026-10-10): an
+ * unreadable call survived the compaction it caused and was written again,
+ * unchanged, four more times.
+ *
+ * So the tail is the messages before it, and it is not summarised either:
+ * nothing happened in it. Only when the turn called nothing. A looped turn
+ * that still ended on a tool call did something, the call and its result are
+ * the record of that, and they stay.
+ *
+ * The reminders the harness appended in answer to the turn go with it. They
+ * describe a turn that is no longer there.
+ */
+export function withoutTrailingSpoiledTurn(
+	messages: MessageWithMetadata[],
+): MessageWithMetadata[] {
+	let end = messages.length;
+	while (end > 0 && isHarnessReminder(messages[end - 1])) {
+		end -= 1;
+	}
+	const last = messages[end - 1];
+	if (!last || last.role !== "assistant" || !isSpoiledTurn(last)) {
+		return messages;
+	}
+	const called =
+		Array.isArray(last.content) &&
+		last.content.some((block) => block.type === "tool_use");
+	if (called || end - 1 < 2) {
+		return messages;
+	}
+	return messages.slice(0, end - 1);
+}
+
 export function findLatestSummaryIndex(
 	messages: MessageWithMetadata[],
 ): number {
@@ -2121,29 +2179,26 @@ export function buildSummaryRequest(options: {
  * behaviour it is meant to flag. Hence the ban on specifics -- those are in the
  * summary, and repeating them here spends the budget twice for one fact.
  */
-export const DEFAULT_THINKING_COMPACTION_PROMPT = `You are writing the retrospective that goes at the top of your own context after compaction. It is not a summary — what happened is written up separately, and repeating it here wastes the space this needs.
+export const DEFAULT_THINKING_COMPACTION_PROMPT = `You are writing down what you now think about how this work has been going. It goes back into your own context after compaction, beside the replay of what happened, and you will read it as your own thought — so write it as the thought you are having right now, not as a report on a session.
 
 You are reading your own reasoning from the work about to be discarded, together with what each stretch of it produced: which tool calls landed, which were refused, which were retried unchanged, and which turns ran long.
 
-Write the honest assessment. Be terse. Every line must be something you would want to know before starting the next hour of this task.
+Write in the **first person, present tense**, in plain prose, in the same voice as the replay. You are not assessing something finished: you are in the middle of the work and saying how it is going. No headings, no bullet lists, no preamble, no sign-off.
 
-## What worked
-Approaches that produced progress, stated as approaches rather than as events.
+Say, in whatever order the thought runs:
 
-## What did not
-Approaches that cost time and produced nothing. Name the failure mode: repeating an unchanged call, editing from a stale read, rewriting where narrowing would do, chasing a symptom.
+- what is working — the approaches that are producing progress, as approaches rather than as events;
+- what is not — the approaches that cost time and produce nothing, with the failure named: repeating an unchanged call, editing from a stale read, rewriting where narrowing would do, chasing a symptom;
+- where the time is going — the stretches that are expensive against what they achieve, including any turn where the reasoning runs long without converging;
+- what you do differently from here — concrete enough to act on, short enough to remember.
 
-## Where the time went
-The stretches that were expensive against what they achieved, including any turn where the reasoning ran long without converging.
-
-## Do differently
-What to do instead. Concrete enough to act on, short enough to remember.
+Sentences that open the way these do are the right shape: "What is working is …", "What keeps costing me is …", "Most of my time is going into …", "From here I …".
 
 Rules:
-- No file names, line numbers, code, identifiers or values. Those are in the summary. This is about method.
-- No narration of the sequence of events. Judgement only.
-- Leave out any section with nothing worth saying.
-- Terse throughout. A dozen short lines is a good retrospective; a page is a failed one.`;
+- No file names, line numbers, code, identifiers or values. Those are in the replay. This is about method.
+- No narration of the sequence of events. What you think of it, not what happened.
+- Leave out anything with nothing worth saying.
+- Short. A dozen sentences is a good one; a page is a failed one.`;
 
 export function buildThinkingSummaryRequest(options: {
 	previousThinkingSummary?: string;
@@ -2259,6 +2314,16 @@ export function buildSummaryMessage(options: {
 	/** The retrospective, prepended as this message's own reasoning. */
 	thinkingSummary?: string;
 	/**
+	 * What the harness adds to the retrospective in the model's own voice --
+	 * see `synthesizeCapThoughts`.
+	 *
+	 * Shown with the retrospective and not stored as part of it: the next
+	 * compaction hands `metadata.thinkingSummary` back as the previous
+	 * retrospective, and a count of this generation's events fed into that
+	 * would be restated as if it still described the work.
+	 */
+	harnessThoughts?: string;
+	/**
 	 * The measured record of the tool calls being folded, appended after the
 	 * summary — see {@link renderToolLedger}.
 	 *
@@ -2279,6 +2344,9 @@ export function buildSummaryMessage(options: {
 	userRequestBudgetChars?: number;
 }): MessageWithMetadata {
 	const thinkingSummary = options.thinkingSummary?.trim();
+	const shownRetrospective = [thinkingSummary, options.harnessThoughts?.trim()]
+		.filter((part): part is string => !!part)
+		.join("\n\n");
 	const toolLedger = options.toolLedger?.trim();
 	// What is shown is also what is stored, and stored is what the next
 	// generation carries. Keeping the untouched originals in metadata was the
@@ -2324,7 +2392,7 @@ export function buildSummaryMessage(options: {
 			// `AI_TypeValidationError: The messages do not match the
 			// ModelMessage[] schema` with a perfectly good retrospective inside
 			// it. The heading carries the framing that the block type cannot.
-			...(thinkingSummary
+			...(shownRetrospective
 				? [
 						{
 							type: "text" as const,
@@ -2336,7 +2404,7 @@ export function buildSummaryMessage(options: {
 							// summary:`. Ending the part rather than trusting the
 							// join keeps the two readable however they are
 							// concatenated.
-							text: `Retrospective on the work this summary replaces — your own assessment, carried forward:\n\n${thinkingSummary}\n\n`,
+							text: `Retrospective on the work this summary replaces — your own assessment, carried forward:\n\n${shownRetrospective}\n\n`,
 						},
 					]
 				: []),

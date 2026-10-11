@@ -50,6 +50,7 @@ import {
 	classifyTurnFault,
 	classifyTurnFaultError,
 	describeAdmissionWait,
+	describeUnreadableToolCallStub,
 	estimateTokens,
 	isKvEviction,
 	isKvEvictionError,
@@ -67,6 +68,7 @@ import {
 	TOOL_INPUT_PROGRESS_KIND,
 	TOOL_REJECTION_SUFFIX,
 	trimNonEmpty,
+	type UnparsedToolCall,
 	unparsedToolCallInText,
 } from "@cline/shared";
 import { nanoid } from "nanoid";
@@ -80,6 +82,8 @@ import {
 import {
 	createRepetitionNudger,
 	DEFAULT_REASONING_REPETITION,
+	isRepetitionLoop,
+	measureReasoningRepetition,
 	type RepetitionNudger,
 } from "./reasoning-repetition";
 
@@ -1191,6 +1195,20 @@ export class AgentRuntime {
 	private repetitionNudger: RepetitionNudger | undefined;
 	private repetitionNudgerBuilt = false;
 	/**
+	 * What the nudger said about a turn, kept because the reasoning it read
+	 * is replaced before the turn is recorded (see `replaceSpoiledContent`).
+	 * Asking it twice would also spend its ration twice.
+	 */
+	private readonly repetitionNudges = new WeakMap<
+		AgentMessage,
+		{ nudge: string | undefined }
+	>();
+	/** The unreadable call a turn's text held before it was replaced. */
+	private readonly unreadableCalls = new WeakMap<
+		AgentMessage,
+		UnparsedToolCall
+	>();
+	/**
 	 * A message arrived mid-run and the model has not been asked to resume yet.
 	 *
 	 * Cleared as soon as the resume nudge is sent, so an interjection costs one
@@ -1458,6 +1476,8 @@ export class AgentRuntime {
 	private async getNoToolCallNudgeMessage(
 		text?: string,
 		guardAsked = false,
+		/** The unreadable call this turn held, when its text has been replaced. */
+		unreadable?: UnparsedToolCall,
 	): Promise<string | undefined> {
 		const budget = this.config.completionPolicy?.maxNoToolCallNudges ?? 0;
 		if (this.consecutiveNoToolCallNudges >= budget) {
@@ -1467,7 +1487,7 @@ export class AgentRuntime {
 		// content, so the turn arrives here looking exactly like a model that
 		// called nothing. It is not, and the generic message is false in the one
 		// way most likely to make it repeat itself: it tried to act.
-		const unparsed = unparsedToolCallInText(text);
+		const unparsed = unreadable ?? unparsedToolCallInText(text);
 		if (unparsed) {
 			return buildUnparsedToolCallNudge(unparsed);
 		}
@@ -1587,11 +1607,111 @@ export class AgentRuntime {
 							...setting,
 						});
 		}
-		const reasoning = reasoningTextInMessage(message);
-		if (!reasoning) {
+		if (!message) {
 			return undefined;
 		}
-		return this.repetitionNudger?.inspect(reasoning, this.state.iteration);
+		const known = this.repetitionNudges.get(message);
+		if (known) {
+			return known.nudge;
+		}
+		const reasoning = reasoningTextInMessage(message);
+		const nudge = reasoning
+			? this.repetitionNudger?.inspect(reasoning, this.state.iteration)
+			: undefined;
+		this.repetitionNudges.set(message, { nudge });
+		return nudge;
+	}
+
+	/**
+	 * Take out of a turn what must not be read back: reasoning that collapsed
+	 * into repetition, and a tool call nothing could parse.
+	 *
+	 * Both were left in the transcript, and both are the largest thing in the
+	 * next request. Measured on pandorum (2026-10-10, v9-agentic): four looped
+	 * turns kept 44,000 to 90,000 characters of one passage repeated, and the
+	 * request after each carried all of it; an unreadable call was copied by
+	 * the next turn 9 times in 21, and one of them pushed the request past the
+	 * window into two refusals and a compaction that kept it.
+	 *
+	 * Replaced here, before the turn is recorded, so that no request, no
+	 * compaction and no stored session ever holds the original. The nudges
+	 * that answer the turn are worked out first -- they quote what is about to
+	 * go -- and the message is marked so compaction can leave a turn like this
+	 * out of what it keeps (see `spoiledTurn` in core's compaction).
+	 */
+	private replaceSpoiledContent(message: AgentMessage): void {
+		if (message.role !== "assistant") {
+			return;
+		}
+		const spoiled: { kinds: string[]; removedChars: number } = {
+			kinds: [],
+			removedChars: 0,
+		};
+		const content = [...message.content];
+		const reasoning = reasoningTextInMessage(message);
+		if (reasoning) {
+			// Asked now, while the reasoning is still there to be measured.
+			this.repetitionNudgeFor(message);
+			const verdict = (
+				message.metadata as { reasoningLoop?: ReasoningLoopVerdict } | undefined
+			)?.reasoningLoop;
+			const setting = this.config.reasoningRepetition;
+			const config = { ...DEFAULT_REASONING_REPETITION, ...(setting || {}) };
+			const measurement =
+				setting === false
+					? undefined
+					: measureReasoningRepetition(reasoning, config);
+			const why = verdict
+				? "it collapsed into repeating itself and was cut"
+				: measurement && isRepetitionLoop(measurement, config)
+					? `it repeated one passage ${measurement.maxRepeat} times`
+					: undefined;
+			if (why) {
+				const note = `[SYSTEM] The reasoning of this turn was removed: ${why}. Only what the turn did is kept.`;
+				const first = content.findIndex((part) => part.type === "reasoning");
+				const kept: AgentMessagePart[] = content.filter(
+					(part) => part.type !== "reasoning",
+				);
+				kept.splice(Math.max(0, first), 0, {
+					type: "reasoning",
+					text: note,
+				} as AgentMessagePart);
+				content.splice(0, content.length, ...kept);
+				spoiled.kinds.push("reasoning_loop");
+				spoiled.removedChars += reasoning.length;
+			}
+		}
+		const calledSomething = content.some((part) => part.type === "tool-call");
+		const text = textFromMessage(message);
+		const unreadable = calledSomething
+			? undefined
+			: unparsedToolCallInText(text);
+		if (unreadable) {
+			this.unreadableCalls.set(message, unreadable);
+			const first = content.findIndex((part) => part.type === "text");
+			const kept: AgentMessagePart[] = content.filter(
+				(part) => part.type !== "text",
+			);
+			kept.splice(first < 0 ? kept.length : Math.min(first, kept.length), 0, {
+				type: "text",
+				text: describeUnreadableToolCallStub(unreadable),
+			} as AgentMessagePart);
+			content.splice(0, content.length, ...kept);
+			spoiled.kinds.push("unreadable_tool_call");
+			spoiled.removedChars += text.length;
+		}
+		if (spoiled.kinds.length === 0) {
+			return;
+		}
+		this.config.logger?.debug?.(
+			`Replaced spoiled content in an assistant turn (${spoiled.kinds.join(", ")}): ${spoiled.removedChars} chars removed`,
+		);
+		const mutable = message as {
+			content: AgentMessagePart[];
+			metadata?: Record<string, unknown>;
+		};
+		mutable.content = content;
+		mutable.metadata = { ...(message.metadata ?? {}), spoiledTurn: spoiled };
 	}
 
 	/** Whether this host asks a silent turn to continue at all. */
@@ -2201,9 +2321,15 @@ export class AgentRuntime {
 						reminders.push(STEER_RESUME_REMINDER);
 					}
 					const finalText = textFromMessage(finalAssistantMessage);
+					// The text is a stub by now if it held a call nothing could
+					// read; what it held is what the nudges answer.
+					const unreadableCall = finalAssistantMessage
+						? this.unreadableCalls.get(finalAssistantMessage)
+						: undefined;
 					const noToolCallNudge = await this.getNoToolCallNudgeMessage(
 						finalText,
 						completionReminders.guardAsked,
+						unreadableCall,
 					);
 					if (noToolCallNudge) {
 						this.noToolCallNudgeAsked = true;
@@ -2225,7 +2351,7 @@ export class AgentRuntime {
 					const unparsedCall =
 						this.unparsedCallNudgeSpent || !this.nudgesEnabled()
 							? undefined
-							: unparsedToolCallInText(finalText);
+							: (unreadableCall ?? unparsedToolCallInText(finalText));
 					if (unparsedCall) {
 						this.unparsedCallNudgeSpent = true;
 						reminders.push(buildUnparsedToolCallNudge(unparsedCall));
@@ -2471,6 +2597,14 @@ export class AgentRuntime {
 				const repetition = this.repetitionNudgeFor(finalAssistantMessage);
 				if (repetition) {
 					await this.addUserReminderMessage(repetition);
+				}
+				// Whatever the host noticed while the tools ran. After the tool
+				// results, which is the only place a user message may follow
+				// an assistant turn that made calls.
+				const hostReminder =
+					this.config.completionPolicy?.afterToolsReminder?.();
+				if (hostReminder) {
+					await this.addUserReminderMessage(hostReminder);
 				}
 			}
 
@@ -3295,6 +3429,7 @@ export class AgentRuntime {
 		message: AgentMessage,
 		finishReason: AgentModelFinishReason,
 	): Promise<void> {
+		this.replaceSpoiledContent(message);
 		this.state.messages.push(message);
 		await this.emit({
 			type: "message-added",
