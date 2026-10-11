@@ -502,6 +502,14 @@ export function runBasicCompaction(options: {
 
 	// Output of an earlier compaction is frozen: those messages are kept
 	// as-is and never re-folded, so this pass only processes new messages.
+	//
+	// Kept as-is, but not ahead of what came after them. They used to be
+	// budgeted first, and a pass keeps as much as fits its target -- so on
+	// the next pass they filled the target on their own and everything newer
+	// was dropped, the latest work first. Measured (harness run 0428,
+	// 2026-10-11): three recoveries running sent the byte-identical prompt,
+	// and each time the model started again from a file it had since
+	// rewritten. They are budgeted after the new messages, below.
 	const frozenIndices = new Set<number>();
 	for (let index = 0; index < originalMessages.length; index += 1) {
 		if (sanitizedTypedByIndex.has(index)) {
@@ -509,7 +517,6 @@ export function runBasicCompaction(options: {
 		}
 		if (isPreservedByCompaction(originalMessages[index])) {
 			frozenIndices.add(index);
-			totalTokens += estimate(originalMessages[index]);
 		}
 	}
 
@@ -550,6 +557,33 @@ export function runBasicCompaction(options: {
 		}
 	}
 
+	// What an earlier pass kept, newest first, for as long as it still fits
+	// beside the new messages. The oldest go first, and the survivors are
+	// snapped forward to an assistant message for the same reason the suffix
+	// above is: a tool result cannot stand without the call it answers.
+	const keptFrozenIndices = new Set<number>();
+	{
+		const newestFirst = [...frozenIndices].sort((a, b) => b - a);
+		for (const index of newestFirst) {
+			const cost = estimate(originalMessages[index]);
+			if (totalTokens + cost > totalTargetTokens) {
+				break;
+			}
+			keptFrozenIndices.add(index);
+			totalTokens += cost;
+		}
+		const oldestFirst = [...keptFrozenIndices].sort((a, b) => a - b);
+		if (keptFrozenIndices.size < frozenIndices.size) {
+			for (const index of oldestFirst) {
+				if (originalMessages[index].role === "assistant") {
+					break;
+				}
+				keptFrozenIndices.delete(index);
+				totalTokens -= estimate(originalMessages[index]);
+			}
+		}
+	}
+
 	// Older typed turns: keep each turn's concluding assistant answer when
 	// it fits, newest turns first.
 	const olderFinalByIndex = new Map<number, MessageWithMetadata>();
@@ -560,8 +594,12 @@ export function runBasicCompaction(options: {
 			const candidate = originalMessages[index];
 			// A frozen answer from an earlier compaction already covers this
 			// turn.
-			if (frozenIndices.has(index)) {
+			if (keptFrozenIndices.has(index)) {
 				break;
+			}
+			// One that no longer fits is gone, and nothing stands in for it.
+			if (frozenIndices.has(index)) {
+				continue;
 			}
 			if (candidate.role !== "assistant") {
 				continue;
@@ -593,7 +631,7 @@ export function runBasicCompaction(options: {
 			keptMessages.push(typed);
 			continue;
 		}
-		if (frozenIndices.has(index) || keptExtraIndices.has(index)) {
+		if (keptFrozenIndices.has(index) || keptExtraIndices.has(index)) {
 			keptMessages.push(originalMessages[index]);
 			continue;
 		}

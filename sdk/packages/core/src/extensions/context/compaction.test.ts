@@ -339,6 +339,77 @@ function runForcedBasicCompaction(
 	return result?.messages ?? messages;
 }
 
+describe("basic compaction run again on its own output", () => {
+	function pair(index: number): LlmsProviders.Message[] {
+		return [
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						id: `call-${index}`,
+						name: "read_files",
+						input: { path: `file-${index}` },
+					},
+				],
+			},
+			{
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: `call-${index}`,
+						content: `${"x".repeat(2000)} marker-${index}`,
+					},
+				],
+			},
+		] as LlmsProviders.Message[];
+	}
+
+	// Measured 2026-10-11, harness run 0428: what the first pass kept was
+	// frozen and filled the target, so the second pass had no room for
+	// anything newer and dropped it. Three recoveries in a row sent the
+	// byte-identical 151,842-character prompt, and each time the model
+	// started over from a file it had already rewritten.
+	it("keeps the newest work and lets go of the oldest it kept before", () => {
+		const first: LlmsProviders.Message[] = [
+			{ role: "user", content: "fix the game" },
+			...[0, 1, 2, 3, 4, 5, 6, 7].flatMap(pair),
+		];
+		const target = 7_000;
+		const afterFirst = runForcedBasicCompaction(first, target);
+		expect(JSON.stringify(afterFirst)).toContain("marker-7");
+		expect(JSON.stringify(afterFirst)).not.toContain("marker-0");
+
+		const afterSecond = runForcedBasicCompaction(
+			[...afterFirst, ...pair(8), ...pair(9)],
+			target,
+		);
+		const text = JSON.stringify(afterSecond);
+
+		expect(text).toContain("marker-9");
+		expect(text).toContain("fix the game");
+		// Every result that is kept still has the call it answers.
+		const calls = new Set(
+			afterSecond.flatMap((message) =>
+				Array.isArray(message.content)
+					? message.content.flatMap((part) =>
+							part.type === "tool_use" ? [part.id] : [],
+						)
+					: [],
+			),
+		);
+		for (const message of afterSecond) {
+			if (!Array.isArray(message.content)) continue;
+			for (const part of message.content) {
+				if (part.type === "tool_result") {
+					expect(calls.has(part.tool_use_id)).toBe(true);
+				}
+			}
+		}
+	});
+});
+
 describe("what a compaction reports", () => {
 	// These two numbers are consumed as a ratio by `getLastApiReqTotalTokens`,
 	// which rescales the provider's own total by `tokensAfter / tokensBefore`.
