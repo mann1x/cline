@@ -78,6 +78,56 @@ describe("WebviewGrpcBridge", () => {
 		})
 	})
 
+	describe("updates of a message that is still streaming", () => {
+		const event = { type: "status", payload: { sessionId: "s1", status: "running" } }
+		const partial = (ts: number, text: string) => ({ ts, type: "say" as const, say: "text" as const, text, partial: true })
+		async function sentTexts() {
+			const { sendPartialMessageEvent } = await import("@core/controller/ui/subscribeToPartialMessage")
+			return vi.mocked(sendPartialMessageEvent).mock.calls.map((call) => `${call[0].ts}:${call[0].text}`)
+		}
+
+		it("sends the first at once and then only the newest, once per interval", async () => {
+			vi.useFakeTimers()
+			try {
+				const listener = bridge.createListener()
+				// biome-ignore lint/suspicious/noExplicitAny: test-only event type
+				const push = (text: string) => listener([partial(1, text)], event as any)
+				push("a")
+				push("ab")
+				push("abc")
+				await vi.advanceTimersByTimeAsync(0)
+				expect(await sentTexts()).toEqual(["1:a"])
+				await vi.advanceTimersByTimeAsync(50)
+				expect(await sentTexts()).toEqual(["1:a", "1:abc"])
+				push("abcd")
+				push("abcde")
+				await vi.advanceTimersByTimeAsync(50)
+				expect(await sentTexts()).toEqual(["1:a", "1:abc", "1:abcde"])
+			} finally {
+				vi.useRealTimers()
+			}
+		})
+
+		it("sends what it holds ahead of a finished message, and drops a held update of that same message", async () => {
+			vi.useFakeTimers()
+			try {
+				const listener = bridge.createListener()
+				// biome-ignore lint/suspicious/noExplicitAny: test-only event type
+				const push = (message: Record<string, unknown>) => listener([message as any], event as any)
+				push(partial(1, "a"))
+				push(partial(1, "ab"))
+				push(partial(2, "x"))
+				push({ ts: 1, type: "say", say: "text", text: "abc", partial: false })
+				await vi.advanceTimersByTimeAsync(0)
+				expect(await sentTexts()).toEqual(["1:a", "2:x", "1:abc"])
+				await vi.advanceTimersByTimeAsync(200)
+				expect(await sentTexts()).toEqual(["1:a", "2:x", "1:abc"])
+			} finally {
+				vi.useRealTimers()
+			}
+		})
+	})
+
 	describe("pushStateUpdateFromController", () => {
 		it("should push state from the provided getter", async () => {
 			const { sendStateUpdate } = await import("@core/controller/state/subscribeToState")

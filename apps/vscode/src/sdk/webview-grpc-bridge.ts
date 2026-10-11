@@ -16,6 +16,9 @@ import { Logger } from "@shared/services/Logger"
 import type { MessageTranslatorState } from "./message-translator"
 import type { SessionEventListener } from "./sdk-message-coordinator"
 
+/** The shortest time between two updates of a message that is still streaming. */
+export const PARTIAL_MESSAGE_INTERVAL_MS = 50
+
 /**
  * Manages the bridge between SDK session events and webview gRPC streams.
  *
@@ -33,6 +36,10 @@ import type { SessionEventListener } from "./sdk-message-coordinator"
 export class WebviewGrpcBridge {
 	/** Function to get the full ExtensionState from the controller */
 	private getStateFn?: () => Promise<import("@shared/ExtensionMessage").ExtensionState>
+	/** The newest held update of each message that is still streaming, by `ts`. */
+	private readonly heldPartials = new Map<number, ClineMessage>()
+	/** Running while streaming updates are being held back. */
+	private partialTimer: ReturnType<typeof setTimeout> | undefined
 
 	constructor(_translatorState: MessageTranslatorState) {
 		// translatorState is kept as a constructor param for API compatibility
@@ -69,7 +76,7 @@ export class WebviewGrpcBridge {
 	private handleSessionEvent(messages: ClineMessage[], event: CoreSessionEvent): void {
 		// Push each translated message through the partial message stream
 		for (const message of messages) {
-			this.pushPartialMessage(message)
+			this.queuePartialMessage(message)
 		}
 
 		// Check if we need to push a state update based on event type.
@@ -84,6 +91,57 @@ export class WebviewGrpcBridge {
 			this.pushStateUpdate().catch((err) => {
 				Logger.error("[WebviewGrpcBridge] Failed to push state update:", err)
 			})
+		}
+	}
+
+	/**
+	 * Send a message now, or hold it for the next flush.
+	 *
+	 * An update to a message that is still streaming carries the whole text so
+	 * far, not the new token, so a long reply re-sends itself once per token:
+	 * the rig measured 8 GB posted in seven minutes at 60 tokens a second. Each
+	 * one supersedes the last, so only the newest per message is worth sending,
+	 * and at most one per PARTIAL_MESSAGE_INTERVAL_MS is.
+	 *
+	 * The first update goes out at once and so does anything that is not a
+	 * streaming update. Held updates are sent ahead of it, in the order their
+	 * messages first appeared, so nothing overtakes anything -- except a held
+	 * update of the very message now arriving complete, which is dropped.
+	 */
+	private queuePartialMessage(message: ClineMessage): void {
+		if (message.partial !== true) {
+			this.heldPartials.delete(message.ts)
+			this.flushHeldPartials()
+			void this.pushPartialMessage(message)
+			return
+		}
+		if (this.partialTimer === undefined) {
+			void this.pushPartialMessage(message)
+			this.armPartialTimer()
+			return
+		}
+		this.heldPartials.set(message.ts, message)
+	}
+
+	private armPartialTimer(): void {
+		this.partialTimer = setTimeout(() => {
+			this.partialTimer = undefined
+			if (this.heldPartials.size > 0) {
+				this.flushHeldPartials()
+				this.armPartialTimer()
+			}
+		}, PARTIAL_MESSAGE_INTERVAL_MS)
+		this.partialTimer.unref?.()
+	}
+
+	private flushHeldPartials(): void {
+		if (this.heldPartials.size === 0) {
+			return
+		}
+		const held = [...this.heldPartials.values()]
+		this.heldPartials.clear()
+		for (const message of held) {
+			void this.pushPartialMessage(message)
 		}
 	}
 

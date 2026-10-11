@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { EmptyRequest } from "@shared/proto/cline/common"
 import type { State } from "@shared/proto/cline/state"
 import { afterEach, describe, it, vi } from "vitest"
+import { Logger } from "@/shared/services/Logger"
 import type { Controller } from ".."
 import { acknowledgeStateUpdate, resetStateUpdateGateForTests, sendStateUpdate, subscribeToState } from "./subscribeToState"
 
@@ -104,6 +105,43 @@ describe("state snapshots wait for the webview", () => {
 		acknowledgeStateUpdate()
 		await Promise.resolve()
 		assert.deepEqual(sent, ["first", "a", "c"])
+	})
+
+	it("writes one line when a webview that used to acknowledge has been silent for thirty seconds, and one when it answers", async () => {
+		vi.useFakeTimers()
+		const warn = vi.spyOn(Logger, "warn").mockImplementation(() => {})
+		try {
+			await subscribe()
+			acknowledgeStateUpdate()
+			// A session posting state once a second to a panel that is gone.
+			for (let second = 0; second < 40; second++) {
+				await sendStateUpdate(state(`s${second}`))
+				await vi.advanceTimersByTimeAsync(1000)
+			}
+			const silent = warn.mock.calls.filter((call) => String(call[0]).includes("has not acknowledged"))
+			assert.equal(silent.length, 1)
+			acknowledgeStateUpdate()
+			assert.equal(warn.mock.calls.filter((call) => String(call[0]).includes("acknowledging state again")).length, 1)
+		} finally {
+			warn.mockRestore()
+		}
+	})
+
+	it("says nothing about a webview that keeps acknowledging", async () => {
+		vi.useFakeTimers()
+		const warn = vi.spyOn(Logger, "warn").mockImplementation(() => {})
+		try {
+			await subscribe()
+			acknowledgeStateUpdate()
+			for (let second = 0; second < 40; second++) {
+				await sendStateUpdate(state(`s${second}`))
+				await vi.advanceTimersByTimeAsync(1000)
+				acknowledgeStateUpdate()
+			}
+			assert.equal(warn.mock.calls.length, 0)
+		} finally {
+			warn.mockRestore()
+		}
 	})
 
 	it("stops waiting after two seconds, so a busy or hidden webview delays state and never loses it", async () => {

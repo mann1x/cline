@@ -93,7 +93,16 @@ export async function subscribeToState(
 // The gate arms itself on the first acknowledgement. A client that never sends
 // one (an older webview, a host with no webview) is posted to exactly as before.
 const STATE_ACK_TIMEOUT_MS = 2000
+// How long a webview that used to acknowledge may stay silent before it is
+// written to the log. The extension host is told nothing when a webview's
+// process dies: on 2026-10-11 the panel had been grey for fifteen minutes and
+// the log read as a healthy session. Silence is the only signal there is, and
+// it is not proof -- a webview that is busy looks the same until it answers.
+const STATE_ACK_SILENCE_LOG_MS = 30_000
 let stateAcksSeen = false
+let stateUnackedSince: number | undefined
+let stateUnackedPosts = 0
+let stateSilenceLogged = false
 let stateOutstandingSince: number | undefined
 let heldState: ExtensionState | undefined
 let stateAckTimer: ReturnType<typeof setTimeout> | undefined
@@ -114,12 +123,36 @@ function releaseHeldState(): void {
 /** A webview has applied the last state snapshot it was sent. */
 export function acknowledgeStateUpdate(): void {
 	stateAcksSeen = true
+	if (stateSilenceLogged && stateUnackedSince !== undefined) {
+		Logger.warn(
+			`[webview] the panel is acknowledging state again after ${Math.round((Date.now() - stateUnackedSince) / 1000)} s of silence`,
+		)
+	}
+	stateUnackedSince = undefined
+	stateUnackedPosts = 0
+	stateSilenceLogged = false
+	releaseHeldState()
+}
+
+/** The wait for an acknowledgement ran out. */
+function onStateAckTimeout(): void {
+	const silentFor = stateUnackedSince === undefined ? 0 : Date.now() - stateUnackedSince
+	if (!stateSilenceLogged && silentFor >= STATE_ACK_SILENCE_LOG_MS) {
+		stateSilenceLogged = true
+		Logger.warn(
+			`[webview] the panel has not acknowledged a state update for ${Math.round(silentFor / 1000)} s (${stateUnackedPosts} sent). ` +
+				"It is busy, or its process has died: if the panel is grey or blank, reopen it or reload the window. The session itself is unaffected.",
+		)
+	}
 	releaseHeldState()
 }
 
 /** Test seam: forget every acknowledgement and anything held. */
 export function resetStateUpdateGateForTests(): void {
 	stateAcksSeen = false
+	stateUnackedSince = undefined
+	stateUnackedPosts = 0
+	stateSilenceLogged = false
 	stateOutstandingSince = undefined
 	heldState = undefined
 	if (stateAckTimer) {
@@ -151,10 +184,12 @@ export async function sendStateUpdate(state: ExtensionState): Promise<void> {
 
 	if (stateAcksSeen && activeStateSubscriptions.size > 0) {
 		stateOutstandingSince = Date.now()
+		stateUnackedSince ??= stateOutstandingSince
+		stateUnackedPosts += 1
 		if (stateAckTimer) {
 			clearTimeout(stateAckTimer)
 		}
-		stateAckTimer = setTimeout(releaseHeldState, STATE_ACK_TIMEOUT_MS)
+		stateAckTimer = setTimeout(onStateAckTimeout, STATE_ACK_TIMEOUT_MS)
 		stateAckTimer.unref?.()
 	}
 
