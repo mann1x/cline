@@ -141,6 +141,12 @@ hooksE2e("Hooks - injected context reaches the model and later prompts stay real
 
 		// Replay: reopen the task from history and confirm the persisted
 		// transcript renders the real prompts, still without the raw block.
+		// Once the turn has ended. The fork carries a turn on after a reply
+		// with no tool call, so the reply above is visible while the turn still
+		// runs; on the Windows runner New Task landed inside it, and the task
+		// reopened without its second prompt. This checks the replay of a
+		// finished task.
+		await expect(sidebar.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0, { timeout: 30_000 })
 		await sidebar.getByRole("button", { name: "New Task", exact: true }).first().click()
 		await expect(sidebar.getByText("Recent")).toBeVisible()
 		await sidebar.getByText("hook context probe").first().click()
