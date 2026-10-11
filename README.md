@@ -470,14 +470,39 @@ Cache KVarN 4-bit. C = 29,696 cells (179 groups in the window, plus 53 for the r
 | 88,243 | no | 11.9 | 15.9 | 550 | 557 |
 | 126,373 | no | 9.1 | 13.0 | 491 | 498 |
 
+#### RTX 3090 under Windows 11, CUDA, as an 8 GB and a 10 GB card: Ternary Bonsai 2 27B
+
+A ternary 27B model small enough for an 8 GB card, on a slow link: this RTX 3090 sits on PCIe 4.0 x4 (6.4 GB/s), and the part of the cache kept in RAM crosses that link on every token. The context is 131,072 tokens, and the model's drafter is off, because its weights and cache do not fit beside the model at 8 GB.
+
+These rows start where the others end. Each prompt begins just past C and the next is about 2,000 tokens longer, so every row is past the limit and the table shows how fast the cost grows from there. The uncapped run took 8,122 MiB of video memory for PTQ1_0 and 9,268 MiB for PQ2_0; the rolling window took 6,474 and 8,656 MiB.
+
+PTQ1_0 as an 8 GB card (cap 8,192 MiB). Cache q4_0. C = 35,584 cells.
+
+| Conversation (tokens) | Below the limit? | Answering: rolling window | uncapped | Reading: rolling window | uncapped |
+|---|---|---|---|---|---|
+| 36,638 | no | 74.8 | 74.8 | 1,154 | 1,148 |
+| 38,807 | no | 72.4 | 74.5 | 1,132 | 1,133 |
+| 40,601 | no | 67.9 | 74.0 | 1,116 | 1,121 |
+| 42,804 | no | 50.3 | 73.5 | 1,098 | 1,107 |
+
+PQ2_0 as a 10 GB card (cap 10,240 MiB). Cache q4_0. C = 94,464 cells.
+
+| Conversation (tokens) | Below the limit? | Answering: rolling window | uncapped | Reading: rolling window | uncapped |
+|---|---|---|---|---|---|
+| 95,678 | no | 56.5 | 56.5 | 858 | 859 |
+| 97,672 | no | 55.4 | 56.2 | 849 | 851 |
+| 99,429 | no | 54.1 | 56.1 | 841 | 844 |
+| 101,778 | no | 48.9 | 55.8 | 832 | 836 |
+
 What the tables say:
 
 - **Below the limit the rolling window costs nothing.** Answering is within 2% of the uncapped card, and the output is the same.
 - **Past the limit it slows gradually.** OmniMerge v6 with a q4_0 cache under CUDA answers at 82.5 tokens per second at 59,000 tokens (uncapped: 83.1) and at 40.5 at 126,000 tokens (uncapped: 73.8).
 - **It is far faster than the usual way.** Against layers in RAM on the same budget, the rolling window answers 10 to 16 times faster for OmniMerge v6 and 7 to 19 times faster for the 14B under CUDA, 5 to 7 times faster for Gemma 4, and 5 to 6 times faster on the RX 9070 XT.
+- **A slow link raises the price.** On the RTX 3090's PCIe 4.0 x4 link, Ternary Bonsai 2 PTQ1_0 answers at 50.3 tokens per second 7,200 tokens past the limit, against 73.5 uncapped. With PQ2_0, where far more of the cache stays on the GPU, it is 48.9 against 55.8 at 7,300 tokens past. Reading the prompt is within 1% in every row.
 - **Quantize the cache.** With an f16 cache the cap leaves only 7,680 cells, and answering falls to 6.7 tokens per second at 126,000 tokens, against 40.5 with q4_0.
 
-How it was measured: the opencoti engine (the engine xOllama runs), release 0.10.5-c10, 2026-10-07. On the RTX PRO 6000 (PCIe 5.0): the development engine 2610071819001 with the published libraries. On the RX 9070 XT (PCIe 5.0 x16, Windows 11): the c10 release engine 2610072136001. Both are the same source apart from the version line. The same tables are in the release's [USAGE.md §3.3](https://huggingface.co/ManniX-ITA/opencoti-llamafile/blob/main/USAGE.md).
+How it was measured: the opencoti engine (the engine xOllama runs), release 0.10.5-c10, 2026-10-07. On the RTX PRO 6000 (PCIe 5.0): the development engine 2610071819001 with the published libraries. On the RX 9070 XT (PCIe 5.0 x16, Windows 11): the c10 release engine 2610072136001. Both are the same source apart from the version line. On the RTX 3090 (PCIe 4.0 x4, Windows 11): release 0.10.5-c11, engine 2610101328001, 2026-10-11. The same tables are in the release's [USAGE.md §3.3](https://huggingface.co/ManniX-ITA/opencoti-llamafile/blob/main/USAGE.md).
 
 On Radeon under Windows, use AMD Software 26.9.2 or later for Vulkan.
 
