@@ -472,8 +472,37 @@ describe("useMessageHandlers — send routing", () => {
 		})
 
 		expect(askResponse).toHaveBeenCalledTimes(1)
+		// Plain Enter: the message waits for the run, so the request does not ask
+		// for anything else.
+		expect(askResponse).toHaveBeenCalledWith({
+			responseType: "messageResponse",
+			text: "steer this way",
+			images: [],
+			files: [],
+		})
 		expect(setPendingUserMessage).not.toHaveBeenCalled()
 		expect(setPendingResponse).not.toHaveBeenCalled()
+	})
+
+	it("marks a streaming follow-up sent with Ctrl+Enter to be read without waiting for the run", async () => {
+		mockTurnState = { phase: "streaming", seq: 9 }
+		const streamingConversation: ClineMessage[] = [
+			{ ts: 1, type: "say", say: "task", text: "task" },
+			{ ts: 2, type: "say", say: "text", text: "working", partial: true },
+		]
+		const { result } = renderHook(() => useMessageHandlers(streamingConversation, makeChatState(streamingConversation)))
+
+		await act(async () => {
+			await result.current.handleSendMessage("stop, wrong file", [], [], { sendNow: true })
+		})
+
+		expect(askResponse).toHaveBeenCalledWith({
+			responseType: "messageResponse",
+			text: "stop, wrong file",
+			images: [],
+			files: [],
+			sendNow: true,
+		})
 	})
 
 	it("rejects a pending approval when the composer is submitted with typed feedback", async () => {

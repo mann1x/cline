@@ -74,7 +74,7 @@ describe("SdkFollowupCoordinator", () => {
 		)
 	})
 
-	it("steers a follow-up into the active session while it is running", async () => {
+	it("queues a follow-up onto the active session while it is running", async () => {
 		const activeSession = makeActiveSession({ isRunning: true })
 		const { coordinator, options } = makeCoordinator({ activeSession })
 
@@ -88,11 +88,27 @@ describe("SdkFollowupCoordinator", () => {
 			"resolved: queued",
 			undefined,
 			undefined,
+			"queue",
+		)
+	})
+
+	it("hands a follow-up over at the next turn boundary when the user sends it now", async () => {
+		const activeSession = makeActiveSession({ isRunning: true })
+		const { coordinator, options } = makeCoordinator({ activeSession })
+
+		await coordinator.askResponse("stop, wrong file", undefined, undefined, "messageResponse", "streaming", true)
+
+		expect(options.sessions.fireAndForgetSend).toHaveBeenCalledWith(
+			activeSession.sdkHost,
+			"session-123",
+			"resolved: stop, wrong file",
+			undefined,
+			undefined,
 			"steer",
 		)
 	})
 
-	it("steers a follow-up when the turn phase is still streaming even if the session running flag is stale", async () => {
+	it("queues a follow-up when the turn phase is still streaming even if the session running flag is stale", async () => {
 		const activeSession = makeActiveSession({ isRunning: false })
 		const task = makeTask("session-123")
 		const { coordinator, options } = makeCoordinator({ activeSession, task })
@@ -108,11 +124,11 @@ describe("SdkFollowupCoordinator", () => {
 			"resolved: queued while streaming",
 			undefined,
 			undefined,
-			"steer",
+			"queue",
 		)
 	})
 
-	it("steers a chat-field message submitted while a tool approval is pending", async () => {
+	it("queues a chat-field message submitted while a tool approval is pending", async () => {
 		const activeSession = makeActiveSession({ isRunning: false })
 		const task = makeTask("session-123")
 		const { coordinator, options } = makeCoordinator({ activeSession, task })
@@ -140,7 +156,7 @@ describe("SdkFollowupCoordinator", () => {
 			"resolved: do the next thing after this",
 			undefined,
 			undefined,
-			"steer",
+			"queue",
 		)
 	})
 
@@ -196,7 +212,7 @@ describe("SdkFollowupCoordinator", () => {
 			"resolved: sent during rebuild",
 			undefined,
 			undefined,
-			"steer",
+			"queue",
 		)
 	})
 
@@ -261,7 +277,7 @@ describe("SdkFollowupCoordinator", () => {
 			"resolved: just give me an answer",
 			undefined,
 			undefined,
-			"steer",
+			"queue",
 		)
 	})
 

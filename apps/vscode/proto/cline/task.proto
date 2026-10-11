@@ -14,6 +14,9 @@ service TaskService {
   rpc cancelTask(EmptyRequest) returns (Empty);
   // Cancels a queued prompt by ID
   rpc cancelQueuedPrompt(StringRequest) returns (Empty);
+  // Hands a queued prompt (by ID) to the model at its next turn boundary
+  // instead of after the run: the queued row's "send now".
+  rpc pushQueuedPrompt(StringRequest) returns (Empty);
   // Cancels the currently running background command
   rpc cancelBackgroundCommand(EmptyRequest) returns (Empty);
   // Stop one running sub-agent, named by the id its spawn tool announced.
@@ -218,6 +221,9 @@ message AskResponseRequest {
   string text = 3;
   repeated string images = 4;
   repeated string files = 5;
+  // A message typed while the model is working waits in the queue until the
+  // run returns. True hands it over at the next turn boundary instead.
+  bool send_now = 6;
 }
 
 // Request for editing a past user message and regenerating the conversation after it

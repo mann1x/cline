@@ -59,7 +59,16 @@ describe("createTaskProxy", () => {
 
 		await proxy.handleWebviewAskResponse("messageResponse", "hello", ["img1"], ["file1"])
 
-		expect(onAskResponse).toHaveBeenCalledWith("hello", ["img1"], ["file1"])
+		expect(onAskResponse).toHaveBeenCalledWith("hello", ["img1"], ["file1"], undefined)
+	})
+
+	it("passes on that a message is to be sent now", async () => {
+		const onAskResponse = vi.fn().mockResolvedValue(undefined)
+		const proxy = createTaskProxy("session-123", onAskResponse, vi.fn())
+
+		await proxy.handleWebviewAskResponse("messageResponse", "stop", [], [], true)
+
+		expect(onAskResponse).toHaveBeenCalledWith("stop", [], [], true)
 	})
 
 	it("should delegate yesButtonClicked to onAskResponse", async () => {
@@ -69,7 +78,7 @@ describe("createTaskProxy", () => {
 
 		await proxy.handleWebviewAskResponse("yesButtonClicked", "", [], [])
 
-		expect(onAskResponse).toHaveBeenCalledWith("", [], [])
+		expect(onAskResponse).toHaveBeenCalledWith("", [], [], undefined)
 	})
 
 	it("should delegate noButtonClicked to onAskResponse", async () => {
@@ -79,7 +88,7 @@ describe("createTaskProxy", () => {
 
 		await proxy.handleWebviewAskResponse("noButtonClicked", "", [], [])
 
-		expect(onAskResponse).toHaveBeenCalledWith("", [], [])
+		expect(onAskResponse).toHaveBeenCalledWith("", [], [], undefined)
 	})
 
 	it("should delegate unknown askResponse types to onAskResponse", async () => {
@@ -90,7 +99,7 @@ describe("createTaskProxy", () => {
 		// biome-ignore lint/suspicious/noExplicitAny: testing unknown ask response type
 		await proxy.handleWebviewAskResponse("command" as any, "ls -la", [], [])
 
-		expect(onAskResponse).toHaveBeenCalledWith("ls -la", [], [])
+		expect(onAskResponse).toHaveBeenCalledWith("ls -la", [], [], undefined)
 	})
 
 	it("should store askResponse in taskState", async () => {

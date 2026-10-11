@@ -16,7 +16,7 @@ export interface SdkTaskControlCoordinatorOptions {
 	taskHistory: SdkTaskHistory
 	getTask: () => TaskProxy | undefined
 	setTask: (task: TaskProxy | undefined) => void
-	onAskResponse: (text?: string, images?: string[], files?: string[]) => Promise<void>
+	onAskResponse: (text?: string, images?: string[], files?: string[], sendNow?: boolean) => Promise<void>
 	resetMessageTranslator: () => void
 	/**
 	 * Follow the reopened task's spawn rows in the live translator, so an
@@ -247,7 +247,8 @@ export class SdkTaskControlCoordinator {
 
 				const task = createTaskProxy(
 					taskId,
-					(text?: string, images?: string[], files?: string[]) => this.options.onAskResponse(text, images, files),
+					(text?: string, images?: string[], files?: string[], sendNow?: boolean) =>
+						this.options.onAskResponse(text, images, files, sendNow),
 					() => this.cancelTask(),
 				)
 				if (cleanedMessages.length > 0) {

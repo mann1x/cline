@@ -684,7 +684,7 @@ export class Controller {
 			setTask: (task) => {
 				this.task = task
 			},
-			onAskResponse: (text, images, files) => this.askResponse(text, images, files),
+			onAskResponse: (text, images, files, sendNow) => this.askResponse(text, images, files, sendNow),
 			resetMessageTranslator: () => this.resetMessageTranslatorAndFence(),
 			adoptSpawnRows: (groups) => this.messageTranslatorState.adoptParkedSpawnGroups(groups),
 			// Bump the epoch synchronously before abort so straggler events from the cancelled
@@ -714,7 +714,7 @@ export class Controller {
 			setTask: (task) => {
 				this.task = task
 			},
-			onAskResponse: (text, images, files) => this.askResponse(text, images, files),
+			onAskResponse: (text, images, files, sendNow) => this.askResponse(text, images, files, sendNow),
 			onCancelTask: () => this.cancelTask(),
 			getWorkspaceRoot: () => this.getWorkspaceRoot(),
 			createTempSessionHost: () => this.createRemoteConfigAwareSessionHost(),
@@ -1407,7 +1407,8 @@ export class Controller {
 		if (!this.task) {
 			this.task = createTaskProxy(
 				`auth-error-${ts}`,
-				(text?: string, images?: string[], files?: string[]) => this.askResponse(text, images, files),
+				(text?: string, images?: string[], files?: string[], sendNow?: boolean) =>
+					this.askResponse(text, images, files, sendNow),
 				() => this.cancelTask(),
 			)
 		}
@@ -1598,6 +1599,36 @@ export class Controller {
 	}
 
 	/**
+	 * The queued row's "send now": the message is handed to the model at its
+	 * next turn boundary instead of after the run. Core moves it to the front
+	 * and wakes a lead that is waiting on its agents, as for a message sent
+	 * that way in the first place.
+	 */
+	async pushQueuedPrompt(promptId: string): Promise<void> {
+		const trimmedPromptId = promptId.trim()
+		if (!trimmedPromptId) {
+			Logger.warn("[SdkController] pushQueuedPrompt: Missing prompt id")
+			return
+		}
+
+		const activeSession = this.sessions.getActiveSession()
+		if (!activeSession) {
+			Logger.warn("[SdkController] pushQueuedPrompt: No active session")
+			return
+		}
+
+		const result = await activeSession.sdkHost.pendingPrompts("update", {
+			sessionId: activeSession.sessionId,
+			promptId: trimmedPromptId,
+			delivery: "steer",
+		})
+		if (!result.updated) {
+			Logger.warn(`[SdkController] pushQueuedPrompt: Prompt not found: ${trimmedPromptId}`)
+		}
+		await this.postStateToWebview()
+	}
+
+	/**
 	 * Manually compact (condense) the active task's conversation. Triggered by
 	 * the compact button and the `/compact` (alias `/smol`) slash command.
 	 * Mirrors the CLI's `/compact` local command: runs an SDK manual compaction
@@ -1708,7 +1739,7 @@ export class Controller {
 	 * subscription. We do NOT await the send — the gRPC handler needs to
 	 * return immediately so the webview stays responsive.
 	 */
-	async askResponse(prompt?: string, images?: string[], files?: string[]): Promise<void> {
+	async askResponse(prompt?: string, images?: string[], files?: string[], sendNow?: boolean): Promise<void> {
 		// The sign-in retry answers only the next response to the task that
 		// showed the error; a task opened since then does not inherit it.
 		const retry = this.pendingClineAuthRetry
@@ -1745,7 +1776,7 @@ export class Controller {
 		this.postStateToWebview().catch((error) => {
 			Logger.error("[SdkController] Failed to post state after askResponse phase change:", error)
 		})
-		await this.followups.askResponse(prompt, images, files, this.task?.taskState?.askResponse, turnStateBefore.phase)
+		await this.followups.askResponse(prompt, images, files, this.task?.taskState?.askResponse, turnStateBefore.phase, sendNow)
 	}
 
 	async editMessageAndRegenerate(input: {
@@ -1870,7 +1901,8 @@ export class Controller {
 
 			const task = createTaskProxy(
 				startResult.sessionId,
-				(text?: string, images?: string[], files?: string[]) => this.askResponse(text, images, files),
+				(text?: string, images?: string[], files?: string[], sendNow?: boolean) =>
+					this.askResponse(text, images, files, sendNow),
 				() => this.cancelTask(),
 			)
 			this.task = task
@@ -1972,7 +2004,8 @@ export class Controller {
 
 		const task = createTaskProxy(
 			restored.sessionId,
-			(text?: string, images?: string[], files?: string[]) => this.askResponse(text, images, files),
+			(text?: string, images?: string[], files?: string[], sendNow?: boolean) =>
+				this.askResponse(text, images, files, sendNow),
 			() => this.cancelTask(),
 		)
 		this.task = task

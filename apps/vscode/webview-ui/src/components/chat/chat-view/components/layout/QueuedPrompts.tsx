@@ -39,9 +39,28 @@ interface QueuedPromptsProps {
 
 export function QueuedPrompts({ items = [] }: QueuedPromptsProps) {
 	const [cancellingIds, setCancellingIds] = useState<Set<string>>(() => new Set())
+	const [pushingIds, setPushingIds] = useState<Set<string>>(() => new Set())
 
 	if (items.length === 0) {
 		return null
+	}
+
+	// A queued message waits for the run to return. Pushing it hands it to the
+	// model at its next turn boundary instead: what Ctrl+Enter does at send
+	// time, for a message already waiting.
+	const pushQueuedPrompt = (promptId: string) => {
+		setPushingIds((current) => new Set(current).add(promptId))
+		TaskServiceClient.pushQueuedPrompt(StringRequest.create({ value: promptId }))
+			.catch((error) => {
+				console.error("Failed to send the queued prompt now:", error)
+			})
+			.finally(() => {
+				setPushingIds((current) => {
+					const next = new Set(current)
+					next.delete(promptId)
+					return next
+				})
+			})
 	}
 
 	const cancelQueuedPrompt = (promptId: string) => {
@@ -70,6 +89,7 @@ export function QueuedPrompts({ items = [] }: QueuedPromptsProps) {
 					const attachments = attachmentLabel(item.attachmentCount)
 					const isSteer = item.delivery === "steer"
 					const isCancelling = cancellingIds.has(item.id)
+					const isPushing = pushingIds.has(item.id)
 					// The prompt text renders in spans whose line boxes are 5 spacing units tall
 					// (the global `span { @apply leading-5 }` base style), so every control in the
 					// row is sized/offset against that same 5-unit first line to stay vertically
@@ -97,6 +117,17 @@ export function QueuedPrompts({ items = [] }: QueuedPromptsProps) {
 								<span className="flex h-5 shrink-0 items-center rounded-[3px] border border-editor-group-border px-1.5 text-[10px] leading-none text-description">
 									{attachments}
 								</span>
+							)}
+							{!isSteer && (
+								<button
+									aria-label="Send queued message now"
+									className="-my-1.5 flex size-5 shrink-0 items-center justify-center rounded-[3px] text-description hover:bg-toolbar-hover-background hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+									disabled={isPushing || isCancelling}
+									onClick={() => pushQueuedPrompt(item.id)}
+									title="Send now: the model reads it at its next step instead of when it has finished"
+									type="button">
+									<span aria-hidden="true" className="codicon codicon-arrow-up text-[12px]" />
+								</button>
 							)}
 							<button
 								aria-label="Cancel queued message"

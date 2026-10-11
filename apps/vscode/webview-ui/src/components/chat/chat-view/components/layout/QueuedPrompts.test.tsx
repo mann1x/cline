@@ -4,10 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { QueuedPrompts } from "./QueuedPrompts"
 
 const cancelQueuedPromptMock = vi.hoisted(() => vi.fn())
+const pushQueuedPromptMock = vi.hoisted(() => vi.fn())
 
 vi.mock("@/services/grpc-client", () => ({
 	TaskServiceClient: {
 		cancelQueuedPrompt: (request: unknown) => cancelQueuedPromptMock(request),
+		pushQueuedPrompt: (request: unknown) => pushQueuedPromptMock(request),
 	},
 }))
 
@@ -36,6 +38,24 @@ describe("QueuedPrompts", () => {
 	beforeEach(() => {
 		cancelQueuedPromptMock.mockReset()
 		cancelQueuedPromptMock.mockResolvedValue({})
+		pushQueuedPromptMock.mockReset()
+		pushQueuedPromptMock.mockResolvedValue({})
+	})
+
+	it("sends a queued message now from the row action, and offers that only while it waits", async () => {
+		render(<QueuedPrompts items={queuedPrompts} />)
+
+		// prompt-2 is already a steer: it has nothing left to push.
+		const pushButtons = screen.getAllByRole("button", { name: "Send queued message now" })
+		expect(pushButtons).toHaveLength(1)
+		fireEvent.click(pushButtons[0])
+
+		expect(pushQueuedPromptMock).toHaveBeenCalledTimes(1)
+		expect(pushQueuedPromptMock).toHaveBeenCalledWith({ value: "prompt-1" })
+		expect(cancelQueuedPromptMock).not.toHaveBeenCalled()
+		expect(pushButtons[0]).toBeDisabled()
+
+		await waitFor(() => expect(pushButtons[0]).not.toBeDisabled())
 	})
 
 	it("cancels a queued prompt from the row action", async () => {

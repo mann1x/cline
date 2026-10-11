@@ -11,25 +11,26 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 }))
 
 vi.mock("@/components/chat/ChatTextArea", () => ({
-	default: React.forwardRef<HTMLTextAreaElement, { sendingDisabled: boolean; onSend: () => void }>(
-		({ sendingDisabled, onSend }, ref) => (
-			<>
-				<textarea
-					aria-label="composer"
-					disabled={sendingDisabled}
-					onKeyDown={(event) => {
-						if (event.key === "Enter" && !sendingDisabled) {
-							onSend()
-						}
-					}}
-					ref={ref}
-				/>
-				<button disabled={sendingDisabled} onClick={onSend} type="button">
-					Send
-				</button>
-			</>
-		),
-	),
+	default: React.forwardRef<
+		HTMLTextAreaElement,
+		{ sendingDisabled: boolean; onSend: (options?: { sendNow?: boolean }) => void }
+	>(({ sendingDisabled, onSend }, ref) => (
+		<>
+			<textarea
+				aria-label="composer"
+				disabled={sendingDisabled}
+				onKeyDown={(event) => {
+					if (event.key === "Enter" && !sendingDisabled) {
+						onSend(event.ctrlKey ? { sendNow: true } : undefined)
+					}
+				}}
+				ref={ref}
+			/>
+			<button disabled={sendingDisabled} onClick={() => onSend()} type="button">
+				Send
+			</button>
+		</>
+	)),
 }))
 
 function makeChatState(overrides: Partial<ChatState> = {}): ChatState {
@@ -79,10 +80,14 @@ describe("InputSection", () => {
 		expect(sendButton).not.toBeDisabled()
 
 		fireEvent.click(sendButton)
-		expect(handleSendMessage).toHaveBeenCalledWith("queue this", [], [])
+		expect(handleSendMessage).toHaveBeenCalledWith("queue this", [], [], undefined)
 		handleSendMessage.mockClear()
 		fireEvent.keyDown(composer, { key: "Enter" })
-		expect(handleSendMessage).toHaveBeenCalledWith("queue this", [], [])
+		expect(handleSendMessage).toHaveBeenCalledWith("queue this", [], [], undefined)
+		handleSendMessage.mockClear()
+		// Ctrl+Enter: the same message, not left to wait for the run.
+		fireEvent.keyDown(composer, { key: "Enter", ctrlKey: true })
+		expect(handleSendMessage).toHaveBeenCalledWith("queue this", [], [], { sendNow: true })
 	})
 
 	it("allows submit while approval is pending so typed feedback can reject the approval", () => {
@@ -104,7 +109,7 @@ describe("InputSection", () => {
 		expect(composer).not.toBeDisabled()
 
 		fireEvent.keyDown(composer, { key: "Enter" })
-		expect(handleSendMessage).toHaveBeenCalledWith("queue this", [], [])
+		expect(handleSendMessage).toHaveBeenCalledWith("queue this", [], [], undefined)
 	})
 
 	it("allows submit for legacy active-task state when turnState is unavailable", () => {
@@ -129,7 +134,7 @@ describe("InputSection", () => {
 		expect(composer).not.toBeDisabled()
 
 		fireEvent.keyDown(composer, { key: "Enter" })
-		expect(handleSendMessage).toHaveBeenCalledWith("queue this", [], [])
+		expect(handleSendMessage).toHaveBeenCalledWith("queue this", [], [], undefined)
 	})
 
 	it("allows submit after a failed request so the draft can start the next turn", () => {
@@ -157,7 +162,7 @@ describe("InputSection", () => {
 		expect(composer).not.toBeDisabled()
 
 		fireEvent.keyDown(composer, { key: "Enter" })
-		expect(handleSendMessage).toHaveBeenCalledWith("queue this", [], [])
+		expect(handleSendMessage).toHaveBeenCalledWith("queue this", [], [], undefined)
 	})
 
 	it("keeps submit disabled in the error phase when no recovery is offered", () => {

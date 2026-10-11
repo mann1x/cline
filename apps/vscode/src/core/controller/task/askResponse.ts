@@ -36,7 +36,7 @@ export async function askResponse(controller: Controller, request: AskResponseRe
 		}
 
 		// Call the task's handler for webview responses
-		await controller.task.handleWebviewAskResponse(responseType, request.text, request.images, request.files)
+		await controller.task.handleWebviewAskResponse(responseType, request.text, request.images, request.files, request.sendNow)
 
 		return Empty.create()
 	} catch (error) {

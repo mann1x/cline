@@ -97,7 +97,11 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 
 	// Handle sending a message
 	const handleSendMessage = useCallback(
-		async (text: string, images: string[], files: string[]) => {
+		async (text: string, images: string[], files: string[], options: { sendNow?: boolean } = {}) => {
+			// Only a message typed while the model works has two deliveries: it
+			// waits for the run to return, or (sendNow) is read at the next turn
+			// boundary. Anywhere else the flag changes nothing.
+			const sendNowField = options.sendNow === true ? { sendNow: true } : {}
 			const recoveryDraft = recoverySeq === undefined ? undefined : chatState.getDraftSnapshot()
 			const submittedText = recoveryDraft?.text ?? text
 			const submittedImages = recoveryDraft?.images ?? images
@@ -264,6 +268,7 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 						return false
 					}
 					const request = AskResponseRequest.create({
+						...sendNowField,
 						responseType: "messageResponse",
 						text: messageToSend,
 						images: submittedImages,
@@ -327,6 +332,7 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 				} else if (turnState?.phase === "awaiting_approval") {
 					await sendAskResponseWithPendingState(
 						AskResponseRequest.create({
+							...sendNowField,
 							responseType: "noButtonClicked",
 							text: messageToSend,
 							images,
@@ -344,6 +350,7 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 						// chat would show only the Thinking loader in the meantime.
 						await sendAskResponseWithPendingState(
 							AskResponseRequest.create({
+								...sendNowField,
 								responseType: "yesButtonClicked",
 								text: messageToSend,
 								images,
@@ -380,6 +387,7 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 
 								await sendAskResponseWithPendingState(
 									AskResponseRequest.create({
+										...sendNowField,
 										responseType: "messageResponse",
 										text: messageToSend,
 										images,
@@ -416,6 +424,7 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 						// Continue the conversation / interrupt with feedback.
 						await sendAskResponseWithPendingState(
 							AskResponseRequest.create({
+								...sendNowField,
 								responseType: "messageResponse",
 								text: messageToSend,
 								images,

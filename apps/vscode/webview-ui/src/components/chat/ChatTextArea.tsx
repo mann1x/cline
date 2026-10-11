@@ -82,7 +82,8 @@ interface ChatTextAreaProps {
 	selectedImages: string[]
 	setSelectedImages: React.Dispatch<React.SetStateAction<string[]>>
 	setSelectedFiles: React.Dispatch<React.SetStateAction<string[]>>
-	onSend: () => void
+	/** `sendNow`: Ctrl+Enter (Cmd+Enter), a message for a working model that does not wait for the run. */
+	onSend: (options?: { sendNow?: boolean }) => void
 	onSelectFilesAndImages: () => void
 	shouldDisableFilesAndImages: boolean
 	onHeightChange?: (height: number) => void
@@ -482,10 +483,13 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		const messageHistory = useMessageHistory(inputValue, setInputValue)
 		const recordSent = messageHistory.recordSent
 		const onHistoryKeyDown = messageHistory.onKeyDown
-		const sendMessage = useCallback(() => {
-			recordSent(inputValue)
-			onSend()
-		}, [recordSent, inputValue, onSend])
+		const sendMessage = useCallback(
+			(options?: { sendNow?: boolean }) => {
+				recordSent(inputValue)
+				onSend(options)
+			},
+			[recordSent, inputValue, onSend],
+		)
 		const handleKeyDown = useCallback(
 			(event: React.KeyboardEvent<HTMLTextAreaElement>) => {
 				// Ctrl+Up / Ctrl+Down walk the sent messages. Not while a menu is
@@ -625,7 +629,11 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						// blur desyncs it permanently (programmatic .focus() on an
 						// already-focused element never re-fires onFocus), which hides the
 						// plan/act mode outline until a real blur/refocus cycle.
-						sendMessage()
+						//
+						// Ctrl+Enter (Cmd+Enter on a Mac) is "send now": while the model is
+						// working, plain Enter queues the message until the run returns and
+						// this one is read at the next turn boundary instead.
+						sendMessage(event.ctrlKey || event.metaKey ? { sendNow: true } : undefined)
 					}
 				}
 
@@ -1636,11 +1644,12 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							<div
 								className={cn("input-icon-button", { disabled: sendingDisabled }, "codicon codicon-send text-sm")}
 								data-testid="send-button"
-								onClick={() => {
+								onClick={(event) => {
 									if (!sendingDisabled) {
-										sendMessage()
+										sendMessage(event.ctrlKey || event.metaKey ? { sendNow: true } : undefined)
 									}
 								}}
+								title="Send (Enter). While the model is working, the message waits until it has finished; Ctrl+Enter sends it now."
 							/>
 						</div>
 					</div>

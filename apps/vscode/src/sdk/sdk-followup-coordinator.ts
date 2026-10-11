@@ -62,18 +62,21 @@ export interface SdkFollowupCoordinatorOptions {
 /**
  * How a message typed while the agent is working reaches it.
  *
- * `"queue"` holds the message until the whole run ends; `"steer"` hands it to the
+ * `"queue"` holds the message until the run returns; `"steer"` hands it to the
  * agent at the next turn boundary, where the runtime appends it to the request
  * before the model is called again.
  *
- * Steer is the right default for something typed *during* a run. Measured: a
- * 58-minute, 72-request run in which the user could see the model reasoning down
- * a wrong path and had no way to say so — a queued message would have arrived
- * after the run it was meant to change. Nothing is lost by steering: the runtime
- * consumes at most one steer per turn and the rest of the queue is untouched, so
- * a message sent seconds before the run ends still lands, just at the end.
+ * Queue is the default: the owner's ruling, 2026-10-11, after steer had been
+ * the default since 5e0bd73770 -- a message that cuts into the work in
+ * progress is the user's decision, not ours. Both ways to make it are in the
+ * chat: Ctrl+Enter sends a message that way, and a queued message has a
+ * "send now" button, so the 58-minute run that prompted the steer default
+ * (the user watching the model reason down a wrong path, with no way to say
+ * so) still has its answer.
  */
-const MID_RUN_DELIVERY = "steer" as const
+function midRunDelivery(sendNow: boolean | undefined): "queue" | "steer" {
+	return sendNow ? "steer" : "queue"
+}
 
 export class SdkFollowupCoordinator {
 	constructor(private readonly options: SdkFollowupCoordinatorOptions) {}
@@ -84,6 +87,7 @@ export class SdkFollowupCoordinator {
 		files?: string[],
 		askResponse?: ClineAskResponse,
 		turnPhaseAtSubmit?: TurnPhase,
+		sendNow?: boolean,
 	): Promise<void> {
 		if (this.options.interactions.resolvePendingToolApproval(prompt, askResponse, images, files)) {
 			return
@@ -97,7 +101,7 @@ export class SdkFollowupCoordinator {
 		const task = this.options.getTask()
 		const submittedDuringActiveTurn = turnPhaseAtSubmit === "streaming" || turnPhaseAtSubmit === "awaiting_approval"
 		if (activeSession && (activeSession.isRunning || submittedDuringActiveTurn)) {
-			await this.queueToActiveSession(activeSession, task?.taskId, prompt, images, files)
+			await this.queueToActiveSession(activeSession, task?.taskId, prompt, images, files, sendNow)
 			return
 		}
 
@@ -116,7 +120,7 @@ export class SdkFollowupCoordinator {
 
 			const currentSession = this.options.sessions.getActiveSession()
 			if (currentSession && (currentSession.isRunning || submittedDuringActiveTurn)) {
-				await this.queueToActiveSession(currentSession, task?.taskId, prompt, images, files)
+				await this.queueToActiveSession(currentSession, task?.taskId, prompt, images, files, sendNow)
 				return
 			}
 
@@ -148,9 +152,11 @@ export class SdkFollowupCoordinator {
 		prompt?: string,
 		images?: string[],
 		files?: string[],
+		sendNow?: boolean,
 	): Promise<void> {
 		const { sessionId } = activeSession
-		Logger.log(`[SdkController] Session is running - steering follow-up into session: ${sessionId}`)
+		const delivery = midRunDelivery(sendNow)
+		Logger.log(`[SdkController] Session is running - follow-up joins session ${sessionId} as "${delivery}"`)
 
 		// The submitted turn phase is authoritative when the lifecycle flag is
 		// briefly stale. Keep passive rebuilds behind the active turn while mention
@@ -174,7 +180,7 @@ export class SdkFollowupCoordinator {
 			resolvedPrompt,
 			images,
 			files,
-			MID_RUN_DELIVERY,
+			delivery,
 		)
 	}
 

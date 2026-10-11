@@ -344,6 +344,7 @@ describe("SDK remote-config coordination", () => {
 				undefined,
 				"messageResponse",
 				"error",
+				undefined,
 			)
 
 			// The follow-up answered the error, so a later approval continues the conversation.
@@ -362,6 +363,7 @@ describe("SDK remote-config coordination", () => {
 				undefined,
 				"yesButtonClicked",
 				"error",
+				undefined,
 			)
 		})
 	})

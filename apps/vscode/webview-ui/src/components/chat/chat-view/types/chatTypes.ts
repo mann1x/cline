@@ -91,7 +91,7 @@ export interface MessageHandlers {
 	recoveryActionInFlight: boolean
 	compactTask: () => Promise<boolean>
 	executeButtonAction: (invocation: ButtonActionInvocation) => Promise<boolean>
-	handleSendMessage: (text: string, images: string[], files: string[]) => Promise<void>
+	handleSendMessage: (text: string, images: string[], files: string[], options?: { sendNow?: boolean }) => Promise<void>
 	handleTaskCloseButtonClick: () => void
 	/** Attach an image from the transcript to the message being composed. */
 	handleReferenceImage: (image: string) => void
