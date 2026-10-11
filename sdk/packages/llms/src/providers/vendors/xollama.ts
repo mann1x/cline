@@ -968,6 +968,7 @@ async function sideCallNeed(
 		?.num_predict;
 	const messages = body.messages as Array<{
 		content?: unknown;
+		thinking?: unknown;
 		images?: unknown;
 		tool_calls?: unknown;
 	}>;
@@ -988,6 +989,13 @@ async function sideCallNeed(
 				(typeof message?.content === "string"
 					? message.content
 					: JSON.stringify(message?.content ?? "")) +
+				// The server renders a message's thinking into the prompt where
+				// its template replays reasoning. Left out, the reasoning-replay
+				// probe was booked at 275 cells for a 383-token prompt and every
+				// session opened on a 400.
+				(typeof message?.thinking === "string" && message.thinking !== ""
+					? `\n${message.thinking}`
+					: "") +
 				(message?.tool_calls !== undefined
 					? JSON.stringify(message.tool_calls)
 					: ""),
@@ -1099,8 +1107,14 @@ async function settleSideCall(
 		// Not a refusal for room. Whatever it is, the booking is ours, so the
 		// call is given the chance it had before there was one.
 		release();
+		// With the server's own words: without them this line recurred at the
+		// start of every session and said nothing about why.
+		const why = refusalText(await response.text().catch(() => "")).slice(
+			0,
+			200,
+		);
 		io.logger?.debug?.(
-			`[xollama] a booked side call answered ${response.status}; sent again without its booking`,
+			`[xollama] a booked side call (${side.need} cells) answered ${response.status}${why ? `: ${why}` : ""}; sent again without its booking`,
 		);
 		return io.send(side.plainBody);
 	}

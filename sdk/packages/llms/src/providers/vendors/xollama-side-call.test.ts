@@ -341,3 +341,52 @@ describe("a call outside its conversation on xOllama", () => {
 		);
 	});
 });
+
+describe("what a side call's booking counts", () => {
+	// Measured 2026-10-11 on eleven2go and pandorum: the reasoning-replay probe
+	// (three short messages, one of them carrying `thinking`) was booked at 275
+	// cells and rendered to 383 tokens. The server answered 400, "request (383
+	// tokens) exceeds the available context size (275 tokens)", at the start of
+	// every session. The estimate read `content` and `tool_calls` and never
+	// `thinking`, which the server renders into the prompt.
+	it("counts a message's thinking, which the server renders too", async () => {
+		const tokenized: string[] = [];
+		const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+			const url = new URL(String(input));
+			if (url.pathname === "/api/xollama") {
+				return json({ xollama: true, features: ["context_window_v1"] });
+			}
+			if (url.pathname === "/api/show") {
+				return json({ xollama: {} });
+			}
+			if (url.pathname === "/api/engine") {
+				if (url.searchParams.get("endpoint") === "tokenize") {
+					tokenized.push(String(init?.body));
+					return json({ status: 200, body: { tokens: [1, 2, 3] } });
+				}
+				return json({ status: 200, body: {} });
+			}
+			return json({ message: { content: "ok" } });
+		}) as unknown as typeof fetch;
+		const wire = withXollamaRequestFields(fetchImpl, {});
+		const response = await wire("http://x/api/chat", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "m",
+				messages: [
+					{ role: "user", content: "probe" },
+					{
+						role: "assistant",
+						content: "checking",
+						thinking: "zebra-quartz zebra-quartz zebra-quartz",
+					},
+					{ role: "tool", content: "probe" },
+				],
+				options: { num_predict: 1 },
+			}),
+		});
+		await response.text();
+		expect(tokenized).toHaveLength(1);
+		expect(tokenized[0]).toContain("zebra-quartz zebra-quartz zebra-quartz");
+	});
+});
