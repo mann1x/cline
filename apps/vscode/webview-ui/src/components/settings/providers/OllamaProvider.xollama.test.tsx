@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
 	getOllamaModels: vi.fn(),
 	getOllamaModelParameters: vi.fn(),
 	placeholders: [] as string[],
+	scope: { current: undefined as { scopeKey: string } | undefined },
+	config: { current: {} as Record<string, unknown> },
 }))
 
 vi.mock("@/context/ExtensionStateContext", () => ({
@@ -32,7 +34,7 @@ vi.mock("@/services/grpc-client", () => ({
 vi.mock("@/hooks/useProviderConfig", () => ({
 	useProviderConfig: (id: string) => {
 		mocks.configIds.push(id)
-		return { config: {}, write: vi.fn(), commitSelection: vi.fn() }
+		return { config: mocks.config.current, write: vi.fn(), commitSelection: vi.fn() }
 	},
 	fromProtobufProviderModelOverrides: (overrides: unknown) => overrides,
 }))
@@ -50,7 +52,7 @@ vi.mock("@shared/proto-conversions/models/modelOverrides", () => ({
 vi.mock("../utils/useApiConfigurationHandlers", () => ({
 	useApiConfigurationHandlers: () => ({ handleFieldChange: vi.fn(), handleModeFieldChange: vi.fn() }),
 }))
-vi.mock("../utils/ApiConfigurationScopeContext", () => ({ useApiConfigurationScope: () => undefined }))
+vi.mock("../utils/ApiConfigurationScopeContext", () => ({ useApiConfigurationScope: () => mocks.scope.current }))
 vi.mock("../utils/useProviderApiKeyField", () => ({
 	useProviderApiKeyField: () => ({ savedApiKeyMask: "", handleApiKeyChange: vi.fn() }),
 }))
@@ -84,6 +86,8 @@ describe("the Ollama form for xOllama", () => {
 		vi.clearAllMocks()
 		mocks.configIds.length = 0
 		mocks.placeholders.length = 0
+		mocks.scope.current = undefined
+		mocks.config.current = {}
 		mocks.getOllamaModels.mockResolvedValue({ values: [] })
 		mocks.getOllamaModelParameters.mockResolvedValue({ values: {} })
 	})
@@ -96,6 +100,30 @@ describe("the Ollama form for xOllama", () => {
 		await waitFor(() => expect(mocks.getOllamaModels).toHaveBeenCalled())
 		expect(mocks.getOllamaModels.mock.calls[0]?.[0]).toMatchObject({ value: "http://localhost:22434" })
 		expect(screen.queryByText("ollama.com account")).toBeNull()
+	})
+
+	// An unticked box on an Agents tab used to read as "thinking off" while the
+	// agents ran with the session's thinking: unset there means "as the session
+	// has it", and the panel has to say so.
+	it("says an Agents tab that does not set thinking follows the session", async () => {
+		mocks.scope.current = { scopeKey: "agentsModeApiConfiguration" }
+		render(<OllamaProvider currentMode="act" providerId="xollama" showModelOptions />)
+		expect(screen.getByText(/Not set on this tab/)).toBeInTheDocument()
+		await waitFor(() => expect(mocks.getOllamaModels).toHaveBeenCalled())
+	})
+
+	it("says nothing of the kind once the tab has an answer, or on the session's own panel", async () => {
+		mocks.scope.current = { scopeKey: "agentsModeApiConfiguration" }
+		mocks.config.current = { reasoning: { enabled: false } }
+		const first = render(<OllamaProvider currentMode="act" providerId="xollama" showModelOptions />)
+		expect(screen.queryByText(/Not set on this tab/)).not.toBeInTheDocument()
+		first.unmount()
+
+		mocks.scope.current = undefined
+		mocks.config.current = {}
+		render(<OllamaProvider currentMode="act" providerId="xollama" showModelOptions />)
+		expect(screen.queryByText(/Not set on this tab/)).not.toBeInTheDocument()
+		await waitFor(() => expect(mocks.getOllamaModels).toHaveBeenCalled())
 	})
 
 	it("is unchanged for Ollama", async () => {

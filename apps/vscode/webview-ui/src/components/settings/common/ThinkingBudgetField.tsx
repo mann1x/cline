@@ -4,6 +4,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { DebouncedTextField } from "./DebouncedTextField"
 import { useSamplingWrite } from "./sampling-fields"
+import { useUserCheckboxChange } from "./useUserCheckboxChange"
 
 /**
  * The levels, in the order they escalate, and spelled the way Ollama's panel
@@ -138,6 +139,10 @@ export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
 		[write, composeAndWrite],
 	)
 
+	// Clicks only: the box also announces the panel's own re-render, and
+	// storing that turned "not stated" into a stated answer.
+	const onEnabledChange = useUserCheckboxChange(thinkingEnabled, handleEnabledChange)
+
 	// Same reason the other provider fields wait: rendering before the config
 	// resolves would show Default over a profile that says something else.
 	if (config === undefined) {
@@ -146,9 +151,7 @@ export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
 
 	return (
 		<div className="flex flex-col gap-1">
-			<VSCodeCheckbox
-				checked={thinkingEnabled}
-				onChange={(event) => handleEnabledChange((event.target as HTMLInputElement).checked)}>
+			<VSCodeCheckbox checked={thinkingEnabled} onChange={onEnabledChange}>
 				Enable thinking
 			</VSCodeCheckbox>
 			<p className="text-xs mt-0 mb-1 text-description">

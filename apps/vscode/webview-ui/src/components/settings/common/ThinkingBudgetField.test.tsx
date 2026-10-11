@@ -75,7 +75,24 @@ vi.mock("./DebouncedTextField", () => ({
 	DebouncedTextField: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
 }))
 vi.mock("@vscode/webview-ui-toolkit/react", () => ({
-	VSCodeCheckbox: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+	// The toolkit's checkbox emits `change` when its `checked` property is set
+	// from outside as well as when it is clicked, so both are offered here: a
+	// click reports the opposite of what is shown, an echo reports the same.
+	VSCodeCheckbox: ({
+		checked,
+		onChange,
+		children,
+	}: {
+		checked?: boolean
+		onChange?: (event: { target: { checked: boolean } }) => void
+		children?: ReactNode
+	}) => (
+		<div>
+			<button data-testid="thinking-click" onClick={() => onChange?.({ target: { checked: !checked } })} type="button" />
+			<button data-testid="thinking-echo" onClick={() => onChange?.({ target: { checked: !!checked } })} type="button" />
+			{children}
+		</div>
+	),
 }))
 
 function lastPatch() {
@@ -116,6 +133,25 @@ describe("the thinking budget field", () => {
 
 		expect(select.value).toBe("custom")
 		expect(screen.getByText(/An absolute token count/)).toBeInTheDocument()
+	})
+
+	// Reported 2026-10-11: an Agents tab stored `reasoning: { enabled: false }`
+	// that nobody had chosen, and its agents ran without thinking. The checkbox
+	// announces a change when the panel re-renders it, and that announcement
+	// was stored as though it were a click.
+	it("does not store its own re-render as a choice", () => {
+		mocks.config.current = {}
+		render(<ThinkingBudgetField providerId="opencoti" />)
+		fireEvent.click(screen.getByTestId("thinking-echo"))
+
+		expect(mocks.write).not.toHaveBeenCalled()
+	})
+
+	it("stores a click", () => {
+		render(<ThinkingBudgetField providerId="opencoti" />)
+		fireEvent.click(screen.getByTestId("thinking-click"))
+
+		expect((lastPatch()?.reasoning as { enabled?: boolean } | undefined)?.enabled).toBe(false)
 	})
 
 	it("shows the stored level again once one is picked back", () => {

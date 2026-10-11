@@ -20,6 +20,7 @@ import { RequestTimingsToggle } from "../common/RequestTimingsToggle"
 import { SamplingSection } from "../common/SamplingSection"
 import { useSamplingWrite } from "../common/sampling-fields"
 import { readStoredThinkingLevel } from "../common/ThinkingBudgetField"
+import { useUserCheckboxChange } from "../common/useUserCheckboxChange"
 import { XollamaModelStrip } from "../common/XollamaModelStrip"
 import OllamaModelPicker from "../OllamaModelPicker"
 import { useApiConfigurationScope } from "../utils/ApiConfigurationScopeContext"
@@ -231,6 +232,17 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 		},
 		[write, config?.reasoning?.effort],
 	)
+	// An Agents or Escalation tab that states nothing about thinking runs with
+	// the session's (`buildDelegatedAgentConnection` takes the tab's reasoning
+	// only when it is there). The box is unticked in that state, which read as
+	// "off" while the agents were thinking -- so the panel says which it is.
+	const thinkingFollowsSession =
+		(scope?.scopeKey?.startsWith("agentsModeApiConfiguration") === true ||
+			scope?.scopeKey === "escalationModeApiConfiguration") &&
+		config?.reasoning?.enabled === undefined
+	// Clicks only: the box also announces the panel's own re-render, and
+	// storing that wrote "off" into a tab that had never stated it.
+	const onThinkingEnabledChange = useUserCheckboxChange(thinkingEnabled, handleThinkingEnabledChange)
 
 	/**
 	 * The same draft, for the three numbers above the sampling section.
@@ -465,11 +477,15 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 			    has thinking enabled. */}
 			{config !== undefined && (
 				<div className="flex flex-col gap-1">
-					<VSCodeCheckbox
-						checked={thinkingEnabled}
-						onChange={(event) => handleThinkingEnabledChange((event.target as HTMLInputElement).checked)}>
+					<VSCodeCheckbox checked={thinkingEnabled} onChange={onThinkingEnabledChange}>
 						Enable thinking
 					</VSCodeCheckbox>
+					{thinkingFollowsSession && (
+						<p className="text-xs mt-0 mb-1 text-description">
+							<strong>Not set on this tab</strong>, so this model runs with the session's own thinking setting. Tick
+							the box, or tick and untick it, to give this tab an answer of its own.
+						</p>
+					)}
 					<p className="text-xs mt-0 mb-1 text-description">
 						Asks the model to think in its own reasoning channel instead of into its answer. On a reasoning model this
 						also lets Ollama bound how much of a reply is spent thinking.
