@@ -684,6 +684,12 @@ Cerebriline is developed and measured against these models, published by the sam
 - **Size on disk** splits a conversation into its transcript, its agents' transcripts and their overlays. Delete removes all of it.
 - **News.** The home view shows this fork's own announcements when there are any.
 
+## Several Windows, and the Chat in Its Own
+
+Cerebriline runs in as many VS Code windows as you open. A setting changed in one window shows up in the others within about a second, and a window writes only the setting it changed. A conversation belongs to the window it is open in: another window cannot continue or delete it, and says where it is open. Conversations in different windows run in parallel; on a local model they share one GPU.
+
+**Undock Chat**, in the Cerebriline title bar, moves the chat out of the sidebar into a window of its own, for a second monitor or a small screen. Files and diffs the chat opens go to the main window. **Dock Chat**, or closing the window, brings it back.
+
 ## Scheduled Agents
 
 Run agents on cron schedules for recurring automations. Daily PR summaries, weekly dependency checks, codebase health reports. Schedules persist across restarts and run independently of any terminal session.

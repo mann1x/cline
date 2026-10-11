@@ -125,6 +125,12 @@ the librarian, and browser automation through the Playwright MCP server.
 endpoint that speaks TypeSafe's Jev API, including Ollama 0.35's
 `/v1/systemone` with local decision models, and xOllama.
 
+**Several windows, and the chat in its own.** Open Cerebriline in as many
+VS Code windows as you like: a setting changed in one shows up in the others,
+and a conversation open in one window cannot be changed from another.
+**Undock Chat** moves the chat out of the sidebar into a window of its own, for
+a second monitor; files and diffs still open in the main window.
+
 **Conversation history.** Tag conversations and filter by `#tag`, see what model
 and settings a session ran with, and check its size on disk.
 

@@ -5,6 +5,358 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.247] — 2026-10-11
+
+### Several VS Code windows at once
+
+- **Settings no longer revert.** Every window kept its own copy of the
+  settings from the moment it opened and wrote the whole copy back on any
+  change, undoing what the other windows had changed in between. A window now
+  writes only the setting it changed.
+- **A change shows up in the other windows** within about a second, without a
+  reload. Two things stay with the window they were made in: the Plan/Act
+  mode, and a message being typed.
+- **A conversation belongs to one window.** A conversation that is open in one
+  window cannot be opened, continued or deleted from another; the other window
+  says where it is open. "Delete all" leaves it alone too. It is free again as
+  soon as the first window starts a new task, opens another conversation or
+  closes. A window that crashed stops holding its conversation by itself.
+- Conversations in different windows run in parallel as before. On a local
+  model they still share one GPU: a second conversation may wait for space the
+  first is using.
+
+### The chat in its own window
+
+- **Undock Chat** (the new button in the Cerebriline title bar, or the command
+  of that name) moves the chat out of the sidebar into a window of its own,
+  for a second monitor or a small screen. The conversation carries on.
+- While it is undocked, files and diffs the chat opens go to the main window,
+  not on top of the chat. The window's title bar has the sidebar's buttons
+  (new task, history, settings) and **Dock Chat**.
+- **Dock Chat**, the button left in the sidebar, or closing the window brings
+  the chat back.
+
+### Browser automation with Playwright
+
+- **MCP Servers > Add Local** has presets. **Playwright** fills in Microsoft's
+  Playwright MCP server (`npx @playwright/mcp@latest`): the model gets a real
+  browser it can open pages in, click, fill forms and read.
+- A new built-in skill, `browser-automation`, teaches the model to use it.
+  Like the other built-in skills it ships turned off: switch it on in the
+  Skills tab.
+
+### Synced with upstream Cline 4.1.23
+
+This release brings in 375 upstream commits. What you will notice:
+
+- **A message sent while the model is answering now interrupts it.** The
+  response in flight stops, what it had written stays in the conversation, and
+  the model answers your message next. Before, the message waited for the turn
+  to end.
+- **A failed provider request is retried** when the provider reports a
+  temporary error, instead of ending the turn.
+- **Imported conversations compact** like native ones.
+- **Settings links open the right place**: a link to a setting now opens its
+  tab and scrolls to the control.
+- **The CLI starts faster**: it loads its core on first use.
+- **Yolo mode has a rewritten prompt**, and the instruction to finish with
+  `submit_and_exit` is firmer.
+- With reasoning turned off, more providers are now told so explicitly.
+
+Kept as they were in Cerebriline: the 32,000-token default output cap, the
+compaction trigger and its summary floor, two request retries per call, and
+the task-progress checklist, which upstream removed.
+
+### Fewer turns lost to broken calls, loops and a stale checklist
+
+From a review of a day of v9-agentic runs:
+
+- **A tool call the model wrote wrongly no longer poisons the conversation.**
+  When a gemma-family model closes a string the wrong way, the call cannot be
+  read and nothing runs. Cerebriline now recognises this, tells the model
+  exactly what was wrong, and keeps the broken call out of the conversation.
+  Before, the model was told it had "called nothing" and often wrote the same
+  broken call again.
+- **A second broken call no longer ends the run.** The model used to be asked
+  to rewrite a broken call once per run; a second one, even a different one,
+  ended the run with nothing done. It is now asked again whenever the broken
+  call differs from the last one it was asked about. Writing the very same
+  broken call twice in a row still ends the run.
+- **A compaction is no longer thrown away one turn later.** When a turn of
+  long thinking had been shortened to a note just before the conversation was
+  compacted, the next request sent the whole uncompacted conversation again
+  and compacted a second time. Seen as two compactions within a minute or
+  two of each other. The saved compaction is now matched against the
+  conversation as stored, so it stays in force.
+- **Recovering from a reply cut off by the output limit no longer discards
+  the latest work.** When that recovery had to trim the conversation a second
+  time, it kept what the first trim had kept and dropped everything newer,
+  so the model was sent the same conversation again and started over from a
+  file it had already changed. Newer messages are now kept ahead of older
+  ones.
+- **That recovery now leaves room for the retried reply.** It used to trim
+  the conversation only down to the point where compaction starts, nine
+  tenths of the window, so the retried turn was often cut off again. It now
+  trims to half of the space left after the system prompt and tools.
+- **The summary written during that recovery is kept.** When the summary
+  plus the recent turns came back too large, the whole summary was thrown
+  away after several model calls. The recent turns are now shortened instead.
+- **Agents go to the server their own tab names.** With the session on
+  xOllama on one machine and the Agents tab on xOllama on another, agents
+  were sent to the session's machine and failed with "model not found".
+  The same applies to the Escalation tab.
+- **The thinking checkbox no longer switches itself off.** Loading a saved
+  configuration that says nothing about thinking, after one that had it on,
+  used to store "thinking off" on the tab, and agents then ran without
+  thinking. The box now stores only what you click. If a tab was affected,
+  tick "Enable thinking" on it once and save the configuration again.
+- **An Agents or Escalation tab says when it follows the session.** A tab
+  that does not set thinking runs with the session's setting, and now says so
+  under the checkbox.
+- **`create_agent` says which argument is missing.** Called without a
+  description it used to answer "Cannot read properties of undefined".
+- **Reasoning that repeats itself is removed at once.** A turn that loops on
+  one passage keeps a one-line note in place of the repeated text, so the next
+  request does not carry it.
+- **Compaction leaves such a turn out** when it is the last thing in the
+  conversation.
+- **The task checklist is kept up to date.** Changing a file while the
+  checklist is missing, or says everything is done, now prompts the model to
+  add the step it is working on. Checklist reminders also reach the model
+  during a run now; before, they were dropped on most tools.
+- **The editor asks for `path` and the other short arguments before the
+  text**, which makes a long edit less likely to arrive without them.
+- **After compaction the model's own assessment of the work is carried as
+  its own thinking**, in plain prose, on a turn of its own. It mentions
+  replies lost to the output limit, thinking that ran out of budget and loops,
+  with the advice to work in smaller steps.
+- **Answering a message you send mid-run no longer draws a "make a tool
+  call" prompt.** The model is told only that its answer was passed on and
+  that the work it was doing is still open.
+
+### The panel no longer runs out of memory on a long conversation
+
+On a long conversation the Cerebriline panel could turn grey while the task carried on behind it. The panel's own process had run out of memory: while a model was streaming, the whole conversation was re-sent to the panel up to twenty times a second, and past a couple of thousand rows the panel needed longer to take each copy in than the time between them. The copies it had not reached yet piled up until it died.
+
+- While a model is streaming, the whole conversation is now sent once a second. Each token still arrives straight away as its own small message.
+- The panel takes a copy of the conversation in one pass, and rows that did not change are not redrawn.
+- The panel now tells the extension when it has taken a copy in, and the extension holds the next one until then (or for two seconds at most).
+- A message that is still being written is sent to the panel at most every 50 milliseconds instead of once per token.
+- If the panel stops answering for thirty seconds while a task is running, the extension log now says so, and says again when it comes back. Before, a dead panel left no trace in the log.
+
+Measured on a conversation of 4,000 rows at 60 tokens per second: the panel's memory stays near 100 MB. Before the fix it stopped responding within seconds on 2,000 rows and grew by several gigabytes in a minute and a half.
+
+## [4.100.246] — 2026-10-10
+
+### Code search by meaning: agents and the CLI
+
+- **Agents** the lead starts are now offered `search_codebase`'s `semantic`
+  mode in a folder that is indexed. The index is the lead's; the lines of a
+  passage are given as they are in the agent's own copy of the folder.
+- **CLI**: `--code-index` (or `CLINE_CODE_INDEX=1`) turns the mode on for the
+  folder the run is in. It needs `CLINE_EMBEDDING_BASE_URL` and
+  `CLINE_EMBEDDING_MODEL`, and downloads LanceDB into the data folder the first
+  time.
+
+### xOllama: no more silent five-minute pauses
+
+- On xOllama a run could go silent for about five minutes after a turn whose
+  thinking hit its budget, or around a compaction. The note or summary written
+  then is a request of its own, and it was refused for space the conversation
+  itself was holding while idle; it only got through when the engine's
+  five-minute idle timer released the conversation.
+- Background requests (thinking notes, compaction summaries, titles, commit
+  messages, generated prompts) now ask for exactly the space they need and
+  get an answer at once.
+- If the only thing in the way of a conversation's own note or summary is
+  that conversation's idle window, the window is released straight away and
+  the request runs. The next turn re-reads its prompt once, as it already did
+  after the pause. The chat says so in a status row.
+- In every other case nothing is released. The request waits as before, and
+  the chat now shows a row when it starts waiting and when it is sent.
+- Starting a new conversation right after closing one no longer waits five
+  minutes with the model already loaded. Closing a conversation now gives
+  its window back to xOllama at once; before, it stayed booked until the
+  engine's idle timer ran out.
+
+### Web scraping for any task
+
+- **Settings > Features > Web scraping** (was "Web scraping for the
+  librarian") has a new tick, **Only for the librarian**, on by default: as
+  before, only the librarian scrapes, to make books.
+- Untick it and every task is offered a `web_scrape` tool, with or without
+  the Library: search the web, list a site's pages, read a page, and
+  **crawl** a site into a folder of the workspace.
+- A crawl saves the site itself, unaltered: each page as the site served it
+  and as the browser rendered it, every stylesheet, script, picture and font
+  the pages use, and a markdown reading of each page, with an `index.md`
+  listing it all. Use it for a site you want reworked or used as the source
+  of new pages. Ask for "text only" to keep just the markdown, as notes.
+- How much a site crawl may fetch is yours to set under Features: files
+  (2,000), largest file (25 MB) and total (300 MB).
+- The files go to disk, not into the model's context. The tool says whether
+  the whole site was read or which linked pages were left out.
+- When a crawl stops at one of your limits, the model is told first and asked
+  to tell you: which limit, how much was left out, and the setting that
+  raises it. The limits count the whole folder, so a resume does not get past
+  them until you raise them.
+- A crawl can be continued. Ask to resume it and only the pages not yet read
+  and the files not yet fetched are downloaded; what is in the folder stays.
+- "Allow web scraping" in the API configuration is still needed, and the page
+  and depth limits under Features still cap every crawl.
+- CLI: `--web-scrape` (or `CLINE_WEB_SCRAPE=1`).
+
+### Fewer "are you finished?" reminders
+
+- A task that answered the end-of-run reminder by checking its work and then
+  said it was done in one short sentence was asked again, sometimes twice.
+  That sentence now ends the run.
+- A task that did its work and then said it was complete is no longer asked
+  whether it is finished. Neither is one that reports having stopped at a
+  limit you set. Every other reply that calls nothing is asked as before,
+  including a status with work still to do.
+- The reminder no longer reads as an order to keep going when a task stopped
+  at something only you can change, such as a limit you set.
+- A reply opening "I have completed ..." counts as saying the work is
+  complete, as "... is complete" already did.
+- When the checklist has unticked items at the end of a run, only the
+  checklist reminder is sent. The general reminder used to arrive with it
+  and ask for a one-sentence answer, which left the boxes unticked and
+  brought the checklist reminder back.
+
+### Searching files with very long lines
+
+- A file search for text that sits on a very long line, as in a minified
+  script, answered "No match" although the text was there. It now shows the
+  part of the line around the match and says where in the line it is.
+- A codebase search printed such lines from their start, so the match was
+  often outside what was shown and one search could fill the whole reply.
+  Long lines are now cut around the match.
+- A codebase search could show the lines before a match under the previous
+  file's result, and left out the matching line itself. Both are fixed.
+- A file search called with a list of patterns instead of one pattern was
+  refused. One entry is now taken as the pattern, and several as
+  alternatives, as literal texts too.
+
+### Message history
+
+- What you have typed in the message box and not sent is still there after
+  the window reloads or the panel is closed and reopened.
+- Ctrl+Up and Ctrl+Down in the message box walk through the messages you
+  sent before. Ctrl+Down past the newest gives back what you were typing.
+  On macOS the keys are Cmd+Up and Cmd+Down; in a box that holds text,
+  Cmd+Up first moves the caret to the start, as in any text box.
+- Settings > General > Message history switches this on or off and sets how
+  many messages are kept (50 by default, 500 at most). Switching it off
+  deletes what was kept.
+
+## [4.100.245] — 2026-10-09
+
+### Commands whose end VS Code never reports
+
+VS Code has open faults where a command sent to the terminal finishes but the
+extension is never told: for some multi-line commands and `( ... )` subshells
+the end signal is lost, and for some no output is delivered at all
+(microsoft/vscode#250764, #316556, #324392). The command sat "running" until
+the five-minute limit while the terminal was back at its prompt.
+
+Three cases now end on their own:
+
+- The end marker was read but the stream stayed open: the command finishes two
+  seconds later, with its exit code.
+- Output arrived, nothing reported the end, and the shell's own prompt has been
+  the last thing printed for ten seconds: the command is treated as finished,
+  and the result says the exit code is unknown. This applies to Windows prompts
+  (`PS C:\path>`, `C:\path>`).
+- The command started and nothing else arrived: the result says the output was
+  not delivered, gives the terminal's visible contents, and suggests sending the
+  command on one line or from a file.
+
+A command the shell never started is still reported as such; the two are told
+apart by whether VS Code saw the command start.
+
+### Code search by meaning
+
+The model can now find code by describing it. In a folder you opt in,
+`search_codebase` gains a `semantic` mode: the query is a question in plain
+words ("where is a user's password checked") and the answer is the passages
+that best match, each with its file and lines. It is for when the model does
+not know what a thing is called; regex search and `ask_lsp` are still what it
+uses when it does.
+
+- **Off by default, on per folder**: Settings > Library > *Index the code of
+  this folder*. Building the index sends every source file of the folder to the
+  embedding model set in the API configuration.
+- Files `.gitignore` leaves out are left out, and so are binaries, lockfiles,
+  generated files and anything over 256 KB.
+- The index is brought up to date when a task starts and with **Update now**;
+  only changed files are read and embedded again.
+- In a folder that is not indexed the tool is unchanged.
+- Not yet offered to agents started by the lead, and not in the CLI.
+
+## [4.100.244] — 2026-10-09
+
+### Check for updates, by hand and while the window stays open
+
+The About tab in Settings has a **Check for updates** button. It asks GitHub
+for the latest release at once and answers with a notification: a newer version
+with Install, or that you are on the latest.
+
+The automatic check also runs while a window stays open. It used to run once,
+twenty seconds after the extension started, so a window left open for days
+never heard of a release published after it started. It now looks again every
+hour and asks GitHub at most once a day, as before.
+
+### An error count on each conversation
+
+The history list shows how many errors a conversation had, as a red label on
+its row: failed tool calls, failed requests and stopped runs. It makes the run
+that went wrong findable without opening each one. The count starts with this
+version; earlier conversations show no label.
+
+The report collector (`tools/Collect-CerebrilineReport.ps1`, version 1.2.0)
+shows the same count as an `errors` column in its session picker and writes it
+to `environment.json`. A session recorded before the count existed shows `-`.
+
+### An unfinished shell command is reported, not waited on
+
+When a command has an unclosed quote or bracket, PowerShell does not run it:
+it stops at its continuation prompt (`>>`) and waits for the rest. The tool
+used to wait with it for five minutes and then say the command was still
+running, and the terminal stayed occupied for the rest of the session.
+
+Such a command is now reported after a few seconds as not run, with the reason
+and a note on PowerShell quoting, and the pending input is cancelled so the
+terminal stays usable. Reading the terminal's contents as a fallback is limited
+to five seconds, and the log records how a command ended whenever the shell did
+not report its end.
+
+## [4.100.243] — 2026-10-09
+
+### Scrolling a page is no longer stopped as a loop
+
+Reading a long page in the browser is the same call sent again and again:
+`scroll_down`, with nothing else in it. The loop guard counted those as
+identical calls, on the premise that the same arguments give the same result,
+and stopped the run at the seventh. For a scroll the premise is false: each
+one shows the next part of the page.
+
+`scroll_down` and `scroll_up` are no longer counted by that rule. The answer is
+still compared, so a scroll that keeps showing the same screen, at the end of
+the page, is still warned about.
+
+### A refused `spawn_agent` call says why
+
+`spawn_agent` is not offered when the session's endpoint serves one request at
+a time, which is what an empty "parallel sessions" field means on most
+providers. A model that called it anyway was told only that the tool was
+unavailable, with a list of every other tool, and usually sent the same call
+again.
+
+The refusal now gives the reason, names the configured agents that can be used
+instead, says that calling it again will be refused the same way, and says the
+user can change it by raising the profile's parallel sessions.
+
 ## [4.100.242] — 2026-10-07
 
 ### Documents are read in a process of their own
