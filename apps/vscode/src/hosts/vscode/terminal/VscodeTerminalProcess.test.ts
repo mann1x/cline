@@ -745,6 +745,12 @@ describe("TerminalProcess (Integration Tests)", () => {
 			;(emitSpy as sinon.SinonSpy).calledWith("completed").should.be.true()
 		})
 
+		// Upstream's two tests for a silent command and for the snapshot
+		// fallback are not carried: this fork solved both on its own (the three
+		// tests above) and says so in words of its own -- a silent success
+		// prints "[The command produced no output...]" where upstream asserts
+		// no line at all.
+
 		it("should complete when the terminal closes mid-command", async () => {
 			const terminal = TerminalRegistry.createTerminal().terminal
 			createdTerminals.push(terminal)

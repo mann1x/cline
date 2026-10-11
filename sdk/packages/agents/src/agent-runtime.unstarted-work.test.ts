@@ -23,6 +23,7 @@ class SilentModel implements AgentModel {
 				type: "text-delta",
 				text: more ? "I will fix it next." : "Done.",
 			} as AgentModelEvent;
+			yield { type: "finish", reason: "stop" } as AgentModelEvent;
 		})();
 	}
 }

@@ -14,6 +14,7 @@ import {
 	measureRequestReasoningChars,
 	type PrepareTurnUsage,
 } from "@cline/shared";
+import { resolveConnectionProviderConfig } from "../../services/llms/handler-factory";
 import {
 	captureCompactionBudgetEmergency,
 	captureCompactionExecuted,
@@ -47,6 +48,7 @@ import {
 	createTokenEstimator,
 	DEFAULT_MAX_INPUT_TOKENS,
 	dropsTailAtThisCompaction,
+	findLatestSummaryIndex,
 	getCompactionSummaryMetadata,
 	type MeasureReportedTokens,
 	resolveCompactionTriggerTokens,
@@ -116,6 +118,12 @@ export interface ContextPipelinePrepareTurnInput {
 	 * (`compact_agents`). Runs as a manual compaction on this turn.
 	 */
 	compactionRequested?: boolean;
+	/**
+	 * Actual provider-reported input tokens for the previous request this run,
+	 * used as a floor on the char-based estimate so dense content still triggers
+	 * compaction. See AgentPrepareTurnContext.previousRequestInputTokens.
+	 */
+	previousRequestInputTokens?: number;
 	emitStatusNotice?: (
 		message: string,
 		metadata?: Record<string, unknown>,
@@ -197,6 +205,8 @@ export interface ContextCompactionPrepareTurnOptions {
 	 * must never close the lead.
 	 */
 	sideCallOf?: string;
+	/** Overrides layered over `config.compaction`. */
+	compaction?: Partial<CoreCompactionConfig>;
 }
 
 /**
@@ -735,6 +745,9 @@ export function createContextCompactionPrepareTurn(
 		| "providerConfig"
 		| "providerId"
 		| "modelId"
+		| "apiKey"
+		| "baseUrl"
+		| "headers"
 		| "compaction"
 		| "logger"
 		| "telemetry"
@@ -752,8 +765,11 @@ export function createContextCompactionPrepareTurn(
 			context: ContextPipelinePrepareTurnInput,
 	  ) => Promise<ContextPipelinePrepareTurnResult | undefined>)
 	| undefined {
-	const userCompaction = config.compaction;
-	if (userCompaction?.enabled !== true) {
+	const userCompaction: CoreCompactionConfig = {
+		...config.compaction,
+		...options.compaction,
+	};
+	if (userCompaction.enabled !== true) {
 		return undefined;
 	}
 
@@ -1435,8 +1451,14 @@ export function createContextCompactionPrepareTurn(
 		const meter = createCompactionMeter(context.reportUsage);
 		const builtinOptions: BuiltinCompactionStrategyOptions = {
 			context: compactionContext,
+			// Resolved per turn from the live session config, with the same
+			// precedence as the main request, so the summarizer never sends
+			// credentials the host has since refreshed or replaced.
 			providerConfig: {
-				...providerConfig,
+				...resolveConnectionProviderConfig(config),
+				// The lead's summaries say whose side call they are; an
+				// agent's never does (see `sideCallOf` on the options).
+				...(options.sideCallOf ? { sideCallOf: options.sideCallOf } : {}),
 				abortSignal: context.abortSignal,
 			},
 			compaction: userCompaction,
@@ -2060,6 +2082,63 @@ export function createContextCompactionPrepareTurn(
 		}
 
 		return result;
+	};
+}
+
+/**
+ * Compaction policy for resuming a session imported from another coding agent.
+ * The imported transcript keeps that agent's tool names and input schemas
+ * verbatim, which a model continuing it may try to call, so the first turn
+ * folds the whole foreign history into a summary before the model request
+ * (manual mode, agentic strategy, nothing preserved but the new prompt).
+ * Runs regardless of the session's auto-compaction setting, tags its status
+ * notices with `importedFrom` so clients can label the wait, and on failure
+ * falls back to the raw transcript. It makes one attempt per session start
+ * (an aborted attempt does not count) and stands down once the working
+ * context already opens with a compaction summary, which is how a resumed
+ * sidecar presents; every other turn defers to `next`, the session's normal
+ * compaction (if any).
+ */
+export function createImportedHistoryCompactionPrepareTurn(input: {
+	config: Parameters<typeof createContextCompactionPrepareTurn>[0];
+	/** Source tool id from the session's `importedFrom` metadata. */
+	importedFrom: string;
+	next?: ContextPipelinePrepareTurn;
+}): ContextPipelinePrepareTurn {
+	// Pass the live config through (not a copy) so the summary uses the
+	// credentials and model current on the resumed turn.
+	const summarize = createContextCompactionPrepareTurn(input.config, {
+		mode: "manual",
+		compaction: { enabled: true, strategy: "agentic", preserveRecentTokens: 0 },
+	});
+	let pending = summarize !== undefined;
+	return async (context) => {
+		if (pending && summarize && findLatestSummaryIndex(context.messages) < 0) {
+			try {
+				const result = await summarize({
+					...context,
+					emitStatusNotice: (message, metadata) =>
+						context.emitStatusNotice?.(message, {
+							...metadata,
+							importedFrom: input.importedFrom,
+						}),
+				});
+				pending = false;
+				if (result?.messages) return result;
+			} catch (error) {
+				if (context.abortSignal.aborted) throw error;
+				pending = false;
+				input.config.logger?.log(
+					"Failed to summarize imported session on resume; continuing with the raw transcript",
+					{
+						severity: "warn",
+						sessionId: input.config.sessionId,
+						...describeCompactionError(error),
+					},
+				);
+			}
+		}
+		return input.next?.(context);
 	};
 }
 

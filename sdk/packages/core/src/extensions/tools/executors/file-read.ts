@@ -12,6 +12,10 @@ import { Readable } from "node:stream";
 import type { AgentToolContext } from "@cline/shared";
 import { resolveExistingFilePath } from "@cline/shared/storage";
 import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
+import {
+	TOOL_RESULT_CACHE_MISS,
+	ToolResultCache,
+} from "../../../session/services/tool-result-cache";
 import type { ReadFileRequest } from "../schemas";
 import type { FileReadExecutor } from "../types";
 import { unreadableDocumentMessage } from "./document/formats";
@@ -423,6 +427,24 @@ export function createFileReadExecutor(
 		// copy this text into `editor` needs it without the gutter; everyone
 		// else keeps the line numbers they address edits by.
 		const withLineNumbers = request.line_numbers ?? includeLineNumbers;
+		// An oversized tool result the session cached, read back by its uri.
+		// Not a file: no receipts, no stamp, no overlay.
+		if (filePath.startsWith("cline://")) {
+			context.signal?.throwIfAborted();
+			const cache = context.metadata?.toolResultCache;
+			if (!(cache instanceof ToolResultCache))
+				throw new Error(TOOL_RESULT_CACHE_MISS);
+			const cached = await readTextWindow(
+				{ kind: "text", text: cache.read(filePath) },
+				encoding,
+				withLineNumbers,
+				start_line,
+				end_line,
+				context.signal,
+				maxReadChars,
+			);
+			return cached.text;
+		}
 		let initialPath = path.isAbsolute(filePath)
 			? path.normalize(filePath)
 			: path.resolve(cwd ?? process.cwd(), filePath);

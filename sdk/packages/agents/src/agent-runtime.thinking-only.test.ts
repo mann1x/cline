@@ -30,6 +30,7 @@ class ScriptedModel implements AgentModel {
 			if (turn.text) {
 				yield { type: "text-delta", text: turn.text } as AgentModelEvent;
 			}
+			yield { type: "finish", reason: "stop" } as AgentModelEvent;
 		})();
 	}
 }

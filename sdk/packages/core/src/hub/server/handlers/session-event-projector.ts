@@ -328,6 +328,7 @@ async function projectAgentEvent(
 						outputTokens: agentEvent.outputTokens,
 						cacheReadTokens: agentEvent.cacheReadTokens ?? 0,
 						cacheWriteTokens: agentEvent.cacheWriteTokens ?? 0,
+						reasoningTokenCount: agentEvent.reasoningTokenCount,
 						totalCost: agentEvent.cost ?? 0,
 						// Named explicitly like everything else in this payload,
 						// which is the trap it is: a field the projector does not

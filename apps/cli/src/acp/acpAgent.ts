@@ -38,6 +38,7 @@ import { createCliCore } from "../session/session";
 import { isClineOrgIndividualInferenceSubscriptionErrorMessage } from "../utils/cline-pass-errors";
 import { getCliBuildInfo } from "../utils/common";
 import { randomSessionId, resolveWorkspaceRoot } from "../utils/helpers";
+import type { ResolvedCliReasoning } from "../utils/reasoning";
 import { resolveSandboxBinariesDir } from "../utils/sandbox-binaries";
 import type { Config } from "../utils/types";
 import {
@@ -113,16 +114,18 @@ export class AcpAgent implements Agent {
 	private readonly conn: AgentSideConnection;
 	private readonly providerSettingsManager = new ProviderSettingsManager();
 	private readonly defaultAutoApproveTools: boolean;
+	private readonly reasoning: ResolvedCliReasoning;
 
 	/** Set after a successful `authenticate` call. */
 	private authResult?: AcpAuthResult;
 
 	constructor(
 		conn: AgentSideConnection,
-		options?: { autoApproveTools?: boolean },
+		options?: { autoApproveTools?: boolean; reasoning?: ResolvedCliReasoning },
 	) {
 		this.conn = conn;
 		this.defaultAutoApproveTools = options?.autoApproveTools ?? false;
+		this.reasoning = options?.reasoning ?? {};
 	}
 
 	async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
@@ -780,7 +783,10 @@ export class AcpAgent implements Agent {
 			execution: undefined,
 			verbose: false,
 			sandbox: false,
-			thinking: false,
+			// From `--thinking`; without the flag ACP sessions keep running without
+			// reasoning, as before.
+			thinking: this.reasoning.thinking ?? false,
+			reasoningEffort: this.reasoning.reasoningEffort,
 			outputMode: "text",
 			mode: session.currentMode,
 			defaultToolAutoApprove: false,

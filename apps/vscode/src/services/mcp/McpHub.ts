@@ -2085,7 +2085,9 @@ export class McpHub {
 
 				const urlValidation = z.string().url().safeParse(expandedConfig.url)
 				if (!urlValidation.success) {
-					throw new Error(`Invalid server URL: ${expandedConfig.url}. Please provide a valid URL.`)
+					// Do not echo the URL: whether as entered or with environment variables
+					// expanded, it can carry credentials, and this error is logged.
+					throw new Error("Invalid server URL. Enter a full URL such as https://example.com/mcp.")
 				}
 
 				const parsedConfig = ServerConfigSchema.parse(expandedConfig)

@@ -13,7 +13,6 @@ const mockExtensionState = vi.hoisted(() => ({
 		compactionStrategy: "basic",
 		subagentsEnabled: false,
 		worktreesEnabled: { user: true, featureFlag: true },
-		focusChainSettings: { enabled: false, remindClineInterval: 6 },
 		remoteConfigSettings: {},
 		backgroundEditEnabled: false,
 		editVerificationSettings: { mode: "nudge" },
@@ -25,7 +24,7 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 	useExtensionState: vi.fn(() => mockExtensionState.value),
 }))
 
-vi.mock("../utils/settingsHandlers", () => ({
+vi.mock("@/components/settings/utils/settingsHandlers", () => ({
 	updateSetting: (...args: unknown[]) => mockUpdateSetting(...args),
 }))
 
@@ -48,8 +47,8 @@ describe("FeatureSettingsSection", () => {
 		const advancedSection = container.querySelector("#advanced-features")
 		const agentSection = container.querySelector("#agent-features")
 
-		expect(advancedSection?.querySelector("#Hooks")).toBeTruthy()
-		expect(agentSection?.querySelector("#Hooks")).toBeNull()
+		expect(advancedSection?.querySelector("#hooks-setting-control")).toBeTruthy()
+		expect(agentSection?.querySelector("#hooks-setting-control")).toBeNull()
 	})
 
 	it("renders Feature Tips toggle in the Editor section", () => {
@@ -60,8 +59,8 @@ describe("FeatureSettingsSection", () => {
 		const editorSection = container.querySelector("#optional-features")
 		const agentSection = container.querySelector("#agent-features")
 
-		expect(editorSection?.querySelector('[id="Feature Tips"]')).toBeTruthy()
-		expect(agentSection?.querySelector('[id="Feature Tips"]')).toBeNull()
+		expect(editorSection?.querySelector("#show-feature-tips-setting-control")).toBeTruthy()
+		expect(agentSection?.querySelector("#show-feature-tips-setting-control")).toBeNull()
 	})
 
 	it("renders the Compaction Strategy setting in the Agent section", () => {
@@ -114,12 +113,9 @@ describe("FeatureSettingsSection", () => {
 	})
 
 	it("calls updateSetting with hooksEnabled when toggled", () => {
-		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
-		const hooksSwitch = container.querySelector("#Hooks")
-		expect(hooksSwitch).toBeTruthy()
-
-		fireEvent.click(hooksSwitch as Element)
+		fireEvent.click(screen.getByRole("switch", { name: "Hooks" }))
 
 		expect(mockUpdateSetting).toHaveBeenCalledWith("hooksEnabled", true)
 	})
@@ -152,13 +148,13 @@ describe("FeatureSettingsSection", () => {
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
 		const agentSection = container.querySelector("#agent-features")
-		expect(agentSection?.querySelector("#Subagents")).toBeTruthy()
+		expect(agentSection?.querySelector("#subagents-setting-control")).toBeTruthy()
 	})
 
 	it("calls updateSetting with subagentsEnabled when toggled", () => {
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
-		fireEvent.click(container.querySelector("#Subagents") as Element)
+		fireEvent.click(container.querySelector("#subagents-setting-control") as Element)
 
 		expect(mockUpdateSetting).toHaveBeenCalledWith("subagentsEnabled", true)
 	})
@@ -167,13 +163,13 @@ describe("FeatureSettingsSection", () => {
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
 		const agentSection = container.querySelector("#agent-features")
-		expect(agentSection?.querySelector('[id="Agents can run commands"]')).toBeTruthy()
+		expect(agentSection?.querySelector("#subagent-commands-setting-control")).toBeTruthy()
 	})
 
 	it("calls updateSetting with subagentCommandsEnabled when toggled", () => {
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
-		fireEvent.click(container.querySelector('[id="Agents can run commands"]') as Element)
+		fireEvent.click(container.querySelector("#subagent-commands-setting-control") as Element)
 
 		expect(mockUpdateSetting).toHaveBeenCalledWith("subagentCommandsEnabled", true)
 	})
@@ -184,15 +180,15 @@ describe("FeatureSettingsSection", () => {
 
 		const agentSection = container.querySelector("#agent-features")
 		const ids = Array.from(agentSection?.querySelectorAll('[role="switch"]') ?? []).map((el) => el.id)
-		expect(ids.indexOf("Teammates")).toBe(ids.indexOf("Agents can run commands") + 1)
-		expect(container.querySelector("#Teammates")?.getAttribute("aria-checked")).toBe("false")
+		expect(ids.indexOf("teammates-setting-control")).toBe(ids.indexOf("subagent-commands-setting-control") + 1)
+		expect(container.querySelector("#teammates-setting-control")?.getAttribute("aria-checked")).toBe("false")
 		expect(screen.getByText(/Adds 18 tools/)).toBeTruthy()
 	})
 
 	it("calls updateSetting with teammatesEnabled when toggled", () => {
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
-		fireEvent.click(container.querySelector("#Teammates") as Element)
+		fireEvent.click(container.querySelector("#teammates-setting-control") as Element)
 
 		expect(mockUpdateSetting).toHaveBeenCalledWith("teammatesEnabled", true)
 	})
@@ -216,7 +212,7 @@ describe("FeatureSettingsSection", () => {
 		mockExtensionState.value = { ...mockExtensionState.value, strongNudgesEnabled: undefined }
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
-		const row = container.querySelector('[id="Strong coding nudges"]')
+		const row = container.querySelector("#strong-nudges-setting-control")
 		expect(row).toBeTruthy()
 		expect(row?.getAttribute("aria-checked")).toBe("true")
 	})
@@ -225,7 +221,7 @@ describe("FeatureSettingsSection", () => {
 		mockExtensionState.value = { ...mockExtensionState.value, strongNudgesEnabled: true }
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
-		fireEvent.click(container.querySelector('[id="Strong coding nudges"]') as Element)
+		fireEvent.click(container.querySelector("#strong-nudges-setting-control") as Element)
 
 		expect(mockUpdateSetting).toHaveBeenCalledWith("strongNudgesEnabled", false)
 	})
@@ -245,12 +241,9 @@ describe("FeatureSettingsSection", () => {
 	})
 
 	it("calls updateSetting with showFeatureTips when toggled", () => {
-		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+		render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
-		const featureTipsSwitch = container.querySelector('[id="Feature Tips"]')
-		expect(featureTipsSwitch).toBeTruthy()
-
-		fireEvent.click(featureTipsSwitch as Element)
+		fireEvent.click(screen.getByRole("switch", { name: "Feature Tips" }))
 
 		expect(mockUpdateSetting).toHaveBeenCalledWith("showFeatureTips", true)
 	})

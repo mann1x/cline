@@ -1,4 +1,9 @@
-export { CLINE_DEFAULT_MODEL_ID } from "@cline/shared";
+/** @deprecated Import from `@cline/shared`; kept for compatibility. */
+export {
+	CLINE_DEFAULT_MODEL_ID,
+	type ProviderLocalCli,
+	resolveProviderLocalCli,
+} from "@cline/shared";
 export type {
 	GetModelsForProviderOptions,
 	ModelCollection,
@@ -15,8 +20,10 @@ export {
 	CODEX_EFFECTIVE_CONTEXT_WINDOW_PERCENT,
 	fetchLiveProviderModels,
 	fetchModelsDevProviderModels,
+	fetchVercelTranscriptionModels,
 	filterImageOutputModels,
 	filterOpenAICodexModels,
+	GENERATED_CLINE_RECOMMENDED_MODELS,
 	getAllProviders,
 	getGeneratedModelsForProvider,
 	getGeneratedProviderModels,
@@ -78,6 +85,7 @@ export {
 	getClineNotSubscribedMessage,
 	getClineOrgIndividualInferenceSubscriptionMessage,
 	getClinePassSubscriptionUrl,
+	getGeneratedModelsForRuntimeProvider,
 	getRegisteredHandler,
 	getRegisteredHandlerAsync,
 	// A host that bundles has to hand the Ollama vendor its stream dispatcher:
@@ -98,6 +106,7 @@ export {
 	isClinePassLimitMessage,
 	isProviderApiLine,
 	isRegisteredHandlerAsync,
+	isRetryableProviderError,
 	looksLikeCloudName,
 	matchOllamaRecommendation,
 	normalizeProviderId,
@@ -125,6 +134,8 @@ export {
 	readResolvedOllamaWindow,
 	registerAsyncHandler,
 	registerHandler,
+	resolveGatewayProviderRegistration,
+	resolveGatewayProviderRegistrationSync,
 	resolveProviderApiLineBaseUrl,
 	setOllamaFetch,
 	setOllamaNoStreamTimeoutDispatcher,
@@ -143,6 +154,7 @@ export {
 	resolveProviderUsageCostDisplay,
 	shouldShowProviderUsageCost,
 } from "./providers/billing";
+export { buildClineClientHeaders } from "./providers/cline-client-headers";
 export type * from "./providers/gateway";
 export {
 	createGateway,
@@ -158,6 +170,7 @@ export {
 export {
 	BUILTIN_MODEL_OPERATION_CAPABILITIES,
 	builtinProviderSupportsModelOperation,
+	getBuiltinStreamingTranscriptionModels,
 	providerManifestSupportsModelOperation,
 	resolveModelOperation,
 } from "./providers/model-operations";
@@ -371,7 +384,12 @@ export {
 	xollamaEngineFetch,
 	xollamaEngineRoot,
 } from "./providers/vendors/xollama-engine";
-export { disposeLangfuseTelemetry } from "./services/langfuse-telemetry";
+export { LangfuseAttributesSpanProcessor } from "./services/LangfuseAttributesSpanProcessor";
+export {
+	disposeLangfuseTelemetry,
+	type LangfuseTraceAttributes,
+	withLangfuseTraceAttributes,
+} from "./services/langfuse-telemetry";
 export {
 	type AudioTranscriptionRequest,
 	type AudioTranscriptionResult,

@@ -6,11 +6,11 @@ import type {
 	DocumentReaderSettings,
 	ToolPolicy,
 } from "@cline/core";
-import { installOcrLanguages, parseOcrLanguages } from "@cline/core";
 import { resolveAgentSlotLimit } from "@cline/llms";
 
-import { registerDisposable } from "@cline/shared";
+import { CLINE_DEFAULT_MODEL_ID, registerDisposable } from "@cline/shared";
 import type { Command } from "commander";
+import { createDashboardCommand } from "./commands/dashboard-command";
 import { registerHistoryCommand } from "./commands/history-command";
 import {
 	CommanderError,
@@ -21,10 +21,14 @@ import {
 	autoUpdateOnStartup,
 	getPreferredKanbanInstaller,
 } from "./commands/update";
-import { resolveCliCheckpointConfig } from "./runtime/defaults";
+import {
+	CLI_DEFAULT_MAX_CONSECUTIVE_MISTAKES,
+	resolveCliCheckpointConfig,
+} from "./runtime/defaults";
 
 import type { TuiStartupTarget } from "./tui/types";
 import { filterChatModels } from "./utils/chat-models";
+import { registerClineClientIdentity } from "./utils/cline-client-identity";
 import { getCliBuildInfo } from "./utils/common";
 import {
 	buildCliCompactionConfig,
@@ -71,9 +75,6 @@ import {
 	identifyTelemetryAccount,
 } from "./utils/telemetry";
 import type { Config, ParsedArgs } from "./utils/types";
-import { runConnectWizard } from "./wizards/connect";
-import { runMcpWizard } from "./wizards/mcp";
-import { runScheduleWizard } from "./wizards/schedule";
 
 /**
  * Approves whatever check the model proposed, without asking.
@@ -178,6 +179,7 @@ function startupTargetTakesPrecedenceOverMigrationNotice(
 }
 
 export async function runCli(): Promise<void> {
+	registerClineClientIdentity("cline-cli");
 	installStreamErrorGuards();
 	autoUpdateOnStartup();
 
@@ -310,6 +312,7 @@ export async function runCli(): Promise<void> {
 		.passThroughOptions()
 		.action(async (_opts: unknown, cmd: Command) => {
 			const realCmd = await createConfigRuntimeCommand();
+			realCmd.setOptionValue("json", cmd.opts().json);
 			await realCmd.parseAsync(cmd.args, { from: "user" });
 		});
 
@@ -485,6 +488,7 @@ export async function runCli(): Promise<void> {
 					io,
 				);
 			} else if (isFullTTY) {
+				const { runConnectWizard } = await import("./wizards/connect");
 				ctx.exitCode = await runConnectWizard();
 			} else {
 				writeln(`\nAdapters:\n${formatAdapterList()}`);
@@ -497,6 +501,7 @@ export async function runCli(): Promise<void> {
 		.description("Manage MCP servers")
 		.action(async () => {
 			if (isFullTTY) {
+				const { runMcpWizard } = await import("./wizards/mcp");
 				ctx.exitCode = await runMcpWizard();
 			} else {
 				writeln(
@@ -622,6 +627,7 @@ export async function runCli(): Promise<void> {
 		.passThroughOptions()
 		.action(async (_opts: unknown, cmd: Command) => {
 			if (cmd.args.length === 0 && isFullTTY) {
+				const { runScheduleWizard } = await import("./wizards/schedule");
 				ctx.exitCode = await runScheduleWizard();
 				return;
 			}
@@ -636,47 +642,21 @@ export async function runCli(): Promise<void> {
 		.passThroughOptions()
 		.action(async (_opts: unknown, cmd: Command) => {
 			const hubCmd = await createHubRuntimeCommand();
+			if (cmd.args.length === 0) {
+				hubCmd.outputHelp();
+				ctx.exitCode = 0;
+				return;
+			}
 			await hubCmd.parseAsync(cmd.args, { from: "user" });
 		});
 
-	const dashboardCmd = program
-		.command("dashboard")
-		.description("Start the Cline Hub dashboard and open it in a browser")
-		.option("--config <dir>", "configuration directory")
-		.option("-c, --cwd <path>", "Workspace root", process.cwd())
-		.option(
-			"--data-dir <dir>",
-			"Use isolated local state at <dir> instead of ~/.cline (enables sandbox mode)",
-		)
-		.option("--host <host>", "Dashboard bind host")
-		.option("--port <port>", "Dashboard HTTP/WebSocket port")
-		.option("--public-url <url>", "Public dashboard URL")
-		.option("--room-secret <secret>", "Invite secret for browser access")
-		.option("--no-open", "Start the dashboard without opening a browser")
-		.action(async () => {
-			const opts = dashboardCmd.opts<{
-				config?: string;
-				cwd?: string;
-				dataDir?: string;
-				host?: string;
-				port?: string;
-				publicUrl?: string;
-				roomSecret?: string;
-				open?: boolean;
-			}>();
-			const { runDashboardCommand } = await import("./commands/dashboard");
-			ctx.exitCode = await runDashboardCommand({
-				configDir: opts.config,
-				cwd: opts.cwd,
-				dataDir: opts.dataDir,
-				host: opts.host,
-				port: opts.port,
-				publicUrl: opts.publicUrl,
-				roomSecret: opts.roomSecret,
-				openBrowser: opts.open !== false,
-				io,
-			});
-		});
+	// Keep the old invocation working without advertising it in root help.
+	program.addCommand(
+		createDashboardCommand(io, (code) => {
+			ctx.exitCode = code;
+		}),
+		{ hidden: true },
+	);
 
 	const updateCmd = program
 		.command("update")
@@ -930,7 +910,16 @@ export async function runCli(): Promise<void> {
 		// Only an explicit `--auto-approve true` (or `--yolo`) enables
 		// auto-approval in ACP mode; We do not respect the default to
 		// avoid accidental auto-approval in ACP mode.
-		await runAcpMode({ autoApproveTools: args.autoApproveOverride === true });
+		await runAcpMode({
+			autoApproveTools: args.autoApproveOverride === true,
+			// Only an explicit `--thinking` applies here: an ACP session picks its
+			// provider later, so there are no persisted provider settings to read.
+			reasoning: resolveCliReasoning({
+				thinking: args.thinking,
+				thinkingExplicitlySet: args.thinkingExplicitlySet,
+				reasoningEffort: args.reasoningEffort,
+			}),
+		});
 		return;
 	}
 
@@ -1135,6 +1124,7 @@ export async function runCli(): Promise<void> {
 		}
 
 		let knownModels: Config["knownModels"];
+		let providerDefaultModelId: string | undefined;
 		try {
 			const persistedProviderConfig = providerSettingsManager.getProviderConfig(
 				provider,
@@ -1155,6 +1145,12 @@ export async function runCli(): Promise<void> {
 				persistedProviderConfig,
 			);
 			knownModels = resolvedProviderConfig?.knownModels;
+			// Only the Cline provider declares a curated default (the first
+			// recommended model). Other manifests may expose a placeholder like
+			// "default", so they keep falling back to the first catalog entry.
+			if (provider === "cline") {
+				providerDefaultModelId = resolvedProviderConfig?.modelId || undefined;
+			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			writeln(
@@ -1167,8 +1163,9 @@ export async function runCli(): Promise<void> {
 		const resolvedModelId =
 			args.model ??
 			selectedProviderSettings?.model ??
+			providerDefaultModelId ??
 			knownModelIds[0] ??
-			"anthropic/claude-sonnet-4.6";
+			CLINE_DEFAULT_MODEL_ID;
 		// Give the session the window the model was actually built with.
 		//
 		// A local Ollama model is discovered from `/api/tags`, which reports
@@ -1284,10 +1281,8 @@ export async function runCli(): Promise<void> {
 				basePrompt: renderedTemplate?.system,
 			}),
 			execution: {
-				// 6, which is what `--retries` has always documented. The code said
-				// 3, so every run that did not pass the flag got half the budget the
-				// help text promised.
-				maxConsecutiveMistakes: args.retries ?? 6,
+				maxConsecutiveMistakes:
+					args.retries ?? CLI_DEFAULT_MAX_CONSECUTIVE_MISTAKES,
 			},
 			// Mode only, and only when asked for. The host adds its own checker and
 			// already defaults `checkTools` to it, so naming the tool here would
@@ -2010,8 +2005,8 @@ export async function runCli(): Promise<void> {
 					activeProviderId: provider,
 				});
 				if (initialNotice) {
-					markInitialNoticeShown = () => {
-						markClineCliMigrationNoticeShown();
+					markInitialNoticeShown = (notice) => {
+						markClineCliMigrationNoticeShown(undefined, notice.id);
 					};
 				}
 			}
@@ -2076,6 +2071,11 @@ async function cliDocumentReader(
 			`--ocr ${args.ocr} is not an engine; using tesseract. Use tesseract, vision or off.\n`,
 		);
 	}
+	// Loaded here, not at the top: command-style subcommands must not pull the
+	// SDK runtime in just to start.
+	const { installOcrLanguages, parseOcrLanguages } = await import(
+		"@cline/core"
+	);
 	const ocrLanguages = parseOcrLanguages(args.ocrLanguages ?? "eng");
 	if (ocr !== "off" && ocrLanguages.some((code) => code !== "eng")) {
 		const result = await installOcrLanguages(ocrLanguages);

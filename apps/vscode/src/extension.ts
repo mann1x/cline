@@ -2,6 +2,7 @@
 // Import the module and reference it with the alias vscode in your code below
 
 import assert from "node:assert"
+import { disableCurrentDirectoryExecutableSearch } from "@cline/shared"
 import * as vscode from "vscode"
 import { Logger } from "@/shared/services/Logger"
 import { sendAccountButtonClickedEvent } from "./core/controller/ui/subscribeToAccountButtonClicked"
@@ -75,6 +76,8 @@ export async function activate(context: vscode.ExtensionContext) {
 	// build a session: the vendor resolves one once and caches the result, so a
 	// session created first would cache the "none" it finds on its own.
 	installOllamaStreamDispatcher()
+	// Before anything spawns with the workspace as cwd (rg, git, hooks, MCP).
+	disableCurrentDirectoryExecutableSearch()
 
 	// 1. Set up HostProvider for VSCode
 	// IMPORTANT: This must be done before any service can be registered

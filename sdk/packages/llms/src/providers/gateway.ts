@@ -552,6 +552,11 @@ export function resolveGatewayOutputCap(
 			? Math.floor(input.reasoningBudgetTokens) +
 				(input.outputReserveTokens ?? GATEWAY_OUTPUT_RESERVE_TOKENS)
 			: 0;
+		// Upstream raises this default to a share of a model's own output
+		// ceiling (#14426's sibling, 0.3 of `maxOutputTokens`). Not taken: the
+		// default's job on a model that publishes a ceiling is to stay under a
+		// bound that already exists, and the thinking budget is a share of this
+		// number, so raising it silently raises that too.
 		const defaultMaxOutputTokens = Math.max(
 			input.defaultMaxOutputTokens ??
 				resolveDefaultMaxOutputTokens(input.model),

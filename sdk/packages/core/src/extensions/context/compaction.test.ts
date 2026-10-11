@@ -17,6 +17,7 @@ import { runBasicCompaction } from "./basic-compaction";
 import {
 	createCompactionStateAwarePrepareTurn,
 	createContextCompactionPrepareTurn,
+	createImportedHistoryCompactionPrepareTurn,
 } from "./compaction";
 import {
 	buildSummaryMessage,
@@ -2142,6 +2143,115 @@ describe("createContextCompactionPrepareTurn", () => {
 		});
 	});
 
+	describe("summarizer connection resolution", () => {
+		const messages: LlmsProviders.Message[] = [
+			{ role: "user", content: "Old turn to compact" },
+			{ role: "assistant", content: "Old answer" },
+			{ role: "user", content: "Recent turn" },
+			{ role: "assistant", content: "Recent assistant state" },
+		];
+		const context = {
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages,
+			apiMessages: messages,
+			model: {
+				id: "mock-model",
+				provider: "cline",
+				info: { id: "mock-model", maxInputTokens: 10 },
+			},
+		};
+		// Mirrors bootstrap.config: the nested providerConfig is a snapshot of
+		// the connection resolved at session start.
+		const liveConfig = (): Parameters<
+			typeof createContextCompactionPrepareTurn
+		>[0] => ({
+			providerId: "cline",
+			modelId: "cline-free/model",
+			apiKey: "workos:initial",
+			providerConfig: {
+				providerId: "cline",
+				modelId: "cline-free/model",
+				apiKey: "workos:initial",
+				baseUrl: "https://api.cline.bot",
+				headers: { "X-CLIENT-TYPE": "cline-desktop" },
+			} as LlmsProviders.ProviderConfig,
+			compaction: {
+				enabled: true,
+				strategy: "agentic",
+				preserveRecentTokens: 1,
+			},
+			logger: undefined,
+		});
+
+		beforeEach(() => {
+			createHandlerMock.mockReturnValue({
+				createMessage: vi.fn(() =>
+					streamChunks([
+						{ type: "text", id: "summary-1", text: "## Goal\nShip it" },
+						{ type: "done", id: "summary-1", success: true },
+					]),
+				),
+			});
+		});
+
+		it("uses a refreshed top-level token while the nested snapshot is stale", async () => {
+			const config = liveConfig();
+			const prepareTurn = createContextCompactionPrepareTurn(config);
+			const importedPrepareTurn = createImportedHistoryCompactionPrepareTurn({
+				config,
+				importedFrom: "claude-code",
+			});
+			// syncOAuthCredentials only writes the top-level apiKey.
+			config.apiKey = "workos:refreshed";
+
+			await prepareTurn?.(context);
+			await importedPrepareTurn(context);
+
+			// At least one handler per pipeline. This fork's summarizer may build
+			// more (it re-asks for a summary it rejects); every one of them has to
+			// carry the refreshed connection.
+			expect(createHandlerMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+			for (const [summarizerConfig] of createHandlerMock.mock.calls) {
+				expect(summarizerConfig).toMatchObject({
+					providerId: "cline",
+					modelId: "cline-free/model",
+					apiKey: "workos:refreshed",
+					baseUrl: "https://api.cline.bot",
+					headers: { "X-CLIENT-TYPE": "cline-desktop" },
+				});
+			}
+		});
+
+		it("drops the nested snapshot when the provider changes without replacing it", async () => {
+			const config = liveConfig();
+			const prepareTurn = createContextCompactionPrepareTurn(config);
+			// updateConnection({ providerId, modelId, apiKey }) with no new
+			// providerConfig leaves the old provider's snapshot in place.
+			config.providerId = "anthropic";
+			config.modelId = "claude-sonnet-4.5";
+			config.apiKey = "sk-ant-key";
+
+			await prepareTurn?.(context);
+
+			expect(createHandlerMock.mock.calls.length).toBeGreaterThanOrEqual(1);
+			for (const [summarizerConfig] of createHandlerMock.mock.calls) {
+				expect(summarizerConfig).toMatchObject({
+					providerId: "anthropic",
+					modelId: "claude-sonnet-4.5",
+					apiKey: "sk-ant-key",
+				});
+				expect(summarizerConfig.baseUrl).toBeUndefined();
+				expect(summarizerConfig.headers).toBeUndefined();
+			}
+		});
+	});
+
 	it("retries a failed summarizer call, then falls back to basic compaction", async () => {
 		// A throw no longer ends the compaction on the spot: a transport error
 		// is usually gone on the next call, and ending here hands the same
@@ -3930,6 +4040,79 @@ describe("createContextCompactionPrepareTurn", () => {
 			}),
 		);
 		assertBasicCompactionResult(result);
+	});
+
+	it.each([
+		false,
+		true,
+	])("preserves active attachments with hidden continuation context (overflow recovery: %s)", async (overflowRecovery) => {
+		const attachments: LlmsProviders.ContentBlock[] = [
+			{ type: "image", data: "abc", mediaType: "image/png" },
+			{
+				type: "file",
+				path: "/tmp/question.txt",
+				content: "Attached information",
+			},
+		];
+		const messages: MessageWithMetadata[] = [
+			{ role: "user", content: "Older request" },
+			{ role: "assistant", content: "Old context ".repeat(10_000) },
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "Answer about these attachments" },
+					...attachments,
+				],
+			},
+			{ role: "assistant", content: "Partial response" },
+			{
+				role: "user",
+				content:
+					"Previous turn ended unexpectedly. Continue from where you left off.",
+				metadata: { displayRole: "system", userRunSpan: 0 },
+			},
+		];
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "anthropic",
+			modelId: "mock-model",
+			providerConfig: {
+				providerId: "anthropic",
+				modelId: "mock-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: { enabled: true, strategy: "basic" },
+			logger: undefined,
+		});
+		const result = await prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			overflowRecovery,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages,
+			apiMessages: messages,
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: {
+					id: "mock-model",
+					maxInputTokens: overflowRecovery ? 1_000_000 : 5_000,
+				},
+			},
+		});
+		expect(result).toBeDefined();
+		expect(
+			result?.messages.flatMap((message) =>
+				Array.isArray(message.content) ? message.content : [],
+			),
+		).toEqual(expect.arrayContaining(attachments));
+		expect(result?.messages.at(-1)).toMatchObject({
+			role: "user",
+			content: messages.at(-1)?.content,
+			metadata: { displayRole: "system", userRunSpan: 0 },
+		});
 	});
 
 	it("compacts on overflow recovery whatever the estimate said, and lands on basic when the summariser cannot run", async () => {

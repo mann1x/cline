@@ -1,4 +1,3 @@
-import { createTeamName } from "@cline/core";
 import { formatUserCommandBlock } from "@cline/shared";
 import type { Config } from "./types";
 
@@ -26,14 +25,6 @@ export function rewriteTeamPrompt(input: string): TeamPromptRewriteResult {
 			"team",
 		),
 	};
-}
-
-export async function enableTeamsForPrompt(config: Config): Promise<void> {
-	if (config.enableAgentTeams) {
-		return;
-	}
-	config.enableAgentTeams = true;
-	config.teamName = config.teamName?.trim() || createTeamName();
 }
 
 /**

@@ -5,22 +5,16 @@ import {
 	markPromptEnvironment,
 	PROMPT_ENVIRONMENT_REFERENCE,
 } from "./environment";
-import {
-	DEFAULT_CLINE_SYSTEM_PROMPT,
-	YOLO_CLINE_SYSTEM_PROMPT,
-} from "./system";
+import { DEFAULT_CLINE_SYSTEM_PROMPTS } from "./system";
 
 const WORKSPACE_CONFIGURATION_MARKER = "# Workspace Configuration";
 
 /**
  * Explains the <user_input mode="..."> wrapper and <mode_notice> elements the
  * runtime stamps on user messages (prepareTurnInput / formatUserInputBlock).
- * Every host that sends through the SDK runtime produces those tags, so every
- * host's system prompt must explain them: without this section the model has
- * no idea what the attribute means, and a mid-conversation mode switch is an
- * invisible system-prompt swap it cannot diff. Included for BOTH modes, since
- * after a switch the transcript still contains messages tagged with the other
- * mode.
+ * Included in plan and act prompts so the model can interpret mode switches
+ * and earlier messages tagged with the other mode. YOLO prompts omit these
+ * instructions because they do not use the plan/act workflow.
  */
 /**
  * That grep, sed and awk exist, said once to every template.
@@ -263,13 +257,17 @@ export function buildClineSystemPrompt(
 			? templatePrompt
 			: `${templatePrompt}\n\n{{CLINE_RULES}}`
 		: mode === "yolo"
-			? YOLO_CLINE_SYSTEM_PROMPT
-			: DEFAULT_CLINE_SYSTEM_PROMPT;
+			? DEFAULT_CLINE_SYSTEM_PROMPTS.YOLO
+			: DEFAULT_CLINE_SYSTEM_PROMPTS.ACT;
 
 	// Mode semantics ride in the rules slot so every host emits them without
 	// composing its own copy. Order matches what the CLI historically built by
 	// hand (caller rules, then the mode-tag explanation, then the plan-mode
 	// contract), keeping CLI output byte-identical after the promotion.
+	// YOLO mode omits the plan/act workflow instructions (upstream #14510);
+	// caller rules apply in every mode.
+	const modeTagInstructions =
+		mode === "yolo" ? undefined : MODE_TAG_INSTRUCTIONS;
 	const modeContract =
 		mode === "plan"
 			? planModeSwitchTool
@@ -279,7 +277,7 @@ export function buildClineSystemPrompt(
 	const effectiveRules = [
 		rules,
 		POSIX_TOOL_AVAILABILITY,
-		MODE_TAG_INSTRUCTIONS,
+		modeTagInstructions,
 		modeContract,
 	]
 		.filter(Boolean)
@@ -288,9 +286,9 @@ export function buildClineSystemPrompt(
 	if (options.environmentTurn) {
 		// The static rules stay in place; everything that differs between
 		// sessions -- or between turns, as the mode does -- becomes a span.
-		const staticRules = [POSIX_TOOL_AVAILABILITY, MODE_TAG_INSTRUCTIONS].join(
-			"\n\n",
-		);
+		const staticRules = [POSIX_TOOL_AVAILABILITY, modeTagInstructions]
+			.filter(Boolean)
+			.join("\n\n");
 		const metadataBlock = isCline
 			? buildWorkspaceMetadata(workspaceRoot, workspaceName, metadata)
 			: "";

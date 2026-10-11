@@ -24,6 +24,14 @@ export const DEFAULT_MAX_INPUT_TOKENS = 128_000;
 export const CONTEXT_WINDOW_INPUT_RATIO = 0.9;
 /** Compact once the transcript consumes this share of the usable input budget. */
 export const COMPACTION_TRIGGER_RATIO = 0.9;
+/**
+ * Upper bound on how far the provider's actual input count may scale the
+ * compaction budget down relative to the character-based estimate. Dense
+ * content realistically tokenizes ~2-3x denser than the 3-chars-per-token
+ * assumption; the cap stops a pathologically small estimate from collapsing
+ * the budget and compacting every turn.
+ */
+export const MAX_INPUT_UNDERESTIMATE_FACTOR = 4;
 export const DEFAULT_TARGET_RATIO = 0.7;
 export const DEFAULT_PRESERVE_RECENT_TOKENS = 20_000;
 
@@ -96,6 +104,11 @@ export function resolvePreserveRecentTokens(input: {
 	);
 }
 /** Floor for a compaction summary, and the cap when no window is known. */
+// Upstream raised this to 8,192 (#14378: a model that reasons by default can
+// spend a tight budget thinking and return no summary). Not taken: here it is
+// the floor under the output budget ladder below, and at 8,192 it overrides
+// the ladder's 70/30 split on every window up to ~120k -- the summary takes
+// the retrospective's room. The ladder's figures are the measured ones.
 export const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS = 4_096;
 
 /**
@@ -1088,6 +1101,7 @@ export function isToolResultOnlyUserMessage(
 export function isTurnStartMessage(message: MessageWithMetadata): boolean {
 	return (
 		message.role === "user" &&
+		message.metadata?.userRunSpan !== 0 &&
 		!isToolResultOnlyUserMessage(message) &&
 		!isCompactionSummaryMessage(message)
 	);

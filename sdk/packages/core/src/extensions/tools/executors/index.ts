@@ -44,6 +44,8 @@ export { PATCH_MARKERS, PatchActionType } from "./apply-patch-parser";
 export { type AwkExecutorOptions, createAwkExecutor } from "./awk";
 export {
 	CommandExitError,
+	CommandSpawnError,
+	CommandTerminationError,
 	createShellExecutor,
 	type ShellExecutorOptions,
 } from "./bash";

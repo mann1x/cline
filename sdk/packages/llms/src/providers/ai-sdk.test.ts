@@ -217,7 +217,68 @@ describe("ai-sdk usage normalization", () => {
 		).toBe(41);
 	});
 
+	// This fork keeps `outputTokens` whole (upstream #14426 subtracts the
+	// reasoning out of it). Everything downstream of here -- the output cap,
+	// the thinking budget, tok/s, the context bar -- is measured against the
+	// number the server generated, and the reasoning count rides beside it.
+	it("reports reasoning tokens beside outputTokens, not subtracted from it", () => {
+		const normalized = normalizeUsage({
+			outputTokens: 250,
+			completion_tokens_details: { reasoning_tokens: 90 },
+		});
+		expect(normalized.reasoningTokenCount).toBe(90);
+		expect(normalized.outputTokens).toBe(250);
+	});
+
+	it("leaves outputTokens alone when the reported reasoning exceeds it", () => {
+		const normalized = normalizeUsage({
+			outputTokens: 10,
+			reasoningTokens: 25,
+		});
+		expect(normalized.outputTokens).toBe(10);
+	});
+
 	describe("cost extraction with pricing fallback", () => {
+		it.each([
+			["cline-pass", "included-model", { input: 3, output: 15 }],
+			["cline", "cline-pass/included-model", undefined],
+			["cline", "cline-free/free-model", undefined],
+			["cline", "vendor/model:free", undefined],
+			["cline", "vendor/promotional-model", { input: 0, output: 0 }],
+		])("zeros included usage for %s/%s", (providerId, modelId, pricing) => {
+			for (const raw of [
+				undefined,
+				{
+					cost: 0.5,
+					market_cost: 1,
+					cost_details: { upstream_inference_cost: 2 },
+				},
+			]) {
+				expect(
+					normalizeUsage(
+						{ inputTokens: 1000, outputTokens: 100, raw },
+						undefined,
+						pricing,
+						{ providerId, modelId },
+					),
+				).toMatchObject({ inputTokens: 1000, outputTokens: 100, totalCost: 0 });
+			}
+		});
+
+		it.each([
+			"cline",
+			"openrouter",
+		])("preserves paid usage for %s", (providerId) => {
+			expect(
+				normalizeUsage(
+					{ inputTokens: 1000, outputTokens: 100, cost: 0.5 },
+					undefined,
+					{ input: 3, output: 15 },
+					{ providerId, modelId: "vendor/paid-model" },
+				).totalCost,
+			).toBe(0.5);
+		});
+
 		it("prefers billed cost over market_cost when Vercel applies a discount", () => {
 			const normalized = normalizeUsage({
 				inputTokens: 11,
@@ -297,6 +358,19 @@ describe("ai-sdk usage normalization", () => {
 			// (1000/1M) * 2.5 + (100/1M) * 10 = 0.0025 + 0.001 = 0.0035
 			expect(normalized.totalCost).toBeCloseTo(0.0035, 5);
 		});
+
+		it("bills pricing-fallback cost on the full output count, including reasoning tokens", () => {
+			const pricingInput = { input: 2.5, output: 10 }; // per 1M tokens
+			const normalized = normalizeUsage(
+				{ inputTokens: 1000, outputTokens: 100, reasoningTokens: 40 },
+				undefined,
+				pricingInput,
+			);
+			// Reasoning tokens are billed at the output rate, and the output
+			// count is the whole 100 here.
+			expect(normalized.outputTokens).toBe(100);
+			expect(normalized.totalCost).toBeCloseTo(0.0035, 5);
+		});
 	});
 
 	describe("field mapping across providers", () => {
@@ -324,6 +398,21 @@ describe("ai-sdk usage normalization", () => {
 			expect(normalized.outputTokens).toBe(120);
 			expect(normalized.cacheReadTokens).toBe(3605);
 			expect(normalized.cacheWriteTokens).toBe(0);
+		});
+
+		it("reads AI SDK v4's nested outputTokens.reasoning beside the total", () => {
+			const normalized = normalizeUsage({
+				inputTokens: { total: 1000, noCache: 1000 },
+				outputTokens: {
+					total: 120,
+					text: 97,
+					reasoning: 23,
+				},
+			} as Record<string, unknown>);
+
+			expect(normalized.reasoningTokenCount).toBe(23);
+			// The total stays whole; see the note on reasoning tokens above.
+			expect(normalized.outputTokens).toBe(120);
 		});
 
 		it("falls back to raw Gemini usage metadata", () => {

@@ -1,11 +1,9 @@
 import type { ContextBreakdown, ContextWindowGrant } from "@shared/ExtensionMessage"
 import type { ProviderApiMetrics } from "@shared/getApiMetrics"
-import { StringRequest } from "@shared/proto/cline/common"
 import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 import debounce from "debounce"
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
-import { SlashServiceClient } from "@/services/grpc-client"
 import { formatLargeNumber as formatTokenNumber } from "@/utils/format"
 import CompactTaskButton from "./buttons/CompactTaskButton"
 import { ContextWindowBar } from "./ContextWindowBar"
@@ -50,6 +48,8 @@ interface ContextWindowProgressProps extends ContextWindowInfoProps {
 	 * bar is drawn against it, with a note when it is smaller than was asked.
 	 */
 	contextWindowGrant?: ContextWindowGrant
+	compactDisabled: boolean
+	compactTask: () => Promise<boolean>
 	onSendMessage?: (command: string, files: string[], images: string[]) => void
 }
 
@@ -88,6 +88,8 @@ ConfirmationDialog.displayName = "ConfirmationDialog"
 const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 	contextWindow = 0,
 	contextTokensUsed = 0,
+	compactDisabled,
+	compactTask,
 	onSendMessage,
 	useAutoCondense,
 	tokensIn,
@@ -113,18 +115,15 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 		[confirmationNeeded],
 	)
 
-	const handleConfirm = useCallback((e: React.MouseEvent) => {
-		e.preventDefault()
-		e.stopPropagation()
-		// Trigger a real SDK manual compaction rather than sending the literal
-		// text "/compact" to the model (which it would treat as a normal prompt
-		// and improvise a fake summary — CLINE-2503). The condense RPC runs the
-		// same SDK compaction effect as the CLI's `/compact` command.
-		SlashServiceClient.condense(StringRequest.create({ value: "compact" })).catch((err) =>
-			console.error("Failed to compact task:", err),
-		)
-		setConfirmationNeeded(false)
-	}, [])
+	const handleConfirm = useCallback(
+		(e: React.MouseEvent) => {
+			e.preventDefault()
+			e.stopPropagation()
+			void compactTask().catch((err) => console.error("Failed to compact task:", err))
+			setConfirmationNeeded(false)
+		},
+		[compactTask],
+	)
 
 	const handleCancel = useCallback((e: React.MouseEvent) => {
 		e.preventDefault()
@@ -231,7 +230,7 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 						{formatTokenNumber(tokenData.max)}
 					</span>
 				</div>
-				<CompactTaskButton onClick={handleCompactClick} />
+				<CompactTaskButton disabled={compactDisabled} onClick={handleCompactClick} />
 			</div>
 			{shownWindow.smallerThanAsked && shownWindow.asked !== undefined && (
 				<div className="text-xs text-description mt-0.5" data-testid="context-window-granted-note">

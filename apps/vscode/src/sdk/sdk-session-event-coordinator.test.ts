@@ -509,6 +509,7 @@ function makeCoordinator(input: Partial<MakeCoordinatorInput> = {}) {
 			getActiveSession: vi.fn(() => activeSession),
 			setRunning: vi.fn(),
 			markTurnStarted: vi.fn(),
+			setQueuedPromptCount: vi.fn(),
 		},
 		messages: {
 			appendAndEmit: vi.fn(),

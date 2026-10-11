@@ -1,20 +1,18 @@
-import {
-	flattenPromptEnvironment,
-	isClineProvider,
-	isOllamaNativeProvider,
-} from "@cline/shared";
+import { flattenPromptEnvironment, isClineProvider } from "@cline/shared";
 import { toAiSdkReasoning } from "../ai-sdk";
 import { DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS } from "../gateway";
 import {
 	getModelReasoningControls,
+	isAnthropicCompatibleModel,
 	isDeepSeekFamily,
 	isGlmModel,
 	isKimiK26Family as isKimiK26FamilyFact,
 	isMiniMaxM3Model,
 	isMoonshotKimiModelIdFallback,
-	modelReasoningDefaultsOn,
 	providerReasoningRouteMatches,
+	resolveModelFamily,
 } from "../model-facts";
+import { isOfficialAnthropicEndpoint } from "../url";
 import {
 	buildLlamaCppSamplingOptions,
 	readLlamaCppSamplingOptions,
@@ -64,19 +62,6 @@ function isDeepSeekModelOrProviderDefault(
 
 function isMiniMaxM3(input: ProviderOptionMatchInput): boolean {
 	return isMiniMaxM3Model(input.request, input.context);
-}
-
-function isOllamaReasoningDefaultOnDisable(
-	input: ProviderOptionMatchInput,
-): boolean {
-	return (
-		isOllamaNativeProvider(input.request.providerId) &&
-		input.request.reasoning?.enabled === false &&
-		modelReasoningDefaultsOn({
-			request: input.request,
-			context: input.context,
-		})
-	);
 }
 
 function usesGlmThinkingProviderRouting(
@@ -151,10 +136,18 @@ const directAnthropicProviderRule: ProviderOptionRule = {
 	id: "provider.anthropic.direct",
 	phase: "provider",
 	description:
-		"Direct Anthropic owns the anthropic bucket built by the base patch.",
+		"Direct Anthropic enables its recommended server-side refusal fallback.",
 	applies: (input) => input.request.providerId === "anthropic",
 	suppresses: { genericFanout: true },
-	build: () => undefined,
+	// The Anthropic adapter adds the required beta header. `fallbacks` exists
+	// only on the Claude API itself; strict-schema proxies such as Azure AI
+	// Foundry reject it with a 400. The endpoint check lives in `build`, not
+	// `applies`, so custom endpoints keep the fanout suppression and their
+	// request body is otherwise unchanged.
+	build: (input) =>
+		isOfficialAnthropicEndpoint(input.context.config.baseUrl)
+			? { anthropic: { fallbacks: "default" } }
+			: undefined,
 };
 
 const directGoogleProviderRule: ProviderOptionRule = {
@@ -165,6 +158,27 @@ const directGoogleProviderRule: ProviderOptionRule = {
 	applies: (input) => input.request.providerId === "google",
 	suppresses: { genericFanout: true },
 	build: () => undefined,
+};
+
+const routedAnthropicProviderFallbackRule: ProviderOptionRule = {
+	id: "provider.routed-anthropic.fallbacks",
+	phase: "provider",
+	description:
+		"OpenRouter and Cline enable provider failover for Anthropic models.",
+	applies: (input) =>
+		(input.request.providerId === "openrouter" ||
+			isClineProvider(input.request.providerId)) &&
+		isAnthropicCompatibleModel({
+			modelId: input.request.modelId,
+			family: resolveModelFamily(input.context),
+		}),
+	// Provider failover is distinct from Anthropic's refusal-model fallback.
+	build: (input) =>
+		buildProviderAndAliasPatch({
+			providerId: input.request.providerId,
+			providerOptionsKey: input.providerOptionsKey,
+			bucketOptions: { provider: { allow_fallbacks: true } },
+		}),
 };
 
 const openAiAdapterRule: ProviderOptionRule = {
@@ -368,13 +382,15 @@ const geminiThinkingRule: ProviderOptionRule = {
 	id: "provider.google-gemini.thinking-config",
 	phase: "provider",
 	description:
-		"Google/Gemini/Vertex uses thinkingConfig only for exact token budgets.",
+		"Google/Gemini/Vertex uses thinkingConfig only for exact token budgets, and only on models that advertise one; level-only models reject thinkingBudget.",
 	suppresses: { genericThinking: true },
 	applies: (input) =>
 		(input.request.providerId === "google" ||
 			input.request.providerId === "gemini" ||
 			input.request.providerId === "vertex") &&
-		typeof input.request.reasoning?.budgetTokens === "number",
+		typeof input.request.reasoning?.budgetTokens === "number" &&
+		getModelReasoningControls(input.context.model.reasoningOptions)?.budget !==
+			undefined,
 	build: (input) => {
 		const providerOptionsName =
 			input.request.providerId === "vertex" ? "vertex" : "google";
@@ -444,28 +460,6 @@ const deepSeekThinkingRule: ProviderOptionRule = {
 					thinkingType,
 				})
 			: undefined;
-	},
-};
-
-const ollamaReasoningDefaultOnDisableRule: ProviderOptionRule = {
-	id: "provider.ollama.reasoning-default-on.disable-none",
-	phase: "provider-reasoning",
-	description:
-		"Ollama models whose reasoning defaults on need reasoningEffort=none when request reasoning is disabled.",
-	applies: isOllamaReasoningDefaultOnDisable,
-	build: (input) => {
-		const bucketOptions = {
-			reasoningEffort: "none",
-			reasoning: { effort: "none" },
-		};
-		return {
-			...buildProviderAndAliasPatch({
-				providerId: input.request.providerId,
-				providerOptionsKey: input.providerOptionsKey,
-				bucketOptions,
-			}),
-			openaiCompatible: bucketOptions,
-		};
 	},
 };
 
@@ -685,6 +679,7 @@ const routedGlmReasoningRule: ProviderOptionRule = {
  */
 export const PROVIDER_OPTION_RULES: ReadonlyArray<ProviderOptionRule> = [
 	directAnthropicProviderRule,
+	routedAnthropicProviderFallbackRule,
 	directGoogleProviderRule,
 	openAiAdapterRule,
 	openAiCodexRule,
@@ -699,7 +694,6 @@ export const PROVIDER_OPTION_RULES: ReadonlyArray<ProviderOptionRule> = [
 	clineReasoningDisabledThinkingRule,
 	kimiK26ThinkingRule,
 	deepSeekThinkingRule,
-	ollamaReasoningDefaultOnDisableRule,
 	ollamaNativeOptionsRule,
 	llamaCppNativeOptionsRule,
 	nonGlmProviderRoutingSuppressionRule,

@@ -227,6 +227,7 @@ export class RuntimeEventAdapter {
 		cacheReadTokens: 0,
 		cacheWriteTokens: 0,
 		totalCost: 0,
+		reasoningTokenCount: 0,
 	};
 
 	private toolStartedAt = new Map<string, number>();
@@ -343,6 +344,7 @@ export class RuntimeEventAdapter {
 			cacheReadTokens: 0,
 			cacheWriteTokens: 0,
 			totalCost: 0,
+			reasoningTokenCount: 0,
 		};
 		this.toolStartedAt.clear();
 	}
@@ -464,6 +466,8 @@ export class RuntimeEventAdapter {
 				// Nor this: it is measured on the one request's stream.
 				...(outputSplit ? { outputSplit } : {}),
 				...(auxiliary ? { auxiliary: true } : {}),
+				reasoningTokenCount:
+					deltaReasoning === 0 ? undefined : Math.max(0, deltaReasoning),
 				totalInputTokens: next.inputTokens,
 				totalOutputTokens: next.outputTokens,
 				totalCacheReadTokens:

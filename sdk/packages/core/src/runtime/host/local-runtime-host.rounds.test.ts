@@ -80,6 +80,7 @@ function stubAgent() {
 		continue: vi.fn().mockResolvedValue(result),
 		abort: vi.fn(),
 		canStartRun: vi.fn().mockReturnValue(true),
+		notifyPendingUserMessage: vi.fn(),
 		getAgentId: vi.fn().mockReturnValue("lead-1"),
 		getConversationId: vi.fn().mockReturnValue("conv-1"),
 		restore: vi.fn((next: unknown[]) => {

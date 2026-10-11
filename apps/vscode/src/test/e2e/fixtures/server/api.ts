@@ -87,6 +87,8 @@ The change has been applied and saved to the file.`
 
 export const E2E_MOCK_API_RESPONSES = {
 	DEFAULT: "Hello! I'm a mock Cline API response.",
+	CHECKPOINT_REBUILD_PROBE: "Checkpoint rebuild probe remains in flight while settings change.",
+	CHECKPOINT_FOLLOWUP: "Checkpoint-enabled follow-up reached the rebuilt session.",
 	/** Assistant text streamed before the structured editor tool call. */
 	/** Assistant text streamed before the read that the edit depends on. */
 	EDIT_REQUEST_READ_LEAD_IN: `Let me read test.ts before I change it.`,
@@ -95,6 +97,9 @@ export const E2E_MOCK_API_RESPONSES = {
 	EDIT_REQUEST_COMPLETE: edit_request_complete,
 	POWERSHELL_REQUEST_LEAD_IN: "I'll inspect the PowerShell process used for background execution.",
 	POWERSHELL_REQUEST_COMPLETE: "PowerShell background execution diagnostic completed.",
+	/** Replies to the hooks e2e probe depending on whether the run-start hook's injected context reached the model request. */
+	HOOK_CONTEXT_RECEIVED: "Hook context received: the codename is ZEBRA-7.",
+	HOOK_CONTEXT_MISSING: "Hook context missing from the model request.",
 }
 
 export const E2E_MOCK_CLINE_RECOMMENDED_MODELS = {

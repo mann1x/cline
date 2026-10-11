@@ -46,6 +46,7 @@ export async function createMcpTools(
 
 		return createTool({
 			name: agentToolName,
+			resultPolicy: "cache-oversized",
 			description: defaultMcpDescription(options.serverName, descriptor),
 			inputSchema: descriptor.inputSchema,
 			// Counted apart from the agent's own schemas in the request's fixed

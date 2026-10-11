@@ -32,6 +32,8 @@ import {
 	PATCH_MARKERS,
 	projectSessionMessagesForDisplay,
 	readTaskProgress,
+	resolveMessageDisplayRole,
+	truncateCommandOutput,
 	uniqueAgentNames,
 } from "@cline/core"
 import {
@@ -73,7 +75,11 @@ import { Logger } from "@shared/services/Logger"
 import * as path from "path"
 import { isClineManagedProvider } from "@/shared/utils/cline"
 import { arePathsEqual, getDesktopDir } from "@/utils/path"
-import { CLINE_FREE_PROMOTION_ENDED_ERROR_CODE, isClineFreePromotionEndedMessage } from "../services/error/ClineError"
+import {
+	CLINE_FREE_PROMOTION_ENDED_ERROR_CODE,
+	isClineFreePromotionEndedMessage,
+	MODEL_NOT_FOUND_GUIDANCE,
+} from "../services/error/ClineError"
 import { MessageIdMinter } from "./message-id-minter"
 import { describeCredentialRejectedError, describeMissingCredentialError } from "./provider-credential-error"
 import {
@@ -722,7 +728,11 @@ export class MessageTranslatorState {
 	 * act on the call selected by `selectStreamingToolCall`, so the branches
 	 * that use them did not change.
 	 */
-	private streamingTools = new Map<string, { ts?: number; input?: unknown; name?: string }>()
+	private lastCommandCallId: string | undefined
+	private streamingTools = new Map<
+		string,
+		{ ts?: number; input?: unknown; name?: string; commandOutput?: { text: string; totalChars: number } }
+	>()
 	/** The call the streaming-tool accessors act on. */
 	private streamingToolCallId = ANONYMOUS_TOOL_CALL
 	/** Approved tool-call ids mapped to the approval row that should be updated in place. */
@@ -962,7 +972,29 @@ export class MessageTranslatorState {
 		this.streamingToolCallId = toolCallId || ANONYMOUS_TOOL_CALL
 	}
 
-	private streamingTool(): { ts?: number; input?: unknown; name?: string } {
+	/**
+	 * Selects the call an update belongs to. An update that names no call (an
+	 * older producer) goes to the anonymous call when one is streaming, and
+	 * otherwise to the command started last -- never to whichever call the
+	 * previous event happened to name.
+	 */
+	selectStreamingToolCallForUpdate(toolCallId: string | undefined): void {
+		if (toolCallId || this.streamingTools.has(ANONYMOUS_TOOL_CALL)) {
+			this.selectStreamingToolCall(toolCallId)
+			return
+		}
+		this.streamingToolCallId =
+			this.lastCommandCallId && this.streamingTools.has(this.lastCommandCallId)
+				? this.lastCommandCallId
+				: ANONYMOUS_TOOL_CALL
+	}
+
+	private streamingTool(): {
+		ts?: number
+		input?: unknown
+		name?: string
+		commandOutput?: { text: string; totalChars: number }
+	} {
 		let slot = this.streamingTools.get(this.streamingToolCallId)
 		if (!slot) {
 			slot = {}
@@ -985,6 +1017,11 @@ export class MessageTranslatorState {
 		const slot = this.streamingTool()
 		slot.name = toolName
 		slot.input = input
+		// A command's streamed output, kept on its own call (see `streamingTools`).
+		slot.commandOutput = { text: "", totalChars: 0 }
+		if (toolName === "run_commands" || toolName === "execute_command") {
+			this.lastCommandCallId = this.streamingToolCallId
+		}
 	}
 
 	/** Remember the approval prompt row for a tool call after the user approves it. */
@@ -1046,6 +1083,33 @@ export class MessageTranslatorState {
 	/** Get the stored tool name (from content_start) */
 	getStreamingToolName(): string | undefined {
 		return this.streamingTools.get(this.streamingToolCallId)?.name
+	}
+
+	appendStreamingCommandOutput(toolCallId: string | undefined, chunk: string): string | undefined {
+		const output = this.streamingTools.get(toolCallId || this.streamingToolCallId)?.commandOutput
+		if (!output) {
+			return undefined
+		}
+		output.totalChars += chunk.length
+		output.text = truncateCommandOutput(output.text + chunk, {
+			totalChars: output.totalChars,
+		})
+		return output.text
+	}
+
+	isMismatchedStreamingCommand(toolName: string, toolCallId: string | undefined): boolean {
+		const slot = this.streamingTools.get(toolCallId || this.streamingToolCallId)
+		if (slot) {
+			return slot.commandOutput !== undefined && slot.name !== toolName
+		}
+		// No row of its own while a command is streaming: a completion from a
+		// call that was already cleared, which must not take the live row.
+		for (const other of this.streamingTools.values()) {
+			if (other.commandOutput) {
+				return true
+			}
+		}
+		return false
 	}
 
 	/** Clear streaming tool */
@@ -2374,6 +2438,7 @@ export function extractToolOutputText(output: unknown): string {
 	// Handle ToolOperationResult[] from SDK tools (run_commands, search_codebase, etc.)
 	if (Array.isArray(output)) {
 		const parts: string[] = []
+		let sawEmptyResult = false
 		for (const item of output) {
 			if (typeof item === "string") {
 				parts.push(item)
@@ -2389,10 +2454,20 @@ export function extractToolOutputText(output: unknown): string {
 					// screenshot. Without this the whole array — base64 image and all —
 					// went through JSON.stringify below and became the row's text.
 					parts.push(record.text)
+				} else if (
+					typeof record.query === "string" &&
+					typeof record.success === "boolean" &&
+					typeof record.result === "string"
+				) {
+					// A command that legitimately printed nothing (`git add -A`,
+					// `mkdir`). Recognized as a ToolOperationResult so it must not
+					// fall through to the JSON fallback below and leak the envelope
+					// into the chat.
+					sawEmptyResult = true
 				}
 			}
 		}
-		if (parts.length > 0) {
+		if (parts.length > 0 || sawEmptyResult) {
 			return parts.join("\n")
 		}
 	}
@@ -3225,7 +3300,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 
 		case "content_update": {
 			if (event.contentType === "tool") {
-				state.selectStreamingToolCall(event.toolCallId)
+				state.selectStreamingToolCallForUpdate(event.toolCallId)
 			}
 			// A tool call's arguments still streaming, before the tool exists:
 			// progress for an agent's own row (core's subagent-progress), and
@@ -3234,11 +3309,38 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 			if (isToolInputProgressUpdate(event.update)) {
 				break
 			}
+			const updateToolName = event.toolName ?? state.getStreamingToolName()
+			if (updateToolName === "run_commands" || updateToolName === "execute_command") {
+				const update = event.update
+				if (
+					state.getStreamingToolName() !== updateToolName ||
+					!update ||
+					typeof update !== "object" ||
+					Array.isArray(update) ||
+					!("chunk" in update) ||
+					typeof update.chunk !== "string" ||
+					!update.chunk
+				) {
+					break
+				}
+				const output = state.appendStreamingCommandOutput(undefined, update.chunk)
+				if (output === undefined) {
+					break
+				}
+				messages.push({
+					ts: state.getStreamingToolTs(),
+					type: "say",
+					say: "command",
+					text: `${extractCommandText(state.getStreamingToolInput())}\n${COMMAND_OUTPUT_STRING}\n${output}`,
+					partial: true,
+				})
+				break
+			}
+
 			// spawn_agent progress updates → emit say:"subagent" with live stats.
 			// The SDK's spawn_agent tool may emit content_update events with
 			// sub-agent progress (iterations, tool calls, usage). We translate
 			// these into the ClineSaySubagentStatus format for the rich UI.
-			const updateToolName = event.toolName ?? state.getStreamingToolName()
 			// A rerun of an agent whose call is gone, carried by the lead's
 			// control call and tagged with the agent's row: that row, wherever
 			// it is -- this iteration's or a kept one -- and never the control
@@ -3346,7 +3448,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 
 		case "content_end": {
 			if (event.contentType === "tool") {
-				state.selectStreamingToolCall(event.toolCallId)
+				state.selectStreamingToolCallForUpdate(event.toolCallId)
 				state.dropGenericToolRow(event.toolCallId)
 			}
 			switch (event.contentType) {
@@ -3398,7 +3500,10 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					break
 				}
 				case "tool": {
-					const toolName = event.toolName ?? "unknown"
+					const toolName = event.toolName ?? state.getStreamingToolName() ?? "unknown"
+					if (state.isMismatchedStreamingCommand(toolName, event.toolCallId)) {
+						break
+					}
 
 					// Counted before the denial branch below: a call the user
 					// refused is still something the turn did, and still leaves a
@@ -4570,6 +4675,17 @@ export function sdkMessagesToClineMessages(
 
 	for (const { message, sourceIndex } of projectSessionMessagesForDisplay(messages)) {
 		const sourceMessage = messages[sourceIndex]
+		if (resolveMessageDisplayRole(message) === "error") {
+			flushUnmatchedToolUses()
+			const text = typeof message.content === "string" ? message.content : textContentBlocksToText(message.content)
+			clineMessages.push(
+				...agentEventToMessages(
+					{ type: "error", error: new Error(text), recoverable: false, iteration: 0 } as AgentEvent,
+					state,
+				),
+			)
+			continue
+		}
 		if (message.role === "assistant") {
 			flushUnmatchedToolUses()
 			// Each assistant message is an iteration, as live: its spawn calls
@@ -4778,23 +4894,24 @@ export function sdkMessagesToClineMessages(
 	// text) gets the inferred completion retag. Skipped when the session record says the last
 	// run failed, was cancelled, or died mid-turn: its terminal text is a dangling partial
 	// response, not a completion, and must stay a plain text row.
-	if (options?.finalTurnCompleted !== false) {
+	if (options?.finalTurnCompleted !== false && !state.wasErrorSeen()) {
 		endFinalTurn()
 	}
 
-	// Always emit ask:"completion_result"
+	// For non-error turns, emit ask:"completion_result"
 	// as the LAST message so it comes after the usage event's
 	// say:"api_req_started". This is critical: the webview uses
 	// the last raw message to determine UI state. If the usage
 	// event is last, the webview shows "Thinking..." instead of
 	// the completion UI
-	clineMessages.push({
-		ts: state.nextTs(),
-		type: "ask",
-		ask: "completion_result",
-		text: "",
-		partial: false,
-	})
+	if (!state.wasErrorSeen())
+		clineMessages.push({
+			ts: state.nextTs(),
+			type: "ask",
+			ask: "completion_result",
+			text: "",
+			partial: false,
+		})
 
 	flushUnmatchedToolUses()
 	return clineMessages
@@ -4835,9 +4952,6 @@ export function historyItemToSessionFields(item: {
 		modelId: item.modelId,
 	}
 }
-
-const MODEL_NOT_FOUND_GUIDANCE =
-	"This model may be retired or unavailable on your account. Switch to a different model in API Configuration settings, then retry."
 
 const VERTEX_GLOBAL_REGION_GUIDANCE =
 	'This model does not support the Vertex AI global endpoint. Switch Google Cloud Region from "global" to a specific region (e.g. "us-east5") in API Configuration settings, or choose a different model, then retry.'

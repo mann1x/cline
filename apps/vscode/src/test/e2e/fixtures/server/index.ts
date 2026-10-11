@@ -33,6 +33,8 @@ export class ClineApiServerMock {
 	private orgBalance = 500.0
 	private userHasOrganization = false
 	private spendLimitExceeded = false
+	private checkpointProbeRelease: Promise<void> | undefined
+	private releaseCheckpointProbeGate: (() => void) | undefined
 	public generationCounter = 0
 
 	public readonly API_USER = new ClineDataMock("personal")
@@ -66,6 +68,19 @@ export class ClineApiServerMock {
 	 */
 	public setSpendLimitExceeded(exceeded: boolean) {
 		this.spendLimitExceeded = exceeded
+	}
+
+	public holdCheckpointProbe(): void {
+		this.releaseCheckpointProbe()
+		this.checkpointProbeRelease = new Promise((resolve) => {
+			this.releaseCheckpointProbeGate = resolve
+		})
+	}
+
+	public releaseCheckpointProbe(): void {
+		this.releaseCheckpointProbeGate?.()
+		this.releaseCheckpointProbeGate = undefined
+		this.checkpointProbeRelease = undefined
 	}
 
 	public setCurrentUser(user: UserResponse | null) {
@@ -491,7 +506,48 @@ export class ClineApiServerMock {
 								: 0
 						const hasToolResult = toolResultCount > 0
 
+						const serializedMessages = Array.isArray(messages)
+							? messages.map((message) => JSON.stringify(message))
+							: []
+						const lastIndexIncluding = (needle: string) => {
+							for (let i = serializedMessages.length - 1; i >= 0; i--) {
+								if (serializedMessages[i].includes(needle)) return i
+							}
+							return -1
+						}
+						const checkpointProbeIndex = lastIndexIncluding("checkpoint_rebuild_probe")
+						const checkpointFollowupIndex = lastIndexIncluding("follow-up after enabling checkpoints")
+						const lastUserIndex = Array.isArray(messages)
+							? messages.map((m: { role?: string }) => m?.role).lastIndexOf("user")
+							: -1
+						// Only the probe turn itself is held open and streams slowly; later
+						// turns whose history contains the probe text answer normally.
+						const isCheckpointProbeTurn = checkpointProbeIndex >= 0 && checkpointProbeIndex === lastUserIndex
+						const checkpointProbeRelease = isCheckpointProbeTurn ? controller.checkpointProbeRelease : undefined
 						let responseText = E2E_MOCK_API_RESPONSES.DEFAULT
+						const chunkDelayMs = isCheckpointProbeTurn ? 750 : 10
+						log("Checkpoint probe indices:", { checkpointFollowupIndex, checkpointProbeIndex, lastUserIndex })
+						if (checkpointFollowupIndex >= 0 && checkpointFollowupIndex === lastUserIndex) {
+							responseText = E2E_MOCK_API_RESPONSES.CHECKPOINT_FOLLOWUP
+						} else if (isCheckpointProbeTurn) {
+							responseText = E2E_MOCK_API_RESPONSES.CHECKPOINT_REBUILD_PROBE
+						}
+						// The hooks e2e sends "hook context probe" after its
+						// UserPromptSubmit hook returned a contextModification; answer
+						// according to whether the injected block made it into this
+						// model request, so the test asserts injection end to end.
+						// The block must follow the *latest* probe prompt: an earlier
+						// turn's block stays in the conversation history, so a
+						// whole-body search would report a fresh injection that never
+						// happened on later turns.
+						if (body.includes("hook context probe")) {
+							const lastPromptIndex = lastIndexIncluding("hook context probe")
+							const lastFactIndex = lastIndexIncluding("HOOK_INJECTED_FACT")
+							responseText =
+								lastFactIndex > lastPromptIndex
+									? E2E_MOCK_API_RESPONSES.HOOK_CONTEXT_RECEIVED
+									: E2E_MOCK_API_RESPONSES.HOOK_CONTEXT_MISSING
+						}
 						let toolCall:
 							| typeof E2E_MOCK_READ_TOOL_CALL
 							| typeof E2E_MOCK_EDITOR_TOOL_CALL
@@ -595,7 +651,11 @@ export class ClineApiServerMock {
 									}
 									res.write(`data: ${JSON.stringify(chunk)}\n\n`)
 									chunkIndex++
-									setTimeout(sendChunk, 10)
+									if (checkpointProbeRelease && chunkIndex === 3) {
+										void checkpointProbeRelease.then(sendChunk)
+									} else {
+										setTimeout(sendChunk, chunkDelayMs)
+									}
 								} else if (toolCallDeltaIndex < toolCallDeltas.length) {
 									const chunk = {
 										id: generationId,
@@ -614,7 +674,7 @@ export class ClineApiServerMock {
 									}
 									res.write(`data: ${JSON.stringify(chunk)}\n\n`)
 									toolCallDeltaIndex++
-									setTimeout(sendChunk, 10)
+									setTimeout(sendChunk, chunkDelayMs)
 								} else {
 									const finalChunk = {
 										id: generationId,

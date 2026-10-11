@@ -25,6 +25,7 @@ import { isAdminOrOwner } from "../account/helpers"
 import { Tab, TabContent, TabList, TabTrigger } from "../common/Tab"
 import ViewHeader from "../common/ViewHeader"
 import SectionHeader from "./SectionHeader"
+import SettingsTargetHighlight from "./SettingsTargetHighlight"
 import AboutSection from "./sections/AboutSection"
 import ApiConfigurationSection from "./sections/ApiConfigurationSection"
 import DebugSection from "./sections/DebugSection"
@@ -34,6 +35,7 @@ import LibrarySettingsSection from "./sections/LibrarySettingsSection"
 import MemorySettingsSection from "./sections/MemorySettingsSection"
 import { RemoteConfigSection } from "./sections/RemoteConfigSection"
 import TerminalSettingsSection from "./sections/TerminalSettingsSection"
+import { getNextSettingsNavigationRequestId, resolveSettingsTarget, type SettingsNavigationRequest } from "./settingsTargets"
 import { flushPendingEdits } from "./utils/pendingEdits"
 
 const IS_DEV = process.env.IS_DEV
@@ -130,7 +132,7 @@ const SETTINGS_TABS: SettingsTab[] = [
 
 type SettingsViewProps = {
 	onDone: () => void
-	targetSection?: string
+	navigationRequest?: SettingsNavigationRequest
 }
 
 // Helper to render section header - moved outside component for better performance
@@ -150,7 +152,8 @@ const renderSectionHeader = (tabId: string) => {
 	)
 }
 
-const SettingsView = ({ onDone, targetSection }: SettingsViewProps) => {
+const SettingsView = ({ navigationRequest, onDone }: SettingsViewProps) => {
+	const initialTarget = resolveSettingsTarget(navigationRequest?.target)
 	// Memoize to avoid recreation
 	const TAB_CONTENT_MAP: Record<SettingsTabID, React.FC<any>> = useMemo(
 		() => ({
@@ -170,7 +173,24 @@ const SettingsView = ({ onDone, targetSection }: SettingsViewProps) => {
 	const { version, extensionVariant, environment, settingsInitialModelTab } = useExtensionState()
 	const { activeOrganization, clineUser } = useClineAuth()
 
-	const [activeTab, setActiveTab] = useState<string>(targetSection || SETTINGS_TABS[0].id)
+	const [activeTab, setActiveTab] = useState<string>(initialTarget?.tabId || SETTINGS_TABS[0].id)
+	const [pendingTarget, setPendingTarget] = useState<{ requestId: number; target: string } | undefined>(undefined)
+
+	const selectSettingsTarget = useCallback((target: string, requestId: number) => {
+		const resolved = resolveSettingsTarget(target)
+		if (!resolved) {
+			return
+		}
+		if (resolved.tabId) {
+			// Same reason as changeTab below: the tab being left unmounts its fields.
+			void flushPendingEdits()
+			setActiveTab(resolved.tabId)
+		}
+		setPendingTarget({ requestId, target })
+	}, [])
+	const completeSettingsTarget = useCallback((requestId: number) => {
+		setPendingTarget((current) => (current?.requestId === requestId ? undefined : current))
+	}, [])
 
 	// Leaving a tab unmounts everything on it, including a field still sitting
 	// inside its debounce. The writes are started here, before the unmount, so
@@ -201,34 +221,13 @@ const SettingsView = ({ onDone, targetSection }: SettingsViewProps) => {
 				return
 			}
 
-			const tabId = grpcMessage.value
-			if (!tabId) {
+			const target = grpcMessage.value
+			if (!target) {
 				return
 			}
-
-			// Check if valid tab ID
-			if (SETTINGS_TABS.some((tab) => tab.id === tabId)) {
-				changeTab(tabId)
-				return
-			}
-
-			// Fallback to element scrolling
-			requestAnimationFrame(() => {
-				const element = document.getElementById(tabId)
-				if (!element) {
-					return
-				}
-
-				element.scrollIntoView({ behavior: "smooth" })
-				element.style.transition = "background-color 0.5s ease"
-				element.style.backgroundColor = "var(--vscode-textPreformat-background)"
-
-				setTimeout(() => {
-					element.style.backgroundColor = "transparent"
-				}, 1200)
-			})
+			selectSettingsTarget(target, getNextSettingsNavigationRequestId())
 		},
-		[changeTab],
+		[selectSettingsTarget],
 	)
 
 	useEvent("message", handleMessage)
@@ -242,12 +241,12 @@ const SettingsView = ({ onDone, targetSection }: SettingsViewProps) => {
 		}
 	}, [])
 
-	// Update active tab when targetSection changes
+	// Update active tab and restart target emphasis for every navigation request.
 	useEffect(() => {
-		if (targetSection) {
-			setActiveTab(targetSection)
+		if (navigationRequest) {
+			selectSettingsTarget(navigationRequest.target, navigationRequest.requestId)
 		}
-	}, [targetSection])
+	}, [navigationRequest, selectSettingsTarget])
 
 	// Memoized tab item renderer
 	const renderTabItem = useCallback(
@@ -309,7 +308,21 @@ const SettingsView = ({ onDone, targetSection }: SettingsViewProps) => {
 					{SETTINGS_TABS.filter((tab) => !tab.hidden?.({ user: clineUser, activeOrganization })).map(renderTabItem)}
 				</TabList>
 
-				<TabContent className="flex-1 overflow-auto">{ActiveContent}</TabContent>
+				<TabContent className="flex-1 overflow-auto">
+					{ActiveContent}
+					{pendingTarget &&
+						(() => {
+							const resolved = resolveSettingsTarget(pendingTarget.target)
+							return resolved?.elementId && (!resolved.tabId || resolved.tabId === activeTab) ? (
+								<SettingsTargetHighlight
+									key={pendingTarget.requestId}
+									onComplete={completeSettingsTarget}
+									requestId={pendingTarget.requestId}
+									target={resolved}
+								/>
+							) : null
+						})()}
+				</TabContent>
 			</div>
 		</Tab>
 	)

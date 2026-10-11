@@ -11,6 +11,7 @@ import { setHomeDir } from "@cline/shared/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { version as corePackageVersion } from "../../package.json";
 import type { ProviderSettings } from "../types/provider-settings";
+import { CORE_TELEMETRY_EVENTS } from "./telemetry/core-events";
 
 function createProviderSettingsManager(settings?: ProviderSettings) {
 	return {
@@ -270,6 +271,104 @@ describe("prepareLocalRuntimeBootstrap", () => {
 			loadLatestOnInit: false,
 			loadPrivateOnAuth: false,
 		});
+	});
+
+	it.each([
+		{ label: "missing", systemPrompt: undefined },
+		{ label: "blank", systemPrompt: " \n\t" },
+	])("builds the default system prompt from execution-host workspace context when the prompt is $label", async ({
+		systemPrompt,
+	}) => {
+		const { prepareLocalRuntimeBootstrap } = await import(
+			"./local-runtime-bootstrap"
+		);
+		const workspaceRoot = mkdtempSync(
+			join(tmpdir(), "remote-bootstrap-prompt-"),
+		);
+		const input = createStartInput();
+		const config = input.config as Omit<
+			typeof input.config,
+			"mode" | "systemPrompt"
+		> & {
+			mode: "act" | "plan";
+			rules?: string;
+			systemPrompt?: string;
+		};
+		config.cwd = workspaceRoot;
+		config.workspaceRoot = workspaceRoot;
+		if (systemPrompt === undefined) {
+			delete config.systemPrompt;
+		} else {
+			config.systemPrompt = systemPrompt;
+		}
+		config.mode = "plan";
+		config.rules = "# Remote Rule\n\nOnly inspect the execution host.";
+
+		const bootstrap = await prepareLocalRuntimeBootstrap({
+			input,
+			sessionId: "sess-remote-prompt",
+			providerSettingsManager: createProviderSettingsManager() as never,
+			defaultTelemetry: undefined,
+			defaultToolPolicies: undefined,
+			onPluginEvent: () => {},
+			onTeamEvent: () => {},
+			createSpawnTool,
+			readSessionMetadata: async () => undefined,
+			writeSessionMetadata: async () => {},
+		});
+
+		expect(bootstrap.config.systemPrompt).toContain(
+			`1. Platform: ${process.platform}`,
+		);
+		expect(bootstrap.config.systemPrompt).toContain(
+			`4. Working Directory: ${workspaceRoot}`,
+		);
+		expect(bootstrap.config.systemPrompt).toContain(
+			"# Workspace Configuration",
+		);
+		expect(bootstrap.config.systemPrompt).toContain(workspaceRoot);
+		expect(bootstrap.config.systemPrompt).toContain(
+			"Only inspect the execution host.",
+		);
+		expect(bootstrap.config.systemPrompt).toContain("# Plan Mode");
+		expect(bootstrap.runtimeBuilderInput.config.systemPrompt).toBe(
+			bootstrap.config.systemPrompt,
+		);
+	});
+
+	// Upstream asserts the prompt comes back byte-identical. This fork states
+	// the Output Budget on every host's prompt, so what is asserted is that
+	// nothing generated was mixed into the caller's text.
+	it("keeps an explicit system prompt as the caller wrote it", async () => {
+		const { prepareLocalRuntimeBootstrap } = await import(
+			"./local-runtime-bootstrap"
+		);
+		const input = createStartInput();
+		const explicitPrompt = "  Use the caller-owned prompt verbatim.  \n";
+		input.config.systemPrompt = explicitPrompt;
+		const config = input.config as typeof input.config & { rules?: string };
+		config.rules = "This rule belongs only in a generated prompt.";
+
+		const bootstrap = await prepareLocalRuntimeBootstrap({
+			input,
+			sessionId: "sess-explicit-prompt",
+			providerSettingsManager: createProviderSettingsManager() as never,
+			defaultTelemetry: undefined,
+			defaultToolPolicies: undefined,
+			onPluginEvent: () => {},
+			onTeamEvent: () => {},
+			createSpawnTool,
+			readSessionMetadata: async () => undefined,
+			writeSessionMetadata: async () => {},
+		});
+
+		expect(bootstrap.config.systemPrompt).toContain(
+			"Use the caller-owned prompt verbatim.",
+		);
+		expect(bootstrap.config.systemPrompt).not.toContain(
+			"This rule belongs only in a generated prompt.",
+		);
+		expect(bootstrap.config.systemPrompt).not.toContain("# Workspace");
 	});
 
 	it("filters globally disabled plugin tools before extension setup", async () => {
@@ -592,6 +691,56 @@ describe("prepareLocalRuntimeBootstrap", () => {
 		expect(bootstrap.providerConfig.defaultMaxOutputTokens).toBe(5_000);
 		expect(bootstrap.providerConfig.thinkingBudgetTokens).toBe(1_250);
 		expect(showFetch).not.toHaveBeenCalled();
+	});
+
+	it("stamps the session origin on every telemetry event the session emits", async () => {
+		const { prepareLocalRuntimeBootstrap } = await import(
+			"./local-runtime-bootstrap"
+		);
+
+		const capture = vi.fn();
+		const defaultTelemetry = {
+			capture,
+			captureRequired: vi.fn(),
+			recordCounter: vi.fn(),
+			recordHistogram: vi.fn(),
+			recordGauge: vi.fn(),
+			setDistinctId: vi.fn(),
+			setMetadata: vi.fn(),
+			updateMetadata: vi.fn(),
+			setCommonProperties: vi.fn(),
+			updateCommonProperties: vi.fn(),
+			isEnabled: () => true,
+			flush: vi.fn(),
+			dispose: vi.fn(),
+		};
+		const bootstrap = await prepareLocalRuntimeBootstrap({
+			input: createStartInput(),
+			sessionId: "sess-origin",
+			sessionOrigin: { mode: "import", trigger: "claude-code" },
+			providerSettingsManager: createProviderSettingsManager() as never,
+			defaultTelemetry: defaultTelemetry as never,
+			defaultToolPolicies: undefined,
+			onPluginEvent: () => {},
+			onTeamEvent: () => {},
+			createSpawnTool,
+			readSessionMetadata: async () => undefined,
+			writeSessionMetadata: async () => {},
+		});
+
+		bootstrap.config.telemetry?.capture({
+			event: CORE_TELEMETRY_EVENTS.TASK.PROVIDER_API_ERROR,
+			properties: { ulid: "sess-origin" },
+		});
+
+		expect(capture).toHaveBeenLastCalledWith({
+			event: CORE_TELEMETRY_EVENTS.TASK.PROVIDER_API_ERROR,
+			properties: expect.objectContaining({
+				ulid: "sess-origin",
+				session_origin: "import",
+				session_origin_trigger: "claude-code",
+			}),
+		});
 	});
 
 	it("prefers per-session config fetch over defaultFetch", async () => {

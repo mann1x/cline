@@ -35,6 +35,8 @@ export {
 	type ApplyPatchExecutorOptions,
 	type AwkExecutorOptions,
 	CommandExitError,
+	CommandSpawnError,
+	CommandTerminationError,
 	computePatchChanges,
 	createApplyPatchExecutor,
 	createAwkExecutor,

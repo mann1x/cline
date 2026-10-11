@@ -9,6 +9,16 @@ export const CLI_DEFAULT_LOOP_DETECTION = {
 } as const;
 
 /**
+ * Consecutive mistakes a run tolerates before it stops or asks how to
+ * continue, when `--retries` is not given. `--help` reports this value.
+ *
+ * 6 in this fork, 3 upstream. `--retries` documented 6 while the code said 3;
+ * upstream settled it on 3, this fork on 6, and the harness arms were all
+ * measured on 6.
+ */
+export const CLI_DEFAULT_MAX_CONSECUTIVE_MISTAKES = 6;
+
+/**
  * Default checkpoint configuration for the CLI.
  * Core leaves checkpoints disabled by default (opt-in);
  * the CLI enables them so every run gets a restorable git snapshot.

@@ -84,10 +84,12 @@ function normalizeToolInputSchema(
 
 export function createTool<TInput, TOutput>(config: {
 	name: string;
+	resultPolicy?: AgentTool["resultPolicy"];
 	description: string;
 	inputSchema: Record<string, unknown>;
 	execute: (input: TInput, context: AgentToolContext) => Promise<TOutput>;
 	lifecycle?: AgentTool<TInput, TOutput>["lifecycle"];
+	executionMode?: AgentTool["executionMode"];
 	timeoutMs?: number;
 	retryable?: boolean;
 	maxRetries?: number;
@@ -96,6 +98,7 @@ export function createTool<TInput, TOutput>(config: {
 }): AgentTool<TInput, TOutput>;
 export function createTool<TSchema extends z.ZodTypeAny, TOutput>(config: {
 	name: string;
+	resultPolicy?: AgentTool["resultPolicy"];
 	description: string;
 	inputSchema: TSchema;
 	execute: (
@@ -103,6 +106,7 @@ export function createTool<TSchema extends z.ZodTypeAny, TOutput>(config: {
 		context: AgentToolContext,
 	) => Promise<TOutput>;
 	lifecycle?: AgentTool<z.infer<TSchema>, TOutput>["lifecycle"];
+	executionMode?: AgentTool["executionMode"];
 	timeoutMs?: number;
 	retryable?: boolean;
 	maxRetries?: number;
@@ -111,10 +115,12 @@ export function createTool<TSchema extends z.ZodTypeAny, TOutput>(config: {
 }): AgentTool<z.infer<TSchema>, TOutput>;
 export function createTool<TInput, TOutput>(config: {
 	name: string;
+	resultPolicy?: AgentTool["resultPolicy"];
 	description: string;
 	inputSchema: Record<string, unknown> | z.ZodTypeAny;
 	execute: (input: TInput, context: AgentToolContext) => Promise<TOutput>;
 	lifecycle?: AgentTool<TInput, TOutput>["lifecycle"];
+	executionMode?: AgentTool["executionMode"];
 	timeoutMs?: number;
 	retryable?: boolean;
 	maxRetries?: number;
@@ -129,11 +135,13 @@ export function createTool<TInput, TOutput>(config: {
 
 	return {
 		name: config.name,
+		resultPolicy: config.resultPolicy,
 		description: config.description,
 		inputSchema,
 		...(config.source ? { source: config.source } : {}),
 		...(config.readOnly ? { readOnly: true } : {}),
 		lifecycle: config.lifecycle,
+		executionMode: config.executionMode,
 		timeoutMs: config.timeoutMs ?? 30_000,
 		retryable: config.retryable ?? true,
 		maxRetries: config.maxRetries ?? 3,

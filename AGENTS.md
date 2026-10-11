@@ -12,7 +12,7 @@
 > marketplace workflow and this fork does not publish to the marketplace.
 > Fork scope and rationale: [`docs/protocols/FORK.md`](docs/protocols/FORK.md).
 
-Bun **1.3.13** workspace (`package.json` `workspaces`) with Node **>=22** as the runtime (`.nvmrc`, `.tool-versions`). Do not use npm/yarn/pnpm. Lockfile: `bun.lock`.
+Bun **1.4.2** workspace (`package.json` `workspaces`) with Node **>=22** as the runtime (`.nvmrc`, `.tool-versions`). Do not use npm/yarn/pnpm. Lockfile: `bun.lock`.
 
 ## Build / lint / test
 

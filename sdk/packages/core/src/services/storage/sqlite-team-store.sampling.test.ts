@@ -14,6 +14,20 @@ describe("a persisted teammate's sampler", () => {
 
 	const opened: SqliteTeamStore[] = [];
 
+	// The store writes the team row from the state, so the state names its team.
+	const emptyState = () =>
+		({
+			teamId: "team-1",
+			teamName: "team",
+			members: [],
+			tasks: [],
+			mailbox: [],
+			missionLog: [],
+			runs: [],
+			outcomes: [],
+			outcomeFragments: [],
+		}) as unknown as TeamRuntimeState;
+
 	beforeEach(() => {
 		dir = fs.mkdtempSync(path.join(os.tmpdir(), "team-store-sampling-"));
 	});
@@ -30,11 +44,7 @@ describe("a persisted teammate's sampler", () => {
 		const store = new SqliteTeamStore({ teamDir: dir });
 		opened.push(store);
 		store.init();
-		const state = {
-			tasks: [],
-			mailbox: [],
-			missionLog: [],
-		} as unknown as TeamRuntimeState;
+		const state = emptyState();
 		const teammate: TeamTeammateSpec = {
 			agentId: "w",
 			rolePrompt: "Write",
@@ -52,17 +62,13 @@ describe("a persisted teammate's sampler", () => {
 		const store = new SqliteTeamStore({ teamDir: dir });
 		opened.push(store);
 		store.init();
-		store.persistRuntime(
-			"team",
-			{ tasks: [], mailbox: [], missionLog: [] } as unknown as TeamRuntimeState,
-			[
-				{
-					agentId: "w",
-					rolePrompt: "Write",
-					temperatureRange: 400,
-				} as TeamTeammateSpec,
-			],
-		);
+		store.persistRuntime("team", emptyState(), [
+			{
+				agentId: "w",
+				rolePrompt: "Write",
+				temperatureRange: 400,
+			} as TeamTeammateSpec,
+		]);
 		expect(store.loadRuntime("team").teammates).toEqual([
 			{ agentId: "w", rolePrompt: "Write" },
 		]);

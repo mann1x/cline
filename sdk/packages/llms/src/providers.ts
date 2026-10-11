@@ -1,4 +1,5 @@
 export {
+	getGeneratedModelsForRuntimeProvider,
 	isProviderApiLine,
 	OLLAMA_DEFAULT_CONTEXT_WINDOW,
 	type ProviderApiLine,
@@ -24,6 +25,12 @@ import {
 	createGatewayApiHandler,
 	createGatewayApiHandlerAsync,
 } from "./providers/compat";
+
+export {
+	resolveGatewayProviderRegistration,
+	resolveGatewayProviderRegistrationSync,
+} from "./providers/compat";
+
 import {
 	getRegisteredHandler,
 	getRegisteredHandlerAsync,
@@ -36,7 +43,10 @@ import {
 	type ProviderConfig,
 } from "./providers/types";
 
-export { classifyProviderError } from "./providers/error-classification";
+export {
+	classifyProviderError,
+	isRetryableProviderError,
+} from "./providers/error-classification";
 export {
 	ClineFreeModelLimitError,
 	ClineNotSubscribedError,

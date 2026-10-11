@@ -113,6 +113,14 @@ export {
 } from "./engine-evictions";
 export { isNodeUnreachable } from "./node-reachability";
 export {
+	isDurableTeamEvent,
+	shouldFlushTeamEventImmediately,
+	TEAM_RUN_RESULT_TEXT_LIMIT,
+	type TeamRunResultRecord,
+	toPersistableTeamEvent,
+	toTeamRunResultRecord,
+} from "./persistence-policy";
+export {
 	buildTeamProgressSummary,
 	toTeamProgressLifecycleEvent,
 } from "./projections";

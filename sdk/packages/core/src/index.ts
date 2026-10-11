@@ -6,6 +6,7 @@
 
 export * as Llms from "@cline/llms";
 export {
+	buildClineClientHeaders,
 	ClineFreeModelLimitError,
 	ClineNotSubscribedError,
 	ClineOrgIndividualInferenceSubscriptionError,
@@ -64,7 +65,6 @@ export type {
 	ClineAccountActionRequest,
 	ConnectorHookEvent,
 	ContentBlock,
-	FeatureFlag,
 	FeatureFlagPayload,
 	FeatureFlagsAndPayloads,
 	FeatureFlagsContext,
@@ -120,6 +120,7 @@ export {
 	createTool,
 	emptyWorkspaceManifest,
 	FEATURE_FLAGS,
+	FeatureFlag,
 	FeatureFlagDefaultValue,
 	formatDisplayUserInput,
 	noopBasicLogger,
@@ -140,6 +141,7 @@ export {
 	type ClineAccountPaymentTransaction,
 	ClineAccountService,
 	type ClineAccountServiceOptions,
+	type ClineAccountTelemetryIdentity,
 	type ClineAccountUsageTransaction,
 	type ClineAccountUser,
 	type ClineOrganization,
@@ -148,7 +150,9 @@ export {
 	type FeaturebaseTokenResponse,
 	isClineAccountActionRequest,
 	type ProviderActionExecutor,
+	persistClineAccountTelemetryIdentity,
 	RpcClineAccountService,
+	resolveClineAccountTelemetryIdentity,
 	type UserCurrentPlan,
 	type UserRemoteConfigOrganization,
 	type UserRemoteConfigResponse,
@@ -211,6 +215,7 @@ export type {
 	OcaTokenResolution,
 } from "./auth/types";
 export { ClineCore } from "./ClineCore";
+export { toClineCoreStartInput } from "./cline-core/start-input";
 export type {
 	ClineAutomationEventIngressResult,
 	ClineAutomationEventLog,
@@ -599,6 +604,7 @@ export {
 export {
 	formatRulesForSystemPrompt,
 	isRuleEnabled,
+	loadRulesForSystemPromptFromRecords,
 	mergeRulesForSystemPrompt,
 } from "./runtime/safety/rules";
 export {
@@ -615,6 +621,7 @@ export {
 	type DesktopToolApprovalOptions,
 	requestDesktopToolApproval,
 } from "./runtime/tools/tool-approval";
+export * from "./services/cloud-handoff";
 export { listActiveConnectors } from "./services/connectors/active-connectors";
 export {
 	disableConnectorAutostart,
@@ -716,9 +723,19 @@ export type {
 export {
 	buildMcpInstallTransport,
 	installMcpServer,
+	parseMcpHeaders,
 	parseMcpInstallArgs,
 	uninstallMcpServer,
 } from "./services/mcp-install";
+export type {
+	PluginCommandResult,
+	PluginCommandService,
+	PluginSlashCommand,
+} from "./services/plugin-commands";
+export {
+	createPluginCommandService,
+	normalizePluginCommandName,
+} from "./services/plugin-commands";
 export type {
 	ParsedPluginSource,
 	PluginInstallOptions,
@@ -774,6 +791,7 @@ export {
 	deleteLocalProvider,
 	ensureCustomProvidersLoaded,
 	getLocalProviderModels,
+	getLocalTranscriptionModels,
 	isDedicatedTranscriptionModel,
 	listLocalProviders,
 	loginAndSaveLocalProviderOAuthCredentials,
@@ -794,6 +812,7 @@ export {
 } from "./services/providers/local-provider-service";
 export {
 	getProviderConfigFields,
+	isLocalAuthProvider,
 	type ProviderConfigFieldKey,
 	type ProviderConfigFieldRequirement,
 	type ProviderConfigFields,
@@ -819,6 +838,7 @@ export type {
 	CaptureAgentUnexpectedReasoningTokensInput,
 	CaptureCompactionExecutedProperties,
 	CaptureCompactionSkippedProperties,
+	GitSnapshotProperties,
 	TelemetryAgentIdentityProperties,
 	TelemetryAgentKind,
 	TelemetryCompactionMode,
@@ -842,6 +862,7 @@ export {
 	captureConversationTurnEvent,
 	captureDiffEditFailure,
 	captureExtensionActivated,
+	captureGitSnapshot,
 	captureHookDiscovery,
 	captureMentionFailed,
 	captureMentionSearchResults,
@@ -860,6 +881,7 @@ export {
 	captureWorkspaceInitError,
 	captureWorkspaceInitialized,
 	captureWorkspacePathResolved,
+	clearAccountTelemetryIdentity,
 	identifyAccount,
 } from "./services/telemetry/core-events";
 export type { ITelemetryAdapter } from "./services/telemetry/ITelemetryAdapter";
@@ -872,6 +894,12 @@ export {
 	OpenTelemetryProvider,
 	type OpenTelemetryProviderOptions,
 } from "./services/telemetry/OpenTelemetryProvider";
+export {
+	type ClientTelemetryContext,
+	createClientScopedTelemetryService,
+	createScopedTelemetryService,
+	resolveClientTelemetryProperties,
+} from "./services/telemetry/scoped-telemetry";
 export {
 	TelemetryLoggerSink,
 	type TelemetryLoggerSinkOptions,
@@ -922,6 +950,7 @@ export {
 	projectSessionMessagesForDisplay,
 	type SessionDisplayMessage,
 } from "./session/display-messages";
+export { createForkSessionMetadata } from "./session/fork-metadata";
 export {
 	deriveSubsessionStatus,
 	makeSubSessionId,
@@ -1019,6 +1048,7 @@ export {
 	resolveScrapeSettings,
 	type ScrapeSettings,
 } from "@cline/shared";
+export { resolveComposioToolsStatePath } from "./extensions/composio/composio-tools-extension";
 export {
 	createCappedThinkingNoteWriter,
 	createCappedThinkingPrepareTurn,
@@ -1064,6 +1094,8 @@ export {
 	type AskQuestionExecutor,
 	type BuiltinToolAvailabilityContext,
 	CommandExitError,
+	CommandSpawnError,
+	CommandTerminationError,
 	type CreateBuiltinToolsOptions,
 	type CreateDefaultToolsOptions,
 	computePatchChanges,
@@ -1440,6 +1472,8 @@ export {
 	WEB_SCRAPE_TOOL_NAME,
 	type WebScrapeToolOptions,
 } from "./extensions/tools/web-scrape-tool";
+export * from "./remote/remote-environments";
+export { ensureLoginShellPath } from "./remote/shell-path";
 // The transaction's base revision: what every file said when the open
 // transaction started. Read through `read_files` with `revision: "base"`, and
 // written back over one file by `restore_file`. Both exist only while the
@@ -1487,6 +1521,7 @@ export {
 // What the user said when an escalation was put to them. A bare boolean still
 // counts: a host with only a yes and a no should not have to wrap it.
 export type { EscalationApproval } from "./runtime/escalation/escalation-session";
+export { isClineAccountFeatureEnabled } from "./services/feature-flags/cline-account-feature-flags";
 export {
 	applyClineFeaturedModels,
 	type ClineRecommendedModel,

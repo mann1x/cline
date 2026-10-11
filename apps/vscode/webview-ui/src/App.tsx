@@ -27,7 +27,7 @@ const AppContent = () => {
 		showMcp,
 		mcpTab,
 		showSettings,
-		settingsTargetSection,
+		settingsNavigationRequest,
 		showHistory,
 		showAccount,
 		showWorktrees,
@@ -93,7 +93,7 @@ const AppContent = () => {
 			 */}
 			{showSettings && (
 				<ViewErrorBoundary onDone={hideSettings} viewName="Settings">
-					<SettingsView onDone={hideSettings} targetSection={settingsTargetSection} />
+					<SettingsView navigationRequest={settingsNavigationRequest} onDone={hideSettings} />
 				</ViewErrorBoundary>
 			)}
 			{showHistory && (

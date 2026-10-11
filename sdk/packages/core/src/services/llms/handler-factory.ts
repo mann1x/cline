@@ -4,6 +4,7 @@ import {
 	hasRegisteredHandler,
 	MODEL_COLLECTIONS_BY_PROVIDER_ID,
 	normalizeProviderId,
+	resolveGatewayProviderRegistrationSync,
 	toGatewayModelCapabilities,
 } from "@cline/llms";
 import type {
@@ -232,11 +233,45 @@ function toGatewayConfiguredModel(
 		capabilities: toGatewayModelCapabilities(model.capabilities),
 		reasoningOptions: model.reasoningOptions,
 		metadata: {
+			// Configured models replace gateway catalog entries, so retain the
+			// per-model protocol used by providers with mixed API endpoints.
+			...(model.metadata?.apiProtocol
+				? { apiProtocol: model.metadata.apiProtocol }
+				: {}),
 			family: model.family,
 			pricing: model.pricing,
 			status: model.status,
 			releaseDate: model.releaseDate,
 		},
+	};
+}
+
+export type ConnectionConfig = Pick<
+	AgentConfig,
+	"providerId" | "modelId" | "apiKey" | "baseUrl" | "headers" | "providerConfig"
+>;
+
+/**
+ * Resolve the provider connection for a request from the live session config.
+ * Top-level fields win over the nested `providerConfig` snapshot, and the
+ * snapshot only contributes when it describes the same provider, so a token
+ * refresh or connection change written to the top level (see
+ * `syncOAuthCredentials` / `updateConnection`) applies to every request built
+ * afterwards. Every request builder (main agent, compaction summarizer) must
+ * go through this so they never disagree on credentials.
+ */
+export function resolveConnectionProviderConfig(
+	config: ConnectionConfig,
+): ProviderConfig {
+	const pc = config.providerConfig as ProviderConfig | undefined;
+	const base = pc?.providerId === config.providerId ? pc : undefined;
+	return {
+		...(base ?? {}),
+		providerId: config.providerId,
+		modelId: config.modelId,
+		apiKey: config.apiKey ?? base?.apiKey,
+		baseUrl: config.baseUrl ?? base?.baseUrl,
+		headers: config.headers ?? base?.headers,
 	};
 }
 
@@ -267,16 +302,8 @@ export function createAgentModelFromConfig(
 	telemetry?: ITelemetryService,
 	options?: CreateAgentModelOptions,
 ): AgentModel {
-	const pc = config.providerConfig as ProviderConfig | undefined;
-	const baseProviderConfig =
-		pc?.providerId === config.providerId ? pc : undefined;
 	const normalizedProviderConfig: ProviderConfig = {
-		...(baseProviderConfig ?? {}),
-		providerId: config.providerId,
-		modelId: config.modelId,
-		apiKey: config.apiKey ?? baseProviderConfig?.apiKey,
-		baseUrl: config.baseUrl ?? baseProviderConfig?.baseUrl,
-		headers: config.headers ?? baseProviderConfig?.headers,
+		...resolveConnectionProviderConfig(config),
 		knownModels: resolveKnownModelsFromConfig(config),
 		maxOutputTokens: config.maxTokensPerTurn,
 		temperature: config.temperature,
@@ -307,7 +334,7 @@ export function createAgentModelFromConfig(
 		);
 	}
 
-	return createGateway({
+	const gateway = createGateway({
 		// Forward the host-provided fetch so inference honors proxy/CA config on
 		// JetBrains and CLI, where the global fetch is not proxy-aware. Without
 		// this the agent loop falls back to bare global fetch and corporate
@@ -349,7 +376,21 @@ export function createAgentModelFromConfig(
 		logger,
 		telemetry:
 			telemetry ?? config.telemetry ?? config.extensionContext?.telemetry,
-	}).createAgentModel(
+	});
+
+	// The gateway starts with builtin providers only. Custom providers (Add
+	// Provider / providers.json / models.json) and routed provider ids live in
+	// the model catalog — bridge them into this gateway instance, exactly as
+	// the legacy ApiHandler path does, so runs don't fail with
+	// "Unknown or disabled provider" for ids the picker legitimately offers.
+	const registration = resolveGatewayProviderRegistrationSync(
+		normalizedProviderConfig,
+	);
+	if (registration) {
+		gateway.registerProvider(registration);
+	}
+
+	return gateway.createAgentModel(
 		{
 			providerId: normalizedProviderConfig.providerId,
 			modelId: normalizedProviderConfig.modelId,

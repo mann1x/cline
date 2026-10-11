@@ -20,6 +20,7 @@ class OneNoteModel implements AgentModel {
 		const text = this.text;
 		return (async function* () {
 			yield { type: "text-delta", text } as AgentModelEvent;
+			yield { type: "finish", reason: "stop" } as AgentModelEvent;
 		})();
 	}
 }
@@ -56,6 +57,7 @@ class ScriptedModel implements AgentModel {
 				return;
 			}
 			yield { type: "text-delta", text: line } as AgentModelEvent;
+			yield { type: "finish", reason: "stop" } as AgentModelEvent;
 		})();
 	}
 }

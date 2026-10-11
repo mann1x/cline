@@ -28,6 +28,7 @@ import {
 	validateAndReserveImageMedia,
 } from "@cline/shared";
 import { readOverlapUnchanged } from "./read-overlap";
+import { prepareToolResultPreview } from "./tool-result-cache";
 
 // 8k held one search result comfortably and cut a real file read in half.
 // Reads are the tool whose output the model is asked to reason about line by
@@ -296,6 +297,10 @@ interface TruncationCandidate {
 }
 
 export interface MessageBuilderOptions {
+	/** Synchronous Core-owned recovery lookup; undefined leaves the normal result projection unchanged. */
+	getToolResultRecovery?: (
+		result: ToolResultContent,
+	) => { uri?: string } | undefined;
 	maxToolResultChars?: number;
 	maxFileContentChars?: number;
 	maxTotalTextBytes?: number;
@@ -332,6 +337,9 @@ export function getMessageBuilderOptionsFromEnv(
  * Builds an API-safe message copy without mutating original conversation history.
  */
 export class MessageBuilder {
+	private readonly recoveryNotices = new WeakSet<object>();
+	private readonly getToolResultRecovery?: MessageBuilderOptions["getToolResultRecovery"];
+	private recoveryNoticeBytes = 0;
 	private indexedMessageCount = 0;
 	private indexedTailRef: Message | undefined;
 	private readonly toolNameByIdCache = new Map<string, string>();
@@ -361,6 +369,7 @@ export class MessageBuilder {
 	private readonly duplicateReadKeys = new Set<string>();
 
 	constructor(options: MessageBuilderOptions = {}) {
+		this.getToolResultRecovery = options.getToolResultRecovery;
 		this.maxToolResultChars = normalizePositiveLimit(
 			options.maxToolResultChars,
 			DEFAULT_MAX_TOOL_RESULT_CHARS,
@@ -406,6 +415,7 @@ export class MessageBuilder {
 	}
 
 	buildForApi(messages: Message[]): Message[] {
+		this.recoveryNoticeBytes = 0;
 		this.reindex(messages);
 		this.commitOutdatedRewrites(messages);
 		const repairedMessages = this.addMissingToolResults(messages);
@@ -490,6 +500,32 @@ export class MessageBuilder {
 		}
 
 		const toolName = this.resolveToolName(block);
+		const recovery = this.getToolResultRecovery?.({
+			...block,
+			name: toolName ?? block.name,
+		});
+		if (recovery) {
+			const { text, images } = prepareToolResultPreview(block.content);
+			if (typeof text === "string" && text.length > this.maxToolResultChars) {
+				const content: ToolResultContent["content"] = [
+					{ type: "text", text: this.truncateMiddle(text) },
+					...images,
+				];
+				if (recovery.uri) {
+					const notice: TextContent = {
+						type: "text",
+						text: `Full result is temporarily saved to ${recovery.uri}. Only read_files can access this cache URI. Use read_files with specific line ranges if omitted content is needed.`,
+					};
+					const bytes = utf8ByteLength(notice.text);
+					if (this.recoveryNoticeBytes + bytes <= this.maxTotalTextBytes / 2) {
+						this.recoveryNoticeBytes += bytes;
+						this.recoveryNotices.add(notice);
+						content.push(notice);
+					}
+				}
+				return { ...block, content };
+			}
+		}
 		let nextContent = block.content;
 
 		if (this.isReadTool(toolName) && block.is_error !== true) {
@@ -1586,6 +1622,7 @@ export class MessageBuilder {
 			return this.truncateMiddle(content);
 		}
 		return content.map((entry) => {
+			if (this.recoveryNotices.has(entry)) return entry;
 			if (entry.type === "file") {
 				const next = this.truncateMiddle(entry.content);
 				return next === entry.content ? entry : { ...entry, content: next };
@@ -1689,23 +1726,39 @@ export class MessageBuilder {
 			}
 			return {
 				...message,
-				content: message.content.map((block) =>
-					cloneContentBlockForMutation(block),
-				),
+				content: message.content.map((block) => {
+					const cloned = cloneContentBlockForMutation(block);
+					if (
+						block.type === "tool_result" &&
+						cloned.type === "tool_result" &&
+						Array.isArray(block.content) &&
+						Array.isArray(cloned.content)
+					) {
+						block.content.forEach((entry, index) => {
+							if (this.recoveryNotices.has(entry))
+								this.recoveryNotices.add(cloned.content[index] as object);
+						});
+					}
+					return cloned;
+				}),
 			};
 		});
 
 		const candidates = this.collectTruncationCandidates(next);
+		const retentionFloor = Math.floor(
+			this.maxTotalTextBytes / (2 * Math.max(1, candidates.length)),
+		);
 		for (const candidate of candidates) {
 			if (totalBytes <= this.maxTotalTextBytes) {
 				break;
 			}
 			const currentBytes = candidate.byteLength;
-			if (currentBytes <= candidate.minBytes) {
+			const minBytes = Math.min(candidate.minBytes, retentionFloor);
+			if (currentBytes <= minBytes) {
 				continue;
 			}
 			const overflow = totalBytes - this.maxTotalTextBytes;
-			const targetBytes = Math.max(candidate.minBytes, currentBytes - overflow);
+			const targetBytes = Math.max(minBytes, currentBytes - overflow);
 			const truncated = truncateMiddleToBytes(
 				candidate.get(),
 				targetBytes,
@@ -1812,6 +1865,7 @@ export class MessageBuilder {
 					continue;
 				}
 				for (const entry of block.content) {
+					if (this.recoveryNotices.has(entry)) continue;
 					if (entry.type === "text") {
 						resultCandidates.push({
 							byteLength: utf8ByteLength(entry.text),
@@ -2095,7 +2149,8 @@ function truncateMiddleToBytes(
 	// Binary search the largest char-length whose UTF-8 byte length fits.
 	let low = 0;
 	let high = text.length;
-	let best = truncateMiddleByChars(text, 0, makeMarker);
+	// Even the truncation marker may exceed the remaining byte budget.
+	let best = "";
 	while (low <= high) {
 		const mid = (low + high) >>> 1;
 		const candidate = truncateMiddleByChars(text, mid, makeMarker);

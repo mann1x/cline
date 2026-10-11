@@ -92,10 +92,7 @@ import {
 	createLeadAgentTools,
 	TEAMMATE_CONTROL_TOOL_NAMES,
 } from "../../extensions/tools/team/lead-agent-tools";
-import {
-	isTeamStateChange,
-	type TeammateWorkspaceHooks,
-} from "../../extensions/tools/team/multi-agent";
+import type { TeammateWorkspaceHooks } from "../../extensions/tools/team/multi-agent";
 import { configuredAgentKey } from "../../extensions/tools/team/spawn-agent-tool";
 import {
 	filterDisabledTools,
@@ -111,6 +108,7 @@ import type {
 	RuntimeBuilderInput,
 	BuiltRuntime as RuntimeEnvironment,
 } from "./session-runtime";
+import { TeamPersistenceWriter } from "./team-persistence-writer";
 
 function hasConfigExtension(
 	extensions: ReadonlyArray<RuntimeConfigExtensionKind> | undefined,
@@ -760,6 +758,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		const modelTools: ModelTool[] = [];
 		if (
 			normalized.enableTools &&
+			normalized.mode !== "yolo" &&
 			isModelToolEnabledGlobally("web_search") &&
 			supportsModelTool(
 				{ providerId: config.providerId, modelId: config.modelId },
@@ -1008,6 +1007,20 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		const teammateSpecs = new Map(
 			restoredTeammateSpecs.map((spec) => [spec.agentId, spec] as const),
 		);
+		const teamPersistence = teamStore
+			? new TeamPersistenceWriter({
+					teamKey: teamStoreKey,
+					store: teamStore,
+					source: () => teamRuntime,
+					teammates: () => Array.from(teammateSpecs.values()),
+					onError: (error) =>
+						(logger ?? config.logger)?.log?.(
+							`[team] failed to persist team state: ${
+								error instanceof Error ? error.message : String(error)
+							}`,
+						),
+				})
+			: undefined;
 		const registryKey = config.sessionId || effectiveTeamName;
 		let leadAgentInstance:
 			| {
@@ -1394,11 +1407,10 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 								),
 							}
 						: {}),
+					onStateDirty: () => teamPersistence?.markStateDirty(),
 					onTeamEvent: (event: TeamEvent) => {
 						onTeamEvent(event);
-						// A teammate's streamed chunks and a running run's heartbeat
-						// change nothing to write: each was a full-state transaction.
-						if (teamRuntime && teamStore && isTeamStateChange(event)) {
+						if (teamPersistence) {
 							if (
 								event.type === "teammate_spawned" &&
 								event.teammate?.rolePrompt
@@ -1423,22 +1435,21 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 										: {}),
 								};
 								teammateSpecs.set(spec.agentId, spec);
+								teamPersistence.markTeammatesDirty();
 							}
 							if (
 								event.type === "teammate_shutdown" &&
 								!isRuntimeLifecycleShutdownReason(event.reason)
 							) {
 								teammateSpecs.delete(event.agentId);
+								teamPersistence.markTeammatesDirty();
 							}
 							if (event.type === "team_cleaned") {
 								teammateSpecs.clear();
+								teamPersistence.markTeammatesDirty();
 							}
-							teamStore.handleTeamEvent(teamStoreKey, event);
-							teamStore.persistRuntime(
-								teamStoreKey,
-								teamRuntime.exportState(),
-								Array.from(teammateSpecs.values()),
-							);
+							// Telemetry is dropped; durable changes are batched.
+							teamPersistence.onEvent(event);
 						}
 					},
 				});
@@ -1740,6 +1751,8 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			},
 			shutdown: async (reason: string) => {
 				shutdownTeamRuntime(teamRuntime, reason);
+				// Final synchronous write so nothing batched is lost on exit.
+				teamPersistence?.dispose();
 				// After the team runtime stops, so the events its shutdown
 				// persists are written first.
 				teamStore?.close();

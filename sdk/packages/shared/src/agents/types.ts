@@ -198,6 +198,11 @@ export interface AgentUsageEvent extends AgentEventMetadata {
 	 * the window the agent is using and gets no request row.
 	 */
 	auxiliary?: boolean;
+	/**
+	 * Reasoning tokens for this turn, under upstream's name for the same
+	 * figure. In this fork they are part of `outputTokens`, not beside it.
+	 */
+	reasoningTokenCount?: number;
 
 	/** Accumulated totals */
 	totalInputTokens: number;
@@ -781,6 +786,13 @@ export interface AgentPrepareTurnContext {
 	 * compaction rather than trust its token estimates.
 	 */
 	overflowRecovery?: boolean;
+	/**
+	 * Input tokens the provider actually counted for the previous request this
+	 * run, when available. Compaction uses it as a floor on its own char-based
+	 * estimate, which under-counts dense content (disassembly, pixel dumps) and
+	 * can otherwise let the real context grow past the window without triggering.
+	 */
+	previousRequestInputTokens?: number;
 	emitStatusNotice?: (
 		message: string,
 		metadata?: Record<string, unknown>,

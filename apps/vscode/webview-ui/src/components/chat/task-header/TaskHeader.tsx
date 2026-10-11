@@ -40,6 +40,8 @@ interface TaskHeaderProps {
 	/** What the expert spent, when the task escalated. */
 	expert?: ExpertApiMetrics
 	generateMs?: number
+	compactDisabled: boolean
+	compactTask: () => Promise<boolean>
 	onClose: () => void
 	onSendMessage?: (command: string, files: string[], images: string[]) => void
 }
@@ -60,6 +62,8 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	generateTokens,
 	expert,
 	generateMs,
+	compactDisabled,
+	compactTask,
 	onClose,
 	onSendMessage,
 }) => {
@@ -235,6 +239,8 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 							byProvider={byProvider}
 							cacheReads={cacheReads}
 							cacheWrites={cacheWrites}
+							compactDisabled={compactDisabled}
+							compactTask={compactTask}
 							contextBreakdown={contextBreakdown}
 							contextTokensUsed={contextTokensUsed}
 							// The session's own window first: the selected model is the

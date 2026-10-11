@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	_testing,
 	createGatewayApiHandler,
+	createGatewayApiHandlerAsync,
 	toGatewayRequestMessages,
 } from "./compat";
 import { ClineNotSubscribedError } from "./errors";
@@ -375,7 +376,38 @@ describe("createGatewayApiHandler.createMessage", () => {
 		openaiCompatibleSpy.mockClear();
 	});
 
-	it("uses the default maxOutputTokens without expanding to catalog maxTokens", async () => {
+	it.each([
+		["openai-responses", "openai"],
+		["anthropic", "anthropic"],
+	])("retains live model protocol %s through the handler", async (apiProtocol, family) => {
+		streamTextSpy.mockReturnValue({
+			fullStream: (async function* () {
+				yield { type: "finish", finishReason: "stop" };
+			})(),
+		});
+		const handler = createGatewayApiHandler({
+			providerId: "opencode-go",
+			modelId: "new-live-model",
+			apiKey: "test-key",
+			knownModels: {
+				"new-live-model": {
+					id: "new-live-model",
+					metadata: { apiProtocol: apiProtocol as never },
+				},
+			},
+		});
+		for await (const _chunk of handler.createMessage("", [
+			{ role: "user", content: "Hello" },
+		])) {
+			// Exercise the live catalog -> handler -> gateway projection.
+		}
+		expect(streamTextSpy.mock.calls.at(-1)?.[0].model).toMatchObject({
+			modelId: "new-live-model",
+			family,
+		});
+	});
+
+	it("defaults maxOutputTokens to a fraction of the catalog maxTokens", async () => {
 		streamTextSpy.mockReturnValue({
 			fullStream: (async function* () {
 				yield { type: "finish", finishReason: "stop" };
@@ -694,6 +726,53 @@ describe("createGatewayApiHandler.createMessage", () => {
 				method: "POST",
 			}),
 		).rejects.toBeInstanceOf(ClineNotSubscribedError);
+	});
+});
+
+describe("createGatewayApiHandlerAsync", () => {
+	beforeEach(() => {
+		streamTextSpy.mockReset();
+		openaiCompatibleFactorySpy.mockReset();
+		openaiCompatibleSpy.mockClear();
+	});
+
+	it("honors setAbortSignal on requests, not just the construction-time signal", async () => {
+		// This fork hands the SDK a signal of its own that follows the caller's
+		// for as long as the turn runs (`abortWhenAbandoned`), so identity is not
+		// the test: aborting the caller's mid-stream must abort the one the
+		// request went out with.
+		const controller = new AbortController();
+		let followedCaller: boolean | undefined;
+		streamTextSpy.mockImplementation((args: { abortSignal?: AbortSignal }) => ({
+			fullStream: (async function* () {
+				const before = args.abortSignal?.aborted;
+				controller.abort();
+				followedCaller = before === false && args.abortSignal?.aborted === true;
+				yield { type: "finish", finishReason: "stop" };
+			})(),
+			usage: Promise.resolve({ inputTokens: 1, outputTokens: 1 }),
+		}));
+
+		const handler = await createGatewayApiHandlerAsync({
+			providerId: "openai-compatible",
+			clientType: "openai-compatible",
+			modelId: "custom-model",
+			apiKey: "test-key",
+		});
+		handler.setAbortSignal?.(controller.signal);
+
+		try {
+			for await (const _chunk of handler.createMessage("", [
+				{ role: "user", content: "Hello" },
+			])) {
+				// Drain the stream so the provider request is executed.
+			}
+		} catch {
+			// An aborted turn may surface as a throw; what is asserted is the
+			// signal the request carried.
+		}
+
+		expect(followedCaller).toBe(true);
 	});
 });
 

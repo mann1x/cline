@@ -137,6 +137,33 @@ describe("buildConnectorStartRequest", () => {
 		expect(request.model).toBe("cline-pass/glm-5.2");
 	});
 
+	it("falls back to the provider's declared default, skipping the placeholder", async () => {
+		const build = (defaultModelId: string) => {
+			mockGetLastUsedProviderSettings.mockReturnValue({ provider: "deepseek" });
+			mockGetProviderSettings.mockReturnValue({
+				provider: "deepseek",
+				apiKey: "ds-key",
+			});
+			mockGetProviderCollection.mockReturnValue({
+				provider: { env: [], defaultModelId },
+			});
+			mockResolveSystemPrompt.mockResolvedValue("system");
+			return buildConnectorStartRequest({
+				options: { cwd: "/tmp/work", mode: "act", enableTools: false },
+				io: { writeln: vi.fn(), writeErr: vi.fn() },
+				loggerConfig: { enabled: false, level: "info", destination: "stdout" },
+				systemRules: "Rules",
+			});
+		};
+
+		await expect(build("deepseek-v4-flash")).resolves.toMatchObject({
+			model: "deepseek-v4-flash",
+		});
+		await expect(build("default")).resolves.toMatchObject({
+			model: "anthropic/claude-sonnet-5.5",
+		});
+	});
+
 	it("uses auth material resolved by provider settings manager", async () => {
 		mockGetLastUsedProviderSettings.mockReturnValue({ provider: "cline-pass" });
 		mockGetProviderSettings.mockReturnValue({
@@ -239,9 +266,7 @@ describe("buildThreadStartRequest", () => {
 				false,
 			);
 			process.env.CLINE_TEAMMATES = "1";
-			expect(buildThreadStartRequest(await start(), {}).enableTeams).toBe(
-				true,
-			);
+			expect(buildThreadStartRequest(await start(), {}).enableTeams).toBe(true);
 		} finally {
 			if (previous === undefined) delete process.env.CLINE_TEAMMATES;
 			else process.env.CLINE_TEAMMATES = previous;

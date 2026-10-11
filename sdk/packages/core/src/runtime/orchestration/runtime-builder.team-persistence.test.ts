@@ -37,6 +37,19 @@ class MockAgentTeamsRuntime {
 		outcomes: [],
 		outcomeFragments: [],
 	}));
+	hasPendingStateDelta = vi.fn(() => false);
+	drainStateDelta = vi.fn(() => ({
+		teamId: "team_1",
+		teamName: "test",
+		reset: false,
+		members: [],
+		tasks: [],
+		mailbox: [],
+		missionLog: [],
+		runs: [],
+		outcomes: [],
+		outcomeFragments: [],
+	}));
 	markStaleRunsInterrupted = vi.fn();
 	recoverActiveRuns = vi.fn();
 	getTeammateIds = vi.fn(() => []);
@@ -127,6 +140,7 @@ class MockTeamStore {
 		interruptedRunIds: [],
 	}));
 	handleTeamEvent = vi.fn();
+	persistBatch = vi.fn();
 	persistRuntime = vi.fn();
 	close = vi.fn();
 }
@@ -198,14 +212,32 @@ describe("DefaultRuntimeBuilder team persistence boundary", () => {
 				maxIterations: 7,
 			},
 		});
-		expect(teamStoreInstance.handleTeamEvent).toHaveBeenCalledWith(
+		expect(teamStoreInstance.persistBatch).toHaveBeenLastCalledWith(
 			expect.any(String),
 			expect.objectContaining({
-				type: "teammate_spawned",
-				agentId: "python-poet",
+				events: [
+					expect.objectContaining({
+						type: "teammate_spawned",
+						payload: expect.objectContaining({ agentId: "python-poet" }),
+					}),
+				],
 			}),
 		);
-		expect(teamStoreInstance.persistRuntime).toHaveBeenCalled();
+		expect(teamStoreInstance.persistRuntime).not.toHaveBeenCalled();
+		const callsAfterSpawn = teamStoreInstance.persistBatch.mock.calls.length;
+		runtimeInstance.emit({
+			type: "agent_event",
+			agentId: "python-poet",
+			event: { type: "content_update" },
+		});
+		runtimeInstance.emit({
+			type: "run_progress",
+			run: { id: "run_1" },
+			message: "heartbeat",
+		});
+		expect(teamStoreInstance.persistBatch.mock.calls.length).toBe(
+			callsAfterSpawn,
+		);
 
 		// A shutdown the lead asked for, with or without a reason, removes it:
 		// `reason` is optional in the tool's schema, and a model omits it.
@@ -213,19 +245,13 @@ describe("DefaultRuntimeBuilder team persistence boundary", () => {
 			type: "teammate_shutdown",
 			agentId: "python-poet",
 		});
-		expect(teamStoreInstance.handleTeamEvent).toHaveBeenCalledWith(
+		expect(teamStoreInstance.persistBatch).toHaveBeenLastCalledWith(
 			expect.any(String),
 			expect.objectContaining({
-				type: "teammate_shutdown",
-				agentId: "python-poet",
+				teammates: expect.not.arrayContaining([
+					expect.objectContaining({ agentId: "python-poet" }),
+				]),
 			}),
-		);
-		expect(teamStoreInstance.persistRuntime).toHaveBeenLastCalledWith(
-			expect.any(String),
-			expect.any(Object),
-			expect.not.arrayContaining([
-				expect.objectContaining({ agentId: "python-poet" }),
-			]),
 		);
 
 		runtimeInstance.emit({
@@ -238,12 +264,13 @@ describe("DefaultRuntimeBuilder team persistence boundary", () => {
 			agentId: "python-poet",
 			reason: "manual_restart",
 		});
-		expect(teamStoreInstance.persistRuntime).toHaveBeenLastCalledWith(
+		expect(teamStoreInstance.persistBatch).toHaveBeenLastCalledWith(
 			expect.any(String),
-			expect.any(Object),
-			expect.not.arrayContaining([
-				expect.objectContaining({ agentId: "python-poet" }),
-			]),
+			expect.objectContaining({
+				teammates: expect.not.arrayContaining([
+					expect.objectContaining({ agentId: "python-poet" }),
+				]),
+			}),
 		);
 
 		runtimeInstance.emit({
@@ -258,21 +285,21 @@ describe("DefaultRuntimeBuilder team persistence boundary", () => {
 			agentId: "java-poet",
 			reason: "cli_run_shutdown",
 		});
-		expect(teamStoreInstance.persistRuntime).toHaveBeenLastCalledWith(
+		expect(teamStoreInstance.persistBatch).toHaveBeenLastCalledWith(
 			expect.any(String),
-			expect.any(Object),
-			expect.arrayContaining([
-				expect.objectContaining({ agentId: "java-poet" }),
-			]),
+			expect.objectContaining({
+				teammates: expect.arrayContaining([
+					expect.objectContaining({ agentId: "java-poet" }),
+				]),
+			}),
 		);
 
 		// team_cleanup wiped the team without a word to the store, so a reload
 		// brought back the team it had removed.
 		runtimeInstance.emit({ type: "team_cleaned" });
-		expect(teamStoreInstance.persistRuntime).toHaveBeenLastCalledWith(
+		expect(teamStoreInstance.persistBatch).toHaveBeenLastCalledWith(
 			expect.any(String),
-			expect.any(Object),
-			[],
+			expect.objectContaining({ teammates: [] }),
 		);
 	});
 
@@ -311,15 +338,18 @@ describe("DefaultRuntimeBuilder team persistence boundary", () => {
 
 		await built.shutdown?.("some_host_reason");
 
-		expect(teamStoreInstance.persistRuntime).toHaveBeenLastCalledWith(
+		expect(teamStoreInstance.persistBatch).toHaveBeenLastCalledWith(
 			expect.any(String),
-			expect.any(Object),
-			expect.arrayContaining([expect.objectContaining({ agentId: "w" })]),
+			expect.objectContaining({
+				teammates: expect.arrayContaining([
+					expect.objectContaining({ agentId: "w" }),
+				]),
+			}),
 		);
 		// Closed only after the shutdown events were persisted.
 		expect(teamStoreInstance.close).toHaveBeenCalledOnce();
 		expect(teamStoreInstance.close.mock.invocationCallOrder[0]).toBeGreaterThan(
-			teamStoreInstance.persistRuntime.mock.invocationCallOrder.at(-1) ?? 0,
+			teamStoreInstance.persistBatch.mock.invocationCallOrder.at(-1) ?? 0,
 		);
 	});
 
@@ -422,8 +452,7 @@ describe("DefaultRuntimeBuilder team persistence boundary", () => {
 		if (!runtimeInstance || !teamStoreInstance) {
 			throw new Error("Expected mocked runtime and team store instances");
 		}
-		teamStoreInstance.persistRuntime.mockClear();
-		teamStoreInstance.handleTeamEvent.mockClear();
+		teamStoreInstance.persistBatch.mockClear();
 		runtimeInstance.exportState.mockClear();
 
 		const chunks = 100;
@@ -445,16 +474,21 @@ describe("DefaultRuntimeBuilder team persistence boundary", () => {
 			run: { id: "run_00001", agentId: "w", status: "running" },
 			message: "heartbeat",
 		});
-		expect(teamStoreInstance.persistRuntime).toHaveBeenCalledTimes(0);
-		expect(teamStoreInstance.handleTeamEvent).toHaveBeenCalledTimes(0);
+		expect(teamStoreInstance.persistBatch).toHaveBeenCalledTimes(0);
 		expect(runtimeInstance.exportState).toHaveBeenCalledTimes(0);
 
 		runtimeInstance.emit({
 			type: "run_completed",
 			run: { id: "run_00001", agentId: "w", status: "completed" },
 		});
-		expect(teamStoreInstance.persistRuntime).toHaveBeenCalledTimes(1);
-		expect(teamStoreInstance.handleTeamEvent).toHaveBeenCalledTimes(1);
-		expect(runtimeInstance.exportState).toHaveBeenCalledTimes(1);
+		// One batch, carrying the event; the full state is only read if the
+		// store asks for it.
+		expect(teamStoreInstance.persistBatch).toHaveBeenCalledTimes(1);
+		expect(teamStoreInstance.persistBatch).toHaveBeenLastCalledWith(
+			expect.any(String),
+			expect.objectContaining({
+				events: [expect.objectContaining({ type: "run_completed" })],
+			}),
+		);
 	});
 });
