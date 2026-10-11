@@ -2465,6 +2465,67 @@ describe("createContextCompactionPrepareTurn", () => {
 		);
 	});
 
+	// Harness run 0432, 2026-10-11: the summarizer's request was 92,738 tokens
+	// against an 85,106-token window. The server said so three times in 0.7 s,
+	// because a throw was retried with the same request whatever it was. A
+	// request that does not fit will not fit on the next call either.
+	it("does not send again a summarizer request the server says is too large", async () => {
+		const tooLarge = new Error(
+			'{"error":{"code":400,"message":"request (92738 tokens) exceeds the available context size (85106 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":92738,"n_ctx":85106}}',
+		);
+		const createMessage = vi.fn(() => {
+			throw tooLarge;
+		});
+		createHandlerMock.mockReturnValue({ createMessage });
+		const log = vi.fn();
+		const messages: LlmsProviders.Message[] = [
+			{ role: "user", content: "Original task" },
+			{ role: "assistant", content: `Old answer ${"x".repeat(500)}` },
+			{ role: "user", content: "Older follow-up" },
+			{ role: "assistant", content: "Older response" },
+			{ role: "user", content: "Latest request" },
+		];
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "anthropic",
+			modelId: "mock-model",
+			providerConfig: {
+				providerId: "anthropic",
+				modelId: "mock-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: {
+				enabled: true,
+				strategy: "agentic",
+				preserveRecentTokens: 1,
+			},
+			logger: { debug: vi.fn(), log },
+		});
+
+		const result = await prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages,
+			apiMessages: messages,
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: { id: "mock-model", maxInputTokens: 10 },
+			},
+		});
+
+		expect(createMessage).toHaveBeenCalledTimes(1);
+		// The decline still reaches basic compaction.
+		expect(result?.messages).toBeDefined();
+		expect(log).toHaveBeenCalledWith(
+			"Agentic compaction produced no result; falling back to basic compaction",
+			expect.objectContaining({ severity: "warn" }),
+		);
+	});
+
 	it("does not fall back to basic compaction when agentic compaction is cancelled", async () => {
 		const providerError = new Error("request stopped");
 		createHandlerMock.mockReturnValue({

@@ -1,4 +1,4 @@
-import { createHandlerAsync } from "@cline/llms";
+import { classifyProviderError, createHandlerAsync } from "@cline/llms";
 import type { BasicLogger, MessageWithMetadata } from "@cline/shared";
 import { countUserRunMessages } from "../../session/user-run-messages";
 import type {
@@ -904,6 +904,22 @@ export async function runAgenticCompaction(options: {
 				throw error;
 			}
 			lastFailure = "threw";
+			// A request the server measured as too large is the one throw that
+			// is certain to repeat: the next attempt sends the same request.
+			// Run 0432 sent 92,738 tokens at an 85,106-token window three times
+			// in 0.7 s before the decline it was always going to reach.
+			if (classifyProviderError(error) === "context_window_exceeded") {
+				options.logger?.log(
+					"Compaction summarizer request does not fit the model's window; not retried",
+					{
+						severity: "warn",
+						attempt,
+						errorMessage:
+							error instanceof Error ? error.message : String(error),
+					},
+				);
+				break;
+			}
 			options.logger?.log("Compaction summarizer call failed; retrying", {
 				severity: "warn",
 				attempt,
