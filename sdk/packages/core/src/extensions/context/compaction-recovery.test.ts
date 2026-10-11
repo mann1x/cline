@@ -354,18 +354,38 @@ describe("dropping the tail when keeping it did not fit", () => {
 		return { result, notices };
 	}
 
-	it("escalates to the no-tail cut, and says so", async () => {
-		summarizerReplying(["## Goal\nThe goal.\n\n## Next\nThe step."]);
+	it("drops a tail that is over the trigger on its own before summarising, and says so", async () => {
+		// pandorum 2026-10-11, session 10l5m: the keep-tail compaction ran all
+		// five of its calls (93 s), came out over the trigger, was thrown away,
+		// and the no-tail one ran after it (48 s). The tail is chosen before the
+		// writer is called, so a tail that cannot fit is known first.
+		const keepTail = summarizerReplying([
+			"## Goal\nThe goal.\n\n## Next\nThe step.",
+		]);
 		const logger = { debug: vi.fn(), log: vi.fn() };
 
 		const { result, notices } = await runOversized(logger);
 
 		expect(result?.messages).toBeDefined();
 		expect(logger.log).toHaveBeenCalledWith(
-			"Compaction kept the tail and stayed over the trigger; retrying without it",
+			expect.stringContaining("The kept tail alone is over the trigger"),
 			expect.objectContaining({ severity: "warn" }),
 		);
+		// One compaction: the keep-tail pass it would have discarded never ran.
+		expect(logger.log).not.toHaveBeenCalledWith(
+			expect.stringContaining("kept the tail and stayed over the trigger"),
+			expect.anything(),
+		);
 		expect(notices.map(([name]) => name)).toContain("compaction-tail-dropped");
+
+		// No call was handed the keep-tail prompt: the pass that would have
+		// been discarded was never asked for.
+		expect(keepTail.mock.calls.length).toBeGreaterThan(0);
+		for (const [system] of keepTail.mock.calls) {
+			expect(system).not.toContain(
+				"re-telling your own recent work in your own voice",
+			);
+		}
 	});
 
 	it("gets the transcript under the trigger, which keeping the tail did not", async () => {
@@ -397,7 +417,11 @@ describe("dropping the tail when keeping it did not fit", () => {
 
 		expect(result?.messages).toBeDefined();
 		expect(logger.log).not.toHaveBeenCalledWith(
-			"Compaction kept the tail and stayed over the trigger; retrying without it",
+			expect.stringContaining("kept the tail and stayed over the trigger"),
+			expect.anything(),
+		);
+		expect(logger.log).not.toHaveBeenCalledWith(
+			expect.stringContaining("The kept tail alone is over the trigger"),
 			expect.anything(),
 		);
 	});

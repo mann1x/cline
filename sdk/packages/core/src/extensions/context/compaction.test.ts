@@ -2211,16 +2211,14 @@ describe("createContextCompactionPrepareTurn", () => {
 			},
 		});
 
-		// Four: the summary and the retrospective over the reasoning being
-		// discarded, then the same pair again for the no-tail escalation. This
-		// window is ten tokens, so nothing a keep-tail compaction produces can
-		// get under the trigger and the escalation is the correct answer.
+		// Two: the summary and the retrospective over the reasoning being
+		// discarded, once, for the no-tail compaction. This window is ten
+		// tokens, so the tail alone is over the trigger and that is known
+		// before the writer is called.
 		//
-		// It used to be two, and that was the bug: the no-tail instruction is
-		// 4,192 characters and the fallback summarizer budget was 1,024 tokens,
-		// so the escalation was refused before it made a request -- "skipped
-		// agentic compaction" at warn, and a transcript left over the trigger.
-		expect(createHandlerMock).toHaveBeenCalledTimes(4);
+		// It was four while the keep-tail compaction ran first and was thrown
+		// away (pandorum 2026-10-11: 93 s of it, then 48 s for this one).
+		expect(createHandlerMock).toHaveBeenCalledTimes(2);
 		expect(emitStatusNotice).toHaveBeenCalledWith(
 			"auto-compacting",
 			expect.objectContaining({
@@ -2683,10 +2681,10 @@ describe("createContextCompactionPrepareTurn", () => {
 			},
 		});
 
-		// The summary request and the retrospective's, then the same pair for
-		// the no-tail escalation this ten-token window always provokes. The
-		// first call is still the summary, which is the one being inspected.
-		expect(createMessage).toHaveBeenCalledTimes(4);
+		// The summary request and the retrospective's, for the no-tail
+		// compaction this ten-token window always takes. The first call is
+		// still the summary, which is the one being inspected.
+		expect(createMessage).toHaveBeenCalledTimes(2);
 		const createMessageCalls = createMessage.mock.calls as unknown as [
 			string,
 			Array<{ role: string; content: string }>,

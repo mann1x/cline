@@ -48,6 +48,7 @@ import {
 	createTokenEstimator,
 	DEFAULT_MAX_INPUT_TOKENS,
 	dropsTailAtThisCompaction,
+	findCutPlan,
 	findLatestSummaryIndex,
 	getCompactionSummaryMetadata,
 	isToolResultOnlyUserMessage,
@@ -61,6 +62,7 @@ import {
 	resolvePreserveRecentTokens,
 	resolveRecencyBounds,
 	seedCalibrationFromTranscript,
+	withoutTrailingSpoiledTurn,
 } from "./compaction-shared";
 import { warnIfWindowBelowMinimum } from "./context-minimum-warning";
 import {
@@ -328,6 +330,50 @@ function resolveSummaryPrompt(
 		: withCouncilWriterPrompt(prompt, compaction?.councilWriterPrompt);
 }
 
+/**
+ * How much of the tail a keep-tail compaction preserves. One function, because
+ * the compaction and the check that runs before it (is the tail alone already
+ * over the trigger?) have to walk the same cut.
+ */
+function resolveKeepTailBounds(
+	context: Pick<CoreCompactionContext, "model" | "budget">,
+	compaction: CoreCompactionConfig | undefined,
+) {
+	return resolveRecencyBounds({
+		preserveRecentTokens: resolvePreserveRecentTokens({
+			contextWindow: context.model.info?.contextWindow,
+			maxInputTokens: context.budget.request.maxInputTokens,
+			messageTargetTokens: context.budget.messages.targetTokens,
+			override: compaction?.preserveRecentTokens,
+		}),
+		preserveRecentMessagesRatio: compaction?.preserveRecentMessagesRatio,
+		messageTargetTokens: context.budget.messages.targetTokens,
+		lastTurnCeiling:
+			translateRequestBudgetToMessages(
+				context.budget.request.maxInputTokens,
+				context.budget.request.overheadTokens,
+			) * LAST_TURN_PRESERVE_CEILING_RATIO,
+	});
+}
+
+/**
+ * The least a summary has cost beside the tail it was written for, in the
+ * estimator's tokens: writer, retrospective and the tool ledger together.
+ * pandorum 2026-10-11 (session 10l5m): 2,605 + 574 characters and 13 ledger
+ * lines. Counted before a keep-tail compaction starts, since a tail that only
+ * fits with no summary beside it does not fit.
+ */
+const KEEP_TAIL_SUMMARY_ALLOWANCE_TOKENS = 1_500;
+/** On a small window the allowance is a share of the trigger, not the figure above. */
+const KEEP_TAIL_SUMMARY_ALLOWANCE_RATIO = 0.05;
+
+function keepTailSummaryAllowance(messageTriggerTokens: number): number {
+	return Math.min(
+		KEEP_TAIL_SUMMARY_ALLOWANCE_TOKENS,
+		Math.floor(messageTriggerTokens * KEEP_TAIL_SUMMARY_ALLOWANCE_RATIO),
+	);
+}
+
 const BUILTIN_COMPACTION_STRATEGIES = {
 	basic: ({ context, estimateMessageTokens, measureReportedTokens, logger }) =>
 		runBasicCompaction({
@@ -379,21 +425,7 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 			// always the smaller number in practice, so the clamp was a no-op
 			// and the room the target bought went unused, every compaction
 			// folding to the 20,000-token minimum no matter how much fit.
-			bounds: resolveRecencyBounds({
-				preserveRecentTokens: resolvePreserveRecentTokens({
-					contextWindow: context.model.info?.contextWindow,
-					maxInputTokens: context.budget.request.maxInputTokens,
-					messageTargetTokens: context.budget.messages.targetTokens,
-					override: compaction?.preserveRecentTokens,
-				}),
-				preserveRecentMessagesRatio: compaction?.preserveRecentMessagesRatio,
-				messageTargetTokens: context.budget.messages.targetTokens,
-				lastTurnCeiling:
-					translateRequestBudgetToMessages(
-						context.budget.request.maxInputTokens,
-						context.budget.request.overheadTokens,
-					) * LAST_TURN_PRESERVE_CEILING_RATIO,
-			}),
+			bounds: resolveKeepTailBounds(context, compaction),
 			estimateMessageTokens,
 			measureReportedTokens,
 			logger,
@@ -1688,6 +1720,50 @@ export function createContextCompactionPrepareTurn(
 			);
 
 		/**
+		 * The kept tail, when it is already over the trigger before anything is
+		 * summarised.
+		 *
+		 * The escalation below finds this out afterwards: it runs the whole
+		 * keep-tail compaction, measures the result, and runs the whole no-tail
+		 * compaction. But the tail is whole messages chosen before the writer is
+		 * called, so its size is known first. pandorum 2026-10-11 (session
+		 * 10l5m, window 96,000): a turn of 14,274 generated tokens was the last
+		 * message, the keep-tail pass took 93 s over five calls, was thrown
+		 * away, and the no-tail pass took another 48 s. The trigger had moved
+		 * down that day (it now leaves room for the continuation's writer),
+		 * which is what brought it within reach of an ordinary tail.
+		 */
+		const keptTailOverTrigger = (): number | undefined => {
+			if (
+				strategy !== "agentic" ||
+				!keepRecentMessages ||
+				!(Number.isFinite(messageTriggerTokens) && messageTriggerTokens > 0)
+			) {
+				return undefined;
+			}
+			const messages = withoutTrailingSpoiledTurn(compactionContext.messages);
+			const { cutIndex, pinnedIndex } = findCutPlan(
+				messages,
+				resolveKeepTailBounds(compactionContext, userCompaction),
+				estimateMessageTokens,
+			);
+			if (cutIndex <= 0 || cutIndex > messages.length - 1) {
+				return undefined;
+			}
+			const kept = messages.slice(cutIndex);
+			if (pinnedIndex >= 0 && pinnedIndex < cutIndex) {
+				kept.push(messages[pinnedIndex]);
+			}
+			const tailTokens = sizeOf(kept);
+			return tailTokens + keepTailSummaryAllowance(messageTriggerTokens) >
+				messageTriggerTokens
+				? tailTokens
+				: undefined;
+		};
+		/** The tail was dropped, before the run or after it. */
+		let tailDropped = false;
+
+		/**
 		 * Drop the tail when keeping it did not get the transcript under the bar.
 		 *
 		 * A keep-tail compaction never declines, which made it look like the safe
@@ -1723,6 +1799,7 @@ export function createContextCompactionPrepareTurn(
 			if (
 				strategy !== "agentic" ||
 				!keepRecentMessages ||
+				tailDropped ||
 				!produced?.messages?.length ||
 				!(Number.isFinite(messageTriggerTokens) && messageTriggerTokens > 0)
 			) {
@@ -1733,7 +1810,7 @@ export function createContextCompactionPrepareTurn(
 				return produced;
 			}
 			config.logger?.log(
-				"Compaction kept the tail and stayed over the trigger; retrying without it",
+				`Compaction kept the tail and stayed over the trigger (${producedTokens} > ${messageTriggerTokens}); retrying without it`,
 				{
 					severity: "warn",
 					producedTokens,
@@ -1775,6 +1852,7 @@ export function createContextCompactionPrepareTurn(
 				return produced;
 			}
 			executedStrategy = "agentic";
+			tailDropped = true;
 			config.logger?.log("Compaction dropped the tail to fit", {
 				severity: "warn",
 				keptTailTokens: producedTokens,
@@ -1952,11 +2030,42 @@ export function createContextCompactionPrepareTurn(
 			result = await userCompaction.compact(compactionContext);
 		} else {
 			try {
-				result =
-					strategy === "agentic"
-						? await runAgenticWithContinuation()
-						: await runBuiltinStrategy(builtinOptions);
-				result = await escalateToNoTailIfStillOversized(result);
+				// A tail that cannot fit is not tried: one compaction, not two.
+				const doomedTailTokens = keptTailOverTrigger();
+				if (doomedTailTokens !== undefined) {
+					config.logger?.log(
+						`The kept tail alone is over the trigger (${doomedTailTokens} + ${keepTailSummaryAllowance(messageTriggerTokens)} > ${messageTriggerTokens}); compacting without it`,
+						{
+							severity: "warn",
+							keptTailTokens: doomedTailTokens,
+							messageTriggerTokens,
+							messageInputTokens,
+						},
+					);
+					builtinOptions.keepRecentMessages = false;
+					result = await runAgenticWithContinuation();
+					if (result?.messages?.length) {
+						tailDropped = true;
+						runReason = `${runReason}; tail over the trigger, not kept`;
+						context.emitStatusNotice?.("compaction-tail-dropped", {
+							kind: "compaction",
+							phase: "escalated",
+							iteration: context.iteration,
+							keptTailTokens: doomedTailTokens,
+							noTailTokens: sizeOf(result.messages),
+							messageTriggerTokens,
+						});
+					}
+					// A no-tail cut that declines is not followed by the
+					// keep-tail one: its result could not fit either, and the
+					// fallback below still answers.
+				} else {
+					result =
+						strategy === "agentic"
+							? await runAgenticWithContinuation()
+							: await runBuiltinStrategy(builtinOptions);
+					result = await escalateToNoTailIfStillOversized(result);
+				}
 			} catch (error) {
 				if (
 					strategy !== "agentic" ||
@@ -2061,7 +2170,7 @@ export function createContextCompactionPrepareTurn(
 				before: context.messages,
 				afterMessageCount: result.messages.length,
 				strategy: executedStrategy,
-				keptRecentMessages: keepRecentMessages,
+				keptRecentMessages: keepRecentMessages && !tailDropped,
 			});
 			// After the journal, because eviction is the one step here that
 			// destroys something, and the transcript it is reasoning about has

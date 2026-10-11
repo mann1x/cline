@@ -193,16 +193,17 @@ describe("compaction on a prompt-cache provider", () => {
 		});
 	});
 
-	// A keep-tail result still over the trigger is rescued without the tail.
-	// The continuation has given its cells back by then: the rescue goes as
-	// text, and the line says so.
-	it("counts a no-tail rescue in the same line", async () => {
+	// A tail that is over the trigger on its own is not kept, and that is
+	// known before the writer is called: the no-tail compaction is the one
+	// that runs, as the continuation, and the line says why. It used to run
+	// second, as text, after a keep-tail compaction that was thrown away.
+	it("says in the same line that the tail was not kept", async () => {
 		const { line } = await compact({ providerId: "ollama" }, 10);
 
 		expect(line).toContain(
-			"path=continuation (prompt-cache continuation; no-tail rescue as text)",
+			"path=continuation (prompt-cache continuation; tail over the trigger, not kept)",
 		);
-		expect(createHandlerMock).toHaveBeenCalled();
+		expect(createHandlerMock).not.toHaveBeenCalled();
 	});
 
 	it("compacts from the transcript when the writer cannot answer", async () => {
