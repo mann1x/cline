@@ -71,6 +71,10 @@ import {
 import { messagesToAgentMessages } from "../../runtime/config/agent-message-codec";
 import { createAgentModelFromConfig } from "../../services/llms/handler-factory";
 import type { ProviderConfig } from "../../types/provider-settings";
+import {
+	CONTINUATION_WRITER_INSTRUCTION_TOKENS,
+	resolveContinuationWriterRoomTokens,
+} from "./compaction-shared";
 import { resolvePolykvEngineConfig } from "./polykv-session";
 
 /** Which of the two shapes a compaction ran as. */
@@ -90,13 +94,6 @@ const CONTINUATION_PROVIDERS = new Set([
 	"lmstudio",
 	"openai-compatible",
 ]);
-
-/**
- * What a writer needs on top of the session's own prompt, before its output
- * budget is known: the instruction. Used only to decide whether a
- * continuation can start at all.
- */
-const WRITER_INSTRUCTION_ROOM_TOKENS = 3_072;
 
 /** Bookings are aligned the way the engine aligns a negotiated window. */
 const BOOKING_ALIGN = 256;
@@ -537,6 +534,12 @@ export interface PrepareContinuationInput {
 	requestTokens: number;
 	/** The last request's own prompt count, when one was measured. */
 	observedRequestTokens?: number;
+	/**
+	 * What the conversation has gained since `requestTokens` was counted: the
+	 * newest assistant message and the results after it. 0 when the count is
+	 * an estimate of the conversation as it stands.
+	 */
+	pendingTokens?: number;
 	reasoning: ContinuationReasoning;
 	/** A summarizer model of its own is configured: it cannot continue this one. */
 	separateSummarizer: boolean;
@@ -587,6 +590,28 @@ export function isInfraFault(error: unknown): boolean {
 }
 
 /**
+ * Why compaction on this connection is never written as a continuation, or
+ * `undefined` when it can be. The part of the answer that does not depend on
+ * the turn, so the trigger can ask it before there is a compaction to prepare.
+ */
+export function continuationCompactionExcluded(
+	config: ProviderConfig,
+	separateSummarizer: boolean,
+): string | undefined {
+	const providerId = normalizeProviderId(config.providerId ?? "");
+	if (config.polykv?.continuationCompaction === false) {
+		return "switched off (polykv.continuationCompaction: false)";
+	}
+	if (separateSummarizer) {
+		return "a summarizer model of its own is configured; it cannot continue this session";
+	}
+	if (!CONTINUATION_PROVIDERS.has(providerId)) {
+		return `${providerId || "this provider"} keeps no prefix a continuation could share`;
+	}
+	return undefined;
+}
+
+/**
  * Whether compaction on this connection can run as a continuation, and in
  * which shape. `undefined` continuation with the reason when it cannot.
  */
@@ -594,20 +619,12 @@ export async function prepareCompactionContinuation(
 	input: PrepareContinuationInput,
 ): Promise<{ continuation?: CompactionContinuation; reason: string }> {
 	const config = input.providerConfig;
-	const providerId = normalizeProviderId(config.providerId ?? "");
-	if (config.polykv?.continuationCompaction === false) {
-		return { reason: "switched off (polykv.continuationCompaction: false)" };
-	}
-	if (input.separateSummarizer) {
-		return {
-			reason:
-				"a summarizer model of its own is configured; it cannot continue this session",
-		};
-	}
-	if (!CONTINUATION_PROVIDERS.has(providerId)) {
-		return {
-			reason: `${providerId || "this provider"} keeps no prefix a continuation could share`,
-		};
+	const excluded = continuationCompactionExcluded(
+		config,
+		input.separateSummarizer,
+	);
+	if (excluded !== undefined) {
+		return { reason: excluded };
 	}
 	if (input.overflowRecovery) {
 		return {
@@ -615,14 +632,21 @@ export async function prepareCompactionContinuation(
 				"overflow recovery: the session's own prompt no longer fits its window",
 		};
 	}
+	// The conversation as it stands, not as its last request counted it, and
+	// the summary as well as the instruction. Compared without either, run
+	// 0432 let through a writer whose request measured 92,738 tokens against
+	// an 85,106-token window: 78,895 + 3,072 passed.
 	const window = input.contextWindow;
+	const conversation =
+		input.requestTokens + Math.max(0, input.pendingTokens ?? 0);
+	const writerRoom = resolveContinuationWriterRoomTokens(window);
 	if (
 		typeof window === "number" &&
 		window > 0 &&
-		input.requestTokens + WRITER_INSTRUCTION_ROOM_TOKENS > window
+		conversation + writerRoom > window
 	) {
 		return {
-			reason: `no room in the window for the writer (${input.requestTokens} + ${WRITER_INSTRUCTION_ROOM_TOKENS} > ${window})`,
+			reason: `no room in the window for the writer (conversation ${Math.round(conversation)} + instruction ${CONTINUATION_WRITER_INSTRUCTION_TOKENS} + summary ${writerRoom - CONTINUATION_WRITER_INSTRUCTION_TOKENS} > ${window})`,
 		};
 	}
 

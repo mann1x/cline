@@ -294,6 +294,35 @@ describe("whether a compaction can continue the session", () => {
 		expect(server.calls).toEqual([]);
 	});
 
+	// Run 0432: the last request counted 78,895 of an 85,106-token window and
+	// the check added the instruction alone, so the writer was let through and
+	// its request measured 92,738. The conversation had grown since that count,
+	// and the summary needs room as well.
+	it("counts what the turn added and the summary before it starts", async () => {
+		const server = engine();
+		for (const override of [
+			{ contextWindow: 85_106, requestTokens: 78_895 },
+			{ contextWindow: 85_106, requestTokens: 70_000, pendingTokens: 11_000 },
+		]) {
+			const prepared = await prepareCompactionContinuation(
+				input(server, override as never),
+			);
+			expect(prepared.continuation).toBeUndefined();
+			expect(prepared.reason).toContain("no room in the window for the writer");
+		}
+		expect(server.calls).toEqual([]);
+		const fits = await prepareCompactionContinuation(
+			input(server, {
+				providerConfig: { providerId: "ollama" },
+				contextWindow: 85_106,
+				requestTokens: 70_000,
+				pendingTokens: 2_000,
+			} as never),
+		);
+		expect(fits.continuation).toBeDefined();
+		await fits.continuation?.dispose();
+	});
+
 	// Ollama and llama.cpp keep the previous prompt's cache: steps 1 and 3
 	// still apply, the pool steps are skipped.
 	it("continues on ollama without a single control-plane call", async () => {

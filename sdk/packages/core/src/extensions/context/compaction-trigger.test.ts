@@ -12,12 +12,16 @@ import {
 } from "./compaction";
 import {
 	COMPACTION_TRIGGER_RATIO,
+	CONTINUATION_WRITER_INSTRUCTION_TOKENS,
 	DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
 	MAX_SUMMARY_OUTPUT_TOKENS,
 	resolveCompactionTriggerTokens,
+	resolveContinuationWriterRoomTokens,
 	resolveDefaultMaxOutputTokens,
 	resolveObservedOutputTokens,
+	resolveObservedTurnGrowthTokens,
 	resolveOutputRoomTokens,
+	resolvePendingTurnTokens,
 	resolveSummaryMaxOutputTokens,
 	SUMMARY_OUTPUT_WINDOW_SHARE,
 } from "./compaction-shared";
@@ -510,5 +514,87 @@ describe("output room sized from what the session actually produces", () => {
 				observedOutputTokens: 40_000,
 			}),
 		).toBe(89_100);
+	});
+});
+
+// Harness run 0432, 2026-10-11, v9-agentic on xOllama with an 85,106-token
+// granted window. The trigger sat at 90% (76,595). The last request counted
+// 78,895; the turn then added a large tool result, and the summary written as
+// the conversation's next turn measured 92,738 tokens on the server. It was
+// refused, the fallback summary did not fit beside the conversation either,
+// the conversation's window was released and the next turn read its whole
+// prompt again. Four times in one run.
+describe("the trigger where the summary continues the conversation", () => {
+	const WINDOW = 85_106;
+	const base = {
+		maxInputTokens: WINDOW,
+		contextWindow: WINDOW,
+		observedOutputTokens: 500,
+	};
+	const sized = (tokens: number[]) => (_: MessageWithMetadata, index: number) =>
+		tokens[index] as number;
+	const turns = (roles: string): MessageWithMetadata[] =>
+		[...roles].map((role) => ({
+			role: role === "a" ? "assistant" : "user",
+			content: "x",
+		})) as MessageWithMetadata[];
+
+	it("is unchanged where the summary is written from the transcript", () => {
+		expect(Math.floor(resolveCompactionTriggerTokens(base))).toBe(76_595);
+	});
+
+	it("holds back the writer's room, the turn in progress and one more like it", () => {
+		const writer = resolveContinuationWriterRoomTokens(WINDOW);
+		// The instruction and 8% of the window for the summary.
+		expect(writer).toBe(CONTINUATION_WRITER_INSTRUCTION_TOKENS + 6_808);
+		const trigger = resolveCompactionTriggerTokens({
+			...base,
+			continuation: { pendingTokens: 1_000, turnGrowthTokens: 7_000 },
+		});
+		expect(trigger).toBe(WINDOW - writer - 1_000 - 7_000);
+		// The request before the one that overflowed counted 72,597: under the
+		// old trigger, over this one, and the writer still fits there.
+		expect(72_597).toBeGreaterThan(trigger);
+		expect(72_597 + 1_000 + writer).toBeLessThan(WINDOW);
+	});
+
+	it("lets the turn in progress stand in for the next before there is a pattern", () => {
+		expect(
+			resolveCompactionTriggerTokens({
+				...base,
+				continuation: { pendingTokens: 4_000 },
+			}),
+		).toBe(WINDOW - resolveContinuationWriterRoomTokens(WINDOW) - 8_000);
+	});
+
+	it("never goes below half the window", () => {
+		expect(
+			resolveCompactionTriggerTokens({
+				...base,
+				continuation: { pendingTokens: 30_000, turnGrowthTokens: 40_000 },
+			}),
+		).toBe(WINDOW * 0.5);
+	});
+
+	it("measures the turn in progress from the newest assistant message on", () => {
+		// user, assistant, result | assistant, result, result
+		expect(
+			resolvePendingTurnTokens(turns("uauauu"), sized([9, 9, 9, 100, 20, 3])),
+		).toBe(123);
+		expect(resolvePendingTurnTokens(turns("u"), sized([9]))).toBe(0);
+	});
+
+	it("reads a turn's growth as the assistant message and what followed it", () => {
+		// Four turns, newest last: 30, 30, 500, 40.
+		const messages = turns("uauauauuau");
+		const growth = resolveObservedTurnGrowthTokens(
+			messages,
+			sized([1, 10, 20, 10, 20, 100, 200, 200, 30, 10]),
+		);
+		// The 500 is among the three newest, so it counts in full.
+		expect(growth).toBe(500);
+		expect(
+			resolveObservedTurnGrowthTokens(turns("ua"), sized([1, 10])),
+		).toBeUndefined();
 	});
 });

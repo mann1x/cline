@@ -425,6 +425,107 @@ export function resolveObservedOutputTokens(
 }
 
 /**
+ * What a compaction written as the conversation's next turn needs on top of
+ * the conversation: its instruction and its summary.
+ *
+ * One function because two things ask it. The trigger asks before the fact,
+ * so that compaction starts while this still fits; the continuation asks at
+ * the moment it would start, and steps aside when it does not. Harness run
+ * 0432 (2026-10-11) is what two different answers cost: the trigger waited
+ * for 90% of an 85,106-token window, the writer's request then measured
+ * 92,738, and each such compaction fell back to a summary that did not fit
+ * beside the conversation either, released the conversation's window and made
+ * the next turn read its whole prompt again.
+ */
+export const CONTINUATION_WRITER_INSTRUCTION_TOKENS = 3_072;
+
+export function resolveContinuationWriterRoomTokens(
+	contextWindow: number | undefined,
+): number {
+	return (
+		CONTINUATION_WRITER_INSTRUCTION_TOKENS +
+		Math.max(
+			DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+			resolveSummaryMaxOutputTokens(contextWindow),
+		)
+	);
+}
+
+/** Where the turn in progress starts: the newest assistant message. */
+function lastAssistantIndexOf(
+	messages: readonly MessageWithMetadata[],
+): number {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		if (messages[index]?.role === "assistant") {
+			return index;
+		}
+	}
+	return -1;
+}
+
+/**
+ * What the conversation has gained since its last request was measured: the
+ * newest assistant message and the results that followed it.
+ *
+ * The provider's count is of the request that produced that message, so it
+ * holds neither. In run 0432 the count was 78,895 and the conversation the
+ * writer had to continue was about 90,000.
+ */
+export function resolvePendingTurnTokens(
+	messages: readonly MessageWithMetadata[],
+	measure: MeasureContextTokens,
+): number {
+	const start = lastAssistantIndexOf(messages);
+	if (start < 0) {
+		return 0;
+	}
+	let total = 0;
+	for (let index = start; index < messages.length; index += 1) {
+		const tokens = measure(messages[index] as MessageWithMetadata, index);
+		total += isPositiveFiniteNumber(tokens) ? tokens : 0;
+	}
+	return total;
+}
+
+/**
+ * How much one turn adds to the conversation, from this session's own turns:
+ * an assistant message and everything up to the next one.
+ *
+ * Read the way {@link resolveObservedOutputTokens} reads output, for the same
+ * reason: the newest turns count in full, and past them a single large turn is
+ * an outlier and the second largest sets the figure.
+ */
+export function resolveObservedTurnGrowthTokens(
+	messages: readonly MessageWithMetadata[],
+	measure: MeasureContextTokens,
+	sampleTurns = OUTPUT_ROOM_SAMPLE_TURNS,
+): number | undefined {
+	const observed: number[] = [];
+	let turn = 0;
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const message = messages[index] as MessageWithMetadata;
+		const tokens = measure(message, index);
+		turn += isPositiveFiniteNumber(tokens) ? tokens : 0;
+		if (message.role !== "assistant") {
+			continue;
+		}
+		observed.push(turn);
+		turn = 0;
+		if (observed.length >= sampleTurns) {
+			break;
+		}
+	}
+	if (observed.length < 2) {
+		return undefined;
+	}
+	const recent = Math.max(...observed.slice(0, OUTPUT_ROOM_RECENT_TURNS));
+	const older = [...observed].sort((a, b) => b - a);
+	const typical =
+		older.length >= 4 ? (older[1] as number) : (older[0] as number);
+	return Math.max(recent, typical);
+}
+
+/**
  * The largest prompt that still leaves the model room to answer.
  *
  * The trigger used to ask only whether the prompt fit. It does not follow that
@@ -483,17 +584,40 @@ export function resolveCompactionTriggerTokens(input: {
 	modelMaxTokens?: number;
 	/** The high-water output of recent turns, from {@link resolveObservedOutputTokens}. */
 	observedOutputTokens?: number;
+	/**
+	 * Set where compaction would be written as the conversation's next turn.
+	 * The trigger then also holds back what that turn needs, so compaction
+	 * starts while it still fits: the writer's own room, what the conversation
+	 * has gained since the count the trigger compares was taken, and one more
+	 * turn like this session's.
+	 */
+	continuation?: {
+		/** {@link resolvePendingTurnTokens}; 0 when the compared count is current. */
+		pendingTokens: number;
+		/** {@link resolveObservedTurnGrowthTokens}. */
+		turnGrowthTokens?: number;
+	};
 }): number {
 	const ratioTrigger = input.maxInputTokens * COMPACTION_TRIGGER_RATIO;
 	if (!isPositiveFiniteNumber(input.contextWindow)) {
 		return ratioTrigger;
 	}
 	const outputRoom = resolveOutputRoomTokens(input);
-	const roomTrigger = Math.max(
-		input.contextWindow - outputRoom,
-		input.contextWindow * MIN_TRIGGER_WINDOW_SHARE,
+	const floor = input.contextWindow * MIN_TRIGGER_WINDOW_SHARE;
+	const roomTrigger = Math.max(input.contextWindow - outputRoom, floor);
+	if (!input.continuation) {
+		return Math.min(ratioTrigger, roomTrigger);
+	}
+	const pending = Math.max(0, input.continuation.pendingTokens);
+	const continuationTrigger = Math.max(
+		input.contextWindow -
+			resolveContinuationWriterRoomTokens(input.contextWindow) -
+			pending -
+			// With no pattern yet, the turn in progress stands in for the next.
+			Math.max(0, input.continuation.turnGrowthTokens ?? pending),
+		floor,
 	);
-	return Math.min(ratioTrigger, roomTrigger);
+	return Math.min(ratioTrigger, roomTrigger, continuationTrigger);
 }
 
 export interface FileOperationSummary {

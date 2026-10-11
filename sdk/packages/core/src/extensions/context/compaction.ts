@@ -55,7 +55,9 @@ import {
 	resolveCompactionTriggerTokens,
 	resolveEffectiveMaxInputTokens,
 	resolveObservedOutputTokens,
+	resolveObservedTurnGrowthTokens,
 	resolveOutputRoomTokens,
+	resolvePendingTurnTokens,
 	resolvePreserveRecentTokens,
 	resolveRecencyBounds,
 	seedCalibrationFromTranscript,
@@ -65,6 +67,7 @@ import {
 	type CompactionContinuation,
 	type CompactionMeter,
 	type ContinuationPath,
+	continuationCompactionExcluded,
 	createCompactionMeter,
 	describeCompactionRun,
 	prepareCompactionContinuation,
@@ -1131,11 +1134,36 @@ export function createContextCompactionPrepareTurn(
 			context.messages,
 			measureContextTokens,
 		);
+		// Where the summary would be written as the conversation's next turn,
+		// the trigger also holds back the room that turn needs. The count it
+		// compares is of the last request, which holds nothing the turn in
+		// progress added; an estimate of the conversation as it stands does.
+		const continuationApplies =
+			strategy === "agentic" &&
+			continuationCompactionExcluded(
+				providerConfig,
+				userCompaction?.summarizer !== undefined,
+			) === undefined;
+		const pendingTurnTokens =
+			lastObservedRequestTokens(measurementsKey) !== undefined
+				? resolvePendingTurnTokens(context.messages, measureContextTokens)
+				: 0;
 		const requestTriggerTokens = resolveCompactionTriggerTokens({
 			maxInputTokens,
 			contextWindow: context.model.info?.contextWindow,
 			modelMaxTokens: context.model.info?.maxTokens,
 			observedOutputTokens,
+			...(continuationApplies
+				? {
+						continuation: {
+							pendingTokens: pendingTurnTokens,
+							turnGrowthTokens: resolveObservedTurnGrowthTokens(
+								context.messages,
+								measureContextTokens,
+							),
+						},
+					}
+				: {}),
 		});
 		const messageTriggerTokens = translateRequestBudgetToMessages(
 			requestTriggerTokens,
@@ -1331,6 +1359,9 @@ export function createContextCompactionPrepareTurn(
 			mcpToolCount: mcpTools.length,
 			maxInputTokens,
 			requestTriggerTokens,
+			// Why the trigger sits where it does when it is below the ratio.
+			continuationReserve: continuationApplies,
+			pendingTurnTokens,
 			messageTriggerTokens,
 			messageTargetShare: COMPACTION_TARGET_CONTENT_SHARE,
 			thresholdRatio: COMPACTION_TRIGGER_RATIO,
@@ -1596,6 +1627,7 @@ export function createContextCompactionPrepareTurn(
 				...(observedRequestTokens !== undefined
 					? { observedRequestTokens }
 					: {}),
+				pendingTokens: pendingTurnTokens,
 				reasoning: {
 					thinking: providerConfig.thinking ?? config.thinking,
 					reasoningEffort:
