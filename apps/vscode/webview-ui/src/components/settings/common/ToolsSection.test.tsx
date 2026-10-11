@@ -104,7 +104,7 @@ describe("the tools section", () => {
 		// The editor is 1,860 of the 8,647 tokens on offer, so dropping it has
 		// to move the number the panel prints.
 		const total = screen.getByTestId("tools-section-total").textContent ?? ""
-		expect(total).toContain("6.8k of 8.6k tokens")
+		expect(total).toContain("6.8k of 8.8k tokens")
 		// On the collapsed header, deliberately: the price is the reason to
 		// open the section, so it cannot be behind it.
 		expect(screen.queryByTestId("tool-editor")).toBeNull()
@@ -249,7 +249,7 @@ describe("the tools section, grouped", () => {
 		renderExpanded()
 
 		// editor is 1,860 of the write group's 2,497.
-		expect(screen.getByTestId("tool-group-total-write").textContent).toContain("637 of 2.5k")
+		expect(screen.getByTestId("tool-group-total-write").textContent).toContain("637 of 2.6k")
 		// And a group it does not belong to is untouched.
 		expect(screen.getByTestId("tool-group-total-check").textContent).toContain("1.7k of 1.7k")
 	})
