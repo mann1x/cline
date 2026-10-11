@@ -1173,12 +1173,18 @@ export class AgentRuntime {
 	/** Whether the run has spent its one non-convergence nudge. */
 	private nonConvergenceNudgeSpent = false;
 	/**
-	 * Whether the run has already spent its one nudge for a tool call the
-	 * provider could not read. Bounded for the reason every nudge here is: a
-	 * model that cannot emit a clean block twice will not on the third ask, and
-	 * an unbounded nudge makes a run immortal.
+	 * The unreadable call the run was last nudged about, as a fingerprint of
+	 * its text. The nudge is asked again for a call that differs from it and
+	 * not for the same one: a model that writes the identical block after
+	 * being told it could not be read will write it a third time, and a model
+	 * that wrote a different call has moved on and broken something else.
+	 *
+	 * It was once per run. Measured (2026-10-11, harness run 0429): a call
+	 * missing a comma, then a different call with a garbled tail one turn
+	 * later, and the run ended 236 seconds in with the stub as its answer and
+	 * the file untouched.
 	 */
-	private unparsedCallNudgeSpent = false;
+	private lastNudgedUnreadableCall: string | undefined;
 	/**
 	 * Whether the one intent-specific nudge has been used.
 	 *
@@ -1207,6 +1213,11 @@ export class AgentRuntime {
 	private readonly unreadableCalls = new WeakMap<
 		AgentMessage,
 		UnparsedToolCall
+	>();
+	/** That call's fingerprint, taken from the text before it was replaced. */
+	private readonly unreadableCallFingerprints = new WeakMap<
+		AgentMessage,
+		string
 	>();
 	/**
 	 * A message arrived mid-run and the model has not been asked to resume yet.
@@ -1688,6 +1699,10 @@ export class AgentRuntime {
 			: unparsedToolCallInText(text);
 		if (unreadable) {
 			this.unreadableCalls.set(message, unreadable);
+			this.unreadableCallFingerprints.set(
+				message,
+				fingerprintUnreadableCall(text),
+			);
 			const first = content.findIndex((part) => part.type === "text");
 			const kept: AgentMessagePart[] = content.filter(
 				(part) => part.type !== "text",
@@ -2359,17 +2374,30 @@ export class AgentRuntime {
 					// model emitted a call and the provider could not read it. Ending
 					// here reports as the run's answer a block that never ran, which
 					// is how a raw `<tool_call>` came to stand as a Completed
-					// message. Once per run, and gated like every other extension of
-					// the nudge policy -- a host with the budget at zero has said a
-					// silent turn ends the run, and this must not be a second door
-					// into the same room.
-					const unparsedCall =
-						this.unparsedCallNudgeSpent || !this.nudgesEnabled()
-							? undefined
-							: (unreadableCall ?? unparsedToolCallInText(finalText));
-					if (unparsedCall) {
-						this.unparsedCallNudgeSpent = true;
-						reminders.push(buildUnparsedToolCallNudge(unparsedCall));
+					// message. Asked for each call that differs from the one last
+					// asked about and never for the same call twice running, and
+					// gated like every other extension of the nudge policy -- a host
+					// with the budget at zero has said a silent turn ends the run,
+					// and this must not be a second door into the same room.
+					const unparsedCall = this.nudgesEnabled()
+						? (unreadableCall ?? unparsedToolCallInText(finalText))
+						: undefined;
+					const unparsedFingerprint = unparsedCall
+						? ((finalAssistantMessage
+								? this.unreadableCallFingerprints.get(finalAssistantMessage)
+								: undefined) ?? fingerprintUnreadableCall(finalText ?? ""))
+						: undefined;
+					if (
+						unparsedCall &&
+						unparsedFingerprint !== this.lastNudgedUnreadableCall
+					) {
+						this.lastNudgedUnreadableCall = unparsedFingerprint;
+						// The silence nudge says the same thing about this turn
+						// when it still has budget; once is enough.
+						const unparsedNudge = buildUnparsedToolCallNudge(unparsedCall);
+						if (!reminders.includes(unparsedNudge)) {
+							reminders.push(unparsedNudge);
+						}
 						firedNudges.push({ nudge: "unparsed_tool_call" });
 					}
 					// The nudge budget is spent, but a model that answered it by
@@ -5172,4 +5200,23 @@ export type Agent = AgentRuntime;
 
 export function createAgent(config: AgentRuntimeConfig): AgentRuntime {
 	return new AgentRuntime(config);
+}
+
+/**
+ * What identifies an unreadable call, for telling a repeat from a new one.
+ *
+ * The call block alone, from its first opening marker: the sentence a model
+ * writes before the block changes from turn to turn while the block it then
+ * writes is the same one. Whitespace is not part of the identity either.
+ */
+function fingerprintUnreadableCall(text: string): string {
+	const open = text.search(/<\|?tool_call\|?>/);
+	const block = (open < 0 ? text : text.slice(open))
+		.replace(/\s+/g, " ")
+		.trim();
+	let hash = 5381;
+	for (let i = 0; i < block.length; i++) {
+		hash = ((hash << 5) + hash + block.charCodeAt(i)) | 0;
+	}
+	return `${block.length}:${hash}`;
 }

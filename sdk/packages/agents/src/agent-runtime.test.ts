@@ -2099,6 +2099,87 @@ describe("AgentRuntime", () => {
 		expect(lastReminder).toContain("could not be read");
 	});
 
+	it("asks again when the next unreadable call is a different one", async () => {
+		// Measured 2026-10-11, harness run 0429: a call missing a comma, then
+		// one turn later a different call with a garbled tail. The nudge was
+		// once per run, so the second ended the run after 236 seconds with
+		// nothing changed.
+		const first =
+			"<tool_call>\n<function=editor>\n<parameter=new_text>\nhalf a line\n" +
+			"<tool_call>\n<function=editor>\n<parameter=path>\n/tmp/x.ts\n" +
+			"</parameter>\n</function>\n</tool_call>";
+		const second =
+			"Fixing line 90 first.\n\n" +
+			"<tool_call>\n<function=editor>\n<parameter=new_text>\nanother line\n" +
+			"<tool_call>\n<function=editor>\n<parameter=path>\n/tmp/y.ts\n" +
+			"</parameter>\n</function>\n</tool_call>";
+		let lastReminder = "";
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: first },
+				{ type: "finish", reason: "stop" },
+			],
+			() => [
+				{ type: "text-delta", text: second },
+				{ type: "finish", reason: "stop" },
+			],
+			(request) => {
+				lastReminder =
+					request.messages
+						.at(-1)
+						?.content.map((part) => (part.type === "text" ? part.text : ""))
+						.join("") ?? "";
+				return [
+					{ type: "text-delta", text: "Done" },
+					{ type: "finish", reason: "stop" },
+				];
+			},
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			completionPolicy: { maxNoToolCallNudges: 1 },
+		});
+
+		await runtime.run("Start");
+
+		expect(model.requests).toHaveLength(3);
+		expect(lastReminder).toContain("could not be read");
+	});
+
+	it("does not ask twice running for the same unreadable call", async () => {
+		// The bound that is left: a model that answers "could not be read" with
+		// the identical block will write it a third time. Different words in
+		// front of the block do not make it a different call.
+		const garbled =
+			"<tool_call>\n<function=editor>\n<parameter=new_text>\nhalf a line\n" +
+			"<tool_call>\n<function=editor>\n<parameter=path>\n/tmp/x.ts\n" +
+			"</parameter>\n</function>\n</tool_call>";
+		const model = new ScriptedModel([
+			() => [
+				{ type: "text-delta", text: garbled },
+				{ type: "finish", reason: "stop" },
+			],
+			() => [
+				{ type: "text-delta", text: `Trying again.\n\n${garbled}` },
+				{ type: "finish", reason: "stop" },
+			],
+			() => [
+				{ type: "text-delta", text: "Done" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [],
+			completionPolicy: { maxNoToolCallNudges: 1 },
+		});
+
+		await runtime.run("Start");
+
+		expect(model.requests).toHaveLength(2);
+	});
+
 	it("stays out of the way of a host that has turned nudging off", async () => {
 		// The gate every extension of the nudge policy has to pass: a budget of
 		// zero means a silent turn ends the run, and this must not be a second
