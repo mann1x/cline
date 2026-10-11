@@ -679,6 +679,8 @@ export interface CappedThinkingCondenserConfig {
 
 type PrepareTurnInput = {
 	messages: MessageWithMetadata[];
+	/** The transcript as the session holds it, before any stage rewrote it. */
+	sourceMessages?: MessageWithMetadata[];
 	/**
 	 * The channel the compaction pipeline reports through, and the only way
 	 * anything that happens inside `prepareTurn` reaches the transcript on
@@ -1140,7 +1142,14 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 			inner as unknown as
 				| ((input: PrepareTurnInput) => Promise<PrepareTurnResult>)
 				| undefined
-		)?.({ ...context, messages })) as PrepareTurnResult;
+		)?.({
+			...context,
+			messages,
+			// What the session holds, for the stage that saves a compaction
+			// against it: this rewrite applies to the newest turn that reasoned
+			// and so to a different turn on the next request.
+			sourceMessages: context.sourceMessages ?? context.messages,
+		})) as PrepareTurnResult;
 		if (result?.messages) {
 			return result;
 		}

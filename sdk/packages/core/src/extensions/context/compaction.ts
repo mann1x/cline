@@ -124,6 +124,19 @@ export interface ContextPipelinePrepareTurnInput {
 	 * compaction. See AgentPrepareTurnContext.previousRequestInputTokens.
 	 */
 	previousRequestInputTokens?: number;
+	/**
+	 * The transcript as the session holds it, when a stage ahead of this one
+	 * rewrote a message in `messages`.
+	 *
+	 * A saved compaction is matched to the transcript by a hash of everything
+	 * it replaced. Hashed over a rewritten transcript, it matches only while
+	 * the same rewrite is applied -- and the capped-thinking condenser rewrites
+	 * the newest turn that reasoned, which is a different turn one request
+	 * later. Measured on pandorum (2026-10-11): a compaction to 39,341 tokens,
+	 * and the very next request sent all 83,853 again and compacted a second
+	 * time. The hash is taken over this, which no stage rewrites.
+	 */
+	sourceMessages?: CoreCompactionContext["messages"];
 	emitStatusNotice?: (
 		message: string,
 		metadata?: Record<string, unknown>,
@@ -2159,8 +2172,13 @@ export function createCompactionStateAwarePrepareTurn(input: {
 }): ContextPipelinePrepareTurn {
 	return async (context) => {
 		const existingState = input.getState?.();
+		const sourceMessages = context.sourceMessages ?? context.messages;
 		const projectedMessages = existingState
-			? projectSessionCompactionState(existingState, context.messages)
+			? projectSessionCompactionState(
+					existingState,
+					sourceMessages,
+					context.messages,
+				)
 			: undefined;
 		if (existingState && projectedMessages) {
 			// Re-compaction intentionally starts from the compacted projection plus
@@ -2177,12 +2195,12 @@ export function createCompactionStateAwarePrepareTurn(input: {
 			if (result?.messages) {
 				const systemPrompt = result.systemPrompt ?? existingState.system_prompt;
 				const nextState = createSessionCompactionState({
-					sourceMessages: context.messages,
+					sourceMessages,
 					compactedMessages: result.messages,
 					conversationId: context.conversationId,
 					systemPrompt,
 				});
-				await input.saveState?.(nextState, context.messages);
+				await input.saveState?.(nextState, sourceMessages);
 				return {
 					...result,
 					...(systemPrompt !== undefined ? { systemPrompt } : {}),
@@ -2200,12 +2218,12 @@ export function createCompactionStateAwarePrepareTurn(input: {
 		const result = input.compact ? await input.compact(context) : undefined;
 		if (result?.messages) {
 			const nextState = createSessionCompactionState({
-				sourceMessages: context.messages,
+				sourceMessages,
 				compactedMessages: result.messages,
 				conversationId: context.conversationId,
 				systemPrompt: result.systemPrompt,
 			});
-			await input.saveState?.(nextState, context.messages);
+			await input.saveState?.(nextState, sourceMessages);
 		}
 		return result;
 	};

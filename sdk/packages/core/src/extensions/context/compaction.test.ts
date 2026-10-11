@@ -6210,6 +6210,116 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(saveState).not.toHaveBeenCalled();
 	});
 
+	it("keeps a compaction saved on a turn where an earlier stage rewrote a message", async () => {
+		// The capped-thinking condenser runs ahead of this stage and replaces
+		// the reasoning of the newest turn that reasoned. One request later
+		// that is a different turn, so the transcript arrives unrewritten.
+		const raw: LlmsProviders.Message[] = [
+			{ role: "user", content: "original request" },
+			{ role: "assistant", content: "twenty thousand characters of reasoning" },
+		];
+		const rewritten: LlmsProviders.Message[] = [
+			raw[0],
+			{ role: "assistant", content: "a short note in its place" },
+		];
+		const compactedMessages: LlmsProviders.Message[] = [
+			{ role: "user", content: "summary of the session so far" },
+		];
+		let state: ReturnType<typeof createSessionCompactionState> | undefined;
+		const compact = vi
+			.fn()
+			.mockResolvedValueOnce({ messages: compactedMessages })
+			.mockResolvedValue(undefined);
+		const prepareTurn = createCompactionStateAwarePrepareTurn({
+			compact,
+			getState: () => state,
+			saveState: (next) => {
+				state = next;
+			},
+		});
+		const base = {
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			abortSignal: new AbortController().signal,
+			systemPrompt: "",
+			tools: [],
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: { id: "mock-model", maxInputTokens: 100_000 },
+			},
+		};
+
+		await prepareTurn({
+			...base,
+			iteration: 1,
+			messages: rewritten,
+			apiMessages: rewritten,
+			sourceMessages: raw,
+		});
+		const next: LlmsProviders.Message[] = [
+			...raw,
+			{ role: "user", content: "a tool result" },
+		];
+		const result = await prepareTurn({
+			...base,
+			iteration: 2,
+			messages: next,
+			apiMessages: next,
+		});
+
+		expect(result?.messages).toEqual([
+			...compactedMessages,
+			{ role: "user", content: "a tool result" },
+		]);
+	});
+
+	it("keeps the rewritten message when it is in the tail the projection appends", async () => {
+		const raw: LlmsProviders.Message[] = [
+			{ role: "user", content: "original request" },
+			{ role: "assistant", content: "original answer" },
+			{ role: "assistant", content: "twenty thousand characters of reasoning" },
+		];
+		const rewritten: LlmsProviders.Message[] = [
+			raw[0],
+			raw[1],
+			{ role: "assistant", content: "a short note in its place" },
+		];
+		const existingState = createSessionCompactionState({
+			sourceMessages: raw.slice(0, 2),
+			compactedMessages: [{ role: "user", content: "summary" }],
+			updatedAt: "2026-01-01T00:00:00.000Z",
+		});
+		const prepareTurn = createCompactionStateAwarePrepareTurn({
+			compact: undefined,
+			getState: () => existingState,
+		});
+
+		const result = await prepareTurn({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			systemPrompt: "",
+			tools: [],
+			messages: rewritten,
+			apiMessages: rewritten,
+			sourceMessages: raw,
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: { id: "mock-model", maxInputTokens: 100_000 },
+			},
+		});
+
+		expect(result?.messages).toEqual([
+			{ role: "user", content: "summary" },
+			{ role: "assistant", content: "a short note in its place" },
+		]);
+	});
+
 	it("keeps stale sidecar state when replacement compaction returns no result", async () => {
 		const originalMessages: LlmsProviders.Message[] = [
 			{ role: "user", content: "original" },

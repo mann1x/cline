@@ -168,8 +168,22 @@ export function createSessionCompactionState(input: {
 export function projectSessionCompactionState(
 	state: SessionCompactionState,
 	sourceMessages: readonly MessageWithMetadata[],
+	/**
+	 * The same transcript as it is about to be sent, when a stage ahead of
+	 * compaction rewrote a message in it. The state is matched against
+	 * `sourceMessages`; the tail that follows the compacted part is taken from
+	 * here, so the rewrite is not undone by the projection.
+	 */
+	tailMessages?: readonly MessageWithMetadata[],
 ): MessageWithMetadata[] | undefined {
 	sourceMessages = canonicalSourceMessages(sourceMessages);
+	const canonicalTail = tailMessages
+		? canonicalSourceMessages(tailMessages)
+		: undefined;
+	const tailSource =
+		canonicalTail && canonicalTail.length === sourceMessages.length
+			? canonicalTail
+			: sourceMessages;
 	const hasEnoughSourceMessages =
 		state.source_message_count <= sourceMessages.length;
 	if (!hasEnoughSourceMessages) {
@@ -193,7 +207,7 @@ export function projectSessionCompactionState(
 
 	return [
 		...cloneMessages(state.messages),
-		...cloneMessages(sourceMessages.slice(state.source_message_count)),
+		...cloneMessages(tailSource.slice(state.source_message_count)),
 	];
 }
 
