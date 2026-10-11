@@ -2526,6 +2526,25 @@ describe("buildDelegatedAgentConnection", () => {
 		expect(connection?.providerConfig?.modelInfo?.contextWindow).toBe(8_192)
 	})
 
+	// pandorum, 2026-10-11: the session on xOllama on this machine, the Agents
+	// tab on xOllama on another. `providers.json` has one xOllama entry and it
+	// is the session's, so the agents were sent there and the model they named
+	// was "not found".
+	it("sends the agents to the address their own tab names, not the session's", async () => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue({ baseUrl: "http://127.0.0.1:22434" } as never)
+		const connection = await buildDelegatedAgentConnection(
+			{ actModeApiProvider: "xollama" } as never,
+			JSON.stringify({
+				global: {},
+				mode: { apiProvider: "xollama", ollamaModelId: "agent-model" },
+				providerConfig: { selectedModelId: "agent-model", baseUrl: "http://192.168.178.161:22434" },
+			}),
+		)
+
+		expect(connection?.modelId).toBe("agent-model")
+		expect(connection?.baseUrl).toContain("192.168.178.161:22434")
+	})
+
 	// `ollamaApiOptionsCtxNum` is one global value. A scoped configuration
 	// reaching for it is exactly how the setting behaved as a global one, and it
 	// would put the session's 128k on an agent model that cannot hold it.

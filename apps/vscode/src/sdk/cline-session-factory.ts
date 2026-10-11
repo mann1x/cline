@@ -1483,15 +1483,21 @@ export async function buildDelegatedAgentConnection(
 	// resolvers below are keyed by the legacy ones.
 	const providerId = toLegacyApiProvider(namedProvider) ?? namedProvider
 	const apiKey = resolveApiKey(providerId, configuration)
-	const baseUrl = resolveBaseUrl(providerId, configuration)
 	const providerSettings = snapshotProviderSettings(storedSnapshot)
+	// The tab's own address ahead of `providers.json`, whose entry belongs to
+	// the session's model. Without it an Agents tab on xOllama at one host,
+	// with the session on xOllama at another, sent its agents to the session's
+	// host: "model 'omnimerge-v6-mtp_tb:27b-q4km-128k' not found", from a
+	// server that was never meant to be asked (pandorum, 2026-10-11). The
+	// Vision tab had the same fault and the same fix.
+	const baseUrl = resolveBaseUrl(providerId, configuration, providerSettings)
 
 	let ollamaConfig: ReturnType<typeof resolveOllamaProviderConfig> | undefined
 	if (isOllamaNativeProvider(providerId)) {
 		// Same priming as the session's own model: ask the server what window
 		// this one was built with before resolving one for it, so the first
 		// request already carries it rather than reloading the model mid-run.
-		await primeDeclaredNumCtx(ollamaNativeBaseUrl(providerId, configuration), modelId, fetch)
+		await primeDeclaredNumCtx(ollamaNativeBaseUrl(providerId, configuration, providerSettings), modelId, fetch)
 		// The tab's own settings, passed as the override — so an Agents tab that
 		// names no window falls through to what the model itself declares rather
 		// than to the number the session's model was given.
