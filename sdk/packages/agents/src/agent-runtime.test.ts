@@ -5517,6 +5517,57 @@ describe("a message sent while the run is going", () => {
 		expect(model.requests).toHaveLength(3);
 	});
 
+	// Measured on pandorum, 2026-10-11: asked "do you have an ETA for the
+	// fixes?" mid-fix, the model answered, and the answer -- which described
+	// the work, as an answer about the work does -- drew "your last message
+	// contained no tool calls" and "you described the next step instead of
+	// taking it" on top of the resume reminder.
+	it("says only that the answer was passed on, never that the model failed to act", async () => {
+		let delivered = false;
+		const model = new ScriptedModel([
+			() => [
+				{
+					type: "tool-call-delta",
+					toolCallId: "call_1",
+					toolName: "echo",
+					inputText: '{"text":"hi"}',
+				},
+				{ type: "finish", reason: "tool-calls" },
+			],
+			() => [
+				{
+					type: "text-delta",
+					text: "I am analyzing the syntax errors. Once I correct this, I will re-run the game check. I expect to have this fixed in a few minutes.",
+				},
+				{ type: "finish", reason: "stop" },
+			],
+			() => [
+				{ type: "text-delta", text: "The task is complete." },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [createEchoTool()],
+			completionPolicy: { maxNoToolCallNudges: 2 },
+			consumePendingUserMessage: () => {
+				if (delivered) return undefined;
+				delivered = true;
+				return "do you have an ETA for the fixes?";
+			},
+		});
+
+		await runtime.run("fix the game");
+
+		const afterAnswer = model.requests[2].messages
+			.flatMap((m) => m.content)
+			.filter((p) => p.type === "text")
+			.map((p) => (p as { text: string }).text)
+			.filter((t) => t.startsWith("[SYSTEM]"));
+		expect(afterAnswer).toHaveLength(1);
+		expect(afterAnswer[0]).toContain("Your answer has been passed on");
+	});
+
 	it("leaves an ordinary run alone", async () => {
 		const model = new ScriptedModel([
 			() => [

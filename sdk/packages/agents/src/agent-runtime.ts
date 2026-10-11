@@ -2286,6 +2286,31 @@ export class AgentRuntime {
 						this.consecutiveNoToolCallTurns = 0;
 						this.noToolCallStreakReasoningChars = 0;
 					}
+					// A message sent while the run was going answers to the user, and
+					// answering it is a turn with nothing to call — which is how a run
+					// ends. Measured: asked "how many lines is manic_miner.html?" in
+					// the middle of a fix, the model answered, the run stopped, and
+					// the file was left half-edited until "continue fixing" was typed
+					// by hand. Nobody interjecting a question means "and stop".
+					//
+					// And it is the only thing said about that turn. The handlers
+					// below all read a turn with no tool call as a model that
+					// stopped working, and this one did not stop: it was
+					// interrupted and it answered. Collected with the rest, the
+					// reminder went out joined to "your last message contained no
+					// tool calls" and, because an answer about the work describes
+					// the work, to "you described the next step instead of taking
+					// it" -- measured on pandorum (2026-10-11): asked for an ETA
+					// mid-fix, the model answered and was told both, and its next
+					// thought was "the user wants me to stop describing my
+					// intentions". The user had asked a question and got an answer.
+					// None of the other guards is evaluated, so none of them spends
+					// its one use on a turn it was never about.
+					if (this.steerAwaitingResume) {
+						this.steerAwaitingResume = false;
+						await this.addUserReminderMessage(STEER_RESUME_REMINDER);
+						continue;
+					}
 					// Every handler below asks the model for something different, and
 					// a turn can be wrong in more than one way at once. They are all
 					// collected and all delivered, in the order they are evaluated,
@@ -2310,16 +2335,6 @@ export class AgentRuntime {
 					}> = [];
 					const completionReminders = this.getCompletionReminderMessages();
 					reminders.push(...completionReminders.messages);
-					// A message sent while the run was going answers to the user, and
-					// answering it is a turn with nothing to call — which is how a run
-					// ends. Measured: asked "how many lines is manic_miner.html?" in
-					// the middle of a fix, the model answered, the run stopped, and
-					// the file was left half-edited until "continue fixing" was typed
-					// by hand. Nobody interjecting a question means "and stop".
-					if (this.steerAwaitingResume) {
-						this.steerAwaitingResume = false;
-						reminders.push(STEER_RESUME_REMINDER);
-					}
 					const finalText = textFromMessage(finalAssistantMessage);
 					// The text is a stub by now if it held a call nothing could
 					// read; what it held is what the nudges answer.
