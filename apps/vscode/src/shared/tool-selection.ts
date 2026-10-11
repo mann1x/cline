@@ -85,7 +85,7 @@ export const SELECTABLE_TOOLS: readonly SelectableTool[] = [
 		name: "editor",
 		label: "editor",
 		summary: "Writes files: ranged replacements, whole-file writes and creations.",
-		tokens: 1860,
+		tokens: 1987,
 		group: "write",
 	},
 	{

@@ -236,6 +236,8 @@ Changes or creates one text file. Use this, never the shell, for anything that w
 
 Which arguments you send decides what the call does. Use one form per call; don't mix `old_text` with a line range.
 
+Write the arguments in this order: `path` and every other short argument first — line and column numbers, `intent`, `task_progress`, `old_text` — and `new_text` last. The text you are writing is the long part of the call, and whatever is written after a long text is the part most easily left out.
+
 1. Replace text: `path`, `old_text`, `new_text`. `old_text` must match exactly, whitespace and indentation included. If it occurs more than once, add `occurrence` (one-based, in file order) to pick one, or `replace_all: true` for all of them.
 2. Replace lines: `path`, `start_line`, `new_text`, optional `end_line` (inclusive, defaults to `start_line`). Best where the text is long, minified or repeated, because a line number cannot be ambiguous. An empty `new_text` deletes the range.
 3. Replace characters: `path`, `start_line`, `start_column`, `new_text`, optional `end_line`/`end_column` (inclusive, each defaulting to its start). This is the unit a diagnostic speaks in — `line 108, column 385` — and on a minified line it is the only form that leaves the other 400 characters alone. `start_column` alone replaces exactly one character.
