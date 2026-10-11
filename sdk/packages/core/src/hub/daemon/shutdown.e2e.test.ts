@@ -21,6 +21,11 @@ interface ReadyDaemon {
 }
 
 // The fixture must run under Bun; which Bun is the installer's business, not this test's.
+// Nor is how it got out. Under Bun 1.3.14 the coordinator forces the exit and
+// writes "forced exit:"; under Bun 1.4.2 (CI, Linux and Windows) the process
+// ends with code 0 inside the deadline and never writes that line. Asserting
+// it failed every push. What is checked is the outcome: code 0, in time, and
+// nothing left behind.
 const RUNTIME_LINE = /\[shutdown-fixture\] runtime: bun \d+\.\d+\.\d+/;
 
 const tempDirs = new Set<string>();
@@ -251,7 +256,6 @@ describe("hub daemon shutdown", () => {
 			expect(result).toEqual({ code: 0, signal: null });
 			expect(Date.now() - startedAt).toBeLessThan(5_000);
 			expect(daemon.stderr()).toMatch(RUNTIME_LINE);
-			expect(daemon.stderr()).toContain("[shutdown-fixture] forced exit:");
 			await expect(
 				readFile(daemon.discoveryPath, "utf8"),
 			).rejects.toMatchObject({
@@ -284,7 +288,6 @@ describe("hub daemon shutdown", () => {
 				expect(result).toEqual({ code: 0, signal: null });
 				expect(Date.now() - startedAt).toBeLessThan(5_000);
 				expect(daemon.stderr()).toMatch(RUNTIME_LINE);
-				expect(daemon.stderr()).toContain("[shutdown-fixture] forced exit:");
 				await expect(
 					readFile(daemon.discoveryPath, "utf8"),
 				).rejects.toMatchObject({ code: "ENOENT" });

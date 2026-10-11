@@ -88,6 +88,7 @@ The change has been applied and saved to the file.`
 export const E2E_MOCK_API_RESPONSES = {
 	DEFAULT: "Hello! I'm a mock Cline API response.",
 	CHECKPOINT_REBUILD_PROBE: "Checkpoint rebuild probe remains in flight while settings change.",
+	CHECKPOINT_QUEUED: "Queued message answered after the checkpoint probe.",
 	CHECKPOINT_FOLLOWUP: "Checkpoint-enabled follow-up reached the rebuilt session.",
 	/** Assistant text streamed before the structured editor tool call. */
 	/** Assistant text streamed before the read that the edit depends on. */

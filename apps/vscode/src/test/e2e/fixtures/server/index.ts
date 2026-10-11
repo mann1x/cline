@@ -517,6 +517,7 @@ export class ClineApiServerMock {
 						}
 						const checkpointProbeIndex = lastIndexIncluding("checkpoint_rebuild_probe")
 						const checkpointFollowupIndex = lastIndexIncluding("follow-up after enabling checkpoints")
+						const checkpointQueuedIndex = lastIndexIncluding("queued during checkpoint change")
 						const lastUserIndex = Array.isArray(messages)
 							? messages.map((m: { role?: string }) => m?.role).lastIndexOf("user")
 							: -1
@@ -531,6 +532,10 @@ export class ClineApiServerMock {
 							responseText = E2E_MOCK_API_RESPONSES.CHECKPOINT_FOLLOWUP
 						} else if (isCheckpointProbeTurn) {
 							responseText = E2E_MOCK_API_RESPONSES.CHECKPOINT_REBUILD_PROBE
+						} else if (checkpointQueuedIndex >= 0 && checkpointQueuedIndex === lastUserIndex) {
+							// Its own sentence, so the test can tell the queued turn's answer
+							// from the default one a nudged probe turn also ends with.
+							responseText = E2E_MOCK_API_RESPONSES.CHECKPOINT_QUEUED
 						}
 						// The hooks e2e sends "hook context probe" after its
 						// UserPromptSubmit hook returned a contextModification; answer

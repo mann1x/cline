@@ -92,9 +92,20 @@ e2e.describe("Checkpoint settings", () => {
 		await expect(checkpoints).not.toBeChecked()
 		await sidebar.getByRole("button", { name: "Done" }).click()
 
+		// The mock answers every request with the same sentence, and the fork
+		// nudges a turn that ends with no tool call once, so a finished turn
+		// carries two of them where upstream's carries one. This test came
+		// from upstream counting replies (1, 2, 3) and failed on strict mode at
+		// its first line. What it waits for is a turn's reply arriving, so it
+		// waits for more replies than there were, whatever a turn costs.
+		const replies = sidebar.getByText("mock Cline API response")
+		const expectNewReply = async (before: number) => {
+			await expect.poll(() => replies.count(), { timeout: 30_000 }).toBeGreaterThan(before)
+		}
+
 		await inputbox.fill("message without checkpoints")
 		await sidebar.getByTestId("send-button").click()
-		await expect(sidebar.getByText("mock Cline API response")).toBeVisible({ timeout: 30_000 })
+		await expect(replies.first()).toBeVisible({ timeout: 30_000 })
 
 		// A streamed reply becomes visible before its turn ends. Wait for the
 		// footer's Cancel button to go and for the chat input to take focus back
@@ -112,9 +123,13 @@ e2e.describe("Checkpoint settings", () => {
 			await sidebar.locator('[title="Edit and regenerate from here"]').filter({ hasText: messageText }).click()
 		}
 
+		// After the first turn has ended, so its second reply is not taken for
+		// this turn's first.
+		await waitForTurnEnd()
+		const repliesAfterFirstTurn = await replies.count()
 		await inputbox.fill("follow-up without checkpoints")
 		await sidebar.getByTestId("send-button").click()
-		await expect(sidebar.getByText("mock Cline API response")).toHaveCount(2, { timeout: 30_000 })
+		await expectNewReply(repliesAfterFirstTurn)
 
 		await openEditor("follow-up without checkpoints")
 		const resetCode = sidebar.getByRole("button", { name: "Reset Code" })
@@ -158,7 +173,12 @@ e2e.describe("Checkpoint settings", () => {
 			await sendButton.click()
 			await expect(sidebar.getByText("queued during checkpoint change")).toBeVisible({ timeout: 30_000 })
 			server.releaseCheckpointProbe()
-			await expect(sidebar.getByText("mock Cline API response")).toHaveCount(3, { timeout: 30_000 })
+			// The queued turn's own sentence: a default reply here could be the
+			// probe turn's, and the next message would then be sent between the
+			// two turns.
+			await expect(sidebar.getByText("Queued message answered after the checkpoint probe.").first()).toBeVisible({
+				timeout: 30_000,
+			})
 		} finally {
 			server.releaseCheckpointProbe()
 		}
