@@ -235,3 +235,73 @@ describe("messageReducer — deterministic", () => {
 		})
 	})
 })
+
+describe("applyStateSnapshot in one pass", () => {
+	const row = (ts: number, seq: number, text: string, extra: Partial<ClineMessage> = {}): ClineMessage => ({
+		ts,
+		type: "say",
+		say: "text",
+		text,
+		epoch: 1,
+		seq,
+		...extra,
+	})
+	// What the reducer did before: one applyMessage per snapshot message.
+	const oneByOne = (state: ReplicaState, messages: ClineMessage[]): ClineMessage[] => {
+		let next = state
+		for (const message of messages) {
+			next = applyMessage(next, message)
+		}
+		return next.messages
+	}
+
+	it("gives the transcript the per-message merge gives", () => {
+		const base = applyStateSnapshot(createReplicaState(), [row(1, 1, "a"), row(2, 2, "b"), row(3, 3, "c")], 1, 1)
+		const incoming = [
+			row(1, 1, "a"), // same copy
+			row(2, 9, "b newer"), // fresher
+			row(3, 2, "c stale"), // older, ignored
+			row(4, 10, "d"), // new
+			row(4, 11, "d again"), // the same ts twice in one snapshot
+		]
+		const merged = applyStateSnapshot(base, incoming, 1, 2)
+		expect(merged.messages).toEqual(oneByOne(base, incoming))
+		expect(merged.messages.map((m) => m.text)).toEqual(["a", "b newer", "c", "d again"])
+		expect(merged.seqByTs.get(2)).toBe(9)
+		expect(merged.seqByTs.get(3)).toBe(3)
+	})
+
+	it("keeps the object of a row that did not change", () => {
+		const base = applyStateSnapshot(createReplicaState(), [row(1, 1, "a"), row(2, 2, "b")], 1, 1)
+		const merged = applyStateSnapshot(base, [row(1, 1, "a"), row(2, 5, "b changed")], 1, 2)
+		expect(merged.messages[0]).toBe(base.messages[0])
+		expect(merged.messages[1]).not.toBe(base.messages[1])
+	})
+
+	it("keeps the transcript array when a snapshot changes nothing", () => {
+		const base = applyStateSnapshot(createReplicaState(), [row(1, 1, "a"), row(2, 2, "b")], 1, 1)
+		const merged = applyStateSnapshot(base, [row(1, 1, "a"), row(2, 2, "b")], 1, 2)
+		expect(merged.messages).toBe(base.messages)
+		expect(merged.stateVersion).toBe(2)
+	})
+
+	it("takes a changed row even when its seq did not move", () => {
+		// A row edited in place on the host arrives with the seq it already had.
+		const base = applyStateSnapshot(createReplicaState(), [row(1, 4, "running", { partial: true })], 1, 1)
+		const merged = applyStateSnapshot(base, [row(1, 4, "done")], 1, 2)
+		expect(merged.messages[0].text).toBe("done")
+		expect(merged.messages[0].partial).toBeUndefined()
+	})
+
+	it("merges 4,000 rows without copying the transcript per row", () => {
+		const rows = Array.from({ length: 4000 }, (_, i) => row(i + 1, i + 1, `row ${i}`))
+		const base = applyStateSnapshot(createReplicaState(), rows, 1, 1)
+		const again = rows.map((m) => ({ ...m }))
+		again[3999] = row(4000, 9000, "the only change")
+		const started = performance.now()
+		const merged = applyStateSnapshot(base, again, 1, 2)
+		expect(performance.now() - started).toBeLessThan(60)
+		expect(merged.messages[3999].text).toBe("the only change")
+		expect(merged.messages[0]).toBe(base.messages[0])
+	})
+})

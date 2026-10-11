@@ -74,11 +74,71 @@ export async function subscribeToState(
 	}
 }
 
+// Backpressure for full-state snapshots.
+//
+// A snapshot is the whole transcript as one JSON string, and delivery is
+// fire-and-forget: nothing here knew whether the webview had absorbed the last
+// one before the next was posted. On a long conversation the webview needs
+// longer per snapshot than the interval they arrive at, and the unprocessed
+// ones queued in its process as multi-megabyte strings until V8 ran out of
+// memory and the panel went grey (2,738 MB heap, 1,633 MB of it large objects;
+// pandorum, 2026-10-11).
+//
+// So a webview says when it has applied a snapshot (`state_applied`), and while
+// one is outstanding the newest request is held and any older held one is
+// dropped -- a snapshot is a whole state, so only the latest matters. The hold
+// ends at the acknowledgement or after STATE_ACK_TIMEOUT_MS, whichever comes
+// first, so a webview that is busy, hidden or gone delays state, never loses it.
+//
+// The gate arms itself on the first acknowledgement. A client that never sends
+// one (an older webview, a host with no webview) is posted to exactly as before.
+const STATE_ACK_TIMEOUT_MS = 2000
+let stateAcksSeen = false
+let stateOutstandingSince: number | undefined
+let heldState: ExtensionState | undefined
+let stateAckTimer: ReturnType<typeof setTimeout> | undefined
+
+function releaseHeldState(): void {
+	stateOutstandingSince = undefined
+	if (stateAckTimer) {
+		clearTimeout(stateAckTimer)
+		stateAckTimer = undefined
+	}
+	const next = heldState
+	heldState = undefined
+	if (next) {
+		void sendStateUpdate(next)
+	}
+}
+
+/** A webview has applied the last state snapshot it was sent. */
+export function acknowledgeStateUpdate(): void {
+	stateAcksSeen = true
+	releaseHeldState()
+}
+
+/** Test seam: forget every acknowledgement and anything held. */
+export function resetStateUpdateGateForTests(): void {
+	stateAcksSeen = false
+	stateOutstandingSince = undefined
+	heldState = undefined
+	if (stateAckTimer) {
+		clearTimeout(stateAckTimer)
+		stateAckTimer = undefined
+	}
+}
+
 /**
  * Send a state update to all active subscribers
  * @param state The state to send
  */
 export async function sendStateUpdate(state: ExtensionState): Promise<void> {
+	if (stateAcksSeen && stateOutstandingSince !== undefined && activeStateSubscriptions.size > 0) {
+		// Newest wins: whatever was held is superseded by this one.
+		heldState = state
+		return
+	}
+
 	let stateJson: string
 	try {
 		stateJson = JSON.stringify(state)
@@ -88,6 +148,15 @@ export async function sendStateUpdate(state: ExtensionState): Promise<void> {
 	}
 
 	recordStateSizeTelemetry(Buffer.byteLength(stateJson, "utf8"))
+
+	if (stateAcksSeen && activeStateSubscriptions.size > 0) {
+		stateOutstandingSince = Date.now()
+		if (stateAckTimer) {
+			clearTimeout(stateAckTimer)
+		}
+		stateAckTimer = setTimeout(releaseHeldState, STATE_ACK_TIMEOUT_MS)
+		stateAckTimer.unref?.()
+	}
 
 	// FIRE-AND-FORGET: do not await delivery to the webview (it may be hidden/reloaded/closed
 	// and postMessage can hang or resolve false). The webview reconciles convergently from

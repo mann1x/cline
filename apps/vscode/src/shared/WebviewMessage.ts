@@ -1,6 +1,11 @@
 export interface WebviewMessage {
 	/** `dock_chat` comes from the sidebar's placeholder while the chat is undocked. */
-	type: "grpc_request" | "grpc_request_cancel" | "dock_chat"
+	/**
+	 * `state_applied` is the webview saying it has applied the last state
+	 * snapshot it was sent, which is what lets the host hold the next one
+	 * instead of queueing it in the webview's memory.
+	 */
+	type: "grpc_request" | "grpc_request_cancel" | "dock_chat" | "state_applied"
 	grpc_request?: GrpcRequest
 	grpc_request_cancel?: GrpcCancel
 }

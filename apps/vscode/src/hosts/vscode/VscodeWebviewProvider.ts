@@ -1,3 +1,4 @@
+import { acknowledgeStateUpdate } from "@core/controller/state/subscribeToState"
 import { sendShowWebviewEvent } from "@core/controller/ui/subscribeToShowWebview"
 import { WebviewProvider } from "@core/webview"
 import * as vscode from "vscode"
@@ -327,6 +328,10 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 			}
 			case "dock_chat": {
 				await this.dock()
+				break
+			}
+			case "state_applied": {
+				acknowledgeStateUpdate()
 				break
 			}
 			default: {

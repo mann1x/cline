@@ -48,7 +48,11 @@ export interface SdkSessionEventCoordinatorOptions {
 	beginProviderFailureTelemetryTurn?: () => void
 }
 
+/** How often the whole state is posted while a turn is only streaming partial messages. */
+export const STREAMING_STATE_POST_INTERVAL_MS = 1000
+
 export class SdkSessionEventCoordinator {
+	private lastStreamingStatePostAt = 0
 	private readonly translateSessionEvent: (event: CoreSessionEvent, state: MessageTranslatorState) => TranslationResult
 
 	constructor(private readonly options: SdkSessionEventCoordinatorOptions) {
@@ -231,6 +235,26 @@ export class SdkSessionEventCoordinator {
 			result.turnComplete ||
 			event.type === "pending_prompt_submitted"
 		) {
+			// A streamed delta is not a reason to post the whole state. Each one
+			// already reaches the webview as a partial message carrying its row, so
+			// a snapshot per delta (twenty a second behind the debouncer) re-sent
+			// the entire transcript to say what the partial had just said, and on a
+			// long conversation that is what filled the webview's memory. While
+			// only partials are flowing the snapshot is the safety net for a lost
+			// partial and nothing else, and once a second is enough of one.
+			const streamingOnly =
+				result.messages.length > 0 &&
+				result.messages.every((m) => m.partial === true) &&
+				!result.sessionEnded &&
+				!result.turnComplete &&
+				event.type !== "pending_prompt_submitted"
+			if (streamingOnly) {
+				const now = Date.now()
+				if (now - this.lastStreamingStatePostAt < STREAMING_STATE_POST_INTERVAL_MS) {
+					return
+				}
+				this.lastStreamingStatePostAt = now
+			}
 			this.options.postStateToWebview().catch((err) => {
 				Logger.error("[SdkController] Failed to post state after event:", err)
 			})

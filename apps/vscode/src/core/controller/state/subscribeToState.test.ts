@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { EmptyRequest } from "@shared/proto/cline/common"
 import type { State } from "@shared/proto/cline/state"
-import { describe, it, vi } from "vitest"
+import { afterEach, describe, it, vi } from "vitest"
 import type { Controller } from ".."
-import { sendStateUpdate, subscribeToState } from "./subscribeToState"
+import { acknowledgeStateUpdate, resetStateUpdateGateForTests, sendStateUpdate, subscribeToState } from "./subscribeToState"
 
 // Reaches for the host provider, which no unit test has.
 vi.mock("@/services/telemetry", () => ({
@@ -59,5 +59,61 @@ describe("the state subscription's first push", () => {
 
 		assert.equal(sent.length, 1)
 		assert.match(sent[0].stateJson ?? "", /"version":"1"/)
+	})
+})
+
+/**
+ * A snapshot is the whole transcript. Posting the next one before the webview
+ * has applied the last queues it in the webview's memory, and on a long
+ * conversation that queue is what killed the panel.
+ */
+describe("state snapshots wait for the webview", () => {
+	afterEach(() => {
+		resetStateUpdateGateForTests()
+		vi.useRealTimers()
+	})
+
+	async function subscribe() {
+		const sent: string[] = []
+		const stream = vi.fn(async (state: State) => {
+			sent.push(JSON.parse(state.stateJson ?? "{}").version)
+		})
+		await subscribeToState(
+			makeController(async () => ({ version: "first" })),
+			EmptyRequest.create({}),
+			stream,
+		)
+		return sent
+	}
+	const state = (version: string) => ({ version }) as never
+
+	it("posts every snapshot to a client that never acknowledges", async () => {
+		const sent = await subscribe()
+		await sendStateUpdate(state("a"))
+		await sendStateUpdate(state("b"))
+		assert.deepEqual(sent, ["first", "a", "b"])
+	})
+
+	it("holds the newest snapshot until the last one is acknowledged, and drops the ones between", async () => {
+		const sent = await subscribe()
+		acknowledgeStateUpdate()
+		await sendStateUpdate(state("a"))
+		await sendStateUpdate(state("b"))
+		await sendStateUpdate(state("c"))
+		assert.deepEqual(sent, ["first", "a"])
+		acknowledgeStateUpdate()
+		await Promise.resolve()
+		assert.deepEqual(sent, ["first", "a", "c"])
+	})
+
+	it("stops waiting after two seconds, so a busy or hidden webview delays state and never loses it", async () => {
+		vi.useFakeTimers()
+		const sent = await subscribe()
+		acknowledgeStateUpdate()
+		await sendStateUpdate(state("a"))
+		await sendStateUpdate(state("b"))
+		assert.deepEqual(sent, ["first", "a"])
+		await vi.advanceTimersByTimeAsync(2000)
+		assert.deepEqual(sent, ["first", "a", "b"])
 	})
 })

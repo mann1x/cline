@@ -3,7 +3,11 @@ import type { ClineMessage } from "@shared/ExtensionMessage"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { MessageTranslatorState, translateSessionEvent } from "./message-translator"
 import { PROVIDER_FAILURE_ERROR_TYPE, PROVIDER_FAILURE_PHASE } from "./provider-failure-telemetry"
-import { SdkSessionEventCoordinator, type SdkSessionEventCoordinatorOptions } from "./sdk-session-event-coordinator"
+import {
+	SdkSessionEventCoordinator,
+	type SdkSessionEventCoordinatorOptions,
+	STREAMING_STATE_POST_INTERVAL_MS,
+} from "./sdk-session-event-coordinator"
 
 vi.mock("@/shared/services/Logger", () => ({
 	Logger: {
@@ -34,6 +38,51 @@ describe("SdkSessionEventCoordinator", () => {
 
 		expect(options.messages.appendAndEmit).toHaveBeenCalledWith([message], event)
 		expect(options.postStateToWebview).toHaveBeenCalledOnce()
+	})
+
+	it("posts the whole state at most once a second while only partial messages stream", async () => {
+		vi.useFakeTimers()
+		try {
+			const partial: ClineMessage = { ts: 1, type: "say", say: "reasoning", text: "thinking", partial: true }
+			const { coordinator, options, event } = makeCoordinator({
+				translation: { messages: [partial], sessionEnded: false, turnComplete: false },
+			})
+
+			for (let i = 0; i < 50; i++) {
+				coordinator.handleSessionEvent(event)
+				await Promise.resolve()
+			}
+			// Every delta still reaches the webview as its own message.
+			expect(options.messages.appendAndEmit).toHaveBeenCalledTimes(50)
+			expect(options.postStateToWebview).toHaveBeenCalledOnce()
+
+			vi.advanceTimersByTime(STREAMING_STATE_POST_INTERVAL_MS)
+			coordinator.handleSessionEvent(event)
+			await Promise.resolve()
+			expect(options.postStateToWebview).toHaveBeenCalledTimes(2)
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
+	it("posts state for a finished message even right after a streamed one", async () => {
+		const { coordinator, options, event } = makeCoordinator({
+			translation: {
+				messages: [{ ts: 1, type: "say", say: "text", text: "a", partial: true }],
+				sessionEnded: false,
+				turnComplete: false,
+			},
+		})
+		coordinator.handleSessionEvent(event)
+		await Promise.resolve()
+		options.translateSessionEvent.mockReturnValue({
+			messages: [{ ts: 1, type: "say", say: "text", text: "a b" }],
+			sessionEnded: false,
+			turnComplete: false,
+		})
+		coordinator.handleSessionEvent(event)
+		await Promise.resolve()
+		expect(options.postStateToWebview).toHaveBeenCalledTimes(2)
 	})
 
 	it("filters late completion messages after cancellation", async () => {

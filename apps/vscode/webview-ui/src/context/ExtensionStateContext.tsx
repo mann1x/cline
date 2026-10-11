@@ -14,6 +14,7 @@ import { convertProtoMcpServersToMcpServers } from "@shared/proto-conversions/mc
 import { fromProtobufModels } from "@shared/proto-conversions/models/typeConversion"
 import type React from "react"
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
+import { PLATFORM_CONFIG, PlatformType } from "@/config/platform.config"
 import { reportWebviewFailure } from "@/services/webview-error-report"
 import {
 	type ModelInfo,
@@ -520,6 +521,22 @@ export const ExtensionStateContextProvider: React.FC<{
 	// arrival order, duplication, or loss. See messageReducer.ts.
 	const replicaRef = useRef<ReplicaState>(createReplicaState())
 
+	// Tell the host when a state snapshot has been applied -- parsed, merged and
+	// committed, which is why this is an effect on the state and not a line in
+	// the stream's callback. The host holds its next snapshot until it hears
+	// this (or two seconds pass), so snapshots this panel has not got to yet are
+	// not queued in its own memory. See sendStateUpdate in subscribeToState.ts.
+	const pendingStateAckRef = useRef<number | undefined>(undefined)
+	// biome-ignore lint/correctness/useExhaustiveDependencies: runs after every commit of `state`, which is the moment being reported
+	useEffect(() => {
+		const version = pendingStateAckRef.current
+		if (version === undefined || PLATFORM_CONFIG.type !== PlatformType.VSCODE) {
+			return
+		}
+		pendingStateAckRef.current = undefined
+		PLATFORM_CONFIG.postMessage({ type: "state_applied", state_applied: { version } })
+	}, [state])
+
 	// Subscribe to state updates and UI events using the gRPC streaming API
 	useEffect(() => {
 		// The panel renders nothing at all until the first state arrives, so
@@ -559,6 +576,7 @@ export const ExtensionStateContextProvider: React.FC<{
 					if (response.stateJson) {
 						try {
 							const stateData = JSON.parse(response.stateJson) as ExtensionState
+							pendingStateAckRef.current = stateData.stateVersion ?? 0
 							setState((prevState) => {
 								// Versioning logic for autoApprovalSettings
 								const incomingVersion = stateData.autoApprovalSettings?.version ?? 1

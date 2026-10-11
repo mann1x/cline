@@ -140,6 +140,103 @@ export function applyMessage(state: ReplicaState, incoming: ClineMessage): Repli
 	return { ...state, messages, seqByTs }
 }
 
+/** Whether two copies of a message would render the same. Nested values are compared by their JSON. */
+function sameMessage(a: ClineMessage, b: ClineMessage): boolean {
+	if (a === b) {
+		return true
+	}
+	const aKeys = Object.keys(a) as (keyof ClineMessage)[]
+	if (aKeys.length !== Object.keys(b).length) {
+		return false
+	}
+	for (const key of aKeys) {
+		const x = a[key]
+		const y = b[key]
+		if (x === y) {
+			continue
+		}
+		if (typeof x !== "object" || typeof y !== "object" || x === null || y === null) {
+			return false
+		}
+		if (JSON.stringify(x) !== JSON.stringify(y)) {
+			return false
+		}
+	}
+	return true
+}
+
+/**
+ * Merge a same-epoch snapshot's messages into the replica: the result `applyMessage` gives when
+ * called once per message, reached in one pass.
+ *
+ * Called once per message, it copied the transcript array and the seq map for every message of
+ * every snapshot -- quadratic in the length of the conversation: 81 ms for 2,000 rows, against
+ * snapshots arriving every 50 ms while a turn streams. The webview fell behind, the snapshots it
+ * had not reached queued in its memory, and the panel died (2026-10-11).
+ *
+ * A message whose incoming copy would render the same keeps the object the replica already
+ * holds, so a row that did not change is not handed to React as a new one, and a snapshot that
+ * changes nothing returns the same state.
+ */
+function mergeSnapshotMessages(state: ReplicaState, snapshotMessages: ClineMessage[]): ReplicaState {
+	// Anything fenced differently takes the general path, which knows how to move the fence.
+	if (snapshotMessages.some((message) => epochOf(message) !== state.epoch)) {
+		let next = state
+		for (const message of snapshotMessages) {
+			next = applyMessage(next, message)
+		}
+		return next
+	}
+
+	// First index per ts, as `findIndex` would find it.
+	const indexByTs = new Map<number, number>()
+	for (let i = 0; i < state.messages.length; i++) {
+		const ts = state.messages[i].ts
+		if (!indexByTs.has(ts)) {
+			indexByTs.set(ts, i)
+		}
+	}
+
+	let messages = state.messages
+	let seqByTs = state.seqByTs
+	let changed = false
+	const beginChange = (): void => {
+		if (!changed) {
+			messages = [...state.messages]
+			seqByTs = new Map(state.seqByTs)
+			changed = true
+		}
+	}
+
+	for (const incoming of snapshotMessages) {
+		const index = indexByTs.get(incoming.ts)
+		const incomingSeq = seqOf(incoming)
+		if (index === undefined) {
+			beginChange()
+			indexByTs.set(incoming.ts, messages.length)
+			messages.push(incoming)
+			seqByTs.set(incoming.ts, incomingSeq)
+			continue
+		}
+		const existingSeq = seqByTs.get(incoming.ts)
+		if (existingSeq !== undefined && incomingSeq < existingSeq) {
+			continue
+		}
+		const nextSeq = Math.max(existingSeq ?? 0, incomingSeq)
+		const unchanged = sameMessage(messages[index], incoming)
+		if (unchanged && existingSeq === nextSeq) {
+			continue
+		}
+		beginChange()
+		if (!unchanged) {
+			messages[index] = incoming
+		}
+		seqByTs.set(incoming.ts, nextSeq)
+	}
+
+	return changed ? { ...state, messages, seqByTs } : state
+}
+
 /**
  * Apply a full state snapshot's transcript.
  *
@@ -181,10 +278,7 @@ export function applyStateSnapshot(
 	}
 
 	// Merge each message; never shrink the transcript for the same task/epoch.
-	let next = state
-	for (const message of snapshotMessages) {
-		next = applyMessage(next, message)
-	}
+	let next = mergeSnapshotMessages(state, snapshotMessages)
 	if (snapshotVersion > next.stateVersion) {
 		next = next === state ? { ...state } : next
 		next.stateVersion = snapshotVersion
