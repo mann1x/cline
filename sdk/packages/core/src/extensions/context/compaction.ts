@@ -2169,7 +2169,11 @@ export function createCompactionStateAwarePrepareTurn(input: {
 		state: SessionCompactionState,
 		sourceMessages: CoreCompactionContext["messages"],
 	) => void | Promise<void>;
+	/** Told when a saved compaction no longer matches the transcript. */
+	logger?: { log?: (message: string) => void };
 }): ContextPipelinePrepareTurn {
+	/** States already reported, so a mismatch is one line and not one a turn. */
+	const reportedMismatches = new Set<string>();
 	return async (context) => {
 		const existingState = input.getState?.();
 		const sourceMessages = context.sourceMessages ?? context.messages;
@@ -2180,6 +2184,19 @@ export function createCompactionStateAwarePrepareTurn(input: {
 					context.messages,
 				)
 			: undefined;
+		if (existingState && !projectedMessages) {
+			// Said out loud, because the consequence is silent: the request goes
+			// out with the whole transcript and the run compacts again. On
+			// pandorum (2026-10-11) that read as "two compactions in a minute"
+			// and nothing in the log said the first one had been dropped.
+			const key = `${existingState.updated_at}:${existingState.source_message_count}`;
+			if (!reportedMismatches.has(key)) {
+				reportedMismatches.add(key);
+				input.logger?.log?.(
+					`[compaction] the saved compaction no longer matches the conversation and is not applied: it covers ${existingState.source_message_count} messages, saved ${existingState.updated_at}; the conversation has ${sourceMessages.length}. The next request carries the whole conversation.`,
+				);
+			}
+		}
 		if (existingState && projectedMessages) {
 			// Re-compaction intentionally starts from the compacted projection plus
 			// canonical tail. This keeps automatic turns bounded without rebuilding a

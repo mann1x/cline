@@ -1168,6 +1168,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 					createCompactionStateAwarePrepareTurn({
 						compact: agentCompact,
 						getState: () => delegatedCompactionState,
+						logger: configWithProvider.logger,
 						saveState: (state) => {
 							delegatedCompactionState = state;
 						},
@@ -2321,6 +2322,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			createCompactionStateAwarePrepareTurn({
 				compact: compactForTurn,
 				getState: () => activeSessionRef?.compactionState,
+				logger: configWithProvider.logger,
 				saveState: async (state, sourceMessages) => {
 					const activeSession = activeSessionRef;
 					if (!activeSession) return;

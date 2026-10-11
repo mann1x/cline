@@ -6275,6 +6275,45 @@ describe("createContextCompactionPrepareTurn", () => {
 		]);
 	});
 
+	it("says so, once, when a saved compaction no longer matches the conversation", async () => {
+		const existingState = createSessionCompactionState({
+			sourceMessages: [{ role: "user", content: "original request" }],
+			compactedMessages: [{ role: "user", content: "summary" }],
+			updatedAt: "2026-01-01T00:00:00.000Z",
+		});
+		const log = vi.fn();
+		const prepareTurn = createCompactionStateAwarePrepareTurn({
+			compact: undefined,
+			getState: () => existingState,
+			logger: { log },
+		});
+		const changed: LlmsProviders.Message[] = [
+			{ role: "user", content: "a different first message" },
+		];
+		const turn = {
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			systemPrompt: "",
+			tools: [],
+			messages: changed,
+			apiMessages: changed,
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: { id: "mock-model", maxInputTokens: 100_000 },
+			},
+		};
+
+		await prepareTurn(turn);
+		await prepareTurn({ ...turn, iteration: 2 });
+
+		expect(log).toHaveBeenCalledTimes(1);
+		expect(log.mock.calls[0][0]).toContain("no longer matches");
+	});
+
 	it("keeps the rewritten message when it is in the tail the projection appends", async () => {
 		const raw: LlmsProviders.Message[] = [
 			{ role: "user", content: "original request" },
