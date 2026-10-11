@@ -210,7 +210,13 @@ describe("a call outside its conversation on xOllama", () => {
 		expect(JSON.stringify(stub.chats[1])).toBe(sideBody());
 	});
 
-	it("leaves the conversation alone when the engine names no figure", async () => {
+	// pandorum, 2026-10-11: a 53,435-token note waited 119 s, 119 s and 70 s
+	// behind its own conversation, which held all 96,000 cells. xOllama sends
+	// the figure only when it is above zero (`server/context_window.go`), so a
+	// full window -- the case this closing exists for -- arrives with none.
+	// The conversation's own booking covers the call by itself, and that is
+	// enough to know that giving it back makes the room.
+	it("closes the conversation when no figure comes and its own booking covers the call", async () => {
 		const stub = server([
 			() => refused(null),
 			() => json({ message: { content: "note" } }),
@@ -218,9 +224,31 @@ describe("a call outside its conversation on xOllama", () => {
 		const wire = withXollamaRequestFields(stub.fetch, {
 			engine: () => ({ sideCallOf: "conv" }),
 		});
-		recordPolykvGrantedWindow("conv", 85_386);
+		recordPolykvGrantedWindow("conv", 96_000);
+		const response = await wire("http://x/api/chat", {
+			method: "POST",
+			body: sideBody(),
+		});
+		expect(response.status).toBe(200);
+		expect(closes(stub.engine)).toContain("sessions/conv/close");
+		// Sent again with its booking, not left to wait.
+		expect(stub.chats[1]?.placement).toEqual({
+			num_ctx: NEED,
+			num_ctx_min: NEED,
+		});
+	});
+
+	it("leaves the conversation alone when no figure comes and its booking would not be enough", async () => {
+		const stub = server([
+			() => refused(null),
+			() => json({ message: { content: "note" } }),
+		]);
+		const wire = withXollamaRequestFields(stub.fetch, {
+			engine: () => ({ sideCallOf: "conv" }),
+		});
+		recordPolykvGrantedWindow("conv", NEED - 1);
 		await wire("http://x/api/chat", { method: "POST", body: sideBody() });
-		// The prose says 10,614; only the header is read.
+		// The prose says 10,614; it is not read.
 		expect(closes(stub.engine)).toEqual([]);
 		expect(stub.chats[1]?.placement).toBeUndefined();
 	});
@@ -299,6 +327,31 @@ describe("a call outside its conversation on xOllama", () => {
 		stopOther();
 	});
 
+	it("does not call a wait that was cut short a request that was sent", async () => {
+		const seen: string[] = [];
+		const stop = onXollamaSideCall("conv", (event) => seen.push(event.message));
+		let chat = 0;
+		const stub = server([() => refused(null)]);
+		const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+			if (new URL(String(input)).pathname === "/api/chat") {
+				chat += 1;
+				if (chat === 2) {
+					throw new Error("The operation timed out");
+				}
+			}
+			return stub.fetch(input as never, init);
+		}) as unknown as typeof fetch;
+		// Its booking would not be enough, so it waits rather than closes.
+		recordPolykvGrantedWindow("conv", NEED - 1);
+		await expect(
+			withXollamaRequestFields(fetchImpl, {
+				engine: () => ({ sideCallOf: "conv" }),
+			})("http://x/api/chat", { method: "POST", body: sideBody() }),
+		).rejects.toThrow("timed out");
+		expect(seen[1]).toMatch(/stopped waiting after \d+ s and was not sent/);
+		stop();
+	});
+
 	it("reads the engine's largest admissible window from the header only", () => {
 		expect(largestAdmissible(refused(1_192))).toBe(1_192);
 		expect(largestAdmissible(refused(0))).toBe(0);
@@ -318,9 +371,17 @@ describe("a call outside its conversation on xOllama", () => {
 		expect(sideCallBlockedByOwnConversation({ ...base, largest: 20_000 })).toBe(
 			false,
 		);
-		// The engine did not say how much is free.
+		// The engine did not say how much is free: only the conversation's
+		// own booking is known, and it has to cover the call alone.
 		expect(
 			sideCallBlockedByOwnConversation({ ...base, largest: undefined }),
+		).toBe(true);
+		expect(
+			sideCallBlockedByOwnConversation({
+				...base,
+				largest: undefined,
+				conversationWindow: 14_842,
+			}),
 		).toBe(false);
 		// The conversation holds nothing we know of.
 		expect(

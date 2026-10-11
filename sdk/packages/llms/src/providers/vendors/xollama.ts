@@ -1040,7 +1040,8 @@ export function largestAdmissible(response: Response): number | undefined {
 /**
  * Whether a refused side call is the one case its conversation is closed for:
  * it does not fit now, it fits with the conversation's booking returned, and
- * the conversation is idle.
+ * the conversation is idle. A refusal that names no figure is taken as
+ * nothing free.
  */
 export function sideCallBlockedByOwnConversation(options: {
 	need: number;
@@ -1049,13 +1050,19 @@ export function sideCallBlockedByOwnConversation(options: {
 	conversationBusy: boolean;
 	delegated: boolean;
 }): boolean {
+	// No figure counts as nothing free, which is the only reading that is safe
+	// to act on: the conversation's own booking then has to cover the call by
+	// itself. It is also the common case, not an odd one -- xOllama sends the
+	// figure only when it is above zero, so a conversation holding its whole
+	// window (pandorum, 2026-10-11: 96,000 of 96,000) refuses with none, and
+	// waiting for it made a note wait out the idle timeout three times.
+	const free = options.largest ?? 0;
 	return (
-		options.largest !== undefined &&
 		options.conversationWindow !== undefined &&
 		!options.conversationBusy &&
 		!options.delegated &&
-		options.largest < options.need &&
-		options.largest + options.conversationWindow >= options.need
+		free < options.need &&
+		free + options.conversationWindow >= options.need
 	);
 }
 
@@ -1146,7 +1153,7 @@ async function settleSideCall(
 			found = false;
 		}
 		if (found) {
-			const said = `A background request (${side.need} tokens) did not fit beside this conversation's idle window on the server (${window} booked, ${largest} free). The window was released to make room, so the next turn re-reads the prompt.`;
+			const said = `A background request (${side.need} tokens) did not fit beside this conversation's idle window on the server (${window} booked${largest !== undefined ? `, ${largest} free` : ""}). The window was released to make room, so the next turn re-reads the prompt.`;
 			io.logger?.log(`[xollama] ${said}`);
 			reportSideCall(side.conversation, { kind: "closed", message: said });
 			const again = await io.send(io.bookedBody);
@@ -1166,15 +1173,23 @@ async function settleSideCall(
 		`[xollama] ${waiting}${reason ? ` Engine: ${reason.slice(0, 300)}` : ""}`,
 	);
 	reportSideCall(side.conversation, { kind: "waiting", message: waiting });
+	const waited = () => Math.round((Date.now() - started) / 1000);
+	let answered: Response;
 	try {
-		return await io.send(side.plainBody);
-	} finally {
-		const sent = `The background request was sent after waiting ${Math.round(
-			(Date.now() - started) / 1000,
-		)} s for room.`;
-		io.logger?.log(`[xollama] ${sent}`);
-		reportSideCall(side.conversation, { kind: "sent", message: sent });
+		answered = await io.send(side.plainBody);
+	} catch (error) {
+		// Said as what it is. This used to read "was sent after waiting 119 s"
+		// for a call that was dropped at its caller's two-minute limit and
+		// never ran: pandorum, 2026-10-11, twice before the third got in.
+		const dropped = `The background request stopped waiting after ${waited()} s and was not sent.`;
+		io.logger?.log(`[xollama] ${dropped}`);
+		reportSideCall(side.conversation, { kind: "sent", message: dropped });
+		throw error;
 	}
+	const sent = `The background request was sent after waiting ${waited()} s for room.`;
+	io.logger?.log(`[xollama] ${sent}`);
+	reportSideCall(side.conversation, { kind: "sent", message: sent });
+	return answered;
 }
 
 /** Top-level `placement` on a plain turn (client_placement_v1, #424). */
