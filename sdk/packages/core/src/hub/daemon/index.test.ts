@@ -5,6 +5,7 @@ const {
 	closeSync,
 	mkdirSync,
 	openSync,
+	rememberLocalHubAuthToken,
 	rememberRecoverableLocalHubUrl,
 	verifyHubConnection,
 	queryHubSessionActivity,
@@ -30,6 +31,7 @@ const {
 	closeSync: vi.fn(),
 	mkdirSync: vi.fn(),
 	openSync: vi.fn(() => 17),
+	rememberLocalHubAuthToken: vi.fn(),
 	rememberRecoverableLocalHubUrl: vi.fn((url: string) => url),
 	verifyHubConnection: vi.fn(),
 	// Idle by default, so existing replacement cases are unaffected.
@@ -130,6 +132,7 @@ vi.mock("@cline/shared", () => ({
 
 vi.mock("../client", () => ({
 	queryHubSessionActivity,
+	rememberLocalHubAuthToken,
 	rememberRecoverableLocalHubUrl,
 	requestHubDrain,
 	requestHubShutdown,
@@ -255,6 +258,50 @@ describe("ensureDetachedHubServer", () => {
 		expect(spawnOptions?.env?.CLINE_CONNECTOR_CLI_LAUNCH).toBe(
 			process.env.CLINE_CONNECTOR_CLI_LAUNCH,
 		);
+	});
+
+	// solidPC and eleven2go, 2026-10-11: with CLINE_HUB_PORT set, the process
+	// that had just started the hub connected to it with no token and was
+	// refused ("Connection ended"), on every first start. An explicit endpoint
+	// is not this process's to restart, but it is still its to connect to.
+	it("keeps the token of a hub it started on an explicit port, without calling it recoverable", async () => {
+		const previousPort = process.env.CLINE_HUB_PORT;
+		process.env.CLINE_HUB_PORT = "25499";
+		rememberLocalHubAuthToken.mockReset();
+		rememberRecoverableLocalHubUrl.mockClear();
+		try {
+			createHubServerUrl.mockReturnValueOnce("ws://127.0.0.1:25499/hub");
+			probeHubServer.mockResolvedValueOnce(undefined).mockResolvedValue({
+				url: "ws://127.0.0.1:25499/hub",
+				protocolVersion: "v1",
+				buildId: "current-build",
+			});
+			verifyHubConnection.mockResolvedValue(true);
+			readHubDiscovery.mockResolvedValueOnce(undefined).mockResolvedValue({
+				url: "ws://127.0.0.1:25499/hub",
+				buildId: "current-build",
+				authToken: "fresh-token",
+			});
+
+			const { ensureDetachedHubServer } = await import(".");
+			const result = await ensureDetachedHubServer("/workspace");
+
+			expect(result).toEqual({
+				url: "ws://127.0.0.1:25499/hub",
+				authToken: "fresh-token",
+			});
+			expect(rememberLocalHubAuthToken).toHaveBeenCalledWith(
+				"ws://127.0.0.1:25499/hub",
+				"fresh-token",
+			);
+			expect(rememberRecoverableLocalHubUrl).not.toHaveBeenCalled();
+		} finally {
+			if (previousPort === undefined) {
+				delete process.env.CLINE_HUB_PORT;
+			} else {
+				process.env.CLINE_HUB_PORT = previousPort;
+			}
+		}
 	});
 
 	it("retries a transient ETXTBSY spawn failure while starting the detached daemon", async () => {

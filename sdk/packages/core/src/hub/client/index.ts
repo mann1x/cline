@@ -329,6 +329,28 @@ export function rememberRecoverableLocalHubUrl(
 	return url;
 }
 
+/**
+ * Keep a local hub's token for the connections this process makes to it,
+ * without marking the hub as one this process may restart.
+ *
+ * A hub on an explicit endpoint (`CLINE_HUB_PORT`, or a host/port the caller
+ * passed) is not "recoverable", and that used to mean its token was not kept
+ * either. The caller that had just started it got back a URL, connected with
+ * no token and was refused: "WebSocket connection to
+ * 'ws://127.0.0.1:25499/hub' failed: Connection ended", on every first start
+ * (solidPC and eleven2go, 2026-10-11, three of three). The second start
+ * worked because it found the discovery record, which carries the token.
+ */
+export function rememberLocalHubAuthToken(
+	url: string,
+	authToken?: string,
+): void {
+	const key = localHubUrlKey(url);
+	if (key && authToken?.trim()) {
+		LOCAL_HUB_AUTH_TOKENS.set(key, authToken);
+	}
+}
+
 export class NodeHubClient {
 	private socket: WebSocketLike | undefined;
 	private connectPromise: Promise<void> | undefined;

@@ -17,6 +17,7 @@ import {
 } from "@cline/shared";
 import {
 	queryHubSessionActivity,
+	rememberLocalHubAuthToken,
 	rememberRecoverableLocalHubUrl,
 	requestHubDrain,
 	requestHubShutdown,
@@ -527,6 +528,9 @@ async function ensureDetachedHubServerLocked(
 	): DetachedHubResolution => {
 		if (!hasExplicitEndpoint) {
 			rememberRecoverableLocalHubUrl(result.url, result.authToken);
+		} else {
+			// Not this process's to restart, but still its to connect to.
+			rememberLocalHubAuthToken(result.url, result.authToken);
 		}
 		return result;
 	};
