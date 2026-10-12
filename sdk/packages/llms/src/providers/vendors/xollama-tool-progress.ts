@@ -64,6 +64,8 @@ interface ProgressStep {
 	text?: unknown;
 	tokens?: unknown;
 	done?: unknown;
+	/** The run ended without a call (dev a39d4b5c2 on): close what was opened. */
+	released?: unknown;
 }
 
 /** Push one chunk's progress, and return the chunk without it. */
@@ -110,7 +112,7 @@ function liftProgress(
 			queue.push({ type: "tool-input-delta", id, delta: held + step.text });
 		}
 	}
-	if (step.done === true) {
+	if (step.done === true || step.released === true) {
 		// A call that never had a character has no end to report.
 		if (seen.begun.has(id)) {
 			queue.push({ type: "tool-input-end", id });

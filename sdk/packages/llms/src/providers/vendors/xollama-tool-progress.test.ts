@@ -169,6 +169,43 @@ describe("withXollamaToolCallProgress", () => {
 		closeStreamSideParts(queue);
 	});
 
+	it("closes a run the server released without a call", async () => {
+		const line = (progress: Record<string, unknown>) =>
+			JSON.stringify({
+				model: "m",
+				message: {
+					role: "assistant",
+					content: "",
+					tool_call_progress: { index: 0, syntax: "gemma4", ...progress },
+				},
+				done: false,
+			});
+		const { fetchImpl } = server(
+			[XOLLAMA_TOOL_CALL_PROGRESS_FEATURE],
+			[
+				// The first chunk of a reported run carries what was held so far.
+				line({ text: "<|tool_call>call:editor{intent:", tokens: 9 }),
+				line({ text: "", tokens: 40, released: true }),
+			],
+		);
+		const queue = openStreamSideParts();
+		const response = await withXollamaToolCallProgress(fetchImpl)(
+			...chat(queue.id, { model: "m", stream: true, tools }),
+		);
+		await response.text();
+		expect(queue.take().map(({ outOfBand: _marked, ...part }) => part)).toEqual(
+			[
+				{
+					type: "tool-input-delta",
+					id: "xollama_call_0",
+					delta: "<|tool_call>call:editor{intent:",
+				},
+				{ type: "tool-input-end", id: "xollama_call_0" },
+			],
+		);
+		closeStreamSideParts(queue);
+	});
+
 	it.each([
 		["the server does not announce the feature", [], { stream: true, tools }],
 		[
