@@ -33,6 +33,10 @@ import { keepToolImagesMiddleware } from "../middleware/split-tool-images";
 import { primeOllamaReinjection } from "../reasoning-history";
 import { installAiSdkWarningLogger } from "../sdk-warnings";
 import {
+	openStreamSideParts,
+	STREAM_SIDE_PARTS_HEADER,
+} from "../stream-side-parts";
+import {
 	primeOllamaAccountStatus,
 	readOllamaCloudFlag,
 	readOllamaRecommendation,
@@ -64,6 +68,7 @@ import {
 	xollamaSessionHeaders,
 } from "./xollama";
 import { xollamaEngineFetch, xollamaEngineRoot } from "./xollama-engine";
+import { withXollamaToolCallProgress } from "./xollama-tool-progress";
 
 /** See {@link OLLAMA_DEFAULT_CONTEXT_WINDOW} — re-exported under the wire-format name. */
 export const OLLAMA_DEFAULT_NUM_CTX = OLLAMA_DEFAULT_CONTEXT_WINDOW;
@@ -1118,11 +1123,16 @@ export async function createOllamaProviderModule(
 	installAiSdkWarningLogger({
 		...(context.logger ? { logger: context.logger } : {}),
 	});
+	// Outermost, so the header that names the queue is gone before anything
+	// below could send it, and only for xOllama: stock Ollama has no such field.
+	const providerFetch = xollama
+		? withXollamaToolCallProgress(timeoutFetch, { logger: context.logger })
+		: timeoutFetch;
 	const provider = createOllama({
 		...(baseURL ? { baseURL } : {}),
 		...(Object.keys(headers).length > 0 ? { headers } : {}),
 		compatibility: "strict",
-		fetch: timeoutFetch,
+		fetch: providerFetch,
 	});
 	// `num_ctx` and the sampler no longer ride on the model: this package has no
 	// model-level options hook, so they reach the wire as request-scoped
@@ -1307,6 +1317,11 @@ export function buildOllamaStreamConfig(
 			? {
 					...xollamaSessionHeaders(request.sessionId),
 					...xollamaReadOnlyHeaders(request.tools),
+					// Where the text of a tool call still being written goes; see
+					// `xollama-tool-progress`. Only a turn that can call a tool.
+					...(request.tools && request.tools.length > 0
+						? { [STREAM_SIDE_PARTS_HEADER]: openStreamSideParts().id }
+						: {}),
 				}
 			: {};
 	// Resolved from the request, not from `config.reasoning`: the portable

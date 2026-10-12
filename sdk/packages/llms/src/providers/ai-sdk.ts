@@ -89,6 +89,12 @@ import {
 	type AiSdkProviderOptionsTarget,
 	composeAiSdkProviderOptions,
 } from "./routing/provider-options";
+import {
+	closeStreamSideParts,
+	type StreamSideParts,
+	streamSidePartsOf,
+	withStreamSideParts,
+} from "./stream-side-parts";
 import type {
 	AiSdkStreamPart,
 	AiSdkStreamResult,
@@ -1882,6 +1888,8 @@ async function* emitAiSdkEvents(
 	pricingValue?: unknown,
 	capturedError?: { current: CapturedStreamError | undefined },
 	modelToolAdapters?: BuiltModelTools,
+	/** Parts a vendor's fetch wrapper adds beside the SDK's own stream. */
+	sideParts?: StreamSideParts,
 ): AsyncIterable<AgentModelEvent> {
 	const emittedToolCallIds = new Set<string>();
 	// Timed here rather than around the whole call because this is the span the
@@ -1953,7 +1961,12 @@ async function* emitAiSdkEvents(
 
 	try {
 		if (stream.fullStream) {
-			for await (const part of stream.fullStream) {
+			for await (const part of withStreamSideParts(
+				stream.fullStream,
+				sideParts,
+			) as AsyncIterable<
+				typeof stream.fullStream extends AsyncIterable<infer P> ? P : never
+			>) {
 				if (
 					part.type === "tool-input-start" ||
 					part.type === "tool-input-delta"
@@ -3082,14 +3095,23 @@ function createUnsupervisedAiSdkProvider(
 				// upfront or Bun/Node will surface them as unhandled rejections.
 				suppressDanglingStreamPromises(stream);
 
-				yield* emitAiSdkEvents(
-					stream,
-					modelToolRequest,
-					context,
-					context.model.metadata?.pricing,
-					capturedError,
-					modelToolAdapters,
+				const sideParts = streamSidePartsOf(
+					(requestConfig as { headers?: Record<string, string | undefined> })
+						.headers,
 				);
+				try {
+					yield* emitAiSdkEvents(
+						stream,
+						modelToolRequest,
+						context,
+						context.model.metadata?.pricing,
+						capturedError,
+						modelToolAdapters,
+						sideParts,
+					);
+				} finally {
+					closeStreamSideParts(sideParts);
+				}
 			} catch (error) {
 				suppressDanglingStreamPromises(stream);
 				// Prefer the real provider error captured in onError over the generic
