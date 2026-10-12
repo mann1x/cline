@@ -359,6 +359,60 @@ describe("whether a compaction can continue the session", () => {
 		expect(critic?.messages.at(-2)).toMatchObject({ role: "assistant" });
 	});
 
+	it("asks the retrospective behind the writer when it fits, and on its own when it does not", async () => {
+		// A request of its own has no room beside a session that reserves its
+		// whole window while idle; the session was closed mid-compaction for it.
+		const server = engine();
+		const m = model();
+		const prepared = await prepareCompactionContinuation(
+			input(server, {
+				providerConfig: { providerId: "xollama" },
+				model: m.fn,
+			}),
+		);
+		const c = prepared.continuation;
+		expect(c?.path).toBe("continuation");
+		await c?.write("write the replay", 2_000);
+		const summarizer = input(server).providerConfig;
+
+		const fits = await c?.fresh(
+			"retrospective",
+			"what did the reasoning establish",
+			"the reasoning",
+			2_000,
+			summarizer,
+		);
+		expect(fits?.text).toBe("retrospective");
+		const asked = m.calls.at(-1);
+		expect(asked?.sessionId).toBe("lead");
+		expect(asked?.systemPrompt).toBe("You are the agent.");
+		expect(asked?.tools).toHaveLength(1);
+		expect(asked?.toolChoice).toBe("none");
+		expect(asked?.messages).toHaveLength(messages().length + 3);
+		expect(asked?.messages.at(-2)).toMatchObject({ role: "assistant" });
+		expect(asked?.reasoning).toEqual({
+			thinking: true,
+			thinkingBudgetTokens: 4_096,
+		});
+
+		// Too large for what is left of the window: as before.
+		await c?.fresh(
+			"retrospective",
+			"what did the reasoning establish",
+			"x".repeat(300_000),
+			2_000,
+			summarizer,
+		);
+		const own = m.calls.at(-1);
+		expect(own?.messages).toHaveLength(1);
+		expect(own?.tools).toHaveLength(0);
+
+		// The synthesizer joins the halves after the release: never in session.
+		await c?.fresh("synthesizer", "s", "r", 1_000, summarizer);
+		expect(m.calls.at(-1)?.messages).toHaveLength(1);
+		await c?.dispose();
+	});
+
 	it("is a plain continuation on an opencoti without pools", async () => {
 		const server = engine({ poolsEnabled: false });
 		const prepared = await prepareCompactionContinuation(

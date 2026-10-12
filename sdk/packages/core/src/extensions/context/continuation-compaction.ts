@@ -748,7 +748,14 @@ class Continuation implements CompactionContinuation {
 	private p?: PolykvPool;
 	private pPrime?: PolykvPool;
 	private pPrimeOwned = false;
-	private lastWriter?: { instruction: string; text: string; cacheN?: number };
+	private lastWriter?: {
+		instruction: string;
+		text: string;
+		cacheN?: number;
+		/** The provider's count of the writer's request, where it gave one. */
+		inputTokens?: number;
+		outputTokens?: number;
+	};
 	/** The writer booked a window for this compaction under the session's id. */
 	private writerBooking?: number;
 	/** Critic and fresh sessions still open, by wire id. */
@@ -930,6 +937,12 @@ class Continuation implements CompactionContinuation {
 			text: result.text,
 			...(result.timings?.cachedTokens !== undefined
 				? { cacheN: result.timings.cachedTokens }
+				: {}),
+			...(result.usage?.inputTokens !== undefined
+				? { inputTokens: result.usage.inputTokens }
+				: {}),
+			...(result.usage?.outputTokens !== undefined
+				? { outputTokens: result.usage.outputTokens }
 				: {}),
 		};
 		this.meter.writerCacheN = result.timings?.cachedTokens;
@@ -1333,6 +1346,18 @@ class Continuation implements CompactionContinuation {
 			}
 			this.claimed = Math.max(0, this.claimed - reservation.cells);
 		}
+		if (purpose === "retrospective" && this.fitsInSession(request, maxTokens)) {
+			try {
+				return await this.inSession(purpose, systemPrompt, request, maxTokens);
+			} catch (error) {
+				if (this.input.abortSignal?.aborted) {
+					throw error;
+				}
+				this.note(
+					`the ${purpose} could not continue the session (${describe(error)}); sent as a request of its own`,
+				);
+			}
+		}
 		let providerConfig = summarizerConfig;
 		let id: string | undefined;
 		let booking = 0;
@@ -1381,6 +1406,89 @@ class Continuation implements CompactionContinuation {
 				this.unbook(booking);
 			}
 		}
+	}
+
+	/**
+	 * Whether a call fits behind the writer's turn in the session's own
+	 * window, so it can be asked there instead of in a request of its own.
+	 *
+	 * Without pools only, and only while the session still holds its slot. A
+	 * request of its own needs room beside the session, and a server that
+	 * reserves the session's whole window while it is idle has none: the
+	 * retrospective of a compaction on xOllama was refused (13,838 tokens
+	 * beside a 96,000 window, pandorum 2026-10-12) and the session was closed
+	 * in the middle of its own compaction to let it through.
+	 */
+	private fitsInSession(request: string, maxTokens: number): boolean {
+		const writer = this.lastWriter;
+		const window = this.input.contextWindow;
+		if (
+			this.path !== "continuation" ||
+			this.released ||
+			this.writerBooking !== undefined ||
+			!writer ||
+			!window
+		) {
+			return false;
+		}
+		const behind =
+			(writer.inputTokens ??
+				this.input.requestTokens +
+					(this.input.pendingTokens ?? 0) +
+					tokensForChars(writer.instruction.length)) +
+			(writer.outputTokens ?? tokensForChars(writer.text.length));
+		const need =
+			behind +
+			tokensForChars(request.length) +
+			maxTokens +
+			BOOKING_SLACK_TOKENS;
+		if (need > window) {
+			this.note(
+				`the retrospective does not fit behind the writer (about ${need} of ${window} tokens); sent as a request of its own`,
+			);
+			return false;
+		}
+		return true;
+	}
+
+	/** One call as the session's next turn after the writer's, like a critic. */
+	private async inSession(
+		purpose: "retrospective" | "synthesizer",
+		systemPrompt: string,
+		request: string,
+		maxTokens: number,
+	): Promise<ContinuationCallResult> {
+		const writer = this.lastWriter;
+		if (!writer) {
+			throw new Error("no writer turn to continue");
+		}
+		return this.call(
+			{
+				purpose,
+				providerConfig: this.input.providerConfig,
+				...(this.input.sessionId ? { sessionId: this.input.sessionId } : {}),
+				systemPrompt: this.input.systemPrompt,
+				messages: [
+					...this.writerMessages(writer.instruction),
+					{ role: "assistant", content: [{ type: "text", text: writer.text }] },
+					{
+						role: "user",
+						content: [{ type: "text", text: `${systemPrompt}\n\n${request}` }],
+					},
+				],
+				tools: this.input.tools,
+				maxTokens,
+				toolChoice: "none",
+				// The session's own, as the critics have it: the thinking switch
+				// is rendered into the head of the prompt, and a different one
+				// would share none of it.
+				reasoning: this.input.reasoning,
+				...(this.input.abortSignal
+					? { abortSignal: this.input.abortSignal }
+					: {}),
+			},
+			{ boundedWaits: true },
+		);
 	}
 
 	private async closeSession(
