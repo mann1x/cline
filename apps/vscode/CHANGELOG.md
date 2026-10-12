@@ -5,6 +5,122 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.248] — 2026-10-12
+
+### Compaction on local servers
+
+- **Compaction starts while the summary still fits.** On Ollama, xOllama,
+  llama.cpp and opencoti the summary is written as the conversation's next
+  turn, which reuses what the server already holds. It only fits if the
+  conversation, the summary and one more turn are inside the window. The
+  trigger waited for 90% of the window, by which point the summary no longer
+  fit: it was refused, the fallback released the conversation's window, and
+  the next turn read the whole prompt again. The trigger now leaves that room,
+  so on these servers compaction starts somewhat earlier than 90%.
+- **A summary that cannot fit is not attempted.** The check before it starts
+  now counts what the last turn added and the summary's own output.
+- **A summary request the server says is too large is not sent again.** It was
+  retried twice unchanged.
+- **No more refused request at the start of every xOllama session.** A small
+  probe sent when a session opens was booked too small and answered with an
+  error before being sent again.
+- **A background request no longer waits minutes behind its own
+  conversation on xOllama.** When the conversation held its whole window, the
+  note written after the thinking budget is spent (and any other background
+  request) waited for the server's idle timeout, up to five minutes, with
+  "waiting for room" notices. The conversation's idle window is now released
+  at once to make room, and the next turn re-reads the prompt.
+- **The "waiting for room" notice says when a request gave up.** It used to
+  say the request "was sent" after a wait that had in fact been cut short.
+- **Compaction no longer runs twice when the recent messages are too large to
+  keep.** It compacted keeping them, found the result still over the limit,
+  threw it away and compacted again without them: about two and a half minutes
+  instead of one on a local model. Their size is known before the first pass,
+  so the pass that cannot fit is not run. The "recent messages were not kept"
+  notice still appears.
+
+- **A tool call whose `intent` turns into the model's reasoning is cut.** A
+  model that stops using its thinking can write it into the `intent` of a
+  call instead; one such call ran to 82,000 characters, could not be read and
+  cost almost six minutes. A call whose `intent` passes 2,000 characters is
+  now stopped while it is being written, and the model is told to make the
+  call again with a one-sentence `intent`. It is one rule for every model and
+  for agents. If the same call is stopped twice in a row, the third attempt
+  is let through.
+- **"Cut runaway tool calls" is a switch in Features, on by default.** Turn
+  it off to check whether it is the cause of something odd; a change applies
+  from the next task.
+- **xOllama shows a tool call while it is being written.** With an xOllama
+  that supports tool-call progress, a turn spent writing one long call
+  reports progress instead of minutes of silence, and the cut above can act.
+  Stock Ollama sends a call only when it is complete, so the cut has nothing
+  to read there.
+- **A cut response now stops the server.** When Cerebriline cut a response
+  mid-stream (a runaway tool call, or reasoning going round in a loop), the
+  server went on generating the abandoned reply to its end, beside the request
+  that replaced it. The request is now closed at the cut: the server stops
+  within a second and the next request picks up where the conversation was.
+  In a test on xOllama the same task took 37 seconds where it took 65.
+- **A turn cut at the output limit no longer evicts the conversation.** The
+  note written from a discarded turn's thinking was a separate request; on
+  xOllama it had no room beside the conversation's reserved window, so the
+  conversation was released and the next turn read the whole prompt again.
+  The note is now asked of the conversation itself, as one more turn that is
+  not kept, whenever it fits what is left of the window.
+- **A run no longer ends on "admission rejected" while an agent is working.**
+  On a server with room for one conversation, an agent holds that room while
+  it works. If the main conversation was woken in the meantime, the server
+  refused its turn and the run ended there, with the agent's work unread. The
+  main conversation now waits for room and retries, as agents already did.
+- **An agent no longer waits five minutes to start on a one-window xOllama
+  server.** The main conversation kept its whole window reserved while it did
+  nothing but wait for the agent, so the agent's first turn was refused until
+  the server's idle timeout. A refused turn now takes the window of an idle
+  session of the same conversation: the waiting main conversation gives way
+  to its agent, and a finished or stopped agent gives way to the main
+  conversation. A session that is generating is never interrupted. The
+  session that gave way reads its prompt again on its next turn.
+- **A compaction no longer releases its own conversation on xOllama.** The
+  retrospective step was a separate request with no room beside the
+  conversation's reserved window, so the conversation was released mid-way and
+  a notice said so. It now runs as part of the conversation when it fits,
+  including when the review council is on (it used to run after the session
+  had been handed back, so the notice still appeared at every compaction).
+- **The compaction row shows what the server counted.** The figure after the
+  arrow was an estimate and could disagree with the context bar (a row said
+  39.9k where the next request measured 28.3k). It now reads "about" until the
+  next request has run, then shows that request's count.
+- **Clearer wording when a background request has no room.** The notice said
+  "96000 booked, 0 free", which read as tokens in use. It now says the
+  conversation keeps its whole window reserved while idle.
+- **The log shows how an unreadable tool call began and ended.**
+- **The log says what the model was shown of its earlier thinking.** One line
+  per run states what Reasoning replay resolved to and what decided it (your
+  setting, the server probe and its figures, or the default for an endpoint
+  that was not probed).
+
+### Messages typed while the model is working
+
+- **A message typed while the model is working waits in the queue again.** It
+  is read when the model has finished what it is doing. It used to cut in at
+  the model's next step, every time.
+- **Ctrl+Enter sends a message now.** The model reads it at its next step
+  instead of when it has finished (Cmd+Enter on a Mac; Ctrl+click on the send
+  button does the same).
+- **A queued message has a "send now" button.** The arrow on its row in the
+  queue does for a waiting message what Ctrl+Enter does at send time.
+- **A removed thinking loop can be checked in the log.** When repeated
+  reasoning is removed from a turn, the log now records how many times the
+  passage appeared, where in the turn its copies sat, and the passage itself
+  (`[reasoning-loop]` in the extension log). It used to record only the size.
+- **An agent's live output no longer shows each tool call twice on xOllama.**
+  The call appeared as the model wrote it and then again as JSON. Empty
+  "tool call" entries that cut the thinking into fragments are gone too.
+- **No more false "doesn't support images" warning on Ollama and xOllama.**
+  A model the server lists as able to read images (for example
+  `deepseek-v4.1-flash:cloud`) was flagged as unable to once it appeared in
+  the server's model list. The chat box now asks the server.
+
 ## [4.100.247] — 2026-10-11
 
 ### Several VS Code windows at once
