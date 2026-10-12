@@ -95,6 +95,13 @@ export interface VscodeExtraToolsOptions {
 	sessionProvider?: MediaSessionProvider
 }
 
+function isFile(absolutePath: string): Promise<boolean> {
+	return stat(absolutePath).then(
+		(found) => found.isFile(),
+		() => false,
+	)
+}
+
 export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExtraToolsOptions): Promise<AgentTool[]> {
 	const provider = new McpHubToolProvider(mcpHub)
 	const mcpTools = await Promise.all(
@@ -210,11 +217,7 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 		createTransformImageTool({
 			cwd: options?.cwd ?? process.cwd(),
 			createDriver: createVscodeRenderDriver,
-			fileExists: (absolutePath) =>
-				stat(absolutePath).then(
-					(found) => found.isFile(),
-					() => false,
-				),
+			fileExists: isFile,
 			writeFile: writeGeneratedImage,
 			onError: (message, error) => Logger.error(`${message}:`, error),
 		}),
@@ -242,6 +245,9 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 			probe: probeMediaServer,
 			readFile: (absolutePath) => readFile(absolutePath),
 			writeFile: writeGeneratedImage,
+			// `generate_icon` draws with the endpoint and writes with the browser.
+			createRenderDriver: createVscodeRenderDriver,
+			fileExists: isFile,
 			onError: (message, error) => Logger.error(`${message}:`, error),
 			log: (message) => Logger.log(`[VscodeRuntimeTools] ${message}`),
 		})),

@@ -410,6 +410,9 @@ It is the wrong tool for text that is not a symbol: strings, comments, config ke
 # tool: generate_image
 {{DEFAULT}}
 
+# tool: generate_icon
+{{DEFAULT}}
+
 # tool: edit_image
 {{DEFAULT}}
 

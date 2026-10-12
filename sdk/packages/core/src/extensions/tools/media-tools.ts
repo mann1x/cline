@@ -21,6 +21,7 @@ import {
 	type SpeechEndpoint,
 	type TranscriptionEndpoint,
 } from "./audio-tools";
+import { createGenerateIconTool } from "./icon-generation";
 import { createEditImageTool } from "./image-edit";
 import {
 	createGenerateImageTool,
@@ -34,6 +35,7 @@ import {
 	type ResolvedMediaEndpoint,
 	resolveMediaEndpoint,
 } from "./media-endpoint";
+import type { RenderDriver } from "./render-image";
 import {
 	createGenerateVideoTool,
 	type VideoGenerationEndpoint,
@@ -251,6 +253,13 @@ export interface CreateMediaToolsOptions {
 	readFile: (absolutePath: string) => Promise<Buffer>;
 	/** Must create the directory: the default paths are under `.cline/`. */
 	writeFile: (absolutePath: string, data: Buffer) => Promise<void>;
+	/**
+	 * The host's browser, where it has one. With it and `fileExists`,
+	 * `generate_icon` is offered beside `generate_image`: drawing the proposals
+	 * is the endpoint's work, and writing an `.ico` from one is the browser's.
+	 */
+	createRenderDriver?: () => RenderDriver | Promise<RenderDriver>;
+	fileExists?: (absolutePath: string) => Promise<boolean>;
 	fetchImpl?: typeof fetch;
 	onError?: (message: string, error: unknown) => void;
 	/** One line per tool: where it goes, or why it was left out. */
@@ -329,6 +338,24 @@ export async function createMediaTools(
 			`${tool} uses the ${resolved.source === "provider" ? "session's provider" : "typed endpoint"} (${resolved.server}), model ${resolved.endpoint.model}${resolved.warning ? `; ${resolved.warning}` : ""}`,
 		);
 		tools.push(build[tool]());
+		if (tool === "generate_image") {
+			const { createRenderDriver, fileExists } = options;
+			if (createRenderDriver && fileExists) {
+				tools.push(
+					createGenerateIconTool({
+						...shared,
+						getEndpoint: endpointOf("generate_image"),
+						createDriver: createRenderDriver,
+						fileExists,
+						writeFile: options.writeFile,
+					}),
+				);
+			} else {
+				options.log?.(
+					"generate_icon omitted: this host has no browser to write icon files with",
+				);
+			}
+		}
 	}
 	return tools;
 }

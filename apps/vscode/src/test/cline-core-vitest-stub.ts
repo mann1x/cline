@@ -145,6 +145,11 @@ export { createCodeSearch } from "../../../../sdk/packages/core/src/extensions/t
 // a string with no imports of its own, so a fake would only test the fake.
 export { describeDelimiterBalance } from "../../../../sdk/packages/core/src/extensions/tools/delimiter-balance"
 export {
+	createGenerateIconTool,
+	GENERATE_ICON_TOOL_DESCRIPTION,
+	GENERATE_ICON_TOOL_NAME,
+} from "../../../../sdk/packages/core/src/extensions/tools/icon-generation"
+export {
 	EDIT_IMAGE_TOOL_DESCRIPTION,
 	EDIT_IMAGE_TOOL_NAME,
 } from "../../../../sdk/packages/core/src/extensions/tools/image-edit"

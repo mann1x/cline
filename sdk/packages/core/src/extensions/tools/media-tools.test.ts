@@ -201,14 +201,19 @@ describe("createMediaTools", () => {
 			"generate_image",
 			"synthesize_speech",
 		]);
-		expect(log).toHaveLength(5);
+		expect(log).toHaveLength(6);
 		expect(log[0]).toMatch(
 			/^generate_image uses the typed endpoint \(unknown\), model klein; /,
 		);
-		expect(log[1]).toBe("edit_image omitted: image editing is switched off");
-		expect(log[2]).toMatch(/^transcribe_audio omitted: /);
-		expect(log[4]).toBe(
+		expect(log[2]).toBe("edit_image omitted: image editing is switched off");
+		expect(log[3]).toMatch(/^transcribe_audio omitted: /);
+		expect(log[5]).toBe(
 			"generate_video omitted: video generation is switched off",
+		);
+		// A host with no browser draws icons with `generate_image` and nothing
+		// else, and the log says why the icon tool is not there.
+		expect(log[1]).toBe(
+			"generate_icon omitted: this host has no browser to write icon files with",
 		);
 	});
 

@@ -37,6 +37,10 @@ import {
 	createWebFetchTool,
 } from "../tools/definitions";
 import {
+	GENERATE_ICON_TOOL_INPUT_SCHEMA,
+	GENERATE_ICON_TOOL_NAME,
+} from "../tools/icon-generation";
+import {
 	EDIT_IMAGE_TOOL_INPUT_SCHEMA,
 	EDIT_IMAGE_TOOL_NAME,
 } from "../tools/image-edit";
@@ -99,6 +103,10 @@ export const HOST_TOOL_INPUT_SCHEMAS: readonly {
 	{
 		name: EDIT_IMAGE_TOOL_NAME,
 		inputSchema: EDIT_IMAGE_TOOL_INPUT_SCHEMA,
+	},
+	{
+		name: GENERATE_ICON_TOOL_NAME,
+		inputSchema: GENERATE_ICON_TOOL_INPUT_SCHEMA,
 	},
 	{
 		name: RENDER_IMAGE_TOOL_NAME,

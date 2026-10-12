@@ -1251,6 +1251,15 @@ export {
 	parseOcrLanguages,
 	resolveOcrDataDir,
 } from "./extensions/tools/executors/document/ocr";
+export {
+	buildIconPrompt,
+	buildProposalSheet,
+	createGenerateIconTool,
+	GENERATE_ICON_TOOL_DESCRIPTION,
+	GENERATE_ICON_TOOL_INPUT_SCHEMA,
+	GENERATE_ICON_TOOL_NAME,
+	type GenerateIconToolOptions,
+} from "./extensions/tools/icon-generation";
 // The other half of the images API: change a picture that already exists.
 export {
 	createEditImageTool,

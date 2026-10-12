@@ -225,6 +225,24 @@ Arguments:
 
 This costs real time — seconds to a minute per image — and on a hosted backend it costs money. Generate one image and look at it before generating variations.
 
+# tool: generate_icon
+Make an icon for an application, a site or a file type: several proposals for the user to choose from, then the chosen one saved in every format an icon needs. Two steps, one call each.
+
+1. Proposals. Give `prompt`: what the icon shows and the feeling it should have ("a paper plane, friendly, blue on white"). Several candidates are drawn and returned on one numbered sheet, each saved as its own file. Show the user the sheet and ask which one they want (`ask_question`, with the numbers as the options); do not choose for them. If none is right, call again with a changed prompt.
+2. Files. Give `pick`: the path of the chosen proposal (or of any square image in the workspace), and `path`: where the icon belongs, without an extension, e.g. `assets/icon`. That writes `assets/icon.ico`, `assets/icon.icns`, `assets/icon.png` and `assets/icon-<size>.png` for the usual sizes.
+
+Arguments:
+- `prompt` — step 1: the subject and the mood. The rules of an icon (one centred subject, bold shapes, no text) are added for you.
+- `count` — step 1: how many proposals, 1 to 6. Optional, default 4.
+- `style` — step 1: e.g. `flat vector`, `glossy 3D`, `line art`, `pixel art`. Optional, default flat vector.
+- `pick` — step 2: workspace path of the image to make the icon from.
+- `path` — step 2: where to save, without an extension.
+- `formats` — step 2: which of `ico`, `icns`, `png`, `webp` to write. Optional, default `ico,icns,png`.
+- `sizes` — step 2: the PNG sizes to write beside the main one. Optional, default `16,32,48,64,128,180,192,256,512`.
+- `background` — step 2: a CSS colour to put behind the icon. Optional; left as the proposal has it.
+
+Each proposal costs what an image costs: seconds to a minute, and money on a hosted backend.
+
 # tool: edit_image
 Edit an existing image in the workspace according to a text instruction and save the result as a new file. Use it to change a picture you already have rather than generate a different one: recolour or restyle an icon, change one element of a mockup, combine a subject with a background.
 

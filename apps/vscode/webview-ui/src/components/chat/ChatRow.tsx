@@ -130,6 +130,7 @@ const GENERIC_TOOL_VERBS: Record<string, string> = {
 	code_intel: "Cerebriline asked the language server:",
 	commit: "Cerebriline committed:",
 	edit_image: "Cerebriline edited an image:",
+	generate_icon: "Cerebriline made an icon:",
 	generate_image: "Cerebriline generated an image:",
 	generate_video: "Cerebriline generated a video:",
 	image_generation: "Cerebriline generated an image:",

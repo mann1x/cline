@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
-import { createRenderImageTool, createTransformImageTool } from "@cline/core"
+import { createGenerateIconTool, createRenderImageTool, createTransformImageTool } from "@cline/core"
 import { describe, expect, it } from "vitest"
 import { renderWithChrome } from "../services/browser/render-page"
 
@@ -86,5 +86,39 @@ describe.skipIf(!OUT || !CHROME)("render_image against a real Chrome", () => {
 		await go({ image: "badge.png", path: "badge.icns" })
 		expect(readFileSync(path.join(ws, "badge.icns")).subarray(0, 4).toString()).toBe("icns")
 		expect(String(await go({ image: "styles/app.css", path: "no.png" }))).toContain("could not be read as an image")
+	}, 180_000)
+
+	it("shows icon proposals on one sheet and writes the chosen one out", async () => {
+		// The endpoint is a stand-in: what is live here is the sheet and the files.
+		const drawn = readFileSync(path.join(ws, "pad.png"))
+		const icon = createGenerateIconTool({
+			cwd: ws,
+			getEndpoint: () => ({ baseUrl: "http://images.invalid/v1", model: "stand-in" }),
+			fetchImpl: (async () =>
+				new Response(JSON.stringify({ data: [{ b64_json: drawn.toString("base64") }] }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				})) as never,
+			createDriver: () => ({
+				render: (request) => renderWithChrome(request, { executablePath: CHROME, args: ["--no-sandbox"] }),
+			}),
+			fileExists: async (file) => existsSync(file),
+			writeFile: async (file, data) => {
+				mkdirSync(path.dirname(file), { recursive: true })
+				writeFileSync(file, data)
+			},
+		})
+		const out = (await icon.execute({ prompt: "a workflow", count: 5 }, {
+			metadata: { modelSupportsImages: true },
+		} as never)) as Array<{ type: string; text?: string; data?: string }>
+		writeFileSync(path.join(ws, "sheet.png"), Buffer.from(out[1]?.data ?? "", "base64"))
+		const first = /1\. `([^`]+)`/.exec(out[0]?.text ?? "")?.[1] ?? ""
+		const saved = String(await icon.execute({ pick: first, path: "icons/app" }, { metadata: {} } as never))
+		console.log(saved)
+		const ico = readFileSync(path.join(ws, "icons/app.ico"))
+		expect(ico.readUInt16LE(4)).toBe(7)
+		const big = readFileSync(path.join(ws, "icons/app.png"))
+		expect([big.readUInt32BE(16), big.readUInt32BE(20)]).toEqual([1024, 1024])
+		expect(readFileSync(path.join(ws, "icons/app.icns")).readUInt32BE(4)).toBe(statSync(path.join(ws, "icons/app.icns")).size)
 	}, 180_000)
 })

@@ -9,6 +9,8 @@ import {
 	BROWSER_TOOL_NAME,
 	EDIT_IMAGE_TOOL_DESCRIPTION,
 	EDIT_IMAGE_TOOL_NAME,
+	GENERATE_ICON_TOOL_DESCRIPTION,
+	GENERATE_ICON_TOOL_NAME,
 	GENERATE_IMAGE_TOOL_DESCRIPTION,
 	GENERATE_IMAGE_TOOL_NAME,
 	GENERATE_VIDEO_TOOL_DESCRIPTION,
@@ -75,6 +77,10 @@ describe("host tool descriptions in default.md", () => {
 
 	it("reproduces edit_image verbatim", () => {
 		expect(shipped?.tools[EDIT_IMAGE_TOOL_NAME]).toBe(EDIT_IMAGE_TOOL_DESCRIPTION.trim())
+	})
+
+	it("reproduces generate_icon verbatim", () => {
+		expect(shipped?.tools[GENERATE_ICON_TOOL_NAME]).toBe(GENERATE_ICON_TOOL_DESCRIPTION.trim())
 	})
 
 	it("reproduces render_image verbatim", () => {

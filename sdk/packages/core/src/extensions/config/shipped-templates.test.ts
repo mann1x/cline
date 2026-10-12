@@ -106,6 +106,7 @@ const HOST_TOOL_NAMES = [
 	"switch_to_act_mode",
 	"browser",
 	"generate_image",
+	"generate_icon",
 	"edit_image",
 	"render_image",
 	"transform_image",

@@ -423,6 +423,72 @@ export async function saveAndReportImage(input: {
 }
 
 /**
+ * One image from the endpoint, or why not, in words for the model.
+ *
+ * Shared by every tool that asks for a picture: the wire format, the busy
+ * retry and the reading of the answer are the same whatever it is for.
+ * A timeout and an unreachable server are thrown, as the request throws them.
+ */
+export async function requestGeneratedImage(input: {
+	endpoint: ImageGenerationEndpoint;
+	prompt: string;
+	size?: string;
+	fetchImpl: typeof fetch;
+	timeoutMs: number;
+	signal?: AbortSignal;
+	onBusy?: (waitMs: number) => void;
+}): Promise<
+	| { image: { data: Buffer; mediaType: string }; revisedPrompt?: string }
+	| { error: string }
+> {
+	const { endpoint } = input;
+	const response = await sendMediaRequest(
+		`${normalizeBaseUrl(endpoint.baseUrl)}/images/generations`,
+		() => ({
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				...(endpoint.apiKey
+					? { Authorization: `Bearer ${endpoint.apiKey}` }
+					: {}),
+			},
+			body: JSON.stringify({
+				model: endpoint.model,
+				prompt: input.prompt,
+				n: 1,
+				response_format: "b64_json",
+				...(input.size ? { size: input.size } : {}),
+			}),
+		}),
+		{
+			fetchImpl: input.fetchImpl,
+			signal: input.signal,
+			attemptTimeoutMs: input.timeoutMs,
+			...(input.onBusy ? { onBusy: input.onBusy } : {}),
+		},
+	);
+	if (response.status === 503) {
+		return {
+			error:
+				"The image engine is still busy with other requests after a long wait, so no image was generated. Nothing is wrong with the request; try again later.",
+		};
+	}
+	if (!response.ok) {
+		const detail = (await response.text().catch(() => "")).slice(0, 400);
+		return {
+			error: `The image endpoint refused the request (HTTP ${response.status}).${detail ? `\n\n${detail}` : ""}`,
+		};
+	}
+	const body = (await response.json()) as ImagesApiResponse;
+	const image = await readGeneratedImage(body, input.fetchImpl, input.signal);
+	if ("error" in image) {
+		return image;
+	}
+	const revisedPrompt = body.data?.[0]?.revised_prompt;
+	return { image, ...(revisedPrompt ? { revisedPrompt } : {}) };
+}
+
+/**
  * Create the `generate_image` tool.
  *
  * The host is expected to omit this tool entirely when no endpoint is
@@ -473,50 +539,24 @@ export function createGenerateImageTool(
 			const signal = context?.signal;
 
 			try {
-				const response = await sendMediaRequest(
-					`${normalizeBaseUrl(endpoint.baseUrl)}/images/generations`,
-					() => ({
-						method: "POST",
-						headers: {
-							"Content-Type": "application/json",
-							...(endpoint.apiKey
-								? { Authorization: `Bearer ${endpoint.apiKey}` }
-								: {}),
-						},
-						body: JSON.stringify({
-							model: endpoint.model,
-							prompt,
-							n: 1,
-							response_format: "b64_json",
-							...(size ? { size } : {}),
+				const made = await requestGeneratedImage({
+					endpoint,
+					prompt,
+					size,
+					fetchImpl,
+					timeoutMs,
+					signal,
+					// A busy engine is a queue, not a failure: say so on the
+					// tool's row and ask again when the server said to.
+					onBusy: (waitMs) =>
+						context?.emitUpdate?.({
+							status: `The image engine is busy; asking again in ${Math.round(waitMs / 1000)}s.`,
 						}),
-					}),
-					{
-						fetchImpl,
-						signal,
-						attemptTimeoutMs: timeoutMs,
-						// A busy engine is a queue, not a failure: say so on the
-						// tool's row and ask again when the server said to.
-						onBusy: (waitMs) =>
-							context?.emitUpdate?.({
-								status: `The image engine is busy; asking again in ${Math.round(waitMs / 1000)}s.`,
-							}),
-					},
-				);
-
-				if (response.status === 503) {
-					return "The image engine is still busy with other requests after a long wait, so no image was generated. Nothing is wrong with the request; try again later.";
+				});
+				if ("error" in made) {
+					return made.error;
 				}
-				if (!response.ok) {
-					const detail = (await response.text().catch(() => "")).slice(0, 400);
-					return `The image endpoint refused the request (HTTP ${response.status}).${detail ? `\n\n${detail}` : ""}`;
-				}
-
-				const body = (await response.json()) as ImagesApiResponse;
-				const image = await readGeneratedImage(body, fetchImpl, signal);
-				if ("error" in image) {
-					return image.error;
-				}
+				const { image } = made;
 
 				return await saveAndReportImage({
 					image,
@@ -525,7 +565,7 @@ export function createGenerateImageTool(
 					requestedPath,
 					absolutePath,
 					size,
-					revisedPrompt: body.data?.[0]?.revised_prompt,
+					revisedPrompt: made.revisedPrompt,
 					writeFile: options.writeFile,
 					context,
 				});
