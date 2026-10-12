@@ -12,12 +12,18 @@ import {
 
 const ROOT = "http://xollama.test:22434";
 
-/** The chunks xOllama dev (a065ed1d9) sent for one gemma4 call, shortened. */
+/**
+ * The shape xOllama dev (02e34ecc8) sends for one gemma4 call, shortened: the
+ * raw text of each held step, delimiters included, `done` with empty text on
+ * the chunk that delivers the parsed call, and after it a short held run that
+ * was not a call.
+ */
 const CAPTURED = [
-	'{"model":"gemma4:e4b","message":{"role":"assistant","content":"","tool_call_progress":{"index":0,"syntax":"gemma4","text":"","tokens":1}},"done":false}',
+	'{"model":"gemma4:e4b","message":{"role":"assistant","content":"","tool_call_progress":{"index":0,"syntax":"gemma4","text":"<|tool_call>","tokens":1}},"done":false}',
 	'{"model":"gemma4:e4b","message":{"role":"assistant","content":"","tool_call_progress":{"index":0,"syntax":"gemma4","text":"call","tokens":2}},"done":false}',
 	'{"model":"gemma4:e4b","message":{"role":"assistant","content":"","tool_call_progress":{"index":0,"syntax":"gemma4","text":":write_file{content:<|\\"|>def","tokens":9}},"done":false}',
-	'{"model":"gemma4:e4b","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_34nwtu9q","function":{"index":0,"name":"write_file","arguments":{"content":"def"}}}],"tool_call_progress":{"index":0,"syntax":"gemma4","text":"","tokens":438,"done":true}},"done":false}',
+	'{"model":"gemma4:e4b","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_34nwtu9q","function":{"index":0,"name":"write_file","arguments":{"content":"def"}}}],"tool_call_progress":{"index":0,"syntax":"gemma4","text":"","tokens":436,"done":true}},"done":false}',
+	'{"model":"gemma4:e4b","message":{"role":"assistant","content":"","tool_call_progress":{"index":1,"syntax":"gemma4","text":"<|tool_response>","tokens":1}},"done":false}',
 	'{"model":"gemma4:e4b","message":{"role":"assistant","content":""},"done":true}',
 ];
 
@@ -83,6 +89,11 @@ describe("withXollamaToolCallProgress", () => {
 		expect(request?.headers.has(STREAM_SIDE_PARTS_HEADER)).toBe(false);
 
 		expect(queue.take()).toEqual([
+			{
+				type: "tool-input-delta",
+				id: "xollama_call_0",
+				delta: "<|tool_call>",
+			},
 			{ type: "tool-input-delta", id: "xollama_call_0", delta: "call" },
 			{
 				type: "tool-input-delta",
@@ -90,6 +101,12 @@ describe("withXollamaToolCallProgress", () => {
 				delta: ':write_file{content:<|"|>def',
 			},
 			{ type: "tool-input-end", id: "xollama_call_0" },
+			// Held output that was not a call: its own run, and no end.
+			{
+				type: "tool-input-delta",
+				id: "xollama_call_1",
+				delta: "<|tool_response>",
+			},
 		]);
 		// Every chunk still arrives, and none of them carries the field.
 		expect(lines).toHaveLength(CAPTURED.length);

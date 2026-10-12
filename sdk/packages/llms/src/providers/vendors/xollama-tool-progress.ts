@@ -9,8 +9,11 @@
  *
  *   message.tool_call_progress = { index, syntax, text, tokens, done? }
  *
- * to the streamed chunks: `text` is the raw delta in the model's own notation,
- * starting after the opening delimiter. The parsed call still arrives whole.
+ * to the streamed chunks: `text` is the raw output of one step the server
+ * held back, delimiters included, in the model's own notation. `index` counts
+ * runs of held output; a run that ends with `done` was a call, and a short
+ * one that does not was a parser deciding about a tag. The parsed call still
+ * arrives whole.
  *
  * This wrapper asks for it, lifts it off the response, and hands it on as the
  * `tool-input-delta` parts every other provider's streamed arguments already
