@@ -71,6 +71,64 @@ describe("ToolIntentGuard", () => {
 		expect(guard.push("b", "0123456789X")?.toolCallId).toBe("b");
 	});
 
+	describe("gemma4 call syntax", () => {
+		const feedGemma = (guard: ToolIntentGuard, text: string, chunk: number) => {
+			for (let i = 0; i < text.length; i += chunk) {
+				const verdict = guard.push(
+					"call_1",
+					text.slice(i, i + chunk),
+					"editor",
+					"gemma4",
+				);
+				if (verdict) {
+					return { verdict, consumed: i + chunk };
+				}
+			}
+			return { verdict: undefined, consumed: text.length };
+		};
+
+		// The first lines of the two calls in xOllama's log for session x8yap.
+		const working =
+			'call:editor{intent:<|"|>Fix syntax error on line 91 by adding missing closing bracket.<|"|>,new_text:<|"|>' +
+			"     dIt(c,x){this.it.forEach(it=>{if(!it.cl){c.save();}});};".repeat(
+				400,
+			) +
+			'<|"|>,path:<|"|>manic_miner.html<|"|>,start_line:91}';
+		const runaway = `call:editor{end_column:386,intent:<|"|>Fix bracket imbalance in currentLevelObj.en.forEach callback on line 110. ${"Wait, let's re-examine line 110 in the previous `read_files`. ".repeat(1500)}`;
+
+		it.each([
+			1, 3, 4, 5, 7, 64,
+		])("passes a short intent with a large payload, in deltas of %i", (chunk) => {
+			expect(
+				feedGemma(new ToolIntentGuard(), working, chunk).verdict,
+			).toBeUndefined();
+		});
+
+		it.each([
+			1, 3, 4, 5, 7, 64,
+		])("cuts the call whose intent is the reasoning, in deltas of %i", (chunk) => {
+			const { verdict, consumed } = feedGemma(
+				new ToolIntentGuard(),
+				runaway,
+				chunk,
+			);
+			expect(verdict?.toolName).toBe("editor");
+			expect(consumed).toBeLessThan(DEFAULT_TOOL_INTENT_MAX_CHARS + 200);
+		});
+
+		it("counts intent to its closing delimiter and no further", () => {
+			const guard = new ToolIntentGuard({ maxChars: 50 });
+			const call = `call:editor{intent:<|"|>${"z".repeat(40)}<|"|>,new_text:<|"|>${"y".repeat(500)}<|"|>}`;
+			expect(feedGemma(guard, call, 3).verdict).toBeUndefined();
+		});
+
+		it("does not take 'intent:' inside another argument for the argument", () => {
+			const guard = new ToolIntentGuard({ maxChars: 50 });
+			const call = `call:editor{new_text:<|"|>{intent:${"q".repeat(300)}}<|"|>,files:[{intent:<|"|>${"n".repeat(300)}<|"|>}],intent:<|"|>Short.<|"|>}`;
+			expect(feedGemma(guard, call, 3).verdict).toBeUndefined();
+		});
+	});
+
 	it("tells the model what was cut and what intent is for", () => {
 		const text = buildToolIntentOverrunNudge({
 			toolCallId: "call_1",

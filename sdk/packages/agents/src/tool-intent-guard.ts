@@ -36,12 +36,27 @@ export interface ToolIntentOverrun {
 	maxChars: number;
 }
 
+/**
+ * How the argument text is written.
+ *
+ * `json` is what a provider streams as a call's arguments. The others are a
+ * model's own call syntax, for a server that passes the call through as it is
+ * generated and parses it only at the end. Text in a syntax nobody here reads
+ * is not measured: no cut is better than a wrong one.
+ */
+export type ToolCallSyntax = "json" | "gemma4";
+
+export function isToolCallSyntax(value: unknown): value is ToolCallSyntax {
+	return value === "json" || value === "gemma4";
+}
+
 interface CallScan {
 	toolName?: string;
+	syntax: ToolCallSyntax;
 	depth: number;
 	inString: boolean;
 	escaped: boolean;
-	/** At depth 1: the next string is a key, not a value. */
+	/** At depth 1: the next string (JSON) or bare word (gemma4) is a key. */
 	expectKey: boolean;
 	/** The string being read is a key at depth 1. */
 	readingKey: boolean;
@@ -49,18 +64,23 @@ interface CallScan {
 	readingIntent: boolean;
 	key: string;
 	intentChars: number;
+	/** gemma4: text held back because it may be the start of a delimiter. */
+	held: string;
 }
 
 /** Keys longer than this are not `intent`; stop collecting them. */
 const KEY_CAPTURE_CHARS = 32;
 
+/** gemma4 opens and closes every string argument with this token. */
+const GEMMA4_STRING_DELIMITER = '<|"|>';
+
 /**
  * Reads tool-call argument text as it arrives, one call at a time, and
  * answers the first time a call's top-level `intent` string passes the limit.
  *
- * The text is JSON being written, so it is scanned, not parsed: nothing here
- * waits for the document to close, because the call this exists for never
- * closes it.
+ * The text is a document being written, so it is scanned, not parsed: nothing
+ * here waits for it to close, because the call this exists for never closes
+ * it.
  */
 export class ToolIntentGuard {
 	private readonly maxChars: number;
@@ -74,10 +94,12 @@ export class ToolIntentGuard {
 		toolCallId: string,
 		text: string,
 		toolName?: string,
+		syntax: ToolCallSyntax = "json",
 	): ToolIntentOverrun | undefined {
 		let scan = this.calls.get(toolCallId);
 		if (!scan) {
 			scan = {
+				syntax,
 				depth: 0,
 				inString: false,
 				escaped: false,
@@ -86,12 +108,28 @@ export class ToolIntentGuard {
 				readingIntent: false,
 				key: "",
 				intentChars: 0,
+				held: "",
 			};
 			this.calls.set(toolCallId, scan);
 		}
 		if (toolName) {
 			scan.toolName = toolName;
 		}
+		const over =
+			scan.syntax === "gemma4"
+				? this.scanGemma4(scan, text)
+				: this.scanJson(scan, text);
+		return over
+			? {
+					toolCallId,
+					...(scan.toolName ? { toolName: scan.toolName } : {}),
+					chars: scan.intentChars,
+					maxChars: this.maxChars,
+				}
+			: undefined;
+	}
+
+	private scanJson(scan: CallScan, text: string): boolean {
 		for (const char of text) {
 			if (scan.inString) {
 				if (scan.escaped) {
@@ -111,12 +149,7 @@ export class ToolIntentGuard {
 				} else if (scan.readingIntent) {
 					scan.intentChars += 1;
 					if (scan.intentChars > this.maxChars) {
-						return {
-							toolCallId,
-							...(scan.toolName ? { toolName: scan.toolName } : {}),
-							chars: scan.intentChars,
-							maxChars: this.maxChars,
-						};
+						return true;
 					}
 				}
 				continue;
@@ -151,8 +184,101 @@ export class ToolIntentGuard {
 				scan.key = "";
 			}
 		}
-		return undefined;
+		return false;
 	}
+
+	/**
+	 * `call:editor{intent:<|"|>...<|"|>,new_text:<|"|>...<|"|>,start_line:91}`
+	 *
+	 * Keys are bare words and a string runs from one delimiter token to the
+	 * next, with no escaping inside it. A delta can end part-way through a
+	 * delimiter, so the last few characters are held until the next one says
+	 * what they were.
+	 */
+	private scanGemma4(scan: CallScan, text: string): boolean {
+		const input = scan.held + text;
+		scan.held = "";
+		let at = 0;
+		while (at < input.length) {
+			if (scan.inString) {
+				const close = input.indexOf(GEMMA4_STRING_DELIMITER, at);
+				// Everything up to the close, or up to what may be its start.
+				const end =
+					close >= 0 ? close : input.length - partialDelimiterLength(input, at);
+				if (scan.readingIntent) {
+					scan.intentChars += Math.max(0, end - at);
+					if (scan.intentChars > this.maxChars) {
+						return true;
+					}
+				}
+				if (close < 0) {
+					scan.held = input.slice(end);
+					return false;
+				}
+				scan.inString = false;
+				scan.readingIntent = false;
+				at = close + GEMMA4_STRING_DELIMITER.length;
+				continue;
+			}
+			if (input.startsWith(GEMMA4_STRING_DELIMITER, at)) {
+				scan.inString = true;
+				if (scan.depth === 1 && !scan.expectKey && scan.key === "intent") {
+					scan.readingIntent = true;
+					scan.intentChars = 0;
+				}
+				at += GEMMA4_STRING_DELIMITER.length;
+				continue;
+			}
+			if (
+				input[at] === "<" &&
+				GEMMA4_STRING_DELIMITER.startsWith(input.slice(at))
+			) {
+				scan.held = input.slice(at);
+				return false;
+			}
+			const char = input[at] as string;
+			at += 1;
+			if (char === "{" || char === "[") {
+				scan.depth += 1;
+				if (scan.depth === 1 && char === "{") {
+					scan.expectKey = true;
+					scan.key = "";
+				}
+			} else if (char === "}" || char === "]") {
+				scan.depth -= 1;
+			} else if (scan.depth === 1) {
+				if (char === ",") {
+					scan.expectKey = true;
+					scan.key = "";
+				} else if (char === ":") {
+					scan.expectKey = false;
+				} else if (
+					scan.expectKey &&
+					scan.key.length < KEY_CAPTURE_CHARS &&
+					/\S/.test(char)
+				) {
+					scan.key += char;
+				}
+			}
+		}
+		return false;
+	}
+}
+
+/** How many characters at the end of `input` could be a delimiter beginning. */
+function partialDelimiterLength(input: string, from: number): number {
+	const longest = Math.min(
+		GEMMA4_STRING_DELIMITER.length - 1,
+		input.length - from,
+	);
+	for (let length = longest; length > 0; length--) {
+		if (
+			GEMMA4_STRING_DELIMITER.startsWith(input.slice(input.length - length))
+		) {
+			return length;
+		}
+	}
+	return 0;
 }
 
 /** What stands in the assistant's turn where the cut call was being written. */
