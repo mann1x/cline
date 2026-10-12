@@ -86,6 +86,12 @@ import {
 	measureReasoningRepetition,
 	type RepetitionNudger,
 } from "./reasoning-repetition";
+import {
+	buildToolIntentOverrunNudge,
+	describeToolIntentOverrunStub,
+	ToolIntentGuard,
+	type ToolIntentOverrun,
+} from "./tool-intent-guard";
 
 /**
  * Wall-clock trace of the agent loop, one line per boundary, gated on
@@ -1251,6 +1257,13 @@ export class AgentRuntime {
 	 * same collapse every turn. Reset by any turn that streams cleanly.
 	 */
 	private reasoningLoopStreak = 0;
+	/**
+	 * What to tell the model about a call this runtime cut for an overlong
+	 * `intent`, held until the one place a user message may follow the turn:
+	 * at once when the turn called nothing else, after the tool results when
+	 * it did.
+	 */
+	private pendingToolIntentNudge?: string;
 	private modelSteerController?: AbortController;
 	private readonly telemetryProviderId?: string;
 	private readonly telemetryModelId?: string;
@@ -2326,6 +2339,16 @@ export class AgentRuntime {
 						await this.addUserReminderMessage(STEER_RESUME_REMINDER);
 						continue;
 					}
+					// A turn this runtime ended itself, by cutting the call the
+					// model was writing. It did not stop working and it did not
+					// stay silent; the one thing to say about it is why it was
+					// cut, and none of the guards below is about that.
+					if (this.pendingToolIntentNudge) {
+						const nudge = this.pendingToolIntentNudge;
+						this.pendingToolIntentNudge = undefined;
+						await this.addUserReminderMessage(nudge);
+						continue;
+					}
 					// Every handler below asks the model for something different, and
 					// a turn can be wrong in more than one way at once. They are all
 					// collected and all delivered, in the order they are evaluated,
@@ -2648,6 +2671,12 @@ export class AgentRuntime {
 					this.config.completionPolicy?.afterToolsReminder?.();
 				if (hostReminder) {
 					await this.addUserReminderMessage(hostReminder);
+				}
+				// The cut call rode in a turn whose other calls ran.
+				if (this.pendingToolIntentNudge) {
+					const nudge = this.pendingToolIntentNudge;
+					this.pendingToolIntentNudge = undefined;
+					await this.addUserReminderMessage(nudge);
 				}
 			}
 
@@ -3677,6 +3706,14 @@ export class AgentRuntime {
 				? undefined
 				: new ReasoningLoopGuard(reasoningLoopConfig);
 		let reasoningLoop: ReasoningLoopVerdict | undefined;
+		const toolIntentLimit = this.config.toolIntentLimit;
+		// On unless turned off, for the reason the guard above is: it guards
+		// spend. See `tool-intent-guard` for the run it comes from.
+		const toolIntentGuard =
+			toolIntentLimit === false
+				? undefined
+				: new ToolIntentGuard(toolIntentLimit);
+		let toolIntentOverrun: ToolIntentOverrun | undefined;
 
 		for await (const event of stream) {
 			if (steerController.signal.aborted) break;
@@ -3772,6 +3809,13 @@ export class AgentRuntime {
 							...(event.inputText ? { inputText: event.inputText } : {}),
 						},
 					});
+					if (event.inputText) {
+						toolIntentOverrun = toolIntentGuard?.push(
+							event.toolCallId,
+							event.inputText,
+							event.toolName,
+						);
+					}
 					break;
 				}
 				case "tool-call-delta": {
@@ -3925,7 +3969,7 @@ export class AgentRuntime {
 					break;
 				}
 			}
-			if (reasoningLoop) {
+			if (reasoningLoop || toolIntentOverrun) {
 				// Leaving the loop closes the iterator, which cancels the provider
 				// request. That is the whole point: the tokens stop being billed
 				// now, not when the model finally reaches the context window.
@@ -3937,13 +3981,18 @@ export class AgentRuntime {
 		} else if (reasoningLoopGuard) {
 			this.reasoningLoopStreak = 0;
 		}
+		if (toolIntentOverrun) {
+			await this.onToolIntentCut(toolIntentOverrun);
+		}
 		this.throwIfAborted();
 		const interrupted = steerController.signal.aborted;
 		if (interrupted) finishReason = "stop";
 		// A stream this runtime cut itself never reaches its finish event. That
 		// is not a model that ended without saying why -- the reason is known,
 		// it is on the message, and the loop answers it with its own reminder.
-		if (reasoningLoop && finishReason === "unknown") finishReason = "stop";
+		if ((reasoningLoop || toolIntentOverrun) && finishReason === "unknown") {
+			finishReason = "stop";
+		}
 
 		for (const item of sequence) {
 			// A cancelled stream may contain incomplete tool JSON or unsigned
@@ -3958,6 +4007,14 @@ export class AgentRuntime {
 				continue;
 			}
 			const assembly = toolAssemblies.get(item.key);
+			// The call that was cut: half a document, and not a call that failed
+			// to parse. The stub below says what happened to it.
+			if (
+				toolIntentOverrun &&
+				assembly?.toolCallId === toolIntentOverrun.toolCallId
+			) {
+				continue;
+			}
 			if (!assembly?.toolName) {
 				invalidToolCalls.push({
 					toolCallId: assembly?.toolCallId ?? item.key,
@@ -4001,6 +4058,15 @@ export class AgentRuntime {
 		const messageMetadata: Record<string, unknown> = {};
 		if (reasoningLoop) {
 			messageMetadata.reasoningLoop = reasoningLoop;
+		}
+		if (toolIntentOverrun) {
+			// In the turn itself, so the history reads as what happened and an
+			// assistant turn with nothing else in it is not sent empty.
+			content.push({
+				type: "text",
+				text: describeToolIntentOverrunStub(toolIntentOverrun),
+			});
+			messageMetadata.toolIntentOverrun = toolIntentOverrun;
 		}
 		if (invalidToolCalls.length > 0) {
 			messageMetadata.invalidToolCalls = invalidToolCalls;
@@ -4808,6 +4874,33 @@ export class AgentRuntime {
 			// channel the next request is certain to carry.
 			await this.addUserReminderMessage(guidance);
 		}
+	}
+
+	/**
+	 * A tool call's `intent` ran past its limit and the request was cut.
+	 *
+	 * Nothing is counted and nothing ends the run: the cut is what bounds the
+	 * cost, and each one is a few hundred tokens where the uncut call was tens
+	 * of thousands.
+	 */
+	private async onToolIntentCut(overrun: ToolIntentOverrun): Promise<void> {
+		this.pendingToolIntentNudge = buildToolIntentOverrunNudge(overrun);
+		const called = overrun.toolName ? `\`${overrun.toolName}\`` : "a tool";
+		this.config.logger?.log?.(
+			`[tool-intent] cut a call to ${called} at iteration ${this.state.iteration}: intent passed ${overrun.maxChars} characters`,
+		);
+		await this.emit({
+			type: "status-notice",
+			snapshot: this.snapshot(),
+			message: `The model was writing its reasoning into the \`intent\` of a call to ${called} (past ${overrun.maxChars.toLocaleString("en-US")} characters). Cutting the request and asking it to make the call again.`,
+			metadata: {
+				kind: "tool_intent_overrun",
+				reason: "tool_intent_overrun",
+				phase: "cut",
+				iteration: this.state.iteration,
+				overrun,
+			},
+		});
 	}
 
 	private throwIfAborted(): void {

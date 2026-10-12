@@ -1002,6 +1002,13 @@ export interface AgentRuntimeConfig {
 		| false
 		| Partial<import("./agents/types").ReasoningLoopDetectionConfig>;
 	/**
+	 * Limit on a tool call's `intent` argument as it streams: a call whose
+	 * `intent` passes `maxChars` is cut and the model is told. On by default
+	 * (2,000 characters), `false` disables it. Acts only where the provider
+	 * streams tool-call arguments.
+	 */
+	toolIntentLimit?: false | { maxChars?: number };
+	/**
 	 * Asked before the reasoning-loop streak ends the run.
 	 *
 	 * The mistake limit has had this seam since it was written; this guard has
