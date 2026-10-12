@@ -48,8 +48,53 @@ function formatDuration(ms: number): string {
 	return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`
 }
 
+/**
+ * What the server counted for the first request after a compaction: the
+ * figure the row's "after" is a forecast of.
+ *
+ * The row is written when the compaction ends, before any request has been
+ * made with the result, so its `tokensAfter` is an estimate. It ran high: a
+ * row read "48.9k → 39.9k" and the next request was counted at 28,298
+ * (pandorum, 2026-10-12), which left the row disagreeing with the context bar
+ * above it. Once that request has run its count replaces the estimate.
+ *
+ * `undefined` until then, and for a row another compaction followed before any
+ * request ran.
+ */
+export function measuredTokensAfterCompaction(messages: readonly ClineMessage[], rowTs: number): number | undefined {
+	const at = messages.findIndex((message) => message.ts === rowTs && message.say === "compaction")
+	if (at < 0) {
+		return undefined
+	}
+	for (let i = at + 1; i < messages.length; i++) {
+		const message = messages[i]
+		if (message.type !== "say" || !message.text) {
+			continue
+		}
+		if (message.say === "compaction") {
+			if (parseCompactionInfo(message.text)?.status === "completed") {
+				return undefined
+			}
+			continue
+		}
+		if (message.say !== "api_req_started") {
+			continue
+		}
+		try {
+			const { tokensIn, cacheWrites, cacheReads } = JSON.parse(message.text)
+			const prompt = (tokensIn || 0) + (cacheWrites || 0) + (cacheReads || 0)
+			if (prompt > 0) {
+				return prompt
+			}
+		} catch {
+			// A row that does not parse has no count; keep looking.
+		}
+	}
+	return undefined
+}
+
 /** Mirrors the CLI's formatCompactionDividerLabel wording for product consistency. */
-function formatCompactionLabel(info: ClineCompactionInfo): string {
+function formatCompactionLabel(info: ClineCompactionInfo, measuredAfter?: number): string {
 	const overflow = info.mode === "overflow"
 	if (info.status === "started") {
 		const base = overflow
@@ -83,7 +128,13 @@ function formatCompactionLabel(info: ClineCompactionInfo): string {
 				: "Context compacted",
 	]
 	if (typeof info.tokensBefore === "number" && typeof info.tokensAfter === "number") {
-		parts.push(`${formatTokenCount(info.tokensBefore)} → ${formatTokenCount(info.tokensAfter)} tokens`)
+		// The server's count once there is one; until then the estimate, said
+		// as one.
+		parts.push(
+			measuredAfter !== undefined
+				? `${formatTokenCount(info.tokensBefore)} → ${formatTokenCount(measuredAfter)} tokens`
+				: `${formatTokenCount(info.tokensBefore)} → about ${formatTokenCount(info.tokensAfter)} tokens`,
+		)
 	}
 	if (typeof info.messagesBefore === "number" && typeof info.messagesAfter === "number") {
 		parts.push(`${info.messagesBefore} → ${info.messagesAfter} messages`)
@@ -130,7 +181,7 @@ const CompactionDetail = ({ label, body }: { label: string; body: string }) => {
  * compaction is running; the same message (same ts) is updated in place to
  * its terminal state when it finishes.
  */
-export const CompactionRow = ({ message }: { message: ClineMessage }) => {
+export const CompactionRow = ({ message, measuredAfter }: { message: ClineMessage; measuredAfter?: number }) => {
 	const info = parseCompactionInfo(message.text)
 	if (!info) {
 		// Virtuoso cannot handle zero-height items; render a spacer instead of null.
@@ -157,7 +208,7 @@ export const CompactionRow = ({ message }: { message: ClineMessage }) => {
 					<FoldVerticalIcon className="size-2 shrink-0" />
 				)}
 				<span className="min-w-0">
-					{formatCompactionLabel(info)}
+					{formatCompactionLabel(info, measuredAfter)}
 					{inProgress ? "…" : ""}
 				</span>
 				<div className="flex-1 min-w-4 border-t border-description/30" />

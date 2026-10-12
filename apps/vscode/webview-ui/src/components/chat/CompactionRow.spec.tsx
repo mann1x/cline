@@ -1,7 +1,7 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import { fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
-import CompactionRow from "./CompactionRow"
+import CompactionRow, { measuredTokensAfterCompaction } from "./CompactionRow"
 
 /**
  * A compaction is the one operation whose output is otherwise unreachable: it
@@ -131,5 +131,44 @@ describe("CompactionRow", () => {
 		render(<CompactionRow message={compactionMessage({ durationMs: 452_000 })} />)
 
 		expect(screen.getByText(/\(7m32s\)/)).toBeTruthy()
+	})
+
+	describe("the figure after the arrow", () => {
+		const row = (ts: number, info: Record<string, unknown> = {}): ClineMessage =>
+			({
+				...compactionMessage({ tokensBefore: 48_900, tokensAfter: 39_900, ...info }),
+				ts,
+				say: "compaction",
+			}) as ClineMessage
+		const request = (ts: number, usage: Record<string, number>): ClineMessage =>
+			({ ts, type: "say", say: "api_req_started", text: JSON.stringify(usage) }) as ClineMessage
+
+		it("is the estimate, said as one, until a request has run", () => {
+			render(<CompactionRow message={row(10)} />)
+			expect(screen.getByText(/48\.9k → about 39\.9k tokens/)).toBeTruthy()
+		})
+
+		it("is the server's count once the next request has one", () => {
+			render(<CompactionRow measuredAfter={28_298} message={row(10)} />)
+			expect(screen.getByText(/48\.9k → 28\.3k tokens/)).toBeTruthy()
+			expect(screen.queryByText(/about/)).toBeNull()
+		})
+
+		it("reads the first counted request after the row", () => {
+			const messages = [
+				request(5, { tokensIn: 48_914, tokensOut: 36_539 }),
+				row(10),
+				request(11, {}),
+				request(12, { tokensIn: 20_000, cacheReads: 8_298, tokensOut: 256 }),
+				request(13, { tokensIn: 34_400 }),
+			]
+			expect(measuredTokensAfterCompaction(messages, 10)).toBe(28_298)
+		})
+
+		it("has none while no request has been counted, or once another compaction came first", () => {
+			expect(measuredTokensAfterCompaction([row(10), request(11, {})], 10)).toBeUndefined()
+			expect(measuredTokensAfterCompaction([row(10), row(20), request(21, { tokensIn: 9_000 })], 10)).toBeUndefined()
+			expect(measuredTokensAfterCompaction([row(10), row(20), request(21, { tokensIn: 9_000 })], 20)).toBe(9_000)
+		})
 	})
 })

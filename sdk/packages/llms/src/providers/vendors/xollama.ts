@@ -1153,7 +1153,12 @@ async function settleSideCall(
 			found = false;
 		}
 		if (found) {
-			const said = `A background request (${side.need} tokens) did not fit beside this conversation's idle window on the server (${window} booked${largest !== undefined ? `, ${largest} free` : ""}). The window was released to make room, so the next turn re-reads the prompt.`;
+			// "Reserved", and said to be the whole window: the first wording read
+			// "96000 booked, 0 free" and was taken, reasonably, for tokens in use
+			// -- 49k used plus a 25k request is 76k, so why no room in 96k? The
+			// server sets the conversation's whole window aside while it is idle,
+			// whatever the conversation holds.
+			const said = `A background request (${side.need} tokens) had no room on the server: this conversation keeps its whole window reserved while it is idle (${window} tokens, however much of it is in use)${largest !== undefined ? `, and ${largest} tokens were free beside it` : ", and nothing was free beside it"}. The reservation was released to make room, so the next turn re-reads the prompt.`;
 			io.logger?.log(`[xollama] ${said}`);
 			reportSideCall(side.conversation, { kind: "closed", message: said });
 			const again = await io.send(io.bookedBody);

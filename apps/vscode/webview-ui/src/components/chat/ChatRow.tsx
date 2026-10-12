@@ -51,7 +51,7 @@ import { findMatchingResourceOrTemplate } from "@/utils/mcp"
 import CodeAccordian, { cleanPathPrefix } from "../common/CodeAccordian"
 import BrowserScreenshotRow from "./BrowserScreenshotRow"
 import { CommandOutputContent, CommandOutputRow } from "./CommandOutputRow"
-import CompactionRow from "./CompactionRow"
+import CompactionRow, { measuredTokensAfterCompaction } from "./CompactionRow"
 import { CompletionOutputRow } from "./CompletionOutputRow"
 import { DiffEditRow } from "./DiffEditRow"
 import EmptyTurnRow from "./EmptyTurnRow"
@@ -1212,7 +1212,12 @@ export const ChatRowContent = memo(
 							/>
 						)
 					case "compaction":
-						return <CompactionRow message={message} />
+						return (
+							<CompactionRow
+								measuredAfter={measuredTokensAfterCompaction(clineMessages, message.ts)}
+								message={message}
+							/>
+						)
 					case "thinking_condensed":
 						return <ThinkingCondensedRow message={message} />
 					case "empty_turn":
