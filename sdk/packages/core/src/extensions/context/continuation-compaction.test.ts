@@ -1046,6 +1046,55 @@ describe("the whole compaction as a continuation", () => {
 		expectNothingLeft(server);
 	});
 
+	it("asks the retrospective of the session before the release when the council runs", async () => {
+		// Run zhy7n (pandorum, 2026-10-12): the release came first, so the
+		// retrospective was a request of its own at every compaction, and the
+		// conversation was closed to admit it.
+		const server = engine();
+		const m = model();
+		const list = messages();
+		(list[1].content as unknown[]).unshift({
+			type: "thinking",
+			thinking: "the brace at line 96 closes the class early. ".repeat(20),
+		});
+		const prepared = await prepareCompactionContinuation(
+			input(server, {
+				providerConfig: { providerId: "xollama" },
+				model: m.fn,
+				apiMessages: list,
+			}),
+		);
+		const c = prepared.continuation;
+		expect(c?.path).toBe("continuation");
+		await runAgenticCompaction({
+			context: contextFor(list),
+			providerConfig: {
+				providerId: "xollama",
+				modelId: "m",
+				baseUrl: "http://engine",
+				modelInfo: { id: "m", maxInputTokens: 100_000 },
+			} as never,
+			thinkingSummaryEnabled: true,
+			bounds: resolveRecencyBounds({
+				preserveRecentTokens: 200,
+				preserveRecentMessagesRatio: Number.EPSILON,
+				messageTargetTokens: Number.MAX_SAFE_INTEGER,
+			}),
+			estimateMessageTokens: estimateJsonTokens,
+			...(c ? { continuation: c } : {}),
+		});
+		await c?.dispose();
+		const asked = m.calls.find((call) => call.purpose === "retrospective");
+		// The session's own next turn: its prompt, its tools, its messages.
+		expect(asked?.sessionId).toBe("lead");
+		expect(asked?.systemPrompt).toBe("You are the agent.");
+		expect(asked?.tools).toHaveLength(1);
+		expect(asked?.toolChoice).toBe("none");
+		expect(
+			m.calls.filter((call) => call.purpose === "retrospective"),
+		).toHaveLength(1);
+	});
+
 	it("hands back nothing when the writer cannot answer, and the caller falls back", async () => {
 		const server = engine({
 			allocations: [{ session_id: "lead", window: 65_536, used: 21_000 }],

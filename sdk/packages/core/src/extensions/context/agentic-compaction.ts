@@ -1459,6 +1459,21 @@ async function reviewAsContinuation(input: {
 			);
 		}
 		if (!synthesizerReservation) {
+			// Before the release where it runs as the session's own next turn.
+			// It used to come after it on every path, so on a server that keeps
+			// the conversation's whole window reserved it was always a request
+			// of its own, refused for room, and the conversation was closed to
+			// admit it: a notice at each compaction of run zhy7n (pandorum,
+			// 2026-10-12, 6,992 and 18,308 tokens beside 96,000 of 96,000).
+			if (
+				input.retrospective &&
+				continuation.retrospectiveFitsInSession(
+					input.retrospective.chars,
+					input.retrospective.maxTokens,
+				)
+			) {
+				await finishRetrospective();
+			}
 			await release();
 			await finishRetrospective();
 		}

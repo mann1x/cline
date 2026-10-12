@@ -503,6 +503,12 @@ export interface CompactionContinuation {
 		reservation?: PPrimeReservation,
 	): Promise<ContinuationCallResult>;
 	/**
+	 * Whether a retrospective of about `chars` characters would run as the
+	 * session's own next turn. It has to be asked for before {@link release}
+	 * then: afterwards there is no session to continue.
+	 */
+	retrospectiveFitsInSession(chars: number, maxTokens: number): boolean;
+	/**
 	 * Give the session's cells back: the critics, P', P, then the session's
 	 * own slot. Idempotent; run before the synthesizer, and again by
 	 * {@link dispose} on any path out.
@@ -1346,7 +1352,10 @@ class Continuation implements CompactionContinuation {
 			}
 			this.claimed = Math.max(0, this.claimed - reservation.cells);
 		}
-		if (purpose === "retrospective" && this.fitsInSession(request, maxTokens)) {
+		if (
+			purpose === "retrospective" &&
+			this.fitsInSession(request.length, maxTokens, true)
+		) {
 			try {
 				return await this.inSession(purpose, systemPrompt, request, maxTokens);
 			} catch (error) {
@@ -1419,7 +1428,15 @@ class Continuation implements CompactionContinuation {
 	 * beside a 96,000 window, pandorum 2026-10-12) and the session was closed
 	 * in the middle of its own compaction to let it through.
 	 */
-	private fitsInSession(request: string, maxTokens: number): boolean {
+	retrospectiveFitsInSession(chars: number, maxTokens: number): boolean {
+		return this.fitsInSession(chars, maxTokens, false);
+	}
+
+	private fitsInSession(
+		chars: number,
+		maxTokens: number,
+		say: boolean,
+	): boolean {
 		const writer = this.lastWriter;
 		const window = this.input.contextWindow;
 		if (
@@ -1438,11 +1455,11 @@ class Continuation implements CompactionContinuation {
 					tokensForChars(writer.instruction.length)) +
 			(writer.outputTokens ?? tokensForChars(writer.text.length));
 		const need =
-			behind +
-			tokensForChars(request.length) +
-			maxTokens +
-			BOOKING_SLACK_TOKENS;
+			behind + tokensForChars(chars) + maxTokens + BOOKING_SLACK_TOKENS;
 		if (need > window) {
+			if (!say) {
+				return false;
+			}
 			this.note(
 				`the retrospective does not fit behind the writer (about ${need} of ${window} tokens); sent as a request of its own`,
 			);
