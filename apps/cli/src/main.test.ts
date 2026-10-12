@@ -641,7 +641,12 @@ describe("runCli lightweight command dispatch", () => {
 		expect(runtimeMocks.runAgent).toHaveBeenCalledTimes(1);
 		expect(mockState.runAgentImports).toBe(1);
 		expect(mockState.runInteractiveImports).toBe(0);
-	});
+		// The first test to load the single-prompt path, cold. At the default
+		// 15 s it timed out on the hosted Ubuntu runner in five of eight runs
+		// (2026-10-12), and its run, still going, was then counted by the next
+		// test as a second `runAgent` call. The first cold load above has the
+		// same allowance.
+	}, 60_000);
 
 	it("rejects a single bare positional prompt token", async () => {
 		const consoleError = vi
