@@ -216,7 +216,7 @@ function outputCeilingKey(providerId: string, modelId: string): string {
  * the line the retry needs: nothing has reached the caller yet, so re-issuing
  * the request cannot duplicate output it has already seen.
  */
-async function primeStream<T>(
+export async function primeStream<T>(
 	stream: AsyncIterable<T> | Iterable<T>,
 ): Promise<{ first: IteratorResult<T>; rest: AsyncIterable<T> }> {
 	const iterator = toAsyncIterable(stream)[Symbol.asyncIterator]();
@@ -226,9 +226,24 @@ async function primeStream<T>(
 		rest: {
 			async *[Symbol.asyncIterator]() {
 				let next = first;
-				while (!next.done) {
-					yield next.value;
-					next = await iterator.next();
+				try {
+					while (!next.done) {
+						yield next.value;
+						next = await iterator.next();
+					}
+				} finally {
+					// A consumer that leaves early has to reach the provider, or
+					// its stream is never closed and the request it holds is never
+					// aborted. This wrapper drives the iterator by hand, so nothing
+					// does that for it. Measured against xOllama (2026-10-12): a
+					// call cut at 18.6s went on generating for 45s and 3,673 tokens
+					// beside the request that replaced it. Not awaited: the caller
+					// is leaving and must not wait on a stream that may be stuck.
+					if (!next.done) {
+						void Promise.resolve(iterator.return?.(undefined)).catch(
+							() => undefined,
+						);
+					}
 				}
 			},
 		},

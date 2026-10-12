@@ -2776,23 +2776,41 @@ export async function* abortWhenAbandoned(
 		caller?.addEventListener("abort", follow, { once: true });
 	}
 	let completed = false;
+	let ended = false;
+	let iterator: AsyncIterator<AgentModelEvent> | undefined;
 	try {
-		for await (const event of await run({
-			...request,
-			signal: upstream.signal,
-		})) {
-			if (event.type === "finish") {
-				completed = event.reason !== "error";
+		iterator = (
+			await run({
+				...request,
+				signal: upstream.signal,
+			})
+		)[Symbol.asyncIterator]();
+		while (true) {
+			const next = await iterator.next();
+			if (next.done) {
+				ended = true;
+				break;
 			}
-			yield event;
+			if (next.value.type === "finish") {
+				completed = next.value.reason !== "error";
+			}
+			yield next.value;
 		}
 	} finally {
 		caller?.removeEventListener("abort", follow);
+		// The abort comes first and waits on nothing. Closing the stream below
+		// can wait on a part the server has not written yet, and a `for await`
+		// would have awaited that close before reaching this line.
 		if (!completed && !upstream.signal.aborted) {
 			upstream.abort(
 				new Error(
 					"the response was abandoned unfinished; the request is closed so the server stops generating",
 				),
+			);
+		}
+		if (!ended) {
+			void Promise.resolve(iterator?.return?.(undefined)).catch(
+				() => undefined,
 			);
 		}
 	}

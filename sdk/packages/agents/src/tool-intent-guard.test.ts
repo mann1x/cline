@@ -152,4 +152,57 @@ describe("ToolIntentGuard", () => {
 		expect(text).toContain("nothing ran");
 		expect(text).toContain("2,000 characters");
 	});
+
+	describe("naming the tool from the text", () => {
+		const names = {
+			argumentNames: ["intent", "path", "new_text"],
+			toolNames: ["editor", "read_files", "read"],
+			maxChars: 50,
+		};
+		const runaway = "x".repeat(60);
+
+		it.each([
+			["gemma4", `<|tool_call>call:editor{intent:<|"|>${runaway}`],
+			[
+				"qwen",
+				`<tool_call>\n<function=editor>\n<parameter=intent>\n${runaway}`,
+			],
+			["JSON", `{"name":"editor","arguments":{"intent":"${runaway}`],
+		])("finds it in %s", (_label, text) => {
+			for (const size of [1, 7, text.length]) {
+				const guard = new ToolIntentGuard(names);
+				let overrun: ReturnType<ToolIntentGuard["push"]>;
+				for (let at = 0; at < text.length && !overrun; at += size) {
+					overrun = guard.push("c1", text.slice(at, at + size));
+				}
+				expect(overrun?.toolName).toBe("editor");
+			}
+		});
+
+		it("takes the last name before the call, not one mentioned earlier", () => {
+			const guard = new ToolIntentGuard(names);
+			const overrun = guard.push(
+				"c1",
+				`I could use read_files first. call:editor{intent:${runaway}`,
+			);
+			expect(overrun?.toolName).toBe("editor");
+		});
+
+		it("does not read a longer word as a tool", () => {
+			const guard = new ToolIntentGuard(names);
+			const overrun = guard.push("c1", `call:reader{intent:${runaway}`);
+			expect(overrun).toBeDefined();
+			expect(overrun?.toolName).toBeUndefined();
+		});
+
+		it("keeps the name the caller gave", () => {
+			const guard = new ToolIntentGuard(names);
+			const overrun = guard.push(
+				"c1",
+				`{"note":"editor","intent":"${runaway}`,
+				"read_files",
+			);
+			expect(overrun?.toolName).toBe("read_files");
+		});
+	});
 });

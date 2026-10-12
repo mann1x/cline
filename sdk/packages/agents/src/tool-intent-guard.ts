@@ -63,6 +63,8 @@ export function isToolIntentGuardEnabled(): boolean {
 
 interface CallScan {
 	toolName?: string;
+	/** The caller named the tool; what the text says is not consulted. */
+	named?: boolean;
 	phase: "seeking" | "counting" | "closed";
 	/** The end of what has been read, kept so a key split by a delta is seen. */
 	tail: string;
@@ -98,6 +100,25 @@ function keyPattern(names: readonly string[]): RegExp | undefined {
 }
 
 /**
+ * A tool's name standing as a word of its own. Where the call arrives as the
+ * model wrote it there is no separate name, only the text, and the name is in
+ * it: `call:editor{`, `<function=editor>`, `"name":"editor"`.
+ */
+function namePattern(names: readonly string[]): RegExp | undefined {
+	if (names.length === 0) {
+		return undefined;
+	}
+	const alternatives = [...names]
+		.sort((a, b) => b.length - a.length)
+		.map(escapeForRegExp)
+		.join("|");
+	return new RegExp(
+		`(?<![A-Za-z0-9_])(?:${alternatives})(?![A-Za-z0-9_])`,
+		"g",
+	);
+}
+
+/**
  * Reads tool-call text as it arrives, one call at a time, and answers the
  * first time a call has gone the limit past the start of `intent` without
  * beginning another argument.
@@ -105,17 +126,22 @@ function keyPattern(names: readonly string[]): RegExp | undefined {
  * `argumentNames` is every argument of every tool the model may call. Without
  * it nothing is measured: a call whose `intent` comes first and whose payload
  * is a whole file would look exactly like the call this exists to cut.
+ *
+ * `toolNames` only serves the message: the last one written before `intent`
+ * begins is the tool the model is told about.
  */
 export class ToolIntentGuard {
 	private readonly maxChars: number;
 	private readonly calls = new Map<string, CallScan>();
 	private readonly intentKey: RegExp | undefined;
 	private readonly otherKey: RegExp | undefined;
+	private readonly toolName: RegExp | undefined;
 	private readonly tailChars: number;
 
 	constructor(
 		config?: Partial<ToolIntentLimitConfig> & {
 			argumentNames?: Iterable<string>;
+			toolNames?: Iterable<string>;
 		},
 	) {
 		this.maxChars = config?.maxChars ?? DEFAULT_TOOL_INTENT_MAX_CHARS;
@@ -124,9 +150,18 @@ export class ToolIntentGuard {
 		);
 		this.otherKey = keyPattern(others);
 		this.intentKey = this.otherKey ? keyPattern([INTENT]) : undefined;
-		// Enough to hold the longest key with its punctuation on both sides.
+		const tools = [...new Set(config?.toolNames ?? [])].filter(
+			(name) => name.length > 0,
+		);
+		this.toolName = namePattern(tools);
+		// Enough to hold the longest key or name with its punctuation on both
+		// sides.
 		this.tailChars =
-			Math.max(INTENT.length, ...others.map((name) => name.length)) + 8;
+			Math.max(
+				INTENT.length,
+				...others.map((name) => name.length),
+				...tools.map((name) => name.length),
+			) + 8;
 	}
 
 	push(
@@ -144,6 +179,7 @@ export class ToolIntentGuard {
 		}
 		if (toolName) {
 			scan.toolName = toolName;
+			scan.named = true;
 		}
 		if (scan.phase === "closed") {
 			return undefined;
@@ -152,6 +188,13 @@ export class ToolIntentGuard {
 		let fresh = text.length;
 		if (scan.phase === "seeking") {
 			const begun = this.intentKey.exec(window);
+			if (!scan.named && this.toolName) {
+				const before = begun ? window.slice(0, begun.index) : window;
+				// A name cut in two by a delta is whole in the next window.
+				for (const match of before.matchAll(this.toolName)) {
+					scan.toolName = match[0];
+				}
+			}
 			if (!begun) {
 				scan.tail = window.slice(-this.tailChars);
 				return undefined;

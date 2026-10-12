@@ -3731,6 +3731,7 @@ export class AgentRuntime {
 				: new ToolIntentGuard({
 						...toolIntentLimit,
 						argumentNames: this.toolArgumentNames(),
+						toolNames: [...this.tools.values()].map((tool) => tool.name),
 					});
 		let toolIntentOverrun: ToolIntentOverrun | undefined;
 
