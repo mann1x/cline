@@ -364,3 +364,52 @@ export function resolveReasoningHistoryPlan(
 	// rather than dependent on a renderer, which makes it worse, not better.
 	return { scope: "last", channel: "inline" };
 }
+
+/**
+ * The plan in words, with what decided it, for the log.
+ *
+ * A run on pandorum (2026-10-12, session x8yap) stopped thinking at its sixth
+ * turn and the first question was what `auto` had resolved to. Nothing said:
+ * the answer was two probe requests in the server's log, 41 prompt tokens
+ * without the field and 366 with it. This is that answer, written where the
+ * request is built.
+ */
+export function describeReasoningHistoryPlan(
+	setting: ReasoningHistorySetting | undefined,
+	baseUrl: string | undefined,
+	modelId: string,
+	unprobed: ReasoningHistoryMode = "none",
+	allowInline = true,
+): string {
+	const plan = resolveReasoningHistoryPlan(
+		setting,
+		baseUrl,
+		modelId,
+		unprobed,
+		allowInline,
+	);
+	const what =
+		plan.scope === "none"
+			? "no prior reasoning"
+			: `${plan.scope === "last" ? "the last reasoning block" : "all prior reasoning"} ${
+					plan.channel === "inline"
+						? "inlined into the reply text"
+						: "in the reasoning field"
+				}`;
+	if (setting !== undefined && setting !== "auto") {
+		return `${what} (set to "${setting}")`;
+	}
+	const capability = cachedReinjection(baseUrl, modelId);
+	if (!capability) {
+		return `${what} (automatic; this endpoint was not probed, standing default "${unprobed}")`;
+	}
+	const answer =
+		capability.channel === "none"
+			? "the endpoint has no reasoning channel"
+			: capability.reinjects === true
+				? "the probe saw reasoning rendered back into the prompt"
+				: capability.reinjects === false
+					? "the probe saw reasoning dropped from the prompt"
+					: "the probe could not get an answer";
+	return `${what} (automatic; ${answer}${capability.detail ? `: ${capability.detail}` : ""})`;
+}

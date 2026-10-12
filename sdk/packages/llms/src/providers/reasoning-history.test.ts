@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
 	autoReasoningHistoryMode,
 	cachedReinjection,
+	describeReasoningHistoryPlan,
 	primeOllamaReinjection,
 	primeTemplateReinjection,
 	resetReasoningReinjection,
@@ -380,5 +381,44 @@ describe("resolveReasoningHistoryPlan", () => {
 		expect(
 			resolveReasoningHistoryPlan("auto", "http://e/", "m", "none", false),
 		).toEqual({ scope: "none", channel: "native" });
+	});
+});
+
+describe("describeReasoningHistoryPlan", () => {
+	beforeEach(() => {
+		resetReasoningReinjection();
+	});
+
+	const answering = (counts: number[]) =>
+		(async () =>
+			new Response(
+				JSON.stringify({ prompt_eval_count: counts.shift() }),
+			)) as unknown as typeof fetch;
+
+	it("names an explicit setting as the reason", () => {
+		expect(describeReasoningHistoryPlan("none", "http://h", "m")).toBe(
+			'no prior reasoning (set to "none")',
+		);
+	});
+
+	it("says an unprobed endpoint is on its standing default", () => {
+		expect(describeReasoningHistoryPlan(undefined, "http://h", "m")).toBe(
+			'no prior reasoning (automatic; this endpoint was not probed, standing default "none")',
+		);
+	});
+
+	it("carries the probe's own figures", async () => {
+		// pandorum, 2026-10-12: the two requests found in the server's log.
+		await primeOllamaReinjection("http://h", "m", answering([41, 366]));
+		expect(describeReasoningHistoryPlan("auto", "http://h", "m")).toBe(
+			"the last reasoning block in the reasoning field (automatic; the probe saw reasoning rendered back into the prompt: prompt 41 -> 366 tokens)",
+		);
+	});
+
+	it("says when the block is inlined because the template drops the field", async () => {
+		await primeOllamaReinjection("http://h", "m", answering([41, 41]));
+		expect(describeReasoningHistoryPlan(undefined, "http://h", "m")).toBe(
+			"the last reasoning block inlined into the reply text (automatic; the probe saw reasoning dropped from the prompt: prompt 41 -> 41 tokens)",
+		);
 	});
 });

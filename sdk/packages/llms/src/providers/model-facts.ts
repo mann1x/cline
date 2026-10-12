@@ -14,7 +14,10 @@ import {
 	nativeReasoningHistoryPlan,
 	REASONING_LEVELS,
 } from "@cline/shared";
-import { resolveReasoningHistoryPlan } from "./reasoning-history";
+import {
+	describeReasoningHistoryPlan,
+	resolveReasoningHistoryPlan,
+} from "./reasoning-history";
 
 const ACTIVE_REASONING_EFFORTS = REASONING_LEVELS.filter(
 	(level): level is ReasoningEffort => level !== "none",
@@ -629,14 +632,41 @@ export function resolveReasoningHistoryPlanForRequest(
 	// The same three-place rule the predicates above use: a provider can be
 	// named at the request, at the resolved config, or by the manifest, and a
 	// custom entry pointed at a local engine carries the name in only one.
-	const namedProvider =
+	return reasoningHistoryPlanForProvider(
+		namedReasoningHistoryProvider(request, context),
+		{
+			modelId: context.model?.id,
+			baseUrl: context.config?.baseUrl,
+			reasoningHistory: context.config?.reasoningHistory,
+			reasoningInline: context.config?.reasoningInline,
+		},
+	);
+}
+
+function namedReasoningHistoryProvider(
+	request: GatewayStreamRequest,
+	context: GatewayProviderContext,
+): string {
+	return (
 		[request.providerId, context.config.providerId, context.provider.id].find(
 			(id) => PROBED_OR_MUTE_PROVIDERS.has(id.toLowerCase()),
-		) ?? request.providerId;
-	return reasoningHistoryPlanForProvider(namedProvider, {
-		modelId: context.model?.id,
-		baseUrl: context.config?.baseUrl,
-		reasoningHistory: context.config?.reasoningHistory,
-		reasoningInline: context.config?.reasoningInline,
-	});
+		) ?? request.providerId
+	);
+}
+
+/** The request's replay plan in words, with what decided it. For the log. */
+export function describeReasoningHistoryPlanForRequest(
+	request: GatewayStreamRequest,
+	context: GatewayProviderContext,
+): string {
+	if (isCerebrasProvider(request, context)) {
+		return "no prior reasoning (this vendor transmits none)";
+	}
+	return describeReasoningHistoryPlan(
+		context.config?.reasoningHistory,
+		context.config?.baseUrl,
+		context.model?.id ?? "",
+		unprobedReasoningHistory(namedReasoningHistoryProvider(request, context)),
+		context.config?.reasoningInline ?? true,
+	);
 }

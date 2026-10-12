@@ -62,6 +62,7 @@ import {
 } from "./middleware/retry-empty-response";
 import { createRetryRateLimitMiddleware } from "./middleware/retry-rate-limit";
 import {
+	describeReasoningHistoryPlanForRequest,
 	isAnthropicCompatibleModel,
 	modelSupportsImageInput,
 	resolveModelFamily,
@@ -448,13 +449,66 @@ function toAiSdkModelToolSet(
 	return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
+/** The plan last written to each logger, so it is stated once and again only when it changes. */
+const loggedReasoningReplay = new WeakMap<object, string>();
+
+/**
+ * Say what this request does with the model's earlier reasoning.
+ *
+ * The plan goes out at `log` once per logger and whenever it changes, with what
+ * decided it; the amount goes out at `debug` on every request. "Why did it
+ * stop thinking" starts with "what was it shown", and that used to be answered
+ * by reading the server's log for the probe.
+ */
+function logReasoningReplay(
+	request: GatewayStreamRequest,
+	context: GatewayProviderContext,
+	plan: ReasoningHistoryPlan,
+): void {
+	const logger = context.logger;
+	if (!logger) {
+		return;
+	}
+	const described = describeReasoningHistoryPlanForRequest(request, context);
+	if (loggedReasoningReplay.get(logger) !== described) {
+		loggedReasoningReplay.set(logger, described);
+		logger.log(`[reasoning-replay] ${context.model.id}: sending ${described}`);
+	}
+	let turns = 0;
+	let total = 0;
+	let newest = 0;
+	for (const message of request.messages) {
+		let chars = 0;
+		for (const part of message.content) {
+			if (part.type === "reasoning") {
+				chars += part.text.length;
+			}
+		}
+		if (chars > 0) {
+			turns += 1;
+			total += chars;
+			newest = chars;
+		}
+	}
+	const sent =
+		plan.scope === "all" ? total : plan.scope === "last" ? newest : 0;
+	logger.debug(
+		`[reasoning-replay] this request: ${sent} of ${total} reasoning characters, ${turns} of ${request.messages.length} messages reasoned (pinned turns not counted)`,
+	);
+}
+
 function buildAiSdkRequestMessages(
 	request: GatewayStreamRequest,
 	context: GatewayProviderContext,
 	systemPrompt?: string,
 ) {
+	const reasoningHistory = resolveReasoningHistoryPlanForRequest(
+		request,
+		context,
+	);
+	logReasoningReplay(request, context, reasoningHistory);
 	const aiMessages = toAiSdkMessages(request.messages, systemPrompt, {
-		reasoningHistory: resolveReasoningHistoryPlanForRequest(request, context),
+		reasoningHistory,
 		supportedInputModalities:
 			context.model.modalities?.input ??
 			(context.model.capabilities
