@@ -19,9 +19,13 @@
 /** Names the queue of a request. Never sent to a server. */
 export const STREAM_SIDE_PARTS_HEADER = "x-cerebriline-stream-parts";
 
-export type StreamSidePart =
+export type StreamSidePart = (
 	| { type: "tool-input-delta"; id: string; delta: string }
-	| { type: "tool-input-end"; id: string };
+	| { type: "tool-input-end"; id: string }
+) & {
+	/** Set on every part that came this way, never by a provider package. */
+	outOfBand?: true;
+};
 
 export class StreamSideParts {
 	private readonly parts: StreamSidePart[] = [];
@@ -29,8 +33,19 @@ export class StreamSideParts {
 
 	constructor(readonly id: string) {}
 
+	/**
+	 * Whether a call's text has come this way. The provider package then
+	 * reports the same call a second time, whole, when it is complete -- under
+	 * its own id and as JSON -- and a view of the stream showed both: the call
+	 * as the model wrote it, then the call again (pandorum, 2026-10-12).
+	 */
+	wroteCallText = false;
+
 	push(part: StreamSidePart): void {
-		this.parts.push(part);
+		if (part.type === "tool-input-delta" && part.delta.length > 0) {
+			this.wroteCallText = true;
+		}
+		this.parts.push({ ...part, outOfBand: true });
 		const wake = this.wake;
 		this.wake = undefined;
 		wake?.();
@@ -49,6 +64,23 @@ export class StreamSideParts {
 			this.wake = resolve;
 		});
 	}
+}
+
+/**
+ * Whether a part of the provider's own stream repeats a call whose text the
+ * side road already delivered, and so is not to be reported again.
+ */
+export function repeatsStreamSideParts(
+	part: { type?: string; outOfBand?: boolean; [key: string]: unknown },
+	side: StreamSideParts | undefined,
+): boolean {
+	return (
+		side?.wroteCallText === true &&
+		part.outOfBand !== true &&
+		(part.type === "tool-input-start" ||
+			part.type === "tool-input-delta" ||
+			part.type === "tool-input-end")
+	);
 }
 
 /** A request that never streamed must not keep its queue for ever. */

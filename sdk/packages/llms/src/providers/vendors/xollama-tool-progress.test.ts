@@ -27,7 +27,7 @@ const CAPTURED = [
 	'{"model":"gemma4:e4b","message":{"role":"assistant","content":""},"done":true}',
 ];
 
-function server(features: string[]) {
+function server(features: string[], captured: string[] = CAPTURED) {
 	const sent: Array<{ url: string; headers: Headers; body?: string }> = [];
 	const fetchImpl = (async (input: string, init?: RequestInit) => {
 		const url = String(input);
@@ -42,8 +42,8 @@ function server(features: string[]) {
 			);
 		}
 		// In two pieces that split a line, as a socket would.
-		const text = `${CAPTURED.join("\n")}\n`;
-		const cut = text.indexOf("write_file{") + 4;
+		const text = `${captured.join("\n")}\n`;
+		const cut = Math.max(1, text.indexOf("write_file{") + 4);
 		const body = new ReadableStream<Uint8Array>({
 			start(controller) {
 				controller.enqueue(new TextEncoder().encode(text.slice(0, cut)));
@@ -88,31 +88,83 @@ describe("withXollamaToolCallProgress", () => {
 		expect(JSON.parse(request?.body ?? "{}").tool_call_progress).toBe(true);
 		expect(request?.headers.has(STREAM_SIDE_PARTS_HEADER)).toBe(false);
 
-		expect(queue.take()).toEqual([
-			{
-				type: "tool-input-delta",
-				id: "xollama_call_0",
-				delta: "<|tool_call>",
-			},
-			{ type: "tool-input-delta", id: "xollama_call_0", delta: "call" },
-			{
-				type: "tool-input-delta",
-				id: "xollama_call_0",
-				delta: ':write_file{content:<|"|>def',
-			},
-			{ type: "tool-input-end", id: "xollama_call_0" },
-			// Held output that was not a call: its own run, and no end.
-			{
-				type: "tool-input-delta",
-				id: "xollama_call_1",
-				delta: "<|tool_response>",
-			},
-		]);
+		expect(queue.take().map(({ outOfBand: _marked, ...part }) => part)).toEqual(
+			[
+				{
+					type: "tool-input-delta",
+					id: "xollama_call_0",
+					delta: "<|tool_call>",
+				},
+				{ type: "tool-input-delta", id: "xollama_call_0", delta: "call" },
+				{
+					type: "tool-input-delta",
+					id: "xollama_call_0",
+					delta: ':write_file{content:<|"|>def',
+				},
+				{ type: "tool-input-end", id: "xollama_call_0" },
+				// Held output that was not a call: its own run, and no end.
+				{
+					type: "tool-input-delta",
+					id: "xollama_call_1",
+					delta: "<|tool_response>",
+				},
+			],
+		);
 		// Every chunk still arrives, and none of them carries the field.
 		expect(lines).toHaveLength(CAPTURED.length);
 		expect(lines.join("\n")).not.toContain("tool_call_progress");
 		expect(JSON.parse(lines[3] ?? "{}").message.tool_calls[0].id).toBe(
 			"call_34nwtu9q",
+		);
+		closeStreamSideParts(queue);
+	});
+
+	it("holds blank progress until a call begins, and drops it when none does", async () => {
+		const step = (index: number, text: string, done = false) =>
+			JSON.stringify({
+				model: "m",
+				message: {
+					role: "assistant",
+					content: "",
+					tool_call_progress: {
+						index,
+						syntax: "gemma4",
+						text,
+						tokens: 1,
+						...(done ? { done: true } : {}),
+					},
+				},
+				done: false,
+			});
+		const { fetchImpl } = server(
+			[XOLLAMA_TOOL_CALL_PROGRESS_FEATURE],
+			[
+				// Between stretches of thinking: blank, and never a call.
+				step(0, "\n\n"),
+				step(0, "", true),
+				// A call that opens with a line break, and has blanks inside it.
+				step(1, "\n"),
+				step(1, "<|tool_call>call:write_file{content:"),
+				step(1, "  "),
+				step(1, "x}"),
+				step(1, "", true),
+			],
+		);
+		const queue = openStreamSideParts();
+		const response = await withXollamaToolCallProgress(fetchImpl)(
+			...chat(queue.id, { model: "m", stream: true, tools }),
+		);
+		await response.text();
+		expect(queue.take().map(({ outOfBand: _marked, ...part }) => part)).toEqual(
+			[
+				{
+					type: "tool-input-delta",
+					id: "xollama_call_1",
+					delta: "\n<|tool_call>call:write_file{content:",
+				},
+				{ type: "tool-input-delta", id: "xollama_call_1", delta: "  x}" },
+				{ type: "tool-input-end", id: "xollama_call_1" },
+			],
 		);
 		closeStreamSideParts(queue);
 	});

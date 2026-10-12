@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	closeStreamSideParts,
 	openStreamSideParts,
+	repeatsStreamSideParts,
 	STREAM_SIDE_PARTS_HEADER,
 	streamSidePartsOf,
 	withStreamSideParts,
@@ -44,8 +45,8 @@ describe("withStreamSideParts", () => {
 		await tick();
 		// Both are out before the main stream has said anything.
 		expect(seen).toEqual([
-			{ type: "tool-input-delta", id: "a", delta: "one" },
-			{ type: "tool-input-delta", id: "a", delta: "two" },
+			{ type: "tool-input-delta", id: "a", delta: "one", outOfBand: true },
+			{ type: "tool-input-delta", id: "a", delta: "two", outOfBand: true },
 		]);
 		release();
 		await reading;
@@ -85,5 +86,25 @@ describe("withStreamSideParts", () => {
 		expect(
 			streamSidePartsOf({ [STREAM_SIDE_PARTS_HEADER]: queue.id }),
 		).toBeUndefined();
+	});
+});
+
+describe("the provider's own account of a call the side road delivered", () => {
+	it("is a repeat once call text has come the other way, and not before", () => {
+		const side = openStreamSideParts();
+		const own = { type: "tool-input-delta", id: "call_1", delta: "{}" };
+		// Nothing came by the side road: the provider's parts are the only ones.
+		expect(repeatsStreamSideParts(own, side)).toBe(false);
+		expect(repeatsStreamSideParts(own, undefined)).toBe(false);
+		side.push({ type: "tool-input-delta", id: "xollama_call_0", delta: "c" });
+		expect(repeatsStreamSideParts(own, side)).toBe(true);
+		expect(
+			repeatsStreamSideParts({ type: "tool-input-end", id: "call_1" }, side),
+		).toBe(true);
+		// The side road's own parts, and anything that is not call text.
+		const [arrived] = side.take();
+		expect(arrived && repeatsStreamSideParts(arrived, side)).toBe(false);
+		expect(repeatsStreamSideParts({ type: "text-delta" }, side)).toBe(false);
+		closeStreamSideParts(side);
 	});
 });

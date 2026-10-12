@@ -70,7 +70,7 @@ interface ProgressStep {
 function liftProgress(
 	raw: string,
 	queue: StreamSideParts,
-	seen: { syntax?: string },
+	seen: { syntax?: string; held?: Map<string, string>; begun?: Set<string> },
 	logger: BasicLogger | undefined,
 ): string {
 	if (!raw.includes('"tool_call_progress"')) {
@@ -93,11 +93,30 @@ function liftProgress(
 			`[xollama] tool call progress is streaming (notation: ${step.syntax})`,
 		);
 	}
+	// A call begins at its first character that is not blank. Blank progress
+	// is held until then: on pandorum (2026-10-12) it arrived between stretches
+	// of thinking, and each piece opened an empty "tool call" in the agent's
+	// live output and cut the thinking around it into fragments. Held text is
+	// part of the call if one follows, and nothing if none does.
+	seen.held ??= new Map();
+	seen.begun ??= new Set();
+	const held = seen.held.get(id) ?? "";
 	if (typeof step.text === "string" && step.text.length > 0) {
-		queue.push({ type: "tool-input-delta", id, delta: step.text });
+		if (step.text.trim() === "") {
+			seen.held.set(id, held + step.text);
+		} else {
+			seen.held.delete(id);
+			seen.begun.add(id);
+			queue.push({ type: "tool-input-delta", id, delta: held + step.text });
+		}
 	}
 	if (step.done === true) {
-		queue.push({ type: "tool-input-end", id });
+		// A call that never had a character has no end to report.
+		if (seen.begun.has(id)) {
+			queue.push({ type: "tool-input-end", id });
+		}
+		seen.held.delete(id);
+		seen.begun.delete(id);
 	}
 	const { tool_call_progress: _lifted, ...message } = chunk.message;
 	return JSON.stringify({ ...chunk, message });
@@ -147,7 +166,11 @@ export function withXollamaToolCallProgress(
 		}
 		const decoder = new TextDecoder();
 		const encoder = new TextEncoder();
-		const seen: { syntax?: string } = {};
+		const seen: {
+			syntax?: string;
+			held?: Map<string, string>;
+			begun?: Set<string>;
+		} = {};
 		let partial = "";
 		const lifted = response.body.pipeThrough(
 			new TransformStream<Uint8Array, Uint8Array>({

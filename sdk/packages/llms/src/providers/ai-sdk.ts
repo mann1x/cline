@@ -91,6 +91,7 @@ import {
 } from "./routing/provider-options";
 import {
 	closeStreamSideParts,
+	repeatsStreamSideParts,
 	type StreamSideParts,
 	streamSidePartsOf,
 	withStreamSideParts,
@@ -1967,6 +1968,11 @@ async function* emitAiSdkEvents(
 			) as AsyncIterable<
 				typeof stream.fullStream extends AsyncIterable<infer P> ? P : never
 			>) {
+				// The provider's own account of a call whose text already came by
+				// the side road: the same call again, so it is not reported twice.
+				if (repeatsStreamSideParts(part, sideParts)) {
+					continue;
+				}
 				if (
 					part.type === "tool-input-start" ||
 					part.type === "tool-input-delta"
