@@ -186,6 +186,11 @@ Cerebriline ships with a small set of skills. They are listed first in the Skill
 | `sdd-status` | Read-only report of where the work stands and what is next | off |
 | `librarian` | Runs the [Library](/features/library): catalogues ebooks and documents onto shelves, checks for duplicates and other editions, makes books from web pages and keeps them up to date. Brings the librarian's tools with it | off |
 | `browser-automation` | Drives a real browser through the [Playwright MCP server](https://github.com/microsoft/playwright-mcp): opens pages, clicks, fills forms, reads what a page shows and requested. Needs the server added under **MCP Servers > Add Local**, where **Playwright** is a preset | off |
+| `media-images` | Tells the model which of its image tools fits the job: `render_image` for screens, mockups and diagrams (anything with words or structure), `generate_image` for pictures, `generate_icon` for icons, `transform_image` for size, crop and format. Recipes for a screen of the application, for diagrams and for README images | on |
+| `media-audio` | Transcribing recordings (text, subtitles, translation) and making speech from text | on |
+| `media-video` | Making a short clip from a description or a starting image, and what that tool cannot do | on |
+
+The three `media-` skills ship turned on. They cost one line each in the list of skills the model sees, and are read only when a task calls for them; turn one off in the Skills tab if you do not want it.
 
 `build-project`, `docker-compose-deploy` and `run-project` refer to each other and are meant to be turned on together, though each works alone.
 
