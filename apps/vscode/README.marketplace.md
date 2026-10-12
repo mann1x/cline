@@ -83,6 +83,15 @@ the media uses that server; otherwise each kind has an endpoint of its own.
 Generated images show in the conversation even when the working model is
 text-only.
 
+**Images the model writes.** An image model cannot write a word, so a picture
+of an interface comes out with garbled labels. `render_image` has the model
+write the picture as HTML, SVG or a Mermaid diagram and renders it in a real
+browser: screens, mockups, workflows and charts with every label legible, sized
+to what was drawn, and able to use your project's own stylesheet.
+`transform_image` resizes, crops and converts (`.png`, `.jpg`, `.webp`, `.ico`,
+`.icns`). Neither needs a server. `generate_icon` draws several proposals,
+asks you which one, and writes it in every icon format.
+
 **Document Reader.** PDFs, Office files (current and 97-2003), OpenDocument and
 ebooks are read into Markdown with their pictures, and scanned pages are read
 with OCR on your machine or by a vision model. Each file is read in a process
@@ -114,11 +123,13 @@ memories chosen per workspace. `remember`, `recall` and `forget`, and the notes
 about each message you send are put beside it automatically. Off by default.
 [Guide](https://github.com/mann1x/cline/blob/main/docs/features/memory.mdx).
 
-**Built-in skills.** Seventeen skills ship with the extension, all turned off:
-QA and Docker deployment (by Chris), build and run, a test-driven set
-(`tdd-wizard` and three more), a spec-driven set after Get Shit Done
-(`sdd-wizard` and six more, with the plan kept in a database behind one tool),
-the librarian, and browser automation through the Playwright MCP server.
+**Built-in skills.** Twenty skills ship with the extension. Seventeen are
+turned off until you want them: QA and Docker deployment (by Chris), build and
+run, a test-driven set (`tdd-wizard` and three more), a spec-driven set after
+Get Shit Done (`sdd-wizard` and six more, with the plan kept in a database
+behind one tool), the librarian, and browser automation through the Playwright
+MCP server. Three are on: `media-images`, `media-audio` and `media-video`, which
+tell the model what it can make and which tool fits the job.
 [Guide](https://github.com/mann1x/cline/blob/main/docs/customization/skills.mdx).
 
 **Jev on your own server.** Jev, the outside scoring model, can run from any

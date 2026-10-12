@@ -37,7 +37,8 @@ The open source coding agent in your IDE and terminal.
 - **[Compaction Council](#compaction-council).** Every summary is checked by two reviewers, each holding half the transcript, before it replaces the conversation.
 - **[Escalation, scored by Jev](#escalation-to-a-stronger-model-scored-by-jev).** A stronger model takes over the edit when the working model is stuck. The hand-over is offered on measurements and scored by an independent model.
 - **[The Library](#the-library) and [Memory](#memory).** Books the model can search, catalogued by a librarian, and notes it keeps from one task to the next.
-- **[Built-in skills](#built-in-skills).** Seventeen ship with it: QA and deployment, test-driven and spec-driven development, the librarian and browser automation.
+- **[Images the model writes](#media-tools-images-audio-video).** Screens, mockups and diagrams rendered from HTML, SVG or Mermaid with every label legible, resizing and converting, and icons in every format.
+- **[Built-in skills](#built-in-skills).** Twenty ship with it: QA and deployment, test-driven and spec-driven development, the librarian, browser automation and media.
 - **[Built for small models](#built-for-small-models).** Per-family prompt templates, one output budget, tolerant tool calls and guards against measured failure modes.
 
 <br>
@@ -599,11 +600,19 @@ When the working model is stuck, a stronger **expert** model (the Escalation tab
 Five tools reach a media server that speaks OpenAI's media routes: `generate_image`, `edit_image`, `transcribe_audio`, `synthesize_speech` and `generate_video`.
 
 - **Images.** Generate an image, or edit one already in the workspace by instruction, with reference images and an optional mask.
+- **Icons.** `generate_icon` draws several proposals and shows them on one numbered sheet, and the model asks you which one. The chosen one is written as `.ico`, `.icns`, a 1024 pixel PNG and the PNG sizes a page and a phone ask for. An image you already have becomes an icon the same way. Offered with an image endpoint.
 - **Audio.** Speech-to-text returns text, subtitles (`srt`, `vtt`) or timed segments, and can translate to English. Text-to-speech writes an audio file, with a default voice and format.
 - **Video.** A description, or an image in the workspace, becomes a clip. The chat shows the job's queue position and progress, and stopping the task deletes the job.
 - **Where a tool goes.** A session on an opencoti or xOllama server that serves that kind of media uses that server. Otherwise each tab has an endpoint of its own. With neither, the tool is not offered and the model is never told it exists.
 
 In the CLI: `--media-provider`, or `--media-config <file>`. Guide: [`docs/features/media-endpoints.mdx`](docs/features/media-endpoints.mdx).
+
+**Two image tools need no server at all.** They use the headless Chrome the extension already has.
+
+- **`render_image`.** An image model cannot write a word: asked for a picture of an interface, it paints garbled labels. So the model writes the picture instead, as HTML and CSS, SVG or a Mermaid diagram, and a real browser renders it. Every label is the text that was typed. The image is exactly as large as what was drawn unless `width`, `height`, `scale` or `crop` say otherwise, relative links resolve from the workspace so a screen can use the project's own stylesheet, and a diagram can be saved as `.svg`. Use it for screens and mockups, workflow and architecture diagrams, charts and README images.
+- **`transform_image`.** Resize (one side, or both with `inside`, `cover`, `pad` or `stretch`), crop, and convert by the file name: `.png`, `.jpg`, `.webp`, `.ico`, `.icns`. The source file is never changed, and no installed program is needed.
+
+Both are in the extension; the CLI does not have them yet.
 
 ## Document Reader
 
@@ -636,13 +645,14 @@ It is off by default: **Settings > Memory**, or `--memory`. Guide: [`docs/featur
 
 ## Built-in Skills
 
-Cerebriline ships with skills of its own, listed under **Built-in Skills** in the Skills tab with nothing to install, in the extension, the CLI and the SDK. All ship turned off.
+Cerebriline ships with skills of its own, listed under **Built-in Skills** in the Skills tab with nothing to install, in the extension, the CLI and the SDK. All ship turned off except the three media skills.
 
 - **Deploying and running:** `mandatory-qa-prompt-and-issue-resolution` and `docker-compose-deploy` (both by Chris), `build-project`, `run-project`.
 - **Test-driven development:** `tdd-wizard`, `tdd-gen`, `tdd-test`, `tdd-coverage`, after Duke Harewood's "[Test-Driven Development with Claude Code: Practical Guide](https://aiskill.market/blog/tdd-with-claude-code)".
 - **Spec-driven development:** `sdd-wizard`, `sdd-discuss`, `sdd-plan`, `sdd-execute`, `sdd-verify`, `sdd-quick`, `sdd-status`, after [Get Shit Done (GSD 2)](https://getshitdone.help/). The plan is kept in a database in your project and worked through one tool, `sdd`, which gives the model the step that is due and refuses one out of turn.
 - **The librarian**, which runs the Library.
 - **Browser automation:** `browser-automation` drives a real browser through the [Playwright MCP server](https://github.com/microsoft/playwright-mcp), which is a preset under **MCP Servers > Add Local**.
+- **Media, turned on:** `media-images`, `media-audio`, `media-video`. They tell the model what it can make and which tool fits the job: a screen or a diagram is written and rendered, a photograph or an illustration is generated, an icon goes through `generate_icon`. Each also says where a missing tool is switched on. They cost one line each until a task calls for one.
 
 A built-in skill can be switched on and off and read, not edited; create a skill of your own with the same name to replace it. Guide: [`docs/customization/skills.mdx`](docs/customization/skills.mdx).
 

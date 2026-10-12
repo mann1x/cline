@@ -17,6 +17,19 @@ Tick **Use an endpoint for image generation and editing** on the API configurati
 
 Edits go where generation goes. To send them elsewhere, name an **Edit endpoint** or an **Edit model** on the tab; the tab's one API key is sent to both. Untick **Also offer image editing** to keep `generate_image` without `edit_image`.
 
+`generate_icon` is offered with `generate_image` and goes to the same endpoint. With a `prompt` it draws several square proposals (four unless told otherwise), saves each, and shows them on one numbered sheet; the model asks you which one you want. With `pick` and `path` it writes the chosen image as `.ico` (16 to 256 pixels), `.icns` (16 to 1024), a 1024 pixel PNG and PNGs at 16, 32, 48, 64, 128, 180, 192, 256 and 512. Any square image in the workspace can be picked, so the second step works on an icon you already have.
+
+### Images without an endpoint
+
+Two image tools use the extension's own headless Chrome and need nothing set up. They are not in the CLI yet.
+
+| Tool | What it does |
+|---|---|
+| `render_image` | Renders HTML and CSS, an SVG document or a Mermaid diagram that the model writes, to a `.png` or (for SVG and Mermaid) an `.svg`. The image is as large as what was drawn; `width`, `height`, `scale` and `crop` set it otherwise. Relative URLs resolve from the workspace root, so a screen can link the project's stylesheet. |
+| `transform_image` | Resizes an image (one side, or both with `fit`: `inside`, `cover`, `pad`, `stretch`), crops it, and converts it by the extension of `path`: `.png`, `.jpg`, `.webp`, `.ico`, `.icns`. The source is never changed. |
+
+An image model paints pixels and cannot write legible text, so a screen, a mockup, a diagram or a chart belongs to `render_image`, and `generate_image` says so. `render_image` runs a page in a browser and is approved by the same box as the browser tool. Both tools can be switched off in the **Tools** section of the API configuration.
+
 How far an edit goes depends on the model. An instruction-edit model such as FLUX.2 klein or Qwen-Image follows the prompt. A plain diffusion model redraws over the source and makes smaller changes.
 
 ## Audio
