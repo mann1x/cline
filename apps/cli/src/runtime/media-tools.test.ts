@@ -91,6 +91,9 @@ describe("the CLI's media configuration", () => {
 		expect(log[0]).toMatch(
 			/^\[media\] generate_image uses the session's provider \(opencoti\)/,
 		);
-		expect(log).toHaveLength(5);
+		// One line per media tool, and one for `generate_icon`, which needs a
+		// browser this host does not have.
+		expect(log).toHaveLength(6);
+		expect(log[1]).toMatch(/generate_icon omitted/);
 	});
 });

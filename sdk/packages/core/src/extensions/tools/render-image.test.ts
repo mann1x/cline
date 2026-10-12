@@ -1,3 +1,5 @@
+import * as nodePath from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	buildRenderDocument,
@@ -8,6 +10,15 @@ import {
 	type RenderRequest,
 	unfence,
 } from "./render-image";
+
+// The workspace is "/work" as this platform resolves it: `D:\\work` on a
+// Windows runner, and a `file:///D:/work/` URL to match.
+const WORK = nodePath.resolve("/work");
+const at = (relative: string) => nodePath.join(WORK, ...relative.split("/"));
+const urlOf = (relative: string) =>
+	relative === ""
+		? pathToFileURL(`${WORK}${nodePath.sep}`).href
+		: pathToFileURL(at(relative)).href;
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]);
 
@@ -111,12 +122,13 @@ describe("the page a source is rendered as", () => {
 	});
 
 	it("resolves relative URLs in the workspace", () => {
-		const base = '<base href="file:///work/app/">';
+		const app = at("app");
+		const base = `<base href="${pathToFileURL(`${app}${nodePath.sep}`).href}">`;
 		expect(
 			buildRenderDocument({
 				kind: "html",
 				source: "<p>x</p>",
-				baseDir: "/work/app",
+				baseDir: app,
 			}),
 		).toContain(`<meta charset="utf-8">${base}`);
 		expect(
@@ -124,20 +136,20 @@ describe("the page a source is rendered as", () => {
 				kind: "html",
 				source:
 					'<!doctype html><html><head lang="en"><title>t</title></head><body></body></html>',
-				baseDir: "/work/app",
+				baseDir: app,
 			}),
 		).toContain(`<head lang="en">${base}<title>`);
 		expect(
 			buildRenderDocument({
 				kind: "html",
 				source: "<html><body><p>x</p></body></html>",
-				baseDir: "/work/app",
+				baseDir: app,
 			}),
 		).toBe(`<html><head>${base}</head><body><p>x</p></body></html>`);
 		// A base the page set itself is kept.
 		const own = '<html><head><base href="https://example.test/"></head></html>';
 		expect(
-			buildRenderDocument({ kind: "html", source: own, baseDir: "/work/app" }),
+			buildRenderDocument({ kind: "html", source: own, baseDir: app }),
 		).toBe(own);
 	});
 
@@ -162,7 +174,7 @@ describe("render_image", () => {
 			scale: 2,
 			baseDir: "/work",
 		});
-		expect(h.requests[0]?.html).toContain('<base href="file:///work/">');
+		expect(h.requests[0]?.html).toContain(`<base href="${urlOf("")}">`);
 		expect(h.requests[0]?.height).toBeUndefined();
 		const [path] = [...h.written.keys()];
 		expect(path).toMatch(
@@ -202,7 +214,7 @@ describe("render_image", () => {
 			path: "docs/flow.png",
 		});
 		expect(h.requests[0]?.mermaid).toEqual({ theme: "dark" });
-		expect(h.written.has("/work/docs/flow.png")).toBe(true);
+		expect(h.written.has(at("docs/flow.png"))).toBe(true);
 	});
 
 	it("saves a diagram as vectors when the path says so", async () => {
@@ -212,7 +224,7 @@ describe("render_image", () => {
 			path: "docs/flow.svg",
 		});
 		expect(h.requests[0]?.wantSvg).toBe(true);
-		expect(h.written.get("/work/docs/flow.svg")?.toString()).toBe(
+		expect(h.written.get(at("docs/flow.svg"))?.toString()).toBe(
 			'<svg id="d"></svg>',
 		);
 		expect(h.written.size).toBe(1);
@@ -224,7 +236,7 @@ describe("render_image", () => {
 		const svg =
 			'<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"></svg>';
 		await h.run({ source: svg, path: "icon.svg" });
-		expect(h.written.get("/work/icon.svg")?.toString()).toBe(svg);
+		expect(h.written.get(at("icon.svg"))?.toString()).toBe(svg);
 	});
 
 	it("returns the picture to a model that can see it", async () => {

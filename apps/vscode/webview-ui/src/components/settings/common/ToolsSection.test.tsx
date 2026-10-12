@@ -101,10 +101,11 @@ describe("the tools section", () => {
 		mocks.config.current = { tools: { disabled: ["editor"] } }
 		render(<ToolsSection providerId="ollama" />)
 
-		// The editor is 1,860 of the 8,647 tokens on offer, so dropping it has
-		// to move the number the panel prints.
+		// The editor is about a fifth of the tokens on offer, so dropping it has
+		// to move the number the panel prints. Both figures move when a tool
+		// joins the catalog: `render_image` and `transform_image` did.
 		const total = screen.getByTestId("tools-section-total").textContent ?? ""
-		expect(total).toContain("6.8k of 8.8k tokens")
+		expect(total).toContain("8.0k of 10.0k tokens")
 		// On the collapsed header, deliberately: the price is the reason to
 		// open the section, so it cannot be behind it.
 		expect(screen.queryByTestId("tool-editor")).toBeNull()

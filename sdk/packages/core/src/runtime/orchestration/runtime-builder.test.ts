@@ -18,6 +18,7 @@ import {
 import { setHomeDir } from "@cline/shared/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { createUserInstructionConfigService } from "../../extensions/config";
+import { setBundledSkillEnabled } from "../../extensions/config/bundled-skills";
 import { PLAN_MODE_COMMAND_GUARD_EXTENSION_NAME } from "../../extensions/tools/command-guard-extension";
 import {
 	__resetAgentRounds,
@@ -26,6 +27,18 @@ import {
 import { TelemetryService } from "../../services/telemetry/TelemetryService";
 import type { CoreSessionConfig } from "../../types/config";
 import { DefaultRuntimeBuilder } from "./runtime-builder";
+
+/**
+ * A few built-in skills ship turned on, so a runtime has the `skills` tool
+ * with nothing installed. A test about where *other* skills come from has to
+ * switch those off first, in settings of its own.
+ */
+function turnOffShippedSkills(home: string): void {
+	process.env.CLINE_GLOBAL_SETTINGS_PATH = join(home, "global-settings.json");
+	for (const name of ["media-images", "media-audio", "media-video"]) {
+		setBundledSkillEnabled(name, false);
+	}
+}
 
 function makeSpawnTool(): AgentTool {
 	return {
@@ -74,7 +87,12 @@ describe("DefaultRuntimeBuilder", () => {
 	afterEach(() => {
 		process.env.HOME = previousHome;
 		setHomeDir(previousHome ?? "~");
-		process.env.CLINE_GLOBAL_SETTINGS_PATH = previousGlobalSettingsPath;
+		// Assigning `undefined` to an environment variable stores the word.
+		if (previousGlobalSettingsPath === undefined) {
+			delete process.env.CLINE_GLOBAL_SETTINGS_PATH;
+		} else {
+			process.env.CLINE_GLOBAL_SETTINGS_PATH = previousGlobalSettingsPath;
+		}
 		for (const dir of tempDirs.splice(0)) {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -1221,6 +1239,7 @@ Use the review plugin guidance.`,
 		);
 		process.env.HOME = cwd;
 		setHomeDir(cwd);
+		turnOffShippedSkills(cwd);
 		const pluginDir = join(cwd, ".cline", "plugins", "review-plugin");
 		const skillRoot = join(pluginDir, "skills");
 		const skillDir = join(skillRoot, "review");
@@ -1279,6 +1298,7 @@ Use the review plugin guidance.`,
 		);
 		process.env.HOME = cwd;
 		setHomeDir(cwd);
+		turnOffShippedSkills(cwd);
 		const pluginDir = join(cwd, ".cline", "plugins", "review-plugin");
 		const skillDir = join(pluginDir, "skills", "review");
 		mkdirSync(skillDir, { recursive: true });

@@ -1,3 +1,5 @@
+import * as nodePath from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	buildIconPrompt,
@@ -5,6 +7,15 @@ import {
 	createGenerateIconTool,
 } from "./icon-generation";
 import type { RenderRequest } from "./render-image";
+
+// The workspace is "/work" as this platform resolves it: `D:\\work` on a
+// Windows runner, and a `file:///D:/work/` URL to match.
+const WORK = nodePath.resolve("/work");
+const at = (relative: string) => nodePath.join(WORK, ...relative.split("/"));
+const urlOf = (relative: string) =>
+	relative === ""
+		? pathToFileURL(`${WORK}${nodePath.sep}`).href
+		: pathToFileURL(at(relative)).href;
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]);
 
@@ -49,7 +60,7 @@ function harness(
 				};
 			},
 		}),
-		fileExists: async (path) => !(config.missing ?? []).includes(path),
+		fileExists: async (path) => !(config.missing ?? []).map(at).includes(path),
 		writeFile: async (path, data) => {
 			written.set(path, data);
 		},
@@ -94,14 +105,14 @@ describe("generate_icon", () => {
 		// Square, whatever shape the tab's default has.
 		expect(h.sizes).toEqual(["768x768", "768x768", "768x768", "768x768"]);
 		expect([...h.written.keys()]).toEqual([
-			"/work/.cline/generated-images/icons/a-paper-plane-42-1.png",
-			"/work/.cline/generated-images/icons/a-paper-plane-42-2.png",
-			"/work/.cline/generated-images/icons/a-paper-plane-42-3.png",
-			"/work/.cline/generated-images/icons/a-paper-plane-42-4.png",
+			at(".cline/generated-images/icons/a-paper-plane-42-1.png"),
+			at(".cline/generated-images/icons/a-paper-plane-42-2.png"),
+			at(".cline/generated-images/icons/a-paper-plane-42-3.png"),
+			at(".cline/generated-images/icons/a-paper-plane-42-4.png"),
 		]);
 		expect(h.renders).toHaveLength(1);
 		expect(h.renders[0]?.html).toContain(
-			"file:///work/.cline/generated-images/icons/a-paper-plane-42-3.png",
+			urlOf(".cline/generated-images/icons/a-paper-plane-42-3.png"),
 		);
 		expect(out.map((part) => part.type)).toEqual(["text", "image"]);
 		expect(out[0]?.text).toContain(
@@ -141,7 +152,7 @@ describe("generate_icon", () => {
 			}),
 		);
 		const names = [...h.written.keys()].map((path) =>
-			path.replace("/work/assets/", ""),
+			nodePath.relative(at("assets"), path),
 		);
 		expect(names).toEqual([
 			"icon.ico",
@@ -157,13 +168,13 @@ describe("generate_icon", () => {
 			"icon-256.png",
 			"icon-512.png",
 		]);
-		const ico = h.written.get("/work/assets/icon.ico") as Buffer;
+		const ico = h.written.get(at("assets/icon.ico")) as Buffer;
 		expect(ico.readUInt16LE(4)).toBe(7);
 		expect(
-			h.written.get("/work/assets/icon.icns")?.subarray(0, 4).toString(),
+			h.written.get(at("assets/icon.icns"))?.subarray(0, 4).toString(),
 		).toBe("icns");
-		expect(h.written.get("/work/assets/icon.png")?.toString()).toBe("png:1024");
-		expect(h.written.get("/work/assets/icon-180.png")?.toString()).toBe(
+		expect(h.written.get(at("assets/icon.png"))?.toString()).toBe("png:1024");
+		expect(h.written.get(at("assets/icon-180.png"))?.toString()).toBe(
 			"png:180",
 		);
 		// One render per size, each size once.
@@ -183,13 +194,13 @@ describe("generate_icon", () => {
 			formats: "ico,webp",
 		});
 		expect([...h.written.keys()]).toEqual([
-			"/work/public/favicon.ico",
-			"/work/public/favicon.webp",
+			at("public/favicon.ico"),
+			at("public/favicon.webp"),
 		]);
 	});
 
 	it("refuses what it cannot do", async () => {
-		const h = harness({ missing: ["/work/gone.png"] });
+		const h = harness({ missing: ["gone.png"] });
 		expect(String(await h.run({}))).toContain("needs a `prompt`");
 		expect(String(await h.run({ pick: "gone.png", path: "a" }))).toContain(
 			"no file at",

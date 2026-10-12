@@ -1,3 +1,4 @@
+import * as nodePath from "node:path";
 import { describe, expect, it } from "vitest";
 import type { RenderRequest } from "./render-image";
 import {
@@ -8,6 +9,11 @@ import {
 	parseIconSizes,
 	planTransform,
 } from "./transform-image";
+
+// The workspace is "/work" as this platform resolves it: `D:\\work` on a
+// Windows runner, and a `file:///D:/work/` URL to match.
+const WORK = nodePath.resolve("/work");
+const at = (relative: string) => nodePath.join(WORK, ...relative.split("/"));
 
 describe("where a source goes in a result", () => {
 	it("keeps the source as it is when nothing is asked", () => {
@@ -166,7 +172,8 @@ describe("icon files", () => {
 });
 
 describe("transform_image", () => {
-	function harness(missing: string[] = []) {
+	function harness(missingRelative: string[] = []) {
+		const missing = missingRelative.map(at);
 		const requests: RenderRequest[] = [];
 		const written = new Map<string, Buffer>();
 		const tool = createTransformImageTool({
@@ -201,7 +208,7 @@ describe("transform_image", () => {
 		const out = String(
 			await h.run({ image: "docs/shot.png", width: 400, height: 300 }),
 		);
-		expect([...h.written.keys()]).toEqual(["/work/docs/shot-400x300.png"]);
+		expect([...h.written.keys()]).toEqual([at("docs/shot-400x300.png")]);
 		expect(out).toContain("docs/shot-400x300.png");
 		expect(h.requests[0]).toMatchObject({
 			format: "png",
@@ -234,13 +241,13 @@ describe("transform_image", () => {
 			await h.run({ image: "logo.png", path: "app.ico", sizes: "16,32" }),
 		);
 		expect(h.requests).toHaveLength(2);
-		const ico = h.written.get("/work/app.ico") as Buffer;
+		const ico = h.written.get(at("app.ico")) as Buffer;
 		expect(ico.readUInt16LE(4)).toBe(2);
 		expect(out).toContain("holds 16, 32");
 	});
 
 	it("refuses what it cannot do, before any browser", async () => {
-		const h = harness(["/work/gone.png"]);
+		const h = harness(["gone.png"]);
 		expect(String(await h.run({}))).toContain("needs `image`");
 		expect(String(await h.run({ image: "../a.png" }))).toContain(
 			"outside the workspace",
