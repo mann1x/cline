@@ -922,6 +922,115 @@ export function xollamaConversationBusy(key: string): boolean {
 /** Test seam: forget every running request. */
 export function resetXollamaConversationRequests(): void {
 	CONVERSATION_REQUESTS.clear();
+	SESSION_REQUESTS.clear();
+	SESSION_WINDOWS.clear();
+}
+
+/**
+ * Windows the engine granted, per engine session (the wire id), and where to
+ * give one back. Kept beside the grant core records because a delegated
+ * agent's turn has to find its lead's here, by name, and the lead its agents'.
+ */
+const SESSION_WINDOWS = new Map<
+	string,
+	{ window: number; root: string; model: string }
+>();
+
+/** Requests running now, per engine session: the lead's and each agent's. */
+const SESSION_REQUESTS = new Map<string, number>();
+
+function sessionRequestStarted(session: string): () => void {
+	SESSION_REQUESTS.set(session, (SESSION_REQUESTS.get(session) ?? 0) + 1);
+	let ended = false;
+	return () => {
+		if (ended) {
+			return;
+		}
+		ended = true;
+		const left = (SESSION_REQUESTS.get(session) ?? 1) - 1;
+		if (left > 0) {
+			SESSION_REQUESTS.set(session, left);
+		} else {
+			SESSION_REQUESTS.delete(session);
+		}
+	};
+}
+
+/** The conversation an engine session belongs to: the lead's own id. */
+export function xollamaConversationOf(session: string): string {
+	const cut = session.search(/~agent-|~teammate-|:swarm:/);
+	return cut < 0 ? session : session.slice(0, cut);
+}
+
+/**
+ * A turn refused for room, where the room is held by an idle session of the
+ * same conversation: those reservations are given back and the caller sends
+ * the turn again.
+ *
+ * A session keeps its whole window reserved while it is idle, and on a server
+ * with room for one window that makes a lead and its agent exclude each
+ * other. Run wsdjr (pandorum, 2026-10-12, 96,000 of 96,000): the agent's
+ * first turn was refused nine times over 5m41s behind a lead that was doing
+ * nothing but waiting for it, until the server's idle timeout let it in; an
+ * hour later the lead was woken twice, was refused behind the agent -- the
+ * second time an agent that had been stopped and was only being kept -- and
+ * the run ended on the refusal.
+ *
+ * Only an idle session yields: one with a request running is never closed,
+ * so two that are both working take turns by waiting, as before. Sessions of
+ * another conversation are never touched. What it costs is the prompt read
+ * again on the closed session's next turn.
+ */
+async function yieldIdleWindows(
+	response: Response,
+	turn: { session: string; need: number; root: string },
+	baseFetch: typeof fetch,
+	logger: BasicLogger | undefined,
+): Promise<boolean> {
+	const free = largestAdmissible(response) ?? 0;
+	const conversation = xollamaConversationOf(turn.session);
+	const idle = [...SESSION_WINDOWS].filter(
+		([session, held]) =>
+			session !== turn.session &&
+			held.root === turn.root &&
+			xollamaConversationOf(session) === conversation &&
+			(SESSION_REQUESTS.get(session) ?? 0) === 0,
+	);
+	const held = idle.reduce((sum, [, entry]) => sum + entry.window, 0);
+	if (free >= turn.need || free + held < turn.need) {
+		return false;
+	}
+	let freed = 0;
+	for (const [session, entry] of idle) {
+		if (free + freed >= turn.need) {
+			break;
+		}
+		// Checked again: a close is awaited, and the session may have begun a
+		// turn while the one before it was being closed.
+		if ((SESSION_REQUESTS.get(session) ?? 0) > 0) {
+			continue;
+		}
+		SESSION_WINDOWS.delete(session);
+		let found = false;
+		try {
+			found = (
+				await createPolykvClient({
+					baseUrl: xollamaEngineRoot(entry.root, entry.model),
+					fetch: xollamaEngineFetch(baseFetch),
+				}).closeSessionReport(session)
+			).found;
+		} catch {
+			found = false;
+		}
+		if (!found) {
+			continue;
+		}
+		freed += entry.window;
+		logger?.log(
+			`[xollama] ${turn.session} had no room for its turn (${turn.need} tokens, ${free} free): ${session}, of the same conversation, was idle with ${entry.window} tokens reserved. The reservation was released; its next turn re-reads its prompt.`,
+		);
+	}
+	return freed > 0 && free + freed >= turn.need;
 }
 
 /** `response`, calling `done` once when its body ends, fails or is dropped. */
@@ -1312,6 +1421,9 @@ export function withXollamaRequestFields(
 			| undefined;
 		/** The conversation this request belongs to, while it runs. */
 		let conversationKey: string | undefined;
+		/** The window a turn of a session asks for, and of which model. */
+		let turnNeed: number | undefined;
+		let turnModel: string | undefined;
 		try {
 			const parsed = JSON.parse(body) as Record<string, unknown>;
 			const original = parsed.messages;
@@ -1442,6 +1554,14 @@ export function withXollamaRequestFields(
 				if (session !== undefined && !isDelegatedEngineSession(session)) {
 					conversationKey = leadKey ?? session;
 				}
+				if (
+					session !== undefined &&
+					!placedOutside &&
+					typeof parsed.model === "string"
+				) {
+					turnModel = parsed.model;
+					turnNeed = placement?.num_ctx_min ?? placement?.num_ctx;
+				}
 				// A call with no conversation behind it: its own exact booking, so
 				// a refusal is answered at once. See `SIDE_CALL_SLACK_TOKENS`.
 				let sideNeed: number | undefined;
@@ -1539,13 +1659,38 @@ export function withXollamaRequestFields(
 				"[xollama] request body is not JSON; sent without xOllama fields",
 			);
 		}
-		const requestEnded =
+		const conversationEnded =
 			conversationKey !== undefined
 				? conversationRequestStarted(conversationKey)
+				: undefined;
+		const sessionEnded =
+			session !== undefined ? sessionRequestStarted(session) : undefined;
+		const requestEnded =
+			conversationEnded !== undefined || sessionEnded !== undefined
+				? () => {
+						conversationEnded?.();
+						sessionEnded?.();
+					}
 				: undefined;
 		let response: Response;
 		try {
 			response = await baseFetch(input, { ...init, headers, body });
+			if (
+				response.status === 429 &&
+				side === undefined &&
+				session !== undefined &&
+				root !== undefined &&
+				turnNeed !== undefined &&
+				(await yieldIdleWindows(
+					response,
+					{ session, need: turnNeed, root },
+					baseFetch,
+					options?.logger,
+				))
+			) {
+				await response.body?.cancel().catch(() => undefined);
+				response = await baseFetch(input, { ...init, headers, body });
+			}
 			if (side !== undefined && root !== undefined) {
 				response = await settleSideCall(response, side, {
 					root,
@@ -1571,6 +1716,17 @@ export function withXollamaRequestFields(
 			Number.isInteger(granted) &&
 			granted > 0
 		) {
+			if (
+				session !== undefined &&
+				root !== undefined &&
+				turnModel !== undefined
+			) {
+				SESSION_WINDOWS.set(session, {
+					window: granted,
+					root,
+					model: turnModel,
+				});
+			}
 			recordPolykvGrantedWindow(windowSession, granted, {
 				...(asked !== undefined ? { asked } : {}),
 				...(sharedAboveBudget !== undefined
