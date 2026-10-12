@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentToolContext } from "@cline/shared";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSddTool } from "../../extensions/tools/sdd-tool";
 import { SddEngine, SddRuleError } from "./sdd-engine";
 
@@ -13,6 +13,13 @@ const task = (title: string) => ({
 	verify: "npm test",
 	expect: "all tests pass",
 });
+
+// Every step here is a SQLite commit and a markdown file written to a fresh
+// temp folder. On a Windows runner one test of this file took 49 s where the
+// next run took 1 s (sdk-test 38254469634 against 38255464811): the machine,
+// not the engine. The limit is for the engine hanging, and stays far from
+// how long a slow disk makes a correct test take.
+vi.setConfig({ testTimeout: 120_000 });
 
 describe("the spec-driven engine", () => {
 	let root: string;
