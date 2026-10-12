@@ -1128,6 +1128,8 @@ export interface AgentConfig {
 		| undefined;
 	/** See `AgentRuntimeConfig.recoverTurnFault`. */
 	recoverTurnFault?: TurnFaultRecovery;
+	/** See `AgentRuntimeConfig.recoverTurnFaultKinds`. */
+	recoverTurnFaultKinds?: readonly ("refusal" | "transport")[];
 	/**
 	 * Optional Telemetry service for emitting structured events about agent execution to configured telemetry backends.
 	 */

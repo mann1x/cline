@@ -430,3 +430,59 @@ describe("a turn the engine evicted", () => {
 		).toBe(true);
 	});
 });
+
+/**
+ * pandorum, 2026-10-12, run wsdjr: the lead was woken beside an agent that
+ * held the server's only window, its turn was refused once, and the run ended
+ * on "admission rejected" with the agent's work unread. The lead waits out a
+ * refusal now -- and only a refusal.
+ */
+describe("a recovery asked about refusals only", () => {
+	const refused =
+		"admission rejected: context allocation exhausted (largest admissible 0 < num_ctx_min 96000)";
+
+	it("waits out a refusal and sends the turn again", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{
+					type: "finish",
+					reason: "error",
+					error: refused,
+					errorClass: "rate_limited",
+				} as AgentModelEvent,
+			],
+			() => finishOk("done"),
+		]);
+		const recover = vi.fn(async () => true);
+		const runtime = new AgentRuntime({
+			model,
+			recoverTurnFault: recover,
+			recoverTurnFaultKinds: ["refusal"],
+		});
+
+		const result = await runtime.run("go");
+
+		expect(result.status).toBe("completed");
+		expect(recover).toHaveBeenCalledTimes(1);
+		expect(recover.mock.calls[0]?.[0]).toMatchObject({ kind: "refusal" });
+	});
+
+	it("is not asked about a dropped connection, which fails as it did", async () => {
+		const model = new ScriptedModel([
+			() => [
+				{ type: "finish", reason: "error", error: "server is shutting down" },
+			],
+		]);
+		const recover = vi.fn(async () => true);
+		const runtime = new AgentRuntime({
+			model,
+			recoverTurnFault: recover,
+			recoverTurnFaultKinds: ["refusal"],
+		});
+
+		const result = await runtime.run("go");
+
+		expect(recover).not.toHaveBeenCalled();
+		expect(result.status).toBe("failed");
+	});
+});

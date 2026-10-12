@@ -1879,6 +1879,15 @@ export class AgentRuntime {
 		return { text: text.trim() };
 	}
 
+	/** Whether the host's `recoverTurnFault` is the one to wait this fault out. */
+	private recoversTurnFault(kind: "refusal" | "transport"): boolean {
+		if (!this.config.recoverTurnFault) {
+			return false;
+		}
+		const kinds = this.config.recoverTurnFaultKinds;
+		return kinds === undefined || kinds.includes(kind);
+	}
+
 	private async noteDiscardedReasoning(
 		message: AgentMessage,
 		windowBound: boolean,
@@ -3009,7 +3018,7 @@ export class AgentRuntime {
 			} else {
 				return giveUp();
 			}
-			if (!kind) {
+			if (!kind || !this.recoversTurnFault(kind)) {
 				return giveUp();
 			}
 			const sessionId = trimNonEmpty(this.config.sessionId);
@@ -3213,10 +3222,8 @@ export class AgentRuntime {
 		// `recoverTurnFault` waits for the server itself rather than re-dialling
 		// on a timer, and three quick requests at a server that just refused
 		// one are what it exists to avoid.
-		if (
-			this.config.recoverTurnFault &&
-			classifyTurnFault(this.state.lastError ?? "", errorClass)
-		) {
+		const fault = classifyTurnFault(this.state.lastError ?? "", errorClass);
+		if (fault && this.recoversTurnFault(fault)) {
 			return false;
 		}
 		// Set from the model boundary's typed `isRetryable` flag when available,

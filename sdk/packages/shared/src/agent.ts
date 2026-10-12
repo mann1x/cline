@@ -1124,6 +1124,15 @@ export interface AgentRuntimeConfig {
 	 * restart or a busy pool is not the job failing.
 	 */
 	recoverTurnFault?: TurnFaultRecovery;
+	/**
+	 * Which faults `recoverTurnFault` is asked about. Absent: both.
+	 *
+	 * The lead takes refusals only. A refusal says the server is there and
+	 * full, and waiting is the whole answer; a dropped connection can also be
+	 * a wrong address, and a lead that waited on one without end would be a
+	 * chat that never says so. Those keep the bounded retry they had.
+	 */
+	recoverTurnFaultKinds?: readonly ("refusal" | "transport")[];
 	// Optional host callback used by interactive sessions to inject a queued
 	// user steering message between agent loop iterations, before the next
 	// model request.

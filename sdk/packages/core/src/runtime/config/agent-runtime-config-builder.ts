@@ -129,6 +129,7 @@ export function createAgentRuntimeConfig(
 		// On the list for the same reason: a delegated agent's retry of a
 		// server restart or an admission refusal lives here.
 		recoverTurnFault: agentConfig.recoverTurnFault,
+		recoverTurnFaultKinds: agentConfig.recoverTurnFaultKinds,
 		onImageInputUnsupported: agentConfig.onImageInputUnsupported,
 		describeImages: agentConfig.describeImages,
 		alwaysDescribeImages: agentConfig.alwaysDescribeImages,

@@ -106,6 +106,7 @@ import {
 	historyUsedTeammates,
 	TEAMMATES_OFF_RESTORE_NOTE,
 } from "../../extensions/tools/team/teammates-off";
+import { createTurnFaultRecovery } from "../../extensions/tools/team/turn-fault-recovery";
 import type { HookEventPayload } from "../../hooks";
 import { buildTelemetryAgentIdentity } from "../../services/agent-events";
 import { resolveWorkspacePath } from "../../services/config";
@@ -2401,6 +2402,20 @@ export class LocalRuntimeHost implements RuntimeHost {
 			execution: configWithProvider.execution,
 			prepareTurn,
 			condenseDiscardedReasoning: condenseLeadDiscardedReasoning,
+			// The lead waits out a refusal as its agents do. It had no way to:
+			// woken beside an agent that held the server's only window, its
+			// turn was refused once and the run ended on "admission rejected"
+			// with the agent's work unread (pandorum, 2026-10-12, twice in one
+			// run). Refusals only -- see `recoverTurnFaultKinds`.
+			recoverTurnFault: createTurnFaultRecovery({
+				label: "lead",
+				baseUrl: () => providerConfig.baseUrl,
+				headers: () => providerConfig.headers,
+				...(configWithProvider.logger
+					? { logger: configWithProvider.logger }
+					: {}),
+			}),
+			recoverTurnFaultKinds: ["refusal"],
 			tools: toolsWithStandDown,
 			modelTools: runtime.modelTools,
 			hooks: bootstrap.hooks,
