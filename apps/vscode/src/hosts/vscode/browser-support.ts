@@ -1,8 +1,11 @@
-import type { BrowserDriver } from "@cline/core"
+import { existsSync } from "node:fs"
+import * as path from "node:path"
+import type { BrowserDriver, RenderDriver } from "@cline/core"
 import * as vscode from "vscode"
 import { StateManager } from "@/core/storage/StateManager"
 import { CONFIG_SECTION } from "@/registry"
 import { BrowserSession } from "@/services/browser/BrowserSession"
+import { renderWithChrome } from "@/services/browser/render-page"
 
 /**
  * The VS Code half of `browser`.
@@ -44,4 +47,38 @@ export function createVscodeBrowserDriver(): BrowserDriver {
  */
 export function isBrowserToolEnabled(): boolean {
 	return vscode.workspace.getConfiguration(CONFIG_SECTION).get<boolean>("browserTool") !== false
+}
+
+/**
+ * Where Mermaid is. The build copies it beside the bundle (`copyMermaid` in
+ * `esbuild.mjs`); run from source, it is where the webview's packages are.
+ */
+function findMermaidScript(): string | undefined {
+	return [
+		path.join(__dirname, "mermaid", "mermaid.min.js"),
+		path.join(__dirname, "..", "webview-ui", "node_modules", "mermaid", "dist", "mermaid.min.js"),
+	].find((candidate) => existsSync(candidate))
+}
+
+/**
+ * The VS Code half of `render_image`.
+ *
+ * The same Chrome `browser` finds: the one named in the browser settings, then
+ * an installed one, then the one downloaded on first use. Not the same switch:
+ * `cline.browserTool` turns off a tool that goes to pages someone else wrote,
+ * and this one draws a page the model wrote.
+ */
+export function createVscodeRenderDriver(): RenderDriver {
+	return {
+		render: async (request) => {
+			const state = StateManager.get()
+			const { path: executablePath } = await new BrowserSession(state, false).getDetectedChromePath()
+			const customArgs = state.getGlobalSettingsKey("browserSettings").customArgs
+			return renderWithChrome(request, {
+				executablePath,
+				mermaidScriptPath: findMermaidScript(),
+				args: (customArgs?.match(/"[^"]+"|\S+/g) ?? []).map((arg) => arg.replace(/^"(.*)"$/, "$1")),
+			})
+		},
+	}
 }

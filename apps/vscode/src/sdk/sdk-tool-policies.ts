@@ -32,7 +32,7 @@ export function buildToolPolicies(
 	set(["editor", "replace_in_file", "write_to_file", "apply_patch", "delete_file", "sed"])
 	set(["run_commands", "execute_command"])
 	set(["fetch_web_content", "web_fetch", "web_search"])
-	set(["browser", "browser_action"])
+	set(["browser", "browser_action", "render_image"])
 
 	if (mcpHub) {
 		for (const server of mcpHub.getServers()) {
@@ -145,7 +145,9 @@ function isWebFetchTool(toolName: string): boolean {
  * with one checkbox for both they could not have it.
  */
 function isBrowserTool(toolName: string): boolean {
-	return toolName === "browser" || toolName === "browser_action"
+	// `render_image` runs a page too. The model wrote that page, but a page can
+	// ask the network for anything, so it answers to the same box.
+	return toolName === "browser" || toolName === "browser_action" || toolName === "render_image"
 }
 
 /**

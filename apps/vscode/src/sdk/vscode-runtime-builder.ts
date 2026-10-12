@@ -8,12 +8,13 @@ import {
 	createMcpTools,
 	createMediaTools,
 	createMemoryTools,
+	createRenderImageTool,
 	createSddTools,
 	createWebScrapeTools,
 	type MediaSessionProvider,
 } from "@cline/core"
 import type { AgentTool, AgentToolContext } from "@cline/shared"
-import { createVscodeBrowserDriver, isBrowserToolEnabled } from "@/hosts/vscode/browser-support"
+import { createVscodeBrowserDriver, createVscodeRenderDriver, isBrowserToolEnabled } from "@/hosts/vscode/browser-support"
 import { loadDocumentForDiagnostics, resolveLintCommand, runLintCommand } from "@/hosts/vscode/check-file-support"
 import { createVscodeCodeIntelProvider } from "@/hosts/vscode/code-intel-support"
 import { writeGeneratedImage } from "@/hosts/vscode/image-generation-support"
@@ -186,6 +187,20 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 	} else {
 		Logger.log("[VscodeRuntimeTools] browser tool omitted; cline.browserTool is false")
 	}
+
+	// `render_image` draws what the model writes (HTML, SVG, Mermaid) in the
+	// same Chrome, started for the render and closed after it. It needs no
+	// endpoint and no model, which is why it is here and not with the media
+	// tools: it is the tool for a screen or a diagram on a machine with no
+	// image model at all, and on one that has it, for anything with words in it.
+	tools.push(
+		createRenderImageTool({
+			cwd: options?.cwd ?? process.cwd(),
+			createDriver: createVscodeRenderDriver,
+			writeFile: writeGeneratedImage,
+			onError: (message, error) => Logger.error(`${message}:`, error),
+		}),
+	)
 
 	// `generate_image` is the one tool here that is off by default, because it
 	// is the one with nowhere to go by default: there is no image endpoint on a

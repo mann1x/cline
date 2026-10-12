@@ -290,7 +290,9 @@ In each case the alternative is `search_codebase`, which is the thing this tool 
 # tool: generate_image
 Generate an image from a text description and save it into the workspace. Call shape: `generate_image(prompt: string, path?: string, size?: string)`.
 
-Use it for visual work you would otherwise have to ask the user to do elsewhere: an app icon, a placeholder texture or sprite, a logo, a background, or a mockup of a layout or theme you are about to build.
+Use it for visual work you would otherwise have to ask the user to do elsewhere: an app icon, a placeholder texture or sprite, a logo, a background, an illustration or a photograph.
+
+It paints pixels: it cannot write legible text, and a picture of an interface or a diagram made this way has garbled labels. For a screen, a mockup, a workflow diagram, a chart or anything else with words in it, write it as HTML, SVG or Mermaid and use `render_image` when you have it.
 
 The image is written to a file and, if you can see images, returned to you as well — so you can look at what you made and generate again with a changed prompt if it is wrong.
 
@@ -302,6 +304,9 @@ The image is written to a file and, if you can see images, returned to you as we
 This costs real time — seconds to a minute per image — and on a hosted backend it costs money. Generate one image and look at it before generating variations.
 
 # tool: edit_image
+{{DEFAULT}}
+
+# tool: render_image
 {{DEFAULT}}
 
 # tool: transcribe_audio

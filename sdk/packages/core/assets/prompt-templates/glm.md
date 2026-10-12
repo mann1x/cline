@@ -184,6 +184,9 @@ Output: plain text, one result per line as `file:line:column` followed by the so
 # tool: edit_image
 {{DEFAULT}}
 
+# tool: render_image
+{{DEFAULT}}
+
 # tool: transcribe_audio
 {{DEFAULT}}
 

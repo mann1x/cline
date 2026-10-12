@@ -19,6 +19,8 @@ import {
 	JEV_TOOL_NAME,
 	LIST_FILES_TOOL_INPUT_SCHEMA,
 	LIST_FILES_TOOL_NAME,
+	RENDER_IMAGE_TOOL_DESCRIPTION,
+	RENDER_IMAGE_TOOL_NAME,
 	SYNTHESIZE_SPEECH_TOOL_DESCRIPTION,
 	SYNTHESIZE_SPEECH_TOOL_NAME,
 	summarizeToolCallSignatures,
@@ -71,6 +73,10 @@ describe("host tool descriptions in default.md", () => {
 
 	it("reproduces edit_image verbatim", () => {
 		expect(shipped?.tools[EDIT_IMAGE_TOOL_NAME]).toBe(EDIT_IMAGE_TOOL_DESCRIPTION.trim())
+	})
+
+	it("reproduces render_image verbatim", () => {
+		expect(shipped?.tools[RENDER_IMAGE_TOOL_NAME]).toBe(RENDER_IMAGE_TOOL_DESCRIPTION.trim())
 	})
 
 	it("reproduces the audio tools verbatim", () => {

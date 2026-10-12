@@ -45,6 +45,10 @@ import {
 	GENERATE_IMAGE_TOOL_NAME,
 } from "../tools/image-generation";
 import { JEV_TOOL_INPUT_SCHEMA, JEV_TOOL_NAME } from "../tools/jev";
+import {
+	RENDER_IMAGE_TOOL_INPUT_SCHEMA,
+	RENDER_IMAGE_TOOL_NAME,
+} from "../tools/render-image";
 import { createReadAgentReportTool } from "../tools/team/agent-reports";
 import { createAgentsStatusTool } from "../tools/team/agent-status";
 import { createLeadAgentTools } from "../tools/team/lead-agent-tools";
@@ -91,6 +95,10 @@ export const HOST_TOOL_INPUT_SCHEMAS: readonly {
 	{
 		name: EDIT_IMAGE_TOOL_NAME,
 		inputSchema: EDIT_IMAGE_TOOL_INPUT_SCHEMA,
+	},
+	{
+		name: RENDER_IMAGE_TOOL_NAME,
+		inputSchema: RENDER_IMAGE_TOOL_INPUT_SCHEMA,
 	},
 	{
 		name: TRANSCRIBE_AUDIO_TOOL_NAME,

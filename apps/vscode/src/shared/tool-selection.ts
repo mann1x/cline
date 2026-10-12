@@ -124,6 +124,13 @@ export const SELECTABLE_TOOLS: readonly SelectableTool[] = [
 		group: "other",
 	},
 	{
+		name: "render_image",
+		label: "render_image",
+		summary: "Draws HTML, SVG or a Mermaid diagram the model writes into an image file.",
+		tokens: 694,
+		group: "other",
+	},
+	{
 		name: "sed",
 		label: "sed",
 		summary: "Stream edits, with a preview mode and an in-place mode.",

@@ -212,7 +212,9 @@ Output: plain text, one result per line as `file:line:column` followed by that s
 An empty answer is a real answer once the symbol resolved: for `definition`, `references`, `implementations`, `type_definition`, `callers` and `hover` the server understood the symbol and nothing matched, so a text search for the same question will not find more. `workspace_symbols` is the exception, and says so when it comes back empty: it reads a project-wide index that covers the languages a server is installed for and does not index script embedded in `.html` or other template files, so nothing there is not proof of nothing anywhere. And when the file does not parse, every answer about it opens with that line — while it is there, the server is answering from a partial parse and you are reading guesses.
 
 # tool: generate_image
-Generate an image from a text description and save it into the workspace. Use it for visual work you would otherwise have to ask the user to do elsewhere: an app icon, a placeholder texture or sprite, a logo, a background, or a mockup of a layout or theme you are about to build.
+Generate an image from a text description and save it into the workspace. Use it for visual work you would otherwise have to ask the user to do elsewhere: an app icon, a placeholder texture or sprite, a logo, a background, an illustration or a photograph.
+
+It paints pixels: it cannot write legible text, and a picture of an interface or a diagram made this way has garbled labels. For a screen, a mockup, a workflow diagram, a chart or anything else with words in it, write it as HTML, SVG or Mermaid and use `render_image` when you have it.
 
 The image is written to a file and, if you can see images, returned to you as well — so you can look at what you made and generate again with a changed prompt if it is wrong.
 
@@ -236,6 +238,22 @@ Arguments:
 - `size` — `WxH` in pixels, e.g. `1024x1024`. Optional, and the backend may round it or keep the source's size.
 
 How far an edit goes depends on the backend: some follow the instruction, others redraw over the source and only make small changes. Look at the result before relying on it. This costs real time — seconds to a minute per image — and on a hosted backend it costs money.
+
+# tool: render_image
+Render HTML, SVG or a Mermaid diagram that you write into an image file in the workspace. Use it for anything with text or structure in it: application screens and mockups, workflow and architecture diagrams, charts, annotated figures. An image model cannot write legible text or draw a real interface; this draws exactly what you write.
+
+The image is saved and, if you can see images, returned to you, so you can check the layout and render again.
+
+- `source` — what to draw: HTML with its CSS (a fragment or a whole document), an SVG document, or Mermaid notation (`flowchart LR`, `sequenceDiagram`, ...). Relative URLs resolve against the workspace root, so a screen of the application can link the project's own stylesheet and images: reuse its markup and class names with sample data and the picture is the real interface.
+- `kind` — `html`, `svg` or `mermaid`. Optional; read from the source.
+- `path` — where to save, relative to the workspace: `.png`, or `.svg` to keep an SVG or Mermaid drawing as vectors. Optional; defaults to a PNG under `.cline/rendered-images/`.
+- `width`, `height` — page size in CSS pixels. Optional. Leave both out and the image is exactly as large as what was drawn; `width` alone fixes where the layout wraps.
+- `scale` — pixel density, 1 to 4, default 2.
+- `crop` — `"x,y,width,height"` in CSS pixels, to keep one region of the page.
+- `background` — a CSS colour, or `transparent`.
+- `theme` — Mermaid only: `default`, `dark`, `neutral` or `forest`.
+
+A README on GitHub renders a ```mermaid block as it is; render a diagram to a file when it must show somewhere that does not. Remote fonts, scripts and images load only if the machine reaches them quickly: inline what matters.
 
 # tool: transcribe_audio
 Transcribe an audio file in the workspace to text. Use it to read a recording you would otherwise have to ask the user to describe: a meeting, a voice note, the audio of a demo.

@@ -194,6 +194,13 @@ export {
 	resolveMediaTool,
 } from "../../../../sdk/packages/core/src/extensions/tools/media-tools"
 export { createMemoryTools } from "../../../../sdk/packages/core/src/extensions/tools/memory-tools"
+export {
+	createRenderImageTool,
+	RENDER_IMAGE_TOOL_DESCRIPTION,
+	RENDER_IMAGE_TOOL_INPUT_SCHEMA,
+	RENDER_IMAGE_TOOL_NAME,
+	RENDER_ROOT_ID,
+} from "../../../../sdk/packages/core/src/extensions/tools/render-image"
 export { createSddTools } from "../../../../sdk/packages/core/src/extensions/tools/sdd-tool"
 // From source: the host names a batch's rows with it and the tool names the
 // agents with it, and the two have to agree.

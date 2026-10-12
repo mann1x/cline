@@ -284,6 +284,26 @@ function copyOfficeOxide(destDir) {
 }
 
 /**
+ * Put Mermaid beside the bundle, for `render_image`.
+ *
+ * The tool draws a diagram in a headless Chrome, and the page it draws in needs
+ * the library as a file to load. The webview already depends on it, so this is
+ * that copy and no second version. Missing is not fatal: HTML and SVG still
+ * render, and a diagram is refused with the reason.
+ */
+function copyMermaid(destDir) {
+	const from = path.join(__dirname, "webview-ui", "node_modules", "mermaid", "dist", "mermaid.min.js")
+	if (!fs.existsSync(from)) {
+		console.warn("[mermaid] mermaid.min.js not found; render_image will not draw diagrams")
+		return
+	}
+	const into = path.join(destDir, "mermaid")
+	fs.mkdirSync(into, { recursive: true })
+	fs.copyFileSync(from, path.join(into, "mermaid.min.js"))
+	console.log(`[mermaid] ${(fs.statSync(from).size / 1024 / 1024).toFixed(1)} MB -> ${into}`)
+}
+
+/**
  * Put the skills that ship with the product beside the bundle.
  *
  * Core keeps them in `assets/skills/`, one folder per skill, and looks for
@@ -361,6 +381,7 @@ async function main() {
 		copyGrammars(path.resolve(__dirname, destDir))
 		copyOfficeOxide(path.resolve(__dirname, destDir))
 		copyBundledSkills(path.resolve(__dirname, destDir))
+		copyMermaid(path.resolve(__dirname, destDir))
 		await writeDocumentReaderAssets(path.resolve(__dirname, destDir))
 		await buildDocumentReaderChild(path.resolve(__dirname, destDir))
 	}

@@ -107,6 +107,7 @@ const HOST_TOOL_NAMES = [
 	"browser",
 	"generate_image",
 	"edit_image",
+	"render_image",
 	"transcribe_audio",
 	"synthesize_speech",
 	"generate_video",

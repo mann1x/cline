@@ -1418,6 +1418,22 @@ export {
 	referencedCredentialNames,
 	resolveCredentialEnv,
 } from "./extensions/tools/qa-credentials";
+export {
+	buildRenderDocument,
+	createRenderImageTool,
+	detectRenderKind,
+	parseCrop,
+	RENDER_IMAGE_TOOL_DESCRIPTION,
+	RENDER_IMAGE_TOOL_INPUT_SCHEMA,
+	RENDER_IMAGE_TOOL_NAME,
+	RENDER_ROOT_ID,
+	type RenderDriver,
+	type RenderImageToolOptions,
+	type RenderKind,
+	type RenderRegion,
+	type RenderRequest,
+	type RenderResult,
+} from "./extensions/tools/render-image";
 // The spec-driven engine and its one tool.
 export {
 	createSddTool,

@@ -241,6 +241,9 @@ Output: plain text, one result per line as `file:line:column` followed by that s
 # tool: edit_image
 {{DEFAULT}}
 
+# tool: render_image
+{{DEFAULT}}
+
 # tool: transcribe_audio
 {{DEFAULT}}
 

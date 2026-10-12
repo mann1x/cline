@@ -9,6 +9,7 @@ import {
 	createBuiltinTools,
 	createCheckFileTool,
 	createListFilesTool,
+	createRenderImageTool,
 	MAX_READ_REFUSAL_CHARS,
 } from "../../node_modules/@cline/core/dist/index.js"
 import { DEFAULT_READ_LIMIT_CHARS, SELECTABLE_TOOLS, TOOL_GROUPS } from "./tool-selection"
@@ -54,6 +55,7 @@ function buildEveryTool(): WireTool[] {
 		createAskLspTool({ ...stub, provider: { readLine: async () => undefined } as never }),
 		createListFilesTool({ ...stub, createLister: async () => ({ roots: () => [] }) as never }),
 		createBrowserTool({ ...stub, createDriver: async () => ({}) as never }),
+		createRenderImageTool({ ...stub, createDriver: async () => ({}) as never, writeFile: async () => {} }),
 	]
 }
 
