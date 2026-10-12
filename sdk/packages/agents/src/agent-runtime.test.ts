@@ -5952,6 +5952,59 @@ describe("a turn cut off at the output cap", () => {
 		).toBe(true);
 	});
 
+	it("lets the host ask the conversation itself for a discarded turn's note", async () => {
+		// A note asked for in a request of its own needs room beside the
+		// conversation on the server; asked as the conversation's next turn it
+		// is the same request plus one message, and it is never kept.
+		const condenseDiscardedReasoning = vi.fn(
+			async (input: {
+				continueConversation?: (ask: {
+					instruction: string;
+					maxTokens: number;
+				}) => Promise<{ text: string }>;
+			}) => {
+				const answered = await input.continueConversation?.({
+					instruction: "WRITE THE NOTE",
+					maxTokens: 500,
+				});
+				return { note: answered?.text };
+			},
+		);
+		const model = new ScriptedModel([
+			() => [
+				{ type: "reasoning-delta", text: "a long think that hit the cap" },
+				{ type: "finish", reason: "max-tokens" },
+			],
+			() => [
+				{ type: "text-delta", text: " where I had got to " },
+				{ type: "finish", reason: "stop" },
+			],
+			() => [
+				{ type: "text-delta", text: "short answer" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model, condenseDiscardedReasoning });
+
+		const result = await runtime.run("Hi");
+
+		expect(result.status).toBe("completed");
+		expect(model.requests).toHaveLength(3);
+		const [turn, asked, retry] = model.requests;
+		// The turn's own request, and one message after it.
+		expect(asked.messages.slice(0, -1)).toEqual(turn.messages);
+		const last = asked.messages.at(-1);
+		expect(last?.role).toBe("user");
+		expect(JSON.stringify(last?.content)).toContain("WRITE THE NOTE");
+		expect(asked.options?.maxTokens).toBe(500);
+		expect(asked.options?.toolChoice).toBe("none");
+		// The question is not part of the conversation; its answer is, as the
+		// note the retry carries.
+		expect(JSON.stringify(retry.messages)).not.toContain("WRITE THE NOTE");
+		expect(JSON.stringify(retry.messages)).toContain("where I had got to");
+		expect(JSON.stringify(result.messages)).not.toContain("WRITE THE NOTE");
+	});
+
 	it("says so when a discarded turn had nothing to condense", async () => {
 		// Reachable, and not the same as an empty turn: a message with parts in it
 		// but no reasoning and no partial reply gets past the empty-turn recovery

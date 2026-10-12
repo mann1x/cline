@@ -859,6 +859,114 @@ describe("salvaging a turn discarded at the output cap", () => {
 		expect(summarizerCalls()).toHaveLength(1);
 	});
 
+	describe("asked of the conversation itself", () => {
+		const reasoning = "the parser gives up at line 90";
+
+		it("writes both notes as the conversation's next turns, with no request of its own", async () => {
+			summarizerCalls().length = 0;
+			const asked: Array<{ instruction: string; maxTokens: number }> = [];
+			const writer = createCappedThinkingNoteWriter(config);
+
+			const result = await writer?.({
+				reasoning,
+				windowBound: false,
+				continuationRoomTokens: 40_000,
+				continueConversation: async (ask) => {
+					asked.push(ask);
+					return { text: `continued ${asked.length}` };
+				},
+			});
+
+			expect(result?.note).toBe("continued 1");
+			expect(result?.retrospective).toBe("continued 2");
+			expect(summarizerCalls()).toHaveLength(0);
+			expect(asked[0].instruction).toContain(reasoning);
+			expect(asked[0].maxTokens).toBeGreaterThan(0);
+		});
+
+		it("asks in a request of its own when the note does not fit what is left", async () => {
+			summarizerCalls().length = 0;
+			const continueConversation = vi.fn(async () => ({ text: "continued" }));
+			const writer = createCappedThinkingNoteWriter(config);
+
+			const result = await writer?.({
+				reasoning,
+				windowBound: true,
+				continuationRoomTokens: 1_000,
+				continueConversation,
+			});
+
+			expect(continueConversation).not.toHaveBeenCalled();
+			expect(result?.note).toBe("the note");
+			expect(summarizerCalls()).toHaveLength(1);
+		});
+
+		it("does not continue on room nobody measured", async () => {
+			summarizerCalls().length = 0;
+			const continueConversation = vi.fn(async () => ({ text: "continued" }));
+			const writer = createCappedThinkingNoteWriter(config);
+
+			await writer?.({ reasoning, windowBound: true, continueConversation });
+
+			expect(continueConversation).not.toHaveBeenCalled();
+			expect(summarizerCalls()).toHaveLength(1);
+		});
+
+		it.each([
+			["fails", async () => Promise.reject(new Error("503"))],
+			["says nothing", async () => ({ text: "" })],
+		])("falls back to a request of its own when the conversation %s", async (_label, answer) => {
+			summarizerCalls().length = 0;
+			const writer = createCappedThinkingNoteWriter(config);
+
+			const result = await writer?.({
+				reasoning: `${reasoning} (${_label})`,
+				windowBound: true,
+				continuationRoomTokens: 40_000,
+				continueConversation: answer as never,
+			});
+
+			expect(result?.note).toBe("the note");
+			expect(summarizerCalls()).toHaveLength(1);
+		});
+
+		it("does not continue with a summarizer model of its own", async () => {
+			summarizerCalls().length = 0;
+			const continueConversation = vi.fn(async () => ({ text: "continued" }));
+			const writer = createCappedThinkingNoteWriter({
+				...config,
+				summarizer: { providerId: "ollama", modelId: "other" },
+			} as never);
+
+			await writer?.({
+				reasoning: `${reasoning} (separate)`,
+				windowBound: true,
+				continuationRoomTokens: 40_000,
+				continueConversation,
+			});
+
+			expect(continueConversation).not.toHaveBeenCalled();
+		});
+
+		it("does not continue on a provider that keeps no prefix", async () => {
+			summarizerCalls().length = 0;
+			const continueConversation = vi.fn(async () => ({ text: "continued" }));
+			const writer = createCappedThinkingNoteWriter({
+				enabled: true,
+				providerConfig: { providerId: "anthropic", modelId: "m" },
+			});
+
+			await writer?.({
+				reasoning: `${reasoning} (no prefix)`,
+				windowBound: true,
+				continuationRoomTokens: 40_000,
+				continueConversation,
+			});
+
+			expect(continueConversation).not.toHaveBeenCalled();
+		});
+	});
+
 	it("pays for the same discarded turn once", async () => {
 		summarizerCalls().length = 0;
 		const writer = createCappedThinkingNoteWriter(config);

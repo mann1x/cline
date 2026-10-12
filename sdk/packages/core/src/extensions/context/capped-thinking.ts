@@ -39,6 +39,7 @@ import {
 	resolveSummarizerConfig,
 	truncateText,
 } from "./compaction-shared";
+import { continuationCompactionExcluded } from "./continuation-compaction";
 
 /**
  * How close to the budget counts as having hit it.
@@ -700,6 +701,91 @@ type PrepareTurn = (
 	context: never,
 ) => PrepareTurnResult | Promise<PrepareTurnResult>;
 
+/** A request answered by the conversation itself, or `undefined` to decline. */
+type ConversationAsk = (
+	systemPrompt: string,
+	request: string,
+	maxTokens: number,
+	what: string,
+) => Promise<string | undefined>;
+
+/** Characters per token, for sizing a request before it is sent. */
+const CONTINUATION_CHARS_PER_TOKEN = 3;
+/** Slack on that sizing: the chat template's own tokens around one message. */
+const CONTINUATION_SLACK_TOKENS = 512;
+
+/**
+ * The discarded turn's notes, asked of the conversation as its next turn
+ * where that can be done (`DiscardedTurnInput.continueConversation`).
+ *
+ * Declines -- and the note is asked for in a request of its own, as before --
+ * when the runtime offered no way to continue, when a separate summarizer
+ * model is configured (it is not the conversation's model), when the provider
+ * keeps no prefix to share, and when the instruction and its answer do not fit
+ * in what the last request left of the window. A continuation that fails or
+ * says nothing declines too: a note is never lost to the attempt.
+ */
+export function createConversationAsk(
+	input: DiscardedTurnInput,
+	config: CappedThinkingCondenserConfig,
+	providerConfig: ProviderConfig,
+): ConversationAsk | undefined {
+	const continueConversation = input.continueConversation;
+	if (!continueConversation) {
+		return undefined;
+	}
+	const excluded = continuationCompactionExcluded(
+		providerConfig,
+		config.summarizer !== undefined,
+	);
+	if (excluded) {
+		config.logger?.debug?.(
+			`[capped-thinking] not asked of the conversation: ${excluded}`,
+		);
+		return undefined;
+	}
+	const room = input.continuationRoomTokens;
+	return async (systemPrompt, request, maxTokens, what) => {
+		// One user message: the conversation's own system prompt stands, so
+		// the note's instruction goes in front of what it is about.
+		const instruction = `${systemPrompt}\n\n${request}`;
+		const need =
+			Math.ceil(instruction.length / CONTINUATION_CHARS_PER_TOKEN) +
+			maxTokens +
+			CONTINUATION_SLACK_TOKENS;
+		if (room === undefined || need > room) {
+			config.logger?.log(
+				`[capped-thinking] the ${what} is asked for in a request of its own: it needs about ${need} tokens and the conversation's last request left ${room ?? "an unmeasured amount"}`,
+				{ severity: "info" },
+			);
+			return undefined;
+		}
+		try {
+			const { text } = await continueConversation({ instruction, maxTokens });
+			if (!text) {
+				config.logger?.log(
+					`[capped-thinking] the conversation answered the ${what} with nothing; asking in a request of its own`,
+					{ severity: "info" },
+				);
+				return undefined;
+			}
+			config.logger?.log(
+				`[capped-thinking] the ${what} was written as the conversation's next turn (${text.length} chars; about ${need} of ${room} free tokens)`,
+				{ severity: "info" },
+			);
+			return text;
+		} catch (error) {
+			config.logger?.log(
+				`[capped-thinking] the conversation could not answer the ${what} (${
+					error instanceof Error ? error.message : String(error)
+				}); asking in a request of its own`,
+				{ severity: "info" },
+			);
+			return undefined;
+		}
+	};
+}
+
 /**
  * Turn one capped think into the note that replaces it.
  *
@@ -715,6 +801,8 @@ async function writeCappedThinkingNote(options: {
 	providerConfig: ProviderConfig;
 	partialAnswer?: string;
 	reportUsage?: (usage: PrepareTurnUsage) => void;
+	/** Tried first: the conversation's own next turn. */
+	ask?: ConversationAsk;
 }): Promise<string> {
 	const request = buildCappedThinkingRequest({
 		thinking: options.thinking,
@@ -722,6 +810,22 @@ async function writeCappedThinkingNote(options: {
 		promptTemplate: options.config.promptTemplate,
 		...(options.partialAnswer ? { partialAnswer: options.partialAnswer } : {}),
 	});
+	if (options.ask) {
+		const continued = truncateText(
+			(
+				(await options.ask(
+					CAPPED_THINKING_SYSTEM_PROMPT,
+					request,
+					resolveCondensedThinkingOutputCap(options.providerConfig),
+					"note",
+				)) ?? ""
+			).trim(),
+			CONDENSED_THINKING_MAX_CHARS,
+		);
+		if (continued && !isDegenerateNote(continued)) {
+			return continued;
+		}
+	}
 	try {
 		// No output cap of its own. A fixed one was the whole failure: at 700
 		// tokens against a template that reasons whatever the request asks for,
@@ -866,7 +970,9 @@ export function createCappedThinkingNoteWriter(
 		if (cached !== undefined) {
 			return cached;
 		}
+		const ask = createConversationAsk(input, config, providerConfig);
 		const note = await writeCappedThinkingNote({
+			...(ask ? { ask } : {}),
 			thinking: trimmed,
 			// The reply the turn had begun writing, offered as what it had already
 			// committed to. There is never a tool call here -- a turn that made one
@@ -893,6 +999,7 @@ export function createCappedThinkingNoteWriter(
 						reasoning: trimmed,
 						config,
 						providerConfig,
+						...(ask ? { ask } : {}),
 					});
 		const result: DiscardedTurnCondensation = {
 			...(note ? { note } : {}),
@@ -918,11 +1025,28 @@ async function writeDiscardedRetrospective(options: {
 	reasoning: string;
 	config: CappedThinkingCondenserConfig;
 	providerConfig: ProviderConfig;
+	ask?: ConversationAsk;
 }): Promise<string | undefined> {
 	try {
 		const request = buildThinkingSummaryRequest({
 			reasoningText: options.reasoning,
 		});
+		if (options.ask) {
+			const continued = truncateText(
+				(
+					(await options.ask(
+						CAPPED_THINKING_RETROSPECTIVE_SYSTEM_PROMPT,
+						request,
+						resolveCondensedThinkingOutputCap(options.providerConfig),
+						"retrospective",
+					)) ?? ""
+				).trim(),
+				CONDENSED_THINKING_MAX_CHARS,
+			);
+			if (continued && !isDegenerateNote(continued)) {
+				return continued;
+			}
+		}
 		const summarizerConfig = {
 			...resolveSummarizerConfig({
 				activeProviderConfig: options.providerConfig,

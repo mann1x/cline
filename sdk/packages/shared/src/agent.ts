@@ -768,6 +768,32 @@ export interface DiscardedTurnInput {
 	 * to answer in cannot, and gets the cheap single pass.
 	 */
 	windowBound?: boolean;
+	/**
+	 * Ask the conversation itself, as its next turn: the request the discarded
+	 * turn was made with, and `instruction` as one more user message, answered
+	 * in prose with no tool call.
+	 *
+	 * A note asked for in a request of its own is a stranger to the server: it
+	 * needs room beside the conversation, and a conversation that holds its
+	 * whole window while idle leaves none, so the conversation was closed to
+	 * make room and its next turn read the whole prompt again (pandorum,
+	 * 2026-10-12: 25,221 tokens refused beside a 96,000 window). Asked this
+	 * way the server reads the instruction and nothing else, and the retry
+	 * that follows still finds the conversation where it was.
+	 *
+	 * Absent when the runtime has no request to continue. Throws when the
+	 * model call fails; the caller falls back to a request of its own.
+	 */
+	continueConversation?: (ask: {
+		instruction: string;
+		maxTokens: number;
+	}) => Promise<{ text: string }>;
+	/**
+	 * Tokens the discarded turn's request left free in the window, as far as
+	 * the runtime can vouch for: enough for the instruction and its answer, or
+	 * the caller does not continue. Absent when nothing was measured.
+	 */
+	continuationRoomTokens?: number;
 }
 
 /** What a host makes of a discarded turn. Both halves are optional. */

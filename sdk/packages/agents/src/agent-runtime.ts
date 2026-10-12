@@ -354,6 +354,9 @@ const THINKING_ONLY_RETRY_BUDGET = 3;
 /** After this many cuts running, the next request is not guarded. */
 const TOOL_INTENT_CUTS_BEFORE_STAND_DOWN = 2;
 
+/** Kept back from the window when sizing what else fits beside a request. */
+const CONTINUATION_WINDOW_RESERVE_TOKENS = 1_024;
+
 /** Tool-call markup, as the templates this fork runs write it. */
 const TOOL_CALL_MARKUP = /<\/?tool_call>|<\/function>|<function=|<\/parameter>/;
 
@@ -1267,6 +1270,8 @@ export class AgentRuntime {
 	 * it did.
 	 */
 	private pendingToolIntentNudge?: string;
+	/** The request the turn in hand was made with (`continueConversation`). */
+	private lastIssuedRequest?: AgentModelRequest;
 	/** Requests in a row this runtime cut for an overlong `intent`. */
 	private toolIntentCutStreak = 0;
 	private modelSteerController?: AbortController;
@@ -1732,6 +1737,17 @@ export class AgentRuntime {
 			content.splice(0, content.length, ...kept);
 			spoiled.kinds.push("unreadable_tool_call");
 			spoiled.removedChars += text.length;
+			// How it began and how it ended. The text is not kept anywhere
+			// else, and "14901 chars removed" cannot say whether the call ran
+			// on inside one argument or was cut short of its closing mark
+			// (pandorum, 2026-10-12: two in a row, 4m32s and 2m39s of
+			// generation, and nothing to tell them apart by).
+			const flat = (part: string) => part.replace(/\s+/g, " ");
+			this.config.logger?.debug?.(
+				`[unreadable-call] iter=${this.state.iteration} ${text.length} chars; begins: ${flat(text.slice(0, 400))}${
+					text.length > 700 ? ` ...; ends: ${flat(text.slice(-300))}` : ""
+				}`,
+			);
 		}
 		if (spoiled.kinds.length === 0) {
 			return;
@@ -1796,6 +1812,73 @@ export class AgentRuntime {
 	 * A condenser that throws, or that has nothing to say, leaves the discard
 	 * exactly as it was.
 	 */
+	/**
+	 * What the last request left free in the window, as far as can be vouched
+	 * for: the window its cap was resolved against, less what the provider
+	 * counted for it and the reserve a cap is given. Where no window was
+	 * reported, the cap itself is the floor -- it is never more than the
+	 * window less the input it was computed against.
+	 */
+	private continuationRoomTokens(): number | undefined {
+		const input = this.state.lastRequestInputTokens;
+		const cap = lastOutputCap(this.config.sessionId);
+		if (!(input > 0) || !cap) {
+			return undefined;
+		}
+		if (cap.contextWindow !== undefined) {
+			return Math.max(
+				0,
+				cap.contextWindow - input - CONTINUATION_WINDOW_RESERVE_TOKENS,
+			);
+		}
+		if (!cap.maxTokens) {
+			return undefined;
+		}
+		const floor =
+			Math.max(input, cap.estimatedInputTokens ?? 0) + cap.maxTokens;
+		return Math.max(0, floor - input);
+	}
+
+	/**
+	 * One more turn of the conversation that is not kept: the last request as
+	 * it was issued, one user message after it, prose only. See
+	 * `DiscardedTurnInput.continueConversation`.
+	 */
+	private async continueConversation(
+		request: AgentModelRequest,
+		ask: { instruction: string; maxTokens: number },
+	): Promise<{ text: string }> {
+		const stream = await this.config.model.stream({
+			...request,
+			messages: [
+				...request.messages,
+				createMessage("user", [{ type: "text", text: ask.instruction }], {
+					displayRole: "system",
+				}),
+			],
+			...(this.abortController ? { signal: this.abortController.signal } : {}),
+			options: {
+				...request.options,
+				maxTokens: ask.maxTokens,
+				toolChoice: "none",
+			},
+		});
+		let text = "";
+		for await (const event of stream) {
+			if (event.type === "text-delta") {
+				text += event.text;
+			} else if (event.type === "usage") {
+				// The agent's spend, like any turn's. Not its last request's
+				// size: that stays the conversation's own.
+				this.state.usage.inputTokens += event.usage.inputTokens ?? 0;
+				this.state.usage.outputTokens += event.usage.outputTokens ?? 0;
+			} else if (event.type === "finish" && event.reason === "error") {
+				throw new Error(event.error ?? "the model call failed");
+			}
+		}
+		return { text: text.trim() };
+	}
+
 	private async noteDiscardedReasoning(
 		message: AgentMessage,
 		windowBound: boolean,
@@ -1860,10 +1943,19 @@ export class AgentRuntime {
 			return undefined;
 		}
 		try {
+			const continued = this.lastIssuedRequest;
+			const room = this.continuationRoomTokens();
 			const condensation = await condense({
 				reasoning,
 				...(text ? { text } : {}),
 				windowBound,
+				...(continued
+					? {
+							continueConversation: (ask) =>
+								this.continueConversation(continued, ask),
+						}
+					: {}),
+				...(room !== undefined ? { continuationRoomTokens: room } : {}),
 			});
 			const note = condensation?.note?.trim();
 			const retrospective = condensation?.retrospective?.trim();
@@ -3682,6 +3774,7 @@ export class AgentRuntime {
 				...(this.abortController ? [this.abortController.signal] : []),
 			]),
 		};
+		this.lastIssuedRequest = request;
 		const stream = this.openTaskLifecycleStream(
 			request,
 			getTaskLifecycleDurationMs,

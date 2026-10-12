@@ -685,6 +685,9 @@ export function resolveGatewayOutputCap(
 		...(windowBound && isPositiveFiniteNumber(input.estimatedInputTokens)
 			? { estimatedInputTokens: input.estimatedInputTokens }
 			: {}),
+		...(isPositiveFiniteNumber(input.model.contextWindow)
+			? { contextWindow: input.model.contextWindow }
+			: {}),
 	};
 }
 

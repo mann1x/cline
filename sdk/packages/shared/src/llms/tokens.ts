@@ -194,6 +194,13 @@ export interface OutputCapReport {
 	 * possible.
 	 */
 	estimatedInputTokens?: number;
+	/**
+	 * The window the cap was resolved against, when the model declares one.
+	 * Whatever decided the cap: a reader that wants to know what else fits
+	 * beside the request needs the window, and a cap the caller asked for
+	 * says nothing about it.
+	 */
+	contextWindow?: number;
 }
 
 function calibration(): TokenCalibrationState {
