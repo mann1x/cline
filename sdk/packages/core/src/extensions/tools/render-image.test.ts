@@ -177,9 +177,8 @@ describe("render_image", () => {
 		expect(h.requests[0]?.html).toContain(`<base href="${urlOf("")}">`);
 		expect(h.requests[0]?.height).toBeUndefined();
 		const [path] = [...h.written.keys()];
-		expect(path).toMatch(
-			/^\/work\/\.cline\/rendered-images\/html-sign-\d+\.png$/,
-		);
+		expect(nodePath.dirname(path as string)).toBe(at(".cline/rendered-images"));
+		expect(nodePath.basename(path as string)).toMatch(/^html-sign-\d+\.png$/);
 		// The size reported is the file's, in pixels.
 		expect(String(out)).toContain("(2360x740)");
 	});
