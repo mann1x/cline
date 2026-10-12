@@ -495,6 +495,9 @@ const USER_SETTINGS_FIELDS = {
 	// opencoti and its `/props` confirms `pools_enabled`.
 	polykvAgentsPriorityZero: { default: false as boolean },
 	strongNudgesEnabled: { default: true as boolean },
+	// Cut a tool call whose `intent` turns into the model's reasoning. On by
+	// default; the switch exists so the guard can be ruled in or out.
+	toolIntentGuardEnabled: { default: true as boolean },
 	// Keep sent messages and the unsent draft of the message box. Off stores
 	// nothing and deletes what was stored.
 	messageHistoryEnabled: { default: true as boolean },

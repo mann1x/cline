@@ -362,6 +362,8 @@ message Settings {
   optional int32 extract_document_max_file_mb = 244;
   optional bool message_history_enabled = 245;
   optional int32 message_history_limit = 246;
+  optional bool tool_intent_guard_enabled = 247;
+  optional string open_telemetry_traces_exporter = 248;
 }
 
 message State {
@@ -596,6 +598,7 @@ message UpdateSettingsRequest {
   // to keep in step for no gain.
   optional string update_channel = 69;
   optional bool strong_nudges_enabled = 73;
+  optional bool tool_intent_guard_enabled = 112;
   optional bool message_history_enabled = 110;
   optional int32 message_history_limit = 111;
   // Two reviewers correct the compaction summary against one half of the

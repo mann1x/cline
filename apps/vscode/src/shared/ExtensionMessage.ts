@@ -274,6 +274,7 @@ export interface ExtensionState {
 	polykvAgentsPriorityZero?: boolean
 	agentModelOverride?: string
 	strongNudgesEnabled?: boolean
+	toolIntentGuardEnabled?: boolean
 	messageHistoryEnabled?: boolean
 	messageHistoryLimit?: number
 	worktreesEnabled?: ClineFeatureSetting

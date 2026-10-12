@@ -282,6 +282,12 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("strongNudgesEnabled", !!request.strongNudgesEnabled)
 		}
 
+		// The same guard, for the same reason: on by default, so `false` is a
+		// choice and has to be stored.
+		if (request.toolIntentGuardEnabled !== undefined) {
+			controller.stateManager.setGlobalState("toolIntentGuardEnabled", !!request.toolIntentGuardEnabled)
+		}
+
 		// Update subagents setting
 		if (request.subagentsEnabled !== undefined) {
 			const wasEnabled = controller.stateManager.getGlobalSettingsKey("subagentsEnabled") ?? false

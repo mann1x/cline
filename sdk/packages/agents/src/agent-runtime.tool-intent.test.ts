@@ -4,8 +4,9 @@ import type {
 	AgentModelRequest,
 	AgentRuntimeEvent,
 } from "@cline/shared";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { AgentRuntime } from "./agent-runtime";
+import { setToolIntentGuardEnabled } from "./tool-intent-guard";
 
 class CountingModel implements AgentModel {
 	public readonly yielded: number[] = [];
@@ -94,6 +95,26 @@ function texts(message: { content: Array<{ type: string; text?: string }> }) {
 }
 
 describe("the tool intent guard, inside the runtime", () => {
+	afterEach(() => {
+		setToolIntentGuardEnabled(true);
+	});
+
+	it("does nothing once the host has switched it off", async () => {
+		setToolIntentGuardEnabled(false);
+		const model = new CountingModel([overrunningCall]);
+		const events: AgentRuntimeEvent[] = [];
+		// No per-runtime setting: this is how an agent's runtime is built.
+		const runtime = new AgentRuntime({ model, tools: [editor] });
+		runtime.subscribe((event) => {
+			events.push(event);
+		});
+
+		await runtime.run("go").catch(() => undefined);
+
+		expect(model.yielded[0]).toBe(4002);
+		expect(notices(events)).toHaveLength(0);
+	});
+
 	it("cuts the call, says so in the turn, and asks for the call again", async () => {
 		const model = new CountingModel([overrunningCall, answer]);
 		const events: AgentRuntimeEvent[] = [];

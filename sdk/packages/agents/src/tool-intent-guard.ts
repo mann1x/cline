@@ -45,6 +45,22 @@ export interface ToolIntentOverrun {
 	maxChars: number;
 }
 
+/**
+ * The host's switch, for every runtime in the process: the lead, and each
+ * agent and teammate it starts. A setting that reached the lead alone would be
+ * a box that is ticked and half read; agents build their own runtime
+ * configuration and none of it is copied from the lead's.
+ */
+let enabledByHost = true;
+
+export function setToolIntentGuardEnabled(enabled: boolean): void {
+	enabledByHost = enabled;
+}
+
+export function isToolIntentGuardEnabled(): boolean {
+	return enabledByHost;
+}
+
 interface CallScan {
 	toolName?: string;
 	phase: "seeking" | "counting" | "closed";

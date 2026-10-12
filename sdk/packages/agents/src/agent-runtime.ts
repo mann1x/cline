@@ -89,6 +89,7 @@ import {
 import {
 	buildToolIntentOverrunNudge,
 	describeToolIntentOverrunStub,
+	isToolIntentGuardEnabled,
 	ToolIntentGuard,
 	type ToolIntentOverrun,
 } from "./tool-intent-guard";
@@ -3723,7 +3724,9 @@ export class AgentRuntime {
 			this.toolIntentCutStreak = 0;
 		}
 		const toolIntentGuard =
-			toolIntentLimit === false || toolIntentStoodDown
+			toolIntentLimit === false ||
+			toolIntentStoodDown ||
+			!isToolIntentGuardEnabled()
 				? undefined
 				: new ToolIntentGuard({
 						...toolIntentLimit,

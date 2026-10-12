@@ -113,6 +113,17 @@ const agentFeatures: FeatureToggle[] = [
 		settingKey: "strongNudgesEnabled",
 	},
 	{
+		// Default on. It is here so that someone looking at a model that
+		// behaves oddly around tool calls can switch it off and see whether
+		// the guard is the cause.
+		id: "tool-intent-guard",
+		label: "Cut runaway tool calls",
+		description:
+			"Every tool call says in one sentence what it does (its intent). A model that stops thinking separately can write its whole reasoning there instead: such a call runs for minutes, cannot be read, and nothing happens. When on, a call whose intent passes 2,000 characters is stopped while it is being written and the model is asked to make it again. It applies to every model and to agents. If the same call is stopped twice in a row, the third attempt is let through. It can only act where the provider shows the call while it is being written: stock Ollama does not, and xOllama does once it supports tool-call progress. A change here applies from the next task.",
+		stateKey: "toolIntentGuardEnabled",
+		settingKey: "toolIntentGuardEnabled",
+	},
+	{
 		id: "auto-compact",
 		label: "Auto Compact",
 		description: "Automatically compress conversation history.",
@@ -294,6 +305,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		extractDocumentMaxFileMb,
 		agentModelOverride,
 		strongNudgesEnabled,
+		toolIntentGuardEnabled,
 		worktreesEnabled,
 		backgroundEditEnabled,
 		showFeatureTips,
@@ -313,6 +325,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		// `?? true` rather than a bare read: the default is on, and an
 		// extension state that predates the key must not render as off.
 		strongNudgesEnabled: strongNudgesEnabled ?? true,
+		toolIntentGuardEnabled: toolIntentGuardEnabled ?? true,
 		worktreesEnabled: worktreesEnabled?.user,
 		backgroundEditEnabled,
 	}

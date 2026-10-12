@@ -1,6 +1,9 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_MAX_NO_TOOL_CALL_NUDGES } from "@cline/agents";
+import {
+	DEFAULT_MAX_NO_TOOL_CALL_NUDGES,
+	setToolIntentGuardEnabled,
+} from "@cline/agents";
 import { supportsModelTool } from "@cline/llms";
 import type {
 	AgentTool,
@@ -1707,6 +1710,9 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		// `true` would be the same behaviour, but leaving the key absent keeps
 		// the default path identical to what shipped before the setting
 		// existed rather than merely equivalent to it.
+		// Process-wide on purpose: the agents this session starts build their
+		// own runtimes, and the switch has to hold for them too.
+		setToolIntentGuardEnabled(config.toolIntentGuard !== false);
 		const completionPolicy = {
 			...(requiresCompletionTool ? { requireCompletionTool: true } : {}),
 			...(completionGuard ? { completionGuard } : {}),

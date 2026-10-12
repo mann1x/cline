@@ -92,6 +92,7 @@ export async function getStateToPostToWebview(controller: {
 	const polykvAgentsPriorityZero = stateManager.getGlobalSettingsKey("polykvAgentsPriorityZero")
 	const agentModelOverride = stateManager.getGlobalSettingsKey("agentModelOverride")
 	const strongNudgesEnabled = stateManager.getGlobalSettingsKey("strongNudgesEnabled")
+	const toolIntentGuardEnabled = stateManager.getGlobalSettingsKey("toolIntentGuardEnabled")
 	const messageHistoryEnabled = stateManager.getGlobalSettingsKey("messageHistoryEnabled")
 	const messageHistoryLimit = stateManager.getGlobalSettingsKey("messageHistoryLimit")
 	const userInfo = stateManager.getGlobalStateKey("userInfo")
@@ -248,6 +249,7 @@ export async function getStateToPostToWebview(controller: {
 		polykvAgentsPriorityZero,
 		agentModelOverride,
 		strongNudgesEnabled,
+		toolIntentGuardEnabled,
 		messageHistoryEnabled,
 		messageHistoryLimit,
 		userInfo,

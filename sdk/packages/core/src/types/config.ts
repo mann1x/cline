@@ -304,6 +304,13 @@ export interface CoreRuntimeFeatures {
 	 */
 	strongNudges?: boolean;
 	/**
+	 * Whether a tool call whose `intent` runs on past its limit is cut while it
+	 * is being written (see `tool-intent-guard` in `@cline/agents`). Defaults
+	 * to true. A host exposes it so that someone chasing odd behaviour can rule
+	 * the guard in or out; it applies to the session and every agent it starts.
+	 */
+	toolIntentGuard?: boolean;
+	/**
 	 * Whether `extract_document` is offered, to the lead and to every agent it
 	 * delegates to. Off unless set: the tool is a niche reader, and each request
 	 * that offers it pays for its schema.

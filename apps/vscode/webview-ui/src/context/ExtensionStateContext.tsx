@@ -388,6 +388,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		polykvAgentsPriorityZero: false,
 		agentModelOverride: "",
 		strongNudgesEnabled: true,
+		toolIntentGuardEnabled: true,
 		messageHistoryEnabled: true,
 		messageHistoryLimit: 50,
 		worktreesEnabled: { user: true, featureFlag: false },

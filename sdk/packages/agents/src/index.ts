@@ -80,3 +80,9 @@ export {
 	isRepetitionLoop,
 	measureReasoningRepetition,
 } from "./reasoning-repetition";
+export {
+	DEFAULT_TOOL_INTENT_MAX_CHARS,
+	isToolIntentGuardEnabled,
+	setToolIntentGuardEnabled,
+	type ToolIntentOverrun,
+} from "./tool-intent-guard";

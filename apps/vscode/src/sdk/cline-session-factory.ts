@@ -2747,6 +2747,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			? join(HostProvider.get().extensionFsPath, "assets", "sandbox")
 			: undefined,
 		strongNudges: strongNudgesEnabled,
+		toolIntentGuard: stateManager.getGlobalSettingsKey("toolIntentGuardEnabled") !== false,
 		enableExtractDocument: extractDocumentEnabled,
 		...(extractDocumentEnabled ? { documentReader } : {}),
 		// Sent whether or not auto compaction is on. `enabled` is the only thing
