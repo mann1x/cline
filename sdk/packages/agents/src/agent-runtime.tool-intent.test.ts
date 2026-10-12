@@ -56,6 +56,21 @@ function* overrunningCall(): Iterable<AgentModelEvent> {
 	yield { type: "finish", reason: "stop" };
 }
 
+const editor = {
+	name: "editor",
+	description: "edit a file",
+	inputSchema: {
+		type: "object",
+		properties: {
+			intent: { type: "string" },
+			path: { type: "string" },
+			new_text: { type: "string" },
+			end_column: { type: "number" },
+		},
+	},
+	execute: async () => "ok",
+};
+
 function* answer(): Iterable<AgentModelEvent> {
 	yield { type: "text-delta", text: "done" };
 	yield { type: "finish", reason: "stop" };
@@ -82,7 +97,7 @@ describe("the tool intent guard, inside the runtime", () => {
 	it("cuts the call, says so in the turn, and asks for the call again", async () => {
 		const model = new CountingModel([overrunningCall, answer]);
 		const events: AgentRuntimeEvent[] = [];
-		const runtime = new AgentRuntime({ model });
+		const runtime = new AgentRuntime({ model, tools: [editor] });
 		runtime.subscribe((event) => {
 			events.push(event);
 		});
@@ -111,7 +126,11 @@ describe("the tool intent guard, inside the runtime", () => {
 	it("lets the call stream to its end when the guard is turned off", async () => {
 		const model = new CountingModel([overrunningCall]);
 		const events: AgentRuntimeEvent[] = [];
-		const runtime = new AgentRuntime({ model, toolIntentLimit: false });
+		const runtime = new AgentRuntime({
+			model,
+			tools: [editor],
+			toolIntentLimit: false,
+		});
 		runtime.subscribe((event) => {
 			events.push(event);
 		});
@@ -120,5 +139,28 @@ describe("the tool intent guard, inside the runtime", () => {
 
 		expect(model.yielded[0]).toBe(4002);
 		expect(notices(events)).toHaveLength(0);
+	});
+
+	it("stands down for one request after two cuts running", async () => {
+		const model = new CountingModel([
+			overrunningCall,
+			overrunningCall,
+			overrunningCall,
+			answer,
+		]);
+		const events: AgentRuntimeEvent[] = [];
+		const runtime = new AgentRuntime({ model, tools: [editor] });
+		runtime.subscribe((event) => {
+			events.push(event);
+		});
+
+		await runtime.run("go").catch(() => undefined);
+
+		expect(model.yielded[0]).toBeLessThan(100);
+		expect(model.yielded[1]).toBeLessThan(100);
+		// The third is let through whole: a payload that looks like a runaway
+		// must not be cut for ever.
+		expect(model.yielded[2]).toBe(4002);
+		expect(notices(events)).toHaveLength(2);
 	});
 });

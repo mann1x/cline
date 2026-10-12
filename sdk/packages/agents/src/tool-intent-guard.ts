@@ -14,10 +14,19 @@
  * has no sane upper bound and an `intent` does. Only `intent` is measured.
  * `new_text` and its like are payload and can rightly be a whole file.
  *
- * It reads the argument text as it streams, so it can only act where the
- * provider streams it. A server that holds the reply back until the call is
- * complete (xOllama and ollama do, for every tool call) gives it nothing to
- * read until there is nothing left to save.
+ * One rule for every model. The call may arrive as JSON arguments from a
+ * provider that streams them, or in a model's own notation from a server that
+ * passes the call through as it is written (xOllama's `tool_call_progress`:
+ * gemma4's `call:NAME{key:<|"|>...}`, qwen's `<parameter=key>`, and whatever
+ * comes next). Reading each notation would mean a guard that exists for some
+ * models and not for others, and nobody remembers which. So nothing here
+ * reads a notation. It knows the names of the tools' arguments, and the rule
+ * is: once `intent` has begun, another argument must begin within the limit.
+ * An argument's name standing where a key stands looks alike in all of them.
+ *
+ * It can only act where the call's text arrives while it is being written. A
+ * server that holds the reply back until the call is complete gives it
+ * nothing to read until there is nothing left to save.
  */
 
 /** Past any `intent` a working call has carried, and well short of the damage. */
@@ -31,254 +40,129 @@ export interface ToolIntentLimitConfig {
 export interface ToolIntentOverrun {
 	toolCallId: string;
 	toolName?: string;
-	/** Characters of `intent` read when the call was cut. */
+	/** Characters read since `intent` began when the call was cut. */
 	chars: number;
 	maxChars: number;
 }
 
-/**
- * How the argument text is written.
- *
- * `json` is what a provider streams as a call's arguments. The others are a
- * model's own call syntax, for a server that passes the call through as it is
- * generated and parses it only at the end. Text in a syntax nobody here reads
- * is not measured: no cut is better than a wrong one.
- */
-export type ToolCallSyntax = "json" | "gemma4";
-
-export function isToolCallSyntax(value: unknown): value is ToolCallSyntax {
-	return value === "json" || value === "gemma4";
-}
-
 interface CallScan {
 	toolName?: string;
-	syntax: ToolCallSyntax;
-	depth: number;
-	inString: boolean;
-	escaped: boolean;
-	/** At depth 1: the next string (JSON) or bare word (gemma4) is a key. */
-	expectKey: boolean;
-	/** The string being read is a key at depth 1. */
-	readingKey: boolean;
-	/** The string being read is the value of `intent` at depth 1. */
-	readingIntent: boolean;
-	key: string;
-	intentChars: number;
-	/** gemma4: text held back because it may be the start of a delimiter. */
-	held: string;
+	phase: "seeking" | "counting" | "closed";
+	/** The end of what has been read, kept so a key split by a delta is seen. */
+	tail: string;
+	chars: number;
 }
 
-/** Keys longer than this are not `intent`; stop collecting them. */
-const KEY_CAPTURE_CHARS = 32;
+const INTENT = "intent";
 
-/** gemma4 opens and closes every string argument with this token. */
-const GEMMA4_STRING_DELIMITER = '<|"|>';
+function escapeForRegExp(text: string): string {
+	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 /**
- * Reads tool-call argument text as it arrives, one call at a time, and
- * answers the first time a call's top-level `intent` string passes the limit.
+ * A name standing where a key stands, in any notation met so far:
  *
- * The text is a document being written, so it is scanned, not parsed: nothing
- * here waits for it to close, because the call this exists for never closes
- * it.
+ *   JSON      `{"intent":`  `,"path" :`
+ *   gemma4    `{intent:`    `<|"|>,path:`
+ *   qwen      `<parameter=intent>`
+ *   glm       `<arg_key>intent</arg_key>`
+ *
+ * Something structural before it, never a space: prose says "the path: ..."
+ * and does not say `,path:`.
+ */
+function keyPattern(names: readonly string[]): RegExp | undefined {
+	if (names.length === 0) {
+		return undefined;
+	}
+	const alternatives = [...names]
+		.sort((a, b) => b.length - a.length)
+		.map(escapeForRegExp)
+		.join("|");
+	return new RegExp(`[,{"'=>]\\s*(?:${alternatives})["']?\\s*[:=><]`);
+}
+
+/**
+ * Reads tool-call text as it arrives, one call at a time, and answers the
+ * first time a call has gone the limit past the start of `intent` without
+ * beginning another argument.
+ *
+ * `argumentNames` is every argument of every tool the model may call. Without
+ * it nothing is measured: a call whose `intent` comes first and whose payload
+ * is a whole file would look exactly like the call this exists to cut.
  */
 export class ToolIntentGuard {
 	private readonly maxChars: number;
 	private readonly calls = new Map<string, CallScan>();
+	private readonly intentKey: RegExp | undefined;
+	private readonly otherKey: RegExp | undefined;
+	private readonly tailChars: number;
 
-	constructor(config?: Partial<ToolIntentLimitConfig>) {
+	constructor(
+		config?: Partial<ToolIntentLimitConfig> & {
+			argumentNames?: Iterable<string>;
+		},
+	) {
 		this.maxChars = config?.maxChars ?? DEFAULT_TOOL_INTENT_MAX_CHARS;
+		const others = [...new Set(config?.argumentNames ?? [])].filter(
+			(name) => name.length > 0 && name !== INTENT,
+		);
+		this.otherKey = keyPattern(others);
+		this.intentKey = this.otherKey ? keyPattern([INTENT]) : undefined;
+		// Enough to hold the longest key with its punctuation on both sides.
+		this.tailChars =
+			Math.max(INTENT.length, ...others.map((name) => name.length)) + 8;
 	}
 
 	push(
 		toolCallId: string,
 		text: string,
 		toolName?: string,
-		syntax: ToolCallSyntax = "json",
 	): ToolIntentOverrun | undefined {
+		if (!this.intentKey || !this.otherKey || text.length === 0) {
+			return undefined;
+		}
 		let scan = this.calls.get(toolCallId);
 		if (!scan) {
-			scan = {
-				syntax,
-				depth: 0,
-				inString: false,
-				escaped: false,
-				expectKey: false,
-				readingKey: false,
-				readingIntent: false,
-				key: "",
-				intentChars: 0,
-				held: "",
-			};
+			scan = { phase: "seeking", tail: "", chars: 0 };
 			this.calls.set(toolCallId, scan);
 		}
 		if (toolName) {
 			scan.toolName = toolName;
 		}
-		const over =
-			scan.syntax === "gemma4"
-				? this.scanGemma4(scan, text)
-				: this.scanJson(scan, text);
-		return over
-			? {
-					toolCallId,
-					...(scan.toolName ? { toolName: scan.toolName } : {}),
-					chars: scan.intentChars,
-					maxChars: this.maxChars,
-				}
-			: undefined;
-	}
-
-	private scanJson(scan: CallScan, text: string): boolean {
-		for (const char of text) {
-			if (scan.inString) {
-				if (scan.escaped) {
-					scan.escaped = false;
-				} else if (char === "\\") {
-					scan.escaped = true;
-				} else if (char === '"') {
-					scan.inString = false;
-					scan.readingKey = false;
-					scan.readingIntent = false;
-					continue;
-				}
-				if (scan.readingKey) {
-					if (scan.key.length < KEY_CAPTURE_CHARS) {
-						scan.key += char;
-					}
-				} else if (scan.readingIntent) {
-					scan.intentChars += 1;
-					if (scan.intentChars > this.maxChars) {
-						return true;
-					}
-				}
-				continue;
-			}
-			if (char === '"') {
-				scan.inString = true;
-				if (scan.depth === 1) {
-					if (scan.expectKey) {
-						scan.readingKey = true;
-						scan.key = "";
-						scan.expectKey = false;
-					} else if (scan.key === "intent") {
-						scan.readingIntent = true;
-						scan.intentChars = 0;
-					}
-				}
-				continue;
-			}
-			if (char === "{" || char === "[") {
-				scan.depth += 1;
-				if (scan.depth === 1 && char === "{") {
-					scan.expectKey = true;
-				}
-				continue;
-			}
-			if (char === "}" || char === "]") {
-				scan.depth -= 1;
-				continue;
-			}
-			if (char === "," && scan.depth === 1) {
-				scan.expectKey = true;
-				scan.key = "";
-			}
+		if (scan.phase === "closed") {
+			return undefined;
 		}
-		return false;
-	}
-
-	/**
-	 * `call:editor{intent:<|"|>...<|"|>,new_text:<|"|>...<|"|>,start_line:91}`
-	 *
-	 * Keys are bare words and a string runs from one delimiter token to the
-	 * next, with no escaping inside it. A delta can end part-way through a
-	 * delimiter, so the last few characters are held until the next one says
-	 * what they were.
-	 */
-	private scanGemma4(scan: CallScan, text: string): boolean {
-		const input = scan.held + text;
-		scan.held = "";
-		let at = 0;
-		while (at < input.length) {
-			if (scan.inString) {
-				const close = input.indexOf(GEMMA4_STRING_DELIMITER, at);
-				// Everything up to the close, or up to what may be its start.
-				const end =
-					close >= 0 ? close : input.length - partialDelimiterLength(input, at);
-				if (scan.readingIntent) {
-					scan.intentChars += Math.max(0, end - at);
-					if (scan.intentChars > this.maxChars) {
-						return true;
-					}
-				}
-				if (close < 0) {
-					scan.held = input.slice(end);
-					return false;
-				}
-				scan.inString = false;
-				scan.readingIntent = false;
-				at = close + GEMMA4_STRING_DELIMITER.length;
-				continue;
+		let window = scan.tail + text;
+		let fresh = text.length;
+		if (scan.phase === "seeking") {
+			const begun = this.intentKey.exec(window);
+			if (!begun) {
+				scan.tail = window.slice(-this.tailChars);
+				return undefined;
 			}
-			if (input.startsWith(GEMMA4_STRING_DELIMITER, at)) {
-				scan.inString = true;
-				if (scan.depth === 1 && !scan.expectKey && scan.key === "intent") {
-					scan.readingIntent = true;
-					scan.intentChars = 0;
-				}
-				at += GEMMA4_STRING_DELIMITER.length;
-				continue;
-			}
-			if (
-				input[at] === "<" &&
-				GEMMA4_STRING_DELIMITER.startsWith(input.slice(at))
-			) {
-				scan.held = input.slice(at);
-				return false;
-			}
-			const char = input[at] as string;
-			at += 1;
-			if (char === "{" || char === "[") {
-				scan.depth += 1;
-				if (scan.depth === 1 && char === "{") {
-					scan.expectKey = true;
-					scan.key = "";
-				}
-			} else if (char === "}" || char === "]") {
-				scan.depth -= 1;
-			} else if (scan.depth === 1) {
-				if (char === ",") {
-					scan.expectKey = true;
-					scan.key = "";
-				} else if (char === ":") {
-					scan.expectKey = false;
-				} else if (
-					scan.expectKey &&
-					scan.key.length < KEY_CAPTURE_CHARS &&
-					/\S/.test(char)
-				) {
-					scan.key += char;
-				}
-			}
+			scan.phase = "counting";
+			window = window.slice(begun.index + begun[0].length);
+			fresh = window.length;
 		}
-		return false;
-	}
-}
-
-/** How many characters at the end of `input` could be a delimiter beginning. */
-function partialDelimiterLength(input: string, from: number): number {
-	const longest = Math.min(
-		GEMMA4_STRING_DELIMITER.length - 1,
-		input.length - from,
-	);
-	for (let length = longest; length > 0; length--) {
-		if (
-			GEMMA4_STRING_DELIMITER.startsWith(input.slice(input.length - length))
-		) {
-			return length;
+		if (this.otherKey.test(window)) {
+			// The next argument began: `intent` is behind it, whatever its size
+			// was, and one `intent` is all a call has.
+			scan.phase = "closed";
+			scan.tail = "";
+			return undefined;
 		}
+		scan.chars += fresh;
+		scan.tail = window.slice(-this.tailChars);
+		if (scan.chars <= this.maxChars) {
+			return undefined;
+		}
+		return {
+			toolCallId,
+			...(scan.toolName ? { toolName: scan.toolName } : {}),
+			chars: scan.chars,
+			maxChars: this.maxChars,
+		};
 	}
-	return 0;
 }
 
 /** What stands in the assistant's turn where the cut call was being written. */

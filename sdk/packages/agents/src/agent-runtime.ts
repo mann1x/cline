@@ -350,6 +350,8 @@ const TOOL_CALL_IN_THINKING_REMINDER =
 
 /** How many thinking-only turns in a row are taken again before the run ends on one. */
 const THINKING_ONLY_RETRY_BUDGET = 3;
+/** After this many cuts running, the next request is not guarded. */
+const TOOL_INTENT_CUTS_BEFORE_STAND_DOWN = 2;
 
 /** Tool-call markup, as the templates this fork runs write it. */
 const TOOL_CALL_MARKUP = /<\/?tool_call>|<\/function>|<function=|<\/parameter>/;
@@ -1264,6 +1266,8 @@ export class AgentRuntime {
 	 * it did.
 	 */
 	private pendingToolIntentNudge?: string;
+	/** Requests in a row this runtime cut for an overlong `intent`. */
+	private toolIntentCutStreak = 0;
 	private modelSteerController?: AbortController;
 	private readonly telemetryProviderId?: string;
 	private readonly telemetryModelId?: string;
@@ -3709,10 +3713,22 @@ export class AgentRuntime {
 		const toolIntentLimit = this.config.toolIntentLimit;
 		// On unless turned off, for the reason the guard above is: it guards
 		// spend. See `tool-intent-guard` for the run it comes from.
+		// Stood down for one request after two cuts running. The rule reads no
+		// notation, so a payload that itself holds an `intent` key (a JSON file
+		// about tool calls, this file's own tests) can look like a runaway; a
+		// model that needs to write one must not be cut out of it forever.
+		const toolIntentStoodDown =
+			this.toolIntentCutStreak >= TOOL_INTENT_CUTS_BEFORE_STAND_DOWN;
+		if (toolIntentStoodDown) {
+			this.toolIntentCutStreak = 0;
+		}
 		const toolIntentGuard =
-			toolIntentLimit === false
+			toolIntentLimit === false || toolIntentStoodDown
 				? undefined
-				: new ToolIntentGuard(toolIntentLimit);
+				: new ToolIntentGuard({
+						...toolIntentLimit,
+						argumentNames: this.toolArgumentNames(),
+					});
 		let toolIntentOverrun: ToolIntentOverrun | undefined;
 
 		for await (const event of stream) {
@@ -3983,6 +3999,8 @@ export class AgentRuntime {
 		}
 		if (toolIntentOverrun) {
 			await this.onToolIntentCut(toolIntentOverrun);
+		} else if (toolIntentGuard) {
+			this.toolIntentCutStreak = 0;
 		}
 		this.throwIfAborted();
 		const interrupted = steerController.signal.aborted;
@@ -4876,6 +4894,20 @@ export class AgentRuntime {
 		}
 	}
 
+	/** Every argument name of every tool this run may call. */
+	private toolArgumentNames(): string[] {
+		const names = new Set<string>();
+		for (const tool of this.tools.values()) {
+			const properties = (
+				tool.inputSchema as { properties?: Record<string, unknown> } | undefined
+			)?.properties;
+			for (const name of Object.keys(properties ?? {})) {
+				names.add(name);
+			}
+		}
+		return [...names];
+	}
+
 	/**
 	 * A tool call's `intent` ran past its limit and the request was cut.
 	 *
@@ -4884,6 +4916,7 @@ export class AgentRuntime {
 	 * of thousands.
 	 */
 	private async onToolIntentCut(overrun: ToolIntentOverrun): Promise<void> {
+		this.toolIntentCutStreak += 1;
 		this.pendingToolIntentNudge = buildToolIntentOverrunNudge(overrun);
 		const called = overrun.toolName ? `\`${overrun.toolName}\`` : "a tool";
 		this.config.logger?.log?.(

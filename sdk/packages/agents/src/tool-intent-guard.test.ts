@@ -5,10 +5,30 @@ import {
 	ToolIntentGuard,
 } from "./tool-intent-guard";
 
+/** The editor's arguments, and a few of its neighbours'. */
+const argumentNames = [
+	"intent",
+	"path",
+	"new_text",
+	"old_text",
+	"start_line",
+	"end_line",
+	"end_column",
+	"task_progress",
+	"files",
+	"commands",
+];
+
+const guard = (maxChars?: number) =>
+	new ToolIntentGuard({
+		argumentNames,
+		...(maxChars ? { maxChars } : {}),
+	});
+
 /** Feed text the way a stream does: in pieces that respect nothing. */
-function feed(guard: ToolIntentGuard, text: string, chunk = 7) {
+function feed(target: ToolIntentGuard, text: string, chunk: number) {
 	for (let i = 0; i < text.length; i += chunk) {
-		const verdict = guard.push("call_1", text.slice(i, i + chunk), "editor");
+		const verdict = target.push("call_1", text.slice(i, i + chunk), "editor");
 		if (verdict) {
 			return { verdict, consumed: i + chunk };
 		}
@@ -16,117 +36,109 @@ function feed(guard: ToolIntentGuard, text: string, chunk = 7) {
 	return { verdict: undefined, consumed: text.length };
 }
 
-describe("ToolIntentGuard", () => {
-	it("lets a call with a one-sentence intent and a large payload through", () => {
-		const guard = new ToolIntentGuard();
-		const call = JSON.stringify({
+const reasoning =
+	"Wait, let's re-examine line 110 in the previous `read_files`. ";
+const payload =
+	"     dIt(c,x){this.it.forEach(it=>{if(!it.cl){c.save();}});};".repeat(400);
+
+/**
+ * One call, short intent and large payload, and one whose intent is where the
+ * model thinks, in each notation a call has been seen in.
+ */
+const notations: Array<{ name: string; working: string; runaway: string }> = [
+	{
+		name: "JSON arguments",
+		working: JSON.stringify({
 			intent: "Delete the extra closing brace at line 97.",
-			new_text: "x".repeat(60_000),
+			new_text: payload,
 			path: "manic_miner.html",
 			start_line: 97,
+		}),
+		runaway: `{"end_column":386,"intent":"Fix bracket imbalance. ${reasoning.repeat(1500)}`,
+	},
+	{
+		name: "JSON inside a tag, arguments one level down",
+		working: `{"name":"editor","arguments":${JSON.stringify({
+			path: "manic_miner.html",
+			intent: "Delete the extra closing brace at line 97.",
+			new_text: payload,
+		})}}`,
+		runaway: `{"name": "editor", "arguments": {"path": "manic_miner.html", "intent": "Fix bracket imbalance. ${reasoning.repeat(1500)}`,
+	},
+	{
+		// The first characters of the two calls xOllama's log kept from
+		// session x8yap.
+		name: "gemma4",
+		working: `call:editor{intent:<|"|>Fix syntax error on line 91 by adding missing closing bracket.<|"|>,new_text:<|"|>${payload}<|"|>,path:<|"|>manic_miner.html<|"|>,start_line:91}`,
+		runaway: `call:editor{end_column:386,intent:<|"|>Fix bracket imbalance in currentLevelObj.en.forEach callback on line 110. ${reasoning.repeat(1500)}`,
+	},
+	{
+		name: "qwen tagged parameters",
+		working: `<function=editor>\n<parameter=intent>\nDelete the extra closing brace.\n</parameter>\n<parameter=new_text>\n${payload}\n</parameter>\n<parameter=path>\nmanic_miner.html\n</parameter>\n</function>`,
+		runaway: `<function=editor>\n<parameter=path>\nmanic_miner.html\n</parameter>\n<parameter=intent>\nFix bracket imbalance. ${reasoning.repeat(1500)}`,
+	},
+	{
+		name: "glm key and value tags",
+		working: `editor\n<arg_key>intent</arg_key>\n<arg_value>Delete the extra closing brace.</arg_value>\n<arg_key>new_text</arg_key>\n<arg_value>${payload}</arg_value>`,
+		runaway: `editor\n<arg_key>path</arg_key>\n<arg_value>a.html</arg_value>\n<arg_key>intent</arg_key>\n<arg_value>Fix bracket imbalance. ${reasoning.repeat(1500)}`,
+	},
+];
+
+describe("ToolIntentGuard", () => {
+	describe.each(notations)("$name", ({ working, runaway }) => {
+		it.each([
+			1, 3, 5, 7, 64, 500,
+		])("passes a short intent with a large payload, in deltas of %i", (chunk) => {
+			expect(feed(guard(), working, chunk).verdict).toBeUndefined();
 		});
-		expect(feed(guard, call).verdict).toBeUndefined();
-	});
 
-	it("answers as soon as intent passes the limit, without waiting for the call to close", () => {
-		const guard = new ToolIntentGuard();
-		// Session x8yap: the reasoning went into `intent` and never came out.
-		const call = `{"end_column":386,"intent":"Fix bracket imbalance. ${"Wait, let's re-examine line 110. ".repeat(3000)}`;
-		const { verdict, consumed } = feed(guard, call);
-		expect(verdict).toMatchObject({
-			toolCallId: "call_1",
-			toolName: "editor",
-			maxChars: DEFAULT_TOOL_INTENT_MAX_CHARS,
+		it.each([
+			1, 3, 5, 7, 64, 500,
+		])("cuts the call whose intent is the reasoning, in deltas of %i", (chunk) => {
+			const { verdict, consumed } = feed(guard(), runaway, chunk);
+			expect(verdict).toMatchObject({
+				toolCallId: "call_1",
+				toolName: "editor",
+				maxChars: DEFAULT_TOOL_INTENT_MAX_CHARS,
+			});
+			expect(consumed).toBeLessThan(
+				DEFAULT_TOOL_INTENT_MAX_CHARS + 200 + chunk,
+			);
 		});
-		expect(consumed).toBeLessThan(DEFAULT_TOOL_INTENT_MAX_CHARS + 100);
 	});
 
-	it("measures intent wherever it comes among the arguments", () => {
-		const guard = new ToolIntentGuard({ maxChars: 50 });
-		const call = `{"path":"a.ts","new_text":"${"y".repeat(500)}","intent":"${"z".repeat(80)}"}`;
-		expect(feed(guard, call).verdict?.chars).toBe(51);
+	it("passes a long payload that comes before intent", () => {
+		// xOllama's capture: argument order is the model's, and `content` came
+		// first.
+		const call = `call:editor{new_text:<|"|>${payload}<|"|>,intent:<|"|>Short.<|"|>,path:<|"|>a.html<|"|>}`;
+		expect(feed(guard(), call, 9).verdict).toBeUndefined();
 	});
 
-	it("does not take a nested or quoted 'intent' for the argument", () => {
-		const guard = new ToolIntentGuard({ maxChars: 50 });
-		const call = JSON.stringify({
-			files: [{ intent: "n".repeat(300) }],
-			new_text: `"intent":"${"q".repeat(300)}"`,
-			intent: "Short.",
-		});
-		expect(feed(guard, call).verdict).toBeUndefined();
+	it("passes an intent that is the last argument", () => {
+		const call = `{"path":"a.ts","new_text":"${"y".repeat(5000)}","intent":"Rewrite the header."}`;
+		expect(feed(guard(), call, 9).verdict).toBeUndefined();
 	});
 
-	it("reads escaped quotes inside intent as part of it", () => {
-		const guard = new ToolIntentGuard({ maxChars: 30 });
-		const call = JSON.stringify({ intent: 'say "hi" '.repeat(10) });
-		expect(feed(guard, call, 3).verdict).toBeDefined();
+	it("does not end the count on an argument's name in prose", () => {
+		// "the path: ..." is a sentence, not the next argument.
+		const call = `{"intent":"Fix it. ${"Now the path: is wrong and new_text: too. ".repeat(200)}`;
+		expect(feed(guard(), call, 9).verdict).toBeDefined();
+	});
+
+	it("measures nothing when it does not know the tools' arguments", () => {
+		const blind = new ToolIntentGuard();
+		expect(
+			feed(blind, notations[0]?.runaway ?? "", 64).verdict,
+		).toBeUndefined();
 	});
 
 	it("keeps calls apart", () => {
-		const guard = new ToolIntentGuard({ maxChars: 20 });
-		expect(guard.push("a", '{"intent":"0123456789')).toBeUndefined();
-		expect(guard.push("b", '{"intent":"0123456789')).toBeUndefined();
-		expect(guard.push("a", '0123456789"')).toBeUndefined();
-		expect(guard.push("b", "0123456789X")?.toolCallId).toBe("b");
-	});
-
-	describe("gemma4 call syntax", () => {
-		const feedGemma = (guard: ToolIntentGuard, text: string, chunk: number) => {
-			for (let i = 0; i < text.length; i += chunk) {
-				const verdict = guard.push(
-					"call_1",
-					text.slice(i, i + chunk),
-					"editor",
-					"gemma4",
-				);
-				if (verdict) {
-					return { verdict, consumed: i + chunk };
-				}
-			}
-			return { verdict: undefined, consumed: text.length };
-		};
-
-		// The first lines of the two calls in xOllama's log for session x8yap.
-		const working =
-			'call:editor{intent:<|"|>Fix syntax error on line 91 by adding missing closing bracket.<|"|>,new_text:<|"|>' +
-			"     dIt(c,x){this.it.forEach(it=>{if(!it.cl){c.save();}});};".repeat(
-				400,
-			) +
-			'<|"|>,path:<|"|>manic_miner.html<|"|>,start_line:91}';
-		const runaway = `call:editor{end_column:386,intent:<|"|>Fix bracket imbalance in currentLevelObj.en.forEach callback on line 110. ${"Wait, let's re-examine line 110 in the previous `read_files`. ".repeat(1500)}`;
-
-		it.each([
-			1, 3, 4, 5, 7, 64,
-		])("passes a short intent with a large payload, in deltas of %i", (chunk) => {
-			expect(
-				feedGemma(new ToolIntentGuard(), working, chunk).verdict,
-			).toBeUndefined();
-		});
-
-		it.each([
-			1, 3, 4, 5, 7, 64,
-		])("cuts the call whose intent is the reasoning, in deltas of %i", (chunk) => {
-			const { verdict, consumed } = feedGemma(
-				new ToolIntentGuard(),
-				runaway,
-				chunk,
-			);
-			expect(verdict?.toolName).toBe("editor");
-			expect(consumed).toBeLessThan(DEFAULT_TOOL_INTENT_MAX_CHARS + 200);
-		});
-
-		it("counts intent to its closing delimiter and no further", () => {
-			const guard = new ToolIntentGuard({ maxChars: 50 });
-			const call = `call:editor{intent:<|"|>${"z".repeat(40)}<|"|>,new_text:<|"|>${"y".repeat(500)}<|"|>}`;
-			expect(feedGemma(guard, call, 3).verdict).toBeUndefined();
-		});
-
-		it("does not take 'intent:' inside another argument for the argument", () => {
-			const guard = new ToolIntentGuard({ maxChars: 50 });
-			const call = `call:editor{new_text:<|"|>{intent:${"q".repeat(300)}}<|"|>,files:[{intent:<|"|>${"n".repeat(300)}<|"|>}],intent:<|"|>Short.<|"|>}`;
-			expect(feedGemma(guard, call, 3).verdict).toBeUndefined();
-		});
+		const target = guard(20);
+		expect(target.push("a", '{"intent":"0123456789')).toBeUndefined();
+		expect(target.push("b", '{"intent":"0123456789')).toBeUndefined();
+		expect(target.push("a", '","path":"x"')).toBeUndefined();
+		expect(target.push("b", "0123456789X")?.toolCallId).toBe("b");
+		expect(target.push("a", "z".repeat(100))).toBeUndefined();
 	});
 
 	it("tells the model what was cut and what intent is for", () => {
