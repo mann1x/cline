@@ -4,24 +4,24 @@ import type { SubagentOutputUpdate } from "@shared/proto/cline/task"
 import { ArrowLeftIcon } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { TaskServiceClient } from "@/services/grpc-client"
-import { applySubagentOutputUpdate, type InspectChunk, inspectToolHeading } from "./subagentOutputView"
+import { applyInspectUpdate, EMPTY_INSPECT_STATE, type InspectChunk, inspectToolHeading } from "./subagentOutputView"
 
 /** Within this many pixels of the bottom counts as following the stream. */
 const FOLLOW_SLACK_PX = 16
 
 /** The agent's current step as the host streams it, while this is mounted. */
 function useSubagentOutput(cancelId: string): InspectChunk[] {
-	const [chunks, setChunks] = useState<InspectChunk[]>([])
+	const [state, setState] = useState(EMPTY_INSPECT_STATE)
 	useEffect(() => {
-		setChunks([])
+		setState(EMPTY_INSPECT_STATE)
 		const cancel = TaskServiceClient.subscribeSubagentOutput(StringRequest.create({ value: cancelId }), {
-			onResponse: (update: SubagentOutputUpdate) => setChunks((current) => applySubagentOutputUpdate(current, update)),
+			onResponse: (update: SubagentOutputUpdate) => setState((current) => applyInspectUpdate(current, update)),
 			onError: (error: unknown) => console.error("Inspect stream failed:", error),
 			onComplete: () => {},
 		})
 		return cancel
 	}, [cancelId])
-	return chunks
+	return state.chunks
 }
 
 /**

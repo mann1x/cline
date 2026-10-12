@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { applySubagentOutputUpdate, type InspectChunk } from "./subagentOutputView"
+import { applyInspectUpdate, applySubagentOutputUpdate, EMPTY_INSPECT_STATE, type InspectChunk } from "./subagentOutputView"
 
 describe("applySubagentOutputUpdate", () => {
 	it("joins a chunk that continues the last stretch", () => {
@@ -37,5 +37,29 @@ describe("applySubagentOutputUpdate", () => {
 			{ kind: "reasoning", text: "c" },
 			{ kind: "text", text: "defgh" },
 		])
+	})
+})
+
+describe("applyInspectUpdate", () => {
+	const text = (value: string) => ({ kind: "reasoning", text: value, toolName: "", toolCallId: "" })
+
+	it("keeps the step before on screen until the new step's first text", () => {
+		let state = applyInspectUpdate(EMPTY_INSPECT_STATE, { reset: true, chunks: [text("first step")] })
+		expect(state.chunks.map((chunk) => chunk.text)).toEqual(["first step"])
+		// The next step begins and the model has said nothing yet.
+		state = applyInspectUpdate(state, { reset: true, chunks: [] })
+		expect(state.chunks.map((chunk) => chunk.text)).toEqual(["first step"])
+		expect(state.stale).toBe(true)
+		// Its first text replaces what was there, and is not joined to it.
+		state = applyInspectUpdate(state, { reset: false, chunks: [text("second")] })
+		expect(state.chunks.map((chunk) => chunk.text)).toEqual(["second"])
+		expect(state.stale).toBe(false)
+		state = applyInspectUpdate(state, { reset: false, chunks: [text(" step")] })
+		expect(state.chunks.map((chunk) => chunk.text)).toEqual(["second step"])
+	})
+
+	it("has nothing to keep before anything was generated", () => {
+		const state = applyInspectUpdate(EMPTY_INSPECT_STATE, { reset: true, chunks: [] })
+		expect(state).toEqual(EMPTY_INSPECT_STATE)
 	})
 })

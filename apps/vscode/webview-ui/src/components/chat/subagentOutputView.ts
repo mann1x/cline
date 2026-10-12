@@ -65,6 +65,36 @@ export function applySubagentOutputUpdate(
 	return next
 }
 
+/** What the Inspect view holds between updates. */
+export interface InspectState {
+	chunks: InspectChunk[]
+	/** A new step began and nothing of it has arrived: `chunks` is the step before. */
+	stale: boolean
+}
+
+export const EMPTY_INSPECT_STATE: InspectState = { chunks: [], stale: false }
+
+/**
+ * The view's state after one update. A step that begins clears the view only
+ * when its first text arrives: until then the step before stays on screen,
+ * where it used to be replaced by "Nothing generated yet" for as long as the
+ * model took to answer.
+ */
+export function applyInspectUpdate(
+	state: InspectState,
+	update: Pick<SubagentOutputUpdate, "reset" | "chunks">,
+	maxChars: number = INSPECT_MAX_CHARS,
+): InspectState {
+	const arrives = (update.chunks ?? []).some((chunk) => chunk.text)
+	if (!arrives) {
+		return update.reset && state.chunks.length > 0 && !state.stale ? { ...state, stale: true } : state
+	}
+	return {
+		chunks: applySubagentOutputUpdate(state.chunks, { ...update, reset: update.reset || state.stale }, maxChars),
+		stale: false,
+	}
+}
+
 /** A tool call's heading in the view: which tool the arguments are for. */
 export function inspectToolHeading(chunk: InspectChunk): string {
 	return `${chunk.toolName ?? "tool"} call`
