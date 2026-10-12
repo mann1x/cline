@@ -1,4 +1,5 @@
 import type { BasicLogger, ITelemetryService } from "@cline/shared";
+import { setClineDataDir } from "@cline/shared/storage";
 import {
 	ClineCoreAutomationController,
 	createClineCoreAutomationExtensionContext,
@@ -212,6 +213,10 @@ export class ClineCore {
 	 * ```
 	 */
 	static async create(options: ClineCoreOptions = {}): Promise<ClineCore> {
+		// First: the machine id below is read from the data directory.
+		if (options.dataDir?.trim()) {
+			setClineDataDir(options.dataDir);
+		}
 		const distinctId = resolveCoreDistinctId(options.distinctId);
 		const capabilities = normalizeRuntimeCapabilities(options.capabilities);
 		const normalizedOptions = { ...options, capabilities, distinctId };

@@ -2811,6 +2811,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			manifestPath,
 			messagesPath,
 			result,
+			resolvedConfig: bootstrap.resolvedConfig,
 		};
 	}
 

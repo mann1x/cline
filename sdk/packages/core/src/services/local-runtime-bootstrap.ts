@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import {
 	readResolvedOllamaWindow,
 	resolveProviderRequestHeaders,
@@ -22,6 +23,11 @@ import {
 	isOllamaNativeProvider,
 	withOutputBudgetSection,
 } from "@cline/shared";
+import {
+	resolveClineDataDir,
+	resolveGlobalSettingsPath,
+	resolveProviderSettingsPath,
+} from "@cline/shared/storage";
 import { version as corePackageVersion } from "../../package.json";
 import {
 	type AgentPluginPackageDiagnostic,
@@ -74,6 +80,11 @@ import {
 	resolveSessionThinkBudgetMessage,
 	resolveSessionThinkingAllowance,
 } from "./llms/session-budget";
+import {
+	fieldsInheritedFromStoredProfile,
+	type ResolvedSessionConfig,
+	toReportValue,
+} from "./resolved-session-config";
 import { hasRuntimeHooks, mergeAgentExtensions } from "./session-data";
 import type { ProviderSettingsManager } from "./storage/provider-settings-manager";
 import { captureDetachedHookRuntime } from "./telemetry/core-events";
@@ -195,15 +206,27 @@ function resolveBootstrapSystemPrompt(
 	});
 }
 
+/**
+ * The stored profile this session may use: none when the host asked for the
+ * session to be built from its own configuration alone.
+ */
+function readStoredProviderSettings(
+	config: CoreSessionConfig,
+	providerSettingsManager: ProviderSettingsManager,
+): ProviderSettings | undefined {
+	return config.storedProviderSettings === "ignore"
+		? undefined
+		: providerSettingsManager.getProviderSettings(config.providerId);
+}
+
 function buildProviderConfig(
 	config: CoreSessionConfig,
 	sessionId: string,
 	source: ResolvedStartSessionInput["source"],
-	providerSettingsManager: ProviderSettingsManager,
+	stored: ProviderSettings | undefined,
 	modelCatalogDefaults?: Partial<ProviderSettings["modelCatalog"]>,
 	defaultFetch?: typeof fetch,
 ): ProviderConfig {
-	const stored = providerSettingsManager.getProviderSettings(config.providerId);
 	const modelCatalog =
 		modelCatalogDefaults || stored?.modelCatalog
 			? {
@@ -215,6 +238,7 @@ function buildProviderConfig(
 		config.providerConfig?.providerId === config.providerId
 			? config.providerConfig
 			: undefined;
+	const sessionWindow = positiveNumber(config.contextWindow);
 	const resolvedHeaders = resolveProviderRequestHeaders({
 		providerId: config.providerId,
 		sessionId,
@@ -253,6 +277,7 @@ function buildProviderConfig(
 		headers: undefined,
 		reasoning: resolveReasoningSettings(config, stored?.reasoning),
 		modelCatalog,
+		...(sessionWindow !== undefined ? { contextWindow: sessionWindow } : {}),
 	};
 	const providerConfig: ProviderConfig = {
 		...toProviderConfig(settings),
@@ -263,6 +288,21 @@ function buildProviderConfig(
 	}
 	if (config.knownModels) {
 		providerConfig.knownModels = config.knownModels;
+	}
+	if (sessionWindow !== undefined) {
+		// The model's catalog entry is what a request's `num_ctx` and the
+		// compaction trigger are read from, so the window goes there too.
+		// `maxInputTokens` is cleared, not set: where both are present the
+		// smaller wins, and a stale catalog figure would cap the window.
+		providerConfig.knownModels = {
+			...(providerConfig.knownModels ?? {}),
+			[config.modelId]: {
+				...(providerConfig.knownModels?.[config.modelId] ?? {}),
+				id: config.modelId,
+				contextWindow: sessionWindow,
+				maxInputTokens: undefined,
+			},
+		} as ProviderConfig["knownModels"];
 	}
 	if (config.extensionContext) {
 		providerConfig.extensionContext = config.extensionContext;
@@ -281,6 +321,128 @@ const positiveNumber = (value: unknown): number | undefined =>
 	typeof value === "number" && Number.isFinite(value) && value > 0
 		? value
 		: undefined;
+
+/**
+ * The report a host is handed before the first request: what the session
+ * will run with, and what of it came from the stored profile.
+ */
+function describeResolvedSession(input: {
+	/** The session's configuration as built. */
+	config: CoreSessionConfig;
+	/**
+	 * The configuration as the host passed it. The built one carries the
+	 * merged provider configuration, so asking it what the host set would
+	 * answer "everything".
+	 */
+	hostConfig: CoreSessionConfig;
+	providerConfig: ProviderConfig;
+	sessionId: string;
+	source: ResolvedStartSessionInput["source"];
+	stored: ProviderSettings | undefined;
+	modelCatalogDefaults?: Partial<ProviderSettings["modelCatalog"]>;
+	defaultFetch?: typeof fetch;
+	contextWindow: number | undefined;
+}): ResolvedSessionConfig {
+	const { config, hostConfig, providerConfig, stored } = input;
+	const known = providerConfig.knownModels?.[config.modelId] as
+		| { contextWindow?: number; maxInputTokens?: number }
+		| undefined;
+	// What the same session would be with no stored profile, to see what the
+	// profile contributed. Built the same way so the comparison is like for like.
+	const inherited = stored
+		? fieldsInheritedFromStoredProfile(
+				providerConfig,
+				(() => {
+					const bare = buildProviderConfig(
+						hostConfig,
+						input.sessionId,
+						input.source,
+						undefined,
+						input.modelCatalogDefaults,
+						input.defaultFetch,
+					);
+					// The budget is applied after the build, from the profile
+					// among other things; it is reported separately below.
+					bare.defaultMaxOutputTokens = providerConfig.defaultMaxOutputTokens;
+					bare.thinkingBudgetTokens = providerConfig.thinkingBudgetTokens;
+					return bare;
+				})(),
+			)
+		: [];
+	// The budget's own inputs from the profile, which the comparison above
+	// cannot see because the budget is computed, not copied.
+	const hostResolvedBudget =
+		hostConfig.providerConfig?.providerId === hostConfig.providerId &&
+		positiveNumber(hostConfig.providerConfig?.defaultMaxOutputTokens) !==
+			undefined;
+	if (stored && !hostResolvedBudget) {
+		const budgetInputs: [string, unknown][] = [
+			[
+				"budget.contextWindow",
+				positiveNumber(config.contextWindow) === undefined
+					? stored.contextWindow
+					: undefined,
+			],
+			["budget.numPredict", stored.sampling?.numPredict],
+			["budget.thinkBudget", stored.sampling?.thinkBudget],
+			["budget.outputBudget", stored.outputBudget],
+			["budget.reasoningBudgetTokens", stored.reasoning?.budgetTokens],
+		];
+		for (const [name, value] of budgetInputs) {
+			if (value !== undefined && value !== null) {
+				inherited.push(name);
+			}
+		}
+	}
+	const globalSettingsPath = resolveGlobalSettingsPath();
+	return {
+		sessionId: input.sessionId,
+		providerId: config.providerId,
+		modelId: config.modelId,
+		...(providerConfig.baseUrl ? { baseUrl: providerConfig.baseUrl } : {}),
+		contextWindow:
+			positiveNumber(config.contextWindow) ??
+			input.contextWindow ??
+			positiveNumber(known?.contextWindow) ??
+			positiveNumber(providerConfig.maxInputTokens),
+		maxOutputTokens: positiveNumber(providerConfig.defaultMaxOutputTokens),
+		thinking: {
+			...(typeof providerConfig.thinking === "boolean"
+				? { enabled: providerConfig.thinking }
+				: {}),
+			...(providerConfig.reasoningEffort
+				? { effort: String(providerConfig.reasoningEffort) }
+				: {}),
+			...(positiveNumber(providerConfig.thinkingBudgetTokens) !== undefined
+				? { budgetTokens: providerConfig.thinkingBudgetTokens }
+				: {}),
+		},
+		...(providerConfig.sampling
+			? {
+					sampling: toReportValue(providerConfig.sampling) as Record<
+						string,
+						unknown
+					>,
+				}
+			: {}),
+		provider: toReportValue(providerConfig) as Record<string, unknown>,
+		session: toReportValue(config) as Record<string, unknown>,
+		...(config.systemPrompt ? { systemPrompt: config.systemPrompt } : {}),
+		sources: {
+			storedProviderSettings:
+				config.storedProviderSettings === "ignore"
+					? "ignored"
+					: stored
+						? "merged"
+						: "absent",
+			inheritedFromStoredProfile: inherited.sort(),
+			dataDir: resolveClineDataDir(),
+			providerSettingsPath: resolveProviderSettingsPath(),
+			globalSettingsPath,
+			globalSettingsPresent: existsSync(globalSettingsPath),
+		},
+	};
+}
 
 /**
  * The plugin's output cap and thinking allowance, for a host that did not
@@ -319,6 +481,7 @@ async function applySessionBudget(
 		| { contextWindow?: number; maxTokens?: number }
 		| undefined;
 	const contextWindow =
+		positiveNumber(config.contextWindow) ??
 		positiveNumber(stored?.contextWindow) ??
 		(isOllamaNativeProvider(config.providerId)
 			? readResolvedOllamaWindow(baseUrl, modelId)
@@ -422,6 +585,8 @@ export interface LocalRuntimeBootstrap {
 	effectiveInput: ResolvedStartSessionInput;
 	config: CoreSessionConfig;
 	providerConfig: ProviderConfig;
+	/** What the session was built with, as a report. */
+	resolvedConfig: ResolvedSessionConfig;
 	workspaceMetadata: string;
 	/** Structured git + path metadata generated alongside workspaceMetadata. */
 	workspaceInfo: WorkspaceInfo;
@@ -654,18 +819,22 @@ export async function prepareLocalRuntimeBootstrap(
 		telemetry: extensionContext.telemetry,
 		logger: extensionContext.logger,
 	};
+	const storedProviderSettings = readStoredProviderSettings(
+		baseConfig,
+		providerSettingsManager,
+	);
 	const providerConfig = buildProviderConfig(
 		baseConfig,
 		sessionId,
 		input.source,
-		providerSettingsManager,
+		storedProviderSettings,
 		modelCatalogDefaults,
 		defaultFetch,
 	);
 	const sessionBudget = await applySessionBudget(
 		providerConfig,
 		baseConfig,
-		providerSettingsManager.getProviderSettings(baseConfig.providerId),
+		storedProviderSettings,
 	);
 	const hooks = mergeAgentHooks([
 		baseConfig.hooks,
@@ -736,6 +905,20 @@ export async function prepareLocalRuntimeBootstrap(
 				}
 			: {}),
 	};
+	const resolvedConfig = describeResolvedSession({
+		config,
+		hostConfig: baseConfig,
+		providerConfig,
+		sessionId,
+		source: input.source,
+		stored: storedProviderSettings,
+		modelCatalogDefaults,
+		defaultFetch,
+		contextWindow: sessionBudget?.contextWindow,
+	});
+	// Before anything is sent: a host that refuses this configuration throws
+	// here and the session never starts.
+	await baseConfig.onConfigResolved?.(resolvedConfig);
 	const toolPolicies =
 		input.toolPolicies ?? baseConfig.toolPolicies ?? defaultToolPolicies;
 	const capabilities = normalizeRuntimeCapabilities(
@@ -760,6 +943,7 @@ export async function prepareLocalRuntimeBootstrap(
 		effectiveInput: input,
 		config,
 		providerConfig,
+		resolvedConfig,
 		workspaceMetadata,
 		workspaceInfo,
 		gitState,

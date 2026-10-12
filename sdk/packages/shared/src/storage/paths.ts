@@ -246,7 +246,27 @@ export function resolveDocumentsExtensionPath(
 	return join(resolveDocumentsClineDirectoryPath(), name);
 }
 
+let CLINE_DATA_DIR: string | undefined;
+
+/**
+ * Put everything this process stores (sessions, databases, team state, the
+ * provider and global settings files) under one directory.
+ *
+ * The same thing `CEREBRILINE_DATA_DIR` does, for a host that is given the
+ * directory as configuration and should not have to write to the environment
+ * to pass it on. It wins over the variable. An empty string clears it.
+ *
+ * It is one setting for the whole process, like the variable: two sessions in
+ * one process share a data directory.
+ */
+export function setClineDataDir(dir: string | undefined): void {
+	CLINE_DATA_DIR = dir?.trim() || undefined;
+}
+
 export function resolveClineDataDir(): string {
+	if (CLINE_DATA_DIR) {
+		return CLINE_DATA_DIR;
+	}
 	const explicitDir =
 		process.env.CEREBRILINE_DATA_DIR?.trim() ||
 		process.env.CLINE_DATA_DIR?.trim();

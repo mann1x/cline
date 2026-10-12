@@ -29,6 +29,7 @@ import type {
 import type { CheckApprover } from "../runtime/atomic/proposal";
 import type { EscalationApproval } from "../runtime/escalation/escalation-session";
 import type { StruggleThresholds } from "../runtime/safety/struggle-detector";
+import type { ResolvedSessionConfig } from "../services/resolved-session-config";
 import type { ProviderConfig } from "./provider-settings";
 
 export type CoreAgentMode = AgentMode;
@@ -840,6 +841,42 @@ export interface CoreSessionConfig
 	 * transcript/tool/hook context.
 	 */
 	sessionId?: string;
+	/**
+	 * The context window this session runs in, in tokens.
+	 *
+	 * It is what the session sizes compaction and its output budget against,
+	 * and what is sent as `num_ctx` to a server that takes one. Without it the
+	 * window is the stored profile's, then the one the model declares, then the
+	 * catalog's. A host that has to control the window had no field for it:
+	 * the CLI wrote it into the model catalog entry it passed along.
+	 */
+	contextWindow?: number;
+	/**
+	 * What to do with the provider profile stored in the data directory.
+	 *
+	 * `merge` (the default) lays it under what this configuration says, so a
+	 * key, a base URL, a sampler or an output budget saved earlier applies to
+	 * this session too. `ignore` builds the session from this configuration
+	 * alone: what is not passed here is absent. A harness wants `ignore`, or
+	 * one run inherits the numbers of another.
+	 *
+	 * Provider settings only. The global settings file (which built-in skills
+	 * are on, which plugins are off) is still read; `onConfigResolved` reports
+	 * where it is and whether it exists.
+	 */
+	storedProviderSettings?: "merge" | "ignore";
+	/**
+	 * Called once the session's configuration is final, before its first
+	 * request is sent. See `ResolvedSessionConfig`.
+	 *
+	 * Awaited. Throwing from it stops the session from starting, which is how
+	 * a host refuses to run on a configuration that is not the one it asked
+	 * for.
+	 *
+	 * Called for a session that runs in this process. A hub or remote runtime
+	 * builds the session elsewhere and a function does not travel there.
+	 */
+	onConfigResolved?: (resolved: ResolvedSessionConfig) => void | Promise<void>;
 	/**
 	 * Turn images into text with a second model, so the session's model never
 	 * sees one. See `AgentConfig.describeImages`.

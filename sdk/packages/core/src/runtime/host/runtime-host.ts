@@ -12,6 +12,7 @@ import type {
 import type { HookEventPayload } from "../../hooks";
 import type { CheckpointEntry } from "../../hooks/checkpoint-hooks";
 import type { ProviderSettings } from "../../services/llms/provider-settings";
+import type { ResolvedSessionConfig } from "../../services/resolved-session-config";
 import type { SessionCompactionState } from "../../session/models/session-compaction";
 import type { SessionManifest } from "../../session/models/session-manifest";
 import type { SessionSource } from "../../types/common";
@@ -269,6 +270,11 @@ export interface StartSessionResult {
 	manifestPath: string;
 	messagesPath: string;
 	result?: AgentResult;
+	/**
+	 * What the session was built with. Present for a session that runs in
+	 * this process; a hub or remote runtime does not send it back.
+	 */
+	resolvedConfig?: ResolvedSessionConfig;
 }
 
 export interface SendSessionInput {

@@ -50,7 +50,12 @@ describe("prepareLocalRuntimeBootstrap", () => {
 	let resetModulesAfterEach = false;
 
 	afterEach(() => {
-		process.env.CLINE_GLOBAL_SETTINGS_PATH = previousGlobalSettingsPath;
+		// Assigning `undefined` to an environment variable stores the word.
+		if (previousGlobalSettingsPath === undefined) {
+			delete process.env.CLINE_GLOBAL_SETTINGS_PATH;
+		} else {
+			process.env.CLINE_GLOBAL_SETTINGS_PATH = previousGlobalSettingsPath;
+		}
 		vi.doUnmock("../extensions/plugin/plugin-config-loader");
 		if (resetModulesAfterEach) {
 			vi.resetModules();

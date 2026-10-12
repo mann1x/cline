@@ -1670,6 +1670,11 @@ export {
 	sessionThinkingEngine,
 } from "./services/llms/session-budget";
 export {
+	fieldsInheritedFromStoredProfile,
+	type ResolvedSessionConfig,
+	toReportValue,
+} from "./services/resolved-session-config";
+export {
 	BOOK_FORMAT,
 	type BookImage,
 	type BookMatch,

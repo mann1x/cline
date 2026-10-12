@@ -61,6 +61,7 @@ export {
 	resolveWorkspaceRulesConfigPaths,
 	resolveWorkspaceTaskSpecsDir,
 	SKILLS_CONFIG_DIRECTORY_NAME,
+	setClineDataDir,
 	setClineDir,
 	setClineDirIfUnset,
 	setHomeDir,

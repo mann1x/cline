@@ -177,6 +177,17 @@ export type CompareCheckpointResult = CheckpointWorkspaceCompareResult;
 
 export interface ClineCoreOptions {
 	/**
+	 * Where this process keeps its data: sessions, databases, team state, and
+	 * the provider and global settings files. Defaults to the data directory
+	 * under the user's home.
+	 *
+	 * A harness gives each run a directory of its own, so that nothing a
+	 * previous run stored is read by the next. It applies to the whole
+	 * process, not to this instance alone, and has to be set before anything
+	 * is read: pass it to the first `ClineCore.create`.
+	 */
+	dataDir?: string;
+	/**
 	 * A human-readable name for this SDK client (e.g. `"my-app"`, `"acme-bot"`).
 	 * Used to identify the consumer in telemetry and logs.
 	 */
