@@ -82,6 +82,7 @@ import {
 import {
 	createRepetitionNudger,
 	DEFAULT_REASONING_REPETITION,
+	describeRepetitionForLog,
 	isRepetitionLoop,
 	measureReasoningRepetition,
 	type RepetitionNudger,
@@ -1713,6 +1714,15 @@ export class AgentRuntime {
 				content.splice(0, content.length, ...kept);
 				spoiled.kinds.push("reasoning_loop");
 				spoiled.removedChars += reasoning.length;
+				this.config.logger?.debug?.(
+					`[reasoning-loop] iter=${this.state.iteration} removed: ${
+						verdict
+							? `${reasoning.length} chars; cut while streaming (${verdict.kind}${verdict.cycles !== undefined ? `, ${verdict.cycles} cycles` : ""}); unit: ${JSON.stringify(verdict.sample.slice(0, 400))}`
+							: measurement
+								? describeRepetitionForLog(reasoning, measurement)
+								: `${reasoning.length} chars`
+					}`,
+				);
 			}
 		}
 		const calledSomething = content.some((part) => part.type === "tool-call");

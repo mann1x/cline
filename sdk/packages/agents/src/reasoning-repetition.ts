@@ -163,6 +163,33 @@ export function measureReasoningRepetition(
 	};
 }
 
+/**
+ * A removal, written so it can be checked afterwards.
+ *
+ * Removing looped reasoning deletes the only copy, and the log said
+ * "98320 chars removed" and nothing else. The user had watched that turn
+ * scroll past and had not seen a passage repeat 15 times (pandorum, zhy7n,
+ * 2026-10-12): the copies were spread through 341 paragraphs, not back to
+ * back, and nothing kept could show that. So: the counts, where in the turn
+ * each copy began, and the passage.
+ */
+export function describeRepetitionForLog(
+	text: string,
+	measurement: RepetitionMeasurement,
+): string {
+	const at: number[] = [];
+	for (
+		let from = text.indexOf(measurement.sample);
+		from >= 0 && at.length < 200;
+		from = text.indexOf(measurement.sample, from + measurement.sample.length)
+	) {
+		at.push(Math.round((from / Math.max(1, text.length)) * 100));
+	}
+	const passage = measurement.sample.replace(/\s+/g, " ");
+	const shown = passage.length > 400 ? `${passage.slice(0, 400)} ...` : passage;
+	return `${text.length} chars; one passage ${measurement.maxRepeat} times; ${measurement.duplicates} of ${measurement.paragraphs} paragraphs repeat an earlier one; its copies begin at ${at.map((percent) => `${percent}%`).join(", ")} of the turn; passage (${passage.length} chars): ${JSON.stringify(shown)}`;
+}
+
 /** Whether a measurement crosses both thresholds. */
 export function isRepetitionLoop(
 	measurement: RepetitionMeasurement | undefined,

@@ -3,6 +3,7 @@ import {
 	createRepetitionNudger,
 	DEFAULT_REASONING_REPETITION,
 	describeRepetition,
+	describeRepetitionForLog,
 	isRepetitionLoop,
 	measureReasoningRepetition,
 } from "./reasoning-repetition";
@@ -292,5 +293,25 @@ describe("recovering the nudge budget", () => {
 
 		expect(nudger.spent).toBe(1);
 		expect(nudger.inspect(LOOP, 100)).toBeUndefined();
+	});
+});
+
+describe("a removal written for the log", () => {
+	it("says how often, where in the turn, and what", () => {
+		const loop =
+			"Wait! I just noticed that my replacement for line 23 was fine and these look fine.";
+		const other = (index: number) =>
+			`Step ${index}: let me look at the next line of the file and see if it is right.`;
+		const text = [other(1), loop, other(2), other(3), loop, other(4), loop]
+			.join("\n\n")
+			.padEnd(4_200, " ");
+		const measured = measureReasoningRepetition(text);
+		expect(measured?.maxRepeat).toBe(3);
+		const line = describeRepetitionForLog(text, measured as never);
+		expect(line).toContain("one passage 3 times");
+		expect(line).toContain("2 of 7 paragraphs repeat an earlier one");
+		// Three copies, spread through the turn and not back to back.
+		expect(line.match(/(\d+%)/g)).toHaveLength(3);
+		expect(line).toContain("Wait! I just noticed");
 	});
 });
