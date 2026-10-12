@@ -26,6 +26,8 @@ import {
 	summarizeToolCallSignatures,
 	TRANSCRIBE_AUDIO_TOOL_DESCRIPTION,
 	TRANSCRIBE_AUDIO_TOOL_NAME,
+	TRANSFORM_IMAGE_TOOL_DESCRIPTION,
+	TRANSFORM_IMAGE_TOOL_NAME,
 } from "@cline/core"
 import { describe, expect, it } from "vitest"
 import { CHECK_FILE_TOOL_DESCRIPTION, CHECK_FILE_TOOL_INPUT_SCHEMA, CHECK_FILE_TOOL_NAME } from "./check-file-tool"
@@ -77,6 +79,10 @@ describe("host tool descriptions in default.md", () => {
 
 	it("reproduces render_image verbatim", () => {
 		expect(shipped?.tools[RENDER_IMAGE_TOOL_NAME]).toBe(RENDER_IMAGE_TOOL_DESCRIPTION.trim())
+	})
+
+	it("reproduces transform_image verbatim", () => {
+		expect(shipped?.tools[TRANSFORM_IMAGE_TOOL_NAME]).toBe(TRANSFORM_IMAGE_TOOL_DESCRIPTION.trim())
 	})
 
 	it("reproduces the audio tools verbatim", () => {

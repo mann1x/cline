@@ -199,6 +199,9 @@ Reach for it the moment you are about to do one of these by hand:
 # tool: render_image
 {{DEFAULT}}
 
+# tool: transform_image
+{{DEFAULT}}
+
 # tool: transcribe_audio
 {{DEFAULT}}
 

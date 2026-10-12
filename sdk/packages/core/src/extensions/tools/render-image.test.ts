@@ -25,7 +25,7 @@ function harness(
 				render: async (request) => {
 					requests.push(request);
 					return {
-						png: PNG,
+						data: PNG,
 						width: result.width ?? 1180,
 						height: result.height ?? 370,
 						...(result.svg ? { svg: result.svg } : {}),

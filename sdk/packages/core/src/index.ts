@@ -1468,6 +1468,26 @@ export type {
 	ConfiguredAgentSummary,
 	DelegateToConfiguredAgentInput,
 } from "./extensions/tools/team/delegate-to-agent";
+export {
+	buildTransformDocument,
+	createTransformImageTool,
+	encodeIcns,
+	encodeIco,
+	ICNS_SIZES,
+	ICO_SIZES,
+	type ImageFit,
+	parseIconSizes,
+	planTransform,
+	renderIconSizes,
+	TRANSFORM_IMAGE_TOOL_DESCRIPTION,
+	TRANSFORM_IMAGE_TOOL_INPUT_SCHEMA,
+	TRANSFORM_IMAGE_TOOL_NAME,
+	type TransformImageToolOptions,
+	type TransformPlan,
+	type TransformSpec,
+	transformWithDriver,
+	UnreadableImageError,
+} from "./extensions/tools/transform-image";
 export type {
 	SemanticSearchExecutor,
 	SemanticSearchOptions,

@@ -204,6 +204,9 @@ Query the language servers for semantic information. Use this instead of `search
 # tool: render_image
 {{DEFAULT}}
 
+# tool: transform_image
+{{DEFAULT}}
+
 # tool: transcribe_audio
 {{DEFAULT}}
 

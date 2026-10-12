@@ -140,10 +140,12 @@ export async function renderWithChrome(request: RenderRequest, environment: Rend
 			height: Math.min(asked.height, limit),
 		}
 		if (clip.width <= 0 || clip.height <= 0) {
-			return { png: Buffer.alloc(0), width: 0, height: 0 }
+			return { data: Buffer.alloc(0), width: 0, height: 0 }
 		}
-		const png = await page.screenshot({
-			type: "png",
+		const format = request.format ?? "png"
+		const capture = await page.screenshot({
+			type: format,
+			...(format !== "png" && request.quality ? { quality: Math.round(request.quality) } : {}),
 			clip,
 			omitBackground: request.transparent,
 			captureBeyondViewport: true,
@@ -154,7 +156,7 @@ export async function renderWithChrome(request: RenderRequest, environment: Rend
 					return drawing ? new XMLSerializer().serializeToString(drawing) : undefined
 				}, RENDER_ROOT_ID)
 			: undefined
-		return { png: Buffer.from(png), width: clip.width, height: clip.height, ...(svg ? { svg } : {}) }
+		return { data: Buffer.from(capture), width: clip.width, height: clip.height, ...(svg ? { svg } : {}) }
 	} finally {
 		request.signal?.removeEventListener("abort", stop)
 		await browser.close().catch(() => undefined)

@@ -55,6 +55,10 @@ import { createLeadAgentTools } from "../tools/team/lead-agent-tools";
 import { createSpawnAgentTool } from "../tools/team/spawn-agent-tool";
 import { createAgentTeamsTools } from "../tools/team/team-tools";
 import {
+	TRANSFORM_IMAGE_TOOL_INPUT_SCHEMA,
+	TRANSFORM_IMAGE_TOOL_NAME,
+} from "../tools/transform-image";
+import {
 	GENERATE_VIDEO_TOOL_INPUT_SCHEMA,
 	GENERATE_VIDEO_TOOL_NAME,
 } from "../tools/video-generation";
@@ -99,6 +103,10 @@ export const HOST_TOOL_INPUT_SCHEMAS: readonly {
 	{
 		name: RENDER_IMAGE_TOOL_NAME,
 		inputSchema: RENDER_IMAGE_TOOL_INPUT_SCHEMA,
+	},
+	{
+		name: TRANSFORM_IMAGE_TOOL_NAME,
+		inputSchema: TRANSFORM_IMAGE_TOOL_INPUT_SCHEMA,
 	},
 	{
 		name: TRANSCRIBE_AUDIO_TOOL_NAME,

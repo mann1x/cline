@@ -1,6 +1,6 @@
-import { writeFileSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
-import { createRenderImageTool } from "@cline/core"
+import { createRenderImageTool, createTransformImageTool } from "@cline/core"
 import { describe, expect, it } from "vitest"
 import { renderWithChrome } from "../services/browser/render-page"
 
@@ -49,4 +49,42 @@ describe.skipIf(!OUT || !CHROME)("render_image against a real Chrome", () => {
 		console.log(String(await run({ source: svg, path: "crop.png", crop: "0,0,100,50", scale: 1, background: "transparent" })))
 		console.log(String(await run({ source: "<p>hello</p>", path: "page.png", width: 400, height: 300, scale: 1 })))
 	}, 90_000)
+
+	it("resizes, crops and converts a file, and packs an icon", async () => {
+		const change = createTransformImageTool({
+			cwd: ws,
+			createDriver: () => ({
+				render: (request) => renderWithChrome(request, { executablePath: CHROME, args: ["--no-sandbox"] }),
+			}),
+			fileExists: async (file) => existsSync(file),
+			writeFile: async (file, data) => writeFileSync(file, data),
+		})
+		const go = (input: Record<string, unknown>) => change.execute(input, { metadata: {} } as never) as Promise<unknown>
+		const sizeOf = (name: string) => {
+			const data = readFileSync(path.join(ws, name))
+			return [data.readUInt32BE(16), data.readUInt32BE(20)]
+		}
+		// flow.png is 1380 by 348.
+		console.log(String(await go({ image: "flow.png", width: 690 })))
+		expect(sizeOf("flow-690x174.png")).toEqual([690, 174])
+		await go({ image: "flow.png", path: "cover.png", width: 300, height: 300, fit: "cover" })
+		expect(sizeOf("cover.png")).toEqual([300, 300])
+		await go({ image: "flow.png", path: "pad.png", width: 300, height: 300, fit: "pad", background: "#0d1117" })
+		expect(sizeOf("pad.png")).toEqual([300, 300])
+		await go({ image: "flow.png", path: "cut.png", crop: "0,0,400,348" })
+		expect(sizeOf("cut.png")).toEqual([400, 348])
+		await go({ image: "flow.png", path: "flow.jpg", width: 600, quality: 80 })
+		expect(readFileSync(path.join(ws, "flow.jpg")).subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]))
+		await go({ image: "flow.png", path: "flow.webp", width: 600 })
+		expect(readFileSync(path.join(ws, "flow.webp")).subarray(8, 12).toString()).toBe("WEBP")
+		console.log(String(await go({ image: "badge.png", path: "badge.ico" })))
+		const ico = readFileSync(path.join(ws, "badge.ico"))
+		expect(ico.readUInt16LE(4)).toBe(7)
+		// Each entry is a PNG of the size its directory entry says.
+		const at = ico.readUInt32LE(6 + 12)
+		expect(ico.readUInt32BE(at + 16)).toBe(16)
+		await go({ image: "badge.png", path: "badge.icns" })
+		expect(readFileSync(path.join(ws, "badge.icns")).subarray(0, 4).toString()).toBe("icns")
+		expect(String(await go({ image: "styles/app.css", path: "no.png" }))).toContain("could not be read as an image")
+	}, 180_000)
 })

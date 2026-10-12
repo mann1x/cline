@@ -131,6 +131,13 @@ export const SELECTABLE_TOOLS: readonly SelectableTool[] = [
 		group: "other",
 	},
 	{
+		name: "transform_image",
+		label: "transform_image",
+		summary: "Resizes, crops and converts an image file, .ico and .icns included.",
+		tokens: 549,
+		group: "other",
+	},
+	{
 		name: "sed",
 		label: "sed",
 		summary: "Stream edits, with a preview mode and an in-place mode.",

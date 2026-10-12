@@ -309,6 +309,9 @@ This costs real time — seconds to a minute per image — and on a hosted backe
 # tool: render_image
 {{DEFAULT}}
 
+# tool: transform_image
+{{DEFAULT}}
+
 # tool: transcribe_audio
 {{DEFAULT}}
 

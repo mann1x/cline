@@ -116,11 +116,16 @@ export interface RenderRequest {
 	transparent: boolean;
 	/** Also hand back the drawing as SVG text, where the page holds one. */
 	wantSvg: boolean;
+	/** What the capture is encoded as. Absent: PNG. */
+	format?: "png" | "jpeg" | "webp";
+	/** 1 to 100, for the two formats that have one. */
+	quality?: number;
 	signal?: AbortSignal;
 }
 
 export interface RenderResult {
-	png: Buffer;
+	/** The capture, in the format asked for. */
+	data: Buffer;
 	/** The captured region, in CSS pixels. */
 	width: number;
 	height: number;
@@ -412,7 +417,7 @@ export function createRenderImageTool(
 					// Shown as the PNG of the same drawing: an SVG is not an image a
 					// model or a tool row is sent.
 					const shown = await saveAndReportImage({
-						image: { data: result.png, mediaType: "image/png" },
+						image: { data: result.data, mediaType: "image/png" },
 						verb: "Rendered",
 						askedPath: requestedPath,
 						requestedPath,
@@ -424,7 +429,7 @@ export function createRenderImageTool(
 					return shown;
 				}
 				return await saveAndReportImage({
-					image: { data: result.png, mediaType: "image/png" },
+					image: { data: result.data, mediaType: "image/png" },
 					verb: "Rendered",
 					askedPath: requestedPath,
 					requestedPath,

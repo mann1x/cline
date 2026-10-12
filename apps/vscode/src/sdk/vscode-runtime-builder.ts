@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises"
+import { readFile, stat } from "node:fs/promises"
 import {
 	createAskLspTool,
 	createBrowserTool,
@@ -10,6 +10,7 @@ import {
 	createMemoryTools,
 	createRenderImageTool,
 	createSddTools,
+	createTransformImageTool,
 	createWebScrapeTools,
 	type MediaSessionProvider,
 } from "@cline/core"
@@ -197,6 +198,23 @@ export async function createVscodeExtraTools(mcpHub: McpHub, options?: VscodeExt
 		createRenderImageTool({
 			cwd: options?.cwd ?? process.cwd(),
 			createDriver: createVscodeRenderDriver,
+			writeFile: writeGeneratedImage,
+			onError: (message, error) => Logger.error(`${message}:`, error),
+		}),
+	)
+
+	// `transform_image` is the same Chrome put to a second use: it decodes
+	// every format a page shows and encodes the ones that matter, so resizing,
+	// cropping and converting need no image library and no shell command.
+	tools.push(
+		createTransformImageTool({
+			cwd: options?.cwd ?? process.cwd(),
+			createDriver: createVscodeRenderDriver,
+			fileExists: (absolutePath) =>
+				stat(absolutePath).then(
+					(found) => found.isFile(),
+					() => false,
+				),
 			writeFile: writeGeneratedImage,
 			onError: (message, error) => Logger.error(`${message}:`, error),
 		}),

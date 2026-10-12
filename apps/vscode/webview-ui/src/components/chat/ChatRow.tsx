@@ -137,6 +137,7 @@ const GENERIC_TOOL_VERBS: Record<string, string> = {
 	plan: "Cerebriline wrote down the plan:",
 	propose_check: "Cerebriline proposed a check:",
 	render_image: "Cerebriline rendered an image:",
+	transform_image: "Cerebriline changed an image:",
 	// The fallback only. A restore names the version it went back to, and the
 	// translator puts that sentence on the row as `headline`; this is what a
 	// row from before that change still says.

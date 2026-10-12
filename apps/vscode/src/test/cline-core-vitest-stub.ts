@@ -206,6 +206,12 @@ export { createSddTools } from "../../../../sdk/packages/core/src/extensions/too
 // agents with it, and the two have to agree.
 export { uniqueAgentNames } from "../../../../sdk/packages/core/src/extensions/tools/team/agent-names"
 export {
+	createTransformImageTool,
+	TRANSFORM_IMAGE_TOOL_DESCRIPTION,
+	TRANSFORM_IMAGE_TOOL_INPUT_SCHEMA,
+	TRANSFORM_IMAGE_TOOL_NAME,
+} from "../../../../sdk/packages/core/src/extensions/tools/transform-image"
+export {
 	GENERATE_VIDEO_TOOL_DESCRIPTION,
 	GENERATE_VIDEO_TOOL_NAME,
 } from "../../../../sdk/packages/core/src/extensions/tools/video-generation"

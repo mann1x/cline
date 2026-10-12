@@ -255,6 +255,18 @@ The image is saved and, if you can see images, returned to you, so you can check
 
 A README on GitHub renders a ```mermaid block as it is; render a diagram to a file when it must show somewhere that does not. Remote fonts, scripts and images load only if the machine reaches them quickly: inline what matters.
 
+# tool: transform_image
+Resize, crop or convert an image file in the workspace and save the result as a new file. Use it to change an image's dimensions, cut a region out of it, change its format, or make an icon file from it. The source is never modified.
+
+- `image` — workspace path of the source: PNG, JPEG, WebP, GIF, BMP, AVIF, ICO or SVG.
+- `path` — where to save, relative to the workspace. The extension chooses the format: `.png`, `.jpg`, `.webp`, `.ico` or `.icns`. Optional; defaults to a file beside the source with the new size in its name.
+- `width`, `height` — the new size in pixels. Give one and the other follows the proportions.
+- `fit` — with both given: `inside` (default; the whole image, within the box, proportions kept), `cover` (fills the box, the overflow cut off), `pad` (the whole image, padded to exactly the box) or `stretch`.
+- `crop` — `"x,y,width,height"` in pixels of the source, taken before resizing.
+- `background` — a CSS colour for padding and for what was transparent. Optional; transparency is kept where the format has it, and JPEG gets white.
+- `quality` — 1 to 100 for `.jpg` and `.webp`, default 90.
+- `sizes` — for `.ico` and `.icns`, the sizes to hold, e.g. `"16,32,48,256"`. Optional; the usual set when left out.
+
 # tool: transcribe_audio
 Transcribe an audio file in the workspace to text. Use it to read a recording you would otherwise have to ask the user to describe: a meeting, a voice note, the audio of a demo.
 

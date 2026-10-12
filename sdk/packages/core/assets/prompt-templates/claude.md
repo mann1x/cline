@@ -416,6 +416,9 @@ It is the wrong tool for text that is not a symbol: strings, comments, config ke
 # tool: render_image
 {{DEFAULT}}
 
+# tool: transform_image
+{{DEFAULT}}
+
 # tool: transcribe_audio
 {{DEFAULT}}
 
