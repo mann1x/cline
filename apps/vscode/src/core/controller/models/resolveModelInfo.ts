@@ -1,4 +1,4 @@
-import { resolveOllamaSessionContextWindow } from "@/sdk/cline-session-factory"
+import { resolveOllamaSessionContextWindow, resolveOllamaSessionImageSupport } from "@/sdk/cline-session-factory"
 import type { ProviderModelsResult } from "@/sdk/model-catalog/contracts"
 import { providerAllowsCustomModelIds } from "@/sdk/model-catalog/custom-model-ids"
 import { ResolveModelInfoRequest, ResolveModelInfoResponse } from "@/shared/proto/cline/models"
@@ -67,10 +67,24 @@ async function withSessionContextWindow(
 	const contextWindow = await resolveOllamaSessionContextWindow(config, response.providerId, response.modelId).catch(
 		() => undefined,
 	)
-	if (contextWindow === undefined || contextWindow === response.modelInfo.contextWindow) {
+	// Image input, from the server that runs the model: the catalog's entry
+	// for a model it discovered says nothing about it.
+	const supportsImages = await resolveOllamaSessionImageSupport(config, response.providerId, response.modelId).catch(
+		() => undefined,
+	)
+	const windowChanged = contextWindow !== undefined && contextWindow !== response.modelInfo.contextWindow
+	const imagesChanged = supportsImages !== undefined && supportsImages !== response.modelInfo.supportsImages
+	if (!windowChanged && !imagesChanged) {
 		return response
 	}
-	return ResolveModelInfoResponse.create({ ...response, modelInfo: { ...response.modelInfo, contextWindow } })
+	return ResolveModelInfoResponse.create({
+		...response,
+		modelInfo: {
+			...response.modelInfo,
+			...(windowChanged ? { contextWindow } : {}),
+			...(imagesChanged ? { supportsImages } : {}),
+		},
+	})
 }
 
 async function resolveCatalogModelInfo(

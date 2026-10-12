@@ -56,7 +56,20 @@ function resolveOllamaContextWindow(providerId: string): number {
 
 export function applyHostModelInfoOverrides(providerId: ProviderId, modelId: string, modelInfo: ModelInfo): ModelInfo {
 	if (isOllamaNativeProvider(providerId)) {
-		return { ...modelInfo, contextWindow: resolveOllamaContextWindow(providerId) }
+		// A model discovered from the server's list carries the provider's own
+		// capability list ("streaming", "tools"), the same for every model, and
+		// the adapter reads a list without "images" as "cannot read images".
+		// That marked every listed model so, vision models included: a pulled
+		// `deepseek-v4.1-flash:cloud`, which the server reports with `vision`,
+		// was shown "doesn't support images, so the attached image will be
+		// ignored" (reported 2026-10-12). A list that was never about this model
+		// is no answer; the server's own is read in `resolveModelInfo`.
+		const { supportsImages, ...rest } = modelInfo
+		return {
+			...rest,
+			...(supportsImages === true ? { supportsImages: true } : {}),
+			contextWindow: resolveOllamaContextWindow(providerId),
+		}
 	}
 	return modelInfo
 }

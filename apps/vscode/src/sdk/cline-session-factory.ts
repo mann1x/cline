@@ -99,6 +99,7 @@ import { parseProviderId } from "./model-catalog/provider-id"
 import { toSdkProviderId } from "./model-catalog/sdk-provider-id"
 import { createProviderConfigStore, resolveRuntimeModelSelection } from "./model-catalog/store"
 import {
+	peekOllamaImageSupport,
 	resolveOllamaContextWindow,
 	resolveOllamaImageSupport,
 	resolveOllamaModelParameters,
@@ -987,6 +988,23 @@ export async function resolveOllamaSessionContextWindow(
 	return positiveFiniteNumber(
 		await resolveOllamaContextWindow(resolveBaseUrl(providerId, config), modelId).catch(() => undefined),
 	)
+}
+
+/**
+ * Whether the selected model of an Ollama-native provider reads images, as
+ * its server reports it (`/api/show`'s `capabilities`), for a surface that
+ * says so before any session exists. `undefined` when the provider is not
+ * Ollama-native or the server did not say.
+ */
+export async function resolveOllamaSessionImageSupport(
+	config: ApiConfiguration,
+	providerId: string,
+	modelId: string | undefined,
+): Promise<boolean | undefined> {
+	if (!modelId || !isOllamaNativeProvider(toSdkProviderId(providerId))) {
+		return undefined
+	}
+	return peekOllamaImageSupport(resolveBaseUrl(providerId, config), modelId).catch(() => undefined)
 }
 
 /**

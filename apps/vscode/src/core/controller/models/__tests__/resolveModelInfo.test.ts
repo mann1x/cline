@@ -63,8 +63,10 @@ function peekResult(providerId: string, entries: Array<[string, ModelInfo]>, def
 }
 
 const sessionWindow = vi.fn(async (): Promise<number | undefined> => undefined)
+const sessionImages = vi.fn(async (): Promise<boolean | undefined> => undefined)
 vi.mock("@/sdk/cline-session-factory", () => ({
 	resolveOllamaSessionContextWindow: (...args: unknown[]) => sessionWindow(...(args as [])),
+	resolveOllamaSessionImageSupport: (...args: unknown[]) => sessionImages(...(args as [])),
 }))
 
 describe("resolveModelInfo", () => {
@@ -92,6 +94,34 @@ describe("resolveModelInfo", () => {
 		sessionWindow.mockResolvedValueOnce(undefined)
 		const unset = await resolveModelInfo(controller, { providerId: "ollama", modelId: "deepseek-v4.1-flash:cloud" })
 		expect(unset.modelInfo?.contextWindow).toBe(128_000)
+	})
+
+	it("answers image input with what the model's server reports", async () => {
+		// A pulled `deepseek-v4.1-flash:cloud` was shown "doesn't support
+		// images" although its server lists `vision`: the catalog's entry for a
+		// discovered model knows nothing about it.
+		const { resolveModelInfo } = await import("../resolveModelInfo")
+		const store = makeStore({ providerId: parseProviderId("ollama") })
+		const catalog = makeCatalog()
+		vi.mocked(catalog.peekModels).mockReturnValue(
+			peekResult(
+				"ollama",
+				[["deepseek-v4.1-flash:cloud", { name: "deepseek", supportsPromptCache: false, contextWindow: 128_000 }]],
+				"deepseek-v4.1-flash:cloud",
+			),
+		)
+		const controller = {
+			...makeController(store, catalog),
+			stateManager: { setGlobalStateBatch: vi.fn(), getApiConfiguration: () => ({}) },
+		}
+		const ask = () => resolveModelInfo(controller, { providerId: "ollama", modelId: "deepseek-v4.1-flash:cloud" })
+		sessionImages.mockResolvedValueOnce(true)
+		expect((await ask()).modelInfo?.supportsImages).toBe(true)
+		sessionImages.mockResolvedValueOnce(false)
+		expect((await ask()).modelInfo?.supportsImages).toBe(false)
+		// The server did not say: unknown stays unknown, which warns of nothing.
+		sessionImages.mockResolvedValueOnce(undefined)
+		expect((await ask()).modelInfo?.supportsImages).toBeUndefined()
 	})
 
 	it("returns committed-selection source when a matching selection exists", async () => {
