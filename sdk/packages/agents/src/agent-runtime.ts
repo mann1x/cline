@@ -74,6 +74,7 @@ import {
 import { nanoid } from "nanoid";
 import { emptyOutputChannelTally, splitOutputTokens } from "./output-split";
 import {
+	contentGivenToModel,
 	DEFAULT_REASONING_LOOP_GUARD,
 	describeReasoningLoop,
 	ReasoningLoopGuard,
@@ -3819,7 +3820,10 @@ export class AgentRuntime {
 		const reasoningLoopGuard =
 			reasoningLoopConfig === false
 				? undefined
-				: new ReasoningLoopGuard(reasoningLoopConfig);
+				: new ReasoningLoopGuard(reasoningLoopConfig, {
+						// Asked only if the guard is about to trip.
+						given: () => contentGivenToModel(request.messages),
+					});
 		let reasoningLoop: ReasoningLoopVerdict | undefined;
 		const toolIntentLimit = this.config.toolIntentLimit;
 		// On unless turned off, for the reason the guard above is: it guards

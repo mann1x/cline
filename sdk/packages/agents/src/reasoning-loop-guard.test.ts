@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	contentGivenToModel,
 	describeReasoningLoop,
 	ReasoningLoopGuard,
 	type ReasoningLoopVerdict,
@@ -118,5 +119,112 @@ describe("ReasoningLoopGuard", () => {
 		expect(message).toContain("2 distinct lines");
 		expect(message).toContain("4,000 characters");
 		expect(message).not.toMatch(/abort|stopp|cancel/i);
+	});
+});
+
+describe("repetition that was in what the model was given", () => {
+	const feed = (text: string, given: string | undefined, chunk = 4) => {
+		const guard = new ReasoningLoopGuard(
+			{},
+			given === undefined ? {} : { given: () => given },
+		);
+		for (let i = 0; i < text.length; i += chunk) {
+			const verdict = guard.push(text.slice(i, i + chunk));
+			if (verdict) return { verdict, at: i + chunk };
+		}
+		return { verdict: null, at: text.length };
+	};
+	// Text that does not itself repeat, long enough for the guard to judge.
+	const prose = Array.from(
+		{ length: 130 },
+		(_, i) => `Step ${i}: sound ${i * 7} goes into slot ${i * 3 + 1}.`,
+	).join(" ");
+	// An MP3's padding, as base64: one character, hundreds of times.
+	const padding = "V".repeat(484);
+	const base64 = `//uUxAAAAAAAWGluZwAAAA8AAAAG${"TU1N".repeat(3)}${padding}MzLjEwMA`;
+
+	it("is not a loop when the model copies base64 it read", () => {
+		const reasoning = `${prose}const SOUND = '${base64}'; Now the editor call.`;
+		expect(feed(reasoning, undefined).verdict?.kind).toBe("phrase-cycle");
+		expect(feed(reasoning, `{"result":"${base64}"}`).verdict).toBeNull();
+	});
+
+	it("is a loop once the model has written more of it than the source holds", () => {
+		const runaway = `${prose}const SOUND = '//uUxAAAAAAAWGluZw${"V".repeat(2942)}`;
+		const { verdict, at } = feed(runaway, `{"result":"${base64}"}`);
+		expect(verdict?.kind).toBe("phrase-cycle");
+		// Not at thirteen repeats, and not long after the source's own run.
+		const written = at - prose.length;
+		expect(written).toBeGreaterThan(484);
+		expect(written).toBeLessThan(484 + 200);
+	});
+
+	it("does not excuse repetition the source merely mentions once", () => {
+		const loop = `${prose}${"ctx.fillText('O2',VIEWPORT_W-80,65);".repeat(80)}`;
+		const given = "58 | ctx.fillText('O2',VIEWPORT_W-80,65);\n59 | draw();";
+		expect(feed(loop, given).verdict?.kind).toBe("phrase-cycle");
+	});
+
+	it("lets the model restate a file whose lines repeat, and no further", () => {
+		const row = "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0";
+		const file = Array.from({ length: 80 }, (_, i) => `${i + 1} | ${row}`).join(
+			"\n",
+		);
+		const intro = `${Array.from({ length: 90 }, (_, i) => `Row ${i} of the level map holds tile ${i * 5}.`).join("\n")}\n`;
+		const restated = `${intro}${`${row}\n`.repeat(80)}So the map is empty.\n`;
+		expect(feed(restated, undefined).verdict).not.toBeNull();
+		expect(feed(restated, file).verdict).toBeNull();
+
+		const runaway = `${intro}${`${row}\n`.repeat(400)}`;
+		const cut = feed(runaway, file);
+		expect(cut.verdict).not.toBeNull();
+		const lines = runaway.slice(intro.length, cut.at).split("\n").length;
+		expect(lines).toBeGreaterThan(80);
+		expect(lines).toBeLessThan(80 + 5);
+	});
+
+	it("still trips on the model's own reasoning going round", () => {
+		const cycle = [
+			"Let me reconsider. The deficit is 2 braces.",
+			"1. Add 2 opening braces",
+			"2. Remove 2 closing braces",
+		].join("\n");
+		const text = `${prose.replaceAll(". ", ".\n")}\n${`${cycle}\n`.repeat(60)}`;
+		const given = "The scanner says line 90 has 2 more `{` than `}`.";
+		expect(feed(text, given).verdict).not.toBeNull();
+		expect(feed(text, given).at).toBe(feed(text, undefined).at);
+	});
+
+	it("reads what the model was given, and not what it wrote", () => {
+		const given = contentGivenToModel([
+			{
+				id: "1",
+				role: "user",
+				createdAt: 0,
+				content: [{ type: "text", text: "embed the sound" }],
+			},
+			{
+				id: "2",
+				role: "assistant",
+				createdAt: 0,
+				content: [{ type: "reasoning", text: "VVVVVVVV" }],
+			},
+			{
+				id: "3",
+				role: "tool",
+				createdAt: 0,
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "c",
+						toolName: "run_commands",
+						output: [{ query: "base64", result: "//uUxAAA", success: true }],
+					},
+				],
+			},
+		] as never);
+		expect(given).toContain("embed the sound");
+		expect(given).toContain("//uUxAAA");
+		expect(given).not.toContain("VVVVVVVV");
 	});
 });
