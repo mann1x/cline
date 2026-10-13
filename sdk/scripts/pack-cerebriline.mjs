@@ -35,6 +35,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -50,6 +51,42 @@ const REWRITTEN = /\.(?:[cm]?js|d\.[cm]?ts|json)$/;
 
 const sdkRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(sdkRoot, "..");
+
+/**
+ * Dependencies this repository patches. The builds bundle them (see
+ * `llms/bun.mts`), because the registry's copy is not the one the code was
+ * written against: 4.100.250 listed `ollama-ai-provider-v2` as a dependency
+ * and an installed SDK sent Ollama a bare `think: true` for every effort
+ * level. A published manifest must not ask for one, and a published file must
+ * not import one.
+ */
+const PATCHED = Object.keys(
+	JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"))
+		.patchedDependencies ?? {},
+).map((spec) => spec.slice(0, spec.lastIndexOf("@")));
+
+/**
+ * Dependencies published at the exact version the workspace was built and
+ * tested with, not at the source manifest's range. `zod`: the shared bundle
+ * drives zod's JSON-schema processors with a context of its own, and under
+ * `^4.3.6` npm resolved 4.6.7, whose processors expect a field that context
+ * lacks. The first session of a fresh install of 4.100.250 threw.
+ */
+const EXACT = ["zod"];
+
+function installedVersion(packageDir, dependency) {
+	const entry = createRequire(join(packageDir, "package.json")).resolve(
+		dependency,
+	);
+	for (let dir = dirname(entry); dir !== dirname(dir); dir = dirname(dir)) {
+		const manifest = join(dir, "package.json");
+		if (existsSync(manifest)) {
+			const parsed = JSON.parse(readFileSync(manifest, "utf8"));
+			if (parsed.name === dependency) return parsed.version;
+		}
+	}
+	fail(`cannot find the installed version of ${dependency}`);
+}
 
 const { values } = parseArgs({
 	options: {
@@ -210,6 +247,14 @@ function packOne(name) {
 		const deps = manifest[field];
 		if (!deps) continue;
 		for (const dependency of Object.keys(deps)) {
+			if (PATCHED.includes(dependency)) {
+				delete deps[dependency];
+				continue;
+			}
+			if (EXACT.includes(dependency)) {
+				deps[dependency] = installedVersion(packageDir, dependency);
+				continue;
+			}
 			const sibling = PACKAGES.find(
 				(other) => dependency === `${FROM_SCOPE}/${other}`,
 			);
@@ -232,6 +277,21 @@ function packOne(name) {
 			files++;
 		}
 	});
+
+	const importsPatched = new RegExp(
+		`(?:from\\s*|import\\s*\\(\\s*|require\\s*\\(\\s*)["'](${PATCHED.map((dependency) => dependency.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")).join("|")})["'/]`,
+	);
+	if (PATCHED.length > 0) {
+		walk(stage, (path) => {
+			if (!/\.[cm]?js$/.test(path)) return;
+			const found = readFileSync(path, "utf8").match(importsPatched);
+			if (found) {
+				fail(
+					`${name}: ${path.slice(stage.length + 1)} imports ${found[1]}, which is patched here and must be bundled`,
+				);
+			}
+		});
+	}
 
 	cpSync(join(repoRoot, "LICENSE"), join(stage, "LICENSE"));
 	writeFileSync(join(stage, "README.md"), readme(name, description));

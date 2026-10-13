@@ -153,6 +153,136 @@ try {
 	);
 }
 
+// One session against a stub Ollama, reading what goes on the wire. Loading
+// every entry point proved nothing about a request: 4.100.250 passed this
+// script and then sent Ollama a bare `think: true` for every effort level,
+// because the installed `ollama-ai-provider-v2` was the registry's and the
+// level is carried by this repository's patch to it. The same install threw on
+// its first tool-using session under the zod that `^4.3.6` resolved to.
+// npm nests a dependency under the package that asked for it when versions
+// differ, so both places are looked in.
+const stockOllama = [
+	join(work, "node_modules"),
+	...PACKAGES.map((name) =>
+		join(work, "node_modules", "@cerebriline", name, "node_modules"),
+	),
+].find((directory) => existsSync(join(directory, "ollama-ai-provider-v2")));
+if (stockOllama) {
+	fail(
+		`the install pulled in ollama-ai-provider-v2 (${stockOllama}); the patched copy must be bundled`,
+	);
+}
+try {
+	const { createServer } = await import("node:http");
+	const sdk = await import(
+		pathToFileURL(
+			join(work, "node_modules", "@cerebriline", "sdk", "dist", "index.js"),
+		).href
+	);
+	const chats = [];
+	const line = (message, rest) =>
+		`${JSON.stringify({ model: "m", created_at: "2024-01-01T00:00:00Z", message, ...rest })}\n`;
+	const server = createServer((request, response) => {
+		let raw = "";
+		request.on("data", (chunk) => {
+			raw += chunk;
+		});
+		request.on("end", () => {
+			if (request.url === "/api/chat") {
+				const body = JSON.parse(raw);
+				// The reachability probes ask for one token; the turn does not.
+				if ((body.options?.num_predict ?? 2) > 1) chats.push(body);
+				response.writeHead(200, { "content-type": "application/x-ndjson" });
+				response.write(
+					line({ role: "assistant", content: "done" }, { done: false }),
+				);
+				response.end(
+					line(
+						{ role: "assistant", content: "" },
+						{
+							done: true,
+							done_reason: "stop",
+							prompt_eval_count: 1,
+							eval_count: 1,
+						},
+					),
+				);
+			} else if (request.url === "/api/show") {
+				response.writeHead(200, { "content-type": "application/json" });
+				response.end(
+					JSON.stringify({
+						capabilities: ["completion", "tools", "thinking"],
+						model_info: {},
+						parameters: "",
+					}),
+				);
+			} else {
+				response.writeHead(404, { "content-type": "application/json" });
+				response.end("{}");
+			}
+		});
+	});
+	await new Promise((done) => server.listen(0, "127.0.0.1", done));
+	const baseUrl = `http://127.0.0.1:${server.address().port}`;
+	const cwd = join(work, "wire-workspace");
+	mkdirSync(cwd, { recursive: true });
+	const core = await sdk.ClineCore.create({
+		backendMode: "local",
+		dataDir: join(work, "wire-data"),
+	});
+	for (const [label, thinking, expected] of [
+		["an effort level", { thinking: true, reasoningEffort: "high" }, "high"],
+		["thinking left unset", {}, true],
+		["thinking off", { thinking: false }, false],
+	]) {
+		chats.length = 0;
+		const started = await core.start({
+			config: {
+				providerId: "ollama",
+				modelId: "m",
+				baseUrl,
+				cwd,
+				systemPrompt: "smoke",
+				mode: "act",
+				enableTools: true,
+				enableSpawnAgent: false,
+				enableAgentTeams: false,
+				storedProviderSettings: "ignore",
+				contextWindow: 32768,
+				...thinking,
+			},
+			prompt: "hi",
+			interactive: false,
+		});
+		await core.stop(started.sessionId).catch(() => {});
+		const sent = chats.at(-1);
+		if (!sent) {
+			fail(`wire, ${label}: no chat request reached the server`);
+		} else if (sent.think !== expected) {
+			fail(
+				`wire, ${label}: think is ${JSON.stringify(sent.think)}, expected ${JSON.stringify(expected)}`,
+			);
+		} else if (sent.options?.num_ctx !== 32768) {
+			fail(`wire, ${label}: num_ctx is ${sent.options?.num_ctx}`);
+		} else {
+			console.log(
+				`ok   wire, ${label}: think ${JSON.stringify(sent.think)}, ${sent.tools?.length ?? 0} tools`,
+			);
+		}
+	}
+	server.close();
+	await core.dispose().catch(() => {});
+} catch (error) {
+	fail(
+		`a session against a stub server :: ${String(error?.stack ?? error)
+			.split("\n")
+			.slice(0, 3)
+			.join(" | ")
+			.slice(0, 400)}`,
+	);
+}
+
 if (!values.work) rmSync(work, { recursive: true, force: true });
 console.log(failed ? `\n${failed} failed` : "\nall entry points load");
+// A session leaves timers behind; the verdict is in, so leave.
 process.exit(failed ? 1 : 0);

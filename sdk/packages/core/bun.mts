@@ -19,6 +19,18 @@ const runtimeBuildId = resolveSdkRuntimeBuildId(
 	resolveRepoRootFromCorePackage(corePackageRoot),
 );
 
+// A dependency this repository patches exists in its patched form only in this
+// workspace; left external, an installed package runs the registry's unpatched
+// copy. See the same rule in `llms/bun.mts`, where it was found.
+const rootManifest = (await Bun.file(
+	new URL("../../../package.json", import.meta.url),
+).json()) as { patchedDependencies?: Record<string, string> };
+const patched = new Set(
+	Object.keys(rootManifest.patchedDependencies ?? {}).map((spec) =>
+		spec.slice(0, spec.lastIndexOf("@")),
+	),
+);
+
 // Keep declared runtime packages external so they are not duplicated inside each
 // bundled entrypoint and installed again from package.json.
 const external = [
@@ -29,7 +41,7 @@ const external = [
 	...Object.keys({
 		...(packageJson.dependencies ?? {}),
 		...(packageJson.peerDependencies ?? {}),
-	}),
+	}).filter((name) => !patched.has(name)),
 ];
 
 const sourcemap = Bun.env.CLINE_SOURCEMAPS === "1" ? "linked" : "none";
