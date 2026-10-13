@@ -688,6 +688,52 @@ describe("an edit made outside the checklist", () => {
 		expect(tracker.takePendingReminder()).toBeUndefined();
 	});
 
+	const editor = (
+		tracker: TaskProgressTracker,
+		execute: () => Promise<string>,
+	) =>
+		withTaskProgressCapture(
+			{
+				name: "editor",
+				description: "",
+				inputSchema: { type: "object", properties: {} },
+				execute,
+			} as never,
+			tracker,
+		) as unknown as {
+			execute: (input: unknown, context: unknown) => Promise<string>;
+		};
+
+	it("is not said about an edit that was refused", async () => {
+		const tracker = new TaskProgressTracker();
+		const refused = editor(tracker, async () => {
+			throw new Error(
+				"Read before editing: answer.txt has not been read in this session. The file was not modified.",
+			);
+		});
+		await expect(refused.execute(edit(), {})).rejects.toThrow(
+			"The file was not modified",
+		);
+		expect(tracker.takePendingReminder()).toBeUndefined();
+
+		// The edit that does land is the first one, and is called out as such.
+		const landed = editor(tracker, async () => "ok");
+		await landed.execute(edit(), {});
+		expect(tracker.takePendingReminder()).toContain("no checklist");
+	});
+
+	it("keeps the nudge for an edit that landed when a later one is refused", async () => {
+		const tracker = new TaskProgressTracker();
+		await editor(tracker, async () => "ok").execute(edit(), {});
+		const refused = editor(tracker, async () => {
+			throw new Error("The file was not modified.");
+		});
+		await expect(
+			refused.execute(edit({ path: "other.html" }), {}),
+		).rejects.toThrow();
+		expect(tracker.takePendingReminder()).toContain("`manic_miner.html`");
+	});
+
 	it("is not repeated on every edit", () => {
 		const tracker = new TaskProgressTracker({ writeInterval: 3 });
 		const fired = [1, 2, 3, 4, 5].map(() => {

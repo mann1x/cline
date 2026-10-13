@@ -497,6 +497,15 @@ export function buildUntrackedEditNudge(
 	].join(" ");
 }
 
+/** The file a write-class call names, as the nudge quotes it. */
+function readEditedPath(input: unknown): string | undefined {
+	const path =
+		typeof input === "object" && input !== null
+			? (input as { path?: unknown }).path
+			: undefined;
+	return typeof path === "string" && path.trim() ? path.trim() : undefined;
+}
+
 export class TaskProgressTracker {
 	private state: TaskProgressState | undefined;
 	private callsSinceReminder = 0;
@@ -641,14 +650,39 @@ export class TaskProgressTracker {
 		if ((this.untrackedEdits - 1) % interval !== 0) {
 			return;
 		}
-		const path =
-			typeof input === "object" && input !== null
-				? (input as { path?: unknown }).path
-				: undefined;
-		this.pending = buildUntrackedEditNudge(
-			kind,
-			typeof path === "string" && path.trim() ? path.trim() : undefined,
-		);
+		this.pending = buildUntrackedEditNudge(kind, readEditedPath(input));
+	}
+
+	/**
+	 * Take back what {@link recordToolCall} counted for a call that then failed.
+	 *
+	 * The call is recorded before the tool runs, because that is the only place
+	 * its checklist is still visible, so "changed a file" was decided from the
+	 * tool's name. An `editor` call refused with "Read before editing ... The
+	 * file was not modified" was then followed by "You just changed
+	 * `/workspace/answer.txt` and this task has no checklist" (automaticum,
+	 * 2026-10-13, SDK 4.100.250): a statement about the file that the result
+	 * one line above it contradicts.
+	 *
+	 * Only the nudge this call queued is withdrawn. One already waiting from an
+	 * edit that did land names a path of its own and is kept.
+	 */
+	retractFailedWrite(input: unknown, toolName?: string): void {
+		if (toolName === undefined || !WRITE_CLASS_TOOL_NAMES.has(toolName)) {
+			return;
+		}
+		this.writesSinceReminder = Math.max(0, this.writesSinceReminder - 1);
+		if (this.untrackedEdits === 0) {
+			return;
+		}
+		this.untrackedEdits -= 1;
+		const path = readEditedPath(input);
+		if (
+			this.pending === buildUntrackedEditNudge("missing", path) ||
+			this.pending === buildUntrackedEditNudge("finished", path)
+		) {
+			this.pending = undefined;
+		}
 	}
 
 	/**
@@ -699,7 +733,15 @@ export function withTaskProgressCapture<TInput, TOutput>(
 		inputSchema: withTaskProgressParam(tool.inputSchema),
 		execute: async (input, context) => {
 			const reminder = tracker.recordToolCall(input, tool.name);
-			const result = await tool.execute(input, context);
+			let result: TOutput;
+			try {
+				result = await tool.execute(input, context);
+			} catch (error) {
+				// A refused or failed edit changed nothing, so nothing may be
+				// said about a change.
+				tracker.retractFailedWrite(input, tool.name);
+				throw error;
+			}
 			if (reminder === undefined) {
 				return result;
 			}
