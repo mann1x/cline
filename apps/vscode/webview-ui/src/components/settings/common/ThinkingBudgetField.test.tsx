@@ -6,7 +6,15 @@ import { readStoredThinkingLevel, ThinkingBudgetField } from "./ThinkingBudgetFi
 type Reasoning = { enabled?: boolean; effort?: string }
 type Config = { reasoning?: Reasoning; sampling?: Record<string, unknown> }
 
-const mocks = vi.hoisted(() => ({ write: vi.fn(), config: { current: {} as Record<string, unknown> } }))
+const mocks = vi.hoisted(() => ({
+	write: vi.fn(),
+	config: { current: {} as Record<string, unknown> },
+	readLevels: vi.fn(async (_request: unknown) => ({ levels: [] as string[], defaultLevel: undefined as string | undefined })),
+}))
+
+vi.mock("@/services/grpc-client", () => ({
+	ModelsServiceClient: { readTemplateReasoningLevels: (request: unknown) => mocks.readLevels(request) },
+}))
 
 /**
  * The hook, with the host store's own merge rules behind it — a panel that
@@ -182,5 +190,50 @@ describe("reading the stored level", () => {
 
 	it("ignores a level it does not offer", () => {
 		expect(readStoredThinkingLevel({ effort: "enormous" })).toBeUndefined()
+	})
+})
+
+// The model's level beside the budget: offered from the server's chat
+// template, written to `sampling.reasoningLevel`, never mixed with the budget.
+describe("the Reasoning effort dropdown", () => {
+	beforeEach(() => {
+		mocks.write.mockReset()
+		mocks.readLevels.mockReset()
+		mocks.readLevels.mockResolvedValue({ levels: [], defaultLevel: undefined })
+		mocks.config.current = { reasoning: { enabled: true } }
+	})
+
+	it("offers the levels the template states and writes the pick beside the budget", async () => {
+		mocks.readLevels.mockResolvedValue({ levels: ["low", "medium", "xhigh"], defaultLevel: "xhigh" })
+		mocks.config.current = { reasoning: { enabled: true, effort: "high" }, sampling: { temperature: 0.6 } }
+		render(<ThinkingBudgetField providerId="openai-compatible" />)
+		expect(await screen.findByText("Reasoning effort")).toBeInTheDocument()
+		expect(screen.getByText("Default (xhigh)")).toBeInTheDocument()
+		expect(screen.getByText("Thinking budget")).toBeInTheDocument()
+		const [levelSelect] = screen.getAllByTestId("thinking-level")
+		fireEvent.change(levelSelect as HTMLElement, { target: { value: "low" } })
+		const sampled = mocks.write.mock.calls.map(([patch]) => patch?.sampling).filter(Boolean)
+		expect(sampled.at(-1)).toMatchObject({ reasoningLevel: "low", temperature: 0.6 })
+		// The budget word stays where it was.
+		expect(mocks.write.mock.calls.some(([patch]) => patch?.reasoning?.effort !== undefined)).toBe(false)
+	})
+
+	it("is not shown when the template states no level", async () => {
+		render(<ThinkingBudgetField providerId="opencoti" />)
+		await vi.waitFor(() => expect(mocks.readLevels).toHaveBeenCalled())
+		expect(screen.queryByText("Reasoning effort")).not.toBeInTheDocument()
+	})
+
+	it("is not asked for on a provider that is not a llama.cpp server", async () => {
+		render(<ThinkingBudgetField providerId="openai" />)
+		expect(mocks.readLevels).not.toHaveBeenCalled()
+		expect(screen.queryByText("Reasoning effort")).not.toBeInTheDocument()
+	})
+
+	it("keeps a stored level the template does not state on screen, with a warning", async () => {
+		mocks.config.current = { reasoning: { enabled: true }, sampling: { reasoningLevel: "high" } }
+		mocks.readLevels.mockResolvedValue({ levels: ["low", "medium", "xhigh"], defaultLevel: "xhigh" })
+		render(<ThinkingBudgetField providerId="openai-compatible" />)
+		expect(await screen.findByText(/does not state the level "high"/)).toBeInTheDocument()
 	})
 })

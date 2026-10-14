@@ -99,6 +99,10 @@ service ModelsService {
   // its "could not be asked" copy for the whole bound, on a server whose
   // admission gate was on.
   rpc readOpencotiEngine(StringRequest) returns (OpencotiEngineResponse);
+  // The thinking levels the loaded model's chat template states for its
+  // `reasoning_effort` variable, read fresh from the configured llama.cpp or
+  // opencoti server's /props. The value is the provider id.
+  rpc readTemplateReasoningLevels(StringRequest) returns (TemplateReasoningLevels);
   // Reads an Ollama endpoint's account and model catalog for display.
   //
   // Three reads: POST /api/me, which the local server signs with the host's own
@@ -1271,6 +1275,20 @@ message OllamaModelParametersRequest {
 // Modelfile parameters, keyed by Ollama's own spelling (`temperature`,
 // `top_k`, ...). Repeated parameters are newline-joined. Empty when the server
 // did not answer, which is not the same as a model that sets nothing.
+// What a llama.cpp server's chat template says about `reasoning_effort`.
+message TemplateReasoningLevels {
+  // The server answered.
+  bool reachable = 1;
+  // It published a chat template (/props.chat_template). A server without
+  // one (vLLM, a hosted API) has nothing to read the levels from.
+  bool has_template = 2;
+  // The levels the template names, in escalating order. Empty when it names
+  // none, which includes a template with no level at all.
+  repeated string levels = 3;
+  // The template's own default, when it states one.
+  optional string default_level = 4;
+}
+
 message OllamaModelParameters {
   map<string, string> parameters = 1;
   // The thinking levels the model names in /api/show's `thinking.values`, in

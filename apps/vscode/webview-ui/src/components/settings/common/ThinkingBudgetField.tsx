@@ -1,7 +1,9 @@
+import { StringRequest } from "@shared/proto/cline/common"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { ModelsServiceClient } from "@/services/grpc-client"
 import { DebouncedTextField } from "./DebouncedTextField"
 import { useSamplingWrite } from "./sampling-fields"
 import { useUserCheckboxChange } from "./useUserCheckboxChange"
@@ -56,17 +58,59 @@ export function readStoredThinkingLevel(source: { effort?: string; thinkBudget?:
 }
 
 /**
+ * The llama.cpp servers: the generic OpenAI-compatible provider, which is how
+ * llama.cpp is reached, and opencoti. They hand a top-level `reasoning_effort`
+ * to the chat template as the model's level.
+ */
+const TEMPLATE_LEVEL_PROVIDERS = new Set(["openai-compatible", "opencoti"])
+
+/** The Reasoning effort dropdown's "send no level" entry. */
+const REASONING_LEVEL_DEFAULT = "__default__"
+
+/**
+ * The levels the server's chat template states, read through the host from
+ * `/props`. Asked again when the base URL changes; the template is the loaded
+ * model's.
+ */
+function useTemplateReasoningLevels(providerId: string, enabled: boolean, baseUrl: string | undefined) {
+	const [read, setRead] = useState<{ levels: string[]; defaultLevel?: string }>({ levels: [] })
+	useEffect(() => {
+		if (!enabled) {
+			setRead({ levels: [] })
+			return
+		}
+		let cancelled = false
+		void ModelsServiceClient.readTemplateReasoningLevels(StringRequest.create({ value: providerId }))
+			.then((response) => {
+				if (!cancelled) {
+					setRead({ levels: response?.levels ?? [], defaultLevel: response?.defaultLevel })
+				}
+			})
+			.catch(() => {
+				if (!cancelled) {
+					setRead({ levels: [] })
+				}
+			})
+		return () => {
+			cancelled = true
+		}
+	}, [providerId, enabled, baseUrl])
+	return read
+}
+
+/**
  * How much of a reply a llama.cpp-family server may spend thinking.
  *
- * This engine has no effort scale of its own. `reasoning_effort` — the field
- * the AI SDK emits for a level — is **read and discarded**: measured on a live
- * opencoti server on 2026-09-18, `minimal`, `low`, `medium` and `high` returned
- * byte-identical output. What it does honour is `reasoning_budget_tokens`, an
- * absolute count, which bounds monotonically (512 → 1,650 characters of
- * reasoning, 256 → 1,057, 128 → 768, 64 → 400 on the same seed and prompt).
+ * The budget is `reasoning_budget_tokens`, an absolute count, which bounds
+ * monotonically (512 → 1,650 characters of reasoning, 256 → 1,057, 128 → 768,
+ * 64 → 400 on the same seed and prompt). A budget word is resolved to a count
+ * on this side, using Ollama's fractions, and only that count goes on the wire.
  *
- * So the level is resolved to a count on this side, using Ollama's fractions,
- * and that count is what goes on the wire.
+ * It is never sent as `reasoning_effort`: llama.cpp (and opencoti from c13)
+ * hands that field to the chat template as the model's level, so "high" set
+ * the level too, and failed the turn on a template that lists only
+ * xhigh/medium/low (eleven2go, 2026-10-14). The level is the Reasoning effort
+ * dropdown above it, offered from the template's own list.
  *
  * **Default means unbounded here, and that is the difference from Ollama.**
  * On Ollama an absent budget hands the decision to the model's own
@@ -102,6 +146,20 @@ export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
 	})
 	const thinkingLevel: ThinkingLevel = storedLevel ?? (customPicked ? "custom" : "unset")
 	const thinkingEnabled = config?.reasoning?.enabled !== false
+
+	// The model's own level, a separate setting from the budget: sent as
+	// `reasoning_effort`, which the server hands to the chat template. Only the
+	// levels the template states are offered -- it raises on any other.
+	const offersLevel = TEMPLATE_LEVEL_PROVIDERS.has(providerId)
+	const templateLevels = useTemplateReasoningLevels(providerId, offersLevel, config?.baseUrl)
+	const storedReasoningLevel = typeof storedSampling?.reasoningLevel === "string" ? storedSampling.reasoningLevel.trim() : ""
+	const reasoningLevelUnstated = storedReasoningLevel !== "" && !templateLevels.levels.includes(storedReasoningLevel)
+	const handleReasoningLevelChange = useCallback(
+		(value: string) => {
+			void composeAndWrite({ reasoningLevel: value === REASONING_LEVEL_DEFAULT ? "" : value })
+		},
+		[composeAndWrite],
+	)
 
 	/**
 	 * Sampling is replaced wholesale by the store, not merged field by field, so
@@ -158,6 +216,42 @@ export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
 				Asks the model to think in its own reasoning channel instead of into its answer, and bounds how much of a reply it
 				may spend doing so. Turning it off asks for the smallest budget the server will take.
 			</p>
+			{thinkingEnabled && offersLevel && (templateLevels.levels.length > 0 || storedReasoningLevel !== "") && (
+				<div className="mb-1">
+					<Label className="text-xs font-medium">Reasoning effort</Label>
+					<Select onValueChange={handleReasoningLevelChange} value={storedReasoningLevel || REASONING_LEVEL_DEFAULT}>
+						<SelectTrigger className="w-full">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value={REASONING_LEVEL_DEFAULT}>
+								{templateLevels.defaultLevel
+									? `Default (${templateLevels.defaultLevel})`
+									: "Default (model decides)"}
+							</SelectItem>
+							{templateLevels.levels.map((level) => (
+								<SelectItem key={level} value={level}>
+									{level}
+								</SelectItem>
+							))}
+							{reasoningLevelUnstated && (
+								<SelectItem value={storedReasoningLevel}>{storedReasoningLevel}</SelectItem>
+							)}
+						</SelectContent>
+					</Select>
+					<p className="text-xs mt-1 mb-0 text-description">
+						The model's own thinking level, sent as <code>reasoning_effort</code> and handed to its chat template. The
+						levels listed are the ones the loaded model's template states. It does not cap the thinking; the budget
+						below does.
+					</p>
+					{reasoningLevelUnstated && (
+						<p className="text-xs mt-1 mb-0 text-(--vscode-errorForeground)">
+							The server's template does not state the level "{storedReasoningLevel}". A template that checks the
+							level fails the request on one it does not list; pick Default or one of the template's levels.
+						</p>
+					)}
+				</div>
+			)}
 			{thinkingEnabled && (
 				<div className="mb-1">
 					<Label className="text-xs font-medium">Thinking budget</Label>
@@ -174,7 +268,7 @@ export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
 						</SelectContent>
 					</Select>
 					<p className="text-xs mt-1 mb-0 text-description">
-						A level is sent as <code>reasoning_budget_tokens</code>, its share of the reply this profile asks for:
+						A budget is sent as <code>reasoning_budget_tokens</code>, its share of the reply this profile asks for:
 						Minimal 1/16, Low 1/8, Medium 1/4, High 1/2, Max 4/5 — Ollama's own fractions, so a level means the same
 						thing on both engines. <strong>Default sends no budget at all</strong>, which on this engine means
 						unbounded unless the server was started with a budget flag of its own.

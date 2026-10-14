@@ -685,13 +685,13 @@ export const OpenAICompatibleProvider = ({
 				</span>
 			</p>
 
-			{/* llama.cpp and opencoti-llamafile are reached through this form, and
-			    they take a thinking budget rather than an effort level — the
-			    level the generic selector wrote went out as `reasoning_effort`,
-			    which this engine reads and discards, so it bounded nothing. The
-			    same dropdown Ollama has, storing the same fields, resolved to
-			    `reasoning_budget_tokens` on the way out. Harmless for the hosted
-			    providers on this path: Default sends no field at all. */}
+			{/* llama.cpp and opencoti-llamafile are reached through this form.
+			    The thinking budget is the same dropdown Ollama has, storing the
+			    same fields, resolved to `reasoning_budget_tokens` on the way out.
+			    The model's level is a separate dropdown, offered from the levels
+			    the server's chat template states and sent as `reasoning_effort`.
+			    Harmless for the hosted providers on this path: Default sends no
+			    field at all. */}
 			<ThinkingBudgetField providerId={providerId} />
 
 			{/* The same sampler Ollama has, under llama.cpp's names. Every field

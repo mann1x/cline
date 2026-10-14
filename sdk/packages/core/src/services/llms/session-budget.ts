@@ -131,15 +131,19 @@ export async function resolveSessionThinkingAllowance(
 	if (!engine || input.thinking === false || !input.modelId) {
 		return undefined;
 	}
-	// llama.cpp only: the stored effort is the budget dropdown's share there,
-	// resolved to a count on this side.
-	const think =
-		input.reasoningEffort?.trim() || Llms.OLLAMA_DEFAULT_REASONING_EFFORT;
 	// A configured num_predict is the cap the server applies; the session's own
 	// cap stands in when nothing more specific was set.
 	const numPredict = positive(input.configuredNumPredict) ?? input.outputCap;
 	if (engine === "llamacpp") {
-		const level = input.configuredThinkBudget?.trim() || think;
+		// The stored effort is the budget dropdown's share there, resolved to a
+		// count on this side. Nothing chosen is no budget on the wire -- the panel's "Default
+		// (unbounded)" -- so there is no allowance to state. The level the
+		// model may also be given (`sampling.reasoningLevel`) bounds nothing.
+		const level =
+			input.configuredThinkBudget?.trim() || input.reasoningEffort?.trim();
+		if (!level) {
+			return undefined;
+		}
 		const budgetTokens = Llms.resolveLlamaCppThinkBudgetTokens(
 			level,
 			Llms.resolveLlamaCppThinkBudgetWindow(input.contextWindow, numPredict),

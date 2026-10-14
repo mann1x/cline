@@ -50,6 +50,20 @@ const NON_PORTABLE_REASONING_PROVIDERS = new Set([
 	"sapaicore",
 ]);
 
+/**
+ * llama.cpp servers reached through the generic OpenAI-compatible provider.
+ *
+ * The stored effort there is the thinking *budget* dropdown's word, turned
+ * into `reasoning_budget_tokens` by the llama.cpp option rule. Sent as
+ * `reasoning_effort` as well, upstream llama.cpp hands it to the chat template
+ * as the model's level -- measured on eleven2go, 2026-10-14: "low" changed the
+ * template's instructions, and "high" made a template that lists only
+ * xhigh/medium/low raise, failing the turn with a 500. The model's level is a
+ * separate setting (`sampling.reasoningLevel`), which that rule sends; the
+ * portable option carries only the off switch.
+ */
+const LEVEL_IS_SEPARATE_PROVIDERS = new Set(["openai-compatible"]);
+
 function toPortableLevel(effort: ReasoningEffort): AiSdkReasoning {
 	// TODO: pass "max" through once the AI SDK portable reasoning setting
 	// accepts it (vercel/ai#22043).
@@ -156,6 +170,9 @@ function resolvePortableLevel(
 			!mayReason(context)
 			? undefined
 			: "none";
+	}
+	if (LEVEL_IS_SEPARATE_PROVIDERS.has(request.providerId)) {
+		return undefined;
 	}
 	if (reasoning.effort) {
 		if (NON_PORTABLE_REASONING_PROVIDERS.has(request.providerId)) {

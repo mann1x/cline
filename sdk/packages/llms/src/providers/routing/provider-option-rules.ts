@@ -562,6 +562,26 @@ const ollamaNativeOptionsRule: ProviderOptionRule = {
  * count in a separate field, so the portable reasoning option and the budget
  * are independent and both belong on the wire.
  */
+/** The providers whose level the llama.cpp rule sends as `reasoning_effort`. */
+const LLAMACPP_LEVEL_PROVIDERS = new Set(["openai-compatible", "opencoti"]);
+
+function readLlamaCppReasoningLevel(
+	input: ProviderOptionBuildInput,
+): string | undefined {
+	if (
+		!LLAMACPP_LEVEL_PROVIDERS.has(input.request.providerId) ||
+		input.request.reasoning?.enabled === false
+	) {
+		return undefined;
+	}
+	const level = readLlamaCppSamplingOptions(
+		input.context.config,
+	)?.reasoningLevel;
+	return typeof level === "string" && level.trim() !== ""
+		? level.trim()
+		: undefined;
+}
+
 const llamaCppNativeOptionsRule: ProviderOptionRule = {
 	id: "provider.llamacpp.native-options",
 	phase: "provider-reasoning",
@@ -606,6 +626,16 @@ const llamaCppNativeOptionsRule: ProviderOptionRule = {
 				enabled: input.request.reasoning?.enabled,
 			},
 		);
+		// The model's own thinking level, a separate setting from the budget
+		// above: `reasoning_effort`, which llama.cpp (and opencoti from c13)
+		// hands to the chat template as its `reasoning_effort` variable. Only
+		// the generic provider and opencoti, the two llama.cpp servers; never
+		// with thinking off, which is the budget of 0 and, on the generic
+		// provider, the portable "none".
+		const level = readLlamaCppReasoningLevel(input);
+		if (level) {
+			bucketOptions.reasoningEffort = level;
+		}
 		if (Object.keys(bucketOptions).length === 0) {
 			return undefined;
 		}

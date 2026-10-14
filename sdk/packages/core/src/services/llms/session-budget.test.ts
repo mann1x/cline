@@ -163,6 +163,21 @@ describe("resolveSessionThinkingAllowance", () => {
 		expect(fetchImpl).not.toHaveBeenCalled();
 	});
 
+	it("states no llama.cpp allowance when no budget is chosen, whatever the level", async () => {
+		// The wire then carries no reasoning_budget_tokens ("Default
+		// (unbounded)"), and the level bounds nothing.
+		for (const providerId of ["opencoti", "openai-compatible"]) {
+			expect(
+				await resolveSessionThinkingAllowance({
+					...base,
+					providerId,
+					configuredReasoningLevel: "low",
+					fetchImpl: vi.fn() as unknown as typeof fetch,
+				}),
+			).toBeUndefined();
+		}
+	});
+
 	it("states nothing with thinking off or on an engine without a budget", async () => {
 		const fetchImpl = vi.fn() as unknown as typeof fetch;
 		expect(

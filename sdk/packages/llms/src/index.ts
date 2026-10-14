@@ -364,6 +364,10 @@ export {
 	reportPolykvNotice,
 	reportPolykvPoolShare,
 } from "./providers/vendors/polykv-swarm";
+export {
+	parseTemplateReasoningLevels,
+	readTemplateReasoningLevels,
+} from "./providers/vendors/template-reasoning-levels";
 // xOllama: detection and per-model facts, read by the host at session build.
 export {
 	forgetXollamaModel,

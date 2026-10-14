@@ -32,6 +32,7 @@ vi.mock("@/hooks/useProviderConfig", () => ({
 vi.mock("@/services/grpc-client", () => ({
 	ModelsServiceClient: {
 		refreshOpenAiModels: mocks.refreshOpenAiModels,
+		readTemplateReasoningLevels: async () => ({ reachable: false, hasTemplate: false, levels: [] }),
 	},
 }))
 
