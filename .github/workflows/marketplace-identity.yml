@@ -3,8 +3,10 @@
 # the run's GitHub identity token is exchanged for an Entra one, and only a
 # job in the `marketplace` environment of this repository can do that.
 #
-# Run it by hand: once to get the member ID, and whenever publishing fails
-# with an authorization error, to see which half is refusing.
+# Run it by hand: once to get the member ID, whenever publishing fails with an
+# authorization error, to see which half is refusing, and when a version that
+# `vsce publish` accepted never appears: the last step lists every version as
+# the publisher sees it, verified or not.
 name: Marketplace identity
 
 on:
@@ -41,3 +43,13 @@ jobs:
             - name: Publisher access
               if: always()
               run: npx --yes @vscode/vsce@3.9.2 verify-pat mann1x --azure-credential
+
+            # The public gallery lists verified versions only; the publisher's
+            # own view also has the ones still verifying or refused. Read-only.
+            - name: Extension versions as the publisher sees them
+              if: always()
+              run: |
+                  az rest --method get \
+                    --resource 499b84ac-1321-427f-aa17-267ca6975798 \
+                    --url "https://marketplace.visualstudio.com/_apis/gallery/publishers/mann1x/extensions/cerebriline?flags=1&api-version=7.2-preview.1" \
+                    --query "{flags: flags, lastUpdated: lastUpdated, versions: versions[].{version: version, flags: flags, lastUpdated: lastUpdated, validationResultMessage: validationResultMessage}}" || true
