@@ -25,6 +25,7 @@ type ProviderSettingsLike = {
 	readonly sampling?: SamplingConfig
 	readonly polykv?: PolykvConfig
 	readonly outputBudget?: OutputBudgetConfig
+	readonly notices?: NoticesConfig
 	readonly tools?: ToolSelectionConfig
 	readonly auth?: AuthConfig
 	readonly extras?: ExtrasConfig
@@ -35,6 +36,7 @@ type SamplingConfig = NonNullable<EffectiveProviderConfig["sampling"]>
 type PolykvConfig = NonNullable<EffectiveProviderConfig["polykv"]>
 type OutputBudgetConfig = NonNullable<EffectiveProviderConfig["outputBudget"]>
 type ToolSelectionConfig = NonNullable<EffectiveProviderConfig["tools"]>
+type NoticesConfig = NonNullable<EffectiveProviderConfig["notices"]>
 
 /** Sampling fields that are read as numbers, and the sign each one allows. */
 const SAMPLING_NUMBER_FIELDS = {
@@ -125,6 +127,34 @@ function readOutputBudget(settings: Record<string, unknown>): OutputBudgetConfig
 		result.maxTokens = maxTokens
 	}
 	return Object.keys(result).length > 0 ? (result as OutputBudgetConfig) : undefined
+}
+
+/**
+ * The generation notices section, narrowed to what the schema accepts: whole
+ * percents from 1 to 99, at most four per phase. A step outside that is
+ * dropped rather than carried, because core's schema would reject the whole
+ * providers.json entry over it.
+ */
+function readNotices(settings: Record<string, unknown>): NoticesConfig | undefined {
+	const notices = settings.notices
+	if (!isPlainRecord(notices)) {
+		return undefined
+	}
+	const steps = (raw: unknown): number[] | undefined => {
+		if (!Array.isArray(raw)) {
+			return undefined
+		}
+		const clean = raw.filter((step): step is number => Number.isInteger(step) && step >= 1 && step <= 99).slice(0, 4)
+		return clean.length > 0 ? clean : undefined
+	}
+	const thinkSteps = steps(notices.thinkSteps)
+	const answerSteps = steps(notices.answerSteps)
+	const result: { enabled?: boolean; thinkSteps?: number[]; answerSteps?: number[] } = {
+		...(typeof notices.enabled === "boolean" ? { enabled: notices.enabled } : {}),
+		...(thinkSteps ? { thinkSteps } : {}),
+		...(answerSteps ? { answerSteps } : {}),
+	}
+	return Object.keys(result).length > 0 ? result : undefined
 }
 
 function readPolykv(settings: Record<string, unknown>): PolykvConfig | undefined {
@@ -488,6 +518,7 @@ function readProviderSettings(providerId: ProviderId): ConfigParts {
 			sampling: readSampling(settings),
 			polykv: readPolykv(settings),
 			outputBudget: readOutputBudget(settings),
+			notices: readNotices(settings),
 			tools: readToolSelection(settings),
 			auth: readAuth(settings),
 			extras: isPlainRecord(settings.extras) ? settings.extras : undefined,
@@ -682,6 +713,7 @@ export function buildEffectiveProviderConfig(providerId: ProviderId): EffectiveP
 	assignIfDefined(merged, "sampling", providerSettings.sampling)
 	assignIfDefined(merged, "polykv", providerSettings.polykv)
 	assignIfDefined(merged, "outputBudget", providerSettings.outputBudget)
+	assignIfDefined(merged, "notices", providerSettings.notices)
 	assignIfDefined(merged, "tools", providerSettings.tools)
 	assignIfDefined(merged, "auth", stateConfig.auth ?? providerSettings.auth)
 	assignIfDefined(merged, "extras", mergeExtras(providerSettings.extras, stateConfig.extras))

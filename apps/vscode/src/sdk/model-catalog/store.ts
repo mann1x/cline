@@ -755,6 +755,27 @@ function writeProviderSettingsFields(providerId: ProviderId, patch: ProviderConf
 		}
 	}
 
+	// Generation notices, written whole like the sections around it: the panel
+	// owns the section and sends the complete state it is showing. Only a step
+	// list with something in it is stored; an empty one means the default.
+	if ("notices" in patch) {
+		const noticesPatch = patch.notices
+		const steps = (raw: readonly number[] | undefined) =>
+			raw?.filter((step) => Number.isInteger(step) && step >= 1 && step <= 99).slice(0, 4)
+		const thinkSteps = steps(noticesPatch?.thinkSteps)
+		const answerSteps = steps(noticesPatch?.answerSteps)
+		const section = {
+			...(typeof noticesPatch?.enabled === "boolean" ? { enabled: noticesPatch.enabled } : {}),
+			...(thinkSteps?.length ? { thinkSteps } : {}),
+			...(answerSteps?.length ? { answerSteps } : {}),
+		}
+		if (noticesPatch === null || noticesPatch === undefined || Object.keys(section).length === 0) {
+			delete (next as Record<string, unknown>).notices
+		} else {
+			;(next as Record<string, unknown>).notices = section
+		}
+	}
+
 	// The PolyKV section, written whole for the same reason as sampling: the
 	// panel owns it and sends the complete state it is showing, and a merge
 	// would make turning one knob back off impossible.

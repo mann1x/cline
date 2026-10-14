@@ -16,6 +16,10 @@ import { DEFAULT_MAX_RETRY_AFTER_MS } from "../middleware/retry-rate-limit";
 import { splitToolImagesMiddleware } from "../middleware/split-tool-images";
 import { primeTemplateReinjection } from "../reasoning-history";
 import { probeServerHealth, waitForServerHealth } from "../server-health";
+import {
+	readGenerationNoticeSettings,
+	withGenerationNotices,
+} from "./generation-notices";
 import { llamaCppTimingsMetadataExtractor } from "./llamacpp-timings";
 import { localStreamFetch, resolveLocalStreamDispatcher } from "./ollama";
 import {
@@ -2309,8 +2313,27 @@ export async function createOpencotiProviderModule(
 			baseFetch ?? globalThis.fetch,
 		);
 	}
+	// Generation notices, on the profile's word and the server's: the
+	// innermost layer, so the field rides on the body the pool logic built.
+	const configOptions = (context.config?.options ?? {}) as Record<
+		string,
+		unknown
+	>;
+	const noticesFetch = withGenerationNotices(baseFetch ?? globalThis.fetch, {
+		settings: readGenerationNoticeSettings(configOptions),
+		sessionId: request.sessionId,
+		sideCall:
+			configOptions.polykvSideCallOf !== undefined ||
+			configOptions.polykvBooking !== undefined,
+		isChat: (url) => url.endsWith("/chat/completions"),
+		capability: async () =>
+			(await probeOpencotiProps(baseURL ?? "", baseFetch ?? globalThis.fetch))
+				.generationNotice,
+		signalUrl: `${polykvRoot(baseURL ?? "")}/v1/notice`,
+		...(config.headers ? { headers: config.headers } : {}),
+	});
 	const providerFetch = createOpencotiFetch({
-		...(baseFetch ? { fetch: baseFetch } : {}),
+		fetch: noticesFetch,
 		dispatcher,
 		request,
 		...(baseURL ? { baseUrl: baseURL } : {}),

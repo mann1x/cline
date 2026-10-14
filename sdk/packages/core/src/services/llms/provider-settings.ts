@@ -146,6 +146,22 @@ export type SamplingSettings = z.infer<typeof SamplingSettingsSchema>;
  * without `--polykv-max-pools`.
  */
 /**
+ * Generation notices (opencoti, xOllama): one short line the engine plants
+ * into the model's output when its thinking or answer room is nearly used, or
+ * when a message is waiting. Off unless `enabled`. Each phase takes up to four
+ * steps, as a percent of that phase's room; absent, the steps are 60/70/80/90.
+ * See `@cline/llms`' `generation-notices.ts`.
+ */
+export const GenerationNoticeSettingsSchema = z.object({
+	enabled: z.boolean().optional(),
+	thinkSteps: z.array(z.number().int().min(1).max(99)).max(4).optional(),
+	answerSteps: z.array(z.number().int().min(1).max(99)).max(4).optional(),
+});
+export type GenerationNoticeSettings = z.infer<
+	typeof GenerationNoticeSettingsSchema
+>;
+
+/**
  * The tools a configuration withholds from its sessions.
  *
  * A deny list rather than an allow list: the tool set grows, and an allow list
@@ -352,6 +368,7 @@ export const ProviderSettingsSchema = z.object({
 	reasoning: ReasoningSettingsSchema.optional(),
 	sampling: SamplingSettingsSchema.optional(),
 	polykv: PolykvSettingsSchema.optional(),
+	notices: GenerationNoticeSettingsSchema.optional(),
 	tools: ToolSelectionSchema.optional(),
 	aws: AwsSettingsSchema.optional(),
 	gcp: GcpSettingsSchema.optional(),
@@ -552,6 +569,7 @@ export function toProviderConfig(
 		reasoningInline: settings.reasoning?.reasoningInline,
 		sampling: settings.sampling,
 		polykv: settings.polykv,
+		notices: settings.notices,
 		tools: settings.tools,
 		region: settings.region ?? settings.aws?.region ?? settings.gcp?.region,
 		apiLine: settings.apiLine,

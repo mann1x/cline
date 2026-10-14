@@ -208,6 +208,17 @@ export {
 	createCline,
 } from "./providers/vendors/cline";
 export {
+	DEFAULT_NOTICE_STEPS,
+	type GenerationNoticeCapability,
+	type GenerationNoticeSettings,
+	hideKnownNoticeLines,
+	hideNoticeLines,
+	MAX_NOTICE_STEPS,
+	normalizeNoticeSteps,
+	readGenerationNoticeCapability,
+	signalNoticeMessageWaiting,
+} from "./providers/vendors/generation-notices";
+export {
 	buildLlamaCppSamplingOptions,
 	LLAMACPP_SAMPLING_WIRE_NAMES,
 	LLAMACPP_THINK_BUDGET_FRACTION,

@@ -147,6 +147,18 @@ export interface OutputBudgetSettings {
 	readonly maxTokens?: number
 }
 
+/**
+ * Generation notices (opencoti, xOllama): one short line the engine plants
+ * into the model's own output when its thinking or answer room is nearly used,
+ * or when a message is waiting. Off unless `enabled`. Steps are percents of a
+ * phase's room, at most four; absent means 60/70/80/90.
+ */
+export interface NoticeSettings {
+	readonly enabled?: boolean
+	readonly thinkSteps?: readonly number[]
+	readonly answerSteps?: readonly number[]
+}
+
 export interface PolykvSettings {
 	readonly enabled?: boolean
 	readonly pinPrefix?: boolean
@@ -257,6 +269,11 @@ export interface EffectiveProviderConfig {
 	 */
 	readonly outputBudget?: OutputBudgetSettings
 	/**
+	 * Generation notices (providers.json `notices`), read as stored so the
+	 * panel shows what it is about to write.
+	 */
+	readonly notices?: NoticeSettings
+	/**
 	 * The tool selection (providers.json `tools`).
 	 *
 	 * Read as stored, so the panel shows what it is about to write. Absent
@@ -319,6 +336,7 @@ export interface ProviderConfigPatch {
 	readonly sampling?: ProviderSamplingSettings | null
 	readonly polykv?: PolykvSettings | null
 	readonly outputBudget?: OutputBudgetSettings | null
+	readonly notices?: NoticeSettings | null
 	readonly tools?: ToolSelectionSettings | null
 	readonly extras?: Readonly<Record<string, unknown>> | null
 }

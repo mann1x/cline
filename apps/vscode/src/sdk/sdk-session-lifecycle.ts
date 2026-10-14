@@ -6,6 +6,7 @@ import type {
 	RestoreResult,
 	StartSessionResult,
 } from "@cline/core"
+import { signalNoticeMessageWaiting } from "@cline/llms"
 import { formatModeSwitchNotice, type ModeSwitchNotice } from "@cline/shared"
 import { StateManager } from "@/core/storage/StateManager"
 import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTerminalManager"
@@ -496,6 +497,13 @@ export class SdkSessionLifecycle {
 		const notice = this.options.consumeModeSwitchNotice?.(sessionId)
 		const noticedPrompt = notice ? `${formatModeSwitchNotice(notice.from, notice.to)}\n${prompt}` : prompt
 		this.options.onSendStart?.(sessionId)
+		// A message joining a running turn: tell the engine one is waiting, so
+		// it plants a notice and the model can look up from a long stretch of
+		// thinking. Quiet unless this session has a request with notices in
+		// flight; no content of the message is sent (`generation-notices.ts`).
+		if (delivery === "queue" || delivery === "steer") {
+			void signalNoticeMessageWaiting(sessionId)
+		}
 		sdkHost
 			.send({
 				sessionId,

@@ -19,6 +19,7 @@ import {
 	isBuiltInProviderId,
 	normalizeProviderId,
 } from "./ids";
+import type { GenerationNoticeSettings } from "./vendors/generation-notices";
 
 // Re-export for convenience
 export {
@@ -403,6 +404,13 @@ export interface ProviderOptions {
 	 * to make room (`xollama.ts`, `settleSideCall`). Inert elsewhere.
 	 */
 	sideCallOf?: string;
+	/**
+	 * Generation notices (opencoti, xOllama): the engine plants one short line
+	 * into the model's output when its thinking or answer room is nearly used,
+	 * or when a message is waiting. Off unless `enabled`; asked for only on a
+	 * conversation's own turns. See `generation-notices.ts`.
+	 */
+	notices?: GenerationNoticeSettings;
 	/** Which tools this configuration withholds from its sessions. */
 	tools?: ToolSelectionOptions;
 	/**

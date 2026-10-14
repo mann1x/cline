@@ -84,6 +84,10 @@ export const PROVIDER_CONFIG_PROFILE_KEYS = [
 	// two above are: a key the load clears must be a key the save captures, or
 	// a profile with no selection comes back carrying the last one's.
 	"tools",
+	// Generation notices, in both lists for the same reason: a profile that
+	// does not mention them must come back with them off, not with the last
+	// profile's.
+	"notices",
 	// An agent node's "Agent window" share, in both lists for the same reason:
 	// saved from a node, it must come back with the profile, and a profile
 	// with none must read back as the default rather than the last share.
@@ -244,6 +248,8 @@ export const PROVIDER_CONFIG_CLEARS: Readonly<Record<string, unknown>> = {
 	// profile made, and a model would silently lose tools under a profile that
 	// never mentioned them.
 	tools: {},
+	// A profile that names no notices has them off.
+	notices: {},
 	// And the reasoning section, so a profile that carries none stops inheriting
 	// the previous profile's effort, budget and replay mode. `{}` rather than
 	// `null` because the patch crosses a proto boundary: `reasoning` is an

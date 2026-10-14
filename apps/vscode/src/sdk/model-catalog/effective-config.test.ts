@@ -477,6 +477,22 @@ describe("the tool selection", () => {
 	})
 })
 
+describe("generation notices", () => {
+	it("reads the stored section back, dropping steps the schema would refuse", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({
+			xollama: {
+				provider: "xollama",
+				notices: { enabled: true, thinkSteps: [70, 0, 100, 80.5, 90], answerSteps: "90" },
+			},
+		})
+
+		const config = buildEffectiveProviderConfig(parseProviderId("xollama"))
+
+		expect(config.notices).toEqual({ enabled: true, thinkSteps: [70, 90] })
+	})
+})
+
 describe("the output budget", () => {
 	// The read half again. This one has a second reader: the session factory
 	// reads the same section to size `num_predict`/`n_predict` and to state the

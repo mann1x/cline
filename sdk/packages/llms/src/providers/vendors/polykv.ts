@@ -25,6 +25,11 @@
  *   unpin-after-migrate; the server reports orphans so they can be swept.
  */
 
+import {
+	type GenerationNoticeCapability,
+	readGenerationNoticeCapability,
+} from "./generation-notices";
+
 /** A pool's identity and how much of the prefix it carries. */
 export interface PolykvPool {
 	pool_id: string;
@@ -832,6 +837,11 @@ export interface OpencotiProps {
 	poolsEnabled: boolean;
 	/** The elastic slot controller is armed, so the slot count is not fixed. */
 	elastic: boolean;
+	/**
+	 * Whether the server plants generation notices on request, and the marker
+	 * its lines start with (`generation-notices.ts`).
+	 */
+	generationNotice?: GenerationNoticeCapability;
 	/** `slots_live` at the time of the probe; the ceiling is `slotsMax`. */
 	slotsLive?: number;
 	slotsMax?: number;
@@ -1104,6 +1114,7 @@ export function probeOpencotiProps(
 						)
 					: [],
 				...(defaultTemperature !== undefined ? { defaultTemperature } : {}),
+				generationNotice: readGenerationNoticeCapability(body),
 			};
 		} catch {
 			return NOT_OPENCOTI;

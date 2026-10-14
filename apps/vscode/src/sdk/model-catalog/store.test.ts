@@ -231,6 +231,30 @@ describe("createProviderConfigStore", () => {
 		expect(store.read(providerId).outputBudget).toEqual({ mode: "auto" })
 	})
 
+	// Generation notices, the same round trip: proto in, providers.json out,
+	// read back. `repeated` cannot say "absent", so an empty step list is the
+	// default ladder and is not stored, and an empty message is the clear.
+	it("round-trips generation notices, and clears them on an empty message", async () => {
+		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
+		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const providerId = parseProviderId("opencoti")
+
+		store.write(
+			providerId,
+			toProviderConfigPatch(
+				WriteProviderConfigPatch.create({
+					notices: { enabled: true, thinkSteps: [80, 90], answerSteps: [] },
+				} as never),
+			),
+		)
+		expect(store.read(providerId).notices).toEqual({ enabled: true, thinkSteps: [80, 90] })
+
+		store.write(providerId, toProviderConfigPatch(WriteProviderConfigPatch.create({ notices: {} } as never)))
+		expect(store.read(providerId).notices).toBeUndefined()
+	})
+
 	it("does not lose the output budget to an unrelated later write", async () => {
 		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
 		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")

@@ -37,6 +37,10 @@ import {
 	STREAM_SIDE_PARTS_HEADER,
 } from "../stream-side-parts";
 import {
+	readGenerationNoticeSettings,
+	withGenerationNotices,
+} from "./generation-notices";
+import {
 	primeOllamaAccountStatus,
 	readOllamaCloudFlag,
 	readOllamaRecommendation,
@@ -64,6 +68,7 @@ import {
 	XOLLAMA_CONTEXT_WINDOW_FEATURE,
 	XOLLAMA_DEFAULT_BASE_URL,
 	type XollamaEngineRequest,
+	xollamaOrigin,
 	xollamaReadOnlyHeaders,
 	xollamaSessionHeaders,
 } from "./xollama";
@@ -1149,8 +1154,32 @@ export async function createOllamaProviderModule(
 	// exactly the request most likely to exceed it.
 	// xOllama's own request fields, inside the timeout layer so the body the
 	// health probe and the image fold read is the one that is sent.
+	// Generation notices, innermost so the field rides on the body every other
+	// layer has finished. xOllama only: stock Ollama has no such field.
+	const noticeOptions = (context.config?.options ?? {}) as Record<
+		string,
+		unknown
+	>;
+	const noticeSession = noticeOptions.polykvSessionId;
+	const noticesFetch = xollama
+		? withGenerationNotices(serverFetch, {
+				settings: readGenerationNoticeSettings(noticeOptions),
+				sessionId:
+					typeof noticeSession === "string" && noticeSession
+						? noticeSession
+						: undefined,
+				sideCall:
+					noticeOptions.polykvSideCallOf !== undefined ||
+					noticeOptions.polykvBooking !== undefined,
+				isChat: (url) => /\/api\/chat$/.test(url),
+				capability: async () =>
+					(await probeXollama(config.baseUrl, serverFetch))?.generationNotice,
+				signalUrl: `${xollamaOrigin(config.baseUrl)}/api/xollama/notice`,
+				...(config.headers ? { headers: config.headers } : {}),
+			})
+		: serverFetch;
 	const fieldsFetch = xollama
-		? withXollamaRequestFields(serverFetch, {
+		? withXollamaRequestFields(noticesFetch, {
 				...(context.logger ? { logger: context.logger } : {}),
 				window: readXollamaWindowOptions(
 					context.config?.options as Record<string, unknown> | undefined,

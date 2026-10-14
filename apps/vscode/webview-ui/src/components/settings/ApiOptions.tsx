@@ -12,6 +12,7 @@ import { useDynamicProviderSelection } from "@/hooks/useDynamicProviderSelection
 import { useProviderListings } from "@/hooks/useProviderListings"
 import { ClinePassHint } from "./ClinePassHint"
 import { AgentWindowField } from "./common/AgentWindowField"
+import { NoticesSection } from "./common/NoticesSection"
 import { OutputBudgetField } from "./common/OutputBudgetField"
 import ParallelSessionsField, { parallelSessionsDescription, useOpencotiEngineMode } from "./common/ParallelSessionsField"
 import { PolykvSection } from "./common/PolykvSection"
@@ -582,6 +583,10 @@ const ApiOptions = ({
 				<OutputBudgetField fallbackContextWindow={budgetModelInfo?.contextWindow} providerId={selectedProvider} />
 			)}
 			{apiConfiguration && showModelOptions && selectedProvider && <ReasoningHistoryField providerId={selectedProvider} />}
+			{/* Generation notices: the two engines that plant them. */}
+			{apiConfiguration && showModelOptions && (isOpencoti || (selectedProvider as string) === "xollama") && (
+				<NoticesSection providerId={selectedProvider} />
+			)}
 
 			{apiConfiguration && showModelOptions && selectedProvider && (
 				<div className="mb-[5px]">

@@ -42,6 +42,10 @@ import {
 	flattenPromptEnvironment,
 } from "@cline/shared";
 import {
+	type GenerationNoticeCapability,
+	readGenerationNoticeCapability,
+} from "./generation-notices";
+import {
 	agentWindowFloorForBody,
 	type OpencotiAgentWindow,
 	readOpencotiAgentWindow,
@@ -199,6 +203,8 @@ function councilStateKey(
 export interface XollamaServerInfo {
 	version?: string;
 	features: string[];
+	/** Generation notices, and the marker their lines start with. */
+	generationNotice: GenerationNoticeCapability;
 }
 
 /** What `/api/show`'s `xollama` block says about one model. */
@@ -218,6 +224,11 @@ function origin(baseUrl: string | undefined): string {
 		"",
 	);
 	return trimmed.replace(/\/(?:v1|api)$/, "");
+}
+
+/** The origin xOllama's own routes live under (`/api/xollama/...`). */
+export function xollamaOrigin(baseUrl: string | undefined): string {
+	return origin(baseUrl);
 }
 
 const serverInfo = new Map<string, Promise<XollamaServerInfo | undefined>>();
@@ -245,6 +256,7 @@ export function probeXollama(
 			xollama?: unknown;
 			version?: unknown;
 			features?: unknown;
+			generation_notice?: unknown;
 		};
 		if (body.xollama !== true) {
 			return undefined;
@@ -254,6 +266,7 @@ export function probeXollama(
 			features: Array.isArray(body.features)
 				? body.features.filter((f): f is string => typeof f === "string")
 				: [],
+			generationNotice: readGenerationNoticeCapability(body),
 		};
 	})().catch(() => undefined);
 	serverInfo.set(key, read);

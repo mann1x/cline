@@ -37,6 +37,7 @@ import {
 	uniqueAgentNames,
 } from "@cline/core"
 import {
+	hideKnownNoticeLines,
 	OPENCOTI_WINDOW_UNAVAILABLE_CODE,
 	parseOpencotiWindowUnavailable,
 	type MessageWithMetadata as SdkMessage,
@@ -3125,7 +3126,9 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						ts,
 						type: "say",
 						say: "text",
-						text: state.appendStreamingText(event.text ?? ""),
+						// A generation notice is hidden from the chat and nowhere
+						// else: the transcript keeps it (`generation-notices.ts`).
+						text: hideKnownNoticeLines(state.appendStreamingText(event.text ?? ""), { streaming: true }),
 						partial: true,
 					})
 					break
@@ -3135,7 +3138,9 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					// reasoning from `text`, so keep `text` and `reasoning` populated with
 					// the accumulated content for smooth in-place streaming.
 					const ts = state.getStreamingReasoningTs()
-					const reasoning = state.appendStreamingReasoning(event.reasoning ?? "")
+					const reasoning = hideKnownNoticeLines(state.appendStreamingReasoning(event.reasoning ?? ""), {
+						streaming: true,
+					})
 					messages.push({
 						ts,
 						type: "say",
@@ -3455,18 +3460,19 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 				case "text": {
 					const ts = state.clearStreamingText()
 					const finalText = event.text ?? ""
+					const shownText = hideKnownNoticeLines(finalText)
 					messages.push({
 						ts,
 						type: "say",
 						say: "text",
-						text: finalText,
+						text: shownText,
 						partial: false,
 					})
 					state.noteIterationText(finalText)
 					// Candidate for the turn-final response: if the turn ends cleanly with
 					// this text as its last content, `done` retags it as a completion row.
-					if (finalText.trim()) {
-						state.recordTurnFinalText(ts, finalText)
+					if (shownText.trim()) {
+						state.recordTurnFinalText(ts, shownText)
 					}
 					break
 				}
@@ -3474,12 +3480,13 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					const ts = state.clearStreamingReasoning()
 					const reasoning = event.reasoning ?? ""
 					state.noteIterationReasoning(reasoning)
+					const shownReasoning = hideKnownNoticeLines(reasoning)
 					messages.push({
 						ts,
 						type: "say",
 						say: "reasoning",
-						text: reasoning,
-						reasoning,
+						text: shownReasoning,
+						reasoning: shownReasoning,
 						partial: false,
 					})
 					break

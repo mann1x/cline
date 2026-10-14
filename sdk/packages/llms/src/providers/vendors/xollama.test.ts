@@ -273,6 +273,7 @@ describe("detecting xOllama", () => {
 		expect(await probeXollama("http://gpu2:22434/api", xollama)).toEqual({
 			version: "0.34.2-xollama.2",
 			features: ["council"],
+			generationNotice: { supported: false },
 		});
 		expect(vi.mocked(xollama).mock.calls[0]?.[0]).toBe(
 			"http://gpu2:22434/api/xollama",

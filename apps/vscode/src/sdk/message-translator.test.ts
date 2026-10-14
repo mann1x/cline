@@ -1,6 +1,7 @@
 import type { CoreSessionEvent } from "@cline/core"
 import { MAX_COMMAND_OUTPUT_CHARS } from "@cline/core"
 import type { Message as SdkMessage } from "@cline/llms"
+import { readGenerationNoticeCapability } from "@cline/llms"
 import type { AgentEvent, MessageWithMetadata } from "@cline/shared"
 import { COMMAND_OUTPUT_STRING } from "@shared/combineCommandSequences"
 import type {
@@ -1297,6 +1298,44 @@ describe("translateSessionEvent — a background agent's events", () => {
 			expect(result.messages).toEqual([])
 			expect(result.turnComplete).toBe(false)
 		}
+	})
+})
+
+// Generation notices: the engine plants a line into the model's own output,
+// and the transcript keeps it -- removing it makes the engine re-read the
+// answer from that point every turn. The chat hides it, and nothing else.
+describe("translateSessionEvent — generation notices", () => {
+	const lead = (event: AgentEvent): CoreSessionEvent => ({
+		type: "agent_event",
+		payload: { sessionId: "session-1", event },
+	})
+
+	it("hides a planted line from the rows, while it streams and when it ends", () => {
+		readGenerationNoticeCapability({ generation_notice: { version: 1, marker: "[notice]" } })
+		const state = new MessageTranslatorState()
+		const partial = translateSessionEvent(
+			lead({ type: "content_start", contentType: "reasoning", reasoning: "weighing it\n[not" } as AgentEvent),
+			state,
+		)
+		expect(partial.messages[0]?.text).toBe("weighing it")
+		const ended = translateSessionEvent(
+			lead({
+				type: "content_end",
+				contentType: "reasoning",
+				reasoning: "weighing it\n[notice] 80% of the thinking room is used.\ndone weighing",
+			} as AgentEvent),
+			state,
+		)
+		expect(ended.messages[0]?.text).toBe("weighing it\ndone weighing")
+		const text = translateSessionEvent(
+			lead({
+				type: "content_end",
+				contentType: "text",
+				text: "The fix is in.\n[notice] a message is waiting.",
+			} as AgentEvent),
+			state,
+		)
+		expect(text.messages[0]?.text).toBe("The fix is in.")
 	})
 })
 

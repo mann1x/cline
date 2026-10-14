@@ -327,6 +327,8 @@ describe("the provider config a profile carries", () => {
 			// of them in, rather than inheriting the last profile's cuts and
 			// leaving a model short of tools nobody switched off.
 			tools: {},
+			// And generation notices: a profile that names none has them off.
+			notices: {},
 			// And an agent node's window share: a profile that names none
 			// reads back as the default 50%, not the last profile's share.
 			agentWindow: {},
@@ -343,6 +345,7 @@ describe("the provider config a profile carries", () => {
 			outputBudget: {},
 			reasoning: {},
 			tools: {},
+			notices: {},
 			agentWindow: {},
 		})
 	})

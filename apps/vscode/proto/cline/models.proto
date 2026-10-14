@@ -538,6 +538,9 @@ message ProviderConfigResponse {
   // Which tools this configuration brings into a session. Carries no secret,
   // so it is returned unredacted.
   optional ToolsProviderConfig tools = 21;
+  // Generation notices (opencoti, xOllama). Carries no secret, so it is
+  // returned unredacted.
+  optional NoticesProviderConfig notices = 22;
 }
 
 message CommittedModelSelection {
@@ -665,6 +668,18 @@ message PolykvProviderConfig {
 // Presence is the signal: an absent message means this profile says nothing
 // about tools, while a present one holding an empty list means it says
 // everything is on.
+// Generation notices (opencoti, xOllama): the engine plants one short line
+// into the model's own output when its thinking or answer room is nearly used,
+// or when a message is waiting. Off unless `enabled`.
+message NoticesProviderConfig {
+  optional bool enabled = 1;
+  // Percent of the thinking room at which a line is planted, up to four. An
+  // empty list means the default ladder, 60/70/80/90.
+  repeated int32 think_steps = 2;
+  // The same for the answer.
+  repeated int32 answer_steps = 3;
+}
+
 message ToolsProviderConfig {
   repeated string disabled = 1;
   // Absent means on, which is the default: the limit exists because a model
@@ -701,6 +716,8 @@ message WriteProviderConfigPatch {
   // The tool selection; an explicitly empty message clears it, which puts
   // every tool back.
   optional ToolsProviderConfig tools = 19;
+  // Generation notices; an explicitly empty message clears the section.
+  optional NoticesProviderConfig notices = 20;
 }
 
 message WriteProviderConfigRequest {

@@ -124,6 +124,13 @@ function buildGatewayProviderOptions(
 		if (config.sideCallOf) {
 			options.polykvSideCallOf = config.sideCallOf;
 		}
+		// Generation notices, for a conversation's own turns only. A handler
+		// with no conversation behind it -- a title, a commit message, the
+		// vision probe -- writes text that is stored as it comes back, and a
+		// planted line in it would be stored with it.
+		if (config.notices && (config.engineSessionId || sessionId)) {
+			options.notices = config.notices;
+		}
 	}
 
 	if (config.providerId === "bedrock") {

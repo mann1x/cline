@@ -541,6 +541,8 @@ export function buildGatewayConfig(config: ProviderConfig) {
 			...(config.polykvBooking ? { polykvBooking: config.polykvBooking } : {}),
 			...(config.polykvLeadPool === false ? { polykvLeadPool: false } : {}),
 			...(config.sideCallOf ? { polykvSideCallOf: config.sideCallOf } : {}),
+			// opencoti / xOllama: generation notices (`generation-notices.ts`).
+			...(config.notices ? { notices: config.notices } : {}),
 			region: config.region ?? config.gcp?.region,
 			project: config.gcp?.projectId,
 			projectId: config.gcp?.projectId,

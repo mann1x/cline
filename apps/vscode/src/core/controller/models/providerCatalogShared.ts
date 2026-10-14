@@ -5,6 +5,7 @@ import type {
 	Mode,
 	ModelSelection,
 	ModelSelectionOverrides,
+	NoticeSettings,
 	OutputBudgetSettings,
 	PolykvSettings,
 	ProviderCatalog,
@@ -259,6 +260,13 @@ export function toRedactedProviderConfigResponse(
 		sampling: config.sampling ? { ...config.sampling, stop: [...(config.sampling.stop ?? [])] } : undefined,
 		polykv: config.polykv ? { ...config.polykv } : undefined,
 		outputBudget: config.outputBudget ? { ...config.outputBudget } : undefined,
+		notices: config.notices
+			? {
+					...(config.notices.enabled !== undefined ? { enabled: config.notices.enabled } : {}),
+					thinkSteps: [...(config.notices.thinkSteps ?? [])],
+					answerSteps: [...(config.notices.answerSteps ?? [])],
+				}
+			: undefined,
 		tools: config.tools
 			? {
 					disabled: [...(config.tools.disabled ?? [])],
@@ -291,6 +299,24 @@ function toOutputBudgetSettings(patch: NonNullable<WriteProviderConfigPatch["out
 		// the user cleared and an `auto` ceiling left at its default both arrive
 		// as 0, and both mean "the default decides".
 		...(patch.maxTokens !== undefined && patch.maxTokens > 0 ? { maxTokens: patch.maxTokens } : {}),
+	}
+}
+
+/**
+ * The notices message as the store takes it. `repeated` cannot say "absent",
+ * so an empty step list arrives as `[]` and means the default ladder; a
+ * message with no switch and no steps is the panel's clear.
+ */
+function toNoticeSettings(patch: NonNullable<WriteProviderConfigPatch["notices"]>): NoticeSettings | null {
+	const thinkSteps = patch.thinkSteps?.length ? [...patch.thinkSteps] : undefined
+	const answerSteps = patch.answerSteps?.length ? [...patch.answerSteps] : undefined
+	if (patch.enabled === undefined && !thinkSteps && !answerSteps) {
+		return null
+	}
+	return {
+		...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+		...(thinkSteps ? { thinkSteps } : {}),
+		...(answerSteps ? { answerSteps } : {}),
 	}
 }
 
@@ -428,6 +454,7 @@ export function toProviderConfigPatch(protoPatch: WriteProviderConfigPatch | und
 						: null,
 				}
 			: {}),
+		...(protoPatch.notices !== undefined ? { notices: toNoticeSettings(protoPatch.notices) } : {}),
 		// A tool selection with nothing in it is the same statement as no
 		// selection at all -- every tool is on -- so an empty list clears the
 		// section rather than storing a profile that withholds nothing. That

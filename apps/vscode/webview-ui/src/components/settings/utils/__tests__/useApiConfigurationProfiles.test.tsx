@@ -163,6 +163,8 @@ describe("useApiConfigurationProfiles — loading a profile", () => {
 			outputBudget: {},
 			reasoning: {},
 			tools: {},
+			// Generation notices: a profile that names none has them off.
+			notices: {},
 			// An agent node's window share; the providers.json write drops it
 			// (no such field there), a node's own snapshot takes it whole.
 			agentWindow: {},

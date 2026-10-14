@@ -902,9 +902,12 @@ export function createContextCompactionPrepareTurn(
 			providerId: config.providerId,
 			modelId: config.modelId,
 		} as ProviderConfig);
+	// A summary never asks for generation notices: it is new text, and a line
+	// planted in it would be stored as the summary's own words.
+	const { notices: _notices, ...summaryProviderConfig } = baseProviderConfig;
 	const providerConfig: ProviderConfig = options.sideCallOf
-		? { ...baseProviderConfig, sideCallOf: options.sideCallOf }
-		: baseProviderConfig;
+		? { ...summaryProviderConfig, sideCallOf: options.sideCallOf }
+		: summaryProviderConfig;
 	// The key the gateway filed this agent's measurements under (see
 	// `createAgentModelFromConfig`): its own engine session, else the session.
 	const measurementsKey = providerConfig.engineSessionId || config.sessionId;
