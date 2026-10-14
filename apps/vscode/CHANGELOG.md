@@ -5,6 +5,95 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.252] — 2026-10-14
+
+### Agents
+
+- **No "you just changed this file" after an edit that was refused.** When an
+  edit was turned down (for example "Read before editing … The file was not
+  modified") and the task had no checklist, the next message told the model it
+  had just changed that file. It is now said only about an edit that went
+  through.
+- **Copying repetitive data is no longer taken for a reasoning loop.** A model
+  asked to embed a sound read the file as base64 and copied it into its
+  thinking; the file's own padding is one character hundreds of times, and
+  the loop guard cut the turn. The guard now checks what the model was given:
+  repetition that is already there, at least as long, is the model restating
+  what it read. Once the model writes more of it than the source holds, the
+  guard cuts as before. Replayed over 88,000 recorded thinking blocks, this
+  removes the four wrong cuts found and changes no other.
+
+### Ollama and xOllama
+
+- **Reasoning effort and thinking budget are two settings.** The thinking
+  dropdown used to send its choice as the model's thinking level, which on the
+  fork's server also capped the thinking. They are now separate:
+  - **Thinking budget** is the existing dropdown, renamed. It is the cap,
+    sent as `think_budget`: Minimal to Max as a share of the reply, or Custom
+    as a token count.
+  - **Reasoning effort** is new. It is the model's own thinking level, sent
+    as `think` and passed to its template. It lists only the levels the
+    selected model states (for example low / medium / xhigh on qwen3.8). It is
+    hidden for models that are only on or off. It does not cap anything.
+- **Saved profiles keep working without a re-save.** The budget is read from
+  where the old dropdown stored it. A profile saved before this release has
+  no reasoning effort and uses Default, so it sends `think: true` with the
+  same budget as before. On a current xOllama or the fork's Ollama, that
+  gives the same cap the profile had.
+- **On stock Ollama, pick gpt-oss's level again.** Stock Ollama has no
+  `think_budget`. There, the old dropdown's choice reached gpt-oss as its
+  level. If you relied on that, choose the level under Reasoning effort; the
+  budget dropdown does nothing on stock Ollama.
+
+### llama.cpp and opencoti
+
+- **The thinking budget no longer sets the model's level, and "High" no
+  longer fails.** On a llama.cpp server, Cerebriline also sent the budget's
+  word as `reasoning_effort`. llama.cpp passes that to the model's chat
+  template. On a template that lists only xhigh / medium / low, "High"
+  failed every turn with a server error, and "Low" changed the model's level
+  as well as the budget. The budget is now sent only as
+  `reasoning_budget_tokens`.
+- **Reasoning effort, from the model's own template.** The llama.cpp and
+  opencoti panels have a Reasoning effort dropdown. It lists the levels the
+  loaded model's chat template states, read from the server's `/props`, and
+  is sent as `reasoning_effort`. It is hidden when the template names no
+  level. opencoti honours it from c13.
+- **A server that does not answer is named as the reason.** When the server's
+  `/props` cannot be read, the panel now says the levels are not known yet,
+  instead of leaving the Reasoning effort dropdown out with no reason. A
+  level already chosen is kept, and is not flagged as unsupported until the
+  template has actually been read.
+- **"Default" means no budget.** With thinking on and the budget left at
+  Default, the generic OpenAI-compatible provider used to send a Medium
+  budget and `reasoning_effort: medium`. It now sends neither, as the panel
+  already said.
+- **Servers that publish no chat template get no level.** vLLM and hosted APIs
+  behind the generic OpenAI-compatible provider have no `/props`, so the
+  Reasoning effort dropdown is not shown there and no `reasoning_effort` is
+  sent. Before, the budget word reached them as one.
+
+### Generation notices (opencoti and xOllama)
+
+- **New: Generation notices.** opencoti and xOllama profiles have a
+  Generation notices switch, off by default. When it is on and the server
+  supports notices, the server writes one short line into the model's own
+  output as the model nears the end of its thinking or answer room, so it can
+  wrap up instead of being cut off. Each phase takes up to four steps, as a
+  percent of its room. The default is 60, 70, 80 and 90.
+- **A message you send mid-run is announced.** A message queued or steered
+  while the model works makes the server plant a line saying one is waiting.
+  The message's text is not sent with it.
+- **The line is hidden from the chat and kept everywhere else.** It stays in
+  the conversation sent back to the server: removing it would make the server
+  re-read the answer from that point on every turn.
+- **Only the conversation's own turns ask for notices.** Compaction
+  summaries, titles, commit messages and calls made for another conversation
+  never do.
+- **Servers without notices are not affected.** The setting is ignored on a
+  server that does not report the capability. opencoti plans notices for its
+  c13 build; until a server reports them, nothing changes.
+
 ## [4.100.251] — 2026-10-13
 
 ### SDK
