@@ -3,7 +3,6 @@ import os from "node:os"
 import path from "node:path"
 import type { CoreSessionConfig } from "@cline/core"
 import * as LlmsModels from "@cline/llms"
-import { OLLAMA_DEFAULT_REASONING_EFFORT } from "@cline/llms"
 import { buildOutputBudgetSection } from "@cline/shared"
 import {
 	CATALOG_CONTEXT_WINDOW,
@@ -2773,8 +2772,32 @@ describe("resolveThinkingAllowance", () => {
 			"v7-coder",
 		)
 
+		// The saved effort is the budget dropdown's share: it is asked about as
+		// `think_budget`, and no level is named.
 		expect(mocks.resolveOllamaThinkBudget).toHaveBeenCalledWith("http://localhost:11434", "v7-coder", {
-			think: "high",
+			thinkBudget: "high",
+			numPredict: 8_000,
+			numCtx: 128_000,
+		})
+	})
+
+	it("names a picked level as think, beside the budget", async () => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue({
+			sampling: { reasoningLevel: "xhigh", thinkBudget: "4096" },
+		} as never)
+
+		await resolveThinkingAllowance(
+			"ollama",
+			{ reasoningEffort: "medium" },
+			8_000,
+			128_000,
+			"http://localhost:11434",
+			"v7-coder",
+		)
+
+		expect(mocks.resolveOllamaThinkBudget).toHaveBeenCalledWith("http://localhost:11434", "v7-coder", {
+			think: "xhigh",
+			thinkBudget: "4096",
 			numPredict: 8_000,
 			numCtx: 128_000,
 		})
@@ -2825,16 +2848,16 @@ describe("resolveThinkingAllowance", () => {
 		).toBeUndefined()
 	})
 
-	it("asks about the level the vendor will fill in when none is set", async () => {
-		// Asking about "no level" would answer for a request this session never
-		// makes: the Ollama vendor supplies its default when reasoning is unset.
+	it("names neither a level nor a budget when none is set", async () => {
+		// The request then carries `think: true` and no `think_budget`, so the
+		// model's own budget parameter is what applies; the question asked is
+		// the same one.
 		await resolveThinkingAllowance("ollama", {}, 8_000, 128_000, "http://localhost:11434", "v7-coder")
 
-		expect(mocks.resolveOllamaThinkBudget).toHaveBeenCalledWith(
-			"http://localhost:11434",
-			"v7-coder",
-			expect.objectContaining({ think: OLLAMA_DEFAULT_REASONING_EFFORT }),
-		)
+		expect(mocks.resolveOllamaThinkBudget).toHaveBeenCalledWith("http://localhost:11434", "v7-coder", {
+			numPredict: 8_000,
+			numCtx: 128_000,
+		})
 	})
 
 	it("prefers a configured num_predict as the cap the server will apply", async () => {

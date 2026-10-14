@@ -14,7 +14,7 @@
  *  - the cap is a configured `num_predict`, then a per-turn override, then a
  *    manual budget, then `auto` against the session's window, then the
  *    gateway's own default;
- *  - thinking is asked of the server on Ollama, which resolves a level itself,
+ *  - thinking is asked of the server on Ollama, which resolves a budget itself,
  *    and computed from the same table on a llama.cpp server, which takes an
  *    absolute count;
  *  - the budget message is the configured one, then the model's own.
@@ -94,8 +94,14 @@ export interface SessionThinkingInput {
 	/** `false` is thinking switched off; anything else leaves it to the level. */
 	thinking?: boolean;
 	reasoningEffort?: string;
-	/** `sampling.thinkBudget`: a level or a bare count, llama.cpp only. */
+	/** `sampling.thinkBudget`: a share or a bare count. */
 	configuredThinkBudget?: string;
+	/**
+	 * `sampling.reasoningLevel`: the model's own level, Ollama's `think`.
+	 * Asked about only so the probe describes the request this session sends;
+	 * a level bounds nothing on a current server.
+	 */
+	configuredReasoningLevel?: string;
 	configuredNumPredict?: number;
 	outputCap: number;
 	contextWindow: number | undefined;
@@ -108,7 +114,12 @@ export interface SessionThinkingInput {
 	probeOllama?: (
 		baseUrl: string | undefined,
 		modelId: string,
-		query: { think: string; numPredict: number; numCtx: number | undefined },
+		query: {
+			think?: string;
+			thinkBudget?: string;
+			numPredict: number;
+			numCtx: number | undefined;
+		},
 	) => Promise<{ level: string; budgetTokens: number } | undefined>;
 }
 
@@ -120,8 +131,8 @@ export async function resolveSessionThinkingAllowance(
 	if (!engine || input.thinking === false || !input.modelId) {
 		return undefined;
 	}
-	// The level this session sends; the vendor fills in its default when
-	// nothing set one, so that is the level to ask about.
+	// llama.cpp only: the stored effort is the budget dropdown's share there,
+	// resolved to a count on this side.
 	const think =
 		input.reasoningEffort?.trim() || Llms.OLLAMA_DEFAULT_REASONING_EFFORT;
 	// A configured num_predict is the cap the server applies; the session's own
@@ -135,7 +146,28 @@ export async function resolveSessionThinkingAllowance(
 		);
 		return budgetTokens === undefined ? undefined : { level, budgetTokens };
 	}
-	const query = { think, numPredict, numCtx: input.contextWindow };
+	// Ollama is asked about the request this session actually sends: the same
+	// `think` and `think_budget` as `resolveOllamaThinking` puts on the wire.
+	// The stored effort is the budget dropdown's share, so it is asked about as
+	// a budget, never as a level, and with nothing set nothing is asked about:
+	// the server then answers with the model's own `think_budget`.
+	const ollamaThinking = Llms.resolveOllamaThinking({
+		effort: input.reasoningEffort,
+		sampling: {
+			thinkBudget: input.configuredThinkBudget,
+			reasoningLevel: input.configuredReasoningLevel,
+		},
+	});
+	const query = {
+		...(typeof ollamaThinking.think === "string"
+			? { think: ollamaThinking.think }
+			: {}),
+		...(ollamaThinking.thinkBudget
+			? { thinkBudget: ollamaThinking.thinkBudget }
+			: {}),
+		numPredict,
+		numCtx: input.contextWindow,
+	};
 	return input.probeOllama
 		? input.probeOllama(input.baseUrl, input.modelId, query)
 		: Llms.probeOllamaThinkBudget(

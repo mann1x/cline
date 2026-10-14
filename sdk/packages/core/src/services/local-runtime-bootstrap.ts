@@ -505,6 +505,7 @@ async function applySessionBudget(
 			thinking: providerConfig.thinking,
 			reasoningEffort: providerConfig.reasoningEffort,
 			configuredThinkBudget: sampling?.thinkBudget,
+			configuredReasoningLevel: sampling?.reasoningLevel,
 			configuredNumPredict: sampling?.numPredict,
 			outputCap,
 			contextWindow,

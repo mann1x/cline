@@ -116,6 +116,8 @@ export interface ProviderSamplingSettings {
 	readonly stop?: readonly string[]
 	readonly thinkBudget?: string
 	readonly thinkBudgetMessage?: string
+	/** The model's thinking level, sent as `think`. Never a cap. */
+	readonly reasoningLevel?: string
 }
 
 /**

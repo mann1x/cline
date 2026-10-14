@@ -266,11 +266,20 @@ describe("sampling values that cannot mean anything", () => {
 		mocks.setProviderSettings({})
 	})
 
-	const load = async (sampling: Record<string, number>) => {
+	const load = async (sampling: Record<string, number | string>) => {
 		const { buildEffectiveProviderConfig } = await import("./effective-config")
 		mocks.setProviderSettings({ ollama: { provider: "ollama", sampling } })
 		return buildEffectiveProviderConfig(parseProviderId("ollama")).sampling
 	}
+
+	it("carries the reasoning level and the budget as two fields", async () => {
+		// The level is sent as `think`, the budget as `think_budget`; neither is
+		// read for the other.
+		const sampling = await load({ reasoningLevel: "xhigh", thinkBudget: "4096" })
+		expect(sampling?.reasoningLevel).toBe("xhigh")
+		expect(sampling?.thinkBudget).toBe("4096")
+		expect((await load({ thinkBudget: "high" }))?.reasoningLevel).toBeUndefined()
+	})
 
 	it("drops a top_p that is not a probability", async () => {
 		expect((await load({ topP: 9 }))?.topP).toBeUndefined()

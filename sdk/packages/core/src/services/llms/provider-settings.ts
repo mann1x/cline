@@ -131,6 +131,7 @@ export const SamplingSettingsSchema = z.object({
 	stop: z.array(z.string()).optional(),
 	thinkBudget: z.string().optional(),
 	thinkBudgetMessage: z.string().optional(),
+	reasoningLevel: z.string().optional(),
 });
 
 export type SamplingSettings = z.infer<typeof SamplingSettingsSchema>;

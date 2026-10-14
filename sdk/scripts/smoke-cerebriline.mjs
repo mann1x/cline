@@ -230,10 +230,31 @@ try {
 		backendMode: "local",
 		dataDir: join(work, "wire-data"),
 	});
-	for (const [label, thinking, expected] of [
-		["an effort level", { thinking: true, reasoningEffort: "high" }, "high"],
-		["thinking left unset", {}, true],
-		["thinking off", { thinking: false }, false],
+	// The saved effort is the budget dropdown's share and travels as
+	// `think_budget`; `think` names a level only when one was picked.
+	for (const [label, thinking, expected, budget] of [
+		[
+			"a budget share",
+			{ thinking: true, reasoningEffort: "high" },
+			true,
+			"high",
+		],
+		[
+			"a picked level",
+			{
+				thinking: true,
+				providerConfig: {
+					providerId: "ollama",
+					modelId: "m",
+					baseUrl,
+					sampling: { reasoningLevel: "xhigh" },
+				},
+			},
+			"xhigh",
+			undefined,
+		],
+		["thinking left unset", {}, true, undefined],
+		["thinking off", { thinking: false }, false, undefined],
 	]) {
 		chats.length = 0;
 		const started = await core.start({
@@ -262,11 +283,15 @@ try {
 			fail(
 				`wire, ${label}: think is ${JSON.stringify(sent.think)}, expected ${JSON.stringify(expected)}`,
 			);
+		} else if (sent.options?.think_budget !== budget) {
+			fail(
+				`wire, ${label}: think_budget is ${JSON.stringify(sent.options?.think_budget)}, expected ${JSON.stringify(budget)}`,
+			);
 		} else if (sent.options?.num_ctx !== 32768) {
 			fail(`wire, ${label}: num_ctx is ${sent.options?.num_ctx}`);
 		} else {
 			console.log(
-				`ok   wire, ${label}: think ${JSON.stringify(sent.think)}, ${sent.tools?.length ?? 0} tools`,
+				`ok   wire, ${label}: think ${JSON.stringify(sent.think)}, think_budget ${JSON.stringify(sent.options?.think_budget)}, ${sent.tools?.length ?? 0} tools`,
 			);
 		}
 	}

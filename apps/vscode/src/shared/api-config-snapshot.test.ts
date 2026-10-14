@@ -395,6 +395,15 @@ describe("the provider config a profile carries", () => {
 		expect(patch.reasoning).toEqual({ reasoningHistory: "last", effort: "" })
 	})
 
+	it("restores a profile saved before the reasoning level existed with no level", () => {
+		// The sampler is restored whole, so a profile that never stored a level
+		// replaces the section with one that has none: Default, which sends what
+		// the profile always sent. The budget it stored comes back unchanged.
+		const patch = providerConfigPatchForProfile({ sampling: { thinkBudget: "8000" } })
+
+		expect(patch.sampling).toEqual({ thinkBudget: "8000" })
+	})
+
 	it("keeps a sampler the profile does carry", () => {
 		// Only the absent ones are cleared; a retuned sampler is restored as it
 		// was saved.

@@ -317,9 +317,20 @@ export interface ProviderSamplingOptions {
 	stop?: string[];
 	/**
 	 * Bound on how many tokens the model may spend inside a thinking block,
-	 * as a token count or an effort level. Ollama's `think_budget`.
+	 * as a token count or a share of the response (`minimal`, `low`, `medium`,
+	 * `high`, `max`). Ollama's `think_budget`.
 	 */
 	thinkBudget?: string;
+	/**
+	 * The model's own reasoning level, sent as Ollama's `think`: one of the
+	 * names the model states in `/api/show`'s `thinking.values` -- `low`,
+	 * `medium`, `xhigh` on Qwen 3.8, `low`, `medium`, `high` on gpt-oss.
+	 *
+	 * Never a bound: the bound is `thinkBudget`. Absent means `think: true`,
+	 * which leaves the model on its own default level. Not an option on the
+	 * wire, so the option builders skip it.
+	 */
+	reasoningLevel?: string;
 	/**
 	 * Text written into the thinking block just before the closing tag is
 	 * forced, so the model reads that it has to answer now. Ollama's

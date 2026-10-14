@@ -134,4 +134,38 @@ describe("the Ollama form for xOllama", () => {
 		expect(mocks.getOllamaModels.mock.calls[0]?.[0]).toMatchObject({ value: "http://ollama-box:11434" })
 		expect(screen.getByText("ollama.com account")).toBeInTheDocument()
 	})
+
+	// The model's thinking level and the thinking budget are two controls. The
+	// level dropdown lists what /api/show states, and only when it states any.
+	it("offers the levels the model states, beside the budget", async () => {
+		mocks.config.current = { reasoning: { enabled: true } }
+		mocks.getOllamaModelParameters.mockResolvedValue({
+			parameters: {},
+			thinkingLevels: ["low", "medium", "xhigh"],
+			thinkingDefault: "medium",
+		})
+		render(<OllamaProvider currentMode="act" providerId="xollama" showModelOptions />)
+		await waitFor(() => expect(screen.getByText("Reasoning effort")).toBeInTheDocument())
+		expect(screen.getByText("Default (medium)")).toBeInTheDocument()
+		expect(screen.getByText("xhigh")).toBeInTheDocument()
+		expect(screen.getByText("Thinking budget")).toBeInTheDocument()
+	})
+
+	it("offers no level for a model that is only on or off", async () => {
+		mocks.config.current = { reasoning: { enabled: true } }
+		mocks.getOllamaModelParameters.mockResolvedValue({ parameters: {}, thinkingLevels: [] })
+		render(<OllamaProvider currentMode="act" providerId="xollama" showModelOptions />)
+		await waitFor(() => expect(mocks.getOllamaModelParameters).toHaveBeenCalled())
+		expect(screen.queryByText("Reasoning effort")).not.toBeInTheDocument()
+		expect(screen.getByText("Thinking budget")).toBeInTheDocument()
+	})
+
+	it("keeps a stored level the model does not state on screen, with a warning", async () => {
+		mocks.config.current = { reasoning: { enabled: true }, sampling: { reasoningLevel: "xhigh" } }
+		mocks.getOllamaModelParameters.mockResolvedValue({ parameters: {}, thinkingLevels: [] })
+		render(<OllamaProvider currentMode="act" providerId="xollama" showModelOptions />)
+		await waitFor(() => expect(mocks.getOllamaModelParameters).toHaveBeenCalled())
+		expect(screen.getByText("Reasoning effort")).toBeInTheDocument()
+		expect(screen.getByText(/does not state the level "xhigh"/)).toBeInTheDocument()
+	})
 })

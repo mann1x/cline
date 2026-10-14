@@ -218,7 +218,9 @@ export function samplingFieldsFor(
 }
 
 /** Sampling values as a panel edits them: raw text, so a half-typed number survives a render. */
-export type SamplingDraft = Partial<Record<SamplingFieldKey | "stop" | "thinkBudget" | "thinkBudgetMessage", string>>
+export type SamplingDraft = Partial<
+	Record<SamplingFieldKey | "stop" | "thinkBudget" | "thinkBudgetMessage" | "reasoningLevel", string>
+>
 
 /**
  * Whether the text is a number the user has finished typing.
@@ -437,7 +439,7 @@ export function buildSamplingPatch(input: {
 		.split("\n")
 		.map((entry) => entry.trim())
 		.filter((entry) => entry !== "")
-	for (const key of ["thinkBudget", "thinkBudgetMessage"] as const) {
+	for (const key of ["thinkBudget", "thinkBudgetMessage", "reasoningLevel"] as const) {
 		const storedText = typeof stored?.[key] === "string" ? (stored[key] as string) : ""
 		const raw = (draft[key] ?? storedText).trim()
 		if (raw !== "") {

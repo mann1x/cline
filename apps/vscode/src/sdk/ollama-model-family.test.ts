@@ -11,6 +11,7 @@ import {
 	clearOllamaModelFamilyCache,
 	DEFAULT_OLLAMA_BASE_URL,
 	OllamaModelInfoUnavailableError,
+	readThinkingLevels,
 	resolveOllamaContextWindow,
 	resolveOllamaImageSupport,
 	resolveOllamaModelFamily,
@@ -474,5 +475,33 @@ describe("resolveOllamaContextWindow", () => {
 		post.mockResolvedValueOnce(ok({ parameters: "num_ctx 0" }) as never)
 
 		await expect(resolveOllamaContextWindow(DEFAULT_OLLAMA_BASE_URL, "broken:latest")).resolves.toBeUndefined()
+	})
+})
+
+describe("readThinkingLevels", () => {
+	// Shapes measured on /api/show, 2026-10-14.
+	it("lists the levels a model states, in the server's order, without the booleans", () => {
+		expect(readThinkingLevels({ thinking: { values: [false, "low", "medium", "xhigh"], default: "medium" } })).toEqual({
+			values: ["low", "medium", "xhigh"],
+			default: "medium",
+		})
+	})
+
+	it("offers nothing for a model that is only on or off", () => {
+		// gemma4: the checkbox is the whole control.
+		expect(readThinkingLevels({ thinking: { values: [false, true], default: true } })).toEqual({ values: [] })
+	})
+
+	it("offers nothing for a model that states no thinking block", () => {
+		// deepseek-r1, and any server older than the block.
+		expect(readThinkingLevels({ thinking: null })).toEqual({ values: [] })
+		expect(readThinkingLevels({})).toEqual({ values: [] })
+		expect(readThinkingLevels(undefined)).toEqual({ values: [] })
+	})
+
+	it("drops a default that is not one of the levels", () => {
+		expect(readThinkingLevels({ thinking: { values: ["low", "high"], default: false } })).toEqual({
+			values: ["low", "high"],
+		})
 	})
 })

@@ -61,7 +61,7 @@ describe("resolveSessionThinkingAllowance", () => {
 		contextWindow: 196_608,
 	};
 
-	it("asks Ollama with the level, the cap and the window the session sends", async () => {
+	it("asks Ollama with the budget, the cap and the window the session sends", async () => {
 		const fetchImpl = vi.fn(
 			async (_url: string | URL | Request, _init?: RequestInit) =>
 				new Response(
@@ -80,10 +80,51 @@ describe("resolveSessionThinkingAllowance", () => {
 		expect(allowance).toEqual({ level: "medium", budgetTokens: 24_000 });
 		const [url, init] = fetchImpl.mock.calls[0] ?? [];
 		expect(String(url)).toBe("http://e2g:22434/api/show");
+		// The stored effort is the budget dropdown's share: asked about as the
+		// budget, and no level is named.
 		expect(JSON.parse(String(init?.body))).toEqual({
 			model: "omni",
-			think: "medium",
-			options: { num_predict: 96_000, num_ctx: 196_608 },
+			options: {
+				think_budget: "medium",
+				num_predict: 96_000,
+				num_ctx: 196_608,
+			},
+		});
+	});
+
+	it("asks about a picked level and a configured count as the session sends them", async () => {
+		const probeOllama = vi.fn(async () => ({
+			level: "4096",
+			budgetTokens: 4096,
+		}));
+		await resolveSessionThinkingAllowance({
+			...base,
+			providerId: "ollama",
+			reasoningEffort: "medium",
+			configuredThinkBudget: "4096",
+			configuredReasoningLevel: "xhigh",
+			fetchImpl: vi.fn() as unknown as typeof fetch,
+			probeOllama,
+		});
+		expect(probeOllama).toHaveBeenCalledWith("http://e2g:22434", "omni", {
+			think: "xhigh",
+			thinkBudget: "4096",
+			numPredict: 96_000,
+			numCtx: 196_608,
+		});
+	});
+
+	it("names neither a level nor a budget when nothing is set", async () => {
+		const probeOllama = vi.fn(async () => undefined);
+		await resolveSessionThinkingAllowance({
+			...base,
+			providerId: "ollama",
+			fetchImpl: vi.fn() as unknown as typeof fetch,
+			probeOllama,
+		});
+		expect(probeOllama).toHaveBeenCalledWith("http://e2g:22434", "omni", {
+			numPredict: 96_000,
+			numCtx: 196_608,
 		});
 	});
 
@@ -103,7 +144,7 @@ describe("resolveSessionThinkingAllowance", () => {
 		});
 		expect(allowance?.budgetTokens).toBe(48_000);
 		expect(probeOllama).toHaveBeenCalledWith("http://e2g:22434", "omni", {
-			think: "high",
+			thinkBudget: "high",
 			numPredict: 64_000,
 			numCtx: 196_608,
 		});

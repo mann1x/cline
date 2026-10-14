@@ -136,6 +136,7 @@ export {
 	registerHandler,
 	resolveGatewayProviderRegistration,
 	resolveGatewayProviderRegistrationSync,
+	resolveOllamaThinking,
 	resolveProviderApiLineBaseUrl,
 	setOllamaFetch,
 	setOllamaNoStreamTimeoutDispatcher,

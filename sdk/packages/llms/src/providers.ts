@@ -168,6 +168,9 @@ export {
 	// A cloud model declares no `num_ctx`, so this is the only one of the three
 	// that answers for one.
 	readResolvedOllamaWindow,
+	// The `think` and `think_budget` a session sends, each from its own
+	// setting, so a host can ask the server about the same request.
+	resolveOllamaThinking,
 	// The dispatcher is only honoured by a fetch that reads it, so the host
 	// hands over both or neither.
 	setOllamaFetch,

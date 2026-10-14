@@ -575,12 +575,17 @@ message ProviderSamplingPatch {
   optional int32 num_predict = 11;
   optional int32 num_keep = 12;
   repeated string stop = 13;
-  // Token count or effort level, as typed.
+  // Token count or share word (minimal/low/medium/high/max), as typed. Sent as
+  // `think_budget`: a cap on thinking, never a level.
   optional string think_budget = 14;
   optional string think_budget_message = 15;
   // Layers to place on the GPU. -1 leaves it to Ollama's own estimator, which
   // is conservative and has been measured refusing layers that fit.
   optional int32 num_gpu = 16;
+  // The model's own thinking level (`think: "high"`), from the levels its
+  // /api/show states. Separate from think_budget: a level is handed to the
+  // model and bounds nothing. Absent sends `think: true`.
+  optional string reasoning_level = 17;
 }
 
 // The per-turn output budget: Ollama's `num_predict`, llama.cpp's and
@@ -1268,4 +1273,10 @@ message OllamaModelParametersRequest {
 // did not answer, which is not the same as a model that sets nothing.
 message OllamaModelParameters {
   map<string, string> parameters = 1;
+  // The thinking levels the model names in /api/show's `thinking.values`, in
+  // the server's order, booleans left out. Empty when the model states none,
+  // only on/off, or the server did not answer.
+  repeated string thinking_levels = 2;
+  // `thinking.default`, when it is one of those levels.
+  optional string thinking_default = 3;
 }

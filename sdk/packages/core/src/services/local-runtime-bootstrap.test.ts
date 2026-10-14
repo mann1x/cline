@@ -653,7 +653,12 @@ describe("prepareLocalRuntimeBootstrap", () => {
 		expect(bootstrap.providerConfig.defaultMaxOutputTokens).toBe(96_000);
 		expect(bootstrap.providerConfig.thinkingBudgetTokens).toBe(24_000);
 		const body = JSON.parse(String(showFetch.mock.calls[0]?.[1]?.body));
-		expect(body.options).toEqual({ num_predict: 96_000, num_ctx: 196_608 });
+		expect(body.options).toEqual({
+			think_budget: "medium",
+			num_predict: 96_000,
+			num_ctx: 196_608,
+		});
+		expect(body).not.toHaveProperty("think");
 		expect(bootstrap.config.systemPrompt).toMatch(
 			/# Output Budget[\s\S]*96[,.]?000[\s\S]*24[,.]?000/,
 		);

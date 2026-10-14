@@ -56,13 +56,18 @@ const PROVIDER_NAMES: Record<OllamaApiProviderId, string> = {
 }
 
 /**
- * Thinking levels offered for Ollama, in the order they escalate.
+ * Thinking budgets offered for Ollama, in the order they escalate.
  *
- * `unset` is a real choice rather than a placeholder: it leaves the request
- * without an effort so the vendor's own default applies, which is what a user
- * who wants thinking on but has no opinion about how much actually means.
- * The rest are the levels Ollama itself accepts, `xhigh` being the name the AI
- * SDK gives Ollama's `max`.
+ * This is the cap on thinking, sent as `think_budget`: a share of the reply
+ * (Ollama's fractions) or, under Custom, a count. It is not the model's
+ * thinking level -- that is the Reasoning effort dropdown, sent as `think`.
+ * The two used to share this one control, so a profile's stored choice here
+ * (`reasoning.effort`) is still read where it always was, and now reaches the
+ * server as the budget it always meant.
+ *
+ * `unset` is a real choice rather than a placeholder: it sends no budget, so
+ * the model's own `think_budget` parameter, if any, applies. `xhigh` is
+ * Ollama's alias for `max`.
  *
  * `custom` is the one entry that is not an effort at all: it stands for "no
  * effort, a `think_budget` instead". Keeping it in this list is what makes the
@@ -83,7 +88,7 @@ const DEFAULT_MAX_OUTPUT_TOKENS_HINT = 32000
 type OllamaThinkingLevel = (typeof OLLAMA_THINKING_LEVELS)[number]
 
 const OLLAMA_THINKING_LEVEL_LABELS: Record<OllamaThinkingLevel, string> = {
-	unset: "Default (provider decides)",
+	unset: "Default (model decides)",
 	minimal: "Minimal",
 	low: "Low",
 	medium: "Medium",
@@ -91,6 +96,9 @@ const OLLAMA_THINKING_LEVEL_LABELS: Record<OllamaThinkingLevel, string> = {
 	xhigh: "Max",
 	custom: "Custom (think_budget)",
 }
+
+/** The Reasoning effort dropdown's "send no level" entry. */
+const REASONING_LEVEL_DEFAULT = "__default__"
 
 /** The `think_budget` placeholder is shown in a sidebar; this is what fits. */
 const SAMPLING_PLACEHOLDER_MAX_LENGTH = 48
@@ -299,6 +307,19 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 		[write, composeAndWrite],
 	)
 
+	// The model's own thinking level, sent as `think`. A separate setting from
+	// the budget above and stored apart from it, in the sampler section, which
+	// profiles capture and restore whole: a profile saved before this control
+	// existed has no level and reads as Default, which sends what it always
+	// sent.
+	const storedReasoningLevel = typeof sampling?.reasoningLevel === "string" ? sampling.reasoningLevel.trim() : ""
+	const handleReasoningLevelChange = useCallback(
+		(value: string) => {
+			void composeAndWrite({ reasoningLevel: value === REASONING_LEVEL_DEFAULT ? "" : value })
+		},
+		[composeAndWrite],
+	)
+
 	// Fetch ollama models on mount and whenever the base URL changes. The
 	// picker also refetches on focus — do NOT poll on an interval: the base
 	// URL is user-configurable, so an unbounded poll can hammer a remote or
@@ -339,6 +360,12 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 	// What the selected model's own Modelfile sets, so a blank field can say
 	// which value it is leaving in force instead of only that it is leaving one.
 	const [modelParameters, setModelParameters] = useState<Record<string, string>>({})
+	// The thinking levels the selected model states in /api/show, booleans left
+	// out. Empty for a model with only on/off, or none.
+	const [modelThinking, setModelThinking] = useState<{ levels: string[]; default?: string }>({ levels: [] })
+	// A stored level the selected model does not state: still sent, so it stays
+	// on screen with a warning rather than hidden where it cannot be cleared.
+	const reasoningLevelUnstated = storedReasoningLevel !== "" && !modelThinking.levels.includes(storedReasoningLevel)
 	const selectedModelId = selectedModel.modelId
 
 	// The draft belongs to the model, the tab it was typed on, and the profile it
@@ -368,6 +395,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 	useEffect(() => {
 		if (!selectedModelId) {
 			setModelParameters({})
+			setModelThinking({ levels: [] })
 			return
 		}
 		let cancelled = false
@@ -377,6 +405,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 			.then((response) => {
 				if (!cancelled) {
 					setModelParameters(response?.parameters ?? {})
+					setModelThinking({ levels: response?.thinkingLevels ?? [], default: response?.thinkingDefault })
 				}
 			})
 			.catch(() => {
@@ -384,6 +413,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 				// fields reading "model default", which is what they said before.
 				if (!cancelled) {
 					setModelParameters({})
+					setModelThinking({ levels: [] })
 				}
 			})
 		return () => {
@@ -490,9 +520,44 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 						Asks the model to think in its own reasoning channel instead of into its answer. On a reasoning model this
 						also lets Ollama bound how much of a reply is spent thinking.
 					</p>
+					{thinkingEnabled && (modelThinking.levels.length > 0 || storedReasoningLevel !== "") && (
+						<div className="mb-1">
+							<Label className="text-xs font-medium">Reasoning effort</Label>
+							<Select
+								onValueChange={handleReasoningLevelChange}
+								value={storedReasoningLevel || REASONING_LEVEL_DEFAULT}>
+								<SelectTrigger className="w-full">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value={REASONING_LEVEL_DEFAULT}>
+										{modelThinking.default ? `Default (${modelThinking.default})` : "Default (model decides)"}
+									</SelectItem>
+									{modelThinking.levels.map((level) => (
+										<SelectItem key={level} value={level}>
+											{level}
+										</SelectItem>
+									))}
+									{reasoningLevelUnstated && (
+										<SelectItem value={storedReasoningLevel}>{storedReasoningLevel}</SelectItem>
+									)}
+								</SelectContent>
+							</Select>
+							<p className="text-xs mt-1 mb-0 text-description">
+								The model's own thinking level, sent as <code>think</code> and handed to its template. The levels
+								listed are the ones this model states. It does not cap the thinking; the budget below does.
+							</p>
+							{reasoningLevelUnstated && (
+								<p className="text-xs mt-1 mb-0 text-(--vscode-errorForeground)">
+									This model does not state the level "{storedReasoningLevel}". The server may use its default
+									instead or refuse the request; pick Default or one of the model's levels.
+								</p>
+							)}
+						</div>
+					)}
 					{thinkingEnabled && (
 						<div className="mb-1">
-							<Label className="text-xs font-medium">Thinking level</Label>
+							<Label className="text-xs font-medium">Thinking budget</Label>
 							<Select
 								onValueChange={(value) => handleThinkingLevelChange(value as OllamaThinkingLevel)}
 								value={thinkingLevel}>
@@ -508,7 +573,8 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 								</SelectContent>
 							</Select>
 							<p className="text-xs mt-1 mb-0 text-description">
-								Higher levels let the model think for longer before answering, leaving less of the reply for the
+								How much of the reply the model may spend thinking, sent as <code>think_budget</code>: Minimal
+								1/16, Low 1/8, Medium 1/4, High 1/2, Max 4/5. A larger budget leaves less of the reply for the
 								answer itself.
 							</p>
 							{thinkingLevel === "custom" && (
@@ -522,8 +588,8 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 										<span className="font-medium text-xs">think_budget</span>
 									</DebouncedTextField>
 									<p className="text-xs mt-1 mb-0 text-description">
-										A token count, or an effort level (minimal / low / medium / high / max). Sent only while
-										Custom is selected; picking any other level above clears it.
+										A token count, or a share (minimal / low / medium / high / max). Sent only while Custom is
+										selected; picking any other budget above clears it.
 									</p>
 								</div>
 							)}

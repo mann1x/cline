@@ -377,8 +377,9 @@ export interface OllamaThinkBudget {
  *
  * `/api/show` given the request's `think` and options answers with
  * `think_budget_tokens` on the think-budget builds, which is the number the
- * server enforces -- a level's share of `min(num_predict, num_ctx)`, or the
- * model's own `think_budget` where no level outranks it. Asked rather than
+ * server enforces -- the request's `think_budget`, else the model's own, as a
+ * share of `min(num_predict, num_ctx)` or a count. (A build from before the
+ * separation also lets a level in `think` outrank both.) Asked rather than
  * computed so every host states the number the server enforces. An older
  * build answers without the field: nothing to report, which is `undefined`
  * rather than a guess.
@@ -386,7 +387,12 @@ export interface OllamaThinkBudget {
 export async function probeOllamaThinkBudget(
 	baseUrl: string | undefined,
 	modelId: string,
-	query: { think?: string; numPredict?: number; numCtx?: number },
+	query: {
+		think?: string;
+		thinkBudget?: string;
+		numPredict?: number;
+		numCtx?: number;
+	},
 	fetchImpl: typeof fetch,
 	attempts = 3,
 ): Promise<OllamaThinkBudget | undefined> {
@@ -395,7 +401,14 @@ export async function probeOllamaThinkBudget(
 		return undefined;
 	}
 	const root = normalizeOllamaBaseUrl(baseUrl) ?? "http://localhost:11434/api";
-	const options: Record<string, number> = {};
+	const options: Record<string, number | string> = {};
+	const thinkBudget = query.thinkBudget?.trim();
+	if (thinkBudget) {
+		// A count is sent as a number, the form every think-budget build reads.
+		options.think_budget = /^\d+$/.test(thinkBudget)
+			? Number(thinkBudget)
+			: thinkBudget;
+	}
 	if (
 		query.numPredict &&
 		Number.isFinite(query.numPredict) &&
@@ -936,7 +949,10 @@ const OLLAMA_SAMPLING_WIRE_NAMES = {
 	stop: "stop",
 	thinkBudget: "think_budget",
 	thinkBudgetMessage: "think_budget_message",
-} as const satisfies Record<keyof ProviderSamplingOptions, string>;
+} as const satisfies Record<
+	Exclude<keyof ProviderSamplingOptions, "reasoningLevel">,
+	string
+>;
 
 /**
  * Translate configured sampling parameters onto the wire.
@@ -976,6 +992,61 @@ export function buildOllamaSamplingOptions(
 		options[wireName] = value;
 	}
 	return options;
+}
+
+/**
+ * The budget shares a stored thinking level can name.
+ *
+ * Until the level and the budget were separated, the Ollama panel's "Thinking
+ * level" dropdown stored its choice in `reasoning.effort`, and the server read
+ * that level as a share of the response. That dropdown is still the budget and
+ * still writes the same field, so every saved profile keeps its value; what
+ * changed is where the value goes. It is sent as `think_budget`, never as the
+ * model's level. `xhigh` is the dropdown's spelling of `max`.
+ */
+const OLLAMA_THINK_BUDGET_SHARES: ReadonlySet<string> = new Set([
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+]);
+
+/**
+ * `think` and `think_budget` for one request, each from its own setting.
+ *
+ * - `think` is the model's level when one was chosen (`sampling.reasoningLevel`),
+ *   `false` when thinking is off, and `true` otherwise -- the model's default
+ *   level. A level is never read as a bound.
+ * - `think_budget` is `sampling.thinkBudget` when set, else the share the
+ *   budget dropdown stored in `reasoning.effort`. Nothing when thinking is off.
+ *
+ * On a server from before the separation a level in `think` still outranks
+ * `think_budget`; with no level chosen the budget applies there exactly as it
+ * does on a current one, so a profile that never picks a level gets the same
+ * bound from both.
+ */
+export function resolveOllamaThinking(input: {
+	/** `"none"` for thinking off, as `toAiSdkReasoning` reports it. */
+	requested?: string;
+	/** The stored `reasoning.effort`: the budget dropdown's share. */
+	effort?: string;
+	sampling?: ProviderSamplingOptions;
+}): { think: boolean | string; thinkBudget?: string } {
+	if (input.requested === "none") {
+		return { think: false };
+	}
+	const level = input.sampling?.reasoningLevel?.trim();
+	const configured = input.sampling?.thinkBudget?.trim();
+	const effort = input.effort?.trim().toLowerCase();
+	const thinkBudget =
+		configured ||
+		(effort && OLLAMA_THINK_BUDGET_SHARES.has(effort) ? effort : undefined);
+	return {
+		think: level || true,
+		...(thinkBudget ? { thinkBudget } : {}),
+	};
 }
 
 /** Read the sampling parameters carried on the resolved provider config. */

@@ -318,21 +318,21 @@ function runCases(cases: ReadonlyArray<Case>) {
 			expect(result).not.toHaveProperty(request.providerId);
 			expect(result[providerOptionsKey]).toBeDefined();
 		}
-		// Ollama first: it is the one target whose bucket may carry a reasoning
+		// Ollama first: it is the one target whose bucket carries a reasoning
 		// field, so the generic "no thinking keys anywhere" sweep below would
-		// otherwise claim it. A *level* still never lands here — only the bare
-		// `think: true` that says "on" without saying how much, and only when
-		// the user named no level. See `provider.ollama.native-options`.
+		// otherwise claim it. `think` is always stated there: `false` for off,
+		// and otherwise `true` -- these cases set no `sampling.reasoningLevel`,
+		// and the stored effort is a budget, never a level. See
+		// `provider.ollama.native-options`.
 		if (request.providerId === "ollama") {
 			expect(result.ollama).toHaveProperty("options.num_ctx");
 			for (const key of ["effort", "reasoningEffort", "thinkingConfig"]) {
 				expect(result.ollama).not.toHaveProperty(key);
 			}
-			if (toAiSdkReasoning(gatewayRequest.reasoning) === undefined) {
-				expect(result.ollama).toHaveProperty("think", true);
-			} else {
-				expect(result.ollama).not.toHaveProperty("think");
-			}
+			expect(result.ollama).toHaveProperty(
+				"think",
+				toAiSdkReasoning(gatewayRequest.reasoning) !== "none",
+			);
 			return;
 		}
 		if (
@@ -2799,6 +2799,85 @@ describe("composeAiSdkProviderOptions: ollama native options", () => {
 				}),
 			}),
 		);
+	});
+});
+
+describe("composeAiSdkProviderOptions: ollama level and budget are separate", () => {
+	const ollama = (
+		reasoning: { enabled?: boolean; effort?: string } | undefined,
+		sampling: Record<string, unknown> = {},
+	) =>
+		composeAiSdkProviderOptions(
+			makeRequest({
+				providerId: "ollama",
+				modelId: "qwen3.8-mtp_tb:27b-q4km",
+				...(reasoning ? { reasoning } : {}),
+			} as never),
+			makeContext({
+				providerId: "ollama",
+				modelId: "qwen3.8-mtp_tb:27b-q4km",
+				configOptions: { sampling },
+			}),
+		).ollama as { think?: unknown; options?: Record<string, unknown> };
+
+	it("sends a saved profile's thinking level as the budget, never as the level", () => {
+		// What every profile saved before the separation holds: the budget
+		// dropdown's share in reasoning.effort and nothing else.
+		const result = ollama({ enabled: true, effort: "low" });
+		expect(result.think).toBe(true);
+		expect(result.options?.think_budget).toBe("low");
+	});
+
+	it("sends the dropdown's top share under the name the server reads", () => {
+		const result = ollama({ enabled: true, effort: "xhigh" });
+		expect(result.think).toBe(true);
+		expect(result.options?.think_budget).toBe("xhigh");
+	});
+
+	it("sends a picked reasoning level as think and the budget beside it", () => {
+		const result = ollama(
+			{ enabled: true, effort: "medium" },
+			{ reasoningLevel: "xhigh" },
+		);
+		expect(result.think).toBe("xhigh");
+		expect(result.options?.think_budget).toBe("medium");
+		expect(result.options).not.toHaveProperty("reasoningLevel");
+		expect(result.options).not.toHaveProperty("reasoning_level");
+	});
+
+	it("lets a configured count win over the stored share", () => {
+		const result = ollama(
+			{ enabled: true, effort: "" },
+			{ thinkBudget: "4096" },
+		);
+		expect(result.think).toBe(true);
+		expect(result.options?.think_budget).toBe("4096");
+	});
+
+	it("leaves the budget to the model when nothing is set", () => {
+		const result = ollama(undefined);
+		expect(result.think).toBe(true);
+		expect(result.options).not.toHaveProperty("think_budget");
+	});
+
+	it("sends a level with no budget when only a level is picked", () => {
+		const result = ollama({ enabled: true }, { reasoningLevel: "low" });
+		expect(result.think).toBe("low");
+		expect(result.options).not.toHaveProperty("think_budget");
+	});
+
+	it("switches thinking off and sends no level", () => {
+		const result = ollama(
+			{ enabled: false, effort: "high" },
+			{ reasoningLevel: "low" },
+		);
+		expect(result.think).toBe(false);
+	});
+
+	it("does not read an unknown effort as a budget", () => {
+		const result = ollama({ enabled: true, effort: "exhaustive" });
+		expect(result.think).toBe(true);
+		expect(result.options).not.toHaveProperty("think_budget");
 	});
 });
 

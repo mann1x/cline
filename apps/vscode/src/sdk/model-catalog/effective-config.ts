@@ -237,7 +237,7 @@ function readSampling(settings: Record<string, unknown>): SamplingConfig | undef
 		}
 		result[field] = parsed
 	}
-	for (const field of ["thinkBudget", "thinkBudgetMessage"] as const) {
+	for (const field of ["thinkBudget", "thinkBudgetMessage", "reasoningLevel"] as const) {
 		const raw = sampling[field]
 		if (typeof raw === "string" && raw !== "") {
 			result[field] = raw

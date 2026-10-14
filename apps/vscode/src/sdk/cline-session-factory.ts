@@ -531,21 +531,20 @@ export async function resolveThinkingAllowance(
 
 	let numPredict: number | undefined
 	let configuredBudget: string | undefined
+	let configuredLevel: string | undefined
 	try {
 		const settings = getProviderSettingsManager(resolveDataDir()).getProviderSettings(providerSettingsProviderId(providerId))
 		numPredict = positiveFiniteNumber(settings?.sampling?.numPredict)
 		configuredBudget = settings?.sampling?.thinkBudget?.trim() || undefined
+		configuredLevel = settings?.sampling?.reasoningLevel?.trim() || undefined
 	} catch (error) {
 		// Advisory: the session's own cap is the sensible stand-in.
 		Logger.warn("[SessionFactory] Failed to read sampling settings:", error)
 	}
 
-	// The level this session will send. The vendor fills in its default when
-	// nothing set one, so that is the level to ask about — asking about "no
-	// level" would answer for a request this session never makes.
-	// Core's rule, shared with the CLI. The level defaults inside it, the
-	// configured num_predict outranks the session cap, and Ollama is asked
-	// rather than computed for.
+	// Core's rule, shared with the CLI: Ollama is asked about the same `think`
+	// and `think_budget` the session sends, and the configured num_predict
+	// outranks the session cap.
 	return resolveSessionThinkingAllowance({
 		providerId: toSdkProviderId(providerId),
 		modelId,
@@ -553,6 +552,7 @@ export async function resolveThinkingAllowance(
 		thinking: reasoning.thinking,
 		reasoningEffort: reasoning.reasoningEffort,
 		configuredThinkBudget: configuredBudget,
+		configuredReasoningLevel: configuredLevel,
 		configuredNumPredict: numPredict,
 		outputCap,
 		contextWindow,

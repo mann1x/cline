@@ -22,6 +22,7 @@ import {
 	readOllamaNumCtx,
 	readOllamaNumPredict,
 	readOllamaSamplingOptions,
+	resolveOllamaThinking,
 } from "../vendors/ollama";
 import { buildGatewayReasoningOptions } from "./anthropic-compatible";
 import { buildOpenAINativeProviderOptions } from "./generic-compatible";
@@ -477,33 +478,32 @@ const deepSeekThinkingRule: ProviderOptionRule = {
  * which the package's option schema does not name — the vendored patch gives
  * that schema a catchall so it survives the parse instead of being dropped.
  *
- * `think` is the one reasoning field that does belong in this bucket, and only
- * in its bare `true` form. A *level* still stays top-level, because on Ollama a
- * level is how a budget is bounded and the two must not be stated twice. But a
- * request that named no level has nothing to put top-level and still has to say
- * "think": with `think` absent a reasoning model thinks into `content` instead,
- * measured as a turn at ~51k input ending on the 32,000-token output limit.
+ * `think` and `think_budget` are two settings and both are set here, each from
+ * its own source (`resolveOllamaThinking`). `think` is the model's own level
+ * when one was picked, else a bare `true`, else `false` for off. The bound is
+ * `think_budget`: the configured count or share, or the share the budget
+ * dropdown stored in `reasoning.effort`. A level is never read as a bound, and
+ * the stored share is never sent as a level.
  *
- * It must not say so by naming a level. On Ollama a level's budget outranks the
- * model's own `PARAMETER think_budget`. Measured against 0.34.2, `num_predict`
- * 8,000:
+ * Why a bare `true` rather than nothing: with `think` absent a reasoning model
+ * thinks into `content` instead, measured as a turn at ~51k input ending on the
+ * 32,000-token output limit. And why never a level the user did not pick: on a
+ * server from before the separation a level's share outranks the model's own
+ * `PARAMETER think_budget`. Measured against 0.34.2, `num_predict` 8,000:
  *
  * | model declares | `think` absent | `think: true` | `think: "medium"` |
  * |---|---|---|---|
  * | nothing | unbounded | unbounded | **2,000** |
  * | `think_budget "high"` | 4,000 | 4,000 | **2,000** |
  *
- * So the old default both capped an unbounded model and halved a budget the
- * model had declared for itself, for every user who had not picked a level —
- * which is what "Default (provider decides)" means. `think: true` is the plain
- * "on" the AI SDK's effort scale cannot express, and it leaves the budget to
- * the model.
+ * From v0.40.3-thinkbudget.1 on, a level bounds nothing at all, and the budget
+ * dropdown's share reaches the server as `think_budget` on both kinds of server.
  */
 const ollamaNativeOptionsRule: ProviderOptionRule = {
 	id: "provider.ollama.native-options",
 	phase: "provider-reasoning",
 	description:
-		"Ollama receives its context window and configured sampler through native provider options; reasoning stays top-level.",
+		"Ollama receives its context window, configured sampler, thinking level (think) and thinking budget (think_budget) through native provider options.",
 	applies: (input) => input.target === "ollama",
 	suppresses: { genericThinking: true },
 	build: (input) => {
@@ -511,23 +511,31 @@ const ollamaNativeOptionsRule: ProviderOptionRule = {
 		// Read from `requestedReasoning`, not `request.reasoning`: the latter has
 		// been cleared by `withoutPortableReasoning` before any rule runs, so it
 		// reports "nothing asked" for every request including an explicit off.
-		// `toAiSdkReasoning` names a level only when the user named one and
-		// returns `"none"` for an off, so an undefined result is exactly the
-		// unnamed case — the only one that gets a bare `think`.
-		const thinkWithoutALevel =
-			toAiSdkReasoning(input.requestedReasoning) === undefined;
+		//
+		// `think` is set here explicitly on every request, and the package lets
+		// it outrank the top-level reasoning value. That is what keeps the
+		// stored `reasoning.effort` -- the budget dropdown's share -- off the
+		// level: it goes into `think_budget` below, and `think` carries only the
+		// level the user picked as the model's own (`sampling.reasoningLevel`).
+		const sampling = readOllamaSamplingOptions(input.context.config);
+		const thinking = resolveOllamaThinking({
+			requested: toAiSdkReasoning(input.requestedReasoning),
+			effort: input.requestedReasoning?.effort,
+			sampling,
+		});
 		return {
 			ollama: {
-				...(thinkWithoutALevel ? { think: true } : {}),
+				think: thinking.think,
 				options: {
 					num_ctx: readOllamaNumCtx(input.context),
 					// Before the sampler, so a `num_predict` the user configured in
 					// the Ollama panel still wins — this only fills in the cap the
 					// session already believes it is sending.
 					...(numPredict !== undefined ? { num_predict: numPredict } : {}),
-					...buildOllamaSamplingOptions(
-						readOllamaSamplingOptions(input.context.config),
-					),
+					...buildOllamaSamplingOptions(sampling),
+					...(thinking.thinkBudget
+						? { think_budget: thinking.thinkBudget }
+						: {}),
 				},
 			},
 		};

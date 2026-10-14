@@ -160,7 +160,7 @@ export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
 			</p>
 			{thinkingEnabled && (
 				<div className="mb-1">
-					<Label className="text-xs font-medium">Thinking level</Label>
+					<Label className="text-xs font-medium">Thinking budget</Label>
 					<Select onValueChange={(value) => handleLevelChange(value as ThinkingLevel)} value={thinkingLevel}>
 						<SelectTrigger className="w-full">
 							<SelectValue />
