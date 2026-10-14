@@ -199,12 +199,12 @@ describe("the Reasoning effort dropdown", () => {
 	beforeEach(() => {
 		mocks.write.mockReset()
 		mocks.readLevels.mockReset()
-		mocks.readLevels.mockResolvedValue({ levels: [], defaultLevel: undefined })
+		mocks.readLevels.mockResolvedValue({ reachable: true, levels: [], defaultLevel: undefined })
 		mocks.config.current = { reasoning: { enabled: true } }
 	})
 
 	it("offers the levels the template states and writes the pick beside the budget", async () => {
-		mocks.readLevels.mockResolvedValue({ levels: ["low", "medium", "xhigh"], defaultLevel: "xhigh" })
+		mocks.readLevels.mockResolvedValue({ reachable: true, levels: ["low", "medium", "xhigh"], defaultLevel: "xhigh" })
 		mocks.config.current = { reasoning: { enabled: true, effort: "high" }, sampling: { temperature: 0.6 } }
 		render(<ThinkingBudgetField providerId="openai-compatible" />)
 		expect(await screen.findByText("Reasoning effort")).toBeInTheDocument()
@@ -232,8 +232,32 @@ describe("the Reasoning effort dropdown", () => {
 
 	it("keeps a stored level the template does not state on screen, with a warning", async () => {
 		mocks.config.current = { reasoning: { enabled: true }, sampling: { reasoningLevel: "high" } }
-		mocks.readLevels.mockResolvedValue({ levels: ["low", "medium", "xhigh"], defaultLevel: "xhigh" })
+		mocks.readLevels.mockResolvedValue({ reachable: true, levels: ["low", "medium", "xhigh"], defaultLevel: "xhigh" })
 		render(<ThinkingBudgetField providerId="openai-compatible" />)
 		expect(await screen.findByText(/does not state the level "high"/)).toBeInTheDocument()
+	})
+
+	// A server that did not answer /props is not a template with no level: say
+	// so, rather than leave the dropdown missing with no reason given.
+	it("says the levels are not known yet when the server does not answer", async () => {
+		mocks.readLevels.mockResolvedValue({ reachable: false, levels: [] })
+		render(<ThinkingBudgetField providerId="opencoti" />)
+		expect(await screen.findByTestId("reasoning-effort-unreachable")).toBeInTheDocument()
+		expect(screen.queryByText("Reasoning effort")).not.toBeInTheDocument()
+	})
+
+	it("keeps a stored level without calling it wrong when the server does not answer", async () => {
+		mocks.config.current = { reasoning: { enabled: true }, sampling: { reasoningLevel: "low" } }
+		mocks.readLevels.mockResolvedValue({ reachable: false, levels: [] })
+		render(<ThinkingBudgetField providerId="opencoti" />)
+		expect(await screen.findByTestId("reasoning-effort-unreachable")).toBeInTheDocument()
+		expect(screen.getByText("Reasoning effort")).toBeInTheDocument()
+		expect(screen.queryByText(/does not state the level/)).not.toBeInTheDocument()
+	})
+
+	it("says nothing about the server when it answered with no level", async () => {
+		render(<ThinkingBudgetField providerId="opencoti" />)
+		await vi.waitFor(() => expect(mocks.readLevels).toHaveBeenCalled())
+		expect(screen.queryByTestId("reasoning-effort-unreachable")).not.toBeInTheDocument()
 	})
 })

@@ -73,22 +73,33 @@ const REASONING_LEVEL_DEFAULT = "__default__"
  * model's.
  */
 function useTemplateReasoningLevels(providerId: string, enabled: boolean, baseUrl: string | undefined) {
-	const [read, setRead] = useState<{ levels: string[]; defaultLevel?: string }>({ levels: [] })
+	// `status` says whether there is an answer to show at all: "unreachable" is
+	// a server that did not answer `/props`, which must not read the same as a
+	// template that names no level.
+	const [read, setRead] = useState<{
+		levels: string[]
+		defaultLevel?: string
+		status: "pending" | "unreachable" | "read"
+	}>({ levels: [], status: "pending" })
 	useEffect(() => {
 		if (!enabled) {
-			setRead({ levels: [] })
+			setRead({ levels: [], status: "pending" })
 			return
 		}
 		let cancelled = false
 		void ModelsServiceClient.readTemplateReasoningLevels(StringRequest.create({ value: providerId }))
 			.then((response) => {
 				if (!cancelled) {
-					setRead({ levels: response?.levels ?? [], defaultLevel: response?.defaultLevel })
+					setRead(
+						response?.reachable
+							? { levels: response.levels ?? [], defaultLevel: response.defaultLevel, status: "read" }
+							: { levels: [], status: "unreachable" },
+					)
 				}
 			})
 			.catch(() => {
 				if (!cancelled) {
-					setRead({ levels: [] })
+					setRead({ levels: [], status: "unreachable" })
 				}
 			})
 		return () => {
@@ -153,7 +164,12 @@ export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
 	const offersLevel = TEMPLATE_LEVEL_PROVIDERS.has(providerId)
 	const templateLevels = useTemplateReasoningLevels(providerId, offersLevel, config?.baseUrl)
 	const storedReasoningLevel = typeof storedSampling?.reasoningLevel === "string" ? storedSampling.reasoningLevel.trim() : ""
-	const reasoningLevelUnstated = storedReasoningLevel !== "" && !templateLevels.levels.includes(storedReasoningLevel)
+	// Judged only against a template that was read: with no answer from the
+	// server, a stored level is unknown, not wrong.
+	const reasoningLevelUnstated =
+		templateLevels.status === "read" && storedReasoningLevel !== "" && !templateLevels.levels.includes(storedReasoningLevel)
+	const reasoningLevelKept =
+		templateLevels.status !== "read" && storedReasoningLevel !== "" && !templateLevels.levels.includes(storedReasoningLevel)
 	const handleReasoningLevelChange = useCallback(
 		(value: string) => {
 			void composeAndWrite({ reasoningLevel: value === REASONING_LEVEL_DEFAULT ? "" : value })
@@ -234,7 +250,7 @@ export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
 									{level}
 								</SelectItem>
 							))}
-							{reasoningLevelUnstated && (
+							{(reasoningLevelUnstated || reasoningLevelKept) && (
 								<SelectItem value={storedReasoningLevel}>{storedReasoningLevel}</SelectItem>
 							)}
 						</SelectContent>
@@ -250,7 +266,19 @@ export const ThinkingBudgetField = ({ providerId }: { providerId: string }) => {
 							level fails the request on one it does not list; pick Default or one of the template's levels.
 						</p>
 					)}
+					{templateLevels.status === "unreachable" && (
+						<p className="text-xs mt-1 mb-0 text-description" data-testid="reasoning-effort-unreachable">
+							The server did not answer, so the levels its template states are not known yet. Reopen this panel once
+							it is running.
+						</p>
+					)}
 				</div>
+			)}
+			{thinkingEnabled && offersLevel && templateLevels.status === "unreachable" && storedReasoningLevel === "" && (
+				<p className="text-xs mt-0 mb-1 text-description" data-testid="reasoning-effort-unreachable">
+					Reasoning effort: the server did not answer, so the levels its template states are not known yet. Reopen this
+					panel once it is running.
+				</p>
 			)}
 			{thinkingEnabled && (
 				<div className="mb-1">
