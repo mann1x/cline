@@ -107,8 +107,7 @@ export const XOLLAMA_CONTEXT_WINDOW_FEATURE = "context_window_v1";
  *   engine at the prompt plus the output cap, 113k of a 256k setting on
  *   pandorum (2026-10-15);
  * - a conversation with no size set whose profile turned "Book a context
- *   window" on asks for the model's window, floored at "Never go below"
- *   (all or nothing without);
+ *   window" on asks for the model's window, floored the same way;
  * - anything else asks for nothing, and the engine decides.
  *
  * Never through `options.num_ctx`: that is the model load, and changing it
@@ -184,26 +183,20 @@ export function windowAsk(
 		recordOpencotiWindowFloor(session, floor);
 		return { num_ctx: ask, num_ctx_min: Math.min(floor ?? ask, ask) };
 	}
-	if (window.requestedWindow !== undefined) {
-		const ask = window.requestedWindow;
-		if (window.contextFloor !== undefined) {
-			recordOpencotiWindowFloor(session, window.contextFloor);
-			return {
-				num_ctx: ask,
-				num_ctx_min: Math.min(window.contextFloor, ask),
-			};
-		}
-		return { num_ctx: ask, num_ctx_min: ask, measureFloor: true };
+	// The size the user set, or with none set and booking on, the model's own.
+	const ask =
+		window.requestedWindow ??
+		(window.dynamicContextSize ? window.contextWindow : undefined);
+	if (ask === undefined) {
+		return undefined;
 	}
-	if (window.dynamicContextSize && window.contextWindow !== undefined) {
-		const ask = window.contextWindow;
+	if (window.contextFloor !== undefined) {
 		recordOpencotiWindowFloor(session, window.contextFloor);
-		return {
-			num_ctx: ask,
-			num_ctx_min: Math.min(window.contextFloor ?? ask, ask),
-		};
+		return { num_ctx: ask, num_ctx_min: Math.min(window.contextFloor, ask) };
 	}
-	return undefined;
+	// No floor set: the size, or the most the engine can give down to what
+	// this turn needs -- never a refusal while the turn would fit.
+	return { num_ctx: ask, num_ctx_min: ask, measureFloor: true };
 }
 
 /**
@@ -1160,7 +1153,10 @@ async function sideCallNeed(
 			baseUrl: xollamaEngineRoot(baseUrl, body.model),
 			fetch: xollamaEngineFetch(baseFetch),
 		}).tokenize(text);
-		return Array.isArray(tokens)
+		// A prompt is never zero tokens: an empty list is an answer that carried
+		// none (the client reads a missing field as []), and a booking built on
+		// it would be the output cap alone -- too small for the prompt.
+		return Array.isArray(tokens) && tokens.length > 0
 			? tokens.length + Math.floor(cap) + SIDE_CALL_SLACK_TOKENS
 			: undefined;
 	} catch {

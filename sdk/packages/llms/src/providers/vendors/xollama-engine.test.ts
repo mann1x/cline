@@ -416,7 +416,10 @@ describe("the conversation's window on xOllama", () => {
 		});
 	});
 
-	it("is all or nothing without a floor", async () => {
+	// Without a floor the engine is asked for the size or the most it can give
+	// down to what the turn needs, which only its tokenizer can count. This stub
+	// has no tokenizer, so the ask stays all or nothing.
+	it("is all or nothing without a floor when the turn cannot be counted", async () => {
 		const xo = stubXollama({ features: WINDOW });
 		await turn(xo.fetchImpl, "win-lead-2", {
 			dynamicContextSize: true,

@@ -156,13 +156,16 @@ describe("no context size set, on xOllama", () => {
 		expect(tokenizes(xo.engine)).toBe(0);
 	});
 
-	it("books the model's window, all or nothing, when Book a context window is on", async () => {
+	it("books the model's window, or the most the engine can, when Book a context window is on", async () => {
 		const xo = server();
 		await turn(xo.fetch, "unset-2", {
 			dynamicContextSize: true,
 			contextWindow: SET,
 		});
-		expect(xo.chats[0]?.placement).toEqual({ num_ctx: SET, num_ctx_min: SET });
+		expect(xo.chats[0]?.placement).toEqual({
+			num_ctx: SET,
+			num_ctx_min: PROMPT_TOKENS + OUTPUT + 256,
+		});
 	});
 });
 

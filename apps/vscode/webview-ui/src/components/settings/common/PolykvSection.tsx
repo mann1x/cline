@@ -214,15 +214,22 @@ export const PolykvSection = ({
 						toggle(
 							"dynamicContextSize",
 							"Book a context window",
-							"Asks the server to guarantee this model's context size for the conversation, so another session cannot take the cells out from under it. Off, the engine decides and a busy server serves the request best-effort; on, a server without room refuses at admission instead.",
+							opencoti
+								? "Asks the server to guarantee this model's context size for the conversation, so another session cannot take the cells out from under it. Off, the engine decides and a busy server serves the request best-effort; on, a server without room refuses at admission instead."
+								: "With no context size set, books the model's own window for the conversation, or the most the engine can give. Off, the engine sizes each request from the prompt and the output cap. A context size you set is always asked for, on or off: the engine has no size it does not hold, and the window is freed when the conversation is closed.",
 						)}
+					{/* On xOllama the floor applies to any size asked, booked or not,
+					    so it is shown whenever one can be: a floor the vendor reads
+					    while the panel hides it would be a setting nobody can see. */}
 					{windows &&
-						polykv.dynamicContextSize === true &&
+						(polykv.dynamicContextSize === true || !opencoti) &&
 						numberField(
 							"contextFloor",
 							"Never go below",
-							"Default: none — all or nothing",
-							"The smallest window still worth opening with, in tokens. If the full size is not free the server grants the largest that is, down to this; below it the conversation is not opened rather than opened too small to be useful. Leave empty to accept only the full size.",
+							opencoti ? "Default: none — all or nothing" : "Default: what the turn needs",
+							opencoti
+								? "The smallest window still worth opening with, in tokens. If the full size is not free the server grants the largest that is, down to this; below it the conversation is not opened rather than opened too small to be useful. Leave empty to accept only the full size."
+								: "The smallest window still worth opening with, in tokens. If the full size is not free the engine grants the largest that is, down to this; below it the conversation is not opened. Leave empty to take whatever the engine can give, as long as the turn fits.",
 						)}
 					{toggle(
 						"continuationCompaction",
