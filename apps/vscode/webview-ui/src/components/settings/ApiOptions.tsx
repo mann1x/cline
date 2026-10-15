@@ -142,17 +142,23 @@ const ApiOptions = ({
 	// prefix, and only they get the "Agent window" slider.
 	const scope = useApiConfigurationScope()
 	const isAgentNode = scope?.scopeKey?.startsWith("agentsModeApiConfiguration") === true
-	// The status dot beside the label. The host checks the provider's main
-	// entry, so a scoped tab (Vision, an agent node), which keeps an entry of
-	// its own, shows none rather than another entry's answer.
-	const { config: providerEntry } = useProviderConfig(selectedProvider as never)
-	const providerStatus = useProviderStatus(scope ? undefined : selectedProvider, providerEntry)
 	// The window the selected model reports, for the output budget to fall back
 	// on. Provider-level `contextWindow` is only written when the box is edited,
 	// so a profile that predates that write has none -- and the budget's slider
 	// is a percentage of a window. Resolved here rather than inside the field
 	// because this is where the configuration and the mode already are.
-	const { selectedModelInfo: budgetModelInfo } = useDynamicProviderSelection(selectedProvider, apiConfiguration, currentMode)
+	const { selectedModelInfo: budgetModelInfo, selectedModelId } = useDynamicProviderSelection(
+		selectedProvider,
+		apiConfiguration,
+		currentMode,
+	)
+	// The status dot beside the label. The host checks the provider's main
+	// entry, so a scoped tab (Vision, an agent node), which keeps an entry of
+	// its own, shows none rather than another entry's answer. The model goes
+	// with it, so a profile that keeps the provider but names a model the
+	// server no longer has turns the dot red.
+	const { config: providerEntry } = useProviderConfig(selectedProvider as never)
+	const providerStatus = useProviderStatus(scope ? undefined : selectedProvider, selectedModelId, providerEntry)
 	const genericProviderSettings = isCustomProvider
 		? undefined
 		: (getGenericProviderSettings(selectedProvider, catalogProviderListing) ??

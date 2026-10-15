@@ -1,14 +1,16 @@
-import { StringRequest } from "@shared/proto/cline/common"
+import { ProviderStatusRequest } from "@shared/proto/cline/models"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { ModelsServiceClient } from "@/services/grpc-client"
 
 /**
- * Whether the selected provider's endpoint answers, for the status dot beside
- * the API Provider label.
+ * Whether the selected provider's endpoint answers, and still has the
+ * selected model where that can be told, for the status dot beside the API
+ * Provider label.
  *
  * Checked when the settings show, when the provider changes, when its
- * settings change (debounced, so typing a URL is one check, not one per key),
- * and when the dot is pressed. Each check is one free read from the extension
+ * settings or the model change (debounced, so typing a URL is one check, not
+ * one per key, and loading a profile -- which writes the entry and then the
+ * model -- is one check after both), and when the dot is pressed. Each check is one free read from the extension
  * host -- see `readProviderStatus`. Not polled: the chat input already watches
  * Ollama and xOllama, and nothing here is worth a request a minute to a paid
  * API.
@@ -41,8 +43,13 @@ export function toProviderStatusState(state: string | undefined): ProviderStatus
  *   key swapped for one of the same length, which the redacted fields alone
  *   would not show. The first entry to arrive is the mount's own read, which
  *   the provider check already covers, so it does not check again.
+ * @param modelId The model the panel has selected for its mode.
  */
-export function useProviderStatus(providerId: string | undefined, settings: object | undefined): ProviderStatusView {
+export function useProviderStatus(
+	providerId: string | undefined,
+	modelId: string | undefined,
+	settings: object | undefined,
+): ProviderStatusView {
 	const [state, setState] = useState<ProviderStatusState>("unknown")
 	const [detail, setDetail] = useState(NOT_YET)
 	const [checking, setChecking] = useState(false)
@@ -57,7 +64,9 @@ export function useProviderStatus(providerId: string | undefined, settings: obje
 		const mine = ++generation.current
 		setChecking(true)
 		try {
-			const response = await ModelsServiceClient.readProviderStatus(StringRequest.create({ value: providerId }))
+			const response = await ModelsServiceClient.readProviderStatus(
+				ProviderStatusRequest.create({ providerId, ...(modelId ? { modelId } : {}) }),
+			)
 			if (mine !== generation.current) {
 				return
 			}
@@ -76,16 +85,20 @@ export function useProviderStatus(providerId: string | undefined, settings: obje
 				setChecking(false)
 			}
 		}
-	}, [providerId])
+	}, [providerId, modelId])
 
 	// A new provider (or the first render) starts grey and is checked at once;
-	// the same provider with changed settings is checked once they settle. One
-	// effect, because a provider switch changes both and must check once.
+	// the same provider with changed settings or another model is checked once
+	// they settle. One effect, because a provider switch changes all three and
+	// must check once.
 	const checkedProvider = useRef<string | undefined>(undefined)
 	const lastSettings = useRef<object | undefined>(undefined)
+	const lastModel = useRef<string | undefined>(undefined)
 	useEffect(() => {
 		const previous = lastSettings.current
+		const previousModel = lastModel.current
 		lastSettings.current = settings
+		lastModel.current = modelId
 		if (checkedProvider.current !== providerId) {
 			checkedProvider.current = providerId
 			generation.current++
@@ -95,12 +108,13 @@ export function useProviderStatus(providerId: string | undefined, settings: obje
 			void check()
 			return
 		}
-		if (previous === undefined || previous === settings) {
+		const settingsChanged = previous !== undefined && previous !== settings
+		if (!settingsChanged && previousModel === modelId) {
 			return
 		}
 		const timer = setTimeout(() => void check(), SETTINGS_SETTLE_MS)
 		return () => clearTimeout(timer)
-	}, [providerId, settings, check])
+	}, [providerId, modelId, settings, check])
 
 	const recheck = useCallback(() => void check(), [check])
 	return { state, detail, checking, recheck }

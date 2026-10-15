@@ -123,18 +123,30 @@ service ModelsService {
   // Whether a provider's endpoint answers with the stored URL and key, for
   // the status dot beside the API Provider label. One free read -- the
   // provider's model list -- and never a generation, so it costs no tokens and
-  // loads no model. The value is the provider id.
-  rpc readProviderStatus(StringRequest) returns (ProviderStatusResponse);
+  // loads no model. Where that list is the server's own word on what it serves,
+  // the selected model is looked up in it as well.
+  rpc readProviderStatus(ProviderStatusRequest) returns (ProviderStatusResponse);
+}
+
+message ProviderStatusRequest {
+  string provider_id = 1;
+  // The model the panel has selected. Omit to ask about the endpoint only.
+  optional string model_id = 2;
 }
 
 message ProviderStatusResponse {
-  // "ready": the endpoint answered and accepted the key. "fail": it did not
-  // answer, or refused. "unknown": this provider has no free route to ask.
+  // "ready": the endpoint answered and accepted the key, and has the model
+  // where that can be told. "fail": it did not answer, refused, or answered
+  // without the model. "unknown": this provider has no free route to ask.
   string state = 1;
   // What was asked and what came back, or why it cannot be asked.
   string detail = 2;
   // The URL asked, without query string. Absent when nothing was asked.
   optional string url = 3;
+  // Whether the endpoint lists the model. Absent when no model was named, the
+  // endpoint did not answer, or its list does not settle it (a cloud catalog
+  // that leaves out aliases, a llama.cpp server that ignores the name).
+  optional bool model_found = 4;
 }
 
 // What the recommendations list publishes about one model. Absent for a model

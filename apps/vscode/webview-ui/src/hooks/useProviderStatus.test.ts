@@ -22,30 +22,30 @@ afterEach(() => {
 describe("useProviderStatus", () => {
 	it("starts grey and turns green when the endpoint answers", async () => {
 		read.mockResolvedValue(answer("ready", "http://box/v1/models answered (HTTP 200)."))
-		const { result } = renderHook(() => useProviderStatus("openai", undefined))
+		const { result } = renderHook(() => useProviderStatus("openai", undefined, undefined))
 		expect(result.current.state).toBe("unknown")
 		await waitFor(() => expect(result.current.state).toBe("ready"))
 		expect(result.current.detail).toBe("http://box/v1/models answered (HTTP 200).")
 		expect(read).toHaveBeenCalledTimes(1)
-		expect(read.mock.calls[0][0].value).toBe("openai")
+		expect(read.mock.calls[0][0].providerId).toBe("openai")
 	})
 
 	it("turns red on a failed check", async () => {
 		read.mockResolvedValue(answer("fail"))
-		const { result } = renderHook(() => useProviderStatus("anthropic", undefined))
+		const { result } = renderHook(() => useProviderStatus("anthropic", undefined, undefined))
 		await waitFor(() => expect(result.current.state).toBe("fail"))
 	})
 
 	it("stays grey, not red, when the extension host cannot be asked", async () => {
 		read.mockRejectedValue(new Error("host gone"))
-		const { result } = renderHook(() => useProviderStatus("openai", undefined))
+		const { result } = renderHook(() => useProviderStatus("openai", undefined, undefined))
 		await waitFor(() => expect(result.current.detail).toBe("Could not check: host gone"))
 		expect(result.current.state).toBe("unknown")
 	})
 
 	it("checks again when pressed", async () => {
 		read.mockResolvedValueOnce(answer("fail")).mockResolvedValueOnce(answer("ready"))
-		const { result } = renderHook(() => useProviderStatus("openai", undefined))
+		const { result } = renderHook(() => useProviderStatus("openai", undefined, undefined))
 		await waitFor(() => expect(result.current.state).toBe("fail"))
 		act(() => result.current.recheck())
 		await waitFor(() => expect(result.current.state).toBe("ready"))
@@ -57,7 +57,7 @@ describe("useProviderStatus", () => {
 		read.mockImplementationOnce(() => new Promise((resolve) => (releaseOld = resolve))).mockResolvedValueOnce(
 			answer("fail", "new provider"),
 		)
-		const { result, rerender } = renderHook(({ id }) => useProviderStatus(id, undefined), {
+		const { result, rerender } = renderHook(({ id }) => useProviderStatus(id, undefined, undefined), {
 			initialProps: { id: "openai" },
 		})
 		rerender({ id: "anthropic" })
@@ -71,7 +71,7 @@ describe("useProviderStatus", () => {
 		vi.useFakeTimers()
 		read.mockResolvedValue(answer("ready"))
 		const first = {}
-		const { rerender } = renderHook(({ settings }) => useProviderStatus("openai", settings), {
+		const { rerender } = renderHook(({ settings }) => useProviderStatus("openai", undefined, settings), {
 			initialProps: { settings: undefined as object | undefined },
 		})
 		expect(read).toHaveBeenCalledTimes(1)
@@ -89,8 +89,47 @@ describe("useProviderStatus", () => {
 		expect(read).toHaveBeenCalledTimes(2)
 	})
 
+	it("sends the selected model with the check", async () => {
+		read.mockResolvedValue(answer("ready"))
+		renderHook(() => useProviderStatus("ollama", "qwen3", undefined))
+		await waitFor(() => expect(read).toHaveBeenCalledTimes(1))
+		expect(read.mock.calls[0][0]).toMatchObject({ providerId: "ollama", modelId: "qwen3" })
+	})
+
+	it("checks a profile load with the same provider once, with the profile's model", async () => {
+		vi.useFakeTimers()
+		read.mockResolvedValue(answer("ready"))
+		const { rerender } = renderHook(({ model, settings }) => useProviderStatus("ollama", model, settings), {
+			initialProps: { model: "qwen3", settings: {} as object },
+		})
+		expect(read).toHaveBeenCalledTimes(1)
+		// The load writes the provider entry, then commits the model, and the
+		// commit re-reads the entry: three changes, one check, after they settle.
+		rerender({ model: "qwen3", settings: {} })
+		await act(async () => vi.advanceTimersByTime(100))
+		rerender({ model: "v9-agentic", settings: {} })
+		await act(async () => vi.advanceTimersByTime(100))
+		rerender({ model: "v9-agentic", settings: {} })
+		await act(async () => vi.advanceTimersByTime(SETTINGS_SETTLE_MS))
+		expect(read).toHaveBeenCalledTimes(2)
+		expect(read.mock.calls[1][0]).toMatchObject({ providerId: "ollama", modelId: "v9-agentic" })
+	})
+
+	it("checks again when only the model changes", async () => {
+		vi.useFakeTimers()
+		read.mockResolvedValue(answer("ready"))
+		const settings = {}
+		const { rerender } = renderHook(({ model }) => useProviderStatus("lmstudio", model, settings), {
+			initialProps: { model: "a" },
+		})
+		rerender({ model: "b" })
+		await act(async () => vi.advanceTimersByTime(SETTINGS_SETTLE_MS))
+		expect(read).toHaveBeenCalledTimes(2)
+		expect(read.mock.calls[1][0].modelId).toBe("b")
+	})
+
 	it("asks nothing without a provider", () => {
-		const { result } = renderHook(() => useProviderStatus(undefined, undefined))
+		const { result } = renderHook(() => useProviderStatus(undefined, undefined, undefined))
 		expect(result.current.state).toBe("unknown")
 		expect(read).not.toHaveBeenCalled()
 	})
