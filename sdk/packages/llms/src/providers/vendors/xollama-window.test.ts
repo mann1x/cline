@@ -30,13 +30,13 @@ const OUTPUT = 96_000;
 const SET = 256_000;
 
 /** A stub xOllama that negotiates windows and grants `grant` on every chat. */
-function server(grant?: number) {
+function server(grant?: number, features: string[] = ["context_window_v1"]) {
 	const chats: Array<Record<string, unknown>> = [];
 	const engine: string[] = [];
 	const fetchImpl = (async (input: unknown, init?: RequestInit) => {
 		const url = new URL(String(input));
 		if (url.pathname === "/api/xollama") {
-			return json({ xollama: true, features: ["context_window_v1"] });
+			return json({ xollama: true, features });
 		}
 		if (url.pathname === "/api/show") {
 			return json({ xollama: {} });
@@ -177,5 +177,47 @@ describe("readXollamaWindowOptions", () => {
 		expect(readXollamaWindowOptions({}, 262_144)).toEqual({
 			contextWindow: 262_144,
 		});
+	});
+});
+
+describe("a context size set with booking off, on an xOllama that passes per-request windows", () => {
+	const UNBOOKED = ["context_window_v1", "context_window_unbooked_v1"];
+	const set = { contextWindow: SET, requestedWindow: SET };
+
+	it("asks for the size per request, with no session, so nothing is held", async () => {
+		const xo = server(undefined, UNBOOKED);
+		await turn(xo.fetch, "unbooked-1", set);
+		expect(xo.chats[0]?.placement).toEqual({
+			num_ctx: SET,
+			num_ctx_min: PROMPT_TOKENS + OUTPUT + 256,
+		});
+		expect(xo.chats[0]).not.toHaveProperty("session_id");
+	});
+
+	it("asks for the size again on the next turn, not the smaller window it got", async () => {
+		const xo = server(180_000, UNBOOKED);
+		await turn(xo.fetch, "unbooked-2", set);
+		await turn(xo.fetch, "unbooked-2", set);
+		expect((xo.chats[1]?.placement as { num_ctx: number }).num_ctx).toBe(SET);
+	});
+
+	it("keeps the session and the held booking when booking is on", async () => {
+		const xo = server(undefined, UNBOOKED);
+		await turn(xo.fetch, "unbooked-3", { ...set, dynamicContextSize: true });
+		expect(xo.chats[0]?.session_id).toBe("unbooked-3");
+		expect((xo.chats[0]?.placement as { num_ctx: number }).num_ctx).toBe(SET);
+	});
+
+	it("falls back to a held booking on an xOllama without the feature", async () => {
+		const xo = server();
+		await turn(xo.fetch, "unbooked-4", set);
+		expect(xo.chats[0]?.session_id).toBe("unbooked-4");
+		expect((xo.chats[0]?.placement as { num_ctx: number }).num_ctx).toBe(SET);
+	});
+
+	it("leaves a delegated agent's session alone", async () => {
+		const xo = server(undefined, UNBOOKED);
+		await turn(xo.fetch, "task~agent-1", set);
+		expect(xo.chats[0]?.session_id).toBe("task~agent-1");
 	});
 });

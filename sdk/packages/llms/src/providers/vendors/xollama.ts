@@ -91,6 +91,16 @@ export const XOLLAMA_COUNCIL_STATE_FEATURE = "council_chat_state_v1";
 export const XOLLAMA_CONTEXT_WINDOW_FEATURE = "context_window_v1";
 
 /**
+ * The server passes a window to the engine for a request with no session:
+ * `num_ctx` / `num_ctx_min` with no `session_id` is a per-request window the
+ * engine grants in full or negotiates down, and releases when the request
+ * ends (opencoti #1503, verified on c13 r2 in #1505). What "Book a context
+ * window" off with a context size set sends. Without the feature the size is
+ * asked as a held booking instead, which an older xOllama understands.
+ */
+export const XOLLAMA_UNBOOKED_WINDOW_FEATURE = "context_window_unbooked_v1";
+
+/**
  * What a conversation on xOllama asks of the engine's window, read off the
  * provider config the way opencoti's is (`resolveOpencotiWindow`):
  *
@@ -165,7 +175,17 @@ export function windowAsk(
 	session: string,
 	body: Record<string, unknown>,
 	window: XollamaWindowOptions,
+	unbooked = false,
 ): { num_ctx: number; num_ctx_min: number; measureFloor?: true } | undefined {
+	// Unbooked: every turn is its own admission, so it asks for the size again
+	// rather than for the window the last turn happened to get -- a grant
+	// negotiated down while the server was busy must not stick.
+	if (unbooked && window.requestedWindow !== undefined) {
+		const ask = window.requestedWindow;
+		return window.contextFloor !== undefined
+			? { num_ctx: ask, num_ctx_min: Math.min(window.contextFloor, ask) }
+			: { num_ctx: ask, num_ctx_min: ask, measureFloor: true };
+	}
 	const granted = getPolykvGrantedWindow(session);
 	if (granted !== undefined) {
 		return { num_ctx: granted, num_ctx_min: granted };
@@ -1461,6 +1481,12 @@ export function withXollamaRequestFields(
 			| undefined;
 		/** The conversation this request belongs to, while it runs. */
 		let conversationKey: string | undefined;
+		/**
+		 * A turn with its own per-request window and no session on the wire:
+		 * a context size set with "Book a context window" off, on a server
+		 * that passes such a window through. Nothing is held between turns.
+		 */
+		let unbooked = false;
 		/** The window a turn of a session asks for, and of which model. */
 		let turnNeed: number | undefined;
 		let turnModel: string | undefined;
@@ -1492,10 +1518,34 @@ export function withXollamaRequestFields(
 				if (root !== undefined && typeof parsed.model === "string") {
 					rememberXollamaRunner(root, parsed.model, parsed);
 				}
+				// Decided before the pool: a lead pool belongs to a session, and
+				// an unbooked turn sends none.
+				const features =
+					root !== undefined
+						? (await probeXollama(root, baseFetch))?.features
+						: undefined;
+				unbooked =
+					!council &&
+					!placedOutside &&
+					engineRequest.booking === undefined &&
+					engineRequest.sideCallOf === undefined &&
+					engineRequest.borrowedPool === undefined &&
+					session !== undefined &&
+					!isDelegatedEngineSession(session) &&
+					options?.window?.requestedWindow !== undefined &&
+					options.window.dynamicContextSize !== true &&
+					options.window.agentWindow === undefined &&
+					model !== undefined &&
+					root !== undefined &&
+					[
+						XOLLAMA_CONTEXT_WINDOW_FEATURE,
+						XOLLAMA_UNBOOKED_WINDOW_FEATURE,
+					].every((feature) => features?.includes(feature) === true);
 				// The lead's pool, on a model that has seats for one. Any other
 				// turn has its environment folded back into the system text,
 				// which is what every provider but opencoti sends.
 				const lead: LeadAttach | undefined =
+					!unbooked &&
 					!council &&
 					!placedOutside &&
 					options?.pooling !== false &&
@@ -1568,7 +1618,12 @@ export function withXollamaRequestFields(
 					) === true
 				) {
 					windowSession = leadKey ?? session;
-					const ask = windowAsk(leadKey ?? session, parsed, options.window);
+					const ask = windowAsk(
+						leadKey ?? session,
+						parsed,
+						options.window,
+						unbooked,
+					);
 					// "Or the most it can": floored at what this turn needs rather
 					// than all or nothing. Counted by the engine, once per
 					// conversation -- after the grant every turn asks for exactly
@@ -1693,7 +1748,9 @@ export function withXollamaRequestFields(
 						...(council ? { messages: withoutThinking(parsed.messages) } : {}),
 						// A placed body's session is the worker layer's: the engine
 						// session its pools and owner are charged to.
+						// Unbooked: no session, or the engine holds the window.
 						...(session !== undefined &&
+						!unbooked &&
 						!(placedOutside && typeof parsed.session_id === "string")
 							? { session_id: session }
 							: {}),
@@ -1769,7 +1826,11 @@ export function withXollamaRequestFields(
 			Number.isInteger(granted) &&
 			granted > 0
 		) {
+			// An unbooked turn's window was released with the request: the
+			// conversation holds nothing while idle, so nothing may close it to
+			// make room.
 			if (
+				!unbooked &&
 				session !== undefined &&
 				root !== undefined &&
 				turnModel !== undefined
