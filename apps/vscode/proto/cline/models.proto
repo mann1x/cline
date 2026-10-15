@@ -120,6 +120,21 @@ service ModelsService {
   // pool seats for the client's own pools; and, where the client drives
   // PolyKV there, the engine's live status through /api/engine.
   rpc readXollamaModelStatus(OllamaReachabilityRequest) returns (XollamaModelStatusResponse);
+  // Whether a provider's endpoint answers with the stored URL and key, for
+  // the status dot beside the API Provider label. One free read -- the
+  // provider's model list -- and never a generation, so it costs no tokens and
+  // loads no model. The value is the provider id.
+  rpc readProviderStatus(StringRequest) returns (ProviderStatusResponse);
+}
+
+message ProviderStatusResponse {
+  // "ready": the endpoint answered and accepted the key. "fail": it did not
+  // answer, or refused. "unknown": this provider has no free route to ask.
+  string state = 1;
+  // What was asked and what came back, or why it cannot be asked.
+  string detail = 2;
+  // The URL asked, without query string. Absent when nothing was asked.
+  optional string url = 3;
 }
 
 // What the recommendations list publishes about one model. Absent for a model

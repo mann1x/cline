@@ -9,13 +9,16 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { PLATFORM_CONFIG, PlatformType } from "@/config/platform.config"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useDynamicProviderSelection } from "@/hooks/useDynamicProviderSelection"
+import { useProviderConfig } from "@/hooks/useProviderConfig"
 import { useProviderListings } from "@/hooks/useProviderListings"
+import { useProviderStatus } from "@/hooks/useProviderStatus"
 import { ClinePassHint } from "./ClinePassHint"
 import { AgentWindowField } from "./common/AgentWindowField"
 import { NoticesSection } from "./common/NoticesSection"
 import { OutputBudgetField } from "./common/OutputBudgetField"
 import ParallelSessionsField, { parallelSessionsDescription, useOpencotiEngineMode } from "./common/ParallelSessionsField"
 import { PolykvSection } from "./common/PolykvSection"
+import { ProviderStatusDot } from "./common/ProviderStatusDot"
 import { ReasoningHistoryField } from "./common/ReasoningHistoryField"
 import { ToolsSection } from "./common/ToolsSection"
 import { OPENROUTER_MODEL_PICKER_Z_INDEX } from "./OpenRouterModelPicker"
@@ -139,6 +142,11 @@ const ApiOptions = ({
 	// prefix, and only they get the "Agent window" slider.
 	const scope = useApiConfigurationScope()
 	const isAgentNode = scope?.scopeKey?.startsWith("agentsModeApiConfiguration") === true
+	// The status dot beside the label. The host checks the provider's main
+	// entry, so a scoped tab (Vision, an agent node), which keeps an entry of
+	// its own, shows none rather than another entry's answer.
+	const { config: providerEntry } = useProviderConfig(selectedProvider as never)
+	const providerStatus = useProviderStatus(scope ? undefined : selectedProvider, providerEntry)
 	// The window the selected model reports, for the output budget to fall back
 	// on. Provider-level `contextWindow` is only written when the box is edited,
 	// so a profile that predates that write has none -- and the budget's slider
@@ -317,21 +325,30 @@ const ApiOptions = ({
 			</style>
 			<DropdownContainer className="dropdown-container">
 				{remoteConfigSettings?.remoteConfiguredProviders && remoteConfigSettings.remoteConfiguredProviders.length > 0 ? (
-					<Tooltip>
-						<TooltipTrigger>
-							<div className="flex items-center gap-2 mb-1">
-								<label htmlFor="api-provider">
-									<span style={{ fontWeight: 500 }}>API Provider</span>
-								</label>
-								<i className="codicon codicon-lock text-description text-sm" />
-							</div>
-						</TooltipTrigger>
-						<TooltipContent>Provider options are managed by your organization's remote configuration</TooltipContent>
-					</Tooltip>
+					<div className="flex items-center gap-1.5 mb-1">
+						<Tooltip>
+							<TooltipTrigger>
+								<div className="flex items-center gap-2">
+									<label htmlFor="api-provider">
+										<span style={{ fontWeight: 500 }}>API Provider</span>
+									</label>
+									<i className="codicon codicon-lock text-description text-sm" />
+								</div>
+							</TooltipTrigger>
+							<TooltipContent>
+								Provider options are managed by your organization's remote configuration
+							</TooltipContent>
+						</Tooltip>
+						{/* Beside the trigger, not in it: the trigger is a button already. */}
+						{!scope && <ProviderStatusDot status={providerStatus} />}
+					</div>
 				) : (
-					<label htmlFor="api-provider">
-						<span style={{ fontWeight: 500 }}>API Provider</span>
-					</label>
+					<div className="flex items-center gap-1.5">
+						<label htmlFor="api-provider">
+							<span style={{ fontWeight: 500 }}>API Provider</span>
+						</label>
+						{!scope && <ProviderStatusDot status={providerStatus} />}
+					</div>
 				)}
 				<ProviderDropdownWrapper ref={dropdownRef}>
 					<VSCodeTextField
