@@ -1,17 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { resetPolykvSessions } from "./polykv";
 import {
 	readXollamaWindowOptions,
 	resetXollamaConversationRequests,
 	resetXollamaProbes,
-	setXollamaUnbookedPlacementField,
 	withXollamaRequestFields,
 	XOLLAMA_SESSION_HEADER,
 	type XollamaWindowOptions,
 } from "./xollama";
 
 afterEach(() => {
-	setXollamaUnbookedPlacementField(undefined);
 	resetXollamaProbes();
 	resetXollamaConversationRequests();
 	resetPolykvSessions();
@@ -185,9 +183,7 @@ describe("readXollamaWindowOptions", () => {
 describe("a context size set with booking off, on an xOllama that passes per-request windows", () => {
 	const UNBOOKED = ["context_window_v1", "context_window_unbooked_v1"];
 	const set = { contextWindow: SET, requestedWindow: SET };
-	// The name is opencoti's to give (#1509); any name stands in for it here.
-	const FIELD = "not_held";
-	beforeEach(() => setXollamaUnbookedPlacementField(FIELD));
+	const FIELD = "num_ctx_hold";
 
 	it("asks for the size marked not held, keeping the session for its slot and cache", async () => {
 		const xo = server(undefined, UNBOOKED);
@@ -195,21 +191,9 @@ describe("a context size set with booking off, on an xOllama that passes per-req
 		expect(xo.chats[0]?.placement).toEqual({
 			num_ctx: SET,
 			num_ctx_min: PROMPT_TOKENS + OUTPUT + 256,
-			[FIELD]: true,
+			num_ctx_hold: false,
 		});
 		expect(xo.chats[0]?.session_id).toBe("unbooked-1");
-	});
-
-	it("stays a held booking until the field is named, whatever the server advertises", async () => {
-		setXollamaUnbookedPlacementField(undefined);
-		const xo = server(180_000, UNBOOKED);
-		await turn(xo.fetch, "unbooked-0", set);
-		await turn(xo.fetch, "unbooked-0", set);
-		expect(xo.chats[0]?.placement).not.toHaveProperty(FIELD);
-		// The resume rule of a held booking.
-		expect((xo.chats[1]?.placement as { num_ctx: number }).num_ctx).toBe(
-			180_000,
-		);
 	});
 
 	it("asks for the size again on the next turn, not the smaller window it got", async () => {

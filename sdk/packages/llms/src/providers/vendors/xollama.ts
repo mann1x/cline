@@ -104,19 +104,14 @@ export const XOLLAMA_CONTEXT_WINDOW_FEATURE = "context_window_v1";
 export const XOLLAMA_UNBOOKED_WINDOW_FEATURE = "context_window_unbooked_v1";
 
 /**
- * The `placement` field that marks a window as not held. opencoti names it
- * (#1509) and xOllama passes it through; until it is named the unbooked path
- * stays off, whatever a server advertises, so a feature that appears first
- * cannot turn on half a request.
+ * What marks a window as not held: the engine's own field, false. Absent or
+ * true is held, as every booking before it (opencoti #1512, xollama #1517).
+ * xOllama passes it through only on an engine pin that declares
+ * `elastic_window_unheld_v1`, which is when it lists the feature above. A
+ * session already holding a live booking stays held; the flag does not
+ * release it.
  */
-let unbookedPlacementField: string | undefined;
-
-/** Name the not-held `placement` field once opencoti has. Also a test seam. */
-export function setXollamaUnbookedPlacementField(
-	name: string | undefined,
-): void {
-	unbookedPlacementField = name;
-}
+export const XOLLAMA_UNHELD_PLACEMENT = { num_ctx_hold: false } as const;
 
 /**
  * What a conversation on xOllama asks of the engine's window, read off the
@@ -1546,7 +1541,6 @@ export function withXollamaRequestFields(
 						? (await probeXollama(root, baseFetch))?.features
 						: undefined;
 				unbooked =
-					unbookedPlacementField !== undefined &&
 					!council &&
 					!placedOutside &&
 					engineRequest.booking === undefined &&
@@ -1682,9 +1676,7 @@ export function withXollamaRequestFields(
 							...(placement ?? {}),
 							...ask,
 							// Not held: granted for this request, released when it ends.
-							...(unbooked && unbookedPlacementField !== undefined
-								? { [unbookedPlacementField]: true }
-								: {}),
+							...(unbooked ? XOLLAMA_UNHELD_PLACEMENT : {}),
 						};
 					}
 				}
