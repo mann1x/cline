@@ -522,6 +522,10 @@ export function buildGatewayConfig(config: ProviderConfig) {
 			// opencoti: the session and the pool tree these requests belong to.
 			// Absent, a summary call is an anonymous per-request admission.
 			polykv: config.polykv,
+			// xOllama: the context size the user set, apart from the model's own.
+			...(config.requestedContextWindow
+				? { requestedContextWindow: config.requestedContextWindow }
+				: {}),
 			// opencoti: an agent node's window share, read where its session
 			// books a window. See `opencoti-agent-window.ts`.
 			...(config.agentWindow ? { agentWindow: config.agentWindow } : {}),

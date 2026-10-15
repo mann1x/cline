@@ -949,6 +949,13 @@ type OllamaProviderConfig = {
 	 * into the gateway's `options` bag where the Ollama vendor looks for it.
 	 */
 	sampling?: ProviderSamplingOptions
+	/**
+	 * The context size the user set, apart from the window the session runs
+	 * on: xOllama asks the engine for it, and with none set lets the engine
+	 * size the request. `modelInfo.contextWindow` cannot tell the two apart,
+	 * because an empty field falls through to the model's own `num_ctx`.
+	 */
+	requestedContextWindow?: number
 }
 
 /**
@@ -1071,6 +1078,9 @@ export function resolveOllamaProviderConfig(
 		...(typeof timeoutMs === "number" && timeoutMs > 0 ? { timeoutMs } : {}),
 		...(sampling ? { sampling } : {}),
 		...(modelId ? { modelInfo: { id: modelId, name: modelId, contextWindow } } : {}),
+		...((settingsContextWindow ?? legacyContextWindow) !== undefined
+			? { requestedContextWindow: settingsContextWindow ?? legacyContextWindow }
+			: {}),
 	}
 }
 

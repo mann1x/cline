@@ -99,8 +99,16 @@ export const XOLLAMA_CONTEXT_WINDOW_FEATURE = "context_window_v1";
  *   fits;
  * - an agent on a node with an "Agent window" share asks for the node's
  *   window, floored at its share measured off the request;
- * - a conversation whose profile turned "Book a context window" on asks for
- *   the model's window, floored at "Never go below" (all or nothing without);
+ * - a conversation with a context size set asks for that size, floored at
+ *   "Never go below" -- or, with no floor set, at what the turn needs, so the
+ *   engine grants the size or the most it can rather than refusing. The size
+ *   is asked whether or not "Book a context window" is on: the engine has no
+ *   size that is not held (#301), and a size left unasked was sized by the
+ *   engine at the prompt plus the output cap, 113k of a 256k setting on
+ *   pandorum (2026-10-15);
+ * - a conversation with no size set whose profile turned "Book a context
+ *   window" on asks for the model's window, floored at "Never go below"
+ *   (all or nothing without);
  * - anything else asks for nothing, and the engine decides.
  *
  * Never through `options.num_ctx`: that is the model load, and changing it
@@ -110,6 +118,8 @@ export interface XollamaWindowOptions {
 	dynamicContextSize?: boolean;
 	contextFloor?: number;
 	contextWindow?: number;
+	/** The context size the user set; absent when the field was left empty. */
+	requestedWindow?: number;
 	agentWindow?: OpencotiAgentWindow;
 }
 
@@ -117,6 +127,7 @@ export function readXollamaWindowOptions(
 	options: Readonly<Record<string, unknown>> | undefined,
 	contextWindow: number | undefined,
 ): XollamaWindowOptions {
+	const requested = options?.requestedContextWindow;
 	const polykv = (options?.polykv ?? {}) as {
 		dynamicContextSize?: unknown;
 		contextFloor?: unknown;
@@ -133,6 +144,9 @@ export function readXollamaWindowOptions(
 		...(isPositive(contextWindow)
 			? { contextWindow: Math.floor(contextWindow) }
 			: {}),
+		...(isPositive(requested)
+			? { requestedWindow: Math.floor(requested) }
+			: {}),
 		...(agentWindow ? { agentWindow } : {}),
 	};
 }
@@ -141,12 +155,18 @@ function isPositive(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-/** The window fields of this turn's `placement`, or nothing to ask. */
-function windowAsk(
+/**
+ * The window fields of this turn's `placement`, or nothing to ask.
+ *
+ * `measureFloor` marks an ask whose floor is the turn's own need, which only
+ * the engine's tokenizer can count: the caller measures it and lowers
+ * `num_ctx_min` to it.
+ */
+export function windowAsk(
 	session: string,
 	body: Record<string, unknown>,
 	window: XollamaWindowOptions,
-): { num_ctx: number; num_ctx_min: number } | undefined {
+): { num_ctx: number; num_ctx_min: number; measureFloor?: true } | undefined {
 	const granted = getPolykvGrantedWindow(session);
 	if (granted !== undefined) {
 		return { num_ctx: granted, num_ctx_min: granted };
@@ -163,6 +183,17 @@ function windowAsk(
 		// The floor a pressure shrink may not go below (`kv-pressure.ts`).
 		recordOpencotiWindowFloor(session, floor);
 		return { num_ctx: ask, num_ctx_min: Math.min(floor ?? ask, ask) };
+	}
+	if (window.requestedWindow !== undefined) {
+		const ask = window.requestedWindow;
+		if (window.contextFloor !== undefined) {
+			recordOpencotiWindowFloor(session, window.contextFloor);
+			return {
+				num_ctx: ask,
+				num_ctx_min: Math.min(window.contextFloor, ask),
+			};
+		}
+		return { num_ctx: ask, num_ctx_min: ask, measureFloor: true };
 	}
 	if (window.dynamicContextSize && window.contextWindow !== undefined) {
 		const ask = window.contextWindow;
@@ -1542,6 +1573,19 @@ export function withXollamaRequestFields(
 				) {
 					windowSession = leadKey ?? session;
 					const ask = windowAsk(leadKey ?? session, parsed, options.window);
+					// "Or the most it can": floored at what this turn needs rather
+					// than all or nothing. Counted by the engine, once per
+					// conversation -- after the grant every turn asks for exactly
+					// that. Uncountable (an image in the prompt, no answer), the
+					// ask stays all or nothing, which is what it was before.
+					if (ask?.measureFloor) {
+						delete ask.measureFloor;
+						const need = await sideCallNeed(root, parsed, baseFetch);
+						if (need !== undefined) {
+							ask.num_ctx_min = Math.min(need, ask.num_ctx);
+							recordOpencotiWindowFloor(leadKey ?? session, ask.num_ctx_min);
+						}
+					}
 					// The window is the private budget where the engine says so,
 					// and the pool's prefix rides above it: a new conversation
 					// books its window less what it shares, as on opencoti, or a

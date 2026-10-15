@@ -353,6 +353,13 @@ export interface ProviderOptions {
 	/** opencoti's PolyKV control plane. Inert for every other provider. */
 	polykv?: PolykvOptions;
 	/**
+	 * The context size the user set, and only that: absent when the field was
+	 * left empty, even though the session then runs on the model's own window.
+	 * xOllama asks the engine for this window (or the most it can give); with
+	 * nothing set the engine sizes the request itself.
+	 */
+	requestedContextWindow?: number;
+	/**
 	 * The engine session requests built from this config run in (opencoti).
 	 *
 	 * On the config rather than only on an agent because some requests are

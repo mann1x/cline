@@ -2496,6 +2496,21 @@ describe("resolveOllamaProviderConfig", () => {
 
 		expect(resolved.modelInfo?.contextWindow).toBe(8_192)
 	})
+
+	// xOllama asks the engine for a size the user set, and lets the engine size
+	// the request when none is set. The session's window cannot tell the two
+	// apart -- an empty field falls through to the model's own `num_ctx` -- so
+	// the set size travels on its own.
+	it("reports the size the user set, apart from the window the session runs on", () => {
+		mocks.providerSettingsManager.getProviderSettings.mockReturnValue(undefined as never)
+
+		const set = resolveOllamaProviderConfig({} as never, "v7-coder_tb:iq4_nl", { contextWindow: 256_000 }, "xollama")
+		expect(set.requestedContextWindow).toBe(256_000)
+
+		const unset = resolveOllamaProviderConfig({} as never, "v7-coder_tb:iq4_nl", {}, "xollama")
+		expect(unset.requestedContextWindow).toBeUndefined()
+		expect(unset.modelInfo?.contextWindow).toBeGreaterThan(0)
+	})
 })
 
 describe("buildDelegatedAgentConnection", () => {
