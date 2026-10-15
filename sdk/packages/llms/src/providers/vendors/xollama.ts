@@ -91,14 +91,32 @@ export const XOLLAMA_COUNCIL_STATE_FEATURE = "council_chat_state_v1";
 export const XOLLAMA_CONTEXT_WINDOW_FEATURE = "context_window_v1";
 
 /**
- * The server passes a window to the engine for a request with no session:
- * `num_ctx` / `num_ctx_min` with no `session_id` is a per-request window the
+ * The server takes a window that is not held: `placement` with `num_ctx`,
+ * `num_ctx_min` and the not-held field below is a per-request window the
  * engine grants in full or negotiates down, and releases when the request
- * ends (opencoti #1503, verified on c13 r2 in #1505). What "Book a context
- * window" off with a context size set sends. Without the feature the size is
- * asked as a held booking instead, which an older xOllama understands.
+ * ends. What "Book a context window" off with a context size set sends. The
+ * request keeps its `session_id` -- dropping it does not unbook anything,
+ * since xOllama derives one from the prompt prefix, and costs the slot
+ * affinity and council state keyed on it (xollama #1510, xo-27). Without the
+ * feature the size is asked as a held booking, which every negotiating
+ * xOllama understands.
  */
 export const XOLLAMA_UNBOOKED_WINDOW_FEATURE = "context_window_unbooked_v1";
+
+/**
+ * The `placement` field that marks a window as not held. opencoti names it
+ * (#1509) and xOllama passes it through; until it is named the unbooked path
+ * stays off, whatever a server advertises, so a feature that appears first
+ * cannot turn on half a request.
+ */
+let unbookedPlacementField: string | undefined;
+
+/** Name the not-held `placement` field once opencoti has. Also a test seam. */
+export function setXollamaUnbookedPlacementField(
+	name: string | undefined,
+): void {
+	unbookedPlacementField = name;
+}
 
 /**
  * What a conversation on xOllama asks of the engine's window, read off the
@@ -1371,6 +1389,8 @@ interface XollamaPlacement {
 	pool_id?: number;
 	num_ctx?: number;
 	num_ctx_min?: number;
+	/** The not-held flag, under the name opencoti gives it. */
+	[notHeld: string]: number | boolean | undefined;
 }
 
 /** The lead's pool, and what of its window the pool already holds. */
@@ -1518,13 +1538,15 @@ export function withXollamaRequestFields(
 				if (root !== undefined && typeof parsed.model === "string") {
 					rememberXollamaRunner(root, parsed.model, parsed);
 				}
-				// Decided before the pool: a lead pool belongs to a session, and
-				// an unbooked turn sends none.
+				// Decided before the pool: an unbooked turn attaches none. A lead
+				// pool lives as long as its session's booking, and an unbooked
+				// turn has none to anchor it.
 				const features =
 					root !== undefined
 						? (await probeXollama(root, baseFetch))?.features
 						: undefined;
 				unbooked =
+					unbookedPlacementField !== undefined &&
 					!council &&
 					!placedOutside &&
 					engineRequest.booking === undefined &&
@@ -1656,7 +1678,14 @@ export function withXollamaRequestFields(
 					}
 					if (ask) {
 						asked = ask.num_ctx;
-						placement = { ...(placement ?? {}), ...ask };
+						placement = {
+							...(placement ?? {}),
+							...ask,
+							// Not held: granted for this request, released when it ends.
+							...(unbooked && unbookedPlacementField !== undefined
+								? { [unbookedPlacementField]: true }
+								: {}),
+						};
 					}
 				}
 				if (session !== undefined && !isDelegatedEngineSession(session)) {
@@ -1748,9 +1777,7 @@ export function withXollamaRequestFields(
 						...(council ? { messages: withoutThinking(parsed.messages) } : {}),
 						// A placed body's session is the worker layer's: the engine
 						// session its pools and owner are charged to.
-						// Unbooked: no session, or the engine holds the window.
 						...(session !== undefined &&
-						!unbooked &&
 						!(placedOutside && typeof parsed.session_id === "string")
 							? { session_id: session }
 							: {}),
