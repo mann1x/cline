@@ -799,6 +799,11 @@ export class Controller {
 		return this.providerCatalog
 	}
 
+	runningProviderId(): string | undefined {
+		const activeSession = this.sessions.getActiveSession()
+		return activeSession?.isRunning ? activeSession.startConfig?.providerId : undefined
+	}
+
 	invalidateProviderListings(): void {
 		this.providerCatalog.invalidateProviderListings()
 	}

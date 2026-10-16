@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import type { EffectiveProviderConfig } from "@/sdk/model-catalog/contracts"
-import { probeProviderStatus } from "../readProviderStatus"
+import { ProviderStatusRequest } from "@/shared/proto/cline/models"
+import { __resetProviderStatusCache, CHECK_WAITS_FOR_RUN, probeProviderStatus, readProviderStatus } from "../readProviderStatus"
 
 type Call = { url: string; headers: Record<string, string> }
 
@@ -200,5 +201,58 @@ describe("probeProviderStatus", () => {
 		expect(status.state).toBe("unknown")
 		expect(status.detail).not.toBe("")
 		expect(calls).toHaveLength(0)
+	})
+})
+
+describe("readProviderStatus while a conversation runs", () => {
+	function controllerFor(running: () => string | undefined) {
+		return {
+			getProviderConfigStore: () => ({ read: (providerId: string) => config(providerId, { baseUrl: "http://box:22434" }) }),
+			getProviderCatalog: () => ({}),
+			runningProviderId: running,
+		} as unknown as Parameters<typeof readProviderStatus>[0]
+	}
+
+	afterEach(() => {
+		vi.unstubAllGlobals()
+		__resetProviderStatusCache()
+	})
+
+	it("asks nothing of the provider its conversation is running on, and shows the last answer", async () => {
+		const { impl, calls } = stubFetch(() => new Response(JSON.stringify({ models: [] }), { status: 200 }))
+		vi.stubGlobal("fetch", impl)
+		let running: string | undefined
+		const controller = controllerFor(() => running)
+		const first = await readProviderStatus(controller, ProviderStatusRequest.create({ providerId: "xollama" }))
+		expect(first.state).toBe("ready")
+		expect(calls).toHaveLength(1)
+
+		running = "xollama"
+		const during = await readProviderStatus(controller, ProviderStatusRequest.create({ providerId: "xollama" }))
+		expect(calls).toHaveLength(1)
+		expect(during.state).toBe("ready")
+		expect(during.detail).toContain(CHECK_WAITS_FOR_RUN)
+	})
+
+	it("is grey with the reason when nothing was asked before the run", async () => {
+		const { impl, calls } = stubFetch(ok)
+		vi.stubGlobal("fetch", impl)
+		const status = await readProviderStatus(
+			controllerFor(() => "xollama"),
+			ProviderStatusRequest.create({ providerId: "xollama" }),
+		)
+		expect(calls).toHaveLength(0)
+		expect(status.state).toBe("unknown")
+		expect(status.detail).toBe(CHECK_WAITS_FOR_RUN)
+	})
+
+	it("still checks a provider other than the one running", async () => {
+		const { impl, calls } = stubFetch(() => new Response(JSON.stringify({ models: [] }), { status: 200 }))
+		vi.stubGlobal("fetch", impl)
+		await readProviderStatus(
+			controllerFor(() => "opencoti"),
+			ProviderStatusRequest.create({ providerId: "xollama" }),
+		)
+		expect(calls).toHaveLength(1)
 	})
 })

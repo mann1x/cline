@@ -38,6 +38,8 @@ import type { GlobalStateAndSettings } from "@/shared/storage/state-keys"
 export interface ProviderCatalogController {
 	getProviderConfigStore(): ProviderConfigStore
 	getProviderCatalog(): ProviderCatalog
+	/** The provider the conversation is running on, while one is running. */
+	runningProviderId?(): string | undefined
 }
 
 export interface ProviderCatalogStateController extends ProviderCatalogController {

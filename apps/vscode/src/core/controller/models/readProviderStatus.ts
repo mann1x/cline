@@ -270,17 +270,41 @@ export async function probeProviderStatus(
 	}
 }
 
+/** Each provider's last answer, shown again while its conversation runs. */
+const lastStatus = new Map<string, ProviderStatusResponse>()
+
+export const CHECK_WAITS_FOR_RUN = "Not checked while a conversation on this provider is running."
+
+/** Test-only. */
+export function __resetProviderStatusCache(): void {
+	lastStatus.clear()
+}
+
+/**
+ * A conversation running on the provider is not checked: its requests are
+ * already the answer, and a check asks the same server while it generates.
+ * The last answer is shown instead, so the dot keeps its colour.
+ */
 export async function readProviderStatus(
 	controller: ProviderCatalogController,
 	request: ProviderStatusRequest,
 ): Promise<ProviderStatusResponse> {
 	const providerId = parseProviderIdRequest(request.providerId, "providerId")
+	const running = controller.runningProviderId?.()
+	if (running !== undefined && toSdkProviderId(running) === toSdkProviderId(providerId)) {
+		const last = lastStatus.get(providerId)
+		return last
+			? ProviderStatusResponse.create({ ...last, detail: `${last.detail} ${CHECK_WAITS_FOR_RUN}` })
+			: ProviderStatusResponse.create({ state: "unknown", detail: CHECK_WAITS_FOR_RUN })
+	}
 	const config = controller.getProviderConfigStore().read(providerId)
 	const status = await probeProviderStatus(providerId, config, request.modelId)
-	return ProviderStatusResponse.create({
+	const response = ProviderStatusResponse.create({
 		state: status.state,
 		detail: status.detail,
 		...(status.url !== undefined ? { url: status.url } : {}),
 		...(status.modelFound !== undefined ? { modelFound: status.modelFound } : {}),
 	})
+	lastStatus.set(providerId, response)
+	return response
 }
