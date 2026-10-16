@@ -1,4 +1,8 @@
-import { createTool } from "@cline/shared";
+import {
+	type AppliedModeSwitch,
+	createSwitchToActModeTool,
+	withSwitchToActModeTool,
+} from "@cline/shared";
 import type { Config } from "../../utils/types";
 import { resolveSystemPrompt } from "../prompt";
 
@@ -15,96 +19,28 @@ export type PendingModeChange = {
 	source: "tool" | "ui" | null;
 };
 
-export type AppliedModeChange = {
-	mode: InteractiveUiMode;
-	source: "tool" | "ui";
-};
+export type AppliedModeChange = AppliedModeSwitch;
 
-/**
- * Canned prompt that drives the auto-continue turn after the model calls
- * switch_to_act_mode. It is a synthetic user message, so transcript hydration
- * filters it out of the chat display.
- */
-export const ACT_MODE_CONTINUATION_PROMPT =
-	"The user approved switching to act mode. Continue with the approved plan now.";
+// The tool, its sentences and the continuation wrapper are in @cline/shared,
+// one implementation for the CLI, the extension and automaticum.
+export {
+	ACT_MODE_CONTINUATION_PROMPT,
+	sendTurnWithActModeContinuation,
+} from "@cline/shared";
 
 export function createInteractiveModeSwitchTool(input: {
 	config: Config;
 	pendingModeChange: PendingModeChange;
 	tuiModeChanged: { current: ((mode: InteractiveUiMode) => void) | null };
 }) {
-	return createTool({
-		name: "switch_to_act_mode",
-		description:
-			"Switch from plan mode to act mode. Switching to act mode immediately starts executing the plan, so only call this after the user has explicitly approved the plan in a message sent AFTER you presented it (e.g. 'looks good', 'go ahead', 'switch to act mode'). " +
-			"Never call this in the same turn you present a plan, never call it proactively, and never treat the original task request as approval.",
-		inputSchema: {
-			type: "object",
-			properties: {},
-		},
-		timeoutMs: 5000,
-		retryable: false,
-		maxRetries: 0,
-		// The act-mode tools only exist after the session is rebuilt with the
-		// new mode config, which can't happen mid-run. End the run right after
-		// the tool result so the model never keeps working with plan-mode tools
-		// it was just told it no longer has; run-interactive applies the pending
-		// change and auto-continues on the rebuilt session.
-		lifecycle: {
-			completesRun: true,
-		},
-		execute: async () => {
-			if (input.config.mode === "act") {
-				// Throw instead of returning: a successful result would end the
-				// run via completesRun even though nothing changed.
-				throw new Error("Already in act mode.");
-			}
+	return createSwitchToActModeTool({
+		isActMode: () => input.config.mode === "act",
+		onSwitch: () => {
 			input.pendingModeChange.current = "act";
 			input.pendingModeChange.source = "tool";
 			input.tuiModeChanged.current?.("act");
-			return "You successfully switched to act mode, proceed with the plan. You now have access to editing files and running commands. (The switch_to_act_mode tool is only available in plan mode.)";
 		},
 	});
-}
-
-/**
- * Runs one interactive turn, and when the model ended it by calling
- * switch_to_act_mode, continues the approved plan on the rebuilt act-mode
- * session instead of waiting for the user to prompt again.
- *
- * The continuation only fires for a tool-initiated switch on a turn that
- * finished "completed": a UI toggle mid-run aborts the turn, and even if the
- * toggle races a natural completion its source is "ui", so the user's Tab
- * press can never start executing a plan they did not approve.
- */
-export async function sendTurnWithActModeContinuation<
-	T extends { finishReason: string; iterations: number },
->(input: {
-	sendInitialTurn: () => Promise<T | undefined>;
-	sendContinuationTurn: (prompt: string) => Promise<T | undefined>;
-	applyPendingModeChange: () => Promise<AppliedModeChange | undefined>;
-}): Promise<T | undefined> {
-	const result = await input.sendInitialTurn();
-	const switched = await input.applyPendingModeChange();
-	if (
-		switched?.mode !== "act" ||
-		switched.source !== "tool" ||
-		result?.finishReason !== "completed"
-	) {
-		return result;
-	}
-	const continuation = await input.sendContinuationTurn(
-		ACT_MODE_CONTINUATION_PROMPT,
-	);
-	// Honor a mode toggle made while the continuation was running.
-	await input.applyPendingModeChange();
-	if (!continuation) {
-		return result;
-	}
-	return {
-		...continuation,
-		iterations: result.iterations + continuation.iterations,
-	};
 }
 
 // The tracker moved to @cline/shared so the VSCode extension can share the
@@ -121,18 +57,11 @@ export async function applyInteractiveModeConfig(input: {
 	switchToActModeTool: NonNullable<Config["extraTools"]>[number];
 }): Promise<void> {
 	input.config.mode = input.mode;
-	// The host's own tools -- `browser`, `ask_lsp` -- are on this list too,
-	// and they are not mode-dependent. Replacing the whole list to add or drop
-	// the mode-switch tool took them with it, so a single switch between plan
-	// and act left the session without a browser or a language server for the
-	// rest of its life.
-	const hostTools = (input.config.extraTools ?? []).filter(
-		(tool) => tool.name !== input.switchToActModeTool.name,
+	input.config.extraTools = withSwitchToActModeTool(
+		input.config.extraTools,
+		input.mode,
+		input.switchToActModeTool,
 	);
-	input.config.extraTools =
-		input.mode === "plan"
-			? [...hostTools, input.switchToActModeTool]
-			: hostTools;
 	input.config.systemPrompt = await resolveSystemPrompt({
 		cwd: input.config.cwd,
 		providerId: input.config.providerId,

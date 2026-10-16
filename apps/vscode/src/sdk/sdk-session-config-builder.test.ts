@@ -56,6 +56,35 @@ describe("SdkSessionConfigBuilder", () => {
 		expect(actConfig.extraTools?.some((tool) => tool.name === "switch_to_act_mode")).toBe(false)
 	})
 
+	it("fails the call when already in act mode, so completesRun does not end the run for nothing", async () => {
+		const onSwitchToActMode = vi.fn()
+		const builder = new SdkSessionConfigBuilder({
+			stateManager: { getGlobalSettingsKey: vi.fn(() => "act") } as never,
+			emitHookMessage: vi.fn(),
+			onSwitchToActMode,
+		})
+		mocks.buildSessionConfig.mockResolvedValueOnce({ extraTools: [], hooks: {} })
+		const config = await builder.build({ cwd: "/workspace", mode: "plan" })
+		const switchTool = config.extraTools?.find((tool) => tool.name === "switch_to_act_mode")
+		await expect(switchTool?.execute({}, {} as never)).rejects.toThrow("Already in act mode.")
+		expect(onSwitchToActMode).not.toHaveBeenCalled()
+	})
+
+	it("keeps the host's own tools when the switch tool comes and goes", async () => {
+		const builder = new SdkSessionConfigBuilder({
+			stateManager: { getGlobalSettingsKey: vi.fn(() => "plan") } as never,
+			emitHookMessage: vi.fn(),
+			onSwitchToActMode: vi.fn(),
+		})
+		const browser = { name: "browser" }
+		mocks.buildSessionConfig.mockResolvedValueOnce({ extraTools: [browser], hooks: {} })
+		const plan = await builder.build({ cwd: "/workspace", mode: "plan" })
+		expect(plan.extraTools?.map((tool) => tool.name)).toEqual(["browser", "switch_to_act_mode"])
+		mocks.buildSessionConfig.mockResolvedValueOnce({ extraTools: plan.extraTools, hooks: {} })
+		const act = await builder.build({ cwd: "/workspace", mode: "act" })
+		expect(act.extraTools?.map((tool) => tool.name)).toEqual(["browser"])
+	})
+
 	it("stops before the next model call after switch_to_act_mode queues a mode change", async () => {
 		const baseBeforeModel = vi.fn(async () => ({ metadata: "base" }))
 		mocks.buildAgentHooks.mockReturnValueOnce({ beforeModel: baseBeforeModel })

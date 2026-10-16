@@ -756,6 +756,19 @@ export {
 export * from "./tasks";
 export * from "./team";
 export { createTool } from "./tools/create";
+// Plan mode's hand-over to act mode, one implementation for every host.
+export {
+	ACT_MODE_CONTINUATION_PROMPT,
+	ALREADY_IN_ACT_MODE_MESSAGE,
+	type AppliedModeSwitch,
+	createSwitchToActModeTool,
+	SWITCH_TO_ACT_MODE_TOOL_DESCRIPTION,
+	SWITCH_TO_ACT_MODE_TOOL_NAME,
+	SWITCHED_TO_ACT_MODE_RESULT,
+	type SwitchToActModeToolOptions,
+	sendTurnWithActModeContinuation,
+	withSwitchToActModeTool,
+} from "./tools/switch-to-act-mode";
 export * from "./types";
 export { AUTH_ERROR_PATTERNS, isLikelyAuthError } from "./types/auth";
 export { initVcr } from "./vcr";

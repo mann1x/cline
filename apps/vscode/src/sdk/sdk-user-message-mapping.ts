@@ -1,4 +1,5 @@
 import {
+	ACT_MODE_CONTINUATION_PROMPT,
 	ANNOUNCED_INTENT_NUDGE_PREFIX,
 	NO_TOOL_CALL_NUDGE_MESSAGE,
 	normalizeUserInput,
@@ -9,11 +10,12 @@ import type { ClineOutputLimitRetryInfo } from "@shared/ExtensionMessage"
 
 /**
  * Canned prompt SdkModeCoordinator sends to drive the plan -> act
- * auto-continuation. Defined here (a leaf module) rather than in the
- * coordinator so display-layer consumers (message-translator, ordinal
- * mapping) don't pull the coordinator's heavy import graph into their tests.
+ * auto-continuation, from @cline/shared with the switch tool itself.
+ * Re-exported from this leaf module so display-layer consumers
+ * (message-translator, ordinal mapping) don't pull the coordinator's heavy
+ * import graph into their tests.
  */
-export const ACT_MODE_CONTINUATION_PROMPT = "The user approved switching to act mode. Continue with the approved plan now."
+export { ACT_MODE_CONTINUATION_PROMPT }
 
 export type SdkUserMessage = {
 	role?: unknown

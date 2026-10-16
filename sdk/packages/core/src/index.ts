@@ -1032,7 +1032,12 @@ export async function loadOpenTelemetryAdapter() {
 	return import("./services/telemetry/index.js");
 }
 export { Agent, createAgentRuntime } from "@cline/agents";
+// Plan mode's hand-over to act mode, one implementation for every host.
 export {
+	ACT_MODE_CONTINUATION_PROMPT,
+	ALREADY_IN_ACT_MODE_MESSAGE,
+	type AppliedModeSwitch,
+	createSwitchToActModeTool,
 	DEFAULT_LIBRARY_SETTINGS,
 	DEFAULT_MEMORY_SELECTION,
 	DEFAULT_MEMORY_SETTINGS,
@@ -1047,6 +1052,12 @@ export {
 	resolveMemorySettings,
 	resolveScrapeSettings,
 	type ScrapeSettings,
+	SWITCH_TO_ACT_MODE_TOOL_DESCRIPTION,
+	SWITCH_TO_ACT_MODE_TOOL_NAME,
+	SWITCHED_TO_ACT_MODE_RESULT,
+	type SwitchToActModeToolOptions,
+	sendTurnWithActModeContinuation,
+	withSwitchToActModeTool,
 } from "@cline/shared";
 export { resolveComposioToolsStatePath } from "./extensions/composio/composio-tools-extension";
 export {
