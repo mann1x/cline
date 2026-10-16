@@ -31,6 +31,7 @@ import type { ProviderSamplingOptions } from "../config";
 import { ensureFetch, resolveApiKey } from "../http";
 import { keepToolImagesMiddleware } from "../middleware/split-tool-images";
 import { primeOllamaReinjection } from "../reasoning-history";
+import { withModelRequestCapture } from "../request-capture";
 import { installAiSdkWarningLogger } from "../sdk-warnings";
 import {
 	openStreamSideParts,
@@ -1111,13 +1112,24 @@ export async function createOllamaProviderModule(
 	const usingSuppliedFetch = requestFetch === suppliedFetch;
 	// xOllama's local key on everything this provider sends it, probes and
 	// PolyKV calls included, not only on the chat the package sends.
+	// Innermost, so a saved body is the one the server got, every field the
+	// layers below add included. See `request-capture.ts`.
+	const captureSession = (
+		context.config?.options as Record<string, unknown> | undefined
+	)?.polykvSessionId;
+	const sentFetch = withModelRequestCapture(
+		ensureFetch(requestFetch),
+		typeof captureSession === "string" && captureSession
+			? captureSession
+			: undefined,
+	);
 	const serverFetch = xollama
 		? withXollamaAuth(
-				ensureFetch(requestFetch),
+				sentFetch,
 				config.baseUrl || XOLLAMA_DEFAULT_BASE_URL,
 				headers,
 			)
-		: ensureFetch(requestFetch);
+		: sentFetch;
 	context.logger?.debug(
 		streamDispatcher
 			? `[ollama] stream dispatcher attached: undici body/headers timeouts disabled (fetch: ${

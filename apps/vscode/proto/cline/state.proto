@@ -364,6 +364,7 @@ message Settings {
   optional int32 message_history_limit = 246;
   optional bool tool_intent_guard_enabled = 247;
   optional string open_telemetry_traces_exporter = 248;
+  optional bool save_model_requests = 249;
 }
 
 message State {
@@ -601,6 +602,8 @@ message UpdateSettingsRequest {
   optional bool tool_intent_guard_enabled = 112;
   optional bool message_history_enabled = 110;
   optional int32 message_history_limit = 111;
+  // Save every model request's body under <dataDir>/logs/requests.
+  optional bool save_model_requests = 113;
   // Two reviewers correct the compaction summary against one half of the
   // transcript each, and a synthesiser merges their corrections.
   optional bool council_compaction_enabled = 74;

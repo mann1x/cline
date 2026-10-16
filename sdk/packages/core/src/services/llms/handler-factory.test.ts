@@ -32,6 +32,11 @@ vi.mock("@cline/llms", async (importOriginal) => {
 		// catalog and skip builtins, so use the real implementation.
 		resolveGatewayProviderRegistrationSync:
 			original.resolveGatewayProviderRegistrationSync,
+		// Request capture wraps the gateway fetch: real, so the tests below see
+		// what a saved request holds.
+		isModelRequestCaptureOn: original.isModelRequestCaptureOn,
+		setModelRequestCapture: original.setModelRequestCapture,
+		withModelRequestCapture: original.withModelRequestCapture,
 	};
 });
 
@@ -139,6 +144,58 @@ describe("createAgentModelFromConfig", () => {
 				],
 			}),
 		);
+	});
+
+	it("saves a gateway provider's request body while capture is on, and leaves Ollama to its vendor", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+		const { setModelRequestCapture } = await import("@cline/llms");
+		const saved: unknown[] = [];
+		setModelRequestCapture((request) => saved.push(request));
+		try {
+			const hostFetch = vi.fn(
+				async () => new Response("{}"),
+			) as unknown as typeof fetch;
+			for (const providerId of ["openai-compatible", "ollama"]) {
+				createAgentModelFromConfig(
+					{
+						providerId,
+						modelId: "mock-model",
+						apiKey: "key",
+						systemPrompt: "",
+						tools: [],
+						sessionId: "conv-1",
+						providerConfig: {
+							providerId,
+							modelId: "mock-model",
+							fetch: hostFetch,
+						},
+					},
+					undefined,
+				);
+			}
+			const calls = gatewayMock.createGateway.mock.calls as unknown as Array<
+				[{ providerConfigs: Array<{ fetch: typeof fetch }> }]
+			>;
+			const [gateway, ollama] = calls
+				.slice(-2)
+				.map((call) => call[0].providerConfigs[0].fetch);
+			expect(ollama).toBe(hostFetch);
+			expect(gateway).not.toBe(hostFetch);
+			await gateway("http://host/v1/chat/completions", {
+				method: "POST",
+				body: JSON.stringify({ model: "mock-model" }),
+			});
+			expect(hostFetch).toHaveBeenCalledTimes(1);
+			expect(saved).toEqual([
+				expect.objectContaining({
+					url: "http://host/v1/chat/completions",
+					sessionId: "conv-1",
+					body: { model: "mock-model" },
+				}),
+			]);
+		} finally {
+			setModelRequestCapture(undefined);
+		}
 	});
 
 	// Measured on a live box: temperature 0.6 and frequencyPenalty 0.3 sat in

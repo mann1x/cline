@@ -182,6 +182,14 @@ export {
 	supportsModelTool,
 } from "./providers/model-tools";
 export { resolveProviderModelCatalogKeys } from "./providers/provider-keys";
+// Saving every generation request's exact body, for replaying a turn.
+export {
+	type CapturedModelRequest,
+	isModelRequestCaptureOn,
+	type ModelRequestWriter,
+	setModelRequestCapture,
+	withModelRequestCapture,
+} from "./providers/request-capture";
 export {
 	type OpenAICodexRequestHeaderContext,
 	type ProviderRequestHeaderClientContext,

@@ -2,10 +2,12 @@ import {
 	createGateway,
 	createHandlerAsync,
 	hasRegisteredHandler,
+	isModelRequestCaptureOn,
 	MODEL_COLLECTIONS_BY_PROVIDER_ID,
 	normalizeProviderId,
 	resolveGatewayProviderRegistrationSync,
 	toGatewayModelCapabilities,
+	withModelRequestCapture,
 } from "@cline/llms";
 import type {
 	AgentConfig,
@@ -324,6 +326,24 @@ export function createAgentModelFromConfig(
 			: {}),
 		...(config.polykvWorker ? { polykvWorker: config.polykvWorker } : {}),
 	};
+	// Saving request bodies for replay (`setModelRequestCapture`). Ollama and
+	// xOllama capture inside their own innermost layer, where the body is
+	// final and the host's undici fetch is the one that sends it; every other
+	// provider sends through this fetch. Wrapped only while capture is on, so
+	// a provider that had no fetch of its own is not handed one otherwise.
+	const capturedProvider = normalizeProviderId(
+		normalizedProviderConfig.providerId,
+	);
+	if (
+		isModelRequestCaptureOn() &&
+		capturedProvider !== "ollama" &&
+		capturedProvider !== "xollama"
+	) {
+		normalizedProviderConfig.fetch = withModelRequestCapture(
+			normalizedProviderConfig.fetch ?? globalThis.fetch,
+			config.sessionId,
+		);
+	}
 
 	// Host-registered custom handlers (e.g. VS Code LM, which needs the host's
 	// `vscode.lm` API) are not part of the gateway. When a handler is registered

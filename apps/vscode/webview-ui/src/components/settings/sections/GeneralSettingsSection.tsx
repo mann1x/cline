@@ -1,5 +1,6 @@
 import MessageHistorySetting from "../MessageHistorySetting"
 import PreferredLanguageSetting from "../PreferredLanguageSetting"
+import SaveModelRequestsSetting from "../SaveModelRequestsSetting"
 import Section from "../Section"
 import UpdateChannelSetting from "../UpdateChannelSetting"
 
@@ -30,6 +31,8 @@ const GeneralSettingsSection = ({ renderSectionHeader }: GeneralSettingsSectionP
 				<UpdateChannelSetting />
 
 				<MessageHistorySetting />
+
+				<SaveModelRequestsSetting />
 			</Section>
 		</div>
 	)

@@ -54,6 +54,7 @@ export default defineConfig({
 			"src/core/controller/models/__tests__/refreshProviderModels.test.ts",
 			"src/core/controller/models/__tests__/refreshOpenAiModels.test.ts",
 			"src/core/controller/models/__tests__/readProviderStatus.test.ts",
+			"src/sdk/model-request-capture.test.ts",
 		],
 		environment: "node",
 		setupFiles: ["./src/test/vitest-setup.ts"],

@@ -13,6 +13,7 @@ import { HookDiscoveryCache } from "./core/hooks/HookDiscoveryCache"
 import { HookProcessRegistry } from "./core/hooks/HookProcessRegistry"
 import { StateManager } from "./core/storage/StateManager"
 import { ExtensionRegistryInfo } from "./registry"
+import { applyModelRequestCapture } from "./sdk/model-request-capture"
 import { registerVsCodeLmHandler } from "./sdk/vscode-lm/register-vscode-lm"
 import { registerClineClientIdentity } from "./services/ClineClientIdentity"
 import { ErrorService } from "./services/error"
@@ -93,6 +94,7 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	const webview = HostProvider.get().createWebviewProvider()
 
 	const stateManager = StateManager.get()
+	applyModelRequestCapture(stateManager.getGlobalSettingsKey("saveModelRequests") === true)
 	// Settings are shared with every other window: show a change made there.
 	stateManager.registerCallbacks({ onSyncExternalChange: () => webview.controller.postStateToWebview() })
 	stopWatchingSharedState = stateManager.watchExternalChanges()

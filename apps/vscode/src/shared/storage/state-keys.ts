@@ -501,6 +501,9 @@ const USER_SETTINGS_FIELDS = {
 	// Keep sent messages and the unsent draft of the message box. Off stores
 	// nothing and deletes what was stored.
 	messageHistoryEnabled: { default: true as boolean },
+	// Save every model request's exact body for replay. See
+	// `sdk/model-request-capture.ts`.
+	saveModelRequests: { default: false as boolean },
 	messageHistoryLimit: { default: DEFAULT_MESSAGE_HISTORY_LIMIT as number },
 	worktreesEnabled: { default: false as boolean },
 	preferredLanguage: { default: "English" as string },

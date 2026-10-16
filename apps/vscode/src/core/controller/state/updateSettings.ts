@@ -10,6 +10,7 @@ import { asUpdateChannel } from "@shared/UpdateSettings"
 import { ClineEnv } from "@/config"
 import { installDocumentReaderLanguages } from "@/sdk/document-reader-languages"
 import { installLibraryVectors } from "@/sdk/library-config"
+import { applyModelRequestCapture } from "@/sdk/model-request-capture"
 import { updateQaCredentials } from "@/sdk/qa-credentials-store"
 import { McpDisplayMode } from "@/shared/McpDisplayMode"
 import { Logger } from "@/shared/services/Logger"
@@ -404,6 +405,12 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 				controller.stateManager.setGlobalState("messageHistory", [])
 				controller.stateManager.setGlobalState("messageDraft", "")
 			}
+		}
+
+		if (request.saveModelRequests !== undefined) {
+			const enabled = !!request.saveModelRequests
+			controller.stateManager.setGlobalState("saveModelRequests", enabled)
+			applyModelRequestCapture(enabled)
 		}
 
 		if (request.messageHistoryLimit !== undefined) {

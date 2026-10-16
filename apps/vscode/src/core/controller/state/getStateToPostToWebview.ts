@@ -94,6 +94,7 @@ export async function getStateToPostToWebview(controller: {
 	const strongNudgesEnabled = stateManager.getGlobalSettingsKey("strongNudgesEnabled")
 	const toolIntentGuardEnabled = stateManager.getGlobalSettingsKey("toolIntentGuardEnabled")
 	const messageHistoryEnabled = stateManager.getGlobalSettingsKey("messageHistoryEnabled")
+	const saveModelRequests = stateManager.getGlobalSettingsKey("saveModelRequests")
 	const messageHistoryLimit = stateManager.getGlobalSettingsKey("messageHistoryLimit")
 	const userInfo = stateManager.getGlobalStateKey("userInfo")
 	const mcpMarketplaceEnabled = stateManager.getGlobalStateKey("mcpMarketplaceEnabled")
@@ -251,6 +252,7 @@ export async function getStateToPostToWebview(controller: {
 		strongNudgesEnabled,
 		toolIntentGuardEnabled,
 		messageHistoryEnabled,
+		saveModelRequests,
 		messageHistoryLimit,
 		userInfo,
 		mcpMarketplaceEnabled,

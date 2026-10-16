@@ -390,6 +390,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		strongNudgesEnabled: true,
 		toolIntentGuardEnabled: true,
 		messageHistoryEnabled: true,
+		saveModelRequests: false,
 		messageHistoryLimit: 50,
 		worktreesEnabled: { user: true, featureFlag: false },
 		favoritedModelIds: [],

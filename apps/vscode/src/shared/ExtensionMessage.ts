@@ -276,6 +276,7 @@ export interface ExtensionState {
 	strongNudgesEnabled?: boolean
 	toolIntentGuardEnabled?: boolean
 	messageHistoryEnabled?: boolean
+	saveModelRequests?: boolean
 	messageHistoryLimit?: number
 	worktreesEnabled?: ClineFeatureSetting
 	favoritedModelIds: string[]
