@@ -903,8 +903,11 @@ export interface XollamaEngineRequest {
  * So every call with no conversation behind it -- a note, a summary, a title,
  * a commit message -- goes out with an exact booking, which xOllama answers at
  * once (429, `X-Context-Largest-Admissible`) instead of waiting out. A call
- * made FOR a conversation names it (`sideCallOf`), and that conversation's
- * session is closed in ONE case only (user ruling, 2026-10-10): the engine's
+ * made FOR a conversation names it (`sideCallOf`). When that conversation
+ * holds an idle booking on the same model that the call fits in, the call
+ * runs inside it and books nothing (`borrowableBooking`, user ruling
+ * 2026-10-16). Otherwise the conversation's session is closed in ONE case
+ * only (user ruling, 2026-10-10): the engine's
  * figure says the call does not fit now and would fit with that
  * conversation's booking returned, and none of the conversation's own
  * requests is running. Its cache is lost then as it would have been at the
