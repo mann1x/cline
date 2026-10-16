@@ -403,6 +403,111 @@ describe("a call outside its conversation on xOllama", () => {
 	});
 });
 
+describe("a call made for a conversation that holds a booking, on xOllama", () => {
+	const WINDOW = 96_000;
+	const granted = () =>
+		json({ message: { content: "turn" } }, 200, {
+			"x-context-window": String(WINDOW),
+		});
+	/** One turn of the conversation, granted and read to the end. */
+	const conversationTurn = async (fetchImpl: typeof fetch, model = "m") => {
+		const lead = withXollamaRequestFields(fetchImpl, {
+			window: {
+				contextWindow: WINDOW,
+				requestedWindow: WINDOW,
+				dynamicContextSize: true,
+			},
+		});
+		const response = await lead("http://x/api/chat", {
+			method: "POST",
+			headers: { [XOLLAMA_SESSION_HEADER]: "conv" },
+			body: JSON.stringify({ model, messages: [] }),
+		});
+		await response.text();
+	};
+	const sideCall = (fetchImpl: typeof fetch) =>
+		withXollamaRequestFields(fetchImpl, {
+			engine: () => ({ sideCallOf: "conv" }),
+		})("http://x/api/chat", { method: "POST", body: sideBody() });
+
+	// pandorum, run xm6e1, 2026-10-16: a 54,304-cell note found the
+	// conversation holding all 256,000, the conversation was closed for it,
+	// and its next turn re-read 57,865 tokens.
+	it("runs inside the conversation's window, booking and closing nothing", async () => {
+		const stub = server([
+			granted,
+			() => json({ message: { content: "note" } }),
+		]);
+		await conversationTurn(stub.fetch);
+		const response = await sideCall(stub.fetch);
+		await response.text();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(stub.chats[1]?.session_id).toBe("conv");
+		// The resumed turn's shape: exactly the grant.
+		expect(stub.chats[1]?.placement).toEqual({
+			num_ctx: WINDOW,
+			num_ctx_min: WINDOW,
+		});
+		expect(closes(stub.engine)).toEqual([]);
+	});
+
+	it("is sent again as the plain request when refused inside it, and still closes nothing", async () => {
+		const stub = server([
+			granted,
+			() => refused(null),
+			() => json({ message: { content: "note" } }),
+		]);
+		await conversationTurn(stub.fetch);
+		const response = await sideCall(stub.fetch);
+		expect(response.status).toBe(200);
+		expect(JSON.stringify(stub.chats[2])).toBe(sideBody());
+		expect(closes(stub.engine)).toEqual([]);
+	});
+
+	it("books its own window while one of the conversation's requests is running", async () => {
+		const stub = server([
+			granted,
+			() => json({ message: { content: "turn" } }),
+			() => json({ message: { content: "note" } }),
+		]);
+		await conversationTurn(stub.fetch);
+		const running = await withXollamaRequestFields(stub.fetch)(
+			"http://x/api/chat",
+			{
+				method: "POST",
+				headers: { [XOLLAMA_SESSION_HEADER]: "conv" },
+				body: JSON.stringify({ model: "m", messages: [] }),
+			},
+		);
+		await sideCall(stub.fetch);
+		expect(String(stub.chats[2]?.session_id)).toMatch(/^cerebriline-side-/);
+		await running.text();
+	});
+
+	it("books its own window when the call is bigger than the conversation's", async () => {
+		const stub = server([
+			() =>
+				json({ message: { content: "turn" } }, 200, {
+					"x-context-window": String(NEED - 1),
+				}),
+			() => json({ message: { content: "note" } }),
+		]);
+		await conversationTurn(stub.fetch);
+		await sideCall(stub.fetch);
+		expect(String(stub.chats[1]?.session_id)).toMatch(/^cerebriline-side-/);
+	});
+
+	it("books its own window when the conversation's booking is on another model", async () => {
+		const stub = server([
+			granted,
+			() => json({ message: { content: "note" } }),
+		]);
+		await conversationTurn(stub.fetch, "other-model");
+		await sideCall(stub.fetch);
+		expect(String(stub.chats[1]?.session_id)).toMatch(/^cerebriline-side-/);
+	});
+});
+
 describe("what a side call's booking counts", () => {
 	// Measured 2026-10-11 on eleven2go and pandorum: the reasoning-replay probe
 	// (three short messages, one of them carrying `thinking`) was booked at 275

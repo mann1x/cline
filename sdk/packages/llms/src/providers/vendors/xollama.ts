@@ -1248,6 +1248,43 @@ export function sideCallBlockedByOwnConversation(options: {
 	);
 }
 
+/**
+ * The conversation's own booking, when a call made for it can run inside it:
+ * the conversation holds a window on this model (a booked turn left it, which
+ * an unbooked one never does), none of its requests is running, and the call
+ * fits. The call then goes out under the conversation's session at exactly
+ * its grant -- the shape of a resumed turn, so the engine attaches it to the
+ * cells it already holds -- and nothing is booked beside it or closed for it.
+ *
+ * User ruling, 2026-10-16. Before it, a capped-thinking note needing 54,304
+ * cells found the conversation holding all 256,000 and nothing free beside
+ * it, so the conversation's session was closed to make room, and its next
+ * turn re-read 57,865 tokens from scratch (pandorum, run xm6e1). Inside the
+ * booking the note costs only what it does not share with the conversation's
+ * cached prompt.
+ */
+function borrowableBooking(
+	conversation: string,
+	root: string,
+	model: string,
+	need: number,
+): { session: string; window: number } | undefined {
+	const session = engineSessionId(conversation);
+	const held = SESSION_WINDOWS.get(session);
+	if (
+		held === undefined ||
+		held.root !== root ||
+		held.model !== model ||
+		need > held.window ||
+		isDelegatedEngineSession(session) ||
+		xollamaConversationBusy(conversation) ||
+		(SESSION_REQUESTS.get(session) ?? 0) > 0
+	) {
+		return undefined;
+	}
+	return { session, window: held.window };
+}
+
 /** Give a side call's own booking back; the idle TTL is the net under it. */
 function closeSideSession(
 	baseUrl: string,
@@ -1502,6 +1539,10 @@ export function withXollamaRequestFields(
 		 * that passes such a window through. Nothing is held between turns.
 		 */
 		let unbooked = false;
+		/** The conversation session a side call runs inside, when it does. */
+		let borrowedSession: string | undefined;
+		/** That call without its window or session, for a refusal to fall back to. */
+		let plainSideBody: string | undefined;
 		/** The window a turn of a session asks for, and of which model. */
 		let turnNeed: number | undefined;
 		let turnModel: string | undefined;
@@ -1707,11 +1748,37 @@ export function withXollamaRequestFields(
 				) {
 					sideNeed = await sideCallNeed(root, parsed, baseFetch);
 				}
+				// Inside the conversation's own booking when it can be: see
+				// `borrowableBooking`. Its own exact booking otherwise.
+				const borrowed =
+					sideNeed !== undefined &&
+					engineRequest.sideCallOf !== undefined &&
+					root !== undefined &&
+					typeof parsed.model === "string"
+						? borrowableBooking(
+								engineRequest.sideCallOf,
+								root,
+								parsed.model,
+								sideNeed,
+							)
+						: undefined;
+				if (borrowed !== undefined && engineRequest.sideCallOf !== undefined) {
+					borrowedSession = borrowed.session;
+					plainSideBody = body;
+					conversationKey = engineRequest.sideCallOf;
+					placement = {
+						num_ctx: borrowed.window,
+						num_ctx_min: borrowed.window,
+					};
+					options?.logger?.debug?.(
+						`[xollama] a background request (${sideNeed} tokens) runs inside its conversation's window (${borrowed.window} tokens)`,
+					);
+				}
 				const sideSession =
-					sideNeed !== undefined
+					sideNeed !== undefined && borrowed === undefined
 						? `cerebriline-side-${Math.random().toString(36).slice(2, 10)}`
 						: undefined;
-				if (sideNeed !== undefined) {
+				if (sideNeed !== undefined && borrowed === undefined) {
 					placement = { num_ctx: sideNeed, num_ctx_min: sideNeed };
 				}
 				const councilSafe = council
@@ -1766,6 +1833,9 @@ export function withXollamaRequestFields(
 						...parsed,
 						...(placement !== undefined ? { placement } : {}),
 						...(sideSession !== undefined ? { session_id: sideSession } : {}),
+						...(borrowedSession !== undefined
+							? { session_id: borrowedSession }
+							: {}),
 						...(council ? { messages: withoutThinking(parsed.messages) } : {}),
 						// A placed body's session is the worker layer's: the engine
 						// session its pools and owner are charged to.
@@ -1792,8 +1862,14 @@ export function withXollamaRequestFields(
 			conversationKey !== undefined
 				? conversationRequestStarted(conversationKey)
 				: undefined;
+		// A side call inside a conversation's booking counts as that session's
+		// request while it runs, so nothing yields the window from under it.
 		const sessionEnded =
-			session !== undefined ? sessionRequestStarted(session) : undefined;
+			session !== undefined
+				? sessionRequestStarted(session)
+				: borrowedSession !== undefined
+					? sessionRequestStarted(borrowedSession)
+					: undefined;
 		const requestEnded =
 			conversationEnded !== undefined || sessionEnded !== undefined
 				? () => {
@@ -1819,6 +1895,24 @@ export function withXollamaRequestFields(
 			) {
 				await response.body?.cancel().catch(() => undefined);
 				response = await baseFetch(input, { ...init, headers, body });
+			}
+			// Refused inside the conversation's booking -- its grant moved, or the
+			// engine would not attach it: sent again as the plain request, which
+			// xOllama waits out as it always did. Nothing is closed for it.
+			if (
+				borrowedSession !== undefined &&
+				!response.ok &&
+				plainSideBody !== undefined
+			) {
+				options?.logger?.debug?.(
+					`[xollama] a background request was refused inside its conversation's window (${response.status}); sent again without a window`,
+				);
+				await response.body?.cancel().catch(() => undefined);
+				response = await baseFetch(input, {
+					...init,
+					headers,
+					body: plainSideBody,
+				});
 			}
 			if (side !== undefined && root !== undefined) {
 				response = await settleSideCall(response, side, {
