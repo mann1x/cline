@@ -88,6 +88,7 @@ import {
 	measureReasoningRepetition,
 	type RepetitionNudger,
 } from "./reasoning-repetition";
+import { type InvalidToolCall, ToolCallAssembler } from "./tool-call-assembly";
 import {
 	buildToolIntentOverrunNudge,
 	describeToolIntentOverrunStub,
@@ -645,22 +646,6 @@ function resolveToolPolicy(
 	};
 }
 
-interface PendingToolAssembly {
-	toolCallId: string;
-	toolName?: string;
-	inputText: string;
-	inputValue?: unknown;
-	metadata?: unknown;
-	parseError?: string;
-}
-
-interface InvalidToolCall {
-	toolCallId: string;
-	toolName?: string;
-	input: Record<string, unknown>;
-	reason: "missing_name" | "missing_arguments" | "invalid_arguments";
-}
-
 function safeJsonSize(value: unknown): number {
 	try {
 		return JSON.stringify(value).length;
@@ -802,16 +787,6 @@ function createMessage(
 		createdAt: Date.now(),
 		metadata,
 	};
-}
-
-function toolInputLength(assembly: PendingToolAssembly): number {
-	if (assembly.inputText) return assembly.inputText.length;
-	if (assembly.inputValue === undefined) return 0;
-	try {
-		return JSON.stringify(assembly.inputValue)?.length ?? 0;
-	} catch {
-		return 0;
-	}
 }
 
 function cloneUsage(usage: AgentUsage): AgentUsage {
@@ -3799,13 +3774,12 @@ export class AgentRuntime {
 		);
 
 		const content: AgentMessagePart[] = [];
-		const toolAssemblies = new Map<string, PendingToolAssembly>();
+		const toolAssembler = new ToolCallAssembler();
 		const modelToolActivities = new Map<string, AgentModelToolActivity>();
 		const invalidToolCalls: InvalidToolCall[] = [];
 		const sequence: Array<
 			{ type: "tool"; key: string } | { type: "part"; part: AgentMessagePart }
 		> = [];
-		let nextToolIndex = 0;
 		let finishReason: AgentModelFinishReason = "unknown";
 		let requestId: string | undefined;
 		let accumulatedText = "";
@@ -3976,40 +3950,9 @@ export class AgentRuntime {
 						});
 						break;
 					}
-					const key =
-						event.toolCallId ?? `tool_${event.index ?? nextToolIndex}`;
-					if (event.index == null && event.toolCallId == null) {
-						nextToolIndex += 1;
-					}
-					let assembly = toolAssemblies.get(key);
-					if (!assembly) {
-						assembly = {
-							toolCallId: event.toolCallId ?? createUID("tool"),
-							inputText: "",
-						};
-						toolAssemblies.set(key, assembly);
+					const { key, created } = toolAssembler.add(event);
+					if (created) {
 						sequence.push({ type: "tool", key });
-					}
-					if (event.toolCallId) {
-						assembly.toolCallId = event.toolCallId;
-					}
-					if (event.toolName) {
-						assembly.toolName = event.toolName;
-					}
-					if (event.input !== undefined) {
-						assembly.inputValue = event.input;
-					}
-					if (event.metadata !== undefined) {
-						assembly.metadata = mergeToolMetadata(
-							assembly.metadata,
-							event.metadata,
-						);
-					}
-					if (event.inputText) {
-						assembly.inputText = mergeToolInputText(
-							assembly.inputText,
-							event.inputText,
-						);
 					}
 					break;
 				}
@@ -4062,10 +4005,7 @@ export class AgentRuntime {
 					}
 					// Tool arguments are measured whole, from what has been assembled:
 					// Ollama sends them in one piece, other providers in fragments.
-					const toolInputChars = [...toolAssemblies.values()].reduce(
-						(sum, assembly) => sum + toolInputLength(assembly),
-						0,
-					);
+					const toolInputChars = toolAssembler.inputChars();
 					channelTally.toolInputChars = Math.max(
 						0,
 						toolInputChars - toolInputCharsClaimed,
@@ -4142,7 +4082,7 @@ export class AgentRuntime {
 				content.push(item.part);
 				continue;
 			}
-			const assembly = toolAssemblies.get(item.key);
+			const assembly = toolAssembler.get(item.key);
 			// The call that was cut: half a document, and not a call that failed
 			// to parse. The stub below says what happened to it.
 			if (
@@ -4151,44 +4091,23 @@ export class AgentRuntime {
 			) {
 				continue;
 			}
-			if (!assembly?.toolName) {
-				invalidToolCalls.push({
-					toolCallId: assembly?.toolCallId ?? item.key,
-					input: buildInvalidToolInput(assembly?.inputText ?? ""),
-					reason: "missing_name",
-				});
+			const finished = toolAssembler.finish(item.key, finishReason);
+			if (finished.invalid) {
+				invalidToolCalls.push(finished.invalid);
+			}
+			if (!finished.call || !assembly) {
 				continue;
 			}
-			const parsed = parseToolInput(assembly, finishReason);
 			this.config.logger?.debug?.(
 				describeToolArguments(
 					this.state.iteration,
-					assembly.toolName,
-					assembly.toolCallId,
+					finished.call.toolName,
+					finished.call.toolCallId,
 					assembly.inputText,
-					parsed.input,
+					finished.call.input,
 				),
 			);
-			if (parsed.reason) {
-				invalidToolCalls.push({
-					toolCallId: assembly.toolCallId,
-					toolName: assembly.toolName,
-					input: parsed.invalidInput,
-					reason: parsed.reason,
-				});
-			}
-			content.push({
-				type: "tool-call",
-				toolCallId: assembly.toolCallId,
-				toolName: assembly.toolName,
-				input: parsed.input,
-				metadata: parsed.parseError
-					? mergeToolMetadata(assembly.metadata, {
-							inputParseError: parsed.parseError,
-							rawInputText: assembly.inputText,
-						})
-					: assembly.metadata,
-			});
+			content.push(finished.call);
 		}
 
 		const messageMetadata: Record<string, unknown> = {};
@@ -5305,124 +5224,6 @@ function buildEventMetadata(event: AgentRuntimeEvent): Record<string, unknown> {
 		iteration: event.snapshot.iteration,
 		eventType: event.type,
 	};
-}
-
-function mergeToolMetadata(current: unknown, patch: unknown): unknown {
-	if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
-		return patch;
-	}
-	if (!current || typeof current !== "object" || Array.isArray(current)) {
-		return patch;
-	}
-	return {
-		...(current as Record<string, unknown>),
-		...patch,
-	};
-}
-
-function parseToolInput(
-	assembly: PendingToolAssembly,
-	finishReason?: AgentModelFinishReason,
-): {
-	input: unknown;
-	parseError?: string;
-	invalidInput: Record<string, unknown>;
-	reason?: InvalidToolCall["reason"];
-} {
-	if (assembly.inputValue !== undefined) {
-		return {
-			input: assembly.inputValue,
-			invalidInput: buildInvalidToolInput(JSON.stringify(assembly.inputValue)),
-		};
-	}
-	if (!assembly.inputText.trim()) {
-		return {
-			input: {},
-			invalidInput: {},
-		};
-	}
-	const parsed = parseToolArguments(assembly.inputText);
-	if (parsed.ok) {
-		return {
-			input: parsed.value,
-			invalidInput: buildInvalidToolInput(assembly.inputText),
-		};
-	}
-	// A turn that ended at the cap did not write bad JSON, it was cut off
-	// mid-write -- and the two need completely different answers. Measured on
-	// pandorum 2026-09-18: `resolveGatewayOutputCap` takes the smallest of
-	// {configured, model max, window - input - reserve}, so the cap decays every
-	// turn (96,000 -> 12,286 across one session), and the malformed calls appear
-	// exactly at the thin end: one `editor` call of 101,300 raw characters
-	// against a 40,774-token cap, another carrying `end_line`, `intent` and
-	// `new_text` but no `path`, each immediately followed by a compaction. Told
-	// its JSON was invalid, the model goes looking for a syntax error that is
-	// not there; what it has to do is write less in one call.
-	const truncated = finishReason === "max-tokens";
-	const explanation = truncated
-		? `was cut off by the output budget before its arguments finished: the turn ended at the cap with ${assembly.inputText.length} characters of arguments written. Nothing is wrong with the payload you were writing -- there was no room left to finish it. Send the same work in smaller pieces: edit one region per call rather than rewriting the file, and keep each call's arguments short enough to complete.`
-		: `emitted invalid JSON arguments: ${parsed.error}`;
-	return {
-		input: {},
-		invalidInput: buildInvalidToolInput(assembly.inputText, parsed.error),
-		parseError: `Tool call ${assembly.toolName ?? assembly.toolCallId} ${explanation}`,
-		reason: "invalid_arguments",
-	};
-}
-
-function buildInvalidToolInput(
-	value: string,
-	parseError?: string,
-): Record<string, unknown> {
-	const trimmed = value.trim();
-	if (!trimmed) {
-		return {};
-	}
-	return parseError
-		? { rawInputText: value, parseError }
-		: { rawInputText: value };
-}
-
-function parseToolArguments(
-	value: string,
-): { ok: true; value: unknown } | { ok: false; error: string } {
-	const trimmed = value.trim();
-	if (!trimmed) {
-		return {
-			ok: false,
-			error: "Tool call arguments were empty.",
-		};
-	}
-
-	try {
-		return { ok: true, value: JSON.parse(trimmed) };
-	} catch {
-		// Fall through to a normalized error below.
-	}
-
-	if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
-		return {
-			ok: false,
-			error: "Tool call arguments must be encoded as a JSON object or array.",
-		};
-	}
-
-	return {
-		ok: false,
-		error:
-			"Tool call arguments could not be parsed as JSON. Ensure the outer tool payload is valid JSON and escape embedded quotes/newlines inside string fields.",
-	};
-}
-
-function mergeToolInputText(current: string, incoming: string): string {
-	if (!current) {
-		return incoming;
-	}
-	const trimmed = incoming.trimStart();
-	if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-		return incoming;
-	}
-	return current + incoming;
 }
 
 export function createAgentRuntime(config: AgentRuntimeConfig): AgentRuntime {

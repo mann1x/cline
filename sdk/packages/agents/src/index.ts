@@ -80,6 +80,18 @@ export {
 	isRepetitionLoop,
 	measureReasoningRepetition,
 } from "./reasoning-repetition";
+// The runtime's tool-call assembly, for a caller with model events and no
+// agent loop (a harness measuring the provider layer).
+export {
+	type FinishedToolCall,
+	type FinishedTurn,
+	type FinishToolCallsTool,
+	finishToolCalls,
+	type InvalidToolCall,
+	ToolCallAssembler,
+	type ToolCallAssembly,
+	type ToolCallDeltaEvent,
+} from "./tool-call-assembly";
 export {
 	DEFAULT_TOOL_INTENT_MAX_CHARS,
 	isToolIntentGuardEnabled,
