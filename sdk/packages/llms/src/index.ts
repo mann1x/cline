@@ -224,9 +224,11 @@ export {
 	hideNoticeLines,
 	MAX_NOTICE_STEPS,
 	type NoticeChannel,
+	type NoticeCopyBar,
 	type NoticeTemplates,
 	normalizeNoticeSteps,
 	readGenerationNoticeCapability,
+	setNoticeCopyBar,
 	setNoticeTemplates,
 	signalNoticeMessageWaiting,
 } from "./providers/vendors/generation-notices";

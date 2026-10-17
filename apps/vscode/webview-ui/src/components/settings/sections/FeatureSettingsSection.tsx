@@ -274,6 +274,7 @@ interface FeatureSettingsSectionProps {
 const NOTICE_WORDING = [
 	{
 		key: "noticeThinkTemplates",
+		copyBarKey: "noticeCopyBarThink",
 		label: "Thinking notices",
 		builtIn: [
 			"I'm settling on my approach now — about {words} words of thinking left.",
@@ -284,6 +285,7 @@ const NOTICE_WORDING = [
 	},
 	{
 		key: "noticeAnswerTemplates",
+		copyBarKey: "noticeCopyBarAnswer",
 		label: "Answer notices",
 		builtIn: [
 			"I'm wrapping up now and covering only what's essential.",
@@ -322,6 +324,8 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		defaultCappedThinkingPrompt,
 		noticeThinkTemplates,
 		noticeAnswerTemplates,
+		noticeCopyBarThink,
+		noticeCopyBarAnswer,
 		compactionStrategy,
 		editVerificationSettings,
 		atomicProtocolSettings,
@@ -1138,11 +1142,30 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 						{" {left}"} the tokens left and {"{total}"} the phase's budget. Applies from the next request, on servers
 						with notices contract v3 (opencoti, xOllama); older servers use their own lines.
 					</p>
+					<p className="text-xs text-muted-foreground">
+						Copy bar: the engine stops the model writing out a notice line again, word for word, in that phase; the
+						model writes a short line of its own instead. Off unless switched on. Sent only to servers that offer it
+						(opencoti r5 and later); applies from the next request.
+					</p>
 					{NOTICE_WORDING.map((phase) => {
 						const value = phase.key === "noticeThinkTemplates" ? noticeThinkTemplates : noticeAnswerTemplates
+						const copyBar = phase.copyBarKey === "noticeCopyBarThink" ? noticeCopyBarThink : noticeCopyBarAnswer
 						return (
 							<div className="space-y-1" key={phase.key}>
-								<span className="text-xs font-medium text-foreground">{phase.label}</span>
+								<div className="flex items-center justify-between w-full">
+									<span className="text-xs font-medium text-foreground">{phase.label}</span>
+									<label
+										className="flex items-center gap-2 text-xs text-muted-foreground"
+										htmlFor={phase.copyBarKey}>
+										Copy bar
+										<Switch
+											checked={copyBar === true}
+											className="shrink-0"
+											id={phase.copyBarKey}
+											onCheckedChange={(checked) => updateSetting(phase.copyBarKey, checked)}
+										/>
+									</label>
+								</div>
 								<DebouncedTextArea
 									initialValue={value ?? ""}
 									maxRows={8}

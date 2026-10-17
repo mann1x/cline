@@ -1,4 +1,4 @@
-import { setNoticeTemplates } from "@cline/llms"
+import { setNoticeCopyBar, setNoticeTemplates } from "@cline/llms"
 
 /**
  * The wording of the engine's generation notices (Settings > Features), one
@@ -14,4 +14,13 @@ export function noticeTemplateLines(value: string | undefined): string[] {
 
 export function applyNoticeTemplates(think: string | undefined, answer: string | undefined): void {
 	setNoticeTemplates({ think: noticeTemplateLines(think), answer: noticeTemplateLines(answer) })
+}
+
+/**
+ * The copy bar per phase (Settings > Features): the engine refuses a token
+ * that would continue a copy of a notice line it planted. Off unless switched
+ * on; sent only to a v3 server that takes it (`generation_notice_copy_bar`).
+ */
+export function applyNoticeCopyBar(think: boolean | undefined, answer: boolean | undefined): void {
+	setNoticeCopyBar({ think: think === true, answer: answer === true })
 }

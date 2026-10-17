@@ -247,6 +247,8 @@ export interface ExtensionState {
 	cappedThinkingPrompt?: string
 	noticeThinkTemplates?: string
 	noticeAnswerTemplates?: string
+	noticeCopyBarThink?: boolean
+	noticeCopyBarAnswer?: boolean
 	/** The built-in continuation-note instruction, so the field can show what it replaces. */
 	defaultCappedThinkingPrompt?: string
 	/** Focus Chain / task checklist. Read by the webview so the panel and the

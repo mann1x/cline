@@ -367,6 +367,8 @@ message Settings {
   optional bool save_model_requests = 249;
   optional string notice_think_templates = 250;
   optional string notice_answer_templates = 251;
+  optional bool notice_copy_bar_think = 252;
+  optional bool notice_copy_bar_answer = 253;
 }
 
 message State {
@@ -609,6 +611,9 @@ message UpdateSettingsRequest {
   // Generation notice wording, one line per step (Settings > Features).
   optional string notice_think_templates = 114;
   optional string notice_answer_templates = 115;
+  // The engine's copy bar per phase (Settings > Features); off by default.
+  optional bool notice_copy_bar_think = 116;
+  optional bool notice_copy_bar_answer = 117;
   // Two reviewers correct the compaction summary against one half of the
   // transcript each, and a synthesiser merges their corrections.
   optional bool council_compaction_enabled = 74;

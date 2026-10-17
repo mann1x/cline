@@ -14,7 +14,7 @@ import { HookProcessRegistry } from "./core/hooks/HookProcessRegistry"
 import { StateManager } from "./core/storage/StateManager"
 import { ExtensionRegistryInfo } from "./registry"
 import { applyModelRequestCapture } from "./sdk/model-request-capture"
-import { applyNoticeTemplates } from "./sdk/notice-templates"
+import { applyNoticeCopyBar, applyNoticeTemplates } from "./sdk/notice-templates"
 import { registerVsCodeLmHandler } from "./sdk/vscode-lm/register-vscode-lm"
 import { registerClineClientIdentity } from "./services/ClineClientIdentity"
 import { ErrorService } from "./services/error"
@@ -99,6 +99,10 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	applyNoticeTemplates(
 		stateManager.getGlobalSettingsKey("noticeThinkTemplates"),
 		stateManager.getGlobalSettingsKey("noticeAnswerTemplates"),
+	)
+	applyNoticeCopyBar(
+		stateManager.getGlobalSettingsKey("noticeCopyBarThink"),
+		stateManager.getGlobalSettingsKey("noticeCopyBarAnswer"),
 	)
 	// Settings are shared with every other window: show a change made there.
 	stateManager.registerCallbacks({ onSyncExternalChange: () => webview.controller.postStateToWebview() })

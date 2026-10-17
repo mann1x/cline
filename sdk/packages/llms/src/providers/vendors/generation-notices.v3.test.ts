@@ -5,11 +5,15 @@ import {
 	readGenerationNoticeCapability,
 	readNoticeFields,
 	resetNoticeRequests,
+	setNoticeCopyBar,
 	setNoticeTemplates,
 	withGenerationNotices,
 } from "./generation-notices";
 
-afterEach(() => resetNoticeRequests());
+afterEach(() => {
+	resetNoticeRequests();
+	setNoticeCopyBar(undefined);
+});
 
 // opencoti docs/llamafile-flags.md "Generation notices (contract v3)", f89f9bee7a.
 const THINK_80 =
@@ -58,6 +62,47 @@ describe("notices v3", () => {
 			think: [{ at_percent: 60 }, { at_percent: 80 }],
 			answer: [{ at_percent: 70 }],
 		});
+	});
+
+	it("reads the copy bar from the feature or the /props block, v3 only", () => {
+		expect(
+			readGenerationNoticeCapability({
+				...V3_PROPS,
+				features: [...V3_PROPS.features, "generation_notice_copy_bar"],
+			}).copyBar,
+		).toBe(true);
+		expect(
+			readGenerationNoticeCapability({
+				features: ["generation_notice_v3"],
+				generation_notice: {
+					v3: { copy_bar: { think: true, answer: true } },
+				},
+			}).copyBar,
+		).toBe(true);
+		expect(readGenerationNoticeCapability(V3_PROPS).copyBar).toBeUndefined();
+		expect(
+			readGenerationNoticeCapability({
+				features: ["generation_notice_v2", "generation_notice_copy_bar"],
+			}).copyBar,
+		).toBeUndefined();
+	});
+
+	it("says the copy bar per phase, off by default, only where it is taken", () => {
+		const settings = { enabled: true, thinkSteps: [80], answerSteps: [80] };
+		expect(
+			buildNoticesField(settings, "k", { v3: true, copyBar: true })?.copy_bar,
+		).toEqual({ think: false, answer: false });
+		setNoticeCopyBar({ think: true });
+		expect(
+			buildNoticesField(settings, "k", { v3: true, copyBar: true })?.copy_bar,
+		).toEqual({ think: true, answer: false });
+		// An older v3 engine, or a v2 one, answers the field with a 400.
+		expect(
+			buildNoticesField(settings, "k", { v3: true })?.copy_bar,
+		).toBeUndefined();
+		expect(
+			buildNoticesField(settings, "k", { copyBar: true })?.copy_bar,
+		).toBeUndefined();
 	});
 
 	it("keeps a template to one line", () => {

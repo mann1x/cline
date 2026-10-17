@@ -451,6 +451,10 @@ const USER_SETTINGS_FIELDS = {
 	// takes the engine's own. See `sdk/notice-templates.ts`.
 	noticeThinkTemplates: { default: "" as string },
 	noticeAnswerTemplates: { default: "" as string },
+	// The engine's copy bar per phase; off unless switched on. See
+	// `sdk/notice-templates.ts`.
+	noticeCopyBarThink: { default: false as boolean },
+	noticeCopyBarAnswer: { default: false as boolean },
 	subagentsEnabled: { default: false as boolean },
 	// Whether a delegated agent is offered `run_commands` at all. Off by default:
 	// a delegate's commands run in a sandbox rooted at the native launcher, and

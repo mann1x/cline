@@ -61,6 +61,9 @@ export const GENERATION_NOTICE_FEATURES: readonly string[] = [
 /** The v3 contract: exact lines in the stream, templates in plain text. */
 export const GENERATION_NOTICE_V3_FEATURE = "generation_notice_v3";
 
+/** v3 servers that take `copy_bar` (opencoti #1590); others refuse it. */
+export const GENERATION_NOTICE_COPY_BAR_FEATURE = "generation_notice_copy_bar";
+
 /** A v2 notice runs from `open` at a line start through `close`, or to its line's end. */
 export interface NoticeSpan {
 	open: string;
@@ -79,6 +82,8 @@ export interface GenerationNoticeCapability {
 	marker?: string;
 	/** v3: the request may say `version: 3`, and the engine names its lines. */
 	v3?: boolean;
+	/** v3: the request may carry `copy_bar`. */
+	copyBar?: boolean;
 	/** v2: the spans a planted notice occupies. */
 	hide?: NoticeSpan[];
 }
@@ -212,6 +217,29 @@ export function getNoticeTemplates(): {
 }
 
 /**
+ * The copy bar, per phase (Settings > Features; opencoti #1590): the engine
+ * refuses a token that would continue a copy of a line it planted in this
+ * response. The engine has it on unless told otherwise; here it is off unless
+ * switched on, so every request to a server that takes it says which.
+ */
+export interface NoticeCopyBar {
+	think: boolean;
+	answer: boolean;
+}
+
+let copyBar: NoticeCopyBar = { think: false, answer: false };
+
+export function setNoticeCopyBar(
+	next: Partial<NoticeCopyBar> | undefined,
+): void {
+	copyBar = { think: next?.think === true, answer: next?.answer === true };
+}
+
+export function getNoticeCopyBar(): NoticeCopyBar {
+	return copyBar;
+}
+
+/**
  * Read the capability from a server's own description of itself: opencoti's
  * `/props` or xOllama's `/api/xollama`. Both carry `features`; the marker is
  * the `generation_notice` object's `marker`.
@@ -247,17 +275,27 @@ export function readGenerationNoticeCapability(body: {
 	}
 	const v3Block =
 		block?.v3 && typeof block.v3 === "object"
-			? (block.v3 as { think?: unknown; answer?: unknown; message?: unknown })
+			? (block.v3 as {
+					think?: unknown;
+					answer?: unknown;
+					message?: unknown;
+					copy_bar?: unknown;
+				})
 			: undefined;
 	for (const form of readV3Forms(v3Block)) {
 		SERVER_FORMS.add(form);
 	}
 	const v3 =
 		features.includes(GENERATION_NOTICE_V3_FEATURE) || v3Block !== undefined;
+	const copyBarTaken =
+		v3 &&
+		(features.includes(GENERATION_NOTICE_COPY_BAR_FEATURE) ||
+			(v3Block?.copy_bar !== undefined && v3Block.copy_bar !== null));
 	return {
 		supported,
 		...(marker ? { marker } : {}),
 		...(v3 ? { v3: true } : {}),
+		...(copyBarTaken ? { copyBar: true } : {}),
 		...(hide.length > 0 ? { hide } : {}),
 	};
 }
@@ -494,7 +532,7 @@ export function normalizeNoticeSteps(
 export function buildNoticesField(
 	settings: GenerationNoticeSettings | undefined,
 	key: string,
-	options?: { v3?: boolean },
+	options?: { v3?: boolean; copyBar?: boolean },
 ): Record<string, unknown> | undefined {
 	if (settings?.enabled !== true) {
 		return undefined;
@@ -517,6 +555,9 @@ export function buildNoticesField(
 		key,
 		...(think.length > 0 ? { think: steps(think, templates.think) } : {}),
 		...(answer.length > 0 ? { answer: steps(answer, templates.answer) } : {}),
+		// Always said where it is taken: the engine's own default is on. Never
+		// sent elsewhere: a v2 request with it, or an older v3 engine, is a 400.
+		...(v3 && options?.copyBar === true ? { copy_bar: { ...copyBar } } : {}),
 	};
 }
 
@@ -822,7 +863,10 @@ export function withGenerationNotices(
 		}
 		const key = newNoticeKey(options.sessionId);
 		const v3 = capability.v3 === true;
-		const notices = buildNoticesField(options.settings, key, { v3 });
+		const notices = buildNoticesField(options.settings, key, {
+			v3,
+			copyBar: capability.copyBar === true,
+		});
 		if (!notices) {
 			return baseFetch(input, init);
 		}
