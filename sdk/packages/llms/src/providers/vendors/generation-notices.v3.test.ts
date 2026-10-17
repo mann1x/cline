@@ -140,6 +140,18 @@ describe("notices v3", () => {
 		);
 	});
 
+	it("removes the exact break the engine wrote after the line", () => {
+		const line = "I'm writing the conclusion now.";
+		readNoticeFields(
+			`data: {"notice":{"index":1,"phase":"answer","channel":"content","text":${JSON.stringify(line)},"break":"\\n\\n"}}`,
+		);
+		expect(
+			hideKnownNoticeLines(`First paragraph.\n\n${line}\n\nLast one.`, {
+				channel: "text",
+			}),
+		).toBe("First paragraph.\n\nLast one.");
+	});
+
 	it("hides a whole line equal to a built-in form or our own template when no stream named it", () => {
 		readGenerationNoticeCapability(V3_PROPS);
 		setNoticeTemplates({ answer: ["Finish now, {left} tokens left."] });

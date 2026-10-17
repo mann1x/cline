@@ -111,6 +111,13 @@ const ANNOUNCED: Record<NoticeChannel, string[]> = { reasoning: [], text: [] };
 const MAX_ANNOUNCED = 32;
 
 /**
+ * The exact line break an engine wrote after a named line ("\n", or "\n\n"
+ * at a paragraph break; opencoti #1583), removed with it. Without one, one
+ * line break is.
+ */
+const BREAKS = new Map<string, string>();
+
+/**
  * Remember a line an engine says it planted. `channel` is where the engine
  * wrote it ("reasoning" or "content"), and decides: a waiting-message line
  * planted while the model still thinks is in the reasoning (opencoti #1579).
@@ -120,6 +127,7 @@ export function noteAnnouncedNotice(
 	phase: unknown,
 	text: unknown,
 	written?: unknown,
+	lineBreak?: unknown,
 ): void {
 	if (typeof text !== "string" || text.trim() === "") {
 		return;
@@ -139,8 +147,18 @@ export function noteAnnouncedNotice(
 		list.splice(at, 1);
 	}
 	list.push(line);
+	if (typeof lineBreak === "string" && /^(\r?\n){0,2}$/.test(lineBreak)) {
+		BREAKS.set(line, lineBreak);
+	}
 	if (list.length > MAX_ANNOUNCED) {
-		list.shift();
+		const dropped = list.shift();
+		if (
+			dropped !== undefined &&
+			!ANNOUNCED.reasoning.includes(dropped) &&
+			!ANNOUNCED.text.includes(dropped)
+		) {
+			BREAKS.delete(dropped);
+		}
 	}
 }
 
@@ -354,11 +372,20 @@ export function hideAnnouncedNotices(
 				continue;
 			}
 			let cut = end;
-			if (shown[cut] === "\r") {
-				cut += 1;
-			}
-			if (shown[cut] === "\n") {
-				cut += 1;
+			const written = BREAKS.get(notice);
+			if (
+				written !== undefined &&
+				written !== "" &&
+				shown.startsWith(written, end)
+			) {
+				cut += written.length;
+			} else {
+				if (shown[cut] === "\r") {
+					cut += 1;
+				}
+				if (shown[cut] === "\n") {
+					cut += 1;
+				}
 			}
 			shown = shown.slice(0, at) + shown.slice(cut);
 			from = at;
@@ -586,6 +613,7 @@ export function resetNoticeRequests(): void {
 	SERVER_FORMS.clear();
 	ANNOUNCED.reasoning.length = 0;
 	ANNOUNCED.text.length = 0;
+	BREAKS.clear();
 	templates = { think: [], answer: [] };
 }
 
@@ -639,7 +667,12 @@ export function readNoticeFields(line: string): void {
 	}
 	const json = line.startsWith("data:") ? line.slice(5).trim() : line.trim();
 	let chunk: {
-		notice?: { phase?: unknown; text?: unknown; channel?: unknown };
+		notice?: {
+			phase?: unknown;
+			text?: unknown;
+			channel?: unknown;
+			break?: unknown;
+		};
 		notices?: unknown;
 		timings?: { notices?: unknown };
 	};
@@ -653,6 +686,7 @@ export function readNoticeFields(line: string): void {
 			chunk.notice.phase,
 			chunk.notice.text,
 			chunk.notice.channel,
+			chunk.notice.break,
 		);
 	}
 	for (const list of [chunk?.timings?.notices, chunk?.notices]) {
@@ -663,8 +697,14 @@ export function readNoticeFields(line: string): void {
 					phase?: unknown;
 					text?: unknown;
 					channel?: unknown;
+					break?: unknown;
 				} | null;
-				noteAnnouncedNotice(notice?.phase, notice?.text, notice?.channel);
+				noteAnnouncedNotice(
+					notice?.phase,
+					notice?.text,
+					notice?.channel,
+					notice?.break,
+				);
 			}
 		}
 	}
