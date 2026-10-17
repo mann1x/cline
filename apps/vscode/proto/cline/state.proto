@@ -365,6 +365,8 @@ message Settings {
   optional bool tool_intent_guard_enabled = 247;
   optional string open_telemetry_traces_exporter = 248;
   optional bool save_model_requests = 249;
+  optional string notice_think_templates = 250;
+  optional string notice_answer_templates = 251;
 }
 
 message State {
@@ -604,6 +606,9 @@ message UpdateSettingsRequest {
   optional int32 message_history_limit = 111;
   // Save every model request's body under <dataDir>/logs/requests.
   optional bool save_model_requests = 113;
+  // Generation notice wording, one line per step (Settings > Features).
+  optional string notice_think_templates = 114;
+  optional string notice_answer_templates = 115;
   // Two reviewers correct the compaction summary against one half of the
   // transcript each, and a synthesiser merges their corrections.
   optional bool council_compaction_enabled = 74;

@@ -76,6 +76,8 @@ export async function getStateToPostToWebview(controller: {
 	const updateChannel = stateManager.getGlobalSettingsKey("updateChannel")
 	const availableUpdate = stateManager.getGlobalSettingsKey("availableUpdate")
 	const cappedThinkingPrompt = stateManager.getGlobalSettingsKey("cappedThinkingPrompt")
+	const noticeThinkTemplates = stateManager.getGlobalSettingsKey("noticeThinkTemplates")
+	const noticeAnswerTemplates = stateManager.getGlobalSettingsKey("noticeAnswerTemplates")
 	const focusChainSettings = stateManager.getGlobalSettingsKey("focusChainSettings")
 	const compactionStrategy = readCompactionStrategyGlobally()
 	const webSearchEnabled = isModelToolEnabledGlobally("web_search")
@@ -233,6 +235,8 @@ export async function getStateToPostToWebview(controller: {
 		availableUpdate,
 		news: getCurrentNews(),
 		cappedThinkingPrompt,
+		noticeThinkTemplates,
+		noticeAnswerTemplates,
 		defaultCappedThinkingPrompt: DEFAULT_CAPPED_THINKING_PROMPT,
 		focusChainSettings,
 		compactionStrategy,

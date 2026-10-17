@@ -3128,7 +3128,10 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						say: "text",
 						// A generation notice is hidden from the chat and nowhere
 						// else: the transcript keeps it (`generation-notices.ts`).
-						text: hideKnownNoticeLines(state.appendStreamingText(event.text ?? ""), { streaming: true }),
+						text: hideKnownNoticeLines(state.appendStreamingText(event.text ?? ""), {
+							streaming: true,
+							channel: "text",
+						}),
 						partial: true,
 					})
 					break
@@ -3140,6 +3143,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					const ts = state.getStreamingReasoningTs()
 					const reasoning = hideKnownNoticeLines(state.appendStreamingReasoning(event.reasoning ?? ""), {
 						streaming: true,
+						channel: "reasoning",
 					})
 					messages.push({
 						ts,
@@ -3460,7 +3464,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 				case "text": {
 					const ts = state.clearStreamingText()
 					const finalText = event.text ?? ""
-					const shownText = hideKnownNoticeLines(finalText)
+					const shownText = hideKnownNoticeLines(finalText, { channel: "text" })
 					messages.push({
 						ts,
 						type: "say",
@@ -3480,7 +3484,7 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					const ts = state.clearStreamingReasoning()
 					const reasoning = event.reasoning ?? ""
 					state.noteIterationReasoning(reasoning)
-					const shownReasoning = hideKnownNoticeLines(reasoning)
+					const shownReasoning = hideKnownNoticeLines(reasoning, { channel: "reasoning" })
 					messages.push({
 						ts,
 						type: "say",

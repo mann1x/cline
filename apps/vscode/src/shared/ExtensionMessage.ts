@@ -245,6 +245,8 @@ export interface ExtensionState {
 	news?: NewsItem[]
 	/** Replaces the built-in continuation-note instruction; empty means default. */
 	cappedThinkingPrompt?: string
+	noticeThinkTemplates?: string
+	noticeAnswerTemplates?: string
 	/** The built-in continuation-note instruction, so the field can show what it replaces. */
 	defaultCappedThinkingPrompt?: string
 	/** Focus Chain / task checklist. Read by the webview so the panel and the

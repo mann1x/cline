@@ -216,14 +216,18 @@ export {
 	createCline,
 } from "./providers/vendors/cline";
 export {
+	buildNoticesField,
 	DEFAULT_NOTICE_STEPS,
 	type GenerationNoticeCapability,
 	type GenerationNoticeSettings,
 	hideKnownNoticeLines,
 	hideNoticeLines,
 	MAX_NOTICE_STEPS,
+	type NoticeChannel,
+	type NoticeTemplates,
 	normalizeNoticeSteps,
 	readGenerationNoticeCapability,
+	setNoticeTemplates,
 	signalNoticeMessageWaiting,
 } from "./providers/vendors/generation-notices";
 export {

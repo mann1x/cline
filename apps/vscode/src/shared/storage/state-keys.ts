@@ -447,6 +447,10 @@ const USER_SETTINGS_FIELDS = {
 	// point is that someone who never saw the toast still finds out.
 	availableUpdate: { default: "" as string },
 	cappedThinkingPrompt: { default: "" as string },
+	// The wording of each generation notice step, one line per step; blank
+	// takes the engine's own. See `sdk/notice-templates.ts`.
+	noticeThinkTemplates: { default: "" as string },
+	noticeAnswerTemplates: { default: "" as string },
 	subagentsEnabled: { default: false as boolean },
 	// Whether a delegated agent is offered `run_commands` at all. Off by default:
 	// a delegate's commands run in a sandbox rooted at the native launcher, and

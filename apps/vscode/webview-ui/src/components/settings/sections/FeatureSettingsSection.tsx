@@ -265,6 +265,35 @@ interface FeatureSettingsSectionProps {
 	renderSectionHeader: (tabId: string) => JSX.Element | null
 }
 
+/**
+ * The engine's built-in v3 notice lines, one per step at 60/70/80/90 %, as
+ * opencoti publishes them (docs/llamafile-flags.md, contract v3). Restated
+ * for the placeholder and "Load default" only: the webview cannot ask the
+ * server, and an unset field sends nothing, so the engine's own line is used.
+ */
+const NOTICE_WORDING = [
+	{
+		key: "noticeThinkTemplates",
+		label: "Thinking notices",
+		builtIn: [
+			"I'm settling on my approach now — about {words} words of thinking left.",
+			"I'm finishing this step and dropping the alternatives — about {words} words left.",
+			"I'm stopping my thinking now and writing the answer — only {words} words left.",
+			"I'm answering now — under {words} words left.",
+		].join("\n"),
+	},
+	{
+		key: "noticeAnswerTemplates",
+		label: "Answer notices",
+		builtIn: [
+			"I'm wrapping up now and covering only what's essential.",
+			"I'm skipping the remaining details and moving to the conclusion.",
+			"I'm writing the conclusion now.",
+			"I'm closing the reply with one sentence.",
+		].join("\n"),
+	},
+] as const
+
 const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionProps) => {
 	const {
 		enableCheckpointsSetting,
@@ -291,6 +320,8 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		cappedThinkingEnabled,
 		cappedThinkingPrompt,
 		defaultCappedThinkingPrompt,
+		noticeThinkTemplates,
+		noticeAnswerTemplates,
 		compactionStrategy,
 		editVerificationSettings,
 		atomicProtocolSettings,
@@ -1094,6 +1125,47 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 							</VSCodeButton>
 						) : null}
 					</div>
+				</div>
+
+				{/* Generation notices are asked per profile (the provider panel's
+				    Notices section); their wording is one setting for all. */}
+				<div className="space-y-2 pt-2">
+					<Label className="text-sm font-medium text-foreground">Generation Notice Wording</Label>
+					<p className="text-xs text-muted-foreground">
+						The line the engine writes into the model's output as its thinking or answer room runs out, when
+						Generation notices are on for the profile. One line per step, in step order: line 1 is the first step (60%
+						by default). A blank line, or none, keeps the engine's own line. {"{words}"} is the words left,
+						{" {left}"} the tokens left and {"{total}"} the phase's budget. Applies from the next request, on servers
+						with notices contract v3 (opencoti, xOllama); older servers use their own lines.
+					</p>
+					{NOTICE_WORDING.map((phase) => {
+						const value = phase.key === "noticeThinkTemplates" ? noticeThinkTemplates : noticeAnswerTemplates
+						return (
+							<div className="space-y-1" key={phase.key}>
+								<span className="text-xs font-medium text-foreground">{phase.label}</span>
+								<DebouncedTextArea
+									initialValue={value ?? ""}
+									maxRows={8}
+									minRows={4}
+									onChange={(next) => updateSetting(phase.key, next)}
+									placeholder={phase.builtIn}
+								/>
+								<div className="flex flex-wrap items-start gap-2">
+									<LoadDefaultPromptButton
+										currentValue={value}
+										defaultValue={phase.builtIn}
+										label={phase.label}
+										onLoad={(next) => updateSetting(phase.key, next)}
+									/>
+									{value?.trim() ? (
+										<VSCodeButton appearance="secondary" onClick={() => updateSetting(phase.key, "")}>
+											Reset to default
+										</VSCodeButton>
+									) : null}
+								</div>
+							</div>
+						)
+					})}
 				</div>
 			</Section>
 		</div>
