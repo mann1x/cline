@@ -12,6 +12,7 @@ import { wrapLanguageModel } from "ai";
 import { z } from "zod";
 import type { PolykvOptions } from "../config";
 import { sleep as abortableSleep } from "../middleware/backoff";
+import { createDropAbandonedToolCallsMiddleware } from "../middleware/drop-abandoned-tool-calls";
 import { DEFAULT_MAX_RETRY_AFTER_MS } from "../middleware/retry-rate-limit";
 import { splitToolImagesMiddleware } from "../middleware/split-tool-images";
 import { primeTemplateReinjection } from "../reasoning-history";
@@ -2400,7 +2401,18 @@ export async function createOpencotiProviderModule(
 			language: (modelId: string) =>
 				wrapLanguageModel({
 					model: withOpencotiErrors(provider(modelId) as LanguageModelV4),
-					middleware: splitToolImagesMiddleware,
+					middleware: [
+						// A streamed call the engine abandoned arrives again as text;
+						// its partial is dropped (`tool_call_abandon_v1`).
+						createDropAbandonedToolCallsMiddleware({
+							onAbandoned: (call) =>
+								context.logger?.log(
+									`[opencoti] the engine abandoned a streamed ${call.name ?? "tool"} call (${call.reason ?? "unparsable"}); its text arrives as ${call.channel ?? "content"} and the partial call is dropped`,
+									{ severity: "warn" },
+								),
+						}),
+						splitToolImagesMiddleware,
+					],
 				}) as LanguageModelV4,
 		},
 	};
