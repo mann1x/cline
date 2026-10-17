@@ -18,9 +18,10 @@ export function applyNoticeTemplates(think: string | undefined, answer: string |
 
 /**
  * The copy bar per phase (Settings > Features): the engine refuses a token
- * that would continue a copy of a notice line it planted. Off unless switched
- * on; sent only to a v3 server that takes it (`generation_notice_copy_bar`).
+ * that would continue a copy of a notice line it planted. On for thinking and
+ * off for the answer unless set; sent only to a v3 server that takes it
+ * (`generation_notice_copy_bar`).
  */
 export function applyNoticeCopyBar(think: boolean | undefined, answer: boolean | undefined): void {
-	setNoticeCopyBar({ think: think === true, answer: answer === true })
+	setNoticeCopyBar({ think, answer })
 }

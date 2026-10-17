@@ -275,6 +275,7 @@ const NOTICE_WORDING = [
 	{
 		key: "noticeThinkTemplates",
 		copyBarKey: "noticeCopyBarThink",
+		copyBarDefault: true,
 		label: "Thinking notices",
 		builtIn: [
 			"I'm settling on my approach now — about {words} words of thinking left.",
@@ -286,6 +287,7 @@ const NOTICE_WORDING = [
 	{
 		key: "noticeAnswerTemplates",
 		copyBarKey: "noticeCopyBarAnswer",
+		copyBarDefault: false,
 		label: "Answer notices",
 		builtIn: [
 			"I'm wrapping up now and covering only what's essential.",
@@ -1144,8 +1146,8 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 					</p>
 					<p className="text-xs text-muted-foreground">
 						Copy bar: the engine stops the model writing out a notice line again, word for word, in that phase; the
-						model writes a short line of its own instead. Off unless switched on. Sent only to servers that offer it
-						(opencoti r5 and later); applies from the next request.
+						model writes a short line of its own instead. On for thinking and off for the answer by default. Sent only
+						to servers that offer it (opencoti r5 and later); applies from the next request.
 					</p>
 					{NOTICE_WORDING.map((phase) => {
 						const value = phase.key === "noticeThinkTemplates" ? noticeThinkTemplates : noticeAnswerTemplates
@@ -1159,7 +1161,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 										htmlFor={phase.copyBarKey}>
 										Copy bar
 										<Switch
-											checked={copyBar === true}
+											checked={copyBar ?? phase.copyBarDefault}
 											className="shrink-0"
 											id={phase.copyBarKey}
 											onCheckedChange={(checked) => updateSetting(phase.copyBarKey, checked)}

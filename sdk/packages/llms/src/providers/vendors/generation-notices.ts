@@ -219,20 +219,30 @@ export function getNoticeTemplates(): {
 /**
  * The copy bar, per phase (Settings > Features; opencoti #1590): the engine
  * refuses a token that would continue a copy of a line it planted in this
- * response. The engine has it on unless told otherwise; here it is off unless
- * switched on, so every request to a server that takes it says which.
+ * response. The engine has it on in both phases unless told otherwise; here
+ * it is on for thinking, where the copies were measured (1-2 % of Qwen3.6-27B
+ * thinking requests, up to 21 in a row), and off for the answer, where the bar
+ * showed no difference. Every request to a server that takes it says which.
  */
 export interface NoticeCopyBar {
 	think: boolean;
 	answer: boolean;
 }
 
-let copyBar: NoticeCopyBar = { think: false, answer: false };
+export const DEFAULT_NOTICE_COPY_BAR: Readonly<NoticeCopyBar> = {
+	think: true,
+	answer: false,
+};
+
+let copyBar: NoticeCopyBar = { ...DEFAULT_NOTICE_COPY_BAR };
 
 export function setNoticeCopyBar(
 	next: Partial<NoticeCopyBar> | undefined,
 ): void {
-	copyBar = { think: next?.think === true, answer: next?.answer === true };
+	copyBar = {
+		think: next?.think ?? DEFAULT_NOTICE_COPY_BAR.think,
+		answer: next?.answer ?? DEFAULT_NOTICE_COPY_BAR.answer,
+	};
 }
 
 export function getNoticeCopyBar(): NoticeCopyBar {

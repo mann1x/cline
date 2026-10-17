@@ -87,15 +87,19 @@ describe("notices v3", () => {
 		).toBeUndefined();
 	});
 
-	it("says the copy bar per phase, off by default, only where it is taken", () => {
+	it("says the copy bar per phase, on for thinking by default, only where it is taken", () => {
 		const settings = { enabled: true, thinkSteps: [80], answerSteps: [80] };
 		expect(
 			buildNoticesField(settings, "k", { v3: true, copyBar: true })?.copy_bar,
-		).toEqual({ think: false, answer: false });
-		setNoticeCopyBar({ think: true });
+		).toEqual({ think: true, answer: false });
+		setNoticeCopyBar({ think: false, answer: true });
 		expect(
 			buildNoticesField(settings, "k", { v3: true, copyBar: true })?.copy_bar,
-		).toEqual({ think: true, answer: false });
+		).toEqual({ think: false, answer: true });
+		setNoticeCopyBar({ answer: true });
+		expect(
+			buildNoticesField(settings, "k", { v3: true, copyBar: true })?.copy_bar,
+		).toEqual({ think: true, answer: true });
 		// An older v3 engine, or a v2 one, answers the field with a 400.
 		expect(
 			buildNoticesField(settings, "k", { v3: true })?.copy_bar,
