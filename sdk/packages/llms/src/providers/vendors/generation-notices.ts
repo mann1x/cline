@@ -110,12 +110,28 @@ export type NoticeChannel = "reasoning" | "text";
 const ANNOUNCED: Record<NoticeChannel, string[]> = { reasoning: [], text: [] };
 const MAX_ANNOUNCED = 32;
 
-/** Remember a line an engine says it planted. */
-export function noteAnnouncedNotice(phase: unknown, text: unknown): void {
+/**
+ * Remember a line an engine says it planted. `channel` is where the engine
+ * wrote it ("reasoning" or "content"), and decides: a waiting-message line
+ * planted while the model still thinks is in the reasoning (opencoti #1579).
+ * Without it, the phase does: thinking in the reasoning, the rest in the reply.
+ */
+export function noteAnnouncedNotice(
+	phase: unknown,
+	text: unknown,
+	written?: unknown,
+): void {
 	if (typeof text !== "string" || text.trim() === "") {
 		return;
 	}
-	const channel: NoticeChannel = phase === "thinking" ? "reasoning" : "text";
+	const channel: NoticeChannel =
+		written === "reasoning"
+			? "reasoning"
+			: written === "content"
+				? "text"
+				: phase === "thinking"
+					? "reasoning"
+					: "text";
 	const list = ANNOUNCED[channel];
 	const line = text.trim();
 	const at = list.indexOf(line);
@@ -623,7 +639,7 @@ export function readNoticeFields(line: string): void {
 	}
 	const json = line.startsWith("data:") ? line.slice(5).trim() : line.trim();
 	let chunk: {
-		notice?: { phase?: unknown; text?: unknown };
+		notice?: { phase?: unknown; text?: unknown; channel?: unknown };
 		notices?: unknown;
 		timings?: { notices?: unknown };
 	};
@@ -633,13 +649,22 @@ export function readNoticeFields(line: string): void {
 		return;
 	}
 	if (chunk?.notice && typeof chunk.notice === "object") {
-		noteAnnouncedNotice(chunk.notice.phase, chunk.notice.text);
+		noteAnnouncedNotice(
+			chunk.notice.phase,
+			chunk.notice.text,
+			chunk.notice.channel,
+		);
 	}
 	for (const list of [chunk?.timings?.notices, chunk?.notices]) {
 		if (Array.isArray(list)) {
 			for (const entry of list) {
-				const notice = entry as { phase?: unknown; text?: unknown } | null;
-				noteAnnouncedNotice(notice?.phase, notice?.text);
+				// A line cut by the reasoning budget lists the part written.
+				const notice = entry as {
+					phase?: unknown;
+					text?: unknown;
+					channel?: unknown;
+				} | null;
+				noteAnnouncedNotice(notice?.phase, notice?.text, notice?.channel);
 			}
 		}
 	}

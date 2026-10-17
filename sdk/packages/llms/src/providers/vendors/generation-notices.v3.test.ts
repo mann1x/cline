@@ -124,6 +124,22 @@ describe("notices v3", () => {
 		).toBe("Done.\n\n");
 	});
 
+	it("hides a waiting-message line where the engine wrote it, by its channel", () => {
+		const line =
+			"A new message is waiting, so I'm finishing this reply briefly.";
+		readNoticeFields(
+			`data: {"notice":{"index":2,"phase":"message","channel":"reasoning","text":${JSON.stringify(line)}}}`,
+		);
+		expect(
+			hideKnownNoticeLines(`Still checking.\n${line}\n`, {
+				channel: "reasoning",
+			}),
+		).toBe("Still checking.\n");
+		expect(hideKnownNoticeLines(`Reply.\n${line}`, { channel: "text" })).toBe(
+			`Reply.\n${line}`,
+		);
+	});
+
 	it("hides a whole line equal to a built-in form or our own template when no stream named it", () => {
 		readGenerationNoticeCapability(V3_PROPS);
 		setNoticeTemplates({ answer: ["Finish now, {left} tokens left."] });
