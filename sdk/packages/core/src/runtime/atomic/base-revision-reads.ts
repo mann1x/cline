@@ -18,6 +18,7 @@
  * a model that leans on it cannot thrash with it.
  */
 
+import { readFile } from "node:fs/promises";
 import * as path from "node:path";
 import type {
 	AgentTool,
@@ -337,6 +338,12 @@ function isOriginal(requested: string): boolean {
  */
 interface RevisionPlace {
 	readonly root: string;
+	/**
+	 * Whether `resolve` reads a snapshot. Without one, a file inside the root
+	 * resolves as `created` whatever it is -- "the log decides" -- and a file
+	 * nothing has written has no log, so that answer must not reach the model.
+	 */
+	readonly snapshotBacked: boolean;
 	resolve(requestedPath: string): BaseFileLookup;
 }
 
@@ -345,6 +352,7 @@ function placeOf(source: BaseRevisionSource): RevisionPlace | undefined {
 	if (snapshot) {
 		return {
 			root: snapshot.root,
+			snapshotBacked: true,
 			resolve: (requestedPath) => resolveBaseFile(snapshot, requestedPath),
 		};
 	}
@@ -354,6 +362,7 @@ function placeOf(source: BaseRevisionSource): RevisionPlace | undefined {
 	const root = source.root;
 	return {
 		root,
+		snapshotBacked: false,
 		resolve: (requestedPath) => resolveSessionFile(root, requestedPath),
 	};
 }
@@ -386,6 +395,48 @@ async function readFromRevision(
 					result: "",
 					error: describeMissingBase(lookup),
 					success: false,
+				};
+			}
+			// Nothing has written it and no snapshot was taken, so its original
+			// is the file on disk. pandorum, 2026-10-18 (ptm1c): three reads of
+			// `revision: "original"` before any edit were each told "This
+			// transaction created that file" about a file the model had just
+			// read, and the model went round on it.
+			if (
+				!place.snapshotBacked &&
+				isOriginal(requested) &&
+				source.revisions.revisions(lookup.absolutePath).length === 0
+			) {
+				const onDisk = await readFile(lookup.absolutePath).catch(
+					() => undefined,
+				);
+				if (!onDisk) {
+					return {
+						query,
+						result: "",
+						error: `That file does not exist, and nothing has written it in ${wording.span}.`,
+						success: false,
+					};
+				}
+				if (!isTextBody(onDisk)) {
+					return {
+						query,
+						result: "",
+						error: "That file is not text, so there is nothing to show.",
+						success: false,
+					};
+				}
+				const window = await readTextWindowFromText({
+					text: onDisk.toString("utf8"),
+					includeLineNumbers: request.line_numbers ?? true,
+					startLine: request.start_line,
+					endLine: request.end_line,
+					signal: context.signal,
+				});
+				return {
+					query,
+					result: `${window.text}\n\n[Nothing has written this file in ${wording.span}, so its original is the file as it stands, shown here. Read it without \`revision\` before editing it.]`,
+					success: true,
 				};
 			}
 			const chosen = bodyForRevision(

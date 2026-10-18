@@ -8,6 +8,7 @@ import { createReadReceipts } from "../../extensions/tools/executors/read-receip
 import type { ToolOperationResult } from "../../extensions/tools/types";
 import {
 	ESCALATION_REVISION_WORDING,
+	SESSION_REVISION_WORDING,
 	withBaseRevisionReads,
 } from "./base-revision-reads";
 import { createRevisionLog } from "./file-revisions";
@@ -220,6 +221,61 @@ describe("reading the version this transaction started from", () => {
 
 		expect(results[0]?.success).toBe(false);
 		expect(results[0]?.error).toContain("No transaction is open");
+	});
+});
+
+describe("the original of a file nothing has written", () => {
+	it("is the file as it stands, not a file this session created", async () => {
+		await withWorkspace({ "game.html": "a\nb\nc\n" }, async (root) => {
+			const [tool] = withBaseRevisionReads(
+				[readTool(createReadReceipts(), root)],
+				{
+					pending: undefined,
+					transaction: 0,
+					revisions: createRevisionLog(),
+					root,
+				},
+				SESSION_REVISION_WORDING,
+			);
+
+			const results = await call(tool, {
+				files: [{ path: "game.html", start_line: 2 }],
+				revision: "original",
+			});
+
+			expect(results[0]?.success).toBe(true);
+			expect(results[0]?.result).toContain("b");
+			expect(results[0]?.result).not.toContain("1 | a");
+			expect(results[0]?.result).toContain(
+				"Nothing has written this file in this session",
+			);
+			expect(results[0]?.result).not.toContain("created");
+		});
+	});
+
+	it("says a missing file does not exist", async () => {
+		await withWorkspace({}, async (root) => {
+			const [tool] = withBaseRevisionReads(
+				[readTool(createReadReceipts(), root)],
+				{
+					pending: undefined,
+					transaction: 0,
+					revisions: createRevisionLog(),
+					root,
+				},
+				SESSION_REVISION_WORDING,
+			);
+
+			const results = await call(tool, {
+				files: [{ path: "gone.html" }],
+				revision: "original",
+			});
+
+			expect(results[0]?.success).toBe(false);
+			expect(results[0]?.error).toBe(
+				"That file does not exist, and nothing has written it in this session.",
+			);
+		});
 	});
 });
 
