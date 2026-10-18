@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentConfig } from "@cline/shared";
@@ -230,6 +230,64 @@ describe("what the checkpoints switch does not turn off", () => {
 	// 1789852877349_7bbnd: generation 4 carried a retrospective and a summary
 	// and no ledger, and the model went on not knowing it had a checker to
 	// run. Core's own comment argues against exactly this coupling.
+	// The session's own history brings a `restore_file` too, and it was built
+	// without the host's `forgetReads`: after a restore, the next read said
+	// "something outside this session wrote to it" (pandorum, 2026-10-18,
+	// e97h3, twice in one run).
+	it("retires the reads of a file the session's restore_file puts back", async () => {
+		const file = join(workspace, "game.js");
+		writeFileSync(file, "const a = 1;\n", "utf8");
+		const forgetReads = vi.fn();
+		let agentConfig: AgentConfig | undefined;
+		const host = new LocalRuntimeHost({
+			distinctId: `test-${nanoid(5)}`,
+			sessionService: sessionServiceStub() as never,
+			createAgent: (config: AgentConfig) => {
+				agentConfig = config;
+				return stubAgent() as never;
+			},
+		});
+		await host.startSession({
+			interactive: false,
+			...splitCoreSessionConfig({
+				providerId: "anthropic",
+				modelId: "claude-sonnet-4-6",
+				apiKey: "test-key",
+				cwd: workspace,
+				systemPrompt: "You are a test agent",
+				mode: "act",
+				enableTools: true,
+				enableSpawnAgent: false,
+				enableAgentTeams: false,
+				checkpoint: { enabled: true },
+				atomicProtocol: { mode: "off" as const, forgetReads },
+			}),
+		});
+		const tools = (agentConfig?.tools ?? []) as {
+			name: string;
+			execute: (input: unknown, context: unknown) => Promise<unknown>;
+		}[];
+		const tool = (name: string) => {
+			const found = tools.find((t) => t.name === name);
+			if (!found) throw new Error(`no ${name}`);
+			return found;
+		};
+		const context = { agentId: "a", conversationId: "c", iteration: 1 };
+		await tool("read_files").execute({ files: [{ path: "game.js" }] }, context);
+		await tool("editor").execute(
+			{ path: "game.js", old_text: "1", new_text: "2" },
+			context,
+		);
+		forgetReads.mockClear();
+
+		await tool("restore_file").execute(
+			{ path: "game.js", revision: "original" },
+			context,
+		);
+
+		expect(forgetReads).toHaveBeenCalledWith(file);
+	});
+
 	it("keeps the tool ledger when checkpoints are off", async () => {
 		const config = await compactionConfig({ enabled: false });
 		expect(config.toolLedgerEnabled).not.toBe(false);

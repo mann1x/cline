@@ -1024,6 +1024,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 			// the model can reach is history with holes in it.
 			root:
 				bootstrap.config.workspaceRoot ?? bootstrap.config.cwd ?? process.cwd(),
+			// This history's `restore_file` rewrites the file as the protocol's
+			// does, and was the one built without telling the receipts: the next
+			// read reported the model's own restore as "something outside this
+			// session wrote to it" (pandorum, 2026-10-18, e97h3, twice).
+			...(bootstrap.config.atomicProtocol?.forgetReads
+				? { forgetReads: bootstrap.config.atomicProtocol.forgetReads }
+				: {}),
 		});
 		// What the Checkpoints switch turns off, which until now was nothing
 		// this session could see. The switch reads as "save progress at key
