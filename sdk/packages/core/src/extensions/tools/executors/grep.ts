@@ -16,9 +16,9 @@ import { promises as fs } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
 import { splitBom } from "./bom";
-import { MAX_SEARCH_OUTPUT_CHARS } from "./output-limits";
+import { MAX_GREP_LINE_CHARS, MAX_SEARCH_OUTPUT_CHARS } from "./output-limits";
 import { compilePosixRegex } from "./posix-regex";
-import { type ReadReceipts, readFileStamp } from "./read-receipts";
+import { noteShown, type ReadReceipts, readFileStamp } from "./read-receipts";
 
 /**
  * Directories not worth searching.
@@ -152,12 +152,9 @@ async function collectFiles(
 	return found.sort();
 }
 
-/** The most of one line that is printed; a longer one is cut around its match. */
-const MAX_SHOWN_LINE_CHARS = 400;
-
 /**
  * One line as it is printed: whole, or for a long one the part around its
- * match with where that is.
+ * match with where that is, and the columns printed.
  *
  * A minified script is a few lines of tens of thousands of characters. Printed
  * whole, the first of them was larger than the whole output allowance, so it
@@ -167,18 +164,25 @@ const MAX_SHOWN_LINE_CHARS = 400;
  * was found. A model that has just read the word in the file does not believe
  * that, and searched the same file fourteen times.
  */
-function shownLine(line: string, regex: RegExp, isHit: boolean): string {
-	if (line.length <= MAX_SHOWN_LINE_CHARS) {
-		return line;
+function shownLine(
+	line: string,
+	regex: RegExp,
+	isHit: boolean,
+): { text: string; cut?: { from: number; to: number } } {
+	if (line.length <= MAX_GREP_LINE_CHARS) {
+		return { text: line };
 	}
 	const match = isHit ? regex.exec(line) : null;
 	const at = match?.index ?? 0;
-	const start = Math.max(0, at - Math.floor(MAX_SHOWN_LINE_CHARS / 3));
-	const end = Math.min(line.length, start + MAX_SHOWN_LINE_CHARS);
+	const start = Math.max(0, at - Math.floor(MAX_GREP_LINE_CHARS / 3));
+	const end = Math.min(line.length, start + MAX_GREP_LINE_CHARS);
 	const where = match
 		? `match at column ${(at + 1).toLocaleString("en-US")} of a line of ${line.length.toLocaleString("en-US")} characters`
 		: `a line of ${line.length.toLocaleString("en-US")} characters`;
-	return `${start > 0 ? "…" : ""}${line.slice(start, end)}${end < line.length ? "…" : ""}  [${where}; characters ${(start + 1).toLocaleString("en-US")}-${end.toLocaleString("en-US")} shown]`;
+	return {
+		text: `${start > 0 ? "…" : ""}${line.slice(start, end)}${end < line.length ? "…" : ""}  [${where}; characters ${(start + 1).toLocaleString("en-US")}-${end.toLocaleString("en-US")} shown]`,
+		cut: { from: start + 1, to: end },
+	};
 }
 
 function looksBinary(content: string): boolean {
@@ -345,7 +349,21 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 				const isHit = hits.includes(index);
 				// grep separates a context line with `-` and a match with `:`.
 				const separator = isHit ? ":" : "-";
-				const text = shownLine(fileLines[index] as string, regex, isHit);
+				const lineText = fileLines[index] as string;
+				const { text, cut } = shownLine(lineText, regex, isHit);
+				// The file is credited as read whole (csf-12), but not this
+				// line: the model saw only the window printed, and an edit by
+				// column past it landed on characters it was never shown.
+				if (cut) {
+					noteShown(
+						options.receipts,
+						filePath,
+						index + 1,
+						cut.from,
+						cut.to,
+						lineText.length,
+					);
+				}
 				push(
 					showLineNumbers
 						? `${shown}${separator}${index + 1}${separator}${text}`

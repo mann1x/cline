@@ -22,12 +22,13 @@ import { splitBom } from "./bom";
 import { unreadableDocumentMessage } from "./document/formats";
 import { withFileLock } from "./file-locks";
 import {
+	MAX_GREP_LINE_CHARS,
 	MAX_LINE_CHARS,
 	MAX_READ_LINES,
 	MAX_READ_OUTPUT_CHARS,
 	MAX_READ_REFUSAL_CHARS,
 } from "./output-limits";
-import { type ReadReceipts, readFileStamp } from "./read-receipts";
+import { noteShown, type ReadReceipts, readFileStamp } from "./read-receipts";
 import type { ReadLedger } from "./unchanged-reads";
 
 /** The first bytes of a file, enough to tell a binary document by. */
@@ -185,7 +186,10 @@ export interface ReadWindow {
 	text: string;
 	firstLine: number;
 	lastLine: number;
-	/** Lines shown only up to `shown` of their `length` characters. */
+	/**
+	 * Lines longer than `grep` prints, and how much of each was shown: up to
+	 * `shown` of their `length` characters, all of it unless cut here.
+	 */
 	cuts?: readonly { line: number; shown: number; length: number }[];
 	/** The file holds no lines at all: seeing that is seeing all of it. */
 	empty?: true;
@@ -372,10 +376,14 @@ async function readTextWindow(
 	}
 	// The span the model actually saw, which is not the span it asked for
 	// whenever the read was capped by line count or output size.
-	const cuts = captured.flatMap(({ lineNumber, cutFrom }) =>
-		cutFrom === undefined
-			? []
-			: [{ line: lineNumber, shown: MAX_LINE_CHARS, length: cutFrom }],
+	// A long line shown whole is recorded too, so a later `grep` printing a
+	// window of it does not narrow what this read showed.
+	const cuts = captured.flatMap(({ lineNumber, text, cutFrom }) =>
+		cutFrom !== undefined
+			? [{ line: lineNumber, shown: MAX_LINE_CHARS, length: cutFrom }]
+			: text.length > MAX_GREP_LINE_CHARS
+				? [{ line: lineNumber, shown: text.length, length: text.length }]
+				: [],
 	);
 	const seen = {
 		firstLine: captured[0]?.lineNumber ?? requestedStartLine,
@@ -564,7 +572,7 @@ export function createFileReadExecutor(
 		// And what the span does not say: a line cut at the display limit was
 		// seen only up to the cut (csf-16).
 		for (const { line, shown, length } of window.cuts ?? []) {
-			receipts?.noteCut?.(resolvedPath, line, shown, length);
+			noteShown(receipts, resolvedPath, line, 1, shown, length);
 		}
 		// Did the file move under this session between the last look and this
 		// one? Asked here rather than inferred from the conversation, because

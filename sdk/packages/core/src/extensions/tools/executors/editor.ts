@@ -22,7 +22,8 @@ import {
 	normalizeLineEndings,
 	normalizeNewFileLineEndings,
 } from "./line-endings";
-import { type ReadReceipts, readFileStamp } from "./read-receipts";
+import { MAX_LINE_CHARS } from "./output-limits";
+import { isWhole, type ReadReceipts, readFileStamp } from "./read-receipts";
 
 /**
  * The largest file worth re-scanning for bracket balance after an edit.
@@ -1932,23 +1933,41 @@ export function createEditorExecutor(
 	 * said the whole line was read. A column edit past the cut, or a replace of
 	 * the whole line, landed on characters the model was never shown — the
 	 * second erases them, and the model cannot retype what it has not seen
-	 * (csf-16). `reach` is the last column the edit touches on `line`,
-	 * `Infinity` for the whole line. Reading again cuts the line again, so the
-	 * way past is named instead: columns inside the part shown, or `old_text`,
-	 * which only matches text the model has.
+	 * (csf-16). `grep` prints a 400-character window of a long line, and
+	 * credited the whole of it the same way. `reach` is the last column the
+	 * edit touches on `line`, `Infinity` for the whole line; `start` the first,
+	 * when the edit has one. Reading again cuts the line again, so the way past
+	 * is named instead: columns inside the part shown, or `old_text`, which
+	 * only matches text the model has.
 	 */
 	const requireUncut = (
 		filePath: string,
 		line: number,
 		reach: number,
+		start?: number,
 	): void => {
 		const cut = receipts?.cutAt?.(filePath, line);
-		if (!cut || reach <= cut.shown) {
+		if (!cut || isWhole(cut)) {
 			return;
 		}
-		const what = Number.isFinite(reach) ? `column ${reach}` : "the whole line";
+		const from = cut.from ?? 1;
+		if (reach <= cut.shown && (start === undefined || start >= from)) {
+			return;
+		}
+		const seen =
+			from <= 1
+				? `the first ${cut.shown.toLocaleString("en-US")}`
+				: `characters ${from.toLocaleString("en-US")}-${cut.shown.toLocaleString("en-US")}`;
+		const what =
+			reach > cut.shown
+				? `reaches ${Number.isFinite(reach) ? `column ${reach}` : "the whole line"}, past what you have seen`
+				: `starts at column ${start}, before what you have seen`;
+		const more =
+			cut.length <= MAX_LINE_CHARS
+				? "read_files shows this line whole"
+				: "grep for a pattern from the rest of the line shows the characters around it";
 		throw new Error(
-			`Not modified: line ${line} of ${filePath} is ${cut.length.toLocaleString("en-US")} characters, and read_files showed you only the first ${cut.shown.toLocaleString("en-US")}. This edit reaches ${what}, past what you have seen. Edit inside columns 1-${cut.shown}, or anchor the edit on text with \`old_text\` — grep for a pattern from the rest of the line shows the characters around it.`,
+			`Not modified: line ${line} of ${filePath} is ${cut.length.toLocaleString("en-US")} characters, and the reads so far showed you only ${seen}. This edit ${what}. Edit inside columns ${from}-${cut.shown}, or anchor the edit on text with \`old_text\` — ${more}.`,
 		);
 	};
 
@@ -1972,7 +1991,7 @@ export function createEditorExecutor(
 	};
 
 	/**
-	 * Move each cut by what an edit did before it.
+	 * Move each cut by what an edit did before it, both ends of it.
 	 *
 	 * The cut was recorded at column 2,000 and stayed there: after deleting 10
 	 * characters in the part shown, an edit could reach 10 characters the model
@@ -2008,13 +2027,18 @@ export function createEditorExecutor(
 				suffix++;
 			}
 			const oldEnd = old.length - suffix;
-			const shown =
-				prefix >= cut.shown
-					? cut.shown
-					: oldEnd <= cut.shown
-						? cut.shown + now.length - old.length
-						: now.length - suffix;
-			receipts?.noteCut?.(filePath, line, shown, now.length);
+			// Each end stays where it is when the edit lies after it, moves by
+			// the edit's change in length when the edit lies before it, and
+			// otherwise takes in the text the edit wrote, which the model has.
+			const moved = (at: number, fallback: number): number =>
+				prefix >= at
+					? at
+					: oldEnd <= at
+						? at + now.length - old.length
+						: fallback;
+			const shown = moved(cut.shown, now.length - suffix);
+			const from = moved((cut.from ?? 1) - 1, prefix) + 1;
+			receipts?.noteCut?.(filePath, line, shown, now.length, from);
 		}
 	};
 
@@ -2032,13 +2056,15 @@ export function createEditorExecutor(
 	/**
 	 * {@link requireUncut} for every line a range touches: the end line up to
 	 * its end column, every other line to its end, the start line's included —
-	 * a range that runs on to the next line replaces the rest of it.
+	 * a range that runs on to the next line replaces the rest of it. Every line
+	 * after the first is taken from its start.
 	 */
 	const requireRangeUncut = (
 		filePath: string,
 		startLine: number,
 		endLine: number,
 		endColumn?: number | null,
+		startColumn?: number | null,
 	): void => {
 		for (let line = startLine; line <= endLine; line++) {
 			requireUncut(
@@ -2047,6 +2073,7 @@ export function createEditorExecutor(
 				line === endLine && endColumn != null
 					? endColumn
 					: Number.POSITIVE_INFINITY,
+				line === startLine && startColumn != null ? startColumn : 1,
 			);
 		}
 	};
@@ -2179,7 +2206,12 @@ export function createEditorExecutor(
 				}
 				await requireRead(filePath, insertLine, insertLine);
 				// Inserting right after the last character shown is still in sight.
-				requireUncut(filePath, insertLine, input.insert_column - 1);
+				requireUncut(
+					filePath,
+					insertLine,
+					input.insert_column - 1,
+					input.insert_column,
+				);
 				const result = await insertAtColumn(
 					filePath,
 					insertLine,
@@ -2230,6 +2262,7 @@ export function createEditorExecutor(
 					input.start_line,
 					input.end_line ?? input.start_line,
 					input.end_column ?? input.start_column,
+					input.start_column,
 				);
 				const result = await replaceColumnRange(
 					filePath,

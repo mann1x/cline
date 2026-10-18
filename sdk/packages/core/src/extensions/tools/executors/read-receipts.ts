@@ -144,8 +144,20 @@ export interface ReadReceipts {
 	 * the whole line, landed on characters the model was never shown (csf-16).
 	 * Optional so a registry that does not track it still compiles; one that
 	 * does not answers "not cut" for every line.
+	 *
+	 * `from` is the first column shown, 1 unless the read showed a window from
+	 * the middle of the line, as `grep` does. A record with `from` 1 and
+	 * `shown` at `length` says the line was seen whole; it is kept, so a later
+	 * window does not narrow what an earlier read showed. Each call replaces
+	 * the line's record; {@link noteShown} merges a new read into it.
 	 */
-	noteCut?(filePath: string, line: number, shown: number, length: number): void;
+	noteCut?(
+		filePath: string,
+		line: number,
+		shown: number,
+		length: number,
+		from?: number,
+	): void;
 	/**
 	 * Move a file's stamp from `from` to `to`, if `from` is the one held.
 	 *
@@ -157,10 +169,7 @@ export interface ReadReceipts {
 	 */
 	carryStamp?(filePath: string, from: FileStamp, to: FileStamp): void;
 	/** How much of `line` the reads showed, when one of them cut it. */
-	cutAt?(
-		filePath: string,
-		line: number,
-	): { shown: number; length: number } | undefined;
+	cutAt?(filePath: string, line: number): LineCut | undefined;
 	/** The lines of a file a read cut short. */
 	cutLines?(filePath: string): number[];
 	/**
@@ -173,6 +182,51 @@ export interface ReadReceipts {
 	 * still read, and is still where it was.
 	 */
 	paths(): string[];
+}
+
+/**
+ * What the reads have shown of one long line: columns `from` (1 when absent)
+ * to `shown` of `length`.
+ */
+export interface LineCut {
+	shown: number;
+	length: number;
+	from?: number;
+}
+
+/** Whether a cut leaves nothing of the line unseen. */
+export function isWhole(cut: LineCut): boolean {
+	return (cut.from ?? 1) <= 1 && cut.shown >= cut.length;
+}
+
+/**
+ * Record that a read showed columns `from` to `to` of a line of `length`.
+ *
+ * Merged with what the line's record already holds: a window that overlaps or
+ * touches it widens it, so `grep` printing 400 characters of a line
+ * `read_files` showed whole leaves it whole. A window apart from it replaces
+ * it, as the newer of two views the model holds.
+ */
+export function noteShown(
+	receipts: ReadReceipts | undefined,
+	filePath: string,
+	line: number,
+	from: number,
+	to: number,
+	length: number,
+): void {
+	if (!receipts?.noteCut) {
+		return;
+	}
+	const held = receipts.cutAt?.(filePath, line);
+	if (held && held.length === length) {
+		const heldFrom = held.from ?? 1;
+		if (heldFrom <= to + 1 && from <= held.shown + 1) {
+			from = Math.min(from, heldFrom);
+			to = Math.max(to, held.shown);
+		}
+	}
+	receipts.noteCut(filePath, line, to, length, from);
 }
 
 /**
@@ -212,10 +266,7 @@ export function createReadReceipts(): OwnedReadReceipts {
 	const originals = new Map<string, string>();
 	// Lines a read cut short, by line number. Dropped with the spans: once the
 	// line numbers move, a cut names some other line.
-	const cuts = new Map<
-		string,
-		Map<number, { shown: number; length: number }>
-	>();
+	const cuts = new Map<string, Map<number, LineCut>>();
 
 	return {
 		noteRead(filePath, first, last) {
@@ -283,16 +334,17 @@ export function createReadReceipts(): OwnedReadReceipts {
 			}
 		},
 
-		noteCut(filePath, line, shown, length) {
+		noteCut(filePath, line, shown, length, from = 1) {
 			const key = receiptKey(filePath);
 			const lines = cuts.get(key) ?? new Map();
-			// An edit can leave a cut line no longer than what was shown of it,
-			// and then it is not cut.
-			if (shown >= length) {
-				lines.delete(line);
-			} else {
-				lines.set(line, { shown, length });
-			}
+			// Kept even when nothing is cut (an edit can leave a line no longer
+			// than what was shown of it): a whole line is then known as seen
+			// whole, and a later window cannot narrow it.
+			lines.set(line, {
+				shown: Math.min(shown, length),
+				length,
+				...(from > 1 ? { from } : {}),
+			});
 			cuts.set(key, lines);
 		},
 

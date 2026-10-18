@@ -43,6 +43,9 @@ export const MAX_READ_LINES = 2_000;
 /** Max characters kept per line in file reads (defangs minified files). */
 export const MAX_LINE_CHARS = 2_000;
 
+/** The most of one line `grep` prints; a longer one is cut around its match. */
+export const MAX_GREP_LINE_CHARS = 400;
+
 /** Max characters returned per file read window. */
 export const MAX_READ_OUTPUT_CHARS = 48_000;
 
