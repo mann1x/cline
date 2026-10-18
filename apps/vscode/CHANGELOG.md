@@ -5,6 +5,261 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.253] — 2026-10-18
+
+### Settings
+
+- **A status dot beside the API Provider label.** Grey until checked, green
+  when the provider's endpoint answers with the URL and key you set, red when
+  it does not answer, refuses the key, or no longer has the selected model.
+  Hover it to see what was asked and what came back; click it to check again.
+  It also checks when the settings open, when you switch provider or load a
+  profile, and a moment after you change the provider's settings or model.
+  - The check reads the provider's model list and never sends a prompt, so it
+    costs no tokens and does not load a model on Ollama, xOllama or opencoti.
+  - The model is looked up on Ollama, xOllama, OpenAI Compatible servers,
+    opencoti, LM Studio and LiteLLM, which list exactly the names they serve;
+    when it is missing, the tooltip names what the server has. A llama.cpp
+    server with one model loaded answers to any name, so a different name
+    there is not marked red. Cloud APIs (Anthropic, OpenRouter, Gemini and
+    others) accept names their lists leave out, so their model is not checked.
+  - Providers that have no such list to ask (Bedrock, Vertex, Claude Code, the
+    ChatGPT subscription, the Cline account) stay grey, and the tooltip says
+    so. They are checked by their first request, as before.
+  - The Vision and agent tabs show no dot: they keep settings of their own,
+    and the check reads the main ones.
+  - It is not checked while a conversation on that provider is running: the
+    conversation's own requests already show whether it answers. The dot
+    keeps its last answer, and the tooltip says it was not checked.
+- **Save model requests.** A new switch in Settings > General. When it is on,
+  every request sent to the model is saved exactly as sent, one file each,
+  under `logs/requests/<conversation>/` in Cerebriline's data folder
+  (`~/.cerebriline/data` unless you moved it). It is for replaying a turn that went
+  wrong, such as garbled text at the start of a reply, to tell the model's
+  own output from a server fault. Off by default.
+  - Only the request body is saved. Headers are not, so no API key or token
+    is written. The body does hold the whole conversation, including the
+    contents of files the model read.
+  - Files are never deleted. Each one holds the whole prompt, so a long
+    conversation can fill hundreds of MB. Turn it off once you have the turn.
+  - On Ollama and xOllama it applies from the next request; on other
+    providers, from the next conversation.
+
+### xOllama
+
+- **The context size you set is the window you get, or the most the server
+  has.** With "Book a context window" off, a 256,000 setting ran on about
+  113,000: nothing was asked, and the server sized each request from the
+  prompt and the output cap. Now a size you set is always asked for. The
+  server grants it in full, or the largest window it has free, as long as the
+  conversation still fits. It is no longer all or nothing.
+  - "Never go below" still sets the smallest window you accept. It is now
+    shown on xOllama whether or not booking is on, because it applies to any
+    size asked.
+  - With no size set, "Book a context window" books the model's own window,
+    also in full or the most the server has. Off, the server sizes each
+    request as before.
+  - With booking on, the window is held for the conversation and freed when
+    you close it. With booking off, each request gets its own window, freed
+    as soon as the request ends, on xOllama v0.40.4-xollama.2 or later (the
+    opencoti c13 r3 pin); an older xOllama holds it until the conversation is
+    closed.
+- **A task runs on the context size the panel shows.** A size typed into the
+  panel reached the panel and the compaction marker, but a task read the
+  size saved in the profile, and kept using it until the profile was saved
+  again: a panel reading 128,000 ran a task at 256,000. The panel's setting
+  now wins, and the profile fills in only what the panel leaves unset.
+  - A conversation that already holds a window asks again when the size
+    set has changed since. A window the server granted smaller than asked
+    is still kept.
+  - Done and Update now wait for the context size to be saved before they
+    close or save the profile.
+- **A background request no longer costs the conversation its cache.** A
+  note that condenses capped reasoning, or a summary, used to ask for a
+  window of its own beside the conversation. When the conversation held its
+  whole window, the conversation was closed to make room, and its next turn
+  re-read the whole prompt (57,865 tokens in one run). Now such a request
+  runs inside the conversation's own window while the conversation is idle,
+  and nothing is closed.
+
+### opencoti
+
+- **A tool call the server can't read no longer ends the turn with an
+  error.** When a model wrote a tool call with arguments the server couldn't
+  parse (for example a Windows path written with single backslashes), the
+  stream ended with an error and the call's text was lost. With an opencoti
+  server that supports it, the server now sends the call's text instead, and
+  Cerebriline tells the model its call could not be read, so it can write it
+  again. The half-written call is dropped, so it isn't counted twice.
+
+### Chat
+
+- **An edit to a line range shows the line it changes.** When the model
+  edited part of a line, such as removing one `}` at a given column, the
+  card read "Cerebriline wants to edit this file (LINE 90):" with nothing
+  under it. An edit that added text showed only the added text. The card
+  now shows the line as it stands and as the edit leaves it, so you can see
+  what is removed and what is around it. The header names the column, for
+  example "LINE 90, COLUMN 382". Files over 4 MB keep the old card. This
+  now also covers the cards that still came up empty: a column edit that
+  also names the text it removes, a deletion of matched text, and an insert
+  at a column, which showed only the inserted text.
+- **Reasoning that looped and was removed now shows a line in the chat.**
+  When a turn's thinking repeated one passage over and over, it was taken
+  out of the conversation and replaced by a short note, but the only sign
+  was that note at the end of the thinking block. The chat now gets a line
+  like the other guards, for example "the reasoning repeated one passage 181
+  times — removed from the conversation". When the model is also asked to
+  try a different approach (once per stretch of looping), the line says so.
+
+### Reading files
+
+- **A new task no longer inherits the last task's reads.** What the model had
+  read was remembered for as long as the window was open, across tasks. A
+  file put back between two runs was then reported on the new task's first
+  read as "changed since you last looked at it… something outside this
+  session wrote to it", and edits could be accepted for lines the new task
+  had never read. Each task now starts having read nothing.
+- **Asking for a file's original before any edit shows the file.** With no
+  change in progress, `revision: "original"` on a file nothing had written
+  answered "This transaction created that file", about a file the model had
+  just read, and the model went round on it. It now shows the file as it
+  stands, and says that nothing has written it yet.
+- **Putting a file back no longer reads as someone else's change.** After
+  the model restored a file with `restore_file`, its next read said the file
+  had "changed since you last looked at it… something outside this session
+  wrote to it". It now reads as the model's own change, as an edit does.
+- **A patch the model applied no longer reads as someone else's change.**
+  After `apply_patch`, the next read said the file had "changed since you
+  last looked at it… something outside this session wrote to it", and the
+  next edit was refused in the same words. A patch is now recorded as the
+  model's own write, the same way an edit is. When the patch moved lines,
+  an edit aimed at the old line numbers is still refused, now with the real
+  reason: the file's length changed.
+- **The bracket check's fix stays on the line it names.** On a long line,
+  the check could suggest moving a bracket "to column 393" of a 388-column
+  line, a place that does not exist. It also never tried the end of the
+  line, which on that line was the actual fix. Both are fixed: a suggested
+  column is always on the line, and the end of the line is tried.
+- **Columns on line 1 of a file with a byte-order mark match the editor.**
+  Files saved "UTF-8 with BOM", common on Windows, start with an invisible
+  mark. VS Code does not count it; the tools did, so every column on line 1
+  was off by one from what the editor and the error list showed, and an
+  edit at the column a diagnostic named landed one character early. A
+  patch's context on line 1 also failed to match. The tools now leave the
+  mark out, as VS Code does, and keep it in the file when they write.
+- **A task opened from History starts having read nothing.** Only "New
+  Task" cleared what the last task had read, so opening a task from History
+  kept the previous task's reads, with the same false "changed since you last
+  looked" on its first read.
+
+### Editing files
+
+- **Another program's change to a file is no longer slipped past the
+  model.** When a file changed outside the session after the model read it,
+  `grep` and `apply_patch` recorded the file as freshly seen, and the next
+  edit went through on lines the model had never looked at. `grep` now says
+  the file changed and asks for a fresh read; `apply_patch` refuses the
+  whole patch, before writing any file of it.
+- **A file created or moved by a patch can be edited straight away.** After
+  `apply_patch` added a file, the next edit was refused with "has not been
+  read in this session", about a file the model had just written. A moved
+  file now counts as read as far as its source was. A move onto a file the
+  model had read no longer lets an edit land on the moved-in lines it never
+  saw.
+- **A file the editor creates is protected like one it read.** Another
+  program's change to a file the model had just created went unnoticed, and
+  the next edit landed on it.
+- **A discarded attempt no longer reads as someone else's change.** When the
+  change protocol put files back after a failed attempt, the next read said
+  "something outside this session wrote to it".
+- **`$` matches at the end of a line in Windows files.** `grep`, `sed` and
+  `awk` kept the carriage return at the end of each line of a CRLF file, so
+  a pattern ending in `$` found nothing, `awk` counted one character too
+  many, and `sed` wrote lines it added with Unix endings. The bracket check
+  also suggested a column one past the end of the line on these files, which
+  the editor then refused.
+- **A column edit never cuts an emoji in two.** An emoji and some other
+  characters take two columns. An edit between the two halves corrupted the
+  character; it is now refused, naming the columns on either side. Text
+  inserted at a column takes the file's line endings.
+- **The editor will not overwrite what a read cut off.** `read_files` shows
+  a line only up to 2,000 characters, but an edit could reach past that
+  point, and replacing the whole line erased the part never shown. Those
+  edits are now refused, with the way to make them: a column inside the part
+  shown, or an edit by text. An edit inside the part shown moves that limit
+  with the text, so a deletion cannot bring unseen characters into reach,
+  and a line shortened to what the model has seen is no longer limited.
+  The same goes for `grep`, which prints 400 characters around a match on a
+  long line: an edit by column outside those characters is refused. A line
+  that `read_files` showed in full stays editable after a `grep` of it, and
+  reading the line with `read_files` lifts the limit.
+- **Trying a proposed check no longer blocks the next edit.** The change
+  protocol runs a proposed check against the files as they were, then puts
+  the edits back. The files ended as they were, but the next edit was
+  refused as "changed since you last read it". Another program's change made
+  before the check is still caught.
+- **An empty file that was read can be edited.** Reading an empty file
+  recorded nothing, so every edit of it was refused as unread, however often
+  the model read it.
+
+### Capped thinking
+
+- **The note that replaces a capped think is longer, and written as the
+  thinking it replaces.** When a turn's thinking ran to its budget, the next
+  request carried a short note in its place, about 450 tokens for a think of
+  45,000. On some models that note sent the next turn round in a loop. The
+  note is now asked for in the first person and the present continuous ("I'm
+  reading `game.js` around line 274…"), the same voice as the replay
+  compaction. It is given 1,000 to 2,000 tokens, about a tenth of the think,
+  so it can carry every call the turn made with what came back, what the
+  turn settled and what it ruled out. It is shorter only when the window has
+  no room for that much.
+  - The same applies to the note written for a reply cut off at the output
+    limit.
+  - If you saved your own Capped Thinking Prompt (Settings > Features), it is
+    kept as you wrote it. The length is still asked for alongside it. "Load
+    default" fills in the new prompt.
+
+### Plan mode
+
+- **Switching to act mode when already there no longer ends the run.** If
+  the mode had already been switched to act when the model called "switch to
+  act mode", the call answered as if it had worked, and the run stopped with
+  nothing switched. The call now reports that it is already in act mode, and
+  the model carries on. The extension and the CLI now share one version of
+  the tool.
+
+### Generation notices
+
+- **Notices work with opencoti's new notice lines.** opencoti and xOllama
+  can write a short line into the model's output as its thinking or answer
+  room runs out, so the model wraps up instead of being cut off. The line is
+  now a plain sentence in the model's own voice, such as "I'm writing the
+  conclusion now.", and the server says exactly which line it wrote.
+  Cerebriline hides that line from the chat and keeps it in the
+  conversation, as before. Lines from servers that still use the
+  `<engine_status>` form are hidden too; they used to show in the chat.
+  - When you reopen a conversation, a line that matches one of the server's
+    built-in notice lines, or one of yours, is hidden. Only a whole line is
+    matched, never part of a sentence.
+- **Choose what the notices say.** Settings > Features > Generation Notice
+  Wording has one box for the thinking notices and one for the answer
+  notices. Write one line per step, in step order. Line 1 is the first step
+  (60% by default), and a blank line keeps the server's own line.
+  `{words}` is replaced with the words left, `{left}` with the tokens left
+  and `{total}` with the phase's budget. "Load default" fills in the
+  server's lines to start from. It applies from the next request, on servers
+  with the new notice lines; older servers use their own.
+- **A copy bar for each phase.** Some models now and then write a notice
+  line out again, word for word, sometimes many times over. With the Copy
+  bar switch on for thinking or for the answer, the server stops the model
+  repeating a notice line in that phase, and the model writes a short line
+  of its own instead. The thinking switch is on by default, as that is
+  where the repeats happen; the answer switch is off. They take effect
+  from the next request, and only on servers that offer the bar (opencoti r5
+  and later).
+
 ## [4.100.252] — 2026-10-14
 
 ### Agents
@@ -3243,7 +3498,7 @@ They are grouped under one entry rather than one per originating server because
 VS Code does not say which server a tool came from — it flattens that into the
 tool's id, and the field that would answer it is behind a proposed API.
 
-`cerebriline.vscodeMcpTools` turns the whole thing off. (Named `cline.vscodeMcpTools` when this shipped; the setting moved to the `cerebriline.` prefix with the rename.)
+`cline.vscodeMcpTools` turns the whole thing off.
 
 ### `providers.json` is no longer read three times a second
 
