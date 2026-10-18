@@ -130,6 +130,41 @@ In MCP settings you can:
 - Set request timeouts
 - Remove servers
 
+## MCP servers configured in VS Code
+
+In the VS Code extension, Cerebriline also offers the tools of every MCP server **VS Code itself** is running: the ones in VS Code's own MCP configuration (`mcp.json`, listed by **MCP: List Servers**), not in Cerebriline's MCP settings. This is on by default and needs no setup. If VS Code has the server running, Cerebriline offers its tools.
+
+VS Code has already started and authenticated those servers, so Cerebriline calls their tools through VS Code (`vscode.lm.invokeTool`) instead of connecting to them itself. That also reaches servers Cerebriline cannot connect to on its own. Figma's MCP server, for example, advertises client registration and then refuses it, so Cerebriline can never obtain a client id for it, but VS Code already holds a token.
+
+<Note>
+  VS Code only. The CLI and other hosts have no VS Code to borrow from and offer only the servers in their own MCP settings.
+</Note>
+
+### How they appear
+
+- **To the model:** each tool is named `vscode__` followed by VS Code's id for it without its `mcp_` prefix, for example `vscode__figma_get_code`. The prefix keeps them apart from a server you have also configured in Cerebriline, so the same server set up in both places shows up twice, under two names.
+- **In Manage MCP Servers:** all of them sit under one entry called **`vscode`**, whatever server they come from. VS Code does not tell extensions which server a tool belongs to, so they cannot be grouped per server. The entry shows only when VS Code reports at least one MCP tool.
+- **Results and stopping:** results come back as text, like any other MCP tool's. Stopping the task cancels a call that is still running.
+
+### Controls
+
+| Control | Where | What it does |
+|---|---|---|
+| On/off | The toggle on the `vscode` entry, or the setting `cerebriline.vscodeMcpTools` (default `true`) | Stops or starts offering these tools to the model. The toggle and the setting are the same switch. |
+| Auto-approve | The tick box per tool on the `vscode` entry, stored in `cerebriline.vscodeMcpAutoApprove` | Lets that tool run without asking. VS Code's own approval settings for the server are not visible to Cerebriline and are not inherited, so a tool you have not ticked asks every time. |
+| Remove | In VS Code | The entry cannot be deleted from Cerebriline. The servers belong to VS Code, so remove them there, or switch the entry off. |
+
+The name `vscode` is reserved for this entry. A server you name `vscode` in Cerebriline's own MCP settings is ignored, because its tools would collide with these.
+
+### When they do not show up
+
+1. Check that the server is configured in **VS Code**, not in Cerebriline's `cline_mcp_settings.json`.
+2. Run **MCP: List Servers** and make sure the server is running and has loaded its tools. Start it from there if it is not.
+3. Check that `cerebriline.vscodeMcpTools` is not set to `false`.
+4. Start a new task. The tools are collected when a task starts, so a server started during a task is offered from the next one.
+
+The extension log names what it found: `[VscodeLmMcpTools] Adopted N MCP tool(s) from VS Code: …`.
+
 ## Security basics
 
 - Only install servers you trust

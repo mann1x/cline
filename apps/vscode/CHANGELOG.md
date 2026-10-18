@@ -3243,7 +3243,7 @@ They are grouped under one entry rather than one per originating server because
 VS Code does not say which server a tool came from — it flattens that into the
 tool's id, and the field that would answer it is behind a proposed API.
 
-`cline.vscodeMcpTools` turns the whole thing off.
+`cerebriline.vscodeMcpTools` turns the whole thing off. (Named `cline.vscodeMcpTools` when this shipped; the setting moved to the `cerebriline.` prefix with the rename.)
 
 ### `providers.json` is no longer read three times a second
 
