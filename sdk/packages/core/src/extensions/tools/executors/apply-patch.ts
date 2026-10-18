@@ -21,6 +21,7 @@ import {
 	PatchParser,
 	type PatchWarning,
 } from "./apply-patch-parser";
+import { splitBom } from "./bom";
 import {
 	detectLineEnding,
 	type LineEnding,
@@ -221,6 +222,8 @@ interface LoadedFiles {
 	 * space because models emit LF-only patch text even for CRLF files.
 	 */
 	files: Record<string, string>;
+	/** A byte order mark each file opened with, put back on write. */
+	boms: Record<string, string>;
 	/** Each file's own EOL, restored onto the output after chunks apply. */
 	eols: Record<string, LineEnding>;
 }
@@ -238,6 +241,7 @@ async function loadFiles(
 	]);
 	const files: Record<string, string> = {};
 	const eols: Record<string, LineEnding> = {};
+	const boms: Record<string, string> = {};
 
 	for (const filePath of filesToLoad) {
 		const absolutePath = resolveFilePath(cwd, filePath, restrictToCwd);
@@ -249,8 +253,12 @@ async function loadFiles(
 		} catch {
 			throw new DiffError(`File not found: ${filePath}`);
 		}
-		files[filePath] = fileContent.replace(/\r\n/g, "\n");
-		eols[filePath] = detectLineEnding(fileContent);
+		// Context lines are matched against the file as the model was shown
+		// it, and a read never shows the mark.
+		const { bom, body } = splitBom(fileContent);
+		boms[filePath] = bom;
+		files[filePath] = body.replace(/\r\n/g, "\n");
+		eols[filePath] = detectLineEnding(body);
 	}
 
 	// ADD targets are loaded only when they already exist, so the parser's
@@ -267,7 +275,7 @@ async function loadFiles(
 		}
 	}
 
-	return { files, eols };
+	return { files, eols, boms };
 }
 
 function patchToChanges(
@@ -284,7 +292,8 @@ function patchToChanges(
 	): string | undefined =>
 		content === undefined
 			? undefined
-			: normalizeLineEndings(content, loaded.eols[filePath] ?? "\n");
+			: (loaded.boms[filePath] ?? "") +
+				normalizeLineEndings(content, loaded.eols[filePath] ?? "\n");
 
 	for (const [filePath, action] of Object.entries(patch.actions)) {
 		switch (action.type) {

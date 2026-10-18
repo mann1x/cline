@@ -15,6 +15,7 @@ import type { Dirent, Stats } from "node:fs";
 import { promises as fs } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
+import { splitBom } from "./bom";
 import { MAX_SEARCH_OUTPUT_CHARS } from "./output-limits";
 import { compilePosixRegex } from "./posix-regex";
 import { type ReadReceipts, readFileStamp } from "./read-receipts";
@@ -262,7 +263,7 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 			options.receipts?.noteStamp(filePath, await readFileStamp(filePath));
 
 			const shown = relative(cwd, filePath) || filePath;
-			const fileLines = content.split("\n");
+			const fileLines = splitBom(content).body.split("\n");
 			if (content.endsWith("\n")) {
 				fileLines.pop();
 			}

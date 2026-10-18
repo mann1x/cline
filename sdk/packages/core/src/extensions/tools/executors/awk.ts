@@ -20,6 +20,7 @@ import { promises as fs } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
 import { type Expr, parseAwk, type Rule, type Stmt } from "./awk-parser";
+import { splitBom } from "./bom";
 import { compilePosixRegex } from "./posix-regex";
 import { type ReadReceipts, readFileStamp } from "./read-receipts";
 
@@ -907,7 +908,7 @@ export function createAwkExecutor(options: AwkExecutorOptions = {}) {
 				: resolvedInput;
 			let content: string;
 			try {
-				content = await fs.readFile(filePath, "utf8");
+				content = splitBom(await fs.readFile(filePath, "utf8")).body;
 			} catch (error) {
 				const reason = error instanceof Error ? error.message : String(error);
 				sections.push(`${file}: could not be read: ${reason}`);

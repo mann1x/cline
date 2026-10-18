@@ -14,6 +14,7 @@ import {
 } from "../delimiter-balance";
 import type { EditFileInput } from "../schemas";
 import type { EditorExecutor } from "../types";
+import { splitBom } from "./bom";
 import { withFileLock } from "./file-locks";
 import {
 	detectLineEnding,
@@ -409,7 +410,9 @@ async function replaceInFile(
 		);
 	}
 
-	const content = await fs.readFile(filePath, encoding);
+	const { bom, body: content } = splitBom(
+		await fs.readFile(filePath, encoding),
+	);
 	const eol = detectLineEnding(content);
 	let normalizedOldStr = normalizeLineEndings(oldStr, eol);
 	let normalizedNewStr = normalizeLineEndings(newStr ?? "", eol);
@@ -524,7 +527,7 @@ async function replaceInFile(
 		);
 	}
 
-	await fs.writeFile(filePath, updated, { encoding });
+	await fs.writeFile(filePath, bom + updated, { encoding });
 
 	const diff = createLineDiff(content, updated, maxDiffLines);
 	const scope = options.replaceAll ? ` (${occurrences} occurrence(s))` : "";
@@ -1039,7 +1042,9 @@ async function replaceLineRange(
 	maxDiffLines: number,
 	noteNoOp?: NoOpLedger,
 ): Promise<string> {
-	const content = await fs.readFile(filePath, encoding);
+	const { bom, body: content } = splitBom(
+		await fs.readFile(filePath, encoding),
+	);
 	const eol = detectLineEnding(content);
 	const { lines, trailingNewline } = splitFileLines(content);
 
@@ -1346,7 +1351,7 @@ async function replaceLineRange(
 		);
 	}
 
-	await fs.writeFile(filePath, updated, { encoding });
+	await fs.writeFile(filePath, bom + updated, { encoding });
 
 	const diff = createLineDiff(content, updated, maxDiffLines);
 	// The diff trims lines that are identical on both sides, so replacing two
@@ -1537,7 +1542,9 @@ async function insertInFile(
 	newStr: string,
 	encoding: BufferEncoding,
 ): Promise<string> {
-	const content = await fs.readFile(filePath, encoding);
+	const { bom, body: content } = splitBom(
+		await fs.readFile(filePath, encoding),
+	);
 	const eol = detectLineEnding(content);
 	const lines = content.split(/\r\n|\n/);
 	const maxBoundaryLine = lines.length + 1;
@@ -1554,7 +1561,7 @@ async function insertInFile(
 	// -- the normal way to write one line -- inserts foo *and* a blank line, and
 	// the file drifts a line at a time exactly as it did on the range path.
 	lines.splice(insertLine, 0, ...splitFileLines(newStr).lines);
-	await fs.writeFile(filePath, lines.join(eol), { encoding });
+	await fs.writeFile(filePath, bom + lines.join(eol), { encoding });
 
 	return `Inserted content at line ${insertLineOneBased} in ${filePath}.`;
 }
@@ -1590,7 +1597,9 @@ async function replaceColumnRange(
 	maxDiffLines: number,
 	noteNoOp?: NoOpLedger,
 ): Promise<string> {
-	const content = await fs.readFile(filePath, encoding);
+	const { bom, body: content } = splitBom(
+		await fs.readFile(filePath, encoding),
+	);
 	const eol = detectLineEnding(content);
 	const lines = content.split(/\r\n|\n/);
 
@@ -1649,7 +1658,7 @@ async function replaceColumnRange(
 		);
 	}
 
-	await fs.writeFile(filePath, updated, { encoding });
+	await fs.writeFile(filePath, bom + updated, { encoding });
 	const diff = createLineDiff(content, updated, maxDiffLines);
 	return `Replaced ${span} in ${filePath}\n${diff}`;
 }
@@ -1669,7 +1678,9 @@ async function insertAtColumn(
 	encoding: BufferEncoding,
 	maxDiffLines: number,
 ): Promise<string> {
-	const content = await fs.readFile(filePath, encoding);
+	const { bom, body: content } = splitBom(
+		await fs.readFile(filePath, encoding),
+	);
 	const eol = detectLineEnding(content);
 	const lines = content.split(/\r\n|\n/);
 
@@ -1694,7 +1705,7 @@ async function insertAtColumn(
 		);
 	}
 
-	await fs.writeFile(filePath, updated, { encoding });
+	await fs.writeFile(filePath, bom + updated, { encoding });
 	const diff = createLineDiff(content, updated, maxDiffLines);
 	return `Inserted ${newStr.length} character(s) at line ${lineOneBased} column ${columnOneBased} in ${filePath}\n${diff}`;
 }

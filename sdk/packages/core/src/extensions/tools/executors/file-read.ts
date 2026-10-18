@@ -18,6 +18,7 @@ import {
 } from "../../../session/services/tool-result-cache";
 import type { ReadFileRequest } from "../schemas";
 import type { FileReadExecutor } from "../types";
+import { splitBom } from "./bom";
 import { unreadableDocumentMessage } from "./document/formats";
 import { withFileLock } from "./file-locks";
 import {
@@ -256,8 +257,10 @@ async function readTextWindow(
 	}
 
 	try {
-		for await (const rawLine of reader) {
+		for await (const streamed of reader) {
 			fileLineCount += 1;
+			// The mark is not part of line 1 for anything that counts columns.
+			const rawLine = fileLineCount === 1 ? splitBom(streamed).body : streamed;
 			if (fileLineCount > MAX_LINE_COUNT_SCAN) {
 				fileLineCount -= 1;
 				approximateFileLineCount = true;

@@ -53,6 +53,8 @@ const C_FAMILY = new Set([
 /** Files whose `<script>` bodies are plain JavaScript. */
 const EMBEDS_SCRIPT = new Set([".html", ".htm"]);
 
+import { splitBom } from "./executors/bom";
+
 export interface DelimiterFinding {
 	kind: "mismatch" | "unmatched-close" | "unclosed";
 	/** 1-based position of the delimiter that is wrong. */
@@ -708,8 +710,10 @@ export function findScriptSyntaxError(
  */
 export function describeDelimiterBalance(
 	filePath: string,
-	text: string,
+	withBom: string,
 ): string | null {
+	// Line 1's columns as the checker and the editor number them.
+	const text = splitBom(withBom).body;
 	const extension = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
 
 	let findings: DelimiterFinding[];

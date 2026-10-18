@@ -22,6 +22,7 @@
 import { promises as fs } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
+import { splitBom } from "./bom";
 import { withFileLock } from "./file-locks";
 import { compilePosixRegex } from "./posix-regex";
 import { type ReadReceipts, readFileStamp } from "./read-receipts";
@@ -666,8 +667,12 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 			// `editor` does, so it loses an update in exactly the same way.
 			await withFileLock(filePath, async () => {
 				let original: string;
+				// Kept off line 1's text, as every reader shows it, and put back.
+				let bom = "";
 				try {
-					original = await fs.readFile(filePath, "utf8");
+					({ bom, body: original } = splitBom(
+						await fs.readFile(filePath, "utf8"),
+					));
 				} catch (error) {
 					const reason = error instanceof Error ? error.message : String(error);
 					outcomes.push({
@@ -739,7 +744,7 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 						});
 						return;
 					}
-					await fs.writeFile(filePath, result.output, "utf8");
+					await fs.writeFile(filePath, bom + result.output, "utf8");
 					receipts?.noteWrite(
 						filePath,
 						countLines(original),
