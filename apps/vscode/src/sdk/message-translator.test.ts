@@ -4690,6 +4690,41 @@ describe("sdkToolToClineSayTool — editor diff rendering (S6-48)", () => {
 			expect(tool.startLineNumbers).toEqual([2])
 		})
 
+		// pandorum 2026-10-18, session 1792344361668_0oqxv: the same deletion
+		// with `old_text: "}"` alongside the columns matched neither the range
+		// form nor the search form, and three cards drew nothing.
+		it("draws a column range that also carries old_text", () => {
+			const ask = buildToolApprovalAskMessage(
+				"editor",
+				{ path: "game.js", start_line: 2, start_column: 12, end_column: 12, old_text: "}", new_text: "" },
+				1,
+				dir,
+			)
+			const tool = JSON.parse(ask.text!) as ClineSayTool
+			expect(tool.editMode).toBe("LINE 2, COLUMN 12")
+			expect(tool.content).toBe("------- SEARCH\nif(a){b();}}\n=======\nif(a){b();}\n+++++++ REPLACE")
+		})
+
+		it("draws a text deletion as the text it deletes", () => {
+			const ask = buildToolApprovalAskMessage("editor", { path: "game.js", old_text: "b();", new_text: "" }, 1, dir)
+			const tool = JSON.parse(ask.text!) as ClineSayTool
+			expect(tool.editMode).toBe("SEARCH/REPLACE")
+			expect(tool.content).toBe("------- SEARCH\nb();\n=======\n\n+++++++ REPLACE")
+		})
+
+		it("draws an insert at a column as the line before and after", () => {
+			const ask = buildToolApprovalAskMessage(
+				"editor",
+				{ path: "game.js", insert_line: 2, insert_column: 6, new_text: "X" },
+				1,
+				dir,
+			)
+			const tool = JSON.parse(ask.text!) as ClineSayTool
+			expect(tool.editMode).toBe("INSERT at 2, COLUMN 6")
+			expect(tool.content).toBe("------- SEARCH\nif(a){b();}}\n=======\nif(a)X{b();}}\n+++++++ REPLACE")
+			expect(tool.startLineNumbers).toEqual([2])
+		})
+
 		it("replaces whole lines when no column is given", () => {
 			const ask = buildToolApprovalAskMessage(
 				"editor",

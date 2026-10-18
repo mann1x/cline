@@ -780,7 +780,12 @@ export function runAwkProgram(
 		// `awk 'BEGIN{print 1+1}'` works with no file at all.
 		if (mainRules.length > 0 || endRules.length > 0) {
 			const hadTrailingNewline = input.endsWith("\n");
-			const lines = input.split("\n");
+			// Split on "\r\n" before "\n", as the reader and the editor do: a
+			// CRLF file's records otherwise kept their trailing "\r", so a
+			// "$"-anchored rule never matched and "$NF" carried the "\r"
+			// (csf-19). A bare "\n" is still split on for the mixed-EOL files
+			// older releases of these tools produced.
+			const lines = input.split(/\r\n|\n/);
 			if (hadTrailingNewline) {
 				lines.pop();
 			}

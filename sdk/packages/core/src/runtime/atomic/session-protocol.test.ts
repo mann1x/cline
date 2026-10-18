@@ -515,6 +515,24 @@ describe("the boundary", () => {
 		});
 	});
 
+	// csf-6: the controller took the hook and the session never passed it, so
+	// a discarded attempt's next read still said "something outside this
+	// session wrote to it" about the protocol's own rollback.
+	it("hands the files a discarded attempt put back to forgetReads", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const forgotten: string[] = [];
+			const session = await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: { mode: "static", oracleCommand: shellCheck(root, "fixed") },
+				forgetReads: (absolutePath) => forgotten.push(absolutePath),
+			});
+			await fs.writeFile(path.join(root, "game.js"), "still broken", "utf8");
+
+			expect(await submit(session, "Fixed.")).toContain("TX-01 discarded");
+			expect(forgotten).toContain(path.join(root, "game.js"));
+		});
+	});
+
 	// Asking again would settle a transaction that was never opened, and the
 	// run would never be allowed to end.
 	it("stops asking once the transactions are spent", async () => {

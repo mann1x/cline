@@ -149,6 +149,17 @@ export interface TransactionControllerOptions {
 	oracleTimeoutMs?: number;
 	snapshotLimits?: SnapshotLimits;
 	/**
+	 * Called for every file a rollback puts back, deletes or recreates.
+	 *
+	 * The rollback rewrites files with a plain write, exactly as this
+	 * session's own restore does — and without this hook the read receipts
+	 * still held the stamp from before the transaction, so the next read said
+	 * the file "changed since you last looked at it … something outside this
+	 * session wrote to it" about a restore the session's own protocol had
+	 * just performed. `restore_file` takes the same hook for the same reason.
+	 */
+	forgetReads?: (absolutePath: string) => void;
+	/**
 	 * The session's file-history log, when the host keeps one.
 	 *
 	 * Given rather than made, so the transaction and the session share a single
@@ -692,6 +703,19 @@ export class TransactionController {
 		for (const filePath of restore.uncovered) {
 			this.uncoveredPaths.add(filePath);
 		}
+		// A file the rollback put back is a file this session's own protocol
+		// rewrote. Without retiring its reads the next read blamed the change
+		// on "something outside this session" (csf-6) — the same defect the
+		// `restore_file` tool fixed with the same hook.
+		if (this.options.forgetReads) {
+			for (const filePath of [
+				...restore.restored,
+				...restore.recreated,
+				...restore.removed,
+			]) {
+				this.options.forgetReads(filePath);
+			}
+		}
 		this.history.push({
 			transaction,
 			kept,
@@ -744,6 +768,15 @@ export class TransactionController {
 		this.snapshot = undefined;
 		this.openedWith = undefined;
 		this.revisionLog.reset();
+		if (this.options.forgetReads) {
+			for (const filePath of [
+				...restore.restored,
+				...restore.recreated,
+				...restore.removed,
+			]) {
+				this.options.forgetReads(filePath);
+			}
+		}
 		return restore;
 	}
 

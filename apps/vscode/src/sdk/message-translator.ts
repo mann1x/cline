@@ -1942,21 +1942,40 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown, context?: Rang
 			// `start_column: 382, end_column: 382, new_text: ""` read "wants to
 			// edit this file (LINE 90):" over nothing. The line as it stands and
 			// as it will read is the diff the user is approving.
+			//
+			// A column range is drawn the same way when `old_text` rides along:
+			// the executor's column path never reads it, and a model deleting a
+			// `}` sent `{start_column: 382, end_column: 382, old_text: "}",
+			// new_text: ""}` -- which matched neither form, so the card drew the
+			// empty `new_text` (pandorum, 2026-10-18). An insert at a column is a
+			// range of no width at that column.
+			const insertColumn = getNumberField(parsedInput, "insert_column")
 			const rangeDiff =
-				!oldText && startLine != null && filePath
+				filePath && insertLine != null && insertColumn != null
 					? describeRangeEdit({
 							filePath,
-							startLine,
-							endLine: endLineField ?? startLine,
-							startColumn,
-							endColumn,
+							startLine: insertLine,
+							endLine: insertLine,
+							startColumn: insertColumn,
+							endColumn: insertColumn - 1,
 							newText: newText ?? "",
 							context,
 						})
-					: undefined
+					: filePath && startLine != null && (!oldText || startColumn != null)
+						? describeRangeEdit({
+								filePath,
+								startLine,
+								endLine: endLineField ?? startLine,
+								startColumn,
+								endColumn,
+								newText: newText ?? "",
+								context,
+							})
+						: undefined
+			// An empty `new_text` is a deletion, and the text it deletes is the diff.
 			const diffContent = rangeDiff
 				? rangeDiff.patch
-				: oldText && newText
+				: oldText && newText !== undefined
 					? `------- SEARCH\n${oldText}\n=======\n${newText}\n+++++++ REPLACE`
 					: newText
 
@@ -1971,10 +1990,10 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown, context?: Rang
 						: `, COLUMN ${startColumn}`
 					: ""
 			const editMode =
-				oldText && newText
+				oldText && newText !== undefined && startColumn == null
 					? "SEARCH/REPLACE"
 					: insertLine != null
-						? `INSERT at ${insertLine}`
+						? `INSERT at ${insertLine}${insertColumn != null ? `, COLUMN ${insertColumn}` : ""}`
 						: startLine != null
 							? endLine != null && endLine !== startLine
 								? `LINES ${startLine}-${endLine}${columns}`

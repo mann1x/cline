@@ -185,11 +185,17 @@ export interface ReadWindow {
 	text: string;
 	firstLine: number;
 	lastLine: number;
+	/** Lines shown only up to `shown` of their `length` characters. */
+	cuts?: readonly { line: number; shown: number; length: number }[];
+	/** The file holds no lines at all: seeing that is seeing all of it. */
+	empty?: true;
 }
 
 interface CapturedLine {
 	lineNumber: number;
 	text: string;
+	/** The line's full length, when it was cut at {@link MAX_LINE_CHARS}. */
+	cutFrom?: number;
 }
 
 function getAbortError(signal: AbortSignal): Error {
@@ -292,7 +298,8 @@ async function readTextWindow(
 			}
 
 			let line = rawLine;
-			if (line.length > MAX_LINE_CHARS) {
+			const cut = line.length > MAX_LINE_CHARS;
+			if (cut) {
 				line = `${line.slice(0, MAX_LINE_CHARS)} [line truncated]`;
 			}
 
@@ -302,7 +309,11 @@ async function readTextWindow(
 				continue;
 			}
 
-			captured.push({ lineNumber: totalLines, text: line });
+			captured.push({
+				lineNumber: totalLines,
+				text: line,
+				...(cut ? { cutFrom: rawLine.length } : {}),
+			});
 			chars = nextChars;
 		}
 	} finally {
@@ -348,14 +359,28 @@ async function readTextWindow(
 
 	const lastCapturedLine = captured[captured.length - 1]?.lineNumber;
 	if (lastCapturedLine === undefined) {
-		// Nothing was captured, so nothing has been seen: no span to record.
-		return { text: body, firstLine: 0, lastLine: -1 };
+		// Nothing was captured, so nothing has been seen: no span to record --
+		// unless there was nothing to capture. An empty file read is a file
+		// read whole, and with no receipt every edit of it was refused as
+		// unread however often the model read it (csf-20).
+		return {
+			text: body,
+			firstLine: 0,
+			lastLine: -1,
+			...(totalLines === 0 ? { empty: true as const } : {}),
+		};
 	}
 	// The span the model actually saw, which is not the span it asked for
 	// whenever the read was capped by line count or output size.
+	const cuts = captured.flatMap(({ lineNumber, cutFrom }) =>
+		cutFrom === undefined
+			? []
+			: [{ line: lineNumber, shown: MAX_LINE_CHARS, length: cutFrom }],
+	);
 	const seen = {
 		firstLine: captured[0]?.lineNumber ?? requestedStartLine,
 		lastLine: lastCapturedLine,
+		...(cuts.length > 0 ? { cuts } : {}),
 	};
 
 	// How long the file is, said on every read rather than only on a truncated
@@ -533,6 +558,13 @@ export function createFileReadExecutor(
 		// edit it exists to catch.
 		if (window.lastLine >= window.firstLine) {
 			receipts?.noteRead(resolvedPath, window.firstLine, window.lastLine);
+		} else if (window.empty) {
+			receipts?.noteRead(resolvedPath, 1, Number.POSITIVE_INFINITY);
+		}
+		// And what the span does not say: a line cut at the display limit was
+		// seen only up to the cut (csf-16).
+		for (const { line, shown, length } of window.cuts ?? []) {
+			receipts?.noteCut?.(resolvedPath, line, shown, length);
 		}
 		// Did the file move under this session between the last look and this
 		// one? Asked here rather than inferred from the conversation, because

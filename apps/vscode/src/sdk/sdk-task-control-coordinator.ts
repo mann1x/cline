@@ -38,6 +38,15 @@ export interface SdkTaskControlCoordinatorOptions {
 	 */
 	clearTaskSettings: () => Promise<void>
 	/**
+	 * Forgets every file read the outgoing task recorded. The read receipts
+	 * outlive the task, and what they hold belongs to one: kept across a switch,
+	 * the next task's first read said the file "changed since you last looked
+	 * at it", and the editor credited reads the new task never made. Cleared
+	 * only on "New Task" before, so a task opened from History kept the last
+	 * task's reads (csf-10). Runs wherever clearTaskSettings does.
+	 */
+	clearTaskReads?: () => void
+	/**
 	 * Sets the authoritative turn phase. showTaskWithId must derive the phase
 	 * from the reopened conversation (resumable/completed) — leaving the
 	 * previous task's phase in place hides the Resume button for interrupted
@@ -138,6 +147,7 @@ export class SdkTaskControlCoordinator {
 			}
 
 			await this.options.clearTaskSettings()
+			this.options.clearTaskReads?.()
 			this.options.resetMessageTranslator()
 		})
 	}
@@ -217,8 +227,10 @@ export class SdkTaskControlCoordinator {
 				}
 
 				// The outgoing task's settings overlay must not apply to the newly
-				// opened task (see clearTaskSettings option doc).
+				// opened task (see clearTaskSettings option doc), and neither must
+				// its reads (clearTaskReads).
 				await this.options.clearTaskSettings()
+				this.options.clearTaskReads?.()
 
 				this.options.resetMessageTranslator()
 

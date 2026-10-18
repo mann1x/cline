@@ -257,14 +257,38 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 			if (looksBinary(content)) {
 				continue;
 			}
+			// A read that has moved under the session is not a read: crediting
+			// it would launder an outside write, and the next edit would pass
+			// the guard against content nobody in this session has looked at
+			// (csf-1). `sed` refuses the same way; `grep` is read-only, so it
+			// retires the stale receipt, stamps the file as it now stands and
+			// says so — the model re-reads before editing, which is the point.
+			const stamp = await readFileStamp(filePath);
+			const shown = relative(cwd, filePath) || filePath;
+			if (options.receipts?.changedSince(filePath, stamp)) {
+				// `forget`, not `retire`: a retired read still counts for a
+				// text-anchored edit, and the text the model has in mind came
+				// from the file as it was — matching it against what an
+				// outside writer left would land the edit on lines nobody in
+				// this session has seen. Forgetting sends the model to
+				// `read_files`, which is the only way it sees this file again.
+				options.receipts.forget(filePath);
+				options.receipts.noteStamp(filePath, stamp);
+				push(
+					`${shown}: changed since you last read it, and not because of anything you did — something outside this session wrote to it. Call read_files for it before editing.`,
+				);
+				continue;
+			}
 			options.receipts?.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
 			// Stamped with the read, so a later edit can tell a file that
 			// moved under the session from one it has simply never seen.
-			options.receipts?.noteStamp(filePath, await readFileStamp(filePath));
-
-			const shown = relative(cwd, filePath) || filePath;
-			const fileLines = splitBom(content).body.split("\n");
-			if (content.endsWith("\n")) {
+			options.receipts?.noteStamp(filePath, stamp);
+			// Split on "\r\n" before "\n", as the reader and the editor do: a
+			// CRLF file's lines otherwise kept their trailing "\r", and a
+			// "$" anchor after a "\r" never matched — the tool answered
+			// "No match" for text the model could see (csf-19).
+			const fileLines = splitBom(content).body.split(/\r\n|\n/);
+			if (content.endsWith("\n") || content.endsWith("\r\n")) {
 				fileLines.pop();
 			}
 

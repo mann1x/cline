@@ -164,6 +164,34 @@ describe("SdkTaskControlCoordinator", () => {
 		expect(options.clearTaskSettings.mock.invocationCallOrder[0]).toBeLessThan(options.setTask.mock.invocationCallOrder[0])
 	})
 
+	// csf-10: the read receipts were cleared on "New Task" only, so a task
+	// opened from History kept the last task's reads.
+	it("forgets the outgoing task's reads when switching to another task", async () => {
+		const { coordinator, options } = makeCoordinator({
+			activeSession: makeActiveSession(),
+			task: makeTask("old-task"),
+			hasHistoryItem: true,
+			clineMessages: [{ ts: 1, type: "say", say: "task", text: "hello" }],
+			sessionStatus: "completed",
+		})
+
+		await coordinator.showTaskWithId("task-1")
+
+		expect(options.clearTaskReads).toHaveBeenCalledOnce()
+		expect(options.clearTaskReads.mock.invocationCallOrder[0]).toBeLessThan(options.setTask.mock.invocationCallOrder[0])
+	})
+
+	it("forgets the reads when the task is cleared", async () => {
+		const { coordinator, options } = makeCoordinator({
+			activeSession: makeActiveSession(),
+			task: makeTask("task-1"),
+		})
+
+		await coordinator.clearTask()
+
+		expect(options.clearTaskReads).toHaveBeenCalledOnce()
+	})
+
 	it("shows a task by creating a proxy, loading messages, and appending a fresh resume ask", async () => {
 		const existingTask = makeTask("old-task")
 		const activeSession = makeActiveSession()
@@ -567,6 +595,7 @@ function makeCoordinator(input: Partial<MakeCoordinatorInput> = {}) {
 		setTurnPhase: vi.fn(),
 		postStateToWebview: vi.fn().mockResolvedValue(undefined),
 		clearTaskSettings: vi.fn().mockResolvedValue(undefined),
+		clearTaskReads: vi.fn(),
 		rebuilds: {
 			runTaskTransition: vi.fn(async (operation: () => Promise<unknown>) => operation()),
 		},
@@ -594,6 +623,7 @@ function makeCoordinator(input: Partial<MakeCoordinatorInput> = {}) {
 		setTurnPhase: ReturnType<typeof vi.fn>
 		postStateToWebview: ReturnType<typeof vi.fn>
 		clearTaskSettings: ReturnType<typeof vi.fn>
+		clearTaskReads: ReturnType<typeof vi.fn>
 		rebuilds: { runTaskTransition: ReturnType<typeof vi.fn> }
 	}
 

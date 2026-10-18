@@ -136,6 +136,22 @@ export interface ReadReceipts {
 	/** Drop everything known about a file. */
 	forget(filePath: string): void;
 	/**
+	 * Record that a read showed only the first `shown` of a line's `length`
+	 * characters.
+	 *
+	 * A line span alone said the whole line was seen. `read_files` cuts a line
+	 * at 2,000 characters, so an edit by column past the cut, or a replace of
+	 * the whole line, landed on characters the model was never shown (csf-16).
+	 * Optional so a registry that does not track it still compiles; one that
+	 * does not answers "not cut" for every line.
+	 */
+	noteCut?(filePath: string, line: number, shown: number, length: number): void;
+	/** How much of `line` the reads showed, when one of them cut it. */
+	cutAt?(
+		filePath: string,
+		line: number,
+	): { shown: number; length: number } | undefined;
+	/**
 	 * Every file read in this session, in the form it was resolved to.
 	 *
 	 * The receipts are the only record of which files the model has actually
@@ -182,6 +198,12 @@ export function createReadReceipts(): OwnedReadReceipts {
 	// Keyed the same way, but holding the path as it was resolved: the key is
 	// lowercased on Windows and is no use to anyone reading it back.
 	const originals = new Map<string, string>();
+	// Lines a read cut short, by line number. Dropped with the spans: once the
+	// line numbers move, a cut names some other line.
+	const cuts = new Map<
+		string,
+		Map<number, { shown: number; length: number }>
+	>();
 
 	return {
 		noteRead(filePath, first, last) {
@@ -235,6 +257,7 @@ export function createReadReceipts(): OwnedReadReceipts {
 				return;
 			}
 			const key = receiptKey(filePath);
+			cuts.delete(key);
 			if (seen.delete(key)) {
 				retired.add(key);
 			}
@@ -242,9 +265,21 @@ export function createReadReceipts(): OwnedReadReceipts {
 
 		retire(filePath) {
 			const key = receiptKey(filePath);
+			cuts.delete(key);
 			if (seen.delete(key)) {
 				retired.add(key);
 			}
+		},
+
+		noteCut(filePath, line, shown, length) {
+			const key = receiptKey(filePath);
+			const lines = cuts.get(key) ?? new Map();
+			lines.set(line, { shown, length });
+			cuts.set(key, lines);
+		},
+
+		cutAt(filePath, line) {
+			return cuts.get(receiptKey(filePath))?.get(line);
 		},
 
 		noteStamp(filePath, stamp) {
@@ -268,6 +303,7 @@ export function createReadReceipts(): OwnedReadReceipts {
 			retired.delete(key);
 			originals.delete(key);
 			stamps.delete(key);
+			cuts.delete(key);
 		},
 
 		paths() {
@@ -279,6 +315,7 @@ export function createReadReceipts(): OwnedReadReceipts {
 			retired.clear();
 			stamps.clear();
 			originals.clear();
+			cuts.clear();
 		},
 	};
 }

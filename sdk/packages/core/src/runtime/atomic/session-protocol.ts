@@ -380,6 +380,7 @@ export async function createAtomicProtocolSession(
 	options.logger?.log?.(`[Atomic] ${armedMessage}`);
 	options.onStatus?.({ armed: true, message: armedMessage });
 
+	const forgetReads = options.forgetReads ?? options.config?.forgetReads;
 	const controller = new TransactionController({
 		workspaceRoot: options.workspaceRoot,
 		...(options.revisions ? { revisions: options.revisions } : {}),
@@ -397,6 +398,11 @@ export async function createAtomicProtocolSession(
 			: {}),
 		oracleTimeoutMs: options.config?.oracleTimeoutMs,
 		onEvent: options.onEvent,
+		// The rollback rewrites files the way `restore_file` does, so it needs
+		// the same hook: the controller had the option and nobody passed it,
+		// and a discarded attempt still read back as "something outside this
+		// session wrote to it" (csf-6).
+		...(forgetReads ? { forgetReads } : {}),
 	});
 
 	// The transaction already holds what every file said when it opened, and
@@ -407,7 +413,7 @@ export async function createAtomicProtocolSession(
 	const tools: AgentTool[] = [
 		createRestoreFileTool({
 			controller,
-			forgetReads: options.forgetReads ?? options.config?.forgetReads,
+			forgetReads,
 			onRestored: ({ path: restored, deleted }) =>
 				options.logger?.log?.(
 					`[Atomic] ${restored} ${deleted ? "deleted" : "put back"} at the model's request.`,

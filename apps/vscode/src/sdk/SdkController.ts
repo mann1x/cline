@@ -698,6 +698,9 @@ export class Controller {
 			postStateToWebview: () => this.postStateToWebview(),
 			rebuilds: this.sessionRebuilds,
 			clearTaskSettings: () => this.stateManager.clearTaskSettings(),
+			// The registry lives as long as the controller; what it records
+			// belongs to one task, and the next one has read nothing yet.
+			clearTaskReads: () => this.readReceipts.clear(),
 		})
 		this.taskStart = new SdkTaskStartCoordinator({
 			stateManager: this.stateManager,
@@ -709,10 +712,8 @@ export class Controller {
 			createHistoryItemFromSession,
 			clearTask: async () => {
 				this.pendingClineAuthRetry = undefined
+				// Clears the reads too (clearTaskReads above).
 				await this.taskControl.clearTask()
-				// The registry lives as long as the controller; what it records
-				// belongs to one task, and the next one has read nothing yet.
-				this.readReceipts.clear()
 			},
 			setTask: (task) => {
 				this.task = task

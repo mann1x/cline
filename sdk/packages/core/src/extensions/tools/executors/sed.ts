@@ -24,6 +24,7 @@ import { isAbsolute, resolve } from "node:path";
 import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
 import { splitBom } from "./bom";
 import { withFileLock } from "./file-locks";
+import { detectLineEnding } from "./line-endings";
 import { compilePosixRegex } from "./posix-regex";
 import { type ReadReceipts, readFileStamp } from "./read-receipts";
 
@@ -417,7 +418,16 @@ export function runSedScript(
 ): RunSedResult {
 	// A trailing newline is a line terminator, not an empty last line.
 	const hadTrailingNewline = input.endsWith("\n");
-	const lines = input.split("\n");
+	// A CRLF file's lines end "\r\n", and every reader strips the "\r" — so
+	// the model writes its script against text without it. Splitting on
+	// "\n" alone left the "\r" on every line, and a "$" anchor after a
+	// "\r" never matches: the tool kept answering "no change — the script
+	// matched nothing" for text the model could see (csf-19). Split on the
+	// pair first, then on a bare "\n" for the mixed-EOL files older
+	// releases of these tools produced, and join with the file's own EOL so
+	// an edit never rewrites a CRLF file to LF wholesale.
+	const eol = detectLineEnding(input);
+	const lines = input.split(/\r\n|\n/);
 	if (hadTrailingNewline) {
 		lines.pop();
 	}
@@ -544,9 +554,9 @@ export function runSedScript(
 		}
 	}
 
-	const text = out.join("\n");
+	const text = out.join(eol);
 	return {
-		output: text === "" ? "" : hadTrailingNewline ? `${text}\n` : text,
+		output: text === "" ? "" : hadTrailingNewline ? `${text}${eol}` : text,
 		changed,
 	};
 }

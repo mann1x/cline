@@ -365,11 +365,19 @@ async function applyChanges(
 		absPath: string,
 		before: string | undefined,
 		after: string,
+		authored = false,
 	) => {
 		if (!receipts) return;
 		const onDisk = overlay ? await overlay.resolveRead(absPath) : absPath;
 		if (before !== undefined) {
 			receipts.noteWrite(onDisk, countLines(before), countLines(after));
+		}
+		if (authored) {
+			// A file this session just wrote in full is a file it has seen —
+			// it supplied every line of it. Without a receipt the very next
+			// edit was refused with "has not been read in this session", of a
+			// file the model authored one call earlier (csf-7).
+			receipts.noteRead(onDisk, 1, Number.POSITIVE_INFINITY);
 		}
 		receipts.noteStamp(onDisk, await readFileStamp(onDisk));
 	};
@@ -387,6 +395,29 @@ async function applyChanges(
 		await fs.rm(absPath, { force: true });
 	};
 
+	// The patch was computed against the files as `loadFiles` read them. If
+	// something outside the session has written to one since this session
+	// last looked, the context lines that matched were matched against
+	// foreign code: applying the patch would land the model's edit on lines it
+	// has never seen, silently (csf-2). Refuse the way `sed -i` and the editor
+	// refuse — for every file before any is written, so a refusal never
+	// leaves half a patch applied behind "Nothing was applied".
+	if (receipts) {
+		for (const [filePath, change] of Object.entries(changes)) {
+			if (change.type !== PatchActionType.UPDATE) continue;
+			const absPath = resolveFilePath(cwd, filePath, restrictToCwd);
+			const onDisk = overlay ? await overlay.resolveRead(absPath) : absPath;
+			const stamp = await readFileStamp(onDisk);
+			if (receipts.changedSince(onDisk, stamp)) {
+				receipts.noteStamp(onDisk, stamp);
+				receipts.retire(onDisk);
+				throw new DiffError(
+					`${filePath} changed since you last read it, and not because of anything you did — something outside this session wrote to it. Nothing was applied. Call read_files for it to see what it says now, then decide whether this patch is still right.`,
+				);
+			}
+		}
+	}
+
 	for (const [filePath, change] of Object.entries(changes)) {
 		const sourceAbsPath = resolveFilePath(cwd, filePath, restrictToCwd);
 		switch (change.type) {
@@ -400,7 +431,7 @@ async function applyChanges(
 					throw new DiffError(`Cannot create ${filePath} with no content`);
 				}
 				await writeFile(sourceAbsPath, change.newContent);
-				await recordWrite(sourceAbsPath, undefined, change.newContent);
+				await recordWrite(sourceAbsPath, undefined, change.newContent, true);
 				touched.push(filePath);
 				break;
 			case PatchActionType.UPDATE: {
@@ -416,10 +447,33 @@ async function applyChanges(
 						change.movePath,
 						restrictToCwd,
 					);
+					// The destination now holds the source's lines, so what the
+					// model has seen of it is what it had seen of the source. Its
+					// own earlier reads describe a file that is gone: kept, they
+					// licensed edits on lines the model never saw when the two
+					// had the same line count (csf-8). Read whole, the source
+					// carries over whole; otherwise the destination starts unread.
+					const sourceOnDisk = overlay
+						? await overlay.resolveRead(sourceAbsPath)
+						: sourceAbsPath;
+					const sourceSeen =
+						receipts?.covers(
+							sourceOnDisk,
+							1,
+							Math.max(1, countLines(change.oldContent ?? "")),
+						) ?? false;
 					await writeFile(moveAbsPath, change.newContent);
 					await removeFile(sourceAbsPath);
-					receipts?.forget(sourceAbsPath);
-					await recordWrite(moveAbsPath, undefined, change.newContent);
+					receipts?.forget(sourceOnDisk);
+					receipts?.forget(
+						overlay ? await overlay.resolveRead(moveAbsPath) : moveAbsPath,
+					);
+					await recordWrite(
+						moveAbsPath,
+						undefined,
+						change.newContent,
+						sourceSeen,
+					);
 					touched.push(`${filePath} -> ${change.movePath}`);
 				} else {
 					await writeFile(sourceAbsPath, change.newContent);

@@ -1634,6 +1634,20 @@ async function replaceColumnRange(
 		);
 	}
 
+	assertColumnKeepsCharacters(
+		startLineText,
+		startColumnOneBased - 1,
+		startColumnOneBased,
+		startLineOneBased,
+		"start_column",
+	);
+	assertColumnKeepsCharacters(
+		endLineText,
+		endColumnOneBased,
+		endColumnOneBased,
+		endLineOneBased,
+		"end_column",
+	);
 	const head = startLineText.slice(0, startColumnOneBased - 1);
 	const tail = endLineText.slice(endColumnOneBased);
 	const replaced = `${head}${newStr ?? ""}${tail}`;
@@ -1694,8 +1708,19 @@ async function insertAtColumn(
 		);
 	}
 
+	assertColumnKeepsCharacters(
+		lineText,
+		columnOneBased - 1,
+		columnOneBased,
+		lineOneBased,
+		"insert_column",
+	);
+
+	// Inserted text takes the file's line ending, as a range replace's does
+	// when it re-splits: spliced in as given, a multi-line insert left bare
+	// "\n"s inside a CRLF file.
 	lines[lineOneBased - 1] =
-		`${lineText.slice(0, columnOneBased - 1)}${newStr}${lineText.slice(columnOneBased - 1)}`;
+		`${lineText.slice(0, columnOneBased - 1)}${newStr.replace(/\r\n|\n/g, eol)}${lineText.slice(columnOneBased - 1)}`;
 	const updated = lines.join(eol);
 
 	if (updated === content) {
@@ -1708,6 +1733,38 @@ async function insertAtColumn(
 	await fs.writeFile(filePath, bom + updated, { encoding });
 	const diff = createLineDiff(content, updated, maxDiffLines);
 	return `Inserted ${newStr.length} character(s) at line ${lineOneBased} column ${columnOneBased} in ${filePath}\n${diff}`;
+}
+
+/**
+ * Refuse a column that falls between the two halves of one character.
+ *
+ * Columns count UTF-16 units, so an emoji or any other character outside the
+ * Basic Multilingual Plane takes two of them. Cutting between the two left a
+ * lone half on each side, which the write turns into U+FFFD: "ab😀cd" with
+ * column 3 replaced by "X" became "abX�cd" (csf-5). `index` is where the
+ * line is cut, which is the column itself for an end column and one before it
+ * for a start or insert column.
+ */
+function assertColumnKeepsCharacters(
+	lineText: string,
+	index: number,
+	columnOneBased: number,
+	lineOneBased: number,
+	field: string,
+): void {
+	const before = lineText.charCodeAt(index - 1);
+	const after = lineText.charCodeAt(index);
+	if (
+		before >= 0xd800 &&
+		before <= 0xdbff &&
+		after >= 0xdc00 &&
+		after <= 0xdfff
+	) {
+		const character = lineText.slice(index - 1, index + 1);
+		throw new Error(
+			`Invalid ${field}: ${columnOneBased}. On line ${lineOneBased} it falls inside "${character}", one character that takes two columns, and cutting it would corrupt it. Use ${columnOneBased - 1} or ${columnOneBased + 1}.`,
+		);
+	}
 }
 
 function assertLineInRange(
@@ -1869,6 +1926,55 @@ export function createEditorExecutor(
 	};
 
 	/**
+	 * Refuse an edit that reaches past where a read cut a line short.
+	 *
+	 * `read_files` shows a line only up to 2,000 characters, and the receipt
+	 * said the whole line was read. A column edit past the cut, or a replace of
+	 * the whole line, landed on characters the model was never shown — the
+	 * second erases them, and the model cannot retype what it has not seen
+	 * (csf-16). `reach` is the last column the edit touches on `line`,
+	 * `Infinity` for the whole line. Reading again cuts the line again, so the
+	 * way past is named instead: columns inside the part shown, or `old_text`,
+	 * which only matches text the model has.
+	 */
+	const requireUncut = (
+		filePath: string,
+		line: number,
+		reach: number,
+	): void => {
+		const cut = receipts?.cutAt?.(filePath, line);
+		if (!cut || reach <= cut.shown) {
+			return;
+		}
+		const what = Number.isFinite(reach) ? `column ${reach}` : "the whole line";
+		throw new Error(
+			`Not modified: line ${line} of ${filePath} is ${cut.length.toLocaleString("en-US")} characters, and read_files showed you only the first ${cut.shown.toLocaleString("en-US")}. This edit reaches ${what}, past what you have seen. Edit inside columns 1-${cut.shown}, or anchor the edit on text with \`old_text\` — grep for a pattern from the rest of the line shows the characters around it.`,
+		);
+	};
+
+	/**
+	 * {@link requireUncut} for every line a range touches: the end line up to
+	 * its end column, every other line to its end, the start line's included —
+	 * a range that runs on to the next line replaces the rest of it.
+	 */
+	const requireRangeUncut = (
+		filePath: string,
+		startLine: number,
+		endLine: number,
+		endColumn?: number | null,
+	): void => {
+		for (let line = startLine; line <= endLine; line++) {
+			requireUncut(
+				filePath,
+				line,
+				line === endLine && endColumn != null
+					? endColumn
+					: Number.POSITIVE_INFINITY,
+			);
+		}
+	};
+
+	/**
 	 * Report what the edit left behind, when it left the file unparseable.
 	 *
 	 * The prompt asks the model to run `check_file` after every edit, and the
@@ -1991,6 +2097,8 @@ export function createEditorExecutor(
 					);
 				}
 				await requireRead(filePath, insertLine, insertLine);
+				// Inserting right after the last character shown is still in sight.
+				requireUncut(filePath, insertLine, input.insert_column - 1);
 				const result = await insertAtColumn(
 					filePath,
 					insertLine,
@@ -2035,6 +2143,12 @@ export function createEditorExecutor(
 					filePath,
 					input.start_line,
 					input.end_line ?? input.start_line,
+				);
+				requireRangeUncut(
+					filePath,
+					input.start_line,
+					input.end_line ?? input.start_line,
+					input.end_column ?? input.start_column,
 				);
 				const result = await replaceColumnRange(
 					filePath,
@@ -2084,6 +2198,15 @@ export function createEditorExecutor(
 				input.start_line,
 				input.end_line ?? input.start_line,
 			);
+			// With `old_text` only the matched text is replaced, and it can only
+			// match text the model has; without it the whole line goes.
+			if (input.old_text == null) {
+				requireRangeUncut(
+					filePath,
+					input.start_line,
+					input.end_line ?? input.start_line,
+				);
+			}
 			const result = await replaceLineRange(
 				filePath,
 				input.start_line,
@@ -2117,6 +2240,11 @@ export function createEditorExecutor(
 			// guard exists for edits aimed at lines nobody has looked at, and
 			// this is the one case where the model wrote them itself.
 			receipts?.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
+			// And the stamp. Without it `changedSince` has nothing to compare
+			// against and an outside write to this file is invisible to
+			// `requireCurrent` — the edit would land on content nobody in this
+			// session had looked at (csf-9).
+			receipts?.noteStamp(filePath, await readFileStamp(filePath));
 			return created;
 		}
 		if (input.old_text == null) {
@@ -2166,6 +2294,7 @@ export function createEditorExecutor(
 						`Changing part of it is cheaper and safer: read around the lines you mean to change, then send \`path\`, \`start_line\`, \`end_line\` and the \`new_text\` for just those lines.`,
 				);
 			}
+			requireRangeUncut(filePath, 1, lineCount);
 			const result = await replaceLineRange(
 				filePath,
 				1,

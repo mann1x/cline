@@ -493,12 +493,22 @@ function offsetIn(
 	}
 	// Only the first line of a span starts anywhere but column 1.
 	const within = column - (row === 0 ? origin.column : 1);
+	// The editor splits on /\r\n|\n/, so a CRLF line is one column narrower
+	// than a `\n` split makes it: the `\r` is not a column the model can
+	// address. Bounding against the raw line let the scan name a column one
+	// past the append position on every CRLF file -- a call `insertAtColumn`
+	// refuses -- which is bug 4's class on the line endings a Windows host
+	// writes. The offset stays the raw one: the `\r` sits at the end of the
+	// line, so every position inside it is the same offset either way.
+	const lineText = lines[row].endsWith("\r")
+		? lines[row].slice(0, -1)
+		: lines[row];
 	// On the line, or just past its last character -- where an append goes,
 	// and the last column the editor accepts. Anything further ran on into
 	// the next line: pandorum, 2026-10-18 (e97h3) was told to move a `)` on
 	// a 388-column line "to column 393", which was four characters into the
 	// line below, and the model, sending half of it, broke the line.
-	if (within < 0 || within > lines[row].length) {
+	if (within < 0 || within > lineText.length) {
 		return -1;
 	}
 	return offset + within;
@@ -577,7 +587,9 @@ function proposeRepair(
 		// The end of the line counts as a bracket position: a closer that
 		// belongs after the last one on the line goes there, and on e97h3's
 		// line 111 that was the only move that fixed it.
-		const lineEnd = target === body.length || body[target] === "\n";
+		// A CRLF line ends at its `\r`, and that is the append position too.
+		const lineEnd =
+			target === body.length || body[target] === "\n" || body[target] === "\r";
 		if (
 			target < 0 ||
 			target > body.length ||
