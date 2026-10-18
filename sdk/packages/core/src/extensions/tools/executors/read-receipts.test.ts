@@ -94,3 +94,20 @@ describe("createReadReceipts", () => {
 		expect(receipts.covers("/repo/other.html", 1, 10)).toBe(false);
 	});
 });
+
+describe("a registry handed to the next task", () => {
+	it("has read nothing once cleared", () => {
+		const receipts = createReadReceipts();
+		receipts.noteRead("/w/game.html", 1, 40);
+		receipts.noteStamp("/w/game.html", "stamp-a");
+
+		receipts.clear();
+
+		// The file was put back between runs: a new stamp, and a task that has
+		// never looked at it. Not "changed since you last looked".
+		expect(receipts.changedSince("/w/game.html", "stamp-b")).toBe(false);
+		expect(receipts.hasEverRead("/w/game.html")).toBe(false);
+		expect(receipts.covers("/w/game.html", 1, 10)).toBe(false);
+		expect(receipts.paths()).toEqual([]);
+	});
+});

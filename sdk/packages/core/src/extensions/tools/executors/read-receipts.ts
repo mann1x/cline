@@ -160,7 +160,22 @@ function receiptKey(filePath: string): string {
 	return process.platform === "win32" ? filePath.toLowerCase() : filePath;
 }
 
-export function createReadReceipts(): ReadReceipts {
+/**
+ * The registry as its owner holds it: everything a reader sees, plus the reset
+ * that only the owner may call. An agent's overlay view is a `ReadReceipts`
+ * and so cannot clear the lead's reads.
+ */
+export interface OwnedReadReceipts extends ReadReceipts {
+	/**
+	 * Forget every read. For the owner of a registry that outlives one task:
+	 * the next task has read nothing, and the last task's reads would tell its
+	 * first read that the file "changed since you last looked at it" (pandorum,
+	 * 2026-10-18, ptm1c) and credit edits to lines it never saw.
+	 */
+	clear(): void;
+}
+
+export function createReadReceipts(): OwnedReadReceipts {
 	const seen = new Map<string, Span[]>();
 	const retired = new Set<string>();
 	const stamps = new Map<string, FileStamp>();
@@ -257,6 +272,13 @@ export function createReadReceipts(): ReadReceipts {
 
 		paths() {
 			return [...originals.values()];
+		},
+
+		clear() {
+			seen.clear();
+			retired.clear();
+			stamps.clear();
+			originals.clear();
 		},
 	};
 }

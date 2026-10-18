@@ -710,6 +710,9 @@ export class Controller {
 			clearTask: async () => {
 				this.pendingClineAuthRetry = undefined
 				await this.taskControl.clearTask()
+				// The registry lives as long as the controller; what it records
+				// belongs to one task, and the next one has read nothing yet.
+				this.readReceipts.clear()
 			},
 			setTask: (task) => {
 				this.task = task
