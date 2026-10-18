@@ -39,6 +39,12 @@ function movePatch(file: string, destination: string, ...body: string[]) {
 	].join("\n");
 }
 
+// A file the tools create takes the platform's line ending, so on Windows it
+// is CRLF. These tests are about whether an edit is refused, not about EOLs.
+async function readLf(file: string): Promise<string> {
+	return (await fs.readFile(file, "utf8")).replace(/\r\n/g, "\n");
+}
+
 let dir: string;
 beforeEach(async () => {
 	dir = await fs.mkdtemp(join(tmpdir(), "csf-receipts-"));
@@ -145,7 +151,7 @@ describe("csf-7: a file a patch creates or moves has been read", () => {
 			ctx,
 		);
 		// The patch body carried no trailing newline, so the file has none.
-		expect(await fs.readFile(made, "utf8")).toBe("one\nTWO");
+		expect(await readLf(made)).toBe("one\nTWO");
 	});
 
 	it("a moved file's destination can be edited without a refused read", async () => {
@@ -323,6 +329,6 @@ describe("csf-9: a file the editor creates carries a stamp", () => {
 			dir,
 			ctx,
 		);
-		expect(await fs.readFile(file, "utf8")).toBe("one\nTWO\n");
+		expect(await readLf(file)).toBe("one\nTWO\n");
 	});
 });
