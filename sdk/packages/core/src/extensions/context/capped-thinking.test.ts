@@ -3,13 +3,17 @@ import { observeRequestTokens, resetTokenCalibration } from "@cline/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	buildCappedThinkingRequest,
+	CAPPED_THINKING_SYSTEM_PROMPT,
+	CONDENSED_THINKING_NOTE_MIN_TOKENS,
 	CONDENSED_THINKING_NOTE_TOKENS,
 	createCappedThinkingNoteWriter,
 	createCappedThinkingPrepareTurn,
+	DEFAULT_CAPPED_THINKING_PROMPT,
 	findCappedThinkingIndex,
 	isDegenerateNote,
 	locateCappedThinking,
 	reasoningHitBudget,
+	resolveCondensedThinkingNoteTokens,
 	resolveCondensedThinkingOutputCap,
 } from "./capped-thinking";
 
@@ -254,9 +258,8 @@ describe("the continuation note's request", () => {
 			],
 		});
 
-		expect(request).toContain("ruled out");
-		expect(request).toContain("First person, present tense");
-		expect(request).toContain("No headings, no bullet lists");
+		expect(request).toContain("setting aside, and why");
+		expect(request).toContain("first person, present continuous tense");
 		expect(request).toContain("I should try old_text again");
 		expect(request).toContain("No change: already reads that way");
 	});
@@ -284,14 +287,64 @@ describe("the continuation note's request", () => {
 			],
 		});
 
-		expect(request).toContain("what you called and what it returned");
+		expect(request).toContain("Every tool call in this turn");
+		expect(request).toContain("what it is returning");
 		expect(request).not.toContain("A paragraph or two");
 	});
 
 	it("says so when the budget ran out before any call was made", () => {
 		expect(
 			buildCappedThinkingRequest({ thinking: "…", outcomes: [] }),
-		).toContain("You made no tool call before the budget ran out.");
+		).toContain("There is no tool call in this turn yet.");
+	});
+
+	/**
+	 * The working model is the replay compaction prompt: first person, present
+	 * continuous, shapes to reuse, and nothing it forbids written out. The
+	 * prompt this replaced framed its own labels in the past and ended on "Do
+	 * not" lines, and its note sent the next turn into a loop (2026-10-18).
+	 */
+	it("holds the present continuous in its own labels and shows no negatives", () => {
+		const request = buildCappedThinkingRequest({
+			thinking: "…",
+			outcomes: [{ name: "read_files", input: "a.ts", result: "ok" }],
+			partialAnswer: "I'm",
+		});
+		expect(request).toContain("Your reasoning, as it stands:");
+		expect(request).toContain("The reply you are in the middle of writing:");
+		expect(request).toContain(
+			"What you are calling, and what it is returning:",
+		);
+		for (const past of [
+			"You were reasoning",
+			"as far as it got",
+			"What you then called",
+			"when you were cut off",
+		]) {
+			expect(request).not.toContain(past);
+		}
+		expect(DEFAULT_CAPPED_THINKING_PROMPT).not.toMatch(
+			/\bDo not\b|\bNo headings\b/,
+		);
+		expect(CAPPED_THINKING_SYSTEM_PROMPT).toContain("present continuous");
+	});
+
+	it("asks for a length, in words, against what it replaces", () => {
+		const request = buildCappedThinkingRequest({
+			thinking: "x".repeat(40_000),
+			outcomes: [],
+			noteTokens: 2_000,
+		});
+		expect(request).toContain("Write about 1500 words.");
+		// A length a replacement prompt gets too.
+		expect(
+			buildCappedThinkingRequest({
+				thinking: "…",
+				outcomes: [],
+				promptTemplate: "Two lines, no more.",
+				noteTokens: 1_000,
+			}),
+		).toContain("Write about 750 words.");
 	});
 
 	it("takes a replacement instruction", () => {
@@ -677,6 +730,57 @@ describe("the condensation cap follows the thinking budget in force", () => {
 	});
 });
 
+/**
+ * "1k-2k if there's enough context/output available" (user, 2026-10-18): a
+ * 45,000-token think had come back as a 450-token note.
+ */
+describe("the note's length follows the think and the room", () => {
+	it("is a tenth of the think, between 1,000 and 2,000 tokens", () => {
+		const at = (thinkChars: number) =>
+			resolveCondensedThinkingNoteTokens({
+				thinkingChars: thinkChars,
+				requestChars: thinkChars,
+				providerConfig: {},
+			}).noteTokens;
+		expect(at(160_000)).toBe(CONDENSED_THINKING_NOTE_TOKENS);
+		expect(at(40_000)).toBeGreaterThanOrEqual(
+			CONDENSED_THINKING_NOTE_MIN_TOKENS,
+		);
+		expect(at(40_000)).toBeLessThanOrEqual(CONDENSED_THINKING_NOTE_TOKENS);
+	});
+
+	it("carries a cap above the target, so the cap is a stop", () => {
+		const { noteTokens, maxTokens } = resolveCondensedThinkingNoteTokens({
+			thinkingChars: 160_000,
+			requestChars: 160_000,
+			providerConfig: {},
+		});
+		expect(maxTokens).toBe(Math.ceil(noteTokens * 1.5));
+	});
+
+	it("steps down only when the window cannot hold the request and the note", () => {
+		const big = resolveCondensedThinkingNoteTokens({
+			thinkingChars: 160_000,
+			requestChars: 160_000,
+			roomTokens: 200_000,
+			providerConfig: {},
+		});
+		expect(big.noteTokens).toBe(CONDENSED_THINKING_NOTE_TOKENS);
+		// 160,000 chars at 3 per token is 53,334 + 512 slack; 55,000 leaves
+		// about 1,150 tokens for the cap, so the note steps down below 1,000.
+		const tight = resolveCondensedThinkingNoteTokens({
+			thinkingChars: 160_000,
+			requestChars: 160_000,
+			roomTokens: 55_000,
+			providerConfig: {},
+		});
+		expect(tight.noteTokens).toBeLessThan(CONDENSED_THINKING_NOTE_MIN_TOKENS);
+		expect(Math.ceil(160_000 / 3) + 512 + tight.maxTokens).toBeLessThanOrEqual(
+			55_000,
+		);
+	});
+});
+
 describe("what the condenser asks the summariser for", () => {
 	afterEach(() => {
 		summarizerConfigs().length = 0;
@@ -724,7 +828,10 @@ describe("what the condenser asks the summariser for", () => {
 
 		expect(summarizerConfigs()).toHaveLength(1);
 		const config = summarizerConfigs()[0];
-		expect(config.maxOutputTokens).toBe(2_000);
+		// A stop above the note's target, not a wall the note is written into:
+		// half as much again as a target of 1,000 to 2,000 tokens.
+		expect(config.maxOutputTokens).toBeGreaterThanOrEqual(1_500);
+		expect(config.maxOutputTokens).toBeLessThanOrEqual(3_000);
 		// The note needs no reasoning of its own, and asking for it is what left
 		// no room for the note.
 		expect(config.thinking).toBe(false);

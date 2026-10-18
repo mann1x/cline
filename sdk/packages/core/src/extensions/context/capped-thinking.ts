@@ -156,7 +156,7 @@ export function reasoningHitBudget(
  * lands nowhere near this in practice, which is what makes it a guard rather
  * than a target.
  */
-const CONDENSED_THINKING_MAX_CHARS = 12_000;
+const CONDENSED_THINKING_MAX_CHARS = 16_000;
 
 /**
  * The output cap for the condensation call itself.
@@ -182,6 +182,89 @@ const CONDENSED_THINKING_MAX_CHARS = 12_000;
  * repeating itself, which is why it stays a fixed number and not a share.
  */
 export const CONDENSED_THINKING_NOTE_TOKENS = 2_000;
+
+/**
+ * The note's length target: a tenth of the think it replaces, kept between
+ * 1,000 and 2,000 tokens (user ruling, 2026-10-18: "1k-2k if there's enough
+ * context/output available").
+ *
+ * The floor is the point. A note is asked for only when a think ran to its
+ * budget, and the notes measured so far were 250 to 450 tokens -- a hundredth
+ * of what they replaced, too little to carry the calls, the findings and what
+ * was set aside, so the next pass re-derived them.
+ */
+export const CONDENSED_THINKING_NOTE_MIN_TOKENS = 1_000;
+const CONDENSED_THINKING_NOTE_SHARE = 0.1;
+/** The least a note is asked for when the window leaves less than the floor. */
+const CONDENSED_THINKING_NOTE_SHRUNK_TOKENS = 300;
+/**
+ * The cap over the target, so the cap is a stop against a runaway and not a
+ * wall the note is written into: a model aiming at 1,500 words lands either
+ * side of it.
+ */
+const CONDENSED_THINKING_NOTE_HEADROOM = 1.5;
+/** Characters per token, for sizing the condensation request before it is sent. */
+const NOTE_REQUEST_CHARS_PER_TOKEN = 3;
+/** Slack on that sizing: the chat template's own tokens. */
+const NOTE_REQUEST_SLACK_TOKENS = 512;
+
+/**
+ * How long a note to ask for, and the output cap that goes with it.
+ *
+ * The target comes from the think; the room only ever lowers it. With a
+ * window to fit, the condensation request and its cap must both be inside
+ * it, so the target steps down until they are -- to a short note rather than
+ * none, because a request that does not fit is refused either way. With no
+ * window known the target stands, and the server sizes the call as before.
+ */
+export function resolveCondensedThinkingNoteTokens(options: {
+	thinkingChars: number;
+	/** The condensation request as it will be sent, in characters. */
+	requestChars: number;
+	/** The tokens the call has to fit in, when known. */
+	roomTokens?: number;
+	providerConfig: Partial<ProviderConfig>;
+}): { noteTokens: number; maxTokens: number } {
+	const capFor = (note: number) =>
+		resolveCondensedThinkingOutputCap(
+			options.providerConfig,
+			Math.ceil(note * CONDENSED_THINKING_NOTE_HEADROOM),
+		);
+	const thinkTokens = estimateThinkingTokens(options.thinkingChars);
+	const wanted = Math.min(
+		CONDENSED_THINKING_NOTE_TOKENS,
+		Math.max(
+			CONDENSED_THINKING_NOTE_MIN_TOKENS,
+			Math.round(thinkTokens * CONDENSED_THINKING_NOTE_SHARE),
+		),
+		// Never more than half of what it condenses: a short think is not
+		// worth a long note.
+		Math.max(
+			CONDENSED_THINKING_NOTE_SHRUNK_TOKENS,
+			Math.floor(thinkTokens / 2),
+		),
+	);
+	const room = options.roomTokens;
+	if (room === undefined || !(room > 0)) {
+		return { noteTokens: wanted, maxTokens: capFor(wanted) };
+	}
+	const request =
+		Math.ceil(options.requestChars / NOTE_REQUEST_CHARS_PER_TOKEN) +
+		NOTE_REQUEST_SLACK_TOKENS;
+	for (
+		let note = wanted;
+		note > CONDENSED_THINKING_NOTE_SHRUNK_TOKENS;
+		note -= 100
+	) {
+		if (request + capFor(note) <= room) {
+			return { noteTokens: note, maxTokens: capFor(note) };
+		}
+	}
+	return {
+		noteTokens: CONDENSED_THINKING_NOTE_SHRUNK_TOKENS,
+		maxTokens: capFor(CONDENSED_THINKING_NOTE_SHRUNK_TOKENS),
+	};
+}
 
 /**
  * The cap the condensation request carries.
@@ -315,9 +398,17 @@ const CAPPED_THINKING_RETROSPECTIVE_SYSTEM_PROMPT =
  * document gets checked rather than continued. Measured on a live run: the
  * model opened its next turn quoting the note back and arguing with a tool
  * result about it, then re-read the same file and reasoned to the budget again.
+ *
+ * Present continuous, like the note under it, and silent about the budget.
+ * The line it replaced -- "I have already reasoned this far ... up to the point
+ * where I ran out of thinking budget" -- told the story of an interruption in
+ * the past perfect, which is the one thing the note is asked to leave out, and
+ * put "ran out of thinking budget" at the head of every condensed think. The
+ * same voice as the compaction retrospective's "I am picking the work back up
+ * from here."
  */
 const CONDENSED_THINKING_LEAD_IN =
-	"I have already reasoned this far on this problem, up to the point where I ran out of thinking budget. Picking up from here rather than starting again:";
+	"I'm picking my reasoning back up from where it stands.";
 
 /**
  * The instruction half of the condensation request.
@@ -327,23 +418,51 @@ const CONDENSED_THINKING_LEAD_IN =
  * note is for; `DEFAULT_CAPPED_THINKING_PROMPT` says what it must contain.
  */
 export const CAPPED_THINKING_SYSTEM_PROMPT =
-	"You are compressing a train of thought, in the voice of the person who was thinking it. What you write goes back into that same reasoning as its own continuation -- not as a report about it -- so write it the way thinking is written: first person, present tense, plain sentences, no headings and no lists. Keep every specific: paths, symbols, line numbers, error text, and above all what was already ruled out and why.";
+	"You are condensing a train of thought, in the voice of the person who is thinking it. What you write goes back into that same reasoning as the part of it already done, and is read as thinking, so write it the way thinking is written: first person, present continuous tense, plain prose, one thought after another. Keep every specific: paths, symbols, line numbers, error text, and what is set aside and why.";
 
-export const DEFAULT_CAPPED_THINKING_PROMPT = `You were reasoning about a problem and ran out of thinking budget mid-thought. Below is how far you got, and what the tool call you managed to make returned.
+/**
+ * What the note must contain, and the voice it is in.
+ *
+ * Built on the replay compaction prompt (`DEFAULT_REPLAY_COMPACTION_PROMPT`),
+ * the one that holds its voice: first person, present continuous, shapes to
+ * reuse, and its own labels in the tense it asks for. The version this
+ * replaces asked for "present tense" while framing everything in the past --
+ * "You were reasoning", "how far you got", "what you then called" -- forbade
+ * lists inside a bullet list, and ended on "Do not" lines. A prompt that
+ * disagrees with itself is read as an instruction that is optional, and a
+ * negative exemplar is still an exemplar. On pandorum the note it produced
+ * sent the next turn into a loop: re-reasoning the note rather than going on
+ * from it.
+ *
+ * The length is not in here. It is a target the request builder appends,
+ * sized to the think and the room (`resolveCondensedThinkingNoteTokens`), so a
+ * replacement prompt gets it too.
+ */
+export const DEFAULT_CAPPED_THINKING_PROMPT = `Your thinking on this turn has reached its budget, and the reasoning below is about to be replaced by what you write now. Write the reasoning that takes its place.
 
-Rewrite that reasoning, compressed, as the thinking it is. It is going back into your own reasoning channel as the part you have already done, so that your next pass starts from here instead of starting over and arriving at this same point again.
+It goes back into **your own thinking channel**, as the thinking you are in the middle of. Your next pass reads it as its own train of thought and carries on from the end of it, so write it the way you think: in the **first person, present continuous tense**, in plain prose, one thought after another, the same voice as the reasoning it replaces.
 
-Write it as thought, not as a report about thought:
-- First person, present tense, the way you were already thinking. No headings, no bullet lists, no preamble, no sign-off. Do not label it or announce what it is; just think.
-- Carry what you called and what it returned. Every tool call in this turn, by name, with the argument that mattered and what came back -- the file you read and what was at the line you were looking for, the edit you attempted and whether it applied, the command you ran and what it printed. A retrospective that omits this is the one thing the next pass cannot recover, because the results are not in front of it any more.
-- State what you have settled as settled. Do not re-derive it and do not hedge it.
-- Say what you ruled out and why, in a clause each. This is the part that stops the next pass repeating this one, and it is the part that gets dropped first if you are careless.
-- Long enough that none of the above is missing, short enough that none of it is padding. Length follows the content: a turn that made four calls and settled three questions is not a paragraph. If you find yourself restating a line you have already written, you are finished: stop.
-- End on the one question still open and the single next action, stated concretely.
+Write every step as the step itself, then what is coming back. These are the shapes — reuse them:
 
-Two things to keep out of it:
-- Do not copy file contents. Name the file and the line and say what you concluded about it. Quoted code goes stale the moment the file is edited, and reasoning that argues with the next tool result costs more than it saved.
-- Do not narrate the interruption. It is not part of the problem.`;
+- "I'm working out why the collision check misses the left wall."
+- "I'm reading \`game.js\` around line 274, and the bounds test there compares against \`width\` where it needs \`width - size\`."
+- "I'm running \`check_file\` on it, and it is reporting an unterminated regular expression at line 274."
+- "I'm setting the loop rewrite aside: the fault is in the bounds test, and the loop is sound."
+- "The bounds test is the cause, so what I'm doing next is editing line 274."
+
+Every sentence holds that voice, the middle as much as the first and the last.
+
+Carry all of this:
+
+- **What you are being asked to do**, in a sentence.
+- **Every tool call in this turn**, by name, with the argument that matters and what it is returning: the file and what is at the line you are looking at, the edit and whether it is applying, the command and what it is printing. These results are not in front of your next pass any more, so this is the only place they survive.
+- **What you are treating as settled**, stated as settled.
+- **What you are setting aside, and why**, a clause each. This is what keeps the next pass off ground this one has already covered.
+- **Where you are**, ending on the one question still open and the single next action, stated concretely.
+
+Name files and lines and say what you are concluding about them; the files themselves are on disk, and the next tool result is what shows their current state.
+
+Begin with the problem itself and end on the next action.`;
 
 interface ToolOutcome {
 	name: string;
@@ -628,21 +747,28 @@ export function buildCappedThinkingRequest(options: {
 	promptTemplate?: string;
 	/** The reply the turn had begun writing before it was cut off. */
 	partialAnswer?: string;
+	/** The note's length target, in tokens (`resolveCondensedThinkingNoteTokens`). */
+	noteTokens?: number;
 }): string {
 	const parts = [
 		options.promptTemplate?.trim() || DEFAULT_CAPPED_THINKING_PROMPT,
-		`Your reasoning, as far as it got:\n${options.thinking}`,
 	];
+	if (options.noteTokens !== undefined && options.noteTokens > 0) {
+		parts.push(describeNoteLength(options.noteTokens, options.thinking.length));
+	}
+	// Labels in the tense the note is asked for: a heading in the past is read
+	// as permission to write the body in it.
+	parts.push(`Your reasoning, as it stands:\n${options.thinking}`);
 	if (options.partialAnswer?.trim()) {
 		// What it had actually started to say. More committal than the reasoning
 		// around it, and discarded with everything else.
 		parts.push(
-			`The reply you had begun writing when you were cut off:\n${options.partialAnswer.trim()}`,
+			`The reply you are in the middle of writing:\n${options.partialAnswer.trim()}`,
 		);
 	}
 	if (options.outcomes.length > 0) {
 		parts.push(
-			`What you then called, and what it returned:\n${options.outcomes
+			`What you are calling, and what it is returning:\n${options.outcomes
 				.map(
 					(outcome) =>
 						`- ${outcome.name}(${outcome.input})\n  → ${outcome.result}`,
@@ -650,9 +776,30 @@ export function buildCappedThinkingRequest(options: {
 				.join("\n")}`,
 		);
 	} else {
-		parts.push("You made no tool call before the budget ran out.");
+		parts.push("There is no tool call in this turn yet.");
 	}
 	return parts.join("\n\n");
+}
+
+/** Words per token of English prose, for saying a length a model can aim at. */
+const NOTE_WORDS_PER_TOKEN = 0.75;
+
+/**
+ * The length, said in words, against the length of what it replaces.
+ *
+ * Without a number the note is as short as the model dares: a think of about
+ * 45,000 tokens came back as a 450-token note on pandorum (reported
+ * 2026-10-18), and 64,313 and 75,317 characters as 768 and 624 on 2026-09-19 --
+ * each time with the room to say four times as much. "Short enough that none of it is padding" was read as
+ * the target.
+ */
+function describeNoteLength(noteTokens: number, thinkingChars: number): string {
+	const round = (n: number) => Math.max(50, Math.round(n / 50) * 50);
+	const words = round(noteTokens * NOTE_WORDS_PER_TOKEN);
+	const replaced = round(
+		estimateThinkingTokens(thinkingChars) * NOTE_WORDS_PER_TOKEN,
+	);
+	return `Write about ${words} words. The reasoning this replaces runs to about ${replaced}, and your next pass has nothing else of it to work from, so use the room: every call with what it is returning, every finding, everything you are setting aside, each with its specifics.`;
 }
 
 export interface CappedThinkingCondenserConfig {
@@ -702,12 +849,15 @@ type PrepareTurn = (
 ) => PrepareTurnResult | Promise<PrepareTurnResult>;
 
 /** A request answered by the conversation itself, or `undefined` to decline. */
-type ConversationAsk = (
+type ConversationAsk = ((
 	systemPrompt: string,
 	request: string,
 	maxTokens: number,
 	what: string,
-) => Promise<string | undefined>;
+) => Promise<string | undefined>) & {
+	/** What the conversation's last request left of the window, when measured. */
+	roomTokens?: number;
+};
 
 /** Characters per token, for sizing a request before it is sent. */
 const CONTINUATION_CHARS_PER_TOKEN = 3;
@@ -745,7 +895,12 @@ export function createConversationAsk(
 		return undefined;
 	}
 	const room = input.continuationRoomTokens;
-	return async (systemPrompt, request, maxTokens, what) => {
+	const ask: ConversationAsk = async (
+		systemPrompt,
+		request,
+		maxTokens,
+		what,
+	) => {
 		// One user message: the conversation's own system prompt stands, so
 		// the note's instruction goes in front of what it is about.
 		const instruction = `${systemPrompt}\n\n${request}`;
@@ -784,6 +939,10 @@ export function createConversationAsk(
 			return undefined;
 		}
 	};
+	if (room !== undefined) {
+		ask.roomTokens = room;
+	}
+	return ask;
 }
 
 /**
@@ -804,19 +963,40 @@ async function writeCappedThinkingNote(options: {
 	/** Tried first: the conversation's own next turn. */
 	ask?: ConversationAsk;
 }): Promise<string> {
-	const request = buildCappedThinkingRequest({
-		thinking: options.thinking,
-		outcomes: options.outcomes,
-		promptTemplate: options.config.promptTemplate,
-		...(options.partialAnswer ? { partialAnswer: options.partialAnswer } : {}),
-	});
+	// Sized twice, once for each place the note can be written: the
+	// conversation's next turn has what its last request left, a request of
+	// its own has the whole window. The length sentence is the same length
+	// whatever number is in it, so the request is measured with any.
+	const build = (noteTokens: number) =>
+		buildCappedThinkingRequest({
+			thinking: options.thinking,
+			outcomes: options.outcomes,
+			promptTemplate: options.config.promptTemplate,
+			noteTokens,
+			...(options.partialAnswer
+				? { partialAnswer: options.partialAnswer }
+				: {}),
+		});
+	const sized = (roomTokens: number | undefined, extraChars = 0) => {
+		const size = resolveCondensedThinkingNoteTokens({
+			thinkingChars: options.thinking.length,
+			requestChars: build(CONDENSED_THINKING_NOTE_TOKENS).length + extraChars,
+			...(roomTokens !== undefined ? { roomTokens } : {}),
+			providerConfig: options.providerConfig,
+		});
+		return { ...size, request: build(size.noteTokens) };
+	};
 	if (options.ask) {
+		const forAsk = sized(
+			options.ask.roomTokens,
+			CAPPED_THINKING_SYSTEM_PROMPT.length,
+		);
 		const continued = truncateText(
 			(
 				(await options.ask(
 					CAPPED_THINKING_SYSTEM_PROMPT,
-					request,
-					resolveCondensedThinkingOutputCap(options.providerConfig),
+					forAsk.request,
+					forAsk.maxTokens,
 					"note",
 				)) ?? ""
 			).trim(),
@@ -834,18 +1014,22 @@ async function writeCappedThinkingNote(options: {
 		// 22,011, 19,007 and 39,544 characters. Left unset, the cap resolves from
 		// the window like any other turn, which is both large enough to survive a
 		// forced think and already scaled to what the session has room for.
+		const resolved = resolveSummarizerConfig({
+			activeProviderConfig: options.providerConfig,
+			summarizer: options.config.summarizer,
+		});
+		const own = sized(resolved.modelInfo?.contextWindow);
+		const request = own.request;
 		const summarizerConfig = {
-			...resolveSummarizerConfig({
-				activeProviderConfig: options.providerConfig,
-				summarizer: options.config.summarizer,
-			}),
-			maxOutputTokens: resolveCondensedThinkingOutputCap(
-				options.providerConfig,
-			),
+			...resolved,
+			maxOutputTokens: own.maxTokens,
 			...(options.config.sideCallOf
 				? { sideCallOf: options.config.sideCallOf }
 				: {}),
 		};
+		options.config.logger?.debug?.(
+			`Capped-thinking note asked for about ${own.noteTokens} tokens (cap ${own.maxTokens}) from ${options.thinking.length} chars of reasoning`,
+		);
 		const handler = await createHandlerAsync(summarizerConfig);
 		let text = "";
 		let chunks = 0;
