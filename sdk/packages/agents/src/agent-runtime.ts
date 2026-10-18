@@ -1198,6 +1198,8 @@ export class AgentRuntime {
 		AgentMessage,
 		{ nudge: string | undefined }
 	>();
+	/** Turns whose looping reasoning was removed and said so in the chat. */
+	private readonly announcedRepetitionRemoval = new WeakSet<AgentMessage>();
 	/** The unreadable call a turn's text held before it was replaced. */
 	private readonly unreadableCalls = new WeakMap<
 		AgentMessage,
@@ -1650,10 +1652,11 @@ export class AgentRuntime {
 	 * go -- and the message is marked so compaction can leave a turn like this
 	 * out of what it keeps (see `spoiledTurn` in core's compaction).
 	 */
-	private replaceSpoiledContent(message: AgentMessage): void {
+	private replaceSpoiledContent(message: AgentMessage): string | undefined {
 		if (message.role !== "assistant") {
-			return;
+			return undefined;
 		}
+		let notice: string | undefined;
 		const spoiled: { kinds: string[]; removedChars: number } = {
 			kinds: [],
 			removedChars: 0,
@@ -1690,6 +1693,16 @@ export class AgentRuntime {
 				content.splice(0, content.length, ...kept);
 				spoiled.kinds.push("reasoning_loop");
 				spoiled.removedChars += reasoning.length;
+				// A cut while streaming has already said so (`onReasoningLoopCut`).
+				// A block measured once it was complete had no line of its own:
+				// the reminder to the model is spent once per run, while every
+				// looping turn is removed, so most loops left nothing in the chat.
+				if (!verdict && measurement) {
+					const asked = this.repetitionNudges.get(message)?.nudge;
+					notice = `the reasoning repeated one passage ${measurement.maxRepeat} times — removed from the conversation${
+						asked ? ", asking for a different approach" : ""
+					}`;
+				}
 				this.config.logger?.debug?.(
 					`[reasoning-loop] iter=${this.state.iteration} removed: ${
 						verdict
@@ -1736,7 +1749,7 @@ export class AgentRuntime {
 			);
 		}
 		if (spoiled.kinds.length === 0) {
-			return;
+			return undefined;
 		}
 		this.config.logger?.debug?.(
 			`Replaced spoiled content in an assistant turn (${spoiled.kinds.join(", ")}): ${spoiled.removedChars} chars removed`,
@@ -1747,6 +1760,7 @@ export class AgentRuntime {
 		};
 		mutable.content = content;
 		mutable.metadata = { ...(message.metadata ?? {}), spoiledTurn: spoiled };
+		return notice;
 	}
 
 	/** Whether this host asks a silent turn to continue at all. */
@@ -2581,6 +2595,13 @@ export class AgentRuntime {
 						// record that collapses them cannot say which threshold
 						// was the one that moved.
 						for (const fired of firedNudges) {
+							// Already in the line that announced the removal.
+							if (
+								fired.nudge === "silent_repetition" &&
+								this.announcedRepetitionRemoval.has(message)
+							) {
+								continue;
+							}
 							await this.emit({
 								type: "status-notice",
 								snapshot: this.snapshot(),
@@ -3591,13 +3612,27 @@ export class AgentRuntime {
 		message: AgentMessage,
 		finishReason: AgentModelFinishReason,
 	): Promise<void> {
-		this.replaceSpoiledContent(message);
+		const removed = this.replaceSpoiledContent(message);
 		this.state.messages.push(message);
 		await this.emit({
 			type: "message-added",
 			snapshot: this.snapshot(),
 			message,
 		});
+		if (removed) {
+			this.announcedRepetitionRemoval.add(message);
+			await this.emit({
+				type: "status-notice",
+				snapshot: this.snapshot(),
+				message: removed,
+				metadata: {
+					kind: "reasoning_loop",
+					reason: "reasoning_loop",
+					phase: "removed",
+					iteration: this.state.iteration,
+				},
+			});
+		}
 		await this.emit({
 			type: "assistant-message",
 			snapshot: this.snapshot(),

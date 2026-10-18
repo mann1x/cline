@@ -119,9 +119,19 @@ describe("a turn whose content must not be read back", () => {
 			// fact is what catches it -- the case that kept all of it.
 			reasoningLoopDetection: false,
 		});
+		const notices: string[] = [];
+		runtime.subscribe((event) => {
+			if (event.type === "status-notice") {
+				notices.push(event.message);
+			}
+		});
 
 		const result = await runtime.run("fix it");
 
+		// Said in the chat, as every other guard says what it did.
+		expect(notices).toEqual([
+			"the reasoning repeated one passage 40 times — removed from the conversation, asking for a different approach",
+		]);
 		const looped = result.messages.find((m) => m.role === "assistant");
 		const reasoning = reasoningOf(looped);
 		expect(reasoning.startsWith("[SYSTEM] ")).toBe(true);
@@ -141,6 +151,60 @@ describe("a turn whose content must not be read back", () => {
 		expect(JSON.stringify(model.requests[1]?.messages)).not.toContain(
 			passage.repeat(3),
 		);
+	});
+
+	it("says so in the chat when the reminder to the model is already spent", async () => {
+		const passage =
+			"Wait, I should also check whether the parser thinks the method is outside the class, because that is what the error on this line is telling me.\n\n";
+		const noop: AgentTool = {
+			name: "read_files",
+			description: "read",
+			inputSchema: { type: "object", properties: {} },
+			execute: async () => "ok",
+		};
+		const looping = (id: string): AgentModelEvent[] => [
+			{ type: "reasoning-delta", text: passage.repeat(30) },
+			{
+				type: "tool-call-delta",
+				toolCallId: id,
+				toolName: "read_files",
+				inputText: "{}",
+			} as AgentModelEvent,
+			{ type: "finish", reason: "tool-calls" },
+		];
+		const model = new ScriptedModel([
+			looping("c1"),
+			looping("c2"),
+			[
+				{ type: "text-delta", text: "The task is complete." },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [noop],
+			reasoningLoopDetection: false,
+			reasoningRepetition: { maxNudges: 0 },
+		});
+		const notices: string[] = [];
+		runtime.subscribe((event) => {
+			if (event.type === "status-notice") {
+				notices.push(event.message);
+			}
+		});
+
+		const result = await runtime.run("fix it");
+
+		expect(notices).toEqual([
+			"the reasoning repeated one passage 30 times — removed from the conversation",
+			"the reasoning repeated one passage 30 times — removed from the conversation",
+		]);
+		expect(
+			result.messages.some(
+				(m) =>
+					m.role === "user" && textOf(m).includes("wrote this same passage"),
+			),
+		).toBe(false);
 	});
 });
 
