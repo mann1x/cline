@@ -12,6 +12,9 @@ import type {
 	SubagentStatusItem,
 } from "@shared/ExtensionMessage"
 import { Logger } from "@shared/services/Logger"
+import * as fs from "fs"
+import * as os from "os"
+import * as path from "path"
 import { describe, expect, it, vi } from "vitest"
 import { getDesktopDir } from "@/utils/path"
 import {
@@ -4660,6 +4663,94 @@ describe("sdkToolToClineSayTool — editor diff rendering (S6-48)", () => {
 		const tool = JSON.parse(result.messages[0].text!)
 		expect(tool.tool).toBe("editedExistingFile")
 		expect(tool.path).toBe("/src/app.ts")
+	})
+
+	/**
+	 * pandorum 2026-10-18, session 1792300402681_dvrls: `editor` with
+	 * `start_line: 90, start_column: 382, end_column: 382, new_text: ""` drew
+	 * "wants to edit this file (LINE 90):" over an empty card -- a deletion
+	 * inside a line sends no text, and the card had only `new_text` to show.
+	 */
+	describe("a line-range edit shows the line it changes", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "range-edit-"))
+		const file = path.join(dir, "game.js")
+		fs.writeFileSync(file, "line one\nif(a){b();}}\nline three\n")
+
+		it("draws the approval card from the file, before the edit runs", () => {
+			const ask = buildToolApprovalAskMessage(
+				"editor",
+				{ path: "game.js", start_line: 2, start_column: 12, end_column: 12, new_text: "" },
+				1,
+				dir,
+			)
+			const tool = JSON.parse(ask.text!) as ClineSayTool
+			expect(tool.tool).toBe("editedExistingFile")
+			expect(tool.editMode).toBe("LINE 2, COLUMN 12")
+			expect(tool.content).toBe("------- SEARCH\nif(a){b();}}\n=======\nif(a){b();}\n+++++++ REPLACE")
+			expect(tool.startLineNumbers).toEqual([2])
+		})
+
+		it("replaces whole lines when no column is given", () => {
+			const ask = buildToolApprovalAskMessage(
+				"editor",
+				{ path: "game.js", start_line: 1, end_line: 2, new_text: "one" },
+				1,
+				dir,
+			)
+			const tool = JSON.parse(ask.text!) as ClineSayTool
+			expect(tool.editMode).toBe("LINES 1-2")
+			expect(tool.content).toBe("------- SEARCH\nline one\nif(a){b();}}\n=======\none\n+++++++ REPLACE")
+		})
+
+		it("draws the finished card from the editor's diff, not the edited file", () => {
+			const state = new MessageTranslatorState()
+			const input = { path: file, start_line: 97, start_column: 1, end_column: 1, new_text: "" }
+			translateSessionEvent(
+				{
+					type: "agent_event",
+					payload: {
+						sessionId: "s",
+						event: {
+							type: "content_start",
+							contentType: "tool",
+							toolName: "editor",
+							toolCallId: "c",
+							input,
+						} as AgentEvent,
+					},
+				},
+				state,
+			)
+			const end = translateSessionEvent(
+				{
+					type: "agent_event",
+					payload: {
+						sessionId: "s",
+						event: {
+							type: "content_end",
+							contentType: "tool",
+							toolName: "editor",
+							toolCallId: "c",
+							output: {
+								query: "edit:game.js",
+								success: true,
+								result: "Replaced line 97, columns 1-1 in game.js\n```diff\n-97: }\n+97: \n```\n",
+							},
+						} as AgentEvent,
+					},
+				},
+				state,
+			)
+			const tool = JSON.parse(end.messages[0].text!) as ClineSayTool
+			expect(tool.content).toBe("------- SEARCH\n}\n=======\n\n+++++++ REPLACE")
+			expect(tool.startLineNumbers).toEqual([97])
+		})
+
+		it("keeps new_text alone when neither the file nor a result can say more", () => {
+			const ask = buildToolApprovalAskMessage("editor", { path: "missing.js", start_line: 3, new_text: "x" }, 1, dir)
+			const tool = JSON.parse(ask.text!) as ClineSayTool
+			expect(tool.content).toBe("x")
+		})
 	})
 
 	it("S6-48: editor with only new_text keeps raw new_text in content", () => {

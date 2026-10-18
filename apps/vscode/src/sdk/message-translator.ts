@@ -73,6 +73,7 @@ import type {
 	SubagentStatusItem,
 } from "@shared/ExtensionMessage"
 import { Logger } from "@shared/services/Logger"
+import * as fs from "fs"
 import * as path from "path"
 import { isClineManagedProvider } from "@/shared/utils/cline"
 import { arePathsEqual, getDesktopDir } from "@/utils/path"
@@ -1711,6 +1712,120 @@ function relativizePatchPaths(patch: string | undefined, cwd: string): string | 
 }
 
 // ---------------------------------------------------------------------------
+// Line-range edits: what the card shows
+// ---------------------------------------------------------------------------
+
+/** What a line-range edit card can be drawn from besides the call itself. */
+interface RangeEditContext {
+	/** The task's cwd, to resolve the path against. */
+	cwd?: string
+	/**
+	 * The tool's output, once it has run. Read before the file, because by
+	 * then the file already holds the edit: the editor's own `-N:`/`+N:` diff is
+	 * the before and after as they were.
+	 */
+	output?: unknown
+}
+
+/** Files larger than this are not read for a card. */
+const RANGE_EDIT_MAX_FILE_BYTES = 4 * 1024 * 1024
+
+function rangeEditResultText(output: unknown): string {
+	if (output && typeof output === "object" && !Array.isArray(output)) {
+		const result = (output as { result?: unknown }).result
+		if (typeof result === "string") {
+			return result
+		}
+	}
+	return extractToolOutputText(output)
+}
+
+/** The editor's own diff of the lines it replaced, from its result. */
+function rangeEditFromResult(output: unknown): { before: string[]; after: string[]; startLine: number } | undefined {
+	const text = rangeEditResultText(output)
+	const block = /```diff\n([\s\S]*?)\n```/.exec(text)
+	if (!block) {
+		return undefined
+	}
+	const before: string[] = []
+	const after: string[] = []
+	let startLine: number | undefined
+	for (const line of block[1].split("\n")) {
+		const match = /^([-+])(\d+): ?(.*)$/.exec(line)
+		if (!match) {
+			continue
+		}
+		const number = Number(match[2])
+		if (startLine === undefined || number < startLine) {
+			startLine = number
+		}
+		;(match[1] === "-" ? before : after).push(match[3])
+	}
+	return startLine === undefined ? undefined : { before, after, startLine }
+}
+
+/** The spanned lines from the file as it stands, and as the edit will leave them. */
+function rangeEditFromFile(options: {
+	filePath: string
+	startLine: number
+	endLine: number
+	startColumn?: number
+	endColumn?: number
+	newText: string
+	cwd?: string
+}): { before: string[]; after: string[]; startLine: number } | undefined {
+	try {
+		const resolved = options.cwd ? path.resolve(options.cwd, options.filePath) : options.filePath
+		if (!path.isAbsolute(resolved) || fs.statSync(resolved).size > RANGE_EDIT_MAX_FILE_BYTES) {
+			return undefined
+		}
+		const lines = fs.readFileSync(resolved, "utf8").split(/\r\n|\n/)
+		if (options.startLine < 1 || options.startLine > lines.length || options.endLine < options.startLine) {
+			return undefined
+		}
+		const last = Math.min(options.endLine, lines.length)
+		const before = lines.slice(options.startLine - 1, last)
+		if (options.startColumn == null) {
+			return { before, after: options.newText.split(/\r\n|\n/), startLine: options.startLine }
+		}
+		// The executor's own splice (`computeNewEditorContent`): columns are
+		// 1-based and the end column is inclusive.
+		const first = before[0] ?? ""
+		const tail = before[before.length - 1] ?? ""
+		const replaced = `${first.slice(0, options.startColumn - 1)}${options.newText}${tail.slice(options.endColumn ?? options.startColumn)}`
+		return { before, after: replaced.split(/\r\n|\n/), startLine: options.startLine }
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * A line-range edit as a SEARCH/REPLACE block, so the card shows the lines
+ * removed and the lines that replace them. From the result once the tool has
+ * run, from the file before; neither, and the card keeps `new_text` alone.
+ */
+function describeRangeEdit(options: {
+	filePath: string
+	startLine: number
+	endLine: number
+	startColumn?: number
+	endColumn?: number
+	newText: string
+	context?: RangeEditContext
+}): { patch: string; startLine: number } | undefined {
+	const found =
+		(options.context?.output !== undefined ? rangeEditFromResult(options.context.output) : undefined) ??
+		(options.context?.output === undefined ? rangeEditFromFile({ ...options, cwd: options.context?.cwd }) : undefined)
+	if (!found || found.before.length === 0) {
+		return undefined
+	}
+	return {
+		patch: `------- SEARCH\n${found.before.join("\n")}\n=======\n${found.after.join("\n")}\n+++++++ REPLACE`,
+		startLine: found.startLine,
+	}
+}
+
+// ---------------------------------------------------------------------------
 // SDK tool name → classic ClineSayTool mapping
 // ---------------------------------------------------------------------------
 
@@ -1738,7 +1853,7 @@ function relativizePatchPaths(patch: string | undefined, cwd: string): string | 
  *   ask_question/ask_followup_question → (not a visual tool — handled by askQuestion executor in SdkController)
  *   MCP tools (serverName__toolName)   → (handled before reaching sdkToolToClineSayTool — emitted as say="use_mcp_server")
  */
-function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool {
+function sdkToolToClineSayTool(toolName: string, input?: unknown, context?: RangeEditContext): ClineSayTool {
 	// Parse input if it's a string (some SDK tools pass stringified JSON)
 	const parsedInput = parseToolInput(input)
 
@@ -1819,12 +1934,42 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 			// When the SDK provides both old and new text, build a search/replace
 			// diff in the format DiffEditRow expects. ChatRow passes `content` to
 			// DiffEditRow's `patch` prop, so the formatted diff must go into `content`.
-			const diffContent = oldText && newText ? `------- SEARCH\n${oldText}\n=======\n${newText}\n+++++++ REPLACE` : newText
+			const startColumn = getNumberField(parsedInput, "start_column")
+			const endColumn = getNumberField(parsedInput, "end_column")
+			// A line-range replace names no text to match, so the card had only
+			// `new_text` to draw -- and a deletion inside a line sends that empty.
+			// Reported as "I don't see the context of the edits": every card for
+			// `start_column: 382, end_column: 382, new_text: ""` read "wants to
+			// edit this file (LINE 90):" over nothing. The line as it stands and
+			// as it will read is the diff the user is approving.
+			const rangeDiff =
+				!oldText && startLine != null && filePath
+					? describeRangeEdit({
+							filePath,
+							startLine,
+							endLine: endLineField ?? startLine,
+							startColumn,
+							endColumn,
+							newText: newText ?? "",
+							context,
+						})
+					: undefined
+			const diffContent = rangeDiff
+				? rangeDiff.patch
+				: oldText && newText
+					? `------- SEARCH\n${oldText}\n=======\n${newText}\n+++++++ REPLACE`
+					: newText
 
 			// Named from the arguments rather than guessed from the payload: the
 			// executor branches on exactly these fields, so this is the same
 			// decision it makes, reported rather than re-derived.
 			const endLine = endLineField
+			const columns =
+				startColumn != null
+					? (endColumn ?? startColumn) !== startColumn || (endLine != null && endLine !== startLine)
+						? `, COLUMNS ${startColumn}-${endColumn ?? startColumn}`
+						: `, COLUMN ${startColumn}`
+					: ""
 			const editMode =
 				oldText && newText
 					? "SEARCH/REPLACE"
@@ -1832,8 +1977,8 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 						? `INSERT at ${insertLine}`
 						: startLine != null
 							? endLine != null && endLine !== startLine
-								? `LINES ${startLine}-${endLine}`
-								: `LINE ${startLine}`
+								? `LINES ${startLine}-${endLine}${columns}`
+								: `LINE ${startLine}${columns}`
 							: undefined
 
 			return {
@@ -1841,6 +1986,7 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown): ClineSayTool 
 				path: filePath,
 				content: diffContent,
 				diff: patch,
+				...(rangeDiff ? { startLineNumbers: [rangeDiff.startLine] } : {}),
 				...(editMode ? { editMode } : {}),
 			}
 		}
@@ -2626,7 +2772,7 @@ export function buildToolApprovalAskMessage(toolName: string, input: unknown, ts
 		ts,
 		type: "ask",
 		ask: "tool",
-		text: JSON.stringify(toDisplaySayTool(sdkToolToClineSayTool(toolName, input), cwd)),
+		text: JSON.stringify(toDisplaySayTool(sdkToolToClineSayTool(toolName, input, { cwd }), cwd)),
 		partial: false,
 	}
 }
@@ -3290,7 +3436,10 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					// only at content_end (see below), mirroring read_files. Splitting at
 					// content_start would mint streaming ids that content_end cannot
 					// reproduce for files ≥2, orphaning those partial rows (cline#9904).
-					const sayTool = toDisplaySayTool(sdkToolToClineSayTool(toolName, input), state.currentCwd())
+					const sayTool = toDisplaySayTool(
+						sdkToolToClineSayTool(toolName, input, { cwd: state.currentCwd() }),
+						state.currentCwd(),
+					)
 					if (event.toolCallId) {
 						state.noteGenericToolRow(event.toolCallId, state.getStreamingToolTs(), sayTool)
 					}
@@ -3827,7 +3976,15 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						}
 					}
 
-					const sayTool = toDisplaySayTool(sdkToolToClineSayTool(toolName, storedInput), state.currentCwd())
+					// After the tool ran: the file already holds the edit, so a range
+					// edit's card is drawn from the result's diff, not from the file.
+					const sayTool = toDisplaySayTool(
+						sdkToolToClineSayTool(toolName, storedInput, {
+							cwd: state.currentCwd(),
+							output: event.output ?? null,
+						}),
+						state.currentCwd(),
+					)
 					// A tool that reported its progress -- an import reading files --
 					// keeps what it came to. Its progress lines go when it ends, and
 					// without this the row was left with nothing but its path.
