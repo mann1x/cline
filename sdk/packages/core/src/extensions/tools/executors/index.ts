@@ -185,7 +185,7 @@ export function createDefaultExecutors(
 		bash: createDefaultShellExecutor({ ...options.bash, receipts }),
 		webFetch: createWebFetchExecutor(options.webFetch),
 		applyPatch: shown(
-			createApplyPatchExecutor({ ...options.applyPatch, overlay }),
+			createApplyPatchExecutor({ ...options.applyPatch, receipts, overlay }),
 		),
 		editor: shown(
 			createEditorExecutor({ ...options.editor, receipts, overlay }),

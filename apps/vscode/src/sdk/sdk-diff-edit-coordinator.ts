@@ -93,7 +93,8 @@ export class SdkDiffEditCoordinator {
 		// Same registry the workspace reader records into, or the read-before-edit
 		// guard never sees the reads it is meant to check.
 		this.fallbackEditorExecutor = options.fallbackEditorExecutor ?? createEditorExecutor({ receipts: options.receipts })
-		this.fallbackApplyPatchExecutor = options.fallbackApplyPatchExecutor ?? createApplyPatchExecutor()
+		this.fallbackApplyPatchExecutor =
+			options.fallbackApplyPatchExecutor ?? createApplyPatchExecutor({ receipts: options.receipts })
 		this.autoApprovePreviewLingerMs = options.autoApprovePreviewLingerMs ?? AUTO_APPROVE_PREVIEW_LINGER_MS
 		this.previewOpenTimeoutMs = options.previewOpenTimeoutMs ?? PREVIEW_OPEN_TIMEOUT_MS
 	}

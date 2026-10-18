@@ -27,6 +27,7 @@ import {
 	normalizeLineEndings,
 	normalizeNewFileLineEndings,
 } from "./line-endings";
+import { type ReadReceipts, readFileStamp } from "./read-receipts";
 
 export interface PatchFileChange {
 	type: PatchActionType;
@@ -58,6 +59,24 @@ export interface ApplyPatchExecutorOptions {
 
 	/** A delegated agent's overlay; the patch reads and writes the agent's copies. */
 	overlay?: AgentOverlay;
+
+	/**
+	 * The registry `read_files` and `editor` share. A patch is this session's
+	 * own write, and has to be recorded as one: without it the next read said
+	 * the file "changed since you last looked at it, and not because of
+	 * anything you did", and the next edit was refused with the same words.
+	 */
+	receipts?: ReadReceipts;
+}
+
+/** Lines in a body, counted the way `sed` and the editor count them. */
+function countLines(text: string): number {
+	if (text === "") {
+		return 0;
+	}
+	return text.endsWith("\n")
+		? text.split("\n").length - 1
+		: text.split("\n").length;
 }
 
 function resolveFilePath(
@@ -326,8 +345,25 @@ async function applyChanges(
 	encoding: BufferEncoding,
 	restrictToCwd: boolean,
 	overlay?: AgentOverlay,
+	receipts?: ReadReceipts,
 ): Promise<string[]> {
 	const touched: string[] = [];
+	// What a write by this session leaves behind in the receipts: spans
+	// retired when the line count moved, and the new stamp, read from the file
+	// the reader will stat (an agent's overlay copy, keyed back to the
+	// workspace path by the overlay's receipts).
+	const recordWrite = async (
+		absPath: string,
+		before: string | undefined,
+		after: string,
+	) => {
+		if (!receipts) return;
+		const onDisk = overlay ? await overlay.resolveRead(absPath) : absPath;
+		if (before !== undefined) {
+			receipts.noteWrite(onDisk, countLines(before), countLines(after));
+		}
+		receipts.noteStamp(onDisk, await readFileStamp(onDisk));
+	};
 
 	// With an overlay every write, delete and move goes through it: a delete
 	// becomes a whiteout, a write lands in the overlay, and the workspace is
@@ -347,6 +383,7 @@ async function applyChanges(
 		switch (change.type) {
 			case PatchActionType.DELETE:
 				await removeFile(sourceAbsPath);
+				receipts?.forget(sourceAbsPath);
 				touched.push(`${filePath}: [deleted]`);
 				break;
 			case PatchActionType.ADD:
@@ -354,6 +391,7 @@ async function applyChanges(
 					throw new DiffError(`Cannot create ${filePath} with no content`);
 				}
 				await writeFile(sourceAbsPath, change.newContent);
+				await recordWrite(sourceAbsPath, undefined, change.newContent);
 				touched.push(filePath);
 				break;
 			case PatchActionType.UPDATE: {
@@ -371,9 +409,16 @@ async function applyChanges(
 					);
 					await writeFile(moveAbsPath, change.newContent);
 					await removeFile(sourceAbsPath);
+					receipts?.forget(sourceAbsPath);
+					await recordWrite(moveAbsPath, undefined, change.newContent);
 					touched.push(`${filePath} -> ${change.movePath}`);
 				} else {
 					await writeFile(sourceAbsPath, change.newContent);
+					await recordWrite(
+						sourceAbsPath,
+						change.oldContent,
+						change.newContent,
+					);
 					touched.push(filePath);
 				}
 				break;
@@ -419,7 +464,12 @@ export async function computePatchChanges(
 export function createApplyPatchExecutor(
 	options: ApplyPatchExecutorOptions = {},
 ): ApplyPatchExecutor {
-	const { encoding = "utf-8", restrictToCwd = true, overlay } = options;
+	const {
+		encoding = "utf-8",
+		restrictToCwd = true,
+		overlay,
+		receipts,
+	} = options;
 
 	return async (
 		input: ApplyPatchInput,
@@ -437,6 +487,7 @@ export function createApplyPatchExecutor(
 			encoding,
 			restrictToCwd,
 			overlay,
+			receipts,
 		);
 
 		const responseLines = [
