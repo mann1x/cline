@@ -282,6 +282,26 @@ describe("describeDelimiterBalance", () => {
 			expect(report).toContain('start_line: 1, start_column: 14, new_text: ""');
 		});
 
+		it("moves a closer to the end of a line, and never past it", () => {
+			// pandorum, 2026-10-18 (e97h3): `update()` with line 111's `)` one
+			// `}` too early. The line is 388 columns long; the scan said "to
+			// column 393", which was on the line below.
+			const update =
+				"function update(){\nif(gameOverFlag)return;\nif(gameState==='COUNTDOWN'){const now=performance.now();if(now-lastCountdownUpdate>=1000){countdownTimer--;statusEl.innerText=countdownTimer>0?`${countdownTimer}...`:'GO!';statusEl.style.color='#ff8800';lastCountdownUpdate=now;if(countdownTimer<=0){gameState='PLAYING';statusEl.innerText='';player.grounded=true;}}return;}\nif(gameState==='LEVEL_COMPLETE'){transitionTimer--;if(transitionTimer<=0){if(currentLevel>=20){gameOverFlag=true;goOverlay.style.display='flex';document.getElementById('go-title').innerText='YOU WIN!';document.getElementById('go-score').innerText=`Final Score: ${player.score}`;return;}gameState='SHOW_STARTING_MSG';levelMsgEl.style.display='block';levelMsgEl.innerText=`CAVERN ${currentLevel+1} STARTING, ARE YOU READY?`;transitionTimer=90;}return;}\nif(gameState==='SHOW_STARTING_MSG'){transitionTimer--;if(transitionTimer<=0){levelMsgEl.style.display='none';gameState='COUNTDOWN';countdownTimer=3;lastCountdownUpdate=performance.now();}return;}\nplayer.frameCount++;player.vy+=.45;if(player.vy>8)player.vy=8;player.vx*=.92;if(Math.abs(player.vx)<.1)player.vx=0;player.grounded=false;const nx=player.x+player.vx;if(!collide(nx,player.y,player.width,player.height))player.x=nx;else player.vx=0;const ny=player.y+player.vy;if(!collide(player.x,ny,player.width,player.height)){player.y=ny;}else{if(player.vy>0)player.grounded=true;player.vy=0;}if(player.x<0){player.x=0;player.vx=0;}if(player.x>currentLevelObj.width*TILE_SIZE-player.width){player.x=currentLevelObj.width*TILE_SIZE-player.width;}\nif(keys.u&&player.grounded){player.vy=-9;player.grounded=false;sound.playJump();}\nif(keys.l)player.vx-=.6;if(player.vx<-5)player.vx=-5;\nif(keys.r)player.vx+=.6;if(player.vx>5)player.vx=5;\ncurrentLevelObj.it.forEach(it=>{if(!it.cl&&Math.abs(player.x+player.width/2-it.x)<16&&Math.abs(player.y+player.height/2-it.y)<16){it.cl=true;player.score+=it.pt;sound.collectGem();}});\ncurrentLevelObj.o2c.forEach(o=>{if(!o.cl&&Math.abs(player.x+player.width/2-o.x)<14&&Math.abs(player.y+player.height/2-o.y)<14){o.cl=true;player.o2=Math.min(100,player.o2+o.ra);sound.collectO2();}});\ncurrentLevelObj.pw.forEach(p=>{if(!p.cl&&Math.abs(player.x+player.width/2-p.x)<14&&Math.abs(player.y+player.height/2-p.y)<14){p.cl=true;player.isSuper=true;player.powerupTimer=300;sound.powerup();}});\ncurrentLevelObj.en.forEach(e=>{if(e.al){e.x+=e.vx;e.fc++;if(e.x<TILE_SIZE||e.x>(currentLevelObj.width-2)*TILE_SIZE)e.vx*=-1;const ex=e.x+10,ey=e.y+6;if(Math.abs(player.x+player.width/2-ex)<18&&Math.abs(player.y+player.height/2-ey)<18){if(!player.isSuper){player.o2-=15;sound.hitEnemy();player.vy=-5;player.vx=(player.x<e.x)?-3:3;}else{e.al=false;player.score+=25;sound.collectGem();}}});}\nif(currentLevelObj.bs&&currentLevelObj.boss&&currentLevelObj.boss.ac){const b=currentLevelObj.boss;b.x+=b.vx;if(b.x<currentLevelObj.width*TILE_SIZE/2||b.x>(currentLevelObj.width-5)*TILE_SIZE)b.vx*=-1;const bx=b.x,by=b.y;if(Math.abs(player.x+player.width/2-bx)<25&&Math.abs(player.y+player.height/2-by)<30){if(!player.isSuper){player.o2-=10;sound.hitEnemy();player.vy=-6;}else{b.hp--;if(b.hp<=0){b.ac=false;player.score+=100+currentLevel*10;gameState='LEVEL_COMPLETE';transitionTimer=120;sound.levelComplete();}else sound.collectGem();}}}\nif(player.isSuper){player.powerupTimer--;if(player.powerupTimer<=0){player.isSuper=false;player.powerupTimer=0;}}\ncamera.x=Math.max(0,Math.min(player.x-VIEWPORT_W/2,currentLevelObj.width*TILE_SIZE-VIEWPORT_W));\nif(player.x>(currentLevelObj.width-8)*TILE_SIZE){gameState='LEVEL_COMPLETE';transitionTimer=120;player.score+=currentLevel*50;sound.levelComplete();}\nscoreEl.innerText=player.score;cavernEl.innerText=currentLevel;o2El.innerText=`${Math.max(0,~~(player.o2))}%`;\nclouds.forEach(c=>c.update());\n}\n";
+			const report = describeDelimiterBalance("app.js", update) ?? "";
+			const width = update.split("\n")[12]?.length ?? 0;
+			expect(width).toBe(388);
+			expect(report).toContain(
+				"move the `)` at column 386 to column 389 — checked",
+			);
+			expect(report).toContain(
+				'insert_line: 13, insert_column: 389, new_text: ")"',
+			);
+			for (const match of report.matchAll(/column (\d+)/g)) {
+				expect(Number(match[1])).toBeLessThanOrEqual(width + 1);
+			}
+		});
+
 		it("proposes a move when the line balances and a closer is misplaced", () => {
 			const report = describeDelimiterBalance("app.js", "const x = ({)};\n");
 			expect(report).toContain(

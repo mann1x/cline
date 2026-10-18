@@ -490,7 +490,16 @@ function offsetIn(
 		offset += lines[index].length + 1;
 	}
 	// Only the first line of a span starts anywhere but column 1.
-	return offset + column - (row === 0 ? origin.column : 1);
+	const within = column - (row === 0 ? origin.column : 1);
+	// On the line, or just past its last character -- where an append goes,
+	// and the last column the editor accepts. Anything further ran on into
+	// the next line: pandorum, 2026-10-18 (e97h3) was told to move a `)` on
+	// a 388-column line "to column 393", which was four characters into the
+	// line below, and the model, sending half of it, broke the line.
+	if (within < 0 || within > lines[row].length) {
+		return -1;
+	}
+	return offset + within;
 }
 
 /**
@@ -563,10 +572,14 @@ function proposeRepair(
 			continue;
 		}
 		const target = offsetIn(body, origin, finding.line, column);
+		// The end of the line counts as a bracket position: a closer that
+		// belongs after the last one on the line goes there, and on e97h3's
+		// line 111 that was the only move that fixed it.
+		const lineEnd = target === body.length || body[target] === "\n";
 		if (
 			target < 0 ||
-			target >= body.length ||
-			(!PAIRS[body[target]] && !CLOSERS[body[target]])
+			target > body.length ||
+			(!lineEnd && !PAIRS[body[target]] && !CLOSERS[body[target]])
 		) {
 			continue;
 		}
