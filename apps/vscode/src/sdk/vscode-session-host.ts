@@ -69,6 +69,8 @@ export interface VscodeSessionHostOptions {
 	 * there.
 	 */
 	forgetReads?: (absolutePath: string) => void
+	/** Carries a file's read stamp across a check run against the base; see `CoreAtomicProtocolConfig.carryReadStamp`. */
+	carryReadStamp?: (absolutePath: string, from: string, to: string) => void
 	requestToolApproval?: (request: {
 		agentId: string
 		conversationId: string
@@ -267,6 +269,7 @@ export class VscodeSessionHost implements SdkSessionHost {
 					// model had read of it no longer holds. This host owns
 					// the receipts, so it is the one that can say so.
 					forgetReads: options.forgetReads,
+					carryReadStamp: options.carryReadStamp,
 				},
 				taskProgress: {
 					enabled: focusChainSettings?.enabled ?? true,

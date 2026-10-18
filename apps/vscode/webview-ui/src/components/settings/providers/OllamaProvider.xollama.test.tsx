@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
 	placeholders: [] as string[],
 	scope: { current: undefined as { scopeKey: string } | undefined },
 	config: { current: {} as Record<string, unknown> },
+	write: vi.fn(),
+	fields: [] as { placeholder?: string; onChange: (value: string) => unknown }[],
 }))
 
 vi.mock("@/context/ExtensionStateContext", () => ({
@@ -34,7 +36,7 @@ vi.mock("@/services/grpc-client", () => ({
 vi.mock("@/hooks/useProviderConfig", () => ({
 	useProviderConfig: (id: string) => {
 		mocks.configIds.push(id)
-		return { config: mocks.config.current, write: vi.fn(), commitSelection: vi.fn() }
+		return { config: mocks.config.current, write: mocks.write, commitSelection: vi.fn() }
 	},
 	fromProtobufProviderModelOverrides: (overrides: unknown) => overrides,
 }))
@@ -57,6 +59,12 @@ vi.mock("../utils/useProviderApiKeyField", () => ({
 	useProviderApiKeyField: () => ({ savedApiKeyMask: "", handleApiKeyChange: vi.fn() }),
 }))
 vi.mock("../OllamaModelPicker", () => ({ default: () => <div /> }))
+vi.mock("../common/DebouncedTextField", () => ({
+	DebouncedTextField: (props: { placeholder?: string; onChange: (value: string) => unknown }) => {
+		mocks.fields.push(props)
+		return <div />
+	},
+}))
 vi.mock("../common/ApiKeyField", () => ({ ApiKeyField: () => <div /> }))
 vi.mock("../common/BaseUrlField", () => ({
 	BaseUrlField: ({ placeholder }: { placeholder?: string }) => {
@@ -88,6 +96,8 @@ describe("the Ollama form for xOllama", () => {
 		mocks.placeholders.length = 0
 		mocks.scope.current = undefined
 		mocks.config.current = {}
+		mocks.fields.length = 0
+		mocks.write.mockResolvedValue(undefined)
 		mocks.getOllamaModels.mockResolvedValue({ values: [] })
 		mocks.getOllamaModelParameters.mockResolvedValue({ values: {} })
 	})
@@ -167,5 +177,25 @@ describe("the Ollama form for xOllama", () => {
 		await waitFor(() => expect(mocks.getOllamaModelParameters).toHaveBeenCalled())
 		expect(screen.getByText("Reasoning effort")).toBeInTheDocument()
 		expect(screen.getByText(/does not state the level "xhigh"/)).toBeInTheDocument()
+	})
+
+	// ol-88: Done waits for what a field's onChange returns. The window's
+	// returned nothing, so Done could close the panel -- and a task start --
+	// before the new size reached providers.json.
+	it("hands Done the context window's write to wait for", async () => {
+		let land: () => void = () => {}
+		mocks.write.mockReturnValue(new Promise<void>((resolve) => (land = resolve)))
+		render(<OllamaProvider currentMode="act" providerId="xollama" showModelOptions />)
+		await waitFor(() => expect(mocks.getOllamaModels).toHaveBeenCalled())
+		const field = mocks.fields.filter((f) => f.placeholder?.startsWith("Default: 32768")).at(-1)
+		const pending = field?.onChange("128000")
+		expect(pending).toBeInstanceOf(Promise)
+		let settled = false
+		void (pending as Promise<unknown>).then(() => (settled = true))
+		await Promise.resolve()
+		expect(settled).toBe(false)
+		land()
+		await pending
+		expect(mocks.write).toHaveBeenCalledWith({ contextWindow: 128000 })
 	})
 })

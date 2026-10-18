@@ -572,12 +572,51 @@ describe("buildSessionConfig", () => {
 		expect((config.providerConfig as { modelInfo?: { contextWindow?: number } }).modelInfo?.contextWindow).toBe(65536)
 	})
 
-	it("still lets the profile's own window win over the shared entry", async () => {
+	// ol-88: the panel read 128,000 and the task asked for the profile's
+	// 256,000, because the profile had not been saved again since. The panel
+	// writes the shared entry, so the shared entry is what a task runs on.
+	it("lets the shared entry's window win over the profile's", async () => {
 		mocks.providerSettingsManager.getProviderSettings.mockImplementation((providerId?: string) => {
 			if (providerId !== "ollama") {
 				return undefined
 			}
 			return { provider: "ollama", contextWindow: 65536 } as any
+		})
+		mocks.stateManager.getApiConfiguration.mockReturnValue({
+			actModeApiProvider: "ollama",
+			actModeOllamaModelId: "v9-agentic",
+			ollamaBaseUrl: "http://127.0.0.1:11434",
+		} as any)
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string): any => {
+			if (key === "subagentsEnabled" || key === "useAutoCondense") {
+				return false
+			}
+			if (key === "apiConfigurationProfiles") {
+				return JSON.stringify([
+					{
+						name: "loud",
+						updatedAt: 1,
+						snapshot: { global: {}, mode: {}, providerConfig: { contextWindow: 131072 } },
+					},
+				])
+			}
+			if (key === "activeApiConfigurationProfile") {
+				return JSON.stringify({ act: "loud" })
+			}
+			return undefined
+		})
+
+		const config = await buildSessionConfig({ cwd: "/tmp/workspace" })
+
+		expect((config.providerConfig as { modelInfo?: { contextWindow?: number } }).modelInfo?.contextWindow).toBe(65536)
+	})
+
+	it("takes the profile's window when the shared entry has none", async () => {
+		mocks.providerSettingsManager.getProviderSettings.mockImplementation((providerId?: string) => {
+			if (providerId !== "ollama") {
+				return undefined
+			}
+			return { provider: "ollama" } as any
 		})
 		mocks.stateManager.getApiConfiguration.mockReturnValue({
 			actModeApiProvider: "ollama",

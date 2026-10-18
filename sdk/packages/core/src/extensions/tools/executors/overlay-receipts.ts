@@ -51,6 +51,9 @@ export function overlayReadReceipts(
 		noteCut: (filePath, line, shown, length) =>
 			receipts.noteCut?.(key(filePath), line, shown, length),
 		cutAt: (filePath, line) => receipts.cutAt?.(key(filePath), line),
+		cutLines: (filePath) => receipts.cutLines?.(key(filePath)) ?? [],
+		carryStamp: (filePath, from, to) =>
+			receipts.carryStamp?.(key(filePath), from, to),
 		paths: () => receipts.paths(),
 	};
 }

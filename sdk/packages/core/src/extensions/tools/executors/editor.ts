@@ -1952,6 +1952,83 @@ export function createEditorExecutor(
 		);
 	};
 
+	/** The text of each line of `filePath` a read cut, before an edit. */
+	const cutLineTexts = async (
+		filePath: string,
+	): Promise<Map<number, string>> => {
+		const texts = new Map<number, string>();
+		const lines = receipts?.cutLines?.(filePath) ?? [];
+		if (lines.length === 0) {
+			return texts;
+		}
+		const now = await fileLines(filePath);
+		for (const line of lines) {
+			const text = now?.[line - 1];
+			if (text !== undefined) {
+				texts.set(line, text);
+			}
+		}
+		return texts;
+	};
+
+	/**
+	 * Move each cut by what an edit did before it.
+	 *
+	 * The cut was recorded at column 2,000 and stayed there: after deleting 10
+	 * characters in the part shown, an edit could reach 10 characters the model
+	 * had never seen, and after inserting, columns it had seen were refused.
+	 * The old and new line share a prefix and a suffix; what lies between is
+	 * the edit. A greedy prefix is safe even inside a run of one character,
+	 * since the new prefix then matches what was shown character for character.
+	 */
+	const moveCuts = async (
+		filePath: string,
+		before: Map<number, string>,
+	): Promise<void> => {
+		if (before.size === 0) {
+			return;
+		}
+		const after = await fileLines(filePath);
+		for (const [line, old] of before) {
+			const cut = receipts?.cutAt?.(filePath, line);
+			const now = after?.[line - 1];
+			if (!cut || now === undefined || now === old) {
+				continue;
+			}
+			let prefix = 0;
+			const most = Math.min(old.length, now.length);
+			while (prefix < most && old[prefix] === now[prefix]) {
+				prefix++;
+			}
+			let suffix = 0;
+			while (
+				suffix < most - prefix &&
+				old[old.length - 1 - suffix] === now[now.length - 1 - suffix]
+			) {
+				suffix++;
+			}
+			const oldEnd = old.length - suffix;
+			const shown =
+				prefix >= cut.shown
+					? cut.shown
+					: oldEnd <= cut.shown
+						? cut.shown + now.length - old.length
+						: now.length - suffix;
+			receipts?.noteCut?.(filePath, line, shown, now.length);
+		}
+	};
+
+	/** A file's lines as the editor numbers its columns: no BOM, no `\r`. */
+	const fileLines = async (filePath: string): Promise<string[] | null> => {
+		try {
+			return splitBom(await fs.readFile(filePath, encoding)).body.split(
+				/\r\n|\n/,
+			);
+		} catch {
+			return null;
+		}
+	};
+
 	/**
 	 * {@link requireUncut} for every line a range touches: the end line up to
 	 * its end column, every other line to its end, the start line's included —
@@ -2071,6 +2148,7 @@ export function createEditorExecutor(
 	): Promise<string> => {
 		await requireCurrent(filePath);
 		const linesBefore = receipts ? await countLines(filePath) : null;
+		const cutBefore = await cutLineTexts(filePath);
 		const noteWrite = async (): Promise<void> => {
 			if (!receipts || linesBefore == null) {
 				return;
@@ -2078,6 +2156,9 @@ export function createEditorExecutor(
 			const linesAfter = await countLines(filePath);
 			if (linesAfter != null) {
 				receipts.noteWrite(filePath, linesBefore, linesAfter);
+				if (linesAfter === linesBefore) {
+					await moveCuts(filePath, cutBefore);
+				}
 			}
 			// After the write, so this session's own edit is not mistaken for
 			// somebody else's on the next call. Missing this is the difference

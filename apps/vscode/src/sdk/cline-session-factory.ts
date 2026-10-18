@@ -1433,7 +1433,13 @@ function readToolSelection(
 }
 
 /**
- * The profile's provider settings laid over the shared entry.
+ * The shared entry laid over the profile's provider settings.
+ *
+ * The live entry wins (user ruling, ol-88): it is what the panel shows and
+ * what compaction measures against. The profile won, so a context size typed
+ * into the panel ran on the profile's older number until the profile was
+ * saved again -- a task started at 256,000 under a panel reading 128,000.
+ * The profile still answers for any field the entry does not carry.
  *
  * A profile that is silent about a field is not a profile that overrides it.
  * `resolveOllamaProviderConfig` picks its source with `??` on the *object*, so
@@ -1460,7 +1466,7 @@ function profileOverSharedEntry(
 	try {
 		const shared = providerId ? getProviderSettingsManager().getProviderSettings(providerId) : undefined
 		return shared && typeof shared === "object"
-			? { ...(shared as Record<string, unknown>), ...profileSettings }
+			? { ...profileSettings, ...(shared as Record<string, unknown>) }
 			: profileSettings
 	} catch {
 		return profileSettings

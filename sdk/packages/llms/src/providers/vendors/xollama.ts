@@ -52,8 +52,10 @@ import {
 } from "./opencoti-agent-window";
 import { recordOpencotiWindowFloor } from "./opencoti-kv-pressure";
 import {
+	clearPolykvGrantedWindow,
 	createPolykvClient,
 	getPolykvGrantedWindow,
+	getPolykvWindowGrant,
 	recordPolykvGrantedWindow,
 } from "./polykv";
 import {
@@ -199,9 +201,20 @@ export function windowAsk(
 			? { num_ctx: ask, num_ctx_min: Math.min(window.contextFloor, ask) }
 			: { num_ctx: ask, num_ctx_min: ask, measureFloor: true };
 	}
-	const granted = getPolykvGrantedWindow(session);
-	if (granted !== undefined) {
-		return { num_ctx: granted, num_ctx_min: granted };
+	const grant = getPolykvWindowGrant(session);
+	// A size set since the window was booked is the user's newer word: the
+	// grant stood over it, so a 128,000 setting ran on the 256,000 a resumed
+	// conversation had been granted (ol-88). A grant negotiated down from the
+	// size still set keeps its `asked`, and stays.
+	if (
+		grant !== undefined &&
+		window.requestedWindow !== undefined &&
+		grant.asked !== undefined &&
+		grant.asked !== Math.floor(window.requestedWindow)
+	) {
+		clearPolykvGrantedWindow(session);
+	} else if (grant !== undefined) {
+		return { num_ctx: grant.granted, num_ctx_min: grant.granted };
 	}
 	if (window.agentWindow) {
 		const cap = (body.options as { num_predict?: unknown } | undefined)

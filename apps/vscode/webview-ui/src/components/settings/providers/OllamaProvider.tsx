@@ -651,7 +651,10 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 						// issue 67 -- the panel matched what was stored, so no
 						// unsaved change was reported either -- and it was fixed
 						// for the scoped tabs' writer without reaching here.
-						void (async () => {
+						//
+						// Returned, so Done and Update wait for it: they await what
+						// onChange returns, and this returned nothing (ol-88).
+						return (async () => {
 							await write({ contextWindow: numCtx ?? 0 })
 							if (!selectedModel.modelId) {
 								return

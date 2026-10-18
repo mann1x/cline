@@ -481,6 +481,10 @@ export class Controller {
 			// moves every line in it, so the reads that would justify an edit
 			// by line number have to go with it.
 			forgetReads: (absolutePath) => this.readReceipts.forget(absolutePath),
+			// A proposed check runs on the unmodified files and the edits are
+			// written back after it: same content, new mtime. The stamp moves
+			// with it, so the next edit is not refused as an outside change.
+			carryReadStamp: (absolutePath, from, to) => this.readReceipts.carryStamp?.(absolutePath, from, to),
 			onSessionEvent: (event) => {
 				this.sessionEvents.handleSessionEvent(event).catch((err) => {
 					Logger.error("[SdkController] Failed to handle session event:", err)

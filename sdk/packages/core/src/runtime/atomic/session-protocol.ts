@@ -403,6 +403,9 @@ export async function createAtomicProtocolSession(
 		// and a discarded attempt still read back as "something outside this
 		// session wrote to it" (csf-6).
 		...(forgetReads ? { forgetReads } : {}),
+		...(options.config?.carryReadStamp
+			? { carryReadStamp: options.config.carryReadStamp }
+			: {}),
 	});
 
 	// The transaction already holds what every file said when it opened, and

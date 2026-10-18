@@ -578,6 +578,15 @@ export interface CoreAtomicProtocolConfig {
 	 * has since moved. A host that leaves this out still gets the restore.
 	 */
 	forgetReads?: (absolutePath: string) => void;
+	/**
+	 * Moves a file's read stamp from `from` to `to` when the host held `from`.
+	 *
+	 * A proposed check is run against the unmodified files and the edits are
+	 * written back after it: the content is unchanged, the mtime is not, and
+	 * without this the next edit was refused as "changed since you last read
+	 * it". Supplied by hosts that own the read receipts, like `forgetReads`.
+	 */
+	carryReadStamp?: (absolutePath: string, from: string, to: string) => void;
 }
 
 export type CoreCompactionStrategy = "basic" | "agentic";

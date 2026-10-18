@@ -1,3 +1,7 @@
+import {
+	type FileStamp,
+	readFileStamp,
+} from "../../extensions/tools/executors/read-receipts";
 import { createRevisionLog, type RevisionLog } from "./file-revisions";
 import {
 	DEFAULT_ORACLE_TIMEOUT_MS,
@@ -159,6 +163,20 @@ export interface TransactionControllerOptions {
 	 * just performed. `restore_file` takes the same hook for the same reason.
 	 */
 	forgetReads?: (absolutePath: string) => void;
+	/**
+	 * Called for every file a check against the base wrote twice, with its
+	 * stamp before the round trip and after it.
+	 *
+	 * The round trip ends on the content it started from, but each write moves
+	 * the mtime, so the session's stamp went stale and its next edit was
+	 * refused as "changed since you last read it". The host moves its stamp
+	 * only if it held `from`, so an outside write stays visible.
+	 */
+	carryReadStamp?: (
+		absolutePath: string,
+		from: FileStamp,
+		to: FileStamp,
+	) => void;
 	/**
 	 * The session's file-history log, when the host keeps one.
 	 *
@@ -347,11 +365,47 @@ export class TransactionController {
 			this.options.workspaceRoot,
 			this.options.snapshotLimits,
 		);
+		const before = await this.stampsOfEdits(base, edited);
 		await restoreSnapshot(base, this.options.snapshotLimits);
 		try {
 			return await runOracle(oracle, { timeoutMs });
 		} finally {
 			await restoreSnapshot(edited, this.options.snapshotLimits);
+			await this.carryStamps(before);
+		}
+	}
+
+	/** The stamps of the files the edits changed, when a host wants them. */
+	private async stampsOfEdits(
+		base: Snapshot,
+		edited: Snapshot,
+	): Promise<Map<string, FileStamp>> {
+		const stamps = new Map<string, FileStamp>();
+		if (!this.options.carryReadStamp) {
+			return stamps;
+		}
+		for (const [filePath, now] of edited.files) {
+			if (base.files.get(filePath)?.hash === now.hash) {
+				continue;
+			}
+			const stamp = await readFileStamp(filePath);
+			if (stamp !== undefined) {
+				stamps.set(filePath, stamp);
+			}
+		}
+		return stamps;
+	}
+
+	private async carryStamps(before: Map<string, FileStamp>): Promise<void> {
+		const carry = this.options.carryReadStamp;
+		if (!carry) {
+			return;
+		}
+		for (const [filePath, from] of before) {
+			const to = await readFileStamp(filePath);
+			if (to !== undefined && to !== from) {
+				carry(filePath, from, to);
+			}
 		}
 	}
 

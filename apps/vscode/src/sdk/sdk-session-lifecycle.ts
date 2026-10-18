@@ -47,6 +47,8 @@ export interface SdkSessionLifecycleOptions {
 	getReadPaths?: () => string[]
 	/** Retires a file's reads after the change protocol put that file back. */
 	forgetReads?: (absolutePath: string) => void
+	/** Carries a file's read stamp across a check run against the base. */
+	carryReadStamp?: (absolutePath: string, from: string, to: string) => void
 	onSessionEvent: (event: CoreSessionEvent) => void
 	/** Lazy factory for the VscodeTerminalManager (foreground terminal support). */
 	getTerminalManager?: () => VscodeTerminalManager
@@ -435,6 +437,7 @@ export class SdkSessionLifecycle {
 				readReceipts: this.options.readReceipts,
 				getReadPaths: this.options.getReadPaths,
 				forgetReads: this.options.forgetReads,
+				carryReadStamp: this.options.carryReadStamp,
 				getTerminalManager: this.options.getTerminalManager,
 				foregroundCommands: this.options.foregroundCommands,
 				beforeStartSession: this.options.beforeStartSession,

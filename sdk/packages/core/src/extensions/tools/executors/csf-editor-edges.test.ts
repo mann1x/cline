@@ -122,6 +122,63 @@ describe("csf-16: an edit cannot reach past where a read cut the line", () => {
 	});
 });
 
+// After an edit inside the part shown, the cut moves with the text: a
+// deletion of 10 characters left the boundary at 2,000, so an edit could
+// reach 10 characters the model had never seen.
+describe("an edit before the cut moves it", () => {
+	const long = `0123456789${"a".repeat(2_290)}TAIL${"b".repeat(100)}\nshort\n`;
+
+	it("a deletion pulls the boundary back", async () => {
+		const { edit } = await opened("m.js", long);
+		await edit({
+			start_line: 1,
+			start_column: 1,
+			end_column: 10,
+			new_text: "",
+		});
+		await expect(
+			edit({
+				start_line: 1,
+				start_column: 1_995,
+				end_column: 1_995,
+				new_text: "X",
+			}),
+		).rejects.toThrow(/showed you only the first 1,990/);
+	});
+
+	it("an insertion pushes it forward", async () => {
+		const { file, edit } = await opened("m.js", long);
+		await edit({ insert_line: 1, insert_column: 1, new_text: "0123456789" });
+		await edit({
+			start_line: 1,
+			start_column: 2_005,
+			end_column: 2_005,
+			new_text: "X",
+		});
+		expect((await fs.readFile(file, "utf8")).slice(2_000, 2_010)).toBe(
+			"aaaaXaaaaa",
+		);
+	});
+
+	it("keeps refusing the part past the cut an old_text edit left", async () => {
+		const { edit } = await opened("m.js", long);
+		await edit({ old_text: "TAIL", new_text: "" });
+		await expect(
+			edit({ start_line: 1, end_line: 1, new_text: "whole" }),
+		).rejects.toThrow(/reaches the whole line/);
+	});
+
+	it("a line shortened to what was seen is no longer cut", async () => {
+		const { file, edit } = await opened("m.js", long);
+		await edit({
+			old_text: `0123456789${"a".repeat(2_290)}TAIL${"b".repeat(100)}`,
+			new_text: "x",
+		});
+		await edit({ start_line: 1, end_line: 1, new_text: "whole" });
+		expect(await fs.readFile(file, "utf8")).toBe("whole\nshort\n");
+	});
+});
+
 // csf-20: an empty file captured no lines, so its read recorded no receipt
 // and every edit of it was refused as unread however often it was read.
 describe("csf-20: an empty file that was read can be edited", () => {

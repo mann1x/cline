@@ -146,11 +146,23 @@ export interface ReadReceipts {
 	 * does not answers "not cut" for every line.
 	 */
 	noteCut?(filePath: string, line: number, shown: number, length: number): void;
+	/**
+	 * Move a file's stamp from `from` to `to`, if `from` is the one held.
+	 *
+	 * For a rewrite that puts back content the session had already seen: the
+	 * change protocol's check against the base writes every edited file twice
+	 * and ends where it started, but the mtime moves, and the next edit was
+	 * refused as "changed since you last read it". Matching on `from` keeps an
+	 * outside write made before the rewrite visible. Optional, like `noteCut`.
+	 */
+	carryStamp?(filePath: string, from: FileStamp, to: FileStamp): void;
 	/** How much of `line` the reads showed, when one of them cut it. */
 	cutAt?(
 		filePath: string,
 		line: number,
 	): { shown: number; length: number } | undefined;
+	/** The lines of a file a read cut short. */
+	cutLines?(filePath: string): number[];
 	/**
 	 * Every file read in this session, in the form it was resolved to.
 	 *
@@ -274,8 +286,18 @@ export function createReadReceipts(): OwnedReadReceipts {
 		noteCut(filePath, line, shown, length) {
 			const key = receiptKey(filePath);
 			const lines = cuts.get(key) ?? new Map();
-			lines.set(line, { shown, length });
+			// An edit can leave a cut line no longer than what was shown of it,
+			// and then it is not cut.
+			if (shown >= length) {
+				lines.delete(line);
+			} else {
+				lines.set(line, { shown, length });
+			}
 			cuts.set(key, lines);
+		},
+
+		cutLines(filePath) {
+			return [...(cuts.get(receiptKey(filePath))?.keys() ?? [])];
 		},
 
 		cutAt(filePath, line) {
@@ -287,6 +309,13 @@ export function createReadReceipts(): OwnedReadReceipts {
 				return;
 			}
 			stamps.set(receiptKey(filePath), stamp);
+		},
+
+		carryStamp(filePath, from, to) {
+			const key = receiptKey(filePath);
+			if (stamps.get(key) === from) {
+				stamps.set(key, to);
+			}
 		},
 
 		changedSince(filePath, stamp) {
