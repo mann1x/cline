@@ -124,6 +124,15 @@ function cacheKey(baseUrl: string, modelId: string): string {
 }
 
 /** Test seam: the cache outlives a session and would leak between cases. */
+/**
+ * Forget the `/api/show` answers, keeping the failure cool-down. Called at
+ * each session start: the cache is shared by the resolvers of one start, and a
+ * model rebuilt under the same name since the last one must be read again.
+ */
+export function forgetOllamaShowAnswers(): void {
+	showCache.clear()
+}
+
 export function clearOllamaModelFamilyCache(): void {
 	showCache.clear()
 	showFailedAt.clear()

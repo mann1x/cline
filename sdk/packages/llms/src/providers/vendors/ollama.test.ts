@@ -7,6 +7,7 @@ import {
 	buildOllamaSamplingOptions,
 	buildOllamaStreamConfig,
 	createOllamaProviderModule,
+	forgetDeclaredModelInfo,
 	hasOllamaNoStreamTimeoutDispatcher,
 	normalizeOllamaBaseUrl,
 	OLLAMA_DEFAULT_NUM_CTX,
@@ -18,6 +19,7 @@ import {
 	parseDeclaredTrainedCtx,
 	primeDeclaredNumCtx,
 	readDeclaredFamily,
+	readDeclaredTemperature,
 	readOllamaNumCtx,
 	readOllamaNumPredict,
 	readOllamaTimeoutMs,
@@ -216,11 +218,28 @@ describe("the window the model declares for itself", () => {
 		expect(readOllamaNumCtx(contextAt(LOCAL))).toBe(OLLAMA_DEFAULT_NUM_CTX);
 	});
 
-	it("asks once per model, however many sessions start", async () => {
+	it("asks once per model until the host forgets", async () => {
 		const fetchImpl = showFetch(SHOW_BODY);
 		await primeDeclaredNumCtx(LOCAL, "a-model", fetchImpl);
 		await primeDeclaredNumCtx(LOCAL, "a-model", fetchImpl);
 		expect(showCalls(fetchImpl)).toBe(1);
+	});
+
+	// The VS Code host lives as long as the window, and the same tag can be
+	// rebuilt with a new Modelfile between two runs. Forgotten at a session
+	// start, the next prime reads what the model declares now.
+	it("reads a rebuilt model again after the declarations are forgotten", async () => {
+		await primeDeclaredNumCtx(LOCAL, "a-model", showFetch(SHOW_BODY));
+		expect(readOllamaNumCtx(contextAt(LOCAL, { id: "a-model" }))).toBe(128000);
+
+		forgetDeclaredModelInfo();
+		await primeDeclaredNumCtx(
+			LOCAL,
+			"a-model",
+			showFetch({ parameters: "num_ctx 65536\ntemperature 0.6" }),
+		);
+		expect(readOllamaNumCtx(contextAt(LOCAL, { id: "a-model" }))).toBe(65536);
+		expect(readDeclaredTemperature(LOCAL, "a-model")).toBe(0.6);
 	});
 
 	// The catalog and the recommendations describe the server, not the model,

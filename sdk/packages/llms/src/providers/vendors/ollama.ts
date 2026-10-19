@@ -575,13 +575,25 @@ export async function primeDeclaredNumCtx(
 	}
 }
 
-/** Test seam: forget every looked-up window and family. */
-export function resetDeclaredNumCtx(): void {
+/**
+ * Forget what every model declared, so the next prime reads `/api/show` again.
+ *
+ * A host that outlives a session calls this when one starts. A model rebuilt
+ * under the same name between two runs -- a new Modelfile, the same tag --
+ * otherwise keeps the window, temperature and think-budget message read
+ * before the rebuild for as long as the process lives.
+ */
+export function forgetDeclaredModelInfo(): void {
 	declaredNumCtx.clear();
 	declaredFamily.clear();
 	declaredTrainedCtx.clear();
 	declaredTemperature.clear();
 	declaredThinkBudgetMessage.clear();
+}
+
+/** Test seam: forget every looked-up window and family. */
+export function resetDeclaredNumCtx(): void {
+	forgetDeclaredModelInfo();
 	resetOllamaAccountStatus();
 }
 

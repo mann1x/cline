@@ -147,6 +147,8 @@ export async function createHandlerAsync(
 // it decides the thinking budget the server enforces, so anything asking the
 // server what that budget will be has to ask about this level.
 export {
+	// A host that outlives a session forgets what models declared when one starts.
+	forgetDeclaredModelInfo,
 	hasOllamaFetch,
 	hasOllamaNoStreamTimeoutDispatcher,
 	OLLAMA_DEFAULT_REASONING_EFFORT,

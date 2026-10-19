@@ -30,6 +30,7 @@ import {
 } from "@cline/core"
 import type { ProviderApiLine, ProviderSamplingOptions, ModelInfo as SdkModelInfo } from "@cline/llms"
 import {
+	forgetDeclaredModelInfo,
 	getGeneratedModelsForProvider,
 	getModelsForProvider,
 	isProviderApiLine,
@@ -99,6 +100,7 @@ import { parseProviderId } from "./model-catalog/provider-id"
 import { toSdkProviderId } from "./model-catalog/sdk-provider-id"
 import { createProviderConfigStore, resolveRuntimeModelSelection } from "./model-catalog/store"
 import {
+	forgetOllamaShowAnswers,
 	peekOllamaImageSupport,
 	resolveOllamaContextWindow,
 	resolveOllamaImageSupport,
@@ -1691,6 +1693,12 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	if (!cwd) {
 		throw new Error("buildSessionConfig requires a cwd resolved by the host controller")
 	}
+	// What each model declares is read again for every session. The caches live
+	// as long as the window, and a model rebuilt under the same name between two
+	// runs would otherwise keep the window, temperature and think-budget message
+	// it had before.
+	forgetDeclaredModelInfo()
+	forgetOllamaShowAnswers()
 	const workspaceRoot = input.workspaceRoot?.trim() || cwd
 	const mode: Mode = input.mode ?? "act"
 	const sdkLogger = createSdkLogger()

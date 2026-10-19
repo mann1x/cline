@@ -82,6 +82,7 @@ export {
 	createHandlerAsync,
 	extractClineFreeModelLimitResetTime,
 	extractClinePassLimitMessage,
+	forgetDeclaredModelInfo,
 	getClineNotSubscribedMessage,
 	getClineOrgIndividualInferenceSubscriptionMessage,
 	getClinePassSubscriptionUrl,
