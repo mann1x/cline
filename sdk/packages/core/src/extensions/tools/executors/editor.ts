@@ -2057,6 +2057,7 @@ export function createEditorExecutor(
 				suffix++;
 			}
 			const oldEnd = old.length - suffix;
+			const writtenEnd = now.length - suffix;
 			// Each end stays where it is when the edit lies after it, moves by
 			// the edit's change in length when the edit lies before it, and
 			// otherwise takes in the text the edit wrote, which the model has.
@@ -2066,9 +2067,19 @@ export function createEditorExecutor(
 					: oldEnd <= at
 						? at + now.length - old.length
 						: fallback;
-			const shown = moved(cut.shown, now.length - suffix);
-			const from = moved((cut.from ?? 1) - 1, prefix) + 1;
-			receipts?.noteCut?.(filePath, line, shown, now.length, from);
+			const start = (cut.from ?? 1) - 1;
+			let shown = moved(cut.shown, writtenEnd);
+			let from = moved(start, prefix);
+			// Text written against the window, not only inside it, is text the
+			// model has. A line read whole at 390 characters and then given `)}`
+			// on its end kept a window of 390 of 392, and every edit reaching
+			// its end was refused as past what the model had seen -- four in a
+			// row, on characters it had typed (pandorum, 2026-10-19).
+			if (prefix <= cut.shown && oldEnd >= start) {
+				shown = Math.max(shown, writtenEnd);
+				from = Math.min(from, prefix);
+			}
+			receipts?.noteCut?.(filePath, line, shown, now.length, from + 1);
 		}
 	};
 

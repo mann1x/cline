@@ -139,6 +139,17 @@ describe("an edit cannot reach past where grep cut the line", () => {
 		).rejects.toThrow(/showed you only characters 468-857/);
 	});
 
+	// pandorum, 2026-10-19: a line read whole at 390 characters was given `)}`
+	// on its end, and the window stayed at 390 of 392 -- four edits refused as
+	// reaching past what the model had seen, on characters it had typed.
+	it("takes in text written against the end of what was seen", async () => {
+		const { file, read, edit } = await workspace();
+		await read();
+		await edit({ start_line: 2, end_line: 2, new_text: `${line})}` });
+		await edit({ start_line: 2, end_line: 2, new_text: "rewritten" });
+		expect((await fs.readFile(file, "utf8")).split("\n")[1]).toBe("rewritten");
+	});
+
 	it("leaves a line grep printed whole alone", async () => {
 		const { grep, edit } = await workspace();
 		await grep("short");
