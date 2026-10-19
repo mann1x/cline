@@ -235,13 +235,13 @@ export function createCheckFileTool(options: CheckFileToolOptions): AgentTool {
  * nothing to report. A failure here must never mask the diagnostics it is
  * appended to, so every error is swallowed.
  */
-async function describeBalance(absolutePath: string): Promise<string | null> {
+async function describeBalance(absolutePath: string): Promise<{ text: string | null; missing: boolean }> {
 	try {
 		const text = await fs.readFile(absolutePath, "utf-8")
-		return describeDelimiterBalance(absolutePath, text)
+		return { text: describeDelimiterBalance(absolutePath, text), missing: false }
 	} catch (error) {
 		Logger.error(`[CheckFile] delimiter scan skipped for ${absolutePath}:`, error)
-		return null
+		return { text: null, missing: (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT" }
 	}
 }
 
@@ -264,7 +264,7 @@ async function describeFile(args: {
 	// with no language server behind it is exactly where this is the only
 	// answer available: VS Code ships no syntax checking for the script inside
 	// an `.html` file, so an unclosed brace there is reported by nobody.
-	const balance = await describeBalance(absolutePath)
+	const { text: balance, missing } = await describeBalance(absolutePath)
 	const withBalance = (text: string) => (balance ? `${text}\n${balance}` : text)
 
 	// Same cap, same severity filter, same rendering as the post-edit report:
@@ -273,6 +273,11 @@ async function describeFile(args: {
 	const rendered = file ? await renderFileDiagnostics(file.filePath, file.diagnostics) : ""
 	if (rendered !== "") {
 		return withBalance(rendered)
+	}
+	// Not "no problems": session y1t7j asked about six scripts it had deleted,
+	// was told they were clean, and spent two turns on the contradiction.
+	if (missing) {
+		return `${displayPath}: no such file, so there is nothing to check.`
 	}
 
 	// The editor said nothing, which is not the same as "this file is fine".

@@ -1,4 +1,4 @@
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { readFile as readFileFromDisk } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
@@ -1308,23 +1308,6 @@ export class LocalRuntimeHost implements RuntimeHost {
 							),
 					}),
 				];
-		// Having both tools is not the same as using both. A model that runs the
-		// build and is told the file is broken has, measured, gone off and
-		// written its own analyser rather than asking the checker sitting next
-		// to it — three scratch scripts in one transaction, twenty-two edits,
-		// none of them to the broken file. So a failing command now returns the
-		// checker's answer about the file it named, in the same result. Wired
-		// over the merged list, after both halves are in it, so a host's own
-		// terminal-aware shell and its own language-server checker are joined
-		// exactly like the builtins.
-		const mergedToolsWithFailureChecks = joinCheckerToShell(
-			mergedToolsWithLister,
-			{
-				cwd: configWithProvider.cwd ?? process.cwd(),
-				shellName: DefaultToolNames.RUN_COMMANDS,
-				checkerName: CHECK_FILE_TOOL_NAME,
-			},
-		);
 		const editVerificationConfig = configWithProvider.editVerification;
 		// Nudge rather than off, now that this host always has a checker to
 		// name. Off was the honest default while it had none — a guard that can
@@ -1340,12 +1323,34 @@ export class LocalRuntimeHost implements RuntimeHost {
 			checkTools: editVerificationConfig?.checkTools ?? [CHECK_FILE_TOOL_NAME],
 			// "require" is the same guard given more room to insist.
 			attempts: editVerificationMode === "require" ? 4 : 2,
+			cwd: configWithProvider.cwd ?? process.cwd(),
+			fileExists: existsSync,
 		};
 		const editVerificationTracker =
 			editVerificationMode === "off" ||
 			editVerificationSettings.checkTools.length === 0
 				? undefined
 				: new EditVerificationTracker(editVerificationSettings);
+		// Having both tools is not the same as using both. A model that runs the
+		// build and is told the file is broken has, measured, gone off and
+		// written its own analyser rather than asking the checker sitting next
+		// to it — three scratch scripts in one transaction, twenty-two edits,
+		// none of them to the broken file. So a failing command now returns the
+		// checker's answer about the file it named, in the same result. Wired
+		// over the merged list, after both halves are in it, so a host's own
+		// terminal-aware shell and its own language-server checker are joined
+		// exactly like the builtins.
+		const mergedToolsWithFailureChecks = joinCheckerToShell(
+			mergedToolsWithLister,
+			{
+				cwd: configWithProvider.cwd ?? process.cwd(),
+				shellName: DefaultToolNames.RUN_COMMANDS,
+				checkerName: CHECK_FILE_TOOL_NAME,
+				// The checker this runs is the bare one, outside the tracker's
+				// wrapping, so the files it reported on are passed on here.
+				onChecked: (paths) => editVerificationTracker?.recordChecked(paths),
+			},
+		);
 		const toolsToWrap = mergedToolsWithFailureChecks;
 		const withChecklist = taskProgressTracker
 			? toolsToWrap.map((tool) =>

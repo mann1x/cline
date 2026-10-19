@@ -37,6 +37,18 @@ describe("announcedIntentWithoutActing", () => {
 		expect(announcedIntentWithoutActing(text)).toBeUndefined();
 	});
 
+	it('reads "let\'s" as a promise and "lets" as a verb', () => {
+		expect(announcedIntentWithoutActing("Let's run the check.")).toBeDefined();
+		expect(
+			announcedIntentWithoutActing("Let\u2019s run the check."),
+		).toBeDefined();
+		expect(
+			announcedIntentWithoutActing(
+				"5. Corrected collide. This lets the player rest exactly on the floor.",
+			),
+		).toBeUndefined();
+	});
+
 	it("ignores an announcement buried far above the end of a long message", () => {
 		// A turn that said what it would do, did it, and closed with a summary
 		// is not a turn that stopped at the announcement.
@@ -58,7 +70,7 @@ describe("buildAnnouncedIntentNudge", () => {
 
 		expect(nudge).toContain('"Let me propose a check, then fix them."');
 		expect(nudge).toContain("called nothing");
-		expect(nudge).toContain("second turn running");
+		expect(nudge).not.toContain("second turn running");
 	});
 
 	it("does not paste an entire message back into the prompt", () => {

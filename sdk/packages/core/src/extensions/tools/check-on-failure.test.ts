@@ -74,6 +74,29 @@ describe("the checker's answer arriving with the failure", () => {
 		expect(String(results[0]?.result)).toContain("line 1: 1 more `(`");
 	});
 
+	it("says which files it checked, so they count as checked", async () => {
+		const root = workspace({ "game.js": "f(\n" });
+		const checked: string[][] = [];
+		const wrapped = withCheckOnFailure(
+			shellReturning([
+				{
+					query: "node game.js",
+					result: "SyntaxError: bad\n  at game.js:1:2",
+					success: false,
+				},
+			]),
+			{
+				cwd: root,
+				checker: checkerSaying("## game.js\nfine"),
+				onChecked: (paths) => checked.push([...paths]),
+			},
+		);
+
+		await wrapped.execute({}, context);
+
+		expect(checked).toEqual([[path.join(root, "game.js")]]);
+	});
+
 	it("says where the extra text came from, so it is not read as command output", async () => {
 		const root = workspace({ "game.js": "f(\n" });
 		const wrapped = withCheckOnFailure(

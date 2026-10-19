@@ -15,9 +15,10 @@ vi.mock("@/hosts/host-provider", () => ({
 /**
  * A disk with only the files a test puts on it.
  *
- * The delimiter scan reads the file itself, and every other test in here names
- * a path that does not exist — which is the shape the scan must survive, so the
- * default is a miss.
+ * The delimiter scan reads the file itself, and most tests in here name a path
+ * that does not exist — which is the shape the scan must survive, so the
+ * default is a miss. A test that wants the file called clean puts it on disk:
+ * a missing file with nothing from the editor is answered as missing.
  */
 const files = new Map<string, string>()
 vi.mock("fs/promises", () => ({
@@ -158,6 +159,7 @@ describe("check_file", () => {
 	})
 
 	it("says a file is clean rather than saying nothing", async () => {
+		files.set(at("src/app.ts"), "")
 		// Silence would read as a failed call, and the model would shell out.
 		const tool = createCheckFileTool({ cwd: CWD, delay: noDelay, readDiagnostics: async () => [] })
 
@@ -169,6 +171,7 @@ describe("check_file", () => {
 	})
 
 	it("drops hint-level noise the way the post-edit report does", async () => {
+		files.set(at("src/app.ts"), "")
 		// Same filter, from the same module: two answers to "what is wrong with
 		// this file" would be worse than either.
 		const tool = createCheckFileTool({
@@ -256,6 +259,7 @@ describe("check_file", () => {
 	})
 
 	it("keeps two paths apart on a case-sensitive platform", async () => {
+		files.set(at("app.ts"), "")
 		// Pinned, because the platform is the subject: on win32 the lookup folds
 		// case on purpose (the test above), so running this one on a Windows agent
 		// asserts the opposite of what the fold is for.
@@ -325,10 +329,12 @@ describe("check_file", () => {
 			expect(await run(tool, { paths: ["app.ts"] })).not.toContain("Delimiter scan")
 		})
 
-		it("is skipped, not fatal, when the file cannot be read", async () => {
+		it("says a file that is not there is not there, rather than clean", async () => {
 			const tool = createCheckFileTool({ cwd: CWD, delay: noDelay, readDiagnostics: async () => [] })
 
-			expect(await run(tool, { paths: ["gone.ts"] })).toContain("no problems reported by the editor")
+			const output = await run(tool, { paths: ["gone.ts"] })
+			expect(output).toContain("gone.ts: no such file")
+			expect(output).not.toContain("no problems")
 		})
 	})
 
@@ -350,6 +356,7 @@ describe("check_file", () => {
 		})
 
 		it("reports what the command found", async () => {
+			files.set(at("a.py"), "")
 			const tool = createCheckFileTool({
 				cwd: CWD,
 				delay: noDelay,
@@ -365,6 +372,7 @@ describe("check_file", () => {
 		})
 
 		it("says both sources agree when the command passes", async () => {
+			files.set(at("a.py"), "")
 			const tool = createCheckFileTool({
 				cwd: CWD,
 				delay: noDelay,
@@ -377,6 +385,7 @@ describe("check_file", () => {
 		})
 
 		it("reports a command that could not run, without pretending the file is clean", async () => {
+			files.set(at("a.py"), "")
 			const tool = createCheckFileTool({
 				cwd: CWD,
 				delay: noDelay,

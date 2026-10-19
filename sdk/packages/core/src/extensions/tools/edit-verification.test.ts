@@ -94,10 +94,52 @@ describe("holding the run back", () => {
 		expect(first).toContain("check_file");
 
 		const second = guard();
-		expect(second).toContain("last time you will be asked");
+		expect(second).toContain("Last reminder");
 
 		// Two refusals is a warning; a third would be an argument.
 		expect(guard()).toBeUndefined();
+	});
+
+	// Untagged, it read as the user: "The user is asking me to run
+	// check_file" (Bonsai 2, sessions y1t7j and 1s1ki).
+	it("speaks as the harness, not as the user", () => {
+		const t = tracker();
+		const guard = createEditVerificationCompletionGuard(t, config);
+		t.recordToolCall("editor", { path: "a.ts" });
+
+		expect(guard()).toMatch(/^\[SYSTEM\] /);
+		expect(guard()).toMatch(/^\[SYSTEM\] /);
+	});
+
+	it("leaves out a file the model has since deleted", () => {
+		const onDisk = new Set(["/ws/game.html"]);
+		const settings = {
+			...config,
+			cwd: "/ws",
+			fileExists: (absolutePath: string) => onDisk.has(absolutePath),
+		};
+		const t = new EditVerificationTracker(settings);
+		const guard = createEditVerificationCompletionGuard(t, settings);
+		t.recordToolCall("editor", { path: "game.html" });
+		t.recordToolCall("editor", { path: "__scratch.js" });
+
+		const first = guard();
+		expect(first).toContain("game.html");
+		expect(first).not.toContain("__scratch.js");
+
+		// And with nothing edited left on disk, the run may end.
+		onDisk.clear();
+		expect(guard()).toBeUndefined();
+	});
+
+	it("counts a check the checker made outside a checker call", () => {
+		const settings = { ...config, cwd: "/ws" };
+		const t = new EditVerificationTracker(settings);
+		t.recordToolCall("editor", { path: "game.html" });
+		// A failing command runs the checker on the file it names, by absolute path.
+		t.recordChecked(["/ws/game.html"]);
+
+		expect(t.getState().unchecked).toEqual([]);
 	});
 
 	it("lets a run end when everything edited has been checked", () => {

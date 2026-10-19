@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import type { AgentTool } from "@cline/shared";
 
 /**
@@ -37,6 +38,14 @@ export interface EditVerificationConfig {
 	 * aside: the model has been told twice and the work is the user's to judge.
 	 */
 	attempts?: number;
+	/** Where relative paths resolve from, so `a.ts` and `/ws/a.ts` are one file. */
+	cwd?: string;
+	/**
+	 * Whether a file is still on disk. A file the model deleted has nothing
+	 * left to check: session y1t7j was asked to check six scratch scripts it
+	 * had removed, and `check_file` called them clean.
+	 */
+	fileExists?: (absolutePath: string) => boolean;
 }
 
 export const EDIT_VERIFICATION_ATTEMPTS = 2;
@@ -95,16 +104,34 @@ function normalizePath(filePath: string): string {
 	return forward.toLowerCase();
 }
 
+function isAbsolutePath(filePath: string): boolean {
+	return path.isAbsolute(filePath) || /^[a-zA-Z]:[\\/]/.test(filePath);
+}
+
 /** Tracks which edited files are still unverified. */
 export class EditVerificationTracker {
 	private readonly editTools: ReadonlySet<string>;
 	private readonly checkTools: ReadonlySet<string>;
 	/** Normalised path → the path as the model wrote it, for the message. */
 	private readonly unchecked = new Map<string, string>();
+	private readonly cwd?: string;
+	private readonly fileExists?: (absolutePath: string) => boolean;
 
 	constructor(config: EditVerificationConfig) {
 		this.editTools = new Set(config.editTools);
 		this.checkTools = new Set(config.checkTools);
+		this.cwd = config.cwd;
+		this.fileExists = config.fileExists;
+	}
+
+	private absolute(filePath: string): string {
+		return this.cwd && !isAbsolutePath(filePath)
+			? path.resolve(this.cwd, filePath)
+			: filePath;
+	}
+
+	private key(filePath: string): string {
+		return normalizePath(this.absolute(filePath));
 	}
 
 	/** Whether this tracker can ever have anything to say. */
@@ -115,19 +142,35 @@ export class EditVerificationTracker {
 	recordToolCall(toolName: string, input: unknown): void {
 		if (this.editTools.has(toolName)) {
 			for (const filePath of extractPaths(input)) {
-				this.unchecked.set(normalizePath(filePath), filePath);
+				this.unchecked.set(this.key(filePath), filePath);
 			}
 			return;
 		}
 		if (this.checkTools.has(toolName)) {
-			for (const filePath of extractPaths(input)) {
-				this.unchecked.delete(normalizePath(filePath));
-			}
+			this.recordChecked(extractPaths(input));
+		}
+	}
+
+	/**
+	 * Files a checker reported on outside a checker call: the one a failing
+	 * command runs on the file it names. Its report is in the model's hands
+	 * either way (session y1t7j ran it after its last edit, clean, and was
+	 * still asked to check the file).
+	 */
+	recordChecked(paths: readonly string[]): void {
+		for (const filePath of paths) {
+			this.unchecked.delete(this.key(filePath));
 		}
 	}
 
 	getState(): EditVerificationState {
-		return { unchecked: [...this.unchecked.values()] };
+		const unchecked = [...this.unchecked.values()];
+		const exists = this.fileExists;
+		return {
+			unchecked: exists
+				? unchecked.filter((filePath) => exists(this.absolute(filePath)))
+				: unchecked,
+		};
 	}
 
 	reset(): void {
@@ -142,19 +185,17 @@ export function buildUncheckedEditsNudge(
 	attempt: 1 | 2,
 ): string {
 	const list = unchecked.map((filePath) => `\`${filePath}\``).join(", ");
-	const plural = unchecked.length === 1 ? "this file" : "these files";
+	// Tagged: untagged, it read as the user. Bonsai 2 answered it "The user is
+	// asking me to run check_file" and "You're right" (sessions y1t7j, 1s1ki).
 	if (attempt === 1) {
 		return (
-			`You changed ${plural} and have not checked ${unchecked.length === 1 ? "it" : "them"} since: ${list}.\n\n` +
-			`Run \`${checkTool}\` on ${unchecked.length === 1 ? "it" : "them"} before you finish. ` +
-			"If it reports problems your edits introduced, fix them and check again. " +
-			"An edit that has not been looked at is not a change you can report as done."
+			`[SYSTEM] Not checked since your last edit: ${list}. ` +
+			`Run \`${checkTool}\` on ${unchecked.length === 1 ? "it" : "them"} before you finish, and fix what your edits broke.`
 		);
 	}
 	return (
-		`${list} ${unchecked.length === 1 ? "is" : "are"} still unchecked since your last edit, and this is the last time you will be asked.\n\n` +
-		`Run \`${checkTool}\` now, or say plainly that you are finishing without checking and why — ` +
-		"an unverified edit reported as complete is the thing this is here to prevent."
+		`[SYSTEM] Still not checked since your last edit: ${list}. Last reminder: ` +
+		`run \`${checkTool}\`, or say you are finishing without it and why.`
 	);
 }
 

@@ -297,7 +297,13 @@ describe("LocalRuntimeHost", () => {
 		);
 
 		const editor = agentConfig?.tools?.find((tool) => tool.name === "editor");
-		await editor?.execute({ path: "manic_miner.html" }, {});
+		// On disk: the guard leaves out a file that is not there any more.
+		const edited = join(
+			mkdtempSync(join(tmpdir(), "cline-unchecked-")),
+			"manic_miner.html",
+		);
+		writeFileSync(edited, "");
+		await editor?.execute({ path: edited }, {});
 		const verdict = agentConfig?.completionPolicy?.completionGuard?.();
 
 		if (guarded) {
@@ -366,7 +372,13 @@ describe("LocalRuntimeHost", () => {
 		);
 
 		const editor = agentConfig?.tools?.find((tool) => tool.name === "editor");
-		await editor?.execute({ path: "a.ts" }, {});
+		// On disk: the guard leaves out a file that is not there any more.
+		const edited = join(
+			mkdtempSync(join(tmpdir(), "cline-unchecked-")),
+			"a.ts",
+		);
+		writeFileSync(edited, "");
+		await editor?.execute({ path: edited }, {});
 		const verdict = agentConfig?.completionPolicy?.completionGuard?.();
 		expect(verdict).toContain("a.ts");
 		expect(verdict).toContain("check_file");

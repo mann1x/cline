@@ -63,6 +63,8 @@ export interface CheckOnFailureOptions {
 	cwd: string;
 	/** The checker to ask. Its report is appended verbatim. */
 	checker: Pick<AgentTool<{ paths: string[] }, unknown>, "execute">;
+	/** Told which files the checker reported on, so they count as checked. */
+	onChecked?: (paths: readonly string[]) => void;
 }
 
 /**
@@ -121,13 +123,13 @@ export function withCheckOnFailure<TInput>(
 			}
 
 			let report: string;
+			// Capped here as well as per result: three failing commands naming
+			// three files each is a build log, and the model is owed an answer
+			// about the failure it is looking at, not a survey.
+			const checked = paths.slice(0, MAX_CHECKED_FILES);
 			try {
 				const answer = await options.checker.execute(
-					// Capped here as well as per result: three failing commands
-					// naming three files each is a build log, and the model is
-					// owed an answer about the failure it is looking at, not a
-					// survey.
-					{ paths: paths.slice(0, MAX_CHECKED_FILES) },
+					{ paths: checked },
 					context,
 				);
 				report = typeof answer === "string" ? answer : String(answer);
@@ -161,6 +163,7 @@ export function withCheckOnFailure<TInput>(
 						? ""
 						: String(attachTo.result);
 			attachTo.result = `${body}\n\n${ATTACHMENT_HEADING}\n${report}`;
+			options.onChecked?.(checked);
 			return results;
 		},
 	};
@@ -176,7 +179,12 @@ export function withCheckOnFailure<TInput>(
  */
 export function joinCheckerToShell<TTool extends AgentTool<never, unknown>>(
 	tools: readonly TTool[],
-	options: { cwd: string; shellName: string; checkerName: string },
+	options: {
+		cwd: string;
+		shellName: string;
+		checkerName: string;
+		onChecked?: (paths: readonly string[]) => void;
+	},
 ): TTool[] {
 	const checker = tools.find((tool) => tool.name === options.checkerName);
 	const shell = tools.find((tool) => tool.name === options.shellName);
@@ -189,6 +197,7 @@ export function joinCheckerToShell<TTool extends AgentTool<never, unknown>>(
 			AgentTool<{ paths: string[] }, unknown>,
 			"execute"
 		>,
+		onChecked: options.onChecked,
 	}) as TTool;
 	return tools.map((tool) => (tool === shell ? joined : tool));
 }

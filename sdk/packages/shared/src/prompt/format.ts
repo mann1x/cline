@@ -571,7 +571,9 @@ export function buildAnnouncedIntentNudge(announcement: string): string {
 	return (
 		ANNOUNCED_INTENT_NUDGE_PREFIX +
 		`"${quoted}" ` +
-		"and then called nothing, for the second turn running. Saying what you " +
+		// Not "for the second turn running": it is sent with the first nudge,
+		// on the first silent turn (session y1t7j quoted that back as false).
+		"and then called nothing. Saying what you " +
 		"are about to do is not doing it, and the run ends on the next silent " +
 		"turn with the work undone. Emit the tool call itself now - the first " +
 		"one, not a description of it. If you cannot, say plainly what is " +
@@ -588,8 +590,10 @@ export function buildAnnouncedIntentNudge(announcement: string): string {
  * that, because the whole point of the one-nudge budget is that such a model
  * has already answered.
  */
+// "let's" needs its apostrophe: without one it is the verb, and "This lets
+// the player rest on the floor" closed a finished report (session y1t7j).
 const ANNOUNCED_INTENT =
-	/\b(?:let me|i'?ll|i will|i'?m going to|i am going to|now i(?:'?ll| will)|next,? i(?:'?ll| will)|let'?s)\b/i;
+	/\b(?:let me|i'?ll|i will|i'?m going to|i am going to|now i(?:'?ll| will)|next,? i(?:'?ll| will)|let['’]s)\b/i;
 const CLAIMS_COMPLETION =
 	/\b(?:task (?:is )?(?:complete|finished|done)|all done|is now (?:complete|finished|fixed|working)|i(?:'?m| am) (?:done|finished)|nothing (?:else|more) to do|no further changes)\b/i;
 
