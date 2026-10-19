@@ -722,6 +722,37 @@ describe("an edit made outside the checklist", () => {
 		expect(tracker.takePendingReminder()).toContain("no checklist");
 	});
 
+	// The editor tool does not throw: it answers `success: false` with the
+	// reason. Its refusals were followed by "you just changed
+	// `manic_miner.html`" (pandorum, 2026-10-19).
+	it("is not said about an edit that reported its refusal", async () => {
+		const tracker = new TaskProgressTracker();
+		const refused = editor(
+			tracker,
+			async () =>
+				({
+					query: "edit:manic_miner.html",
+					result: "",
+					error: "Editor operation failed: Not modified: line 94 …",
+					success: false,
+				}) as never,
+		);
+		await refused.execute(edit(), {});
+		expect(tracker.takePendingReminder()).toBeUndefined();
+
+		const landed = editor(
+			tracker,
+			async () =>
+				({
+					query: "edit:manic_miner.html",
+					result: "ok",
+					success: true,
+				}) as never,
+		);
+		await landed.execute(edit(), {});
+		expect(tracker.takePendingReminder()).toContain("no checklist");
+	});
+
 	it("keeps the nudge for an edit that landed when a later one is refused", async () => {
 		const tracker = new TaskProgressTracker();
 		await editor(tracker, async () => "ok").execute(edit(), {});

@@ -706,6 +706,17 @@ export class TaskProgressTracker {
 	}
 }
 
+/** Whether a tool's result says it failed: `success: false`, or every entry of a batch. */
+function reportsFailure(result: unknown): boolean {
+	const failed = (entry: unknown): boolean =>
+		typeof entry === "object" &&
+		entry !== null &&
+		(entry as { success?: unknown }).success === false;
+	return Array.isArray(result)
+		? result.length > 0 && result.every(failed)
+		: failed(result);
+}
+
 /**
  * Wrap a tool so its calls feed the tracker and its results carry reminders.
  *
@@ -741,6 +752,13 @@ export function withTaskProgressCapture<TInput, TOutput>(
 				// said about a change.
 				tracker.retractFailedWrite(input, tool.name);
 				throw error;
+			}
+			// A tool that reports its failure instead of throwing it changed
+			// nothing either. The editor answers `success: false`, and its
+			// refusals were followed by "you just changed `manic_miner.html`"
+			// (pandorum, 2026-10-19): the same contradiction as a thrown one.
+			if (reportsFailure(result)) {
+				tracker.retractFailedWrite(input, tool.name);
 			}
 			if (reminder === undefined) {
 				return result;
