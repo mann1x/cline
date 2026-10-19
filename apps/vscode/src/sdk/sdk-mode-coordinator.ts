@@ -69,6 +69,12 @@ export interface SdkModeCoordinatorOptions {
 export class SdkModeCoordinator {
 	private pendingModeChange: Mode | null = null
 	/**
+	 * The conversation the pending switch was asked for. The coordinator lives
+	 * as long as the window; a switch queued by one run must not fire on the
+	 * next run's first idle edge.
+	 */
+	private pendingModeChangeSessionId: string | undefined
+	/**
 	 * Pending user-initiated mode switch, stamped as a <mode_notice> onto the
 	 * next outbound message by SdkSessionLifecycle.fireAndForgetSend. Shares the
 	 * CLI's round-trip-cancelling tracker (@cline/shared), scoped to the session
@@ -113,6 +119,7 @@ export class SdkModeCoordinator {
 
 	queueSwitchToActMode(): void {
 		this.pendingModeChange = "act"
+		this.pendingModeChangeSessionId = this.options.sessions.getActiveSession()?.sessionId
 	}
 
 	hasPendingModeChange(): boolean {
@@ -124,7 +131,13 @@ export class SdkModeCoordinator {
 		if (!target) {
 			return
 		}
+		const queuedFor = this.pendingModeChangeSessionId
 		this.pendingModeChange = null
+		this.pendingModeChangeSessionId = undefined
+		if (this.options.sessions.getActiveSession()?.sessionId !== queuedFor) {
+			Logger.log("[SdkController] applyPendingModeChange: the conversation it was queued for is no longer active; dropping")
+			return
+		}
 		Logger.log(`[SdkController] applyPendingModeChange: switching to ${target}`)
 		// The tool result told the model to proceed with the plan, so rebuild with
 		// act-mode tools and auto-continue rather than waiting for another user message.

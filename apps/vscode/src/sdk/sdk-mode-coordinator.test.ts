@@ -44,6 +44,23 @@ describe("SdkModeCoordinator", () => {
 		expect(options.postStateToWebview).toHaveBeenCalledTimes(2)
 	})
 
+	// The coordinator lives as long as the window. A switch queued by one run
+	// that never reached its idle edge must not rebuild the next run into act
+	// mode and auto-continue it with "the user approved switching".
+	it("drops a queued switch when another conversation is active by the time it applies", async () => {
+		const activeSession = makeActiveSession()
+		const { coordinator, state, options } = makeCoordinator({ activeSession })
+
+		coordinator.queueSwitchToActMode()
+		options.sessions.getActiveSession.mockReturnValue({ ...makeActiveSession(), sessionId: "next-run" })
+		await coordinator.applyPendingModeChange()
+
+		expect(coordinator.hasPendingModeChange()).toBe(false)
+		expect(state.mode).toBe("plan")
+		expect(options.sessions.replaceActiveSession).not.toHaveBeenCalled()
+		expect(options.sessions.fireAndForgetSend).not.toHaveBeenCalled()
+	})
+
 	it("preserves pending input by returning false when toggling mode without an active session", async () => {
 		const { coordinator, state, options } = makeCoordinator({ mode: "act" })
 
