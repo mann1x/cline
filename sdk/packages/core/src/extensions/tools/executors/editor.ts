@@ -1893,7 +1893,13 @@ export function createEditorExecutor(
 	};
 
 	/**
-	 * Every no-op edit this session has been refused, and how often.
+	 * Every no-op edit refused, and how often, per conversation and agent.
+	 *
+	 * Keyed by who sent it because the executor can outlive a conversation: the
+	 * VS Code host builds one for the window. Keyed by the call alone, a rerun
+	 * of the same task on the same file was told on its first refusal that this
+	 * was "attempt 6, and every one has been refused" -- five of them from runs
+	 * before it.
 	 *
 	 * Unbounded on purpose: an entry is one refused call's key, a session that
 	 * accumulates thousands of them has a bigger problem than the memory, and
@@ -1901,11 +1907,14 @@ export function createEditorExecutor(
 	 * this cannot afford.
 	 */
 	const refusedNoOps = new Map<string, number>();
-	const noteNoOp: NoOpLedger = (key) => {
-		const seen = (refusedNoOps.get(key) ?? 0) + 1;
-		refusedNoOps.set(key, seen);
-		return seen;
-	};
+	const noOpLedgerFor =
+		(context: AgentToolContext): NoOpLedger =>
+		(key) => {
+			const scoped = `${context.sessionId ?? context.conversationId ?? ""}\u0000${context.agentId}\u0000${key}`;
+			const seen = (refusedNoOps.get(scoped) ?? 0) + 1;
+			refusedNoOps.set(scoped, seen);
+			return seen;
+		};
 
 	/** How many lines the file holds right now, or null if it has none to count. */
 	const countLines = async (filePath: string): Promise<number | null> => {
@@ -2212,8 +2221,9 @@ export function createEditorExecutor(
 	const editLocked = async (
 		input: EditFileInput,
 		filePath: string,
-		_context: AgentToolContext,
+		context: AgentToolContext,
 	): Promise<string> => {
+		const noteNoOp = noOpLedgerFor(context);
 		await requireCurrent(filePath);
 		const linesBefore = receipts ? await countLines(filePath) : null;
 		const cutBefore = await cutLineTexts(filePath);

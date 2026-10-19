@@ -560,6 +560,28 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
+		// pandorum, v9-agentic: the VS Code host keeps one editor for the window,
+		// and a rerun of the same task was told on its first refusal "This is
+		// attempt 6, and every one has been refused" -- five were earlier runs'.
+		it("counts a no-op's refusals per conversation, not per editor", async () => {
+			await withTempFile("one\ntwo\nthree", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const send = (sessionId: string) =>
+					editor({ path: filePath, new_text: "two", start_line: 2 }, dir, {
+						...context,
+						sessionId,
+					});
+
+				await expect(send("run-1")).rejects.toThrow("No change");
+				await expect(send("run-1")).rejects.toThrow("identical edit 2 times");
+
+				// The next run's first refusal is a first refusal.
+				await expect(send("run-2")).rejects.not.toThrow("identical edit");
+				await expect(send("run-2")).rejects.toThrow("identical edit 2 times");
+				await expect(send("run-1")).rejects.toThrow("identical edit 3 times");
+			});
+		});
+
 		// Five identical refusals over the last twenty messages of a
 		// jackdelta-9b run, with a full re-read of the file between three of
 		// them and the check run twice in between. Every refusal said the same
