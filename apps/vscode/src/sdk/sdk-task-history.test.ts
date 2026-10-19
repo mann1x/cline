@@ -579,6 +579,20 @@ describe("SdkTaskHistory", () => {
 		expect(second.metadata.conversationTags).toEqual([])
 	})
 
+	// Hydrating reads the messages of every session without a recorded cost --
+	// every local-model one. Per tag write that ran the extension host out of heap.
+	it("re-lists from metadata only after an update or a delete", async () => {
+		const { history, listHistory } = makeHistory([makeSessionRecord("task-1"), makeSessionRecord("task-2")])
+
+		await history.updateTaskHistory(makeHistoryItem("task-1", { tags: ["bonsai-2"] }))
+		await history.deleteTaskFromState("task-2")
+
+		expect(listHistory).toHaveBeenCalled()
+		for (const [options] of listHistory.mock.calls as unknown as [unknown][]) {
+			expect(options).toEqual(expect.objectContaining({ hydrate: false }))
+		}
+	})
+
 	it("keeps cached SDK task size when updating history without measuring artifacts", async () => {
 		vi.mocked(getFolderSize.loose).mockResolvedValue(8192 as never)
 		const existing = makeSessionRecord("task-1", {

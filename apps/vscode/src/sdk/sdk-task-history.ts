@@ -716,7 +716,7 @@ export class SdkTaskHistory {
 
 	async deleteTaskFromState(id: string): Promise<HistoryItem[]> {
 		await this.deleteSession(id)
-		return (await this.listHistory()).map(sessionHistoryRecordToHistoryItem)
+		return (await this.listHistory({ hydrate: false })).map(sessionHistoryRecordToHistoryItem)
 	}
 
 	async deleteAllTaskHistory(
@@ -753,9 +753,15 @@ export class SdkTaskHistory {
 		return deletedCount
 	}
 
+	/**
+	 * Metadata only, like every other read of the whole list. Hydrating opens the
+	 * messages of each session with no cost recorded, which is every local-model
+	 * session: on a 958-conversation history that was half a gigabyte of JSON
+	 * parsed at once, per tag or favourite, and the extension host ran out of heap.
+	 */
 	async updateTaskHistory(item: HistoryItem): Promise<HistoryItem[]> {
 		await this.updateTaskHistoryItem(item)
-		return (await this.listHistory()).map(sessionHistoryRecordToHistoryItem)
+		return (await this.listHistory({ hydrate: false })).map(sessionHistoryRecordToHistoryItem)
 	}
 
 	/**

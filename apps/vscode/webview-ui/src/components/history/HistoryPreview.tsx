@@ -247,6 +247,13 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 										)}
 										<div className="history-task-description ph-no-capture">{item.task}</div>
 									</div>
+									{(item.errorCount ?? 0) > 0 && (
+										<span
+											className="text-xs rounded px-1.5 py-0.5 bg-error/15 text-error flex-shrink-0"
+											title="Errors shown in this conversation: failed tool calls, failed requests and stopped runs">
+											{item.errorCount} {item.errorCount === 1 ? "error" : "errors"}
+										</span>
+									)}
 									{item.isLegacy && <span className="history-cost-chip">Legacy</span>}
 								</div>
 								<div className="history-meta-stack">
