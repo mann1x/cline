@@ -5,6 +5,45 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.255] — 2026-10-19
+
+### Agents
+
+- **No more back and forth over `check_file` at the end of a run.** A model
+  that had finished was asked to check files it had already checked, and
+  files it had deleted.
+  - A command that fails already runs the checker on the file it names, and
+    that now counts as checking it.
+  - Files that are no longer on disk are left out of the reminder, and
+    `check_file` now says a missing file is missing instead of calling it
+    clean.
+  - The reminder is marked as coming from Cerebriline. Models answered it as
+    if you had asked ("The user is asking me to run check_file").
+- **A finished report is no longer quoted back as a promise.** "This lets the
+  player…" was read as "let's", and the reply was nudged as if the model had
+  announced work and stopped. The nudge also no longer says "for the second
+  turn running" when it is the first.
+
+### Compaction
+
+- **Summaries cite the right tool calls in small windows.** The numbered
+  list of calls the summary writer cites against was cut to the ledger's
+  budget, which at a 32k window dropped the oldest calls of the stretch
+  being summarised and renumbered the rest. Summaries then cited by
+  counting, and the calls placed under their sentences were the wrong ones.
+  The list now holds every call of the stretch; long inputs are shortened
+  to keep it small. What is carried to the next summary is unchanged.
+
+### History
+
+- **Adding a tag no longer crashes the extension.** Saving a tag or a
+  favourite reloaded the whole history by opening every conversation's
+  messages, and on a large history the extension ran out of memory. Tags
+  added while it was stuck were lost. It now reloads the list from the
+  saved summaries only.
+- **The home list shows a conversation's error count**, as the full
+  history already did.
+
 ## [4.100.254] — 2026-10-19
 
 ### Settings
