@@ -1804,13 +1804,28 @@ function assertColumnInRange(
  * finally arrived at 38.9. Retyping a long line is also how the next fault gets
  * introduced, so the cost is not only tokens.
  *
- * Silent unless all three hold: the scan prescribes a call, this edit addressed
- * no column, and it carried enough text for the difference to matter. Creating
- * a file is never retyping -- its whole text is the smallest call that could
- * have written it.
+ * Silent unless all four hold: the scan prescribes a call, that call is for a
+ * line this edit wrote, this edit addressed no column, and it carried enough
+ * text for the difference to matter. Creating a file is never retyping -- its
+ * whole text is the smallest call that could have written it.
+ *
+ * The line has to be the one the edit wrote. Without that check it fired after
+ * any long edit that left the file unbalanced, and in 60% of 1,575 notices on
+ * pandorum (2026-10-19) the prescription was for some other line: an edit to
+ * line 111 was told "the call above changes one column", the call being the
+ * scan's fix for line 97, and the model read "the call above" as its own.
  */
-function describeRetypeCost(input: EditFileInput, scan: string): string | null {
-	if (!scan.includes(PRESCRIPTION_MARKER)) {
+function describeRetypeCost(
+	input: EditFileInput,
+	scan: string,
+	result: string,
+): string | null {
+	const prescription = scan.match(PRESCRIBED_CALL);
+	if (!prescription) {
+		return null;
+	}
+	const line = Number(prescription[2]);
+	if (!editedLines(result).has(line)) {
 		return null;
 	}
 	const addressedByColumn =
@@ -1832,9 +1847,24 @@ function describeRetypeCost(input: EditFileInput, scan: string): string | null {
 		return null;
 	}
 	return (
-		`\n  That edit retyped ${typed} characters and the file still does not ` +
-		"balance; the call above changes one column and retypes nothing."
+		`\n  Your edit retyped ${typed} characters of line ${line} and the file still ` +
+		`does not balance. The scan's fix for line ${line} is \`editor\` with ` +
+		`${prescription[1]}: it changes one character and retypes nothing.`
 	);
+}
+
+/** The scan's prescribed call, and the line it is for. */
+const PRESCRIBED_CALL = new RegExp(
+	`${PRESCRIPTION_MARKER.replace(/[.*+?^${}()|[\]\\`]/g, "\\$&")}((?:start|insert)_line: (\\d+), [^\n]*?) — `,
+);
+
+/** The lines an edit's text landed on, from the `+N:` lines of its diff. */
+function editedLines(result: string): Set<number> {
+	const lines = new Set<number>();
+	for (const match of result.matchAll(/^\+(\d+):/gm)) {
+		lines.add(Number(match[1]));
+	}
+	return lines;
 }
 
 /**
@@ -2115,7 +2145,7 @@ export function createEditorExecutor(
 		if (!scan) {
 			return result;
 		}
-		const cost = describeRetypeCost(input, scan);
+		const cost = describeRetypeCost(input, scan, result);
 		return `${result}\n\n${scan}${cost ?? ""}`;
 	};
 

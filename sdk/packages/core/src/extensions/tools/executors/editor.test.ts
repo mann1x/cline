@@ -2224,8 +2224,39 @@ describe("how long the file is", () => {
 
 				expect(result).toContain("start_column: 48");
 				expect(result).toContain(
-					`retyped ${LONG_UNBALANCED_LINE.length} characters`,
+					`retyped ${LONG_UNBALANCED_LINE.length} characters of line 1`,
 				);
+				// Named as the scan's call, not "the call above", which the model
+				// read as its own edit.
+				expect(result).toContain(
+					"The scan's fix for line 1 is `editor` with start_line: 1, start_column: 48",
+				);
+			});
+		});
+
+		// pandorum, 2026-10-19: an edit retyped line 111 and was told "the call
+		// above changes one column" -- the call being the scan's fix for line 97.
+		// 60% of 1,575 notices in the archive pointed at a line the edit had
+		// not touched.
+		it("says nothing about the cost when the scan's fix is for another line", async () => {
+			await withTempDir(async (dir) => {
+				const editor = createEditorExecutor();
+				const filePath = path.join(dir, "game.js");
+				await fs.writeFile(filePath, `${SPARE_BRACE_LINE}\n// old\n`, "utf-8");
+
+				const result = await editor(
+					{
+						path: filePath,
+						start_line: 2,
+						end_line: 2,
+						new_text: `// ${"pad ".repeat(60)}`,
+					},
+					dir,
+					context,
+				);
+
+				expect(result).toContain("start_line: 1, start_column: 48");
+				expect(result).not.toContain("retyped");
 			});
 		});
 
