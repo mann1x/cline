@@ -5,6 +5,53 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.254] — 2026-10-19
+
+### Settings
+
+- **Notice wording and the copy bar moved to the provider settings.** They
+  are part of how a model handles notices, so they are now set per provider,
+  in the Notices section below the switch that turns notices on, with Load
+  default and Reset, and only shown while notices are on. They are gone from
+  Settings > Features. Wording set there in 4.100.253 is not carried over:
+  set it again on each provider that uses it.
+
+### Fixes
+
+- **`repeat_last_n` keeps -1 on Ollama and opencoti.** The field accepted -1
+  and showed no error, but the value was never saved, and a -1 saved earlier
+  was dropped as soon as any other sampling field was changed. It is now
+  saved and sent. Upstream llama.cpp still refuses -1, as before, because
+  that server rejects it.
+- **Sampling fields save what they accept.** An integer field such as
+  `top_k` or `seed` took a decimal with no error and saved it cut to a whole
+  number; it now says the value must be a whole number. On llama.cpp, a
+  `n_keep` below -1, or a `repeat_last_n`, `n_keep` or `num_predict` above
+  2,147,483,647, made the server refuse every request; the panel now refuses
+  them instead.
+
+### Agents
+
+- **Edits to a line you just wrote are no longer refused.** After the model
+  added text to the end of a line it had read, the editor still treated the
+  added characters as unseen and refused further edits reaching them, as
+  "past what you have seen".
+- **No "you just changed" note after a refused edit.** A refused edit was
+  followed by a note saying the file had been changed.
+
+- **Harness notes no longer read as you speaking.** The task checklist and
+  the reminders Cerebriline adds while a model works (an edit with no
+  checklist, a repeated passage, a cut-off tool call) were sent as user
+  messages. Models took them as instructions from you, and on Gemma 4 each
+  one also wiped the model's earlier reasoning from the prompt, so it kept
+  starting over with "The user wants to …". They now arrive with the tool
+  result they follow.
+- **The editor's "retyped N characters" hint points at the right line.** It
+  appeared after any long edit that left brackets unbalanced, usually naming
+  a fix for some other line, and its "the call above" read as the model's
+  own edit. It now appears only when the edit touched the line the bracket
+  check has a one-character fix for, and names that line and the call.
+
 ## [4.100.253] — 2026-10-18
 
 ### Settings
