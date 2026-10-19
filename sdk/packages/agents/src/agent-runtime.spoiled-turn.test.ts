@@ -37,6 +37,13 @@ function textOf(message: AgentMessage | undefined): string {
 		.join("");
 }
 
+/** The harness notes riding on a message's tool results. */
+function notesOf(message: AgentMessage | undefined): string {
+	return (message?.content ?? [])
+		.map((part) => (part.type === "tool-result" ? (part.note ?? "") : ""))
+		.join("");
+}
+
 function reasoningOf(message: AgentMessage | undefined): string {
 	return (message?.content ?? [])
 		.map((part) =>
@@ -141,13 +148,18 @@ describe("a turn whose content must not be read back", () => {
 			true,
 		);
 		// The nudge was worked out before the reasoning went, so it still
-		// quotes the passage.
+		// quotes the passage. It rides on the tool result, not as a user turn.
+		expect(
+			result.messages.some((m) =>
+				notesOf(m).includes("wrote this same passage"),
+			),
+		).toBe(true);
 		expect(
 			result.messages.some(
 				(m) =>
 					m.role === "user" && textOf(m).includes("wrote this same passage"),
 			),
-		).toBe(true);
+		).toBe(false);
 		expect(JSON.stringify(model.requests[1]?.messages)).not.toContain(
 			passage.repeat(3),
 		);
@@ -209,7 +221,11 @@ describe("a turn whose content must not be read back", () => {
 });
 
 describe("a reminder the host raises while tools run", () => {
-	it("reaches the model after the tool results, once", async () => {
+	// It used to follow the results as a user message. On gemma4 a user turn
+	// drops all earlier reasoning from the prompt, and the model read the note
+	// as the user speaking: pandorum, 2026-10-19, six "The user wants to ..."
+	// restarts in one session, each right after a note.
+	it("reaches the model on the tool result, once, and not as a user turn", async () => {
 		const noop: AgentTool = {
 			name: "editor",
 			description: "edit",
@@ -242,18 +258,19 @@ describe("a reminder the host raises while tools run", () => {
 
 		const result = await runtime.run("fix it");
 
-		const roles = result.messages.map((m) =>
-			m.content.some((part) => part.type === "tool-result")
-				? "tool-result"
-				: m.role,
-		);
-		const at = result.messages.findIndex((m) =>
-			textOf(m).includes("has no checklist"),
-		);
-		expect(roles[at - 1]).toBe("tool-result");
 		expect(
-			result.messages.filter((m) => textOf(m).includes("has no checklist")),
+			result.messages.filter((m) => notesOf(m).includes("has no checklist")),
 		).toHaveLength(1);
+		expect(
+			result.messages.some(
+				(m) => m.role === "user" && textOf(m).includes("has no checklist"),
+			),
+		).toBe(false);
+		// The output its caller parses is untouched; the note is beside it.
+		const tool = result.messages.find((m) => notesOf(m) !== "");
+		expect(
+			tool?.content.find((part) => part.type === "tool-result")?.output,
+		).toEqual({ success: true });
 		expect(JSON.stringify(model.requests[1]?.messages)).toContain(
 			"has no checklist",
 		);

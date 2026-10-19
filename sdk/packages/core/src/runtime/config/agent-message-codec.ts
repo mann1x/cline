@@ -231,6 +231,7 @@ function toolResultContentToAgentPart(
 		toolName: block.name,
 		output: block.content,
 		isError: block.is_error,
+		...(block.note ? { note: block.note } : {}),
 	};
 }
 
@@ -300,6 +301,7 @@ function agentPartToContentBlock(
 				name: part.toolName,
 				content: toPersistedToolResultContent(part.output),
 				is_error: part.isError,
+				...(part.note ? { note: part.note } : {}),
 			} satisfies ToolResultContent;
 		}
 	}

@@ -2708,6 +2708,20 @@ export class AgentRuntime {
 					`tools-end iter=${this.state.iteration} took=${Date.now() - toolsAt}ms`,
 				);
 				this.state.pendingToolCalls = [];
+				// The turn's notes ride on its last tool result, read after the
+				// output, rather than following it as a user message. A user turn
+				// is the user speaking, and on gemma4 it also drops every earlier
+				// reasoning block from the prompt: measured on pandorum, 16 of 17
+				// user turns were notes, each left the model 0 characters of its
+				// own plan, and all six "The user wants to ..." restarts in that
+				// session came straight after one. Attached before the messages are
+				// added so the stored copy carries them too.
+				const leftoverNotes = this.findCompletingToolMessage(
+					toolCalls,
+					toolMessages,
+				)
+					? []
+					: this.attachTurnNotes(toolMessages, finalAssistantMessage);
 				for (const toolMessage of toolMessages) {
 					this.state.messages.push(toolMessage);
 					await this.emit({
@@ -2766,30 +2780,9 @@ export class AgentRuntime {
 					});
 					return result;
 				}
-				// A looping turn that still calls tools is the shape every
-				// turn-level detector is blind to: measured on `kessj` message 30,
-				// one paragraph written seven times in sixty-five, and the turn
-				// emitted a tool call, so the run read as productive. Reached only
-				// once the turn is otherwise going to continue, so it appends to a
-				// turn that was carrying on anyway and can never keep a finished
-				// run alive.
-				const repetition = this.repetitionNudgeFor(finalAssistantMessage);
-				if (repetition) {
-					await this.addUserReminderMessage(repetition);
-				}
-				// Whatever the host noticed while the tools ran. After the tool
-				// results, which is the only place a user message may follow
-				// an assistant turn that made calls.
-				const hostReminder =
-					this.config.completionPolicy?.afterToolsReminder?.();
-				if (hostReminder) {
-					await this.addUserReminderMessage(hostReminder);
-				}
-				// The cut call rode in a turn whose other calls ran.
-				if (this.pendingToolIntentNudge) {
-					const nudge = this.pendingToolIntentNudge;
-					this.pendingToolIntentNudge = undefined;
-					await this.addUserReminderMessage(nudge);
+				// Only when the turn had no tool result to carry them.
+				for (const note of leftoverNotes) {
+					await this.addUserReminderMessage(note);
 				}
 			}
 
@@ -4562,6 +4555,51 @@ export class AgentRuntime {
 			...running,
 		]);
 		return results;
+	}
+
+	/**
+	 * Put the turn's notes on its last tool result, and return any left over.
+	 *
+	 * Taken only on a turn that carries on, as they always were: the repetition
+	 * nudge, whatever the host noticed while the tools ran, and the nudge for a
+	 * call that was cut. A looping turn that still calls tools is the shape
+	 * every turn-level detector is blind to (`kessj` message 30: one paragraph
+	 * written seven times in sixty-five, and the run read as productive), which
+	 * is why the repetition check is here at all.
+	 */
+	private attachTurnNotes(
+		toolMessages: AgentMessage[],
+		finalAssistantMessage: AgentMessage | undefined,
+	): string[] {
+		const notes: string[] = [];
+		const repetition = this.repetitionNudgeFor(finalAssistantMessage);
+		if (repetition) {
+			notes.push(repetition);
+		}
+		const hostReminder = this.config.completionPolicy?.afterToolsReminder?.();
+		if (hostReminder) {
+			notes.push(hostReminder);
+		}
+		if (this.pendingToolIntentNudge) {
+			notes.push(this.pendingToolIntentNudge);
+			this.pendingToolIntentNudge = undefined;
+		}
+		if (notes.length === 0) {
+			return [];
+		}
+		const parts = toolMessages.at(-1)?.content ?? [];
+		let result: Extract<AgentMessagePart, { type: "tool-result" }> | undefined;
+		for (let index = parts.length - 1; index >= 0 && !result; index -= 1) {
+			const part = parts[index];
+			if (part?.type === "tool-result") {
+				result = part;
+			}
+		}
+		if (!result) {
+			return notes;
+		}
+		result.note = [result.note, ...notes].filter(Boolean).join("\n\n");
+		return [];
 	}
 
 	private findCompletingToolMessage(

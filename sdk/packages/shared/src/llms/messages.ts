@@ -82,6 +82,8 @@ export interface ToolResultContent {
 	content: string | Array<TextContent | ImageContent | FileContent>;
 	/** Whether this result represents an error */
 	is_error?: boolean;
+	/** The harness's note for the model, read after `content`; see `AgentToolResultPart.note`. */
+	note?: string;
 }
 
 /**

@@ -71,6 +71,48 @@ export interface AgentToolResultPart {
 	isError?: boolean;
 	/** Absent for ordinary AgentRuntime-executed tools. */
 	execution?: ModelToolExecution;
+	/**
+	 * The harness's own note for the model, read after the output.
+	 *
+	 * Kept apart from `output`, which callers parse, and joined to it only in
+	 * what the model is sent: see {@link toolResultForModel}. Mid-run notes
+	 * used to be user messages, and on gemma4 a user message drops all of the
+	 * model's earlier reasoning from the prompt; every note cost the plan.
+	 */
+	note?: string;
+}
+
+/**
+ * A tool result's output as the model reads it, with the harness note after it.
+ *
+ * Text stays text and anything structured is serialized as the providers
+ * already serialize it. An array carrying media gains a text block instead, so
+ * an image is never flattened into JSON.
+ */
+export function toolResultForModel(
+	output: unknown,
+	note: string | undefined,
+): unknown {
+	if (!note) {
+		return output;
+	}
+	if (typeof output === "string") {
+		return `${output}\n\n${note}`;
+	}
+	if (
+		Array.isArray(output) &&
+		output.some(
+			(entry) =>
+				typeof entry === "object" &&
+				entry !== null &&
+				["image", "file", "media"].includes(
+					(entry as { type?: unknown }).type as string,
+				),
+		)
+	) {
+		return [...output, { type: "text", text: note }];
+	}
+	return `${JSON.stringify(output) ?? ""}\n\n${note}`;
 }
 
 export type ModelToolExecution = "client" | "provider";

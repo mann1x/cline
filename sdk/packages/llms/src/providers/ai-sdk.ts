@@ -32,6 +32,7 @@ import {
 	nativeReasoningHistoryPlan,
 	parseJsonStream,
 	sanitizeSurrogates,
+	toolResultForModel,
 	usesImageGenerationOperation,
 	validateAndReserveBase64Media,
 	validateAndReserveImageMedia,
@@ -992,7 +993,7 @@ export function toAiSdkMessages(
 					type: "tool-result",
 					toolCallId: part.toolCallId,
 					toolName: part.toolName,
-					output: part.output,
+					output: toolResultForModel(part.output, part.note),
 					isError: part.isError ?? false,
 				});
 			}

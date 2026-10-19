@@ -18,13 +18,51 @@ import {
 	type ApiStreamChunk,
 	classifyProviderError,
 } from "@cline/llms";
-import type {
-	AgentModel,
-	AgentModelEvent,
-	AgentModelFinishReason,
-	AgentModelRequest,
+import {
+	type AgentModel,
+	type AgentModelEvent,
+	type AgentModelFinishReason,
+	type AgentModelRequest,
+	type Message,
+	type ToolResultContent,
+	toolResultForModel,
 } from "@cline/shared";
 import { agentMessagesToMessages } from "../../runtime/config/agent-message-codec";
+
+/**
+ * The messages a handler is sent: a tool result's harness note joined to its
+ * content, which is what the model reads. Persisted, the two stay apart.
+ */
+function withToolResultNotes(messages: Message[]): Message[] {
+	return messages.map((message) => {
+		if (typeof message.content === "string") {
+			return message;
+		}
+		if (
+			!message.content.some(
+				(block) => block.type === "tool_result" && block.note,
+			)
+		) {
+			return message;
+		}
+		return {
+			...message,
+			content: message.content.map((block) => {
+				if (block.type !== "tool_result" || !block.note) {
+					return block;
+				}
+				const { note, ...rest } = block;
+				return {
+					...rest,
+					content: toolResultForModel(
+						rest.content,
+						note,
+					) as ToolResultContent["content"],
+				};
+			}),
+		};
+	});
+}
 
 type ApiStreamDoneChunk = Extract<ApiStreamChunk, { type: "done" }>;
 
@@ -147,7 +185,9 @@ export function createAgentModelFromApiHandler(
 				// Forward the abort signal so cancellation reaches the handler.
 				handler.setAbortSignal?.(request.signal);
 
-				const messages = agentMessagesToMessages(request.messages);
+				const messages = withToolResultNotes(
+					agentMessagesToMessages(request.messages),
+				);
 				const tools = request.tools.map((tool) => ({
 					name: tool.name,
 					description: tool.description,
