@@ -596,9 +596,22 @@ export function evictToolLedger(
 	entries: readonly ToolLedgerEntry[],
 	budgetChars: number,
 ): ToolLedgerEntry[] {
+	const kept = toolLedgerSurvivors(entries, budgetChars);
+	return renumber(entries.filter((_entry, position) => kept[position]));
+}
+
+/**
+ * Which entries `evictToolLedger` keeps, by position, for a caller that has
+ * to keep its own numbering: the compaction cites a fold by the numbers it
+ * showed the writer, and stores only what survives.
+ */
+export function toolLedgerSurvivors(
+	entries: readonly ToolLedgerEntry[],
+	budgetChars: number,
+): boolean[] {
 	let total = entries.reduce((sum, entry) => sum + entryChars(entry), 0);
 	if (total <= budgetChars) {
-		return renumber([...entries]);
+		return entries.map(() => true);
 	}
 	const tierOf = (entry: ToolLedgerEntry): number =>
 		VERDICT_TOOLS.has(entry.toolName) ? 2 : entry.failed ? 1 : 0;
@@ -616,7 +629,7 @@ export function evictToolLedger(
 		dropped.add(position);
 		total -= entryChars(entry);
 	}
-	return renumber(entries.filter((_entry, position) => !dropped.has(position)));
+	return entries.map((_entry, position) => !dropped.has(position));
 }
 
 /**
@@ -656,9 +669,40 @@ export function renderToolLedgerEntry(entry: ToolLedgerEntry): string {
  */
 export function renderToolLedgerKey(
 	entries: readonly ToolLedgerEntry[],
+	maxChars?: number,
 ): string {
+	const heads = entries.map((entry) => `${entry.index}. ${entry.toolName}`);
+	const full = entries.reduce(
+		(sum, entry, position) =>
+			sum + (heads[position]?.length ?? 0) + 2 + entry.input.length + 1,
+		0,
+	);
+	// Over the limit, every input is cut to the same share and no call is
+	// left out: a key that drops a call renumbers the rest, and the writer,
+	// who reads every call of the fold, then cites by counting (claude-hooks
+	// trace, 2026-10-19: a 9-call fold shown 6, the oldest gone).
+	const allowance =
+		maxChars === undefined || full <= maxChars
+			? Number.POSITIVE_INFINITY
+			: Math.max(
+					0,
+					Math.floor(
+						(maxChars - heads.reduce((sum, head) => sum + head.length + 3, 0)) /
+							Math.max(1, entries.length),
+					),
+				);
 	return entries
-		.map((entry) => `${entry.index}. ${entry.toolName}  ${entry.input}`)
+		.map((entry, position) => {
+			const input =
+				entry.input.length <= allowance
+					? entry.input
+					: allowance > 1
+						? `${entry.input.slice(0, allowance - 1)}…`
+						: "";
+			return input === ""
+				? `${heads[position]}`
+				: `${heads[position]}  ${input}`;
+		})
 		.join("\n");
 }
 

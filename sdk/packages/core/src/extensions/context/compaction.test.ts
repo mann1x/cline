@@ -3039,6 +3039,93 @@ describe("createContextCompactionPrepareTurn", () => {
 		expect(sent).toContain("<user_request>");
 	});
 
+	it("shows the writer every call of the fold, and carries only what fits", async () => {
+		// claude-hooks, 2026-10-19: at a small window the key the writer cites
+		// against was the evicted ledger, so a 9-call fold was shown 6 with the
+		// oldest gone and the rest renumbered; the writer cited by counting and
+		// the splice placed the wrong calls under its sentences.
+		const createMessage = vi.fn(() =>
+			streamChunks([
+				{ type: "text", id: "summary-key", text: "I read the modules." },
+				{ type: "done", id: "summary-key", success: true },
+			]),
+		);
+		createHandlerMock.mockReturnValue({ createMessage });
+		const prepareTurn = createContextCompactionPrepareTurn({
+			providerId: "anthropic",
+			modelId: "mock-model",
+			providerConfig: {
+				providerId: "anthropic",
+				modelId: "mock-model",
+			} as LlmsProviders.ProviderConfig,
+			compaction: {
+				enabled: true,
+				strategy: "agentic",
+				preserveRecentTokens: 1,
+				councilEnabled: false,
+			},
+			logger: undefined,
+		});
+		const loop: MessageWithMetadata[] = [];
+		for (let index = 0; index < 12; index += 1) {
+			loop.push({
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						id: `read-${index}`,
+						name: "read_files",
+						input: { files: [{ path: `src/module_${index}.py` }] },
+					},
+				],
+			});
+			loop.push({
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: `read-${index}`,
+						name: "read_files",
+						content: `${"def body(): pass ".repeat(60)}${index}`,
+					},
+				],
+			});
+		}
+		const prompt = "Survey the modules.";
+
+		const result = await prepareTurn?.({
+			agentId: "agent-1",
+			conversationId: "conv-1",
+			parentAgentId: null,
+			iteration: 1,
+			abortSignal: new AbortController().signal,
+			systemPrompt: "You are helpful.",
+			tools: [],
+			messages: [{ role: "user", content: prompt }, ...loop],
+			apiMessages: [{ role: "user", content: prompt }, ...loop],
+			model: {
+				id: "mock-model",
+				provider: "anthropic",
+				info: { id: "mock-model", maxInputTokens: 10 },
+			},
+		});
+
+		const sent = createMessage.mock.calls
+			.map((call) => JSON.stringify(call))
+			.join("\n");
+		// The first call and the last, under the numbers the fold gives them.
+		expect(sent).toContain("1. read_files");
+		expect(sent).toContain("12. read_files");
+		const stored = (
+			result?.messages?.[0]?.metadata as
+				| { toolLedgerEntries?: unknown[] }
+				| undefined
+		)?.toolLedgerEntries;
+		// Carried forward under the budget, as before.
+		expect(stored?.length).toBeGreaterThan(0);
+		expect(stored?.length).toBeLessThan(12);
+	});
+
 	it("budgets agentic summary input before serialization", () => {
 		const result = buildAgenticSummaryInputBudget({
 			messages: [

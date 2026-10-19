@@ -62,6 +62,7 @@ import {
 	renderToolLedger,
 	renderToolLedgerKey,
 	spliceLedgerCitations,
+	toolLedgerSurvivors,
 } from "./tool-ledger";
 
 /**
@@ -174,6 +175,9 @@ export const SUMMARIZER_SYSTEM_PROMPTS = {
 const USER_REQUEST_BUDGET_SHARE = 0.15;
 
 const TOOL_LEDGER_BUDGET_SHARE = 0.1;
+
+/** The most of the writer's input the call key may take before inputs are cut. */
+const TOOL_LEDGER_KEY_SHARE = 0.1;
 
 /**
  * A floor under that share, for a caller that names no message target.
@@ -672,12 +676,51 @@ export async function runAgenticCompaction(options: {
 		maxInputTokens: summarizerInputLimit,
 		outputTokenCap: outputBudgets.summaryMaxTokens,
 	});
+	const ledgerEnabled = options.toolLedgerEnabled !== false;
+	// The share is small because the ledger is a record and not the record:
+	// it earns its space by holding the calls the prose is worst at keeping,
+	// not by holding all of them. It bounds what is carried forward, not the
+	// key: the writer reads every call of this fold, and a key cut to the
+	// share dropped the oldest of them and renumbered the rest, so the writer
+	// cited by counting and the splice placed the wrong calls. Replayed over
+	// 26 first-generation pandorum folds at the 2,000-character floor, 787 of
+	// 929 calls were missing from the key.
+	const ledgerBudgetChars = Math.max(
+		MIN_TOOL_LEDGER_CHARS,
+		Math.floor(
+			(options.context.budget.messages.targetTokens ?? 0) *
+				CHARS_PER_TOKEN *
+				TOOL_LEDGER_BUDGET_SHARE,
+		),
+	);
+	// Every call of this fold behind the carried ones, which alone are
+	// evicted: one numbering, shown to the writer and used by the splice.
+	const keyEntries = ledgerEnabled
+		? mergeToolLedger(
+				evictToolLedger(previousLedgerEntries, ledgerBudgetChars),
+				buildToolLedger(newMessagesToFold),
+			)
+		: [];
+	// Bounded by shortening inputs, never by leaving calls out, and counted in
+	// the overhead below: a long fold's key reached 23,000 characters.
+	const toolLedgerKey = ledgerEnabled
+		? renderToolLedgerKey(
+				keyEntries,
+				Math.max(
+					ledgerBudgetChars,
+					Math.floor(
+						summarizerInputLimit * CHARS_PER_TOKEN * TOOL_LEDGER_KEY_SHARE,
+					),
+				),
+			)
+		: "";
 	const summaryRequestOverheadTokens = estimateTokens(
 		buildSummaryRequest({
 			previousSummary,
 			conversationText: "",
 			fileOps: preProjectionFileOps,
 			promptTemplate: options.summaryPrompt,
+			toolLedger: toolLedgerKey,
 		}).length,
 	);
 	const availableSummaryInputTokens =
@@ -729,29 +772,12 @@ export async function runAgenticCompaction(options: {
 	// means "say nothing about files", and the ledger is still worth its space
 	// without one -- it is the only place a *refused* call survives compaction,
 	// which is precisely what the summary is worst at keeping.
-	const ledgerEnabled = options.toolLedgerEnabled !== false;
-	// This compaction's calls behind the ones carried from the last, collapsed
-	// across the join and then brought back under budget. The share is small
-	// because the ledger is a record and not the record: it earns its space by
-	// holding the calls the prose is worst at keeping, not by holding all of
-	// them.
-	const ledgerBudgetChars = Math.max(
-		MIN_TOOL_LEDGER_CHARS,
-		Math.floor(
-			(options.context.budget.messages.targetTokens ?? 0) *
-				CHARS_PER_TOKEN *
-				TOOL_LEDGER_BUDGET_SHARE,
-		),
-	);
+	// What is carried to the next generation: the key's calls brought back
+	// under budget, numbered afresh for it.
 	const ledgerEntries = ledgerEnabled
-		? evictToolLedger(
-				mergeToolLedger(
-					previousLedgerEntries,
-					buildToolLedger(newMessagesToFold),
-				),
-				ledgerBudgetChars,
-			)
+		? evictToolLedger(keyEntries, ledgerBudgetChars)
 		: [];
+	const keySurvivors = toolLedgerSurvivors(keyEntries, ledgerBudgetChars);
 	const toolLedger = ledgerEnabled
 		? renderToolLedger(
 				ledgerEntries,
@@ -793,7 +819,7 @@ export async function runAgenticCompaction(options: {
 		userRequestBudgetChars: Math.floor(
 			summarizerInputLimit * CHARS_PER_TOKEN * USER_REQUEST_BUDGET_SHARE,
 		),
-		toolLedger: ledgerEnabled ? renderToolLedgerKey(ledgerEntries) : "",
+		toolLedger: toolLedgerKey,
 	});
 	// Which of the three instructions actually ran. The diagnostics recorded
 	// the strategy and the mode and could not answer "which prompt", so a
@@ -1071,9 +1097,6 @@ export async function runAgenticCompaction(options: {
 	// cannot honour, and costs tokens on every compaction to make it.
 	//
 	// Explicitly, not inferred from `spanFor`. An absent revision lookup already
-	const toolLedgerKey = ledgerEnabled
-		? renderToolLedgerKey(ledgerEntries)
-		: undefined;
 	const retrospectiveMaxTokens = resolveThinkingSummaryMaxTokens({
 		budgets: outputBudgets,
 		summaryTokens: estimateTokens(summary.length),
@@ -1157,11 +1180,11 @@ export async function runAgenticCompaction(options: {
 	// keep, where a spliced-in call would be four hundred characters they were
 	// asked not to shorten.
 	const spliced = ledgerEnabled
-		? spliceLedgerCitations(reviewed.summary, ledgerEntries)
+		? spliceLedgerCitations(reviewed.summary, keyEntries)
 		: { text: reviewed.summary, cited: [], uncited: [], invalid: [] };
-	if (ledgerEnabled && ledgerEntries.length > 0) {
+	if (ledgerEnabled && keyEntries.length > 0) {
 		options.logger?.debug(
-			`[compaction] ledger citations: ${spliced.cited.length} of ${ledgerEntries.length} placed inline` +
+			`[compaction] ledger citations: ${spliced.cited.length} of ${keyEntries.length} placed inline` +
 				(spliced.uncited.length > 0
 					? `, ${spliced.uncited.length} appended (${spliced.uncited.slice(0, 12).join(", ")})`
 					: "") +
@@ -1214,8 +1237,11 @@ export async function runAgenticCompaction(options: {
 			retrospectiveAsTurn,
 			toolLedger: ledgerEnabled
 				? renderToolLedger(
-						ledgerEntries.filter((entry) =>
-							spliced.uncited.includes(entry.index),
+						// Numbered as cited, and only those that are carried: the
+						// rest of the fold is in no ledger after this one.
+						keyEntries.filter(
+							(entry, position) =>
+								keySurvivors[position] && spliced.uncited.includes(entry.index),
 						),
 						collectFileHistories(ledgerEntries, options.spanFor),
 					)

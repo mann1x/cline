@@ -7,7 +7,9 @@ import {
 	evictToolLedger,
 	mergeToolLedger,
 	renderToolLedger,
+	renderToolLedgerKey,
 	spliceLedgerCitations,
+	toolLedgerSurvivors,
 } from "./tool-ledger";
 
 function call(
@@ -580,6 +582,49 @@ describe("a ledger that outlives its own compaction", () => {
 		const kept = evictToolLedger(entries, 100);
 
 		expect(kept.map((e) => e.toolName)).toEqual(["run_commands"]);
+	});
+
+	it("names the survivors by position, the same ones eviction keeps", () => {
+		const entries = mergeToolLedger(
+			[],
+			[
+				entry("read_files", "path=a.ts", "x".repeat(400)),
+				entry("run_commands", "commands=[node run_game.js]", "ok:false"),
+				entry("read_files", "path=b.ts", "z".repeat(400)),
+			],
+		);
+
+		expect(toolLedgerSurvivors(entries, 100)).toEqual([false, true, false]);
+		expect(evictToolLedger(entries, 100).map((e) => e.toolName)).toEqual([
+			"run_commands",
+		]);
+	});
+
+	it("keeps every call in the key, shortening inputs to fit", () => {
+		// A key that drops a call renumbers the rest, and a writer who reads
+		// every call of the fold then cites by counting.
+		const entries = mergeToolLedger(
+			[],
+			Array.from({ length: 30 }, (_unused, index) =>
+				entry(
+					"read_files",
+					`path=src/${"deep/".repeat(10)}module_${index}.py`,
+					"ok",
+				),
+			),
+		);
+
+		const key = renderToolLedgerKey(entries, 900);
+		const lines = key.split("\n");
+
+		expect(lines).toHaveLength(30);
+		expect(lines[0]).toMatch(/^1\. read_files/);
+		expect(lines[29]).toMatch(/^30\. read_files/);
+		expect(key.length).toBeLessThanOrEqual(900);
+		// Under the limit it is the key it always was.
+		expect(renderToolLedgerKey(entries, 100_000)).toBe(
+			renderToolLedgerKey(entries),
+		);
 	});
 
 	it("keeps a failed read over a successful one", () => {
