@@ -267,6 +267,10 @@ export function toRedactedProviderConfigResponse(
 					...(config.notices.enabled !== undefined ? { enabled: config.notices.enabled } : {}),
 					thinkSteps: [...(config.notices.thinkSteps ?? [])],
 					answerSteps: [...(config.notices.answerSteps ?? [])],
+					thinkTemplates: [...(config.notices.thinkTemplates ?? [])],
+					answerTemplates: [...(config.notices.answerTemplates ?? [])],
+					...(config.notices.copyBarThink !== undefined ? { copyBarThink: config.notices.copyBarThink } : {}),
+					...(config.notices.copyBarAnswer !== undefined ? { copyBarAnswer: config.notices.copyBarAnswer } : {}),
 				}
 			: undefined,
 		tools: config.tools
@@ -312,13 +316,28 @@ function toOutputBudgetSettings(patch: NonNullable<WriteProviderConfigPatch["out
 function toNoticeSettings(patch: NonNullable<WriteProviderConfigPatch["notices"]>): NoticeSettings | null {
 	const thinkSteps = patch.thinkSteps?.length ? [...patch.thinkSteps] : undefined
 	const answerSteps = patch.answerSteps?.length ? [...patch.answerSteps] : undefined
-	if (patch.enabled === undefined && !thinkSteps && !answerSteps) {
+	// An empty list is the engine's own wording, which is also what absent says.
+	const thinkTemplates = patch.thinkTemplates?.some((line) => line.trim() !== "") ? [...patch.thinkTemplates] : undefined
+	const answerTemplates = patch.answerTemplates?.some((line) => line.trim() !== "") ? [...patch.answerTemplates] : undefined
+	if (
+		patch.enabled === undefined &&
+		!thinkSteps &&
+		!answerSteps &&
+		!thinkTemplates &&
+		!answerTemplates &&
+		patch.copyBarThink === undefined &&
+		patch.copyBarAnswer === undefined
+	) {
 		return null
 	}
 	return {
 		...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
 		...(thinkSteps ? { thinkSteps } : {}),
 		...(answerSteps ? { answerSteps } : {}),
+		...(thinkTemplates ? { thinkTemplates } : {}),
+		...(answerTemplates ? { answerTemplates } : {}),
+		...(patch.copyBarThink !== undefined ? { copyBarThink: patch.copyBarThink } : {}),
+		...(patch.copyBarAnswer !== undefined ? { copyBarAnswer: patch.copyBarAnswer } : {}),
 	}
 }
 

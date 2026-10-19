@@ -11,7 +11,6 @@ import { ClineEnv } from "@/config"
 import { installDocumentReaderLanguages } from "@/sdk/document-reader-languages"
 import { installLibraryVectors } from "@/sdk/library-config"
 import { applyModelRequestCapture } from "@/sdk/model-request-capture"
-import { applyNoticeCopyBar, applyNoticeTemplates } from "@/sdk/notice-templates"
 import { updateQaCredentials } from "@/sdk/qa-credentials-store"
 import { McpDisplayMode } from "@/shared/McpDisplayMode"
 import { Logger } from "@/shared/services/Logger"
@@ -440,32 +439,6 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 
 		if (request.cappedThinkingPrompt !== undefined) {
 			controller.stateManager.setGlobalState("cappedThinkingPrompt", request.cappedThinkingPrompt)
-		}
-
-		if (request.noticeThinkTemplates !== undefined || request.noticeAnswerTemplates !== undefined) {
-			if (request.noticeThinkTemplates !== undefined) {
-				controller.stateManager.setGlobalState("noticeThinkTemplates", request.noticeThinkTemplates)
-			}
-			if (request.noticeAnswerTemplates !== undefined) {
-				controller.stateManager.setGlobalState("noticeAnswerTemplates", request.noticeAnswerTemplates)
-			}
-			applyNoticeTemplates(
-				controller.stateManager.getGlobalSettingsKey("noticeThinkTemplates"),
-				controller.stateManager.getGlobalSettingsKey("noticeAnswerTemplates"),
-			)
-		}
-
-		if (request.noticeCopyBarThink !== undefined || request.noticeCopyBarAnswer !== undefined) {
-			if (request.noticeCopyBarThink !== undefined) {
-				controller.stateManager.setGlobalState("noticeCopyBarThink", request.noticeCopyBarThink)
-			}
-			if (request.noticeCopyBarAnswer !== undefined) {
-				controller.stateManager.setGlobalState("noticeCopyBarAnswer", request.noticeCopyBarAnswer)
-			}
-			applyNoticeCopyBar(
-				controller.stateManager.getGlobalSettingsKey("noticeCopyBarThink"),
-				controller.stateManager.getGlobalSettingsKey("noticeCopyBarAnswer"),
-			)
 		}
 
 		if (request.useAutoCondense !== undefined) {

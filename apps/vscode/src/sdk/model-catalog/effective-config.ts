@@ -155,10 +155,31 @@ function readNotices(settings: Record<string, unknown>): NoticesConfig | undefin
 	}
 	const thinkSteps = steps(notices.thinkSteps)
 	const answerSteps = steps(notices.answerSteps)
-	const result: { enabled?: boolean; thinkSteps?: number[]; answerSteps?: number[] } = {
+	const wording = (raw: unknown): string[] | undefined => {
+		if (!Array.isArray(raw)) {
+			return undefined
+		}
+		const lines = raw.slice(0, 4).map((line) => (typeof line === "string" ? line : ""))
+		return lines.some((line) => line.trim() !== "") ? lines : undefined
+	}
+	const thinkTemplates = wording(notices.thinkTemplates)
+	const answerTemplates = wording(notices.answerTemplates)
+	const result: {
+		enabled?: boolean
+		thinkSteps?: number[]
+		answerSteps?: number[]
+		thinkTemplates?: string[]
+		answerTemplates?: string[]
+		copyBarThink?: boolean
+		copyBarAnswer?: boolean
+	} = {
 		...(typeof notices.enabled === "boolean" ? { enabled: notices.enabled } : {}),
 		...(thinkSteps ? { thinkSteps } : {}),
 		...(answerSteps ? { answerSteps } : {}),
+		...(thinkTemplates ? { thinkTemplates } : {}),
+		...(answerTemplates ? { answerTemplates } : {}),
+		...(typeof notices.copyBarThink === "boolean" ? { copyBarThink: notices.copyBarThink } : {}),
+		...(typeof notices.copyBarAnswer === "boolean" ? { copyBarAnswer: notices.copyBarAnswer } : {}),
 	}
 	return Object.keys(result).length > 0 ? result : undefined
 }

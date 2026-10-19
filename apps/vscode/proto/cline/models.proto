@@ -705,6 +705,13 @@ message NoticesProviderConfig {
   repeated int32 think_steps = 2;
   // The same for the answer.
   repeated int32 answer_steps = 3;
+  // v3: the line for each step, in step order; a blank line takes the engine's
+  // own. An empty list means the engine's own throughout.
+  repeated string think_templates = 4;
+  repeated string answer_templates = 5;
+  // v3: the copy bar per phase. Absent: on for thinking, off for the answer.
+  optional bool copy_bar_think = 6;
+  optional bool copy_bar_answer = 7;
 }
 
 message ToolsProviderConfig {

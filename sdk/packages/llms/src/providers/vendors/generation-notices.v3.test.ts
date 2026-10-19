@@ -5,14 +5,11 @@ import {
 	readGenerationNoticeCapability,
 	readNoticeFields,
 	resetNoticeRequests,
-	setNoticeCopyBar,
-	setNoticeTemplates,
 	withGenerationNotices,
 } from "./generation-notices";
 
 afterEach(() => {
 	resetNoticeRequests();
-	setNoticeCopyBar(undefined);
 });
 
 // opencoti docs/llamafile-flags.md "Generation notices (contract v3)", f89f9bee7a.
@@ -42,12 +39,14 @@ describe("notices v3", () => {
 		});
 	});
 
-	it("asks for version 3 with the wording set for each step, and none on v2", () => {
-		setNoticeTemplates({
-			think: ["", "Wrap up: {words} words left."],
-			answer: ["Finish now."],
-		});
-		const settings = { enabled: true, thinkSteps: [60, 80], answerSteps: [70] };
+	it("asks for version 3 with the profile's wording for each step, and none on v2", () => {
+		const settings = {
+			enabled: true,
+			thinkSteps: [60, 80],
+			answerSteps: [70],
+			thinkTemplates: ["", "Wrap up: {words} words left."],
+			answerTemplates: ["Finish now."],
+		};
 		expect(buildNoticesField(settings, "k", { v3: true })).toEqual({
 			version: 3,
 			key: "k",
@@ -92,13 +91,18 @@ describe("notices v3", () => {
 		expect(
 			buildNoticesField(settings, "k", { v3: true, copyBar: true })?.copy_bar,
 		).toEqual({ think: true, answer: false });
-		setNoticeCopyBar({ think: false, answer: true });
 		expect(
-			buildNoticesField(settings, "k", { v3: true, copyBar: true })?.copy_bar,
+			buildNoticesField(
+				{ ...settings, copyBarThink: false, copyBarAnswer: true },
+				"k",
+				{ v3: true, copyBar: true },
+			)?.copy_bar,
 		).toEqual({ think: false, answer: true });
-		setNoticeCopyBar({ answer: true });
 		expect(
-			buildNoticesField(settings, "k", { v3: true, copyBar: true })?.copy_bar,
+			buildNoticesField({ ...settings, copyBarAnswer: true }, "k", {
+				v3: true,
+				copyBar: true,
+			})?.copy_bar,
 		).toEqual({ think: true, answer: true });
 		// An older v3 engine, or a v2 one, answers the field with a 400.
 		expect(
@@ -110,10 +114,14 @@ describe("notices v3", () => {
 	});
 
 	it("keeps a template to one line", () => {
-		setNoticeTemplates({ answer: ["Finish\nnow."] });
 		expect(
 			buildNoticesField(
-				{ enabled: true, answerSteps: [70], thinkSteps: [] },
+				{
+					enabled: true,
+					answerSteps: [70],
+					thinkSteps: [],
+					answerTemplates: ["Finish\nnow."],
+				},
 				"k",
 				{ v3: true },
 			),
@@ -203,7 +211,16 @@ describe("notices v3", () => {
 
 	it("hides a whole line equal to a built-in form or our own template when no stream named it", () => {
 		readGenerationNoticeCapability(V3_PROPS);
-		setNoticeTemplates({ answer: ["Finish now, {left} tokens left."] });
+		// Sent by a profile: rows rendered later hide it without knowing which.
+		buildNoticesField(
+			{
+				enabled: true,
+				answerSteps: [70],
+				answerTemplates: ["Finish now, {left} tokens left."],
+			},
+			"k",
+			{ v3: true },
+		);
 		const stored =
 			"Reading.\nI'm stopping my thinking now and writing the answer — only 1230 words left.\nDone.\nFinish now, 300 tokens left.";
 		expect(hideKnownNoticeLines(stored)).toBe("Reading.\nDone.");

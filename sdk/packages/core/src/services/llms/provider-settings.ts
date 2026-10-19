@@ -156,6 +156,12 @@ export const GenerationNoticeSettingsSchema = z.object({
 	enabled: z.boolean().optional(),
 	thinkSteps: z.array(z.number().int().min(1).max(99)).max(4).optional(),
 	answerSteps: z.array(z.number().int().min(1).max(99)).max(4).optional(),
+	/** v3: the line for each step, in order; blank takes the engine's own. */
+	thinkTemplates: z.array(z.string()).max(4).optional(),
+	answerTemplates: z.array(z.string()).max(4).optional(),
+	/** v3: the copy bar per phase; on for thinking and off for the answer unless set. */
+	copyBarThink: z.boolean().optional(),
+	copyBarAnswer: z.boolean().optional(),
 });
 export type GenerationNoticeSettings = z.infer<
 	typeof GenerationNoticeSettingsSchema

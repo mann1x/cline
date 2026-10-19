@@ -525,6 +525,29 @@ describe("generation notices", () => {
 
 		expect(config.notices).toEqual({ enabled: true, thinkSteps: [70, 90] })
 	})
+
+	it("carries the profile's wording and copy bar to the request", async () => {
+		const { buildEffectiveProviderConfig } = await import("./effective-config")
+		mocks.setProviderSettings({
+			opencoti: {
+				provider: "opencoti",
+				notices: {
+					enabled: true,
+					thinkTemplates: ["Settle now.", "", "x", "y", "dropped"],
+					answerTemplates: [7, "Finish now."],
+					copyBarThink: false,
+					copyBarAnswer: "yes",
+				},
+			},
+		})
+
+		expect(buildEffectiveProviderConfig(parseProviderId("opencoti")).notices).toEqual({
+			enabled: true,
+			thinkTemplates: ["Settle now.", "", "x", "y"],
+			answerTemplates: ["", "Finish now."],
+			copyBarThink: false,
+		})
+	})
 })
 
 describe("the output budget", () => {

@@ -23,7 +23,8 @@
 //   own paragraph. The engine names each one as it plants it -- a top-level
 //   `notice: {index, phase, text}` on a stream chunk, and `timings.notices` at
 //   the end -- so the display hides that exact text, not a form. The wording
-//   of each step can be set in Settings > Features (`setNoticeTemplates`).
+//   of each step, and the copy bar, are the profile's (the provider panel's
+//   Notices section).
 //   A conversation shown again has no stream to name its notices: there a
 //   whole line equal to a known form (the server's built-in v3 forms, or our
 //   own templates) with each wildcard a whole number is hidden.
@@ -39,6 +40,14 @@ export interface GenerationNoticeSettings {
 	thinkSteps?: number[];
 	/** Percent of the answer room at which a notice is planted. */
 	answerSteps?: number[];
+	/** v3: the line for each thinking step, in order; blank takes the engine's. */
+	thinkTemplates?: string[];
+	/** v3: the line for each answer step, in order; blank takes the engine's. */
+	answerTemplates?: string[];
+	/** v3: the copy bar while thinking; on unless `false`. */
+	copyBarThink?: boolean;
+	/** v3: the copy bar while answering; off unless `true`. */
+	copyBarAnswer?: boolean;
 }
 
 /** The ladder the owner described: up to four per phase. */
@@ -167,14 +176,6 @@ export function noteAnnouncedNotice(
 	}
 }
 
-/** The wording of each step, from Settings > Features. v3 only. */
-export interface NoticeTemplates {
-	/** One per thinking step, in order; blank takes the engine's line. */
-	think?: readonly string[];
-	/** One per answer step, in order; blank takes the engine's line. */
-	answer?: readonly string[];
-}
-
 /** A v3 template is one line of at most 4096 bytes (opencoti refuses more). */
 const MAX_TEMPLATE_BYTES = 4096;
 
@@ -193,36 +194,24 @@ function cleanTemplates(lines: readonly string[] | undefined): string[] {
 	return clean;
 }
 
-let templates: { think: string[]; answer: string[] } = {
-	think: [],
-	answer: [],
-};
-
 /**
- * Set the wording sent with each step, for every request after this one.
- * Step i takes line i; a blank line, or none, takes the engine's own.
+ * Every line a profile has sent as a step's wording, for the display.
+ *
+ * A row is rendered long after the request that planted its notice, without
+ * knowing which profile asked, so a conversation shown again hides a whole
+ * line equal to any wording sent in this process -- the same reach the
+ * server's own forms have.
  */
-export function setNoticeTemplates(next: NoticeTemplates | undefined): void {
-	templates = {
-		think: cleanTemplates(next?.think),
-		answer: cleanTemplates(next?.answer),
-	};
-}
-
-export function getNoticeTemplates(): {
-	think: readonly string[];
-	answer: readonly string[];
-} {
-	return templates;
-}
+const SENT_TEMPLATES = new Set<string>();
 
 /**
- * The copy bar, per phase (Settings > Features; opencoti #1590): the engine
- * refuses a token that would continue a copy of a line it planted in this
- * response. The engine has it on in both phases unless told otherwise; here
- * it is on for thinking, where the copies were measured (1-2 % of Qwen3.6-27B
- * thinking requests, up to 21 in a row), and off for the answer, where the bar
- * showed no difference. Every request to a server that takes it says which.
+ * The copy bar, per phase (the profile's Notices section; opencoti #1590): the
+ * engine refuses a token that would continue a copy of a line it planted in
+ * this response. The engine has it on in both phases unless told otherwise;
+ * here it is on for thinking, where the copies were measured (1-2 % of
+ * Qwen3.6-27B thinking requests, up to 21 in a row), and off for the answer,
+ * where the bar showed no difference. Every request to a server that takes it
+ * says which.
  */
 export interface NoticeCopyBar {
 	think: boolean;
@@ -233,21 +222,6 @@ export const DEFAULT_NOTICE_COPY_BAR: Readonly<NoticeCopyBar> = {
 	think: true,
 	answer: false,
 };
-
-let copyBar: NoticeCopyBar = { ...DEFAULT_NOTICE_COPY_BAR };
-
-export function setNoticeCopyBar(
-	next: Partial<NoticeCopyBar> | undefined,
-): void {
-	copyBar = {
-		think: next?.think ?? DEFAULT_NOTICE_COPY_BAR.think,
-		answer: next?.answer ?? DEFAULT_NOTICE_COPY_BAR.answer,
-	};
-}
-
-export function getNoticeCopyBar(): NoticeCopyBar {
-	return copyBar;
-}
 
 /**
  * Read the capability from a server's own description of itself: opencoti's
@@ -381,11 +355,9 @@ export function hideKnownNoticeLines(
 	if (announced.length > 0) {
 		shown = hideAnnouncedNotices(shown, announced, options);
 	}
-	const forms = [
-		...SERVER_FORMS,
-		...templates.think,
-		...templates.answer,
-	].filter((form) => form !== "");
+	const forms = [...SERVER_FORMS, ...SENT_TEMPLATES].filter(
+		(form) => form !== "",
+	);
 	if (forms.length > 0) {
 		shown = hideNoticeForms(shown, forms);
 	}
@@ -556,18 +528,29 @@ export function buildNoticesField(
 	// must open with a published tag), so a v2 request carries none.
 	const v3 = options?.v3 === true;
 	const steps = (at: number[], wording: readonly string[]) =>
-		at.map((percent, index) => ({
-			at_percent: percent,
-			...(v3 && wording[index] ? { template: wording[index] } : {}),
-		}));
+		at.map((percent, index) => {
+			const template = v3 ? wording[index] : undefined;
+			if (template) {
+				SENT_TEMPLATES.add(template);
+			}
+			return { at_percent: percent, ...(template ? { template } : {}) };
+		});
+	const copyBar: NoticeCopyBar = {
+		think: settings.copyBarThink ?? DEFAULT_NOTICE_COPY_BAR.think,
+		answer: settings.copyBarAnswer ?? DEFAULT_NOTICE_COPY_BAR.answer,
+	};
 	return {
 		...(v3 ? { version: 3 } : {}),
 		key,
-		...(think.length > 0 ? { think: steps(think, templates.think) } : {}),
-		...(answer.length > 0 ? { answer: steps(answer, templates.answer) } : {}),
+		...(think.length > 0
+			? { think: steps(think, cleanTemplates(settings.thinkTemplates)) }
+			: {}),
+		...(answer.length > 0
+			? { answer: steps(answer, cleanTemplates(settings.answerTemplates)) }
+			: {}),
 		// Always said where it is taken: the engine's own default is on. Never
 		// sent elsewhere: a v2 request with it, or an older v3 engine, is a 400.
-		...(v3 && options?.copyBar === true ? { copy_bar: { ...copyBar } } : {}),
+		...(v3 && options?.copyBar === true ? { copy_bar: copyBar } : {}),
 	};
 }
 
@@ -584,11 +567,28 @@ export function readGenerationNoticeSettings(
 		Array.isArray(raw)
 			? raw.filter((n): n is number => typeof n === "number")
 			: undefined;
+	const lines = (raw: unknown) =>
+		Array.isArray(raw)
+			? raw.map((line) => (typeof line === "string" ? line : ""))
+			: undefined;
+	const flag = (raw: unknown) => (typeof raw === "boolean" ? raw : undefined);
 	return {
 		enabled: value.enabled === true,
 		...(steps(value.thinkSteps) ? { thinkSteps: steps(value.thinkSteps) } : {}),
 		...(steps(value.answerSteps)
 			? { answerSteps: steps(value.answerSteps) }
+			: {}),
+		...(lines(value.thinkTemplates)
+			? { thinkTemplates: lines(value.thinkTemplates) }
+			: {}),
+		...(lines(value.answerTemplates)
+			? { answerTemplates: lines(value.answerTemplates) }
+			: {}),
+		...(flag(value.copyBarThink) !== undefined
+			? { copyBarThink: flag(value.copyBarThink) }
+			: {}),
+		...(flag(value.copyBarAnswer) !== undefined
+			? { copyBarAnswer: flag(value.copyBarAnswer) }
 			: {}),
 	};
 }
@@ -665,7 +665,7 @@ export function resetNoticeRequests(): void {
 	ANNOUNCED.reasoning.length = 0;
 	ANNOUNCED.text.length = 0;
 	BREAKS.clear();
-	templates = { think: [], answer: [] };
+	SENT_TEMPLATES.clear();
 }
 
 /**

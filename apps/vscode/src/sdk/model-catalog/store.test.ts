@@ -255,6 +255,51 @@ describe("createProviderConfigStore", () => {
 		expect(store.read(providerId).notices).toBeUndefined()
 	})
 
+	// The wording and the copy bar are the profile's: a model that copies its
+	// notices is a model, not the editor's, so another profile keeps its own.
+	it("keeps each profile's notice wording and copy bar apart", async () => {
+		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
+		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")
+		const { createProviderConfigStore } = await import("./store")
+		const store = createProviderConfigStore()
+		const opencoti = parseProviderId("opencoti")
+		const xollama = parseProviderId("xollama")
+
+		store.write(
+			opencoti,
+			toProviderConfigPatch(
+				WriteProviderConfigPatch.create({
+					notices: {
+						enabled: true,
+						thinkSteps: [],
+						answerSteps: [],
+						thinkTemplates: ["Settle now.", "", "Answer now: {words} words left."],
+						answerTemplates: [],
+						copyBarThink: false,
+						copyBarAnswer: true,
+					},
+				} as never),
+			),
+		)
+		store.write(
+			xollama,
+			toProviderConfigPatch(
+				WriteProviderConfigPatch.create({
+					notices: { enabled: true, thinkSteps: [], answerSteps: [], thinkTemplates: ["", ""], answerTemplates: [] },
+				} as never),
+			),
+		)
+
+		expect(store.read(opencoti).notices).toEqual({
+			enabled: true,
+			thinkTemplates: ["Settle now.", "", "Answer now: {words} words left."],
+			copyBarThink: false,
+			copyBarAnswer: true,
+		})
+		// All blank is the engine's own wording, which absent already says.
+		expect(store.read(xollama).notices).toEqual({ enabled: true })
+	})
+
 	it("does not lose the output budget to an unrelated later write", async () => {
 		const { toProviderConfigPatch } = await import("@core/controller/models/providerCatalogShared")
 		const { WriteProviderConfigPatch } = await import("@shared/proto/cline/models")

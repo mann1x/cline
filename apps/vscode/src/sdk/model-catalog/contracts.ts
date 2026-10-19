@@ -157,6 +157,12 @@ export interface NoticeSettings {
 	readonly enabled?: boolean
 	readonly thinkSteps?: readonly number[]
 	readonly answerSteps?: readonly number[]
+	/** v3: the line for each step, in order; blank takes the engine's own. */
+	readonly thinkTemplates?: readonly string[]
+	readonly answerTemplates?: readonly string[]
+	/** v3: the copy bar per phase; on for thinking and off for the answer unless set. */
+	readonly copyBarThink?: boolean
+	readonly copyBarAnswer?: boolean
 }
 
 export interface PolykvSettings {

@@ -764,10 +764,22 @@ function writeProviderSettingsFields(providerId: ProviderId, patch: ProviderConf
 			raw?.filter((step) => Number.isInteger(step) && step >= 1 && step <= 99).slice(0, 4)
 		const thinkSteps = steps(noticesPatch?.thinkSteps)
 		const answerSteps = steps(noticesPatch?.answerSteps)
+		// One line per step, so at most four, and only a list that says something:
+		// all blank is the engine's own wording, which absent already says.
+		const wording = (raw: readonly string[] | undefined) => {
+			const lines = raw?.slice(0, 4).map((line) => (typeof line === "string" ? line : ""))
+			return lines?.some((line) => line.trim() !== "") ? lines : undefined
+		}
+		const thinkTemplates = wording(noticesPatch?.thinkTemplates)
+		const answerTemplates = wording(noticesPatch?.answerTemplates)
 		const section = {
 			...(typeof noticesPatch?.enabled === "boolean" ? { enabled: noticesPatch.enabled } : {}),
 			...(thinkSteps?.length ? { thinkSteps } : {}),
 			...(answerSteps?.length ? { answerSteps } : {}),
+			...(thinkTemplates ? { thinkTemplates } : {}),
+			...(answerTemplates ? { answerTemplates } : {}),
+			...(typeof noticesPatch?.copyBarThink === "boolean" ? { copyBarThink: noticesPatch.copyBarThink } : {}),
+			...(typeof noticesPatch?.copyBarAnswer === "boolean" ? { copyBarAnswer: noticesPatch.copyBarAnswer } : {}),
 		}
 		if (noticesPatch === null || noticesPatch === undefined || Object.keys(section).length === 0) {
 			delete (next as Record<string, unknown>).notices
