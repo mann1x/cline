@@ -329,6 +329,40 @@ describe("sampling values that cannot mean anything", () => {
 		expect((await load({ numGpu: -2 }))?.numGpu).toBeUndefined()
 		expect((await load({ numGpu: 990000 }))?.numGpu).toBeUndefined()
 	})
+
+	// Every limit the panel accepts reaches the request: a value the panel
+	// saves and this then drops is the repeat_last_n -1 defect one step later.
+	it("keeps every sampling value the panel accepts, at both ends", async () => {
+		const accepted: Record<string, number[]> = {
+			temperature: [0, 2],
+			topK: [0, 1000],
+			topP: [0, 1],
+			minP: [0, 1],
+			typicalP: [0, 1],
+			repeatLastN: [-1, 0, 2_147_483_647],
+			repeatPenalty: [0, 2],
+			presencePenalty: [-2, 2],
+			frequencyPenalty: [-2, 2],
+			seed: [-1, 0, 4_294_967_295],
+			numPredict: [-2, -1, 2_147_483_647],
+			numKeep: [-1, 0, 2_147_483_647],
+			numGpu: [-1, 0, 9999],
+		}
+		for (const [field, values] of Object.entries(accepted)) {
+			for (const value of values) {
+				expect({ field, value: (await load({ [field]: value }))?.[field as "seed"] }).toEqual({ field, value })
+			}
+		}
+	})
+
+	// llama.cpp answers 400 to these on every request (set_hard_limits), so a
+	// settings file written before the panel held them must not send them.
+	it("drops counts llama.cpp refuses", async () => {
+		expect((await load({ numKeep: -2 }))?.numKeep).toBeUndefined()
+		expect((await load({ numKeep: 2_147_483_648 }))?.numKeep).toBeUndefined()
+		expect((await load({ repeatLastN: 2_147_483_648 }))?.repeatLastN).toBeUndefined()
+		expect((await load({ numPredict: 2_147_483_648 }))?.numPredict).toBeUndefined()
+	})
 })
 
 describe("the PolyKV section", () => {

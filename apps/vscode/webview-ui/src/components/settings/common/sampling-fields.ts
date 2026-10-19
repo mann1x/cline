@@ -77,6 +77,13 @@ export type SamplingFieldKey =
  * sending side, and the two lists must agree — a field offered here that is
  * absent there is a control that does nothing.
  */
+/**
+ * The largest count llama.cpp's request schema accepts, from its
+ * `set_hard_limits(…, INT32_MAX)`. Anything above it is a 400 on every
+ * request, not a larger window.
+ */
+const INT32_MAX = 2_147_483_647
+
 export const SAMPLING_FIELDS: readonly SamplingFieldSpec[] = [
 	{
 		key: "temperature",
@@ -133,6 +140,7 @@ export const SAMPLING_FIELDS: readonly SamplingFieldSpec[] = [
 		// "Field 'repeat_last_n': Value must be between 0 <= value <= …".
 		hint: "How far back the repeat penalty looks. 0 disables it.",
 		min: 0,
+		max: INT32_MAX,
 		byEngine: {
 			ollama: { min: -1, hint: "How far back the repeat penalty looks. 0 disables it, -1 uses the whole context." },
 			opencoti: { min: -1, hint: "How far back the repeat penalty looks. 0 disables it, -1 uses the whole context." },
@@ -177,12 +185,17 @@ export const SAMPLING_FIELDS: readonly SamplingFieldSpec[] = [
 		labels: { ollama: "num_predict", llamacpp: undefined },
 		kind: "integer",
 		hint: "Maximum tokens to generate. -1 is unlimited.",
+		max: INT32_MAX,
 	},
 	{
 		key: "numKeep",
 		labels: { ollama: "num_keep", llamacpp: "n_keep" },
 		kind: "integer",
 		hint: "Tokens kept from the prompt when the context is trimmed.",
+		// llama.cpp's `n_keep` is `set_hard_limits(-1, INT32_MAX)`; below -1 it
+		// answers 400. Ollama reads no negative as anything but "keep none".
+		min: -1,
+		max: INT32_MAX,
 	},
 	{
 		key: "numGpu",
@@ -249,12 +262,19 @@ export function isCompleteNumber(raw: string): boolean {
  * probability and must never reach the server. Silence would be worse than a
  * refusal — the panel would look set while the request carried something else.
  */
-export function samplingProblem(field: { label: string; min?: number; max?: number }, raw: string): string | undefined {
+export function samplingProblem(
+	field: { label: string; kind?: "number" | "integer"; min?: number; max?: number },
+	raw: string,
+): string | undefined {
 	const trimmed = raw.trim()
 	if (trimmed === "" || !isCompleteNumber(trimmed)) {
 		return undefined
 	}
 	const value = Number(trimmed)
+	// Saving `64.5` as `64` would store a value nobody typed.
+	if (field.kind === "integer" && !Number.isInteger(value)) {
+		return `${field.label} must be a whole number.`
+	}
 	if (field.min !== undefined && value < field.min) {
 		return `${field.label} cannot be below ${field.min}.`
 	}

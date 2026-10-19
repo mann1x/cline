@@ -86,6 +86,12 @@ const SAMPLING_RANGES: Partial<Record<keyof typeof SAMPLING_NUMBER_FIELDS, { min
 	// enough above any real model that "all of them" always fits, while a
 	// mistyped 990000 still does not become a setting.
 	numGpu: { min: -1, max: 9999 },
+	// llama.cpp's own hard limits, `set_hard_limits(…, INT32_MAX)`: past them
+	// every request is a 400. The -1 floor on `repeatLastN` is the widest any
+	// engine takes; upstream llama.cpp's 0 is held by the panel.
+	repeatLastN: { min: -1, max: 2_147_483_647 },
+	numPredict: { max: 2_147_483_647 },
+	numKeep: { min: -1, max: 2_147_483_647 },
 }
 
 /**
