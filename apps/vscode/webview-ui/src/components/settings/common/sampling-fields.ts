@@ -391,9 +391,9 @@ export function useSamplingWrite(providerId: string, dialect: SamplingDialect = 
 	const composeAndWrite = useCallback(
 		(draft: SamplingDraft, alongside?: ProviderConfigWritePatch) => {
 			const base = pendingSampling.get(entryKey)?.value ?? storedRef.current
-			return writeSampling(buildSamplingPatch({ dialect, stored: base, draft }), alongside)
+			return writeSampling(buildSamplingPatch({ dialect, stored: base, draft, providerId }), alongside)
 		},
-		[writeSampling, entryKey, dialect],
+		[writeSampling, entryKey, dialect, providerId],
 	)
 
 	return { config, write, sampling, loaded: config !== undefined, writeSampling, composeAndWrite }
@@ -411,8 +411,11 @@ export function buildSamplingPatch(input: {
 	dialect: SamplingDialect
 	stored: Record<string, unknown> | undefined
 	draft: SamplingDraft
+	/** Which server's range applies; see `samplingEngineFor`. */
+	providerId?: string
 }): ProviderSamplingPatch {
-	const { dialect, stored, draft } = input
+	const { dialect, stored, draft, providerId } = input
+	const engine = samplingEngineFor(dialect, providerId)
 	const next: ProviderSamplingPatch = { stop: [] }
 	// Every field in the catalog, not only this dialect's: a value set on one
 	// engine and then read on another is still the user's, and dropping it here
@@ -424,8 +427,12 @@ export function buildSamplingPatch(input: {
 		// parameter absent keeps the model's own value in force, which is the
 		// right answer while the user is still typing and the only safe one for
 		// a value that cannot be valid.
+		// The range is the engine's, as the panel shows it. Checking against the
+		// catalog's own range dropped Ollama's `repeat_last_n: -1` on every
+		// save while the field showed it as valid.
 		const label = field.labels[dialect] ?? field.labels.ollama
-		if (raw.trim() !== "" && (!isCompleteNumber(raw) || samplingProblem({ ...field, label }, raw) !== undefined)) {
+		const range = { ...field, ...(field.byEngine?.[engine] ?? {}), label }
+		if (raw.trim() !== "" && (!isCompleteNumber(raw) || samplingProblem(range, raw) !== undefined)) {
 			continue
 		}
 		const parsed = parseSamplingNumber(raw, field.kind)

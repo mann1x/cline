@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { samplingEngineFor, samplingFieldsFor, samplingProblem } from "./sampling-fields"
+import { buildSamplingPatch, samplingEngineFor, samplingFieldsFor, samplingProblem } from "./sampling-fields"
 
 // Reported from pandorum: every request failed with
 //   Field 'repeat_last_n': Value must be between 0 <= value <= 2147483647, but got -1
@@ -68,5 +68,36 @@ describe("repeat_last_n", () => {
 		for (const field of [repeatLastN("ollama"), repeatLastN("llamacpp", "opencoti"), repeatLastN("llamacpp")]) {
 			expect(samplingProblem(field, "-2")).toBeTruthy()
 		}
+	})
+})
+
+// Reported from pandorum: -1 typed into repeat_last_n on Ollama showed no
+// error and was never stored. The panel checked the engine's range; the patch
+// it saved checked the catalog's, which is upstream llama.cpp's `min: 0`.
+describe("saving repeat_last_n", () => {
+	const save = (dialect: "ollama" | "llamacpp", providerId: string | undefined, raw: string) =>
+		buildSamplingPatch({ dialect, providerId, stored: undefined, draft: { repeatLastN: raw } }).repeatLastN
+
+	it("stores -1 on Ollama", () => {
+		expect(save("ollama", "ollama", "-1")).toBe(-1)
+	})
+
+	it("stores -1 on opencoti", () => {
+		expect(save("llamacpp", "opencoti", "-1")).toBe(-1)
+	})
+
+	it("does not send -1 to upstream llama.cpp", () => {
+		expect(save("llamacpp", "llamacpp", "-1")).toBeUndefined()
+	})
+
+	it("keeps a stored -1 when another field is saved", () => {
+		const next = buildSamplingPatch({
+			dialect: "ollama",
+			providerId: "ollama",
+			stored: { repeatLastN: -1 },
+			draft: { temperature: "0.6" },
+		})
+		expect(next.repeatLastN).toBe(-1)
+		expect(next.temperature).toBe(0.6)
 	})
 })
