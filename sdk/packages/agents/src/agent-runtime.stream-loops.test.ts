@@ -125,6 +125,8 @@ describe("the loop guard on a call's arguments", () => {
 		expect(texts(reminder as never)).toContain(
 			"its arguments had come to repeat the same 12-line block",
 		);
+		expect(model.requests).toHaveLength(2);
+		expect(texts(result.messages.at(-1) as never)).toBe("done");
 	});
 
 	it("reads JSON arguments with their line breaks decoded", async () => {
@@ -220,6 +222,10 @@ describe("the loop guard on the reply", () => {
 		const cut = result.messages[1];
 		expect(texts(cut as never)).toContain("The reply here was cut");
 		expect(texts(cut as never)).not.toContain("pop3()");
+		// The cut is not the answer: the run asks again and ends on the next
+		// turn, not on the stub.
+		expect(model.requests).toHaveLength(2);
+		expect(texts(result.messages.at(-1) as never)).toBe("done");
 	});
 
 	it("leaves a reply that only talks alone", async () => {

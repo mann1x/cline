@@ -117,15 +117,24 @@ export function describeToolArgumentLoopStub(loop: ToolArgumentLoop): string {
 	return `(A call to ${called} was begun here and cut before it was complete, so nothing ran. Its text is not kept.)`;
 }
 
+function repeated(verdict: ReasoningLoopVerdict): string {
+	return verdict.kind === "phrase-cycle"
+		? `the same ${verdict.period}-character run ${verdict.cycles} times`
+		: verdict.kind === "low-uniqueness"
+			? `the same ${verdict.distinct} lines over and over`
+			: `the same ${verdict.period}-line block ${verdict.cycles} times`;
+}
+
 /** What the model is told about it, before its next turn. */
 export function buildToolArgumentLoopNudge(loop: ToolArgumentLoop): string {
 	const called = loop.toolName ? `\`${loop.toolName}\`` : "a tool";
-	const { verdict } = loop;
-	const what =
-		verdict.kind === "phrase-cycle"
-			? `the same ${verdict.period}-character run ${verdict.cycles} times`
-			: verdict.kind === "low-uniqueness"
-				? `the same ${verdict.distinct} lines over and over`
-				: `the same ${verdict.period}-line block ${verdict.cycles} times`;
-	return `[SYSTEM] Your call to ${called} was cut while you were writing it, and nothing ran: its arguments had come to repeat ${what}. Make the call again with only what it needs.`;
+	return `[SYSTEM] Your call to ${called} was cut while you were writing it, and nothing ran: its arguments had come to repeat ${repeated(loop.verdict)}. Make the call again with only what it needs.`;
+}
+
+/**
+ * The turn after a reply cut for looping. Without it the stub is the turn's
+ * only text, and a turn with text and no call reads as the run's answer.
+ */
+export function buildReplyLoopNudge(verdict: ReasoningLoopVerdict): string {
+	return `[SYSTEM] Your reply was cut while you were writing it, and none of it is kept: it had come to repeat ${repeated(verdict)}. Carry on with the task from where it stands.`;
 }

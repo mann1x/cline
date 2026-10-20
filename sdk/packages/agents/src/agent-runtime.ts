@@ -89,6 +89,7 @@ import {
 	type RepetitionNudger,
 } from "./reasoning-repetition";
 import {
+	buildReplyLoopNudge,
 	buildToolArgumentLoopNudge,
 	describeToolArgumentLoopStub,
 	type ToolArgumentLoop,
@@ -4179,6 +4180,7 @@ export class AgentRuntime {
 			await this.onReasoningLoopCut(reasoningLoop);
 		} else if (answerLoop) {
 			await this.onReasoningLoopCut(answerLoop, "reply");
+			this.pendingToolIntentNudge = buildReplyLoopNudge(answerLoop);
 		} else if (argumentLoop) {
 			await this.onReasoningLoopCut(
 				argumentLoop.verdict,
