@@ -120,6 +120,8 @@ export interface ParsedArgs {
 	retries?: number;
 	editVerification?: "off" | "nudge" | "require";
 	invalidEditVerification?: string;
+	toolResultFormat?: "json" | "text";
+	invalidToolResultFormat?: string;
 	invalidRetries?: string;
 	/**
 	 * Whether the task runs as judged, revertible transactions.

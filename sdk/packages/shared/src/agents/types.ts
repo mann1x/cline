@@ -40,6 +40,7 @@ import {
 	type ReasoningEffort,
 	ReasoningEffortSchema,
 } from "../llms/reasoning-options";
+import type { ToolResultFormat } from "../llms/tool-result-text";
 import type { TurnFaultRecovery } from "./turn-faults";
 
 export {
@@ -984,6 +985,13 @@ export interface AgentConfig {
 	 * it went out before. Omit for the builder's own rule.
 	 */
 	staleReadRewrites?: boolean;
+	/**
+	 * How tool results reach the model: `json` (unset), as the providers
+	 * serialize them, or `text`, rendered by `renderToolOutputForModel`. Set
+	 * once by the host when the conversation starts and never changed after:
+	 * a transcript read half one way and half the other is worse than either.
+	 */
+	toolResultFormat?: ToolResultFormat;
 	/**
 	 * Sampling temperature per API call
 	 */

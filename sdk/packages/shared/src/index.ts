@@ -311,6 +311,18 @@ export {
 	type TokenEstimatedRequest,
 	thinkingCharsPerToken,
 } from "./llms/tokens";
+export {
+	asStructuredToolResultEntry,
+	DEFAULT_TOOL_RESULT_FORMAT,
+	isToolResultFormat,
+	renderStructuredToolResultEntry,
+	renderToolOutputForModel,
+	renderToolResultText,
+	type StructuredToolResultEntry,
+	TOOL_RESULT_FORMATS,
+	TOOL_RESULT_SERIALIZED_JSON,
+	type ToolResultFormat,
+} from "./llms/tool-result-text";
 export type {
 	ToolApprovalRequest,
 	ToolApprovalResult,

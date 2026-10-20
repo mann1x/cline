@@ -325,6 +325,11 @@ export function createAgentModelFromConfig(
 			? { engineSessionId: config.engineSessionId }
 			: {}),
 		...(config.polykvWorker ? { polykvWorker: config.polykvWorker } : {}),
+		// The conversation's, not the connection's: a model switch replaces the
+		// provider config, and the format must not change with it.
+		...(config.toolResultFormat
+			? { toolResultFormat: config.toolResultFormat }
+			: {}),
 	};
 	// Saving request bodies for replay (`setModelRequestCapture`). Ollama and
 	// xOllama capture inside their own innermost layer, where the body is
@@ -356,8 +361,11 @@ export function createAgentModelFromConfig(
 			normalizeProviderId(normalizedProviderConfig.providerId),
 		)
 	) {
-		return createAgentModelFromApiHandler(() =>
-			createHandlerAsync(normalizedProviderConfig),
+		return createAgentModelFromApiHandler(
+			() => createHandlerAsync(normalizedProviderConfig),
+			normalizedProviderConfig.toolResultFormat
+				? { toolResultFormat: normalizedProviderConfig.toolResultFormat }
+				: undefined,
 		);
 	}
 
@@ -389,6 +397,7 @@ export function createAgentModelFromConfig(
 				// characters of reasoning.
 				reasoningHistory: normalizedProviderConfig.reasoningHistory,
 				reasoningInline: normalizedProviderConfig.reasoningInline,
+				toolResultFormat: normalizedProviderConfig.toolResultFormat,
 				options: buildGatewayProviderOptions(
 					normalizedProviderConfig,
 					config.sessionId,

@@ -2133,6 +2133,9 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		positiveFiniteNumber(profileSettings?.maxToolResultChars) ??
 		positiveFiniteNumber(readStoredMaxToolResultChars(providerId)) ??
 		globalMaxToolResultChars
+	// Applies to a new conversation only: core records it on the session and
+	// a resumed one keeps what it recorded, whatever this says now.
+	const toolResultFormat = stateManager.getGlobalSettingsKey("toolResultFormat") === "text" ? "text" : "json"
 	const enableCheckpoints = stateManager.getGlobalSettingsKey("enableCheckpointsSetting") ?? true
 	// A second model that reads images for the primary one. Only installed when
 	// the user has both enabled it and picked a model for it: without a
@@ -2853,6 +2856,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		...(maxTokensPerTurn !== undefined ? { maxTokensPerTurn } : {}),
 		...(maxToolResultChars !== undefined ? { maxToolResultChars: Math.floor(maxToolResultChars) } : {}),
 		...(councilModel ? { staleReadRewrites: false } : {}),
+		toolResultFormat,
 		...(temperature !== undefined ? { temperature } : {}),
 		maxIterations: undefined,
 		logger: sdkLogger,

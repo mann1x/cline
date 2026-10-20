@@ -149,6 +149,7 @@ export async function getStateToPostToWebview(controller: {
 	const remoteWorkflowToggles = stateManager.getGlobalStateKey("remoteWorkflowToggles")
 	const shellIntegrationTimeout = stateManager.getGlobalSettingsKey("shellIntegrationTimeout")
 	const maxToolResultChars = stateManager.getGlobalSettingsKey("maxToolResultChars")
+	const toolResultFormat = stateManager.getGlobalSettingsKey("toolResultFormat")
 	const terminalReuseEnabled = stateManager.getGlobalStateKey("terminalReuseEnabled")
 	const vscodeTerminalExecutionMode = stateManager.getGlobalStateKey("vscodeTerminalExecutionMode")
 	const defaultTerminalProfile = stateManager.getGlobalSettingsKey("defaultTerminalProfile")
@@ -326,6 +327,7 @@ export async function getStateToPostToWebview(controller: {
 		remoteWorkflowToggles,
 		shellIntegrationTimeout,
 		maxToolResultChars,
+		toolResultFormat,
 		terminalReuseEnabled,
 		vscodeTerminalExecutionMode,
 		defaultTerminalProfile,

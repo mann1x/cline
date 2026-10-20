@@ -8,6 +8,10 @@
 import type { TurnFaultRecovery } from "./agents/turn-faults";
 import type { GeneratedMedia } from "./llms/media";
 import type { ModelInfo } from "./llms/model-info";
+import {
+	renderToolOutputForModel,
+	type ToolResultFormat,
+} from "./llms/tool-result-text";
 import type {
 	ToolApprovalRequest,
 	ToolApprovalResult,
@@ -80,19 +84,41 @@ export interface AgentToolResultPart {
 	 * model's earlier reasoning from the prompt; every note cost the plan.
 	 */
 	note?: string;
+	/**
+	 * Set when `output` is the transcript codec's `JSON.stringify` of an
+	 * object rather than text the tool returned (`TOOL_RESULT_SERIALIZED_JSON`).
+	 * The only thing that lets a `text` session render it.
+	 */
+	serialized?: string;
 }
 
 /**
  * A tool result's output as the model reads it, with the harness note after it.
  *
- * Text stays text and anything structured is serialized as the providers
- * already serialize it. An array carrying media gains a text block instead, so
- * an image is never flattened into JSON.
+ * Under `json` text stays text and anything structured is serialized as the
+ * providers already serialize it. An array carrying media gains a text block
+ * instead, so an image is never flattened into JSON.
+ *
+ * Under `text` the output is rendered first (`renderToolOutputForModel`) and
+ * the note follows it: appended to a serialized string before that, it would
+ * leave a string that no longer parses.
  */
 export function toolResultForModel(
 	output: unknown,
 	note: string | undefined,
+	options?: { format?: ToolResultFormat; serialized?: string },
 ): unknown {
+	if (options?.format === "text") {
+		const rendered = renderToolOutputForModel(output, {
+			...(options.serialized ? { serialized: options.serialized } : {}),
+		});
+		if (!note) {
+			return rendered;
+		}
+		return typeof rendered === "string"
+			? `${rendered}\n\n${note}`
+			: [...rendered, { type: "text", text: note }];
+	}
 	if (!note) {
 		return output;
 	}

@@ -267,6 +267,29 @@ describe("createAgentModelFromConfig", () => {
 		expect(options?.polykvSessionId).toBe("lead/1~agent-2");
 	});
 
+	// A delegated agent never passes through the lead's message builder, and a
+	// model switch replaces its provider config: the format rides on the agent
+	// config so both still send what the conversation chose.
+	it("hands the conversation's tool result format to the gateway", async () => {
+		const { createAgentModelFromConfig } = await import("./handler-factory");
+
+		createAgentModelFromConfig(
+			{
+				providerId: "openai",
+				modelId: "m",
+				tools: [],
+				toolResultFormat: "text",
+				providerConfig: { providerId: "openai", modelId: "m" },
+			} as never,
+			undefined,
+		);
+
+		const [gateway] = gatewayMock.createGateway.mock.lastCall as unknown as [
+			{ providerConfigs: Array<{ toolResultFormat?: string }> },
+		];
+		expect(gateway.providerConfigs[0]?.toolResultFormat).toBe("text");
+	});
+
 	it("lifts the PolyKV section into the gateway options bag", async () => {
 		const { createAgentModelFromConfig } = await import("./handler-factory");
 

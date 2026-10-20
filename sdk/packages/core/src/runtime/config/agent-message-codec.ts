@@ -15,7 +15,10 @@ import type {
 	ToolUseContent,
 } from "@cline/shared";
 import { EMPTY_CONTENT_TEXT } from "@cline/shared";
-import { toPersistedToolResultContent } from "../../session/persisted-tool-result-content";
+import {
+	persistedToolResultSerialization,
+	toPersistedToolResultContent,
+} from "../../session/persisted-tool-result-content";
 
 export function messageToAgentMessages(
 	message: MessageWithMetadata,
@@ -232,6 +235,7 @@ function toolResultContentToAgentPart(
 		output: block.content,
 		isError: block.is_error,
 		...(block.note ? { note: block.note } : {}),
+		...(block.serialized ? { serialized: block.serialized } : {}),
 	};
 }
 
@@ -302,6 +306,9 @@ function agentPartToContentBlock(
 				content: toPersistedToolResultContent(part.output),
 				is_error: part.isError,
 				...(part.note ? { note: part.note } : {}),
+				...(persistedToolResultSerialization(part)
+					? { serialized: persistedToolResultSerialization(part) }
+					: {}),
 			} satisfies ToolResultContent;
 		}
 	}

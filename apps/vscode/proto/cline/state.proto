@@ -369,6 +369,7 @@ message Settings {
   optional string notice_answer_templates = 251;
   optional bool notice_copy_bar_think = 252;
   optional bool notice_copy_bar_answer = 253;
+  optional string tool_result_format = 254;
 }
 
 message State {
@@ -530,6 +531,9 @@ message UpdateSettingsRequest {
   optional string compaction_strategy = 44;
   // 0 restores the SDK default rather than meaning "keep nothing".
   optional int32 max_tool_result_chars = 45;
+  // "json" or "text": how a tool result is written into the request. Read
+  // when a conversation starts; a resumed one keeps the format it began with.
+  optional string tool_result_format = 118;
   optional bool vision_model_enabled = 46;
   // JSON, not a message: these carry a snapshot of the API configuration panel,
   // whose field list is generated from `ApiHandlerSettingsKeys` and grows with

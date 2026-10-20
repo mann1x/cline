@@ -48,6 +48,7 @@ export type DelegatedAgentConnectionConfig = Pick<
 	| "maxTokensPerTurn"
 	| "maxToolResultChars"
 	| "staleReadRewrites"
+	| "toolResultFormat"
 	| "temperature"
 >;
 
@@ -355,6 +356,7 @@ export function createDelegatedAgentConfigProvider(
 			maxTokensPerTurn: runtimeConfig.maxTokensPerTurn,
 			maxToolResultChars: runtimeConfig.maxToolResultChars,
 			staleReadRewrites: runtimeConfig.staleReadRewrites,
+			toolResultFormat: runtimeConfig.toolResultFormat,
 			temperature: runtimeConfig.temperature,
 		}),
 		updateConnectionDefaults: (overrides) => {

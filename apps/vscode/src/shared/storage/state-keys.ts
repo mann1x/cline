@@ -383,6 +383,10 @@ const USER_SETTINGS_FIELDS = {
 	shellIntegrationTimeout: { default: 4000 as number },
 	// 0 means "unset": the SDK's own DEFAULT_MAX_TOOL_RESULT_CHARS applies.
 	maxToolResultChars: { default: 0 as number },
+	// How a tool's result is written into the request: `json`, as it always
+	// was, or `text`. Read when a conversation starts and fixed for it after;
+	// a resumed one keeps the format it began with.
+	toolResultFormat: { default: "json" as "json" | "text" },
 	defaultTerminalProfile: { default: "default" as string },
 	hooksEnabled: { default: true as boolean },
 	useAutoCondense: { default: true as boolean },

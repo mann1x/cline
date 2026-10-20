@@ -84,6 +84,8 @@ export interface ToolResultContent {
 	is_error?: boolean;
 	/** The harness's note for the model, read after `content`; see `AgentToolResultPart.note`. */
 	note?: string;
+	/** `content` is the codec's `JSON.stringify` of an object; see `AgentToolResultPart.serialized`. */
+	serialized?: string;
 }
 
 /**

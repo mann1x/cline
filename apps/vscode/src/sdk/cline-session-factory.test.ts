@@ -1645,6 +1645,17 @@ describe("buildSessionConfig", () => {
 		expect(config.providerConfig).not.toHaveProperty("apiKey")
 	})
 
+	// Stored but never read is this repository's most repeated bug. Only `text`
+	// is text: anything else, unset included, is the format sessions ran on.
+	it("hands the tool result format to core", async () => {
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string): any =>
+			key === "toolResultFormat" ? "text" : undefined,
+		)
+		expect((await buildSessionConfig({ cwd: "/tmp/workspace" })).toolResultFormat).toBe("text")
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation(() => undefined)
+		expect((await buildSessionConfig({ cwd: "/tmp/workspace" })).toolResultFormat).toBe("json")
+	})
+
 	it("enables agentic SDK compaction when global useAutoCondense is true", async () => {
 		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string) => {
 			if (key === "useAutoCondense") {

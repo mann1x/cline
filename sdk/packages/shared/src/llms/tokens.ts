@@ -1,3 +1,6 @@
+import { toolResultForModel } from "../agent";
+import type { ToolResultFormat } from "./tool-result-text";
+
 /**
  * Chars-per-token approximation used for compaction triggering, request-size
  * diagnostics and the remaining-context term of the output cap.
@@ -769,7 +772,10 @@ function hasReasoningPart(content: unknown): boolean {
  */
 export function measureRequestReasoningChars(
 	request: TokenEstimatedRequest,
-	options?: { reasoningHistory?: ReasoningHistoryMode },
+	options?: {
+		reasoningHistory?: ReasoningHistoryMode;
+		toolResultFormat?: ToolResultFormat;
+	},
 ): number {
 	const messages = withSentReasoningOnly(
 		request.messages,
@@ -792,11 +798,14 @@ export function measureRequestReasoningChars(
 
 export function measureRequestInputChars(
 	request: TokenEstimatedRequest,
-	options?: { reasoningHistory?: ReasoningHistoryMode },
+	options?: {
+		reasoningHistory?: ReasoningHistoryMode;
+		toolResultFormat?: ToolResultFormat;
+	},
 ): number {
-	const messages = withSentReasoningOnly(
-		request.messages,
-		options?.reasoningHistory ?? "all",
+	const messages = withRenderedToolResults(
+		withSentReasoningOnly(request.messages, options?.reasoningHistory ?? "all"),
+		options?.toolResultFormat,
 	);
 	let serialized: string;
 	try {
@@ -816,12 +825,64 @@ export function measureRequestInputChars(
 }
 
 /**
+ * The messages as a `text` session sends them: every tool result rendered,
+ * its note after it. Measured any other way the count includes the JSON
+ * escapes the request no longer carries.
+ */
+function withRenderedToolResults(
+	messages: TokenEstimatedRequest["messages"],
+	format: ToolResultFormat | undefined,
+): TokenEstimatedRequest["messages"] {
+	if (format !== "text" || messages === undefined) {
+		return messages;
+	}
+	return messages.map((message) => {
+		const content = (message as { content?: unknown }).content;
+		if (!Array.isArray(content)) {
+			return message;
+		}
+		let changed = false;
+		const rendered = content.map((part) => {
+			const typed = part as {
+				type?: unknown;
+				output?: unknown;
+				content?: unknown;
+				note?: string;
+				serialized?: string;
+			};
+			if (typed.type !== "tool-result" && typed.type !== "tool_result") {
+				return part;
+			}
+			changed = true;
+			const field = typed.type === "tool-result" ? "output" : "content";
+			const { note, serialized, ...rest } = typed;
+			return {
+				...rest,
+				[field]: toolResultForModel(typed[field], note, {
+					format,
+					...(serialized ? { serialized } : {}),
+				}),
+			};
+		});
+		return changed
+			? ({
+					...(message as object),
+					content: rendered,
+				} as (typeof messages)[number])
+			: message;
+	});
+}
+
+/**
  * Estimate the complete provider request payload so request execution and
  * pre-request policies use the same definition of input utilization.
  */
 export function estimateRequestInputTokens(
 	request: TokenEstimatedRequest,
-	options?: { reasoningHistory?: ReasoningHistoryMode },
+	options?: {
+		reasoningHistory?: ReasoningHistoryMode;
+		toolResultFormat?: ToolResultFormat;
+	},
 ): number {
 	const chars = measureRequestInputChars(request, options);
 	const reasoningChars = Math.min(

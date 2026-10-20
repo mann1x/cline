@@ -169,6 +169,10 @@ import {
 	waitForTeamRunUpdates,
 } from "../../session/team";
 import {
+	pinToolResultFormat,
+	TOOL_RESULT_FORMAT_METADATA_KEY,
+} from "../../session/tool-result-format-pin";
+import {
 	isNonTerminalSessionStatus,
 	SessionSource,
 	type SessionStatus,
@@ -923,8 +927,28 @@ export class LocalRuntimeHost implements RuntimeHost {
 				trigger: startInput.mode ? undefined : resumedOrigin?.trigger,
 			}),
 		);
+		// Fixed for the life of the conversation; see `pinToolResultFormat`. A
+		// resume that brings a new prompt never reads the manifest above, so it
+		// is read here, before this start writes one of its own.
+		const storedManifest =
+			wasSessionIdRequested && initialMessages.length > 0
+				? (resumedArtifacts?.manifest ??
+					existingResumeManifest ??
+					(await this.invokeOptionalValue<SessionManifest>(
+						"readSessionManifest",
+						sessionId,
+					)))
+				: undefined;
+		const toolResultFormat = pinToolResultFormat({
+			stored: storedManifest?.metadata,
+			hasHistory: initialMessages.length > 0,
+			configured: startInput.config.toolResultFormat,
+		});
 		bootstrap = await prepareLocalRuntimeBootstrap({
-			input: startInput,
+			input: {
+				...startInput,
+				config: { ...startInput.config, toolResultFormat },
+			},
 			localRuntime: input.localRuntime,
 			sessionId,
 			sessionOrigin,
@@ -991,6 +1015,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 				{
 					...(resumedArtifacts?.manifest.metadata ?? {}),
 					...(startInput.sessionMetadata ?? {}),
+					[TOOL_RESULT_FORMAT_METADATA_KEY]: toolResultFormat,
 				},
 				bootstrap.gitState,
 			),
@@ -1129,7 +1154,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 			// unset field meant the condenser stood down on every session,
 			// which is exactly as visible as it sounds: no note, no failure,
 			// no log, through a run where the cap fired on 288 requests.
-			providerConfig: configWithProvider.providerConfig ?? providerConfig,
+			providerConfig: {
+				...(configWithProvider.providerConfig ?? providerConfig),
+				// The outcomes it quotes read as the model read them.
+				...(configWithProvider.toolResultFormat
+					? { toolResultFormat: configWithProvider.toolResultFormat }
+					: {}),
+			},
 			summarizer: configWithProvider.compaction?.summarizer,
 			logger: configWithProvider.logger,
 		};

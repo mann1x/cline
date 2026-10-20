@@ -702,6 +702,9 @@ export class SessionRuntime {
 			...(config.staleReadRewrites === false
 				? { minOutdatedRewriteBytes: Number.POSITIVE_INFINITY }
 				: {}),
+			...(config.toolResultFormat
+				? { toolResultFormat: config.toolResultFormat }
+				: {}),
 			getToolResultRecovery: (result) =>
 				this.cacheableToolNames.has(result.name ?? "")
 					? { uri: this.toolResultCache.uriFor(result.tool_use_id) }

@@ -98,6 +98,10 @@ export function addRootOptions(cmd: Command): Command {
 				"Require the model to check a file it edited: off | nudge | require (default: nudge)",
 			)
 			.option(
+				"--tool-result-format <format>",
+				"How tool results are written into the request: json | text (default: json). A resumed session keeps the format it started with",
+			)
+			.option(
 				"--atomic <mode>",
 				"Run the task as judged, revertible transactions: off | static (default: off). auto, always and on are accepted and mean static",
 			)
@@ -440,6 +444,17 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 			result.editVerification = raw;
 		} else if (raw) {
 			result.invalidEditVerification = raw;
+		}
+	}
+
+	// Rejected rather than coerced, like the mode above: an A/B arm that
+	// silently ran on the default would be the control twice.
+	if (opts.toolResultFormat !== undefined) {
+		const raw = String(opts.toolResultFormat).trim();
+		if (raw === "json" || raw === "text") {
+			result.toolResultFormat = raw;
+		} else if (raw) {
+			result.invalidToolResultFormat = raw;
 		}
 	}
 

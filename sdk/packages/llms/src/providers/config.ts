@@ -10,6 +10,7 @@ import type {
 	ExtensionContext,
 	ReasoningEffort,
 	ReasoningHistorySetting,
+	ToolResultFormat,
 } from "@cline/shared";
 import type { ModelInfo, ProviderClient } from "../catalog/types";
 import {
@@ -164,6 +165,12 @@ export interface ReasoningConfig {
 	 * per model from a measured capability. Unset means `auto`.
 	 */
 	reasoningHistory?: ReasoningHistorySetting;
+	/**
+	 * How tool results reach the model: `json` (unset) as the providers
+	 * serialize them, or `text` as `renderToolOutputForModel` lays them out.
+	 * Fixed for the life of a conversation by the host that owns it.
+	 */
+	toolResultFormat?: ToolResultFormat;
 	/**
 	 * Whether `auto` may inline prior reasoning into content when the endpoint's
 	 * template renders none of the reasoning field. Unset means on.

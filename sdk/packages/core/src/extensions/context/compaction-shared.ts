@@ -5,12 +5,17 @@ import type {
 } from "@cline/llms";
 import { resolveDefaultMaxOutputTokens } from "@cline/llms";
 import {
+	asStructuredToolResultEntry,
 	CHARS_PER_TOKEN,
 	estimateThinkingTokens,
 	estimateTokens,
 	type MessageWithMetadata,
 	measureRequestInputChars,
+	renderToolResultText,
+	type StructuredToolResultEntry,
 	seedRequestTokenCalibration,
+	TOOL_RESULT_SERIALIZED_JSON,
+	type ToolResultFormat,
 } from "@cline/shared";
 
 export { CHARS_PER_TOKEN, estimateThinkingTokens, estimateTokens };
@@ -746,23 +751,8 @@ export function truncateText(text: string, limit: number): string {
  * happened, so a session whose checker returned `ok:false` three times was
  * summarised as "the game is running" and the next context believed it.
  */
-export interface StructuredToolResultEntry {
-	query?: unknown;
-	result?: unknown;
-	success?: unknown;
-	error?: unknown;
-}
-
-export function asStructuredToolResultEntry(
-	block: unknown,
-): StructuredToolResultEntry | undefined {
-	if (typeof block !== "object" || block === null || "type" in block) {
-		return undefined;
-	}
-	return "result" in block || "error" in block || "query" in block
-		? (block as StructuredToolResultEntry)
-		: undefined;
-}
+export type { StructuredToolResultEntry };
+export { asStructuredToolResultEntry };
 
 function stringifyEntryField(value: unknown): string {
 	if (value === undefined || value === null) {
@@ -802,9 +792,60 @@ function formatStructuredToolResult(entry: StructuredToolResultEntry): string {
 	return lines.join("\n");
 }
 
+/**
+ * How a session's tool results are rendered, for the parts of compaction the
+ * model reads: the summarizer's transcript, the call record, a condensed
+ * note's outcomes. Absent, or `json`, is the rendering they always had.
+ */
+export interface ToolResultRendering {
+	format?: ToolResultFormat;
+	/** The block's `serialized` mark, so a codec-written string is parsed back. */
+	serialized?: string;
+}
+
+/**
+ * Under `text`: the result as `renderToolResultText` lays it out, cut to the
+ * same limits the `json` path cuts it to.
+ */
+function flattenRenderedToolResult(
+	content: ToolResultContent["content"],
+	serialized: string | undefined,
+): string {
+	let value: unknown = content;
+	if (
+		typeof content === "string" &&
+		serialized === TOOL_RESULT_SERIALIZED_JSON
+	) {
+		try {
+			value = JSON.parse(content);
+		} catch {
+			value = content;
+		}
+	}
+	if (typeof value === "string") {
+		return truncateText(value, TOOL_RESULT_CHAR_LIMIT);
+	}
+	if (Array.isArray(value)) {
+		return renderToolResultText(
+			truncateToolResultContentForCompaction(
+				value as Exclude<ToolResultContent["content"], string>,
+			),
+		);
+	}
+	const entry = asStructuredToolResultEntry(value);
+	if (entry) {
+		return renderToolResultText(truncateStructuredToolResultEntry(entry));
+	}
+	return truncateText(renderToolResultText(value), TOOL_RESULT_CHAR_LIMIT);
+}
+
 export function flattenToolResultContent(
 	content: ToolResultContent["content"],
+	rendering?: ToolResultRendering,
 ): string {
+	if (rendering?.format === "text") {
+		return flattenRenderedToolResult(content, rendering.serialized);
+	}
 	const truncated = truncateToolResultContentForCompaction(content);
 	if (typeof truncated === "string") {
 		return truncated;
@@ -888,7 +929,10 @@ export function formatToolInput(input: Record<string, unknown>): string {
 		.join(", ");
 }
 
-export function serializeMessage(message: MessageWithMetadata): string {
+export function serializeMessage(
+	message: MessageWithMetadata,
+	format?: ToolResultFormat,
+): string {
 	if (typeof message.content === "string") {
 		return `[${message.role === "user" ? "User" : "Bot"}]: ${message.content}`;
 	}
@@ -912,7 +956,12 @@ export function serializeMessage(message: MessageWithMetadata): string {
 				);
 				break;
 			case "tool_result":
-				lines.push(`[Tool result]: ${flattenToolResultContent(block.content)}`);
+				lines.push(
+					`[Tool result]: ${flattenToolResultContent(block.content, {
+						...(format ? { format } : {}),
+						...(block.serialized ? { serialized: block.serialized } : {}),
+					})}`,
+				);
 				break;
 			case "file":
 				lines.push(
@@ -949,6 +998,7 @@ export function serializeMessage(message: MessageWithMetadata): string {
  */
 export function serializeReasoningWithOutcomes(
 	messages: MessageWithMetadata[],
+	format?: ToolResultFormat,
 ): string {
 	const outcomeByToolUseId = new Map<string, string>();
 	for (const message of messages) {
@@ -957,7 +1007,10 @@ export function serializeReasoningWithOutcomes(
 		}
 		for (const block of message.content) {
 			if (block.type === "tool_result") {
-				outcomeByToolUseId.set(block.tool_use_id, describeToolOutcome(block));
+				outcomeByToolUseId.set(
+					block.tool_use_id,
+					describeToolOutcome(block, format),
+				);
 			}
 		}
 	}
@@ -999,8 +1052,14 @@ export function serializeReasoningWithOutcomes(
 }
 
 /** What a tool call came back as, in the fewest words that distinguish them. */
-function describeToolOutcome(block: ToolResultContent): string {
-	const text = flattenToolResultContent(block.content);
+function describeToolOutcome(
+	block: ToolResultContent,
+	format?: ToolResultFormat,
+): string {
+	const text = flattenToolResultContent(block.content, {
+		...(format ? { format } : {}),
+		...(block.serialized ? { serialized: block.serialized } : {}),
+	});
 	if (text.includes("strikes left") || text.includes("LAST strike")) {
 		return "refused by the loop guard as an unchanged repeat";
 	}
@@ -1043,8 +1102,14 @@ function reasoningCostLabel(
 	return ` (${outputTokens} output tokens, ${thinkingChars} chars of it thinking)`;
 }
 
-export function serializeConversation(messages: MessageWithMetadata[]): string {
-	return messages.map(serializeMessage).join("\n\n").trim();
+export function serializeConversation(
+	messages: MessageWithMetadata[],
+	format?: ToolResultFormat,
+): string {
+	return messages
+		.map((message) => serializeMessage(message, format))
+		.join("\n\n")
+		.trim();
 }
 
 export function createTokenEstimator(): EstimateMessageTokens {
@@ -2665,6 +2730,8 @@ export function seedCalibrationFromTranscript(request: {
 	messages: MessageWithMetadata[];
 	tools?: unknown[];
 	reasoningHistory?: ReasoningHistoryMode;
+	/** As the request path renders tool results; see `ToolResultFormat`. */
+	toolResultFormat?: ToolResultFormat;
 	/** Whose transcript this is, so the seeded count answers only to it. */
 	sessionId?: string;
 }): void {
@@ -2684,7 +2751,10 @@ export function seedCalibrationFromTranscript(request: {
 					messages: request.messages.slice(0, index),
 					tools: request.tools,
 				},
-				{ reasoningHistory: request.reasoningHistory },
+				{
+					reasoningHistory: request.reasoningHistory,
+					toolResultFormat: request.toolResultFormat,
+				},
 			),
 			tokens,
 			request.sessionId,

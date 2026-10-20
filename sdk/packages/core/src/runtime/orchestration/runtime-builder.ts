@@ -618,6 +618,7 @@ export function resolveSessionAgentNodes(
 			maxTokensPerTurn: config.maxTokensPerTurn,
 			maxToolResultChars: config.maxToolResultChars,
 			staleReadRewrites: config.staleReadRewrites,
+			toolResultFormat: config.toolResultFormat,
 			temperature: config.temperature,
 		},
 	}) as NonNullable<CoreSessionConfig["agentNodes"]>;
@@ -1136,6 +1137,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 				maxTokensPerTurn: config.maxTokensPerTurn,
 				maxToolResultChars: config.maxToolResultChars,
 				staleReadRewrites: config.staleReadRewrites,
+				toolResultFormat: config.toolResultFormat,
 				temperature: config.temperature,
 				maxIterations: config.maxIterations,
 				// How each agent's struggle supervisor knows a turn that ran out

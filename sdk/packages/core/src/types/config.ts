@@ -15,6 +15,7 @@ import type {
 	SessionExecutionConfig,
 	SessionPromptConfig,
 	SessionWorkspaceConfig,
+	ToolResultFormat,
 } from "@cline/shared";
 import type { CompactionRevisions } from "../extensions/context/compaction-revisions";
 import type { DocumentReaderSettings } from "../extensions/tools/executors/document/ocr";
@@ -72,6 +73,13 @@ export interface CoreModelConfig {
 	 */
 	staleReadRewrites?: boolean;
 	/**
+	 * How tool results reach the model: `json` (unset), as the providers
+	 * serialize them, or `text`, rendered by `renderToolOutputForModel`. Set
+	 * once by the host when the conversation starts and never changed after:
+	 * a transcript read half one way and half the other is worse than either.
+	 */
+	toolResultFormat?: ToolResultFormat;
+	/**
 	 * Sampling temperature per API call.
 	 */
 	temperature?: number;
@@ -105,6 +113,7 @@ export type DelegatedAgentConnectionOverride = Pick<
 	// named a different budget with it. Absent, agents keep the session's.
 	| "maxToolResultChars"
 	| "staleReadRewrites"
+	| "toolResultFormat"
 	// The tab's thinking, sampler temperature and output cap. Leaving these
 	// out handed every delegated agent the LEAD's: on 2026-09-23 an Agents
 	// tab with thinking off ran its opencoti agents at the lead's `high`, a

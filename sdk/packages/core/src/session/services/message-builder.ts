@@ -22,9 +22,12 @@ import {
 	type Message,
 	normalizeUserInput,
 	type ResolvedMediaBudget,
+	renderToolOutputForModel,
 	resolveMediaBudget,
 	type TextContent,
+	TOOL_RESULT_SERIALIZED_JSON,
 	type ToolResultContent,
+	type ToolResultFormat,
 	validateAndReserveImageMedia,
 } from "@cline/shared";
 import { readOverlapUnchanged } from "./read-overlap";
@@ -313,6 +316,13 @@ export interface MessageBuilderOptions {
 	 * threshold; ignored when `minOutdatedRewriteBytes` is given explicitly.
 	 */
 	contextWindowTokens?: number;
+	/**
+	 * The conversation's `ToolResultFormat`. Under `text` a result the codec
+	 * serialized is cut inside its values, so it still parses, and an oversized
+	 * one is previewed as the model will read it. Under `json`, or unset, both
+	 * are exactly what they always were.
+	 */
+	toolResultFormat?: ToolResultFormat;
 }
 
 export function getMessageBuilderOptionsFromEnv(
@@ -354,6 +364,7 @@ export class MessageBuilder {
 	private readOrderCounter = 0;
 	private readResultLocatorCache = new WeakMap<object, ReadLocator[]>();
 	private readonly maxToolResultChars: number;
+	private readonly rendersToolResults: boolean;
 	private readonly maxFileContentChars: number;
 	private readonly maxTotalTextBytes: number;
 	private readonly mediaBudget: MediaBudgetOptions;
@@ -370,6 +381,7 @@ export class MessageBuilder {
 
 	constructor(options: MessageBuilderOptions = {}) {
 		this.getToolResultRecovery = options.getToolResultRecovery;
+		this.rendersToolResults = options.toolResultFormat === "text";
 		this.maxToolResultChars = normalizePositiveLimit(
 			options.maxToolResultChars,
 			DEFAULT_MAX_TOOL_RESULT_CHARS,
@@ -505,7 +517,7 @@ export class MessageBuilder {
 			name: toolName ?? block.name,
 		});
 		if (recovery) {
-			const { text, images } = prepareToolResultPreview(block.content);
+			const { text, images } = this.previewToolResult(block);
 			if (typeof text === "string" && text.length > this.maxToolResultChars) {
 				const content: ToolResultContent["content"] = [
 					{ type: "text", text: this.truncateMiddle(text) },
@@ -556,7 +568,7 @@ export class MessageBuilder {
 		// Truncation is default-on for every tool result: MCP and custom SDK
 		// tools produce payloads just as large as the built-in ones, and any
 		// allowlist gate silently exempts them.
-		nextContent = this.truncateToolResultContent(nextContent);
+		nextContent = this.truncateToolResultContent(nextContent, block.serialized);
 
 		return nextContent === block.content
 			? block
@@ -1615,10 +1627,55 @@ export class MessageBuilder {
 			: undefined;
 	}
 
+	/**
+	 * The text an oversized result is previewed by. Under `text` it is the
+	 * rendered result, so the preview reads like every other result the model
+	 * is sent rather than as pretty-printed JSON.
+	 */
+	private previewToolResult(block: ToolResultContent): {
+		text: string | undefined;
+		images: ImageContent[];
+	} {
+		if (!this.rendersToolResults) {
+			return prepareToolResultPreview(block.content);
+		}
+		const rendered = renderToolOutputForModel(block.content, {
+			...(block.serialized ? { serialized: block.serialized } : {}),
+		});
+		if (typeof rendered === "string") {
+			return { text: rendered, images: [] };
+		}
+		return {
+			text: rendered
+				.flatMap((part) => (part.type === "text" ? [part.text] : []))
+				.join("\n"),
+			images: rendered.filter(
+				(part): part is ImageContent => part.type === "image",
+			),
+		};
+	}
+
 	private truncateToolResultContent(
 		content: ToolResultContent["content"],
+		serialized?: string,
 	): ToolResultContent["content"] {
 		if (typeof content === "string") {
+			// Cut a serialized result inside its values: cut through the middle,
+			// the JSON stops parsing and a `text` session is sent it as escapes
+			// after all -- exactly for the largest results there are.
+			if (
+				this.rendersToolResults &&
+				serialized === TOOL_RESULT_SERIALIZED_JSON &&
+				content.length > this.maxToolResultChars
+			) {
+				try {
+					return JSON.stringify(
+						this.truncateNestedStrings(JSON.parse(content)),
+					);
+				} catch {
+					return this.truncateMiddle(content);
+				}
+			}
 			return this.truncateMiddle(content);
 		}
 		return content.map((entry) => {

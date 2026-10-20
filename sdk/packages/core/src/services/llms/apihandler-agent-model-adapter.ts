@@ -25,6 +25,7 @@ import {
 	type AgentModelRequest,
 	type Message,
 	type ToolResultContent,
+	type ToolResultFormat,
 	toolResultForModel,
 } from "@cline/shared";
 import { agentMessagesToMessages } from "../../runtime/config/agent-message-codec";
@@ -32,15 +33,23 @@ import { agentMessagesToMessages } from "../../runtime/config/agent-message-code
 /**
  * The messages a handler is sent: a tool result's harness note joined to its
  * content, which is what the model reads. Persisted, the two stay apart.
+ *
+ * Under `text` every result is rendered, not only the ones carrying a note:
+ * this is the last step before a host-registered handler -- VS Code LM among
+ * them -- reads the message, and nothing after it renders anything.
  */
-function withToolResultNotes(messages: Message[]): Message[] {
+function withToolResultNotes(
+	messages: Message[],
+	format: ToolResultFormat | undefined,
+): Message[] {
+	const renders = format === "text";
 	return messages.map((message) => {
 		if (typeof message.content === "string") {
 			return message;
 		}
 		if (
 			!message.content.some(
-				(block) => block.type === "tool_result" && block.note,
+				(block) => block.type === "tool_result" && (renders || block.note),
 			)
 		) {
 			return message;
@@ -48,16 +57,16 @@ function withToolResultNotes(messages: Message[]): Message[] {
 		return {
 			...message,
 			content: message.content.map((block) => {
-				if (block.type !== "tool_result" || !block.note) {
+				if (block.type !== "tool_result" || (!renders && !block.note)) {
 					return block;
 				}
-				const { note, ...rest } = block;
+				const { note, serialized, ...rest } = block;
 				return {
 					...rest,
-					content: toolResultForModel(
-						rest.content,
-						note,
-					) as ToolResultContent["content"],
+					content: toolResultForModel(rest.content, note, {
+						...(format ? { format } : {}),
+						...(serialized ? { serialized } : {}),
+					}) as ToolResultContent["content"],
 				};
 			}),
 		};
@@ -171,6 +180,7 @@ export type ApiHandlerSource =
  */
 export function createAgentModelFromApiHandler(
 	source: ApiHandlerSource,
+	options?: { toolResultFormat?: ToolResultFormat },
 ): AgentModel {
 	return {
 		async *stream(request: AgentModelRequest): AsyncGenerator<AgentModelEvent> {
@@ -187,6 +197,7 @@ export function createAgentModelFromApiHandler(
 
 				const messages = withToolResultNotes(
 					agentMessagesToMessages(request.messages),
+					options?.toolResultFormat,
 				);
 				const tools = request.tools.map((tool) => ({
 					name: tool.name,

@@ -17,6 +17,7 @@ import type {
 	ReasoningHistoryMode,
 	ReasoningHistoryPlan,
 	ToolCallRejection,
+	ToolResultFormat,
 } from "@cline/shared";
 import {
 	type AiSdkFormatterMessage,
@@ -517,6 +518,9 @@ function buildAiSdkRequestMessages(
 	logReasoningReplay(request, context, reasoningHistory);
 	const aiMessages = toAiSdkMessages(request.messages, systemPrompt, {
 		reasoningHistory,
+		...(context.config.toolResultFormat
+			? { toolResultFormat: context.config.toolResultFormat }
+			: {}),
 		supportedInputModalities:
 			context.model.modalities?.input ??
 			(context.model.capabilities
@@ -851,6 +855,7 @@ export function toAiSdkMessages(
 	options?: {
 		reasoningHistory?: ReasoningHistoryMode | ReasoningHistoryPlan;
 		supportedInputModalities?: readonly string[];
+		toolResultFormat?: ToolResultFormat;
 	},
 ) {
 	const plan: ReasoningHistoryPlan =
@@ -993,7 +998,12 @@ export function toAiSdkMessages(
 					type: "tool-result",
 					toolCallId: part.toolCallId,
 					toolName: part.toolName,
-					output: toolResultForModel(part.output, part.note),
+					output: toolResultForModel(part.output, part.note, {
+						...(options?.toolResultFormat
+							? { format: options.toolResultFormat }
+							: {}),
+						...(part.serialized ? { serialized: part.serialized } : {}),
+					}),
 					isError: part.isError ?? false,
 				});
 			}

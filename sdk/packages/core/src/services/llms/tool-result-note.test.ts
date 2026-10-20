@@ -91,4 +91,39 @@ describe("a note on a tool result", () => {
 		expect(results?.[0]).not.toHaveProperty("note");
 		expect(sent[0]?.filter((m) => m.role === "user")).toHaveLength(2);
 	});
+
+	it("is joined after the rendered result under text, and the mark is not sent", async () => {
+		const sent: Message[][] = [];
+		const handler: ApiHandler = {
+			getMessages: () => [],
+			getModel: (): HandlerModelInfo => ({ id: "m", info: { id: "m" } }),
+			async *createMessage(
+				_system: string,
+				input: Message[],
+			): AsyncGenerator<ApiStreamChunk> {
+				sent.push(input);
+				yield { type: "text", text: "ok", id: "x" };
+			},
+		};
+		const model = createAgentModelFromApiHandler(handler, {
+			toolResultFormat: "text",
+		});
+		const stored = messagesToAgentMessages(agentMessagesToMessages(messages));
+		for await (const _event of await model.stream({
+			systemPrompt: "sys",
+			messages: stored,
+			tools: [],
+		})) {
+			// drain
+		}
+		const results = sent[0]?.flatMap((m) =>
+			typeof m.content === "string"
+				? []
+				: m.content.filter((b) => b.type === "tool_result"),
+		);
+		expect(results?.[0]).toMatchObject({
+			content: "success: true\n\n[SYSTEM] Task progress (1/2 done)",
+		});
+		expect(results?.[0]).not.toHaveProperty("serialized");
+	});
 });

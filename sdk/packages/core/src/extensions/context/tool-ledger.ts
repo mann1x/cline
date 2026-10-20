@@ -28,6 +28,10 @@
  * One line per call, the failures marked, no JSON it has to parse.
  */
 
+import {
+	TOOL_RESULT_SERIALIZED_JSON,
+	type ToolResultFormat,
+} from "@cline/shared";
 import { asStructuredToolResultEntry } from "./compaction-shared";
 
 /**
@@ -103,6 +107,11 @@ export const DEFAULT_TOOL_LEDGER_LIMITS: ToolLedgerLimits = {
 
 export interface ToolLedgerOptions {
 	limits?: Partial<ToolLedgerLimits>;
+	/**
+	 * Under `text`, a result the transcript codec stored as JSON is read back
+	 * into the entry it was, so the key quotes the result and not its escapes.
+	 */
+	toolResultFormat?: ToolResultFormat;
 }
 
 /**
@@ -318,6 +327,25 @@ function summariseStructuredOutput(
 	return parts.join("; ");
 }
 
+/**
+ * A result as `text` reads it: a string the codec wrote from an object is that
+ * object again, and a single entry is a list of one.
+ */
+function asTextResult(answer: NormalisedResult): unknown {
+	let value = answer.output;
+	if (
+		typeof value === "string" &&
+		answer.serialized === TOOL_RESULT_SERIALIZED_JSON
+	) {
+		try {
+			value = JSON.parse(value);
+		} catch {
+			return value;
+		}
+	}
+	return asStructuredToolResultEntry(value) ? [value] : value;
+}
+
 function summariseOutput(output: unknown, limits: ToolLedgerLimits): string {
 	if (typeof output === "string") {
 		return clamp(output, limits.maxResultChars);
@@ -397,6 +425,7 @@ interface NormalisedResult {
 	id: string;
 	output: unknown;
 	isError?: boolean;
+	serialized?: string;
 }
 
 /**
@@ -441,6 +470,9 @@ function normaliseResult(part: unknown): NormalisedResult | undefined {
 			id: part.toolCallId,
 			output: part.output,
 			isError: part.isError === true,
+			...(typeof part.serialized === "string"
+				? { serialized: part.serialized }
+				: {}),
 		};
 	}
 	if (part.type === "tool_result" && typeof part.tool_use_id === "string") {
@@ -448,6 +480,9 @@ function normaliseResult(part: unknown): NormalisedResult | undefined {
 			id: part.tool_use_id,
 			output: part.content,
 			isError: part.is_error === true,
+			...(typeof part.serialized === "string"
+				? { serialized: part.serialized }
+				: {}),
 		};
 	}
 	return undefined;
@@ -492,7 +527,12 @@ export function buildToolLedger(
 			const answer = results.get(call.id);
 			const input = summariseInput(call.input, limits);
 			const result = answer
-				? summariseOutput(answer.output, limits)
+				? summariseOutput(
+						options.toolResultFormat === "text"
+							? asTextResult(answer)
+							: answer.output,
+						limits,
+					)
 				: "(no result recorded)";
 			const failed = answer
 				? looksRefused(answer.output, answer.isError)

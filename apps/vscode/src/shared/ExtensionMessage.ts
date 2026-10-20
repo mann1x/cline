@@ -172,6 +172,8 @@ export interface ExtensionState {
 	shellIntegrationTimeout: number
 	/** Per-tool-result character cap; 0 means the SDK default applies. */
 	maxToolResultChars?: number
+	/** How tool results are written into the request; new conversations only. */
+	toolResultFormat?: "json" | "text"
 	terminalReuseEnabled?: boolean
 	defaultTerminalProfile?: string
 	vscodeTerminalExecutionMode: string

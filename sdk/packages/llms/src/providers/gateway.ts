@@ -873,14 +873,23 @@ export class DefaultGateway implements Gateway {
 			model: resolved.model,
 			config: providerRecord.config,
 		} as GatewayProviderContext);
-		const inputChars = measureRequestInputChars(request, { reasoningHistory });
+		// Tool results measured as they will be sent: under `text` that is the
+		// rendered form, without the escapes a serialization would count.
+		const toolResultFormat = providerRecord.config.toolResultFormat;
+		const inputChars = measureRequestInputChars(request, {
+			reasoningHistory,
+			toolResultFormat,
+		});
 		// Reasoning is counted at its own rate. One ratio for a whole request is
 		// an average over two populations that do not tokenize alike, and the mix
 		// moves every turn — which undercounts exactly the reasoning-heavy
 		// requests that are already closest to the window.
 		const reasoningChars = Math.min(
 			inputChars,
-			measureRequestReasoningChars(request, { reasoningHistory }),
+			measureRequestReasoningChars(request, {
+				reasoningHistory,
+				toolResultFormat,
+			}),
 		);
 		// Anchored to the provider's own count for the previous request, so only
 		// the characters added since are projected. The pure character estimate

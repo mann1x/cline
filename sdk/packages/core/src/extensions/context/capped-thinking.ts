@@ -28,6 +28,7 @@ import type {
 	DiscardedTurnInput,
 	MessageWithMetadata,
 	PrepareTurnUsage,
+	ToolResultFormat,
 } from "@cline/shared";
 import type { CoreCompactionSummarizerConfig } from "../../types/config";
 import type { ProviderConfig } from "../../types/provider-settings";
@@ -501,6 +502,7 @@ function transcriptUserRequests(
 function collectToolOutcomes(
 	messages: readonly MessageWithMetadata[],
 	index: number,
+	format?: ToolResultFormat,
 ): ToolOutcome[] {
 	const message = messages[index];
 	if (!Array.isArray(message?.content)) {
@@ -513,7 +515,13 @@ function collectToolOutcomes(
 		}
 		for (const block of later.content) {
 			if (block.type === "tool_result") {
-				results.set(block.tool_use_id, flattenToolResultContent(block.content));
+				results.set(
+					block.tool_use_id,
+					flattenToolResultContent(block.content, {
+						format,
+						serialized: block.serialized,
+					}),
+				);
 			}
 		}
 	}
@@ -1430,7 +1438,11 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 			});
 			note = await writeCappedThinkingNote({
 				thinking,
-				outcomes: collectToolOutcomes(messages, index),
+				outcomes: collectToolOutcomes(
+					messages,
+					index,
+					providerConfig.toolResultFormat,
+				),
 				config,
 				providerConfig,
 				...(reportUsage ? { reportUsage } : {}),

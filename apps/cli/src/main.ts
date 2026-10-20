@@ -811,6 +811,13 @@ export async function runCli(): Promise<void> {
 		process.exitCode = 1;
 		return;
 	}
+	if (args.invalidToolResultFormat) {
+		writeln(
+			`invalid --tool-result-format "${args.invalidToolResultFormat}" (expected json or text)`,
+		);
+		process.exitCode = 1;
+		return;
+	}
 	// Fails hardest of these. A run the user believes is transactional and is
 	// not leaves a failed attempt's edits on disk under a report that says they
 	// were put back, which is worse than either doing it or not doing it.
@@ -1289,6 +1296,9 @@ export async function runCli(): Promise<void> {
 			// duplicate a default that can drift out from under this file.
 			...(args.editVerification
 				? { editVerification: { mode: args.editVerification } }
+				: {}),
+			...(args.toolResultFormat
+				? { toolResultFormat: args.toolResultFormat }
 				: {}),
 			// Sent whenever any of it was asked for, not only on `--atomic`: an
 			// oracle named without a mode is a user who wants the check and has

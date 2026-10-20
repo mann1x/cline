@@ -35,7 +35,11 @@
  *   is exactly what shipped before it existed.
  */
 
-import type { BasicLogger, MessageWithMetadata } from "@cline/shared";
+import type {
+	BasicLogger,
+	MessageWithMetadata,
+	ToolResultFormat,
+} from "@cline/shared";
 import { serializeConversation } from "./compaction-shared";
 
 /** What a reviewer and the synthesiser are told they are. */
@@ -548,6 +552,8 @@ export async function runCouncilReview(input: {
 	summary: string;
 	thinkingSummary?: string;
 	messages: readonly MessageWithMetadata[];
+	/** How the conversation's tool results read; the critics see the same. */
+	toolResultFormat?: ToolResultFormat;
 	/**
 	 * One model call. Throwing is allowed and is handled as a decline.
 	 *
@@ -643,7 +649,7 @@ export async function runCouncilReview(input: {
 	}
 	const transcript = input.transcriptInContext
 		? ""
-		: serializeConversation([...input.messages]);
+		: serializeConversation([...input.messages], input.toolResultFormat);
 	const originalLength = halves.first.length + halves.second.length;
 
 	input.logger?.debug(

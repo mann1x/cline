@@ -204,6 +204,7 @@ export class GatewayRegistry {
 			// characters of reasoning replayed none of it under `all`.
 			reasoningHistory: config.reasoningHistory,
 			reasoningInline: config.reasoningInline,
+			toolResultFormat: config.toolResultFormat,
 			enabled: config.enabled ?? true,
 			defaultModelId: config.defaultModelId,
 			models: config.models?.map((model) => ({ ...model })),
@@ -346,6 +347,8 @@ export class GatewayRegistry {
 					config?.reasoningHistory ?? record.defaults?.reasoningHistory,
 				reasoningInline:
 					config?.reasoningInline ?? record.defaults?.reasoningInline,
+				toolResultFormat:
+					config?.toolResultFormat ?? record.defaults?.toolResultFormat,
 			},
 			createProvider: record.createProvider,
 		};

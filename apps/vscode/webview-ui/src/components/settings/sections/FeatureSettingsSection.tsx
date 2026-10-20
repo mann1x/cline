@@ -293,6 +293,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		defaultCappedThinkingPrompt,
 		compactionStrategy,
 		editVerificationSettings,
+		toolResultFormat,
 		atomicProtocolSettings,
 		webSearchEnabled,
 		subagentsEnabled,
@@ -442,6 +443,28 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 										<SelectItem value="off">Off</SelectItem>
 										<SelectItem value="nudge">Nudge</SelectItem>
 										<SelectItem value="require">Require</SelectItem>
+									</SelectContent>
+								</Select>
+							</div>
+							<div className="space-y-2 py-3">
+								<Label className="text-sm font-medium text-foreground">Tool Results</Label>
+								{/* Fixed per conversation by core, so the description says when
+								    a change takes effect rather than leaving a resumed task to
+								    look as if it ignored the setting. */}
+								<p className="text-xs text-muted-foreground">
+									How a tool's result is written for the model. JSON sends it as data, so a file it reads has
+									its line breaks as \n and its quotes escaped; Text sends what the tool returned as it reads.
+									Applies to new conversations: one already started keeps the format it began with.
+								</p>
+								<Select
+									onValueChange={(value) => updateSetting("toolResultFormat", value)}
+									value={toolResultFormat ?? "json"}>
+									<SelectTrigger className="w-full">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="json">JSON</SelectItem>
+										<SelectItem value="text">Text</SelectItem>
 									</SelectContent>
 								</Select>
 							</div>

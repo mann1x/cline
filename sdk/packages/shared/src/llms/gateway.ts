@@ -18,6 +18,7 @@ import type {
 	ReasoningEffort,
 } from "./reasoning-options";
 import type { ReasoningHistorySetting } from "./tokens";
+import type { ToolResultFormat } from "./tool-result-text";
 
 export type JsonValue =
 	| string
@@ -211,6 +212,11 @@ export interface GatewayProviderSettings {
 	 * model from a measured capability. Unset means `auto`.
 	 */
 	reasoningHistory?: ReasoningHistorySetting;
+	/**
+	 * How tool results reach the model; see `ToolResultFormat`. Unset is
+	 * `json`. Read at request time off `context.config`, like the two above.
+	 */
+	toolResultFormat?: ToolResultFormat;
 	/**
 	 * Whether `auto` may inline prior reasoning into the assistant's content
 	 * when the endpoint's chat template renders none of the reasoning field.

@@ -879,7 +879,11 @@ export function createContextCompactionPrepareTurn(
 		Partial<
 			Pick<
 				CoreSessionConfig,
-				"thinking" | "reasoningEffort" | "thinkingBudgetTokens" | "temperature"
+				| "thinking"
+				| "reasoningEffort"
+				| "thinkingBudgetTokens"
+				| "temperature"
+				| "toolResultFormat"
 			>
 		>,
 	options: ContextCompactionPrepareTurnOptions = {},
@@ -896,12 +900,17 @@ export function createContextCompactionPrepareTurn(
 		return undefined;
 	}
 
-	const baseProviderConfig =
+	const connectionProviderConfig =
 		config.providerConfig ??
 		({
 			providerId: config.providerId,
 			modelId: config.modelId,
 		} as ProviderConfig);
+	// The conversation's format, which no provider config carries: a summary
+	// is written from the tool results as the model read them.
+	const baseProviderConfig: ProviderConfig = config.toolResultFormat
+		? { ...connectionProviderConfig, toolResultFormat: config.toolResultFormat }
+		: connectionProviderConfig;
 	// A summary never asks for generation notices: it is new text, and a line
 	// planted in it would be stored as the summary's own words.
 	const { notices: _notices, ...summaryProviderConfig } = baseProviderConfig;
@@ -1000,6 +1009,10 @@ export function createContextCompactionPrepareTurn(
 				reasoningInline: providerConfig.reasoningInline,
 			},
 		);
+		// And the tool results as they are sent, for the same reason: under
+		// `text` the request carries none of the JSON escapes a serialized
+		// measurement would count.
+		const toolResultFormat = providerConfig.toolResultFormat;
 		// Anchored, because the request path is. `estimateRequestInputTokens`
 		// is characters over one smoothed ratio with nothing holding it to the
 		// provider's own count, so its error compounds with the transcript:
@@ -1016,7 +1029,7 @@ export function createContextCompactionPrepareTurn(
 				messages: wireMessages,
 				tools: context.tools,
 			},
-			{ reasoningHistory },
+			{ reasoningHistory, toolResultFormat },
 		);
 		const requestReasoningChars = Math.min(
 			requestChars,
@@ -1026,7 +1039,7 @@ export function createContextCompactionPrepareTurn(
 					messages: wireMessages,
 					tools: context.tools,
 				},
-				{ reasoningHistory },
+				{ reasoningHistory, toolResultFormat },
 			),
 		);
 		const requestInputTokens = anchoredRequestTokens(
@@ -1060,7 +1073,7 @@ export function createContextCompactionPrepareTurn(
 		// turning off a handful of tools is what buys the room back.
 		const systemPromptTokens = estimateRequestInputTokens(
 			{ systemPrompt: context.systemPrompt, messages: [], tools: [] },
-			{ reasoningHistory },
+			{ reasoningHistory, toolResultFormat },
 		);
 		const requestOverheadTokens = estimateRequestInputTokens(
 			{
@@ -1068,7 +1081,7 @@ export function createContextCompactionPrepareTurn(
 				messages: [],
 				tools: context.tools,
 			},
-			{ reasoningHistory },
+			{ reasoningHistory, toolResultFormat },
 		);
 		const toolSchemaTokens = Math.max(
 			0,
@@ -1091,7 +1104,7 @@ export function createContextCompactionPrepareTurn(
 							messages: [],
 							tools: mcpTools,
 						},
-						{ reasoningHistory },
+						{ reasoningHistory, toolResultFormat },
 					) - systemPromptTokens,
 				)
 			: 0;
@@ -1232,6 +1245,7 @@ export function createContextCompactionPrepareTurn(
 			messages: context.messages,
 			tools: context.tools,
 			reasoningHistory,
+			toolResultFormat,
 			sessionId: config.sessionId,
 		});
 		// Asked in this session's name. The record is process-wide and a request
@@ -1609,7 +1623,7 @@ export function createContextCompactionPrepareTurn(
 		): number =>
 			estimateRequestInputTokens(
 				{ systemPrompt: "", messages },
-				{ reasoningHistory },
+				{ reasoningHistory, toolResultFormat },
 			);
 
 		// What this compaction costs, on whichever path it takes: the line it

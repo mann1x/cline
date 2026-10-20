@@ -1,5 +1,9 @@
 import { classifyProviderError, createHandlerAsync } from "@cline/llms";
-import type { BasicLogger, MessageWithMetadata } from "@cline/shared";
+import type {
+	BasicLogger,
+	MessageWithMetadata,
+	ToolResultFormat,
+} from "@cline/shared";
 import { countUserRunMessages } from "../../session/user-run-messages";
 import type {
 	CoreCompactionContext,
@@ -352,7 +356,10 @@ async function generateThinkingSummary(options: {
 	if (!options.enabled) {
 		return undefined;
 	}
-	const reasoningText = serializeReasoningWithOutcomes(options.messages);
+	const reasoningText = serializeReasoningWithOutcomes(
+		options.messages,
+		options.activeProviderConfig.toolResultFormat,
+	);
 	if (!reasoningText.trim() && !options.previousThinkingSummary?.trim()) {
 		// Nothing was thought and nothing was carried, so there is nothing to be
 		// retrospective about. Common on the first compaction of a session whose
@@ -553,6 +560,9 @@ export async function runAgenticCompaction(options: {
 	// N-1: a spoiled turn at the end is neither kept nor summarised.
 	const messages = withoutTrailingSpoiledTurn(options.context.messages);
 	const continuation = options.continuation;
+	// The conversation's own format: the record a summary is written from
+	// reads its tool results the way the model read them.
+	const toolResultFormat = options.providerConfig.toolResultFormat;
 	const meter = continuation?.meter ?? options.meter;
 	if (messages.length < 2) {
 		return undefined;
@@ -698,7 +708,7 @@ export async function runAgenticCompaction(options: {
 	const keyEntries = ledgerEnabled
 		? mergeToolLedger(
 				evictToolLedger(previousLedgerEntries, ledgerBudgetChars),
-				buildToolLedger(newMessagesToFold),
+				buildToolLedger(newMessagesToFold, { toolResultFormat }),
 			)
 		: [];
 	// Bounded by shortening inputs, never by leaving calls out, and counted in
@@ -793,7 +803,7 @@ export async function runAgenticCompaction(options: {
 	);
 	const conversationText = continuation
 		? ""
-		: serializeConversation(summaryInputBudget.messages);
+		: serializeConversation(summaryInputBudget.messages, toolResultFormat);
 	const mergedUserRequests = mergeUserRequests(
 		previousUserRequests,
 		spanUserRequests,
@@ -810,6 +820,7 @@ export async function runAgenticCompaction(options: {
 						cutIndex,
 						keepRecentMessages,
 						pinnedMessage,
+						toolResultFormat,
 					}),
 				}
 			: {}),
@@ -1153,6 +1164,7 @@ export async function runAgenticCompaction(options: {
 					messages: newMessagesToFold,
 					previousThinkingSummary,
 					maxTokens: retrospectiveMaxTokens,
+					toolResultFormat,
 				}),
 				progress,
 				logger: options.logger,
@@ -1167,6 +1179,7 @@ export async function runAgenticCompaction(options: {
 				summarizerProviderConfig,
 				summarizerInputLimit,
 				messages: newMessagesToFold,
+				toolResultFormat,
 				toolLedgerKey,
 				progress,
 				meter,
@@ -1300,12 +1313,16 @@ export function describeReplaySpan(input: {
 	cutIndex: number;
 	keepRecentMessages: boolean;
 	pinnedMessage?: MessageWithMetadata;
+	toolResultFormat?: ToolResultFormat;
 }): string {
 	if (!input.keepRecentMessages || input.cutIndex >= input.messages.length) {
 		return "The conversation this replay covers is everything above this message.";
 	}
 	const opening = (message: MessageWithMetadata | undefined): string => {
-		const text = serializeConversation(message ? [message] : [])
+		const text = serializeConversation(
+			message ? [message] : [],
+			input.toolResultFormat,
+		)
 			.replace(/\s+/g, " ")
 			.trim();
 		return text.length > 200 ? `${text.slice(0, 200)}…` : text;
@@ -1336,6 +1353,7 @@ async function reviewAsText(input: {
 	summarizerProviderConfig: ProviderConfig;
 	summarizerInputLimit: number;
 	messages: MessageWithMetadata[];
+	toolResultFormat?: ToolResultFormat;
 	toolLedgerKey: string | undefined;
 	progress: CompactionProgress;
 	meter: CompactionMeter | undefined;
@@ -1359,6 +1377,7 @@ async function reviewAsText(input: {
 		thinkingSummary: input.thinkingSummary,
 		serial: Boolean(input.summarizerProviderConfig.engineSessionId),
 		messages: input.messages,
+		toolResultFormat: input.toolResultFormat,
 		maxRequestChars: input.summarizerInputLimit * CHARS_PER_TOKEN,
 		toolLedgerKey: input.toolLedgerKey,
 		generate: (call) => {
@@ -1386,11 +1405,15 @@ function retrospectiveNeed(input: {
 	messages: MessageWithMetadata[];
 	previousThinkingSummary?: string;
 	maxTokens: number;
+	toolResultFormat?: ToolResultFormat;
 }): { chars: number; maxTokens: number } | undefined {
 	if (!input.enabled) {
 		return undefined;
 	}
-	const reasoning = serializeReasoningWithOutcomes(input.messages);
+	const reasoning = serializeReasoningWithOutcomes(
+		input.messages,
+		input.toolResultFormat,
+	);
 	const previous = input.previousThinkingSummary ?? "";
 	if (!reasoning.trim() && !previous.trim()) {
 		return undefined;

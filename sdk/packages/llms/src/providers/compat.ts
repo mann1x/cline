@@ -517,6 +517,7 @@ export function buildGatewayConfig(config: ProviderConfig) {
 		// reasoning replayed none of it, on every setting alike.
 		reasoningHistory: config.reasoningHistory,
 		reasoningInline: config.reasoningInline,
+		toolResultFormat: config.toolResultFormat,
 		options: {
 			sampling: config.sampling,
 			// opencoti: the session and the pool tree these requests belong to.
