@@ -322,11 +322,12 @@ describe("LocalRuntimeHost", () => {
 	// none of them is where it was lost: the lead's config is a list of fields
 	// and the format was not on it, so a `text` session sent JSON.
 	it.each([
-		{ configured: "text" as const, expected: "text" },
-		{ configured: undefined, expected: "json" },
-	])("builds the lead with the pinned tool result format ($expected)", async ({
+		{ configured: "text" as const, expected: "text", staleReadRewrites: false },
+		{ configured: undefined, expected: "json", staleReadRewrites: undefined },
+	])("builds the lead with the session's tool result format and read rewrites ($expected)", async ({
 		configured,
 		expected,
+		staleReadRewrites,
 	}) => {
 		const runtimeBuilder = {
 			build: vi.fn().mockReturnValue({
@@ -345,12 +346,17 @@ describe("LocalRuntimeHost", () => {
 			canStartRun: vi.fn().mockReturnValue(true),
 			shutdown: vi.fn().mockResolvedValue(undefined),
 		};
-		let agentConfig: { toolResultFormat?: string } | undefined;
+		let agentConfig:
+			| { toolResultFormat?: string; staleReadRewrites?: boolean }
+			| undefined;
 		const manager = new RuntimeHostUnderTest({
 			distinctId,
 			sessionService: new FileSessionService(join(isolatedHomeDir, "sessions")),
 			runtimeBuilder: runtimeBuilder as never,
-			createAgent: ((config: { toolResultFormat?: string }) => {
+			createAgent: ((config: {
+				toolResultFormat?: string;
+				staleReadRewrites?: boolean;
+			}) => {
 				agentConfig = config;
 				return agent;
 			}) as never,
@@ -358,14 +364,18 @@ describe("LocalRuntimeHost", () => {
 
 		await manager.startSession(
 			normalizeStartInput({
-				config: createConfig(
-					configured ? { toolResultFormat: configured } : {},
-				),
+				config: createConfig({
+					...(configured ? { toolResultFormat: configured } : {}),
+					...(staleReadRewrites === false ? { staleReadRewrites } : {}),
+				}),
 				prompt: "hello",
 			}),
 		);
 
 		expect(agentConfig?.toolResultFormat).toBe(expected);
+		// The same list dropped this one: a council session's lead had its
+		// reads rewritten while its agents did not.
+		expect(agentConfig?.staleReadRewrites).toBe(staleReadRewrites);
 		await manager.dispose();
 	});
 

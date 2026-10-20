@@ -2443,6 +2443,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 			// builder never saw it: a `text` session was recorded as `text` and
 			// sent JSON.
 			toolResultFormat: configWithProvider.toolResultFormat,
+			// Off this list too, so a council session's "never rewrite a read"
+			// held for its agents and not for the lead, whose history is the
+			// one the council reviews.
+			staleReadRewrites: configWithProvider.staleReadRewrites,
 			temperature: configWithProvider.temperature,
 			systemPrompt: configWithProvider.systemPrompt,
 			maxIterations: configWithProvider.maxIterations,
