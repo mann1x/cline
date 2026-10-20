@@ -99,7 +99,7 @@ Fetch web pages and extract information using a prompt. Each request needs a `ur
 Output: one object per request — `{query, result, success, error?}`. `query` is the URL. `result` is the extracted text for your prompt. A failed entry has `success: false` with the reason in `error`.
 
 # tool: editor
-Make precise edits to a single text file at `path`. Six modes, chosen by which arguments you send:
+Make precise edits to a single text file at `file_path`. Six modes, chosen by which arguments you send:
 
 - Replace text: `old_text` plus `new_text`. When `old_text` occurs more than once, add `occurrence` (one-based, in file order) to pick one, or `replace_all: true` to change every one.
 - Replace lines: `start_line` plus `new_text`, with optional `end_line` (inclusive, defaults to `start_line`). No `old_text` needed. Prefer this when the text is long, minified or repeated: a diagnostic already gives you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.
@@ -107,7 +107,7 @@ Make precise edits to a single text file at `path`. Six modes, chosen by which a
 - Insert: `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF. Add `insert_column` to insert inside that line instead, before the character at that column — this is how you add one missing bracket, with `line_length + 1` appending at the end of the line.
 - Create or replace whole: `new_text` alone. Creates the file when it does not exist; replaces every line when it does, which needs the file read first. No size limit on this one — a file written whole cannot be split. Never `rm` a file to write it fresh: this is that, and a deleted file is gone if the turn ends first.
 
-Write the arguments in this order: `path` and every other short argument first — line and column numbers, `intent`, `task_progress`, `old_text` — and `new_text` last. The text you are writing is the long part of the call, and whatever is written after a long text is the part most easily left out.
+Write the arguments in this order: `file_path` and every other short argument first — line and column numbers, `intent`, `task_progress`, `old_text` — and `new_text` last. The text you are writing is the long part of the call, and whatever is written after a long text is the part most easily left out.
 Use this rather than a shell command for anything that changes a file. Make one edit at a time and check it before starting the next: reads and searches cost nothing if one turns out to be unnecessary, but several edits made together and checked once leave several things to undo and no way to tell which one was wrong.
 
 Read the lines you are about to change before you change them: an edit aimed at a range you have not read in its current state is refused. Your own edits count — one that changes the file's length moves every line below it, so read that region again before editing it a second time. Line numbers from an earlier turn, from a task summary, or from a diagnostic issued before your last edit are the ones that go stale.

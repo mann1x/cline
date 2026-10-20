@@ -1,4 +1,5 @@
 import { basename, extname } from "node:path";
+import { editorFilePath } from "@cline/shared";
 import { hunkHeader } from "./diff";
 
 const EXT_TO_LANGUAGE: Record<string, string> = {
@@ -134,11 +135,12 @@ export interface EditorInfo {
 
 export function parseEditorInput(input: unknown): EditorInfo | undefined {
 	if (!isRecord(input)) return undefined;
-	if (typeof input.path !== "string") return undefined;
+	const path = editorFilePath(input);
+	if (path === undefined) return undefined;
 	if (typeof input.new_text !== "string") return undefined;
 
 	return {
-		path: input.path,
+		path,
 		oldText: typeof input.old_text === "string" ? input.old_text : undefined,
 		newText: input.new_text,
 		insertLine:

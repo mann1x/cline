@@ -22,7 +22,7 @@ import { appendFileSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { describeDelimiterBalance } from "@cline/core"
-import type { AgentAfterToolContext, AgentBeforeToolContext, AgentHooks } from "@cline/shared"
+import { type AgentAfterToolContext, type AgentBeforeToolContext, type AgentHooks, editorFilePath } from "@cline/shared"
 import { getNewDiagnostics, singleFileDiagnosticsToProblemsString } from "@integrations/diagnostics"
 import * as path from "path"
 import { HostProvider } from "@/hosts/host-provider"
@@ -132,8 +132,8 @@ export interface EditorDiagnosticsOptions {
  */
 export function readTargetPaths(toolName: string, input: unknown): string[] {
 	if (toolName === "editor") {
-		const filePath = (input as { path?: unknown } | undefined)?.path
-		return typeof filePath === "string" && filePath.trim() !== "" ? [filePath] : []
+		const filePath = editorFilePath(input)
+		return filePath !== undefined && filePath.trim() !== "" ? [filePath] : []
 	}
 	if (toolName !== "apply_patch") {
 		return []

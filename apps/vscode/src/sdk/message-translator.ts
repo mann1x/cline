@@ -44,6 +44,7 @@ import {
 } from "@cline/llms"
 import {
 	type AgentEvent,
+	editorFilePath,
 	formatDisplayUserInput,
 	isToolInputProgressUpdate,
 	type ProviderErrorClass,
@@ -1891,7 +1892,8 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown, context?: Rang
 
 		case "editor":
 		case "replace_in_file": {
-			const filePath = getStringField(parsedInput, "path") ?? ""
+			// `editor` names its file `file_path` (`path` until 2026-10-20).
+			const filePath = editorFilePath(parsedInput) ?? ""
 			const newText =
 				getStringField(parsedInput, "new_text") ??
 				getStringField(parsedInput, "new_str") ??

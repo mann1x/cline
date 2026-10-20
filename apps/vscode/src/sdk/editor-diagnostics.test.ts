@@ -40,6 +40,8 @@ function diagnostic(overrides: Partial<FileDiagnostics["diagnostics"][number]> =
 describe("readTargetPaths", () => {
 	it("reads the editor tool's path", () => {
 		expect(readTargetPaths("editor", { path: "src/app.ts" })).toEqual(["src/app.ts"])
+		expect(readTargetPaths("editor", { file_path: "src/app.ts" })).toEqual(["src/app.ts"])
+		expect(readTargetPaths("editor", { path: "src/old.ts", file_path: "src/app.ts" })).toEqual(["src/app.ts"])
 		expect(readTargetPaths("editor", { path: "   " })).toEqual([])
 		expect(readTargetPaths("editor", {})).toEqual([])
 	})

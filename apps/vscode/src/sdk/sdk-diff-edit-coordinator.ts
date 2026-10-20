@@ -9,7 +9,7 @@ import {
 	PatchActionType,
 	type ReadReceipts,
 } from "@cline/core"
-import type { AgentToolContext } from "@cline/shared"
+import { type AgentToolContext, editorFilePath } from "@cline/shared"
 import * as fs from "fs/promises"
 import * as path from "path"
 import { HostProvider } from "@/hosts/host-provider"
@@ -110,7 +110,10 @@ export class SdkDiffEditCoordinator {
 		}
 		try {
 			if (toolName === "editor") {
-				await this.openEditorPreview(toolCallId, input as EditFileInput)
+				// The call as the model wrote it, before the tool resolved its
+				// file: the model names it `file_path`, the executor `path`.
+				const path = editorFilePath(input)
+				await this.openEditorPreview(toolCallId, { ...(input as EditFileInput), ...(path ? { path } : {}) })
 			} else if (toolName === "apply_patch") {
 				await this.openPatchPreview(toolCallId, input as ApplyPatchInput)
 			}

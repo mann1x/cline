@@ -236,18 +236,18 @@ Changes or creates one text file. Use this, never the shell, for anything that w
 
 Which arguments you send decides what the call does. Use one form per call; don't mix `old_text` with a line range.
 
-Write the arguments in this order: `path` and every other short argument first — line and column numbers, `intent`, `task_progress`, `old_text` — and `new_text` last. The text you are writing is the long part of the call, and whatever is written after a long text is the part most easily left out.
+Write the arguments in this order: `file_path` and every other short argument first — line and column numbers, `intent`, `task_progress`, `old_text` — and `new_text` last. The text you are writing is the long part of the call, and whatever is written after a long text is the part most easily left out.
 
-1. Replace text: `path`, `old_text`, `new_text`. `old_text` must match exactly, whitespace and indentation included. If it occurs more than once, add `occurrence` (one-based, in file order) to pick one, or `replace_all: true` for all of them.
-2. Replace lines: `path`, `start_line`, `new_text`, optional `end_line` (inclusive, defaults to `start_line`). Best where the text is long, minified or repeated, because a line number cannot be ambiguous. An empty `new_text` deletes the range.
-3. Replace characters: `path`, `start_line`, `start_column`, `new_text`, optional `end_line`/`end_column` (inclusive, each defaulting to its start). This is the unit a diagnostic speaks in — `line 12, column 640` — and on a minified line it is the only form that leaves the other 400 characters alone. `start_column` alone replaces exactly one character.
-4. Insert lines: `path`, `insert_line`, `new_text`. The text goes in before that line and nothing is replaced. `insert_line` = line count + 1 appends at end of file.
-5. Insert within a line: `path`, `insert_line`, `insert_column`, `new_text`. The text goes in before the character at that column — this is how you add one missing bracket. `insert_column` = line length + 1 appends at end of line.
-6. Create, or overwrite whole: `path` and `new_text` only. Creates the file if absent; if present, replaces all of it, which is allowed only once you have read it, since reading is what tells you what you are discarding. (`start_line: 1` with `end_line: <last line>` is the same write.) No size limit. Reach for it only after a targeted edit has failed — a whole-file rewrite that is slightly off silently loses the parts you never meant to touch. Never delete a file to get a clean slate: this form already is one, and a deleted file stays gone if the turn ends before you write it back.
+1. Replace text: `file_path`, `old_text`, `new_text`. `old_text` must match exactly, whitespace and indentation included. If it occurs more than once, add `occurrence` (one-based, in file order) to pick one, or `replace_all: true` for all of them.
+2. Replace lines: `file_path`, `start_line`, `new_text`, optional `end_line` (inclusive, defaults to `start_line`). Best where the text is long, minified or repeated, because a line number cannot be ambiguous. An empty `new_text` deletes the range.
+3. Replace characters: `file_path`, `start_line`, `start_column`, `new_text`, optional `end_line`/`end_column` (inclusive, each defaulting to its start). This is the unit a diagnostic speaks in — `line 12, column 640` — and on a minified line it is the only form that leaves the other 400 characters alone. `start_column` alone replaces exactly one character.
+4. Insert lines: `file_path`, `insert_line`, `new_text`. The text goes in before that line and nothing is replaced. `insert_line` = line count + 1 appends at end of file.
+5. Insert within a line: `file_path`, `insert_line`, `insert_column`, `new_text`. The text goes in before the character at that column — this is how you add one missing bracket. `insert_column` = line length + 1 appends at end of line.
+6. Create, or overwrite whole: `file_path` and `new_text` only. Creates the file if absent; if present, replaces all of it, which is allowed only once you have read it, since reading is what tells you what you are discarding. (`start_line: 1` with `end_line: <last line>` is the same write.) No size limit. Reach for it only after a targeted edit has failed — a whole-file rewrite that is slightly off silently loses the parts you never meant to touch. Never delete a file to get a clean slate: this form already is one, and a deleted file stays gone if the turn ends before you write it back.
 
-{"path": "/abs/src/app.ts", "old_text": "const retries = 3;", "new_text": "const retries = 5;"}
-{"path": "/abs/src/app.ts", "start_line": 40, "end_line": 44, "new_text": "  return cached;\n"}
-{"path": "/abs/src/app.ts", "insert_line": 12, "insert_column": 640, "new_text": "]"}
+{"file_path": "/abs/src/app.ts", "old_text": "const retries = 3;", "new_text": "const retries = 5;"}
+{"file_path": "/abs/src/app.ts", "start_line": 40, "end_line": 44, "new_text": "  return cached;\n"}
+{"file_path": "/abs/src/app.ts", "insert_line": 12, "insert_column": 640, "new_text": "]"}
 
 Rules the tool enforces:
 - An edit addressed by line number (forms 2–5) must fall inside lines you have read. An edit that changes the file's line count invalidates those reads, because every line below it moved. For the next edit to that file, either use `old_text` (form 1 only needs the file read at some point) or read the region again. Line numbers from an earlier turn, from a task summary, or from a diagnostic issued before your last edit go stale the same way.

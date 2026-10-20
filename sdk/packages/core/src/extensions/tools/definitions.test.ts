@@ -2572,12 +2572,12 @@ describe("an editor call refused for a missing argument", () => {
 
 	it("says what the call did carry, so the model can tell which one it was", async () => {
 		const message = await refusal({
-			path: "/w/game.html",
+			file_path: "/w/game.html",
 			start_line: 95,
 			end_line: 291,
 		});
 
-		expect(message).toContain("The call carried: `path`");
+		expect(message).toContain("`file_path`");
 		expect(message).toContain("`start_line`");
 		expect(message).toContain("`end_line`");
 	});
@@ -2598,14 +2598,14 @@ describe("an editor call refused for a missing argument", () => {
 
 	// The tool that fills in the file a model forgot to name is the tool that
 	// edits the wrong one.
-	it("proposes no path of its own when path is what is missing", async () => {
+	it("proposes no path of its own when the file is what is missing", async () => {
 		const message = await refusal({
 			start_line: 96,
 			end_line: 97,
 			new_text: "  sX(){return -1;}",
 		});
 
-		expect(message).toContain("Missing required argument `path`");
+		expect(message).toContain("Missing required argument `file_path`");
 		expect(message).toContain("never inferred");
 		expect(message).not.toContain("/w/");
 	});
@@ -2626,5 +2626,60 @@ describe("an editor call refused for a missing argument", () => {
 
 		expect((result as { success: boolean }).success).toBe(true);
 		expect(seen).toHaveLength(1);
+	});
+});
+
+// Gemma 4's template renders a call's arguments sorted by name, and the model
+// writes them the way it is shown them: `path` came after `new_text`, and a
+// long call ended before it (pandorum, 2026-10-20). `file_path` sorts first.
+describe("the editor's file argument is file_path", () => {
+	async function run(input: unknown): Promise<EditFileInput[]> {
+		const seen: EditFileInput[] = [];
+		const execute: EditorExecutor = async (resolved) => {
+			seen.push(resolved);
+			return "Replaced line 3";
+		};
+		const tool = createEditorTool(execute, { cwd: "/w" });
+		await tool.execute(input as EditFileInput, {} as never);
+		return seen;
+	}
+
+	it("is what the model is shown, first and required, with no path beside it", () => {
+		const tool = createEditorTool(async () => "edited", { cwd: "/w" });
+		const schema = tool.inputSchema as {
+			properties: Record<string, unknown>;
+			required: string[];
+		};
+		const names = Object.keys(schema.properties);
+		expect(names[0]).toBe("file_path");
+		expect(names).not.toContain("path");
+		expect(schema.required).toContain("file_path");
+		expect(["file_path", "new_text"].sort()[0]).toBe("file_path");
+	});
+
+	it("hands the executor the file as path", async () => {
+		const seen = await run({
+			file_path: "/w/a.ts",
+			start_line: 3,
+			new_text: "x",
+		});
+		expect(seen).toHaveLength(1);
+		expect(seen[0]?.path).toBe("/w/a.ts");
+		expect(seen[0]).not.toHaveProperty("file_path");
+	});
+
+	it("still edits the file a call names with the old path", async () => {
+		const seen = await run({ path: "/w/a.ts", start_line: 3, new_text: "x" });
+		expect(seen[0]?.path).toBe("/w/a.ts");
+	});
+
+	it("takes file_path when a call carries both", async () => {
+		const seen = await run({
+			path: "/w/old.ts",
+			file_path: "/w/a.ts",
+			start_line: 3,
+			new_text: "x",
+		});
+		expect(seen[0]?.path).toBe("/w/a.ts");
 	});
 });

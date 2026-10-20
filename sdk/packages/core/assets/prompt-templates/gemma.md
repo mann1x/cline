@@ -107,7 +107,7 @@ Retrieve and analyze web pages.
 # tool: editor
 Precise text edits or file creation. This is the primary tool for writing files. Never use shell redirects (`>`) or `sed`.
 - **Arguments:** 
-    - `path`: Absolute path to the file.
+    - `file_path`: Absolute path to the file.
     - `new_text`: The text to insert or replace.
     - `old_text` (Optional): The exact text to be replaced. Must match indentation perfectly.
     - `insert_line` (Optional): 1-based line number to insert `new_text` before.

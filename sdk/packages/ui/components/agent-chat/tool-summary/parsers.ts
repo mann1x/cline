@@ -1,4 +1,4 @@
-import { validateImageMedia } from "@cline/shared/browser";
+import { editorFilePath, validateImageMedia } from "@cline/shared/browser";
 import { FRAGMENT_HUNK_HEADER, hunkHeader } from "./diff.js";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -128,11 +128,12 @@ export interface EditorInfo {
 export function parseEditorInput(input: unknown): EditorInfo | undefined {
 	const normalized = normalizeValue(input);
 	if (!isRecord(normalized)) return undefined;
-	if (typeof normalized.path !== "string") return undefined;
+	const path = editorFilePath(normalized);
+	if (path === undefined) return undefined;
 	if (typeof normalized.new_text !== "string") return undefined;
 
 	return {
-		path: normalized.path,
+		path,
 		oldText:
 			typeof normalized.old_text === "string" ? normalized.old_text : undefined,
 		newText: normalized.new_text,

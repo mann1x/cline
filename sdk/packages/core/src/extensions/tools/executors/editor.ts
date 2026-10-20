@@ -2455,8 +2455,8 @@ export function createEditorExecutor(
 					? "an earlier edit changed the file's length, so what you read is no longer where you read it"
 					: "not all of it has been read in this session";
 				throw new Error(
-					`Read before replacing: this call replaces every one of the ${lineCount} line(s) in ${filePath}, and ${why}. The file was not modified. Call \`read_files\` for ${filePath} — all of it, since all of it is what you are replacing — then send this call again with \`path: "${filePath}"\` and the \`new_text\` the whole file should end up as. ` +
-						`Changing part of it is cheaper and safer: read around the lines you mean to change, then send \`path\`, \`start_line\`, \`end_line\` and the \`new_text\` for just those lines.`,
+					`Read before replacing: this call replaces every one of the ${lineCount} line(s) in ${filePath}, and ${why}. The file was not modified. Call \`read_files\` for ${filePath} — all of it, since all of it is what you are replacing — then send this call again with \`file_path: "${filePath}"\` and the \`new_text\` the whole file should end up as. ` +
+						`Changing part of it is cheaper and safer: read around the lines you mean to change, then send \`file_path\`, \`start_line\`, \`end_line\` and the \`new_text\` for just those lines.`,
 				);
 			}
 			requireRangeUncut(filePath, 1, lineCount);

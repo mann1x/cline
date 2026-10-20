@@ -5,6 +5,7 @@
  * and are used for both validation and JSON Schema generation.
  */
 
+import { EDITOR_FILE_PATH_ARG } from "@cline/shared";
 import { z } from "zod";
 
 export const INPUT_ARG_CHAR_LIMIT = 6000;
@@ -797,9 +798,9 @@ export function describeEditorArgumentGap(value: unknown): string | null {
 			'`new_text` is what goes into the region you addressed, and every form of this call needs it — a deletion included. To delete that region rather than replace it, send `new_text: ""`.',
 		);
 	}
-	if (!has("path")) {
+	if (!has(EDITOR_FILE_PATH_ARG)) {
 		notes.push(
-			"`path` is the one file this call edits. It is not carried over from an earlier call and is never inferred, so a call without it is not aimed at anything.",
+			"`file_path` is the one file this call edits. It is not carried over from an earlier call and is never inferred, so a call without it is not aimed at anything.",
 		);
 	}
 	const readArgs = READ_FILES_ARGS.filter(has);
@@ -899,6 +900,50 @@ export const EditFileInputSchema = z
 	.describe(
 		"Edit a text file by replacing old_text with new_text, by replacing the start_line..end_line range with new_text, by creating the file with new_text if it does not exist, or by inserting new_text at insert_line. Prefer using this tool for file edits over shell commands. IMPORTANT: large edits can time out, so use small chunks and multiple calls when possible.",
 	);
+
+/**
+ * The editor's arguments as the model is shown them and writes them.
+ *
+ * The same arguments as {@link EditFileInputSchema}, with the file named
+ * `file_path` rather than `path` and listed first. `file_path` sorts before
+ * `new_text`, which `path` did not, and a template that renders a call's
+ * arguments by name puts it there: see `editorFilePath` in `@cline/shared`
+ * for the runs this comes from. The executor still takes `path`;
+ * {@link toEditFileInput} is the one place the two meet.
+ */
+export const EditorToolInputSchema = z
+	.object({
+		[EDITOR_FILE_PATH_ARG]: EditFileInputSchema.shape.path,
+		...EditFileInputSchema.omit({ path: true }).shape,
+	})
+	.describe(EditFileInputSchema.description ?? "");
+
+export type EditorToolInput = z.infer<typeof EditorToolInputSchema>;
+
+/**
+ * A call that names its file with the old `path` is still aimed at that
+ * file. Applied before validation, like {@link withNewTextAlias}, so the
+ * schema the model is shown names one argument. `file_path` wins when both
+ * are present.
+ */
+export function withFilePathAlias(value: unknown): unknown {
+	if (value == null || typeof value !== "object" || Array.isArray(value)) {
+		return value;
+	}
+	const input = value as Record<string, unknown>;
+	if (!("path" in input)) {
+		return value;
+	}
+	const { path, ...rest } = input;
+	return rest[EDITOR_FILE_PATH_ARG] === undefined
+		? { ...rest, [EDITOR_FILE_PATH_ARG]: path }
+		: rest;
+}
+
+export function toEditFileInput(input: EditorToolInput): EditFileInput {
+	const { file_path, ...rest } = input;
+	return { path: file_path, ...rest };
+}
 
 /**
  * Schema for apply_patch tool input

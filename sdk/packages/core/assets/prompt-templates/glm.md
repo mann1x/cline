@@ -83,7 +83,7 @@ Output: one object per request, in order — `{query, result, success, error?}`.
 {{DEFAULT}}
 
 # tool: editor
-Edits the text file at `path` (absolute). This, or `apply_patch`, is how a file gets changed — never `sed -i`, `echo >`, or a heredoc through `run_commands`.
+Edits the text file at `file_path` (absolute). This, or `apply_patch`, is how a file gets changed — never `sed -i`, `echo >`, or a heredoc through `run_commands`.
 
 What you send decides what it does:
 - Change some text: `old_text` + `new_text`. `old_text` must match exactly, indentation included. If it occurs more than once, add `occurrence` (one-based, in file order) to pick which one, or `replace_all: true` to change every one.

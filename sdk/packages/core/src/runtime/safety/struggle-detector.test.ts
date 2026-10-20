@@ -504,7 +504,8 @@ describe("driving the detector from the session's own events", () => {
 			type: "content_start",
 			contentType: "tool",
 			toolName: "editor",
-			input: { path: "src/board.js" },
+			// The name the schema asks for; the first call used the old one.
+			input: { file_path: "src/board.js" },
 		});
 		expect(detector.inspect({ iteration: 25 }).kind).toBe("suggest");
 	});

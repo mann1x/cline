@@ -28,7 +28,7 @@
  * earns an offer of help, and in what words, belongs to the caller.
  */
 
-import type { AgentEvent } from "@cline/shared";
+import { type AgentEvent, editorFilePath } from "@cline/shared";
 
 /** Iterations of history the trigger reads. */
 export const STRUGGLE_WINDOW = 10;
@@ -935,12 +935,10 @@ export function createStruggleFeed(
 					) {
 						return;
 					}
-					const input = event.input;
-					const path =
-						input && typeof input === "object"
-							? (input as { path?: unknown }).path
-							: undefined;
-					if (typeof path === "string" && path !== "") {
+					// `editor` names its file `file_path`; `apply_patch` and
+					// `restore_file` still say `path`. Both are read.
+					const path = editorFilePath(event.input);
+					if (path !== undefined) {
 						detector.noteFileChanged(path);
 					}
 					return;

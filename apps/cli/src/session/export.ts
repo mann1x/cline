@@ -786,7 +786,9 @@ function renderToolUseHTML(
 
 	const hasOldNew =
 		input.old_string !== undefined && input.new_string !== undefined;
-	const hasPathDiff = input.path !== undefined && input.new_text !== undefined;
+	const hasPathDiff =
+		(input.file_path !== undefined || input.path !== undefined) &&
+		input.new_text !== undefined;
 
 	if (isEdit && (hasOldNew || hasPathDiff)) {
 		const oldText = String(input.old_string ?? input.old_text ?? "");

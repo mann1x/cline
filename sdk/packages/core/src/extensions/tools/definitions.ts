@@ -53,7 +53,7 @@ import {
 	type AwkToolInput,
 	describeEditorArgumentGap,
 	type EditFileInput,
-	EditFileInputSchema,
+	EditorToolInputSchema,
 	type ExtractDocumentInput,
 	ExtractDocumentInputSchema,
 	type FetchWebContentInput,
@@ -78,6 +78,8 @@ import {
 	type StructuredCommandInput,
 	type SubmitInput,
 	SubmitInputSchema,
+	toEditFileInput,
+	withFilePathAlias,
 	withNewTextAlias,
 } from "./schemas";
 import {
@@ -1001,7 +1003,7 @@ export function createEditorTool(
 	return createTool<EditFileInput, ToolOperationResult>({
 		name: "editor",
 		description:
-			"An editor for controlled filesystem edits on the text file at the provided path. It does six things, chosen by which arguments you send:\n" +
+			"An editor for controlled filesystem edits on the text file at `file_path`. It does six things, chosen by which arguments you send:\n" +
 			"- Replace text: `old_text` plus `new_text`. When `old_text` occurs more than once, add `occurrence` (one-based, in file order) to pick one, or `replace_all: true` to change every one.\n" +
 			"- Replace lines: `start_line` plus `new_text`, with optional `end_line` (inclusive, defaults to `start_line`). No `old_text` needed. Prefer this when the text is long, minified or repeated: a diagnostic already gives you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.\n" +
 			"- Replace characters: `start_line` and `start_column` plus `new_text`, with optional `end_line`/`end_column` (both inclusive; each defaults to its start). This is the unit a diagnostic speaks in — `Line 12, column 640` — and on a long or minified line it is the only edit that leaves the other 400 characters untouched. `start_column` on its own replaces exactly one character.\n" +
@@ -1014,14 +1016,14 @@ export function createEditorTool(
 			// of 8 calls that arrived without `path` followed a `new_text` of
 			// 10,000 to 41,000 characters, and 15 of 21 unreadable calls broke
 			// on the delimiter that closes it.
-			"Write the arguments in this order: `path` and every other short argument first — line and column numbers, `intent`, `task_progress`, `old_text` — and `new_text` last. The text you are writing is the long part of the call, and whatever is written after a long text is the part most easily left out.\n" +
+			"Write the arguments in this order: `file_path` and every other short argument first — line and column numbers, `intent`, `task_progress`, `old_text` — and `new_text` last. The text you are writing is the long part of the call, and whatever is written after a long text is the part most easily left out.\n" +
 			"Use this rather than a shell command for anything that changes a file. Make one edit at a time and check it before starting the next: reads and searches cost nothing if one turns out to be unnecessary, but several edits made together and checked once leave several things to undo and no way to tell which one was wrong. " +
 			"Read the lines you are about to change before you change them: an edit aimed at a range you have not read in its current state is refused. Your own edits count — one that changes the file's length moves every line below it, so read that region again before editing it a second time. Line numbers taken from an earlier turn, from a task summary, or from a diagnostic issued before your last edit are the ones that go stale. " +
 			"Repeating the lines already in the range and then continuing is how you insert after them, and it is allowed — the range says which lines you mean, so repeating them is your own choice. What is refused is a `new_text` that goes on to repeat lines from *outside* the range: that appends a second copy of text already elsewhere in the file rather than replacing anything, and the refusal names the lines it matched so you can aim the next call at them. " +
 			"Output: a single `{query, result, success, error?}` object for this one edit, where `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. " +
 			"A failed edit changes nothing: `success` is false, `error` says why, and the file is exactly as it was. Do not resend the same call — `error` names the fix. In particular, text copied out of a `read_files` result must have its `123 | ` line-number gutter removed first.",
 
-		inputSchema: zodToJsonSchema(EditFileInputSchema),
+		inputSchema: zodToJsonSchema(EditorToolInputSchema),
 		timeoutMs,
 		retryable: false, // Editing operations are stateful and should not auto-retry
 		maxRetries: 0,
@@ -1030,11 +1032,15 @@ export function createEditorTool(
 			// JSON Schema the model is shown still advertises exactly one name
 			// for this argument. The alias is a landing net, not a second way
 			// of calling the tool.
-			const aliased = withNewTextAlias(input);
+			// `path` is the name the file went by until 2026-10-20; see
+			// `EditorToolInputSchema`.
+			const aliased = withFilePathAlias(withNewTextAlias(input));
 			// Only on the way out: a call that validates has nothing to be told.
 			const validatedInput = ((): EditFileInput => {
 				try {
-					return validateWithZod(EditFileInputSchema, aliased);
+					return toEditFileInput(
+						validateWithZod(EditorToolInputSchema, aliased),
+					);
 				} catch (error) {
 					const gap = describeEditorArgumentGap(aliased);
 					throw gap
