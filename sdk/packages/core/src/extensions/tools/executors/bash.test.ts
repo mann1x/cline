@@ -1182,16 +1182,21 @@ describe("createShellExecutor with inherited stdio", () => {
 					token: `test-process-${pid}`,
 				}),
 			});
-			// The shell stays in the foreground for a second (so the command
-			// can be detached first), then exits while the backgrounded sleep -
-			// which outlives the whole test - still holds the stdio pipes, so
-			// 'close' can never arrive within the assertion window.
+			// The shell stays in the foreground until the test has detached it
+			// and created the gate file, then exits while the backgrounded sleep
+			// - which outlives the whole test - still holds the stdio pipes, so
+			// 'close' can never arrive within the assertion window. A fixed
+			// sleep here raced the detach: under a loaded suite the shell could
+			// exit first, and an exited command cannot be detached. The wait is
+			// bounded so a failed run does not leave the shell spinning.
+			const gateDirectory = await mkdtemp(join(tmpdir(), "detach-bg-gate-"));
+			const gate = join(gateDirectory, "go").replace(/\\/g, "/");
 			const execution = executor(
 				{
 					command: bashShell,
 					args: [
 						"-c",
-						`sleep 30 & echo started; sleep 1; ${terminateBySignal ? "kill -TERM $$" : "exit 0"}`,
+						`sleep 30 & echo started; i=0; while [ ! -e "${gate}" ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i + 1)); done; ${terminateBySignal ? "kill -TERM $$" : "exit 0"}`,
 					],
 				},
 				process.cwd(),
@@ -1213,28 +1218,37 @@ describe("createShellExecutor with inherited stdio", () => {
 				},
 			);
 
-			await readyToDetach;
-			expect(
-				controller.proceedWhileRunning("session-detach-bg", "call-detach-bg"),
-			).toBe(1);
-			const result = await execution;
-			expect(result).toContain("started");
-			// The detach notice names the log file the rest of the output goes to.
-			const logPath = /Output will continue in (.+?)\]/.exec(result)?.[1];
-			expect(logPath).toBeDefined();
+			try {
+				await readyToDetach;
+				expect(
+					controller.proceedWhileRunning("session-detach-bg", "call-detach-bg"),
+				).toBe(1);
+				const result = await execution;
+				expect(result).toContain("started");
+				// The detach notice names the log file the rest of the output goes to.
+				const logPath = /Output will continue in (.+?)\]/.exec(result)?.[1];
+				expect(logPath).toBeDefined();
+				await writeFile(gate, "");
 
-			const completedAtPath = join(dirname(logPath as string), "completed-at");
-			const deadline = Date.now() + 10_000;
-			while (!(await fileExists(completedAtPath)) && Date.now() < deadline) {
-				await new Promise((resolve) => setTimeout(resolve, 100));
+				const completedAtPath = join(
+					dirname(logPath as string),
+					"completed-at",
+				);
+				const deadline = Date.now() + 10_000;
+				while (!(await fileExists(completedAtPath)) && Date.now() < deadline) {
+					await new Promise((resolve) => setTimeout(resolve, 100));
+				}
+				const logText = await readFile(logPath as string, "utf8");
+				expect(logText).toContain(
+					terminateBySignal
+						? "[Command terminated by signal SIGTERM]"
+						: "[Command exited with code 0]",
+				);
+				expect(await fileExists(completedAtPath)).toBe(true);
+			} finally {
+				await writeFile(gate, "");
+				await rm(gateDirectory, { recursive: true, force: true });
 			}
-			const logText = await readFile(logPath as string, "utf8");
-			expect(logText).toContain(
-				terminateBySignal
-					? "[Command terminated by signal SIGTERM]"
-					: "[Command exited with code 0]",
-			);
-			expect(await fileExists(completedAtPath)).toBe(true);
 		},
 	);
 });
