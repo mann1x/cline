@@ -130,7 +130,7 @@ An editor for controlled filesystem edits on the text file at `path`. Six operat
 
 1. **Replace text** — `old_text` plus `new_text`. When `old_text` occurs more than once, add `occurrence` (one-based, in file order) to pick one, or `replace_all: true` to change every one.
 2. **Replace lines** — `start_line` plus `new_text`, with optional `end_line` (inclusive, defaults to `start_line`). No `old_text` needed. Prefer this when the text is long, minified or repeated: a diagnostic already gives you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.
-3. **Replace characters** — `start_line` and `start_column` plus `new_text`, with optional `end_line`/`end_column` (both inclusive; each defaults to its start). This is the unit a diagnostic speaks in — `Line 108, column 385` — and on a long or minified line it is the only edit that leaves the other 400 characters untouched. `start_column` on its own replaces exactly one character.
+3. **Replace characters** — `start_line` and `start_column` plus `new_text`, with optional `end_line`/`end_column` (both inclusive; each defaults to its start). This is the unit a diagnostic speaks in — `Line 12, column 640` — and on a long or minified line it is the only edit that leaves the other 400 characters untouched. `start_column` on its own replaces exactly one character.
 4. **Insert** — `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF. Add `insert_column` to insert *within* that line, before the character at that column — this is how you add one missing bracket. Use `line_length + 1` to append at the end of the line.
 5. **Create or replace a file whole** — `new_text` alone. When the file does not exist this creates it; when it exists this replaces every line, which is allowed once you have read the file, since reading it is what tells you what you are overwriting. `start_line: 1` with `end_line: <line count>` is the same write by another name. Neither has a size limit, because a file written whole cannot be split — but reach for a whole-file write only once a targeted edit has failed, since a rewrite that is slightly wrong quietly loses the parts you did not mean to touch. Never delete a file to get a clean slate: this call already is one, and a deleted file is simply gone if the turn ends before you write it back.
 
@@ -230,7 +230,7 @@ List files in the workspace. Call shape: `list_files({path?: string, pattern?: s
 
 Two ways to ask:
 - `path` — list what is directly inside one directory. Omit to list the workspace root.
-- `pattern` — a glob searched across the whole workspace, e.g. `**/*.html`, `src/**/*.ts`, `**/manic_miner.*`. Use this when you know part of a name but not where it lives.
+- `pattern` — a glob searched across the whole workspace, e.g. `**/*.html`, `src/**/*.ts`, `**/config.*`. Use this when you know part of a name but not where it lives.
 
 Results are limited to the workspace folders the user opened, and directories the user's settings exclude from search — `node_modules`, `.git`, build output — are left out. A path outside the workspace is refused rather than listed.
 

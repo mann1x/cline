@@ -1258,7 +1258,7 @@ const DEFAULT_USER_REQUEST_BUDGET_CHARS = 6_000;
  * task is usually the first thing typed and the steering is usually the last,
  * and there is no general rule about which of them the next turn needs.
  */
-function renderUserRequests(
+export function renderUserRequests(
 	requests: readonly string[],
 	budgetChars?: number,
 ): string[] {

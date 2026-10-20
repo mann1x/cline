@@ -1888,6 +1888,55 @@ export class AgentRuntime {
 		return kinds === undefined || kinds.includes(kind);
 	}
 
+	/**
+	 * What the user typed, oldest first, as far as the transcript still holds
+	 * it: a compaction summary's own record of the requests it replaced, then
+	 * every turn the user started since. Harness messages and tool results are
+	 * not requests.
+	 */
+	private userRequestsInTranscript(): string[] {
+		const requests: string[] = [];
+		const add = (value: unknown) => {
+			const request = typeof value === "string" ? value.trim() : "";
+			if (request && !requests.includes(request)) {
+				requests.push(request);
+			}
+		};
+		for (const message of this.state.messages) {
+			if (message.role !== "user") {
+				continue;
+			}
+			const metadata = message.metadata as
+				| { kind?: unknown; userRequests?: unknown; userRunSpan?: unknown }
+				| undefined;
+			if (metadata?.kind === "compaction_summary") {
+				if (Array.isArray(metadata.userRequests)) {
+					for (const request of metadata.userRequests) {
+						add(request);
+					}
+				}
+				continue;
+			}
+			if (
+				metadata?.userRunSpan === 0 ||
+				message.content.some((part) => part.type === "tool-result")
+			) {
+				continue;
+			}
+			add(
+				message.content
+					.filter(
+						(part): part is AgentMessagePart & { text: string } =>
+							part.type === "text" &&
+							typeof (part as { text?: unknown }).text === "string",
+					)
+					.map((part) => part.text)
+					.join("\n"),
+			);
+		}
+		return requests;
+	}
+
 	private async noteDiscardedReasoning(
 		message: AgentMessage,
 		windowBound: boolean,
@@ -1954,10 +2003,12 @@ export class AgentRuntime {
 		try {
 			const continued = this.lastIssuedRequest;
 			const room = this.continuationRoomTokens();
+			const userRequests = this.userRequestsInTranscript();
 			const condensation = await condense({
 				reasoning,
 				...(text ? { text } : {}),
 				windowBound,
+				...(userRequests.length > 0 ? { userRequests } : {}),
 				...(continued
 					? {
 							continueConversation: (ask) =>

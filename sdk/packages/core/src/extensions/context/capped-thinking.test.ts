@@ -347,6 +347,12 @@ describe("the continuation note's request", () => {
 		).toContain("Write about 750 words.");
 	});
 
+	it("leaves the user's requests out when there are none", () => {
+		expect(
+			buildCappedThinkingRequest({ thinking: "…", outcomes: [] }),
+		).not.toContain("What you are being asked to do, as it was typed");
+	});
+
 	it("takes a replacement instruction", () => {
 		expect(
 			buildCappedThinkingRequest({
@@ -881,6 +887,52 @@ describe("what the condenser asks the summariser for", () => {
 		expect(call.system).not.toContain("the parser gives up at line 90");
 		expect(call.system.length).toBeLessThan(1_000);
 	});
+
+	// Pandorum 2026-10-20: a note asked for on its own saw only the reasoning,
+	// which never named the file, and filled the gap from the prompt's own
+	// example -- `game.js`, throughout, in a session fixing `manic_miner.html`.
+	it("tells a note asked for on its own what the user typed", async () => {
+		summarizerCalls().length = 0;
+		const budgetMessage = "I have used my thinking budget.";
+		const prepareTurn = createCappedThinkingPrepareTurn(undefined, {
+			enabled: true,
+			budgetTokens: 16_000,
+			budgetMessage,
+			providerConfig: { providerId: "ollama", modelId: "m" },
+		});
+		const messages = [
+			{
+				role: "user",
+				content: [{ type: "text", text: "inspect report.html, it's broken" }],
+			},
+			{
+				role: "user",
+				content: [{ type: "text", text: "a harness note, not a request" }],
+				metadata: { userRunSpan: 0, displayRole: "system" },
+			},
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "thinking",
+						thinking: `the parser gives up at line 90\n${budgetMessage}`,
+					},
+				],
+			},
+		] as unknown as MessageWithMetadata[];
+
+		await (
+			prepareTurn as unknown as (input: {
+				messages: MessageWithMetadata[];
+			}) => Promise<unknown>
+		)({ messages });
+
+		const request = summarizerCalls()[0]?.messages[0]?.content ?? "";
+		expect(request).toContain(
+			"What you are being asked to do, as it was typed:\ninspect report.html, it's broken",
+		);
+		expect(request).not.toContain("a harness note, not a request");
+	});
 });
 
 /**
@@ -964,6 +1016,21 @@ describe("salvaging a turn discarded at the output cap", () => {
 		expect(result?.note).toBe("the note");
 		expect(result?.retrospective).toBeUndefined();
 		expect(summarizerCalls()).toHaveLength(1);
+	});
+
+	it("quotes what the user typed in a request of its own", async () => {
+		summarizerCalls().length = 0;
+		const writer = createCappedThinkingNoteWriter(config);
+
+		await writer?.({
+			reasoning: "the parser gives up at line 90",
+			windowBound: true,
+			userRequests: ["inspect report.html, it's broken"],
+		});
+
+		expect(summarizerCalls()[0]?.messages[0]?.content).toContain(
+			"What you are being asked to do, as it was typed:\ninspect report.html, it's broken",
+		);
 	});
 
 	describe("asked of the conversation itself", () => {

@@ -6005,6 +6005,32 @@ describe("a turn cut off at the output cap", () => {
 		expect(JSON.stringify(result.messages)).not.toContain("WRITE THE NOTE");
 	});
 
+	it("tells the condenser what the user asked for", async () => {
+		// A note written in a request of its own sees the reasoning and nothing
+		// else; without the request it took its file name from the prompt's
+		// example (pandorum, 2026-10-20).
+		const condenseDiscardedReasoning = vi.fn(async () => ({ note: "n" }));
+		const model = new ScriptedModel([
+			() => [
+				{ type: "reasoning-delta", text: "a long think that hit the cap" },
+				{ type: "finish", reason: "max-tokens" },
+			],
+			() => [
+				{ type: "text-delta", text: "short answer" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model, condenseDiscardedReasoning });
+
+		await runtime.run("inspect report.html, it's broken");
+
+		expect(condenseDiscardedReasoning).toHaveBeenCalledWith(
+			expect.objectContaining({
+				userRequests: ["inspect report.html, it's broken"],
+			}),
+		);
+	});
+
 	it("says so when a discarded turn had nothing to condense", async () => {
 		// Reachable, and not the same as an empty turn: a message with parts in it
 		// but no reasoning and no partial reply gets past the empty-turn recovery

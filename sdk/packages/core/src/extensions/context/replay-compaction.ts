@@ -64,14 +64,15 @@ Write in the **first person, present continuous tense**, in your own voice, in t
 
 Write **every step** as the step itself, then what came back. The opening of a
 step is what you are about to do; the outcome is its own short sentence after
-it. These are the shapes — reuse them:
+it. These are the shapes, taken from a task that is not yours — reuse the
+shapes, and take every name, line and value from your own transcript:
 
-- "The user is asking me to fix the collision."
+- "The user is asking me to fix the invoice rounding."
 - "Let me start by reading the file."
 - "Let me read a large chunk of the file." — then what it showed.
-- "Let me try reconstructing the script section. It failed: \`check_file\` reports an unterminated regular expression at line 274."
+- "Let me try rewriting the totals function. It failed: \`test_invoice_total\` expects 100.00 and is getting 99.99."
 - "Now the editor is warning me this change shifted the line numbers by +11."
-- "The file parses now, so what is left is the collision check."
+- "The tests pass now, so what is left is the currency conversion."
 
 This holds for the middle of the replay and not only its first and last
 sentences. A step that opens by reporting itself has changed voice, and the
@@ -84,7 +85,7 @@ Carry all of this:
 - **What you are asked to do, verbatim.** Quote the instructions you have been given word for word. Everything else here can be rebuilt from the files or from the record below your replay; what was asked exists nowhere else once these messages are gone.
 - **What you have done, in order.** Narrate it, and **cite the calls instead of writing them out.** Every call you made, with its arguments and what it returned, is numbered in the record below. Where a call belongs in your account, put its number in square brackets with a \`#\`, and carry on:
 
-  "Let me run the checker. [#3] It reports a \`SyntaxError\` at line 90."
+  "Let me run the tests. [#3] \`test_invoice_total\` fails at line 58."
 
   The harness puts call 3 in at that point, exactly as it happened. Writing the call out yourself instead would spend your budget copying a record that is already exact, and yours would be the less accurate of the two. Cite each call once, in the order you made them. Where a run of calls in sequence belongs at the same point — the same check repeated, a read and the edit that followed it — cite the span as \`[#2-5]\` rather than one at a time; the harness puts all of them in there. A number you leave out is not lost — it is added at the end — but then it sits away from the step it belongs to.
 

@@ -811,6 +811,16 @@ export interface DiscardedTurnInput {
 	 */
 	windowBound?: boolean;
 	/**
+	 * What the user typed, verbatim, oldest first.
+	 *
+	 * A note asked for in a request of its own sees the reasoning and nothing
+	 * else, and reasoning rarely restates the task. Without this the note's
+	 * account of what it was asked to do came from the prompt's examples: a
+	 * pandorum note on 2026-10-20 named the example's `game.js` throughout, in
+	 * a session working on another file.
+	 */
+	userRequests?: readonly string[];
+	/**
 	 * Ask the conversation itself, as its next turn: the request the discarded
 	 * turn was made with, and `instruction` as one more user message, answered
 	 * in prose with no tool call.

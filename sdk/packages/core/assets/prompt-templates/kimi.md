@@ -103,7 +103,7 @@ Make precise edits to a single text file at `path`. Six modes, chosen by which a
 
 - Replace text: `old_text` plus `new_text`. When `old_text` occurs more than once, add `occurrence` (one-based, in file order) to pick one, or `replace_all: true` to change every one.
 - Replace lines: `start_line` plus `new_text`, with optional `end_line` (inclusive, defaults to `start_line`). No `old_text` needed. Prefer this when the text is long, minified or repeated: a diagnostic already gives you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.
-- Replace characters: `start_line` and `start_column` plus `new_text`, with optional `end_line`/`end_column` (both inclusive, each defaulting to its start). This is the unit a diagnostic speaks in — `Line 108, column 385` — and on a long or minified line it is the only edit that leaves the rest of the line untouched. `start_column` on its own replaces exactly one character.
+- Replace characters: `start_line` and `start_column` plus `new_text`, with optional `end_line`/`end_column` (both inclusive, each defaulting to its start). This is the unit a diagnostic speaks in — `Line 12, column 640` — and on a long or minified line it is the only edit that leaves the rest of the line untouched. `start_column` on its own replaces exactly one character.
 - Insert: `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF. Add `insert_column` to insert inside that line instead, before the character at that column — this is how you add one missing bracket, with `line_length + 1` appending at the end of the line.
 - Create or replace whole: `new_text` alone. Creates the file when it does not exist; replaces every line when it does, which needs the file read first. No size limit on this one — a file written whole cannot be split. Never `rm` a file to write it fresh: this is that, and a deleted file is gone if the turn ends first.
 
@@ -191,7 +191,7 @@ List the files in the workspace. Use this to find out what exists, rather than r
 
 How to ask:
 - `path` — list one directory. Absolute, or relative to the workspace root. Omit it for the root.
-- `pattern` — a glob searched across the workspace, e.g. `**/*.html` or `**/manic_miner.*`. Use it when you know part of a name but not where it lives. Given this, `path` is ignored.
+- `pattern` — a glob searched across the workspace, e.g. `**/*.html` or `**/config.*`. Use it when you know part of a name but not where it lives. Given this, `path` is ignored.
 - `max_results` — caps the listing.
 
 The excludes in the user's settings apply, so `node_modules`, `.git` and build output stay out of the way. A path outside the workspace is refused rather than listed.

@@ -58,7 +58,7 @@ export const LIST_FILES_TOOL_DESCRIPTION = `List the files in the workspace. Use
 
 Two ways to ask:
 - \`path\` — list what is directly inside one directory. Omit it to list the workspace root.
-- \`pattern\` — a glob searched across the whole workspace, e.g. \`**/*.html\`, \`src/**/*.ts\`, \`**/manic_miner.*\`. Use this when you know part of a name but not where it lives.
+- \`pattern\` — a glob searched across the whole workspace, e.g. \`**/*.html\`, \`src/**/*.ts\`, \`**/config.*\`. Use this when you know part of a name but not where it lives.
 
 Results are limited to the workspace folders the user opened, and directories the user's settings exclude from search — \`node_modules\`, \`.git\`, build output — are left out. A path outside the workspace is refused rather than listed.
 

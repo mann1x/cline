@@ -33,9 +33,12 @@ import type { CoreCompactionSummarizerConfig } from "../../types/config";
 import type { ProviderConfig } from "../../types/provider-settings";
 import {
 	buildThinkingSummaryRequest,
+	collectUserRequests,
 	estimateThinkingTokens,
 	flattenToolResultContent,
 	formatToolInput,
+	getCompactionSummaryMetadata,
+	renderUserRequests,
 	resolveSummarizerConfig,
 	truncateText,
 } from "./compaction-shared";
@@ -442,13 +445,13 @@ export const DEFAULT_CAPPED_THINKING_PROMPT = `Your thinking on this turn has re
 
 It goes back into **your own thinking channel**, as the thinking you are in the middle of. Your next pass reads it as its own train of thought and carries on from the end of it, so write it the way you think: in the **first person, present continuous tense**, in plain prose, one thought after another, the same voice as the reasoning it replaces.
 
-Write every step as the step itself, then what is coming back. These are the shapes — reuse them:
+Write every step as the step itself, then what is coming back. These are the shapes, taken from a task that is not yours — reuse the shapes, and take every name, line and value from your own reasoning:
 
-- "I'm working out why the collision check misses the left wall."
-- "I'm reading \`game.js\` around line 274, and the bounds test there compares against \`width\` where it needs \`width - size\`."
-- "I'm running \`check_file\` on it, and it is reporting an unterminated regular expression at line 274."
-- "I'm setting the loop rewrite aside: the fault is in the bounds test, and the loop is sound."
-- "The bounds test is the cause, so what I'm doing next is editing line 274."
+- "I'm working out why the invoice total comes out a cent short."
+- "I'm reading \`billing/invoice.py\` around line 58, and the rounding there happens on every line item where it needs to happen once, on the sum."
+- "I'm running the tests on it, and \`test_invoice_total\` is failing with 99.99 against 100.00."
+- "I'm setting the currency conversion aside: the fault is in the rounding, and the conversion is sound."
+- "The rounding is the cause, so what I'm doing next is editing line 58."
 
 Every sentence holds that voice, the middle as much as the first and the last.
 
@@ -468,6 +471,30 @@ interface ToolOutcome {
 	name: string;
 	input: string;
 	result: string;
+}
+
+/**
+ * What the user typed, as far as this transcript still holds it: a compaction
+ * summary's record of the requests it replaced, then the turns started since.
+ */
+function transcriptUserRequests(
+	messages: readonly MessageWithMetadata[],
+): string[] {
+	const requests: string[] = [];
+	for (const message of messages) {
+		for (const request of getCompactionSummaryMetadata(message)?.userRequests ??
+			[]) {
+			if (!requests.includes(request)) {
+				requests.push(request);
+			}
+		}
+	}
+	for (const request of collectUserRequests(messages)) {
+		if (!requests.includes(request)) {
+			requests.push(request);
+		}
+	}
+	return requests;
 }
 
 /** What the capped turn actually called, and what came back. */
@@ -749,12 +776,23 @@ export function buildCappedThinkingRequest(options: {
 	partialAnswer?: string;
 	/** The note's length target, in tokens (`resolveCondensedThinkingNoteTokens`). */
 	noteTokens?: number;
+	/**
+	 * What the user typed. Only for a request of its own: the conversation's
+	 * next turn already has them in front of it.
+	 */
+	userRequests?: readonly string[];
 }): string {
 	const parts = [
 		options.promptTemplate?.trim() || DEFAULT_CAPPED_THINKING_PROMPT,
 	];
 	if (options.noteTokens !== undefined && options.noteTokens > 0) {
 		parts.push(describeNoteLength(options.noteTokens, options.thinking.length));
+	}
+	const requests = renderUserRequests(options.userRequests ?? []);
+	if (requests.length > 0) {
+		parts.push(
+			`What you are being asked to do, as it was typed:\n${requests.join("\n\n")}`,
+		);
 	}
 	// Labels in the tense the note is asked for: a heading in the past is read
 	// as permission to write the body in it.
@@ -962,12 +1000,14 @@ async function writeCappedThinkingNote(options: {
 	reportUsage?: (usage: PrepareTurnUsage) => void;
 	/** Tried first: the conversation's own next turn. */
 	ask?: ConversationAsk;
+	/** Quoted in a request of its own, which sees nothing of the conversation. */
+	userRequests?: readonly string[];
 }): Promise<string> {
 	// Sized twice, once for each place the note can be written: the
 	// conversation's next turn has what its last request left, a request of
 	// its own has the whole window. The length sentence is the same length
 	// whatever number is in it, so the request is measured with any.
-	const build = (noteTokens: number) =>
+	const build = (noteTokens: number, standalone: boolean) =>
 		buildCappedThinkingRequest({
 			thinking: options.thinking,
 			outcomes: options.outcomes,
@@ -976,19 +1016,28 @@ async function writeCappedThinkingNote(options: {
 			...(options.partialAnswer
 				? { partialAnswer: options.partialAnswer }
 				: {}),
+			...(standalone && options.userRequests
+				? { userRequests: options.userRequests }
+				: {}),
 		});
-	const sized = (roomTokens: number | undefined, extraChars = 0) => {
+	const sized = (
+		roomTokens: number | undefined,
+		standalone: boolean,
+		extraChars = 0,
+	) => {
 		const size = resolveCondensedThinkingNoteTokens({
 			thinkingChars: options.thinking.length,
-			requestChars: build(CONDENSED_THINKING_NOTE_TOKENS).length + extraChars,
+			requestChars:
+				build(CONDENSED_THINKING_NOTE_TOKENS, standalone).length + extraChars,
 			...(roomTokens !== undefined ? { roomTokens } : {}),
 			providerConfig: options.providerConfig,
 		});
-		return { ...size, request: build(size.noteTokens) };
+		return { ...size, request: build(size.noteTokens, standalone) };
 	};
 	if (options.ask) {
 		const forAsk = sized(
 			options.ask.roomTokens,
+			false,
 			CAPPED_THINKING_SYSTEM_PROMPT.length,
 		);
 		const continued = truncateText(
@@ -1018,7 +1067,7 @@ async function writeCappedThinkingNote(options: {
 			activeProviderConfig: options.providerConfig,
 			summarizer: options.config.summarizer,
 		});
-		const own = sized(resolved.modelInfo?.contextWindow);
+		const own = sized(resolved.modelInfo?.contextWindow, true);
 		const request = own.request;
 		const summarizerConfig = {
 			...resolved,
@@ -1166,6 +1215,7 @@ export function createCappedThinkingNoteWriter(
 			outcomes: [],
 			config,
 			providerConfig,
+			...(input.userRequests ? { userRequests: input.userRequests } : {}),
 		});
 		// The second pass, and the reason the caller says whether the window was
 		// what capped the turn.
@@ -1384,6 +1434,7 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 				config,
 				providerConfig,
 				...(reportUsage ? { reportUsage } : {}),
+				userRequests: transcriptUserRequests(messages),
 			});
 			condensed.set(thinking, note);
 		}
