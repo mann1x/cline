@@ -844,14 +844,16 @@ export function withOllamaResponseTimeout(
 	baseFetch: typeof fetch,
 	timeoutMs: number,
 	dispatcher?: unknown,
-	options?: { logger?: BasicLogger },
+	options?: { logger?: BasicLogger; toolResultText?: boolean },
 ): typeof fetch {
 	return (async (input, init) => {
 		const url = requestUrl(input);
 		// One parse serves both jobs: the images have to be folded back onto the
 		// tool message they came from, and the health probe wants to name the
 		// model it is waiting for. These bodies are a quarter of a megabyte.
-		const rewritten = rewriteOllamaChatBody(init?.body);
+		const rewritten = rewriteOllamaChatBody(init?.body, {
+			toolResultText: options?.toolResultText === true,
+		});
 		if (rewritten?.merged) {
 			options?.logger?.debug?.(
 				`[ollama] folded ${rewritten.merged} tool-result image message(s) back onto their tool messages`,
@@ -1231,7 +1233,10 @@ export async function createOllamaProviderModule(
 		wireFetch,
 		readOllamaTimeoutMs(config),
 		streamDispatcher,
-		{ logger: context.logger },
+		{
+			logger: context.logger,
+			toolResultText: context.config?.toolResultFormat === "text",
+		},
 	);
 	if (context.model?.id) {
 		await primeOllamaReinjection(

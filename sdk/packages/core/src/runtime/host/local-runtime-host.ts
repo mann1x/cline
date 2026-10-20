@@ -2439,6 +2439,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 			thinkingBudgetTokens: configWithProvider.thinkingBudgetTokens,
 			maxTokensPerTurn: configWithProvider.maxTokensPerTurn,
 			maxToolResultChars: configWithProvider.maxToolResultChars,
+			// The pinned one. Left off this list, the lead's model and message
+			// builder never saw it: a `text` session was recorded as `text` and
+			// sent JSON.
+			toolResultFormat: configWithProvider.toolResultFormat,
 			temperature: configWithProvider.temperature,
 			systemPrompt: configWithProvider.systemPrompt,
 			maxIterations: configWithProvider.maxIterations,

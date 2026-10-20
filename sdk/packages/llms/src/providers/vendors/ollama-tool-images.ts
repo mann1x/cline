@@ -129,6 +129,70 @@ export interface RewrittenOllamaBody {
 	/** The model this request is for, when the body names one. */
 	model?: string;
 	merged: number;
+	/** How many tool messages had their text parts joined back into text. */
+	joined?: number;
+}
+
+/** A `content` tool output's text parts, as the converter stringified them. */
+function stringifiedTextParts(content: unknown): string[] | undefined {
+	if (typeof content !== "string" || !content.startsWith("[")) {
+		return undefined;
+	}
+	let parts: unknown;
+	try {
+		parts = JSON.parse(content);
+	} catch {
+		return undefined;
+	}
+	if (!Array.isArray(parts) || parts.length === 0) {
+		return undefined;
+	}
+	const texts: string[] = [];
+	for (const part of parts) {
+		if (
+			!isWireMessage(part) ||
+			part.type !== "text" ||
+			typeof part.text !== "string"
+		) {
+			return undefined;
+		}
+		texts.push(part.text);
+	}
+	return texts;
+}
+
+/**
+ * Under `text`, give a tool result that carried an image its text back.
+ *
+ * The converter takes the images out of a `content` output and then writes
+ * what is left as `JSON.stringify` of the parts, so a rendered result reached
+ * the model as `[{"type":"text","text":"…\n…"}]` -- the escapes the format
+ * exists to remove. Under `text` a result becomes `content` only when it
+ * carries an image, which is why the test is a tool message with images: no
+ * other tool message in a `text` request has that shape. Under `json` this is
+ * never called, and those bodies go out as they always did.
+ */
+export function joinOllamaToolResultText(messages: unknown[]): {
+	messages: unknown[];
+	joined: number;
+} {
+	let joined = 0;
+	const out = messages.map((entry) => {
+		if (
+			!isWireMessage(entry) ||
+			entry.role !== "tool" ||
+			imagesOf(entry).length === 0
+		) {
+			return entry;
+		}
+		const texts = stringifiedTextParts(entry.content);
+		if (!texts) {
+			return entry;
+		}
+		joined += 1;
+		return { ...entry, content: texts.join("\n") };
+	});
+	return { messages: out, joined };
 }
 
 /**
@@ -144,6 +208,7 @@ export interface RewrittenOllamaBody {
  */
 export function rewriteOllamaChatBody(
 	body: unknown,
+	options?: { toolResultText?: boolean },
 ): RewrittenOllamaBody | undefined {
 	if (typeof body !== "string" || body.length === 0) {
 		return undefined;
@@ -158,13 +223,18 @@ export function rewriteOllamaChatBody(
 		return undefined;
 	}
 	const model = typeof parsed.model === "string" ? parsed.model : undefined;
-	const { messages, merged } = mergeOllamaToolImages(parsed.messages);
-	if (merged === 0) {
-		return { body, model, merged: 0 };
+	const folded = mergeOllamaToolImages(parsed.messages);
+	const { merged } = folded;
+	const { messages, joined } = options?.toolResultText
+		? joinOllamaToolResultText(folded.messages)
+		: { messages: folded.messages, joined: 0 };
+	if (merged === 0 && joined === 0) {
+		return { body, model, merged: 0, joined: 0 };
 	}
 	return {
 		body: JSON.stringify({ ...parsed, messages }),
 		model,
 		merged,
+		joined,
 	};
 }

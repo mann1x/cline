@@ -128,3 +128,48 @@ describe("rewriteOllamaChatBody", () => {
 		).toBeUndefined();
 	});
 });
+
+// Under `text` a result carrying an image is a `content` output, and the
+// converter writes its text parts as `JSON.stringify` of the parts: the escapes
+// the format exists to remove, on exactly the results that have images.
+describe("rewriteOllamaChatBody under a text tool result format", () => {
+	const rendered = '/abs/shot.png\n→ Successfully read image "shot"';
+	const body = JSON.stringify({
+		model: "m",
+		messages: [
+			{ role: "user", content: "look" },
+			{
+				role: "tool",
+				tool_call_id: "c1",
+				tool_name: "read_files",
+				content: JSON.stringify([{ type: "text", text: rendered }]),
+				images: ["aGk="],
+			},
+			{
+				role: "tool",
+				tool_call_id: "c2",
+				tool_name: "run_commands",
+				content: JSON.stringify([{ type: "text", text: "printed by a tool" }]),
+			},
+		],
+	});
+
+	it("gives an image-carrying tool message its text back", () => {
+		const out = rewriteOllamaChatBody(body, { toolResultText: true });
+		const messages = JSON.parse(out?.body ?? "{}").messages;
+		expect(out?.joined).toBe(1);
+		expect(messages[1].content).toBe(rendered);
+		expect(messages[1].images).toEqual(["aGk="]);
+		// No images: not a `content` output, so what the tool returned.
+		expect(messages[2].content).toBe(
+			JSON.stringify([{ type: "text", text: "printed by a tool" }]),
+		);
+	});
+
+	it("sends a json session's body exactly as it was", () => {
+		expect(rewriteOllamaChatBody(body)?.body).toBe(body);
+		expect(rewriteOllamaChatBody(body, { toolResultText: false })?.body).toBe(
+			body,
+		);
+	});
+});

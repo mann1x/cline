@@ -318,6 +318,57 @@ describe("LocalRuntimeHost", () => {
 	// satisfy is worse than no guard, so it stood aside. It supplies one now, so
 	// the same setup has to produce the opposite result: the run is held back,
 	// and the tool named is the one that can clear it.
+	// Every layer below the host was tested with the format handed to it, and
+	// none of them is where it was lost: the lead's config is a list of fields
+	// and the format was not on it, so a `text` session sent JSON.
+	it.each([
+		{ configured: "text" as const, expected: "text" },
+		{ configured: undefined, expected: "json" },
+	])("builds the lead with the pinned tool result format ($expected)", async ({
+		configured,
+		expected,
+	}) => {
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [],
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			}),
+		};
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn().mockResolvedValue(createResult()),
+			getMessages: vi.fn().mockReturnValue([]),
+			getAgentId: vi.fn().mockReturnValue("agent-trf"),
+			getConversationId: vi.fn().mockReturnValue("conv-trf"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		let agentConfig: { toolResultFormat?: string } | undefined;
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: new FileSessionService(join(isolatedHomeDir, "sessions")),
+			runtimeBuilder: runtimeBuilder as never,
+			createAgent: ((config: { toolResultFormat?: string }) => {
+				agentConfig = config;
+				return agent;
+			}) as never,
+		});
+
+		await manager.startSession(
+			normalizeStartInput({
+				config: createConfig(
+					configured ? { toolResultFormat: configured } : {},
+				),
+				prompt: "hello",
+			}),
+		);
+
+		expect(agentConfig?.toolResultFormat).toBe(expected);
+		await manager.dispose();
+	});
+
 	it("guards the run now that it supplies its own checker", async () => {
 		const runtimeBuilder = {
 			build: vi.fn().mockReturnValue({
