@@ -1848,6 +1848,8 @@ export class AgentRuntime {
 		request: AgentModelRequest,
 		ask: { instruction: string; maxTokens: number },
 	): Promise<{ text: string }> {
+		// Its own signal, so giving up on this answer does not abort the run.
+		const asked = new AbortController();
 		const stream = await this.config.model.stream({
 			...request,
 			messages: [
@@ -1856,7 +1858,9 @@ export class AgentRuntime {
 					displayRole: "system",
 				}),
 			],
-			...(this.abortController ? { signal: this.abortController.signal } : {}),
+			signal: this.abortController
+				? AbortSignal.any([this.abortController.signal, asked.signal])
+				: asked.signal,
 			options: {
 				...request.options,
 				maxTokens: ask.maxTokens,
@@ -1865,6 +1869,22 @@ export class AgentRuntime {
 		});
 		let text = "";
 		for await (const event of stream) {
+			// The tools stay in the request so the server can reuse its prefix,
+			// and `toolChoice: "none"` is all that keeps the model off them. A
+			// server that ignores it lets the model start a call, and the answer
+			// is then lost however long it runs: xOllama 0.40.6 took a
+			// retrospective to its 4,000-token cap writing an `editor` call
+			// (pandorum, 2026-10-20, 36 s). Stopped at the first sign of one, so
+			// the caller's request of its own starts at once.
+			if (
+				event.type === "tool-input-progress" ||
+				(event.type === "tool-call-delta" && !event.execution)
+			) {
+				asked.abort();
+				throw new Error(
+					`the model started calling ${event.toolName ?? "a tool"} instead of answering (tool choice "none" was not enforced)`,
+				);
+			}
 			if (event.type === "text-delta") {
 				text += event.text;
 			} else if (event.type === "usage") {

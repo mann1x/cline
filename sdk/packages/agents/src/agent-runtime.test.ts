@@ -6005,6 +6005,67 @@ describe("a turn cut off at the output cap", () => {
 		expect(JSON.stringify(result.messages)).not.toContain("WRITE THE NOTE");
 	});
 
+	it("gives up on a conversation's answer as soon as it starts a tool call", async () => {
+		// The tools stay in the request for the prefix, and `toolChoice: "none"`
+		// is not honoured by every server: xOllama 0.40.6 let a retrospective
+		// write an `editor` call to its 4,000-token cap and answered nothing
+		// (pandorum, 2026-10-20). The caller falls back to a request of its own,
+		// and should not wait out the call first.
+		let rejection: unknown;
+		const condenseDiscardedReasoning = vi.fn(
+			async (input: {
+				continueConversation?: (ask: {
+					instruction: string;
+					maxTokens: number;
+				}) => Promise<{ text: string }>;
+			}) => {
+				try {
+					await input.continueConversation?.({
+						instruction: "WRITE THE RETROSPECTIVE",
+						maxTokens: 500,
+					});
+				} catch (error) {
+					rejection = error;
+				}
+				return { note: "asked elsewhere" };
+			},
+		);
+		const model = new ScriptedModel([
+			() => [
+				{ type: "reasoning-delta", text: "a long think that hit the cap" },
+				{ type: "finish", reason: "max-tokens" },
+			],
+			() => [
+				{
+					type: "tool-input-progress",
+					toolCallId: "c1",
+					toolName: "editor",
+					inputChars: 12,
+					deltas: 3,
+				},
+				{ type: "text-delta", text: "never read" },
+				{ type: "finish", reason: "stop" },
+			],
+			() => [
+				{ type: "text-delta", text: "short answer" },
+				{ type: "finish", reason: "stop" },
+			],
+		]);
+		const runtime = new AgentRuntime({ model, condenseDiscardedReasoning });
+
+		const result = await runtime.run("Hi");
+
+		expect(result.status).toBe("completed");
+		expect(String(rejection)).toContain("started calling editor");
+		const asked = model.requests[1];
+		expect(asked.signal?.aborted).toBe(true);
+		// Its own signal: the run it was asked from carried on.
+		expect(model.requests[2].signal?.aborted).not.toBe(true);
+		expect(JSON.stringify(model.requests[2].messages)).toContain(
+			"asked elsewhere",
+		);
+	});
+
 	it("tells the condenser what the user asked for", async () => {
 		// A note written in a request of its own sees the reasoning and nothing
 		// else; without the request it took its file name from the prompt's

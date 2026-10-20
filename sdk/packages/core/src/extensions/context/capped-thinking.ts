@@ -1303,19 +1303,34 @@ async function writeDiscardedRetrospective(options: {
 		};
 		const handler = await createHandlerAsync(summarizerConfig);
 		let text = "";
+		let reasoningChars = 0;
 		for await (const chunk of handler.createMessage(
 			CAPPED_THINKING_RETROSPECTIVE_SYSTEM_PROMPT,
 			[{ role: "user", content: request }],
 		)) {
 			if (chunk.type === "text") {
 				text += chunk.text;
+			} else if (chunk.type === "reasoning") {
+				reasoningChars += chunk.reasoning?.length ?? 0;
 			}
 		}
 		const retrospective = truncateText(
 			text.trim(),
 			CONDENSED_THINKING_MAX_CHARS,
 		);
+		// Said either way. An empty retrospective was all the log showed of a
+		// request that ran 3,999 tokens with thinking off (pandorum,
+		// 2026-10-20): reasoning it was not asked for, or prose it then threw
+		// away as degenerate, and nothing kept to tell which.
 		if (!retrospective || isDegenerateNote(retrospective)) {
+			options.config.logger?.log(
+				`[capped-thinking] the retrospective's own request was not used: ${
+					retrospective
+						? `its ${retrospective.length} chars repeat themselves`
+						: "it wrote no text"
+				}${reasoningChars ? `; it wrote ${reasoningChars} chars of reasoning` : ""}`,
+				{ severity: "info" },
+			);
 			return undefined;
 		}
 		options.config.logger?.debug?.(
