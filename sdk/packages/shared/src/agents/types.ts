@@ -402,6 +402,19 @@ export interface ReasoningLoopDetectionConfig {
 	/** How many times a phrase must repeat before it counts as a cycle. */
 	phraseMinCycles: number;
 	/**
+	 * Shortest block, in lines, the block-cycle test looks for. The line-cycle
+	 * test above needs `minCycles` repeats inside `window` lines, so a long
+	 * block -- a paragraph, a function -- can repeat for as long as it likes
+	 * without being seen. Above `blockMaxPeriod` the test is off.
+	 */
+	blockMinPeriod: number;
+	/** Longest block, in lines, the block-cycle test looks for. */
+	blockMaxPeriod: number;
+	/** Copies of the block back to back, the first one included, that count. */
+	blockMinCycles: number;
+	/** A block shorter than this many characters is not judged by this test. */
+	blockMinChars: number;
+	/**
 	 * How many turns in a row may be cut for looping before the run is ended.
 	 * Cutting the request stops one degenerate draw; a model that redraws the
 	 * same collapse every turn is not making progress, and something has to
@@ -1385,6 +1398,10 @@ export const AgentConfigSchema = z.object({
 						minLineChars: z.number().int().positive().optional(),
 						phraseMaxPeriod: z.number().int().positive().optional(),
 						phraseMinCycles: z.number().int().positive().optional(),
+						blockMinPeriod: z.number().int().positive().optional(),
+						blockMaxPeriod: z.number().int().nonnegative().optional(),
+						blockMinCycles: z.number().int().positive().optional(),
+						blockMinChars: z.number().int().nonnegative().optional(),
 						maxConsecutiveTrips: z.number().int().positive().optional(),
 					}),
 				])

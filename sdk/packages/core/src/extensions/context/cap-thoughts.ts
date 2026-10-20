@@ -60,6 +60,8 @@ export function countCapEvents(
 			| {
 					noticeKind?: unknown;
 					reasoningLoop?: unknown;
+					answerLoop?: unknown;
+					argumentLoop?: unknown;
 					spoiledTurn?: { kinds?: unknown };
 			  }
 			| undefined;
@@ -72,7 +74,14 @@ export function countCapEvents(
 		const kinds = Array.isArray(metadata?.spoiledTurn?.kinds)
 			? metadata.spoiledTurn.kinds
 			: [];
-		if (metadata?.reasoningLoop || kinds.includes("reasoning_loop")) {
+		// A loop cut from the reply or from a call's arguments is the same
+		// event as one cut from the reasoning.
+		if (
+			metadata?.reasoningLoop ||
+			metadata?.answerLoop ||
+			metadata?.argumentLoop ||
+			kinds.includes("reasoning_loop")
+		) {
 			events.loops += 1;
 		}
 		if (kinds.includes("unreadable_tool_call")) {

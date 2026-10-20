@@ -19,6 +19,11 @@
  *   line-cycle      the same 1..N lines repeating with an exact period.
  *   phrase-cycle    no newlines at all -- one fragment repeating inside a
  *                   single unbroken line ("and I'll do it, and I'll do it...").
+ *   block-cycle     a block of many lines repeating back to back: a paragraph
+ *                   of v9-agentic's 503 characters 181 times (2026-10-18), and
+ *                   in a model's answer "Actually, I will do it in one go. /
+ *                   Step 1: ..." 177 times. Too long a period for line-cycle,
+ *                   too many distinct lines for low-uniqueness.
  *
  * Length is never the signal. Healthy agentic reasoning on our own harness runs
  * to 150k-260k characters per turn, and a guard that fired on volume would kill
@@ -49,12 +54,21 @@ export const DEFAULT_REASONING_LOOP_GUARD: ReasoningLoopGuardConfig = {
 	minLineChars: 2000,
 	phraseMaxPeriod: 120,
 	phraseMinCycles: 12,
+	// Set against 3,348 stored sessions (2026-10-20): over 54,605 tool calls'
+	// arguments and 10,837 answers, a block of 7 to 400 lines repeated three
+	// times running occurs 12 times, every one a loop and none in a call that
+	// worked. Periods below 7 are line-cycle's (see ol-67 for its gap).
+	blockMinPeriod: 7,
+	blockMaxPeriod: 400,
+	blockMinCycles: 3,
+	blockMinChars: 200,
 	maxConsecutiveTrips: 3,
 };
 
 export type ReasoningLoopKind =
 	| "low-uniqueness"
 	| "line-cycle"
+	| "block-cycle"
 	| "phrase-cycle";
 
 export interface ReasoningLoopVerdict {
@@ -74,16 +88,23 @@ export interface ReasoningLoopVerdict {
  * consequence -- the caller decides what to do about it, the same rule the
  * tool-call loop detector follows.
  */
-export function describeReasoningLoop(v: ReasoningLoopVerdict): string {
-	const where = `after ${v.chars.toLocaleString()} characters of reasoning`;
+export function describeReasoningLoop(
+	v: ReasoningLoopVerdict,
+	/** What looped, after "The model's": its reasoning, its reply, a call. */
+	subject = "reasoning",
+): string {
+	const where = `after ${v.chars.toLocaleString()} characters${
+		subject === "reasoning" ? " of reasoning" : ""
+	}`;
 	const sample = v.sample ? ` Repeating: ${JSON.stringify(v.sample)}` : "";
 	switch (v.kind) {
 		case "low-uniqueness":
-			return `The model's reasoning collapsed into ${v.distinct} distinct lines over ${where}.${sample}`;
+			return `The model's ${subject} collapsed into ${v.distinct} distinct lines over ${where}.${sample}`;
 		case "line-cycle":
-			return `The model's reasoning repeated a ${v.period}-line block ${v.cycles} times ${where}.${sample}`;
+		case "block-cycle":
+			return `The model's ${subject} repeated a ${v.period}-line block ${v.cycles} times ${where}.${sample}`;
 		case "phrase-cycle":
-			return `The model's reasoning repeated a ${v.period}-character phrase ${v.cycles} times ${where}.${sample}`;
+			return `The model's ${subject} repeated a ${v.period}-character phrase ${v.cycles} times ${where}.${sample}`;
 	}
 }
 
@@ -152,6 +173,11 @@ export class ReasoningLoopGuard {
 	private verdict: ReasoningLoopVerdict | null = null;
 	private source: { text: string; lines: string[] } | undefined;
 	private readonly sourceRuns = new Map<string, number>();
+	/** The last `blockMaxPeriod + 1` completed lines, for the block-cycle test. */
+	private recent: string[] = [];
+	/** Per period, how many lines running have matched the line that far back. */
+	private streaks: number[] = [];
+	private block: { period: number; cycles: number } | undefined;
 
 	constructor(
 		config: Partial<ReasoningLoopGuardConfig> = {},
@@ -183,6 +209,7 @@ export class ReasoningLoopGuard {
 				this.lines.push(line);
 				if (this.lines.length > this.cfg.window) this.lines.shift();
 				if (this.given) this.history.push(line);
+				this.trackBlocks(line);
 			}
 		}
 		if (this.chars < this.cfg.minChars) return null;
@@ -190,6 +217,7 @@ export class ReasoningLoopGuard {
 		const found =
 			this.detectLowUniqueness() ??
 			this.detectLineCycle() ??
+			this.detectBlockCycle() ??
 			this.detectPhraseCycle();
 		if (found) this.verdict = found;
 		return this.verdict;
@@ -376,6 +404,54 @@ export class ReasoningLoopGuard {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * One counter per period, moved on by each completed line: a run of `k`
+	 * lines that each equal the line `p` back is a block of `p` lines repeated
+	 * `k / p + 1` times. The shortest period that qualifies is kept, so a block
+	 * repeated is not reported as two copies of a block twice its size.
+	 */
+	private trackBlocks(line: string): void {
+		const { blockMinPeriod: low, blockMaxPeriod: high } = this.cfg;
+		if (high < low) return;
+		this.recent.push(line);
+		if (this.recent.length > high + 1) this.recent.shift();
+		const n = this.recent.length;
+		this.block = undefined;
+		for (let p = low; p <= high && p < n; p++) {
+			const run =
+				this.recent[n - 1] === this.recent[n - 1 - p]
+					? (this.streaks[p] ?? 0) + 1
+					: 0;
+			this.streaks[p] = run;
+			if (
+				!this.block &&
+				run >= (this.cfg.blockMinCycles - 1) * p &&
+				this.recent
+					.slice(n - p)
+					.reduce((chars, entry) => chars + entry.length, 0) >=
+					this.cfg.blockMinChars
+			) {
+				this.block = { period: p, cycles: Math.floor(run / p) + 1 };
+			}
+		}
+	}
+
+	private detectBlockCycle(): ReasoningLoopVerdict | null {
+		const found = this.block;
+		if (!found) return null;
+		const unit = this.recent.slice(this.recent.length - found.period);
+		// Restating a block read that many times over is not a collapse; one
+		// more copy than the source has is.
+		if (found.cycles <= this.blockRunInSource(unit)) return null;
+		return {
+			kind: "block-cycle",
+			period: found.period,
+			cycles: found.cycles,
+			chars: this.chars,
+			sample: unit.join(" / ").slice(0, 160),
+		};
 	}
 
 	private detectPhraseCycle(): ReasoningLoopVerdict | null {

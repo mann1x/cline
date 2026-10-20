@@ -103,8 +103,15 @@ describe("the tool intent guard, inside the runtime", () => {
 		setToolIntentGuardEnabled(false);
 		const model = new CountingModel([overrunningCall]);
 		const events: AgentRuntimeEvent[] = [];
-		// No per-runtime setting: this is how an agent's runtime is built.
-		const runtime = new AgentRuntime({ model, tools: [editor] });
+		// No per-runtime setting for this guard: this is how an agent's runtime
+		// is built.
+		const runtime = new AgentRuntime({
+			model,
+			tools: [editor],
+			// The looping intent is also a phrase loop, which the separate loop
+			// guard cuts on its own switch; this test is about this guard's.
+			reasoningLoopDetection: false,
+		});
 		runtime.subscribe((event) => {
 			events.push(event);
 		});
@@ -151,6 +158,9 @@ describe("the tool intent guard, inside the runtime", () => {
 			model,
 			tools: [editor],
 			toolIntentLimit: false,
+			// The looping intent is also a phrase loop, which the separate loop
+			// guard cuts on its own switch; this test is about this guard's.
+			reasoningLoopDetection: false,
 		});
 		runtime.subscribe((event) => {
 			events.push(event);
@@ -170,7 +180,13 @@ describe("the tool intent guard, inside the runtime", () => {
 			answer,
 		]);
 		const events: AgentRuntimeEvent[] = [];
-		const runtime = new AgentRuntime({ model, tools: [editor] });
+		const runtime = new AgentRuntime({
+			model,
+			tools: [editor],
+			// The looping intent is also a phrase loop, which the separate loop
+			// guard cuts on its own switch; this test is about this guard's.
+			reasoningLoopDetection: false,
+		});
 		runtime.subscribe((event) => {
 			events.push(event);
 		});

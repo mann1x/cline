@@ -79,11 +79,25 @@ describe("ReasoningLoopGuard", () => {
 	});
 
 	it("leaves a legitimately repetitive but rotating list alone", () => {
+		// Thirty values in turn, as a retry log has them: the lines rotate, and
+		// what each one says goes on changing.
+		const text = Array.from(
+			{ length: 600 },
+			(_, i) => `- retry attempt ${i % 30} after ${i * 250} ms`,
+		).join("\n");
+		expect(stream(text).verdict).toBeNull();
+	});
+
+	it("cuts the same thirty lines written out twenty times", () => {
+		// What the test above used to feed: one 30-line block, exactly, twenty
+		// times. No arm saw it until the block-cycle test; it is a loop.
 		const text = Array.from(
 			{ length: 600 },
 			(_, i) => `- retry attempt ${i % 30}`,
 		).join("\n");
-		expect(stream(text).verdict).toBeNull();
+		const { verdict } = stream(text);
+		expect(verdict?.kind).toBe("block-cycle");
+		expect(verdict?.period).toBe(30);
 	});
 
 	it("never judges a short block", () => {
@@ -226,5 +240,69 @@ describe("repetition that was in what the model was given", () => {
 		expect(given).toContain("embed the sound");
 		expect(given).toContain("//uUxAAA");
 		expect(given).not.toContain("VVVVVVVV");
+	});
+});
+
+describe("a long block repeated back to back", () => {
+	// The shape ol-87 measured: a 12-line paragraph of v9-agentic's, 503
+	// characters, written out again and again. Every arm above passed it at
+	// 181 copies -- too long a period for line-cycle, too many distinct lines
+	// for low-uniqueness, and it has newlines, so no phrase cycle.
+	const paragraph = Array.from(
+		{ length: 12 },
+		(_, i) =>
+			`Line ${i} of the plan: check the collider for tile row ${i * 3} again.`,
+	).join("\n");
+	const prose = Array.from(
+		{ length: 120 },
+		(_, i) => `Step ${i}: sound ${i * 7} goes into slot ${i * 3 + 1}.`,
+	).join("\n");
+	const feed = (text: string, given?: string, config = {}) => {
+		const guard = new ReasoningLoopGuard(
+			config,
+			given === undefined ? {} : { given: () => given },
+		);
+		for (let i = 0; i < text.length; i += 4) {
+			const verdict = guard.push(text.slice(i, i + 4));
+			if (verdict) return { verdict, at: i + 4 };
+		}
+		return { verdict: null, at: text.length };
+	};
+
+	it("cuts it on the third copy", () => {
+		const copies = Array.from({ length: 20 }, () => paragraph).join("\n");
+		const { verdict, at } = feed(`${prose}\n${copies}`);
+		expect(verdict?.kind).toBe("block-cycle");
+		expect(verdict?.period).toBe(12);
+		expect(verdict?.cycles).toBe(3);
+		expect(at).toBeLessThan(prose.length + 4 * paragraph.length);
+	});
+
+	it("leaves a block that comes twice alone", () => {
+		const { verdict } = feed(`${prose}\n${paragraph}\n${paragraph}\n${prose}`);
+		expect(verdict).toBeNull();
+	});
+
+	it("leaves code whose lines differ alone, however long", () => {
+		const code = Array.from(
+			{ length: 900 },
+			(_, i) => `\tdraw${i % 37}(ctx, x + ${i}, y - ${i % 11});`,
+		).join("\n");
+		expect(feed(code).verdict).toBeNull();
+	});
+
+	it("excuses a block restated no more often than it was given", () => {
+		const given = Array.from({ length: 4 }, () => paragraph).join("\n");
+		const four = Array.from({ length: 4 }, () => paragraph).join("\n");
+		expect(feed(`${prose}\n${four}\n${prose}`, given).verdict).toBeNull();
+		const five = Array.from({ length: 5 }, () => paragraph).join("\n");
+		expect(feed(`${prose}\n${five}`, given).verdict?.kind).toBe("block-cycle");
+	});
+
+	it("is off when its longest period is below its shortest", () => {
+		const copies = Array.from({ length: 20 }, () => paragraph).join("\n");
+		expect(
+			feed(`${prose}\n${copies}`, undefined, { blockMaxPeriod: 0 }).verdict,
+		).toBeNull();
 	});
 });

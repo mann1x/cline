@@ -123,6 +123,16 @@ describe("what the harness adds to the retrospective", () => {
 		});
 	});
 
+	it("counts a loop cut from the reply or a call's arguments as a loop", () => {
+		const events = countCapEvents([
+			assistant([call], { answerLoop: { kind: "block-cycle" } }),
+			assistant([call], {
+				argumentLoop: { toolCallId: "c1", verdict: { kind: "block-cycle" } },
+			}),
+		]);
+		expect(events.loops).toBe(2);
+	});
+
 	it("is written in the first person and the present tense, and ends on smaller steps", () => {
 		const thoughts =
 			synthesizeCapThoughts({

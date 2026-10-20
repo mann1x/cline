@@ -88,6 +88,12 @@ import {
 	measureReasoningRepetition,
 	type RepetitionNudger,
 } from "./reasoning-repetition";
+import {
+	buildToolArgumentLoopNudge,
+	describeToolArgumentLoopStub,
+	type ToolArgumentLoop,
+	ToolArgumentLoopGuard,
+} from "./tool-argument-loop-guard";
 import { type InvalidToolCall, ToolCallAssembler } from "./tool-call-assembly";
 import {
 	buildToolIntentOverrunNudge,
@@ -3898,6 +3904,19 @@ export class AgentRuntime {
 						given: () => contentGivenToModel(request.messages),
 					});
 		let reasoningLoop: ReasoningLoopVerdict | undefined;
+		// The same detector over the reply and over each call's arguments, under
+		// the same switch: a model loops in whichever channel it is writing.
+		const given = () => contentGivenToModel(request.messages);
+		const answerLoopGuard =
+			reasoningLoopConfig === false
+				? undefined
+				: new ReasoningLoopGuard(reasoningLoopConfig, { given });
+		const argumentLoopGuard =
+			reasoningLoopConfig === false
+				? undefined
+				: new ToolArgumentLoopGuard(reasoningLoopConfig, { given });
+		let answerLoop: ReasoningLoopVerdict | undefined;
+		let argumentLoop: ToolArgumentLoop | undefined;
 		const toolIntentLimit = this.config.toolIntentLimit;
 		// On unless turned off, for the reason the guard above is: it guards
 		// spend. See `tool-intent-guard` for the run it comes from.
@@ -3946,6 +3965,7 @@ export class AgentRuntime {
 						text: event.text,
 						accumulatedText,
 					});
+					answerLoop = answerLoopGuard?.push(event.text) ?? undefined;
 					break;
 				}
 				case "media": {
@@ -4018,6 +4038,11 @@ export class AgentRuntime {
 					});
 					if (event.inputText) {
 						toolIntentOverrun = toolIntentGuard?.push(
+							event.toolCallId,
+							event.inputText,
+							event.toolName,
+						);
+						argumentLoop = argumentLoopGuard?.push(
 							event.toolCallId,
 							event.inputText,
 							event.toolName,
@@ -4142,15 +4167,24 @@ export class AgentRuntime {
 					break;
 				}
 			}
-			if (reasoningLoop || toolIntentOverrun) {
+			if (reasoningLoop || answerLoop || argumentLoop || toolIntentOverrun) {
 				// Leaving the loop closes the iterator, which cancels the provider
 				// request. That is the whole point: the tokens stop being billed
 				// now, not when the model finally reaches the context window.
 				break;
 			}
 		}
+		// One cut, one count, whichever channel it was in.
 		if (reasoningLoop) {
 			await this.onReasoningLoopCut(reasoningLoop);
+		} else if (answerLoop) {
+			await this.onReasoningLoopCut(answerLoop, "reply");
+		} else if (argumentLoop) {
+			await this.onReasoningLoopCut(
+				argumentLoop.verdict,
+				`call to \`${argumentLoop.toolName ?? "a tool"}\``,
+			);
+			this.pendingToolIntentNudge = buildToolArgumentLoopNudge(argumentLoop);
 		} else if (reasoningLoopGuard) {
 			this.reasoningLoopStreak = 0;
 		}
@@ -4165,7 +4199,10 @@ export class AgentRuntime {
 		// A stream this runtime cut itself never reaches its finish event. That
 		// is not a model that ended without saying why -- the reason is known,
 		// it is on the message, and the loop answers it with its own reminder.
-		if ((reasoningLoop || toolIntentOverrun) && finishReason === "unknown") {
+		if (
+			(reasoningLoop || answerLoop || argumentLoop || toolIntentOverrun) &&
+			finishReason === "unknown"
+		) {
 			finishReason = "stop";
 		}
 
@@ -4178,6 +4215,9 @@ export class AgentRuntime {
 			)
 				continue;
 			if (item.type === "part") {
+				// A reply cut for looping is not kept: the loop would be the
+				// first thing the next turn reads.
+				if (answerLoop && item.part.type === "text") continue;
 				content.push(item.part);
 				continue;
 			}
@@ -4185,8 +4225,9 @@ export class AgentRuntime {
 			// The call that was cut: half a document, and not a call that failed
 			// to parse. The stub below says what happened to it.
 			if (
-				toolIntentOverrun &&
-				assembly?.toolCallId === toolIntentOverrun.toolCallId
+				(toolIntentOverrun &&
+					assembly?.toolCallId === toolIntentOverrun.toolCallId) ||
+				(argumentLoop && assembly?.toolCallId === argumentLoop.toolCallId)
 			) {
 				continue;
 			}
@@ -4212,6 +4253,20 @@ export class AgentRuntime {
 		const messageMetadata: Record<string, unknown> = {};
 		if (reasoningLoop) {
 			messageMetadata.reasoningLoop = reasoningLoop;
+		}
+		if (answerLoop) {
+			content.push({
+				type: "text",
+				text: "(The reply here was cut: it had come to repeat itself. Its text is not kept.)",
+			});
+			messageMetadata.answerLoop = answerLoop;
+		}
+		if (argumentLoop) {
+			content.push({
+				type: "text",
+				text: describeToolArgumentLoopStub(argumentLoop),
+			});
+			messageMetadata.argumentLoop = argumentLoop;
 		}
 		if (toolIntentOverrun) {
 			// In the turn itself, so the history reads as what happened and an
@@ -5021,6 +5076,8 @@ export class AgentRuntime {
 	 */
 	private async onReasoningLoopCut(
 		verdict: ReasoningLoopVerdict,
+		/** What looped, as `describeReasoningLoop` names it. */
+		subject = "reasoning",
 	): Promise<void> {
 		this.reasoningLoopStreak += 1;
 		const limit =
@@ -5028,7 +5085,7 @@ export class AgentRuntime {
 				? undefined
 				: this.config.reasoningLoopDetection?.maxConsecutiveTrips) ??
 			DEFAULT_REASONING_LOOP_GUARD.maxConsecutiveTrips;
-		const diagnosis = describeReasoningLoop(verdict);
+		const diagnosis = describeReasoningLoop(verdict, subject);
 		const atLimit = this.reasoningLoopStreak >= limit;
 		// Asked before the run ends rather than after, so the notice below says
 		// what actually happened. The streak is deliberately not reset by a
@@ -5060,6 +5117,7 @@ export class AgentRuntime {
 				iteration: this.state.iteration,
 				consecutiveTrips: this.reasoningLoopStreak,
 				verdict,
+				channel: subject,
 			},
 		});
 		if (giveUp) {
