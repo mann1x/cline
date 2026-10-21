@@ -2413,6 +2413,17 @@ export function createEditorExecutor(
 			return created;
 		}
 		if (input.old_text == null) {
+			// Half a range is not the whole file. A call with an `end_line` and no
+			// `start_line` came here and replaced every line: on pandorum
+			// (2026-10-21, v9-agentic) `end_line: 267` with 23 lines of
+			// `new_text` replaced lines 1-292, and the model's `start_line: 261`
+			// was inside the text -- written after `new_text`, the order Gemma 4
+			// sorts arguments in, once the call had already closed.
+			if (input.end_line != null) {
+				throw new Error(
+					`This call names \`end_line: ${input.end_line}\` and no \`start_line\`, so it says where the lines it replaces end and not where they begin. The file was not modified. Send it again with \`start_line\` as well, written before \`new_text\`.`,
+				);
+			}
 			// `new_text` alone against an existing file is a model asking to
 			// rewrite it wholesale.
 			//

@@ -2151,6 +2151,20 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown, context?: Rang
 			// `revision: "#3"`, rendered as the base.
 			const searched = getStringField(parsedInput, "find")
 			const target = describeRestoreTarget(getStringField(parsedInput, "revision"))
+			// Once it has run, the result says whether anything was written. A
+			// refusal is an ordinary result, not a failed call, so the row kept
+			// saying the file was put back over "has no earlier version held"
+			// (pandorum, 2026-10-21: two such rows, and the file was never
+			// restored). Every restore that writes says the file "is back to".
+			const result = context?.output != null ? rangeEditResultText(context.output) : undefined
+			if (result !== undefined && !searched && !/ is back to /.test(result)) {
+				return {
+					tool: toolName as ClineSayTool["tool"],
+					path: getStringField(parsedInput, "path") ?? "",
+					headline: "Cerebriline did not put this file back:",
+					content: result.split("\n")[0],
+				}
+			}
 			const headline = searched
 				? "Cerebriline searched this file's earlier versions:"
 				: target.kind === "numbered"

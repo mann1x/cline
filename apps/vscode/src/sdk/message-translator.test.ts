@@ -7238,6 +7238,32 @@ describe("tools with no bespoke row still reach the chat with something to show"
 		expect(sayToolFor("restore_file", { path: "/w/game.html", revision: "original" }).headline).toBe(expected)
 	})
 
+	// pandorum, 2026-10-21: two restores refused with "has no earlier version
+	// held", and both rows said the file had been put back.
+	it("says a restore did not happen once its result says so", () => {
+		const finished = (output: string) => {
+			const state = new MessageTranslatorState()
+			const send = (event: Record<string, unknown>) =>
+				translateSessionEvent(
+					{ type: "agent_event", payload: { sessionId: "s1", event: event as unknown as AgentEvent } },
+					state,
+				)
+			const input = { path: "/w/game.html", revision: "last" }
+			send({ type: "content_start", contentType: "tool", toolName: "restore_file", toolCallId: "c1", input })
+			const end = send({ type: "content_end", contentType: "tool", toolName: "restore_file", toolCallId: "c1", output })
+			return JSON.parse(end.messages.at(-1)?.text ?? "{}") as { headline?: string; content?: string }
+		}
+
+		const refused = finished(
+			"`game.html` has no earlier version held: nothing has written to it in this session, so there is nothing to put back.",
+		)
+		expect(refused.headline).toBe("Cerebriline did not put this file back:")
+		expect(refused.content).toContain("has no earlier version held")
+
+		const restored = finished("`game.html` is back to revision #2: 40 lines, undoing 3 changed lines.\n\n#1 ...")
+		expect(restored.headline).toBe("Cerebriline undid its last change to this file:")
+	})
+
 	// `find` searches the history and writes nothing, so the constant header
 	// asserted a restore that never happened.
 	it("does not claim a restore when the call only searched the history", () => {

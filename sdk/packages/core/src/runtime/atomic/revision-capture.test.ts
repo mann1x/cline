@@ -78,6 +78,24 @@ describe("withRevisionCapture", () => {
 		expect(log.revisions(FILE)[1]?.body?.toString()).toBe("two\n");
 	});
 
+	it("captures an editor call that names its file `file_path`", async () => {
+		// The editor's argument as the model writes it since the rename; read
+		// as `path` alone, nothing was captured and restore_file had no
+		// version to go back to (pandorum, 2026-10-21).
+		const { log, d, source } = harness({ [FILE]: "one\n" });
+		const [editor] = withRevisionCapture([tool("editor")], {
+			source,
+			readFile: d.readFile,
+		});
+		d.state.set(FILE, "two\n");
+		await editor?.execute?.(
+			{ file_path: FILE, new_text: "two\n" } as never,
+			{} as never,
+		);
+		expect(log.revisions(FILE).map((r) => r.index)).toEqual([1, 2]);
+		expect(log.revisions(FILE)[0]?.body?.toString()).toBe("one\n");
+	});
+
 	it("records nothing when the tool changed nothing", async () => {
 		const { log, d, source } = harness({ [FILE]: "one\n" });
 		const [editor] = withRevisionCapture([tool("editor")], {

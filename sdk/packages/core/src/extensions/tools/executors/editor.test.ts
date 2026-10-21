@@ -1680,6 +1680,27 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
+		// pandorum, 2026-10-21: `end_line: 267` and no `start_line`, the model's
+		// `start_line` lost after the text, replaced all 292 lines with 23.
+		it("refuses an end_line with no start_line instead of replacing the file", async () => {
+			await withTempFile("one\ntwo\nthree\n", async (filePath, dir) => {
+				const receipts = createReadReceipts();
+				const editor = createEditorExecutor({ receipts });
+				receipts.noteRead(filePath, 1, 3);
+
+				await expect(
+					editor(
+						{ path: filePath, end_line: 2, new_text: "TWO\n" },
+						dir,
+						context,
+					),
+				).rejects.toThrow("`end_line: 2` and no `start_line`");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"one\ntwo\nthree\n",
+				);
+			});
+		});
+
 		// The condition the deletion route silently discarded. Reading is what
 		// tells the model what it is about to overwrite.
 		it("refuses to replace a file it has not read", async () => {

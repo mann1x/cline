@@ -22,10 +22,11 @@
  */
 
 import * as path from "node:path";
-import type {
-	AgentTool,
-	AgentToolContext,
-	AgentToolDefinition,
+import {
+	type AgentTool,
+	type AgentToolContext,
+	type AgentToolDefinition,
+	editorFilePath,
 } from "@cline/shared";
 import { DefaultToolNames } from "../../extensions/tools/constants";
 import { resolveBaseFile } from "./base-revision";
@@ -116,7 +117,13 @@ function targetsOf(name: string, input: unknown): string[] {
 	}
 	const record = input as Record<string, unknown>;
 	if (name === DefaultToolNames.EDITOR) {
-		return typeof record.path === "string" ? [record.path] : [];
+		// The call as the model wrote it, before the tool resolves it: the file
+		// is `file_path`, or `path` in a call written with the old name. Read
+		// as `path` alone, no editor write was captured from the rename on
+		// (pandorum, 2026-10-21): the file was overwritten whole, and
+		// `restore_file` found no earlier version of it to put back.
+		const file = editorFilePath(record);
+		return file ? [file] : [];
 	}
 	if (name === DefaultToolNames.APPLY_PATCH) {
 		return typeof record.input === "string" ? patchTargets(record.input) : [];
