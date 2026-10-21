@@ -99,7 +99,7 @@ export function addRootOptions(cmd: Command): Command {
 			)
 			.option(
 				"--tool-result-format <format>",
-				"How tool results are written into the request: json | text (default: json). A resumed session keeps the format it started with",
+				"How tool results are written into the request: json | text (default: text). A resumed session keeps the format it started with",
 			)
 			.option(
 				"--atomic <mode>",

@@ -250,10 +250,9 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			)
 		}
 
-		// Anything but `text` is the format sessions always ran on. Empty is
-		// proto3's "not sent".
+		// Anything but `json` is the default, `text`. Empty is proto3's "not sent".
 		if (request.toolResultFormat !== undefined && request.toolResultFormat !== "") {
-			controller.stateManager.setGlobalState("toolResultFormat", request.toolResultFormat === "text" ? "text" : "json")
+			controller.stateManager.setGlobalState("toolResultFormat", request.toolResultFormat === "json" ? "json" : "text")
 		}
 
 		// Update terminal reuse setting

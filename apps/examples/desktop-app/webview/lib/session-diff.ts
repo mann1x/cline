@@ -381,7 +381,9 @@ function parseEditorFileDiff(event: SessionHookEvent): SessionFileDiff | null {
 			: toStringValue(input.old_text) != null
 				? "str_replace"
 				: "create");
-	const pathFromInput = toStringValue(input.path);
+	// `editor` names its file `file_path` (`path` before 2026-10-20).
+	const pathFromInput =
+		toStringValue(input.file_path) ?? toStringValue(input.path);
 	const query = toStringValue(output.query);
 	const pathFromQuery = query?.includes(":")
 		? query.split(":").slice(1).join(":")

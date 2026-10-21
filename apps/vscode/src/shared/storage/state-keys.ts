@@ -386,7 +386,7 @@ const USER_SETTINGS_FIELDS = {
 	// How a tool's result is written into the request: `json`, as it always
 	// was, or `text`. Read when a conversation starts and fixed for it after;
 	// a resumed one keeps the format it began with.
-	toolResultFormat: { default: "json" as "json" | "text" },
+	toolResultFormat: { default: "text" as "json" | "text" },
 	defaultTerminalProfile: { default: "default" as string },
 	hooksEnabled: { default: true as boolean },
 	useAutoCondense: { default: true as boolean },

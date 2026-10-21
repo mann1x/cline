@@ -2135,7 +2135,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 		globalMaxToolResultChars
 	// Applies to a new conversation only: core records it on the session and
 	// a resumed one keeps what it recorded, whatever this says now.
-	const toolResultFormat = stateManager.getGlobalSettingsKey("toolResultFormat") === "text" ? "text" : "json"
+	const toolResultFormat = stateManager.getGlobalSettingsKey("toolResultFormat") === "json" ? "json" : "text"
 	const enableCheckpoints = stateManager.getGlobalSettingsKey("enableCheckpointsSetting") ?? true
 	// A second model that reads images for the primary one. Only installed when
 	// the user has both enabled it and picked a model for it: without a

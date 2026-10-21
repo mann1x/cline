@@ -315,6 +315,7 @@ export {
 	asStructuredToolResultEntry,
 	DEFAULT_TOOL_RESULT_FORMAT,
 	isToolResultFormat,
+	LEGACY_TOOL_RESULT_FORMAT,
 	renderStructuredToolResultEntry,
 	renderToolOutputForModel,
 	renderToolResultText,

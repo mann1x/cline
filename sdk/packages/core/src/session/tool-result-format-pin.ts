@@ -1,6 +1,7 @@
 import {
 	DEFAULT_TOOL_RESULT_FORMAT,
 	isToolResultFormat,
+	LEGACY_TOOL_RESULT_FORMAT,
 	type ToolResultFormat,
 } from "@cline/shared";
 
@@ -25,8 +26,9 @@ export function pinToolResultFormat(input: {
 	if (isToolResultFormat(stored)) {
 		return stored;
 	}
+	// Not the default: that is what a new conversation gets, and it changed.
 	if (input.hasHistory) {
-		return DEFAULT_TOOL_RESULT_FORMAT;
+		return LEGACY_TOOL_RESULT_FORMAT;
 	}
 	return input.configured ?? DEFAULT_TOOL_RESULT_FORMAT;
 }

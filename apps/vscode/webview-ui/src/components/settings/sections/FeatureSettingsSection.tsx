@@ -458,7 +458,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 								</p>
 								<Select
 									onValueChange={(value) => updateSetting("toolResultFormat", value)}
-									value={toolResultFormat ?? "json"}>
+									value={toolResultFormat ?? "text"}>
 									<SelectTrigger className="w-full">
 										<SelectValue />
 									</SelectTrigger>

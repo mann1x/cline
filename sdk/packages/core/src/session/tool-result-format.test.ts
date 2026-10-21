@@ -158,7 +158,11 @@ describe("the session's pinned format", () => {
 		expect(pinToolResultFormat({ hasHistory: false, configured: "text" })).toBe(
 			"text",
 		);
-		expect(pinToolResultFormat({ hasHistory: false })).toBe("json");
+		// The default since 2026-10-21.
+		expect(pinToolResultFormat({ hasHistory: false })).toBe("text");
+		expect(pinToolResultFormat({ hasHistory: false, configured: "json" })).toBe(
+			"json",
+		);
 	});
 
 	it("is what a resumed conversation recorded, whatever the setting says now", () => {

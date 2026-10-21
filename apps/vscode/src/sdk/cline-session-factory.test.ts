@@ -1652,8 +1652,13 @@ describe("buildSessionConfig", () => {
 			key === "toolResultFormat" ? "text" : undefined,
 		)
 		expect((await buildSessionConfig({ cwd: "/tmp/workspace" })).toolResultFormat).toBe("text")
-		mocks.stateManager.getGlobalSettingsKey.mockImplementation(() => undefined)
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation((key: string): any =>
+			key === "toolResultFormat" ? "json" : undefined,
+		)
 		expect((await buildSessionConfig({ cwd: "/tmp/workspace" })).toolResultFormat).toBe("json")
+		// Text is the default since 2026-10-21: nothing stored means text.
+		mocks.stateManager.getGlobalSettingsKey.mockImplementation(() => undefined)
+		expect((await buildSessionConfig({ cwd: "/tmp/workspace" })).toolResultFormat).toBe("text")
 	})
 
 	it("enables agentic SDK compaction when global useAutoCondense is true", async () => {

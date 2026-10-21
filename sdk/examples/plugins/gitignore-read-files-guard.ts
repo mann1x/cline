@@ -41,6 +41,14 @@ function addPath(value: unknown, paths: string[]): void {
 	if (typeof record?.path === "string" && record.path.trim().length > 0) {
 		paths.push(record.path);
 	}
+	// `editor` names its file `file_path`; read as `path` alone, an edit to an
+	// ignored file went through unchecked.
+	if (
+		typeof record?.file_path === "string" &&
+		record.file_path.trim().length > 0
+	) {
+		paths.push(record.file_path);
+	}
 }
 
 function addPathList(value: unknown, paths: string[]): void {

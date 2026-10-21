@@ -323,8 +323,14 @@ describe("LocalRuntimeHost", () => {
 	// and the format was not on it, so a `text` session sent JSON.
 	it.each([
 		{ configured: "text" as const, expected: "text", staleReadRewrites: false },
-		{ configured: undefined, expected: "json", staleReadRewrites: undefined },
-	])("builds the lead with the session's tool result format and read rewrites ($expected)", async ({
+		{
+			configured: "json" as const,
+			expected: "json",
+			staleReadRewrites: undefined,
+		},
+		// Text is the default for a new conversation since 2026-10-21.
+		{ configured: undefined, expected: "text", staleReadRewrites: undefined },
+	])("builds the lead with the session's tool result format and read rewrites ($configured -> $expected)", async ({
 		configured,
 		expected,
 		staleReadRewrites,

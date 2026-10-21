@@ -29,11 +29,17 @@ export const TOOL_RESULT_FORMATS: readonly ToolResultFormat[] = [
 ];
 
 /**
- * `json`, so a session that names no format is the session it always was. The
- * other one is chosen, and stays chosen for the life of the conversation: a
- * transcript that reads half one way and half the other is worse than either.
+ * `text` since 2026-10-21: a model copying code out of a JSON result wrote its
+ * escapes into the edit (pandorum, 28 literal `\n` and no real line break).
+ * Whichever one a session starts with stays for the life of the conversation:
+ * a transcript that reads half one way and half the other is worse than
+ * either. A session from before the setting existed ran on `json`; see
+ * `LEGACY_TOOL_RESULT_FORMAT`.
  */
-export const DEFAULT_TOOL_RESULT_FORMAT: ToolResultFormat = "json";
+export const DEFAULT_TOOL_RESULT_FORMAT: ToolResultFormat = "text";
+
+/** What every session ran on before the format could be chosen. */
+export const LEGACY_TOOL_RESULT_FORMAT: ToolResultFormat = "json";
 
 export function isToolResultFormat(value: unknown): value is ToolResultFormat {
 	return value === "json" || value === "text";

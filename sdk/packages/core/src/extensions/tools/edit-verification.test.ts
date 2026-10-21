@@ -20,6 +20,9 @@ describe("reading the paths out of a call", () => {
 	// Three tools, three shapes. Reading one would silently cover one tool,
 	// which is the failure this module exists to answer.
 	it("reads the shape each tool actually sends", () => {
+		expect(extractPaths({ file_path: "src/game.ts", new_text: "x" })).toEqual([
+			"src/game.ts",
+		]);
 		expect(extractPaths({ path: "src/game.ts" })).toEqual(["src/game.ts"]);
 		expect(extractPaths({ paths: ["a.ts", "b.ts"] })).toEqual(["a.ts", "b.ts"]);
 		expect(extractPaths({ files: [{ path: "c.ts" }, "d.ts"] })).toEqual([

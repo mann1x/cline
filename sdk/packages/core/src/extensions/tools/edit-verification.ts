@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import type { AgentTool } from "@cline/shared";
+import { type AgentTool, editorFilePath } from "@cline/shared";
 
 /**
  * Files the model changed and has not checked since.
@@ -58,10 +58,12 @@ export interface EditVerificationState {
 /**
  * Every file path an argument bag names, whatever shape it names them in.
  *
- * `editor` sends `path`, `check_file` sends `paths`, and `read_files` sends
- * `files: [{ path }]`. Reading one shape would silently cover one tool, which
- * is the failure mode this whole module exists to answer, so all three are
- * read and anything unrecognised contributes nothing.
+ * `editor` sends `file_path` (`path` before 2026-10-20), `check_file` sends
+ * `paths`, and `read_files` sends `files: [{ path }]`. Reading one shape would
+ * silently cover one tool, which is the failure mode this whole module exists
+ * to answer, so all of them are read and anything unrecognised contributes
+ * nothing. Read as `path` alone, no editor edit was tracked after the rename
+ * and the unchecked-edit guard never fired.
  */
 export function extractPaths(input: unknown): string[] {
 	if (input == null || typeof input !== "object") {
@@ -74,7 +76,7 @@ export function extractPaths(input: unknown): string[] {
 			found.push(value.trim());
 		}
 	};
-	push(bag.path);
+	push(editorFilePath(bag));
 	if (Array.isArray(bag.paths)) {
 		for (const entry of bag.paths) {
 			push(entry);
