@@ -20,7 +20,7 @@
  * colon.
  */
 
-import { statSync } from "node:fs";
+import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 
 /**
@@ -108,6 +108,34 @@ function workspaceFile(
 	}
 }
 
+/** How much of a file is read to tell a program from a source file. */
+const BINARY_SNIFF_BYTES = 8192;
+
+/**
+ * Whether a file is a program or other binary rather than text.
+ *
+ * The runner itself is named on the command line, and on pandorum it is
+ * `run_game.exe`: the checker was asked about 99 MB of machine code and said
+ * "no problems reported … that is not the same as clean" on every failing run.
+ * A NUL byte in the first few kilobytes is what text never has, whatever the
+ * extension.
+ */
+function looksBinary(absolute: string): boolean {
+	let fd: number | undefined;
+	try {
+		fd = openSync(absolute, "r");
+		const buffer = Buffer.alloc(BINARY_SNIFF_BYTES);
+		const read = readSync(fd, buffer, 0, BINARY_SNIFF_BYTES, 0);
+		return buffer.subarray(0, read).includes(0);
+	} catch {
+		return false;
+	} finally {
+		if (fd !== undefined) {
+			closeSync(fd);
+		}
+	}
+}
+
 /**
  * The workspace files a command names in its own arguments.
  *
@@ -138,7 +166,7 @@ export function findCommandFileTargets(
 	const found: string[] = [];
 	for (const token of tokens) {
 		const absolute = workspaceFile(token, root, seen);
-		if (absolute) {
+		if (absolute && !looksBinary(absolute)) {
 			found.push(absolute);
 		}
 		if (found.length > MAX_COMMAND_TARGETS) {

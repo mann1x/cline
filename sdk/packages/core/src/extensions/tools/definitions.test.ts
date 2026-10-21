@@ -1780,6 +1780,52 @@ describe("default read_files tool", () => {
 		);
 	});
 
+	// pandorum klbbz: `end_line` beside the list was dropped, and the read of
+	// 80-120 ran to the end of the file.
+	it("applies a range or line_numbers written beside the list to its files", async () => {
+		const execute = vi.fn(
+			async (request: { path: string }) => `content:${request.path}`,
+		);
+		const tool = createReadFilesTool(execute);
+		const context = { agentId: "agent-1", conversationId: "conv-1" };
+
+		await tool.execute(
+			{
+				end_line: 120,
+				files: [{ path: "/tmp/game.html", start_line: 80 }],
+			} as never,
+			{ ...context, iteration: 1 },
+		);
+		await tool.execute(
+			{
+				line_numbers: false,
+				start_line: 5,
+				files: [
+					"/tmp/a.ts",
+					{ path: "/tmp/b.ts", start_line: 9, end_line: null },
+				],
+			} as never,
+			{ ...context, iteration: 2 },
+		);
+
+		expect(execute).toHaveBeenNthCalledWith(
+			1,
+			{ path: "/tmp/game.html", start_line: 80, end_line: 120 },
+			expect.objectContaining({ iteration: 1 }),
+		);
+		expect(execute).toHaveBeenNthCalledWith(
+			2,
+			{ path: "/tmp/a.ts", start_line: 5, line_numbers: false },
+			expect.objectContaining({ iteration: 2 }),
+		);
+		// The entry's own start_line wins over the one beside the list.
+		expect(execute).toHaveBeenNthCalledWith(
+			3,
+			{ path: "/tmp/b.ts", start_line: 9, line_numbers: false },
+			expect.objectContaining({ iteration: 2 }),
+		);
+	});
+
 	it("reads a path field that carries a bracketed list instead of a path", async () => {
 		const execute = vi.fn(
 			async (request: { path: string }) => `content:${request.path}`,

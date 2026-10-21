@@ -197,6 +197,75 @@ export function coalesceOrphanReadRanges(input: unknown): unknown {
 	return input;
 }
 
+/** Per-file read options a model sometimes writes once, beside the list. */
+const SHARED_READ_OPTION_KEYS = ["start_line", "end_line", "line_numbers"];
+
+/**
+ * Hand options written beside the file list to the files in it.
+ *
+ * Measured on pandorum (klbbz): `{end_line: 120, files: [{path, start_line: 80}]}`.
+ * The schema keeps only what is on each entry, so the `end_line` was dropped
+ * without a word and the read ran from line 80 to the end of the file. A
+ * `line_numbers: false` written there was dropped the same way, and a model
+ * that asked for clean text to copy into an edit got numbered lines instead.
+ * Each entry keeps any option it sets itself; only the ones it leaves out are
+ * taken from beside the list.
+ */
+export function applySharedReadOptions(input: unknown): unknown {
+	if (input === null || typeof input !== "object" || Array.isArray(input)) {
+		return input;
+	}
+	const record = input as Record<string, unknown>;
+	const shared = Object.fromEntries(
+		SHARED_READ_OPTION_KEYS.filter((key) => record[key] != null).map((key) => [
+			key,
+			record[key],
+		]),
+	);
+	if (Object.keys(shared).length === 0) {
+		return input;
+	}
+	for (const key of ["files", "paths"] as const) {
+		const value = record[key];
+		if (value == null) {
+			continue;
+		}
+		const entries = Array.isArray(value) ? value : [value];
+		const applied = entries.map((entry) => {
+			if (typeof entry === "string") {
+				return { path: entry, ...shared };
+			}
+			if (
+				entry !== null &&
+				typeof entry === "object" &&
+				!Array.isArray(entry)
+			) {
+				return {
+					...shared,
+					...withoutNullish(entry as Record<string, unknown>),
+				};
+			}
+			return entry;
+		});
+		const rest = Object.fromEntries(
+			Object.entries(record).filter(
+				([name]) => !SHARED_READ_OPTION_KEYS.includes(name),
+			),
+		);
+		return { ...rest, [key]: applied };
+	}
+	return input;
+}
+
+/** An entry's `null` means "not set", so it must not hide a shared value. */
+function withoutNullish(
+	entry: Record<string, unknown>,
+): Record<string, unknown> {
+	return Object.fromEntries(
+		Object.entries(entry).filter(([, value]) => value != null),
+	);
+}
+
 /** Path-carrying keys a model might put a bracketed list into. */
 const READ_PATH_KEYS = [
 	"path",

@@ -24,6 +24,7 @@ import {
 	MAX_SEARCH_OUTPUT_CHARS,
 } from "./executors/output-limits";
 import {
+	applySharedReadOptions,
 	coalesceOrphanReadRanges,
 	expandBracketedPathLists,
 	formatError,
@@ -400,7 +401,9 @@ export const EMPTY_READ_EXPLANATION =
 export function readFileRequestsFrom(input: unknown): ReadFileRequest[] {
 	const validate = validateWithZod(
 		ReadFilesInputUnionSchema,
-		coalesceOrphanReadRanges(expandBracketedPathLists(input)),
+		applySharedReadOptions(
+			coalesceOrphanReadRanges(expandBracketedPathLists(input)),
+		),
 	);
 	if (typeof validate === "string") {
 		return [{ path: validate }];

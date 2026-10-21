@@ -189,6 +189,18 @@ describe("the files a command names itself", () => {
 		]);
 	});
 
+	// pandorum: `.\run_game.exe manic_miner.html` had the checker report on the
+	// executable after every failing run.
+	it("leaves out a runner that is a program, not a source file", () => {
+		const root = workspace({
+			"run_game.exe": "MZ\u0090\u0000\u0003\u0000\u0000\u0000",
+			"manic_miner.html": "<script>f(</script>\n",
+		});
+		expect(
+			findCommandFileTargets("./run_game.exe manic_miner.html", root),
+		).toEqual([path.join(root, "manic_miner.html")]);
+	});
+
 	it("sees past a cd and quoting", () => {
 		const root = workspace({ "manic_miner.html": "<script>f(</script>\n" });
 		expect(
