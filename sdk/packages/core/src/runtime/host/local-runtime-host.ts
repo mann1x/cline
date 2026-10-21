@@ -16,6 +16,7 @@ import {
 	createSessionId,
 	type ITelemetryService,
 	isLikelyAuthError,
+	type LoopCutRecord,
 	normalizeUserInput,
 	type ReasoningLoopLimitContext,
 } from "@cline/shared";
@@ -248,6 +249,7 @@ import {
 	type SubAgentStartTracker,
 } from "./local/spawn-tool";
 import { loadUserFileContent } from "./local/user-files";
+import { appendLoopCut } from "./loop-cut-log";
 import type {
 	ListSessionsOptions,
 	PendingPromptsServiceApi,
@@ -2522,6 +2524,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 						);
 					}
 				: configWithProvider.onConsecutiveMistakeLimitReached,
+			// Every text a guard removes, kept beside the transcript it was taken
+			// out of: one JSON line per cut, so a cut can be read back and checked.
+			onLoopCut: (cut: LoopCutRecord) =>
+				appendLoopCut(join(sessionDir, `${sessionId}.cuts.jsonl`), cut),
 			// The other terminal guard, which had no seam at all until now.
 			...(forcedEscalation
 				? {

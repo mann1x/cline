@@ -315,6 +315,48 @@ export interface ReasoningLoopLimitContext {
 	diagnosis: string;
 }
 
+/**
+ * Text a guard took out of a turn, as it was before it went.
+ *
+ * Nothing that is removed is kept in the transcript, any request or the
+ * stored session, so without this record a cut cannot be checked: on pandorum
+ * (2026-10-21, v9-agentic) 71,744 characters of reasoning were cut as a loop
+ * and the session held a 128-character stub.
+ */
+export interface LoopCutRecord {
+	agentId: string;
+	iteration: number;
+	/** Where the text was: the thinking, the reply, or a call's arguments. */
+	channel: "reasoning" | "reply" | "tool_arguments";
+	/**
+	 * What removed it. `reasoning_loop`, `answer_loop` and `argument_loop` are
+	 * the streaming loop guard; `reasoning_repetition` is the passage measured
+	 * once the turn was complete; `tool_intent_overrun` is a call whose
+	 * `intent` ran past its limit; `unreadable_tool_call` is reply text
+	 * nothing could parse as the call it began.
+	 */
+	cause:
+		| "reasoning_loop"
+		| "answer_loop"
+		| "argument_loop"
+		| "reasoning_repetition"
+		| "tool_intent_overrun"
+		| "unreadable_tool_call";
+	/** The streaming guard's verdict, when it was that guard. */
+	verdict?: {
+		kind: string;
+		chars: number;
+		period?: number;
+		cycles?: number;
+		distinct?: number;
+		sample: string;
+	};
+	toolName?: string;
+	toolCallId?: string;
+	/** Everything removed, verbatim. */
+	text: string;
+}
+
 export interface LoopDetectionConfig {
 	softThreshold: number;
 	hardThreshold: number;
@@ -1108,6 +1150,12 @@ export interface AgentConfig {
 	onReasoningLoopLimitReached?: (
 		context: ReasoningLoopLimitContext,
 	) => Promise<TerminalGuardDecision> | TerminalGuardDecision;
+	/**
+	 * Given every piece of text a guard removes from a turn, before it goes;
+	 * see `LoopCutRecord`. Not awaited: the turn does not wait on the host's
+	 * write, and a failure is logged and nothing else.
+	 */
+	onLoopCut?: (cut: LoopCutRecord) => void | Promise<void>;
 	/**
 	 * Optional logger for tracing agent loop lifecycle and recoverable failures.
 	 */

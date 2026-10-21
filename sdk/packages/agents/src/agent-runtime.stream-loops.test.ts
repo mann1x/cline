@@ -3,6 +3,7 @@ import type {
 	AgentModelEvent,
 	AgentModelRequest,
 	AgentRuntimeEvent,
+	LoopCutRecord,
 } from "@cline/shared";
 import { describe, expect, it, vi } from "vitest";
 import { AgentRuntime } from "./agent-runtime";
@@ -177,6 +178,34 @@ describe("the loop guard on a call's arguments", () => {
 		expect(loopNotices(events)).toHaveLength(0);
 	});
 
+	it("hands the cut call's arguments to the host, verbatim", async () => {
+		const head = 'call:editor{intent:<|"|>Fix sX<|"|>,new_text:<|"|>';
+		function* looping(): Iterable<AgentModelEvent> {
+			yield progress(head);
+			for (let i = 0; i < 200; i++) yield progress(`${BLOCK}\n`);
+			yield { type: "finish", reason: "length" };
+		}
+		const cuts: LoopCutRecord[] = [];
+		const runtime = new AgentRuntime({
+			model: new CountingModel([looping, answer]),
+			tools: [editor],
+			onLoopCut: (cut) => {
+				cuts.push(cut);
+			},
+		});
+
+		await runtime.run("go");
+		await vi.waitFor(() => expect(cuts).toHaveLength(1));
+
+		expect(cuts[0]).toMatchObject({
+			channel: "tool_arguments",
+			cause: "argument_loop",
+			toolName: "editor",
+			toolCallId: "call_1",
+		});
+		expect(cuts[0]?.text.startsWith(`${head}${BLOCK}\n`)).toBe(true);
+	});
+
 	it("stays off with the loop detection switch", async () => {
 		function* looping(): Iterable<AgentModelEvent> {
 			yield progress('call:editor{new_text:<|"|>');
@@ -228,6 +257,35 @@ describe("the loop guard on the reply", () => {
 		expect(texts(result.messages.at(-1) as never)).toBe("done");
 	});
 
+	it("hands the cut reply to the host, verbatim", async () => {
+		function* looping(): Iterable<AgentModelEvent> {
+			yield { type: "text-delta", text: "I will write the file now.\n" };
+			for (let i = 0; i < 200; i++) {
+				yield { type: "text-delta", text: `${BLOCK}\n` };
+			}
+			yield { type: "finish", reason: "stop" };
+		}
+		const cuts: LoopCutRecord[] = [];
+		const runtime = new AgentRuntime({
+			model: new CountingModel([looping, answer]),
+			onLoopCut: (cut) => {
+				cuts.push(cut);
+			},
+		});
+
+		await runtime.run("go");
+		await vi.waitFor(() => expect(cuts).toHaveLength(1));
+
+		expect(cuts[0]).toMatchObject({
+			channel: "reply",
+			cause: "answer_loop",
+			iteration: 1,
+			verdict: { kind: "block-cycle", period: 12 },
+		});
+		expect(cuts[0]?.text.startsWith("I will write the file now.\n")).toBe(true);
+		expect(cuts[0]?.text).toContain(`${BLOCK}\n${BLOCK}\n`);
+	});
+
 	it("leaves a reply that only talks alone", async () => {
 		function* healthy(): Iterable<AgentModelEvent> {
 			for (let i = 0; i < 300; i++) {
@@ -249,5 +307,75 @@ describe("the loop guard on the reply", () => {
 
 		expect(model.yielded[0]).toBe(301);
 		expect(loopNotices(events)).toHaveLength(0);
+	});
+});
+
+describe("the loop guard on the thinking", () => {
+	function* looping(): Iterable<AgentModelEvent> {
+		yield { type: "reasoning-delta", text: "Let me plan the edit.\n" };
+		for (let i = 0; i < 200; i++) {
+			yield { type: "reasoning-delta", text: `${BLOCK}\n` };
+		}
+		yield { type: "finish", reason: "stop" };
+	}
+
+	it("tells the model what was cut and asks for the next call", async () => {
+		// pandorum, 2026-10-21: after a cut the model was told only that a
+		// turn with no tool call was about to end the run.
+		const model = new CountingModel([looping, answer]);
+		const runtime = new AgentRuntime({ model });
+
+		const result = await runtime.run("go");
+
+		expect(model.requests).toHaveLength(2);
+		const reminder = result.messages[2];
+		expect(reminder?.role).toBe("user");
+		expect(texts(reminder as never)).toContain(
+			"Your thinking was cut while you were writing it",
+		);
+		expect(texts(reminder as never)).toContain("the same 12-line block");
+		expect(texts(reminder as never)).not.toContain(
+			"Your last message contained no tool calls",
+		);
+		expect(texts(result.messages.at(-1) as never)).toBe("done");
+	});
+
+	it("hands the cut thinking to the host, verbatim", async () => {
+		const cuts: LoopCutRecord[] = [];
+		const runtime = new AgentRuntime({
+			model: new CountingModel([looping, answer]),
+			onLoopCut: (cut) => {
+				cuts.push(cut);
+			},
+		});
+
+		const result = await runtime.run("go");
+		await vi.waitFor(() => expect(cuts).toHaveLength(1));
+
+		expect(cuts[0]).toMatchObject({
+			channel: "reasoning",
+			cause: "reasoning_loop",
+			iteration: 1,
+			verdict: { kind: "block-cycle", period: 12 },
+		});
+		expect(cuts[0]?.text.startsWith(`Let me plan the edit.\n${BLOCK}\n`)).toBe(
+			true,
+		);
+		// The transcript still holds only the stub.
+		expect(JSON.stringify(result.messages)).not.toContain("pop3()");
+	});
+
+	it("keeps running when the host cannot keep the cut", async () => {
+		const runtime = new AgentRuntime({
+			model: new CountingModel([looping, answer]),
+			onLoopCut: () => {
+				throw new Error("disk full");
+			},
+		});
+
+		const result = await runtime.run("go");
+
+		expect(result.status).toBe("completed");
+		expect(texts(result.messages.at(-1) as never)).toBe("done");
 	});
 });

@@ -1126,6 +1126,13 @@ export interface AgentRuntimeConfig {
 		| Promise<import("./agents/types").TerminalGuardDecision>
 		| import("./agents/types").TerminalGuardDecision;
 	/**
+	 * Given every piece of text a guard removes from a turn; see
+	 * `LoopCutRecord`. A host keeps it so a cut can be checked afterwards.
+	 */
+	onLoopCut?: (
+		cut: import("./agents/types").LoopCutRecord,
+	) => void | Promise<void>;
+	/**
 	 * Verbatim self-repetition nudge on the model's reasoning channel; see
 	 * `ReasoningRepetitionConfig`. On by default, `false` disables it.
 	 */

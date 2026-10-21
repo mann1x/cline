@@ -152,6 +152,9 @@ export function createAgentRuntimeConfig(
 		// streak is counted inside the runtime and nothing outside it can see the
 		// moment the run is about to end.
 		onReasoningLoopLimitReached: agentConfig.onReasoningLoopLimitReached,
+		// The text the guards remove exists only inside the runtime, so only the
+		// runtime can hand it over before it goes.
+		onLoopCut: agentConfig.onLoopCut,
 		// Same reason: the nudge is issued from inside the turn loop, so the
 		// runtime is the only thing that can carry the setting.
 		reasoningRepetition: agentConfig.execution?.reasoningRepetition,

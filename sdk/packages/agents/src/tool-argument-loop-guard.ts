@@ -138,3 +138,13 @@ export function buildToolArgumentLoopNudge(loop: ToolArgumentLoop): string {
 export function buildReplyLoopNudge(verdict: ReasoningLoopVerdict): string {
 	return `[SYSTEM] Your reply was cut while you were writing it, and none of it is kept: it had come to repeat ${repeated(verdict)}. Carry on with the task from where it stands.`;
 }
+
+/**
+ * The turn after thinking cut for looping. The stub that replaces the
+ * thinking says it was removed, but not what to do next, and the turn made no
+ * call: without this the model was told only that a turn with no tool call
+ * was about to end the run (pandorum, 2026-10-21).
+ */
+export function buildReasoningLoopNudge(verdict: ReasoningLoopVerdict): string {
+	return `[SYSTEM] Your thinking was cut while you were writing it, and none of it is kept: it had come to repeat ${repeated(verdict)}. Carry on with the task from where it stands: make the next tool call now rather than working the plan out again.`;
+}

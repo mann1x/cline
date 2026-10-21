@@ -28,6 +28,7 @@ import type {
 	AgentUsage,
 	AgentRuntimeConfig as BaseAgentRuntimeConfig,
 	CaptureTaskLifecycleEventInput,
+	LoopCutRecord,
 	OutputTokenSplit,
 	ProviderErrorClass,
 	RequestTimings,
@@ -89,6 +90,7 @@ import {
 	type RepetitionNudger,
 } from "./reasoning-repetition";
 import {
+	buildReasoningLoopNudge,
 	buildReplyLoopNudge,
 	buildToolArgumentLoopNudge,
 	describeToolArgumentLoopStub,
@@ -1700,6 +1702,12 @@ export class AgentRuntime {
 				content.splice(0, content.length, ...kept);
 				spoiled.kinds.push("reasoning_loop");
 				spoiled.removedChars += reasoning.length;
+				this.recordCut({
+					channel: "reasoning",
+					cause: verdict ? "reasoning_loop" : "reasoning_repetition",
+					...(verdict ? { verdict } : {}),
+					text: reasoning,
+				});
 				// A cut while streaming has already said so (`onReasoningLoopCut`).
 				// A block measured once it was complete had no line of its own:
 				// the reminder to the model is spent once per run, while every
@@ -1743,6 +1751,11 @@ export class AgentRuntime {
 			content.splice(0, content.length, ...kept);
 			spoiled.kinds.push("unreadable_tool_call");
 			spoiled.removedChars += text.length;
+			this.recordCut({
+				channel: "reply",
+				cause: "unreadable_tool_call",
+				text,
+			});
 			// How it began and how it ended. The text is not kept anywhere
 			// else, and "14901 chars removed" cannot say whether the call ran
 			// on inside one argument or was cut short of its closing mark
@@ -3881,6 +3894,9 @@ export class AgentRuntime {
 
 		const content: AgentMessagePart[] = [];
 		const toolAssembler = new ToolCallAssembler();
+		// Each call's arguments as they streamed, in the model's own notation:
+		// on xOllama this is the only copy of a call that is cut before it ends.
+		const streamedArguments = new Map<string, string>();
 		const modelToolActivities = new Map<string, AgentModelToolActivity>();
 		const invalidToolCalls: InvalidToolCall[] = [];
 		const sequence: Array<
@@ -4038,6 +4054,10 @@ export class AgentRuntime {
 						},
 					});
 					if (event.inputText) {
+						streamedArguments.set(
+							event.toolCallId,
+							(streamedArguments.get(event.toolCallId) ?? "") + event.inputText,
+						);
 						toolIntentOverrun = toolIntentGuard?.push(
 							event.toolCallId,
 							event.inputText,
@@ -4175,18 +4195,28 @@ export class AgentRuntime {
 				break;
 			}
 		}
-		// One cut, one count, whichever channel it was in.
+		// One cut, one count, whichever channel it was in. The host's guidance,
+		// when it answered the streak, follows the cut turn with its nudge.
+		const withGuidance = (nudge: string, guidance: string | undefined) =>
+			guidance ? `${nudge}\n\n${guidance}` : nudge;
 		if (reasoningLoop) {
-			await this.onReasoningLoopCut(reasoningLoop);
-		} else if (answerLoop) {
-			await this.onReasoningLoopCut(answerLoop, "reply");
-			this.pendingToolIntentNudge = buildReplyLoopNudge(answerLoop);
-		} else if (argumentLoop) {
-			await this.onReasoningLoopCut(
-				argumentLoop.verdict,
-				`call to \`${argumentLoop.toolName ?? "a tool"}\``,
+			this.pendingToolIntentNudge = withGuidance(
+				buildReasoningLoopNudge(reasoningLoop),
+				await this.onReasoningLoopCut(reasoningLoop),
 			);
-			this.pendingToolIntentNudge = buildToolArgumentLoopNudge(argumentLoop);
+		} else if (answerLoop) {
+			this.pendingToolIntentNudge = withGuidance(
+				buildReplyLoopNudge(answerLoop),
+				await this.onReasoningLoopCut(answerLoop, "reply"),
+			);
+		} else if (argumentLoop) {
+			this.pendingToolIntentNudge = withGuidance(
+				buildToolArgumentLoopNudge(argumentLoop),
+				await this.onReasoningLoopCut(
+					argumentLoop.verdict,
+					`call to \`${argumentLoop.toolName ?? "a tool"}\``,
+				),
+			);
 		} else if (reasoningLoopGuard) {
 			this.reasoningLoopStreak = 0;
 		}
@@ -4208,6 +4238,7 @@ export class AgentRuntime {
 			finishReason = "stop";
 		}
 
+		let cutReply = "";
 		for (const item of sequence) {
 			// A cancelled stream may contain incomplete tool JSON or unsigned
 			// reasoning. Keep only replayable visible content from that response.
@@ -4219,7 +4250,10 @@ export class AgentRuntime {
 			if (item.type === "part") {
 				// A reply cut for looping is not kept: the loop would be the
 				// first thing the next turn reads.
-				if (answerLoop && item.part.type === "text") continue;
+				if (answerLoop && item.part.type === "text") {
+					cutReply += item.part.text;
+					continue;
+				}
 				content.push(item.part);
 				continue;
 			}
@@ -4257,13 +4291,33 @@ export class AgentRuntime {
 			messageMetadata.reasoningLoop = reasoningLoop;
 		}
 		if (answerLoop) {
+			this.recordCut({
+				channel: "reply",
+				cause: "answer_loop",
+				verdict: answerLoop,
+				text: cutReply,
+			});
 			content.push({
 				type: "text",
 				text: "(The reply here was cut: it had come to repeat itself. Its text is not kept.)",
 			});
 			messageMetadata.answerLoop = answerLoop;
 		}
+		// What the cut call had written. Streamed text first: a provider that
+		// sends progress (xOllama) never assembles a call it did not finish.
+		const cutArguments = (toolCallId: string) =>
+			streamedArguments.get(toolCallId) ||
+			toolAssembler.get(toolCallId)?.inputText ||
+			"";
 		if (argumentLoop) {
+			this.recordCut({
+				channel: "tool_arguments",
+				cause: "argument_loop",
+				verdict: argumentLoop.verdict,
+				...(argumentLoop.toolName ? { toolName: argumentLoop.toolName } : {}),
+				toolCallId: argumentLoop.toolCallId,
+				text: cutArguments(argumentLoop.toolCallId),
+			});
 			content.push({
 				type: "text",
 				text: describeToolArgumentLoopStub(argumentLoop),
@@ -4271,6 +4325,15 @@ export class AgentRuntime {
 			messageMetadata.argumentLoop = argumentLoop;
 		}
 		if (toolIntentOverrun) {
+			this.recordCut({
+				channel: "tool_arguments",
+				cause: "tool_intent_overrun",
+				...(toolIntentOverrun.toolName
+					? { toolName: toolIntentOverrun.toolName }
+					: {}),
+				toolCallId: toolIntentOverrun.toolCallId,
+				text: cutArguments(toolIntentOverrun.toolCallId),
+			});
 			// In the turn itself, so the history reads as what happened and an
 			// assistant turn with nothing else in it is not sent empty.
 			content.push({
@@ -5076,11 +5139,33 @@ export class AgentRuntime {
 	 * model gets a chance to recover -- but a model that collapses the same way
 	 * every turn is not recovering, and the streak ends the run.
 	 */
+	/**
+	 * Hand the host text a guard is removing, so the cut can be checked later.
+	 * Not awaited and never thrown from: what the turn does next does not
+	 * depend on whether the host managed to keep it.
+	 */
+	private recordCut(cut: Omit<LoopCutRecord, "agentId" | "iteration">): void {
+		const onLoopCut = this.config.onLoopCut;
+		if (!onLoopCut || !cut.text) return;
+		const record: LoopCutRecord = {
+			agentId: this.state.agentId,
+			iteration: this.state.iteration,
+			...cut,
+		};
+		void Promise.resolve()
+			.then(() => onLoopCut(record))
+			.catch((error) => {
+				this.config.logger?.debug?.(
+					`[loop-cut] could not keep the ${cut.channel} cut at iteration ${record.iteration}: ${String(error)}`,
+				);
+			});
+	}
+
 	private async onReasoningLoopCut(
 		verdict: ReasoningLoopVerdict,
 		/** What looped, as `describeReasoningLoop` names it. */
 		subject = "reasoning",
-	): Promise<void> {
+	): Promise<string | undefined> {
 		this.reasoningLoopStreak += 1;
 		const limit =
 			(this.config.reasoningLoopDetection === false
@@ -5125,14 +5210,12 @@ export class AgentRuntime {
 		if (giveUp) {
 			this.abort(new AgentRuntimeAbortError(diagnosis));
 			this.throwIfAborted();
-			return;
+			return undefined;
 		}
-		if (guidance) {
-			// A user message, the way the mistake limit delivers its own
-			// guidance: the model is about to draw again, and this is the only
-			// channel the next request is certain to carry.
-			await this.addUserReminderMessage(guidance);
-		}
+		// Returned, not sent: sent from here it landed in the history ahead of
+		// the very turn it answers, which is recorded only after this returns.
+		// The caller delivers it after that turn, with the cut's own nudge.
+		return guidance;
 	}
 
 	/** Every argument name of every tool this run may call. */

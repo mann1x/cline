@@ -58,7 +58,9 @@ function notices(events: AgentRuntimeEvent[]): Array<Record<string, unknown>> {
 
 describe("the reasoning loop guard, inside the runtime", () => {
 	it("cuts the request instead of streaming the whole collapse", async () => {
-		const model = new CountingModel([collapsingTurn]);
+		// The cut turn is not the answer: the run asks again, with a reminder
+		// about the cut, and ends on the turn after it.
+		const model = new CountingModel([collapsingTurn, healthyTurn]);
 		const events: AgentRuntimeEvent[] = [];
 		const runtime = new AgentRuntime({ model });
 		runtime.subscribe((event) => {
@@ -77,13 +79,14 @@ describe("the reasoning loop guard, inside the runtime", () => {
 		expect(seen[0]?.phase).toBe("cut");
 		expect(seen[0]?.consecutiveTrips).toBe(1);
 
-		const assistant = result.messages
-			.filter((m) => m.role === "assistant")
-			.at(-1);
+		const [cut, reminder] = result.messages.slice(1, 3);
 		expect(
-			(assistant?.metadata as { reasoningLoop?: { kind: string } } | undefined)
+			(cut?.metadata as { reasoningLoop?: { kind: string } } | undefined)
 				?.reasoningLoop?.kind,
 		).toBe("low-uniqueness");
+		expect(JSON.stringify(reminder?.content)).toContain(
+			"Your thinking was cut while you were writing it",
+		);
 	});
 
 	it("streams the whole collapse when the guard is turned off", async () => {
@@ -126,9 +129,12 @@ describe("the reasoning loop guard, inside the runtime", () => {
 	// The seam the mistake limit has had since it was written, given to the
 	// other terminal guard. A host that answers `continue` gets one more turn.
 	it("lets a host answer the streak with one more turn", async () => {
+		// A cut turn is answered by its own reminder and spends none of the
+		// five no-tool-call nudges, so each healthy turn after it spends one.
 		const model = new CountingModel([
 			collapsingTurn,
 			collapsingTurn,
+			healthyTurn,
 			healthyTurn,
 			healthyTurn,
 			healthyTurn,
@@ -154,11 +160,22 @@ describe("the reasoning loop guard, inside the runtime", () => {
 
 		expect(asked).toEqual([2]);
 		expect(result.status).toBe("completed");
-		expect(
-			result.messages.some((message) =>
-				JSON.stringify(message.content).includes("hand this over instead"),
-			),
-		).toBe(true);
+		// After the turn it answers, with that turn's reminder: it was sent
+		// ahead of it, between the first cut's reminder and the second cut.
+		const roles = result.messages.map((message) => message.role);
+		const guided = result.messages.findIndex((message) =>
+			JSON.stringify(message.content).includes("hand this over instead"),
+		);
+		expect(roles.slice(1, 5)).toEqual([
+			"assistant",
+			"user",
+			"assistant",
+			"user",
+		]);
+		expect(guided).toBe(4);
+		expect(JSON.stringify(result.messages[4]?.content)).toContain(
+			"Your thinking was cut while you were writing it",
+		);
 	});
 
 	// Deferred, never removed: the streak is not forgiven, so the next turn cut
