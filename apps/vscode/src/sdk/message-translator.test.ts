@@ -4709,7 +4709,7 @@ describe("sdkToolToClineSayTool — editor diff rendering (S6-48)", () => {
 			const ask = buildToolApprovalAskMessage("editor", { path: "game.js", old_text: "b();", new_text: "" }, 1, dir)
 			const tool = JSON.parse(ask.text!) as ClineSayTool
 			expect(tool.editMode).toBe("SEARCH/REPLACE")
-			expect(tool.content).toBe("------- SEARCH\nb();\n=======\n\n+++++++ REPLACE")
+			expect(tool.content).toBe("------- SEARCH\nb();\n=======\n+++++++ REPLACE")
 		})
 
 		it("draws an insert at a column as the line before and after", () => {
@@ -4779,6 +4779,44 @@ describe("sdkToolToClineSayTool — editor diff rendering (S6-48)", () => {
 			const tool = JSON.parse(end.messages[0].text!) as ClineSayTool
 			expect(tool.content).toBe("------- SEARCH\n}\n=======\n\n+++++++ REPLACE")
 			expect(tool.startLineNumbers).toEqual([97])
+		})
+
+		// The editor leaves out the lines between two changed runs; one block
+		// would draw lines 4 and 7 as if they were next to each other.
+		it("draws one block per changed run of the editor's diff", () => {
+			const state = new MessageTranslatorState()
+			const input = { path: file, start_line: 2, end_line: 9, new_text: "x" }
+			const event = (type: "content_start" | "content_end", extra: object) =>
+				translateSessionEvent(
+					{
+						type: "agent_event",
+						payload: {
+							sessionId: "s",
+							event: {
+								type,
+								contentType: "tool",
+								toolName: "editor",
+								toolCallId: "c",
+								input,
+								...extra,
+							} as AgentEvent,
+						},
+					},
+					state,
+				)
+			event("content_start", {})
+			const end = event("content_end", {
+				output: {
+					query: "edit:game.js",
+					success: true,
+					result: "Replaced lines 2-9 in game.js\n```diff\n-4: \n  ... 2 unchanged lines ...\n-7: it})};\n+7: it});\n```\n",
+				},
+			})
+			const tool = JSON.parse(end.messages[0].text!) as ClineSayTool
+			expect(tool.content).toBe(
+				"------- SEARCH\n\n=======\n+++++++ REPLACE\n------- SEARCH\nit})};\n=======\nit});\n+++++++ REPLACE",
+			)
+			expect(tool.startLineNumbers).toEqual([4, 7])
 		})
 
 		it("keeps new_text alone when neither the file nor a result can say more", () => {

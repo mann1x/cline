@@ -453,18 +453,22 @@ function parseSearchReplaceFormat(patch: string, path: string): Patch | undefine
 		return result
 	}
 
-	// Extract SEARCH block (deletions)
-	const searchContent = afterSearch.substring(0, separatorIndex).replace(/\r?\n$/, "")
-	addLinesToPatch(result, searchContent, "-")
+	// Extract SEARCH block (deletions). A separator straight after the marker
+	// is a side of no lines; a side of one blank line still has its newline.
+	if (separatorIndex > 0) {
+		const searchContent = afterSearch.substring(0, separatorIndex).replace(/\r?\n$/, "")
+		addLinesToPatch(result, searchContent, "-")
+	}
 
 	// Extract REPLACE block (additions)
 	const afterSeparator = afterSearch.substring(separatorIndex + MARKERS.SEARCH_SEPARATOR.length).replace(/^\r?\n/, "")
 	const replaceEndIndex = afterSeparator.indexOf(MARKERS.REPLACE_BLOCK)
 
-	const replaceContent =
-		replaceEndIndex !== -1 ? afterSeparator.substring(0, replaceEndIndex).replace(/\r?\n$/, "") : afterSeparator.trimEnd()
-
-	addLinesToPatch(result, replaceContent, "+")
+	if (replaceEndIndex !== 0) {
+		const replaceContent =
+			replaceEndIndex !== -1 ? afterSeparator.substring(0, replaceEndIndex).replace(/\r?\n$/, "") : afterSeparator.trimEnd()
+		addLinesToPatch(result, replaceContent, "+")
+	}
 
 	return result
 }

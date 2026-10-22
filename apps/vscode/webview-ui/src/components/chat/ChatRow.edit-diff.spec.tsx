@@ -66,3 +66,42 @@ describe("an edit row's diff", () => {
 		})
 	}
 })
+
+/**
+ * A side of no lines is the marker straight after the one before it; a side
+ * of one blank line has the line. Both used to be written the same way, so an
+ * insertion drew a blank line removed and a deletion a blank line added.
+ */
+describe("an edit row's empty side", () => {
+	it("draws an insertion as added lines only", () => {
+		render(
+			<ChatRowContent
+				message={editMessage({
+					tool: "editedExistingFile",
+					path: "src/c.ts",
+					content: "------- SEARCH\n=======\nsX()\n+++++++ REPLACE",
+				})}
+				{...base}
+			/>,
+		)
+
+		expect(screen.getByText("+1")).toBeTruthy()
+		expect(screen.queryByText("-1")).toBeNull()
+	})
+
+	it("draws a removed blank line as one removed line and nothing added", () => {
+		render(
+			<ChatRowContent
+				message={editMessage({
+					tool: "editedExistingFile",
+					path: "src/d.ts",
+					content: "------- SEARCH\n\n=======\n+++++++ REPLACE",
+				})}
+				{...base}
+			/>,
+		)
+
+		expect(screen.getByText("-1")).toBeTruthy()
+		expect(screen.queryByText("+1")).toBeNull()
+	})
+})

@@ -1741,28 +1741,47 @@ function rangeEditResultText(output: unknown): string {
 	return extractToolOutputText(output)
 }
 
-/** The editor's own diff of the lines it replaced, from its result. */
-function rangeEditFromResult(output: unknown): { before: string[]; after: string[]; startLine: number } | undefined {
+/** The editor's line between two changed runs, standing for the lines neither one touched. */
+const UNCHANGED_LINES_MARKER = /^ {2}\.\.\. \d+ unchanged lines? \.\.\.$/
+
+interface RangeEditBlock {
+	before: string[]
+	after: string[]
+	/** The first line the block covers, when the diff numbered one. */
+	startLine?: number
+}
+
+/**
+ * The editor's own diff of the lines it replaced, from its result: one block
+ * per changed run. The diff leaves out the lines between two runs, so joining
+ * the runs into one block would show lines that are not next to each other in
+ * the file as if they were.
+ */
+function rangeEditFromResult(output: unknown): RangeEditBlock[] | undefined {
 	const text = rangeEditResultText(output)
 	const block = /```diff\n([\s\S]*?)\n```/.exec(text)
 	if (!block) {
 		return undefined
 	}
-	const before: string[] = []
-	const after: string[] = []
-	let startLine: number | undefined
+	const blocks: RangeEditBlock[] = [{ before: [], after: [] }]
 	for (const line of block[1].split("\n")) {
+		if (UNCHANGED_LINES_MARKER.test(line)) {
+			blocks.push({ before: [], after: [] })
+			continue
+		}
 		const match = /^([-+])(\d+): ?(.*)$/.exec(line)
 		if (!match) {
 			continue
 		}
 		const number = Number(match[2])
-		if (startLine === undefined || number < startLine) {
-			startLine = number
+		const current = blocks[blocks.length - 1] as RangeEditBlock
+		if (current.startLine === undefined || number < current.startLine) {
+			current.startLine = number
 		}
-		;(match[1] === "-" ? before : after).push(match[3])
+		;(match[1] === "-" ? current.before : current.after).push(match[3])
 	}
-	return startLine === undefined ? undefined : { before, after, startLine }
+	const filled = blocks.filter((entry) => entry.startLine !== undefined)
+	return filled.length > 0 ? filled : undefined
 }
 
 /** The spanned lines from the file as it stands, and as the edit will leave them. */
@@ -1801,6 +1820,22 @@ function rangeEditFromFile(options: {
 }
 
 /**
+ * One side of a SEARCH/REPLACE block, each line ended by its own newline.
+ *
+ * No lines is nothing at all, so the marker follows at once: written as an
+ * empty line, an insertion drew a blank line removed that the file never had,
+ * and a side of one blank line could not be told from a side of none.
+ */
+function searchReplaceSide(lines: readonly string[]): string {
+	return lines.map((line) => `${line}\n`).join("")
+}
+
+/** A text's lines; an empty text has none, where `split` would give one empty line. */
+function textLines(text: string): string[] {
+	return text === "" ? [] : text.split(/\r\n|\n/)
+}
+
+/**
  * A line-range edit as a SEARCH/REPLACE block, so the card shows the lines
  * removed and the lines that replace them. From the result once the tool has
  * run, from the file before; neither, and the card keeps `new_text` alone.
@@ -1813,16 +1848,23 @@ function describeRangeEdit(options: {
 	endColumn?: number
 	newText: string
 	context?: RangeEditContext
-}): { patch: string; startLine: number } | undefined {
-	const found =
-		(options.context?.output !== undefined ? rangeEditFromResult(options.context.output) : undefined) ??
-		(options.context?.output === undefined ? rangeEditFromFile({ ...options, cwd: options.context?.cwd }) : undefined)
-	if (!found || found.before.length === 0) {
+}): { patch: string; startLines: number[] } | undefined {
+	const fromFile = (): RangeEditBlock[] | undefined => {
+		const found = rangeEditFromFile({ ...options, cwd: options.context?.cwd })
+		return found ? [found] : undefined
+	}
+	const blocks = options.context?.output !== undefined ? rangeEditFromResult(options.context.output) : fromFile()
+	if (!blocks || !blocks.some((entry) => entry.before.length > 0)) {
 		return undefined
 	}
 	return {
-		patch: `------- SEARCH\n${found.before.join("\n")}\n=======\n${found.after.join("\n")}\n+++++++ REPLACE`,
-		startLine: found.startLine,
+		patch: blocks
+			.map(
+				(entry) =>
+					`------- SEARCH\n${searchReplaceSide(entry.before)}=======\n${searchReplaceSide(entry.after)}+++++++ REPLACE`,
+			)
+			.join("\n"),
+		startLines: blocks.map((entry) => entry.startLine ?? options.startLine),
 	}
 }
 
@@ -1978,7 +2020,7 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown, context?: Rang
 			const diffContent = rangeDiff
 				? rangeDiff.patch
 				: oldText && newText !== undefined
-					? `------- SEARCH\n${oldText}\n=======\n${newText}\n+++++++ REPLACE`
+					? `------- SEARCH\n${searchReplaceSide(textLines(oldText))}=======\n${searchReplaceSide(textLines(newText))}+++++++ REPLACE`
 					: newText
 
 			// Named from the arguments rather than guessed from the payload: the
@@ -2007,7 +2049,7 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown, context?: Rang
 				path: filePath,
 				content: diffContent,
 				diff: patch,
-				...(rangeDiff ? { startLineNumbers: [rangeDiff.startLine] } : {}),
+				...(rangeDiff ? { startLineNumbers: rangeDiff.startLines } : {}),
 				...(editMode ? { editMode } : {}),
 			}
 		}
