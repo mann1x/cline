@@ -1,0 +1,64 @@
+name: Publish a release to the VS Code Marketplace
+
+# The Marketplace step of fork-release.yml, on its own: download the VSIX of a
+# release that already exists and publish it. Nothing is rebuilt, the GitHub
+# release is left as it is, and nothing goes to Open VSX or Discord.
+#
+# For when the release went out but the Marketplace did not take it, or the
+# listing has to be recreated. Re-dispatching fork-release.yml for that would
+# rebuild and replace the release's VSIX and announce it a second time.
+#
+# Same sign-in as fork-release.yml's `marketplace` job: the Entra app trusted
+# for this repository's `marketplace` environment.
+
+on:
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Release whose VSIX to publish (e.g. v4.100.255)"
+                required: true
+                type: string
+
+permissions:
+    contents: read
+
+jobs:
+    publish:
+        name: Publish to the VS Code Marketplace
+        runs-on: ubuntu-latest
+        environment: marketplace
+        permissions:
+            id-token: write
+            contents: read
+        steps:
+            - name: Download the released VSIX
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  TAG: ${{ inputs.tag }}
+              run: |
+                  NAME="cerebriline-${TAG#v}.vsix"
+                  gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$NAME"
+                  sha256sum "$NAME"
+                  echo "NAME=$NAME" >> "$GITHUB_ENV"
+
+            - uses: azure/login@v2
+              with:
+                  client-id: ${{ vars.AZURE_CLIENT_ID }}
+                  tenant-id: ${{ vars.AZURE_TENANT_ID }}
+                  allow-no-subscriptions: true
+
+            - name: Publish
+              run: |
+                  npx --yes @vscode/vsce@3.9.2 publish --azure-credential \
+                    --packagePath "$NAME" --skip-duplicate
+                  echo "Published $NAME to the VS Code Marketplace" | tee -a "$GITHUB_STEP_SUMMARY"
+
+            # What the Marketplace holds afterwards, as the publisher sees it:
+            # vsce reporting success has not always meant the version was recorded.
+            - name: The listing as the publisher sees it
+              if: always()
+              run: |
+                  az rest --method get \
+                    --resource 499b84ac-1321-427f-aa17-267ca6975798 \
+                    --url "https://marketplace.visualstudio.com/_apis/gallery/publishers/mann1x/extensions/cerebriline?flags=1&api-version=7.2-preview.1" \
+                    --query "{flags: flags, lastUpdated: lastUpdated, versions: versions[].{version: version, flags: flags, lastUpdated: lastUpdated, validationResultMessage: validationResultMessage}}" || true
