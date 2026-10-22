@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import type { AgentTool } from "@cline/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -115,7 +116,8 @@ describe("holding the run back", () => {
 	});
 
 	it("leaves out a file the model has since deleted", () => {
-		const onDisk = new Set(["/ws/game.html"]);
+		// As the platform resolves it: `D:\\ws\\game.html` on Windows.
+		const onDisk = new Set([path.resolve("/ws", "game.html")]);
 		const settings = {
 			...config,
 			cwd: "/ws",

@@ -106,9 +106,8 @@ function normalizePath(filePath: string): string {
 	return forward.toLowerCase();
 }
 
-function isAbsolutePath(filePath: string): boolean {
-	return path.isAbsolute(filePath) || /^[a-zA-Z]:[\\/]/.test(filePath);
-}
+/** A Windows path with its drive, absolute on either platform's reading. */
+const DRIVE_PATH = /^[a-zA-Z]:[\\/]/;
 
 /** Tracks which edited files are still unverified. */
 export class EditVerificationTracker {
@@ -127,7 +126,10 @@ export class EditVerificationTracker {
 	}
 
 	private absolute(filePath: string): string {
-		return this.cwd && !isAbsolutePath(filePath)
+		// A rooted path without a drive is resolved too: on Windows `/ws/a.ts`
+		// is `D:\ws\a.ts`, which is where `a.ts` under `/ws` resolves, and kept
+		// as written the two were different files to this tracker.
+		return this.cwd && !DRIVE_PATH.test(filePath)
 			? path.resolve(this.cwd, filePath)
 			: filePath;
 	}
