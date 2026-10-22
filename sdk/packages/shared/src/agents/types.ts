@@ -431,8 +431,10 @@ export interface AgentExecutionConfig {
 export interface ReasoningLoopDetectionConfig {
 	/** Never judge a reasoning block shorter than this many characters. */
 	minChars: number;
-	/** Completed lines kept for the uniqueness and period tests. */
+	/** Completed lines kept for the uniqueness test. */
 	window: number;
+	/** Completed lines kept for the period (line-cycle) test. */
+	lineCycleWindow: number;
 	/** Longest cycle looked for, in lines. */
 	maxPeriod: number;
 	/** How many times a period must repeat before it counts as a cycle. */
@@ -1442,6 +1444,7 @@ export const AgentConfigSchema = z.object({
 					z.object({
 						minChars: z.number().int().positive().optional(),
 						window: z.number().int().positive().optional(),
+						lineCycleWindow: z.number().int().positive().optional(),
 						maxPeriod: z.number().int().positive().optional(),
 						minCycles: z.number().int().positive().optional(),
 						maxUniqueInWindow: z.number().int().positive().optional(),

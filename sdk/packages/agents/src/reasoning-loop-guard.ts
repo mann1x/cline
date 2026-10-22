@@ -48,6 +48,15 @@ export type ReasoningLoopGuardConfig = ReasoningLoopDetectionConfig;
 export const DEFAULT_REASONING_LOOP_GUARD: ReasoningLoopGuardConfig = {
 	minChars: 4000,
 	window: 60,
+	// 126 lines, not 60: at 60 a period of 3 to 6 lines could never reach 20
+	// repeats. Replayed 2026-10-13 (ol-67) on 545 harness streams and 3,014
+	// pandorum session files: 18 new trips, all of them the model's own
+	// reasoning repeated verbatim 21 times, none of them restated read content.
+	// Replayed again 2026-10-22 beside the block-cycle arm (545 streams, 3,496
+	// sessions, 448 trips): no trip changes, because block-cycle catches the
+	// same loops earlier as blocks of twice the period. What is left to this is
+	// a loop of short lines whose repeated block stays under `blockMinChars`.
+	lineCycleWindow: 126,
 	maxPeriod: 6,
 	minCycles: 20,
 	maxUniqueInWindow: 4,
@@ -57,7 +66,7 @@ export const DEFAULT_REASONING_LOOP_GUARD: ReasoningLoopGuardConfig = {
 	// Set against 3,348 stored sessions (2026-10-20): over 54,605 tool calls'
 	// arguments and 10,837 answers, a block of 7 to 400 lines repeated three
 	// times running occurs 12 times, every one a loop and none in a call that
-	// worked. Periods below 7 are line-cycle's (see ol-67 for its gap).
+	// worked. Periods below 7 are line-cycle's.
 	blockMinPeriod: 7,
 	blockMaxPeriod: 400,
 	blockMinCycles: 3,
@@ -171,6 +180,8 @@ export class ReasoningLoopGuard {
 	private readonly given: (() => string) | undefined;
 	private chars = 0;
 	private lines: string[] = [];
+	/** The last `lineCycleWindow` completed lines, for the line-cycle test. */
+	private cycleLines: string[] = [];
 	/** Every completed line of the block, kept only when there is a source. */
 	private history: string[] = [];
 	private pending = "";
@@ -212,6 +223,10 @@ export class ReasoningLoopGuard {
 			if (line) {
 				this.lines.push(line);
 				if (this.lines.length > this.cfg.window) this.lines.shift();
+				this.cycleLines.push(line);
+				if (this.cycleLines.length > this.cfg.lineCycleWindow) {
+					this.cycleLines.shift();
+				}
 				if (this.given) this.history.push(line);
 				this.trackBlocks(line);
 			}
@@ -359,14 +374,15 @@ export class ReasoningLoopGuard {
 	}
 
 	private detectLineCycle(): ReasoningLoopVerdict | null {
-		const n = this.lines.length;
+		const lines = this.cycleLines;
+		const n = lines.length;
 		if (n < this.cfg.maxPeriod * 2) return null;
 		for (let p = 1; p <= this.cfg.maxPeriod; p++) {
 			let cycles = 0;
 			for (let i = n - p; i - p >= 0; i -= p) {
 				let same = true;
 				for (let k = 0; k < p; k++) {
-					if (this.lines[i + k] !== this.lines[i - p + k]) {
+					if (lines[i + k] !== lines[i - p + k]) {
 						same = false;
 						break;
 					}
@@ -376,8 +392,9 @@ export class ReasoningLoopGuard {
 			}
 			if (cycles >= this.cfg.minCycles) {
 				if (this.given) {
-					// The window holds 60 lines, so it cannot say whether the block
-					// has outrun a source that repeats for longer. The history can.
+					// The window holds `lineCycleWindow` lines, so it cannot say
+					// whether the block has outrun a source that repeats for
+					// longer. The history can.
 					const all = this.history;
 					let repeats = 1;
 					for (let i = all.length - p; i - p >= 0; i -= p) {
@@ -391,7 +408,7 @@ export class ReasoningLoopGuard {
 						if (!same) break;
 						repeats++;
 					}
-					if (repeats <= this.blockRunInSource(this.lines.slice(n - p))) {
+					if (repeats <= this.blockRunInSource(lines.slice(n - p))) {
 						continue;
 					}
 				}
@@ -400,7 +417,7 @@ export class ReasoningLoopGuard {
 					period: p,
 					cycles: cycles + 1,
 					chars: this.chars,
-					sample: this.lines
+					sample: lines
 						.slice(n - p)
 						.join(" / ")
 						.slice(0, 160),

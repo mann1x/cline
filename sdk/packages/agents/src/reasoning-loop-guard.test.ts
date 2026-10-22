@@ -64,6 +64,30 @@ describe("ReasoningLoopGuard", () => {
 		expect(verdict).not.toBeNull();
 	});
 
+	it("trips on a short-lined block of 5 or 6 lines repeated 21 times", () => {
+		// ol-67: with a 60-line window a 5-line block reached only 11 repeats.
+		// 5 distinct lines are too many for the uniqueness test, and lines this
+		// short keep every repeated block under the block test's 200 characters,
+		// so nothing saw it.
+		const before = Array.from(
+			{ length: 120 },
+			(_, i) => `Step ${i}: inspect symbol ${i} and note where it is read.`,
+		).join("\n");
+		for (const period of [5, 6]) {
+			const unit = Array.from({ length: period }, (_, k) => `}${k}`);
+			const copies = (n: number) =>
+				Array.from({ length: n }, () => unit.join("\n")).join("\n");
+			const { verdict } = stream(`${before}\n${copies(21)}\n`);
+			expect(verdict?.kind, `period ${period}`).toBe("line-cycle");
+			expect(verdict?.period).toBe(period);
+			expect(verdict?.cycles).toBe(21);
+			expect(
+				stream(`${before}\n${copies(20)}\n`).verdict,
+				`period ${period}`,
+			).toBeNull();
+		}
+	});
+
 	it("leaves long healthy reasoning alone", () => {
 		// Agentic reasoning legitimately runs to six figures per turn. Volume is
 		// never the signal -- a guard that fired on length would kill good turns.
