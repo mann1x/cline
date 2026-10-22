@@ -1,9 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { extractTarGz } from "./tar-extract";
+import { extractTarGz, NotATarArchiveError } from "./tar-extract";
 import { pieces, tarGz } from "./tar-fixture";
 
 describe("extractTarGz", () => {
@@ -60,6 +61,20 @@ describe("extractTarGz", () => {
 			/outside its folder/,
 		);
 		expect(existsSync(join(root, "..", "escape.txt"))).toBe(false);
+	});
+
+	it("refuses gzip that does not hold a tar, and writes nothing", async () => {
+		// A gzipped ebook: its first block was read as a header, and its text
+		// became a folder name Windows refused (issue #109).
+		const book = gzipSync(
+			Buffer.from(
+				`<?xml version="1.0"?><FictionBook>${"<p>text</p>".repeat(200)}</FictionBook>`,
+			),
+		);
+		await expect(extractTarGz(pieces(book, 64), root)).rejects.toThrow(
+			NotATarArchiveError,
+		);
+		expect(readdirSync(root)).toEqual([]);
 	});
 
 	it("fails on data that is not an archive", async () => {

@@ -32,7 +32,7 @@ import type { SqliteDb } from "@cline/shared/db";
 import { fingerprintSimilarity, textFingerprint } from "./fingerprint";
 import type { Library } from "./library";
 import { runningHeads } from "./running-heads";
-import { extractTarGz } from "./tar-extract";
+import { extractTarGz, NotATarArchiveError } from "./tar-extract";
 import { type TarEntry, writeTarGz } from "./tar-write";
 
 export const BOOK_FORMAT = "cerebriline-book";
@@ -1728,7 +1728,18 @@ export class Catalogue {
 		);
 		const result: ImportResult = { imported: [], skipped: [] };
 		try {
-			await extractTarGz(createReadStream(file), staging);
+			try {
+				await extractTarGz(createReadStream(file), staging);
+			} catch (error) {
+				// A gzipped book is the likely file: say what this reads and
+				// where a book goes in instead.
+				if (error instanceof NotATarArchiveError) {
+					throw new Error(
+						"That file is not a Library export. Import reads the `.library.tar.gz` that Export writes; to add a book, ask the librarian in a chat to import it.",
+					);
+				}
+				throw error;
+			}
 			const manifestFile = join(staging, "library.json");
 			if (!existsSync(manifestFile)) {
 				throw new Error(

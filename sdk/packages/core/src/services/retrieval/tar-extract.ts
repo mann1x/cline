@@ -25,6 +25,29 @@ function octal(block: Buffer, start: number, length: number): number {
 	return value ? Number.parseInt(value, 8) : 0;
 }
 
+/**
+ * Whether a block is a tar header: its checksum, the sum of its bytes with the
+ * checksum field read as spaces, matches the one it records. Anything gzipped
+ * that is not a tar fails this on its first block, and without it the first
+ * hundred bytes of, say, a gzipped ebook were taken for a file name.
+ */
+function isHeader(block: Buffer): boolean {
+	const recorded = octal(block, 148, 8);
+	let sum = 0;
+	for (let index = 0; index < BLOCK; index++) {
+		sum += index >= 148 && index < 156 ? 0x20 : block[index];
+	}
+	return recorded > 0 && sum === recorded;
+}
+
+/** Thrown when what was unpacked from gzip is not a tar archive. */
+export class NotATarArchiveError extends Error {
+	constructor() {
+		super("The file is gzip, but what it holds is not a tar archive.");
+		this.name = "NotATarArchiveError";
+	}
+}
+
 function paxPath(data: Buffer): string | undefined {
 	// Records are "<length> <key>=<value>\n".
 	let offset = 0;
@@ -145,6 +168,9 @@ export async function extractTarGz(
 			pending = pending.subarray(BLOCK);
 			if (header.every((byte) => byte === 0)) {
 				continue; // end-of-archive padding
+			}
+			if (!isHeader(header)) {
+				throw new NotATarArchiveError();
 			}
 			const size = octal(header, 124, 12);
 			const type = String.fromCharCode(header[156] || 0x30);

@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BOOK_FORMAT, LEGACY_SECTION } from "./catalogue";
 import { fingerprintSimilarity, textFingerprint } from "./fingerprint";
@@ -478,6 +479,22 @@ describe("the Library's catalogue", () => {
 	it("refuses a file that is not a Library export", async () => {
 		const path = file("x.tar.gz", "not an archive");
 		await expect(library.catalogue.import(path)).rejects.toThrow();
+		expect(
+			readdirSync(library.directory).filter((name) =>
+				name.startsWith("import-"),
+			),
+		).toEqual([]);
+	});
+
+	it("says a gzipped file that is not an export is not one, and how to add a book", async () => {
+		const path = file("book.fb2.gz", "");
+		writeFileSync(
+			path,
+			gzipSync(Buffer.from(`<FictionBook>${PROSE}</FictionBook>`)),
+		);
+		await expect(library.catalogue.import(path)).rejects.toThrow(
+			/not a Library export\. Import reads the `\.library\.tar\.gz`/,
+		);
 		expect(
 			readdirSync(library.directory).filter((name) =>
 				name.startsWith("import-"),
