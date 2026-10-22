@@ -147,6 +147,65 @@ describe("the ollama probe measures the prompt rather than naming the renderer",
 		);
 		expect(cachedReinjection("http://h/api", "m")?.reinjects).toBe(false);
 	});
+
+	// pandorum 2026-10-22: two sessions started 18 seconds apart, while the
+	// first probe sat through a model load, each sent their own pair.
+	it("sends one pair for sessions that start while it is still running", async () => {
+		const counts = [45, 382];
+		let calls = 0;
+		let release: () => void = () => undefined;
+		const loaded = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const fetchImpl = async () => {
+			calls += 1;
+			await loaded;
+			return new Response(
+				JSON.stringify({ prompt_eval_count: counts.shift() }),
+				{ status: 200 },
+			);
+		};
+		const first = primeOllamaReinjection(
+			"http://h/api",
+			"m",
+			fetchImpl as unknown as typeof fetch,
+		);
+		const second = primeOllamaReinjection(
+			"http://h/api",
+			"m",
+			fetchImpl as unknown as typeof fetch,
+		);
+		release();
+		await Promise.all([first, second]);
+		expect(calls).toBe(2);
+		expect(cachedReinjection("http://h/api", "m")?.reinjects).toBe(true);
+	});
+
+	it("adds the caller's fields to both requests", async () => {
+		const bodies: Array<Record<string, unknown>> = [];
+		const fetchImpl = async (_url: string, init: { body: string }) => {
+			bodies.push(JSON.parse(init.body));
+			return new Response(JSON.stringify({ prompt_eval_count: 40 }), {
+				status: 200,
+			});
+		};
+		const placement = {
+			num_ctx: 192_000,
+			num_ctx_min: 1024,
+			num_ctx_hold: false,
+		};
+		await primeOllamaReinjection(
+			"http://h/api",
+			"m",
+			fetchImpl as unknown as typeof fetch,
+			{ placement },
+		);
+		expect(bodies.map((body) => body.placement)).toEqual([
+			placement,
+			placement,
+		]);
+		expect(bodies[0]?.model).toBe("m");
+	});
 });
 
 describe("the template probe reads the server's own rendered prompt", () => {

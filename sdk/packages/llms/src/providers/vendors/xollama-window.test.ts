@@ -7,6 +7,7 @@ import {
 	withXollamaRequestFields,
 	XOLLAMA_SESSION_HEADER,
 	type XollamaWindowOptions,
+	xollamaLoadPlacement,
 } from "./xollama";
 
 afterEach(() => {
@@ -224,5 +225,78 @@ describe("a context size set with booking off, on an xOllama that passes per-req
 		await turn(xo.fetch, "task~agent-1", set);
 		expect(xo.chats[0]?.session_id).toBe("task~agent-1");
 		expect(xo.chats[0]?.placement ?? {}).not.toHaveProperty(FIELD);
+	});
+});
+
+// The reasoning-replay probe reaches the model first. Asking for nothing, it
+// had the model loaded at the engine's default, and the first turn loaded it
+// again at its own size (pandorum, 2026-10-22).
+describe("a request made before the first turn asks for the turn's size", () => {
+	const UNBOOKED = ["context_window_v1", "context_window_unbooked_v1"];
+	const ROOT = "http://pandorum:22434";
+
+	it("asks for the size set, not held, floored at the probe's own", async () => {
+		const xo = server(undefined, UNBOOKED);
+		expect(
+			await xollamaLoadPlacement(
+				ROOT,
+				{ contextWindow: SET, requestedWindow: 192_000 },
+				xo.fetch,
+			),
+		).toEqual({ num_ctx: 192_000, num_ctx_min: 1024, num_ctx_hold: false });
+	});
+
+	it("asks for the model's window when booking is on and no size is set", async () => {
+		const xo = server(undefined, UNBOOKED);
+		expect(
+			(
+				await xollamaLoadPlacement(
+					ROOT,
+					{ contextWindow: SET, dynamicContextSize: true },
+					xo.fetch,
+				)
+			)?.num_ctx,
+		).toBe(SET);
+	});
+
+	it("asks for nothing when the turn will ask for nothing", async () => {
+		const xo = server(undefined, UNBOOKED);
+		expect(
+			await xollamaLoadPlacement(ROOT, { contextWindow: SET }, xo.fetch),
+		).toBeUndefined();
+	});
+
+	it("asks for nothing where a window cannot be left unheld", async () => {
+		const xo = server(undefined, ["context_window_v1"]);
+		expect(
+			await xollamaLoadPlacement(
+				ROOT,
+				{ contextWindow: SET, requestedWindow: 192_000 },
+				xo.fetch,
+			),
+		).toBeUndefined();
+	});
+
+	it("sends a placed request as it was placed, with no side session", async () => {
+		const xo = server(undefined, UNBOOKED);
+		const wire = withXollamaRequestFields(xo.fetch, {
+			window: { contextWindow: SET, requestedWindow: 192_000 },
+		});
+		const placement = {
+			num_ctx: 192_000,
+			num_ctx_min: 1024,
+			num_ctx_hold: false,
+		};
+		const response = await wire(`${ROOT}/api/chat`, {
+			method: "POST",
+			body: JSON.stringify({
+				model: "v7-coder_tb:iq4_nl",
+				placement,
+				messages: [{ role: "user", content: "probe" }],
+			}),
+		});
+		await response.text();
+		expect(xo.chats[0]?.placement).toEqual(placement);
+		expect(xo.chats[0]?.session_id).toBeUndefined();
 	});
 });

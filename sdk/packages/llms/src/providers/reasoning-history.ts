@@ -58,6 +58,13 @@ const REINJECTION_TOKEN_FLOOR = 8;
 
 const reinjection = new Map<string, ReasoningReinjection>();
 
+/**
+ * The probe still running for a key. Its answer is cached only when it ends,
+ * and the first one can sit through a model load: two sessions started 18
+ * seconds apart on pandorum each sent their own pair (2026-10-22).
+ */
+const reinjectionInFlight = new Map<string, Promise<void>>();
+
 function cacheKey(baseUrl: string | undefined, modelId: string): string {
 	return `${(baseUrl ?? "default").replace(/\/+$/, "")}::${modelId}`;
 }
@@ -97,6 +104,7 @@ export function cachedReinjection(
 
 export function resetReasoningReinjection(): void {
 	reinjection.clear();
+	reinjectionInFlight.clear();
 }
 
 /**
@@ -159,11 +167,42 @@ export async function primeOllamaReinjection(
 	baseUrl: string | undefined,
 	modelId: string,
 	fetchImpl: typeof fetch = fetch,
+	/**
+	 * Fields added to both requests. xOllama's window: the probe is usually the
+	 * first request to reach the model, and the engine loads it at the size the
+	 * probe asks for -- its own default when it asks for none, which the
+	 * conversation's first turn then reloads.
+	 */
+	extraBody?: Readonly<Record<string, unknown>>,
 ): Promise<void> {
 	const key = cacheKey(baseUrl, modelId);
 	if (reinjection.has(key)) {
 		return;
 	}
+	const running = reinjectionInFlight.get(key);
+	if (running) {
+		return running;
+	}
+	const probe = probeOllamaReinjection(
+		key,
+		baseUrl,
+		modelId,
+		fetchImpl,
+		extraBody,
+	).finally(() => {
+		reinjectionInFlight.delete(key);
+	});
+	reinjectionInFlight.set(key, probe);
+	return probe;
+}
+
+async function probeOllamaReinjection(
+	key: string,
+	baseUrl: string | undefined,
+	modelId: string,
+	fetchImpl: typeof fetch,
+	extraBody: Readonly<Record<string, unknown>> | undefined,
+): Promise<void> {
 	const needle = `${REINJECTION_NEEDLE} `.repeat(OLLAMA_PROBE_REPEATS);
 	const ask = async (
 		thinking: string | undefined,
@@ -180,6 +219,7 @@ export async function primeOllamaReinjection(
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
+				...(extraBody ?? {}),
 				model: modelId,
 				stream: false,
 				think: true,

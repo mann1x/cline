@@ -246,6 +246,52 @@ export function windowAsk(
 }
 
 /**
+ * The smallest window the reasoning-replay probe will take: its longer
+ * request is under 400 tokens and generates one.
+ */
+const XOLLAMA_PROBE_WINDOW_FLOOR = 1024;
+
+/**
+ * The window a request made before the conversation's first turn asks for, so
+ * the engine loads the model once.
+ *
+ * The reasoning-replay probe (`primeOllamaReinjection`) is usually the first
+ * request to reach the model. Asking for nothing, or for its own few hundred
+ * tokens, it had the model loaded at the engine's default, 131,072 cells, and
+ * the first turn's 192,000 then loaded it again: about 19 seconds before the
+ * first reply on pandorum (2026-10-22). Asked here for the size the turn will
+ * ask for, not held, so it is granted for the probe and released with it. The
+ * floor is the probe's own, so a busy engine still answers it; and only on an
+ * engine that takes a window not held, since a held one without a session
+ * would never be closed.
+ */
+export async function xollamaLoadPlacement(
+	root: string | undefined,
+	window: XollamaWindowOptions,
+	fetchImpl: typeof fetch,
+): Promise<XollamaPlacement | undefined> {
+	const ask =
+		window.requestedWindow ??
+		(window.dynamicContextSize ? window.contextWindow : undefined);
+	if (ask === undefined || root === undefined) {
+		return undefined;
+	}
+	const features = (await probeXollama(root, fetchImpl))?.features;
+	if (
+		![XOLLAMA_CONTEXT_WINDOW_FEATURE, XOLLAMA_UNBOOKED_WINDOW_FEATURE].every(
+			(feature) => features?.includes(feature) === true,
+		)
+	) {
+		return undefined;
+	}
+	return {
+		num_ctx: ask,
+		num_ctx_min: Math.min(XOLLAMA_PROBE_WINDOW_FLOOR, ask),
+		...XOLLAMA_UNHELD_PLACEMENT,
+	};
+}
+
+/**
  * A delegated agent's engine session: `~agent-`, `~teammate-` or a swarm
  * worker's `:swarm:`. Its turns are plain chats even on a council model; the
  * council is the lead's (user ruling, 2026-09-27).
@@ -1433,7 +1479,7 @@ async function settleSideCall(
 }
 
 /** Top-level `placement` on a plain turn (client_placement_v1, #424). */
-interface XollamaPlacement {
+export interface XollamaPlacement {
 	pool_id?: number;
 	num_ctx?: number;
 	num_ctx_min?: number;

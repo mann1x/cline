@@ -69,6 +69,7 @@ import {
 	XOLLAMA_CONTEXT_WINDOW_FEATURE,
 	XOLLAMA_DEFAULT_BASE_URL,
 	type XollamaEngineRequest,
+	xollamaLoadPlacement,
 	xollamaOrigin,
 	xollamaReadOnlyHeaders,
 	xollamaSessionHeaders,
@@ -1204,13 +1205,14 @@ export async function createOllamaProviderModule(
 				...(config.headers ? { headers: config.headers } : {}),
 			})
 		: serverFetch;
+	const xollamaWindow = readXollamaWindowOptions(
+		context.config?.options as Record<string, unknown> | undefined,
+		context.model?.contextWindow,
+	);
 	const fieldsFetch = xollama
 		? withXollamaRequestFields(noticesFetch, {
 				...(context.logger ? { logger: context.logger } : {}),
-				window: readXollamaWindowOptions(
-					context.config?.options as Record<string, unknown> | undefined,
-					context.model?.contextWindow,
-				),
+				window: xollamaWindow,
 				pooling:
 					(
 						(context.config?.options as Record<string, unknown> | undefined)
@@ -1239,10 +1241,20 @@ export async function createOllamaProviderModule(
 		},
 	);
 	if (context.model?.id) {
+		// On xOllama at the size the conversation will ask for, so the model is
+		// loaded once and at that size (`xollamaLoadPlacement`).
+		const placement = xollama
+			? await xollamaLoadPlacement(
+					config.baseUrl || XOLLAMA_DEFAULT_BASE_URL,
+					xollamaWindow,
+					serverFetch,
+				)
+			: undefined;
 		await primeOllamaReinjection(
 			config.baseUrl,
 			context.model.id,
 			timeoutFetch,
+			placement ? { placement } : undefined,
 		);
 	}
 	// Before the first request, because the SDK reads this global at the moment
