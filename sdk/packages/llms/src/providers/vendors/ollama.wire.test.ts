@@ -376,6 +376,62 @@ describe("xOllama wire fields (real provider package)", () => {
 		expect(sentHeaders[0]?.has(XOLLAMA_READ_ONLY_HEADER)).toBe(false);
 	});
 
+	// A side request (the retrospective, a continuation compaction) keeps the
+	// tools so the server can reuse its prefix, and asks for none of them.
+	// xOllama enforces that from tool_choice_none_v1 (31e5ef920): it bans the
+	// tag a call opens with. It can only do so if the field survives the trip,
+	// including xOllama's own rewrite of the body for session_id.
+	it("sends tool_choice none with the tools still in the request", async () => {
+		const requests: OllamaChatRequest[] = [];
+		const fetchStub = (async (input, init) => {
+			const url = typeof input === "string" ? input : String(input);
+			const sent = url.includes("/api/chat")
+				? (JSON.parse(init?.body as string) as OllamaChatRequest)
+				: undefined;
+			if (sent && sent.stream !== false) {
+				requests.push(sent);
+			}
+			return new Response(
+				`${[textChunk("hi"), DONE_CHUNK].map((l) => JSON.stringify(l)).join("\n")}\n`,
+				{ status: 200, headers: { "content-type": "application/x-ndjson" } },
+			);
+		}) as typeof fetch;
+		const module = await createOllamaProviderModule(
+			{
+				providerId: "xollama",
+				baseUrl: "http://gpu2:22434",
+				fetch: fetchStub,
+			} as GatewayResolvedProviderConfig,
+			{
+				provider: {
+					id: "xollama",
+					name: "xOllama",
+					defaultModelId: "",
+					models: [],
+				},
+				model: { id: "test-model", name: "test-model", providerId: "xollama" },
+			} as unknown as GatewayProviderContext,
+		);
+		const model = module.operations.language("test-model") as LanguageModelV4;
+		const schema = { type: "object" as const, properties: {} };
+		const result = await model.doStream({
+			prompt: userText("write the retrospective"),
+			tools: [{ type: "function", name: "editor", inputSchema: schema }],
+			toolChoice: { type: "none" },
+			headers: xollamaSessionHeaders("lead"),
+		} as LanguageModelV4CallOptions);
+		const reader = result.stream.getReader();
+		while (!(await reader.read()).done) {}
+
+		expect(requests[0]?.session_id).toBe("lead");
+		expect(requests[0]?.tool_choice).toBe("none");
+		expect(
+			(requests[0]?.tools as Array<{ function: { name: string } }>).map(
+				(t) => t.function.name,
+			),
+		).toEqual(["editor"]);
+	});
+
 	// The council answers a tool call with a lane-prefixed id and a plain
 	// "stop"; the lead must still see a tool call, under that id, and send its
 	// result back under it. The state-only chunk in front must not reach the

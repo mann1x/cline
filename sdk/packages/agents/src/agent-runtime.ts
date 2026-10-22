@@ -1895,7 +1895,10 @@ export class AgentRuntime {
 			// is then lost however long it runs: xOllama 0.40.6 took a
 			// retrospective to its 4,000-token cap writing an `editor` call
 			// (pandorum, 2026-10-20, 36 s). Stopped at the first sign of one, so
-			// the caller's request of its own starts at once.
+			// the caller's request of its own starts at once. xOllama enforces
+			// "none" from tool_choice_none_v1 (31e5ef920) by banning the tag a
+			// call opens with, so this is the fallback for the servers that
+			// still ignore it: stock Ollama, and older xOllama builds.
 			if (
 				event.type === "tool-input-progress" ||
 				(event.type === "tool-call-delta" && !event.execution)
