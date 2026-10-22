@@ -137,6 +137,11 @@ export interface RuntimeBuilderInput {
 	 * discarded -- so unlike the pipeline above it is shared, not rebuilt.
 	 */
 	condenseDiscardedReasoning?: AgentConfig["condenseDiscardedReasoning"];
+	/**
+	 * Given every cut a delegated agent's guards make, as the lead's own
+	 * `onLoopCut` is. One for all of them: each record names its agent.
+	 */
+	onDelegatedLoopCut?: AgentConfig["onLoopCut"];
 }
 
 export interface RuntimeBuilder {

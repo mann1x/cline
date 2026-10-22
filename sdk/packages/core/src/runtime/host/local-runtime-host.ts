@@ -249,7 +249,7 @@ import {
 	type SubAgentStartTracker,
 } from "./local/spawn-tool";
 import { loadUserFileContent } from "./local/user-files";
-import { appendLoopCut } from "./loop-cut-log";
+import { appendLoopCut, delegatedLoopCutFile } from "./loop-cut-log";
 import type {
 	ListSessionsOptions,
 	PendingPromptsServiceApi,
@@ -1218,6 +1218,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 				);
 			},
 			condenseDiscardedReasoning,
+			// A delegated agent's cuts go beside its own transcript, which is
+			// `<agentId>.messages.json` in this same folder.
+			onDelegatedLoopCut: (cut: LoopCutRecord) =>
+				appendLoopCut(join(sessionDir, delegatedLoopCutFile(cut.agentId)), cut),
 		});
 		if (runtime.teamRuntime && !configWithProvider.teamName?.trim()) {
 			configWithProvider.teamName = runtime.teamRuntime.getTeamName();

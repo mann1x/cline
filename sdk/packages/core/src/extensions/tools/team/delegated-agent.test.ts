@@ -215,6 +215,27 @@ describe("buildDelegatedAgentConfig", () => {
 		expect(config.condenseDiscardedReasoning).toBe(condenseDiscardedReasoning);
 	});
 
+	// ol-109: the lead's cuts were kept and every delegated agent's were thrown
+	// away, because this config is a list of chosen fields and the hook was not
+	// one of them.
+	it("hands the agent's loop cuts to the host", () => {
+		const onLoopCut = vi.fn();
+		const configProvider = createDelegatedAgentConfigProvider({
+			providerId: "ollama",
+			modelId: "small",
+			onLoopCut,
+		});
+
+		const config = buildDelegatedAgentConfig({
+			kind: "teammate",
+			prompt: "fix the parser",
+			tools: [],
+			configProvider,
+		});
+
+		expect(config.onLoopCut).toBe(onLoopCut);
+	});
+
 	// Built per agent rather than handed down, because compaction carries
 	// state: two agents sharing one pipeline would compact against each
 	// other's summaries.

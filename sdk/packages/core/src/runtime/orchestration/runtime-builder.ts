@@ -1158,6 +1158,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 				// with no compaction and no thinking cap at all.
 				createPrepareTurn: input.createDelegatedPrepareTurn,
 				condenseDiscardedReasoning: input.condenseDiscardedReasoning,
+				onLoopCut: input.onDelegatedLoopCut,
 				// One gate for the spawn paths that do all read this provider -- the
 				// team runtime, the lead's `spawn_agent`, and a sub-agent spawning
 				// its own -- and the registry beside it for the one that does not.

@@ -1,6 +1,7 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { LoopCutRecord } from "@cline/shared";
+import { sanitizeSessionToken } from "../../session/models/session-graph";
 
 /**
  * Append one cut to a session's `<id>.cuts.jsonl`, with the time it was kept.
@@ -23,4 +24,13 @@ export async function appendLoopCut(
 		`${JSON.stringify({ at: now().toISOString(), ...cut, chars: cut.text.length })}\n`,
 		"utf8",
 	);
+}
+
+/**
+ * The file a delegated agent's cuts are kept in: named for the agent as its
+ * transcript is (`subagentArtifactPaths`), so the two sit side by side. An
+ * agent with no id still gets a file rather than writing over the lead's.
+ */
+export function delegatedLoopCutFile(agentId: string): string {
+	return `${sanitizeSessionToken(agentId) || "agent"}.cuts.jsonl`;
 }

@@ -152,6 +152,13 @@ export interface DelegatedAgentRuntimeConfig
 	) => AgentConfig["prepareTurn"];
 	/** The pipeline's other half; stateless, so shared rather than built. */
 	condenseDiscardedReasoning?: AgentConfig["condenseDiscardedReasoning"];
+	/**
+	 * Where this agent's guards hand the text they cut; see `LoopCutRecord`.
+	 * The record carries the agent's id, which is how the host files it beside
+	 * that agent's own transcript. Absent, an agent's cuts are thrown away, as
+	 * every delegated agent's were until this field.
+	 */
+	onLoopCut?: AgentConfig["onLoopCut"];
 }
 
 /**
@@ -489,6 +496,9 @@ export function buildDelegatedAgentConfig(
 				options.pinnedHead ?? [],
 			) as AgentConfig["prepareTurn"],
 			condenseDiscardedReasoning: runtimeConfig.condenseDiscardedReasoning,
+			...(runtimeConfig.onLoopCut
+				? { onLoopCut: runtimeConfig.onLoopCut }
+				: {}),
 			parentAgentId: options.parentAgentId,
 			abortSignal,
 			onEvent,

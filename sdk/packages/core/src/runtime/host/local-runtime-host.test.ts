@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { MessageWithMetadata } from "@cline/llms";
+import type { LoopCutRecord } from "@cline/shared";
 import {
 	type AgentConfig,
 	type AgentEvent,
@@ -607,6 +608,63 @@ describe("LocalRuntimeHost", () => {
 		expect(builderInput.createDelegatedPrepareTurn?.()).not.toBe(
 			builderInput.createDelegatedPrepareTurn?.(),
 		);
+	});
+
+	// ol-109: a teammate's cut is filed beside that teammate's transcript, not
+	// in the lead's file and not nowhere.
+	it("keeps a delegated agent's loop cuts beside its own transcript", async () => {
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [],
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			}),
+		};
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn().mockResolvedValue(createResult()),
+			getMessages: vi.fn().mockReturnValue([]),
+			getAgentId: vi.fn().mockReturnValue("agent-delegated-cuts"),
+			getConversationId: vi.fn().mockReturnValue("conv-delegated-cuts"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		const sessionsDir = join(isolatedHomeDir, "sessions");
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: new FileSessionService(sessionsDir),
+			runtimeBuilder: runtimeBuilder as never,
+			createAgent: (() => agent) as never,
+		});
+
+		const { sessionId } = await manager.startSession(
+			normalizeStartInput({ config: createConfig(), prompt: "hello" }),
+		);
+
+		const builderInput = runtimeBuilder.build.mock.calls[0]?.[0] as {
+			onDelegatedLoopCut?: (cut: LoopCutRecord) => Promise<void>;
+		};
+		expect(builderInput.onDelegatedLoopCut).toBeTypeOf("function");
+		await builderInput.onDelegatedLoopCut?.({
+			agentId: "fixer-1",
+			iteration: 4,
+			channel: "reasoning",
+			text: "the same paragraph again",
+		} as LoopCutRecord);
+
+		const kept = readFileSync(
+			join(sessionsDir, sessionId, "fixer-1.cuts.jsonl"),
+			"utf8",
+		);
+		expect(JSON.parse(kept.trim())).toMatchObject({
+			agentId: "fixer-1",
+			iteration: 4,
+			text: "the same paragraph again",
+		});
+		expect(
+			existsSync(join(sessionsDir, sessionId, `${sessionId}.cuts.jsonl`)),
+		).toBe(false);
 	});
 
 	// This object is an explicit list with no spread, so a field a host sets on
