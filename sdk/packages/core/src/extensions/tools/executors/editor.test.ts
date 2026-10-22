@@ -730,6 +730,60 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
+		// pandorum syqi9, 2026-10-22: a line added at the top of a range moved
+		// every line under it, and the diff showed seven unchanged lines as
+		// rewritten -- four of them the broken lines the model meant to fix.
+		it("shows only the lines that changed when an edit moves the rest", async () => {
+			const before = [
+				"top",
+				"gen",
+				"pop",
+				"",
+				"grid",
+				"dec",
+				"it})};",
+				"o2})};",
+				"pw})};",
+				"end",
+			];
+			await withTempFile(before.join("\n"), async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = String(
+					await editor(
+						{
+							path: filePath,
+							new_text: [
+								"gen",
+								"sX",
+								"pop",
+								"grid",
+								"dec",
+								"it});",
+								"o2})};",
+								"pw})};",
+							].join("\n"),
+							start_line: 2,
+							end_line: 9,
+						},
+						dir,
+						context,
+					),
+				);
+
+				// Of the 8 lines in the range only the blank line and `it` are gone.
+				expect(result).toContain("6 of the 8 line(s) in the range");
+				const diff = /```diff\n([\s\S]*?)\n```/.exec(result)?.[1] ?? "";
+				expect(diff.split("\n")).toEqual([
+					"+3: sX",
+					"  ... 1 unchanged line ...",
+					"-4: ",
+					"  ... 2 unchanged lines ...",
+					"-7: it})};",
+					"+7: it});",
+				]);
+			});
+		});
+
 		// The same session as the no-op count, immediately after its turn was
 		// discarded at the output cap: one 4,991-character whole-class
 		// replacement at line 84, sent seven times in a row, refused identically

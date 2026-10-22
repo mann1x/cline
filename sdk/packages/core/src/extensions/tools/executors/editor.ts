@@ -144,17 +144,35 @@ function countOccurrences(content: string, needle: string): number {
 // ./line-endings) or they create mixed line endings and break subsequent
 // exact-match replacements.
 
-function createLineDiff(
-	oldContent: string,
-	newContent: string,
-	maxLines: number,
-): string {
-	const oldLines = oldContent.split(/\r\n|\n/);
-	const newLines = newContent.split(/\r\n|\n/);
+/** One run of changed lines: what the old file had there and what replaced it. */
+interface LineHunk {
+	/** 0-based index of the first old line, or where an insertion goes. */
+	oldStart: number;
+	removed: string[];
+	/** 0-based index of the first new line. */
+	newStart: number;
+	added: string[];
+}
 
-	// Trim the common prefix and suffix so only the changed region is emitted;
-	// a naive positional compare would mispair every line after an edit that
-	// changes the line count.
+/**
+ * The largest changed region aligned line by line, in cells of the table
+ * (old lines x new lines). Past it the region is one hunk, as it always was.
+ */
+const LINE_ALIGN_MAX_CELLS = 4_000_000;
+
+/**
+ * The lines that really changed, in order.
+ *
+ * Trimming the common prefix and suffix is not enough on its own: an edit that
+ * inserts a line near the top of a range moves every line under it, and a
+ * positional compare then reports each of them as removed and re-added. On
+ * pandorum (syqi9, 2026-10-22) a call that added `sX()` above `pop()` and fixed
+ * two lines was shown as ten lines rewritten, seven of them unchanged -- and
+ * four of those seven were the broken lines the model meant to fix. It read
+ * them in the diff and took them as fixed. So the region between the trims is
+ * aligned by its longest common run of lines, and only what is left is a hunk.
+ */
+function lineHunks(oldLines: string[], newLines: string[]): LineHunk[] {
 	let start = 0;
 	while (
 		start < oldLines.length &&
@@ -173,11 +191,102 @@ function createLineDiff(
 		oldEnd--;
 		newEnd--;
 	}
+	const m = oldEnd - start;
+	const n = newEnd - start;
+	if (m === 0 && n === 0) {
+		return [];
+	}
+	const whole: LineHunk = {
+		oldStart: start,
+		removed: oldLines.slice(start, oldEnd),
+		newStart: start,
+		added: newLines.slice(start, newEnd),
+	};
+	if (m === 0 || n === 0 || (m + 1) * (n + 1) > LINE_ALIGN_MAX_CELLS) {
+		return [whole];
+	}
+	// Longest common subsequence, filled from the end so the walk below goes
+	// forwards.
+	const width = n + 1;
+	const table = new Uint32Array((m + 1) * width);
+	for (let i = m - 1; i >= 0; i--) {
+		for (let j = n - 1; j >= 0; j--) {
+			table[i * width + j] =
+				oldLines[start + i] === newLines[start + j]
+					? (table[(i + 1) * width + j + 1] as number) + 1
+					: Math.max(
+							table[(i + 1) * width + j] as number,
+							table[i * width + j + 1] as number,
+						);
+		}
+	}
+	const hunks: LineHunk[] = [];
+	let open: LineHunk | undefined;
+	let i = 0;
+	let j = 0;
+	while (i < m || j < n) {
+		if (i < m && j < n && oldLines[start + i] === newLines[start + j]) {
+			open = undefined;
+			i++;
+			j++;
+			continue;
+		}
+		if (!open) {
+			open = {
+				oldStart: start + i,
+				removed: [],
+				newStart: start + j,
+				added: [],
+			};
+			hunks.push(open);
+		}
+		if (
+			j >= n ||
+			(i < m &&
+				(table[(i + 1) * width + j] as number) >=
+					(table[i * width + j + 1] as number))
+		) {
+			open.removed.push(oldLines[start + i] as string);
+			i++;
+		} else {
+			open.added.push(newLines[start + j] as string);
+			j++;
+		}
+	}
+	return hunks;
+}
+
+/** Lines the old file had that the new one does not, and the reverse. */
+function alignedLineCounts(
+	oldContent: string,
+	newContent: string,
+): { removed: number; added: number } {
+	let removed = 0;
+	let added = 0;
+	for (const hunk of lineHunks(
+		oldContent.split(/\r\n|\n/),
+		newContent.split(/\r\n|\n/),
+	)) {
+		removed += hunk.removed.length;
+		added += hunk.added.length;
+	}
+	return { removed, added };
+}
+
+function createLineDiff(
+	oldContent: string,
+	newContent: string,
+	maxLines: number,
+): string {
+	const hunks = lineHunks(
+		oldContent.split(/\r\n|\n/),
+		newContent.split(/\r\n|\n/),
+	);
 
 	// Split the line budget between removals and additions so neither side is
 	// silently dropped when the other alone would exhaust maxLines.
-	const removedCount = oldEnd - start;
-	const addedCount = newEnd - start;
+	const removedCount = hunks.reduce((sum, h) => sum + h.removed.length, 0);
+	const addedCount = hunks.reduce((sum, h) => sum + h.added.length, 0);
 	let removedBudget = removedCount;
 	let addedBudget = addedCount;
 	if (removedCount + addedCount > maxLines) {
@@ -189,15 +298,33 @@ function createLineDiff(
 	}
 
 	const out: string[] = ["```diff"];
-	for (let i = start; i < start + removedBudget; i++) {
-		out.push(`-${i + 1}: ${oldLines[i]}`);
-	}
-	for (let i = start; i < start + addedBudget; i++) {
-		out.push(`+${i + 1}: ${newLines[i]}`);
-	}
+	let removedShown = 0;
+	let addedShown = 0;
+	hunks.forEach((hunk, index) => {
+		if (index > 0) {
+			const previous = hunks[index - 1] as LineHunk;
+			const between =
+				hunk.oldStart - (previous.oldStart + previous.removed.length);
+			out.push(
+				`  ... ${between} unchanged line${between === 1 ? "" : "s"} ...`,
+			);
+		}
+		hunk.removed.forEach((line, k) => {
+			if (removedShown < removedBudget) {
+				out.push(`-${hunk.oldStart + k + 1}: ${line}`);
+				removedShown++;
+			}
+		});
+		hunk.added.forEach((line, k) => {
+			if (addedShown < addedBudget) {
+				out.push(`+${hunk.newStart + k + 1}: ${line}`);
+				addedShown++;
+			}
+		});
+	});
 
-	const omittedRemoved = removedCount - removedBudget;
-	const omittedAdded = addedCount - addedBudget;
+	const omittedRemoved = removedCount - removedShown;
+	const omittedAdded = addedCount - addedShown;
 	if (omittedRemoved > 0 || omittedAdded > 0) {
 		out.push(
 			`... diff truncated (${omittedRemoved} more removed, ${omittedAdded} more added lines) ...`,
@@ -1361,11 +1488,14 @@ async function replaceLineRange(
 	await fs.writeFile(filePath, bom + updated, { encoding });
 
 	const diff = createLineDiff(content, updated, maxDiffLines);
-	// The diff trims lines that are identical on both sides, so replacing two
-	// lines where one was already correct shows a single line and reads like a
-	// half-applied edit. Measured: a model spent a turn asking whether line 90
-	// had been touched. Say it instead of leaving it to be inferred.
-	const unchanged = requestedLines - removed;
+	// The diff leaves out lines that are identical on both sides, so replacing
+	// two lines where one was already correct shows a single line and reads
+	// like a half-applied edit. Measured: a model spent a turn asking whether
+	// line 90 had been touched. Say it instead of leaving it to be inferred.
+	// Counted the way the diff is drawn, not by the trim the guard above uses:
+	// the trim called 4 of 14 lines identical where 11 were.
+	const unchanged =
+		requestedLines - alignedLineCounts(content, updated).removed;
 	const note =
 		unchanged > 0
 			? ` (${unchanged} of the ${requestedLines} line(s) in the range were already identical, so the diff below does not show them)`
