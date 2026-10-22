@@ -27,11 +27,13 @@ import {
 } from "@cline/shared";
 import { toAsyncIterable } from "./async";
 import { BUILTIN_PROVIDER_REGISTRATIONS } from "./builtins-runtime";
+import { normalizeProviderId } from "./ids";
 import { resolveReasoningHistoryMode } from "./model-facts";
 import { providerManifestSupportsModelOperation } from "./model-operations";
 import { providerManifestSupportsModelTool } from "./model-tools";
 import { GatewayRegistry } from "./registry";
 import { isPositiveFiniteNumber } from "./utils";
+import { getPolykvWindowGrant, polykvEffectiveWindow } from "./vendors/polykv";
 
 export type * from "@cline/shared";
 
@@ -550,6 +552,31 @@ export function resolveGatewayRequestMaxTokens(
  * arithmetic that knows is this function's, so the answer is returned rather
  * than reconstructed by a caller comparing numbers it would have to guess at.
  */
+/**
+ * The window a conversation can fill: the model's, or the smaller one an
+ * opencoti or xOllama engine granted this session. The same rule as core's
+ * `resolveGrantedContextWindow`, which compaction sizes against; a grant
+ * from another provider's server does not bind a session that moved on.
+ */
+export function grantedContextWindow(
+	providerId: string,
+	sessionId: string | undefined,
+	modelWindow: number | undefined,
+): number | undefined {
+	const id = normalizeProviderId(providerId);
+	if (id !== "opencoti" && id !== "xollama") {
+		return modelWindow;
+	}
+	const granted = polykvEffectiveWindow(getPolykvWindowGrant(sessionId));
+	if (
+		granted === undefined ||
+		(isPositiveFiniteNumber(modelWindow) && granted >= modelWindow)
+	) {
+		return modelWindow;
+	}
+	return granted;
+}
+
 export function resolveGatewayOutputCap(
 	input: GatewayOutputCapInput,
 ): OutputCapReport {
@@ -908,6 +935,19 @@ export class DefaultGateway implements Gateway {
 			resolved.provider.id,
 			resolved.model.id,
 		);
+		// The window the server granted, where it gave less than the model's.
+		// Compaction already sized against it; the cap did not, and an unbooked
+		// xOllama conversation granted 113,707 of 128,000 was sent 75,756 tokens
+		// with a 43,153-token cap (pandorum m9npw, 2026-10-22).
+		const contextWindow = grantedContextWindow(
+			resolved.provider.id,
+			request.sessionId,
+			resolved.model.contextWindow,
+		);
+		const capModel =
+			contextWindow === resolved.model.contextWindow
+				? resolved.model
+				: { ...resolved.model, contextWindow };
 		const resolveCap = (ceiling: number | undefined): OutputCapReport =>
 			resolveGatewayOutputCap({
 				// A call that is not the conversation running out of room is its own
@@ -915,7 +955,7 @@ export class DefaultGateway implements Gateway {
 				suppressGlobalNotes: !request.conversation,
 				sessionId: request.sessionId,
 				requestedMaxTokens: request.maxTokens,
-				model: resolved.model,
+				model: capModel,
 				// A model that publishes its own ceiling needs nothing learned; the
 				// resolver already clamps to it. This only stands in where the
 				// catalog is silent, which is where a synthesized cap can be
@@ -959,7 +999,7 @@ export class DefaultGateway implements Gateway {
 			this.logger?.log(
 				`Resolved output cap ${maxTokens ?? "none"} from ${outputCap.source} (${describeOutputBudget(
 					{
-						contextWindow: resolved.model.contextWindow,
+						contextWindow,
 						estimatedInputTokens,
 						inputChars,
 					},
@@ -1048,7 +1088,7 @@ export class DefaultGateway implements Gateway {
 						inputChars,
 						reasoningChars,
 						request.sessionId,
-						resolved.model.contextWindow,
+						contextWindow,
 					)
 				: toAsyncIterable(stream),
 			this.#takeSlot(),

@@ -31,10 +31,15 @@ import {
 	DEFAULT_GATEWAY_MAX_OUTPUT_TOKENS,
 	extractRejectedOutputCeiling,
 	GATEWAY_MIN_OUTPUT_TOKENS,
+	grantedContextWindow,
 	resetLearnedOutputCeilings,
 	resolveGatewayOutputCap,
 	resolveGatewayRequestMaxTokens,
 } from "./gateway";
+import {
+	clearPolykvGrantedWindow,
+	recordPolykvGrantedWindow,
+} from "./vendors/polykv";
 
 const streamTextSpy = vi.fn();
 const generateImageSpy = vi.fn();
@@ -1054,6 +1059,26 @@ describe("sdk-gateway", () => {
 			source: "remaining-context",
 			windowBound: true,
 		});
+	});
+
+	it("sizes against the window an xOllama engine granted, not the model's", () => {
+		// pandorum m9npw: an unbooked conversation asked 128,000 and was granted
+		// 113,707; the cap was still computed from 128,000.
+		const session = "gateway-granted-window";
+		recordPolykvGrantedWindow(session, 113_707);
+		try {
+			expect(grantedContextWindow("xollama", session, 128_000)).toBe(113_707);
+			expect(grantedContextWindow("opencoti", session, 128_000)).toBe(113_707);
+			// Another provider's session is not bound by it.
+			expect(grantedContextWindow("openai", session, 128_000)).toBe(128_000);
+			// A grant as large as the model's window changes nothing.
+			expect(grantedContextWindow("xollama", session, 100_000)).toBe(100_000);
+			expect(grantedContextWindow("xollama", "no-grant", 128_000)).toBe(
+				128_000,
+			);
+		} finally {
+			clearPolykvGrantedWindow(session);
+		}
 	});
 
 	// Upstream raises the default to 0.3 of the model's output ceiling here;
