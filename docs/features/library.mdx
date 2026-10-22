@@ -52,7 +52,7 @@ Then ask for it in plain words:
 
 The librarian looks at what shelves there are, reads each file, and for each one that is new works out its title, authors and edition, writes a short description, picks the shelf it belongs on (making a shelf or section only when none fits) and adds it. At the end it reports what went where and what it skipped.
 
-Files are read by the [Document Reader](/features/document-reader): PDF, Word, PowerPoint, Excel, OpenDocument, RTF, HTML and ebooks (EPUB, MOBI, AZW3, FB2). Text and Markdown are taken as they are.
+Files are read by the [Document Reader](/features/document-reader): PDF, Word, PowerPoint, Excel, OpenDocument, RTF, HTML and ebooks (EPUB, MOBI, AZW3, FB2), each also gzipped (`book.fb2.gz`). Text and Markdown are taken as they are, gzipped or not.
 
 ### Is it already there
 
@@ -146,7 +146,7 @@ Once the Library is on, **Settings > Library** shows the shelves: each section, 
 
 ## Export and import
 
-**Export…** writes the whole Library to one file when nothing is ticked. Each section, shelf and book has a box: tick any mix of them, a book from one shelf, a whole shelf from another section, a whole section, and **Export…** writes only those. A section or shelf with some of its books ticked shows a partly filled box; clicking it ticks the whole of it. The line under the buttons says which it will do, with **Clear** to go back to the whole Library. **Import…** reads such a file in: sections and shelves are made where they are missing, and a book that is already there is left alone. The librarian does the same with `library_transfer`, and can also replace an existing book or bring the file's in beside it as a copy.
+**Export…** writes the whole Library to one file when nothing is ticked. Each section, shelf and book has a box: tick any mix of them, a book from one shelf, a whole shelf from another section, a whole section, and **Export…** writes only those. A section or shelf with some of its books ticked shows a partly filled box; clicking it ticks the whole of it. The line under the buttons says which it will do, with **Clear** to go back to the whole Library. **Import…** reads such a file in, and only such a file: a book is added by the librarian, not by Import. Sections and shelves are made where they are missing, and a book that is already there is left alone. The librarian does the same with `library_transfer`, and can also replace an existing book or bring the file's in beside it as a copy.
 
 The file is a gzipped tar of the books' folders: the original files, their text, pictures and descriptions, and where each book stood. **Vectors are not in it.** They are made again where the file is imported, with the embedding model set there, so a file exported with one model works in a Library that uses another.
 
