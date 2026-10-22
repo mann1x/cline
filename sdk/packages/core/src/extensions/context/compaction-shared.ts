@@ -1172,7 +1172,16 @@ export function createTokenEstimator(): EstimateMessageTokens {
 		}
 		let serialized: string;
 		try {
-			serialized = JSON.stringify(message);
+			// Without `metadata`: it never reaches the model, and a compaction
+			// summary keeps its ledger, summary and retrospective there as well
+			// as in its content -- twice the summary's real size, counted every
+			// time the transcript is measured.
+			// Only the message's own: a content part's metadata may be sent.
+			serialized = JSON.stringify(
+				message.metadata === undefined
+					? message
+					: { ...message, metadata: undefined },
+			);
 		} catch {
 			serialized = serializeMessage(message);
 		}

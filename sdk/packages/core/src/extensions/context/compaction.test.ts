@@ -217,6 +217,31 @@ function assertBasicCompactionResult(
 }
 
 describe("createTokenEstimator", () => {
+	// A compaction summary keeps its ledger, summary and retrospective in
+	// metadata beside the content, and none of it is sent. Counted, it made
+	// f099u's summary message ~11,000 tokens instead of ~5,000: the tail check
+	// before the run saw a tail that fitted, the check after it saw the same
+	// tail over the trigger, and the compaction ran twice.
+	it("does not count metadata, which is never sent to the model", () => {
+		const estimateMessageTokens = createTokenEstimator();
+		const sent: MessageWithMetadata = {
+			role: "user",
+			content: "summary of the work so far",
+		};
+		const withMetadata: MessageWithMetadata = {
+			...sent,
+			metadata: {
+				kind: "compaction_summary",
+				summary: "x".repeat(3_000),
+				toolLedger: "y".repeat(10_000),
+			},
+		};
+
+		expect(estimateMessageTokens(withMetadata)).toBe(
+			estimateMessageTokens({ ...sent }),
+		);
+	});
+
 	it("does not treat cumulative request metrics as per-message token counts", () => {
 		const estimateMessageTokens = createTokenEstimator();
 		const message: MessageWithMetadata = {
