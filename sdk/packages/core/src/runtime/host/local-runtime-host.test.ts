@@ -3695,6 +3695,113 @@ describe("LocalRuntimeHost", () => {
 		});
 	});
 
+	it("does not queue a follow-up with nothing in it", async () => {
+		const sessionId = "sess-empty-followup";
+		const manifest = createManifest(sessionId);
+		const sessionService = {
+			ensureSessionsDir: vi.fn().mockReturnValue("/tmp/sessions"),
+			createRootSessionWithArtifacts: vi.fn().mockResolvedValue({
+				manifestPath: "/tmp/manifest.json",
+				messagesPath: "/tmp/messages.json",
+				manifest,
+			}),
+			persistSessionMessages: vi.fn(),
+			updateSessionStatus: vi.fn().mockResolvedValue({
+				updated: true,
+				endedAt: "2026-01-01T00:00:05.000Z",
+			}),
+			writeSessionManifest: vi.fn(),
+			listSessions: vi.fn().mockResolvedValue([]),
+			deleteSession: vi.fn().mockResolvedValue({ deleted: true }),
+		};
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [],
+				shutdown: vi.fn(),
+			}),
+		};
+		let activeRun = false;
+		let rejectRun: ((error: Error) => void) | undefined;
+		let markRunStarted: (() => void) | undefined;
+		const runStarted = new Promise<void>((resolve) => {
+			markRunStarted = resolve;
+		});
+		const drainedPrompts: string[] = [];
+		const run = vi
+			.fn()
+			.mockImplementationOnce(
+				() =>
+					new Promise<AgentResult>((_resolve, reject) => {
+						activeRun = true;
+						rejectRun = (error) => {
+							activeRun = false;
+							reject(error);
+						};
+						markRunStarted?.();
+					}),
+			)
+			.mockImplementation((prompt: string) => {
+				drainedPrompts.push(prompt);
+				return Promise.resolve(createResult({ text: "queued result" }));
+			});
+		const continueTurn = vi.fn().mockImplementation((prompt: string) => {
+			drainedPrompts.push(prompt);
+			return Promise.resolve(createResult());
+		});
+		const agent = {
+			run,
+			continue: continueTurn,
+			abort: vi.fn(),
+			notifyPendingUserMessage: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			getAgentId: vi.fn().mockReturnValue("agent-root-1"),
+			getConversationId: vi.fn().mockReturnValue("conv-root-1"),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+			getMessages: vi.fn().mockReturnValue([]),
+			canStartRun: vi.fn(() => !activeRun),
+		};
+		agent.abort.mockImplementation(() => {
+			rejectRun?.(new Error("user cancelled"));
+		});
+
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: sessionService as never,
+			runtimeBuilder,
+			createAgent: () => agent as never,
+		});
+
+		await manager.startSession(
+			normalizeStartInput({
+				config: createConfig({ sessionId }),
+				interactive: true,
+			}),
+		);
+
+		const events: unknown[] = [];
+		manager.subscribe((event) => events.push(event));
+		const firstTurn = manager.runTurn({ sessionId, prompt: "slow" });
+		await runStarted;
+		await manager.runTurn({ sessionId, prompt: "", delivery: "queue" });
+		await manager.runTurn({ sessionId, prompt: "  \n", delivery: "steer" });
+		await manager.runTurn({
+			sessionId,
+			prompt: "",
+			delivery: "queue",
+			userImages: ["data:image/png;base64,AAAA"],
+		});
+		expect(
+			(await manager.pendingPrompts.list({ sessionId })).map((prompt) => ({
+				prompt: prompt.prompt,
+				delivery: prompt.delivery,
+			})),
+		).toEqual([{ prompt: "", delivery: "queue" }]);
+		expect(agent.notifyPendingUserMessage).not.toHaveBeenCalled();
+
+		await manager.abort(sessionId, new Error("test abort"));
+		await firstTurn;
+	});
+
 	it("propagates a parent session abort to its team runtime", async () => {
 		const sessionId = "sess-team-abort";
 		const manifest = createManifest(sessionId);

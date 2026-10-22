@@ -3062,6 +3062,17 @@ export class LocalRuntimeHost implements RuntimeHost {
 				delivery: delivery ?? "immediate",
 			},
 		});
+		// A follow-up with nothing in it is not a message: queued, it sat in
+		// the chat as an empty row (pandorum 4let7, 2026-10-12, sent by no
+		// keystroke) and, drained, would start a turn with no input.
+		if (
+			(delivery === "queue" || delivery === "steer") &&
+			input.prompt.trim() === "" &&
+			!input.userImages?.length &&
+			!input.userFiles?.length
+		) {
+			return undefined;
+		}
 		// A steer while the lead waits on its agents (`await_agents`, a
 		// blocking spawn) ends that wait: the round goes on in the background,
 		// the lead reads the steer at the boundary right after, and waits again
