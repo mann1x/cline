@@ -386,6 +386,28 @@ describe("what a turn at the output cap was writing", () => {
 		});
 	});
 
+	it("is named in the retry, with how far it got", async () => {
+		// Lines that never repeat, so no loop guard has a say.
+		const text = Array.from(
+			{ length: 400 },
+			(_, i) => `const v${i} = ${i * 7919} % ${i + 3};`,
+		).join("\n");
+		function* capped(): Iterable<AgentModelEvent> {
+			yield progress(text);
+			yield { type: "finish", reason: "max-tokens" };
+		}
+		execute.mockClear();
+		const model = new CountingModel([capped, answer]);
+		const runtime = new AgentRuntime({ model, tools: [editor] });
+
+		await runtime.run("go");
+
+		expect(execute).not.toHaveBeenCalled();
+		expect(JSON.stringify(model.requests[1]?.messages)).toContain(
+			`It ended while you were writing a call to \`editor\` (${text.length.toLocaleString("en-US")} characters of arguments written). That call was not run`,
+		);
+	});
+
 	it("is not kept for a call the turn finished", async () => {
 		function* done(): Iterable<AgentModelEvent> {
 			yield progress('{"path":"a.js","new_text":"x"}');

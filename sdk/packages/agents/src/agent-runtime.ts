@@ -285,6 +285,43 @@ const MAX_TOKENS_INCOMPLETE_TURN_REMINDER =
 	"Do not try to reproduce it. Take the smallest useful next step instead: make one tool call, or write one short paragraph. " +
 	"If the work you were planning does not fit in one reply, do the part that fits, call the tools it needs, and continue in the next turn.";
 
+/** A call a turn at the output cap was writing, which the provider dropped. */
+interface UnfinishedToolCall {
+	toolName?: string;
+	/** How much of its arguments had streamed when the turn ended. */
+	chars: number;
+}
+
+/**
+ * What the output-limit reminder adds when the turn was writing a call.
+ *
+ * Without it the model hears only that its reply was too long, though the
+ * runtime holds the call's text: xOllama logs "dropping a tool call the model
+ * did not finish writing … done_reason=length" and the turn arrives with no
+ * call in it (ol-104). Naming the call, how far it got and that it did not
+ * run is what tells the model the edit itself is what has to be smaller.
+ */
+function describeUnfinishedToolCalls(value: unknown): string | undefined {
+	if (!Array.isArray(value) || value.length === 0) return undefined;
+	const calls = value.filter(
+		(call): call is UnfinishedToolCall =>
+			typeof call === "object" &&
+			call !== null &&
+			typeof (call as UnfinishedToolCall).chars === "number",
+	);
+	if (calls.length === 0) return undefined;
+	const named = calls
+		.map(
+			(call) =>
+				`\`${call.toolName ?? "a tool"}\` (${call.chars.toLocaleString("en-US")} characters of arguments written)`,
+		)
+		.join(", ");
+	return (
+		`It ended while you were writing a call to ${named}. That call was not run, so it changed nothing. ` +
+		"If it was one large edit or file, split it into smaller calls."
+	);
+}
+
 /**
  * How the retrospective is introduced, when there was room to write one.
  *
@@ -2419,10 +2456,16 @@ export class AgentRuntime {
 							compacting: this.compactBeforeNextTurn,
 						},
 					});
+					const unfinished = describeUnfinishedToolCalls(
+						message.metadata?.unfinishedToolCalls,
+					);
+					const reminder = unfinished
+						? `${MAX_TOKENS_INCOMPLETE_TURN_REMINDER} ${unfinished}`
+						: MAX_TOKENS_INCOMPLETE_TURN_REMINDER;
 					await this.addUserReminderMessage(
 						discardedNote
 							? [
-									MAX_TOKENS_INCOMPLETE_TURN_REMINDER,
+									reminder,
 									...(discardedNote.note
 										? [DISCARDED_REASONING_NOTE_PREFIX, discardedNote.note]
 										: []),
@@ -2433,7 +2476,7 @@ export class AgentRuntime {
 											]
 										: []),
 								].join("\n\n")
-							: MAX_TOKENS_INCOMPLETE_TURN_REMINDER,
+							: reminder,
 						// The same fields the notice above carries, so the row a
 						// reader sees live and the row they see when they reopen
 						// the task are the same row rather than one and nothing.
@@ -4393,6 +4436,7 @@ export class AgentRuntime {
 				),
 			);
 			const refused = new Set(invalidToolCalls.map((call) => call.toolCallId));
+			const dropped: UnfinishedToolCall[] = [];
 			for (const [toolCallId, text] of streamedArguments) {
 				if (
 					(ran.has(toolCallId) && !refused.has(toolCallId)) ||
@@ -4409,6 +4453,17 @@ export class AgentRuntime {
 					toolCallId,
 					text,
 				});
+				// A refused one is answered with its own refusal; only a call the
+				// provider dropped has nothing in the turn to say it existed.
+				if (!refused.has(toolCallId)) {
+					dropped.push({
+						...(toolName ? { toolName } : {}),
+						chars: text.length,
+					});
+				}
+			}
+			if (dropped.length > 0) {
+				messageMetadata.unfinishedToolCalls = dropped;
 			}
 		}
 		if (invalidToolCalls.length > 0) {
