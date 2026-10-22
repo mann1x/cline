@@ -356,18 +356,23 @@ async function executeShellCommands(
  *
  * Every tool here is described in terms of what it does and none of them in
  * terms of what they hand back, so a model reading the descriptions has no way
- * to know that the answer to `read_files` is an array of `{query, result}`
- * rather than the file's text. It finds out by receiving one, which costs it a
+ * to know that the answer to `read_files` is one entry per file, each named by
+ * the path it answers, rather than the file's text. It finds out by receiving one, which costs it a
  * turn of inference at best; watched against small models it costs more than
  * that, because a result it cannot map onto its request looks like a tool that
  * did not work, and a tool that does not work gets replaced by `cat`.
  *
- * `query` is the part worth naming. These tools are batched — several paths,
- * several patterns, several commands in one call — so the entries have to be
- * matched back to the requests, and `query` is what they are matched by.
+ * What an entry answers is the part worth naming. These tools are batched —
+ * several paths, several patterns, several commands in one call — so the
+ * entries have to be matched back to the requests, and that is what they are
+ * matched by.
+ *
+ * No field names and no syntax: a session sends results as text or as JSON
+ * objects, and the descriptions are built before the session's format is
+ * known, so they say only what both formats show.
  */
 const TOOL_RESULT_ENVELOPE =
-	"`{query, result, success, error?}`, where a failed entry has `success: false` and the reason in `error`.";
+	"each entry names what it answers, then what came back, and a failed entry says that it failed and why.";
 
 /**
  * What a successful read with no content is told to mean.
@@ -453,7 +458,7 @@ export function createReadFilesTool(
 			"Any of those hands you a line number to read around — take roughly 30 lines either side of it, and widen only if what you needed turned out to fall outside that. Read a file entire only when you have no line to start from and it is genuinely small. " +
 			"The cost of reading more than you need is not the tool call: every line returned stays in the conversation for the rest of the task, crowding out the room left to reason about it. " +
 			"Binary files that are not image and large files are not supported. " +
-			`Output: one object per requested file, in the order requested — ${TOOL_RESULT_ENVELOPE} \`query\` echoes the path you asked for (as \`path:start-end\` when you gave a range), and \`result\` is that file's content, with every line prefixed by its number as \`  92 | text\`. ` +
+			`Output: one entry per requested file, in the order requested — ${TOOL_RESULT_ENVELOPE} An entry is named by the path you asked for (as \`path:start-end\` when you gave a range), and what came back is that file's content, with every line prefixed by its number as \`  92 | text\`. ` +
 			"Those numbers are how you address an edit, and they are not in the file. Never paste them into another tool: text carrying a `92 | ` prefix will not match anything. When you are reading in order to copy text into `editor`, set `line_numbers: false` on that file's entry and get it clean. ",
 		inputSchema: zodToJsonSchema(ReadFilesInputSchema),
 		timeoutMs: timeoutMs * 2, // Account for multiple files
@@ -549,7 +554,7 @@ export function createSearchTool(
 			(semantic
 				? 'This workspace\'s code is also indexed by meaning: `mode: "semantic"` takes questions in plain words instead of patterns, for when you do not know what the thing is called. '
 				: "") +
-			`Output: one object per pattern — ${TOOL_RESULT_ENVELOPE} \`query\` is the pattern you sent and \`result\` is the matching lines with their file paths. A pattern that matched nothing still has \`success: true\` with an empty \`result\`; that is an answer, not a failure, and re-running it will not change it.`,
+			`Output: one entry per pattern — ${TOOL_RESULT_ENVELOPE} An entry is named by the pattern you sent and holds the matching lines with their file paths. A pattern that matched nothing comes back empty, not failed; that is an answer, and re-running it will not change it.`,
 		inputSchema,
 		timeoutMs: timeoutMs * 2,
 		retryable: true,
@@ -634,11 +639,11 @@ const RUN_COMMANDS_SHARED_INSTRUCTIONS =
 /**
  * Said separately from the envelope because the failure case is the useful
  * part: a command that exits non-zero is exactly the command whose output the
- * model needs, and `success: false` reads as "there is nothing here".
+ * model needs, and an entry marked failed reads as "there is nothing here".
  */
 const RUN_COMMANDS_OUTPUT =
-	`Output: one object per command — ${TOOL_RESULT_ENVELOPE} \`query\` is the command and \`result\` is its combined stdout and stderr. ` +
-	"A non-zero exit sets `success: false` and describes the exit in `error`, but `result` still holds everything the command printed — read it, that is where the compiler or test failure is.";
+	`Output: one entry per command — ${TOOL_RESULT_ENVELOPE} An entry is named by the command and holds its combined stdout and stderr. ` +
+	"A non-zero exit marks the entry failed and describes the exit, but the entry still holds everything the command printed — read it, that is where the compiler or test failure is.";
 
 /**
  * Build the run_commands tool description for the shell that will actually
@@ -858,7 +863,7 @@ export function createWebFetchTool(
 			"Fetch content from URLs and analyze them using the provided prompts. " +
 			"Use for retrieving documentation, API references, or any web content. " +
 			"Each request includes a URL and a prompt describing what information to extract. Fetch independent URLs together in one call, and call this tool in the same response as other independent tool calls. " +
-			`Output: one object per request — ${TOOL_RESULT_ENVELOPE} \`query\` is the URL and \`result\` is what was extracted from that page for your prompt, as text.`,
+			`Output: one entry per request — ${TOOL_RESULT_ENVELOPE} An entry is named by the URL and holds what was extracted from that page for your prompt, as text.`,
 		inputSchema: zodToJsonSchema(FetchWebContentInputSchema),
 		timeoutMs: timeoutMs * 2,
 		retryable: true,
@@ -940,7 +945,7 @@ Example:
  }
 *** End Patch
 
-Output: a single \`{query, result, success, error?}\` object covering the whole patch, where \`result\` says which files were added, updated, moved or deleted. A patch that did not apply — usually because its context lines no longer match the file — sets \`success: false\` and says so in \`error\`; re-read the file and rebuild the patch from what is actually there rather than resending it.`;
+Output: one result covering the whole patch, saying which files were added, updated, moved or deleted. A patch that did not apply — usually because its context lines no longer match the file — comes back failed and says why; re-read the file and rebuild the patch from what is actually there rather than resending it.`;
 
 /**
  * Create the apply_patch tool
@@ -1023,8 +1028,8 @@ export function createEditorTool(
 			"Use this rather than a shell command for anything that changes a file. Make one edit at a time and check it before starting the next: reads and searches cost nothing if one turns out to be unnecessary, but several edits made together and checked once leave several things to undo and no way to tell which one was wrong. " +
 			"Read the lines you are about to change before you change them: an edit aimed at a range you have not read in its current state is refused. Your own edits count — one that changes the file's length moves every line below it, so read that region again before editing it a second time. Line numbers taken from an earlier turn, from a task summary, or from a diagnostic issued before your last edit are the ones that go stale. " +
 			"Repeating the lines already in the range and then continuing is how you insert after them, and it is allowed — the range says which lines you mean, so repeating them is your own choice. What is refused is a `new_text` that goes on to repeat lines from *outside* the range: that appends a second copy of text already elsewhere in the file rather than replacing anything, and the refusal names the lines it matched so you can aim the next call at them. " +
-			"Output: a single `{query, result, success, error?}` object for this one edit, where `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. " +
-			"A failed edit changes nothing: `success` is false, `error` says why, and the file is exactly as it was. Do not resend the same call — `error` names the fix. In particular, text copied out of a `read_files` result must have its `123 | ` line-number gutter removed first.",
+			"Output: one result for this one edit, named `edit:<path>` or `insert:<path>`, describing what changed. " +
+			"A failed edit changes nothing: the result says it failed and why, and the file is exactly as it was. Do not resend the same call — the reason names the fix. In particular, text copied out of a `read_files` result must have its `123 | ` line-number gutter removed first.",
 
 		inputSchema: zodToJsonSchema(EditorToolInputSchema),
 		timeoutMs,
@@ -1118,8 +1123,8 @@ export function createGrepTool(
 			"Flags: `ignore_case`, `invert` (the lines that do not match), `word` (whole words), `count` (how many per file), `files_with_matches` (names only), `context` (lines either side), `max_count` (stop after N per file). Line numbers are included unless you set `line_numbers: false`. " +
 			"Use it to find where something is before you read or edit it — it is cheaper than reading whole files, and a match records that you have read those lines. " +
 			TEXT_TOOL_PROVENANCE +
-			`Output: a single ${TOOL_RESULT_ENVELOPE} \`query\` is \`grep:<pattern>\` and \`result\` holds the matching lines prefixed with their path and line number. ` +
-			"A pattern that matched nothing still has `success: true`, and `result` says so in words: that is an answer, and re-running the same search will not change it.",
+			"Output: one result, named `grep:<pattern>`, holding the matching lines prefixed with their path and line number; a search that could not run says that it failed and why. " +
+			"A pattern that matched nothing is not a failure, and the result says so in words: that is an answer, and re-running the same search will not change it.",
 		inputSchema: zodToJsonSchema(GrepInputSchema),
 		timeoutMs,
 		retryable: true,
@@ -1173,8 +1178,8 @@ export function createExtractDocumentTool(
 			"Use `range` to read part of a long document: pages of a PDF, slides, sheets, or chapters of an ebook. " +
 			'`images: "inline"` also attaches the first few pictures to the result, when you can see images; `images: "none"` skips them. ' +
 			"The first lines of the result say what the document is: its format, title and author, how many pages, slides, sheets or chapters it has, the table of contents of an ebook, and which PDF pages are scanned images of text. Their text is recognized (OCR) and marked as such, or the result says why it was not; `ocr` picks how. " +
-			`Output: a single ${TOOL_RESULT_ENVELOPE} \`query\` is \`extract_document:<path>\` and \`result\` holds that summary, then the text. ` +
-			"A long text is cut at `max_chars` and says where the rest is. A document with no text still has `success: true`, and the result says so.",
+			"Output: one result, named `extract_document:<path>`, holding that summary, then the text; a document that could not be read says that it failed and why. " +
+			"A long text is cut at `max_chars` and says where the rest is. A document with no text is not a failure, and the result says so.",
 		inputSchema: zodToJsonSchema(ExtractDocumentInputSchema),
 		timeoutMs,
 		retryable: false,
@@ -1221,8 +1226,8 @@ export function createSedTool(
 			"Reach for this over `editor` when one mechanical change applies in many places or across many files — renaming an identifier everywhere, stripping a prefix from every line of a block. For a single considered change to one place, `editor` is the better tool: it can anchor on text you quote back, and it tells you when the file has moved under you. " +
 			"An in-place run is refused on a file you have not read, the same way an `editor` call is — and a script addressed by line number is refused unless you have read those lines. Read first. " +
 			TEXT_TOOL_PROVENANCE +
-			`Output: one object per file — ${TOOL_RESULT_ENVELOPE} \`query\` is \`sed:<file>\` and \`result\` is that file's output, or a sentence saying what was written. ` +
-			"The files do not share a fate: one may be written while the next is refused, so read every entry. `success: false` means that file was NOT touched and `error` says why. A script that matched nothing is `success: true` — it ran, and that is its answer; running it again unchanged will not change it.",
+			`Output: one entry per file — ${TOOL_RESULT_ENVELOPE} An entry is named \`sed:<file>\` and holds that file's output, or a sentence saying what was written. ` +
+			"The files do not share a fate: one may be written while the next is refused, so read every entry. A failed entry means that file was NOT touched, and it says why. A script that matched nothing has not failed — it ran, and that is its answer; running it again unchanged will not change it.",
 		inputSchema: zodToJsonSchema(SedInputSchema),
 		timeoutMs,
 		// In-place runs write files; a silent retry would apply a script twice.
@@ -1276,8 +1281,8 @@ export function createAwkTool(
 			"This is the tool for questions about columns and totals, where grep would only find the lines and you would still have to count them yourself: summing a column, picking fields out of a delimited file, counting occurrences per key. " +
 			"It is read-only, and deliberately so: output redirection, pipes, `system()` and `getline` are all refused rather than quietly ignored. Use `sed` or `editor` to change a file. " +
 			TEXT_TOOL_PROVENANCE +
-			`Output: a single ${TOOL_RESULT_ENVELOPE} \`query\` is \`awk:<program>\` and \`result\` is everything the program printed. ` +
-			"A program that printed nothing still has `success: true` — that is the program's answer, not a failure.",
+			"Output: one result, named `awk:<program>`, holding everything the program printed; a program that could not run says that it failed and why. " +
+			"A program that printed nothing has not failed — that is the program's answer.",
 		inputSchema: zodToJsonSchema(AwkInputSchema),
 		timeoutMs,
 		retryable: true,

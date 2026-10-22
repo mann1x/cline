@@ -6,7 +6,11 @@ import {
 	auditToolSectionContent,
 	buildPromptTemplateRepairPrompt,
 	buildPromptTemplateReviewPrompt,
+	exceedsAdditionCap,
 	extractTemplateFromReply,
+	findNonZeroExitDenials,
+	findRestatedBuiltinSentences,
+	findResultFieldClaims,
 	renderToolCallSignatures,
 	summarizeToolCallSignatures,
 } from "./prompt-template-review";
@@ -406,6 +410,132 @@ describe("auditPromptTemplateProposal", () => {
 		);
 
 		expect(result.problems.length).toBeGreaterThanOrEqual(2);
+	});
+});
+
+describe("findResultFieldClaims", () => {
+	it("catches the phrasings the shipped templates used", () => {
+		for (const line of [
+			"Output: one object per file — `{query, result, success, error?}`.",
+			"- **Output**: Returns an array of objects `{ query, result, success }`.",
+			"If `success` is false, `error` explains why.",
+			"A pattern that matched nothing still has `success: true`.",
+			"`query` echoes the path you asked for.",
+			"`result` is everything the program printed.",
+		]) {
+			expect(findResultFieldClaims(line), line).toEqual([line]);
+		}
+	});
+
+	it("passes a result described in words, and other tools' fields", () => {
+		for (const line of [
+			"Output: one entry per file — each entry names what it answers, then what came back, and a failed entry says that it failed and why.",
+			"A script that matched nothing has not failed — it ran, and that is its answer.",
+			"Output: Array of run objects including `id`, `status`, `currentActivity`, `error`, `resultSummary`.",
+			"A command that failed says so, and what it printed is still there.",
+		]) {
+			expect(findResultFieldClaims(line), line).toEqual([]);
+		}
+	});
+});
+
+describe("findRestatedBuiltinSentences", () => {
+	const builtin =
+		"Read the content of text files at the given paths. Each read returns at most 2000 lines of the file. Longer files report their total line count. Short one.";
+
+	it("finds the sentences repeated beside the marker, ignoring case and spacing", () => {
+		const own =
+			"Prefer ranges.  each read returns at most 2000 lines\nof the file. Longer files report their total line count.";
+		expect(findRestatedBuiltinSentences(own, builtin)).toEqual([
+			"each read returns at most 2000 lines of the file.",
+			"longer files report their total line count.",
+		]);
+	});
+
+	it("ignores short sentences and text that only adds to the built-in", () => {
+		expect(
+			findRestatedBuiltinSentences(
+				"Short one. Read the lines around a diagnostic, not the whole file.",
+				builtin,
+			),
+		).toEqual([]);
+	});
+});
+
+describe("exceedsAdditionCap", () => {
+	const builtin = "x".repeat(1000);
+
+	it("allows up to 1.25 times the built-in and refuses past it", () => {
+		expect(exceedsAdditionCap("y".repeat(1250), builtin)).toBe(false);
+		expect(exceedsAdditionCap("y".repeat(1251), builtin)).toBe(true);
+	});
+
+	it("does not measure against a short or composed built-in", () => {
+		expect(exceedsAdditionCap("y".repeat(5000), "x".repeat(499))).toBe(false);
+		expect(exceedsAdditionCap("y".repeat(5000), `${builtin}{{DEFAULT}}`)).toBe(
+			false,
+		);
+	});
+
+	it("is a problem in the audit when the section keeps the marker", () => {
+		const own = "Paraphrased at length. ".repeat(60);
+		const withMarker = auditToolSectionContent(
+			{ grep: `${own}\n\n{{DEFAULT}}` },
+			[],
+			{ grep: builtin },
+		);
+		expect(withMarker.join("\n")).toContain("times as long");
+		const without = auditToolSectionContent({ grep: own }, [], {
+			grep: builtin,
+		});
+		expect(without.join("\n")).not.toContain("times as long");
+	});
+});
+
+describe("restating the built-in text beside the marker", () => {
+	const builtin =
+		"Search files for lines matching a pattern, as grep does. The pattern is a basic regular expression by default. Line numbers are included unless you turn them off. A pattern that matched nothing is an answer, not a failure.";
+	const sentences = builtin.split(/(?<=\.)\s+/);
+
+	it("is a problem from three restated sentences", () => {
+		const body = `${sentences.slice(0, 3).join(" ")}\n\n{{DEFAULT}}`;
+		const problems = auditToolSectionContent({ grep: body }, [], {
+			grep: builtin,
+		});
+		expect(problems.join("\n")).toContain("reads them twice");
+	});
+
+	it("passes two, and passes the same text without the marker", () => {
+		const two = `${sentences.slice(0, 2).join(" ")}\n\n{{DEFAULT}}`;
+		expect(
+			auditToolSectionContent({ grep: two }, [], { grep: builtin }).join("\n"),
+		).not.toContain("reads them twice");
+		const replaced = sentences.slice(0, 3).join(" ");
+		expect(
+			auditToolSectionContent({ grep: replaced }, [], { grep: builtin }).join(
+				"\n",
+			),
+		).not.toContain("reads them twice");
+	});
+});
+
+describe("findNonZeroExitDenials", () => {
+	it("catches both phrasings deepseek wrote", () => {
+		for (const line of [
+			"An entry whose command exited non-zero has not failed as a tool call — the exit code is the command's answer.",
+			"A non-zero exit code is not a failed tool call — it is the command's answer.",
+		]) {
+			expect(findNonZeroExitDenials(line), line).toEqual([line]);
+		}
+	});
+
+	it("passes the exit stated correctly", () => {
+		for (const line of [
+			"A non-zero exit marks the entry as failed and describes the exit, but the entry still holds everything the command printed.",
+			"A command that exits non-zero comes back failed; read what it printed, that is where the error is.",
+		]) {
+			expect(findNonZeroExitDenials(line), line).toEqual([]);
+		}
 	});
 });
 

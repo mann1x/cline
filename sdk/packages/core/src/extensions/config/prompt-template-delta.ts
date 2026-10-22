@@ -295,6 +295,8 @@ export function buildToolSectionDeltaPrompt(
 		"== THE BUILT-IN TEXT FOR THE SECTIONS YOU ARE WRITING ==",
 		"",
 		"This is what the model is given today. Rewrite it into the form you would rather receive: keep every fact, drop nothing the tool can do, and say what its output means.",
+		"If you keep `{{DEFAULT}}` in a section, the built-in text below is sent after whatever you write, on every request: write only what you add to it -- the rule a model breaks, the case it misreads, an example -- and do not restate or paraphrase it. To say everything in your own words, drop `{{DEFAULT}}` and write the whole description.",
+		"Say the output in words, as this text does: what each entry is named by, what it holds, what an empty result means, and that a failed one says it failed and why. Do not name fields such as `query`, `result` or `success`, and do not write the result as an object. A session receives results as text or as JSON, so a description of one is false in the other -- and if the template you are amending still does it, that is part of what you are rewriting.",
 		"",
 		"```markdown",
 		wanted,

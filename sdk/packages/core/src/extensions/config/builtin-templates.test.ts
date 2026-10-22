@@ -4,7 +4,13 @@ import { describe, expect, it } from "vitest";
 import { getBuiltinPromptTemplates } from "./builtin-templates";
 import { BUILTIN_PROMPT_TEMPLATE_FILES } from "./builtin-templates.generated";
 import { buildBuiltinTemplatesModule } from "./builtin-templates-codegen";
-import { findBatchedEditRules } from "./prompt-template-review";
+import {
+	exceedsAdditionCap,
+	findBatchedEditRules,
+	findNonZeroExitDenials,
+	findRestatedBuiltinSentences,
+	findResultFieldClaims,
+} from "./prompt-template-review";
 
 const TEMPLATE_DIR = join(
 	__dirname,
@@ -35,6 +41,7 @@ describe("builtin prompt templates", () => {
 			"glm.md",
 			"kimi-k3.md",
 			"kimi.md",
+			"minimax-m3.1-flash.md",
 			"minimax.md",
 			"nemotron.md",
 			"qwen.md",
@@ -75,6 +82,84 @@ describe("builtin prompt templates", () => {
 				),
 			),
 		]);
+
+		expect(offenders).toEqual([]);
+	});
+
+	it("ships no tool section that describes results by their JSON fields", () => {
+		// A session receives tool results as text or as JSON, and the text form
+		// has no `query`, `result` or `success` in it. Every shipped template
+		// said "`success: false` means ...", inherited from the built-in
+		// descriptions, so a text session was told about fields it never sees.
+		const offenders = getBuiltinPromptTemplates().flatMap((template) =>
+			Object.entries(template.tools ?? {}).flatMap(([tool, body]) =>
+				[
+					...findResultFieldClaims(body ?? ""),
+					...(tool === "run_commands"
+						? findNonZeroExitDenials(body ?? "")
+						: []),
+				].map(
+					(line) =>
+						`${template.name} [tool: ${tool}]: ${line.trim().slice(0, 110)}`,
+				),
+			),
+		);
+
+		expect(offenders).toEqual([]);
+	});
+
+	it("ships no section that restates the built-in text beside the marker", () => {
+		// Both get sent: the section's own words, then '{{DEFAULT}}' expanded to
+		// the built-in description. A rewrite that repeats the built-in sentences
+		// and keeps the marker passes every other check and doubles what the
+		// model reads -- a qwen3.8 rewrite measured 2.4 times the shipped file.
+		const templates = getBuiltinPromptTemplates();
+		const base =
+			templates.find((template) => template.name === "default")?.tools ?? {};
+		const offenders = templates.flatMap((template) =>
+			template.name === "default"
+				? []
+				: Object.entries(template.tools ?? {}).flatMap(([tool, body]) => {
+						const builtin = base[tool];
+						if (!builtin || !(body ?? "").includes("{{DEFAULT}}")) {
+							return [];
+						}
+						const own = (body ?? "").split("{{DEFAULT}}").join("");
+						const restated = findRestatedBuiltinSentences(own, builtin);
+						return restated.length >= 3
+							? [
+									`${template.name} [tool: ${tool}]: ${restated.length} sentences`,
+								]
+							: [];
+					}),
+		);
+
+		expect(offenders).toEqual([]);
+	});
+
+	it("ships no section whose text beside the marker outgrows the built-in", () => {
+		// Paraphrase passes the sentence check above. Shipped sections that keep
+		// the marker run to 1.16 times the built-in at most; the qwen3.8
+		// thinking rewrites that read everything twice went to 2.84.
+		const templates = getBuiltinPromptTemplates();
+		const base =
+			templates.find((template) => template.name === "default")?.tools ?? {};
+		const offenders = templates.flatMap((template) =>
+			template.name === "default"
+				? []
+				: Object.entries(template.tools ?? {}).flatMap(([tool, body]) => {
+						const builtin = base[tool];
+						if (!builtin || !(body ?? "").includes("{{DEFAULT}}")) {
+							return [];
+						}
+						const own = (body ?? "").split("{{DEFAULT}}").join("").trim();
+						return exceedsAdditionCap(own, builtin)
+							? [
+									`${template.name} [tool: ${tool}]: ${own.length} / ${builtin.length}`,
+								]
+							: [];
+					}),
+		);
 
 		expect(offenders).toEqual([]);
 	});

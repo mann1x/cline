@@ -36,6 +36,7 @@
  * says so here rather than at the next session start, and nothing is copied
  * into `assets/` automatically — that stays a human decision.
  */
+import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -199,6 +200,12 @@ function stampProvenance(
 		sampler: Record<string, number>;
 		runDir: string;
 		/**
+		 * How the model was reached, when it was not an Ollama model: a Claude
+		 * has no Ollama family and is sent no sampler, so the header says how it
+		 * was written instead of reporting either as missing.
+		 */
+		via?: string;
+		/**
 		 * Set when only some sections were rewritten.
 		 *
 		 * A delta run replaces three sections of a file whose other three
@@ -231,9 +238,15 @@ function stampProvenance(
 						.join(", ")} written by`
 				: "Written by"
 		} ${details.model} (${
-			details.familyDeclared ? "family declared as" : "Ollama family"
-		} \`${details.family ?? "unreported"}\`${
-			details.familyDeclared ? ", because the tag reports none of its own" : ""
+			details.via
+				? `through \`${details.via}\``
+				: `${
+						details.familyDeclared ? "family declared as" : "Ollama family"
+					} \`${details.family ?? "unreported"}\`${
+						details.familyDeclared
+							? ", because the tag reports none of its own"
+							: ""
+					}`
 		}) on ${RUN_STAMP.slice(0, 4)}-${RUN_STAMP.slice(4, 6)}-${RUN_STAMP.slice(6, 8)}.`,
 		...(details.delta
 			? details.delta.earlier.length > 0
@@ -251,14 +264,18 @@ function stampProvenance(
 			: []),
 		`     Run, with its log: ${details.runDir.replace(/^.*?(?=prompt-reviews\/)/, "")}`,
 		"",
-		"     Sampler asked for by the generator, overriding the model's own:",
-		...describeSampler(details.sampler),
-		"",
-		"     Sampler the tag sources (`/api/show`), which applies to every key",
-		"     the request above does not set:",
-		...(details.sourced
-			? details.sourced.split("\n").map((line) => `       ${line.trim()}`)
-			: ["       (none reported)"]),
+		...(details.via
+			? [`     Sampler: none sent -- written through \`${details.via}\`.`]
+			: [
+					"     Sampler asked for by the generator, overriding the model's own:",
+					...describeSampler(details.sampler),
+					"",
+					"     Sampler the tag sources (`/api/show`), which applies to every key",
+					"     the request above does not set:",
+					...(details.sourced
+						? details.sourced.split("\n").map((line) => `       ${line.trim()}`)
+						: ["       (none reported)"]),
+				]),
 		"",
 		"     The script hands a model the prompt it would really receive, names the",
 		"     failures observed with models in its family, and asks for the version it",
@@ -336,7 +353,11 @@ function createRunLog(): RunLog {
  */
 const REVIEW_MODELS = [
 	"gemma4:31b-cloud",
-	"qwen3.5:397b-cloud",
+	// qwen3.5:397b-cloud was retired on 2026-09-25 and Ollama cloud has no
+	// qwen left. This is a local params overlay of qwen3.8 27B (Q4_K_M) on
+	// solidPC, built for the generator: 128k window, 32k output. It carries the
+	// weights, so unlike a cloud overlay it reports its family (`qwen35`).
+	"qwen3.8-tpl:27b",
 	"glm-5.3:cloud",
 	"deepseek-v4.1-flash:cloud",
 	"kimi-k2.6:cloud",
@@ -346,6 +367,10 @@ const REVIEW_MODELS = [
 	// templates and left the tenth on whatever it last had.
 	"kimi-k3:cloud",
 	"minimax-m3:cloud",
+	// Its own template, split from `minimax.md` on the model name: it reports
+	// family `minimax-m3`, the same as the tag above. Generated through the
+	// `minimax-m3.1-flash-tpl:latest` overlay, as minimax-m3 is.
+	"minimax-m3.1-flash:cloud",
 	"nemotron-3-super:cloud",
 ];
 
@@ -354,7 +379,7 @@ const REVIEW_MODELS = [
  * The rest of `REVIEW_MODELS` comes after these two have been checked by hand,
  * which is why `--all` is a flag rather than the default.
  */
-const DEFAULT_MODELS = ["gemma4:31b-cloud", "qwen3.5:397b-cloud"];
+const DEFAULT_MODELS = ["gemma4:31b-cloud", "qwen3.8-tpl:27b"];
 
 /** A cloud model is a long call, and a rewrite of a 6KB prompt is a long one. */
 const DEFAULT_TIMEOUT_MS = 600_000;
@@ -451,6 +476,14 @@ interface Options {
 	 * none. Whole-file runs only: `--tool` cannot be combined with it.
 	 */
 	compaction: PromptTemplateCompactionId[];
+	/**
+	 * Who answers. `ollama` posts to `--host`; `claude` runs `claude -p` with
+	 * `--model` as the Claude model, for the one family with no Ollama build.
+	 * Everything else -- routing, the section splice, the audit and the repair
+	 * loop -- is the same code either way, which is the point: the hand-built
+	 * repair loop in PROMPT-TEMPLATES.md §7 had no section rewrite at all.
+	 */
+	transport: "ollama" | "claude";
 }
 
 function parseArgs(argv: string[]): Options {
@@ -467,6 +500,7 @@ function parseArgs(argv: string[]): Options {
 	let name: string | undefined;
 	let family: string | undefined;
 	let think = false;
+	let transport: Options["transport"] = "ollama";
 	const compaction = new Set<PromptTemplateCompactionId>();
 
 	for (let index = 0; index < argv.length; index++) {
@@ -475,6 +509,13 @@ function parseArgs(argv: string[]): Options {
 		switch (arg) {
 			case "--think":
 				think = true;
+				break;
+			case "--transport":
+				if (value !== "ollama" && value !== "claude") {
+					throw new Error("--transport is ollama or claude");
+				}
+				transport = value;
+				index++;
 				break;
 			case "--compaction":
 				for (const id of PROMPT_TEMPLATE_COMPACTION_IDS) {
@@ -607,7 +648,60 @@ function parseArgs(argv: string[]): Options {
 		family,
 		think,
 		compaction: [...compaction],
+		transport,
 	};
+}
+
+/**
+ * One `claude -p` call, run inside the run directory with one turn, so it
+ * answers the prompt and cannot start using tools on the repo. `-p` takes a
+ * single prompt, so a repair round is flattened the way §7's hand-built loop
+ * flattens it: the request, the earlier answer, then the audit's complaint.
+ */
+function completeWithClaude(
+	messages: readonly { role: "user" | "assistant"; content: string }[],
+	model: string,
+	cwd: string,
+	timeoutMs: number,
+): Promise<string> {
+	const prompt =
+		messages.length === 1
+			? messages[0].content
+			: messages
+					.map((message) =>
+						message.role === "assistant"
+							? `--- YOUR PREVIOUS ANSWER ---\n\n${message.content}`
+							: message.content,
+					)
+					.join("\n\n---\n\n");
+	return new Promise((resolve, reject) => {
+		const child = spawn(
+			"claude",
+			["-p", "--model", model, "--max-turns", "1"],
+			{ cwd, stdio: ["pipe", "pipe", "pipe"] },
+		);
+		let out = "";
+		let err = "";
+		const timer = setTimeout(() => child.kill(), timeoutMs);
+		child.stdout.on("data", (chunk) => {
+			out += chunk;
+		});
+		child.stderr.on("data", (chunk) => {
+			err += chunk;
+		});
+		child.on("error", reject);
+		child.on("close", (code) => {
+			clearTimeout(timer);
+			if (code === 0) {
+				resolve(out);
+			} else {
+				reject(
+					new Error(`claude -p exited ${code}: ${err.trim().slice(0, 400)}`),
+				);
+			}
+		});
+		child.stdin.end(prompt);
+	});
 }
 
 async function post(
@@ -706,12 +800,11 @@ async function review(model: string, options: Options): Promise<boolean> {
 	const runLog = createRunLog();
 	runLog.log(`\n${model}`);
 
-	const facts = await readModelFacts(
-		options.host,
-		model,
-		options.timeoutMs,
-		runLog,
-	);
+	// A Claude has no `/api/show` to read; its template routes on the name.
+	const facts =
+		options.transport === "claude"
+			? { family: undefined, sourced: undefined }
+			: await readModelFacts(options.host, model, options.timeoutMs, runLog);
 	// The declaration wins over what the tag reports, because the only reason to
 	// pass it is that the tag reports nothing usable. Kept separate from `facts`
 	// so the provenance header can say which of the two it was.
@@ -805,6 +898,9 @@ async function review(model: string, options: Options): Promise<boolean> {
 			fileName: `${slug}.md`,
 			attempts: options.attempts,
 			complete: async (messages) => {
+				if (options.transport === "claude") {
+					return completeWithClaude(messages, model, runDir, options.timeoutMs);
+				}
 				const payload = (await post(
 					options.host,
 					"/api/chat",
@@ -849,6 +945,9 @@ async function review(model: string, options: Options): Promise<boolean> {
 				familyDeclared: options.family !== undefined,
 				sourced: facts.sourced,
 				sampler: requestOptions(options.temperature),
+				...(options.transport === "claude"
+					? { via: "claude -p --max-turns 1" }
+					: {}),
 				runDir,
 				...(options.onlyTools.length > 0
 					? {
@@ -877,7 +976,7 @@ async function review(model: string, options: Options): Promise<boolean> {
 			return true;
 		}
 		runLog.error(
-			`  NOT CLEAN after ${result.attempts} attempt(s); wrote the best of them to ${outputPath}`,
+			`  NOT CLEAN after ${result.attempts} attempt(s); wrote the best of them (attempt ${result.bestAttempt}) to ${outputPath}`,
 		);
 		writeFileSync(logPath, runLog.text, "utf8");
 		return false;

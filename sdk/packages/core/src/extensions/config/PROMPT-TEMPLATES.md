@@ -12,7 +12,7 @@ history. Everything that cost time is written down here.
 
 ---
 
-## 0. The twenty-four things that are easy to get wrong
+## 0. The twenty-five things that are easy to get wrong
 
 | | |
 |---|---|
@@ -39,6 +39,7 @@ history. Everything that cost time is written down here.
 | **The audit only read `# system` until 2026-09-12.** | The batch-edits ban was enforced against model proposals and against that section only, so nine of the ten shipped templates carried the rule in `# tool: editor` while reporting clean. A model reads a tool description in the same request as the system prompt. `findBatchedEditRules()` now runs over both, and `builtin-templates.test.ts` runs it over what ships. |
 | **A rule can reach every template from code, not from a template.** | The batch-edits rule was in `DEFAULT_CLINE_SYSTEM_PROMPT`, `YOLO_CLINE_SYSTEM_PROMPT` and the `editor` and `run_commands` tool descriptions. `default.md` mirrors all of those verbatim, and every other template is regenerated from `default.md`, so fixing the templates alone fixes nothing that lasts. Fix the code, re-sync `default.md`, then regenerate. **And grep the packaged bundle for the string you removed.** On 2026-09-20 a one-sentence fix to the `check_file` description landed in `@cline/core` and the old sentence was still in the built `.vsix` twice: `apps/vscode/src/sdk/check-file-tool.ts` restates the whole description again for the host's own registration, and it is outside everything on this page — `sync-default-template.mts` says so itself ("Host tools ... cannot be constructed from here at all"). `unzip -p <vsix> extension/dist/extension.js | grep -cF '<old sentence>'` is the check that does not care how many homes the text has. |
 | **A `# compaction:` section is the one section whose failure cannot be seen afterwards.** | Its answer *replaces* the transcript, so a translated prompt that drops a rule loses that part of the session's history for good, with nothing left to compare it against. That is why translating them is opt-in (the **Translate Compaction Prompts** switch, `--compaction` in the script). It is also why the generator **cuts** a compaction section that still fails after the last repair round, rather than keeping it as "the best attempt". And it is why no built-in template ships one until it has been measured against the built-in prompt it replaces. |
+| **A tool's result is described in words, never by its fields.** | Results reach the model as text or as JSON, chosen when a session starts, and the text form has no `query`, `result` or `success`: an entry is its query on one line, then `→ ` and what came back, or `→ failed: ` and why. Until 2026-10-22 every built-in description and every shipped template said "`{query, result, success, error?}`, where a failed entry has `success: false`", because review instruction 3 asked for "the shape, what the fields hold". Text became the default in 4.100.256, and every text session was told about fields it never sees. `findResultFieldClaims()` gates proposals and `builtin-templates.test.ts` gates what ships. |
 | **Keep the generic pattern when you add a narrow one.** | `kimi*` + `kimi-k3*` means an unreleased `kimi-k4` lands on `kimi.md`. `kimi-k2*` + `kimi-k3*` means it falls silently to `default.md` — the `glm5*` / `deepseek4*` failure again. The fallback rung is the point of the ladder. |
 
 ---
@@ -647,6 +648,16 @@ the dimension is the primary key and narrowness only breaks ties inside it.
 scaffolding (`igovet/minimax-m3-opencode`). Both are checked: if a stated match
 does not arrive in the reply, the audit fails the attempt.
 
+### Fix one section of a template that has just been regenerated
+
+**Promote first, then re-run the one section.** A `--tool` run splices its
+sections into the file that *ships* and audits the whole result, so a fix-up
+of one section against an unpromoted file inherits every problem in the rest
+of it and can never come back clean. Measured 2026-10-22: `--tool run_commands`
+on deepseek, with the nine other regenerated sections still only a proposal,
+spent four attempts on the old sections' wording and reported NOT CLEAN.
+Promoted first, the same run was clean on attempt 3.
+
 ### Audit a hand edit
 
 ```bash
@@ -667,6 +678,21 @@ bun scripts/generate-builtin-templates.mts
 ```
 
 ### Producing a template for a model with no Ollama build (e.g. Claude)
+
+**Use `--transport claude` first.** Since 2026-10-22 the generator can call
+`claude -p --max-turns 1` itself, inside the run directory, in place of the
+Ollama request. Routing, the `--tool` section splice, the audit and the repair
+loop are then the same code as every other family, which the hand-built route
+below cannot offer: it has no section rewrite at all.
+
+```bash
+bun scripts/review-prompt-templates.mts --transport claude \
+  --model claude-opus-5-5 --tool editor --tool sed
+```
+
+`--model` is the Claude model, and it is also the name the template routes on
+(`*claude*`, `*opus*`). The provenance header records no sampler, because none
+is sent. The manual route below is still the way to see the exact prompt.
 
 There is no Ollama build of Claude, so the generator cannot drive it. The
 transport is the `claude` CLI on solidPC in non-interactive mode; the input and
@@ -775,14 +801,15 @@ rebuilding one.
 | Template | Generate with | Why |
 |---|---|---|
 | `gemma.md` | `gemma4:31b-cloud` | cloud tag works |
-| `qwen.md` | `qwen3.5:397b-cloud` | cloud tag works |
+| `qwen.md` | **`qwen3.8-tpl:27b`** (local) | `qwen3.5:397b-cloud` was retired on 2026-09-25 and Ollama cloud has no qwen left; this is a params overlay of the local qwen3.8 27B Q4_K_M, see the overlay table |
 | `deepseek.md` | `deepseek-v4.1-flash:cloud` | cloud tag works |
 | `kimi.md` | `kimi-k2.6:cloud` | cloud tag works (family `kimi-k2`) |
 | `glm.md` | **`glm-5.3-flash-tpl2:latest`** + `--think` | §7 "glm took three separate fixes" — the only family needing an overlay *and* reasoning *and* the flash tag |
 | `minimax.md` | **`minimax-m3-tpl:latest`** | `minimax-m3:cloud` degenerates / truncates |
+| `minimax-m3.1-flash.md` | **`minimax-m3.1-flash-tpl:latest`** + `--family minimax-m3 --match-model '*minimax-m3.1-flash*' --name minimax-m3.1-flash` | split from `minimax.md` on 2026-10-22. The tag reports family `minimax-m3`, the same as minimax-m3, so the split is a narrower `model:` pattern; `minimax.md` keeps `*minimax*` as the generic rung. Overlay built pre-emptively with the minimax-m3 recipe; clean on attempt 3, a third smaller than `minimax.md` (28 KB vs 41 KB) |
 | `nemotron.md` | **`nemotron-3-super-tpl:latest`** | `nemotron-3-super:cloud` same |
 | `kimi-k3.md` | `kimi-k3:cloud` | its own family (`kimi-k3`), not a kimi variant |
-| `claude.md` | `claude -p` on solidPC | no Ollama build of Claude |
+| `claude.md` | `--transport claude --model claude-opus-5-5` | no Ollama build of Claude; the generator calls `claude -p` instead (§7) |
 
 The overlay runs need their identity stated, because an overlay reports **no
 family at all** and its own name is scaffolding.
@@ -847,8 +874,52 @@ The local overlays, as built (params only, no weights, `FROM` the cloud tag):
 | `glm-5.3-flash-tpl:latest` | 131072 | 1048576 |
 | `minimax-m3-tpl:latest` | 131072 | 262144 |
 | `nemotron-3-super-tpl:latest` | **65536** | 262144 |
+| `qwen3.8-tpl:27b` | 32768 | **131072** |
+| `minimax-m3.1-flash-tpl:latest` | 131072 | 262144 |
 
-All four also carry `temperature 1, top_p 0.95, repeat_last_n 2048,
+`qwen3.8-tpl:27b` is the odd one: it is `FROM qwen3.8:27b-mtp-q4_K_M`, local
+weights rather than a cloud tag, so it **does** report its family (`qwen35`) and
+needs no `--family`. Its window is 128k rather than 256k so the 27B's KV cache
+fits the 24 GB 3090. The generator sends only a temperature, so without the
+overlay a local tag runs at whatever window the server sizes it to.
+
+**It carries `num_ctx` and `num_predict` only -- not the penalties below.** Built
+first with the full recipe, it wrote the first section and then degenerated
+into word salad (a 40-word synonym chain at 0.2, shouted nonsense at 0.6), on
+every attempt. `repeat_penalty 1.1` over `repeat_last_n 2048` plus frequency and
+presence penalties are actually applied by a local runner, and they push the
+model off exactly the tokens a template has to repeat: every `# tool:` heading,
+every tool name. The cloud overlays carry them without that effect. With the
+penalties removed and nothing else changed, the same nine-section request came
+back whole at 0.2, 0.6 and 1.0 alike, so it was the penalties and not the
+temperature. Generate it at `--temperature 0.6` anyway: qwen 27B is known to
+misbehave below that.
+
+**Thinking or not, measured 2026-10-22** on the same nine sections from the same
+seed (`qwen.md` before the rewrite), with each mode's sampler from the Qwen3.8-27B
+card (`qwen3.8-tpl-instruct:27b`: 0.7 / top_p 0.80 / presence 1.5;
+`qwen3.8-tpl-think:27b`: 1.0 / top_p 0.95 / presence 0):
+
+| run | result | nine sections as sent |
+|---|---|---|
+| shipped: thinking off, 0.6, thinking sampler | 4 attempts, then `apply_patch` alone | 13,480 chars |
+| instruct sampler, thinking off | NOT CLEAN after 4 (`check_file` kept "no `success` field") | 26,608 chars |
+| thinking sampler, `--think` | clean on attempt 2 | 32,858 chars |
+| thinking sampler, `--think`, under the restated-sentence check | clean on attempt 3 | 34,871 chars |
+| thinking sampler, `--think`, under the length cap | NOT CLEAN after 4: over the cap on attempt 2, then dropped `{{DEFAULT}}` and lost arguments and output | — |
+
+Presence 1.5 did not degenerate it. Thinking got clean fastest, but by restating
+the built-in text in its own sections *and* keeping `{{DEFAULT}}`, so the model
+reads most of it twice: 2.4x the shipped file, about 4,800 tokens more on every
+request. Nothing checked for that, so "clean" did not mean "lean";
+`findRestatedBuiltinSentences()` and `exceedsAdditionCap()` now do (§9). Under
+both, thinking could not write a section that adds little: told to cut, it
+dropped the marker and then left out what the built-in had covered. The shipped
+template stays the 0.6, thinking-off one. A local
+overlay keeps the model's own sampler (qwen3.8: `temperature 1`, `top_k 20`,
+`top_p 0.95`, `min_p 0`, `repeat_penalty 1`, `presence_penalty 0`).
+
+The cloud overlays also carry `temperature 1, top_p 0.95, repeat_last_n 2048,
 repeat_penalty 1.1, frequency_penalty 0.1, presence_penalty 0.1`.
 `nemotron-3-super` refuses `num_predict` above 65536 — it names the ceiling in
 the error.
@@ -858,11 +929,12 @@ the error.
 | Template | Model |
 |---|---|
 | `gemma.md` | `gemma4:31b-cloud` |
-| `qwen.md` | `qwen3.5:397b-cloud` |
+| `qwen.md` | `qwen3.8-tpl:27b` (local overlay; `qwen3.5:397b-cloud` retired 2026-09-25) |
 | `glm.md` | `glm-5.3:cloud` |
 | `deepseek.md` | `deepseek-v4.1-flash:cloud` |
 | `kimi.md` | `kimi-k2.6:cloud` |
 | *(new)* | `minimax-m3:cloud` — family `minimax-m3` |
+| `minimax-m3.1-flash.md` | `minimax-m3.1-flash:cloud` — family `minimax-m3`, through its `-tpl` overlay |
 | *(new)* | `nemotron-3-super:cloud` — family `nemotron_h_moe` |
 | `claude.md` | a Claude, via `dump-review-prompt.mts` |
 
@@ -889,6 +961,10 @@ in `shipped-templates.test.ts`.
 | `prompt-template-compaction.test.ts` | a dropped placeholder, a collapse, a missing or unrequested section each fail; the strip removes only the named sections; the generator keeps a good one, **cuts a failing one**, strips any it was never asked for, and refuses a section rewrite with compaction |
 | `prompt-template-parser.test.ts` — compaction | `# compaction: <id>` parses, an unknown id is reported, a compaction-only template is valid |
 | `cline-session-factory.test.ts` `resolveCompactionPrompt` | template section > Features setting > built-in (empty) |
+| `findResultFieldClaims()` + `builtin-templates.test.ts` "ships no tool section that describes results by their JSON fields" | no tool section names `query`, `result` or `success`, or writes `{query, result, …}`, in a proposal or in what ships |
+| `findRestatedBuiltinSentences()` in `auditToolSectionContent()` + `builtin-templates.test.ts` "ships no section that restates the built-in text beside the marker" | a section that keeps `{{DEFAULT}}` repeats fewer than 3 built-in sentences of 40+ characters. Measured 2026-10-22: no shipped section repeats more than 2; qwen3.8's thinking rewrite repeated 3-8 in 11 sections and was 2.4x the shipped file |
+| `exceedsAdditionCap()` in `auditToolSectionContent()` + `builtin-templates.test.ts` "ships no section whose text beside the marker outgrows the built-in" | a section that keeps `{{DEFAULT}}` writes at most 1.25x the length of the built-in it adds to (static built-ins of 500+ chars). Catches what paraphrase gets past the sentence check. Measured 2026-10-22 over 45 shipped sections: median 0.65, max 1.16; the two qwen3.8 thinking rewrites went to 2.84 and failed on 4 and 6 sections |
+| `findNonZeroExitDenials()`, same two places | no `run_commands` section says a non-zero exit is not a failure. It is one (`CommandExitError`, the entry comes back failed); deepseek-v4.1-flash wrote the denial on two runs and nothing flagged it |
 | `auditSystemSection()` — completion rule | the system section does not say a response without tool calls counts as completion |
 
 ---

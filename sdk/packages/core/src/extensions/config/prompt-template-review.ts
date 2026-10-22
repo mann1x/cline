@@ -105,6 +105,7 @@ Hard constraints:
 - Keep the file structure: YAML frontmatter between --- markers, then '# system', then one '# tool: <name>' section for EVERY tool listed below. Not only the ones you want to change — every one of them.
 - Covering every tool is a hard requirement. A tool with no section keeps its built-in description, and that fallback exists for exactly one situation: Cline gains a new tool and the templates have not been regenerated yet. It is not a way to skip tools you have nothing to say about. A template that covers six of thirty-one tools is not using the fallback, it is relying on it, and nothing in the file shows which twenty-five were left out.
 - '{{DEFAULT}}' expands to the tool's built-in description at runtime, and it is how you cover a tool cheaply. Where you would improve on the built-in wording, write your own and put '{{DEFAULT}}' on its own line where the built-in text should follow. Where you would not, the entire section body may be just '{{DEFAULT}}'. Either is a covered tool; an absent section is not.
+- Text you write beside '{{DEFAULT}}' is sent in addition to the built-in description, not instead of it, on every request. So write only what you add: the rule a model in your family breaks, the case it misreads, the one example that settles it. Do not restate or paraphrase what the built-in text already says; it follows anyway, and a restatement means the reader takes in the same thing twice. If you want to say everything in your own words, drop '{{DEFAULT}}' and write the whole description instead.
 - These eight tools must be written in your own words, and a section containing only '{{DEFAULT}}' is not acceptable for any of them: read_files, search_codebase, editor, apply_patch, run_commands, fetch_web_content, check_file, ask_lsp. They are the tools models in your family are observed to misuse, so they are the whole reason this template exists. For these eight, your own text — not the inherited text — has to carry the three things listed below: every value of any closed set, every argument and when to use it, and what comes back. Adding '{{DEFAULT}}' after your text is allowed and does not excuse you from any of that.
 - For 'ask_lsp', say when to reach for it, not only what it does. List at least three concrete situations as the reader actually meets them — "about to search for a name to find where it is defined", "about to open a file just to read a signature", "about to scroll or count brackets to work out a file's structure" — each pointing at the operation that answers it, and name 'search_codebase' as the thing those situations would otherwise go to. This is not padding: measured across a whole session against a real bug, a template that described all eight operations correctly and said only "prefer this over search_codebase for anything about a symbol" produced zero calls to the tool, while the model hand-rolled the same answers in the shell twenty times. It could not recognise the moment.
 - Do not copy a built-in description out word for word. That is a snapshot: it says the same thing today and stops tracking the built-in text tomorrow, so the next edit to it reaches every model except you. If you would not change the wording, write '{{DEFAULT}}' — that is what it is for.
@@ -122,7 +123,7 @@ If it does not, your text is the only thing a model will ever see about that too
 
 1. Closed sets. Where the built-in description lists the values an argument accepts — the operations of a language-server tool, the actions of a task tool, the statuses of a run — your replacement must list all of them too. Naming four of eight hides half the tool and a model cannot guess the rest.
 2. How to address the tool. Where the built-in description names the arguments, and says which one to use when, your replacement must say the same. A tool that can be addressed three ways needs all three, and what each is for.
-3. What comes back. Where the built-in description states an output, your replacement must state one: the shape, what the fields hold, and what an empty or failed result means. A model that cannot map a result back onto its request spends a turn working it out, and then stops trusting the tool.
+3. What comes back. Where the built-in description states an output, your replacement must state one: what each entry is named by, what it holds, and what an empty or failed result means. A model that cannot map a result back onto its request spends a turn working it out, and then stops trusting the tool. Say it in words, as the built-in text does: do not name fields such as 'query', 'result' or 'success', and do not write the result as an object like '{query, result, success, error?}'. A session receives tool results as text or as JSON, chosen when it starts, so a description of one format is false in the other.
 
 Nothing is required of you that the built-in text did not already provide. Reproducing what is there is always enough; improving on it is better; dropping it is the one thing that is not allowed.
 
@@ -657,6 +658,23 @@ export function auditToolSectionContent(
 			);
 			continue;
 		}
+		const inherited = builtinDescriptions[name];
+		if (
+			own !== "" &&
+			inherited !== undefined &&
+			body.includes(PROMPT_TEMPLATE_DEFAULT_MARKER)
+		) {
+			const restated = findRestatedBuiltinSentences(own, inherited);
+			if (restated.length >= RESTATED_SENTENCE_LIMIT) {
+				problems.push(
+					`The '# tool: ${name}' section keeps '{{DEFAULT}}' and also restates ${restated.length} sentences of the built-in description word for word, so the model reads them twice, on every request. For example: ${JSON.stringify(restated[0].slice(0, 120))}. Keep '{{DEFAULT}}' and write only what you add to it, or drop '{{DEFAULT}}' and write the whole description in your own words.`,
+				);
+			} else if (exceedsAdditionCap(own, inherited)) {
+				problems.push(
+					`The '# tool: ${name}' section keeps '{{DEFAULT}}', and the text you wrote beside it is ${own.length} characters against ${inherited.length} for the built-in description it adds to: ${(own.length / inherited.length).toFixed(1)} times as long. Both are sent, on every request. Text beside the marker should hold only what you add -- a rule, a correction, an example -- not the built-in content again in other words. Cut it to what is new, or drop '{{DEFAULT}}' and write the whole description yourself.`,
+				);
+			}
+		}
 		// A tool that has to be rewritten is judged on its own words, marker or
 		// not: inheriting the contract defeats the point of demanding the
 		// rewrite. Everything else is judged only when it replaced the text.
@@ -980,6 +998,127 @@ function auditToolSectionsForBatchedEdits(
 }
 
 /**
+ * Lines that describe a tool's result by its JSON fields.
+ *
+ * Results reach the model as text or as JSON, chosen per session, and the
+ * text form has no `query`, `result` or `success` in it: an entry is its query
+ * on one line, then `→ ` and what came back, or `→ failed: ` and why. A
+ * description that says "`success: false` means the file was not touched" is
+ * false for every text session. Every shipped template said it, because the
+ * built-in descriptions did and the review instructions asked for "the shape,
+ * what the fields hold". Exported for the same reason as
+ * `findBatchedEditRules`: the shipped-template test and the proposal audit
+ * must use one detector.
+ */
+export function findResultFieldClaims(text: string): string[] {
+	return text
+		.split(/\r?\n/)
+		.filter((line) =>
+			/\{\s*query\s*,\s*result\b|`(?:query|result|success)`|`success:\s*(?:true|false)`/.test(
+				line,
+			),
+		);
+}
+
+/**
+ * How many built-in sentences a section may restate beside '{{DEFAULT}}'.
+ *
+ * Measured 2026-10-22 over the shipped templates and two qwen3.8 rewrites of the
+ * same nine sections: no shipped section restates more than 2 (qwen's
+ * `browser`), while the thinking rewrite restated 3 to 8 in each of 11 sections
+ * and came to 2.4 times the size of the shipped file -- clean by every other
+ * check, and about 4,800 tokens heavier on every request.
+ */
+const RESTATED_SENTENCE_LIMIT = 3;
+
+/**
+ * How long the text beside '{{DEFAULT}}' may be, as a multiple of the built-in
+ * description it is sent with.
+ *
+ * Paraphrase gets past the sentence check: told to stop copying the built-in
+ * sentences, qwen3.8's thinking rewrite wrote them out again in its own words
+ * and came to 34,871 characters for nine sections against 13,480 shipped.
+ * Measured 2026-10-22 over 45 shipped sections that keep the marker (static
+ * built-ins of 500+ characters): median 0.65, largest 1.16 (minimax-m3.1-flash
+ * `grep`). The two thinking rewrites went to 2.84, with a dozen sections each
+ * above 1.3.
+ */
+const ADDITION_LENGTH_CAP = 1.25;
+
+/** Whether `own`, sent beside the marker, is longer than an addition should be. */
+export function exceedsAdditionCap(own: string, builtin: string): boolean {
+	if (
+		builtin.length < 500 ||
+		builtin.includes(PROMPT_TEMPLATE_DEFAULT_MARKER)
+	) {
+		// Too short to measure against, or composed at runtime.
+		return false;
+	}
+	return own.length > builtin.length * ADDITION_LENGTH_CAP;
+}
+
+/**
+ * The built-in sentences, 40 characters or longer, that `own` repeats verbatim
+ * (ignoring whitespace and case). Next to '{{DEFAULT}}' each one is sent twice.
+ */
+export function findRestatedBuiltinSentences(
+	own: string,
+	builtin: string,
+): string[] {
+	const normalize = (text: string) =>
+		text.replace(/\s+/g, " ").trim().toLowerCase();
+	const ownText = normalize(own);
+	return builtin
+		.split(/(?<=[.!?])\s+/)
+		.map(normalize)
+		.filter((sentence) => sentence.length >= 40 && ownText.includes(sentence));
+}
+
+/**
+ * Lines in a `run_commands` section that say a non-zero exit is not a failure.
+ *
+ * It is one: the command throws `CommandExitError`, the entry comes back
+ * failed with the exit in its reason, and a text session reads `→ failed:`
+ * above the output. deepseek-v4.1-flash wrote "has not failed as a tool call"
+ * and then "is not a failed tool call" on two separate runs on 2026-10-22,
+ * the second after being told the result format, and nothing flagged either.
+ * The point it means to make -- read the output, the error is in it -- is the
+ * right one, and saying it does not need the denial.
+ */
+export function findNonZeroExitDenials(text: string): string[] {
+	return text
+		.split(/\r?\n/)
+		.filter((line) =>
+			/non-?zero[^.]{0,120}\b(?:not|n't)\b[^.]{0,30}\bfail/i.test(line),
+		);
+}
+
+function auditToolSectionsForResultFields(
+	tools: Record<string, string>,
+): string[] {
+	const problems: string[] = [];
+	const [denial] = findNonZeroExitDenials(tools.run_commands ?? "");
+	if (denial) {
+		problems.push(
+			`In 'tool: run_commands': the section says a non-zero exit is not a failure: ${JSON.stringify(
+				denial.trim().slice(0, 160),
+			)}. It is one -- the entry comes back failed with the exit in its reason, and a text session sees it marked failed above the output. Say that, and that the output is still there to read.`,
+		);
+	}
+	for (const [name, body] of Object.entries(tools)) {
+		const [offender] = findResultFieldClaims(body ?? "");
+		if (offender) {
+			problems.push(
+				`In 'tool: ${name}': the section describes the result by its JSON fields: ${JSON.stringify(
+					offender.trim().slice(0, 160),
+				)}. Say it in words instead -- what each entry is named by, what it holds, and that a failed one says it failed and why. A session receives results as text or as JSON, and the text form has no 'query', 'result' or 'success' field, so this sentence is false for it.`,
+			);
+		}
+	}
+	return problems;
+}
+
+/**
  * The one rule a rewrite may not write into its system prompt.
  *
  * "Read the file back after you edit it" is the most expensive sentence a
@@ -1175,6 +1314,7 @@ export function auditPromptTemplateProposal(
 	);
 	problems.push(...auditExampleCalls(args.raw, args.toolSignatures ?? []));
 	problems.push(...auditToolSectionsForBatchedEdits(parsed.template.tools));
+	problems.push(...auditToolSectionsForResultFields(parsed.template.tools));
 	problems.push(
 		...auditToolSectionContent(
 			parsed.template.tools,
@@ -1346,6 +1486,13 @@ export interface GeneratePromptTemplateResult {
 	audit: PromptTemplateProposalAudit;
 	/** How many model calls it took. */
 	attempts: number;
+	/**
+	 * Which of those calls produced `raw`. The same as `attempts` for a clean
+	 * result; for one that never got clean it is the cleanest attempt, which
+	 * is often an early one. The two used to share a field, and a run that
+	 * spent four calls was logged as "NOT CLEAN after 1 attempt(s)".
+	 */
+	bestAttempt: number;
 	/**
 	 * The compaction sections the file carries, and the ones that were removed
 	 * because they still failed the check after the last attempt. Present only
@@ -1631,6 +1778,7 @@ export async function generatePromptTemplate(
 			raw,
 			audit,
 			attempts: attempt,
+			bestAttempt: attempt,
 			compactionFailing: compactionAudit.failing,
 			compactionUnchanged: compactionAudit.unchanged,
 			compactionProblems: compactionAudit.problems,
@@ -1663,7 +1811,10 @@ export async function generatePromptTemplate(
 	if (!best) {
 		throw new Error("No proposal was produced.");
 	}
-	return finishGeneration(best, requestedCompaction);
+	return finishGeneration(
+		{ ...best, attempts: attemptLimit },
+		requestedCompaction,
+	);
 }
 
 /**

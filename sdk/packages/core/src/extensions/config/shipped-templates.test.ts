@@ -159,7 +159,10 @@ describe("shipped prompt templates", () => {
 			"kimi",
 			"kimi-k3",
 			// Matched on `model:` -- neither reports a usable family string.
+			// `minimax-m3.1-flash` reports the same family as minimax-m3, so its
+			// split from the generic `minimax` is a narrower model pattern.
 			"minimax",
+			"minimax-m3.1-flash",
 			"nemotron",
 			"qwen",
 		]);
@@ -343,6 +346,16 @@ describe("shipped prompt templates", () => {
 				"Kimi K3 on a cloud tag, against the generic kimi rung",
 				{ providerId: "ollama", modelId: "kimi-k3:cloud" },
 				"kimi-k3",
+			],
+			[
+				"MiniMax M3.1 Flash, against the generic minimax rung",
+				{ providerId: "ollama", modelId: "minimax-m3.1-flash:cloud" },
+				"minimax-m3.1-flash",
+			],
+			[
+				"MiniMax M3, which the narrower rung must not claim",
+				{ providerId: "ollama", modelId: "minimax-m3:cloud" },
+				"minimax",
 			],
 			[
 				"a model no template claims",

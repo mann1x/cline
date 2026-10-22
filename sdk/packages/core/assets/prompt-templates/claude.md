@@ -4,21 +4,42 @@ match:
   model: ["*claude*", "*opus*", "*sonnet*", "*fable*", "*haiku*"]
 ---
 
-<!-- PROVENANCE -- written by hand from a `claude -p` run, not by the model.
+<!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.
 
-     Written by claude -p --model opus on 2026-09-12, clean on attempt 2.
-     Run, with its log: prompt-reviews/regen/20260912-1817-claude-p
+     Sections `apply_patch`, `awk`, `check_file`, `editor`, `fetch_web_content`, `grep`, `read_files`, `run_commands`, `search_codebase`, `sed` written by claude-opus-5-5 (through `claude -p --max-turns 1`) on 2026-10-22.
+     Every other section is as it was. Before this run:
 
-     Sampler: not applicable -- written through the Claude CLI
-     (`claude -p --max-turns 1`), not through /api/chat, so neither the
-     generator's request options nor an Ollama sourced-parameter set
-     applies.
+       Written by claude -p --model opus on 2026-09-12, clean on attempt 2.
+       Run, with its log: prompt-reviews/regen/20260912-1817-claude-p
 
-     This path has no repair loop. Attempt 1 failed the audit on the
-     one-change-at-a-time rule; attempt 2 was the same prompt with that
-     complaint and its own previous answer appended, which is what
-     review-prompt-templates.mts does automatically for an Ollama model.
-     Both attempts and both audits are in the run directory.
+       Sampler: not applicable -- written through the Claude CLI
+       (`claude -p --max-turns 1`), not through /api/chat, so neither the
+       generator's request options nor an Ollama sourced-parameter set
+       applies.
+
+       This path has no repair loop. Attempt 1 failed the audit on the
+       one-change-at-a-time rule; attempt 2 was the same prompt with that
+       complaint and its own previous answer appended, which is what
+       review-prompt-templates.mts does automatically for an Ollama model.
+       Both attempts and both audits are in the run directory.
+
+       Regenerate rather than hand-edit, and audit a hand-edit with
+       scripts/audit-prompt-template.mts. 
+
+     Run, with its log: prompt-reviews/regen/20261022-0710-claude-opus-5-5
+
+     Sampler: none sent -- written through `claude -p --max-turns 1`.
+
+     The script hands a model the prompt it would really receive, names the
+     failures observed with models in its family, and asks for the version it
+     would rather read; the reply is parsed and audited before it lands here.
+
+     This line is stamped by the caller because a model cannot report which
+     model it is. Shown a template that opens with a header, a model copies
+     that header verbatim -- deepseek-v4.1-flash returned one naming
+     deepseek-v4-flash and family `deepseek4` while the live family was
+     `deepseek_v41`. Any header in a model's reply is stripped before this
+     one is added.
 
      Regenerate rather than hand-edit, and audit a hand-edit with
      scripts/audit-prompt-template.mts. -->
@@ -147,6 +168,7 @@ If the user asks a question that does not need the codebase, answer it directly 
 {{CLINE_METADATA}}
 
 # tool: read_files
+
 Reads text or image files, whole or by line range.
 
 The argument is always the `files` array, one object per file. A bare path, or a list of path strings, is rejected:
@@ -154,140 +176,148 @@ The argument is always the `files` array, one object per file. A bare path, or a
 {"files": [{"path": "/abs/src/session.ts", "start_line": 60, "end_line": 130}, {"path": "/abs/package.json"}]}
 
 - `path`: the absolute path.
-- `start_line`, `end_line`: optional, one-based and inclusive, narrowing the file named on that same entry.
-- `line_numbers`: optional. Lines come back prefixed with their number unless you set this to `false`. Set it `false` when you are reading text in order to copy it into `editor`'s `old_text`.
+- `start_line`, `end_line`: optional, one-based and inclusive. They narrow the file named on that same entry.
+- `line_numbers`: optional. Lines come back prefixed with their number unless you set this to `false` on that entry. Set it to `false` when you are reading text in order to copy it into `editor`'s `old_text`.
 
 Put every file you already know you need into one call, alongside any other independent calls in the same response.
 
-Read a range, not a whole file. Find the line first: a diagnostic or stack trace names it, `search_codebase` reports the line of every match, `ask_lsp` resolves a symbol to its definition. Then read about 30 lines either side, widening only if what you needed fell outside. Read a file entire only when you have no line to start from and it is genuinely small (`list_files` shows sizes). The cost is not the call: every line returned stays in the conversation for the rest of the task, crowding out the room left to think about it.
+Read a range, not a whole file. Find the line first: a diagnostic or stack trace names it, `search_codebase` reports the line of every match, and `ask_lsp` resolves a symbol to its definition. Then read about 30 lines either side of it, widening only if what you needed fell outside. Read a whole file only when you have no line to start from and the file is genuinely small (`list_files` shows sizes). The cost is not the call. Every line returned stays in the conversation for the rest of the task, crowding out the room left to think about it.
 
-Don't use this to inspect an edit you just made. The `editor` result already told you whether it landed and what changed; re-reading only repeats that at the price of the file's full length. Read again when an edit failed, or when you need lines you have not seen — including lines you intend to address by number below an edit that changed the file's length (see `editor`).
+Don't use this to inspect an edit you just made. The `editor` result already told you whether it landed and what changed, and re-reading only repeats that at the cost of the file's full length. Read again when an edit failed, or when you need lines you have not seen. That includes lines you plan to address by number below an edit that changed the file's length (see `editor`).
 
-Limits: at most 2000 lines / ~47k characters per read. A longer file reports its total line count; page through it with `start_line`/`end_line`. Images are supported; other binary files and very large files are not.
+Limits: at most 2000 lines or about 47k characters per read. A longer file reports its total line count, so page through it with `start_line` and `end_line`. Images are supported. Other binary files and very large files are not.
 
-Output: one object per entry, in the order requested, shaped `{query, result, success, error?}`.
-- `query` echoes the path, or `path:start-end` for a range — that is how you match a result back to its request.
-- `result` is the content. With line numbers on, each line reads `  92 | text`. The `92 | ` gutter is not in the file, so text still carrying it will match nothing in `editor`.
-- A file that could not be read has `success: false` with the reason in `error`; the other entries are unaffected.
+Output: one entry per requested file, in the order requested. Each entry is named by the path you asked for, or by `path:start-end` when you gave a range, which is how you match an entry back to its request. The entry holds that file's content. With line numbers on, each line reads `  92 | text`. The `92 | ` gutter is not in the file, so text that still carries it will match nothing in `editor`. A file that could not be read says it failed and why, and the other entries are unaffected.
 
 Use this instead of `cat`, `head`, `tail` or `Get-Content` through `run_commands`.
 
 # tool: search_codebase
+
 Searches the codebase with regular expressions.
 
 {"queries": ["loadConfig\\(", "CLINE_[A-Z_]+"], "context_lines": 2, "max_per_file": 5}
 
-- `queries`: an array of regexes, run in parallel. Put every independent pattern in one call. Escape metacharacters you mean literally.
-- `max_per_file`: optional. By default each file reports only its first match, which answers *which files* mention something. Raise it when you need *every* occurrence in a file and where each one sits.
-- `context_lines`: optional, lines shown either side of a match; 2 by default.
+- `queries`: an array of regexes, run in parallel. Put every independent pattern in one call. Escape any metacharacter you mean literally.
+- `max_per_file`: optional. By default each file reports only its first match, which tells you *which files* mention something. Raise it when you need *every* occurrence in a file and where each one is.
+- `context_lines`: optional, the number of lines shown either side of a match. 2 by default.
 
-What it is for: text. String literals, log messages, config keys, comments, TODOs, a spelling to find everywhere. It is also how you find the line to read around before calling `read_files`. What it is not for: questions about a symbol. If the pattern is an identifier and the question is where it is defined, what uses or calls it, or what implements it, `ask_lsp` answers exactly in one call; a text search returns every mention and leaves you opening files to work out which hit was real. Use this instead of `grep`, `rg`, `findstr` or `Select-String` through `run_commands` — and see the `grep` tool when you want grep's own flags on a file you have already located.
+What it is for: text. That covers string literals, log messages, config keys, comments, TODOs, import lines, and a spelling you need to find everywhere. It is also how you find the line to read around before calling `read_files`. What it is not for: questions about a symbol. If the pattern is an identifier and the question is where it is defined, what uses or calls it, or what implements it, `ask_lsp` answers exactly in one call. A text search returns every mention and leaves you opening files to work out which hit was the real one. Use this instead of `grep`, `rg`, `findstr` or `Select-String` through `run_commands`. Use the `grep` tool when you want grep's own flags on a file you have already located.
 
-Output: one object per pattern, shaped `{query, result, success, error?}`. `query` is the pattern you sent; `result` is the matching lines with their file paths and line numbers, plus context. Output beyond ~48k characters for one pattern is middle-truncated, so narrow a broad pattern rather than paging it. A pattern that matched nothing returns `success: true` with an empty `result` — that is an answer, and re-running it will not change it. `success: false` with `error` means the search itself failed.
+Output: one entry per pattern, in the order sent, each named by the pattern. An entry holds the matching lines with their file paths and line numbers, plus context. Output beyond about 48k characters for one pattern is cut from the middle, so narrow a broad pattern rather than paging through it. A pattern that matched nothing comes back empty, not failed. That is an answer, and re-running it will not change it. A search that could not run says it failed and why.
 
 # tool: grep
+
 Searches files for lines matching a pattern, as POSIX `grep` does, in this process.
 
-{"pattern": "TODO", "paths": ["src"], "context": 2, "max_count": 20}
+{"pattern": "TODO", "paths": ["/abs/src"], "context": 2, "max_count": 20}
 
-- `pattern`: a **basic** regular expression by default — `+ ? ( ) { } |` are literal characters there, and `\(a\|b\)` is how you group and alternate. Pass `extended: true` for the syntax you were probably about to write, or `fixed: true` to search for the text itself with no syntax at all.
+- `pattern`: a **basic** regular expression by default. In that syntax `+ ? ( ) { } |` are literal characters, and you group and alternate with `\(a\|b\)`. Pass `extended: true` for the syntax you were probably about to write, or `fixed: true` to search for the text itself with no syntax at all.
 - `paths`: optional, files or directories. Defaults to the workspace root, searched recursively, skipping `node_modules`, `.git`, `dist` and the like.
-- `ignore_case`, `invert`, `word`, `count`, `files_with_matches`: the usual flags, spelled out — case-insensitive, the lines that do *not* match, whole words only, a count per file, names only.
-- `context`: lines shown either side of a match. `max_count`: stop after this many per file. Line numbers are included unless you set `line_numbers: false`.
+- `ignore_case`, `invert`, `word`, `count`, `files_with_matches`: the usual flags, spelled out. They give, in order: case-insensitive matching, the lines that do *not* match, whole words only, a count per file, and file names only.
+- `context`: lines shown either side of a match. `max_count`: stop after this many matches per file. Line numbers are included unless you set `line_numbers: false`.
 
-What it is for: grep's own semantics on a known file or directory — every matching line rather than one per file, a count, an inverted match, a window of context, a pattern you already have in POSIX form. What `search_codebase` is for: sweeping the whole repository with several independent patterns at once to find *which* files mention something. Reach for that first when you do not yet know where to look, and for this when you do. Neither is for questions about a symbol — `ask_lsp` answers those exactly.
+What it is for: grep's own semantics on a known file or directory. That means every matching line rather than one per file, a count, an inverted match, a window of context, or a pattern you already have in POSIX form. It is cheaper than reading whole files to find where something is before you read or edit it. `search_codebase` is for sweeping the whole repository with several independent patterns at once to find *which* files mention something. Reach for that when you don't yet know where to look, and for this when you do. Neither is for questions about a symbol; `ask_lsp` answers those exactly.
 
-This runs in-process. It is not the `grep` binary and does not go through `run_commands`, so it needs nothing installed and behaves the same on every platform; running `grep` or `rg` through the shell instead is the thing to avoid.
+This runs in-process. It is not the `grep` binary and does not go through `run_commands`, so it needs nothing installed and behaves the same on every platform. Running `grep` or `rg` through the shell instead is the thing to avoid.
 
-Output: a single `{query, result, success, error?}`. `query` is `grep:<pattern>`; `result` is the matching lines, each prefixed with its path and line number, with context lines separated by `-` and matches by `:`. A pattern that matched nothing returns `success: true` and says so in words — that is an answer, and re-running it will not change it. Reading a file's lines here counts as having read them.
+Output: one result, named `grep:` followed by the pattern. It holds the matching lines, each prefixed with its path and line number. Context lines are marked with `-` and matching lines with `:`. A pattern that matched nothing has not failed, and the result says so in words. That is an answer, and re-running the same search will not change it. A search that could not run says it failed and why. The lines a match shows you count as lines you have read, for `editor` and `sed`.
 
 # tool: awk
+
 Runs an `awk` program over one or more files, in this process.
 
-{"program": "NR>1 {sum += $2} END {print sum}", "files": ["data.csv"], "field_separator": ","}
+{"program": "NR>1 {sum += $2} END {print sum}", "files": ["/abs/data/usage.csv"], "field_separator": ","}
 
-- `program`: the awk program. `{print $1}`, `$3 ~ /error/ {print FILENAME, NR, $0}`, a `BEGIN`/`END` pair — all of it.
+- `program`: the awk program, in full. That can be `{print $1}`, `$3 ~ /error/ {print FILENAME, NR, $0}`, or a `BEGIN`/`END` pair.
 - `files`: optional. A program with only a `BEGIN` block needs none.
-- `field_separator`: `-F`. `variables`: `-v name=value`, as an object.
+- `field_separator`: this is `-F`. `variables`: this is `-v name=value`, given as an object such as `{"limit": "10"}`.
 
-What it is for: questions about columns and totals, where a search would only find the lines and leave you counting them yourself — summing a column, pulling fields out of a delimited file, counting occurrences per key, reshaping a report into the two numbers you actually wanted.
+What it is for: questions about columns and totals, where a search would find the lines but leave the counting to you. Examples are summing a column, pulling fields out of a delimited file, counting occurrences per key, or reducing a report to the two numbers you actually wanted.
 
-It cannot write, and that is deliberate rather than incidental: output redirection, pipes, `system()` and `getline` are refused rather than quietly ignored. Use `sed` or `editor` to change a file.
+It cannot write, and that is on purpose. Output redirection, pipes, `system()` and `getline` are refused, not quietly ignored. Use `sed` or `editor` to change a file.
 
-Output: a single `{query, result, success, error?}`. `query` is `awk:<program>`; `result` is everything the program printed. A program that printed nothing still returns `success: true` — that is the program's answer, not a failure.
+It runs in-process, not through the shell. It needs no `awk` binary installed and behaves the same on every platform. Running `awk` through `run_commands` instead is the thing to avoid.
+
+Output: one result, named `awk:` followed by the program, holding everything the program printed. A program that could not run says it failed and why. A program that printed nothing has not failed: that is the program's answer.
 
 # tool: extract_document
 {{DEFAULT}}
 
 # tool: fetch_web_content
-Fetches web pages — documentation, API references, changelogs — and extracts from each what you ask for.
+
+Fetches web pages, such as documentation, API references or changelogs, and pulls out of each one what you ask for.
 
 {"requests": [{"url": "https://example.com/docs/config", "prompt": "List every option under `server` with its default value"}]}
 
-- `requests`: an array. Each entry pairs a `url` with a `prompt`. A bare `{url, prompt}` outside the array is rejected.
-- `prompt`: what to pull out of that page. You get the answer to this prompt back, not the page, so ask for the specific thing you need.
+- `requests`: an array with one entry per page. Each entry pairs a `url` with a `prompt`. A bare `{url, prompt}` outside the array is rejected.
+- `prompt`: what to pull out of that page. You get back the answer to this prompt, not the page, so ask for the specific thing you need.
 
-Fetch independent URLs in one call, next to any other independent calls in the same response.
+Fetch independent URLs in one call, alongside any other independent calls in the same response.
 
-Output: one object per request, shaped `{query, result, success, error?}`. `query` is the URL; `result` is the text extracted for your prompt. A page that could not be fetched has `success: false` with the reason in `error`.
+Output: one entry per request, in the order sent, each named by its URL. An entry holds the text extracted from that page for your prompt. A page that could not be fetched says it failed and why, and the other entries are unaffected.
 
 # tool: editor
-Changes or creates one text file. Use this, never the shell, for anything that writes a file: `sed -i`, `echo >`, `cat > f <<EOF` and `Set-Content` tell you nothing about what they changed.
 
-Which arguments you send decides what the call does. Use one form per call; don't mix `old_text` with a line range.
+Changes or creates one text file. Use this, never the shell, for anything that writes a file. `sed -i`, `echo >`, `cat > f <<EOF` and `Set-Content` tell you nothing about what they changed.
 
-Write the arguments in this order: `file_path` and every other short argument first — line and column numbers, `intent`, `task_progress`, `old_text` — and `new_text` last. The text you are writing is the long part of the call, and whatever is written after a long text is the part most easily left out.
+The arguments you send decide what the call does. Use one form per call, and don't mix `old_text` with a line range.
 
-1. Replace text: `file_path`, `old_text`, `new_text`. `old_text` must match exactly, whitespace and indentation included. If it occurs more than once, add `occurrence` (one-based, in file order) to pick one, or `replace_all: true` for all of them.
-2. Replace lines: `file_path`, `start_line`, `new_text`, optional `end_line` (inclusive, defaults to `start_line`). Best where the text is long, minified or repeated, because a line number cannot be ambiguous. An empty `new_text` deletes the range.
-3. Replace characters: `file_path`, `start_line`, `start_column`, `new_text`, optional `end_line`/`end_column` (inclusive, each defaulting to its start). This is the unit a diagnostic speaks in — `line 12, column 640` — and on a minified line it is the only form that leaves the other 400 characters alone. `start_column` alone replaces exactly one character.
-4. Insert lines: `file_path`, `insert_line`, `new_text`. The text goes in before that line and nothing is replaced. `insert_line` = line count + 1 appends at end of file.
-5. Insert within a line: `file_path`, `insert_line`, `insert_column`, `new_text`. The text goes in before the character at that column — this is how you add one missing bracket. `insert_column` = line length + 1 appends at end of line.
-6. Create, or overwrite whole: `file_path` and `new_text` only. Creates the file if absent; if present, replaces all of it, which is allowed only once you have read it, since reading is what tells you what you are discarding. (`start_line: 1` with `end_line: <last line>` is the same write.) No size limit. Reach for it only after a targeted edit has failed — a whole-file rewrite that is slightly off silently loses the parts you never meant to touch. Never delete a file to get a clean slate: this form already is one, and a deleted file stays gone if the turn ends before you write it back.
+Write the arguments in this order: `file_path` and every other short argument first (line and column numbers, `intent`, `task_progress`, `old_text`), then `new_text` last. The text you are writing is the long part of the call, and whatever comes after a long text is the part most easily left out.
+
+1. Replace text: `file_path`, `old_text`, `new_text`. `old_text` must match exactly, including whitespace and indentation. If it occurs more than once, add `occurrence` (one-based, in file order) to pick one, or `replace_all: true` to change all of them.
+2. Replace lines: `file_path`, `start_line`, `new_text`, and optionally `end_line` (inclusive, defaults to `start_line`). This form is best where the text is long, minified or repeated, because a line number cannot be ambiguous. An empty `new_text` deletes the range.
+3. Replace characters: `file_path`, `start_line`, `start_column`, `new_text`, and optionally `end_line` and `end_column` (inclusive, each defaulting to its start). This is the unit a diagnostic speaks in, as in `line 12, column 640`. On a minified line it is the only form that leaves the other 400 characters alone. `start_column` on its own replaces exactly one character.
+4. Insert lines: `file_path`, `insert_line`, `new_text`. The text goes in before that line and nothing is replaced. Setting `insert_line` to the line count + 1 appends at the end of the file.
+5. Insert within a line: `file_path`, `insert_line`, `insert_column`, `new_text`. The text goes in before the character at that column, which is how you add one missing bracket. Setting `insert_column` to the line length + 1 appends at the end of the line.
+6. Create, or overwrite whole: `file_path` and `new_text` only. This creates the file if it is absent. If it exists, it replaces all of it, which is allowed only once you have read the file, because reading is what tells you what you are discarding. (`start_line: 1` with `end_line` set to the last line is the same write.) There is no size limit. Use this form only after a targeted edit has failed, because a whole-file rewrite that is slightly off silently loses the parts you never meant to touch. Never delete a file to get a clean slate. This form already gives you one, and a deleted file stays gone if the turn ends before you write it back.
 
 {"file_path": "/abs/src/app.ts", "old_text": "const retries = 3;", "new_text": "const retries = 5;"}
 {"file_path": "/abs/src/app.ts", "start_line": 40, "end_line": 44, "new_text": "  return cached;\n"}
 {"file_path": "/abs/src/app.ts", "insert_line": 12, "insert_column": 640, "new_text": "]"}
 
 Rules the tool enforces:
-- An edit addressed by line number (forms 2–5) must fall inside lines you have read. An edit that changes the file's line count invalidates those reads, because every line below it moved. For the next edit to that file, either use `old_text` (form 1 only needs the file read at some point) or read the region again. Line numbers from an earlier turn, from a task summary, or from a diagnostic issued before your last edit go stale the same way.
-- `new_text` replaces the range, it is not added to it — but repeating the lines already there and then continuing is how you insert after them, and that is allowed: the range names the lines you mean. What is refused is going on to repeat lines from *outside* the range, which would duplicate text already elsewhere in the file; the refusal names the lines it matched.
-- Text copied out of `read_files` must not carry the `  92 | ` gutter. When copying, read with `line_numbers: false`.
+- An edit addressed by line number (forms 2–5) must fall inside lines you have read in their current state. An edit that changes the file's line count invalidates those reads, because every line below it has moved. For the next edit to that file, either use `old_text` (form 1 only needs the file to have been read at some point) or read the region again. Line numbers from an earlier turn, from a task summary, or from a diagnostic issued before your last edit go stale the same way.
+- `new_text` replaces the range; it is not added to it. You may repeat the lines already in the range and then continue, which is how you insert after them, because the range names the lines you mean. What is refused is going on to repeat lines from *outside* the range. That would add a second copy of text already elsewhere in the file, and the refusal names the lines it matched so you can aim the next call at them.
+- Text copied out of `read_files` must not carry the `  92 | ` line-number gutter. When you read in order to copy, read with `line_numbers: false`.
 
-One edit, then its check, then the next. Where two edits to the same file are genuinely unavoidable in one step, use `old_text` for both, since the first one to change the line count moves the lines the other points at.
+One edit, then its check, then the next. If two edits to the same file in one step are genuinely unavoidable, use `old_text` for both. Otherwise the first one to change the line count moves the lines the other points at.
 
-Output: one `{query, result, success, error?}` object for this edit. `query` is `edit:<path>` or `insert:<path>`; `result` describes what changed, and that is your confirmation — do not read the file back to see it. A failed edit changed nothing: `success` is false, the file is exactly as it was, and `error` names the fix. Don't resend the same call; change what `error` points at.
+Output: one result for this edit, named `edit:` or `insert:` followed by the path, describing what changed. That description is your confirmation, so don't read the file back to see it. A failed edit changes nothing: the result says it failed and why, and the file is exactly as it was. Don't resend the same call. The reason names the fix, so change what it points at.
 
-Once the edit lands, call `check_file` on the file before starting the next change.
+Once the edit lands, call `check_file` on the file before you start the next change.
 
 # tool: sed
-Applies a `sed` script to one or more files, in this process. The third way to change a file, alongside `editor` and `apply_patch`.
 
-{"script": "s/oldName/newName/g", "files": ["src/a.ts", "src/b.ts"], "in_place": true}
+Applies a `sed` script to one or more files, in this process. It is the third way to change a file, alongside `editor` and `apply_patch`.
 
-- `script`: the sed program — `s/foo/bar/g`, `/^debug/d`, `2,5s/^/# /`. Several commands go in one script, separated by newlines or `;`. Addresses and `s///` patterns are **basic** regular expressions unless you pass `extended: true`.
-- `files`: what to run it over.
-- `in_place`: omit it and the call only prints what the script would produce, which is how you check a script before trusting it. Set it to `true` and each file is rewritten.
+{"script": "s/oldName/newName/g", "files": ["/abs/src/a.ts", "/abs/src/b.ts"], "in_place": true}
+
+- `script`: the sed program, such as `s/foo/bar/g`, `/^debug/d` or `2,5s/^/# /`. Several commands go in one script, separated by newlines or `;`. Addresses and `s///` patterns are **basic** regular expressions unless you pass `extended: true`.
+- `files`: the files to run it over.
+- `in_place`: if you omit it, the call only prints what the script would produce, which is how you check a script before trusting it. Set it to `true` to rewrite each file.
 - `quiet`: print only what the script itself prints, as `sed -n` does.
 
-What it is for: one mechanical change that applies in many places, or across many files — renaming an identifier everywhere, stripping a prefix from every line of a block. What `editor` is for: a single considered change to one place. It can anchor on text you quote back and it tells you when the file has moved under you; a script cannot, and a script that matches more than you meant changes more than you meant. Preview first.
+What it is for: one mechanical change that applies in many places, or across many files, such as renaming an identifier everywhere or stripping a prefix from every line of a block. `editor` is for a single considered change to one place. It can anchor on text you quote back, and it tells you when the file has moved under you. A script can do neither, and a script that matches more than you meant changes more than you meant. Preview first.
 
-The same rule as `editor` applies, for the same reason: an in-place run is refused on a file you have not read, and a script addressed by line number is refused unless you have read those lines. Read first. In plan mode `in_place` is refused outright, exactly as `sed -i` through the shell is; the preview still works.
+The same rule as `editor` applies, for the same reason. An in-place run is refused on a file you have not read, and a script addressed by line number is refused unless you have read those lines. Read first. In plan mode `in_place` is refused outright, just as `sed -i` through the shell is, but the preview still works.
 
-Output: one object per file, shaped `{query, result, success, error?}`. `query` is `sed:<file>`; `result` is that file's output, or a sentence saying what was written. The files do not share a fate — one can be written while the next is refused — so read every entry. `success: false` means that file was **not** touched and `error` says why. A script that matched nothing is `success: true`: it ran, and that is its answer.
+It runs in-process, not through the shell. It needs no `sed` binary installed and behaves the same on every platform.
+
+Output: one entry per file, in the order given, each named `sed:` followed by the file. An entry holds that file's output, or a sentence saying what was written. The files don't share a fate: one can be written while the next is refused, so read every entry. A failed entry says why, and that file was **not** touched. A script that matched nothing has not failed. It ran, that is its answer, and running it again unchanged will not change it.
 
 # tool: apply_patch
+
 Applies one patch that adds, updates, moves or deletes files. Use it when a single change spans several files, or when a new file arrives alongside edits to existing ones. For one change to one file, `editor` is simpler.
 
-Call shape: `{"input": "<the whole patch as one string>"}`. Send the patch body itself; legacy wrappers such as `%%bash` or `apply_patch <<"EOF"` are still accepted but not preferred.
+The argument is a single string, `input`, holding the whole patch: `{"input": "*** Begin Patch\n...\n*** End Patch"}`. Send the patch body itself. Legacy shell wrappers such as `%%bash` or `apply_patch <<"EOF"` are still accepted but not preferred.
 
 Grammar: the patch opens with `*** Begin Patch` and closes with `*** End Patch`. Between them each file gets one header:
-- `*** Add File: <path>` — followed by the new content, every line prefixed `+`.
-- `*** Update File: <path>` — followed by hunks: unchanged context lines start with a space, removed lines with `-`, added lines with `+`.
-- `*** Move to: <new path>` — only immediately after an `*** Update File:` header, to rename that file.
-- `*** Delete File: <path>` — no body.
+- `*** Add File: <path>`, followed by the new content with every line prefixed `+`.
+- `*** Update File: <path>`, followed by hunks: unchanged context lines start with a space, removed lines with `-`, added lines with `+`.
+- `*** Move to: <new path>`, only immediately after an `*** Update File:` header, to rename that file.
+- `*** Delete File: <path>`, with no body.
 
-Hunks are located by context, never by line number. Give enough unchanged lines around each change to pin it down, and where the same block appears more than once put an `@@` marker line before the hunk, optionally carrying nearby context such as the enclosing signature.
+Hunks are located by context, never by line number, so don't write line numbers anywhere in a patch. Give enough unchanged lines around each change to pin it down. Where the same block appears more than once, put an `@@` marker line before the hunk, optionally followed by nearby context such as the enclosing signature.
 
 *** Begin Patch
 *** Update File: src/config.ts
@@ -300,7 +330,7 @@ Hunks are located by context, never by line number. Give enough unchanged lines 
 +export const DEFAULTS = { retries: 3 };
 *** End Patch
 
-Output: one `{query, result, success, error?}` object for the whole patch. `result` lists the files added, updated, moved or deleted, and that is your confirmation — don't read those files back. A patch that did not apply, usually because its context lines no longer match, sets `success: false` and says so in `error`; read the region as it stands now and rebuild the patch from that, since resending the same text fails the same way. After it lands, call `check_file` on the files it touched before making the next change.
+Output: one result for the whole patch, listing the files it added, updated, moved or deleted. That list is your confirmation, so don't read those files back. If the patch did not apply, usually because its context lines no longer match the file, the result says it failed and why. Read the region as it is now and rebuild the patch from that. Resending the same text fails the same way. After it lands, call `check_file` on the files it touched before you make the next change.
 
 # tool: ask_question
 Ask only when an answer that only the user has would change what you build. Don't use it to confirm a choice you can make yourself, or to report progress. Their reply arrives as text — act on it in the same turn.
@@ -313,24 +343,26 @@ Call this once the assigned work is finished and checked. `verified` states what
 {{DEFAULT}}
 
 # tool: run_commands
-Runs shell commands: builds, test suites, running the program you changed, installing dependencies, git. That is what it is for — the work no dedicated tool does.
+
+Runs shell commands: builds, test suites, running the program you changed, installing dependencies, git. That is the work no dedicated tool does, and it is what this tool is for.
 
 It is not for files. Each of these has a tool that reports whether it worked:
 - reading a file (`cat`, `head`, `tail`, `type`, `Get-Content`) → `read_files`
 - searching for text (`grep`, `rg`, `findstr`, `Select-String`) → `search_codebase`, or the `grep` tool
+- totalling or picking out columns (`awk`, `cut`, `wc`) → the `awk` tool
 - listing what exists (`ls`, `dir`, `find`, `Get-ChildItem`) → `list_files`
 - writing or changing a file (`sed -i`, `echo >`, `cat > f <<EOF`, `tee`, `Set-Content`, a one-off script that rewrites a file) → `editor`, `apply_patch` for a change across several files, or the `sed` tool
 - finding where a name is defined, or what uses it → `ask_lsp`
 - asking whether one file type-checks or lints clean (`tsc`, `eslint`, `biome`, `ruff`, `mypy`, `go build`, `cargo check`) → `check_file`, which answers from the language servers in milliseconds without building the project. Run the checker here only when you need a project-wide answer, or when no language server covers the file.
 
-When to run: when a change needs the code executed to settle whether it was right, and once more after every planned change is in place — not after each edit, which is what `check_file` is for. Put `check_file` on the changed files in the same response as the run. The run says *that* it fails and where; the checker says *which line* to change.
+When to run: when a change needs the code executed to settle whether it was right, and once more after every planned change is in place. Don't run after each edit; that is what `check_file` is for. Put `check_file` on the changed files in the same response as the run. The run says *that* it fails and where, and the checker says *which line* to change.
 
 {"commands": ["npm run build", "npm test -- src/parser.test.ts"]}
 
-- `commands`: an array of complete, non-interactive command strings. Independent commands go in one call and may run concurrently; commands that depend on each other belong in a single string joined with the shell's sequencing operator (see below).
-- `credentials`: optional, an array of names of QA credentials the user has configured, for a command that needs one but does not name it itself — a test runner reading its environment, say. The values are set for that call only and are never shown to you. If none are configured, leave it out.
+- `commands`: an array of complete, non-interactive command strings. Independent commands go in one call and may run concurrently. Commands that depend on each other belong in a single string, joined with the shell's sequencing operator (see below).
+- `credentials`: optional, an array of names of QA credentials the user has configured. Use it for a command that needs a credential but does not name it itself, such as a test runner that reads its environment. The values are set for that call only and are never shown to you. If none are configured, leave it out.
 
-Output: one object per command, shaped `{query, result, success, error?}`. `query` is the command; `result` is its combined stdout and stderr. A non-zero exit sets `success: false` and describes the exit in `error`, but `result` still holds everything the command printed — the compiler error or the failing test is in there, so read it before doing anything else.
+Output: one entry per command, in the order sent, each named by the command. An entry holds everything the command printed, stdout and stderr together. A command that exits non-zero is reported as failed with its exit described, but the entry still holds all its output. The compiler error or the failing test is in there, so read it before doing anything else.
 
 {{DEFAULT}}
 
@@ -340,25 +372,26 @@ Runs an installed skill: a packaged procedure for a task this machine already kn
 {{DEFAULT}}
 
 # tool: check_file
-Returns the language servers' diagnostics for the files you name. This is the linter, the type checker, the syntax check and the Problems panel — whichever word the question uses, this answers it. Results are live and follow your edits: each answer is current as of the moment you ask. If a problem is still listed after an edit, it is still there. There is nothing to restart.
+
+Returns the language servers' diagnostics for the files you name. This is the linter, the type checker, the syntax check and the Problems panel. Whichever of those words the question uses, this tool answers it. Results are live and follow your edits, so each answer is current as of the moment you ask. If a problem is still listed after an edit, it is still there. You cannot restart a language server from here, and you don't need to.
 
 {"paths": ["/abs/src/parser.ts", "/abs/src/lexer.ts"]}
 
 - `paths`: absolute paths. Put every file you want checked into one call.
 
-Where a language server covers the file, this answers what `tsc`, `eslint`, `biome`, `ruff`, `mypy`, `go build` or `cargo check` would answer, for just these files, in milliseconds, without building anything. Ask it before reaching for one of those through `run_commands`.
+Where a language server covers the file, this answers the same question as `tsc`, `eslint`, `biome`, `ruff`, `mypy`, `go build` or `cargo check`. It does so for just these files, in milliseconds, without building anything. Ask it before you reach for one of those through `run_commands`.
 
 When to call it:
-- After each edit lands, on the file touched, before you begin the next edit. This is the cheap check between one change and the next.
-- At the end, in the same response as the run — `run_commands` for the build, the tests or the program, or `browser` for a page. The run tells you *that* something broke; this tells you *which line*. Calling only one leaves the other half to guesswork.
-- Whenever you are asked about errors, warnings, lint or problems — "is it clean now?", "what is still broken?". A report from an earlier edit is out of date; ask again.
+- After each edit lands, on the file you touched, before you begin the next edit. This is the cheap check between one change and the next.
+- At the end, on every file you changed, in the same response as the run: `run_commands` for the build, the tests or the program, or `browser` for a page. The run tells you *that* something broke, and this tells you *which line*. If you call only one, the other half is left to guesswork.
+- Whenever you are asked about errors, warnings, lint or problems, as in "is it clean now?" or "what is still broken?". You have no other way to know. A report from before your last edit is out of date, so ask again.
 - On a file you are about to change, when you want to know what was already wrong with it.
 
-Output: plain text, one section per file you named, each problem on its own line as `file:line:column` with its severity and message. A clean file says so in one line. There is no object to unpack and no `success` field — problems being listed is this tool working, not failing.
+Output: plain text with one section per file you named. Each problem is on its own line as `file:line:column` with its severity and message. A clean file says so in one line. A list of problems means the tool worked, not that it failed.
 
-`Delimiter scan`: where a file's brackets don't balance, this section names the line to edit and how many brackets that line is out by, one line per place the trouble starts, since a file can be broken in several spots at once. A parse error is always reported where the parser gave up, which is a closing bracket; the scan names the line the parse error cannot. Work through every line it lists before re-checking rather than re-checking after each one. Don't recount brackets to check it: the scan skips strings, comments and regex literals and hand-counting does not, so where your count and the scan disagree, your count is wrong. If you doubt it, make the edit and run the code — that settles it faster than any recount. The scan runs even when the editor reported nothing, so it can appear under a file called clean; for script inside an `.html` file it is the only report you get.
+`Delimiter scan`: where a file's brackets don't balance, this section names the line to edit and how many brackets that line is out by. It gives one line per place the trouble starts, because a file can be broken in several spots at once. A parse error is always reported where the parser gave up, which is a closing bracket. The scan names the line that the parse error cannot. Work through every line it lists before you re-check, rather than re-checking after each one. Don't recount brackets to check it. The scan skips strings, comments and regex literals and hand-counting does not, so where your count and the scan disagree, your count is wrong. If you doubt the scan, make the edit and run the code, which settles it faster than any recount. The scan runs even when the language server reported nothing, so it can appear under a file called clean. For script inside an `.html` file it is the only report you get.
 
-A clean result is conclusive only where a language server covers that file, and that is not every language on every machine. If it reports nothing and you have reason to expect a problem, or the project has a checker the language servers don't run, run that checker through `run_commands`. Tests and builds always go through `run_commands`; this tool does not run them.
+A clean result is conclusive only where a language server covers that file, and that is not every language on every machine. Run the project's checker through `run_commands` in two cases: this tool reports nothing but you have reason to expect a problem, or the project has a checker the language servers don't run. Tests and builds always go through `run_commands`, because this tool does not run them.
 
 # tool: list_files
 Use this, not `ls`, `dir`, `find` or `Get-ChildItem` through `run_commands`, whenever you need to know which files exist — it is scoped to the workspace and they are not. `max_results` caps the entries returned: 200 by default, 1000 at most; if a pattern hits the cap, narrow it. A directory listing puts directories first with a trailing `/`, and gives each file's size, which tells you whether reading it whole is reasonable. This says which files exist, not what is in them — to find files by content use `search_codebase`, which reports the line worth reading around.

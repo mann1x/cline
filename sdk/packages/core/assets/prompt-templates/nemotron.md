@@ -6,17 +6,34 @@ match:
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.
 
-     Sections `grep`, `sed`, `awk` written by nemotron-3-super:cloud (Ollama family `nemotron_h_moe`) on 2026-09-12.
+     Sections `check_file` written by nemotron-3-super-tpl:latest (family declared as `nemotron_h_moe`, because the tag reports none of its own) on 2026-10-22.
+     Every other section is as it was. Before this run:
 
-     Every other section is unchanged. Written by nemotron-3-super-tpl:latest (family declared as `nemotron_h_moe`, because the tag reports none of its own) on 2026-09-12.
-     Run, with its log: prompt-reviews/regen/20260912-2340-nemotron-3-super-cloud
+       Sections `apply_patch`, `awk`, `check_file`, `editor`, `fetch_web_content`, `grep`, `read_files`, `search_codebase`, `sed` written by nemotron-3-super-tpl:latest (family declared as `nemotron_h_moe`, because the tag reports none of its own) on 2026-10-22.
+       Every other section is as it was. Before this run:
+
+         Sections `grep`, `sed`, `awk` written by nemotron-3-super:cloud (Ollama family `nemotron_h_moe`) on 2026-09-12.
+
+         Every other section is unchanged. Written by nemotron-3-super-tpl:latest (family declared as `nemotron_h_moe`, because the tag reports none of its own) on 2026-09-12.
+         Run, with its log: prompt-reviews/regen/20260912-2340-nemotron-3-super-cloud
+
+       Run, with its log: prompt-reviews/regen/20261022-0712-nemotron-3-super-tpl-latest
+
+     Run, with its log: prompt-reviews/regen/20261022-0716-nemotron-3-super-tpl-latest
 
      Sampler asked for by the generator, overriding the model's own:
-       temperature 0.2
+       temperature 1
 
      Sampler the tag sources (`/api/show`), which applies to every key
      the request above does not set:
-       (none reported)
+       repeat_penalty                 1.1
+       temperature                    1
+       top_p                          0.95
+       frequency_penalty              0.1
+       num_ctx                        262144
+       num_predict                    65536
+       presence_penalty               0.1
+       repeat_last_n                  2048
 
      The script hands a model the prompt it would really receive, names the
      failures observed with models in its family, and asks for the version it
@@ -70,75 +87,32 @@ IMPORTANT: Always include tool calls in your response until the task is complete
 {{CLINE_METADATA}}
 
 # tool: read_files
-Read the content of text or image files at the provided absolute paths, or return only an inclusive one-based line range when `start_line`/`end_line` are provided on the same file entry as its path. When you already know multiple files you need, read them together in one call, and call this tool in the same response as other independent tool calls. Each read returns at most 2000 lines / ~47k characters; longer files report their total line count, page through them with `start_line`/`end_line` on that file's entry. Reading a range is the normal case; reading a file whole is the exception. Locate first, then read: a diagnostic or a stack trace already names the line, `search_codebase` reports the line every match is on, and `ask_lsp` resolves a symbol to where it is defined. Any of those hands you a line number to read around — take roughly 30 lines either side of it, and widen only if what you needed turned out to fall outside that. Read a file entire only when you have no line to start from and it is genuinely small. The cost of reading more than you need is not the tool call: every line returned stays in the conversation for the rest of the task, crowding out the room left to reason about it. Binary files that are not image and large files are not supported. Output: one object per requested file, in the order requested — `{query, result, success, error?}`, where a failed entry has `success: false` and the reason in `error`. `query` echoes the path you asked for (as `path:start-end` when you gave a range), and `result` is that file's content, with every line prefixed by its number as `  92 | text`. Those numbers are how you address an edit, and they are not in the file. Never paste them into another tool: text carrying a `92 | ` prefix will not match anything. When you are reading in order to copy text into `editor`, set `line_numbers: false` on that file's entry and get it clean.
 
-**Do not use shell commands (`cat`, `sed`, `echo`, `grep`, etc.) for file operations when dedicated tools exist and are always available.** Use `read_files` to read, `editor` or `apply_patch` to write, `search_codebase` to search, `ask_lsp` for symbol questions, `check_file` for diagnostics, `list_files` to discover files, `browser` to run a page. The shell is for running the program, not for inspecting or changing its source.
+Obtain the contents of text or image files located at absolute paths, or retrieve an inclusive one‑based line range when `start_line` and `end_line` accompany a file path. When several files are needed ahead of time, read them all in one request and pair that call with other independent tool calls in the same response. Each read is capped at 2000 lines (approximately 47 k characters); longer files report their total line count, allowing you to page through them using `start_line`/`end_line` on that file’s entry. Reading a range is the typical scenario; reading an entire file is reserved for cases where you have no starting line and the file is genuinely small. Procedure: first locate the line of interest (via a diagnostic, stack trace, `search_codebase` match, or `ask_lsp` symbol resolution), then read roughly thirty lines on either side, widening the window only if the needed information lies outside that initial span. Read a file in full only when you lack a starting line and the file is truly modest in size. Retrieving more data than necessary does not cost an extra tool call, but every returned line remains in the conversation for the remainder of the task, consuming space that could be used for reasoning. Unsupported file types: non‑image binaries and excessively large files. Output is one entry per requested file, delivered in the order you asked for them. Each entry is named by the path you supplied (shown as `path:start-end` when a range was given) and contains the file’s content with every line prefixed by its line number, e.g., `  92 | text`. Those line numbers serve as addresses for edits but are **not** part of the file itself; never paste them into another tool because text bearing a `92 | ` prefix will not match anything. When you intend to copy text from a `read_files` result into `editor`, set `line_numbers: false` on that entry to obtain the content without the line‑number column.
 
 # tool: search_codebase
-Perform regex pattern searches across the codebase. Supports multiple parallel searches. When several search patterns could be useful and do not depend on each other, run them together in one call, and call this tool in the same response as other independent tool calls. Use for finding code patterns, function definitions, class names, imports, etc. It reports one match per file by default, which answers which files mention something. To find every occurrence inside a file — how many times a name appears and where each one is — raise `max_per_file`. `context_lines` sets how many lines are shown either side of a match, 2 by default. Output beyond ~48k characters per query is middle-truncated; narrow patterns beat broad ones. Output: one object per pattern — `{query, result, success, error?}`, where a failed entry has `success: false` and the reason in `error`. `query` is the pattern you sent and `result` is the matching lines with their file paths. A pattern that matched nothing still has `success: true` with an empty `result`; that is an answer, not a failure, and re-running it will not change it.
 
-**Prefer `ask_lsp` for anything about a symbol.** When you are about to search for a name to find where it is defined, what uses it, what implements it, or what a name means — use `ask_lsp` with the matching operation instead. It is faster, exact, and does not need you to read files to interpret the result. `search_codebase` is for text patterns that are not symbols: log messages, string literals, comments, config keys, or when no language server covers the language.
+Execute regular‑expression searches across the codebase, with support for running several independent patterns in parallel. Supply one or more query strings; when the patterns are unrelated and could be useful together, send them all in one request and combine the call with other independent tool calls in the same response. The tool is suited for locating code patterns, function definitions, class names, import statements, and similar textual elements. By default it reports at most one match per file, which tells you **which** files mention something. To discover every occurrence inside a file (including how many times a name appears and on which lines), increase `max_per_file`. Adjust `context_lines` to control how many lines are displayed before and after each match (the default is 2). Output that exceeds roughly 48 k characters per query undergoes middle‑truncation, so narrower, more specific patterns tend to yield more complete results than broad ones. Output consists of one entry per pattern: each entry names the query you submitted, returns the matching lines together with their file paths, and, if the search could not be performed, explains why. A pattern that finds no matches is considered a valid answer – the result comes back empty (not marked as failed) – and repeating the identical search will produce the same empty output.
 
 # tool: fetch_web_content
-Fetch content from URLs and analyze them using the provided prompts. Use for retrieving documentation, API references, or any web content. Each request includes a URL and a prompt describing what information to extract. Fetch independent URLs together in one call, and call this tool in the same response as other independent tool calls. Output: one object per request — `{query, result, success, error?}`, where a failed entry has `success: false` and the reason in `error`. `query` is the URL and `result` is what was extracted from that page for your prompt, as text.
 
-**Do not use `run_commands` with `curl`, `wget`, or similar to fetch web content when this tool exists.** It handles redirects, authentication, and content extraction in one call, and returns structured results you can act on directly.
+Retrieve material from URLs and analyze it according to a supplied prompt. Each request consists of a URL and a natural‑language description of the information you wish to extract. You may bundle several independent URLs in one invocation and combine it with other independent tool calls in the same response. Output consists of one entry per request: each entry identifies the URL, presents the extracted text that satisfies your prompt, and, if something went wrong, explains the failure. A successful entry names the URL and holds the prompted content as plain text.
 
 # tool: editor
-An editor for controlled filesystem edits on the text file at `file_path`. It does six things, chosen by which arguments you send:
-- Replace text: `old_text` plus `new_text`. When `old_text` occurs more than once, add `occurrence` (one-based, in file order) to pick one, or `replace_all: true` to change every one.
-- Replace lines: `start_line` plus `new_text`, with optional `end_line` (inclusive, defaults to `start_line`). No `old_text` needed. Prefer this when the text is long, minified or repeated: a diagnostic already gives you the line number, and a line number cannot be ambiguous. An empty `new_text` deletes the range.
-- Replace characters: `start_line` and `start_column` plus `new_text`, with optional `end_line`/`end_column` (both inclusive; each defaults to its start). This is the unit a diagnostic speaks in — `Line 12, column 640` — and on a long or minified line it is the only edit that leaves the other 400 characters untouched. `start_column` on its own replaces exactly one character.
-- Insert: `insert_line` plus `new_text`, which adds text before that line without replacing anything. Use `line_count + 1` to append at EOF. Add `insert_column` to insert *within* that line instead, before the character at that column — this is how you add one missing bracket. Use `line_length + 1` to append at the end of the line.
-- Create, or replace a file whole: `new_text` alone. When the file does not exist this creates it; when it exists this replaces every line, which is allowed once you have read the file, since reading it is what tells you what you are overwriting. `start_line: 1` with `end_line: <line count>` is the same write by another name. Neither has a size limit, because a file written whole cannot be split — but reach for a whole-file write only once a targeted edit has failed, since a rewrite that is slightly wrong quietly loses the parts you did not mean to touch. Never delete a file to get a clean slate: this call already is one, and a deleted file is simply gone if the turn ends before you write it back.
 
-Write the arguments in this order: `file_path` and every other short argument first — line and column numbers, `intent`, `task_progress`, `old_text` — and `new_text` last. The text you are writing is the long part of the call, and whatever is written after a long text is the part most easily left out.
-Use this rather than a shell command for anything that changes a file. Make one edit at a time and check it before starting the next: reads and searches cost nothing if one turns out to be unnecessary, but several edits made together and checked once leave several things to undo and no way to tell which one was wrong. Read the lines you are about to change before you change them: an edit aimed at a range you have not read in its current state is refused. Your own edits count — one that changes the file's length moves every line below it, so read that region again before editing it a second time. Line numbers taken from an earlier turn, from a task summary, or from a diagnostic issued before your last edit are the ones that go stale. Repeating the lines already in the range and then continuing is how you insert after them, and it is allowed — the range says which lines you mean, so repeating them is your own choice. What is refused is a `new_text` that goes on to repeat lines from *outside* the range: that appends a second copy of text already elsewhere in the file rather than replacing anything, and the refusal names the lines it matched so you can aim the next call at them. Output: a single `{query, result, success, error?}` object for this one edit, where `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. A failed edit changes nothing: `success` is false, `error` says why, and the file is exactly as it was. Do not resend the same call — `error` names the fix. In particular, text copied out of a `read_files` result must have its `123 | ` line-number gutter removed first.
-
-**Do not use `run_commands` for file operations when `read_files`, `editor`, `apply_patch`, `search_codebase`, `list_files`, `check_file`, or `ask_lsp` exist for that purpose.** The shell is for running the program, not for inspecting or changing its source.
+Edit text files at `file_path` with precise control via arguments. The six possible actions are chosen by which parameters you provide:
+- Replace text: give `old_text` and `new_text`. If `old_text` appears multiple times, use `occurrence` (one‑based, file order) to pick a specific instance, or `replace_all: true` to change every occurrence.
+- Replace lines: specify `start_line` and `new_text`, with optional `end_line` (inclusive, defaults to `start_line`). Omit `old_text`. Use this for long, minified, or repeated sections – a diagnostic often supplies the exact line number. An empty `new_text` deletes the range.
+- Replace characters: set `start_line`, `start_column`, and `new_text`, with optional `end_line`/`end_column` (inclusive; each defaults to its start). This matches the unit spoken by diagnostics – e.g., `Line 12, column 640` – and on a long or minified line it alone alters the targeted span, leaving the surrounding characters untouched. `start_column` by itself replaces exactly one character.
+- Insert: supply `insert_line` and `new_text` to add text before that line (use `line_count + 1` to append at end‑of‑file). Add `insert_column` to insert within the line before the character at that column – handy for adding a missing bracket. Use `line_length + 1` to append at the line’s end.
+- Create or overwrite a file: pass `new_text` alone. If the file does not exist it is created; if it exists it is replaced entirely – allowed only after you have read the file so you know what is being overwritten. Equivalent to `start_line: 1` with `end_line: <line count>`. Avoid whole‑file writes until a targeted edit fails; a slightly incorrect rewrite silently discards the parts you did not intend to change. Never delete a file to obtain a clean slate – this call already provides that, and simply deleting the file leaves it gone if the turn ends before you write it back.
+Order the arguments: `file_path` and the short options first (line/column numbers, `intent`, `task_progress`, `old_text`), with `new_text` last. The written content forms the bulk of the call; anything placed after it is easily omitted. Prefer this tool over shell commands for file modifications. Perform one edit at a time and verify it before proceeding: unnecessary reads or searches cost nothing, but several edits checked together create multiple undo points with no way to attribute blame. Before editing, read the lines you are about to change – an edit targeting an unread state is refused. Your edits shift line numbers when they alter the file’s length, so re‑read the affected region before a second edit. Repeating the existing range then continuing inserts after it – permitted because the range defines intent. Refusal occurs if `new_text` repeats lines from outside the range, which would duplicate existing content rather than replace it; the error names those lines to guide the next attempt. Text obtained from `read_files` must first have its `123 | ` line‑number prefix stripped.
+Output: one result for this one edit, named `edit:<path>` or `insert:<path>`, describing what changed. A failed edit changes nothing: the result says it failed and why, and the file is exactly as it was. Do not resend the same call — the reason names the fix.
 
 # tool: apply_patch
-Use `apply_patch` to edit files with the canonical freeform patch grammar. Pass the patch text directly as the `input` string. Prefer the exact format below:
 
-*** Begin Patch
-*** Update File: path/to/file.ts
-@@ optional section marker
- [context before]
--[old line]
-+[new line]
- [context after]
-*** End Patch
-
-Supported actions:
-- `*** Add File: <path>`
-- `*** Update File: <path>`
-- `*** Delete File: <path>`
-- optional `*** Move to: <new path>` immediately after an Update File header
-
-Rules:
-- In an Add File section, every file-content line must start with `+`.
-- In an Update section, use context lines plus `-` and `+` lines to describe the change.
-- Use `@@` markers when extra context is needed to disambiguate repeated code blocks.
-- Do not use line numbers; this format is context-based.
-- Prefer sending the patch body directly. Legacy shell wrappers such as `%%bash` and `apply_patch <<"EOF"` are accepted for compatibility but are not preferred.
-
-Example:
-
-*** Begin Patch
-*** Update File: src/page.tsx
-@@
-   return (
-     <div>
-       <button onClick={() => console.log("clicked")}>Click me</button>
-+      <button onClick={() => console.log("cancel clicked")}>Cancel</button>
-     </div>
-   );
- }
-*** End Patch
-
-Output: a single `{query, result, success, error?}` object covering the whole patch, where `result` says which files were added, updated, moved or deleted. A patch that did not apply — usually because its context lines no longer match the file — sets `success: false` and says so in `error`; re-read the file and rebuild the patch from what is actually there rather than resending it.
-
-**Do not use `run_commands` for file operations when `read_files`, `editor`, `apply_patch`, `search_codebase`, `list_files`, `check_file`, or `ask_lsp` exist for that purpose.** The shell is for running the program, not for inspecting or changing its source.
+Use `apply_patch` to modify files with a free‑form patch format. Supply the patch text as the `input` string. The preferred layout begins with `*** Begin Patch`, then one or more sections such as `*** Update File: path/to/file`, optionally followed by `@@` markers for context, lines preceded by `-` for removal, `+` for addition, and plain lines for surrounding context, ending with `*** End Patch`. Supported actions include adding a new file (every content line starts with `+`), updating an existing file, deleting a file, and moving a file (specify `*** Move to: <new path>` right after an update). In an update section, unchanged context lines help the tool locate the correct place to apply the change; line numbers are not used. If the patch cannot be applied because the context no longer matches the file, the result explains the failure and leaves the file untouched; you should refresh the file view and craft a new patch from the current content.
+Output: one result covering the whole patch, saying which files were added, updated, moved or deleted. A patch that did not apply — usually because its context lines no longer match the file — comes back failed and says why; re‑read the file and rebuild the patch from what is actually there rather than resending it.
 
 # tool: ask_question
 {{DEFAULT}}
@@ -161,25 +135,23 @@ Run the program once, after every change you planned is in place — not after e
 {{DEFAULT}}
 
 # tool: check_file
-Check files for errors and warnings, using the editor's own language servers (LSP). **This is the linter.** It is also the type checker, the syntax check, and the source of the problems that would show in a Problems panel — whichever of those words the question uses, this is the tool that answers it. The results are live and follow your edits: one is current as of the moment you ask, so if it still reports a problem after an edit, the problem is still there. Restarting a language server is neither possible nor necessary from here.
 
-Ask this before running a checker yourself. For a file whose language a language server covers, it answers the same question as `tsc`, `eslint`, `biome`, `ruff`, `mypy`, `go build` or `cargo check` would — for the files you name, in milliseconds, without building the project.
+Check files for errors and warnings via the editor’s language servers (LSP). This tool acts as the linter, type checker, and syntax checker, surfacing the same issues that would appear in a Problems panel. The results are current at the moment of querying: if a problem remains after an edit, it is still present. Language server restarts are neither possible nor required here. Invoke this tool before running external checkers; for files covered by a language server it gives the same outcome as `tsc`, `eslint`, `biome`, `ruff`, `mypy`, `go build`, or `cargo check`—instantly and without building the project.
 
-When to call it:
-- Whenever the question is about the linter, lint errors, diagnostics, problems, warnings, type errors, syntax errors or compile errors — "how many errors is the linter reporting?", "is it clean now?", "what is still broken?". You have no other way to know, and the report you were shown after an earlier edit does not answer it: that was true then, and you have edited since.
-- After editing a file, to confirm the edit is valid before moving on.
+**When to call it**
+- Whenever you need to know about lint errors, diagnostics, problems, warnings, type errors, syntax errors, or compile errors (e.g., “how many errors?”, “is it clean?”, “what is still broken?”).
+- After editing a file, to validate the edit before moving on.
 - Before reporting a task finished, on every file you changed.
-- On a file you are about to change, when you want to know what was already wrong with it.
+- On a file you are about to modify, to see existing issues.
 
-Pass every file you want checked in one call.
+**How to call it**
+Pass every file you want checked in one request using the `paths` argument, which expects an array of absolute paths.
 
-Read a clean result carefully. "No problems reported by the editor" is conclusive only where a language server covers that file, and it does not for every language on every machine. If this reports nothing and you have reason to expect a problem, or the project has a checker the language servers do not run, run that checker with `run_commands`. Tests and builds are always `run_commands`; this tool does not run them.
+**Output**
+Plain text, grouped by file. Each problem appears on its own line as `file:line:column` followed by its severity and message. A file with no problems reports so in a single line. Seeing problems listed confirms the tool is working, not failing. If the tool cannot run (for example, because no language server is available for the given file type), it returns a failure message explaining why.
 
-Output: plain text, one section per file you named, each problem on its own line as `file:line:column` with its severity and message. A file with nothing wrong says so in one line. There is no object to unpack and no `success` field — problems being listed is this tool working, not failing.
-
-When a file's brackets do not match, a `Delimiter scan` section names the line to edit and how many brackets that line is out by, one line per place the trouble starts — a file can be broken in several spots at once, so work through every line it lists before re-checking rather than re-checking after each one. A parse error is always reported where the parser gave up, which is the closing bracket; the line named here is the one the error cannot name. Trust those lines over counting brackets yourself — the scan skips strings, comments and regex literals, which counting characters does not. It runs whether or not the editor reported anything, so it can appear beneath a file the editor called clean — no language server checks the script inside an `.html` file, and there this is the only report you will get.
-
-The checker and the run belong in the same turn. Call `check_file` and `run_commands` (or `browser` for a page) together, not one or the other. Running it says *that* something is broken and where the parser gave up; the checker says *which line* to edit. Each is half the answer, and the half you skip is the half the turn gets spent guessing at.
+**Delimiter scan**
+When brackets do not match, a `Delimiter scan` section names the line to edit and how many brackets that line is out by—one line per place the trouble starts, since a file can be broken in several spots at once. Work through every listed line before re‑checking rather than re‑checking after each one. A parse error is always reported where the parser gave up (the closing bracket); the line named here is the one the error cannot specify. Trust those lines over manual bracket counts because the scan skips strings, comments, and regex literals, which simple character counting does not. The check runs regardless of editor reports, so it may appear beneath a file the editor deemed clean—no language server checks the script inside an `.html` file, and here this is the sole report you will get.
 
 # tool: list_files
 {{DEFAULT}}
@@ -354,15 +326,15 @@ Output: plain text, one result per line as `file:line:column` followed by that s
 
 # tool: grep
 
-Search files for lines matching a pattern using an in-process implementation that mirrors POSIX grep behavior. Provide a `pattern` and optionally `paths` to limit the search (defaults to the workspace root, skipping common directories like `node_modules`, `.git`, and `dist`). The pattern uses basic regular expression syntax by default, where metacharacters such as `+ ? ( ) { } |` are treated literally unless escaped; use `\(a\|b\)` for grouping and alternation. Enable extended regex syntax with `extended: true` (making `+ ? ( ) { } |` active as metacharacters) or literal text matching with `fixed: true`. Additional flags include `ignore_case`, `invert` (to select non-matching lines), `word` (for whole-word matches), `count` (to output match counts per file), `files_with_matches` (to list only files containing matches), `context` (to show N lines before and after each match), and `max_count` (to limit matches per file). Line numbers are included in output unless `line_numbers: false` is set. This tool is ideal for locating patterns before reading or editing files, as it avoids loading entire files into the conversation and marks those lines as read. Output is a single `{query, result, success, error?}` object where `query` reflects the grep invocation and `result` contains matching lines prefixed with path and line number. If no matches are found, `success` remains true and `result` indicates no matches—this is a valid answer, and repeating the search yields the same result.
+Search files for lines that match a pattern, behaving like an in‑process version of POSIX `grep`. Provide a `pattern` and optionally limit the search to certain `paths` (defaulting to the workspace root while skipping typical directories such as `node_modules`, `.git`, `dist`). By default the pattern is interpreted as a basic regular expression, where metacharacters like `+ ? ( ) { } |` are treated as literal characters unless escaped; use `\(a\|b\)` for grouping and alternation. Activate extended regular expression syntax with `extended: true` (making those characters metacharacters) or force literal matching with `fixed: true`. Additional flags: `ignore_case` (case‑insensitive), `invert` (select lines that do **not** match), `word` (whole‑word matches only), `count` (output a tally of matches per file), `files_with_matches` (list only the names of files containing at least one match), `context` (show N lines before and after each match), `max_count` (stop after N matches per file). Line numbers are included in the output unless you set `line_numbers: false`. This tool is useful for locating patterns before you read or edit a file, because it avoids loading entire files into the conversation and records which lines you have examined. Output is a single result labeled `grep:<pattern>` containing the matching lines, each prefixed with its file path and line number; if the search cannot be executed, the result states the reason. A pattern that matches nothing is **not** a failure – the result conveys this in words, and repeating the same search yields identical output.
 
 # tool: sed
 
-Apply a sed script to one or more files using an in-process implementation that behaves identically across platforms without requiring a binary. Provide a `script` (e.g., `s/foo/bar/g`, `/^debug/d`, or multi-line scripts separated by newlines or semicolons) and the target `files`. By default, the tool outputs the transformed content without modifying files—use `in_place: true` to rewrite files in place. Addresses and substitution patterns follow basic regular expression rules unless `extended: true` is specified. Use `quiet: true` to suppress output and only print what the script emits (similar to `sed -n`). This tool is preferred over `editor` for repetitive, mechanical changes across many files (e.g., renaming symbols or stripping prefixes), while `editor` is better for isolated, context-dependent edits. An in-place operation is refused if any target file has not been read first, and line-numbered scripts are rejected unless those lines have been read. Output consists of one `{query, result, success, error?}` object per file, where `query` identifies the file and `result` shows the output or a summary of changes. A `success: false` indicates the file was not modified, with `error` explaining why. A script that produces no changes still returns `success: true`, indicating it executed successfully, and re-running it with the same input will yield identical results.
+Apply a `sed` script to one or more files using an in‑process implementation that works identically on all platforms without needing an external binary. Supply the script (examples: `s/foo/bar/g`, `/^debug/d`, or multi‑line scripts separated by newlines or semicolons) and the list of target `files`. By default the tool prints the transformed content without altering the original files; use `in_place: true` to rewrite each file in place. Addresses and substitution patterns follow basic regular‑expression rules unless you specify `extended: true`. Specify `quiet: true` to suppress normal output and only print what the script emits (similar to `sed -n`). This tool is the better choice when you need to perform the same mechanical change across many files – e.g., renaming an identifier everywhere or stripping a prefix from every line in a block. For a solitary, context‑dependent edit to a single location, prefer `editor` because it can anchor on quoted text and detect if the file has moved underneath you. An in‑place operation is refused if any target file has not been read beforehand, mirroring the restriction of `editor`; likewise, a script that refers to line numbers is rejected unless those lines have previously been read. Always read the files first. Output is one entry per file: each entry is named `sed:<file>` and holds either the transformed content (when not writing in place) or a brief note of what was written; if the script could not be applied, the entry explains the failure and indicates that the file was not changed. A file that is not touched because of an error is reported as such, with the reason given. A script that makes no changes still succeeds – running it again with exactly the same input will yield an identical result. Because files are processed independently, one may be written while another is refused, so you must inspect every entry individually.
 
 # tool: awk
 
-Execute an awk program over one or more files using an in-process implementation that requires no external binary and behaves consistently across all platforms. Supply a `program` (e.g., `{print $1}`, `NR>1 {sum+=$2} END {print sum}`, or pattern-action rules like `$3 ~ /error/ {print FILENAME, NR, $0}`) and optionally the `files` to process—programs with only a BEGIN block need no input files. Use `field_separator` to change the input field separator (equivalent to `-F`) and `variables` to define awk variables (equivalent to `-v` assignments). This tool is designed for data transformation and aggregation tasks such as summing columns, extracting fields from delimited text, or counting key occurrences—scenarios where grep would locate relevant lines but leave further processing to the user. Importantly, awk is read-only: features like output redirection, pipes, `system()` calls, and `getline` are disallowed to prevent unintended side effects; use `sed` or `editor` for file modifications. Output is a single `{query, result, success, error?}` object where `query` reflects the awk invocation and `result` captures all printed output. A program that produces no output still returns `success: true`, signifying successful execution, and re-running it with identical input will yield the same result.
+Run an `awk` program over one or more files. Provide the program text (examples: `{print $1}`, `NR>1 {sum+=$2} END {print sum}`, `$3 ~ /error/ {print FILENAME, NR, $0}`) and optionally the list of files to process; a program consisting only of a BEGIN block needs no files. You may set the input field separator with `field_separator` (equivalent to `-F`) and define variables with `variables` (equivalent to `-v` assignments). The tool is read‑only: it prohibits output redirection, pipelines, `system()` calls, and `getline` to avoid side effects; use `sed` or `editor` when you need to alter files. Execution occurs in‑process, requiring no external binary and yielding identical behavior across platforms. The output is one result named `awk:<program>`, holding everything the program printed; a program that could not run says that it failed and why. A program that printed nothing has not failed — that is the program's answer.
 
 # tool: extract_document
 {{DEFAULT}}

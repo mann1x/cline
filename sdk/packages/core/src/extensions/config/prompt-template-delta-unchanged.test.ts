@@ -75,3 +75,32 @@ describe("a delta reply that is the input verbatim", () => {
 		);
 	});
 });
+
+describe("a run that never gets clean", () => {
+	it("reports every call it made, and which one it kept", async () => {
+		// The count used to be the kept attempt's ordinal, so four calls whose
+		// first was the cleanest were logged as "NOT CLEAN after 1 attempt(s)".
+		const replies = [
+			"# tool: grep\n\nSearch in-process. A miss is still `success: true`.\n",
+			"# tool: grep\n\nSearch in-process. `query` is the pattern; a miss is `success: true`.\n\n# tool: nonexistent\n\nx\n",
+			"# tool: grep\n\nSearch in-process. `query` is the pattern; a miss is `success: true`.\n\n# tool: nonexistent\n\nx\n",
+		];
+		let call = 0;
+		const result = await generatePromptTemplate({
+			defaultTemplate: FAMILY_TEMPLATE,
+			familyTemplate: FAMILY_TEMPLATE,
+			providerId: "ollama",
+			modelId: "sample:cloud",
+			family: "sample",
+			knownToolNames: ["grep"],
+			onlyTools: ["grep"],
+			attempts: 3,
+			fileName: "sample.md",
+			complete: async () => replies[call++] ?? "",
+		});
+		expect(result.audit.problems.length).toBeGreaterThan(0);
+		expect(result.attempts).toBe(3);
+		expect(result.bestAttempt).toBe(1);
+		expect(result.raw).toContain("A miss is still");
+	});
+});

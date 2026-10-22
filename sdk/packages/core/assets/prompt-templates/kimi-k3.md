@@ -7,32 +7,37 @@ match:
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.
 
-     Sections `read_files`, `editor`, `check_file` written by kimi-k3:cloud (Ollama family `kimi-k3`) on 2026-09-23.
+     Sections `apply_patch`, `awk`, `editor`, `fetch_web_content`, `grep`, `read_files`, `search_codebase`, `sed`, `check_file`, `run_commands` written by kimi-k3:cloud (Ollama family `kimi-k3`) on 2026-10-22.
      Every other section is as it was. Before this run:
 
-       Sections `grep` and `run_commands` written by kimi-k3:cloud (Ollama
-       family `kimi-k3`) on 2026-09-13 at temperature 0.6, clean on attempt 4.
-       Run, with its log: prompt-reviews/regen/20260913-0452-kimi-k3-cloud
+       Sections `read_files`, `editor`, `check_file` written by kimi-k3:cloud (Ollama family `kimi-k3`) on 2026-09-23.
+       Every other section is as it was. Before this run:
 
-       Section `awk` written by kimi-k3:cloud on 2026-09-13 at temperature 0.9,
-       clean on attempt 3; the 0.6 run had changed one sentence of it and no
-       more. Run, with its log: prompt-reviews/regen/20260913-0456-kimi-k3-cloud
+         Sections `grep` and `run_commands` written by kimi-k3:cloud (Ollama
+         family `kimi-k3`) on 2026-09-13 at temperature 0.6, clean on attempt 4.
+         Run, with its log: prompt-reviews/regen/20260913-0452-kimi-k3-cloud
 
-       Section `sed` is still written by hand, from 2026-09-12. kimi-k3:cloud
-       will not rewrite it. Asked six times on 2026-09-12 it returned the
-       built-in text verbatim; asked again on 2026-09-13 at 0.6 and at 0.9 it
-       returned the hand-written text with a single sentence extended, both
-       times borrowing the tail of its own `grep` section to do it. Three
-       sections of this file are the model's words and this one is not, which
-       is the whole reason this header distinguishes them.
+         Section `awk` written by kimi-k3:cloud on 2026-09-13 at temperature 0.9,
+         clean on attempt 3; the 0.6 run had changed one sentence of it and no
+         more. Run, with its log: prompt-reviews/regen/20260913-0456-kimi-k3-cloud
 
-       Every other section is unchanged. Written by kimi-k3:cloud (Ollama
-       family `kimi-k3`) on 2026-09-12.
+         Section `sed` is still written by hand, from 2026-09-12. kimi-k3:cloud
+         will not rewrite it. Asked six times on 2026-09-12 it returned the
+         built-in text verbatim; asked again on 2026-09-13 at 0.6 and at 0.9 it
+         returned the hand-written text with a single sentence extended, both
+         times borrowing the tail of its own `grep` section to do it. Three
+         sections of this file are the model's words and this one is not, which
+         is the whole reason this header distinguishes them.
 
-     Run, with its log: prompt-reviews/regen/20260923-1648-kimi-k3-cloud
+         Every other section is unchanged. Written by kimi-k3:cloud (Ollama
+         family `kimi-k3`) on 2026-09-12.
+
+       Run, with its log: prompt-reviews/regen/20260923-1648-kimi-k3-cloud
+
+     Run, with its log: prompt-reviews/regen/20261022-0650-kimi-k3-cloud
 
      Sampler asked for by the generator, overriding the model's own:
-       temperature 0.7
+       temperature 0.2
 
      Sampler the tag sources (`/api/show`), which applies to every key
      the request above does not set:
@@ -105,9 +110,10 @@ Locate first, then read: a diagnostic or stack trace already names the line, `se
 
 Binary files that are not images and very large files are not supported.
 
-Output: one object per requested file, in the order requested — `{query, result, success, error?}`. `query` echoes the path you asked for (as `path:start-end` when you gave a range). `result` is that file's content, with every line prefixed by its number as `  92 | text`. Those numbers are how you address an edit, and they are not in the file. Never paste them into another tool: text carrying a `92 | ` prefix will not match anything. When you are reading in order to copy text into `editor`, set `line_numbers: false` on that file's entry and get it clean.
+Output: one entry per requested file, in the order requested — each entry names what it answers, then what came back, and a failed entry says that it failed and why. An entry is named by the path you asked for (as `path:start-end` when you gave a range), and what came back is that file's content, with every line prefixed by its number as `  92 | text`. Those numbers are how you address an edit, and they are not in the file. Never paste them into another tool: text carrying a `92 | ` prefix will not match anything. When you are reading in order to copy text into `editor`, set `line_numbers: false` on that file's entry and get it clean.
 
 # tool: search_codebase
+
 Run regex searches across the codebase. Multiple independent patterns go in one call, together with other independent tool calls in the same response. Use for finding patterns, definitions, classes, imports, etc.
 
 Arguments:
@@ -117,7 +123,7 @@ Arguments:
 
 Output per query is middle-truncated beyond ~48k characters; specific patterns beat broad ones.
 
-Output: one object per pattern — `{query, result, success, error?}`. `query` is the pattern you sent. `result` is matching lines with file paths. A pattern that matched nothing has `success: true` and `result: []`; that is an answer, not a failure, and re-running it will not change it.
+Output: one entry per pattern — each entry names what it answers, then what came back, and a failed entry says that it failed and why. An entry is named by the pattern you sent and holds the matching lines with their file paths. A pattern that matched nothing comes back empty, not failed; that is an answer, and re-running it will not change it.
 
 # tool: grep
 
@@ -132,7 +138,7 @@ Arguments:
 
 Use `search_codebase` when you do not yet know which files are involved — it takes several patterns at once and reports one hit per file, which answers "where is this". Use `grep` when you already know the file or directory and want grep's own semantics: every matching line, a count, an inverted match, a window of context. Neither answers questions about a symbol; `ask_lsp` does.
 
-Output: a single `{query, result, success, error?}`. `query` is `grep:<pattern>`. `result` is the matching lines prefixed with path and line number. A pattern that matched nothing has `success: true` and says so in words — that is an answer, not a failure, and re-running it will not change it. Lines returned here count as read.
+Output: one result, named `grep:<pattern>`, holding the matching lines prefixed with their path and line number. A search that could not run says that it failed and why. A pattern that matched nothing is not a failure, and the result says so in words: that is an answer, and re-running the same search will not change it. Lines returned here count as read.
 
 # tool: awk
 
@@ -147,15 +153,16 @@ Use this for columnar questions and aggregations — summing a column, extractin
 
 This tool is read-only, and that is enforced rather than assumed: output redirection, pipes, `system()` and `getline` are refused. To modify a file, use `sed` or `editor`.
 
-Output: a single `{query, result, success, error?}`. `query` is `awk:<program>`. `result` is everything the program printed. A program that printed nothing has `success: true` — that is the program's answer.
+Output: one result, named `awk:<program>`, holding everything the program printed. A program that could not run says that it failed and why. A program that printed nothing has not failed — that is the program's answer.
 
 # tool: extract_document
 {{DEFAULT}}
 
 # tool: fetch_web_content
+
 Fetch web pages and extract information using a prompt. Each request needs a `url` and a `prompt` describing what to extract. Batch independent URLs into one call, together with other independent tool calls in the same response.
 
-Output: one object per request — `{query, result, success, error?}`. `query` is the URL. `result` is the extracted text for your prompt. A failed entry has `success: false` with the reason in `error`.
+Output: one entry per request — each entry names what it answers, then what came back, and a failed entry says that it failed and why. An entry is named by the URL and holds what was extracted from that page for your prompt, as text.
 
 # tool: editor
 
@@ -170,9 +177,10 @@ Make precise edits to a single text file at `file_path`. Six modes, chosen by wh
 Write the arguments in this order: `file_path` and every other short argument first — line and column numbers, `intent`, `task_progress`, `old_text` — and `new_text` last. The text you are writing is the long part of the call, and whatever is written after a long text is the part most easily left out.
 Use this rather than a shell command for anything that changes a file. Make one edit at a time and check it before starting the next: reads and searches cost nothing if one turns out to be unnecessary, but several edits made together and checked once leave several things to undo and no way to tell which one was wrong. Read the lines you are about to change before you change them: an edit aimed at a range you have not read in its current state is refused. Your own edits count — one that changes the file's length moves every line below it, so read that region again before editing it a second time. Line numbers taken from an earlier turn, from a task summary, or from a diagnostic issued before your last edit are the ones that go stale. Repeating the lines already in the range and then continuing is how you insert after them, and it is allowed — the range says which lines you mean, so repeating them is your own choice. What is refused is a `new_text` that goes on to repeat lines from *outside* the range: that appends a second copy of text already elsewhere in the file rather than replacing anything, and the refusal names the lines it matched so you can aim the next call at them.
 
-Output: a single `{query, result, success, error?}` object for this one edit, where `query` is `edit:<path>` or `insert:<path>` and `result` describes what changed. A failed edit changes nothing: `success` is false, `error` says why, and the file is exactly as it was. Do not resend the same call — `error` names the fix. In particular, text copied out of a `read_files` result must have its `123 | ` line-number gutter removed first.
+Output: one result for this one edit, named `edit:<path>` or `insert:<path>`, describing what changed. A failed edit changes nothing: the result says it failed and why, and the file is exactly as it was. Do not resend the same call — the reason names the fix. In particular, text copied out of a `read_files` result must have its `123 | ` line-number gutter removed first.
 
 # tool: sed
+
 Apply a `sed` script to one or more files. Runs in this process, not through the shell.
 
 Arguments:
@@ -185,9 +193,10 @@ Use this when one mechanical change applies in many places or across many files 
 
 The read rule is the same as `editor`'s and exists for the same reason: an in-place run is refused on a file you have not read, and a script addressed by line number is refused unless you have read those lines. In plan mode `in_place` is refused outright, as `sed -i` through the shell is; the preview still works.
 
-Output: one object per file — `{query, result, success, error?}`. `query` is `sed:<file>`. `result` is that file's output, or a sentence saying what was written. The files do not share a fate: one can be written while the next is refused, so read every entry. `success: false` means that file was **not** touched and `error` says why. A script that matched nothing has `success: true` — it ran, and that is its answer.
+Output: one entry per file — each entry names what it answers, then what came back, and a failed entry says that it failed and why. An entry is named `sed:<file>` and holds that file's output, or a sentence saying what was written. The files do not share a fate: one may be written while the next is refused, so read every entry. A failed entry means that file was **not** touched, and it says why. A script that matched nothing has not failed — it ran, and that is its answer; running it again unchanged will not change it.
 
 # tool: apply_patch
+
 Apply a freeform patch to edit one or more files. Pass the patch text as `input`. Preferred format:
 
 *** Begin Patch
@@ -208,7 +217,7 @@ Rules:
 - No line numbers; context-based only.
 - Prefer sending the patch body directly. Legacy wrappers like `%%bash` are accepted but not preferred.
 
-Output: `{query, result, success, error?}` covering the whole patch. `result` lists added, updated, moved, or deleted files. If context lines no longer match, `success` is `false` and `error` says so — re-read the file and rebuild the patch from what is actually there rather than resending.
+Output: one result covering the whole patch, saying which files were added, updated, moved or deleted. A patch that did not apply — usually because its context lines no longer match the file — comes back failed and says why; re-read the file and rebuild the patch from what is actually there rather than resending it.
 
 # tool: ask_question
 {{DEFAULT}}
@@ -222,7 +231,7 @@ Execute shell commands in the working directory. This is the tool for builds, te
 
 When you need multiple independent commands, send them all in one call. Each command runs in its own shell, so `cd` in one does not affect the next. Use absolute paths or chain with `&&` when a command depends on being in a specific directory.
 
-Output: one object per command, in order — `{query, result, success, error?}`, where `query` is the command string, `result` is stdout and stderr combined, and a failed command has `success: false` with the reason in `error`.
+Output: one entry per command, in order — each entry names what it answers, then what came back, and a failed entry says that it failed and why. An entry is named by the command string and holds stdout and stderr combined.
 
 {{DEFAULT}}
 
@@ -245,7 +254,7 @@ Pass every file you want checked in one call.
 
 Read a clean result carefully. "No problems reported by the editor" is conclusive only where a language server covers that file, and it does not for every language on every machine. If this reports nothing and you have reason to expect a problem, or the project has a checker the language servers do not run, run that checker with `run_commands`. Tests and builds are always `run_commands`; this tool does not run them.
 
-Output: plain text, one section per file you named, each problem on its own line as `file:line:column` with its severity and message. A file with nothing wrong says so in one line. There is no object to unpack and no `success` field — problems being listed is this tool working, not failing.
+Output: one section per file you named, each problem on its own line as `file:line:column` with its severity and message. A file with nothing wrong says so in one line. Problems being listed is this tool working, not failing.
 
 When a file's brackets do not match, a `Delimiter scan` section names the line to edit and how many brackets that line is out by, one line per place the trouble starts — a file can be broken in several spots at once, so work through every line it lists before re-checking rather than re-checking after each one. A parse error is always reported where the parser gave up, which is the closing bracket; the line named here is the one the error cannot name. Trust those lines over counting brackets yourself — the scan skips strings, comments and regex literals, which counting characters does not. It runs whether or not the editor reported anything, so it can appear beneath a file the editor called clean — no language server checks the script inside an `.html` file, and there this is the only report you will get.
 

@@ -7,10 +7,15 @@ match:
 
 <!-- PROVENANCE -- written by scripts/review-prompt-templates.mts, not by the model.
 
-     Sections `grep`, `sed`, `awk`, `run_commands` written by gemma4:31b-cloud (Ollama family `gemma4`) on 2026-09-12.
+     Sections `apply_patch`, `awk`, `editor`, `fetch_web_content`, `grep`, `read_files`, `search_codebase`, `sed` written by gemma4:31b-cloud (Ollama family `gemma4`) on 2026-10-22.
+     Every other section is as it was. Before this run:
 
-     Every other section is unchanged. Written by gemma4:31b-cloud (Ollama family `gemma4`) on 2026-09-12.
-     Run, with its log: prompt-reviews/regen/20260912-2324-gemma4-31b-cloud
+       Sections `grep`, `sed`, `awk`, `run_commands` written by gemma4:31b-cloud (Ollama family `gemma4`) on 2026-09-12.
+
+       Every other section is unchanged. Written by gemma4:31b-cloud (Ollama family `gemma4`) on 2026-09-12.
+       Run, with its log: prompt-reviews/regen/20260912-2324-gemma4-31b-cloud
+
+     Run, with its log: prompt-reviews/regen/20261022-0646-gemma4-31b-cloud
 
      Sampler asked for by the generator, overriding the model's own:
        temperature 0.2
@@ -84,27 +89,32 @@ Environment:
 {{CLINE_METADATA}}
 
 # tool: read_files
+
 Read text or image files. Use this instead of shell commands like `cat` or `type`.
 - **Arguments:** `files`: An array of objects. Each object must have a `path`. Optionally include `start_line` and `end_line` (1-based) to read a specific range. Set `line_numbers: false` when reading text to be copied into `editor`.
 - **When to use:** When you need to see the contents of one or more files. Batch all known required files into one call.
-- **Output:** An array of objects `{query, result, success, error?}`. `result` contains the file content with line numbers (unless disabled). If `success` is false, `error` explains why.
+- **Constraints:** Each read returns at most 2000 lines. Use ranges to page through larger files. Avoid reading entire files unless they are genuinely small to save context space.
+- **Output:** One entry per requested file, named by the path (or `path:start-end` for ranges). It holds the file content with line numbers (unless disabled). If a read fails, the entry explains why.
 {{DEFAULT}}
 
 # tool: search_codebase
+
 Regex search across the codebase. Use this instead of `grep` or `rg`.
 - **Arguments:** `queries`: An array of regex strings. `context_lines` (integer) for surrounding lines. `max_per_file` (integer) to find all occurrences in a file.
 - **When to use:** To find patterns, names, or imports. Use narrow patterns to avoid middle-truncation. Batch multiple independent queries into one call.
-- **Output:** An array of objects `{query, result, success, error?}`. `result` contains matching lines and their file paths.
+- **Output:** One entry per pattern, named by the regex used. It holds the matching lines and their file paths. If a search fails, the entry explains why.
 {{DEFAULT}}
 
 # tool: fetch_web_content
+
 Retrieve and analyze web pages.
 - **Arguments:** `requests`: An array of objects, each containing a `url` and a `prompt` describing what to extract.
 - **When to use:** For documentation or API references. Batch multiple URLs into one call.
-- **Output:** An array of objects `{query, result, success, error?}`. `result` is the extracted text.
+- **Output:** One entry per request, named by the URL. It holds the text extracted from the page based on your prompt. If a request fails, the entry explains why.
 {{DEFAULT}}
 
 # tool: editor
+
 Precise text edits or file creation. This is the primary tool for writing files. Never use shell redirects (`>`) or `sed`.
 - **Arguments:** 
     - `file_path`: Absolute path to the file.
@@ -112,19 +122,37 @@ Precise text edits or file creation. This is the primary tool for writing files.
     - `old_text` (Optional): The exact text to be replaced. Must match indentation perfectly.
     - `insert_line` (Optional): 1-based line number to insert `new_text` before.
     - `start_line`/`end_line` (Optional): Line range to replace (inclusive).
-    - `start_column`/`end_column` (Optional): Character range on those lines (inclusive, each defaults to its start). Diagnostics report a column; this replaces only those characters, which is what a long or minified line needs.
-    - `insert_column` (Optional): With `insert_line`, inserts inside that line before this character instead of adding a new line. Use it to add a single missing bracket; `line_length + 1` appends at the end of the line.
+    - `start_column`/`end_column` (Optional): Character range on those lines (inclusive). Used for precise edits on long or minified lines.
+    - `insert_column` (Optional): With `insert_line`, inserts within that line before this character.
     - `occurrence` (Optional): 1-based index if `old_text` appears multiple times.
     - `replace_all` (Optional): Boolean to replace all occurrences of `old_text`.
-- **When to use:** For small, precise changes or creating new files. Emit multiple `editor` calls in one response for different files or non-overlapping regions.
-- **Output:** A single `{query, result, success, error?}` object. If `old_text` is not found, `success` is false.
+- **When to use:** For small, precise changes or creating new files.
+- **Constraints:** 
+    - Make one edit at a time and verify it before proceeding.
+    - You must read the lines you are about to change in their current state; edits to unread ranges are refused.
+    - Text copied from `read_files` must have the line-number gutter (`123 | `) removed.
+- **Output:** A single result named `edit:<path>` or `insert:<path>` describing what changed. If the edit fails (e.g., `old_text` not found or range unread), the result explains why.
 {{DEFAULT}}
 
 # tool: apply_patch
-Apply complex changes using a patch grammar.
-- **Arguments:** `input`: A string containing the patch. Use `*** Begin Patch`, `*** Update File: path`, and `+`/`-` markers.
-- **When to use:** For larger structural changes across multiple files.
-- **Output:** A single `{query, result, success, error?}` object. If context lines do not match, `success` is false.
+
+Apply complex changes using a patch grammar. Use this for larger structural changes across multiple files.
+- **Arguments:** `input`: A string containing the patch. Use the following format:
+    *** Begin Patch
+    *** Update File: path/to/file.ts
+    @@ optional section marker
+       [context before]
+    -[old line]
+    +[new line]
+       [context after]
+    *** End Patch
+- **Supported Actions:**
+    - `*** Add File: <path>`: Every line of content must start with `+`.
+    - `*** Update File: <path>`: Use context lines with `-` and `+` markers.
+    - `*** Delete File: <path>`
+    - `*** Move to: <new path>`: Must immediately follow an Update File header.
+- **Constraints:** Do not use line numbers; the format is context-based. Use `@@` markers to disambiguate repeated code blocks. Avoid legacy shell wrappers like `%%bash`.
+- **Output:** A single result listing which files were added, updated, moved, or deleted. If the patch fails to apply (usually due to context mismatch), the result explains why.
 {{DEFAULT}}
 
 # tool: ask_question
@@ -327,7 +355,7 @@ Search files for lines matching a pattern, as POSIX `grep` does. This runs in-pr
     - `ignore_case`, `invert` (non-matching lines), `word` (whole words), `count` (matches per file), `files_with_matches` (names only), `line_numbers` (defaults to true), `max_count` (stop after N per file).
     - `context` (Optional): Integer for lines of surrounding context.
 - **When to use:** To find where a string or pattern exists before reading or editing. It is cheaper than reading whole files.
-- **Output:** A single `{query, result, success, error?}` object. `result` contains matching lines prefixed with path and line number. A pattern that matches nothing is still `success: true`.
+- **Output:** A single result named `grep:<pattern>` containing matching lines prefixed with path and line number. If the search fails, the result explains why.
 {{DEFAULT}}
 
 # tool: sed
@@ -341,7 +369,7 @@ Apply a `sed` script to one or more files. This runs in-process and behaves iden
     - `extended` (Optional): Boolean. Use for extended regex syntax.
 - **When to use:** For mechanical changes applying in many places or across many files (e.g., renaming an identifier everywhere). For single, considered changes, use `editor`.
 - **Constraints:** In-place runs are refused on files you have not read. Scripts addressed by line number are refused unless those lines have been read.
-- **Output:** One `{query, result, success, error?}` object per file. `result` is the output or a confirmation of the write. If `success` is false, that specific file was NOT touched.
+- **Output:** One entry per file, named `sed:<file>`. It holds the resulting text or a confirmation that the file was written. If a specific file was not touched, the entry explains why.
 {{DEFAULT}}
 
 # tool: awk
@@ -354,7 +382,7 @@ Run an `awk` program over one or more files. This runs in-process and behaves id
     - `variables` (Optional): Object of variables to pass to the program (like `-v`).
 - **When to use:** For questions about columns, totals, or delimited data (e.g., summing a column, counting occurrences per key) where `grep` is insufficient.
 - **Constraints:** Read-only. Output redirection, pipes, `system()`, and `getline` are refused.
-- **Output:** A single `{query, result, success, error?}` object. `result` contains everything the program printed. A program that prints nothing is still `success: true`.
+- **Output:** A single result named `awk:<program>` containing everything the program printed. If the program fails to run, the result explains why.
 {{DEFAULT}}
 
 # tool: extract_document
