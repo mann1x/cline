@@ -1984,7 +1984,7 @@ function describeRetypeCost(
 	}
 	return (
 		`\n  Your edit retyped ${typed} characters of line ${line} and the file still ` +
-		`does not balance. The scan's fix for line ${line} is \`editor\` with ` +
+		`does not balance. The scan's suggested fix for line ${line} is \`editor\` with ` +
 		`${prescription[1]}: it changes one character and retypes nothing.`
 	);
 }

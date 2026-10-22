@@ -88,7 +88,7 @@ describe("naming the file the check could not run", () => {
 		);
 
 		expect(notice).not.toContain("start_column");
-		expect(notice).not.toContain("send it as it stands");
+		expect(notice).not.toContain("one edit that balances it");
 	});
 
 	it("says nothing when the changed files parse", () => {

@@ -2387,7 +2387,7 @@ describe("how long the file is", () => {
 				// Named as the scan's call, not "the call above", which the model
 				// read as its own edit.
 				expect(result).toContain(
-					"The scan's fix for line 1 is `editor` with start_line: 1, start_column: 48",
+					"The scan's suggested fix for line 1 is `editor` with start_line: 1, start_column: 48",
 				);
 			});
 		});

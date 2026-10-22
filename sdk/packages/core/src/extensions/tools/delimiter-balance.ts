@@ -453,9 +453,14 @@ function surplusNote(line: number, balance: Map<number, LineBalance>): string {
 	}
 
 	if (surplus.length === 0) {
-		return "this line's own brackets do balance, so one is in the wrong place rather than missing or spare";
+		return "this line's own brackets balance in number, so one is in the wrong place rather than missing or spare";
 	}
-	return `counting only code, this line has ${surplus.join(" and ")} — that is the edit`;
+	// A count, and nothing more. It used to end "— that is the edit", which
+	// claimed the line's intent as well as its tally: brackets cannot say which
+	// block a closer was meant to end, and a model told the edit as fact
+	// disbelieved the count when the fix it tried did not hold (pandorum b46hx,
+	// 2026-10-22, three restores of the same line).
+	return `counting only code, this line has ${surplus.join(" and ")}`;
 }
 
 /** How far along the line to look for somewhere a misplaced closer belongs. */
@@ -634,9 +639,13 @@ function proposeRepair(
 		best.left === 0
 			? "and nothing else in this file crosses after that"
 			: `and leaves ${best.left} of the ${baseline} crossings, all further down the file`;
+	// Offered, not prescribed. "Checked" means the brackets balance after it,
+	// which several different edits achieve; which one is right depends on the
+	// block that was meant to close, and only the code's meaning says that.
 	return (
-		`${best.say} — checked: that clears this line ${rest}.\n` +
-		`      ${PRESCRIPTION_MARKER}${best.call} — send it as it stands; there is no text to match on.`
+		`one edit that balances it: ${best.say} — checked: that clears this line ${rest}. ` +
+		"Brackets cannot tell which block was meant to close here, so make sure it is this one.\n" +
+		`      ${PRESCRIPTION_MARKER}${best.call} — if that is the change you mean; there is no text to match on.`
 	);
 }
 
@@ -814,8 +823,8 @@ export function describeDelimiterBalance(
 				const sameLine = finding.openLine === finding.line;
 				const note = sameLine ? surplusNote(finding.line, balance) : "";
 				const crossing = sameLine
-					? `the \`${finding.opener}\` at column ${finding.openColumn} is closed by \`${finding.found}\` at column ${finding.column}`
-					: `the \`${finding.opener}\` at column ${finding.openColumn} is closed by \`${finding.found}\` at line ${finding.line}, column ${finding.column}`;
+					? `the \`${finding.found}\` at column ${finding.column} comes while the \`${finding.opener}\` at column ${finding.openColumn} is still open`
+					: `the \`${finding.found}\` at line ${finding.line}, column ${finding.column} comes while the \`${finding.opener}\` at column ${finding.openColumn} is still open`;
 				return note
 					? `  line ${finding.openLine}: ${note} (${crossing})`
 					: `  line ${finding.openLine}: ${crossing}`;

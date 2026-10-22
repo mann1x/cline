@@ -120,7 +120,9 @@ describe("describeDelimiterBalance", () => {
 		expect(report).toContain("Delimiter scan");
 		// The line the edit goes on leads; the crossing that found it follows.
 		expect(report).toContain("line 1: ");
-		expect(report).toContain("`{` at column 22 is closed by `)` at column 29");
+		expect(report).toContain(
+			"`)` at column 29 comes while the `{` at column 22 is still open",
+		);
 	});
 
 	it("names every line that does not balance, not just the first", () => {
@@ -180,7 +182,7 @@ describe("describeDelimiterBalance", () => {
 			.split("\n")
 			.find((line) => line.startsWith("  line "));
 		expect(named).toBe(
-			"  line 1: counting only code, this line has 1 more `}` than `{` — that is the edit (the `(` at column 26 is closed by `}` at column 48)",
+			"  line 1: counting only code, this line has 1 more `}` than `{` (the `}` at column 48 comes while the `(` at column 26 is still open)",
 		);
 	});
 
@@ -215,12 +217,16 @@ describe("describeDelimiterBalance", () => {
 				"function dPw(c){ if (c) { c(); }}}\n",
 			);
 			expect(report).toContain("1 more `}` than `{`");
-			expect(report).toContain("that is the edit");
+			// The count is a fact; which brace is the spare one is not.
+			expect(report).not.toContain("that is the edit");
+			expect(report).toContain(
+				"Brackets cannot tell which block was meant to close",
+			);
 		});
 
 		it("says a crossed line that balances is out of order, not short", () => {
 			const report = describeDelimiterBalance("app.js", "const x = ({)};\n");
-			expect(report).toContain("do balance");
+			expect(report).toContain("balance in number");
 			expect(report).toContain("wrong place");
 		});
 
@@ -231,7 +237,7 @@ describe("describeDelimiterBalance", () => {
 				"app.js",
 				"function f() {\n  g();\n)\n",
 			);
-			expect(report).not.toContain("that is the edit");
+			expect(report).not.toContain("counting only code");
 		});
 
 		it("counts only code, not brackets inside strings", () => {
