@@ -5,6 +5,20 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.257] — 2026-10-22
+
+### Library
+
+- **Import adds books, and lists the files it can take.** The Library
+  panel's **Import…** opened only `.gz` files, and read whatever it was given
+  as a Library export: an EPUB given to it failed with
+  `incorrect header check`. The dialog now lists every type a book is read
+  from, and the export's `.gz`, first, then all files, and several can be
+  picked at once. A Library export is imported as before; any other file
+  becomes a book, titled from the file, on the shelf that is open or on
+  **Unsorted / Imported**. A book that looks like one already there is left
+  out, with the reason.
+
 ## [4.100.256] — 2026-10-22
 
 ### Agents
