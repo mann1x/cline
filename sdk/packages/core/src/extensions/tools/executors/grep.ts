@@ -18,7 +18,7 @@ import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
 import { splitBom } from "./bom";
 import { MAX_GREP_LINE_CHARS, MAX_SEARCH_OUTPUT_CHARS } from "./output-limits";
 import { compilePosixRegex } from "./posix-regex";
-import { noteShown, type ReadReceipts, readFileStamp } from "./read-receipts";
+import { fileStampFor, noteShown, type ReadReceipts } from "./read-receipts";
 
 /**
  * Directories not worth searching.
@@ -267,7 +267,7 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 			// (csf-1). `sed` refuses the same way; `grep` is read-only, so it
 			// retires the stale receipt, stamps the file as it now stands and
 			// says so — the model re-reads before editing, which is the point.
-			const stamp = await readFileStamp(filePath);
+			const stamp = await fileStampFor(filePath, options.overlay);
 			const shown = relative(cwd, filePath) || filePath;
 			if (options.receipts?.changedSince(filePath, stamp)) {
 				// `forget`, not `retire`: a retired read still counts for a

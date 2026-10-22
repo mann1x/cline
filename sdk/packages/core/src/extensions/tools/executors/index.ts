@@ -182,7 +182,7 @@ export function createDefaultExecutors(
 		search: createSearchExecutor(options.search),
 		// Receipts reach the shell too, so a command that rewrites a file the
 		// model has read says so. Nothing else about the shell changes.
-		bash: createDefaultShellExecutor({ ...options.bash, receipts }),
+		bash: createDefaultShellExecutor({ ...options.bash, receipts, overlay }),
 		webFetch: createWebFetchExecutor(options.webFetch),
 		applyPatch: shown(
 			createApplyPatchExecutor({ ...options.applyPatch, receipts, overlay }),

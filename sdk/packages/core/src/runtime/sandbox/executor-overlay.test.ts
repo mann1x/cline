@@ -138,6 +138,60 @@ describe("executors over an AgentOverlay", () => {
 		expect((await fs.readFile(path.join(ws, "a.txt"))).toString()).toBe("ORIG");
 	});
 
+	// ol-22: after its first edit the agent's file is the overlay copy, and a
+	// grep or a command stamped the workspace file instead. The next edit saw
+	// two stamps that could never agree and was refused as "something outside
+	// this session wrote to it": 35 such refusals across one 9-agent swarm.
+	for (const [between, run] of [
+		[
+			"a grep",
+			(executors: Required<ReturnType<typeof createDefaultExecutors>>) =>
+				executors.grep(
+					{ pattern: "EDITED", paths: [path.join(ws, "a.txt")] },
+					ws,
+					ctx,
+				),
+		],
+		[
+			"a command that only reads it",
+			(executors: Required<ReturnType<typeof createDefaultExecutors>>) =>
+				executors.bash(
+					`"${process.execPath}" -e "require('fs').readFileSync('a.txt')"`,
+					ws,
+					ctx,
+				),
+		],
+	] as const) {
+		it(`lets the agent edit its own copy again after ${between}`, async () => {
+			const executors = createDefaultExecutors({ overlay }) as Required<
+				ReturnType<typeof createDefaultExecutors>
+			>;
+			await executors.readFile({ path: path.join(ws, "a.txt") }, ctx);
+			await executors.editor(
+				{ path: path.join(ws, "a.txt"), new_text: "EDITED" },
+				ws,
+				ctx,
+			);
+			await new Promise((resolve) => setTimeout(resolve, 5));
+			await run(executors);
+
+			const again = await executors.editor(
+				{
+					path: path.join(ws, "a.txt"),
+					old_text: "EDITED",
+					new_text: "EDITED TWICE",
+				},
+				ws,
+				ctx,
+			);
+
+			expect(JSON.stringify(again)).not.toContain("changed since");
+			expect((await fs.readFile(path.join(ov, "a.txt"))).toString()).toBe(
+				"EDITED TWICE",
+			);
+		});
+	}
+
 	it("still refuses the edit when the lead's file changed after the agent read it", async () => {
 		const executors = createDefaultExecutors({ overlay }) as Required<
 			ReturnType<typeof createDefaultExecutors>

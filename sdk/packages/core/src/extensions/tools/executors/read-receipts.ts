@@ -68,6 +68,24 @@ export async function readFileStamp(
 	}
 }
 
+/**
+ * The stamp of a file as the caller sees it: through an agent's overlay, the
+ * copy the agent is working on once it has one, else the workspace file.
+ *
+ * Everything that stamps a file has to stamp the same one. The editor stamps
+ * the overlay copy it writes; a `grep` or a command that stamped the workspace
+ * file beside it left two stamps that could never agree, and the agent's next
+ * edit was refused as "something outside this session wrote to it" (ol-22).
+ */
+export async function fileStampFor(
+	filePath: string,
+	overlay?: { resolveRead(filePath: string): Promise<string> },
+): Promise<FileStamp | undefined> {
+	return readFileStamp(
+		overlay ? await overlay.resolveRead(filePath) : filePath,
+	);
+}
+
 /** A span of lines the model has seen, inclusive at both ends. */
 interface Span {
 	first: number;

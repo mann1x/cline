@@ -34,7 +34,7 @@ import {
 	MAX_COMMAND_OUTPUT_CHARS,
 	truncateCommandOutput,
 } from "./output-limits";
-import { type ReadReceipts, readFileStamp } from "./read-receipts";
+import { fileStampFor, type ReadReceipts } from "./read-receipts";
 import type { RunCommandExecutionController } from "./run-command-execution-controller";
 
 const MAX_DETACHED_LOG_BYTES = 10 * 1024 * 1024;
@@ -418,10 +418,11 @@ const MAX_SWEPT_FILES = 512;
 async function sweepTrackedFiles(
 	receipts: ReadReceipts,
 	paths: readonly string[],
+	overlay: ShellExecutorOptions["overlay"],
 ): Promise<string[]> {
 	const changed: string[] = [];
 	for (const filePath of paths.slice(0, MAX_SWEPT_FILES)) {
-		const stamp = await readFileStamp(filePath);
+		const stamp = await fileStampFor(filePath, overlay);
 		if (receipts.changedSince(filePath, stamp)) {
 			changed.push(filePath);
 			// The spans are wrong now whatever the command was, so the next edit
@@ -503,6 +504,13 @@ export interface ShellExecutorOptions {
 	 * say what the command did to what the model believes.
 	 */
 	receipts?: ReadReceipts;
+
+	/**
+	 * A delegated agent's overlay, so the sweep above stamps the agent's copy
+	 * of a file rather than the workspace file its commands no longer write.
+	 * Only resolving is needed: the command itself runs through `wrapSpawn`.
+	 */
+	overlay?: { resolveRead(filePath: string): Promise<string> };
 
 	/**
 	 * Optional host-scoped controller that can release an in-flight command
@@ -1280,6 +1288,7 @@ export function createShellExecutor(
 		executionController,
 		processStartTokenProbe = probeProcessStartTokenAsync,
 		receipts,
+		overlay,
 		wrapSpawn,
 	} = options;
 	const detachedLogRetentionMs = resolveDetachedLogRetentionMs(
@@ -1340,7 +1349,7 @@ export function createShellExecutor(
 		if (!receipts || tracked.length === 0) {
 			return output;
 		}
-		const changed = await sweepTrackedFiles(receipts, tracked);
+		const changed = await sweepTrackedFiles(receipts, tracked, overlay);
 		return changed.length === 0
 			? output
 			: `${output}\n\n${describeSweptFiles(changed)}`;
