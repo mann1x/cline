@@ -16,6 +16,13 @@
  * failed and every one a loop: `=` for 5,000 characters, "most importantly."
  * 110 times, one grep alternative 190 times.
  *
+ * A loop whose copies differ gets past both block tests, which want the same
+ * lines at an exact period. On pandorum (2026-10-22, session f099u) an
+ * `editor` call wrote one 590-line script 13 times over in 12 minutes, 265,328
+ * characters, each copy a few lines off the last; the call before it wrote
+ * the same script 9 times. So a call is also measured by how much of it it
+ * has already written: see `RestatedLines`.
+ *
  * The text arrives in whatever form the provider streams. A server passing the
  * model's own notation through (xOllama's `tool_call_progress`) has the file's
  * line breaks in it; JSON arguments have them as `\n`, and a detector that
@@ -23,6 +30,7 @@
  */
 
 import {
+	comparableLine,
 	ReasoningLoopGuard,
 	type ReasoningLoopGuardConfig,
 	type ReasoningLoopGuardOptions,
@@ -46,6 +54,7 @@ const JSON_ESCAPES: Record<string, string> = {
 
 interface CallState {
 	guard: ReasoningLoopGuard;
+	restated: RestatedLines;
 	/** Decided on the first character that is not white space. */
 	json?: boolean;
 	/** A backslash ended the last delta, so the escape it opens is split. */
@@ -75,6 +84,7 @@ export class ToolArgumentLoopGuard {
 		if (!call) {
 			call = {
 				guard: new ReasoningLoopGuard(this.config, this.options),
+				restated: new RestatedLines(this.options.given),
 				escaping: false,
 			};
 			this.calls.set(toolCallId, call);
@@ -83,7 +93,9 @@ export class ToolArgumentLoopGuard {
 			const first = text.trimStart()[0];
 			if (first !== undefined) call.json = first === "{" || first === "[";
 		}
-		const found = call.guard.push(call.json ? decode(call, text) : text);
+		const decoded = call.json ? decode(call, text) : text;
+		const found =
+			call.guard.push(decoded) ?? call.restated.push(decoded) ?? undefined;
 		if (found) {
 			this.verdict = {
 				toolCallId,
@@ -92,6 +104,105 @@ export class ToolArgumentLoopGuard {
 			};
 		}
 		return this.verdict;
+	}
+}
+
+/**
+ * Long lines written a third time or more. Set against every stored call of
+ * 2,000+ characters, 3,890 of them from 3,895 sessions (2026-10-22): once a
+ * call has 300 long lines, no healthy one has more than 6% of them as third
+ * copies, and both f099u loops pass 30% within their first 720 -- about a
+ * fifth of the way into the larger. Below 300 lines the only calls that
+ * score high are `spawn_agent` task lists, whose boilerplate repeats per agent
+ * by design, and every one of them worked.
+ *
+ * A third copy, not a second: a call that rewrites a file it read holds each
+ * line once more than the source, and one that moves a block holds it twice.
+ * Lines the source already repeats are allowed that many again.
+ */
+const RESTATED_MIN_LINE_CHARS = 24;
+const RESTATED_MIN_LINES = 300;
+const RESTATED_FRACTION = 0.3;
+/** After the source excuses a call, how many more lines before asking again. */
+const RESTATED_RECHECK_LINES = 50;
+
+class RestatedLines {
+	private readonly counts = new Map<string, number>();
+	private pending = "";
+	private chars = 0;
+	private lines = 0;
+	/** Copies past the second, before the source is consulted. */
+	private excess = 0;
+	private nextCheck = RESTATED_MIN_LINES;
+	private source: Map<string, number> | undefined;
+
+	constructor(private readonly given?: () => string) {}
+
+	push(text: string): ReasoningLoopVerdict | undefined {
+		this.chars += text.length;
+		this.pending += text;
+		let nl: number;
+		while ((nl = this.pending.indexOf("\n")) !== -1) {
+			const line = comparableLine(this.pending.slice(0, nl));
+			this.pending = this.pending.slice(nl + 1);
+			if (line.length < RESTATED_MIN_LINE_CHARS) continue;
+			const count = (this.counts.get(line) ?? 0) + 1;
+			this.counts.set(line, count);
+			this.lines++;
+			if (count > 2) this.excess++;
+		}
+		if (
+			this.lines < this.nextCheck ||
+			this.excess < RESTATED_FRACTION * this.lines
+		) {
+			return undefined;
+		}
+		const excess = this.excessBeyondSource();
+		if (excess < RESTATED_FRACTION * this.lines) {
+			this.nextCheck = this.lines + RESTATED_RECHECK_LINES;
+			return undefined;
+		}
+		let sample = "";
+		let most = 0;
+		for (const [line, count] of this.counts) {
+			if (count > most) {
+				most = count;
+				sample = line;
+			}
+		}
+		return {
+			kind: "restated-lines",
+			chars: this.chars,
+			cycles: most,
+			distinct: this.counts.size,
+			sample: sample.slice(0, 160),
+		};
+	}
+
+	private excessBeyondSource(): number {
+		if (this.source === undefined) {
+			this.source = new Map();
+			let text = "";
+			try {
+				text = this.given?.() ?? "";
+			} catch {
+				// No source is no excuse.
+			}
+			for (const raw of text.split("\n")) {
+				const line = comparableLine(raw);
+				if (line.length >= RESTATED_MIN_LINE_CHARS) {
+					this.source.set(line, (this.source.get(line) ?? 0) + 1);
+				}
+			}
+		}
+		let excess = 0;
+		for (const [line, count] of this.counts) {
+			excess += Math.max(
+				0,
+				count - Math.max(2, (this.source.get(line) ?? 0) + 1),
+			);
+		}
+		return excess;
 	}
 }
 
@@ -122,7 +233,9 @@ function repeated(verdict: ReasoningLoopVerdict): string {
 		? `the same ${verdict.period}-character run ${verdict.cycles} times`
 		: verdict.kind === "low-uniqueness"
 			? `the same ${verdict.distinct} lines over and over`
-			: `the same ${verdict.period}-line block ${verdict.cycles} times`;
+			: verdict.kind === "restated-lines"
+				? `lines already written twice, one of them ${verdict.cycles} times`
+				: `the same ${verdict.period}-line block ${verdict.cycles} times`;
 }
 
 /** What the model is told about it, before its next turn. */

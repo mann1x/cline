@@ -739,7 +739,17 @@ export async function runCouncilReview(input: {
 		}
 	};
 
-	const [firstRewritten, secondRewritten] = input.serial
+	// Two reviewers at once are two requests at once, and each carries the
+	// whole transcript. When two of them are more than one request may hold,
+	// the server cannot admit both: f099u (pandorum, 2026-10-22) sent two of
+	// 219,669 tokens into one 256,000-token window, and each waited for room
+	// the other was holding.
+	const serial =
+		input.serial ||
+		(!input.transcriptInContext &&
+			typeof input.maxRequestChars === "number" &&
+			transcript.length * 2 > input.maxRequestChars);
+	const [firstRewritten, secondRewritten] = serial
 		? [await rewrite("first"), await rewrite("second")]
 		: await Promise.all([rewrite("first"), rewrite("second")]);
 	const reviewers = (firstRewritten ? 1 : 0) + (secondRewritten ? 1 : 0);

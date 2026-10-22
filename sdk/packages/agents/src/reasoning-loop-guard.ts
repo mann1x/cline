@@ -69,7 +69,9 @@ export type ReasoningLoopKind =
 	| "low-uniqueness"
 	| "line-cycle"
 	| "block-cycle"
-	| "phrase-cycle";
+	| "phrase-cycle"
+	/** A call's arguments only: see `tool-argument-loop-guard`. */
+	| "restated-lines";
 
 export interface ReasoningLoopVerdict {
 	kind: ReasoningLoopKind;
@@ -105,6 +107,8 @@ export function describeReasoningLoop(
 			return `The model's ${subject} repeated a ${v.period}-line block ${v.cycles} times ${where}.${sample}`;
 		case "phrase-cycle":
 			return `The model's ${subject} repeated a ${v.period}-character phrase ${v.cycles} times ${where}.${sample}`;
+		case "restated-lines":
+			return `The model's ${subject} kept writing the same lines again: ${v.distinct} distinct lines, one of them ${v.cycles} times, ${where}.${sample}`;
 	}
 }
 
@@ -140,7 +144,7 @@ export function contentGivenToModel(messages: readonly AgentMessage[]): string {
 /** A `read_files` line number, which a model restating the line leaves off. */
 const LINE_NUMBER_PREFIX = /^\d+\s*\|\s?/;
 
-function comparableLine(line: string): string {
+export function comparableLine(line: string): string {
 	return line.trim().replace(LINE_NUMBER_PREFIX, "").trim();
 }
 

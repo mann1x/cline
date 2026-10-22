@@ -268,6 +268,49 @@ describe("runCouncilReview", () => {
 		expect(result.summary).toBe("one continuous replay with no marker");
 	});
 
+	it("reviews one half after the other when two requests would not fit", async () => {
+		// f099u (pandorum, 2026-10-22): two reviewers of 219,669 tokens each,
+		// sent at once into one 256,000-token window, each waiting for room
+		// the other held.
+		const big = [text("user", "fix it"), text("assistant", "x".repeat(10_000))];
+		let inFlight = 0;
+		let most = 0;
+		const result = await runCouncilReview({
+			summary: marked,
+			messages: big,
+			maxRequestChars: 16_000,
+			generate: async (call) => {
+				inFlight += 1;
+				most = Math.max(most, inFlight);
+				await new Promise((resolve) => setTimeout(resolve, 5));
+				inFlight -= 1;
+				return isCritic(call) ? "rewritten" : `## Replay\n\n${bulk("merged")}`;
+			},
+		});
+
+		expect(most).toBe(1);
+		expect(result.reviewers).toBe(2);
+	});
+
+	it("reviews both halves at once when two requests fit", async () => {
+		let inFlight = 0;
+		let most = 0;
+		await runCouncilReview({
+			summary: marked,
+			messages,
+			maxRequestChars: 100_000,
+			generate: async (call) => {
+				inFlight += 1;
+				most = Math.max(most, inFlight);
+				await new Promise((resolve) => setTimeout(resolve, 5));
+				inFlight -= 1;
+				return isCritic(call) ? "rewritten" : `## Replay\n\n${bulk("merged")}`;
+			},
+		});
+
+		expect(most).toBe(2);
+	});
+
 	it("falls back to the half as written when one writer fails", async () => {
 		let merge = "";
 		const result = await runCouncilReview({

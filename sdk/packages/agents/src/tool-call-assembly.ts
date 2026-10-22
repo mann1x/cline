@@ -117,9 +117,15 @@ export class ToolCallAssembler {
 
 	/**
 	 * The call `key` names, parsed. `finishReason` matters: a call cut off at
-	 * the output cap is told so, not that its JSON was invalid.
+	 * the output cap is told so, not that its JSON was invalid. `lastOfTurn`
+	 * says it is the call that was being written when the turn ended -- the
+	 * only one a cap can have cut.
 	 */
-	finish(key: string, finishReason?: AgentModelFinishReason): FinishedToolCall {
+	finish(
+		key: string,
+		finishReason?: AgentModelFinishReason,
+		lastOfTurn = false,
+	): FinishedToolCall {
 		const assembly = this.assemblies.get(key);
 		if (!assembly?.toolName) {
 			return {
@@ -130,7 +136,7 @@ export class ToolCallAssembler {
 				},
 			};
 		}
-		const parsed = parseToolInput(assembly, finishReason);
+		const parsed = parseToolInput(assembly, finishReason, lastOfTurn);
 		const call: AgentToolCallPart = {
 			type: "tool-call",
 			toolCallId: assembly.toolCallId,
@@ -261,12 +267,20 @@ export async function finishToolCalls(
 	const content: AgentMessagePart[] = [];
 	const toolCalls: AgentToolCallPart[] = [];
 	const invalidToolCalls: InvalidToolCall[] = [];
+	let lastToolKey: string | undefined;
+	for (const item of sequence) {
+		if (item.type === "tool") lastToolKey = item.key;
+	}
 	for (const item of sequence) {
 		if (item.type === "part") {
 			content.push(item.part);
 			continue;
 		}
-		const finished = assembler.finish(item.key, finishReason);
+		const finished = assembler.finish(
+			item.key,
+			finishReason,
+			item.key === lastToolKey,
+		);
 		if (finished.invalid) {
 			invalidToolCalls.push(finished.invalid);
 		}
@@ -332,12 +346,33 @@ function toolInputLength(assembly: ToolCallAssembly): number {
 function parseToolInput(
 	assembly: ToolCallAssembly,
 	finishReason?: AgentModelFinishReason,
+	lastOfTurn = false,
 ): {
 	input: unknown;
 	parseError?: string;
 	invalidInput: Record<string, unknown>;
 	reason?: InvalidToolCall["reason"];
 } {
+	// Arguments that parse are not arguments that finished. A server that
+	// closes an open call when the cap is reached (xOllama does) hands over
+	// valid JSON holding half of what the model meant: f099u (pandorum,
+	// 2026-10-22) ended at exactly its 92,662-token cap with an `editor` call
+	// whose `new_text` stopped mid-statement, and it ran. It was refused only
+	// for lacking a `start_line`; with one, the half would have been written.
+	if (finishReason === "max-tokens" && lastOfTurn) {
+		const raw =
+			assembly.inputValue !== undefined
+				? JSON.stringify(assembly.inputValue)
+				: assembly.inputText;
+		if (raw.trim()) {
+			return {
+				input: {},
+				invalidInput: buildInvalidToolInput(raw),
+				parseError: `Tool call ${assembly.toolName ?? assembly.toolCallId} was cut off by the output budget: the turn ended at the cap while this call was being written, ${raw.length} characters into its arguments, so what arrived may not be all of it, and it was not run. Send the same work in smaller pieces: edit one region per call rather than rewriting the file, and keep each call's arguments short enough to complete.`,
+				reason: "invalid_arguments",
+			};
+		}
+	}
 	if (assembly.inputValue !== undefined) {
 		return {
 			input: assembly.inputValue,

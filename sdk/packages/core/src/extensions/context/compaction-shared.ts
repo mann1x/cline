@@ -140,6 +140,15 @@ export const SUMMARY_OUTPUT_WINDOW_SHARE = 0.08;
 
 export const TOOL_RESULT_CHAR_LIMIT = 2_000;
 export const FILE_CONTENT_CHAR_LIMIT = 2_000;
+/**
+ * The longest a single argument of a tool call is written into a transcript
+ * pasted into a compaction request. Reasoning and file contents already had a
+ * bound there and arguments did not: f099u (pandorum, 2026-10-22) put two
+ * refused edits of 141,009 and 272,888 characters into every summary and
+ * reviewer request, 571,425 characters each. What a call was for is in its
+ * other arguments; what it wrote is in the file, or was never applied.
+ */
+export const TOOL_INPUT_VALUE_CHAR_LIMIT = 4_000;
 export const MIN_TRUNCATED_MESSAGE_TOKENS = 8;
 
 /**
@@ -929,6 +938,31 @@ export function formatToolInput(input: Record<string, unknown>): string {
 		.join(", ");
 }
 
+/**
+ * A call's arguments for a transcript: each string value past
+ * {@link TOOL_INPUT_VALUE_CHAR_LIMIT} keeps its beginning and its end, and
+ * says how much of it was left out.
+ */
+export function formatToolInputForTranscript(
+	input: Record<string, unknown>,
+): string {
+	return Object.entries(input)
+		.map(([key, value]) => {
+			if (
+				typeof value !== "string" ||
+				value.length <= TOOL_INPUT_VALUE_CHAR_LIMIT
+			) {
+				return `${key}=${JSON.stringify(value)}`;
+			}
+			const head = value.slice(0, (TOOL_INPUT_VALUE_CHAR_LIMIT * 3) / 4);
+			const tail = value.slice(value.length - TOOL_INPUT_VALUE_CHAR_LIMIT / 4);
+			const lines = value.split("\n").length;
+			const omitted = value.length - head.length - tail.length;
+			return `${key}=${JSON.stringify(`${head}\n...[${omitted} of ${value.length} chars (${lines} lines) left out]...\n${tail}`)}`;
+		})
+		.join(", ");
+}
+
 export function serializeMessage(
 	message: MessageWithMetadata,
 	format?: ToolResultFormat,
@@ -952,7 +986,7 @@ export function serializeMessage(
 				break;
 			case "tool_use":
 				lines.push(
-					`[Bot tool calls]: ${block.name}(${formatToolInput(block.input)})`,
+					`[Bot tool calls]: ${block.name}(${formatToolInputForTranscript(block.input)})`,
 				);
 				break;
 			case "tool_result":

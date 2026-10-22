@@ -2216,11 +2216,20 @@ export function createContextCompactionPrepareTurn(
 				0,
 			);
 			const afterRequestTokens = requestOverheadTokens + afterMessageTokens;
-			// On the provider's scale, so it can be compared with `tokensBefore`.
+			// On the provider's scale, so it can be compared with `tokensBefore`:
+			// by how far the same estimator read the request being compacted
+			// from `requestInputTokens`, which is on that scale.
+			//
+			// Not by `requestInputTokens` against the last count. Once the
+			// estimate was anchored those are two requests a turn apart, and the
+			// turn between them is in one and not the other: f099u (pandorum,
+			// 2026-10-22) added a 92,662-token reply, the "ratio" came to 0.6,
+			// and the notice read "138.2k -> about 23.2k" for a transcript the
+			// writer's own request then counted at 234,769.
 			const scaledAfterRequestTokens = scaleEstimateToObserved(
 				afterRequestTokens,
+				requestOverheadTokens + messageInputTokens,
 				requestInputTokens,
-				observedRequestTokens,
 			);
 			// Between requests, with the transcript just rewritten: the booking
 			// can now shrink to what is left, when the server is short of cells.
@@ -2253,24 +2262,23 @@ export function createContextCompactionPrepareTurn(
 				cause,
 				phase: "completed",
 				iteration: context.iteration,
-				// Report what the decision was actually made on, which is the
-				// provider's own count once one exists. `requestInputTokens`
-				// estimates the same quantity and read 96% high before the
-				// estimator was calibrated, which put this notice at odds with
-				// the context bar it sits above. The "after" figure has no
-				// counterpart to use -- it describes a request that has not
-				// been sent.
+				// The transcript being compacted, on the provider's scale: the
+				// provider's last count plus the estimate of what was added since
+				// (`anchoredRequestTokens`). The last count alone is a turn behind,
+				// which is what the context bar shows until the next response;
+				// printed here it left out the reply that made compaction
+				// necessary. The "after" figure has no counterpart to use -- it
+				// describes a request that has not been sent.
 				//
 				// It can only be an estimate, but printing a measurement and an
 				// estimate as the two ends of one arrow compares two different
 				// rulers. Measured live: 89,881 observed before against 93,844
 				// estimated after, shown as a compaction that made the context
 				// *larger* -- and the next response counted 80,317. So the estimate
-				// is scaled by how far this same transcript's estimate stood from
-				// the count the provider gave it. That is the only calibration
-				// available here and it is the right one: the same messages,
-				// measured the same way, moments earlier.
-				tokensBefore: triggerInputTokens,
+				// is scaled by how far the same estimator read the transcript
+				// being compacted from its figure on the provider's scale: the
+				// same messages, measured the same way, moments earlier.
+				tokensBefore: requestInputTokens,
 				tokensAfter: scaledAfterRequestTokens,
 				messagesBefore: beforeMessageCount,
 				messagesAfter: result.messages.length,
@@ -2297,9 +2305,9 @@ export function createContextCompactionPrepareTurn(
 				messagesBefore: beforeMessageCount,
 				messagesAfter: result.messages.length,
 				messagesRemoved: beforeMessageCount - result.messages.length,
-				tokensBefore: triggerInputTokens,
+				tokensBefore: requestInputTokens,
 				tokensAfter: scaledAfterRequestTokens,
-				tokensSaved: triggerInputTokens - scaledAfterRequestTokens,
+				tokensSaved: requestInputTokens - scaledAfterRequestTokens,
 				triggerTokens: requestTriggerTokens,
 				maxInputTokens,
 				thresholdRatio: COMPACTION_TRIGGER_RATIO,

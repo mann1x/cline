@@ -157,6 +157,105 @@ describe("the loop guard on a call's arguments", () => {
 		expect(loopNotices(events)[0]?.message).toContain("12-line block");
 	});
 
+	it("cuts a call that writes one script again and again, each copy drifting", async () => {
+		// f099u (pandorum, 2026-10-22): 13 copies of a 590-line script in one
+		// `editor` call, 265,328 characters, no two copies alike.
+		const copy = (c: number) =>
+			Array.from({ length: 150 }, (_, i) =>
+				i === c
+					? `    const value${i} = compute(${i}, state.level, ${c});`
+					: `    const value${i} = compute(${i}, state.level);`,
+			).join("\n");
+		function* looping(): Iterable<AgentModelEvent> {
+			yield progress(
+				'call:editor{intent:<|"|>Rewrite the script<|"|>,new_text:<|"|>',
+			);
+			for (let c = 0; c < 13; c++) yield progress(`${copy(c)}\n`);
+			yield { type: "finish", reason: "length" };
+		}
+		execute.mockClear();
+		const model = new CountingModel([looping, answer]);
+		const events: AgentRuntimeEvent[] = [];
+		const runtime = new AgentRuntime({ model, tools: [editor] });
+		runtime.subscribe((event) => {
+			events.push(event);
+		});
+
+		const result = await runtime.run("go");
+
+		expect(model.yielded[0]).toBeLessThan(6);
+		expect(execute).not.toHaveBeenCalled();
+		expect(loopNotices(events)[0]?.message).toContain(
+			"The model's call to `editor` kept writing the same lines again",
+		);
+		const reminder = result.messages[2];
+		expect(texts(reminder as never)).toContain(
+			"its arguments had come to repeat lines already written twice",
+		);
+	});
+
+	it("reads a call that arrived whole, with no progress, before it runs", async () => {
+		// A provider that streams no progress hands the call over in one piece.
+		// Too late to save the tokens; not too late to keep it from running.
+		const copy = (c: number) =>
+			Array.from({ length: 150 }, (_, i) =>
+				i === c
+					? `    const value${i} = compute(${i}, state.level, ${c});`
+					: `    const value${i} = compute(${i}, state.level);`,
+			).join("\n");
+		const newText = Array.from({ length: 13 }, (_, c) => copy(c)).join("\n");
+		function* whole(): Iterable<AgentModelEvent> {
+			yield {
+				type: "tool-call-delta",
+				toolCallId: "call_1",
+				toolName: "editor",
+				inputText: JSON.stringify({ path: "a.js", new_text: newText }),
+			};
+			yield { type: "finish", reason: "tool-calls" };
+		}
+		execute.mockClear();
+		const model = new CountingModel([whole, answer]);
+		const events: AgentRuntimeEvent[] = [];
+		const runtime = new AgentRuntime({ model, tools: [editor] });
+		runtime.subscribe((event) => {
+			events.push(event);
+		});
+
+		const result = await runtime.run("go");
+
+		expect(execute).not.toHaveBeenCalled();
+		expect(loopNotices(events)).toHaveLength(1);
+		const cut = result.messages[1];
+		expect(cut?.content.some((part) => part.type === "tool-call")).toBe(false);
+		expect(texts(cut as never)).toContain("begun here and cut");
+		expect(texts(result.messages.at(-1) as never)).toBe("done");
+	});
+
+	it("runs a call that arrived whole when its lines differ", async () => {
+		const newText = Array.from(
+			{ length: 2000 },
+			(_, i) => `    draw${i}(ctx, x + ${i}, y - ${i % 7}, state.level);`,
+		).join("\n");
+		function* whole(): Iterable<AgentModelEvent> {
+			yield {
+				type: "tool-call-delta",
+				toolCallId: "call_1",
+				toolName: "editor",
+				inputText: JSON.stringify({ path: "a.js", new_text: newText }),
+			};
+			yield { type: "finish", reason: "tool-calls" };
+		}
+		execute.mockClear();
+		const runtime = new AgentRuntime({
+			model: new CountingModel([whole, answer]),
+			tools: [editor],
+		});
+
+		await runtime.run("go");
+
+		expect(execute).toHaveBeenCalledTimes(1);
+	});
+
 	it("leaves a long call whose lines differ alone", async () => {
 		function* healthy(): Iterable<AgentModelEvent> {
 			yield progress('call:editor{new_text:<|"|>');
@@ -222,6 +321,36 @@ describe("the loop guard on a call's arguments", () => {
 		await runtime.run("go").catch(() => undefined);
 
 		expect(model.yielded[0]).toBe(202);
+	});
+});
+
+describe("a call the output cap cut short", () => {
+	it("is not run when it parsed, and the model is told it was cut", async () => {
+		// f099u (pandorum, 2026-10-22): xOllama closed an open `editor` call at
+		// the cap; the JSON parsed and the half-written edit ran.
+		function* capped(): Iterable<AgentModelEvent> {
+			yield {
+				type: "tool-call-delta",
+				toolCallId: "call_1",
+				toolName: "editor",
+				inputText: JSON.stringify({
+					path: "a.js",
+					new_text: "const ex = e.x",
+				}),
+			};
+			yield { type: "finish", reason: "max-tokens" };
+		}
+		execute.mockClear();
+		const model = new CountingModel([capped, answer]);
+		const runtime = new AgentRuntime({ model, tools: [editor] });
+
+		const result = await runtime.run("go");
+
+		expect(execute).not.toHaveBeenCalled();
+		expect(JSON.stringify(model.requests[1]?.messages)).toContain(
+			"was cut off by the output budget",
+		);
+		expect(texts(result.messages.at(-1) as never)).toBe("done");
 	});
 });
 

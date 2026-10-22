@@ -4198,6 +4198,29 @@ export class AgentRuntime {
 				break;
 			}
 		}
+		// A call nothing streamed progress for was read by no guard while it was
+		// written. Read it whole now, before it runs: too late to save its
+		// tokens, not too late to keep a loop out of the tools and the history.
+		// Not delta by delta: some providers send each delta as the whole text
+		// so far, which is what the assembler's merge exists for.
+		if (argumentLoopGuard && !argumentLoop && !toolIntentOverrun) {
+			for (const item of sequence) {
+				if (item.type !== "tool") continue;
+				const assembly = toolAssembler.get(item.key);
+				if (
+					!assembly?.inputText ||
+					streamedArguments.has(assembly.toolCallId)
+				) {
+					continue;
+				}
+				argumentLoop = argumentLoopGuard.push(
+					assembly.toolCallId,
+					assembly.inputText,
+					assembly.toolName,
+				);
+				if (argumentLoop) break;
+			}
+		}
 		// One cut, one count, whichever channel it was in. The host's guidance,
 		// when it answered the streak, follows the cut turn with its nudge.
 		const withGuidance = (nudge: string, guidance: string | undefined) =>
@@ -4242,6 +4265,12 @@ export class AgentRuntime {
 		}
 
 		let cutReply = "";
+		// The call that was being written when the stream ended: at the cap, the
+		// one call it can have cut short.
+		let lastToolKey: string | undefined;
+		for (const item of sequence) {
+			if (item.type === "tool") lastToolKey = item.key;
+		}
 		for (const item of sequence) {
 			// A cancelled stream may contain incomplete tool JSON or unsigned
 			// reasoning. Keep only replayable visible content from that response.
@@ -4270,7 +4299,11 @@ export class AgentRuntime {
 			) {
 				continue;
 			}
-			const finished = toolAssembler.finish(item.key, finishReason);
+			const finished = toolAssembler.finish(
+				item.key,
+				finishReason,
+				item.key === lastToolKey,
+			);
 			if (finished.invalid) {
 				invalidToolCalls.push(finished.invalid);
 			}

@@ -2,6 +2,7 @@ import type * as LlmsProviders from "@cline/llms";
 import {
 	estimateRequestInputTokens,
 	type MessageWithMetadata,
+	noteContextOverflow,
 	noteOutputCap,
 	observeRequestTokens,
 	resetTokenCalibration,
@@ -37,6 +38,7 @@ import {
 	resolveThinkingSummaryMaxTokens,
 	serializeMessage,
 	serializeReasoningWithOutcomes,
+	TOOL_INPUT_VALUE_CHAR_LIMIT,
 	TOOL_RESULT_CHAR_LIMIT,
 } from "./compaction-shared";
 
@@ -736,6 +738,56 @@ describe("createContextCompactionPrepareTurn", () => {
 		// A refused call is the one kind the replay prompt says never to lose:
 		// without it the model simply makes the same call again.
 		expect(serialized).toContain("Read too large");
+	});
+
+	it("bounds a long argument of a call, keeping its start and its end", () => {
+		// f099u (pandorum, 2026-10-22): two refused edits of 141,009 and
+		// 272,888 characters went whole into every summary and reviewer request.
+		const newText = `START\n${"const value = compute(state);\n".repeat(9_000)}END`;
+		const serialized = serializeMessage({
+			role: "assistant",
+			content: [
+				{
+					type: "tool_use",
+					id: "call-1",
+					name: "editor",
+					input: {
+						file_path: "game.html",
+						intent: "rewrite",
+						new_text: newText,
+					},
+				},
+			],
+		} as never);
+
+		expect(serialized.length).toBeLessThan(TOOL_INPUT_VALUE_CHAR_LIMIT + 500);
+		expect(serialized).toContain('file_path="game.html"');
+		expect(serialized).toContain('intent="rewrite"');
+		expect(serialized).toContain("START");
+		expect(serialized).toContain("END");
+		expect(serialized).toContain(
+			`of ${newText.length} chars (${newText.split("\n").length} lines) left out]`,
+		);
+	});
+
+	it("leaves a short argument of a call as it is", () => {
+		const serialized = serializeMessage({
+			role: "assistant",
+			content: [
+				{
+					type: "tool_use",
+					id: "call-1",
+					name: "editor",
+					input: {
+						file_path: "a.ts",
+						new_text: "x".repeat(TOOL_INPUT_VALUE_CHAR_LIMIT),
+					},
+				},
+			],
+		} as never);
+
+		expect(serialized).toContain("x".repeat(TOOL_INPUT_VALUE_CHAR_LIMIT));
+		expect(serialized).not.toContain("left out");
 	});
 
 	it("truncates the strings inside a structured tool result", () => {
@@ -1763,6 +1815,69 @@ describe("createContextCompactionPrepareTurn", () => {
 			observeRequestTokens(163_772, 40_000, undefined, "my-session");
 			const result = await prepare(bloatedApiMessages, "my-session");
 			expect(result?.messages).toBeUndefined();
+		});
+
+		it("reports the transcript it compacts, the reply since the last count included", async () => {
+			// f099u (pandorum, 2026-10-22): the last count was 138,207, the turn
+			// after it wrote a 92,662-token call, and the notice read "138.2k ->
+			// about 23.2k" for a transcript the next request counted at 234,769.
+			observeRequestTokens(40_000, 10_000);
+			noteContextOverflow({
+				contextWindow: 128_000,
+				estimatedInputTokens: 130_000,
+				reserveTokens: 4_000,
+				remainingContext: -6_000,
+				minOutputTokens: 1_024,
+			});
+			const notices: Array<Record<string, unknown>> = [];
+			const messages: LlmsProviders.Message[] = [
+				{ role: "user", content: "start the task" },
+				{ role: "assistant", content: "x".repeat(39_000) },
+				{ role: "user", content: "continue" },
+				{ role: "assistant", content: "y".repeat(400_000) },
+				{ role: "user", content: "and now?" },
+			];
+			const prepareTurn = createContextCompactionPrepareTurn({
+				providerId: "ollama",
+				modelId: "local-model",
+				providerConfig: {
+					providerId: "ollama",
+					modelId: "local-model",
+				} as LlmsProviders.ProviderConfig,
+				compaction: { enabled: true, strategy: "basic" },
+				logger: undefined,
+			});
+
+			await prepareTurn?.({
+				agentId: "agent-1",
+				conversationId: "conv-1",
+				parentAgentId: null,
+				iteration: 4,
+				abortSignal: new AbortController().signal,
+				systemPrompt: "You are helpful.",
+				tools: [],
+				messages,
+				apiMessages: messages,
+				model: {
+					id: "local-model",
+					provider: "ollama",
+					info: { id: "local-model", contextWindow: 128_000 },
+				},
+				emitStatusNotice: (
+					_message: string,
+					metadata?: Record<string, unknown>,
+				) => {
+					if (metadata) notices.push(metadata);
+				},
+			} as never);
+
+			const completed = notices.find((notice) => notice.phase === "completed");
+			expect(completed).toBeDefined();
+			// The count it started from was 10,000; the reply since is ~100,000.
+			expect(completed?.tokensBefore as number).toBeGreaterThan(100_000);
+			expect(completed?.tokensAfter as number).toBeLessThan(
+				completed?.tokensBefore as number,
+			);
 		});
 
 		it("stops compacting once the counted context comes back down", async () => {
