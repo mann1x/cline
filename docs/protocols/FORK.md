@@ -17,7 +17,7 @@ As of 2026-09-14: **570 commits ahead of `upstream/main`, 88 behind.**
 | Artefact | `cerebriline-<version>.vsix` |
 | Data directory | `~/.cerebriline`, falling back to `~/.cline` when that exists and the new one does not |
 | Versioning | `4.100.x`, incremented per build; not aligned with upstream's numbering |
-| Distribution | GitHub releases on `mann1x/cline` with the `.vsix` attached; Open VSX; and, since 2026-10-10, the VS Code Marketplace as `mann1x.cerebriline`. `fork-release.yml` publishes all three from one build. The Marketplace job stores no token: it signs in as the Entra application `cerebriline-marketplace` from the repo's `marketplace` environment (`marketplace-identity.yml` checks that sign-in by hand). |
+| Distribution | GitHub releases on `mann1x/cline` with the `.vsix` attached, and Open VSX; `fork-release.yml` publishes both from one build. **Not the VS Code Marketplace**: `mann1x.cerebriline` was listed from 2026-10-10 and removed on 2026-10-22, and its name is reserved. `marketplace-publish.yml` publishes an existing release by hand when there is a listing to publish to; it stores no token and signs in as the Entra application `cerebriline-marketplace` from the repo's `marketplace` environment (`marketplace-identity.yml` checks that sign-in). |
 
 The extension id was `saoudrizwan.claude-dev` until 4.100.112 — upstream's own,
 so a build *replaced* an upstream Cline install rather than sitting beside it.

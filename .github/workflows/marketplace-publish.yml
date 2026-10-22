@@ -1,15 +1,15 @@
 name: Publish a release to the VS Code Marketplace
 
-# The Marketplace step of fork-release.yml, on its own: download the VSIX of a
-# release that already exists and publish it. Nothing is rebuilt, the GitHub
+# The only path to the VS Code Marketplace: download the VSIX of a release that
+# already exists and publish it, run by hand. Nothing is rebuilt, the GitHub
 # release is left as it is, and nothing goes to Open VSX or Discord.
 #
-# For when the release went out but the Marketplace did not take it, or the
-# listing has to be recreated. Re-dispatching fork-release.yml for that would
-# rebuild and replace the release's VSIX and announce it a second time.
+# fork-release.yml published every release here until 2026-10-22, when the
+# listing was removed and the name `cerebriline` became reserved; publishing
+# it again needs Marketplace support or a new package.json `name`.
 #
-# Same sign-in as fork-release.yml's `marketplace` job: the Entra app trusted
-# for this repository's `marketplace` environment.
+# No token: it signs in as the Entra application `cerebriline-marketplace`,
+# which trusts only jobs in this repository's `marketplace` environment.
 
 on:
     workflow_dispatch:

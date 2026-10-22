@@ -12,10 +12,11 @@
 # Here the name is computed once, asserted, and uploaded by exact path. There
 # is no glob and no human in the naming path.
 #
-# It publishes to the VS Code Marketplace (publisher `mann1x`, since
-# 2026-10-10) in a job of its own after the release, with the file the release
-# carries. No token is stored for it: see the `marketplace` job.
-# `ext-vscode-publish-stable.yml` is upstream's and does not apply.
+# It does NOT publish to the VS Code Marketplace. That job was taken out on
+# 2026-10-22, when the listing was removed and the name `cerebriline` became
+# reserved; `marketplace-publish.yml` publishes an existing release's VSIX on
+# its own, by hand. `ext-vscode-publish-stable.yml` is upstream's and does not
+# apply.
 #
 # It also publishes to Open VSX when `OVSX_PAT` is configured, and skips that step
 # in silence when it is not — so the release keeps working on a fork or a clone
@@ -207,46 +208,3 @@ jobs:
                   curl -fsS --retry 3 -o /dev/null -w "Discord answered HTTP %{http_code}\n" \
                     -H "Content-Type: application/json" -d @discord.json "$DISCORD_WEBHOOK"
                   echo "Announced $TAG on Discord" | tee -a "$GITHUB_STEP_SUMMARY"
-
-    # The VS Code Marketplace, with the file the GitHub release carries, so the
-    # two listings cannot differ. A job of its own: the release above is
-    # complete before this starts, and a Marketplace refusal cannot undo it.
-    #
-    # No token. The run's GitHub identity is exchanged for a Microsoft Entra
-    # one (application `cerebriline-marketplace`, a Contributor of the
-    # publisher), and the application trusts only jobs in this repository's
-    # `marketplace` environment. `marketplace-identity.yml` checks the same
-    # sign-in on its own when this fails.
-    marketplace:
-        name: Publish to the VS Code Marketplace
-        needs: release
-        runs-on: ubuntu-latest
-        environment: marketplace
-        permissions:
-            id-token: write
-            contents: read
-        steps:
-            - name: Download the released VSIX
-              env:
-                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-                  TAG: ${{ needs.release.outputs.tag }}
-                  NAME: ${{ needs.release.outputs.artifact-name }}
-              run: |
-                  gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$NAME"
-                  sha256sum "$NAME"
-
-            - uses: azure/login@v2
-              with:
-                  client-id: ${{ vars.AZURE_CLIENT_ID }}
-                  tenant-id: ${{ vars.AZURE_TENANT_ID }}
-                  allow-no-subscriptions: true
-
-            # --skip-duplicate: a rebuilt release of a version already listed
-            # is not an error.
-            - name: Publish
-              env:
-                  NAME: ${{ needs.release.outputs.artifact-name }}
-              run: |
-                  npx --yes @vscode/vsce@3.9.2 publish --azure-credential \
-                    --packagePath "$NAME" --skip-duplicate
-                  echo "Published $NAME to the VS Code Marketplace" | tee -a "$GITHUB_STEP_SUMMARY"
