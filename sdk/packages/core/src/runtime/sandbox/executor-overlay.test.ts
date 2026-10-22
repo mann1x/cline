@@ -156,7 +156,8 @@ describe("executors over an AgentOverlay", () => {
 			"a command that only reads it",
 			(executors: Required<ReturnType<typeof createDefaultExecutors>>) =>
 				executors.bash(
-					`"${process.execPath}" -e "require('fs').readFileSync('a.txt')"`,
+					// PowerShell, the Windows shell, runs a quoted path only after `&`.
+					`${process.platform === "win32" ? "& " : ""}"${process.execPath}" -e "require('fs').readFileSync('a.txt')"`,
 					ws,
 					ctx,
 				),

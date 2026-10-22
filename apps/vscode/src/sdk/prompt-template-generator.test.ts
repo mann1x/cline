@@ -62,7 +62,7 @@ function written(builtin: string): string {
 	return builtin.trim() === "{{DEFAULT}}"
 		? [
 				"Run it, and only for work no other tool covers: `read_files` reads, `editor` and `sed` write, `search_codebase` and `grep` search, `awk` totals columns.",
-				"Output: one object per command, `{query, result, success, error?}`, with the command in `query`.",
+				"Output: one entry per command, named by the command, holding what it printed; a failed one says it failed and why.",
 				"",
 				"{{DEFAULT}}",
 			].join("\n")

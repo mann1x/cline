@@ -53,6 +53,34 @@ const runtimeHandlers: HubScheduleRuntimeHandlers = {
 
 let requestShutdown: (() => void) | undefined;
 let shutdownPending = false;
+
+// Installed before the endpoint is published, as the real daemon does
+// (`entry.ts`): the test signals as soon as discovery exists, and a SIGTERM
+// that arrived before these handlers took the default exit -- the process
+// died by the signal and the test failed one push in eight.
+let coordinator:
+	| ReturnType<typeof createHubDaemonShutdownCoordinator>
+	| undefined;
+let pendingSignal: "SIGINT" | "SIGTERM" | undefined;
+let signalCount = 0;
+const handleSignal = (signal: "SIGINT" | "SIGTERM"): void => {
+	signalCount += 1;
+	if (!coordinator) {
+		pendingSignal ??= signal;
+		return;
+	}
+	if (signalCount > 1) {
+		coordinator.force({
+			reason: `second termination signal (${signal})`,
+			exitCode: 0,
+		});
+		return;
+	}
+	void coordinator.request({ reason: signal, exitCode: 0 });
+};
+process.on("SIGINT", () => handleSignal("SIGINT"));
+process.on("SIGTERM", () => handleSignal("SIGTERM"));
+
 const server = await startHubWebSocketServer({
 	host: "127.0.0.1",
 	port,
@@ -71,7 +99,7 @@ const server = await startHubWebSocketServer({
 });
 process.stderr.write(`[shutdown-fixture] runtime: bun ${bunVersion}\n`);
 
-const coordinator = createHubDaemonShutdownCoordinator({
+const ready = createHubDaemonShutdownCoordinator({
 	deadlineMs: HUB_DAEMON_SHUTDOWN_DEADLINE_MS,
 	cleanup: () => server.close(),
 	exit: (code) => process.exit(code),
@@ -79,8 +107,9 @@ const coordinator = createHubDaemonShutdownCoordinator({
 		process.stderr.write(`[shutdown-fixture] forced exit: ${reason}\n`);
 	},
 });
+coordinator = ready;
 requestShutdown = () => {
-	void coordinator.request({
+	void ready.request({
 		reason: "authenticated HTTP shutdown request",
 		exitCode: 0,
 	});
@@ -88,20 +117,8 @@ requestShutdown = () => {
 if (shutdownPending) {
 	requestShutdown();
 }
-
-let signalCount = 0;
-const handleSignal = (signal: "SIGINT" | "SIGTERM"): void => {
-	signalCount += 1;
-	if (signalCount > 1) {
-		coordinator.force({
-			reason: `second termination signal (${signal})`,
-			exitCode: 0,
-		});
-		return;
-	}
-	void coordinator.request({ reason: signal, exitCode: 0 });
-};
-process.on("SIGINT", () => handleSignal("SIGINT"));
-process.on("SIGTERM", () => handleSignal("SIGTERM"));
+if (pendingSignal) {
+	void ready.request({ reason: pendingSignal, exitCode: 0 });
+}
 
 await new Promise<void>(() => undefined);

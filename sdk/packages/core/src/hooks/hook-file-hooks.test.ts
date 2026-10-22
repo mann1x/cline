@@ -316,7 +316,9 @@ describe("createHookConfigFileHooks", () => {
 				retryDelay: 250,
 			});
 		}
-	}, 15000);
+		// A cold Windows runner can try the `py -3` launcher before `python`:
+		// 15 seconds ran out there once in eight pushes (2026-10-22).
+	}, 30_000);
 
 	it("returns appendContext from legacy contextModification output", async () => {
 		const { workspace } = await createWorkspaceWithHook(
