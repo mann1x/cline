@@ -1090,21 +1090,25 @@ function describeToolOutcome(
 	block: ToolResultContent,
 	format?: ToolResultFormat,
 ): string {
-	const text = flattenToolResultContent(block.content, {
-		...(format ? { format } : {}),
-		...(block.serialized ? { serialized: block.serialized } : {}),
-	});
-	if (text.includes("strikes left") || text.includes("LAST strike")) {
+	// Judged on the stored form, which says `success: false` whatever the
+	// session's format; quoted in the form the model read. Judged on the
+	// text form, which has no such field, every failed call read "applied".
+	const serialized = block.serialized ? { serialized: block.serialized } : {};
+	const stored = flattenToolResultContent(block.content, serialized);
+	const text = format
+		? flattenToolResultContent(block.content, { format, ...serialized })
+		: stored;
+	if (stored.includes("strikes left") || stored.includes("LAST strike")) {
 		return "refused by the loop guard as an unchanged repeat";
 	}
-	if (text.includes(NO_CHANGE_MARKER)) {
+	if (stored.includes(NO_CHANGE_MARKER)) {
 		return "refused: the change was already in the file";
 	}
 	if (block.is_error === true) {
-		return `failed: ${truncateText(firstLine(text), 200)}`;
+		return `failed: ${truncateText(failureLine(text), 200)}`;
 	}
-	if (/"success"\s*:\s*false/.test(text)) {
-		return `reported failure: ${truncateText(firstLine(text), 200)}`;
+	if (/"success"\s*:\s*false/.test(stored)) {
+		return `reported failure: ${truncateText(failureLine(text), 200)}`;
 	}
 	return "applied";
 }
@@ -1115,6 +1119,18 @@ const NO_CHANGE_MARKER = "No change:";
 function firstLine(text: string): string {
 	const line = text.split("\n").find((value) => value.trim());
 	return (line ?? text).trim();
+}
+
+/**
+ * The line that says why. In the text form an entry is its query, then
+ * `→ failed: why`; the query alone says nothing about the failure.
+ */
+function failureLine(text: string): string {
+	const failed = text
+		.split("\n")
+		.map((line) => line.trim())
+		.find((line) => line.startsWith("→ failed:"));
+	return failed?.slice("→ failed:".length).trim() || firstLine(text);
 }
 
 /**

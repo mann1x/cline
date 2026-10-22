@@ -2509,6 +2509,80 @@ describe("createContextCompactionPrepareTurn", () => {
 				expect(summarizerConfig.headers).toBeUndefined();
 			}
 		});
+
+		it("writes the summary from the results as the conversation reads them", async () => {
+			// The strategies were handed a config rebuilt from the live session
+			// without the conversation's format, so a text session's summary,
+			// reviewers and retrospective all quoted results as JSON (f099u,
+			// pandorum, 2026-10-22). Nor were generation notices taken out of it.
+			const withResults: LlmsProviders.Message[] = [
+				{ role: "user", content: "Old turn to compact" },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							id: "c1",
+							name: "editor",
+							input: { file_path: "a.ts" },
+						},
+					],
+				},
+				{
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: "c1",
+							name: "editor",
+							content: JSON.stringify({
+								query: "edit:a.ts",
+								result: "",
+								error: "Editor operation failed: no start_line",
+								success: false,
+							}),
+							serialized: "json",
+						},
+					],
+				} as LlmsProviders.Message,
+				{ role: "assistant", content: "Old answer" },
+				{ role: "user", content: "Recent turn" },
+				{ role: "assistant", content: "Recent assistant state" },
+			];
+			const sent: unknown[] = [];
+			createHandlerMock.mockReturnValue({
+				createMessage: vi.fn((...args: unknown[]) => {
+					sent.push(args);
+					return streamChunks([
+						{ type: "text", id: "summary-1", text: "## Goal\nShip it" },
+						{ type: "done", id: "summary-1", success: true },
+					]);
+				}),
+			});
+			const config = {
+				...liveConfig(),
+				toolResultFormat: "text",
+				providerConfig: {
+					...liveConfig().providerConfig,
+					notices: { enabled: true },
+				},
+			} as Parameters<typeof createContextCompactionPrepareTurn>[0];
+
+			await createContextCompactionPrepareTurn(config)?.({
+				...context,
+				messages: withResults,
+				apiMessages: withResults,
+			});
+
+			const requests = JSON.stringify(sent);
+			expect(requests).toContain(
+				"→ failed: Editor operation failed: no start_line",
+			);
+			expect(requests).not.toContain('\\"success\\":false');
+			for (const [summarizerConfig] of createHandlerMock.mock.calls) {
+				expect(summarizerConfig.notices).toBeUndefined();
+			}
+		});
 	});
 
 	it("retries a failed summarizer call, then falls back to basic compaction", async () => {
@@ -7107,6 +7181,48 @@ describe("serializeReasoningWithOutcomes", () => {
 		expect(rendered).toContain(
 			"refused by the loop guard as an unchanged repeat",
 		);
+	});
+
+	it("says a call failed in a session that reads its results as text", () => {
+		// The text form has no `success` field to find, so judged on it every
+		// failure came out "applied"; quoted in the stored form, the model was
+		// shown JSON it had never read (f099u, pandorum, 2026-10-22).
+		const turn = (format?: "text" | "json") =>
+			serializeReasoningWithOutcomes(
+				[
+					{
+						role: "assistant",
+						content: [
+							{ type: "thinking", thinking: "rewrite the whole script" },
+							{ type: "tool_use", id: "c", name: "editor", input: {} },
+						],
+					} as MessageWithMetadata,
+					{
+						role: "user",
+						content: [
+							{
+								type: "tool_result",
+								tool_use_id: "c",
+								name: "editor",
+								content: JSON.stringify({
+									query: "edit:game.html",
+									result: "",
+									error: "Editor operation failed: no start_line",
+									success: false,
+								}),
+								serialized: "json",
+							},
+						],
+					} as MessageWithMetadata,
+				],
+				format,
+			);
+
+		expect(turn("text")).toContain(
+			"editor -> reported failure: Editor operation failed: no start_line",
+		);
+		expect(turn("text")).not.toContain('"success"');
+		expect(turn("json")).toContain("editor -> reported failure: {");
 	});
 
 	it("has nothing to say about turns that did not reason", () => {

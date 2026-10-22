@@ -1629,13 +1629,23 @@ export function createContextCompactionPrepareTurn(
 		// What this compaction costs, on whichever path it takes: the line it
 		// logs, and the numbers a live gate compares before and after.
 		const meter = createCompactionMeter(context.reportUsage);
+		// What `baseProviderConfig` adds and takes away, again: rebuilt here
+		// from the live config, it had neither. Without the conversation's
+		// format every summary, reviewer and retrospective request quoted tool
+		// results as JSON in a session the model reads as text (f099u, pandorum,
+		// 2026-10-22: `{"query":"edit:manic_miner.html","result":"",...}`).
+		const { notices: _liveNotices, ...liveProviderConfig } =
+			resolveConnectionProviderConfig(config);
 		const builtinOptions: BuiltinCompactionStrategyOptions = {
 			context: compactionContext,
 			// Resolved per turn from the live session config, with the same
 			// precedence as the main request, so the summarizer never sends
 			// credentials the host has since refreshed or replaced.
 			providerConfig: {
-				...resolveConnectionProviderConfig(config),
+				...liveProviderConfig,
+				...(config.toolResultFormat
+					? { toolResultFormat: config.toolResultFormat }
+					: {}),
 				// The lead's summaries say whose side call they are; an
 				// agent's never does (see `sideCallOf` on the options).
 				...(options.sideCallOf ? { sideCallOf: options.sideCallOf } : {}),
