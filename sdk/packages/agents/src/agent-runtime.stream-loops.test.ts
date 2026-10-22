@@ -354,6 +354,65 @@ describe("a call the output cap cut short", () => {
 	});
 });
 
+describe("what a turn at the output cap was writing", () => {
+	// ol-106: iter 27 on pandorum wrote ~81,000 tokens of one `editor` call;
+	// xOllama dropped it at the cap and none of it was kept anywhere.
+	it("is kept when the provider dropped the call", async () => {
+		const written = 'call:editor{path:<|"|>a.js<|"|>,new_text:<|"|>const ex';
+		function* capped(): Iterable<AgentModelEvent> {
+			yield progress(written.slice(0, 20));
+			yield progress(written.slice(20));
+			yield { type: "finish", reason: "max-tokens" };
+		}
+		const cuts: LoopCutRecord[] = [];
+		const model = new CountingModel([capped, answer]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [editor],
+			onLoopCut: (cut) => {
+				cuts.push(cut);
+			},
+		});
+
+		await runtime.run("go");
+		await vi.waitFor(() => expect(cuts).toHaveLength(1));
+
+		expect(cuts[0]).toMatchObject({
+			channel: "tool_arguments",
+			cause: "output_limit",
+			toolName: "editor",
+			toolCallId: "call_1",
+			text: written,
+		});
+	});
+
+	it("is not kept for a call the turn finished", async () => {
+		function* done(): Iterable<AgentModelEvent> {
+			yield progress('{"path":"a.js","new_text":"x"}');
+			yield {
+				type: "tool-call-delta",
+				toolCallId: "call_1",
+				toolName: "editor",
+				inputText: '{"path":"a.js","new_text":"x"}',
+			};
+			yield { type: "finish", reason: "tool-calls" };
+		}
+		const cuts: LoopCutRecord[] = [];
+		const model = new CountingModel([done, answer]);
+		const runtime = new AgentRuntime({
+			model,
+			tools: [editor],
+			onLoopCut: (cut) => {
+				cuts.push(cut);
+			},
+		});
+
+		await runtime.run("go");
+
+		expect(cuts).toEqual([]);
+	});
+});
+
 describe("the loop guard on the reply", () => {
 	it("cuts a reply that repeats a block, and does not keep it", async () => {
 		function* looping(): Iterable<AgentModelEvent> {

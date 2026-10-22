@@ -333,7 +333,8 @@ export interface LoopCutRecord {
 	 * the streaming loop guard; `reasoning_repetition` is the passage measured
 	 * once the turn was complete; `tool_intent_overrun` is a call whose
 	 * `intent` ran past its limit; `unreadable_tool_call` is reply text
-	 * nothing could parse as the call it began.
+	 * nothing could parse as the call it began; `output_limit` is a call the
+	 * turn was still writing when it reached the output cap, which never ran.
 	 */
 	cause:
 		| "reasoning_loop"
@@ -341,7 +342,8 @@ export interface LoopCutRecord {
 		| "argument_loop"
 		| "reasoning_repetition"
 		| "tool_intent_overrun"
-		| "unreadable_tool_call";
+		| "unreadable_tool_call"
+		| "output_limit";
 	/** The streaming guard's verdict, when it was that guard. */
 	verdict?: {
 		kind: string;

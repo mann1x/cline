@@ -3900,6 +3900,7 @@ export class AgentRuntime {
 		// Each call's arguments as they streamed, in the model's own notation:
 		// on xOllama this is the only copy of a call that is cut before it ends.
 		const streamedArguments = new Map<string, string>();
+		const streamedToolNames = new Map<string, string>();
 		const modelToolActivities = new Map<string, AgentModelToolActivity>();
 		const invalidToolCalls: InvalidToolCall[] = [];
 		const sequence: Array<
@@ -4056,6 +4057,9 @@ export class AgentRuntime {
 							...(event.inputText ? { inputText: event.inputText } : {}),
 						},
 					});
+					if (event.toolName) {
+						streamedToolNames.set(event.toolCallId, event.toolName);
+					}
 					if (event.inputText) {
 						streamedArguments.set(
 							event.toolCallId,
@@ -4377,6 +4381,35 @@ export class AgentRuntime {
 				text: describeToolIntentOverrunStub(toolIntentOverrun),
 			});
 			messageMetadata.toolIntentOverrun = toolIntentOverrun;
+		}
+		// A call still being written when the turn reached the output cap. The
+		// provider may drop it (xOllama does) or close it, and either way it
+		// never runs; the text it streamed is the only record of what it was
+		// going to do, and nothing else keeps it.
+		if (finishReason === "max-tokens") {
+			const ran = new Set(
+				content.flatMap((part) =>
+					part.type === "tool-call" ? [part.toolCallId] : [],
+				),
+			);
+			const refused = new Set(invalidToolCalls.map((call) => call.toolCallId));
+			for (const [toolCallId, text] of streamedArguments) {
+				if (
+					(ran.has(toolCallId) && !refused.has(toolCallId)) ||
+					toolCallId === argumentLoop?.toolCallId ||
+					toolCallId === toolIntentOverrun?.toolCallId
+				) {
+					continue;
+				}
+				const toolName = streamedToolNames.get(toolCallId);
+				this.recordCut({
+					channel: "tool_arguments",
+					cause: "output_limit",
+					...(toolName ? { toolName } : {}),
+					toolCallId,
+					text,
+				});
+			}
 		}
 		if (invalidToolCalls.length > 0) {
 			messageMetadata.invalidToolCalls = invalidToolCalls;
