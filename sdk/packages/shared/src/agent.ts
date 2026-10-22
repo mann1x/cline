@@ -847,6 +847,16 @@ export interface DiscardedTurnInput {
 	 */
 	userRequests?: readonly string[];
 	/**
+	 * The conversation as it stands, for the record of what its tools did.
+	 * The same gap as `userRequests`: a note asked for on its own sees no tool
+	 * result, and invented the files and results it did not have.
+	 */
+	transcript?: readonly {
+		role?: string;
+		content?: unknown;
+		metadata?: unknown;
+	}[];
+	/**
 	 * Ask the conversation itself, as its next turn: the request the discarded
 	 * turn was made with, and `instruction` as one more user message, answered
 	 * in prose with no tool call.

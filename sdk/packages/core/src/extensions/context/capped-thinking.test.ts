@@ -1033,6 +1033,80 @@ describe("salvaging a turn discarded at the output cap", () => {
 		);
 	});
 
+	// The reasoning names no file; only the record of the calls does.
+	it("gives a request of its own the task's tool record", async () => {
+		summarizerCalls().length = 0;
+		const writer = createCappedThinkingNoteWriter(config);
+
+		await writer?.({
+			reasoning: "the parser gives up at line 90",
+			windowBound: true,
+			transcript: [
+				{ role: "user", content: [{ type: "text", text: "fix it" }] },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool-call",
+							toolCallId: "c1",
+							toolName: "read_files",
+							input: { files: [{ path: "report.html" }] },
+						},
+					],
+				},
+				{
+					role: "tool",
+					content: [
+						{
+							type: "tool-result",
+							toolCallId: "c1",
+							toolName: "read_files",
+							output: "90 | <div class='total'",
+						},
+					],
+				},
+			],
+		});
+
+		const request = String(summarizerCalls()[0]?.messages[0]?.content);
+		expect(request).toContain("What your tools have done in this task so far");
+		expect(request).toContain("read_files");
+		expect(request).toContain("report.html");
+		expect(request).toContain("<div class='total'");
+	});
+
+	it("leaves the record out of a note asked of the conversation", async () => {
+		const asked: string[] = [];
+		const writer = createCappedThinkingNoteWriter(config);
+
+		await writer?.({
+			reasoning: "the parser gives up at line 91",
+			windowBound: true,
+			continuationRoomTokens: 40_000,
+			continueConversation: async (ask) => {
+				asked.push(ask.instruction);
+				return { text: "continued" };
+			},
+			transcript: [
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool-call",
+							toolCallId: "c1",
+							toolName: "read_files",
+							input: { files: [{ path: "report.html" }] },
+						},
+					],
+				},
+			],
+		});
+
+		// The conversation has the calls in front of it already.
+		expect(asked[0]).toBeDefined();
+		expect(asked[0]).not.toContain("What your tools have done");
+	});
+
 	describe("asked of the conversation itself", () => {
 		const reasoning = "the parser gives up at line 90";
 

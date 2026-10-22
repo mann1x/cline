@@ -39,11 +39,20 @@ import {
 	flattenToolResultContent,
 	formatToolInput,
 	getCompactionSummaryMetadata,
+	isCompactionSummaryMessage,
 	renderUserRequests,
 	resolveSummarizerConfig,
 	truncateText,
 } from "./compaction-shared";
 import { continuationCompactionExcluded } from "./continuation-compaction";
+import {
+	buildToolLedger,
+	evictToolLedger,
+	mergeToolLedger,
+	renderToolLedger,
+	type ToolLedgerEntry,
+	type ToolLedgerMessage,
+} from "./tool-ledger";
 
 /**
  * How close to the budget counts as having hit it.
@@ -498,6 +507,49 @@ function transcriptUserRequests(
 	return requests;
 }
 
+/**
+ * How much of the task's tool record a note request carries: about 3,000
+ * tokens. Over that the ledger evicts reads and edits first, which can be
+ * made again, and keeps the checker runs, which cannot.
+ */
+const NOTE_TOOL_RECORD_MAX_CHARS = 9_000;
+
+/**
+ * What the task's tools have done so far, as the harness recorded each call:
+ * the compaction ledger, over the calls since the last compaction plus the
+ * ones that compaction carried.
+ *
+ * A note asked for in a request of its own sees the capped reasoning and the
+ * capped turn's own calls, and a capped turn usually has none that ran -- its
+ * call is the part the cap cut. Reasoning rarely names the file it is about,
+ * so the note filled the gap itself: on pandorum (lfw1t, 2026-10-20) a 34,572-
+ * character think that named no file came back as a note about `game.js` in a
+ * task on `manic_miner.html`. The record is the harness's account, not the
+ * model's, so the names and results in it are the ones that happened.
+ */
+export function recordedToolCalls(
+	messages: readonly ToolLedgerMessage[],
+	format?: ToolResultFormat,
+): string {
+	let start = 0;
+	let carried: readonly ToolLedgerEntry[] = [];
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const message = messages[index] as MessageWithMetadata;
+		if (isCompactionSummaryMessage(message)) {
+			start = index + 1;
+			carried = getCompactionSummaryMetadata(message)?.toolLedgerEntries ?? [];
+			break;
+		}
+	}
+	const entries = mergeToolLedger(
+		carried,
+		buildToolLedger(messages.slice(start), {
+			...(format ? { toolResultFormat: format } : {}),
+		}),
+	);
+	return renderToolLedger(evictToolLedger(entries, NOTE_TOOL_RECORD_MAX_CHARS));
+}
+
 /** What the capped turn actually called, and what came back. */
 function collectToolOutcomes(
 	messages: readonly MessageWithMetadata[],
@@ -789,6 +841,8 @@ export function buildCappedThinkingRequest(options: {
 	 * next turn already has them in front of it.
 	 */
 	userRequests?: readonly string[];
+	/** The task's tool record (`recordedToolCalls`), on the same terms. */
+	toolRecord?: string;
 }): string {
 	const parts = [
 		options.promptTemplate?.trim() || DEFAULT_CAPPED_THINKING_PROMPT,
@@ -800,6 +854,11 @@ export function buildCappedThinkingRequest(options: {
 	if (requests.length > 0) {
 		parts.push(
 			`What you are being asked to do, as it was typed:\n${requests.join("\n\n")}`,
+		);
+	}
+	if (options.toolRecord?.trim()) {
+		parts.push(
+			`What your tools have done in this task so far, one call each, oldest first, as each one ran. The files, calls and results you name are the ones here and in your reasoning:\n${options.toolRecord.trim()}`,
 		);
 	}
 	// Labels in the tense the note is asked for: a heading in the past is read
@@ -1010,6 +1069,8 @@ async function writeCappedThinkingNote(options: {
 	ask?: ConversationAsk;
 	/** Quoted in a request of its own, which sees nothing of the conversation. */
 	userRequests?: readonly string[];
+	/** The task's tool record, on the same terms. */
+	toolRecord?: string;
 }): Promise<string> {
 	// Sized twice, once for each place the note can be written: the
 	// conversation's next turn has what its last request left, a request of
@@ -1026,6 +1087,9 @@ async function writeCappedThinkingNote(options: {
 				: {}),
 			...(standalone && options.userRequests
 				? { userRequests: options.userRequests }
+				: {}),
+			...(standalone && options.toolRecord
+				? { toolRecord: options.toolRecord }
 				: {}),
 		});
 	const sized = (
@@ -1224,6 +1288,14 @@ export function createCappedThinkingNoteWriter(
 			config,
 			providerConfig,
 			...(input.userRequests ? { userRequests: input.userRequests } : {}),
+			...(input.transcript
+				? {
+						toolRecord: recordedToolCalls(
+							input.transcript,
+							providerConfig.toolResultFormat,
+						),
+					}
+				: {}),
 		});
 		// The second pass, and the reason the caller says whether the window was
 		// what capped the turn.
@@ -1462,6 +1534,10 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 				providerConfig,
 				...(reportUsage ? { reportUsage } : {}),
 				userRequests: transcriptUserRequests(messages),
+				toolRecord: recordedToolCalls(
+					messages,
+					providerConfig.toolResultFormat,
+				),
 			});
 			condensed.set(thinking, note);
 		}

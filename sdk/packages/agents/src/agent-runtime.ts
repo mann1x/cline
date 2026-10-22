@@ -2089,6 +2089,7 @@ export class AgentRuntime {
 				...(text ? { text } : {}),
 				windowBound,
 				...(userRequests.length > 0 ? { userRequests } : {}),
+				transcript: this.state.messages,
 				...(continued
 					? {
 							continueConversation: (ask) =>
