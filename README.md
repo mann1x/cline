@@ -73,7 +73,7 @@ AI coding assistant in your editor.
 Create files, run commands, browse the web,
 and use tools with human-in-the-loop approval.
 
-<a href="https://marketplace.visualstudio.com/items?itemName=mann1x.cerebriline">Install from VS Marketplace</a>
+<a href="https://github.com/mann1x/cline/releases/latest">Download the latest release</a>
 <br><br>
 </td>
 
@@ -109,16 +109,7 @@ npm install @cline/sdk
 
 ## Install
 
-There are three ways to get it.
-
-**From the VS Code Marketplace** ([`mann1x.cerebriline`](https://marketplace.visualstudio.com/items?itemName=mann1x.cerebriline)).
-In VS Code, search for **Cerebriline** in the Extensions panel, or:
-
-```
-code --install-extension mann1x.cerebriline
-```
-
-VS Code then keeps it up to date.
+There are two ways to get it.
 
 **From Open VSX** ([`mann1x.cerebriline`](https://open-vsx.org/extension/mann1x/cerebriline)).
 This is the gallery **VSCodium, Cursor, Windsurf and Gitpod** use, so on those
@@ -129,7 +120,7 @@ it in the Extensions panel, or:
 codium --install-extension mann1x.cerebriline
 ```
 
-Stock VS Code does not read Open VSX: use the Marketplace above, or the `.vsix` below.
+Stock VS Code does not read Open VSX: use the `.vsix` below.
 
 **From the `.vsix`.** Download it from the
 [latest release](https://github.com/mann1x/cline/releases/latest) and install:
@@ -161,7 +152,7 @@ without you asking unless you choose **Auto**.
 | **Auto** | check daily and install a newer release as soon as it is found, then offer to reload |
 
 There is also a **Cerebriline: Check for Updates** command for checking on
-demand. If you installed from the Marketplace or Open VSX your editor already keeps it current,
+demand. If you installed from Open VSX your editor already keeps it current,
 and this check will simply find nothing to report.
 
 ### Upgrading from the mann1x Cline fork
@@ -225,7 +216,7 @@ repository you work on with other people keeps working for everyone.
 |---------|------------|--------------|--------------|
 | **SDK** | Node.js programmatic agent API and extension exports. | [`sdk/`](#) | [CHANGELOG.md](#) |
 | **CLI** | Terminal UI, headless mode, shell commands, and CLI-specific flows. | [`apps/cli/`](#) | [CHANGELOG.md](#) |
-| **VS Code Extension** | The Marketplace extension and extension host integration. | [`/`](#) (WIP migrating) | [CHANGELOG.md](#) |
+| **VS Code Extension** | The VS Code extension and extension host integration. | [`/`](#) (WIP migrating) | [CHANGELOG.md](#) |
 | **JetBrains Plugin** | JetBrains-hosted client that talks to the shared agent core. | Currently we are not open-sourcing JetBrains plugins | - |
 | **Kanban** | Web-based multi-agent task board. | [`cline/kanban`](#) | [CHANGELOG.md](#) |
 | **Docs site** | Public documentation pages. | [`docs/`](#) | - |
