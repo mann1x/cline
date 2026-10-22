@@ -18,6 +18,7 @@ import {
 	CommandExitError,
 	CommandSpawnError,
 	cleanupStaleDetachedCommandLogs,
+	createDetachedLog,
 	createShellExecutor,
 } from "./bash";
 import { RunCommandExecutionController } from "./run-command-execution-controller";
@@ -1251,6 +1252,43 @@ describe("createShellExecutor with inherited stdio", () => {
 			}
 		},
 	);
+});
+
+describe("a detached command's log", () => {
+	// ol-112: the completion marker was written as soon as the exit line was
+	// queued, before it reached the file. A reader that waits for the marker --
+	// the test above, and anything that tails a detached command -- could read
+	// the log without its last line, and under a loaded suite it did.
+	it("is marked complete only once everything written to it is in the file", async () => {
+		const log = createDetachedLog(60_000, {
+			version: 1,
+			executionId: "exec-1",
+			pid: 1,
+			processStartToken: "token-1",
+			detachedAtMs: Date.now(),
+		});
+		const completedAtPath = join(dirname(log.path), "completed-at");
+		try {
+			log.write("started\n");
+			log.write(`${"x".repeat(200_000)}\n`);
+			log.write("[Command exited with code 0]\n");
+			log.complete();
+
+			// The flush is asynchronous; a marker that already exists was written
+			// ahead of it.
+			expect(existsSync(completedAtPath)).toBe(false);
+			const deadline = Date.now() + 10_000;
+			while (!existsSync(completedAtPath) && Date.now() < deadline) {
+				await new Promise((resolve) => setTimeout(resolve, 5));
+			}
+			expect(existsSync(completedAtPath)).toBe(true);
+			const text = await readFile(log.path, "utf8");
+			expect(text.endsWith("[Command exited with code 0]\n")).toBe(true);
+			expect(existsSync(join(dirname(log.path), "active-command"))).toBe(false);
+		} finally {
+			await rm(dirname(log.path), { recursive: true, force: true });
+		}
+	});
 });
 
 describe("CommandSpawnError", () => {

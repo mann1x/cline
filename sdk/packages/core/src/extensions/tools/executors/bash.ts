@@ -745,7 +745,11 @@ function scheduleDetachedLogCleanup(
 	cleanupTimer.unref();
 }
 
-function createDetachedLog(retentionMs: number, marker: DetachedCommandMarker) {
+/** Exported for its own tests: the order of its writes is the contract. */
+export function createDetachedLog(
+	retentionMs: number,
+	marker: DetachedCommandMarker,
+) {
 	const directory = mkdtempSync(join(tmpdir(), DETACHED_LOG_DIRECTORY_PREFIX));
 	const path = join(directory, DETACHED_LOG_FILENAME);
 	const activeCommandPath = join(
@@ -776,15 +780,16 @@ function createDetachedLog(retentionMs: number, marker: DetachedCommandMarker) {
 		// failure must not become an unhandled stream error in the hub process.
 		writable = false;
 	});
-	stream.once("close", () => {
-		writable = false;
-		streamClosed = true;
-		if (completed) scheduleCleanup();
-	});
-
-	const complete = () => {
-		if (completed) return;
-		completed = true;
+	// The marker says the log is whole, so it is written once the log's last
+	// write has reached the file, not when it was queued. Written first, a
+	// reader that waits for it could read the log without the exit line still
+	// in the stream's buffer -- under load, for seconds (ol-112). A host that
+	// dies in between leaves the active marker, which the startup reaper
+	// resolves by probing the process.
+	let marked = false;
+	const markCompleted = () => {
+		if (marked) return;
+		marked = true;
 		try {
 			writeLifecycleMarker(completedAtPath, String(Date.now()));
 		} catch {
@@ -796,12 +801,27 @@ function createDetachedLog(retentionMs: number, marker: DetachedCommandMarker) {
 		} catch {
 			// Cleanup remains best effort and must not surface from a stream event.
 		}
+	};
+	stream.once("close", () => {
+		writable = false;
+		streamClosed = true;
+		if (completed) {
+			// A stream that failed never finishes; it still closes.
+			markCompleted();
+			scheduleCleanup();
+		}
+	});
+
+	const complete = () => {
+		if (completed) return;
+		completed = true;
 		if (streamClosed) {
+			markCompleted();
 			scheduleCleanup();
 			return;
 		}
 		writable = false;
-		stream.end();
+		stream.end(markCompleted);
 	};
 
 	return {
