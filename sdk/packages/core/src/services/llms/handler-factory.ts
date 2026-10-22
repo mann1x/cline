@@ -126,6 +126,19 @@ function buildGatewayProviderOptions(
 		if (config.sideCallOf) {
 			options.polykvSideCallOf = config.sideCallOf;
 		}
+		// The context size the user set, apart from the model's window
+		// (`xollama.ts`), and an agent node's share of the window
+		// (`opencoti-agent-window.ts`). Both were lifted by llms' own builder
+		// and never by this one, the one the conversation is built with: with
+		// "Book a context window" off, xOllama was asked for no size at all and
+		// gave every turn its prompt plus the output cap, 113,707 of a 192,000
+		// setting (pandorum, 2026-10-22).
+		if (config.requestedContextWindow) {
+			options.requestedContextWindow = config.requestedContextWindow;
+		}
+		if (config.agentWindow) {
+			options.agentWindow = config.agentWindow;
+		}
 		// Generation notices, for a conversation's own turns only. A handler
 		// with no conversation behind it -- a title, a commit message, the
 		// vision probe -- writes text that is stored as it comes back, and a
