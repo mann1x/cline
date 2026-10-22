@@ -553,7 +553,16 @@ const LibraryBrowser = ({ retrieval }: LibraryBrowserProps) => {
 					onClick={() => setPending({ kind: "newSection", value: "" })}>
 					New section
 				</VSCodeButton>
-				<VSCodeButton appearance="secondary" disabled={busy} onClick={() => void act({ action: "libraryImport" })}>
+				<VSCodeButton
+					appearance="secondary"
+					disabled={busy}
+					onClick={() =>
+						void act({
+							action: "libraryImport",
+							// A book goes on the shelf that is open.
+							...(open !== undefined && open !== TRASH ? { shelfId: open } : {}),
+						})
+					}>
 					Import…
 				</VSCodeButton>
 				<VSCodeButton

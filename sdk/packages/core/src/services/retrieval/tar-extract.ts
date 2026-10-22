@@ -8,7 +8,7 @@
  * folder is refused.
  */
 
-import { createWriteStream, mkdirSync } from "node:fs";
+import { createReadStream, createWriteStream, mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, sep } from "node:path";
 import { createGunzip } from "node:zlib";
 
@@ -38,6 +38,30 @@ function isHeader(block: Buffer): boolean {
 		sum += index >= 148 && index < 156 ? 0x20 : block[index];
 	}
 	return recorded > 0 && sum === recorded;
+}
+
+/**
+ * Whether a file is a gzipped tar, read from its first block alone: a
+ * Library export is one, a gzipped book is not.
+ */
+export async function isTarGz(file: string): Promise<boolean> {
+	const gunzip = createGunzip();
+	const source = createReadStream(file);
+	source.on("error", (error) => gunzip.destroy(error));
+	source.pipe(gunzip);
+	let head = Buffer.alloc(0);
+	try {
+		for await (const chunk of gunzip as AsyncIterable<Buffer>) {
+			head = Buffer.concat([head, chunk]);
+			if (head.length >= BLOCK) break;
+		}
+	} catch {
+		return false;
+	} finally {
+		source.destroy();
+		gunzip.destroy();
+	}
+	return head.length >= BLOCK && isHeader(head.subarray(0, BLOCK));
 }
 
 /** Thrown when what was unpacked from gzip is not a tar archive. */

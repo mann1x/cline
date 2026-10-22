@@ -730,317 +730,387 @@ function createLibraryAddTool(options: CreateLibraryToolsOptions): AgentTool {
 		},
 		timeoutMs: LONG_CALL_MS,
 		retryable: false,
-		execute: async (input: unknown, context): Promise<string> => {
-			const config = activeConfig(options);
-			if (!config) return LIBRARY_OFF;
-			const request = (input ?? {}) as Record<string, unknown>;
-			const library = options.library ?? sharedLibrary();
-			const catalogue = library.catalogue;
-			const paths = strings(request.paths ?? request.path);
-			if (paths.length === 0) {
-				return "`library_add` needs `paths`: the book's files.";
-			}
-			const ifExists = text(request.if_exists) || "stop";
-			const bookReference = text(request.book);
-			let target: LibraryBook | undefined;
-			if (bookReference) {
-				const found = oneBook(catalogue, bookReference);
-				if (typeof found === "string") return found;
-				target = found;
-			} else {
-				if (!text(request.title)) {
-					return "A new book needs a `title`. Or name an existing `book` to add the files to.";
-				}
-				if (!text(request.description)) {
-					return "A new book needs a `description`: what it is and what it covers, in two or three sentences.";
-				}
-			}
-
-			const { files, notes } = await resolveFiles(options.cwd, paths);
-			const lines = [...notes];
-			const read: Awaited<ReturnType<typeof readSource>>[] = [];
-			const run = new LibraryImportRun(
-				`Adding ${plural(files.length, "file")}`,
-				files,
+		execute: (input: unknown, context): Promise<string> =>
+			addBook(
+				options,
+				(input ?? {}) as Record<string, unknown>,
 				context,
-				options.log,
-			);
-			try {
-				for (const file of files) {
-					if (run.isCancelled) break;
-					run.start(file);
-					try {
-						const source = await run.guard(
-							readSource(file, config, library, true, run),
-						);
-						read.push(source);
-						// Read, and not yet in the Library.
-						run.stage(file, "read, waiting to be added");
-					} catch (error) {
-						if (run.isCancelled) break;
-						lines.push(`${file}: not read, ${errorText(error)}`);
-						run.fail(file, errorText(error));
-					}
-				}
-				if (run.isCancelled) {
-					throw run.cancellation(["Nothing was added to the Library."]);
-				}
-				if (read.length === 0) {
-					return [
-						"Nothing was added: no file could be read.",
-						...lines,
-						"",
-						...run.report(),
-					].join("\n");
-				}
-
-				// Files that are versions of one work are not put in one book
-				// unasked: which to keep, and whether together, is the user's.
-				if (ifExists === "stop") {
-					const versions: string[] = [];
-					for (let a = 0; a < read.length; a++) {
-						for (let b = a + 1; b < read.length; b++) {
-							const similarity = fingerprintSimilarity(
-								read[a].fingerprint,
-								read[b].fingerprint,
-							);
-							if (
-								read[a].sha256 !== read[b].sha256 &&
-								similarity >= RELATED_TEXT &&
-								similarity < SAME_TEXT &&
-								sameDocument(read[a].runningHeads, read[b].runningHeads) !==
-									false
-							) {
-								versions.push(
-									`${read[a].name} and ${read[b].name} share ${Math.round(similarity * 100)}% of their text`,
-								);
-							}
-						}
-					}
-					if (versions.length > 0) {
-						return [
-							"Nothing was added. These files look like different versions of one work, not one book in several formats:",
-							...versions.map((line) => `- ${line}`),
-							'Tell the user and ask: keep them as separate books (one library_add call each, the second with if_exists "new_version"), keep only one, or put them together in this one book (call again with if_exists "add_anyway").',
-						].join("\n");
-					}
-				}
-
-				// Is it here already. Each file is judged, and the book by its title.
-				const metadata = metadataFrom(request);
-				const judgedFiles = read.map((source) => ({
-					source,
-					judged: judge(
-						catalogue,
-						{
-							sha256: source.sha256,
-							isbn: metadata.isbn ?? source.isbn,
-							title: target ? undefined : text(request.title),
-							authors: metadata.authors,
-							fingerprint: source.fingerprint,
-							runningHeads: source.runningHeads,
-						},
-						target?.id,
-					),
-				}));
-				const here = judgedFiles.filter(
-					(entry) => entry.judged.verdict === "here",
-				);
-				const doubtful = judgedFiles.filter(
-					(entry) =>
-						entry.judged.verdict === "same book" ||
-						entry.judged.verdict === "other version",
-				);
-				if (ifExists !== "add_anyway" && here.length === judgedFiles.length) {
-					return [
-						"Nothing was added: every file is already in the Library.",
-						...here.map(
-							(entry) => `${entry.source.file}: ${entry.judged.line}`,
-						),
-					].join("\n");
-				}
-				if (doubtful.length > 0 && ifExists === "stop") {
-					return [
-						"Nothing was added. This looks like a book the Library already has:",
-						...doubtful.map(
-							(entry) => `${entry.source.file}: ${entry.judged.line}`,
-						),
-						...here.map(
-							(entry) => `${entry.source.file}: ${entry.judged.line}`,
-						),
-						'Tell the user what was found and ask: keep both (call again with if_exists "new_version"), replace the old one (if_exists "replace"), or leave it.',
-					].join("\n");
-				}
-
-				const made: string[] = [];
-				const replaced: LibraryBook[] = [];
-				if (!target) {
-					const place = placeFor(catalogue, request);
-					if (typeof place === "string") return place;
-					made.push(...place.made);
-					const older = [
-						...new Map(
-							doubtful
-								.flatMap((entry) => entry.judged.matches)
-								.filter((match) => !match.book.trashedAt)
-								.map((match) => [match.book.id, match.book]),
-						).values(),
-					];
-					if (ifExists === "new_version" && older.length > 0) {
-						metadata.versionOf = older.map((book) => ({
-							uid: book.uid,
-							title: book.title,
-							...(book.metadata.edition
-								? { edition: book.metadata.edition }
-								: {}),
-						}));
-					}
-					if (ifExists === "replace") {
-						for (const book of older) {
-							catalogue.trashBook(book.id);
-							replaced.push(book);
-						}
-					}
-					const first = read[0];
-					if (!metadata.authors && first.document.author) {
-						metadata.authors = [first.document.author];
-					}
-					if (!metadata.isbn && first.isbn) metadata.isbn = first.isbn;
-					target = catalogue.createBook({
-						shelfId: place.shelfId,
-						title: text(request.title),
-						description: text(request.description),
-						metadata,
-					});
-					lines.push(
-						`New book ${describeBookLine(target).split(":")[0]} on ${place.label}${made.length ? ` (made ${made.join(" and ")})` : ""}.`,
-					);
-				}
-
-				const describe =
-					config.settings.describeImages &&
-					config.settings.describeImagesLimit > 0
-						? await options.getDescribeImages?.()
-						: undefined;
-				let added = 0;
-				let passages = 0;
-				let pictures = 0;
-				let described = 0;
-				let undescribed = 0;
-				for (const { source, judged } of judgedFiles) {
-					if (run.isCancelled) break;
-					if (judged.verdict === "here" && ifExists !== "add_anyway") {
-						lines.push(`${source.name}: left out. ${judged.line}`);
-						run.done(source.file, "left out, it is already in the Library");
-						continue;
-					}
-					try {
-						const leftOut = [...source.document.problems];
-						if (source.document.images.length > 0) {
-							if (describe) {
-								run.stage(
-									source.file,
-									`describing ${plural(Math.min(source.document.images.length, config.settings.describeImagesLimit), "picture")}`,
-								);
-								const result = await run.guard(
-									describeBookPictures(source.document, describe, {
-										documentName: source.name,
-										limit: config.settings.describeImagesLimit,
-									}),
-								);
-								described += result.described;
-								undescribed += result.candidates - result.described;
-								if (result.candidates > result.described) {
-									leftOut.push(
-										`${result.candidates - result.described} of ${plural(result.candidates, "picture")} got no description from the vision model`,
-									);
-								}
-							} else {
-								undescribed += source.document.images.length;
-							}
-						}
-						run.stage(source.file, "adding to the book");
-						const result = await catalogue.addSource(
-							target.id,
-							{
-								kind: "file",
-								name: source.name,
-								path: source.file,
-								text: source.document.markdown,
-								title: source.document.title,
-								metadata: {
-									format: source.document.format,
-									...(source.document.author
-										? { author: source.document.author }
-										: {}),
-									...(source.isbn ? { isbn: source.isbn } : {}),
-								},
-								images: source.document.images,
-							},
-							config.settings,
-						);
-						if (result.outcome === "unchanged") {
-							lines.push(`${source.name}: already a source of this book.`);
-							run.done(source.file, "already a source of this book");
-							continue;
-						}
-						added++;
-						passages += result.passages;
-						pictures += result.images;
-						run.done(
-							source.file,
-							`added, ${readOutcome(source)}, ${plural(result.passages, "passage")}${result.images ? `, ${plural(result.images, "picture")}` : ""}`,
-							leftOut,
-						);
-						lines.push(
-							`${source.name}: added as source ${result.source.id}, ${plural(result.passages, "passage")}${result.images ? `, ${plural(result.images, "picture")}` : ""}${source.document.notes.length ? `. ${source.document.notes.join(" ")}` : ""}`,
-						);
-					} catch (error) {
-						if (run.isCancelled) break;
-						lines.push(`${source.name}: not added, ${errorText(error)}`);
-						run.fail(source.file, `not added, ${errorText(error)}`);
-					}
-				}
-				if (run.isCancelled) {
-					throw run.cancellation([
-						added > 0
-							? `"${target.title}" (#${target.id}) is in the Library with ${plural(added, "source")} of the ${plural(judgedFiles.length, "file")}; the rest are not in it. Remove the book with library_organize delete_book if it should not stay half added.`
-							: `"${target.title}" (#${target.id}) was made and has no source from this call.`,
-					]);
-				}
-				const summary = [
-					`"${target.title}" (#${target.id}): ${plural(added, "source")} added, ${plural(passages, "passage")}, searchable by keyword now.`,
-				];
-				if (pictures > 0) {
-					summary.push(
-						describe
-							? `${plural(pictures, "picture")} kept, ${described} described${undescribed > 0 ? `; ${undescribed} have no description` : ""}.`
-							: `${plural(pictures, "picture")} kept, none described: ${config.settings.describeImages ? "no model that reads images is set (Settings > Library, or the Vision tab) and this conversation's model is not reported as reading images" : "describing pictures is turned off in Settings > Library"}.`,
-					);
-				}
-				for (const book of replaced) {
-					summary.push(
-						`Replaced #${book.id} "${book.title}", which is in the trash for ${TRASH_DAYS} days.`,
-					);
-				}
-				if (added > 0) {
-					const embedded = await embedNew(
-						library,
-						config,
-						[target.collectionId],
-						options,
-						context?.signal,
-					);
-					if (embedded) summary.push(embedded);
-				}
-				return [...summary, ...lines, "", ...run.report()].join("\n");
-			} finally {
-				// The pictures were held on disk until filed; filed or not, they go.
-				await Promise.all(read.map((source) => source.document.release()));
-				run.close();
-			}
-		},
+				false,
+			),
 	});
+}
+
+/**
+ * Add a book: the work of \`library_add\`, and of the Library panel's Import.
+ *
+ * From the panel no one names the book or writes its description, so its
+ * title is the one the file gives and its description is left for the
+ * librarian; a book that looks like one already there is still refused.
+ */
+async function addBook(
+	options: CreateLibraryToolsOptions,
+	request: Record<string, unknown>,
+	context: AgentToolContext | undefined,
+	fromPanel: boolean,
+): Promise<string> {
+	const config = activeConfig(options);
+	if (!config) return LIBRARY_OFF;
+	const library = options.library ?? sharedLibrary();
+	const catalogue = library.catalogue;
+	const paths = strings(request.paths ?? request.path);
+	if (paths.length === 0) {
+		return "`library_add` needs `paths`: the book's files.";
+	}
+	const ifExists = text(request.if_exists) || "stop";
+	const bookReference = text(request.book);
+	let target: LibraryBook | undefined;
+	if (bookReference) {
+		const found = oneBook(catalogue, bookReference);
+		if (typeof found === "string") return found;
+		target = found;
+	} else if (!fromPanel) {
+		if (!text(request.title)) {
+			return "A new book needs a `title`. Or name an existing `book` to add the files to.";
+		}
+		if (!text(request.description)) {
+			return "A new book needs a `description`: what it is and what it covers, in two or three sentences.";
+		}
+	}
+
+	const { files, notes } = await resolveFiles(options.cwd, paths);
+	const lines = [...notes];
+	const read: Awaited<ReturnType<typeof readSource>>[] = [];
+	const run = new LibraryImportRun(
+		`Adding ${plural(files.length, "file")}`,
+		files,
+		context,
+		options.log,
+	);
+	try {
+		for (const file of files) {
+			if (run.isCancelled) break;
+			run.start(file);
+			try {
+				const source = await run.guard(
+					readSource(file, config, library, true, run),
+				);
+				read.push(source);
+				// Read, and not yet in the Library.
+				run.stage(file, "read, waiting to be added");
+			} catch (error) {
+				if (run.isCancelled) break;
+				lines.push(`${file}: not read, ${errorText(error)}`);
+				run.fail(file, errorText(error));
+			}
+		}
+		if (run.isCancelled) {
+			throw run.cancellation(["Nothing was added to the Library."]);
+		}
+		if (read.length === 0) {
+			return [
+				"Nothing was added: no file could be read.",
+				...lines,
+				"",
+				...run.report(),
+			].join("\n");
+		}
+
+		// From the panel nobody has named the book: it is named by itself.
+		const title = text(request.title) || (fromPanel ? titleOf(read[0]) : "");
+
+		// Files that are versions of one work are not put in one book
+		// unasked: which to keep, and whether together, is the user's.
+		if (ifExists === "stop") {
+			const versions: string[] = [];
+			for (let a = 0; a < read.length; a++) {
+				for (let b = a + 1; b < read.length; b++) {
+					const similarity = fingerprintSimilarity(
+						read[a].fingerprint,
+						read[b].fingerprint,
+					);
+					if (
+						read[a].sha256 !== read[b].sha256 &&
+						similarity >= RELATED_TEXT &&
+						similarity < SAME_TEXT &&
+						sameDocument(read[a].runningHeads, read[b].runningHeads) !== false
+					) {
+						versions.push(
+							`${read[a].name} and ${read[b].name} share ${Math.round(similarity * 100)}% of their text`,
+						);
+					}
+				}
+			}
+			if (versions.length > 0) {
+				return [
+					"Nothing was added. These files look like different versions of one work, not one book in several formats:",
+					...versions.map((line) => `- ${line}`),
+					'Tell the user and ask: keep them as separate books (one library_add call each, the second with if_exists "new_version"), keep only one, or put them together in this one book (call again with if_exists "add_anyway").',
+				].join("\n");
+			}
+		}
+
+		// Is it here already. Each file is judged, and the book by its title.
+		const metadata = metadataFrom(request);
+		const judgedFiles = read.map((source) => ({
+			source,
+			judged: judge(
+				catalogue,
+				{
+					sha256: source.sha256,
+					isbn: metadata.isbn ?? source.isbn,
+					title: target ? undefined : title,
+					authors: metadata.authors,
+					fingerprint: source.fingerprint,
+					runningHeads: source.runningHeads,
+				},
+				target?.id,
+			),
+		}));
+		const here = judgedFiles.filter((entry) => entry.judged.verdict === "here");
+		const doubtful = judgedFiles.filter(
+			(entry) =>
+				entry.judged.verdict === "same book" ||
+				entry.judged.verdict === "other version",
+		);
+		if (ifExists !== "add_anyway" && here.length === judgedFiles.length) {
+			return [
+				"Nothing was added: every file is already in the Library.",
+				...here.map((entry) => `${entry.source.file}: ${entry.judged.line}`),
+			].join("\n");
+		}
+		if (doubtful.length > 0 && ifExists === "stop") {
+			return [
+				"Nothing was added. This looks like a book the Library already has:",
+				...doubtful.map(
+					(entry) => `${entry.source.file}: ${entry.judged.line}`,
+				),
+				...here.map((entry) => `${entry.source.file}: ${entry.judged.line}`),
+				fromPanel
+					? "To keep both, or to replace the old one, ask the librarian in a chat to add it."
+					: 'Tell the user what was found and ask: keep both (call again with if_exists "new_version"), replace the old one (if_exists "replace"), or leave it.',
+			].join("\n");
+		}
+
+		const made: string[] = [];
+		const replaced: LibraryBook[] = [];
+		if (!target) {
+			const place = placeFor(catalogue, request);
+			if (typeof place === "string") return place;
+			made.push(...place.made);
+			const older = [
+				...new Map(
+					doubtful
+						.flatMap((entry) => entry.judged.matches)
+						.filter((match) => !match.book.trashedAt)
+						.map((match) => [match.book.id, match.book]),
+				).values(),
+			];
+			if (ifExists === "new_version" && older.length > 0) {
+				metadata.versionOf = older.map((book) => ({
+					uid: book.uid,
+					title: book.title,
+					...(book.metadata.edition ? { edition: book.metadata.edition } : {}),
+				}));
+			}
+			if (ifExists === "replace") {
+				for (const book of older) {
+					catalogue.trashBook(book.id);
+					replaced.push(book);
+				}
+			}
+			const first = read[0];
+			if (!metadata.authors && first.document.author) {
+				metadata.authors = [first.document.author];
+			}
+			if (!metadata.isbn && first.isbn) metadata.isbn = first.isbn;
+			target = catalogue.createBook({
+				shelfId: place.shelfId,
+				title,
+				description: text(request.description),
+				metadata,
+			});
+			lines.push(
+				`New book ${describeBookLine(target).split(":")[0]} on ${place.label}${made.length ? ` (made ${made.join(" and ")})` : ""}.`,
+			);
+		}
+
+		const describe =
+			config.settings.describeImages && config.settings.describeImagesLimit > 0
+				? await options.getDescribeImages?.()
+				: undefined;
+		let added = 0;
+		let passages = 0;
+		let pictures = 0;
+		let described = 0;
+		let undescribed = 0;
+		for (const { source, judged } of judgedFiles) {
+			if (run.isCancelled) break;
+			if (judged.verdict === "here" && ifExists !== "add_anyway") {
+				lines.push(`${source.name}: left out. ${judged.line}`);
+				run.done(source.file, "left out, it is already in the Library");
+				continue;
+			}
+			try {
+				const leftOut = [...source.document.problems];
+				if (source.document.images.length > 0) {
+					if (describe) {
+						run.stage(
+							source.file,
+							`describing ${plural(Math.min(source.document.images.length, config.settings.describeImagesLimit), "picture")}`,
+						);
+						const result = await run.guard(
+							describeBookPictures(source.document, describe, {
+								documentName: source.name,
+								limit: config.settings.describeImagesLimit,
+							}),
+						);
+						described += result.described;
+						undescribed += result.candidates - result.described;
+						if (result.candidates > result.described) {
+							leftOut.push(
+								`${result.candidates - result.described} of ${plural(result.candidates, "picture")} got no description from the vision model`,
+							);
+						}
+					} else {
+						undescribed += source.document.images.length;
+					}
+				}
+				run.stage(source.file, "adding to the book");
+				const result = await catalogue.addSource(
+					target.id,
+					{
+						kind: "file",
+						name: source.name,
+						path: source.file,
+						text: source.document.markdown,
+						title: source.document.title,
+						metadata: {
+							format: source.document.format,
+							...(source.document.author
+								? { author: source.document.author }
+								: {}),
+							...(source.isbn ? { isbn: source.isbn } : {}),
+						},
+						images: source.document.images,
+					},
+					config.settings,
+				);
+				if (result.outcome === "unchanged") {
+					lines.push(`${source.name}: already a source of this book.`);
+					run.done(source.file, "already a source of this book");
+					continue;
+				}
+				added++;
+				passages += result.passages;
+				pictures += result.images;
+				run.done(
+					source.file,
+					`added, ${readOutcome(source)}, ${plural(result.passages, "passage")}${result.images ? `, ${plural(result.images, "picture")}` : ""}`,
+					leftOut,
+				);
+				lines.push(
+					`${source.name}: added as source ${result.source.id}, ${plural(result.passages, "passage")}${result.images ? `, ${plural(result.images, "picture")}` : ""}${source.document.notes.length ? `. ${source.document.notes.join(" ")}` : ""}`,
+				);
+			} catch (error) {
+				if (run.isCancelled) break;
+				lines.push(`${source.name}: not added, ${errorText(error)}`);
+				run.fail(source.file, `not added, ${errorText(error)}`);
+			}
+		}
+		if (run.isCancelled) {
+			throw run.cancellation([
+				added > 0
+					? `"${target.title}" (#${target.id}) is in the Library with ${plural(added, "source")} of the ${plural(judgedFiles.length, "file")}; the rest are not in it. Remove the book with library_organize delete_book if it should not stay half added.`
+					: `"${target.title}" (#${target.id}) was made and has no source from this call.`,
+			]);
+		}
+		const summary = [
+			`"${target.title}" (#${target.id}): ${plural(added, "source")} added, ${plural(passages, "passage")}, searchable by keyword now.`,
+		];
+		if (pictures > 0) {
+			summary.push(
+				describe
+					? `${plural(pictures, "picture")} kept, ${described} described${undescribed > 0 ? `; ${undescribed} have no description` : ""}.`
+					: `${plural(pictures, "picture")} kept, none described: ${config.settings.describeImages ? (fromPanel ? "no model that reads images is set (Settings > Library, or the Vision tab)" : "no model that reads images is set (Settings > Library, or the Vision tab) and this conversation's model is not reported as reading images") : "describing pictures is turned off in Settings > Library"}.`,
+			);
+		}
+		for (const book of replaced) {
+			summary.push(
+				`Replaced #${book.id} "${book.title}", which is in the trash for ${TRASH_DAYS} days.`,
+			);
+		}
+		if (added > 0) {
+			const embedded = await embedNew(
+				library,
+				config,
+				[target.collectionId],
+				options,
+				context?.signal,
+			);
+			if (embedded) summary.push(embedded);
+		}
+		return [...summary, ...lines, "", ...run.report()].join("\n");
+	} finally {
+		// The pictures were held on disk until filed; filed or not, they go.
+		await Promise.all(read.map((source) => source.document.release()));
+		run.close();
+	}
+}
+
+/** A book's title from its file: its own metadata, or its name. */
+function titleOf(source: ReadSource): string {
+	const own = source.document.title?.trim();
+	if (own) return own;
+	const name = source.name.replace(/\.gz$/i, "");
+	const stem = name.slice(0, name.length - path.extname(name).length) || name;
+	return stem.replace(/[._]+/g, " ").trim() || name;
+}
+
+/**
+ * What the panel's Import offers to open, without the dot: every file a book
+ * is read from, gzipped or not, and the Library's own export.
+ */
+export const LIBRARY_IMPORT_EXTENSIONS: readonly string[] = [
+	...new Set(
+		[...TEXT_EXTENSIONS, ...DOCUMENT_EXTENSIONS].map((extension) =>
+			extension.slice(1),
+		),
+	),
+	"gz",
+];
+
+/** Where a book added from the panel goes when no shelf is open. */
+export const PANEL_IMPORT_PLACE = { section: "Unsorted", shelf: "Imported" };
+
+/**
+ * Add one file to the Library as a book, from the Library panel: on the
+ * shelf the panel has open, or on Unsorted / Imported, made when missing.
+ * Resolves with what to tell the user.
+ */
+export async function addBookFromPanel(
+	options: CreateLibraryToolsOptions,
+	file: string,
+	place: { shelfId?: number } = {},
+): Promise<string> {
+	if (!activeConfig(options)) {
+		return "The Library is turned off: turn it on in Settings > Library first.";
+	}
+	const library = options.library ?? sharedLibrary();
+	const open =
+		place.shelfId !== undefined
+			? library.catalogue.shelf(place.shelfId)
+			: undefined;
+	return addBook(
+		options,
+		{
+			paths: [file],
+			...(open
+				? { section: open.section, shelf: open.name }
+				: PANEL_IMPORT_PLACE),
+		},
+		undefined,
+		true,
+	);
 }
 
 /** A picture too small to be one: a rule, a bullet, an icon. */

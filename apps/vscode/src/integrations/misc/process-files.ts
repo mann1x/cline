@@ -16,6 +16,7 @@ export async function selectFiles(imagesAllowed: boolean): Promise<{ images: str
 	const showDialogueResponse = await HostProvider.window.showOpenDialogue({
 		canSelectMany: true,
 		openLabel: "Select",
+		namedFilters: {},
 		filters: {
 			files: imagesAllowed ? [...IMAGE_EXTENSIONS, ...OTHER_FILE_EXTENSIONS] : OTHER_FILE_EXTENSIONS,
 		},

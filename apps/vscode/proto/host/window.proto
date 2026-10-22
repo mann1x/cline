@@ -61,6 +61,10 @@ message ShowOpenDialogueRequest {
   optional bool can_select_many = 2;
   optional string open_label = 3;
   optional ShowOpenDialogueFilterOption filters = 4;
+  // Named file types, listed in the dialog in this order, e.g.
+  // "Books": { "extensions": ["epub", "pdf"] }, "All files": { "extensions": ["*"] }.
+  // Used instead of `filters` when set.
+  map<string, FileExtensionList> named_filters = 5;
 }
 
 message ShowOpenDialogueFilterOption {

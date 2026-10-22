@@ -1343,8 +1343,11 @@ export {
 } from "./extensions/tools/jev";
 // The Library: documents kept for retrieval, and the tools the model has on it.
 export {
+	addBookFromPanel,
 	createLibrarianTools,
 	LIBRARIAN_TOOL_NAMES,
+	LIBRARY_IMPORT_EXTENSIONS,
+	PANEL_IMPORT_PLACE,
 } from "./extensions/tools/librarian-tools";
 export {
 	cancelLibraryImports,
@@ -1799,6 +1802,7 @@ export type {
 	RetrievedHit,
 	RetrieveResult,
 } from "./services/retrieval/retrieve";
+export { isTarGz } from "./services/retrieval/tar-extract";
 export {
 	SDD_DATABASE,
 	SDD_DIRECTORY,

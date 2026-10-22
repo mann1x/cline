@@ -176,6 +176,11 @@ export {
 	rankQuestionOptions,
 } from "../../../../sdk/packages/core/src/extensions/tools/jev"
 export {
+	addBookFromPanel,
+	LIBRARY_IMPORT_EXTENSIONS,
+	PANEL_IMPORT_PLACE,
+} from "../../../../sdk/packages/core/src/extensions/tools/librarian-tools"
+export {
 	cancelLibraryImports,
 	hasActiveLibraryImports,
 } from "../../../../sdk/packages/core/src/extensions/tools/library-import-run"
@@ -268,6 +273,7 @@ export {
 } from "../../../../sdk/packages/core/src/services/retrieval/library"
 export { closeSharedMemories, sharedMemory } from "../../../../sdk/packages/core/src/services/retrieval/memory"
 export { createMemoryRecaller } from "../../../../sdk/packages/core/src/services/retrieval/memory-recall"
+export { isTarGz } from "../../../../sdk/packages/core/src/services/retrieval/tar-extract"
 export { captureGitSnapshot } from "../../../../sdk/packages/core/src/services/telemetry/core-events"
 // From source: `resumed-compaction.ts` rebases a saved compaction with these,
 // and a stub that always "projects" would pass a test of exactly that.

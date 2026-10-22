@@ -235,6 +235,7 @@ async function act(request: RetrievalAction, outcome: Outcome): Promise<string |
 			const chosen = await HostProvider.window.showOpenDialogue({
 				canSelectMany: false,
 				openLabel: "Import memory",
+				namedFilters: {},
 				filters: { files: ["json"] },
 			})
 			const path = chosen.paths[0]

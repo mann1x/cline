@@ -1,7 +1,10 @@
 import {
+	addBookFromPanel,
 	cancelLibraryImports,
 	isLibrarianEnabled,
+	isTarGz,
 	LIBRARIAN_SKILL_NAME,
+	LIBRARY_IMPORT_EXTENSIONS,
 	type LibraryBook,
 	scrapePage,
 	setBundledSkillEnabled,
@@ -20,7 +23,14 @@ import type {
 } from "@/shared/retrieval-status"
 import { Logger } from "@/shared/services/Logger"
 import { ensureBaseUrlScheme } from "./cline-session-factory"
-import { readEmbeddingEndpoint, readLibrarySettings, readScrapeConfig, readScrapeSettings } from "./library-config"
+import {
+	readEmbeddingEndpoint,
+	readLibraryImageDescriber,
+	readLibrarySettings,
+	readLibraryToolsConfig,
+	readScrapeConfig,
+	readScrapeSettings,
+} from "./library-config"
 
 /**
  * The Library's shelves, for the Settings panel that browses them: what is
@@ -278,32 +288,62 @@ export async function runLibraryAction(request: LibraryAction, outcome: Outcome)
 			return `Wrote ${count(result.books, "book")} (${(result.bytes / 1024 / 1024).toFixed(1)} MB) to ${result.file}. Vectors are not in it; they are made again where it is imported.`
 		}
 		case "libraryImport": {
+			// Books first, as the button is mostly for them; a Library export
+			// is a `.gz` and is in the same list.
 			const chosen = await HostProvider.window.showOpenDialogue({
-				canSelectMany: false,
+				canSelectMany: true,
 				openLabel: "Import into the Library",
-				filters: { files: ["gz"] },
+				namedFilters: {
+					"Books and Library exports": { extensions: [...LIBRARY_IMPORT_EXTENSIONS] },
+					"All files": { extensions: ["*"] },
+				},
 			})
-			const path = chosen.paths[0]
-			if (!path) {
+			if (chosen.paths.length === 0) {
 				return undefined
 			}
-			const result = await catalogue.import(path, {
-				settings,
-				...(request.existing ? { existing: request.existing } : {}),
-			})
-			const embedding = readEmbeddingEndpoint()
-			if (embedding && result.imported.length > 0) {
-				// In the background: a shelf of books is many requests, and the
-				// panel shows what is left to embed either way.
-				void library.embedPending({ embedding, settings }).catch((error) => {
-					Logger.warn(`[Library] Embedding the imported books stopped: ${error}`)
-				})
+			const { existing, shelfId } = request
+			const lines: string[] = []
+			for (const path of chosen.paths) {
+				try {
+					lines.push(
+						(await isTarGz(path))
+							? await importExport(path)
+							: await addBookFromPanel(
+									{
+										cwd: process.cwd(),
+										getConfig: readLibraryToolsConfig,
+										getDescribeImages: readLibraryImageDescriber,
+										log: (message) => Logger.log(`[Library] ${message}`),
+									},
+									path,
+									shelfId !== undefined ? { shelfId } : {},
+								),
+					)
+				} catch (error) {
+					lines.push(`${path}: not imported, ${error instanceof Error ? error.message : String(error)}`)
+				}
 			}
-			return `Imported ${count(result.imported.length, "book")}${
-				result.skipped.length
-					? `; left out ${result.skipped.map((entry) => `"${entry.title}" (${entry.reason})`).join(", ")}`
-					: ""
-			}.`
+			return lines.join("\n\n")
+
+			async function importExport(path: string): Promise<string> {
+				const result = await catalogue.import(path, {
+					settings,
+					...(existing ? { existing } : {}),
+				})
+				const embedding = readEmbeddingEndpoint()
+				if (embedding && result.imported.length > 0) {
+					// In the background: a shelf of books is many requests, and the
+					// panel shows what is left to embed either way.
+					void library.embedPending({ embedding, settings }).catch((error) => {
+						Logger.warn(`[Library] Embedding the imported books stopped: ${error}`)
+					})
+				}
+				return `Imported ${count(result.imported.length, "book")}${
+					result.skipped.length
+						? `; left out ${result.skipped.map((entry) => `"${entry.title}" (${entry.reason})`).join(", ")}`
+						: ""
+				}.`
+			}
 		}
 		case "setLibrarian":
 			setBundledSkillEnabled(LIBRARIAN_SKILL_NAME, request.enabled)

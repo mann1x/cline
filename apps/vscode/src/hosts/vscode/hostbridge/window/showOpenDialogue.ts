@@ -12,7 +12,10 @@ export async function showOpenDialogue(request: ShowOpenDialogueRequest): Promis
 		options.openLabel = request.openLabel
 	}
 
-	if (request.filters?.files) {
+	const named = Object.entries(request.namedFilters ?? {}).filter(([, list]) => list.extensions.length > 0)
+	if (named.length > 0) {
+		options.filters = Object.fromEntries(named.map(([name, list]) => [name, list.extensions]))
+	} else if (request.filters?.files) {
 		options.filters = {
 			Files: request.filters.files,
 		}

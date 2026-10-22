@@ -305,7 +305,7 @@ export type LibraryAction =
 			/** Ticked in the browser: whole sections and shelves, and single books. Empty or absent is the whole Library. */
 			selection?: { sectionIds?: number[]; shelfIds?: number[]; bookIds?: number[] }
 	  }
-	| { action: "libraryImport"; existing?: "skip" | "replace" | "copy" }
+	| { action: "libraryImport"; existing?: "skip" | "replace" | "copy"; shelfId?: number }
 	| { action: "setLibrarian"; enabled: boolean }
 	| {
 			action: "setScrape"

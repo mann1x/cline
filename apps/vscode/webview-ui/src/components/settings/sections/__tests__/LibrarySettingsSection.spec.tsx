@@ -394,6 +394,14 @@ describe("the Library panel", () => {
 			expect(screen.getByText(/1 book, each kept 30 days/)).toBeTruthy()
 		})
 
+		it("imports onto the shelf that is open", async () => {
+			await open()
+			fireEvent.click(screen.getByText("Godot"))
+			await screen.findByText("Godot Tilemaps")
+			fireEvent.click(screen.getByText("Import…"))
+			await waitFor(() => expect(sent("libraryImport")).toEqual([{ action: "libraryImport", shelfId: 10 }]))
+		})
+
 		it("opens a shelf to its books, and a book to what it was made from", async () => {
 			await open()
 			fireEvent.click(screen.getByText("Godot"))

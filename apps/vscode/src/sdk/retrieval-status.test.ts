@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
@@ -11,6 +11,8 @@ const host = vi.hoisted(() => ({
 	/** The file name the save dialog was opened with. */
 	offeredName: undefined as string | undefined,
 	openPath: undefined as string | undefined,
+	/** The named file types the open dialog was given, in order. */
+	openFilters: undefined as string[] | undefined,
 }))
 
 vi.mock("@/core/storage/StateManager", () => ({
@@ -37,7 +39,12 @@ vi.mock("@/hosts/host-provider", () => ({
 				host.offeredName = request.options?.defaultPath
 				return { selectedPath: host.savePath }
 			},
-			showOpenDialogue: async () => ({ paths: host.openPath ? [host.openPath] : [] }),
+			showOpenDialogue: async (request: { namedFilters?: Record<string, { extensions: string[] }> }) => {
+				host.openFilters = Object.entries(request.namedFilters ?? {}).map(
+					([name, list]) => `${name}: ${list.extensions.includes("epub") ? "epub…" : list.extensions.join(",")}`,
+				)
+				return { paths: host.openPath ? [host.openPath] : [] }
+			},
 		},
 	},
 }))
@@ -296,6 +303,40 @@ describe("what the Library and Memory panels ask of the host", () => {
 			const emptied = await act({ action: "libraryEmptyTrash" })
 			expect(emptied.message).toBe("The trash is empty: 1 book deleted.")
 			expect(emptied.status.catalogue).toMatchObject({ books: 1, trash: 0 })
+		})
+
+		it("imports a book as well as an export: onto the open shelf, or onto Unsorted / Imported", async () => {
+			// Issue #109: an EPUB given to Import was read as an export, and
+			// failed with zlib's "incorrect header check".
+			host.settings.libraryEnabled = true
+			const fixtures = join(__dirname, "..", "..", "..", "..", "sdk", "packages", "core", "fixtures", "documents")
+			const shelfId = sharedLibrary().catalogue.books()[0].shelfId as number
+			host.openPath = join(root, "probe.epub")
+			copyFileSync(join(fixtures, "probe.epub"), host.openPath)
+			const added = await act({ action: "libraryImport", shelfId })
+			expect(host.openFilters).toEqual(["Books and Library exports: epub…", "All files: *"])
+			expect(added.message).toMatch(/^New book #\d+ "probe" by .+ on Game development \/ Engines\.$/m)
+			expect(added.message).not.toContain("this conversation's model")
+			expect(added.message).not.toContain("incorrect header check")
+			expect((await act({ action: "libraryImport", shelfId })).message).toContain(
+				"Nothing was added: every file is already in the Library.",
+			)
+
+			// The same text in another file is refused as the same book.
+			host.openPath = join(root, "probe.fb2")
+			copyFileSync(join(fixtures, "probe.fb2"), host.openPath)
+			expect((await act({ action: "libraryImport" })).message).toContain("Nothing was added. This looks like a book")
+
+			host.openPath = join(root, "orchard.md")
+			writeFileSync(
+				host.openPath,
+				`# Orchard Pruning\n\n${Array.from({ length: 60 }, (_u, i) => `Step ${i}: cut the water shoots of tree ${i} back to the second bud.`).join(" ")}\n`,
+			)
+			expect((await act({ action: "libraryImport" })).message).toMatch(
+				/on Unsorted \/ Imported \(made section "Unsorted" and shelf "Imported"\)/,
+			)
+			host.openPath = undefined
+			host.settings.libraryEnabled = undefined
 		})
 
 		it("turns the librarian on and off", async () => {
