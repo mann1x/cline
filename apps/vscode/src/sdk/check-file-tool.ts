@@ -100,6 +100,22 @@ const MAX_FILES_PER_CALL = 20
  */
 const SETTLE_BUDGET = { pollMs: 150, timeoutMs: 1_500 }
 
+/**
+ * How long to wait for the editor's copy of a file to catch up with the disk.
+ *
+ * VS Code reloads an unmodified document when its file watcher reports the
+ * write, a moment after it lands. A check right behind an edit can get there
+ * first, and the language server's errors are then for the text before it.
+ */
+const SYNC_BUDGET = { pollMs: 100, timeoutMs: 1_000 }
+
+/** What the editor holds for a file: the text its language server checks. */
+export interface LoadedDocument {
+	text: string
+	/** The user has changes to it they have not saved. */
+	dirty: boolean
+}
+
 export interface LintCommandResult {
 	exitCode: number
 	output: string
@@ -112,8 +128,9 @@ export interface CheckFileToolOptions {
 	/**
 	 * Make the language server aware of a file it may never have opened.
 	 * Optional: without it the tool still reports whatever the editor knows.
+	 * What it returns is compared with the disk; nothing returned skips that.
 	 */
-	loadDocument?: (filePath: string) => Promise<void>
+	loadDocument?: (filePath: string) => Promise<LoadedDocument | undefined>
 	/** The user's `cline.lintCommand`, if they set one. */
 	resolveLintCommand?: () => string | undefined
 	/** Runs the configured command. Injected so tests never spawn anything. */
@@ -187,15 +204,13 @@ export function createCheckFileTool(options: CheckFileToolOptions): AgentTool {
 			// A file the language server has never seen has no diagnostics, and
 			// no diagnostics reads as "clean". Loading it first is what makes the
 			// difference between a check and a guess.
+			const stale = new Map<string, LoadedDocument>()
 			if (options.loadDocument) {
 				await Promise.all(
 					absolute.map(async (filePath) => {
-						try {
-							await options.loadDocument?.(filePath)
-						} catch (error) {
-							Logger.log(
-								`[CheckFile] could not load ${filePath}: ${error instanceof Error ? error.message : error}`,
-							)
+						const divergent = await awaitEditorSync(filePath, options, delay)
+						if (divergent) {
+							stale.set(filePath, divergent)
 						}
 					}),
 				)
@@ -217,6 +232,7 @@ export function createCheckFileTool(options: CheckFileToolOptions): AgentTool {
 						absolutePath: absolute[index],
 						diagnostics,
 						options,
+						stale: stale.get(absolute[index]),
 						signal: context?.signal,
 					}),
 				)
@@ -228,6 +244,59 @@ export function createCheckFileTool(options: CheckFileToolOptions): AgentTool {
 			return sections.join("\n\n")
 		},
 	})
+}
+
+/** The same text either side of a BOM and line endings, which the editor normalises. */
+function normalised(text: string): string {
+	return text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n")
+}
+
+/**
+ * Load a file into the editor and wait for its copy to match the disk.
+ *
+ * Returns the editor's copy when it still differs once the wait is over, so
+ * the check can say its errors may be for that text; nothing when they match,
+ * or when either side cannot be read and there is nothing to compare.
+ */
+async function awaitEditorSync(
+	filePath: string,
+	options: CheckFileToolOptions,
+	delay: (ms: number) => Promise<void>,
+): Promise<LoadedDocument | undefined> {
+	let disk: string | undefined
+	try {
+		disk = normalised(await fs.readFile(filePath, "utf-8"))
+	} catch {
+		disk = undefined
+	}
+	for (let waited = 0; ; waited += SYNC_BUDGET.pollMs) {
+		let loaded: LoadedDocument | undefined
+		try {
+			loaded = await options.loadDocument?.(filePath)
+		} catch (error) {
+			Logger.log(`[CheckFile] could not load ${filePath}: ${error instanceof Error ? error.message : error}`)
+			return undefined
+		}
+		if (!loaded || disk === undefined || normalised(loaded.text) === disk) {
+			return undefined
+		}
+		// Unsaved changes are not reloaded from the disk however long we wait.
+		if (loaded.dirty || waited >= SYNC_BUDGET.timeoutMs) {
+			return loaded
+		}
+		await delay(SYNC_BUDGET.pollMs)
+	}
+}
+
+/**
+ * The note for a file whose editor copy is not what is on disk. The errors
+ * the editor lists are for its copy; the delimiter scan read the disk.
+ */
+function describeStale(displayPath: string, stale: LoadedDocument): string {
+	const why = stale.dirty
+		? "it has changes in the editor that are not saved"
+		: "the editor has not yet loaded what was last written to it"
+	return `Note: the editor's copy of ${displayPath} is not what is on disk (${why}). The editor's errors above are for its copy and may not match the file; the delimiter scan read the file on disk.`
 }
 
 /**
@@ -250,9 +319,10 @@ async function describeFile(args: {
 	absolutePath: string
 	diagnostics: readonly FileDiagnostics[]
 	options: CheckFileToolOptions
+	stale?: LoadedDocument
 	signal?: AbortSignal
 }): Promise<string> {
-	const { displayPath, absolutePath, diagnostics, options, signal } = args
+	const { displayPath, absolutePath, diagnostics, options, stale, signal } = args
 	const file = diagnostics.find((entry) => samePath(entry.filePath, absolutePath))
 
 	// A parse error is reported where the parser gave up, which is the closing
@@ -265,7 +335,8 @@ async function describeFile(args: {
 	// answer available: VS Code ships no syntax checking for the script inside
 	// an `.html` file, so an unclosed brace there is reported by nobody.
 	const { text: balance, missing } = await describeBalance(absolutePath)
-	const withBalance = (text: string) => (balance ? `${text}\n${balance}` : text)
+	const staleNote = stale ? describeStale(displayPath, stale) : null
+	const withBalance = (text: string) => [text, staleNote, balance].filter((part) => part).join("\n")
 
 	// Same cap, same severity filter, same rendering as the post-edit report:
 	// two different answers to "what is wrong with this file" would be worse

@@ -543,3 +543,80 @@ describe("two histories, one revision parameter", () => {
 		expect(tool.description).toContain("the expert's most recent change");
 	});
 });
+
+// pandorum cq5zf, 2026-10-22: the same error came back after an edit and the
+// model decided the checker had "a stale cache". Its edit had removed a
+// different brace than the one named.
+describe("a check says which revision it read", () => {
+	const checkTool = {
+		name: "check_file",
+		description: "check",
+		inputSchema: { type: "object" },
+		execute: async () => "game.js\n- Line 1, column 3: ',' expected.",
+	};
+
+	async function checkIn(
+		root: string,
+		log: ReturnType<typeof createRevisionLog>,
+	): Promise<string> {
+		const [tool] = withBaseRevisionReads(
+			[checkTool as never],
+			{ pending: undefined, transaction: 0, revisions: log, root },
+			SESSION_REVISION_WORDING,
+		);
+		return (await (
+			tool as unknown as { execute: (i: unknown, c: unknown) => unknown }
+		).execute({ paths: ["game.js"] }, context)) as string;
+	}
+
+	it("names the revision the model's last edit made when the disk holds it", async () => {
+		await withWorkspace({ "game.js": "f(}}\n" }, async (root) => {
+			const file = path.join(root, "game.js");
+			const log = createRevisionLog();
+			log.seed(file, Buffer.from("f(}}}\n"), "session");
+			log.record(file, Buffer.from("f(}}\n"), "editor", {
+				intent: "drop a brace",
+			});
+
+			const result = await checkIn(root, log);
+			expect(result).toContain("column 3");
+			expect(result).toContain(
+				"Checked `game.js` as it is on disk now: revision #2, the content your most recent change left (drop a brace). Nothing older is cached",
+			);
+		});
+	});
+
+	it("says when the disk holds none of the file's revisions", async () => {
+		await withWorkspace({ "game.js": "written by a shell\n" }, async (root) => {
+			const file = path.join(root, "game.js");
+			const log = createRevisionLog();
+			log.seed(file, Buffer.from("a\n"), "session");
+			log.record(file, Buffer.from("b\n"), "editor");
+
+			expect(await checkIn(root, log)).toContain(
+				"which is none of its 2 revisions: something other than this session's file tools has written it since revision #2",
+			);
+		});
+	});
+
+	it("says when a restore put back an earlier revision", async () => {
+		await withWorkspace({ "game.js": "a\n" }, async (root) => {
+			const file = path.join(root, "game.js");
+			const log = createRevisionLog();
+			log.seed(file, Buffer.from("a\n"), "session");
+			log.record(file, Buffer.from("b\n"), "editor");
+			log.record(file, Buffer.from("c\n"), "editor");
+
+			expect(await checkIn(root, log)).toContain(
+				"the same content as revision #1",
+			);
+		});
+	});
+
+	it("adds nothing for a file this session never changed", async () => {
+		await withWorkspace({ "game.js": "a\n" }, async (root) => {
+			const result = await checkIn(root, createRevisionLog());
+			expect(result).toBe("game.js\n- Line 1, column 3: ',' expected.");
+		});
+	});
+});

@@ -25,6 +25,7 @@ import type {
 	AgentToolContext,
 	AgentToolDefinition,
 } from "@cline/shared";
+import { CHECK_FILE_TOOL_NAME } from "../../extensions/tools/check-file";
 import { DefaultToolNames } from "../../extensions/tools/constants";
 import { readFileRequestsFrom } from "../../extensions/tools/definitions";
 import { readTextWindowFromText } from "../../extensions/tools/executors/file-read";
@@ -42,6 +43,7 @@ import {
 } from "./base-revision";
 import {
 	describeRevisions,
+	hashOf,
 	LAST_REVISION,
 	ORIGINAL_REVISION,
 	type RevisionLog,
@@ -516,6 +518,71 @@ function annotateWithRevisions(
 	});
 }
 
+/** The files a `check_file` call names, read the way the tool reads them. */
+function checkedPaths(input: unknown): string[] {
+	const raw =
+		input && typeof input === "object" && !Array.isArray(input)
+			? (input as { paths?: unknown }).paths
+			: undefined;
+	const list = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw : [];
+	return list
+		.filter((entry): entry is string => typeof entry === "string")
+		.map((entry) => entry.trim())
+		.filter((entry) => entry !== "");
+}
+
+/**
+ * Which revision a check looked at, for each checked file that has a history.
+ *
+ * A check is read from the file as it is on disk, and the model cannot see
+ * that. When the same error came back after an edit, jackod (pandorum
+ * cq5zf, 2026-10-22) decided the checker had "a stale cache" and spent the
+ * rest of the run on byte dumps: its edit had removed a different brace than
+ * the one named. Naming the revision says the result is for the content its
+ * edit left, or that something outside this session's tools has changed it.
+ */
+async function describeCheckedRevisions(
+	source: BaseRevisionSource,
+	place: RevisionPlace,
+	input: unknown,
+): Promise<string | undefined> {
+	const lines: string[] = [];
+	const seen = new Set<string>();
+	for (const requested of checkedPaths(input)) {
+		const lookup = place.resolve(requested);
+		if (lookup.kind === "uncovered" || lookup.kind === "outside") continue;
+		const absolutePath = lookup.absolutePath;
+		if (seen.has(absolutePath)) continue;
+		seen.add(absolutePath);
+		const history = source.revisions.revisions(absolutePath);
+		if (history.length < 2) continue;
+		let body: Buffer | undefined;
+		try {
+			body = await readFile(absolutePath);
+		} catch {
+			body = undefined;
+		}
+		const hash = hashOf(body);
+		const latest = history[history.length - 1];
+		const name = `\`${path.basename(absolutePath)}\``;
+		const match = [...history].reverse().find((entry) => entry.hash === hash);
+		if (!match) {
+			lines.push(
+				`Checked ${name} as it is on disk now, which is none of its ${history.length} revisions: something other than this session's file tools has written it since revision #${latest?.index} (${latest?.note}).`,
+			);
+		} else if (match.index === latest?.index) {
+			lines.push(
+				`Checked ${name} as it is on disk now: revision #${match.index}, ${match.index === 1 ? "the file before your first change" : `the content your most recent change left (${match.note})`}. Nothing older is cached; an error reported here is in that content.`,
+			);
+		} else {
+			lines.push(
+				`Checked ${name} as it is on disk now: the same content as revision #${match.index} (${match.note}), not your most recent change, #${latest?.index}.`,
+			);
+		}
+	}
+	return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
 /**
  * Return the tool list with `read_files` able to serve the transaction's base.
  *
@@ -532,6 +599,9 @@ export function withBaseRevisionReads<T extends AgentToolDefinition>(
 	const live = (): { source: BaseRevisionSource; wording: RevisionWording } =>
 		overlay?.live() ? overlay : { source, wording };
 	return tools.map((tool) => {
+		if (tool.name === CHECK_FILE_TOOL_NAME) {
+			return withCheckedRevisions(tool, live);
+		}
 		if (tool.name !== DefaultToolNames.READ_FILES) {
 			return tool;
 		}
@@ -608,4 +678,26 @@ export function withBaseRevisionReads<T extends AgentToolDefinition>(
 			},
 		} as unknown as T;
 	});
+}
+
+/** `check_file`, saying which revision of each file it checked. */
+function withCheckedRevisions<T extends AgentToolDefinition>(
+	tool: T,
+	live: () => { source: BaseRevisionSource },
+): T {
+	const original = tool as unknown as AgentTool<unknown, unknown>;
+	return {
+		...original,
+		execute: async (input: unknown, context: AgentToolContext) => {
+			const result = await original.execute(input, context);
+			if (typeof result !== "string") return result;
+			const { source } = live();
+			const place = placeOf(source);
+			if (!place) return result;
+			const note = await describeCheckedRevisions(source, place, input).catch(
+				() => undefined,
+			);
+			return note ? `${result}\n\n${note}` : result;
+		},
+	} as unknown as T;
 }

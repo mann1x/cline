@@ -1,7 +1,7 @@
 import { exec } from "child_process"
 import * as vscode from "vscode"
 import { CONFIG_SECTION } from "@/registry"
-import type { LintCommandResult } from "@/sdk/check-file-tool"
+import type { LintCommandResult, LoadedDocument } from "@/sdk/check-file-tool"
 import { buildLintCommand } from "@/sdk/check-file-tool"
 
 /**
@@ -19,15 +19,18 @@ const LINT_COMMAND_TIMEOUT_MS = 20_000
 const LINT_OUTPUT_MAX_CHARS = 8_000
 
 /**
- * Make the language server aware of a file.
+ * Make the language server aware of a file, and say what the editor holds.
  *
  * `openTextDocument` loads the document into the editor's model without
  * showing it, which is what makes a check on a file the user never opened
  * possible without stealing their focus. VS Code caches it, so the second call
- * for the same file costs nothing.
+ * for the same file costs nothing — and returns the cached copy, which is what
+ * the language server checks. That copy can lag a write to the disk, or hold
+ * the user's unsaved changes, so its text is handed back to be compared.
  */
-export async function loadDocumentForDiagnostics(filePath: string): Promise<void> {
-	await vscode.workspace.openTextDocument(vscode.Uri.file(filePath))
+export async function loadDocumentForDiagnostics(filePath: string): Promise<LoadedDocument> {
+	const document = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath))
+	return { text: document.getText(), dirty: document.isDirty }
 }
 
 /**

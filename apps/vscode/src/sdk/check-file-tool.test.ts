@@ -186,7 +186,7 @@ describe("check_file", () => {
 	})
 
 	it("loads the document first, so an unopened file is checked and not assumed clean", async () => {
-		const loadDocument = vi.fn(async () => {})
+		const loadDocument = vi.fn(async () => undefined)
 		const tool = createCheckFileTool({ cwd: CWD, delay: noDelay, readDiagnostics: async () => [], loadDocument })
 
 		await run(tool, { paths: ["src/app.ts", "src/other.ts"] })
@@ -206,6 +206,58 @@ describe("check_file", () => {
 		})
 
 		expect(await run(tool, { paths: ["src/app.ts"] })).toContain("boom")
+	})
+
+	it("waits for the editor's copy to catch up with a write before reading its errors", async () => {
+		files.set(at("src/app.ts"), "const a = 1\n")
+		const copies = ["const a = (\n", "const a = (\n", "const a = 1\n"]
+		const loadDocument = vi.fn(async () => ({ text: copies.shift() ?? "const a = 1\n", dirty: false }))
+		const tool = createCheckFileTool({ cwd: CWD, delay: noDelay, readDiagnostics: async () => [], loadDocument })
+
+		const output = await run(tool, { paths: ["src/app.ts"] })
+
+		expect(loadDocument).toHaveBeenCalledTimes(3)
+		expect(output).not.toContain("editor's copy")
+	})
+
+	it("says the errors may be for older text when the editor's copy never catches up", async () => {
+		files.set(at("src/app.ts"), "const a = 1\n")
+		const tool = createCheckFileTool({
+			cwd: CWD,
+			delay: noDelay,
+			readDiagnostics: async () => [fileDiagnostics(at("src/app.ts"), diagnostic("')' expected"))],
+			loadDocument: async () => ({ text: "const a = (\n", dirty: false }),
+		})
+
+		const output = await run(tool, { paths: ["src/app.ts"] })
+
+		expect(output).toContain("')' expected")
+		expect(output).toContain(
+			"the editor's copy of src/app.ts is not what is on disk (the editor has not yet loaded what was last written to it)",
+		)
+	})
+
+	it("does not wait on unsaved changes, which the disk will never match", async () => {
+		files.set(at("src/app.ts"), "const a = 1\n")
+		const loadDocument = vi.fn(async () => ({ text: "const a = 2\n", dirty: true }))
+		const tool = createCheckFileTool({ cwd: CWD, delay: noDelay, readDiagnostics: async () => [], loadDocument })
+
+		const output = await run(tool, { paths: ["src/app.ts"] })
+
+		expect(loadDocument).toHaveBeenCalledTimes(1)
+		expect(output).toContain("it has changes in the editor that are not saved")
+	})
+
+	it("counts a copy that differs only in its BOM or line endings as the same", async () => {
+		files.set(at("src/app.ts"), "\uFEFFconst a = 1\r\nconst b = 2\n")
+		const tool = createCheckFileTool({
+			cwd: CWD,
+			delay: noDelay,
+			readDiagnostics: async () => [],
+			loadDocument: async () => ({ text: "const a = 1\r\nconst b = 2\r\n", dirty: false }),
+		})
+
+		expect(await run(tool, { paths: ["src/app.ts"] })).not.toContain("editor's copy")
 	})
 
 	it("checks every file in one call", async () => {

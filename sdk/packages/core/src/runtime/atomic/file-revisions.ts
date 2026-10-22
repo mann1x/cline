@@ -205,7 +205,8 @@ function deriveNote(
 	};
 }
 
-function hashOf(body: Buffer | undefined): string {
+/** How a revision's content is identified, for matching a file against it. */
+export function hashOf(body: Buffer | undefined): string {
 	return body ? createHash("sha256").update(body).digest("hex") : ABSENT_HASH;
 }
 
