@@ -720,7 +720,9 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 							if (!receipts.covers(filePath, range.first, range.last)) {
 								const why = receipts.wasRetired(filePath)
 									? "an earlier edit moved the lines that were read"
-									: "those lines have not been read in this session";
+									: receipts.hasAny(filePath)
+										? "no read of it since it last changed covers those lines"
+										: "those lines have not been read in this session";
 								outcomes.push({
 									file,
 									output: "",

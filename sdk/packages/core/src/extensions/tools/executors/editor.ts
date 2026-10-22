@@ -668,11 +668,17 @@ function noChangeMessage(
 	// The count goes first, before the explanation the model has already read
 	// and acted against. A second identical refusal is not a second chance to
 	// re-read the same paragraph: it is evidence that the paragraph did not
-	// land, so what it needs is the fact it does not have -- that this exact
-	// call has already been answered this way, and what that leaves it to do.
+	// land, so what it needs is the fact it does not have -- that this no-op
+	// has already been answered this way, and what that leaves it to do.
+	//
+	// What is counted is the result, not the call: a whole-line replace and an
+	// `old_text` edit that both leave line 90 as it is are one no-op sent
+	// twice. "This identical edit" was untrue of the second (pandorum feiqn,
+	// where the third refusal followed two whole-line calls with an
+	// `old_text`/`occurrence` one), so the message says what was repeated.
 	const history =
 		repeats && repeats > 1
-			? `You have now sent this identical edit ${repeats} times and it has been refused ${repeats} times for the same reason, so nothing about the file, the tool or this call is going to change on the next one. Either the change you meant is already in the file -- in which case it is done, and the next thing to do is the next change or the answer -- or the text you want is somewhere else in the file, and only re-reading around it will find it. `
+			? `You have now sent ${repeats} edits that leave this part of the file exactly as it already is, however each was written, and all ${repeats} have been refused for the same reason, so nothing about the file, the tool or this call is going to change on the next one. Either the change you meant is already in the file -- in which case it is done, and the next thing to do is the next change or the answer -- or the text you want is somewhere else in the file, and only re-reading around it will find it. `
 			: "";
 
 	// Past the limit the explanation stops and the instruction starts. Measured
@@ -1957,9 +1963,15 @@ export function createEditorExecutor(
 		}
 		const range =
 			first === wanted ? `line ${first}` : `lines ${first}-${wanted}`;
+		// Three cases, not two. A read after a retiring edit clears the retired
+		// mark, so a file read whole, edited shorter, then read again lower down
+		// was told it "has not been read in this session" (pandorum v44ot,
+		// call 22): its receipts were there, they just did not reach the lines.
 		const why = receipts.wasRetired(filePath)
 			? `${range} of ${filePath} has not been read in its current state — either it was never read, or an earlier edit changed the file's length and moved every line below it`
-			: `${filePath} has not been read in this session`;
+			: receipts.hasAny(filePath)
+				? `no read of ${filePath} since it last changed covers ${range} — one read has to take in the whole range you edit, and an edit that changed the file's length retired the reads before it`
+				: `${filePath} has not been read in this session`;
 		throw new Error(
 			`Read before editing: ${why}. The file was not modified. Call \`read_files\` for ${filePath} covering ${range} — with \`start_line\` and \`end_line\` around it, not the whole file — then send this edit again using the line numbers that read reports. Editing lines you have not seen is how a correct-looking edit lands on the wrong code.`,
 		);

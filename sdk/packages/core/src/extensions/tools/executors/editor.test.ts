@@ -547,16 +547,47 @@ describe("createEditorExecutor", () => {
 					);
 
 				// The first refusal is the explanation, with nothing to count yet.
-				await expect(send()).rejects.not.toThrow("identical edit");
+				await expect(send()).rejects.not.toThrow("edits that leave");
 
 				await expect(send()).rejects.toThrow(
-					"You have now sent this identical edit 2 times",
+					"You have now sent 2 edits that leave",
 				);
 				// And it still says what to do about it: the count leads, the
 				// two ways out follow it.
 				await expect(send()).rejects.toThrow(
-					"You have now sent this identical edit 3 times",
+					"You have now sent 3 edits that leave",
 				);
+			});
+		});
+
+		// pandorum feiqn: two whole-line no-ops on line 90, then an
+		// `old_text`/`occurrence` call on the same line that also left it as
+		// it was. One no-op three times, but not "this identical edit".
+		it("counts differently written edits with the same no-op result together", async () => {
+			await withTempFile("one\ntwo\nthree", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await expect(
+					editor(
+						{ path: filePath, new_text: "two", start_line: 2 },
+						dir,
+						context,
+					),
+				).rejects.toThrow("No change");
+
+				const second = editor(
+					{
+						path: filePath,
+						old_text: "two",
+						new_text: "two",
+						start_line: 2,
+						end_line: 2,
+						occurrence: 1,
+					},
+					dir,
+					context,
+				);
+				await expect(second).rejects.toThrow("You have now sent 2 edits");
+				await expect(second).rejects.not.toThrow("identical edit");
 			});
 		});
 
@@ -573,12 +604,12 @@ describe("createEditorExecutor", () => {
 					});
 
 				await expect(send("run-1")).rejects.toThrow("No change");
-				await expect(send("run-1")).rejects.toThrow("identical edit 2 times");
+				await expect(send("run-1")).rejects.toThrow("sent 2 edits that leave");
 
 				// The next run's first refusal is a first refusal.
-				await expect(send("run-2")).rejects.not.toThrow("identical edit");
-				await expect(send("run-2")).rejects.toThrow("identical edit 2 times");
-				await expect(send("run-1")).rejects.toThrow("identical edit 3 times");
+				await expect(send("run-2")).rejects.not.toThrow("edits that leave");
+				await expect(send("run-2")).rejects.toThrow("sent 2 edits that leave");
+				await expect(send("run-1")).rejects.toThrow("sent 3 edits that leave");
 			});
 		});
 
@@ -608,8 +639,8 @@ describe("createEditorExecutor", () => {
 				};
 
 				expect(await attempt()).toContain("No change");
-				expect(await attempt()).toContain("identical edit 2 times");
-				expect(await attempt()).toContain("identical edit 3 times");
+				expect(await attempt()).toContain("sent 2 edits that leave");
+				expect(await attempt()).toContain("sent 3 edits that leave");
 
 				// The fourth is the one that changes.
 				const fourth = await attempt();
@@ -619,7 +650,7 @@ describe("createEditorExecutor", () => {
 				// It must not go back to counting politely afterwards.
 				const fifth = await attempt();
 				expect(fifth).toContain("This is attempt 5");
-				expect(fifth).not.toContain("identical edit 5 times");
+				expect(fifth).not.toContain("sent 5 edits that leave");
 			});
 		});
 
@@ -643,7 +674,7 @@ describe("createEditorExecutor", () => {
 						dir,
 						context,
 					),
-				).rejects.not.toThrow("identical edit");
+				).rejects.not.toThrow("edits that leave");
 			});
 		});
 
@@ -1880,6 +1911,36 @@ describe("requiring a read before an edit", () => {
 			);
 
 			await expect(failure).rejects.toThrow(
+				"has not been read in this session",
+			);
+		});
+	});
+
+	// pandorum v44ot: the file read whole, a line deleted (which retires the
+	// reads), the lower half read again, then an edit above it. Refusing it is
+	// right; saying the file "has not been read in this session" was not.
+	it("does not say a file was never read when its reads only miss the range", async () => {
+		await withTempFile("a\nb\nc\nd\ne\nf", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
+			// Two lines become one: the length changes and the read is retired.
+			await editor(
+				{ path: filePath, start_line: 5, end_line: 6, new_text: "e" },
+				dir,
+				context,
+			);
+			receipts.noteRead(filePath, 4, Number.POSITIVE_INFINITY);
+
+			const failure = editor(
+				{ path: filePath, new_text: "B", start_line: 2 },
+				dir,
+				context,
+			);
+
+			await expect(failure).rejects.toThrow("Read before editing");
+			await expect(failure).rejects.toThrow("no read of");
+			await expect(failure).rejects.not.toThrow(
 				"has not been read in this session",
 			);
 		});
