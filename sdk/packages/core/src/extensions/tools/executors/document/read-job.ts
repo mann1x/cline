@@ -9,13 +9,17 @@
  */
 
 import fs from "node:fs/promises";
+import path from "node:path";
+import { gunzipSync } from "node:zlib";
 import { readEbook } from "./ebook";
 import {
 	type DocumentFormat,
 	type DocumentReadResult,
 	detectFormat,
+	isGzip,
 	type ReadOptions,
 	type ReadProgress,
+	ungzippedName,
 } from "./formats";
 import { type ExtractedImage, ImageCollector } from "./images";
 import { readLegacyOffice } from "./legacy";
@@ -103,15 +107,38 @@ function read(
 	}
 }
 
+/** A gzipped document that unpacks past this is refused rather than read. */
+const MAX_UNGZIPPED_BYTES = 1024 * 1024 * 1024;
+
 export async function runReadJob(
 	job: ReadJob,
 	hooks: ReadJobHooks = {},
 ): Promise<ReadJobResult> {
-	const data = new Uint8Array(await fs.readFile(job.filePath));
-	const verdict = detectFormat(
-		job.namedAs ?? job.filePath,
-		data.subarray(0, 512),
-	);
+	let data = new Uint8Array(await fs.readFile(job.filePath));
+	let named = job.namedAs ?? job.filePath;
+	let filePath = job.filePath;
+	// A gzipped book (`book.fb2.gz`) is read as the book inside it. The
+	// ebook readers open their file by path, so it is written out once, in
+	// the scratch directory the caller removes.
+	if (isGzip(data)) {
+		try {
+			data = new Uint8Array(
+				gunzipSync(data, { maxOutputLength: MAX_UNGZIPPED_BYTES }),
+			);
+		} catch (error) {
+			throw new Error(
+				error instanceof RangeError
+					? `It is gzipped, and holds more than ${MAX_UNGZIPPED_BYTES / 1024 / 1024} MB once unpacked.`
+					: `It is gzipped, but it could not be unpacked: ${error instanceof Error ? error.message : String(error)}.`,
+			);
+		}
+		named = ungzippedName(named);
+		const unpacked = path.join(job.scratchDir, "ungzipped");
+		await fs.mkdir(unpacked, { recursive: true });
+		filePath = path.join(unpacked, path.basename(named) || "document");
+		await fs.writeFile(filePath, data);
+	}
+	const verdict = detectFormat(named, data.subarray(0, 512));
 	if ("unsupported" in verdict) {
 		throw new Error(verdict.unsupported);
 	}
@@ -134,7 +161,7 @@ export async function runReadJob(
 	const images = new ImageCollector("images");
 	let result: DocumentReadResult;
 	try {
-		result = await read(job.filePath, data, format, {
+		result = await read(filePath, data, format, {
 			images,
 			wantImages: job.wantImages,
 			scratchDir: job.scratchDir,

@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import type { AgentToolContext } from "@cline/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ExtractDocumentInput } from "../schemas";
@@ -48,6 +49,15 @@ async function run(
 	context = CONTEXT,
 ) {
 	return extract(input as ExtractDocumentInput, workspace, context);
+}
+
+/** A fixture gzipped, as books are often kept: `probe.fb2.gz`. */
+function placeGzipped(name: string): string {
+	writeFileSync(
+		join(workspace, `${name}.gz`),
+		gzipSync(readFileSync(join(FIXTURES, name))),
+	);
+	return `${name}.gz`;
 }
 
 function imagesOf(stem: string): string[] {
@@ -137,6 +147,40 @@ describe("extract_document", () => {
 		expect(result).toMatch(/\d+ chapters?\./);
 		expect(result).toContain("First paragraph with a red picture below.");
 		expect(result).not.toMatch(/<\/?p>/);
+	});
+
+	it.each([
+		"probe.epub",
+		"probe.fb2",
+	])("reads the gzipped ebook %s.gz as the book inside it", async (name) => {
+		const result = String(await run({ path: placeGzipped(name) }));
+		expect(result).toMatch(/\d+ chapters?\./);
+		expect(result).toContain("First paragraph with a red picture below.");
+	});
+
+	it("says a gzipped file that will not unpack could not be", async () => {
+		const name = "broken.fb2.gz";
+		writeFileSync(
+			join(workspace, name),
+			gzipSync(readFileSync(join(FIXTURES, "probe.fb2"))).subarray(0, 40),
+		);
+		await expect(run({ path: name })).rejects.toThrow(
+			/gzipped, but it could not be unpacked/,
+		);
+	});
+
+	it("reads a gzipped book for the Library, and leaves nothing unpacked behind", async () => {
+		const scratchDir = join(workspace, "scratch");
+		const book = await readDocumentForBook(
+			join(workspace, placeGzipped("probe.fb2")),
+			{ scratchDir, pictures: false },
+		);
+		expect(book.format).toBe("fb2");
+		expect(book.markdown).toContain(
+			"First paragraph with a red picture below.",
+		);
+		await book.release();
+		expect(existsSync(scratchDir) ? readdirSync(scratchDir) : []).toEqual([]);
 	});
 
 	it("says an EPUB cut short is damaged instead of waiting on it", async () => {
@@ -349,6 +393,17 @@ describe("read_files on a document", () => {
 		const without = createFileReadExecutor({ cwd: workspace });
 		await expect(without({ path: pdf }, CONTEXT)).rejects.toThrow(
 			/turned off in this session/,
+		);
+	});
+
+	it("says a gzipped ebook is one instead of returning its bytes", async () => {
+		const gz = placeGzipped("probe.epub");
+		const read = createFileReadExecutor({
+			cwd: workspace,
+			documentReader: true,
+		});
+		await expect(read({ path: gz }, CONTEXT)).rejects.toThrow(
+			/probe\.epub\.gz is a gzipped EPUB.*Read it with extract_document/,
 		);
 	});
 

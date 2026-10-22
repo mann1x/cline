@@ -289,7 +289,7 @@ export function addRootOptions(cmd: Command): Command {
 			)
 			.option(
 				"--documents",
-				"Offer extract_document, which reads PDF, Word, PowerPoint, Excel (current and 97-2003), OpenDocument, RTF and ebooks (EPUB, MOBI, AZW3, FB2) to text and writes their pictures to files under .cline/extracted/. Off by default; CLINE_DOCUMENTS=1 does the same",
+				"Offer extract_document, which reads PDF, Word, PowerPoint, Excel (current and 97-2003), OpenDocument, RTF and ebooks (EPUB, MOBI, AZW3, FB2), gzipped or not, to text and writes their pictures to files under .cline/extracted/. Off by default; CLINE_DOCUMENTS=1 does the same",
 			)
 			.option(
 				"--ocr <engine>",

@@ -106,6 +106,21 @@ const UNSUPPORTED: Record<string, string> = {
 	".cbr": "Comic archives are not read yet.",
 };
 
+/** Whether bytes are gzip: a book is often kept as `book.fb2.gz`. */
+export function isGzip(head: Uint8Array): boolean {
+	return head[0] === 0x1f && head[1] === 0x8b;
+}
+
+/** A name without the `.gz` a gzipped document carries. */
+export function ungzippedName(filePath: string): string {
+	return /\.gz$/i.test(filePath) ? filePath.slice(0, -3) : filePath;
+}
+
+/** The extension that says what a file is, under any `.gz` wrapped round it. */
+export function documentExtension(filePath: string): string {
+	return path.extname(ungzippedName(filePath)).toLowerCase();
+}
+
 /** Every extension this tool reads, for the tool description and read_files. */
 export const DOCUMENT_EXTENSIONS: readonly string[] = Object.keys(BY_EXTENSION);
 
@@ -124,7 +139,7 @@ export function detectFormat(
 	filePath: string,
 	head: Uint8Array,
 ): FormatVerdict {
-	const extension = path.extname(filePath).toLowerCase();
+	const extension = documentExtension(filePath);
 	const unsupported = UNSUPPORTED[extension];
 	if (unsupported) {
 		return { unsupported };
@@ -196,7 +211,7 @@ export function detectFormat(
 		};
 	}
 	return {
-		unsupported: `No reader for ${extension || "files without an extension"}. Readable: PDF, DOCX/DOC, PPTX/PPT, XLSX/XLS, ODT/ODP/ODS/ODG, RTF, CSV, HTML, EPUB, MOBI/AZW/AZW3, FB2.`,
+		unsupported: `No reader for ${extension || "files without an extension"}. Readable: PDF, DOCX/DOC, PPTX/PPT, XLSX/XLS, ODT/ODP/ODS/ODG, RTF, CSV, HTML, EPUB, MOBI/AZW/AZW3, FB2, and any of them gzipped (\`.fb2.gz\`).`,
 	};
 }
 
@@ -313,11 +328,18 @@ export function unreadableDocumentMessage(
 	head: Uint8Array,
 	documentReader: boolean,
 ): string | undefined {
-	const verdict = detectFormat(filePath, head);
-	if (!("format" in verdict) || !BINARY_FORMATS.has(verdict.format)) {
-		return undefined;
+	let what: string;
+	if (isGzip(head)) {
+		const inner = BY_EXTENSION[documentExtension(filePath)];
+		if (!inner || !/\.gz$/i.test(filePath)) return undefined;
+		what = `${path.basename(filePath)} is a gzipped ${FORMAT_LABELS[inner]}, which read_files would return as unreadable bytes.`;
+	} else {
+		const verdict = detectFormat(filePath, head);
+		if (!("format" in verdict) || !BINARY_FORMATS.has(verdict.format)) {
+			return undefined;
+		}
+		what = `${path.basename(filePath)} is a ${FORMAT_LABELS[verdict.format]}, which read_files would return as unreadable bytes.`;
 	}
-	const what = `${path.basename(filePath)} is a ${FORMAT_LABELS[verdict.format]}, which read_files would return as unreadable bytes.`;
 	return documentReader
 		? `${what} Read it with extract_document instead.`
 		: `${what} The extract_document tool reads it but is turned off in this session: the user can turn it on under Settings > Features, or give you the document as text.`;

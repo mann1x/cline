@@ -13,6 +13,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { gunzipSync } from "node:zlib";
 import {
 	type AgentTool,
 	type AgentToolContext,
@@ -43,6 +44,8 @@ import {
 } from "../../services/retrieval/running-heads";
 import {
 	DOCUMENT_EXTENSIONS,
+	documentExtension,
+	isGzip,
 	type ReadProgress,
 } from "./executors/document/formats";
 import { VIEWABLE_MEDIA_TYPES } from "./executors/document/images";
@@ -169,7 +172,8 @@ async function filesUnder(
 			}
 			await filesUnder(full, found, skipped);
 		} else if (entry.isFile()) {
-			const extension = path.extname(entry.name).toLowerCase();
+			// Under any `.gz`: a gzipped book is read as the book inside.
+			const extension = documentExtension(entry.name);
 			if (
 				!TEXT_EXTENSIONS.has(extension) &&
 				!DOCUMENT_EXTENSION_SET.has(extension)
@@ -233,7 +237,7 @@ async function readSource(
 	const key = `${file}:${stat.size}:${stat.mtimeMs}`;
 	const cached = pictures ? undefined : readCache.get(key);
 	if (cached) return cached;
-	const extension = path.extname(file).toLowerCase();
+	const extension = documentExtension(file);
 	let document: BookDocument;
 	if (DOCUMENT_EXTENSION_SET.has(extension)) {
 		document = await readDocumentForBook(file, {
@@ -255,7 +259,19 @@ async function readSource(
 				`it is ${Math.round(stat.size / 1024 / 1024)} MB of text, past the ${MAX_TEXT_FILE_BYTES / 1024 / 1024} MB one file may be`,
 			);
 		}
-		const data = await fs.readFile(file);
+		const raw = await fs.readFile(file);
+		let data: Buffer;
+		try {
+			data = isGzip(raw)
+				? gunzipSync(raw, { maxOutputLength: MAX_TEXT_FILE_BYTES })
+				: raw;
+		} catch (error) {
+			throw new Error(
+				error instanceof RangeError
+					? `it is gzipped, and past the ${MAX_TEXT_FILE_BYTES / 1024 / 1024} MB one file may be once unpacked`
+					: "it is gzipped, but it could not be unpacked",
+			);
+		}
 		if (data.subarray(0, 8192).includes(0)) {
 			throw new Error(
 				"it is not a text file or a format the Document Reader reads",

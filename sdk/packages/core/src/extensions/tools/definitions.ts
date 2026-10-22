@@ -1171,7 +1171,7 @@ export function createExtractDocumentTool(
 		name: "extract_document",
 		readOnly: true,
 		description:
-			"Read a document that is not plain text: PDF, Word (DOCX and 97-2003 DOC), PowerPoint (PPTX, PPT), Excel (XLSX, XLS), OpenDocument (ODT, ODP, ODS, ODG), RTF, CSV, HTML, and ebooks (EPUB, MOBI, AZW, AZW3, FB2). " +
+			"Read a document that is not plain text: PDF, Word (DOCX and 97-2003 DOC), PowerPoint (PPTX, PPT), Excel (XLSX, XLS), OpenDocument (ODT, ODP, ODS, ODG), RTF, CSV, HTML, and ebooks (EPUB, MOBI, AZW, AZW3, FB2), each of them also gzipped (`book.fb2.gz`). " +
 			"`read_files` cannot read these: it returns their bytes as garbage text. " +
 			'It returns the document as markdown (or plain text with `format: "text"`) and writes the whole text to a file, with the pictures inside the document saved beside it in an `images` folder and linked from the text. ' +
 			"The output goes to `.cline/extracted/<document name>/` in the workspace; pass `output_dir` only when the user asks for it somewhere else in the workspace. " +

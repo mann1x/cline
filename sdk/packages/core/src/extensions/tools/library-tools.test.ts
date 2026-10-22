@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import type { AgentToolContext } from "@cline/shared";
 import { DEFAULT_LIBRARY_SETTINGS, type LibrarySettings } from "@cline/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -239,6 +240,25 @@ describe("the Library tools", () => {
 		const details = await call("list_library", { book: "Engine Care" });
 		expect(details).toContain("On Cars / Maintenance.");
 		expect(details).toContain("source 1: engine.md [file");
+	});
+
+	it("adds a gzipped book, and finds gzipped books and text in a folder", async () => {
+		// Issue #109: a book kept as `.fb2.gz` had no way in.
+		mkdirSync(join(workspace, "shelf"));
+		writeFileSync(
+			join(workspace, "shelf", "probe.fb2.gz"),
+			gzipSync(readFileSync(join(FIXTURES, "probe.fb2"))),
+		);
+		writeFileSync(join(workspace, "shelf", "engine.md.gz"), gzipSync(BOOK));
+		writeFileSync(join(workspace, "shelf", "notes.gz"), gzipSync("no kind"));
+		const added = await addBook({ paths: ["shelf"] });
+		expect(added).toContain('"Engine Care" (#1): 2 sources added');
+		expect(
+			await call("search_library", { query: "thermostat coolant" }),
+		).toContain("engine.md.gz");
+		expect(await call("search_library", { query: "red picture" })).toContain(
+			"probe.fb2.gz",
+		);
 	});
 
 	it("ends with a report of every file, and shows where it is as it goes", async () => {
