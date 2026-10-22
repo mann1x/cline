@@ -5,6 +5,274 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.256] — 2026-10-22
+
+### Agents
+
+- **A run no longer inherits another run's refused edits.** The editor
+  counts how many times the same no-op edit has been refused, and past
+  four it stops explaining and tells the model to stop sending it. The
+  count was kept for the whole VS Code window, so a rerun of a task was
+  told on its first refusal "This is attempt 6, and every one has been
+  refused" and got the stop message meant for a model that had really
+  repeated itself. It now counts within one conversation.
+- **A switch to act mode applies only to the conversation that asked.** A
+  run that queued the switch and ended before it went idle could rebuild
+  the next run into act mode and continue it as if the user had approved
+  a plan.
+- **A turn cut off at the output limit recovers faster on xOllama.** The
+  notes written for its retry are asked of the conversation with tools
+  turned off, and xOllama does not turn them off: the model could spend the
+  whole allowance writing a tool call and leave the note empty. Cerebriline
+  now stops that request as soon as a call begins and writes the note in a
+  request of its own.
+- **A loop is caught in the reply and in a tool call, not only in the
+  thinking.** The guard that stops a model repeating itself read only its
+  reasoning. A model that looped while writing its reply, or the arguments
+  of a call, ran on to the output limit; one editor call ran for some 81,000
+  tokens and was thrown away unfinished. The reply and each call are now
+  watched as they stream: a looping call is stopped before anything runs,
+  and the model is asked to make it again with only what it needs. The
+  guard also catches a long passage written out three times in a row, which
+  it used to miss in the thinking too. Text quoted from the conversation is
+  not counted as a repeat.
+- **A council session leaves the lead's reads as it read them.** With a
+  council model set, a file read the model has since read again is meant to
+  stay in the history unchanged, because the council reviews that history.
+  Only the session's agents were held to it; the lead's older reads were
+  still replaced by a note that a newer read exists.
+- **What a loop guard cuts is kept, so you can check it.** When the guard
+  cut a looping thought, reply or tool call, the text was thrown away and the
+  conversation kept only a short note, so there was no way to tell whether it
+  really was looping. Each cut is now saved whole in the session's folder, in
+  `<session>.cuts.jsonl`, with what the guard saw.
+- **A call that writes the same thing over and over is cut.** One `editor`
+  call wrote the same script out thirteen times, 265,000 characters over
+  twelve minutes, with each copy a few lines different from the last. The loop
+  guard looks for a block repeated exactly, so it never fired. A call is now
+  also cut once most of what it writes are lines it has already written twice.
+  Checked against every stored call of 2,000 characters or more, about 3,900
+  of them: it cuts the two that looped and nothing else. A call that arrives
+  all at once, from a provider that does not stream its progress, is now
+  checked before it runs.
+- **A call cut off at the output limit is not run.** When a reply reaches the
+  output limit while a call is still being written, xOllama closes the call,
+  and the half-written call used to run as if it were complete. It is now
+  sent back to the model as cut off, with a request to do the work in smaller
+  pieces. Calls the reply had already finished still run.
+- **A call dropped at the output limit is named in the retry.** When xOllama
+  drops a call the model had not finished, the reply arrives with no call in
+  it, and the model was told only that its reply was too long. It now hears
+  which tool it was calling, how much of the call it had written, that the
+  call did not run, and that a large edit should be split into smaller ones.
+  What it had written is kept in `<session>.cuts.jsonl`, with the other cut
+  text, and is not sent back to the model.
+- **An agent's cuts are kept too.** The text a loop guard cut was kept for
+  the main conversation only. Each agent's cuts are now kept beside its own
+  transcript, in `<agent>.cuts.jsonl` in the session's folder.
+- **An agent is no longer told someone else changed the file it is
+  editing.** An agent working in its own copy of the workspace was refused
+  edits it had every right to make, with "something outside this session
+  wrote to it": 35 times in one nine-agent run. After its first edit, a
+  `grep` or a command that only read the file compared the wrong copy of it.
+  Both now check the agent's own copy, and a command that does change that
+  copy is reported as having changed it.
+- **A condensed thought is written from what the tools really did.** When a
+  turn's thinking runs out of budget, it is replaced by a short note, and a
+  note written in a request of its own saw only that reasoning. Reasoning
+  rarely names the file it is about, and the call that would have was usually
+  the part the budget cut, so the note made up what it lacked: one, in a task
+  on `manic_miner.html`, was about a `game.js` that does not exist. The
+  request now carries the record of the task's tool calls and what each
+  returned, the same record a compaction keeps.
+- **A model whose thinking was cut is told so.** It used to be told only that
+  its turn had no tool call. It now hears that its thinking was cut for
+  repeating itself and is asked to make its next call. A cut no longer uses up
+  the reminders a model gets for turns that call nothing.
+- **An empty message no longer waits in the queue.** A follow-up with no
+  text and nothing attached, sent while a run was going, joined the queue as
+  an empty row, and would have started a turn with nothing to answer. It is
+  now dropped.
+
+### Compaction
+
+- **The compaction row shows the size it compacted.** After a reply of about
+  92,000 tokens, the row read "138.2k → about 23.2k". 138.2k was the size
+  before that reply, and the conversation was really about 231,000 tokens.
+  Both figures were too small. The row now includes the last reply, and both
+  ends of the arrow are measured the same way.
+- **A compaction's review requests are smaller and no longer wait on each
+  other.** The full conversation sent to the summary and to the two reviewers
+  included every tool call's text in full, even edits that were refused:
+  about 570,000 characters per request in one run. A call's long text is now
+  shortened to its start and its end. And when two reviewers cannot both fit
+  in the model's context window, they now run one after the other. Sent
+  together, each waited for room the other was using, and the compaction took
+  ten minutes.
+- **A compaction runs once where it ran twice.** The size of a compaction
+  summary was counted with the notes stored beside it, which are never sent
+  to the model and are about twice the summary's own size. A compaction that
+  kept the latest messages was then judged too big and run again without
+  them: four minutes of a run on pandorum went to the first pass, which was
+  thrown away. A summary is now counted as the model receives it.
+- **A compaction reads tool results the way the model did.** In a
+  conversation that gets its tool results as text, the summary, its reviewers
+  and the retrospective still saw them as JSON, a form the model never read.
+  They now see the text. The retrospective would also have marked every
+  failed call as having worked once it saw text; it now says which calls
+  failed and why.
+
+### Tools
+
+- **A command left running in the background is reported with its ending.**
+  A command that outlived its call was marked finished before its last line,
+  the one that says how it ended, had reached its log. Whatever read the log
+  at that moment saw it end without saying how. The mark now comes after the
+  log is written.
+- **An edit's diff shows what changed, not what moved.** An edit that added
+  a line near the top of a range moved every line under it, and the diff
+  showed each of them removed and written again. One edit that added a line
+  and fixed two was shown as ten lines rewritten, seven of them unchanged,
+  and the model took four broken lines it had left alone for lines it had
+  fixed. The diff now shows only the lines that differ, says how many
+  unchanged lines lie between them, and counts the identical lines the same
+  way. The chat's edit card draws each changed run as its own block, and no
+  longer draws an insertion with a blank line removed or a deletion with a
+  blank line added.
+- **The bracket check offers its fix instead of ordering it.** When a line's
+  brackets do not balance, the check counts them and suggests an edit that
+  balances them. It used to call that edit "the edit" and say a bracket "is
+  closed by" another, but several different edits balance the same line, and
+  which one is right depends on which block was meant to close. The counts are
+  still stated as fact; the fix is now offered as one that balances the line,
+  with a reminder to check that it closes the block meant.
+- **A file checked by a path without its drive counts as checked on
+  Windows.** A model that edited `game.html` and then checked
+  `/ws/game.html` was still reminded to check it: the two were kept as
+  different files. They are now the same file.
+- **A check says which version of the file it read.** A model that had
+  edited a file several times and was then told of an error it thought it had
+  fixed took the check to be reading an old cached copy, and spent turns on
+  it. A check of a file this session has changed now says whether what is on
+  disk is the model's latest change, an earlier revision (and which), or
+  something none of the session's tools wrote. And when the editor's own copy
+  of the file differs from the disk, because it has unsaved changes or has not
+  yet loaded a write, the check waits a moment for it and, if it still
+  differs, says the editor's errors may be for that copy.
+- **An edit that names only where it ends is refused.** An edit with an
+  `end_line` but no `start_line` replaced the whole file: one replaced all
+  292 lines of a game with the 23 it meant for a few of them. It is now
+  refused and the file is left as it was.
+- **A restore that did not happen no longer says it did.** When
+  `restore_file` found nothing to put back, the chat still said the file had
+  been put back. It now says it did not, and why.
+- **Tool results are sent as text.** A tool's result has always reached
+  the model as JSON, so a file it read arrived with its line breaks as
+  `\n`, its quotes escaped and its backslashes doubled, and a model copying
+  a line out of it could write the escapes into the edit. Results are now
+  sent as text by default: the call on one line, then what came back as it
+  reads, laid out the way a compaction summary already records it. The
+  **Tool Results** setting (and `--tool-result-format` on the CLI) still
+  offers JSON. The choice is made when a conversation starts and kept for
+  it: a conversation you resume keeps the format it began with, and one
+  from an earlier version stays on JSON.
+- **A read's range is kept when it is written beside the file list.** A
+  model that asked for lines 80 to 120 with `end_line` next to the list,
+  not inside the file's entry, got line 80 to the end of the file; a
+  `line_numbers: false` written there was ignored the same way. Both now
+  apply to every file in the list that does not set its own.
+- **A failing command no longer has its program checked.** When a command
+  fails, the checker is run on the files it names. For
+  `run_game.exe manic_miner.html` that included the executable, and each
+  failure came back with a note that a 99 MB program had no problems
+  reported. Binary files are now left out.
+- **A refused edit says what actually happened.** A model that sent three
+  differently written edits, each leaving line 90 as it already was, was
+  told it had sent "this identical edit" three times; it now hears that
+  three edits have left that part of the file unchanged. And a model that
+  had read a file, changed its length and read part of it again was told,
+  on an edit to lines it had not re-read, that the file "has not been read
+  in this session". It is now told that no read since the last change
+  covers those lines.
+- **An edit names its file before its text.** The editor's file argument
+  is now `file_path`, not `path`. Gemma 4 writes a call's arguments in
+  alphabetical order, the order its template shows earlier calls in, and
+  `path` came after `new_text`: an edit cut off in a long text, or closed
+  once the text was written, never said which file it was for, and was
+  refused. `file_path` comes before `new_text`. A call that still says
+  `path` works as before.
+
+### Prompts
+
+- **No example the model is shown comes from a test it might be given.**
+  The examples in the reasoning-condensation and compaction prompts, the
+  editor's description and the file-search tool's were taken from a game
+  repair task: its file name, the line its parse error sits on, the column
+  of the missing bracket, the collision it gets wrong. A model given that
+  task was being handed hints about it. They now come from an unrelated
+  task, and a test fails if one comes back.
+- **Tool descriptions say what comes back in words.** Every tool description,
+  and every model family's template, told the model that a result is a
+  `{query, result, success, error?}` object and that `success: false` means
+  the call failed. With results now sent as text, a model never sees those
+  fields, and it was being taught to look for them. The descriptions now say
+  what each result is named by, what it holds, and that a failed one says why,
+  which is true in either format. Each family's tool sections were rewritten by
+  a model of that family, and a test fails if the old wording comes back. One
+  family's template also said a command that exits with an error "has not
+  failed"; it has, and the template now says so.
+- **MiniMax M3.1 Flash has its own template.** Written by the model itself,
+  it is chosen for `minimax-m3.1-flash` and leaves every other MiniMax on the
+  existing one.
+- **A condensed thought knows what was asked.** When a turn runs out of
+  thinking budget and its reasoning is condensed in a request of its own,
+  that request now quotes what you typed. It used to see the reasoning
+  alone, and a note written from reasoning that never named the file took
+  the file name from the prompt's example.
+
+### Library
+
+- **Importing a file that is not a Library export says so.** The Library's
+  Import reads the `.library.tar.gz` that Export writes. Given a gzipped
+  ebook, it read the book's text as an archive and tried to make a folder
+  named after its first line, and on Windows failed with an unreadable
+  `ENOENT` full of binary characters. It now says the file is not an export
+  and that a book is added by asking the librarian in a chat.
+- **A gzipped book can be added.** A book kept as `.fb2.gz`, `.epub.gz` or
+  any other readable format gzipped, and text kept as `.md.gz` or `.txt.gz`,
+  is now read as the file inside it: by the librarian when it adds a book or a
+  folder of them, and by `extract_document`.
+
+### Ollama
+
+- **A rebuilt model is read again for every session.** What a model
+  declares (its window, temperature and think-budget message) was read
+  once per VS Code window. A model re-created under the same tag kept the
+  old values until the window was reloaded; each session now asks the
+  server.
+- **The context size you set is asked for with booking off.** With "Book a
+  context window" off, xOllama is meant to be asked for the size you set on
+  every turn. The size never reached the request, so xOllama was asked for
+  nothing and gave each turn only its prompt plus the room for a reply:
+  113,707 tokens of a 192,000 setting. It is now asked for. An agent's share
+  of the window, set on the Agents tab, was lost the same way and now
+  reaches the server too.
+- **A conversation on xOllama no longer loads its model twice.** Before the
+  first turn of a model, Cerebriline sends two short test requests to learn
+  whether the server puts earlier thinking back into the prompt. They reached
+  the model first and had it loaded at the server's default size, and the
+  first turn then loaded it again at the size you set: about 19 seconds
+  before the first reply. They now ask for the size the turn will, so the
+  model is loaded once. Two conversations started close together also sent a
+  pair each; they now share one.
+- **A reply's length is limited by the window the server gave.** When
+  xOllama gives a conversation a smaller window than the one set, the
+  compaction already worked to it, but the limit on a reply's length was
+  still worked out from the size set. A conversation given 113,707 of
+  128,000 tokens was allowed a 43,000-token reply on top of 75,800 tokens
+  of conversation, more than its window holds. The limit now comes from
+  the window given.
+
 ## [4.100.255] — 2026-10-19
 
 ### Agents
