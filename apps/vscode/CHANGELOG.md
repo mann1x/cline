@@ -5,6 +5,18 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.258] — 2026-10-23
+
+### Agents
+
+- **A `/delegate` that cannot run says why.** When `/delegate` or
+  `/delegate-background` was refused, because no agent has that name, no
+  conversation is open yet, a turn is still running, or sub-agents are off,
+  the chat showed nothing. It now shows the reason as an error message; for an
+  unknown name that includes the agents there are. In a new chat the command
+  used to go to the model as the first message; it is now refused, saying a
+  conversation is needed first.
+
 ## [4.100.257] — 2026-10-22
 
 ### Library
