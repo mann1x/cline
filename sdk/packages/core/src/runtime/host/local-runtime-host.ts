@@ -1419,19 +1419,66 @@ export class LocalRuntimeHost implements RuntimeHost {
 				)
 			: undefined;
 		const existingCompletionGuard = runtime.completionPolicy?.completionGuard;
-		const composedGuards = [
-			existingCompletionGuard,
-			uncheckedEditsGuard,
-			checklistCloseOutGuard,
-		].filter((guard): guard is () => string | undefined => guard !== undefined);
+		// Named, so the guard that held the run back can say so on the event
+		// stream. The runtime only receives the text, which it hands to the
+		// model; until these notices, a run that was asked to check its edits
+		// or tick its checklist left no record that it had been.
+		const composedGuards: Array<{
+			kind: string;
+			guard: () => string | undefined;
+			notice: string;
+		}> = [];
+		if (existingCompletionGuard) {
+			composedGuards.push({
+				kind: "team_obligation",
+				guard: existingCompletionGuard,
+				notice:
+					"Delegated work for this run is still open — asking the model to collect it before it finishes.",
+			});
+		}
+		if (uncheckedEditsGuard) {
+			composedGuards.push({
+				kind: "edit_verification",
+				guard: uncheckedEditsGuard,
+				notice:
+					"Edited files have not been checked since the last edit — asking the model to check them before it finishes.",
+			});
+		}
+		if (checklistCloseOutGuard) {
+			composedGuards.push({
+				kind: "checklist_close_out",
+				guard: checklistCloseOutGuard,
+				notice:
+					"The checklist still has open items — asking the model to close them before it finishes.",
+			});
+		}
+		const guardAttempts = new Map<string, number>();
 		const completionPolicyWithGuards =
 			composedGuards.length > 0
 				? {
 						...runtime.completionPolicy,
 						completionGuard: () => {
-							for (const guard of composedGuards) {
+							for (const { kind, guard, notice } of composedGuards) {
 								const message = guard();
 								if (message !== undefined) {
+									const attempt = (guardAttempts.get(kind) ?? 0) + 1;
+									guardAttempts.set(kind, attempt);
+									this.eventBridge.dispatchAgentEvent(
+										sessionId,
+										configWithProvider,
+										{
+											type: "notice",
+											noticeType: "status",
+											displayRole: "status",
+											message: notice,
+											metadata: {
+												kind,
+												reason: kind,
+												phase: "nudge",
+												attempt,
+											},
+										},
+									);
 									return message;
 								}
 							}

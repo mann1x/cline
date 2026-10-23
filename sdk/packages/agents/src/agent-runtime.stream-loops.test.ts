@@ -119,6 +119,11 @@ describe("the loop guard on a call's arguments", () => {
 		expect(seen[0]?.message).toContain(
 			"The model's call to `editor` repeated a 12-line block",
 		);
+		// The kind stays `reasoning_loop` for every stream; `cause` says which.
+		expect(seen[0]?.metadata).toMatchObject({
+			phase: "cut",
+			cause: "argument_loop",
+		});
 		const [cut, reminder] = result.messages.slice(1, 3);
 		expect(cut?.content.some((part) => part.type === "tool-call")).toBe(false);
 		expect(texts(cut as never)).toContain("begun here and cut");
@@ -458,6 +463,10 @@ describe("the loop guard on the reply", () => {
 		expect(loopNotices(events)[0]?.message).toContain(
 			"The model's reply repeated a 12-line block",
 		);
+		expect(loopNotices(events)[0]?.metadata).toMatchObject({
+			phase: "cut",
+			cause: "answer_loop",
+		});
 		const cut = result.messages[1];
 		expect(texts(cut as never)).toContain("The reply here was cut");
 		expect(texts(cut as never)).not.toContain("pop3()");

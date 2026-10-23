@@ -447,9 +447,32 @@ describe("LocalRuntimeHost", () => {
 		);
 		writeFileSync(edited, "");
 		await editor?.execute({ path: edited }, {});
+		const events: unknown[] = [];
+		manager.subscribe((event) => events.push(event));
 		const verdict = agentConfig?.completionPolicy?.completionGuard?.();
 		expect(verdict).toContain("a.ts");
 		expect(verdict).toContain("check_file");
+		// automaticum #1811: the guard that held the run back says so on the
+		// event stream, by name, not only in the text the model reads.
+		await vi.waitFor(() =>
+			expect(events).toContainEqual(
+				expect.objectContaining({
+					type: "agent_event",
+					payload: expect.objectContaining({
+						event: expect.objectContaining({
+							type: "notice",
+							noticeType: "status",
+							metadata: {
+								kind: "edit_verification",
+								reason: "edit_verification",
+								phase: "nudge",
+								attempt: 1,
+							},
+						}),
+					}),
+				}),
+			),
+		);
 	});
 
 	it.each([

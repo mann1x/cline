@@ -3036,6 +3036,70 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 		expect(String(abortCalls[0])).toContain("it kept sending `same` {a: 1}");
 	});
 
+	// automaticum #1811: a harness arm that stops at the first guard trip saw
+	// the reasoning-loop and intent cuts on the event stream and nothing at all
+	// from this guard -- the warning rode on the tool result and the stop on
+	// the mistake tracker, neither of which names the loop guard.
+	const loopNoticesFor = async (overrides: Partial<AgentConfig> = {}) => {
+		const { deps } = makeScriptedRuntime({
+			events: [
+				{ type: "turn-started", iteration: 1, snapshot: makeSnapshot() },
+				...Array.from({ length: 4 }, (_, i) => identicalCall(i + 1)),
+			],
+		});
+		const session = new SessionRuntime(
+			makeAgentConfig({
+				execution: {
+					maxConsecutiveMistakes: 6,
+					loopDetection: { softThreshold: 2, hardThreshold: 3 },
+				},
+				...overrides,
+			}),
+			deps,
+		);
+		const notices: Array<Record<string, unknown>> = [];
+		session.subscribeEvents((event) => {
+			if (
+				event.type === "notice" &&
+				event.metadata?.kind === "loop_detection"
+			) {
+				notices.push(event.metadata);
+			}
+		});
+		await session.run("loop-me");
+		return notices;
+	};
+
+	it("announces each loop-detection action as a status notice", async () => {
+		const notices = await loopNoticesFor();
+		expect(notices.map((notice) => notice.phase)).toEqual([
+			"soft",
+			"hard",
+			"hard",
+			"stopped",
+		]);
+		expect(notices[0]).toMatchObject({
+			reason: "loop_detection",
+			iteration: 2,
+			toolName: "same",
+		});
+		expect(notices.slice(1).map((notice) => notice.escalation)).toEqual([
+			1, 2, 2,
+		]);
+		expect(notices[3]).toMatchObject({ escalationLimit: 2, iteration: 4 });
+	});
+
+	it("does not announce a stop the host answered with continue", async () => {
+		const notices = await loopNoticesFor({
+			onConsecutiveMistakeLimitReached: () => ({ action: "continue" }),
+		});
+		expect(notices.map((notice) => notice.phase)).toEqual([
+			"soft",
+			"hard",
+			"hard",
+		]);
+	});
+
 	// The warning used to be appended to the conversation store, which the run
 	// had already snapshotted and would overwrite when it finished. Measured on
 	// a live session: the guard counted six refusals of one `editor` call, and

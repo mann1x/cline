@@ -1964,6 +1964,12 @@ export class SessionRuntime {
 				// certain to be read.
 				this.pendingLoopWarnings.set(toolCallId, verdict.message);
 			}
+			this.emitLoopNotice(
+				"soft",
+				`The model repeated a call to \`${toolName}\` — warning it to change approach.`,
+				iteration,
+				toolName,
+			);
 			return;
 		}
 		// Hard escalation. The first one is a last warning, not a stop.
@@ -1985,10 +1991,21 @@ export class SessionRuntime {
 		const diagnosis =
 			verdict.message ?? `Detected repeated tool calls to \`${toolName}\`.`;
 		this.loopHardEscalations += 1;
+		const escalation = {
+			escalation: this.loopHardEscalations,
+			escalationLimit: LOOP_HARD_ESCALATION_LIMIT,
+		};
 		if (this.loopHardEscalations < LOOP_HARD_ESCALATION_LIMIT) {
 			this.pendingLoopWarnings.set(
 				toolCallId,
 				`${diagnosis}\n\n${LOOP_FINAL_WARNING}`,
+			);
+			this.emitLoopNotice(
+				"hard",
+				`The model kept repeating a call to \`${toolName}\` after the warnings — last warning before the run is stopped.`,
+				iteration,
+				toolName,
+				escalation,
 			);
 			this.enqueueMistakeRecord({
 				iteration,
@@ -1997,6 +2014,13 @@ export class SessionRuntime {
 			});
 			return;
 		}
+		this.emitLoopNotice(
+			"hard",
+			`The model sent the call to \`${toolName}\` again after the last warning.`,
+			iteration,
+			toolName,
+			escalation,
+		);
 		this.enqueueMistakeRecord({
 			iteration,
 			reason: "tool_execution_failed",
@@ -2005,6 +2029,46 @@ export class SessionRuntime {
 			// The abort reason is what a lead reads about a delegated agent the
 			// guard stopped, and until now it named no call at all.
 			abortDetail: `it kept sending ${describeRepeatedCall(toolName, input)}. ${firstSentence(diagnosis)}`,
+			// The host may still answer the limit with "continue"; the stop is
+			// announced only once the tracker has actually decided on it.
+			onStop: () =>
+				this.emitLoopNotice(
+					"stopped",
+					`Stopped the run: the model kept repeating a call to \`${toolName}\`.`,
+					iteration,
+					toolName,
+					escalation,
+				),
+		});
+	}
+
+	/**
+	 * One status notice per loop-detection action, beside the text the model
+	 * is given. The warning itself rides on the tool result and the stop on
+	 * the mistake tracker, neither of which says on the event stream that the
+	 * loop guard was the cause, so a run record could not tell a loop from any
+	 * other run that ended at its mistake limit.
+	 */
+	private emitLoopNotice(
+		phase: "soft" | "hard" | "stopped",
+		message: string,
+		iteration: number,
+		toolName: string,
+		extra?: Record<string, unknown>,
+	): void {
+		this.emitLegacyEvent({
+			type: "notice",
+			noticeType: "status",
+			displayRole: "status",
+			message,
+			metadata: {
+				kind: "loop_detection",
+				reason: "loop_detection",
+				phase,
+				iteration,
+				toolName,
+				...(extra ?? {}),
+			},
 		});
 	}
 
@@ -2039,6 +2103,8 @@ export class SessionRuntime {
 		forceAtLimit?: boolean;
 		/** Appended to the abort reason when this record stops the run. */
 		abortDetail?: string;
+		/** Called when this record is the one that stops the run. */
+		onStop?: () => void;
 	}): void {
 		if (this.trackerAbortInFlight) {
 			return;
@@ -2047,10 +2113,11 @@ export class SessionRuntime {
 			if (this.trackerAbortInFlight) {
 				return;
 			}
-			const { abortDetail, ...record } = input;
+			const { abortDetail, onStop, ...record } = input;
 			const outcome = await this.mistakeTracker.record(record);
 			if (outcome.action === "stop") {
 				this.trackerAbortInFlight = true;
+				onStop?.();
 				this.conversation.appendMessage({
 					role: "user",
 					content: [{ type: "text", text: outcome.message }],

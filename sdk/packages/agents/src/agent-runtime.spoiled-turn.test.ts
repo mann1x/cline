@@ -127,9 +127,11 @@ describe("a turn whose content must not be read back", () => {
 			reasoningLoopDetection: false,
 		});
 		const notices: string[] = [];
+		const nudged: unknown[] = [];
 		runtime.subscribe((event) => {
 			if (event.type === "status-notice") {
 				notices.push(event.message);
+				nudged.push(event.metadata?.nudged);
 			}
 		});
 
@@ -139,6 +141,8 @@ describe("a turn whose content must not be read back", () => {
 		expect(notices).toEqual([
 			"the reasoning repeated one passage 40 times — removed from the conversation, asking for a different approach",
 		]);
+		// And in the metadata, for a reader that does not parse the sentence.
+		expect(nudged).toEqual([true]);
 		const looped = result.messages.find((m) => m.role === "assistant");
 		const reasoning = reasoningOf(looped);
 		expect(reasoning.startsWith("[SYSTEM] ")).toBe(true);
@@ -199,9 +203,11 @@ describe("a turn whose content must not be read back", () => {
 			reasoningRepetition: { maxNudges: 0 },
 		});
 		const notices: string[] = [];
+		const nudged: unknown[] = [];
 		runtime.subscribe((event) => {
 			if (event.type === "status-notice") {
 				notices.push(event.message);
+				nudged.push(event.metadata?.nudged);
 			}
 		});
 
@@ -211,6 +217,7 @@ describe("a turn whose content must not be read back", () => {
 			"the reasoning repeated one passage 30 times — removed from the conversation",
 			"the reasoning repeated one passage 30 times — removed from the conversation",
 		]);
+		expect(nudged).toEqual([false, false]);
 		expect(
 			result.messages.some(
 				(m) =>

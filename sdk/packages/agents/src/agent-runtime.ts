@@ -3761,6 +3761,9 @@ export class AgentRuntime {
 					reason: "reasoning_loop",
 					phase: "removed",
 					iteration: this.state.iteration,
+					// The repetition nudge shares this measurement, so when it
+					// fires it is announced here rather than on a line of its own.
+					nudged: Boolean(this.repetitionNudges.get(message)?.nudge),
 				},
 			});
 		}
@@ -4281,7 +4284,7 @@ export class AgentRuntime {
 		} else if (answerLoop) {
 			this.pendingToolIntentNudge = withGuidance(
 				buildReplyLoopNudge(answerLoop),
-				await this.onReasoningLoopCut(answerLoop, "reply"),
+				await this.onReasoningLoopCut(answerLoop, "reply", "answer_loop"),
 			);
 		} else if (argumentLoop) {
 			this.pendingToolIntentNudge = withGuidance(
@@ -4289,6 +4292,7 @@ export class AgentRuntime {
 				await this.onReasoningLoopCut(
 					argumentLoop.verdict,
 					`call to \`${argumentLoop.toolName ?? "a tool"}\``,
+					"argument_loop",
 				),
 			);
 		} else if (reasoningLoopGuard) {
@@ -5290,6 +5294,15 @@ export class AgentRuntime {
 		verdict: ReasoningLoopVerdict,
 		/** What looped, as `describeReasoningLoop` names it. */
 		subject = "reasoning",
+		/**
+		 * Which stream looped, in `recordCut`'s words. The notice keeps the
+		 * `reasoning_loop` kind for all three, which is what readers key on, and
+		 * says here which one it was.
+		 */
+		cause:
+			| "reasoning_loop"
+			| "answer_loop"
+			| "argument_loop" = "reasoning_loop",
 	): Promise<string | undefined> {
 		this.reasoningLoopStreak += 1;
 		const limit =
@@ -5326,6 +5339,7 @@ export class AgentRuntime {
 				kind: "reasoning_loop",
 				reason: "reasoning_loop",
 				phase: giveUp ? "aborted" : "cut",
+				cause,
 				iteration: this.state.iteration,
 				consecutiveTrips: this.reasoningLoopStreak,
 				verdict,
