@@ -5,6 +5,50 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.261] — 2026-10-23
+
+### Agents
+
+- **"Prior reasoning: Automatic" now sends Gemma-4 its reasoning in the
+  template's own format.** The check that decides what to send asked the
+  server with the reasoning placed before a second user message. Google's
+  official Gemma-4 template keeps reasoning only after the last user message,
+  so it was measured as dropping reasoning it actually keeps. The check now
+  asks with the layout an agent run sends: the reasoning on a tool call, then
+  the tool's result. Gemma-4 is now sent its latest reasoning in the reasoning
+  field, and the template writes it as its own thinking block, in the right
+  place.
+- **Reasoning is no longer folded into a message that calls a tool.** On a
+  template that really drops the reasoning field, the latest reasoning used to
+  be written into the assistant's text as `<think>…</think>`. Gemma-4's
+  template puts that text after the tool's result and closes the turn there,
+  so the next turn started without its header. A message that calls a tool now
+  carries no folded-in reasoning. A message that only answers still does.
+- **"Save model requests" now saves the answer too.** Beside each saved request
+  there is now a `.response.json` with the response exactly as the model
+  streamed it back, its reasoning included. A request alone was not the whole
+  turn. The model's answer only showed up in the next request, after the
+  history had been reshaped: older reasoning dropped, and the latest sometimes
+  moved into the reply text. A response that was cut off is saved with what
+  arrived and `complete: false`. A request that got no answer is saved with
+  the error.
+- On plain Ollama, saved requests are now filed under their conversation
+  instead of `no-session`.
+
+### SDK
+
+- **`saveModelRequests` on `ClineCore.create`** does what the plugin's "Save
+  model requests" setting does, with the same files in the same layout:
+  `<dataDir>/logs/requests/<session>/<time>-<n>.json` and
+  `<time>-<n>.response.json`. Pass `true`, or `{ dir, responses }`. It is off
+  by default, as in the plugin. `applyModelRequestCapture` switches it while
+  running. `createModelRequestWriter` is the writer itself, for a host that
+  wants the same layout somewhere else.
+- A writer installed with `Llms.setModelRequestCapture` can ask for each
+  request's response by returning a function, which receives
+  `CapturedModelResponse` (`status`, the raw `body`, `complete`, `error`).
+  Headers are never saved.
+
 ## [4.100.260] — 2026-10-23
 
 ### SDK
