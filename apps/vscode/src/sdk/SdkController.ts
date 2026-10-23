@@ -1668,7 +1668,9 @@ export class Controller {
 	async startBackgroundDelegation(agentName: string, prompt: string): Promise<BackgroundDelegationView> {
 		const activeSession = this.sessions.getActiveSession()
 		if (!activeSession) {
-			throw new Error("There is no active task to delegate from. Start one first.")
+			throw new Error(
+				"it hands work to an agent from an open conversation, and none is open. Start one, then send the command again.",
+			)
 		}
 		if (!activeSession.sdkHost.startBackgroundDelegation) {
 			throw new Error("This runtime cannot run a delegation in the background. Please update Cerebriline and try again.")
@@ -1712,7 +1714,9 @@ export class Controller {
 	async delegateToAgent(agentName: string, prompt: string): Promise<ConfiguredAgentDelegationResult> {
 		const activeSession = this.sessions.getActiveSession()
 		if (!activeSession) {
-			throw new Error("There is no active task to delegate from. Start one first.")
+			throw new Error(
+				"it hands work to an agent from an open conversation, and none is open. Start one, then send the command again.",
+			)
 		}
 		if (!activeSession.sdkHost.delegateToConfiguredAgent) {
 			throw new Error("This runtime cannot delegate to an agent. Please update Cerebriline and try again.")

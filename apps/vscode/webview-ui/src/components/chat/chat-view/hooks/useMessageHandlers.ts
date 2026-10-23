@@ -142,7 +142,7 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 			// `/delegate` only for the reader's sake -- the `\s+` in that
 			// pattern already means it cannot swallow this one.
 			const delegateBackgroundMatch = messageToSend.match(/^\/delegate-background\s+(\S+)\s+([\s\S]+)$/)
-			if (messages.length > 0 && delegateBackgroundMatch) {
+			if (delegateBackgroundMatch) {
 				setInputValue("")
 				setActiveQuote(null)
 				await SlashServiceClient.delegateBackground(
@@ -158,9 +158,12 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 			// lead model is not asked whether to delegate: an instruction that
 			// the model can decline is a suggestion, which is not what the user
 			// typed. With no task, the command falls through to the model, which
-			// can answer the "what can I delegate to" question in words.
+			// can answer the "what can I delegate to" question in words. In a
+			// chat with no conversation yet it is still a delegation, and the
+			// extension says one is needed: sent to the model as a first
+			// message, it was a task nobody asked for.
 			const delegateMatch = messageToSend.match(/^\/delegate\s+(\S+)\s+([\s\S]+)$/)
-			if (messages.length > 0 && delegateMatch) {
+			if (delegateMatch) {
 				setInputValue("")
 				setActiveQuote(null)
 				await SlashServiceClient.delegate(

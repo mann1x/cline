@@ -4,6 +4,15 @@ import { DelegateRequest } from "@shared/proto/cline/slash"
 import { describe, it, vi } from "vitest"
 import type { Controller } from ".."
 import { delegate } from "./delegate"
+import { delegateBackground } from "./delegateBackground"
+
+const shown = vi.hoisted(() => [] as { type: unknown; message: string }[])
+vi.mock("@/hosts/host-provider", () => ({
+	HostProvider: {
+		window: { showMessage: async (request: { type: unknown; message: string }) => shown.push(request) },
+	},
+}))
+
 import { listAgents } from "./listAgents"
 
 describe("delegate slash handler", () => {
@@ -37,6 +46,29 @@ describe("delegate slash handler", () => {
 		await assert.rejects(
 			() => delegate(controller, DelegateRequest.create({ agentName: "qa", prompt: "go" })),
 			/no agent named/,
+		)
+	})
+
+	it("shows why a delegation did not run, which the chat alone never did", async () => {
+		// "/delegate Agent-Build-Deploy-Run ..." with no such agent: the
+		// refusal named the agents there are, and reached nobody.
+		shown.length = 0
+		const refusal = new Error('There is no agent named "Agent-Build-Deploy-Run". Available: qa.')
+		const controller = {
+			delegateToAgent: vi.fn().mockRejectedValue(refusal),
+			startBackgroundDelegation: vi.fn().mockRejectedValue(refusal),
+		} as unknown as Controller
+		const request = DelegateRequest.create({ agentName: "Agent-Build-Deploy-Run", prompt: "build" })
+
+		await assert.rejects(() => delegate(controller, request))
+		await assert.rejects(() => delegateBackground(controller, request))
+
+		assert.deepEqual(
+			shown.map((entry) => entry.message),
+			[
+				'/delegate: There is no agent named "Agent-Build-Deploy-Run". Available: qa.',
+				'/delegate-background: There is no agent named "Agent-Build-Deploy-Run". Available: qa.',
+			],
 		)
 	})
 })

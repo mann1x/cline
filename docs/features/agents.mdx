@@ -347,8 +347,8 @@ It is offered only to the lead, and only when Subagents is on.
 
 - It calls the same `subagent_<name>` tool, and the agent's report is appended to the conversation as your message ("I delegated this to the "qa" agent: …"). No new turn is started.
 - It is refused while a turn is running.
-- Only configured agents can be named. An unknown name lists the available ones.
-- In VS Code the command is recognised only in a task that already has messages. In a new task the text goes to the model as an ordinary message.
+- Only configured agents can be named: the `name` in an agent file in `.cline/agents` in the workspace, or in the Cerebriline data folder's `agents`. An agent file from someone else's machine has to be copied there first.
+- It needs an open conversation to hand work from. In VS Code, a `/delegate` that cannot run says why in an error message: an unknown name (with the agents that are there), no conversation yet, a turn still running, or sub-agents switched off.
 
 **`/delegate-background <agent> <task>`** does the same thing without blocking:
 
@@ -358,9 +358,7 @@ It is offered only to the lead, and only when Subagents is on.
 - In VS Code the panel above the chat shows running delegations with Pause/Resume and Stop. In the CLI, `/agents` opens the same controls.
 - All background runs stop when the session ends.
 
-<Warning>
-  User-initiated delegations are **not** overlay-sandboxed today. `/delegate` and `/delegate-background` call the agent with no tool-call id, so no private workspace is opened. The agent edits your real files and gets no shell. Every model-initiated path (`spawn_agent`, swarm workers, `subagent_<name>`, teammates) is sandboxed.
-</Warning>
+User-initiated delegations are sandboxed like every other delegated path: each run gets a tool-call id of its own, which opens the agent's private copy of the workspace and its shell.
 
 ### Agent nodes and placement
 

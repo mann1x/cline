@@ -1,5 +1,6 @@
 import { BackgroundDelegation, type DelegateRequest } from "@shared/proto/cline/slash"
 import type { Controller } from "../index"
+import { reportDelegationFailure } from "./delegate"
 
 /**
  * Start a configured agent beside the current turn.
@@ -9,7 +10,9 @@ import type { Controller } from "../index"
  * agent reported reaches the conversation on its own when it finishes.
  */
 export async function delegateBackground(controller: Controller, request: DelegateRequest): Promise<BackgroundDelegation> {
-	const run = await controller.startBackgroundDelegation(request.agentName, request.prompt)
+	const run = await controller
+		.startBackgroundDelegation(request.agentName, request.prompt)
+		.catch((error) => reportDelegationFailure("/delegate-background", error))
 	return BackgroundDelegation.create({
 		id: run.id,
 		agentName: run.agentName,
