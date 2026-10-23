@@ -11,7 +11,9 @@ import {
 	isMoonshotKimiModelIdFallback,
 	providerReasoningRouteMatches,
 	resolveModelFamily,
+	resolveReasoningHistoryPlanForRequest,
 } from "../model-facts";
+import { shouldPreserveThinking } from "../reasoning-history";
 import { isOfficialAnthropicEndpoint } from "../url";
 import {
 	buildLlamaCppSamplingOptions,
@@ -635,6 +637,19 @@ const llamaCppNativeOptionsRule: ProviderOptionRule = {
 		const level = readLlamaCppReasoningLevel(input);
 		if (level) {
 			bucketOptions.reasoningEffort = level;
+		}
+		// Keep the prior reasoning past the harness's own user-role nudges, on
+		// a template measured to drop it there without this flag and keep it
+		// with it (Gemma-4's official, Qwen 3.6's). See `probePreserveThinking`.
+		if (
+			input.context.model?.id &&
+			shouldPreserveThinking(
+				input.context.config?.baseUrl,
+				input.context.model.id,
+				resolveReasoningHistoryPlanForRequest(input.request, input.context),
+			)
+		) {
+			bucketOptions.chat_template_kwargs = { preserve_thinking: true };
 		}
 		if (Object.keys(bucketOptions).length === 0) {
 			return undefined;

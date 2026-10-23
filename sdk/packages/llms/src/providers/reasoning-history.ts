@@ -40,6 +40,14 @@ export interface ReasoningReinjection {
 	reinjects: boolean | undefined;
 	/** What the probe actually saw, for the log and the settings panel. */
 	detail?: string;
+	/**
+	 * Whether the template keeps a tool call's reasoning past a later user
+	 * message when asked to with `chat_template_kwargs.preserve_thinking`
+	 * (Gemma-4's official template, Qwen 3.6's). Measured on `/apply-template`
+	 * only. `true` only where the flag is what makes the difference, so it is
+	 * never sent to a template that ignores it or keeps the reasoning anyway.
+	 */
+	preservesThinking?: boolean;
 }
 
 /** A needle no chat template would emit on its own. */
@@ -327,6 +335,61 @@ export async function primeTemplateReinjection(
 	return probe;
 }
 
+/** The agent-run shape: one user message, a tool call carrying reasoning, its result. */
+function agenticProbeMessages(): Array<Record<string, unknown>> {
+	return [
+		{ role: "user", content: "probe" },
+		{
+			role: "assistant",
+			content: "",
+			reasoning_content: REINJECTION_NEEDLE,
+			thinking: REINJECTION_NEEDLE,
+			tool_calls: [
+				{
+					id: "call_probe",
+					type: "function",
+					function: { name: "probe", arguments: "{}" },
+				},
+			],
+		},
+		{ role: "tool", tool_call_id: "call_probe", content: "probe" },
+	];
+}
+
+const PROBE_TOOLS = [
+	{
+		type: "function",
+		function: {
+			name: "probe",
+			description: "probe",
+			parameters: { type: "object", properties: {} },
+		},
+	},
+];
+
+/** The server's rendering of `body`, or why there is none. */
+async function renderTemplate(
+	baseUrl: string | undefined,
+	fetchImpl: typeof fetch,
+	body: Record<string, unknown>,
+): Promise<{ prompt: string } | { status: number }> {
+	const response = await fetchImpl(`${serverRoot(baseUrl)}/apply-template`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(body),
+	});
+	const parsed = response.ok
+		? ((await response.json().catch(() => undefined)) as
+				| { prompt?: unknown }
+				| undefined)
+		: undefined;
+	// Only a rendered prompt is an answer. A 200 with some other body is an
+	// endpoint that is not llama-server, which is a refusal by another name.
+	return typeof parsed?.prompt === "string"
+		? { prompt: parsed.prompt }
+		: { status: response.status };
+}
+
 async function probeTemplateReinjection(
 	key: string,
 	baseUrl: string | undefined,
@@ -334,70 +397,42 @@ async function probeTemplateReinjection(
 	recordRefusal: boolean,
 ): Promise<void> {
 	try {
-		const response = await fetchImpl(`${serverRoot(baseUrl)}/apply-template`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			// The shape an agent run sends: one user message, then the model's
-			// tool call carrying its reasoning, then the tool's result. Asked
-			// with a user message *after* the reasoning, a template that keeps
-			// reasoning only since the last user turn -- Gemma-4's official one
-			// (ae53464b), qwen3's -- answers "drops", and this was the question
-			// asked: Gemma was measured as dropping what it renders, and fell to
-			// inlining, which breaks its turn structure (automaticum #1845).
-			body: JSON.stringify({
-				messages: [
-					{ role: "user", content: "probe" },
-					{
-						role: "assistant",
-						content: "",
-						reasoning_content: REINJECTION_NEEDLE,
-						thinking: REINJECTION_NEEDLE,
-						tool_calls: [
-							{
-								id: "call_probe",
-								type: "function",
-								function: { name: "probe", arguments: "{}" },
-							},
-						],
-					},
-					{ role: "tool", tool_call_id: "call_probe", content: "probe" },
-				],
-				tools: [
-					{
-						type: "function",
-						function: {
-							name: "probe",
-							description: "probe",
-							parameters: { type: "object", properties: {} },
-						},
-					},
-				],
-			}),
+		// The shape an agent run sends: one user message, then the model's
+		// tool call carrying its reasoning, then the tool's result. Asked
+		// with a user message *after* the reasoning, a template that keeps
+		// reasoning only since the last user turn -- Gemma-4's official one
+		// (ae53464b), qwen3's -- answers "drops", and this was the question
+		// asked: Gemma was measured as dropping what it renders, and fell to
+		// inlining, which breaks its turn structure (automaticum #1845).
+		const rendered = await renderTemplate(baseUrl, fetchImpl, {
+			messages: agenticProbeMessages(),
+			tools: PROBE_TOOLS,
 		});
-		const body = response.ok
-			? ((await response.json().catch(() => undefined)) as
-					| { prompt?: unknown }
-					| undefined)
-			: undefined;
-		// Only a rendered prompt is an answer. A 200 with some other body is an
-		// endpoint that is not llama-server, which is a refusal by another name.
-		if (typeof body?.prompt !== "string") {
+		if (!("prompt" in rendered)) {
 			if (recordRefusal) {
 				reinjection.set(key, {
 					channel: "reasoning-content",
 					reinjects: undefined,
-					detail: `/apply-template answered HTTP ${response.status}`,
+					detail: `/apply-template answered HTTP ${rendered.status}`,
 				});
 			}
 			return;
 		}
-		const seen = body.prompt.includes(REINJECTION_NEEDLE);
+		const seen = rendered.prompt.includes(REINJECTION_NEEDLE);
+		const preservesThinking = seen
+			? await probePreserveThinking(baseUrl, fetchImpl)
+			: undefined;
 		reinjection.set(key, {
 			channel: "reasoning-content",
 			reinjects: seen,
 			detail: seen
-				? "template re-injects reasoning"
+				? `template re-injects reasoning${
+						preservesThinking
+							? "; keeps it past a user message with preserve_thinking"
+							: ""
+					}`
 				: "template drops reasoning",
+			...(preservesThinking ? { preservesThinking } : {}),
 		});
 	} catch {
 		if (recordRefusal) {
@@ -407,6 +442,61 @@ async function probeTemplateReinjection(
 			});
 		}
 	}
+}
+
+/**
+ * Whether `preserve_thinking` is what keeps a tool call's reasoning past a
+ * later user message.
+ *
+ * The harness's own nudges are user messages, so on a template that keeps
+ * reasoning only since the last user turn every nudge silently dropped the
+ * reasoning before it (automaticum #1848). Two renderings of the same chain
+ * with a user message after it: without the flag, and with it. Only "dropped
+ * without, kept with" counts, so the flag is never sent where it changes
+ * nothing. A failure is "no": the agentic answer above stands either way.
+ */
+async function probePreserveThinking(
+	baseUrl: string | undefined,
+	fetchImpl: typeof fetch,
+): Promise<boolean> {
+	const messages = [
+		...agenticProbeMessages(),
+		{ role: "user", content: "probe" },
+	];
+	try {
+		const without = await renderTemplate(baseUrl, fetchImpl, {
+			messages,
+			tools: PROBE_TOOLS,
+		});
+		if (!("prompt" in without) || without.prompt.includes(REINJECTION_NEEDLE)) {
+			return false;
+		}
+		const withFlag = await renderTemplate(baseUrl, fetchImpl, {
+			messages,
+			tools: PROBE_TOOLS,
+			chat_template_kwargs: { preserve_thinking: true },
+		});
+		return "prompt" in withFlag && withFlag.prompt.includes(REINJECTION_NEEDLE);
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Whether to ask this endpoint's template for `preserve_thinking`: measured
+ * to need it, and prior reasoning going out natively at all. Under `last` it
+ * still carries one block, so the prompt stays bounded.
+ */
+export function shouldPreserveThinking(
+	baseUrl: string | undefined,
+	modelId: string,
+	plan: ReasoningHistoryPlan,
+): boolean {
+	return (
+		plan.channel === "native" &&
+		plan.scope !== "none" &&
+		cachedReinjection(baseUrl, modelId)?.preservesThinking === true
+	);
 }
 
 /**
