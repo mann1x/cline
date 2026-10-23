@@ -6,7 +6,10 @@ import {
 	readDeclaredFamily,
 	resolveSessionPromptTemplateFrom,
 } from "@cline/core";
-import type { RenderedPromptTemplate } from "@cline/shared";
+import {
+	isOllamaNativeProvider,
+	type RenderedPromptTemplate,
+} from "@cline/shared";
 
 /**
  * Which prompt template this CLI session is on.
@@ -67,14 +70,15 @@ export function resolveCliPromptTemplate(
 	options: CliPromptTemplateOptions,
 ): RenderedPromptTemplate | undefined {
 	try {
-		// Only Ollama can answer what a local model actually is, and only it
-		// needs to: a hosted provider's model ids already say. `readDeclaredFamily`
-		// reads the answer already cached by the context-window lookup, so this
-		// adds no request and no wait.
-		const family =
-			options.providerId === "ollama"
-				? readDeclaredFamily(options.baseUrl, options.modelId)
-				: undefined;
+		// Only Ollama and xOllama can answer what a local model actually is, and
+		// only they need to: a hosted provider's model ids already say.
+		// `readDeclaredFamily` reads the answer already cached by the
+		// context-window lookup, so this adds no request and no wait. xOllama
+		// was left out, so a local qwen there ran without `qwen.md` here and
+		// with it in the plugin.
+		const family = isOllamaNativeProvider(options.providerId)
+			? readDeclaredFamily(options.baseUrl, options.modelId)
+			: undefined;
 
 		const { rendered, errors, warnings } = resolveSessionPromptTemplateFrom({
 			providerId: options.providerId,

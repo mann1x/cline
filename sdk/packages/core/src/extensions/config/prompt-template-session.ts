@@ -1,5 +1,6 @@
+import { primeDeclaredNumCtx, readDeclaredFamily } from "@cline/llms";
 import type { RenderedPromptTemplate } from "@cline/shared";
-import { renderPromptTemplate } from "@cline/shared";
+import { isOllamaNativeProvider, renderPromptTemplate } from "@cline/shared";
 import { getBuiltinPromptTemplates } from "./builtin-templates";
 import {
 	loadPromptTemplates,
@@ -67,6 +68,38 @@ export function resolveSessionPromptTemplateFrom(
 	);
 
 	return { rendered, errors, warnings };
+}
+
+/**
+ * {@link resolveSessionPromptTemplateFrom}, with the family asked of the
+ * provider the way the plugin asks it: Ollama and xOllama answer what a local
+ * model actually is through `/api/show`, and a template chosen by family is
+ * chosen only where someone asked. An SDK host had no way to ask, so a local
+ * qwen ran on the built-in prompt there and on `qwen.md` in the plugin. The
+ * answer is the session's own window lookup, cached, so it costs nothing
+ * extra. A family the caller already has is used as given; a failed lookup
+ * costs the family template and nothing else.
+ */
+export async function resolveSessionPromptTemplate(
+	request: SessionPromptTemplateRequest & {
+		/** The provider's endpoint; blank means its default. */
+		baseUrl?: string;
+		fetch?: typeof fetch;
+	},
+): Promise<SessionPromptTemplateResult & { family?: string }> {
+	let family = request.family;
+	if (family === undefined && isOllamaNativeProvider(request.providerId)) {
+		await primeDeclaredNumCtx(
+			request.baseUrl,
+			request.modelId,
+			request.fetch ?? globalThis.fetch,
+		).catch(() => undefined);
+		family = readDeclaredFamily(request.baseUrl, request.modelId);
+	}
+	return {
+		...resolveSessionPromptTemplateFrom({ ...request, family }),
+		family,
+	};
 }
 
 /**

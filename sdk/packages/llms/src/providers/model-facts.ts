@@ -16,6 +16,9 @@ import {
 } from "@cline/shared";
 import {
 	describeReasoningHistoryPlan,
+	primeTemplateReinjection,
+	type ReasoningHistoryReport,
+	reportReasoningHistoryPlan,
 	resolveReasoningHistoryPlan,
 } from "./reasoning-history";
 
@@ -588,6 +591,58 @@ export function reasoningHistoryPlanForProvider(
 		unprobedReasoningHistory(providerId),
 		config?.reasoningInline ?? true,
 	);
+}
+
+/** {@link reasoningHistoryPlanForProvider}, as the data a host records. */
+export function reportReasoningHistoryForProvider(
+	providerId: string | undefined,
+	config?: ReasoningHistoryProviderConfig,
+): ReasoningHistoryReport {
+	if ((providerId ?? "").toLowerCase() === "cerebras") {
+		return {
+			setting: config?.reasoningHistory ?? "auto",
+			...nativeReasoningHistoryPlan("none"),
+			decidedBy: "set",
+			inline: false,
+			detail: "this vendor transmits no reasoning",
+		};
+	}
+	return reportReasoningHistoryPlan(
+		config?.reasoningHistory,
+		config?.baseUrl,
+		config?.modelId ?? "",
+		unprobedReasoningHistory(providerId),
+		config?.reasoningInline ?? true,
+	);
+}
+
+/**
+ * Measure the template before the session's first request, where that is
+ * free: `/apply-template` renders on the CPU and takes no slot. opencoti
+ * serves it, so its refusal is recorded. A generic OpenAI-compatible endpoint
+ * is asked too, because stock llama-server serves the same route; anything
+ * else answering there leaves that provider's standing default untouched.
+ * Ollama's probe loads the model, so it stays at the first request.
+ */
+export async function primeReasoningHistoryForProvider(
+	providerId: string | undefined,
+	baseUrl: string | undefined,
+	modelId: string | undefined,
+	fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+	if (!baseUrl || !modelId) {
+		return;
+	}
+	switch ((providerId ?? "").toLowerCase()) {
+		case "opencoti":
+			return primeTemplateReinjection(baseUrl, modelId, fetchImpl);
+		case "openai-compatible":
+			return primeTemplateReinjection(baseUrl, modelId, fetchImpl, {
+				recordRefusal: false,
+			});
+		default:
+			return;
+	}
 }
 
 export function resolveReasoningHistoryMode(

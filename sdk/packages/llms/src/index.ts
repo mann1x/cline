@@ -80,6 +80,7 @@ export {
 	classifyProviderError,
 	createHandler,
 	createHandlerAsync,
+	type DeclaredOllamaCapabilities,
 	extractClineFreeModelLimitResetTime,
 	extractClinePassLimitMessage,
 	forgetDeclaredModelInfo,
@@ -126,6 +127,7 @@ export {
 	probeOllamaThinkBudget,
 	readDeclaredFamily,
 	readDeclaredNumCtx,
+	readDeclaredOllamaCapabilities,
 	readDeclaredTemperature,
 	readDeclaredThinkBudgetMessage,
 	readOllamaAccountCache,
@@ -166,8 +168,10 @@ export {
 } from "./providers/gateway";
 export { toGatewayModelCapabilities } from "./providers/model-capabilities";
 export {
+	primeReasoningHistoryForProvider,
 	type ReasoningHistoryMode,
 	reasoningHistoryModeForProvider,
+	reportReasoningHistoryForProvider,
 } from "./providers/model-facts";
 export {
 	BUILTIN_MODEL_OPERATION_CAPABILITIES,
@@ -183,6 +187,7 @@ export {
 	supportsModelTool,
 } from "./providers/model-tools";
 export { resolveProviderModelCatalogKeys } from "./providers/provider-keys";
+export type { ReasoningHistoryReport } from "./providers/reasoning-history";
 // Saving every generation request's exact body, for replaying a turn.
 export {
 	type CapturedModelRequest,

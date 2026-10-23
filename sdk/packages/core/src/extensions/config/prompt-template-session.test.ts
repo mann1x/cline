@@ -1,8 +1,44 @@
 import { describe, expect, it } from "vitest";
 import {
 	describeResolvedPromptTemplate,
+	resolveSessionPromptTemplate,
 	resolveSessionPromptTemplateFrom,
 } from "./prompt-template-session";
+
+// The plugin asked Ollama for the family; an SDK host had no way to.
+describe("resolveSessionPromptTemplate", () => {
+	const show = (family: string) =>
+		(async (url: string) =>
+			String(url).endsWith("/show")
+				? new Response(JSON.stringify({ details: { family } }))
+				: new Response("{}", { status: 404 })) as unknown as typeof fetch;
+
+	it("asks xOllama what a local model is, and picks its family's template", async () => {
+		const { rendered, family } = await resolveSessionPromptTemplate({
+			providerId: "xollama",
+			modelId: "a3b-coder_tb:Q4_K_M",
+			baseUrl: "http://family-lookup.test:22434",
+			fetch: show("qwen35moe"),
+		});
+		expect(family).toBe("qwen35moe");
+		expect(rendered?.name).toBe("qwen");
+	});
+
+	it("does not ask a provider whose model ids already say", async () => {
+		let asked = false;
+		const { family } = await resolveSessionPromptTemplate({
+			providerId: "opencoti",
+			modelId: "gemma-4",
+			baseUrl: "http://no-lookup.test:8261",
+			fetch: (async () => {
+				asked = true;
+				return new Response("{}");
+			}) as unknown as typeof fetch,
+		});
+		expect(asked).toBe(false);
+		expect(family).toBeUndefined();
+	});
+});
 
 /**
  * The resolver both hosts now share.

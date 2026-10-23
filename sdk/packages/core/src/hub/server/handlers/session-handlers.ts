@@ -310,9 +310,11 @@ export async function handleSessionCreate(
 	} else if (typeof runtimeOptions.systemPrompt === "string") {
 		metadata.systemPrompt = runtimeOptions.systemPrompt;
 	}
-	if (sessionConfig?.checkpoint?.enabled === true) {
-		metadata.checkpointEnabled = true;
-	} else if (runtimeOptions.checkpointEnabled === true) {
+	// On unless switched off, as the bootstrap resolves it (`withSessionDefaults`).
+	if (
+		(sessionConfig?.checkpoint?.enabled ?? runtimeOptions.checkpointEnabled) !==
+		false
+	) {
 		metadata.checkpointEnabled = true;
 	}
 	metadata.autoApproveTools = resolveSessionAutoApproveTools(
@@ -472,11 +474,9 @@ export async function handleSessionCreate(
 				sessionConfig?.enableSpawnAgent ?? runtimeOptions.enableSpawn !== false,
 			enableAgentTeams:
 				sessionConfig?.enableAgentTeams ?? runtimeOptions.enableTeams === true,
-			checkpoint:
-				sessionConfig?.checkpoint ??
-				(runtimeOptions.checkpointEnabled === true
-					? { enabled: true }
-					: undefined),
+			checkpoint: sessionConfig?.checkpoint ?? {
+				enabled: runtimeOptions.checkpointEnabled !== false,
+			},
 			teamName:
 				sessionConfig?.teamName ??
 				(typeof metadata.teamName === "string" ? metadata.teamName : undefined),
@@ -607,9 +607,10 @@ export async function handleSessionRestore(
 		} else if (typeof runtimeOptions.systemPrompt === "string") {
 			metadata.systemPrompt = runtimeOptions.systemPrompt;
 		}
-		if (sessionConfig?.checkpoint?.enabled === true) {
-			metadata.checkpointEnabled = true;
-		} else if (runtimeOptions.checkpointEnabled === true) {
+		if (
+			(sessionConfig?.checkpoint?.enabled ??
+				runtimeOptions.checkpointEnabled) !== false
+		) {
 			metadata.checkpointEnabled = true;
 		}
 		metadata.autoApproveTools = resolveSessionAutoApproveTools(
@@ -761,11 +762,9 @@ export async function handleSessionRestore(
 						enableAgentTeams:
 							sessionConfig?.enableAgentTeams ??
 							runtimeOptions.enableTeams === true,
-						checkpoint:
-							sessionConfig?.checkpoint ??
-							(runtimeOptions.checkpointEnabled === true
-								? { enabled: true }
-								: undefined),
+						checkpoint: sessionConfig?.checkpoint ?? {
+							enabled: runtimeOptions.checkpointEnabled !== false,
+						},
 						teamName:
 							sessionConfig?.teamName ??
 							(typeof metadata.teamName === "string"

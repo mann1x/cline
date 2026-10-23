@@ -325,6 +325,58 @@ export function parseDeclaredTemperature(payload: unknown): number | undefined {
 	return Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+/**
+ * What the model says it can do, from `/api/show`'s `capabilities`: whether
+ * it reads images (`vision`) and whether it calls tools.
+ *
+ * The plugin asked for these and no other host did, so a local text model on
+ * the SDK was offered screenshots its catalog entry optimistically allowed.
+ * Read from the response the window lookup already makes. A field the server
+ * did not send is `undefined`, never `false`: older servers answer without
+ * `capabilities` at all, and a guess stays a guess.
+ */
+export interface DeclaredOllamaCapabilities {
+	images?: boolean;
+	tools?: boolean;
+}
+
+const declaredCapabilities = new Map<
+	string,
+	DeclaredOllamaCapabilities | null
+>();
+
+export function readDeclaredOllamaCapabilities(
+	baseUrl: string | undefined,
+	modelId: string | undefined,
+): DeclaredOllamaCapabilities | undefined {
+	if (!modelId) {
+		return undefined;
+	}
+	return declaredCapabilities.get(declaredKey(baseUrl, modelId)) ?? undefined;
+}
+
+export function parseDeclaredCapabilities(
+	payload: unknown,
+): DeclaredOllamaCapabilities | undefined {
+	if (!payload || typeof payload !== "object") {
+		return undefined;
+	}
+	const listed = (payload as { capabilities?: unknown }).capabilities;
+	if (!Array.isArray(listed)) {
+		return undefined;
+	}
+	const named = listed.filter(
+		(entry): entry is string => typeof entry === "string",
+	);
+	if (named.length === 0) {
+		return undefined;
+	}
+	return {
+		images: named.some((entry) => entry === "vision" || entry === "image"),
+		tools: named.includes("tools"),
+	};
+}
+
 const declaredThinkBudgetMessage = new Map<string, string | null>();
 
 /**
@@ -534,6 +586,7 @@ export async function primeDeclaredNumCtx(
 			declaredTrainedCtx.set(key, null);
 			declaredTemperature.set(key, null);
 			declaredThinkBudgetMessage.set(key, null);
+			declaredCapabilities.set(key, null);
 			await account;
 			return;
 		}
@@ -557,12 +610,14 @@ export async function primeDeclaredNumCtx(
 			key,
 			parseDeclaredThinkBudgetMessage(payload) ?? null,
 		);
+		declaredCapabilities.set(key, parseDeclaredCapabilities(payload) ?? null);
 	} catch {
 		declaredNumCtx.set(key, null);
 		declaredFamily.set(key, null);
 		declaredTrainedCtx.set(key, null);
 		declaredTemperature.set(key, null);
 		declaredThinkBudgetMessage.set(key, null);
+		declaredCapabilities.set(key, null);
 	}
 	await account;
 	const resolved = readResolvedOllamaWindow(baseUrl, modelId);
@@ -590,6 +645,7 @@ export function forgetDeclaredModelInfo(): void {
 	declaredTrainedCtx.clear();
 	declaredTemperature.clear();
 	declaredThinkBudgetMessage.clear();
+	declaredCapabilities.clear();
 }
 
 /** Test seam: forget every looked-up window and family. */

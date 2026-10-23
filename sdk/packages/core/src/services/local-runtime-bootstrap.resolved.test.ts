@@ -133,6 +133,135 @@ describe("what a session was built with", () => {
 		).rejects.toThrow("not the configuration that was asked for");
 	});
 
+	it("measures prior-reasoning replay before the report, through the host's fetch", async () => {
+		// automaticum #1833: `auto` never measured opencoti, because the probe
+		// posted under `/v1`, and nothing told the host what it resolved to.
+		const urls: string[] = [];
+		const fetch = async (url: string) => {
+			urls.push(String(url));
+			return String(url).endsWith("/apply-template")
+				? new Response(JSON.stringify({ prompt: "<start_of_turn>model\nhi" }))
+				: new Response("not found", { status: 404 });
+		};
+		const { resolvedConfig } = await bootstrap(
+			{
+				providerId: "opencoti",
+				modelId: "gemma-4",
+				baseUrl: "http://resolved-probe.test:8261/v1",
+				storedProviderSettings: "ignore",
+				fetch,
+			},
+			null,
+		).run;
+		expect(urls).toContain("http://resolved-probe.test:8261/apply-template");
+		expect(resolvedConfig.reasoningHistory).toEqual({
+			setting: "auto",
+			scope: "last",
+			channel: "inline",
+			decidedBy: "measured",
+			inline: true,
+			detail: "template drops reasoning",
+		});
+	});
+
+	it("gives a host that names no switch the plugin's defaults", async () => {
+		const { config, resolvedConfig } = await bootstrap({}, null).run;
+		expect(config.compaction?.enabled).toBe(true);
+		expect(config.checkpoint?.enabled).toBe(true);
+		expect(config.taskProgress?.enabled).toBe(true);
+		expect(resolvedConfig.session).toMatchObject({
+			compaction: { enabled: true },
+			checkpoint: { enabled: true },
+			taskProgress: { enabled: true },
+		});
+	});
+
+	it("keeps a switch a host turned off", async () => {
+		const { config } = await bootstrap(
+			{
+				compaction: { enabled: false, strategy: "basic" },
+				checkpoint: { enabled: false },
+				taskProgress: { enabled: false },
+			},
+			null,
+		).run;
+		expect(config.compaction).toMatchObject({
+			enabled: false,
+			strategy: "basic",
+		});
+		expect(config.checkpoint?.enabled).toBe(false);
+		expect(config.taskProgress?.enabled).toBe(false);
+	});
+
+	it("asks Ollama about the model before it budgets, as the plugin does", async () => {
+		const fetch = async (url: string) =>
+			String(url).endsWith("/api/show")
+				? new Response(
+						JSON.stringify({
+							parameters: "num_ctx                        65536",
+							capabilities: ["completion", "tools"],
+							details: { family: "qwen3" },
+						}),
+					)
+				: new Response("not found", { status: 404 });
+		const { providerConfig, resolvedConfig } = await bootstrap(
+			{
+				providerId: "ollama",
+				modelId: "qwen3:8b",
+				baseUrl: "http://ask-before-budget.test:11434",
+				storedProviderSettings: "ignore",
+				fetch,
+			},
+			null,
+		).run;
+		// The window the model declares is the one the session budgets against.
+		expect(resolvedConfig.contextWindow).toBe(65_536);
+		const entry = providerConfig.knownModels?.["qwen3:8b"] as {
+			contextWindow?: number;
+			maxInputTokens?: number;
+			maxTokens?: number;
+			capabilities?: string[];
+		};
+		expect(entry.contextWindow).toBe(65_536);
+		expect(entry.maxInputTokens).toBe(65_536);
+		// Ollama publishes no cap, so the session's own is written for compaction.
+		expect(entry.maxTokens).toBe(providerConfig.defaultMaxOutputTokens);
+		// It said it calls tools and did not say it reads images.
+		expect(entry.capabilities).toEqual(["tools"]);
+	});
+
+	it("stands client compaction down for an xOllama council", async () => {
+		const fetch = async (url: string) =>
+			String(url).endsWith("/api/show")
+				? new Response(
+						JSON.stringify({ xollama: { council: { enabled: true } } }),
+					)
+				: new Response("not found", { status: 404 });
+		const { config } = await bootstrap(
+			{
+				providerId: "xollama",
+				modelId: "council-a",
+				baseUrl: "http://council.test:22434",
+				storedProviderSettings: "ignore",
+				compaction: { enabled: true, cappedThinkingEnabled: true },
+				fetch,
+			},
+			null,
+		).run;
+		expect(config.compaction?.enabled).toBe(false);
+		expect(config.compaction?.cappedThinkingEnabled).toBe(false);
+		expect(config.staleReadRewrites).toBe(false);
+	});
+
+	it("reports a provider it does not probe as the standing default", async () => {
+		const { resolvedConfig } = await bootstrap({}, null).run;
+		expect(resolvedConfig.reasoningHistory).toMatchObject({
+			setting: "auto",
+			scope: "all",
+			decidedBy: "standing-default",
+		});
+	});
+
 	it("is data: nothing live in it, and no secret", async () => {
 		const { resolvedConfig } = await bootstrap({
 			headers: { "X-Api-Token": "also-secret" },

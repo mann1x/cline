@@ -48,6 +48,7 @@ export {
 } from "./prompt-template-review";
 export {
 	describeResolvedPromptTemplate,
+	resolveSessionPromptTemplate,
 	resolveSessionPromptTemplateFrom,
 	type SessionPromptTemplateRequest,
 	type SessionPromptTemplateResult,

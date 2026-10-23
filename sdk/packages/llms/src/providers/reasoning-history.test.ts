@@ -5,6 +5,7 @@ import {
 	describeReasoningHistoryPlan,
 	primeOllamaReinjection,
 	primeTemplateReinjection,
+	reportReasoningHistoryPlan,
 	resetReasoningReinjection,
 	resolveReasoningHistoryPlan,
 	resolveReasoningHistorySetting,
@@ -264,6 +265,140 @@ describe("the template probe reads the server's own rendered prompt", () => {
 			fetchImpl as unknown as typeof fetch,
 		);
 		expect(cachedReinjection("http://h", "m")?.reinjects).toBeUndefined();
+	});
+
+	it("posts to the server's root, not under the /v1 a client adds", async () => {
+		// llama-server serves /apply-template at its root only; the opencoti
+		// vendor hands the probe `<host>/v1`, and the probe 404'd on every
+		// session (automaticum #1833).
+		const urls: string[] = [];
+		const fetchImpl = async (url: string) => {
+			urls.push(url);
+			return new Response(JSON.stringify({ prompt: "hi" }), { status: 200 });
+		};
+		await primeTemplateReinjection(
+			"http://h:8261/v1/",
+			"m",
+			fetchImpl as unknown as typeof fetch,
+		);
+		expect(urls).toEqual(["http://h:8261/apply-template"]);
+	});
+
+	it("answers for the server however its URL was written", async () => {
+		const fetchImpl = async () =>
+			new Response(JSON.stringify({ prompt: "hi" }), { status: 200 });
+		await primeTemplateReinjection(
+			"http://h:8261/v1",
+			"m",
+			fetchImpl as unknown as typeof fetch,
+		);
+		expect(cachedReinjection("http://h:8261", "m")?.reinjects).toBe(false);
+		expect(cachedReinjection("http://h:8261/", "m")?.reinjects).toBe(false);
+	});
+
+	it("sends one probe for callers that overlap", async () => {
+		let calls = 0;
+		const fetchImpl = async () => {
+			calls += 1;
+			await new Promise((resolve) => setTimeout(resolve, 5));
+			return new Response(JSON.stringify({ prompt: "hi" }), { status: 200 });
+		};
+		await Promise.all([
+			primeTemplateReinjection(
+				"http://h",
+				"m",
+				fetchImpl as unknown as typeof fetch,
+			),
+			primeTemplateReinjection(
+				"http://h/v1",
+				"m",
+				fetchImpl as unknown as typeof fetch,
+			),
+		]);
+		expect(calls).toBe(1);
+	});
+
+	it("records nothing for a refusal it was told not to trust", async () => {
+		const fetchImpl = async () => new Response("not found", { status: 404 });
+		await primeTemplateReinjection(
+			"http://h/v1",
+			"m",
+			fetchImpl as unknown as typeof fetch,
+			{ recordRefusal: false },
+		);
+		expect(cachedReinjection("http://h/v1", "m")).toBeUndefined();
+	});
+
+	it("reads a 200 that is not a rendered prompt as a refusal", async () => {
+		const fetchImpl = async () =>
+			new Response(JSON.stringify({ ok: true }), { status: 200 });
+		await primeTemplateReinjection(
+			"http://h",
+			"m",
+			fetchImpl as unknown as typeof fetch,
+			{ recordRefusal: false },
+		);
+		expect(cachedReinjection("http://h", "m")).toBeUndefined();
+	});
+});
+
+describe("reportReasoningHistoryPlan says what decided the plan", () => {
+	beforeEach(() => {
+		resetReasoningReinjection();
+	});
+
+	it("reports an explicit setting as set", () => {
+		expect(reportReasoningHistoryPlan("all", "http://h", "m")).toEqual({
+			setting: "all",
+			scope: "all",
+			channel: "native",
+			decidedBy: "set",
+			inline: true,
+		});
+	});
+
+	it("reports an unprobed endpoint as the standing default", () => {
+		expect(
+			reportReasoningHistoryPlan(undefined, "http://h", "m", "all"),
+		).toMatchObject({
+			setting: "auto",
+			scope: "all",
+			decidedBy: "standing-default",
+		});
+	});
+
+	it("reports a measured template, with the probe's words", async () => {
+		const fetchImpl = async () =>
+			new Response(JSON.stringify({ prompt: "hi" }), { status: 200 });
+		await primeTemplateReinjection(
+			"http://h/v1",
+			"m",
+			fetchImpl as unknown as typeof fetch,
+		);
+		expect(reportReasoningHistoryPlan("auto", "http://h", "m")).toEqual({
+			setting: "auto",
+			scope: "last",
+			channel: "inline",
+			decidedBy: "measured",
+			inline: true,
+			detail: "template drops reasoning",
+		});
+	});
+
+	it("reports a probe that got no answer as unproven", async () => {
+		const fetchImpl = async () => new Response("no", { status: 404 });
+		await primeTemplateReinjection(
+			"http://h",
+			"m",
+			fetchImpl as unknown as typeof fetch,
+		);
+		expect(
+			reportReasoningHistoryPlan(undefined, "http://h", "m"),
+		).toMatchObject({
+			scope: "none",
+			decidedBy: "unproven",
+			detail: "/apply-template answered HTTP 404",
+		});
 	});
 });
 

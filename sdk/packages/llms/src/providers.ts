@@ -147,6 +147,8 @@ export async function createHandlerAsync(
 // it decides the thinking budget the server enforces, so anything asking the
 // server what that budget will be has to ask about this level.
 export {
+	// Whether the model reads images and calls tools, from the same response.
+	type DeclaredOllamaCapabilities,
 	// A host that outlives a session forgets what models declared when one starts.
 	forgetDeclaredModelInfo,
 	hasOllamaFetch,
@@ -162,6 +164,7 @@ export {
 	// on the model's architecture, and a local model's name does not carry one.
 	readDeclaredFamily,
 	readDeclaredNumCtx,
+	readDeclaredOllamaCapabilities,
 	// The Modelfile's own temperature: what a spawn's `temperature: "random"`
 	// randomizes around.
 	readDeclaredTemperature,

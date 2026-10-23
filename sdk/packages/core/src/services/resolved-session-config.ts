@@ -12,6 +12,7 @@
  * a token or a header's value is replaced by the word that it was there.
  */
 
+import type { ReasoningHistoryReport } from "@cline/llms";
 import type { ProviderConfig } from "../types/provider-settings";
 
 export interface ResolvedSessionConfig {
@@ -30,6 +31,14 @@ export interface ResolvedSessionConfig {
 	};
 	/** The sampler the session sends. Absent: the model's own. */
 	sampling?: Record<string, unknown>;
+	/**
+	 * How much earlier reasoning goes back to the model, by which route, and
+	 * what decided it. `auto` (the default, as in the plugin) is measured
+	 * before this report where the probe is free (opencoti, and stock
+	 * llama-server behind openai-compatible); ollama's probe runs at the first
+	 * request, so there `decidedBy` is still `standing-default` here.
+	 */
+	reasoningHistory: ReasoningHistoryReport;
 	/** The provider configuration, with secrets and live objects removed. */
 	provider: Record<string, unknown>;
 	/** The session's own settings, the same way. */

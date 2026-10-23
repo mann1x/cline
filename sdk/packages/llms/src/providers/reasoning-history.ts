@@ -65,12 +65,29 @@ const reinjection = new Map<string, ReasoningReinjection>();
  */
 const reinjectionInFlight = new Map<string, Promise<void>>();
 
+/**
+ * Keyed by the server, not by how its URL was written. The probe is handed
+ * the vendor's normalized URL (opencoti always ends in `/v1`) and the request
+ * path reads the one the host configured, which may not; keyed on the raw
+ * string, a measured answer was never found again.
+ */
 function cacheKey(baseUrl: string | undefined, modelId: string): string {
-	return `${(baseUrl ?? "default").replace(/\/+$/, "")}::${modelId}`;
+	return `${baseUrl ? serverRoot(baseUrl) : "default"}::${modelId}`;
 }
 
 function root(baseUrl: string | undefined): string {
 	return (baseUrl ?? "").replace(/\/+$/, "");
+}
+
+/**
+ * The server's own root: the configured URL without the API prefix a client
+ * library adds. llama-server serves `/apply-template` there and nowhere else
+ * (tools/server/server.cpp), so the probe posted to `<host>/v1/apply-template`
+ * got a 404 on every opencoti session and left `auto` at "none". Same rule as
+ * `polykvRoot`, restated here because the vendors import this module.
+ */
+function serverRoot(baseUrl: string | undefined): string {
+	return root(baseUrl).replace(/\/(?:v1|api)$/, "");
 }
 
 /**
@@ -84,7 +101,7 @@ function root(baseUrl: string | undefined): string {
  * imports this one.
  */
 function ollamaApiRoot(baseUrl: string | undefined): string {
-	return `${root(baseUrl).replace(/\/(?:v1|api)$/, "")}/api`;
+	return `${serverRoot(baseUrl)}/api`;
 }
 
 /**
@@ -278,13 +295,46 @@ export async function primeTemplateReinjection(
 	baseUrl: string | undefined,
 	modelId: string,
 	fetchImpl: typeof fetch = fetch,
+	options: {
+		/**
+		 * Whether a refused or failed probe is recorded as "unproven". True for
+		 * an engine that serves the route, where a refusal means the answer is
+		 * unknown and nothing is sent. False for an endpoint that may not be
+		 * llama-server at all: there the refusal says nothing about its
+		 * template, and recording it would replace the provider's standing
+		 * default (a hosted API's reasoning replay) with "none".
+		 */
+		recordRefusal?: boolean;
+	} = {},
 ): Promise<void> {
 	const key = cacheKey(baseUrl, modelId);
 	if (reinjection.has(key)) {
 		return;
 	}
+	const running = reinjectionInFlight.get(key);
+	if (running) {
+		return running;
+	}
+	const probe = probeTemplateReinjection(
+		key,
+		baseUrl,
+		fetchImpl,
+		options.recordRefusal ?? true,
+	).finally(() => {
+		reinjectionInFlight.delete(key);
+	});
+	reinjectionInFlight.set(key, probe);
+	return probe;
+}
+
+async function probeTemplateReinjection(
+	key: string,
+	baseUrl: string | undefined,
+	fetchImpl: typeof fetch,
+	recordRefusal: boolean,
+): Promise<void> {
 	try {
-		const response = await fetchImpl(`${root(baseUrl)}/apply-template`, {
+		const response = await fetchImpl(`${serverRoot(baseUrl)}/apply-template`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
@@ -300,15 +350,24 @@ export async function primeTemplateReinjection(
 				],
 			}),
 		});
-		if (!response.ok) {
-			reinjection.set(key, {
-				channel: "reasoning-content",
-				reinjects: undefined,
-			});
+		const body = response.ok
+			? ((await response.json().catch(() => undefined)) as
+					| { prompt?: unknown }
+					| undefined)
+			: undefined;
+		// Only a rendered prompt is an answer. A 200 with some other body is an
+		// endpoint that is not llama-server, which is a refusal by another name.
+		if (typeof body?.prompt !== "string") {
+			if (recordRefusal) {
+				reinjection.set(key, {
+					channel: "reasoning-content",
+					reinjects: undefined,
+					detail: `/apply-template answered HTTP ${response.status}`,
+				});
+			}
 			return;
 		}
-		const body = (await response.json()) as { prompt?: string };
-		const seen = (body.prompt ?? "").includes(REINJECTION_NEEDLE);
+		const seen = body.prompt.includes(REINJECTION_NEEDLE);
 		reinjection.set(key, {
 			channel: "reasoning-content",
 			reinjects: seen,
@@ -317,10 +376,12 @@ export async function primeTemplateReinjection(
 				: "template drops reasoning",
 		});
 	} catch {
-		reinjection.set(key, {
-			channel: "reasoning-content",
-			reinjects: undefined,
-		});
+		if (recordRefusal) {
+			reinjection.set(key, {
+				channel: "reasoning-content",
+				reinjects: undefined,
+			});
+		}
 	}
 }
 
@@ -403,6 +464,63 @@ export function resolveReasoningHistoryPlan(
 	// thinking history in every prompt. Inlining makes that cost unconditional
 	// rather than dependent on a renderer, which makes it worse, not better.
 	return { scope: "last", channel: "inline" };
+}
+
+/** The plan as data, with what decided it: for a host's record of the run. */
+export interface ReasoningHistoryReport {
+	/** What was asked for. Unset is `auto`. */
+	setting: ReasoningHistorySetting;
+	scope: ReasoningHistoryMode;
+	channel: ReasoningHistoryPlan["channel"];
+	/**
+	 * - `set`: an explicit choice, which no probe overrides.
+	 * - `measured`: `auto`, and the server answered the probe.
+	 * - `unproven`: `auto`, the server was asked and gave no answer, so
+	 *   nothing is sent.
+	 * - `standing-default`: `auto`, and this endpoint is not probed (or not
+	 *   yet: ollama's probe needs the model loaded and runs at the first
+	 *   request), so the provider's long-standing behaviour holds.
+	 */
+	decidedBy: "set" | "measured" | "unproven" | "standing-default";
+	inline: boolean;
+	detail?: string;
+}
+
+export function reportReasoningHistoryPlan(
+	setting: ReasoningHistorySetting | undefined,
+	baseUrl: string | undefined,
+	modelId: string,
+	unprobed: ReasoningHistoryMode = "none",
+	allowInline = true,
+): ReasoningHistoryReport {
+	const plan = resolveReasoningHistoryPlan(
+		setting,
+		baseUrl,
+		modelId,
+		unprobed,
+		allowInline,
+	);
+	const base = {
+		setting: setting ?? "auto",
+		scope: plan.scope,
+		channel: plan.channel,
+		inline: allowInline,
+	};
+	if (setting !== undefined && setting !== "auto") {
+		return { ...base, decidedBy: "set" };
+	}
+	const capability = cachedReinjection(baseUrl, modelId);
+	if (!capability) {
+		return { ...base, decidedBy: "standing-default" };
+	}
+	return {
+		...base,
+		decidedBy:
+			capability.channel !== "none" && capability.reinjects === undefined
+				? "unproven"
+				: "measured",
+		...(capability.detail ? { detail: capability.detail } : {}),
+	};
 }
 
 /**

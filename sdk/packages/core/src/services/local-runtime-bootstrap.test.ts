@@ -652,7 +652,15 @@ describe("prepareLocalRuntimeBootstrap", () => {
 
 		expect(bootstrap.providerConfig.defaultMaxOutputTokens).toBe(96_000);
 		expect(bootstrap.providerConfig.thinkingBudgetTokens).toBe(24_000);
-		const body = JSON.parse(String(showFetch.mock.calls[0]?.[1]?.body));
+		// The session asks the model about itself first (`/api/show` with no
+		// options); the think-budget probe is the request that carries options.
+		const probe = showFetch.mock.calls
+			.map((call) => (call as unknown[])[1] as { body?: unknown } | undefined)
+			.map((init) =>
+				typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+			)
+			.find((sent) => sent?.options !== undefined);
+		const body = probe ?? {};
 		expect(body.options).toEqual({
 			think_budget: "medium",
 			num_predict: 96_000,

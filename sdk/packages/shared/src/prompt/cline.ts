@@ -214,6 +214,11 @@ export interface ClineSystemPromptOptions
 	 * workspace metadata are lifted into an `<environment>` turn by the
 	 * provider, so the system turn is the same for every conversation. See
 	 * `./environment.ts`. Off, the prompt is exactly what it always was.
+	 *
+	 * Unset, it is on for opencoti and off for everything else: the provider
+	 * that lifts the spans is opencoti's, and the plugin has always asked for
+	 * it there. A host that built the prompt without saying -- automaticum's
+	 * runner did -- sent opencoti a system turn that differed per session.
 	 */
 	environmentTurn?: boolean;
 }
@@ -283,7 +288,7 @@ export function buildClineSystemPrompt(
 		.filter(Boolean)
 		.join("\n\n");
 
-	if (options.environmentTurn) {
+	if (options.environmentTurn ?? providerId === "opencoti") {
 		// The static rules stay in place; everything that differs between
 		// sessions -- or between turns, as the mode does -- becomes a span.
 		const staticRules = [POSIX_TOOL_AVAILABILITY, modeTagInstructions]

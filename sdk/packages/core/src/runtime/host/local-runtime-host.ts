@@ -1224,7 +1224,12 @@ export class LocalRuntimeHost implements RuntimeHost {
 				appendLoopCut(join(sessionDir, delegatedLoopCutFile(cut.agentId)), cut),
 		});
 		if (runtime.teamRuntime && !configWithProvider.teamName?.trim()) {
-			configWithProvider.teamName = runtime.teamRuntime.getTeamName();
+			// Onto both: the runtime builder holds `bootstrap.config`, and the two
+			// are one object only while no compaction block was set -- which the
+			// session defaults now always set.
+			const teamName = runtime.teamRuntime.getTeamName();
+			configWithProvider.teamName = teamName;
+			bootstrap.config.teamName = teamName;
 		}
 
 		// Auth-retry hook for every agent in the session (lead, teammates,

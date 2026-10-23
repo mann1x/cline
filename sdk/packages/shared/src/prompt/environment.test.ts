@@ -72,12 +72,30 @@ describe("a system prompt built with an environment turn", () => {
 		expect(flat).toContain("c:/work/one");
 	});
 
-	it("is unchanged without the option", () => {
-		const plain = buildClineSystemPrompt({
+	it("is unchanged when switched off, or off opencoti", () => {
+		for (const options of [
+			{ providerId: "opencoti", environmentTurn: false },
+			{ providerId: "ollama" },
+			{},
+		]) {
+			const plain = buildClineSystemPrompt({
+				workspaceRoot: "c:/work/one",
+				...options,
+			});
+			expect(hasPromptEnvironment(plain)).toBe(false);
+			expect(plain).toContain("Working Directory: c:/work/one");
+		}
+	});
+
+	// What the plugin asks for there, so a host that does not say gets it too.
+	it("is on for opencoti when the host does not say", () => {
+		const built = buildClineSystemPrompt({
 			workspaceRoot: "c:/work/one",
 			providerId: "opencoti",
 		});
-		expect(hasPromptEnvironment(plain)).toBe(false);
-		expect(plain).toContain("Working Directory: c:/work/one");
+		expect(hasPromptEnvironment(built)).toBe(true);
+		expect(hoistPromptEnvironment(built)?.environment).toContain(
+			"## Working Directory\nc:/work/one",
+		);
 	});
 });

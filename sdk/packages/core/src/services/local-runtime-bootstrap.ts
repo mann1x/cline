@@ -1,6 +1,12 @@
 import { existsSync } from "node:fs";
 import {
+	primeDeclaredNumCtx,
+	primeReasoningHistoryForProvider,
+	readDeclaredOllamaCapabilities,
 	readResolvedOllamaWindow,
+	readXollamaModel,
+	reportReasoningHistoryForProvider,
+	resolveOllamaOrigin,
 	resolveProviderRequestHeaders,
 } from "@cline/llms";
 import type {
@@ -323,6 +329,211 @@ const positiveNumber = (value: unknown): number | undefined =>
 		: undefined;
 
 /**
+ * The plugin's defaults, for a host that leaves a switch out.
+ *
+ * The VS Code factory always sends these three, on by default, so the SDK's
+ * own absent-means-off was never seen there -- and every other host got a
+ * session the plugin never runs: no auto-compaction, no checkpoints, no
+ * checklist. A harness measuring "the plugin's behaviour" through the SDK was
+ * measuring something else (owner, 2026-10-23). Off is still a value a host
+ * can send.
+ */
+export function withSessionDefaults(
+	config: CoreSessionConfig,
+): CoreSessionConfig {
+	return {
+		...config,
+		compaction: {
+			...(config.compaction ?? {}),
+			enabled: config.compaction?.enabled ?? true,
+		},
+		checkpoint: {
+			...(config.checkpoint ?? {}),
+			enabled: config.checkpoint?.enabled ?? true,
+		},
+		taskProgress: {
+			...(config.taskProgress ?? {}),
+			enabled: config.taskProgress?.enabled ?? true,
+		},
+	};
+}
+
+/**
+ * What the model says about itself, asked before the session budgets.
+ *
+ * The plugin asks Ollama's `/api/show` before it resolves anything: the
+ * window the session budgets against, the think-budget message, and whether
+ * the model reads images and calls tools. Every other host budgeted first, so
+ * the output cap and thinking allowance were sized without the window, and
+ * the first request -- which the vendor primes for itself -- went out with a
+ * `num_ctx` the session's own figures did not know. And an xOllama council
+ * compacts its conversation server-side, so client compaction has to stand
+ * down there, which only the plugin knew to do.
+ */
+async function askModelForSession(
+	config: CoreSessionConfig,
+	providerConfig: ProviderConfig,
+): Promise<{ council: boolean }> {
+	const modelId = providerConfig.modelId ?? config.modelId;
+	const fetchImpl = providerConfig.fetch ?? globalThis.fetch;
+	// A host that resolved its own budget asked already: the plugin reads
+	// `/api/show` and the council flag itself, keyed by its own URL field, and
+	// asking again here would repeat those requests under another key.
+	const hostResolved =
+		config.providerConfig?.providerId === config.providerId &&
+		positiveNumber(config.providerConfig?.defaultMaxOutputTokens) !== undefined;
+	if (hostResolved || !modelId || !isOllamaNativeProvider(config.providerId)) {
+		return { council: false };
+	}
+	await primeDeclaredNumCtx(
+		providerConfig.baseUrl,
+		modelId,
+		fetchImpl,
+		config.logger,
+	).catch(() => undefined);
+	applyDeclaredCapabilities(
+		providerConfig,
+		modelId,
+		readDeclaredOllamaCapabilities(providerConfig.baseUrl, modelId),
+		config.knownModels?.[modelId],
+	);
+	if (config.providerId !== "xollama") {
+		return { council: false };
+	}
+	const model = await readXollamaModel(
+		resolveOllamaOrigin(config.providerId, providerConfig.baseUrl),
+		modelId,
+		fetchImpl,
+	).catch(() => undefined);
+	return { council: model?.council === true };
+}
+
+/**
+ * The capabilities Ollama declared, onto the model's catalog entry, by the
+ * plugin's rule. A list is unspecified only while it is empty: once one is
+ * written, a capability it leaves out reads as "cannot", so a model Ollama
+ * did not describe as unable to call tools keeps `tools`. A host that stated
+ * the model's capabilities itself is left alone.
+ */
+function applyDeclaredCapabilities(
+	providerConfig: ProviderConfig,
+	modelId: string,
+	declared: { images?: boolean; tools?: boolean } | undefined,
+	hostEntry: unknown,
+): void {
+	if (
+		!declared ||
+		(declared.images === undefined && declared.tools === undefined) ||
+		Array.isArray((hostEntry as { capabilities?: unknown })?.capabilities)
+	) {
+		return;
+	}
+	const existing = providerConfig.knownModels?.[modelId] as
+		| { capabilities?: string[] }
+		| undefined;
+	const capabilities = new Set<string>(existing?.capabilities ?? []);
+	const apply = (name: string, supported: boolean | undefined) => {
+		if (supported === true) {
+			capabilities.add(name);
+		} else if (supported === false) {
+			capabilities.delete(name);
+		}
+	};
+	apply("images", declared.images);
+	apply("tools", declared.tools);
+	if (declared.tools === undefined && capabilities.size > 0) {
+		capabilities.add("tools");
+	}
+	providerConfig.knownModels = {
+		...(providerConfig.knownModels ?? {}),
+		[modelId]: {
+			...(existing ?? {}),
+			id: modelId,
+			capabilities: [...capabilities],
+		},
+	} as ProviderConfig["knownModels"];
+}
+
+/**
+ * An xOllama council folds its own conversation (xollama #370, D1), keyed on
+ * the messages its record replaced. Client compaction, the stale-read rewrite
+ * and the capped-thinking condenser would all hand it a history it did not
+ * fold, and it would fold again. The plugin turns all three off for one,
+ * whatever the settings say; so does every other host now.
+ */
+function withoutClientCompaction(config: CoreSessionConfig): CoreSessionConfig {
+	config.logger?.log(
+		`${config.modelId} is an xOllama council: it compacts server-side; client compaction is off`,
+		{ severity: "info" },
+	);
+	return {
+		...config,
+		compaction: {
+			...(config.compaction ?? {}),
+			enabled: false,
+			cappedThinkingEnabled: false,
+		},
+		staleReadRewrites: false,
+	};
+}
+
+/**
+ * The session's window and output cap, onto the model's catalog entry.
+ *
+ * That entry is where compaction reads the window and the cap from. The
+ * plugin writes both there for every session; without them a local model's
+ * trigger was computed from a catalog guess and its long-conversation target
+ * from no cap at all (the factory's account of both is at the same write).
+ * Only a window that was actually reported is written, or an entry that
+ * already exists amended, so a provider whose lookup failed gets no invented
+ * metadata.
+ */
+function writeSessionWindow(
+	providerConfig: ProviderConfig,
+	config: CoreSessionConfig,
+	stored: ProviderSettings | undefined,
+	contextWindow: number | undefined,
+	reported: boolean,
+): void {
+	const modelId = config.modelId;
+	const existing = providerConfig.knownModels?.[modelId] as
+		| { contextWindow?: number; maxInputTokens?: number; maxTokens?: number }
+		| undefined;
+	if (contextWindow === undefined || (!reported && !existing)) {
+		return;
+	}
+	// A cap someone chose goes on the wire, so it wins; then the model's own;
+	// the synthesized one only for Ollama, whose models publish none.
+	const explicitCap =
+		positiveNumber(stored?.sampling?.numPredict) ??
+		positiveNumber(config.maxTokensPerTurn) ??
+		(stored?.outputBudget?.mode === "manual"
+			? positiveNumber(stored.outputBudget.maxTokens)
+			: undefined);
+	const maxTokens =
+		explicitCap ??
+		positiveNumber(existing?.maxTokens) ??
+		(isOllamaNativeProvider(config.providerId)
+			? positiveNumber(providerConfig.defaultMaxOutputTokens)
+			: undefined);
+	providerConfig.knownModels = {
+		...(providerConfig.knownModels ?? {}),
+		[modelId]: {
+			...(existing ?? {}),
+			id: modelId,
+			contextWindow,
+			// A window the host named was written by `buildProviderConfig`, which
+			// clears this so a stale catalog figure cannot cap it; left so.
+			maxInputTokens:
+				positiveNumber(config.contextWindow) !== undefined
+					? existing?.maxInputTokens
+					: Math.min(existing?.maxInputTokens ?? contextWindow, contextWindow),
+			...(maxTokens !== undefined ? { maxTokens } : {}),
+		},
+	} as ProviderConfig["knownModels"];
+}
+
+/**
  * The report a host is handed before the first request: what the session
  * will run with, and what of it came from the stored profile.
  */
@@ -425,6 +636,12 @@ function describeResolvedSession(input: {
 					>,
 				}
 			: {}),
+		reasoningHistory: reportReasoningHistoryForProvider(config.providerId, {
+			modelId: providerConfig.modelId ?? config.modelId,
+			baseUrl: providerConfig.baseUrl,
+			reasoningHistory: providerConfig.reasoningHistory,
+			reasoningInline: providerConfig.reasoningInline,
+		}),
 		provider: toReportValue(providerConfig) as Record<string, unknown>,
 		session: toReportValue(config) as Record<string, unknown>,
 		...(config.systemPrompt ? { systemPrompt: config.systemPrompt } : {}),
@@ -810,7 +1027,7 @@ export async function prepareLocalRuntimeBootstrap(
 	const pluginSkillDirectories = hasConfigExtension(configExtensions, "plugins")
 		? resolvePluginSkillDirectoriesFromPaths(loadedPlugins?.pluginPaths ?? [])
 		: undefined;
-	const baseConfig: CoreSessionConfig = {
+	const hostConfig = withSessionDefaults({
 		...input.config,
 		...(localConfig ?? {}),
 		sessionId,
@@ -819,24 +1036,41 @@ export async function prepareLocalRuntimeBootstrap(
 		extensionContext,
 		telemetry: extensionContext.telemetry,
 		logger: extensionContext.logger,
-	};
+	});
 	const storedProviderSettings = readStoredProviderSettings(
-		baseConfig,
+		hostConfig,
 		providerSettingsManager,
 	);
 	const providerConfig = buildProviderConfig(
-		baseConfig,
+		hostConfig,
 		sessionId,
 		input.source,
 		storedProviderSettings,
 		modelCatalogDefaults,
 		defaultFetch,
 	);
+	const modelFacts = await askModelForSession(hostConfig, providerConfig);
+	const baseConfig = modelFacts.council
+		? withoutClientCompaction(hostConfig)
+		: hostConfig;
 	const sessionBudget = await applySessionBudget(
 		providerConfig,
 		baseConfig,
 		storedProviderSettings,
 	);
+	if (sessionBudget) {
+		writeSessionWindow(
+			providerConfig,
+			baseConfig,
+			storedProviderSettings,
+			sessionBudget.contextWindow,
+			(positiveNumber(baseConfig.contextWindow) ??
+				positiveNumber(storedProviderSettings?.contextWindow) ??
+				(isOllamaNativeProvider(baseConfig.providerId)
+					? readResolvedOllamaWindow(providerConfig.baseUrl, baseConfig.modelId)
+					: undefined)) !== undefined,
+		);
+	}
 	const hooks = mergeAgentHooks([
 		baseConfig.hooks,
 		baseConfig.checkpoint?.enabled === true
@@ -906,6 +1140,15 @@ export async function prepareLocalRuntimeBootstrap(
 				}
 			: {}),
 	};
+	// So `auto` is measured, not assumed, in the report below and from the
+	// first request on. Free where it runs (a CPU-only template render), and a
+	// probe that fails leaves the session as it would have been.
+	await primeReasoningHistoryForProvider(
+		config.providerId,
+		providerConfig.baseUrl,
+		providerConfig.modelId ?? config.modelId,
+		providerConfig.fetch ?? globalThis.fetch,
+	).catch(() => undefined);
 	const resolvedConfig = describeResolvedSession({
 		config,
 		hostConfig: baseConfig,

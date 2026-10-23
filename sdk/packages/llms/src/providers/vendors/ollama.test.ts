@@ -13,12 +13,14 @@ import {
 	OLLAMA_DEFAULT_NUM_CTX,
 	OLLAMA_DEFAULT_REASONING_EFFORT,
 	OLLAMA_DEFAULT_TIMEOUT_MS,
+	parseDeclaredCapabilities,
 	parseDeclaredFamily,
 	parseDeclaredNumCtx,
 	parseDeclaredTemperature,
 	parseDeclaredTrainedCtx,
 	primeDeclaredNumCtx,
 	readDeclaredFamily,
+	readDeclaredOllamaCapabilities,
 	readDeclaredTemperature,
 	readOllamaNumCtx,
 	readOllamaNumPredict,
@@ -192,6 +194,31 @@ describe("the window the model declares for itself", () => {
 	it("uses the declared window instead of the default", async () => {
 		await primeDeclaredNumCtx(LOCAL, "minimax-m3:cloud", showFetch(SHOW_BODY));
 		expect(readOllamaNumCtx(contextAt(LOCAL))).toBe(128000);
+	});
+
+	// The plugin read these off its own /api/show; every host reads them here.
+	it("records what the model says it can do, from the same answer", async () => {
+		const fetchImpl = showFetch({
+			...SHOW_BODY,
+			capabilities: ["completion", "vision", "tools", "thinking"],
+		});
+		await primeDeclaredNumCtx(LOCAL, "qwen3-vl", fetchImpl);
+		expect(readDeclaredOllamaCapabilities(LOCAL, "qwen3-vl")).toEqual({
+			images: true,
+			tools: true,
+		});
+		expect(showCalls(fetchImpl)).toBe(1);
+	});
+
+	it("says nothing about capabilities a server did not list", () => {
+		expect(parseDeclaredCapabilities(SHOW_BODY)).toBeUndefined();
+		expect(parseDeclaredCapabilities({ capabilities: [] })).toBeUndefined();
+		expect(parseDeclaredCapabilities({ capabilities: ["completion"] })).toEqual(
+			{
+				images: false,
+				tools: false,
+			},
+		);
 	});
 
 	// The user's own setting is an instruction, not a guess, and outranks the

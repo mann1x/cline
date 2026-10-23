@@ -338,6 +338,7 @@ export {
 	resolveCompactionPromptSources,
 	resolvePromptTemplateDirectories,
 	resolveRulesConfigSearchPaths,
+	resolveSessionPromptTemplate,
 	resolveSessionPromptTemplateFrom,
 	resolveSkillsConfigSearchPaths,
 	resolveWorkflowsConfigSearchPaths,
