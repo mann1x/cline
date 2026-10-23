@@ -5,6 +5,47 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.260] — 2026-10-23
+
+### SDK
+
+- **An SDK session now runs the way the plugin's does when a host leaves a
+  setting out.** The extension always sends its own values. Every other host,
+  including the CLI's unset fields and any program built on
+  `@cerebriline/sdk`, got what the SDK did on its own. In several places that
+  was not what the plugin runs:
+  - Auto-compaction, checkpoints and the task checklist are on unless a host
+    turns them off. Before this they were off unless a host turned them on.
+  - On Ollama and xOllama, the SDK asks the model about itself before it sizes
+    the session, as the plugin does. The window the model declares now sets the
+    output cap, the thinking allowance and the compaction trigger. Until now
+    these were sized without it, while the first request already used it.
+  - Whether a local model reads images and calls tools now comes from what
+    Ollama reports, so a text-only model is no longer sent screenshots.
+  - An xOllama council compacts its own conversation, so client-side
+    compaction stands down for one on every host, not only in the plugin.
+  - opencoti gets the same system turn from every host, so its shared prompt
+    cache is reused across sessions.
+  - `resolveSessionPromptTemplate` asks Ollama or xOllama which family a local
+    model belongs to, and picks that family's template, as the plugin does.
+
+- **"Prior reasoning: Automatic" now works on opencoti and llama-server.** The
+  check that decides how much earlier reasoning to send back posted to
+  `/v1/apply-template`, where the server has no such route. So Automatic never
+  measured anything, and every earlier reasoning block was dropped. This
+  affected the plugin as well as the SDK. The check now goes to the server's
+  root, and it runs before the session starts.
+  - A llama-server behind the "OpenAI compatible" provider is checked too.
+  - An endpoint that is not llama-server keeps what it did before.
+  - The result is reported to the host as `reasoningHistory` in
+    `onConfigResolved`: what was sent, by which route, and whether it was
+    measured, set by hand, or left at the provider's default.
+
+### CLI
+
+- On xOllama the CLI now picks a local model's family template, as it already
+  did on Ollama.
+
 ## [4.100.259] — 2026-10-23
 
 ### Agents
