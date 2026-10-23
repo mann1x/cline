@@ -284,6 +284,26 @@ describe("the template probe reads the server's own rendered prompt", () => {
 		expect(urls).toEqual(["http://h:8261/apply-template"]);
 	});
 
+	it("asks in the shape an agent run sends: reasoning on a tool call after the only user turn", async () => {
+		// Asked with a user message after the reasoning, Gemma-4's official
+		// template (ae53464b), which keeps reasoning only since the last user
+		// turn, was measured as dropping what it renders (automaticum #1845).
+		let sent: { messages: Array<Record<string, unknown>> } | undefined;
+		const fetchImpl = async (_url: string, init: RequestInit) => {
+			sent = JSON.parse(String(init.body));
+			return new Response(JSON.stringify({ prompt: "hi" }), { status: 200 });
+		};
+		await primeTemplateReinjection(
+			"http://h:8261",
+			"m",
+			fetchImpl as unknown as typeof fetch,
+		);
+		const roles = sent?.messages.map((message) => message.role);
+		expect(roles).toEqual(["user", "assistant", "tool"]);
+		expect(sent?.messages[1]?.tool_calls).toBeDefined();
+		expect(sent?.messages[1]?.reasoning_content).toBeDefined();
+	});
+
 	it("answers for the server however its URL was written", async () => {
 		const fetchImpl = async () =>
 			new Response(JSON.stringify({ prompt: "hi" }), { status: 200 });

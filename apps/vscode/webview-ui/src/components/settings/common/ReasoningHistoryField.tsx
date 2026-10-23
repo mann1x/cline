@@ -94,7 +94,9 @@ export const ReasoningHistoryField = ({ providerId }: { providerId: string }) =>
 					<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
 						Only under Automatic, and only where the endpoint has been measured to render none of the reasoning field:
 						the last block is folded into the assistant's own message as <code>&lt;think&gt;…&lt;/think&gt;</code>,
-						which every chat template does render. Turn it off to send nothing rather than spend the tokens.
+						which every chat template does render. A message that calls a tool is left out, because a template may
+						place its text after the tool's result and end the turn there. Turn it off to send nothing rather than
+						spend the tokens.
 					</p>
 				</div>
 			) : null}

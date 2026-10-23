@@ -901,6 +901,13 @@ export function toAiSdkMessages(
 		// folded into the assistant's text instead, because this endpoint's chat
 		// template renders the field and then throws it away.
 		const inlined: string[] = [];
+		// Never into a turn that calls a tool. A template renders an assistant's
+		// text where its own layout puts it -- Gemma-4's after the tool
+		// response, and as the text that closes the model turn -- so the block
+		// lands out of the order it was generated in, and every turn after a
+		// tool result then starts without a turn header (automaticum #1845).
+		// Such a turn's reasoning is dropped, as the template itself drops it.
+		const callsTool = message.content.some((part) => part.type === "tool-call");
 		for (const part of message.content) {
 			if (part.type === "text") {
 				content.push({ type: "text", text: sanitizeSurrogates(part.text) });
@@ -920,6 +927,10 @@ export function toAiSdkMessages(
 					continue;
 				}
 				if (plan.channel === "inline") {
+					if (callsTool) {
+						skippedReasoning = true;
+						continue;
+					}
 					const text = sanitizeSurrogates(part.text).trim();
 					if (text.length > 0) {
 						inlined.push(text);

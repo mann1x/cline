@@ -337,16 +337,40 @@ async function probeTemplateReinjection(
 		const response = await fetchImpl(`${serverRoot(baseUrl)}/apply-template`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
+			// The shape an agent run sends: one user message, then the model's
+			// tool call carrying its reasoning, then the tool's result. Asked
+			// with a user message *after* the reasoning, a template that keeps
+			// reasoning only since the last user turn -- Gemma-4's official one
+			// (ae53464b), qwen3's -- answers "drops", and this was the question
+			// asked: Gemma was measured as dropping what it renders, and fell to
+			// inlining, which breaks its turn structure (automaticum #1845).
 			body: JSON.stringify({
 				messages: [
 					{ role: "user", content: "probe" },
 					{
 						role: "assistant",
-						content: "hi",
+						content: "",
 						reasoning_content: REINJECTION_NEEDLE,
 						thinking: REINJECTION_NEEDLE,
+						tool_calls: [
+							{
+								id: "call_probe",
+								type: "function",
+								function: { name: "probe", arguments: "{}" },
+							},
+						],
 					},
-					{ role: "user", content: "probe" },
+					{ role: "tool", tool_call_id: "call_probe", content: "probe" },
+				],
+				tools: [
+					{
+						type: "function",
+						function: {
+							name: "probe",
+							description: "probe",
+							parameters: { type: "object", properties: {} },
+						},
+					},
 				],
 			}),
 		});
