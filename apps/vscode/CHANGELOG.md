@@ -5,6 +5,21 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.262] — 2026-10-23
+
+### Agents
+
+- **On llama-server and opencoti, prior reasoning now survives the harness's
+  own nudges.** Reminders such as "your last message contained no tool calls"
+  are sent as user messages. Gemma-4's official template keeps reasoning only
+  after the last user message, and so does Qwen 3.6's, so each nudge dropped
+  the reasoning written before it. Where the template has the
+  `preserve_thinking` switch, it is now sent with `chat_template_kwargs`, and
+  the reasoning is kept. "Prior reasoning: Last" still sends one block, so the
+  prompt does not grow. The same check that decides "Automatic" measures
+  whether the template needs the switch, and it is sent only where it changes
+  what the template renders.
+
 ## [4.100.261] — 2026-10-23
 
 ### Agents
