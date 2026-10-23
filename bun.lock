@@ -364,7 +364,7 @@
     },
     "apps/vscode": {
       "name": "cerebriline",
-      "version": "4.100.247",
+      "version": "4.100.259",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.37.0",
         "@bufbuild/protobuf": "^2.2.5",

@@ -5,6 +5,28 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.259] — 2026-10-23
+
+### Agents
+
+- **Every guard says when it acts, in the chat and on the event stream.**
+  Loop detection, which catches a model sending the same tool call over and
+  over, gave its warnings inside the tool result and stopped the run through
+  the mistake count, so neither the chat nor an SDK client could tell a loop
+  from any other run that ended early. It now posts a status line for each
+  step: the first warning, the last warning, and the stop. A request to check
+  edited files before finishing, a reminder about open checklist items and a
+  reminder about delegated work that is still running each post one too.
+
+  For SDK clients, each of these is a status notice (`type: "notice"`,
+  `noticeType: "status"`) with `metadata.kind` naming the guard (`loop_detection`, `edit_verification`,
+  `checklist_close_out`, `team_obligation`) and `metadata.phase` saying what it
+  did (`soft`, `hard` and `stopped` for loop detection, `nudge` for the
+  others). A cut loop keeps the kind `reasoning_loop` and now says in
+  `metadata.cause` whether the reasoning, the reply or a tool call's arguments
+  looped, and a removed block of repeated reasoning says in
+  `metadata.nudged` whether the model was also asked to change approach.
+
 ## [4.100.258] — 2026-10-23
 
 ### Agents
