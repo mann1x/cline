@@ -22,6 +22,7 @@ import type {
 	StartSessionResult,
 } from "../runtime/host/runtime-host";
 import type { FeatureFlagsService } from "../services/feature-flags";
+import type { ModelRequestCaptureOptions } from "../services/llms/model-request-files";
 import type { CheckpointWorkspaceCompareResult } from "../session/checkpoint-diff";
 import type { ClineCoreStartConfig } from "../types/config";
 import type { SessionMessagesArtifactUploader } from "../types/session";
@@ -187,6 +188,20 @@ export interface ClineCoreOptions {
 	 * is read: pass it to the first `ClineCore.create`.
 	 */
 	dataDir?: string;
+	/**
+	 * Save the exact body of every generation request, and the response it got,
+	 * one file each under `<dataDir>/logs/requests/<session>/` (or `dir`). The
+	 * VS Code extension's "Save model requests" setting, and off by default as
+	 * it is there.
+	 *
+	 * The request is what the model saw after the history was reshaped --
+	 * reasoning scope, inlined reasoning, compaction -- and the response is the
+	 * raw stream it generated, so a pair is a replayable turn. Headers are never
+	 * saved. Applies to the whole process; set it on the first
+	 * `ClineCore.create`, or switch it later with `applyModelRequestCapture`.
+	 * See `model-request-files.ts`.
+	 */
+	saveModelRequests?: boolean | ModelRequestCaptureOptions;
 	/**
 	 * A human-readable name for this SDK client (e.g. `"my-app"`, `"acme-bot"`).
 	 * Used to identify the consumer in telemetry and logs.

@@ -7,6 +7,7 @@ export {
 	installOcrLanguages,
 	parseOcrLanguages,
 } from "../../../../sdk/packages/core/src/extensions/tools/executors/document/ocr"
+export { createModelRequestWriter } from "../../../../sdk/packages/core/src/services/llms/model-request-files"
 export {
 	resolveSessionOutputCap,
 	resolveSessionThinkBudgetMessage,

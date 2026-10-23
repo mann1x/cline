@@ -191,8 +191,10 @@ export type { ReasoningHistoryReport } from "./providers/reasoning-history";
 // Saving every generation request's exact body, for replaying a turn.
 export {
 	type CapturedModelRequest,
+	type CapturedModelResponse,
 	isModelRequestCaptureOn,
 	type ModelRequestWriter,
+	type ModelResponseWriter,
 	setModelRequestCapture,
 	withModelRequestCapture,
 } from "./providers/request-capture";

@@ -103,6 +103,12 @@ function buildGatewayProviderOptions(
 	// lead tree may take the call) and ignores them where the model is not
 	// one it pools.
 	const engineProvider = normalizeProviderId(config.providerId);
+	// Plain Ollama has no engine session, so its saved requests (`request-
+	// capture.ts`) had no conversation to be filed under. Set for Ollama alone:
+	// some vendors spread this bag into their client's options.
+	if (engineProvider === "ollama" && sessionId) {
+		options.requestCaptureSessionId = sessionId;
+	}
 	if (engineProvider === "opencoti" || engineProvider === "xollama") {
 		const engineSession =
 			config.engineSessionId || sessionId || auxiliarySessionId();

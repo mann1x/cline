@@ -1599,6 +1599,12 @@ export {
 // why the vision path could not be run headlessly.
 export { createAgentModelFromConfig } from "./services/llms/handler-factory";
 export {
+	applyModelRequestCapture,
+	createModelRequestWriter,
+	type ModelRequestCaptureOptions,
+	modelRequestCaptureDir,
+} from "./services/llms/model-request-files";
+export {
 	clearLiveModelsCatalogCache,
 	clearPrivateModelsCatalogCache,
 	DEFAULT_MODELS_CATALOG_URL,

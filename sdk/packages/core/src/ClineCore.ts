@@ -30,7 +30,6 @@ import type {
 	RestoreResult,
 	StartSessionBootstrap,
 } from "./cline-core/types";
-
 import { CronService } from "./cron/service/cron-service";
 import type { RuntimeCapabilities } from "./runtime/capabilities";
 import { normalizeRuntimeCapabilities } from "./runtime/capabilities";
@@ -50,6 +49,7 @@ import {
 	FeatureFlagsService,
 	NoOpFeatureFlagsProvider,
 } from "./services/feature-flags";
+import { applyModelRequestCapture } from "./services/llms/model-request-files";
 import { resolveCoreDistinctId } from "./services/telemetry/distinct-id";
 import { compareCheckpointToWorkspace } from "./session/checkpoint-diff";
 import {
@@ -216,6 +216,16 @@ export class ClineCore {
 		// First: the machine id below is read from the data directory.
 		if (options.dataDir?.trim()) {
 			setClineDataDir(options.dataDir);
+		}
+		// After the data directory, which is where the files go by default.
+		if (options.saveModelRequests) {
+			const dir = applyModelRequestCapture(
+				options.saveModelRequests,
+				options.logger,
+			);
+			options.logger?.log(
+				`[request-capture] saving every model request and response under ${dir}`,
+			);
 		}
 		const distinctId = resolveCoreDistinctId(options.distinctId);
 		const capabilities = normalizeRuntimeCapabilities(options.capabilities);

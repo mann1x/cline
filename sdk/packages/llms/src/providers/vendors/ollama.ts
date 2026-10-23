@@ -1185,9 +1185,13 @@ export async function createOllamaProviderModule(
 	// PolyKV calls included, not only on the chat the package sends.
 	// Innermost, so a saved body is the one the server got, every field the
 	// layers below add included. See `request-capture.ts`.
-	const captureSession = (
-		context.config?.options as Record<string, unknown> | undefined
-	)?.polykvSessionId;
+	// xOllama's engine key, or plain Ollama's conversation id, which has no
+	// engine key to carry it (`handler-factory.ts`).
+	const captureOptions = context.config?.options as
+		| Record<string, unknown>
+		| undefined;
+	const captureSession =
+		captureOptions?.polykvSessionId ?? captureOptions?.requestCaptureSessionId;
 	const sentFetch = withModelRequestCapture(
 		ensureFetch(requestFetch),
 		typeof captureSession === "string" && captureSession
