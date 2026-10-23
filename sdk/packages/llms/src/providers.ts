@@ -199,3 +199,19 @@ export {
 	resetOllamaAccountStatus,
 	unpulledCloudModels,
 } from "./providers/vendors/ollama-account";
+export {
+	includedAllowanceExhausted,
+	OLLAMA_USAGE_LONG_RANGE_POLL_MS,
+	OLLAMA_USAGE_POLL_MS,
+	OLLAMA_USAGE_RANGES,
+	type OllamaCloudBalance,
+	type OllamaCloudLimit,
+	type OllamaCloudUsage,
+	type OllamaCloudUsageState,
+	type OllamaUsageRange,
+	type OllamaUsageTotals,
+	parseOllamaBalance,
+	parseOllamaUsageTotals,
+	readOllamaCloudUsage,
+	resetOllamaCloudUsage,
+} from "./providers/vendors/ollama-cloud-usage";

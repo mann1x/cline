@@ -16,6 +16,7 @@ import { BaseUrlField } from "../common/BaseUrlField"
 import { ContextMinimumWarning } from "../common/ContextMinimumWarning"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import { OllamaAccountStrip } from "../common/OllamaAccountStrip"
+import { OllamaCloudUsageStrip } from "../common/OllamaCloudUsage"
 import { RequestTimingsToggle } from "../common/RequestTimingsToggle"
 import { SamplingSection } from "../common/SamplingSection"
 import { useSamplingWrite } from "../common/sampling-fields"
@@ -500,6 +501,8 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 			{/* The ollama.com account is Ollama's. */}
 			{providerId === "ollama" && <OllamaAccountStrip modelId={selectedModel.modelId || undefined} providerId="ollama" />}
 			{providerId === "xollama" && <XollamaModelStrip modelId={selectedModel.modelId || undefined} />}
+			{/* What the ollama.com account behind either server has left and has used. */}
+			<OllamaCloudUsageStrip providerId={providerId} />
 
 			{/* Thinking. Rendered only once the provider config has resolved, for
 			    the same reason as the context-window field below: mounting

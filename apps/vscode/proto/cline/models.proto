@@ -115,6 +115,14 @@ service ModelsService {
   // it while the panel is open, and readOllamaAccount's /api/me is a signed
   // round trip to ollama.com that has no business on a poll.
   rpc readOllamaReachability(OllamaReachabilityRequest) returns (OllamaReachabilityResponse);
+  // What the ollama.com account behind an Ollama or xOllama server has left and
+  // has used: GET /api/balance and GET /api/usage for 24h, 7d and 30d, which
+  // the server proxies with its own signed-in account (Ollama 0.40.6+). The
+  // host caches per server and reads at most once a minute (the 7d and 30d
+  // ranges every five), so a panel may ask as often as it likes. With a model
+  // id, says whether that model is a cloud one, so the task header can stay
+  // silent for a local model.
+  rpc readOllamaCloudUsage(OllamaReachabilityRequest) returns (OllamaCloudUsageResponse);
   // What an xOllama model is, for the settings panel: a council (xOllama owns
   // its pools and the lead sends it none), or a plain model with or without
   // pool seats for the client's own pools; and, where the client drives
@@ -185,6 +193,50 @@ message OllamaReachabilityRequest {
   string provider_id = 1;
   // The model the chat input would send to. Omit to ask about the server only.
   optional string model_id = 2;
+}
+
+// A limit a legacy plan resets on a schedule.
+message OllamaCloudLimit {
+  // 0 to 100: what is left.
+  double remaining_percent = 1;
+  // UTC, ISO 8601.
+  optional string resets_at = 2;
+}
+
+// One range's totals. Only the request count is on every plan; a legacy plan
+// reports no cost or tokens, and those stay absent rather than zero.
+message OllamaCloudUsageTotals {
+  // "24h", "7d" or "30d".
+  string range = 1;
+  int64 request_count = 2;
+  optional double usage_usd = 3;
+  optional int64 input_tokens = 4;
+  optional int64 cached_input_tokens = 5;
+  optional int64 output_tokens = 6;
+}
+
+message OllamaCloudUsageResponse {
+  // "ok", "signed-out", "cloud-disabled", "unsupported" (a server before
+  // 0.40.6), "rate-limited" or "unreachable".
+  string state = 1;
+  optional string signin_url = 2;
+  // Current plans.
+  optional double included_balance_usd = 3;
+  optional double included_allowance_usd = 4;
+  optional string period_until = 5;
+  // Legacy plans.
+  optional OllamaCloudLimit session = 6;
+  optional OllamaCloudLimit weekly = 7;
+  optional double purchased_balance_usd = 8;
+  repeated OllamaCloudUsageTotals usage = 9;
+  // When the balance was read, ISO 8601.
+  optional string read_at = 10;
+  // The included allowance is spent: a legacy limit at 0%, or a current
+  // plan's included balance at $0. Purchased credit is reported beside it.
+  bool included_exhausted = 11;
+  // Whether the model asked about is served from the cloud. Absent when no
+  // model was asked about or the catalog could not be read.
+  optional bool cloud_model = 12;
 }
 
 message OllamaReachabilityResponse {

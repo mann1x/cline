@@ -3,6 +3,7 @@ import type { ExpertApiMetrics, ProviderApiMetrics } from "@shared/getApiMetrics
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import React, { useCallback, useLayoutEffect, useMemo, useState } from "react"
 import Thumbnails from "@/components/common/Thumbnails"
+import { OllamaCloudLimitLine } from "@/components/settings/common/OllamaCloudUsage"
 import { getModeSpecificFields } from "@/components/settings/utils/providerUtils"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useNormalizedApiConfiguration } from "@/hooks/useNormalizedApiConfiguration"
@@ -112,7 +113,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	}, [isHighlightedTextExpanded])
 
 	// Simplified computed values
-	const { selectedModelInfo } = useNormalizedApiConfiguration(mode)
+	const { selectedModelInfo, selectedProvider, selectedModelId } = useNormalizedApiConfiguration(mode)
 	const modeFields = getModeSpecificFields(apiConfiguration, mode)
 
 	// Local providers report no cost; the openai-compatible provider can
@@ -269,6 +270,12 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 							tokensIn={tokensIn}
 							tokensOut={tokensOut}
 						/>
+
+						{/*
+						 * How much of the ollama.com allowance is left, for a cloud
+						 * model on Ollama or xOllama. It renders nothing otherwise.
+						 */}
+						<OllamaCloudLimitLine modelId={selectedModelId} providerId={selectedProvider} />
 
 						{/*
 						 * Under the context window, where the old focus chain lived. It
