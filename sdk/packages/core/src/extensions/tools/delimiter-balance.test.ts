@@ -121,7 +121,7 @@ describe("describeDelimiterBalance", () => {
 		// The line the edit goes on leads; the crossing that found it follows.
 		expect(report).toContain("line 1: ");
 		expect(report).toContain(
-			"`)` at column 29 comes while the `{` at column 22 is still open",
+			"the `)` at column 29 that follows …` (a) { b(); ` comes while the `{` at column 22 that follows …`f(){ if (a) ` is still open, both on line 1",
 		);
 	});
 
@@ -162,7 +162,9 @@ describe("describeDelimiterBalance", () => {
 			"app.ts",
 			"function f(){ if (a) { b(); ) }",
 		);
-		expect(report).toContain("Delimiter scan:");
+		expect(report).toContain(
+			"Delimiter scan of the whole file, read from line 1:",
+		);
 		expect(report).toContain("edit the line named above");
 	});
 
@@ -182,8 +184,34 @@ describe("describeDelimiterBalance", () => {
 			.split("\n")
 			.find((line) => line.startsWith("  line "));
 		expect(named).toBe(
-			"  line 1: counting only code, this line has 1 more `}` than `{` (the `}` at column 48 comes while the `(` at column 26 is still open)",
+			"  line 1: counting only code, this line has 1 more `}` than `{` (the `}` at column 48 that follows …`{c.fill();}}` comes while the `(` at column 26 that follows …`s.dc.forEach` is still open, both on line 1)",
 		);
+	});
+
+	it("quotes each bracket so it is found by its text, not by counting", () => {
+		// Measured, pandorum 2026-10-23: told the `(` at column 30 was still
+		// open, a model counted the line by hand, reached the `(` at column 5,
+		// found it balanced and decided the scan was counting some other line.
+		// The quote names which `(` it is.
+		const report = describeDelimiterBalance(
+			"app.js",
+			"dDec(c,x){this.dc.forEach(d=>{if(d){c.fill();}}});}\n",
+		);
+		expect(report).toContain(
+			"the `(` at column 26 that follows …`s.dc.forEach`",
+		);
+		expect(report).not.toContain("column 5");
+	});
+
+	it("gives both lines when a crossing spans two", () => {
+		const report = describeDelimiterBalance(
+			"app.ts",
+			"function f() {\n  g(1, 2;\n}\n",
+		);
+		expect(report).toMatch(
+			/the `\}` at line 3, column 1, which starts the line, comes while the `\(` at line 2, column 4 that follows ` {2}g` is still open/,
+		);
+		expect(report).not.toContain("both on line");
 	});
 
 	it("scans script bodies in HTML at their real line numbers", () => {

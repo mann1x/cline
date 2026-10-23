@@ -415,6 +415,9 @@ function scriptSpans(
 /** Lines named in one report. Past this it is a rewrite, not a fix. */
 const MAX_REPORTED_LINES = 6;
 
+/** How much of the text before a bracket a report quotes to point at it. */
+const QUOTE_CHARS = 12;
+
 /** How deep the enclosing chain goes. Four covers a method inside a class. */
 const ENCLOSING_REPORTED = 4;
 
@@ -804,6 +807,35 @@ export function describeDelimiterBalance(
 
 	const shown = distinct.slice(0, MAX_REPORTED_LINES);
 
+	// A bracket by its position and by the text just before it. The column
+	// alone was not enough: pandorum, 2026-10-23, a model told the `(` at
+	// column 30 "is still open" counted the line by hand, landed on the `(` at
+	// column 5, found it balanced and decided the scan was confused -- then
+	// that it must be counting some other line. The quote lets the bracket be
+	// found by searching rather than by counting.
+	const fileLines = text.split(/\r?\n/);
+	const bracket = (
+		char: string,
+		line: number,
+		column: number,
+		sameLine = false,
+	) => {
+		const position = sameLine
+			? `column ${column}`
+			: `line ${line}, column ${column}`;
+		const row = fileLines[line - 1];
+		if (row === undefined || row[column - 1] !== char) {
+			return `the \`${char}\` at ${position}`;
+		}
+		if (column === 1) {
+			return `the \`${char}\` at ${position}, which starts the line,`;
+		}
+		const start = Math.max(0, column - 1 - QUOTE_CHARS);
+		const before = row.slice(start, column - 1);
+		const quoted = before.includes("`") ? `"${before}"` : `\`${before}\``;
+		return `the \`${char}\` at ${position} that follows ${start > 0 ? "…" : ""}${quoted}`;
+	};
+
 	// Line number first, then the tally, then the pairing in brackets.
 	//
 	// The order is the whole point. Led by the pairing, a real report read "the
@@ -822,22 +854,23 @@ export function describeDelimiterBalance(
 				// span has to balance within itself, so the tally is a verdict.
 				const sameLine = finding.openLine === finding.line;
 				const note = sameLine ? surplusNote(finding.line, balance) : "";
-				const crossing = sameLine
-					? `the \`${finding.found}\` at column ${finding.column} comes while the \`${finding.opener}\` at column ${finding.openColumn} is still open`
-					: `the \`${finding.found}\` at line ${finding.line}, column ${finding.column} comes while the \`${finding.opener}\` at column ${finding.openColumn} is still open`;
+				// Both ends get their own position: "the `(` at column 30" under a
+				// line heading was read as a column of whatever line the model had
+				// in mind.
+				const crossing = `${bracket(finding.found ?? "", finding.line, finding.column, sameLine)} comes while ${bracket(finding.opener ?? "", finding.openLine ?? finding.line, finding.openColumn ?? 0, sameLine)} is still open${sameLine ? `, both on line ${finding.line}` : ""}`;
 				return note
 					? `  line ${finding.openLine}: ${note} (${crossing})`
 					: `  line ${finding.openLine}: ${crossing}`;
 			}
 			case "unmatched-close": {
 				const note = surplusNote(finding.line, balance);
-				const stray = `the \`${finding.found}\` at column ${finding.column} closes nothing that is open`;
+				const stray = `${bracket(finding.found ?? "", finding.line, finding.column)} closes nothing that is open`;
 				return note
 					? `  line ${finding.line}: ${note} (${stray})`
 					: `  line ${finding.line}: ${stray}`;
 			}
 			default:
-				return `  line ${finding.openLine}: the \`${finding.opener}\` at column ${finding.openColumn} is never closed`;
+				return `  line ${finding.openLine}: ${bracket(finding.opener ?? "", finding.openLine ?? 0, finding.openColumn ?? 0)} is never closed`;
 		}
 	});
 
@@ -893,10 +926,12 @@ export function describeDelimiterBalance(
 	}
 
 	const hidden = distinct.length - shown.length;
+	// The scope is said up front: the same model took a report on the whole
+	// file for a report on the one line it was looking at.
 	const heading =
 		shown.length === 1
-			? "Delimiter scan:"
-			: `Delimiter scan — ${distinct.length} line(s) do not balance${hidden > 0 ? `, first ${shown.length} shown` : ""}:`;
+			? "Delimiter scan of the whole file, read from line 1:"
+			: `Delimiter scan of the whole file, read from line 1 — ${distinct.length} line(s) do not balance${hidden > 0 ? `, first ${shown.length} shown` : ""}:`;
 
 	// The first line is certain: it is where the parser gave up. The rest are
 	// scanned with a stack the first crossing already disturbed, so they are
