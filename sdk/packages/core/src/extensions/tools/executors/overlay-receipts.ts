@@ -47,6 +47,7 @@ export function overlayReadReceipts(
 		changedSince: (filePath, stamp) =>
 			receipts.changedSince(key(filePath), stamp),
 		retire: (filePath) => receipts.retire(key(filePath)),
+		noteRewrite: (filePath) => receipts.noteRewrite(key(filePath)),
 		forget: (filePath) => receipts.forget(key(filePath)),
 		noteCut: (filePath, line, shown, length, from) =>
 			receipts.noteCut?.(key(filePath), line, shown, length, from),

@@ -479,8 +479,9 @@ export class Controller {
 			getReadPaths: () => this.readReceipts.paths(),
 			// The change protocol can put a file back mid-transaction. That
 			// moves every line in it, so the reads that would justify an edit
-			// by line number have to go with it.
-			forgetReads: (absolutePath) => this.readReceipts.forget(absolutePath),
+			// by line number have to go with it -- retired, not erased: the model
+			// has still read the file, and a text-matched edit needs no more.
+			forgetReads: (absolutePath) => this.readReceipts.noteRewrite(absolutePath),
 			// A proposed check runs on the unmodified files and the edits are
 			// written back after it: same content, new mtime. The stamp moves
 			// with it, so the next edit is not refused as an outside change.

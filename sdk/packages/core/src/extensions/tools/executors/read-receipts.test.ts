@@ -93,6 +93,22 @@ describe("createReadReceipts", () => {
 
 		expect(receipts.covers("/repo/other.html", 1, 10)).toBe(false);
 	});
+
+	it("retires a file the session itself rewrote, without forgetting the read", () => {
+		// pandorum g5tmt: `restore_file` erased the receipts, and the next
+		// text-matched edit was refused as "has not been read in this session".
+		const receipts = createReadReceipts();
+		receipts.noteRead(FILE, 1, 137);
+		receipts.noteStamp(FILE, "9000:1");
+
+		receipts.noteRewrite(FILE);
+
+		expect(receipts.covers(FILE, 90, 93)).toBe(false);
+		expect(receipts.wasRetired(FILE)).toBe(true);
+		expect(receipts.hasEverRead(FILE)).toBe(true);
+		// The rewrite is the session's own, not an outside change.
+		expect(receipts.changedSince(FILE, "9003:2")).toBe(false);
+	});
 });
 
 describe("a registry handed to the next task", () => {

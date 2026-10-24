@@ -27,9 +27,10 @@ describe("csf-6: a rollback retires the reads of the files it puts back", () => 
 				workspaceRoot: root,
 				maxChanges: 3,
 				maxTransactions: 3,
+				// What the VS Code host wires it to.
 				forgetReads: (absolutePath) => {
 					forgotten.push(absolutePath);
-					receipts.forget(absolutePath);
+					receipts.noteRewrite(absolutePath);
 				},
 			});
 
@@ -45,11 +46,15 @@ describe("csf-6: a rollback retires the reads of the files it puts back", () => 
 			const settlement = await controller.settle({ selfReport: "failure" });
 			expect(settlement.kept).toBe(false);
 			expect(forgotten).toContain(file);
-			// With the receipts forgotten, the restored file reads as
-			// unchanged — not as somebody else's write.
+			// With the stamp dropped, the restored file reads as unchanged —
+			// not as somebody else's write.
 			expect(receipts.changedSince(file, await readFileStamp(file))).toBe(
 				false,
 			);
+			// And the model is still one that read it: its line numbers are
+			// stale, the read is not.
+			expect(receipts.covers(file, 1, 1)).toBe(false);
+			expect(receipts.hasEverRead(file)).toBe(true);
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });
 		}

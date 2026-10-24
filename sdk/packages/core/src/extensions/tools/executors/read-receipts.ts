@@ -151,6 +151,18 @@ export interface ReadReceipts {
 	 * get different advice.
 	 */
 	retire(filePath: string): void;
+	/**
+	 * Record that the session's own machinery rewrote the file: a
+	 * `restore_file`, a transaction rollback, an expert's edits.
+	 *
+	 * Every line may have moved, so the spans retire, and the stamp goes so
+	 * the rewrite is not later reported as something outside the session.
+	 * That the model read the file stays known. {@link forget} erased it, and
+	 * a text-matched edit sent straight after a restore was refused with "has
+	 * not been read in this session", of a file read four times and edited
+	 * twice (pandorum g5tmt, calls 24 and 88).
+	 */
+	noteRewrite(filePath: string): void;
 	/** Drop everything known about a file. */
 	forget(filePath: string): void;
 	/**
@@ -394,6 +406,15 @@ export function createReadReceipts(): OwnedReadReceipts {
 			}
 			const known = stamps.get(receiptKey(filePath));
 			return known !== undefined && known !== stamp;
+		},
+
+		noteRewrite(filePath) {
+			const key = receiptKey(filePath);
+			cuts.delete(key);
+			stamps.delete(key);
+			if (seen.delete(key)) {
+				retired.add(key);
+			}
 		},
 
 		forget(filePath) {

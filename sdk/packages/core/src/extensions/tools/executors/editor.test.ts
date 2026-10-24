@@ -2134,6 +2134,35 @@ describe("requiring a read before an edit", () => {
 		});
 	});
 
+	// pandorum g5tmt, calls 24 and 88: `restore_file` put the file back, and
+	// the model's next edit, matched on text, was refused as "has not been
+	// read in this session" — of a file it had read four times.
+	it("takes a text-matched edit after a restore, and asks again for line numbers", async () => {
+		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
+			// What the host's `forgetReads` does for the restore.
+			receipts.noteRewrite(filePath);
+
+			const byLine = editor(
+				{ path: filePath, new_text: "B", start_line: 2 },
+				dir,
+				context,
+			);
+			await expect(byLine).rejects.toThrow(
+				"not been read in its current state",
+			);
+
+			await editor(
+				{ path: filePath, old_text: "c", new_text: "C" },
+				dir,
+				context,
+			);
+			expect(await fs.readFile(filePath, "utf8")).toBe("a\nb\nC\nd");
+		});
+	});
+
 	it("accepts an edit whose range runs past the end of the file", async () => {
 		// Measured live, three identical cycles before the run was stopped: the
 		// file was 198 lines, the model aimed at lines 101-200, `read_files`
