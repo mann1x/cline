@@ -56,6 +56,7 @@ const MemorySettingsSection = ({ renderSectionHeader }: MemorySettingsSectionPro
 	const workspaceKey = retrieval.status?.workspace.key
 	const selection = useMemo(() => memorySelectionFor(settings, workspaceKey), [settings, workspaceKey])
 	const hydeProfileMissing = settings.hydeProfile !== "" && !profileNames.includes(settings.hydeProfile)
+	const expanding = settings.autoRecall && settings.hyde
 
 	const save = useCallback(
 		async (patch: Partial<MemorySettings>) => {
@@ -68,6 +69,39 @@ const MemorySettingsSection = ({ renderSectionHeader }: MemorySettingsSectionPro
 			}
 		},
 		[settings],
+	)
+
+	// One model for both: the expansion and the distillation of expired notes.
+	const profilePicker = (
+		<div className="mt-2">
+			<label className="font-medium text-sm block mb-1" htmlFor="memory-hyde-profile">
+				Profile whose model expands questions and distils expired notes
+			</label>
+			<VSCodeDropdown
+				className="w-full"
+				id="memory-hyde-profile"
+				onChange={(event: Event | React.FormEvent<HTMLElement>) =>
+					void save({ hydeProfile: String((event.target as HTMLSelectElement | null)?.value ?? "") })
+				}
+				value={settings.hydeProfile}>
+				<VSCodeOption value="">None</VSCodeOption>
+				{hydeProfileMissing ? (
+					<VSCodeOption value={settings.hydeProfile}>{settings.hydeProfile} (deleted)</VSCodeOption>
+				) : null}
+				{profileNames.map((name) => (
+					<VSCodeOption key={name} value={name}>
+						{name}
+					</VSCodeOption>
+				))}
+			</VSCodeDropdown>
+			<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
+				{profileNames.length === 0
+					? "There are no saved profiles yet. Save one in the API configuration: set the provider and model you want for this, then use Save as profile."
+					: settings.hydeProfile === "" || hydeProfileMissing
+						? "Until a saved profile is picked, Memory is searched with your message alone, and expired notes stay."
+						: "One of the profiles saved in the API configuration. Its provider, model, window and sampler are used; the key is the one stored for that provider."}
+			</p>
+		</div>
 	)
 
 	return (
@@ -146,39 +180,7 @@ const MemorySettingsSection = ({ renderSectionHeader }: MemorySettingsSectionPro
 									message and none of its words. It adds one short model call to each message, so pick a cheap,
 									fast model: a small cloud model is the usual choice.
 								</p>
-								{settings.hyde ? (
-									<div className="mt-2">
-										<label className="font-medium text-sm block mb-1" htmlFor="memory-hyde-profile">
-											Profile whose model writes it
-										</label>
-										<VSCodeDropdown
-											className="w-full"
-											id="memory-hyde-profile"
-											onChange={(event: any) =>
-												void save({ hydeProfile: String(event.target.value ?? "") })
-											}
-											value={settings.hydeProfile}>
-											<VSCodeOption value="">None</VSCodeOption>
-											{hydeProfileMissing ? (
-												<VSCodeOption value={settings.hydeProfile}>
-													{settings.hydeProfile} (deleted)
-												</VSCodeOption>
-											) : null}
-											{profileNames.map((name) => (
-												<VSCodeOption key={name} value={name}>
-													{name}
-												</VSCodeOption>
-											))}
-										</VSCodeDropdown>
-										<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
-											{profileNames.length === 0
-												? "There are no saved profiles yet. Save one in the API configuration: set the provider and model you want for this, then use Save as profile."
-												: settings.hydeProfile === "" || hydeProfileMissing
-													? "Until a saved profile is picked, Memory is searched with your message alone."
-													: "One of the profiles saved in the API configuration. Its provider, model, window and sampler are used; the key is the one stored for that provider."}
-										</p>
-									</div>
-								) : null}
+								{settings.hyde ? profilePicker : null}
 							</div>
 						) : null}
 
@@ -200,8 +202,27 @@ const MemorySettingsSection = ({ renderSectionHeader }: MemorySettingsSectionPro
 						</DebouncedTextField>
 						<p className="text-xs -mt-2 text-(--vscode-descriptionForeground)">
 							The most notes one recall gives the model, best first. Every note returned takes room in the
-							conversation.
+							conversation. Notes attached automatically take at most 4% of the model's window, whatever this says.
 						</p>
+
+						<DebouncedTextField
+							className="w-full"
+							initialValue={String(settings.noteTtlDays)}
+							numeric
+							onChange={(value) => {
+								const parsed = Number(value.trim())
+								void save({ noteTtlDays: value.trim() !== "" && Number.isFinite(parsed) ? parsed : 0 })
+							}}
+							placeholder="0">
+							<span className="font-medium">Facts expire after (days)</span>
+						</DebouncedTextField>
+						<p className="text-xs -mt-2 text-(--vscode-descriptionForeground)">
+							0 keeps notes until they are forgotten. Otherwise a fact the model notes expires after this many days,
+							unless you confirmed it; decisions and preferences never expire. Expired notes of a memory are
+							distilled into one note by the model of the profile below, and only then removed. Without a profile
+							they stay.
+						</p>
+						{settings.noteTtlDays > 0 && !expanding ? profilePicker : null}
 
 						<div>
 							<div className="flex justify-between text-sm mb-1">
@@ -221,7 +242,8 @@ const MemorySettingsSection = ({ renderSectionHeader }: MemorySettingsSectionPro
 							<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
 								With a reranking model, notes it scores below this are left out, so a recall about something never
 								noted returns nothing instead of the least unrelated notes. 0 keeps them all. Without a reranker
-								it has no effect.
+								it has no effect. Notes attached automatically also need a score of 0.5, or to share meaning or
+								words with your message.
 							</p>
 						</div>
 					</>

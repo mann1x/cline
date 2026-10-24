@@ -1725,14 +1725,15 @@ async function insertInFile(
  */
 async function replaceColumnRange(
 	filePath: string,
-	startLineOneBased: number,
-	startColumnOneBased: number,
-	endLineOneBased: number,
-	endColumnOneBased: number,
+	requestedStartLine: number,
+	requestedStartColumn: number,
+	requestedEndLine: number,
+	requestedEndColumn: number,
 	newStr: string | null | undefined,
 	encoding: BufferEncoding,
 	maxDiffLines: number,
 	noteNoOp?: NoOpLedger,
+	oldStr?: string | null,
 ): Promise<string> {
 	const { bom, body: content } = splitBom(
 		await fs.readFile(filePath, encoding),
@@ -1740,12 +1741,34 @@ async function replaceColumnRange(
 	const eol = detectLineEnding(content);
 	const lines = content.split(/\r\n|\n/);
 
-	assertLineInRange(startLineOneBased, lines.length, "start_line");
-	assertLineInRange(endLineOneBased, lines.length, "end_line");
-	if (endLineOneBased < startLineOneBased) {
+	assertLineInRange(requestedStartLine, lines.length, "start_line");
+	assertLineInRange(requestedEndLine, lines.length, "end_line");
+	if (requestedEndLine < requestedStartLine) {
 		throw new Error(
-			`Invalid end_line: ${endLineOneBased}. It must be at least start_line (${startLineOneBased}).`,
+			`Invalid end_line: ${requestedEndLine}. It must be at least start_line (${requestedStartLine}).`,
 		);
+	}
+
+	let startLineOneBased = requestedStartLine;
+	let startColumnOneBased = requestedStartColumn;
+	let endLineOneBased = requestedEndLine;
+	let endColumnOneBased = requestedEndColumn;
+	let reanchored = "";
+	if (oldStr != null && oldStr !== "") {
+		const anchor = resolveColumnAnchor(
+			filePath,
+			lines,
+			requestedStartLine,
+			requestedStartColumn,
+			requestedEndLine,
+			requestedEndColumn,
+			oldStr,
+		);
+		startLineOneBased = anchor.startLine;
+		startColumnOneBased = anchor.startColumn;
+		endLineOneBased = anchor.endLine;
+		endColumnOneBased = anchor.endColumn;
+		reanchored = anchor.note;
 	}
 
 	const startLineText = lines[startLineOneBased - 1] ?? "";
@@ -1811,7 +1834,117 @@ async function replaceColumnRange(
 
 	await fs.writeFile(filePath, bom + updated, { encoding });
 	const diff = createLineDiff(content, updated, maxDiffLines);
-	return `Replaced ${span} in ${filePath}\n${diff}`;
+	return `Replaced ${span} in ${filePath}${reanchored}\n${diff}`;
+}
+
+/**
+ * `old_text` sent with columns is the model saying what it expects to find
+ * there. Honour it or refuse; never drop it.
+ *
+ * Measured on pandorum session 1792831559714_4w0m4 (jackodf-9b):
+ * `{start_line: 90, start_column: 137, end_column: 137, old_text: "}",
+ * new_text: ""}` on a 390-character minified line. Column 137 held the `l` of
+ * `else`; the editor deleted it, reported "Replaced line 90, columns
+ * 137-137", and the model restored and sent the same call again, with the
+ * same result. The `}` it meant was at column 384.
+ *
+ * As for a line range with an anchor: when the anchor occurs exactly once on
+ * the lines the call named, the file has settled which half was wrong and
+ * the edit goes there, said in the result. Twice or more is refused, and the
+ * refusal lists the columns, because a `}` on a minified line occurs dozens
+ * of times and only the model knows which one it meant.
+ */
+function resolveColumnAnchor(
+	filePath: string,
+	lines: readonly string[],
+	startLine: number,
+	startColumn: number,
+	endLine: number,
+	endColumn: number,
+	oldStr: string,
+): {
+	startLine: number;
+	startColumn: number;
+	endLine: number;
+	endColumn: number;
+	note: string;
+} {
+	const wanted = oldStr.split(/\r\n|\n/).join("\n");
+	const named = lines.slice(startLine - 1, endLine).join("\n");
+	const lastLine = lines[endLine - 1] ?? "";
+	const held = named.slice(
+		startColumn - 1,
+		named.length - lastLine.length + endColumn,
+	);
+	if (held === wanted) {
+		return { startLine, startColumn, endLine, endColumn, note: "" };
+	}
+	const at = (offset: number) => {
+		const before = named.slice(0, offset).split("\n");
+		return {
+			line: startLine + before.length - 1,
+			column: (before[before.length - 1] ?? "").length + 1,
+		};
+	};
+	const hits: number[] = [];
+	for (
+		let index = named.indexOf(wanted);
+		index >= 0 && hits.length <= 12;
+		index = named.indexOf(wanted, index + 1)
+	) {
+		hits.push(index);
+	}
+	const where =
+		startLine === endLine
+			? `line ${startLine}`
+			: `lines ${startLine}-${endLine}`;
+	const spanOf = (
+		from: { line: number; column: number },
+		to: { line: number; column: number },
+	) =>
+		from.line === to.line
+			? `line ${from.line}, ${from.column === to.column ? `column ${from.column}` : `columns ${from.column}-${to.column}`}`
+			: `line ${from.line} column ${from.column} through line ${to.line} column ${to.column}`;
+	const asked = spanOf(
+		{ line: startLine, column: startColumn },
+		{ line: endLine, column: endColumn },
+	);
+	const quote = (text: string) => JSON.stringify(text);
+	if (hits.length === 1) {
+		const from = at(hits[0]);
+		const to = at(hits[0] + wanted.length - 1);
+		// On one named line the line is already said; name the columns alone.
+		const found =
+			startLine === endLine && from.line === to.line
+				? from.column === to.column
+					? `column ${from.column}`
+					: `columns ${from.column}-${to.column}`
+				: spanOf(from, to);
+		return {
+			startLine: from.line,
+			startColumn: from.column,
+			endLine: to.line,
+			endColumn: to.column,
+			note: ` (${asked} held ${quote(held)}, not your \`old_text\` ${quote(wanted)}; that occurs once on ${where}, at ${found}, so that is what was replaced)`,
+		};
+	}
+	const found =
+		hits.length === 0
+			? `${quote(wanted)} does not occur on ${where} at all: re-read the line and send its own text.`
+			: `${quote(wanted)} occurs ${hits.length > 12 ? "more than 12" : hits.length} times on ${where}, at ${startLine === endLine ? "columns " : ""}${hits
+					.slice(0, 12)
+					.map((hit) => {
+						const from = at(hit);
+						return startLine === endLine
+							? `${from.column}`
+							: `line ${from.line} column ${from.column}`;
+					})
+					.join(
+						", ",
+					)}: send the columns of the one you mean, or a longer \`old_text\` that occurs once on ${where}.`;
+	throw new Error(
+		`No replacement performed: ${asked} of ${filePath} holds ${quote(held)}, not ${quote(wanted)} as your \`old_text\` says, so the columns and the anchor name different characters. ${found}`,
+	);
 }
 
 /**
@@ -2467,6 +2600,7 @@ export function createEditorExecutor(
 					encoding,
 					maxDiffLines,
 					noteNoOp,
+					input.old_text,
 				);
 				await noteWrite();
 				return result;

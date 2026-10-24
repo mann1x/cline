@@ -428,7 +428,7 @@ describe("Memory", () => {
 			text: "Run the tests with vitest.",
 			tags: ["build", "testing"],
 		});
-		expect(tagged.outcome).toBe("tagged");
+		expect(tagged.outcome).toBe("updated");
 		expect(tagged.item).toMatchObject({
 			id: first.item.id,
 			tags: ["testing", "build"],
@@ -533,7 +533,19 @@ describe("the memory tools", () => {
 				(tool.inputSchema as { properties: Record<string, unknown> })
 					.properties,
 			);
-		expect(fields(remember)).toEqual(["text", "tags"]);
+		expect(fields(remember)).toEqual([
+			"text",
+			"tags",
+			"kind",
+			"reason",
+			"places",
+			"evidence",
+			"replaces",
+		]);
+		// None of them names a memory, and none settles a note.
+		expect(fields(remember).some((name) => /memory|status/.test(name))).toBe(
+			false,
+		);
 		expect(fields(recall)).toEqual(["query", "limit"]);
 	});
 

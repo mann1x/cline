@@ -272,7 +272,12 @@ export {
 	resolveLanceDbRuntimeDirectory,
 	sharedLibrary,
 } from "../../../../sdk/packages/core/src/services/retrieval/library"
-export { closeSharedMemories, sharedMemory } from "../../../../sdk/packages/core/src/services/retrieval/memory"
+export {
+	buildMemoryDistillPrompt,
+	closeSharedMemories,
+	MEMORY_DISTILL_SYSTEM_PROMPT,
+	sharedMemory,
+} from "../../../../sdk/packages/core/src/services/retrieval/memory"
 export { createMemoryRecaller } from "../../../../sdk/packages/core/src/services/retrieval/memory-recall"
 export { isTarGz } from "../../../../sdk/packages/core/src/services/retrieval/tar-extract"
 export { captureGitSnapshot } from "../../../../sdk/packages/core/src/services/telemetry/core-events"

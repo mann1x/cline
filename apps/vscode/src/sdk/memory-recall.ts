@@ -1,4 +1,11 @@
-import { createMemoryRecaller, type MemoryQueryExpander, type MemoryRecaller } from "@cline/core"
+import {
+	buildMemoryDistillPrompt,
+	createMemoryRecaller,
+	MEMORY_DISTILL_SYSTEM_PROMPT,
+	type MemoryQueryExpander,
+	type MemoryRecaller,
+	sharedMemory,
+} from "@cline/core"
 import type { ApiConfiguration } from "@shared/api"
 import { findApiConfigurationProfile, parseApiConfigurationProfiles } from "@shared/api-config-profiles"
 import { Logger } from "@shared/services/Logger"
@@ -23,7 +30,20 @@ import { buildScopedApiConfiguration } from "./vision-model"
  */
 export function readMemoryQueryExpander(primary: ApiConfiguration | undefined): MemoryQueryExpander | undefined {
 	const settings = readMemorySettings()
-	if (!settings.hyde || !settings.hydeProfile) {
+	if (!settings.hyde) {
+		return undefined
+	}
+	return readMemoryProfileModel(primary, settings.hydeProfile)
+}
+
+/**
+ * The model of the profile the Memory panel names, as one call: a system
+ * prompt and a request in, the text out. Undefined when no profile is named
+ * or it is gone. For the expansion and the distillation of expired notes.
+ */
+function readMemoryProfileModel(primary: ApiConfiguration | undefined, profileName: string): MemoryQueryExpander | undefined {
+	const settings = { hydeProfile: profileName }
+	if (!settings.hydeProfile) {
 		return undefined
 	}
 	const profile = findApiConfigurationProfile(
@@ -31,14 +51,14 @@ export function readMemoryQueryExpander(primary: ApiConfiguration | undefined): 
 		settings.hydeProfile,
 	)
 	if (!profile) {
-		Logger.warn(`[Memory] The profile "${settings.hydeProfile}" named for the expansion is gone; searching without it`)
+		Logger.warn(`[Memory] The profile "${settings.hydeProfile}" named in the Memory panel is gone; going without its model`)
 		return undefined
 	}
 	// Keys are not part of a profile: they come from the session's own
 	// configuration, as for the Vision and Agents models.
 	const configuration = buildScopedApiConfiguration(primary, JSON.stringify(profile.snapshot))
 	if (!configuration) {
-		Logger.warn(`[Memory] The profile "${profile.name}" names no provider; searching without the expansion`)
+		Logger.warn(`[Memory] The profile "${profile.name}" names no provider; going without its model`)
 		return undefined
 	}
 	const providerSettings = profile.snapshot.providerConfig as Record<string, unknown> | undefined
@@ -63,8 +83,57 @@ export function readMemoryQueryExpander(primary: ApiConfiguration | undefined): 
 	}
 }
 
+/** How often expired notes are looked for: an hour, and only when a session starts. */
+const EXPIRY_INTERVAL_MS = 60 * 60 * 1000
+const DISTILL_TIMEOUT_MS = 120_000
+let lastExpiry = 0
+
+/**
+ * Distil each memory's expired notes into one and remove them, at most once
+ * an hour. Off while Memory is off or notes never expire. With no profile
+ * named, nothing is removed: an expired note waits for a model to keep what
+ * it found.
+ */
+export async function runMemoryExpiry(primary: ApiConfiguration | undefined, nowMs = Date.now()): Promise<void> {
+	const settings = readMemorySettings()
+	if (!settings.enabled || settings.noteTtlDays <= 0 || nowMs - lastExpiry < EXPIRY_INTERVAL_MS) {
+		return
+	}
+	lastExpiry = nowMs
+	const model = readMemoryProfileModel(primary, settings.hydeProfile)
+	const config = readMemoryToolsConfig()
+	const outcomes = await sharedMemory().expire({
+		nowMs,
+		...(config?.embedding ? { endpoints: { embedding: config.embedding } } : {}),
+		distill: async (notes) => {
+			if (!model) {
+				throw new Error("no profile is named in the Memory panel to distil them")
+			}
+			const abort = new AbortController()
+			const timer = setTimeout(() => abort.abort(), DISTILL_TIMEOUT_MS)
+			try {
+				return await model({
+					system: MEMORY_DISTILL_SYSTEM_PROMPT,
+					prompt: buildMemoryDistillPrompt(notes),
+					signal: abort.signal,
+				})
+			} finally {
+				clearTimeout(timer)
+			}
+		},
+	})
+	for (const outcome of outcomes) {
+		Logger.log(
+			outcome.distilled
+				? `[Memory] Distilled ${outcome.removed} expired note(s) of "${outcome.memory}" into ${outcome.distilled}`
+				: `[Memory] Kept the expired notes of "${outcome.memory}": ${outcome.kept}`,
+		)
+	}
+}
+
 /** Installed on every session: it reads the Memory settings per message and does nothing while Memory is off. */
 export function createSessionMemoryRecaller(primary: ApiConfiguration | undefined): MemoryRecaller {
+	void runMemoryExpiry(primary).catch((error) => Logger.warn(`[Memory] Expiring notes stopped: ${error}`))
 	return createMemoryRecaller({
 		getConfig: readMemoryToolsConfig,
 		getExpander: () => readMemoryQueryExpander(primary),

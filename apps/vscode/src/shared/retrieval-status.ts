@@ -154,6 +154,32 @@ export interface RetrievalImageModels {
 	notVision: string[]
 }
 
+/** One note, as the Memory panel lists it. */
+export interface MemoryNoteView {
+	id: string
+	text: string
+	tags: string[]
+	createdAt: string
+	kind: "fact" | "decision" | "preference"
+	status: "noted" | "confirmed" | "outdated"
+	reason?: string
+	/** `path` or `path:line`. */
+	places: string[]
+	/** Who kept it: the model, the user, or a file it was imported from. */
+	by?: "model" | "user" | "import"
+	evidence: string[]
+	/** What it said before each revision, oldest first. */
+	history: Array<{ at: string; text: string }>
+	/** The user's reason, for an outdated note. */
+	settledReason?: string
+	settledAt?: string
+	/** Ids folded into it by a merge. */
+	merged: string[]
+	/** How many times it was given to a task. */
+	recalled: number
+	expiresAt?: string
+}
+
 export interface RetrievalActionResult {
 	ok: boolean
 	/** What happened, for the panel to show. */
@@ -167,6 +193,7 @@ export interface RetrievalActionResult {
 	/** What a listing action answered with. */
 	books?: LibraryBookView[]
 	book?: LibraryBookDetails
+	notes?: MemoryNoteView[]
 	status: RetrievalStatus
 }
 
@@ -185,6 +212,10 @@ export type RetrievalAction =
 	| { action: "deleteMemory"; name: string }
 	| { action: "exportMemory"; name: string }
 	| { action: "importMemory"; into?: string }
+	| { action: "memoryNotes"; name: string }
+	| { action: "settleNote"; name: string; id: string; status: "noted" | "confirmed" | "outdated"; reason?: string }
+	| { action: "forgetNote"; name: string; id: string }
+	| { action: "consolidateMemory"; name: string }
 	/** Bring the open folder's code index up to date; followed through the status. */
 	| { action: "codeIndexRefresh" }
 	/** Forget the open folder's code index: its files, passages and vectors. */

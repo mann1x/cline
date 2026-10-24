@@ -1,4 +1,5 @@
 import deepEqual from "fast-deep-equal"
+import * as fs from "fs/promises"
 import * as path from "path"
 import { Diagnostic, DiagnosticSeverity, FileDiagnostics } from "@/shared/proto/index.cline"
 import { Logger } from "@/shared/services/Logger"
@@ -72,7 +73,7 @@ function isUnbalancedDelimiter(message: string): boolean {
  * wrong, and then asked the user whether it should give up. Point at the cause
  * before the list rather than leaving it at the bottom.
  */
-function rootCauseHint(diagnostics: Diagnostic[]): string | null {
+function rootCauseHint(diagnostics: Diagnostic[], shape: FileShape | null): string | null {
 	if (diagnostics.length < 3) {
 		return null
 	}
@@ -84,7 +85,7 @@ function rootCauseHint(diagnostics: Diagnostic[]): string | null {
 		.slice(0, 2)
 		.map((d) => {
 			const start = d.range?.start
-			const at = start ? `line ${start.line + 1}, column ${start.character + 1}` : "an unknown position"
+			const at = start ? describePosition(start, shape) : "an unknown position"
 			return `${d.message.trim().replace(/\.$/, "")} at ${at}`
 		})
 		.join("; ")
@@ -96,6 +97,70 @@ function rootCauseHint(diagnostics: Diagnostic[]): string | null {
 	)
 }
 
+/**
+ * What the renderer needs of the file to name a position the language server
+ * puts past its last line: how many lines it has, counted the way
+ * `read_files` and the revision list count them, and where each `</script>`
+ * of a page closes.
+ */
+interface FileShape {
+	lines: number
+	/** 1-based lines of the `</script>` tags, in order. Empty for a file that is not a page. */
+	scriptEnds: number[]
+}
+
+async function readFileShape(filePath: string): Promise<FileShape | null> {
+	let text: string
+	try {
+		text = await fs.readFile(filePath, "utf8")
+	} catch {
+		return null
+	}
+	const lines = text === "" ? [] : text.split(/\r\n|\r|\n/)
+	if (lines[lines.length - 1] === "") {
+		lines.pop()
+	}
+	const scriptEnds: number[] = []
+	if (/\.html?$/i.test(filePath)) {
+		for (const match of text.matchAll(/<\/script\s*>/gi)) {
+			scriptEnds.push(text.slice(0, match.index).split(/\r\n|\r|\n/).length)
+		}
+	}
+	return { lines: lines.length, scriptEnds }
+}
+
+/**
+ * `line 90, column 382`, or, for a position past the last line, the end of
+ * the file said in the file's own count.
+ *
+ * A language server counts the empty line after the final line break, which
+ * no other tool does: the parser gives up on an unclosed brace there, so a
+ * file `read_files` calls 136 lines long gets `Line 137, column 1: '}'
+ * expected`. Measured on pandorum (jackodf-9b, session ydiox): the model took
+ * the line that did not exist as the check reading an old copy, said so for
+ * ten turns, re-ran the check after every edit and stopped believing it. For
+ * a page the JavaScript is checked as the whole page with the markup blanked
+ * out, so the end of the script is its `</script>`, and that is said too.
+ */
+function describePosition(start: { line: number; character: number }, shape: FileShape | null): string {
+	const line = start.line + 1
+	// The column is the part that makes a diagnostic actionable on a long
+	// line, and it was being dropped. Measured on a minified file: the one
+	// error that mattered was at line 92 *column 293*, and "Line 92" alone
+	// sent the model into fifteen shell commands counting braces by hand to
+	// find what the language server had already located exactly. The
+	// browser's own console said `manic_miner.html:92:293`.
+	const column = start.character !== undefined ? `, column ${start.character + 1}` : ""
+	if (!shape || line <= shape.lines) {
+		return `line ${line}${column}`
+	}
+	const end =
+		`the end of the file (after line ${shape.lines}, its last; the editor numbers the empty line after ` +
+		`the final line break ${line})`
+	const script = shape.scriptEnds[shape.scriptEnds.length - 1]
+	return script ? `${end}, which for the script is its \`</script>\` on line ${script}` : end
+}
+
 export async function singleFileDiagnosticsToProblemsString(filePath: string, diagnostics: Diagnostic[]): Promise<string> {
 	if (!diagnostics.length) {
 		return ""
@@ -103,8 +168,9 @@ export async function singleFileDiagnosticsToProblemsString(filePath: string, di
 	const cwd = await getCwd()
 	const relPath = path.relative(cwd, filePath).toPosix()
 	let result = `${relPath}`
+	const shape = await readFileShape(filePath)
 
-	const hint = rootCauseHint(diagnostics)
+	const hint = rootCauseHint(diagnostics, shape)
 	if (hint) {
 		result += `\n${hint}`
 	}
@@ -113,17 +179,9 @@ export async function singleFileDiagnosticsToProblemsString(filePath: string, di
 		const label = severityToString(diagnostic.severity)
 		// Lines and characters are both 0-indexed in the protocol.
 		const start = diagnostic.range?.start
-		const line = start ? `${start.line + 1}` : ""
-		// The column is the part that makes a diagnostic actionable on a long
-		// line, and it was being dropped. Measured on a minified file: the one
-		// error that mattered was at line 92 *column 293*, and "Line 92" alone
-		// sent the model into fifteen shell commands counting braces by hand to
-		// find what the language server had already located exactly. The
-		// browser's own console said `manic_miner.html:92:293`.
-		const column = start?.character !== undefined ? `, column ${start.character + 1}` : ""
-
+		const at = start ? describePosition(start, shape) : "line "
 		const source = diagnostic.source ? `${diagnostic.source} ` : ""
-		result += `\n- [${source}${label}] Line ${line}${column}: ${diagnostic.message}`
+		result += `\n- [${source}${label}] ${at.charAt(0).toUpperCase()}${at.slice(1)}: ${diagnostic.message}`
 	}
 	return result
 }

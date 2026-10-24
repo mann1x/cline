@@ -435,6 +435,81 @@ describe("createEditorExecutor", () => {
 			});
 		});
 
+		// Session 4w0m4: `old_text: "}"` at a column holding the `l` of `else`
+		// deleted the `l` and reported success, twice.
+		const BRANCHES = "a\nif(x){y();}else{z();}}\nb";
+
+		it("never replaces a column span that does not hold its old_text", async () => {
+			await withTempFile(BRANCHES, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await expect(
+					editor(
+						{
+							path: filePath,
+							start_line: 2,
+							start_column: 13,
+							end_column: 13,
+							old_text: "}",
+							new_text: "",
+						},
+						dir,
+						context,
+					),
+				).rejects.toThrow(
+					`line 2, column 13 of ${filePath} holds "l", not "}" as your \`old_text\` says, so the columns and the anchor name different characters. "}" occurs 3 times on line 2, at columns 11, 21, 22`,
+				);
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(BRANCHES);
+			});
+		});
+
+		it("moves a column edit to its old_text when that occurs once on the line", async () => {
+			await withTempFile(BRANCHES, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{
+						path: filePath,
+						start_line: 2,
+						start_column: 3,
+						end_column: 6,
+						old_text: "else",
+						new_text: "else ",
+					},
+					dir,
+					context,
+				);
+
+				expect(result).toContain(
+					'line 2, columns 3-6 held "(x){", not your `old_text` "else"; that occurs once on line 2, at columns 12-15, so that is what was replaced',
+				);
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"a\nif(x){y();}else {z();}}\nb",
+				);
+			});
+		});
+
+		it("applies a column edit whose old_text matches the span", async () => {
+			await withTempFile(BRANCHES, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const result = await editor(
+					{
+						path: filePath,
+						start_line: 2,
+						start_column: 22,
+						end_column: 22,
+						old_text: "}",
+						new_text: "",
+					},
+					dir,
+					context,
+				);
+
+				expect(result).not.toContain("held");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					"a\nif(x){y();}else{z();}\nb",
+				);
+			});
+		});
+
 		it("says how long the line is when the column is past its end", async () => {
 			await withTempFile(MINIFIED, async (filePath, dir) => {
 				const editor = createEditorExecutor();

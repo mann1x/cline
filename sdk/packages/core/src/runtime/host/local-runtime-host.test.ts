@@ -2163,6 +2163,7 @@ describe("LocalRuntimeHost", () => {
 			sessionId,
 			inConversation: ["m4"],
 			contextWindow: 8192,
+			places: [],
 		});
 		// With messages already there, the turn continues the conversation.
 		const call = agent.run.mock.calls[0] ?? agent.continue.mock.calls[0];

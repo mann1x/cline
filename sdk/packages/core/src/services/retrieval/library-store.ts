@@ -131,6 +131,14 @@ const SCHEMA = [
 		dimension INTEGER NOT NULL,
 		seen_at TEXT NOT NULL
 	)`,
+	// The highest document id ever given. SQLite gives the next row the
+	// highest id there is plus one, so deleting the newest document handed
+	// its id to the next one, and a reference to it (a note's m12) named
+	// another document. Every id is now above this.
+	`CREATE TABLE IF NOT EXISTS id_floor (
+		name TEXT PRIMARY KEY,
+		value INTEGER NOT NULL
+	)`,
 	// unicode61 and no stemmer: a library is not all in one language.
 	`CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 		text, context,
@@ -291,6 +299,7 @@ export class LibraryStore {
 	/** Removes the collection with its documents and chunks. */
 	deleteCollection(collectionId: number): void {
 		this.transaction(() => {
+			this.raiseIdFloor();
 			// Chunks first and by statement: the index is kept by a trigger on
 			// `chunks`, and a cascade's deletes fire it only with recursive
 			// triggers on.
@@ -350,17 +359,20 @@ export class LibraryStore {
 				return { document: existing, outcome: "unchanged", chunkIds: [] };
 			}
 			if (existing) {
+				this.raiseIdFloor();
 				this.db
 					.prepare("DELETE FROM chunks WHERE document_id = ?")
 					.run(existing.id);
 				this.db.prepare("DELETE FROM documents WHERE id = ?").run(existing.id);
 			}
+			const nextId = this.nextDocumentId();
 			const inserted = this.db
 				.prepare(
-					`INSERT INTO documents(collection_id, source, title, content_hash, bytes, chunk_count, added_at, metadata)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+					`INSERT INTO documents(id, collection_id, source, title, content_hash, bytes, chunk_count, added_at, metadata)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				)
 				.run(
+					nextId,
 					collectionId,
 					input.source,
 					input.title ?? null,
@@ -371,6 +383,11 @@ export class LibraryStore {
 					JSON.stringify(input.metadata ?? {}),
 				);
 			const documentId = Number(inserted.lastInsertRowid);
+			this.db
+				.prepare(
+					"INSERT INTO id_floor(name, value) VALUES ('documents', ?) ON CONFLICT(name) DO UPDATE SET value = MAX(value, excluded.value)",
+				)
+				.run(documentId);
 			const insertChunk = this.db.prepare(
 				`INSERT INTO chunks(document_id, collection_id, ord, text, context, start_offset, end_offset, headings)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -460,8 +477,86 @@ export class LibraryStore {
 			.run(JSON.stringify(metadata), documentId);
 	}
 
+	/** The id the next document gets: above every id there is or was. */
+	private nextDocumentId(): number {
+		const highest = Number(
+			this.db.prepare("SELECT MAX(id) AS n FROM documents").get()?.n ?? 0,
+		);
+		const floor = Number(
+			this.db
+				.prepare("SELECT value FROM id_floor WHERE name = 'documents'")
+				.get()?.value ?? 0,
+		);
+		return Math.max(highest, floor) + 1;
+	}
+
+	/** Remember the highest id there is, before a delete can take it away. */
+	private raiseIdFloor(): void {
+		this.db
+			.prepare(
+				`INSERT INTO id_floor(name, value) SELECT 'documents', COALESCE(MAX(id), 0) FROM documents WHERE true
+				ON CONFLICT(name) DO UPDATE SET value = MAX(value, excluded.value)`,
+			)
+			.run();
+	}
+
+	/**
+	 * Put new text in a document and keep its id: its chunks are made again,
+	 * and its vectors are to be made again (the caller removes the old ones).
+	 */
+	replaceDocument(
+		documentId: number,
+		input: LibraryDocumentInput,
+		chunks: readonly TextChunk[],
+	): LibraryDocument {
+		return this.transaction(() => {
+			const existing = this.getDocument(documentId);
+			if (!existing) {
+				throw new Error(`There is no document ${documentId}.`);
+			}
+			this.db
+				.prepare("DELETE FROM chunks WHERE document_id = ?")
+				.run(documentId);
+			this.db
+				.prepare("DELETE FROM document_embeddings WHERE document_id = ?")
+				.run(documentId);
+			this.db
+				.prepare(
+					`UPDATE documents SET source = ?, title = ?, content_hash = ?, bytes = ?, chunk_count = ?, metadata = ?
+					WHERE id = ?`,
+				)
+				.run(
+					input.source,
+					input.title ?? null,
+					input.contentHash,
+					input.bytes ?? null,
+					chunks.length,
+					JSON.stringify(input.metadata ?? {}),
+					documentId,
+				);
+			const insertChunk = this.db.prepare(
+				`INSERT INTO chunks(document_id, collection_id, ord, text, context, start_offset, end_offset, headings)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			);
+			for (const chunk of chunks) {
+				insertChunk.run(
+					documentId,
+					existing.collectionId,
+					chunk.index,
+					chunk.text,
+					chunkContext(input, chunk.headings),
+					chunk.start,
+					chunk.end,
+					JSON.stringify(chunk.headings),
+				);
+			}
+			return this.getDocument(documentId) as LibraryDocument;
+		});
+	}
+
 	deleteDocument(documentId: number): void {
 		this.transaction(() => {
+			this.raiseIdFloor();
 			this.db
 				.prepare("DELETE FROM chunks WHERE document_id = ?")
 				.run(documentId);

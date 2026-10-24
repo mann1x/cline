@@ -41,6 +41,7 @@ import {
 } from "../../extensions/tools/memory-tools";
 import { queryTerms } from "./library-store";
 import { type Memory, type RecalledMemory, sharedMemory } from "./memory";
+import { type DescribedPlaceCheck, describeNote } from "./memory-note";
 
 /** A message shorter than this is "yes", "continue", "go on": nothing to search for. */
 export const MEMORY_RECALL_MIN_PROMPT_CHARS = 12;
@@ -73,6 +74,12 @@ export const MEMORY_RECALL_WINDOW_SHARE = 0.04;
 export const MEMORY_RECALL_FALLBACK_WINDOW = 32_768;
 /** Characters per token, low, so the bound errs short. */
 const CHARS_PER_TOKEN = 3.5;
+/**
+ * Notes added for the files a task has in play, after the message's own and
+ * never in their place (claude-hooks cd71cf3 adds up to 12 for a council's
+ * judges; a chat turn has a smaller window to share).
+ */
+export const MEMORY_RECALL_PLACE_EXTRA = 3;
 const HYDE_CACHE_ENTRIES = 200;
 const SESSIONS_TRACKED = 200;
 const RRF_K = 60;
@@ -114,6 +121,11 @@ export interface MemoryRecallInput {
 	inConversation?: readonly string[];
 	/** The session's window, in tokens, which bounds how much is attached. */
 	contextWindow?: number;
+	/**
+	 * The files this task has in play: read, edited, mentioned. Notes about
+	 * them are added after the message's own.
+	 */
+	places?: readonly string[];
 }
 
 export interface MemoryRecallResult {
@@ -227,8 +239,18 @@ export function fuseRecalls(
 		.map((entry) => entry.item);
 }
 
-function formatNote(item: RecalledMemory, text = item.text): string {
-	return `[${item.id}] ${item.createdAt.slice(0, 10)}, ${item.memory}${item.tags.length ? `, tags: ${item.tags.join(", ")}` : ""}\n${text}`;
+/** A recalled note, and why it was given when it was not for the message's words. */
+export type GivenNote = RecalledMemory & { via?: string };
+
+function formatNote(
+	item: GivenNote,
+	text = item.text,
+	checks?: readonly DescribedPlaceCheck[] | undefined,
+): string {
+	return describeNote(
+		{ ...item, text },
+		{ ...(checks ? { checks } : {}), ...(item.via ? { extra: item.via } : {}) },
+	);
 }
 
 /** How many characters of notes a window of this size takes. */
@@ -246,10 +268,10 @@ export function recallCharBudget(contextWindow: number | undefined): number {
  * cut if it has to be, with the id to recall it whole.
  */
 export function fitRecalledMemory(
-	items: RecalledMemory[],
+	items: GivenNote[],
 	maxChars: number,
-): { items: RecalledMemory[]; cut?: string } {
-	const kept: RecalledMemory[] = [];
+): { items: GivenNote[]; cut?: string } {
+	const kept: GivenNote[] = [];
 	let used = 0;
 	for (const item of items) {
 		const size = formatNote(item).length + 2;
@@ -272,12 +294,15 @@ export function fitRecalledMemory(
 	};
 }
 
-export function formatRecalledMemory(items: RecalledMemory[]): string {
+export function formatRecalledMemory(
+	items: GivenNote[],
+	checksFor?: (item: GivenNote) => readonly DescribedPlaceCheck[] | undefined,
+): string {
 	return [
 		`<${RECALLED_MEMORY_TAG}>`,
-		`Notes from earlier tasks that may bear on this message, found automatically (${items.length}). They were true when noted: check they still hold before relying on them, and ignore any that do not apply. The recall tool searches for more.`,
+		`Notes from earlier tasks that may bear on this message, found automatically (${items.length}). Each says what to do with it; ignore any that do not apply. The recall tool searches for more.`,
 		"",
-		...items.map((item) => formatNote(item)),
+		...items.map((item) => formatNote(item, item.text, checksFor?.(item))),
 		`</${RECALLED_MEMORY_TAG}>`,
 	].join("\n");
 }
@@ -390,6 +415,7 @@ export function createMemoryRecaller(
 				memories,
 				settings: config.settings,
 				endpoints: config,
+				skipOutdated: true,
 			});
 			searchNotes.push(...result.notes);
 			return {
@@ -448,7 +474,32 @@ export function createMemoryRecaller(
 				}
 			}
 			const already = givenTo(input);
-			const unseen = items.filter((item) => !already.has(item.id));
+			const unseen: GivenNote[] = items.filter((item) => !already.has(item.id));
+			// Then the notes at the files in play: a place in common, never
+			// words alone, and only after the message's own.
+			if (input.places?.length && memory.recallAtPlaces) {
+				const placed = memory.recallAtPlaces(input.places, {
+					memories,
+					limit: MEMORY_RECALL_PLACE_EXTRA,
+					exclude: [...already, ...unseen.map((item) => item.id)],
+				});
+				for (const item of placed) {
+					const at = (item.places ?? [])
+						.map((place) => place.path)
+						.find((path) =>
+							input.places?.some(
+								(wanted) =>
+									wanted === path ||
+									wanted.endsWith(`/${path}`) ||
+									path.endsWith(`/${wanted}`),
+							),
+						);
+					unseen.push({
+						...item,
+						via: `about ${at ?? "a file"} in this task`,
+					});
+				}
+			}
 			// What the search could not do ("searched by keyword"), said once
 			// a session: an empty recall from a degraded search is not the
 			// same as Memory having nothing.
@@ -481,11 +532,24 @@ export function createMemoryRecaller(
 			}
 			for (const item of fresh) already.add(item.id);
 			const ids = fresh.map((item) => item.id);
+			try {
+				memory.noteRecalled?.(ids, memories);
+			} catch {
+				// A use not counted moves a ranking a little; it fails nothing.
+			}
 			options.log?.(
 				`memory recall: ${ids.join(", ")}${expanded ? " (expanded)" : ""}`,
 			);
 			return {
-				context: formatRecalledMemory(fresh),
+				context: formatRecalledMemory(fresh, (item) => {
+					try {
+						return item.places?.length
+							? memory.checkPlaces(item, input.cwd)
+							: undefined;
+					} catch {
+						return undefined;
+					}
+				}),
 				ids,
 				expanded,
 				summary: [

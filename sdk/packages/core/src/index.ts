@@ -1780,7 +1780,9 @@ export type {
 	LibraryHit,
 } from "./services/retrieval/library-store";
 export {
+	buildMemoryDistillPrompt,
 	closeSharedMemories,
+	MEMORY_DISTILL_SYSTEM_PROMPT,
 	MEMORY_EXPORT_FORMAT,
 	MEMORY_MAX_CHARS,
 	MEMORY_NAME_MAX_CHARS,

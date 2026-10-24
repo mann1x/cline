@@ -3,6 +3,7 @@ import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 import { useState } from "react"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import type { RetrievalStatusHandle } from "../utils/useRetrievalStatus"
+import MemoryNotes from "./MemoryNotes"
 
 interface MemoryListProps {
 	retrieval: RetrievalStatusHandle
@@ -27,6 +28,7 @@ const MemoryList = ({ retrieval, selection, onSelect, onRenamed }: MemoryListPro
 	const [nameFieldKey, setNameFieldKey] = useState(0)
 	const [confirmDelete, setConfirmDelete] = useState<string>()
 	const [renaming, setRenaming] = useState<{ name: string; to: string }>()
+	const [browsing, setBrowsing] = useState<string>()
 
 	if (!status) {
 		return null
@@ -184,6 +186,13 @@ const MemoryList = ({ retrieval, selection, onSelect, onRenamed }: MemoryListPro
 									<>
 										<VSCodeButton
 											appearance="icon"
+											disabled={busy || memory.notes === 0}
+											onClick={() => setBrowsing(browsing === memory.name ? undefined : memory.name)}
+											title={`Read, confirm or set aside the notes in "${memory.name}"`}>
+											Notes
+										</VSCodeButton>
+										<VSCodeButton
+											appearance="icon"
 											disabled={busy}
 											onClick={() => void run({ action: "exportMemory", name: memory.name })}
 											title={`Write "${memory.name}" to a file`}>
@@ -214,6 +223,15 @@ const MemoryList = ({ retrieval, selection, onSelect, onRenamed }: MemoryListPro
 					))}
 				</tbody>
 			</table>
+			{browsing && memories.some((memory) => memory.name === browsing) ? (
+				<MemoryNotes
+					key={browsing}
+					label={browsing === MAIN_MEMORY ? "Main" : browsing}
+					name={browsing}
+					onClose={() => setBrowsing(undefined)}
+					retrieval={retrieval}
+				/>
+			) : null}
 			{recall.size === 0 ? (
 				<p className="text-xs text-(--vscode-errorForeground)">
 					No memory is ticked for recall: this workspace's tasks find no notes, though they still store them.

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 const state = vi.hoisted(() => ({
 	settings: {} as Record<string, unknown>,
@@ -33,7 +33,11 @@ vi.mock("./sdk-api-handler", () => ({
 	},
 }))
 
-import { readMemoryQueryExpander } from "./memory-recall"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { closeSharedMemories, sharedMemory } from "@cline/core"
+import { readMemoryQueryExpander, runMemoryExpiry } from "./memory-recall"
 
 const profile = (name: string) => ({
 	name,
@@ -101,5 +105,49 @@ describe("the model that writes Memory's expansion", () => {
 		state.chunks = [{ type: "done", success: false, error: "401" }]
 		const expand = readMemoryQueryExpander({})
 		await expect(expand?.({ system: "S", prompt: "P", signal: new AbortController().signal })).rejects.toThrow("401")
+	})
+})
+
+describe("expired notes", () => {
+	// Memory's own folder, never the user's: sharedMemory() reads the data
+	// folder from the environment each time.
+	const dataDir = mkdtempSync(join(tmpdir(), "memory-expiry-"))
+	process.env.CEREBRILINE_DATA_DIR = dataDir
+	afterAll(async () => {
+		await closeSharedMemories()
+		delete process.env.CEREBRILINE_DATA_DIR
+		rmSync(dataDir, { recursive: true, force: true })
+	})
+	let now = Date.now() + 10 * 86_400_000
+
+	beforeEach(() => {
+		state.settings = { apiConfigurationProfiles: JSON.stringify([profile("cheap cloud")]) }
+		state.sent = []
+		state.chunks = [
+			{ type: "text", text: "The cache was tried twice and missed." },
+			{ type: "done", success: true },
+		]
+		// Past the hour each run waits for since the last.
+		now += 2 * 60 * 60 * 1000
+	})
+
+	it("stay while no profile is named, and are distilled by its model once one is", async () => {
+		const store = sharedMemory()
+		await store.remember({ text: "Session one tried the cache.", ttlDays: 1 })
+		await store.remember({ text: "Session two saw the cache miss.", ttlDays: 1 })
+		memory({ noteTtlDays: 1 })
+		await runMemoryExpiry({}, now)
+		expect(store.list()).toHaveLength(2)
+
+		memory({ noteTtlDays: 1, hydeProfile: "cheap cloud" })
+		await runMemoryExpiry({}, (now += 2 * 60 * 60 * 1000))
+		expect(state.sent[0].system).toContain("distil a project's expired notes")
+		expect(store.list().map((note) => note.text)).toEqual(["The cache was tried twice and missed."])
+	})
+
+	it("does nothing while notes never expire", async () => {
+		memory({ noteTtlDays: 0, hydeProfile: "cheap cloud" })
+		await runMemoryExpiry({}, now)
+		expect(state.sent).toEqual([])
 	})
 })

@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, it, mock } from "bun:test"
 import { DiagnosticSeverity, FileDiagnostics } from "@shared/proto/index.cline"
 import { expect } from "chai"
+import * as fs from "fs/promises"
+import * as os from "os"
+import * as path from "path"
 import * as sinon from "sinon"
 import * as actualPathUtils from "@/utils/path"
 
@@ -611,6 +614,44 @@ describe("Diagnostics Tests", () => {
 			]
 
 			expect(await diagnosticsToProblemsString(diagnostics)).to.not.contain("Start here")
+		})
+
+		it("names a position past the last line as the end of the file, in the file's own count", async () => {
+			// Session ydiox: a page `read_files` called 136 lines long, ending in
+			// an empty line and a final break, got `Line 137, column 1: '}'
+			// expected` and the model took the check for a stale copy.
+			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "diag-eof-"))
+			try {
+				const page = path.join(dir, "page.html")
+				const body = ["<html>", "<body>", "<script>", "class A {", "  m(){", "</script>", "</body>", "</html>", ""]
+				await fs.writeFile(page, `${body.join("\r\n")}\r\n`)
+				const script = path.join(dir, "a.js")
+				await fs.writeFile(script, "class A {\n  m(){\n")
+				const result = await diagnosticsToProblemsString([
+					{
+						filePath: page,
+						diagnostics: [
+							errorAt(4, 2, "',' expected."),
+							errorAt(4, 5, "';' expected."),
+							errorAt(9, 0, "'}' expected."),
+						],
+					},
+					{ filePath: script, diagnostics: [errorAt(2, 0, "'}' expected.")] },
+				])
+				const end =
+					"the end of the file (after line 9, its last; the editor numbers the empty line after the final line break 10), " +
+					"which for the script is its `</script>` on line 6"
+				expect(result).to.contain(`'}' expected at ${end}.`)
+				expect(result).to.contain(`- [Error] T${end.slice(1)}: '}' expected.`)
+				// A line the file has is named as before.
+				expect(result).to.contain("- [Error] Line 5, column 3: ',' expected.")
+				// Not a page: no script to name.
+				expect(result).to.contain(
+					"- [Error] The end of the file (after line 2, its last; the editor numbers the empty line after the final line break 3): '}' expected.",
+				)
+			} finally {
+				await fs.rm(dir, { recursive: true, force: true })
+			}
 		})
 	})
 })

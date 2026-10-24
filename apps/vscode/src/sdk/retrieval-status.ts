@@ -8,7 +8,13 @@ import {
 	sharedLibrary,
 	sharedMemory,
 } from "@cline/core"
-import type { RetrievalAction, RetrievalActionResult, RetrievalEmbedJob, RetrievalStatus } from "@shared/retrieval-status"
+import type {
+	MemoryNoteView,
+	RetrievalAction,
+	RetrievalActionResult,
+	RetrievalEmbedJob,
+	RetrievalStatus,
+} from "@shared/retrieval-status"
 import { Logger } from "@shared/services/Logger"
 import { getCwd } from "@utils/path"
 import { HostProvider } from "@/hosts/host-provider"
@@ -152,7 +158,29 @@ export async function readRetrievalStatus(): Promise<RetrievalStatus> {
 
 const fileName = (name: string) => `${name.replace(/[^\p{L}\p{N}._-]+/gu, "-").replace(/^-+|-+$/g, "") || "memory"}.memory.json`
 
-type Outcome = Pick<RetrievalActionResult, "models" | "check" | "books" | "book" | "imageSupport" | "imageModels">
+type Outcome = Pick<RetrievalActionResult, "models" | "check" | "books" | "book" | "imageSupport" | "imageModels" | "notes">
+
+/** A memory's notes for the panel, newest first. */
+function noteViews(memory: ReturnType<typeof sharedMemory>, name: string): MemoryNoteView[] {
+	return memory.list({ memories: [name] }).map((item) => ({
+		id: item.id,
+		text: item.text,
+		tags: item.tags,
+		createdAt: item.createdAt,
+		kind: item.kind ?? "fact",
+		status: item.status ?? "noted",
+		...(item.reason ? { reason: item.reason } : {}),
+		places: (item.places ?? []).map((place) => (place.line ? `${place.path}:${place.line}` : place.path)),
+		...(item.origin?.by ? { by: item.origin.by } : {}),
+		evidence: (item.evidence ?? []).map((entry) => entry.text),
+		history: item.history ?? [],
+		...(item.settled?.reason ? { settledReason: item.settled.reason } : {}),
+		...(item.settled?.at ? { settledAt: item.settled.at } : {}),
+		merged: item.merged ?? [],
+		recalled: item.recalled?.count ?? 0,
+		...(item.expiresAt ? { expiresAt: item.expiresAt } : {}),
+	}))
+}
 
 async function act(request: RetrievalAction, outcome: Outcome): Promise<string | undefined> {
 	const memory = sharedMemory()
@@ -230,6 +258,34 @@ async function act(request: RetrievalAction, outcome: Outcome): Promise<string |
 			}
 			await writeFile(chosen.selectedPath, `${JSON.stringify(data, null, 2)}\n`, "utf8")
 			return `Wrote ${data.notes.length} note${data.notes.length === 1 ? "" : "s"} of "${request.name}" to ${chosen.selectedPath}.`
+		}
+		case "memoryNotes":
+			outcome.notes = noteViews(memory, request.name)
+			return undefined
+		case "settleNote": {
+			// The user's verdict: the one way a note is confirmed or set aside.
+			const settled = memory.settle(
+				request.id,
+				{ status: request.status, ...(request.reason ? { reason: request.reason } : {}) },
+				{ memories: [request.name] },
+			)
+			outcome.notes = noteViews(memory, request.name)
+			return request.status === "noted"
+				? `${settled.id} is noted again, as the model left it.`
+				: `Marked ${settled.id} ${request.status}.`
+		}
+		case "forgetNote": {
+			const removed = await memory.forget(request.id, { memories: [request.name] })
+			outcome.notes = noteViews(memory, request.name)
+			if (!removed) throw new Error(`There is no note ${request.id} in "${request.name}".`)
+			return `Forgot ${request.id}.`
+		}
+		case "consolidateMemory": {
+			const result = await memory.consolidate({ memories: [request.name] })
+			outcome.notes = noteViews(memory, request.name)
+			return result.merged === 0
+				? `No two notes in "${request.name}" say the same.`
+				: `Merged ${result.merged} note${result.merged === 1 ? "" : "s"} into ${result.into.join(", ")}; their ids now reach the note they went into.`
 		}
 		case "importMemory": {
 			const chosen = await HostProvider.window.showOpenDialogue({

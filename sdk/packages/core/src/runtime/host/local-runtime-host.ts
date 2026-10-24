@@ -33,6 +33,7 @@ import {
 } from "../../extensions/context/compaction";
 import type { CompactionRevisions } from "../../extensions/context/compaction-revisions";
 import { releasePolykvSession } from "../../extensions/context/polykv-session";
+import { buildToolLedger } from "../../extensions/context/tool-ledger";
 import type { ToolExecutors } from "../../extensions/tools";
 import {
 	DefaultToolNames,
@@ -4487,6 +4488,9 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// Memory, searched with the user's own words -- not with the files a
 		// mention pulled in -- and put after them: the request is read first,
 		// the notes as what is known about it.
+		const history = session.config.recallMemory
+			? session.agent.getMessages()
+			: [];
 		const recalled = session.config.recallMemory
 			? await session.config.recallMemory({
 					prompt: normalizedPrompt,
@@ -4494,9 +4498,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 					sessionId: session.sessionId,
 					// What the conversation still holds: a note a compaction
 					// folded away is given again when it comes up.
-					inConversation: recalledMemoryIds(
-						messageTexts(session.agent.getMessages()),
-					),
+					inConversation: recalledMemoryIds(messageTexts(history)),
+					// The files the task has in play, newest first: notes about
+					// them are found by place, not only by the message's words.
+					places: filesInPlay(history, enriched.matchedFiles),
 					contextWindow:
 						session.config.contextWindow ??
 						session.config.knownModels?.[session.config.modelId]?.contextWindow,
@@ -5236,4 +5241,21 @@ function* messageTexts(messages: readonly unknown[]): Iterable<string> {
 				.join("\n");
 		}
 	}
+}
+
+/** Files the task's calls named and the message mentions, newest first, at most this many. */
+const FILES_IN_PLAY_MAX = 30;
+
+function filesInPlay(
+	messages: readonly unknown[],
+	mentioned: readonly string[] | undefined,
+): string[] {
+	const files = [...(mentioned ?? [])];
+	const entries = buildToolLedger(
+		messages as Parameters<typeof buildToolLedger>[0],
+	);
+	for (let at = entries.length - 1; at >= 0; at -= 1) {
+		files.push(...entries[at].files);
+	}
+	return [...new Set(files)].slice(0, FILES_IN_PLAY_MAX);
 }

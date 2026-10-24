@@ -29,8 +29,18 @@ export interface MemorySettings {
 	 * would answer the message, and search with that as well (HyDE).
 	 */
 	hyde: boolean;
-	/** The saved profile whose model writes it. Empty: none chosen. */
+	/**
+	 * The saved profile whose model writes it, and distils expired notes.
+	 * Empty: none chosen.
+	 */
 	hydeProfile: string;
+	/**
+	 * Days a fact the model notes is kept before it expires. Expired notes
+	 * are distilled into one by the model of `hydeProfile`, then removed;
+	 * with no model, they stay. Decisions, preferences and notes the user
+	 * confirmed never expire. 0: notes never expire.
+	 */
+	noteTtlDays: number;
 }
 
 /** The memory every workspace starts on, and the one that cannot be deleted. */
@@ -125,6 +135,7 @@ export const DEFAULT_MEMORY_SETTINGS: MemorySettings = {
 	autoRecall: true,
 	hyde: false,
 	hydeProfile: "",
+	noteTtlDays: 0,
 };
 
 /** Stored settings, whatever shape they are in, as settings that can be used. */
@@ -135,6 +146,7 @@ export function resolveMemorySettings(
 	const s = stored ?? {};
 	const count = Number(s.recallCount);
 	const threshold = Number(s.relevanceThreshold);
+	const ttl = Number(s.noteTtlDays);
 	return {
 		enabled: typeof s.enabled === "boolean" ? s.enabled : d.enabled,
 		recallCount: Number.isFinite(count)
@@ -148,5 +160,8 @@ export function resolveMemorySettings(
 		hyde: typeof s.hyde === "boolean" ? s.hyde : d.hyde,
 		hydeProfile:
 			typeof s.hydeProfile === "string" ? s.hydeProfile.trim() : d.hydeProfile,
+		noteTtlDays: Number.isFinite(ttl)
+			? Math.min(3650, Math.max(0, Math.round(ttl)))
+			: d.noteTtlDays,
 	};
 }

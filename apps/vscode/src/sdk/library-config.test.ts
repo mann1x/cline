@@ -183,6 +183,7 @@ describe("Memory's configuration", () => {
 				autoRecall: true,
 				hyde: true,
 				hydeProfile: "cheap cloud",
+				noteTtlDays: 0,
 			},
 			embedding: { baseUrl: "http://h:1", model: "bge-m3" },
 			reranker: { baseUrl: "http://r:2", model: "rr" },
@@ -200,6 +201,7 @@ describe("Memory's configuration", () => {
 				autoRecall: true,
 				hyde: false,
 				hydeProfile: "",
+				noteTtlDays: 0,
 			},
 		})
 	})

@@ -264,6 +264,42 @@ export class Library {
 		return result;
 	}
 
+	/**
+	 * Put new text in a document and keep its id. It is searchable by keyword
+	 * at once; its vectors are made again by `embedPending`.
+	 */
+	async replaceDocument(
+		documentId: number,
+		document: LibraryDocumentText,
+		settings: LibrarySettings = DEFAULT_LIBRARY_SETTINGS,
+	): Promise<LibraryDocument> {
+		const chunks = chunkText(document.text, {
+			size: settings.chunkSize,
+			overlap: settings.chunkOverlap,
+			minSize: settings.chunkMinSize,
+			unit: settings.splitter,
+			markdownHeaders: settings.markdownHeaders,
+		});
+		const replaced = this.store.replaceDocument(
+			documentId,
+			{
+				source: document.source,
+				title: document.title,
+				contentHash: createHash("sha256")
+					.update(
+						`${settings.splitter}:${settings.chunkSize}:${settings.chunkOverlap}:${settings.chunkMinSize}:${settings.markdownHeaders}\n`,
+					)
+					.update(document.text)
+					.digest("hex"),
+				bytes: document.bytes ?? Buffer.byteLength(document.text),
+				metadata: document.metadata,
+			},
+			chunks,
+		);
+		await this.dropVectors([documentId]);
+		return replaced;
+	}
+
 	private async dropVectors(documentIds: readonly number[]): Promise<void> {
 		const index = await this.vectors().catch(() => undefined);
 		if (index) await this.exclusive(() => index.deleteDocuments(documentIds));
