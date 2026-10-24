@@ -617,9 +617,20 @@ function proposeRepair(
 		});
 	}
 
-	let best: { say: string; call: string; left: number } | null = null;
+	// The line's own count comes first, the file's crossings second. Fewest
+	// crossings alone chose a move on a line one `}` short, because a spare `}`
+	// further down absorbed the shortfall: pandorum g5tmt line 93 was told to
+	// move its `)` two columns, which left `dPw` open and every method after it
+	// a statement. A move cannot change a count; the line said it was short.
+	let best: {
+		say: string;
+		call: string;
+		left: number;
+		off: number;
+	} | null = null;
 	for (const candidate of candidates) {
-		const after = scanDelimiters(candidate.text, origin);
+		const scan = scanWithBalance(candidate.text, origin);
+		const after = scan.findings;
 		const cleared = !after.some(
 			(other) =>
 				other.line === finding.line &&
@@ -630,8 +641,25 @@ function proposeRepair(
 				other.line < finding.line ||
 				(other.line === finding.line && other.column <= finding.column),
 		);
-		if (cleared && !earlier && (best === null || after.length < best.left)) {
-			best = { say: candidate.say, call: candidate.call, left: after.length };
+		const counts = scan.balance.get(finding.line);
+		const off = counts
+			? Math.abs(counts.curly) +
+				Math.abs(counts.round) +
+				Math.abs(counts.square)
+			: 0;
+		if (
+			cleared &&
+			!earlier &&
+			(best === null ||
+				off < best.off ||
+				(off === best.off && after.length < best.left))
+		) {
+			best = {
+				say: candidate.say,
+				call: candidate.call,
+				left: after.length,
+				off,
+			};
 		}
 	}
 	if (!best) {

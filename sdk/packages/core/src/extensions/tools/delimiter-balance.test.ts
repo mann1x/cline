@@ -341,6 +341,26 @@ describe("describeDelimiterBalance", () => {
 			}
 		});
 
+		it("adds the missing closer rather than borrow a spare one further down", () => {
+			// pandorum g5tmt: line 93 was one `}` short, and line 98 held a spare
+			// `}`. Fewest crossings chose "move the `)` two columns", which left
+			// `dPw` open and made every method after it a statement.
+			const source = [
+				"class L{",
+				"  dPw(c){this.pw.forEach(p=>{if(p){c.fill();})}",
+				"  dEn(c){c.x();}",
+				"}",
+				"}",
+				"",
+			].join("\n");
+			const report = describeDelimiterBalance("app.js", source) ?? "";
+			expect(report).toContain(
+				"line 2: counting only code, this line has 1 more `{`",
+			);
+			expect(report).toContain("insert a `}` before the `)` at column 46");
+			expect(report).not.toContain("move the `)`");
+		});
+
 		it("proposes a move when the line balances and a closer is misplaced", () => {
 			const report = describeDelimiterBalance("app.js", "const x = ({)};\n");
 			expect(report).toContain(

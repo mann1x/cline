@@ -488,15 +488,15 @@ describe("steering a repeated call somewhere else", () => {
 		expect(message).toContain("still called `new_text`");
 	});
 
-	it("offers a command something a command can do", () => {
-		const shell = { name: "run_commands", input: { command: "node app.js" } };
+	it("offers a tool that does not edit something it can do", () => {
+		const search = { name: "grep", input: { pattern: "dPw" } };
 		const tracker = new LoopDetectionTracker();
-		tracker.inspect(shell);
+		tracker.inspect(search);
 		tracker.noteOutcome(false, true);
 
 		const seen: string[] = [];
 		for (let i = 0; i < 2; i++) {
-			seen.push(tracker.inspect(shell).message ?? "");
+			seen.push(tracker.inspect(search).message ?? "");
 			tracker.noteOutcome(false, true);
 		}
 
@@ -651,24 +651,60 @@ describe("a call answered the same way but for the revision it names", () => {
 		expect(kinds).toContain("hard");
 	});
 
-	// The reason the cycle rule was written soft. A command re-run after each
-	// edit that keeps printing the same thing is sometimes a loop and sometimes
-	// a suite that passes, and nothing here can tell them apart -- so it says
-	// what it sees and lets the run continue.
-	it("only warns about a command that keeps printing the same thing", () => {
+	// The reason the cycle rule was written soft. A read re-sent after each
+	// edit that keeps answering the same is sometimes a loop and sometimes a
+	// check that the edit held, and nothing here can tell them apart -- so it
+	// says what it sees and lets the run continue.
+	it("only warns about a read that keeps answering the same", () => {
 		const tracker = new LoopDetectionTracker();
-		const command = { name: "run_commands", input: { commands: ["npm test"] } };
+		const search = { name: "grep", input: { pattern: "dPw" } };
 		const kinds: string[] = [];
 
 		for (let turn = 0; turn < 8; turn += 1) {
-			kinds.push(tracker.inspect(command).kind);
-			tracker.noteOutcome(true, false, "42 passing");
+			kinds.push(tracker.inspect(search).kind);
+			tracker.noteOutcome(true, false, "93: dPw(c,x){");
 			tracker.inspect(read);
 			tracker.noteOutcome(true, false, "136 lines");
 		}
 
 		expect(kinds).toContain("soft");
 		expect(kinds).not.toContain("hard");
+	});
+
+	// pandorum g5tmt: the task's oracle, `.\run_game.exe manic_miner.html`, was
+	// flagged as a repeat. A command answers about the workspace, so running it
+	// again after each edit is the job -- whether it passes, fails, or prints
+	// the same thing every time.
+	it("leaves a command alone however often it is run", () => {
+		const tracker = new LoopDetectionTracker();
+		const oracle = {
+			name: "run_commands",
+			input: { commands: [".\\run_game.exe manic_miner.html"] },
+		};
+		const kinds: string[] = [];
+
+		for (let turn = 0; turn < 8; turn += 1) {
+			kinds.push(tracker.inspect(oracle).kind);
+			tracker.noteOutcome(false, false, '{"ok":false}');
+			kinds.push(tracker.inspect(oracle).kind);
+			tracker.noteOutcome(true, false, '{"ok":false}');
+			tracker.inspect(read);
+			tracker.noteOutcome(true, false, "136 lines");
+		}
+
+		expect(new Set(kinds)).toEqual(new Set(["ok"]));
+	});
+
+	it("still lets a command break another call's run of repeats", () => {
+		const tracker = new LoopDetectionTracker();
+		const oracle = { name: "run_commands", input: { commands: ["npm test"] } };
+
+		tracker.inspect(editor);
+		tracker.noteOutcome(true);
+		tracker.inspect(oracle);
+		tracker.noteOutcome(true);
+
+		expect(tracker.inspect(editor).kind).toBe("ok");
 	});
 });
 

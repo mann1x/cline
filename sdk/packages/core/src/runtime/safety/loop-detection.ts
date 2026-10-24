@@ -27,8 +27,8 @@ import type { LoopDetectionConfig } from "@cline/shared";
  * reported "No change" every time, because two calls to a different line in the
  * middle reset the consecutive count twice.
  *
- * Only failures count, which is what makes this safe. Re-running the same test
- * command after each edit, or re-checking the same file, is how work gets done;
+ * Only failures count, which is what makes this safe. Re-checking the same file
+ * after each edit is how work gets done (commands are not counted at all);
  * those calls succeed, and a success clears the tally for that signature. What
  * accrues here is strictly a call that has been tried and got nowhere.
  *
@@ -349,6 +349,24 @@ export const POLLING_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Tools that run a command, which the guard leaves alone entirely.
+ *
+ * A command's answer is about the workspace, not about its arguments: the same
+ * test, build or oracle run after each edit is the job, and an answer that does
+ * not change is the evidence that the edit did not fix it. Measured on pandorum
+ * g5tmt (2026-10-24): `.\run_game.exe manic_miner.html`, the task's own oracle,
+ * was flagged "The model repeated a call to run_commands", telling the model
+ * to change approach when it had done exactly what it should.
+ *
+ * Unlike {@link POLLING_TOOL_NAMES} a command still breaks another call's run
+ * of repeats: it can change the workspace, so a call sent before and after it
+ * is not the same question twice.
+ */
+export const COMMAND_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"run_commands",
+]);
+
+/**
  * The answer a tool gave, with the part that cannot repeat taken out.
  *
  * `editor` and `restore_file` both end their message with the revision the file
@@ -483,10 +501,11 @@ const DEFAULT_CONFIG: LoopDetectionConfig = {
  * calls, it fired zero times, because a `read_files` sat between every repeat
  * and the one before it. What repeated was the pair.
  *
- * Deliberately soft and never hard. A command that is re-run after each edit
- * and keeps printing the same thing is sometimes a loop and sometimes a passing
- * test suite, and the two are indistinguishable from here -- so this says what
- * it sees and never ends a run on it.
+ * Deliberately soft and never hard. A read re-sent after each edit that keeps
+ * answering the same is sometimes a loop and sometimes a check that the edit
+ * held, and the two are indistinguishable from here -- so this says what it
+ * sees and never ends a run on it. Commands are not counted at all; see
+ * {@link COMMAND_TOOL_NAMES}.
  */
 const CYCLE_REPEAT_LIMIT = 3;
 
@@ -498,9 +517,9 @@ const CYCLE_REPEAT_LIMIT = 3;
  * read before the sixth attempt, which is the ladder finishing rather than
  * repeating.
  *
- * Only for {@link WRITE_CLASS_TOOL_NAMES}. A read or a command answered the
- * same way is sometimes a loop and sometimes the job, and nothing here can
- * separate them -- those keep warning and never stop.
+ * Only for {@link WRITE_CLASS_TOOL_NAMES}. A read answered the same way is
+ * sometimes a loop and sometimes the job, and nothing here can separate them
+ * -- those keep warning and never stop.
  */
 const CYCLE_HARD_LIMIT = 6;
 
@@ -527,6 +546,13 @@ export class LoopDetectionTracker {
 			// Not counted, and not an interruption of any other call's run of
 			// repeats either: nothing is recorded for its outcome.
 			this.state.pendingKey = "";
+			return { kind: "ok" };
+		}
+		if (COMMAND_TOOL_NAMES.has(call.name)) {
+			this.state.pendingKey = "";
+			this.state.lastToolName = call.name;
+			this.state.lastToolSignature = "";
+			this.state.consecutiveIdenticalCount = 0;
 			return { kind: "ok" };
 		}
 		const signature = toolCallSignature(call.input);
@@ -604,9 +630,9 @@ export class LoopDetectionTracker {
 			checkRepeatedToolCall(this.state, call.name, signature, this.config);
 			// A warning that can only ever be a warning is one the run can
 			// ignore, and on pandorum it was ignored for ten rounds. The
-			// softness protects one case -- a command re-run after each edit
-			// that keeps printing the same thing, which is sometimes a loop and
-			// sometimes a suite that passes. A write tool re-sent unchanged is
+			// softness protects one case -- a read re-sent after each edit that
+			// keeps answering the same, which is sometimes a loop and sometimes
+			// a check that the edit held. A write tool re-sent unchanged is
 			// not that case: a byte-identical payload applied to the same range
 			// cannot be progress, however it is answered.
 			if (
