@@ -226,7 +226,7 @@ export function readingRule(fields: MemoryNoteFields): string {
 	}
 	const confirmed =
 		fields.status === "confirmed"
-			? ` Confirmed by the user${fields.settled?.at ? ` on ${fields.settled.at.slice(0, 10)}` : ""}.`
+			? ` Confirmed by the user${fields.settled?.at ? ` on ${fields.settled.at.slice(0, 10)}` : ""}${fields.settled?.reason ? `: ${fields.settled.reason}` : ""}.`
 			: "";
 	switch (fields.kind) {
 		case "decision":

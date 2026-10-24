@@ -47,9 +47,21 @@ describe("what a note is", () => {
 
 	it("is settled by the user only, and an outdated note is left out of automatic recall", async () => {
 		const kept = await memory.remember({ text: "The tests run under jest." });
-		const confirmed = memory.settle(kept.item.id, { status: "confirmed" });
+		// A verdict is kept with its reason, and one without is refused.
+		expect(() => memory.settle(kept.item.id, { status: "confirmed" })).toThrow(
+			`Say why ${kept.item.id} is confirmed`,
+		);
+		expect(() =>
+			memory.settle(kept.item.id, { status: "outdated", reason: "  " }),
+		).toThrow(`Say why ${kept.item.id} is outdated`);
+		const confirmed = memory.settle(kept.item.id, {
+			status: "confirmed",
+			reason: "package.json runs jest",
+		});
 		expect(confirmed.status).toBe("confirmed");
-		expect(describeNote(confirmed)).toContain("Confirmed by the user");
+		expect(describeNote(confirmed)).toMatch(
+			/Confirmed by the user on \d{4}-\d{2}-\d{2}: package\.json runs jest\./,
+		);
 		const outdated = memory.settle(kept.item.id, {
 			status: "outdated",
 			reason: "moved to vitest",
@@ -70,7 +82,7 @@ describe("what a note is", () => {
 
 	it("is revised in place: the same id, what it said before kept, the user's verdict cleared", async () => {
 		const kept = await memory.remember({ text: "Build with Bun 1.3." });
-		memory.settle(kept.item.id, { status: "confirmed" });
+		memory.settle(kept.item.id, { status: "confirmed", reason: "checked" });
 		const revised = await memory.remember({
 			text: "Build with Bun 1.4.2.",
 			replaces: kept.item.id,
@@ -309,7 +321,7 @@ describe("out and back in", () => {
 			reason: "main carries work in progress",
 			places: ["docs/RELEASE.md"],
 		});
-		memory.settle("m1", { status: "confirmed" });
+		memory.settle("m1", { status: "confirmed", reason: "checked" });
 		const file = memory.exportMemory("main");
 		const other = new Memory({
 			directory: join(root, "other"),

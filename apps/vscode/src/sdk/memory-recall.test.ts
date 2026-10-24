@@ -37,7 +37,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { closeSharedMemories, sharedMemory } from "@cline/core"
-import { readMemoryQueryExpander, runMemoryExpiry } from "./memory-recall"
+import { readMemoryQueryExpander, runMemoryMaintenance } from "./memory-recall"
 
 const profile = (name: string) => ({
 	name,
@@ -136,18 +136,46 @@ describe("expired notes", () => {
 		await store.remember({ text: "Session one tried the cache.", ttlDays: 1 })
 		await store.remember({ text: "Session two saw the cache miss.", ttlDays: 1 })
 		memory({ noteTtlDays: 1 })
-		await runMemoryExpiry({}, now)
+		await runMemoryMaintenance({}, now)
 		expect(store.list()).toHaveLength(2)
 
 		memory({ noteTtlDays: 1, hydeProfile: "cheap cloud" })
-		await runMemoryExpiry({}, (now += 2 * 60 * 60 * 1000))
+		await runMemoryMaintenance({}, (now += 2 * 60 * 60 * 1000))
 		expect(state.sent[0].system).toContain("distil a project's expired notes")
 		expect(store.list().map((note) => note.text)).toEqual(["The cache was tried twice and missed."])
 	})
 
 	it("does nothing while notes never expire", async () => {
 		memory({ noteTtlDays: 0, hydeProfile: "cheap cloud" })
-		await runMemoryExpiry({}, now)
+		await runMemoryMaintenance({}, now)
 		expect(state.sent).toEqual([])
+	})
+
+	it("merges near-duplicates on its own, once an hour, whether or not notes expire", async () => {
+		const store = sharedMemory()
+		for (const note of store.list()) await store.forget(note.id)
+		const first = await store.remember({ text: "The parser keeps a cache of tokens per file." })
+		await store.remember({ text: "The parser keeps a cache of the tokens per file.", allowSimilar: true })
+		memory({ noteTtlDays: 0 })
+		await runMemoryMaintenance({}, now)
+		expect(store.list().map((note) => note.id)).toEqual([first.item.id])
+
+		// Within the hour, a new duplicate waits for the next run.
+		await store.remember({ text: "The parser keeps a cache of tokens for each file.", allowSimilar: true })
+		await runMemoryMaintenance({}, now + 60_000)
+		expect(store.list()).toHaveLength(2)
+		await runMemoryMaintenance({}, (now += 2 * 60 * 60 * 1000))
+		expect(store.list().map((note) => note.id)).toEqual([first.item.id])
+	})
+
+	it("leaves the notes alone while Memory is off", async () => {
+		const store = sharedMemory()
+		for (const note of store.list()) await store.forget(note.id)
+		await store.remember({ text: "Builds run under Bun 1.4.2 on solidPC." })
+		await store.remember({ text: "Builds run under Bun 1.4.2 on the solidPC.", allowSimilar: true })
+		memory({})
+		state.settings.memoryEnabled = false
+		await runMemoryMaintenance({}, now)
+		expect(store.list()).toHaveLength(2)
 	})
 })

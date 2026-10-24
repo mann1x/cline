@@ -33,7 +33,8 @@ const statusClass = (status: MemoryNoteView["status"]) =>
  *
  * The model keeps notes and can only leave them noted. Here the user
  * confirms a note, marks it outdated with the reason, puts it back to
- * noted, or forgets it; and merges the notes that say the same. A
+ * noted, or forgets it; and merges the notes that say the same. Each
+ * verdict is kept with its reason, which the model is shown with the note. A
  * confirmed note is read as settled, an outdated one is not attached to a
  * message again.
  */
@@ -41,7 +42,7 @@ const MemoryNotes = ({ retrieval, name, label, onClose }: MemoryNotesProps) => {
 	const { busy, run } = retrieval
 	const [notes, setNotes] = useState<MemoryNoteView[]>()
 	const [filter, setFilter] = useState<Filter>("all")
-	const [outdating, setOutdating] = useState<{ id: string; reason: string }>()
+	const [settling, setSettling] = useState<{ id: string; status: "confirmed" | "outdated"; reason: string }>()
 	const [confirmForget, setConfirmForget] = useState<string>()
 	const [open, setOpen] = useState<string>()
 
@@ -96,8 +97,8 @@ const MemoryNotes = ({ retrieval, name, label, onClose }: MemoryNotesProps) => {
 				</VSCodeButton>
 			</div>
 			<p className="text-xs text-(--vscode-descriptionForeground)">
-				The model keeps notes as <b>noted</b>. Confirm the ones that hold, and the model reads them as settled; mark one{" "}
-				<b>outdated</b>, with why, and it is no longer attached to your messages.
+				The model keeps notes as <b>noted</b>. Confirm the ones that hold, with why, and the model reads them as settled;
+				mark one <b>outdated</b>, with why, and it is no longer attached to your messages.
 			</p>
 			{shown.length === 0 ? (
 				<p className="text-xs text-(--vscode-descriptionForeground)">
@@ -126,6 +127,9 @@ const MemoryNotes = ({ retrieval, name, label, onClose }: MemoryNotesProps) => {
 							{note.reason ? <div className="mt-1">Because: {note.reason}</div> : null}
 							{note.status === "outdated" && note.settledReason ? (
 								<div className="mt-1 text-(--vscode-errorForeground)">Outdated: {note.settledReason}</div>
+							) : null}
+							{note.status === "confirmed" && note.settledReason ? (
+								<div className="mt-1 text-(--vscode-testing-iconPassed)">Confirmed: {note.settledReason}</div>
 							) : null}
 							{note.places.length > 0 || note.tags.length > 0 ? (
 								<div className="mt-1 text-(--vscode-descriptionForeground)">
@@ -168,34 +172,36 @@ const MemoryNotes = ({ retrieval, name, label, onClose }: MemoryNotesProps) => {
 								</div>
 							) : null}
 							<div className="mt-1 flex items-center gap-1 flex-wrap">
-								{outdating?.id === note.id ? (
+								{settling?.id === note.id ? (
 									<>
 										<input
-											aria-label={`Why ${note.id} is outdated`}
+											aria-label={`Why ${note.id} is ${settling.status}`}
 											className="grow bg-(--vscode-input-background) text-(--vscode-input-foreground) border border-(--vscode-input-border) px-1"
-											onChange={(event) => setOutdating({ id: note.id, reason: event.target.value })}
+											onChange={(event) => setSettling({ ...settling, reason: event.target.value })}
 											onKeyDown={(event) => {
-												if (event.key === "Escape") setOutdating(undefined)
+												if (event.key === "Escape") setSettling(undefined)
 											}}
-											placeholder="Why it no longer holds"
-											value={outdating.reason}
+											placeholder={
+												settling.status === "confirmed" ? "Why it holds" : "Why it no longer holds"
+											}
+											value={settling.reason}
 										/>
 										<VSCodeButton
 											appearance="secondary"
-											disabled={busy || outdating.reason.trim() === ""}
+											disabled={busy || settling.reason.trim() === ""}
 											onClick={() => {
 												void act({
 													action: "settleNote",
 													name,
 													id: note.id,
-													status: "outdated",
-													reason: outdating.reason,
+													status: settling.status,
+													reason: settling.reason,
 												})
-												setOutdating(undefined)
+												setSettling(undefined)
 											}}>
-											Mark outdated
+											{settling.status === "confirmed" ? "Confirm" : "Mark outdated"}
 										</VSCodeButton>
-										<VSCodeButton appearance="icon" onClick={() => setOutdating(undefined)}>
+										<VSCodeButton appearance="icon" onClick={() => setSettling(undefined)}>
 											Cancel
 										</VSCodeButton>
 									</>
@@ -220,17 +226,15 @@ const MemoryNotes = ({ retrieval, name, label, onClose }: MemoryNotesProps) => {
 											<VSCodeButton
 												appearance="icon"
 												disabled={busy}
-												onClick={() =>
-													void act({ action: "settleNote", name, id: note.id, status: "confirmed" })
-												}>
-												Confirm
+												onClick={() => setSettling({ id: note.id, status: "confirmed", reason: "" })}>
+												Confirm…
 											</VSCodeButton>
 										) : null}
 										{note.status !== "outdated" ? (
 											<VSCodeButton
 												appearance="icon"
 												disabled={busy}
-												onClick={() => setOutdating({ id: note.id, reason: "" })}>
+												onClick={() => setSettling({ id: note.id, status: "outdated", reason: "" })}>
 												Outdated…
 											</VSCodeButton>
 										) : null}

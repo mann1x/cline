@@ -979,8 +979,12 @@ export class Memory {
 	}
 
 	/**
-	 * The user's verdict on a note: confirmed, outdated (with why), or back
-	 * to noted. Only the user's: no tool the model has calls this.
+	 * The user's verdict on a note: confirmed or outdated, each with why, or
+	 * back to noted. Only the user's: no tool the model has calls this.
+	 *
+	 * A verdict without a reason is refused, as claude-hooks' findings ledger
+	 * refuses one: the reason is what the reading model weighs a later
+	 * contradiction against, and "confirmed" alone gives it nothing to weigh.
 	 */
 	settle(
 		id: string,
@@ -993,6 +997,11 @@ export class Memory {
 		const found = this.resolveNote(id, memories);
 		if (!found) throw new Error(`There is no note ${id}.`);
 		const reason = verdict.reason?.trim();
+		if (verdict.status !== "noted" && !reason) {
+			throw new Error(
+				`Say why ${id} is ${verdict.status}: a verdict is kept with its reason.`,
+			);
+		}
 		const {
 			status: _status,
 			settled: _settled,

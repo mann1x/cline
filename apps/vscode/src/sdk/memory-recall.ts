@@ -83,23 +83,39 @@ function readMemoryProfileModel(primary: ApiConfiguration | undefined, profileNa
 	}
 }
 
-/** How often expired notes are looked for: an hour, and only when a session starts. */
-const EXPIRY_INTERVAL_MS = 60 * 60 * 1000
+/** How often Memory is tidied: an hour, and only when a session starts. */
+const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000
 const DISTILL_TIMEOUT_MS = 120_000
-let lastExpiry = 0
+let lastMaintenance = 0
 
 /**
- * Distil each memory's expired notes into one and remove them, at most once
- * an hour. Off while Memory is off or notes never expire. With no profile
- * named, nothing is removed: an expired note waits for a model to keep what
- * it found.
+ * Tidy every memory, at most once an hour, and not at all while Memory is
+ * off: merge the notes that say nearly the same into the oldest of them,
+ * then, when notes expire, distil each memory's expired notes into one and
+ * remove them.
+ *
+ * The merge runs on its own, as claude-hooks' consolidation does, rather
+ * than only from the panel's button: a duplicate the model kept before the
+ * refusal at write existed, or one an import brought in, is otherwise never
+ * folded. It moves nothing a person settled the wrong way: a confirmed note
+ * is never merged into one that is not.
+ *
+ * With no profile named, no expired note is removed: it waits for a model to
+ * keep what it found.
  */
-export async function runMemoryExpiry(primary: ApiConfiguration | undefined, nowMs = Date.now()): Promise<void> {
+export async function runMemoryMaintenance(primary: ApiConfiguration | undefined, nowMs = Date.now()): Promise<void> {
 	const settings = readMemorySettings()
-	if (!settings.enabled || settings.noteTtlDays <= 0 || nowMs - lastExpiry < EXPIRY_INTERVAL_MS) {
+	if (!settings.enabled || nowMs - lastMaintenance < MAINTENANCE_INTERVAL_MS) {
 		return
 	}
-	lastExpiry = nowMs
+	lastMaintenance = nowMs
+	const merged = await sharedMemory().consolidate()
+	if (merged.merged > 0) {
+		Logger.log(`[Memory] Merged ${merged.merged} near-duplicate note(s) into ${merged.into.join(", ")}`)
+	}
+	if (settings.noteTtlDays <= 0) {
+		return
+	}
 	const model = readMemoryProfileModel(primary, settings.hydeProfile)
 	const config = readMemoryToolsConfig()
 	const outcomes = await sharedMemory().expire({
@@ -133,7 +149,7 @@ export async function runMemoryExpiry(primary: ApiConfiguration | undefined, now
 
 /** Installed on every session: it reads the Memory settings per message and does nothing while Memory is off. */
 export function createSessionMemoryRecaller(primary: ApiConfiguration | undefined): MemoryRecaller {
-	void runMemoryExpiry(primary).catch((error) => Logger.warn(`[Memory] Expiring notes stopped: ${error}`))
+	void runMemoryMaintenance(primary).catch((error) => Logger.warn(`[Memory] Tidying notes stopped: ${error}`))
 	return createMemoryRecaller({
 		getConfig: readMemoryToolsConfig,
 		getExpander: () => readMemoryQueryExpander(primary),
