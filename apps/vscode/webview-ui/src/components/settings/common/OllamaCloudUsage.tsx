@@ -1,6 +1,7 @@
 import type { OllamaCloudLimit, OllamaCloudUsageResponse } from "@shared/proto/cline/models"
 import { OllamaReachabilityRequest } from "@shared/proto/cline/models"
 import { VSCodeLink } from "@vscode/webview-ui-toolkit/react"
+import type React from "react"
 import { useEffect, useState } from "react"
 import { ModelsServiceClient } from "@/services/grpc-client"
 
@@ -77,6 +78,15 @@ export function formatResetsIn(iso: string | undefined, nowMs: number = Date.now
 	return `in ${rest}m`
 }
 
+/**
+ * What is used, as ollama.com shows it: the complement of `formatRemaining`, in
+ * whole tenths so the two always add up to 100 (23.1% left is 76.9% used).
+ */
+export function formatUsed(remainingPercent: number): string {
+	const tenths = 1000 - Math.floor(remainingPercent * 10 + 1e-9)
+	return `${tenths % 10 === 0 ? (tenths / 10).toFixed(0) : (tenths / 10).toFixed(1)}%`
+}
+
 function formatUsd(value: number): string {
 	return `$${value.toFixed(2)}`
 }
@@ -86,13 +96,60 @@ function localTime(iso: string | undefined): string | undefined {
 	return Number.isFinite(at) ? new Date(at).toLocaleString() : undefined
 }
 
-function limitLine(label: string, limit: OllamaCloudLimit, nowMs: number): string {
+function resetsAfter(limit: OllamaCloudLimit, nowMs: number): string | undefined {
 	const resets = formatResetsIn(limit.resetsAt, nowMs)
-	return `${label}: ${formatRemaining(limit.remainingPercent)} left${resets ? ` · resets ${resets}` : ""}`
+	return resets ? `resets ${resets}` : undefined
+}
+
+function limitLine(label: string, limit: OllamaCloudLimit, nowMs: number): string {
+	const resets = resetsAfter(limit, nowMs)
+	return `${label}: ${formatUsed(limit.remainingPercent)} used${resets ? ` · ${resets}` : ""}`
 }
 
 /** Below this much left, a limit is shown in the warning colour. */
 const LOW_PERCENT = 10
+
+function limitTone(limit: OllamaCloudLimit): { text?: string; fill: string } {
+	if (limit.remainingPercent <= 0) {
+		return { text: "text-(--vscode-errorForeground)", fill: "bg-(--vscode-errorForeground)" }
+	}
+	if (limit.remainingPercent < LOW_PERCENT) {
+		return { text: "text-(--vscode-editorWarning-foreground)", fill: "bg-(--vscode-editorWarning-foreground)" }
+	}
+	return { fill: "bg-(--vscode-progressBar-background)" }
+}
+
+/**
+ * One limit as ollama.com's settings draw it: the name, a bar filling as the
+ * limit is used, and the percentage used on the right. It said "% left" until
+ * 4.100.266, and "session 23.1% left" was read as 23.1% used.
+ */
+const LimitBar = ({ label, limit, after }: { label: string; limit: OllamaCloudLimit; after?: string }) => {
+	const tone = limitTone(limit)
+	const used = formatUsed(limit.remainingPercent)
+	return (
+		<>
+			<span className={tone.text}>{label}</span>
+			<div
+				aria-label={`${label}: ${used} used`}
+				aria-valuemax={100}
+				aria-valuemin={0}
+				aria-valuenow={100 - limit.remainingPercent}
+				className="relative h-1.5 w-full overflow-hidden rounded-full bg-code-foreground/20"
+				role="progressbar">
+				<div className={`h-full ${tone.fill}`} style={{ width: `${100 - limit.remainingPercent}%` }} />
+			</div>
+			<span className={`tabular-nums text-right ${tone.text ?? ""}`}>
+				{used} used{after ? ` · ${after}` : ""}
+			</span>
+		</>
+	)
+}
+
+/** Rows of `LimitBar`, their bars lined up in one column. */
+const LimitBars = ({ children }: { children: React.ReactNode }) => (
+	<div className="grid grid-cols-[auto_1fr_auto] items-center gap-x-2 gap-y-[3px]">{children}</div>
+)
 
 /**
  * The account's limits and recent usage, for the Ollama and xOllama settings.
@@ -151,20 +208,19 @@ export const OllamaCloudUsageStrip = ({ providerId }: { providerId: "ollama" | "
 				}`,
 		)
 		.join(" · ")
-	const limitClass = (limit: OllamaCloudLimit | undefined) =>
-		limit && limit.remainingPercent <= 0
-			? "text-(--vscode-errorForeground)"
-			: limit && limit.remainingPercent < LOW_PERCENT
-				? "text-(--vscode-editorWarning-foreground)"
-				: undefined
-
 	return (
 		<div
 			className="mt-[6px] text-xs text-(--vscode-descriptionForeground) flex flex-col gap-[2px]"
 			title={usage.readAt ? `Read ${localTime(usage.readAt)}, at most once a minute` : undefined}>
 			<div className="font-semibold">Cloud usage</div>
-			{usage.session && <div className={limitClass(usage.session)}>{limitLine("Session limit", usage.session, nowMs)}</div>}
-			{usage.weekly && <div className={limitClass(usage.weekly)}>{limitLine("Weekly limit", usage.weekly, nowMs)}</div>}
+			{(usage.session || usage.weekly) && (
+				<LimitBars>
+					{usage.session && (
+						<LimitBar after={resetsAfter(usage.session, nowMs)} label="Session" limit={usage.session} />
+					)}
+					{usage.weekly && <LimitBar after={resetsAfter(usage.weekly, nowMs)} label="Weekly" limit={usage.weekly} />}
+				</LimitBars>
+			)}
 			{included && (
 				<div
 					className={
@@ -210,7 +266,15 @@ export const OllamaCloudLimitLine = ({
 			? ` · ${formatUsd(usage.purchasedBalanceUsd)} credit`
 			: ""
 
-	let text: string
+	const detail = [
+		...limits.map((entry) => limitLine(`${entry.name[0]?.toUpperCase()}${entry.name.slice(1)} limit`, entry.limit, nowMs)),
+		usage.purchasedBalanceUsd !== undefined ? `Purchased credit: ${formatUsd(usage.purchasedBalanceUsd)}` : undefined,
+		usage.readAt ? `Read ${localTime(usage.readAt)}; refreshed once a minute.` : undefined,
+	]
+		.filter(Boolean)
+		.join("\n")
+
+	let text: string | undefined
 	let tone = "text-description"
 	if (usage.includedExhausted) {
 		// The reset that matters is the one that brings it back: the latest of
@@ -228,10 +292,7 @@ export const OllamaCloudLimitLine = ({
 		text = `Cloud ${which} limit reached${resets ? ` · resets ${resets}` : ""}${credit}`
 		tone = "text-error"
 	} else if (limits.length > 0) {
-		text = `Cloud: ${limits.map((entry) => `${entry.name} ${formatRemaining(entry.limit.remainingPercent)} left`).join(" · ")}`
-		if (limits.some((entry) => entry.limit.remainingPercent < LOW_PERCENT)) {
-			tone = "text-warning"
-		}
+		text = undefined
 	} else if (usage.includedBalanceUsd !== undefined) {
 		text = `Cloud: ${formatUsd(usage.includedBalanceUsd)}${
 			usage.includedAllowanceUsd !== undefined ? ` of ${formatUsd(usage.includedAllowanceUsd)}` : ""
@@ -240,17 +301,16 @@ export const OllamaCloudLimitLine = ({
 		return null
 	}
 
-	const detail = [
-		...limits.map((entry) => limitLine(`${entry.name[0]?.toUpperCase()}${entry.name.slice(1)} limit`, entry.limit, nowMs)),
-		usage.purchasedBalanceUsd !== undefined ? `Purchased credit: ${formatUsd(usage.purchasedBalanceUsd)}` : undefined,
-		usage.readAt ? `Read ${localTime(usage.readAt)}; refreshed once a minute.` : undefined,
-	]
-		.filter(Boolean)
-		.join("\n")
-
 	return (
-		<div className={`mt-0.5 text-xs ${tone}`} title={detail}>
-			{text}
+		<div className="mt-0.5 text-xs text-description flex flex-col gap-[3px]" title={detail}>
+			{limits.length > 0 && (
+				<LimitBars>
+					{limits.map((entry) => (
+						<LimitBar key={entry.name} label={`Cloud ${entry.name}`} limit={entry.limit} />
+					))}
+				</LimitBars>
+			)}
+			{text && <div className={tone}>{text}</div>}
 		</div>
 	)
 }

@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { formatRemaining, formatResetsIn, OllamaCloudLimitLine, OllamaCloudUsageStrip } from "./OllamaCloudUsage"
+import { formatRemaining, formatResetsIn, formatUsed, OllamaCloudLimitLine, OllamaCloudUsageStrip } from "./OllamaCloudUsage"
 
 const readOllamaCloudUsage = vi.fn()
 
@@ -47,6 +47,15 @@ describe("formatting", () => {
 		expect(formatRemaining(0)).toBe("0%")
 	})
 
+	it("says what is used as the complement of what is left", () => {
+		expect(formatUsed(23.1)).toBe("76.9%")
+		expect(formatUsed(23.17)).toBe("76.9%")
+		expect(formatUsed(78.3)).toBe("21.7%")
+		expect(formatUsed(99.97)).toBe("0.1%")
+		expect(formatUsed(100)).toBe("0%")
+		expect(formatUsed(0)).toBe("100%")
+	})
+
 	it("says how long until a reset", () => {
 		const now = Date.parse("2026-10-23T22:08:00Z")
 		expect(formatResetsIn("2026-10-24T00:00:00Z", now)).toBe("in 1h 52m")
@@ -61,8 +70,9 @@ describe("OllamaCloudUsageStrip", () => {
 	it("shows a legacy plan's limits, credit and requests", async () => {
 		readOllamaCloudUsage.mockResolvedValue(legacy())
 		render(<OllamaCloudUsageStrip providerId="ollama" />)
-		expect(await screen.findByText(/Session limit: 99\.9% left · resets in 2h/)).toBeTruthy()
-		expect(screen.getByText(/Weekly limit: 68\.3% left · resets in 2d 2h/)).toBeTruthy()
+		expect(await screen.findByText("0.1% used · resets in 2h")).toBeTruthy()
+		expect(screen.getByText("31.7% used · resets in 2d 2h")).toBeTruthy()
+		expect(screen.getByRole("progressbar", { name: "Weekly: 31.7% used" })).toBeTruthy()
 		expect(screen.getByText("Purchased credit: $31.89")).toBeTruthy()
 		expect(screen.getByText("Requests: 244 in 24h · 1,530 in 7d · 5,012 in 30d")).toBeTruthy()
 		expect(readOllamaCloudUsage.mock.calls[0]?.[0]).toMatchObject({ providerId: "ollama" })
@@ -111,10 +121,13 @@ describe("OllamaCloudUsageStrip", () => {
 })
 
 describe("OllamaCloudLimitLine", () => {
-	it("shows what is left for a cloud model", async () => {
+	it("shows what is used for a cloud model, as a bar each, the way ollama.com does", async () => {
 		readOllamaCloudUsage.mockResolvedValue(legacy())
 		render(<OllamaCloudLimitLine modelId="glm-5.3-flash:cloud" providerId="ollama" />)
-		expect(await screen.findByText("Cloud: session 99.9% left · weekly 68.3% left")).toBeTruthy()
+		const session = await screen.findByRole("progressbar", { name: "Cloud session: 0.1% used" })
+		expect(Number.parseFloat((session.firstChild as HTMLElement).style.width)).toBeCloseTo(0.03, 5)
+		expect(screen.getByRole("progressbar", { name: "Cloud weekly: 31.7% used" })).toBeTruthy()
+		expect(screen.getByText("31.7% used")).toBeTruthy()
 		expect(readOllamaCloudUsage.mock.calls[0]?.[0]).toMatchObject({
 			providerId: "ollama",
 			modelId: "glm-5.3-flash:cloud",
@@ -136,7 +149,7 @@ describe("OllamaCloudLimitLine", () => {
 	it("warns when a limit runs low", async () => {
 		readOllamaCloudUsage.mockResolvedValue(legacy({ weekly: { remainingPercent: 4.2, resetsAt: inHours(30) } }))
 		render(<OllamaCloudLimitLine modelId="kimi-k2.6:cloud" providerId="ollama" />)
-		expect((await screen.findByText(/weekly 4\.2% left/)).className).toContain("text-warning")
+		expect((await screen.findByText("95.8% used")).className).toContain("editorWarning")
 	})
 
 	it("stays silent for a local model", async () => {
