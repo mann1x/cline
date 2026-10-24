@@ -1,6 +1,7 @@
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import { memo, useState } from "react"
 import { CopyButton } from "@/components/common/CopyButton"
+import { cn } from "@/lib/utils"
 
 /**
  * The checklist reminder core appends to a tool's result every few calls. It
@@ -12,13 +13,25 @@ const TASK_PROGRESS_REMINDER = /\s*<task_progress>[\s\S]*?<\/task_progress>\s*/g
 export const reportText = (report: string) => report.replace(TASK_PROGRESS_REMINDER, "\n").trim()
 
 /**
- * What a finished tool that reported its progress came to, kept on its row.
+ * What a finished tool came to, kept on its row: an import's report, or
+ * what the editor answered an edit.
  *
  * An import's report lists every file and what was left out of it, and was
- * gone the moment the call ended. Collapsed to its first line, so a run of
- * imports stays short, and copyable whole.
+ * gone the moment the call ended. An edit's answer is the one record of
+ * whether it landed: a refused edit drew the same card as an applied one.
+ * Collapsed to its first line, so a run of them stays short, and copyable
+ * whole.
  */
-const ToolReport = ({ report: sent }: { report: string }) => {
+const ToolReport = ({
+	report: sent,
+	failed = false,
+	label = "Report",
+}: {
+	report: string
+	failed?: boolean
+	/** What a report that is not a refusal is called. */
+	label?: string
+}) => {
 	const [open, setOpen] = useState(false)
 	const report = reportText(sent)
 	if (!report) {
@@ -27,7 +40,11 @@ const ToolReport = ({ report: sent }: { report: string }) => {
 	const lines = report.split("\n")
 	const headline = lines.find((line) => line.trim())?.trim() ?? ""
 	return (
-		<div className="mt-1.5 bg-code overflow-hidden rounded-xs border border-editor-group-border">
+		<div
+			className={cn(
+				"mt-1.5 bg-code overflow-hidden rounded-xs border",
+				failed ? "border-(--vscode-errorForeground)" : "border-editor-group-border",
+			)}>
 			<div className="flex items-center">
 				<button
 					aria-expanded={open}
@@ -40,7 +57,7 @@ const ToolReport = ({ report: sent }: { report: string }) => {
 					) : (
 						<ChevronRightIcon className="size-3.5 shrink-0" />
 					)}
-					<span className="font-semibold shrink-0">Report</span>
+					<span className={cn("font-semibold shrink-0", failed && "text-error")}>{failed ? "Refused" : label}</span>
 					<span className="truncate">{headline}</span>
 					<span className="shrink-0 opacity-70">
 						{lines.length} line{lines.length === 1 ? "" : "s"}

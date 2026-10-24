@@ -61,7 +61,8 @@ describe("markDiffLines", () => {
 	it("pairs each run of removed lines with the added lines after it", () => {
 		const marks = markDiffLines(["  context", "- old line", "+ new line", "  more", "+ only added", "- only removed"])
 		expect(marks[0]).toBeUndefined()
-		expect(changed(marks[1] ?? [])).toBe("old")
+		// A removed line stays all red: only the added side is marked.
+		expect(marks[1]).toBeUndefined()
 		expect(changed(marks[2] ?? [])).toBe("new")
 		expect(marks[3]).toBeUndefined()
 		// Nothing on the other side to share with: drawn as before.

@@ -507,6 +507,12 @@ export interface ClineSayTool {
 	 * which files failed and why.
 	 */
 	report?: string
+	/**
+	 * The tool refused the call: `report` then holds its error. An edit the
+	 * editor turned down comes back as a result carrying `error`, not as a
+	 * tool failure, and drew a card identical to one that was applied.
+	 */
+	failed?: boolean
 }
 
 // must keep in sync with system prompt

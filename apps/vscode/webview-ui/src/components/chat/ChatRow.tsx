@@ -513,18 +513,26 @@ export const ChatRowContent = memo(
 					// question. A SEARCH/REPLACE and a line-range replace fail in
 					// completely different ways, and telling them apart at a
 					// glance is most of reading a session back.
+					// Once the editor has answered, the header says what it said:
+					// a refused edit drew the same "wants to edit" card as an
+					// applied one, and the answer was nowhere on screen.
+					const editMode = tool.editMode ? ` (${tool.editMode})` : ""
 					const editToolTitle = isApplyingPatch
 						? "Cerebriline is creating patches to edit this file:"
-						: tool.editMode
-							? `Cerebriline wants to edit this file (${tool.editMode}):`
-							: "Cerebriline wants to edit this file:"
+						: !message.partial && tool.report
+							? tool.failed
+								? `Cerebriline's edit was refused${editMode}:`
+								: `Cerebriline edited this file${editMode}:`
+							: `Cerebriline wants to edit this file${editMode}:`
 					return (
 						<div>
 							<div className={HEADER_CLASSNAMES}>
 								<PencilIcon className="size-2" />
 								{tool.operationIsLocatedInWorkspace === false &&
 									toolIcon("sign-out", "yellow", -90, "This file is outside of your workspace")}
-								<span style={{ fontWeight: "bold" }}>{editToolTitle}</span>
+								<span className={cn("font-bold", tool.failed && !message.partial && "text-error")}>
+									{editToolTitle}
+								</span>
 							</div>
 							{/* Drawn in both edit modes. It arrived with background edit
 							    and was gated on it, so with the setting off the row showed
@@ -546,6 +554,9 @@ export const ChatRowContent = memo(
 									path={tool.path!}
 								/>
 							)}
+							{!message.partial && tool.report ? (
+								<ToolReport failed={tool.failed} label="Result" report={tool.report} />
+							) : null}
 						</div>
 					)
 				case "fileDeleted":
@@ -555,7 +566,13 @@ export const ChatRowContent = memo(
 								<SquareMinusIcon className="size-2" />
 								{tool.operationIsLocatedInWorkspace === false &&
 									toolIcon("sign-out", "yellow", -90, "This file is outside of your workspace")}
-								<span style={{ fontWeight: "bold" }}>Cerebriline wants to delete this file:</span>
+								<span className={cn("font-bold", tool.failed && !message.partial && "text-error")}>
+									{!message.partial && tool.report
+										? tool.failed
+											? "Cerebriline's delete was refused:"
+											: "Cerebriline deleted this file:"
+										: "Cerebriline wants to delete this file:"}
+								</span>
 							</div>
 							<CodeAccordian
 								// isLoading={message.partial}
@@ -564,6 +581,9 @@ export const ChatRowContent = memo(
 								onToggleExpand={handleToggle}
 								path={tool.path!}
 							/>
+							{!message.partial && tool.report ? (
+								<ToolReport failed={tool.failed} label="Result" report={tool.report} />
+							) : null}
 						</div>
 					)
 				case "newFileCreated":
@@ -573,7 +593,13 @@ export const ChatRowContent = memo(
 								<FilePlus2Icon className="size-2" />
 								{tool.operationIsLocatedInWorkspace === false &&
 									toolIcon("sign-out", "yellow", -90, "This file is outside of your workspace")}
-								<span className="font-bold">Cerebriline wants to create a new file:</span>
+								<span className={cn("font-bold", tool.failed && !message.partial && "text-error")}>
+									{!message.partial && tool.report
+										? tool.failed
+											? "Cerebriline's new file was refused:"
+											: "Cerebriline created this file:"
+										: "Cerebriline wants to create a new file:"}
+								</span>
 							</div>
 							{tool.path && tool.content ? (
 								<DiffEditRow patch={tool.content} path={tool.path} startLineNumbers={tool.startLineNumbers} />
@@ -586,6 +612,9 @@ export const ChatRowContent = memo(
 									path={tool.path!}
 								/>
 							)}
+							{!message.partial && tool.report ? (
+								<ToolReport failed={tool.failed} label="Result" report={tool.report} />
+							) : null}
 						</div>
 					)
 				case "readFile":

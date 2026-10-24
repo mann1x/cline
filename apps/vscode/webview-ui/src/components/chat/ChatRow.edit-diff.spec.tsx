@@ -105,3 +105,57 @@ describe("an edit row's empty side", () => {
 		expect(screen.queryByText("+1")).toBeNull()
 	})
 })
+
+/**
+ * Session 1792839340096_0rlyv: three of four edits refused, and every card
+ * read "wants to edit this file", so the model's "my edits failed because of
+ * CRLF" could not be checked against what the editor had said.
+ */
+describe("an edit row once the editor has answered", () => {
+	it("says the edit was refused, and shows the editor's answer", () => {
+		render(
+			<ChatRowContent
+				message={editMessage({
+					tool: "editedExistingFile",
+					path: "src/a.ts",
+					content: searchReplace,
+					editMode: "SEARCH/REPLACE",
+					failed: true,
+					report: "Editor operation failed: No replacement performed: text not found in src/a.ts.",
+				})}
+				{...base}
+			/>,
+		)
+		expect(screen.getByText("Cerebriline's edit was refused (SEARCH/REPLACE):")).toBeTruthy()
+		expect(screen.getByText("Refused")).toBeTruthy()
+		expect(screen.getByText(/No replacement performed: text not found/)).toBeTruthy()
+	})
+
+	it("says the edit was applied, with its result", () => {
+		render(
+			<ChatRowContent
+				message={editMessage({
+					tool: "editedExistingFile",
+					path: "src/a.ts",
+					content: searchReplace,
+					editMode: "SEARCH/REPLACE",
+					report: "Edited src/a.ts",
+				})}
+				{...base}
+			/>,
+		)
+		expect(screen.getByText("Cerebriline edited this file (SEARCH/REPLACE):")).toBeTruthy()
+		expect(screen.getByText("Result")).toBeTruthy()
+	})
+
+	it("still asks while the editor has not answered", () => {
+		render(
+			<ChatRowContent
+				message={editMessage({ tool: "editedExistingFile", path: "src/a.ts", content: searchReplace })}
+				{...base}
+			/>,
+		)
+		expect(screen.getByText("Cerebriline wants to edit this file:")).toBeTruthy()
+		expect(screen.queryByText("Refused")).toBeNull()
+	})
+})

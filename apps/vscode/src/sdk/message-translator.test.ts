@@ -22,6 +22,7 @@ import {
 	applySubagentIterationCap,
 	buildToolApprovalAskMessage,
 	configuredAgentUsage,
+	editAnswer,
 	extractToolOutputImages,
 	extractToolOutputText,
 	historyItemToSessionFields,
@@ -7807,5 +7808,87 @@ describe("persisted display-only errors", () => {
 		expect(rendered.at(-1)).toMatchObject({ type: "ask", ask: "api_req_failed" })
 		expect(rendered.at(-1)?.text).toContain("API key expired")
 		expect(rendered.some((message) => message.say === "completion_result" || message.ask === "completion_result")).toBe(false)
+	})
+})
+
+// Session 1792839340096_0rlyv: three of four edits refused, every card the same.
+describe("an edit's card carries what the editor answered", () => {
+	const refusal =
+		"Editor operation failed: No replacement performed: text not found in c:\\repo\\manic_miner.html. The first 287 character(s) do match, on line 93, and diverge there."
+	const endEdit = (output: unknown, error?: string) => {
+		const state = new MessageTranslatorState()
+		const input = { file_path: "/src/app.ts", old_text: "return false", new_text: "return true" }
+		translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "s",
+					event: {
+						type: "content_start",
+						contentType: "tool",
+						toolName: "editor",
+						toolCallId: "c1",
+						input,
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+		const end = translateSessionEvent(
+			{
+				type: "agent_event",
+				payload: {
+					sessionId: "s",
+					event: {
+						type: "content_end",
+						contentType: "tool",
+						toolName: "editor",
+						toolCallId: "c1",
+						output,
+						error,
+					} as AgentEvent,
+				},
+			},
+			state,
+		)
+		return JSON.parse(end.messages[0].text ?? "{}")
+	}
+
+	it("marks a refused edit as failed, with the editor's own words", () => {
+		const tool = endEdit([{ query: "edit:/src/app.ts", result: "", error: refusal, success: false }])
+		expect(tool).toMatchObject({ tool: "editedExistingFile", failed: true, report: refusal })
+	})
+
+	it("keeps an applied edit's result, not failed", () => {
+		const tool = endEdit([
+			{ query: "edit:/src/app.ts", result: "Edited /src/app.ts\n-1: return false\n+1: return true", success: true },
+		])
+		expect(tool.failed).toBeUndefined()
+		expect(tool.report).toBe("Edited /src/app.ts\n-1: return false\n+1: return true")
+	})
+
+	it("reads a saved session's answer, which is the result's JSON", () => {
+		const saved = JSON.stringify({ query: "edit:/src/app.ts", result: "", error: refusal })
+		expect(editAnswer(saved)).toEqual({ text: refusal, failed: true })
+		const rendered = sdkMessagesToClineMessages([
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						id: "c1",
+						name: "editor",
+						input: { file_path: "/src/app.ts", old_text: "a", new_text: "b" },
+					},
+				],
+			},
+			{ role: "user", content: [{ type: "tool_result", tool_use_id: "c1", content: saved }] },
+		] as unknown as Parameters<typeof sdkMessagesToClineMessages>[0])
+		const card = rendered.find((message) => message.say === "tool")
+		expect(JSON.parse(card?.text ?? "{}")).toMatchObject({ tool: "editedExistingFile", failed: true, report: refusal })
+	})
+
+	it("says nothing on a card the tool has not answered yet", () => {
+		expect(endEdit(undefined).report).toBeUndefined()
 	})
 })

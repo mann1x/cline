@@ -130,9 +130,9 @@ export function markHunk(
 }
 
 /**
- * Segments for every line of a diff, by index: each run of `-` lines with
- * the `+` lines straight after it is marked as one hunk. Lines outside such
- * a pair, and hunks too large to mark, have none.
+ * Segments for the added lines of a diff, by index: each run of `-` lines
+ * with the `+` lines straight after it is marked as one hunk. Removed lines,
+ * lines outside such a pair, and hunks too large to mark have none.
  */
 export function markDiffLines(lines: readonly string[]): (DiffSegment[] | undefined)[] {
 	const out: (DiffSegment[] | undefined)[] = new Array(lines.length).fill(undefined)
@@ -152,9 +152,8 @@ export function markDiffLines(lines: readonly string[]): (DiffSegment[] | undefi
 			lines.slice(addedStart, index).map(diffLineCode),
 		)
 		if (!marked) continue
-		marked.removed.forEach((segments, k) => {
-			out[removedStart + k] = segments
-		})
+		// Only the added side is marked: a removed line is removed whatever it
+		// shares, and reads as such all in red.
 		marked.added.forEach((segments, k) => {
 			out[addedStart + k] = segments
 		})

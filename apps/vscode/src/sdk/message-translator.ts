@@ -2646,6 +2646,48 @@ function getBooleanField(input: Record<string, unknown> | undefined, field: stri
 	return undefined
 }
 
+/** The cards drawn for a call that changes a file. */
+const EDIT_CARD_TOOLS: ReadonlySet<ClineSayTool["tool"]> = new Set(["editedExistingFile", "newFileCreated", "fileDeleted"])
+
+/**
+ * What a file tool answered: its error when it refused, otherwise its result.
+ *
+ * A refusal arrives as `ToolOperationResult`s carrying `error`, live as an
+ * array and from a saved session as that array's JSON, so both are read.
+ */
+export function editAnswer(output: unknown, error?: string): { text: string; failed: boolean } {
+	if (error?.trim()) {
+		return { text: error.trim(), failed: true }
+	}
+	let value = output
+	if (typeof value === "string") {
+		const trimmed = value.trim()
+		if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+			return { text: trimmed, failed: false }
+		}
+		try {
+			value = JSON.parse(trimmed)
+		} catch {
+			return { text: trimmed, failed: false }
+		}
+	}
+	const items = Array.isArray(value) ? value : [value]
+	const field = (name: "error" | "result") =>
+		items
+			.map((item) => (item && typeof item === "object" ? (item as Record<string, unknown>)[name] : undefined))
+			.filter((text): text is string => typeof text === "string" && text.trim() !== "")
+			.map((text) => text.trim())
+	const errors = field("error")
+	if (errors.length > 0) {
+		return { text: errors.join("\n\n"), failed: true }
+	}
+	const results = field("result")
+	if (results.length > 0) {
+		return { text: results.join("\n\n"), failed: false }
+	}
+	return { text: value == null ? "" : extractToolOutputText(value).trim(), failed: false }
+}
+
 /**
  * Extract raw text output from an SDK tool's output.
  *
@@ -4069,6 +4111,21 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						const report = (event.error ?? extractToolOutputText(event.output) ?? "").trim()
 						if (report) {
 							sayTool.report = report
+						}
+					}
+					// A file edit's card says what the tool answered. Measured on
+					// pandorum session 1792839340096_0rlyv: four edits in one batch,
+					// three refused with "text not found ... diverge there", and all
+					// four drew the same "wants to edit this file" card. The model
+					// then said its edits failed over CRLF, and nothing on screen
+					// showed what the editor had actually said.
+					if (EDIT_CARD_TOOLS.has(sayTool.tool) && !sayTool.report) {
+						const answer = editAnswer(event.output, event.error)
+						if (answer.text) {
+							sayTool.report = answer.text
+						}
+						if (answer.failed) {
+							sayTool.failed = true
 						}
 					}
 					// If there's an error, include it in the tool message
