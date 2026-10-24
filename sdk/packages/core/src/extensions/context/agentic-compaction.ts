@@ -59,15 +59,25 @@ import {
 import { cutEchoedTranscript, trimReplayOverflow } from "./replay-compaction";
 import {
 	buildToolLedger,
+	citedPastKey,
 	collectFileHistories,
+	dropPastKey,
 	evictToolLedger,
 	mergeToolLedger,
+	numberToolCalls,
 	type RevisionSpanLookup,
 	renderToolLedger,
 	renderToolLedgerKey,
 	spliceLedgerCitations,
 	toolLedgerSurvivors,
 } from "./tool-ledger";
+import {
+	carrySeenFiles,
+	dropUnreadLines,
+	filesIn,
+	seenFiles,
+	unreadNote,
+} from "./unread-files";
 
 /**
  * The summarizer input budget assumed when nothing knows the summarizer's
@@ -241,6 +251,26 @@ function describeOverrun(measuredTokens: number, limitTokens: number): string {
 		`Your previous attempt was about ${measuredTokens} tokens. It has to fit in ${limitTokens} and it did not, so it was rejected and nothing was kept from it.`,
 		"",
 		`Write it again under ${limitTokens} tokens. Keep every section — a missing section reads as an omission by accident. Shorten within them instead: fewer words per item, no restating the same fact in two sections, no preamble. Two things are never shortened: quoted standing instructions, and identifiers, lists and checklists, which have to stay verbatim and complete however little room is left.`,
+	].join("\n");
+}
+
+/**
+ * Tell the writer it narrated calls that never happened.
+ *
+ * A writer whose span ended mid-task carried on in the present tense and
+ * cited up to #174 against a 55-call record (claude-hooks, compaction-v7-cite,
+ * 2026-10-24). Re-asked with the numbers, it ends where the record ends.
+ */
+function describePastKey(cited: readonly number[], calls: number): string {
+	const low = Math.min(...cited);
+	const high = Math.max(...cited);
+	const span = low === high ? `#${low}` : `#${low}–#${high}`;
+	return [
+		"",
+		"",
+		`Your previous attempt cited ${span}. Only #1–#${calls} happened in this part of the conversation; nothing after #${calls} has been done yet, so it was rejected.`,
+		"",
+		`Write it again ending where the conversation above ends, at #${calls}. Do not narrate what comes next: what has not been done yet goes under next steps, as a plan, without citations.`,
 	].join("\n");
 }
 
@@ -724,6 +754,17 @@ export async function runAgenticCompaction(options: {
 				),
 			)
 		: "";
+	// Each call of the fold as the key numbers it, for the transcript the
+	// writer reads. Not for a continuation: that writer reads the
+	// conversation itself, where nothing can be numbered.
+	const callNumbers =
+		ledgerEnabled && !continuation
+			? numberToolCalls(
+					evictToolLedger(previousLedgerEntries, ledgerBudgetChars),
+					newMessagesToFold,
+					{ toolResultFormat },
+				)
+			: undefined;
 	const summaryRequestOverheadTokens = estimateTokens(
 		buildSummaryRequest({
 			previousSummary,
@@ -803,7 +844,11 @@ export async function runAgenticCompaction(options: {
 	);
 	const conversationText = continuation
 		? ""
-		: serializeConversation(summaryInputBudget.messages, toolResultFormat);
+		: serializeConversation(
+				summaryInputBudget.messages,
+				toolResultFormat,
+				callNumbers,
+			);
 	const mergedUserRequests = mergeUserRequests(
 		previousUserRequests,
 		spanUserRequests,
@@ -902,6 +947,9 @@ export async function runAgenticCompaction(options: {
 
 	let summaryResult: SummaryGenerationResult | undefined;
 	let lastFailure = "none";
+	// Calls the last attempt cited that are past the key: steps it narrated
+	// and the session never took.
+	let citedPast: number[] = [];
 	for (let attempt = 1; attempt <= SUMMARY_ATTEMPTS; attempt += 1) {
 		// Only the overrun retry changes the request, because only the overrun
 		// gives the model something it did not already know. A throw and an
@@ -913,7 +961,9 @@ export async function runAgenticCompaction(options: {
 						estimateTokens(summaryResult.text.length),
 						summaryLimitTokens,
 					)}`
-				: summaryRequest;
+				: lastFailure === "past_key"
+					? `${summaryRequest}${describePastKey(citedPast, keyEntries.length)}`
+					: summaryRequest;
 		let candidate: SummaryGenerationResult | undefined;
 		progress.step("summary");
 		const writerRole = keepRecentMessages
@@ -1051,6 +1101,24 @@ export async function runAgenticCompaction(options: {
 			);
 			continue;
 		}
+		citedPast = ledgerEnabled
+			? citedPastKey(candidate.text, keyEntries.length)
+			: [];
+		if (citedPast.length > 0 && attempt < SUMMARY_ATTEMPTS) {
+			lastFailure = "past_key";
+			summaryResult = candidate;
+			options.logger?.log(
+				"Compaction summary narrated calls past the record; retrying with the numbers",
+				{
+					severity: "warn",
+					attempt,
+					attempts: SUMMARY_ATTEMPTS,
+					cited: citedPast.slice(0, 12),
+					calls: keyEntries.length,
+				},
+			);
+			continue;
+		}
 		summaryResult = candidate;
 		lastFailure = "none";
 		break;
@@ -1181,6 +1249,7 @@ export async function runAgenticCompaction(options: {
 				messages: newMessagesToFold,
 				toolResultFormat,
 				toolLedgerKey,
+				...(callNumbers ? { callNumbers } : {}),
 				progress,
 				meter,
 				logger: options.logger,
@@ -1192,9 +1261,53 @@ export async function runAgenticCompaction(options: {
 	// work on prose carrying `[#7]`, which is cheap to move around and cheap to
 	// keep, where a spliced-in call would be four hundred characters they were
 	// asked not to shorten.
+	// The floor under the writer's re-ask: a reviewer can bring invented
+	// steps back, and the splice alone drops their numbers and keeps the
+	// sentences.
+	let replay = reviewed.summary;
+	if (ledgerEnabled) {
+		const past = dropPastKey(replay, keyEntries.length);
+		if (past.dropped > 0) {
+			options.logger?.log(
+				"Compaction summary narrated steps past the record; cut",
+				{ severity: "warn", cut: past.dropped, calls: keyEntries.length },
+			);
+			replay = past.text;
+		}
+	}
+	// Lines about files no call opened: the writer and the reviewers
+	// completed the task's tables for files not read yet (claude-hooks,
+	// compaction-v7-g2 / -cite). The names are kept, the claims are not.
+	const seen = seenFiles(newMessagesToFold);
+	if (previousSummaryMetadata?.seenFiles) {
+		for (const file of previousSummaryMetadata.seenFiles) seen.add(file);
+	} else if (previousSummaryMetadata) {
+		// A summary from before the set was carried: what it and its ledger
+		// name counts as seen, so nothing it kept is cut now.
+		for (const file of filesIn(previousSummary ?? "")) seen.add(file);
+		for (const entry of previousLedgerEntries) {
+			for (const file of entry.files) seen.add(file);
+		}
+	}
+	const unread = dropUnreadLines(
+		replay,
+		seen,
+		mergeUserRequests(mergedUserRequests, pinnedUserRequests).join("\n"),
+	);
+	if (unread.cut > 0) {
+		options.logger?.log(
+			"Compaction summary stated details of files no call opened; cut",
+			{
+				severity: "warn",
+				lines: unread.cut,
+				files: unread.names.slice(0, 12),
+			},
+		);
+		replay = unread.text;
+	}
 	const spliced = ledgerEnabled
-		? spliceLedgerCitations(reviewed.summary, keyEntries)
-		: { text: reviewed.summary, cited: [], uncited: [], invalid: [] };
+		? spliceLedgerCitations(replay, keyEntries)
+		: { text: replay, cited: [], uncited: [], invalid: [] };
 	if (ledgerEnabled && keyEntries.length > 0) {
 		options.logger?.debug(
 			`[compaction] ledger citations: ${spliced.cited.length} of ${keyEntries.length} placed inline` +
@@ -1206,7 +1319,10 @@ export async function runAgenticCompaction(options: {
 					: ""),
 		);
 	}
-	const reviewedSummary = ensureFilesSection(spliced.text, fileOps);
+	const reviewedSummary =
+		unread.cut > 0
+			? `${ensureFilesSection(spliced.text, fileOps).trimEnd()}\n\n${unreadNote(unread.names, unread.cut)}`
+			: ensureFilesSection(spliced.text, fileOps);
 	if (reviewed.merged) {
 		options.logger?.debug("Compaction council merged the summary", {
 			reviewers: reviewed.reviewers,
@@ -1261,6 +1377,7 @@ export async function runAgenticCompaction(options: {
 				: "",
 			...(ledgerEnabled ? { toolLedgerEntries: ledgerEntries } : {}),
 			userRequests: mergedUserRequests,
+			seenFiles: carrySeenFiles(previousSummaryMetadata?.seenFiles ?? [], seen),
 			userRequestBudgetChars: Math.floor(
 				(options.context.budget.messages.targetTokens ?? 0) *
 					CHARS_PER_TOKEN *
@@ -1355,6 +1472,7 @@ async function reviewAsText(input: {
 	messages: MessageWithMetadata[];
 	toolResultFormat?: ToolResultFormat;
 	toolLedgerKey: string | undefined;
+	callNumbers?: ReadonlyMap<string, number>;
 	progress: CompactionProgress;
 	meter: CompactionMeter | undefined;
 	logger?: BasicLogger;
@@ -1378,6 +1496,7 @@ async function reviewAsText(input: {
 		serial: Boolean(input.summarizerProviderConfig.engineSessionId),
 		messages: input.messages,
 		toolResultFormat: input.toolResultFormat,
+		...(input.callNumbers ? { callNumbers: input.callNumbers } : {}),
 		maxRequestChars: input.summarizerInputLimit * CHARS_PER_TOKEN,
 		toolLedgerKey: input.toolLedgerKey,
 		generate: (call) => {

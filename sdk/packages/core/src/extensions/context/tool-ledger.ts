@@ -415,13 +415,13 @@ function pathsIn(input: unknown): string[] {
 	return [...new Set(found)];
 }
 
-interface NormalisedCall {
+export interface NormalisedCall {
 	id: string;
 	name: string;
 	input: unknown;
 }
 
-interface NormalisedResult {
+export interface NormalisedResult {
 	id: string;
 	output: unknown;
 	isError?: boolean;
@@ -439,7 +439,7 @@ interface NormalisedResult {
  * silently reports that no tools were called, which is the most damaging thing
  * it could say. So it reads both and says so here.
  */
-function normaliseCall(part: unknown): NormalisedCall | undefined {
+export function normaliseCall(part: unknown): NormalisedCall | undefined {
 	if (!isRecord(part)) {
 		return undefined;
 	}
@@ -461,7 +461,7 @@ function normaliseCall(part: unknown): NormalisedCall | undefined {
 }
 
 /** One result, in either shape. See {@link normaliseCall}. */
-function normaliseResult(part: unknown): NormalisedResult | undefined {
+export function normaliseResult(part: unknown): NormalisedResult | undefined {
 	if (!isRecord(part)) {
 		return undefined;
 	}
@@ -500,6 +500,15 @@ export function buildToolLedger(
 	messages: readonly ToolLedgerMessage[],
 	options: ToolLedgerOptions = {},
 ): ToolLedgerEntry[] {
+	return buildToolLedgerWithCalls(messages, options).entries;
+}
+
+/** The ledger, and the ids of the calls each entry stands for. */
+function buildToolLedgerWithCalls(
+	messages: readonly ToolLedgerMessage[],
+	options: ToolLedgerOptions = {},
+): { entries: ToolLedgerEntry[]; callIds: string[][] } {
+	const callIds: string[][] = [];
 	const limits = resolveLimits(options.limits);
 	const results = new Map<string, NormalisedResult>();
 	for (const message of messages) {
@@ -549,9 +558,11 @@ export function buildToolLedger(
 				previous.result === result
 			) {
 				previous.repeated += 1;
+				callIds[callIds.length - 1].push(call.id);
 				continue;
 			}
 
+			callIds.push([call.id]);
 			entries.push({
 				index: entries.length + 1,
 				toolName: call.name,
@@ -563,7 +574,42 @@ export function buildToolLedger(
 			});
 		}
 	}
-	return entries;
+	return { entries, callIds };
+}
+
+/**
+ * The number each call of `messages` has in the key that
+ * `mergeToolLedger(previous, buildToolLedger(messages))` makes, by call id.
+ *
+ * For the writer's transcript: with the calls numbered where they happen,
+ * the writer cites `#7` by reading it, not by counting tool calls down the
+ * conversation, and counting was where its citations went wrong
+ * (claude-hooks 0e7310e, compaction-v7). A run of repeats is one entry, so
+ * all its calls carry the one number.
+ */
+export function numberToolCalls(
+	previous: readonly ToolLedgerEntry[],
+	messages: readonly ToolLedgerMessage[],
+	options: ToolLedgerOptions = {},
+): Map<string, number> {
+	const { entries, callIds } = buildToolLedgerWithCalls(messages, options);
+	const last = previous[previous.length - 1];
+	const first = entries[0];
+	// The merge folds the first new entry into the last carried one when the
+	// two are the same call with the same answer.
+	const joined = Boolean(
+		last &&
+			first &&
+			last.toolName === first.toolName &&
+			last.input === first.input &&
+			last.result === first.result,
+	);
+	const numbers = new Map<string, number>();
+	callIds.forEach((ids, position) => {
+		const index = previous.length + position + (joined ? 0 : 1);
+		for (const id of ids) numbers.set(id, index);
+	});
+	return numbers;
 }
 
 /**
@@ -758,6 +804,96 @@ export function renderToolLedgerKey(
  * dash a model reaches for, spaced or not, with or without a second `#`.
  */
 const LEDGER_CITATION = /\[#(\d+)(?:\s*[-\u2013\u2014]\s*#?(\d+))?\]/g;
+
+/** Each citation in `text`, with the call numbers it names. */
+function citations(
+	text: string,
+): Array<{ start: number; end: number; numbers: number[] }> {
+	const found: Array<{ start: number; end: number; numbers: number[] }> = [];
+	for (const match of text.matchAll(LEDGER_CITATION)) {
+		const from = Number(match[1]);
+		const to = match[2] === undefined ? from : Number(match[2]);
+		const numbers: number[] = [];
+		if (to >= from) {
+			// Bounded: a span wider than any key is one bad number, not a list.
+			for (let n = from; n <= Math.min(to, from + 10_000); n += 1) {
+				numbers.push(n);
+			}
+		} else {
+			numbers.push(from);
+		}
+		found.push({
+			start: match.index ?? 0,
+			end: (match.index ?? 0) + match[0].length,
+			numbers,
+		});
+	}
+	return found;
+}
+
+/**
+ * The call numbers `text` cites past a key of `calls` entries: calls that
+ * did not happen in the span, so the sentence that cites them is invented.
+ *
+ * Measured by claude-hooks on compaction-v7-cite with qwen3.6 27B: a writer
+ * whose span ended mid-task carried on in the present tense and cited up to
+ * #174 against a 55-call record -- a forecast written as a record.
+ */
+export function citedPastKey(text: string, calls: number): number[] {
+	const past = new Set<number>();
+	for (const citation of citations(text)) {
+		for (const n of citation.numbers) if (n > calls) past.add(n);
+	}
+	return [...past].sort((a, b) => a - b);
+}
+
+/**
+ * `text` without its narration of calls past the key.
+ *
+ * A citation follows the clause that narrates its call, so a citation naming
+ * only calls past the key goes with the clause before it: back to the end of
+ * the previous citation, never across a paragraph. One that also names real
+ * calls keeps its clause; the splice drops just its bad numbers.
+ *
+ * The splice alone dropped the number and kept the sentence, which is the
+ * half of the failure a reader can see -- the invented step is still there,
+ * now uncited.
+ */
+export function dropPastKey(
+	text: string,
+	calls: number,
+): { text: string; dropped: number } {
+	const kept: string[] = [];
+	let at = 0;
+	let previousEnd = 0;
+	let dropped = 0;
+	for (const citation of citations(text)) {
+		if (
+			citation.numbers.length > 0 &&
+			citation.numbers.every((n) => n > calls)
+		) {
+			const paragraph = text.lastIndexOf("\n\n", citation.start - 1);
+			const start = Math.max(
+				previousEnd,
+				paragraph >= 0 ? paragraph + 2 : 0,
+				at,
+			);
+			kept.push(text.slice(at, start));
+			at = citation.end;
+			dropped += 1;
+		}
+		previousEnd = citation.end;
+	}
+	if (dropped === 0) return { text, dropped };
+	kept.push(text.slice(at));
+	const joined = kept
+		.join("")
+		.replace(/[ \t]{2,}/g, " ")
+		.replace(/[ \t]+\n/g, "\n")
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
+	return { text: joined, dropped };
+}
 
 export interface LedgerSpliceResult {
 	text: string;

@@ -690,6 +690,13 @@ export interface CompactionSummaryMetadata {
 	 * exists nowhere else once the messages are gone.
 	 */
 	userRequests?: string[];
+	/**
+	 * The files a call has put in front of the model, over every generation
+	 * so far. A summary line about a file outside it states what nobody read
+	 * (`unread-files.ts`); carried because the next fold's calls are not the
+	 * only ones that opened files.
+	 */
+	seenFiles?: string[];
 }
 
 export type EstimateMessageTokens = (message: MessageWithMetadata) => number;
@@ -966,6 +973,8 @@ export function formatToolInputForTranscript(
 export function serializeMessage(
 	message: MessageWithMetadata,
 	format?: ToolResultFormat,
+	/** Each call's number in the tool ledger's key, by call id. */
+	callNumbers?: ReadonlyMap<string, number>,
 ): string {
 	if (typeof message.content === "string") {
 		return `[${message.role === "user" ? "User" : "Bot"}]: ${message.content}`;
@@ -984,11 +993,15 @@ export function serializeMessage(
 			case "redacted_thinking":
 				lines.push("[Bot thinking]: [redacted]");
 				break;
-			case "tool_use":
+			case "tool_use": {
+				// Numbered as the key numbers it, so the writer cites the call by
+				// reading its number here, not by counting calls down the page.
+				const number = callNumbers?.get(block.id);
 				lines.push(
-					`[Bot tool calls]: ${block.name}(${formatToolInputForTranscript(block.input)})`,
+					`[Bot tool calls]: ${number !== undefined ? `#${number} ` : ""}${block.name}(${formatToolInputForTranscript(block.input)})`,
 				);
 				break;
+			}
 			case "tool_result":
 				lines.push(
 					`[Tool result]: ${flattenToolResultContent(block.content, {
@@ -1155,9 +1168,10 @@ function reasoningCostLabel(
 export function serializeConversation(
 	messages: MessageWithMetadata[],
 	format?: ToolResultFormat,
+	callNumbers?: ReadonlyMap<string, number>,
 ): string {
 	return messages
-		.map((message) => serializeMessage(message, format))
+		.map((message) => serializeMessage(message, format, callNumbers))
 		.join("\n\n")
 		.trim();
 }
@@ -1328,6 +1342,13 @@ export function getCompactionSummaryMetadata(
 							typeof value === "object" &&
 							value !== null &&
 							typeof (value as ToolLedgerEntry).toolName === "string",
+					),
+				}
+			: {}),
+		...(Array.isArray(metadata.seenFiles)
+			? {
+					seenFiles: metadata.seenFiles.filter(
+						(value): value is string => typeof value === "string",
 					),
 				}
 			: {}),
@@ -2653,6 +2674,8 @@ export function buildSummaryMessage(options: {
 	userRequests?: string[];
 	/** How much room the quoted requests may take, all together. */
 	userRequestBudgetChars?: number;
+	/** The files calls have opened, for the next generation. */
+	seenFiles?: string[];
 }): MessageWithMetadata {
 	const thinkingSummary = options.thinkingSummary?.trim();
 	const shownRetrospective = options.retrospectiveAsTurn
@@ -2758,6 +2781,9 @@ export function buildSummaryMessage(options: {
 				? { toolLedgerEntries: options.toolLedgerEntries }
 				: {}),
 			...(shownRequests.length > 0 ? { userRequests: shownRequests } : {}),
+			...(options.seenFiles && options.seenFiles.length > 0
+				? { seenFiles: options.seenFiles }
+				: {}),
 		} satisfies CompactionSummaryMetadata,
 	};
 }

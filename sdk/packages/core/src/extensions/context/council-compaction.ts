@@ -554,6 +554,8 @@ export async function runCouncilReview(input: {
 	messages: readonly MessageWithMetadata[];
 	/** How the conversation's tool results read; the critics see the same. */
 	toolResultFormat?: ToolResultFormat;
+	/** Each call's number in the ledger key, so the critics read it as the writer did. */
+	callNumbers?: ReadonlyMap<string, number>;
 	/**
 	 * One model call. Throwing is allowed and is handled as a decline.
 	 *
@@ -649,7 +651,11 @@ export async function runCouncilReview(input: {
 	}
 	const transcript = input.transcriptInContext
 		? ""
-		: serializeConversation([...input.messages], input.toolResultFormat);
+		: serializeConversation(
+				[...input.messages],
+				input.toolResultFormat,
+				input.callNumbers,
+			);
 	const originalLength = halves.first.length + halves.second.length;
 
 	input.logger?.debug(

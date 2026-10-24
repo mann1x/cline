@@ -2,10 +2,13 @@ import type { AgentMessage } from "@cline/shared";
 import { describe, expect, it } from "vitest";
 import {
 	buildToolLedger,
+	citedPastKey,
 	collectFileHistories,
 	DEFAULT_TOOL_LEDGER_LIMITS,
+	dropPastKey,
 	evictToolLedger,
 	mergeToolLedger,
+	numberToolCalls,
 	renderToolLedger,
 	renderToolLedgerKey,
 	spliceLedgerCitations,
@@ -790,5 +793,82 @@ describe("putting each call where the replay says it happened", () => {
 	it("leaves a replay that cites nothing exactly as it was", () => {
 		const prose = "Let me work on the file. It is not parsing yet.";
 		expect(spliceLedgerCitations(prose, ledger()).text).toBe(prose);
+	});
+});
+
+describe("steps past the record", () => {
+	// From claude-hooks tests/test_compaction_flows.py: a replay citing #4-#9
+	// against a 3-call record.
+	const FORECAST =
+		"I read the audit modules. [#1-2]\n\nLet me read the remaining `src/cli/` files. [#3-4] Then `src/cluster/`. [#5-7] Then `src/config/`. [#8-9]\n\nSo far the unit is deciseconds. [#2]";
+
+	it("finds and cuts only the invented steps", () => {
+		expect(citedPastKey(FORECAST, 3)).toEqual([4, 5, 6, 7, 8, 9]);
+		const result = dropPastKey(FORECAST, 3);
+		expect(result.dropped).toBe(2);
+		expect(result.text).not.toContain("src/cluster");
+		expect(result.text).not.toContain("src/config");
+		// A citation naming a real call keeps its clause; the splice drops #4.
+		expect(result.text).toContain("remaining `src/cli/` files. [#3-4]");
+		expect(result.text.startsWith("I read the audit modules. [#1-2]")).toBe(
+			true,
+		);
+		expect(result.text.endsWith("So far the unit is deciseconds. [#2]")).toBe(
+			true,
+		);
+		expect(dropPastKey(FORECAST, 9)).toEqual({ text: FORECAST, dropped: 0 });
+	});
+
+	it("never cuts across a paragraph", () => {
+		expect(
+			dropPastKey(
+				"Found the bug in backoff.py. [#1] The window is in deciseconds.\n\nNext I read cluster. [#7]",
+				2,
+			),
+		).toEqual({
+			text: "Found the bug in backoff.py. [#1] The window is in deciseconds.",
+			dropped: 1,
+		});
+	});
+});
+
+describe("numberToolCalls", () => {
+	const call = (id: string, path: string) => ({
+		role: "assistant" as const,
+		content: [{ type: "tool_use", id, name: "read_files", input: { path } }],
+	});
+	const result = (id: string, text: string) => ({
+		role: "user" as const,
+		content: [{ type: "tool_result", tool_use_id: id, content: text }],
+	});
+
+	it("numbers each call as the merged key does, a run of repeats as one", () => {
+		const messages = [
+			call("a", "x.ts"),
+			result("a", "one"),
+			call("b", "y.ts"),
+			result("b", "two"),
+			call("c", "y.ts"),
+			result("c", "two"),
+			call("d", "z.ts"),
+			result("d", "three"),
+		];
+		const previous = buildToolLedger([call("p", "w.ts"), result("p", "zero")]);
+		const numbers = numberToolCalls(previous, messages);
+		const key = mergeToolLedger(previous, buildToolLedger(messages));
+		expect([...numbers.entries()]).toEqual([
+			["a", 2],
+			["b", 3],
+			["c", 3],
+			["d", 4],
+		]);
+		expect(key.map((entry) => entry.index)).toEqual([1, 2, 3, 4]);
+		// The first call joins the last carried one when it repeats it.
+		const joined = numberToolCalls(
+			buildToolLedger([call("p", "x.ts"), result("p", "one")]),
+			messages,
+		);
+		expect(joined.get("a")).toBe(1);
+		expect(joined.get("d")).toBe(3);
 	});
 });
