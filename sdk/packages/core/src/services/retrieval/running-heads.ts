@@ -29,7 +29,8 @@ const HEAD_SHARE = 0.4;
 const MAX_HEADS = 5;
 const MAX_HEAD_LENGTH = 200;
 
-const MONTH = String.raw`(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)`;
+const MONTH =
+	"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
 const WORD = /[\p{L}\p{N}]+/gu;
 
 /**

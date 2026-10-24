@@ -24,11 +24,14 @@
  * however poor: by keyword, "the" and "project" match every note. Asked for
  * by the model that is fine, it asked. Attached unasked to every message it
  * is noise, so a note is attached only when something says it is about the
- * message: the reranker passed it, or it is close by meaning, or it shares
- * two meaningful words with what was searched for.
+ * message: the reranker scored it high, or it is close by meaning, or it
+ * shares two meaningful words with what was searched for.
  *
  * Nothing here can fail a turn. A search that throws, an expander that times
  * out, a server that is down: the message goes to the model without notes.
+ * But the user is told, in other words than "nothing found": a recall that
+ * cannot run and a Memory with nothing to say end the same way for the
+ * model, and are two different things to put right.
  */
 
 import { RECALLED_MEMORY_TAG } from "@cline/shared";
@@ -55,6 +58,21 @@ export const HYDE_TIMEOUT_MS = 20_000;
 export const AUTO_RECALL_MIN_SIMILARITY = 0.5;
 /** Meaningful words a note has to share with the search to be attached unasked. */
 export const AUTO_RECALL_MIN_SHARED_WORDS = 2;
+/**
+ * The reranker's score that passes a note on its own. Its own floor, apart
+ * from the user's threshold, which defaults to 0 and would pass every note.
+ * Below it the note still has the other two tests.
+ */
+export const AUTO_RECALL_MIN_RELEVANCE = 0.5;
+/**
+ * The share of the session's window the notes may take. A share and not a
+ * count: five notes of 4000 characters are a fifth of a 32k window.
+ */
+export const MEMORY_RECALL_WINDOW_SHARE = 0.04;
+/** The window assumed when the host does not say: the smallest in common use. */
+export const MEMORY_RECALL_FALLBACK_WINDOW = 32_768;
+/** Characters per token, low, so the bound errs short. */
+const CHARS_PER_TOKEN = 3.5;
 const HYDE_CACHE_ENTRIES = 200;
 const SESSIONS_TRACKED = 200;
 const RRF_K = 60;
@@ -87,6 +105,15 @@ export interface MemoryRecallInput {
 	cwd: string;
 	/** Notes already given to a session are not given to it again. */
 	sessionId?: string;
+	/**
+	 * The notes still in the conversation, by id (`recalledMemoryIds` reads
+	 * them from its messages). Given, they are what counts as given: a note
+	 * a compaction folded away can be given again. Left out, a note is given
+	 * once per session.
+	 */
+	inConversation?: readonly string[];
+	/** The session's window, in tokens, which bounds how much is attached. */
+	contextWindow?: number;
 }
 
 export interface MemoryRecallResult {
@@ -96,8 +123,10 @@ export interface MemoryRecallResult {
 	ids: string[];
 	/** Whether the expander's note was searched with. */
 	expanded: boolean;
-	/** One line for the user: what was recalled. */
+	/** One line for the user: what was recalled, or why nothing could be. */
 	summary?: string;
+	/** Why the recall did not run. Not the same as nothing being found. */
+	failed?: string;
 }
 
 export type MemoryRecaller = (
@@ -143,8 +172,15 @@ export function isAboutTheSearch(
 	search: string,
 	item: RecalledMemory,
 ): boolean {
-	// The reranker read the two together, and the threshold was applied.
-	if (item.relevance !== undefined) return true;
+	// The reranker read the two together. Its score passes a note only above
+	// a floor of its own; the user's threshold, at its default of 0, passes
+	// every note, and the gate is the only floor there is.
+	if (
+		item.relevance !== undefined &&
+		item.relevance >= AUTO_RECALL_MIN_RELEVANCE
+	) {
+		return true;
+	}
 	if (
 		item.similarity !== undefined &&
 		item.similarity >= AUTO_RECALL_MIN_SIMILARITY
@@ -191,38 +227,114 @@ export function fuseRecalls(
 		.map((entry) => entry.item);
 }
 
+function formatNote(item: RecalledMemory, text = item.text): string {
+	return `[${item.id}] ${item.createdAt.slice(0, 10)}, ${item.memory}${item.tags.length ? `, tags: ${item.tags.join(", ")}` : ""}\n${text}`;
+}
+
+/** How many characters of notes a window of this size takes. */
+export function recallCharBudget(contextWindow: number | undefined): number {
+	const window =
+		contextWindow && contextWindow > 0
+			? contextWindow
+			: MEMORY_RECALL_FALLBACK_WINDOW;
+	return Math.floor(window * MEMORY_RECALL_WINDOW_SHARE * CHARS_PER_TOKEN);
+}
+
+/**
+ * The notes that fit in this many characters, best first. A note that does
+ * not fit is left for the next, smaller ones; the best note is always given,
+ * cut if it has to be, with the id to recall it whole.
+ */
+export function fitRecalledMemory(
+	items: RecalledMemory[],
+	maxChars: number,
+): { items: RecalledMemory[]; cut?: string } {
+	const kept: RecalledMemory[] = [];
+	let used = 0;
+	for (const item of items) {
+		const size = formatNote(item).length + 2;
+		if (used + size <= maxChars) {
+			kept.push(item);
+			used += size;
+		}
+	}
+	if (kept.length > 0 || items.length === 0) return { items: kept };
+	const first = items[0];
+	const room = Math.max(200, maxChars - formatNote(first, "").length - 80);
+	return {
+		items: [
+			{
+				...first,
+				text: `${first.text.slice(0, room)}\n... (cut to fit; recall ${first.id} for all of it)`,
+			},
+		],
+		cut: first.id,
+	};
+}
+
 export function formatRecalledMemory(items: RecalledMemory[]): string {
 	return [
 		`<${RECALLED_MEMORY_TAG}>`,
 		`Notes from earlier tasks that may bear on this message, found automatically (${items.length}). They were true when noted: check they still hold before relying on them, and ignore any that do not apply. The recall tool searches for more.`,
 		"",
-		...items.map(
-			(item) =>
-				`[${item.id}] ${item.createdAt.slice(0, 10)}, ${item.memory}${item.tags.length ? `, tags: ${item.tags.join(", ")}` : ""}\n${item.text}`,
-		),
+		...items.map((item) => formatNote(item)),
 		`</${RECALLED_MEMORY_TAG}>`,
 	].join("\n");
+}
+
+/**
+ * The ids of the notes recall attached that are still in these texts: the
+ * head line of each, as `formatRecalledMemory` writes it. A compaction that
+ * kept a note word for word kept that line with it.
+ */
+export function recalledMemoryIds(texts: Iterable<string>): string[] {
+	const ids = new Set<string>();
+	for (const text of texts) {
+		if (!text.includes(`<${RECALLED_MEMORY_TAG}>`)) continue;
+		for (const match of text.matchAll(/^\[(m\d+)\] \d{4}-\d{2}-\d{2}, /gm)) {
+			ids.add(match[1]);
+		}
+	}
+	return [...ids];
 }
 
 export function createMemoryRecaller(
 	options: CreateMemoryRecallerOptions,
 ): MemoryRecaller {
 	const given = new Map<string, Set<string>>();
+	// Search notes said to a session ("searched by keyword"), said once.
+	const told = new Map<string, Set<string>>();
 	const expansions = new Map<string, string>();
 	const hydeTimeoutMs = options.hydeTimeoutMs ?? HYDE_TIMEOUT_MS;
 
-	const givenTo = (sessionId: string | undefined): Set<string> => {
+	const tracked = (
+		map: Map<string, Set<string>>,
+		sessionId: string | undefined,
+	): Set<string> => {
 		if (!sessionId) return new Set();
-		let set = given.get(sessionId);
+		let set = map.get(sessionId);
 		if (!set) {
 			set = new Set();
-			given.set(sessionId, set);
-			if (given.size > SESSIONS_TRACKED) {
-				const oldest = given.keys().next().value;
-				if (oldest !== undefined) given.delete(oldest);
+			map.set(sessionId, set);
+			if (map.size > SESSIONS_TRACKED) {
+				const oldest = map.keys().next().value;
+				if (oldest !== undefined) map.delete(oldest);
 			}
 		}
 		return set;
+	};
+	const givenTo = (input: MemoryRecallInput): Set<string> => {
+		if (!input.inConversation) return tracked(given, input.sessionId);
+		// The conversation says what it holds; a note folded away is not in it.
+		const set = new Set(input.inConversation);
+		if (input.sessionId) given.set(input.sessionId, set);
+		return set;
+	};
+	const newNotes = (sessionId: string | undefined, notes: string[]) => {
+		const said = tracked(told, sessionId);
+		const fresh = [...new Set(notes)].filter((note) => !said.has(note));
+		for (const note of fresh) said.add(note);
+		return fresh;
 	};
 
 	const expand = async (
@@ -272,17 +384,17 @@ export function createMemoryRecaller(
 		const memory = options.memory ?? sharedMemory();
 		const query = clampRecallQuery(question);
 		let memories: string[] = [];
+		const searchNotes: string[] = [];
 		const search = async (text: string) => {
-			const found = (
-				await memory.recall(text, {
-					memories,
-					settings: config.settings,
-					endpoints: config,
-				})
-			).items;
+			const result = await memory.recall(text, {
+				memories,
+				settings: config.settings,
+				endpoints: config,
+			});
+			searchNotes.push(...result.notes);
 			return {
-				found,
-				about: found.filter((item) => isAboutTheSearch(text, item)),
+				found: result.items,
+				about: result.items.filter((item) => isAboutTheSearch(text, item)),
 			};
 		};
 		try {
@@ -335,15 +447,37 @@ export function createMemoryRecaller(
 					);
 				}
 			}
-			const already = givenTo(input.sessionId);
-			const fresh = items.filter((item) => !already.has(item.id));
+			const already = givenTo(input);
+			const unseen = items.filter((item) => !already.has(item.id));
+			// What the search could not do ("searched by keyword"), said once
+			// a session: an empty recall from a degraded search is not the
+			// same as Memory having nothing.
+			const degraded = newNotes(input.sessionId, searchNotes);
+			for (const note of degraded) options.log?.(`memory recall: ${note}`);
+			const fitted = fitRecalledMemory(
+				unseen,
+				recallCharBudget(input.contextWindow),
+			);
+			const fresh = fitted.items;
 			if (fresh.length === 0) {
 				options.log?.(
 					items.length > 0
 						? "memory recall: nothing new, the notes found were already given to this task"
 						: `memory recall: no note is about this message (${raw.found.length} looked at)`,
 				);
-				return undefined;
+				return degraded.length > 0
+					? {
+							ids: [],
+							expanded,
+							summary: `Memory found no note for this message. ${degraded.join(" ")}`,
+						}
+					: undefined;
+			}
+			const left = unseen.length - fresh.length;
+			if (fitted.cut || left > 0) {
+				options.log?.(
+					`memory recall: ${fitted.cut ? `${fitted.cut} cut` : `${left} more left out`} to fit ${recallCharBudget(input.contextWindow)} characters`,
+				);
 			}
 			for (const item of fresh) already.add(item.id);
 			const ids = fresh.map((item) => item.id);
@@ -354,13 +488,24 @@ export function createMemoryRecaller(
 				context: formatRecalledMemory(fresh),
 				ids,
 				expanded,
-				summary: `Recalled ${fresh.length} note${fresh.length === 1 ? "" : "s"} from Memory (${ids.join(", ")})${expanded ? ", searched with an expanded question" : ""}.`,
+				summary: [
+					`Recalled ${fresh.length} note${fresh.length === 1 ? "" : "s"} from Memory (${ids.join(", ")})${expanded ? ", searched with an expanded question" : ""}${left > 0 ? `; ${left} more did not fit the window` : ""}.`,
+					...degraded,
+				].join(" "),
 			};
 		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
 			options.log?.(
-				`memory recall failed, the message goes without notes: ${error instanceof Error ? error.message : String(error)}`,
+				`memory recall failed, the message goes without notes: ${reason}`,
 			);
-			return undefined;
+			// Told once a session for each reason, not on every message.
+			const summary = `Memory unreachable, the message went without notes: ${reason}`;
+			return {
+				ids: [],
+				expanded: false,
+				failed: reason,
+				...(newNotes(input.sessionId, [summary]).length > 0 ? { summary } : {}),
+			};
 		}
 	};
 }

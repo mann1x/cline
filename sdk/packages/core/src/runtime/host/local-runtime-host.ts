@@ -112,6 +112,7 @@ import type { HookEventPayload } from "../../hooks";
 import { buildTelemetryAgentIdentity } from "../../services/agent-events";
 import { resolveWorkspacePath } from "../../services/config";
 import { prepareLocalRuntimeBootstrap } from "../../services/local-runtime-bootstrap";
+import { recalledMemoryIds } from "../../services/retrieval/memory-recall";
 import { nowIso } from "../../services/session-artifacts";
 import {
 	toSessionRecord,
@@ -4486,11 +4487,21 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// Memory, searched with the user's own words -- not with the files a
 		// mention pulled in -- and put after them: the request is read first,
 		// the notes as what is known about it.
-		const recalled = await session.config.recallMemory?.({
-			prompt: normalizedPrompt,
-			cwd: session.config.cwd,
-			sessionId: session.sessionId,
-		});
+		const recalled = session.config.recallMemory
+			? await session.config.recallMemory({
+					prompt: normalizedPrompt,
+					cwd: session.config.cwd,
+					sessionId: session.sessionId,
+					// What the conversation still holds: a note a compaction
+					// folded away is given again when it comes up.
+					inConversation: recalledMemoryIds(
+						messageTexts(session.agent.getMessages()),
+					),
+					contextWindow:
+						session.config.contextWindow ??
+						session.config.knownModels?.[session.config.modelId]?.contextWindow,
+				})
+			: undefined;
 		const body = recalled?.context
 			? `${enriched.prompt}\n\n${recalled.context}`
 			: enriched.prompt;
@@ -5206,5 +5217,23 @@ export class LocalRuntimeHost implements RuntimeHost {
 		...args: unknown[]
 	): Promise<T | undefined> {
 		return invokeBackendOptionalValue<T>(this.sessionService, method, ...args);
+	}
+}
+
+/** The text of each message, its text parts joined. */
+function* messageTexts(messages: readonly unknown[]): Iterable<string> {
+	for (const message of messages) {
+		const content = (message as { content?: unknown } | undefined)?.content;
+		if (typeof content === "string") {
+			yield content;
+		} else if (Array.isArray(content)) {
+			yield content
+				.map((part) =>
+					part && typeof part === "object" && "text" in part
+						? String((part as { text?: unknown }).text ?? "")
+						: "",
+				)
+				.join("\n");
+		}
 	}
 }

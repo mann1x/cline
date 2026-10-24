@@ -29,6 +29,26 @@ import {
 import { type RetrieveResult, retrieve } from "./retrieve";
 import { VectorIndex, vectorTableName } from "./vector-index";
 
+/** The text a model is asked to embed to learn its size and tell it apart. */
+const MODEL_PROBE_TEXT = "size";
+/**
+ * The same model gives the same vector for the same text, to rounding:
+ * batching on a GPU moves the last digits. A re-pulled model does not.
+ */
+const SAME_MODEL_COSINE = 0.999;
+
+function cosine(a: readonly number[], b: readonly number[]): number {
+	let dot = 0;
+	let na = 0;
+	let nb = 0;
+	for (let at = 0; at < a.length; at++) {
+		dot += a[at] * b[at];
+		na += a[at] * a[at];
+		nb += b[at] * b[at];
+	}
+	return na > 0 && nb > 0 ? dot / Math.sqrt(na * nb) : 0;
+}
+
 export function resolveLibraryDirectory(): string {
 	return join(resolveClineDataDir(), "library");
 }
@@ -133,6 +153,16 @@ export class Library {
 	private readonly fetch?: typeof fetch;
 	private index?: Promise<VectorIndex>;
 	private shelves?: Catalogue;
+	/** Documents a run is embedding now, by model: another run leaves them to it. */
+	private readonly embedding = new Set<string>();
+	/** Models whose probe was checked by this process. */
+	private readonly probed = new Set<string>();
+	/**
+	 * The last write to the vectors. Writes take turns: two runs creating or
+	 * compacting a table at once, LanceDB refuses the second. The requests
+	 * to the embedding model, the slow part, still run side by side.
+	 */
+	private writing: Promise<unknown> = Promise.resolve();
 
 	constructor(options: LibraryOptions = {}) {
 		this.directory = options.directory ?? resolveLibraryDirectory();
@@ -236,7 +266,7 @@ export class Library {
 
 	private async dropVectors(documentIds: readonly number[]): Promise<void> {
 		const index = await this.vectors().catch(() => undefined);
-		await index?.deleteDocuments(documentIds);
+		if (index) await this.exclusive(() => index.deleteDocuments(documentIds));
 	}
 
 	async removeDocument(documentId: number): Promise<void> {
@@ -247,7 +277,7 @@ export class Library {
 	async removeCollection(collectionId: number): Promise<void> {
 		this.store.deleteCollection(collectionId);
 		const index = await this.vectors().catch(() => undefined);
-		await index?.deleteCollection(collectionId);
+		if (index) await this.exclusive(() => index.deleteCollection(collectionId));
 	}
 
 	/**
@@ -261,12 +291,7 @@ export class Library {
 		const settings = options.settings ?? DEFAULT_LIBRARY_SETTINGS;
 		const model = options.embedding.model;
 		if (options.probe) {
-			const probed = await embedTexts(options.embedding, ["size"], {
-				prefix: settings.embeddingDocumentPrefix || undefined,
-				signal: options.signal,
-				fetch: this.fetch,
-			});
-			this.store.noteDimension(model, probed.dimension);
+			await this.checkModel(options.embedding, settings, options.signal);
 		}
 		let pending = this.store.documentsWithoutEmbedding(
 			model,
@@ -297,44 +322,67 @@ export class Library {
 		for (let at = 0; at < pending.length; at += 1) {
 			const document = pending[at];
 			options.signal?.throwIfAborted();
-			const chunks = this.store.documentChunks(document.id);
-			const embedded = await embedTexts(
-				options.embedding,
-				chunks.map((chunk) => chunk.text),
-				{
-					batchSize: settings.embeddingBatchSize,
-					concurrency: settings.embeddingConcurrency,
-					prefix: settings.embeddingDocumentPrefix || undefined,
-					signal: options.signal,
-					fetch: this.fetch,
-				},
-			);
-			dimension = embedded.dimension;
-			// The model answers with another size than it last did: a re-pulled
-			// tag, a truncated variant. Everything counted as embedded was
-			// embedded at the old size, so the list of what is left is made
-			// again, against the size it returns now.
-			const resized = this.store.noteDimension(model, embedded.dimension);
-			// What an earlier, unfinished run wrote for this document, in this
-			// model's own set only: its vectors for other models stay.
-			await index.deleteDocumentsIn(model, embedded.dimension, [document.id]);
-			await index.add(
-				model,
-				chunks.map((chunk, n) => ({
-					chunkId: chunk.chunkId,
-					collectionId: chunk.collectionId,
-					documentId: chunk.documentId,
-					vector: embedded.vectors[n],
-				})),
-			);
-			this.store.markEmbedded(document.id, model, embedded.dimension);
+			// Two runs at once (a book added while the rest catch up) would
+			// both write its vectors; the second leaves it to the first.
+			// Held until the document is marked, and a document another run
+			// finished since this list was made is not done twice.
+			const claim = `${model}\n${document.id}`;
+			if (
+				this.embedding.has(claim) ||
+				this.store.isEmbedded(document.id, model)
+			) {
+				continue;
+			}
+			this.embedding.add(claim);
+			let resized: boolean;
+			let chunks: ReturnType<LibraryStore["documentChunks"]>;
+			try {
+				chunks = this.store.documentChunks(document.id);
+				const embedded = await embedTexts(
+					options.embedding,
+					chunks.map((chunk) => chunk.text),
+					{
+						batchSize: settings.embeddingBatchSize,
+						concurrency: settings.embeddingConcurrency,
+						prefix: settings.embeddingDocumentPrefix || undefined,
+						signal: options.signal,
+						fetch: this.fetch,
+					},
+				);
+				dimension = embedded.dimension;
+				// The model answers with another size than it last did: a re-pulled
+				// tag, a truncated variant. Everything counted as embedded was
+				// embedded at the old size, so the list of what is left is made
+				// again, against the size it returns now.
+				resized = this.store.noteDimension(model, embedded.dimension);
+				// What an earlier, unfinished run wrote for this document, in this
+				// model's own set only: its vectors for other models stay.
+				const written = chunks;
+				await this.exclusive(async () => {
+					await index.deleteDocumentsIn(model, embedded.dimension, [
+						document.id,
+					]);
+					await index.add(
+						model,
+						written.map((chunk, n) => ({
+							chunkId: chunk.chunkId,
+							collectionId: chunk.collectionId,
+							documentId: chunk.documentId,
+							vector: embedded.vectors[n],
+						})),
+					);
+				});
+				this.store.markEmbedded(document.id, model, embedded.dimension);
+			} finally {
+				this.embedding.delete(claim);
+			}
 			chunksDone += chunks.length;
 			documentsDone += 1;
 			if (resized) {
 				pending = this.store.documentsWithoutEmbedding(
 					model,
 					options.collectionIds,
-					embedded.dimension,
+					dimension,
 				);
 				at = -1;
 			}
@@ -348,9 +396,85 @@ export class Library {
 			});
 		}
 		if (dimension !== undefined) {
-			await index.optimize(model, dimension);
+			await this.optimize(index, model, dimension);
 		}
 		return { documents: documentsDone, chunks: chunksDone, dimension };
+	}
+
+	/** Run one write to the vectors when the one before it is done. */
+	private exclusive<T>(write: () => Promise<T>): Promise<T> {
+		const run = this.writing.then(write);
+		this.writing = run.catch(() => {});
+		return run;
+	}
+
+	/**
+	 * Compact a set of vectors after a run. A conflict can still come from a
+	 * writer outside this process; it is tried once more. It is
+	 * housekeeping: the vectors are written either way.
+	 */
+	private optimize(
+		index: VectorIndex,
+		model: string,
+		dimension: number,
+	): Promise<void> {
+		return this.exclusive(async () => {
+			try {
+				await index.optimize(model, dimension);
+			} catch (error) {
+				if (!/commit conflict/i.test(String(error))) throw error;
+				await index.optimize(model, dimension);
+			}
+		});
+	}
+
+	/**
+	 * Ask the model for the vector of a fixed text and hold it against the
+	 * one it gave last time. The size tells a truncated variant apart; this
+	 * tells a model re-pulled under the same name and size, whose vectors no
+	 * longer compare with the ones kept. Those are then dropped, and every
+	 * document is embedded again. True when that happened.
+	 */
+	async checkModel(
+		embedding: RetrievalEndpoint,
+		settings: LibrarySettings = DEFAULT_LIBRARY_SETTINGS,
+		signal?: AbortSignal,
+	): Promise<boolean> {
+		const model = embedding.model;
+		const probed = await embedTexts(embedding, [MODEL_PROBE_TEXT], {
+			prefix: settings.embeddingDocumentPrefix || undefined,
+			signal,
+			fetch: this.fetch,
+		});
+		this.probed.add(model);
+		const vector = Array.from(probed.vectors[0]);
+		const before = this.store.knownProbe(model);
+		const sameSize = this.store.knownDimension(model) === vector.length;
+		this.store.noteProbe(model, vector);
+		if (!before || !sameSize || before.length !== vector.length) return false;
+		if (cosine(before, vector) >= SAME_MODEL_COSINE) return false;
+		const index = await this.vectors().catch(() => undefined);
+		if (index) {
+			await this.exclusive(() =>
+				index.dropSet(vectorTableName(model, vector.length)),
+			);
+		}
+		this.store.forgetEmbeddings(model, vector.length);
+		return true;
+	}
+
+	/**
+	 * Embed whatever has no vectors for this model, in every collection, and
+	 * check the model once per process first. For after something was
+	 * added: a model changed since covers more than the one book.
+	 */
+	catchUpEmbeddings(
+		options: Omit<EmbedPendingOptions, "collectionIds" | "probe">,
+	): Promise<EmbedPendingResult> {
+		return this.embedPending({
+			...options,
+			probe: !this.probed.has(options.embedding.model),
+		});
 	}
 
 	/**
@@ -390,7 +514,9 @@ export class Library {
 	/** Delete one set of vectors, and forget that its documents were embedded with it. */
 	async deleteVectorSet(table: string): Promise<boolean> {
 		const index = await this.vectors().catch(() => undefined);
-		if (!index || !(await index.dropSet(table))) return false;
+		if (!index || !(await this.exclusive(() => index.dropSet(table)))) {
+			return false;
+		}
 		for (const entry of this.store.embeddingSets()) {
 			if (vectorTableName(entry.model, entry.dimension) === table) {
 				this.store.forgetEmbeddings(entry.model, entry.dimension);
@@ -413,6 +539,14 @@ export class Library {
 					return undefined;
 				})
 			: undefined;
+		if (options.embedding && !index && notes.length === 0) {
+			// Without this the search is keywords alone and nothing says so:
+			// "nothing by meaning" and "never searched by meaning" read the same.
+			const unsupported = lanceDbUnsupportedReason();
+			notes.push(
+				`Semantic search did not run (${unsupported ?? "LanceDB is not installed yet"}); searched by keyword.`,
+			);
+		}
 		const result = await retrieve(query, {
 			store: this.store,
 			collectionIds: options.collectionIds,

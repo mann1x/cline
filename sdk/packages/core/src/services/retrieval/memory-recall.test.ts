@@ -12,9 +12,12 @@ import {
 	clampRecallQuery,
 	contentWords,
 	createMemoryRecaller,
+	fitRecalledMemory,
 	fuseRecalls,
 	isAboutTheSearch,
 	type MemoryQueryExpander,
+	recallCharBudget,
+	recalledMemoryIds,
 } from "./memory-recall";
 
 describe("automatic recall", () => {
@@ -95,6 +98,69 @@ describe("automatic recall", () => {
 		expect((await recall(ask))?.ids).toEqual(["m1"]);
 		expect(await recall(ask)).toBeUndefined();
 		expect((await recall({ ...ask, sessionId: "s2" }))?.ids).toEqual(["m1"]);
+	});
+
+	it("gives a note again once a compaction folded it away, not while it is still there", async () => {
+		const recall = recaller();
+		const ask = {
+			prompt: "How are the tests run here?",
+			cwd: project,
+			sessionId: "s1",
+		};
+		const first = await recall({ ...ask, inConversation: [] });
+		expect(first?.ids).toEqual(["m1"]);
+		// Still in the conversation: not given twice.
+		const held = recalledMemoryIds([`How?\n\n${first?.context}`]);
+		expect(held).toEqual(["m1"]);
+		expect(await recall({ ...ask, inConversation: held })).toBeUndefined();
+		// The compaction's digest did not keep it: given again.
+		expect((await recall({ ...ask, inConversation: [] }))?.ids).toEqual(["m1"]);
+	});
+
+	it("bounds the notes by a share of the window, never by a count", async () => {
+		await memory.remember({
+			text: `Tests are run in CI too. ${"The suite is long. ".repeat(180)}`,
+			memory: "tally",
+			tags: ["testing"],
+		});
+		const ask = { prompt: "How are the tests run here?", cwd: project };
+		const wide = await recaller()({ ...ask, contextWindow: 262_144 });
+		expect(wide?.ids).toHaveLength(2);
+		// 8k: 1146 characters, room for the short note only.
+		const narrow = await recaller()({ ...ask, contextWindow: 8192 });
+		expect(narrow?.ids).toEqual(["m1"]);
+		expect(narrow?.summary).toContain("1 more did not fit the window");
+		expect(narrow?.context?.length).toBeLessThan(recallCharBudget(8192) + 400);
+	});
+
+	it("says once a session that the search ran by keyword alone", async () => {
+		const bare = new Memory({
+			directory: join(root, "bare"),
+			runtimeDirectory: join(root, "no-runtime"),
+		});
+		try {
+			await bare.remember({ text: "Indentation is two spaces." });
+			const recall = createMemoryRecaller({
+				memory: bare,
+				getConfig: () => ({
+					settings: { ...settings, selections: {} },
+					embedding: { baseUrl: "http://embed.test", model: "toy" },
+				}),
+			});
+			const ask = {
+				prompt: "Which deploy target do we use?",
+				cwd: project,
+				sessionId: "s1",
+			};
+			const first = await recall(ask);
+			expect(first?.context).toBeUndefined();
+			expect(first?.summary).toMatch(
+				/^Memory found no note for this message\. Semantic search did not run \(.+\); searched by keyword\.$/,
+			);
+			expect(await recall(ask)).toBeUndefined();
+		} finally {
+			await bare.close();
+		}
 	});
 
 	it("searches only the memories the workspace is allowed", async () => {
@@ -194,16 +260,33 @@ describe("automatic recall", () => {
 	});
 
 	it("never throws: a search that fails sends the message without notes", async () => {
-		await memory.close();
-		const broken = { recall: async () => Promise.reject(new Error("db")) };
+		const broken = {
+			listMemories: () => memory.listMemories(),
+			recall: async () => Promise.reject(new Error("db")),
+		};
 		const recall = createMemoryRecaller({
 			memory: broken as unknown as Memory,
 			getConfig: () => ({ settings }),
 		});
-		expect(
-			await recall({ prompt: "How are the tests run here?", cwd: project }),
-		).toBeUndefined();
-		memory = new Memory({ directory: root });
+		const failed = await recall({
+			prompt: "How are the tests run here?",
+			cwd: project,
+			sessionId: "s1",
+		});
+		// No notes, and said so in words that are not "nothing found".
+		expect(failed?.context).toBeUndefined();
+		expect(failed?.failed).toBe("db");
+		expect(failed?.summary).toBe(
+			"Memory unreachable, the message went without notes: db",
+		);
+		// Once a session: the next message is not told again.
+		const again = await recall({
+			prompt: "And the build, how is it run?",
+			cwd: project,
+			sessionId: "s1",
+		});
+		expect(again?.failed).toBe("db");
+		expect(again?.summary).toBeUndefined();
 	});
 });
 
@@ -256,10 +339,45 @@ describe("the pieces of automatic recall", () => {
 		expect(isAboutTheSearch("tests", note(french, { similarity: 0.2 }))).toBe(
 			false,
 		);
-		// The reranker's verdict stands.
-		expect(isAboutTheSearch("tests", note(french, { relevance: 0.1 }))).toBe(
+		// The reranker passes a note on its own only above its floor: the
+		// user's threshold defaults to 0, which would pass every note.
+		expect(isAboutTheSearch("tests", note(french, { relevance: 0.8 }))).toBe(
 			true,
 		);
+		expect(isAboutTheSearch("tests", note(french, { relevance: 0.1 }))).toBe(
+			false,
+		);
+		// Below it the other tests still stand.
+		expect(
+			isAboutTheSearch(
+				"tests",
+				note(french, { relevance: 0.1, similarity: 0.71 }),
+			),
+		).toBe(true);
+	});
+
+	it("always gives the best note, cut to fit, with the id to read it whole", () => {
+		const big = {
+			id: "m7",
+			text: "x".repeat(5000),
+			memory: "main",
+			tags: [],
+			createdAt: "2026-10-24T00:00:00Z",
+		};
+		const fitted = fitRecalledMemory([big], 1000);
+		expect(fitted.cut).toBe("m7");
+		expect(fitted.items[0].text.length).toBeLessThan(1000);
+		expect(fitted.items[0].text).toContain("recall m7 for all of it");
+		expect(fitRecalledMemory([], 1000)).toEqual({ items: [] });
+	});
+
+	it("reads back only the ids of notes recall attached", () => {
+		expect(
+			recalledMemoryIds([
+				"[m3] 2026-01-01, main\nnot in a block",
+				"<recalled_memory>\nNotes...\n\n[m4] 2026-01-02, main, tags: a\ntext\n[m5] 2026-01-03, tally\nmore\n</recalled_memory>",
+			]),
+		).toEqual(["m4", "m5"]);
 	});
 
 	it("fuses two rankings, a note in both ahead of a note in one", () => {

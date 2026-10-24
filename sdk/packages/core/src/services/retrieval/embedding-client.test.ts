@@ -9,7 +9,11 @@ import {
 
 const endpoint = { baseUrl: "http://host:1", model: "embed" };
 
-type Call = { url: string; body: any; headers: Record<string, string> };
+type Call = {
+	url: string;
+	body: Record<string, unknown>;
+	headers: Record<string, string>;
+};
 function stub(
 	answer: (call: Call, n: number) => { status?: number; json?: unknown },
 ) {

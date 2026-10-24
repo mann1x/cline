@@ -1804,6 +1804,7 @@ export {
 	type MemoryRecaller,
 	type MemoryRecallInput,
 	type MemoryRecallResult,
+	recalledMemoryIds,
 } from "./services/retrieval/memory-recall";
 export type {
 	RetrievedHit,

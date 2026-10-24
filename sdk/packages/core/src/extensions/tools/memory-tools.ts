@@ -121,6 +121,9 @@ function createRememberTool(options: CreateMemoryToolsOptions): AgentTool {
 				const fellBack = access.storeFellBack
 					? ` The memory chosen for this workspace, "${access.storeFellBack}", no longer exists.`
 					: "";
+				if (result.outcome === "tagged") {
+					return `Already remembered as ${result.item.id} in ${where}; its tags are now ${result.item.tags.join(", ")}.`;
+				}
 				return result.outcome === "unchanged"
 					? `Already remembered as ${result.item.id} in ${where}; nothing was added.`
 					: `Remembered as ${result.item.id} in ${where}.${fellBack}${result.note ? ` It is found by keyword for now: ${result.note}` : ""}`;

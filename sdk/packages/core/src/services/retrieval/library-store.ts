@@ -167,12 +167,21 @@ export function queryTerms(query: string): string[] {
 	return [...seen];
 }
 
+/**
+ * Sources that are a key and not a name: a note is `memory:<hash>`. Indexed
+ * as a file name, every note held the word "memory", and any search with it
+ * matched them all.
+ */
+export const KEYED_SOURCE = /^memory:/;
+
 /** What the index also matches on for a chunk: file name, title, headers. */
 export function chunkContext(
 	document: Pick<LibraryDocumentInput, "source" | "title">,
 	headings: readonly string[],
 ): string {
-	const name = document.source.split(/[\\/]/).pop() ?? document.source;
+	const name = KEYED_SOURCE.test(document.source)
+		? ""
+		: (document.source.split(/[\\/]/).pop() ?? document.source);
 	return [name.replace(/[._-]+/g, " "), document.title ?? "", ...headings]
 		.map((part) => part.trim())
 		.filter(Boolean)
@@ -197,6 +206,15 @@ export class LibraryStore {
 		this.db.exec("PRAGMA foreign_keys = ON;");
 		for (const statement of SCHEMA) {
 			this.db.exec(statement);
+		}
+		// Added after the first build: the vector a model gave for a fixed
+		// text, by which a model re-pulled under the same name is told apart.
+		const columns = this.db
+			.prepare("PRAGMA table_info(embedding_dimensions)")
+			.all()
+			.map((row) => String(row.name));
+		if (!columns.includes("probe")) {
+			this.db.exec("ALTER TABLE embedding_dimensions ADD COLUMN probe TEXT");
 		}
 	}
 
@@ -384,6 +402,64 @@ export class LibraryStore {
 		});
 	}
 
+	/**
+	 * Index the chunks of keyed sources again without their source as
+	 * context, for those stored before it was left out. The index has no
+	 * update trigger, so each chunk is taken out and put back by hand.
+	 * Returns how many chunks changed.
+	 */
+	reindexKeyedContexts(): number {
+		const rows = this.db
+			.prepare(
+				`SELECT k.id, k.text, k.context, k.headings, d.source, d.title
+				FROM chunks k JOIN documents d ON d.id = k.document_id
+				WHERE d.source LIKE 'memory:%'`,
+			)
+			.all();
+		const stale = rows.flatMap((row) => {
+			const context = chunkContext(
+				{
+					source: String(row.source),
+					title: typeof row.title === "string" ? row.title : undefined,
+				},
+				parseJson<string[]>(row.headings, []),
+			);
+			return context === String(row.context) ? [] : [{ row, context }];
+		});
+		if (stale.length === 0) return 0;
+		this.transaction(() => {
+			const remove = this.db.prepare(
+				"INSERT INTO chunks_fts(chunks_fts, rowid, text, context) VALUES ('delete', ?, ?, ?)",
+			);
+			const update = this.db.prepare(
+				"UPDATE chunks SET context = ? WHERE id = ?",
+			);
+			const insert = this.db.prepare(
+				"INSERT INTO chunks_fts(rowid, text, context) VALUES (?, ?, ?)",
+			);
+			for (const { row, context } of stale) {
+				remove.run(row.id, row.text, row.context);
+				update.run(context, row.id);
+				insert.run(row.id, row.text, context);
+			}
+		});
+		return stale.length;
+	}
+
+	/** Give a document another source key. Its id, chunks and vectors stay. */
+	renameSource(documentId: number, source: string): void {
+		this.db
+			.prepare("UPDATE documents SET source = ? WHERE id = ?")
+			.run(source, documentId);
+	}
+
+	/** Replace what is kept beside a document. Its text and chunks stay. */
+	updateMetadata(documentId: number, metadata: Record<string, unknown>): void {
+		this.db
+			.prepare("UPDATE documents SET metadata = ? WHERE id = ?")
+			.run(JSON.stringify(metadata), documentId);
+	}
+
 	deleteDocument(documentId: number): void {
 		this.transaction(() => {
 			this.db
@@ -442,6 +518,26 @@ export class LibraryStore {
 			.map((row) => this.toDocument(row));
 	}
 
+	/** Whether the document has its vectors for this model, at the size it returns now. */
+	isEmbedded(
+		documentId: number,
+		model: string,
+		dimension: number | undefined = this.knownDimension(model),
+	): boolean {
+		return Boolean(
+			this.db
+				.prepare(
+					`SELECT 1 AS ok FROM document_embeddings WHERE document_id = ? AND model = ?
+					${dimension !== undefined ? "AND dimension = ?" : ""}`,
+				)
+				.get(
+					documentId,
+					model,
+					...(dimension !== undefined ? [dimension] : []),
+				),
+		);
+	}
+
 	/** Record the vector size a model returned. True when it differs from the last one seen. */
 	noteDimension(model: string, dimension: number): boolean {
 		const known = this.knownDimension(model);
@@ -453,6 +549,23 @@ export class LibraryStore {
 			)
 			.run(model, dimension, new Date().toISOString());
 		return known !== undefined;
+	}
+
+	/** The vector the model last gave for the probe text, if it was ever asked. */
+	knownProbe(model: string): number[] | undefined {
+		const row = this.db
+			.prepare("SELECT probe FROM embedding_dimensions WHERE model = ?")
+			.get(model);
+		const probe = parseJson<unknown>(row?.probe, undefined);
+		return Array.isArray(probe) ? probe.map(Number) : undefined;
+	}
+
+	/** Keep the vector the model gave for the probe text, with its size. */
+	noteProbe(model: string, vector: readonly number[]): void {
+		this.noteDimension(model, vector.length);
+		this.db
+			.prepare("UPDATE embedding_dimensions SET probe = ? WHERE model = ?")
+			.run(JSON.stringify(vector), model);
 	}
 
 	knownDimension(model: string): number | undefined {

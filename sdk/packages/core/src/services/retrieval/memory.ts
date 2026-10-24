@@ -106,6 +106,28 @@ export function normalizeMemoryName(name: string): string {
 	return name.replace(/\s+/g, " ").trim().slice(0, MEMORY_NAME_MAX_CHARS);
 }
 
+/**
+ * The key a note is kept under: its text with spacing and case evened out,
+ * hashed. "Run the tests with vitest" noted twice, once with a capital and a
+ * trailing newline, is one note. The key is the source of the note's
+ * document, so it never changes with the chunk settings and neither does
+ * the note's id.
+ */
+export function memoryNoteKey(text: string): string {
+	const normalized = text
+		.normalize("NFKC")
+		.replace(/\s+/g, " ")
+		.trim()
+		.toLowerCase();
+	return `memory:${createHash("sha256").update(normalized).digest("hex").slice(0, 24)}`;
+}
+
+function tagsOfDocument(document: LibraryDocument): string[] {
+	return Array.isArray(document.metadata.tags)
+		? (document.metadata.tags as unknown[]).map(String)
+		: [];
+}
+
 export class Memory {
 	private readonly library: Library;
 	private readonly directory: string;
@@ -169,6 +191,46 @@ export class Memory {
 		}
 		if (changed) this.writeRegistry(registry);
 		store.ensureCollection(MAIN_MEMORY);
+		this.rekeyNotes();
+		store.reindexKeyedContexts();
+	}
+
+	/**
+	 * Bring notes kept under the first key (the exact text) to the key they
+	 * have now. Notes that turn out the same are one: the oldest stays, with
+	 * the tags of all of them, so its id is the one that keeps working.
+	 */
+	private rekeyNotes(): void {
+		const store = this.library.store;
+		for (const collection of store.listCollections()) {
+			const groups = new Map<string, LibraryDocument[]>();
+			for (const document of store.listDocuments(collection.id)) {
+				if (!document.source.startsWith("memory:")) continue;
+				const key = memoryNoteKey(this.textOf(document.id));
+				groups.set(key, [...(groups.get(key) ?? []), document]);
+			}
+			for (const [key, group] of groups) {
+				group.sort((a, b) => a.id - b.id);
+				const [survivor, ...duplicates] = group;
+				if (duplicates.length > 0) {
+					const tags = [...new Set(group.flatMap(tagsOfDocument))];
+					store.updateMetadata(survivor.id, { ...survivor.metadata, tags });
+					// The rows go now, before the key is taken; the vectors when
+					// the index is open.
+					for (const duplicate of duplicates) {
+						void this.library.removeDocument(duplicate.id).catch(() => {});
+					}
+				}
+				if (survivor.source !== key) store.renameSource(survivor.id, key);
+			}
+		}
+	}
+
+	private textOf(documentId: number): string {
+		return this.library.store
+			.documentChunks(documentId)
+			.map((chunk) => chunk.text)
+			.join("\n");
 	}
 
 	private freeName(wanted: string, taken: Set<string>): string {
@@ -282,24 +344,21 @@ export class Memory {
 	// ── The notes ───────────────────────────────────────────────────────
 
 	private toItem(document: LibraryDocument, memory: string): MemoryItem {
-		const text = this.library.store
-			.documentChunks(document.id)
-			.map((chunk) => chunk.text)
-			.join("\n");
 		const noted = document.metadata.createdAt;
 		return {
 			id: `m${document.id}`,
-			text,
+			text: this.textOf(document.id),
 			memory,
-			tags: Array.isArray(document.metadata.tags)
-				? (document.metadata.tags as unknown[]).map(String)
-				: [],
+			tags: tagsOfDocument(document),
 			// An imported note keeps the day it was noted, not the day it arrived.
 			createdAt: typeof noted === "string" && noted ? noted : document.addedAt,
 		};
 	}
 
-	/** Keep a note. The same text in the same memory is kept once. */
+	/**
+	 * Keep a note. The same text in the same memory is kept once, whatever
+	 * its spacing and case; noted again with new tags, it gains them.
+	 */
 	async remember(input: {
 		text: string;
 		/** @default the main memory */
@@ -311,7 +370,8 @@ export class Memory {
 		signal?: AbortSignal;
 	}): Promise<{
 		item: MemoryItem;
-		outcome: "added" | "unchanged";
+		/** "tagged": it was there, and the new tags were added to it. */
+		outcome: "added" | "tagged" | "unchanged";
 		note?: string;
 	}> {
 		this.migrate();
@@ -331,10 +391,28 @@ export class Memory {
 		const tags = [
 			...new Set((input.tags ?? []).map((tag) => tag.trim()).filter(Boolean)),
 		];
+		const source = memoryNoteKey(text);
+		const collection = this.library.store.ensureCollection(memory);
+		const existing = this.library.store.findDocument(collection.id, source);
+		if (existing) {
+			// Looked up by key, never added again: an add with other settings
+			// would replace the note, and give it a new id.
+			const held = tagsOfDocument(existing);
+			const merged = [...new Set([...held, ...tags])];
+			if (merged.length === held.length) {
+				return { item: this.toItem(existing, memory), outcome: "unchanged" };
+			}
+			this.library.store.updateMetadata(existing.id, {
+				...existing.metadata,
+				tags: merged,
+			});
+			const updated = this.library.store.getDocument(existing.id) ?? existing;
+			return { item: this.toItem(updated, memory), outcome: "tagged" };
+		}
 		const result = await this.library.addDocument(
 			memory,
 			{
-				source: `memory:${createHash("sha256").update(text).digest("hex").slice(0, 24)}`,
+				source,
 				text,
 				metadata: {
 					tags,
@@ -344,7 +422,7 @@ export class Memory {
 			NOTE_SETTINGS,
 		);
 		let note: string | undefined;
-		if (result.outcome !== "unchanged" && input.endpoints?.embedding) {
+		if (input.endpoints?.embedding) {
 			// Embedded now, so the next recall finds it by meaning. A failure
 			// here loses nothing: it is embedded with the next note.
 			try {
@@ -360,7 +438,7 @@ export class Memory {
 		}
 		return {
 			item: this.toItem(result.document, memory),
-			outcome: result.outcome === "unchanged" ? "unchanged" : "added",
+			outcome: "added",
 			...(note ? { note } : {}),
 		};
 	}

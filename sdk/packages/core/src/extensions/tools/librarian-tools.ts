@@ -542,6 +542,15 @@ async function embedNew(
 			collectionIds,
 			...(signal ? { signal } : {}),
 		});
+		// The book first, for the answer; then whatever else is missing
+		// vectors for this model, in the background: a model changed since
+		// the rest was embedded leaves it all to do, not only this book.
+		const embedding = config.embedding;
+		void library
+			.catchUpEmbeddings({ embedding, settings: config.settings })
+			.catch((error) =>
+				options.onError?.("[library] catching up stopped", error),
+			);
 		return embedded.skipped
 			? `Not embedded: ${embedded.skipped} Search is by keyword until it is.`
 			: `Embedded ${plural(embedded.chunks, "passage")} with ${config.embedding.model}, for search by meaning.`;

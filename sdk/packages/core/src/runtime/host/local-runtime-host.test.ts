@@ -2091,6 +2091,88 @@ describe("LocalRuntimeHost", () => {
 		expect(runtime.shutdown).not.toHaveBeenCalled();
 	});
 
+	it("puts recalled notes after the user's words, with what the conversation still holds and the window", async () => {
+		const sessionId = "sess-memory-recall";
+		const manifest = createManifest(sessionId);
+		const sessionService = {
+			ensureSessionsDir: vi.fn().mockReturnValue("/tmp/sessions"),
+			createRootSessionWithArtifacts: vi.fn().mockResolvedValue({
+				manifestPath: "/tmp/manifest.json",
+				messagesPath: "/tmp/messages.json",
+				manifest,
+			}),
+			persistSessionMessages: vi.fn(),
+			updateSessionStatus: vi.fn().mockResolvedValue({ updated: true }),
+			writeSessionManifest: vi.fn(),
+			listSessions: vi.fn().mockResolvedValue([]),
+			deleteSession: vi.fn().mockResolvedValue({ deleted: true }),
+		};
+		const runtime = { tools: [], shutdown: vi.fn() };
+		// An earlier message of this session that still carries note m4.
+		const earlier = [
+			{
+				role: "user",
+				content: [
+					{
+						type: "text",
+						text: "First?\n\n<recalled_memory>\nNotes\n\n[m4] 2026-10-01, main\nUse vitest.\n</recalled_memory>",
+					},
+				],
+			},
+		];
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn().mockResolvedValue(createResult()),
+			getMessages: vi.fn().mockReturnValue(earlier),
+			getAgentId: vi.fn().mockReturnValue("agent-root-1"),
+			getConversationId: vi.fn().mockReturnValue("conv-root-1"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		const recallMemory = vi.fn(async () => ({
+			context:
+				"<recalled_memory>\n[m9] 2026-10-02, main\nBun 1.4.2.\n</recalled_memory>",
+			ids: ["m9"],
+			expanded: false,
+			summary: "Recalled 1 note from Memory (m9).",
+		}));
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: sessionService as never,
+			runtimeBuilder: { build: vi.fn().mockReturnValue(runtime) } as never,
+			createAgent: () => agent as never,
+		});
+
+		await manager.startSession(
+			normalizeStartInput({
+				config: createConfig({
+					sessionId,
+					contextWindow: 8192,
+					recallMemory,
+				}),
+				prompt: "How is it built here?",
+				interactive: true,
+			}),
+		);
+
+		expect(recallMemory).toHaveBeenCalledWith({
+			prompt: "How is it built here?",
+			cwd: "/tmp/project",
+			sessionId,
+			inConversation: ["m4"],
+			contextWindow: 8192,
+		});
+		// With messages already there, the turn continues the conversation.
+		const call = agent.run.mock.calls[0] ?? agent.continue.mock.calls[0];
+		const sent = String(call?.[0] ?? "");
+		expect(sent.indexOf("How is it built here?")).toBeGreaterThanOrEqual(0);
+		expect(sent.indexOf("[m9]")).toBeGreaterThan(
+			sent.indexOf("How is it built here?"),
+		);
+	});
+
 	it("disposes idle interactive sessions without changing status", async () => {
 		const sessionId = "sess-interactive-dispose";
 		const manifest = createManifest(sessionId);

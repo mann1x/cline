@@ -127,6 +127,51 @@ describe("Library", () => {
 		text: "# Cooling\n\nThe coolant pump is held by four bolts.\n\n# Oil\n\nChange the oil and the filter together.\n",
 	};
 
+	it("says a search ran by keyword alone when an embedder is set and LanceDB is not there", async () => {
+		const { send } = embedder();
+		const library = open(send);
+		await library.addDocument("manuals", manual);
+		const result = await library.search("coolant pump", { embedding });
+		expect(result.mode).toBe("keyword");
+		expect(result.hits.length).toBeGreaterThan(0);
+		expect(result.notes).toEqual([
+			expect.stringMatching(
+				/^Semantic search did not run \(.+\); searched by keyword\.$/,
+			),
+		]);
+		// Asked for keywords alone, nothing to say.
+		expect((await library.search("coolant pump")).notes).toEqual([]);
+	});
+
+	it("tells a model re-pulled under the same name and size, and forgets what it embedded", async () => {
+		let shift = 0;
+		const send = (async (
+			_input: string | URL | Request,
+			init?: RequestInit,
+		) => {
+			const input = JSON.parse(String(init?.body)).input as string[];
+			return Response.json({
+				data: input.map((_text, index) => ({
+					index,
+					embedding: shift ? [0, 1, 0] : [1, 0, 0],
+				})),
+			});
+		}) as typeof fetch;
+		const library = open(send);
+		const added = await library.addDocument("manuals", manual);
+		expect(await library.checkModel(embedding)).toBe(false);
+		library.store.markEmbedded(added.document.id, embedding.model, 3);
+		// Asked again, the same answer: the same model.
+		expect(await library.checkModel(embedding)).toBe(false);
+		expect(library.store.counts(embedding.model).embeddedDocuments).toBe(1);
+		shift = 1;
+		expect(await library.checkModel(embedding)).toBe(true);
+		expect(library.store.counts(embedding.model).embeddedDocuments).toBe(0);
+		expect(
+			library.store.documentsWithoutEmbedding(embedding.model),
+		).toHaveLength(1);
+	});
+
 	it("is searchable by keyword as soon as a document is added, with no LanceDB", async () => {
 		open();
 		const added = await library.addDocument("manuals", manual);
@@ -209,6 +254,67 @@ describe("Library", () => {
 			expect(result.hits[0].source).toBe("cooling.md");
 			expect(result.hits[0].vectorRank).toBe(1);
 			expect(result.hits[0].keywordRank).toBeUndefined();
+		});
+
+		it("catches up every collection, and embeds them all again for a re-pulled model", async () => {
+			let pulled = 0;
+			const send = (async (
+				_input: string | URL | Request,
+				init?: RequestInit,
+			) => {
+				const input = JSON.parse(String(init?.body)).input as string[];
+				return Response.json({
+					data: input.map((text, index) => ({
+						index,
+						// The re-pulled model points everything another way.
+						embedding: pulled
+							? toyVector(text).map((value, at) =>
+									at === 0 ? value + 1 : value,
+								)
+							: toyVector(text),
+					})),
+				});
+			}) as typeof fetch;
+			open(send, runtimeDirectory);
+			await fill();
+			await library.addDocument("notes", {
+				source: "spare.md",
+				text: "The spare wheel is under the boot floor.",
+			});
+			const book = library.store
+				.listCollections()
+				.find((collection) => collection.name === "notes");
+			// The one book, as library_add embeds it...
+			await library.embedPending({
+				embedding,
+				collectionIds: [book?.id ?? -1],
+			});
+			expect(library.store.counts("toy").embeddedDocuments).toBe(1);
+			// ...then everything else.
+			const rest = await library.catchUpEmbeddings({ embedding });
+			expect(rest.documents).toBe(3);
+			expect(library.store.counts("toy").embeddedDocuments).toBe(4);
+			await library.close();
+
+			pulled = 1;
+			open(send, runtimeDirectory);
+			const again = await library.catchUpEmbeddings({ embedding });
+			expect(again.documents).toBe(4);
+			const sets = await library.vectorSets("toy");
+			expect(sets.map((set) => set.vectors)).toEqual([4]);
+		});
+
+		it("lets two runs at once embed each document once", async () => {
+			const { send } = embedder();
+			open(send, runtimeDirectory);
+			await fill();
+			const [a, b] = await Promise.all([
+				library.embedPending({ embedding }),
+				library.embedPending({ embedding }),
+			]);
+			expect(a.documents + b.documents).toBe(3);
+			const sets = await library.vectorSets("toy");
+			expect(sets.map((set) => set.vectors)).toEqual([3]);
 		});
 
 		it("picks up where a failed run stopped, without duplicates", async () => {

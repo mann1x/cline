@@ -18,7 +18,7 @@ import {
 	type MemoryToolsConfig,
 } from "../../extensions/tools/memory-tools";
 import { Library } from "./library";
-import { MEMORY_MAX_CHARS, Memory } from "./memory";
+import { MEMORY_MAX_CHARS, Memory, memoryNoteKey } from "./memory";
 
 describe("resolveMemorySettings", () => {
 	it("gives the defaults for nothing stored, and keeps values in range", () => {
@@ -360,6 +360,129 @@ describe("Memory", () => {
 			]);
 		} finally {
 			await old.close();
+		}
+	});
+
+	it("does not match every note on the word memory", async () => {
+		// A note's source is a key, memory:<hash>; indexed as a file name it
+		// put "memory" in every note, and this query matched them all.
+		await memory.remember({ text: "Two-space indentation everywhere." });
+		await memory.remember({ text: "Release from full-build-release only." });
+		const found = await memory.recall("memory leak parser");
+		expect(found.items).toEqual([]);
+	});
+
+	it("takes the word memory out of notes indexed before, once", async () => {
+		const directory = join(root, "before");
+		const library = new Library({
+			directory,
+			runtimeDirectory: join(root, "no-runtime"),
+		});
+		await library.addDocument(
+			"main",
+			{ source: "memory:aaaa", text: "Two-space indentation.", metadata: {} },
+			{ ...DEFAULT_LIBRARY_SETTINGS, enabled: true },
+		);
+		// As the first build indexed it: the key as context.
+		const db = library.store.database;
+		const row = db.prepare("SELECT id, text FROM chunks").get() as {
+			id: number;
+			text: string;
+		};
+		db.prepare(
+			"INSERT INTO chunks_fts(chunks_fts, rowid, text, context) VALUES ('delete', ?, ?, '')",
+		).run(row.id, row.text);
+		db.prepare("UPDATE chunks SET context = 'memory:aaaa' WHERE id = ?").run(
+			row.id,
+		);
+		db.prepare(
+			"INSERT INTO chunks_fts(rowid, text, context) VALUES (?, ?, 'memory:aaaa')",
+		).run(row.id, row.text);
+		expect(library.store.searchKeywords("memory")).toHaveLength(1);
+		await library.close();
+
+		const reopened = new Memory({
+			directory,
+			runtimeDirectory: join(root, "no-runtime"),
+		});
+		try {
+			expect((await reopened.recall("memory")).items).toEqual([]);
+			expect((await reopened.recall("indentation")).items).toHaveLength(1);
+		} finally {
+			await reopened.close();
+		}
+	});
+
+	it("keeps a note once whatever its spacing and case, and adds new tags to it", async () => {
+		const first = await memory.remember({
+			text: "Run the tests with vitest.",
+			tags: ["testing"],
+		});
+		const again = await memory.remember({
+			text: "  run the tests   with Vitest.\n",
+			tags: ["testing"],
+		});
+		expect(again.outcome).toBe("unchanged");
+		expect(again.item.id).toBe(first.item.id);
+		const tagged = await memory.remember({
+			text: "Run the tests with vitest.",
+			tags: ["build", "testing"],
+		});
+		expect(tagged.outcome).toBe("tagged");
+		expect(tagged.item).toMatchObject({
+			id: first.item.id,
+			tags: ["testing", "build"],
+			text: "Run the tests with vitest.",
+		});
+		expect(memory.list()).toHaveLength(1);
+	});
+
+	it("keeps a note's id when it is noted again with other chunk settings", async () => {
+		const first = await memory.remember({ text: "Bun 1.4.2 builds it." });
+		// What changed the id: the same source added again with another
+		// content hash was "replaced", under a new document id.
+		const library = (memory as unknown as { library: Library }).library;
+		const document = library.store.getDocument(Number(first.item.id.slice(1)));
+		expect(document?.source).toBe(memoryNoteKey("Bun 1.4.2 builds it."));
+		const again = await memory.remember({ text: "Bun 1.4.2 builds it." });
+		expect(again.item.id).toBe(first.item.id);
+	});
+
+	it("brings notes kept under the old key to the new one, merging the ones that are the same", async () => {
+		const directory = join(root, "old-keys");
+		const library = new Library({
+			directory,
+			runtimeDirectory: join(root, "no-runtime"),
+		});
+		const settings = { ...DEFAULT_LIBRARY_SETTINGS, enabled: true };
+		const add = (source: string, text: string, tags: string[]) =>
+			library.addDocument(
+				"main",
+				{ source, text, metadata: { tags } },
+				settings,
+			);
+		const oldest = await add("memory:old1", "Use vitest.", ["testing"]);
+		await add("memory:old2", "use  Vitest.", ["build"]);
+		// One already under the new key: renaming the others must not collide.
+		await add(memoryNoteKey("Use vitest."), "Use vitest.", ["ci"]);
+		await add("memory:old3", "Two-space indentation.", []);
+		await library.close();
+
+		const reopened = new Memory({
+			directory,
+			runtimeDirectory: join(root, "no-runtime"),
+		});
+		try {
+			const notes = reopened.list();
+			expect(notes).toHaveLength(2);
+			const vitest = notes.find((note) => note.text === "Use vitest.");
+			expect(vitest?.id).toBe(`m${oldest.document.id}`);
+			expect(vitest?.tags.sort()).toEqual(["build", "ci", "testing"]);
+			expect(
+				(await reopened.remember({ text: "Two-space indentation." })).outcome,
+			).toBe("unchanged");
+		} finally {
+			await reopened.close();
 		}
 	});
 });
