@@ -95,7 +95,21 @@ function strikeWarning(remaining: number): string {
  * Kept to one short paragraph each. This rides on a tool result the model is
  * already reading, and a wall of advice under a failed call is skimmed.
  */
-function steeringFor(attempt: number, toolName: string): string {
+function steeringFor(
+	attempt: number,
+	toolName: string,
+	copied = false,
+): string {
+	// `new_text` a copy of `old_text` lands exactly where the model meant and
+	// changes nothing, so "look at the target" and "address it by position"
+	// both send it after the wrong thing. Measured on pandorum session
+	// 1792835223239_4odkd (jackodf-9b): three calls retyping the whole of a
+	// 387-character line 90, each with the intent "Remove extra }; from dDec
+	// closing" and none with the `};` removed; the guard's second answer told
+	// it the call was not landing where it thought.
+	if (copied && attempt <= 2 && EDITING_TOOL_NAMES.has(toolName)) {
+		return "Your `new_text` is the same text as your `old_text`, so this call finds what you meant and changes none of it: the change you described was never written into `new_text`. On a long line, do not send the whole line again — name the line with `start_line` and send as `old_text` only the few characters that change, with `new_text` as they should read.";
+	}
 	if (attempt <= 1) {
 		return `Before sending anything else: look at what this call targets as it is right now, with a tool that reads rather than writes, and compare that against what you meant it to be. If it already says what you wanted, this piece is done — record that and move to the next one.`;
 	}
@@ -108,6 +122,16 @@ function steeringFor(attempt: number, toolName: string): string {
 			: `If the answer matters, change what produces it rather than asking again. Nothing about this call has changed, so nothing about its answer can — something has to happen first: make the edit, or use a different tool that answers the same question from the file itself.`;
 	}
 	return `Leave this alone now. Take the next thing that is still wrong and work on that; come back here only with something you have not already tried. If there is nothing else wrong, say in one sentence what is blocking you and stop — that is more use than another attempt.`;
+}
+
+/** An edit whose `new_text` repeats its `old_text`: one that can only ever be a no-op. */
+function copiesItsAnchor(input: unknown): boolean {
+	if (!input || typeof input !== "object") return false;
+	const { old_text: oldText, new_text: newText } = input as Record<
+		string,
+		unknown
+	>;
+	return typeof oldText === "string" && oldText !== "" && oldText === newText;
 }
 
 /**
@@ -148,6 +172,13 @@ export interface LoopDetectionState {
 	futileStrikes: Map<string, number>;
 	/** The call awaiting its outcome, so the result can be attributed. */
 	pendingKey: string;
+	/** The tool of the call awaiting its outcome. */
+	pendingName: string;
+	/**
+	 * Per signature, the files its call names. A write that lands on one of
+	 * them makes every verdict on those calls stale.
+	 */
+	keyPaths: Map<string, string[]>;
 	/**
 	 * Per signature, the last answer it got and how many times in a row that
 	 * same answer came back. The no-progress half of the detector: a call whose
@@ -162,6 +193,8 @@ export function createLoopDetectionState(): LoopDetectionState {
 		lastToolName: "",
 		lastToolSignature: "",
 		consecutiveIdenticalCount: 0,
+		pendingName: "",
+		keyPaths: new Map(),
 		barrenCounts: new Map(),
 		futileKeys: new Set(),
 		appliedKeys: new Set(),
@@ -182,7 +215,38 @@ export function resetLoopDetectionState(state: LoopDetectionState): void {
 	state.settledKeys.clear();
 	state.futileStrikes.clear();
 	state.pendingKey = "";
+	state.pendingName = "";
+	state.keyPaths.clear();
 	state.resultCycles.clear();
+}
+
+/**
+ * The files a call names, folded so `C:\a\b.html` and `c:/a/b.html` agree:
+ * `path`, `file_path`, `paths` and the `path` of each of `files`.
+ */
+function namedPaths(input: unknown): string[] {
+	if (!input || typeof input !== "object") return [];
+	const held = input as Record<string, unknown>;
+	const found: unknown[] = [held.path, held.file_path];
+	if (Array.isArray(held.paths)) found.push(...held.paths);
+	if (Array.isArray(held.files)) {
+		for (const file of held.files) {
+			found.push(
+				file && typeof file === "object"
+					? (file as Record<string, unknown>).path
+					: file,
+			);
+		}
+	}
+	return [
+		...new Set(
+			found
+				.filter(
+					(path): path is string => typeof path === "string" && path !== "",
+				)
+				.map((path) => path.replace(/\\/g, "/").toLowerCase()),
+		),
+	];
 }
 
 function sortKeys(value: unknown): unknown {
@@ -468,6 +532,9 @@ export class LoopDetectionTracker {
 		const signature = toolCallSignature(call.input);
 		const key = `${call.name}:${signature}`;
 		this.state.pendingKey = key;
+		this.state.pendingName = call.name;
+		const paths = namedPaths(call.input);
+		if (paths.length > 0) this.state.keyPaths.set(key, paths);
 
 		// A call the tool has already declared a no-op is on a countdown. The
 		// barren counter is for calls that fail for reasons that might change — a
@@ -502,7 +569,7 @@ export class LoopDetectionTracker {
 				this.state.settledKeys.add(key);
 				return {
 					kind: "soft",
-					message: `${explanation}\n\n${steeringFor(strike, call.name)}\n\n${strikeWarning(remaining)}`,
+					message: `${explanation}\n\n${steeringFor(strike, call.name, copiesItsAnchor(call.input))}\n\n${strikeWarning(remaining)}`,
 				};
 			}
 			return {
@@ -618,6 +685,27 @@ ${steeringFor(cycle.repeats, call.name)}`,
 			);
 		}
 		if (productive) {
+			// A write that landed changes what every other call on that file
+			// would get: an edit refused as a no-op, an anchor that was not
+			// there. Those verdicts were about the file before this write, so
+			// they go with it, and the same call sent again is judged afresh.
+			//
+			// The no-progress cycle is kept. It is keyed on the answer, so a
+			// call the change really affects gets a new answer and restarts it
+			// by itself; and it is what stops a restore-and-reapply carousel,
+			// where every turn is a write that lands.
+			if (WRITE_CLASS_TOOL_NAMES.has(this.state.pendingName)) {
+				const written = this.state.keyPaths.get(key) ?? [];
+				for (const [other, paths] of this.state.keyPaths) {
+					if (other === key || !paths.some((path) => written.includes(path))) {
+						continue;
+					}
+					this.state.barrenCounts.delete(other);
+					this.state.futileKeys.delete(other);
+					this.state.settledKeys.delete(other);
+					this.state.futileStrikes.delete(other);
+				}
+			}
 			this.state.barrenCounts.delete(key);
 			this.state.futileKeys.delete(key);
 			// The warning is spent with the episode it belonged to: if this

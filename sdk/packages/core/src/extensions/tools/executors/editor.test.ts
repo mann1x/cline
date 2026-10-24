@@ -1638,6 +1638,65 @@ describe("createEditorExecutor", () => {
 		});
 	});
 
+	// Session 4odkd: the whole of a 387-character line sent back unchanged,
+	// three times, with "Remove extra };" as the intent.
+	describe("an edit whose new_text repeats its old_text", () => {
+		const long = `    dDec(c,x){this.dc.forEach(d=>{${"c.fillRect(d.x-x,d.y-20,8,20);".repeat(6)}c.fill();}});});}`;
+
+		it("says the change was never written, and how to send a long line's few characters", async () => {
+			await withTempFile(`a\n${long}\nb`, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const refused = editor(
+					{ path: filePath, old_text: long, new_text: long },
+					dir,
+					context,
+				);
+				await expect(refused).rejects.toThrow(
+					"Your `new_text` is the same text as your `old_text`, character for character: the change you meant was never written into it.",
+				);
+				await expect(refused).rejects.toThrow(
+					`A line of ${long.length} characters is too long to retype`,
+				);
+				await expect(refused).rejects.toThrow(
+					'{start_line: 2, old_text: ");}});});}", new_text:',
+				);
+
+				// What it suggests is an edit that applies.
+				await editor(
+					{
+						path: filePath,
+						start_line: 2,
+						old_text: ");}});});}",
+						new_text: ");}});}",
+					},
+					dir,
+					context,
+				);
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+					`a\n${long.slice(0, -3)}\nb`,
+				);
+			});
+		});
+
+		it("on a short line, says only that the change is missing", async () => {
+			await withTempFile("a\nconst x = 1;\nb", async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				const refused = editor(
+					{
+						path: filePath,
+						old_text: "const x = 1;",
+						new_text: "const x = 1;",
+					},
+					dir,
+					context,
+				);
+				await expect(refused).rejects.toThrow(
+					"the change you meant was never written into it. Write the change into `new_text` and send it once.",
+				);
+			});
+		});
+	});
+
 	describe("choosing among repeated matches", () => {
 		it("replaces the occurrence asked for and leaves the others", async () => {
 			await withTempFile("x\nsame\ny\nsame\nz\nsame", async (filePath, dir) => {

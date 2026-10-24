@@ -70,6 +70,11 @@ describe("LoopDetectionTracker", () => {
 		expect(kinds).toContain("hard");
 	});
 
+	// A read between the repeats, as in the session that ran twelve refused
+	// edits. An edit that lands in between is another matter: it changes the
+	// file, so the call is judged afresh (below).
+	const reading = { name: "read_files", input: { files: [{ path: "a.ts" }] } };
+
 	it("stops a call that keeps failing even when other calls interrupt it", () => {
 		const tracker = new LoopDetectionTracker();
 
@@ -77,7 +82,7 @@ describe("LoopDetectionTracker", () => {
 			expect(tracker.inspect(call).kind).not.toBe("hard");
 			tracker.noteOutcome(false);
 			// The interruption that used to reset everything.
-			tracker.inspect(other);
+			tracker.inspect(reading);
 			tracker.noteOutcome(true);
 		}
 
@@ -99,7 +104,7 @@ describe("LoopDetectionTracker", () => {
 			expect(verdict.kind).toBe("soft");
 			remaining.push(verdict.message ?? "");
 			tracker.noteOutcome(false);
-			tracker.inspect(other);
+			tracker.inspect(reading);
 			tracker.noteOutcome(true);
 		}
 
@@ -302,6 +307,83 @@ describe("a call the tool has declared a no-op", () => {
 		expect(second.message).toContain(
 			"unchanged from the one that was just refused",
 		);
+	});
+
+	// Session 4odkd: `new_text` a copy of `old_text`, refused as a no-op three
+	// times, and the second answer said the call was not landing where the
+	// model thought. It was landing exactly there.
+	it("says the change was never written, not that the call missed, when new_text repeats old_text", () => {
+		const tracker = new LoopDetectionTracker();
+		const copied = {
+			name: "editor",
+			input: { path: "a.js", old_text: "x();});}", new_text: "x();});}" },
+		};
+		const messages: string[] = [];
+		for (let attempt = 0; attempt < 3; attempt++) {
+			messages.push(tracker.inspect(copied).message ?? "");
+			tracker.noteOutcome(false, true);
+		}
+		const said = messages.join("\n");
+		expect(said).toContain(
+			"the change you described was never written into `new_text`",
+		);
+		expect(said).not.toContain("not landing where you think");
+	});
+
+	// A verdict on a call is a verdict on the file as it was. Once another
+	// edit lands on that file, the same call may well be right.
+	it("judges a call afresh after another edit lands on its file", () => {
+		const tracker = new LoopDetectionTracker();
+		const noOp = {
+			name: "editor",
+			input: { file_path: "C:\\repo\\game.html", old_text: "a", new_text: "b" },
+		};
+		const other = {
+			name: "editor",
+			input: { file_path: "c:/repo/game.html", start_line: 3, new_text: "x" },
+		};
+
+		tracker.inspect(noOp);
+		tracker.noteOutcome(false, true);
+		expect(tracker.inspect(noOp).kind).toBe("soft");
+		tracker.noteOutcome(false, true);
+
+		// A different edit to the same file applies.
+		expect(tracker.inspect(other).kind).toBe("ok");
+		tracker.noteOutcome(true);
+
+		// The refusals were about the file before it: no warning, no strikes.
+		expect(tracker.inspect(noOp)).toEqual({ kind: "ok" });
+	});
+
+	it("still stops a failing edit answered the same way, with landed edits between", () => {
+		const tracker = new LoopDetectionTracker();
+		const call = { name: "editor", input: { path: "a.ts", start_line: 94 } };
+		const other = { name: "editor", input: { path: "a.ts", start_line: 112 } };
+		const kinds: string[] = [];
+		for (let turn = 0; turn < 8; turn += 1) {
+			kinds.push(tracker.inspect(call).kind);
+			tracker.noteOutcome(false, false, "old_text not found on line 94");
+			tracker.inspect(other);
+			tracker.noteOutcome(true, false, `revision #${turn + 2}`);
+		}
+		expect(kinds).toContain("hard");
+	});
+
+	it("keeps the verdict when the edit that landed was on another file", () => {
+		const tracker = new LoopDetectionTracker();
+		const noOp = {
+			name: "editor",
+			input: { file_path: "a.html", old_text: "a", new_text: "b" },
+		};
+		tracker.inspect(noOp);
+		tracker.noteOutcome(false, true);
+		tracker.inspect({
+			name: "editor",
+			input: { file_path: "b.html", start_line: 1, new_text: "x" },
+		});
+		tracker.noteOutcome(true);
+		expect(tracker.inspect(noOp).kind).toBe("soft");
 	});
 
 	// An ordinary failure may stop failing — a range that had moved, a read that

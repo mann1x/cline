@@ -652,6 +652,9 @@ async function replaceInFile(
 			options.noteNoOp?.(
 				`text\u0000${filePath}\u0000${oldStr}\u0000${newStr ?? ""}`,
 			),
+			normalizedOldStr === normalizedNewStr
+				? copiedAnchorHint(content, normalizedOldStr)
+				: undefined,
 		);
 	}
 
@@ -777,11 +780,43 @@ export const NO_CHANGE_ERROR_PREFIX = "No change: ";
  */
 export const DUPLICATED_RANGE_ERROR_PREFIX = "Duplicated instead of replaced: ";
 
+/** Past this, a line is too long to retype: send the part that changes. */
+const RETYPED_LINE_CHARS = 120;
+
+/**
+ * What to say when `new_text` is `old_text` again, character for character.
+ *
+ * The call lands where the model meant and the change it described is not in
+ * it, so "compare against the file" sends it after a difference that is not
+ * there. Measured on pandorum session 1792835223239_4odkd (jackodf-9b): three
+ * calls retyping the whole of a 387-character line, intent "Remove extra };
+ * from dDec closing", none with the `};` removed. A 9B model copying a long
+ * minified line copies it; what it can do is change a few characters, and
+ * `start_line` with a short `old_text` is found inside that line.
+ */
+function copiedAnchorHint(content: string, anchor: string): string {
+	const said =
+		" Your `new_text` is the same text as your `old_text`, character for character: the change you meant was never written into it.";
+	const lines = anchor.split("\n");
+	const longest = lines.reduce((a, b) => (b.length > a.length ? b : a), "");
+	if (longest.length <= RETYPED_LINE_CHARS) {
+		return `${said} Write the change into \`new_text\` and send it once.`;
+	}
+	const index = content.indexOf(longest);
+	const line =
+		index < 0 ? undefined : content.slice(0, index).split("\n").length;
+	const trimmed = longest.trimEnd();
+	const closers = /[)\]};,]{3,}$/.exec(trimmed)?.[0];
+	const tail = closers ?? trimmed.slice(-16);
+	return `${said} A line of ${longest.length} characters is too long to retype: send only the few characters that change, with the line they are on — for example \`{start_line: ${line ?? "<its line>"}, old_text: ${JSON.stringify(tail)}, new_text: <those characters as they should read>}\`. A short \`old_text\` with \`start_line\` is found inside that line.`;
+}
+
 function noChangeMessage(
 	filePath: string,
 	why: string,
 	quoted?: string,
 	repeats?: number,
+	copied?: string,
 ): never {
 	// The instruction to compare used to end "differs from the text quoted back
 	// to you" while quoting nothing at all. Measured on a live session: the
@@ -789,9 +824,11 @@ function noChangeMessage(
 	// re-reading the file — "the editor said No change but then showed a diff …
 	// let me read those lines VERY carefully". An instruction to diff against
 	// something has to carry the something.
-	const comparison = quoted
-		? ` If you meant to change something there, work out how the text you want differs from what those lines hold now — shown below — and send that; if the fix belongs on a different line, edit that line instead.\n\n${quoted}`
-		: ` If you meant to change something there, work out how the text you want differs from what is already in the file at that spot and send that; if the fix belongs on a different line, edit that line instead.`;
+	const comparison =
+		copied ??
+		(quoted
+			? ` If you meant to change something there, work out how the text you want differs from what those lines hold now — shown below — and send that; if the fix belongs on a different line, edit that line instead.\n\n${quoted}`
+			: ` If you meant to change something there, work out how the text you want differs from what is already in the file at that spot and send that; if the fix belongs on a different line, edit that line instead.`);
 	// The count goes first, before the explanation the model has already read
 	// and acted against. A second identical refusal is not a second chance to
 	// re-read the same paragraph: it is evidence that the paragraph did not

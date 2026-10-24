@@ -3,6 +3,7 @@ import { FilePlus, FileText, FileX, SquareArrowOutUpRightIcon } from "lucide-rea
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
 import { FileServiceClient } from "@/services/grpc-client"
+import { type DiffSegment, diffLineCode, markDiffLines } from "./diff-chars"
 
 interface Patch {
 	action: string
@@ -136,6 +137,10 @@ const FileBlock = memo<{ file: Patch; isStreaming: boolean; startLineNumber?: nu
 			})
 		}, [file.lines, startLineNumber])
 
+		// What each removed and added line shares with the other side, so a copy
+		// reads as a copy and only what really changed is green or red.
+		const segments = useMemo(() => markDiffLines(file.lines), [file.lines])
+
 		return (
 			<div className="bg-code rounded-xs border border-editor-group-border overflow-hidden">
 				<button
@@ -171,7 +176,12 @@ const FileBlock = memo<{ file: Patch; isStreaming: boolean; startLineNumber?: nu
 						ref={scrollContainerRef}>
 						<div className="font-mono text-xs w-max min-w-full">
 							{file.lines.map((line, index) => (
-								<DiffLine key={`${index}-${line.slice(0, 20)}`} line={line} lineNumber={lineNumbers?.[index]} />
+								<DiffLine
+									key={`${index}-${line.slice(0, 20)}`}
+									line={line}
+									lineNumber={lineNumbers?.[index]}
+									segments={segments[index]}
+								/>
 							))}
 						</div>
 					</div>
@@ -198,13 +208,16 @@ const DiffStats = memo<{ additions: number; deletions: number }>(({ additions, d
 ))
 
 // Diff line component with Tailwind styling - indicator bar, line number, prefix, code
-const DiffLine = memo<{ line: string; lineNumber?: number; showLineNumberColumn?: boolean }>(
-	({ line, lineNumber, showLineNumberColumn = true }) => {
+// Characters both sides hold are yellow: an added line that is all yellow is
+// the old text sent back unchanged, not a change.
+const SAME_TEXT_CLASS = "text-yellow-400"
+
+const DiffLine = memo<{ line: string; lineNumber?: number; showLineNumberColumn?: boolean; segments?: DiffSegment[] }>(
+	({ line, lineNumber, showLineNumberColumn = true, segments }) => {
 		const isAddition = line.startsWith("+")
 		const isDeletion = line.startsWith("-")
-		const hasSpacePrefix = line.startsWith("+ ") || line.startsWith("- ")
 		// Extract just the code content (without +/- prefix)
-		const code = isAddition || isDeletion ? line.slice(hasSpacePrefix ? 2 : 1) : line
+		const code = diffLineCode(line)
 		// Get the prefix character to display
 		const prefix = isAddition ? "+" : isDeletion ? "-" : " "
 
@@ -250,7 +263,13 @@ const DiffLine = memo<{ line: string; lineNumber?: number; showLineNumberColumn?
 						isDeletion && "text-red-400",
 						!isAddition && !isDeletion && "text-editor-foreground",
 					)}>
-					{code}
+					{segments
+						? segments.map((segment, index) => (
+								<span className={segment.same ? SAME_TEXT_CLASS : undefined} key={index}>
+									{segment.text}
+								</span>
+							))
+						: code}
 				</span>
 			</div>
 		)
