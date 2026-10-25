@@ -1,5 +1,6 @@
-import * as vscode from "vscode"
 import type { DirectoryEntry, WorkspaceLister } from "@cline/core"
+import * as vscode from "vscode"
+import { isLocalFolder } from "./hostbridge/workspace/getWorkspacePaths"
 
 /**
  * The VS Code half of `list_files`.
@@ -16,7 +17,7 @@ import type { DirectoryEntry, WorkspaceLister } from "@cline/core"
 export function createVscodeWorkspaceLister(): WorkspaceLister {
 	return {
 		roots(): string[] {
-			return (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath)
+			return (vscode.workspace.workspaceFolders ?? []).filter(isLocalFolder).map((folder) => folder.uri.fsPath)
 		},
 
 		async readDirectory(absolutePath: string): Promise<DirectoryEntry[]> {

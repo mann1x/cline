@@ -248,6 +248,12 @@
 				"icon": "$(cloud-download)"
 			},
 			{
+				"command": "cerebriline.reopenSshFsWithRemoteSsh",
+				"title": "Reopen SSH FS Folder with Remote-SSH",
+				"category": "Cerebriline",
+				"icon": "$(remote)"
+			},
+			{
 				"command": "cerebriline.copyFormatted",
 				"title": "Copy Formatted",
 				"category": "Cerebriline"

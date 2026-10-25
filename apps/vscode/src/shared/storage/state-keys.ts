@@ -81,6 +81,9 @@ const GLOBAL_STATE_FIELDS = {
 	taskHistory: { default: [] as HistoryItem[], isAsync: true },
 	userInfo: { default: undefined as UserInfo | undefined },
 	favoritedModelIds: { default: [] as string[] },
+	// SSH FS config names whose "reopen with Remote-SSH" offer was turned off
+	// (hosts/vscode/remote/sshfs-bridge.ts).
+	sshFsBridgeDismissed: { default: [] as string[] },
 	mcpMarketplaceEnabled: { default: true as boolean },
 	mcpResponsesCollapsed: { default: false as boolean },
 	terminalReuseEnabled: { default: true as boolean },

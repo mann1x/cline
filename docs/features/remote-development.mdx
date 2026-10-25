@@ -1,7 +1,7 @@
 ---
 title: "Remote Development (SSH)"
 sidebarTitle: "Remote Development"
-description: "Work on a project that lives on another machine: what runs where under Remote-SSH, what to set up, and where SSH FS stands."
+description: "Work on a project that lives on another machine: what runs where under Remote-SSH and SSH FS, how to set up Remote-SSH, and how Cerebriline moves an SSH FS folder to it."
 ---
 
 A project often lives on a bigger machine than the one you type on: a build
@@ -12,13 +12,14 @@ agent is not where the files are shown but **where its tools run**.
 | | Remote-SSH (Microsoft) | SSH FS (Kelvin Schoofs) |
 |---|---|---|
 | Where Cerebriline runs | On the remote host | On your computer |
-| Reading and editing files | On the remote host | Not supported yet |
-| `run_commands` and terminals | On the remote host | Not supported yet |
-| Search, `check_file`, checkpoints | On the remote host | Not supported yet |
+| Reading and editing files | On the remote host | Not reachable |
+| `run_commands` and terminals | On the remote host | Not reachable |
+| Search, `check_file`, checkpoints | On the remote host | Not reachable |
 | Provider URL `localhost` means | The remote host | Your computer |
 
 **Use Remote-SSH.** It is the supported way to let the model work on another
-machine, and everything below that heading has been checked end to end.
+machine. When you open a folder with SSH FS, Cerebriline offers to reopen it
+with Remote-SSH for you ([below](#ssh-fs)).
 
 ## Remote-SSH
 
@@ -106,15 +107,70 @@ and SSH FS shows the remote files as a folder (`ssh://<config>/<path>`) that it
 reads and writes over SFTP. It has no API that another extension can use to run
 commands, and its terminal reports neither output nor exit codes back.
 
-Cerebriline's tools work on files and processes of the machine they run on.
-With an SSH FS folder open, that machine is your computer, and the folder's
-path names a directory that does not exist there:
+Cerebriline's tools work on the files and processes of the machine they run
+on, which with an SSH FS folder is your computer. So Cerebriline does not
+treat an SSH FS folder as its workspace (a task started there runs in the
+shared chat workspace instead), and offers to move the folder to Remote-SSH.
 
-- File reads, edits and searches fail, or, if a local folder happens to have
-  the same path, act on that folder instead.
-- Commands run on your computer, not on the remote host.
+### Reopening an SSH FS folder with Remote-SSH
 
-Until Cerebriline supports SSH FS folders itself, open the same project with
-Remote-SSH instead. Every SSH FS config names a host, user and port that
-Remote-SSH can connect to; a password-only login works too, since Remote-SSH
-asks for it.
+When a window opens an SSH FS folder, Cerebriline shows:
+
+> "project" is opened through SSH FS, so Cerebriline's tools run on this
+> computer: they cannot read, edit or run anything on its host. Reopen it with
+> Remote-SSH to let them work there.
+
+**Reopen with Remote-SSH** does the following:
+
+1. Reads the folder's SSH FS config the way SSH FS does: from your user,
+   workspace and folder settings (`sshfs.configs`) and the files named in
+   `sshfs.configpaths`, with `merge`, `extend` and `$VARIABLE` expansion.
+2. Builds an OpenSSH host entry from it, named `sshfs-<config name>`:
+
+   ```text
+   # Added by Cerebriline from the SSH FS config "build-box"
+   Host sshfs-build-box
+       HostName 10.0.0.12
+       User dev
+       Port 2222
+       IdentityFile C:/Users/me/.ssh/id_ed25519
+       ProxyJump sshfs-bastion
+   ```
+
+   A `hop` becomes `ProxyJump`, with its own entry for the hop's config.
+3. Shows the entry and asks before changing anything. **Add and Reopen**
+   appends it to the SSH config file Remote-SSH reads
+   (`remote.SSH.configFile`, otherwise `~/.ssh/config`); **Copy Entry** puts it
+   on the clipboard instead. An entry with the same name that is already in the
+   file is used as you wrote it and never rewritten.
+4. Opens the same path on the host with Remote-SSH. A window with only that
+   folder is reused; a window with other folders opens a new one, so they stay
+   open.
+
+Then install Cerebriline on the host, as for any [Remote-SSH](#setting-it-up)
+window.
+
+The same flow is available any time from the Command Palette:
+**Cerebriline: Reopen SSH FS Folder with Remote-SSH**. **Don't Show Again** on
+the notification stops it for that SSH FS config; the command still works.
+
+### What is not carried over
+
+OpenSSH cannot express everything an SSH FS config can. The bridge does not
+guess; the confirmation lists each of these when it applies:
+
+- **Passwords.** SSH FS's stored password is not copied. Remote-SSH asks for
+  it when it connects. A key or an agent avoids the prompt.
+- **Pageant** (`"agent": "pageant"`). The `ssh` Remote-SSH runs on Windows
+  reads Pageant only when Pageant was started with its OpenSSH option
+  (`--openssh-config`). Otherwise add an `IdentityFile` to the entry.
+- **SOCKS and HTTP proxies** (`proxy`). These need a `ProxyCommand`, which you
+  add to the entry yourself.
+- **PuTTY sessions** (`putty`). Only the config's own host, user, port and key
+  are used; a config whose host comes only from a PuTTY session cannot be
+  converted, and the bridge says so.
+- **No user.** `ssh` then connects as your local user name, where SSH FS
+  would have asked.
+
+Config files given in `sshfs.configpaths` by a relative path are read
+relative to each open folder, as SSH FS does.
