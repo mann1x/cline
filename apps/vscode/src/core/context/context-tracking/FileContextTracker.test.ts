@@ -45,7 +45,10 @@ describe("FileContextTracker", () => {
 		// Mock vscode workspace
 		_mockWorkspace = sandbox.stub(vscode.workspace, "workspaceFolders").value([
 			{
+				// A real folder's URI always has a scheme; only `file` folders
+				// count as workspace roots (getWorkspacePaths' isLocalFolder).
 				uri: {
+					scheme: "file",
 					fsPath: "/mock/workspace",
 				},
 			} as vscode.WorkspaceFolder,
