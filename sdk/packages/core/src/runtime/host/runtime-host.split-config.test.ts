@@ -34,6 +34,28 @@ describe("splitCoreSessionConfig", () => {
 		).toBeUndefined();
 	});
 
+	it("keeps both terminal-guard decisions on the local runtime", () => {
+		const onConsecutiveMistakeLimitReached = () => ({
+			action: "stop" as const,
+		});
+		const onReasoningLoopLimitReached = () => ({ action: "continue" as const });
+		const split = splitCoreSessionConfig({
+			...(base as object),
+			onConsecutiveMistakeLimitReached,
+			onReasoningLoopLimitReached,
+		} as never);
+
+		expect(split.localRuntime?.onConsecutiveMistakeLimitReached).toBe(
+			onConsecutiveMistakeLimitReached,
+		);
+		expect(split.localRuntime?.onReasoningLoopLimitReached).toBe(
+			onReasoningLoopLimitReached,
+		);
+		expect(
+			(split.config as Record<string, unknown>).onReasoningLoopLimitReached,
+		).toBeUndefined();
+	});
+
 	it("omits it entirely when the host did not ask for a checklist", () => {
 		const split = splitCoreSessionConfig({ ...(base as object) } as never);
 		expect(split.localRuntime?.taskProgress).toBeUndefined();

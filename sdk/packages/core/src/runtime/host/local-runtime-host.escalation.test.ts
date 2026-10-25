@@ -229,6 +229,66 @@ describe("the escalation path, as the host wires it", () => {
 			} as never).then(String);
 	}
 
+	// automaticum (mail #1925): every release from 4.100.250 to .262 built the
+	// agent's hook only from escalation, so a runner's own `continue` or
+	// `stop` never reached the agent and the streak always ended the run.
+	const reasoningLoopContext = {
+		iteration: 7,
+		consecutiveTrips: 3,
+		maxConsecutiveTrips: 3,
+		diagnosis: "The same plan, a third time.",
+	};
+
+	it("hands the host's reasoning-loop decision to the agent when no expert is configured", async () => {
+		const onReasoningLoopLimitReached = vi.fn(() => ({
+			action: "continue" as const,
+		}));
+		const { agentConfig } = await startSession(undefined, undefined, {
+			onReasoningLoopLimitReached,
+		});
+
+		await expect(
+			Promise.resolve(
+				agentConfig?.onReasoningLoopLimitReached?.(reasoningLoopContext),
+			),
+		).resolves.toEqual({ action: "continue" });
+		expect(onReasoningLoopLimitReached).toHaveBeenCalledWith(
+			reasoningLoopContext,
+		);
+	});
+
+	it("leaves the reasoning-loop limit terminal when neither the host nor an expert answers", async () => {
+		const { agentConfig } = await startSession();
+		expect(agentConfig?.onReasoningLoopLimitReached).toBeUndefined();
+	});
+
+	it("makes the escalation offer first, and asks the host after it", async () => {
+		const onReasoningLoopLimitReached = vi.fn(() => ({
+			action: "stop" as const,
+		}));
+		const { agentConfig } = await startSession(
+			{
+				connection: {
+					providerId: "ollama",
+					modelId: "qwen3.6:27b",
+					baseUrl: "http://192.168.178.161:11434",
+				},
+			},
+			undefined,
+			{ onReasoningLoopLimitReached },
+		);
+
+		const first =
+			await agentConfig?.onReasoningLoopLimitReached?.(reasoningLoopContext);
+		expect(first?.action).toBe("continue");
+		expect(onReasoningLoopLimitReached).not.toHaveBeenCalled();
+
+		await expect(
+			agentConfig?.onReasoningLoopLimitReached?.(reasoningLoopContext),
+		).resolves.toEqual({ action: "stop" });
+		expect(onReasoningLoopLimitReached).toHaveBeenCalledTimes(1);
+	});
+
 	// Every build before this one. A tool that is always there and always
 	// answers "no expert is configured" is worst exactly where it is reached.
 	it("offers no escalate tool when no expert is configured", async () => {

@@ -11,10 +11,12 @@ import type {
 	HookErrorMode,
 	ITelemetryService,
 	MessageWithMetadata,
+	ReasoningLoopLimitContext,
 	RenderedPromptTemplate,
 	SessionExecutionConfig,
 	SessionPromptConfig,
 	SessionWorkspaceConfig,
+	TerminalGuardDecision,
 	ToolResultFormat,
 } from "@cline/shared";
 import type { CompactionRevisions } from "../extensions/context/compaction-revisions";
@@ -1157,6 +1159,15 @@ export interface CoreSessionConfig
 	) =>
 		| Promise<ConsecutiveMistakeLimitDecision>
 		| ConsecutiveMistakeLimitDecision;
+	/**
+	 * Asked before the reasoning-loop streak (`execution.reasoningLoopDetection.
+	 * maxConsecutiveTrips`) ends the run; `continue` defers it. With escalation
+	 * tools configured the escalation offer is made first and this is asked
+	 * after it, as for the mistake limit. Absent, the run ends.
+	 */
+	onReasoningLoopLimitReached?: (
+		context: ReasoningLoopLimitContext,
+	) => Promise<TerminalGuardDecision> | TerminalGuardDecision;
 	toolRoutingRules?: ToolRoutingRule[];
 	/**
 	 * Optional skill allowlist for the `skills` tool. When provided, only these

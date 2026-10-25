@@ -124,6 +124,9 @@ describe("the reasoning loop guard, inside the runtime", () => {
 		expect(result.abortReason).toContain("distinct lines");
 		const seen = notices(events);
 		expect(seen.map((n) => n.phase)).toEqual(["cut", "aborted"]);
+		// The limit that applied rides with each count, so a reader need not
+		// assume the default of 3.
+		expect(seen.map((n) => n.maxConsecutiveTrips)).toEqual([2, 2]);
 	});
 
 	// The seam the mistake limit has had since it was written, given to the

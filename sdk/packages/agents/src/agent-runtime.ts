@@ -5342,6 +5342,8 @@ export class AgentRuntime {
 				cause,
 				iteration: this.state.iteration,
 				consecutiveTrips: this.reasoningLoopStreak,
+				// The limit that applied, so a reader need not assume the default.
+				maxConsecutiveTrips: limit,
 				verdict,
 				channel: subject,
 			},

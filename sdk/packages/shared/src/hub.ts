@@ -784,6 +784,8 @@ export const HUB_HOOK_CAPABILITY_PREFIX = "hook.";
 export const HUB_COMPACTION_CAPABILITY = "compaction.compact";
 export const HUB_CHECKPOINT_CAPABILITY = "checkpoint.create";
 export const HUB_MISTAKE_LIMIT_CAPABILITY = "mistake_limit.decide";
+export const HUB_REASONING_LOOP_LIMIT_CAPABILITY =
+	"reasoning_loop_limit.decide";
 export const HUB_USER_INSTRUCTIONS_SNAPSHOT_CAPABILITY =
 	"user_instructions.snapshot";
 
@@ -794,6 +796,7 @@ export type HubClientContributionKind =
 	| "compaction"
 	| "checkpoint"
 	| "mistakeLimit"
+	| "reasoningLoopLimit"
 	| "userInstructionService";
 
 export interface HubClientContributionBase {
@@ -837,6 +840,11 @@ export interface HubClientMistakeLimitContribution
 	kind: "mistakeLimit";
 }
 
+export interface HubClientReasoningLoopLimitContribution
+	extends HubClientContributionBase {
+	kind: "reasoningLoopLimit";
+}
+
 export interface HubClientUserInstructionServiceContribution
 	extends HubClientContributionBase {
 	kind: "userInstructionService";
@@ -849,6 +857,7 @@ export type HubClientContribution =
 	| HubClientCompactionContribution
 	| HubClientCheckpointContribution
 	| HubClientMistakeLimitContribution
+	| HubClientReasoningLoopLimitContribution
 	| HubClientUserInstructionServiceContribution;
 
 export interface HubSessionRuntimeOptions {

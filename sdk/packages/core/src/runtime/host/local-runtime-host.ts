@@ -2586,16 +2586,21 @@ export class LocalRuntimeHost implements RuntimeHost {
 			// out of: one JSON line per cut, so a cut can be read back and checked.
 			onLoopCut: (cut: LoopCutRecord) =>
 				appendLoopCut(join(sessionDir, `${sessionId}.cuts.jsonl`), cut),
-			// The other terminal guard, which had no seam at all until now.
-			...(forcedEscalation
-				? {
-						onReasoningLoopLimitReached: (context: ReasoningLoopLimitContext) =>
-							forcedEscalation.decide({
-								guard: "The reasoning-loop guard",
-								diagnosis: context.diagnosis,
-							}) ?? { action: "stop" as const },
-					}
-				: {}),
+			// The other terminal guard, on the same terms: the escalation offer
+			// first, then the host's own decision. Until 4.100.266 the host's hook
+			// was never forwarded, so a runner answering `continue` was not asked.
+			onReasoningLoopLimitReached: forcedEscalation
+				? async (context: ReasoningLoopLimitContext) =>
+						forcedEscalation.decide({
+							guard: "The reasoning-loop guard",
+							diagnosis: context.diagnosis,
+						}) ??
+						(await configWithProvider.onReasoningLoopLimitReached?.(
+							context,
+						)) ?? {
+							action: "stop" as const,
+						}
+				: configWithProvider.onReasoningLoopLimitReached,
 			completionPolicy: completionPolicyWithProtocol,
 			consumePendingUserMessage: async () => {
 				// Standing down happens here and nowhere else. This runs after

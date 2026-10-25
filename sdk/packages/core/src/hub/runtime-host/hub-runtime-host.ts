@@ -20,6 +20,7 @@ import {
 	HUB_CUSTOM_TOOL_CAPABILITY_PREFIX,
 	HUB_HOOK_CAPABILITY_PREFIX,
 	HUB_MISTAKE_LIMIT_CAPABILITY,
+	HUB_REASONING_LOOP_LIMIT_CAPABILITY,
 	HUB_TOOL_EXECUTOR_CAPABILITY_PREFIX,
 	HUB_USER_INSTRUCTIONS_SNAPSHOT_CAPABILITY,
 	isGeneratedMedia,
@@ -360,6 +361,20 @@ function buildClientContributionRegistration(
 			{
 				kind: "mistakeLimit",
 				capabilityName: HUB_MISTAKE_LIMIT_CAPABILITY,
+			},
+			async ({ payload }) => ({
+				result: await decide(payload.context as never),
+			}),
+		);
+	}
+
+	if (localRuntime?.onReasoningLoopLimitReached) {
+		const decide = localRuntime.onReasoningLoopLimitReached;
+		addClientContribution(
+			registration,
+			{
+				kind: "reasoningLoopLimit",
+				capabilityName: HUB_REASONING_LOOP_LIMIT_CAPABILITY,
 			},
 			async ({ payload }) => ({
 				result: await decide(payload.context as never),

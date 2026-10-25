@@ -12,6 +12,7 @@ import type {
 	HubClientToolContribution,
 	HubClientToolExecutorContribution,
 	JsonValue,
+	TerminalGuardDecision,
 } from "@cline/shared";
 import {
 	HUB_CHECKPOINT_CAPABILITY,
@@ -19,6 +20,7 @@ import {
 	HUB_CUSTOM_TOOL_CAPABILITY_PREFIX,
 	HUB_HOOK_CAPABILITY_PREFIX,
 	HUB_MISTAKE_LIMIT_CAPABILITY,
+	HUB_REASONING_LOOP_LIMIT_CAPABILITY,
 	HUB_TOOL_EXECUTOR_CAPABILITY_PREFIX,
 	HUB_USER_INSTRUCTIONS_SNAPSHOT_CAPABILITY,
 	isHubToolExecutorName,
@@ -30,6 +32,7 @@ export {
 	HUB_CUSTOM_TOOL_CAPABILITY_PREFIX,
 	HUB_HOOK_CAPABILITY_PREFIX,
 	HUB_MISTAKE_LIMIT_CAPABILITY,
+	HUB_REASONING_LOOP_LIMIT_CAPABILITY,
 	HUB_TOOL_EXECUTOR_CAPABILITY_PREFIX,
 	HUB_USER_INSTRUCTIONS_SNAPSHOT_CAPABILITY,
 } from "@cline/shared";
@@ -208,6 +211,12 @@ export function parseHubClientContributions(
 		if (kind === "mistakeLimit") {
 			seenCapabilities.add(capabilityName);
 			contributions.push({ kind: "mistakeLimit", capabilityName });
+			continue;
+		}
+
+		if (kind === "reasoningLoopLimit") {
+			seenCapabilities.add(capabilityName);
+			contributions.push({ kind: "reasoningLoopLimit", capabilityName });
 			continue;
 		}
 
@@ -574,6 +583,9 @@ export function createHubClientContributionRuntime(input: {
 	const mistakeLimit = input.contributions.find(
 		(item): item is HubClientContribution => item.kind === "mistakeLimit",
 	);
+	const reasoningLoopLimit = input.contributions.find(
+		(item): item is HubClientContribution => item.kind === "reasoningLoopLimit",
+	);
 	const userInstructionService = input.contributions.find(
 		(item): item is HubClientContribution =>
 			item.kind === "userInstructionService",
@@ -667,6 +679,23 @@ export function createHubClientContributionRuntime(input: {
 						},
 					}
 				: {}),
+			...(reasoningLoopLimit
+				? {
+						onReasoningLoopLimitReached: async (
+							context: Parameters<
+								NonNullable<CoreSessionConfig["onReasoningLoopLimitReached"]>
+							>[0],
+						): Promise<TerminalGuardDecision> => {
+							const response = await input.requestCapability(
+								input.sessionId,
+								reasoningLoopLimit.capabilityName,
+								{ context },
+								input.targetClientId,
+							);
+							return response?.result as TerminalGuardDecision;
+						},
+					}
+				: {}),
 			...(userInstructionService
 				? {
 						userInstructionService: createUserInstructionServiceProxy(
@@ -703,6 +732,8 @@ export function defaultClientContributionCapabilityName(
 			return HUB_CHECKPOINT_CAPABILITY;
 		case "mistakeLimit":
 			return HUB_MISTAKE_LIMIT_CAPABILITY;
+		case "reasoningLoopLimit":
+			return HUB_REASONING_LOOP_LIMIT_CAPABILITY;
 		case "userInstructionService":
 			return HUB_USER_INSTRUCTIONS_SNAPSHOT_CAPABILITY;
 		default:
