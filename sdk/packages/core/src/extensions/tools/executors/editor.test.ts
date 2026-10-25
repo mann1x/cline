@@ -2187,6 +2187,43 @@ describe("requiring a read before an edit", () => {
 		});
 	});
 
+	it("accepts an append at line count + 1 after the file was read", async () => {
+		// Measured live: a one-line file read whole, then insert_line 2 -- the
+		// append the insert error tells the model to send -- refused twice
+		// with "no read ... covers line 2", a line no read can cover.
+		await withTempFile("hello\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 1);
+
+			await editor(
+				{ path: filePath, new_text: "appended", insert_line: 2 },
+				dir,
+				context,
+			);
+
+			expect(await fs.readFile(filePath, "utf8")).toBe("hello\nappended\n");
+		});
+	});
+
+	it("refuses an append when the last line was never read", async () => {
+		// The text lands after the last line, so that line is the anchor the
+		// model has to have seen; the clamp must not wave an append through.
+		await withTempFile("a\nb\nc\n", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 1);
+
+			const failure = editor(
+				{ path: filePath, new_text: "d", insert_line: 4 },
+				dir,
+				context,
+			);
+
+			await expect(failure).rejects.toThrow("covers line 3");
+		});
+	});
+
 	it("still refuses when the read stops short inside the file", async () => {
 		// The clamp is to the end of the file, not to whatever was read. A range
 		// that ends inside the file and was only partly read is the case the

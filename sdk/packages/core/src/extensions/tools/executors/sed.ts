@@ -698,7 +698,18 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 					// Exactly the rule `editor` applies, and for the same reason: an
 					// edit aimed at lines nobody has looked at lands on whatever
 					// happens to be there now.
-					const range = addressedLines(commands);
+					// Clamped to the file, as `editor` clamps: an address past the
+					// last line names lines no read can return, so demanding a
+					// receipt for them refuses every attempt the model makes.
+					const addressed = addressedLines(commands);
+					const lineCount = countLines(original);
+					const range =
+						addressed && lineCount > 0
+							? {
+									first: Math.min(addressed.first, lineCount),
+									last: Math.min(addressed.last, lineCount),
+								}
+							: addressed;
 					if (receipts) {
 						// And the other half of it: whether what was read is still
 						// what is there. `sed -i` on a file a parallel agent has

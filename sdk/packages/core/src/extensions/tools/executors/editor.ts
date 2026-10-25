@@ -2254,15 +2254,23 @@ export function createEditorExecutor(
 		// sends it round again. Measured: an edit aimed at lines 101-200 of a
 		// 198-line file, read correctly three times, refused three times, with
 		// the model doing exactly as instructed each time.
+		// The start is clamped the same way. An append is a boundary insert at
+		// line count + 1 -- the call the insert error itself tells the model to
+		// send -- and that line does not exist; the text lands after the last
+		// line, so the last line is the one that has to have been seen. Measured
+		// on a one-line file read whole: insert_line 2 refused twice, the model
+		// reading exactly what it was told to, before it gave up and replaced
+		// the line instead.
 		const lineCount = await countLines(filePath);
-		const end =
-			lineCount != null && lineCount > 0 ? Math.min(last, lineCount) : last;
-		const wanted = Math.max(first, end);
-		if (receipts.covers(filePath, first, wanted)) {
+		const inFile = lineCount != null && lineCount > 0;
+		const start = inFile ? Math.min(first, lineCount) : first;
+		const end = inFile ? Math.min(last, lineCount) : last;
+		const wanted = Math.max(start, end);
+		if (receipts.covers(filePath, start, wanted)) {
 			return;
 		}
 		const range =
-			first === wanted ? `line ${first}` : `lines ${first}-${wanted}`;
+			start === wanted ? `line ${start}` : `lines ${start}-${wanted}`;
 		// Three cases, not two. A read after a retiring edit clears the retired
 		// mark, so a file read whole, edited shorter, then read again lower down
 		// was told it "has not been read in this session" (pandorum v44ot,

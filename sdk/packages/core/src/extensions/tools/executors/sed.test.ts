@@ -227,6 +227,23 @@ describe("file handling and the read guard", () => {
 		expect(await fs.readFile(file, "utf8")).toBe("alpha\nbeta\ngamma\n");
 	});
 
+	it("accepts an address range that runs past the end of the file", async () => {
+		// Lines 4-99 do not exist, so no read can return them; the guard asks
+		// only for the lines that do, as `editor` does.
+		const receipts = createReadReceipts();
+		receipts.noteRead(file, 2, 3);
+		const sed = createSedExecutor({ cwd: dir, receipts });
+
+		const [outcome] = await sed({
+			script: "2,99d",
+			files: [file],
+			in_place: true,
+		});
+
+		expect(outcome.ok).toBe(true);
+		expect(await fs.readFile(file, "utf8")).toBe("alpha\n");
+	});
+
 	it("retires the receipts when an edit changes the line count", async () => {
 		const receipts = createReadReceipts();
 		receipts.noteRead(file, 1, Number.POSITIVE_INFINITY);
