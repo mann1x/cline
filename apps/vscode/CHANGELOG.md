@@ -5,6 +5,289 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.267] — 2026-10-25
+
+### Remote development
+
+- **A provider URL on `localhost` warns when Cerebriline runs on a remote
+  host.** Under Remote-SSH, WSL or a dev container the extension, and every
+  request it makes, runs on the remote machine, so the default Ollama, xOllama
+  and LM Studio URL reaches a server on that machine and not on your computer.
+  The base URL field now says so, names the remote, and for Remote-SSH gives
+  the `RemoteForward` line that makes a server on your computer reachable.
+- **An SSH FS folder can be reopened with Remote-SSH.** SSH FS serves the
+  remote files to VS Code on your computer, where Cerebriline's tools also
+  run, so they could not read, edit or run anything on the host. Opening such
+  a folder now offers **Reopen with Remote-SSH**: Cerebriline reads the
+  folder's SSH FS config the way SSH FS does, builds the matching OpenSSH
+  host entry (a hop becomes `ProxyJump`), shows it, adds it to your SSH config
+  file once you agree, and opens the same path with Remote-SSH. Also in the
+  Command Palette: **Cerebriline: Reopen SSH FS Folder with Remote-SSH**.
+- **A folder that is not on this computer's disk is no longer the
+  workspace.** An SSH FS folder `ssh://box/home/dev/project` was handed to the
+  tools as the local path `/home/dev/project` (`C:\home\dev\project` on
+  Windows): reads and edits failed, or landed in a local folder that happened
+  to have that path. Only folders on the local disk count as workspace roots
+  now; a window with none runs tasks in the shared chat workspace.
+- **New page: Remote Development.** What runs where under Remote-SSH and SSH
+  FS, how to set up Remote-SSH, what to do about `localhost`, and what the SSH
+  FS bridge carries over.
+
+### Editing tools
+
+- **Appending to a file is no longer refused after the file was read.** An
+  append is an insert at the line after the last one, which is what the
+  editor's own error tells the model to send, but the read-before-editing
+  check asked for a read covering that line, and a line that does not exist
+  cannot be read. A one-line file read in full was refused twice before the
+  model gave up and replaced the line instead. The check now asks for the
+  last line, the one the text lands after.
+- **`sed` in place accepts an address range that runs past the end of the
+  file.** A script such as `2,99d` on a three-line file asked for a read of
+  lines 2-99 and refused every attempt, whatever was read. Like the editor, it
+  now asks only for the lines the file has.
+
+## [4.100.266] — 2026-10-25
+
+### Ollama cloud usage
+
+- **Cloud limits show what is used, with a bar each, as ollama.com does.** The
+  task header read "Cloud: session 23.1% left · weekly 78.2% left", which was
+  easy to take for the share used, so the two limits looked swapped against
+  the ollama.com settings page. The header and the Ollama and xOllama settings
+  now show a bar for the session limit and one for the weekly limit, filling
+  as they are used, with "76.9% used" on the right. The settings also give
+  when each one resets; in the header that is in the tooltip.
+- **The bars in the task header can be turned off.** "Show cloud usage in
+  the task header", in the Ollama and xOllama settings, is on by default.
+  Turned off, the header shows no cloud usage; the settings still do.
+
+### SDK
+
+- **A host's `onReasoningLoopLimitReached` reaches the agent.** Core built the
+  agent's reasoning-loop decision only from escalation, so a host's own
+  decision was never asked and the streak always ended the run. Core's session
+  config now declares it and passes it through, after the escalation offer
+  when there is one, as the consecutive-mistake hook does, and a hub client
+  can contribute it (`reasoning_loop_limit.decide`). With no hook the run
+  still ends at the limit. The `reasoning_loop` notice now carries
+  `maxConsecutiveTrips` beside `consecutiveTrips`.
+
+## [4.100.265] — 2026-10-24
+
+### Memory and the Library
+
+- **A message with the word "memory" no longer recalls every note.** Each note
+  was indexed with its internal name, `memory:<hash>`, as if it were a file
+  name, so every note held the word "memory" and any search with it matched
+  them all. Notes kept before this version are indexed again the first time
+  Memory opens.
+- **With a reranker set, automatic recall attaches only notes it scores high.**
+  The reranker's score passed every note, because the relevance threshold
+  defaults to 0, so the five best notes went with every message. A reranked
+  note is now attached when it scores 0.5 or more, or when it is close by
+  meaning or shares two meaningful words with the message, as without a
+  reranker.
+- **A recall that cannot run says so.** When Memory cannot be searched, the
+  task shows "Memory unreachable, the message went without notes: <reason>",
+  once per task for each reason. Until now it read the same as Memory having
+  nothing to say. When the search ran by keyword alone because LanceDB is not
+  installed, recall and `search_library` say that too.
+- **Recalled notes take at most 4% of the model's window.** Five notes of up to
+  4000 characters each could take a fifth of a 32k window. The best note is
+  always given, cut to fit if it has to be, with its id to recall it whole;
+  the task notice says how many more did not fit.
+- **A note a compaction folded away is recalled again when it comes up.** A
+  task was given each note once, and a note summarised away by a compaction
+  never came back that task. Notes still in the conversation word for word are
+  not given twice.
+- **The same note with other spacing or capitals is kept once, and noting it
+  again with new tags adds the tags.** Notes that differ only that way are
+  merged when Memory opens: the oldest keeps its id, with the tags of all of
+  them.
+- **A note's id no longer changes.** A note noted again under other chunk
+  settings was replaced under a new id, and `m<id>` references to it stopped
+  working.
+- **A re-pulled embedding model is noticed, and every collection catches up.**
+  Adding a book embedded only that book; the rest stayed without vectors for a
+  new model until something was added to each. Now the rest follows in the
+  background. The model is also checked by the vector it gives for a fixed
+  text, so a model re-pulled under the same name and size, whose vectors no
+  longer compare with the stored ones, has its old vectors dropped and
+  everything embedded again.
+- Two embedding runs at once, such as a book added while an import is still
+  embedding, no longer write a document's vectors twice or fail on a LanceDB
+  commit conflict.
+- **Notes say what they are and where they stand.** A note is a fact, a
+  decision (with the reason it was taken) or a preference, and it can name the
+  places in the code it is about, as `path` or `path:line`. The model keeps
+  notes as *noted*. Only you can confirm one or mark it outdated, and either
+  takes a reason, which the model is shown with the note. Each recalled note carries a line telling the model what to do with
+  it. A confirmed decision is not reopened unless something contradicts its
+  reason. A noted fact is checked before it is relied on. An outdated note is
+  not attached again.
+- **A notes browser in Settings → Memory.** The Notes button beside each
+  memory lists its notes by status, with evidence and earlier wording. From
+  there you can Confirm… a note, mark it Outdated…, put it Back to noted or
+  Forget it, and Merge near-duplicates into the oldest note. The merge also
+  runs on its own, once an hour while Memory is on. A confirmed note is
+  never merged into one that is not.
+- **A changed note is revised in place.** It keeps its id, the earlier wording
+  is kept with it, and its status goes back to noted. A note id is never given
+  to another note, even after the note is forgotten.
+- **A note that says nearly the same as one already kept is refused**, naming
+  the note it repeats, so the model revises that one instead of keeping a
+  second copy.
+- **Recall ranks by use as well as by match.** A note given lately counts a
+  little more. One given at every message, whatever was asked, counts less.
+- **Notes about the files a task is working on come up with it.** Up to three
+  notes whose places match the files the task has read or edited are
+  attached, even when the message does not mention them. They are matched by
+  place, never by words alone.
+- **A note's places are checked when it is given.** When the line it named
+  has moved, changed or gone, or the path matches more than one file, the
+  note says so.
+- **Facts can expire.** A new setting, "Facts expire after (days)", is off by
+  default. Past it, a noted fact is distilled with the others that expired
+  into one note tagged `distilled`, and the originals are removed only after
+  that note is written. Confirmed notes, decisions and preferences never
+  expire. The distilling model is the profile picked for Memory.
+
+### Compaction
+
+- **A compaction summary no longer narrates steps that were never taken.**
+  A writer whose part of the conversation ended mid-task could carry on in the
+  present tense, citing calls past the end of the record. claude-hooks measured
+  citations up to #174 against 55 calls with qwen3.6 27B. Such an attempt is
+  now asked again with the numbers it invented. What is still left after the
+  last attempt, or that a reviewer brought back, is cut clause by clause:
+  never past the previous citation and never across a paragraph. Until now
+  only the bad number was dropped, and the invented sentence stayed.
+- **The writer reads each tool call with its number.** The conversation it
+  summarises now shows `#7 read_files(...)`, the same number the call has in
+  the record, so the writer cites a call by reading its number instead of
+  counting calls down the page.
+- **A summary no longer states details of files nothing opened.** On a first
+  compaction, writers and reviewers filled in the task's module tables for
+  files that had only been listed, with every field invented (1 right in 98,
+  in claude-hooks' measurement). A summary line whose every file is one that
+  no call showed is now cut. The files are named in one "Not yet read" note
+  at the end, so a list of what is still to read survives as names. A
+  listing does not count as having read a file. A file the user's own
+  requests name is never cut, and fenced code is left alone. The set of files
+  seen is carried from one compaction to the next.
+
+### Tools
+
+- **`check_file` names the end of a file in the file's own count.** For an
+  unclosed bracket the language server reports where the parser gave up,
+  which is the end of the file. It numbers that as the empty line after the
+  last line break, a line no other tool counts. A page that `read_files`
+  called 136 lines long got `Line 137, column 1: '}' expected`. The model
+  took the line that did not exist for a check of an old copy, and stopped
+  trusting the check. Such a position now reads as "the end of the file
+  (after line 136, its last…)". For a page it adds the line of the script's
+  `</script>`.
+- **A column edit whose `old_text` is not at those columns is no longer
+  applied.** The editor replaced the columns it was given and ignored
+  `old_text`. Asked to delete a `}` at a column that held the `l` of `else`,
+  it deleted the `l` and reported success. Now, when `old_text` occurs once
+  on the lines named, the edit goes there and the result says so. Otherwise
+  it is refused, naming what the columns hold and every column where
+  `old_text` does occur.
+- The `check_file` description in the SDK and in every prompt template now
+  matches the plugin's. It was missing the sentence on finding a bracket by
+  the text before it rather than by its column.
+- **An edit that sends its own `old_text` back as `new_text` is told so.**
+  A small model retyping a long minified line copies it unchanged, with the
+  change it meant left out. The refusal used to say that the call was not
+  landing where it thought and to try columns, though it was landing exactly
+  there. It now says the change was never written into `new_text`. On a long
+  line it shows how to send only the characters that change, with the line
+  they are on.
+- **An edit card shows which characters really change.** On the added
+  lines of an edit card, characters the new text shares with the old are
+  yellow, and only what is actually new stays green. Removed lines stay all
+  red. An edit that sends the old text back unchanged shows its added line
+  solid yellow, not green.
+- **An edit card says whether the edit was applied.** A refused edit came
+  back as a result carrying an error, not as a tool failure, so it drew the
+  same "wants to edit this file" card as one that landed. Once the editor
+  has answered, the card now reads "edited this file" or "edit was refused",
+  in red when refused. It carries the editor's answer: Result, or Refused
+  with the editor's own words, such as where `old_text` diverged from the
+  file. It shows its first line and expands to the whole answer. The same
+  goes for the cards of new and deleted files, and for tasks reopened from
+  history.
+- **A landed edit clears the repeat guard's verdicts on that file.** A call
+  refused as a no-op, or failed, used to stay on its countdown even after
+  other edits changed the same file, so a call that had become right could
+  still be warned or stopped. Now an edit that lands on a file clears those
+  verdicts for every call on that file. A call that keeps getting the same
+  answer is still stopped as before, which is what catches a model
+  restoring the file and reapplying the same edit over and over.
+- **An edit right after `restore_file` is no longer refused as unread.**
+  A restore erased the record that the file had been read, so the next
+  edit, even one matched on text, was refused with "has not been read in
+  this session". Now a restore only marks the old line numbers stale. An
+  edit by line still asks for a fresh read, and says why. An edit matched
+  on text goes through. The same applies after a transaction rollback and
+  after an expert's edits.
+- **Running a command again is never flagged as a repeat.** The repeat guard
+  warned when a model ran the same command twice. It flagged a task's own
+  check, such as a game launcher re-run after each edit, and told the model
+  to change approach when it was doing what it should. A command's answer
+  depends on the files, not on its arguments, so `run_commands` is no longer
+  counted at all. It still breaks another call's run of repeats.
+- **The delimiter scan suggests the missing bracket, not a move.** When a
+  line was one `}` short and a spare `}` sat further down the file, the scan
+  suggested moving a `)` instead of adding the `}`. That only balanced by
+  using up the spare, and left the code still broken. Now a fix that
+  balances the line's own count comes first, and the spare is reported
+  separately.
+
+## [4.100.264] — 2026-10-23
+
+### Providers
+
+- **Your ollama.com cloud usage, in the Ollama and xOllama settings.** Under the
+  model picker, a "Cloud usage" block shows:
+  - how much of the plan is left: on a legacy plan, the session and weekly
+    limits with the time until each resets; on a current plan, the included
+    balance against the allowance;
+  - any purchased credit;
+  - the number of requests in the last 24 hours, 7 days and 30 days, with
+    their cost when the plan reports it.
+
+  The server reads all of this from ollama.com with its own signed-in account,
+  so it needs Ollama or xOllama 0.40.6 or later. Older servers, servers that
+  are not signed in, and servers with cloud features turned off each say so.
+- **The task header shows how much of the cloud allowance is left.** For a
+  cloud model on Ollama or xOllama, one line under the token totals reads, for
+  example, "Cloud: session 99.9% left · weekly 68.3% left". It turns to the
+  warning colour under 10%. At zero it reads "Cloud session limit reached ·
+  resets in 1h 52m", with any purchased credit beside it. Until now the header
+  could only say the limit was reached after a request had been refused for it.
+- ollama.com allows 10 balance reads a minute per account, across all your
+  devices. The extension reads the balance and the 24-hour usage at most once a
+  minute per server, and the 7-day and 30-day usage every five minutes,
+  however many panels are open. A rate-limited read keeps the last numbers and
+  waits as long as ollama.com asks.
+
+## [4.100.263] — 2026-10-23
+
+### Agents
+
+- **The delimiter scan now says it covers the whole file, and quotes each
+  bracket it names.** A report said "the `(` at column 30 is still open". The
+  model counted the line by hand, reached a different `(` at column 5, found it
+  balanced and decided the scan was counting some other line. Reports now start
+  "Delimiter scan of the whole file, read from line 1". Each bracket comes with
+  the text just before it, for example "the `(` at column 26 that follows
+  `…s.dc.forEach`", so it can be found by searching. A crossing whose two ends
+  are on one line says "both on line N". One that spans two lines names both
+  lines. `check_file`'s description says the same.
+
 ## [4.100.262] — 2026-10-23
 
 ### Agents
