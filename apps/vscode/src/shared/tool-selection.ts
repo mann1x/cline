@@ -106,7 +106,7 @@ export const SELECTABLE_TOOLS: readonly SelectableTool[] = [
 		name: "check_file",
 		label: "check_file",
 		summary: "The editor's own diagnostics for a file, plus the project's lint command.",
-		tokens: 800,
+		tokens: 849,
 		group: "check",
 	},
 	{
