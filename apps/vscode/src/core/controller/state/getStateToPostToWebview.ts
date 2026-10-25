@@ -19,7 +19,7 @@ import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import { normalizeAtomicProtocolMode } from "@shared/AtomicProtocolSettings"
 import type { ExtensionState, Platform } from "@shared/ExtensionMessage"
 import { ClineEnv } from "@/config"
-import { ExtensionRegistryInfo } from "@/registry"
+import { ExtensionRegistryInfo, HostRegistryInfo } from "@/registry"
 import { readImageGenerationApiKey } from "@/sdk/image-generation-config"
 import { readJevApiKey, readJevCustomApiKey } from "@/sdk/jev-config"
 import { readLibrarySettings, readMemorySettings } from "@/sdk/library-config"
@@ -184,6 +184,7 @@ export async function getStateToPostToWebview(controller: {
 	const latestAnnouncementId = getLatestAnnouncementId()
 	const shouldShowAnnouncement = lastShownAnnouncementId !== latestAnnouncementId
 	const platform = process.platform as Platform
+	const remoteName = HostRegistryInfo.get()?.remoteName
 	const distinctId = getDistinctId()
 	const version = ExtensionRegistryInfo.version
 	const clineConfig = ClineEnv.config()
@@ -312,6 +313,7 @@ export async function getStateToPostToWebview(controller: {
 		activeApiConfigurationProfile,
 		enableCheckpointsSetting: enableCheckpointsSetting ?? true,
 		platform,
+		remoteName,
 		environment,
 		distinctId,
 		globalClineRulesToggles: globalClineRulesToggles || {},

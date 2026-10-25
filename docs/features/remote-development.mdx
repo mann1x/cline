@@ -1,0 +1,120 @@
+---
+title: "Remote Development (SSH)"
+sidebarTitle: "Remote Development"
+description: "Work on a project that lives on another machine: what runs where under Remote-SSH, what to set up, and where SSH FS stands."
+---
+
+A project often lives on a bigger machine than the one you type on: a build
+server, a GPU box, a VM. VS Code offers two ways to work on it over SSH, and
+Cerebriline behaves very differently under each, because what matters for an
+agent is not where the files are shown but **where its tools run**.
+
+| | Remote-SSH (Microsoft) | SSH FS (Kelvin Schoofs) |
+|---|---|---|
+| Where Cerebriline runs | On the remote host | On your computer |
+| Reading and editing files | On the remote host | Not supported yet |
+| `run_commands` and terminals | On the remote host | Not supported yet |
+| Search, `check_file`, checkpoints | On the remote host | Not supported yet |
+| Provider URL `localhost` means | The remote host | Your computer |
+
+**Use Remote-SSH.** It is the supported way to let the model work on another
+machine, and everything below that heading has been checked end to end.
+
+## Remote-SSH
+
+[Remote - SSH](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-ssh)
+opens a folder on the remote host and runs a VS Code server there. Extensions
+that work on files and processes, Cerebriline among them, are installed **on
+the remote host** and run in its extension host; only the windows and the
+chat view stay on your computer.
+
+For an agent that is exactly the right split. Every tool the model calls acts
+on the remote machine:
+
+- `read_files`, the editor, `sed`, search and `check_file` read and write the
+  remote project.
+- `run_commands` and the terminals it opens run in a shell on the remote host,
+  in the project's folder, as the user you connected as.
+
+### Setting it up
+
+1. Install Remote - SSH and connect to the host (**Remote-SSH: Connect to
+   Host…**).
+2. Open the project folder on the remote host and choose **Trust** when VS
+   Code asks. In Restricted Mode VS Code keeps Cerebriline switched off: it
+   needs a trusted folder to run commands and edit files.
+3. In the Extensions view, Cerebriline shows **Install in SSH: \<host\>**.
+   Install it there. The version on your computer does not run in a remote
+   window.
+4. Open Cerebriline and set up a provider. The remote host has its own
+   settings, history and data folder (`~/.cerebriline` on that host); nothing
+   is copied from your computer's install.
+
+Updates work the same way as locally: **Install and reload** in the
+Cerebriline view installs the new version on the remote host.
+
+### Providers: `localhost` is the remote host
+
+The requests to your model provider leave from the remote host too. A provider
+URL on `localhost` or `127.0.0.1`, which is the default for Ollama, xOllama
+and LM Studio, therefore reaches a server **on the remote host**, not one on
+your computer. Cerebriline shows a warning under the base URL field when that
+is the case.
+
+Cloud providers are not affected. For a model server on your own computer, pick
+one of these:
+
+- **Forward the port to the remote host.** Add a `RemoteForward` line to the
+  host's entry in your SSH config (`~/.ssh/config`, on Windows
+  `C:\Users\<you>\.ssh\config`) and reconnect:
+
+  ```text
+  Host build-server
+      HostName 10.0.0.12
+      User me
+      RemoteForward 11434 localhost:11434
+  ```
+
+  The remote host's `localhost:11434` then reaches the Ollama on your
+  computer, and the default URL works unchanged. Use the port of your server:
+  `22434` for xOllama, `1234` for LM Studio.
+- **Use your computer's network address**, for example
+  `http://192.168.1.20:11434`, if the remote host can reach it. Ollama listens
+  only on `localhost` unless `OLLAMA_HOST=0.0.0.0` is set.
+- **Run the model server on the remote host.** If it has the GPU, this is
+  usually what you want anyway, and `localhost` is then correct.
+
+### Sign-ins and links
+
+Links and sign-in pages open in the browser on your computer. Sign-in flows
+that wait for the browser to call back to a local port (OpenAI Codex, MCP
+servers with OAuth) rely on VS Code forwarding that port from the remote host;
+VS Code does this by default (`remote.autoForwardPorts`). If a sign-in never
+completes, check the **Ports** view for the forwarded port.
+
+### Approvals
+
+Commands are not auto-approved by default, so the first `run_commands` call of
+a task waits for **Run Command**. See [Auto-Approve](/features/auto-approve) to
+change that, on the remote host's install.
+
+## SSH FS
+
+[SSH FS](https://marketplace.visualstudio.com/items?itemName=Kelvin.vscode-sshfs)
+works the other way round: VS Code and every extension stay on your computer,
+and SSH FS shows the remote files as a folder (`ssh://<config>/<path>`) that it
+reads and writes over SFTP. It has no API that another extension can use to run
+commands, and its terminal reports neither output nor exit codes back.
+
+Cerebriline's tools work on files and processes of the machine they run on.
+With an SSH FS folder open, that machine is your computer, and the folder's
+path names a directory that does not exist there:
+
+- File reads, edits and searches fail, or, if a local folder happens to have
+  the same path, act on that folder instead.
+- Commands run on your computer, not on the remote host.
+
+Until Cerebriline supports SSH FS folders itself, open the same project with
+Remote-SSH instead. Every SSH FS config names a host, user and port that
+Remote-SSH can connect to; a password-only login works too, since Remote-SSH
+asks for it.

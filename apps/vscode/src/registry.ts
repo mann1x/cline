@@ -118,6 +118,11 @@ export interface HostInfo {
 	 * The version of Cerebriline that the host client is running
 	 */
 	extensionVersion: string
+	/**
+	 * VS Code's remote kind when the extension runs in a remote extension host
+	 * ("ssh-remote", "wsl", "dev-container", ...); undefined when it runs locally.
+	 */
+	remoteName?: string
 }
 
 let hostInfo = null as HostInfo | null
@@ -130,7 +135,7 @@ export const HostRegistryInfo = {
 		const platform = host.platform || "unknown"
 		const os = process.platform || "unknown"
 		const ide = host.clineType || "unknown"
-		hostInfo = { hostVersion, extensionVersion, platform, os, ide, distinctId }
+		hostInfo = { hostVersion, extensionVersion, platform, os, ide, distinctId, remoteName: host.remoteName || undefined }
 	},
 	get: () => hostInfo,
 }

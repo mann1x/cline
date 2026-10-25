@@ -450,6 +450,7 @@ export const OllamaProvider = ({ showModelOptions, isPopup, currentMode, provide
 	return (
 		<div className="flex flex-col gap-2">
 			<BaseUrlField
+				defaultValue={DEFAULT_BASE_URLS[providerId]}
 				initialValue={ollamaBaseUrl}
 				label="Use custom base URL"
 				onChange={handleBaseUrlChange}

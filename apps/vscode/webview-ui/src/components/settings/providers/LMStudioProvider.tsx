@@ -159,6 +159,7 @@ export const LMStudioProvider = ({ currentMode }: LMStudioProviderProps) => {
 	return (
 		<div className="flex flex-col gap-2">
 			<BaseUrlField
+				defaultValue="http://localhost:1234"
 				initialValue={config?.baseUrl ?? apiConfiguration?.lmStudioBaseUrl}
 				label="Use custom base URL"
 				onChange={handleBaseUrlChange}

@@ -180,7 +180,8 @@
 						"pages": [
 							"features/auto-approve",
 							"features/jupyter-notebooks",
-							"features/multiroot-workspace"
+							"features/multiroot-workspace",
+							"features/remote-development"
 						]
 					},
 					{

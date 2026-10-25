@@ -165,6 +165,12 @@ export interface ExtensionState {
 	activeApiConfigurationProfile: string
 	enableCheckpointsSetting?: boolean
 	platform: Platform
+	/**
+	 * VS Code's remote kind ("ssh-remote", "wsl", "dev-container", ...) when the
+	 * extension host runs on another machine than the UI. Its `localhost` is
+	 * that machine, which provider URLs have to be told apart from.
+	 */
+	remoteName?: string
 	environment?: Environment
 	shouldShowAnnouncement: boolean
 	taskHistory: HistoryItem[]

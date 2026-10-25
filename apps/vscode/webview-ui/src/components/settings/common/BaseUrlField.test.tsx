@@ -3,6 +3,11 @@ import type { ChangeEventHandler, ReactNode } from "react"
 import { describe, expect, it, vi } from "vitest"
 import { BaseUrlField } from "./BaseUrlField"
 
+const extensionState: { remoteName?: string } = {}
+vi.mock("@/context/ExtensionStateContext", () => ({
+	useExtensionState: () => extensionState,
+}))
+
 vi.mock("@vscode/webview-ui-toolkit/react", () => ({
 	VSCodeCheckbox: ({
 		checked,
@@ -190,5 +195,61 @@ describe("enabling the field on a tab that has no saved URL yet", () => {
 
 		render(<BaseUrlField initialValue={undefined} onChange={onChange} />)
 		expect(screen.getByRole("checkbox")).not.toBeChecked()
+	})
+
+	describe("localhost under a remote", () => {
+		const withRemote = (remoteName: string | undefined, ui: ReactNode) => {
+			extensionState.remoteName = remoteName
+			return ui
+		}
+
+		it("warns when the default URL is localhost and the extension runs over SSH", () => {
+			render(
+				withRemote(
+					"ssh-remote",
+					<BaseUrlField defaultValue="http://localhost:11434" initialValue={undefined} onChange={vi.fn()} />,
+				),
+			)
+
+			const notice = screen.getByTestId("loopback-on-remote-notice")
+			expect(notice).toHaveTextContent("running on the SSH host")
+			expect(notice).toHaveTextContent("RemoteForward 11434 localhost:11434")
+		})
+
+		it("warns on a typed loopback URL and names its port", () => {
+			render(withRemote("ssh-remote", <BaseUrlField initialValue="http://127.0.0.1:1234/v1" onChange={vi.fn()} />))
+
+			expect(screen.getByTestId("loopback-on-remote-notice")).toHaveTextContent("RemoteForward 1234 localhost:1234")
+		})
+
+		it("says nothing for a local window", () => {
+			render(
+				withRemote(
+					undefined,
+					<BaseUrlField defaultValue="http://localhost:11434" initialValue={undefined} onChange={vi.fn()} />,
+				),
+			)
+
+			expect(screen.queryByTestId("loopback-on-remote-notice")).toBeNull()
+		})
+
+		it("says nothing for an address the remote can reach", () => {
+			render(withRemote("ssh-remote", <BaseUrlField initialValue="http://192.168.1.20:11434" onChange={vi.fn()} />))
+
+			expect(screen.queryByTestId("loopback-on-remote-notice")).toBeNull()
+		})
+
+		it("leaves out the SSH config advice outside Remote-SSH", () => {
+			render(
+				withRemote(
+					"wsl",
+					<BaseUrlField defaultValue="http://localhost:11434" initialValue={undefined} onChange={vi.fn()} />,
+				),
+			)
+
+			const notice = screen.getByTestId("loopback-on-remote-notice")
+			expect(notice).toHaveTextContent("running on WSL")
+			expect(notice).not.toHaveTextContent("RemoteForward")
+		})
 	})
 })
