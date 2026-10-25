@@ -547,6 +547,10 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("showFeatureTips", request.showFeatureTips)
 		}
 
+		if (request.showCloudUsageInTaskHeader !== undefined) {
+			controller.stateManager.setGlobalState("showCloudUsageInTaskHeader", request.showCloudUsageInTaskHeader)
+		}
+
 		// Merged onto the stored value rather than assigned: the settings UI sends
 		// only the field it changed, and proto3 gives an absent number the same
 		// wire form as zero — assigning the request wholesale would reset the

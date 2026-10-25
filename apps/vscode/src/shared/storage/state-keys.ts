@@ -532,6 +532,10 @@ const USER_SETTINGS_FIELDS = {
 	backgroundEditEnabled: { default: false as boolean },
 	optOutOfRemoteConfig: { default: false as boolean },
 	showFeatureTips: { default: false as boolean },
+	// The Ollama cloud limits as bars in the task header, for a cloud model.
+	// Two rows there, so it can be turned off; the provider settings show them
+	// either way.
+	showCloudUsageInTaskHeader: { default: true as boolean },
 
 	// OpenTelemetry configuration
 	openTelemetryEnabled: { default: true as boolean },

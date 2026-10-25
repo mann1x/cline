@@ -1,6 +1,13 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { formatRemaining, formatResetsIn, formatUsed, OllamaCloudLimitLine, OllamaCloudUsageStrip } from "./OllamaCloudUsage"
+import {
+	formatRemaining,
+	formatResetsIn,
+	formatUsed,
+	OllamaCloudLimitLine,
+	OllamaCloudUsageHeaderToggle,
+	OllamaCloudUsageStrip,
+} from "./OllamaCloudUsage"
 
 const readOllamaCloudUsage = vi.fn()
 
@@ -12,6 +19,17 @@ vi.mock("@/services/grpc-client", () => ({
 
 vi.mock("@vscode/webview-ui-toolkit/react", () => ({
 	VSCodeLink: ({ children, href }: { children?: React.ReactNode; href?: string }) => <a href={href}>{children}</a>,
+}))
+
+const updateSetting = vi.fn()
+const extensionState: { showCloudUsageInTaskHeader?: boolean } = {}
+
+vi.mock("../utils/settingsHandlers", () => ({
+	updateSetting: (...args: unknown[]) => updateSetting(...args),
+}))
+
+vi.mock("@/context/ExtensionStateContext", () => ({
+	useExtensionState: () => extensionState,
 }))
 
 const inHours = (hours: number) => new Date(Date.now() + hours * 3_600_000 + 30_000).toISOString()
@@ -37,6 +55,8 @@ function legacy(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
 	readOllamaCloudUsage.mockReset()
+	updateSetting.mockReset()
+	delete extensionState.showCloudUsageInTaskHeader
 })
 
 describe("formatting", () => {
@@ -163,5 +183,21 @@ describe("OllamaCloudLimitLine", () => {
 		const { container } = render(<OllamaCloudLimitLine modelId="claude" providerId="anthropic" />)
 		expect(readOllamaCloudUsage).not.toHaveBeenCalled()
 		expect(container.textContent).toBe("")
+	})
+})
+
+describe("OllamaCloudUsageHeaderToggle", () => {
+	it("is on until it is turned off, and turning it off writes the setting", () => {
+		render(<OllamaCloudUsageHeaderToggle />)
+		const toggle = screen.getByRole("switch", { name: "Show cloud usage in the task header" })
+		expect(toggle.getAttribute("aria-checked")).toBe("true")
+		fireEvent.click(toggle)
+		expect(updateSetting).toHaveBeenCalledWith("showCloudUsageInTaskHeader", false)
+	})
+
+	it("shows a stored off as off", () => {
+		extensionState.showCloudUsageInTaskHeader = false
+		render(<OllamaCloudUsageHeaderToggle />)
+		expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe("false")
 	})
 })

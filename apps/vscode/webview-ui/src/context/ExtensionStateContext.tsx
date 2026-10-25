@@ -405,6 +405,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		lastDismissedCliBannerVersion: 0,
 		backgroundEditEnabled: false,
 		showFeatureTips: false,
+		showCloudUsageInTaskHeader: true,
 		globalSkillsToggles: {},
 		localSkillsToggles: {},
 

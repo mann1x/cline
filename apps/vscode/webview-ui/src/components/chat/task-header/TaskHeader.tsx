@@ -79,6 +79,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 		platform,
 		clineMessages,
 		focusChainSettings,
+		showCloudUsageInTaskHeader,
 	} = useExtensionState()
 
 	const [isHighlightedTextExpanded, setIsHighlightedTextExpanded] = useState(false)
@@ -273,9 +274,12 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 
 						{/*
 						 * How much of the ollama.com allowance is left, for a cloud
-						 * model on Ollama or xOllama. It renders nothing otherwise.
+						 * model on Ollama or xOllama. It renders nothing otherwise, and
+						 * nothing when the provider settings turn it off.
 						 */}
-						<OllamaCloudLimitLine modelId={selectedModelId} providerId={selectedProvider} />
+						{showCloudUsageInTaskHeader !== false && (
+							<OllamaCloudLimitLine modelId={selectedModelId} providerId={selectedProvider} />
+						)}
 
 						{/*
 						 * Under the context window, where the old focus chain lived. It

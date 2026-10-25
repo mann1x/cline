@@ -370,6 +370,7 @@ message Settings {
   optional bool notice_copy_bar_think = 252;
   optional bool notice_copy_bar_answer = 253;
   optional string tool_result_format = 254;
+  optional bool show_cloud_usage_in_task_header = 255;
 }
 
 message State {
@@ -631,6 +632,7 @@ message UpdateSettingsRequest {
   // and a temp folder. On by default for delegated agents, off for the lead.
   optional bool subagent_sandbox_confine = 99;
   optional bool lead_sandbox_confine = 100;
+  optional bool show_cloud_usage_in_task_header = 119;
 }
 
 // The escalation path's budgets and switches.

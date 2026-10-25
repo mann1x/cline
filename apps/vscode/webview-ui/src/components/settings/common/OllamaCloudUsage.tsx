@@ -3,7 +3,11 @@ import { OllamaReachabilityRequest } from "@shared/proto/cline/models"
 import { VSCodeLink } from "@vscode/webview-ui-toolkit/react"
 import type React from "react"
 import { useEffect, useState } from "react"
+import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
+import { useExtensionState } from "@/context/ExtensionStateContext"
 import { ModelsServiceClient } from "@/services/grpc-client"
+import { updateSetting } from "../utils/settingsHandlers"
 
 /**
  * The ollama.com account's balance and usage, read through the configured
@@ -311,6 +315,36 @@ export const OllamaCloudLimitLine = ({
 				</LimitBars>
 			)}
 			{text && <div className={tone}>{text}</div>}
+		</div>
+	)
+}
+
+/**
+ * The switch for `OllamaCloudLimitLine`: the bars take two rows of the task
+ * header, so they can be hidden. On by default; this panel's own strip shows
+ * the limits either way.
+ */
+export const OllamaCloudUsageHeaderToggle = () => {
+	const { showCloudUsageInTaskHeader } = useExtensionState()
+
+	return (
+		<div className="flex flex-col gap-1">
+			<div className="flex items-center justify-between w-full">
+				<Label className="text-xs font-medium text-foreground" htmlFor="showCloudUsageInTaskHeader">
+					Show cloud usage in the task header
+				</Label>
+				<Switch
+					checked={showCloudUsageInTaskHeader !== false}
+					className="shrink-0"
+					id="showCloudUsageInTaskHeader"
+					onCheckedChange={(checked) => updateSetting("showCloudUsageInTaskHeader", checked)}
+					size="default"
+				/>
+			</div>
+			<p className="text-xs mt-0 mb-0 text-description">
+				A bar each for the session and weekly limits under the context window, while a cloud model is selected. Applies to
+				Ollama and xOllama.
+			</p>
 		</div>
 	)
 }
