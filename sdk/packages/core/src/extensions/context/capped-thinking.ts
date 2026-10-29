@@ -171,6 +171,50 @@ export function reasoningHitBudget(
  */
 const CONDENSED_THINKING_MAX_CHARS = 16_000;
 
+/** New text a side call writes between two checks for repetition. */
+const SIDE_CALL_CHECK_CHARS = 4_000;
+
+/**
+ * Why a note's stream can stop before the model ends it.
+ *
+ * Both are verdicts the caller reaches anyway once the stream ends -- text
+ * past `CONDENSED_THINKING_MAX_CHARS` is cut, and text that repeats itself is
+ * thrown away -- so stopping costs nothing that would have been kept. Without
+ * it a runaway note ran to its whole output cap: 51,000 tokens in 7m55s,
+ * twice in one run, both discarded as repetition (automaticum, 2026-10-28).
+ */
+function sideCallSettled(text: string): "length" | "repetition" | undefined {
+	if (text.length > CONDENSED_THINKING_MAX_CHARS) {
+		return "length";
+	}
+	return isDegenerateNote(text) ? "repetition" : undefined;
+}
+
+/**
+ * A handler for one of the condenser's own requests, bound to the run.
+ *
+ * The run's signal reaches the request, so an abort ends it instead of
+ * waiting for it: prepareTurn checks for an abort only after it returns, and
+ * a note can take minutes. `stop` ends the request early for the condenser's
+ * own reasons (`sideCallSettled`).
+ */
+async function openSideCall(
+	config: ProviderConfig,
+	abortSignal: AbortSignal | undefined,
+): Promise<{
+	handler: Awaited<ReturnType<typeof createHandlerAsync>>;
+	stop: AbortController;
+}> {
+	abortSignal?.throwIfAborted();
+	const stop = new AbortController();
+	const signal = abortSignal
+		? AbortSignal.any([abortSignal, stop.signal])
+		: stop.signal;
+	const handler = await createHandlerAsync({ ...config, abortSignal: signal });
+	handler.setAbortSignal?.(signal);
+	return { handler, stop };
+}
+
 /**
  * The output cap for the condensation call itself.
  *
@@ -945,6 +989,8 @@ type PrepareTurnInput = {
 	) => void;
 	/** Where the condensation's own call is counted, as the agent's spend. */
 	reportUsage?: (usage: PrepareTurnUsage) => void;
+	/** The run's signal, which the condensation's own call has to follow. */
+	abortSignal?: AbortSignal;
 };
 type PrepareTurnResult =
 	| { messages?: readonly MessageWithMetadata[] }
@@ -1071,6 +1117,8 @@ async function writeCappedThinkingNote(options: {
 	userRequests?: readonly string[];
 	/** The task's tool record, on the same terms. */
 	toolRecord?: string;
+	/** Ends the note's own request with the run; an abort is thrown, not swallowed. */
+	abortSignal?: AbortSignal;
 }): Promise<string> {
 	// Sized twice, once for each place the note can be written: the
 	// conversation's next turn has what its last request left, a request of
@@ -1151,8 +1199,13 @@ async function writeCappedThinkingNote(options: {
 		options.config.logger?.debug?.(
 			`Capped-thinking note asked for about ${own.noteTokens} tokens (cap ${own.maxTokens}) from ${options.thinking.length} chars of reasoning`,
 		);
-		const handler = await createHandlerAsync(summarizerConfig);
+		const { handler, stop } = await openSideCall(
+			summarizerConfig,
+			options.abortSignal,
+		);
 		let text = "";
+		let checkedAt = 0;
+		let settled: ReturnType<typeof sideCallSettled>;
 		let chunks = 0;
 		const seen: string[] = [];
 		let streamError: string | undefined;
@@ -1174,6 +1227,14 @@ async function writeCappedThinkingNote(options: {
 			}
 			if (chunk.type === "text") {
 				text += chunk.text;
+				if (text.length - checkedAt >= SIDE_CALL_CHECK_CHARS) {
+					checkedAt = text.length;
+					settled = sideCallSettled(text);
+					if (settled) {
+						stop.abort();
+						break;
+					}
+				}
 				continue;
 			}
 			if (chunk.type === "usage") {
@@ -1195,6 +1256,17 @@ async function writeCappedThinkingNote(options: {
 			if (chunk.type === "done" && !chunk.success && chunk.error) {
 				streamError = chunk.error;
 			}
+		}
+		options.abortSignal?.throwIfAborted();
+		if (settled) {
+			options.config.logger?.log(
+				`Capped-thinking condensation stopped at ${text.length} chars: ${
+					settled === "length"
+						? "the note is cut there anyway"
+						: "it is repeating itself"
+				}`,
+				{ severity: "info", noteChars: text.length },
+			);
 		}
 		const note = truncateText(text.trim(), CONDENSED_THINKING_MAX_CHARS);
 		if (note && isDegenerateNote(note)) {
@@ -1221,6 +1293,12 @@ async function writeCappedThinkingNote(options: {
 		}
 		return note;
 	} catch (error) {
+		// An abort is the run's to handle. Swallowed, it came back as an empty
+		// note, which the caller caches against the reasoning -- and the think
+		// was then never condensed, even after a resume.
+		if (options.abortSignal?.aborted) {
+			throw error;
+		}
 		// A note is worth having and worth nothing at the price of the turn it
 		// was meant to help.
 		options.config.logger?.log(
@@ -1296,6 +1374,7 @@ export function createCappedThinkingNoteWriter(
 						),
 					}
 				: {}),
+			...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
 		});
 		// The second pass, and the reason the caller says whether the window was
 		// what capped the turn.
@@ -1314,6 +1393,7 @@ export function createCappedThinkingNoteWriter(
 						config,
 						providerConfig,
 						...(ask ? { ask } : {}),
+						...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
 					});
 		const result: DiscardedTurnCondensation = {
 			...(note ? { note } : {}),
@@ -1340,6 +1420,8 @@ async function writeDiscardedRetrospective(options: {
 	config: CappedThinkingCondenserConfig;
 	providerConfig: ProviderConfig;
 	ask?: ConversationAsk;
+	/** As the note's: ends the request with the run, and is thrown. */
+	abortSignal?: AbortSignal;
 }): Promise<string | undefined> {
 	try {
 		const request = buildThinkingSummaryRequest({
@@ -1373,8 +1455,12 @@ async function writeDiscardedRetrospective(options: {
 				? { sideCallOf: options.config.sideCallOf }
 				: {}),
 		};
-		const handler = await createHandlerAsync(summarizerConfig);
+		const { handler, stop } = await openSideCall(
+			summarizerConfig,
+			options.abortSignal,
+		);
 		let text = "";
+		let checkedAt = 0;
 		let reasoningChars = 0;
 		for await (const chunk of handler.createMessage(
 			CAPPED_THINKING_RETROSPECTIVE_SYSTEM_PROMPT,
@@ -1382,10 +1468,18 @@ async function writeDiscardedRetrospective(options: {
 		)) {
 			if (chunk.type === "text") {
 				text += chunk.text;
+				if (text.length - checkedAt >= SIDE_CALL_CHECK_CHARS) {
+					checkedAt = text.length;
+					if (sideCallSettled(text)) {
+						stop.abort();
+						break;
+					}
+				}
 			} else if (chunk.type === "reasoning") {
 				reasoningChars += chunk.reasoning?.length ?? 0;
 			}
 		}
+		options.abortSignal?.throwIfAborted();
 		const retrospective = truncateText(
 			text.trim(),
 			CONDENSED_THINKING_MAX_CHARS,
@@ -1410,6 +1504,9 @@ async function writeDiscardedRetrospective(options: {
 		);
 		return retrospective;
 	} catch (error) {
+		if (options.abortSignal?.aborted) {
+			throw error;
+		}
 		options.config.logger?.debug?.(
 			`Discarded-turn retrospective failed; keeping the note alone: ${
 				error instanceof Error ? error.message : String(error)
@@ -1471,6 +1568,7 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 		messages: MessageWithMetadata[],
 		emitStatusNotice?: PrepareTurnInput["emitStatusNotice"],
 		reportUsage?: PrepareTurnInput["reportUsage"],
+		abortSignal?: AbortSignal,
 	): Promise<MessageWithMetadata[]> => {
 		const lookup = locateCappedThinking(messages, config.budgetTokens, {
 			budgetMessage: config.budgetMessage,
@@ -1538,6 +1636,7 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 					messages,
 					providerConfig.toolResultFormat,
 				),
+				...(abortSignal ? { abortSignal } : {}),
 			});
 			condensed.set(thinking, note);
 		}
@@ -1599,6 +1698,7 @@ export function createCappedThinkingPrepareTurn<T extends PrepareTurn>(
 			context.messages,
 			context.emitStatusNotice,
 			context.reportUsage,
+			context.abortSignal,
 		);
 		const result = (await (
 			inner as unknown as

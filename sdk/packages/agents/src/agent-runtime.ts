@@ -2097,6 +2097,9 @@ export class AgentRuntime {
 						}
 					: {}),
 				...(room !== undefined ? { continuationRoomTokens: room } : {}),
+				...(this.abortController
+					? { abortSignal: this.abortController.signal }
+					: {}),
 			});
 			const note = condensation?.note?.trim();
 			const retrospective = condensation?.retrospective?.trim();
@@ -2123,6 +2126,14 @@ export class AgentRuntime {
 				...(retrospective ? { retrospective } : {}),
 			};
 		} catch (error) {
+			if (this.abortController?.signal.aborted) {
+				// The run is ending, so there is no retry to write a note for.
+				this.config.logger?.log?.(
+					"Stopped condensing the discarded reasoning: the run was aborted",
+					{ severity: "info" },
+				);
+				return undefined;
+			}
 			this.config.logger?.log?.(
 				"Could not condense the discarded reasoning; retrying without a note",
 				{

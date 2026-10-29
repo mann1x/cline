@@ -49,6 +49,18 @@ function summarizerCalls(): Array<{
 	}>;
 }
 
+/**
+ * How the summariser answers, when a test wants something other than
+ * "the note": handed the signal the condenser gave the handler.
+ */
+type SummarizerStream = (
+	signal: AbortSignal | undefined,
+) => AsyncGenerator<{ type: string; text?: string }>;
+const STREAM = Symbol.for("cline.test.summarizerStream");
+function setSummarizerStream(stream: SummarizerStream | undefined): void {
+	(globalThis as unknown as Record<symbol, unknown>)[STREAM] = stream;
+}
+
 vi.mock("@cline/llms", async (importOriginal) => ({
 	...((await importOriginal()) as Record<string, unknown>),
 	createHandlerAsync: async (config: Record<string, unknown>) => {
@@ -58,7 +70,11 @@ vi.mock("@cline/llms", async (importOriginal) => ({
 			container[key] = [];
 		}
 		(container[key] as Array<Record<string, unknown>>).push(config);
+		let signal = config.abortSignal as AbortSignal | undefined;
 		return {
+			setAbortSignal(next: AbortSignal | undefined) {
+				signal = next;
+			},
 			createMessage: async function* (
 				system: string,
 				messages: Array<{ role: string; content: string }>,
@@ -73,6 +89,13 @@ vi.mock("@cline/llms", async (importOriginal) => ({
 						messages: Array<{ role: string; content: string }>;
 					}>
 				).push({ system, messages });
+				const stream = container[Symbol.for("cline.test.summarizerStream")] as
+					| SummarizerStream
+					| undefined;
+				if (stream) {
+					yield* stream(signal);
+					return;
+				}
 				yield { type: "text", text: "the note" };
 			},
 		};
@@ -1250,5 +1273,144 @@ describe("reasoningHitBudget", () => {
 				`I have used my thinking budget sparingly. ${"More analysis. ".repeat(100)}`,
 			),
 		).toBe(false);
+	});
+});
+
+/**
+ * A summariser that never answers: it waits for the signal it was given, and
+ * fails with the abort's reason when that fires. With no signal it waits
+ * forever, which is what a session that aborted mid-condensation saw.
+ */
+const stalled: SummarizerStream = async function* (signal) {
+	await new Promise((_resolve, reject) => {
+		signal?.addEventListener("abort", () => reject(signal.reason), {
+			once: true,
+		});
+	});
+	yield { type: "text", text: "never" };
+};
+
+/** Run `promise` against a deadline, so a missing abort fails rather than hangs. */
+function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+	return Promise.race([
+		promise,
+		new Promise<T>((_resolve, reject) =>
+			setTimeout(() => reject(new Error(`still running after ${ms} ms`)), ms),
+		),
+	]);
+}
+
+// automaticum bug-045 (2026-10-28): an abort during a condensation did nothing
+// until the condensation's own request finished, which took up to eight
+// minutes, and the session never ended `cancelled`.
+describe("an abort reaches the condenser's own requests", () => {
+	afterEach(() => setSummarizerStream(undefined));
+
+	const cappedTurn = () =>
+		[
+			{
+				role: "assistant",
+				content: [{ type: "thinking", thinking: "y".repeat(43_000) }],
+				metrics: { outputTokens: 16_400 },
+			},
+		] as never[];
+	type Prepare = (input: {
+		messages: unknown[];
+		abortSignal?: AbortSignal;
+		emitStatusNotice?: (message: string) => void;
+	}) => Promise<{ messages?: unknown[] } | undefined>;
+
+	it("ends the capped turn's note when the run aborts", async () => {
+		setSummarizerStream(stalled);
+		const prepareTurn = createCappedThinkingPrepareTurn(undefined, {
+			budgetTokens: 16_000,
+			providerConfig: { providerId: "ollama", modelId: "m" } as never,
+		}) as unknown as Prepare;
+		const run = new AbortController();
+		const done = prepareTurn({
+			messages: cappedTurn(),
+			abortSignal: run.signal,
+			emitStatusNotice: (message) => {
+				if (message === "thinking-condensing") {
+					setTimeout(() => run.abort(new Error("wall limit")), 10);
+				}
+			},
+		});
+		await expect(within(done, 2_000)).rejects.toThrow("wall limit");
+
+		// Not cached as "nothing to say": the next run condenses the same think.
+		setSummarizerStream(undefined);
+		const next = await prepareTurn({
+			messages: cappedTurn(),
+			abortSignal: new AbortController().signal,
+		});
+		expect(JSON.stringify(next?.messages)).toContain("the note");
+	});
+
+	it("makes no request at all once the run has aborted", async () => {
+		summarizerCalls().length = 0;
+		const writer = createCappedThinkingNoteWriter({
+			enabled: true,
+			providerConfig: { providerId: "ollama", modelId: "m" } as never,
+		});
+		const run = new AbortController();
+		run.abort(new Error("stopped"));
+
+		await expect(
+			writer?.({ reasoning: "half a plan", abortSignal: run.signal }),
+		).rejects.toThrow("stopped");
+		expect(summarizerCalls()).toHaveLength(0);
+	});
+
+	it("ends a discarded turn's note and retrospective when the run aborts", async () => {
+		setSummarizerStream(stalled);
+		const writer = createCappedThinkingNoteWriter({
+			enabled: true,
+			providerConfig: { providerId: "ollama", modelId: "m" } as never,
+		});
+		const run = new AbortController();
+		setTimeout(() => run.abort(new Error("wall limit")), 10);
+
+		await expect(
+			within(
+				writer?.({
+					reasoning: "the parser gives up at line 90",
+					windowBound: false,
+					abortSignal: run.signal,
+				}) ?? Promise.resolve(undefined),
+				2_000,
+			),
+		).rejects.toThrow("wall limit");
+
+		setSummarizerStream(undefined);
+		const result = await writer?.({
+			reasoning: "the parser gives up at line 90",
+			windowBound: false,
+		});
+		expect(result?.note).toBe("the note");
+	});
+
+	// Measured: 51,000 tokens in 7m55s, discarded as repetition at the end.
+	it("stops a note that has started repeating itself", async () => {
+		let written = 0;
+		setSummarizerStream(async function* (signal) {
+			while (!signal?.aborted && written < 10_000) {
+				written += 1;
+				yield { type: "text", text: "Summary of the thought process:\n" };
+			}
+		});
+		const writer = createCappedThinkingNoteWriter({
+			enabled: true,
+			providerConfig: { providerId: "ollama", modelId: "m" } as never,
+		});
+
+		const result = await writer?.({
+			reasoning: "the parser gives up at line 90",
+			windowBound: true,
+		});
+
+		expect(result?.note).toBeUndefined();
+		// One check's worth of text, not the whole cap.
+		expect(written).toBeLessThan(200);
 	});
 });

@@ -882,6 +882,12 @@ export interface DiscardedTurnInput {
 	 * the caller does not continue. Absent when nothing was measured.
 	 */
 	continuationRoomTokens?: number;
+	/**
+	 * The run's own signal. The note and the retrospective are model calls
+	 * that can each run for minutes, so an abort has to reach them rather than
+	 * wait for them to finish.
+	 */
+	abortSignal?: AbortSignal;
 }
 
 /** What a host makes of a discarded turn. Both halves are optional. */

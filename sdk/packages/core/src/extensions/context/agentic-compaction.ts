@@ -372,6 +372,8 @@ async function generateThinkingSummary(options: {
 	summarizerInputLimit: number;
 	logger?: BasicLogger;
 	meter?: CompactionMeter;
+	/** The compaction's signal, which its own request has to follow. */
+	abortSignal?: AbortSignal;
 	/**
 	 * Makes the call instead of the summarizer's own handler: a continuation
 	 * sends it on an exact booking of its own.
@@ -412,12 +414,15 @@ async function generateThinkingSummary(options: {
 		);
 		return undefined;
 	}
-	const providerConfig = resolveSummarizerConfig({
-		activeProviderConfig: options.activeProviderConfig,
-		summarizer: options.summarizer,
-		maxInputTokens: options.summarizerInputLimit,
-		outputTokenCap: options.maxOutputTokens,
-	});
+	const providerConfig = {
+		...resolveSummarizerConfig({
+			activeProviderConfig: options.activeProviderConfig,
+			summarizer: options.summarizer,
+			maxInputTokens: options.summarizerInputLimit,
+			outputTokenCap: options.maxOutputTokens,
+		}),
+		...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+	};
 	try {
 		const result = options.generate
 			? await options.generate({
@@ -456,6 +461,11 @@ async function generateThinkingSummary(options: {
 		});
 		return trimmed;
 	} catch (error) {
+		// Cancelled, not failed: the compaction stops here rather than carrying
+		// on to calls the same signal will only cancel again.
+		if (options.abortSignal?.aborted) {
+			throw error;
+		}
 		options.logger?.log(
 			"Thinking compaction failed; keeping the summary alone",
 			{
@@ -710,12 +720,20 @@ export async function runAgenticCompaction(options: {
 		maxInputTokens: summarizerInputLimit,
 		generation,
 	});
-	const summarizerProviderConfig = resolveSummarizerConfig({
-		activeProviderConfig: options.providerConfig,
-		summarizer: options.summarizer,
-		maxInputTokens: summarizerInputLimit,
-		outputTokenCap: outputBudgets.summaryMaxTokens,
-	});
+	// The context's signal on every request made with it -- the summary, the
+	// council's reviews -- so an abort ends the one in flight. It was checked
+	// only between attempts, and a summary can run for minutes.
+	const summarizerProviderConfig = {
+		...resolveSummarizerConfig({
+			activeProviderConfig: options.providerConfig,
+			summarizer: options.summarizer,
+			maxInputTokens: summarizerInputLimit,
+			outputTokenCap: outputBudgets.summaryMaxTokens,
+		}),
+		...(options.context.abortSignal
+			? { abortSignal: options.context.abortSignal }
+			: {}),
+	};
 	const ledgerEnabled = options.toolLedgerEnabled !== false;
 	// The share is small because the ledger is a record and not the record:
 	// it earns its space by holding the calls the prose is worst at keeping,
@@ -1197,6 +1215,9 @@ export async function runAgenticCompaction(options: {
 			summarizerInputLimit,
 			logger: options.logger,
 			meter,
+			...(options.context.abortSignal
+				? { abortSignal: options.context.abortSignal }
+				: {}),
 			...(continuation
 				? {
 						generate: (call: {
