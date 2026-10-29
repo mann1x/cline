@@ -2879,7 +2879,10 @@ function createUnsupervisedAiSdkProvider(
 							context,
 						),
 					},
-					context,
+					// The request's own signal, which `abortWhenAbandoned` also
+					// fires when the stream is dropped: a vendor that probes the
+					// server before its first request stops waiting on either.
+					{ ...context, signal: request.signal ?? context.signal },
 				);
 				const composedProviderOptions = composeAiSdkProviderOptions(
 					request,

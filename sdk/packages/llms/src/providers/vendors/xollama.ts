@@ -45,6 +45,7 @@ import {
 	type GenerationNoticeCapability,
 	readGenerationNoticeCapability,
 } from "./generation-notices";
+import { OLLAMA_METADATA_TIMEOUT_MS } from "./ollama-account";
 import {
 	agentWindowFloorForBody,
 	type OpencotiAgentWindow,
@@ -364,7 +365,9 @@ export function probeXollama(
 		return cached;
 	}
 	const read = (async () => {
-		const response = await fetchImpl(`${key}/api/xollama`);
+		const response = await fetchImpl(`${key}/api/xollama`, {
+			signal: AbortSignal.timeout(OLLAMA_METADATA_TIMEOUT_MS),
+		});
 		if (!response.ok) {
 			return undefined;
 		}

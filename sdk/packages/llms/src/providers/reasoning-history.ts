@@ -4,6 +4,7 @@ import {
 	type ReasoningHistoryPlan,
 	type ReasoningHistorySetting,
 } from "@cline/shared";
+import { untilAborted } from "./http";
 
 /**
  * Whether prior assistant reasoning can reach this endpoint, and whether the
@@ -71,7 +72,56 @@ const reinjection = new Map<string, ReasoningReinjection>();
  * and the first one can sit through a model load: two sessions started 18
  * seconds apart on pandorum each sent their own pair (2026-10-22).
  */
-const reinjectionInFlight = new Map<string, Promise<void>>();
+const reinjectionInFlight = new Map<string, ProbeRun>();
+
+/**
+ * One probe and the requests waiting on it. The probe belongs to all of them,
+ * so one request's abort only ends that request's wait; the last one leaving
+ * stops the probe, because a request left in the server's queue with nobody
+ * to read it still holds the server.
+ */
+interface ProbeRun {
+	done: Promise<void>;
+	stop: AbortController;
+	waiters: number;
+	settled: boolean;
+}
+
+function joinProbe(
+	key: string,
+	start: (signal: AbortSignal) => Promise<void>,
+	signal: AbortSignal | undefined,
+): Promise<void> {
+	let run = reinjectionInFlight.get(key);
+	if (!run) {
+		const stop = new AbortController();
+		const created: ProbeRun = {
+			stop,
+			waiters: 0,
+			settled: false,
+			done: Promise.resolve(),
+		};
+		created.done = start(stop.signal).finally(() => {
+			created.settled = true;
+			if (reinjectionInFlight.get(key) === created) {
+				reinjectionInFlight.delete(key);
+			}
+		});
+		reinjectionInFlight.set(key, created);
+		run = created;
+	}
+	const joined = run;
+	joined.waiters += 1;
+	return untilAborted(joined.done, signal).finally(() => {
+		joined.waiters -= 1;
+		if (joined.waiters === 0 && !joined.settled) {
+			if (reinjectionInFlight.get(key) === joined) {
+				reinjectionInFlight.delete(key);
+			}
+			joined.stop.abort(signal?.reason);
+		}
+	});
+}
 
 /**
  * Keyed by the server, not by how its URL was written. The probe is handed
@@ -129,6 +179,9 @@ export function cachedReinjection(
 
 export function resetReasoningReinjection(): void {
 	reinjection.clear();
+	for (const run of reinjectionInFlight.values()) {
+		run.stop.abort();
+	}
 	reinjectionInFlight.clear();
 }
 
@@ -199,26 +252,19 @@ export async function primeOllamaReinjection(
 	 * conversation's first turn then reloads.
 	 */
 	extraBody?: Readonly<Record<string, unknown>>,
+	/** This request's stop: it ends the wait, and the probe once nobody waits. */
+	signal?: AbortSignal,
 ): Promise<void> {
 	const key = cacheKey(baseUrl, modelId);
 	if (reinjection.has(key)) {
 		return;
 	}
-	const running = reinjectionInFlight.get(key);
-	if (running) {
-		return running;
-	}
-	const probe = probeOllamaReinjection(
+	return joinProbe(
 		key,
-		baseUrl,
-		modelId,
-		fetchImpl,
-		extraBody,
-	).finally(() => {
-		reinjectionInFlight.delete(key);
-	});
-	reinjectionInFlight.set(key, probe);
-	return probe;
+		(stop) =>
+			probeOllamaReinjection(key, baseUrl, modelId, fetchImpl, extraBody, stop),
+		signal,
+	);
 }
 
 async function probeOllamaReinjection(
@@ -227,6 +273,7 @@ async function probeOllamaReinjection(
 	modelId: string,
 	fetchImpl: typeof fetch,
 	extraBody: Readonly<Record<string, unknown>> | undefined,
+	signal: AbortSignal,
 ): Promise<void> {
 	const needle = `${REINJECTION_NEEDLE} `.repeat(OLLAMA_PROBE_REPEATS);
 	const ask = async (
@@ -242,6 +289,7 @@ async function probeOllamaReinjection(
 		}
 		const response = await fetchImpl(`${ollamaApiRoot(baseUrl)}/chat`, {
 			method: "POST",
+			signal,
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
 				...(extraBody ?? {}),
@@ -267,6 +315,9 @@ async function probeOllamaReinjection(
 	try {
 		const without = await ask(undefined);
 		const with_ = await ask(needle);
+		if (signal.aborted) {
+			return;
+		}
 		if (without === undefined || with_ === undefined) {
 			reinjection.set(key, {
 				channel: "native-thinking",
@@ -281,7 +332,13 @@ async function probeOllamaReinjection(
 			detail: `prompt ${without} -> ${with_} tokens`,
 		});
 	} catch {
-		reinjection.set(key, { channel: "native-thinking", reinjects: undefined });
+		// Stopped, not answered: the next request asks again.
+		if (!signal.aborted) {
+			reinjection.set(key, {
+				channel: "native-thinking",
+				reinjects: undefined,
+			});
+		}
 	}
 }
 
@@ -313,26 +370,26 @@ export async function primeTemplateReinjection(
 		 * default (a hosted API's reasoning replay) with "none".
 		 */
 		recordRefusal?: boolean;
+		/** This request's stop: it ends the wait, and the probe once nobody waits. */
+		signal?: AbortSignal;
 	} = {},
 ): Promise<void> {
 	const key = cacheKey(baseUrl, modelId);
 	if (reinjection.has(key)) {
 		return;
 	}
-	const running = reinjectionInFlight.get(key);
-	if (running) {
-		return running;
-	}
-	const probe = probeTemplateReinjection(
+	return joinProbe(
 		key,
-		baseUrl,
-		fetchImpl,
-		options.recordRefusal ?? true,
-	).finally(() => {
-		reinjectionInFlight.delete(key);
-	});
-	reinjectionInFlight.set(key, probe);
-	return probe;
+		(stop) =>
+			probeTemplateReinjection(
+				key,
+				baseUrl,
+				fetchImpl,
+				options.recordRefusal ?? true,
+				stop,
+			),
+		options.signal,
+	);
 }
 
 /** The agent-run shape: one user message, a tool call carrying reasoning, its result. */
@@ -372,9 +429,11 @@ async function renderTemplate(
 	baseUrl: string | undefined,
 	fetchImpl: typeof fetch,
 	body: Record<string, unknown>,
+	signal: AbortSignal,
 ): Promise<{ prompt: string } | { status: number }> {
 	const response = await fetchImpl(`${serverRoot(baseUrl)}/apply-template`, {
 		method: "POST",
+		signal,
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(body),
 	});
@@ -395,6 +454,7 @@ async function probeTemplateReinjection(
 	baseUrl: string | undefined,
 	fetchImpl: typeof fetch,
 	recordRefusal: boolean,
+	signal: AbortSignal,
 ): Promise<void> {
 	try {
 		// The shape an agent run sends: one user message, then the model's
@@ -404,10 +464,12 @@ async function probeTemplateReinjection(
 		// (ae53464b), qwen3's -- answers "drops", and this was the question
 		// asked: Gemma was measured as dropping what it renders, and fell to
 		// inlining, which breaks its turn structure (automaticum #1845).
-		const rendered = await renderTemplate(baseUrl, fetchImpl, {
-			messages: agenticProbeMessages(),
-			tools: PROBE_TOOLS,
-		});
+		const rendered = await renderTemplate(
+			baseUrl,
+			fetchImpl,
+			{ messages: agenticProbeMessages(), tools: PROBE_TOOLS },
+			signal,
+		);
 		if (!("prompt" in rendered)) {
 			if (recordRefusal) {
 				reinjection.set(key, {
@@ -420,8 +482,11 @@ async function probeTemplateReinjection(
 		}
 		const seen = rendered.prompt.includes(REINJECTION_NEEDLE);
 		const preservesThinking = seen
-			? await probePreserveThinking(baseUrl, fetchImpl)
+			? await probePreserveThinking(baseUrl, fetchImpl, signal)
 			: undefined;
+		if (signal.aborted) {
+			return;
+		}
 		reinjection.set(key, {
 			channel: "reasoning-content",
 			reinjects: seen,
@@ -435,7 +500,8 @@ async function probeTemplateReinjection(
 			...(preservesThinking ? { preservesThinking } : {}),
 		});
 	} catch {
-		if (recordRefusal) {
+		// Stopped, not refused: the next request asks again.
+		if (recordRefusal && !signal.aborted) {
 			reinjection.set(key, {
 				channel: "reasoning-content",
 				reinjects: undefined,
@@ -458,24 +524,32 @@ async function probeTemplateReinjection(
 async function probePreserveThinking(
 	baseUrl: string | undefined,
 	fetchImpl: typeof fetch,
+	signal: AbortSignal,
 ): Promise<boolean> {
 	const messages = [
 		...agenticProbeMessages(),
 		{ role: "user", content: "probe" },
 	];
 	try {
-		const without = await renderTemplate(baseUrl, fetchImpl, {
-			messages,
-			tools: PROBE_TOOLS,
-		});
+		const without = await renderTemplate(
+			baseUrl,
+			fetchImpl,
+			{ messages, tools: PROBE_TOOLS },
+			signal,
+		);
 		if (!("prompt" in without) || without.prompt.includes(REINJECTION_NEEDLE)) {
 			return false;
 		}
-		const withFlag = await renderTemplate(baseUrl, fetchImpl, {
-			messages,
-			tools: PROBE_TOOLS,
-			chat_template_kwargs: { preserve_thinking: true },
-		});
+		const withFlag = await renderTemplate(
+			baseUrl,
+			fetchImpl,
+			{
+				messages,
+				tools: PROBE_TOOLS,
+				chat_template_kwargs: { preserve_thinking: true },
+			},
+			signal,
+		);
 		return "prompt" in withFlag && withFlag.prompt.includes(REINJECTION_NEEDLE);
 	} catch {
 		return false;

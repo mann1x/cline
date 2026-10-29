@@ -10,6 +10,40 @@ export function ensureFetch(fetchImpl?: typeof fetch): typeof fetch {
 	return resolved;
 }
 
+/**
+ * Wait for `work`, or stop waiting when `signal` aborts.
+ *
+ * For setup a request awaits before it is sent: a probe the server never
+ * answers would otherwise hold the request past its own abort, because nothing
+ * the abort reaches has been sent yet. The work itself is not cancelled; it may
+ * be shared with other callers, and it keeps whatever bound it has of its own.
+ */
+export function untilAborted<T>(
+	work: Promise<T>,
+	signal: AbortSignal | undefined,
+): Promise<T> {
+	if (!signal) {
+		return work;
+	}
+	if (signal.aborted) {
+		return Promise.reject(signal.reason);
+	}
+	return new Promise<T>((resolve, reject) => {
+		const onAbort = () => reject(signal.reason);
+		signal.addEventListener("abort", onAbort, { once: true });
+		work.then(
+			(value) => {
+				signal.removeEventListener("abort", onAbort);
+				resolve(value);
+			},
+			(error: unknown) => {
+				signal.removeEventListener("abort", onAbort);
+				reject(error);
+			},
+		);
+	});
+}
+
 export async function resolveApiKey(
 	settings: GatewayProviderSettings,
 ): Promise<string | undefined> {

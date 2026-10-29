@@ -335,13 +335,24 @@ export function matchOllamaRecommendation(
 	return undefined;
 }
 
+/**
+ * The bound on a read that describes the server or a model, never on one that
+ * runs it. These answer from the manifest without the scheduler, so a server
+ * this slow to answer one is wedged: the caller falls back as it does for an
+ * unreachable server, instead of waiting on it for as long as it stays open.
+ */
+export const OLLAMA_METADATA_TIMEOUT_MS = 30_000;
+
 async function readJson(
 	doFetch: typeof fetch,
 	url: string,
 	init?: RequestInit,
 ): Promise<{ status: number; body: unknown } | undefined> {
 	try {
-		const response = await doFetch(url, init);
+		const response = await doFetch(url, {
+			...init,
+			signal: AbortSignal.timeout(OLLAMA_METADATA_TIMEOUT_MS),
+		});
 		const text = await response.text();
 		let body: unknown;
 		try {

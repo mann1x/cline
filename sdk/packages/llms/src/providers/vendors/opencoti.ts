@@ -2312,6 +2312,7 @@ export async function createOpencotiProviderModule(
 			baseURL,
 			context.model.id,
 			baseFetch ?? globalThis.fetch,
+			context.signal ? { signal: context.signal } : {},
 		);
 	}
 	// Generation notices, on the profile's word and the server's: the

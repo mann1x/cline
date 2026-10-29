@@ -28,7 +28,7 @@ import { createOllama } from "ollama-ai-provider-v2";
 import { buildAiSdkStreamConfig, toAiSdkReasoning } from "../ai-sdk";
 import { OLLAMA_DEFAULT_CONTEXT_WINDOW } from "../builtins";
 import type { ProviderSamplingOptions } from "../config";
-import { ensureFetch, resolveApiKey } from "../http";
+import { ensureFetch, resolveApiKey, untilAborted } from "../http";
 import { keepToolImagesMiddleware } from "../middleware/split-tool-images";
 import { primeOllamaReinjection } from "../reasoning-history";
 import { withModelRequestCapture } from "../request-capture";
@@ -42,6 +42,7 @@ import {
 	withGenerationNotices,
 } from "./generation-notices";
 import {
+	OLLAMA_METADATA_TIMEOUT_MS,
 	primeOllamaAccountStatus,
 	readOllamaCloudFlag,
 	readOllamaRecommendation,
@@ -560,6 +561,11 @@ export async function primeDeclaredNumCtx(
 	modelId: string | undefined,
 	fetchImpl: typeof fetch,
 	logger?: BasicLogger,
+	/**
+	 * The request's stop. An abort ends the read and records nothing: the
+	 * server was not asked to the end, so its silence is not an answer.
+	 */
+	signal?: AbortSignal,
 ): Promise<void> {
 	if (!modelId) {
 		return;
@@ -575,10 +581,12 @@ export async function primeDeclaredNumCtx(
 	// before, which is why it is not awaited as a precondition.
 	const account = primeOllamaAccountStatus(baseUrl, fetchImpl, logger);
 	try {
+		const bound = AbortSignal.timeout(OLLAMA_METADATA_TIMEOUT_MS);
 		const response = await fetchImpl(`${root}/show`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ model: modelId }),
+			signal: signal ? AbortSignal.any([signal, bound]) : bound,
 		});
 		if (!response.ok) {
 			declaredNumCtx.set(key, null);
@@ -587,7 +595,7 @@ export async function primeDeclaredNumCtx(
 			declaredTemperature.set(key, null);
 			declaredThinkBudgetMessage.set(key, null);
 			declaredCapabilities.set(key, null);
-			await account;
+			await untilAborted(account, signal);
 			return;
 		}
 		const payload = await response.json();
@@ -611,7 +619,10 @@ export async function primeDeclaredNumCtx(
 			parseDeclaredThinkBudgetMessage(payload) ?? null,
 		);
 		declaredCapabilities.set(key, parseDeclaredCapabilities(payload) ?? null);
-	} catch {
+	} catch (error) {
+		if (signal?.aborted) {
+			throw signal.reason ?? error;
+		}
 		declaredNumCtx.set(key, null);
 		declaredFamily.set(key, null);
 		declaredTrainedCtx.set(key, null);
@@ -619,7 +630,7 @@ export async function primeDeclaredNumCtx(
 		declaredThinkBudgetMessage.set(key, null);
 		declaredCapabilities.set(key, null);
 	}
-	await account;
+	await untilAborted(account, signal);
 	const resolved = readResolvedOllamaWindow(baseUrl, modelId);
 	if (
 		resolved !== undefined &&
@@ -1225,6 +1236,7 @@ export async function createOllamaProviderModule(
 		context.model?.id,
 		serverFetch,
 		context.logger,
+		context.signal,
 	);
 	// Whether this server re-renders `thinking` back into the prompt, measured
 	// here rather than named anywhere. It costs two `/api/chat` calls with
@@ -1289,7 +1301,10 @@ export async function createOllamaProviderModule(
 	// A swarm agent on a plain xOllama model with pool seats runs as it would
 	// on opencoti: attached to its group's owner, through the engine proxy.
 	const wireFetch = xollama
-		? await xollamaWorkerFetch(config, context, fieldsFetch, serverFetch)
+		? await untilAborted(
+				xollamaWorkerFetch(config, context, fieldsFetch, serverFetch),
+				context.signal,
+			)
 		: fieldsFetch;
 	const timeoutFetch = withOllamaResponseTimeout(
 		wireFetch,
@@ -1302,12 +1317,18 @@ export async function createOllamaProviderModule(
 	);
 	if (context.model?.id) {
 		// On xOllama at the size the conversation will ask for, so the model is
-		// loaded once and at that size (`xollamaLoadPlacement`).
+		// loaded once and at that size (`xollamaLoadPlacement`). Both probes are
+		// shared with other requests for the same server, so an abort ends this
+		// request's wait: the reasoning probe stops once nobody waits on it, and
+		// the placement read keeps its own bound.
 		const placement = xollama
-			? await xollamaLoadPlacement(
-					config.baseUrl || XOLLAMA_DEFAULT_BASE_URL,
-					xollamaWindow,
-					serverFetch,
+			? await untilAborted(
+					xollamaLoadPlacement(
+						config.baseUrl || XOLLAMA_DEFAULT_BASE_URL,
+						xollamaWindow,
+						serverFetch,
+					),
+					context.signal,
 				)
 			: undefined;
 		await primeOllamaReinjection(
@@ -1315,6 +1336,7 @@ export async function createOllamaProviderModule(
 			context.model.id,
 			timeoutFetch,
 			placement ? { placement } : undefined,
+			context.signal,
 		);
 	}
 	// Before the first request, because the SDK reads this global at the moment
