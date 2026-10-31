@@ -281,8 +281,8 @@ see §6.
 
 * Resolution happens **once**, at session start, via `renderPromptTemplate()`.
   The hook only carries the answer.
-* The rewritten tool list is **memoised** against the list it was built from, so
-  a fifty-turn conversation does the work once.
+* The rewritten tool list is rebuilt for every request, never kept: the
+  `skills` description changes when a skill is added mid-session.
 * `beforeModel` is the seam because it is the only place that sees *every* tool:
   built-ins from core, MCP tools from a hub, and host-injected VS Code tools all
   converge on `request.tools`.

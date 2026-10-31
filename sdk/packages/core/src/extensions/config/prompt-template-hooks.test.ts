@@ -105,30 +105,29 @@ describe("createPromptTemplateHooks", () => {
 		);
 	});
 
-	it("does the work once for a tool set it has already seen", async () => {
-		// A fifty-turn conversation hands over the same array every turn.
-		let reads = 0;
-		const skills = {
+	it("shows a skill added since the last request", async () => {
+		// The description is computed from the skills on disk, and the same
+		// tool is read again for every request.
+		let skills = "pdf";
+		const live = {
 			name: "skills",
 			inputSchema: {},
 			get description() {
-				reads++;
-				return "base. Available skills: pdf.";
+				return `base. Available skills: ${skills}.`;
 			},
 		} as unknown as AgentToolDefinition;
-		const tools = [skills];
+		const tools = [live];
 
 		const hooks = createPromptTemplateHooks({
 			rendered: rendered({ tools: { skills: "{{DEFAULT}} Prefer these." } }),
 		});
 
 		const first = await hooks?.beforeModel?.(contextWith(tools));
+		skills = "pdf, qa";
 		const second = await hooks?.beforeModel?.(contextWith(tools));
-		const third = await hooks?.beforeModel?.(contextWith(tools));
 
-		expect(second?.tools).toBe(first?.tools);
-		expect(third?.tools).toBe(first?.tools);
-		expect(reads).toBeLessThanOrEqual(2);
+		expect(first?.tools?.[0]?.description).toContain("skills: pdf.");
+		expect(second?.tools?.[0]?.description).toContain("skills: pdf, qa.");
 	});
 
 	it("recomputes for a tool set it has not seen", async () => {

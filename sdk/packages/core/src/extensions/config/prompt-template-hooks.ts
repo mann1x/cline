@@ -1,8 +1,4 @@
-import type {
-	AgentHooks,
-	AgentToolDefinition,
-	RenderedPromptTemplate,
-} from "@cline/shared";
+import type { AgentHooks, RenderedPromptTemplate } from "@cline/shared";
 import { applyPromptTemplateToTools } from "@cline/shared";
 
 /**
@@ -11,9 +7,10 @@ import { applyPromptTemplateToTools } from "@cline/shared";
  * Two things are deliberately *not* happening here. Nothing is resolved: which
  * template governs this session, and how it layers over `default.md`, was
  * settled once by `renderPromptTemplate` when the session started, and this
- * hook only carries the answer. And nothing is recomputed per request: the
- * rewritten tool list is memoised against the list it was built from, so a
- * fifty-turn conversation does the work once.
+ * hook only carries the answer. And nothing is kept between requests: the
+ * runtime hands over a new list every time, read from the tools themselves,
+ * and the `skills` description changes when a skill is added mid-session. A
+ * rewrite remembered from an earlier request would hide that skill.
  *
  * `beforeModel` is still the seam, because it is the only one that sees every
  * tool. Builtin tools are constructed in core, MCP tools arrive from a hub and
@@ -64,12 +61,6 @@ export function createPromptTemplateHooks(
 		return undefined;
 	}
 
-	// Keyed on the array the runtime hands us. The tool set is built once per
-	// session and passed by reference on every turn, so this hits from the
-	// second request onwards; a runtime that rebuilds the array simply
-	// recomputes, which is correct either way. Weak so a finished session's
-	// tools can be collected.
-	const cache = new WeakMap<object, AgentToolDefinition[]>();
 	// The last set reported, so a rebuilt tool array that changes nothing stays
 	// quiet while one that changes something is heard.
 	let reported: string | undefined;
@@ -80,10 +71,6 @@ export function createPromptTemplateHooks(
 			if (!tools || tools.length === 0) {
 				return undefined;
 			}
-			const cached = cache.get(tools);
-			if (cached) {
-				return { tools: cached };
-			}
 			const rewritten = applyPromptTemplateToTools(tools, rendered, {
 				ideName,
 			}).map((tool) => ({
@@ -93,7 +80,6 @@ export function createPromptTemplateHooks(
 				// type boundary.
 				description: tool.description ?? "",
 			}));
-			cache.set(tools, rewritten);
 			if (log) {
 				const changed: string[] = [];
 				let before = 0;
