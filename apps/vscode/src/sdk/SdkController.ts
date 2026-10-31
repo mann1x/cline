@@ -17,6 +17,8 @@ import {
 	ensureChatWorkspace,
 	findCheckpointForRun,
 	getProviderAuthStorageId,
+	listConfiguredAgentSummaries,
+	loadConfiguredAgentConfigs,
 	loadRulesForSystemPromptFromRecords,
 	type PreparedRemoteConfigCoreIntegration,
 	type RuleConfig,
@@ -27,6 +29,7 @@ import {
 	type UserInstructionConfigService,
 } from "@cline/core"
 import { formatDisplayUserInput, type RemoteConfig, type RemoteConfigBundle } from "@cline/shared"
+import { agentDirectories } from "@core/controller/file/agent-files"
 import type { AtomicProtocolSessionSettings } from "@shared/AtomicProtocolSettings"
 import { DEFAULT_ATOMIC_PROTOCOL_SESSION } from "@shared/AtomicProtocolSettings"
 import type { ApiConfiguration } from "@shared/api"
@@ -1649,10 +1652,18 @@ export class Controller {
 	 * and persists the compaction sidecar so the model's working context is
 	 * reduced on the next turn and later resumes.
 	 */
-	/** The agents the active session can hand work to. */
+	/**
+	 * The agents the active session can hand work to. With no conversation open
+	 * yet, the ones a new session would load: the chat's first message is where
+	 * someone types `/delegate`, and an empty list there reads as having none.
+	 */
 	async listConfiguredAgents(): Promise<ConfiguredAgentSummary[]> {
 		const activeSession = this.sessions.getActiveSession()
-		if (!activeSession?.sdkHost.listConfiguredAgents) {
+		if (!activeSession) {
+			const { searchPaths } = await agentDirectories()
+			return listConfiguredAgentSummaries(loadConfiguredAgentConfigs({ searchPaths }).configs)
+		}
+		if (!activeSession.sdkHost.listConfiguredAgents) {
 			return []
 		}
 		return activeSession.sdkHost.listConfiguredAgents(activeSession.sessionId)

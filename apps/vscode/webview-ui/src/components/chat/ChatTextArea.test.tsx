@@ -42,6 +42,14 @@ vi.mock("@/services/grpc-client", () => ({
 		openImage: vi.fn(async () => ({})),
 		openFile: vi.fn(async () => ({})),
 	},
+	SlashServiceClient: {
+		listAgents: vi.fn(async () => ({
+			agents: [
+				{ name: "qa", description: "Runs the QA skill" },
+				{ name: "docs", description: "Writes the docs" },
+			],
+		})),
+	},
 	StateServiceClient: {
 		togglePlanActModeProto: vi.fn(async () => ({})),
 	},
@@ -141,5 +149,52 @@ describe("ChatTextArea image attachments vs. model capability", () => {
 		renderTextArea()
 
 		expect(screen.queryByTestId("images-unsupported-notice")).not.toBeInTheDocument()
+	})
+})
+
+describe("ChatTextArea /delegate agent names", () => {
+	function renderWith(initial: string) {
+		const setInputValue = vi.fn()
+		const view = render(
+			<ChatTextArea
+				activeQuote={null}
+				inputValue={initial}
+				onSelectFilesAndImages={vi.fn()}
+				onSend={vi.fn()}
+				placeholderText="Type a message"
+				selectedFiles={[]}
+				selectedImages={[]}
+				sendingDisabled={false}
+				setInputValue={setInputValue}
+				setSelectedFiles={vi.fn()}
+				setSelectedImages={vi.fn()}
+				shouldDisableFilesAndImages={false}
+			/>,
+		)
+		return { textarea: screen.getByPlaceholderText("Type a message") as HTMLTextAreaElement, setInputValue, view }
+	}
+
+	function type(textarea: HTMLTextAreaElement, value: string) {
+		fireEvent.change(textarea, { target: { value, selectionStart: value.length } })
+	}
+
+	it("offers the agents after the command and fills in the one chosen", async () => {
+		const { textarea, setInputValue } = renderWith("/delegate q")
+		type(textarea, "/delegate q")
+
+		expect(await screen.findByText("qa")).toBeInTheDocument()
+		expect(screen.queryByText("docs")).not.toBeInTheDocument()
+
+		fireEvent.keyDown(textarea, { key: "Enter" })
+		expect(setInputValue).toHaveBeenLastCalledWith("/delegate qa ")
+	})
+
+	it("stops offering them when Escape is pressed, so Enter sends", async () => {
+		const { textarea } = renderWith("/delegate-background ")
+		type(textarea, "/delegate-background ")
+
+		expect(await screen.findByText("docs")).toBeInTheDocument()
+		fireEvent.keyDown(textarea, { key: "Escape" })
+		expect(screen.queryByText("docs")).not.toBeInTheDocument()
 	})
 })

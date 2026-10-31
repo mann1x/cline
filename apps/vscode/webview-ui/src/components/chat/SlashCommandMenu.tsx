@@ -16,6 +16,8 @@ interface SlashCommandMenuProps {
 	remoteWorkflowToggles?: Record<string, boolean>
 	remoteWorkflows?: any[]
 	mcpServers?: McpServer[]
+	/** Shown instead of the commands: the cursor is on the name `/delegate` takes. */
+	agents?: SlashCommand[]
 }
 
 const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
@@ -29,21 +31,25 @@ const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
 	remoteWorkflowToggles,
 	remoteWorkflows,
 	mcpServers = [],
+	agents,
 }) => {
 	const menuRef = useRef<HTMLDivElement>(null)
 
 	// Filter commands based on query
-	const filteredCommands = getMatchingSlashCommands(
-		query,
-		localWorkflowToggles,
-		globalWorkflowToggles,
-		remoteWorkflowToggles,
-		remoteWorkflows,
-		mcpServers,
-	)
+	const filteredCommands =
+		agents ??
+		getMatchingSlashCommands(
+			query,
+			localWorkflowToggles,
+			globalWorkflowToggles,
+			remoteWorkflowToggles,
+			remoteWorkflows,
+			mcpServers,
+		)
 	const defaultCommands = filteredCommands.filter((cmd) => cmd.section === "default" || !cmd.section)
 	const workflowCommands = filteredCommands.filter((cmd) => cmd.section === "custom")
 	const mcpCommands = filteredCommands.filter((cmd) => cmd.section === "mcp")
+	const agentCommands = filteredCommands.filter((cmd) => cmd.section === "agent")
 
 	// Screen reader announcements
 	const getCommandLabel = useCallback((command: SlashCommand) => {
@@ -109,7 +115,9 @@ const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
 							onMouseEnter={() => setSelectedIndex(itemIndex)}
 							role="option">
 							<div className="font-bold whitespace-nowrap overflow-hidden text-ellipsis">
-								<span className="ph-no-capture">/{command.name}</span>
+								<span className="ph-no-capture">
+									{command.section === "agent" ? command.name : `/${command.name}`}
+								</span>
 							</div>
 							{showDescriptions && command.description && (
 								<div
@@ -146,6 +154,7 @@ const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
 						{renderCommandSection(defaultCommands, "Default Commands", 0, true)}
 						{renderCommandSection(workflowCommands, "Workflow Commands", defaultCommands.length, false)}
 						{renderCommandSection(mcpCommands, "MCP Prompts", defaultCommands.length + workflowCommands.length, true)}
+						{renderCommandSection(agentCommands, "Agents", 0, true)}
 					</>
 				) : (
 					<div aria-selected="false" className="py-2 px-3 cursor-default flex flex-col" role="option">

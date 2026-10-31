@@ -13,6 +13,8 @@ import {
 	type CoreSettingsToggleInput,
 	createSessionCompactionState,
 	isSessionNotFoundError,
+	listConfiguredAgentSummaries,
+	loadConfiguredAgentConfigs,
 	type PendingPromptMutationResult,
 	type ProviderSettingsManager,
 	projectSessionCompactionState,
@@ -700,11 +702,18 @@ export function createInteractiveSessionRuntime(input: {
 		return messages;
 	};
 
-	/** The agents this session can hand work to, for the /delegate picker. */
+	/**
+	 * The agents this session can hand work to, for the /delegate picker. Before
+	 * the first message, the ones a new session would load, as the plugin does.
+	 */
 	const listConfiguredAgents = async (): Promise<ConfiguredAgentSummary[]> => {
 		const manager = sessionManager;
 		if (!manager || !activeSessionId) {
-			return [];
+			return listConfiguredAgentSummaries(
+				loadConfiguredAgentConfigs({
+					workspaceRoot: input.config.workspaceRoot ?? input.config.cwd,
+				}).configs,
+			);
 		}
 		return manager.listConfiguredAgents(activeSessionId);
 	};

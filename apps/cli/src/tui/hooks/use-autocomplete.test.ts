@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+	extractDelegateAgentQuery,
 	extractSlashQuery,
 	formatMentionAutocompleteValue,
 	getFirstSelectableIndex,
 	insertMention,
+	takesAgentName,
 } from "./use-autocomplete";
 
 describe("TUI autocomplete slash command replacement", () => {
@@ -67,5 +69,39 @@ describe("TUI autocomplete slash command replacement", () => {
 		expect(insertMention("open @docs", 5, "docs/my file.md")).toBe(
 			'open @"./docs/my file.md" ',
 		);
+	});
+});
+
+describe("TUI autocomplete of the /delegate agent", () => {
+	it("is on the name from the space after the command", () => {
+		expect(extractDelegateAgentQuery("/delegate ")).toEqual({
+			inAgentMode: true,
+			query: "",
+			nameIndex: 10,
+		});
+		expect(extractDelegateAgentQuery("/delegate-background q")).toEqual({
+			inAgentMode: true,
+			query: "q",
+			nameIndex: 21,
+		});
+	});
+
+	it("is over once the task starts, and off for anything else", () => {
+		for (const text of [
+			"/delegate",
+			"/delegate qa ",
+			"/delegate qa run it",
+			"/delegate @file",
+			"please /delegate q",
+			"/delegated q",
+		]) {
+			expect(extractDelegateAgentQuery(text).inAgentMode).toBe(false);
+		}
+	});
+
+	it("knows the two commands that take an agent", () => {
+		expect(takesAgentName("delegate")).toBe(true);
+		expect(takesAgentName("delegate-background")).toBe(true);
+		expect(takesAgentName("agents")).toBe(false);
 	});
 });

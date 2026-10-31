@@ -156,6 +156,7 @@ function App(props: TuiProps) {
 		workspaceRoot,
 		systemCommands,
 		skillCommands,
+		listAgents: props.onListAgents,
 	});
 
 	const repoStatusInFlightRef = useRef(false);

@@ -21,7 +21,11 @@ import {
 	removeLocalSlashCommandInvocation,
 } from "../utils/skill-command-input";
 import type { AutocompleteOption, useAutocomplete } from "./use-autocomplete";
-import { extractSlashQuery } from "./use-autocomplete";
+import {
+	extractDelegateAgentQuery,
+	extractSlashQuery,
+	takesAgentName,
+} from "./use-autocomplete";
 import { useInputHistory } from "./use-input-history";
 
 interface PastedImage {
@@ -207,7 +211,10 @@ export function usePromptInputController(input: {
 				const offset = ta.cursorOffset;
 				const before = text.slice(0, offset);
 				const slash = extractSlashQuery(before);
-				if (option.commandExecution === "local") {
+				// Run from here it could only print its usage: the agent and the
+				// task are still to come, so it goes in the input like any other
+				// command with arguments.
+				if (option.commandExecution === "local" && !takesAgentName(cmd)) {
 					const invocation: LocalSlashCommandInvocation = {
 						text,
 						cursorOffset: offset,
@@ -238,6 +245,19 @@ export function usePromptInputController(input: {
 						});
 					}
 					ta.cursorOffset = slash.slashIndex + option.value.length;
+				}
+				if (takesAgentName(cmd)) {
+					setInputValue(ta.plainText);
+					autocomplete.updateAutocomplete(ta.plainText);
+					return;
+				}
+			} else if (autocomplete.mode === "agent") {
+				const text = inputValueRef.current;
+				const agent = extractDelegateAgentQuery(text);
+				if (agent.inAgentMode) {
+					const newText = text.slice(0, agent.nameIndex) + option.value;
+					ta.setText(newText);
+					ta.cursorOffset = newText.length;
 				}
 			} else if (autocomplete.mode === "@") {
 				const text = inputValueRef.current;

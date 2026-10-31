@@ -1,5 +1,5 @@
 import { mentionRegex, mentionRegexGlobal } from "@shared/context-mentions"
-import { StringRequest } from "@shared/proto/cline/common"
+import { EmptyRequest, StringRequest } from "@shared/proto/cline/common"
 import { FileSearchRequest, FileSearchType, RelativePathsRequest } from "@shared/proto/cline/file"
 import { PlanActMode, TogglePlanActModeRequest } from "@shared/proto/cline/state"
 import { type SlashCommand } from "@shared/slashCommands"
@@ -22,7 +22,7 @@ import { useMessageHistory } from "@/hooks/useMessageHistory"
 import { useNormalizedApiConfiguration } from "@/hooks/useNormalizedApiConfiguration"
 import { useOllamaReachability } from "@/hooks/useOllamaReachability"
 import { cn } from "@/lib/utils"
-import { FileServiceClient, StateServiceClient } from "@/services/grpc-client"
+import { FileServiceClient, SlashServiceClient, StateServiceClient } from "@/services/grpc-client"
 import {
 	ContextMenuOptionType,
 	getContextMenuOptionIndex,
@@ -36,7 +36,10 @@ import {
 import { useMetaKeyDetection, useShortcut } from "@/utils/hooks"
 import { isSafari } from "@/utils/platformUtils"
 import {
+	getDelegateAgentQuery,
+	getMatchingDelegateAgents,
 	getMatchingSlashCommands,
+	insertDelegateAgent,
 	insertSlashCommand,
 	removeSlashCommand,
 	shouldShowSlashCommandsMenu,
@@ -247,6 +250,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		const [showSlashCommandsMenu, setShowSlashCommandsMenu] = useState(false)
 		const [selectedSlashCommandsIndex, setSelectedSlashCommandsIndex] = useState(0)
 		const [slashCommandsQuery, setSlashCommandsQuery] = useState("")
+		const [delegateAgents, setDelegateAgents] = useState<{ name: string; description: string }[]>([])
+		const [delegateMenuDismissed, setDelegateMenuDismissed] = useState(false)
 		const slashCommandsMenuContainerRef = useRef<HTMLDivElement>(null)
 
 		const [thumbnailsHeight, setThumbnailsHeight] = useState(0)
@@ -331,6 +336,35 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			}
 		}, [showContextMenu, setShowContextMenu])
 
+		// Derived from the text rather than set on each keystroke, so picking
+		// `/delegate` from the menu opens this too, and a sent message closes it.
+		const delegateAgentQuery = delegateMenuDismissed ? undefined : getDelegateAgentQuery(inputValue, cursorPosition)
+		const choosingDelegateAgent = delegateAgentQuery !== undefined
+
+		// Asked each time the menu opens: an agent file can appear at any point.
+		useEffect(() => {
+			if (!choosingDelegateAgent) {
+				return
+			}
+			let cancelled = false
+			SlashServiceClient.listAgents(EmptyRequest.create({}))
+				.then((response) => {
+					if (!cancelled) {
+						setDelegateAgents(response.agents)
+					}
+				})
+				.catch((error) => console.error("Failed to list agents:", error))
+			return () => {
+				cancelled = true
+				setDelegateAgents([])
+			}
+		}, [choosingDelegateAgent])
+
+		const delegateAgentItems = useMemo(
+			() => (delegateAgentQuery === undefined ? [] : getMatchingDelegateAgents(delegateAgentQuery, delegateAgents)),
+			[delegateAgentQuery, delegateAgents],
+		)
+
 		useEffect(() => {
 			const handleClickOutsideSlashMenu = (event: MouseEvent) => {
 				if (
@@ -338,17 +372,18 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					!slashCommandsMenuContainerRef.current.contains(event.target as Node)
 				) {
 					setShowSlashCommandsMenu(false)
+					setDelegateMenuDismissed(true)
 				}
 			}
 
-			if (showSlashCommandsMenu) {
+			if (showSlashCommandsMenu || delegateAgentItems.length > 0) {
 				document.addEventListener("mousedown", handleClickOutsideSlashMenu)
 			}
 
 			return () => {
 				document.removeEventListener("mousedown", handleClickOutsideSlashMenu)
 			}
-		}, [showSlashCommandsMenu])
+		}, [showSlashCommandsMenu, delegateAgentItems.length])
 
 		const handleMentionSelect = useCallback(
 			(type: ContextMenuOptionType, value?: string) => {
@@ -451,6 +486,22 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			[setInputValue, cursorPosition, searchQuery],
 		)
 
+		const handleDelegateAgentSelect = useCallback(
+			(agent: SlashCommand) => {
+				const { newValue, newCursorPosition } = insertDelegateAgent(inputValue, agent.name, cursorPosition)
+				setInputValue(newValue)
+				setCursorPosition(newCursorPosition)
+				setIntendedCursorPosition(newCursorPosition)
+				setTimeout(() => {
+					if (textAreaRef.current) {
+						textAreaRef.current.blur()
+						textAreaRef.current.focus()
+					}
+				}, 0)
+			},
+			[setInputValue, inputValue, cursorPosition],
+		)
+
 		const handleSlashCommandsSelect = useCallback(
 			(command: SlashCommand) => {
 				setShowSlashCommandsMenu(false)
@@ -506,6 +557,30 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					textArea.setSelectionRange(0, textArea.value.length)
 					setCursorPosition(0)
 					return
+				}
+
+				if (delegateAgentItems.length > 0) {
+					if (event.key === "Escape") {
+						setDelegateMenuDismissed(true)
+						return
+					}
+
+					if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+						event.preventDefault()
+						const direction = event.key === "ArrowUp" ? -1 : 1
+						setSelectedSlashCommandsIndex(
+							(prevIndex) => (prevIndex + direction + delegateAgentItems.length) % delegateAgentItems.length,
+						)
+						return
+					}
+
+					if (event.key === "Enter" || event.key === "Tab") {
+						event.preventDefault()
+						const agent = delegateAgentItems[selectedSlashCommandsIndex] ?? delegateAgentItems[0]
+						handleDelegateAgentSelect(agent)
+						setSelectedSlashCommandsIndex(0)
+						return
+					}
 				}
 
 				if (showSlashCommandsMenu) {
@@ -719,6 +794,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				selectedSlashCommandsIndex,
 				slashCommandsQuery,
 				handleSlashCommandsSelect,
+				delegateAgentItems,
+				handleDelegateAgentSelect,
 				sendingDisabled,
 			],
 		)
@@ -768,6 +845,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				const newCursorPosition = e.target.selectionStart
 				setInputValue(newValue)
 				setCursorPosition(newCursorPosition)
+				setDelegateMenuDismissed(false)
 				let showMenu = shouldShowContextMenu(newValue, newCursorPosition)
 				const showSlashCommandsMenu = shouldShowSlashCommandsMenu(newValue, newCursorPosition)
 
@@ -874,6 +952,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			if (!isMouseDownOnMenu) {
 				setShowContextMenu(false)
 				setShowSlashCommandsMenu(false)
+				setDelegateMenuDismissed(true)
 			}
 			setIsTextAreaFocused(false)
 			onFocusChange?.(false) // Call prop on blur
@@ -1466,14 +1545,15 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							<span className="text-error font-bold text-xs">Files other than images are currently disabled</span>
 						</div>
 					)}
-					{showSlashCommandsMenu && (
+					{(showSlashCommandsMenu || delegateAgentItems.length > 0) && (
 						<div ref={slashCommandsMenuContainerRef}>
 							<SlashCommandMenu
+								agents={delegateAgentItems.length > 0 ? delegateAgentItems : undefined}
 								globalWorkflowToggles={globalWorkflowToggles}
 								localWorkflowToggles={localWorkflowToggles}
 								mcpServers={mcpServers}
 								onMouseDown={handleMenuMouseDown}
-								onSelect={handleSlashCommandsSelect}
+								onSelect={delegateAgentItems.length > 0 ? handleDelegateAgentSelect : handleSlashCommandsSelect}
 								query={slashCommandsQuery}
 								remoteWorkflows={remoteConfigSettings?.remoteGlobalWorkflows}
 								remoteWorkflowToggles={remoteWorkflowToggles}

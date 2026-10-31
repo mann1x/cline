@@ -6,7 +6,7 @@ import {
 } from "../commands/slash-command-registry";
 import { COMPLETION_DEBOUNCE_MS, MAX_COMPLETION_RESULTS } from "../types";
 
-export type AutocompleteMode = false | "@" | "/";
+export type AutocompleteMode = false | "@" | "/" | "agent";
 
 interface MentionQueryInfo {
 	inMentionMode: boolean;
@@ -50,6 +50,37 @@ export function extractSlashQuery(text: string): SlashQueryInfo {
 		return { inSlashMode: false, query: "", slashIndex: -1 };
 	}
 	return { inSlashMode: true, query, slashIndex };
+}
+
+interface DelegateAgentQueryInfo {
+	inAgentMode: boolean;
+	query: string;
+	nameIndex: number;
+}
+
+/**
+ * The agent name being typed after `/delegate` or `/delegate-background`. Over
+ * once a space follows it: what comes next is the task.
+ */
+export function extractDelegateAgentQuery(
+	text: string,
+): DelegateAgentQueryInfo {
+	const match = /^(\s*\/(?:delegate|delegate-background)\s+)([^\s@]*)$/.exec(
+		text,
+	);
+	if (!match) {
+		return { inAgentMode: false, query: "", nameIndex: -1 };
+	}
+	return {
+		inAgentMode: true,
+		query: match[2] ?? "",
+		nameIndex: match[1]?.length ?? 0,
+	};
+}
+
+/** Whether a command's first argument is an agent name to choose. */
+export function takesAgentName(commandName: string): boolean {
+	return commandName === "delegate" || commandName === "delegate-background";
 }
 
 export function insertMention(
@@ -125,16 +156,22 @@ export function useAutocomplete(opts: {
 	workspaceRoot: string;
 	systemCommands: SlashCommandRegistryEntry[];
 	skillCommands: SlashCommandRegistryEntry[];
+	listAgents?: () => Promise<{ name: string; description: string }[]>;
 }) {
-	const { workspaceRoot, systemCommands, skillCommands } = opts;
+	const { workspaceRoot, systemCommands, skillCommands, listAgents } = opts;
 
 	const [mode, setMode] = useState<AutocompleteMode>(false);
 	const [filter, setFilter] = useState("");
 	const [selected, setSelected] = useState(0);
 	const [mentionResults, setMentionResults] = useState<string[]>([]);
+	const [agents, setAgents] = useState<{ name: string; description: string }[]>(
+		[],
+	);
 
 	const searchTimerRef = useRef<NodeJS.Timeout | null>(null);
 	const searchCounterRef = useRef(0);
+	const choosingAgentRef = useRef(false);
+	const agentLoadCounterRef = useRef(0);
 
 	const systemOptions: AutocompleteOption[] = systemCommands.map((cmd) => ({
 		display: `/${cmd.name}`,
@@ -207,8 +244,55 @@ export function useAutocomplete(opts: {
 		[mentionResults],
 	);
 
+	const getFilteredAgentOptions = useCallback(
+		(query: string): AutocompleteOption[] => {
+			const q = query.toLowerCase();
+			return agents
+				.filter(
+					(agent) =>
+						agent.name.toLowerCase().includes(q) ||
+						agent.description.toLowerCase().includes(q),
+				)
+				.sort(
+					(a, b) =>
+						Number(b.name.toLowerCase().startsWith(q)) -
+						Number(a.name.toLowerCase().startsWith(q)),
+				)
+				.slice(0, MAX_COMPLETION_RESULTS)
+				.map((agent) => ({
+					display: agent.name,
+					value: `${agent.name} `,
+					description: agent.description,
+				}));
+		},
+		[agents],
+	);
+
 	const updateAutocomplete = useCallback(
 		(text: string) => {
+			const agent = extractDelegateAgentQuery(text);
+			if (agent.inAgentMode) {
+				// Asked once per opening, not per keystroke; an agent file can
+				// appear between openings.
+				if (!choosingAgentRef.current) {
+					choosingAgentRef.current = true;
+					setAgents([]);
+					const counter = ++agentLoadCounterRef.current;
+					listAgents?.()
+						.then((listed) => {
+							if (counter === agentLoadCounterRef.current) {
+								setAgents(listed);
+							}
+						})
+						.catch(() => {});
+				}
+				setMode("agent");
+				setFilter(agent.query);
+				setSelected(0);
+				return;
+			}
+			choosingAgentRef.current = false;
+
 			const slash = extractSlashQuery(text);
 			if (slash.inSlashMode) {
 				setMode("/");
@@ -249,16 +333,24 @@ export function useAutocomplete(opts: {
 			setMode(false);
 			setFilter("");
 		},
-		[workspaceRoot, getFilteredSlashOptions],
+		[workspaceRoot, getFilteredSlashOptions, listAgents],
 	);
 
 	const getFilteredOptions = useCallback((): AutocompleteOption[] => {
 		if (mode === "/") return getFilteredSlashOptions(filter);
 		if (mode === "@") return getFilteredMentionOptions(filter);
+		if (mode === "agent") return getFilteredAgentOptions(filter);
 		return [];
-	}, [mode, filter, getFilteredSlashOptions, getFilteredMentionOptions]);
+	}, [
+		mode,
+		filter,
+		getFilteredSlashOptions,
+		getFilteredMentionOptions,
+		getFilteredAgentOptions,
+	]);
 
 	const close = useCallback(() => {
+		choosingAgentRef.current = false;
 		setMode(false);
 		setFilter("");
 		setSelected(0);

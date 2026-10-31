@@ -200,6 +200,40 @@ export function getMatchingSlashCommands(
 }
 
 /**
+ * The part of an agent name typed so far, when the cursor is on the first
+ * argument of `/delegate` or `/delegate-background`; undefined anywhere else.
+ * Only at the start of the message, where those commands are recognised.
+ */
+export function getDelegateAgentQuery(text: string, cursorPosition: number): string | undefined {
+	return text.slice(0, cursorPosition).match(/^\/(?:delegate|delegate-background)\s+([^\s@]*)$/)?.[1]
+}
+
+/** The agents whose name starts with what was typed, as menu entries. */
+export function getMatchingDelegateAgents(
+	query: string,
+	agents: ReadonlyArray<{ name: string; description: string }>,
+): SlashCommand[] {
+	const wanted = query.toLowerCase()
+	return agents
+		.filter((agent) => agent.name.toLowerCase().startsWith(wanted))
+		.map((agent) => ({ name: agent.name, description: agent.description, section: "agent" }))
+}
+
+/** Replace the agent name under the cursor, leaving the cursor where the task goes. */
+export function insertDelegateAgent(
+	text: string,
+	agentName: string,
+	cursorPosition: number,
+): { newValue: string; newCursorPosition: number } {
+	const start = cursorPosition - (getDelegateAgentQuery(text, cursorPosition) ?? "").length
+	const rest = text.slice(cursorPosition).replace(/^\S*/, "")
+	return {
+		newValue: `${text.slice(0, start)}${agentName}${rest.startsWith(" ") ? rest : ` ${rest}`}`,
+		newCursorPosition: start + agentName.length + 1,
+	}
+}
+
+/**
  * Insert a slash command at position or replace partial command
  */
 export function insertSlashCommand(
