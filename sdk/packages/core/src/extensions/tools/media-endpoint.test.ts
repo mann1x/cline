@@ -122,6 +122,10 @@ describe("sound effects", () => {
 		expect(mediaKindsOfModelRow({ output_modalities: ["audio"] })).toEqual([
 			"speech",
 		]);
+		// opencoti's own name for it, on a server that is not xOllama.
+		expect(
+			mediaKindsOfModelRow({ capabilities: ["audio_generation"] }),
+		).toEqual(["sound_effects"]);
 	});
 
 	it("are found on opencoti from its feature", async () => {

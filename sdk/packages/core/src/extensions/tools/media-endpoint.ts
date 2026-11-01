@@ -139,6 +139,7 @@ const CAPABILITY_KINDS: Record<string, MediaKind> = {
 	video: "video",
 	video_generation: "video",
 	sound_effects: "sound_effects",
+	audio_generation: "sound_effects",
 };
 
 function strings(value: unknown): string[] {
