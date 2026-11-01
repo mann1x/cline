@@ -112,6 +112,7 @@ const HOST_TOOL_NAMES = [
 	"transform_image",
 	"transcribe_audio",
 	"synthesize_speech",
+	"generate_sound_effect",
 	"generate_video",
 	"jev",
 ];

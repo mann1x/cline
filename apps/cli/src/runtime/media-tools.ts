@@ -12,7 +12,8 @@ import {
  * The media tools, for a host with no settings tabs.
  *
  * The extension reads where `generate_image`, `edit_image`,
- * `transcribe_audio`, `synthesize_speech` and `generate_video` go from its
+ * `transcribe_audio`, `synthesize_speech`, `generate_sound_effect` and
+ * `generate_video` go from its
  * Images, Audio and Video tabs. This host reads the same thing from two
  * places, and hands it to the same builder in core, so a run here offers the
  * tools the plugin would for the same configuration:

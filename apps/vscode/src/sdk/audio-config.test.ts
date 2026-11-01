@@ -38,14 +38,46 @@ describe("the audio endpoints", () => {
 	})
 
 	it("reads an empty or broken record as an empty tab", () => {
-		expect(parseAudioEndpoints(undefined)).toEqual({ stt: { baseUrl: "", model: "" }, tts: { baseUrl: "", model: "" } })
-		expect(parseAudioEndpoints("{not json")).toEqual({ stt: { baseUrl: "", model: "" }, tts: { baseUrl: "", model: "" } })
+		expect(parseAudioEndpoints(undefined)).toEqual({
+			stt: { baseUrl: "", model: "" },
+			tts: { baseUrl: "", model: "" },
+			sfx: { baseUrl: "", model: "" },
+		})
+		expect(parseAudioEndpoints("{not json")).toEqual({
+			stt: { baseUrl: "", model: "" },
+			tts: { baseUrl: "", model: "" },
+			sfx: { baseUrl: "", model: "" },
+		})
 		expect(audioEndpointsConfigured(parseAudioEndpoints(undefined))).toBe(false)
 		expect(audioEndpointsConfigured(parseAudioEndpoints('{"useProvider":true}'))).toBe(true)
 		expect(audioEndpointsConfigured(parseAudioEndpoints('{"tts":{"baseUrl":"http://h","model":"m"}}'))).toBe(true)
 		expect(audioEndpointsConfigured(parseAudioEndpoints('{"tts":{"baseUrl":"http://h","model":"m","disabled":true}}'))).toBe(
 			false,
 		)
+	})
+
+	it("sends sound effects to the text-to-speech endpoint, with its key, until they have their own", async () => {
+		store({ tts: { baseUrl: "http://127.0.0.1:9", model: "kokoro" }, sfx: { model: "sfx" } })
+		state.secrets.audioTtsApiKey = "sk-tts"
+		state.secrets.audioSfxApiKey = "sk-sfx"
+		expect(await resolveExtensionMediaTool("generate_sound_effect")).toMatchObject({
+			endpoint: { baseUrl: "http://127.0.0.1:9", model: "sfx", apiKey: "sk-tts" },
+		})
+	})
+
+	it("never sends the speech key to a sound effects server of its own", async () => {
+		store({ tts: { baseUrl: "http://127.0.0.1:9", model: "kokoro" }, sfx: { baseUrl: "http://127.0.0.1:8", model: "sfx" } })
+		state.secrets.audioTtsApiKey = "sk-tts"
+		const resolved = await resolveExtensionMediaTool("generate_sound_effect")
+		expect(resolved).toMatchObject({ endpoint: { baseUrl: "http://127.0.0.1:8" } })
+		expect("endpoint" in resolved && resolved.endpoint.apiKey).toBeUndefined()
+	})
+
+	it("does not offer sound effects with no model, or switched off", async () => {
+		store({ tts: { baseUrl: "http://127.0.0.1:9", model: "kokoro" } })
+		expect(await resolveExtensionMediaTool("generate_sound_effect")).toHaveProperty("disabled")
+		store({ tts: { baseUrl: "http://127.0.0.1:9", model: "kokoro" }, sfx: { model: "sfx", disabled: true } })
+		expect(await resolveExtensionMediaTool("generate_sound_effect")).toHaveProperty("disabled")
 	})
 
 	it("offers a typed endpoint that is not answering, with a warning", async () => {

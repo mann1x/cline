@@ -9,7 +9,7 @@
  * Three kinds of server answer these routes, and they say different amounts:
  *  - **opencoti** names what is loaded in `features` on `/props`
  *    (`images_generate_v1`, `images_edit_v1`, `audio_transcriptions_v1`,
- *    `audio_speech_v1`, `videos_generate_v1`), and its `/v1/models` rows carry
+ *    `audio_speech_v1`, `videos_generate_v1`, `audio_generations_v1`), and its `/v1/models` rows carry
  *    `capabilities`. One process can serve the LLM and every media kind.
  *  - **xOllama** answers `/api/xollama`, and its `/v1/models` rows carry
  *    `input_modalities` / `output_modalities` for models with media.
@@ -39,7 +39,8 @@ export type MediaKind =
 	| "image_edit"
 	| "transcription"
 	| "speech"
-	| "video";
+	| "video"
+	| "sound_effects";
 
 export const MEDIA_KINDS: readonly MediaKind[] = [
 	"image_generation",
@@ -47,6 +48,7 @@ export const MEDIA_KINDS: readonly MediaKind[] = [
 	"transcription",
 	"speech",
 	"video",
+	"sound_effects",
 ];
 
 export type MediaServer = "opencoti" | "xollama" | "openai";
@@ -88,7 +90,7 @@ export interface MediaEndpointProbe {
 
 /** The routes the tools call, as they get pasted into a base URL. */
 const PASTED_ROUTE =
-	/\/(?:audio\/(?:speech|transcriptions|translations)|images\/(?:generations|edits|variations)|videos|embeddings|rerank|models|chat\/completions)$/;
+	/\/(?:audio\/(?:speech|transcriptions|translations|generations)|images\/(?:generations|edits|variations)|videos|embeddings|rerank|models|chat\/completions)$/;
 
 /** A base URL without its trailing slashes or a pasted route. */
 export function withoutPastedRoute(baseUrl: string): string {
@@ -123,6 +125,7 @@ const OPENCOTI_FEATURES: Record<string, MediaKind> = {
 	audio_transcriptions_v1: "transcription",
 	audio_speech_v1: "speech",
 	videos_generate_v1: "video",
+	audio_generations_v1: "sound_effects",
 };
 
 /** Both servers' names for a capability, as one. */
@@ -135,6 +138,7 @@ const CAPABILITY_KINDS: Record<string, MediaKind> = {
 	audio_speech: "speech",
 	video: "video",
 	video_generation: "video",
+	sound_effects: "sound_effects",
 };
 
 function strings(value: unknown): string[] {
@@ -148,7 +152,8 @@ function strings(value: unknown): string[] {
  *
  * Capabilities are exact and win. Modalities are xOllama's listing and need
  * reading: an edit model takes an image and returns one, a transcription model
- * takes audio and returns text.
+ * takes audio and returns text. Sound effects are never read from them: speech
+ * returns audio too, and only the capability tells the two apart.
  */
 export function mediaKindsOfModelRow(row: unknown): MediaKind[] | undefined {
 	const entry = row as {

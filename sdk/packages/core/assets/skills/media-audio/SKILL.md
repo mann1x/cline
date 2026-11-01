@@ -1,11 +1,12 @@
 ---
 name: media-audio
 description: >-
-  Reads and makes audio: turns a recording into text or subtitles, and turns
-  text into spoken audio. Use when the user asks to transcribe a recording, a
-  meeting, a voice note or the sound of a video, to make subtitles, to
-  translate speech, or to make a voice-over, a spoken prompt or an audio
-  version of a text.
+  Reads and makes audio: turns a recording into text or subtitles, turns text
+  into spoken audio, and makes sound effects. Use when the user asks to
+  transcribe a recording, a meeting, a voice note or the sound of a video, to
+  make subtitles, to translate speech, to make a voice-over, a spoken prompt or
+  an audio version of a text, or to make a sound for a button, a notification
+  or a game.
 ---
 
 # Audio
@@ -21,11 +22,12 @@ recording you could transcribe, or to record something you could synthesize.
 | Subtitles for a recording or a clip | `transcribe_audio` with `format: srt` or `vtt` |
 | The English of speech in another language | `transcribe_audio` with `translate: true` |
 | A voice-over, a spoken prompt, an audio version of a text | `synthesize_speech` |
+| A button click, a notification, a game event, an ambience | `generate_sound_effect` |
 
 When you do not have the tool you need, it is not set up. Say that the user
 turns it on in **Settings > API Configuration > Audio** (the speech-to-text
-endpoint for transcription, the text-to-speech endpoint for speech), and stop
-there.
+endpoint for transcription, the text-to-speech endpoint for speech, sound
+effects for sounds), and stop there.
 
 ## Transcribing
 
@@ -53,3 +55,16 @@ there.
   how long it is, and let the user listen.
 - For a long text, make one file per section. A section that came out wrong
   can then be made again alone.
+
+## Sound effects
+
+- Describe the sound plainly: what makes it, what it is like and how it ends.
+  "a short wooden click, dry, no echo" works better than "a nice button sound".
+- Keep UI sounds short: give `seconds` under 1 for a click and leave them as
+  `wav`, which starts on time. Length barely changes how long a clip takes.
+- Use `negative_prompt` for what keeps coming out wrong, such as music or
+  reverb.
+- The result reports a `seed`. Keep it: the same prompt and seed remake the
+  clip on the same machine.
+- For a set of sounds, make one file each with names that say what they are for.
+- You do not hear the result. Say what you asked for and let the user listen.

@@ -1,6 +1,6 @@
 import { listMediaModels, listSpeechVoices, MEDIA_KINDS, type MediaKind } from "@cline/core"
 import { String as ProtoString, StringRequest } from "@shared/proto/cline/common"
-import { readSpeechTab, readTranscriptionTab } from "@/sdk/audio-config"
+import { readSoundEffectsTab, readSpeechTab, readTranscriptionTab } from "@/sdk/audio-config"
 import { readImageEditTab, readImageGenerationTab } from "@/sdk/image-generation-config"
 import { type MediaTabSettings, probeMediaServer, readLeadMediaProvider, resolveMediaTab } from "@/sdk/media-endpoint-config"
 import { readVideoTab } from "@/sdk/video-config"
@@ -13,6 +13,7 @@ const TABS: Record<MediaKind, () => MediaTabSettings> = {
 	image_edit: readImageEditTab,
 	transcription: readTranscriptionTab,
 	speech: readSpeechTab,
+	sound_effects: readSoundEffectsTab,
 	video: readVideoTab,
 }
 

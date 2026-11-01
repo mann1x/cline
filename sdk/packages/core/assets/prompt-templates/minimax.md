@@ -332,6 +332,9 @@ This costs real time — seconds to a minute per image — and on a hosted backe
 # tool: synthesize_speech
 {{DEFAULT}}
 
+# tool: generate_sound_effect
+{{DEFAULT}}
+
 # tool: generate_video
 {{DEFAULT}}
 

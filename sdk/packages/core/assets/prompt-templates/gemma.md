@@ -244,6 +244,9 @@ Query the language servers for semantic information. Use this instead of `search
 # tool: synthesize_speech
 {{DEFAULT}}
 
+# tool: generate_sound_effect
+{{DEFAULT}}
+
 # tool: generate_video
 {{DEFAULT}}
 

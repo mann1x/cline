@@ -2,6 +2,7 @@ import { relative, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
 	audioExtension,
+	createGenerateSoundEffectTool,
 	createSynthesizeSpeechTool,
 	createTranscribeAudioTool,
 	listSpeechVoices,
@@ -304,6 +305,145 @@ describe("synthesize_speech", () => {
 			"HTTP 400",
 		);
 		expect(await tool.execute({}, {} as never)).toContain("needs `text`");
+	});
+});
+
+describe("generate_sound_effect", () => {
+	const make = (
+		fetchImpl: typeof fetch,
+		endpoint: { baseUrl?: string; format?: string } = {},
+	) => {
+		const written: Record<string, Buffer> = {};
+		const tool = createGenerateSoundEffectTool({
+			cwd: at(),
+			getEndpoint: () => ({
+				baseUrl: "http://e2g:22434",
+				model: "mannix/stable-audio:3-small-sfx-q8_0",
+				...endpoint,
+			}),
+			writeFile: async (path, data) => {
+				written[path] = data;
+			},
+			fetchImpl,
+		});
+		return { tool, written };
+	};
+	const clip = (headers: Record<string, string> = {}) =>
+		vi.fn(
+			async (_url: string | URL | Request, _init?: RequestInit) =>
+				new Response(new Uint8Array(wav(1)), {
+					headers: { "content-type": "audio/wav", ...headers },
+				}),
+		);
+
+	it("sends only what was chosen, asks for wav and reports the seed", async () => {
+		const fetchImpl = clip({ "x-oc-seed": "4242" });
+		const { tool, written } = make(fetchImpl as unknown as typeof fetch);
+		const output = await tool.execute(
+			{ prompt: "a short wooden click", path: "ui/click.wav" },
+			{} as never,
+		);
+		const [url, init] = fetchImpl.mock.calls[0] ?? [];
+		expect(String(url)).toBe("http://e2g:22434/v1/audio/generations");
+		expect(JSON.parse(String(init?.body))).toEqual({
+			model: "mannix/stable-audio:3-small-sfx-q8_0",
+			prompt: "a short wooden click",
+			response_format: "wav",
+		});
+		expect(written[at("ui/click.wav")]).toBeDefined();
+		expect(output).toContain("seed 4242");
+	});
+
+	it("sends what the caller chose, seed 0 included", async () => {
+		const fetchImpl = clip();
+		const { tool } = make(fetchImpl as unknown as typeof fetch);
+		await tool.execute(
+			{ prompt: "p", negative_prompt: "music", seconds: 0.5, seed: 0 },
+			{} as never,
+		);
+		expect(
+			JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)),
+		).toMatchObject({
+			negative_prompt: "music",
+			seconds: 0.5,
+			seed: 0,
+		});
+	});
+
+	it("posts to one route when the whole route was pasted as the base URL", async () => {
+		const fetchImpl = clip();
+		const { tool } = make(fetchImpl as unknown as typeof fetch, {
+			baseUrl: "http://h:22434/v1/audio/generations",
+		});
+		await tool.execute({ prompt: "p" }, {} as never);
+		expect(String(fetchImpl.mock.calls[0]?.[0])).toBe(
+			"http://h:22434/v1/audio/generations",
+		);
+	});
+
+	it("names the file from what came back", async () => {
+		const fetchImpl = vi.fn(
+			async () =>
+				new Response(new Uint8Array([1, 2, 3, 4]), {
+					headers: { "content-type": "audio/mpeg", "x-oc-seconds": "2" },
+				}),
+		);
+		const { tool } = make(fetchImpl as unknown as typeof fetch);
+		const output = await tool.execute(
+			{ prompt: "p", path: "a.wav" },
+			{} as never,
+		);
+		expect(output).toContain("`a.mp3`");
+		expect(output).toContain("2.0 s");
+	});
+
+	it("asks again without a format the engine refuses", async () => {
+		const answers = [
+			new Response('{"error":{"message":"unknown response_format"}}', {
+				status: 400,
+			}),
+			new Response(new Uint8Array(wav(1)), {
+				headers: { "content-type": "audio/wav" },
+			}),
+		];
+		const fetchImpl = vi.fn(
+			async (_url: string | URL | Request, _init?: RequestInit) =>
+				answers.shift() as Response,
+		);
+		const { tool } = make(fetchImpl as unknown as typeof fetch, {
+			format: "mp3",
+		});
+		await tool.execute({ prompt: "p" }, {} as never);
+		expect(
+			JSON.parse(String(fetchImpl.mock.calls[1]?.[1]?.body)).response_format,
+		).toBeUndefined();
+	});
+
+	it.each([
+		[404, "older than sound effects"],
+		[501, "no sound effects"],
+		[400, "does not support sound effects"],
+	])("says what a %i means", async (status, words) => {
+		const fetchImpl = vi.fn(
+			async () =>
+				new Response('{"error":{"message":"does not support sound effects"}}', {
+					status,
+				}),
+		);
+		const { tool } = make(fetchImpl as unknown as typeof fetch);
+		expect(await tool.execute({ prompt: "p" }, {} as never)).toContain(words);
+	});
+
+	it("refuses a format and a path it cannot use before sending", async () => {
+		const fetchImpl = clip();
+		const { tool } = make(fetchImpl as unknown as typeof fetch);
+		expect(
+			await tool.execute({ prompt: "p", format: "flac" }, {} as never),
+		).toContain("not a format");
+		expect(
+			await tool.execute({ prompt: "p", path: "../out.wav" }, {} as never),
+		).toContain("outside the workspace");
+		expect(fetchImpl).not.toHaveBeenCalled();
 	});
 });
 

@@ -426,6 +426,9 @@ Output: plain text. Most operations return one result per line as `file:line:col
 
 {{DEFAULT}}
 
+# tool: generate_sound_effect
+{{DEFAULT}}
+
 # tool: generate_video
 
 {{DEFAULT}}

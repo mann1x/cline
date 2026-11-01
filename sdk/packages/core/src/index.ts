@@ -1178,12 +1178,19 @@ export {
 	type ParsedAskLspRequest,
 	parseAskLspRequest,
 } from "./extensions/tools/ask-lsp";
-// Text to and from sound: transcription and speech on the OpenAI audio routes.
+// Text to and from sound: transcription and speech on the OpenAI audio routes,
+// sound effects on opencoti's.
 export {
 	audioExtension,
+	createGenerateSoundEffectTool,
 	createSynthesizeSpeechTool,
 	createTranscribeAudioTool,
+	GENERATE_SOUND_EFFECT_TOOL_DESCRIPTION,
+	GENERATE_SOUND_EFFECT_TOOL_INPUT_SCHEMA,
+	GENERATE_SOUND_EFFECT_TOOL_NAME,
+	type GenerateSoundEffectToolOptions,
 	listSpeechVoices,
+	type SoundEffectEndpoint,
 	type SpeechEndpoint,
 	type SpeechVoices,
 	SYNTHESIZE_SPEECH_TOOL_DESCRIPTION,

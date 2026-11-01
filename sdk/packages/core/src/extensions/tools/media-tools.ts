@@ -1,8 +1,8 @@
 /**
  * The media tools as one set, built from one configuration.
  *
- * Five tools -- `generate_image`, `edit_image`, `transcribe_audio`,
- * `synthesize_speech`, `generate_video` -- share one rule for where a request
+ * Six tools -- `generate_image`, `edit_image`, `transcribe_audio`,
+ * `synthesize_speech`, `generate_sound_effect`, `generate_video` -- share one rule for where a request
  * goes (see `media-endpoint.ts`), and two hosts offer them: the extension from
  * its settings tabs and the CLI from a file. If each host wrote its own
  * "which tools, pointed where", the two would drift the first time one of them
@@ -16,8 +16,10 @@
 
 import type { AgentTool } from "@cline/shared";
 import {
+	createGenerateSoundEffectTool,
 	createSynthesizeSpeechTool,
 	createTranscribeAudioTool,
+	type SoundEffectEndpoint,
 	type SpeechEndpoint,
 	type TranscriptionEndpoint,
 } from "./audio-tools";
@@ -66,6 +68,8 @@ export interface MediaToolsConfig {
 	transcription?: MediaSectionSettings;
 	/** `synthesize_speech`. */
 	speech?: MediaSectionSettings & { voice?: string; format?: string };
+	/** `generate_sound_effect`. */
+	soundEffects?: MediaSectionSettings & { format?: string };
 	/** `generate_video`. */
 	video?: MediaSectionSettings & {
 		size?: string;
@@ -79,6 +83,7 @@ export const MEDIA_TOOL_NAMES = [
 	"edit_image",
 	"transcribe_audio",
 	"synthesize_speech",
+	"generate_sound_effect",
 	"generate_video",
 ] as const;
 export type MediaToolName = (typeof MEDIA_TOOL_NAMES)[number];
@@ -88,6 +93,7 @@ interface MediaToolEndpoints {
 	edit_image: ImageGenerationEndpoint;
 	transcribe_audio: TranscriptionEndpoint;
 	synthesize_speech: SpeechEndpoint;
+	generate_sound_effect: SoundEffectEndpoint;
 	generate_video: VideoGenerationEndpoint;
 }
 
@@ -150,6 +156,7 @@ const SWITCHED_OFF: Record<MediaToolName, string> = {
 	edit_image: "image editing is switched off",
 	transcribe_audio: "speech-to-text is switched off",
 	synthesize_speech: "text-to-speech is switched off",
+	generate_sound_effect: "sound effects are switched off",
 	generate_video: "video generation is switched off",
 };
 
@@ -158,6 +165,7 @@ const KINDS: Record<MediaToolName, MediaKind> = {
 	edit_image: "image_edit",
 	transcribe_audio: "transcription",
 	synthesize_speech: "speech",
+	generate_sound_effect: "sound_effects",
 	generate_video: "video",
 };
 
@@ -186,6 +194,8 @@ function sectionOf(
 			return config.transcription;
 		case "synthesize_speech":
 			return config.speech;
+		case "generate_sound_effect":
+			return config.soundEffects;
 		case "generate_video":
 			return config.video;
 	}
@@ -232,6 +242,8 @@ export async function resolveMediaTool<T extends MediaToolName>(
 	} else if (tool === "synthesize_speech") {
 		set("voice", config.speech?.voice);
 		set("format", config.speech?.format);
+	} else if (tool === "generate_sound_effect") {
+		set("format", config.soundEffects?.format);
 	} else if (tool === "generate_video") {
 		set("size", config.video?.size);
 		set("seconds", config.video?.seconds);
@@ -321,6 +333,12 @@ export async function createMediaTools(
 				getEndpoint: endpointOf("synthesize_speech"),
 				writeFile: options.writeFile,
 			}),
+		generate_sound_effect: () =>
+			createGenerateSoundEffectTool({
+				...shared,
+				getEndpoint: endpointOf("generate_sound_effect"),
+				writeFile: options.writeFile,
+			}),
 		generate_video: () =>
 			createGenerateVideoTool({
 				...shared,
@@ -407,6 +425,7 @@ function section(
  *   "image": { "model": "flux2-klein", "size": "1024x1024" },
  *   "transcription": true,
  *   "speech": { "voice": "alloy" },
+ *   "soundEffects": { "model": "mannix/stable-audio:3-small-sfx-q8_0" },
  *   "video": { "baseUrl": "http://other:8090", "model": "wan2.1" }
  * }
  * ```
@@ -462,6 +481,16 @@ export function parseMediaToolsConfig(
 		config.speech = {
 			...speech,
 			...(str(given.voice) ? { voice: str(given.voice) } : {}),
+			...(str(given.format)
+				? { format: str(given.format)?.toLowerCase() }
+				: {}),
+		};
+	}
+	const soundEffects = section(on("soundEffects"), base);
+	if (soundEffects) {
+		const given = record(doc.soundEffects) ?? {};
+		config.soundEffects = {
+			...soundEffects,
 			...(str(given.format)
 				? { format: str(given.format)?.toLowerCase() }
 				: {}),

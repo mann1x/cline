@@ -117,6 +117,7 @@ export interface ExtensionState {
 	/** Whether a key is stored for each audio endpoint. Never the keys. */
 	audioSttApiKeySet: boolean
 	audioTtsApiKeySet: boolean
+	audioSfxApiKeySet: boolean
 	/** "Use an embedding model": semantic search for the Library, on the endpoints below. */
 	embeddingEnabled: boolean
 	/** JSON for the Embedding tab: the embedding and reranking endpoints. */

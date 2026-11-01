@@ -461,6 +461,9 @@ It is the wrong tool for text that is not a symbol: strings, comments, config ke
 # tool: synthesize_speech
 {{DEFAULT}}
 
+# tool: generate_sound_effect
+{{DEFAULT}}
+
 # tool: generate_video
 {{DEFAULT}}
 

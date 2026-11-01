@@ -16,6 +16,7 @@ const everything: MediaEndpointProbe = {
 		transcription: true,
 		speech: true,
 		video: true,
+		sound_effects: true,
 	},
 	models: [],
 };
@@ -27,6 +28,7 @@ const chatOnly: MediaEndpointProbe = {
 		transcription: false,
 		speech: false,
 		video: false,
+		sound_effects: false,
 	},
 	models: [],
 };
@@ -89,6 +91,7 @@ describe("parseMediaToolsConfig", () => {
 			image: { useProvider: true },
 			transcription: { useProvider: true },
 			speech: { useProvider: true },
+			soundEffects: { useProvider: true },
 		});
 	});
 });
@@ -201,13 +204,16 @@ describe("createMediaTools", () => {
 			"generate_image",
 			"synthesize_speech",
 		]);
-		expect(log).toHaveLength(6);
+		expect(log).toHaveLength(7);
 		expect(log[0]).toMatch(
 			/^generate_image uses the typed endpoint \(unknown\), model klein; /,
 		);
 		expect(log[2]).toBe("edit_image omitted: image editing is switched off");
 		expect(log[3]).toMatch(/^transcribe_audio omitted: /);
 		expect(log[5]).toBe(
+			"generate_sound_effect omitted: sound effects are switched off",
+		);
+		expect(log[6]).toBe(
 			"generate_video omitted: video generation is switched off",
 		);
 		// A host with no browser draws icons with `generate_image` and nothing
@@ -230,6 +236,7 @@ describe("createMediaTools", () => {
 			"edit_image",
 			"transcribe_audio",
 			"synthesize_speech",
+			"generate_sound_effect",
 			"generate_video",
 		]);
 	});

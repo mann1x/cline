@@ -4,7 +4,7 @@ sidebarTitle: "Media Endpoints"
 description: "How Cerebriline's media tools find a server: the session's own opencoti or xOllama provider when it serves the kind, a typed endpoint otherwise, and no tool when neither is configured."
 ---
 
-A media tool sends its request to a server that speaks OpenAI's media routes. These are `generate_image`, `edit_image`, `transcribe_audio`, `synthesize_speech` and `generate_video`. All five find their server by the same rule.
+A media tool sends its request to a media server. These are `generate_image`, `edit_image`, `transcribe_audio`, `synthesize_speech`, `generate_sound_effect` and `generate_video`. All six find their server by the same rule.
 
 ## Images
 
@@ -40,8 +40,11 @@ Tick **Use an endpoint for audio processing** on the API configuration panel, th
 |---|---|---|
 | `transcribe_audio` | Turns an audio file in the workspace into text. It can return plain text, or write subtitles (`srt`, `vtt`) or the timed segments (`verbose_json`) to a file. It can also translate to English. | `POST <endpoint>/audio/transcriptions`, or `/audio/translations` |
 | `synthesize_speech` | Turns text into an audio file in the workspace. | `POST <endpoint>/audio/speech` |
+| `generate_sound_effect` | Makes a sound from a description and saves it in the workspace. | `POST <endpoint>/audio/generations` |
 
 The Audio tab also sets a **Default voice** and a **Default format** for calls that name none. Open the voice field to list the engine's voices. Only opencoti and xOllama can list them, and xOllama starts the speech engine to answer, so the list is fetched when you open the field and not before. For any other server, type the voice name.
+
+Sound effects use their own model and are not part of OpenAI's API: the route is opencoti's, and xOllama serves it from v0.40.13-xollama.1. Leave **Sound effects endpoint** empty to use the text-to-speech endpoint and its key. The result reports the seed, which remakes the same clip on the same machine. In a `--media-config` file the section is `soundEffects`.
 
 Audio is never re-encoded. The file is named from the bytes that come back, so asking for `mp3` from an engine that only encodes WAV gives a `.wav` file. An engine that refuses the format asked for is asked once more for its own default.
 
@@ -107,7 +110,7 @@ The run's log has one `[media]` line per tool, saying where it goes or why it wa
 
 | Server | How it is recognised | How it says what it serves |
 |---|---|---|
-| opencoti | `GET /props` carries a `features` array | `images_generate_v1`, `images_edit_v1`, `audio_transcriptions_v1`, `audio_speech_v1`, `videos_generate_v1` |
+| opencoti | `GET /props` carries a `features` array | `images_generate_v1`, `images_edit_v1`, `audio_transcriptions_v1`, `audio_speech_v1`, `audio_generations_v1`, `videos_generate_v1` |
 | xOllama | `GET /api/xollama` answers | each media model's `/v1/models` row lists `capabilities` and its input and output modalities |
 | anything else | `GET /v1/models` answers | it does not say; it is taken to serve what it is asked for |
 

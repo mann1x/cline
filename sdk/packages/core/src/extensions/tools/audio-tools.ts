@@ -1,9 +1,10 @@
 /**
- * Two tools that cross between text and sound.
+ * Three tools that cross between text and sound.
  *
- * `transcribe_audio` turns a recording in the workspace into text, and
- * `synthesize_speech` turns text into an audio file there. A meeting recording
- * that has to become notes, a voice-over for a demo, a prompt for a phone menu:
+ * `transcribe_audio` turns a recording in the workspace into text,
+ * `synthesize_speech` turns text into an audio file there, and
+ * `generate_sound_effect` turns a description into one. A meeting recording
+ * that has to become notes, a voice-over for a demo, a click for a button:
  * each one used to leave the session, like an image did before
  * `generate_image`.
  *
@@ -11,7 +12,9 @@
  * transcriptions` (multipart) and `POST {endpoint}/audio/speech` (JSON, bytes
  * back) -- which opencoti and xOllama serve beside chat and which the hosted
  * services serve too. The two are separate endpoints because they are often
- * separate servers: a Whisper box and a TTS box.
+ * separate servers: a Whisper box and a TTS box. Sound effects have no OpenAI
+ * route: `POST {endpoint}/audio/generations` is opencoti's, and xOllama's after
+ * it.
  *
  * Audio is never re-encoded here. What the engine returns is what is written,
  * and the file is named from what came back: opencoti b97 answers WAV whatever
@@ -31,6 +34,7 @@ import {
 
 export const TRANSCRIBE_AUDIO_TOOL_NAME = "transcribe_audio";
 export const SYNTHESIZE_SPEECH_TOOL_NAME = "synthesize_speech";
+export const GENERATE_SOUND_EFFECT_TOOL_NAME = "generate_sound_effect";
 
 export const TRANSCRIBE_AUDIO_TOOL_DESCRIPTION = `Transcribe an audio file in the workspace to text. Use it to read a recording you would otherwise have to ask the user to describe: a meeting, a voice note, the audio of a demo.
 
@@ -91,6 +95,51 @@ Arguments:
 
 Output: the saved path, the audio format and its length. You do not hear the result, so say what you asked for when reporting it. A long text takes a while.`;
 
+export const GENERATE_SOUND_EFFECT_TOOL_DESCRIPTION = `Generate a short sound effect from a description and save it as a file in the workspace. Use it for the sound of a button, a notification, a game event or an ambience. It makes sounds, not speech: use \`synthesize_speech\` for words.
+
+Arguments:
+- \`prompt\` — the sound, described plainly, e.g. "a short wooden click". Say what makes it and how it ends.
+- \`negative_prompt\` — what the sound must not have, e.g. "reverb, music". Optional.
+- \`seconds\` — how long the clip is. Optional; 4 by default, and the model sets the most it allows. A UI sound is usually under 1 second.
+- \`seed\` — repeats an earlier clip on the same machine. Optional; the result reports the seed that was used.
+- \`path\` — where to save it, relative to the workspace. Optional; defaults to a file under \`.cline/generated-audio/\`.
+- \`format\` — \`wav\` (the default), \`mp3\` or \`pcm\`. Optional, and a backend that cannot encode it returns what it can.
+
+Output: the saved path, the audio format, its length and the seed. You do not hear the result, so say what you asked for and let the user listen. The first clip also loads the model and can take minutes.`;
+
+export const GENERATE_SOUND_EFFECT_TOOL_INPUT_SCHEMA = {
+	type: "object",
+	properties: {
+		prompt: {
+			type: "string",
+			description: "The sound, described plainly.",
+		},
+		negative_prompt: {
+			type: "string",
+			description: "What the sound must not have. Optional.",
+		},
+		seconds: {
+			type: "number",
+			description: "How long the clip is. Optional.",
+		},
+		seed: {
+			type: "integer",
+			description: "Repeats an earlier clip on the same machine. Optional.",
+		},
+		path: {
+			type: "string",
+			description:
+				"Where to save it, relative to the workspace. Optional; defaults to a file under .cline/generated-audio/.",
+		},
+		format: {
+			type: "string",
+			enum: ["wav", "mp3", "pcm"],
+			description: "The audio format to ask for; wav by default. Optional.",
+		},
+	},
+	required: ["prompt"],
+} as const;
+
 export const SYNTHESIZE_SPEECH_TOOL_INPUT_SCHEMA = {
 	type: "object",
 	properties: {
@@ -134,6 +183,11 @@ export interface SpeechEndpoint extends TranscriptionEndpoint {
 	format?: string;
 }
 
+export interface SoundEffectEndpoint extends TranscriptionEndpoint {
+	/** Default for calls that name no format. */
+	format?: string;
+}
+
 type MaybePromise<T> = T | Promise<T>;
 
 interface AudioToolBase {
@@ -156,6 +210,13 @@ export interface SynthesizeSpeechToolOptions extends AudioToolBase {
 	getEndpoint: () => MaybePromise<SpeechEndpoint | undefined>;
 	writeFile: (absolutePath: string, data: Buffer) => Promise<void>;
 	/** Milliseconds one synthesis may take. Defaults to 5 minutes. */
+	timeoutMs?: number;
+}
+
+export interface GenerateSoundEffectToolOptions extends AudioToolBase {
+	getEndpoint: () => MaybePromise<SoundEffectEndpoint | undefined>;
+	writeFile: (absolutePath: string, data: Buffer) => Promise<void>;
+	/** Milliseconds one clip may take. Defaults to 15 minutes. */
 	timeoutMs?: number;
 }
 
@@ -577,6 +638,183 @@ export function createSynthesizeSpeechTool(
 				options.onError?.("[synthesize_speech] request failed", error);
 				const message = error instanceof Error ? error.message : String(error);
 				return `Could not reach the text-to-speech endpoint: ${message}`;
+			}
+		},
+	});
+}
+
+const SOUND_EFFECT_FORMATS = new Set(["wav", "mp3", "pcm"]);
+
+/** Plays at once and has no encoder padding, which a short UI sound would feel. */
+const DEFAULT_SOUND_EFFECT_FORMAT = "wav";
+
+export function createGenerateSoundEffectTool(
+	options: GenerateSoundEffectToolOptions,
+): AgentTool {
+	const fetchImpl = options.fetchImpl ?? fetch;
+	// A clip takes seconds, but xOllama holds a request for up to 10 minutes in
+	// its queue before answering 503, and the first clip loads the model.
+	const timeoutMs = options.timeoutMs ?? 15 * 60_000;
+
+	return createTool({
+		name: GENERATE_SOUND_EFFECT_TOOL_NAME,
+		description: GENERATE_SOUND_EFFECT_TOOL_DESCRIPTION,
+		inputSchema: GENERATE_SOUND_EFFECT_TOOL_INPUT_SCHEMA,
+		execute: async (input: unknown, context): Promise<string> => {
+			const request = (input ?? {}) as Record<string, unknown>;
+			const prompt = text(request.prompt);
+			if (!prompt) {
+				return "`generate_sound_effect` needs `prompt`: what the sound is.";
+			}
+			const endpoint = await options.getEndpoint();
+			if (!endpoint?.baseUrl || !endpoint.model) {
+				return (
+					"No sound effect endpoint is configured, so no audio was made. " +
+					"The user names one on the Audio tab of the API configuration settings; " +
+					"tell them that rather than trying again."
+				);
+			}
+			const format = (
+				text(request.format) ||
+				text(endpoint.format) ||
+				DEFAULT_SOUND_EFFECT_FORMAT
+			)
+				.toLowerCase()
+				.replace(/^\./, "");
+			if (!SOUND_EFFECT_FORMATS.has(format)) {
+				return `\`${format}\` is not a format this tool asks for. Use wav, mp3 or pcm.`;
+			}
+			const negative = text(request.negative_prompt);
+			const seconds =
+				typeof request.seconds === "number" &&
+				Number.isFinite(request.seconds) &&
+				request.seconds > 0
+					? request.seconds
+					: undefined;
+			const seed =
+				typeof request.seed === "number" &&
+				Number.isSafeInteger(request.seed) &&
+				request.seed >= 0
+					? request.seed
+					: undefined;
+
+			const askedPath = text(request.path) || undefined;
+			const requestedPath = askedPath ?? defaultSpeechPath(prompt, Date.now());
+			const absolutePath = resolveInsideWorkspace(options.cwd, requestedPath);
+			if (!absolutePath) {
+				return `\`${requestedPath}\` is outside the workspace. Save the audio somewhere under the project.`;
+			}
+			const signal = context?.signal;
+
+			try {
+				// Only what was chosen: a template may state its own defaults,
+				// or fix a field.
+				const send = (responseFormat: string | undefined) =>
+					sendMediaRequest(
+						`${normalizeBaseUrl(endpoint.baseUrl)}/audio/generations`,
+						(): RequestInit => ({
+							method: "POST",
+							headers: {
+								"Content-Type": "application/json",
+								...authHeaders(endpoint.apiKey),
+							},
+							body: JSON.stringify({
+								model: endpoint.model,
+								prompt,
+								...(negative ? { negative_prompt: negative } : {}),
+								...(seconds ? { seconds } : {}),
+								...(seed !== undefined ? { seed } : {}),
+								...(responseFormat ? { response_format: responseFormat } : {}),
+							}),
+						}),
+						{
+							fetchImpl,
+							signal,
+							attemptTimeoutMs: timeoutMs,
+							onBusy: (waitMs) =>
+								context?.emitUpdate?.({
+									status: `The sound effect engine is busy; asking again in ${Math.round(waitMs / 1000)}s.`,
+								}),
+						},
+					);
+				let response = await send(format);
+				// As for speech: the sound is what was wanted, so an engine that
+				// will not encode this is asked for whatever it does encode.
+				if (response.status === 400) {
+					const refusal = await response
+						.clone()
+						.text()
+						.catch(() => "");
+					if (/response_format|\bformat\b|encoder/i.test(refusal)) {
+						response = await send(undefined);
+					}
+				}
+				if (response.status === 503) {
+					return "The sound effect engine is still busy with other requests after a long wait, so no audio was made. Nothing is wrong with the request; try again later.";
+				}
+				if (!response.ok) {
+					const detail = (await response.text().catch(() => "")).slice(0, 400);
+					const hint =
+						response.status === 404
+							? " The model does not exist there, or the server is older than sound effects: xOllama has them from v0.40.13-xollama.1."
+							: response.status === 501
+								? " This server's engine has no sound effects."
+								: "";
+					return `The sound effect endpoint refused the request (HTTP ${response.status}).${hint}${detail ? `\n\n${detail}` : ""}`;
+				}
+				const data = Buffer.from(await response.arrayBuffer());
+				if (data.length === 0) {
+					return "The sound effect endpoint returned no audio.";
+				}
+
+				const extension = audioExtension(
+					data,
+					response.headers.get("content-type"),
+					format,
+				);
+				const current = nodePath.extname(requestedPath);
+				const savedPath =
+					current.toLowerCase() === extension
+						? requestedPath
+						: `${current ? requestedPath.slice(0, -current.length) : requestedPath}${extension}`;
+				const absoluteSaved = resolveInsideWorkspace(options.cwd, savedPath);
+				if (!absoluteSaved) {
+					return `\`${savedPath}\` is outside the workspace. Save the audio somewhere under the project.`;
+				}
+				await options.writeFile(absoluteSaved, data);
+
+				const stated = Number(response.headers.get("x-oc-seconds"));
+				const length =
+					wavSeconds(data) ??
+					(Number.isFinite(stated) && stated > 0 ? stated : undefined);
+				// The only place a random seed comes back, and what remakes this clip.
+				const usedSeed = response.headers.get("x-oc-seed")?.trim();
+				const got = extension.slice(1);
+				const notes: string[] = [];
+				if (got !== format) {
+					notes.push(
+						`The backend returned ${got}, not the ${format} that was asked for.`,
+					);
+				}
+				if (askedPath && savedPath !== askedPath) {
+					notes.push(
+						`The file was saved as \`${savedPath}\` so its name matches its contents.`,
+					);
+				}
+				return (
+					`Generated and saved to \`${savedPath}\` (${got}` +
+					`${length !== undefined ? `, ${length.toFixed(1)} s` : ""}` +
+					`, ${Math.max(1, Math.round(data.length / 1024))} KB` +
+					`${usedSeed ? `, seed ${usedSeed}` : ""}).` +
+					`${notes.length ? `\n\n${notes.join(" ")}` : ""}`
+				);
+			} catch (error) {
+				if (error instanceof MediaRequestTimeoutError || signal?.aborted) {
+					return `The sound effect was stopped before it finished (the limit is ${Math.round(timeoutMs / 1000)}s).`;
+				}
+				options.onError?.("[generate_sound_effect] request failed", error);
+				const message = error instanceof Error ? error.message : String(error);
+				return `Could not reach the sound effect endpoint: ${message}`;
 			}
 		},
 	});

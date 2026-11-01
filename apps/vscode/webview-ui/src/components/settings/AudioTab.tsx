@@ -28,11 +28,12 @@ const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`
  * endpoint, not a second model in the conversation.
  */
 const AudioTab = () => {
-	const { audioEndpoints, audioSttApiKeySet, audioTtsApiKeySet } = useExtensionState()
+	const { audioEndpoints, audioSttApiKeySet, audioTtsApiKeySet, audioSfxApiKeySet } = useExtensionState()
 	const stored = useMemo(() => parseAudioEndpoints(audioEndpoints), [audioEndpoints])
-	const statusTrigger = `${audioEndpoints}|${audioSttApiKeySet}|${audioTtsApiKeySet}`
+	const statusTrigger = `${audioEndpoints}|${audioSttApiKeySet}|${audioTtsApiKeySet}|${audioSfxApiKeySet}`
 	const sttStatus = useMediaEndpointStatus("transcription", statusTrigger)
 	const ttsStatus = useMediaEndpointStatus("speech", statusTrigger)
+	const sfxStatus = useMediaEndpointStatus("sound_effects", statusTrigger)
 	const [voices, setVoices] = useState<SpeechVoices | undefined>()
 
 	const save = useCallback(async (next: AudioEndpoints) => {
@@ -44,11 +45,18 @@ const AudioTab = () => {
 	}, [])
 	const saveStt = (patch: Partial<AudioEndpoints["stt"]>) => void save({ ...stored, stt: { ...stored.stt, ...patch } })
 	const saveTts = (patch: Partial<AudioEndpoints["tts"]>) => void save({ ...stored, tts: { ...stored.tts, ...patch } })
+	const saveSfx = (patch: Partial<AudioEndpoints["sfx"]>) => void save({ ...stored, sfx: { ...stored.sfx, ...patch } })
 
-	const saveKey = useCallback(async (key: "audioSttApiKey" | "audioTtsApiKey", value: string) => {
+	const saveKey = useCallback(async (key: "audioSttApiKey" | "audioTtsApiKey" | "audioSfxApiKey", value: string) => {
 		try {
 			await StateServiceClient.updateSettings(
-				UpdateSettingsRequest.create(key === "audioSttApiKey" ? { audioSttApiKey: value } : { audioTtsApiKey: value }),
+				UpdateSettingsRequest.create(
+					key === "audioSttApiKey"
+						? { audioSttApiKey: value }
+						: key === "audioTtsApiKey"
+							? { audioTtsApiKey: value }
+							: { audioSfxApiKey: value },
+				),
 			)
 		} catch (error) {
 			console.error("Failed to save the audio key:", error)
@@ -69,8 +77,10 @@ const AudioTab = () => {
 	const useProvider = stored.useProvider === true
 	const sttModels = mediaPickerModels(sttStatus)
 	const ttsModels = mediaPickerModels(ttsStatus)
+	const sfxModels = mediaPickerModels(sfxStatus)
 	const sttOn = stored.stt.disabled !== true
 	const ttsOn = stored.tts.disabled !== true
+	const sfxOn = stored.sfx.disabled !== true
 
 	return (
 		<div className="flex flex-col gap-3">
@@ -254,6 +264,87 @@ const AudioTab = () => {
 						{voices && voices.formats.length > 0
 							? `This engine encodes ${voices.formats.join(", ")}.`
 							: "An engine that cannot encode the one asked for is asked again for its own default."}
+					</p>
+				</>
+			) : null}
+
+			<div className="mt-2 pt-3 border-t border-(--vscode-panel-border)">
+				<SettingsCheckbox checked={sfxOn} onChange={(checked) => saveSfx({ disabled: !checked })}>
+					Offer sound effects
+				</SettingsCheckbox>
+				<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
+					Offers the <code>generate_sound_effect</code> tool, which makes a sound from a description and saves it in the
+					workspace: a button click, a notification, a game event. It needs a model made for this, on xOllama{" "}
+					v0.40.13-xollama.1 or later, or on opencoti.
+				</p>
+				{sfxOn ? (
+					<MediaEndpointStatusLines
+						lacks="no sound effects model"
+						serves="makes sound effects"
+						status={sfxStatus}
+						toggle="Offer sound effects"
+						tool="generate_sound_effect"
+						useProvider={useProvider}
+					/>
+				) : null}
+			</div>
+
+			{sfxOn ? (
+				<>
+					<DebouncedTextField
+						className="w-full"
+						initialValue={stored.sfx.baseUrl}
+						onChange={(value) => saveSfx({ baseUrl: value.trim() })}
+						placeholder="The text-to-speech endpoint">
+						<span className="font-medium">Sound effects endpoint</span>
+					</DebouncedTextField>
+					<p className="text-xs -mt-2 text-(--vscode-descriptionForeground)">
+						The server's address. Cerebriline calls <code>POST &lt;endpoint&gt;/audio/generations</code>. Leave it
+						empty to use the text-to-speech endpoint and its key.
+					</p>
+
+					{stored.sfx.baseUrl ? (
+						<DebouncedTextField
+							className="w-full"
+							initialValue=""
+							onChange={(value) => void saveKey("audioSfxApiKey", value)}
+							placeholder={
+								audioSfxApiKeySet
+									? "Stored — type to replace, clear to remove"
+									: "Leave empty if the server needs none"
+							}
+							type="password">
+							<span className="font-medium">API key</span>
+						</DebouncedTextField>
+					) : null}
+
+					<div>
+						<label className="font-medium text-sm block mb-1" htmlFor="audio-sfx-model">
+							Model
+						</label>
+						<OllamaModelPicker
+							ollamaModels={sfxModels}
+							onModelChange={(value) => saveSfx({ model: value.trim() })}
+							placeholder="Search and select a sound effects model..."
+							selectedModelId={stored.sfx.model}
+						/>
+						<p className="text-xs mt-1 text-(--vscode-descriptionForeground)">
+							{sfxModels.length > 0
+								? `${count(sfxModels.length, "sound effects model")} listed${sfxStatus.resolved?.source === "provider" ? " on the session's provider. Name one here when it has several." : " by this endpoint."}`
+								: "No sound effects models were listed — type the name yourself; it is sent as given."}
+						</p>
+					</div>
+
+					<DebouncedTextField
+						className="w-full"
+						initialValue={stored.sfx.format ?? ""}
+						onChange={(value) => saveSfx({ format: value.trim().toLowerCase() })}
+						placeholder="wav">
+						<span className="font-medium">Default format</span>
+					</DebouncedTextField>
+					<p className="text-xs -mt-2 text-(--vscode-descriptionForeground)">
+						Used when the model asks for none: <code>wav</code>, <code>mp3</code> or <code>pcm</code>.{" "}
+						<code>wav</code> suits short sounds: it plays at once, with no silence added at the start.
 					</p>
 				</>
 			) : null}

@@ -145,6 +145,7 @@ const GENERIC_TOOL_VERBS: Record<string, string> = {
 	restore_file: "Cerebriline put this file back as the transaction found it:",
 	run_check: "Cerebriline ran the check:",
 	synthesize_speech: "Cerebriline made spoken audio:",
+	generate_sound_effect: "Cerebriline made a sound effect:",
 	tasks: "Cerebriline updated its task list:",
 	transcribe_audio: "Cerebriline transcribed audio:",
 }

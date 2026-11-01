@@ -183,7 +183,7 @@ export function addRootOptions(cmd: Command): Command {
 			)
 			.option(
 				"--media-provider",
-				"Offer the media tools (generate_image, edit_image, transcribe_audio, synthesize_speech, generate_video) the session's own opencoti or xOllama serves",
+				"Offer the media tools (generate_image, edit_image, transcribe_audio, synthesize_speech, generate_sound_effect, generate_video) the session's own opencoti or xOllama serves",
 			)
 			.option(
 				"--media-config <file>",

@@ -310,6 +310,19 @@ Arguments:
 
 Output: the saved path, the audio format and its length. You do not hear the result, so say what you asked for when reporting it. A long text takes a while.
 
+# tool: generate_sound_effect
+Generate a short sound effect from a description and save it as a file in the workspace. Use it for the sound of a button, a notification, a game event or an ambience. It makes sounds, not speech: use `synthesize_speech` for words.
+
+Arguments:
+- `prompt` — the sound, described plainly, e.g. "a short wooden click". Say what makes it and how it ends.
+- `negative_prompt` — what the sound must not have, e.g. "reverb, music". Optional.
+- `seconds` — how long the clip is. Optional; 4 by default, and the model sets the most it allows. A UI sound is usually under 1 second.
+- `seed` — repeats an earlier clip on the same machine. Optional; the result reports the seed that was used.
+- `path` — where to save it, relative to the workspace. Optional; defaults to a file under `.cline/generated-audio/`.
+- `format` — `wav` (the default), `mp3` or `pcm`. Optional, and a backend that cannot encode it returns what it can.
+
+Output: the saved path, the audio format, its length and the seed. You do not hear the result, so say what you asked for and let the user listen. The first clip also loads the model and can take minutes.
+
 # tool: generate_video
 Generate a short video clip from a text description and save it as a file in the workspace. Use it for a few seconds of footage you would otherwise have to ask the user to make elsewhere: a background loop, a product shot, a placeholder for a scene, an animated version of an image you already have.
 

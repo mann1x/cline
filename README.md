@@ -588,7 +588,7 @@ When the working model is stuck, a stronger **expert** model (the Escalation tab
 
 ## Media Tools: Images, Audio, Video
 
-Five tools reach a media server that speaks OpenAI's media routes: `generate_image`, `edit_image`, `transcribe_audio`, `synthesize_speech` and `generate_video`.
+Six tools reach a media server: `generate_image`, `edit_image`, `transcribe_audio`, `synthesize_speech`, `generate_sound_effect` and `generate_video`.
 
 - **Images.** Generate an image, or edit one already in the workspace by instruction, with reference images and an optional mask.
 - **Icons.** `generate_icon` draws several proposals and shows them on one numbered sheet, and the model asks you which one. The chosen one is written as `.ico`, `.icns`, a 1024 pixel PNG and the PNG sizes a page and a phone ask for. An image you already have becomes an icon the same way. Offered with an image endpoint.

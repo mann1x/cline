@@ -79,6 +79,7 @@ describe("normalizeBaseUrl", () => {
 		"/audio/translations",
 		"/images/generations",
 		"/images/edits",
+		"/audio/generations",
 		"/videos",
 		"/models",
 	])("takes a pasted %s back off, with or without /v1", (route) => {
@@ -107,6 +108,55 @@ describe("normalizeBaseUrl", () => {
 			"https://h/proxy/v2",
 		);
 		expect(mediaServerOrigin("https://h/proxy/v1")).toBe("https://h/proxy");
+	});
+});
+
+describe("sound effects", () => {
+	it("are read from the capability, never from audio output", () => {
+		expect(
+			mediaKindsOfModelRow({
+				capabilities: ["sound_effects"],
+				output_modalities: ["audio"],
+			}),
+		).toEqual(["sound_effects"]);
+		expect(mediaKindsOfModelRow({ output_modalities: ["audio"] })).toEqual([
+			"speech",
+		]);
+	});
+
+	it("are found on opencoti from its feature", async () => {
+		const probe = await probeMediaEndpoint("http://h:1", {
+			fetchImpl: server({
+				"/props": {
+					build_info: "opencoti-c14",
+					features: ["audio_generations_v1"],
+				},
+			}),
+		});
+		expect(probe?.kinds.sound_effects).toBe(true);
+		expect(probe?.kinds.speech).toBe(false);
+	});
+
+	it("take the model xOllama's operator marked as the default", async () => {
+		const models = [
+			{ id: "a", capabilities: ["sound_effects"] },
+			{
+				id: "b",
+				capabilities: ["sound_effects"],
+				default_for: ["sound_effects"],
+			},
+		];
+		const fetchImpl = server({
+			"/api/xollama": { xollama: true },
+			"/v1/models": { data: models },
+		});
+		const resolved = await resolveMediaEndpoint({
+			kind: "sound_effects",
+			useProvider: true,
+			provider: { providerId: "xollama", baseUrl: "http://h:1" },
+			probe: (url) => probeMediaEndpoint(url, { fetchImpl }),
+		});
+		expect(resolved).toMatchObject({ endpoint: { model: "b" } });
 	});
 });
 
@@ -215,6 +265,7 @@ describe("probeMediaEndpoint", () => {
 			transcription: false,
 			speech: true,
 			video: false,
+			sound_effects: false,
 		});
 		expect(probe && listMediaModels(probe, "speech")).toEqual([
 			"outetts",
@@ -233,6 +284,7 @@ describe("probeMediaEndpoint", () => {
 			transcription: true,
 			speech: false,
 			video: false,
+			sound_effects: false,
 		});
 		expect(probe && listMediaModels(probe, "image_edit")).toEqual([
 			"mannix/flux2-klein:4b",

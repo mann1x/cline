@@ -583,10 +583,11 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 							</SettingsCheckbox>
 							<p className="text-xs mt-[5px] text-(--vscode-descriptionForeground)">
 								Offers <code>transcribe_audio</code>, which turns a recording in the workspace into text or
-								subtitles, and <code>synthesize_speech</code>, which turns text into an audio file there. The
-								Audio tab names a speech-to-text and a text-to-speech endpoint: the session's own opencoti or
-								xOllama provider when it has the engine, or any endpoint serving the OpenAI audio API. Each tool
-								is offered once its endpoint is named, whether or not the server is up yet.
+								subtitles, <code>synthesize_speech</code>, which turns text into an audio file there, and{" "}
+								<code>generate_sound_effect</code>, which makes a sound from a description. The Audio tab names
+								their endpoints: the session's own opencoti or xOllama provider when it has the engine, or any
+								endpoint serving the OpenAI audio API. Each tool is offered once its endpoint is named, whether or
+								not the server is up yet.
 							</p>
 							{audioUnconfigured ? (
 								<p className="text-xs mt-[5px] text-(--vscode-errorForeground)">

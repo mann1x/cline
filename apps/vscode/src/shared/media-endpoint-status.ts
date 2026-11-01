@@ -5,7 +5,7 @@
  * tab cannot work this out itself: it has neither the session provider's key
  * nor a way to ask a server what it serves.
  */
-export type MediaEndpointKind = "image_generation" | "image_edit" | "transcription" | "speech" | "video"
+export type MediaEndpointKind = "image_generation" | "image_edit" | "transcription" | "speech" | "video" | "sound_effects"
 
 export interface MediaEndpointStatus {
 	/**

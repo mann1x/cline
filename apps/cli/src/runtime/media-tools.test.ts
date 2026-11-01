@@ -30,6 +30,7 @@ describe("the CLI's media configuration", () => {
 			image: { useProvider: true },
 			transcription: { useProvider: true },
 			speech: { useProvider: true },
+			soundEffects: { useProvider: true },
 			video: { useProvider: true },
 		});
 		vi.stubEnv("CLINE_MEDIA_PROVIDER", "1");
@@ -93,7 +94,7 @@ describe("the CLI's media configuration", () => {
 		);
 		// One line per media tool, and one for `generate_icon`, which needs a
 		// browser this host does not have.
-		expect(log).toHaveLength(6);
+		expect(log).toHaveLength(7);
 		expect(log[1]).toMatch(/generate_icon omitted/);
 	});
 });

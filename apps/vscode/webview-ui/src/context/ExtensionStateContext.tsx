@@ -342,6 +342,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		audioEndpoints: "",
 		audioSttApiKeySet: false,
 		audioTtsApiKeySet: false,
+		audioSfxApiKeySet: false,
 		videoEnabled: false,
 		videoEndpoint: "",
 		videoApiKeySet: false,

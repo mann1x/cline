@@ -129,6 +129,9 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.audioTtsApiKey !== undefined) {
 			controller.stateManager.setSecret("audioTtsApiKey", request.audioTtsApiKey.trim() || undefined)
 		}
+		if (request.audioSfxApiKey !== undefined) {
+			controller.stateManager.setSecret("audioSfxApiKey", request.audioSfxApiKey.trim() || undefined)
+		}
 		if (request.embeddingEnabled !== undefined) {
 			controller.stateManager.setGlobalState("embeddingEnabled", request.embeddingEnabled)
 			// Fetched when the box is ticked, like an OCR language: the user is

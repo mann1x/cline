@@ -1,7 +1,8 @@
 import { type MediaSessionProvider, type MediaToolName, type MediaToolsConfig, resolveMediaTool } from "@cline/core"
 import { StateManager } from "@/core/storage/StateManager"
-import { parseAudioEndpoints } from "@/shared/audio-endpoints"
+import { parseAudioEndpoints, sfxBaseUrl } from "@/shared/audio-endpoints"
 import { parseVideoEndpoint } from "@/shared/video-endpoint"
+import { sfxApiKey } from "./audio-config"
 import { readImageGenerationApiKey, readStoredEndpoint } from "./image-generation-config"
 import { probeMediaServer, readLeadMediaProvider } from "./media-endpoint-config"
 
@@ -52,6 +53,15 @@ export function readMediaToolsConfig(): MediaToolsConfig {
 				apiKey: secret("audioTtsApiKey"),
 				voice: stored.tts.voice,
 				format: stored.tts.format,
+			}
+		}
+		if (!stored.sfx.disabled) {
+			config.soundEffects = {
+				useProvider: stored.useProvider,
+				baseUrl: sfxBaseUrl(stored),
+				model: stored.sfx.model,
+				apiKey: sfxApiKey(stored),
+				format: stored.sfx.format,
 			}
 		}
 	}

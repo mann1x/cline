@@ -308,8 +308,8 @@ const USER_SETTINGS_FIELDS = {
 	// a machine until someone stands one up, and a tool that always fails is
 	// worse than an absent one.
 	imageGenEnabled: { default: false as boolean },
-	// Offer `transcribe_audio` and `synthesize_speech`, each pointed at an
-	// OpenAI-compatible audio endpoint. Off by default for the image tool's
+	// Offer `transcribe_audio`, `synthesize_speech` and `generate_sound_effect`,
+	// each pointed at an audio endpoint. Off by default for the image tool's
 	// reason: nothing serves these on a machine until someone stands one up.
 	audioEnabled: { default: false as boolean },
 	// Offer `generate_video`, pointed at an OpenAI-compatible videos endpoint.
@@ -357,8 +357,8 @@ const USER_SETTINGS_FIELDS = {
 	// has no image models in it. The key is not here -- it is a secret.
 	imageGenEndpoint: { default: "" as string },
 	// JSON `{useProvider, stt: {baseUrl, model, disabled}, tts: {baseUrl, model,
-	// voice, format, disabled}}` for the Audio tab, round-tripped whole. The two
-	// keys are secrets.
+	// voice, format, disabled}, sfx: {baseUrl, model, format, disabled}}` for the
+	// Audio tab, round-tripped whole. The keys are secrets.
 	audioEndpoints: { default: "" as string },
 	// JSON `{useProvider, baseUrl, model, size, seconds}` for the Video tab.
 	videoEndpoint: { default: "" as string },
@@ -620,10 +620,11 @@ const SECRETS_KEYS = [
 	// snapshot travels to the webview as one `state_json` string, and this must
 	// never be in it. The webview is told whether one is set, and nothing else.
 	"imageGenApiKey",
-	// The keys for the two audio endpoints and the video endpoint, secrets for
-	// the same reason.
+	// The keys for the audio endpoints and the video endpoint, secrets for the
+	// same reason.
 	"audioSttApiKey",
 	"audioTtsApiKey",
+	"audioSfxApiKey",
 	"videoApiKey",
 	"embeddingApiKey",
 	"rerankingApiKey",
@@ -682,6 +683,7 @@ export const NonApiHandlerSecretKeys = new Set<string>([
 	"imageGenApiKey",
 	"audioSttApiKey",
 	"audioTtsApiKey",
+	"audioSfxApiKey",
 	"videoApiKey",
 	"embeddingApiKey",
 	"rerankingApiKey",

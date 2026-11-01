@@ -121,8 +121,9 @@ export async function getStateToPostToWebview(controller: {
 	const embeddingEnabled = stateManager.getGlobalSettingsKey("embeddingEnabled")
 	const retrievalEndpoints = stateManager.getGlobalSettingsKey("retrievalEndpoints")
 	const libraryEnabled = stateManager.getGlobalSettingsKey("libraryEnabled")
-	const secretSet = (key: "audioSttApiKey" | "audioTtsApiKey" | "videoApiKey" | "embeddingApiKey" | "rerankingApiKey") =>
-		Boolean(stateManager.getSecretKey(key)?.trim())
+	const secretSet = (
+		key: "audioSttApiKey" | "audioTtsApiKey" | "audioSfxApiKey" | "videoApiKey" | "embeddingApiKey" | "rerankingApiKey",
+	) => Boolean(stateManager.getSecretKey(key)?.trim())
 	const jevEnabled = stateManager.getGlobalSettingsKey("jevEnabled")
 	const jevSettings = stateManager.getGlobalSettingsKey("jevSettings")
 	const editVerificationSettings = stateManager.getGlobalSettingsKey("editVerificationSettings")
@@ -285,6 +286,7 @@ export async function getStateToPostToWebview(controller: {
 		audioEndpoints,
 		audioSttApiKeySet: secretSet("audioSttApiKey"),
 		audioTtsApiKeySet: secretSet("audioTtsApiKey"),
+		audioSfxApiKeySet: secretSet("audioSfxApiKey"),
 		videoEnabled,
 		videoEndpoint,
 		videoApiKeySet: secretSet("videoApiKey"),

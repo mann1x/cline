@@ -19,6 +19,11 @@ export interface AudioEndpoints {
 	stt: AudioEndpointSettings
 	/** Text-to-speech: `synthesize_speech`, with the defaults a call may omit. */
 	tts: AudioEndpointSettings & { voice?: string; format?: string }
+	/**
+	 * Sound effects: `generate_sound_effect`. An empty `baseUrl` is the
+	 * text-to-speech endpoint, since one server usually does both.
+	 */
+	sfx: AudioEndpointSettings & { format?: string }
 }
 
 const text = (value: unknown) => (typeof value === "string" ? value.trim() : "")
@@ -46,6 +51,7 @@ export function parseAudioEndpoints(raw: string | undefined): AudioEndpoints {
 		}
 	}
 	const tts = (typeof parsed.tts === "object" && parsed.tts !== null ? parsed.tts : {}) as Record<string, unknown>
+	const sfx = (typeof parsed.sfx === "object" && parsed.sfx !== null ? parsed.sfx : {}) as Record<string, unknown>
 	return {
 		...(parsed.useProvider === true ? { useProvider: true } : {}),
 		stt: endpoint(parsed.stt),
@@ -54,11 +60,21 @@ export function parseAudioEndpoints(raw: string | undefined): AudioEndpoints {
 			...(text(tts.voice) ? { voice: text(tts.voice) } : {}),
 			...(text(tts.format) ? { format: text(tts.format) } : {}),
 		},
+		sfx: {
+			...endpoint(parsed.sfx),
+			...(text(sfx.format) ? { format: text(sfx.format) } : {}),
+		},
 	}
+}
+
+/** Where sound effects go: their own endpoint, or the text-to-speech one. */
+export function sfxBaseUrl(endpoints: AudioEndpoints): string {
+	return endpoints.sfx.baseUrl || endpoints.tts.baseUrl
 }
 
 /** Whether the tab says anywhere to go at all, for the panel's warning. */
 export function audioEndpointsConfigured(endpoints: AudioEndpoints): boolean {
 	const named = (settings: AudioEndpointSettings) => !settings.disabled && settings.baseUrl !== "" && settings.model !== ""
-	return endpoints.useProvider === true || named(endpoints.stt) || named(endpoints.tts)
+	const sfx = { ...endpoints.sfx, baseUrl: sfxBaseUrl(endpoints) }
+	return endpoints.useProvider === true || named(endpoints.stt) || named(endpoints.tts) || named(sfx)
 }
