@@ -24,6 +24,7 @@
 import * as nodePath from "node:path";
 import { type AgentTool, createTool } from "@cline/shared";
 import {
+	MEDIA_QUEUE_WAIT_MS,
 	MediaRequestTimeoutError,
 	normalizeBaseUrl,
 	sendMediaRequest,
@@ -164,7 +165,7 @@ export interface GenerateImageToolOptions {
 		| Promise<ImageGenerationEndpoint | undefined>;
 	writeFile: (absolutePath: string, data: Buffer) => Promise<void>;
 	fetchImpl?: typeof fetch;
-	/** Milliseconds before a generation is abandoned. Defaults to 3 minutes. */
+	/** Milliseconds before a generation is abandoned. Defaults to 13 minutes. */
 	timeoutMs?: number;
 	onError?: (message: string, error: unknown) => void;
 }
@@ -500,7 +501,7 @@ export function createGenerateImageTool(
 	options: GenerateImageToolOptions,
 ): AgentTool {
 	const fetchImpl = options.fetchImpl ?? fetch;
-	const timeoutMs = options.timeoutMs ?? 180_000;
+	const timeoutMs = options.timeoutMs ?? MEDIA_QUEUE_WAIT_MS + 180_000;
 
 	return createTool({
 		name: GENERATE_IMAGE_TOOL_NAME,

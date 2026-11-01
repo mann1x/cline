@@ -25,6 +25,7 @@ import * as nodePath from "node:path";
 import { type AgentTool, createTool } from "@cline/shared";
 import { resolveInsideWorkspace } from "./image-generation";
 import {
+	MEDIA_QUEUE_WAIT_MS,
 	MediaRequestTimeoutError,
 	type MediaServer,
 	mediaServerOrigin,
@@ -200,7 +201,7 @@ export interface TranscribeAudioToolOptions extends AudioToolBase {
 	getEndpoint: () => MaybePromise<TranscriptionEndpoint | undefined>;
 	readFile: (absolutePath: string) => Promise<Buffer>;
 	writeFile: (absolutePath: string, data: Buffer) => Promise<void>;
-	/** Milliseconds one transcription may take. Defaults to 15 minutes. */
+	/** Milliseconds one transcription may take. Defaults to 25 minutes. */
 	timeoutMs?: number;
 	/** Characters of transcript returned to the model. Defaults to 24,000. */
 	maxReturnedChars?: number;
@@ -209,7 +210,7 @@ export interface TranscribeAudioToolOptions extends AudioToolBase {
 export interface SynthesizeSpeechToolOptions extends AudioToolBase {
 	getEndpoint: () => MaybePromise<SpeechEndpoint | undefined>;
 	writeFile: (absolutePath: string, data: Buffer) => Promise<void>;
-	/** Milliseconds one synthesis may take. Defaults to 5 minutes. */
+	/** Milliseconds one synthesis may take. Defaults to 15 minutes. */
 	timeoutMs?: number;
 }
 
@@ -343,7 +344,7 @@ export function createTranscribeAudioTool(
 	options: TranscribeAudioToolOptions,
 ): AgentTool {
 	const fetchImpl = options.fetchImpl ?? fetch;
-	const timeoutMs = options.timeoutMs ?? 15 * 60_000;
+	const timeoutMs = options.timeoutMs ?? MEDIA_QUEUE_WAIT_MS + 15 * 60_000;
 	const maxReturnedChars = options.maxReturnedChars ?? 24_000;
 
 	return createTool({
@@ -497,7 +498,7 @@ export function createSynthesizeSpeechTool(
 	options: SynthesizeSpeechToolOptions,
 ): AgentTool {
 	const fetchImpl = options.fetchImpl ?? fetch;
-	const timeoutMs = options.timeoutMs ?? 5 * 60_000;
+	const timeoutMs = options.timeoutMs ?? MEDIA_QUEUE_WAIT_MS + 5 * 60_000;
 
 	return createTool({
 		name: SYNTHESIZE_SPEECH_TOOL_NAME,
@@ -652,9 +653,8 @@ export function createGenerateSoundEffectTool(
 	options: GenerateSoundEffectToolOptions,
 ): AgentTool {
 	const fetchImpl = options.fetchImpl ?? fetch;
-	// A clip takes seconds, but xOllama holds a request for up to 10 minutes in
-	// its queue before answering 503, and the first clip loads the model.
-	const timeoutMs = options.timeoutMs ?? 15 * 60_000;
+	// A clip takes seconds, but the first one loads the model.
+	const timeoutMs = options.timeoutMs ?? MEDIA_QUEUE_WAIT_MS + 5 * 60_000;
 
 	return createTool({
 		name: GENERATE_SOUND_EFFECT_TOOL_NAME,

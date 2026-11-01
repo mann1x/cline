@@ -24,7 +24,10 @@ import {
 	resolveInsideWorkspace,
 	type ToolOutput,
 } from "./image-generation";
-import { MediaRequestTimeoutError } from "./media-endpoint";
+import {
+	MEDIA_QUEUE_WAIT_MS,
+	MediaRequestTimeoutError,
+} from "./media-endpoint";
 import { buildRenderDocument, type RenderDriver } from "./render-image";
 import {
 	encodeIcns,
@@ -195,7 +198,7 @@ export function createGenerateIconTool(
 	options: GenerateIconToolOptions,
 ): AgentTool {
 	const fetchImpl = options.fetchImpl ?? fetch;
-	const timeoutMs = options.timeoutMs ?? 180_000;
+	const timeoutMs = options.timeoutMs ?? MEDIA_QUEUE_WAIT_MS + 180_000;
 	const now = options.now ?? Date.now;
 	let driver: RenderDriver | undefined;
 

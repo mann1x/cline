@@ -490,13 +490,22 @@ export function retryAfterMs(header: string | null, now = Date.now()): number {
 		: fallback;
 }
 
+/**
+ * How long xOllama may hold a request before it starts or answers `503`: its
+ * `mediaQueueWait`. The wait happens inside one attempt, so a tool's limit is
+ * this plus the time the work itself may take. Without it a queued request is
+ * abandoned, and reported as stopped, before the server has answered at all.
+ */
+export const MEDIA_QUEUE_WAIT_MS = 10 * 60_000;
+
 export interface MediaRequestOptions {
 	fetchImpl?: typeof fetch;
 	/** The caller's cancellation. The only thing that ends the waiting. */
 	signal?: AbortSignal;
 	/**
-	 * Milliseconds one attempt may take. Waiting on a busy engine is not
-	 * counted: the limit is on the work, not on the queue in front of it.
+	 * Milliseconds one attempt may take. Waiting between attempts on a busy
+	 * engine is not counted, but a server's own queue is: see
+	 * `MEDIA_QUEUE_WAIT_MS`.
 	 */
 	attemptTimeoutMs?: number;
 	/**

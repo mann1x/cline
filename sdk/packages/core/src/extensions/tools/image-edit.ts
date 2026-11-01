@@ -29,6 +29,7 @@ import {
 	type ToolOutput,
 } from "./image-generation";
 import {
+	MEDIA_QUEUE_WAIT_MS,
 	MediaRequestTimeoutError,
 	normalizeBaseUrl,
 	sendMediaRequest,
@@ -99,7 +100,7 @@ export interface EditImageToolOptions {
 	readFile: (absolutePath: string) => Promise<Buffer>;
 	writeFile: (absolutePath: string, data: Buffer) => Promise<void>;
 	fetchImpl?: typeof fetch;
-	/** Milliseconds one edit may take. Defaults to 3 minutes. */
+	/** Milliseconds one edit may take. Defaults to 13 minutes. */
 	timeoutMs?: number;
 	onError?: (message: string, error: unknown) => void;
 }
@@ -164,7 +165,7 @@ function asBlob(image: SourceImage): Blob {
  */
 export function createEditImageTool(options: EditImageToolOptions): AgentTool {
 	const fetchImpl = options.fetchImpl ?? fetch;
-	const timeoutMs = options.timeoutMs ?? 180_000;
+	const timeoutMs = options.timeoutMs ?? MEDIA_QUEUE_WAIT_MS + 180_000;
 
 	return createTool({
 		name: EDIT_IMAGE_TOOL_NAME,

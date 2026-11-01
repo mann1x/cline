@@ -1,5 +1,5 @@
 import { relative, resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	audioExtension,
 	createGenerateSoundEffectTool,
@@ -9,6 +9,7 @@ import {
 	sniffAudioExtension,
 	wavSeconds,
 } from "./audio-tools";
+import { createGenerateImageTool } from "./image-generation";
 
 /** A path under the test workspace, in the running platform's form. */
 const at = (...parts: string[]) => resolve("/ws", ...parts);
@@ -444,6 +445,56 @@ describe("generate_sound_effect", () => {
 			await tool.execute({ prompt: "p", path: "../out.wav" }, {} as never),
 		).toContain("outside the workspace");
 		expect(fetchImpl).not.toHaveBeenCalled();
+	});
+});
+
+describe("a request waiting in the server's queue", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	/** Answers only after `ms`, as a server does with a request it has queued. */
+	const queued = (ms: number, answer: () => Response) =>
+		(async (_url: string | URL | Request, init?: RequestInit) =>
+			await new Promise<Response>((resolve, reject) => {
+				const timer = setTimeout(() => resolve(answer()), ms);
+				init?.signal?.addEventListener("abort", () => {
+					clearTimeout(timer);
+					reject(new Error("aborted"));
+				});
+			})) as unknown as typeof fetch;
+	const wait = 9.5 * 60_000;
+
+	it("is not given up on by synthesize_speech", async () => {
+		vi.useFakeTimers();
+		const tool = createSynthesizeSpeechTool({
+			cwd: at(),
+			getEndpoint: () => ({ baseUrl: "http://h:1", model: "m" }),
+			writeFile: async () => {},
+			fetchImpl: queued(
+				wait,
+				() =>
+					new Response(new Uint8Array(wav(1)), {
+						headers: { "content-type": "audio/wav" },
+					}),
+			),
+		});
+		const result = tool.execute({ text: "hello" }, {} as never);
+		await vi.advanceTimersByTimeAsync(wait + 1_000);
+		expect(await result).toContain("Synthesized and saved");
+	});
+
+	it("is not given up on by generate_image", async () => {
+		vi.useFakeTimers();
+		const tool = createGenerateImageTool({
+			cwd: at(),
+			getEndpoint: () => ({ baseUrl: "http://h:1", model: "m" }),
+			writeFile: async () => {},
+			fetchImpl: queued(wait, () => new Response("{}", { status: 400 })),
+		});
+		const result = tool.execute({ prompt: "a cat" }, {} as never);
+		await vi.advanceTimersByTimeAsync(wait + 1_000);
+		expect(JSON.stringify(await result)).not.toContain("stopped before");
 	});
 });
 
