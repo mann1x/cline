@@ -15,6 +15,8 @@
  * growing wait before the error is passed on.
  */
 
+import { withoutPastedRoute } from "../../extensions/tools/media-endpoint";
+
 export interface RetrievalEndpoint {
 	/** With or without a trailing `/v1`; `/v1` is added when the path has none. */
 	baseUrl: string;
@@ -69,9 +71,12 @@ export class RetrievalEndpointError extends Error {
 	}
 }
 
-/** `http://host:1234` and `http://host:1234/v1/` both become `http://host:1234/v1`. */
+/**
+ * `http://host:1234`, `http://host:1234/v1/` and a pasted
+ * `http://host:1234/v1/embeddings` all become `http://host:1234/v1`.
+ */
 export function resolveRetrievalBaseUrl(baseUrl: string): string {
-	const trimmed = baseUrl.trim().replace(/\/+$/, "");
+	const trimmed = withoutPastedRoute(baseUrl);
 	if (!trimmed) {
 		throw new RetrievalEndpointError("No endpoint URL is set.");
 	}

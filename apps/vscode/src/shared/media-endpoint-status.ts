@@ -23,8 +23,8 @@ export interface MediaEndpointStatus {
 	/** The tool is offered, and this is where it goes. */
 	resolved?: {
 		source: "provider" | "typed"
-		/** `unknown` is a typed endpoint that did not answer. */
-		server: "opencoti" | "xollama" | "openai" | "unknown"
+		/** `unknown` is a typed endpoint that did not answer, `unrecognized` one that answered and said nothing of use. */
+		server: "opencoti" | "xollama" | "openai" | "unknown" | "unrecognized"
 		model: string
 		/** Why a call may fail right now; the tool is offered all the same. */
 		warning?: string

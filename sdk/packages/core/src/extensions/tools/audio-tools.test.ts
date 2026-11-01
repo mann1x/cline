@@ -173,7 +173,7 @@ describe("transcribe_audio", () => {
 describe("synthesize_speech", () => {
 	const make = (
 		fetchImpl: typeof fetch,
-		endpoint: { voice?: string; format?: string } = {},
+		endpoint: { baseUrl?: string; voice?: string; format?: string } = {},
 	) => {
 		const written: Record<string, Buffer> = {};
 		const tool = createSynthesizeSpeechTool({
@@ -198,6 +198,17 @@ describe("synthesize_speech", () => {
 					headers: { "content-type": type },
 				}),
 		);
+
+	it("posts to one route when the whole route was pasted as the base URL", async () => {
+		const fetchImpl = audio(wav(2), "audio/wav");
+		const { tool } = make(fetchImpl as unknown as typeof fetch, {
+			baseUrl: "http://192.168.1.100:22434/v1/audio/speech",
+		});
+		await tool.execute({ text: "hello" }, {} as never);
+		expect(String(fetchImpl.mock.calls[0]?.[0])).toBe(
+			"http://192.168.1.100:22434/v1/audio/speech",
+		);
+	});
 
 	it("posts the text and saves what comes back", async () => {
 		const fetchImpl = audio(wav(2), "audio/wav");

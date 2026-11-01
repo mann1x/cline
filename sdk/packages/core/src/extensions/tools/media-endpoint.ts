@@ -28,6 +28,10 @@
  * start stays out for the whole session. The tab's own switch is how a user
  * says they do not want the tool. What the probe found is a warning, not a
  * gate.
+ *
+ * A base URL is a server's address, but the settings say `POST <endpoint>/
+ * audio/speech`, so the whole route gets pasted. Nothing is lost by taking it
+ * back off: a route under a route is never what anyone meant.
  */
 
 export type MediaKind =
@@ -73,11 +77,35 @@ export interface MediaEndpointProbe {
 	 */
 	kinds: Partial<Record<MediaKind, boolean>>;
 	models: MediaModel[];
+	/**
+	 * Set when something replied at this address and none of it read as a
+	 * server of ours or a model list: the status its `/models` gave. Such a
+	 * probe has `server: "openai"` and no models. A server that lists nothing
+	 * can still take a request, so this is not a dead endpoint.
+	 */
+	unrecognizedStatus?: number;
+}
+
+/** The routes the tools call, as they get pasted into a base URL. */
+const PASTED_ROUTE =
+	/\/(?:audio\/(?:speech|transcriptions|translations)|images\/(?:generations|edits|variations)|videos|embeddings|rerank|models|chat\/completions)$/;
+
+/** A base URL without its trailing slashes or a pasted route. */
+export function withoutPastedRoute(baseUrl: string): string {
+	return baseUrl.trim().replace(/\/+$/, "").replace(PASTED_ROUTE, "");
+}
+
+/** The address to send to: a typed `host:port` has no scheme for fetch. */
+function serverAddress(baseUrl: string): string {
+	const address = withoutPastedRoute(baseUrl);
+	return /^[a-z][a-z0-9+.-]*:\/\//i.test(address)
+		? address
+		: `http://${address.replace(/^\/+/, "")}`;
 }
 
 /** `.../v1`, whether or not the user typed it. */
 export function normalizeBaseUrl(baseUrl: string): string {
-	const trimmed = baseUrl.trim().replace(/\/+$/, "");
+	const trimmed = serverAddress(baseUrl);
 	if (/\/api$/.test(trimmed)) {
 		return `${trimmed.slice(0, -"/api".length)}/v1`;
 	}
@@ -86,10 +114,7 @@ export function normalizeBaseUrl(baseUrl: string): string {
 
 /** The server's root, under which `/props` and `/api/xollama` live. */
 export function mediaServerOrigin(baseUrl: string): string {
-	return baseUrl
-		.trim()
-		.replace(/\/+$/, "")
-		.replace(/\/(?:v\d+|api)$/, "");
+	return serverAddress(baseUrl).replace(/\/(?:v\d+|api)$/, "");
 }
 
 const OPENCOTI_FEATURES: Record<string, MediaKind> = {
@@ -188,10 +213,16 @@ export interface MediaProbeOptions {
 	timeoutMs?: number;
 }
 
+interface ProbeRead {
+	body?: unknown;
+	/** Absent when nothing replied. */
+	status?: number;
+}
+
 async function readJson(
 	url: string,
 	options: MediaProbeOptions,
-): Promise<unknown | undefined> {
+): Promise<ProbeRead> {
 	const fetchImpl = options.fetchImpl ?? fetch;
 	const controller = new AbortController();
 	const timer = setTimeout(
@@ -200,6 +231,7 @@ async function readJson(
 	);
 	const onAbort = () => controller.abort();
 	options.signal?.addEventListener("abort", onAbort);
+	let status: number | undefined;
 	try {
 		const response = await fetchImpl(url, {
 			headers: options.apiKey
@@ -207,9 +239,11 @@ async function readJson(
 				: {},
 			signal: controller.signal,
 		});
-		return response.ok ? await response.json() : undefined;
+		status = response.status;
+		return { status, body: response.ok ? await response.json() : undefined };
 	} catch {
-		return undefined;
+		// A page that is not JSON still came from something at this address.
+		return { status };
 	} finally {
 		clearTimeout(timer);
 		options.signal?.removeEventListener("abort", onAbort);
@@ -228,11 +262,12 @@ export async function probeMediaEndpoint(
 ): Promise<MediaEndpointProbe | undefined> {
 	if (!baseUrl.trim()) return undefined;
 	const origin = mediaServerOrigin(baseUrl);
-	const [props, xollama, listing] = await Promise.all([
+	const reads = await Promise.all([
 		readJson(`${origin}/props`, options),
 		readJson(`${origin}/api/xollama`, options),
 		readJson(`${normalizeBaseUrl(baseUrl)}/models`, options),
 	]);
+	const [props, xollama, listing] = reads.map((read) => read.body);
 	const models = modelsOfListing(listing);
 
 	if ((xollama as { xollama?: unknown })?.xollama === true) {
@@ -266,7 +301,13 @@ export async function probeMediaEndpoint(
 		return { server: "opencoti", kinds, models };
 	}
 
-	if (listing === undefined) return undefined;
+	if (listing === undefined) {
+		const status =
+			reads[2]?.status ?? reads.find((read) => read.status)?.status;
+		return status === undefined
+			? undefined
+			: { server: "openai", kinds: {}, models, unrecognizedStatus: status };
+	}
 	return { server: "openai", kinds: {}, models };
 }
 
@@ -308,8 +349,11 @@ export type ResolvedMediaEndpoint =
 	| {
 			endpoint: MediaEndpoint;
 			source: "provider" | "typed";
-			/** `unknown` is a typed endpoint that did not answer the probe. */
-			server: MediaServer | "unknown";
+			/**
+			 * `unknown` is a typed endpoint that did not answer the probe,
+			 * `unrecognized` one that answered and said nothing of use.
+			 */
+			server: MediaServer | "unknown" | "unrecognized";
 			/** Why a call may fail right now. The tool is offered all the same. */
 			warning?: string;
 	  }
@@ -341,6 +385,20 @@ function providerModel(
 		return named || sessionModel;
 	}
 	return undefined;
+}
+
+/** What to say about an address that replied but is no media endpoint. */
+function unrecognizedWarning(baseUrl: string, status: number): string {
+	if (status === 401 || status === 403) {
+		return `the server at ${baseUrl} refused the request (${status}): check the API key`;
+	}
+	const root = mediaServerOrigin(baseUrl);
+	const address = URL.canParse(root) ? new URL(root).origin : undefined;
+	const hint =
+		address && address !== root
+			? `; use the server's address, such as ${address}`
+			: "";
+	return `a server answered at ${baseUrl} (${status}) but not as a media endpoint${hint}`;
 }
 
 export async function resolveMediaEndpoint(
@@ -390,6 +448,14 @@ export async function resolveMediaEndpoint(
 			source: "typed",
 			server: "unknown",
 			warning: `the endpoint at ${baseUrl} does not answer right now`,
+		};
+	}
+	if (probe.unrecognizedStatus !== undefined) {
+		return {
+			endpoint,
+			source: "typed",
+			server: "unrecognized",
+			warning: unrecognizedWarning(baseUrl, probe.unrecognizedStatus),
 		};
 	}
 	return {

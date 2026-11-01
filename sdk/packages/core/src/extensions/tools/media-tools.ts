@@ -134,7 +134,10 @@ export function createMediaProbeCache(
 		};
 		probes.set(key, entry);
 		void entry.probe.then((probe) => {
-			if (probe === undefined && probes.get(key) === entry) {
+			if (
+				(probe === undefined || probe.unrecognizedStatus !== undefined) &&
+				probes.get(key) === entry
+			) {
 				entry.at = now() - PROBE_TTL_MS + DEAD_PROBE_TTL_MS;
 			}
 		});

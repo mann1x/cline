@@ -1,5 +1,6 @@
 import {
 	embedTexts,
+	mediaServerOrigin,
 	type RetrievalEndpoint,
 	rerankDocuments,
 	resolveRetrievalBaseUrl,
@@ -64,9 +65,6 @@ const SHOW_CONCURRENCY = 8
 /** A name that says "embedding model" when the server does not. */
 const EMBEDDING_NAME = /embed|bge|e5-|minilm|arctic|gte-|nomic|mxbai|jina/i
 
-/** The server's root, without the `/v1` an OpenAI-style address ends in. */
-const serverRoot = (baseUrl: string) => baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "")
-
 const lists = new Map<string, { at: number; list: Promise<RetrievalEmbeddingModels> }>()
 const LIST_TTL_MS = 30_000
 
@@ -90,7 +88,7 @@ export function listEmbeddingModels(baseUrl: string, apiKey: string | undefined)
 }
 
 async function fetchEmbeddingModels(baseUrl: string, apiKey: string | undefined): Promise<RetrievalEmbeddingModels> {
-	const root = serverRoot(baseUrl)
+	const root = mediaServerOrigin(baseUrl)
 	const settings = {
 		...getAxiosSettings(),
 		timeout: MODEL_LIST_TIMEOUT_MS,

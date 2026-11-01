@@ -195,6 +195,7 @@ export {
 export {
 	listMediaModels,
 	MEDIA_KINDS,
+	mediaServerOrigin,
 	probeMediaEndpoint,
 	resolveMediaEndpoint,
 } from "../../../../sdk/packages/core/src/extensions/tools/media-endpoint"

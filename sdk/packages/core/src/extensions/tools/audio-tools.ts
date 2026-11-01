@@ -618,7 +618,7 @@ const strings = (value: unknown): string[] =>
  */
 export async function listSpeechVoices(
 	endpoint: TranscriptionEndpoint,
-	server: MediaServer | "unknown",
+	server: MediaServer | "unknown" | "unrecognized",
 	options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
 ): Promise<SpeechVoices | undefined> {
 	if (server !== "opencoti" && server !== "xollama") {

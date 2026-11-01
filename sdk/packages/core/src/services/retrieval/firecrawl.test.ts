@@ -82,6 +82,22 @@ describe("the scraping endpoint", () => {
 		expect(page.sha256).toHaveLength(64);
 	});
 
+	it.each([
+		"http://scrape.test",
+		"http://scrape.test/v1",
+		"http://scrape.test/v2/scrape",
+		"http://scrape.test/scrape/",
+	])("sends one route whatever the base URL holds: %s", async (baseUrl) => {
+		const { send, seen } = answering(() =>
+			Response.json({
+				success: true,
+				data: { html: "<p>a</p>", metadata: {} },
+			}),
+		);
+		await scrapePage({ baseUrl }, "https://example.com/a", { fetch: send });
+		expect(seen[0]?.url).toBe("http://scrape.test/v2/scrape");
+	});
+
 	it("says what went wrong in words the user can act on", async () => {
 		const failing = (status: number, body: string) =>
 			scrapePage(endpoint, "https://example.com/a", {

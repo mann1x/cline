@@ -85,6 +85,7 @@ function root(endpoint: ScrapeEndpoint): string {
 	return endpoint.baseUrl
 		.trim()
 		.replace(/\/+$/, "")
+		.replace(/\/(?:scrape|crawl|map|search)$/, "")
 		.replace(/\/v[12]$/, "");
 }
 

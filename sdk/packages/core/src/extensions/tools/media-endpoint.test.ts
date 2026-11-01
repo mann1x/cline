@@ -4,6 +4,7 @@ import {
 	type MediaEndpointProbe,
 	MediaRequestTimeoutError,
 	mediaKindsOfModelRow,
+	mediaServerOrigin,
 	normalizeBaseUrl,
 	probeMediaEndpoint,
 	resolveMediaEndpoint,
@@ -70,6 +71,114 @@ describe("normalizeBaseUrl", () => {
 		expect(normalizeBaseUrl("http://h:8080/v1/")).toBe("http://h:8080/v1");
 		// An Ollama provider's base URL, reused for media.
 		expect(normalizeBaseUrl("http://h:22434/api")).toBe("http://h:22434/v1");
+	});
+
+	it.each([
+		"/audio/speech",
+		"/audio/transcriptions",
+		"/audio/translations",
+		"/images/generations",
+		"/images/edits",
+		"/videos",
+		"/models",
+	])("takes a pasted %s back off, with or without /v1", (route) => {
+		for (const pasted of [
+			`http://h:22434/v1${route}`,
+			`http://h:22434/v1${route}/`,
+			`http://h:22434${route}`,
+		]) {
+			expect(normalizeBaseUrl(pasted)).toBe("http://h:22434/v1");
+			expect(mediaServerOrigin(pasted)).toBe("http://h:22434");
+		}
+	});
+
+	it("gives a typed host:port the scheme fetch needs", () => {
+		expect(normalizeBaseUrl("192.168.1.100:22434")).toBe(
+			"http://192.168.1.100:22434/v1",
+		);
+		expect(mediaServerOrigin("192.168.1.100:22434/v1/audio/speech")).toBe(
+			"http://192.168.1.100:22434",
+		);
+		expect(normalizeBaseUrl("https://h/v1")).toBe("https://h/v1");
+	});
+
+	it("keeps a path that is not a route, and another API version", () => {
+		expect(normalizeBaseUrl("https://h/proxy/v2/audio/speech")).toBe(
+			"https://h/proxy/v2",
+		);
+		expect(mediaServerOrigin("https://h/proxy/v1")).toBe("https://h/proxy");
+	});
+});
+
+describe("a pasted route", () => {
+	const speech = "http://h:22434/v1/audio/speech";
+
+	it("is probed at the server, not under the route", async () => {
+		const urls: string[] = [];
+		const fetchImpl = (async (input: string | URL | Request) => {
+			urls.push(String(input));
+			return server({
+				"http://h:22434/api/xollama": { xollama: true },
+				"http://h:22434/v1/models": {
+					data: [{ id: "kokoro", output_modalities: ["audio"] }],
+				},
+			})(input);
+		}) as typeof fetch;
+		const probe = await probeMediaEndpoint(speech, { fetchImpl });
+		expect(probe?.server).toBe("xollama");
+		expect(probe?.kinds.speech).toBe(true);
+		expect(urls.every((url) => !url.includes("/audio/speech"))).toBe(true);
+	});
+});
+
+describe("a server that answers but is no media endpoint", () => {
+	const replying = (status: number, body = "{}") =>
+		(async () => new Response(body, { status })) as unknown as typeof fetch;
+	const resolve = (baseUrl: string, fetchImpl: typeof fetch) =>
+		resolveMediaEndpoint({
+			kind: "speech",
+			useProvider: false,
+			typed: { baseUrl, model: "m" },
+			probe: (url, apiKey) => probeMediaEndpoint(url, { apiKey, fetchImpl }),
+		});
+
+	it("is told from one that does not answer", async () => {
+		const probe = await probeMediaEndpoint("http://h:1", {
+			fetchImpl: replying(404),
+		});
+		expect(probe).toEqual({
+			server: "openai",
+			kinds: {},
+			models: [],
+			unrecognizedStatus: 404,
+		});
+		const resolved = await resolve("http://h:1/some/path", replying(404));
+		expect(resolved).toMatchObject({
+			server: "unrecognized",
+			warning:
+				"a server answered at http://h:1/some/path (404) but not as a media endpoint; use the server's address, such as http://h:1",
+		});
+	});
+
+	it("has no address to suggest when it was given the address", async () => {
+		expect(await resolve("http://h:1", replying(404))).toMatchObject({
+			warning:
+				"a server answered at http://h:1 (404) but not as a media endpoint",
+		});
+	});
+
+	it("counts a page that is not JSON as an answer", async () => {
+		expect(
+			await resolve("http://h:1", replying(200, "<html></html>")),
+		).toMatchObject({ server: "unrecognized" });
+	});
+
+	it("says a refused key is a refused key", async () => {
+		expect(await resolve("http://h:1", replying(401))).toMatchObject({
+			server: "unrecognized",
+			warning:
+				"the server at http://h:1 refused the request (401): check the API key",
+		});
 	});
 });
 

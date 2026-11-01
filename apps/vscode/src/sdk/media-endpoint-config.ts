@@ -65,7 +65,7 @@ export function probeMediaServer(baseUrl: string, apiKey: string | undefined): P
 	const entry = { at: Date.now(), probe: probeMediaEndpoint(url, { apiKey }) }
 	probes.set(key, entry)
 	void entry.probe.then((probe) => {
-		if (probe === undefined && probes.get(key) === entry) {
+		if ((probe === undefined || probe.unrecognizedStatus !== undefined) && probes.get(key) === entry) {
 			entry.at = Date.now() - PROBE_TTL_MS + DEAD_PROBE_TTL_MS
 		}
 	})

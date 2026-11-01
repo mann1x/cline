@@ -8,6 +8,7 @@ export const MEDIA_SERVER_NAMES = {
 	xollama: "xOllama",
 	openai: "OpenAI-compatible",
 	unknown: "not answering",
+	unrecognized: "answering, not as a media endpoint",
 } as const
 
 /**

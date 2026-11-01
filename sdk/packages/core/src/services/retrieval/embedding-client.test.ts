@@ -46,6 +46,15 @@ describe("resolveRetrievalBaseUrl", () => {
 		expect(resolveRetrievalBaseUrl("http://h:1")).toBe("http://h:1/v1");
 		expect(resolveRetrievalBaseUrl("http://h:1/")).toBe("http://h:1/v1");
 		expect(resolveRetrievalBaseUrl("http://h:1/v1/")).toBe("http://h:1/v1");
+		expect(resolveRetrievalBaseUrl("http://h:1/v1/embeddings")).toBe(
+			"http://h:1/v1",
+		);
+		expect(resolveRetrievalBaseUrl("http://h:1/v1/rerank/")).toBe(
+			"http://h:1/v1",
+		);
+		expect(resolveRetrievalBaseUrl("http://h:1/embeddings")).toBe(
+			"http://h:1/v1",
+		);
 		expect(resolveRetrievalBaseUrl("https://h/api/v3")).toBe(
 			"https://h/api/v3",
 		);
