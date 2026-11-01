@@ -151,8 +151,10 @@ VS Code has already started and authenticated those servers, so Cerebriline call
 | Control | Where | What it does |
 |---|---|---|
 | On/off | The toggle on the `vscode` entry, or the setting `cerebriline.vscodeMcpTools` (default `true`) | Stops or starts offering these tools to the model. The toggle and the setting are the same switch. |
-| Auto-approve | The tick box per tool on the `vscode` entry, stored in `cerebriline.vscodeMcpAutoApprove` | Lets that tool run without asking. VS Code's own approval settings for the server are not visible to Cerebriline and are not inherited, so a tool you have not ticked asks every time. |
+| Auto-approve | The tick box per tool on the `vscode` entry, stored in `cerebriline.vscodeMcpAutoApprove` | Skips Cerebriline's own approval for that tool. It does not stop VS Code's confirmation dialog, see below. VS Code's own approval settings for the server are not visible to Cerebriline and are not inherited, so a tool you have not ticked asks every time. |
 | Remove | In VS Code | The entry cannot be deleted from Cerebriline. The servers belong to VS Code, so remove them there, or switch the entry off. |
+
+**VS Code confirms these tools itself.** Unless a tool declares itself read-only, VS Code shows a "Run ..." dialog for each call an extension makes, and an extension cannot turn it off. VS Code's chat auto-approve settings do not apply outside its chat, and `autoApprove` in `mcp.json` is not a VS Code setting. For unattended work, add the server to Cerebriline's own MCP settings instead, if the server lets Cerebriline sign in, and auto-approve its tools there. `autoApprove` there lists tool names, and `*` is not a wildcard.
 
 The name `vscode` is reserved for this entry. A server you name `vscode` in Cerebriline's own MCP settings is ignored, because its tools would collide with these.
 
