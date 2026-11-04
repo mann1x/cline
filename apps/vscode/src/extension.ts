@@ -21,7 +21,7 @@ import { checkForUpdates, registerUpdateChecks } from "@services/updates/update-
 import type { ExtensionContext } from "vscode"
 import { HostProvider } from "@/hosts/host-provider"
 import { vscodeHostBridgeClient } from "@/hosts/vscode/hostbridge/client/host-grpc-client"
-import { createStorageContext } from "@/shared/storage/storage-context"
+import { createStorageContext, type StorageContext } from "@/shared/storage/storage-context"
 import { readTextFromClipboard, writeTextToClipboard } from "@/utils/env"
 import { initialize, tearDown } from "./common"
 import { addToCline } from "./core/controller/commands/addToCline"
@@ -48,6 +48,7 @@ import {
 	disposeVscodeCommentReviewController,
 	getVscodeCommentReviewController,
 } from "./hosts/vscode/review/VscodeCommentReviewController"
+import { StartupView } from "./hosts/vscode/startup-view"
 import { TerminalRegistry } from "./hosts/vscode/terminal/VscodeTerminalRegistry"
 import { DIFF_VIEW_URI_SCHEME, diffContentProvider } from "./hosts/vscode/VscodeDiffContentProvider"
 import { EDIT_PREVIEW_URI_SCHEME, editPreviewContentProvider, VscodeEditPreview } from "./hosts/vscode/VscodeEditPreview"
@@ -56,6 +57,7 @@ import { exportVSCodeStorageToSharedFiles } from "./hosts/vscode/vscode-to-file-
 import { ExtensionRegistryInfo } from "./registry"
 import { AuthService, LogoutReason } from "./sdk/auth-service"
 import { startMemoryLog } from "./sdk/extension-memory-log"
+import { resolveDataDir } from "./sdk/legacy-state-reader"
 import { installOllamaStreamDispatcher, reportOllamaStreamDispatcher } from "./sdk/ollama-stream-dispatcher"
 import { telemetryService } from "./services/telemetry"
 import type { RolloutBundleActivation } from "./services/telemetry/rollout-metadata"
@@ -73,31 +75,52 @@ export async function reportRolloutActivation(input: RolloutBundleActivation): P
 export async function activate(context: vscode.ExtensionContext) {
 	const activationStartTime = performance.now()
 
-	// 0. Hand the Ollama vendor its stream dispatcher. Before anything that can
-	// build a session: the vendor resolves one once and caches the result, so a
-	// session created first would cache the "none" it finds on its own.
-	installOllamaStreamDispatcher()
-	// Before anything spawns with the workspace as cwd (rg, git, hooks, MCP).
-	disableCurrentDirectoryExecutableSearch()
+	// Before anything that can throw or stall: until a provider is registered,
+	// VS Code shows the sidebar as a blank panel with a spinner and no error.
+	// The real provider takes the view over once `initialize` has created it.
+	const startupView = new StartupView(() => [path.join(resolveDataDir(), "logs", "extension.log"), context.logUri.fsPath])
+	context.subscriptions.push(
+		startupView,
+		vscode.window.registerWebviewViewProvider(VscodeWebviewProvider.SIDEBAR_ID, startupView, {
+			webviewOptions: { retainContextWhenHidden: true },
+		}),
+	)
 
-	// 1. Set up HostProvider for VSCode
-	// IMPORTANT: This must be done before any service can be registered
-	setupHostProvider(context)
+	let storageContext: StorageContext
+	let webview: VscodeWebviewProvider
+	try {
+		startupView.setStep("setting up the host")
+		// 0. Hand the Ollama vendor its stream dispatcher. Before anything that can
+		// build a session: the vendor resolves one once and caches the result, so a
+		// session created first would cache the "none" it finds on its own.
+		installOllamaStreamDispatcher()
+		// Before anything spawns with the workspace as cwd (rg, git, hooks, MCP).
+		disableCurrentDirectoryExecutableSearch()
 
-	// 2. Clean up legacy data patterns within VSCode's native storage.
-	// Moves workspace→global keys, task history→file, custom instructions→rules, etc.
-	// Must run BEFORE the file export so we copy clean state.
-	await cleanupLegacyVSCodeStorage(context)
+		// 1. Set up HostProvider for VSCode
+		// IMPORTANT: This must be done before any service can be registered
+		setupHostProvider(context)
 
-	// 3. One-time export of VSCode's native storage to shared file-backed stores.
-	// After this, all platforms (VSCode, CLI, JetBrains) read from ~/.cline/data/.
-	const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-	const storageContext = createStorageContext({ workspacePath })
-	await exportVSCodeStorageToSharedFiles(context, storageContext)
+		// 2. Clean up legacy data patterns within VSCode's native storage.
+		// Moves workspace→global keys, task history→file, custom instructions→rules, etc.
+		// Must run BEFORE the file export so we copy clean state.
+		startupView.setStep("cleaning up old VS Code storage")
+		await cleanupLegacyVSCodeStorage(context)
 
-	// 4. Register services and perform common initialization
-	// IMPORTANT: Must be done after host provider is setup and migrations are complete
-	const webview = (await initialize(storageContext)) as VscodeWebviewProvider
+		// 3. One-time export of VSCode's native storage to shared file-backed stores.
+		// After this, all platforms (VSCode, CLI, JetBrains) read from ~/.cline/data/.
+		startupView.setStep("copying VS Code storage to the data folder")
+		const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+		storageContext = createStorageContext({ workspacePath })
+		await exportVSCodeStorageToSharedFiles(context, storageContext)
+
+		// 4. Register services and perform common initialization
+		// IMPORTANT: Must be done after host provider is setup and migrations are complete
+		webview = (await initialize(storageContext, (step) => startupView.setStep(step))) as VscodeWebviewProvider
+	} catch (error) {
+		startupView.fail(error)
+		throw error
+	}
 
 	// Only now can anything be logged. `Logger` fans out to a set of
 	// subscribers and `initialize` is what adds them — registering the output
@@ -147,11 +170,8 @@ export async function activate(context: vscode.ExtensionContext) {
 		},
 	)
 
-	context.subscriptions.push(
-		vscode.window.registerWebviewViewProvider(VscodeWebviewProvider.SIDEBAR_ID, webview, {
-			webviewOptions: { retainContextWhenHidden: true },
-		}),
-	)
+	// Where the provider used to be registered: the sidebar is the real one from here.
+	void startupView.ready(webview)
 
 	// NOTE: Commands must be added to the internal registry before registering them with VSCode
 	const { commands } = ExtensionRegistryInfo

@@ -38,7 +38,10 @@ let stopWatchingSharedState: (() => void) | undefined
  * @returns The webview provider
  * @throws ClineConfigurationError if endpoints.json exists but is invalid
  */
-export async function initialize(storageContext: StorageContext): Promise<WebviewProvider> {
+export async function initialize(
+	storageContext: StorageContext,
+	onStep: (step: string) => void = () => {},
+): Promise<WebviewProvider> {
 	// Configure the shared Logging class to use HostProvider's output channels and debug logger
 	Logger.subscribe((msg: string) => HostProvider.get().logToChannel(msg)) // File system logging
 	Logger.subscribe((msg: string) => HostProvider.env.debugLog({ value: msg })) // Host debug logging
@@ -63,9 +66,11 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	// Initialize ClineEndpoint configuration (reads bundled and ~/.cline/endpoints.json if present)
 	// This must be done before any other code that calls ClineEnv.config()
 	// Throws ClineConfigurationError if config file exists but is invalid
+	onStep("reading the endpoint configuration")
 	const { ClineEndpoint } = await import("./config")
 	await ClineEndpoint.initialize(HostProvider.get().extensionFsPath)
 
+	onStep("reading settings")
 	try {
 		await StateManager.initialize(storageContext)
 	} catch (error) {
@@ -84,6 +89,7 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	registerVsCodeLmHandler()
 
 	// =============== External services ===============
+	onStep("starting error reporting")
 	await ErrorService.initialize()
 	// Initialize PostHog client provider (skip in self-hosted mode)
 	if (!ClineEndpoint.isSelfHosted()) {
@@ -91,6 +97,7 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	}
 
 	// =============== Webview services ===============
+	onStep("creating the chat view")
 	const webview = HostProvider.get().createWebviewProvider()
 
 	const stateManager = StateManager.get()
@@ -101,6 +108,7 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	// Non-blocking announcement check and display
 	showVersionUpdateAnnouncement(stateManager)
 	// Check if this workspace was opened from worktree quick launch
+	onStep("checking for a worktree to open")
 	await checkWorktreeAutoOpen(stateManager)
 
 	// =============== Background sync and cleanup tasks ===============
