@@ -24,6 +24,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { cn } from "@/lib/utils"
 import { McpServiceClient } from "@/services/grpc-client"
 import type { MarketplaceMcpMetadata } from "../ServersToggleList"
+import McpOAuthAccountActions from "./McpOAuthAccountActions"
 import McpOAuthClientEditor from "./McpOAuthClientEditor"
 import McpPromptRow from "./McpPromptRow"
 import McpResourceRow from "./McpResourceRow"
@@ -297,23 +298,33 @@ const ServerRow = ({
 				<div className="text-sm bg-text-block-background rounded-b-sm">
 					<div className="text-failed-icon mb-2 px-2.5 break-words">{server.error}</div>
 					{server.oauthRequired && server.oauthAuthStatus === "unauthenticated" ? (
-						<Button
-							className="m-2.5 mt-0 max-w-[calc(100%-20px)]"
-							onClick={(e) => {
-								e.stopPropagation()
-								McpServiceClient.authenticateMcpServer(StringRequest.create({ value: server.name }))
-							}}
-							variant="default">
-							Authenticate
-						</Button>
+						<>
+							<Button
+								className="m-2.5 mt-0 max-w-[calc(100%-20px)]"
+								onClick={(e) => {
+									e.stopPropagation()
+									McpServiceClient.authenticateMcpServer(StringRequest.create({ value: server.name }))
+								}}
+								variant="default">
+								Authenticate
+							</Button>
+							{/* Authenticating again signs in with the browser's
+							    session, so a wrong account comes straight back. */}
+							<McpOAuthAccountActions server={server} />
+						</>
 					) : (
-						<Button
-							className="m-2.5 mt-0 max-w-[calc(100%-20px)]"
-							disabled={server.status === "connecting"}
-							onClick={handleRestart}
-							variant="secondary">
-							{server.status === "connecting" || isRestarting ? "Retrying..." : "Retry Connection"}
-						</Button>
+						<>
+							<Button
+								className="m-2.5 mt-0 max-w-[calc(100%-20px)]"
+								disabled={server.status === "connecting"}
+								onClick={handleRestart}
+								variant="secondary">
+								{server.status === "connecting" || isRestarting ? "Retrying..." : "Retry Connection"}
+							</Button>
+							{/* Signed in, and failing anyway: often the account is
+						    the wrong one. */}
+							{server.oauthRequired && <McpOAuthAccountActions server={server} />}
+						</>
 					)}
 
 					{/* A server that refuses to register a client for us leaves
@@ -414,6 +425,12 @@ const ServerRow = ({
 								"timeout" (seconds) in cline_mcp_settings.json.
 							</p>
 						</div>
+						{server.oauthRequired && (
+							<div className="mx-1.5 mb-2.5">
+								<label className="block mb-1 text-[13px]">Account</label>
+								<McpOAuthAccountActions className="flex gap-2" server={server} />
+							</div>
+						)}
 						<Button
 							className="w-[calc(100%-14px)] mt-1 mx-1.5 mb-3"
 							disabled={server.status === "connecting" || isRestarting || server.disabled}

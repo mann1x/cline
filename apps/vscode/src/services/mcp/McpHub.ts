@@ -806,6 +806,10 @@ export class McpHub {
 
 			connection.server.status = "connected"
 			connection.server.error = ""
+			// Signed in with OAuth: the row offers sign-out and another account.
+			if (authProvider && (await authProvider.tokens())?.access_token) {
+				connection.server.oauthRequired = true
+			}
 
 			// Register notification handler for real-time messages
 			//Logger.log(`[MCP Debug] Setting up notification handlers for server: ${name}`)
@@ -2483,7 +2487,7 @@ export class McpHub {
 	 * them immediately. On success the connection is restarted so the transport
 	 * picks up the fresh tokens.
 	 */
-	async initiateOAuth(serverName: string): Promise<void> {
+	async initiateOAuth(serverName: string, options: { switchAccount?: boolean } = {}): Promise<void> {
 		const connection = this.connections.find((conn) => conn.server.name === serverName)
 		if (!connection) {
 			throw new Error(`No connection found for server: ${serverName}`)
@@ -2496,7 +2500,7 @@ export class McpHub {
 
 		try {
 			// Blocks until tokens are exchanged and written to the settings file
-			await this.mcpOAuthManager.startOAuthFlow(serverName)
+			await this.mcpOAuthManager.startOAuthFlow(serverName, options)
 		} catch (error) {
 			const current = this.connections.find((conn) => conn.server.name === serverName)
 			if (current) {
@@ -2518,6 +2522,29 @@ export class McpHub {
 
 		// Restart connection so the transport authenticates with the new tokens
 		await this.restartConnection(serverName)
+	}
+
+	/**
+	 * Signs a server out and reconnects it, so it shows as needing
+	 * authentication. Until this existed a server signed in with the wrong
+	 * account could only be fixed by deleting it or waiting for its tokens to
+	 * expire: Authenticate is answered by tokens that still work.
+	 */
+	async signOutMcpServer(serverName: string): Promise<void> {
+		const connection = this.connections.find((conn) => conn.server.name === serverName)
+		if (!connection) {
+			throw new Error(`No connection found for server: ${serverName}`)
+		}
+		const { hadTokens, revoked } = await this.mcpOAuthManager.signOut(serverName)
+		await this.restartConnection(serverName)
+		HostProvider.window.showMessage({
+			type: ShowMessageType.INFORMATION,
+			message: !hadTokens
+				? `${serverName} was not signed in.`
+				: revoked
+					? `Signed out of ${serverName}.`
+					: `Signed out of ${serverName}. The server could not be asked to revoke the sign-in, so it lasts on its side until it expires.`,
+		})
 	}
 
 	async dispose(): Promise<void> {

@@ -22,6 +22,7 @@ import {
 	getMcpServerOAuthState,
 	type McpServerOAuthState,
 	resolveMcpServerRegistration,
+	signOutMcpServerOAuth,
 	updateMcpServerOAuthStateAsync,
 } from "@cline/core"
 import { StateManager } from "@core/storage/StateManager"
@@ -50,6 +51,13 @@ const MCP_OAUTH_CALLBACK_PORTS = [1456, 1457, 1458, 1459, 1460, 1461]
 
 /** How long the interactive flow waits for the browser callback. */
 const MCP_OAUTH_FLOW_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
+
+/**
+ * Asks the provider for its account chooser. Without it the browser signs in
+ * again, silently, with whichever account already has a session there --
+ * which is how a wrong account kept coming back.
+ */
+const MCP_OAUTH_SWITCH_ACCOUNT_PROMPT = "select_account"
 
 /**
  * Read a server's OAuth state fresh from the shared settings file.
@@ -277,8 +285,12 @@ export class McpOAuthManager {
 	 * client registration, opens the browser, validates the returned state
 	 * in-process, exchanges the code, and writes tokens to the shared settings
 	 * file. Resolves when tokens are saved (or rejects on timeout/denial).
+	 *
+	 * `switchAccount` forgets the stored tokens first, so tokens that still
+	 * work cannot answer for the flow, and asks the provider to let the user
+	 * choose the account.
 	 */
-	async startOAuthFlow(serverName: string): Promise<void> {
+	async startOAuthFlow(serverName: string, options: { switchAccount?: boolean } = {}): Promise<void> {
 		const inFlight = this.activeFlows.get(serverName)
 		if (inFlight) {
 			Logger.log(`[McpOAuth] OAuth flow already in progress for ${serverName}`)
@@ -295,6 +307,7 @@ export class McpOAuthManager {
 				openUrl: (url) => openExternal(url),
 				callbackPorts: MCP_OAUTH_CALLBACK_PORTS,
 				timeoutMs: MCP_OAUTH_FLOW_TIMEOUT_MS,
+				...(options.switchAccount ? { reauthorize: true, prompt: MCP_OAUTH_SWITCH_ACCOUNT_PROMPT } : {}),
 			})
 			Logger.log(`[McpOAuth] ${result.message}`)
 		})()
@@ -305,6 +318,18 @@ export class McpOAuthManager {
 		} finally {
 			this.activeFlows.delete(serverName)
 		}
+	}
+
+	/**
+	 * Signs a server out: its tokens are revoked where the provider supports
+	 * it, and forgotten either way. The client registration stays.
+	 */
+	async signOut(serverName: string): Promise<{ hadTokens: boolean; revoked: boolean }> {
+		const result = await signOutMcpServerOAuth({ serverName, filePath: await this.getSettingsPath(), fetch })
+		Logger.log(
+			`[McpOAuth] Signed out of ${serverName} (${result.hadTokens ? (result.revoked ? "tokens revoked" : "tokens forgotten, not revoked") : "no tokens"})`,
+		)
+		return result
 	}
 
 	/**

@@ -411,12 +411,16 @@ export {
 	resolveMcpServerRegistration,
 	resolveMcpServerRegistrations,
 	type SetMcpServerDisabledOptions,
+	type SignOutMcpServerOAuthOptions,
+	type SignOutMcpServerOAuthResult,
 	setMcpServerDisabled,
+	signOutMcpServerOAuth,
 	type UpdateMcpServerOAuthStateOptions,
 	updateMcpServerOAuthState,
 	updateMcpServerOAuthStateAsync,
 	updateMcpSettingsFile,
 	updateMcpSettingsFileSync,
+	withAuthorizationPrompt,
 } from "./extensions/mcp";
 export {
 	type AgentProfileConnection,

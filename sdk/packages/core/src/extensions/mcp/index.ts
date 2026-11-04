@@ -45,8 +45,14 @@ export type {
 	AuthorizeMcpServerOAuthResult,
 	CreateMcpOAuthProviderContextOptions,
 	McpOAuthProviderContext,
+	SignOutMcpServerOAuthOptions,
+	SignOutMcpServerOAuthResult,
 } from "./oauth";
-export { authorizeMcpServerOAuth } from "./oauth";
+export {
+	authorizeMcpServerOAuth,
+	signOutMcpServerOAuth,
+	withAuthorizationPrompt,
+} from "./oauth";
 export type { PluginMcpServerResolution } from "./plugin-server-registration";
 export {
 	normalizePluginMcpServerRegistration,

@@ -169,7 +169,11 @@ export interface McpOAuthProviderContext {
 	provider: OAuthClientProvider;
 	getLastAuthorizationUrl(): string | undefined;
 	getLastOAuthState(): string | undefined;
-	resetInteractiveState(): Promise<void>;
+	/**
+	 * Clears the leftovers of an earlier interactive flow. `forgetTokens` also
+	 * drops the stored tokens, so the flow cannot be answered by them.
+	 */
+	resetInteractiveState(options?: { forgetTokens?: boolean }): Promise<void>;
 	markError(errorMessage: string): Promise<void>;
 	markConnectionError(errorMessage: string): Promise<void>;
 	markAuthorizationRequired(errorMessage: string): Promise<void>;
@@ -191,6 +195,18 @@ export interface AuthorizeMcpServerOAuthOptions {
 	onServerListening?: (info: OAuthServerListeningInfo) => void | Promise<void>;
 	onServerClose?: (info: OAuthServerCloseInfo) => void | Promise<void>;
 	signal?: AbortSignal;
+	/**
+	 * Forget the stored tokens before connecting. Without it a server whose
+	 * tokens still work (or still refresh) answers "already authorized" and no
+	 * browser opens, so a sign-in with the wrong account can never be replaced.
+	 */
+	reauthorize?: boolean;
+	/**
+	 * An OpenID Connect `prompt` value for the authorization URL, such as
+	 * `select_account`: without one the provider signs in silently with
+	 * whichever account the browser already has a session for.
+	 */
+	prompt?: string;
 }
 
 export interface AuthorizeMcpServerOAuthResult {
@@ -458,7 +474,7 @@ export function createMcpOAuthProviderContext(
 		provider,
 		getLastAuthorizationUrl: () => lastAuthorizationUrl,
 		getLastOAuthState: () => lastOAuthState,
-		resetInteractiveState: async () => {
+		resetInteractiveState: async (resetOptions) => {
 			await patch((current) => {
 				const configuredClientInformation = options.clientInformation;
 				const configuredClientChanged =
@@ -479,7 +495,7 @@ export function createMcpOAuthProviderContext(
 								>,
 							}
 						: {}),
-					...(configuredClientChanged
+					...(configuredClientChanged || resetOptions?.forgetTokens
 						? { tokens: undefined, lastAuthenticatedAt: undefined }
 						: {}),
 					codeVerifier: undefined,
@@ -700,10 +716,12 @@ export async function authorizeMcpServerOAuth(
 			registration.oauthClient,
 		),
 		onAuthorizationUrl: async (url) => {
-			await options.openUrl?.(url);
+			await options.openUrl?.(withAuthorizationPrompt(url, options.prompt));
 		},
 	});
-	await oauthContext.resetInteractiveState();
+	await oauthContext.resetInteractiveState({
+		forgetTokens: options.reauthorize === true,
+	});
 
 	const client = buildClient(options);
 	let retryClient: Client | undefined;
@@ -831,4 +849,145 @@ export async function authorizeMcpServerOAuth(
 		await retryClient?.close().catch(() => undefined);
 		callbackServer.close();
 	}
+}
+
+/** Adds an OpenID Connect `prompt` to an authorization URL, if one is asked for. */
+export function withAuthorizationPrompt(url: string, prompt?: string): string {
+	const value = prompt?.trim();
+	if (!value) {
+		return url;
+	}
+	try {
+		const next = new URL(url);
+		next.searchParams.set("prompt", value);
+		return next.toString();
+	} catch {
+		return url;
+	}
+}
+
+export interface SignOutMcpServerOAuthOptions {
+	serverName: string;
+	filePath?: string;
+	fetch?: FetchLike;
+	/** How long revocation may take before the tokens are forgotten anyway. */
+	timeoutMs?: number;
+}
+
+export interface SignOutMcpServerOAuthResult {
+	serverName: string;
+	/** Whether there were tokens to forget. */
+	hadTokens: boolean;
+	/** Whether the authorization server confirmed it revoked them. */
+	revoked: boolean;
+}
+
+const MCP_OAUTH_REVOKE_TIMEOUT_MS = 5_000;
+
+/**
+ * Signs a server out: asks its authorization server to revoke the tokens
+ * (RFC 7009, when it advertises a revocation endpoint) and forgets them.
+ *
+ * The client registration is kept, so signing in again does not register a
+ * new client. Revocation is best effort: the tokens are forgotten whether or
+ * not it succeeds, since a sign-out that can fail would leave the user where
+ * they started. Ending the provider's own browser session is out of reach; a
+ * sign-in after this should pass `prompt` to choose the account.
+ */
+export async function signOutMcpServerOAuth(
+	options: SignOutMcpServerOAuthOptions,
+): Promise<SignOutMcpServerOAuthResult> {
+	const serverName = options.serverName.trim();
+	if (!serverName) {
+		throw new Error("MCP server name cannot be empty.");
+	}
+	const { resolveMcpServerRegistration } = await import("./config-loader");
+	const filePath = options.filePath ?? resolveDefaultMcpSettingsPath();
+	const registration = resolveMcpServerRegistration(serverName, { filePath });
+	if (!registration) {
+		throw new Error(`MCP server "${serverName}" is not configured.`);
+	}
+	const state = getMcpServerOAuthState(serverName, { filePath }) ?? {};
+	const tokens = state.tokens as OAuthTokens | undefined;
+	const hadTokens = Boolean(tokens?.access_token || tokens?.refresh_token);
+	let revoked = false;
+	if (tokens && hadTokens) {
+		revoked = await revokeMcpOAuthTokens({
+			tokens,
+			discoveryState: state.discoveryState as OAuthDiscoveryState | undefined,
+			client:
+				createMcpOAuthClientInformation(registration.oauthClient) ??
+				(state.clientInformation as OAuthClientInformationMixed | undefined),
+			fetch: options.fetch ?? fetch,
+			timeoutMs: options.timeoutMs ?? MCP_OAUTH_REVOKE_TIMEOUT_MS,
+		}).catch(() => false);
+	}
+	await updateMcpServerOAuthStateAsync(
+		serverName,
+		(current) => ({
+			...current,
+			tokens: undefined,
+			lastAuthenticatedAt: undefined,
+			codeVerifier: undefined,
+			lastError: undefined,
+			authorizationRequired: true,
+		}),
+		{ filePath },
+	);
+	return { serverName, hadTokens, revoked };
+}
+
+async function revokeMcpOAuthTokens(input: {
+	tokens: OAuthTokens;
+	discoveryState: OAuthDiscoveryState | undefined;
+	client: OAuthClientInformationMixed | undefined;
+	fetch: FetchLike;
+	timeoutMs: number;
+}): Promise<boolean> {
+	// OpenID provider metadata is typed without it, though servers send it.
+	const metadata = input.discoveryState?.authorizationServerMetadata as
+		| { revocation_endpoint?: unknown }
+		| undefined;
+	const endpoint =
+		typeof metadata?.revocation_endpoint === "string"
+			? metadata.revocation_endpoint
+			: undefined;
+	const clientId = input.client?.client_id;
+	if (!endpoint || !clientId) {
+		return false;
+	}
+	// The refresh token first: revoking it ends the grant on most servers.
+	const candidates: Array<[string | undefined, string]> = [
+		[input.tokens.refresh_token, "refresh_token"],
+		[input.tokens.access_token, "access_token"],
+	];
+	let revoked = false;
+	for (const [token, hint] of candidates) {
+		if (!token) {
+			continue;
+		}
+		const body = new URLSearchParams({ token, token_type_hint: hint });
+		const headers: Record<string, string> = {
+			"content-type": "application/x-www-form-urlencoded",
+		};
+		if (input.client?.client_secret) {
+			const credentials = `${encodeURIComponent(clientId)}:${encodeURIComponent(input.client.client_secret)}`;
+			headers.authorization = `Basic ${Buffer.from(credentials).toString("base64")}`;
+		} else {
+			body.set("client_id", clientId);
+		}
+		try {
+			const response = await input.fetch(endpoint, {
+				method: "POST",
+				headers,
+				body: body.toString(),
+				signal: AbortSignal.timeout(input.timeoutMs),
+			});
+			await response.body?.cancel().catch(() => undefined);
+			revoked ||= response.ok;
+		} catch {
+			// Unreachable or slow: the tokens are forgotten regardless.
+		}
+	}
+	return revoked;
 }

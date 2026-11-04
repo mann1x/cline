@@ -1,6 +1,9 @@
 import * as p from "@clack/prompts";
 import { parseMcpHeaders } from "@cline/core";
-import { authorizeMcpServerOAuthWithBrowser as authorizeOAuth } from "./oauth";
+import {
+	authorizeMcpServerOAuthWithBrowser as authorizeOAuth,
+	signOutMcpServerOAuthInteractive,
+} from "./oauth";
 import {
 	addServer,
 	clearServerOAuth,
@@ -503,6 +506,18 @@ async function actionAuthorizeOAuth(): Promise<void> {
 	await authorizeOAuth(name);
 }
 
+async function actionSwitchOAuthAccount(): Promise<void> {
+	const name = await pickRemoteServer("Select remote server to sign in to");
+	if (!name) return;
+	await authorizeOAuth(name, { switchAccount: true });
+}
+
+async function actionSignOutOAuth(): Promise<void> {
+	const name = await pickRemoteServer("Select remote server to sign out of");
+	if (!name) return;
+	await signOutMcpServerOAuthInteractive(name);
+}
+
 export async function runMcpWizard(
 	options: RunMcpWizardOptions = {},
 ): Promise<number> {
@@ -552,6 +567,16 @@ export async function runMcpWizard(
 					hint: "run or rerun browser authorization for a remote server",
 				},
 				{
+					value: "switch-account",
+					label: "Use another OAuth account",
+					hint: "forget the sign-in and choose the account in the browser",
+				},
+				{
+					value: "sign-out",
+					label: "Sign out of OAuth",
+					hint: "revoke and forget a remote server's sign-in",
+				},
+				{
 					value: "delete",
 					label: "Delete server",
 				},
@@ -583,6 +608,12 @@ export async function runMcpWizard(
 					break;
 				case "authorize":
 					await actionAuthorizeOAuth();
+					break;
+				case "switch-account":
+					await actionSwitchOAuthAccount();
+					break;
+				case "sign-out":
+					await actionSignOutOAuth();
 					break;
 				case "delete":
 					await actionDelete();

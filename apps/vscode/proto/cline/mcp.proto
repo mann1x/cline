@@ -19,6 +19,8 @@ service McpService {
   rpc toggleToolAutoApprove(ToggleToolAutoApproveRequest) returns (McpServers);
   rpc openMcpSettings(EmptyRequest) returns (Empty);
   rpc authenticateMcpServer(StringRequest) returns (Empty);
+  rpc switchMcpServerAccount(StringRequest) returns (Empty);
+  rpc signOutMcpServer(StringRequest) returns (Empty);
   rpc getLatestMcpServers(Empty) returns (McpServers);
 
   // Subscribe to MCP server updates
