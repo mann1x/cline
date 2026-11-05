@@ -11,6 +11,7 @@ import type { AgentToolContext } from "@cline/shared";
 import { getFileIndex } from "../../../services/workspace";
 import type { SearchExecutor, SearchQueryOptions } from "../types";
 import { MAX_SEARCH_OUTPUT_CHARS } from "./output-limits";
+import { wholeFileRefusal } from "./whole-file";
 
 /**
  * Cap on buffered `rg --json` stdout. Each event embeds the full text of its
@@ -490,6 +491,9 @@ export function createSearchExecutor(
 
 			totalFilesSearched++;
 			const filePath = path.join(cwd, relativePath);
+
+			// Read whole below: a binary or a file too large to hold is passed by.
+			if (await wholeFileRefusal(filePath, "search_codebase")) continue;
 
 			try {
 				const content = await fs.readFile(filePath, "utf-8");

@@ -19,6 +19,7 @@ import { splitBom } from "./bom";
 import { MAX_GREP_LINE_CHARS, MAX_SEARCH_OUTPUT_CHARS } from "./output-limits";
 import { compilePosixRegex } from "./posix-regex";
 import { fileStampFor, noteShown, type ReadReceipts } from "./read-receipts";
+import { BINARY_SNIFF_BYTES, wholeFileRefusal } from "./whole-file";
 
 /**
  * Directories not worth searching.
@@ -45,9 +46,6 @@ const SKIP_DIRECTORIES = new Set([
 	".idea",
 	".vscode-test",
 ]);
-
-/** How much of a file to sniff for NUL before calling it binary, as grep does. */
-const BINARY_SNIFF_BYTES = 8_000;
 
 export interface GrepInput {
 	pattern: string;
@@ -244,6 +242,22 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 		};
 
 		for (const filePath of files) {
+			// Before the read, which holds the whole file: a binary was skipped
+			// after it, and one too large to hold ended the process.
+			const refusal = await wholeFileRefusal(
+				options.overlay
+					? await options.overlay.resolveRead(filePath)
+					: filePath,
+				"grep",
+			);
+			// A binary is passed by as it always was; one too large is named.
+			if (refusal?.kind === "size") {
+				const shown = relative(cwd, filePath) || filePath;
+				if (files.length === 1) return `${shown}: ${refusal.message}`;
+				push(`${shown}: ${refusal.message}`);
+				continue;
+			}
+			if (refusal) continue;
 			let content: string;
 			try {
 				content = options.overlay

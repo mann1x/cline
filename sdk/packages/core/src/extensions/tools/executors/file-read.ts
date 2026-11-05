@@ -30,6 +30,7 @@ import {
 } from "./output-limits";
 import { noteShown, type ReadReceipts, readFileStamp } from "./read-receipts";
 import type { ReadLedger } from "./unchanged-reads";
+import { MAX_TEXT_STREAM_BYTES } from "./whole-file";
 
 /** The first bytes of a file, enough to tell a binary document by. */
 async function readHead(filePath: string): Promise<Uint8Array> {
@@ -150,7 +151,6 @@ const DEFAULT_FILE_READ_OPTIONS: Required<
 	maxReadChars: MAX_READ_REFUSAL_CHARS,
 };
 
-const MAX_TEXT_STREAM_BYTES = 100_000_000;
 const MAX_UNRANGED_LINE_SCAN = 50_000;
 
 /**

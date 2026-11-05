@@ -27,6 +27,7 @@ import { withFileLock } from "./file-locks";
 import { detectLineEnding } from "./line-endings";
 import { compilePosixRegex } from "./posix-regex";
 import { type ReadReceipts, readFileStamp } from "./read-receipts";
+import { wholeFileRefusal } from "./whole-file";
 
 /** Commands whose absence would otherwise be silent. */
 const UNSUPPORTED_COMMANDS: Record<string, string> = {
@@ -669,6 +670,16 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 		const outcomes: SedFileOutcome[] = [];
 		for (const file of input.files) {
 			const resolvedInput = isAbsolute(file) ? file : resolve(cwd, file);
+			// Looked at where a read would open it, before the write path copies
+			// it up: the whole file is read into one string below.
+			const refusal = await wholeFileRefusal(
+				overlay ? await overlay.resolveRead(resolvedInput) : resolvedInput,
+				"sed",
+			);
+			if (refusal) {
+				outcomes.push({ file, output: "", ok: false, error: refusal.message });
+				continue;
+			}
 			const filePath = overlay
 				? await overlay.resolveWrite(resolvedInput)
 				: resolvedInput;

@@ -23,6 +23,7 @@ import { type Expr, parseAwk, type Rule, type Stmt } from "./awk-parser";
 import { splitBom } from "./bom";
 import { compilePosixRegex } from "./posix-regex";
 import { type ReadReceipts, readFileStamp } from "./read-receipts";
+import { wholeFileRefusal } from "./whole-file";
 
 /** An awk value: a number, a string, or a string that looks like a number. */
 type Value = string | number;
@@ -911,6 +912,12 @@ export function createAwkExecutor(options: AwkExecutorOptions = {}) {
 			const filePath = options.overlay
 				? await options.overlay.resolveRead(resolvedInput)
 				: resolvedInput;
+			// The whole file is read into one string: not one too large to hold.
+			const refusal = await wholeFileRefusal(filePath, "awk");
+			if (refusal) {
+				sections.push(`${file}: ${refusal.message}`);
+				continue;
+			}
 			let content: string;
 			try {
 				content = splitBom(await fs.readFile(filePath, "utf8")).body;
