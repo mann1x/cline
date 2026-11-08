@@ -122,6 +122,17 @@ describe("code search", () => {
 			/turned off/,
 		);
 	});
+
+	it("says no model is set, not that the index was turned off, when none ever was", async () => {
+		const search = createCodeSearch({
+			getConfig: () => ({ settings: config.settings }),
+			index,
+		});
+
+		await expect(search.search("x", workspace, context)).rejects.toThrow(
+			/no embedding model is set/,
+		);
+	});
 });
 
 describe("a delegated agent's code search", () => {

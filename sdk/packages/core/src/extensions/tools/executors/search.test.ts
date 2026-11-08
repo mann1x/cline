@@ -89,7 +89,11 @@ describe("createSearchExecutor", () => {
 			// the cut a long line gets, so it is the count that overflows.
 			const search = createSearchExecutor({ contextLines: 1 });
 			// Lookahead is unsupported by ripgrep, forcing the fallback scan.
-			const result = await search("(?=needle)", dir, ctx);
+			// Every match in the one file is asked for: the fallback used to
+			// ignore `max_per_file` and report 100 from one file regardless.
+			const result = await search("(?=needle)", dir, ctx, {
+				maxPerFile: 200,
+			});
 
 			expect(result.length).toBeGreaterThan(MAX_SEARCH_OUTPUT_CHARS);
 			expect(result.length).toBeLessThanOrEqual(50_000);
@@ -168,5 +172,89 @@ describe("createSearchExecutor", () => {
 		} finally {
 			await fs.rm(dir, { recursive: true, force: true });
 		}
+	});
+
+	// automaticum audit 2026-11-08, readers 7, 19, 20.
+	describe("what ripgrep said, and nothing else", () => {
+		it("reports ripgrep's no-match as the answer, not a narrower fallback's", async () => {
+			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-search-"));
+			try {
+				await fs.writeFile(path.join(dir, "a.ts"), "const y = 2;\n");
+				const result = await createSearchExecutor()("ZebraX", dir, ctx);
+				expect(result).toContain("No results found");
+				expect(result).toContain("ripgrep searched");
+			} finally {
+				await fs.rm(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("finds a match in a file the old fallback list left out, through look-around", async () => {
+			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-search-"));
+			try {
+				await fs.writeFile(path.join(dir, "Program.cs"), "var ZebraX = 1;\n");
+				const result = await createSearchExecutor()("Zebra(?=X)", dir, ctx);
+				expect(result).toContain("Program.cs:1:5");
+				expect(result).toContain("built-in search answered");
+			} finally {
+				await fs.rm(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("names ripgrep's error rather than calling it no match", async () => {
+			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-search-"));
+			try {
+				await fs.writeFile(path.join(dir, "a.ts"), "x\n");
+				await expect(
+					createSearchExecutor()("a{2,1}", dir, ctx),
+				).rejects.toThrow(/could not search|Invalid regex/);
+			} finally {
+				await fs.rm(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("gives the column in characters, not bytes", async () => {
+			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-search-"));
+			try {
+				await fs.writeFile(
+					path.join(dir, "i18n.ts"),
+					"const s = 'ééééé'; const needleZ = 1;\n",
+				);
+				const result = await createSearchExecutor()("needleZ", dir, ctx);
+				expect(result).toContain("i18n.ts:1:26");
+			} finally {
+				await fs.rm(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("finds a pattern anchored at the end of a CRLF line", async () => {
+			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-search-"));
+			try {
+				await fs.writeFile(
+					path.join(dir, "crlf.ts"),
+					"export const endsHere = 1;\r\nfoo();\r\n",
+				);
+				const result = await createSearchExecutor()("endsHere = 1;$", dir, ctx);
+				expect(result).toContain("crlf.ts:1:14");
+				expect(result).not.toContain("built-in search");
+			} finally {
+				await fs.rm(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("keeps to one match per file when context lines also match", async () => {
+			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-search-"));
+			try {
+				await fs.writeFile(
+					path.join(dir, "many.ts"),
+					"Token\ntoken\nTOKEN\ntoken\n",
+				);
+				const result = await createSearchExecutor()("token", dir, ctx);
+				expect(result).toContain("Found 1 result for pattern");
+				expect(result).toContain("> 1: Token");
+				expect(result).toContain("  2: token");
+			} finally {
+				await fs.rm(dir, { recursive: true, force: true });
+			}
+		});
 	});
 });

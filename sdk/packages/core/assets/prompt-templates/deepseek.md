@@ -118,7 +118,7 @@ Output: one entry per requested file, in the order requested, each named by the 
 
 Regex search across the codebase. Pass an array of pattern strings. When several independent patterns are useful, send them together in one call. Use for finding code patterns, function definitions, class names, imports, etc. It reports one match per file by default; raise `max_per_file` to find every occurrence inside a file. `context_lines` sets lines shown either side of a match (default 2). Output beyond ~48k chars per query is middle-truncated; narrow patterns beat broad ones.
 
-Output: one entry per pattern, named by the pattern you sent and holding the matching lines with their file paths. An entry that could not run says it failed and gives the reason. A pattern that matched nothing comes back empty rather than failed — that is a definite answer, and re-running it will not change it.
+Output: one entry per pattern, named by the pattern you sent and holding the matching lines with their file paths. An entry that could not run says it failed and gives the reason. A pattern that matched nothing says so rather than failing — that is a definite answer, and re-running it will not change it. Matching ignores case: `token` finds `Token` and `TOKEN` too.
 
 # tool: fetch_web_content
 

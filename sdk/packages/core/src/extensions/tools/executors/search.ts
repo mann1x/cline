@@ -53,8 +53,8 @@ function fitLine(text: string, column?: number): string {
  */
 export interface SearchExecutorOptions {
 	/**
-	 * File extensions to include in search (without dot)
-	 * @default common code extensions
+	 * File extensions the built-in search is limited to (without dot).
+	 * @default every text file; ripgrep is never limited by this
 	 */
 	includeExtensions?: string[];
 
@@ -82,53 +82,6 @@ export interface SearchExecutorOptions {
 	 */
 	maxDepth?: number;
 }
-
-const DEFAULT_INCLUDE_EXTENSIONS = [
-	"ts",
-	"tsx",
-	"js",
-	"jsx",
-	"mjs",
-	"cjs",
-	"json",
-	"md",
-	"mdx",
-	"txt",
-	"yaml",
-	"yml",
-	"toml",
-	"py",
-	"rb",
-	"php",
-	"phtml",
-	"inc",
-	"go",
-	"rs",
-	"java",
-	"kt",
-	"swift",
-	"c",
-	"cpp",
-	"h",
-	"hpp",
-	"css",
-	"scss",
-	"less",
-	"html",
-	"vue",
-	"svelte",
-	"twig",
-	"sql",
-	"sh",
-	"bash",
-	"zsh",
-	"fish",
-	"ps1",
-	"env",
-	"gitignore",
-	"dockerignore",
-	"editorconfig",
-];
 
 const DEFAULT_EXCLUDE_DIRS = [
 	"node_modules",
@@ -197,6 +150,26 @@ function checkRipgrepAvailable(): Promise<boolean> {
 	});
 }
 
+/** What one ripgrep run said, kept apart so "no match" is never an error. */
+type RipgrepOutcome =
+	| { kind: "matches"; matches: SearchMatch[]; capped: boolean }
+	| { kind: "none" }
+	| { kind: "error"; message: string }
+	| { kind: "timeout" }
+	| { kind: "aborted" };
+
+/**
+ * A ripgrep byte offset into a line, as a column a reader counts: UTF-16
+ * units, from 1. rg reports bytes, so every character before the match that
+ * is not ASCII moved the column right (readers 19).
+ */
+function columnOf(lineText: string, byteOffset: number): number {
+	return (
+		Buffer.from(lineText, "utf8").subarray(0, byteOffset).toString("utf8")
+			.length + 1
+	);
+}
+
 function searchWithRipgrep(
 	query: string,
 	cwd: string,
@@ -205,7 +178,7 @@ function searchWithRipgrep(
 	maxPerFile: number,
 	timeoutMs: number = 5000,
 	abortSignal?: AbortSignal,
-): Promise<SearchMatch[] | null> {
+): Promise<RipgrepOutcome> {
 	return new Promise((resolve) => {
 		const child = spawn(
 			"rg",
@@ -218,6 +191,11 @@ function searchWithRipgrep(
 				// commands walking IndexOf by hand.
 				`--max-count=${maxPerFile}`,
 				"-i",
+				// `$` before a CRLF. Without it a pattern ending in `$` found
+				// nothing in a Windows file, and the "no match" was wrong.
+				"--crlf",
+				// After `--`, so a pattern starting with `-` is a pattern.
+				"--",
 				query,
 			],
 			{
@@ -229,6 +207,7 @@ function searchWithRipgrep(
 		);
 
 		let stdout = "";
+		let stderr = "";
 		let resolved = false;
 
 		const cleanup = () => {
@@ -241,11 +220,11 @@ function searchWithRipgrep(
 			if (!resolved) {
 				resolved = true;
 				cleanup();
-				resolve(null);
+				resolve({ kind: "timeout" });
 			}
 		}, timeoutMs);
 
-		const finalize = (result: SearchMatch[] | null) => {
+		const finalize = (result: RipgrepOutcome) => {
 			if (!resolved) {
 				resolved = true;
 				clearTimeout(timeout);
@@ -256,12 +235,12 @@ function searchWithRipgrep(
 
 		if (abortSignal?.aborted) {
 			cleanup();
-			resolve(null);
+			resolve({ kind: "aborted" });
 			return;
 		}
 
 		abortSignal?.addEventListener("abort", () => {
-			finalize(null);
+			finalize({ kind: "aborted" });
 		});
 
 		child.stdout.on("data", (chunk: Buffer | string) => {
@@ -271,84 +250,125 @@ function searchWithRipgrep(
 			stdout += chunk.toString();
 		});
 
-		child.stderr.on("data", () => {
-			// Ignore stderr
+		child.stderr.on("data", (chunk: Buffer | string) => {
+			if (stderr.length < 4000) stderr += chunk.toString();
 		});
 
 		child.on("close", (code: number | null) => {
-			if (code === 0 || code === 1) {
-				try {
-					const matches: SearchMatch[] = [];
-					// Context lines arrive before their match. They belong to the
-					// next match of the same file, never to the last match of the
-					// file before it.
-					let before: string[] = [];
-					let lastInFile: SearchMatch | undefined;
-					// Drop the trailing partial event left behind by the stdout cap.
-					const lines = stdout
-						.slice(0, stdout.lastIndexOf("\n") + 1)
-						.split("\n")
-						.filter((line) => line.trim());
-
-					for (const line of lines) {
-						if (matches.length >= maxResults) break;
-
-						const json = JSON.parse(line);
-						if (json.type === "begin") {
-							before = [];
-							lastInFile = undefined;
-						} else if (json.type === "match") {
-							const matchData = json.data;
-							const shownLines: string[] = before;
-							before = [];
-
-							if (json.data.submatches && json.data.submatches.length > 0) {
-								const submatch = json.data.submatches[0];
-								// The matching line itself, around its match.
-								const matched = String(matchData.lines?.text ?? "").replace(
-									/\r?\n$/,
-									"",
-								);
-								if (matched) {
-									shownLines.push(
-										`> ${matchData.line_number}: ${fitLine(matched, (submatch?.start ?? 0) + 1)}`,
-									);
-								}
-								lastInFile = {
-									file: matchData.path.text,
-									line: matchData.line_number,
-									column: (submatch?.start ?? 0) + 1,
-									match: submatch?.match?.text ?? "",
-									context: shownLines,
-								};
-								matches.push(lastInFile);
-							}
-						} else if (json.type === "context") {
-							const shown = `  ${json.data.line_number}: ${fitLine(String(json.data.lines?.text ?? json.data.line?.text ?? "").replace(/\r?\n$/, ""))}`;
-							if (
-								lastInFile &&
-								json.data.line_number > lastInFile.line &&
-								json.data.line_number - lastInFile.line <= contextLines
-							) {
-								lastInFile.context.push(shown);
-							} else {
-								before.push(shown);
-							}
-						}
-					}
-
-					finalize(matches.length > 0 ? matches : null);
-				} catch {
-					finalize(null);
-				}
+			// 1 is ripgrep's "searched, found nothing": an answer, not a reason
+			// to fall back to a narrower search and report its silence instead
+			// (readers 7).
+			if (code === 1) {
+				finalize({ kind: "none" });
 				return;
 			}
+			if (code !== 0) {
+				finalize({
+					kind: "error",
+					message:
+						stderr.trim() ||
+						`ripgrep exited with ${code === null ? "a signal" : `code ${code}`}`,
+				});
+				return;
+			}
+			try {
+				const matches: SearchMatch[] = [];
+				// Context lines arrive before their match. They belong to the
+				// next match of the same file, never to the last match of the
+				// file before it.
+				let before: string[] = [];
+				let lastInFile: SearchMatch | undefined;
+				let inFile = 0;
+				let capped = false;
+				// Drop the trailing partial event left behind by the stdout cap.
+				const lines = stdout
+					.slice(0, stdout.lastIndexOf("\n") + 1)
+					.split("\n")
+					.filter((line) => line.trim());
 
-			finalize(null);
+				const asContext = (lineNumber: number, text: string) => {
+					const shown = `  ${lineNumber}: ${fitLine(text)}`;
+					if (
+						lastInFile &&
+						lineNumber > lastInFile.line &&
+						lineNumber - lastInFile.line <= contextLines
+					) {
+						lastInFile.context.push(shown);
+					} else {
+						before.push(shown);
+					}
+				};
+
+				for (const line of lines) {
+					const json = JSON.parse(line);
+					if (json.type === "begin") {
+						before = [];
+						lastInFile = undefined;
+						inFile = 0;
+					} else if (json.type === "match") {
+						const matchData = json.data;
+						const matched = String(matchData.lines?.text ?? "").replace(
+							/\r?\n$/,
+							"",
+						);
+						// ripgrep reports a matching line inside the trailing context
+						// of the last counted match as a match, past --max-count:
+						// it is context here, as the cap asked (readers 7).
+						if (inFile >= maxPerFile) {
+							asContext(matchData.line_number, matched);
+							continue;
+						}
+						if (matches.length >= maxResults) {
+							capped = true;
+							break;
+						}
+						const shownLines: string[] = before;
+						before = [];
+
+						if (json.data.submatches && json.data.submatches.length > 0) {
+							const submatch = json.data.submatches[0];
+							const column = columnOf(matched, submatch?.start ?? 0);
+							// The matching line itself, around its match.
+							if (matched) {
+								shownLines.push(
+									`> ${matchData.line_number}: ${fitLine(matched, column)}`,
+								);
+							}
+							lastInFile = {
+								file: matchData.path.text,
+								line: matchData.line_number,
+								column,
+								match: submatch?.match?.text ?? "",
+								context: shownLines,
+							};
+							matches.push(lastInFile);
+							inFile += 1;
+						}
+					} else if (json.type === "context") {
+						asContext(
+							json.data.line_number,
+							String(
+								json.data.lines?.text ?? json.data.line?.text ?? "",
+							).replace(/\r?\n$/, ""),
+						);
+					}
+				}
+
+				finalize(
+					matches.length > 0
+						? { kind: "matches", matches, capped }
+						: { kind: "none" },
+				);
+			} catch (error) {
+				finalize({
+					kind: "error",
+					message: `ripgrep's output could not be read: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			}
 		});
 
-		child.on("error", () => {
-			finalize(null);
+		child.on("error", (error) => {
+			finalize({ kind: "error", message: error.message });
 		});
 	});
 }
@@ -356,7 +376,8 @@ function searchWithRipgrep(
 function shouldIncludeFile(
 	relativePath: string,
 	excludeDirs: Set<string>,
-	includeExtensions: Set<string>,
+	/** Every file when absent: binaries are passed by when they are read. */
+	includeExtensions: Set<string> | undefined,
 	maxDepth: number,
 ): boolean {
 	const segments = relativePath.split("/");
@@ -373,6 +394,9 @@ function shouldIncludeFile(
 		}
 	}
 
+	if (includeExtensions === undefined) {
+		return true;
+	}
 	const ext = path.posix.extname(fileName).slice(1).toLowerCase();
 	return includeExtensions.has(ext) || (!ext && !fileName.startsWith("."));
 }
@@ -394,16 +418,19 @@ export function createSearchExecutor(
 	options: SearchExecutorOptions = {},
 ): SearchExecutor {
 	const {
-		includeExtensions = DEFAULT_INCLUDE_EXTENSIONS,
+		includeExtensions,
 		excludeDirs = DEFAULT_EXCLUDE_DIRS,
 		maxResults = 100,
 		contextLines = 2,
 		maxDepth = 20,
 	} = options;
 	const excludeDirsSet = new Set(excludeDirs);
-	const includeExtensionsSet = new Set(
-		includeExtensions.map((extension) => extension.toLowerCase()),
-	);
+	// Only a list someone passed narrows the built-in search. The default list
+	// left out C#, Lua, Dart and the rest, and the fallback's "No results"
+	// over them was taken for ripgrep's (readers 7).
+	const includeExtensionsSet = includeExtensions
+		? new Set(includeExtensions.map((extension) => extension.toLowerCase()))
+		: undefined;
 
 	return async (
 		query: string,
@@ -420,9 +447,12 @@ export function createSearchExecutor(
 
 		// Try ripgrep first if available
 		const isRgAvailable = await checkRipgrepAvailable();
-		let rgMatches: SearchMatch[] | null = null;
+		// Why the built-in search is answering, said with its answer: its
+		// "No results" used to stand in for ripgrep's, over a narrower set of
+		// files, whatever had gone wrong (readers 7).
+		let fallbackReason: string;
 		if (isRgAvailable) {
-			rgMatches = await searchWithRipgrep(
+			const outcome = await searchWithRipgrep(
 				query,
 				cwd,
 				maxResults,
@@ -431,30 +461,43 @@ export function createSearchExecutor(
 				5000,
 				context.signal,
 			);
-		}
-
-		if (rgMatches) {
-			const resultLines: string[] = [
-				`Found ${rgMatches.length} result${rgMatches.length === 1 ? "" : "s"} for pattern: ${query}`,
-				"",
-			];
-
-			for (const match of rgMatches) {
-				resultLines.push(`${match.file}:${match.line}:${match.column}`);
-				resultLines.push(...match.context);
-				resultLines.push("");
+			if (outcome.kind === "aborted") {
+				throw new Error("Search operation aborted");
 			}
-
-			if (rgMatches.length >= maxResults) {
-				resultLines.push(
-					`(Showing first ${maxResults} results. Refine your search for more specific results.)`,
+			if (outcome.kind === "none") {
+				return `No results found for pattern: ${query}\n(ripgrep searched every file it does not skip by default: hidden files, binaries and whatever .gitignore lists.)`;
+			}
+			if (outcome.kind === "matches") {
+				return formatMatches(
+					query,
+					outcome.matches,
+					outcome.capped || outcome.matches.length >= maxResults,
+					maxResults,
 				);
 			}
-
-			return capSearchOutput(resultLines.join("\n"));
+			if (outcome.kind === "error") {
+				// A pattern ripgrep's engine refuses but JavaScript's reads
+				// (look-around, backreferences) is still a pattern; anything
+				// else is the answer, and is said.
+				if (
+					!/regex parse error|look-?around|backreference/i.test(
+						outcome.message,
+					) ||
+					!compiles(query)
+				) {
+					throw new Error(`ripgrep could not search: ${outcome.message}`);
+				}
+				fallbackReason =
+					"ripgrep cannot read this pattern (it has no look-around or backreferences), so the built-in search answered instead";
+			} else {
+				fallbackReason =
+					"ripgrep did not finish within 5 seconds, so the built-in search answered instead";
+			}
+		} else {
+			fallbackReason =
+				"ripgrep is not installed, so the built-in search answered";
 		}
 
-		// Fallback to manual regex search
 		let regex: RegExp;
 		try {
 			regex = new RegExp(query, "gim");
@@ -466,6 +509,8 @@ export function createSearchExecutor(
 
 		const matches: SearchMatch[] = [];
 		let totalFilesSearched = 0;
+		let passedBy = 0;
+		let capped = false;
 
 		const fileList = await getFileIndex(cwd);
 
@@ -487,84 +532,107 @@ export function createSearchExecutor(
 				continue;
 			}
 
-			if (matches.length >= maxResults) break;
+			if (matches.length >= maxResults) {
+				capped = true;
+				break;
+			}
 
-			totalFilesSearched++;
 			const filePath = path.join(cwd, relativePath);
 
-			// Read whole below: a binary or a file too large to hold is passed by.
-			if (await wholeFileRefusal(filePath, "search_codebase")) continue;
+			// Read whole below: a binary or a file too large to hold is passed by,
+			// and counted as passed by rather than as searched.
+			if (await wholeFileRefusal(filePath, "search_codebase")) {
+				passedBy += 1;
+				continue;
+			}
 
 			try {
 				const content = await fs.readFile(filePath, "utf-8");
-				const lines = content.split("\n");
+				totalFilesSearched++;
+				const lines = content.split(/\r?\n/);
+				let inFile = 0;
 
-				for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-					const line = lines[lineIdx];
-					regex.lastIndex = 0; // Reset regex state
-
-					let match = regex.exec(line);
-					while (match !== null) {
-						if (matches.length >= maxResults) break;
-
-						// Get context lines
-						const contextStart = Math.max(0, lineIdx - contextLines);
-						const contextEnd = Math.min(
-							lines.length - 1,
-							lineIdx + contextLines,
-						);
-						const contextLinesArr: string[] = [];
-
-						for (let i = contextStart; i <= contextEnd; i++) {
-							const prefix = i === lineIdx ? ">" : " ";
-							contextLinesArr.push(
-								`${prefix} ${i + 1}: ${fitLine(lines[i] as string, i === lineIdx ? match.index + 1 : undefined)}`,
-							);
-						}
-
-						matches.push({
-							file: relativePath,
-							line: lineIdx + 1,
-							column: match.index + 1,
-							match: match[0],
-							context: contextLinesArr,
-						});
-
-						// Prevent infinite loop on zero-length matches
-						if (match.index === regex.lastIndex) {
-							regex.lastIndex++;
-						}
-						match = regex.exec(line);
+				for (
+					let lineIdx = 0;
+					lineIdx < lines.length && inFile < effectiveMaxPerFile;
+					lineIdx++
+				) {
+					const line = lines[lineIdx] as string;
+					regex.lastIndex = 0;
+					const match = regex.exec(line);
+					if (match === null) continue;
+					if (matches.length >= maxResults) {
+						capped = true;
+						break;
 					}
+					// One entry per matching line, as ripgrep reports them, with
+					// the context the query asked for (it used the default).
+					const contextStart = Math.max(0, lineIdx - effectiveContextLines);
+					const contextEnd = Math.min(
+						lines.length - 1,
+						lineIdx + effectiveContextLines,
+					);
+					const contextLinesArr: string[] = [];
+					for (let i = contextStart; i <= contextEnd; i++) {
+						const prefix = i === lineIdx ? ">" : " ";
+						contextLinesArr.push(
+							`${prefix} ${i + 1}: ${fitLine(lines[i] as string, i === lineIdx ? match.index + 1 : undefined)}`,
+						);
+					}
+					matches.push({
+						file: relativePath,
+						line: lineIdx + 1,
+						column: match.index + 1,
+						match: match[0],
+						context: contextLinesArr,
+					});
+					inFile += 1;
 				}
-			} catch {}
+			} catch {
+				passedBy += 1;
+			}
 		}
 
-		// Format results
+		const searched = `Searched ${totalFilesSearched} file${totalFilesSearched === 1 ? "" : "s"}${passedBy > 0 ? `; ${passedBy} binary, unreadable or too large to search were passed by` : ""}. (${fallbackReason}.)`;
 		if (matches.length === 0) {
-			return `No results found for pattern: ${query}\nSearched ${totalFilesSearched} files.`;
+			return `No results found for pattern: ${query}\n${searched}`;
 		}
-
-		const resultLines: string[] = [
-			`Found ${matches.length} result${matches.length === 1 ? "" : "s"} for pattern: ${query}`,
-			`Searched ${totalFilesSearched} files.`,
-			"",
-		];
-
-		for (const match of matches) {
-			resultLines.push(`${match.file}:${match.line}:${match.column}`);
-			resultLines.push(...match.context);
-			resultLines.push("");
-		}
-
-		if (matches.length >= maxResults) {
-			resultLines.push(
-				`(Showing first ${maxResults} results. Refine your search for more specific results.)`,
-			);
-		}
-
-		return capSearchOutput(resultLines.join("\n"));
+		return formatMatches(query, matches, capped, maxResults, searched);
 	};
+}
+
+function compiles(pattern: string): boolean {
+	try {
+		new RegExp(pattern);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function formatMatches(
+	query: string,
+	matches: readonly SearchMatch[],
+	capped: boolean,
+	maxResults: number,
+	note?: string,
+): string {
+	const resultLines: string[] = [
+		`Found ${matches.length} result${matches.length === 1 ? "" : "s"} for pattern: ${query}`,
+		...(note ? [note] : []),
+		"",
+	];
+	for (const match of matches) {
+		resultLines.push(`${match.file}:${match.line}:${match.column}`);
+		resultLines.push(...match.context);
+		resultLines.push("");
+	}
+	if (capped) {
+		resultLines.push(
+			`(Showing first ${maxResults} results. Refine your search for more specific results.)`,
+		);
+	}
+	return capSearchOutput(resultLines.join("\n"));
 }
 
 /**

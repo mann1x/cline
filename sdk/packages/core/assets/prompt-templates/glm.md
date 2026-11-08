@@ -86,7 +86,7 @@ Regex search across the codebase, for text. Symbol questions — where is this d
 
 `queries` is a list of regex strings — run every independent pattern in one call, alongside your other independent calls. `context_lines` (integer, default 2) sets how many lines surround each match. `max_per_file` (integer, default 1) reports one match per file, which answers "which files mention this"; raise it when you need every occurrence inside a file and where each one sits. Output past ~48k characters per query is middle-truncated, so a narrow pattern beats a broad one — search the distinctive part of the name, not the common prefix.
 
-Output: one entry per pattern — each entry is named by the pattern you sent and holds the matching lines with their file paths and line numbers, and a failed entry says that it failed and why. A pattern that matched nothing comes back empty, not failed: that is an answer, and re-running it will not change it.
+Output: one entry per pattern — each entry is named by the pattern you sent and holds the matching lines with their file paths and line numbers, and a failed entry says that it failed and why. A pattern that matched nothing says so and is not marked failed: that is an answer, and re-running it will not change it. Matching ignores case: `token` finds `Token` and `TOKEN` too.
 
 # tool: fetch_web_content
 

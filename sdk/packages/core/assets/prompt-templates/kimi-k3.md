@@ -123,7 +123,7 @@ Arguments:
 
 Output per query is middle-truncated beyond ~48k characters; specific patterns beat broad ones.
 
-Output: one entry per pattern — each entry names what it answers, then what came back, and a failed entry says that it failed and why. An entry is named by the pattern you sent and holds the matching lines with their file paths. A pattern that matched nothing comes back empty, not failed; that is an answer, and re-running it will not change it.
+Output: one entry per pattern — each entry names what it answers, then what came back, and a failed entry says that it failed and why. An entry is named by the pattern you sent and holds the matching lines with their file paths. A pattern that matched nothing says so and is not marked failed; that is an answer, and re-running it will not change it. Matching ignores case: `token` finds `Token` and `TOKEN` too.
 
 # tool: grep
 

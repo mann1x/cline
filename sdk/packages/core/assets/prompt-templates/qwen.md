@@ -173,7 +173,7 @@ Perform regex pattern searches across the codebase. This is the primary tool for
 - **Parallelism**: Send all independent patterns in the `queries` array in one call.
 - **Limitations**: Output is truncated if it exceeds ~48k characters. Narrow patterns are better.
 - **Arguments**: `queries` is an array of strings. Optional: `context_lines` (integer), `max_per_file` (integer).
-- **Output**: One entry per pattern, in the order sent. Each entry is named by the pattern and holds the matching lines with their file paths. A pattern that matched nothing comes back empty, not failed; that is an answer, and re-running it will not change it. A failed entry says that it failed and why.
+- **Output**: One entry per pattern, in the order sent. Each entry is named by the pattern and holds the matching lines with their file paths. A pattern that matched nothing says so and is not marked failed; that is an answer, and re-running it will not change it. Matching ignores case: `token` finds `Token` and `TOKEN` too. A failed entry says that it failed and why.
 
 # tool: fetch_web_content
 

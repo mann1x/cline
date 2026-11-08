@@ -87,7 +87,7 @@ Perform regex pattern searches across the codebase. Supports multiple parallel s
 
 Output beyond ~48k characters per query is middle-truncated; narrow patterns beat broad ones.
 
-Output: one entry per pattern — each entry names what it answers, then what came back, and a failed entry says that it failed and why. An entry is named by the pattern you sent and holds the matching lines with their file paths. A pattern that matched nothing comes back empty, not failed; that is an answer, and re-running it will not change it.
+Output: one entry per pattern — each entry names what it answers, then what came back, and a failed entry says that it failed and why. An entry is named by the pattern you sent and holds the matching lines with their file paths. A pattern that matched nothing says so and is not marked failed; that is an answer, and re-running it will not change it. Matching ignores case: `token` finds `Token` and `TOKEN` too.
 
 Use this for text patterns. For questions about a symbol — where it is defined, what uses it, what implements it, what its type is — use `ask_lsp` instead. `ask_lsp` understands the code; this only matches text.
 

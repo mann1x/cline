@@ -118,7 +118,7 @@ Call shape: `search_codebase(queries: [string], context_lines?: integer, max_per
 
 Use this for code patterns, function and class names, imports, strings, comments, and other content that a language server does not semantically answer. For a symbol’s definition, references, callers, implementation, type, hover text, or document structure, use `ask_lsp` first.
 
-Results contain one entry per pattern. Each entry names the pattern and contains matching lines with file paths. A pattern that matches nothing is an empty successful result, not a failure, and repeating the same search will not change it. Very large output may be middle-truncated, so narrow broad patterns. A failed entry states why the search failed.
+Results contain one entry per pattern. Each entry names the pattern and contains matching lines with file paths. A pattern that matches nothing says so and is not marked failed, and repeating the same search will not change it. Matching ignores case: `token` finds `Token` and `TOKEN` too. Very large output may be middle-truncated, so narrow broad patterns. A failed entry states why the search failed.
 
 # tool: grep
 

@@ -548,7 +548,7 @@ export function createSearchTool(
 		name: "search_codebase",
 		readOnly: true,
 		description:
-			"Perform regex pattern searches across the codebase. " +
+			"Perform regex pattern searches across the codebase. Matching ignores case: `token` finds `Token` and `TOKEN` too. " +
 			"Supports multiple parallel searches. When several search patterns could be useful and do not depend on each other, run them together in one call, and call this tool in the same response as other independent tool calls. " +
 			"Use for finding code patterns, function definitions, class names, imports, etc. " +
 			"It reports one match per file by default, which answers which files mention something. To find every occurrence inside a file — how many times a name appears and where each one is — raise `max_per_file`. `context_lines` sets how many lines are shown either side of a match, 2 by default. " +
@@ -556,7 +556,7 @@ export function createSearchTool(
 			(semantic
 				? 'This workspace\'s code is also indexed by meaning: `mode: "semantic"` takes questions in plain words instead of patterns, for when you do not know what the thing is called. '
 				: "") +
-			`Output: one entry per pattern — ${TOOL_RESULT_ENVELOPE} An entry is named by the pattern you sent and holds the matching lines with their file paths. A pattern that matched nothing comes back empty, not failed; that is an answer, and re-running it will not change it.`,
+			`Output: one entry per pattern — ${TOOL_RESULT_ENVELOPE} An entry is named by the pattern you sent and holds the matching lines with their file paths. A pattern that matched nothing says so and is not marked failed; that is an answer, and re-running it will not change it.`,
 		inputSchema,
 		timeoutMs: timeoutMs * 2,
 		retryable: true,

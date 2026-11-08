@@ -110,7 +110,7 @@ Perform regex pattern searches across the codebase. Pass one or more patterns in
 
 Use it to find code patterns, function definitions, class names, imports and similar textual evidence. It reports one match per file by default, which answers which files mention something. To find every occurrence within a file, raise `max_per_file`. `context_lines` sets how many lines appear around each match and defaults to 2. Output beyond roughly 48k characters per query is middle-truncated, so narrow patterns beat broad ones.
 
-Output: one entry per pattern. Each entry names the pattern it answers and holds matching lines with their file paths. An entry that could not run says that it failed and why. A pattern that matched nothing comes back empty, not failed; that is an answer, and searching again unchanged will not change it.
+Output: one entry per pattern. Each entry names the pattern it answers and holds matching lines with their file paths. An entry that could not run says that it failed and why. A pattern that matched nothing says so and is not marked failed; that is an answer, and searching again unchanged will not change it. Matching ignores case: `token` finds `Token` and `TOKEN` too.
 
 # tool: fetch_web_content
 

@@ -159,9 +159,16 @@ export function createCodeSearch(options: CreateCodeSearchOptions): CodeSearch {
 		state,
 		async search(query, cwd, _context, searchOptions) {
 			const config = options.getConfig();
+			// Two different reasons, said apart: "turned off" was said when no
+			// embedding model had ever been chosen (readers minor).
+			if (config.embedding === undefined) {
+				throw new Error(
+					"no embedding model is set, so there is no code index to search: one can be chosen in Settings > Library",
+				);
+			}
 			if (!codeSearchAvailable(config, cwd)) {
 				throw new Error(
-					"this folder's code index was turned off in Settings > Library",
+					"this folder's code index is turned off in Settings > Library",
 				);
 			}
 			const result = await index().search(cwd, query, {
