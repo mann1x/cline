@@ -122,15 +122,62 @@ export function posixToJsSource(
 ): string {
 	if (options.fixed) {
 		const literal = escapeLiteral(pattern);
-		return options.wordBoundary ? `\\b(?:${literal})\\b` : literal;
+		return options.wordBoundary ? wholeWord(literal) : literal;
 	}
 
 	const extended = options.extended === true;
 	let out = "";
 	let index = 0;
+	// Where a new expression starts: the pattern's start, after a group opens,
+	// after an alternation. POSIX gives `^` and `*` their meaning by position,
+	// and translating them by character answered "No match" for `$HOME`.
+	let atStart = true;
 
 	while (index < pattern.length) {
 		const char = pattern[index];
+		const startHere = atStart;
+		atStart = false;
+
+		// A leading `*` has nothing to repeat: it is a literal in BRE, and GNU
+		// reads it the same way in ERE. JavaScript rejected the pattern.
+		if (char === "*" && (startHere || out.endsWith("(?:") || out === "^")) {
+			out += "\\*";
+			index += 1;
+			continue;
+		}
+		if (!extended && char === "^") {
+			// An anchor only where an expression starts; anywhere else in BRE,
+			// a literal caret.
+			if (startHere) {
+				out += "^";
+				atStart = true;
+			} else {
+				out += "\\^";
+			}
+			index += 1;
+			continue;
+		}
+		if (!extended && char === "$") {
+			// An anchor only where an expression ends: `PATH=$PATH` is text.
+			const rest = pattern.slice(index + 1);
+			const endsHere =
+				rest === "" || rest.startsWith("\\)") || rest.startsWith("\\|");
+			out += endsHere ? "$" : "\\$";
+			index += 1;
+			continue;
+		}
+		if (extended && (char === "(" || char === "|")) {
+			out += char;
+			atStart = true;
+			index += 1;
+			continue;
+		}
+		if (extended && char === "^") {
+			out += "^";
+			atStart = true;
+			index += 1;
+			continue;
+		}
 
 		if (char === "[") {
 			const bracket = translateBracket(pattern, index);
@@ -150,6 +197,7 @@ export function posixToJsSource(
 			// literal; in ERE it is the other way round.
 			if (!extended && "(){}|+?".includes(next)) {
 				out += next;
+				atStart = next === "(" || next === "|";
 				index += 2;
 				continue;
 			}
@@ -192,7 +240,17 @@ export function posixToJsSource(
 		index += 1;
 	}
 
-	return options.wordBoundary ? `\\b(?:${out})\\b` : out;
+	return options.wordBoundary ? wholeWord(out) : out;
+}
+
+/**
+ * `grep -w`: the match may not touch a word character on either side.
+ *
+ * `\\b` on both sides is not that: it needs a word character inside the match
+ * at each end, so `-w @Override` could never match and answered "No match".
+ */
+function wholeWord(source: string): string {
+	return `(?<![A-Za-z0-9_])(?:${source})(?![A-Za-z0-9_])`;
 }
 
 /**

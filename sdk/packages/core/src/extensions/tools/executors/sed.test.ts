@@ -223,7 +223,7 @@ describe("file handling and the read guard", () => {
 		});
 
 		expect(outcome.ok).toBe(false);
-		expect(outcome.error).toContain("lines 3-3");
+		expect(outcome.error).toContain("would change line 3");
 		expect(await fs.readFile(file, "utf8")).toBe("alpha\nbeta\ngamma\n");
 	});
 
@@ -392,5 +392,141 @@ describe("agreeing with the system sed", () => {
 		expect(mismatches).toEqual([]);
 		// A differential test that quietly compared nothing would pass forever.
 		expect(compared).toBeGreaterThanOrEqual(cases.length - 2);
+	});
+});
+
+// Written out rather than asked of a system sed at test time: the grid above
+// returns early where no sed is installed and so passes having compared
+// nothing. These are GNU sed 4.7's answers, each one a case this tool got
+// wrong -- the first two deleted the rest of the file in place.
+const GNU_4_7: Array<[string, string]> = [
+	[
+		"/line5/,3d",
+		"line1\nline2\nline3\nline4\nline6\nline7\nline8\nline9\nline10\n",
+	],
+	["7,3d", "line1\nline2\nline3\nline4\nline5\nline6\nline8\nline9\nline10\n"],
+	["0,/line2/d", "line3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n"],
+	["1,/line1/d", ""],
+	["2,+2d", "line1\nline5\nline6\nline7\nline8\nline9\nline10\n"],
+	["3,~4d", "line1\nline2\nline5\nline6\nline7\nline8\nline9\nline10\n"],
+	["4,~4d", "line1\nline2\nline3\nline9\nline10\n"],
+	["1~3d", "line2\nline3\nline5\nline6\nline8\nline9\n"],
+	["0~4d", "line1\nline2\nline3\nline5\nline6\nline7\nline9\nline10\n"],
+	[
+		"s/line/\\U&/",
+		"LINE1\nLINE2\nLINE3\nLINE4\nLINE5\nLINE6\nLINE7\nLINE8\nLINE9\nLINE10\n",
+	],
+	[
+		"s/\\(l\\)\\(ine\\)/\\u\\1\\U\\2\\E!/",
+		"LINE!1\nLINE!2\nLINE!3\nLINE!4\nLINE!5\nLINE!6\nLINE!7\nLINE!8\nLINE!9\nLINE!10\n",
+	],
+	["2,4c\\NEW", "line1\nNEW\nline5\nline6\nline7\nline8\nline9\nline10\n"],
+	["2,4!c\\X", "X\nline2\nline3\nline4\nX\nX\nX\nX\nX\nX\n"],
+	["5!d", "line5\n"],
+	["$d", "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\n"],
+	["/line3/,/line5/d", "line1\nline2\nline6\nline7\nline8\nline9\nline10\n"],
+	["/line3/,/line3/d", "line1\nline2\n"],
+	[
+		"1a\\    indented",
+		"line1\n    indented\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n",
+	],
+	[
+		"/line2/,+1s/line/L/",
+		"line1\nL2\nL3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n",
+	],
+	["3q", "line1\nline2\nline3\n"],
+	["2,/line9/!d", "line2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\n"],
+	[
+		"/line8/,2p",
+		"line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline8\nline9\nline10\n",
+	],
+];
+
+describe("GNU sed's range and replacement rules", () => {
+	const input = Array.from({ length: 10 }, (_, i) => `line${i + 1}\n`).join("");
+	for (const [script, expected] of GNU_4_7) {
+		it(`agrees with GNU sed on ${script}`, () => {
+			expect(runSedScript(input, parseSedScript(script)).output).toBe(expected);
+		});
+	}
+
+	it("refuses line 0 except as 0,/regex/", () => {
+		expect(() => parseSedScript("0,5d")).toThrow(/0,\/regex\//);
+		expect(() => parseSedScript("+2d")).toThrow(/after a comma/);
+	});
+
+	it("says a substitution that wrote the same text matched", () => {
+		const result = runSedScript("x\n", parseSedScript("s/x/x/"));
+		expect(result.changed).toBe(false);
+		expect(result.matched).toBe(true);
+	});
+});
+
+describe("a backward range in place", () => {
+	let work: string;
+	beforeEach(async () => {
+		work = await fs.mkdtemp(join(tmpdir(), "sed-backward-"));
+	});
+	afterEach(async () => {
+		await fs.rm(work, { recursive: true, force: true });
+	});
+
+	it("deletes the one line, not the rest of the file", async () => {
+		const target = join(work, "f.txt");
+		const text = Array.from({ length: 10 }, (_, i) => `line${i + 1}\n`).join(
+			"",
+		);
+		await fs.writeFile(target, text, "utf8");
+		const receipts = createReadReceipts();
+		receipts.noteRead(target, 1, Number.POSITIVE_INFINITY);
+		const sed = createSedExecutor({ cwd: work, receipts });
+
+		const [outcome] = await sed({
+			script: "/line5/,3d",
+			files: [target],
+			in_place: true,
+		});
+
+		expect(outcome.output).toContain("-1 line");
+		expect(await fs.readFile(target, "utf8")).toBe(text.replace("line5\n", ""));
+	});
+});
+
+describe("what a run credits as read", () => {
+	let work: string;
+	beforeEach(async () => {
+		work = await fs.mkdtemp(join(tmpdir(), "sed-credit-"));
+	});
+	afterEach(async () => {
+		await fs.rm(work, { recursive: true, force: true });
+	});
+
+	it("credits the lines -n p printed, not the whole file", async () => {
+		const target = join(work, "f.txt");
+		await fs.writeFile(target, "a\nb\nneedle\nd\ne\n", "utf8");
+		const receipts = createReadReceipts();
+		const sed = createSedExecutor({ cwd: work, receipts });
+
+		await sed({ script: "/needle/p", files: [target], quiet: true });
+
+		expect(receipts.covers(target, 3, 3)).toBe(true);
+		expect(receipts.covers(target, 1, 5)).toBe(false);
+	});
+
+	it("checks a negated command against the whole file, not the line it names", async () => {
+		const target = join(work, "f.txt");
+		await fs.writeFile(target, "a\nb\nc\n", "utf8");
+		const receipts = createReadReceipts();
+		receipts.noteRead(target, 2, 2);
+		const sed = createSedExecutor({ cwd: work, receipts });
+
+		const [outcome] = await sed({
+			script: "2!d",
+			files: [target],
+			in_place: true,
+		});
+
+		expect(outcome.ok).toBe(false);
+		expect(await fs.readFile(target, "utf8")).toBe("a\nb\nc\n");
 	});
 });

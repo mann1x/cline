@@ -172,7 +172,9 @@ describe("grep", () => {
 
 		const output = await grep({ pattern: "needle" });
 		expect(output).toContain("a.ts");
-		expect(output).not.toContain("node_modules");
+		expect(output).not.toContain("node_modules/b.ts");
+		// Skipped, and said so: "1 matching line" alone read as the whole tree.
+		expect(output).toContain("directories skipped by name: node_modules");
 	});
 
 	it("says an empty result is an answer rather than failing", async () => {
@@ -181,13 +183,101 @@ describe("grep", () => {
 		expect(output).toContain("zzzz");
 	});
 
-	it("skips a binary file rather than printing it", async () => {
+	// Not printed, but not "No match" either: the file holds the text, and
+	// saying it did not is the false answer GNU grep avoids with "Binary file
+	// matches".
+	it("says a binary file matches without printing it", async () => {
 		await fs.writeFile(
 			join(dir, "blob.bin"),
 			Buffer.from([0x6e, 0x65, 0x65, 0x64, 0x6c, 0x65, 0x00, 0x01]),
 		);
 		const output = await grep({ pattern: "needle", paths: ["blob.bin"] });
-		expect(output).toContain("No match");
+		expect(output).not.toContain("No match");
+		expect(output).toContain("Binary file blob.bin matches");
+		expect(output).not.toContain("0 matching lines");
+	});
+
+	it("says No match for a binary file without the text", async () => {
+		await fs.writeFile(
+			join(dir, "blob.bin"),
+			Buffer.from([0x61, 0x62, 0x00, 0x01]),
+		);
+		const output = await grep({ pattern: "needle", paths: ["blob.bin"] });
+		expect(output).toContain(
+			"binary, searched for the pattern but not printed",
+		);
+	});
+
+	// The audit's cases, each answered "No match" for text that was there.
+	it("reads $ and ^ mid-pattern as text in a basic expression", async () => {
+		await fs.writeFile(
+			join(dir, "run.sh"),
+			"echo $HOME\nexport PATH=$PATH:/x\n",
+		);
+		expect(await grep({ pattern: "$HOME", paths: ["run.sh"] })).toContain(
+			"run.sh:1:",
+		);
+		expect(await grep({ pattern: "PATH=$PATH", paths: ["run.sh"] })).toContain(
+			"run.sh:2:",
+		);
+	});
+
+	it("matches -w on a word that starts with punctuation", async () => {
+		await fs.writeFile(
+			join(dir, "A.java"),
+			"class A {\n  @Override\n  x@Overrides\n}\n",
+		);
+		const output = await grep({
+			pattern: "@Override",
+			word: true,
+			paths: ["A.java"],
+		});
+		expect(output).toContain("A.java:2:");
+		expect(output).not.toContain("A.java:3:");
+	});
+
+	it("searches a UTF-16 file with a byte-order mark", async () => {
+		const text = "TODO fix the parser\n";
+		await fs.writeFile(
+			join(dir, "notes.txt"),
+			Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]),
+		);
+		expect(await grep({ pattern: "TODO", paths: ["notes.txt"] })).toContain(
+			"notes.txt:1:TODO",
+		);
+	});
+
+	it("does not count a missing path as searched", async () => {
+		const output = await grep({
+			pattern: "zzzz",
+			paths: ["sample.txt", "nope.txt"],
+		});
+		expect(output).toContain("in sample.txt");
+		expect(output).toContain("does not exist: nope.txt");
+		expect(await grep({ pattern: "zzzz", paths: ["nope.txt"] })).toContain(
+			"nothing was searched",
+		);
+	});
+
+	it("credits only the lines it printed as read", async () => {
+		const receipts = createReadReceipts();
+		const scoped = createGrepExecutor({ cwd: dir, receipts });
+		await fs.writeFile(
+			join(dir, "ten.txt"),
+			"a\nb\nneedle\nd\ne\nf\ng\nh\ni\nj\n",
+		);
+		await scoped({ pattern: "needle", paths: ["ten.txt"] });
+		const ten = join(dir, "ten.txt");
+		expect(receipts.covers(ten, 3, 3)).toBe(true);
+		expect(receipts.covers(ten, 1, 10)).toBe(false);
+		expect(receipts.covers(ten, 7, 7)).toBe(false);
+	});
+
+	it("credits nothing for a search with no match", async () => {
+		const receipts = createReadReceipts();
+		const scoped = createGrepExecutor({ cwd: dir, receipts });
+		await scoped({ pattern: "zzzz", paths: ["sample.txt"] });
+		expect(receipts.hasEverRead(file)).toBe(false);
 	});
 
 	it("records the read, so a later edit is not refused", async () => {

@@ -79,17 +79,20 @@ describe("whole-file reads", () => {
 		);
 	});
 
-	it("grep passes a binary by, as before, and names a large one", async () => {
+	// A binary is not printed, but it holds "ELF", and "No match" said it did
+	// not. GNU grep answers "Binary file … matches"; so does this.
+	it("grep does not print a binary, says whether it matches, and names a large one", async () => {
 		const grep = createGrepExecutor({ cwd: dir });
-		expect(await grep({ pattern: "ELF", paths: ["run_tests"] })).toContain(
-			"No match",
-		);
+		const elf = await grep({ pattern: "ELF", paths: ["run_tests"] });
+		expect(elf).toContain("Binary file run_tests matches");
+		expect(elf).not.toContain("No match");
 		expect(await grep({ pattern: "x", paths: ["huge.log"] })).toContain(
 			"huge.log: not read:",
 		);
 		const walked = await grep({ pattern: "alpha", paths: ["."] });
 		expect(walked).toContain("notes.txt");
 		expect(walked).toContain("huge.log: not read:");
-		expect(walked).not.toContain("run_tests");
+		expect(walked).not.toContain("run_tests:");
+		expect(walked).not.toContain("Binary file run_tests matches");
 	});
 });

@@ -22,7 +22,7 @@ import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
 import { type Expr, parseAwk, type Rule, type Stmt } from "./awk-parser";
 import { splitBom } from "./bom";
 import { compilePosixRegex } from "./posix-regex";
-import { type ReadReceipts, readFileStamp } from "./read-receipts";
+import { creditShown, type ReadReceipts, readFileStamp } from "./read-receipts";
 import { wholeFileRefusal } from "./whole-file";
 
 /** An awk value: a number, a string, or a string that looks like a number. */
@@ -926,9 +926,8 @@ export function createAwkExecutor(options: AwkExecutorOptions = {}) {
 				sections.push(`${file}: could not be read: ${reason}`);
 				continue;
 			}
-			options.receipts?.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
-			// Stamped with the read, so a later edit can tell a file that
-			// moved under the session from one it has simply never seen.
+			// Stamped, so a later edit can tell a file that moved under the
+			// session from one it has simply never seen.
 			options.receipts?.noteStamp(filePath, await readFileStamp(filePath));
 			// Each file is a fresh run so NR and FNR agree, which is what a model
 			// expects when it passes one file at a time.
@@ -939,6 +938,19 @@ export function createAwkExecutor(options: AwkExecutorOptions = {}) {
 				...(input.variables ? { variables: input.variables } : {}),
 				fileName: file,
 			});
+			// Credited as read: the input lines that came out verbatim. The
+			// whole file was credited, so `print $1` -- which shows none of a
+			// line -- let an edit by line number land on lines never seen.
+			const printed = new Set(result.output.split(/\r?\n/));
+			const inputLines = content.split(/\r\n|\n/);
+			if (content.endsWith("\n")) inputLines.pop();
+			creditShown(
+				options.receipts,
+				filePath,
+				inputLines.flatMap((line, index) =>
+					printed.has(line) ? [index + 1] : [],
+				),
+			);
 			sections.push(
 				files.length === 1
 					? result.output

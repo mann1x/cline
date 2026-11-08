@@ -1,7 +1,11 @@
 import { spawnSync } from "node:child_process";
+import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { runAwkProgram } from "./awk";
+import { createAwkExecutor, runAwkProgram } from "./awk";
 import { parseAwk } from "./awk-parser";
+import { createReadReceipts } from "./read-receipts";
 
 const run = (
 	program: string,
@@ -341,5 +345,29 @@ describe("agreeing with the system awk", () => {
 		expect(mismatches).toEqual([]);
 		// A differential test that quietly compared nothing would pass forever.
 		expect(compared).toBeGreaterThanOrEqual(cases.length - 3);
+	});
+});
+
+// A run credits as read only the input lines it printed verbatim. The whole
+// file was credited, so `print $1` -- which shows none of a line -- let an edit
+// by line number land on lines the model had never seen.
+describe("what an awk run credits as read", () => {
+	it("credits the lines printed whole, and none for a field", async () => {
+		const dir = await fs.mkdtemp(join(tmpdir(), "awk-credit-"));
+		try {
+			const file = join(dir, "data.txt");
+			await fs.writeFile(file, "a 1\nb 2\nneedle 3\nd 4\n", "utf8");
+			const receipts = createReadReceipts();
+			const awk = createAwkExecutor({ cwd: dir, receipts });
+
+			await awk({ program: "{ print $1 }", files: [file] });
+			expect(receipts.hasEverRead(file)).toBe(false);
+
+			await awk({ program: "/needle/", files: [file] });
+			expect(receipts.covers(file, 3, 3)).toBe(true);
+			expect(receipts.covers(file, 1, 4)).toBe(false);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
 	});
 });

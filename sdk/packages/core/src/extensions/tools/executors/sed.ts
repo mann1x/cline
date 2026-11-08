@@ -26,7 +26,7 @@ import { splitBom } from "./bom";
 import { withFileLock } from "./file-locks";
 import { detectLineEnding } from "./line-endings";
 import { compilePosixRegex } from "./posix-regex";
-import { type ReadReceipts, readFileStamp } from "./read-receipts";
+import { creditShown, type ReadReceipts, readFileStamp } from "./read-receipts";
 import { wholeFileRefusal } from "./whole-file";
 
 /** Commands whose absence would otherwise be silent. */
@@ -52,7 +52,15 @@ type Address =
 	| { kind: "line"; line: number }
 	| { kind: "last" }
 	| { kind: "regex"; regex: RegExp }
-	| { kind: "every" };
+	| { kind: "every" }
+	/** `first~step`: every step-th line from first (GNU). */
+	| { kind: "step"; first: number; step: number }
+	/** `0` as a range start: the range is open before line 1 (GNU `0,/re/`). */
+	| { kind: "zero" }
+	/** `+N` as a range end: N lines after the line that opened it (GNU). */
+	| { kind: "relative"; count: number }
+	/** `~N` as a range end: up to the next line that is a multiple of N (GNU). */
+	| { kind: "multiple"; of: number };
 
 interface Command {
 	start?: Address;
@@ -75,6 +83,10 @@ interface Command {
 	text?: string;
 	/** Range state while executing. */
 	active?: boolean;
+	/** For a range whose end is a line count: the line it closes on. */
+	closesAt?: number;
+	/** Set by `selects`: this line is the last one of the command's range. */
+	closing?: boolean;
 }
 
 /** Read a delimited section of an `s` or `y` command, honouring `\` escapes. */
@@ -114,18 +126,51 @@ function parseAddress(
 	start: number,
 	extended: boolean,
 ): { address?: Address; next: number } {
-	let index = start;
+	const index = start;
 	const char = script[index];
 	if (char === "$") {
 		return { address: { kind: "last" }, next: index + 1 };
 	}
-	if (char !== undefined && /[0-9]/.test(char)) {
-		let digits = "";
-		while (index < script.length && /[0-9]/.test(script[index])) {
-			digits += script[index];
-			index += 1;
+	const digitsAt = (from: number): { value: string; next: number } => {
+		let at = from;
+		let value = "";
+		while (at < script.length && /[0-9]/.test(script[at])) {
+			value += script[at];
+			at += 1;
 		}
-		return { address: { kind: "line", line: Number(digits) }, next: index };
+		return { value, next: at };
+	};
+	if ((char === "+" || char === "~") && /[0-9]/.test(script[index + 1] ?? "")) {
+		const count = digitsAt(index + 1);
+		return {
+			address:
+				char === "+"
+					? { kind: "relative", count: Number(count.value) }
+					: { kind: "multiple", of: Number(count.value) },
+			next: count.next,
+		};
+	}
+	if (char !== undefined && /[0-9]/.test(char)) {
+		const digits = digitsAt(index);
+		if (
+			script[digits.next] === "~" &&
+			/[0-9]/.test(script[digits.next + 1] ?? "")
+		) {
+			const step = digitsAt(digits.next + 1);
+			return {
+				address: {
+					kind: "step",
+					first: Number(digits.value),
+					step: Number(step.value),
+				},
+				next: step.next,
+			};
+		}
+		const line = Number(digits.value);
+		return {
+			address: line === 0 ? { kind: "zero" } : { kind: "line", line },
+			next: digits.next,
+		};
 	}
 	if (char === "/") {
 		const body = readDelimited(script, index + 1, "/");
@@ -177,8 +222,32 @@ export function parseSedScript(script: string, extended = false): Command[] {
 		let end: Address | undefined;
 		if (script[index] === ",") {
 			const second = parseAddress(script, index + 1, extended);
+			if (!second.address) {
+				throw new Error(
+					"A `,` needs a second address after it: a line number, `$`, `/regex/`, `+N` or `~N`.",
+				);
+			}
 			end = second.address;
 			index = second.next;
+		}
+		// The same errors GNU sed gives, rather than a guess at what was meant.
+		if (first.address?.kind === "zero" && end?.kind !== "regex") {
+			throw new Error(
+				"Line 0 is only valid as `0,/regex/`, where the regex may match on line 1. Lines are numbered from 1.",
+			);
+		}
+		if (
+			first.address?.kind === "relative" ||
+			first.address?.kind === "multiple"
+		) {
+			throw new Error(
+				"`+N` and `~N` are only valid after a comma, as the end of a range (`/re/,+2`).",
+			);
+		}
+		if (end?.kind === "zero" || end?.kind === "step") {
+			throw new Error(
+				"That is not a valid end for a range. Use a line number, `$`, `/regex/`, `+N` or `~N`.",
+			);
 		}
 		while (index < script.length && /\s/.test(script[index])) {
 			index += 1;
@@ -267,18 +336,24 @@ export function parseSedScript(script: string, extended = false): Command[] {
 
 		if (name === "a" || name === "i" || name === "c") {
 			// GNU allows `a text`; POSIX wants `a\` then a line. Both are accepted
-			// because a model writes whichever it saw most.
-			while (index < script.length && /[\s\\]/.test(script[index])) {
+			// because a model writes whichever it saw most. Whitespace before the
+			// text is dropped only in the `a text` form: after `a\` it is the
+			// text's own indentation, and GNU keeps it -- skipping it lost the
+			// indentation of every line a model inserted into Python or YAML.
+			while (index < script.length && /[ \t]/.test(script[index])) {
+				index += 1;
+			}
+			if (script[index] === "\\") {
+				index += 1;
 				if (script[index] === "\n") {
 					index += 1;
-					break;
 				}
-				index += 1;
 			}
 			let text = "";
 			while (index < script.length && script[index] !== "\n") {
-				if (script[index] === "\\" && script[index + 1] === "\n") {
-					text += "\n";
+				if (script[index] === "\\" && index + 1 < script.length) {
+					const next = script[index + 1];
+					text += next === "t" ? "\t" : next;
 					index += 2;
 					continue;
 				}
@@ -323,37 +398,73 @@ function applyReplacement(
 ): string {
 	let out = "";
 	let index = 0;
+	// GNU case conversion: `\U`/`\L` until `\E`, `\u`/`\l` for the next
+	// character only. They were written out as the literal letters, in place.
+	let mode: "U" | "L" | undefined;
+	let once: "u" | "l" | undefined;
+	const emit = (text: string) => {
+		for (const char of text) {
+			let next =
+				mode === "U"
+					? char.toUpperCase()
+					: mode === "L"
+						? char.toLowerCase()
+						: char;
+			if (once) {
+				next = once === "u" ? next.toUpperCase() : next.toLowerCase();
+				once = undefined;
+			}
+			out += next;
+		}
+	};
 	while (index < replacement.length) {
 		const char = replacement[index];
 		if (char === "\\") {
 			const next = replacement[index + 1];
-			if (next !== undefined && /[1-9]/.test(next)) {
-				out += match[Number(next)] ?? "";
+			if (next !== undefined && /[0-9]/.test(next)) {
+				emit(match[Number(next)] ?? "");
+				index += 2;
+				continue;
+			}
+			if (next === "U" || next === "L") {
+				mode = next;
+				once = undefined;
+				index += 2;
+				continue;
+			}
+			if (next === "E") {
+				mode = undefined;
+				once = undefined;
+				index += 2;
+				continue;
+			}
+			if (next === "u" || next === "l") {
+				once = next;
 				index += 2;
 				continue;
 			}
 			if (next === "n") {
-				out += "\n";
+				emit("\n");
 				index += 2;
 				continue;
 			}
 			if (next === "t") {
-				out += "\t";
+				emit("\t");
 				index += 2;
 				continue;
 			}
 			if (next !== undefined) {
-				out += next;
+				emit(next);
 				index += 2;
 				continue;
 			}
 		}
 		if (char === "&") {
-			out += match[0];
+			emit(match[0]);
 			index += 1;
 			continue;
 		}
-		out += char;
+		emit(char);
 		index += 1;
 	}
 	return out;
@@ -374,33 +485,94 @@ function matchesAddress(
 			return address.regex.test(line);
 		case "every":
 			return true;
+		case "step":
+			return address.step <= 0
+				? lineNumber === address.first
+				: lineNumber >= address.first &&
+						(lineNumber - address.first) % address.step === 0;
+		// Only meaningful as one end of a range, which `selects` handles.
+		case "zero":
+		case "relative":
+		case "multiple":
+			return false;
 	}
 }
 
+/**
+ * Whether a command applies to this line, with GNU sed's range rules.
+ *
+ * Sets `command.closing` when this line is the last of its range, which `c`
+ * needs to print its text once per range rather than once per line.
+ *
+ * The rules, each of which the old loop got wrong somewhere:
+ * - An end that is a line number at or before the opening line selects the
+ *   opening line alone. Treated as "never reached", `7,3d` and `/x/,3d` ran to
+ *   the end of the file -- in place, that deleted the rest of it.
+ * - A regex end is looked for from the line after the opening one.
+ * - `0,/re/` is open before line 1, so `re` may close it on line 1.
+ * - `+N` closes N lines after the opening one; `~N` on the next multiple of N.
+ */
 function selects(
 	command: Command,
 	lineNumber: number,
 	line: string,
 	lastLine: number,
 ): boolean {
+	command.closing = false;
 	let hit: boolean;
+	const end = command.end;
 	if (!command.start) {
 		hit = true;
-	} else if (!command.end) {
+	} else if (!end) {
 		hit = matchesAddress(command.start, lineNumber, line, lastLine);
-	} else {
-		// A range stays on from the line that opens it until one closes it.
-		if (command.active) {
-			hit = true;
-			if (matchesAddress(command.end, lineNumber, line, lastLine)) {
-				command.active = false;
-			}
-		} else if (matchesAddress(command.start, lineNumber, line, lastLine)) {
-			hit = true;
-			command.active = !matchesAddress(command.end, lineNumber, line, lastLine);
-		} else {
-			hit = false;
+	} else if (command.active) {
+		hit = true;
+		const closes =
+			command.closesAt !== undefined
+				? lineNumber >= command.closesAt
+				: end.kind === "line"
+					? lineNumber >= end.line
+					: matchesAddress(end, lineNumber, line, lastLine);
+		if (closes) {
+			command.active = false;
+			command.closing = true;
 		}
+	} else if (
+		command.start.kind === "zero"
+			? lineNumber === 1
+			: matchesAddress(command.start, lineNumber, line, lastLine)
+	) {
+		hit = true;
+		command.closesAt = undefined;
+		let closesHere: boolean;
+		switch (end.kind) {
+			case "line":
+				closesHere = end.line <= lineNumber;
+				break;
+			case "last":
+				closesHere = lineNumber === lastLine;
+				break;
+			case "relative":
+				command.closesAt = lineNumber + end.count;
+				closesHere = end.count <= 0;
+				break;
+			case "multiple":
+				// The next multiple after this line: GNU runs `4,~4` to line 8.
+				closesHere = end.of <= 0;
+				if (!closesHere) {
+					command.closesAt = lineNumber + (end.of - (lineNumber % end.of));
+				}
+				break;
+			default:
+				// A regex end is tried on the opening line only for `0,/re/`.
+				closesHere =
+					command.start.kind === "zero" &&
+					matchesAddress(end, lineNumber, line, lastLine);
+		}
+		command.active = !closesHere;
+		command.closing = closesHere;
+	} else {
+		hit = false;
 	}
 	return command.negated ? !hit : hit;
 }
@@ -409,6 +581,22 @@ export interface RunSedResult {
 	output: string;
 	/** Whether any command changed the text. */
 	changed: boolean;
+	/**
+	 * Whether any command selected a line and acted on it: an `s` that matched
+	 * but wrote the same text back matched something, and "matched nothing"
+	 * was a false account of it.
+	 */
+	matched: boolean;
+	/**
+	 * Input lines whose text reached the output, in order and once each: what
+	 * a read-only run showed, and so what it may credit as read.
+	 */
+	shown: number[];
+	/**
+	 * Input lines the script changed: rewritten, deleted, replaced, or with
+	 * text put before or after them. What an in-place run must have seen.
+	 */
+	touched: number[];
 }
 
 /** Run a parsed script over text. Pure: no filesystem, so it is easy to test. */
@@ -435,9 +623,14 @@ export function runSedScript(
 	const lastLine = lines.length;
 	const out: string[] = [];
 	let changed = false;
+	let matched = false;
+	const shown = new Set<number>();
+	const touched = new Set<number>();
 
 	for (const command of commands) {
 		command.active = false;
+		command.closesAt = undefined;
+		command.closing = false;
 	}
 
 	for (let index = 0; index < lines.length; index++) {
@@ -455,9 +648,17 @@ export function runSedScript(
 			if (!selects(command, lineNumber, line, lastLine)) {
 				continue;
 			}
+			if (command.name !== "s") {
+				matched = true;
+			}
 			switch (command.name) {
 				case "s": {
 					const regex = command.regex as RegExp;
+					if (
+						new RegExp(regex.source, regex.flags.replace("g", "")).test(line)
+					) {
+						matched = true;
+					}
 					let replaced: string;
 					if (command.occurrence !== undefined) {
 						let seen = 0;
@@ -489,9 +690,11 @@ export function runSedScript(
 					}
 					if (replaced !== line) {
 						changed = true;
+						touched.add(lineNumber);
 						line = replaced;
 						if (command.print) {
 							out.push(line);
+							shown.add(lineNumber);
 						}
 					}
 					break;
@@ -507,6 +710,7 @@ export function runSedScript(
 						.join("");
 					if (mapped !== line) {
 						changed = true;
+						touched.add(lineNumber);
 						line = mapped;
 					}
 					break;
@@ -514,10 +718,12 @@ export function runSedScript(
 				case "d":
 					deleted = true;
 					changed = true;
+					touched.add(lineNumber);
 					line = undefined;
 					break;
 				case "p":
 					out.push(line);
+					shown.add(lineNumber);
 					break;
 				case "=":
 					out.push(String(lineNumber));
@@ -525,15 +731,22 @@ export function runSedScript(
 				case "a":
 					after.push(command.text ?? "");
 					changed = true;
+					touched.add(lineNumber);
 					break;
 				case "i":
 					before.push(command.text ?? "");
 					changed = true;
+					touched.add(lineNumber);
 					break;
 				case "c":
+					// Over a range, GNU replaces the whole range with one copy of
+					// the text, printed on its last line; it was printed per line.
 					deleted = true;
 					changed = true;
-					before.push(command.text ?? "");
+					touched.add(lineNumber);
+					if (!command.end || command.negated || command.closing) {
+						before.push(command.text ?? "");
+					}
 					line = undefined;
 					break;
 				case "q":
@@ -548,6 +761,7 @@ export function runSedScript(
 		out.push(...before);
 		if (!quiet && !deleted && line !== undefined) {
 			out.push(line);
+			shown.add(lineNumber);
 		}
 		out.push(...after);
 		if (quit) {
@@ -559,6 +773,9 @@ export function runSedScript(
 	return {
 		output: text === "" ? "" : hadTrailingNewline ? `${text}${eol}` : text,
 		changed,
+		matched,
+		shown: [...shown].sort((a, b) => a - b),
+		touched: [...touched].sort((a, b) => a - b),
 	};
 }
 
@@ -583,38 +800,6 @@ export interface SedInput {
 	in_place?: boolean;
 	quiet?: boolean;
 	extended?: boolean;
-}
-
-/**
- * Which lines a script is aimed at, when it is aimed at lines at all.
- *
- * A script addressed purely by line number is checked against those lines, the
- * way a line-anchored `editor` call is. One with a regex address, or none, is
- * text-anchored: the file is searched at the moment it runs, so a read whose
- * line numbers went stale is still a model that has seen the file.
- */
-function addressedLines(
-	commands: Command[],
-): { first: number; last: number } | undefined {
-	let first = Number.POSITIVE_INFINITY;
-	let last = 0;
-	for (const command of commands) {
-		for (const address of [command.start, command.end]) {
-			if (!address) {
-				continue;
-			}
-			if (address.kind !== "line") {
-				return undefined;
-			}
-			first = Math.min(first, address.line);
-			last = Math.max(last, address.line);
-		}
-		if (!command.start) {
-			// An unaddressed command applies to every line.
-			return undefined;
-		}
-	}
-	return Number.isFinite(first) && last > 0 ? { first, last } : undefined;
 }
 
 function countLines(text: string): number {
@@ -705,22 +890,17 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 					return;
 				}
 
+				// Run first: it is pure, and what it changes is what has to have
+				// been read.
+				const result = runSedScript(original, commands, input.quiet === true);
+
 				if (input.in_place) {
 					// Exactly the rule `editor` applies, and for the same reason: an
 					// edit aimed at lines nobody has looked at lands on whatever
-					// happens to be there now.
-					// Clamped to the file, as `editor` clamps: an address past the
-					// last line names lines no read can return, so demanding a
-					// receipt for them refuses every attempt the model makes.
-					const addressed = addressedLines(commands);
-					const lineCount = countLines(original);
-					const range =
-						addressed && lineCount > 0
-							? {
-									first: Math.min(addressed.first, lineCount),
-									last: Math.min(addressed.last, lineCount),
-								}
-							: addressed;
+					// happens to be there now. Judged on the lines the script
+					// changes, not on its addresses: a regex or negated address used
+					// to need only "read at some point", so `5!d` or `s/x/y/g` after a
+					// read of one line rewrote every line nobody had seen.
 					if (receipts) {
 						// And the other half of it: whether what was read is still
 						// what is there. `sed -i` on a file a parallel agent has
@@ -738,34 +918,53 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 							});
 							return;
 						}
-						if (range) {
-							if (!receipts.covers(filePath, range.first, range.last)) {
-								const why = receipts.wasRetired(filePath)
-									? "an earlier edit moved the lines that were read"
-									: receipts.hasAny(filePath)
-										? "no read of it since it last changed covers those lines"
-										: "those lines have not been read in this session";
-								outcomes.push({
-									file,
-									output: "",
-									ok: false,
-									error: `not modified. Read before editing: ${why}. Call \`read_files\` for ${file} covering lines ${range.first}-${range.last}, then run this again.`,
-								});
-								return;
+						const touched = result.touched;
+						let runStart: number | undefined;
+						let runEnd = 0;
+						const runs: Array<{ first: number; last: number }> = [];
+						for (const line of touched) {
+							if (runStart !== undefined && line === runEnd + 1) {
+								runEnd = line;
+								continue;
 							}
-						} else if (!receipts.hasEverRead(filePath)) {
+							if (runStart !== undefined)
+								runs.push({ first: runStart, last: runEnd });
+							runStart = line;
+							runEnd = line;
+						}
+						if (runStart !== undefined)
+							runs.push({ first: runStart, last: runEnd });
+						const unseen = runs.filter(
+							(run) => !receipts.covers(filePath, run.first, run.last),
+						);
+						if (unseen.length > 0) {
+							const why = !receipts.hasEverRead(filePath)
+								? `${file} has not been read in this session`
+								: receipts.wasRetired(filePath)
+									? "an earlier edit moved the lines that were read"
+									: "no read of it since it last changed covers them";
+							const named = unseen
+								.slice(0, 5)
+								.map((run) =>
+									run.first === run.last
+										? `${run.first}`
+										: `${run.first}-${run.last}`,
+								)
+								.join(", ");
+							const single =
+								unseen.length === 1 && unseen[0].first === unseen[0].last;
+							const more =
+								unseen.length > 5 ? ` and ${unseen.length - 5} more` : "";
 							outcomes.push({
 								file,
 								output: "",
 								ok: false,
-								error: `not modified. Read before editing: ${file} has not been read in this session. Call \`read_files\` for it first, then run this again.`,
+								error: `not modified. This script would change ${single ? "line" : "lines"} ${named}${more}, and ${why}. Read before editing: call \`read_files\` for ${file} covering ${single ? "it" : "them"}, then run this again.`,
 							});
 							return;
 						}
 					}
 				}
-
-				const result = runSedScript(original, commands, input.quiet === true);
 
 				if (input.in_place) {
 					if (!result.changed) {
@@ -773,7 +972,9 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 						// otherwise invites the model to run it again unchanged.
 						outcomes.push({
 							file,
-							output: "no change — the script matched nothing.",
+							output: result.matched
+								? "no change — the script matched, but what it wrote is what was already there."
+								: "no change — the script matched nothing.",
 							ok: true,
 						});
 						return;
@@ -800,9 +1001,11 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 					return;
 				}
 
-				// A read-only run is a read: record it, so a later edit to the same
-				// file is not refused for a file the model has just been through.
-				receipts?.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
+				// A read-only run is a read of what it printed: recorded, so a later
+				// edit to those lines is not refused. Only those lines -- the whole
+				// file was credited, so `sed -n '/x/p'` let an edit by line number
+				// land on every line it had not shown.
+				creditShown(receipts, filePath, result.shown);
 				receipts?.noteStamp(filePath, await readFileStamp(filePath));
 				outcomes.push({ file, output: result.output, ok: true });
 			});

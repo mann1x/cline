@@ -18,7 +18,12 @@ import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
 import { splitBom } from "./bom";
 import { MAX_GREP_LINE_CHARS, MAX_SEARCH_OUTPUT_CHARS } from "./output-limits";
 import { compilePosixRegex } from "./posix-regex";
-import { fileStampFor, noteShown, type ReadReceipts } from "./read-receipts";
+import {
+	creditShown,
+	fileStampFor,
+	noteShown,
+	type ReadReceipts,
+} from "./read-receipts";
 import { BINARY_SNIFF_BYTES, wholeFileRefusal } from "./whole-file";
 
 /**
@@ -81,9 +86,16 @@ export interface GrepExecutorOptions {
 	overlay?: AgentOverlay;
 }
 
+/** What a walk passed by, so "No match" can say what it did not look at. */
+interface Passed {
+	directories: Set<string>;
+	symlinks: string[];
+}
+
 async function collectFiles(
 	target: string,
 	overlay?: AgentOverlay,
+	passed: Passed = { directories: new Set(), symlinks: [] },
 ): Promise<string[]> {
 	let stat: Stats;
 	try {
@@ -117,7 +129,10 @@ async function collectFiles(
 				continue;
 			}
 			if (st.isDirectory()) {
-				if (SKIP_DIRECTORIES.has(name)) continue;
+				if (SKIP_DIRECTORIES.has(name)) {
+					passed.directories.add(name);
+					continue;
+				}
 				await walkOverlay(full);
 			} else if (st.isFile()) {
 				found.push(full);
@@ -136,6 +151,7 @@ async function collectFiles(
 		for (const entry of entries) {
 			if (entry.isDirectory()) {
 				if (SKIP_DIRECTORIES.has(entry.name)) {
+					passed.directories.add(entry.name);
 					continue;
 				}
 				await walk(join(directory, entry.name));
@@ -143,6 +159,9 @@ async function collectFiles(
 			}
 			if (entry.isFile()) {
 				found.push(join(directory, entry.name));
+			} else if (entry.isSymbolicLink()) {
+				// Not followed, as `grep -r` does not follow them -- but named.
+				passed.symlinks.push(join(directory, entry.name));
 			}
 		}
 	};
@@ -183,11 +202,22 @@ function shownLine(
 	};
 }
 
-function looksBinary(content: string): boolean {
-	// A NUL in the first few KB, which is how grep decides. The escape matters:
-	// writing the byte itself puts a real NUL in this source file, and then grep
-	// declines to print matches from its own implementation.
-	return content.slice(0, BINARY_SNIFF_BYTES).includes("\u0000");
+/**
+ * A file's text, or undefined for a binary one. UTF-16 is decoded by its
+ * byte-order mark; anything else with a NUL near the start is binary, which
+ * is how grep decides.
+ */
+function decodeText(bytes: Buffer): string | undefined {
+	if (bytes[0] === 0xff && bytes[1] === 0xfe) {
+		return new TextDecoder("utf-16le").decode(bytes.subarray(2));
+	}
+	if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+		return new TextDecoder("utf-16be").decode(bytes.subarray(2));
+	}
+	if (bytes.subarray(0, BINARY_SNIFF_BYTES).includes(0)) {
+		return undefined;
+	}
+	return bytes.toString("utf8");
 }
 
 export function createGrepExecutor(options: GrepExecutorOptions = {}) {
@@ -211,15 +241,33 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 
 		const targets = input.paths && input.paths.length > 0 ? input.paths : ["."];
 		const files: string[] = [];
+		const passed: Passed = { directories: new Set(), symlinks: [] };
+		// Everything not searched, by why. "No match … in N files" counted
+		// these as searched: a binary holding the text, a path that does not
+		// exist, a UTF-16 file -- and the model believed the text was absent.
+		const missing: string[] = [];
+		const binaries: string[] = [];
+		const unreadable: string[] = [];
 		for (const target of targets) {
 			const absolute = isAbsolute(target) ? target : resolve(cwd, target);
-			const found = await collectFiles(absolute, options.overlay);
-			if (found.length === 0) {
-				files.push(absolute);
-			} else {
-				files.push(...found);
+			const exists = await (options.overlay
+				? options.overlay.stat(absolute)
+				: fs.stat(absolute)
+			).then(
+				() => true,
+				() => false,
+			);
+			if (!exists) {
+				missing.push(relative(cwd, absolute) || absolute);
+				continue;
 			}
+			files.push(...(await collectFiles(absolute, options.overlay, passed)));
 		}
+		if (files.length === 0 && missing.length === targets.length) {
+			return `${missing.join(", ")}: no such file or directory, so nothing was searched.`;
+		}
+		let searched = 0;
+		let binaryHits = 0;
 
 		const showLineNumbers = input.line_numbers !== false;
 		const contextLines = Math.max(0, input.context ?? 0);
@@ -229,16 +277,18 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 		let truncated = false;
 		let charCount = 0;
 
-		const push = (text: string): void => {
+		/** Whether the line made it into the output, which is what was seen. */
+		const push = (text: string): boolean => {
 			if (truncated) {
-				return;
+				return false;
 			}
 			if (charCount + text.length > limit) {
 				truncated = true;
-				return;
+				return false;
 			}
 			charCount += text.length + 1;
 			lines.push(text);
+			return true;
 		};
 
 		for (const filePath of files) {
@@ -257,22 +307,35 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 				push(`${shown}: ${refusal.message}`);
 				continue;
 			}
-			if (refusal) continue;
-			let content: string;
+			let bytes: Buffer;
 			try {
-				content = options.overlay
-					? (await options.overlay.read(filePath)).toString("utf8")
-					: await fs.readFile(filePath, "utf8");
+				bytes = options.overlay
+					? await options.overlay.read(filePath)
+					: await fs.readFile(filePath);
 			} catch (error) {
 				// A named file that cannot be read is worth saying; one found by
-				// walking a directory is not.
+				// walking a directory is counted and named in the summary.
 				if (files.length === 1) {
 					const reason = error instanceof Error ? error.message : String(error);
 					return `${relative(cwd, filePath) || filePath}: could not be read: ${reason}`;
 				}
+				unreadable.push(relative(cwd, filePath) || filePath);
 				continue;
 			}
-			if (looksBinary(content)) {
+			// UTF-16 with a byte-order mark is text. Its NUL bytes made it read
+			// as binary, and it was skipped while being counted as searched.
+			const content = decodeText(bytes);
+			if (content === undefined) {
+				// A binary is not printed, but whether it holds the text is
+				// answered, as GNU grep answers it.
+				const shownBinary = relative(cwd, filePath) || filePath;
+				binaries.push(shownBinary);
+				const hit =
+					regex.test(bytes.toString("latin1")) === (input.invert !== true);
+				if (hit) {
+					binaryHits += 1;
+					push(`Binary file ${shownBinary} matches (not printed)`);
+				}
 				continue;
 			}
 			// A read that has moved under the session is not a read: crediting
@@ -297,9 +360,12 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 				);
 				continue;
 			}
-			options.receipts?.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
-			// Stamped with the read, so a later edit can tell a file that
-			// moved under the session from one it has simply never seen.
+			searched += 1;
+			// Stamped, so a later edit can tell a file that moved under the
+			// session from one it has simply never seen. Only the lines printed
+			// below are credited as read: the whole file used to be, so a grep
+			// with no match -- or a match on line 3 -- let an edit by line
+			// number land on lines the model had never been shown.
 			options.receipts?.noteStamp(filePath, stamp);
 			// Split on "\r\n" before "\n", as the reader and the editor do: a
 			// CRLF file's lines otherwise kept their trailing "\r", and a
@@ -354,6 +420,7 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 				}
 			}
 			const ordered = [...wanted].sort((a, b) => a - b);
+			const shownLines: number[] = [];
 			let previous = -2;
 			for (const index of ordered) {
 				if (contextLines > 0 && previous >= 0 && index > previous + 1) {
@@ -378,33 +445,89 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 						lineText.length,
 					);
 				}
-				push(
-					showLineNumbers
-						? `${shown}${separator}${index + 1}${separator}${text}`
-						: `${shown}${separator}${text}`,
-				);
+				if (
+					push(
+						showLineNumbers
+							? `${shown}${separator}${index + 1}${separator}${text}`
+							: `${shown}${separator}${text}`,
+					)
+				) {
+					shownLines.push(index + 1);
+				}
 			}
+			creditShown(options.receipts, filePath, shownLines);
 		}
+
+		// What was not searched, said with every answer and above all with
+		// "No match": an absence claimed over files nobody looked at is the
+		// false answer a model acts on.
+		const notSearched: string[] = [];
+		const list = (names: readonly string[]) =>
+			names.length <= 5
+				? names.join(", ")
+				: `${names.slice(0, 5).join(", ")} and ${names.length - 5} more`;
+		if (missing.length > 0) {
+			notSearched.push(`does not exist: ${list(missing)}`);
+		}
+		if (unreadable.length > 0) {
+			notSearched.push(`could not be read: ${list(unreadable)}`);
+		}
+		if (binaries.length > 0) {
+			notSearched.push(
+				`binary, searched for the pattern but not printed: ${list(binaries)}`,
+			);
+		}
+		if (passed.directories.size > 0) {
+			notSearched.push(
+				`directories skipped by name: ${[...passed.directories].sort().join(", ")} — name one in \`paths\` to search it`,
+			);
+		}
+		if (passed.symlinks.length > 0) {
+			notSearched.push(
+				`symbolic links, not followed: ${list(passed.symlinks.map((link) => relative(cwd, link) || link))} — name one in \`paths\` to search it`,
+			);
+		}
+		const notes =
+			notSearched.length > 0
+				? ["", "Not searched:", ...notSearched.map((note) => `- ${note}`)]
+				: [];
+		const capped =
+			input.max_count !== undefined
+				? ` (at most ${input.max_count} per file, as \`max_count\` asked)`
+				: "";
 
 		if (lines.length === 0 && totalMatches > 0) {
 			// Found, and nothing fitted the output: never "No match".
-			return `${totalMatches} matching line${totalMatches === 1 ? "" : "s"} in ${filesWithMatches} file${filesWithMatches === 1 ? "" : "s"}, but the output allowance of ${limit} characters has no room for them — narrow the pattern, or pass fewer paths.`;
+			return `${totalMatches} matching line${totalMatches === 1 ? "" : "s"}${capped} in ${filesWithMatches} file${filesWithMatches === 1 ? "" : "s"}, but the output allowance of ${limit} characters has no room for them — narrow the pattern, or pass fewer paths.`;
 		}
-		if (lines.length === 0) {
+		if (totalMatches === 0 && filesWithMatches === 0 && binaryHits === 0) {
 			// An empty result is an answer, not a failure — saying so stops a model
-			// re-running the same search expecting a different outcome.
-			return `No match for ${input.fixed ? "the text" : "the pattern"} \`${input.pattern}\` in ${
-				files.length === 1
+			// re-running the same search expecting a different outcome. It counts
+			// the files actually searched, not the ones passed by.
+			const where =
+				searched === 1 && files.length === 1
 					? relative(cwd, files[0]) || files[0]
-					: `${files.length} files`
-			}.`;
+					: `${searched} searched file${searched === 1 ? "" : "s"}`;
+			return [
+				searched === 0
+					? "No file was searched, so this says nothing about whether the text is there."
+					: `No match for ${input.fixed ? "the text" : "the pattern"} \`${input.pattern}\` in ${where}.`,
+				...(lines.length > 0 ? ["", ...lines] : []),
+				...notes,
+			].join("\n");
 		}
 
+		const binaryNote =
+			binaryHits > 0
+				? `${binaryHits} binary file${binaryHits === 1 ? "" : "s"} match${binaryHits === 1 ? "es" : ""}`
+				: "";
 		const header = input.files_with_matches
-			? `${filesWithMatches} file${filesWithMatches === 1 ? "" : "s"} with a match`
+			? `${filesWithMatches + binaryHits} file${filesWithMatches + binaryHits === 1 ? "" : "s"} with a match`
 			: input.count
 				? `Counts per file`
-				: `${totalMatches} matching line${totalMatches === 1 ? "" : "s"} in ${filesWithMatches} file${filesWithMatches === 1 ? "" : "s"}`;
+				: totalMatches === 0
+					? binaryNote
+					: `${totalMatches} matching line${totalMatches === 1 ? "" : "s"}${capped} in ${filesWithMatches} file${filesWithMatches === 1 ? "" : "s"}${binaryNote ? `, and ${binaryNote}` : ""}`;
 
 		return [
 			header,
@@ -416,6 +539,7 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 						`(output stopped at ${limit} characters — narrow the pattern, or pass fewer paths)`,
 					]
 				: []),
+			...notes,
 		].join("\n");
 	};
 }

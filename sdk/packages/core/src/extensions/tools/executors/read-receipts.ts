@@ -439,3 +439,31 @@ export function createReadReceipts(): OwnedReadReceipts {
 		},
 	};
 }
+
+/**
+ * Record the lines a tool printed as read, one receipt per unbroken run.
+ *
+ * A receipt must cover an edit's whole range in one read, so runs are kept
+ * apart: lines 3 and 9 shown do not make 3-9 seen.
+ */
+export function creditShown(
+	receipts:
+		| { noteRead(filePath: string, first: number, last: number): void }
+		| undefined,
+	filePath: string,
+	lineNumbers: readonly number[],
+): void {
+	if (!receipts) return;
+	let first: number | undefined;
+	let last = 0;
+	for (const line of lineNumbers) {
+		if (first !== undefined && line === last + 1) {
+			last = line;
+			continue;
+		}
+		if (first !== undefined) receipts.noteRead(filePath, first, last);
+		first = line;
+		last = line;
+	}
+	if (first !== undefined) receipts.noteRead(filePath, first, last);
+}
