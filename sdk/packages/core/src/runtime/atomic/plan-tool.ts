@@ -111,7 +111,7 @@ To record that an item did not work, send \`failed\` with its number and a \`not
 
 Every call returns the whole plan with its current state, so you never have to remember it or scroll back for it. Read what comes back before deciding what to do next.
 
-The plan survives a discarded transaction. An item that landed and was then rolled back comes back as work still to do, but it is still on the record as something that once worked — which is the fastest route back to a working file.`;
+The plan survives a discarded transaction. An item that landed and was then rolled back comes back as work still to do, but it is still on the record as something that once applied — which is the fastest route back to a working file. When a transaction is carried instead, its files and its landed items stay as they are.`;
 
 export const PLAN_TOOL_INPUT_SCHEMA = {
 	type: "object",
@@ -165,7 +165,20 @@ export const PLAN_TOOL_INPUT_SCHEMA = {
 export interface PlanTransactionSource {
 	/** Which transaction is open. A change here means the last one closed. */
 	readonly transaction: number;
+	/**
+	 * How each closed transaction ended, when the host can say. A kept or
+	 * carried transaction's edits are still in the files, and its landed items
+	 * stay landed.
+	 */
+	readonly outcomes?: readonly {
+		readonly transaction: number;
+		readonly kept: boolean;
+		readonly carried?: boolean;
+	}[];
 }
+
+/** How a closed transaction ended, for what is said about its edits. */
+type ClosedAs = "discarded" | "carried" | "kept";
 
 export interface PlanToolOptions {
 	controller: PlanTransactionSource;
@@ -217,6 +230,7 @@ const STATUS_MARK: Record<PlanItemStatus, string> = {
 export function renderRetrospective(
 	items: readonly PlanItem[],
 	closed: number,
+	closedAs: ClosedAs = "discarded",
 ): string {
 	const label = `TX-${String(closed).padStart(2, "0")}`;
 	const lastOf = (item: PlanItem) =>
@@ -236,10 +250,17 @@ export function renderRetrospective(
 		return attempt?.note ? `${name(item)} — ${attempt.note}` : name(item);
 	};
 	const lines = [
-		`${label} is closed and its edits are gone. What it established is not, and this is the record of it — you do not have to reconstruct it.`,
+		// Said as it happened: "its edits are gone" after a carried or kept
+		// transaction sent the model to redo edits still on disk (automaticum
+		// audit 2026-11-08, B14).
+		closedAs === "discarded"
+			? `${label} is closed and its edits are gone. What it established is not, and this is the record of it — you do not have to reconstruct it.`
+			: `${label} is closed and its edits were ${closedAs === "kept" ? "kept" : "carried into this transaction"}: they are still in the files. This is the record of what it did — you do not have to reconstruct it.`,
 		"",
+		// Landed is what the model marked, not what anything verified. Calling
+		// it "known good" vouched for edits the check had just failed (B13).
 		landed.length > 0
-			? `  WORKED   ${landed.map(noted).join("; ")} — these applied cleanly before the rollback, so the edit itself is known good.`
+			? `  WORKED   ${landed.map(noted).join("; ")} — you marked these as landed: the edits applied${closedAs === "discarded" ? " before the rollback" : ""}. That is not the check agreeing they were right.`
 			: "  WORKED   nothing was marked as landed.",
 		refused.length > 0
 			? `  DID NOT  ${refused.map(noted).join("; ")}`
@@ -284,16 +305,28 @@ export function createPlanTool(options: PlanToolOptions): AgentTool {
 	let declarationsIn = 0;
 	/** The transaction that just closed, until a new plan is stated for this one. */
 	let closedUnread: number | undefined;
+	/** How it closed. */
+	let closedAs: ClosedAs = "discarded";
 
 	/**
 	 * Close the open transaction's books.
 	 *
-	 * Everything it did is written into each item's history, and `done` goes
-	 * back to `pending` because the rollback really did undo it. `failed` goes
-	 * back too: the next transaction starts from the original file, so a change
-	 * that failed against a half-edited one has not been tried against this one.
+	 * Everything it did is written into each item's history. After a rollback
+	 * `done` goes back to `pending` because the rollback really did undo it,
+	 * and `failed` goes back too: the next transaction starts from the original
+	 * file, so a change that failed against a half-edited one has not been
+	 * tried against this one. After a carry or a keep nothing goes back -- the
+	 * files are the ones those statuses were earned against.
 	 */
 	function rollOver(closed: number): void {
+		const outcome = options.controller.outcomes?.find(
+			(entry) => entry.transaction === closed,
+		);
+		closedAs = outcome?.kept
+			? "kept"
+			: outcome?.carried
+				? "carried"
+				: "discarded";
 		for (const item of items) {
 			if (item.status !== "pending") {
 				item.history.push({
@@ -302,8 +335,12 @@ export function createPlanTool(options: PlanToolOptions): AgentTool {
 					note: item.note,
 				});
 			}
-			item.status = "pending";
-			item.note = undefined;
+			// Only a rollback undoes an edit. A carried transaction's files are
+			// the next one's, so what landed in them is still landed.
+			if (closedAs === "discarded") {
+				item.status = "pending";
+				item.note = undefined;
+			}
 		}
 		declarationsIn = 0;
 		if (items.length > 0) {
@@ -351,7 +388,7 @@ export function createPlanTool(options: PlanToolOptions): AgentTool {
 		if (closedUnread === undefined) {
 			return rest;
 		}
-		const head = renderRetrospective(items, closedUnread);
+		const head = renderRetrospective(items, closedUnread, closedAs);
 		if (clear) {
 			closedUnread = undefined;
 		}

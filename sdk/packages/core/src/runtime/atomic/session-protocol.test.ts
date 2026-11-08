@@ -557,6 +557,36 @@ describe("the boundary", () => {
 		});
 	});
 
+	// automaticum audit 2026-11-08, B11: the reply to the submission that spent
+	// the last transaction said "the task is done" over work put back.
+	it("does not call the task done when the last transaction failed", async () => {
+		await withWorkspace({ "game.js": "broken" }, async (root) => {
+			const session = (await createAtomicProtocolSession({
+				workspaceRoot: root,
+				config: {
+					mode: "static",
+					oracleCommand: shellCheck(root, "fixed"),
+					maxTransactions: 1,
+				},
+			})) as unknown as {
+				tools: unknown[];
+				decorateTools: (g: unknown[]) => { name: string; execute?: unknown }[];
+			};
+			const tool = session
+				.decorateTools([...session.tools])
+				.find((entry) => entry.name === "submit_transaction");
+			await fs.writeFile(path.join(root, "game.js"), "no", "utf8");
+			const said = String(
+				await (tool?.execute as (a: unknown, b: unknown) => Promise<unknown>)(
+					{ account: "Fixed." },
+					{ iteration: 1 } as never,
+				),
+			);
+			expect(said).not.toContain("the task is done");
+			expect(said).toMatch(/not done|put back|discarded/i);
+		});
+	});
+
 	// Measured on the harness: a run whose first transaction was discarded closed
 	// the remaining five in nine minutes with no edit in any of them, and read as
 	// six failed attempts when it had made one.

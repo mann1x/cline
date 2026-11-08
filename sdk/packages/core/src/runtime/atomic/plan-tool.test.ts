@@ -212,3 +212,38 @@ describe("plan tool", () => {
 		expect(seen).toEqual([3, 3]);
 	});
 });
+
+// automaticum audit 2026-11-08, B13 and B14.
+describe("plan tool audit 2026-11-08", () => {
+	it("does not call the model's own marks known good (B13)", async () => {
+		const source = controller();
+		const t = tool(source);
+		await call(t, { changes: THREE });
+		await call(t, { done: 1 });
+		source.transaction = 2;
+		const out = await call(t, {});
+		expect(out).not.toContain("known good");
+		expect(out).toContain("That is not the check agreeing they were right");
+	});
+
+	it("keeps a carried transaction's edits and landed items (B14)", async () => {
+		const source = {
+			...controller(),
+			outcomes: [] as {
+				transaction: number;
+				kept: boolean;
+				carried?: boolean;
+			}[],
+		};
+		const t = createPlanTool({ controller: source, maxChanges: 6 });
+		await call(t, { changes: THREE });
+		await call(t, { done: 1 });
+		source.outcomes.push({ transaction: 1, kept: false, carried: true });
+		source.transaction = 2;
+		const out = await call(t, {});
+		expect(out).not.toContain("its edits are gone");
+		expect(out).toContain("still in the files");
+		expect(out).toContain("1 landed");
+		expect(out).not.toContain("rolled back");
+	});
+});

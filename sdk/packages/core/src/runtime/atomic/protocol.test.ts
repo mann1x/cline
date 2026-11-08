@@ -188,6 +188,27 @@ describe("the stuck host check notice", () => {
 		expect(prompt).toContain("gate to mark the task completed successfully");
 	});
 
+	// automaticum audit 2026-11-08, B12: output naming no place in the code
+	// cannot say the edits missed.
+	it("does not say the edits missed when the output names no place", () => {
+		const prompt = build([failed(1, ERR), failed(2, ERR), failed(3, ERR)]);
+		expect(prompt).toContain("names no place in the code");
+		expect(prompt).not.toContain("Nothing you have edited");
+	});
+
+	it("says the edits changed nothing when the output names a place", () => {
+		const located =
+			"game.js:97\n  if (x) {\n         ^\nSyntaxError: Unexpected token";
+		const prompt = build([
+			failed(1, located),
+			failed(2, located),
+			failed(3, located),
+		]);
+		expect(prompt).toContain(
+			"Nothing you have edited has changed what the check reports",
+		);
+	});
+
 	// The user's wording, and the reason for it: told the check *is* the task, a
 	// model games the check instead of fixing the code.
 	it("never suggests the check itself might be wrong", () => {

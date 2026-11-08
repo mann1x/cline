@@ -293,7 +293,13 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 		if (stuck) {
 			lines.push("", stuck);
 		}
-		lines.push("", describePostMortemRequest(input.history.length));
+		lines.push(
+			"",
+			describePostMortemRequest(
+				input.history.length,
+				input.history[input.history.length - 1]?.carried === true,
+			),
+		);
 	}
 
 	// Last, because it is the one instruction the rest of the run cannot work
@@ -345,6 +351,19 @@ const STUCK_HOST_CHECK_AFTER = 3;
  * output cannot be wrong in that direction: if the check printed the same
  * thing twice, nothing on the path it takes changed.
  */
+/**
+ * Whether a check's output names a place in the code: a `file:line`, a
+ * `line N`, a stack frame or a caret under a source line.
+ */
+function outputLocates(output: string): boolean {
+	return (
+		/[\w./-]+\.[a-z]{1,5}:\d+/i.test(output) ||
+		/\bline \d+/i.test(output) ||
+		/^\s+at .+[(:]\d+/m.test(output) ||
+		/^\s*\^+\s*$/m.test(output)
+	);
+}
+
 function describeStuckHostCheck(
 	history: readonly TransactionOutcome[],
 ): string | undefined {
@@ -383,7 +402,14 @@ function describeStuckHostCheck(
 		"",
 		last,
 		"",
-		"Nothing you have edited is on the path the check takes. Whatever the file looks like where you have been working, the failure it reports is raised somewhere your changes have not reached. Before editing anything else, find where that output actually comes from — read it as text, locate the thing it names, and confirm you are looking at the code that produces it.",
+		// Only output that names places in the code can say the edits missed.
+		// A check that prints only pass or fail reads the same until the last
+		// part of a fix in several parts lands, and telling the model it never
+		// reached the failure discarded correct partial work (automaticum
+		// audit 2026-11-08, B12).
+		outputLocates(last)
+			? "Nothing you have edited has changed what the check reports. Whatever the file looks like where you have been working, the place it names is one your changes have not altered. Before editing anything else, find where that output actually comes from — read it as text, locate the thing it names, and confirm you are looking at the code that produces it."
+			: "This output names no place in the code, so it says only that the check still fails — not where, and not that your edits missed. A fix in several parts reads the same until its last part lands. Before editing anything else, find out what the check actually tests: read the check itself, or run the part of it that fails on its own, so its answer can tell your changes apart.",
 		"",
 		"Say in one sentence where you now think it comes from. Then plan.",
 	].join("\n");
@@ -408,7 +434,11 @@ function describeStuckHostCheck(
  * fix was right and the only one that can catch a diagnosis that was wrong
  * about what it was even looking at.
  */
-function describePostMortemRequest(attempts: number): string {
+function describePostMortemRequest(
+	attempts: number,
+	/** The last transaction's changes were carried, not put back. */
+	carried = false,
+): string {
 	const those = attempts === 1 ? "that attempt" : "those attempts";
 	return [
 		"== BEFORE YOU PLAN, LOOK BACK ==",
@@ -417,7 +447,9 @@ function describePostMortemRequest(attempts: number): string {
 		"",
 		`Then open this transaction with a short retrospective on ${those} — four lines, before the plan, in your reply where the user can see it:`,
 		"",
-		"  WORKED     - what you established that is still true. A symptom you located, a line you confirmed is fine, a reading of the file that held up. This survives the rollback even though the edits did not.",
+		carried
+			? "  WORKED     - what you established that is still true. A symptom you located, a line you confirmed is fine, a reading of the file that held up."
+			: "  WORKED     - what you established that is still true. A symptom you located, a line you confirmed is fine, a reading of the file that held up. This survives the rollback even though the edits did not.",
 		"  DID NOT    - which edit failed to move the check, and what the check said instead of what you expected.",
 		"  RE-USE     - what you will carry into this attempt unchanged, so you do not spend the transaction rediscovering it.",
 		'  DIFFERENT  - what you will do differently, named concretely. Not "be more careful".',
@@ -430,7 +462,11 @@ function describePostMortemRequest(attempts: number): string {
 		"",
 		"Then read the check's last output again as text rather than as a verdict. Does it name the thing you were fixing? If it names something else, the plan that follows should be about what it names, not about what you were working on when it said so.",
 		"",
-		"The files are back to their starting state, but what you learned is not. That is the only thing this transaction begins with that the last one did not.",
+		// Carried, the files are not back: saying so sent the model to redo
+		// edits that were still on disk.
+		carried
+			? "The last transaction's changes were carried: they are still in the files, so read them before you edit. What you learned is the other thing this transaction begins with."
+			: "The files are back to their starting state, but what you learned is not. That is the only thing this transaction begins with that the last one did not.",
 	].join("\n");
 }
 
@@ -498,11 +534,14 @@ function describeHistory(
 	// that has ever passed, and the wrong thing about one that has not: it told
 	// two runs, six times each, that the fault was their diagnosis when the
 	// fault was the check they were frozen to.
+	const lastCarried = history[history.length - 1]?.carried === true;
 	lines.push(
 		"",
-		checkNeverPassed
-			? "Those changes are gone: the files are as they were before that transaction. Do not repeat a plan that has already been discarded. The check has not passed once across any of them, so either the same reading of the symptom keeps coming back wrong, or the check itself is not asking for what a fix would produce — the second is worth considering by now."
-			: "Those changes are gone: the files are as they were before that transaction. Do not repeat a plan that has already been discarded — if the same symptom is still there, the previous reading of it was wrong.",
+		lastCarried
+			? "The last transaction's changes were carried: they are still in the files, and this transaction builds on them. Earlier discarded transactions are gone — do not repeat a plan that was already discarded."
+			: checkNeverPassed
+				? "Those changes are gone: the files are as they were before that transaction. Do not repeat a plan that has already been discarded. The check has not passed once across any of them, so either the same reading of the symptom keeps coming back wrong, or the check itself is not asking for what a fix would produce — the second is worth considering by now."
+				: "Those changes are gone: the files are as they were before that transaction. Do not repeat a plan that has already been discarded — if the same symptom is still there, the previous reading of it was wrong.",
 	);
 	return lines.join("\n");
 }

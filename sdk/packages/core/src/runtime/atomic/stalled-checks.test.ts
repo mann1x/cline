@@ -192,3 +192,22 @@ describe("what the model is told", () => {
 		expect(message).not.toMatch(/judged|put back|discarded|rolled back/i);
 	});
 });
+
+// automaticum audit 2026-11-08, B10: a change by any means resets the count.
+describe("stalled checks and the workspace fingerprint", () => {
+	it("does not count checks over files a shell command changed", () => {
+		const stalled = createStalledChecks({ transaction: 1 });
+		expect(stalled.checked(false, "a")).toBe("ok");
+		expect(stalled.checked(false, "b")).toBe("ok");
+		expect(stalled.checked(false, "c")).toBe("ok");
+		expect(stalled.checked(false, "d")).toBe("ok");
+		expect(stalled.streak).toBe(1);
+	});
+
+	it("still counts checks over files nothing changed", () => {
+		const stalled = createStalledChecks({ transaction: 1 });
+		stalled.checked(false, "a");
+		stalled.checked(false, "a");
+		expect(stalled.checked(false, "a")).toBe("nudge");
+	});
+});

@@ -82,6 +82,8 @@ function faultLinesOf(filePath: string, text: string): string[] {
 export function describeUnparseableChange(
 	changed: readonly ChangedFile[],
 	root: string,
+	/** The work is carried into the next transaction rather than put back. */
+	carried = false,
 ): string | null {
 	for (const file of changed) {
 		const refused = findScriptSyntaxError(file.path, file.text);
@@ -99,12 +101,17 @@ export function describeUnparseableChange(
 		const lead =
 			refused === undefined
 				? `The check reported a syntax error. Nothing here parses ${name} to confirm it is this file, but its brackets do not count up on these lines:`
-				: `The check never ran your change: ${name} does not parse. ${refused} What it measured was a file the engine refuses, so the verdict above says nothing about whether your fix was right.`;
+				: `The check never ran your change: ${name} does not parse. ${refused} What it measured was a file the engine refuses, so nothing your change does beyond its syntax has been run yet.`;
 		return [
 			lead,
 			...(faults.length > 0 ? ["", ...faults] : []),
 			"",
-			"That fault goes back with the rest of the work. `check_file` on a file you have just edited catches it before a transaction is spent on it.",
+			// Carried, the fault is still in the files the next transaction
+			// starts from; said as rolled back, the model went looking for a
+			// file that was never restored (automaticum audit 2026-11-08, B9).
+			carried
+				? "That fault is still in the files: they are carried into the next transaction as they are, so fix it there first. `check_file` on a file you have just edited catches it before a transaction is spent on it."
+				: "That fault goes back with the rest of the work. `check_file` on a file you have just edited catches it before a transaction is spent on it.",
 		].join("\n");
 	}
 	return null;

@@ -206,3 +206,16 @@ describe("a discard that could not put a file back", () => {
 		});
 	});
 });
+
+// automaticum audit 2026-11-08, B9.
+describe("the unparseable note on carried work", () => {
+	it("says the fault is still in the files when the work is carried", () => {
+		const note = describeUnparseableChange(
+			[{ path: "/w/game.js", text: "function f( {\n" }],
+			"/w",
+			true,
+		);
+		expect(note).toContain("still in the files");
+		expect(note).not.toContain("goes back with the rest");
+	});
+});

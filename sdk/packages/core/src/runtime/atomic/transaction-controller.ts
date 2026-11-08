@@ -485,6 +485,34 @@ export class TransactionController {
 		return this.revisionLog;
 	}
 
+	/**
+	 * What the files under the open transaction's root hold right now, as one
+	 * string, or nothing when no transaction is open. Two equal fingerprints
+	 * mean nothing changed in between, by whatever means -- an edit, a shell
+	 * command, another agent.
+	 */
+	async fingerprint(): Promise<string | undefined> {
+		if (!this.openedWith) {
+			return undefined;
+		}
+		const now = await takeSnapshot(
+			this.openedWith.root,
+			this.options.snapshotLimits,
+		);
+		const parts: string[] = [];
+		for (const [filePath, file] of [...now.files].sort(([a], [b]) =>
+			a < b ? -1 : a > b ? 1 : 0,
+		)) {
+			parts.push(`${filePath}\u0000${file.hash}`);
+		}
+		for (const [filePath, stamp] of [...now.skippedStats].sort(([a], [b]) =>
+			a < b ? -1 : a > b ? 1 : 0,
+		)) {
+			parts.push(`${filePath}\u0000${stamp.size}:${stamp.mtimeMs}`);
+		}
+		return parts.join("\n");
+	}
+
 	/** Whether the open transaction has changed anything on disk. */
 	async isUntouched(): Promise<boolean> {
 		return this.openedWith
@@ -748,6 +776,7 @@ export class TransactionController {
 						}),
 					),
 					snapshot.root,
+					carried,
 				)
 			: null;
 		const restore: RestoreReport = carried

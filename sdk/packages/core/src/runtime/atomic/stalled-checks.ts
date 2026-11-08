@@ -82,8 +82,16 @@ export interface StalledCheckSource {
 export type StalledCheckVerdict = "ok" | "nudge" | "settle";
 
 export interface StalledChecks {
-	/** Record a check that has just run, and say what it has earned. */
-	checked(passed: boolean): StalledCheckVerdict;
+	/**
+	 * Record a check that has just run, and say what it has earned.
+	 *
+	 * `fingerprint` is what the files held when it ran, when the host can say.
+	 * A fingerprint that moved since the last check is a change, whatever made
+	 * it: counting only the editing tools let a file rewritten by a shell
+	 * command run up the count, and the guard rolled back work that was moving
+	 * (automaticum audit 2026-11-08, B10).
+	 */
+	checked(passed: boolean, fingerprint?: string): StalledCheckVerdict;
 	/** Record a change: whatever the next check says, it is judging new bytes. */
 	changed(): void;
 	/** The current run of checks over untouched files. */
@@ -110,12 +118,14 @@ export function createStalledChecks(source: StalledCheckSource): StalledChecks {
 	// Once per transaction. A guard that repeats itself every third check is
 	// noise, and the model has already been told.
 	let nudged = false;
+	let lastFingerprint: string | undefined;
 
 	const syncTransaction = () => {
 		if (source.transaction !== seenTransaction) {
 			seenTransaction = source.transaction;
 			streak = 0;
 			nudged = false;
+			lastFingerprint = undefined;
 		}
 	};
 
@@ -127,8 +137,18 @@ export function createStalledChecks(source: StalledCheckSource): StalledChecks {
 			syncTransaction();
 			streak = 0;
 		},
-		checked(passed: boolean): StalledCheckVerdict {
+		checked(passed: boolean, fingerprint?: string): StalledCheckVerdict {
 			syncTransaction();
+			if (
+				fingerprint !== undefined &&
+				lastFingerprint !== undefined &&
+				fingerprint !== lastFingerprint
+			) {
+				streak = 0;
+			}
+			if (fingerprint !== undefined) {
+				lastFingerprint = fingerprint;
+			}
 			// A passing check is never the stalled kind. The model has been told
 			// to say so and finish, and the same check runs again when it does.
 			if (passed) {
@@ -195,14 +215,14 @@ export function withChangeSignal<T extends AgentToolDefinition>(
  *
  * It judges nothing and puts nothing back -- saying otherwise would have the
  * model report a transaction that is still open. What it adds is the thing the
- * re-run cannot give it: the check names where the parser gave up, and
- * `check_file` names the line that is actually wrong.
+ * re-run cannot give it: a reading of the whole file rather than the check's
+ * first complaint.
  */
 export function describeStalledCheckNudge(runs: number, label: string): string {
 	return [
 		`That was \`${label}\` run ${runs} times in a row over files that have not changed since the run before it. It cannot tell you anything the first of them did not, and running it again will not either.`,
 		"",
-		`Change something or look somewhere else. \`check_file\` is the sharper instrument here: it lists every problem in the file rather than the first one, and where brackets cross it names the line that is wrong rather than the line the parser gave up on.`,
+		`Change something or look somewhere else. \`check_file\` reads the whole file: it says where the parser stops and, where brackets stop pairing up, on which lines — which may be earlier than anything the check's own output points at.`,
 		"",
 		"The transaction is still open, and this is not a verdict on it.",
 	].join("\n");

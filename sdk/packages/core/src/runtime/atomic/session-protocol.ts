@@ -462,7 +462,12 @@ export async function createAtomicProtocolSession(
 				options.logger?.log?.(
 					`[Atomic] ${ran.label} run on request: ${verdict.passed ? "passed" : "failed"}.`,
 				);
-				const earned = stalled.checked(verdict.passed);
+				// What the files hold now, so a change by any means -- not only
+				// the editing tools -- resets the count.
+				const fingerprint = await controller
+					.fingerprint()
+					.catch(() => undefined);
+				const earned = stalled.checked(verdict.passed, fingerprint);
 				if (earned === "ok" || finished) {
 					return undefined;
 				}
@@ -508,10 +513,19 @@ export async function createAtomicProtocolSession(
 						text: account,
 						deliberate: true,
 					});
-					return (
-						message ??
-						"Submitted, and that settles it: the task is done and this run is over. Say plainly what you changed."
-					);
+					if (message !== undefined) {
+						return message;
+					}
+					switch (ending) {
+						case "spent":
+							return "Submitted, and that settles it: that was the last transaction, and its check did not pass, so its changes were put back. The task is not done, and this run is over. Say plainly what you tried and what the check still says.";
+						case "stuck":
+							return "Submitted, and that settles it: this run is over without a change ever being tried. Say so plainly.";
+						case "standdown":
+							return "Submitted, and that settles it: nothing was changed, and the check agrees there was nothing to fix. This run is over. Say plainly what you found.";
+						default:
+							return "Submitted, and that settles it: the task is done and this run is over. Say plainly what you changed.";
+					}
 				} finally {
 					submitting = false;
 				}
@@ -541,6 +555,10 @@ export async function createAtomicProtocolSession(
 
 	let rules: string | undefined = await controller.open();
 	let finished = false;
+	// How the run ended, so the reply to the submission that ended it says so.
+	// "The task is done" was said after a last transaction that failed its
+	// check and was put back (automaticum audit 2026-11-08, B11).
+	let ending: "kept" | "spent" | "standdown" | "stuck" | undefined;
 	// Set by `disengage`, and checked by everything the protocol added. A stood
 	// down protocol is inert rather than removed: its tools are already bound
 	// into the running session, so refusing is the only way to make "these tools
@@ -599,6 +617,7 @@ export async function createAtomicProtocolSession(
 		});
 		if (settlement.kept || !settlement.nextPrompt) {
 			finished = true;
+			ending = settlement.kept ? "kept" : "spent";
 			return { finished: true, kept: settlement.kept };
 		}
 		// The whole of the next transaction's rules, not a pointer to them. This
@@ -674,6 +693,7 @@ export async function createAtomicProtocolSession(
 			const verdict = await judgeStandDown();
 			if (!verdict || verdict.passed) {
 				finished = true;
+				ending = "standdown";
 				return undefined;
 			}
 			unfixed = verdict;
@@ -744,6 +764,7 @@ export async function createAtomicProtocolSession(
 			// behind that read as six attempts.
 			if (neverBegan && unstartedAttempts > DEFAULT_MAX_UNSTARTED_ATTEMPTS) {
 				finished = true;
+				ending = "stuck";
 				const stuck = describeNeverStarted(
 					controller.transaction,
 					unstartedAttempts,
