@@ -371,10 +371,10 @@ describe("the Library tools", () => {
 		const checked = await call("library_check", { paths: ["in"] });
 		expect(checked).toContain("IN THIS BATCH: is the same file as engine.md.");
 		expect(checked).toMatch(
-			/IN THIS BATCH: is the same book \(\d+% of the text\) as engine\.txt\./,
+			/IN THIS BATCH: is the same book \(about \d+% of the text\) as engine\.txt\./,
 		);
 		expect(checked).toMatch(
-			/IN THIS BATCH: shares \d+% of its text, so is probably another version of, engine-2nd\.md\./,
+			/IN THIS BATCH: shares about \d+% of its text, so is probably another version of, engine-2nd\.md\./,
 		);
 		expect(checked).toContain("ask before adding more than one");
 		const bread = checked.slice(
@@ -437,7 +437,7 @@ describe("the Library tools", () => {
 		expect(of("55803.md")).toContain("not in the Library.");
 		expect(of("55803.md")).not.toContain("IN THIS BATCH");
 		expect(of("56176.md")).toMatch(
-			/IN THIS BATCH: shares \d+% of its text, so is probably another version of, 56176-3\.07\.md\./,
+			/IN THIS BATCH: shares about \d+% of its text, so is probably another version of, 56176-3\.07\.md\./,
 		);
 		expect(of("56176.md")).not.toContain("55803");
 
@@ -523,7 +523,7 @@ describe("the Library tools", () => {
 		const stopped = await addBook(both);
 		expect(stopped).toContain("different versions of one work");
 		expect(stopped).toMatch(
-			/engine\.md and engine-2nd\.md share \d+% of their text/,
+			/engine\.md and engine-2nd\.md share about \d+% of their text/,
 		);
 		expect(library.catalogue.books()).toEqual([]);
 		// The same book in two formats is one book, with no question asked.
