@@ -831,7 +831,12 @@ export function toolFailed(error: unknown, output: unknown): boolean {
 		!!entry &&
 		typeof entry === "object" &&
 		(entry as { success?: unknown }).success === false;
-	return Array.isArray(output) ? output.some(failed) : failed(output);
+	// A batch fails when every entry did, as the struggle detector counts it:
+	// one missing file among five reads made "N of M tool calls failed" count
+	// the whole call (automaticum audit 2026-11-08, rest N4).
+	return Array.isArray(output)
+		? output.length > 0 && output.every(failed)
+		: failed(output);
 }
 
 export function createActivityCounter(

@@ -10,6 +10,7 @@ import {
 	reportSubagentPlaced,
 	reportSubagentQueued,
 	SUBAGENT_OUTPUT_TAIL_CHARS,
+	toolFailed,
 } from "./subagent-progress";
 
 const toolStart = (toolName: string): AgentEvent =>
@@ -678,5 +679,18 @@ describe("a tool call still being written", () => {
 			text: "done",
 		} as AgentEvent);
 		expect(updates.at(-1)?.latestOutput).toBe("done");
+	});
+});
+
+// automaticum audit 2026-11-08, rest N4.
+describe("a failed tool call", () => {
+	it("is a batch whose every entry failed, not one with a single failure", () => {
+		const ok = { success: true };
+		const bad = { success: false, error: "missing" };
+		expect(toolFailed(undefined, [ok, bad, ok])).toBe(false);
+		expect(toolFailed(undefined, [bad, bad])).toBe(true);
+		expect(toolFailed(undefined, [])).toBe(false);
+		expect(toolFailed(undefined, bad)).toBe(true);
+		expect(toolFailed("thrown", [ok])).toBe(true);
 	});
 });
