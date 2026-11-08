@@ -368,13 +368,24 @@ export class CommandSpawnError extends Error {
 	readonly missing: "executable" | "cwd" | undefined;
 
 	constructor(cause: Error, options: { cwd?: string } = {}) {
-		super(`Failed to execute command: ${cause.message}`);
-		this.name = "CommandSpawnError";
 		const code = (cause as NodeJS.ErrnoException).code;
+		const missingCwd =
+			code === "ENOENT" &&
+			options.cwd !== undefined &&
+			!existsSync(options.cwd);
+		// libuv names the shell when it is the directory that is gone, and
+		// "no such file or directory, posix_spawn '/bin/bash'" sent the model
+		// looking for a missing bash (automaticum audit 2026-11-08, readers 27).
+		super(
+			missingCwd
+				? `The working directory ${options.cwd} does not exist, so the command was not run.`
+				: `Failed to execute command: ${cause.message}`,
+		);
+		this.name = "CommandSpawnError";
 		this.code = typeof code === "string" ? code : undefined;
 		if (this.code !== "ENOENT") {
 			this.missing = undefined;
-		} else if (options.cwd !== undefined && !existsSync(options.cwd)) {
+		} else if (missingCwd) {
 			this.missing = "cwd";
 		} else {
 			this.missing = "executable";
@@ -441,14 +452,23 @@ async function sweepTrackedFiles(
  * unlike the reader's notice: the model ran this itself, and telling it
  * otherwise would send it looking for a culprit that is in its own transcript.
  */
-function describeSweptFiles(changed: readonly string[]): string {
+function describeSweptFiles(
+	changed: readonly string[],
+	/** Another command ran at some point while this one did. */
+	overlapped = false,
+): string {
 	const list = changed.map((file) => `  - ${file}`).join("\n");
 	const count =
 		changed.length === 1
 			? "1 file you had read"
 			: `${changed.length} files you had read`;
+	// With two commands running at once the sweep cannot tell whose write it
+	// saw, and naming this one blamed a read-only command for the other's
+	// write (automaticum audit 2026-11-08, readers 25).
 	return [
-		`NOTE: this command changed ${count}:`,
+		overlapped
+			? `NOTE: ${count} changed while this command ran — by it, or by another command running at the same time:`
+			: `NOTE: this command changed ${count}:`,
 		list,
 		"",
 		"What you remember of these files is out of date. Read any of them again before editing it — earlier line numbers may now point at different code.",
@@ -616,6 +636,17 @@ function createRollingCollector(maxChars: number) {
 				dropped: totalChars > head.length + tail.length,
 			};
 		},
+		/**
+		 * Head and tail with the gap between them said: handed on at a detach
+		 * without it, the notice and the log ran "li" straight into "line54"
+		 * (automaticum audit 2026-11-08, readers 24).
+		 */
+		marked(): string {
+			const gap = totalChars - head.length - tail.length;
+			return gap > 0
+				? `${head}\n[... ${gap} characters of output not kept here ...]\n${tail}`
+				: head + tail;
+		},
 		snapshot() {
 			// Flush bytes the decoder buffered for an incomplete multibyte
 			// sequence at end-of-stream; otherwise the final characters of
@@ -774,6 +805,13 @@ export function createDetachedLog(
 	const stream = createWriteStream(path, { encoding: "utf8" });
 	let bytesWritten = 0;
 	let capped = false;
+	let droppedBytes = 0;
+	let droppedReported = false;
+	const reportDropped = () => {
+		if (!capped || droppedReported || droppedBytes === 0 || !writable) return;
+		droppedReported = true;
+		stream.write(`\n[${droppedBytes} more bytes of output were not kept]\n`);
+	};
 	let writable = true;
 	let streamClosed = false;
 	let completed = false;
@@ -822,6 +860,7 @@ export function createDetachedLog(
 
 	const complete = () => {
 		if (completed) return;
+		reportDropped();
 		completed = true;
 		if (streamClosed) {
 			markCompleted();
@@ -835,27 +874,33 @@ export function createDetachedLog(
 	return {
 		path,
 		write(text: string): void {
-			if (!text || capped || !writable) return;
-			const remaining = MAX_DETACHED_LOG_BYTES - bytesWritten;
-			if (remaining <= 0) {
-				capped = true;
-				writable = false;
-				stream.end();
+			if (!text || !writable) return;
+			if (capped) {
+				droppedBytes += Buffer.byteLength(text, "utf8");
 				return;
 			}
+			// The stream stays open past the cap: the exit line still has to
+			// reach the file. It used to end at 10 MB mid-line, with no word
+			// that it had and no exit record (readers 23).
+			const remaining = MAX_DETACHED_LOG_BYTES - bytesWritten;
 			const data = Buffer.from(text, "utf8");
 			const accepted =
 				data.length <= remaining ? data : data.subarray(0, remaining);
 			stream.write(accepted);
 			bytesWritten += accepted.length;
-			if (
-				accepted.length < data.length ||
-				bytesWritten >= MAX_DETACHED_LOG_BYTES
-			) {
+			if (bytesWritten >= MAX_DETACHED_LOG_BYTES) {
 				capped = true;
-				writable = false;
-				stream.end();
+				droppedBytes += data.length - accepted.length;
+				stream.write(
+					`\n[... the log stops keeping output at ${MAX_DETACHED_LOG_BYTES / (1024 * 1024)} MB; how the command ends is still recorded below ...]\n`,
+				);
 			}
+		},
+		/** Lifecycle lines -- the exit, a failure -- which the cap never drops. */
+		note(text: string): void {
+			if (!text || !writable) return;
+			reportDropped();
+			stream.write(text);
 		},
 		complete,
 	};
@@ -963,8 +1008,35 @@ function spawnAndCollect(
 			}
 		};
 
+		/** What the command has printed so far, as a result would show it. */
+		const printedSoFar = (): string => {
+			const out = stdout.current().text;
+			const err = stderr.current().text;
+			const text = combineOutput
+				? out + (err ? `\n[stderr]\n${err}` : "")
+				: out;
+			return text.length > maxOutputChars
+				? truncateCommandOutput(text, {
+						maxChars: maxOutputChars,
+						totalChars: text.length,
+					})
+				: text;
+		};
+		const timedOut = (message: string, ms: number) =>
+			new TimeoutError(message, ms, printedSoFar());
+
 		let timeout: NodeJS.Timeout;
-		const abortHandler = () => killAndReject(new Error("Command was aborted"));
+		// The tool layer's timeout aborts with a TimeoutError as the reason, so
+		// the tree is stopped here: it used to report "timed out" and leave the
+		// command running and writing (readers 9).
+		const abortHandler = () => {
+			const reason = context.signal?.reason;
+			killAndReject(
+				reason instanceof TimeoutError
+					? timedOut(reason.message, reason.timeoutMs)
+					: new Error("Command was aborted"),
+			);
+		};
 		const cleanup = () => {
 			clearTimeout(timeout);
 			if (exitStreamGraceTimer) {
@@ -984,7 +1056,10 @@ function spawnAndCollect(
 		timeout = setTimeout(
 			() =>
 				killAndReject(
-					new TimeoutError(`Command timed out after ${timeoutMs}ms`, timeoutMs),
+					timedOut(
+						`Command timed out after ${timeoutMs}ms and was stopped`,
+						timeoutMs,
+					),
 				),
 			timeoutMs,
 		);
@@ -1016,8 +1091,8 @@ function spawnAndCollect(
 			progress.stop({ flush: true });
 			detached = true;
 			detachedLog = log;
-			const currentOut = stdout.current();
-			const currentErr = stderr.current();
+			const currentOut = { text: stdout.marked() };
+			const currentErr = { text: stderr.marked() };
 			detachedLog.write(currentOut.text);
 			if (currentErr.text) {
 				detachedLog.write(`\n[stderr]\n${currentErr.text}`);
@@ -1108,6 +1183,48 @@ function spawnAndCollect(
 			progress.append("stderr", chunk);
 		});
 
+		/**
+		 * stdout and stderr as one result, each truncated within its own share
+		 * so the `[stderr]` label survives: cut as one string, the label fell
+		 * in the elided middle and stderr's tail read as stdout's (automaticum
+		 * audit 2026-11-08, readers bash minors).
+		 */
+		const joinStreams = (
+			out: { text: string; totalChars: number; dropped: boolean },
+			err: { text: string; totalChars: number; dropped: boolean },
+		): string => {
+			const fit = (
+				stream: { text: string; totalChars: number; dropped: boolean },
+				budget: number,
+			) =>
+				stream.dropped || stream.text.length > budget
+					? truncateCommandOutput(stream.text, {
+							maxChars: budget,
+							totalChars: stream.totalChars,
+						})
+					: stream.text;
+			if (!combineOutput || !err.text) {
+				return fit(out, maxOutputChars);
+			}
+			if (
+				!out.dropped &&
+				!err.dropped &&
+				out.text.length + err.text.length <= maxOutputChars
+			) {
+				return `${out.text}\n[stderr]\n${err.text}`;
+			}
+			const half = Math.floor(maxOutputChars / 2);
+			const errBudget = Math.max(
+				1,
+				Math.min(
+					err.text.length,
+					Math.max(half, maxOutputChars - out.text.length),
+				),
+			);
+			const outBudget = Math.max(1, maxOutputChars - errBudget);
+			return `${fit(out, outBudget)}\n[stderr]\n${fit(err, errBudget)}`;
+		};
+
 		// Shared completion path for 'close' (stdio drained) and the
 		// exit-grace fallback below: snapshot the collectors, flush the final
 		// decoder chunks, and settle with the exit code or signal. `trailingNote` is
@@ -1129,19 +1246,7 @@ function spawnAndCollect(
 			cleanup();
 
 			if (code !== 0) {
-				let failureOutput = combineOutput
-					? out.text + (err.text ? `\n[stderr]\n${err.text}` : "")
-					: out.text;
-				const dropped = out.dropped || (combineOutput && err.dropped);
-				const totalChars = combineOutput
-					? out.totalChars + err.totalChars
-					: out.totalChars;
-				if (dropped || failureOutput.length > maxOutputChars) {
-					failureOutput = truncateCommandOutput(failureOutput, {
-						maxChars: maxOutputChars,
-						totalChars,
-					});
-				}
+				const failureOutput = joinStreams(out, err);
 				const notice = `[${commandCompletionMessage(code, signal)}]`;
 				const result =
 					failureOutput.length > 0 ? `${notice}\n${failureOutput}` : notice;
@@ -1154,19 +1259,7 @@ function spawnAndCollect(
 					),
 				);
 			} else {
-				let output = combineOutput
-					? out.text + (err.text ? `\n[stderr]\n${err.text}` : "")
-					: out.text;
-				const dropped = out.dropped || (combineOutput && err.dropped);
-				if (dropped || output.length > maxOutputChars) {
-					const totalChars = combineOutput
-						? out.totalChars + err.totalChars
-						: out.totalChars;
-					output = truncateCommandOutput(output, {
-						maxChars: maxOutputChars,
-						totalChars,
-					});
-				}
+				const output = joinStreams(out, err);
 				settle(() =>
 					resolve(trailingNote ? `${output}\n${trailingNote}` : output),
 				);
@@ -1186,7 +1279,7 @@ function spawnAndCollect(
 				}
 				detachedLog?.write(out.finalChunk);
 				detachedLog?.write(err.finalChunk);
-				detachedLog?.write(`\n[${commandCompletionMessage(code, signal)}]\n`);
+				detachedLog?.note(`\n[${commandCompletionMessage(code, signal)}]\n`);
 				detachedLog?.complete();
 				return;
 			}
@@ -1221,7 +1314,7 @@ function spawnAndCollect(
 					const err = stderr.snapshot();
 					detachedLog?.write(out.finalChunk);
 					detachedLog?.write(err.finalChunk);
-					detachedLog?.write(`\n[${commandCompletionMessage(code, signal)}]\n`);
+					detachedLog?.note(`\n[${commandCompletionMessage(code, signal)}]\n`);
 					detachedLog?.complete();
 					return;
 				}
@@ -1245,7 +1338,7 @@ function spawnAndCollect(
 		child.on("error", (error) => {
 			if (killed) return;
 			if (detached) {
-				detachedLog?.write(`\n[Command failed: ${error.message}]\n`);
+				detachedLog?.note(`\n[Command failed: ${error.message}]\n`);
 				detachedLog?.complete();
 				return;
 			}
@@ -1298,6 +1391,9 @@ export function createShellExecutor(
 		options.maxOutputChars ??
 		options.maxOutputBytes ??
 		MAX_COMMAND_OUTPUT_CHARS;
+	// Commands in flight, each marked once another starts beside it, so a
+	// sweep can say when it cannot attribute a change.
+	const inFlight = new Set<{ overlapped: boolean }>();
 
 	return async (command, cwd, context, callOptions) => {
 		// Spawn without a shell only when the args key is present (even
@@ -1306,12 +1402,31 @@ export function createShellExecutor(
 		// line, and spawning that string as an executable fails with ENOENT.
 		// Same key-presence rule as the VS Code host's formatCommandForTerminal.
 		const directExec = typeof command !== "string" && "args" in command;
-		const invocation = directExec
-			? { executable: command.command, args: command.args ?? [] }
+		const shellInvocation = directExec
+			? undefined
 			: getShellInvocation(
 					shell,
 					typeof command === "string" ? command : command.command,
 				);
+		// pipefail where the shell has it: `build 2>&1 | tail -5` reported the
+		// tail's success over a failed build, and the description itself says
+		// to pipe through tail (automaticum audit 2026-11-08, readers 22).
+		const pipefail =
+			shellInvocation !== undefined &&
+			PIPEFAIL_SHELL.test(shell) &&
+			shellInvocation.args[0] === "-c";
+		const invocation = shellInvocation
+			? pipefail
+				? {
+						...shellInvocation,
+						args: ["-o", "pipefail", ...shellInvocation.args],
+					}
+				: shellInvocation
+			: {
+					executable: (command as { command: string }).command,
+					args: (command as { args?: string[] }).args ?? [],
+					input: undefined,
+				};
 		// Snapshotted before the command runs, because the command can add
 		// files to the set and a file this session has never read is not one it
 		// can be holding a stale view of.
@@ -1329,29 +1444,76 @@ export function createShellExecutor(
 		// A delegated agent roots the whole command tree at the sandbox launcher,
 		// so the command and everything it spawns reads and writes the overlay.
 		const spec = wrapSpawn ? wrapSpawn(baseSpec) : baseSpec;
-		const output = await spawnAndCollect(
-			{
-				executable: spec.executable,
-				args: spec.args,
-				cwd: spec.cwd,
-				env: spec.env,
-				withhold: callOptions?.withhold,
-				input: invocation.input,
-			},
-			context,
-			timeoutMs,
-			maxOutputChars,
-			combineOutput,
-			detachedLogRetentionMs,
-			executionController,
-			processStartTokenProbe,
-		);
-		if (!receipts || tracked.length === 0) {
-			return output;
+		const run = { overlapped: inFlight.size > 0 };
+		for (const other of inFlight) other.overlapped = true;
+		inFlight.add(run);
+		const sweep = async (): Promise<string> => {
+			if (!receipts || tracked.length === 0) return "";
+			const changed = await sweepTrackedFiles(receipts, tracked, overlay);
+			return changed.length === 0
+				? ""
+				: `\n\n${describeSweptFiles(changed, run.overlapped)}`;
+		};
+		let output: string;
+		try {
+			output = await spawnAndCollect(
+				{
+					executable: spec.executable,
+					args: spec.args,
+					cwd: spec.cwd,
+					env: spec.env,
+					withhold: callOptions?.withhold,
+					input: invocation.input,
+				},
+				context,
+				timeoutMs,
+				maxOutputChars,
+				combineOutput,
+				detachedLogRetentionMs,
+				executionController,
+				processStartTokenProbe,
+			);
+		} catch (error) {
+			// A command that failed can have rewritten files as surely as one
+			// that succeeded, and its note was dropped with the success path
+			// (readers 7b).
+			const note = await sweep().finally(() => inFlight.delete(run));
+			// 141 is SIGPIPE: under pipefail, `producer | head -1` ends that way
+			// when head stops reading. That is how the pipeline was meant to end.
+			if (
+				pipefail &&
+				error instanceof CommandExitError &&
+				error.exitCode === SIGPIPE_EXIT
+			) {
+				return `${error.output.replace(/^\[Command exited with code 141\]\n?/, "")}\n[A command in the pipeline was stopped by SIGPIPE when the command reading from it finished early — the usual end of \`| head\`, not a failure.]${note}`;
+			}
+			if (note) {
+				if (error instanceof CommandExitError) {
+					throw new CommandExitError(error.exitCode, `${error.output}${note}`);
+				}
+				if (error instanceof CommandTerminationError) {
+					throw new CommandTerminationError(
+						error.signal,
+						`${error.output}${note}`,
+					);
+				}
+				if (error instanceof TimeoutError) {
+					throw new TimeoutError(
+						error.message,
+						error.timeoutMs,
+						`${error.output ?? ""}${note}`,
+					);
+				}
+			}
+			throw error;
 		}
-		const changed = await sweepTrackedFiles(receipts, tracked, overlay);
-		return changed.length === 0
-			? output
-			: `${output}\n\n${describeSweptFiles(changed)}`;
+		const note = await sweep().finally(() => inFlight.delete(run));
+		return `${output}${note}`;
 	};
 }
+
+/** Shells that take `-o pipefail` before `-c`. */
+const PIPEFAIL_SHELL = /(^|[\\/])(bash|zsh|ksh)(\.exe)?$/i;
+
+/** 128 + SIGPIPE (13). */
+const SIGPIPE_EXIT = 141;

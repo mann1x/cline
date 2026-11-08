@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AgentToolContext } from "@cline/shared";
 import { describe, expect, it } from "vitest";
+import { TimeoutError } from "../helpers";
 import {
 	CommandExitError,
 	CommandSpawnError,
@@ -769,6 +770,94 @@ describe("createShellExecutor", () => {
 		await expect(shell(longRunningCommand, process.cwd(), ctx)).rejects.toThrow(
 			"timed out",
 		);
+	});
+
+	// A timeout dropped what the command had printed -- the test runner's FAIL
+	// line before it hung (automaticum audit 2026-11-08, readers 8).
+	it("keeps what a command printed before it timed out", async () => {
+		const shell = createShellExecutor({ timeoutMs: 400 });
+		const error = await shell(
+			{
+				command: process.execPath,
+				args: [
+					"-e",
+					"console.log('test_a ok'); console.error('test_c FAIL'); setInterval(() => {}, 1000)",
+				],
+			},
+			process.cwd(),
+			ctx,
+		).catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(TimeoutError);
+		expect((error as TimeoutError).message).toContain("was stopped");
+		expect((error as TimeoutError).output).toContain("test_a ok");
+		expect((error as TimeoutError).output).toContain("[stderr]\ntest_c FAIL");
+	});
+
+	it("stops the command when the caller's signal aborts with a timeout", async () => {
+		const shell = createShellExecutor({ timeoutMs: 60_000 });
+		const stop = new AbortController();
+		const dir = await mkdtemp(join(tmpdir(), "bash-stop-"));
+		try {
+			const marker = join(dir, "marker");
+			const run = shell(`sleep 1; echo wrote > '${marker}'`, dir, {
+				...ctx,
+				signal: stop.signal,
+			}).catch((caught: unknown) => caught);
+			setTimeout(
+				() =>
+					stop.abort(
+						new TimeoutError(
+							"Command timed out after 200ms and was stopped",
+							200,
+						),
+					),
+				200,
+			);
+			const error = await run;
+			expect(error).toBeInstanceOf(TimeoutError);
+			await new Promise((done) => setTimeout(done, 1500));
+			expect(existsSync(marker)).toBe(false);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the [stderr] label when both streams are truncated", async () => {
+		const shell = createShellExecutor({ maxOutputChars: 200 });
+		const error = await shell(
+			"printf 'O%.0s' $(seq 300); printf 'E%.0s' $(seq 299) >&2; echo ' real-error' >&2; exit 1",
+			process.cwd(),
+			ctx,
+		).catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(CommandExitError);
+		const output = (error as CommandExitError).output;
+		expect(output).toContain("\n[stderr]\n");
+		expect(output.indexOf("[stderr]")).toBeLessThan(
+			output.indexOf("real-error"),
+		);
+		expect(output.slice(output.indexOf("[stderr]"))).not.toContain("O");
+	});
+
+	it("names a missing working directory, not a missing shell", async () => {
+		const shell = createShellExecutor();
+		await expect(
+			shell("ls", join(tmpdir(), "no-such-dir-bash-test"), ctx),
+		).rejects.toThrow(/working directory .* does not exist/);
+	});
+
+	it("reports a failure that a pipe through tail would hide", async () => {
+		const shell = createShellExecutor();
+		await expect(
+			shell(
+				"(echo 'error TS2304' >&2; exit 2) 2>&1 | tail -5",
+				process.cwd(),
+				ctx,
+			),
+		).rejects.toThrow("code 2");
+		// And the usual end of `| head` is not a failure.
+		const output = await shell("yes | head -1", process.cwd(), ctx);
+		expect(output).toContain("y");
+		expect(output).toContain("SIGPIPE");
 	});
 
 	it("middle-truncates output exceeding maxOutputBytes, keeping head and tail", async () => {

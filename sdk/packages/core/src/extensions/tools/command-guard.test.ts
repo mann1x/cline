@@ -380,3 +380,50 @@ describe("formatPlanModeBlockedCommandError", () => {
 		expect(message).toContain("act mode");
 	});
 });
+
+// automaticum audit 2026-11-08, readers 26: bypasses that ran in plan mode,
+// and read-only commands that were refused.
+describe("findFileEditingCommand — audit bypasses and false positives", () => {
+	it.each([
+		["# don't run tests yet\nrm -rf src\n# that's it", "`rm`"],
+		["\\rm -rf src", "`rm`"],
+		["grep -n '<<EOF' build.sh\nrm -rf src\necho EOF", "`rm`"],
+		["sudo -u root rm -rf src", "`rm`"],
+		["eval rm -rf src", "`rm`"],
+		["exec rm -rf src", "`rm`"],
+		["bash -c 'rm -rf src'", "`rm`"],
+		["uv pip install requests", "`uv pip install`"],
+		["pip3.11 install requests", "`pip install`"],
+		["echo x >|src/a.ts", "output redirection (`> src/a.ts`)"],
+		["npx prettier --write src", "`prettier` (rewrites files)"],
+		["git branch -D main", "`git branch` (changes branches)"],
+		["timeout -s KILL 5 rm -rf src", "`rm`"],
+		["ls | xargs -I % rm %", "`rm`"],
+		["perl -pie 's/a/b/' f", "`perl -i` (in-place edit)"],
+		["sed -ie 's/a/b/' f", "`sed -i` (in-place edit)"],
+	])("blocks %j", (command, reason) => {
+		expect(findFileEditingCommand(command)).toBe(reason);
+	});
+
+	it("reads a structured bash -c argument as a command line", () => {
+		expect(
+			findFileEditingCommand({ command: "bash", args: ["-c", "rm -rf src"] }),
+		).toBe("`rm`");
+	});
+
+	it.each([
+		"curl -s -o /dev/null -w '%{http_code}' http://localhost:3000",
+		"[[ $a > $b ]] && echo gt",
+		"git submodule",
+		"git branch",
+		"git branch -a",
+		"sort -o /tmp/x.txt a.txt",
+		"cp src/a.ts /tmp/a.ts",
+		"git clean -n",
+		"pip install --dry-run x",
+		"npx prettier --check src",
+		"echo a \\> b",
+	])("allows %j", (command) => {
+		expect(findFileEditingCommand(command)).toBeUndefined();
+	});
+});

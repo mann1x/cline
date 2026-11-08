@@ -12,9 +12,10 @@
  * so they cannot false-positive), split on shell separators, and the leading
  * command word of each part is compared against the lists below; output
  * redirection to files is also rejected. It will not catch every possible
- * mutation (e.g. `python -c "open(..., 'w')"` or commands hidden inside a
- * quoted `bash -c` string) — it exists to stop the common ways models edit
- * files from the shell, and entries are easy to add.
+ * mutation (e.g. `python -c "open(..., 'w')"`, or a command assembled at run
+ * time from variables) — it exists to stop the common ways models edit files
+ * from the shell, and entries are easy to add. A quoted `bash -c` / `eval`
+ * string is read as the command line it is.
  */
 
 import type { StructuredCommandInput } from "./schemas";
@@ -198,6 +199,12 @@ const WRAPPERS = new Set([
 	"stdbuf",
 	"timeout",
 	"xargs",
+	// The words after these are a command that runs.
+	"eval",
+	"exec",
+	"npx",
+	"bunx",
+	"pnpx",
 ]);
 
 /** Shell reserved words that can precede the command word. */
@@ -258,43 +265,152 @@ function normalizeCommandName(word: string): string {
  * the blacklist scan below cannot false-positive on them: heredoc bodies are
  * dropped, and special characters inside quotes / behind backslash escapes /
  * after a comment marker are replaced with "_".
+ *
+ * One pass that knows which state it is in. Done as separate regex passes,
+ * the apostrophe in `# don't` opened a quote that swallowed the next line's
+ * `rm`, `<<EOF` inside a quoted grep pattern dropped every line after it as a
+ * heredoc body, and `\rm` -- which runs rm -- read as `_m` (automaticum audit
+ * 2026-11-08, readers 26).
  */
 function maskNonCommandText(command: string): string {
-	// Drop heredoc bodies (everything between `<<DELIM` and the DELIM line).
-	const lines = command.split("\n");
-	const kept: string[] = [];
-	let heredocDelimiter: string | undefined;
-	for (const line of lines) {
-		if (heredocDelimiter !== undefined) {
-			if (line.replace(/^\t+/, "") === heredocDelimiter) {
-				heredocDelimiter = undefined;
+	const SPECIAL = /[\s<>|;&$()`#\\]/;
+	let out = "";
+	let index = 0;
+	let atWordStart = true;
+	const pendingHeredocs: string[] = [];
+	while (index < command.length) {
+		const char = command[index] as string;
+		if (char === "\n") {
+			out += "\n";
+			index += 1;
+			atWordStart = true;
+			// Heredoc bodies start on the line after their `<<`.
+			while (pendingHeredocs.length > 0 && index < command.length) {
+				const delimiter = pendingHeredocs[0] as string;
+				const end = command.indexOf("\n", index);
+				const line = command.slice(index, end === -1 ? undefined : end);
+				index = end === -1 ? command.length : end + 1;
+				if (line.replace(/^\t+/, "") === delimiter) {
+					pendingHeredocs.shift();
+				}
 			}
 			continue;
 		}
-		kept.push(line);
-		const heredoc = line.match(
-			/(?<![<])<<-?\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_./-]+))/,
-		);
-		if (heredoc) {
-			heredocDelimiter = heredoc[1] ?? heredoc[2] ?? heredoc[3];
+		if (char === "\\") {
+			const next = command[index + 1];
+			// A line continuation joins the lines; an escaped special
+			// character is literal text; an escaped letter is that letter.
+			out +=
+				next === undefined
+					? ""
+					: next === "\n"
+						? " "
+						: SPECIAL.test(next)
+							? "_"
+							: next;
+			index += 2;
+			atWordStart = false;
+			continue;
 		}
+		if (char === "'" || char === '"') {
+			const close = command.indexOf(char, index + 1);
+			const end = close === -1 ? command.length : close + 1;
+			out += command.slice(index, end).replace(/[\s<>|;&$()`#\\]/g, "_");
+			index = end;
+			atWordStart = false;
+			continue;
+		}
+		if (char === "#" && atWordStart) {
+			const end = command.indexOf("\n", index);
+			index = end === -1 ? command.length : end;
+			out += " ";
+			continue;
+		}
+		if (
+			char === "<" &&
+			command[index + 1] === "<" &&
+			command[index + 2] !== "<"
+		) {
+			const heredoc =
+				/^<<-?\s*(?:"([^"]+)"|'([^']+)'|\\?([A-Za-z0-9_./-]+))/.exec(
+					command.slice(index),
+				);
+			if (heredoc) {
+				pendingHeredocs.push(
+					(heredoc[1] ?? heredoc[2] ?? heredoc[3]) as string,
+				);
+				out += heredoc[0].replace(/["'\\]/g, "_");
+				index += heredoc[0].length;
+				atWordStart = false;
+				continue;
+			}
+		}
+		out += char;
+		atWordStart = /[\s;&|()]/.test(char);
+		index += 1;
 	}
 	return (
-		kept
-			.join("\n")
+		out
 			// Arithmetic expansion ($((3 > 2))) holds comparisons, not
 			// commands or redirections.
 			.replace(/\$\(\([\s\S]*?\)\)/g, "_")
-			// Backslash-escaped characters are literal text.
-			.replace(/\\./g, "_")
-			// Special characters inside quotes are literal text; spaces are
-			// masked too so a quoted span stays a single token.
-			.replace(/"[^"]*"|'[^']*'/g, (span) =>
-				span.replace(/[\s<>|;&$()`#\\]/g, "_"),
-			)
-			// Comments.
-			.replace(/(?:^|\s)#.*$/gm, " ")
+			// So does a [[ ... ]] test: `[[ $a > $b ]]` compares strings.
+			.replace(/\[\[[\s\S]*?\]\]/g, (test) => test.replace(/[<>]/g, "_"))
 	);
+}
+
+/**
+ * Value-taking options of each wrapper, so `sudo -u root rm` reaches `rm`
+ * rather than stopping at `root`.
+ */
+const WRAPPER_VALUE_OPTIONS: Record<string, Set<string>> = {
+	sudo: new Set(["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U"]),
+	doas: new Set(["-u", "-C"]),
+	env: new Set(["-u", "-C", "-S"]),
+	timeout: new Set(["-s", "-k", "--signal", "--kill-after"]),
+	xargs: new Set(["-I", "-i", "-n", "-P", "-L", "-s", "-d", "-E", "-a"]),
+	nice: new Set(["-n"]),
+	stdbuf: new Set(["-i", "-o", "-e"]),
+	npx: new Set(["-p", "--package"]),
+};
+
+/** Shells whose `-c` argument is a command line of its own. */
+const NESTED_SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
+
+/** Formatters, and the arguments that make them write rather than check. */
+function formatterWrites(name: string, args: string[]): boolean {
+	const has = (...flags: string[]) =>
+		args.some((arg) =>
+			flags.some((flag) => arg === flag || arg.startsWith(`${flag}=`)),
+		);
+	switch (name) {
+		case "prettier":
+			return has("--write", "-w");
+		case "eslint":
+		case "stylelint":
+			return has("--fix");
+		case "biome":
+			return has("--write", "--apply", "--fix");
+		case "black":
+		case "isort":
+			return !has("--check", "--diff");
+		case "ruff":
+			return (
+				(args[0] === "format" && !has("--check", "--diff")) || has("--fix")
+			);
+		case "gofmt":
+		case "goimports":
+			return has("-w");
+		case "rustfmt":
+			return !has("--check");
+		case "clang-format":
+		case "autopep8":
+			return has("-i", "--in-place");
+		case "dprint":
+			return args[0] === "fmt";
+		default:
+			return false;
+	}
 }
 
 /** Check one command's tokens (command word + args) against the blacklist. */
@@ -311,23 +427,52 @@ function checkTokens(tokens: string[]): string | undefined {
 		index < tokens.length &&
 		WRAPPERS.has(normalizeCommandName(tokens[index]))
 	) {
+		const wrapper = normalizeCommandName(tokens[index]);
+		const valued = WRAPPER_VALUE_OPTIONS[wrapper];
 		index += 1;
 		while (
 			index < tokens.length &&
 			(tokens[index].startsWith("-") ||
 				tokens[index] === "{}" ||
 				ENV_ASSIGNMENT.test(tokens[index]) ||
-				/^\d+[smhd]?$/.test(tokens[index]))
+				/^\d+(\.\d+)?[smhd]?$/.test(tokens[index]))
 		) {
-			index += 1;
+			// `-u root`, `-s KILL`, `-I %`: the value is not the command.
+			index += valued?.has(tokens[index]) ? 2 : 1;
 		}
+		// xargs -I % rm %: the placeholder is not the command either.
 	}
 	if (index >= tokens.length) {
 		return undefined;
 	}
 
-	const name = normalizeCommandName(tokens[index]);
+	const rawName = normalizeCommandName(tokens[index]);
+	// pip3.11 is pip.
+	const name = /^pip[\d.]*$/.test(rawName) ? "pip" : rawName;
 	const args = tokens.slice(index + 1);
+	const dryRun = args.some((arg) => arg === "--dry-run" || arg === "--dryrun");
+
+	// `bash -c "rm -rf src"`: the string is a command line of its own.
+	if (NESTED_SHELLS.has(name)) {
+		const flag = args.findIndex((arg) => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg));
+		const inner = flag === -1 ? undefined : args[flag + 1];
+		return inner === undefined
+			? undefined
+			: findFileEditingCommand(inner.replace(/^(['"])([\s\S]*)\1$/, "$2"));
+	}
+
+	if (formatterWrites(name, args)) {
+		return `\`${name}\` (rewrites files)`;
+	}
+
+	// Copying out to a temp location leaves the workspace alone.
+	if (name === "cp") {
+		const operands = args.filter((arg) => !arg.startsWith("-"));
+		const target = operands[operands.length - 1];
+		if (operands.length >= 2 && target && isAllowedRedirectTarget(target)) {
+			return undefined;
+		}
+	}
 
 	// `| tee /tmp/log` is the documented way to capture output; only file
 	// arguments outside tmp are a mutation.
@@ -342,8 +487,84 @@ function checkTokens(tokens: string[]): string | undefined {
 		return `\`${name}\``;
 	}
 
+	// `uv pip install` is pip.
+	if (name === "uv" && args[0] === "pip") {
+		const sub = args.slice(1).find((arg) => !arg.startsWith("-"));
+		return sub && PIP_SUBCOMMANDS.has(sub) && !dryRun
+			? `\`uv pip ${sub}\``
+			: undefined;
+	}
+
+	if (name === "git") {
+		const sub = args.find((arg) => !arg.startsWith("-"));
+		const rest = sub === undefined ? [] : args.slice(args.indexOf(sub) + 1);
+		// Listing branches and tags reads; deleting, renaming or creating one
+		// writes .git (readers 26: `git branch -D main` ran in plan mode).
+		if (sub === "branch") {
+			const listing = rest.some((arg) =>
+				[
+					"-a",
+					"-r",
+					"-l",
+					"--list",
+					"-v",
+					"-vv",
+					"--all",
+					"--remotes",
+					"--show-current",
+					"--contains",
+					"--merged",
+					"--no-merged",
+				].includes(arg),
+			);
+			const writes = rest.some(
+				(arg) =>
+					/^-[dDmMcCu]$/.test(arg) ||
+					[
+						"--delete",
+						"--move",
+						"--copy",
+						"--set-upstream-to",
+						"--unset-upstream",
+						"--edit-description",
+					].some((flag) => arg.startsWith(flag)),
+			);
+			const creates = !listing && rest.some((arg) => !arg.startsWith("-"));
+			if (writes || creates) return "`git branch` (changes branches)";
+			return undefined;
+		}
+		if (sub === "tag") {
+			const listing = rest.some(
+				(arg) =>
+					["-l", "--list", "-n", "--contains", "--points-at"].includes(arg) ||
+					/^-n\d+$/.test(arg),
+			);
+			const writes = rest.some(
+				(arg) =>
+					/^-[dafs]$/.test(arg) || arg === "--delete" || arg === "--force",
+			);
+			if (writes || (!listing && rest.some((arg) => !arg.startsWith("-")))) {
+				return "`git tag` (changes tags)";
+			}
+			return undefined;
+		}
+		// Dry runs and a bare `git submodule` (its status) read only.
+		if (
+			sub === "clean" &&
+			rest.some((arg) => /^-[A-Za-z]*n/.test(arg) || arg === "--dry-run")
+		) {
+			return undefined;
+		}
+		if (sub === "submodule" && rest.length === 0) {
+			return undefined;
+		}
+	}
+
 	const subcommands = BLOCKED_SUBCOMMANDS[name];
 	if (subcommands) {
+		if (dryRun) {
+			return undefined;
+		}
 		// Help output never mutates (`git switch --help`).
 		if (
 			name === "git" &&
@@ -396,14 +617,16 @@ function checkTokens(tokens: string[]): string | undefined {
 	// In-place edit flags on otherwise read-only text tools. The flag cluster
 	// must end at the lowercase `i` (optionally followed by a `.suffix`), so
 	// value-taking uppercase flags like `perl -Ilib` do not match.
-	const IN_PLACE_FLAG = /^-[A-Za-z]*i(\..*)?$/;
+	// `-i` takes the rest of its cluster as a backup suffix, so `-ie` and
+	// `perl -pie` are in-place edits: the letters before it must be flags
+	// that take no value.
 	if (
 		(name === "sed" || name === "gsed") &&
-		args.some((arg) => IN_PLACE_FLAG.test(arg) || arg.startsWith("--in-place"))
+		args.some((arg) => /^-[nErsuz]*i/.test(arg) || arg.startsWith("--in-place"))
 	) {
 		return "`sed -i` (in-place edit)";
 	}
-	if (name === "perl" && args.some((arg) => IN_PLACE_FLAG.test(arg))) {
+	if (name === "perl" && args.some((arg) => /^-[pnlaswTtWX0-9]*i/.test(arg))) {
 		return "`perl -i` (in-place edit)";
 	}
 	if (/^[gnm]?awk$/.test(name)) {
@@ -419,20 +642,33 @@ function checkTokens(tokens: string[]): string | undefined {
 		}
 		return undefined;
 	}
-	if (
-		name === "sort" &&
-		args.some((arg) => arg.startsWith("-o") || arg.startsWith("--output"))
-	) {
-		return "`sort -o` (writes a file)";
+	if (name === "sort") {
+		const target = outputTarget(args, /^-o$/, /^-o(.+)$/, "--output");
+		return target !== undefined && !isAllowedRedirectTarget(target)
+			? "`sort -o` (writes a file)"
+			: undefined;
 	}
 	if (name === "curl") {
-		const writesFile = args.some(
-			(arg) =>
-				(!arg.startsWith("--") && /^-[A-Za-z]*[oO]/.test(arg)) ||
-				arg.startsWith("--output") ||
-				arg.startsWith("--remote-name"),
+		// -O / --remote-name always write into the working directory.
+		if (
+			args.some(
+				(arg) =>
+					(!arg.startsWith("--") && /^-[A-Za-z]*O/.test(arg)) ||
+					arg.startsWith("--remote-name"),
+			)
+		) {
+			return "`curl -O` (writes a file)";
+		}
+		// -o /dev/null is the status-probe idiom, and /tmp is allowed.
+		const target = outputTarget(
+			args,
+			/^-[A-Za-z]*o$/,
+			/^-[A-Za-z]*o(.+)$/,
+			"--output",
 		);
-		return writesFile ? "`curl -o` (writes a file)" : undefined;
+		return target !== undefined && !isAllowedRedirectTarget(target)
+			? "`curl -o` (writes a file)"
+			: undefined;
 	}
 	if (name === "wget") {
 		const readOnly = args.some(
@@ -471,6 +707,27 @@ function checkTokens(tokens: string[]): string | undefined {
 	return undefined;
 }
 
+/** The file an `-o`-style option names, attached or as the next argument. */
+function outputTarget(
+	args: readonly string[],
+	alone: RegExp,
+	attached: RegExp,
+	long: string,
+): string | undefined {
+	for (let at = 0; at < args.length; at += 1) {
+		const arg = args[at] as string;
+		if (arg.startsWith("--")) {
+			if (arg === long) return args[at + 1] ?? "";
+			if (arg.startsWith(`${long}=`)) return arg.slice(long.length + 1);
+			continue;
+		}
+		if (alone.test(arg)) return args[at + 1] ?? "";
+		const match = attached.exec(arg);
+		if (match) return match[1];
+	}
+	return undefined;
+}
+
 /**
  * Inspect a run_commands entry and return a short description of the first
  * file-modifying construct found, or undefined when the command looks
@@ -489,12 +746,24 @@ export function findFileEditingCommand(
 
 	// Output redirection to a file (`>`, `>>`, `&>`), allowing /dev sinks,
 	// fd duplication (`2>&1`, `>&2`), and /tmp output capture.
+	// `>|` overrides noclobber and writes all the same.
 	const redirects = masked.matchAll(
-		/(?:^|[^<>])(?:>{1,2}|&>{1,2})\s*([^\s;&|<>()]+)/g,
+		/(?:^|[^<>])(?:>{1,2}\|?|&>{1,2})\s*([^\s;&|<>()]+)/g,
 	);
 	for (const redirect of redirects) {
 		if (!isAllowedRedirectTarget(redirect[1])) {
 			return `output redirection (\`> ${redirect[1]}\`)`;
+		}
+	}
+
+	// A quoted `bash -c '...'` / `eval '...'` string is a command line, though
+	// masking made it one token: read it from the original.
+	for (const nested of command.matchAll(
+		/(?:^|[\s;&|(])(?:(?:ba|z|da|k)?sh\s+-[A-Za-z]*c[A-Za-z]*|eval)\s+(["'])([\s\S]*?)\1/g,
+	)) {
+		const blocked = findFileEditingCommand(nested[2] as string);
+		if (blocked) {
+			return blocked;
 		}
 	}
 

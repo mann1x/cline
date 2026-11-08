@@ -276,9 +276,27 @@ async function executeShellCommands(
 					command,
 					requested: options.requestedCredentials,
 				});
+				// The timeout stops the command rather than only giving up on it:
+				// raced alone, it reported "timed out" while the process kept
+				// running and writing (automaticum audit 2026-11-08, readers 9).
+				const stop = new AbortController();
+				const forward = () => stop.abort(context.signal?.reason);
+				if (context.signal?.aborted) forward();
+				else context.signal?.addEventListener("abort", forward, { once: true });
+				const stopTimer = setTimeout(
+					() =>
+						stop.abort(
+							new TimeoutError(
+								`Command timed out after ${timeoutMs}ms and was stopped`,
+								timeoutMs,
+							),
+						),
+					timeoutMs,
+				);
 				const commandContext: AgentToolContext = context.emitUpdate
 					? {
 							...context,
+							signal: stop.signal,
 							emitUpdate: (update) => {
 								const payload =
 									update && typeof update === "object" && !Array.isArray(update)
@@ -291,7 +309,7 @@ async function executeShellCommands(
 								});
 							},
 						}
-					: context;
+					: { ...context, signal: stop.signal };
 				try {
 					const output = await withTimeout(
 						// Called with three arguments when there is nothing to say, so
@@ -308,8 +326,10 @@ async function executeShellCommands(
 									withhold: withheldNames,
 								})
 							: executor(command, cwd, commandContext),
-						timeoutMs,
-						`Command timed out after ${timeoutMs}ms`,
+						// A backstop for an executor that ignores the signal; the
+						// stop above is what ends a command on time.
+						timeoutMs + RUN_COMMANDS_STOP_GRACE_MS,
+						`Command timed out after ${timeoutMs}ms and did not stop when asked; it may still be running`,
 					);
 					return {
 						query,
@@ -319,7 +339,8 @@ async function executeShellCommands(
 				} catch (error) {
 					if (error instanceof TimeoutError) {
 						captureRunCommandsTimeoutFromContext(telemetry, context, {
-							effectiveTimeoutMs: error.timeoutMs,
+							// The configured timeout, not the backstop's.
+							effectiveTimeoutMs: timeoutMs,
 							timeoutSource,
 							commandCount: commands.length,
 							durationMs: Date.now() - startedAt,
@@ -336,6 +357,18 @@ async function executeShellCommands(
 							success: false,
 						};
 					}
+					// What it printed before the timeout stays: the description
+					// promises it, and it is usually where the hang is.
+					if (error instanceof TimeoutError && error.output) {
+						return {
+							query,
+							result: redact(error.output),
+							error: redact(
+								`${error.message}. What it printed before then is above.`,
+							),
+							success: false,
+						};
+					}
 					const msg = formatError(error);
 					return {
 						query,
@@ -343,6 +376,9 @@ async function executeShellCommands(
 						error: redact(`Command failed: ${msg}`),
 						success: false,
 					};
+				} finally {
+					clearTimeout(stopTimer);
+					context.signal?.removeEventListener("abort", forward);
 				}
 			},
 		),
@@ -634,6 +670,9 @@ export function createSearchTool(
 	});
 }
 
+/** How long a stopped command has to exit before the tool gives up on it. */
+const RUN_COMMANDS_STOP_GRACE_MS = 5_000;
+
 const RUN_COMMANDS_SHARED_INSTRUCTIONS =
 	"Use for listing files, checking git status, running builds, executing tests, etc. " +
 	"Commands must be non-interactive. Commands that require follow-up input like pagers should be skipped or used with supported flags/env (e.g. git --no-pager, --non-interactive) to bypass the interaction steps. ";
@@ -700,6 +739,7 @@ export function buildRunCommandsDescription(
 		environmentNote +
 		"Commands should be properly shell-escaped and targeted to avoid error or timeout. Include multiple commands in the same call when they are independent complete shell commands and safe to run concurrently; multiline scripts and heredocs must be a single command string. When independent reads or searches are also needed, call those tools in the same response; edits are the exception, and go one at a time. " +
 		`Output beyond ~${Math.round(MAX_COMMAND_OUTPUT_CHARS / 1000)}k characters is middle-truncated (start and end preserved); pipe through grep/head/tail when you need specific sections of large output. ` +
+		"A pipe does not hide a failure: in bash and zsh a pipeline exits with its last failing command's code (pipefail). A command still running at the timeout is stopped, and what it printed until then is returned. " +
 		"For long-running commands, run them in background and redirect output to a tmp file that you can read from later. " +
 		RUN_COMMANDS_OUTPUT
 	);

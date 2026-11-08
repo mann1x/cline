@@ -100,11 +100,19 @@ export function getEditorSizeError(input: EditFileInput): string | null {
  */
 export class TimeoutError extends Error {
 	readonly timeoutMs: number;
+	/**
+	 * What the work printed before it was stopped, when there is any. A
+	 * timeout dropped it: the test runner's FAIL line printed before it hung
+	 * was exactly what the model needed (automaticum audit 2026-11-08,
+	 * readers 8).
+	 */
+	readonly output?: string;
 
-	constructor(message: string, timeoutMs: number) {
+	constructor(message: string, timeoutMs: number, output?: string) {
 		super(message);
 		this.name = "TimeoutError";
 		this.timeoutMs = timeoutMs;
+		if (output !== undefined) this.output = output;
 	}
 }
 
