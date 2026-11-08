@@ -209,7 +209,13 @@ function kvLine(
 			: "";
 	const high = row.pressure >= node.threshold;
 	return `KV ${short(row.used)}/${short(row.window)} cells, pressure ${row.pressure.toFixed(2)} of its ${node.threshold} compaction threshold${share}${
-		high ? " -- at the threshold: it compacts on its own at its next turn" : ""
+		// Conditional: this is the last `/kv` read, and the trigger decides on
+		// a fresh one at the agent's next turn. Said unconditionally, it
+		// promised a compaction a falling pressure never fires (automaticum
+		// audit 2026-11-08, rest N2).
+		high
+			? " -- at or past the threshold in the last read: it compacts at its next turn if the server's figure then still says so"
+			: ""
 	}`;
 }
 

@@ -321,6 +321,8 @@ function encodedForms(value: string): string[] {
 		JSON.stringify(value).slice(1, -1),
 		base64.replace(/=+$/, ""),
 		base64.replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_"),
+		Buffer.from(value, "utf8").toString("hex"),
+		Buffer.from(value, "utf8").toString("hex").toUpperCase(),
 	];
 }
 
@@ -337,12 +339,16 @@ export function describeQaCredentials(names: readonly string[]): string {
 	}
 	return (
 		`\n\nQA credentials configured by the user: ${names.join(", ")}. ` +
-		"Their values are never shown to you. Reference them in a command as " +
+		// What masking does, not "never shown": a value a command splits or
+		// re-cases is not recognised (automaticum audit 2026-11-08, rest N8).
+		"Their values are not given to you. Reference them in a command as " +
 		"environment variables (for example `$" +
 		names[0] +
 		"`), or list the ones a command needs in `credentials` when the command " +
 		"itself does not name them — a test runner that reads its own environment " +
-		"is the usual case. They are set only for the commands that ask, and are " +
-		"masked out of any output that contains them."
+		"is the usual case. They are set only for the commands that ask. Output " +
+		"is masked where it contains a value as written or URL-, JSON-, base64- " +
+		"or hex-encoded; a value a command splits, re-cases or transforms another " +
+		"way is not recognised, so do not print or transform them."
 	);
 }

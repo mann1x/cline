@@ -167,6 +167,28 @@ describe("TaskProgressTracker", () => {
 		expect(tracker.takePendingReminder()).toContain("You just changed `x.ts`");
 	});
 
+	// rest N5: the failed call withdrew the nudge by its text, which a landed
+	// parallel edit to the same path had queued too.
+	it("keeps the nudge a landed edit earned when a parallel edit to the same path fails", () => {
+		for (const writeInterval of [1, 3]) {
+			const tracker = new TaskProgressTracker({ writeInterval });
+			const landed = { path: "src/a.ts", old_text: "x", new_text: "y" };
+			const failed = { path: "src/a.ts", old_text: "q", new_text: "r" };
+			tracker.recordToolCall(landed, "editor");
+			tracker.recordToolCall(failed, "editor");
+			tracker.retractFailedWrite(failed, "editor");
+			expect(tracker.takePendingReminder()).toContain(
+				"You just changed `src/a.ts`",
+			);
+		}
+
+		const tracker = new TaskProgressTracker({ writeInterval: 1 });
+		const only = { path: "src/a.ts", old_text: "x", new_text: "y" };
+		tracker.recordToolCall(only, "editor");
+		tracker.retractFailedWrite(only, "editor");
+		expect(tracker.takePendingReminder()).toBeUndefined();
+	});
+
 	// rest M2: only `- [x]` was read.
 	it("reads a checklist whatever its bullets", () => {
 		for (const markdown of [

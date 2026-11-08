@@ -419,7 +419,8 @@ function createListLibraryTool(options: CreateLibraryToolsOptions): AgentTool {
 			}
 			if (view === "problems") {
 				const problems = catalogue.problems();
-				if (problems.length === 0) return "Nothing is wrong with the Library.";
+				if (problems.length === 0)
+					return "No known problem found in the Library. Checked: every book has sources, their files are in their folders and indexed, and every section has a shelf; not whether what the books say is right.";
 				return problems
 					.map(
 						(entry) =>

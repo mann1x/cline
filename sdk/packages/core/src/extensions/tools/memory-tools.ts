@@ -200,7 +200,7 @@ function createRememberTool(options: CreateMemoryToolsOptions): AgentTool {
 					: "";
 				switch (result.outcome) {
 					case "similar":
-						return `Not remembered: ${result.item.id} in ${where} says nearly the same (${Math.round((result.similarity ?? 0) * 100)}% alike). If this corrects it, remember it again with replaces: "${result.item.id}"; if it adds evidence, pass that as evidence with replaces. It reads:\n${result.item.text}`;
+						return `Not remembered: ${result.item.id} in ${where} reads nearly the same: ${Math.round((result.similarity ?? 0) * 100)}% of its wording matches yours. That compares letters, not meaning, so read it below: if it says what you meant, nothing is lost. If this corrects it, remember it again with replaces: "${result.item.id}"; if it adds evidence, pass that as evidence with replaces. It reads:\n${result.item.text}`;
 					case "updated":
 						return `Already remembered as ${result.item.id} in ${where}; what was new (tags, places or evidence) was added to it.`;
 					case "unchanged":

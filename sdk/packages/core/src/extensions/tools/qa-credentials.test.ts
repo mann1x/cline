@@ -210,7 +210,12 @@ describe("what the model is told", () => {
 		expect(description).toContain("QA_USER");
 		expect(description).toContain("QA_PASSWORD");
 		expect(description).not.toContain("hunter2-but-longer");
-		expect(description).toContain("never shown to you");
+		// rest N8: "never shown" promised more than exact-substring masking
+		// gives; it now says what is masked and what is not.
+		expect(description).not.toContain("never shown");
+		expect(description).toContain(
+			"Output is masked where it contains a value as written or URL-, JSON-, base64- or hex-encoded; a value a command splits, re-cases or transforms another way is not recognised",
+		);
 	});
 
 	it("says nothing at all when none are configured", () => {
@@ -243,6 +248,8 @@ describe("a credential printed in another form", () => {
 			encodeURIComponent(value).replace(/%20/g, "+"),
 			JSON.stringify(value).slice(1, -1),
 			Buffer.from(value).toString("base64").replace(/=+$/, ""),
+			Buffer.from(value).toString("hex"),
+			Buffer.from(value).toString("hex").toUpperCase(),
 		]) {
 			expect(redact(`> GET /login?pw=${form} HTTP/1.1`)).toBe(
 				"> GET /login?pw=[redacted: QA_PASSWORD] HTTP/1.1",

@@ -540,6 +540,17 @@ describe("the Library tools", () => {
 		).toContain("1 source added");
 	});
 
+	// rest N7: "Nothing is wrong with the Library" claimed more than the
+	// checks look at.
+	it("says no known problem was found, and what was checked", async () => {
+		write("engine.md", BOOK);
+		await addBook();
+		const answer = await call("list_library", { view: "problems" });
+		expect(answer).toContain("No known problem found in the Library.");
+		expect(answer).toContain("not whether what the books say is right");
+		expect(answer).not.toContain("Nothing is wrong");
+	});
+
 	it("replaces a book by moving the old one to the trash", async () => {
 		write("engine.md", BOOK);
 		await addBook();

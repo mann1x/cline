@@ -103,6 +103,31 @@ export function noteSimilarity(a: string, b: string): number {
 	return (2 * shared) / (left.total + right.total);
 }
 
+const NEGATION =
+	/\b(?:not|no|never|none|nothing|nobody|cannot|without|neither|nor)\b|n't\b/g;
+
+/**
+ * Whether one note negates what the other says: their negations differ.
+ *
+ * {@link noteSimilarity} counts letter pairs, so "the cache is enabled" and
+ * "the cache is not enabled" score far above the duplicate bar, and the
+ * correction was refused as saying "nearly the same" (automaticum audit
+ * 2026-11-08, rest N6). A pair that differs here is never a duplicate.
+ */
+export function negationDiffers(a: string, b: string): boolean {
+	const of = (text: string) =>
+		(
+			text
+				.normalize("NFKC")
+				.toLowerCase()
+				.replace(/[\u2019]/g, "'")
+				.match(NEGATION) ?? []
+		)
+			.sort()
+			.join(" ");
+	return of(a) !== of(b);
+}
+
 export interface RecalledMemory extends MemoryItem {
 	/** The reranker's score, 0 to 1, when there was one. */
 	relevance?: number;
@@ -888,6 +913,7 @@ export class Memory {
 				const similarity = noteSimilarity(text, item.text);
 				if (
 					similarity >= NEAR_DUPLICATE_SIMILARITY &&
+					!negationDiffers(text, item.text) &&
 					(!best || similarity > best.similarity)
 				) {
 					best = { item, similarity };
@@ -1214,7 +1240,8 @@ export class Memory {
 					}
 					if (
 						noteSimilarity(survivor.text, other.text) <
-						NEAR_DUPLICATE_SIMILARITY
+							NEAR_DUPLICATE_SIMILARITY ||
+						negationDiffers(survivor.text, other.text)
 					) {
 						continue;
 					}

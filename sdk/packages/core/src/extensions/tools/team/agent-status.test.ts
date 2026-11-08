@@ -520,3 +520,44 @@ describe("agents_status: what an agent is doing, and when it will be done", () =
 		).toContain("ETA: none -- it has no iteration cap");
 	});
 });
+
+describe("agents_status on an agent at its compaction threshold", () => {
+	it("says the compaction depends on the next read, not that it happens", async () => {
+		const fetchImpl = (async (input: unknown) => {
+			const path = new URL(String(input)).pathname;
+			const body =
+				path === "/props"
+					? { features: ["kv_status_v1"] }
+					: {
+							cells_total: 262_144,
+							cells_free: 100_000,
+							allocations: [
+								{ session_id: "s1~agent-full", window: 100_000, used: 90_000 },
+							],
+						};
+			return new Response(JSON.stringify(body), {
+				headers: { "content-type": "application/json" },
+			});
+		}) as unknown as typeof fetch;
+		await readOpencotiKv("http://engine:8241/v1", fetchImpl);
+		const handle = roundsFor("s1").open({
+			kind: "spawn_agent",
+			tool: "spawn_agent",
+			background: true,
+			agents: [{ name: "full", task: "fix a.js" }],
+		});
+		void handle.run(0, context, (ctx) => {
+			ctx.emitUpdate?.({ nodeId: "node-a", engineSessionId: "s1~agent-full" });
+			return new Promise(() => {});
+		});
+		const text = renderAgentsStatus(
+			{ agent_id: "full" },
+			{ sessionId: "s1", configProvider: nodes(), now: () => Date.now() },
+		);
+		expect(text).toContain("pressure 0.90 of its 0.85 compaction threshold");
+		expect(text).toContain(
+			"at or past the threshold in the last read: it compacts at its next turn if the server's figure then still says so",
+		);
+		expect(text).not.toContain("it compacts on its own at its next turn");
+	});
+});

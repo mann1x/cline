@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_MEMORY_SETTINGS, type MemorySettings } from "@cline/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Memory, noteSimilarity, placeScore } from "./memory";
+import { Memory, negationDiffers, noteSimilarity, placeScore } from "./memory";
 import { describeNote, useWeight } from "./memory-note";
 import { createMemoryRecaller } from "./memory-recall";
 
@@ -149,6 +149,31 @@ describe("near-duplicates", () => {
 		expect(near.similarity).toBeGreaterThanOrEqual(0.85);
 		expect(memory.list()).toHaveLength(1);
 		expect(noteSimilarity("abc def", "xyz uvw")).toBeLessThan(0.3);
+	});
+
+	// rest N6: letter pairs scored a note and its negation as near-duplicates,
+	// so the correction was refused as saying "nearly the same".
+	it("are never a note and its negation", async () => {
+		await memory.remember({ text: "The build cache is enabled on CI." });
+		const negated = await memory.remember({
+			text: "The build cache is not enabled on CI.",
+		});
+		expect(
+			noteSimilarity(
+				"The build cache is enabled on CI.",
+				"The build cache is not enabled on CI.",
+			),
+		).toBeGreaterThanOrEqual(0.85);
+		expect(negated.outcome).not.toBe("similar");
+		expect(memory.list()).toHaveLength(2);
+		expect(negationDiffers("It can run.", "It can\u2019t run.")).toBe(true);
+		expect(negationDiffers("Do not push.", "Never do not push.")).toBe(true);
+		expect(
+			negationDiffers(
+				"Do not push to main.",
+				"Do not push to the main branch.",
+			),
+		).toBe(false);
 	});
 
 	it("are merged by consolidation, which deletes what it merged and keeps their ids reachable", async () => {

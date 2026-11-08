@@ -558,6 +558,8 @@ export class TaskProgressTracker {
 	private untrackedEdits = 0;
 	/** A reminder waiting for the turn's tool calls to finish. */
 	private pending: string | undefined;
+	/** The calls that queued the untracked-edit nudge {@link pending} holds. */
+	private readonly pendingFrom = new Set<unknown>();
 	private readonly reminderInterval: number;
 	private readonly writeInterval: number;
 	private readonly onUpdate: ((state: TaskProgressState) => void) | undefined;
@@ -693,7 +695,12 @@ export class TaskProgressTracker {
 		if ((this.untrackedEdits - 1) % interval !== 0) {
 			return;
 		}
-		this.pending = buildUntrackedEditNudge(kind, readEditedPath(input));
+		const nudge = buildUntrackedEditNudge(kind, readEditedPath(input));
+		if (this.pending !== nudge) {
+			this.pendingFrom.clear();
+		}
+		this.pending = nudge;
+		this.pendingFrom.add(input);
 	}
 
 	/**
@@ -719,11 +726,10 @@ export class TaskProgressTracker {
 			return;
 		}
 		this.untrackedEdits -= 1;
-		const path = readEditedPath(input);
-		if (
-			this.pending === buildUntrackedEditNudge("missing", path) ||
-			this.pending === buildUntrackedEditNudge("finished", path)
-		) {
+		// By the calls that queued it, not by its text: two parallel edits to
+		// one path queue the same words, and the failed one withdrew the nudge
+		// the landed one had earned (automaticum audit 2026-11-08, rest N5).
+		if (this.pendingFrom.delete(input) && this.pendingFrom.size === 0) {
 			this.pending = undefined;
 		}
 	}
@@ -745,6 +751,7 @@ export class TaskProgressTracker {
 	takePendingReminder(): string | undefined {
 		const pending = this.pending;
 		this.pending = undefined;
+		this.pendingFrom.clear();
 		return pending;
 	}
 }
