@@ -153,9 +153,12 @@ function describeNewRevision(
 	lines: number,
 	note: string,
 	fromModel: boolean,
+	inTransaction: boolean,
 ): string {
-	const head = `\`${display}\` is now revision #${index} (${lines} lines) — ${note}.`;
-	const undo = `To undo just this change, \`restore_file\` with \`revision: "${LAST_REVISION}"\`; #1 is the file as this transaction opened.`;
+	const head = `\`${display}\` is now revision #${index} (${lines} line${lines === 1 ? "" : "s"}) — ${note}.`;
+	// Session scope has no transaction, and naming one promised a boundary
+	// that does not exist (automaticum audit 2026-11-08).
+	const undo = `To undo just this change, \`restore_file\` with \`revision: "${LAST_REVISION}"\`; #1 is the file as ${inTransaction ? "this transaction opened" : "it stood before this session first wrote to it"}.`;
 	if (fromModel) {
 		return `${head} ${undo}`;
 	}
@@ -412,6 +415,7 @@ export function withRevisionCapture<T extends AgentToolDefinition>(
 						newest.lines,
 						newest.note,
 						newest.fromModel,
+						snapshot !== undefined,
 					),
 				);
 			},

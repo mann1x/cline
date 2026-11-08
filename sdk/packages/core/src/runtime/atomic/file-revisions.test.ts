@@ -264,6 +264,45 @@ describe("describeRevisions elision", () => {
 		expect(text).not.toContain("#15");
 	});
 
+	it("counts the revisions it leaves out exactly", () => {
+		// 12 revisions, 10 listed: 2 hidden. It said 3.
+		const log = createRevisionLog();
+		log.seed(FILE, body("0\n"));
+		for (let i = 1; i < 12; i += 1) log.record(FILE, body(`${i}\n`), "editor");
+		const text = describeRevisions("f.html", log.revisions(FILE), {
+			limit: 10,
+		});
+		const listed = (text.match(/^ {2}#\d+/gm) ?? []).length;
+		expect(listed).toBe(10);
+		expect(text).toContain("2 older revisions not listed");
+	});
+
+	it("says one, not ones, when a single revision is left out", () => {
+		const log = createRevisionLog();
+		log.seed(FILE, body("0\n"));
+		for (let i = 1; i < 7; i += 1) log.record(FILE, body(`${i}\n`), "editor");
+		const text = describeRevisions("f.html", log.revisions(FILE), { limit: 6 });
+		expect(text).toContain("1 older revision not listed");
+	});
+
+	it("steps `last` back past a restore, not onto what it discarded", () => {
+		const log = createRevisionLog();
+		log.seed(FILE, body("v1\n"));
+		log.record(FILE, body("v2\n"), "editor");
+		log.record(FILE, body("v3\n"), "editor");
+		log.record(FILE, body("v2\n"), "restore_file", { restores: 2 });
+		const found = log.resolve(FILE, "last");
+		expect(found.kind === "found" && found.revision.body?.toString()).toBe(
+			"v1\n",
+		);
+		// A plain write after the restore is undone as any write is.
+		log.record(FILE, body("v4\n"), "editor");
+		const after = log.resolve(FILE, "last");
+		expect(after.kind === "found" && after.revision.body?.toString()).toBe(
+			"v2\n",
+		);
+	});
+
 	it("lists everything when the history is short enough", () => {
 		const log = createRevisionLog();
 		log.seed(FILE, body("a\n"));

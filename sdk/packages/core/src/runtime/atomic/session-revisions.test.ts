@@ -47,6 +47,27 @@ describe("createSessionRevisions", () => {
 		expect(revisions.port.spanFor(FILE)).toBe("#1–#2");
 	});
 
+	it("tells the writer where #1 comes from without naming a transaction", async () => {
+		// The receipt said "#1 is the file as this transaction opened" in a
+		// session that has none (automaticum audit 2026-11-08).
+		const disk = fakeDisk({ [FILE]: "one\n" });
+		const revisions = createSessionRevisions({
+			root: ROOT,
+			readFile: disk.readFile,
+		});
+		const [editor] = revisions.decorate([
+			writer("editor", () => disk.state.set(FILE, "two\n")),
+		]);
+
+		const said = JSON.stringify(
+			await editor?.execute?.({ path: FILE } as never, {} as never),
+		);
+
+		expect(said).toContain("before this session first wrote to it");
+		expect(said).not.toContain("transaction");
+		expect(said).toContain("(1 line)");
+	});
+
 	it("says nothing about a file nothing has written", () => {
 		const revisions = createSessionRevisions({ root: ROOT });
 		expect(revisions.port.spanFor(FILE)).toBeUndefined();

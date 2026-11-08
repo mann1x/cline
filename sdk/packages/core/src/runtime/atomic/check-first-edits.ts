@@ -91,7 +91,7 @@ export function describeCheckFirst(
 		"",
 		...(checkAlreadyRun
 			? [
-					"You have run the check, which is the right way to open a transaction — this is not asking you to run it again. What is missing is the plan.",
+					`You have called \`${RUN_CHECK_TOOL_NAME}\` already — this is not asking you to call it again. If it said the check could not run, say that in the plan. What is missing is the plan.`,
 					"",
 					"State it before you edit: a numbered list, each entry naming WHERE, WHAT and WHY. Put it in your reply, so it is on the record and the user can see it, not only in your reasoning.",
 				]

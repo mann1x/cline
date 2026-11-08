@@ -119,7 +119,7 @@ It affects one file. Anything you changed in other files this transaction stays.
 
 **You do not have to go all the way back.** Every time a tool writes a file, that version is kept and numbered, and \`revision\` says which one to return to:
 
-- \`revision: "${LAST_REVISION}"\` undoes only your most recent change to the file, keeping everything before it. This is almost always the one you want after a single edit goes wrong.
+- \`revision: "${LAST_REVISION}"\` undoes only your most recent change to the file, keeping everything before it. This is almost always the one you want after a single edit goes wrong. Asking for it again goes one more step back; it does not undo the restore you just made.
 - \`revision: "#3"\` (or \`3\`) returns to that numbered version. Every edit's result tells you the number it just made, and every read of the file lists the ones you can go back to.
 - \`revision: "${ORIGINAL_REVISION}"\` is the file as this transaction opened, which is what you get if you say nothing.
 
@@ -145,7 +145,7 @@ Use it the moment an edit goes wrong in a way you would otherwise have to undo b
 
 Every time a tool writes a file, that version is kept and numbered, and \`revision\` says which one to return to:
 
-- \`revision: "${LAST_REVISION}"\` undoes only your most recent change to the file, keeping everything before it. This is almost always the one you want after a single edit goes wrong.
+- \`revision: "${LAST_REVISION}"\` undoes only your most recent change to the file, keeping everything before it. This is almost always the one you want after a single edit goes wrong. Asking for it again goes one more step back; it does not undo the restore you just made.
 - \`revision: "#3"\` (or \`3\`) returns to that numbered version. Every edit's result tells you the number it just made, and every read of the file lists the ones you can go back to.
 - \`revision: "${ORIGINAL_REVISION}"\` is the file as it stood before this session first wrote to it, which is what you get if you say nothing.
 
@@ -165,7 +165,7 @@ export const RESTORE_FILE_TOOL_INPUT_SCHEMA = {
 		},
 		revision: {
 			type: "string",
-			description: `Which version to return to: "${LAST_REVISION}" to undo only your most recent change to this file, a number such as "#3" for that version, or "${ORIGINAL_REVISION}" for the file as this transaction opened. Defaults to "${ORIGINAL_REVISION}".`,
+			description: `Which version to return to: "${LAST_REVISION}" to undo only your most recent change to this file (again, to go one more step back), a number such as "#3" for that version, or "${ORIGINAL_REVISION}" for the earliest version held. Defaults to "${ORIGINAL_REVISION}".`,
 		},
 		find: {
 			type: "string",
@@ -250,7 +250,12 @@ function countLines(body: Buffer | string): number {
 	return lines.length;
 }
 
-/** The first line at which two texts stop agreeing, one-based, or 0. */
+/**
+ * The first line at which two texts stop agreeing, one-based; 0 when every
+ * line's text agrees, or -1 when the only difference is the newline at the
+ * end. That last case used to be named as line N+1 of an N-line file, a line
+ * no read of it shows (automaticum audit 2026-11-08).
+ */
 function firstDivergentLine(before: string, after: string): number {
 	const a = before.split(/\r\n|\r|\n/);
 	const b = after.split(/\r\n|\r|\n/);
@@ -258,7 +263,14 @@ function firstDivergentLine(before: string, after: string): number {
 	for (let i = 0; i < shared; i += 1) {
 		if (a[i] !== b[i]) return i + 1;
 	}
-	return a.length === b.length ? 0 : shared + 1;
+	if (a.length === b.length) return 0;
+	const [shorter, longer] = a.length < b.length ? [a, b] : [b, a];
+	// The shorter one ends in a newline: its last element is the empty tail,
+	// and the longer one's extra lines start at that line.
+	if (shorter[shared - 1] === "") return shared;
+	return longer.length === shared + 1 && longer[shared] === ""
+		? -1
+		: shared + 1;
 }
 
 /**
@@ -327,9 +339,12 @@ export function createRestoreFileTool(
 			// transaction, 102 of them to the same revision of the same file.
 			if (!snapshot) {
 				const writes = workRevisions(options.controller.revisions);
+				// The budget only: the no-op count is per file and already starts
+				// again when that file is written. Cleared here, a write to any
+				// other file reset it, and a model restoring an unchanged file in
+				// a loop while touching another was never capped (B24).
 				if (writes !== writesAtLastRestore) {
 					spentIn = 0;
-					noOpsByFile.clear();
 				}
 				writesAtLastRestore = writes;
 			}
@@ -352,7 +367,9 @@ export function createRestoreFileTool(
 					: undefined;
 
 			if (findSpec === undefined && spentIn >= MAX_RESTORES_PER_TRANSACTION) {
-				return `That is ${MAX_RESTORES_PER_TRANSACTION} restores already in this transaction, so no more will be made. Undoing the same work repeatedly is not converging on it. Read the file as it stands, decide on one change, and make that change — or say plainly that you cannot, and let the transaction be judged.`;
+				return snapshot
+					? `That is ${MAX_RESTORES_PER_TRANSACTION} restores already in this transaction, so no more will be made. Undoing the same work repeatedly is not converging on it. Read the file as it stands, decide on one change, and make that change — or say plainly that you cannot, and let the transaction be judged.`
+					: `That is ${MAX_RESTORES_PER_TRANSACTION} restores without a change in between, so no more will be made until something is written. Undoing the same work repeatedly is not converging on it. Read the file as it stands, decide on one change, and make that change — or say plainly that you cannot.`;
 			}
 
 			const requestedRevision =
@@ -402,7 +419,11 @@ export function createRestoreFileTool(
 			// a different fact from "no transaction is open", which was true of
 			// every call and told the model nothing it could act on.
 			if (!snapshot && history.length === 0) {
-				return `\`${display}\` has no earlier version held: nothing has written to it in this session, so there is nothing to put back. Only files this session has changed can be restored.`;
+				// After a compaction the history of a file not written lately is
+				// released, and "nothing has written to it" was then false.
+				return log.released(lookup.absolutePath)
+					? `\`${display}\` has no earlier version held: this session did write to it, but its history was released at a compaction because nothing had written to it since. There is nothing to put back; read the file as it stands and change what needs changing.`
+					: `\`${display}\` has no earlier version held: nothing has written to it in this session, so there is nothing to put back. Only files this session has changed can be restored.`;
 			}
 
 			// Searching is not restoring: it writes nothing, spends no budget and
@@ -415,7 +436,7 @@ export function createRestoreFileTool(
 			const found = log.resolve(lookup.absolutePath, revisionSpec);
 			if (found.kind === "dropped") {
 				return [
-					`Revision #${found.index} of \`${display}\` is no longer held: its content was released to stay inside the memory this transaction may spend on file history. The revisions still held are below, and one of them is the nearest point you can return to.`,
+					`Revision #${found.index} of \`${display}\` is no longer held: its content was released to stay inside the memory ${historySpan} may spend on file history. The revisions still held are below, and one of them is the nearest point you can return to.`,
 					"",
 					describeRevisions(display, history, { span: historySpan }),
 				].join("\n");
@@ -546,8 +567,10 @@ export function createRestoreFileTool(
 				lookup.absolutePath,
 				target,
 				RESTORE_FILE_TOOL_NAME,
+				{ restores: found.revision.index },
 			);
 			const restoredLines = countLines(target);
+			const linesWord = restoredLines === 1 ? "line" : "lines";
 			const discarded =
 				current === undefined
 					? "it had been deleted"
@@ -558,7 +581,7 @@ export function createRestoreFileTool(
 						);
 
 			return [
-				`\`${display}\` is back to ${targetLabel}: ${restoredLines} lines, ${discarded}.${made ? ` That is now revision #${made.index}.` : ""} Every line number you read before this now points somewhere else, so read the file again before you edit it. ${describeBudget(spentIn, snapshot !== undefined)}`,
+				`\`${display}\` is back to ${targetLabel}: ${restoredLines} ${linesWord}, ${discarded}.${made ? ` That is now revision #${made.index}.` : ""} Every line number you read before this now points somewhere else, so read the file again before you edit it. ${describeBudget(spentIn, snapshot !== undefined)}`,
 				"",
 				describeRevisions(display, log.revisions(lookup.absolutePath), {
 					span: historySpan,
@@ -579,7 +602,7 @@ function describeBudget(spent: number, inTransaction = true): string {
 		left > 0
 			? `${left} more restore${left === 1 ? "" : "s"} available${scope}.`
 			: `That was the last restore available${scope}.`;
-	const habit = describeRestoreHabit(spent);
+	const habit = describeRestoreHabit(spent, inTransaction);
 	return habit ? `${budget} ${habit}` : budget;
 }
 
@@ -617,9 +640,28 @@ export const RESTORE_HABIT_INSISTS_AFTER = 6;
  * back in full whatever state its files are in, and the account it writes is
  * kept and read by the next one. Restoring buys nothing that ending does not.
  */
-function describeRestoreHabit(spent: number): string | undefined {
+function describeRestoreHabit(
+	spent: number,
+	inTransaction = true,
+): string | undefined {
 	if (spent < RESTORE_HABIT_AFTER) {
 		return undefined;
+	}
+	// Outside a transaction nothing puts the files back: promising a rollback
+	// there told the model to leave a broken file for a boundary that does
+	// not exist (automaticum audit 2026-11-08, B24).
+	if (!inTransaction) {
+		return spent < RESTORE_HABIT_INSISTS_AFTER
+			? [
+					`That is ${spent} changes undone without a change in between.`,
+					"Undoing the same kind of edit that many times means the reading behind it is wrong, not the typing.",
+					"Read the file, run the check and say what it actually reports, and what in the file produces it, before you edit again.",
+				].join(" ")
+			: [
+					`That is ${spent} changes undone without a change in between, which is no longer recovery — it is one attempt being repeated.`,
+					"Stop editing: say plainly what you tried and what the check still says.",
+					"Nothing will put these files back for you: what is on disk now is what stays.",
+				].join(" ");
 	}
 	if (spent < RESTORE_HABIT_INSISTS_AFTER) {
 		return [
@@ -658,7 +700,13 @@ function describeDiscarded(
 	const what = untouched
 		? "replacing the original, which you had not changed"
 		: "discarding what you had made of it";
-	return line > 0
-		? `${what}, which had ${size} and first differed at line ${line}`
-		: what;
+	if (line > 0) {
+		return `${what}, which had ${size} and first differed at line ${line}`;
+	}
+	if (line < 0) {
+		return `${what}, which differed only in the newline at the end of the last line`;
+	}
+	return before === after
+		? what
+		: `${what}, which differed only in its line endings`;
 }

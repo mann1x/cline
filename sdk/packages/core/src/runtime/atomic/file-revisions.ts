@@ -73,6 +73,8 @@ export interface FileRevision {
 	 * of what it has been doing.
 	 */
 	readonly sameAs?: number;
+	/** The revision this one put back, when a restore made it. */
+	readonly restores?: number;
 }
 
 export type RevisionLookup =
@@ -143,7 +145,11 @@ export interface RevisionNote {
 	readonly intent?: string;
 	/** What the writing tool reported doing, e.g. "Replaced line 90". */
 	readonly summary?: string;
-	/** What the checker said about this file afterwards, when it said anything. */
+	/**
+	 * What the checker last said when this revision was made. It ran before
+	 * the write, so it is labelled as such: shown bare, it read as the verdict
+	 * on content it never saw (automaticum audit 2026-11-08).
+	 */
 	readonly check?: string;
 	/**
 	 * The content was never written to this workspace: a delegated agent's
@@ -151,6 +157,12 @@ export interface RevisionNote {
 	 * still the newest revision that is not held.
 	 */
 	readonly held?: boolean;
+	/**
+	 * The revision a restore put back. `last` follows it: undoing a restore
+	 * with `last` used to land on the state the restore had just discarded,
+	 * so a second `last` undid the first (automaticum audit 2026-11-08, B24).
+	 */
+	readonly restores?: number;
 }
 
 /** Longest note kept. A list of forty of these is read by a 9B model. */
@@ -198,7 +210,7 @@ function deriveNote(
 	const head = intent ?? summary ?? delta ?? (existed ? "written" : "deleted");
 	const parts = [head];
 	if (intent && summary) parts.push(summary);
-	if (check) parts.push(`check: ${check}`);
+	if (check) parts.push(`last check before it: ${check}`);
 	return {
 		note: tidy(parts.join(" — ")) ?? head,
 		noteSource: intent ? "model" : "derived",
@@ -238,6 +250,7 @@ interface MutableRevision {
 	existed: boolean;
 	sameAs?: number;
 	held?: boolean;
+	restores?: number;
 }
 
 /**
@@ -342,6 +355,8 @@ export interface RevisionLog {
 	heldBytes(absolutePath: string): number;
 	/** Forget everything. A discard puts the tree back, so the history goes too. */
 	reset(): void;
+	/** Whether a compaction released this file's whole history. */
+	released(absolutePath: string): boolean;
 	/**
 	 * Close the current compaction span and release what the next one cannot use.
 	 *
@@ -443,6 +458,10 @@ export function createRevisionLog(
 	// is worth its whole history.
 	const lastWrittenSpan = new Map<string, number>();
 	let span = 0;
+	// Files whose whole history a compaction released, so "no history" can
+	// be told apart from "never written" -- after a compaction the second was
+	// said of files the session had edited (automaticum audit 2026-11-08).
+	const releasedPaths = new Set<string>();
 
 	const bodyOf = (entry: MutableRevision): Buffer | undefined =>
 		entry.dropped || !entry.existed ? undefined : blobs.get(entry.hash)?.body;
@@ -459,6 +478,7 @@ export function createRevisionLog(
 		dropped: entry.dropped,
 		...(entry.held ? { held: true } : {}),
 		...(entry.sameAs === undefined ? {} : { sameAs: entry.sameAs }),
+		...(entry.restores === undefined ? {} : { restores: entry.restores }),
 	});
 
 	const release = (entry: MutableRevision): void => {
@@ -605,6 +625,7 @@ export function createRevisionLog(
 			existed: body !== undefined,
 			...(note?.held ? { held: true } : {}),
 			...(earlier ? { sameAs: earlier.index } : {}),
+			...(note?.restores === undefined ? {} : { restores: note.restores }),
 		};
 		entries.push(entry);
 		lastWrittenSpan.set(absolutePath, span);
@@ -680,7 +701,19 @@ export function createRevisionLog(
 				// no-op every time -- which is not what "revert the last change"
 				// means. Held revisions never reached the disk and are skipped.
 				const written = entries.filter((entry) => !entry.held);
-				index = written[Math.max(0, written.length - 2)]?.index ?? 1;
+				// What is on disk, and where it came from: a restore's content
+				// stands where the revision it put back stands, so `last` after
+				// a restore steps back from there instead of returning to what
+				// the restore discarded.
+				let at = written.length - 1;
+				for (let guard = 0; guard < written.length; guard += 1) {
+					const back = written[at]?.restores;
+					if (back === undefined) break;
+					const position = written.findIndex((entry) => entry.index === back);
+					if (position < 0 || position >= at) break;
+					at = position;
+				}
+				index = written[Math.max(0, at - 1)]?.index ?? 1;
 			} else {
 				index = parsed;
 			}
@@ -702,6 +735,11 @@ export function createRevisionLog(
 			logs.clear();
 			blobs.clear();
 			lastWrittenSpan.clear();
+			releasedPaths.clear();
+		},
+
+		released(absolutePath) {
+			return releasedPaths.has(absolutePath) && !logs.has(absolutePath);
 		},
 
 		noteCompaction(keep) {
@@ -733,6 +771,7 @@ export function createRevisionLog(
 				}
 				logs.delete(path);
 				lastWrittenSpan.delete(path);
+				releasedPaths.add(path);
 				released += 1;
 			}
 			return released;
@@ -782,8 +821,9 @@ export function describeRevisions(
 	const onDiskIndex = [...revisions].reverse().find((r) => !r.held)?.index;
 	const lines = shown.map((revision) => {
 		if (revision === "gap") {
+			// `limit` are listed: the newest `limit - 1` and #1.
 			const hidden = revisions.length - limit;
-			return `  …  ${hidden + 1} older revision${hidden === 0 ? "" : "s"} not listed — ask for one by number`;
+			return `  …  ${hidden} older revision${hidden === 1 ? "" : "s"} not listed — ask for one by number`;
 		}
 		const newest = revision.index === onDiskIndex;
 		const what =

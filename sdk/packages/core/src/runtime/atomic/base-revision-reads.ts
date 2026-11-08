@@ -572,7 +572,7 @@ async function describeCheckedRevisions(
 			);
 		} else if (match.index === latest?.index) {
 			lines.push(
-				`Checked ${name} as it is on disk now: revision #${match.index}, ${match.index === 1 ? "the file before your first change" : `the content your most recent change left (${match.note})`}. Nothing older is cached; an error reported here is in that content.`,
+				`Checked ${name} as it is on disk now: revision #${match.index}, ${match.index === 1 ? "the file before your first change" : `the content your most recent change left (${match.note})`}. Nothing older is cached: what the check reports was measured on that content.`,
 			);
 		} else {
 			lines.push(

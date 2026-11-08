@@ -132,6 +132,11 @@ describe("withCheckFirstEdits", () => {
 
 		expect(held).toContain("What is missing is the plan");
 		expect(calls).toEqual(["editor"]);
+		// A check that blew up did not run: claiming "You have run the check"
+		// was false (automaticum audit 2026-11-08). The call is what happened.
+		expect(held).not.toContain("You have run the check");
+		expect(held).toContain(`called \`${RUN_CHECK_TOOL_NAME}\` already`);
+		expect(held).toContain("could not run, say that in the plan");
 	});
 
 	it("arms again for the next transaction", async () => {

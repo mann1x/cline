@@ -84,7 +84,10 @@ export function createSubmitTransactionTool(
 					"[Atomic] the transaction could not be settled",
 					error,
 				);
-				return `The transaction could not be settled: ${String(error)}. It is still open and your changes are still in place.`;
+				// Settling runs the check and may roll back; an error can come
+				// from either half, so "still open, changes in place" was a guess
+				// (automaticum audit 2026-11-08).
+				return `The transaction could not be settled: ${String(error)}. Settling stopped partway, so the files may or may not still hold your changes. Read the files you changed before doing anything else, then submit again.`;
 			}
 		},
 	});

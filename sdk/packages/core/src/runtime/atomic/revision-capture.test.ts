@@ -264,7 +264,7 @@ describe("withRevisionCapture", () => {
 		await editor?.execute?.({ path: FILE } as never, {} as never);
 		const note = log.revisions(FILE)[1]?.note ?? "";
 		expect(note).toContain("Replaced line 90");
-		expect(note).toContain("check: SyntaxError");
+		expect(note).toContain("last check before it: SyntaxError");
 	});
 
 	it("offers `intent` on writers that name their file, and not on the others", async () => {
