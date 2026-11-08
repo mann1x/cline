@@ -298,3 +298,94 @@ describe("createApplyPatchExecutor", () => {
 		await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(original);
 	});
 });
+
+// The audit's cases (editor C3, M5, m3). Each one either wrote the wrong code
+// and said "Successfully applied", or wrote half a patch and said nothing.
+describe("a patch that does not match", () => {
+	let tempDir: string;
+	const ctx = {} as never;
+
+	beforeEach(async () => {
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "apply-patch-miss-"));
+	});
+
+	afterEach(async () => {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("never deletes a similar line in place of the one it names", async () => {
+		const filePath = path.join(tempDir, "price.ts");
+		const original = [
+			"function price(kind) {",
+			"  switch (kind) {",
+			"    case 'apple': return 10;",
+			"    case 'pear': return 20;",
+			"  }",
+			"}",
+			"",
+		].join("\n");
+		await fs.writeFile(filePath, original, "utf-8");
+
+		await expect(
+			createApplyPatchExecutor()(
+				{
+					input: [
+						"*** Begin Patch",
+						"*** Update File: price.ts",
+						"@@",
+						"-    case 'grape': return 25;",
+						"+    case 'grape': return 26;",
+						"*** End Patch",
+					].join("\n"),
+				},
+				tempDir,
+				ctx,
+			),
+		).rejects.toThrow(/Nothing in this patch was applied/);
+		await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(original);
+	});
+
+	it("writes nothing when a later file's move leaves the workspace", async () => {
+		await fs.writeFile(path.join(tempDir, "a.txt"), "one\n");
+		await fs.writeFile(path.join(tempDir, "b.txt"), "two\n");
+
+		await expect(
+			createApplyPatchExecutor()(
+				{
+					input: [
+						"*** Begin Patch",
+						"*** Update File: a.txt",
+						"@@",
+						"-one",
+						"+ONE",
+						"*** Update File: b.txt",
+						"*** Move to: ../escaped.txt",
+						"@@",
+						"-two",
+						"+TWO",
+						"*** End Patch",
+					].join("\n"),
+				},
+				tempDir,
+				ctx,
+			),
+		).rejects.toThrow(/Nothing was applied/);
+		await expect(
+			fs.readFile(path.join(tempDir, "a.txt"), "utf-8"),
+		).resolves.toBe("one\n");
+	});
+
+	it("says a directory is a directory", async () => {
+		await fs.mkdir(path.join(tempDir, "adir"));
+		await expect(
+			createApplyPatchExecutor()(
+				{
+					input:
+						"*** Begin Patch\n*** Update File: adir\n@@\n-a\n+b\n*** End Patch",
+				},
+				tempDir,
+				ctx,
+			),
+		).rejects.toThrow(/adir is a directory, not a file/);
+	});
+});

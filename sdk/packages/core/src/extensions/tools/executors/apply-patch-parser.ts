@@ -240,7 +240,7 @@ export class PatchParser {
 				this.addWarning({
 					path: this.currentPath || path,
 					chunkIndex: action.chunks.length,
-					message: `Could not find matching context (similarity: ${similarity.toFixed(2)}). Chunk skipped.`,
+					message: `Could not find matching context (closest similarity: ${similarity.toFixed(2)}). Nothing in this patch was applied.`,
 					context:
 						contextText.length > 200
 							? `${contextText.substring(0, 200)}...`
@@ -401,20 +401,12 @@ function findContext(
 			}
 		}
 
-		const similarityThreshold = 0.66;
-		for (let i = startIdx; i < lines.length; i++) {
-			const segment = canonicalize(
-				lines.slice(i, i + context.length).join("\n"),
-			);
-			const similarity = calculateSimilarity(segment, canonicalContext);
-			if (similarity >= similarityThreshold) {
-				return [i, 1000, similarity];
-			}
-			if (similarity > bestSimilarity) {
-				bestSimilarity = similarity;
-			}
-		}
-
+		// No "close enough" tier. One existed at similarity 0.66: it chose a
+		// window whose text differed, and the hunk's `-` lines were then deleted
+		// there without being compared -- a patch for `case 'grape'` deleted
+		// `case 'apple'` and reported "Successfully applied". A hunk applies
+		// where its lines are, ignoring whitespace at most, or it fails and the
+		// whole patch with it; the similarity is still reported in that error.
 		return [-1, 0, bestSimilarity];
 	};
 

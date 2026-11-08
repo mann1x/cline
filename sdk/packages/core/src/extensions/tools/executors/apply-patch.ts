@@ -207,6 +207,18 @@ function applyChunks(
 				`${filePath}: currentIndex ${currentIndex} > chunk.origIndex ${chunk.origIndex}`,
 			);
 		}
+		// The lines a hunk removes must be the lines it named, whitespace
+		// aside. The parser locates them; this makes sure, because a removal
+		// of lines nobody compared is how a patch deletes the wrong code and
+		// still reports success.
+		chunk.delLines.forEach((expected, offset) => {
+			const actual = lines[chunk.origIndex + offset];
+			if (actual === undefined || actual.trim() !== expected.trim()) {
+				throw new DiffError(
+					`${filePath}: the patch removes ${JSON.stringify(expected)} at line ${chunk.origIndex + offset + 1}, but the file holds ${actual === undefined ? "nothing there" : JSON.stringify(actual)}. Nothing was written. Read the file around that line and send the patch with its own text.`,
+				);
+			}
+		});
 		result.push(...lines.slice(currentIndex, chunk.origIndex));
 		result.push(...chunk.insLines);
 		currentIndex = chunk.origIndex + chunk.delLines.length;
@@ -250,8 +262,15 @@ async function loadFiles(
 			fileContent = overlay
 				? (await overlay.read(absolutePath)).toString(encoding)
 				: await fs.readFile(absolutePath, encoding);
-		} catch {
-			throw new DiffError(`File not found: ${filePath}`);
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			throw new DiffError(
+				code === "EISDIR"
+					? `${filePath} is a directory, not a file. Nothing was applied.`
+					: code === "ENOENT"
+						? `File not found: ${filePath}. Nothing was applied.`
+						: `${filePath} could not be read (${code ?? (error instanceof Error ? error.message : String(error))}). Nothing was applied.`,
+			);
 		}
 		// Context lines are matched against the file as the model was shown
 		// it, and a read never shows the mark.
@@ -418,78 +437,120 @@ async function applyChanges(
 		}
 	}
 
+	// Everything that can be refused is refused before the first write: a move
+	// path outside the workspace was found only after the files before it had
+	// been written.
 	for (const [filePath, change] of Object.entries(changes)) {
-		const sourceAbsPath = resolveFilePath(cwd, filePath, restrictToCwd);
-		switch (change.type) {
-			case PatchActionType.DELETE:
-				await removeFile(sourceAbsPath);
-				receipts?.forget(sourceAbsPath);
-				touched.push(`${filePath}: [deleted]`);
-				break;
-			case PatchActionType.ADD:
-				if (change.newContent === undefined) {
-					throw new DiffError(`Cannot create ${filePath} with no content`);
-				}
-				await writeFile(sourceAbsPath, change.newContent);
-				await recordWrite(sourceAbsPath, undefined, change.newContent, true);
-				touched.push(filePath);
-				break;
-			case PatchActionType.UPDATE: {
-				if (change.newContent === undefined) {
-					throw new DiffError(
-						`UPDATE change for ${filePath} has no new content`,
-					);
-				}
-
-				if (change.movePath) {
-					const moveAbsPath = resolveFilePath(
-						cwd,
-						change.movePath,
-						restrictToCwd,
-					);
-					// The destination now holds the source's lines, so what the
-					// model has seen of it is what it had seen of the source. Its
-					// own earlier reads describe a file that is gone: kept, they
-					// licensed edits on lines the model never saw when the two
-					// had the same line count (csf-8). Read whole, the source
-					// carries over whole; otherwise the destination starts unread.
-					const sourceOnDisk = overlay
-						? await overlay.resolveRead(sourceAbsPath)
-						: sourceAbsPath;
-					const sourceSeen =
-						receipts?.covers(
-							sourceOnDisk,
-							1,
-							Math.max(1, countLines(change.oldContent ?? "")),
-						) ?? false;
-					await writeFile(moveAbsPath, change.newContent);
-					await removeFile(sourceAbsPath);
-					receipts?.forget(sourceOnDisk);
-					receipts?.forget(
-						overlay ? await overlay.resolveRead(moveAbsPath) : moveAbsPath,
-					);
-					await recordWrite(
-						moveAbsPath,
-						undefined,
-						change.newContent,
-						sourceSeen,
-					);
-					touched.push(`${filePath} -> ${change.movePath}`);
-				} else {
-					await writeFile(sourceAbsPath, change.newContent);
-					await recordWrite(
-						sourceAbsPath,
-						change.oldContent,
-						change.newContent,
-					);
-					touched.push(filePath);
-				}
-				break;
+		try {
+			resolveFilePath(cwd, filePath, restrictToCwd);
+			if (change.movePath) {
+				resolveFilePath(cwd, change.movePath, restrictToCwd);
 			}
+		} catch (error) {
+			throw new DiffError(
+				`${error instanceof Error ? error.message : String(error)}. Nothing was applied.`,
+			);
+		}
+		if (
+			(change.type === PatchActionType.ADD ||
+				change.type === PatchActionType.UPDATE) &&
+			change.newContent === undefined
+		) {
+			throw new DiffError(
+				`${filePath}: the patch gives it no content. Nothing was applied.`,
+			);
 		}
 	}
 
+	try {
+		await writeAll();
+	} catch (error) {
+		// Files are written one at a time, so a failure part way leaves the
+		// earlier ones written. Saying only the error let the model think
+		// nothing had happened and send the whole patch again over files it
+		// had already changed.
+		const raw = error instanceof Error ? error.message : String(error);
+		const reason = /[.!?]$/.test(raw) ? raw : `${raw}.`;
+		throw new DiffError(
+			touched.length === 0
+				? `${reason} Nothing was applied.`
+				: `${reason} Before that failed, these were already written and stay as written: ${touched.join(", ")}. Read them before sending a patch for the rest.`,
+		);
+	}
 	return touched;
+
+	async function writeAll(): Promise<void> {
+		for (const [filePath, change] of Object.entries(changes)) {
+			const sourceAbsPath = resolveFilePath(cwd, filePath, restrictToCwd);
+			switch (change.type) {
+				case PatchActionType.DELETE:
+					await removeFile(sourceAbsPath);
+					receipts?.forget(sourceAbsPath);
+					touched.push(`${filePath}: [deleted]`);
+					break;
+				case PatchActionType.ADD:
+					if (change.newContent === undefined) {
+						throw new DiffError(`Cannot create ${filePath} with no content`);
+					}
+					await writeFile(sourceAbsPath, change.newContent);
+					await recordWrite(sourceAbsPath, undefined, change.newContent, true);
+					touched.push(filePath);
+					break;
+				case PatchActionType.UPDATE: {
+					if (change.newContent === undefined) {
+						throw new DiffError(
+							`UPDATE change for ${filePath} has no new content`,
+						);
+					}
+
+					if (change.movePath) {
+						const moveAbsPath = resolveFilePath(
+							cwd,
+							change.movePath,
+							restrictToCwd,
+						);
+						// The destination now holds the source's lines, so what the
+						// model has seen of it is what it had seen of the source. Its
+						// own earlier reads describe a file that is gone: kept, they
+						// licensed edits on lines the model never saw when the two
+						// had the same line count (csf-8). Read whole, the source
+						// carries over whole; otherwise the destination starts unread.
+						const sourceOnDisk = overlay
+							? await overlay.resolveRead(sourceAbsPath)
+							: sourceAbsPath;
+						const sourceSeen =
+							receipts?.covers(
+								sourceOnDisk,
+								1,
+								Math.max(1, countLines(change.oldContent ?? "")),
+							) ?? false;
+						await writeFile(moveAbsPath, change.newContent);
+						await removeFile(sourceAbsPath);
+						receipts?.forget(sourceOnDisk);
+						receipts?.forget(
+							overlay ? await overlay.resolveRead(moveAbsPath) : moveAbsPath,
+						);
+						await recordWrite(
+							moveAbsPath,
+							undefined,
+							change.newContent,
+							sourceSeen,
+						);
+						touched.push(`${filePath} -> ${change.movePath}`);
+					} else {
+						await writeFile(sourceAbsPath, change.newContent);
+						await recordWrite(
+							sourceAbsPath,
+							change.oldContent,
+							change.newContent,
+						);
+						touched.push(filePath);
+					}
+					break;
+				}
+			}
+		}
+	}
 }
 
 /**
