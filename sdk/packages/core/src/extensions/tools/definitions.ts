@@ -1281,7 +1281,7 @@ export function createAwkTool(
 			"Run an `awk` program over one or more files. " +
 			"Send a `program` — `{print $1}`, `NR>1 {sum+=$2} END {print sum}`, `$3 ~ /error/ {print FILENAME, NR, $0}` — and the `files` to run it over. `field_separator` is `-F`; `variables` is `-v`. A program with only a BEGIN block needs no files. " +
 			"This is the tool for questions about columns and totals, where grep would only find the lines and you would still have to count them yourself: summing a column, picking fields out of a delimited file, counting occurrences per key. " +
-			"It is read-only, and deliberately so: output redirection, pipes, `system()` and `getline` are all refused rather than quietly ignored. Use `sed` or `editor` to change a file. " +
+			"It is read-only, and deliberately so: output redirection, pipes, `system()` and `getline` are all refused rather than quietly ignored, and so are user-defined functions: write the logic inline. Use `sed` or `editor` to change a file. " +
 			TEXT_TOOL_PROVENANCE +
 			"Output: one result, named `awk:<program>`, holding everything the program printed; a program that could not run says that it failed and why. " +
 			"A program that printed nothing has not failed — that is the program's answer.",

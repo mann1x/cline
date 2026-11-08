@@ -25,8 +25,31 @@ import { compilePosixRegex } from "./posix-regex";
 import { creditShown, type ReadReceipts, readFileStamp } from "./read-receipts";
 import { wholeFileRefusal } from "./whole-file";
 
-/** An awk value: a number, a string, or a string that looks like a number. */
-type Value = string | number;
+/**
+ * Input that looks like a number: a field, a `split` part, a `-v` value.
+ *
+ * awk's strnum. It tests and compares as a number and prints as it was
+ * written. A string *constant* is never one: `x = "0"` is true and
+ * `$1 == "1.0"` compares text. With the two the same, both were judged by
+ * whether the text looked numeric (automaticum audit 2026-11-08, readers 21).
+ */
+class StrNum {
+	constructor(readonly text: string) {}
+}
+
+/** An awk value: a number, a string, or input that looks like a number. */
+type Value = string | number | StrNum;
+
+/**
+ * A variable or array element nothing has set: "" and 0 at once, so both
+ * `x == 0` and `x == ""` hold, as in awk.
+ */
+const UNSET = new StrNum("");
+
+/** Input text as awk types it: a strnum when it looks numeric. */
+function fromInput(text: string): Value {
+	return looksNumeric(text) ? new StrNum(text) : text;
+}
 
 class NextSignal extends Error {}
 class ExitSignal extends Error {
@@ -37,14 +60,22 @@ class ExitSignal extends Error {
 class BreakSignal extends Error {}
 class ContinueSignal extends Error {}
 
-/** Whether a string should be compared as a number, per awk's strnum rule. */
+/**
+ * Whether input text is a strnum: a decimal number, blanks either side.
+ *
+ * Not `Number()`, which also takes "0x1A", "0b1", "Infinity" and "" -- none of
+ * which awk reads as a number.
+ */
 function looksNumeric(text: string): boolean {
-	return text.trim() !== "" && Number.isFinite(Number(text.trim()));
+	return /^[ \t\n]*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?[ \t\n]*$/.test(text);
 }
 
 function toNumber(value: Value): number {
 	if (typeof value === "number") {
 		return value;
+	}
+	if (value instanceof StrNum) {
+		return toNumber(value.text);
 	}
 	// awk takes the longest numeric prefix: "12abc" is 12, "abc" is 0.
 	const match = /^[ \t]*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/.exec(value);
@@ -55,22 +86,75 @@ function toStringValue(value: Value, convfmt = "%.6g"): string {
 	if (typeof value === "string") {
 		return value;
 	}
+	if (value instanceof StrNum) {
+		return value.text;
+	}
+	if (!Number.isFinite(value)) {
+		return nonFinite(value);
+	}
 	if (Number.isInteger(value)) {
 		return String(value);
 	}
 	return formatOne(convfmt, value);
 }
 
+/** inf, -inf and nan, as awk prints them (JavaScript says "Infinity"). */
+function nonFinite(value: number): string {
+	return Number.isNaN(value) ? "nan" : value > 0 ? "inf" : "-inf";
+}
+
 function truthy(value: Value): boolean {
 	if (typeof value === "number") {
 		return value !== 0;
 	}
-	// An unset or empty field is false; a string that looks numeric is judged
-	// by its value, so `$1` of "0" is false exactly as awk has it.
-	if (value === "") {
-		return false;
+	// Input that looks numeric is judged by its value, so `$1` of "0" is
+	// false; a string constant by whether it is empty, so `"0"` is true.
+	if (value instanceof StrNum) {
+		return toNumber(value) !== 0;
 	}
-	return looksNumeric(value) ? Number(value) !== 0 : true;
+	return value !== "";
+}
+
+/** C's %e: at least two exponent digits ("1.5e+0" is JavaScript's). */
+function cExponential(value: number, precision: number): string {
+	const [mantissa, exponent = "+0"] = value.toExponential(precision).split("e");
+	const sign = exponent.startsWith("-") ? "-" : "+";
+	const digits = exponent.replace(/^[+-]/, "").padStart(2, "0");
+	return `${mantissa}e${sign}${digits}`;
+}
+
+/**
+ * C's %g: %e when the exponent is below -4 or at least the precision, %f
+ * otherwise, trailing zeros removed unless `#`. It was toPrecision read back
+ * as a number, so 1234567 printed as 1234570 -- digits lost, silently.
+ */
+function cGeneral(
+	value: number,
+	precision: number,
+	alternate: boolean,
+): string {
+	const digits = precision === 0 ? 1 : precision;
+	if (value === 0) {
+		return alternate ? (0).toFixed(digits - 1) : "0";
+	}
+	const exponent = Number(value.toExponential(digits - 1).split("e")[1]);
+	let text =
+		exponent < -4 || exponent >= digits
+			? cExponential(value, digits - 1)
+			: value.toFixed(Math.max(0, digits - 1 - exponent));
+	if (!alternate) {
+		const [mantissa = "", power] = text.split("e");
+		const trimmed = mantissa.includes(".")
+			? mantissa.replace(/\.?0+$/, "")
+			: mantissa;
+		text = power === undefined ? trimmed : `${trimmed}e${power}`;
+	}
+	return text;
+}
+
+/** An integer conversion's operand as C's unsigned 64-bit reads a negative. */
+function unsigned(value: number): bigint {
+	return BigInt.asUintN(64, BigInt(Math.trunc(value)));
 }
 
 /** printf for a single conversion, enough for the specifiers awk programs use. */
@@ -83,80 +167,88 @@ function formatOne(spec: string, value: Value): string {
 	const width = widthText ? Number(widthText) : undefined;
 	const precision = precisionText ? Number(precisionText) : undefined;
 	let text: string;
+	const number = toNumber(value);
 
-	switch (kind) {
-		case "d":
-		case "i":
-			text = String(Math.trunc(toNumber(value)));
-			break;
-		case "o":
-			text = Math.trunc(toNumber(value)).toString(8);
-			break;
-		case "x":
-			text = Math.trunc(toNumber(value)).toString(16);
-			break;
-		case "X":
-			text = Math.trunc(toNumber(value)).toString(16).toUpperCase();
-			break;
-		case "u":
-			text = String(Math.abs(Math.trunc(toNumber(value))));
-			break;
-		case "e":
-		case "E": {
-			text = toNumber(value).toExponential(precision ?? 6);
-			if (kind === "E") {
-				text = text.toUpperCase();
+	if ("dioxXueEfgG".includes(kind as string) && !Number.isFinite(number)) {
+		text = nonFinite(number);
+		if (kind === "E" || kind === "G" || kind === "X") text = text.toUpperCase();
+	} else
+		switch (kind) {
+			case "d":
+			case "i":
+				text = String(Math.trunc(number));
+				break;
+			// Unsigned, as C prints them: %x of -1 is ffffffffffffffff, not -1.
+			case "o":
+				text = unsigned(number).toString(8);
+				if (flags.includes("#") && text !== "0") text = `0${text}`;
+				break;
+			case "x":
+			case "X":
+				text = unsigned(number).toString(16);
+				if (flags.includes("#") && text !== "0") text = `0x${text}`;
+				if (kind === "X") text = text.toUpperCase();
+				break;
+			case "u":
+				text = unsigned(number).toString(10);
+				break;
+			case "e":
+			case "E": {
+				text = cExponential(number, precision ?? 6);
+				if (kind === "E") {
+					text = text.toUpperCase();
+				}
+				break;
 			}
-			break;
-		}
-		case "f":
-			text = toNumber(value).toFixed(precision ?? 6);
-			break;
-		case "g":
-		case "G": {
-			const digits = precision ?? 6;
-			const number = toNumber(value);
-			text = number === 0 ? "0" : Number(number.toPrecision(digits)).toString();
-			if (kind === "G") {
-				text = text.toUpperCase();
+			case "f":
+				text = number.toFixed(precision ?? 6);
+				break;
+			case "g":
+			case "G": {
+				text = cGeneral(number, precision ?? 6, flags.includes("#"));
+				if (kind === "G") {
+					text = text.toUpperCase();
+				}
+				break;
 			}
-			break;
-		}
-		case "c": {
-			const asString = toStringValue(value);
-			text =
-				typeof value === "number"
-					? String.fromCharCode(value)
-					: asString.charAt(0);
-			break;
-		}
-		case "s":
-			text = toStringValue(value);
-			if (precision !== undefined) {
-				text = text.slice(0, precision);
+			case "c": {
+				// A number, strnum input included, is a character code.
+				text =
+					typeof value === "number" || value instanceof StrNum
+						? String.fromCodePoint(Math.max(0, Math.trunc(number)))
+						: toStringValue(value).charAt(0);
+				break;
 			}
-			break;
-		case "%":
-			return "%";
-		default:
-			text = toStringValue(value);
-	}
+			case "s":
+				text = toStringValue(value);
+				if (precision !== undefined) {
+					text = text.slice(0, precision);
+				}
+				break;
+			case "%":
+				return "%";
+			default:
+				text = toStringValue(value);
+		}
 
-	if (
-		flags.includes("+") &&
-		"dioufeEgG".includes(kind) &&
-		toNumber(value) >= 0
-	) {
-		text = `+${text}`;
+	if ("difeEgG".includes(kind as string) && !text.startsWith("-")) {
+		if (flags.includes("+")) {
+			text = `+${text}`;
+		} else if (flags.includes(" ")) {
+			text = ` ${text}`;
+		}
 	}
 	if (width !== undefined && text.length < width) {
 		if (flags.includes("-")) {
 			text = text.padEnd(width, " ");
-		} else if (flags.includes("0") && "dioxXufeEgG".includes(kind)) {
-			const negative = text.startsWith("-");
-			const body = negative ? text.slice(1) : text;
-			text =
-				(negative ? "-" : "") + body.padStart(width - (negative ? 1 : 0), "0");
+		} else if (
+			flags.includes("0") &&
+			"dioxXufeEgG".includes(kind as string) &&
+			Number.isFinite(number)
+		) {
+			const sign = /^[-+ ]/.test(text) ? text[0] : "";
+			const body = sign ? text.slice(1) : text;
+			text = sign + body.padStart(width - sign.length, "0");
 		} else {
 			text = text.padStart(width, " ");
 		}
@@ -235,6 +327,43 @@ function splitFields(record: string, separator: string): string[] {
 	);
 }
 
+/**
+ * The input as records, by RS (read after BEGIN, which is where it is set).
+ *
+ * RS was read and ignored: `RS=""` (paragraph mode) counted lines, not
+ * paragraphs (automaticum audit 2026-11-08, readers 21).
+ */
+function splitRecords(input: string, separator: string): string[] {
+	if (separator === "\n") {
+		// Split on "\r\n" before "\n", as the reader and the editor do: a
+		// CRLF file's records otherwise kept their trailing "\r", so a
+		// "$"-anchored rule never matched and "$NF" carried the "\r"
+		// (csf-19). A bare "\n" is still split on for the mixed-EOL files
+		// older releases of these tools produced.
+		const lines = input.split(/\r\n|\n/);
+		if (input.endsWith("\n")) {
+			lines.pop();
+		}
+		return lines;
+	}
+	if (separator === "") {
+		// Paragraphs: one or more blank lines between records, leading and
+		// trailing newlines ignored.
+		const text = input.replace(/\r\n/g, "\n").replace(/^\n+|\n+$/g, "");
+		return text === "" ? [] : text.split(/\n\n+/);
+	}
+	const parts =
+		separator.length === 1
+			? input.split(separator)
+			: input.split(
+					compilePosixRegex(separator, { extended: true, global: true }),
+				);
+	if (parts.length > 0 && parts[parts.length - 1] === "") {
+		parts.pop();
+	}
+	return parts;
+}
+
 export function runAwkProgram(
 	rules: Rule[],
 	input: string,
@@ -261,17 +390,22 @@ export function runAwkProgram(
 	};
 
 	for (const [name, value] of Object.entries(options.variables ?? {})) {
-		state.globals.set(name, looksNumeric(value) ? Number(value) : value);
+		state.globals.set(name, fromInput(value));
 	}
 
-	const getVar = (name: string): Value => state.globals.get(name) ?? "";
+	const getVar = (name: string): Value => state.globals.get(name) ?? UNSET;
 	const setVar = (name: string, value: Value): void => {
 		state.globals.set(name, value);
 	};
 
 	const setRecord = (line: string): void => {
 		state.record = line;
-		state.fields = splitFields(line, toStringValue(getVar("FS")));
+		const separator = toStringValue(getVar("FS"));
+		// In paragraph mode a newline separates fields whatever FS is.
+		state.fields =
+			toStringValue(getVar("RS")) === "" && separator !== " "
+				? line.split("\n").flatMap((part) => splitFields(part, separator))
+				: splitFields(line, separator);
 		setVar("NF", state.fields.length);
 	};
 
@@ -281,13 +415,13 @@ export function runAwkProgram(
 
 	const getField = (index: number): Value => {
 		if (index === 0) {
-			return state.record;
+			return fromInput(state.record);
 		}
 		const value = state.fields[index - 1];
 		if (value === undefined) {
 			return "";
 		}
-		return looksNumeric(value) ? value : value;
+		return fromInput(value);
 	};
 
 	const setField = (index: number, value: Value): void => {
@@ -319,12 +453,10 @@ export function runAwkProgram(
 
 	/** Compare per awk: numerically when both sides look numeric. */
 	const compare = (left: Value, right: Value): number => {
-		const leftNumeric =
-			typeof left === "number" ||
-			(typeof left === "string" && looksNumeric(left));
-		const rightNumeric =
-			typeof right === "number" ||
-			(typeof right === "string" && looksNumeric(right));
+		// Numbers and strnum input compare as numbers; a string constant on
+		// either side makes it a comparison of text.
+		const leftNumeric = typeof left === "number" || left instanceof StrNum;
+		const rightNumeric = typeof right === "number" || right instanceof StrNum;
 		if (leftNumeric && rightNumeric) {
 			const a = toNumber(left);
 			const b = toNumber(right);
@@ -388,7 +520,7 @@ export function runAwkProgram(
 				const array = arrayFor(arrayName);
 				array.clear();
 				parts.forEach((part, at) => {
-					array.set(String(at + 1), part);
+					array.set(String(at + 1), fromInput(part));
 				});
 				return parts.length;
 			}
@@ -520,18 +652,34 @@ export function runAwkProgram(
 				return evaluate(expr.inner);
 			case "var": {
 				if (state.arrays.has(expr.name) && !state.globals.has(expr.name)) {
-					return "";
+					return UNSET;
 				}
 				return getVar(expr.name);
 			}
 			case "field":
 				return getField(Math.trunc(toNumber(evaluate(expr.index))));
-			case "index":
-				return arrayFor(expr.name).get(keyOf(expr.keys)) ?? "";
+			case "index": {
+				// Referring to an element creates it, as in awk: `k in a` is true
+				// afterwards and `length(a)` counts it.
+				const array = arrayFor(expr.name);
+				const key = keyOf(expr.keys);
+				const held = array.get(key);
+				if (held !== undefined) return held;
+				array.set(key, UNSET);
+				return UNSET;
+			}
 			case "in":
-				return arrayFor(expr.array).has(toStringValue(evaluate(expr.key)))
+				return arrayFor(expr.array).has(
+					expr.key.type === "exprList"
+						? keyOf(expr.key.items)
+						: toStringValue(evaluate(expr.key)),
+				)
 					? 1
 					: 0;
+			case "exprList":
+				throw new Error(
+					"A parenthesised list `(a, b)` means something only after `print` or before `in`.",
+				);
 			case "concat":
 				return expr.parts
 					.map((part) =>
@@ -729,7 +877,8 @@ export function runAwkProgram(
 			}
 			case "forIn": {
 				for (const key of [...arrayFor(statement.array).keys()]) {
-					setVar(statement.name, looksNumeric(key) ? key : key);
+					// Subscripts are strings, as in awk.
+					setVar(statement.name, key);
 					try {
 						execute(statement.body);
 					} catch (error) {
@@ -780,16 +929,7 @@ export function runAwkProgram(
 		// A program that is only BEGIN never reads input, which is how
 		// `awk 'BEGIN{print 1+1}'` works with no file at all.
 		if (mainRules.length > 0 || endRules.length > 0) {
-			const hadTrailingNewline = input.endsWith("\n");
-			// Split on "\r\n" before "\n", as the reader and the editor do: a
-			// CRLF file's records otherwise kept their trailing "\r", so a
-			// "$"-anchored rule never matched and "$NF" carried the "\r"
-			// (csf-19). A bare "\n" is still split on for the mixed-EOL files
-			// older releases of these tools produced.
-			const lines = input.split(/\r\n|\n/);
-			if (hadTrailingNewline) {
-				lines.pop();
-			}
+			const lines = splitRecords(input, toStringValue(getVar("RS")));
 			for (const line of lines) {
 				setVar("NR", toNumber(getVar("NR")) + 1);
 				setVar("FNR", toNumber(getVar("FNR")) + 1);

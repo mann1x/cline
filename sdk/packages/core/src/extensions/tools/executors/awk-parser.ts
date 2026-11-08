@@ -293,7 +293,9 @@ export type Expr =
 	| { type: "in"; key: Expr; array: string }
 	| { type: "call"; name: string; args: Expr[] }
 	| { type: "concat"; parts: Expr[] }
-	| { type: "grouping"; inner: Expr };
+	| { type: "grouping"; inner: Expr }
+	/** `(a, b)`: only after `print` or before `in`. */
+	| { type: "exprList"; items: Expr[] };
 
 export type Stmt =
 	| { type: "print"; args: Expr[] }
@@ -462,6 +464,10 @@ class Parser {
 						}
 					}
 					this.inPrintArgs = wasInPrintArgs;
+					// `print (a, b)` is `print a, b`.
+					if (args.length === 1 && args[0]?.type === "exprList") {
+						args.splice(0, 1, ...args[0].items);
+					}
 					if (this.isPunct(">") || this.isPunct(">>")) {
 						throw new Error(
 							"Redirecting output to a file is not supported. Let the program print, and use `sed` or `editor` to write a file.",
@@ -808,14 +814,28 @@ class Parser {
 			return { type: "field", index: this.parsePostfix() };
 		}
 		if (token.kind === "punct" && token.value === "(") {
-			const inner = this.parseExpr();
+			// Inside parentheses `>` compares: `print ($1 > 2)` was refused as
+			// a redirect (automaticum audit 2026-11-08, readers 21).
+			const wasInPrintArgs = this.inPrintArgs;
+			this.inPrintArgs = false;
+			const items = [this.parseExpr()];
+			while (this.isPunct(",")) {
+				this.position += 1;
+				this.skipOptionalNewlines();
+				items.push(this.parseExpr());
+			}
+			this.inPrintArgs = wasInPrintArgs;
 			this.expectPunct(")");
-			return { type: "grouping", inner };
+			return items.length === 1
+				? { type: "grouping", inner: items[0] as Expr }
+				: { type: "exprList", items };
 		}
 		if (token.kind === "builtin") {
 			const args: Expr[] = [];
 			if (this.isPunct("(")) {
 				this.position += 1;
+				const wasInPrintArgs = this.inPrintArgs;
+				this.inPrintArgs = false;
 				if (!this.isPunct(")")) {
 					args.push(this.parseExpr());
 					while (this.isPunct(",")) {
@@ -823,6 +843,7 @@ class Parser {
 						args.push(this.parseExpr());
 					}
 				}
+				this.inPrintArgs = wasInPrintArgs;
 				this.expectPunct(")");
 			}
 			return { type: "call", name: token.value, args };
