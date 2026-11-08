@@ -122,20 +122,48 @@ async function opened<T>(open: Promise<T>): Promise<T> {
 	}
 }
 
+interface TocItem {
+	label: string;
+	id?: string;
+	children?: unknown[];
+}
+
+/**
+ * The table of contents, each entry with the chapter `range` reaches it by.
+ *
+ * Without the number, "Contents: Probe document" read as chapter 1, and
+ * `range: "1"` returned the title page's nothing (readers 28). The first 200
+ * entries are kept; `total` counts every one, so "… N more" is not short.
+ */
 function tocTitles(
-	items: { label: string; children?: unknown[] }[],
+	items: TocItem[],
+	chapterOf: ReadonlyMap<string, number>,
 	depth = 0,
-	out: string[] = [],
-): string[] {
+	out: { titles: string[]; total: number } = { titles: [], total: 0 },
+	parentChapter?: number,
+): { titles: string[]; total: number } {
 	for (const item of items) {
-		if (out.length >= 200) break;
 		const label = String(item.label ?? "").trim();
-		if (label) out.push(`${"  ".repeat(depth)}${label}`);
+		const chapter = item.id !== undefined ? chapterOf.get(item.id) : undefined;
+		if (label) {
+			out.total++;
+			if (out.titles.length < 200) {
+				// Said once per chapter: a section inside its parent's chapter
+				// would only repeat it.
+				const where =
+					chapter !== undefined && chapter !== parentChapter
+						? ` (chapter ${chapter})`
+						: "";
+				out.titles.push(`${"  ".repeat(depth)}${label}${where}`);
+			}
+		}
 		if (Array.isArray(item.children)) {
 			tocTitles(
-				item.children as { label: string; children?: unknown[] }[],
+				item.children as TocItem[],
+				chapterOf,
 				depth + 1,
 				out,
+				chapter ?? parentChapter,
 			);
 		}
 	}
@@ -345,14 +373,20 @@ export async function readEbook(
 		const metadata = book.getMetadata() ?? {};
 		const title = firstString(metadata.title);
 		const author = firstString(metadata.creator ?? metadata.author);
-		const contents = tocTitles(book.getToc() ?? []);
+		const chapterOf = new Map<string, number>();
+		spine.forEach((item, index) => {
+			const id = (item as { id?: string }).id;
+			if (id !== undefined && !chapterOf.has(id)) chapterOf.set(id, index + 1);
+		});
+		const toc = tocTitles((book.getToc() ?? []) as TocItem[], chapterOf);
+		const contents = toc.titles;
 		return {
 			markdown: parts.join("\n\n"),
 			reader,
 			...(title && title !== "Unknown" ? { title } : {}),
 			...(author && author !== "Unknown" ? { author } : {}),
 			units: { name: "chapter", total: spine.length, read },
-			...(contents.length ? { contents } : {}),
+			...(contents.length ? { contents, contentsTotal: toc.total } : {}),
 		};
 	} finally {
 		book.destroy();

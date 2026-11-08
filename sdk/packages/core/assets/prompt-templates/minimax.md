@@ -114,9 +114,9 @@ Output: one entry per pattern. Each entry names the pattern it answers and holds
 
 # tool: fetch_web_content
 
-Fetch content from URLs and analyse it with the provided prompts. Each request includes a URL and a prompt describing what information to extract. Fetch independent URLs together in one call, and call this tool in the same response as other independent tool calls.
+Fetch the text of web pages. Each request includes a URL and a prompt saying what you want from it; the prompt is returned with the page for you to apply, and nothing extracts it for you. Fetch independent URLs together in one call, and call this tool in the same response as other independent tool calls.
 
-Output: one entry per request — each entry names what it answers, then what came back, and a failed entry says that it failed and why. An entry is named by the URL and holds what was extracted from that page for its prompt, as text.
+Output: one entry per request — each entry names what it answers, then what came back, and a failed entry says that it failed and why. An entry is named by the URL and holds the page's text (HTML as plain text, up to 50,000 characters), followed by your prompt. A page that is not text (a PDF, an image) is not shown: download it with `run_commands` and read it with `extract_document`.
 
 # tool: editor
 
@@ -243,11 +243,13 @@ Two ways to ask:
 - `path` — list what is directly inside one directory. Omit to list the workspace root.
 - `pattern` — a glob searched across the whole workspace, e.g. `**/*.html`, `src/**/*.ts`, `**/config.*`. Use this when you know part of a name but not where it lives.
 
-Results are limited to the workspace folders the user opened, and directories the user's settings exclude from search — `node_modules`, `.git`, build output — are left out. A path outside the workspace is refused rather than listed.
+Results are limited to the workspace folders the user opened. A `pattern` search does not enter the directories the user's settings exclude from search — `node_modules`, `.git` and the like — unless the pattern names one (`node_modules/**/package.json`); a `path` listing shows them, marked. A link to a directory is listed as one and searched through. A path outside the workspace is refused rather than listed.
 
 This tells you which files exist, not what is in them. To find files by their contents use `search_codebase`, which reports the line each match is on and is the right way to locate the part of a file worth reading.
 
 Do not run `ls`, `dir`, `find` or `Get-ChildItem` through `run_commands` to look around — this tool is scoped to the workspace and those are not.
+
+Output: one result — for `path`, the directory's entries, directories first with a trailing `/`, files with their size, links with `->` and their target; for `pattern`, the matching paths relative to the workspace, and "more than N" when there were more than were shown.
 
 # tool: browser
 Open a page in a real browser and report what it printed to the console and what it threw. This is how you check that a page works. Do not ask the user whether it works — open it and read the errors yourself. Call shape: `browser(action: string, url?: string, coordinate?: string, text?: string)`.

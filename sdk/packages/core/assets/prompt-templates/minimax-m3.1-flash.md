@@ -164,18 +164,17 @@ The result contains everything the program printed. A program that prints nothin
 
 # tool: fetch_web_content
 
-Fetch and analyze web pages using one request per URL.
+Fetch the text of web pages, one request per URL.
 
 Call shape: `fetch_web_content(requests: [{url, prompt}])`
 
 - `requests` is an array of request objects; a bare URL or bare list of strings is invalid.
 - `url` is the page to fetch.
-- `prompt` describes the information to extract from that page.
+- `prompt` says what you want from that page. It is returned with the page's text for you to apply; nothing extracts it for you.
 
 Use this for documentation, API references, and factual web content. Include independent URLs in one call and issue that call alongside other independent context-gathering calls.
 
-Output: one entry per request, identified by its URL, containing the text extracted from that page for the corresponding prompt. A failed request states that it failed and why.
-
+Output: one entry per request, identified by its URL, containing the page's text (HTML as plain text, up to 50,000 characters), followed by your prompt. A page that is not text (a PDF, an image) is not shown: download it with `run_commands` and read it with `extract_document`. A failed request states that it failed and why.
 {{DEFAULT}}
 
 # tool: editor
@@ -336,9 +335,11 @@ Call shape: `list_files({path?: string, pattern?: string, max_results?: number})
 - `pattern` is a workspace-wide glob such as `**/*.html` or `src/**/*.ts`.
 - `max_results` limits the number of results.
 
-Use this to discover files. Do not use shell `ls`, `dir`, `find`, or `Get-ChildItem`. Results are limited to opened workspace folders and exclude configured directories such as `node_modules`, `.git`, and build output. Paths outside the workspace are refused.
+Use this to discover files. Do not use shell `ls`, `dir`, `find`, or `Get-ChildItem`. Results are limited to opened workspace folders. A `pattern` search skips `node_modules`, `.git` and the user's other search excludes unless the pattern names one; a `path` listing shows them, marked. Paths outside the workspace are refused.
 
 The result tells you which files exist, not their contents. Use `search_codebase` to locate relevant content and report the line to read.
+
+Output: one result — for `path`, the directory's entries, directories first with a trailing `/`, files with their size, links with `->` and their target; for `pattern`, the matching paths relative to the workspace, and "more than N" when there were more than were shown.
 
 # tool: browser
 

@@ -118,6 +118,13 @@ describe("renderMatches", () => {
 		expect(report).not.toContain(ROOT);
 	});
 
+	it("says there are more than the limit, not a count it does not have", () => {
+		const paths = Array.from({ length: 11 }, (_, i) => join(ROOT, `f${i}.log`));
+		const report = renderMatches("**/*.log", paths, [ROOT], 10);
+		expect(report).toContain("more than 10 matches, first 10 shown");
+		expect(report).not.toContain("11 matches");
+	});
+
 	it("treats no matches as an answer rather than a failure", () => {
 		// The distinction that stops a retry loop: a search that found nothing
 		// will find nothing again. It now says so by naming the ground it
@@ -306,15 +313,61 @@ describe("the filesystem-backed lister", () => {
 		expect(byName.get("index.ts")?.size).toBeGreaterThan(0);
 	});
 
-	it("leaves node_modules out of a listing and a search alike", async () => {
+	// Listed and marked, not dropped: dropped, a folder holding only .git was
+	// "empty" and node_modules did not exist (automaticum audit 2026-11-08,
+	// readers 11, 28). A search still passes it by -- unless it names it.
+	it("lists node_modules as excluded, and searches it only when the pattern names it", async () => {
 		const dir = await workspace();
 		const lister = createLocalWorkspaceLister(dir);
 
-		const names = (await lister.readDirectory(dir)).map((entry) => entry.name);
-		expect(names).not.toContain("node_modules");
+		const entries = await lister.readDirectory(dir);
+		expect(
+			entries.find((entry) => entry.name === "node_modules"),
+		).toMatchObject({
+			kind: "directory",
+			excluded: true,
+		});
 
 		const found = await lister.findFiles("**/*.ts", 100);
 		expect(found.some((file) => file.includes("node_modules"))).toBe(false);
+		const named = await lister.findFiles("node_modules/**/*.ts", 100);
+		expect(named.some((file) => file.includes("node_modules"))).toBe(true);
+	});
+
+	it("reads ./ in a pattern as the workspace root", async () => {
+		const dir = await workspace();
+		const lister = createLocalWorkspaceLister(dir);
+		expect(await lister.findFiles("./*.ts", 100)).toEqual(
+			await lister.findFiles("*.ts", 100),
+		);
+		expect((await lister.findFiles("./*.ts", 100)).length).toBeGreaterThan(0);
+	});
+
+	it("lists a link to a directory as a directory, and searches through it", async () => {
+		const dir = await workspace();
+		await fs.mkdir(path.join(dir, "real", "deep"), { recursive: true });
+		await fs.writeFile(path.join(dir, "real", "deep", "target.md"), "x");
+		await fs.symlink(path.join(dir, "real"), path.join(dir, "linkdir"));
+		// And a loop, which must not hang the walk.
+		await fs.symlink(
+			path.join(dir, "real"),
+			path.join(dir, "real", "deep", "up"),
+		);
+		const lister = createLocalWorkspaceLister(dir);
+
+		const link = (await lister.readDirectory(dir)).find(
+			(entry) => entry.name === "linkdir",
+		);
+		expect(link).toMatchObject({ kind: "directory" });
+		expect(link?.link).toContain("real");
+		expect(renderDirectory(dir, link ? [link] : [], 10)).toContain(
+			"linkdir/ -> ",
+		);
+
+		const found = await lister.findFiles("linkdir/**/*.md", 100);
+		expect(found.map((file) => path.relative(dir, file))).toContain(
+			path.join("linkdir", "deep", "target.md"),
+		);
 	});
 
 	it("finds files at any depth, and stops at the limit asked for", async () => {

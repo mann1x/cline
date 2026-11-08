@@ -124,7 +124,7 @@ describe("extract_document", () => {
 		const result = String(
 			await run({ path: place("scan-ocrd.pdf"), range: "2" }),
 		);
-		expect(result).toContain("2 pages; read pages 2.");
+		expect(result).toContain("2 pages; read page 2.");
 		expect(result).not.toContain("## Page 1");
 		expect(
 			existsSync(join(workspace, ".cline/extracted/scan-ocrd/scan-ocrd.2.md")),
@@ -280,7 +280,7 @@ describe("extract_document", () => {
 		const result = String(
 			await run({ path: place("op-test.pptx"), range: "1" }),
 		);
-		expect(result).toMatch(/\d+ slides; read slides 1\./);
+		expect(result).toMatch(/\d+ slides; read slide 1\./);
 	});
 
 	it("returns plain text when asked", async () => {

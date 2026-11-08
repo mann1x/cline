@@ -177,11 +177,11 @@ Perform regex pattern searches across the codebase. This is the primary tool for
 
 # tool: fetch_web_content
 
-Fetch content from URLs and analyze them using the provided prompts. Use for retrieving documentation, API references, or any web content.
+Fetch the text of web pages. Use for retrieving documentation, API references, or any web content.
 
 - **Parallelism**: Fetch independent URLs together in one call by populating the `requests` array.
-- **Arguments**: `requests` is an array of objects: `{url: string, prompt: string}`. The prompt describes what to extract.
-- **Output**: One entry per request, in the order requested. Each entry is named by the URL and holds what was extracted from that page for your prompt, as text. A failed entry says that it failed and why.
+- **Arguments**: `requests` is an array of objects: `{url: string, prompt: string}`. The prompt says what you want from the page; it is returned with the page's text for you to apply, and nothing extracts it for you.
+- **Output**: One entry per request, in the order requested. Each entry is named by the URL and holds the page's text (HTML as plain text, up to 50,000 characters), followed by your prompt. A page that is not text (a PDF, an image) is not shown: download it with `run_commands` and read it with `extract_document`. A failed entry says that it failed and why.
 
 # tool: editor
 
@@ -300,7 +300,7 @@ List files in the workspace. Use this rather than `ls`, `dir` or `find` through 
 
 - **Usage**: Call it whenever you need to know what exists, or where a file lives, before reading anything.
 - **Arguments**: `path` is one directory to list (absolute, or relative to the workspace root; omit for the root). `pattern` is a glob searched workspace-wide, e.g. `**/*.html` — given this, `path` is ignored. `max_results` caps the listing.
-- **Scope**: Only the folders the user opened. A path outside them is refused. `node_modules`, `.git` and build output are excluded automatically.
+- **Scope**: Only the folders the user opened. A path outside them is refused. A `pattern` search skips `node_modules`, `.git` and the user's other search excludes unless the pattern names one; a `path` listing shows them, marked.
 - **Output**: Directories first with a trailing `/`, then files with sizes.
 
 This finds files by name. To find them by their contents, use `search_codebase`.

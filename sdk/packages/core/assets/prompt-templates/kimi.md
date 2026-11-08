@@ -93,9 +93,9 @@ Use this for text patterns. For questions about a symbol — where it is defined
 
 # tool: fetch_web_content
 
-Fetch web pages and extract information using a prompt. Each request needs a `url` and a `prompt` describing what to extract. Batch independent URLs into one call, together with other independent tool calls in the same response.
+Fetch the text of web pages. Each request needs a `url` and a `prompt` saying what you want from it; the prompt is returned with the page for you to apply, nothing extracts it for you. Batch independent URLs into one call, together with other independent tool calls in the same response.
 
-Output: one entry per request — each entry names what it answers, then what came back, and a failed entry says that it failed and why. An entry is named by the URL and holds what was extracted from that page for your prompt, as text.
+Output: one entry per request — each entry names what it answers, then what came back, and a failed entry says that it failed and why. An entry is named by the URL and holds the page's text (HTML as plain text, up to 50,000 characters), followed by your prompt. A page that is not text (a PDF, an image) is not shown: download it with `run_commands` and read it with `extract_document`.
 
 # tool: editor
 
@@ -198,7 +198,7 @@ How to ask:
 - `pattern` — a glob searched across the workspace, e.g. `**/*.html` or `**/config.*`. Use it when you know part of a name but not where it lives. Given this, `path` is ignored.
 - `max_results` — caps the listing.
 
-The excludes in the user's settings apply, so `node_modules`, `.git` and build output stay out of the way. A path outside the workspace is refused rather than listed.
+A `pattern` search skips `node_modules`, `.git` and the user's other search excludes unless the pattern names one; a `path` listing shows them, marked. A path outside the workspace is refused rather than listed.
 
 Output is directories first with a trailing `/`, then files with their sizes. This tells you what files are called, not what is in them — for that use `search_codebase`.
 

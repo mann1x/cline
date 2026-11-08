@@ -75,15 +75,39 @@ function jpegLength(data: Uint8Array, start: number): number | undefined {
 	return undefined;
 }
 
+async function loadCfb(): Promise<typeof CFB> {
+	// CommonJS: its functions are on the default export under Node's ESM
+	// loader, and on the namespace under a bundler.
+	const loaded = await import("cfb");
+	return ((loaded as unknown as { default?: typeof CFB }).default ??
+		loaded) as typeof CFB;
+}
+
+/**
+ * Whether a compound file is a password-protected .docx, .xlsx or .pptx.
+ *
+ * Encrypting an OOXML file wraps it in the same container as a 97-2003 one,
+ * so the bytes and often the name both say "legacy"; the old reader then
+ * reported "WordDocument stream not found" about a file that only needed its
+ * password (automaticum audit 2026-11-08, readers 28).
+ */
+export async function isEncryptedOoxml(data: Uint8Array): Promise<boolean> {
+	const cfb = await loadCfb();
+	try {
+		const container = cfb.read(Buffer.from(data), { type: "buffer" });
+		return container.FileIndex.some(
+			(entry) => entry.type === 2 && entry.name === "EncryptedPackage",
+		);
+	} catch {
+		return false;
+	}
+}
+
 /** Complete PNG and JPEG images inside a compound file's streams. */
 export async function scanCompoundImages(
 	data: Uint8Array,
 ): Promise<Uint8Array[]> {
-	// CommonJS: its functions are on the default export under Node's ESM
-	// loader, and on the namespace under a bundler.
-	const loaded = await import("cfb");
-	const cfb = ((loaded as unknown as { default?: typeof CFB }).default ??
-		loaded) as typeof CFB;
+	const cfb = await loadCfb();
 	let container: CFB.CFB$Container;
 	try {
 		container = cfb.read(Buffer.from(data), { type: "buffer" });
@@ -169,9 +193,34 @@ export async function readLegacyOffice(
 		}
 	}
 
+	// Slides and sheets are the `## ` sections office_oxide writes, so a range
+	// selects among them as it does in a .pptx or .xlsx. It used to be
+	// "ignored: one flow of text" above output headed "## Slide 1"
+	// (automaticum audit 2026-11-08, readers 28).
+	let units: DocumentReadResult["units"];
+	if (format === "ppt" || format === "xls") {
+		const parts = markdown.split(/^(?=## )/m);
+		const preamble = parts[0]?.startsWith("## ") ? "" : (parts.shift() ?? "");
+		const read: number[] = [];
+		const kept: string[] = [];
+		parts.forEach((part, index) => {
+			if (!options.selects || options.selects(index + 1)) {
+				read.push(index + 1);
+				kept.push(part);
+			}
+		});
+		units = {
+			name: format === "ppt" ? "slide" : "sheet",
+			total: parts.length,
+			read,
+		};
+		markdown = [preamble, ...kept].join("").trim();
+	}
+
 	return {
 		markdown,
 		reader: "office_oxide",
+		...(units ? { units } : {}),
 		...(notes.length ? { notes } : {}),
 	};
 }

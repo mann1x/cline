@@ -131,7 +131,7 @@ function chooseEngine(input: PlanInput): Engine {
 		kind: "tesseract",
 		languages: languages.length ? languages : ["eng"],
 		fallback:
-			"No vision model is configured and this model does not take images, so tesseract read the pages instead.",
+			"no vision model is configured and this model does not take images",
 	};
 }
 
@@ -148,6 +148,8 @@ export function planRecognition(input: PlanInput): RecognitionPlan {
 	const failed: string[] = [];
 	let reader: Promise<TesseractReader> | undefined;
 	let used = 0;
+	// Pages recognition was asked about, read or not.
+	const attempted = new Set<number>();
 
 	const limit =
 		input.pageLimit !== undefined
@@ -165,6 +167,7 @@ export function planRecognition(input: PlanInput): RecognitionPlan {
 					page: number,
 					images: readonly PageImage[],
 				): Promise<RecognizedText | undefined> => {
+					attempted.add(page);
 					if (used >= limit) {
 						skipped.push(page);
 						return undefined;
@@ -229,8 +232,10 @@ export function planRecognition(input: PlanInput): RecognitionPlan {
 				(page) => !recognizedPages.includes(page),
 			);
 			if (engine.kind === "none") {
+				// "No text layer" was said of a photo page whose caption was
+				// printed right below (readers 28).
 				notes.push(
-					`Scanned pages ${formatUnits(scannedPages)}: an image of text with no text layer, so their words are not in this text. ${engine.reason}`,
+					`Scanned pages ${formatUnits(scannedPages)}: mostly a picture, with little or no text layer, so any words inside the picture are not in this text. ${engine.reason}`,
 				);
 				return notes;
 			}
@@ -243,8 +248,15 @@ export function planRecognition(input: PlanInput): RecognitionPlan {
 					`Scanned pages ${formatUnits(recognizedPages)}: their text was recognized from the page image by ${by}, and may contain recognition errors.`,
 				);
 			}
-			if (engine.kind === "tesseract" && engine.fallback)
-				notes.push(engine.fallback);
+			// "So tesseract read the pages" was said when tesseract failed or
+			// found nothing (readers d2): what it did is said by the outcome.
+			if (engine.kind === "tesseract" && engine.fallback && attempted.size) {
+				notes.push(
+					recognizedPages.length
+						? `Tesseract was used because ${engine.fallback}.`
+						: `Tesseract was tried because ${engine.fallback}.`,
+				);
+			}
 			if (engine.kind === "self" && attachments.length) {
 				notes.push(
 					`Scanned pages ${formatUnits(attachments.map((a) => a.page))} are attached below as images (${engine.why}): read their text from them.`,
@@ -258,8 +270,16 @@ export function planRecognition(input: PlanInput): RecognitionPlan {
 			const rest = unread.filter(
 				(page) =>
 					!skipped.includes(page) &&
+					attempted.has(page) &&
 					!(engine.kind === "self" && attachments.some((a) => a.page === page)),
 			);
+			// Never tried is not "no text could be recognized" (readers 12).
+			const untried = unread.filter((page) => !attempted.has(page));
+			if (untried.length) {
+				notes.push(
+					`Scanned pages ${formatUnits(untried)}: recognition was not tried, because no picture this reader could take from them is large enough to be the page; their words are not in this text.`,
+				);
+			}
 			if (rest.length) {
 				notes.push(
 					`Scanned pages ${formatUnits(rest)}: no text could be recognized${failed.length ? ` (${failed.slice(0, 3).join("; ")})` : ""}.`,

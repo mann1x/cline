@@ -287,6 +287,8 @@ export interface DocumentReadResult {
 	units?: { name: UnitName; total: number; read: number[] };
 	/** Chapter titles for an ebook, in reading order. */
 	contents?: string[];
+	/** Every contents entry, of which `contents` holds the first 200. */
+	contentsTotal?: number;
 	/** Pages whose text is an image of text, for OCR. */
 	scannedPages?: number[];
 	/** Scanned pages whose text was recognized here, by `ReadOptions.recognize`. */
@@ -295,6 +297,8 @@ export interface DocumentReadResult {
 	ocrLayerPages?: number[];
 	/** Pages drawn as shapes: no text and no pictures to read. */
 	vectorPages?: number[];
+	/** PDF pages with no text and no picture found on them. */
+	emptyPages?: number[];
 	notes?: string[];
 }
 

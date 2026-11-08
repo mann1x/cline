@@ -902,10 +902,11 @@ export function createWebFetchTool(
 		name: "fetch_web_content",
 		readOnly: true,
 		description:
-			"Fetch content from URLs and analyze them using the provided prompts. " +
+			"Fetch the text of web pages. " +
 			"Use for retrieving documentation, API references, or any web content. " +
-			"Each request includes a URL and a prompt describing what information to extract. Fetch independent URLs together in one call, and call this tool in the same response as other independent tool calls. " +
-			`Output: one entry per request — ${TOOL_RESULT_ENVELOPE} An entry is named by the URL and holds what was extracted from that page for your prompt, as text.`,
+			"Each request includes a URL and a prompt saying what you want from it; the prompt is returned with the page so you can apply it — nothing extracts it for you. Fetch independent URLs together in one call, and call this tool in the same response as other independent tool calls. " +
+			"HTML comes back as text, decoded by the page's charset; a page that is not text (a PDF, an image) is not shown — download it with run_commands and read it with extract_document. " +
+			`Output: one entry per request — ${TOOL_RESULT_ENVELOPE} An entry is named by the URL and holds the page's text, up to 50,000 characters, followed by your prompt.`,
 		inputSchema: zodToJsonSchema(FetchWebContentInputSchema),
 		timeoutMs: timeoutMs * 2,
 		retryable: true,

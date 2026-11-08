@@ -167,13 +167,15 @@ export function describeReaderExit(
 	stderr: string,
 	progress: ReadProgress | undefined,
 ): string {
+	// Out of memory only when something says so. Every SIGKILL and SIGABRT
+	// was "ran out of memory": a wasm assertion is a decoder that met a
+	// document it cannot handle, and a kill can come from outside
+	// (automaticum audit 2026-11-08, readers 28).
 	const outOfMemory =
-		/out of memory|Allocation failed|Cannot allocate|std::bad_alloc/i.test(
+		/out of memory|Allocation failed|Cannot allocate|std::bad_alloc|heap limit/i.test(
 			stderr,
-		) ||
-		code === 134 ||
-		signal === "SIGABRT" ||
-		signal === "SIGKILL";
+		);
+	const assertion = /Assertion failed|RuntimeError|unreachable/i.test(stderr);
 	const how = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
 	const last = stderr
 		.trim()
@@ -182,11 +184,16 @@ export function describeReaderExit(
 		.slice(-2)
 		.join(" | ")
 		.slice(0, 400);
+	const why = outOfMemory
+		? ": it ran out of memory. The document is too large to decode here"
+		: assertion
+			? ": the decoder failed an internal check on this document, which is damaged or uses something the decoder cannot read"
+			: signal === "SIGKILL"
+				? ": it was killed from outside — the system does that when memory runs out, so a very large document is the likely cause, but nothing here says so"
+				: "";
 	return (
 		`the reader process ended${where(progress)} without an answer (${how})` +
-		(outOfMemory
-			? ": it ran out of memory. The document is too large to decode here"
-			: "") +
+		why +
 		`. The session and the rest of this call are unaffected.${last ? ` Its last words: ${last}` : ""}`
 	);
 }

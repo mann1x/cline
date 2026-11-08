@@ -26,7 +26,7 @@ export interface ExtractedImage {
 	/** What the vision model saw in it, when descriptions were asked for. */
 	description?: string;
 	/**
-	 * Set for a format no model can view (EMF, WMF, PICT, TIFF, BMP): the file is
+	 * Set for a format no model can view (EMF, WMF, PICT, TIFF, BMP, JPEG 2000, …): the file is
 	 * kept, but it is not a picture anyone downstream can look at as it is.
 	 */
 	notViewable?: boolean;
@@ -52,7 +52,19 @@ const EXTENSIONS: Record<string, string> = {
 	"image/emf": "emf",
 	"image/wmf": "wmf",
 	"image/x-pict": "pict",
+	"image/jp2": "jp2",
+	"image/heic": "heic",
+	"image/avif": "avif",
 };
+
+/**
+ * What to call an image's format in a sentence: the extension it was saved
+ * with, or its media type when it has none of its own.
+ */
+export function formatName(mediaType: string): string {
+	const extension = EXTENSIONS[mediaType];
+	return extension ? extension.toUpperCase() : mediaType;
+}
 
 /**
  * The media type of an image, from its first bytes.
@@ -71,6 +83,13 @@ export function sniffImageType(data: Uint8Array): string | undefined {
 		return "image/webp";
 	}
 	if (at(0, 0x42, 0x4d)) return "image/bmp";
+	// JPEG 2000, as a JP2 file or a bare codestream.
+	if (
+		at(0, 0x00, 0x00, 0x00, 0x0c, 0x6a, 0x50, 0x20, 0x20) ||
+		at(0, 0xff, 0x4f, 0xff, 0x51)
+	) {
+		return "image/jp2";
+	}
 	if (at(0, 0x49, 0x49, 0x2a, 0x00) || at(0, 0x4d, 0x4d, 0x00, 0x2a)) {
 		return "image/tiff";
 	}

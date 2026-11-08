@@ -245,16 +245,16 @@ Output: one result, named `awk:` followed by the program, holding everything the
 
 # tool: fetch_web_content
 
-Fetches web pages, such as documentation, API references or changelogs, and pulls out of each one what you ask for.
+Fetches web pages, such as documentation, API references or changelogs, and returns the text of each.
 
 {"requests": [{"url": "https://example.com/docs/config", "prompt": "List every option under `server` with its default value"}]}
 
 - `requests`: an array with one entry per page. Each entry pairs a `url` with a `prompt`. A bare `{url, prompt}` outside the array is rejected.
-- `prompt`: what to pull out of that page. You get back the answer to this prompt, not the page, so ask for the specific thing you need.
+- `prompt`: what you want from that page. Nothing answers it for you: it comes back after the page's text, as a reminder of what to look for in it.
 
 Fetch independent URLs in one call, alongside any other independent calls in the same response.
 
-Output: one entry per request, in the order sent, each named by its URL. An entry holds the text extracted from that page for your prompt. A page that could not be fetched says it failed and why, and the other entries are unaffected.
+Output: one entry per request, in the order sent, each named by its URL. An entry holds the page's text, decoded by its charset and cut at 50,000 characters, then your prompt. A page that is not text, such as a PDF or an image, is not shown: download it with `run_commands` and read it with `extract_document`. A page that could not be fetched says it failed and why, and the other entries are unaffected.
 
 # tool: editor
 

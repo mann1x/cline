@@ -48,34 +48,345 @@ export interface WebFetchExecutorOptions {
 }
 
 /**
- * Extract text content from HTML
- * Simple implementation - strips tags and normalizes whitespace
+ * HTML 4's named character references, as code points: `&eacute;` and the
+ * rest of Latin-1 were missing, and a French page came back with them
+ * written out.
  */
-function htmlToText(html: string): string {
-	return (
-		html
-			// Remove script and style elements
-			.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-			.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-			// Remove HTML comments
-			.replace(/<!--[\s\S]*?-->/g, "")
-			// Replace block elements with newlines
-			.replace(/<(p|div|br|hr|h[1-6]|li|tr)[^>]*>/gi, "\n")
-			// Remove all remaining tags
-			.replace(/<[^>]+>/g, " ")
-			// Decode HTML entities
-			.replace(/&nbsp;/g, " ")
-			.replace(/&amp;/g, "&")
-			.replace(/&lt;/g, "<")
-			.replace(/&gt;/g, ">")
-			.replace(/&quot;/g, '"')
-			.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
-			// Normalize whitespace
-			.replace(/\s+/g, " ")
-			.replace(/\n\s+/g, "\n")
-			.replace(/\n{3,}/g, "\n\n")
-			.trim()
+const NAMED_ENTITIES: Record<string, number> = {
+	quot: 0x22,
+	amp: 0x26,
+	lt: 0x3c,
+	gt: 0x3e,
+	nbsp: 0xa0,
+	iexcl: 0xa1,
+	cent: 0xa2,
+	pound: 0xa3,
+	curren: 0xa4,
+	yen: 0xa5,
+	brvbar: 0xa6,
+	sect: 0xa7,
+	uml: 0xa8,
+	copy: 0xa9,
+	ordf: 0xaa,
+	laquo: 0xab,
+	not: 0xac,
+	shy: 0xad,
+	reg: 0xae,
+	macr: 0xaf,
+	deg: 0xb0,
+	plusmn: 0xb1,
+	sup2: 0xb2,
+	sup3: 0xb3,
+	acute: 0xb4,
+	micro: 0xb5,
+	para: 0xb6,
+	middot: 0xb7,
+	cedil: 0xb8,
+	sup1: 0xb9,
+	ordm: 0xba,
+	raquo: 0xbb,
+	frac14: 0xbc,
+	frac12: 0xbd,
+	frac34: 0xbe,
+	iquest: 0xbf,
+	Agrave: 0xc0,
+	Aacute: 0xc1,
+	Acirc: 0xc2,
+	Atilde: 0xc3,
+	Auml: 0xc4,
+	Aring: 0xc5,
+	AElig: 0xc6,
+	Ccedil: 0xc7,
+	Egrave: 0xc8,
+	Eacute: 0xc9,
+	Ecirc: 0xca,
+	Euml: 0xcb,
+	Igrave: 0xcc,
+	Iacute: 0xcd,
+	Icirc: 0xce,
+	Iuml: 0xcf,
+	ETH: 0xd0,
+	Ntilde: 0xd1,
+	Ograve: 0xd2,
+	Oacute: 0xd3,
+	Ocirc: 0xd4,
+	Otilde: 0xd5,
+	Ouml: 0xd6,
+	times: 0xd7,
+	Oslash: 0xd8,
+	Ugrave: 0xd9,
+	Uacute: 0xda,
+	Ucirc: 0xdb,
+	Uuml: 0xdc,
+	Yacute: 0xdd,
+	THORN: 0xde,
+	szlig: 0xdf,
+	agrave: 0xe0,
+	aacute: 0xe1,
+	acirc: 0xe2,
+	atilde: 0xe3,
+	auml: 0xe4,
+	aring: 0xe5,
+	aelig: 0xe6,
+	ccedil: 0xe7,
+	egrave: 0xe8,
+	eacute: 0xe9,
+	ecirc: 0xea,
+	euml: 0xeb,
+	igrave: 0xec,
+	iacute: 0xed,
+	icirc: 0xee,
+	iuml: 0xef,
+	eth: 0xf0,
+	ntilde: 0xf1,
+	ograve: 0xf2,
+	oacute: 0xf3,
+	ocirc: 0xf4,
+	otilde: 0xf5,
+	ouml: 0xf6,
+	divide: 0xf7,
+	oslash: 0xf8,
+	ugrave: 0xf9,
+	uacute: 0xfa,
+	ucirc: 0xfb,
+	uuml: 0xfc,
+	yacute: 0xfd,
+	thorn: 0xfe,
+	yuml: 0xff,
+	OElig: 0x152,
+	oelig: 0x153,
+	Scaron: 0x160,
+	scaron: 0x161,
+	Yuml: 0x178,
+	fnof: 0x192,
+	circ: 0x2c6,
+	tilde: 0x2dc,
+	Alpha: 0x391,
+	Beta: 0x392,
+	Gamma: 0x393,
+	Delta: 0x394,
+	Epsilon: 0x395,
+	Zeta: 0x396,
+	Eta: 0x397,
+	Theta: 0x398,
+	Iota: 0x399,
+	Kappa: 0x39a,
+	Lambda: 0x39b,
+	Mu: 0x39c,
+	Nu: 0x39d,
+	Xi: 0x39e,
+	Omicron: 0x39f,
+	Pi: 0x3a0,
+	Rho: 0x3a1,
+	Sigma: 0x3a3,
+	Tau: 0x3a4,
+	Upsilon: 0x3a5,
+	Phi: 0x3a6,
+	Chi: 0x3a7,
+	Psi: 0x3a8,
+	Omega: 0x3a9,
+	alpha: 0x3b1,
+	beta: 0x3b2,
+	gamma: 0x3b3,
+	delta: 0x3b4,
+	epsilon: 0x3b5,
+	zeta: 0x3b6,
+	eta: 0x3b7,
+	theta: 0x3b8,
+	iota: 0x3b9,
+	kappa: 0x3ba,
+	lambda: 0x3bb,
+	mu: 0x3bc,
+	nu: 0x3bd,
+	xi: 0x3be,
+	omicron: 0x3bf,
+	pi: 0x3c0,
+	rho: 0x3c1,
+	sigmaf: 0x3c2,
+	sigma: 0x3c3,
+	tau: 0x3c4,
+	upsilon: 0x3c5,
+	phi: 0x3c6,
+	chi: 0x3c7,
+	psi: 0x3c8,
+	omega: 0x3c9,
+	thetasym: 0x3d1,
+	upsih: 0x3d2,
+	piv: 0x3d6,
+	ensp: 0x2002,
+	emsp: 0x2003,
+	thinsp: 0x2009,
+	zwnj: 0x200c,
+	zwj: 0x200d,
+	lrm: 0x200e,
+	rlm: 0x200f,
+	ndash: 0x2013,
+	mdash: 0x2014,
+	lsquo: 0x2018,
+	rsquo: 0x2019,
+	sbquo: 0x201a,
+	ldquo: 0x201c,
+	rdquo: 0x201d,
+	bdquo: 0x201e,
+	dagger: 0x2020,
+	Dagger: 0x2021,
+	bull: 0x2022,
+	hellip: 0x2026,
+	permil: 0x2030,
+	prime: 0x2032,
+	Prime: 0x2033,
+	lsaquo: 0x2039,
+	rsaquo: 0x203a,
+	oline: 0x203e,
+	frasl: 0x2044,
+	euro: 0x20ac,
+	image: 0x2111,
+	weierp: 0x2118,
+	real: 0x211c,
+	trade: 0x2122,
+	alefsym: 0x2135,
+	larr: 0x2190,
+	uarr: 0x2191,
+	rarr: 0x2192,
+	darr: 0x2193,
+	harr: 0x2194,
+	crarr: 0x21b5,
+	lArr: 0x21d0,
+	uArr: 0x21d1,
+	rArr: 0x21d2,
+	dArr: 0x21d3,
+	hArr: 0x21d4,
+	forall: 0x2200,
+	part: 0x2202,
+	exist: 0x2203,
+	empty: 0x2205,
+	nabla: 0x2207,
+	isin: 0x2208,
+	notin: 0x2209,
+	ni: 0x220b,
+	prod: 0x220f,
+	sum: 0x2211,
+	minus: 0x2212,
+	lowast: 0x2217,
+	radic: 0x221a,
+	prop: 0x221d,
+	infin: 0x221e,
+	ang: 0x2220,
+	and: 0x2227,
+	or: 0x2228,
+	cap: 0x2229,
+	cup: 0x222a,
+	int: 0x222b,
+	there4: 0x2234,
+	sim: 0x223c,
+	cong: 0x2245,
+	asymp: 0x2248,
+	ne: 0x2260,
+	equiv: 0x2261,
+	le: 0x2264,
+	ge: 0x2265,
+	sub: 0x2282,
+	sup: 0x2283,
+	nsub: 0x2284,
+	sube: 0x2286,
+	supe: 0x2287,
+	oplus: 0x2295,
+	otimes: 0x2297,
+	perp: 0x22a5,
+	sdot: 0x22c5,
+	lceil: 0x2308,
+	rceil: 0x2309,
+	lfloor: 0x230a,
+	rfloor: 0x230b,
+	lang: 0x2329,
+	rang: 0x232a,
+	loz: 0x25ca,
+	spades: 0x2660,
+	clubs: 0x2663,
+	hearts: 0x2665,
+	diams: 0x2666,
+	apos: 0x27,
+};
+
+/**
+ * Decode character references in one pass, so `&amp;lt;` is the text
+ * `&lt;` -- decoded entity by entity it became `<`, and `&#x27;` or an emoji
+ * above U+FFFF was not decoded at all (automaticum audit 2026-11-08,
+ * readers 28).
+ */
+export function decodeEntities(text: string): string {
+	return text.replace(
+		/&(#[xX][0-9a-fA-F]+|#\d+|[A-Za-z][A-Za-z0-9]*);/g,
+		(whole, body: string) => {
+			if (body.startsWith("#")) {
+				const code =
+					body[1] === "x" || body[1] === "X"
+						? Number.parseInt(body.slice(2), 16)
+						: Number.parseInt(body.slice(1), 10);
+				return Number.isFinite(code) && code > 0 && code <= 0x10ffff
+					? String.fromCodePoint(code)
+					: whole;
+			}
+			// Case matters (`&Eacute;` is not `&eacute;`); `&AMP;` and the like
+			// are accepted by browsers, so lower case is the fallback.
+			const code = NAMED_ENTITIES[body] ?? NAMED_ENTITIES[body.toLowerCase()];
+			return code === undefined ? whole : String.fromCodePoint(code);
+		},
 	);
+}
+
+/** A tag, with `>` inside a quoted attribute value kept inside it. */
+const TAG = /<\/?[A-Za-z!?][^>"']*(?:(?:"[^"]*"|'[^']*')[^>"']*)*>/g;
+
+/** Elements that start a new line in the text. */
+const BLOCK_TAG =
+	/<\/?(p|div|br|hr|h[1-6]|li|tr|table|ul|ol|dl|dt|dd|pre|blockquote|section|article|header|footer|nav|aside|main|figure|figcaption|form)\b[^>"']*(?:(?:"[^"]*"|'[^']*')[^>"']*)*>/gi;
+
+/**
+ * Extract text content from HTML: tags stripped, block elements as line
+ * breaks, `<pre>` kept as written, entities decoded once.
+ */
+export function htmlToText(html: string): string {
+	const preserved: string[] = [];
+	const body = html
+		// Remove script and style elements
+		.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+		.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
+		// Remove HTML comments
+		.replace(/<!--[\s\S]*?-->/g, "")
+		// <pre> keeps its line breaks and indentation, which the whitespace
+		// collapse below flattened into one line.
+		.replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, (_whole, inner: string) => {
+			preserved.push(decodeEntities(inner.replace(TAG, "")));
+			return `\n\uE000${preserved.length - 1}\uE000\n`;
+		})
+		.replace(BLOCK_TAG, "\n")
+		.replace(TAG, " ");
+	return decodeEntities(body)
+		.split("\n")
+		.map((line) => line.replace(/[ \t\r\f\v\u00a0]+/g, " ").trim())
+		.join("\n")
+		.replace(/\n{3,}/g, "\n\n")
+		.replace(
+			/\uE000(\d+)\uE000/g,
+			(_whole, at: string) => preserved[Number(at)] ?? "",
+		)
+		.trim();
+}
+
+/** Media types whose body is text, and worth decoding as such. */
+const TEXT_TYPE =
+	/^(text\/|application\/(json|xml|xhtml\+xml|javascript|x-javascript|ecmascript|ld\+json|[\w.+-]*\+(xml|json))|image\/svg\+xml)/i;
+
+/** The charset a response declares, in its header or in an HTML meta tag. */
+function declaredCharset(
+	contentType: string,
+	head: Uint8Array,
+): string | undefined {
+	const fromHeader = /charset\s*=\s*"?([\w.:-]+)/i.exec(contentType)?.[1];
+	if (fromHeader) return fromHeader;
+	const sniff = new TextDecoder("latin1").decode(head.subarray(0, 2048));
+	return /<meta[^>]+charset\s*=\s*["']?([\w.:-]+)/i.exec(sniff)?.[1];
 }
 
 /**
@@ -129,7 +440,13 @@ export function createWebFetchExecutor(
 
 		// Create abort controller for timeout
 		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), timeoutMs);
+		// Which of the two ended it: a cancel was reported as "timed out after
+		// 5000ms" one second in (readers 28).
+		let timedOut = false;
+		const timeout = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, timeoutMs);
 		let contextAbortHandler: (() => void) | undefined;
 
 		// Combine with context abort signal
@@ -202,8 +519,31 @@ export function createWebFetchExecutor(
 				offset += chunk.length;
 			}
 
-			// Decode as text
-			const text = new TextDecoder("utf-8").decode(buffer);
+			// Not text: a PDF or an image decoded as UTF-8 is noise the model
+			// then reasons about (readers 28).
+			if (contentType !== "" && !TEXT_TYPE.test(contentType.trim())) {
+				return [
+					`URL: ${url}`,
+					`Content-Type: ${contentType}`,
+					`Size: ${totalSize} bytes`,
+					"",
+					`This is not a text page (${contentType.split(";")[0]}), so its content is not shown. To read a document, download it with run_commands (for example \`curl -sSL -o /tmp/download.pdf <url>\`) and open it with extract_document.`,
+				].join("\n");
+			}
+
+			// Decode by the charset the response declares: a Latin-1 page came
+			// back with U+FFFD for every accented letter (readers 28).
+			const charset = declaredCharset(contentType, buffer) ?? "utf-8";
+			let text: string;
+			try {
+				// Bun types the label as its known encodings; an unknown one throws
+				// and falls back below.
+				text = new TextDecoder(
+					charset as ConstructorParameters<typeof TextDecoder>[0],
+				).decode(buffer);
+			} catch {
+				text = new TextDecoder("utf-8").decode(buffer);
+			}
 
 			// Process content based on type
 			let content: string;
@@ -239,15 +579,25 @@ export function createWebFetchExecutor(
 				);
 			}
 
-			outputLines.push(``, `--- Analysis Request ---`, `Prompt: ${prompt}`);
+			// Nothing here runs the prompt: the page's text is the answer, and
+			// the request is repeated so the model applies it (readers 28).
+			outputLines.push(
+				``,
+				`--- Your request (nothing has been extracted for you: apply it to the content above) ---`,
+				prompt,
+			);
 
 			return outputLines.join("\n");
 		} catch (error) {
 			clearTimeout(timeout);
 
 			if (error instanceof Error) {
-				if (error.name === "AbortError") {
-					throw new Error(`Request timed out after ${timeoutMs}ms`);
+				if (error.name === "AbortError" || controller.signal.aborted) {
+					throw new Error(
+						timedOut
+							? `Request timed out after ${timeoutMs}ms`
+							: "Request was cancelled",
+					);
 				}
 				throw error;
 			}

@@ -1388,6 +1388,8 @@ export {
 	LIST_FILES_TOOL_INPUT_SCHEMA,
 	LIST_FILES_TOOL_NAME,
 	type ListFilesToolOptions,
+	namedExcludedDirectories,
+	normalizeGlob,
 	normalizeMaxResults,
 	renderDirectory,
 	renderMatches,

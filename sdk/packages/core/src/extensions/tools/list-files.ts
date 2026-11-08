@@ -60,7 +60,7 @@ Two ways to ask:
 - \`path\` — list what is directly inside one directory. Omit it to list the workspace root.
 - \`pattern\` — a glob searched across the whole workspace, e.g. \`**/*.html\`, \`src/**/*.ts\`, \`**/config.*\`. Use this when you know part of a name but not where it lives.
 
-Results are limited to the workspace folders the user opened, and directories the user's settings exclude from search — \`node_modules\`, \`.git\`, build output — are left out. A path outside the workspace is refused rather than listed.
+Results are limited to the workspace folders the user opened. A \`pattern\` search does not enter the directories the user's settings exclude from search — \`node_modules\`, \`.git\` and the like — unless the pattern names one (\`node_modules/**/package.json\`); a \`path\` listing shows them, marked. A link to a directory is listed as one and searched through. A path outside the workspace is refused rather than listed.
 
 This tells you which files exist, not what is in them. To find files by their contents use \`search_codebase\`, which reports the line each match is on and is the right way to locate the part of a file worth reading.`;
 
@@ -87,9 +87,18 @@ export const LIST_FILES_TOOL_INPUT_SCHEMA = {
 
 export interface DirectoryEntry {
 	name: string;
+	/** What it is, through a symbolic link: a link to a directory is one. */
 	kind: "file" | "directory";
 	/** Bytes, when the host could say cheaply. */
 	size?: number;
+	/**
+	 * A symbolic link, and where it points. Listed as a 60-byte file, a link
+	 * to a directory hid everything behind it (automaticum audit 2026-11-08,
+	 * readers 28).
+	 */
+	link?: string;
+	/** A directory a pattern search does not enter unless it names it. */
+	excluded?: true;
 }
 
 /**
@@ -184,11 +193,13 @@ export function renderDirectory(
 		return left.name.localeCompare(right.name);
 	});
 	const shown = sorted.slice(0, limit);
-	const lines = shown.map((entry) =>
-		entry.kind === "directory"
-			? `  ${entry.name}/`
-			: `  ${entry.name}${formatSize(entry.size)}`,
-	);
+	const lines = shown.map((entry) => {
+		const link = entry.link !== undefined ? ` -> ${entry.link}` : "";
+		if (entry.kind === "directory") {
+			return `  ${entry.name}/${link}${entry.excluded ? "  (not entered by a pattern search unless the pattern names it)" : ""}`;
+		}
+		return `  ${entry.name}${link}${formatSize(entry.size)}`;
+	});
 	const hidden = sorted.length - shown.length;
 	const heading = `${displayPath} — ${sorted.length} entr${sorted.length === 1 ? "y" : "ies"}${
 		hidden > 0 ? `, first ${shown.length} shown` : ""
@@ -254,7 +265,7 @@ export function renderMatches(
 			path.basename(absolute).toLowerCase().includes(base.toLowerCase());
 		return `No file in the workspace matches \`${pattern}\`. Re-running it will not change that — the workspace is ${
 			roots.length > 0 ? roots.join(", ") : "the current folder"
-		}.${outsideNote(readPaths, roots, relevant)} Otherwise try a broader glob, or \`search_codebase\` if you are looking for what is inside a file rather than what it is called.`;
+		}, searched except for excluded directories (node_modules, .git and the user's search excludes), which a pattern enters only when it names them.${outsideNote(readPaths, roots, relevant)} Otherwise try a broader glob, or \`search_codebase\` if you are looking for what is inside a file rather than what it is called.`;
 	}
 
 	const relativeTo = (absolute: string): string => {
@@ -267,10 +278,12 @@ export function renderMatches(
 	};
 
 	const shown = absolutePaths.slice(0, limit);
-	const hidden = absolutePaths.length - shown.length;
-	const heading = `\`${pattern}\` — ${absolutePaths.length} match${absolutePaths.length === 1 ? "" : "es"}${
-		hidden > 0 ? `, first ${shown.length} shown` : ""
-	}:`;
+	// The search is asked for one more than the limit, to learn that there are
+	// more -- not how many: "201 matches" was said of 3,000 (readers 28).
+	const heading =
+		absolutePaths.length > limit
+			? `\`${pattern}\` — more than ${limit} matches, first ${shown.length} shown (narrow the pattern to see the rest):`
+			: `\`${pattern}\` — ${absolutePaths.length} match${absolutePaths.length === 1 ? "" : "es"}:`;
 	return [
 		heading,
 		...shown.map((absolute) => `  ${relativeTo(absolute)}`),
@@ -296,6 +309,23 @@ const DEFAULT_EXCLUDED_DIRECTORIES = new Set([
 	"node_modules",
 	"bower_components",
 ]);
+
+/**
+ * A glob as the workspace-relative pattern it means: `./src/*.ts` is
+ * `src/*.ts`, which is what a model writing `./` intends (readers 11).
+ */
+export function normalizeGlob(pattern: string): string {
+	return pattern.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "");
+}
+
+/** Excluded directory names a pattern spells out, which it then searches. */
+export function namedExcludedDirectories(pattern: string): Set<string> {
+	const named = new Set<string>();
+	for (const segment of normalizeGlob(pattern).split("/")) {
+		if (DEFAULT_EXCLUDED_DIRECTORIES.has(segment)) named.add(segment);
+	}
+	return named;
+}
 
 /** Directories entered during one glob search, so a symlink loop cannot hang it. */
 const MAX_WALKED_DIRECTORIES = 20_000;
@@ -377,11 +407,33 @@ export function createLocalWorkspaceLister(root: string): WorkspaceLister {
 			const found = await fs.readdir(absolutePath, { withFileTypes: true });
 			const entries: DirectoryEntry[] = [];
 			for (const entry of found) {
+				// Listed, and said to be skipped by searches: dropped, a folder
+				// holding only .git was "empty" and node_modules did not exist
+				// (readers 11, 28).
 				if (entry.isDirectory()) {
-					if (DEFAULT_EXCLUDED_DIRECTORIES.has(entry.name)) {
-						continue;
-					}
-					entries.push({ name: entry.name, kind: "directory" });
+					entries.push({
+						name: entry.name,
+						kind: "directory",
+						...(DEFAULT_EXCLUDED_DIRECTORIES.has(entry.name)
+							? { excluded: true as const }
+							: {}),
+					});
+					continue;
+				}
+				if (entry.isSymbolicLink()) {
+					const full = path.join(absolutePath, entry.name);
+					const target = await fs.readlink(full).catch(() => "?");
+					const resolved = await fs.stat(full).catch(() => undefined);
+					entries.push(
+						resolved?.isDirectory()
+							? { name: entry.name, kind: "directory", link: target }
+							: {
+									name: entry.name,
+									kind: "file",
+									link: resolved ? target : `${target} (broken)`,
+									...(resolved ? { size: resolved.size } : {}),
+								},
+					);
 					continue;
 				}
 				// A size the host could say cheaply, and nothing more: a file that
@@ -406,15 +458,26 @@ export function createLocalWorkspaceLister(root: string): WorkspaceLister {
 			pattern: string,
 			maxResults: number,
 		): Promise<string[]> => {
-			const matcher = globToRegExp(pattern);
+			const matcher = globToRegExp(normalizeGlob(pattern));
+			const entered = namedExcludedDirectories(pattern);
 			const matches: string[] = [];
-			const queue: string[] = [absoluteRoot];
+			// Each directory with the real paths above it: a link back up its
+			// own tree is a loop and is not entered; a second link to the same
+			// directory elsewhere is a path the pattern may name, and is.
+			const queue: { directory: string; above: ReadonlySet<string> }[] = [
+				{ directory: absoluteRoot, above: new Set() },
+			];
 			let walked = 0;
 			while (queue.length > 0 && matches.length < maxResults) {
-				const directory = queue.shift() as string;
+				const { directory, above } = queue.shift() as (typeof queue)[number];
 				if (walked++ >= MAX_WALKED_DIRECTORIES) {
 					break;
 				}
+				const real = await fs.realpath(directory).catch(() => directory);
+				if (above.has(real)) {
+					continue;
+				}
+				const chain = new Set(above).add(real);
 				let entries: Dirent[];
 				try {
 					entries = await fs.readdir(directory, { withFileTypes: true });
@@ -426,9 +489,20 @@ export function createLocalWorkspaceLister(root: string): WorkspaceLister {
 				}
 				for (const entry of entries) {
 					const absolute = path.join(directory, entry.name);
-					if (entry.isDirectory()) {
-						if (!DEFAULT_EXCLUDED_DIRECTORIES.has(entry.name)) {
-							queue.push(absolute);
+					// A link is followed to what it points at: a linked directory
+					// is searched, as the reader and editor would open it.
+					const isDirectory =
+						entry.isDirectory() ||
+						(entry.isSymbolicLink() &&
+							(
+								await fs.stat(absolute).catch(() => undefined)
+							)?.isDirectory() === true);
+					if (isDirectory) {
+						if (
+							!DEFAULT_EXCLUDED_DIRECTORIES.has(entry.name) ||
+							entered.has(entry.name)
+						) {
+							queue.push({ directory: absolute, above: chain });
 						}
 						continue;
 					}

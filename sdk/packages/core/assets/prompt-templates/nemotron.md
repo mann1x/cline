@@ -96,7 +96,7 @@ Execute regular‑expression searches across the codebase, with support for runn
 
 # tool: fetch_web_content
 
-Retrieve material from URLs and analyze it according to a supplied prompt. Each request consists of a URL and a natural‑language description of the information you wish to extract. You may bundle several independent URLs in one invocation and combine it with other independent tool calls in the same response. Output consists of one entry per request: each entry identifies the URL, presents the extracted text that satisfies your prompt, and, if something went wrong, explains the failure. A successful entry names the URL and holds the prompted content as plain text.
+Retrieve the text of web pages. Each request consists of a URL and a natural‑language prompt saying what you want from the page; the prompt is returned alongside the page's text for you to apply, and nothing extracts it on your behalf. You may bundle several independent URLs in one invocation and combine it with other independent tool calls in the same response. Output consists of one entry per request: each entry identifies the URL and holds the page's text (HTML as plain text, up to 50,000 characters), followed by your prompt; if something went wrong, it explains the failure. A page that is not text (a PDF, an image) is not shown: download it with `run_commands` and read it with `extract_document`.
 
 # tool: editor
 

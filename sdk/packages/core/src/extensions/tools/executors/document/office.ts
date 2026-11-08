@@ -64,6 +64,13 @@ function passwordError(
 	password: string | undefined,
 ): Error | undefined {
 	const message = (error as { message?: string })?.message ?? "";
+	// A scheme the decryptor cannot open is not a wrong password: said as
+	// one, the model asked the user for a password that was right.
+	if (/could not decrypt/i.test(message)) {
+		return new Error(
+			`The document is encrypted in a way this reader cannot open (${message.replace(/\.$/, "")}). It can be opened by saving an unprotected copy from the program that made it.`,
+		);
+	}
 	if (!/password|encrypt/i.test(message)) return undefined;
 	return new Error(
 		password

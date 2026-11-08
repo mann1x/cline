@@ -110,6 +110,18 @@ async function measurePage(
 			ctm = stack.pop() ?? ctm;
 		} else if (fn === ops.transform) {
 			ctm = multiply(ctm, args as number[]);
+		} else if (fn === ops.paintFormXObjectBegin) {
+			// A form object draws in its own space: a scan placed inside one
+			// measured as no picture at all, and the page read as blank
+			// (automaticum audit 2026-11-08, readers 28).
+			stack.push(ctm);
+			// The matrix arrives as a typed array, not an Array.
+			const matrix = args[0] as ArrayLike<number> | null | undefined;
+			if (matrix && matrix.length === 6) {
+				ctm = multiply(ctm, Array.from(matrix));
+			}
+		} else if (fn === ops.paintFormXObjectEnd) {
+			ctm = stack.pop() ?? ctm;
 		} else if (fn === ops.setTextRenderingMode) {
 			if (args[0] === 3) invisibleText = true;
 		} else if (
@@ -350,6 +362,7 @@ async function readPages(
 	const recognizedPages: number[] = [];
 	const ocrLayerPages: number[] = [];
 	const vectorPages: number[] = [];
+	const emptyPages: number[] = [];
 	const parts: string[] = [];
 
 	let taken = 0;
@@ -404,6 +417,11 @@ async function readPages(
 			vectorPages.push(number);
 		} else if (isGarbled(text)) {
 			scanned = true;
+		} else if (visibleChars === 0 && shape.coverage === 0) {
+			// Said, not left as an empty heading: a page whose picture sits
+			// somewhere this measure does not look read as a blank page with
+			// no word about it (readers 28).
+			emptyPages.push(number);
 		}
 		if (scanned) scannedPages.push(number);
 
@@ -496,9 +514,17 @@ async function readPages(
 
 		let recognized: string | undefined;
 		if (scanned && options.recognize) {
-			const pageImages = pictures.filter(
+			const large = pictures.filter(
 				(picture) => picture.coverage >= OCR_MIN_COVERAGE,
 			);
+			// A page drawn as tiles has no one picture large enough; together
+			// they are the page, and recognition was never tried on it
+			// (readers 12).
+			const tiled =
+				large.length === 0 &&
+				pictures.reduce((sum, picture) => sum + picture.coverage, 0) >=
+					OCR_MIN_COVERAGE;
+			const pageImages = tiled ? pictures : large;
 			if (pageImages.length > 0) progress(number, "recognizing text");
 			const result =
 				pageImages.length > 0
@@ -547,5 +573,6 @@ async function readPages(
 		...(recognizedPages.length ? { recognizedPages } : {}),
 		...(ocrLayerPages.length ? { ocrLayerPages } : {}),
 		...(vectorPages.length ? { vectorPages } : {}),
+		...(emptyPages.length ? { emptyPages } : {}),
 	};
 }

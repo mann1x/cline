@@ -22,7 +22,7 @@ import {
 	ungzippedName,
 } from "./formats";
 import { type ExtractedImage, ImageCollector } from "./images";
-import { readLegacyOffice } from "./legacy";
+import { isEncryptedOoxml, readLegacyOffice } from "./legacy";
 import type { DocumentReaderSettings } from "./ocr";
 import { readOffice } from "./office";
 import { readPdf } from "./pdf";
@@ -84,7 +84,9 @@ export interface ReadJobResult {
 	problems: string[];
 }
 
-function read(
+const ENCRYPTED_AS = { doc: "docx", xls: "xlsx", ppt: "pptx" } as const;
+
+async function read(
 	filePath: string,
 	data: Uint8Array,
 	format: DocumentFormat,
@@ -96,6 +98,11 @@ function read(
 		case "doc":
 		case "xls":
 		case "ppt":
+			// officeparser decrypts the package with `password`, or says it
+			// needs one.
+			if (await isEncryptedOoxml(data)) {
+				return readOffice(data, ENCRYPTED_AS[format], options);
+			}
 			return readLegacyOffice(data, format, options);
 		case "epub":
 		case "mobi":

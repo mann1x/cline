@@ -90,11 +90,11 @@ Output: one entry per pattern — each entry is named by the pattern you sent an
 
 # tool: fetch_web_content
 
-Fetches web pages and extracts from each one what you asked for. Use it for documentation, API references, changelogs, and error messages you want explained — anything you would otherwise open and read in a browser.
+Fetches web pages and returns the text of each. Use it for documentation, API references, changelogs, and error messages you want explained — anything you would otherwise open and read in a browser.
 
-`requests` is a list of `{url, prompt}` objects, one per page. The `prompt` says what to pull out of that page, so make it specific — "the signature and return type of function X", "the section on rate limits" — not "tell me about this page". Fetch independent URLs together in one call, in the same response as your other independent calls.
+`requests` is a list of `{url, prompt}` objects, one per page. The `prompt` says what you are looking for on that page — "the signature and return type of function X", "the section on rate limits". It is returned after the page's text so you can apply it; nothing extracts it for you. Fetch independent URLs together in one call, in the same response as your other independent calls.
 
-Output: one entry per request, in the order requested — each entry is named by the URL and holds what was extracted from that page for your prompt, as text. A failed entry says that it failed and why.
+Output: one entry per request, in the order requested — each entry is named by the URL and holds the page's text (HTML as plain text, up to 50,000 characters), followed by your prompt. A page that is not text (a PDF, an image) is not shown: download it with `run_commands` and read it with `extract_document`. A failed entry says that it failed and why.
 
 # tool: editor
 

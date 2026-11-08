@@ -107,10 +107,10 @@ Regex search across the codebase. Use this instead of `grep` or `rg`.
 
 # tool: fetch_web_content
 
-Retrieve and analyze web pages.
-- **Arguments:** `requests`: An array of objects, each containing a `url` and a `prompt` describing what to extract.
+Retrieve the text of web pages.
+- **Arguments:** `requests`: An array of objects, each containing a `url` and a `prompt` saying what you want from the page. The prompt is handed back with the page; nothing applies it for you.
 - **When to use:** For documentation or API references. Batch multiple URLs into one call.
-- **Output:** One entry per request, named by the URL. It holds the text extracted from the page based on your prompt. If a request fails, the entry explains why.
+- **Output:** One entry per request, named by the URL. It holds the page's text (HTML as plain text, up to 50,000 characters), followed by your prompt. A PDF or image is not shown: download it with `run_commands` and use `extract_document`. If a request fails, the entry explains why.
 {{DEFAULT}}
 
 # tool: editor
@@ -192,7 +192,7 @@ Verify file validity using the language servers. **This is the linter** — and 
 # tool: list_files
 List the files in the workspace. Use this to find out what exists instead of running `ls`, `dir` or `find` through `run_commands`.
 - **Arguments:** `path` lists one directory (absolute, or relative to the workspace root; omit for the root). `pattern` is a glob searched across the workspace, e.g. `**/*.html`. `max_results` caps the listing.
-- **When to use:** Whenever you need to know what files exist or where a file lives. Prefer it over a shell command: it is limited to the folders the user opened, and it leaves out `node_modules`, `.git` and build output.
+- **When to use:** Whenever you need to know what files exist or where a file lives. Prefer it over a shell command: it is limited to the folders the user opened. A `pattern` search skips `node_modules`, `.git` and the user's other search excludes unless the pattern names one; a `path` listing shows them, marked.
 - **Output:** Directories first with a trailing `/`, then files with their size. A path outside the workspace is refused rather than listed.
 This says which files exist, not what is in them — use `search_codebase` to find files by their contents.
 {{DEFAULT}}

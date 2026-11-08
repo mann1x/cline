@@ -171,7 +171,9 @@ describe("scanned pages", () => {
 			await run({ path: place("scan-only.pdf"), ocr: "vision" }),
 		);
 		expect(result).toContain("invoice 4711");
-		expect(result).toContain("so tesseract read the pages instead");
+		expect(result).toContain(
+			"Tesseract was used because no vision model is configured",
+		);
 	}, 60_000);
 });
 

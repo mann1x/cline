@@ -19,7 +19,11 @@ import {
 	FORMAT_LABELS,
 	type ReadProgress,
 } from "./document/formats";
-import { type ExtractedImage, VIEWABLE_MEDIA_TYPES } from "./document/images";
+import {
+	type ExtractedImage,
+	formatName,
+	VIEWABLE_MEDIA_TYPES,
+} from "./document/images";
 import type { DocumentReaderSettings } from "./document/ocr";
 import { formatUnits, parseUnitRange } from "./document/range";
 import { type HeldRead, readDocumentJob } from "./document/read-process";
@@ -617,7 +621,14 @@ export function createDocumentExtractExecutor(
 			const text = [
 				header,
 				"---",
-				cut ? body.slice(0, maxChars) : body || "(The document has no text.)",
+				cut
+					? body.slice(0, maxChars)
+					: body ||
+						// Said of the range when there is one: "the document has no
+						// text" was said of page 99 of a one-page PDF (readers 10).
+						(range
+							? "(The selected range has no text.)"
+							: "(The document has no text.)"),
 				...(cut
 					? [
 							`[Cut at ${maxChars.toLocaleString("en-US")} of ${body.length.toLocaleString("en-US")} characters. The whole text is in ${shown(cwd, documentFile)}: read the rest with read_files and start_line, or call again with a narrower range.]`,
@@ -677,6 +688,25 @@ export function createDocumentExtractExecutor(
 	};
 }
 
+/**
+ * The pictures kept as files a model cannot look at, by the formats they are.
+ *
+ * Every such picture used to be called "EMF, WMF, PICT, TIFF or BMP", a JPEG
+ * 2000 included (readers d3).
+ */
+function unviewableNote(images: readonly ExtractedImage[]): string {
+	const unviewable = images.filter((image) => image.notViewable);
+	if (unviewable.length === 0) return "";
+	const formats = [
+		...new Set(unviewable.map((image) => formatName(image.mediaType))),
+	];
+	const named =
+		formats.length === 1
+			? formats[0]
+			: `${formats.slice(0, -1).join(", ")} or ${formats[formats.length - 1]}`;
+	return `; ${unviewable.length} of them ${unviewable.length === 1 ? "is" : "are"} ${named}, kept as files but not viewable as they are`;
+}
+
 function describe(input: {
 	cwd: string;
 	requested: string;
@@ -707,24 +737,30 @@ function describe(input: {
 		const plural = total === 1 ? name : `${name}s`;
 		lines.push(
 			input.range
-				? `${total} ${plural}; read ${read.length ? `${name}s ${formatUnits(read)}` : "none: the range selects nothing that exists"}.`
+				? `${total} ${plural}; read ${read.length ? `${read.length === 1 ? name : `${name}s`} ${formatUnits(read)}` : "none: the range selects nothing that exists"}.`
 				: `${total} ${plural}.`,
 		);
 	} else if (input.range) {
 		lines.push(
-			`range was ignored: a ${FORMAT_LABELS[input.format]} is one flow of text, not pages, slides, sheets or chapters.`,
+			`range was ignored: ${/^[AEIOU]/i.test(FORMAT_LABELS[input.format]) ? "an" : "a"} ${FORMAT_LABELS[input.format]} is one flow of text, not pages, slides, sheets or chapters.`,
 		);
 	}
 	if (result.contents?.length) {
 		const shownContents = result.contents.slice(0, 40);
+		const allContents = result.contentsTotal ?? result.contents.length;
 		lines.push(
-			`Contents:\n${shownContents.map((entry) => `  ${entry}`).join("\n")}${result.contents.length > shownContents.length ? `\n  … ${result.contents.length - shownContents.length} more` : ""}`,
+			`Contents:\n${shownContents.map((entry) => `  ${entry}`).join("\n")}${allContents > shownContents.length ? `\n  … ${allContents - shownContents.length} more` : ""}`,
 		);
 	}
 	for (const note of input.notes) lines.push(note);
 	if (result.ocrLayerPages?.length) {
 		lines.push(
 			`Pages ${formatUnits(result.ocrLayerPages)} are scans that already carry a recognized text layer; that text is included.`,
+		);
+	}
+	if (result.emptyPages?.length) {
+		lines.push(
+			`Pages ${formatUnits(result.emptyPages)} have no text and no picture this reader found: blank, or drawn in a way it does not extract.`,
 		);
 	}
 	if (result.vectorPages?.length) {
@@ -737,7 +773,7 @@ function describe(input: {
 		? 'Pictures were not extracted (images: "none").'
 		: input.images.length === 0
 			? "No pictures."
-			: `${input.images.length} picture(s) in ${shown(cwd, path.join(input.outputDir, "images"))}/, listed in ${shown(cwd, input.indexFile)}${input.images.some((image) => image.notViewable) ? `; ${input.images.filter((image) => image.notViewable).length} of them are EMF, WMF, PICT, TIFF or BMP, kept as files but not viewable as they are` : ""}.`;
+			: `${input.images.length} picture(s) in ${shown(cwd, path.join(input.outputDir, "images"))}/, listed in ${shown(cwd, input.indexFile)}${unviewableNote(input.images)}.`;
 	lines.push(
 		`Wrote ${shown(cwd, input.documentFile)} (${input.bodyChars.toLocaleString("en-US")} characters). ${imageLine}`,
 	);
