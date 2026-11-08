@@ -201,13 +201,18 @@ export function planRecognition(input: PlanInput): RecognitionPlan {
 						return undefined;
 					}
 					const texts: string[] = [];
-					let confidence = 0;
+					// Weighted by how much text each picture gave: the best
+					// picture's score was shown as the page's (readers d7).
+					let weighted = 0;
+					let characters = 0;
 					for (const image of ordered) {
 						try {
 							const result = await tesseract.recognize(image.png);
 							if (result.text.trim()) {
-								texts.push(result.text.trim());
-								confidence = Math.max(confidence, result.confidence);
+								const text = result.text.trim();
+								texts.push(text);
+								weighted += result.confidence * text.length;
+								characters += text.length;
 							}
 						} catch (error) {
 							failed.push(
@@ -216,9 +221,10 @@ export function planRecognition(input: PlanInput): RecognitionPlan {
 						}
 					}
 					if (!texts.length) return undefined;
+					const confidence = Math.round(weighted / Math.max(characters, 1));
 					return {
 						text: texts.join("\n\n"),
-						by: `tesseract (${engine.languages.join("+")}, ${confidence}% confidence)`,
+						by: `tesseract (${engine.languages.join("+")}, ${confidence}% ${texts.length > 1 ? "average " : ""}confidence)`,
 					};
 				};
 

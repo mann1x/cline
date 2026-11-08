@@ -484,14 +484,28 @@ export function createDocumentExtractExecutor(
 			? await overlay.resolveRead(requested)
 			: requested;
 
-		const stat = await fs.stat(sourcePath).catch(() => undefined);
-		if (!stat) {
+		// Every stat failure was "No file", and anything not a file "a
+		// directory" (readers d6).
+		let stat: Awaited<ReturnType<typeof fs.stat>>;
+		try {
+			stat = await fs.stat(sourcePath);
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException)?.code;
 			throw new Error(
-				`No file at ${input.path}. Check the path; relative paths start at the workspace root.`,
+				code === "ENOENT" || code === "ENOTDIR"
+					? `No file at ${input.path}. Check the path; relative paths start at the workspace root.`
+					: code === "EACCES" || code === "EPERM"
+						? `${input.path} cannot be read: permission denied.`
+						: `${input.path} cannot be read: ${(error as Error)?.message ?? String(error)}`,
 			);
 		}
-		if (!stat.isFile()) {
+		if (stat.isDirectory()) {
 			throw new Error(`${input.path} is a directory, not a document.`);
+		}
+		if (!stat.isFile()) {
+			throw new Error(
+				`${input.path} is not a regular file (a pipe, socket or device), so it is not a document.`,
+			);
 		}
 		if (stat.size > maxFileSizeBytes) {
 			throw new Error(tooLarge(input.path, stat.size, maxFileSizeBytes));

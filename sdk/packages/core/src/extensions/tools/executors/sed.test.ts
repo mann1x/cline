@@ -342,6 +342,25 @@ describe("agreeing with the system sed", () => {
 		{ script: "s/^/> /" },
 		{ script: "s/$/!/" },
 		{ script: "s/[[:alpha:]]/./g" },
+		// The address forms and replacement escapes the 2026-11-08 audit
+		// found wrong, which the grid did not cover.
+		{ script: "3,2d" },
+		{ script: "/second/,1d" },
+		{ script: "0,/foo/d" },
+		{ script: "0,/foo/s/foo/X/" },
+		{ script: "2,+1d" },
+		{ script: "/foo/,+1d" },
+		{ script: "1~2d" },
+		{ script: "2,~4d" },
+		{ script: "$!d" },
+		{ script: "/second/,/third/d" },
+		{ script: "1a\\    indented" },
+		{ script: "2i\\inserted" },
+		{ script: "2c\\changed" },
+		{ script: "s/foo/\\U&/" },
+		{ script: "s/\\(f\\)\\(oo\\)/\\u\\2\\L\\1X\\E!/" },
+		{ script: "s/foo/[\\0]/" },
+		{ script: "s/x/x/" },
 	];
 
 	const input = "foo bar\nsecond foo\nthird line\nfoo\n";

@@ -26,6 +26,7 @@ import {
 } from "./executors/output-limits";
 import { MAX_TEXT_STREAM_BYTES } from "./executors/whole-file";
 import {
+	abandonedWriteMessage,
 	applySharedReadOptions,
 	coalesceOrphanReadRanges,
 	expandBracketedPathLists,
@@ -1027,11 +1028,14 @@ export function createApplyPatchTool(
 					success: true,
 				};
 			} catch (error) {
-				const msg = formatError(error);
+				const msg =
+					error instanceof TimeoutError
+						? abandonedWriteMessage("apply_patch", timeoutMs)
+						: `apply_patch failed: ${formatError(error)}`;
 				return {
 					query: "apply_patch",
 					result: "",
-					error: `apply_patch failed: ${msg}`,
+					error: msg,
 					success: false,
 				};
 			}
@@ -1124,11 +1128,14 @@ export function createEditorTool(
 					success: true,
 				};
 			} catch (error) {
-				const msg = formatError(error);
+				const msg =
+					error instanceof TimeoutError
+						? abandonedWriteMessage("The editor", timeoutMs)
+						: `Editor operation failed: ${formatError(error)}`;
 				return {
 					query: `${operation}:${validatedInput.path}`,
 					result: "",
-					error: `Editor operation failed: ${msg}`,
+					error: msg,
 					success: false,
 				};
 			}
@@ -1215,7 +1222,7 @@ export function createExtractDocumentTool(
 		readOnly: true,
 		description:
 			"Read a document that is not plain text: PDF, Word (DOCX and 97-2003 DOC), PowerPoint (PPTX, PPT), Excel (XLSX, XLS), OpenDocument (ODT, ODP, ODS, ODG), RTF, CSV, HTML, and ebooks (EPUB, MOBI, AZW, AZW3, FB2), each of them also gzipped (`book.fb2.gz`). " +
-			"`read_files` cannot read these: it returns their bytes as garbage text. " +
+			"`read_files` cannot read these: it refuses the binary ones, and shows RTF and HTML as raw markup. " +
 			'It returns the document as markdown (or plain text with `format: "text"`) and writes the whole text to a file, with the pictures inside the document saved beside it in an `images` folder and linked from the text. ' +
 			"The output goes to `.cline/extracted/<document name>/` in the workspace; pass `output_dir` only when the user asks for it somewhere else in the workspace. " +
 			"Use `range` to read part of a long document: pages of a PDF, slides, sheets, or chapters of an ebook. " +
@@ -1291,13 +1298,16 @@ export function createSedTool(
 					...(outcome.error ? { error: outcome.error } : {}),
 				}));
 			} catch (error) {
-				// The script itself did not parse, or the call timed out: nothing
-				// ran, so there is no per-file outcome to report.
-				const msg = formatError(error);
+				// The script did not parse, so nothing ran; or the call timed out,
+				// and an in-place run may have written some files by then.
+				const msg =
+					error instanceof TimeoutError && validated.in_place
+						? abandonedWriteMessage("sed", timeoutMs)
+						: `sed failed: ${formatError(error)}`;
 				return (validated.files ?? []).map((file) => ({
 					query: `sed:${file}`,
 					result: "",
-					error: `sed failed: ${msg}`,
+					error: msg,
 					success: false,
 				}));
 			}

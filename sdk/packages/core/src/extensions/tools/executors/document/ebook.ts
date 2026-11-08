@@ -110,7 +110,7 @@ async function opened<T>(open: Promise<T>): Promise<T> {
 					() =>
 						reject(
 							new Error(
-								`The book could not be opened: the reader gave no answer in ${OPEN_LIMIT_MS / 1000}s, which is what it does with a damaged file. Check that the file is complete.`,
+								`The book could not be opened: the reader gave no answer in ${OPEN_LIMIT_MS / 1000}s. It does that with a damaged file, and a very large one can take longer than that to open; check that the file is complete.`,
 							),
 						),
 					OPEN_LIMIT_MS,

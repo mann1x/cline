@@ -731,4 +731,19 @@ describe("windowing text that has no file to stream from", () => {
 
 		expect(window.text).toContain("shown in full");
 	});
+
+	it("does not call text with a cut line shown in full", async () => {
+		const window = await readTextWindowFromText({
+			text: `${"x".repeat(2500)}\nshort\n`,
+		});
+
+		expect(window.text).not.toContain("shown in full");
+		expect(window.text).toContain("Line 1 was cut at 2000 characters");
+	});
+
+	it("counts lines as the other tools do: a lone CR does not end one", async () => {
+		const window = await readTextWindowFromText({ text: "a\rb\rc\n" });
+
+		expect(window.lastLine).toBe(1);
+	});
 });

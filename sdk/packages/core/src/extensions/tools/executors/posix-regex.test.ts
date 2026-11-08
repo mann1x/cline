@@ -124,3 +124,39 @@ describe("posixToJsSource", () => {
 		expect(posixToJsSource("a.c*")).toBe("a.c*");
 	});
 });
+
+// GNU's rules where the translation used to differ (automaticum audit
+// 2026-11-08, readers 5): each was a "No match" over text that matched.
+describe("anchors and stars where GNU reads them as text", () => {
+	it("takes a $ or ^ in the middle of a BRE as a literal", () => {
+		expect(compilePosixRegex("$HOME").test("echo $HOME")).toBe(true);
+		expect(compilePosixRegex("PATH=$PATH").test("PATH=$PATH:/x")).toBe(true);
+		expect(compilePosixRegex("a^b").test("a^b")).toBe(true);
+	});
+
+	it("keeps them as anchors at the ends, after \\( and after \\|", () => {
+		expect(compilePosixRegex("^a").test("xa")).toBe(false);
+		expect(compilePosixRegex("a$").test("ax")).toBe(false);
+		expect(compilePosixRegex("\\(^a\\)").test("abc")).toBe(true);
+		expect(compilePosixRegex("\\(^a\\)").test("ba")).toBe(false);
+		expect(compilePosixRegex("x\\|^a").test("ba")).toBe(false);
+	});
+
+	it("keeps a mid-pattern $ an anchor in ERE", () => {
+		expect(
+			compilePosixRegex("$HOME", { extended: true }).test("echo $HOME"),
+		).toBe(false);
+	});
+
+	it("takes a leading * as a literal star", () => {
+		expect(compilePosixRegex("*x").test("a*x")).toBe(true);
+		expect(compilePosixRegex("^*").test("*abc")).toBe(true);
+	});
+
+	it("matches a whole word that starts with a non-word character", () => {
+		const word = { wordBoundary: true };
+		expect(compilePosixRegex("@Override", word).test("  @Override")).toBe(true);
+		expect(compilePosixRegex("@Override", word).test("x@Override")).toBe(false);
+		expect(compilePosixRegex("foo", word).test("foobar")).toBe(false);
+	});
+});

@@ -278,6 +278,31 @@ describe("encrypted Office files", () => {
 	});
 });
 
+describe("a path that is not a document", () => {
+	it("calls a pipe a pipe, not a directory", async () => {
+		const { spawnSync } = await import("node:child_process");
+		const fifo = join(workspace, "pipe.pdf");
+		if (spawnSync("mkfifo", [fifo]).status !== 0) return;
+		await expect(run({ path: "pipe.pdf" })).rejects.toThrow(
+			/not a regular file \(a pipe, socket or device\)/,
+		);
+	});
+
+	it("calls a directory a directory", async () => {
+		const { mkdirSync } = await import("node:fs");
+		mkdirSync(join(workspace, "folder.pdf"));
+		await expect(run({ path: "folder.pdf" })).rejects.toThrow(
+			"is a directory, not a document",
+		);
+	});
+
+	it("says a missing file is missing", async () => {
+		await expect(run({ path: "nothing-here.pdf" })).rejects.toThrow(
+			/^No file at nothing-here\.pdf/,
+		);
+	});
+});
+
 describe("pictures that cannot be viewed", () => {
 	it("calls a JPEG 2000 what it is", () => {
 		const collector = new ImageCollector();

@@ -2,10 +2,12 @@ import type { AgentToolContext, ITelemetryService } from "@cline/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
 	buildRunCommandsDescription,
+	createApplyPatchTool,
 	createDefaultTools,
 	createEditorTool,
 	createReadFilesTool,
 	createSearchTool,
+	createSedTool,
 	createShellTool,
 	createSkillsTool,
 	EMPTY_READ_EXPLANATION,
@@ -2727,5 +2729,56 @@ describe("the editor's file argument is file_path", () => {
 			new_text: "x",
 		});
 		expect(seen[0]?.path).toBe("/w/a.ts");
+	});
+});
+
+describe("a writing tool that times out", () => {
+	const context = {
+		agentId: "agent-1",
+		conversationId: "conv-1",
+		iteration: 1,
+	} as AgentToolContext;
+	const never = () => new Promise<never>(() => {});
+	const abandoned =
+		/timed out after 20ms and was abandoned, not stopped: it may have written some or all of its changes/;
+
+	it("does not tell the model the editor changed nothing", async () => {
+		const tool = createEditorTool(never as unknown as EditorExecutor, {
+			editorTimeoutMs: 20,
+		});
+		const result = (await tool.execute(
+			{ path: "/w/a.ts", old_text: "a", new_text: "b" } as EditFileInput,
+			context,
+		)) as { success: boolean; error?: string };
+		expect(result.success).toBe(false);
+		expect(result.error).toMatch(abandoned);
+		expect(result.error).not.toContain("failed");
+	});
+
+	it("says the same of apply_patch", async () => {
+		const tool = createApplyPatchTool(never as never, {
+			applyPatchTimeoutMs: 20,
+		});
+		const result = (await tool.execute(
+			{ input: "*** Begin Patch\n*** End Patch" } as never,
+			context,
+		)) as { error?: string };
+		expect(result.error).toMatch(abandoned);
+	});
+
+	it("says it of an in-place sed, and not of a read-only one", async () => {
+		const tool = createSedTool(never as never, { textToolsTimeoutMs: 20 });
+		const inPlace = (await tool.execute(
+			{ script: "s/a/b/", files: ["/w/a.ts"], in_place: true } as never,
+			context,
+		)) as { error?: string }[];
+		expect(inPlace[0]?.error).toMatch(abandoned);
+		const readOnly = (await tool.execute(
+			{ script: "s/a/b/", files: ["/w/a.ts"] } as never,
+			context,
+		)) as { error?: string }[];
+		expect(readOnly[0]?.error).toContain(
+			"sed failed: sed timed out after 20ms",
+		);
 	});
 });

@@ -121,12 +121,25 @@ export function withTimeout<T>(
 	ms: number,
 	message: string,
 ): Promise<T> {
+	// Cleared when the work settles: left running, every call held a timer
+	// (and the process) for the whole allowance after the work was done.
+	let timer: ReturnType<typeof setTimeout> | undefined;
 	return Promise.race([
 		promise,
 		new Promise<never>((_, reject) => {
-			setTimeout(() => reject(new TimeoutError(message, ms)), ms);
+			timer = setTimeout(() => reject(new TimeoutError(message, ms)), ms);
 		}),
-	]);
+	]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * What a writing tool's timeout means: the call was abandoned, not stopped,
+ * so the files may hold some or all of its changes. "Failed" read as
+ * "nothing happened", and the model ran the same edit again over a file
+ * that already had it (automaticum audit 2026-11-08, outside scope).
+ */
+export function abandonedWriteMessage(tool: string, timeoutMs: number): string {
+	return `${tool} timed out after ${timeoutMs}ms and was abandoned, not stopped: it may have written some or all of its changes before or after that. Read the files it targets before editing them again, and do not repeat the call unseen.`;
 }
 
 export function formatReadFileQuery(request: ReadFileRequest): string {
