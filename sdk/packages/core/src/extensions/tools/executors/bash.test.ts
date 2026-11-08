@@ -22,6 +22,7 @@ import {
 	createDetachedLog,
 	createShellExecutor,
 } from "./bash";
+import { createReadReceipts, readFileStamp } from "./read-receipts";
 import { RunCommandExecutionController } from "./run-command-execution-controller";
 
 const ctx: AgentToolContext = {
@@ -1219,6 +1220,26 @@ describe("createShellExecutor with inherited stdio", () => {
 	);
 
 	it.runIf(hasBashShell)(
+		"does not blame a silent background process for output still arriving at the cut",
+		async () => {
+			const executor = createShellExecutor({
+				shell: bashShell,
+				timeoutMs: commandTimeoutMs,
+			});
+			// The background loop prints every 100 ms past the grace: output is
+			// still arriving when the result is cut.
+			const output = await executor(
+				"(for i in $(seq 1 40); do echo tick$i; sleep 0.1; done) & echo started",
+				process.cwd(),
+				ctx,
+			);
+			expect(output).toContain("started");
+			expect(output).toContain("its output was still arriving");
+			expect(output).not.toContain("background processes still running");
+		},
+	);
+
+	it.runIf(hasBashShell)(
 		"reports a failing exit code when a background child keeps the stdio pipes open",
 		async () => {
 			const executor = createShellExecutor({
@@ -1400,6 +1421,83 @@ describe("a detached command's log", () => {
 			await rm(dirname(log.path), { recursive: true, force: true });
 		}
 	});
+});
+
+describe("a detached command's changed files", () => {
+	const bashShell = "/bin/bash";
+
+	it.runIf(process.platform !== "win32" && existsSync(bashShell))(
+		"are reported in its log when it ends, not only at the detach",
+		async () => {
+			const dir = await mkdtemp(join(tmpdir(), "detach-sweep-"));
+			const tracked = join(dir, "tracked.txt");
+			const gate = join(dir, "go");
+			await writeFile(tracked, "one\ntwo\n");
+			const receipts = createReadReceipts();
+			receipts.noteRead(tracked, 1, 2);
+			receipts.noteStamp(tracked, await readFileStamp(tracked));
+			const controller = new RunCommandExecutionController();
+			let ready: () => void = () => {};
+			const readyToDetach = new Promise<void>((resolve) => {
+				ready = resolve;
+			});
+			let started = false;
+			let detachable = false;
+			const executor = createShellExecutor({
+				shell: bashShell,
+				timeoutMs: 10_000,
+				receipts,
+				executionController: controller,
+				detachedLogRetentionMs: 5_000,
+				processStartTokenProbe: (pid) => ({
+					status: "found",
+					token: `test-process-${pid}`,
+				}),
+			});
+			// The write happens only after the gate, so after the detach.
+			const execution = executor(
+				`echo started; i=0; while [ ! -e "${gate}" ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i + 1)); done; printf 'rewritten\n' > "${tracked}"`,
+				dir,
+				{
+					...ctx,
+					sessionId: "session-detach-sweep",
+					toolCallId: "call-detach-sweep",
+					emitUpdate: (update) => {
+						const payload = update as Record<string, unknown>;
+						if (
+							typeof payload.chunk === "string" &&
+							payload.chunk.startsWith("started")
+						) {
+							started = true;
+						}
+						if (payload.detachable === true) detachable = true;
+						if (started && detachable) ready();
+					},
+				},
+			);
+			try {
+				await readyToDetach;
+				controller.proceedWhileRunning(
+					"session-detach-sweep",
+					"call-detach-sweep",
+				);
+				const notice = await execution;
+				expect(notice).not.toContain("tracked.txt");
+				const logPath = notice.match(/Output will continue in (.+)]/)?.[1];
+				if (!logPath) throw new Error("Expected detached command log path");
+				await writeFile(gate, "");
+				await expect
+					.poll(() => readFile(logPath, "utf8").catch(() => ""), {
+						timeout: 10_000,
+					})
+					.toContain("changed while this command ran");
+				expect(await readFile(logPath, "utf8")).toContain(tracked);
+				await rm(dirname(logPath), { recursive: true, force: true });
+			} finally {
+				await rm(dir, { recursive: true, force: true });
+			}
+		},
+	);
 });
 
 describe("CommandSpawnError", () => {

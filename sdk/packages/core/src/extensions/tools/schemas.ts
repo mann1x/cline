@@ -547,11 +547,11 @@ export const SearchCodebaseUnionInputSchema = z
 	// convention.
 	.pipe(SearchCodebaseInputSchema);
 
-const CommandInputSchema = z
-	.string()
-	.describe(
-		`The non-interactive shell command to execute - MUST keep input short and concise (within ${INPUT_ARG_CHAR_LIMIT * 2} characters) to avoid timeouts.`,
-	);
+const CommandInputSchema = z.string().describe(
+	// "Within 12000 characters to avoid timeouts" was neither enforced nor
+	// true: length does not make a command slow (bash audit m5).
+	"The non-interactive shell command to execute. Nothing can answer a prompt, so a command that waits for input runs until it times out.",
+);
 
 export const StructuredCommandInputSchema = z.object({
 	command: z

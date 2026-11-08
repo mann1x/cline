@@ -53,7 +53,7 @@ import { readFile, stat } from "node:fs/promises";
  */
 export type FileStamp = string;
 
-const ABSENT_STAMP: FileStamp = "absent";
+export const ABSENT_STAMP: FileStamp = "absent";
 
 /**
  * Files up to this size are stamped by their content rather than by mtime.

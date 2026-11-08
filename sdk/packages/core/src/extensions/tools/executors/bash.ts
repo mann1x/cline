@@ -34,7 +34,7 @@ import {
 	MAX_COMMAND_OUTPUT_CHARS,
 	truncateCommandOutput,
 } from "./output-limits";
-import { fileStampFor, type ReadReceipts } from "./read-receipts";
+import { ABSENT_STAMP, fileStampFor, type ReadReceipts } from "./read-receipts";
 import type { RunCommandExecutionController } from "./run-command-execution-controller";
 
 const MAX_DETACHED_LOG_BYTES = 10 * 1024 * 1024;
@@ -430,19 +430,22 @@ async function sweepTrackedFiles(
 	receipts: ReadReceipts,
 	paths: readonly string[],
 	overlay: ShellExecutorOptions["overlay"],
-): Promise<string[]> {
+): Promise<{ changed: string[]; deleted: string[] }> {
 	const changed: string[] = [];
+	const deleted: string[] = [];
 	for (const filePath of paths.slice(0, MAX_SWEPT_FILES)) {
 		const stamp = await fileStampFor(filePath, overlay);
 		if (receipts.changedSince(filePath, stamp)) {
-			changed.push(filePath);
+			// A deleted file was "changed" and to be read again, which sent the
+			// model to read a file that is gone (bash audit m2).
+			(stamp === ABSENT_STAMP ? deleted : changed).push(filePath);
 			// The spans are wrong now whatever the command was, so the next edit
 			// is held until the model has looked again.
 			receipts.retire(filePath);
 		}
 		receipts.noteStamp(filePath, stamp);
 	}
-	return changed;
+	return { changed, deleted };
 }
 
 /**
@@ -456,23 +459,40 @@ function describeSweptFiles(
 	changed: readonly string[],
 	/** Another command ran at some point while this one did. */
 	overlapped = false,
+	deleted: readonly string[] = [],
 ): string {
-	const list = changed.map((file) => `  - ${file}`).join("\n");
-	const count =
-		changed.length === 1
+	const counted = (files: readonly string[]) =>
+		files.length === 1
 			? "1 file you had read"
-			: `${changed.length} files you had read`;
+			: `${files.length} files you had read`;
+	const list = (files: readonly string[]) =>
+		files.map((file) => `  - ${file}`).join("\n");
 	// With two commands running at once the sweep cannot tell whose write it
 	// saw, and naming this one blamed a read-only command for the other's
 	// write (automaticum audit 2026-11-08, readers 25).
-	return [
+	const by = (verb: string, files: readonly string[]) =>
 		overlapped
-			? `NOTE: ${count} changed while this command ran — by it, or by another command running at the same time:`
-			: `NOTE: this command changed ${count}:`,
-		list,
-		"",
-		"What you remember of these files is out of date. Read any of them again before editing it — earlier line numbers may now point at different code.",
-	].join("\n");
+			? `NOTE: ${counted(files)} ${files.length === 1 ? "was" : "were"} ${verb} while this command ran — by it, or by another command running at the same time:`
+			: `NOTE: this command ${verb} ${counted(files)}:`;
+	const parts: string[] = [];
+	if (changed.length > 0) {
+		parts.push(
+			by("changed", changed),
+			list(changed),
+			"",
+			"What you remember of these files is out of date. Read any of them again before editing it — earlier line numbers may now point at different code.",
+		);
+	}
+	if (deleted.length > 0) {
+		if (parts.length > 0) parts.push("");
+		parts.push(
+			by("deleted", deleted),
+			list(deleted),
+			"",
+			"They no longer exist: what you remember of them is all that is left.",
+		);
+	}
+	return parts.join("\n");
 }
 
 export interface ShellExecutorOptions {
@@ -576,6 +596,12 @@ interface SpawnConfig {
 	/** Names removed from the inherited environment; see ShellExecutionOptions. */
 	withhold?: readonly string[];
 	input?: string;
+	/**
+	 * Run when a detached command ends, its answer written into the log: the
+	 * changed-files check ran only at detach, and what the command wrote
+	 * after that was never reported (bash audit m7).
+	 */
+	afterDetachedExit?: () => Promise<string>;
 }
 
 /**
@@ -946,6 +972,8 @@ function spawnAndCollect(
 		let settled = false;
 		let settledOnExitGrace = false;
 		let exitStreamGraceTimer: NodeJS.Timeout | undefined;
+		/** When output last arrived, on either stream. */
+		let lastOutputAt = 0;
 		let detached = false;
 		let detachedLog: ReturnType<typeof createDetachedLog> | undefined;
 		let unregisterExecution = () => {};
@@ -1164,6 +1192,7 @@ function spawnAndCollect(
 		});
 
 		child.stdout?.on("data", (data: Buffer) => {
+			lastOutputAt = Date.now();
 			const chunk = stdout.append(data);
 			if (!chunk) return;
 			if (detached) {
@@ -1174,6 +1203,7 @@ function spawnAndCollect(
 		});
 
 		child.stderr?.on("data", (data: Buffer) => {
+			lastOutputAt = Date.now();
 			const chunk = stderr.append(data);
 			if (!chunk) return;
 			if (detached) {
@@ -1266,6 +1296,24 @@ function spawnAndCollect(
 			}
 		};
 
+		/** The detached log's last lines, then its end. */
+		const finishDetachedLog = (line: string) => {
+			detachedLog?.note(line);
+			const after = config.afterDetachedExit;
+			if (!after) {
+				detachedLog?.complete();
+				return;
+			}
+			void after()
+				.then(
+					(note) => {
+						if (note) detachedLog?.note(`${note.trim()}\n`);
+					},
+					() => {},
+				)
+				.finally(() => detachedLog?.complete());
+		};
+
 		child.on("close", (code, signal) => {
 			if (killed || settledOnExitGrace) return;
 
@@ -1279,8 +1327,7 @@ function spawnAndCollect(
 				}
 				detachedLog?.write(out.finalChunk);
 				detachedLog?.write(err.finalChunk);
-				detachedLog?.note(`\n[${commandCompletionMessage(code, signal)}]\n`);
-				detachedLog?.complete();
+				finishDetachedLog(`\n[${commandCompletionMessage(code, signal)}]\n`);
 				return;
 			}
 			completeCommand(code, signal ?? null, "");
@@ -1314,8 +1361,7 @@ function spawnAndCollect(
 					const err = stderr.snapshot();
 					detachedLog?.write(out.finalChunk);
 					detachedLog?.write(err.finalChunk);
-					detachedLog?.note(`\n[${commandCompletionMessage(code, signal)}]\n`);
-					detachedLog?.complete();
+					finishDetachedLog(`\n[${commandCompletionMessage(code, signal)}]\n`);
 					return;
 				}
 				if (settled) return;
@@ -1327,10 +1373,17 @@ function spawnAndCollect(
 					child.stderr as (typeof child.stderr & { unref?: () => void }) | null
 				)?.unref?.();
 				child.unref();
+				// Output still arriving at the cut may be the command's own tail,
+				// not a background process's: blamed on one, the model went
+				// looking for a process that did not exist (bash audit m6).
+				const stillArriving =
+					Date.now() - lastOutputAt < EXIT_STREAM_GRACE_MS / 4;
 				completeCommand(
 					code,
 					signal ?? null,
-					"[Command completed with background processes still running; their output is no longer captured]",
+					stillArriving
+						? `[Command exited, but its output was still arriving ${EXIT_STREAM_GRACE_MS / 1000}s later, from it or from something it started in the background; what came after that is not captured]`
+						: "[Command completed with background processes still running; their output is no longer captured]",
 				);
 			}, EXIT_STREAM_GRACE_MS);
 		});
@@ -1338,8 +1391,7 @@ function spawnAndCollect(
 		child.on("error", (error) => {
 			if (killed) return;
 			if (detached) {
-				detachedLog?.note(`\n[Command failed: ${error.message}]\n`);
-				detachedLog?.complete();
+				finishDetachedLog(`\n[Command failed: ${error.message}]\n`);
 				return;
 			}
 			progress.stop({ flush: true });
@@ -1449,10 +1501,14 @@ export function createShellExecutor(
 		inFlight.add(run);
 		const sweep = async (): Promise<string> => {
 			if (!receipts || tracked.length === 0) return "";
-			const changed = await sweepTrackedFiles(receipts, tracked, overlay);
-			return changed.length === 0
+			const { changed, deleted } = await sweepTrackedFiles(
+				receipts,
+				tracked,
+				overlay,
+			);
+			return changed.length === 0 && deleted.length === 0
 				? ""
-				: `\n\n${describeSweptFiles(changed, run.overlapped)}`;
+				: `\n\n${describeSweptFiles(changed, run.overlapped, deleted)}`;
 		};
 		let output: string;
 		try {
@@ -1464,6 +1520,19 @@ export function createShellExecutor(
 					env: spec.env,
 					withhold: callOptions?.withhold,
 					input: invocation.input,
+					// Other commands have run since the detach, so whose write it
+					// was is said as unknown.
+					afterDetachedExit: async () => {
+						if (!receipts || tracked.length === 0) return "";
+						const { changed, deleted } = await sweepTrackedFiles(
+							receipts,
+							tracked,
+							overlay,
+						);
+						return changed.length === 0 && deleted.length === 0
+							? ""
+							: describeSweptFiles(changed, true, deleted);
+					},
 				},
 				context,
 				timeoutMs,

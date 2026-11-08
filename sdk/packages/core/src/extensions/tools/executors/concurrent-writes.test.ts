@@ -247,6 +247,38 @@ describe("what a command did to the files the model was holding", () => {
 		});
 	});
 
+	it("says nothing about a touch that left the content as it was", async () => {
+		await withShell(async ({ dir, filePath, read, shell }) => {
+			await read({ path: filePath }, context as never);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+
+			const output = await shell(
+				`touch ${JSON.stringify(filePath)}`,
+				dir,
+				context as never,
+			);
+
+			expect(output).not.toContain("this command changed");
+		});
+	});
+
+	it("calls a deleted file deleted, not changed and to be read again", async () => {
+		await withShell(async ({ dir, filePath, read, shell }) => {
+			await read({ path: filePath }, context as never);
+
+			const output = await shell(
+				`rm ${JSON.stringify(filePath)}`,
+				dir,
+				context as never,
+			);
+
+			expect(output).toContain("this command deleted 1 file you had read");
+			expect(output).toContain(filePath);
+			expect(output).not.toContain("this command changed");
+			expect(output).not.toContain("Read any of them again");
+		});
+	});
+
 	it("says nothing when the command touched nothing the model had read", async () => {
 		await withShell(async ({ dir, filePath, read, shell }) => {
 			await read({ path: filePath }, context as never);

@@ -63,6 +63,18 @@ for (const shell of shells) {
 		);
 
 		it(
+			"keeps a failed native command's own exit code",
+			() => {
+				// PowerShell itself is the one native command known to be there.
+				const result = run(
+					"& ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -Command 'exit 3'",
+				);
+				expect(result.status).toBe(3);
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
 			"preserves an escaped outer line continuation",
 			() => {
 				const result = run(
