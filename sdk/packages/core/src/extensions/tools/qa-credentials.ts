@@ -279,18 +279,49 @@ export function createSecretRedactor(
 	if (maskable.length === 0) {
 		return (text) => text;
 	}
+	// The forms a command prints a value in besides as written: a URL, a
+	// JSON string, base64. Only the exact substring was masked, so `curl -v`
+	// with the password in a query string printed it (automaticum audit
+	// 2026-11-08, rest N8).
+	const forms = maskable.flatMap((credential) =>
+		[...new Set(encodedForms(credential.value))]
+			.filter((form) => form.length >= QA_CREDENTIAL_MIN_VALUE_LENGTH)
+			.map((form) => ({ form, name: credential.name })),
+	);
+	forms.sort((a, b) => b.form.length - a.form.length);
 	return (text) => {
 		if (!text) {
 			return text;
 		}
-		let masked = text;
-		for (const credential of maskable) {
-			masked = masked
-				.split(credential.value)
-				.join(`[redacted: ${credential.name}]`);
+		// An HTTP Basic header carries `user:password` in base64, where the
+		// password's own encoding is not a substring.
+		let masked = text.replace(
+			/(\bBasic\s+)([A-Za-z0-9+/]{8,}={0,2})/g,
+			(whole, lead: string, token: string) => {
+				const decoded = Buffer.from(token, "base64").toString("utf8");
+				const hit = maskable.find((credential) =>
+					decoded.includes(credential.value),
+				);
+				return hit ? `${lead}[redacted: ${hit.name}]` : whole;
+			},
+		);
+		for (const { form, name } of forms) {
+			masked = masked.split(form).join(`[redacted: ${name}]`);
 		}
 		return masked;
 	};
+}
+
+function encodedForms(value: string): string[] {
+	const base64 = Buffer.from(value, "utf8").toString("base64");
+	return [
+		value,
+		encodeURIComponent(value),
+		encodeURIComponent(value).replace(/%20/g, "+"),
+		JSON.stringify(value).slice(1, -1),
+		base64.replace(/=+$/, ""),
+		base64.replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_"),
+	];
 }
 
 /**

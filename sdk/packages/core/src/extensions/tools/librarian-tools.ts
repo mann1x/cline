@@ -365,7 +365,8 @@ function judge(
 		return {
 			verdict: "same book",
 			matches,
-			line: `SAME BOOK, another file: ${Math.round((similar.similarity ?? 0) * 100)}% of its text is in ${said(similar)}. Skip it, or add it to that book as another source if the user wants this format kept too.`,
+			// A fingerprint estimate, not a measurement: "about" (rest N7).
+			line: `SAME BOOK, another file: about ${Math.round((similar.similarity ?? 0) * 100)}% of its text is in ${said(similar)}. Skip it, or add it to that book as another source if the user wants this format kept too.`,
 		};
 	}
 	const named = matches.find((match) => match.reason !== "similar text");
@@ -376,7 +377,7 @@ function judge(
 		line: `ANOTHER VERSION, it seems: ${matches
 			.map(
 				(match) =>
-					`${match.reason}${match.similarity !== undefined ? ` (${Math.round(match.similarity * 100)}% in common)` : ""} with ${said(match)}`,
+					`${match.reason}${match.similarity !== undefined ? ` (about ${Math.round(match.similarity * 100)}% in common)` : ""} with ${said(match)}`,
 			)
 			.join(
 				"; ",
@@ -425,20 +426,20 @@ function batchRelation(one: ReadSource, other: ReadSource): string | undefined {
 	const similarity = fingerprintSimilarity(one.fingerprint, other.fingerprint);
 	const percent = Math.round(similarity * 100);
 	if (similarity >= SAME_TEXT) {
-		return `is the same book (${percent}% of the text) as`;
+		return `is the same book (about ${percent}% of the text) as`;
 	}
 	if (sameDocument(one.runningHeads, other.runningHeads) === false) {
 		return undefined;
 	}
 	if (similarity >= RELATED_TEXT) {
-		return `shares ${percent}% of its text, so is probably another version of,`;
+		return `shares about ${percent}% of its text, so is probably another version of,`;
 	}
 	const sameTitle =
 		one.document.title !== undefined &&
 		other.document.title !== undefined &&
 		normalizeTitle(one.document.title) === normalizeTitle(other.document.title);
 	if (sameTitle && similarity >= TITLE_NEEDS_TEXT) {
-		return `has the same title as, and ${percent}% of its text in common with,`;
+		return `has the same title as, and about ${percent}% of its text in common with,`;
 	}
 	return undefined;
 }
@@ -844,7 +845,7 @@ async function addBook(
 						sameDocument(read[a].runningHeads, read[b].runningHeads) !== false
 					) {
 						versions.push(
-							`${read[a].name} and ${read[b].name} share ${Math.round(similarity * 100)}% of their text`,
+							`${read[a].name} and ${read[b].name} share about ${Math.round(similarity * 100)}% of their text`,
 						);
 					}
 				}

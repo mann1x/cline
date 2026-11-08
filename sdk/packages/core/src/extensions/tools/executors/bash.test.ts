@@ -1456,7 +1456,7 @@ describe("a detached command's changed files", () => {
 			});
 			// The write happens only after the gate, so after the detach.
 			const execution = executor(
-				`echo started; i=0; while [ ! -e "${gate}" ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i + 1)); done; printf 'rewritten\n' > "${tracked}"`,
+				`printf 'early\\n' > "${tracked}"; echo started; i=0; while [ ! -e "${gate}" ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i + 1)); done; printf 'rewritten\n' > "${tracked}"`,
 				dir,
 				{
 					...ctx,
@@ -1482,7 +1482,9 @@ describe("a detached command's changed files", () => {
 					"call-detach-sweep",
 				);
 				const notice = await execution;
-				expect(notice).not.toContain("tracked.txt");
+				// Written before the detach: reported, and said to be partial.
+				expect(notice).toContain("tracked.txt");
+				expect(notice).toContain("This was checked at the detach");
 				const logPath = notice.match(/Output will continue in (.+)]/)?.[1];
 				if (!logPath) throw new Error("Expected detached command log path");
 				await writeFile(gate, "");

@@ -1577,6 +1577,14 @@ export function createShellExecutor(
 			throw error;
 		}
 		const note = await sweep().finally(() => inFlight.delete(run));
+		// Detached, the check ran while the command still runs: it covers what
+		// was written by now, and the log gets the rest when it ends (bash m7).
+		if (
+			note &&
+			output.includes("[Command is still running. Output will continue in ")
+		) {
+			return `${output}${note}\nThis was checked at the detach; what the command writes after it is reported at the end of its log.`;
+		}
 		return `${output}${note}`;
 	};
 }

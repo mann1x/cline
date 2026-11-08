@@ -229,3 +229,35 @@ describe("commandText", () => {
 		expect(commandText("ls -la")).toBe("ls -la");
 	});
 });
+
+// automaticum audit 2026-11-08, rest N8: only the exact substring was masked.
+describe("a credential printed in another form", () => {
+	const redact = createSecretRedactor([
+		{ name: "QA_PASSWORD", value: 'p@ss word/+="x"' },
+	]);
+
+	it("is masked URL-encoded, JSON-escaped and in base64", () => {
+		const value = 'p@ss word/+="x"';
+		for (const form of [
+			encodeURIComponent(value),
+			encodeURIComponent(value).replace(/%20/g, "+"),
+			JSON.stringify(value).slice(1, -1),
+			Buffer.from(value).toString("base64").replace(/=+$/, ""),
+		]) {
+			expect(redact(`> GET /login?pw=${form} HTTP/1.1`)).toBe(
+				"> GET /login?pw=[redacted: QA_PASSWORD] HTTP/1.1",
+			);
+		}
+	});
+
+	it("is masked inside an HTTP Basic header", () => {
+		const token = Buffer.from('qa:p@ss word/+="x"').toString("base64");
+		expect(redact(`Authorization: Basic ${token}`)).toBe(
+			"Authorization: Basic [redacted: QA_PASSWORD]",
+		);
+		const other = Buffer.from("someone:else-entirely").toString("base64");
+		expect(redact(`Authorization: Basic ${other}`)).toBe(
+			`Authorization: Basic ${other}`,
+		);
+	});
+});

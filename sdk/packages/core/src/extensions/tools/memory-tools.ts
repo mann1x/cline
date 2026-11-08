@@ -87,12 +87,19 @@ export function describeNoteHere(
 	cwd: string,
 ): string {
 	let checks: ReturnType<Memory["checkPlaces"]> | undefined;
+	let failed: string | undefined;
 	try {
 		checks = item.places?.length ? memory.checkPlaces(item, cwd) : undefined;
-	} catch {
-		// The check is a courtesy: the note reads as it was kept.
+	} catch (error) {
+		// Said, not swallowed: the description promises the places are
+		// checked, and an unchecked note read as a checked one (automaticum
+		// audit 2026-11-08, rest N6).
+		failed = error instanceof Error ? error.message : String(error);
 	}
-	return describeNote(item, checks ? { checks } : {});
+	const note = describeNote(item, checks ? { checks } : {});
+	return failed === undefined
+		? note
+		: `${note}\n(Its places could not be checked against this workspace: ${failed}.)`;
 }
 
 function tagsOf(value: unknown): string[] {

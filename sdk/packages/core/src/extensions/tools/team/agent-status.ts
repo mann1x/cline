@@ -268,7 +268,7 @@ function etaLine(agent: RoundAgentRecord, now: number): string | undefined {
 		pace.overall,
 		Math.floor(pace.minutes),
 	);
-	return `ETA to its cap: ~${formatDuration((left / rate) * 60_000)} (${left} iterations left, ${paceText}; reliability ${reliability}). An agent usually finishes before its cap.`;
+	return `ETA to its cap: ~${formatDuration((left / rate) * 60_000)} (${left} iterations left, ${paceText}; reliability ${reliability}).`;
 }
 
 /** Where a queued agent stands, and a rough wait from how fast agents finish. */
