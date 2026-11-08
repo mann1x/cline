@@ -29,6 +29,7 @@ import {
 	normalizeNewFileLineEndings,
 } from "./line-endings";
 import { type ReadReceipts, readFileStamp } from "./read-receipts";
+import { wholeFileRefusal } from "./whole-file";
 
 export interface PatchFileChange {
 	type: PatchActionType;
@@ -255,8 +256,26 @@ async function loadFiles(
 	const eols: Record<string, LineEnding> = {};
 	const boms: Record<string, string> = {};
 
+	const updates = new Set(
+		extractFilesForOperations(lines, [PATCH_MARKERS.UPDATE]),
+	);
 	for (const filePath of filesToLoad) {
 		const absolutePath = resolveFilePath(cwd, filePath, restrictToCwd);
+		// An update reads the file as UTF-8 and writes it back: a binary or a
+		// UTF-16 file would come back rewritten byte for byte. Deleting one is
+		// fine (automaticum audit 2026-11-08, readers 13).
+		if (updates.has(filePath)) {
+			const refusal = await wholeFileRefusal(
+				overlay ? await overlay.resolveRead(absolutePath) : absolutePath,
+				"apply_patch",
+				"not patched",
+			);
+			if (refusal) {
+				throw new DiffError(
+					`${filePath}: ${refusal.message} Nothing was applied.`,
+				);
+			}
+		}
 		let fileContent: string;
 		try {
 			fileContent = overlay

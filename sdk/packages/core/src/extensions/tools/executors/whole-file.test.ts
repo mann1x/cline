@@ -96,3 +96,77 @@ describe("whole-file reads", () => {
 		expect(walked).not.toContain("Binary file run_tests matches");
 	});
 });
+
+// UTF-16 is text: its NUL bytes made it "a binary file", and the advice was
+// to run `file` on it. And neither writer checked at all: an edit read it as
+// UTF-8 and wrote it back (automaticum audit 2026-11-08, readers 13 / minor).
+describe("UTF-16 and binary files under the writers", () => {
+	let dir: string;
+	let utf16: string;
+	let binary: string;
+
+	beforeEach(async () => {
+		dir = await fs.mkdtemp(join(tmpdir(), "whole-file-"));
+		utf16 = join(dir, "u16.txt");
+		binary = join(dir, "prog");
+		await fs.writeFile(
+			utf16,
+			Buffer.concat([
+				Buffer.from([0xff, 0xfe]),
+				Buffer.from("hello\nworld\n", "utf16le"),
+			]),
+		);
+		await fs.writeFile(
+			binary,
+			Buffer.concat([Buffer.from("\x7fELF hello\n"), Buffer.alloc(64)]),
+		);
+	});
+
+	afterEach(async () => {
+		await fs.rm(dir, { recursive: true, force: true });
+	});
+
+	it("names UTF-16 as UTF-16, not as binary", async () => {
+		const refusal = await wholeFileRefusal(utf16, "sed");
+		expect(refusal?.kind).toBe("utf16");
+		expect(refusal?.message).toContain("UTF-16 text");
+		expect(refusal?.message).not.toContain("binary");
+	});
+
+	it("refuses an editor change to either, and leaves the bytes alone", async () => {
+		const { createEditorExecutor } = await import("./editor");
+		const editor = createEditorExecutor();
+		for (const file of [utf16, binary]) {
+			const before = await fs.readFile(file);
+			await expect(
+				editor({ path: file, old_text: "hello", new_text: "HELLO" }, dir, {
+					agentId: "a",
+					conversationId: "c",
+					iteration: 1,
+				}),
+			).rejects.toThrow("not edited");
+			expect((await fs.readFile(file)).equals(before)).toBe(true);
+		}
+	});
+
+	it("refuses a patch that updates either, and leaves the bytes alone", async () => {
+		const { createApplyPatchExecutor } = await import("./apply-patch");
+		const patch = createApplyPatchExecutor();
+		for (const name of ["u16.txt", "prog"]) {
+			const file = join(dir, name);
+			const before = await fs.readFile(file);
+			const said = await patch(
+				{
+					input: [`*** Update File: ${name}`, "@@", "-hello", "+HELLO"].join(
+						"\n",
+					),
+				},
+				dir,
+				{} as never,
+			).catch((error: unknown) => String(error));
+			expect(String(said)).toContain("not patched");
+			expect(String(said)).toContain("Nothing was applied");
+			expect((await fs.readFile(file)).equals(before)).toBe(true);
+		}
+	});
+});

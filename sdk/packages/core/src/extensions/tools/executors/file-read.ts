@@ -7,7 +7,6 @@
 import { createReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
 import type { AgentToolContext } from "@cline/shared";
 import { resolveExistingFilePath } from "@cline/shared/storage";
@@ -30,17 +29,38 @@ import {
 } from "./output-limits";
 import { noteShown, type ReadReceipts, readFileStamp } from "./read-receipts";
 import type { ReadLedger } from "./unchanged-reads";
-import { MAX_TEXT_STREAM_BYTES } from "./whole-file";
+import {
+	BINARY_SNIFF_BYTES,
+	MAX_TEXT_STREAM_BYTES,
+	readHead,
+	utf16ByteOrder,
+} from "./whole-file";
 
-/** The first bytes of a file, enough to tell a binary document by. */
-async function readHead(filePath: string): Promise<Uint8Array> {
-	const handle = await fs.open(filePath, "r");
-	try {
-		const buffer = new Uint8Array(512);
-		const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-		return buffer.subarray(0, bytesRead);
-	} finally {
-		await handle.close();
+/**
+ * Lines as `editor`, `grep` and `sed` count them: ended by LF or CRLF, with a
+ * lone CR kept inside its line. readline also broke at a lone CR, so a
+ * progress-bar log or a string holding a raw CR was numbered one line further
+ * per CR than every other tool numbered it, and edits addressed by those
+ * numbers landed on the wrong line (automaticum audit 2026-11-08, readers C1).
+ */
+async function* splitStreamLines(
+	stream: AsyncIterable<string | Buffer>,
+): AsyncGenerator<string> {
+	let pending = "";
+	for await (const chunk of stream) {
+		pending += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+		let start = 0;
+		let at = pending.indexOf("\n", start);
+		while (at >= 0) {
+			const end = at > start && pending[at - 1] === "\r" ? at - 1 : at;
+			yield pending.slice(start, end);
+			start = at + 1;
+			at = pending.indexOf("\n", start);
+		}
+		pending = pending.slice(start);
+	}
+	if (pending !== "") {
+		yield pending;
 	}
 }
 
@@ -165,7 +185,7 @@ const MAX_UNRANGED_LINE_SCAN = 50_000;
  * `end_line: 9999` as a guess at EOF. Counting the remaining lines costs one
  * stream pass with no capture and no allocation.
  */
-const MAX_LINE_COUNT_SCAN = 500_000;
+export const MAX_LINE_COUNT_SCAN = 500_000;
 
 /** A read's text together with the line span it actually returned. */
 /**
@@ -193,6 +213,8 @@ export interface ReadWindow {
 	cuts?: readonly { line: number; shown: number; length: number }[];
 	/** The file holds no lines at all: seeing that is seeing all of it. */
 	empty?: true;
+	/** Every line of the file is in this window. */
+	whole?: true;
 }
 
 interface CapturedLine {
@@ -254,10 +276,7 @@ async function readTextWindow(
 		source.kind === "file"
 			? createReadStream(source.path, { encoding })
 			: Readable.from([source.text]);
-	const reader = createInterface({
-		input: stream,
-		crlfDelay: Number.POSITIVE_INFINITY,
-	});
+	const reader = splitStreamLines(stream);
 	const abortHandler = signal
 		? () => stream.destroy(getAbortError(signal))
 		: undefined;
@@ -324,7 +343,7 @@ async function readTextWindow(
 		if (signal && abortHandler) {
 			signal.removeEventListener("abort", abortHandler);
 		}
-		reader.close();
+		await reader.return(undefined);
 		stream.destroy();
 	}
 
@@ -398,17 +417,31 @@ async function readTextWindow(
 		? `${fileLineCount}+`
 		: `${fileLineCount}`;
 
+	// A line cut at the display limit means the read did not show it all, and
+	// "shown in full" said otherwise (readers 14).
+	const cutLines = captured.flatMap(({ lineNumber, cutFrom }) =>
+		cutFrom !== undefined ? [lineNumber] : [],
+	);
+	const cutNote =
+		cutLines.length === 0
+			? ""
+			: ` ${cutLines.length === 1 ? `Line ${cutLines[0]} was` : `Lines ${cutLines.slice(0, 5).join(", ")}${cutLines.length > 5 ? ` and ${cutLines.length - 5} more` : ""} were`} cut at ${MAX_LINE_CHARS} characters, so not all of ${cutLines.length === 1 ? "it was" : "them were"} shown: grep for what you need on ${cutLines.length === 1 ? "it" : "them"}, which prints the text around each match.`;
+
 	const effectiveEndLine = Math.min(requestedEndLine, totalLines);
 	if (lastCapturedLine >= effectiveEndLine) {
 		const readWholeFile =
 			requestedStartLine === 1 &&
 			!approximateFileLineCount &&
 			lastCapturedLine === fileLineCount;
+		const lineWord = fileLength === "1" ? "line" : "lines";
 		return {
 			text: readWholeFile
-				? `${body}\n\n[${fileLength} lines, shown in full.]`
-				: `${body}\n\n[Lines ${requestedStartLine}-${lastCapturedLine} of ${fileLength}.]`,
+				? cutNote
+					? `${body}\n\n[${fileLength} ${lineWord}, every one of them listed.${cutNote}]`
+					: `${body}\n\n[${fileLength} ${lineWord}, shown in full.]`
+				: `${body}\n\n[Lines ${requestedStartLine}-${lastCapturedLine} of ${fileLength}.${cutNote}]`,
 			...seen,
+			...(readWholeFile ? { whole: true as const } : {}),
 		};
 	}
 
@@ -424,7 +457,7 @@ async function readTextWindow(
 		text:
 			`${body}\n\n` +
 			`[Showing lines ${requestedStartLine}-${lastCapturedLine} of ${totalLineText}. ` +
-			"Use start_line/end_line to read other sections.]",
+			`Use start_line/end_line to read other sections.${cutNote}]`,
 		...seen,
 	};
 }
@@ -526,18 +559,31 @@ export function createFileReadExecutor(
 
 		// A PDF or an Office file read as text is kilobytes of noise the model
 		// then reasons about. Told what it is instead.
+		const head = await readHead(resolvedPath, BINARY_SNIFF_BYTES);
 		const unreadable = unreadableDocumentMessage(
 			resolvedPath,
-			await readHead(resolvedPath),
+			head,
 			documentReader,
 		);
 		if (unreadable) {
 			throw new Error(unreadable);
 		}
 
+		// sed and grep refuse past the same size, so they were no way round
+		// this; only a command that reads part of a file is (readers minor).
 		if (stat.size > MAX_TEXT_STREAM_BYTES) {
 			throw new Error(
-				`Text file too large to stream safely: ${stat.size} bytes (max: ${MAX_TEXT_STREAM_BYTES} bytes). Use a targeted command such as sed, grep, head, or tail to inspect specific sections.`,
+				`Text file too large to stream safely: ${stat.size} bytes (max: ${MAX_TEXT_STREAM_BYTES} bytes). Look at parts of it with run_commands (head, tail, grep -n); sed and grep refuse a file this large too.`,
+			);
+		}
+
+		// What the bytes are, before they are shown as text. A UTF-16 file
+		// came back as NUL-spaced garbage marked "shown in full", and an ELF
+		// binary as "read it in ranges" (readers 13).
+		const utf16 = utf16ByteOrder(head);
+		if (utf16 === undefined && head.includes(0)) {
+			throw new Error(
+				`${resolvedPath} is a binary file (a NUL byte in its first ${BINARY_SNIFF_BYTES} bytes), so it is not shown: read_files shows text. To learn what it is, run \`file\` on it with run_commands.`,
 			);
 		}
 
@@ -547,9 +593,16 @@ export function createFileReadExecutor(
 		// the one failure here that produces content no version of the file ever
 		// had. A reader in another process can still see it; that is what the
 		// stamps are for.
-		const window = await withFileLock(resolvedPath, () =>
+		const window = await withFileLock(resolvedPath, async () =>
 			readTextWindow(
-				{ kind: "file", path: resolvedPath },
+				utf16
+					? {
+							kind: "text",
+							text: new TextDecoder(utf16).decode(
+								(await fs.readFile(resolvedPath)).subarray(2),
+							),
+						}
+					: { kind: "file", path: resolvedPath },
 				encoding,
 				withLineNumbers,
 				start_line,
@@ -558,6 +611,22 @@ export function createFileReadExecutor(
 				maxReadChars,
 			),
 		);
+		const notes: string[] = [];
+		if (utf16) {
+			notes.push(
+				`NOTE: ${resolvedPath} is UTF-16 (${utf16 === "utf-16le" ? "little" : "big"}-endian, with a byte-order mark), decoded here for reading. editor, sed and apply_patch work on UTF-8 and will not change it as it is: convert it with run_commands first (for example \`iconv -f UTF-16 -t UTF-8\`) if it has to change.`,
+			);
+		} else if (
+			/^utf-?8$/i.test(encoding) &&
+			window.text.includes("\uFFFD") &&
+			!isValidUtf8(await fs.readFile(resolvedPath))
+		) {
+			// Latin-1 and the like: every byte that is not UTF-8 is shown as
+			// U+FFFD, with nothing saying so (readers 13).
+			notes.push(
+				`NOTE: ${resolvedPath} is not valid UTF-8 (it may be Latin-1 or another 8-bit encoding). Each byte that does not decode is shown as \uFFFD, which is not what the file holds, and an edit that copies such a line writes \uFFFD in its place.`,
+			);
+		}
 		// Record what was actually looked at, so `editor` can refuse an edit
 		// aimed at lines that were never read. The span comes from the read
 		// itself, not from the request: a read capped by line count or output
@@ -592,10 +661,11 @@ export function createFileReadExecutor(
 				firstLine: window.firstLine,
 				lastLine: window.lastLine,
 				withLineNumbers,
+				wholeFile: window.whole === true,
 			},
 			window.text,
 		);
-		const text = unchanged ?? window.text;
+		const text = [...notes, unchanged ?? window.text].join("\n\n");
 		// Ahead of the content, not after it. A model that has what it asked for
 		// stops reading, and this is the one thing it must not miss: everything
 		// it believed about this file a moment ago may be wrong.
@@ -603,6 +673,15 @@ export function createFileReadExecutor(
 			? `${describeMovedUnderUs(resolvedPath)}\n\n${text}`
 			: text;
 	};
+}
+
+function isValidUtf8(bytes: Uint8Array): boolean {
+	try {
+		new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 /**

@@ -216,7 +216,10 @@ describe("createFileReadExecutor", () => {
 		};
 		const text = await createFileReadExecutor()({ path: uri }, context);
 		expect(String(text)).toContain("[line truncated]");
-		expect(String(text).length).toBeLessThan(2100);
+		// Bounded at the cut, with the note that says it was cut.
+		expect(String(text).length).toBeLessThan(2400);
+		expect(String(text)).not.toContain("shown in full");
+		expect(String(text)).toContain("Line 1 was cut at 2000 characters");
 		await expect(
 			createFileReadExecutor()(
 				{ path: uri },
@@ -235,7 +238,88 @@ describe("createFileReadExecutor", () => {
 	});
 	it("reads a file from an absolute path", async () => {
 		const result = await readTempFile("hello absolute path");
-		expect(result).toBe("1 | hello absolute path\n\n[1 lines, shown in full.]");
+		expect(result).toBe("1 | hello absolute path\n\n[1 line, shown in full.]");
+	});
+
+	// readline broke lines at a lone CR, so read_files numbered a line one
+	// further per CR than grep, sed and the editor (readers C1).
+	it("numbers lines as grep and the editor do: a lone CR is inside its line", async () => {
+		const result = String(
+			await readTempFile(
+				"alpha\nprogress 10%\rprogress 100%\nTARGET\r\nomega\n",
+			),
+		);
+		expect(result).toContain("2 | progress 10%\rprogress 100%");
+		expect(result).toContain("3 | TARGET\n");
+		expect(result).toContain("4 | omega");
+		expect(result).toContain("[4 lines, shown in full.]");
+	});
+
+	it("decodes UTF-16 with a byte-order mark and says it did", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-file-read-"));
+		try {
+			const file = path.join(dir, "u16.txt");
+			await fs.writeFile(
+				file,
+				Buffer.concat([
+					Buffer.from([0xff, 0xfe]),
+					Buffer.from("hello\r\nworld\r\n", "utf16le"),
+				]),
+			);
+			const text = String(
+				await createFileReadExecutor()(
+					{ path: file },
+					{ agentId: "a", iteration: 1 },
+				),
+			);
+			expect(text).toContain("1 | hello");
+			expect(text).toContain("2 | world");
+			expect(text).not.toContain("\u0000");
+			expect(text).toContain("is UTF-16 (little-endian");
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("says a file is not UTF-8 rather than showing replacement characters silently", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-file-read-"));
+		try {
+			const file = path.join(dir, "latin1.txt");
+			await fs.writeFile(file, Buffer.from("caf\xe9 = 1\n", "latin1"));
+			const text = String(
+				await createFileReadExecutor()(
+					{ path: file },
+					{ agentId: "a", iteration: 1 },
+				),
+			);
+			expect(text).toContain("is not valid UTF-8");
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("does not flag a UTF-8 file that holds a real replacement character", async () => {
+		const text = String(await readTempFile("a \uFFFD b\n"));
+		expect(text).not.toContain("not valid UTF-8");
+	});
+
+	it("refuses a binary as binary, not as too long to read at once", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agents-file-read-"));
+		try {
+			const file = path.join(dir, "prog");
+			await fs.writeFile(
+				file,
+				Buffer.concat([Buffer.from("\x7fELF"), Buffer.alloc(64)]),
+			);
+			await expect(
+				createFileReadExecutor()(
+					{ path: file },
+					{ agentId: "a", iteration: 1 },
+				),
+			).rejects.toThrow("is a binary file");
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
 	});
 
 	// The workspace, not the process. Measured on a harness run started one

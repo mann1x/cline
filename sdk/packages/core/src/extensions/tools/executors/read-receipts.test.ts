@@ -1,5 +1,8 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createReadReceipts } from "./read-receipts";
+import { createReadReceipts, readFileStamp } from "./read-receipts";
 
 const FILE = "/repo/game.html";
 
@@ -148,5 +151,35 @@ describe("reads that join up", () => {
 		receipts.noteRead(FILE, 12, 20);
 		expect(receipts.covers(FILE, 1, 20)).toBe(false);
 		expect(receipts.covers(FILE, 12, 20)).toBe(true);
+	});
+});
+
+// A touch moved mtime and nothing else, and the next read said the file had
+// "changed since you last looked" (automaticum audit 2026-11-08, readers 18).
+describe("readFileStamp", () => {
+	it("does not change when only the modification time does", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "stamp-"));
+		try {
+			const file = path.join(dir, "f.txt");
+			await fs.writeFile(file, "same text\n");
+			const before = await readFileStamp(file);
+			const later = new Date(Date.now() + 60_000);
+			await fs.utimes(file, later, later);
+			expect(await readFileStamp(file)).toBe(before);
+			// And a same-length rewrite is a change.
+			await fs.writeFile(file, "SAME TEXT\n");
+			expect(await readFileStamp(file)).not.toBe(before);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("tells an absent file from a present one", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "stamp-"));
+		try {
+			expect(await readFileStamp(path.join(dir, "nope"))).toBe("absent");
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
 	});
 });

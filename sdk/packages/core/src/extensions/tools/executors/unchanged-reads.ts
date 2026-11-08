@@ -40,6 +40,12 @@ export interface ReadKeyParts {
 	firstLine: number;
 	lastLine: number;
 	withLineNumbers: boolean;
+	/**
+	 * The window was the whole file. Otherwise the comparison says nothing
+	 * about the lines outside it, and "has not changed" claimed it did
+	 * (automaticum audit 2026-11-08, readers 15).
+	 */
+	wholeFile?: boolean;
 }
 
 export interface ReadLedger {
@@ -78,8 +84,11 @@ function describeUnchanged(
 	lineCount: number,
 ): string {
 	const span = lineCount === 1 ? "line" : `${lineCount} lines`;
+	const lead = parts.wholeFile
+		? `${parts.path} has not changed since you read it earlier in this conversation, so the content is not repeated here.`
+		: `${lineCount === 1 ? `Line ${parts.firstLine}` : `Lines ${parts.firstLine}-${parts.lastLine}`} of ${parts.path} read exactly as they did earlier in this conversation, so the content is not repeated here. That says nothing about the rest of the file, which this read did not look at.`;
 	return [
-		`${parts.path} has not changed since you read it earlier in this conversation, so the content is not repeated here.`,
+		lead,
 		"",
 		`This is read ${attempt} of the same ${span} with the same arguments. Look back at the earlier read rather than asking for it again: it is the same text, character for character.`,
 		"",

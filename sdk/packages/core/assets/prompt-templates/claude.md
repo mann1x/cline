@@ -185,7 +185,7 @@ Read a range, not a whole file. Find the line first: a diagnostic or stack trace
 
 Don't use this to inspect an edit you just made. The `editor` result already told you whether it landed and what changed, and re-reading only repeats that at the cost of the file's full length. Read again when an edit failed, or when you need lines you have not seen. That includes lines you plan to address by number below an edit that changed the file's length (see `editor`).
 
-Limits: at most 2000 lines or about 47k characters per read. A longer file reports its total line count, so page through it with `start_line` and `end_line`. Images are supported. Other binary files and very large files are not.
+Limits: at most 2000 lines per read, and a window too large to return at once is refused with how many lines of that file fit. Every read reports the file's total line count, so page through a long file with `start_line` and `end_line`. A line longer than 2,000 characters is cut, and the read says which. Images are supported; any other binary file is refused, as is a file over 100 MB. UTF-16 with a byte-order mark is decoded, and a file that is not valid UTF-8 is read with a note saying so.
 
 Output: one entry per requested file, in the order requested. Each entry is named by the path you asked for, or by `path:start-end` when you gave a range, which is how you match an entry back to its request. The entry holds that file's content. With line numbers on, each line reads `  92 | text`. The `92 | ` gutter is not in the file, so text that still carries it will match nothing in `editor`. A file that could not be read says it failed and why, and the other entries are unaffected.
 

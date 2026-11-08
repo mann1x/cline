@@ -26,6 +26,7 @@ import {
 } from "./line-endings";
 import { MAX_LINE_CHARS } from "./output-limits";
 import { isWhole, type ReadReceipts, readFileStamp } from "./read-receipts";
+import { wholeFileRefusal } from "./whole-file";
 
 /**
  * The largest file worth re-scanning for bracket balance after an edit.
@@ -2843,6 +2844,14 @@ export function createEditorExecutor(
 	): Promise<string> => {
 		const noteNoOp = noOpLedgerFor(context);
 		await requireCurrent(filePath);
+		// A binary or a UTF-16 file read as UTF-8 and written back is a file
+		// destroyed: every NUL and every unpaired byte is rewritten. read_files
+		// refuses or decodes them; the editor wrote them (automaticum audit
+		// 2026-11-08, readers 13).
+		const refusal = await wholeFileRefusal(filePath, "editor", "not edited");
+		if (refusal) {
+			throw new Error(`${filePath}: ${refusal.message}`);
+		}
 		const linesBefore = receipts ? await countLines(filePath) : null;
 		const cutBefore = await cutLineTexts(filePath);
 		const noteWrite = async (): Promise<void> => {

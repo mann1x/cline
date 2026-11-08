@@ -104,11 +104,11 @@ If user asked a simple question without any coding context, answer it directly w
 
 # tool: read_files
 
-Read text or image files by absolute path, or a one-based inclusive line range when `start_line`/`end_line` appear on the same file entry. Batch every file you already know you need into one call, and emit it in the same response as other independent tool calls. Each file returns at most 2000 lines / ~47k characters; longer files report their total line count, so paginate with `start_line`/`end_line` on that entry.
+Read text or image files by absolute path, or a one-based inclusive line range when `start_line`/`end_line` appear on the same file entry. Batch every file you already know you need into one call, and emit it in the same response as other independent tool calls. Each file returns at most 2000 lines, and a window too large to return at once is refused with how many lines of that file fit; longer files report their total line count, so paginate with `start_line`/`end_line` on that entry.
 
 Locate first, then read: a diagnostic or stack trace already names the line, `search_codebase` reports the line every match is on, and `ask_lsp` resolves a symbol to where it is defined. Any of those hands you a line number to read around — take roughly 30 lines either side of it, and widen only if what you needed turned out to fall outside that. Reading a range is the normal case; reading a file whole is the exception, reserved for small files when you have no line to start from. Every line returned stays in the conversation for the rest of the task, crowding out the room left to reason about it.
 
-Binary files that are not images and very large files are not supported.
+A binary file that is not an image is refused, as is a file over 100 MB; UTF-16 with a byte-order mark is decoded, and a file that is not valid UTF-8 is read with a note saying so. A line longer than 2,000 characters is cut, and the read says which.
 
 Output: one entry per requested file, in the order requested — each entry names what it answers, then what came back, and a failed entry says that it failed and why. An entry is named by the path you asked for (as `path:start-end` when you gave a range), and what came back is that file's content, with every line prefixed by its number as `  92 | text`. Those numbers are how you address an edit, and they are not in the file. Never paste them into another tool: text carrying a `92 | ` prefix will not match anything. When you are reading in order to copy text into `editor`, set `line_numbers: false` on that file's entry and get it clean.
 

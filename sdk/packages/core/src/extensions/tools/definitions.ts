@@ -17,12 +17,14 @@ import {
 } from "@cline/shared";
 import { captureRunCommandsTimeout } from "../../services/telemetry/core-events";
 import { CommandExitError, CommandTerminationError } from "./executors/bash";
+import { MAX_LINE_COUNT_SCAN } from "./executors/file-read";
 import {
 	MAX_COMMAND_OUTPUT_CHARS,
+	MAX_LINE_CHARS,
 	MAX_READ_LINES,
-	MAX_READ_OUTPUT_CHARS,
 	MAX_SEARCH_OUTPUT_CHARS,
 } from "./executors/output-limits";
+import { MAX_TEXT_STREAM_BYTES } from "./executors/whole-file";
 import {
 	applySharedReadOptions,
 	coalesceOrphanReadRanges,
@@ -453,11 +455,11 @@ export function createReadFilesTool(
 		description:
 			"Read the content of text or image files at the provided absolute paths, or return only an inclusive one-based line range when start_line/end_line are provided on the same file entry as its path. " +
 			"When you already know multiple files you need, read them together in one call, and call this tool in the same response as other independent tool calls. " +
-			`Each read returns at most ${MAX_READ_LINES} lines / ~${Math.round(MAX_READ_OUTPUT_CHARS / 1024)}k characters; longer files report their total line count, page through them with start_line/end_line on that file's entry. ` +
+			`Each read returns at most ${MAX_READ_LINES} lines, and a window too large to return at once is refused with how many lines of that file do fit; every read reports the file's total line count (as N+ past ${MAX_LINE_COUNT_SCAN.toLocaleString("en-US")} lines), so page through a long file with start_line/end_line on that file's entry. A line longer than ${MAX_LINE_CHARS.toLocaleString("en-US")} characters is cut, and the read says which. ` +
 			"Reading a range is the normal case; reading a file whole is the exception. Locate first, then read: a diagnostic or a stack trace already names the line, `search_codebase` reports the line every match is on, and `ask_lsp` resolves a symbol to where it is defined. " +
 			"Any of those hands you a line number to read around — take roughly 30 lines either side of it, and widen only if what you needed turned out to fall outside that. Read a file entire only when you have no line to start from and it is genuinely small. " +
 			"The cost of reading more than you need is not the tool call: every line returned stays in the conversation for the rest of the task, crowding out the room left to reason about it. " +
-			"Binary files that are not image and large files are not supported. " +
+			`A binary file that is not an image is refused, as is a file over ${MAX_TEXT_STREAM_BYTES / 1_000_000} MB; UTF-16 with a byte-order mark is decoded, and a file that is not valid UTF-8 is read with a note saying so. ` +
 			`Output: one entry per requested file, in the order requested — ${TOOL_RESULT_ENVELOPE} An entry is named by the path you asked for (as \`path:start-end\` when you gave a range), and what came back is that file's content, with every line prefixed by its number as \`  92 | text\`. ` +
 			"Those numbers are how you address an edit, and they are not in the file. Never paste them into another tool: text carrying a `92 | ` prefix will not match anything. When you are reading in order to copy text into `editor`, set `line_numbers: false` on that file's entry and get it clean. ",
 		inputSchema: zodToJsonSchema(ReadFilesInputSchema),

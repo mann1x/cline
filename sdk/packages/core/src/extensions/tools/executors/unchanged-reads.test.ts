@@ -8,6 +8,7 @@ const whole = (path = FILE) => ({
 	firstLine: 1,
 	lastLine: 134,
 	withLineNumbers: true,
+	wholeFile: true,
 });
 
 describe("createReadLedger", () => {
@@ -26,6 +27,26 @@ describe("createReadLedger", () => {
 		expect(notice).toContain("has not changed");
 		expect(notice).not.toContain("the file");
 		expect(notice).toContain("134 lines");
+	});
+
+	// A window that read the same says nothing about the lines outside it:
+	// "has not changed" was said of a file edited at line 250 after a re-read
+	// of lines 1-20 (automaticum audit 2026-11-08, readers 15).
+	it("speaks only for the window when the read was not the whole file", () => {
+		const ledger = createReadLedger();
+		const window = {
+			path: FILE,
+			firstLine: 1,
+			lastLine: 20,
+			withLineNumbers: true,
+		};
+		ledger.noticeFor(window, "the window");
+
+		const notice = ledger.noticeFor(window, "the window") ?? "";
+
+		expect(notice).not.toContain("has not changed");
+		expect(notice).toContain("Lines 1-20");
+		expect(notice).toContain("says nothing about the rest of the file");
 	});
 
 	// The whole point: a read after a real edit is how work gets done, and it

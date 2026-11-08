@@ -98,7 +98,7 @@ Call shape: `read_files(files: [{path, start_line?, end_line?, line_numbers?}])`
 - `start_line` and `end_line` select an inclusive one-based line range on that file entry.
 - `line_numbers` controls whether returned lines have their one-based number prefix. Set it to `false` when copying text for an edit.
 
-Locate before reading when possible. A diagnostic, search result, stack trace, or language-server result often identifies the relevant line; then read roughly 30 lines around it. Read whole files only when they are genuinely small and no narrower starting point exists. Each read returns at most 2000 lines or about 47k characters; longer files report their total length and can be paged with `start_line` and `end_line`.
+Locate before reading when possible. A diagnostic, search result, stack trace, or language-server result often identifies the relevant line; then read roughly 30 lines around it. Read whole files only when they are genuinely small and no narrower starting point exists. Each read returns at most 2000 lines, and a window too large to return at once is refused with how many lines of that file fit; longer files report their total length and can be paged with `start_line` and `end_line`.
 
 Output: one entry per requested file, in request order. Each entry names the path you asked for, or `path:start-end` for a range, and contains that file’s content with every line prefixed by its one-based number, such as `  92 | text`. A failed entry states that it failed and why. The line-number prefixes are display metadata, not file content, and must not be copied into an edit.
 

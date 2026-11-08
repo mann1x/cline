@@ -30,7 +30,8 @@
 // filesystem what the file is now and comparing it to what it was when this
 // session last looked.
 
-import { stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile, stat } from "node:fs/promises";
 
 /**
  * What the filesystem said about a file the last time this session saw it.
@@ -54,11 +55,26 @@ export type FileStamp = string;
 
 const ABSENT_STAMP: FileStamp = "absent";
 
+/**
+ * Files up to this size are stamped by their content rather than by mtime.
+ *
+ * A touch, a `git checkout` of the same text, or an editor's save-without-
+ * change moves mtime and nothing else, and the next read told the model the
+ * file had "changed since you last looked" and to discard what it knew
+ * (automaticum audit 2026-11-08, readers 18). Hashing a megabyte costs about
+ * a millisecond; past that the stat answers alone, as it always did.
+ */
+const CONTENT_STAMP_MAX_BYTES = 1_000_000;
+
 export async function readFileStamp(
 	filePath: string,
 ): Promise<FileStamp | undefined> {
 	try {
 		const info = await stat(filePath, { bigint: true });
+		if (info.isFile() && info.size <= BigInt(CONTENT_STAMP_MAX_BYTES)) {
+			const bytes = await readFile(filePath);
+			return `${bytes.length}#${createHash("sha1").update(bytes).digest("hex")}`;
+		}
 		return `${info.size}:${info.mtimeNs}`;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
