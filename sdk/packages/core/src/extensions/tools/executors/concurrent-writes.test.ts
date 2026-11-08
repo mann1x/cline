@@ -97,7 +97,7 @@ describe("a file two writers share", () => {
 			const result = textOf(await read({ path: filePath }, context as never));
 
 			expect(result).toContain("changed since you last looked");
-			expect(result).toContain("not because of anything you did");
+			expect(result).toContain("not through an edit this session recorded");
 			// The content still comes back: the warning is a preface, not a
 			// refusal. A read is safe; it is the edit that is not.
 			expect(result).toContain("TWO");

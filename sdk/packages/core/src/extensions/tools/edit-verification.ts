@@ -91,7 +91,55 @@ export function extractPaths(input: unknown): string[] {
 			}
 		}
 	}
+	// `apply_patch` names its files inside the patch text. Unread, no file it
+	// wrote was ever tracked, and a run that edited only by patch finished
+	// with nothing checked (automaticum audit 2026-11-08, M6). A deleted file
+	// has nothing left to check; a moved one is checked where it went.
+	if (typeof bag.input === "string") {
+		for (const line of bag.input.split(/\r?\n/)) {
+			const named = /^\*\*\* (?:Add File|Update File|Move to): (.+)$/.exec(
+				line,
+			);
+			if (named) {
+				push(named[1]);
+			}
+		}
+	}
 	return found;
+}
+
+/**
+ * The files a checker's answer says it read, or `undefined` when the answer is
+ * not one this can read.
+ *
+ * `check_file` answers in JSON, one entry per file, and an entry carrying
+ * `error` is a file it could not read. Counting every path the call named
+ * marked a file checked when the checker failed on it, or never reached it
+ * past its per-call limit (automaticum audit 2026-11-08, M7).
+ */
+function filesReportedOn(output: unknown): string[] | undefined {
+	if (typeof output !== "string") {
+		return undefined;
+	}
+	let answer: unknown;
+	try {
+		answer = JSON.parse(output);
+	} catch {
+		return undefined;
+	}
+	const files = (answer as { files?: unknown } | null)?.files;
+	if (!Array.isArray(files)) {
+		return undefined;
+	}
+	return files
+		.filter(
+			(entry): entry is { uri: string } =>
+				entry != null &&
+				typeof entry === "object" &&
+				typeof (entry as { uri?: unknown }).uri === "string" &&
+				(entry as { error?: unknown }).error === undefined,
+		)
+		.map((entry) => entry.uri);
 }
 
 /**
@@ -103,7 +151,12 @@ export function extractPaths(input: unknown): string[] {
  */
 function normalizePath(filePath: string): string {
 	const forward = filePath.replace(/\\/g, "/").replace(/^\.\//, "");
-	return forward.toLowerCase();
+	// Case is folded only where the filesystem folds it. On Linux `Foo.ts` and
+	// `foo.ts` are two files, and checking one cleared the other (automaticum
+	// audit 2026-11-08, m4).
+	return process.platform === "win32" || DRIVE_PATH.test(filePath)
+		? forward.toLowerCase()
+		: forward;
 }
 
 /** A Windows path with its drive, absolute on either platform's reading. */
@@ -141,6 +194,20 @@ export class EditVerificationTracker {
 	/** Whether this tracker can ever have anything to say. */
 	get armed(): boolean {
 		return this.editTools.size > 0 && this.checkTools.size > 0;
+	}
+
+	/** Whether calls to this tool verify files. */
+	isCheckTool(toolName: string): boolean {
+		return this.checkTools.has(toolName);
+	}
+
+	/**
+	 * A checker call that returned: the files its answer reported on are
+	 * checked, or every file the call named when the answer says nothing a
+	 * file-by-file reading can use.
+	 */
+	recordCheckResult(input: unknown, output: unknown): void {
+		this.recordChecked(filesReportedOn(output) ?? extractPaths(input));
 	}
 
 	recordToolCall(toolName: string, input: unknown): void {
@@ -243,10 +310,11 @@ export function isEditVerificationWrapped(tool: object): boolean {
 /**
  * Watch a tool's calls without changing what it does.
  *
- * Only the call is observed — not the result. A failed edit still counts as
- * having touched the file: the tool may have written part of it, and a guard
- * that trusted `success` would be answering a different question than "is this
- * file in a state anyone has looked at".
+ * An edit is observed at the call, not the result. A failed edit still counts
+ * as having touched the file: the tool may have written part of it, and a
+ * guard that trusted `success` would be answering a different question than
+ * "is this file in a state anyone has looked at". A check is the opposite: it
+ * counts only once it has answered, for the files the answer covers.
  */
 export function withEditVerificationCapture<TInput, TOutput>(
 	tool: AgentTool<TInput, TOutput>,
@@ -258,6 +326,13 @@ export function withEditVerificationCapture<TInput, TOutput>(
 	const wrapped: AgentTool<TInput, TOutput> = {
 		...tool,
 		execute: async (input, context) => {
+			// A checker counts once it has answered, not when it is called: one
+			// that threw checked nothing.
+			if (tracker.isCheckTool(tool.name)) {
+				const output = await tool.execute(input, context);
+				tracker.recordCheckResult(input, output);
+				return output;
+			}
 			tracker.recordToolCall(tool.name, input);
 			return tool.execute(input, context);
 		},

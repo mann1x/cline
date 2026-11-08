@@ -49,7 +49,7 @@ describe("apply_patch and the read receipts", () => {
 		await executors.applyPatch?.({ input: patch(" a", "+X", " b") }, dir, ctx);
 		const again = String(await executors.readFile?.({ path: file }, ctx));
 
-		expect(again).not.toContain("not because of anything you did");
+		expect(again).not.toContain("not through an edit this session recorded");
 		expect(again).toContain("X");
 	});
 

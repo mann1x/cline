@@ -127,3 +127,26 @@ describe("a registry handed to the next task", () => {
 		expect(receipts.paths()).toEqual([]);
 	});
 });
+
+// automaticum audit 2026-11-08, M4: a file past the read cap could never be
+// covered, because one read had to span all of it.
+describe("reads that join up", () => {
+	const FILE = "/ws/big.txt";
+
+	it("cover a range together when they touch or overlap", () => {
+		const receipts = createReadReceipts();
+		receipts.noteRead(FILE, 1, 2000);
+		receipts.noteRead(FILE, 2001, 2500);
+		expect(receipts.covers(FILE, 1, 2500)).toBe(true);
+		receipts.noteRead(FILE, 2400, 3000);
+		expect(receipts.covers(FILE, 1, 3000)).toBe(true);
+	});
+
+	it("still refuse a range with a line nobody read", () => {
+		const receipts = createReadReceipts();
+		receipts.noteRead(FILE, 1, 10);
+		receipts.noteRead(FILE, 12, 20);
+		expect(receipts.covers(FILE, 1, 20)).toBe(false);
+		expect(receipts.covers(FILE, 12, 20)).toBe(true);
+	});
+});

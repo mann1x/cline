@@ -326,10 +326,23 @@ export function createReadReceipts(): OwnedReadReceipts {
 			if (!spans) {
 				return false;
 			}
-			// A single read has to cover the whole range. Stitching two disjoint
-			// reads together would let a model claim it had seen a range it only
-			// saw the ends of, which is exactly the mistake being guarded.
-			return spans.some((span) => span.first <= first && span.last >= last);
+			// Reads that touch or overlap leave no line unseen, so together they
+			// cover what they span; a gap between them is a line nobody saw, and
+			// that is still refused. Requiring one read to cover everything made
+			// a file past the read cap (2,000 lines, or the character cap)
+			// impossible to cover at all: "read all of it" could not be done
+			// (automaticum audit 2026-11-08, M4).
+			let reach = first - 1;
+			for (const span of [...spans].sort((a, b) => a.first - b.first)) {
+				if (span.first > reach + 1) {
+					break;
+				}
+				reach = Math.max(reach, span.last);
+				if (reach >= last) {
+					return true;
+				}
+			}
+			return reach >= last;
 		},
 
 		hasAny(filePath) {

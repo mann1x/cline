@@ -616,8 +616,8 @@ export function createFileReadExecutor(
  */
 function describeMovedUnderUs(path: string): string {
 	return [
-		`NOTE: ${path} changed since you last looked at it, and not because of anything you did.`,
-		"Something outside this session wrote to it — another agent working in parallel, a background task, a command you ran, or the user.",
+		`NOTE: ${path} changed since you last looked at it, and not through an edit this session recorded.`,
+		"A command wrote to it — one you ran, in the foreground or the background — or another agent working in parallel, or the user.",
 		"Use the content below and discard what you remember of this file: earlier line numbers may now point at different code.",
 	].join(" ");
 }

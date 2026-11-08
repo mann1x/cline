@@ -431,7 +431,7 @@ async function applyChanges(
 				receipts.noteStamp(onDisk, stamp);
 				receipts.retire(onDisk);
 				throw new DiffError(
-					`${filePath} changed since you last read it, and not because of anything you did — something outside this session wrote to it. Nothing was applied. Call read_files for it to see what it says now, then decide whether this patch is still right.`,
+					`${filePath} changed since you last read it, and not through an edit this session recorded — a command (yours included, in the foreground or the background), another agent, or something outside this session wrote to it. Nothing was applied. Call read_files for it to see what it says now, then decide whether this patch is still right.`,
 				);
 			}
 		}

@@ -356,7 +356,7 @@ export function createGrepExecutor(options: GrepExecutorOptions = {}) {
 				options.receipts.forget(filePath);
 				options.receipts.noteStamp(filePath, stamp);
 				push(
-					`${shown}: changed since you last read it, and not because of anything you did — something outside this session wrote to it. Call read_files for it before editing.`,
+					`${shown}: changed since you last read it, and not through an edit this session recorded — a command (yours included, in the foreground or the background), another agent, or something outside this session wrote to it. Call read_files for it before editing.`,
 				);
 				continue;
 			}

@@ -970,6 +970,23 @@ function chooseRepair(
 		if (after === null || !gotPast(after, stop)) {
 			continue;
 		}
+		// Measured in the original text. An inserted `}` moves everything
+		// after it one column on, so a parser stopping at the very same `{`
+		// read as one column further and the edit was offered as progress
+		// that it was not.
+		if (after !== undefined && stopAt >= 0 && after.line !== undefined) {
+			const afterAt = offsetIn(
+				candidate.text,
+				origin,
+				after.line,
+				after.column ?? 1,
+			);
+			const delta = candidate.text.length - body.length;
+			const inOriginal = afterAt > candidate.at ? afterAt - delta : afterAt;
+			if (afterAt >= 0 && inOriginal <= stopAt) {
+				continue;
+			}
+		}
 		const counts = scanWithBalance(candidate.text, origin).balance.get(
 			candidate.line,
 		);
@@ -1002,8 +1019,14 @@ function chooseRepair(
 			: `after it, ${parser.name} gets past ${where(stop)} and next stops at ${where(best.after)} (${best.after.message})`;
 	// Offered, not prescribed. The parser says the edit gets it further; which
 	// block was meant to close is the code's meaning, and only that says it.
+	// "Accepts" only when it does: an edit that gets the parser further but not
+	// through was introduced as one the parser accepts.
+	const lead =
+		best.after === undefined
+			? `one edit ${parser.name} accepts`
+			: `one edit that gets ${parser.name} further`;
 	return (
-		`one edit ${parser.name} accepts: ${best.candidate.say} — checked: ${outcome}. ` +
+		`${lead}: ${best.candidate.say} — checked: ${outcome}. ` +
 		"Brackets cannot tell which block was meant to close here, so make sure it is this one.\n" +
 		`      ${PRESCRIPTION_MARKER}${best.candidate.call} — if that is the change you mean; there is no text to match on.`
 	);

@@ -4,11 +4,13 @@
  * Built-in implementation for filesystem editing operations.
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentToolContext } from "@cline/shared";
 import type { AgentOverlay } from "../../../runtime/sandbox/overlay-fs";
 import {
+	canScanDelimiters,
 	describeDelimiterBalance,
 	PRESCRIPTION_MARKER,
 } from "../delimiter-balance";
@@ -439,13 +441,38 @@ function replaceNthOccurrence(
 
 /** Where the occurrences sit, as one-based line numbers, for the error text. */
 function occurrenceLines(content: string, needle: string): number[] {
-	const lines: number[] = [];
+	// Stepped past each match, as the count is, and each line named once: the
+	// overlapping walk listed "lines 2, 2, 2, 4, 4, 4" beside a count of 4
+	// (automaticum audit 2026-11-08, m2).
+	const lines = new Set<number>();
+	if (needle === "") {
+		return [];
+	}
 	let index = content.indexOf(needle);
 	while (index >= 0) {
-		lines.push(content.slice(0, index).split(/\r\n|\n/).length);
-		index = content.indexOf(needle, index + 1);
+		lines.add(content.slice(0, index).split(/\r\n|\n/).length);
+		index = content.indexOf(needle, index + needle.length);
 	}
-	return lines;
+	return [...lines];
+}
+
+/** Whether a file breaks some lines with CRLF and others with a bare LF. */
+function hasMixedLineEndings(content: string): boolean {
+	return content.includes("\r\n") && /(^|[^\r])\n/.test(content);
+}
+
+/** Every match of `text` in `content`, a line break matching CRLF or LF. */
+function findAcrossLineEndings(content: string, text: string): string[] {
+	const pattern = text
+		.split(/\r\n|\n/)
+		.map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+		.join("\r?\n");
+	if (pattern === "") {
+		return [];
+	}
+	return [...content.matchAll(new RegExp(pattern, "g"))].map(
+		(match) => match[0],
+	);
 }
 
 /** Past this, the prefix search costs more than the hint is worth. */
@@ -464,9 +491,14 @@ const MAX_DIVERGENCE_SEARCH_BYTES = 2_000_000;
  * handful of scans, and its end is the divergence.
  */
 function describeFirstDivergence(
-	content: string,
-	needle: string,
+	fileContent: string,
+	sentNeedle: string,
 ): string | undefined {
+	// Compared with every line break as LF: the match itself accepts the
+	// file's own breaks, CRLF, LF or a mixture, so a break is never the
+	// difference to point at. Line numbers are unchanged by it.
+	const content = fileContent.replace(/\r\n/g, "\n");
+	const needle = sentNeedle.replace(/\r\n/g, "\n");
 	if (needle.length < 24 || content.length > MAX_DIVERGENCE_SEARCH_BYTES) {
 		return undefined;
 	}
@@ -487,7 +519,12 @@ function describeFirstDivergence(
 		return undefined;
 	}
 	const index = content.indexOf(needle.slice(0, low));
-	const line = content.slice(0, index).split(/\r\n|\n/).length;
+	const line = content.slice(0, index).split("\n").length;
+	// The line it stops matching on, which is what the model has to fix: the
+	// line the match starts on is correct by definition, and naming it sent the
+	// model to "replace line 1 by number" over a line that was right
+	// (automaticum audit 2026-11-08, C6).
+	const divergesOn = content.slice(0, index + low).split("\n").length;
 	// Both sides quoted with line breaks shown the same way, and said out loud
 	// when the file is CRLF.
 	//
@@ -500,13 +537,20 @@ function describeFirstDivergence(
 	// the theory for the rest of the run. It was never true -- `old_text` is
 	// converted to the file's own EOL before any comparison -- and the
 	// divergence in that call was two closing braces the model had invented.
-	const crlf = content.includes("\r\n");
-	const endingNote = crlf
-		? " (Line breaks are shown as \\n on both sides. This file uses CRLF, and your `old_text` is converted to CRLF before it is compared, so line endings are never the reason a match fails.)"
+	const endingNote = fileContent.includes("\r\n")
+		? ` (Line breaks are shown as \\n on both sides. This file uses ${
+				hasMixedLineEndings(fileContent)
+					? "CRLF on some lines and LF on others"
+					: "CRLF"
+			}, and a line break in your \`old_text\` matches either, so line endings are not the reason this match fails.)`
 		: "";
-	return ` The first ${low} character(s) do match, on line ${line}, and diverge there: the file has ${quoteExcerpt(
+	const where =
+		divergesOn === line
+			? `on line ${line}, and diverge there`
+			: `from line ${line}, and diverge on line ${divergesOn}`;
+	return ` The first ${low} character(s) do match, ${where}: the file has ${quoteExcerpt(
 		content.slice(index + low, index + low + 48),
-	)} where \`old_text\` has ${quoteExcerpt(needle.slice(low, low + 48))}.${endingNote} Send the edit again with the file's own text from that point, or replace line ${line} by number with \`start_line\`/\`end_line\`.`;
+	)} where \`old_text\` has ${quoteExcerpt(needle.slice(low, low + 48))}.${endingNote} Send the edit again with the file's own text from that point, or replace line ${divergesOn} by number with \`start_line\`/\`end_line\`.`;
 }
 
 /**
@@ -545,6 +589,28 @@ async function replaceInFile(
 	let normalizedOldStr = normalizeLineEndings(oldStr, eol);
 	let normalizedNewStr = normalizeLineEndings(newStr ?? "", eol);
 	let occurrences = countOccurrences(content, normalizedOldStr);
+
+	// A file that mixes CRLF and LF holds lines no single conversion of
+	// `old_text` can match: it was converted to CRLF, the file broke the line
+	// with LF, and "not found" followed -- with a note saying line endings are
+	// never the reason (automaticum audit 2026-11-08, M1). Nobody can type the
+	// file's mixture back, so either break is accepted, and the file's own
+	// bytes become the anchor.
+	if (occurrences === 0 && hasMixedLineEndings(content)) {
+		const spelled = findAcrossLineEndings(content, oldStr);
+		if (spelled.length > 0 && spelled.every((text) => text === spelled[0])) {
+			normalizedOldStr = spelled[0] as string;
+			occurrences = spelled.length;
+		} else if (spelled.length > 1) {
+			throw new Error(
+				`No replacement performed: the text appears ${spelled.length} times in ${filePath}, with different line endings each time, on lines ${[
+					...new Set(spelled.flatMap((text) => occurrenceLines(content, text))),
+				].join(
+					", ",
+				)}. Extend \`old_text\` until it is unique, or replace by line number with \`start_line\`/\`end_line\`.`,
+			);
+		}
+	}
 
 	// `read_files` renders content as `  92 | <text>` and the model pastes the
 	// gutter back in. Naming the mistake was not enough: mined from real
@@ -636,7 +702,10 @@ async function replaceInFile(
 		// measured exit from it was PowerShell. Say where they are and how to
 		// choose.
 		throw new Error(
-			`No replacement performed: the text appears ${occurrences} times in ${filePath}, on lines ${occurrenceLines(content, normalizedOldStr).join(", ")}. Extend \`old_text\` until it is unique, pass \`occurrence\` to pick one, pass \`replace_all\` to change every one, or replace by line number with \`start_line\`/\`end_line\`.`,
+			`No replacement performed: the text appears ${occurrences} times in ${filePath}, on ${(() => {
+				const where = occurrenceLines(content, normalizedOldStr);
+				return `line${where.length === 1 ? "" : "s"} ${where.join(", ")}${where.length < occurrences ? " (more than once on some of them)" : ""}`;
+			})()}. Extend \`old_text\` until it is unique, pass \`occurrence\` to pick one, pass \`replace_all\` to change every one, or replace by line number with \`start_line\`/\`end_line\`.`,
 		);
 	} else {
 		// Replacer function so "$"-sequences in new_text ($&, $', $`, $$, $n)
@@ -650,7 +719,16 @@ async function replaceInFile(
 			"the text already reads exactly this way",
 			undefined,
 			options.noteNoOp?.(
-				`text\u0000${filePath}\u0000${oldStr}\u0000${newStr ?? ""}`,
+				(() => {
+					const at = Math.max(0, content.indexOf(normalizedOldStr));
+					const first = content.slice(0, at).split(/\r\n|\n/).length;
+					return noOpKey(
+						filePath,
+						content,
+						first,
+						first + normalizedOldStr.split(/\r\n|\n/).length - 1,
+					);
+				})(),
 			),
 			normalizedOldStr === normalizedNewStr
 				? copiedAnchorHint(content, normalizedOldStr)
@@ -780,6 +858,26 @@ export const NO_CHANGE_ERROR_PREFIX = "No change: ";
  */
 export const DUPLICATED_RANGE_ERROR_PREFIX = "Duplicated instead of replaced: ";
 
+/**
+ * What a refused no-op is counted under: the lines it left as they were, in
+ * this file as it stands.
+ *
+ * The count is of results, as {@link noChangeMessage} says, so the key holds
+ * nothing of the call's shape. Keyed on the call, a whole-line replace and an
+ * `old_text` edit leaving the same line unchanged were two first attempts
+ * (automaticum audit 2026-11-08, m5). The file's digest is in it because a
+ * changed file is a new question.
+ */
+function noOpKey(
+	filePath: string,
+	content: string,
+	first: number,
+	last: number,
+): string {
+	const digest = createHash("sha1").update(content).digest("hex");
+	return `noop\u0000${filePath}\u0000${first}-${last}\u0000${digest}`;
+}
+
 /** Past this, a line is too long to retype: send the part that changes. */
 const RETYPED_LINE_CHARS = 120;
 
@@ -901,11 +999,10 @@ function isContentDoubled(content: string, updated: string): boolean {
  * earlier were about to be added a second time, and the refusal never said so.
  * The model spent six thinking blocks deciding the tool was broken.
  *
- * Two or more non-blank lines matching contiguously is a block; a single line,
- * or a run of blanks, is left unnamed rather than guessed at. The bar is
- * deliberately low, because the thing being detected is a verbatim copy and a
- * two-line copy is still a copy -- pasting a read's gutter back is exactly this
- * shape, and its lines are often one character wide.
+ * Two or more lines with a word in them, matching contiguously, is a block; a
+ * single line, a run of blanks, or a run of closing brackets is left unnamed
+ * rather than guessed at. The bar is otherwise deliberately low, because the
+ * thing being detected is a verbatim copy and a two-line copy is still a copy.
  *
  * **A copy of the range the call names is not reported.** Intent cannot be read
  * off the payload -- repeating a line deliberately and duplicating one by
@@ -931,9 +1028,16 @@ function locateExistingBlock(
 	while (from < to && trimmed[from] === "") from++;
 	while (to > from && trimmed[to - 1] === "") to--;
 	const block = trimmed.slice(from, to);
-	// One line, or a run of blanks, is not evidence of anything.
-	const nonBlank = block.filter((line) => line !== "").length;
-	if (block.length < 2 || nonBlank < 2) {
+	// One line, or a run of blanks, is not evidence of anything -- and neither
+	// are lines of nothing but brackets and punctuation. `}` then `}` is in
+	// every file that nests twice, so adding the two braces a function was
+	// missing was refused as a copy of some other function's ending, and the
+	// refusal sent the model to edit correct code (automaticum audit
+	// 2026-11-08, C4). A copy is told by what it says, and closers say nothing.
+	const substantive = block.filter((line) =>
+		/[\p{L}\p{N}_]/u.test(line),
+	).length;
+	if (block.length < 2 || substantive < 2) {
 		return undefined;
 	}
 	const fileLines = splitFileLines(content).lines.map((line) => line.trim());
@@ -1130,6 +1234,70 @@ function findAnchorWithinRange(
 	return { index, length: supplied.length };
 }
 
+/**
+ * Why a one-line `old_text` that is shorter than the lines named was not used
+ * as a fragment of them.
+ *
+ * It went to the whole-line comparison, which reported "differ at column 1"
+ * and "that is the whole of the mismatch" for a fragment that was simply
+ * misspelled, or that occurs twice on the line -- and never said either
+ * (automaticum audit 2026-11-08, M2).
+ */
+function describeFragmentMiss(
+	rangeText: string,
+	oldStr: string,
+	startLineOneBased: number,
+): string | undefined {
+	const target = anchorText(rangeText);
+	const suppliedText = anchorText(oldStr);
+	const supplied = hasLineNumberGutter(suppliedText)
+		? anchorText(stripLineNumberGutter(suppliedText))
+		: suppliedText;
+	if (
+		supplied === "" ||
+		supplied.includes("\n") ||
+		supplied.length >= target.length
+	) {
+		return undefined;
+	}
+	const at = (index: number) => {
+		const before = target.slice(0, index).split("\n");
+		return `line ${startLineOneBased + before.length - 1} column ${(before.at(-1) ?? "").length + 1}`;
+	};
+	const found: number[] = [];
+	for (
+		let index = target.indexOf(supplied);
+		index >= 0;
+		index = target.indexOf(supplied, index + 1)
+	) {
+		found.push(index);
+	}
+	if (found.length > 1) {
+		return `Your \`old_text\` occurs ${found.length} times in the lines named — at ${found
+			.slice(0, 6)
+			.map(at)
+			.join(
+				", ",
+			)}${found.length > 6 ? ", …" : ""} — so which one to change cannot be told. Add characters from either side of it until it occurs once in those lines.`;
+	}
+	let low = 0;
+	let high = supplied.length;
+	while (low < high) {
+		const mid = Math.ceil((low + high) / 2);
+		if (target.includes(supplied.slice(0, mid))) {
+			low = mid;
+		} else {
+			high = mid - 1;
+		}
+	}
+	if (low < Math.min(4, supplied.length)) {
+		return "Your `old_text` is not in the lines named — not even its first few characters.";
+	}
+	const index = target.indexOf(supplied.slice(0, low));
+	const fileSide = target.slice(index + low, index + low + 24).split("\n")[0];
+	return `Your \`old_text\` is not in the lines named. Its first ${low} character(s) are, at ${at(index)}, and then the file has ${quoteExcerpt(fileSide ?? "")} where \`old_text\` has ${quoteExcerpt(supplied.slice(low, low + 24))}.`;
+}
+
 /** How much of a line to show either side of the character that differs. */
 const DIVERGENCE_WINDOW = 48;
 
@@ -1182,7 +1350,7 @@ function describeAnchorDivergence(
 		) {
 			column += 1;
 		}
-		return `They agree until line ${startLineOneBased + index}, and differ at column ${column + 1}:\n  the file  ${divergenceWindow(fileLine, column)}\n  old_text  ${divergenceWindow(sentLine, column)}\nThat is the whole of the mismatch — send \`old_text\` exactly as the file holds it there, or drop it and let the range stand alone.`;
+		return `They agree until line ${startLineOneBased + index}, and differ at column ${column + 1}:\n  the file  ${divergenceWindow(fileLine, column)}\n  old_text  ${divergenceWindow(sentLine, column)}\nThat is the first place they differ — send \`old_text\` exactly as the file holds it there, or drop it and let the range stand alone.`;
 	}
 
 	if (target.length !== supplied.length) {
@@ -1302,7 +1470,16 @@ async function replaceLineRange(
 	let reanchoredFrom: { start: number; end: number } | undefined;
 	if (anchored && !anchorDescribesRange(rangeText, oldStr as string)) {
 		const uniqueSpan = findUniqueAnchorSpan(content, eol, oldStr as string);
-		if (uniqueSpan) {
+		// Only an anchor wholly outside the named lines says the numbers are
+		// stale. One inside them is the model pointing at part of its own range
+		// -- moving the edit onto that part replaced one line with the whole
+		// range's text and left the rest of the range in place, duplicated, under
+		// a message calling correct line numbers stale.
+		const outsideRange =
+			uniqueSpan !== undefined &&
+			(uniqueSpan.endLine < startLineOneBased ||
+				uniqueSpan.startLine > effectiveEndLine);
+		if (uniqueSpan && outsideRange) {
 			reanchoredFrom = {
 				start: startLineOneBased,
 				end: effectiveEndLine,
@@ -1330,9 +1507,71 @@ async function replaceLineRange(
 		const within = findAnchorWithinRange(rangeText, oldStr as string);
 		if (within) {
 			const target = anchorText(rangeText);
+			const rangeLines = target.split("\n").length;
+			const firstTouched = target.slice(0, within.index).split("\n").length;
+			const lastTouched = target
+				.slice(0, within.index + within.length)
+				.split("\n").length;
+			const named =
+				startLineOneBased === effectiveEndLine
+					? `line ${startLineOneBased}`
+					: `lines ${startLineOneBased}-${effectiveEndLine}`;
+			const anchorAt =
+				firstTouched === lastTouched
+					? `line ${startLineOneBased + firstTouched - 1}`
+					: `lines ${startLineOneBased + firstTouched - 1}-${startLineOneBased + lastTouched - 1}`;
+			const anchorLines = lastTouched - firstTouched + 1;
+			const sentLines = (newStr ?? "").split(/\r\n|\n/).length;
+			// The range picks lines and the anchor picks characters when the
+			// anchor reaches across every line the range names, or when
+			// `new_text` is as many lines as the anchor and so plainly replaces
+			// it. Short of both the call is two different edits -- `new_text` for
+			// the range, or for the anchor -- and splicing a range's worth of text
+			// into the middle of it wrote the second while reporting the first.
+			if (
+				(firstTouched !== 1 || lastTouched !== rangeLines) &&
+				sentLines !== anchorLines
+			) {
+				throw new Error(
+					`No replacement performed: your \`old_text\` is at ${anchorAt}, inside ${named} the call names, but it covers only part of them, and \`new_text\` is ${sentLines} line(s) where \`old_text\` is ${anchorLines}. Whether \`new_text\` replaces ${named} or only \`old_text\` cannot be told from the call, and either guess writes the wrong code. Send \`old_text\` holding all of ${named} exactly as the file has them, or send \`old_text\` without the line numbers and only its replacement as \`new_text\`. ${filePath} currently holds:\n${
+						quoteCurrentLines(content, startLineOneBased, effectiveEndLine) ??
+						""
+					}`,
+				);
+			}
+			const lineStart = target.lastIndexOf("\n", within.index - 1) + 1;
+			const lineEndAt = target.indexOf("\n", within.index + within.length);
+			const before = target.slice(lineStart, within.index);
+			const after = target.slice(
+				within.index + within.length,
+				lineEndAt < 0 ? target.length : lineEndAt,
+			);
+			let replacement = (newStr ?? "").split(/\r\n|\n/).join("\n");
+			// The anchor without its indentation, and `new_text` with it: the
+			// line is being rewritten whole, and the indentation must not be
+			// written twice.
+			if (
+				before !== "" &&
+				before.trim() === "" &&
+				replacement.startsWith(before)
+			) {
+				replacement = replacement.slice(before.length);
+			}
+			const repeatsBefore =
+				before.trim() !== "" &&
+				replacement.trimStart().startsWith(before.trim());
+			const repeatsAfter =
+				after.trim() !== "" && replacement.trimEnd().endsWith(after.trim());
+			if (repeatsBefore || repeatsAfter) {
+				throw new Error(
+					`No replacement performed: \`old_text\` is part of ${anchorAt}, and \`new_text\` repeats the text ${
+						repeatsBefore ? "before" : "after"
+					} it on that line (\`${(repeatsBefore ? before : after).trim()}\`), so \`new_text\` reads as the whole line while \`old_text\` names only part of it. Splicing it in would write that text twice. Send \`old_text\` as the whole line, or \`new_text\` as only what replaces \`old_text\`.`,
+				);
+			}
 			narrowedRangeText =
 				target.slice(0, within.index) +
-				(newStr ?? "") +
+				replacement +
 				target.slice(within.index + within.length);
 		}
 	}
@@ -1344,6 +1583,34 @@ async function replaceLineRange(
 	) {
 		const suppliedLines = anchorText(oldStr as string).split("\n").length;
 		const namedLines = effectiveEndLine - startLineOneBased + 1;
+		const fragmentMiss = describeFragmentMiss(
+			rangeText,
+			oldStr as string,
+			startLineOneBased,
+		);
+		if (fragmentMiss) {
+			throw new Error(
+				`No replacement performed: the call names ${
+					startLineOneBased === effectiveEndLine
+						? `line ${startLineOneBased}`
+						: `lines ${startLineOneBased}-${effectiveEndLine}`
+				} and a one-line \`old_text\` to change inside ${
+					startLineOneBased === effectiveEndLine ? "it" : "them"
+				}. ${fragmentMiss}${(() => {
+					const elsewhere = occurrenceLines(
+						content,
+						normalizeLineEndings(anchorText(oldStr as string), eol),
+					).filter(
+						(line) => line < startLineOneBased || line > effectiveEndLine,
+					);
+					return elsewhere.length > 0
+						? ` It does occur elsewhere in the file, on line${elsewhere.length === 1 ? "" : "s"} ${elsewhere.slice(0, 8).join(", ")}${elsewhere.length > 8 ? ", …" : ""}: if you meant one of those, read it and name that line.`
+						: "";
+				})()} ${filePath} currently holds:\n${
+					quoteCurrentLines(content, startLineOneBased, effectiveEndLine) ?? ""
+				}`,
+			);
+		}
 		const divergence = describeAnchorDivergence(
 			rangeText,
 			oldStr as string,
@@ -1470,7 +1737,7 @@ async function replaceLineRange(
 			`${range} already reads exactly this way`,
 			quoteCurrentLines(content, startLineOneBased, effectiveEndLine),
 			noteNoOp?.(
-				`lines\u0000${filePath}\u0000${range}\u0000${effectiveNewStr ?? ""}`,
+				noOpKey(filePath, content, startLineOneBased, effectiveEndLine),
 			),
 		);
 	}
@@ -1720,7 +1987,15 @@ async function insertInFile(
 		await fs.readFile(filePath, encoding),
 	);
 	const eol = detectLineEnding(content);
-	const lines = content.split(/\r\n|\n/);
+	// Counted without the empty string after a final newline, as `read_files`
+	// counts. Counting it made "a\nb\nc\n" four lines, so the advice for
+	// appending said 5 -- and following it wrote a blank line and lost the
+	// final newline (automaticum audit 2026-11-08, M3).
+	// An empty file has no ending of its own, so it takes the inserted text's.
+	const { lines, trailingNewline } =
+		content === ""
+			? { lines: [] as string[], trailingNewline: /\r?\n$/.test(newStr) }
+			: splitFileLines(content);
 	const maxBoundaryLine = lines.length + 1;
 
 	if (insertLineOneBased < 1 || insertLineOneBased > maxBoundaryLine) {
@@ -1735,7 +2010,13 @@ async function insertInFile(
 	// -- the normal way to write one line -- inserts foo *and* a blank line, and
 	// the file drifts a line at a time exactly as it did on the range path.
 	lines.splice(insertLine, 0, ...splitFileLines(newStr).lines);
-	await fs.writeFile(filePath, bom + lines.join(eol), { encoding });
+	// Appending to a file that did not end in a newline keeps it that way;
+	// inserting into one that did keeps the newline.
+	await fs.writeFile(
+		filePath,
+		bom + joinFileLines(lines, eol, trailingNewline),
+		{ encoding },
+	);
 
 	return `Inserted content at line ${insertLineOneBased} in ${filePath}.`;
 }
@@ -1776,7 +2057,10 @@ async function replaceColumnRange(
 		await fs.readFile(filePath, encoding),
 	);
 	const eol = detectLineEnding(content);
-	const lines = content.split(/\r\n|\n/);
+	// Without the empty string after a final newline: it is not a line, and
+	// counting it offered "line 4 has 0 characters" in a three-line file
+	// (automaticum audit 2026-11-08, m1).
+	const { lines, trailingNewline } = splitFileLines(content);
 
 	assertLineInRange(requestedStartLine, lines.length, "start_line");
 	assertLineInRange(requestedEndLine, lines.length, "end_line");
@@ -1853,7 +2137,7 @@ async function replaceColumnRange(
 		endLineOneBased - startLineOneBased + 1,
 		...replaced.split(/\r\n|\n/),
 	);
-	const updated = lines.join(eol);
+	const updated = joinFileLines(lines, eol, trailingNewline);
 
 	const span =
 		startLineOneBased === endLineOneBased
@@ -1865,7 +2149,9 @@ async function replaceColumnRange(
 			filePath,
 			`${span} already reads exactly this way`,
 			quoteCurrentLines(content, startLineOneBased, endLineOneBased),
-			noteNoOp?.(`columns\u0000${filePath}\u0000${span}\u0000${newStr ?? ""}`),
+			noteNoOp?.(
+				noOpKey(filePath, content, startLineOneBased, endLineOneBased),
+			),
 		);
 	}
 
@@ -2003,7 +2289,7 @@ async function insertAtColumn(
 		await fs.readFile(filePath, encoding),
 	);
 	const eol = detectLineEnding(content);
-	const lines = content.split(/\r\n|\n/);
+	const { lines, trailingNewline } = splitFileLines(content);
 
 	assertLineInRange(lineOneBased, lines.length, "insert_line");
 	const lineText = lines[lineOneBased - 1] ?? "";
@@ -2028,7 +2314,7 @@ async function insertAtColumn(
 	// "\n"s inside a CRLF file.
 	lines[lineOneBased - 1] =
 		`${lineText.slice(0, columnOneBased - 1)}${newStr.replace(/\r\n|\n/g, eol)}${lineText.slice(columnOneBased - 1)}`;
-	const updated = lines.join(eol);
+	const updated = joinFileLines(lines, eol, trailingNewline);
 
 	if (updated === content) {
 		return noChangeMessage(
@@ -2131,7 +2417,8 @@ function describeRetypeCost(
 		return null;
 	}
 	const line = Number(prescription[2]);
-	if (!editedLines(result).has(line)) {
+	const written = editedLines(result).get(line);
+	if (written === undefined) {
 		return null;
 	}
 	const addressedByColumn =
@@ -2148,13 +2435,19 @@ function describeRetypeCost(
 	if (created) {
 		return null;
 	}
-	const typed = input.new_text?.length ?? 0;
+	// What was typed on that line, read off the diff -- not the whole of
+	// `new_text`, which counted every other line the edit wrote as "characters
+	// of line N" (automaticum audit 2026-11-08, M10).
+	const typed = written.length;
 	if (typed < RETYPE_NOTICE_MIN_CHARS) {
 		return null;
 	}
+	// The scan's finding, attributed to the scan: its call is parser-gated now,
+	// but "the file still does not balance" stated as fact is more than it
+	// knows.
 	return (
-		`\n  Your edit retyped ${typed} characters of line ${line} and the file still ` +
-		`does not balance. The scan's suggested fix for line ${line} is \`editor\` with ` +
+		`\n  Your edit retyped all ${typed} characters of line ${line}, and the scan above ` +
+		`still finds a fault on it. Its suggested fix for line ${line} is \`editor\` with ` +
 		`${prescription[1]}: it changes one character and retypes nothing.`
 	);
 }
@@ -2165,10 +2458,10 @@ const PRESCRIBED_CALL = new RegExp(
 );
 
 /** The lines an edit's text landed on, from the `+N:` lines of its diff. */
-function editedLines(result: string): Set<number> {
-	const lines = new Set<number>();
-	for (const match of result.matchAll(/^\+(\d+):/gm)) {
-		lines.add(Number(match[1]));
+function editedLines(result: string): Map<number, string> {
+	const lines = new Map<number, string>();
+	for (const match of result.matchAll(/^\+(\d+): ?(.*)$/gm)) {
+		lines.set(Number(match[1]), match[2] ?? "");
 	}
 	return lines;
 }
@@ -2472,8 +2765,13 @@ export function createEditorExecutor(
 			const stat = await fs.stat(filePath);
 			// A scan of a file this size costs more than the answer is worth,
 			// and nothing a model edits by hand is this big.
+			// Said, because silence after an edit is how a balanced file reads:
+			// a file past the bound was left looking checked (automaticum audit
+			// 2026-11-08, m6).
 			if (stat.size > MAX_SCANNED_BYTES) {
-				return result;
+				return canScanDelimiters(filePath)
+					? `${result}\n\n(The bracket scan does not run on a file over ${MAX_SCANNED_BYTES.toLocaleString("en-US")} bytes, so nothing here says whether ${filePath} balances. \`check_file\` does.)`
+					: result;
 			}
 			text = await fs.readFile(filePath, encoding);
 		} catch {
@@ -2520,7 +2818,7 @@ export function createEditorExecutor(
 		receipts.noteStamp(filePath, stamp);
 		receipts.retire(filePath);
 		throw new Error(
-			`${filePath} changed since you last read it, and not because of anything you did — something outside this session wrote to it. The file was not modified. Call \`read_files\` for ${filePath} to see what it says now, then decide whether this edit is still the right one: the lines you are aiming at may hold different code, and applying this edit as written could undo someone else's work.`,
+			`${filePath} changed since you last read it, and not through an edit this session recorded — a command (yours included, in the foreground or the background), another agent, or something outside this session wrote to it. The file was not modified. Call \`read_files\` for ${filePath} to see what it says now, then decide whether this edit is still the right one: the lines you are aiming at may hold different code, and applying this edit as written could undo someone else's work.`,
 		);
 	};
 
@@ -2787,7 +3085,7 @@ export function createEditorExecutor(
 					? "an earlier edit changed the file's length, so what you read is no longer where you read it"
 					: "not all of it has been read in this session";
 				throw new Error(
-					`Read before replacing: this call replaces every one of the ${lineCount} line(s) in ${filePath}, and ${why}. The file was not modified. Call \`read_files\` for ${filePath} — all of it, since all of it is what you are replacing — then send this call again with \`file_path: "${filePath}"\` and the \`new_text\` the whole file should end up as. ` +
+					`Read before replacing: this call replaces every one of the ${lineCount} line(s) in ${filePath}, and ${why}. The file was not modified. Call \`read_files\` for ${filePath} — all of it, since all of it is what you are replacing; when one read stops short of the end, read on from where it stopped with \`start_line\`, because reads that join up count together — then send this call again with \`file_path: "${filePath}"\` and the \`new_text\` the whole file should end up as. ` +
 						`Changing part of it is cheaper and safer: read around the lines you mean to change, then send \`file_path\`, \`start_line\`, \`end_line\` and the \`new_text\` for just those lines.`,
 				);
 			}

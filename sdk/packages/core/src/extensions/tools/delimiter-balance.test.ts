@@ -741,3 +741,18 @@ describe("a checked repair against the editor's own bounds", () => {
 		}
 	});
 });
+
+// An inserted `}` moves the rest of the line one column on, so a parser that
+// stopped at the same `{` afterwards read as having got one column further,
+// and the edit was offered as one "the parser accepts".
+describe("an edit that only appears to get the parser further", () => {
+	it("is not offered, and nothing is called accepted when it is not", () => {
+		const source =
+			"class A {\n  m() {\n    // note\n    dDec(c,x){this.dc.forEach(d=>{if(d){c.fill();}}});}\n    return 1;\n  }\n}\n";
+		const report = describeDelimiterBalance("game.js", source) ?? "";
+		expect(report).not.toContain("insert a `}` at line 4, column 14");
+		if (report.includes("one edit the JavaScript parser accepts")) {
+			expect(report).toContain("the JavaScript parser accepts this script");
+		}
+	});
+});

@@ -914,7 +914,7 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 								file,
 								output: "",
 								ok: false,
-								error: `not modified. ${file} changed since you last read it, and not because of anything you did — something outside this session wrote to it. Call \`read_files\` for it to see what it says now, then decide whether this script is still right.`,
+								error: `not modified. ${file} changed since you last read it, and not through an edit this session recorded — a command (yours included, in the foreground or the background), another agent, or something outside this session wrote to it. Call \`read_files\` for it to see what it says now, then decide whether this script is still right.`,
 							});
 							return;
 						}

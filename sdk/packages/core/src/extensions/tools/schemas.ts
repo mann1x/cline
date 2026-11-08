@@ -865,7 +865,7 @@ export const EditFileInputSchema = z
 			.nullable()
 			.optional()
 			.describe(
-				"Optional positive one-based first character to replace on start_line. Diagnostics report a column, so this is the unit for a one-character fix on a long or minified line: nothing else on the line is retyped or at risk.",
+				"Optional positive one-based first character to replace on start_line. Diagnostics report a column, so this is the unit for a one-character fix on a long or minified line: nothing else on the line is retyped or at risk. Columns are counted the way those diagnostics count them, in UTF-16 units: a character outside the Basic Multilingual Plane, such as an emoji, takes two.",
 			),
 		end_column: z.coerce
 			.number()

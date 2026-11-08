@@ -2586,12 +2586,12 @@ describe("how long the file is", () => {
 
 				expect(result).toContain("start_column: 48");
 				expect(result).toContain(
-					`retyped ${LONG_UNBALANCED_LINE.length} characters of line 1`,
+					`retyped all ${LONG_UNBALANCED_LINE.length} characters of line 1`,
 				);
 				// Named as the scan's call, not "the call above", which the model
 				// read as its own edit.
 				expect(result).toContain(
-					"The scan's suggested fix for line 1 is `editor` with start_line: 1, start_column: 48",
+					"Its suggested fix for line 1 is `editor` with start_line: 1, start_column: 48",
 				);
 			});
 		});
@@ -3036,7 +3036,9 @@ describe("a range edit whose old_text is somewhere else", () => {
 					dir,
 					context,
 				),
-			).rejects.toThrow(/two halves of the edit describe different code/);
+			).rejects.toThrow(
+				/not in the lines named[\s\S]*elsewhere in the file, on lines 1, 3/,
+			);
 			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
 				"dup\nbeta\ndup\ngamma\n",
 			);
@@ -3213,7 +3215,7 @@ describe("quoting a mismatch on a CRLF file", () => {
 				// The whole point: the file's own CRLF must not appear in a
 				// message about two texts that differ.
 				expect(said).not.toContain("\\r");
-				expect(said).toContain("line endings are never the reason");
+				expect(said).toContain("line endings are not the reason");
 			},
 		);
 	});
@@ -3449,6 +3451,341 @@ describe("a range edit whose old_text names part of the range", () => {
 			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
 				"one\nTWO\nTHREE\nfour\n",
 			);
+		});
+	});
+
+	// automaticum audit 2026-11-08 C1/C2: a range's worth of `new_text` with one
+	// line of the range as `old_text`. It was moved onto that line (C1) or
+	// spliced into it (C2), leaving the rest of the range duplicated.
+	const twenty = `${Array.from({ length: 20 }, (_, i) => `  step${i + 1}();`).join("\n")}\n`;
+	const rangeText = [
+		"  step10b();",
+		"  step11b();",
+		"  step12b();",
+		"  step13b();",
+		"  step14b();",
+	].join("\n");
+
+	for (const [label, anchor] of [
+		["a whole line", "  step12();"],
+		["a fragment", "step12();"],
+	] as const) {
+		it(`refuses a range's text against ${label} of the range, and writes nothing`, async () => {
+			await withTempFile(twenty, async (filePath, dir) => {
+				const receipts = createReadReceipts();
+				const editor = createEditorExecutor({ receipts });
+				receipts.noteRead(filePath, 1, 20);
+
+				const call = editor(
+					{
+						path: filePath,
+						start_line: 10,
+						end_line: 14,
+						old_text: anchor,
+						new_text: rangeText,
+					},
+					dir,
+					context,
+				);
+				await expect(call).rejects.toThrow(/inside lines 10-14/);
+				await expect(call).rejects.not.toThrow(/stale/);
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(twenty);
+			});
+		});
+	}
+
+	it("still re-anchors an old_text that is wholly outside the named range", async () => {
+		await withTempFile(twenty, async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 20);
+
+			const result = await editor(
+				{
+					path: filePath,
+					start_line: 3,
+					end_line: 3,
+					old_text: "  step12();",
+					new_text: "  step12b();",
+				},
+				dir,
+				context,
+			);
+			expect(String(result)).toMatch(/line numbers are stale/);
+			const after = await fs.readFile(filePath, "utf-8");
+			expect(after.split("\n")[11]).toBe("  step12b();");
+			expect(after.split("\n")[2]).toBe("  step3();");
+		});
+	});
+
+	it("refuses a fragment anchor whose new_text restates the rest of the line", async () => {
+		await withTempFile(twenty, async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 20);
+
+			await expect(
+				editor(
+					{
+						path: filePath,
+						start_line: 12,
+						end_line: 12,
+						old_text: "step12()",
+						new_text: "step12b();",
+					},
+					dir,
+					context,
+				),
+			).rejects.toThrow(/would write that text twice/);
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(twenty);
+		});
+	});
+
+	it("does not indent twice when new_text carries the indentation the anchor left out", async () => {
+		await withTempFile(twenty, async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 20);
+
+			await editor(
+				{
+					path: filePath,
+					start_line: 12,
+					end_line: 12,
+					old_text: "step12();",
+					new_text: "  step12b();",
+				},
+				dir,
+				context,
+			);
+			const after = await fs.readFile(filePath, "utf-8");
+			expect(after.split("\n")[11]).toBe("  step12b();");
+		});
+	});
+});
+
+// automaticum audit 2026-11-08, section A: each case is the audit's own repro.
+describe("editor audit 2026-11-08", () => {
+	it("adds missing closing braces without calling them a copy (C4)", async () => {
+		const source =
+			"function a() {\n  if (x) {\n    y();\n  }\n}\n\nfunction b() {\n  if (z) {\n    w();\n";
+		await withTempFile(source, async (filePath, dir) => {
+			await createEditorExecutor()(
+				{
+					path: filePath,
+					start_line: 9,
+					end_line: 9,
+					new_text: "    w();\n  }\n}",
+				},
+				dir,
+				context,
+			);
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				`${source}  }\n}\n`,
+			);
+		});
+	});
+
+	it("still refuses a pasted copy of real lines from elsewhere", async () => {
+		const source = "alpha();\nbeta();\ngamma();\ndelta();\n";
+		await withTempFile(source, async (filePath, dir) => {
+			await expect(
+				createEditorExecutor()(
+					{
+						path: filePath,
+						start_line: 4,
+						end_line: 4,
+						new_text: "delta();\nalpha();\nbeta();",
+					},
+					dir,
+					context,
+				),
+			).rejects.toThrow(/already in the file at lines 1-2/);
+		});
+	});
+
+	it("names the line the match diverges on, not the line it starts on (C6)", async () => {
+		const source =
+			"function f() {\n  const alpha = 1;\n  const beta = 2;\n  const gamma = 3;\n  return alpha + beta + gamma;\n}\n";
+		await withTempFile(source, async (filePath, dir) => {
+			const failure = createEditorExecutor()(
+				{
+					path: filePath,
+					old_text:
+						"function f() {\n  const alpha = 1;\n  const beta = 2;\n  const gamma = 4;",
+					new_text: "X",
+				},
+				dir,
+				context,
+			);
+			await expect(failure).rejects.toThrow(
+				/from line 1, and diverge on line 4/,
+			);
+			await expect(failure).rejects.toThrow(/replace line 4 by number/);
+		});
+	});
+
+	it("matches old_text across a file's mixed line endings (M1)", async () => {
+		const source =
+			"line one is here\r\nline two is LF-only and long enough\nline three continues here ok\r\n";
+		await withTempFile(source, async (filePath, dir) => {
+			await createEditorExecutor()(
+				{
+					path: filePath,
+					old_text:
+						"line two is LF-only and long enough\nline three continues here ok",
+					new_text: "X",
+				},
+				dir,
+				context,
+			);
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"line one is here\r\nX\r\n",
+			);
+		});
+	});
+
+	it("says where a misspelled fragment stops matching (M2)", async () => {
+		const source = "a\nthis.update();if(ok){draw(ctx,1);}}else{stop();}\nb\n";
+		await withTempFile(source, async (filePath, dir) => {
+			const failure = createEditorExecutor()(
+				{
+					path: filePath,
+					start_line: 2,
+					old_text: "draw(ctx,2);}}",
+					new_text: "x",
+				},
+				dir,
+				context,
+			);
+			await expect(failure).rejects.toThrow(
+				/first 9 character\(s\) are, at line 2 column 22/,
+			);
+			await expect(failure).rejects.not.toThrow(
+				/whole of the mismatch|column 1:/,
+			);
+		});
+	});
+
+	it("says a fragment occurs twice on the line (M2)", async () => {
+		await withTempFile(
+			"a\nif(a){x();}});if(b){y();}});\nb\n",
+			async (filePath, dir) => {
+				await expect(
+					createEditorExecutor()(
+						{
+							path: filePath,
+							start_line: 2,
+							old_text: "}});",
+							new_text: "});",
+						},
+						dir,
+						context,
+					),
+				).rejects.toThrow(
+					/occurs 2 times in the lines named — at line 2 column 11, line 2 column 25/,
+				);
+			},
+		);
+	});
+
+	it("appends at EOF where its own advice says to (M3)", async () => {
+		await withTempFile("a\nb\nc\n", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+			await expect(
+				editor(
+					{ path: filePath, insert_line: 99, new_text: "d" },
+					dir,
+					context,
+				),
+			).rejects.toThrow("Use 4 to append at EOF.");
+			await editor(
+				{ path: filePath, insert_line: 4, new_text: "d" },
+				dir,
+				context,
+			);
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"a\nb\nc\nd\n",
+			);
+		});
+	});
+
+	it("does not offer the phantom line after a final newline to a column edit (m1)", async () => {
+		await withTempFile("a\nb\nc\n", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+			await expect(
+				editor(
+					{
+						path: filePath,
+						start_line: 4,
+						start_column: 1,
+						end_column: 1,
+						new_text: "x",
+					},
+					dir,
+					context,
+				),
+			).rejects.toThrow("The file has 3 line(s)");
+			await editor(
+				{
+					path: filePath,
+					start_line: 3,
+					start_column: 1,
+					end_column: 1,
+					new_text: "C",
+				},
+				dir,
+				context,
+			);
+			await editor(
+				{ path: filePath, insert_line: 3, insert_column: 2, new_text: "!" },
+				dir,
+				context,
+			);
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("a\nb\nC!\n");
+		});
+	});
+
+	it("names each line once, beside a count that agrees (m2)", async () => {
+		await withTempFile("x\n====\ny\n====\n", async (filePath, dir) => {
+			await expect(
+				createEditorExecutor()(
+					{ path: filePath, old_text: "==", new_text: "--" },
+					dir,
+					context,
+				),
+			).rejects.toThrow("appears 4 times in ");
+			await expect(
+				createEditorExecutor()(
+					{ path: filePath, old_text: "==", new_text: "--" },
+					dir,
+					context,
+				),
+			).rejects.toThrow(/on lines 2, 4 \(more than once on some of them\)/);
+		});
+	});
+});
+
+// automaticum audit 2026-11-08, m5: the no-op count is of results, so two
+// differently shaped calls leaving the same line as it is are one repeat.
+describe("no-op refusals counted by what they left unchanged", () => {
+	it("counts a whole-line call and an old_text call on the same line together", async () => {
+		await withTempFile("alpha\nbeta\ngamma\n", async (filePath, dir) => {
+			const editor = createEditorExecutor();
+			await expect(
+				editor(
+					{ path: filePath, start_line: 2, end_line: 2, new_text: "beta" },
+					dir,
+					context,
+				),
+			).rejects.toThrow(/already reads exactly this way/);
+			await expect(
+				editor(
+					{ path: filePath, old_text: "beta", new_text: "beta" },
+					dir,
+					context,
+				),
+			).rejects.toThrow(/You have now sent 2 edits/);
 		});
 	});
 });

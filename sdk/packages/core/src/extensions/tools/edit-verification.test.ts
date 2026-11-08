@@ -64,7 +64,10 @@ describe("what counts as checked", () => {
 	it("tracks each file separately", () => {
 		const t = tracker();
 		t.recordToolCall("editor", { path: "a.ts" });
-		t.recordToolCall("apply_patch", { path: "b.ts" });
+		t.recordToolCall("apply_patch", {
+			input:
+				"*** Begin Patch\n*** Update File: b.ts\n@@\n-a\n+b\n*** End Patch",
+		});
 		t.recordToolCall("check_file", { paths: ["a.ts"] });
 
 		expect(t.getState().unchecked).toEqual(["b.ts"]);
@@ -220,4 +223,72 @@ describe("watching a tool's calls", () => {
 		await twice.execute({ path: "a.ts" }, {} as never);
 		expect(t.getState().unchecked).toEqual(["a.ts"]);
 	});
+});
+
+// automaticum audit 2026-11-08: M6, M7, m4.
+describe("edit verification audit 2026-11-08", () => {
+	it("tracks the files an apply_patch names in its patch text (M6)", () => {
+		expect(
+			extractPaths({
+				input:
+					"*** Begin Patch\n*** Add File: new.ts\n+x\n*** Update File: old.ts\n*** Move to: moved.ts\n@@\n-a\n+b\n*** Delete File: gone.ts\n*** End Patch",
+			}),
+		).toEqual(["new.ts", "old.ts", "moved.ts"]);
+	});
+
+	it("does not count a checker that threw as a check (M7)", async () => {
+		const t = tracker();
+		const editor = withEditVerificationCapture(
+			{ name: "editor", execute: async () => "ok" } as unknown as AgentTool<
+				unknown,
+				string
+			>,
+			t,
+		);
+		const check = withEditVerificationCapture(
+			{
+				name: "check_file",
+				execute: async () => {
+					throw new Error("language server not available");
+				},
+			} as unknown as AgentTool<unknown, string>,
+			t,
+		);
+		await editor.execute({ file_path: "a.ts", new_text: "x" }, {} as never);
+		await expect(
+			check.execute({ paths: ["a.ts"] }, {} as never),
+		).rejects.toThrow();
+		expect(t.getState().unchecked).toEqual(["a.ts"]);
+	});
+
+	it("counts only the files the checker's answer covers (M7)", async () => {
+		const t = tracker();
+		t.recordToolCall("editor", { file_path: "a.ts" });
+		t.recordToolCall("editor", { file_path: "b.ts" });
+		const check = withEditVerificationCapture(
+			{
+				name: "check_file",
+				execute: async () =>
+					JSON.stringify({
+						files: [
+							{ uri: "a.ts", checked: "parsed", diagnostics: [] },
+							{ uri: "b.ts", error: "Could not read this file: EACCES" },
+						],
+					}),
+			} as unknown as AgentTool<unknown, string>,
+			t,
+		);
+		await check.execute({ paths: ["a.ts", "b.ts"] }, {} as never);
+		expect(t.getState().unchecked).toEqual(["b.ts"]);
+	});
+
+	it.skipIf(process.platform === "win32")(
+		"keeps Foo.ts and foo.ts apart on a case-sensitive system (m4)",
+		() => {
+			const t = tracker();
+			t.recordToolCall("editor", { file_path: "Foo.ts" });
+			t.recordToolCall("check_file", { paths: ["foo.ts"] });
+			expect(t.getState().unchecked).toEqual(["Foo.ts"]);
+		},
+	);
 });
