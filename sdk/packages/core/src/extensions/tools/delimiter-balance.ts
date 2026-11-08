@@ -53,6 +53,7 @@ const C_FAMILY = new Set([
 /** Files whose `<script>` bodies are plain JavaScript. */
 const EMBEDS_SCRIPT = new Set([".html", ".htm"]);
 
+import { compileFunction } from "node:vm";
 import { splitBom } from "./executors/bom";
 
 export interface DelimiterFinding {
@@ -456,7 +457,7 @@ function surplusNote(line: number, balance: Map<number, LineBalance>): string {
 	}
 
 	if (surplus.length === 0) {
-		return "this line's own brackets balance in number, so one is in the wrong place rather than missing or spare";
+		return "this line's own brackets balance in number, so if they are wrong here one is in the wrong place rather than missing or spare";
 	}
 	// A count, and nothing more. It used to end "— that is the edit", which
 	// claimed the line's intent as well as its tally: brackets cannot say which
@@ -523,62 +524,271 @@ function offsetIn(
 }
 
 /**
- * An edit that makes one crossing go away, found by trying and re-scanning.
+ * Where a real parser stops on one script, in the file's own coordinates.
  *
- * The scan says which brackets cross. It cannot say whether to delete one, add
- * one or move one, and that is the question the model burns its thinking on:
- * one measured turn spent 33,350 tokens deciding between a swap and a deletion
- * on a 500-column line, reached the budget wall, and picked the wrong one. A
- * parse is microseconds, so the honest answer is to try each single-character
- * edit and report the one that verifies rather than reason about it.
+ * The scan counts brackets. It cannot say which one is wrong, and an edit it
+ * worked out from the count alone was offered as checked when it fixed
+ * nothing. Measured on the manic_miner seed: line 95 holds a spare `}` that
+ * closes `class Level` early. Once line 90 was fixed the count no longer saw
+ * line 95 at all -- the class's own closing brace on line 97 was the one left
+ * over -- and the scan offered to delete that brace, with the exact editor
+ * call. The parser had stopped at line 96 the whole time, and the edit left it
+ * there. Every manic_miner gate from 2026-10-25 on was handed that edit.
  *
- * A candidate is accepted only when the crossing it targets is gone *and* it
- * introduced nothing new at or before that point — a repair that merely pushes
- * the trouble earlier in the file is not a repair. Among those that pass, the
- * one leaving fewest crossings wins, and simpler edits break the tie.
+ * So no edit is offered unless the parser agrees it helped, and the line the
+ * parser stops on is named whatever the count says.
+ *
+ * `line` and `column` are absent where the runtime does not say: Bun 1.3
+ * names the line and no column, and a parse that only succeeds or fails, such
+ * as top-level `await` or JSON, names neither. On the same line without a
+ * column, an edit is offered only when the whole script parses after it.
  */
-function proposeRepair(
+export interface ParseStop {
+	message: string;
+	line?: number;
+	column?: number;
+}
+
+/** The name the parser is given for the source, to find its stack line. */
+const PARSE_FILENAME = "delimiter-scan";
+
+/** Top-level `import` or `export`: module code, which nothing here parses. */
+const MODULE_SYNTAX = /^[ \t]*(?:import\s*[\w{*"'.]|export\s)/m;
+
+const AsyncFunction = Object.getPrototypeOf(async () => {})
+	.constructor as FunctionConstructor;
+
+/**
+ * Parse one classic script and say where the parser stops: nothing when it
+ * parses, and null when this cannot tell.
+ *
+ * Parsed as a function body, so a top-level `return` passes as it does in a
+ * CommonJS file. Three things a real file holds are not classic script, and
+ * calling them "does not parse" told the model a correct file was broken:
+ *
+ * - a `#!` line, which Node runs and no parser here accepts, is blanked with
+ *   the line count kept;
+ * - top-level `await` is parsed as an async function body, which accepts it;
+ * - `import` or `export` makes the file a module, which no parser here reads,
+ *   so the answer is null -- cannot check -- and never a stop.
+ *
+ * `vm.compileFunction` throws on a broken body under Node and Bun alike (Bun's
+ * `vm.Script` parses lazily and throws nothing), and names the line in its
+ * stack: V8 and Bun 1.4 as `<filename>:<line>` over the source line and a
+ * caret, Bun 1.3 as `at <parse> (<filename>:<line>)`.
+ */
+export function findParseStop(
+	body: string,
+	origin: Cursor = { line: 1, column: 1 },
+): ParseStop | null | undefined {
+	const source = body.startsWith("#!") ? body.replace(/^#![^\n]*/, "") : body;
+	let stop: ParseStop;
+	try {
+		compileFunction(source, [], { filename: PARSE_FILENAME });
+		return undefined;
+	} catch (error) {
+		if (!isSyntaxError(error)) {
+			return null;
+		}
+		stop = {
+			message: error.message,
+			...locateStop(error.stack ?? "", source, origin),
+		};
+	}
+	if (/\bawait\b/.test(source)) {
+		try {
+			new AsyncFunction(source);
+			return undefined;
+		} catch (error) {
+			if (!isSyntaxError(error)) {
+				return null;
+			}
+			// The classic parse may have stopped at the `await` itself, so its
+			// position is not the fault's; the async parse gives none.
+			stop = { message: error.message };
+		}
+	}
+	return MODULE_SYNTAX.test(source) ? null : stop;
+}
+
+/** By name: a `SyntaxError` from `vm` need not be this realm's class. */
+function isSyntaxError(error: unknown): error is SyntaxError {
+	return error instanceof Error && error.name === "SyntaxError";
+}
+
+/**
+ * The stop's line and column, read off the parser's stack.
+ *
+ * V8 prints the source line with its leading whitespace trimmed and puts the
+ * caret under that, so the caret is placed back on the untrimmed line. When the
+ * printed line cannot be found on the real one, only the line is given: a
+ * column that might be wrong is worse than none.
+ */
+function locateStop(
+	stack: string,
+	body: string,
+	origin: Cursor,
+): { line?: number; column?: number } {
+	const rows = stack.split("\n");
+	const v8 = new RegExp(`^${PARSE_FILENAME}:(\\d+)$`).exec(rows[0] ?? "");
+	if (!v8) {
+		const jsc = new RegExp(`at <parse> \\(${PARSE_FILENAME}:(\\d+)\\)`).exec(
+			stack,
+		);
+		return jsc ? { line: origin.line + Number(jsc[1]) - 1 } : {};
+	}
+	const row = Number(v8[1]);
+	const line = origin.line + row - 1;
+	const raw = body.split("\n")[row - 1];
+	if (raw === undefined) {
+		return { line };
+	}
+	const text = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+	const shown = rows[1] ?? "";
+	const caret = (rows[2] ?? "").indexOf("^");
+	const lead = shown === "" ? -1 : text.indexOf(shown);
+	if (caret < 0 || lead < 0) {
+		return { line };
+	}
+	// Only the first line of a span starts anywhere but column 1.
+	return {
+		line,
+		column: lead + caret + 1 + (row === 1 ? origin.column - 1 : 0),
+	};
+}
+
+/**
+ * A parser the scan can check an edit against, and how to name it. `parse`
+ * gives nothing when the span parses and null when it cannot tell.
+ */
+interface Parser {
+	name: string;
+	parse: (body: string, origin: Cursor) => ParseStop | null | undefined;
+}
+
+const JAVASCRIPT: Parser = {
+	name: "the JavaScript parser",
+	parse: findParseStop,
+};
+
+/** JSON says no position the same way on every runtime, so it gives none. */
+const JSON_PARSER: Parser = {
+	name: "the JSON parser",
+	parse: (body) => {
+		try {
+			JSON.parse(body);
+			return undefined;
+		} catch (error) {
+			return {
+				message: error instanceof Error ? error.message : String(error),
+			};
+		}
+	},
+};
+
+/**
+ * The parser for one span, or none.
+ *
+ * None is the answer for TypeScript, CSS, JSONC and module scripts: nothing
+ * here parses them, so the scan names their lines and offers no edit.
+ */
+function parserFor(extension: string, module: boolean): Parser | undefined {
+	if (extension === ".json") {
+		return JSON_PARSER;
+	}
+	if (module) {
+		return undefined;
+	}
+	return PARSE_CHECKED.has(extension) ? JAVASCRIPT : undefined;
+}
+
+/**
+ * Whether an edit got the parser past the point it stopped at.
+ *
+ * Past means the script now parses, or the parser stops strictly later than
+ * before. An edit that leaves the stop where it was, or moves it earlier, did
+ * not fix what the parser refused, whatever it did to the count.
+ */
+function gotPast(
+	after: ParseStop | null | undefined,
+	stop: ParseStop,
+): boolean {
+	if (after === null) {
+		return false;
+	}
+	if (after === undefined) {
+		return true;
+	}
+	if (stop.line === undefined || after.line === undefined) {
+		return false;
+	}
+	if (after.line !== stop.line) {
+		return after.line > stop.line;
+	}
+	return (
+		stop.column !== undefined &&
+		after.column !== undefined &&
+		after.column > stop.column
+	);
+}
+
+/** One single-character edit to try, and how to say it. */
+interface Candidate {
+	text: string;
+	say: string;
+	call: string;
+	/** The line the edit is on, whose count it is judged by. */
+	line: number;
+	/** Offset of the edit in the span, for its distance from the stop. */
+	at: number;
+}
+
+/**
+ * The edits that might clear one finding: delete the bracket, swap it for what
+ * its opener wanted, add that before it, or move it along the line.
+ *
+ * Each carries the `editor` call that performs it, because naming the edit in
+ * prose was not enough. Measured: the model was told to delete the `}` at
+ * column 382, restated that correctly, and then composed an `old_text` match
+ * for a 500-column minified line and got back "No replacement performed: text
+ * not found". The editor already addresses a character by line and column.
+ */
+function findingCandidates(
 	body: string,
 	origin: Cursor,
 	finding: DelimiterFinding,
-	baseline: number,
-): string | null {
-	if (body.length > MAX_REPAIR_BYTES) {
-		return null;
-	}
+): Candidate[] {
 	const at = offsetIn(body, origin, finding.line, finding.column);
 	if (at < 0 || at >= body.length || body[at] !== finding.found) {
-		return null;
+		return [];
 	}
 	const expected = finding.opener ? PAIRS[finding.opener] : undefined;
 	const cut = body.slice(0, at) + body.slice(at + 1);
-
-	// Each candidate carries the `editor` call that performs it, because naming
-	// the edit in prose was not enough. Measured: the model was told to delete
-	// the `}` at column 382, restated that correctly, and then composed an
-	// `old_text` match for a 500-column minified line and got back "No
-	// replacement performed: text not found". The editor already addresses a
-	// character by line and column; the scan already knows both. Saying it in
-	// the tool's own arguments removes the step that failed.
 	const line = finding.line;
 	const at1 = finding.column;
-	const candidates: Array<{ text: string; say: string; call: string }> = [
+	const candidates: Candidate[] = [
 		{
 			text: cut,
-			say: `delete the \`${finding.found}\` at column ${at1}`,
+			say: `delete the \`${finding.found}\` at line ${line}, column ${at1}`,
 			call: `start_line: ${line}, start_column: ${at1}, new_text: ""`,
+			line,
+			at,
 		},
 	];
 	if (expected && expected !== finding.found) {
 		candidates.push({
 			text: body.slice(0, at) + expected + body.slice(at + 1),
-			say: `replace the \`${finding.found}\` at column ${at1} with \`${expected}\``,
+			say: `replace the \`${finding.found}\` at line ${line}, column ${at1} with \`${expected}\``,
 			call: `start_line: ${line}, start_column: ${at1}, new_text: "${expected}"`,
+			line,
+			at,
 		});
 		candidates.push({
 			text: body.slice(0, at) + expected + body.slice(at),
-			say: `insert a \`${expected}\` before the \`${finding.found}\` at column ${at1}`,
+			say: `insert a \`${expected}\` before the \`${finding.found}\` at line ${line}, column ${at1}`,
 			call: `insert_line: ${line}, insert_column: ${at1}, new_text: "${expected}"`,
+			line,
+			at,
 		});
 	}
 	// A closer in the wrong place, which is neither spare nor missing. Only
@@ -610,73 +820,192 @@ function proposeRepair(
 		// every column after it, including the one the insert names.
 		candidates.push({
 			text: cut.slice(0, into) + finding.found + cut.slice(into),
-			say: `move the \`${finding.found}\` at column ${at1} to column ${column}`,
+			say: `move the \`${finding.found}\` at line ${line}, column ${at1} to column ${column}`,
 			call:
 				`insert_line: ${line}, insert_column: ${column}, new_text: "${finding.found}"` +
 				`, then a second call with start_line: ${line}, start_column: ${at1 > column ? at1 + 1 : at1}, new_text: ""`,
+			line,
+			at,
 		});
 	}
+	return candidates;
+}
 
-	// The line's own count comes first, the file's crossings second. Fewest
-	// crossings alone chose a move on a line one `}` short, because a spare `}`
-	// further down absorbed the shortfall: pandorum g5tmt line 93 was told to
-	// move its `)` two columns, which left `dPw` open and every method after it
-	// a statement. A move cannot change a count; the line said it was short.
+/** How many lines above the parser's stop are searched for the edit. */
+const STOP_LOOKBACK = 3;
+
+/** A ceiling on the edits tried around the stop, so a long line cannot stall. */
+const MAX_STOP_CANDIDATES = 160;
+
+/**
+ * The edits that might clear the parser's stop, wherever the count is.
+ *
+ * A spare closer is usually just before where the parser gives up, and the
+ * count may not name its line at all: on the seed, the parser stopped at line
+ * 96 and the spare `}` was the last one on line 95, a line the count had
+ * absorbed into the class. So the lines at and just above the stop are tried
+ * directly: on a line with more closers than openers, deleting each closer of
+ * that kind; with more openers, each opener; and at the stop itself, each
+ * closer the parser may be missing.
+ */
+function stopCandidates(
+	body: string,
+	origin: Cursor,
+	stop: ParseStop,
+	balance: Map<number, LineBalance>,
+): Candidate[] {
+	if (stop.line === undefined) {
+		return [];
+	}
+	const lines = body.split("\n");
+	const candidates: Candidate[] = [];
+	const add = (candidate: Candidate) => {
+		if (candidates.length < MAX_STOP_CANDIDATES) {
+			candidates.push(candidate);
+		}
+	};
+	if (stop.column !== undefined) {
+		const at = offsetIn(body, origin, stop.line, stop.column);
+		if (at >= 0) {
+			for (const closer of [")", "]", "}"]) {
+				add({
+					text: body.slice(0, at) + closer + body.slice(at),
+					say: `insert a \`${closer}\` at line ${stop.line}, column ${stop.column}`,
+					call: `insert_line: ${stop.line}, insert_column: ${stop.column}, new_text: "${closer}"`,
+					line: stop.line,
+					at,
+				});
+			}
+		}
+	}
+	for (
+		let line = stop.line;
+		line >= Math.max(origin.line, stop.line - STOP_LOOKBACK);
+		line -= 1
+	) {
+		const counts = balance.get(line);
+		const raw = lines[line - origin.line];
+		if (!counts || raw === undefined) {
+			continue;
+		}
+		const first = line === origin.line ? origin.column : 1;
+		const start = offsetIn(body, origin, line, first);
+		if (start < 0) {
+			continue;
+		}
+		const spare = new Set<string>();
+		for (const [net, open, close] of [
+			[counts.curly, "{", "}"],
+			[counts.round, "(", ")"],
+			[counts.square, "[", "]"],
+		] as const) {
+			if (net < 0) {
+				spare.add(close);
+			} else if (net > 0) {
+				spare.add(open);
+			}
+		}
+		// From the end of the line back: the nearer the stop, the likelier.
+		for (let index = raw.length - 1; index >= 0; index -= 1) {
+			if (!spare.has(raw[index])) {
+				continue;
+			}
+			const at = start + index;
+			const column = first + index;
+			add({
+				text: body.slice(0, at) + body.slice(at + 1),
+				say: `delete the \`${raw[index]}\` at line ${line}, column ${column}`,
+				call: `start_line: ${line}, start_column: ${column}, new_text: ""`,
+				line,
+				at,
+			});
+		}
+	}
+	return candidates;
+}
+
+/**
+ * The edit to offer, chosen by the parser and never by the count alone.
+ *
+ * Every candidate is parsed. Only those that get the parser past its stop are
+ * kept, and among them the line's own count comes first -- a move cannot
+ * change a count, so on a line one `}` short the edit that adds it beats one
+ * that borrows a spare further down (pandorum g5tmt line 93) -- then an edit
+ * after which the script parses, then the edit nearest the stop, then the
+ * order tried. Nearest, not furthest: a wrong deletion can carry the parser
+ * further by letting a later spare closer balance it.
+ */
+function chooseRepair(
+	body: string,
+	origin: Cursor,
+	candidates: Candidate[],
+	parser: Parser,
+	stop: ParseStop,
+): string | null {
+	if (body.length > MAX_REPAIR_BYTES) {
+		return null;
+	}
+	const stopAt =
+		stop.line === undefined
+			? -1
+			: offsetIn(
+					body,
+					origin,
+					stop.line,
+					stop.column ?? (stop.line === origin.line ? origin.column : 1),
+				);
+	const tried = new Set<string>();
 	let best: {
-		say: string;
-		call: string;
-		left: number;
+		candidate: Candidate;
+		after: ParseStop | undefined;
 		off: number;
+		distance: number;
 	} | null = null;
 	for (const candidate of candidates) {
-		const scan = scanWithBalance(candidate.text, origin);
-		const after = scan.findings;
-		const cleared = !after.some(
-			(other) =>
-				other.line === finding.line &&
-				Math.abs(other.column - finding.column) <= 3,
+		if (tried.has(candidate.text)) {
+			continue;
+		}
+		tried.add(candidate.text);
+		const after = parser.parse(candidate.text, origin);
+		if (after === null || !gotPast(after, stop)) {
+			continue;
+		}
+		const counts = scanWithBalance(candidate.text, origin).balance.get(
+			candidate.line,
 		);
-		const earlier = after.some(
-			(other) =>
-				other.line < finding.line ||
-				(other.line === finding.line && other.column <= finding.column),
-		);
-		const counts = scan.balance.get(finding.line);
 		const off = counts
 			? Math.abs(counts.curly) +
 				Math.abs(counts.round) +
 				Math.abs(counts.square)
 			: 0;
-		if (
-			cleared &&
-			!earlier &&
-			(best === null ||
-				off < best.off ||
-				(off === best.off && after.length < best.left))
-		) {
-			best = {
-				say: candidate.say,
-				call: candidate.call,
-				left: after.length,
-				off,
-			};
+		const distance = stopAt < 0 ? 0 : Math.abs(candidate.at - stopAt);
+		const better =
+			best === null ||
+			off < best.off ||
+			(off === best.off &&
+				((after === undefined && best.after !== undefined) ||
+					((after === undefined) === (best.after === undefined) &&
+						distance < best.distance)));
+		if (better) {
+			best = { candidate, after, off, distance };
 		}
 	}
 	if (!best) {
 		return null;
 	}
 
-	const rest =
-		best.left === 0
-			? "and nothing else in this file crosses after that"
-			: `and leaves ${best.left} of the ${baseline} crossings, all further down the file`;
-	// Offered, not prescribed. "Checked" means the brackets balance after it,
-	// which several different edits achieve; which one is right depends on the
-	// block that was meant to close, and only the code's meaning says that.
+	const where = (at: ParseStop) =>
+		`line ${at.line}${at.column === undefined ? "" : `, column ${at.column}`}`;
+	const outcome =
+		best.after === undefined
+			? `after it, ${parser.name} accepts this script`
+			: `after it, ${parser.name} gets past ${where(stop)} and next stops at ${where(best.after)} (${best.after.message})`;
+	// Offered, not prescribed. The parser says the edit gets it further; which
+	// block was meant to close is the code's meaning, and only that says it.
 	return (
-		`one edit that balances it: ${best.say} — checked: that clears this line ${rest}. ` +
+		`one edit ${parser.name} accepts: ${best.candidate.say} — checked: ${outcome}. ` +
 		"Brackets cannot tell which block was meant to close here, so make sure it is this one.\n" +
-		`      ${PRESCRIPTION_MARKER}${best.call} — if that is the change you mean; there is no text to match on.`
+		`      ${PRESCRIPTION_MARKER}${best.candidate.call} — if that is the change you mean; there is no text to match on.`
 	);
 }
 
@@ -744,12 +1073,11 @@ export function findScriptSyntaxError(
 		if (body.trim() === "") {
 			continue;
 		}
-		try {
-			new Function(body);
-		} catch (error) {
-			if (error instanceof SyntaxError) {
-				return `SyntaxError: ${error.message}`;
-			}
+		// The same parse the scan gates its edits on, so the two never disagree:
+		// a module, a `#!` line or top-level `await` is not a syntax error.
+		const stop = findParseStop(body);
+		if (stop) {
+			return `SyntaxError: ${stop.message}`;
 		}
 	}
 	return undefined;
@@ -768,16 +1096,32 @@ export function describeDelimiterBalance(
 	const text = splitBom(withBom).body;
 	const extension = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
 
-	let findings: DelimiterFinding[];
 	const balance = new Map<number, LineBalance>();
 	// Which span each finding came out of, so a repair can be tried against
-	// the same text the scan walked rather than against the whole file.
-	const sources: Array<{
+	// the same text the scan walked rather than against the whole file, and
+	// what a real parser said about that span.
+	interface Source {
 		body: string;
 		origin: Cursor;
 		findings: DelimiterFinding[];
-	}> = [];
-	const absorb = (scan: DelimiterScan) => {
+		balance: Map<number, LineBalance>;
+		parser?: Parser;
+		stop?: ParseStop;
+	}
+	const sources: Source[] = [];
+
+	const record = (body: string, origin: Cursor, module = false) => {
+		const scan = scanWithBalance(body, origin);
+		const candidate = parserFor(extension, module);
+		const verdict = candidate?.parse(body, origin);
+		// A parser that cannot tell -- module code, say -- is no parser here:
+		// the count is reported and no edit is offered.
+		const parser = verdict === null ? undefined : candidate;
+		const stop = verdict ?? undefined;
+		// A parser that accepts the span outranks the count: whatever the scan
+		// found there is the scan's own mistake, and reporting it would send an
+		// edit to code that is correct.
+		const findings = parser && stop === undefined ? [] : scan.findings;
 		for (const [at, counts] of scan.balance) {
 			const entry = balance.get(at) ?? { round: 0, square: 0, curly: 0 };
 			entry.round += counts.round;
@@ -785,22 +1129,25 @@ export function describeDelimiterBalance(
 			entry.curly += counts.curly;
 			balance.set(at, entry);
 		}
-		return scan.findings;
+		sources.push({
+			body,
+			origin,
+			findings,
+			balance: scan.balance,
+			parser,
+			stop,
+		});
+		return findings;
 	};
 
-	const record = (body: string, origin: Cursor) => {
-		const found = absorb(scanWithBalance(body, origin));
-		sources.push({ body, origin, findings: found });
-		return found;
-	};
-
+	let findings: DelimiterFinding[];
 	if (C_FAMILY.has(extension)) {
 		findings = record(text, { line: 1, column: 1 });
 	} else if (EMBEDS_SCRIPT.has(extension)) {
 		// One line can hold the end of one `<script>` and the start of the next,
 		// so the tallies are summed rather than replaced.
 		findings = scriptSpans(text).flatMap((span) =>
-			record(span.body, span.origin),
+			record(span.body, span.origin, span.module),
 		);
 	} else {
 		return null;
@@ -815,17 +1162,17 @@ export function describeDelimiterBalance(
 	// Reporting the first two findings was wrong on a real file. It had five
 	// separately broken lines, each a minified one-liner ending `}})` where it
 	// should end `});`, and naming two of them sent the model round the loop —
-	// edit, reload the page, read, edit — once per line. Worse, it fixed a line
-	// the report had not named and then had to work out for itself why the
-	// error had not moved.
+	// edit, reload the page, read, edit — once per line.
 	//
 	// Two findings on one line say less than two findings on two lines, so the
 	// list is deduplicated by line rather than truncated by count.
 	const seen = new Set<number>();
+	const lineOf = (finding: DelimiterFinding) =>
+		finding.openLine ?? finding.line;
 	const distinct = findings.filter((finding) => {
 		// The line the fix goes on: the opener for a crossing or an unclosed
 		// bracket, and the stray character itself when nothing was open.
-		const line = finding.openLine ?? finding.line;
+		const line = lineOf(finding);
 		if (seen.has(line)) {
 			return false;
 		}
@@ -834,6 +1181,21 @@ export function describeDelimiterBalance(
 	});
 
 	const shown = distinct.slice(0, MAX_REPORTED_LINES);
+
+	// The first span a parser refused. Its stop is the one position in this
+	// report that is certain; everything else is a count.
+	const stopped = sources.find((source) => source.stop !== undefined);
+	const stop = stopped?.stop;
+	const stopLine = stop?.line;
+	// A count after the stop was taken past a bracket the parser could not
+	// place, so it can name a line that is correct. Measured on the seed: the
+	// count named line 97, the class's own closing brace, while the spare `}`
+	// was on line 95 and the parser stopped on line 96.
+	const pastStop = (finding: DelimiterFinding) =>
+		stopped !== undefined &&
+		stopLine !== undefined &&
+		stopped.findings.includes(finding) &&
+		lineOf(finding) > stopLine;
 
 	// A bracket by its position and by the text just before it. The column
 	// alone was not enough: pandorum, 2026-10-23, a model told the `(` at
@@ -868,14 +1230,16 @@ export function describeDelimiterBalance(
 	//
 	// The order is the whole point. Led by the pairing, a real report read "the
 	// `(` opened at line 90, column 30 is closed by `}` at line 90, column
-	// 382; counting only code, this line has 1 more `}` than `{` — that is the
-	// edit". The model quoted that first clause back and spent the rest of the
+	// 382". The model quoted that first clause back and spent the rest of the
 	// turn trying to make sense of a `(` being closed by a `}` — six turns of
 	// it, four of them ending at the thinking budget — while the clause that
 	// told it what to change sat behind a semicolon. A crossing is how the
 	// scanner noticed; the tally is what the model can act on, so the tally
 	// leads and the crossing explains.
 	const lines = shown.map((finding) => {
+		const after = pastStop(finding)
+			? ` — this is after where ${stopped?.parser?.name} stops, so it may be correct code that only looks unpaired until that is fixed`
+			: "";
 		switch (finding.kind) {
 			case "mismatch": {
 				// Only when the crossing opens and closes on the same line: that
@@ -887,71 +1251,95 @@ export function describeDelimiterBalance(
 				// in mind.
 				const crossing = `${bracket(finding.found ?? "", finding.line, finding.column, sameLine)} comes while ${bracket(finding.opener ?? "", finding.openLine ?? finding.line, finding.openColumn ?? 0, sameLine)} is still open${sameLine ? `, both on line ${finding.line}` : ""}`;
 				return note
-					? `  line ${finding.openLine}: ${note} (${crossing})`
-					: `  line ${finding.openLine}: ${crossing}`;
+					? `  line ${finding.openLine}: ${note} (${crossing})${after}`
+					: `  line ${finding.openLine}: ${crossing}${after}`;
 			}
 			case "unmatched-close": {
 				const note = surplusNote(finding.line, balance);
-				const stray = `${bracket(finding.found ?? "", finding.line, finding.column)} closes nothing that is open`;
+				// "Closes nothing that is open" read as a verdict that the closer
+				// is spare. It is only what the count found: a closer earlier
+				// that ended its block too soon leaves a correct one here with
+				// nothing to close, which is exactly the seed's line 97.
+				const stray = `${bracket(finding.found ?? "", finding.line, finding.column)} finds nothing open to close in the count — either it is spare or a closer before it ended its block too soon`;
 				return note
-					? `  line ${finding.line}: ${note} (${stray})`
-					: `  line ${finding.line}: ${stray}`;
+					? `  line ${finding.line}: ${note} (${stray})${after}`
+					: `  line ${finding.line}: ${stray}${after}`;
 			}
 			default:
-				return `  line ${finding.openLine}: ${bracket(finding.opener ?? "", finding.openLine ?? 0, finding.openColumn ?? 0)} is never closed`;
+				return `  line ${finding.openLine}: ${bracket(finding.opener ?? "", finding.openLine ?? 0, finding.openColumn ?? 0)} is never closed${after}`;
 		}
 	});
 
-	// Everything below goes to the first line only. It is the one the parser
-	// stopped on, so it is the one that is certain; the rest are scanned past a
-	// disturbed stack. Saying this much about all six would cost more of the
-	// model's attention than the five leads are worth.
-	const first = shown[0];
-	if (first) {
-		// One voice or none. An earlier draft said what the parser expected at
-		// the column *and* named the verified edit, and on the real file those
-		// read as contradictory instructions — "a `)` belongs at column 382"
-		// next to "delete the `}` at column 382", when the `)` it wants is
-		// already sitting at 383. Whichever is said, the other has to stay out.
-		const detail: string[] = [];
-		const source = sources.find((candidate) =>
-			candidate.findings.includes(first),
+	// The parser's own answer leads when it named a line, and it is named
+	// whatever the count found there: it is the line the fix has to get past.
+	if (stopped?.parser && stop && stopLine !== undefined) {
+		const column = stop.column === undefined ? "" : `, column ${stop.column}`;
+		lines.unshift(
+			`  line ${stopLine}: ${stopped.parser.name} stops here${column} — ${stop.message.replace(/\.+$/, "")}. This is the parser's own answer, not a count.`,
 		);
-		// Whether the search ran at all, which is not the same as it finding
-		// nothing — a file over the size guard is never tried, and a report that
-		// said "no single edit clears it" there would be stating a result it
-		// never measured.
-		const searched =
-			source !== undefined && source.body.length <= MAX_REPAIR_BYTES;
-		const repair = source
-			? proposeRepair(source.body, source.origin, first, findings.length)
-			: null;
+	} else if (stopped?.parser && stop) {
+		lines.unshift(
+			`  ${stopped.parser.name} refuses this file — ${stop.message.replace(/\.+$/, "")}. It does not say where here, so the lines below are counts only.`,
+		);
+	}
+
+	// Everything below goes to one place only: the parser's stop when there is
+	// one, the first line otherwise. Saying this much about all six would cost
+	// more of the model's attention than the five leads are worth.
+	const detail: string[] = [];
+	if (stopped?.parser && stop) {
+		// Edits come from the count's findings near the stop and from the lines
+		// at and just above it, and the parser picks among them. Under Bun,
+		// where the stop has no line, only the first finding is tried, and only
+		// an edit after which the script parses survives.
+		const near = stopped.findings.filter((finding) =>
+			stopLine === undefined
+				? finding === stopped.findings[0]
+				: lineOf(finding) <= stopLine &&
+					lineOf(finding) >= stopLine - STOP_LOOKBACK,
+		);
+		const candidates = [
+			...near.flatMap((finding) =>
+				findingCandidates(stopped.body, stopped.origin, finding),
+			),
+			...stopCandidates(stopped.body, stopped.origin, stop, stopped.balance),
+		];
+		const repair = chooseRepair(
+			stopped.body,
+			stopped.origin,
+			candidates,
+			stopped.parser,
+			stop,
+		);
 		if (repair) {
 			detail.push(`      ${repair}`);
-		} else {
-			const expected = first.opener ? PAIRS[first.opener] : undefined;
-			if (first.kind === "mismatch" && expected) {
-				detail.push(
-					`      a \`${expected}\` is what belongs at column ${first.column} — that is what the \`${first.opener}\` from column ${first.openColumn} is waiting for.`,
-				);
-			} else if (first.kind === "unmatched-close") {
-				detail.push(
-					`      nothing was open at column ${first.column}, so the \`${first.found}\` there is spare rather than misplaced.`,
-				);
-			}
-			if (first.enclosing?.length) {
-				// Hand over the chain the model would otherwise rebuild by hand.
-				const chain = first.enclosing
-					.map((open) => `\`${open.opener}\` ${open.line}:${open.column}`)
-					.join(", ");
-				const lead = searched
-					? "no single-character edit clears it, and s"
-					: "S";
-				detail.push(`      ${lead}till open there, innermost first: ${chain}.`);
-			}
+		} else if (stopped.body.length <= MAX_REPAIR_BYTES) {
+			// Whether the search ran at all, which is not the same as it finding
+			// nothing — a file over the size guard is never tried, and a report
+			// that said "no single edit gets past it" there would be stating a
+			// result it never measured.
+			detail.push(
+				stopLine === undefined
+					? `      no single-character edit at the first line named makes ${stopped.parser.name} accept this script, so none is offered.`
+					: `      no single-character edit near here gets ${stopped.parser.name} past this point, so none is offered.`,
+			);
 		}
-		lines.splice(1, 0, ...detail);
+	} else {
+		const first = shown[0];
+		if (first) {
+			detail.push(
+				`      no edit is offered: nothing here parses ${extension} files to check one against, and a count of brackets cannot say which one is wrong.`,
+			);
+		}
+		if (first?.enclosing?.length) {
+			// Hand over the chain the model would otherwise rebuild by hand.
+			const chain = first.enclosing
+				.map((open) => `\`${open.opener}\` ${open.line}:${open.column}`)
+				.join(", ");
+			detail.push(`      Still open there, innermost first: ${chain}.`);
+		}
 	}
+	lines.splice(1, 0, ...detail);
 
 	const hidden = distinct.length - shown.length;
 	// The scope is said up front: the same model took a report on the whole
@@ -961,14 +1349,17 @@ export function describeDelimiterBalance(
 			? "Delimiter scan of the whole file, read from line 1:"
 			: `Delimiter scan of the whole file, read from line 1 — ${distinct.length} line(s) do not balance${hidden > 0 ? `, first ${shown.length} shown` : ""}:`;
 
-	// The first line is certain: it is where the parser gave up. The rest are
-	// scanned with a stack the first crossing already disturbed, so they are
-	// leads rather than verdicts — which is why the closing line says to fix
-	// them together and re-check rather than trusting the list wholesale.
+	// What the counts are and what they are not. An earlier closing line said
+	// the first line named "is where the parser gave up"; on the seed it was
+	// line 97 and the parser had stopped at 96.
+	const counts =
+		"  This scan skips strings, comments and regex literals, so its counts are of real code. A count says where brackets stop pairing up, not which bracket is wrong: a spare closer earlier can leave a correct one later looking spare.";
 	const closing =
-		shown.length === 1
-			? "  This scan skips strings, comments and regex literals, so it is counting real code — edit the line named above rather than re-deriving the balance yourself. It is the line the parse error could not name."
-			: "  This scan skips strings, comments and regex literals, so it is counting real code — edit the lines named above rather than re-deriving the balance yourself. The first is where the parser gave up; the others are scanned past it and may shift once it is fixed. Fix them and then re-check.";
+		stopLine !== undefined
+			? `${counts} Start from line ${stopLine}, where the parser stops, and check again after each fix.`
+			: shown.length === 1
+				? `${counts} Fix the line named above, then check again.`
+				: `${counts} Fix the first line named, then check again: the others are counted past it and may shift once it is fixed.`;
 
 	return [heading, ...lines, closing].join("\n");
 }

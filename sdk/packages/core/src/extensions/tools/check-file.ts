@@ -544,9 +544,10 @@ export function checkSource(filePath: string, text: string): string {
 			lines.push(`    ${finding.sourceText}`);
 		}
 	}
-	// Runs whether or not the parse succeeded: a file can parse and still have
-	// crossed brackets inside a string-heavy line, and a file that fails to
-	// parse needs the opener named, which the parse error cannot do.
+	// Runs whether or not the parse succeeded. For a language it can parse, the
+	// scan says nothing about a file that parses -- a count that disagrees with
+	// the parser is the count's mistake -- and for one that fails it names the
+	// parser's stop and the opener the parse error cannot.
 	const scan = describeDelimiterBalance(filePath, text);
 	if (scan) {
 		lines.push(scan);

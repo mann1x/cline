@@ -165,7 +165,7 @@ describe("describeDelimiterBalance", () => {
 		expect(report).toContain(
 			"Delimiter scan of the whole file, read from line 1:",
 		);
-		expect(report).toContain("edit the line named above");
+		expect(report).toContain("Fix the line named above, then check again.");
 	});
 
 	it("leads with the line and the tally, not with the crossing", () => {
@@ -182,7 +182,7 @@ describe("describeDelimiterBalance", () => {
 		);
 		const named = (report ?? "")
 			.split("\n")
-			.find((line) => line.startsWith("  line "));
+			.find((line) => line.startsWith("  line 1: counting"));
 		expect(named).toBe(
 			"  line 1: counting only code, this line has 1 more `}` than `{` (the `}` at column 48 that follows …`{c.fill();}}` comes while the `(` at column 26 that follows …`s.dc.forEach` is still open, both on line 1)",
 		);
@@ -281,20 +281,25 @@ describe("describeDelimiterBalance", () => {
 	 * Which brackets cross is the easy half. Whether to delete one, add one or
 	 * move one is the half the model pays for: one measured turn spent 33,350
 	 * tokens deciding between a swap and a deletion on a 500-column line, hit
-	 * the thinking budget mid-sentence, and had picked the wrong one anyway —
-	 * the run that fixed that file deleted a brace. A scan is microseconds, so
-	 * the edit is tried and re-scanned rather than reasoned about.
+	 * the thinking budget mid-sentence, and had picked the wrong one anyway.
+	 *
+	 * An edit is offered only when a real parser agrees it helped. Until
+	 * 2026-11-08 "checked" meant the bracket count was satisfied, and on the
+	 * manic_miner seed that offered to delete a class's correct closing brace;
+	 * these fixtures were fragments that did not parse even after their fix,
+	 * so nothing here could notice.
 	 */
 	describe("a checked repair", () => {
+		// The shape from the file this was measured on, reduced, as a method of
+		// a class so the fixed file parses. Line 2 keeps its original columns.
+		const dDec =
+			"class A{\ndDec(c,x){this.dc.forEach(d=>{if(d){c.fill();}}});}\n}\n";
+
 		it("names the edit that clears the line", () => {
-			// The shape from the file this was measured on, reduced. The run that
-			// fixed it made exactly this edit.
-			const report = describeDelimiterBalance(
-				"app.js",
-				"dDec(c,x){this.dc.forEach(d=>{if(d){c.fill();}}});}\n",
+			const report = describeDelimiterBalance("app.js", dDec);
+			expect(report).toContain(
+				"delete the `}` at line 2, column 48 — checked: after it, the JavaScript parser accepts this script",
 			);
-			expect(report).toContain("delete the `}` at column 48 — checked");
-			expect(report).toContain("nothing else in this file crosses after that");
 		});
 
 		it("gives the edit as arguments the editor takes, not as text to match", () => {
@@ -302,23 +307,26 @@ describe("describeDelimiterBalance", () => {
 			// that correctly and then composed an `old_text` for a 500-column
 			// minified line, which came back "No replacement performed: text not
 			// found". The editor addresses a character directly; so does this.
-			const report = describeDelimiterBalance(
-				"app.js",
-				"dDec(c,x){this.dc.forEach(d=>{if(d){c.fill();}}});}\n",
-			);
+			const report = describeDelimiterBalance("app.js", dDec);
 			expect(report).toContain(
-				'`editor` with start_line: 1, start_column: 48, new_text: ""',
+				'`editor` with start_line: 2, start_column: 48, new_text: ""',
 			);
 			expect(report).toContain("there is no text to match on");
 		});
 
-		it("orders a move so the deletion accounts for the insert's shift", () => {
-			// Insert first at column 12, which pushes the `)` from 13 to 14.
+		it("names the insert first and the deletion at the column it then has", () => {
+			// `({)}` wants `({})`. Moving the `)` to column 12 instead, which the
+			// bracket count accepted, gives `(){}`: not JavaScript. The edit the
+			// parser accepts moves the `}` left, so its deletion comes second and
+			// one column further on.
 			const report = describeDelimiterBalance("app.js", "const x = ({)};\n");
 			expect(report).toContain(
-				'insert_line: 1, insert_column: 12, new_text: ")"',
+				"move the `}` at line 1, column 14 to column 13 — checked: after it, the JavaScript parser accepts this script",
 			);
-			expect(report).toContain('start_line: 1, start_column: 14, new_text: ""');
+			expect(report).toContain(
+				'insert_line: 1, insert_column: 13, new_text: "}", then a second call with start_line: 1, start_column: 15, new_text: ""',
+			);
+			expect(report).not.toContain("to column 12");
 		});
 
 		it("moves a closer to the end of a line, and never past it", () => {
@@ -331,7 +339,7 @@ describe("describeDelimiterBalance", () => {
 			const width = update.split("\n")[12]?.length ?? 0;
 			expect(width).toBe(388);
 			expect(report).toContain(
-				"move the `)` at column 386 to column 389 — checked",
+				"move the `)` at line 13, column 386 to column 389 — checked",
 			);
 			expect(report).toContain(
 				'insert_line: 13, insert_column: 389, new_text: ")"',
@@ -342,7 +350,7 @@ describe("describeDelimiterBalance", () => {
 		});
 
 		it("adds the missing closer rather than borrow a spare one further down", () => {
-			// pandorum g5tmt: line 93 was one `}` short, and line 98 held a spare
+			// pandorum g5tmt: line 2 was one `}` short, and line 5 held a spare
 			// `}`. Fewest crossings chose "move the `)` two columns", which left
 			// `dPw` open and made every method after it a statement.
 			const source = [
@@ -357,56 +365,220 @@ describe("describeDelimiterBalance", () => {
 			expect(report).toContain(
 				"line 2: counting only code, this line has 1 more `{`",
 			);
-			expect(report).toContain("insert a `}` before the `)` at column 46");
+			expect(report).toContain(
+				"insert a `}` before the `)` at line 2, column 46 — checked",
+			);
 			expect(report).not.toContain("move the `)`");
 		});
 
-		it("proposes a move when the line balances and a closer is misplaced", () => {
-			const report = describeDelimiterBalance("app.js", "const x = ({)};\n");
-			expect(report).toContain(
-				"move the `)` at column 13 to column 12 — checked",
-			);
-		});
-
-		it("says what is left over when the file has more than one fault", () => {
+		it("says where the parser stops next when the file has more than one fault", () => {
 			const report = describeDelimiterBalance(
 				"app.js",
 				"function f(){ if (a) { b(); ) } ) }\n",
 			);
-			expect(report).toContain("replace the `)` at column 29 with `}`");
-			expect(report).toContain(
-				"leaves 2 of the 3 crossings, all further down the file",
+			expect(report).toMatch(
+				/— checked: after it, the JavaScript parser gets past line 1, column 29 and next stops at line 1, column \d+/,
 			);
 		});
 
-		it("gives the enclosing chain when no single edit clears it", () => {
+		it("offers nothing when no single edit gets the parser past its stop", () => {
+			// Two closers missing: no one-character edit makes this parse or
+			// moves the parser on, so none is named.
 			const report = describeDelimiterBalance(
 				"app.js",
-				"function f(){\n  if (a) {\n    b();\n)\n",
+				"function f(){\n  g(h(1;\n}\n",
 			);
-			expect(report).toContain("a `}` is what belongs at column 1");
+			expect(report).toContain("line 2: the JavaScript parser stops here");
 			expect(report).toContain(
-				"no single-character edit clears it, and still open there, innermost first: `{` 1:13",
+				"no single-character edit near here gets the JavaScript parser past this point, so none is offered.",
 			);
+			expect(report).not.toContain("that edit is `editor`");
 		});
 
 		it("does not claim a search it never ran on a file too big to search", () => {
 			const big = `function f(){ if (a) { b(); ) }\n${"// filler\n".repeat(20_000)}`;
 			const report = describeDelimiterBalance("big.js", big);
-			expect(report).not.toContain("no single-character edit clears it");
-			expect(report).toContain("Still open there, innermost first");
+			expect(report).toContain("line 1: the JavaScript parser stops here");
+			expect(report).not.toContain("no single-character edit");
+			expect(report).not.toContain("that edit is `editor`");
 		});
 
-		it("says it about the first line only, whatever else is broken", () => {
+		it("offers no edit for a language nothing here parses", () => {
+			// TypeScript has no parser in this package, so an edit could only
+			// be checked against the count -- which is how the wrong ones got out.
+			const report = describeDelimiterBalance(
+				"app.ts",
+				"function f(){\n  if (a) {\n    b();\n)\n",
+			);
+			expect(report).toContain("no edit is offered");
+			expect(report).toContain("Still open there, innermost first: `{` 1:13");
+			expect(report).not.toContain("— checked");
+		});
+
+		it("says it about one place only, whatever else is broken", () => {
 			const report = describeDelimiterBalance(
 				"app.js",
-				"f(){ a(); ) }\ng(){ b(); ) }\nh(){ c(); ) }\n",
+				"f(); a(); )\ng(); b(); )\nh(); c(); )\n",
 			);
 			const checked = (report ?? "")
 				.split("\n")
 				.filter((line) => line.includes("— checked"));
 			expect(checked).toHaveLength(1);
 		});
+	});
+
+	/**
+	 * The manic_miner seed, the file these edits were wrong on. Line 95's spare
+	 * `}` closes `class Level` early, so the count finds the class's own
+	 * closing brace on line 97 with nothing to close and the parser stops at
+	 * line 96. The old scan offered to delete line 97's brace -- an edit that
+	 * left the parser exactly where it was -- and stopped naming line 95.
+	 */
+	describe("a spare closer the count blames on a correct one", () => {
+		const page = [
+			"<script>",
+			"class Level{",
+			"  constructor(){this.e=[];}",
+			"  dBoss(c){if(this.b){c.save();c.fill();c.restore();}}};",
+			"  dEn(c){this.e.forEach(e=>{c.fill();});}",
+			"}",
+			"</script>",
+		].join("\n");
+
+		it("names the line the parser stops on, which the count does not", () => {
+			const report = describeDelimiterBalance("game.html", page) ?? "";
+			expect(report).toMatch(/line 5: the JavaScript parser stops here/);
+		});
+
+		it("offers the spare brace on line 4, never the class's own on line 6", () => {
+			const report = describeDelimiterBalance("game.html", page) ?? "";
+			expect(report).toContain("delete the `}` at line 4, column");
+			expect(report).toContain("the JavaScript parser accepts this script");
+			expect(report).not.toContain("start_line: 6");
+		});
+
+		it("says a line the count names past the stop may be correct code", () => {
+			const report = describeDelimiterBalance("game.html", page) ?? "";
+			const line6 = report
+				.split("\n")
+				.find((line) => line.startsWith("  line 6:"));
+			expect(line6).toContain("may be correct code");
+			expect(line6).not.toContain("is spare rather than misplaced");
+		});
+	});
+
+	/**
+	 * The rule itself, over every fixture with a fault: whatever edit is
+	 * offered, applying it must get the parser past the line and column it
+	 * stopped at. The call is applied the way the editor applies it.
+	 */
+	describe("every offered edit gets the parser further", () => {
+		const faulty = [
+			"class A{\ndDec(c,x){this.dc.forEach(d=>{if(d){c.fill();}}});}\n}\n",
+			"const x = ({)};\n",
+			"function f(){ if (a) { b(); ) } ) }\n",
+			"class L{\n  dPw(c){this.pw.forEach(p=>{if(p){c.fill();})}\n  dEn(c){c.x();}\n}\n}\n",
+			"a.forEach(p=>{if(p){x();}})}\nb.forEach(p=>{if(p){y();}})}\n",
+			'function f(){ s = "}}}}"; }}\n',
+			"class K{\n  m(){if(a){b();}}}\n  n(){c();}\n}\n",
+			"f(g(1, [2, 3)], 4);\n",
+		];
+
+		/** Apply `editor`'s line/column calls to text, as the editor would. */
+		function applyCall(text: string, report: string): string | null {
+			const marker = report.indexOf("that edit is `editor` with ");
+			if (marker < 0) {
+				return null;
+			}
+			const call = report.slice(marker).split(" — ")[0] ?? "";
+			const lines = text.split("\n");
+			const steps = [
+				...call.matchAll(
+					/(insert|start)_line: (\d+), (?:insert|start)_column: (\d+), new_text: "([^"]*)"/g,
+				),
+			];
+			for (const [, kind, line, column, insert] of steps) {
+				const row = lines[Number(line) - 1] ?? "";
+				const at = Number(column) - 1;
+				lines[Number(line) - 1] =
+					kind === "insert"
+						? row.slice(0, at) + insert + row.slice(at)
+						: row.slice(0, at) + insert + row.slice(at + 1);
+			}
+			return lines.join("\n");
+		}
+
+		/** Where the parser stops, as [line, column], or null when it parses. */
+		function stopOf(text: string): [number, number] | null {
+			const report = describeDelimiterBalance("app.js", text) ?? "";
+			const match =
+				/line (\d+): the JavaScript parser stops here, column (\d+)/.exec(
+					report,
+				);
+			if (match) {
+				return [Number(match[1]), Number(match[2])];
+			}
+			return findScriptSyntaxError("app.js", text) ? [0, 0] : null;
+		}
+
+		for (const text of faulty) {
+			it(`holds for ${JSON.stringify(text.slice(0, 40))}`, () => {
+				const report = describeDelimiterBalance("app.js", text) ?? "";
+				const before = stopOf(text);
+				expect(before).not.toBeNull();
+				const fixed = applyCall(text, report);
+				if (fixed === null) {
+					return;
+				}
+				const after = stopOf(fixed);
+				if (after !== null && before !== null) {
+					expect(
+						after[0] > before[0] ||
+							(after[0] === before[0] && after[1] > before[1]),
+					).toBe(true);
+				}
+			});
+		}
+	});
+});
+
+/**
+ * Valid files that are not classic script. Each was reported "does not parse"
+ * by the SDK, and a parse error the parser never had outranks the count, so a
+ * stop that is not real would gate edits against nothing.
+ */
+describe("files that are not classic script", () => {
+	it("leaves an ES module unchecked rather than calling it broken", () => {
+		const esm =
+			'import fs from "node:fs";\nexport const a = fs.existsSync("x");\n';
+		expect(findScriptSyntaxError("lib.js", esm)).toBeUndefined();
+		expect(describeDelimiterBalance("lib.js", esm)).toBeNull();
+	});
+
+	it("reports a module's crossed brackets as counts, with no edit", () => {
+		const report =
+			describeDelimiterBalance(
+				"lib.js",
+				'import fs from "node:fs";\nexport function f(){ if (a) { b(); ) }\n',
+			) ?? "";
+		expect(report).toContain("line 2:");
+		expect(report).not.toContain("parser stops here");
+		expect(report).not.toContain("that edit is `editor`");
+	});
+
+	it("accepts top-level await", () => {
+		const text = 'const r = await fetch("x");\nconsole.log(r);\n';
+		expect(findScriptSyntaxError("main.js", text)).toBeUndefined();
+		expect(describeDelimiterBalance("main.js", text)).toBeNull();
+	});
+
+	it("accepts a #! line and keeps the line numbers after it", () => {
+		const cli = "#!/usr/bin/env node\nconsole.log(1);\n";
+		expect(findScriptSyntaxError("cli.js", cli)).toBeUndefined();
+		const broken = "#!/usr/bin/env node\nfunction f(){ if (a) { b(); ) }\n";
+		expect(describeDelimiterBalance("cli.js", broken)).toContain(
+			"line 2: the JavaScript parser stops here",
+		);
 	});
 });
 

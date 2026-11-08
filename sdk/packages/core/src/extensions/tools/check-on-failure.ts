@@ -30,9 +30,17 @@ import type { ToolOperationResult } from "./types";
 /** Files checked for one call, however many failures it holds. */
 const MAX_CHECKED_FILES = 3;
 
-/** The heading the appended report arrives under. */
+/**
+ * The heading the appended report arrives under.
+ *
+ * It used to call the whole report "the measurement" and say that where it
+ * disagreed with the model's own count, the model's count was wrong. The
+ * report carries a bracket scan as well as the parser's answer, and on the
+ * manic_miner seed that scan was the one that was wrong -- so the heading
+ * says which part is the parser's and which part is a count.
+ */
 const ATTACHMENT_HEADING =
-	"--- the checker, run for you on the file(s) this command names. This is the measurement, not a second opinion: where it disagrees with a count of your own, it is the count that is wrong. ---";
+	"--- the checker, run for you on the file(s) this command names. A parse error in it is the parser's own answer; a bracket count in it says where brackets stop pairing up, not which one is wrong. ---";
 
 /**
  * What a result looks like once the shell tool is done with it.

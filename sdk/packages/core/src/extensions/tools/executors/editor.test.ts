@@ -11,8 +11,12 @@ const context = {
 	iteration: 1,
 };
 
-/** One spare `}` at column 48, which the scan can prescribe a repair for. */
-const SPARE_BRACE_LINE = "dDec(c,x){this.dc.forEach(d=>{if(d){c.fill();}}});}";
+/**
+ * One spare `}` at column 48, which the scan can prescribe a repair for. It is
+ * valid JavaScript once that brace is gone: an edit is offered only when the
+ * parser accepts it, so the fixture has to be code, not a method fragment.
+ */
+const SPARE_BRACE_LINE = "if(c&&xx){this.dc.forEach(d=>{if(d){c.fill();}}});}";
 
 /** The same fault, on a line long enough that rewriting it is the expensive way. */
 const LONG_UNBALANCED_LINE = `${SPARE_BRACE_LINE} // ${"pad ".repeat(50)}`;
