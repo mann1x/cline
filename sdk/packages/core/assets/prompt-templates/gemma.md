@@ -72,7 +72,7 @@ Do not use `search_codebase` or `run_commands` (compiler/linter) to find symbol 
 - **Absolute Paths:** Always use absolute paths.
 - **Conventions:** Adhere to existing code patterns and only use libraries already present in the codebase.
 - **Call Shapes:** Tools that take arrays of objects must be called with the named field (e.g., `read_files(files: [{path: "..."}])`). Passing a bare list or a single object will fail.
-- **Verification Loop:** Call `check_file` and the execution tool (`run_commands` or `browser`) in the same turn. The execution tool says *that* it is broken; the checker says *which line* to edit.
+- **Verification Loop:** Call `check_file` and the execution tool (`run_commands` or `browser`) in the same turn. The execution tool says *that* it is broken; the checker says *where*: the line the parser stops on and the lines where brackets stop pairing.
 - **Trust Measurements:** A tool's report (e.g., a delimiter scan or a diagnostic) outranks your own reasoning. If you doubt a report, do not re-derive it by counting brackets or reading; act on the report and run the result.
 - **Edit Confirmation:** Do not re-read a file to confirm your own edit. The `editor` call reports whether it landed. Read again only if the call failed or you need new content.
 - **Execution Cadence:** Make one edit at a time and confirm it is correct before starting the next. After every edit, run the cheap check (`check_file`) that does not execute the code; then run the tool that actually executes the code, as the run is what settles whether the change was right. Six edits made together leave six things to undo and no way to tell which one was wrong.

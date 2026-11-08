@@ -230,3 +230,22 @@ describe("the files a command names itself", () => {
 		expect(findCommandFileTargets(`ls ${root}`, root)).toEqual([]);
 	});
 });
+
+// automaticum audit 2026-11-08, B15: a passing run's counts of nothing are not
+// a complaint.
+describe("looksLikeFailure and counts of nothing", () => {
+	it.each([
+		"Tests: 12 passed, 0 failed",
+		"Found 0 errors. Watching for file changes.",
+		"errors: 0, warnings: 2",
+		"No errors found",
+		"compiled without errors",
+	])("does not read %j as a failure", (output) => {
+		expect(looksLikeFailure(output, false)).toBe(false);
+	});
+
+	it("still reads a real failure among counts", () => {
+		expect(looksLikeFailure("Tests: 11 passed, 1 failed", false)).toBe(true);
+		expect(looksLikeFailure("Found 3 errors.", false)).toBe(true);
+	});
+});

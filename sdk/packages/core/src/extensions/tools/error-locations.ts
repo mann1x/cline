@@ -2,7 +2,7 @@
  * The files a command's output blames, whatever produced the output.
  *
  * A model that runs the build gets told *that* something is broken and where
- * the tool gave up. A checker tells it *which line to edit*. Measured across
+ * the tool gave up. A checker reads the whole file and tells it where. Measured across
  * four transactions on three builds of the harness arm: the model that had the
  * first and not the second wrote its own analyser rather than asking for the
  * second — `find_error.js`, then five checkers in one transaction, then
@@ -50,7 +50,7 @@ const LOCATION_PATTERNS: RegExp[] = [
  * caller passes it; this covers the tools that fail while exiting zero.
  */
 const FAILURE_WORDS =
-	/\berror\b|\bexception\b|traceback|\bpanic\b|\bfailed\b|\bfailure\b|syntaxerror|cannot find|unexpected/i;
+	/\berrors?\b|\bexceptions?\b|traceback|\bpanic\b|\bfailed\b|\bfailures?\b|syntaxerror|cannot find|unexpected/i;
 
 /** Past this an output is a log to be searched, not an error to be read. */
 const MAX_SCANNED_OUTPUT = 200_000;
@@ -76,7 +76,27 @@ export function looksLikeFailure(
 	output: string,
 	exitedNonZero: boolean,
 ): boolean {
-	return exitedNonZero || FAILURE_WORDS.test(output);
+	return exitedNonZero || FAILURE_WORDS.test(withoutZeroCounts(output));
+}
+
+/**
+ * The output with its counts of nothing taken out.
+ *
+ * A passing run reports "12 passed, 0 failed" or "errors: 0", and the word
+ * matched as a complaint: the checker was run on files a clean test run had
+ * named (automaticum audit 2026-11-08, B15).
+ */
+function withoutZeroCounts(output: string): string {
+	return output
+		.replace(
+			/\b(?:0|no|zero)\s+(?:errors?|failures?|failed|failing|exceptions?|problems?)\b/gi,
+			"",
+		)
+		.replace(
+			/\b(?:errors?|failures?|failed|failing|exceptions?|problems?)\s*[:=]\s*0\b/gi,
+			"",
+		)
+		.replace(/\bwithout (?:any )?errors?\b/gi, "");
 }
 
 /**

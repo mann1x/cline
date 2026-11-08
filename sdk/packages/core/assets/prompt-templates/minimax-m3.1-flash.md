@@ -324,7 +324,7 @@ Call it after each edit as the cheap non-executing confirmation, before the next
 
 The output is plain text with one section per file. Problems appear on separate lines as `file:line:column`, severity, and message. A clean file says so in one line. A listed problem is a successful diagnostic result, not a tool failure. “No problems” is conclusive only when a language server actually covers that file; use `run_commands` for a project checker or test command when appropriate.
 
-If delimiters do not match, a `Delimiter scan` section identifies the line to edit and the imbalance at each place the problem starts. A parse error is reported where the parser stopped, often at a closing bracket. Trust these measured locations instead of counting brackets manually. Fix every location named by the scan, then check the file again. The scan also runs for embedded scripts that no language server checks.
+If delimiters do not match, a `Delimiter scan` section names the lines where brackets stop pairing and the imbalance at each place the problem starts. A parse error is reported where the parser stopped, which is not always where the mistake is: a bracket left open earlier makes it stop later. Read the code at those locations instead of counting brackets manually — a count says where brackets stop pairing, not which one is wrong. Fix every location the scan names, then check the file again. The scan also runs for embedded scripts that no language server checks.
 
 # tool: list_files
 

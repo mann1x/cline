@@ -79,7 +79,7 @@ How to address a symbol:
 
 Output: plain text, one result per line as \`file:line:column\` followed by that source line, so you can go straight to the one you want rather than reading each candidate. \`hover\` returns the signature and documentation as text instead, and \`document_symbols\` and \`workspace_symbols\` name each symbol's kind.
 
-An empty answer is a real answer once the symbol resolved: for \`definition\`, \`references\`, \`implementations\`, \`type_definition\`, \`callers\` and \`hover\` the server understood the symbol and nothing matched, so a text search for the same question will not find more. \`workspace_symbols\` is the exception, and says so when it comes back empty: it reads a project-wide index that covers the languages a server is installed for and does not index script embedded in \`.html\` or other template files, so nothing there is not proof of nothing anywhere. And when the file does not parse, every answer about it opens with that line — while it is there, the server is answering from a partial parse and you are reading guesses.`;
+An empty answer once the symbol resolved means the server understood the symbol and found nothing for it — within what it can see. It does not see uses it cannot resolve statically (\`obj[name]\`, a name built in a string, reflection), files it does not load, or other languages, so for \`references\` and \`callers\` above all, a text search can still find uses the server missed; run one when the answer decides an edit. \`workspace_symbols\` says so when it comes back empty too: it reads a project-wide index that covers the languages a server is installed for and does not index script embedded in \`.html\` or other template files, so nothing there is not proof of nothing anywhere. And when a JavaScript or HTML file does not parse, every answer about it opens with that line — while it is there, the server is answering from a partial parse and you are reading guesses. Other languages are not parsed here, so no such line is no promise for them.`;
 
 /** Exported for the same reason as `CHECK_FILE_TOOL_INPUT_SCHEMA`. */
 export const ASK_LSP_TOOL_INPUT_SCHEMA = {
@@ -424,8 +424,8 @@ export function createAskLspTool(options: AskLspToolOptions): AgentTool {
  * broken file, and exactly when it is least able to tell. Saying so costs one
  * line and turns a wrong answer into a signposted one.
  *
- * The check is the same `new Function` parse `check_file` uses, on the same
- * file extensions, so the two tools never disagree about whether a file parses.
+ * The check is the parse `check_file` and the delimiter scan use, on the same
+ * file extensions, so the tools never disagree about whether a file parses.
  */
 async function describeParseFault(
 	provider: CodeIntelProvider,

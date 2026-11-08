@@ -677,6 +677,22 @@ bun scripts/sync-default-template.mts --check  # CI: fail if stale
 bun scripts/generate-builtin-templates.mts
 ```
 
+Two homes the sync does not reach, both found on 2026-11-08 when the
+`check_file`, `browser` and `ask_lsp` descriptions were corrected:
+
+- **Host tools' sections in `default.md`.** `check_file` (the VS Code host's own
+  text in `apps/vscode/src/sdk/check-file-tool.ts`), `browser`, `ask_lsp`,
+  `switch_to_act_mode` and the media tools are left untouched by the sync and
+  "up to date" is reported regardless. Copy each new description into its
+  `# tool:` section by hand, then run `apps/vscode`'s
+  `src/sdk/host-tool-descriptions.test.ts`, which is the guard for them.
+- **Family templates' own rewrites.** A family `.md` that rewrote a section
+  carries its paraphrase of the old text, and a corrected claim survives
+  there. Grep every `assets/prompt-templates/*.md` for the sentence you
+  changed, fix each paraphrase, audit each file against its own `match:`
+  target (`--family`, or `--model` where the block matches on model), then
+  regenerate.
+
 ### Producing a template for a model with no Ollama build (e.g. Claude)
 
 **Use `--transport claude` first.** Since 2026-10-22 the generator can call
