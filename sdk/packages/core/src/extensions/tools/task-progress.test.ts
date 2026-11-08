@@ -147,9 +147,39 @@ describe("TaskProgressTracker", () => {
 		expect(tracker.recordToolCall({}, "editor")).toBeUndefined();
 		expect(tracker.recordToolCall({}, "read_files")).toBeUndefined();
 		expect(tracker.recordToolCall({}, "apply_patch")).toBeUndefined();
-		const reminder = tracker.recordToolCall({}, "sed");
+		const reminder = tracker.recordToolCall({ in_place: true }, "sed");
 
 		expect(reminder).toContain("<task_progress>");
+	});
+
+	// automaticum audit 2026-11-08, rest M1: counted by name, a read-only awk
+	// or a sed preview was "You just changed a file".
+	it("does not count awk or a sed preview as a change", () => {
+		const tracker = new TaskProgressTracker();
+		tracker.recordToolCall({ program: "{print $1}", files: ["a.csv"] }, "awk");
+		tracker.recordToolCall({ script: "s/a/b/", files: ["x.ts"] }, "sed");
+		expect(tracker.takePendingReminder()).toBeUndefined();
+
+		tracker.recordToolCall(
+			{ script: "s/a/b/", files: ["x.ts"], in_place: true },
+			"sed",
+		);
+		expect(tracker.takePendingReminder()).toContain("You just changed `x.ts`");
+	});
+
+	// rest M2: only `- [x]` was read.
+	it("reads a checklist whatever its bullets", () => {
+		for (const markdown of [
+			"1. [x] Fix parser\n2. [x] Run tests\n3. [ ] Write docs",
+			"* [x] Fix parser\n* [x] Run tests\n* [ ] Write docs",
+			"-[x] Fix parser\n-[x] Run tests\n-[ ] Write docs",
+			"1) [x] Fix parser\n+ [x] Run tests\n[ ] Write docs",
+		]) {
+			const state = buildTaskProgressState(
+				readTaskProgress({ task_progress: markdown }) ?? "",
+			);
+			expect(state).toMatchObject({ total: 3, completed: 2 });
+		}
 	});
 
 	// Only if it has been already provided: a model that never sent a list is

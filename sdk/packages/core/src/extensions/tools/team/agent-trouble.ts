@@ -31,6 +31,10 @@ import { describeAdmissionWait } from "@cline/shared";
 import { HARNESS_TAG } from "../../../runtime/turn-queue/harness-notes";
 import { FAILED_BATCH_REASON, type TurnFaultWait } from "./turn-fault-recovery";
 
+/** A refusal that says waiting will not end it: quota, billing, the key. */
+const REFUSAL_WAITING_CANNOT_CLEAR =
+	/quota|billing|exceeded your current|insufficient (?:credit|balance|funds)|payment required|unauthori[sz]ed|invalid (?:api )?key|forbidden|\b40[123]\b/i;
+
 /** Continuous waiting after which the lead is told about an agent. */
 export const LEAD_NUDGE_AFTER_MS = 10 * 60_000;
 
@@ -170,14 +174,25 @@ export function describeLeadNudge(
 	now: number,
 ): string {
 	const count = records.length;
-	const queued = records.filter((record) => record.kind === "refusal").length;
+	// A quota or a rejected key is a refusal too, and "queued, nothing is
+	// lost, wait" sent the lead to wait on one forever (rest M6).
+	const final = records.filter(
+		(record) =>
+			record.kind === "refusal" &&
+			REFUSAL_WAITING_CANNOT_CLEAR.test(record.detail),
+	);
+	const queued = records.filter(
+		(record) => record.kind === "refusal" && !final.includes(record),
+	).length;
 	// A queued agent is being paced, and stopping it throws its work away for
 	// nothing (the wlafh lead was offered that twice and rightly declined).
 	// Taking the tasks back is only worth saying for a server that is gone.
 	const options =
-		queued === count
-			? "They are queued, not broken: the server places them as it frees up, and nothing is lost. Wait for them; stop one only if you no longer need its work."
-			: `Options: let them retry; or stop_agents and do their tasks yourself when the round returns.${queued > 0 ? " The queued ones are placed as the server frees up: leave them." : ""} The user can stop/restart them from their rows.`;
+		final.length > 0
+			? `${final.map((record) => record.name).join(", ")} ${final.length === 1 ? "is" : "are"} refused for a reason waiting does not clear (a quota, billing or a rejected key): ask the user (ask_question), since it needs their account; or stop_agents and do ${final.length === 1 ? "its task" : "their tasks"} yourself.${queued > 0 ? " The queued ones are placed as the server frees up: leave them." : ""}`
+			: queued === count
+				? "They are queued, not broken: the server places them as it frees up, and nothing is lost. Wait for them; stop one only if you no longer need its work."
+				: `Options: let them retry; or stop_agents and do their tasks yourself when the round returns.${queued > 0 ? " The queued ones are placed as the server frees up: leave them." : ""} The user can stop/restart them from their rows.`;
 	return [
 		`${HARNESS_TAG} ${count} agent${count === 1 ? "" : "s"} waiting >${minutes(LEAD_NUDGE_AFTER_MS)} min for the server, still retrying; nothing stopped:`,
 		...records.map((record) => describeTrouble(record, now)),

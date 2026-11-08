@@ -17,6 +17,12 @@ export interface ToolRoutingRule {
 	 */
 	modelIdIncludes?: string[];
 	/**
+	 * A case-insensitive regular expression the model ID must match, for a
+	 * rule a substring cannot state. Both this and `modelIdIncludes` must
+	 * match when both are given.
+	 */
+	modelIdPattern?: string;
+	/**
 	 * Case-insensitive substrings that must match the provider ID.
 	 * When omitted/empty, the rule is not constrained by provider ID.
 	 */
@@ -76,7 +82,11 @@ export const DEFAULT_MODEL_TOOL_ROUTING_RULES: ToolRoutingRule[] = [
 	{
 		name: "codex-and-gpt-use-apply-patch",
 		mode: "act",
-		modelIdIncludes: ["codex", "gpt"],
+		// OpenAI's own models: `gpt-` and a version digit, or `codex`, as a
+		// word. "gpt" anywhere took the editor from GPTQ quantisations and
+		// from gpt-oss, which were not trained on apply_patch (automaticum
+		// audit 2026-11-08, rest M9).
+		modelIdPattern: "(^|[^a-z0-9])(gpt-\\d|codex)",
 		enableTools: ["apply_patch"],
 		disableTools: ["editor"],
 	},
@@ -95,6 +105,21 @@ function matchesModelId(
 	);
 }
 
+function matchesModelIdPattern(
+	modelId: string,
+	pattern: string | undefined,
+): boolean {
+	if (!pattern) {
+		return true;
+	}
+	try {
+		return new RegExp(pattern, "i").test(modelId);
+	} catch {
+		// A rule that does not compile matches nothing rather than everything.
+		return false;
+	}
+}
+
 function matchesRule(
 	rule: ToolRoutingRule,
 	providerId: string,
@@ -106,7 +131,8 @@ function matchesRule(
 	}
 	return (
 		matchesModelId(providerId, rule.providerIdIncludes) &&
-		matchesModelId(modelId, rule.modelIdIncludes)
+		matchesModelId(modelId, rule.modelIdIncludes) &&
+		matchesModelIdPattern(modelId, rule.modelIdPattern)
 	);
 }
 

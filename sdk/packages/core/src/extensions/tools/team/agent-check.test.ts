@@ -9,6 +9,7 @@ import {
 	checkCommandUnresolved,
 	createDelegatedAgentCheck,
 	describeAgentCheck,
+	isReviewOnlyTask,
 	readAgentCheck,
 } from "./agent-check";
 
@@ -220,6 +221,70 @@ describe("the check at the agent's completion attempt", () => {
 		expect(says("user: not found", 1)).toBe(false);
 		expect(says("3 tests failed", 1)).toBe(false);
 		expect(says("", null)).toBe(false);
+	});
+
+	it("does not call a task that asks for changes review-only", () => {
+		// rest M8: "update" was not an edit word.
+		for (const task of [
+			"Analyze why test_parse fails and update parser.ts so it passes",
+			"Review the loader and add a null check where it crashes",
+			"Audit the config and remove the unused keys",
+			"Inspect the build and write a fix for the broken import",
+		]) {
+			expect(isReviewOnlyTask(task)).toBe(false);
+		}
+		for (const task of [
+			"Review src/api and write your findings to REVIEW.md",
+			"Audit the parser and report every bug you find",
+		]) {
+			expect(isReviewOnlyTask(task)).toBe(true);
+		}
+	});
+
+	it("blames the environment only when the check's own program was not found", () => {
+		// A typo inside the agent's own script is the agent's failure
+		// (automaticum audit 2026-11-08, rest C3).
+		expect(
+			checkCommandUnresolved(
+				{
+					exitCode: 127,
+					output: "./test.sh: line 3: pytets: command not found\n",
+				},
+				"bash test.sh",
+			),
+		).toBe(false);
+		expect(
+			checkCommandUnresolved(
+				{
+					exitCode: 127,
+					output: "bash: line 1: run_game: command not found\n",
+				},
+				"run_game --level 1",
+			),
+		).toBe(true);
+		expect(
+			checkCommandUnresolved(
+				{ exitCode: 127, output: "sh: 1: ./run_game: not found\n" },
+				"FOO=1 ./run_game",
+			),
+		).toBe(true);
+		expect(
+			checkCommandUnresolved(
+				{
+					exitCode: 1,
+					output:
+						"'pytest' is not recognized as an internal or external command,",
+				},
+				"pytest.exe -q",
+			),
+		).toBe(true);
+		// An exit 127 the script chose, with no shell message, is its own.
+		expect(
+			checkCommandUnresolved(
+				{ exitCode: 127, output: "giving up\n" },
+				"bash t.sh",
+			),
+		).toBe(false);
 	});
 
 	it("judges nothing once closed: the lead's summary is not an attempt", async () => {

@@ -156,12 +156,20 @@ function checklistLine(entry: unknown): string | undefined {
  * carries is dropped; anything else is an open item. Nothing is ticked from
  * the wording: "(done)" in the text is the model's note, not a mark.
  */
+/**
+ * A checklist line with any bullet: `- [x]`, `* [x]`, `+ [x]`, `-[x]`,
+ * `1. [x]`, `1) [x]`, or a bare `[x]`. Only `- [x]` was read, so a numbered
+ * list came back with every box unticked and a `*` list as no list at all
+ * (automaticum audit 2026-11-08, rest M2).
+ */
+const CHECKBOX_LINE = /^\s*(?:[-*+•]|\d+[.)])?\s*\[( |x|X)\]\s*(.*)$/;
+
 function itemLine(text: string): string | undefined {
 	const trimmed = text.trim();
 	if (trimmed === "") {
 		return undefined;
 	}
-	const marked = /^(?:[-*]\s*)?\[( |x|X)\]\s*(.*)$/.exec(trimmed);
+	const marked = CHECKBOX_LINE.exec(trimmed);
 	if (marked) {
 		return marked[2].trim() === ""
 			? undefined
@@ -223,16 +231,22 @@ function readChecklistValue(value: unknown, depth: number): string | undefined {
 		// a list, and a list with some boxes keeps only those lines (see
 		// parseTaskProgress): there the unmarked lines are heading and prose.
 		const rows = trimmed.split("\n").filter((line) => line.trim() !== "");
-		if (
-			rows.length > 1 &&
-			!rows.some((line) => /^\s*[-*]\s*\[( |x|X)\]/.test(line))
-		) {
+		const boxed = rows.some((line) => CHECKBOX_LINE.test(line));
+		if (rows.length > 1 && !boxed) {
 			return rows
 				.map(itemLine)
 				.filter((line): line is string => line !== undefined)
 				.join("\n");
 		}
-		return trimmed;
+		// Boxed lines in one spelling, `- [x]`; the heading and prose around
+		// them are kept as they are, and parse to nothing.
+		return boxed
+			? rows
+					.map((line) =>
+						CHECKBOX_LINE.test(line) ? (itemLine(line) ?? line) : line,
+					)
+					.join("\n")
+			: trimmed;
 	}
 	if (Array.isArray(value)) {
 		const lines = value
@@ -264,7 +278,7 @@ export function parseTaskProgress(markdown: string): TaskProgressItem[] {
 	const items: TaskProgressItem[] = [];
 	for (const rawLine of markdown.split("\n")) {
 		const line = rawLine.trim();
-		const match = /^- \[( |x|X)\]\s*(.*)$/.exec(line);
+		const match = CHECKBOX_LINE.exec(line);
 		if (!match) {
 			continue;
 		}
@@ -497,13 +511,43 @@ export function buildUntrackedEditNudge(
 	].join(" ");
 }
 
-/** The file a write-class call names, as the nudge quotes it. */
+/**
+ * The file a write-class call names, as the nudge quotes it: `path` for the
+ * editor, `file_path` for some hosts' spelling, the first of `files` for sed
+ * (rest N5).
+ */
 function readEditedPath(input: unknown): string | undefined {
+	if (typeof input !== "object" || input === null) return undefined;
+	const record = input as {
+		path?: unknown;
+		file_path?: unknown;
+		files?: unknown;
+	};
 	const path =
-		typeof input === "object" && input !== null
-			? (input as { path?: unknown }).path
-			: undefined;
+		record.path ??
+		record.file_path ??
+		(Array.isArray(record.files) ? record.files[0] : undefined);
 	return typeof path === "string" && path.trim() ? path.trim() : undefined;
+}
+
+/**
+ * Whether this call changes a file. awk never does and sed only in place:
+ * counted by name, a read-only awk was "You just changed a file"
+ * (rest M1).
+ */
+function changesFiles(toolName: string | undefined, input: unknown): boolean {
+	if (toolName === undefined || !WRITE_CLASS_TOOL_NAMES.has(toolName)) {
+		return false;
+	}
+	if (toolName === "awk") return false;
+	if (toolName === "sed") {
+		return (
+			typeof input === "object" &&
+			input !== null &&
+			(input as { in_place?: unknown }).in_place === true
+		);
+	}
+	return true;
 }
 
 export class TaskProgressTracker {
@@ -564,8 +608,7 @@ export class TaskProgressTracker {
 	 */
 	recordToolCall(input: unknown, toolName?: string): string | undefined {
 		const markdown = readTaskProgress(input);
-		const isWrite =
-			toolName !== undefined && WRITE_CLASS_TOOL_NAMES.has(toolName);
+		const isWrite = changesFiles(toolName, input);
 		// As the list stood before this call. A call that does a step's work
 		// and ticks it in the same breath is the ordinary way a list is
 		// finished; a call that edits after the list was already finished is

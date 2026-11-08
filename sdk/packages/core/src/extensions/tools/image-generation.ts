@@ -24,6 +24,7 @@
 import * as nodePath from "node:path";
 import { type AgentTool, createTool } from "@cline/shared";
 import {
+	describeMediaFailure,
 	MEDIA_QUEUE_WAIT_MS,
 	MediaRequestTimeoutError,
 	normalizeBaseUrl,
@@ -571,12 +572,15 @@ export function createGenerateImageTool(
 					context,
 				});
 			} catch (error) {
-				if (error instanceof MediaRequestTimeoutError || signal?.aborted) {
-					return `Image generation was stopped before it finished (the limit is ${Math.round(timeoutMs / 1000)}s).`;
+				if (!(error instanceof MediaRequestTimeoutError) && !signal?.aborted) {
+					options.onError?.("[generate_image] request failed", error);
 				}
-				options.onError?.("[generate_image] request failed", error);
-				const message = error instanceof Error ? error.message : String(error);
-				return `Could not reach the image endpoint: ${message}`;
+				return describeMediaFailure(error, {
+					what: "Image generation",
+					endpoint: "image",
+					timeoutMs,
+					signal,
+				});
 			}
 		},
 	});

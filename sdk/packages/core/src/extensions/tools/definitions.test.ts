@@ -2782,3 +2782,45 @@ describe("a writing tool that times out", () => {
 		);
 	});
 });
+
+// automaticum audit 2026-11-08, rest M9: sed, awk and read_files sent a
+// model to `editor` in a session that offered apply_patch instead.
+describe("tools that name the editor, in a session without it", () => {
+	const executors = {
+		readFile: vi.fn(),
+		sed: vi.fn(),
+		awk: vi.fn(),
+		applyPatch: vi.fn(),
+		editor: vi.fn(),
+	} as never;
+
+	it("say apply_patch takes its place", () => {
+		const tools = createDefaultTools({
+			executors,
+			enableSearch: false,
+			enableBash: false,
+			enableWebFetch: false,
+			enableSkills: false,
+			enableEditor: false,
+			enableApplyPatch: true,
+		});
+		for (const name of ["read_files", "sed", "awk"]) {
+			expect(tools.find((tool) => tool.name === name)?.description).toContain(
+				"where this says `editor`, edit with `apply_patch`",
+			);
+		}
+	});
+
+	it("say nothing of it when the editor is offered", () => {
+		const tools = createDefaultTools({
+			executors,
+			enableSearch: false,
+			enableBash: false,
+			enableWebFetch: false,
+			enableSkills: false,
+		});
+		expect(
+			tools.find((tool) => tool.name === "sed")?.description,
+		).not.toContain("is not offered");
+	});
+});

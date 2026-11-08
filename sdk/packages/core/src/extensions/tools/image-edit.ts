@@ -29,6 +29,7 @@ import {
 	type ToolOutput,
 } from "./image-generation";
 import {
+	describeMediaFailure,
 	MEDIA_QUEUE_WAIT_MS,
 	MediaRequestTimeoutError,
 	normalizeBaseUrl,
@@ -280,12 +281,15 @@ export function createEditImageTool(options: EditImageToolOptions): AgentTool {
 					context,
 				});
 			} catch (error) {
-				if (error instanceof MediaRequestTimeoutError || signal?.aborted) {
-					return `The image edit was stopped before it finished (the limit is ${Math.round(timeoutMs / 1000)}s).`;
+				if (!(error instanceof MediaRequestTimeoutError) && !signal?.aborted) {
+					options.onError?.("[edit_image] request failed", error);
 				}
-				options.onError?.("[edit_image] request failed", error);
-				const message = error instanceof Error ? error.message : String(error);
-				return `Could not reach the image endpoint: ${message}`;
+				return describeMediaFailure(error, {
+					what: "The image edit",
+					endpoint: "image",
+					timeoutMs,
+					signal,
+				});
 			}
 		},
 	});

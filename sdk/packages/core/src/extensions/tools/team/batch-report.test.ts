@@ -454,3 +454,73 @@ describe("a round's report says each thing once", () => {
 		expect(texts).toContain("Finding 0: brace missing.");
 	});
 });
+
+// automaticum audit 2026-11-08, rest M3 and M4.
+describe("what a round's numbers say about its checks", () => {
+	const failed = {
+		status: "fail" as const,
+		command: "npm test",
+		expect: "passing",
+		must: "match" as const,
+		exitCode: 1,
+		output: "3 failing",
+		runs: 3,
+	};
+
+	it("counts the agents whose check failed, though they completed", () => {
+		const report = buildSpawnBatchReport(
+			[
+				{
+					name: "fixer-1",
+					text: "Fixed.",
+					finishReason: "completed",
+					oracle: failed,
+				},
+				{ name: "fixer-2", text: "Fixed.", finishReason: "completed" },
+			],
+			"s1",
+		);
+		expect(report.summary).toMatchObject({ completed: 2, checkFailed: 1 });
+	});
+
+	it("keeps the check's verdict in the compact index", () => {
+		const many = Array.from({ length: 300 }, (_, i) => ({
+			name: `fixer-number-${i}`,
+			id: `r1-${i}`,
+			text: `report ${i} ${"y".repeat(900)}`,
+			finishReason: "completed",
+			oracle: failed,
+		}));
+		const report = buildSpawnBatchReport(many, "s1");
+		expect(typeof report.agents[0]).toBe("string");
+		expect(report.agents[0]).toBe("r1-0:fixer-number-0|completed|check:fail");
+	});
+
+	it("does not call a transport timeout a cancel", () => {
+		const report = buildSpawnBatchReport(
+			[
+				{
+					name: "a",
+					error: "fetch failed: The operation was aborted due to timeout",
+				},
+			],
+			"s1",
+		);
+		expect(report.summary).toMatchObject({ errored: 1, cancelled: 0 });
+	});
+
+	it("takes the round's verdict on who stopped an agent", () => {
+		const report = buildSpawnBatchReport(
+			[
+				{
+					name: "a",
+					error: "The operation was aborted",
+					stop: "cancelled_by_lead",
+				},
+				{ name: "b", error: "The operation was aborted", stop: "task_error" },
+			],
+			"s1",
+		);
+		expect(report.summary).toMatchObject({ cancelled: 1, errored: 1 });
+	});
+});

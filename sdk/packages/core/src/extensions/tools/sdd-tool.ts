@@ -8,12 +8,12 @@
 
 import { type AgentTool, createTool } from "@cline/shared";
 import {
+	parseUatResult,
 	type RequirementStatus,
 	SddEngine,
 	SddRuleError,
 	type SliceInput,
 	type TaskInput,
-	type UatResult,
 } from "../../services/sdd/sdd-engine";
 import { isBundledSkillEnabled } from "../config/bundled-skills";
 
@@ -328,17 +328,28 @@ export function runSddAction(
 				reason: str(input.reason) ?? "",
 			});
 			return "The task is marked blocked.";
-		case "complete_slice":
-			engine.completeSlice({
+		case "complete_slice": {
+			const { awaitingPerson } = engine.completeSlice({
 				slice: str(input.slice),
 				summary: str(input.summary) ?? "",
-				uat: list<Record<string, unknown>>(input.uat, "uat").map((entry) => ({
-					check: str(entry.check) ?? "",
-					result: (str(entry.result) ?? "fail") as UatResult,
-					note: str(entry.note),
-				})),
+				uat: list<Record<string, unknown>>(input.uat, "uat").map((entry) => {
+					const result = parseUatResult(str(entry.result));
+					if (!result) {
+						throw new SddRuleError(
+							`The result of the check "${str(entry.check) ?? ""}" is ${JSON.stringify(str(entry.result) ?? "missing")}; it is "pass", "fail" or "needs_human".`,
+						);
+					}
+					return {
+						check: str(entry.check) ?? "",
+						result,
+						note: str(entry.note),
+					};
+				}),
 			});
-			return "The slice is closed, and the requirements it owns are validated.";
+			return awaitingPerson.length === 0
+				? "The slice is closed, and the requirements it owns are validated."
+				: `The slice's work is done, but ${awaitingPerson.length === 1 ? "one check waits" : `${awaitingPerson.length} checks wait`} for a person (${awaitingPerson.join("; ")}), so the requirements it owns stay active. Ask the user to judge ${awaitingPerson.length === 1 ? "it" : "them"}.`;
+		}
 		case "validate_milestone": {
 			const verdict = str(input.verdict);
 			if (verdict !== "pass" && verdict !== "needs_remediation") {

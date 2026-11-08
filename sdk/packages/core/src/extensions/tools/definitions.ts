@@ -12,6 +12,7 @@ import {
 	getPowerShellEdition,
 	getShellKind,
 	type ITelemetryService,
+	noteMissingEditor,
 	validateWithZod,
 	zodToJsonSchema,
 } from "@cline/shared";
@@ -1598,6 +1599,13 @@ export function createDefaultTools(
 	}
 	if (enableAwk && executors.awk) {
 		tools.push(createAwkTool(executors.awk, config));
+	}
+
+	// read_files, sed and awk point at `editor` by name; where routing gave
+	// apply_patch instead, they say so. Said again after a prompt template
+	// replaces the descriptions (applyPromptTemplateToTools).
+	for (const [index, tool] of noteMissingEditor(tools).entries()) {
+		if (tools[index] !== tool) tools[index] = tool as (typeof tools)[number];
 	}
 
 	// Off unless the preset and the host both ask for it.

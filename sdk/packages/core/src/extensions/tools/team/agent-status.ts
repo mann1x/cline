@@ -71,7 +71,7 @@ const DETAIL_MAX_AGENTS = 6;
  * How the harness treats infrastructure trouble, in words, for the lead:
  * it must not try to route around a node itself (ruling 1).
  */
-export const RETRY_POLICY_TEXT = `Retry policy: a full server queues agents, and queued turns and unreachable nodes are retried with backoff -- an agent queued before it starts goes back to the front of the queue and the node is held for up to ${Math.round(REFUSED_HOLD_MAX_MS / 1000)} s; only one agent per node asks for admission at a time, and an admitted agent keeps its place -- its next turns are continuations, and context pressure is met by compacting it; a node that does not answer is out of rotation and probed every few seconds until it does. Agents never fail on infrastructure, and there is no per-agent time limit. Only a node without the model is skipped for longer, and ${MAX_NODE_PLACEMENT_ATTEMPTS} of those in a row is the agent's own failure. Placement is the harness's: to move an agent, requeue it; it is never routed by hand.`;
+export const RETRY_POLICY_TEXT = `Retry policy: a full server queues agents, and queued turns and unreachable nodes are retried with backoff -- an agent queued before it starts goes back to the front of the queue and the node is held for up to ${Math.round(REFUSED_HOLD_MAX_MS / 1000)} s; only one agent per node asks for admission at a time, and an admitted agent keeps its place -- its next turns are continuations, and context pressure is met by compacting it; a node that does not answer is out of rotation and probed every few seconds until it does. A busy server or a node that does not answer does not fail an agent, and there is no per-agent time limit. A node without the model is skipped for longer, and ${MAX_NODE_PLACEMENT_ATTEMPTS} of those in a row fail the agent; so does a refusal waiting cannot clear (a quota, a rejected key), and the round counts those as infra failures. Placement is the harness's: to move an agent, requeue it; it is never routed by hand.`;
 
 /** A teammate, as the team runtime reports it. */
 export interface TeammateStatusSource {
@@ -154,6 +154,14 @@ const PHASE_WORDS: Record<AgentPhase, string> = {
 	waiting_room: "waiting for room on the server",
 };
 
+/**
+ * Past this, a compaction is not called progress. A summary call takes
+ * minutes on a slow node; "progress, not a hang" was said of one at any
+ * length, so a stuck one was never questioned (automaticum audit
+ * 2026-11-08, rest M7).
+ */
+const COMPACTING_LONG_MS = 20 * 60_000;
+
 /** The phase of a live agent, with how long it has been in it. */
 function phaseLine(agent: RoundAgentRecord, now: number): string | undefined {
 	const phase = agent.phase;
@@ -164,7 +172,11 @@ function phaseLine(agent: RoundAgentRecord, now: number): string | undefined {
 	) {
 		return undefined;
 	}
-	return `${PHASE_WORDS[phase.name] ?? phase.name}${
+	const words =
+		phase.name === "compacting" && now - phase.since > COMPACTING_LONG_MS
+			? `COMPACTING its context for over ${COMPACTING_LONG_MS / 60_000} min, longer than a summary call should take: if it does not end soon, requeue_agent`
+			: (PHASE_WORDS[phase.name] ?? phase.name);
+	return `${words}${
 		phase.detail ? ` (${oneLine(phase.detail, 100)})` : ""
 	}, for ${formatDuration(now - phase.since)}`;
 }

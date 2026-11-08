@@ -195,7 +195,12 @@ describe("agents_status with no arguments", () => {
 	it("states the retry policy in words, so the lead does not route by hand", () => {
 		const text = renderAgentsStatus({}, { sessionId: "s1", now: () => NOW });
 		expect(text).toContain(RETRY_POLICY_TEXT);
-		expect(RETRY_POLICY_TEXT).toContain("Agents never fail on infrastructure");
+		// "Agents never fail on infrastructure" was false (rest M5).
+		expect(RETRY_POLICY_TEXT).not.toContain("never fail");
+		expect(RETRY_POLICY_TEXT).toContain(
+			"A busy server or a node that does not answer does not fail an agent",
+		);
+		expect(RETRY_POLICY_TEXT).toContain("a refusal waiting cannot clear");
 		expect(RETRY_POLICY_TEXT).toContain("requeue it");
 	});
 
@@ -457,6 +462,19 @@ describe("agents_status: what an agent is doing, and when it will be done", () =
 		expect(detail).toContain(
 			"doing: COMPACTING its context: a summary call, no output and zero throughput until it ends -- progress, not a hang (cause: KV pressure on the server), for 2m00s",
 		);
+		// Past twenty minutes it is not called progress (rest M7).
+		const later = renderAgentsStatus(
+			{ agent_id: "busy" },
+			{
+				sessionId: "s1",
+				now: () => NOW + 25 * 60_000,
+				configProvider: nodes(),
+			},
+		);
+		expect(later).toContain(
+			"COMPACTING its context for over 20 min, longer than a summary call should take: if it does not end soon, requeue_agent",
+		);
+		expect(later).not.toContain("progress, not a hang");
 		// Three iterations began in the last five minutes, ten in twelve: the
 		// compaction slowed it, and the reliability says the two disagree.
 		expect(detail).toContain(

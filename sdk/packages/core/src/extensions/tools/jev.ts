@@ -635,7 +635,7 @@ Use it when you are unsure:
 - how complex the task is, before deciding to escalate or delegate it.
 
 Arguments:
-- \`context\` — the situation, in plain text: what the user asked, what you found, what you are deciding. Only what the questions need; unrelated text makes the answers worse.
+- \`context\` — the situation, in plain text: what the user asked, what you found, what you are deciding. Only what the questions need; unrelated text makes the answers worse. Jev reads at most ${(JEV_MAX_PART_CHARS * 2).toLocaleString("en-US")} characters of it; past that the middle is cut, and the result says so.
 - \`questions\` — 1 to 10, all asked in one call. Each has an \`id\`, a \`kind\` and a \`question\`:
   - \`yes_no\` — a yes/no question. Returns the probability of yes.
   - \`choice\` — pick one of \`options\` (2 to 50). Include a "none of these" option when that is possible: a choice always picks something.
@@ -880,10 +880,14 @@ export function createJevTool(options: JevToolOptions): AgentTool {
 				return "Jev is not configured, so nothing was scored. The user enables it and sets its key on the Jev tab of the API configuration settings; decide without it rather than calling again.";
 			}
 			try {
+				const sent = boundJevText(state, JEV_MAX_PART_CHARS * 2);
+				// Cut without a word, the answers were vouched for over text
+				// Jev never saw (automaticum audit 2026-11-08, rest C2).
+				const kept = Math.floor((JEV_MAX_PART_CHARS * 2 - 40) / 2);
 				const response = await evaluateJev(
 					endpoint,
 					{
-						state: boundJevText(state, JEV_MAX_PART_CHARS * 2),
+						state: sent,
 						questions: Object.fromEntries(
 							read.questions.map((question) => [
 								question.id,
@@ -906,12 +910,19 @@ export function createJevTool(options: JevToolOptions): AgentTool {
 				const unsure = read.questions
 					.filter((_, index) => !described[index]?.sure)
 					.map((question) => question.id);
+				const cutNote =
+					sent === state
+						? undefined
+						: `The context was ${state.length.toLocaleString("en-US")} characters; Jev read the first and last ${kept.toLocaleString("en-US")} and not the ${(state.length - 2 * kept).toLocaleString("en-US")} between. Its answers are about what it read: if the decision rests on the middle, ask again with a context that holds that part.`;
 				return [
 					`Jev (${response.model || endpoint.model || JEV_DEFAULT_MODEL}):`,
 					...described.map((entry) => entry.line),
 					"",
+					...(cutNote ? [cutNote, ""] : []),
 					unsure.length === 0
-						? "Every answer cleared the floor; act on them."
+						? cutNote
+							? "Every answer cleared the floor on the text Jev read."
+							: "Every answer cleared the floor; act on them."
 						: `Unsure: ${unsure.join(", ")}. Verify these yourself or ask the user before acting on them.`,
 				].join("\n");
 			} catch (error) {

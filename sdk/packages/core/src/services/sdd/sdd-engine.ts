@@ -37,6 +37,40 @@ export type TaskStatus = "pending" | "in_progress" | "done" | "blocked";
 export type Verdict = "pass" | "needs_remediation";
 export type UatResult = "pass" | "fail" | "needs_human";
 
+/**
+ * A UAT result as a model writes it, or undefined when it is none of the
+ * three. "failed", "FAIL" and "needs human" were not "fail", so a failed
+ * check closed the slice (automaticum audit 2026-11-08, rest C1).
+ */
+export function parseUatResult(
+	value: string | undefined,
+): UatResult | undefined {
+	const word = (value ?? "")
+		.trim()
+		.toLowerCase()
+		.replace(/[\s-]+/g, "_");
+	if (/^(pass|passed|passes|passing|ok|success|succeeded)$/.test(word))
+		return "pass";
+	if (/^(fail|failed|fails|failing|failure|error|broken)$/.test(word))
+		return "fail";
+	if (/^(needs_human|human|needs_review|manual|needs_person)$/.test(word)) {
+		return "needs_human";
+	}
+	return undefined;
+}
+
+/**
+ * Whether verify output reports failures: "1 failing", "3 failed", "FAIL".
+ * A count of zero does not, and neither does a word inside another.
+ */
+export function reportsFailure(evidence: string): boolean {
+	return (
+		/\b[1-9]\d*\s+(failing|failed|failures?|errors?)\b/i.test(evidence) ||
+		/(^|\s)FAIL(ED)?\b/.test(evidence) ||
+		/\b(Tests?|Suites?):\s+[1-9]\d*\s+failed\b/i.test(evidence)
+	);
+}
+
 export interface SddRequirement {
 	id: string;
 	title: string;
@@ -1048,6 +1082,14 @@ export class SddEngine {
 			input.evidence,
 			`The evidence: the output of \`${task.verify}\` as it ran in the workspace`,
 		);
+		// Evidence of failure closed the task all the same (rest C1). Only
+		// the plain case is caught: output that reports failures where the
+		// plan expected none.
+		if (reportsFailure(evidence) && !reportsFailure(task.expect ?? "")) {
+			throw new SddRuleError(
+				`The evidence for ${task.id} reports failures, and the plan expects ${task.expect ? `"${task.expect}"` : "the verify command to pass"}. The task is not done: fix it and run \`${task.verify}\` again, or call block_task with the reason.`,
+			);
+		}
 		this.change(
 			"complete_task",
 			`${task.milestone}/${task.slice}/${task.id}`,
@@ -1077,7 +1119,7 @@ export class SddEngine {
 		slice?: string;
 		summary: string;
 		uat: readonly { check: string; result: UatResult; note?: string }[];
-	}): void {
+	}): { awaitingPerson: string[] } {
 		const slice = this.sliceOf(input.slice);
 		if (slice.status === "done")
 			throw new SddRuleError(`${slice.id} is already done.`);
@@ -1102,6 +1144,11 @@ export class SddEngine {
 				`${failed.length} acceptance check(s) failed: ${failed.map((entry) => entry.check).join("; ")}. The slice is not done. Fix it with replan_slice (new tasks), then close it again.`,
 			);
 		}
+		// A check only a person can judge has not been judged: the slice's
+		// work is done, but its requirements are not validated by it (rest C1).
+		const awaitingPerson = input.uat
+			.filter((entry) => entry.result === "needs_human")
+			.map((entry) => entry.check);
 		this.change(
 			"complete_slice",
 			`${slice.milestone}/${slice.id}`,
@@ -1114,12 +1161,15 @@ export class SddEngine {
 					number(slice.milestone),
 					number(slice.id),
 				);
-				this.run(
-					"UPDATE requirements SET status = 'validated' WHERE owner = ? AND status = 'active'",
-					`${slice.milestone}/${slice.id}`,
-				);
+				if (awaitingPerson.length === 0) {
+					this.run(
+						"UPDATE requirements SET status = 'validated' WHERE owner = ? AND status = 'active'",
+						`${slice.milestone}/${slice.id}`,
+					);
+				}
 			},
 		);
+		return { awaitingPerson };
 	}
 
 	validateMilestone(input: {
@@ -1199,7 +1249,12 @@ export class SddEngine {
 			return {
 				step: "discuss_milestone",
 				needsUser: true,
-				instruction: `Every milestone of "${project.name}" is complete. Ask the user what comes next; add its requirements with add_requirement, then add_milestone (title, context).`,
+				// "Every milestone is complete" was said of a project that had
+				// none yet (rest N1).
+				instruction:
+					this.milestones().length === 0
+						? `"${project.name}" has no milestone yet. Ask the user what the first deliverable is; add its requirements with add_requirement, then add_milestone (title, context).`
+						: `Every milestone of "${project.name}" is complete. Ask the user what comes next; add its requirements with add_requirement, then add_milestone (title, context).`,
 			};
 		}
 		const slices = this.slices(milestone.id);

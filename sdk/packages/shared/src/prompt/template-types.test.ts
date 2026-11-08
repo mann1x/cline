@@ -891,3 +891,42 @@ describe("applyPromptTemplateToTools never blanks a description", () => {
 		expect(applied?.description).toBe("Close it out.");
 	});
 });
+
+// automaticum audit 2026-11-08, rest M9: a template section replaces the
+// built-in text, so the note is made after it.
+describe("a session without the editor", () => {
+	it("is told so in the descriptions that name it, after the template", () => {
+		const result = applyPromptTemplateToTools(
+			[
+				{ name: "sed", description: "built-in" },
+				{ name: "awk", description: "Use `sed` or `editor` to change a file." },
+				{ name: "apply_patch", description: "patch" },
+				{ name: "grep", description: "Not `editor`." },
+			],
+			{ tools: { sed: "Reach for this over `editor` for bulk changes." } },
+		);
+		expect(result[0]?.description).toBe(
+			"Reach for this over `editor` for bulk changes. (`editor` is not offered in this session: where this says `editor`, edit with `apply_patch`.)",
+		);
+		expect(result[1]?.description).toContain("edit with `apply_patch`");
+		expect(result[3]?.description).toBe("Not `editor`.");
+	});
+
+	it("is not told twice, and not at all when the editor is there", () => {
+		const once = applyPromptTemplateToTools(
+			[{ name: "sed", description: "Over `editor`." }],
+			undefined,
+		);
+		const twice = applyPromptTemplateToTools(once, undefined);
+		expect(twice[0]?.description).toBe(once[0]?.description);
+		expect(
+			applyPromptTemplateToTools(
+				[
+					{ name: "sed", description: "Over `editor`." },
+					{ name: "editor", description: "e" },
+				],
+				undefined,
+			)[0]?.description,
+		).toBe("Over `editor`.");
+	});
+});

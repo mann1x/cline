@@ -25,6 +25,7 @@ import * as nodePath from "node:path";
 import { type AgentTool, createTool } from "@cline/shared";
 import { resolveInsideWorkspace } from "./image-generation";
 import {
+	describeMediaFailure,
 	MEDIA_QUEUE_WAIT_MS,
 	MediaRequestTimeoutError,
 	type MediaServer,
@@ -481,12 +482,15 @@ export function createTranscribeAudioTool(
 				}
 				return transcript;
 			} catch (error) {
-				if (error instanceof MediaRequestTimeoutError || signal?.aborted) {
-					return `The transcription was stopped before it finished (the limit is ${Math.round(timeoutMs / 1000)}s).`;
+				if (!(error instanceof MediaRequestTimeoutError) && !signal?.aborted) {
+					options.onError?.("[transcribe_audio] request failed", error);
 				}
-				options.onError?.("[transcribe_audio] request failed", error);
-				const message = error instanceof Error ? error.message : String(error);
-				return `Could not reach the speech-to-text endpoint: ${message}`;
+				return describeMediaFailure(error, {
+					what: "The transcription",
+					endpoint: "speech-to-text",
+					timeoutMs,
+					signal,
+				});
 			}
 		},
 	});
@@ -633,12 +637,15 @@ export function createSynthesizeSpeechTool(
 					`${notes.length ? `\n\n${notes.join(" ")}` : ""}`
 				);
 			} catch (error) {
-				if (error instanceof MediaRequestTimeoutError || signal?.aborted) {
-					return `The speech synthesis was stopped before it finished (the limit is ${Math.round(timeoutMs / 1000)}s).`;
+				if (!(error instanceof MediaRequestTimeoutError) && !signal?.aborted) {
+					options.onError?.("[synthesize_speech] request failed", error);
 				}
-				options.onError?.("[synthesize_speech] request failed", error);
-				const message = error instanceof Error ? error.message : String(error);
-				return `Could not reach the text-to-speech endpoint: ${message}`;
+				return describeMediaFailure(error, {
+					what: "The speech synthesis",
+					endpoint: "text-to-speech",
+					timeoutMs,
+					signal,
+				});
 			}
 		},
 	});
@@ -809,12 +816,15 @@ export function createGenerateSoundEffectTool(
 					`${notes.length ? `\n\n${notes.join(" ")}` : ""}`
 				);
 			} catch (error) {
-				if (error instanceof MediaRequestTimeoutError || signal?.aborted) {
-					return `The sound effect was stopped before it finished (the limit is ${Math.round(timeoutMs / 1000)}s).`;
+				if (!(error instanceof MediaRequestTimeoutError) && !signal?.aborted) {
+					options.onError?.("[generate_sound_effect] request failed", error);
 				}
-				options.onError?.("[generate_sound_effect] request failed", error);
-				const message = error instanceof Error ? error.message : String(error);
-				return `Could not reach the sound effect endpoint: ${message}`;
+				return describeMediaFailure(error, {
+					what: "The sound effect",
+					endpoint: "sound effect",
+					timeoutMs,
+					signal,
+				});
 			}
 		},
 	});

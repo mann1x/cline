@@ -128,9 +128,17 @@ export interface SpawnBatchIndexEntry {
 
 export interface SpawnBatchSummary {
 	total: number;
+	/** Ran to the end; how many of those failed their check is `checkFailed`. */
 	completed: number;
 	errored: number;
 	cancelled: number;
+	/**
+	 * Agents whose check failed, whatever their status: a completed agent
+	 * with a failed check has not done its task (rest M3).
+	 */
+	checkFailed: number;
+	/** Agents whose check could not run; their work is unverified. */
+	checkNotRun: number;
 	/** Stopped at the iteration cap and waiting on you; see `agents`. */
 	awaitingLead: number;
 	/** Per configured type, or per name with its `-<n>` copy suffix dropped. */
@@ -203,6 +211,15 @@ function statusOf(result: SpawnBatchMemberResult): SpawnBatchStatus {
 		// cancelled it, and showing it as cancelled reads like a stop by the
 		// lead or the user (9 agents of swarm 0926).
 		if (/\bloop guard\b/i.test(result.error)) {
+			return "errored";
+		}
+		// The round's own verdict, when it gave one: it knows who stopped the
+		// agent. A transport timeout ("aborted due to timeout") read as
+		// cancelled here and as task_error in the rounds (rest M4).
+		if (result.stop !== undefined) {
+			return result.stop.startsWith("cancelled") ? "cancelled" : "errored";
+		}
+		if (/\btime(d)? ?out\b|\btimeout\b/i.test(result.error)) {
 			return "errored";
 		}
 		return /\babort|cancel|stopped\b/i.test(result.error)
@@ -343,13 +360,18 @@ function oracleWord(oracle: AgentOracleResult): string {
 	return oracle.exitCode === null ? "fail" : `fail (exit ${oracle.exitCode})`;
 }
 
-/** The index entry at its smallest: `name|status[|failureClass]`. */
+/**
+ * The index entry at its smallest: `name|status[|failureClass][|check:…]`.
+ * The check's verdict stays: dropped, an agent whose check failed read as
+ * plainly completed (rest M3).
+ */
 function compactIndexEntry(result: SpawnBatchMemberResult): string {
 	const failureClass = failureClassOf(result);
 	return [
 		result.id ? `${result.id}:${result.name}` : result.name,
 		statusOf(result),
 		...(failureClass ? [failureClass] : []),
+		...(result.oracle ? [`check:${result.oracle.status}`] : []),
 		...(result.state === "awaiting_lead" && result.agentId
 			? [result.agentId]
 			: []),
@@ -410,6 +432,8 @@ export function buildSpawnBatchReport(
 		completed: 0,
 		errored: 0,
 		cancelled: 0,
+		checkFailed: 0,
+		checkNotRun: 0,
 		awaitingLead: 0,
 		byType: {},
 		byFailureClass: { infra: 0, task: 0 },
@@ -437,6 +461,8 @@ export function buildSpawnBatchReport(
 		if (failureClass) {
 			summary.byFailureClass[failureClass] += 1;
 		}
+		if (result.oracle?.status === "fail") summary.checkFailed += 1;
+		if (result.oracle?.status === "not_run") summary.checkNotRun += 1;
 		summary.evicted += result.evicted ?? 0;
 		summary.totalIterations += result.iterations ?? 0;
 		const split = splitInputTokens(

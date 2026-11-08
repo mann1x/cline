@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createAgentTroubleWatch,
+	describeLeadNudge,
 	LEAD_NUDGE_AFTER_MS,
 	LEAD_NUDGE_BATCH_MS,
 	NO_NODE_AFTER_MS,
@@ -348,5 +349,46 @@ describe("telling the lead again when agents have had no node for two hours", ()
 
 		expect(sent).toHaveLength(2);
 		watch.dispose();
+	});
+});
+
+// automaticum audit 2026-11-08, rest M6: a quota refusal was "queued ...
+// nothing is lost. Wait".
+describe("a refusal waiting cannot clear", () => {
+	it("is not reported as queued", () => {
+		const text = describeLeadNudge(
+			[
+				{
+					name: "a",
+					since: 0,
+					kind: "refusal",
+					where: "the server",
+					detail:
+						"Too Many Requests: You exceeded your current quota, please check your plan and billing details",
+					refusals: 12,
+				},
+			],
+			11 * 60_000,
+		);
+		expect(text).not.toContain("nothing is lost");
+		expect(text).toContain("refused for a reason waiting does not clear");
+		expect(text).toContain("ask the user");
+	});
+
+	it("still calls a full server's refusal queued", () => {
+		const text = describeLeadNudge(
+			[
+				{
+					name: "a",
+					since: 0,
+					kind: "refusal",
+					where: "the server",
+					detail: "session allocation full",
+					refusals: 40,
+				},
+			],
+			11 * 60_000,
+		);
+		expect(text).toContain("They are queued, not broken");
 	});
 });

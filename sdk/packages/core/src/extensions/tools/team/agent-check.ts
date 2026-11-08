@@ -103,31 +103,72 @@ export const AGENT_CHECK_MAX_IDENTICAL_FAILS = 3;
  */
 export const AGENT_CHECK_MAX_UNRESOLVED = 2;
 
+/** What sh exits with when it finds no such program. */
+const SH_COMMAND_NOT_FOUND = 127;
+
+/** sh, bash and zsh naming the program they did not find. */
+const SH_NOT_FOUND =
+	/(?:^|\n)[^\n]*?:\s*(?:line \d+:\s*|\d+:\s*)?([^\s:'"]+):\s*(?:command )?not found/gi;
+/** cmd and PowerShell naming it. */
+const WINDOWS_NOT_FOUND =
+	/'([^']+)' is not recognized as an internal or external command|The term '([^']+)' is not recognized/gi;
+
+/** The program a command line runs: its first word, as a bare name. */
+function programOf(command: string): string | undefined {
+	const word = command
+		.trim()
+		.split(/\s+/)
+		.find((part) => !/^\w+=/.test(part));
+	return word ? bareName(word) : undefined;
+}
+
+function bareName(word: string): string {
+	return word
+		.replace(/^["']|["']$/g, "")
+		.split(/[\\/]/)
+		.pop()!
+		.replace(/\.(exe|cmd|bat|ps1|com)$/i, "")
+		.toLowerCase();
+}
+
 /**
- * The shell saying it could not find the program to run: cmd, PowerShell, sh.
+ * Whether a failed run says the shell never found the check's program.
  *
  * That is a statement about where the check runs, not about the agent's work.
  * In swarm wlafh five of six fixers were sent back to work by it, spent 11 to
  * 18 iterations on the environment, and three changed the host to get past it
  * (the user's PATH, a hard link in `~/.local/bin`, a re-created program).
+ *
+ * Only the check's own program: exit 127 from a typo inside the agent's
+ * test script was blamed on the environment and recorded as not run,
+ * which hid the failure (automaticum audit 2026-11-08, rest C3).
  */
-const UNRESOLVED_COMMAND =
-	/is not recognized as an internal or external command|is not recognized as the name of a cmdlet|CommandNotFoundException/i;
-/** What sh exits with when it finds no such program. */
-const SH_COMMAND_NOT_FOUND = 127;
-
-/** Whether a failed run says the shell never found the program. */
-export function checkCommandUnresolved(verdict: {
-	exitCode: number | null;
-	output: string;
-}): boolean {
+export function checkCommandUnresolved(
+	verdict: { exitCode: number | null; output: string },
+	/** The check's command line; without it any program not found counts. */
+	command?: string,
+): boolean {
 	if (verdict.exitCode === 0 || verdict.exitCode === null) {
 		return false;
 	}
-	return (
-		verdict.exitCode === SH_COMMAND_NOT_FOUND ||
-		UNRESOLVED_COMMAND.test(verdict.output)
-	);
+	const named: string[] = [];
+	if (verdict.exitCode === SH_COMMAND_NOT_FOUND) {
+		for (const match of verdict.output.matchAll(SH_NOT_FOUND)) {
+			if (match[1]) named.push(match[1]);
+		}
+	}
+	for (const match of verdict.output.matchAll(WINDOWS_NOT_FOUND)) {
+		const name = match[1] ?? match[2];
+		if (name) named.push(name);
+	}
+	if (named.length > 0) {
+		const program = command ? programOf(command) : undefined;
+		return program === undefined
+			? true
+			: named.some((name) => bareName(name) === program);
+	}
+	// PowerShell's exception names no program; it is about the line itself.
+	return /CommandNotFoundException/i.test(verdict.output);
 }
 
 /** The reason a check is not run when the agent has no sandboxed shell. */
@@ -379,7 +420,7 @@ export function createDelegatedAgentCheck(
 			identicalFails =
 				verdict.output === lastFailOutput ? identicalFails + 1 : 1;
 			lastFailOutput = verdict.output;
-			if (checkCommandUnresolved(verdict)) {
+			if (checkCommandUnresolved(verdict, check.command)) {
 				if (identicalFails >= AGENT_CHECK_MAX_UNRESOLVED) {
 					// Not the agent's to fix: it finishes, and the lead reads why.
 					latest = {
@@ -434,9 +475,14 @@ export function createDelegatedAgentCheck(
 /** A task that reads as reviewing and reporting. */
 const REVIEW_WORDS =
 	/\b(review(?:s|er|ers|ing)?|audit(?:s|or|ing)?|analy[sz](?:e|es|is|ing)|inspect(?:s|ing)?|assess(?:es|ing|ment)?|evaluat(?:e|es|ing|ion)|report)\b/i;
-/** A task that asks for changes. Any of these and it is not review-only. */
+/**
+ * A task that asks for changes. Any of these and it is not review-only.
+ * "Update parser.ts so it passes" read as review-only, and the lead was told
+ * to restart a real fixer without its check (rest M8). Writing findings or a
+ * report is still review.
+ */
 const EDIT_WORDS =
-	/\b(fix(?:es|ed|ing)?|repair(?:s|ing)?|edit(?:s|ing)?|modify|change (?:it|the|them)|implement(?:s|ing)?|rewrite|refactor(?:s|ing)?|patch(?:es|ing)?|apply|resolve (?:the|it|them|all|any)|make (?:it|the) (?:work|pass|run))\b/i;
+	/\b(fix(?:es|ed|ing)?|repair(?:s|ing)?|edit(?:s|ing)?|modify|change (?:it|the|them)|implement(?:s|ing)?|rewrite|refactor(?:s|ing)?|patch(?:es|ing)?|apply|resolve (?:the|it|them|all|any)|make (?:it|the) (?:work|pass|run)|updat(?:e|es|ing)|add(?:s|ing)?|creat(?:e|es|ing)|build(?:s|ing)?|remov(?:e|es|ing)|delet(?:e|es|ing)|renam(?:e|es|ing)|replac(?:e|es|ing)|convert(?:s|ing)?|migrat(?:e|es|ing)|upgrad(?:e|es|ing)|so (?:it|that|they) (?:passe?s?|works?|runs?)|writ(?:e|es|ing) (?!(?:up |down )?(?:your |the |a |an |all )?(?:findings|report|summary|notes|review|conclusions)))\b/i;
 
 /** Its task reads as review and report only, with nothing to change. */
 export function isReviewOnlyTask(text: string): boolean {

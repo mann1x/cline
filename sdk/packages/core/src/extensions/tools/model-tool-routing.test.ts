@@ -83,4 +83,46 @@ describe("model tool routing", () => {
 		expect(config.enableApplyPatch).toBe(true);
 		expect(config.enableEditor).toBe(false);
 	});
+
+	// automaticum audit 2026-11-08, rest M9: "gpt" anywhere matched.
+	it("leaves the editor to models that only contain the letters gpt", () => {
+		for (const id of [
+			"Qwen2.5-Coder-32B-Instruct-GPTQ-Int4",
+			"gpt-oss-20b",
+			"openai/gpt-oss-120b",
+			"my-gptx",
+		]) {
+			expect(
+				resolveToolRoutingConfig(
+					"openai-compatible",
+					id,
+					"act",
+					DEFAULT_MODEL_TOOL_ROUTING_RULES,
+				),
+			).toEqual({});
+		}
+		for (const id of [
+			"gpt-4o",
+			"gpt-5",
+			"openai/gpt-4.1-mini",
+			"codex-mini-latest",
+		]) {
+			expect(
+				resolveToolRoutingConfig(
+					"openai-compatible",
+					id,
+					"act",
+					DEFAULT_MODEL_TOOL_ROUTING_RULES,
+				),
+			).toMatchObject({ enableEditor: false, enableApplyPatch: true });
+		}
+	});
+
+	it("matches nothing with a pattern that does not compile", () => {
+		expect(
+			resolveToolRoutingConfig("x", "anything", "act", [
+				{ modelIdPattern: "(", disableTools: ["editor"] },
+			]),
+		).toEqual({});
+	});
 });

@@ -491,6 +491,99 @@ describe("the spec-driven engine", () => {
 	});
 });
 
+describe("a project with no milestone", () => {
+	it("is not called complete", () => {
+		const root = mkdtempSync(join(tmpdir(), "sdd-empty-"));
+		const engine = new SddEngine(root);
+		try {
+			engine.setProject({ name: "p", description: "d" });
+			const next = engine.next();
+			expect(next.step).toBe("discuss_milestone");
+			expect(next.instruction).toContain('"p" has no milestone yet');
+			expect(next.instruction).not.toContain("is complete");
+		} finally {
+			engine.close();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("what closes a task and a slice", () => {
+	let root: string;
+	let engine: SddEngine;
+	const CONTEXT = {} as AgentToolContext;
+	const call = async (input: unknown) =>
+		String(await createSddTool({ cwd: root }).execute(input, CONTEXT));
+
+	beforeEach(() => {
+		root = mkdtempSync(join(tmpdir(), "sdd-close-"));
+		engine = new SddEngine(root);
+		engine.setProject({ name: "p", description: "d" });
+		engine.addRequirement({ title: "Parser handles empty input" });
+		engine.addMilestone({ title: "M1", context: "c" });
+		engine.approve("requirements");
+		engine.planMilestone([{ title: "S", requirements: ["R001"] }]);
+		engine.approve("roadmap");
+		engine.planSlice({ tasks: [task("t")] });
+		engine.startTask();
+	});
+	afterEach(() => {
+		engine.close();
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	// automaticum audit 2026-11-08, rest C1.
+	it("does not close a task whose evidence reports failures", () => {
+		expect(() =>
+			engine.completeTask({ summary: "did it", evidence: "1 failing" }),
+		).toThrow(/reports failures/);
+		expect(() =>
+			engine.completeTask({
+				summary: "did it",
+				evidence: "FAIL src/a.test.ts",
+			}),
+		).toThrow(/reports failures/);
+		engine.completeTask({ summary: "did it", evidence: "12 passed, 0 failed" });
+	});
+
+	it("refuses a failed check however the model spells it", async () => {
+		engine.completeTask({ summary: "did it", evidence: "12 passed" });
+		engine.close();
+		for (const result of ["failed", "FAIL", "Failure"]) {
+			const answer = await call({
+				action: "complete_slice",
+				summary: "s",
+				uat: [{ check: "empty input returns []", result }],
+			});
+			expect(answer).toContain("acceptance check(s) failed");
+		}
+		const unknown = await call({
+			action: "complete_slice",
+			summary: "s",
+			uat: [{ check: "empty input returns []", result: "kinda" }],
+		});
+		expect(unknown).toContain('it is "pass", "fail" or "needs_human"');
+		engine = new SddEngine(root);
+		expect(engine.requirements()[0].status).toBe("active");
+	});
+
+	it("leaves the requirements active while a check waits for a person", async () => {
+		engine.completeTask({ summary: "did it", evidence: "12 passed" });
+		engine.close();
+		const answer = await call({
+			action: "complete_slice",
+			summary: "s",
+			uat: [
+				{ check: "returns []", result: "passed" },
+				{ check: "reads well", result: "needs human" },
+			],
+		});
+		expect(answer).toContain("one check waits for a person (reads well)");
+		engine = new SddEngine(root);
+		expect(engine.requirements()[0].status).toBe("active");
+	});
+});
+
 describe("the sdd tool", () => {
 	let root: string;
 	const CONTEXT = {} as AgentToolContext;

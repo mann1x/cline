@@ -494,6 +494,42 @@ describe("readJevToolQuestions", () => {
 });
 
 describe("the jev tool", () => {
+	// automaticum audit 2026-11-08, rest C2: the cut was silent and the
+	// answers were vouched for as if Jev had read everything.
+	it("says how much of a long context Jev did not read", async () => {
+		const fetchImpl = fetchReturning(
+			jsonResponse({
+				model: "jev-1.13.0",
+				answers: { q1: { type: "noul", noul: 0.08 } },
+			}),
+		);
+		const tool = createJevTool({
+			getEndpoint: () => endpoint,
+			fetchImpl: fetchImpl as unknown as typeof fetch,
+		});
+		const context = `${"filler line\n".repeat(2500)}THE DOCS SAY: retries default to 5.\n${"filler line\n".repeat(2500)}`;
+		const output = String(
+			await tool.execute(
+				{
+					context,
+					questions: [
+						{
+							id: "q1",
+							kind: "yes_no",
+							question: "Does it say retries default to 5?",
+						},
+					],
+				},
+				{} as never,
+			),
+		);
+		expect(output).toMatch(
+			/The context was [\d,]+ characters; Jev read the first and last [\d,]+ and not the [\d,]+ between\./,
+		);
+		expect(output).not.toContain("act on them");
+		expect(output).toContain("cleared the floor on the text Jev read");
+	});
+
 	it("reports confident and unsure answers against the floors", async () => {
 		const fetchImpl = fetchReturning(
 			jsonResponse({

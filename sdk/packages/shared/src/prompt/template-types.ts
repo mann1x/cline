@@ -690,12 +690,47 @@ export function applyPromptTemplateToTools<
 	facts?: PromptTemplateToolFacts,
 ): T[] {
 	const templated = applyPromptTemplateSections(tools, template);
-	return templated.map((tool) => {
+	return noteMissingEditor(
+		templated.map((tool) => {
+			const description = tool.description ?? "";
+			const substituted = substituteToolPlaceholders(description, facts);
+			return substituted === description
+				? tool
+				: { ...tool, description: substituted };
+		}),
+	);
+}
+
+/** Tools whose descriptions send the model to `editor` by name. */
+const NAMES_THE_EDITOR = new Set(["read_files", "sed", "awk"]);
+const EDITOR_ABSENT = "`editor` is not offered in this session";
+
+/**
+ * Say so where a description names `editor` and the session has none.
+ *
+ * Model routing swaps `editor` for `apply_patch` on some models, and
+ * read_files, sed and awk kept sending the model to the editor (automaticum
+ * audit 2026-11-08, rest M9). Applied after the template, whose sections
+ * replace the built-in text, and once: a description that already says it
+ * is left alone.
+ */
+export function noteMissingEditor<
+	T extends { name: string; description?: string },
+>(tools: readonly T[]): T[] {
+	const names = new Set(tools.map((tool) => tool.name));
+	if (names.has("editor")) {
+		return [...tools];
+	}
+	const note = names.has("apply_patch")
+		? ` (${EDITOR_ABSENT}: where this says \`editor\`, edit with \`apply_patch\`.)`
+		: ` (${EDITOR_ABSENT}.)`;
+	return tools.map((tool) => {
 		const description = tool.description ?? "";
-		const substituted = substituteToolPlaceholders(description, facts);
-		return substituted === description
-			? tool
-			: { ...tool, description: substituted };
+		return NAMES_THE_EDITOR.has(tool.name) &&
+			description.includes("`editor`") &&
+			!description.includes(EDITOR_ABSENT)
+			? { ...tool, description: `${description}${note}` }
+			: tool;
 	});
 }
 

@@ -529,6 +529,45 @@ export class MediaRequestTimeoutError extends Error {
 	}
 }
 
+/**
+ * What a media call's failure was, in words: the limit, a cancel, the file
+ * it could not save, or the endpoint it could not reach.
+ *
+ * Every failure was "could not reach the endpoint", a disk that would not
+ * take the file included, and a cancel was "stopped (the limit is N s)"
+ * (automaticum audit 2026-11-08, rest M10).
+ */
+export function describeMediaFailure(
+	error: unknown,
+	options: {
+		/** "The transcription", "Image generation". */
+		what: string;
+		/** "speech-to-text", "image". */
+		endpoint: string;
+		timeoutMs: number;
+		signal?: AbortSignal;
+	},
+): string {
+	const { what, endpoint, timeoutMs, signal } = options;
+	if (error instanceof MediaRequestTimeoutError) {
+		return `${what} was stopped before it finished: it took longer than the limit of ${Math.round(timeoutMs / 1000)}s.`;
+	}
+	if (signal?.aborted) {
+		return `${what} was cancelled before it finished.`;
+	}
+	const message = error instanceof Error ? error.message : String(error);
+	const io = error as NodeJS.ErrnoException | undefined;
+	if (
+		io &&
+		typeof io === "object" &&
+		typeof io.syscall === "string" &&
+		io.path
+	) {
+		return `${what} could not save its result to ${io.path}: ${message}`;
+	}
+	return `Could not reach the ${endpoint} endpoint: ${message}`;
+}
+
 function sleepFor(ms: number, signal?: AbortSignal): Promise<void> {
 	return new Promise((resolve, reject) => {
 		if (signal?.aborted) {

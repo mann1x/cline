@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	describeMediaFailure,
 	listMediaModels,
 	type MediaEndpointProbe,
 	MediaRequestTimeoutError,
@@ -591,5 +592,53 @@ describe("sendMediaRequest", () => {
 		expect(retryAfterMs(null)).toBe(5_000);
 		expect(retryAfterMs("0")).toBe(1_000);
 		expect(retryAfterMs("600")).toBe(60_000);
+	});
+});
+
+// automaticum audit 2026-11-08, rest M10.
+describe("a media call's failure", () => {
+	const options = {
+		what: "Image generation",
+		endpoint: "image",
+		timeoutMs: 60_000,
+	};
+
+	it("names the limit for a timeout", () => {
+		expect(
+			describeMediaFailure(new MediaRequestTimeoutError(60_000), options),
+		).toBe(
+			"Image generation was stopped before it finished: it took longer than the limit of 60s.",
+		);
+	});
+
+	it("calls a cancel a cancel", () => {
+		const controller = new AbortController();
+		controller.abort();
+		expect(
+			describeMediaFailure(new Error("aborted"), {
+				...options,
+				signal: controller.signal,
+			}),
+		).toBe("Image generation was cancelled before it finished.");
+	});
+
+	it("does not blame the endpoint for a file it could not save", () => {
+		const error = Object.assign(
+			new Error("ENOSPC: no space left on device, write"),
+			{
+				code: "ENOSPC",
+				syscall: "write",
+				path: "/w/out.png",
+			},
+		);
+		expect(describeMediaFailure(error, options)).toBe(
+			"Image generation could not save its result to /w/out.png: ENOSPC: no space left on device, write",
+		);
+	});
+
+	it("says the endpoint could not be reached when it could not", () => {
+		expect(describeMediaFailure(new TypeError("fetch failed"), options)).toBe(
+			"Could not reach the image endpoint: fetch failed",
+		);
 	});
 });
