@@ -548,22 +548,70 @@ describe("describeDelimiterBalance", () => {
  * stop that is not real would gate edits against nothing.
  */
 describe("files that are not classic script", () => {
-	it("leaves an ES module unchecked rather than calling it broken", () => {
+	it("parses a correct ES module rather than calling it broken", () => {
 		const esm =
 			'import fs from "node:fs";\nexport const a = fs.existsSync("x");\n';
 		expect(findScriptSyntaxError("lib.js", esm)).toBeUndefined();
 		expect(describeDelimiterBalance("lib.js", esm)).toBeNull();
 	});
 
-	it("reports a module's crossed brackets as counts, with no edit", () => {
+	// automaticum audit 2026-11-08, B5: a module was "cannot check", so a
+	// broken one read as clean. It is parsed by a module's rules now.
+	it("parses a module and names where it stops", () => {
 		const report =
 			describeDelimiterBalance(
 				"lib.js",
 				'import fs from "node:fs";\nexport function f(){ if (a) { b(); ) }\n',
 			) ?? "";
-		expect(report).toContain("line 2:");
-		expect(report).not.toContain("parser stops here");
-		expect(report).not.toContain("that edit is `editor`");
+		expect(report).toContain("line 2: the JavaScript parser stops here");
+		expect(
+			findScriptSyntaxError(
+				"lib.js",
+				'import fs from "node:fs";\nexport function f(){ if (a) { b(); ) }\n',
+			),
+		).toMatch(/line 2/);
+	});
+
+	it("reads module syntax spread over lines, defaults and import.meta", () => {
+		const esm = [
+			"#!/usr/bin/env node",
+			"import {",
+			"  a,",
+			"  b as c,",
+			'} from "./x.js";',
+			'import "./side.js";',
+			'import data from "./d.json" with { type: "json" };',
+			"export default function main() { return import.meta.url; }",
+			"export const d = await Promise.resolve(c);",
+			"export { a, c as e };",
+			'export * from "./y.js";',
+		].join("\n");
+		expect(findScriptSyntaxError("main.mjs", esm)).toBeUndefined();
+		expect(findScriptSyntaxError("main.js", esm)).toBeUndefined();
+	});
+
+	it("refuses a top-level return in a module and in a classic script, not in CommonJS", () => {
+		expect(findScriptSyntaxError("m.mjs", "const a = 1;\nreturn a;\n")).toMatch(
+			/return/i,
+		);
+		expect(
+			findScriptSyntaxError(
+				"p.html",
+				"<script>\nconst a = 1;\nreturn a;\n</script>",
+			),
+		).toMatch(/return.*line 3/i);
+		expect(
+			findScriptSyntaxError("c.js", "const a = 1;\nreturn a;\n"),
+		).toBeUndefined();
+	});
+
+	it("parses a script whose data-type attribute is not its type", () => {
+		expect(
+			findScriptSyntaxError(
+				"p.html",
+				'<script data-type="game">\nfunction f( {\n</script>',
+			),
+		).toBeDefined();
 	});
 
 	it("accepts top-level await", () => {

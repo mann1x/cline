@@ -61,9 +61,9 @@ Actions:
 - \`scroll_down\`, \`scroll_up\` — one viewport.
 - \`close\` — shut the browser down. Do this when finished with it.
 
-Every action reports the console messages and uncaught errors produced while it ran, so a syntax error, a failed fetch or a null dereference comes back as text you can act on. \`[error]\` and \`[Page Error]\` lines are real failures. A page that says nothing printed nothing — that is a pass, not a failed call, and for a local file it is checked: a silent console over a file that does not parse is reported as the failure it is, not as a pass.
+Every action reports the console messages and uncaught errors produced while it ran, so a syntax error, a failed fetch or a null dereference comes back as text you can act on. \`[error]\` and \`[Page Error]\` lines are real failures. A page that says nothing printed nothing — that is a pass, not a failed call, and for a local file it is checked: the page's own scripts and the local scripts it loads by \`src\` are parsed, and a silent console over one that does not parse is reported as the failure it is, not as a pass. Silence says nothing threw; it does not say the page drew what it should.
 
-A parse error from the browser names no line, because the script never ran. For a local file a \`Delimiter scan\` section follows it and names the line to edit and how many brackets that line is out by — one line per place the trouble starts, since a file can be broken in several spots at once. Fix every line it lists in one edit and reload once, rather than one edit and one reload per line. Edit those lines instead of counting brackets yourself: counting a whole file by hand costs more thinking than you have, and the scan skips strings, comments and regex literals, which counting does not.
+A parse error from the browser often names no line. For a local file the parser's own answer follows, with where it stopped, and a \`Delimiter scan\` section names the lines where brackets stop pairing up — one per place the trouble starts, since a file can be broken in several spots at once. Where the parser stops is where it gave up, which is not always where the mistake is, and a count says where brackets stop pairing, not which one is wrong: read the code at those lines, fix every place listed, and reload once. Do not count brackets yourself — the scan skips strings, comments and regex literals, which counting by hand does not.
 
 The browser stays open between calls, so \`open\` once and then interact. Only one page is open at a time; \`open\` again to go elsewhere.`;
 
@@ -247,6 +247,46 @@ export function splitDataUrl(
  */
 const PARSE_ERROR = /\bSyntaxError\b|\bUnexpected (token|end of input)\b/;
 
+/**
+ * Whether the console reports a script that did not parse.
+ *
+ * A `SyntaxError` from `JSON.parse` is a script that ran and was handed bad
+ * data -- a fetch that got an HTML error page -- and reading it as a parse
+ * failure sent the scan after a file that parses (automaticum audit
+ * 2026-11-08, B17).
+ */
+function reportsParseError(logs: string): boolean {
+	return logs
+		.split("\n")
+		.some((line) => PARSE_ERROR.test(line) && !/\bJSON\b/.test(line));
+}
+
+/**
+ * The local scripts a page loads by `src`, resolved against the page.
+ *
+ * Only inline scripts were parsed, so a page whose own `game.js` did not
+ * parse came back as a silent console and a pass (B3).
+ */
+function localScriptSources(pagePath: string, html: string): string[] {
+	const found: string[] = [];
+	for (const match of html.matchAll(/<script\b([^>]*)>/gi)) {
+		const src = /(?:^|\s)src\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(
+			match[1] ?? "",
+		);
+		const value = src?.[1] ?? src?.[2] ?? src?.[3];
+		if (!value || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(value)) {
+			continue;
+		}
+		const clean = value.split(/[?#]/)[0] ?? "";
+		found.push(
+			clean.startsWith("/")
+				? clean
+				: `${pagePath.slice(0, Math.max(pagePath.lastIndexOf("/"), pagePath.lastIndexOf("\\")) + 1)}${clean}`,
+		);
+	}
+	return found;
+}
+
 /** The local path behind a `file://` URL, or nothing for anything remote. */
 export function localPathOf(url: string | undefined): string | undefined {
 	if (!url?.startsWith("file://")) {
@@ -272,7 +312,7 @@ export function localPathOf(url: string | undefined): string | undefined {
 function silentNote(filePath: string, syntaxError: string): string {
 	return (
 		`That silence is not a pass: ${filePath} does not parse — ${syntaxError.replace(/\.+$/, "")}. ` +
-		"The script never ran, which is why there was nothing to print. " +
+		"A script that does not parse runs none of its code, so that script printed nothing and did nothing. " +
 		"Fix the file and open it again: silence only counts once the page parses."
 	);
 }
@@ -308,7 +348,7 @@ async function locateParseError(
 	if (!filePath) {
 		return null;
 	}
-	const reported = PARSE_ERROR.test(logs);
+	const reported = reportsParseError(logs);
 	// A console that printed nothing is the tool's own definition of a pass, so
 	// it is the one result worth checking against the file itself. Anything the
 	// page did print means it ran.
@@ -318,16 +358,35 @@ async function locateParseError(
 	}
 	try {
 		const source = await readFile(filePath);
-		const missed = reported
-			? undefined
-			: findScriptSyntaxError(filePath, source);
-		if (!reported && !missed) {
-			return null;
+		// The page and every local script it loads: any of them can be the one
+		// that never ran.
+		const files: Array<{ path: string; text: string }> = [
+			{ path: filePath, text: source },
+		];
+		if (/\.html?$/i.test(filePath)) {
+			for (const script of localScriptSources(filePath, source)) {
+				try {
+					files.push({ path: script, text: await readFile(script) });
+				} catch {
+					// A script that cannot be read is the browser's to report.
+				}
+			}
 		}
-		const scan = describeDelimiterBalance(filePath, source);
-		return missed
-			? [silentNote(filePath, missed), scan].filter(Boolean).join("\n\n")
-			: scan;
+		const notes: string[] = [];
+		for (const file of files) {
+			const missed = reported
+				? undefined
+				: findScriptSyntaxError(file.path, file.text);
+			if (!reported && !missed) {
+				continue;
+			}
+			const scan = describeDelimiterBalance(file.path, file.text);
+			notes.push(
+				...(missed ? [silentNote(file.path, missed)] : []),
+				...(scan ? [scan] : []),
+			);
+		}
+		return notes.length > 0 ? notes.join("\n\n") : null;
 	} catch (error) {
 		// Never mask the console output this is appended to.
 		onError?.(`[Browser] delimiter scan skipped for ${filePath}`, error);

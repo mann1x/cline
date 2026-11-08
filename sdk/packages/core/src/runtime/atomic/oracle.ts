@@ -451,7 +451,11 @@ async function runPageOracle(oracle: PageOracle): Promise<OracleVerdict> {
 		return {
 			passed: true,
 			exitCode: 0,
-			output: `${oracle.path} loaded and ran ${result.framesRun} frame(s) with no errors.`,
+			output: `${oracle.path} loaded and ran ${
+				result.framesRun > 0
+					? `${result.framesRun} frame(s)`
+					: `${result.timeoutsRun ?? 0} timer callback(s), and no animation frames,`
+			} without throwing or logging an error. That is all this check sees: it does not look at what was drawn.`,
 			timedOut: false,
 		};
 	}

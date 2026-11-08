@@ -406,13 +406,18 @@ describe("the structured report", () => {
 		// sends the model to the wrong end of the file. In LSP shape every
 		// diagnostic has a range, so the lie has to be marked rather than
 		// avoided by omission.
-		const report = checkFileReport("/w/a.json", "{ oops ");
+		const report = checkFileReport("/w/a.json", '{\n  "a": 1,\n  oops\n}');
 
 		const parseError = report.diagnostics.find((d) =>
 			/JSON|token|position/i.test(d.message),
 		);
-		expect(parseError?.located).toBe(false);
-		expect(parseError?.range.start.line).toBe(0);
+		// Located only where the runtime gives a position (Node does, Bun does
+		// not), and then at the line it names -- never line 1 by default.
+		if (parseError?.located) {
+			expect(parseError.range.start.line).toBe(2);
+		} else {
+			expect(parseError?.range.start.line).toBe(0);
+		}
 	});
 
 	it("carries the delimiter scan as a diagnostic, not as prose", () => {

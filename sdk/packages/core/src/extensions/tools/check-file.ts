@@ -31,11 +31,12 @@ import { exec } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import * as vm from "node:vm";
 import type { AgentTool, AgentToolContext } from "@cline/shared";
 import {
 	canScanDelimiters,
 	describeDelimiterBalance,
+	findParseStop,
+	type ScriptGoal,
 } from "./delimiter-balance";
 
 const execAsync = promisify(exec);
@@ -71,7 +72,7 @@ Output: JSON, in the shape a language server answers in. \`files\` holds one ent
 
 Each diagnostic carries \`range\` (zero-based line and character), \`severity\` (1 = error) and \`message\`. \`located: false\` means the parser could not name a position, so the range is a placeholder rather than a claim about the top of the file. \`complexity\` appears on a file big enough to be worth a word about — a note to you, not a diagnostic.
 
-When a file's brackets do not match, a diagnostic names the line to edit and how many brackets that line is out by, one line per place the trouble starts — a file can be broken in several spots at once, so work through every line it lists before re-checking rather than re-checking after each one. Edit the lines it names; do not re-derive the balance by hand or with a script you write, which costs more thinking than you have and counts brackets inside strings, comments and regex literals that this scan skips. A parse error is always reported where the parser gave up, which is the closing bracket; the line named here is the one the error cannot name. The scan reads the whole file from line 1, and names each bracket by its line, its column and the text just before it: find it by that text rather than by counting columns.`;
+A parse error is reported where the parser gave up. That is where the code stopped making sense to it, which is often but not always where the mistake is: a bracket left open earlier makes it give up later. When a file's brackets do not match, the bracket scan adds the lines where they stop pairing up and how many each line is out by, one line per place the trouble starts — read both before you edit, and work through every line listed before re-checking. A count says where brackets stop pairing, not which bracket is wrong, so read the code at those lines rather than editing them blind; do not re-derive the balance by hand or with a script of your own, which counts brackets inside strings, comments and regex literals that this scan skips. The scan names each bracket by its line, its column and the text just before it: find it by that text rather than by counting columns.`;
 
 /**
  * The description when the host has a real checker to point at.
@@ -109,7 +110,7 @@ Output: JSON, in the shape a language server answers in. \`files\` holds one ent
 
 Each diagnostic carries \`range\` (zero-based line and character), \`severity\` (1 = error) and \`message\`. \`located: false\` means the parser could not name a position, so the range is a placeholder rather than a claim about the top of the file. \`complexity\` appears on a file big enough to be worth a word about — a note to you, not a diagnostic. \`lint\` carries what your own checker said: \`command\`, \`exitCode\` and \`output\`. \`exitCode: 0\` with empty output means it ran and found nothing; the key missing altogether means no checker ran, which is not the same thing.
 
-When a file's brackets do not match, a diagnostic names the line to edit and how many brackets that line is out by, one line per place the trouble starts — a file can be broken in several spots at once, so work through every line it lists before re-checking rather than re-checking after each one. Edit the lines it names; do not re-derive the balance by hand or with a script you write, which costs more thinking than you have and counts brackets inside strings, comments and regex literals that this scan skips. A parse error is always reported where the parser gave up, which is the closing bracket; the line named here is the one the error cannot name. The scan reads the whole file from line 1, and names each bracket by its line, its column and the text just before it: find it by that text rather than by counting columns.`;
+A parse error is reported where the parser gave up. That is where the code stopped making sense to it, which is often but not always where the mistake is: a bracket left open earlier makes it give up later. When a file's brackets do not match, the bracket scan adds the lines where they stop pairing up and how many each line is out by, one line per place the trouble starts — read both before you edit, and work through every line listed before re-checking. A count says where brackets stop pairing, not which bracket is wrong, so read the code at those lines rather than editing them blind; do not re-derive the balance by hand or with a script of your own, which counts brackets inside strings, comments and regex literals that this scan skips. The scan names each bracket by its line, its column and the text just before it: find it by that text rather than by counting columns.`;
 }
 
 export const CHECK_FILE_TOOL_INPUT_SCHEMA = {
@@ -224,85 +225,50 @@ export interface CheckFinding {
 }
 
 /**
- * Top-level `import`/`export`, which only a module may have.
+ * Compile without running, and say what and where.
  *
- * `new Function` compiles a function body, where module syntax is a syntax
- * error however correct the module is. Reporting that would send a model to
- * "fix" a working ES module, so module code is left to the locator alone.
- */
-const MODULE_SYNTAX = /^[ \t]*(?:import|export)[\s{*]/m;
-
-/**
- * Whether the code parses at all.
+ * The parse the delimiter scan gates its edits on, so the two never disagree.
+ * The parse this had of its own threw nothing under Bun, which parses
+ * `vm.Script` lazily, so it never named a line there (automaticum audit
+ * 2026-11-08, B1); turned off on any line starting `import`, so a broken ES
+ * module was "No syntax errors" (B5); and refused a `#!` line and top-level
+ * `await`, which are correct (B6).
  *
- * `new Function` rather than `vm.Script` because the two runtimes disagree and
- * the CLI runs on the one that says nothing: measured on the same broken page,
- * Node's `vm.Script` throws `missing ) after argument list` and **Bun's parses
- * it without complaint**, because Bun compiles the script lazily. `new
- * Function` has to produce a callable, so both runtimes parse eagerly and both
- * throw.
+ * `undefined` when the code parses, and equally when nothing here can tell --
+ * {@link parseVerdict} is the one that tells those apart.
  */
-function parseError(code: string): string | undefined {
-	if (MODULE_SYNTAX.test(code)) {
-		return undefined;
-	}
-	try {
-		new Function(code);
-		return undefined;
-	} catch (error) {
-		return error instanceof Error ? error.message : String(error);
-	}
-}
-
-/**
- * Which line stopped the parser, where the runtime will say.
- *
- * `vm.Script` puts `filename:line` at the head of the stack along with the
- * offending source line; the message alone carries neither. Bun does not throw
- * here at all, so this returns nothing there and the delimiter scan below
- * carries the location instead — which names the *opening* bracket, and is the
- * more useful answer regardless.
- */
-function locateError(
-	code: string,
-	label: string,
-): { line: number; sourceText?: string } | undefined {
-	try {
-		new vm.Script(code, { filename: label });
-		return undefined;
-	} catch (error) {
-		if (!(error instanceof Error)) {
-			return undefined;
-		}
-		const head = (error.stack ?? "").split("\n");
-		const located = head[0]?.match(/:(\d+)$/);
-		if (!located) {
-			return undefined;
-		}
-		const sourceText = head[1]?.trim();
-		return {
-			line: Number(located[1]),
-			...(sourceText ? { sourceText } : {}),
-		};
-	}
-}
-
-/** Compile without running, and say what and where. */
 export function compileCheck(
 	code: string,
-	label: string,
+	_label: string,
 	lineOffset = 0,
+	goal: ScriptGoal = "either",
 ): CheckFinding | undefined {
-	const message = parseError(code);
-	if (message === undefined) {
-		return undefined;
+	const verdict = parseVerdict(code, lineOffset, goal);
+	return verdict === null ? undefined : verdict;
+}
+
+/** A finding, nothing for a parse, or null when no parser here could tell. */
+function parseVerdict(
+	code: string,
+	lineOffset: number,
+	goal: ScriptGoal,
+): CheckFinding | null | undefined {
+	const stop = findParseStop(code, { line: 1 + lineOffset, column: 1 }, goal);
+	if (stop == null) {
+		return stop;
 	}
-	const where = locateError(code, label);
+	const sourceText =
+		stop.line === undefined
+			? undefined
+			: code.split("\n")[stop.line - 1 - lineOffset]?.trim();
 	return {
-		line: where ? where.line + lineOffset : 1 + lineOffset,
-		located: where !== undefined,
-		message,
-		...(where?.sourceText ? { sourceText: where.sourceText } : {}),
+		line: stop.line ?? 1 + lineOffset,
+		located: stop.line !== undefined,
+		message:
+			stop.column !== undefined
+				? `${stop.message} (column ${stop.column})`
+				: stop.message,
+		...(sourceText ? { sourceText } : {}),
 	};
 }
 
@@ -310,6 +276,8 @@ export function compileCheck(
 export interface ScriptBlock {
 	code: string;
 	startLine: number;
+	/** `type="module"`: parsed by a module's rules. */
+	module?: boolean;
 }
 
 /**
@@ -326,13 +294,17 @@ export function extractScripts(html: string): ScriptBlock[] {
 	for (const match of html.matchAll(pattern)) {
 		const attributes = match[1] ?? "";
 		const code = match[2] ?? "";
-		if (/\bsrc\s*=/i.test(attributes)) {
+		if (/(?:^|\s)src\s*=/i.test(attributes)) {
 			continue;
 		}
-		const type = attributes.match(/\btype\s*=\s*["']?([^"'\s>]+)/i)?.[1];
+		// `(?:^|\s)`, not `\b`: `data-type="game"` is not the script's type,
+		// and reading it as one skipped the script unparsed (B5).
+		const type = attributes.match(/(?:^|\s)type\s*=\s*["']?([^"'\s>]+)/i)?.[1];
 		if (
 			type &&
-			!/^(text\/javascript|application\/javascript|module)$/i.test(type)
+			!/^(text\/javascript|application\/javascript|text\/ecmascript|application\/ecmascript|module)$/i.test(
+				type,
+			)
 		) {
 			continue;
 		}
@@ -343,6 +315,7 @@ export function extractScripts(html: string): ScriptBlock[] {
 		blocks.push({
 			code,
 			startLine: html.slice(0, bodyStart).split("\n").length,
+			...(type && /^module$/i.test(type) ? { module: true } : {}),
 		});
 	}
 	return blocks;
@@ -434,12 +407,7 @@ export function checkFileReport(
 	text: string,
 ): CheckFileReport {
 	const extension = path.extname(filePath).toLowerCase();
-	const findings = findIssues(filePath, text, extension);
-	const parsed =
-		JS_LIKE.has(extension) ||
-		HTML_LIKE.has(extension) ||
-		extension === ".json" ||
-		extension === ".jsonc";
+	const { findings, parsed } = inspect(filePath, text, extension);
 	const scanned = canScanDelimiters(filePath);
 	const balance = describeDelimiterBalance(filePath, text);
 	const diagnostics = findings.map(toDiagnostic);
@@ -464,42 +432,152 @@ export function checkFileReport(
 	};
 }
 
+/**
+ * JSON files that are JSON-with-comments by convention: their own tools read
+ * them that way, so a comment in one is not an error.
+ */
+function isJsonc(filePath: string, extension: string): boolean {
+	if (extension === ".jsonc") {
+		return true;
+	}
+	if (extension !== ".json") {
+		return false;
+	}
+	const name = path.basename(filePath).toLowerCase();
+	const parent = path.basename(path.dirname(filePath)).toLowerCase();
+	return (
+		/^(?:ts|js)config(?:\..*)?\.json$/.test(name) ||
+		name === "devcontainer.json" ||
+		name === ".devcontainer.json" ||
+		parent === ".vscode" ||
+		parent === ".devcontainer"
+	);
+}
+
+/**
+ * Comments and trailing commas as spaces, so JSONC parses as JSON with every
+ * position where it was. Strings are walked, so `"//"` inside one is text.
+ */
+function jsoncAsJson(text: string): string {
+	let out = "";
+	let index = 0;
+	while (index < text.length) {
+		const char = text[index] as string;
+		if (char === '"') {
+			const start = index;
+			index += 1;
+			while (index < text.length && text[index] !== '"') {
+				index += text[index] === "\\" ? 2 : 1;
+			}
+			index += 1;
+			out += text.slice(start, index);
+			continue;
+		}
+		if (char === "/" && text[index + 1] === "/") {
+			const end = text.indexOf("\n", index);
+			const stop = end < 0 ? text.length : end;
+			out += " ".repeat(stop - index);
+			index = stop;
+			continue;
+		}
+		if (char === "/" && text[index + 1] === "*") {
+			const end = text.indexOf("*/", index + 2);
+			const stop = end < 0 ? text.length : end + 2;
+			out += text.slice(index, stop).replace(/[^\n]/g, " ");
+			index = stop;
+			continue;
+		}
+		out += char;
+		index += 1;
+	}
+	return out.replace(/,(\s*[}\]])/g, " $1");
+}
+
+/** The line a JSON parse error names, when the runtime gives a position. */
+function jsonErrorLine(message: string, text: string): number | undefined {
+	const lineColumn = /\(line (\d+) column \d+\)/.exec(message);
+	if (lineColumn) {
+		return Number(lineColumn[1]);
+	}
+	const position = /\bposition (\d+)\b/.exec(message);
+	return position
+		? text.slice(0, Number(position[1])).split("\n").length
+		: undefined;
+}
+
 /** Every finding for one file, before it is shaped for a reader. */
 function findIssues(
 	filePath: string,
 	text: string,
 	extension: string,
 ): CheckFinding[] {
+	return inspect(filePath, text, extension).findings;
+}
+
+/**
+ * Every finding for one file, and whether a parser actually read all of it.
+ *
+ * `parsed` is false when any part of the file went unparsed -- a script a
+ * parser here could not tell about -- so "No syntax errors" is never said on
+ * the authority of a parse that did not happen (B5).
+ */
+function inspect(
+	filePath: string,
+	text: string,
+	extension: string,
+): { findings: CheckFinding[]; parsed: boolean } {
 	const findings: CheckFinding[] = [];
-	if (JS_LIKE.has(extension)) {
-		const found = compileCheck(text, path.basename(filePath));
-		if (found) {
-			findings.push(found);
+	let parsed = true;
+	const take = (verdict: CheckFinding | null | undefined) => {
+		if (verdict === null) {
+			parsed = false;
+		} else if (verdict) {
+			findings.push(verdict);
 		}
+	};
+	if (JS_LIKE.has(extension)) {
+		take(
+			parseVerdict(
+				text,
+				0,
+				extension === ".mjs"
+					? "module"
+					: extension === ".cjs"
+						? "script"
+						: "either",
+			),
+		);
 	} else if (HTML_LIKE.has(extension)) {
 		for (const block of extractScripts(text)) {
 			// -1 because the block's own line 1 *is* the line it starts on.
-			const found = compileCheck(
-				block.code,
-				path.basename(filePath),
-				block.startLine - 1,
+			take(
+				parseVerdict(
+					block.code,
+					block.startLine - 1,
+					block.module ? "module" : "script",
+				),
 			);
-			if (found) {
-				findings.push(found);
-			}
 		}
 	} else if (extension === ".json" || extension === ".jsonc") {
+		const source = isJsonc(filePath, extension) ? jsoncAsJson(text) : text;
 		try {
-			JSON.parse(text);
+			JSON.parse(source);
 		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const line = jsonErrorLine(message, source);
 			findings.push({
-				line: 1,
-				located: false,
-				message: error instanceof Error ? error.message : String(error),
+				line: line ?? 1,
+				located: line !== undefined,
+				message,
+				...(line !== undefined && text.split("\n")[line - 1]?.trim()
+					? { sourceText: text.split("\n")[line - 1]?.trim() }
+					: {}),
 			});
 		}
+	} else {
+		parsed = false;
 	}
-	return findings;
+	return { findings, parsed };
 }
 
 export function checkSource(filePath: string, text: string): string {

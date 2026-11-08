@@ -202,6 +202,33 @@ describe("the delimiter scan on a parse error", () => {
 		expect(output).toContain("line 2");
 	});
 
+	// automaticum audit 2026-11-08, B3: only inline scripts were parsed.
+	it("checks a silent page's own src scripts too", async () => {
+		const tool = toolFor("", {
+			"/repo/game.html": '<body><script src="game.js"></script></body>',
+			"/repo/game.js": "function f( {\n  go();\n",
+		});
+
+		const output = await run(tool, { action: "open", url: "/repo/game.html" });
+
+		expect(output).toContain(
+			"That silence is not a pass: /repo/game.js does not parse",
+		);
+	});
+
+	// B17: a runtime JSON.parse SyntaxError is bad data, not a script that
+	// did not parse.
+	it("does not read a runtime JSON SyntaxError as a parse failure", async () => {
+		const tool = toolFor(
+			`[Page Error] SyntaxError: Unexpected token '<', "<!doctype "... is not valid JSON`,
+			{ "/repo/game.html": BROKEN },
+		);
+
+		expect(
+			await run(tool, { action: "open", url: "/repo/game.html" }),
+		).not.toContain("Delimiter scan");
+	});
+
 	it("stays quiet when the page threw something that is not a parse error", async () => {
 		const tool = toolFor("[Page Error] TypeError: x is not a function", {
 			"/repo/game.html": BROKEN,

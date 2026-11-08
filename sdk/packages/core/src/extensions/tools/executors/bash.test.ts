@@ -1163,6 +1163,20 @@ describe("createShellExecutor with inherited stdio", () => {
 		.each(process.platform === "win32" ? [false] : [false, true])(
 		"finalizes a detached log when the shell exits while a background child holds the pipes (signal: %s)",
 		async (terminateBySignal) => {
+			// The detached log goes to a temp directory of this test's own. In the
+			// shared one, a runtime host started by another test file reaps it at
+			// startup: the fake start token below cannot match the real process,
+			// so the live log was retired -- marked complete, without its exit
+			// line -- and this test failed whenever the two ran together.
+			const privateTemp = await mkdtemp(join(tmpdir(), "detach-bg-tmp-"));
+			const savedTemp = {
+				TMPDIR: process.env.TMPDIR,
+				TEMP: process.env.TEMP,
+				TMP: process.env.TMP,
+			};
+			process.env.TMPDIR = privateTemp;
+			process.env.TEMP = privateTemp;
+			process.env.TMP = privateTemp;
 			const controller = new RunCommandExecutionController();
 			let commandStarted = false;
 			let detachReady = false;
@@ -1249,6 +1263,14 @@ describe("createShellExecutor with inherited stdio", () => {
 			} finally {
 				await writeFile(gate, "");
 				await rm(gateDirectory, { recursive: true, force: true });
+				for (const [name, value] of Object.entries(savedTemp)) {
+					if (value === undefined) {
+						delete process.env[name];
+					} else {
+						process.env[name] = value;
+					}
+				}
+				await rm(privateTemp, { recursive: true, force: true });
 			}
 		},
 	);

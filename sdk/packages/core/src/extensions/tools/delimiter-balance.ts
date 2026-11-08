@@ -53,7 +53,7 @@ const C_FAMILY = new Set([
 /** Files whose `<script>` bodies are plain JavaScript. */
 const EMBEDS_SCRIPT = new Set([".html", ".htm"]);
 
-import { compileFunction } from "node:vm";
+import { compileFunction, Script } from "node:vm";
 import { splitBom } from "./executors/bom";
 
 export interface DelimiterFinding {
@@ -378,6 +378,16 @@ export function scanWithBalance(
 	return { findings, balance };
 }
 
+/** The `type` values a browser runs as script: classic JavaScript, or a module. */
+const SCRIPT_TYPES = new Set([
+	"",
+	"text/javascript",
+	"application/javascript",
+	"application/ecmascript",
+	"text/ecmascript",
+	"module",
+]);
+
 /** Every `<script>` body in an HTML-ish file, with where each one starts. */
 function scriptSpans(
 	text: string,
@@ -392,11 +402,15 @@ function scriptSpans(
 		const bodyEnd = closing === -1 ? text.length : closing;
 		// A `src=` script has no body worth scanning, and a non-JS `type=` may
 		// not be JavaScript at all.
+		// The type's value, compared whole. A lookahead after an optional quote
+		// backtracked to the quote itself, so `type="module"` read as "not
+		// JavaScript" and the module went unscanned and unparsed.
+		const type = /(?:^|\s)type\s*=\s*["']?([^"'\s>]*)/i
+			.exec(attributes)?.[1]
+			?.toLowerCase();
 		if (
-			!/\bsrc\s*=/i.test(attributes) &&
-			!/\btype\s*=\s*["']?(?!text\/javascript|module|application\/javascript)/i.test(
-				attributes,
-			)
+			!/(?:^|\s)src\s*=/i.test(attributes) &&
+			(type === undefined || SCRIPT_TYPES.has(type))
 		) {
 			const before = text.slice(0, bodyStart);
 			const lineIndex = before.split("\n").length;
@@ -404,7 +418,7 @@ function scriptSpans(
 			spans.push({
 				body: text.slice(bodyStart, bodyEnd),
 				origin: { line: lineIndex, column: bodyStart - lastNewline },
-				module: /\btype\s*=\s*["']?module\b/i.test(attributes),
+				module: type === "module",
 			});
 		}
 		opening.lastIndex = bodyEnd;
@@ -552,25 +566,134 @@ export interface ParseStop {
 /** The name the parser is given for the source, to find its stack line. */
 const PARSE_FILENAME = "delimiter-scan";
 
-/** Top-level `import` or `export`: module code, which nothing here parses. */
+/** Top-level `import` or `export`: module code, parsed by its own rules. */
 const MODULE_SYNTAX = /^[ \t]*(?:import\s*[\w{*"'.]|export\s)/m;
 
-const AsyncFunction = Object.getPrototypeOf(async () => {})
-	.constructor as FunctionConstructor;
+/** Which grammar a span is read under. `either` is a `.js` file: a script, unless its own syntax says module. */
+export type ScriptGoal = "script" | "module" | "either";
 
 /**
- * Parse one classic script and say where the parser stops: nothing when it
- * parses, and null when this cannot tell.
+ * Module syntax rewritten as script syntax of exactly the same length, line
+ * for line, so every position the parser names is a position in the file.
  *
- * Parsed as a function body, so a top-level `return` passes as it does in a
- * CommonJS file. Three things a real file holds are not classic script, and
- * calling them "does not parse" told the model a correct file was broken:
+ * No parser here reads the module goal -- `vm.SourceTextModule` needs a flag
+ * nobody passes -- and "cannot check" on every ES module left check_file
+ * calling `return a +;` in one "No syntax errors" (automaticum audit
+ * 2026-11-08, B5). Declarations are what modules add; their bodies are
+ * ordinary code. So the import and export *statements* become spaces, an
+ * `export` keyword before a declaration becomes spaces, `export default`
+ * becomes a `var` of the same width, and `import.meta` an expression of the
+ * same width. What is left is parsed strict, as a module is.
+ */
+function moduleAsScript(text: string): string {
+	const blank = (match: string) => match.replace(/[^\n]/g, " ");
+	const specifier = `(["'])[^"'\\n]*\\1`;
+	return text
+		.replace(
+			new RegExp(
+				`^[ \\t]*import(?=[\\s{*"'])(?:[^;"'\`()]*?\\bfrom)?\\s*${specifier}(?:\\s*(?:with|assert)\\s*\\{[^}]*\\})?[ \\t]*;?`,
+				"gm",
+			),
+			blank,
+		)
+		.replace(
+			new RegExp(
+				`^[ \\t]*export\\s*(?:\\*(?:\\s*as\\s+[\\w$]+)?|\\{[^}]*\\})(?:\\s*from\\s*${specifier})?(?:\\s*(?:with|assert)\\s*\\{[^}]*\\})?[ \\t]*;?`,
+				"gm",
+			),
+			blank,
+		)
+		.replace(
+			/^([ \t]*)(export[ \t]+default)\b/gm,
+			(_, lead: string, words: string) =>
+				`${lead}${"var _$default=".padEnd(words.length, " ")}`,
+		)
+		.replace(
+			/^([ \t]*)export(?=[ \t]+(?:const|let|var|function|class|async)\b)/gm,
+			(_, lead: string) => `${lead}      `,
+		)
+		.replace(/\bimport\.meta\b/g, "Object.meta");
+}
+
+/**
+ * Parse `source` inside a function opened by `prefix` on its first line, and
+ * say where it stops in `source`'s own coordinates.
  *
- * - a `#!` line, which Node runs and no parser here accepts, is blanked with
- *   the line count kept;
- * - top-level `await` is parsed as an async function body, which accepts it;
- * - `import` or `export` makes the file a module, which no parser here reads,
- *   so the answer is null -- cannot check -- and never a stop.
+ * The wrapper is how an async body gets a position: `new AsyncFunction` names
+ * none, and `vm.compileFunction` has no async form. Its closing line is the
+ * wrapper's, so a stop there is the span ending with something still open.
+ */
+function parseWrapped(
+	source: string,
+	origin: Cursor,
+	prefix: string,
+): ParseStop | null | undefined {
+	const wrapped = `${prefix}${source}\n})`;
+	const lastRow = source.split("\n").length;
+	try {
+		compileFunction(wrapped, [], { filename: PARSE_FILENAME });
+		return undefined;
+	} catch (error) {
+		if (!isSyntaxError(error)) {
+			return null;
+		}
+		const at = locateStop(error.stack ?? "", wrapped, origin);
+		if (at.line !== undefined && at.line - origin.line + 1 > lastRow) {
+			return {
+				message: "Unexpected end of input",
+				line: origin.line + lastRow - 1,
+			};
+		}
+		if (at.line === origin.line && at.column !== undefined) {
+			const column = at.column - prefix.length;
+			return column >= origin.column
+				? { message: error.message, line: at.line, column }
+				: { message: error.message, line: at.line };
+		}
+		return { message: error.message, ...at };
+	}
+}
+
+/** Strict, and async so a module's top-level `await` is accepted. */
+const MODULE_PREFIX = '"use strict";(async function(){';
+
+/** Sloppy and async: a script body that uses top-level `await`. */
+const ASYNC_PREFIX = "(async function(){";
+
+/**
+ * Parse a span as a module: nothing when it parses, else where it stops.
+ *
+ * The span is parsed inside a strict async function, which accepts top-level
+ * `await` and rejects what strict mode rejects. A top-level `return`, which a
+ * function body allows and a module does not, is {@link findTopLevelReturn}'s.
+ */
+function findModuleParseStop(
+	body: string,
+	origin: Cursor,
+): ParseStop | null | undefined {
+	const source = moduleAsScript(
+		body.startsWith("#!") ? body.replace(/^#![^\n]*/, "") : body,
+	);
+	const stop = parseWrapped(source, origin, MODULE_PREFIX);
+	return stop === undefined ? findTopLevelReturn(source, origin) : stop;
+}
+
+/**
+ * Parse one script and say where the parser stops: nothing when it parses,
+ * and null when this cannot tell.
+ *
+ * `goal` is what the span is: `script` a classic `<script>`, `module` a module
+ * script or `.mjs`, `either` a `.js` file, which is a script unless its own
+ * syntax says module. A script is parsed as a function body, so for a `.js`
+ * file a top-level `return` passes, as it does in CommonJS; a classic
+ * `<script>` is held to the stricter rule. What a real file holds and a
+ * parser here does not accept as written:
+ *
+ * - a `#!` line, which Node runs, is blanked with the line count kept;
+ * - top-level `await` in a `.js` file is parsed as an async body;
+ * - `import` or `export` in a `.js` file makes it a module, read by
+ *   {@link moduleAsScript}'s rules. In a classic `<script>` it is the error a
+ *   browser reports.
  *
  * `vm.compileFunction` throws on a broken body under Node and Bun alike (Bun's
  * `vm.Script` parses lazily and throws nothing), and names the line in its
@@ -580,12 +703,18 @@ const AsyncFunction = Object.getPrototypeOf(async () => {})
 export function findParseStop(
 	body: string,
 	origin: Cursor = { line: 1, column: 1 },
+	goal: ScriptGoal = "either",
 ): ParseStop | null | undefined {
+	if (goal === "module") {
+		return findModuleParseStop(body, origin);
+	}
 	const source = body.startsWith("#!") ? body.replace(/^#![^\n]*/, "") : body;
 	let stop: ParseStop;
 	try {
 		compileFunction(source, [], { filename: PARSE_FILENAME });
-		return undefined;
+		// A classic `<script>` is not a function body; a `.js` file may be
+		// CommonJS, which is.
+		return goal === "script" ? findTopLevelReturn(source, origin) : undefined;
 	} catch (error) {
 		if (!isSyntaxError(error)) {
 			return null;
@@ -595,20 +724,45 @@ export function findParseStop(
 			...locateStop(error.stack ?? "", source, origin),
 		};
 	}
-	if (/\bawait\b/.test(source)) {
-		try {
-			new AsyncFunction(source);
-			return undefined;
-		} catch (error) {
-			if (!isSyntaxError(error)) {
-				return null;
-			}
-			// The classic parse may have stopped at the `await` itself, so its
-			// position is not the fault's; the async parse gives none.
-			stop = { message: error.message };
-		}
+	if (goal === "either" && MODULE_SYNTAX.test(source)) {
+		return findModuleParseStop(body, origin);
 	}
-	return MODULE_SYNTAX.test(source) ? null : stop;
+	if (goal === "either" && /\bawait\b/.test(source)) {
+		// The classic parse may have stopped at the `await` itself, so its
+		// position is not the fault's; the async parse names its own.
+		return parseWrapped(source, origin, ASYNC_PREFIX);
+	}
+	return stop;
+}
+
+/**
+ * A `return` outside any function, which a function-body parse accepts and a
+ * script or module refuses.
+ *
+ * `vm.Script` refuses it eagerly under Node and Bun alike, with the line, even
+ * where Bun parses function bodies lazily. Only that refusal is taken from it:
+ * anything else it says is the function-body parse's business.
+ */
+function findTopLevelReturn(
+	source: string,
+	origin: Cursor,
+): ParseStop | undefined {
+	if (!/\breturn\b/.test(source)) {
+		return undefined;
+	}
+	try {
+		new Script(source, { filename: PARSE_FILENAME });
+		return undefined;
+	} catch (error) {
+		if (!isSyntaxError(error) || !/\breturn\b/i.test(error.message)) {
+			return undefined;
+		}
+		const at = locateStop(error.stack ?? "", source, origin);
+		return {
+			message: error.message,
+			...(at.line !== undefined ? { line: at.line } : {}),
+		};
+	}
 }
 
 /** By name: a `SyntaxError` from `vm` need not be this realm's class. */
@@ -668,7 +822,17 @@ interface Parser {
 
 const JAVASCRIPT: Parser = {
 	name: "the JavaScript parser",
-	parse: findParseStop,
+	parse: (body, origin) => findParseStop(body, origin, "either"),
+};
+
+const CLASSIC_SCRIPT: Parser = {
+	name: "the JavaScript parser",
+	parse: (body, origin) => findParseStop(body, origin, "script"),
+};
+
+const MODULE_SCRIPT: Parser = {
+	name: "the JavaScript parser",
+	parse: (body, origin) => findParseStop(body, origin, "module"),
 };
 
 /** JSON says no position the same way on every runtime, so it gives none. */
@@ -696,10 +860,13 @@ function parserFor(extension: string, module: boolean): Parser | undefined {
 	if (extension === ".json") {
 		return JSON_PARSER;
 	}
-	if (module) {
+	if (!PARSE_CHECKED.has(extension)) {
 		return undefined;
 	}
-	return PARSE_CHECKED.has(extension) ? JAVASCRIPT : undefined;
+	if (module || extension === ".mjs") {
+		return MODULE_SCRIPT;
+	}
+	return EMBEDS_SCRIPT.has(extension) ? CLASSIC_SCRIPT : JAVASCRIPT;
 }
 
 /**
@@ -1055,8 +1222,8 @@ export function canScanDelimiters(filePath: string): boolean {
 	return C_FAMILY.has(extension) || EMBEDS_SCRIPT.has(extension);
 }
 
-/** Classic scripts only: a module body is parsed under different rules. */
-const PARSE_CHECKED = new Set([".js", ".cjs", ".html", ".htm"]);
+/** What a parser here reads: scripts, and modules by {@link moduleAsScript}. */
+const PARSE_CHECKED = new Set([".js", ".cjs", ".mjs", ".html", ".htm"]);
 
 /**
  * Whether a file's scripts parse at all, asked of a real parser.
@@ -1087,20 +1254,33 @@ export function findScriptSyntaxError(
 	if (!PARSE_CHECKED.has(extension)) {
 		return undefined;
 	}
-	const bodies = EMBEDS_SCRIPT.has(extension)
-		? scriptSpans(text)
-				.filter((span) => !span.module)
-				.map((span) => span.body)
-		: [text];
-	for (const body of bodies) {
-		if (body.trim() === "") {
+	const spans = EMBEDS_SCRIPT.has(extension)
+		? scriptSpans(text).map((span) => ({
+				body: span.body,
+				origin: span.origin,
+				goal: (span.module ? "module" : "script") as ScriptGoal,
+			}))
+		: [
+				{
+					body: text,
+					origin: { line: 1, column: 1 },
+					goal: (extension === ".mjs" ? "module" : "either") as ScriptGoal,
+				},
+			];
+	for (const span of spans) {
+		if (span.body.trim() === "") {
 			continue;
 		}
 		// The same parse the scan gates its edits on, so the two never disagree:
-		// a module, a `#!` line or top-level `await` is not a syntax error.
-		const stop = findParseStop(body);
+		// a `#!` line or top-level `await` is not a syntax error, and a module
+		// is read as one.
+		const stop = findParseStop(span.body, span.origin, span.goal);
 		if (stop) {
-			return `SyntaxError: ${stop.message}`;
+			return `SyntaxError: ${stop.message}${
+				stop.line !== undefined
+					? ` (line ${stop.line}${stop.column !== undefined ? `, column ${stop.column}` : ""})`
+					: ""
+			}`;
 		}
 	}
 	return undefined;

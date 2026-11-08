@@ -180,3 +180,89 @@ requestAnimationFrame(function loop(){ ctx.fillRect(0, 0, w, 1); requestAnimatio
 		});
 	});
 });
+
+// automaticum audit 2026-11-08, B7 and B8: each case is the audit's repro.
+describe("checkPage audit 2026-11-08", () => {
+	const page = (js: string, attributes = "") =>
+		`<html><body><canvas id="c"></canvas>\n<script${attributes}>\n${js}\n</script></body></html>`;
+	const loop = "function loop(){requestAnimationFrame(loop);}";
+
+	it("fails a game that catches its error and logs it every frame (P4)", () => {
+		const result = checkPage(
+			"g.html",
+			page(
+				`function loop(){ try { undefinedFn(); } catch (e) { console.error(e); } requestAnimationFrame(loop); }\nrequestAnimationFrame(loop);`,
+			),
+		);
+		expect(result.ok).toBe(false);
+		expect(result.error).toMatch(/console\.error in frame 0: ReferenceError/);
+	});
+
+	it("reaches past the first second of frames (P5)", () => {
+		const result = checkPage(
+			"g.html",
+			page(
+				`let n = 0;\nfunction loop(){ n += 1; if (n === 31) player.move(); requestAnimationFrame(loop); }\nrequestAnimationFrame(loop);`,
+			),
+		);
+		expect(result.ok).toBe(false);
+		expect(result.error).toMatch(/frame 30: ReferenceError: player/);
+	});
+
+	it("does not count one setTimeout as a running page (P6)", () => {
+		const result = checkPage("g.html", page("setTimeout(() => {}, 100);"));
+		expect(result.ok).toBe(false);
+		expect(result.error).toMatch(/one setTimeout ran/);
+	});
+
+	it("passes a page whose loop is a recurring setTimeout", () => {
+		const result = checkPage(
+			"g.html",
+			page("function tick(){ setTimeout(tick, 16); }\ntick();"),
+		);
+		expect(result.ok).toBe(true);
+		expect(result.timeoutsRun).toBeGreaterThan(1);
+	});
+
+	it("fails a module script that does not parse instead of leaving it unchecked (P9)", () => {
+		const result = checkPage(
+			"g.html",
+			page(`function never(){ return a +; }\n${loop}loop();`, ' type="module"'),
+		);
+		expect(result.unchecked).toBeUndefined();
+		expect(result.ok).toBe(false);
+		expect(result.error).toMatch(/SyntaxError.*line 3, column 29/);
+	});
+
+	it("starts a game that waits for a key (P10)", () => {
+		const result = checkPage(
+			"g.html",
+			page(
+				`${loop}document.addEventListener('keydown', () => loop(), { once: true });`,
+			),
+		);
+		expect(result.ok).toBe(true);
+		expect(result.started).toBe(true);
+	});
+
+	it("fires load listeners registered on an element", () => {
+		const result = checkPage(
+			"g.html",
+			page(
+				`${loop}document.getElementById("c").addEventListener("click", () => loop());`,
+			),
+		);
+		expect(result.ok).toBe(true);
+	});
+
+	it("bounds a frame that never returns instead of hanging", () => {
+		const started = Date.now();
+		const result = checkPage(
+			"g.html",
+			page("function loop(){ while (true) {} }\nrequestAnimationFrame(loop);"),
+		);
+		expect(result.ok).toBe(false);
+		expect(result.error).toMatch(/timed out/i);
+		expect(Date.now() - started).toBeLessThan(60_000);
+	}, 70_000);
+});
