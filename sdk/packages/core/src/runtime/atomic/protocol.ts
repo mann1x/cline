@@ -1,5 +1,10 @@
 import { LAST_REVISION } from "./file-revisions";
-import { isPageOracle, type Oracle, type OracleVerdict } from "./oracle";
+import {
+	checkDidNotRun,
+	isPageOracle,
+	type Oracle,
+	type OracleVerdict,
+} from "./oracle";
 import { PLAN_TOOL_NAME } from "./plan-tool";
 import { PROPOSE_CHECK_TOOL_NAME } from "./proposal";
 import { RESTORE_FILE_TOOL_NAME } from "./restore-file-tool";
@@ -216,7 +221,12 @@ export function buildProtocolPrompt(input: ProtocolPromptInput): string {
 			// exists to be substituted for, which is why it sits in this branch.
 			"A program you write yourself is not that check and cannot take its place. A small helper to locate the fault is fine; running one in place of the check is not, because a program you wrote can only tell you what you already believe. If you have written more than one helper, or you are editing a helper rather than the file this task is about, stop and run the check.",
 			"",
-			`If it passes, ${label} is kept and the task is finished.`,
+			// A check found by looking at the tree answers "does this still
+			// build", not "is the task done", and a pass was presented as the
+			// second (automaticum audit 2026-11-08, B18).
+			input.oracle.reason.startsWith("named")
+				? `If it passes, ${label} is kept and the task is finished.`
+				: `If it passes, ${label} is kept and this run ends. This check was found in the workspace (${input.oracle.reason}), not named for this task, so a pass shows the project still passes it — not that your change does what was asked. Make sure of that yourself before you finish.`,
 			"",
 			`If it does not, every change in ${label} is discarded. The files go back to exactly what they were when ${label} opened, and you get a new transaction with a record of what this one tried. You will never be asked to undo an edit yourself — that is done for you, mechanically, before the next transaction starts.`,
 		);
@@ -580,7 +590,7 @@ export function buildEmptyAttemptPrompt(input: {
 	 * check is a fix being reported rather than made, and the model is told so
 	 * in the same message that tells it the transaction is still open.
 	 */
-	check?: { label: string; output?: string };
+	check?: { label: string; output?: string; notRun?: string };
 	/**
 	 * No tool was called in this transaction at all. Worth saying, because the
 	 * advice that follows assumes edits were tried and refused, and here
@@ -601,17 +611,23 @@ export function buildEmptyAttemptPrompt(input: {
 		"== NOTHING WAS CHANGED ==",
 		"",
 		`You ended ${label} without editing a single file, so there was nothing to judge. The transaction was not spent, it is still open, and ${budget}.`,
-		...(input.check
+		...(input.check?.notRun
 			? [
 					"",
-					`\`${input.check.label}\` was run for you at that boundary and it FAILED. The defect is still there, so the task is not done and this run is not over — ending your turn does not end it. What finishes this task is the check passing, not your account of the work.`,
-					"",
-					"Take that as the state of the files, not as your diagnosis being done. It says the defect is still present; it does not tell you which line is wrong. Read the file.",
-					...(input.check.output
-						? [`The check said:\n${input.check.output}`]
-						: []),
+					`\`${input.check.label}\` was run for you at that boundary and did not run to a verdict: ${input.check.notRun}. It said nothing about the code, so it is not evidence that the defect is there or gone — but it is not a pass either, and this run is not over. Find out why it could not run before relying on it.`,
+					...(input.check.output ? [`It said:\n${input.check.output}`] : []),
 				]
-			: []),
+			: input.check
+				? [
+						"",
+						`\`${input.check.label}\` was run for you at that boundary and it FAILED. The defect is still there, so the task is not done and this run is not over — ending your turn does not end it. What finishes this task is the check passing, not your account of the work.`,
+						"",
+						"Take that as the state of the files, not as your diagnosis being done. It says the defect is still present; it does not tell you which line is wrong. Read the file.",
+						...(input.check.output
+							? [`The check said:\n${input.check.output}`]
+							: []),
+					]
+				: []),
 		"",
 		"Keep going. An empty submission is not a failed attempt — it is an attempt that has not happened yet, and nothing has been used up.",
 		...(input.neverBegan
@@ -625,7 +641,7 @@ export function buildEmptyAttemptPrompt(input: {
 		"",
 		`State the plan as before — AT MOST ${input.maxChanges} changes, each with WHERE, WHAT and WHY — and then make it.`,
 		"",
-		"If your edits are being refused, the refusal says why, and it is worth more than another read: an `old_text` that disagrees with the line range you named is the usual cause, so send one or the other, not both. If you cannot see the defect, run the linter on the file and act on the line it names rather than reading the whole file again.",
+		"If your edits are being refused, the refusal says why, and it is worth more than another read: an `old_text` that disagrees with the line range you named is the usual cause, so send one or the other, not both. If you cannot see the defect, run `check_file` on the file and read the code where it says the parser stops rather than reading the whole file again.",
 	].join("\n");
 }
 
@@ -675,7 +691,7 @@ export function describeSilentTurn(input: {
 	silent: number;
 	before: number;
 	untouched: boolean;
-	check?: { label: string; output?: string };
+	check?: { label: string; output?: string; notRun?: string };
 }): string {
 	const label = `TX-${String(input.transaction).padStart(2, "0")}`;
 	const left = Math.max(1, input.before - input.silent);
@@ -690,7 +706,9 @@ export function describeSilentTurn(input: {
 		...(input.check
 			? [
 					"",
-					`As things stand \`${input.check.label}\` does not pass, so there is still work to do.`,
+					input.check.notRun
+						? `As things stand \`${input.check.label}\` does not run to a verdict (${input.check.notRun}), so nothing has checked the work yet.`
+						: `As things stand \`${input.check.label}\` does not pass, so there is still work to do.`,
 					...(input.check.output ? [`It said:\n${input.check.output}`] : []),
 				]
 			: []),
@@ -774,10 +792,11 @@ export function describeVerdict(
 	if (verdict?.summary) {
 		return `${label} ${verb} — ${verdict.summary}${tail}`;
 	}
-	if (verdict?.exitCode == null) {
-		return `${label} ${verb} — the check could not be run at all, so nothing was verified.${tail}`;
+	const notRun = verdict ? checkDidNotRun(verdict) : "it could not be started";
+	if (notRun) {
+		return `${label} ${verb} — the check did not run to a verdict: ${notRun}, so nothing was verified.${tail}`;
 	}
-	return `${label} ${verb} — the check failed (exit ${verdict.exitCode}).${tail}`;
+	return `${label} ${verb} — the check failed (exit ${verdict?.exitCode}).${tail}`;
 }
 
 /**
@@ -845,7 +864,7 @@ export function describeDisengagement(input: {
 			lines.push(
 				`So ${moved}, and what you have read of them no longer describes what is on disk. Read a file again before you edit it — an edit sent against what you remember will be refused, and that refusal is this, not a fault.`,
 				"",
-				`What you found out in ${label} is still true even though its edits are gone. Do not simply make the same change again: it has already been shown not to work.`,
+				`What you found out in ${label} is still true even though its edits are gone. Before making the same change again, read what the check said about it above.`,
 				"",
 			);
 		} else {

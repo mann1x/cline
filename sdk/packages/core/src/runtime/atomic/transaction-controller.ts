@@ -3,6 +3,7 @@ import {
 	type FileStamp,
 	readFileStamp,
 } from "../../extensions/tools/executors/read-receipts";
+import { compareCheckProgress } from "./check-progress";
 import { createRevisionLog, type RevisionLog } from "./file-revisions";
 import {
 	DEFAULT_ORACLE_TIMEOUT_MS,
@@ -260,6 +261,9 @@ export class TransactionController {
 	 * files rather than about the clock.
 	 */
 	private readonly checkOutputs = new Set<string>();
+	/** The check's most recent output, and the one before it. */
+	private lastCheckOutput?: string;
+	private previousCheckOutput?: string;
 	private checkHasRepeated = false;
 	/** Set by a carried settlement, so the next `open` keeps the older base. */
 	private carrying = false;
@@ -419,6 +423,8 @@ export class TransactionController {
 	 */
 	private noteCheckOutput(output: string): boolean {
 		const key = output.trim();
+		this.previousCheckOutput = this.lastCheckOutput;
+		this.lastCheckOutput = key;
 		if (this.checkOutputs.has(key)) {
 			this.checkHasRepeated = true;
 			return false;
@@ -669,6 +675,18 @@ export class TransactionController {
 				timeoutMs: this.options.oracleTimeoutMs ?? DEFAULT_ORACLE_TIMEOUT_MS,
 			});
 			moved = this.noteCheckOutput(verdict.output);
+			// New is not the same as further. An answer that moved backwards --
+			// more failures, fewer frames, an earlier error in the same file --
+			// is a change that broke something, and carrying it built the next
+			// transaction on the break.
+			if (
+				moved &&
+				this.previousCheckOutput !== undefined &&
+				compareCheckProgress(this.previousCheckOutput, verdict.output) ===
+					"worse"
+			) {
+				moved = false;
+			}
 			kept = verdict.passed;
 			evidence = verdict.output;
 			if (verdict.passed) {

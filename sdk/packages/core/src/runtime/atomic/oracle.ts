@@ -113,6 +113,8 @@ export interface OracleVerdict {
 	output: string;
 	/** Set when the oracle exceeded its budget: an unfinished run is not a pass. */
 	timedOut: boolean;
+	/** The signal that stopped it, when that was not the timeout. */
+	signal?: string;
 	/**
 	 * Set when the command succeeded but its output did not say the change did.
 	 * A different failure from a non-zero exit and reported as one, because "it
@@ -338,7 +340,10 @@ export async function discoverOracle(
 	if (pkg?.scripts) {
 		const runner = await detectNodeRunner(workspaceRoot);
 		for (const name of SCRIPT_PREFERENCE) {
-			if (typeof pkg.scripts[name] === "string") {
+			const script = pkg.scripts[name];
+			// npm's placeholder fails on purpose and judges nothing: chosen as the
+			// check, it failed every transaction whatever the change (B18).
+			if (typeof script === "string" && !isPlaceholderScript(script)) {
 				return {
 					label: `${runner} run ${name}`,
 					command: runner,
@@ -514,6 +519,18 @@ export async function runOracle(
 			env: spec.env,
 		});
 		const combined = `${stdout}${stderr}`;
+		// A pattern that does not compile judges nothing, and calling the result
+		// "does not match" sent the model after its output (B19).
+		const broken = invalidExpectPattern(oracle.expect);
+		if (broken) {
+			return {
+				passed: false,
+				exitCode: 0,
+				output: `${truncate(combined)}\n\nThe check ran and finished cleanly, but its pattern /${oracle.expect}/ is not a valid regular expression (${broken}), so its output cannot be judged. Nothing about your change is known from it: the pattern has to be fixed where the check is set.`,
+				timedOut: false,
+				unmatched: true,
+			};
+		}
 		const matched = outputSaysItPassed(oracle, combined);
 		return {
 			passed: matched,
@@ -536,7 +553,10 @@ export async function runOracle(
 			stdout?: string;
 			stderr?: string;
 		};
-		const timedOut = failure.killed === true || failure.signal === "SIGTERM";
+		// Killed by the timeout only when the runner killed it. Any SIGTERM was
+		// read as "still running after 120s", including a check that stopped
+		// itself or was stopped by something else.
+		const timedOut = failure.killed === true;
 		const started = typeof failure.code === "number";
 		const output = truncate(
 			`${failure.stdout ?? ""}${failure.stderr ?? ""}` ||
@@ -547,9 +567,63 @@ export async function runOracle(
 			exitCode: started ? (failure.code as number) : null,
 			output: timedOut
 				? `${output}\n\nThe oracle was still running after ${Math.round(timeoutMs / 1000)}s and was stopped. An unfinished check is not a pass.`
-				: output,
+				: failure.signal
+					? `${output}\n\nThe check was stopped by ${failure.signal} before it finished, not by its own failure. An unfinished check is not a pass, and it is not evidence that your change is wrong either.`
+					: output,
 			timedOut,
+			...(failure.signal && !timedOut ? { signal: failure.signal } : {}),
 		};
+	}
+}
+
+/**
+ * Why a check produced no verdict about the code, or nothing when it ran.
+ *
+ * A command that was not found (127) or could not be executed (126), one that
+ * never started, or one a signal stopped has said nothing about the change,
+ * and reporting it as "it FAILED, the defect is still there" sent the model
+ * after a defect the check never looked for (automaticum audit 2026-11-08,
+ * B20/B23).
+ */
+export function checkDidNotRun(verdict: OracleVerdict): string | undefined {
+	if (verdict.passed || verdict.timedOut || verdict.summary) {
+		return undefined;
+	}
+	if (verdict.signal) {
+		return `it was stopped by ${verdict.signal} before it finished`;
+	}
+	if (verdict.exitCode === 127) {
+		return "its command was not found (exit 127)";
+	}
+	if (verdict.exitCode === 126) {
+		return "its command could not be executed (exit 126)";
+	}
+	if (verdict.exitCode === null) {
+		return "it could not be started";
+	}
+	return undefined;
+}
+
+/** npm init's `test` script, and anything else that only echoes and exits. */
+function isPlaceholderScript(script: string): boolean {
+	return (
+		/no test specified/i.test(script) ||
+		/^\s*echo\b[^;&|]*(?:(?:&&|;)\s*exit\s+\d+\s*)?$/i.test(script)
+	);
+}
+
+/** Why a check's pattern cannot be used, or nothing when it compiles. */
+export function invalidExpectPattern(
+	expect: string | undefined,
+): string | undefined {
+	if (!expect) {
+		return undefined;
+	}
+	try {
+		new RegExp(expect, ORACLE_EXPECT_FLAGS);
+		return undefined;
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
 	}
 }
 

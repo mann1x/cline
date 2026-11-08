@@ -7,7 +7,12 @@ import {
 } from "./base-revision-reads";
 import { withCheckFirstEdits } from "./check-first-edits";
 import type { RevisionLog } from "./file-revisions";
-import { discoverOracle, type Oracle, type OracleVerdict } from "./oracle";
+import {
+	checkDidNotRun,
+	discoverOracle,
+	type Oracle,
+	type OracleVerdict,
+} from "./oracle";
 import { withPlanCapture } from "./plan-capture";
 import { readPlan } from "./plan-text";
 import { createPlanTool } from "./plan-tool";
@@ -721,6 +726,9 @@ export async function createAtomicProtocolSession(
 							check: {
 								label: controller.oracle?.label ?? "the check",
 								...(unfixed.output ? { output: unfixed.output } : {}),
+								...(checkDidNotRun(unfixed)
+									? { notRun: checkDidNotRun(unfixed) }
+									: {}),
 							},
 						}
 					: {}),
@@ -805,6 +813,9 @@ export async function createAtomicProtocolSession(
 									check: {
 										label: controller.oracle?.label ?? "the check",
 										...(unfixed.output ? { output: unfixed.output } : {}),
+										...(checkDidNotRun(unfixed)
+											? { notRun: checkDidNotRun(unfixed) }
+											: {}),
 									},
 								}
 							: {}),

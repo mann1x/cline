@@ -507,3 +507,54 @@ describe("a check run through a launcher", () => {
 		});
 	});
 });
+
+// automaticum audit 2026-11-08: B18, B19 and the SIGTERM minor.
+describe("oracle audit 2026-11-08", () => {
+	it("does not choose npm's placeholder test script (B18)", async () => {
+		await withWorkspace(
+			{
+				"package.json": JSON.stringify({
+					scripts: {
+						test: 'echo "Error: no test specified" && exit 1',
+						build: "tsc -p .",
+					},
+				}),
+			},
+			async (root) => {
+				const oracle = await discoverCommandOracle(root);
+				expect(oracle?.args).toEqual(["run", "build"]);
+			},
+		);
+	});
+
+	it.runIf(process.platform !== "win32")(
+		"names a pattern that does not compile instead of 'does not match' (B19)",
+		async () => {
+			await withWorkspace({}, async (root) => {
+				const oracle = await discoverCommandOracle(root, {
+					manual: "echo all good",
+					expect: "all (good",
+				});
+				const verdict = await runOracle(oracle as Oracle);
+				expect(verdict.passed).toBe(false);
+				expect(verdict.output).toContain("is not a valid regular expression");
+				expect(verdict.output).not.toContain("does not match");
+			});
+		},
+	);
+
+	it.runIf(process.platform !== "win32")(
+		"does not call a check that stopped itself with SIGTERM a timeout",
+		async () => {
+			await withWorkspace({}, async (root) => {
+				const oracle = await discoverCommandOracle(root, {
+					manual: "kill -TERM $$",
+				});
+				const verdict = await runOracle(oracle as Oracle);
+				expect(verdict.timedOut).toBe(false);
+				expect(verdict.signal).toBe("SIGTERM");
+				expect(verdict.output).not.toContain("still running after");
+			});
+		},
+	);
+});

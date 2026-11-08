@@ -145,7 +145,7 @@ describe("the line a transaction ends on", () => {
 				output: "",
 				timedOut: false,
 			},
-			expected: "could not be run at all",
+			expected: "it could not be started",
 		},
 	])("distinguishes $name", ({ verdict, expected }) => {
 		const line = describeVerdict(1, false, "oracle", verdict);
@@ -386,7 +386,7 @@ describe("buildEmptyAttemptPrompt", () => {
 
 		expect(text).toMatch(/old_text/);
 		expect(text).toMatch(/line range/i);
-		expect(text).toMatch(/linter/i);
+		expect(text).toMatch(/check_file/);
 	});
 });
 
@@ -459,7 +459,7 @@ describe("the notice sent when the user disengages mid-run", () => {
 		// The receipts are forgotten mechanically, so the next edit IS refused.
 		// Unexplained, that refusal reads as a bug and gets retried.
 		expect(notice).toContain("will be refused");
-		expect(notice).toContain("Do not simply make the same change again");
+		expect(notice).toContain("Before making the same change again");
 	});
 
 	it("counts one restored file in the singular", () => {
@@ -529,5 +529,46 @@ describe("what the rules say about undoing one edit", () => {
 		expect(prompt).toContain("numbered as you make it");
 		expect(prompt).toContain('"last"');
 		expect(prompt).toContain("restore_file");
+	});
+});
+
+// automaticum audit 2026-11-08, B20/B23: a check that never ran said nothing
+// about the defect.
+describe("a check that did not run to a verdict", () => {
+	it("names a missing command instead of calling it a failure", () => {
+		const line = describeVerdict(1, false, "oracle", {
+			passed: false,
+			exitCode: 127,
+			output: "sh: 1: npx: not found",
+			timedOut: false,
+		});
+		expect(line).toContain("its command was not found (exit 127)");
+		expect(line).not.toContain("the check failed");
+	});
+
+	it("names a signal instead of 'could not be run at all'", () => {
+		const line = describeVerdict(1, false, "oracle", {
+			passed: false,
+			exitCode: null,
+			output: "",
+			timedOut: false,
+			signal: "SIGKILL",
+		});
+		expect(line).toContain("stopped by SIGKILL");
+	});
+
+	it("does not tell the model the defect is still there", () => {
+		const prompt = buildEmptyAttemptPrompt({
+			transaction: 1,
+			maxChanges: 6,
+			maxTransactions: 6,
+			check: {
+				label: "npm test",
+				output: "not found",
+				notRun: "its command was not found (exit 127)",
+			},
+		});
+		expect(prompt).not.toContain("it FAILED");
+		expect(prompt).toContain("did not run to a verdict");
 	});
 });
