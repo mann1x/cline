@@ -11,6 +11,8 @@
  * `SessionRuntime` installs as a `beforeTool` hook per §3.2.3.
  */
 
+import { statSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import type { LoopDetectionConfig } from "@cline/shared";
 
 // =============================================================================
@@ -225,6 +227,15 @@ export function resetLoopDetectionState(state: LoopDetectionState): void {
  * `path`, `file_path`, `paths` and the `path` of each of `files`.
  */
 function namedPaths(input: unknown): string[] {
+	return [
+		...new Set(
+			spelledPaths(input).map((path) => path.replace(/\\/g, "/").toLowerCase()),
+		),
+	];
+}
+
+/** The same paths as {@link namedPaths}, as written: for the filesystem. */
+function spelledPaths(input: unknown): string[] {
 	if (!input || typeof input !== "object") return [];
 	const held = input as Record<string, unknown>;
 	const found: unknown[] = [held.path, held.file_path];
@@ -238,15 +249,28 @@ function namedPaths(input: unknown): string[] {
 			);
 		}
 	}
-	return [
-		...new Set(
-			found
-				.filter(
-					(path): path is string => typeof path === "string" && path !== "",
-				)
-				.map((path) => path.replace(/\\/g, "/").toLowerCase()),
-		),
-	];
+	return found.filter(
+		(path): path is string => typeof path === "string" && path !== "",
+	);
+}
+
+/**
+ * What the files a call names look like now: size and modification time, or
+ * "missing". A verdict on a call is a verdict on those files as they were;
+ * once they change it no longer holds.
+ */
+function stampFiles(paths: readonly string[], root: string): string {
+	return paths
+		.map((spelled) => {
+			const full = isAbsolute(spelled) ? spelled : resolve(root, spelled);
+			try {
+				const stat = statSync(full);
+				return `${full}:${stat.size}:${stat.mtimeMs}`;
+			} catch {
+				return `${full}:missing`;
+			}
+		})
+		.join("\u0000");
 }
 
 function sortKeys(value: unknown): unknown {
@@ -533,12 +557,35 @@ const CYCLE_HARD_LIMIT = 6;
 export class LoopDetectionTracker {
 	private readonly config: LoopDetectionConfig;
 	private readonly state: LoopDetectionState = createLoopDetectionState();
+	/** Where relative paths in a call resolve, to see whether they changed. */
+	private readonly root: string | undefined;
+	/**
+	 * The files a failed or no-op call named, as they were when it was judged.
+	 * The verdicts said "nothing has changed, so neither will the result"; a
+	 * write the tracker never sees -- a shell `sed -i`, a rollback, the user --
+	 * made that false, and the call that would now work was stopped.
+	 */
+	private readonly stamps = new Map<string, string>();
+	private pendingSpelled: string[] = [];
 
-	constructor(config?: Partial<LoopDetectionConfig>) {
+	constructor(
+		config?: Partial<LoopDetectionConfig>,
+		options: { root?: string } = {},
+	) {
 		this.config = {
 			softThreshold: config?.softThreshold ?? DEFAULT_CONFIG.softThreshold,
 			hardThreshold: config?.hardThreshold ?? DEFAULT_CONFIG.hardThreshold,
 		};
+		this.root = options.root;
+	}
+
+	/** Drop what was concluded about one call, so it is judged afresh. */
+	private forgetVerdicts(key: string): void {
+		this.state.barrenCounts.delete(key);
+		this.state.futileKeys.delete(key);
+		this.state.settledKeys.delete(key);
+		this.state.futileStrikes.delete(key);
+		this.stamps.delete(key);
 	}
 
 	inspect(call: LoopDetectionCall): LoopDetectionVerdict {
@@ -561,6 +608,15 @@ export class LoopDetectionTracker {
 		this.state.pendingName = call.name;
 		const paths = namedPaths(call.input);
 		if (paths.length > 0) this.state.keyPaths.set(key, paths);
+		this.pendingSpelled = spelledPaths(call.input);
+		const stamped = this.stamps.get(key);
+		if (
+			stamped !== undefined &&
+			this.root !== undefined &&
+			stampFiles(this.pendingSpelled, this.root) !== stamped
+		) {
+			this.forgetVerdicts(key);
+		}
 
 		// A call the tool has already declared a no-op is on a countdown. The
 		// barren counter is for calls that fail for reasons that might change — a
@@ -734,6 +790,7 @@ ${steeringFor(cycle.repeats, call.name)}`,
 			}
 			this.state.barrenCounts.delete(key);
 			this.state.futileKeys.delete(key);
+			this.stamps.delete(key);
 			// The warning is spent with the episode it belonged to: if this
 			// payload goes futile again later, that is a new situation and gets
 			// its own warning before the stop.
@@ -741,6 +798,9 @@ ${steeringFor(cycle.repeats, call.name)}`,
 			this.state.futileStrikes.delete(key);
 			this.state.appliedKeys.add(key);
 			return;
+		}
+		if (this.root !== undefined && this.pendingSpelled.length > 0) {
+			this.stamps.set(key, stampFiles(this.pendingSpelled, this.root));
 		}
 		if (futile) {
 			// Recorded rather than counted: the next identical call is stopped on
@@ -757,5 +817,6 @@ ${steeringFor(cycle.repeats, call.name)}`,
 
 	reset(): void {
 		resetLoopDetectionState(this.state);
+		this.stamps.clear();
 	}
 }

@@ -17,6 +17,7 @@ function snapshotOf(files: Record<string, string>): Snapshot {
 	return {
 		root: "/work",
 		skipped: [],
+		skippedStats: new Map(),
 		files: new Map(
 			Object.entries(files).map(([path, body]) => [
 				path,
@@ -291,6 +292,7 @@ describe("createEscalationSession", () => {
 			removed: [],
 			recreated: [],
 			uncovered: [],
+			unrestored: [],
 		}));
 		const first = snapshotOf({ "/work/a.js": "before" });
 		const { call, session } = build({

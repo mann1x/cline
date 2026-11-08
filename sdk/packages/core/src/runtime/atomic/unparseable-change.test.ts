@@ -91,6 +91,26 @@ describe("naming the file the check could not run", () => {
 		expect(notice).not.toContain("one edit that balances it");
 	});
 
+	// The count is not a parser. TypeScript is never parsed here, so a count
+	// that flags a .ts line must not be reported as the file not parsing.
+	it("does not say a file fails to parse on the bracket count alone", () => {
+		const notice = describeUnparseableChange(
+			[
+				{
+					path: "/w/src/game.ts",
+					text: "export function f(): void {\n\tif (a) { b(); }}\n}\nconst x = 1;\n",
+				},
+			],
+			"/w",
+		);
+
+		expect(notice).not.toBeNull();
+		expect(notice).not.toContain("does not parse");
+		expect(notice).not.toContain("never ran your change");
+		expect(notice).toContain("src/game.ts");
+		expect(notice).toContain("line 3");
+	});
+
 	it("says nothing when the changed files parse", () => {
 		expect(
 			describeUnparseableChange(
@@ -156,6 +176,33 @@ describe("a transaction discarded over a file that does not parse", () => {
 			await expect(
 				fs.readFile(path.join(root, "game.js"), "utf8"),
 			).resolves.toBe("function dDec(){ return 1; }\n");
+		});
+	});
+});
+
+// "Your files are back as they were" is false for a file the snapshot could
+// not hold, and the model would build on a file it believes was reverted.
+describe("a discard that could not put a file back", () => {
+	it("names the file it left as the transaction left it", async () => {
+		await withWorkspace(async (root) => {
+			await fs.writeFile(path.join(root, "level.dat"), "x".repeat(2000));
+			const controller = new TransactionController({
+				workspaceRoot: root,
+				maxChanges: 3,
+				maxTransactions: 6,
+				oracle: failingOracle(root, "AssertionError: expected 3 rows"),
+				snapshotLimits: { maxFileBytes: 1000 },
+			});
+			await controller.open();
+			await fs.writeFile(path.join(root, "level.dat"), "y".repeat(10));
+
+			const settled = await controller.settle({ account: "tried it" });
+
+			expect(settled.kept).toBe(false);
+			expect(settled.message).toContain("Not put back: level.dat");
+			await expect(
+				fs.readFile(path.join(root, "level.dat"), "utf8"),
+			).resolves.toBe("y".repeat(10));
 		});
 	});
 });

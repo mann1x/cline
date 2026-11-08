@@ -295,7 +295,7 @@ export function createRestoreFileTool(
 	// Restoring a file that already matches the base is not thrash, it is a
 	// model that has lost track of what it changed — and being told the file is
 	// already the original is the answer it was looking for.
-	let noOps = 0;
+	const noOpsByFile = new Map<string, { times: number; writes: number }>();
 
 	return createTool({
 		name: RESTORE_FILE_TOOL_NAME,
@@ -314,7 +314,7 @@ export function createRestoreFileTool(
 			if (transaction !== lastTransaction) {
 				lastTransaction = transaction;
 				spentIn = 0;
-				noOps = 0;
+				noOpsByFile.clear();
 			}
 			if (!snapshot && sessionRoot === undefined) {
 				return "No transaction is open, so there is nothing to put the file back to.";
@@ -329,7 +329,7 @@ export function createRestoreFileTool(
 				const writes = workRevisions(options.controller.revisions);
 				if (writes !== writesAtLastRestore) {
 					spentIn = 0;
-					noOps = 0;
+					noOpsByFile.clear();
 				}
 				writesAtLastRestore = writes;
 			}
@@ -489,14 +489,22 @@ export function createRestoreFileTool(
 			}
 
 			if (current?.equals(target)) {
-				noOps += 1;
+				// Per file, and only while nothing wrote to it: the answer below
+				// says "without it having changed in between" and "your edits
+				// are not landing". Counted across files and across writes, it
+				// told a model whose edit had landed (and been undone) otherwise.
+				const writes = log.revisions(lookup.absolutePath).length;
+				const previous = noOpsByFile.get(lookup.absolutePath);
+				const noOps =
+					previous && previous.writes === writes ? previous.times + 1 : 1;
+				noOpsByFile.set(lookup.absolutePath, { times: noOps, writes });
 				// Past the budget the tool stops answering. Not to punish the
 				// call -- it costs nothing on disk -- but because answering it
 				// is what kept the loop fed: the reply was reassuring, the next
 				// call was identical, and the transaction never moved.
 				if (noOps > MAX_NOOP_RESTORES_PER_TRANSACTION) {
 					return [
-						`\`${display}\` already matches ${targetLabel}. You have now asked to restore it ${noOps} times without it having changed in between, and this tool will not answer again for this file in this transaction — there is nothing here to undo.`,
+						`\`${display}\` already matches ${targetLabel}. You have now asked to restore it ${noOps} times without it having changed in between, and the answer will not change until the file does — there is nothing here to undo.`,
 						"",
 						"That is the answer to the question you keep asking: your edits are not landing. The file on disk is exactly what it was, so nothing you have done to it has taken effect.",
 						"",

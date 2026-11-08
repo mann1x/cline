@@ -436,6 +436,17 @@ async function runPageOracle(oracle: PageOracle): Promise<OracleVerdict> {
 	}
 
 	const result = checkPage(filePath, source, { frames: oracle.frames });
+	// Not run is not "did not run": the page may be fine, and the model must
+	// not go looking for a fault in it.
+	if (result.unchecked) {
+		return {
+			passed: false,
+			exitCode: null,
+			output: `${oracle.path}: ${result.error}`,
+			timedOut: false,
+			summary: `the check could not run ${oracle.path} (${result.error}), so nothing was verified.`,
+		};
+	}
 	if (result.ok) {
 		return {
 			passed: true,

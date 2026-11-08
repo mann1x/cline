@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Dirent } from "node:fs";
+import type { Dirent, Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { SCAN_IGNORED_DIRECTORIES } from "./oracle";
@@ -26,6 +26,17 @@ export interface Snapshot {
 	readonly root: string;
 	/** Files that existed but were too large to hold; never rolled back. */
 	readonly skipped: readonly string[];
+	/**
+	 * Size and modification time of each skipped file that could be statted,
+	 * so a restore can say which of them the transaction changed.
+	 */
+	readonly skippedStats: ReadonlyMap<string, SkippedStamp>;
+}
+
+/** Enough of a file's stat to tell that it changed. */
+export interface SkippedStamp {
+	readonly size: number;
+	readonly mtimeMs: number;
 }
 
 export interface SnapshotLimits {
@@ -67,6 +78,14 @@ export async function takeSnapshot(
 	const bounds = { ...DEFAULT_LIMITS, ...limits };
 	const files = new Map<string, { hash: string; body: Buffer }>();
 	const skipped: string[] = [];
+	const skippedStats = new Map<string, SkippedStamp>();
+	const skip = async (full: string, stat?: Stats) => {
+		skipped.push(full);
+		const known = stat ?? (await fs.lstat(full).catch(() => undefined));
+		if (known) {
+			skippedStats.set(full, { size: known.size, mtimeMs: known.mtimeMs });
+		}
+	};
 	let total = 0;
 
 	const walk = async (dir: string): Promise<void> => {
@@ -89,23 +108,23 @@ export async function takeSnapshot(
 			// one by writing its target's bytes over it would replace the link
 			// with a copy, which is a change of its own.
 			if (!entry.isFile()) {
-				skipped.push(full);
+				await skip(full);
 				continue;
 			}
 			if (files.size >= bounds.maxFiles || total >= bounds.maxTotalBytes) {
-				skipped.push(full);
+				await skip(full);
 				continue;
 			}
 			let body: Buffer;
 			try {
 				const stat = await fs.stat(full);
 				if (stat.size > bounds.maxFileBytes) {
-					skipped.push(full);
+					await skip(full, stat);
 					continue;
 				}
 				body = await fs.readFile(full);
 			} catch {
-				skipped.push(full);
+				await skip(full);
 				continue;
 			}
 			total += body.byteLength;
@@ -114,7 +133,7 @@ export async function takeSnapshot(
 	};
 
 	await walk(root);
-	return { files, root, skipped };
+	return { files, root, skipped, skippedStats };
 }
 
 export interface RestoreReport {
@@ -126,6 +145,11 @@ export interface RestoreReport {
 	recreated: string[];
 	/** Paths the snapshot never held, listed so nobody assumes they reverted. */
 	uncovered: string[];
+	/**
+	 * Of `uncovered`, the files the transaction changed or deleted: left as the
+	 * transaction left them, because there was nothing to put back.
+	 */
+	unrestored: string[];
 }
 
 /**
@@ -145,9 +169,27 @@ export async function restoreSnapshot(
 		removed: [],
 		recreated: [],
 		uncovered: [...snapshot.skipped],
+		unrestored: [],
 	};
 
 	const now = await takeSnapshot(snapshot.root, limits);
+	// A skipped file existed when the transaction opened. Absent from `files`
+	// only because it was not held, it read as one the transaction created,
+	// and the rollback deleted it: a 4 MB file the transaction shrank, or a
+	// file past the 5,000-file cap once the transaction deleted others.
+	const existedAtOpen = new Set(snapshot.skipped);
+	for (const filePath of snapshot.skipped) {
+		const before = snapshot.skippedStats.get(filePath);
+		const after = await fs.lstat(filePath).catch(() => undefined);
+		if (
+			!after ||
+			!before ||
+			after.size !== before.size ||
+			after.mtimeMs !== before.mtimeMs
+		) {
+			report.unrestored.push(filePath);
+		}
+	}
 
 	for (const [filePath, before] of snapshot.files) {
 		const after = now.files.get(filePath);
@@ -164,7 +206,7 @@ export async function restoreSnapshot(
 	}
 
 	for (const filePath of now.files.keys()) {
-		if (!snapshot.files.has(filePath)) {
+		if (!snapshot.files.has(filePath) && !existedAtOpen.has(filePath)) {
 			await fs.rm(filePath, { force: true });
 			report.removed.push(filePath);
 		}
@@ -207,8 +249,13 @@ export async function snapshotIsClean(
 	limits: SnapshotLimits = {},
 ): Promise<boolean> {
 	const now = await takeSnapshot(snapshot.root, limits);
-	if (now.files.size !== snapshot.files.size) {
-		return false;
+	// A file the open skipped but this walk held is not new; only one that did
+	// not exist at the open is.
+	const skipped = new Set(snapshot.skipped);
+	for (const filePath of now.files.keys()) {
+		if (!snapshot.files.has(filePath) && !skipped.has(filePath)) {
+			return false;
+		}
 	}
 	for (const [filePath, before] of snapshot.files) {
 		if (now.files.get(filePath)?.hash !== before.hash) {

@@ -26,6 +26,7 @@ function snapshotOf(
 	return {
 		root: ROOT,
 		skipped,
+		skippedStats: new Map(),
 		files: new Map(
 			Object.entries(files).map(([p, text]) => [
 				p,

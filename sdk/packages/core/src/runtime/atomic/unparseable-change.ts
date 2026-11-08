@@ -92,9 +92,16 @@ export function describeUnparseableChange(
 			continue;
 		}
 		const name = path.relative(root, file.path) || file.path;
-		const engine = refused === undefined ? "" : ` ${refused}`;
+		// "Does not parse" only when a parser said so. The bracket count alone
+		// used to say it too, about TypeScript the count misread and about files
+		// that ran: the check's syntax error may be another file's, and a count
+		// is a count. Then the count's lines are offered as what it is.
+		const lead =
+			refused === undefined
+				? `The check reported a syntax error. Nothing here parses ${name} to confirm it is this file, but its brackets do not count up on these lines:`
+				: `The check never ran your change: ${name} does not parse. ${refused} What it measured was a file the engine refuses, so the verdict above says nothing about whether your fix was right.`;
 		return [
-			`The check never ran your change: ${name} does not parse.${engine} What it measured was a file the engine refuses, so the verdict above says nothing about whether your fix was right.`,
+			lead,
 			...(faults.length > 0 ? ["", ...faults] : []),
 			"",
 			"That fault goes back with the rest of the work. `check_file` on a file you have just edited catches it before a transaction is spent on it.",

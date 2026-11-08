@@ -147,3 +147,63 @@ describe("the undo a transaction is built on", () => {
 		});
 	});
 });
+
+describe("files the snapshot could not hold", () => {
+	// The rollback took any file it did not hold for one the transaction had
+	// created, and deleted it: here a file over the size limit that the
+	// transaction shrank under it. The file existed before the transaction.
+	it("never deletes a file that existed when the transaction opened", async () => {
+		await withWorkspace(
+			{ "big.dat": "x".repeat(2000), "a.txt": "a" },
+			async (root) => {
+				const limits = { maxFileBytes: 1000 };
+				const snapshot = await takeSnapshot(root, limits);
+				expect(snapshot.skipped).toEqual([path.join(root, "big.dat")]);
+
+				await fs.writeFile(path.join(root, "big.dat"), "small now", "utf8");
+				const report = await restoreSnapshot(snapshot, limits);
+
+				expect(report.removed).toEqual([]);
+				expect(report.unrestored).toEqual([path.join(root, "big.dat")]);
+				await expect(
+					fs.readFile(path.join(root, "big.dat"), "utf8"),
+				).resolves.toBe("small now");
+			},
+		);
+	});
+
+	// The same through the file-count cap: deleting one held file lets a file
+	// the open walked past fit, and it was removed as if new.
+	it("keeps a file past the file cap when the transaction deleted another", async () => {
+		await withWorkspace(
+			{ "a.txt": "a", "b.txt": "b", "c.txt": "c" },
+			async (root) => {
+				const limits = { maxFiles: 2 };
+				const snapshot = await takeSnapshot(root, limits);
+				const [past] = snapshot.skipped;
+				expect(past).toBeDefined();
+				const held = [...snapshot.files.keys()][0];
+
+				await fs.rm(held);
+				const report = await restoreSnapshot(snapshot, limits);
+
+				expect(report.removed).toEqual([]);
+				expect(report.unrestored).toEqual([]);
+				await expect(fs.readFile(past, "utf8")).resolves.toBeDefined();
+				await expect(fs.readFile(held, "utf8")).resolves.toBeDefined();
+			},
+		);
+	});
+
+	it("does not call a skipped file the transaction left alone unrestored", async () => {
+		await withWorkspace({ "big.dat": "x".repeat(2000) }, async (root) => {
+			const limits = { maxFileBytes: 1000 };
+			const snapshot = await takeSnapshot(root, limits);
+
+			const report = await restoreSnapshot(snapshot, limits);
+
+			expect(report.unrestored).toEqual([]);
+			expect(await snapshotIsClean(snapshot, limits)).toBe(true);
+		});
+	});
+});

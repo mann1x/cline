@@ -290,6 +290,31 @@ describe("a page oracle", () => {
 	const WORKING =
 		"<script>requestAnimationFrame(function loop(){ requestAnimationFrame(loop); });</script>";
 
+	// A page this check cannot run has not been judged, so the summary must
+	// not say the page failed: the model would go looking for a fault in it.
+	it("says nothing was verified for a module page, not that it did not run", async () => {
+		await withWorkspace(
+			{
+				"game.html":
+					'<script type="module">import { start } from "./game.js"; start();</script>',
+			},
+			async (root) => {
+				const verdict = await runOracle({
+					kind: "page",
+					label: "load game.html",
+					path: "game.html",
+					cwd: root,
+					reason: "the task is about this page",
+				});
+
+				expect(verdict.passed).toBe(false);
+				expect(verdict.exitCode).toBeNull();
+				expect(verdict.summary).toContain("nothing was verified");
+				expect(verdict.summary).not.toContain("did not run");
+			},
+		);
+	});
+
 	// The point of this kind: it needs nothing installed, so it is a real
 	// verdict in exactly the workspaces where `discoverOracle` finds none.
 	it("passes a page that loads and runs", async () => {

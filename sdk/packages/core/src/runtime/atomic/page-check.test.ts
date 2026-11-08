@@ -110,4 +110,73 @@ requestAnimationFrame(function loop(){ ctx.fillRect(0, 0, w, 1); requestAnimatio
 
 		expect(checkPage("game.html", page, { frames: 3 }).ok).toBe(true);
 	});
+	// Each of these runs in a browser, and each was failed here: the stub had
+	// no window listeners, ran an interval loop as nothing, and executed every
+	// <script> block as JavaScript. A false failure sends the model to fix code
+	// that works.
+	describe("pages a browser runs", () => {
+		const LOOP =
+			"let ticks = 0; function loop(){ ticks += 1; requestAnimationFrame(loop); }";
+
+		it("starts a page from window.onload", () => {
+			const page = `<script>${LOOP} window.onload = () => loop();</script>`;
+			expect(checkPage("game.html", page, { frames: 3 }).ok).toBe(true);
+		});
+
+		it("starts a page from a load listener on window", () => {
+			const page = `<script>${LOOP} window.addEventListener("load", () => loop());</script>`;
+			expect(checkPage("game.html", page, { frames: 3 }).ok).toBe(true);
+		});
+
+		it("starts a page from DOMContentLoaded", () => {
+			const page = `<script>${LOOP} document.addEventListener("DOMContentLoaded", loop);</script>`;
+			expect(checkPage("game.html", page, { frames: 3 }).ok).toBe(true);
+		});
+
+		it("runs a game loop driven by setInterval", () => {
+			const page = `<script>let ticks = 0; setInterval(() => { ticks += 1; }, 16);</script>`;
+			const result = checkPage("game.html", page, { frames: 4 });
+			expect(result.ok).toBe(true);
+			expect(result.framesRun).toBe(4);
+		});
+
+		it("leaves a JSON data block alone", () => {
+			const page = `<script type="application/json" id="level">{"rows": 3}</script>${WORKING}`;
+			expect(checkPage("game.html", page, { frames: 2 }).ok).toBe(true);
+		});
+
+		it("still fails a page that throws while starting from onload", () => {
+			const page = `<script>window.onload = () => { startLevel(); };</script>`;
+			const result = checkPage("game.html", page);
+			expect(result.ok).toBe(false);
+			expect(result.unchecked).toBeUndefined();
+			expect(result.error).toContain("load: ReferenceError");
+		});
+
+		it("still fails a page whose interval throws", () => {
+			const page = `<script>setInterval(() => { player.x += 1; }, 16);</script>`;
+			const result = checkPage("game.html", page);
+			expect(result.ok).toBe(false);
+			expect(result.error).toContain("frame 0: ReferenceError");
+		});
+	});
+
+	// Not run is not failed: neither verdict may be claimed about it.
+	describe("module scripts", () => {
+		it("says a module page was not checked rather than that it failed", () => {
+			const page = `<script type="module">import { start } from "./game.js"; start();</script>`;
+			const result = checkPage("game.html", page);
+			expect(result.ok).toBe(false);
+			expect(result.unchecked).toBe(true);
+			expect(result.error).toContain("cannot run");
+		});
+
+		it("says the same of an ES module script file", () => {
+			const result = checkPage(
+				"game.js",
+				'import { a } from "./a.js";\nexport const b = a;\n',
+			);
+			expect(result.unchecked).toBe(true);
+		});
+	});
 });

@@ -191,13 +191,53 @@ describe("putting one file back", () => {
 			}
 			const said = await tool.execute({ path: "game.html" }, context);
 
-			expect(said).toContain("will not answer again");
+			expect(said).toContain("will not change until the file does");
 			// The diagnosis, not just the refusal: the file being untouched is
 			// evidence about the model's edits, and naming it is the whole value.
 			expect(said).toContain("your edits are not landing");
 			// Never an invitation to stop — that was the failure mode of the
 			// empty-transaction message this replaces the shape of.
 			expect(said).not.toContain("say so");
+		});
+	});
+
+	// The capped answer says the file has not changed in between and that the
+	// edits are not landing. Counted across files, or across a write that did
+	// land, both were false.
+	it("counts no-ops per file, so other files' no-ops do not cap this one", async () => {
+		await withWorkspace(
+			{ "a.js": "a", "b.js": "b", "c.js": "c", "game.html": "original" },
+			async (root) => {
+				controller.pending = await takeSnapshot(root);
+				const tool = createRestoreFileTool({ controller });
+
+				for (const name of ["a.js", "b.js", "c.js", "a.js"]) {
+					await tool.execute({ path: name }, context);
+				}
+				const said = await tool.execute({ path: "game.html" }, context);
+
+				expect(said).toContain("already exactly the original");
+				expect(said).not.toContain("not landing");
+			},
+		);
+	});
+
+	it("starts the count again once the file has been written", async () => {
+		await withWorkspace({ "game.html": "original" }, async (root) => {
+			controller.pending = await takeSnapshot(root);
+			const tool = createRestoreFileTool({ controller });
+			const file = path.join(root, "game.html");
+
+			for (let i = 0; i < MAX_NOOP_RESTORES_PER_TRANSACTION; i += 1) {
+				await tool.execute({ path: "game.html" }, context);
+			}
+			// An edit that landed, then one that put the text back.
+			controller.revisions.record(file, Buffer.from("edited"), "editor");
+			controller.revisions.record(file, Buffer.from("original"), "editor");
+			const said = await tool.execute({ path: "game.html" }, context);
+
+			expect(said).toContain("already exactly the original");
+			expect(said).not.toContain("not landing");
 		});
 	});
 

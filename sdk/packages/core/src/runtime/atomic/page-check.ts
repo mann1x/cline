@@ -33,6 +33,8 @@ export interface PageCheckResult {
 	framesRun: number;
 	/** Whether the page had to be told to start rather than starting itself. */
 	started: boolean;
+	/** The page was not run at all, so `ok: false` judges nothing about it. */
+	unchecked?: boolean;
 }
 
 /** Everything a canvas context is asked to do, swallowed. */
@@ -156,23 +158,62 @@ function audioNode(): unknown {
  * an edit that dropped the trailing tags. Reading the second as the first cost
  * two investigations.
  */
-function scriptBodies(html: string): { blocks: string[]; error?: string } {
-	const blocks = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)]
-		.map((match) => match[1])
-		.filter((body) => body.trim() !== "");
-	if (blocks.length > 0) {
-		return { blocks };
+function scriptBodies(html: string): {
+	blocks: string[];
+	modules: number;
+	error?: string;
+} {
+	// A browser runs a block as a classic script only when its type is absent
+	// or a JavaScript type. Running a JSON, template or importmap block failed
+	// a working page with "SyntaxError: Unexpected token ':'"; a module block is
+	// counted, because it cannot be run here at all.
+	let modules = 0;
+	let others = 0;
+	const blocks: string[] = [];
+	for (const match of html.matchAll(
+		/<script\b([^>]*)>([\s\S]*?)<\/script>/gi,
+	)) {
+		const type = /\btype\s*=\s*["']?([^"'\s>]+)/i
+			.exec(match[1])?.[1]
+			.toLowerCase();
+		// A browser ignores the body of a `src=` script.
+		if (match[2].trim() === "" || /\bsrc\s*=/i.test(match[1])) {
+			continue;
+		}
+		if (type === "module") {
+			modules += 1;
+		} else if (type === undefined || CLASSIC_TYPES.has(type)) {
+			blocks.push(match[2]);
+		} else {
+			others += 1;
+		}
+	}
+	if (blocks.length > 0 || modules > 0 || others > 0) {
+		return { blocks, modules };
 	}
 	const opened = (html.match(/<script\b[^>]*>/gi) ?? []).length;
 	const closed = (html.match(/<\/script>/gi) ?? []).length;
 	return {
 		blocks,
+		modules,
 		error:
 			opened > closed
 				? `unclosed <script> (${opened} opened, ${closed} closed)`
 				: "no script blocks",
 	};
 }
+
+/** The `type` values a browser runs as a classic script. */
+const CLASSIC_TYPES = new Set([
+	"",
+	"text/javascript",
+	"application/javascript",
+	"application/ecmascript",
+	"text/ecmascript",
+]);
+
+/** A top-level `import` or `export`: module code, which `vm.Script` refuses. */
+const MODULE_SYNTAX = /^[ \t]*(import\s*[\w{*"'$]|export\s)/m;
 
 function describe(error: unknown, prefix = ""): string {
 	const named =
@@ -197,11 +238,31 @@ export function checkPage(
 ): PageCheckResult {
 	const frames = options.frames ?? DEFAULT_PAGE_FRAMES;
 	const isPage = /\.html?$/i.test(filePath);
-	const { blocks, error: noScript } = isPage
+	const {
+		blocks,
+		modules,
+		error: noScript,
+	} = isPage
 		? scriptBodies(source)
-		: { blocks: [source], error: undefined };
+		: {
+				blocks: [source],
+				modules: MODULE_SYNTAX.test(source) ? 1 : 0,
+				error: undefined,
+			};
 	if (noScript) {
 		return { ok: false, error: noScript, framesRun: 0, started: false };
+	}
+	// Not run, so not judged: saying the page failed would send the model to
+	// fix code a browser runs, and saying it passed would keep a broken one.
+	if (modules > 0) {
+		return {
+			ok: false,
+			unchecked: true,
+			error:
+				'its scripts are ES modules (import/export or type="module"), which this check cannot run',
+			framesRun: 0,
+			started: false,
+		};
 	}
 
 	// Asked of a real parser before anything runs, because `vm` parses lazily
@@ -214,6 +275,25 @@ export function checkPage(
 
 	let pending: Array<(time: number) => void> = [];
 	let framesRun = 0;
+	// A `setInterval` loop is a game loop as much as `requestAnimationFrame`:
+	// stubbed to nothing, a page driven by one was failed for never scheduling
+	// a frame. Each live interval runs once per pumped frame.
+	const intervals = new Map<number, (time: number) => void>();
+	let nextInterval = 1;
+	// Load events, which a browser fires once the scripts have run. Swallowed,
+	// a page that starts in `window.onload` or a `load` listener never started.
+	const lifecycle: Array<{ event: string; callback: () => void }> = [];
+	const listen = (event: unknown, callback: unknown) => {
+		if (
+			(event === "load" || event === "DOMContentLoaded") &&
+			typeof callback === "function"
+		) {
+			lifecycle.push({
+				event: String(event),
+				callback: callback as () => void,
+			});
+		}
+	};
 
 	const elements = new Map<string, Record<string, unknown>>();
 	const getElementById = (id: string) => {
@@ -248,8 +328,9 @@ export function checkPage(
 				getElementById(String(selector).replace(/^[#.]/, "")),
 			querySelectorAll: () => [],
 			createElement: (tag: string) => element(tag),
-			addEventListener() {},
+			addEventListener: listen,
 			removeEventListener() {},
+			readyState: "loading",
 			body: element("body"),
 			documentElement: element("html"),
 		},
@@ -264,8 +345,19 @@ export function checkPage(
 			return 0;
 		},
 		clearTimeout() {},
-		setInterval: () => 0,
-		clearInterval() {},
+		setInterval: (callback: unknown) => {
+			if (typeof callback !== "function") {
+				return 0;
+			}
+			const id = nextInterval++;
+			intervals.set(id, callback as (time: number) => void);
+			return id;
+		},
+		clearInterval: (id: unknown) => {
+			intervals.delete(Number(id));
+		},
+		addEventListener: listen,
+		removeEventListener() {},
 		performance: { now: () => framesRun * 16.7 },
 		Date,
 		Math,
@@ -294,11 +386,37 @@ export function checkPage(
 		return { ok: false, error: describe(error), framesRun: 0, started: false };
 	}
 
+	// What a browser does next: the document is parsed, then the page loaded.
+	(sandbox.document as Record<string, unknown>).readyState = "complete";
+	const loaders = [
+		...lifecycle.filter((entry) => entry.event === "DOMContentLoaded"),
+		...lifecycle.filter((entry) => entry.event === "load"),
+	].map((entry) => entry.callback);
+	if (typeof sandbox.onload === "function") {
+		loaders.push(sandbox.onload as () => void);
+	}
+	try {
+		for (const loader of loaders) {
+			loader();
+		}
+	} catch (error) {
+		return {
+			ok: false,
+			error: describe(error, "load"),
+			framesRun: 0,
+			started: false,
+		};
+	}
+
 	// Some pages start themselves; if this one waits to be told, tell it.
 	let started = false;
 	try {
 		const start = sandbox.startGame ?? sandbox.start ?? sandbox.init;
-		if (typeof start === "function" && pending.length === 0) {
+		if (
+			typeof start === "function" &&
+			pending.length === 0 &&
+			intervals.size === 0
+		) {
 			(start as () => void)();
 			started = true;
 		}
@@ -315,7 +433,7 @@ export function checkPage(
 	// every time: whatever the page schedules, it is called `frames` times.
 	try {
 		while (framesRun < frames) {
-			const due = pending;
+			const due = [...pending, ...intervals.values()];
 			pending = [];
 			if (due.length === 0) {
 				break;

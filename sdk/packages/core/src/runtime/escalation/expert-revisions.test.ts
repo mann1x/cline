@@ -6,6 +6,7 @@ function snapshotOf(files: Record<string, string>, root = "/ws"): Snapshot {
 	return {
 		root,
 		skipped: [],
+		skippedStats: new Map(),
 		files: new Map(
 			Object.entries(files).map(([path, body]) => [
 				path,

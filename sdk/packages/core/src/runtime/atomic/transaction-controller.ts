@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import {
 	type FileStamp,
 	readFileStamp,
@@ -749,11 +750,31 @@ export class TransactionController {
 					snapshot.root,
 				)
 			: null;
-		const discarded = unparseable ? `${message}\n\n${unparseable}` : message;
-
 		const restore: RestoreReport = carried
-			? { restored: [], removed: [], recreated: [], uncovered: [] }
+			? {
+					restored: [],
+					removed: [],
+					recreated: [],
+					uncovered: [],
+					unrestored: [],
+				}
 			: await restoreSnapshot(snapshot, this.options.snapshotLimits);
+		// The verdict says the files are back. For a file the snapshot could not
+		// hold that is false, and the model would build on a file it believes
+		// was reverted.
+		const unrestored =
+			restore.unrestored.length > 0
+				? `Not put back: ${restore.unrestored
+						.map(
+							(filePath) => path.relative(snapshot.root, filePath) || filePath,
+						)
+						.join(
+							", ",
+						)} — too large or too many files for the snapshot to hold, so they stay as this transaction left them.`
+				: null;
+		const discarded = [message, unparseable, unrestored]
+			.filter(Boolean)
+			.join("\n\n");
 		for (const filePath of restore.uncovered) {
 			this.uncoveredPaths.add(filePath);
 		}

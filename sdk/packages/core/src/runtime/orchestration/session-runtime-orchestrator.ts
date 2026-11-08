@@ -774,7 +774,10 @@ export class SessionRuntime {
 			loopDetectionInput === false || loopDetectionInput === undefined
 				? undefined
 				: loopDetectionInput;
-		this.loopTracker = new LoopDetectionTracker(loopConfig);
+		const workspace = config.extensionContext?.workspace;
+		this.loopTracker = new LoopDetectionTracker(loopConfig, {
+			root: workspace?.cwd ?? workspace?.rootPath,
+		});
 	}
 
 	// -------------------------------------------------------------------

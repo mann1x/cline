@@ -731,3 +731,64 @@ describe("describeRepeatedCall", () => {
 		);
 	});
 });
+
+// "Failed every time, the arguments have not changed, so neither will the
+// result" is about the file as it was. A write the tracker does not see -- a
+// shell `sed -i`, a rollback, the user -- made it false, and the call that
+// would now have worked was stopped.
+describe("a verdict on a call whose file has since changed", () => {
+	async function withFile(run: (root: string) => Promise<void>) {
+		const fs = await import("node:fs/promises");
+		const os = await import("node:os");
+		const path = await import("node:path");
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "loop-stamp-"));
+		try {
+			await fs.writeFile(path.join(root, "game.js"), "let a = 1;\n");
+			await run(root);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	}
+	const failing = {
+		name: "editor",
+		input: { path: "game.js", old_text: "let b = 2;", new_text: "let b = 3;" },
+	};
+	const elsewhere = { name: "read_files", input: { paths: ["other.js"] } };
+
+	function failOnce(tracker: LoopDetectionTracker) {
+		const verdict = tracker.inspect(failing);
+		tracker.noteOutcome(false);
+		tracker.inspect(elsewhere);
+		tracker.noteOutcome(true);
+		return verdict;
+	}
+
+	it("judges the call afresh once the file it names has changed", async () => {
+		await withFile(async (root) => {
+			const fs = await import("node:fs/promises");
+			const tracker = new LoopDetectionTracker(undefined, { root });
+			for (let attempt = 0; attempt < 6; attempt += 1) {
+				failOnce(tracker);
+			}
+			expect(tracker.inspect(failing).kind).toBe("hard");
+			tracker.noteOutcome(false);
+
+			// The text the call looks for is put there by something else.
+			await fs.writeFile(`${root}/game.js`, "let a = 1;\nlet b = 2;\n");
+
+			expect(tracker.inspect(failing).kind).toBe("ok");
+		});
+	});
+
+	it("still stops the same call on the same file", async () => {
+		await withFile(async (root) => {
+			const tracker = new LoopDetectionTracker(undefined, { root });
+			for (let attempt = 0; attempt < 6; attempt += 1) {
+				failOnce(tracker);
+			}
+			const verdict = tracker.inspect(failing);
+			expect(verdict.kind).toBe("hard");
+			expect(verdict.message).toContain("failed every time");
+		});
+	});
+});
