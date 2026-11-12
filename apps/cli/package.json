@@ -95,7 +95,7 @@
 		"react-devtools-core": "^7.0.1",
 		"react-reconciler": "0.33.0",
 		"yaml": "^2.8.2",
-		"zod": "^4.1.11"
+		"zod": "^4.6.6"
 	},
 	"devDependencies": {
 		"@cline/core": "workspace:*",

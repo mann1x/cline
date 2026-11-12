@@ -196,6 +196,20 @@ export interface TransformSpec {
 	background?: string;
 }
 
+/**
+ * `planTransform`'s text, for the page to run.
+ *
+ * Bound to the name in the page (`var planTransform = (...)`) rather than
+ * pasted as a declaration: a minified build renames the function -- the
+ * published 4.100.276 bundle has it as `function BK(...)` -- and a page that
+ * then calls `planTransform(...)` throws "planTransform is not defined",
+ * draws nothing, and every `transform_image` call reports a valid image as
+ * unreadable. As an expression its own name no longer matters.
+ */
+export function planTransformSource(): string {
+	return planTransform.toString();
+}
+
 /** The page that draws one image at its new size. */
 export function buildTransformDocument(
 	sourceUrl: string,
@@ -220,7 +234,7 @@ canvas { display: block; }
 </head>
 <body><div id="${RENDER_ROOT_ID}"></div><img id="source" alt="" style="display:none" src="${sourceUrl.replace(/"/g, "%22")}">
 <script>
-${planTransform.toString()}
+var planTransform = (${planTransformSource()});
 addEventListener("load", function () {
 	var p = ${parameters};
 	var source = document.getElementById("source");

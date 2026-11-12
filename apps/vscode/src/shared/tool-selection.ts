@@ -92,14 +92,14 @@ export const SELECTABLE_TOOLS: readonly SelectableTool[] = [
 		name: "read_files",
 		label: "read_files",
 		summary: "Reads files, several at once, with line ranges and revisions.",
-		tokens: 947,
+		tokens: 1019,
 		group: "read",
 	},
 	{
 		name: "ask_lsp",
 		label: "ask_lsp",
 		summary: "Definitions, references and hovers from the language servers already installed.",
-		tokens: 921,
+		tokens: 978,
 		group: "check",
 	},
 	{
@@ -120,7 +120,7 @@ export const SELECTABLE_TOOLS: readonly SelectableTool[] = [
 		name: "browser",
 		label: "browser",
 		summary: "Drives a real Chrome: loads a page, clicks, types and reads the console.",
-		tokens: 645,
+		tokens: 693,
 		group: "other",
 	},
 	{
@@ -148,7 +148,7 @@ export const SELECTABLE_TOOLS: readonly SelectableTool[] = [
 		name: "run_commands",
 		label: "run_commands",
 		summary: "Runs shell commands in the workspace terminal.",
-		tokens: 529,
+		tokens: 603,
 		group: "other",
 	},
 	{
@@ -169,14 +169,14 @@ export const SELECTABLE_TOOLS: readonly SelectableTool[] = [
 		name: "list_files",
 		label: "list_files",
 		summary: "Lists a directory or finds files by glob, without a shell.",
-		tokens: 355,
+		tokens: 399,
 		group: "read",
 	},
 	{
 		name: "fetch_web_content",
 		label: "fetch_web_content",
 		summary: "Fetches a URL and returns its text.",
-		tokens: 264,
+		tokens: 320,
 		group: "read",
 	},
 ]

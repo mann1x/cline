@@ -348,7 +348,7 @@ Use it when you are unsure:
 - how complex the task is, before deciding to escalate or delegate it.
 
 Arguments:
-- `context` — the situation, in plain text: what the user asked, what you found, what you are deciding. Only what the questions need; unrelated text makes the answers worse.
+- `context` — the situation, in plain text: what the user asked, what you found, what you are deciding. Only what the questions need; unrelated text makes the answers worse. Jev reads at most 24,000 characters of it; past that the middle is cut, and the result says so.
 - `questions` — 1 to 10, all asked in one call. Each has an `id`, a `kind` and a `question`:
   - `yes_no` — a yes/no question. Returns the probability of yes.
   - `choice` — pick one of `options` (2 to 50). Include a "none of these" option when that is possible: a choice always picks something.

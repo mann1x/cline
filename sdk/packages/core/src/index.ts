@@ -1064,6 +1064,22 @@ export {
 	sendTurnWithActModeContinuation,
 	withSwitchToActModeTool,
 } from "@cline/shared";
+export {
+	type ChromeBrowserDriverOptions,
+	chromeCandidates,
+	createChromeBrowserDriver,
+	DEFAULT_CHROME_ARGS,
+	findChrome,
+	loadPuppeteer,
+	MissingChromeError,
+	type PuppeteerLoader,
+} from "./extensions/browser/chrome-browser-driver";
+export {
+	type ChromeRenderDriverOptions,
+	createChromeRenderDriver,
+	type RenderEnvironment,
+	renderWithChrome,
+} from "./extensions/browser/chrome-render-driver";
 export { resolveComposioToolsStatePath } from "./extensions/composio/composio-tools-extension";
 export {
 	createCappedThinkingNoteWriter,
@@ -1103,6 +1119,80 @@ export {
 	FULL_COMPACTION_SECTIONS,
 } from "./extensions/context/full-compaction";
 export { DEFAULT_REPLAY_COMPACTION_PROMPT } from "./extensions/context/replay-compaction";
+// The host halves every host without an editor needs, one copy for all of
+// them: language servers behind ask_lsp, check_file and the post-edit report;
+// diagnostics read from them (or from VS Code) and rendered one way; a Chrome
+// driven for browser, render_image and transform_image.
+export {
+	CHECK_SETTLE_BUDGET,
+	createDiagnosticsCheckFileTool,
+	DIAGNOSTICS_CHECK_FILE_TOOL_DESCRIPTION,
+	DIAGNOSTICS_CHECK_FILE_TOOL_INPUT_SCHEMA,
+	type DiagnosticsCheckFileToolOptions,
+	type LoadedDocument,
+	readRequestedPaths,
+} from "./extensions/diagnostics/check-file-diagnostics";
+export {
+	appendToOutput,
+	comparablePath,
+	createEditorDiagnosticsHooks,
+	type EditorDiagnosticsHooksOptions,
+	filterToPaths,
+	formatIntroducedDiagnostics,
+	isLintableFile,
+	isReportableDiagnostic,
+	MAX_DIAGNOSTICS_PER_FILE,
+	markRegressed,
+	REPORTED_SEVERITIES,
+	readSettledDiagnostics,
+	readTargetPaths,
+	renderFileDiagnostics,
+	SETTLE_POLL_MS,
+	SETTLE_TIMEOUT_MS,
+	samePath,
+	withoutPending,
+} from "./extensions/diagnostics/editor-diagnostics";
+export {
+	diagnosticsToProblemsString,
+	getNewDiagnostics,
+	sameDiagnostic,
+	singleFileDiagnosticsToProblemsString,
+} from "./extensions/diagnostics/render";
+export type {
+	DiagnosticPosition,
+	DiagnosticSeverityName,
+	HostDiagnostic,
+	HostFileDiagnostics,
+	ReadDiagnostics,
+	ReadText,
+	TouchDocument,
+} from "./extensions/diagnostics/types";
+export {
+	fileUri,
+	LspConnection,
+	type LspConnectionOptions,
+	type LspServerSpec,
+	normalizeLspDiagnostic,
+	serverName as lspServerName,
+	uriToPath,
+} from "./extensions/lsp/lsp-connection";
+export {
+	commandExists,
+	createLspHost,
+	DEFAULT_LSP_SERVERS,
+	findGlobalTypescriptLib,
+	findHtmlServerTypescriptGap,
+	HTML_SERVER_SETTINGS,
+	type HtmlServerTypescriptGap,
+	isServerInstalled,
+	LANGUAGE_BY_EXTENSION,
+	type LspHost,
+	type LspHostOptions,
+	type LspServerStatus,
+	languageIdFor,
+	repairHtmlServerTypescript,
+	workspaceLanguages,
+} from "./extensions/lsp/lsp-host";
 export {
 	ALL_DEFAULT_TOOL_NAMES,
 	type ApplyPatchExecutor,

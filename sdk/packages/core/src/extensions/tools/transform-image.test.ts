@@ -269,3 +269,48 @@ describe("transform_image", () => {
 		expect(h.written.size).toBe(0);
 	});
 });
+
+describe("the page's script in a minified build", () => {
+	// The published 4.100.276 bundle renamed planTransform (`function BK(`),
+	// and the page called it by its source name: "planTransform is not
+	// defined", nothing drawn, every transform_image call a failure. The
+	// script is run here as a minifier leaves it, not the source function.
+	it("draws when the function has lost its name", async () => {
+		const { runInNewContext } = await import("node:vm");
+		const html = buildTransformDocument("file:///x.png", {
+			width: 50,
+			fit: "inside",
+		});
+		const script = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1] ?? "";
+		const minified = script.replace(/function planTransform\(/, "function BK(");
+		expect(minified).toContain("function BK(");
+
+		let onLoad: (() => void) | undefined;
+		const drawn: unknown[] = [];
+		const canvas = {
+			width: 0,
+			height: 0,
+			style: {} as Record<string, string>,
+			getContext: () => ({
+				drawImage: (...args: unknown[]) => drawn.push(args),
+				fillRect: () => {},
+			}),
+		};
+		const root = { appendChild: (child: unknown) => drawn.push(child) };
+		runInNewContext(minified, {
+			addEventListener: (_event: string, handler: () => void) => {
+				onLoad = handler;
+			},
+			document: {
+				getElementById: (id: string) =>
+					id === "source" ? { naturalWidth: 100, naturalHeight: 40 } : root,
+				createElement: () => canvas,
+			},
+		});
+		expect(onLoad).toBeDefined();
+		onLoad?.();
+		expect(canvas.width).toBe(50);
+		expect(canvas.height).toBe(20);
+		expect(drawn).toContain(canvas);
+	});
+});

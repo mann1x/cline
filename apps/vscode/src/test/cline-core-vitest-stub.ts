@@ -70,6 +70,7 @@ export function resolveModelsRegistryPath(): string {
 export function ensureCustomProvidersLoadedSync(): void {}
 
 export { toClineCoreStartInput } from "../../../../sdk/packages/core/src/cline-core/start-input"
+export { renderWithChrome } from "../../../../sdk/packages/core/src/extensions/browser/chrome-render-driver"
 export {
 	getBuiltinPromptTemplateSource,
 	getBuiltinPromptTemplates,
@@ -113,6 +114,33 @@ export {
 // the same reason and guarded the same way.
 export { FORCE_FULL_FROM_COMPACTION } from "../../../../sdk/packages/core/src/extensions/context/compaction-shared"
 export {
+	createDiagnosticsCheckFileTool,
+	DIAGNOSTICS_CHECK_FILE_TOOL_DESCRIPTION,
+	DIAGNOSTICS_CHECK_FILE_TOOL_INPUT_SCHEMA,
+	readRequestedPaths,
+} from "../../../../sdk/packages/core/src/extensions/diagnostics/check-file-diagnostics"
+export {
+	appendToOutput,
+	comparablePath,
+	createEditorDiagnosticsHooks,
+	formatIntroducedDiagnostics,
+	isLintableFile,
+	isReportableDiagnostic,
+	MAX_DIAGNOSTICS_PER_FILE,
+	markRegressed,
+	readSettledDiagnostics,
+	readTargetPaths,
+	renderFileDiagnostics,
+	SETTLE_POLL_MS,
+	SETTLE_TIMEOUT_MS,
+	samePath,
+} from "../../../../sdk/packages/core/src/extensions/diagnostics/editor-diagnostics"
+export {
+	diagnosticsToProblemsString,
+	sameDiagnostic,
+	singleFileDiagnosticsToProblemsString,
+} from "../../../../sdk/packages/core/src/extensions/diagnostics/render"
+export {
 	ASK_LSP_OPERATIONS,
 	ASK_LSP_TOOL_DESCRIPTION,
 	ASK_LSP_TOOL_INPUT_SCHEMA,
@@ -139,6 +167,15 @@ export {
 	splitDataUrl,
 	toNavigableUrl,
 } from "../../../../sdk/packages/core/src/extensions/tools/browser"
+// The same for `check_file`, the post-edit report and the diagnostics
+// renderer: they moved into core so every host shares them, and the
+// extension's modules became adapters over these. Real code, so the
+// extension's suites test what ships rather than a fake.
+export {
+	buildLintCommand,
+	CHECK_FILE_TOOL_NAME,
+	LINT_COMMAND_FILE_PLACEHOLDER,
+} from "../../../../sdk/packages/core/src/extensions/tools/check-file"
 export { createCodeSearch } from "../../../../sdk/packages/core/src/extensions/tools/code-search"
 // Likewise, and for a sharper reason. The delimiter scan moved out of the
 // extension and into core, and the three extension files that call it were

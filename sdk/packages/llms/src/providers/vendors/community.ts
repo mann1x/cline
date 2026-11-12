@@ -4,7 +4,6 @@ import { accessSync, existsSync, constants as fsConstants } from "node:fs";
 import { createRequire } from "node:module";
 import { delimiter, dirname, join } from "node:path";
 import type { GatewayResolvedProviderConfig } from "@cline/shared";
-import { createDifyProvider } from "dify-ai-provider";
 import { resolveApiKey } from "../http";
 import type { ProviderFactoryResult } from "./types";
 
@@ -252,10 +251,31 @@ export async function createOpenCodeProviderModule(
 	};
 }
 
+/**
+ * `dify-ai-provider` is an optional peer: it pins `@ai-sdk/provider-utils`
+ * 3.x, which pulls an undici with open advisories into every install of this
+ * package, Dify user or not. Loaded only when a Dify model is asked for; the
+ * specifier is a literal so a host's bundler still includes it.
+ */
+async function importDifyProvider(): Promise<
+	typeof import("dify-ai-provider")
+> {
+	try {
+		return await import("dify-ai-provider");
+	} catch (error) {
+		throw new Error(
+			`The Dify provider needs the dify-ai-provider package, which is not installed: ${
+				error instanceof Error ? error.message : String(error)
+			}. Install dify-ai-provider beside @cline/llms.`,
+		);
+	}
+}
+
 export async function createDifyProviderModule(
 	config: GatewayResolvedProviderConfig,
 ): Promise<ProviderFactoryResult> {
 	const apiKey = await resolveApiKey(config);
+	const { createDifyProvider } = await importDifyProvider();
 	const provider = createDifyProvider({
 		baseURL: config.baseUrl,
 		headers: config.headers,
