@@ -105,4 +105,21 @@ describe("keeping the grant with the session", () => {
 		expect(hydrateWindowGrant("conv", { settings: { [WINDOW_GRANT_SETTINGS_KEY]: { granted: "big" } } })).toBe(false)
 		expect(getPolykvWindowGrant("conv")).toBeUndefined()
 	})
+
+	// 4.100.276 recorded an unbooked request's own peak as the grant (pandorum
+	// p5cee stored { granted: 114759 }). Every opencoti window a conversation
+	// booked answered an ask, so a grant without one is that peak.
+	it("skips an opencoti grant that names no ask", () => {
+		const record = { settings: { [WINDOW_GRANT_SETTINGS_KEY]: { granted: 114_759 } } }
+		expect(hydrateWindowGrant("conv", record, "opencoti")).toBe(false)
+		expect(getPolykvWindowGrant("conv")).toBeUndefined()
+		// xOllama grants a plain conversation's window without an ask of its own.
+		expect(hydrateWindowGrant("conv", record, "xollama")).toBe(true)
+	})
+
+	it("hydrates an opencoti grant that answered an ask", () => {
+		const record = { settings: { [WINDOW_GRANT_SETTINGS_KEY]: { granted: 163_840, asked: 262_144 } } }
+		expect(hydrateWindowGrant("conv", record, "opencoti")).toBe(true)
+		expect(getPolykvWindowGrant("conv")?.granted).toBe(163_840)
+	})
 })

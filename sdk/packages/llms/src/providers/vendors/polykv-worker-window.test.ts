@@ -125,10 +125,12 @@ describe("the window and booking a worker lives in", () => {
 		expect(polykvWorkerChargedTo("agent-a")).toBe(LEAD_ENGINE);
 	});
 
-	it("charges an unpooled worker to nobody, and still records its own window", async () => {
+	it("charges an unpooled worker to nobody, and takes no window from a turn that asked for none", async () => {
 		// Not shaped [system, 2 shared turns, task]: it runs as a session of
-		// its own, and its own session's window is the one it fills. (A swarm
-		// worker: a priority-0 one is refused back to the queue instead.)
+		// its own. (A swarm worker: a priority-0 one is refused back to the
+		// queue instead.) With no agent window it states no num_ctx, so the
+		// engine books this turn's own peak (opencoti bug-3843) and the header
+		// reports that -- no window to size the worker against.
 		const response = await send(
 			engine({ contextWindow: "65536" }),
 			"agent-b",
@@ -140,7 +142,7 @@ describe("the window and booking a worker lives in", () => {
 		);
 		expect(response.status).toBe(200);
 		expect(polykvWorkerChargedTo("agent-b")).toBeUndefined();
-		expect(getPolykvWindowGrant("agent-b")?.granted).toBe(65_536);
+		expect(getPolykvWindowGrant("agent-b")).toBeUndefined();
 	});
 
 	it("forgets the owner when the agent is released", async () => {

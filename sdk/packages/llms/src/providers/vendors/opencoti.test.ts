@@ -745,7 +745,10 @@ describe("what an admitted response says about the window", () => {
 		resetPolykvSessions();
 	});
 
-	async function admit(headers: Record<string, string>, numCtx = 262_144) {
+	async function admit(
+		headers: Record<string, string>,
+		numCtx: number | null = 262_144,
+	) {
 		const engine = windowEngine({
 			features: [GUARANTEED, ATOMIC],
 			replies: [ok({ choices: [] }, headers)],
@@ -754,7 +757,10 @@ describe("what an admitted response says about the window", () => {
 		const fetchImpl = createOpencotiFetch({
 			fetch: engine.fetch,
 			baseUrl: "http://x/v1",
-			request: { sessionId: "conv", numCtx },
+			request: {
+				sessionId: "conv",
+				...(numCtx !== null ? { numCtx } : {}),
+			},
 			onFacts: (facts) => seen.push(facts),
 		});
 		await fetchImpl("http://x/v1/chat/completions", {
@@ -783,6 +789,19 @@ describe("what an admitted response says about the window", () => {
 		await admit({});
 		expect(getPolykvWindowObservation("conv")?.granted).toBeUndefined();
 		expect(getPolykvGrantedWindow("conv")).toBe(163_840);
+	});
+
+	// Booking off: a request that states no num_ctx is booked its own private
+	// peak (opencoti bug-3843), and the header reports that peak. It is no
+	// window: taken as one, each turn sized against the last request's peak and
+	// shrank by the shared prefix (pandorum p5cee: 96,461 -> 69,895 -> 44,289
+	// -> 17,772), compacting toward a window nobody granted.
+	it("records no grant from a request that asked for no window", async () => {
+		await admit({ "x-context-window": "96461" }, null);
+		expect(getPolykvGrantedWindow("conv")).toBeUndefined();
+		expect(getPolykvWindowObservation("conv")?.granted).toBeUndefined();
+		await admit({ "x-context-window": "69895" }, null);
+		expect(getPolykvGrantedWindow("conv")).toBeUndefined();
 	});
 });
 

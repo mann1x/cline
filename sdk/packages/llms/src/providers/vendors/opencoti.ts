@@ -792,6 +792,16 @@ export function createOpencotiFetch(options: {
 		// Every admitted response, header or not: an absent `X-Context-Window`
 		// is an observation too -- "unknown" -- and must replace whatever the
 		// last response said rather than let it stand.
+		//
+		// Only a request that ASKED for a window was granted one. One that
+		// states no `num_ctx` (booking off) is booked its own private peak --
+		// prompt minus the shared prefix, plus its output cap, plus one
+		// (opencoti bug-3843) -- and the header reports that: what this one
+		// request needed, not a window the conversation holds. Taken as the
+		// grant it sized the next turn's cap and compaction against the last
+		// request's peak, which loses the shared prefix every turn: pandorum
+		// p5cee (2026-11-12) went 262,144 -> 96,461 -> 69,895 -> 44,289 ->
+		// 17,772 in five turns and compacted a 38k transcript toward 22.5k.
 		if (
 			sessionId !== undefined &&
 			response.ok &&
@@ -799,7 +809,9 @@ export function createOpencotiFetch(options: {
 		) {
 			noteWindowGrant(
 				sessionId,
-				numberOrUndefined(response.headers.get("x-context-window")),
+				outcome.asked !== undefined
+					? numberOrUndefined(response.headers.get("x-context-window"))
+					: undefined,
 				outcome.asked,
 				sharedAboveBudget,
 			);
@@ -1821,9 +1833,13 @@ function createWorkerFetch(options: {
 						// while the booking it lived in held a fraction of that (§9:
 						// compaction runs against the granted window). An unpooled turn
 						// that booked the node's window names its ask beside it.
+						// An unpooled turn that asked for nothing was booked its own
+						// peak (bug-3843), which is no window to size against.
 						noteWindowGrant(
 							options.worker.sessionId,
-							numberOrUndefined(response.headers.get("x-context-window")),
+							attach.poolId !== undefined || unpooledAsk !== undefined
+								? numberOrUndefined(response.headers.get("x-context-window"))
+								: undefined,
 							unpooledAsk,
 							undefined,
 						);

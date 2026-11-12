@@ -64,13 +64,22 @@ export function readStoredWindowGrant(metadata: Record<string, unknown> | undefi
  * Only when this process does not already hold one: an in-memory grant is the
  * newer truth, and the stored copy is what survives an extension restart.
  * Returns whether anything was hydrated.
+ *
+ * An opencoti grant that names no ask is skipped: every window a conversation
+ * booked there answered an ask, so a stored grant without one is a request's
+ * own peak that 4.100.276 and earlier recorded with booking off. Hydrated, it
+ * would bind compaction to it and, with booking turned on, become the exact
+ * window the resume rule asks for.
  */
-export function hydrateWindowGrant(sessionId: string, metadata: Record<string, unknown> | undefined): boolean {
+export function hydrateWindowGrant(sessionId: string, metadata: Record<string, unknown> | undefined, provider?: string): boolean {
 	if (getPolykvWindowGrant(sessionId)) {
 		return false
 	}
 	const stored = readStoredWindowGrant(metadata)
 	if (!stored) {
+		return false
+	}
+	if (provider?.toLowerCase() === "opencoti" && stored.asked === undefined) {
 		return false
 	}
 	recordPolykvGrantedWindow(sessionId, stored.granted, {

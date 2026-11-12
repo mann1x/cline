@@ -217,7 +217,11 @@ export class SdkSessionLifecycle {
 		if (requestedSessionId) {
 			try {
 				const existing = await sdkHost.get(requestedSessionId)
-				hydrateWindowGrant(requestedSessionId, existing?.metadata as Record<string, unknown> | undefined)
+				hydrateWindowGrant(
+					requestedSessionId,
+					existing?.metadata as Record<string, unknown> | undefined,
+					(existing as { provider?: string } | undefined)?.provider,
+				)
 			} catch (error) {
 				Logger.warn(`[SdkController] Could not read the stored window for ${requestedSessionId}:`, error)
 			}
