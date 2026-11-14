@@ -493,6 +493,45 @@ export function checkRepeatedToolCall(
 export interface LoopDetectionVerdict {
 	kind: "ok" | "soft" | "hard";
 	message?: string;
+	/**
+	 * For a no-progress cycle on a call that writes a file: the answer that
+	 * keeps coming back, and what to tell the model if this call lands and
+	 * gives it again.
+	 *
+	 * A repeat that succeeds is not a mistake (user ruling, 2026-11-14), so a
+	 * verdict stands down when its call works -- except this one. A write that
+	 * lands for the third time on the same text with the same result means
+	 * something keeps putting that text back and the edit keeps going back on
+	 * top: the restore-and-reapply carousel. The success is the loop, so the
+	 * verdict holds, but only if this call's answer is that answer again; one
+	 * that differs is progress. Replayed over 3,762 pandorum sessions: 44
+	 * reach the third landing and 12 the sixth, and every one is either an
+	 * edit undone in between (by `restore_file` in 27, by another edit in 18)
+	 * or a write that changed nothing, reported as a success.
+	 */
+	landed?: { answer: string; message: string };
+}
+
+/**
+ * Whether a call writes the file it names, for {@link LoopDetectionVerdict.landed}.
+ *
+ * Not `restore_file`: going back to one revision again and again, with
+ * different edits tried in between, is exploring, and the restore cap bounds
+ * it; the carousel shows on the edit that is re-applied. Not `sed` or `awk`
+ * without `in_place`: those only print.
+ */
+function writesItsFile(call: LoopDetectionCall): boolean {
+	if (!WRITE_CLASS_TOOL_NAMES.has(call.name) || call.name === "restore_file") {
+		return false;
+	}
+	if (call.name === "sed" || call.name === "awk") {
+		return (
+			call.input != null &&
+			typeof call.input === "object" &&
+			(call.input as { in_place?: unknown }).in_place === true
+		);
+	}
+	return true;
 }
 
 /** Minimal call shape the tracker needs; matches `AgentToolCallPart` subset. */
@@ -694,6 +733,8 @@ export class LoopDetectionTracker {
 			// a check that the edit held. A write tool re-sent unchanged is
 			// not that case: a byte-identical payload applied to the same range
 			// cannot be progress, however it is answered.
+			const landedTimes = cycle.repeats + 1;
+			const landedHead = `This \`${call.name}\` call has now landed ${landedTimes} times with the same arguments, each time on the same text and with the same result.`;
 			if (
 				WRITE_CLASS_TOOL_NAMES.has(call.name) &&
 				cycle.repeats >= CYCLE_HARD_LIMIT - 1
@@ -701,6 +742,14 @@ export class LoopDetectionTracker {
 				return {
 					kind: "hard",
 					message: `This \`${call.name}\` call has been made ${cycle.repeats} times with the same arguments and answered the same way every time. It changes the file to a state it has already been in, so repeating it cannot move the task forward.`,
+					...(writesItsFile(call)
+						? {
+								landed: {
+									answer: cycle.signature,
+									message: `${landedHead} It puts the file into a state it has already been in, so repeating it cannot move the task forward.`,
+								},
+							}
+						: {}),
 				};
 			}
 			return {
@@ -708,6 +757,14 @@ export class LoopDetectionTracker {
 				message: `This \`${call.name}\` call has been answered ${cycle.repeats} times with the same answer, and the arguments have not changed. Whatever it is being asked, it has already said everything it is going to say.
 
 ${steeringFor(cycle.repeats, call.name)}`,
+				...(writesItsFile(call)
+					? {
+							landed: {
+								answer: cycle.signature,
+								message: `${landedHead} Something keeps putting that text back -- a restore, or another edit undoing this one -- and this edit goes back on top of it, so the file is going round in a circle, not forward. What this edit does is already known. Look at what is still wrong with it in place and change something else; if this edit is right, keep it and stop undoing it.`,
+							},
+						}
+					: {}),
 			};
 		}
 

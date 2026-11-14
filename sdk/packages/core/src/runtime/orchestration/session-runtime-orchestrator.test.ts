@@ -2651,6 +2651,16 @@ function makeScriptedRuntime(script: {
 	 * The loop guard's verdicts wait for that answer.
 	 */
 	answerTools?: "fail" | "succeed";
+	/**
+	 * Answer each started call with this output and then finish it, as the
+	 * real runtime does: `afterTool` first, then `tool-finished` with what the
+	 * hook returned. Takes the place of `answerTools`.
+	 */
+	respond?: (call: {
+		toolName: string;
+		input: unknown;
+		toolCallId: string;
+	}) => { output: unknown; isError?: boolean };
 }): {
 	deps: SessionRuntimeOrchestratorDeps;
 	abortCalls: string[];
@@ -2676,6 +2686,42 @@ function makeScriptedRuntime(script: {
 	const play = async () => {
 		for (const e of script.events) {
 			listener?.(e);
+			if (script.respond && e.type === "tool-started") {
+				const answer = script.respond(e.toolCall);
+				const after = await hooks?.afterTool?.({
+					snapshot: makeSnapshot(),
+					tool: { name: e.toolCall.toolName },
+					toolCall: e.toolCall,
+					input: e.toolCall.input,
+					result: answer,
+					startedAt: new Date(),
+					endedAt: new Date(),
+					durationMs: 1,
+				} as never);
+				const result =
+					(after as { result?: typeof answer } | undefined)?.result ?? answer;
+				listener?.({
+					type: "tool-finished",
+					iteration: e.iteration,
+					toolCall: e.toolCall,
+					message: {
+						id: `m${e.toolCall.toolCallId}`,
+						role: "tool",
+						content: [
+							{
+								type: "tool-result",
+								toolCallId: e.toolCall.toolCallId,
+								toolName: e.toolCall.toolName,
+								output: result.output,
+								isError: result.isError === true,
+							},
+						],
+						createdAt: 1,
+					},
+					snapshot: makeSnapshot(),
+				} as AgentRuntimeEvent);
+				continue;
+			}
 			if (script.answerTools && e.type === "tool-started") {
 				await hooks?.afterTool?.({
 					snapshot: makeSnapshot(),
@@ -3099,6 +3145,116 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 		expect((await runIdenticalCalls(4, "fail")).length).toBeGreaterThanOrEqual(
 			1,
 		);
+	});
+
+	/**
+	 * The restore-and-reapply carousel: each round the same `editor` call
+	 * lands on the same text with the same result, and `restore_file` puts
+	 * the text back. Every call succeeds. `landedResult` gives the editor's
+	 * answer for a round.
+	 */
+	const runCarousel = async (
+		rounds: number,
+		landedResult: (round: number) => string = () =>
+			"Replaced line 3 in /w/a.js\n```diff\n-3: b\n+3: B\n```",
+	) => {
+		const events: AgentRuntimeEvent[] = [
+			{ type: "turn-started", iteration: 1, snapshot: makeSnapshot() },
+		];
+		for (let round = 1; round <= rounds; round++) {
+			for (const [name, input] of [
+				["editor", { path: "/w/a.js", start_line: 3, new_text: "B" }],
+				["restore_file", { path: "/w/a.js", revision: "1" }],
+			] as const) {
+				events.push({
+					type: "tool-started",
+					iteration: round,
+					toolCall: {
+						type: "tool-call",
+						toolCallId: `${name}-${round}`,
+						toolName: name,
+						input,
+					},
+					snapshot: makeSnapshot(),
+				});
+			}
+		}
+		const { deps, abortCalls } = makeScriptedRuntime({
+			events,
+			respond: (call) => {
+				const round = Number(call.toolCallId.split("-").pop());
+				return {
+					output: {
+						query: call.toolName,
+						result:
+							call.toolName === "editor"
+								? `${landedResult(round)}\nThe file is now revision #${round * 2}.`
+								: `\`/w/a.js\` is back to revision #1. That is now revision #${round * 2 + 1}.`,
+						success: true,
+					},
+				};
+			},
+		});
+		const session = new SessionRuntime(
+			makeAgentConfig({
+				execution: {
+					maxConsecutiveMistakes: 6,
+					loopDetection: { softThreshold: 2, hardThreshold: 3 },
+				},
+			}),
+			deps,
+		);
+		const notices: Array<Record<string, unknown>> = [];
+		session.subscribeEvents((event) => {
+			if (
+				event.type === "notice" &&
+				event.metadata?.kind === "loop_detection"
+			) {
+				notices.push(event.metadata);
+			}
+		});
+		await session.run("carousel");
+		return { notices, abortCalls };
+	};
+
+	// The user, on 4.100.280: "avoiding nudging a single successful retry and
+	// keep the loop detection for a sequence should be possible". A carousel
+	// is a sequence of successes, and it is still warned and stopped.
+	it("warns and then stops an edit that keeps landing on the same text", async () => {
+		const { notices, abortCalls } = await runCarousel(8);
+		const editorPhases = notices
+			.filter((notice) => notice.toolName === "editor")
+			.map((notice) => notice.phase);
+		expect(editorPhases).toEqual([
+			"soft",
+			"soft",
+			"soft",
+			"hard",
+			"hard",
+			"stopped",
+		]);
+		// Rounds 3, 4 and 5 warn; 6 is the last warning; 7 stops.
+		expect(
+			notices
+				.filter((notice) => notice.toolName === "editor")
+				.map((notice) => notice.iteration),
+		).toEqual([3, 4, 5, 6, 7, 7]);
+		expect(abortCalls.length).toBeGreaterThanOrEqual(1);
+		expect(String(abortCalls[0])).toContain("loop");
+		// The restores in between are not what is warned about.
+		expect(
+			notices.filter((notice) => notice.toolName === "restore_file"),
+		).toEqual([]);
+	});
+
+	it("says nothing about an edit that lands with a different result each round", async () => {
+		const { notices, abortCalls } = await runCarousel(
+			8,
+			(round) =>
+				`Replaced line 3 in /w/a.js\n\`\`\`diff\n-3: b\n+3: B${round}\n\`\`\``,
+		);
+		expect(notices).toEqual([]);
+		expect(abortCalls).toHaveLength(0);
 	});
 
 	// automaticum #1811: a harness arm that stops at the first guard trip saw

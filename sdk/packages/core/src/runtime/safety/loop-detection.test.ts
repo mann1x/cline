@@ -86,6 +86,59 @@ describe("LoopDetectionTracker", () => {
 		expect(kinds.every((kind) => kind === "ok")).toBe(true);
 	});
 
+	describe("a write that keeps landing on the same text", () => {
+		const land = (
+			tracker: LoopDetectionTracker,
+			call: { name: string; input: unknown },
+			times: number,
+		) => {
+			const verdicts = [];
+			for (let i = 0; i < times; i++) {
+				verdicts.push(tracker.inspect(call));
+				tracker.noteOutcome(true, false, "Replaced line 3, revision #4");
+				tracker.inspect(reading);
+				tracker.noteOutcome(true);
+			}
+			return verdicts;
+		};
+
+		it("carries the answer on an editor cycle, so a landing can be recognised", () => {
+			const tracker = new LoopDetectionTracker();
+			const edit = {
+				name: "editor",
+				input: { path: "a.ts", start_line: 3, new_text: "B" },
+			};
+			const verdicts = land(tracker, edit, 3);
+			expect(verdicts[2].kind).toBe("soft");
+			expect(verdicts[2].landed?.answer).toBe("Replaced line 3, revision #n");
+			expect(verdicts[2].landed?.message).toContain("has now landed 3 times");
+		});
+
+		it("does not on a restore, nor on an awk that only prints", () => {
+			const restore = {
+				name: "restore_file",
+				input: { path: "a.ts", revision: "1" },
+			};
+			const printing = {
+				name: "awk",
+				input: { files: ["a.ts"], program: "{print}" },
+			};
+			const editing = {
+				name: "awk",
+				input: { files: ["a.ts"], program: "{print}", in_place: true },
+			};
+			expect(land(new LoopDetectionTracker(), restore, 3)[2].landed).toBe(
+				undefined,
+			);
+			expect(land(new LoopDetectionTracker(), printing, 3)[2].landed).toBe(
+				undefined,
+			);
+			expect(
+				land(new LoopDetectionTracker(), editing, 3)[2].landed,
+			).toBeDefined();
+		});
+	});
+
 	it("counts the second failure of an identical call as the second", () => {
 		const tracker = new LoopDetectionTracker();
 		tracker.inspect(call);

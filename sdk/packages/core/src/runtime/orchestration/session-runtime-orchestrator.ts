@@ -589,8 +589,26 @@ export class SessionRuntime {
 			 * warning" the model never saw.
 			 */
 			mistake?: Parameters<SessionRuntime["enqueueMistakeRecord"]>[0];
+			/**
+			 * A no-progress cycle on a write: the answer that keeps coming back,
+			 * and what is said and recorded when a successful call gives it
+			 * again. That success is the carousel, so the verdict holds for it.
+			 */
+			landed?: {
+				answer: string;
+				message: string;
+				text: string;
+				details: string;
+			};
 		}
 	>();
+	/**
+	 * Each call's answer as the tool gave it, taken in `afterTool` before a
+	 * warning is attached. `tool-finished` carries the result after that hook,
+	 * so a warning shown on one landing made the next identical answer look
+	 * different and broke the cycle it was warning about.
+	 */
+	private readonly loopAnswers = new Map<string, string>();
 	/**
 	 * Hard loop verdicts seen in this session, counted across tool names rather
 	 * than per call signature. A run that works its way out of one loop and into
@@ -1275,6 +1293,7 @@ export class SessionRuntime {
 		this.currentRunUsage = { inputTokens: 0, outputTokens: 0 };
 		this.toolStartedAt.clear();
 		this.toolInputs.clear();
+		this.loopAnswers.clear();
 		this.currentTurnSuccessfulTools = 0;
 		this.currentTurnFailedTools = 0;
 		this.currentTurnFailureDetails = [];
@@ -1581,11 +1600,12 @@ export class SessionRuntime {
 							this.toolResultCache.store(ctx.toolCall.toolCallId, text);
 					}
 				}
+				const answer = loopResultSignature(result.output);
+				this.loopAnswers.set(ctx.toolCall.toolCallId, answer);
 				const pending = this.pendingLoopWarnings.get(ctx.toolCall.toolCallId);
 				if (pending === undefined) {
 					return after;
 				}
-				const warning = pending.message;
 				this.pendingLoopWarnings.delete(ctx.toolCall.toolCallId);
 				// Only onto a failure. The verdict is formed before the call runs,
 				// and a repeat that finally works is the outcome the guard wants —
@@ -1596,7 +1616,13 @@ export class SessionRuntime {
 					allOperationsFailed(result.output) ||
 					introducedRegression(result.output) ||
 					declaredNoOp(result.output);
-				if (!failed) {
+				// A success that gives the cycle's answer once more is the
+				// carousel itself, not a recovery.
+				const landed =
+					!failed && pending.landed?.answer === answer
+						? pending.landed
+						: undefined;
+				if (!failed && !landed) {
 					if (pending.notice.phase === "hard") {
 						// The verdict did not stand: the call it was about worked.
 						this.loopHardEscalations = Math.max(
@@ -1606,12 +1632,17 @@ export class SessionRuntime {
 					}
 					return after;
 				}
+				const warning = landed ? landed.message : pending.message;
 				if (pending.mistake) {
-					this.enqueueMistakeRecord(pending.mistake);
+					this.enqueueMistakeRecord(
+						landed
+							? { ...pending.mistake, details: landed.details }
+							: pending.mistake,
+					);
 				}
 				this.emitLoopNotice(
 					pending.notice.phase,
-					pending.notice.text,
+					landed ? landed.text : pending.notice.text,
 					pending.notice.iteration,
 					pending.notice.toolName,
 					pending.notice.extra,
@@ -1799,8 +1830,10 @@ export class SessionRuntime {
 						// Not the raw signature: `editor` and `restore_file` end their
 						// answer with the revision the file is now at, which goes up on
 						// every write, so two otherwise identical answers never matched.
-						loopResultSignature(finishedOutput),
+						this.loopAnswers.get(event.toolCall.toolCallId) ??
+							loopResultSignature(finishedOutput),
 					);
+				this.loopAnswers.delete(event.toolCall.toolCallId);
 				const errorText = isError
 					? formatToolResultError(finishedOutput)
 					: undefined;
@@ -2021,6 +2054,16 @@ export class SessionRuntime {
 						iteration,
 						toolName,
 					},
+					...(verdict.landed
+						? {
+								landed: {
+									answer: verdict.landed.answer,
+									message: verdict.landed.message,
+									text: `The model applied the same \`${toolName}\` call to the same text again — warning it that the file is going in circles.`,
+									details: verdict.landed.message,
+								},
+							}
+						: {}),
 				});
 			}
 			return;
@@ -2043,6 +2086,17 @@ export class SessionRuntime {
 		// The next hard verdict stops the run, and says the loop is why.
 		const diagnosis =
 			verdict.message ?? `Detected repeated tool calls to \`${toolName}\`.`;
+		const landedNote = (message: string, text: string) =>
+			verdict.landed
+				? {
+						landed: {
+							answer: verdict.landed.answer,
+							message,
+							text,
+							details: verdict.landed.message,
+						},
+					}
+				: {};
 		this.loopHardEscalations += 1;
 		const escalation = {
 			escalation: this.loopHardEscalations,
@@ -2063,6 +2117,10 @@ export class SessionRuntime {
 					reason: "tool_execution_failed",
 					details: diagnosis,
 				},
+				...landedNote(
+					`${verdict.landed?.message}\n\n${LOOP_FINAL_WARNING}`,
+					`The model kept applying the same \`${toolName}\` call to the same text after the warnings — last warning before the run is stopped.`,
+				),
 			});
 			return;
 		}
@@ -2096,6 +2154,10 @@ export class SessionRuntime {
 						escalation,
 					),
 			},
+			...landedNote(
+				`${verdict.landed?.message} ${LOOP_STOP_NOTICE}`,
+				`The model applied the same \`${toolName}\` call to the same text again after the last warning.`,
+			),
 		});
 	}
 
