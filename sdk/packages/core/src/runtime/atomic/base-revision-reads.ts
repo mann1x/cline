@@ -518,6 +518,47 @@ function annotateWithRevisions(
 	});
 }
 
+/**
+ * Whether every file a revision read names holds, in that revision, exactly
+ * what is on disk now. Anything that cannot be compared -- a path outside the
+ * history, a revision that does not exist, a file that cannot be read -- is
+ * not a match, and the read goes to the revision as before.
+ */
+async function revisionsMatchDisk(
+	active: { source: BaseRevisionSource; wording: RevisionWording },
+	place: RevisionPlace,
+	input: unknown,
+	requested: string,
+): Promise<boolean> {
+	const requests = readFileRequestsFrom(input);
+	if (requests.length === 0) return false;
+	for (const request of requests) {
+		if (getReadFileRangeError(request)) return false;
+		const lookup = place.resolve(request.path);
+		if (lookup.kind === "uncovered" || lookup.kind === "outside") return false;
+		const onDisk = await readFile(lookup.absolutePath).catch(() => undefined);
+		if (!onDisk) return false;
+		// Nothing has written it and there is no snapshot: its original is
+		// the disk itself (the branch in `readFromRevision` that says so).
+		if (
+			!place.snapshotBacked &&
+			isOriginal(requested) &&
+			active.source.revisions.revisions(lookup.absolutePath).length === 0
+		) {
+			continue;
+		}
+		const chosen = bodyForRevision(
+			active.source,
+			lookup.absolutePath,
+			requested,
+			lookup.kind === "held" ? lookup.body : undefined,
+			active.wording,
+		);
+		if (chosen.kind !== "body" || !chosen.body.equals(onDisk)) return false;
+	}
+	return true;
+}
+
 /** The files a `check_file` call names, read the way the tool reads them. */
 function checkedPaths(input: unknown): string[] {
 	const raw =
@@ -666,6 +707,30 @@ export function withBaseRevisionReads<T extends AgentToolDefinition>(
 							success: false,
 						} satisfies ToolOperationResult,
 					];
+				}
+				// A revision that is byte for byte the file on disk is the file:
+				// read it as the file, so it counts as a read. Measured on pandorum
+				// (2026-11-14, kf07w): every read asked for `revision: "original"`
+				// before anything had changed the file, the edits that followed
+				// were refused as "not read in this session", and the model read
+				// the same way again and was refused again.
+				if (await revisionsMatchDisk(active, place, rest, wanted)) {
+					const plain = (await original.execute(
+						rest,
+						context,
+					)) as ToolOperationResult[];
+					if (!Array.isArray(plain)) return plain;
+					const note = `[\`${wanted}\` is identical to the file as it stands, so this is the file now, and it counts as reading it.]`;
+					return annotateWithRevisions(
+						active.source,
+						place,
+						rest,
+						plain.map((result) =>
+							result.success
+								? { ...result, result: `${result.result}\n\n${note}` }
+								: result,
+						),
+					);
 				}
 				return readFromRevision(
 					active.source,

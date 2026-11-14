@@ -2528,6 +2528,34 @@ export function createEditorExecutor(
 	};
 
 	/**
+	 * Whether `old_text` is in the file as it is on disk now.
+	 *
+	 * The read checks ask a proxy question -- has the model seen these lines,
+	 * since they last changed -- and `old_text` the file holds answers the real
+	 * one directly. Refusing such an edit for want of a read only sent the
+	 * model off to read what it had just quoted correctly. Line endings are
+	 * compared as one, the way the match itself compares them; empty or blank
+	 * text proves nothing.
+	 */
+	const oldTextOnDisk = async (
+		filePath: string,
+		oldText: string | null | undefined,
+	): Promise<boolean> => {
+		if (oldText == null || oldText.trim() === "") {
+			return false;
+		}
+		try {
+			const content = (await fs.readFile(filePath, encoding)).replace(
+				/\r\n/g,
+				"\n",
+			);
+			return content.includes(oldText.replace(/\r\n/g, "\n"));
+		} catch {
+			return false;
+		}
+	};
+
+	/**
 	 * Refuse an edit aimed at lines the model has not read.
 	 *
 	 * The message names the exact call that would satisfy it, because the
@@ -2575,7 +2603,7 @@ export function createEditorExecutor(
 			? `${range} of ${filePath} has not been read in its current state — either it was never read, or an earlier edit changed the file's length and moved every line below it`
 			: receipts.hasAny(filePath)
 				? `no read of ${filePath} since it last changed covers ${range} — one read has to take in the whole range you edit, and an edit that changed the file's length retired the reads before it`
-				: `${filePath} has not been read in this session`;
+				: `${filePath} has not been read in this session as it is now (a read with \`revision\` shows an earlier version of it, and only counts when that version is identical to the file)`;
 		throw new Error(
 			`Read before editing: ${why}. The file was not modified. Call \`read_files\` for ${filePath} covering ${range} — with \`start_line\` and \`end_line\` around it, not the whole file — then send this edit again using the line numbers that read reports. Editing lines you have not seen is how a correct-looking edit lands on the wrong code.`,
 		);
@@ -2879,7 +2907,13 @@ export function createEditorExecutor(
 		context: AgentToolContext,
 	): Promise<string> => {
 		const noteNoOp = noOpLedgerFor(context);
-		await requireCurrent(filePath);
+		// `old_text` the file holds right now is proof the model has the text
+		// it is changing, which is all the read and freshness checks exist to
+		// establish. The replacement itself still changes only what matched.
+		const knowsText = await oldTextOnDisk(filePath, input.old_text);
+		if (!knowsText) {
+			await requireCurrent(filePath);
+		}
 		// A binary or a UTF-16 file read as UTF-8 and written back is a file
 		// destroyed: every NUL and every unpaired byte is rewritten. read_files
 		// refuses or decodes them; the editor wrote them (automaticum audit
@@ -2965,19 +2999,23 @@ export function createEditorExecutor(
 					`Cannot replace lines in ${filePath}: the file does not exist. Omit start_line to create it.`,
 				);
 			}
-			if (input.start_column != null) {
+			if (input.start_column != null && !knowsText) {
 				await requireRead(
 					filePath,
 					input.start_line,
 					input.end_line ?? input.start_line,
 				);
-				requireRangeUncut(
-					filePath,
-					input.start_line,
-					input.end_line ?? input.start_line,
-					input.end_column ?? input.start_column,
-					input.start_column,
-				);
+			}
+			if (input.start_column != null) {
+				if (!knowsText) {
+					requireRangeUncut(
+						filePath,
+						input.start_line,
+						input.end_line ?? input.start_line,
+						input.end_column ?? input.start_column,
+						input.start_column,
+					);
+				}
 				const result = await replaceColumnRange(
 					filePath,
 					input.start_line,
@@ -3022,11 +3060,13 @@ export function createEditorExecutor(
 					}`,
 				);
 			}
-			await requireRead(
-				filePath,
-				input.start_line,
-				input.end_line ?? input.start_line,
-			);
+			if (!knowsText) {
+				await requireRead(
+					filePath,
+					input.start_line,
+					input.end_line ?? input.start_line,
+				);
+			}
 			// With `old_text` only the matched text is replaced, and it can only
 			// match text the model has; without it the whole line goes.
 			if (input.old_text == null) {
@@ -3160,9 +3200,9 @@ export function createEditorExecutor(
 		// Retirement means line numbers moved, which is nothing to an edit that
 		// names no line: the text is matched against the file as it is now, and
 		// if the edit moved it, the match fails on its own terms and says so.
-		if (receipts && !receipts.hasEverRead(filePath)) {
+		if (receipts && !knowsText && !receipts.hasEverRead(filePath)) {
 			throw new Error(
-				`Read before editing: ${filePath} has not been read in this session. The file was not modified. Call \`read_files\` for it first — narrow it with \`start_line\`/\`end_line\` around the text you mean to change — then send this edit again.`,
+				`Read before editing: ${filePath} has not been read in this session as it is now, and your \`old_text\` is not in it. The file was not modified. Call \`read_files\` for it first — narrow it with \`start_line\`/\`end_line\` around the text you mean to change — then send this edit again.`,
 			);
 		}
 

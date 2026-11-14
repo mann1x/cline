@@ -2311,18 +2311,60 @@ describe("requiring a read before an edit", () => {
 		});
 	});
 
-	it("refuses a text-matched edit on a file that was never read", async () => {
+	it("refuses a text-matched edit whose text the unread file does not hold", async () => {
 		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
 			const receipts = createReadReceipts();
 			const editor = createEditorExecutor({ receipts });
 
 			const failure = editor(
-				{ path: filePath, old_text: "b", new_text: "B" },
+				{ path: filePath, old_text: "x", new_text: "X" },
 				dir,
 				context,
 			);
 
 			await expect(failure).rejects.toThrow("Read before editing");
+		});
+	});
+
+	it("applies an old_text the file holds, read or not", async () => {
+		// The text is the proof the read stands in for (user ruling, 2026-11-14).
+		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+
+			await editor(
+				{ path: filePath, old_text: "b", new_text: "B" },
+				dir,
+				context,
+			);
+			await editor(
+				{
+					path: filePath,
+					start_line: 3,
+					end_line: 3,
+					old_text: "c",
+					new_text: "C",
+				},
+				dir,
+				context,
+			);
+
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("a\nB\nC\nd");
+		});
+	});
+
+	it("still refuses a line range on an unread file, with no text to prove it", async () => {
+		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+
+			await expect(
+				editor(
+					{ path: filePath, start_line: 2, end_line: 2, new_text: "B" },
+					dir,
+					context,
+				),
+			).rejects.toThrow("Read before editing");
 		});
 	});
 
@@ -2935,13 +2977,13 @@ describe("recovering the calls a transaction used to lose", () => {
 		});
 	});
 
-	it("still refuses a text-anchored edit to a file never read", async () => {
+	it("still refuses a text-anchored edit to a file never read when the text is not in it", async () => {
 		await withTempFile("one\ntwo\n", async (filePath, dir) => {
 			const receipts = createReadReceipts();
 			const editor = createEditorExecutor({ receipts });
 
 			const failure = editor(
-				{ path: filePath, old_text: "two", new_text: "TWO" },
+				{ path: filePath, old_text: "three", new_text: "TWO" },
 				dir,
 				context,
 			);

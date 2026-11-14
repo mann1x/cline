@@ -118,14 +118,15 @@ describe("a file two writers share", () => {
 
 	it("refuses an edit to a file somebody else rewrote", async () => {
 		// The read path warns; this one refuses, because a warning attached to
-		// a write arrives after the damage.
+		// a write arrives after the damage. A line range carries no text to
+		// prove the model knows what is there now.
 		await withFile(async ({ filePath, read, edit, somebodyElseWrites }) => {
 			await read({ path: filePath }, context as never);
 			await somebodyElseWrites("one\ntwo\nthree\nfour\nfive");
 
 			await expect(
 				edit(
-					{ path: filePath, old_text: "two", new_text: "TWO" },
+					{ path: filePath, start_line: 2, end_line: 2, new_text: "TWO" },
 					path.dirname(filePath),
 					context as never,
 				),
@@ -144,7 +145,7 @@ describe("a file two writers share", () => {
 			await read({ path: filePath }, context as never);
 			await somebodyElseWrites("one\ntwo\nthree\nfour\nfive");
 			await edit(
-				{ path: filePath, old_text: "two", new_text: "TWO" },
+				{ path: filePath, start_line: 2, end_line: 2, new_text: "TWO" },
 				path.dirname(filePath),
 				context as never,
 			).catch(() => undefined);
@@ -153,12 +154,47 @@ describe("a file two writers share", () => {
 
 			await expect(
 				edit(
-					{ path: filePath, old_text: "two", new_text: "TWO" },
+					{ path: filePath, start_line: 2, end_line: 2, new_text: "TWO" },
 					path.dirname(filePath),
 					context as never,
 				),
 			).resolves.toBeTruthy();
 			expect(await fs.readFile(filePath, "utf-8")).toContain("TWO");
+		});
+	});
+
+	it("applies an old_text the file still holds, keeping the other writer's change", async () => {
+		// The text it quotes is on disk, so it knows what it is changing; only
+		// that text is replaced, so nothing the other writer did is undone.
+		await withFile(async ({ filePath, read, edit, somebodyElseWrites }) => {
+			await read({ path: filePath }, context as never);
+			await somebodyElseWrites("one\ntwo\nthree\nfour\nfive");
+
+			await edit(
+				{ path: filePath, old_text: "two", new_text: "TWO" },
+				path.dirname(filePath),
+				context as never,
+			);
+
+			expect(await fs.readFile(filePath, "utf-8")).toBe(
+				"one\nTWO\nthree\nfour\nfive",
+			);
+		});
+	});
+
+	it("still refuses an old_text the other writer changed", async () => {
+		await withFile(async ({ filePath, read, edit, somebodyElseWrites }) => {
+			await read({ path: filePath }, context as never);
+			await somebodyElseWrites("one\n2\nthree");
+
+			await expect(
+				edit(
+					{ path: filePath, old_text: "two", new_text: "TWO" },
+					path.dirname(filePath),
+					context as never,
+				),
+			).rejects.toThrow(/changed since you last read it/);
+			expect(await fs.readFile(filePath, "utf-8")).toBe("one\n2\nthree");
 		});
 	});
 
@@ -171,12 +207,12 @@ describe("a file two writers share", () => {
 			await somebodyElseWrites("one\ntwo\nthree\nfour\nfive");
 
 			const first = await edit(
-				{ path: filePath, old_text: "two", new_text: "TWO" },
+				{ path: filePath, start_line: 2, end_line: 2, new_text: "TWO" },
 				path.dirname(filePath),
 				context as never,
 			).catch((error: Error) => error.message);
 			const second = await edit(
-				{ path: filePath, old_text: "two", new_text: "TWO" },
+				{ path: filePath, start_line: 2, end_line: 2, new_text: "TWO" },
 				path.dirname(filePath),
 				context as never,
 			).catch((error: Error) => error.message);

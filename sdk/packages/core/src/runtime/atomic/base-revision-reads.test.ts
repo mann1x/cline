@@ -82,6 +82,7 @@ describe("reading the version this transaction started from", () => {
 		// so crediting this read would let the model edit lines it never saw.
 		await withWorkspace({ "game.html": "a\nb\nc\n" }, async (root) => {
 			const snapshot = await takeSnapshot(root);
+			await fs.writeFile(path.join(root, "game.html"), "a\nB\nc\n", "utf8");
 			const receipts = createReadReceipts();
 			const [tool] = withBaseRevisionReads([readTool(receipts, root)], {
 				pending: snapshot,
@@ -92,6 +93,30 @@ describe("reading the version this transaction started from", () => {
 			await call(tool, { files: [{ path: "game.html" }], revision: "base" });
 
 			expect(receipts.paths()).toEqual([]);
+		});
+	});
+
+	it("counts as reading the file when the revision is identical to it", async () => {
+		// pandorum kf07w (2026-11-14): `revision: "original"` before anything
+		// changed the file was refused as "not read", twice.
+		await withWorkspace({ "game.html": "a\nb\nc\n" }, async (root) => {
+			const snapshot = await takeSnapshot(root);
+			const receipts = createReadReceipts();
+			const [tool] = withBaseRevisionReads([readTool(receipts, root)], {
+				pending: snapshot,
+				transaction: 1,
+				revisions: createRevisionLog(),
+			});
+
+			const results = await call(tool, {
+				files: [{ path: "game.html" }],
+				revision: "base",
+			});
+
+			expect(results[0]?.result).toContain(
+				"identical to the file as it stands",
+			);
+			expect(receipts.paths()).toHaveLength(1);
 		});
 	});
 
@@ -227,8 +252,9 @@ describe("reading the version this transaction started from", () => {
 describe("the original of a file nothing has written", () => {
 	it("is the file as it stands, not a file this session created", async () => {
 		await withWorkspace({ "game.html": "a\nb\nc\n" }, async (root) => {
+			const receipts = createReadReceipts();
 			const [tool] = withBaseRevisionReads(
-				[readTool(createReadReceipts(), root)],
+				[readTool(receipts, root)],
 				{
 					pending: undefined,
 					transaction: 0,
@@ -246,9 +272,11 @@ describe("the original of a file nothing has written", () => {
 			expect(results[0]?.success).toBe(true);
 			expect(results[0]?.result).toContain("b");
 			expect(results[0]?.result).not.toContain("1 | a");
+			// It is the file now, so it is read as the file and counts.
 			expect(results[0]?.result).toContain(
-				"Nothing has written this file in this session",
+				"identical to the file as it stands, so this is the file now",
 			);
+			expect(receipts.paths()).toHaveLength(1);
 			expect(results[0]?.result).not.toContain("created");
 		});
 	});
