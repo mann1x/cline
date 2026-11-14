@@ -114,6 +114,57 @@ describe("createReadReceipts", () => {
 	});
 });
 
+describe("a file put back to bytes the model read", () => {
+	const FILE = "/w/game.html";
+
+	it("gets back the reads that were live at those bytes", () => {
+		const receipts = createReadReceipts();
+		receipts.noteRead(FILE, 150, Number.POSITIVE_INFINITY);
+		receipts.noteStamp(FILE, "336#aaaa");
+		receipts.noteWrite(FILE, 336, 340);
+		receipts.noteStamp(FILE, "340#bbbb");
+		receipts.noteRewrite(FILE);
+
+		expect(receipts.covers(FILE, 159, 166)).toBe(false);
+		expect(receipts.reinstate?.(FILE, "340#bbbb")).toBe(false);
+		expect(receipts.reinstate?.(FILE, "336#aaaa")).toBe(true);
+		expect(receipts.covers(FILE, 159, 166)).toBe(true);
+		expect(receipts.covers(FILE, 1, 10)).toBe(false);
+		expect(receipts.wasRetired(FILE)).toBe(false);
+		expect(receipts.changedSince(FILE, "336#aaaa")).toBe(false);
+	});
+
+	it("never matches a size-and-mtime stamp, which proves nothing about the bytes", () => {
+		const receipts = createReadReceipts();
+		receipts.noteRead(FILE, 1, 40);
+		receipts.noteStamp(FILE, "9000:1");
+		receipts.noteRewrite(FILE);
+
+		expect(receipts.reinstate?.(FILE, "9000:1")).toBe(false);
+		expect(receipts.covers(FILE, 1, 10)).toBe(false);
+	});
+
+	it("brings the cut lines back with the spans", () => {
+		const receipts = createReadReceipts();
+		receipts.noteRead(FILE, 1, 5);
+		receipts.noteCut?.(FILE, 3, 2000, 5000);
+		receipts.noteStamp(FILE, "6000#cccc");
+		receipts.noteRewrite(FILE);
+
+		expect(receipts.reinstate?.(FILE, "6000#cccc")).toBe(true);
+		expect(receipts.cutAt?.(FILE, 3)).toEqual({ shown: 2000, length: 5000 });
+	});
+
+	it("forgets them with the file", () => {
+		const receipts = createReadReceipts();
+		receipts.noteRead(FILE, 1, 5);
+		receipts.noteStamp(FILE, "10#dddd");
+		receipts.forget(FILE);
+
+		expect(receipts.reinstate?.(FILE, "10#dddd")).toBe(false);
+	});
+});
+
 describe("a registry handed to the next task", () => {
 	it("has read nothing once cleared", () => {
 		const receipts = createReadReceipts();

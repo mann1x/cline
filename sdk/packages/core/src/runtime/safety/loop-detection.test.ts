@@ -56,7 +56,23 @@ describe("LoopDetectionTracker", () => {
 		expect(kinds).toContain("soft");
 	});
 
-	it("still counts a browser call that does not move the page", () => {
+	it("still counts a browser call that does not move the page, when it fails", () => {
+		const tracker = new LoopDetectionTracker();
+		const open = {
+			name: "browser",
+			input: { action: "open", url: "http://localhost:8080/" },
+		};
+		const kinds: string[] = [];
+		for (let attempt = 0; attempt < 8; attempt += 1) {
+			kinds.push(tracker.inspect(open).kind);
+			tracker.noteOutcome(false);
+		}
+		expect(kinds).toContain("hard");
+	});
+
+	// User ruling (2026-11-14): a repeat that succeeds is not a mistake, so it
+	// starts no streak of identical calls.
+	it("starts no streak for an identical call that keeps succeeding", () => {
 		const tracker = new LoopDetectionTracker();
 		const open = {
 			name: "browser",
@@ -67,7 +83,18 @@ describe("LoopDetectionTracker", () => {
 			kinds.push(tracker.inspect(open).kind);
 			tracker.noteOutcome(true, false, `load ${attempt}`);
 		}
-		expect(kinds).toContain("hard");
+		expect(kinds.every((kind) => kind === "ok")).toBe(true);
+	});
+
+	it("counts the second failure of an identical call as the second", () => {
+		const tracker = new LoopDetectionTracker();
+		tracker.inspect(call);
+		tracker.noteOutcome(false);
+		const verdict = tracker.inspect(call);
+		expect(verdict.kind).toBe("soft");
+		expect(verdict.kind === "soft" && verdict.message).toContain(
+			"has now failed 2 times",
+		);
 	});
 
 	// A read between the repeats, as in the session that ran twelve refused

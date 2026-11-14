@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createEditorExecutor } from "./editor";
-import { createReadReceipts } from "./read-receipts";
+import { createReadReceipts, readFileStamp } from "./read-receipts";
 
 const context = {
 	agentId: "agent-1",
@@ -2164,6 +2164,55 @@ describe("requiring a read before an edit", () => {
 				context,
 			);
 			expect(await fs.readFile(filePath, "utf8")).toBe("a\nb\nC\nd");
+		});
+	});
+
+	// pandorum kf07w (2026-11-14): lines 150 to the end read at revision #22,
+	// an edit, `restore_file` back to #22, and the next edit of lines 159-166
+	// refused as "either it was never read, or an earlier edit changed the
+	// file's length" -- of the very bytes it had read.
+	it("takes a line edit after a restore to bytes the model read", async () => {
+		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 2, Number.POSITIVE_INFINITY);
+			receipts.noteStamp(filePath, await readFileStamp(filePath));
+			await editor(
+				{ path: filePath, new_text: "X", start_line: 3, end_line: 3 },
+				dir,
+				context,
+			);
+			// The restore: the bytes put back, and the host's `forgetReads`.
+			await fs.writeFile(filePath, "a\nb\nc\nd");
+			receipts.noteRewrite(filePath);
+
+			const result = await editor(
+				{ path: filePath, new_text: "C", start_line: 3, end_line: 3 },
+				dir,
+				context,
+			);
+			expect(result).toContain("Replaced line 3");
+			expect(await fs.readFile(filePath, "utf8")).toBe("a\nb\nC\nd");
+
+			// Line 1 was never read, in that version or any other.
+			await expect(
+				editor({ path: filePath, new_text: "A", start_line: 1 }, dir, context),
+			).rejects.toThrow("Read before editing");
+		});
+	});
+
+	it("still refuses a line edit after a restore to bytes the model never read", async () => {
+		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
+			receipts.noteStamp(filePath, await readFileStamp(filePath));
+			await fs.writeFile(filePath, "a\nq\nc\nd");
+			receipts.noteRewrite(filePath);
+
+			await expect(
+				editor({ path: filePath, new_text: "C", start_line: 3 }, dir, context),
+			).rejects.toThrow("not been read in its current state");
 		});
 	});
 

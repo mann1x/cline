@@ -2593,6 +2593,14 @@ export function createEditorExecutor(
 		if (receipts.covers(filePath, start, wanted)) {
 			return;
 		}
+		// The file may be back to bytes the model read -- a restore, a revert
+		// -- and then those reads describe it exactly.
+		if (
+			receipts.reinstate?.(filePath, await readFileStamp(filePath)) &&
+			receipts.covers(filePath, start, wanted)
+		) {
+			return;
+		}
 		const range =
 			start === wanted ? `line ${start}` : `lines ${start}-${wanted}`;
 		// Three cases, not two. A read after a retiring edit clears the retired

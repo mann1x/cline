@@ -667,13 +667,16 @@ export class LoopDetectionTracker {
 				message: `This exact call to \`${call.name}\` has already been made ${barren} times and failed every time. The arguments have not changed between attempts, so neither will the result.`,
 			};
 		}
+		// Composed before the call runs but attached only once it has failed,
+		// so the count includes it: "failed 1 time" was shown on the second
+		// failure of an identical call (pandorum kf07w, 2026-11-14).
 		// The same countdown for a call that keeps failing outright. The first
 		// failure is the tool's own error and nothing more — a single failure is
 		// ordinary and does not need a warning attached to it.
 		if (barren > 0) {
 			return {
 				kind: "soft",
-				message: `This \`${call.name}\` call has now failed ${barren} time${barren === 1 ? "" : "s"} with these exact arguments, and nothing about them has changed between attempts.\n\n${steeringFor(barren, call.name)}\n\n${strikeWarning(STRIKE_LIMIT - barren)}`,
+				message: `This \`${call.name}\` call has now failed ${barren + 1} times with these exact arguments, and nothing about them has changed between attempts.\n\n${steeringFor(barren, call.name)}\n\n${strikeWarning(STRIKE_LIMIT - barren)}`,
 			};
 		}
 
@@ -791,6 +794,13 @@ ${steeringFor(cycle.repeats, call.name)}`,
 			this.state.barrenCounts.delete(key);
 			this.state.futileKeys.delete(key);
 			this.stamps.delete(key);
+			// Nor does a run of identical calls count against a call that worked:
+			// a repeat that succeeds is not a mistake, so it starts no streak.
+			if (
+				`${this.state.lastToolName}:${this.state.lastToolSignature}` === key
+			) {
+				this.state.consecutiveIdenticalCount = 0;
+			}
 			// The warning is spent with the episode it belonged to: if this
 			// payload goes futile again later, that is a new situation and gets
 			// its own warning before the stop.

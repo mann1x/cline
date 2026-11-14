@@ -580,6 +580,15 @@ export class SessionRuntime {
 				toolName: string;
 				extra?: Record<string, unknown>;
 			};
+			/**
+			 * A hard verdict's mistake, recorded only if the call then fails. A
+			 * repeat that works is what the guard was after, so it is neither a
+			 * mistake nor a reason to stop (user ruling, 2026-11-14): it was
+			 * recorded when the verdict was formed, before the call had run, and
+			 * a run could be stopped for a call that succeeded after a "last
+			 * warning" the model never saw.
+			 */
+			mistake?: Parameters<SessionRuntime["enqueueMistakeRecord"]>[0];
 		}
 	>();
 	/**
@@ -1588,7 +1597,17 @@ export class SessionRuntime {
 					introducedRegression(result.output) ||
 					declaredNoOp(result.output);
 				if (!failed) {
+					if (pending.notice.phase === "hard") {
+						// The verdict did not stand: the call it was about worked.
+						this.loopHardEscalations = Math.max(
+							0,
+							this.loopHardEscalations - 1,
+						);
+					}
 					return after;
+				}
+				if (pending.mistake) {
+					this.enqueueMistakeRecord(pending.mistake);
 				}
 				this.emitLoopNotice(
 					pending.notice.phase,
@@ -2039,39 +2058,44 @@ export class SessionRuntime {
 					toolName,
 					extra: escalation,
 				},
-			});
-			this.enqueueMistakeRecord({
-				iteration,
-				reason: "tool_execution_failed",
-				details: diagnosis,
+				mistake: {
+					iteration,
+					reason: "tool_execution_failed",
+					details: diagnosis,
+				},
 			});
 			return;
 		}
-		this.emitLoopNotice(
-			"hard",
-			`The model sent the call to \`${toolName}\` again after the last warning.`,
-			iteration,
-			toolName,
-			escalation,
-		);
-		this.enqueueMistakeRecord({
-			iteration,
-			reason: "tool_execution_failed",
-			forceAtLimit: true,
-			details: `${diagnosis} ${LOOP_STOP_NOTICE}`,
-			// The abort reason is what a lead reads about a delegated agent the
-			// guard stopped, and until now it named no call at all.
-			abortDetail: `it kept sending ${describeRepeatedCall(toolName, input)}. ${firstSentence(diagnosis)}`,
-			// The host may still answer the limit with "continue"; the stop is
-			// announced only once the tracker has actually decided on it.
-			onStop: () =>
-				this.emitLoopNotice(
-					"stopped",
-					`Stopped the run: the model kept repeating a call to \`${toolName}\`.`,
-					iteration,
-					toolName,
-					escalation,
-				),
+		// The stop waits for the call's result as well: one that works is
+		// not stopped for.
+		this.pendingLoopWarnings.set(toolCallId, {
+			message: `${diagnosis} ${LOOP_STOP_NOTICE}`,
+			notice: {
+				phase: "hard",
+				text: `The model sent the call to \`${toolName}\` again after the last warning.`,
+				iteration,
+				toolName,
+				extra: escalation,
+			},
+			mistake: {
+				iteration,
+				reason: "tool_execution_failed",
+				forceAtLimit: true,
+				details: `${diagnosis} ${LOOP_STOP_NOTICE}`,
+				// The abort reason is what a lead reads about a delegated agent the
+				// guard stopped, and until now it named no call at all.
+				abortDetail: `it kept sending ${describeRepeatedCall(toolName, input)}. ${firstSentence(diagnosis)}`,
+				// The host may still answer the limit with "continue"; the stop is
+				// announced only once the tracker has actually decided on it.
+				onStop: () =>
+					this.emitLoopNotice(
+						"stopped",
+						`Stopped the run: the model kept repeating a call to \`${toolName}\`.`,
+						iteration,
+						toolName,
+						escalation,
+					),
+			},
 		});
 	}
 

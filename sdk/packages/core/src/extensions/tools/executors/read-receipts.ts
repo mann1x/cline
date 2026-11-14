@@ -102,6 +102,14 @@ export async function fileStampFor(
 	);
 }
 
+/** Whether a stamp is of the file's bytes, not of its size and mtime. */
+function isContentStamp(stamp: FileStamp | undefined): stamp is FileStamp {
+	return stamp !== undefined && stamp.includes("#");
+}
+
+/** Contents of one file remembered with their reads, the newest kept. */
+const REMEMBERED_STATES = 16;
+
 /** A span of lines the model has seen, inclusive at both ends. */
 interface Span {
 	first: number;
@@ -179,6 +187,22 @@ export interface ReadReceipts {
 	 * twice (pandorum g5tmt, calls 24 and 88).
 	 */
 	noteRewrite(filePath: string): void;
+	/**
+	 * Bring back the reads that were live when the file last held exactly
+	 * these bytes, and say whether there were any.
+	 *
+	 * A write retires every read of the file, and a `restore_file` back to a
+	 * version the model had read left it refused for lines it had read as
+	 * they stand: pandorum kf07w (2026-11-14), lines 150 to the end read at
+	 * revision #22, one edit, a restore to #22, and the next edit of lines
+	 * 159-166 refused as "either it was never read, or an earlier edit
+	 * changed the file's length" -- neither true. Only a content stamp
+	 * qualifies: equal stamps are equal bytes, so every line number in those
+	 * reads points at the text it pointed at when it was read. An mtime stamp
+	 * proves nothing of the kind and is never matched. Optional, so a registry
+	 * that does not track it still compiles and answers no.
+	 */
+	reinstate?(filePath: string, stamp: FileStamp | undefined): boolean;
 	/** Drop everything known about a file. */
 	forget(filePath: string): void;
 	/**
@@ -313,6 +337,35 @@ export function createReadReceipts(): OwnedReadReceipts {
 	// Lines a read cut short, by line number. Dropped with the spans: once the
 	// line numbers move, a cut names some other line.
 	const cuts = new Map<string, Map<number, LineCut>>();
+	// The reads that were live under each content stamp the file has had, so
+	// a file put back to bytes the model read gets those reads back. Written
+	// whenever a stamp is recorded with reads live -- a read records its stamp
+	// after its span -- and kept through retirement, which is what it is for.
+	const states = new Map<
+		string,
+		Map<FileStamp, { spans: Span[]; cuts: Map<number, LineCut> }>
+	>();
+	const remember = (key: string): void => {
+		const stamp = stamps.get(key);
+		const spans = seen.get(key);
+		if (!isContentStamp(stamp) || !spans || spans.length === 0) {
+			return;
+		}
+		const held = states.get(key) ?? new Map();
+		held.delete(stamp);
+		held.set(stamp, {
+			spans: spans.map((span) => ({ ...span })),
+			cuts: new Map(
+				[...(cuts.get(key) ?? new Map<number, LineCut>())].map(
+					([line, cut]) => [line, { ...cut }],
+				),
+			),
+		});
+		while (held.size > REMEMBERED_STATES) {
+			held.delete(held.keys().next().value as FileStamp);
+		}
+		states.set(key, held);
+	};
 
 	return {
 		noteRead(filePath, first, last) {
@@ -419,7 +472,31 @@ export function createReadReceipts(): OwnedReadReceipts {
 			if (stamp === undefined) {
 				return;
 			}
-			stamps.set(receiptKey(filePath), stamp);
+			const key = receiptKey(filePath);
+			stamps.set(key, stamp);
+			remember(key);
+		},
+
+		reinstate(filePath, stamp) {
+			if (!isContentStamp(stamp)) {
+				return false;
+			}
+			const key = receiptKey(filePath);
+			const state = states.get(key)?.get(stamp);
+			if (!state) {
+				return false;
+			}
+			seen.set(
+				key,
+				state.spans.map((span) => ({ ...span })),
+			);
+			cuts.set(
+				key,
+				new Map([...state.cuts].map(([line, cut]) => [line, { ...cut }])),
+			);
+			stamps.set(key, stamp);
+			retired.delete(key);
+			return true;
 		},
 
 		carryStamp(filePath, from, to) {
@@ -453,6 +530,7 @@ export function createReadReceipts(): OwnedReadReceipts {
 			originals.delete(key);
 			stamps.delete(key);
 			cuts.delete(key);
+			states.delete(key);
 		},
 
 		paths() {
@@ -465,6 +543,7 @@ export function createReadReceipts(): OwnedReadReceipts {
 			stamps.clear();
 			originals.clear();
 			cuts.clear();
+			states.clear();
 		},
 	};
 }

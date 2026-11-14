@@ -2645,6 +2645,12 @@ describe("SessionRuntime.run — initialMessages seeding (P1 #1)", () => {
  */
 function makeScriptedRuntime(script: {
 	events: readonly AgentRuntimeEvent[];
+	/**
+	 * Answer each started tool call through the runtime's `afterTool` hook,
+	 * as the real runtime does before the next call: failing or succeeding.
+	 * The loop guard's verdicts wait for that answer.
+	 */
+	answerTools?: "fail" | "succeed";
 }): {
 	deps: SessionRuntimeOrchestratorDeps;
 	abortCalls: string[];
@@ -2666,13 +2672,48 @@ function makeScriptedRuntime(script: {
 		},
 	};
 	let listener: ((e: AgentRuntimeEvent) => void) | undefined;
+	let hooks: Partial<AgentRuntimeHooks> | undefined;
+	const play = async () => {
+		for (const e of script.events) {
+			listener?.(e);
+			if (script.answerTools && e.type === "tool-started") {
+				await hooks?.afterTool?.({
+					snapshot: makeSnapshot(),
+					tool: { name: e.toolCall.toolName },
+					toolCall: e.toolCall,
+					input: e.toolCall.input,
+					result:
+						script.answerTools === "succeed"
+							? {
+									output: {
+										query: e.toolCall.toolName,
+										result: "fine",
+										success: true,
+									},
+								}
+							: {
+									output: {
+										query: e.toolCall.toolName,
+										result: "",
+										error: "no",
+										success: false,
+									},
+									isError: true,
+								},
+					startedAt: new Date(),
+					endedAt: new Date(),
+					durationMs: 1,
+				} as never);
+			}
+		}
+	};
 	const runtime = {
 		async run() {
-			for (const e of script.events) listener?.(e);
+			await play();
 			return baseResult;
 		},
 		async continue() {
-			for (const e of script.events) listener?.(e);
+			await play();
 			return baseResult;
 		},
 		abort(reason?: string) {
@@ -2687,7 +2728,12 @@ function makeScriptedRuntime(script: {
 		snapshot: makeSnapshot,
 	} as unknown as AgentRuntime;
 	return {
-		deps: { createAgentRuntimeImpl: () => runtime },
+		deps: {
+			createAgentRuntimeImpl: (config: AgentRuntimeConfig) => {
+				hooks = config.hooks as Partial<AgentRuntimeHooks>;
+				return runtime;
+			},
+		},
 		abortCalls,
 	};
 }
@@ -2955,12 +3001,16 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 		snapshot: makeSnapshot(),
 	});
 
-	const runIdenticalCalls = async (count: number) => {
+	const runIdenticalCalls = async (
+		count: number,
+		answerTools: "fail" | "succeed" = "fail",
+	) => {
 		const { deps, abortCalls } = makeScriptedRuntime({
 			events: [
 				{ type: "turn-started", iteration: 1, snapshot: makeSnapshot() },
 				...Array.from({ length: count }, (_, i) => identicalCall(i + 1)),
 			],
+			answerTools,
 		});
 		const session = new SessionRuntime(
 			makeAgentConfig({
@@ -3036,6 +3086,21 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 		expect(String(abortCalls[0])).toContain("it kept sending `same` {a: 1}");
 	});
 
+	// User ruling (2026-11-14): "dont think a successful repeat should count
+	// as a mistake". The verdict is formed before the call runs; a repeat
+	// that works records nothing and stops nothing.
+	it("neither stops nor records a mistake for repeats that succeed", async () => {
+		expect(await runIdenticalCalls(8, "succeed")).toHaveLength(0);
+	});
+
+	// A success clears only its own call's escalation, so failures in between
+	// still add up to the stop.
+	it("still stops a repeat that keeps failing", async () => {
+		expect((await runIdenticalCalls(4, "fail")).length).toBeGreaterThanOrEqual(
+			1,
+		);
+	});
+
 	// automaticum #1811: a harness arm that stops at the first guard trip saw
 	// the reasoning-loop and intent cuts on the event stream and nothing at all
 	// from this guard -- the warning rode on the tool result and the stop on
@@ -3055,11 +3120,8 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 				{ type: "turn-started", iteration: 1, snapshot: makeSnapshot() },
 				...Array.from({ length: 4 }, (_, i) => identicalCall(i + 1)),
 			],
+			answerTools: succeed ? "succeed" : "fail",
 		});
-		let capturedHooks: Partial<AgentRuntimeHooks> | undefined;
-		const createRuntime = deps.createAgentRuntimeImpl as (
-			config: AgentRuntimeConfig,
-		) => AgentRuntime;
 		const session = new SessionRuntime(
 			makeAgentConfig({
 				execution: {
@@ -3068,13 +3130,7 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 				},
 				...overrides,
 			}),
-			{
-				...deps,
-				createAgentRuntimeImpl: (config: AgentRuntimeConfig) => {
-					capturedHooks = config.hooks as Partial<AgentRuntimeHooks>;
-					return createRuntime(config);
-				},
-			},
+			deps,
 		);
 		const notices: Array<Record<string, unknown>> = [];
 		session.subscribeEvents((event) => {
@@ -3086,33 +3142,6 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 			}
 		});
 		await session.run("loop-me");
-		for (let i = 1; i <= 4; i++) {
-			await capturedHooks?.afterTool?.({
-				snapshot: makeSnapshot(),
-				tool: { name: "same" },
-				toolCall: {
-					type: "tool-call",
-					toolCallId: `tc${i}`,
-					toolName: "same",
-					input: { a: 1 },
-				},
-				input: { a: 1 },
-				result: succeed
-					? { output: { query: "same", result: "fine", success: true } }
-					: {
-							output: {
-								query: "same",
-								result: "",
-								error: "no",
-								success: false,
-							},
-							isError: true,
-						},
-				startedAt: new Date(),
-				endedAt: new Date(),
-				durationMs: 1,
-			} as never);
-		}
 		// Stable: a call's own notices keep their order.
 		return [...notices].sort(
 			(a, b) => (a.iteration as number) - (b.iteration as number),
