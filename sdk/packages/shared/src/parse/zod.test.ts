@@ -118,3 +118,94 @@ describe("validateWithZod", () => {
 		).toEqual({ path: "/tmp/a.ts", new_text: "x", start_line: 3 });
 	});
 });
+
+describe("validateWithZod: arguments swallowed into a string", () => {
+	const Editor = z.object({
+		path: z.string().optional(),
+		file_path: z.string().optional(),
+		new_text: z.string(),
+		old_text: z.string().optional(),
+		start_line: z.number().optional(),
+		end_line: z.number().optional(),
+		intent: z.string().optional(),
+	});
+
+	it("refuses the pandorum call and names the argument the model wrote", () => {
+		// t9vz7, call 82: `new_text` closed with a backtick, `start_line` after it.
+		const input = {
+			end_line: 344,
+			file_path: "manic_miner.html",
+			intent: "Fix friction",
+			new_text:
+				// biome-ignore lint/suspicious/noTemplateCurlyInString: the model's own code, quoted
+				"o2El.innerText=`${Math.max(0,~~(player.o2))}%`;\nclouds.forEach(c=>c.update());\n}\n`,start_line:337",
+		};
+		expect(() => validateWithZod(Editor, input)).toThrow(
+			/Its `new_text` ends with .*closed with a backtick \(`\).*`start_line: 337`, which you did write/,
+		);
+	});
+
+	it("names every argument a tail swallowed, and a tag as the closer", () => {
+		expect(() =>
+			validateWithZod(Editor, {
+				end_line: 9,
+				new_text: "</html>` ,path: `manic_miner.html`, start_line: 105}",
+			}),
+		).toThrow(/`path: `manic_miner.html``, `start_line: 105`/);
+		expect(() =>
+			validateWithZod(Editor, {
+				end_line: 133,
+				file_path: "m.html",
+				new_text: "</script></code>,start_line:29",
+			}),
+		).toThrow(/closed with `<\/code>`/);
+	});
+
+	it("passes text that only looks like it", () => {
+		// A template literal at the end of the text, nothing after it.
+		expect(
+			validateWithZod(Editor, { new_text: "const s = `a`;" }).new_text,
+		).toBe("const s = `a`;");
+		// The name is not one of this tool's arguments.
+		expect(
+			validateWithZod(Editor, { new_text: "f(`a`, width: 3" }).new_text,
+		).toBe("f(`a`, width: 3");
+		// The argument is in the call already, so nothing was lost.
+		expect(
+			validateWithZod(Editor, {
+				new_text: "x`,start_line:3",
+				start_line: 3,
+			}).start_line,
+		).toBe(3);
+		// A newline after it, which the refusal tells a model to add.
+		expect(
+			validateWithZod(Editor, { new_text: "x`,start_line:3\n" }).new_text,
+		).toBe("x`,start_line:3\n");
+	});
+});
+
+describe("validateWithZod: an unknown closer is not named", () => {
+	it("does not blame the quote that ends a swallowed value", () => {
+		// agent uqj5pq: `old_text` ran on through `path: '...'`, which is no
+		// argument of this schema, and on into `start_line` and `end_line`.
+		const Editor = z.object({
+			new_text: z.string(),
+			old_text: z.string().optional(),
+			start_line: z.number().optional(),
+			end_line: z.number().optional(),
+		});
+		let message = "";
+		try {
+			validateWithZod(Editor, {
+				new_text: "x",
+				old_text:
+					"safe)} ,path: 'c:\\\\m.html', start_line: 96, end_line: 132}",
+			});
+		} catch (error) {
+			message = String(error);
+		}
+		expect(message).toContain("was not closed by the delimiter that opened it");
+		expect(message).not.toContain("closed with a quote");
+		expect(message).toContain("`start_line: 96`, `end_line: 132`");
+	});
+});

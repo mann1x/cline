@@ -164,11 +164,166 @@ function namesAField(message: string): boolean {
 	return message.includes("→ at ");
 }
 
+/** Every argument name a schema declares, across union branches. */
+const schemaPropertyNames = new WeakMap<z.ZodType, Set<string>>();
+
+function propertyNamesOf(schema: z.ZodType): Set<string> {
+	const cached = schemaPropertyNames.get(schema);
+	if (cached) {
+		return cached;
+	}
+	const names = new Set<string>();
+	const collect = (node: unknown): void => {
+		if (!node || typeof node !== "object") {
+			return;
+		}
+		const record = node as Record<string, unknown>;
+		const properties = record.properties;
+		if (properties && typeof properties === "object") {
+			for (const name of Object.keys(properties)) {
+				names.add(name);
+			}
+		}
+		for (const key of ["anyOf", "oneOf", "allOf"]) {
+			const branches = record[key];
+			if (Array.isArray(branches)) {
+				for (const branch of branches) {
+					collect(branch);
+				}
+			}
+		}
+	};
+	try {
+		collect(z.toJSONSchema(schema, { io: "input", unrepresentable: "any" }));
+	} catch {
+		// A schema that cannot be described has no names to check against, and
+		// the check below then finds nothing: silence, never a guess.
+	}
+	schemaPropertyNames.set(schema, names);
+	return names;
+}
+
+/** What a string was closed with instead of its own delimiter. */
+const WRONG_CLOSER = String.raw`\x60|"|'|<\/[A-Za-z][\w-]*>`;
+/** One argument written after it: `,name: value`, a value of plain shape. */
+const SWALLOWED_PAIR = String.raw`\s*,\s*[A-Za-z_]\w*\s*:\s*(?:\x60[^\x60\n]*\x60|"[^"\n]*"|'[^'\n]*'|-?\d+(?:\.\d+)?|true|false|null)`;
+const SWALLOWED_TAIL = new RegExp(
+	// Spaces only after it, never a newline: the repair closes the string
+	// before any trailing whitespace, and a newline is the way out the
+	// refusal offers for text that really ends like this.
+	String.raw`(${WRONG_CLOSER})((?:${SWALLOWED_PAIR})+)[ \t]*\}?[ \t]*$`,
+);
+const SWALLOWED_PAIRS =
+	/\s*,\s*([A-Za-z_]\w*)\s*:\s*(\x60[^\x60\n]*\x60|"[^"\n]*"|'[^'\n]*'|[^,\s}]+)/g;
+
+interface SwallowedArguments {
+	field: string;
+	closer: string;
+	pairs: Array<{ name: string; value: string }>;
+	tail: string;
+}
+
+/**
+ * Arguments a lenient parse folded into the end of a string argument.
+ *
+ * The model closed a string with a backtick (or a quote, or `</code>`) instead
+ * of the delimiter that opened it. Ollama's Gemma 4 parser then repairs the
+ * call by closing the string at the very end, so every argument written after
+ * it -- `start_line: 337`, which the model did write -- arrives as the tail of
+ * `new_text`, and the call is well-formed with that argument missing. The
+ * editor then said, truthfully, that the call had no `start_line`, and the
+ * model, which had written one, sent the identical call again: five times in
+ * a row on pandorum (2026-11-14, t9vz7). Across the archived sessions this
+ * shape is 102 calls in 38 sessions, and before the editor refused an
+ * `end_line` without a `start_line`, 21 of them replaced a whole file with
+ * one line and the swallowed text.
+ *
+ * Only a tail that is nothing but `,name: value` pairs after the wrong closer,
+ * every name an argument of this tool that the call does not carry. Text a
+ * model meant to send cannot end that way without also leaving those very
+ * arguments absent, and if it ever does, the refusal says how to send it.
+ */
+function findSwallowedArguments(
+	schema: z.ZodType,
+	input: unknown,
+): SwallowedArguments | undefined {
+	if (input === null || typeof input !== "object" || Array.isArray(input)) {
+		return undefined;
+	}
+	const record = input as Record<string, unknown>;
+	let names: Set<string> | undefined;
+	for (const [field, value] of Object.entries(record)) {
+		if (typeof value !== "string") {
+			continue;
+		}
+		const tail = SWALLOWED_TAIL.exec(value);
+		if (!tail) {
+			continue;
+		}
+		names ??= propertyNamesOf(schema);
+		const pairs = [...(tail[2] ?? "").matchAll(SWALLOWED_PAIRS)].map(
+			(pair) => ({ name: pair[1] ?? "", value: pair[2] ?? "" }),
+		);
+		const swallowed =
+			pairs.length > 0 &&
+			pairs.every(
+				(pair) =>
+					pair.name !== field &&
+					names?.has(pair.name) &&
+					record[pair.name] === undefined,
+			);
+		if (swallowed) {
+			// The "closer" can itself be the closing quote of an argument that
+			// was swallowed too but is no name this tool has (`path: '...'`).
+			// Then what really ended the string is further left and unknown,
+			// and naming the quote would send the model looking for the wrong
+			// mistake.
+			const before = value.slice(0, tail.index + 1);
+			const endsAValue =
+				/,\s*[A-Za-z_]\w*\s*:\s*(?:\x60[^\x60\n]*|"[^"\n]*|'[^'\n]*)[\x60"']$/.test(
+					before,
+				);
+			return {
+				field,
+				closer: endsAValue ? "" : (tail[1] ?? ""),
+				pairs,
+				tail: tail[0],
+			};
+		}
+	}
+	return undefined;
+}
+
+function describeSwallowedArguments(found: SwallowedArguments): string {
+	const closer = !found.closer
+		? ""
+		: found.closer === "\x60"
+			? "a backtick (\x60)"
+			: found.closer === '"' || found.closer === "'"
+				? `a quote (${found.closer})`
+				: `\x60${found.closer}\x60`;
+	const written = found.pairs
+		.map((pair) => `\x60${pair.name}: ${pair.value}\x60`)
+		.join(", ");
+	const them = found.pairs.length === 1 ? "it" : "them";
+	return (
+		`This call was not run. Its \x60${found.field}\x60 ends with ${JSON.stringify(found.tail.trim())}: ` +
+		`${closer ? `the string was closed with ${closer} instead of the delimiter that opened it` : "the string was not closed by the delimiter that opened it"}, so the parser read on past it, ` +
+		`and ${written}, which you did write, arrived as the end of \x60${found.field}\x60 instead of as ${them === "it" ? "its own argument" : "their own arguments"}. ` +
+		`Send the call again with \x60${found.field}\x60 closed by the same delimiter that opened it, and nothing after its last character. ` +
+		`(If that text really is the end of what \x60${found.field}\x60 should hold, end it with a newline after it.)`
+	);
+}
+
 /**
  * Validate input using a Zod schema
  * Throws a formatted error if validation fails
  */
 export function validateWithZod<T>(schema: z.ZodType<T>, input: unknown): T {
+	const swallowed = findSwallowedArguments(schema, input);
+	if (swallowed) {
+		throw new Error(describeSwallowedArguments(swallowed));
+	}
 	const result = schema.safeParse(input);
 	if (!result.success) {
 		const missing = describeMissingFields(result.error, input);
