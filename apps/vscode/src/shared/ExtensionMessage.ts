@@ -521,6 +521,12 @@ export interface ClineSayTool {
 	 * tool failure, and drew a card identical to one that was applied.
 	 */
 	failed?: boolean
+	/**
+	 * `report` is what the tool answered the call -- a check's findings, the
+	 * matches a search found -- rather than an import's progress report, so
+	 * the row calls it a result, and a failure "Failed".
+	 */
+	answered?: boolean
 }
 
 // must keep in sync with system prompt

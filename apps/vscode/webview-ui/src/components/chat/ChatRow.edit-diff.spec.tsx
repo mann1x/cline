@@ -161,7 +161,15 @@ describe("an edit row once the editor has answered", () => {
 })
 
 // Asked for 2026-11-14: a grep row showed its pattern and none of what it found.
-describe("a grep, sed or awk row's answer", () => {
+describe("a generic tool row's answer", () => {
+	it("still calls an import's progress a report", () => {
+		render(
+			<ChatRowContent message={editMessage({ tool: "library_add", report: "3 files read\nb.pdf: not read" })} {...base} />,
+		)
+		expect(screen.getByText("Report")).toBeTruthy()
+		expect(screen.queryByText("Result")).toBeNull()
+	})
+
 	it("shows what the grep found, as a result", () => {
 		render(
 			<ChatRowContent
@@ -169,6 +177,7 @@ describe("a grep, sed or awk row's answer", () => {
 					tool: "grep",
 					path: "manic_miner.html",
 					content: "grep currentLevel",
+					answered: true,
 					report: "manic_miner.html:82: currentLevel = 1;\nmanic_miner.html:377: currentLevel++;",
 				})}
 				{...base}
@@ -186,6 +195,7 @@ describe("a grep, sed or awk row's answer", () => {
 					tool: "awk",
 					path: "a.txt",
 					content: "awk {print",
+					answered: true,
 					failed: true,
 					report: "awk failed: Unterminated string.",
 				})}

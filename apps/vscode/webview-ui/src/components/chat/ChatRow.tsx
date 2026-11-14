@@ -150,9 +150,6 @@ const GENERIC_TOOL_VERBS: Record<string, string> = {
 	transcribe_audio: "Cerebriline transcribed audio:",
 }
 
-/** Tools whose report is what they answered, shown as a result. */
-const ANSWER_ROW_TOOLS: ReadonlySet<string> = new Set(["grep", "sed", "awk"])
-
 function toolVerbForDisplay(toolName: string): string {
 	return GENERIC_TOOL_VERBS[toolName] ?? `Cerebriline used \`${toolName}\`:`
 }
@@ -911,10 +908,10 @@ export const ChatRowContent = memo(
 							) : null}
 							{/* What it came to, once it is done: the progress above
 							    goes when the call ends, the report stays. */}
-							{/* `grep`, `sed` and `awk` answer with their matches,
-							    changes and output: a result, or a failure. */}
+							{/* What the tool answered -- a result, or a failure --
+							    or, for an import, the report it came to. */}
 							{!message.partial && tool.report ? (
-								ANSWER_ROW_TOOLS.has(tool.tool) ? (
+								tool.answered ? (
 									<ToolReport failed={tool.failed} failedLabel="Failed" label="Result" report={tool.report} />
 								) : (
 									<ToolReport report={tool.report} />

@@ -2650,12 +2650,73 @@ function getBooleanField(input: Record<string, unknown> | undefined, field: stri
 const EDIT_CARD_TOOLS: ReadonlySet<ClineSayTool["tool"]> = new Set(["editedExistingFile", "newFileCreated", "fileDeleted"])
 
 /**
- * Tools whose row shows what they answered, as an edit's card does: the
- * matches a `grep` found, what a `sed` changed, what an `awk` printed. The row
- * showed the pattern and the file and nothing of the result, so a reader had
- * to guess what the model saw before its next move (asked for 2026-11-14).
+ * The rows the webview draws for a tool of its own, each showing what it needs
+ * to. Every other tool gets the generic row, and that row now shows what the
+ * tool answered, as an edit's card does: what `check_file` found, what
+ * `run_check` reported, what `ask_lsp`, a `grep`, an MCP tool returned. It
+ * showed a name and a file and nothing of the result, so a reader had to
+ * guess what the model saw before its next move (asked for 2026-11-14).
  */
-const ANSWER_CARD_TOOLS: ReadonlySet<string> = new Set(["grep", "sed", "awk"])
+const BESPOKE_TOOL_ROWS: ReadonlySet<ClineSayTool["tool"]> = new Set([
+	"editedExistingFile",
+	"newFileCreated",
+	"fileDeleted",
+	"readFile",
+	"listFilesTopLevel",
+	"listFilesRecursive",
+	"listCodeDefinitionNames",
+	"searchFiles",
+	"summarizeTask",
+	"webFetch",
+	"webSearch",
+	"useSkill",
+])
+
+/**
+ * The text a tool answered, for its row, or nothing.
+ *
+ * Only text: a result or error field, a text block, an MCP result's text
+ * content. Unlike {@link editAnswer} there is no fallback to the output's JSON,
+ * because an image tool answers with base64, and on a row that is a wall of
+ * noise rather than an answer -- such a tool's row shows nothing instead.
+ */
+export function toolAnswer(output: unknown, error?: string): { text: string; failed: boolean } {
+	if (error?.trim()) {
+		return { text: error.trim(), failed: true }
+	}
+	let value = output
+	if (typeof value === "string") {
+		const trimmed = value.trim()
+		if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+			return { text: trimmed, failed: false }
+		}
+		try {
+			value = JSON.parse(trimmed)
+		} catch {
+			return { text: trimmed, failed: false }
+		}
+	}
+	const items = (Array.isArray(value) ? value : [value]).flatMap((item) =>
+		item && typeof item === "object" && Array.isArray((item as { content?: unknown }).content)
+			? [item, ...((item as { content: unknown[] }).content as unknown[])]
+			: [item],
+	)
+	const texts = (pick: (record: Record<string, unknown>) => unknown) =>
+		items
+			.map((item) => (item && typeof item === "object" ? pick(item as Record<string, unknown>) : undefined))
+			.filter((text): text is string => typeof text === "string" && text.trim() !== "")
+			.map((text) => text.trim())
+	const errors = texts((record) => record.error)
+	if (errors.length > 0) {
+		return { text: errors.join("\n\n"), failed: true }
+	}
+	const results = [
+		...texts((record) => record.result),
+		...texts((record) => (record.type === "text" ? record.text : undefined)),
+	]
+	const mcpError = items.some((item) => item && typeof item === "object" && (item as { isError?: unknown }).isError === true)
+	return { text: results.join("\n\n"), failed: mcpError && results.length > 0 }
+}
 
 /**
  * Longest answer kept on a row. The row is part of the task's saved state,
@@ -4151,13 +4212,14 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 							sayTool.failed = true
 						}
 					}
-					if (ANSWER_CARD_TOOLS.has(toolName) && !sayTool.report) {
-						const answer = editAnswer(event.output, event.error)
+					if (!sayTool.report && !BESPOKE_TOOL_ROWS.has(sayTool.tool) && !isSubagentSpawnTool(toolName)) {
+						const answer = toolAnswer(event.output, event.error)
 						if (answer.text) {
 							sayTool.report = clipAnswer(answer.text)
-						}
-						if (answer.failed) {
-							sayTool.failed = true
+							sayTool.answered = true
+							if (answer.failed) {
+								sayTool.failed = true
+							}
 						}
 					}
 					// If there's an error, include it in the tool message

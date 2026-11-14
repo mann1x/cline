@@ -30,6 +30,7 @@ import {
 	sdkMessagesToClineMessages,
 	spawnBatchMembers,
 	summarizeSubagentUsageByProvider,
+	toolAnswer,
 	translateSessionEvent,
 } from "./message-translator"
 
@@ -3301,7 +3302,9 @@ describe("translateSessionEvent — a tool that reported its progress", () => {
 		expect(rowOf(end).report).toBe("Cancelled by the user.\na.pdf: not read")
 	})
 
-	it("leaves a tool that reported nothing as it was", () => {
+	// Until 2026-11-14 such a row showed nothing; it now shows the answer as
+	// what the tool answered, not as a progress report.
+	it("shows a tool that reported nothing with its answer, as a result", () => {
 		const state = new MessageTranslatorState()
 		send(state, {
 			type: "content_start",
@@ -3317,7 +3320,7 @@ describe("translateSessionEvent — a tool that reported its progress", () => {
 			toolCallId: "quiet-1",
 			output: "a.md: not in the Library.",
 		})
-		expect(rowOf(end)).not.toHaveProperty("report")
+		expect(rowOf(end)).toMatchObject({ report: "a.md: not in the Library.", answered: true })
 	})
 })
 
@@ -7894,7 +7897,7 @@ describe("an edit's card carries what the editor answered", () => {
 })
 
 // Asked for 2026-11-14: a grep row showed the pattern and nothing it found.
-describe("a grep, sed or awk row carries what the tool answered", () => {
+describe("a tool's generic row carries what the tool answered", () => {
 	const end = (toolName: string, input: unknown, output: unknown, error?: string) => {
 		const state = new MessageTranslatorState()
 		const event = (type: string, extra: Record<string, unknown>) =>
@@ -7917,7 +7920,7 @@ describe("a grep, sed or awk row carries what the tool answered", () => {
 		const tool = end("grep", grep, [
 			{ query: "grep:manic_miner.html", result: "manic_miner.html:82: currentLevel = 1;", success: true },
 		])
-		expect(tool).toMatchObject({ tool: "grep", report: "manic_miner.html:82: currentLevel = 1;" })
+		expect(tool).toMatchObject({ tool: "grep", answered: true, report: "manic_miner.html:82: currentLevel = 1;" })
 		expect(tool.failed).toBeUndefined()
 	})
 
@@ -7933,6 +7936,43 @@ describe("a grep, sed or awk row carries what the tool answered", () => {
 		const tool = end("grep", grep, [{ query: "grep", result: "x".repeat(25_000), success: true }])
 		expect(tool.report.length).toBeLessThan(20_100)
 		expect(tool.report).toContain("5,000 more characters, not shown here.")
+	})
+
+	it("keeps what check_file found", () => {
+		const tool = end("check_file", { paths: ["manic_miner.html"] }, [
+			{ query: "check:manic_miner.html", result: "manic_miner.html: 2 problems\n  line 90: ';' expected", success: true },
+		])
+		expect(tool).toMatchObject({
+			tool: "check_file",
+			answered: true,
+			report: "manic_miner.html: 2 problems\n  line 90: ';' expected",
+		})
+	})
+
+	it("reads text content and its error flag from an MCP-shaped result", () => {
+		expect(toolAnswer({ content: [{ type: "text", text: "no server for .ts" }], isError: true })).toEqual({
+			text: "no server for .ts",
+			failed: true,
+		})
+	})
+
+	it("keeps the browser's words and drops its screenshot", () => {
+		const tool = end("browser", { action: "open", url: "http://localhost/" }, [
+			{ type: "text", text: "Loaded http://localhost/ (200)" },
+			{ type: "image", data: "iVBORw0KGgo".repeat(500), mediaType: "image/png" },
+		])
+		expect(tool.report).toBe("Loaded http://localhost/ (200)")
+	})
+
+	it("shows nothing for an answer that is only an image", () => {
+		const tool = end("generate_image", { prompt: "a cave" }, { type: "image", data: "iVBORw0KGgo".repeat(500) })
+		expect(tool.report).toBeUndefined()
+		expect(tool.answered).toBeUndefined()
+	})
+
+	it("leaves a row the webview draws for itself alone", () => {
+		const tool = end("read_files", { files: [{ path: "a.txt" }] }, [{ query: "a.txt", result: "1 | hello", success: true }])
+		expect(tool.report).toBeUndefined()
 	})
 
 	it("shows it again when the task is reopened", () => {
