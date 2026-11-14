@@ -126,7 +126,16 @@ export const ThinkingRow = memo(
 									isVisible,
 							},
 						)}>
-						<div className="relative flex-1">
+						{/*
+						 * `min-w-0`, or the rules on `pre` below do nothing. This is a
+						 * flex item, and a flex item is never narrower than its widest
+						 * content: a fenced block's longest line. The percentage
+						 * `max-w-full` on that `pre` is no limit while that minimum is
+						 * worked out, so the whole box took the code's width and
+						 * `overflow-hidden` cut every paragraph at the panel's edge,
+						 * not only the code (reported 2026-11-14, a v9-agentic run).
+						 */}
+						<div className="relative flex-1 min-w-0" data-testid="thinking-body">
 							<div
 								className={cn(
 									"flex max-h-[150px] overflow-y-auto overflow-x-hidden text-description leading-normal truncated break-words pl-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden [direction:ltr]",

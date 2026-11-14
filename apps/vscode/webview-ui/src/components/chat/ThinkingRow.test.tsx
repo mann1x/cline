@@ -180,3 +180,21 @@ describe("ThinkingRow while streaming", () => {
 		expect(screen.getByRole("heading", { name: "Plan" })).toBeInTheDocument()
 	})
 })
+
+describe("ThinkingRow width", () => {
+	it("lets the body shrink below its widest code line", () => {
+		// jsdom does no layout, so this pins the class that does the work: without
+		// `min-w-0` the flex item takes a fenced block's longest line as its
+		// minimum width and every paragraph is cut at the panel's edge.
+		render(
+			<ThinkingRow
+				isExpanded={true}
+				isVisible={true}
+				reasoningContent={"Look at line 85:\n\n```js\n85 | " + "x".repeat(400) + "\n```\n\nThen the prose."}
+				showTitle={true}
+			/>,
+		)
+
+		expect(screen.getByTestId("thinking-body")).toHaveClass("min-w-0")
+	})
+})
