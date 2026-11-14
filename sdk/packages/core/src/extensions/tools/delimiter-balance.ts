@@ -75,7 +75,7 @@ export interface DelimiterFinding {
 	enclosing?: Array<{ opener: string; line: number; column: number }>;
 }
 
-interface Cursor {
+export interface Cursor {
 	line: number;
 	column: number;
 }
@@ -391,8 +391,13 @@ const SCRIPT_TYPES = new Set([
 /** Every `<script>` body in an HTML-ish file, with where each one starts. */
 function scriptSpans(
 	text: string,
-): Array<{ body: string; origin: Cursor; module: boolean }> {
-	const spans: Array<{ body: string; origin: Cursor; module: boolean }> = [];
+): Array<{ body: string; start: number; origin: Cursor; module: boolean }> {
+	const spans: Array<{
+		body: string;
+		start: number;
+		origin: Cursor;
+		module: boolean;
+	}> = [];
 	const opening = /<script\b([^>]*)>/gi;
 	let match = opening.exec(text);
 	while (match) {
@@ -417,6 +422,7 @@ function scriptSpans(
 			const lastNewline = before.lastIndexOf("\n");
 			spans.push({
 				body: text.slice(bodyStart, bodyEnd),
+				start: bodyStart,
 				origin: { line: lineIndex, column: bodyStart - lastNewline },
 				module: type === "module",
 			});
@@ -1250,24 +1256,7 @@ export function findScriptSyntaxError(
 	filePath: string,
 	text: string,
 ): string | undefined {
-	const extension = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
-	if (!PARSE_CHECKED.has(extension)) {
-		return undefined;
-	}
-	const spans = EMBEDS_SCRIPT.has(extension)
-		? scriptSpans(text).map((span) => ({
-				body: span.body,
-				origin: span.origin,
-				goal: (span.module ? "module" : "script") as ScriptGoal,
-			}))
-		: [
-				{
-					body: text,
-					origin: { line: 1, column: 1 },
-					goal: (extension === ".mjs" ? "module" : "either") as ScriptGoal,
-				},
-			];
-	for (const span of spans) {
+	for (const span of parseCheckedScripts(filePath, text) ?? []) {
 		if (span.body.trim() === "") {
 			continue;
 		}
@@ -1284,6 +1273,45 @@ export function findScriptSyntaxError(
 		}
 	}
 	return undefined;
+}
+
+/** One script a file holds, where it sits, and how it is parsed. */
+export interface CheckedScript {
+	body: string;
+	/** Offset of `body` in the file's text. */
+	start: number;
+	/** Where `body` begins, 1-based, for `findParseStop`. */
+	origin: Cursor;
+	goal: ScriptGoal;
+}
+
+/**
+ * The scripts in a file a real parser is asked about: the whole file for
+ * JavaScript, each inline `<script>` for HTML. Undefined for anything else.
+ */
+export function parseCheckedScripts(
+	filePath: string,
+	text: string,
+): CheckedScript[] | undefined {
+	const extension = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
+	if (!PARSE_CHECKED.has(extension)) {
+		return undefined;
+	}
+	return EMBEDS_SCRIPT.has(extension)
+		? scriptSpans(text).map((span) => ({
+				body: span.body,
+				start: span.start,
+				origin: span.origin,
+				goal: (span.module ? "module" : "script") as ScriptGoal,
+			}))
+		: [
+				{
+					body: text,
+					start: 0,
+					origin: { line: 1, column: 1 },
+					goal: (extension === ".mjs" ? "module" : "either") as ScriptGoal,
+				},
+			];
 }
 
 /**

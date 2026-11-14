@@ -13,7 +13,9 @@ import {
 	canScanDelimiters,
 	describeDelimiterBalance,
 	PRESCRIPTION_MARKER,
+	parseCheckedScripts,
 } from "../delimiter-balance";
+import { describeRedefinition } from "../redefinition-note";
 import type { EditFileInput } from "../schemas";
 import type { EditorExecutor } from "../types";
 import { splitBom } from "./bom";
@@ -2834,7 +2836,41 @@ export function createEditorExecutor(
 		// step with respect to other writers: two agents that each read before
 		// either writes both produce a complete, well-formed file, and the
 		// second one silently contains none of the first one's work.
-		return withFileLock(filePath, () => editLocked(input, filePath, context));
+		return withFileLock(filePath, async () => {
+			// Read inside the lock, so these are exactly the text this call
+			// found and the text it left, whoever else is writing.
+			const before = await readForRedefinition(filePath);
+			const result = await editLocked(input, filePath, context);
+			if (before === undefined) {
+				return result;
+			}
+			const after = await readForRedefinition(filePath);
+			const note =
+				after === undefined
+					? undefined
+					: describeRedefinition(filePath, before, after, input);
+			return note ? `${result}\n\n${note}` : result;
+		});
+	};
+
+	/**
+	 * A JavaScript or HTML file's text, for `describeRedefinition`; undefined
+	 * for any other file, one too big to scan, or one that cannot be read.
+	 */
+	const readForRedefinition = async (
+		filePath: string,
+	): Promise<string | undefined> => {
+		if (!parseCheckedScripts(filePath, "")) {
+			return undefined;
+		}
+		try {
+			const stat = await fs.stat(filePath);
+			return stat.size > MAX_SCANNED_BYTES
+				? undefined
+				: await fs.readFile(filePath, encoding);
+		} catch {
+			return undefined;
+		}
 	};
 
 	const editLocked = async (
