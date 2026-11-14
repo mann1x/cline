@@ -104,9 +104,10 @@ describe("the tools section", () => {
 		// The editor is about a fifth of the tokens on offer, so dropping it has
 		// to move the number the panel prints. Both figures move when a tool
 		// joins the catalog or its description is reworded: `render_image` and
-		// `transform_image` did, and so did `check_file` at 849 tokens.
+		// `transform_image` did, and so did `check_file` at 849 tokens, and so did
+		// read_files, ask_lsp and browser re-measured in 4.100.277.
 		const total = screen.getByTestId("tools-section-total").textContent ?? ""
-		expect(total).toContain("8.1k of 10.1k tokens")
+		expect(total).toContain("8.4k of 10.4k tokens")
 		// On the collapsed header, deliberately: the price is the reason to
 		// open the section, so it cannot be behind it.
 		expect(screen.queryByTestId("tool-editor")).toBeNull()

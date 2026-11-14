@@ -159,3 +159,40 @@ describe("an edit row once the editor has answered", () => {
 		expect(screen.queryByText("Refused")).toBeNull()
 	})
 })
+
+// Asked for 2026-11-14: a grep row showed its pattern and none of what it found.
+describe("a grep, sed or awk row's answer", () => {
+	it("shows what the grep found, as a result", () => {
+		render(
+			<ChatRowContent
+				message={editMessage({
+					tool: "grep",
+					path: "manic_miner.html",
+					content: "grep currentLevel",
+					report: "manic_miner.html:82: currentLevel = 1;\nmanic_miner.html:377: currentLevel++;",
+				})}
+				{...base}
+			/>,
+		)
+		expect(screen.getByText("Result")).toBeTruthy()
+		expect(screen.getByText("manic_miner.html:82: currentLevel = 1;")).toBeTruthy()
+		expect(screen.getByText("2 lines")).toBeTruthy()
+	})
+
+	it("calls a failed awk failed, not refused", () => {
+		render(
+			<ChatRowContent
+				message={editMessage({
+					tool: "awk",
+					path: "a.txt",
+					content: "awk {print",
+					failed: true,
+					report: "awk failed: Unterminated string.",
+				})}
+				{...base}
+			/>,
+		)
+		expect(screen.getByText("Failed")).toBeTruthy()
+		expect(screen.queryByText("Refused")).toBeNull()
+	})
+})

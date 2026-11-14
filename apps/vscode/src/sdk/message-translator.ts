@@ -2650,6 +2650,29 @@ function getBooleanField(input: Record<string, unknown> | undefined, field: stri
 const EDIT_CARD_TOOLS: ReadonlySet<ClineSayTool["tool"]> = new Set(["editedExistingFile", "newFileCreated", "fileDeleted"])
 
 /**
+ * Tools whose row shows what they answered, as an edit's card does: the
+ * matches a `grep` found, what a `sed` changed, what an `awk` printed. The row
+ * showed the pattern and the file and nothing of the result, so a reader had
+ * to guess what the model saw before its next move (asked for 2026-11-14).
+ */
+const ANSWER_CARD_TOOLS: ReadonlySet<string> = new Set(["grep", "sed", "awk"])
+
+/**
+ * Longest answer kept on a row. The row is part of the task's saved state,
+ * resent to the webview whole, and a `grep` over a large tree can answer with
+ * far more than anyone scrolls through in a card.
+ */
+const MAX_ANSWER_CARD_CHARS = 20_000
+
+function clipAnswer(text: string): string {
+	if (text.length <= MAX_ANSWER_CARD_CHARS) {
+		return text
+	}
+	const rest = text.length - MAX_ANSWER_CARD_CHARS
+	return `${text.slice(0, MAX_ANSWER_CARD_CHARS)}\n… ${rest.toLocaleString("en-US")} more characters, not shown here.`
+}
+
+/**
  * What a file tool answered: its error when it refused, otherwise its result.
  *
  * A refusal arrives as `ToolOperationResult`s carrying `error`, live as an
@@ -4123,6 +4146,15 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 						const answer = editAnswer(event.output, event.error)
 						if (answer.text) {
 							sayTool.report = answer.text
+						}
+						if (answer.failed) {
+							sayTool.failed = true
+						}
+					}
+					if (ANSWER_CARD_TOOLS.has(toolName) && !sayTool.report) {
+						const answer = editAnswer(event.output, event.error)
+						if (answer.text) {
+							sayTool.report = clipAnswer(answer.text)
 						}
 						if (answer.failed) {
 							sayTool.failed = true

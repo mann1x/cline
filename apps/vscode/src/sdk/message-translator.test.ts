@@ -7892,3 +7892,61 @@ describe("an edit's card carries what the editor answered", () => {
 		expect(endEdit(undefined).report).toBeUndefined()
 	})
 })
+
+// Asked for 2026-11-14: a grep row showed the pattern and nothing it found.
+describe("a grep, sed or awk row carries what the tool answered", () => {
+	const end = (toolName: string, input: unknown, output: unknown, error?: string) => {
+		const state = new MessageTranslatorState()
+		const event = (type: string, extra: Record<string, unknown>) =>
+			translateSessionEvent(
+				{
+					type: "agent_event",
+					payload: {
+						sessionId: "s",
+						event: { type, contentType: "tool", toolName, toolCallId: "g1", ...extra } as AgentEvent,
+					},
+				},
+				state,
+			)
+		event("content_start", { input })
+		return JSON.parse(event("content_end", { output, error }).messages[0].text ?? "{}")
+	}
+	const grep = { pattern: "currentLevel\\s*[+-]", files: ["manic_miner.html"] }
+
+	it("keeps the matches a grep found", () => {
+		const tool = end("grep", grep, [
+			{ query: "grep:manic_miner.html", result: "manic_miner.html:82: currentLevel = 1;", success: true },
+		])
+		expect(tool).toMatchObject({ tool: "grep", report: "manic_miner.html:82: currentLevel = 1;" })
+		expect(tool.failed).toBeUndefined()
+	})
+
+	it("marks a failed awk as failed, with its own words", () => {
+		const error = 'awk failed: Unterminated string: a `"` has no closing quote.'
+		const tool = end("awk", { program: '{print "', files: ["a.txt"] }, [
+			{ query: "awk:a.txt", result: "", error, success: false },
+		])
+		expect(tool).toMatchObject({ tool: "awk", failed: true, report: error })
+	})
+
+	it("clips an answer too long to keep on a row", () => {
+		const tool = end("grep", grep, [{ query: "grep", result: "x".repeat(25_000), success: true }])
+		expect(tool.report.length).toBeLessThan(20_100)
+		expect(tool.report).toContain("5,000 more characters, not shown here.")
+	})
+
+	it("shows it again when the task is reopened", () => {
+		const saved = JSON.stringify([{ query: "sed:a.txt", result: "a.txt: 2 lines changed", success: true }])
+		const rendered = sdkMessagesToClineMessages([
+			{
+				role: "assistant",
+				content: [
+					{ type: "tool_use", id: "s1", name: "sed", input: { script: "s/a/b/", files: ["a.txt"], in_place: true } },
+				],
+			},
+			{ role: "user", content: [{ type: "tool_result", tool_use_id: "s1", content: saved }] },
+		] as unknown as Parameters<typeof sdkMessagesToClineMessages>[0])
+		const card = rendered.find((message) => message.say === "tool")
+		expect(JSON.parse(card?.text ?? "{}")).toMatchObject({ tool: "sed", report: "a.txt: 2 lines changed" })
+	})
+})

@@ -26,11 +26,14 @@ const ToolReport = ({
 	report: sent,
 	failed = false,
 	label = "Report",
+	failedLabel = "Refused",
 }: {
 	report: string
 	failed?: boolean
 	/** What a report that is not a refusal is called. */
 	label?: string
+	/** What a failed one is called: an edit is refused, a search fails. */
+	failedLabel?: string
 }) => {
 	const [open, setOpen] = useState(false)
 	const report = reportText(sent)
@@ -57,7 +60,7 @@ const ToolReport = ({
 					) : (
 						<ChevronRightIcon className="size-3.5 shrink-0" />
 					)}
-					<span className={cn("font-semibold shrink-0", failed && "text-error")}>{failed ? "Refused" : label}</span>
+					<span className={cn("font-semibold shrink-0", failed && "text-error")}>{failed ? failedLabel : label}</span>
 					<span className="truncate">{headline}</span>
 					<span className="shrink-0 opacity-70">
 						{lines.length} line{lines.length === 1 ? "" : "s"}
