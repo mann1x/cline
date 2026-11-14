@@ -3040,13 +3040,26 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 	// the reasoning-loop and intent cuts on the event stream and nothing at all
 	// from this guard -- the warning rode on the tool result and the stop on
 	// the mistake tracker, neither of which names the loop guard.
-	const loopNoticesFor = async (overrides: Partial<AgentConfig> = {}) => {
+	/**
+	 * The notices one run of four identical calls produces. A warning's notice
+	 * goes out when the warning reaches the call's result, so each call is
+	 * answered through `afterTool` -- failing, unless `succeed` -- and the
+	 * notices are put back in the order the calls came in.
+	 */
+	const loopNoticesFor = async (
+		overrides: Partial<AgentConfig> = {},
+		succeed = false,
+	) => {
 		const { deps } = makeScriptedRuntime({
 			events: [
 				{ type: "turn-started", iteration: 1, snapshot: makeSnapshot() },
 				...Array.from({ length: 4 }, (_, i) => identicalCall(i + 1)),
 			],
 		});
+		let capturedHooks: Partial<AgentRuntimeHooks> | undefined;
+		const createRuntime = deps.createAgentRuntimeImpl as (
+			config: AgentRuntimeConfig,
+		) => AgentRuntime;
 		const session = new SessionRuntime(
 			makeAgentConfig({
 				execution: {
@@ -3055,7 +3068,13 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 				},
 				...overrides,
 			}),
-			deps,
+			{
+				...deps,
+				createAgentRuntimeImpl: (config: AgentRuntimeConfig) => {
+					capturedHooks = config.hooks as Partial<AgentRuntimeHooks>;
+					return createRuntime(config);
+				},
+			},
 		);
 		const notices: Array<Record<string, unknown>> = [];
 		session.subscribeEvents((event) => {
@@ -3067,8 +3086,45 @@ describe("SessionRuntime.run — tracker wiring (P1 #3)", () => {
 			}
 		});
 		await session.run("loop-me");
-		return notices;
+		for (let i = 1; i <= 4; i++) {
+			await capturedHooks?.afterTool?.({
+				snapshot: makeSnapshot(),
+				tool: { name: "same" },
+				toolCall: {
+					type: "tool-call",
+					toolCallId: `tc${i}`,
+					toolName: "same",
+					input: { a: 1 },
+				},
+				input: { a: 1 },
+				result: succeed
+					? { output: { query: "same", result: "fine", success: true } }
+					: {
+							output: {
+								query: "same",
+								result: "",
+								error: "no",
+								success: false,
+							},
+							isError: true,
+						},
+				startedAt: new Date(),
+				endedAt: new Date(),
+				durationMs: 1,
+			} as never);
+		}
+		// Stable: a call's own notices keep their order.
+		return [...notices].sort(
+			(a, b) => (a.iteration as number) - (b.iteration as number),
+		);
 	};
+
+	it("shows no warning for a repeat that succeeded, since none was given", async () => {
+		// pandorum kf07w: a read straight after `restore_file` was shown as
+		// "warning it to change approach" while the model was told nothing.
+		const notices = await loopNoticesFor({}, true);
+		expect(notices.map((notice) => notice.phase)).not.toContain("soft");
+	});
 
 	it("announces each loop-detection action as a status notice", async () => {
 		const notices = await loopNoticesFor();

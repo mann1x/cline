@@ -560,7 +560,28 @@ export class SessionRuntime {
 	private readonly mistakeTracker: MistakeTracker;
 	private readonly loopTracker: LoopDetectionTracker;
 	/** Loop-guard warnings awaiting the tool result they belong to. */
-	private readonly pendingLoopWarnings = new Map<string, string>();
+	/**
+	 * Loop warnings waiting for their call's result, each with the notice that
+	 * says it was given. The notice goes out only when the warning is attached:
+	 * it used to go out when the verdict was formed, so a repeat that then
+	 * succeeded -- which gets no warning -- still showed "warning it to change
+	 * approach" in the panel. Measured on pandorum (2026-11-14, kf07w): a full
+	 * read straight after a `restore_file`, which asks for exactly that read,
+	 * was shown as warned, and no request on the wire carried a word of it.
+	 */
+	private readonly pendingLoopWarnings = new Map<
+		string,
+		{
+			message: string;
+			notice: {
+				phase: "soft" | "hard";
+				text: string;
+				iteration: number;
+				toolName: string;
+				extra?: Record<string, unknown>;
+			};
+		}
+	>();
 	/**
 	 * Hard loop verdicts seen in this session, counted across tool names rather
 	 * than per call signature. A run that works its way out of one loop and into
@@ -1551,10 +1572,11 @@ export class SessionRuntime {
 							this.toolResultCache.store(ctx.toolCall.toolCallId, text);
 					}
 				}
-				const warning = this.pendingLoopWarnings.get(ctx.toolCall.toolCallId);
-				if (warning === undefined) {
+				const pending = this.pendingLoopWarnings.get(ctx.toolCall.toolCallId);
+				if (pending === undefined) {
 					return after;
 				}
+				const warning = pending.message;
 				this.pendingLoopWarnings.delete(ctx.toolCall.toolCallId);
 				// Only onto a failure. The verdict is formed before the call runs,
 				// and a repeat that finally works is the outcome the guard wants —
@@ -1568,6 +1590,13 @@ export class SessionRuntime {
 				if (!failed) {
 					return after;
 				}
+				this.emitLoopNotice(
+					pending.notice.phase,
+					pending.notice.text,
+					pending.notice.iteration,
+					pending.notice.toolName,
+					pending.notice.extra,
+				);
 				return {
 					...after,
 					result: {
@@ -1965,14 +1994,16 @@ export class SessionRuntime {
 				// and not one of the twenty-six requests on the wire contained a
 				// word of the warning. A tool result is the one channel that is
 				// certain to be read.
-				this.pendingLoopWarnings.set(toolCallId, verdict.message);
+				this.pendingLoopWarnings.set(toolCallId, {
+					message: verdict.message,
+					notice: {
+						phase: "soft",
+						text: `The model repeated a call to \`${toolName}\` — warning it to change approach.`,
+						iteration,
+						toolName,
+					},
+				});
 			}
-			this.emitLoopNotice(
-				"soft",
-				`The model repeated a call to \`${toolName}\` — warning it to change approach.`,
-				iteration,
-				toolName,
-			);
 			return;
 		}
 		// Hard escalation. The first one is a last warning, not a stop.
@@ -1999,17 +2030,16 @@ export class SessionRuntime {
 			escalationLimit: LOOP_HARD_ESCALATION_LIMIT,
 		};
 		if (this.loopHardEscalations < LOOP_HARD_ESCALATION_LIMIT) {
-			this.pendingLoopWarnings.set(
-				toolCallId,
-				`${diagnosis}\n\n${LOOP_FINAL_WARNING}`,
-			);
-			this.emitLoopNotice(
-				"hard",
-				`The model kept repeating a call to \`${toolName}\` after the warnings — last warning before the run is stopped.`,
-				iteration,
-				toolName,
-				escalation,
-			);
+			this.pendingLoopWarnings.set(toolCallId, {
+				message: `${diagnosis}\n\n${LOOP_FINAL_WARNING}`,
+				notice: {
+					phase: "hard",
+					text: `The model kept repeating a call to \`${toolName}\` after the warnings — last warning before the run is stopped.`,
+					iteration,
+					toolName,
+					extra: escalation,
+				},
+			});
 			this.enqueueMistakeRecord({
 				iteration,
 				reason: "tool_execution_failed",
