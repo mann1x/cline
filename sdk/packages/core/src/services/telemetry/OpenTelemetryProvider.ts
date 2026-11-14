@@ -344,7 +344,8 @@ export class OpenTelemetryProvider {
 				if (!logExporter) {
 					return null;
 				}
-				return new BatchLogRecordProcessor(logExporter, {
+				return new BatchLogRecordProcessor({
+					exporter: logExporter,
 					maxQueueSize: this.options.logMaxQueueSize ?? 2048,
 					maxExportBatchSize: this.options.logBatchSize ?? 512,
 					scheduledDelayMillis:

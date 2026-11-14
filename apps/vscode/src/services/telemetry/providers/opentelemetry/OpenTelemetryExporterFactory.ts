@@ -1,4 +1,4 @@
-import { credentials as grpcCredentials } from "@grpc/grpc-js"
+import { credentials as grpcCredentials, Metadata } from "@grpc/grpc-js"
 import { OTLPLogExporter as OTLPLogExporterGRPC } from "@opentelemetry/exporter-logs-otlp-grpc"
 import { OTLPLogExporter as OTLPLogExporterHTTP } from "@opentelemetry/exporter-logs-otlp-http"
 import { OTLPLogExporter as OTLPLogExporterProto } from "@opentelemetry/exporter-logs-otlp-proto"
@@ -26,6 +26,23 @@ function isDebugEnabled(): boolean {
  */
 export function createConsoleLogExporter(): ConsoleLogRecordExporter {
 	return new ConsoleLogRecordExporter()
+}
+
+/**
+ * The configured OTLP headers as gRPC metadata, which is what OTLP headers
+ * mean over gRPC. The 0.5x exporters took a `headers` option here and dropped
+ * it with a warning ("Headers cannot be set when using grpc"), so they never
+ * reached a gRPC collector; 0.200 removed the option.
+ */
+export function grpcMetadata(headers?: Record<string, string>): Metadata | undefined {
+	if (!headers || Object.keys(headers).length === 0) {
+		return undefined
+	}
+	const metadata = new Metadata()
+	for (const [key, value] of Object.entries(headers)) {
+		metadata.set(key, value)
+	}
+	return metadata
 }
 
 function ensurePathSuffix(url: URL, suffix: string): void {
@@ -59,7 +76,7 @@ export function createOTLPLogExporter(
 				exporter = new OTLPLogExporterGRPC({
 					url: grpcEndpoint,
 					credentials: credentials,
-					headers,
+					metadata: grpcMetadata(headers),
 				})
 				break
 			}
@@ -106,7 +123,7 @@ export function createOTLPTraceExporter(
 				return new OTLPTraceExporterGRPC({
 					url: grpcEndpoint,
 					credentials: credentials,
-					headers,
+					metadata: grpcMetadata(headers),
 				})
 			}
 			case "http/json": {
@@ -162,7 +179,7 @@ export function createOTLPMetricReader(
 				exporter = new OTLPMetricExporterGRPC({
 					url: grpcEndpoint,
 					credentials: credentials,
-					headers,
+					metadata: grpcMetadata(headers),
 				})
 				break
 			}

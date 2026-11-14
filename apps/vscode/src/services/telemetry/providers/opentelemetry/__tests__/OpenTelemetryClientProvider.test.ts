@@ -65,7 +65,7 @@ describe("OpenTelemetryClientProvider tracer lifecycle", () => {
 		await replacement.tracerProvider!.forceFlush()
 		const spans = exporters.get("http://second:4318")!.getFinishedSpans()
 		expect(spans.map((span) => span.name)).toEqual(["child", "parent"])
-		expect(spans[0].parentSpanId).toBe(spans[1].spanContext().spanId)
+		expect(spans[0].parentSpanContext?.spanId).toBe(spans[1].spanContext().spanId)
 		expect(oldExporter.getFinishedSpans()).toHaveLength(0)
 	})
 
@@ -88,9 +88,8 @@ describe("OpenTelemetryClientProvider tracer lifecycle", () => {
 	it("does not unregister a foreign provider that has taken over the global slot", async () => {
 		const old = createClient()
 		trace.disable()
-		const foreign = new NodeTracerProvider()
 		const exporter = new InMemorySpanExporter()
-		foreign.addSpanProcessor(new SimpleSpanProcessor(exporter))
+		const foreign = new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] })
 		foreign.register()
 		try {
 			await old.dispose()

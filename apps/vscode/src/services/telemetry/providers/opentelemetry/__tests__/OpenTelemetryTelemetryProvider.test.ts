@@ -83,8 +83,7 @@ describe("OpenTelemetryTelemetryProvider.identifyUser", () => {
 
 	beforeEach(() => {
 		logExporter = new InMemoryLogRecordExporter()
-		loggerProvider = new LoggerProvider()
-		loggerProvider.addLogRecordProcessor(new SimpleLogRecordProcessor(logExporter))
+		loggerProvider = new LoggerProvider({ processors: [new SimpleLogRecordProcessor({ exporter: logExporter })] })
 
 		provider = new OpenTelemetryTelemetryProvider(null, loggerProvider, {
 			name: "test-otel",
