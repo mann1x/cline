@@ -29,6 +29,7 @@ export {
 	createSkillsTool,
 	createSubmitAndExitTool,
 	createWebFetchTool,
+	readFileRequestsFrom,
 } from "./definitions";
 // Built-in Executors
 export {

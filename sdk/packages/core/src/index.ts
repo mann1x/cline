@@ -1243,6 +1243,7 @@ export {
 	PatchActionType,
 	type PatchFileChange,
 	type ReadReceipts,
+	readFileRequestsFrom,
 	readTaskProgress,
 	resolveCoreSelectedToolIds,
 	resolveToolClientType,

@@ -414,7 +414,7 @@ export { createMcpTools } from "../../../../sdk/packages/core/src/extensions/mcp
 // The real createShellTool, so tests exercise the actual description
 // building and shell classification (getShellKind) rather than a stub that
 // would have to duplicate those invariants.
-export { createShellTool } from "../../../../sdk/packages/core/src/extensions/tools/definitions"
+export { createShellTool, readFileRequestsFrom } from "../../../../sdk/packages/core/src/extensions/tools/definitions"
 // Real (dependency-light) edit-executor implementations, re-exported from the sdk source so
 // the diff-edit coordinator and its tests exercise the actual content/parse semantics. These
 // modules only pull in node:fs/node:path and the patch parser — not the heavy core runtime.

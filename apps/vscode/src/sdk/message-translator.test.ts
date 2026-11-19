@@ -753,6 +753,24 @@ describe("translateSessionEvent — tools with nothing but arguments", () => {
 		)
 	})
 
+	// pandorum 1795114580141_gajc9: the model wrote end_line beside the list.
+	// The tool read 460-490 (core hands it to the files); the card said "460+",
+	// so the editor's refusal of 460-522 that followed looked wrong.
+	it("shows a read's range as the tool reads it, end_line beside the list included", () => {
+		const row = toolRow("read_files", { end_line: 490, files: [{ path: "manic_miner.html", start_line: 460 }] })
+
+		expect(row.path).toBe("manic_miner.html")
+		expect(row.readLineStart).toBe(460)
+		expect(row.readLineEnd).toBe(490)
+	})
+
+	it("keeps a range on the entry over one beside the list, as the tool does", () => {
+		const row = toolRow("read_files", { end_line: 490, files: [{ path: "a.ts", start_line: 10, end_line: 20 }] })
+
+		expect(row.readLineStart).toBe(10)
+		expect(row.readLineEnd).toBe(20)
+	})
+
 	it("shows an awk program", () => {
 		const row = toolRow("awk", { files: ["data.csv"], program: "{ print $2 }" })
 

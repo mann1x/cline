@@ -31,6 +31,7 @@ import {
 	describeRestoreTarget,
 	PATCH_MARKERS,
 	projectSessionMessagesForDisplay,
+	readFileRequestsFrom,
 	readTaskProgress,
 	resolveMessageDisplayRole,
 	truncateCommandOutput,
@@ -2503,6 +2504,25 @@ interface FileReadRequest {
 /** Extract file read requests (path + optional one-based inclusive line range) from a read_files/read_file input */
 function extractFileReads(input: Record<string, unknown> | undefined): FileReadRequest[] {
 	if (!input) return []
+	// The tool's own parser first, so the card shows the lines that were read.
+	// A second parser here drifted: `{end_line: 490, files: [{path, start_line: 460}]}`
+	// read 460-490 -- core hands a range written beside the list to its files --
+	// while the card said "lines 460+", and the editor's refusal of 460-522 that
+	// followed looked wrong to the user (pandorum 1795114580141_gajc9).
+	try {
+		const reads = readFileRequestsFrom(input)
+			.filter((request) => typeof request.path === "string" && request.path !== "")
+			.map((request) => ({
+				path: request.path,
+				startLine: typeof request.start_line === "number" ? request.start_line : undefined,
+				endLine: typeof request.end_line === "number" ? request.end_line : undefined,
+			}))
+		if (reads.length > 0) {
+			return reads
+		}
+	} catch {
+		// A shape the tool itself refuses: fall through to the lenient reading below.
+	}
 	const files = input.files
 	if (Array.isArray(files) && files.length > 0) {
 		const reads = files
