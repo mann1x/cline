@@ -743,6 +743,16 @@ describe("translateSessionEvent — tools with nothing but arguments", () => {
 		expect(row.content).toBe("sed s/x/y/")
 	})
 
+	// pandorum 1795111674339_2nrat: `90p` without quiet printed line 90 twice,
+	// and the row said only `sed 90p`, so nothing on the card showed why.
+	it("shows quiet as -n and extended as -E, the way the command line reads", () => {
+		expect(toolRow("sed", { files: ["a.txt"], script: "90p", quiet: true }).content).toBe("sed -n 90p")
+		expect(toolRow("sed", { files: ["a.txt"], script: "90p" }).content).toBe("sed 90p")
+		expect(toolRow("sed", { files: ["a.txt"], script: "s/a+/b/", extended: true, in_place: true }).content).toBe(
+			"sed -i -E s/a+/b/",
+		)
+	})
+
 	it("shows an awk program", () => {
 		const row = toolRow("awk", { files: ["data.csv"], program: "{ print $2 }" })
 
@@ -7947,6 +7957,13 @@ describe("a tool's generic row carries what the tool answered", () => {
 			answered: true,
 			report: "manic_miner.html: 2 problems\n  line 90: ';' expected",
 		})
+	})
+
+	it("puts a tool's note after its result: sed saying why a line came out twice", () => {
+		const tool = end("sed", { files: ["a.txt"], script: "2p" }, [
+			{ query: "sed:a.txt", result: "a\nb\nb\nc\n", success: true, note: "Line 2 appears twice in this output" },
+		])
+		expect(tool.report).toBe("a\nb\nb\nc\n\nLine 2 appears twice in this output")
 	})
 
 	it("reads text content and its error flag from an MCP-shaped result", () => {

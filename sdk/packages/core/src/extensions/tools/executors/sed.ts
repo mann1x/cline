@@ -597,6 +597,15 @@ export interface RunSedResult {
 	 * text put before or after them. What an in-place run must have seen.
 	 */
 	touched: number[];
+	/**
+	 * Input lines that reached the output twice: printed by `p` (or `s///p`)
+	 * and then again by sed's own end-of-line print, because the run was not
+	 * quiet. `90p` without `-n` is the whole file with line 90 doubled, and a
+	 * model that meant "show me line 90" reads that as a duplicate line in the
+	 * file (pandorum 1795111674339_2nrat, and four earlier sessions, every one
+	 * of them `90p`).
+	 */
+	printedTwice: number[];
 }
 
 /** Run a parsed script over text. Pure: no filesystem, so it is easy to test. */
@@ -626,6 +635,7 @@ export function runSedScript(
 	let matched = false;
 	const shown = new Set<number>();
 	const touched = new Set<number>();
+	const printedTwice = new Set<number>();
 
 	for (const command of commands) {
 		command.active = false;
@@ -640,6 +650,7 @@ export function runSedScript(
 		const after: string[] = [];
 		let deleted = false;
 		let quit = false;
+		let explicit = false;
 
 		for (const command of commands) {
 			if (line === undefined) {
@@ -695,6 +706,7 @@ export function runSedScript(
 						if (command.print) {
 							out.push(line);
 							shown.add(lineNumber);
+							explicit = true;
 						}
 					}
 					break;
@@ -724,6 +736,7 @@ export function runSedScript(
 				case "p":
 					out.push(line);
 					shown.add(lineNumber);
+					explicit = true;
 					break;
 				case "=":
 					out.push(String(lineNumber));
@@ -762,6 +775,9 @@ export function runSedScript(
 		if (!quiet && !deleted && line !== undefined) {
 			out.push(line);
 			shown.add(lineNumber);
+			if (explicit) {
+				printedTwice.add(lineNumber);
+			}
 		}
 		out.push(...after);
 		if (quit) {
@@ -776,7 +792,34 @@ export function runSedScript(
 		matched,
 		shown: [...shown].sort((a, b) => a - b),
 		touched: [...touched].sort((a, b) => a - b),
+		printedTwice: [...printedTwice].sort((a, b) => a - b),
 	};
+}
+
+/**
+ * Why some lines came out twice, for a run that was not quiet.
+ *
+ * This is sed doing what sed does, so nothing is refused or changed; the run's
+ * output is exactly the system sed's. What was missing is the reason, and
+ * without it the doubled line reads as a fault in the file.
+ */
+export function printedTwiceNote(lines: readonly number[]): string | undefined {
+	if (lines.length === 0) {
+		return undefined;
+	}
+	const runs: string[] = [];
+	for (let i = 0; i < lines.length; ) {
+		let j = i;
+		while (j + 1 < lines.length && lines[j + 1] === lines[j] + 1) j++;
+		runs.push(i === j ? `${lines[i]}` : `${lines[i]}-${lines[j]}`);
+		i = j + 1;
+	}
+	const one = lines.length === 1;
+	const named =
+		runs.length > 5
+			? `${runs.slice(0, 5).join(", ")} and ${runs.length - 5} more`
+			: runs.join(", ");
+	return `${one ? "Line" : "Lines"} ${named} ${one ? "appears" : "appear"} twice in this output, and the file has ${one ? "it" : "them"} once: without \`quiet\`, sed prints every line, and \`p\` printed ${one ? "that line" : "those lines"} a second time, as \`sed '${lines[0]}p'\` does. To see only the lines the script prints, run it again with \`quiet: true\` (\`sed -n\`), or read them with \`read_files\`.`;
 }
 
 export interface SedExecutorOptions {
@@ -829,6 +872,8 @@ export interface SedFileOutcome {
 	ok: boolean;
 	/** Why, when `ok` is false. */
 	error?: string;
+	/** Something about the output the model would otherwise misread: lines a non-quiet run printed twice. */
+	note?: string;
 }
 
 export function createSedExecutor(options: SedExecutorOptions = {}) {
@@ -1007,7 +1052,16 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 				// land on every line it had not shown.
 				creditShown(receipts, filePath, result.shown);
 				receipts?.noteStamp(filePath, await readFileStamp(filePath));
-				outcomes.push({ file, output: result.output, ok: true });
+				const note =
+					input.quiet === true
+						? undefined
+						: printedTwiceNote(result.printedTwice);
+				outcomes.push({
+					file,
+					output: result.output,
+					ok: true,
+					...(note ? { note } : {}),
+				});
 			});
 		}
 

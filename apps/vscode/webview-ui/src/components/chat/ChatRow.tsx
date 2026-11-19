@@ -150,6 +150,9 @@ const GENERIC_TOOL_VERBS: Record<string, string> = {
 	transcribe_audio: "Cerebriline transcribed audio:",
 }
 
+/** Tools whose row content is a command line short enough to show as it is. */
+const COMMAND_LINE_TOOLS: ReadonlySet<string> = new Set(["grep", "sed", "awk"])
+
 function toolVerbForDisplay(toolName: string): string {
 	return GENERIC_TOOL_VERBS[toolName] ?? `Cerebriline used \`${toolName}\`:`
 }
@@ -898,7 +901,17 @@ export const ChatRowContent = memo(
 									Cancel import
 								</button>
 							) : null}
-							{tool.content ? (
+							{/* grep, sed and awk: the command line itself, in view. Folded
+							    into the accordion it hid `sed 90p` -- a call without
+							    -n, which is why its output held line 90 twice -- and the
+							    card showed only the file and the result. */}
+							{tool.content && COMMAND_LINE_TOOLS.has(tool.tool) ? (
+								<div
+									className="bg-code border border-editor-group-border border-t-0 overflow-hidden rounded-xs py-1.5 px-2.5 font-mono text-xs whitespace-pre-wrap break-all"
+									data-testid="tool-command-line">
+									{tool.content}
+								</div>
+							) : tool.content ? (
 								<CodeAccordian
 									code={tool.content}
 									isExpanded={isExpanded}

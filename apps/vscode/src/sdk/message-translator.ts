@@ -2319,10 +2319,18 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown, context?: Rang
 				getStringField(parsedInput, "program") ??
 				""
 			const inPlace = getBooleanField(parsedInput, "in_place") === true
+			// The flags as the command line would carry them. A `sed` row showed
+			// `sed 90p` for a call that was not quiet, and nothing on the card
+			// said why its output held line 90 twice (pandorum 1795111674339_2nrat).
+			const flags = [
+				inPlace ? "-i" : "",
+				toolName === "sed" && getBooleanField(parsedInput, "quiet") === true ? "-n" : "",
+				getBooleanField(parsedInput, "extended") === true ? "-E" : "",
+			]
 			return {
 				tool: toolName as ClineSayTool["tool"],
 				path: named.length > 1 ? `${named[0]} (+${named.length - 1} more)` : (named[0] ?? ""),
-				content: [inPlace ? `${toolName} -i` : toolName, program].filter(Boolean).join(" "),
+				content: [toolName, ...flags, program].filter(Boolean).join(" "),
 			}
 		}
 
@@ -2713,6 +2721,8 @@ export function toolAnswer(output: unknown, error?: string): { text: string; fai
 	const results = [
 		...texts((record) => record.result),
 		...texts((record) => (record.type === "text" ? record.text : undefined)),
+		// A tool's note on its own result (sed: lines printed twice), after it.
+		...texts((record) => record.note),
 	]
 	const mcpError = items.some((item) => item && typeof item === "object" && (item as { isError?: unknown }).isError === true)
 	return { text: results.join("\n\n"), failed: mcpError && results.length > 0 }

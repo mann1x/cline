@@ -42,6 +42,11 @@ export interface ToolOperationResult {
 	success: boolean;
 	/** Duration in MS */
 	duration?: number;
+	/**
+	 * Something about a successful result the model would otherwise misread,
+	 * kept out of `result` so the output stays exactly what the tool produced.
+	 */
+	note?: string;
 }
 
 export type FileReadResultContent = string | Array<TextContent | ImageContent>;

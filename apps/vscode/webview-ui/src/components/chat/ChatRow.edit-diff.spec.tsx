@@ -206,3 +206,35 @@ describe("a generic tool row's answer", () => {
 		expect(screen.queryByText("Refused")).toBeNull()
 	})
 })
+
+/**
+ * pandorum 1795111674339_2nrat: a `sed` card folded its command into a closed
+ * accordion, so the user saw the file and a result with line 90 twice, and not
+ * the `sed 90p` -- no -n -- that explains it.
+ */
+describe("a sed, grep or awk row's command line", () => {
+	it("shows the command without being opened", () => {
+		render(
+			<ChatRowContent
+				message={editMessage({
+					tool: "sed",
+					path: "manic_miner.html",
+					content: "sed 90p",
+					report: "a\nb",
+					answered: true,
+				})}
+				{...base}
+			/>,
+		)
+
+		expect(screen.getByTestId("tool-command-line").textContent).toBe("sed 90p")
+	})
+
+	it("keeps the accordion for other generic tools", () => {
+		render(
+			<ChatRowContent message={editMessage({ tool: "check_file", path: "a.html", content: "check a.html" })} {...base} />,
+		)
+
+		expect(screen.queryByTestId("tool-command-line")).toBeNull()
+	})
+})

@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createReadReceipts } from "./read-receipts";
-import { createSedExecutor, parseSedScript, runSedScript } from "./sed";
+import {
+	createSedExecutor,
+	parseSedScript,
+	printedTwiceNote,
+	runSedScript,
+} from "./sed";
 
 const run = (input: string, script: string, quiet = false, extended = false) =>
 	runSedScript(input, parseSedScript(script, extended), quiet).output;
@@ -89,6 +94,80 @@ describe("the -n and p combination, which is how a model prints a slice", () => 
 
 	it("prints nothing when quiet and nothing matched", () => {
 		expect(run("a\nb\n", "/zzz/p", true)).toBe("");
+	});
+});
+
+describe("p without quiet: every line, and p's lines twice, said in a note", () => {
+	const twice = (input: string, script: string, quiet = false) =>
+		runSedScript(input, parseSedScript(script), quiet).printedTwice;
+
+	it("prints the whole file with the line doubled, as the system sed does", () => {
+		expect(run("a\nb\nc\n", "2p")).toBe("a\nb\nb\nc\n");
+		expect(twice("a\nb\nc\n", "2p")).toEqual([2]);
+	});
+
+	it("records nothing when quiet: then p is the only print", () => {
+		expect(twice("a\nb\nc\n", "2p", true)).toEqual([]);
+	});
+
+	it("records an s///p line that was then printed again", () => {
+		expect(run("a\nb\n", "s/b/B/p")).toBe("a\nB\nB\n");
+		expect(twice("a\nb\n", "s/b/B/p")).toEqual([2]);
+	});
+
+	it("does not count a line p printed and d then deleted", () => {
+		expect(run("a\nb\n", "2p;2d")).toBe("a\nb\n");
+		expect(twice("a\nb\n", "2p;2d")).toEqual([]);
+	});
+
+	it("names one line, or the runs of several", () => {
+		expect(printedTwiceNote([])).toBeUndefined();
+		const one = printedTwiceNote([90]) ?? "";
+		expect(one).toContain("Line 90 appears twice");
+		expect(one).toContain("the file has it once");
+		expect(one).toContain("`quiet: true`");
+		expect(printedTwiceNote([3, 4, 5, 9])).toContain(
+			"Lines 3-5, 9 appear twice",
+		);
+		expect(printedTwiceNote([1, 3, 5, 7, 9, 11, 13])).toContain(
+			"1, 3, 5, 7, 9 and 2 more",
+		);
+	});
+
+	describe("from the executor", () => {
+		let dir: string;
+		let file: string;
+		beforeEach(async () => {
+			dir = await fs.mkdtemp(join(tmpdir(), "sed-twice-"));
+			file = join(dir, "sample.txt");
+			await fs.writeFile(file, "alpha\r\nbeta\r\ngamma\r\n", "utf8");
+		});
+		afterEach(async () => {
+			await fs.rm(dir, { recursive: true, force: true });
+		});
+
+		it("adds the note to a read-only run that doubled a line, and leaves the output alone", async () => {
+			const sed = createSedExecutor({
+				cwd: dir,
+				receipts: createReadReceipts(),
+			});
+			const [outcome] = await sed({ script: "2p", files: [file] });
+			expect(outcome.ok).toBe(true);
+			expect(outcome.output).toBe("alpha\r\nbeta\r\nbeta\r\ngamma\r\n");
+			expect(outcome.note).toContain("Line 2 appears twice");
+		});
+
+		it("adds no note when quiet, or when nothing was printed twice", async () => {
+			const sed = createSedExecutor({
+				cwd: dir,
+				receipts: createReadReceipts(),
+			});
+			const [quiet] = await sed({ script: "2p", files: [file], quiet: true });
+			expect(quiet.output).toBe("beta\r\n");
+			expect(quiet.note).toBeUndefined();
+			const [plain] = await sed({ script: "s/beta/BETA/", files: [file] });
+			expect(plain.note).toBeUndefined();
+		});
 	});
 });
 

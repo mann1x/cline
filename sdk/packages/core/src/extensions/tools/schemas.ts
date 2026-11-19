@@ -1095,7 +1095,7 @@ export const SedInputSchema = z.object({
 		.boolean()
 		.optional()
 		.describe(
-			"Print only what the script explicitly prints, as `sed -n` does.",
+			"Print only what the script explicitly prints, as `sed -n` does. Without it sed prints every line as well, so `90p` gives the whole file with line 90 twice; to show some lines, set this.",
 		),
 	extended: z
 		.boolean()
