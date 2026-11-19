@@ -16,11 +16,13 @@
 //  - An edit that names line numbers requires a read that covered those lines.
 //    "Read the file somewhere" is not enough; the range being changed is the
 //    range that has to have been seen.
-//  - A write that changes the file's line count retires the receipts for that
-//    file. Line numbers below the edit have moved, so what the model read is no
-//    longer where it read it. A write that leaves the count alone keeps them:
-//    nothing shifted, and forcing a re-read after every in-place edit would
-//    cost a turn for no information.
+//  - A write that changes the file's line count moves the receipts with the
+//    lines. A tool that knows the file before and after its write passes the
+//    region it changed: reads above it stay, reads below it shift by the change
+//    in length, and what the model itself wrote counts as seen. Until
+//    2026-11-19 every read of the file was dropped instead -- 579 refusals in
+//    the archive were that, mostly for lines nowhere near the edit -- and a
+//    write that does not say where it changed still drops them.
 //
 // Both rules are about *this* session moving the ground under itself. The
 // stamps below are about somebody else moving it: a second agent, a background
@@ -116,6 +118,88 @@ interface Span {
 	last: number;
 }
 
+/**
+ * Where a write changed a file, as one region: old lines `first..oldLast`
+ * became new lines `first..newLast`. An insert has `oldLast = first - 1`, a
+ * deletion `newLast = first - 1`. `authored` when the model sent the new text
+ * itself (an `editor` call), so those lines count as seen.
+ */
+export interface LineChange {
+	first: number;
+	oldLast: number;
+	newLast: number;
+	authored: boolean;
+}
+
+function splitLinesForChange(text: string): string[] {
+	const lines = text.split(/\r\n|\n/);
+	if (text.endsWith("\n")) {
+		lines.pop();
+	}
+	return text === "" ? [] : lines;
+}
+
+/**
+ * The one region a write changed: everything between the lines left equal at
+ * the top and the lines left equal at the bottom. For a write in several
+ * places it is the span from the first change to the last, which is
+ * conservative -- reads inside it are dropped -- and never wrong. `undefined`
+ * when nothing changed.
+ */
+export function changedRegion(
+	before: string,
+	after: string,
+	authored: boolean,
+): LineChange | undefined {
+	const a = splitLinesForChange(before);
+	const b = splitLinesForChange(after);
+	let prefix = 0;
+	while (prefix < a.length && prefix < b.length && a[prefix] === b[prefix]) {
+		prefix++;
+	}
+	if (prefix === a.length && prefix === b.length) {
+		return undefined;
+	}
+	let suffix = 0;
+	while (
+		suffix < a.length - prefix &&
+		suffix < b.length - prefix &&
+		a[a.length - 1 - suffix] === b[b.length - 1 - suffix]
+	) {
+		suffix++;
+	}
+	return {
+		first: prefix + 1,
+		oldLast: a.length - suffix,
+		newLast: b.length - suffix,
+		authored,
+	};
+}
+
+/** Spans carried across a change: above it kept, below it shifted, inside it dropped. */
+function shiftSpans(spans: Span[], change: LineChange): Span[] {
+	const delta = change.newLast - change.oldLast;
+	const out: Span[] = [];
+	for (const span of spans) {
+		if (span.first < change.first) {
+			out.push({
+				first: span.first,
+				last: Math.min(span.last, change.first - 1),
+			});
+		}
+		if (span.last > change.oldLast) {
+			out.push({
+				first: Math.max(span.first, change.oldLast + 1) + delta,
+				last: span.last + delta,
+			});
+		}
+	}
+	if (change.authored && change.newLast >= change.first) {
+		out.push({ first: change.first, last: change.newLast });
+	}
+	return out;
+}
+
 export interface ReadReceipts {
 	/** Record that `filePath` was read over the given inclusive line span. */
 	noteRead(filePath: string, first: number, last: number): void;
@@ -144,10 +228,19 @@ export interface ReadReceipts {
 	 */
 	wasRetired(filePath: string): boolean;
 	/**
-	 * Record a write. When the line count changed, receipts for the file are
-	 * dropped: every line number below the edit now points somewhere else.
+	 * Record a write. When the line count changed, the receipts move with the
+	 * lines if `change` says where the write was (see {@link changedRegion});
+	 * without it they are dropped, since every line number below an unknown
+	 * edit may point somewhere else.
 	 */
-	noteWrite(filePath: string, linesBefore: number, linesAfter: number): void;
+	noteWrite(
+		filePath: string,
+		linesBefore: number,
+		linesAfter: number,
+		change?: LineChange,
+	): void;
+	/** The lines the live reads of this file cover, merged, in order. */
+	coveredSpans?(filePath: string): Array<{ first: number; last: number }>;
 	/**
 	 * Record what the filesystem said about the file, as of now.
 	 *
@@ -427,15 +520,49 @@ export function createReadReceipts(): OwnedReadReceipts {
 			return retired.has(receiptKey(filePath));
 		},
 
-		noteWrite(filePath, linesBefore, linesAfter) {
+		noteWrite(filePath, linesBefore, linesAfter, change) {
 			if (linesBefore === linesAfter) {
 				return;
 			}
 			const key = receiptKey(filePath);
+			const spans = seen.get(key);
+			if (change && spans && spans.length > 0) {
+				const moved = shiftSpans(spans, change);
+				const delta = change.newLast - change.oldLast;
+				const lineCuts = cuts.get(key);
+				if (lineCuts) {
+					const kept = new Map<number, LineCut>();
+					for (const [line, cut] of lineCuts) {
+						if (line < change.first) kept.set(line, cut);
+						else if (line > change.oldLast) kept.set(line + delta, cut);
+					}
+					cuts.set(key, kept);
+				}
+				if (moved.length > 0) {
+					seen.set(key, moved);
+					return;
+				}
+			}
 			cuts.delete(key);
 			if (seen.delete(key)) {
 				retired.add(key);
 			}
+		},
+
+		coveredSpans(filePath) {
+			const spans = [...(seen.get(receiptKey(filePath)) ?? [])].sort(
+				(a, b) => a.first - b.first,
+			);
+			const merged: Span[] = [];
+			for (const span of spans) {
+				const last = merged[merged.length - 1];
+				if (last && span.first <= last.last + 1) {
+					last.last = Math.max(last.last, span.last);
+				} else {
+					merged.push({ ...span });
+				}
+			}
+			return merged;
 		},
 
 		retire(filePath) {

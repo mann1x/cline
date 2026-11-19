@@ -53,7 +53,7 @@ describe("apply_patch and the read receipts", () => {
 		expect(again).toContain("X");
 	});
 
-	it("retires the line numbers a patch moved, and says why", async () => {
+	it("moves the reads a patch shifted, and does not credit the lines it added", async () => {
 		const { dir, file, executors } = await workspace();
 		await executors.readFile?.({ path: file, start_line: 1, end_line: 3 }, ctx);
 		await executors.applyPatch?.(
@@ -62,15 +62,22 @@ describe("apply_patch and the read receipts", () => {
 			ctx,
 		);
 
-		// Line 3 was `c` when it was read; it is `Y` now.
+		// Line 3 was `c` when it was read; it is `Y` now, which the patch added.
 		await expect(
 			executors.editor?.(
 				{ path: file, start_line: 3, end_line: 3, new_text: "C" } as never,
 				dir,
 				ctx,
 			),
-		).rejects.toThrow(/changed the file's length/);
+		).rejects.toThrow(/no read of .* covers line 3/);
 		expect(await fs.readFile(file, "utf8")).toBe("a\nX\nY\nb\nc\n");
+		// `c` moved to line 5 and is still read.
+		await executors.editor?.(
+			{ path: file, start_line: 5, end_line: 5, new_text: "C" } as never,
+			dir,
+			ctx,
+		);
+		expect(await fs.readFile(file, "utf8")).toBe("a\nX\nY\nb\nC\n");
 	});
 
 	it("keeps the reads of a patch that moved no line", async () => {

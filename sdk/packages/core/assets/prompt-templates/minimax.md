@@ -449,7 +449,7 @@ Output: one result named `grep:<pattern>`, holding matching lines prefixed with 
 
 # tool: sed
 
-Apply a `sed` script to one or more files. Send a `script` — `s/foo/bar/g`, `/^debug/d`, `2,5s/^/# /`, or several commands separated by newlines or `;` — and the `files` to run it over. Without `in_place` it only prints the result, which is how to check a script before trusting it; with `in_place: true` it rewrites each file. Addresses and `s///` patterns are BASIC regular expressions as `sed` reads them, unless you pass `extended: true`. `quiet: true` prints only what the script prints, as `sed -n` does.
+Apply a `sed` script to one or more files. Send a `script` — `s/foo/bar/g`, `/^debug/d`, `2,5s/^/# /`, or several commands separated by newlines or `;` — and the `files` to run it over. Without `in_place` it only prints the result, which is how to check a script before trusting it; with `in_place: true` it rewrites each file. Addresses and `s///` patterns are BASIC regular expressions as `sed` reads them, unless you pass `extended: true`. `quiet: true` prints only what the script prints, as `sed -n` does; without it every line is printed too, so `90p` gives the whole file with line 90 twice.
 
 Use this over `editor` when one mechanical change applies in many places or across many files — renaming an identifier everywhere, stripping a prefix from every line of a block. For a single considered change to one place, `editor` is better because it anchors on text you quote back and tells you when the file has moved under you.
 

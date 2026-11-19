@@ -41,8 +41,9 @@ export function overlayReadReceipts(
 		hasAny: (filePath) => receipts.hasAny(key(filePath)),
 		hasEverRead: (filePath) => receipts.hasEverRead(key(filePath)),
 		wasRetired: (filePath) => receipts.wasRetired(key(filePath)),
-		noteWrite: (filePath, linesBefore, linesAfter) =>
-			receipts.noteWrite(key(filePath), linesBefore, linesAfter),
+		noteWrite: (filePath, linesBefore, linesAfter, change) =>
+			receipts.noteWrite(key(filePath), linesBefore, linesAfter, change),
+		coveredSpans: (filePath) => receipts.coveredSpans?.(key(filePath)) ?? [],
 		noteStamp: (filePath, stamp) => receipts.noteStamp(key(filePath), stamp),
 		changedSince: (filePath, stamp) =>
 			receipts.changedSince(key(filePath), stamp),

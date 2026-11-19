@@ -28,7 +28,11 @@ import {
 	normalizeLineEndings,
 	normalizeNewFileLineEndings,
 } from "./line-endings";
-import { type ReadReceipts, readFileStamp } from "./read-receipts";
+import {
+	changedRegion,
+	type ReadReceipts,
+	readFileStamp,
+} from "./read-receipts";
 import { wholeFileRefusal } from "./whole-file";
 
 export interface PatchFileChange {
@@ -408,7 +412,15 @@ async function applyChanges(
 		if (!receipts) return;
 		const onDisk = overlay ? await overlay.resolveRead(absPath) : absPath;
 		if (before !== undefined) {
-			receipts.noteWrite(onDisk, countLines(before), countLines(after));
+			// Reads move with the lines. A patch's hunks may be far apart, and
+			// the region between them is not text the model sent, so nothing
+			// is credited as seen.
+			receipts.noteWrite(
+				onDisk,
+				countLines(before),
+				countLines(after),
+				changedRegion(before, after, false),
+			);
 		}
 		if (authored) {
 			// A file this session just wrote in full is a file it has seen —

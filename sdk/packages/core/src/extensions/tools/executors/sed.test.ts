@@ -323,16 +323,18 @@ describe("file handling and the read guard", () => {
 		expect(await fs.readFile(file, "utf8")).toBe("alpha\n");
 	});
 
-	it("retires the receipts when an edit changes the line count", async () => {
+	it("moves the reads with the lines when an edit changes the line count", async () => {
 		const receipts = createReadReceipts();
-		receipts.noteRead(file, 1, Number.POSITIVE_INFINITY);
+		receipts.noteRead(file, 1, 2);
 		const sed = createSedExecutor({ cwd: dir, receipts });
 
 		await sed({ script: "/beta/d", files: [file], in_place: true });
 
 		expect(await fs.readFile(file, "utf8")).toBe("alpha\ngamma\n");
-		// The line count moved, so line-anchored reads are no longer valid.
-		expect(receipts.covers(file, 1, 3)).toBe(false);
+		// alpha stays read. gamma was line 3, never read, and is line 2 now:
+		// the deleted line's place is not credited to it.
+		expect(receipts.covers(file, 1, 1)).toBe(true);
+		expect(receipts.covers(file, 2, 2)).toBe(false);
 	});
 
 	it("a read-only run records the read, so a later edit is not refused", async () => {

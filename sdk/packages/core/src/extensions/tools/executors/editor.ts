@@ -27,7 +27,12 @@ import {
 	normalizeNewFileLineEndings,
 } from "./line-endings";
 import { MAX_LINE_CHARS } from "./output-limits";
-import { isWhole, type ReadReceipts, readFileStamp } from "./read-receipts";
+import {
+	changedRegion,
+	isWhole,
+	type ReadReceipts,
+	readFileStamp,
+} from "./read-receipts";
 import { wholeFileRefusal } from "./whole-file";
 
 /**
@@ -2607,10 +2612,24 @@ export function createEditorExecutor(
 		// mark, so a file read whole, edited shorter, then read again lower down
 		// was told it "has not been read in this session" (pandorum v44ot,
 		// call 22): its receipts were there, they just did not reach the lines.
+		// Which lines the live reads do cover, so the model reads only the gap.
+		// The message used to blame "an edit that changed the file's length"
+		// whenever a read fell short, and in pandorum gajc9 none had: the read
+		// was 460-490 and the edit 460-522.
+		const covered = receipts.coveredSpans?.(filePath) ?? [];
+		const coverage = covered
+			.filter((span) => span.last >= start && span.first <= wanted)
+			.map((span) =>
+				span.first === span.last
+					? `${span.first}`
+					: `${span.first}-${Number.isFinite(span.last) ? span.last : "end"}`,
+			);
 		const why = receipts.wasRetired(filePath)
-			? `${range} of ${filePath} has not been read in its current state — either it was never read, or an earlier edit changed the file's length and moved every line below it`
+			? `${range} of ${filePath} has not been read in its current state — either it was never read, or a write this session could not follow (a command, or a change from outside) moved its lines`
 			: receipts.hasAny(filePath)
-				? `no read of ${filePath} since it last changed covers ${range} — one read has to take in the whole range you edit, and an edit that changed the file's length retired the reads before it`
+				? coverage.length > 0
+					? `your reads of ${filePath} cover only line${coverage.length === 1 && !coverage[0].includes("-") ? "" : "s"} ${coverage.join(", ")} of the ${range} you edit`
+					: `no read of ${filePath} covers ${range}`
 				: `${filePath} has not been read in this session as it is now (a read with \`revision\` shows an earlier version of it, and only counts when that version is identical to the file)`;
 		throw new Error(
 			`Read before editing: ${why}. The file was not modified. Call \`read_files\` for ${filePath} covering ${range} — with \`start_line\` and \`end_line\` around it, not the whole file — then send this edit again using the line numbers that read reports. Editing lines you have not seen is how a correct-looking edit lands on the wrong code.`,
@@ -2931,6 +2950,12 @@ export function createEditorExecutor(
 			throw new Error(`${filePath}: ${refusal.message}`);
 		}
 		const linesBefore = receipts ? await countLines(filePath) : null;
+		// The text before the write, so the receipts can follow the lines: the
+		// model wrote what replaced them, and everything else only moved.
+		const textBefore =
+			receipts && linesBefore != null
+				? await fs.readFile(filePath, encoding).catch(() => null)
+				: null;
 		const cutBefore = await cutLineTexts(filePath);
 		const noteWrite = async (): Promise<void> => {
 			if (!receipts || linesBefore == null) {
@@ -2938,7 +2963,14 @@ export function createEditorExecutor(
 			}
 			const linesAfter = await countLines(filePath);
 			if (linesAfter != null) {
-				receipts.noteWrite(filePath, linesBefore, linesAfter);
+				const change =
+					linesAfter !== linesBefore && textBefore != null
+						? await fs
+								.readFile(filePath, encoding)
+								.then((after) => changedRegion(textBefore, after, true))
+								.catch(() => undefined)
+						: undefined;
+				receipts.noteWrite(filePath, linesBefore, linesAfter, change);
 				if (linesAfter === linesBefore) {
 					await moveCuts(filePath, cutBefore);
 				}

@@ -2,7 +2,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createReadReceipts, readFileStamp } from "./read-receipts";
+import {
+	changedRegion,
+	createReadReceipts,
+	readFileStamp,
+} from "./read-receipts";
 
 const FILE = "/repo/game.html";
 
@@ -232,5 +236,75 @@ describe("readFileStamp", () => {
 		} finally {
 			await fs.rm(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("changedRegion and reads that move with the lines", () => {
+	it("finds the one region a write changed", () => {
+		expect(changedRegion("a\nb\nc\n", "a\nX\nY\nc\n", true)).toEqual({
+			first: 2,
+			oldLast: 2,
+			newLast: 3,
+			authored: true,
+		});
+		expect(changedRegion("a\nb\n", "a\nb\n", true)).toBeUndefined();
+		// An insert, a deletion, CRLF against LF.
+		expect(changedRegion("a\nc\n", "a\nb\nc\n", false)).toEqual({
+			first: 2,
+			oldLast: 1,
+			newLast: 2,
+			authored: false,
+		});
+		expect(changedRegion("a\nb\nc\n", "a\nc\n", false)).toEqual({
+			first: 2,
+			oldLast: 2,
+			newLast: 1,
+			authored: false,
+		});
+		expect(changedRegion("a\r\nb\r\n", "a\r\nb\r\nc\r\n", false)).toEqual({
+			first: 3,
+			oldLast: 2,
+			newLast: 3,
+			authored: false,
+		});
+	});
+
+	it("keeps reads above, shifts reads below, drops unauthored lines inside", () => {
+		const receipts = createReadReceipts();
+		receipts.noteRead("/f", 1, 10);
+		receipts.noteRead("/f", 20, Number.POSITIVE_INFINITY);
+		receipts.noteWrite("/f", 30, 32, {
+			first: 5,
+			oldLast: 6,
+			newLast: 8,
+			authored: false,
+		});
+		expect(receipts.covers("/f", 1, 4)).toBe(true);
+		expect(receipts.covers("/f", 5, 5)).toBe(false);
+		expect(receipts.covers("/f", 9, 12)).toBe(true);
+		expect(receipts.covers("/f", 13, 13)).toBe(false);
+		expect(receipts.covers("/f", 22, 500)).toBe(true);
+		expect(receipts.wasRetired("/f")).toBe(false);
+	});
+
+	it("credits what the model wrote", () => {
+		const receipts = createReadReceipts();
+		receipts.noteRead("/f", 1, 10);
+		receipts.noteWrite("/f", 10, 13, {
+			first: 5,
+			oldLast: 6,
+			newLast: 9,
+			authored: true,
+		});
+		expect(receipts.covers("/f", 1, 13)).toBe(true);
+		expect(receipts.coveredSpans?.("/f")).toEqual([{ first: 1, last: 13 }]);
+	});
+
+	it("still retires when the write does not say where it was", () => {
+		const receipts = createReadReceipts();
+		receipts.noteRead("/f", 1, 10);
+		receipts.noteWrite("/f", 10, 12);
+		expect(receipts.hasAny("/f")).toBe(false);
+		expect(receipts.wasRetired("/f")).toBe(true);
 	});
 });

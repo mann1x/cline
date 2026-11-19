@@ -2115,13 +2115,6 @@ describe("requiring a read before an edit", () => {
 		await withTempFile("a\nb\nc\nd\ne\nf", async (filePath, dir) => {
 			const receipts = createReadReceipts();
 			const editor = createEditorExecutor({ receipts });
-			receipts.noteRead(filePath, 1, Number.POSITIVE_INFINITY);
-			// Two lines become one: the length changes and the read is retired.
-			await editor(
-				{ path: filePath, start_line: 5, end_line: 6, new_text: "e" },
-				dir,
-				context,
-			);
 			receipts.noteRead(filePath, 4, Number.POSITIVE_INFINITY);
 
 			const failure = editor(
@@ -2132,6 +2125,8 @@ describe("requiring a read before an edit", () => {
 
 			await expect(failure).rejects.toThrow("Read before editing");
 			await expect(failure).rejects.toThrow("no read of");
+			// Not blamed on an edit that never happened (pandorum gajc9).
+			await expect(failure).rejects.not.toThrow("changed the file's length");
 			await expect(failure).rejects.not.toThrow(
 				"has not been read in this session",
 			);
@@ -2312,9 +2307,11 @@ describe("requiring a read before an edit", () => {
 		});
 	});
 
-	it("requires a fresh read after an edit that changed the file's length", async () => {
-		// The second edit is aimed at a line number from before the first one
-		// moved it. This is the exact shape of the measured failure.
+	// Until 2026-11-19 an edit that changed the length dropped every read of
+	// the file: 579 refusals in the archive, mostly of lines nowhere near the
+	// edit. The reads now move with the lines, and what the model wrote counts
+	// as read.
+	it("moves the reads with the lines after an edit that changed the file's length", async () => {
 		await withTempFile("a\nb\nc\nd", async (filePath, dir) => {
 			const receipts = createReadReceipts();
 			const editor = createEditorExecutor({ receipts });
@@ -2325,18 +2322,70 @@ describe("requiring a read before an edit", () => {
 				dir,
 				context,
 			);
+			// a, B1, B2, B3, c, d: the three lines it wrote, and c and d moved down two.
+			expect(receipts.covers(filePath, 1, 6)).toBe(true);
 
-			const failure = editor(
+			await editor(
+				{ path: filePath, new_text: "C", start_line: 5 },
+				dir,
+				context,
+			);
+			await editor(
 				{ path: filePath, new_text: "X", start_line: 3 },
 				dir,
 				context,
 			);
 
-			await expect(failure).rejects.toThrow("Read before editing");
-			await expect(failure).rejects.toThrow(
-				"an earlier edit changed the file's length",
+			await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+				"a\nB1\nX\nB3\nC\nd",
 			);
 		});
+	});
+
+	it("still refuses a line that moved into place from below an unread stretch", async () => {
+		await withTempFile("a\nb\nc\nd\ne\nf", async (filePath, dir) => {
+			const receipts = createReadReceipts();
+			const editor = createEditorExecutor({ receipts });
+			receipts.noteRead(filePath, 1, 3);
+
+			// Line 2 becomes three: a read of 1-3 now covers 1-5 (b's three lines and c).
+			await editor(
+				{ path: filePath, new_text: "b1\nb2\nb3", start_line: 2 },
+				dir,
+				context,
+			);
+			expect(receipts.covers(filePath, 1, 5)).toBe(true);
+
+			// d was line 4, never read; it is line 6 now.
+			const failure = editor(
+				{ path: filePath, new_text: "D", start_line: 6 },
+				dir,
+				context,
+			);
+			await expect(failure).rejects.toThrow("Read before editing");
+			await expect(failure).rejects.toThrow("no read of");
+		});
+	});
+
+	it("names what the reads cover when they reach only part of the range", async () => {
+		await withTempFile(
+			Array.from({ length: 30 }, (_, i) => `l${i + 1}`).join("\n"),
+			async (filePath, dir) => {
+				const receipts = createReadReceipts();
+				const editor = createEditorExecutor({ receipts });
+				receipts.noteRead(filePath, 10, 20);
+
+				const failure = editor(
+					{ path: filePath, new_text: "x", start_line: 10, end_line: 25 },
+					dir,
+					context,
+				);
+				await expect(failure).rejects.toThrow(
+					"cover only lines 10-20 of the lines 10-25 you edit",
+				);
+				await expect(failure).rejects.not.toThrow("changed the file's length");
+			},
+		);
 	});
 
 	it("keeps the receipt when an edit left the line count alone", async () => {
@@ -2954,14 +3003,14 @@ describe("recovering the calls a transaction used to lose", () => {
 			const editor = createEditorExecutor({ receipts });
 			receipts.noteRead(filePath, 1, 3);
 
-			// An insert of its own, which moves every line below it and retires
-			// the receipts for the file.
+			// An insert of its own, which moves every line below it: the reads
+			// move with them, and the inserted line counts as read.
 			await editor(
 				{ path: filePath, insert_line: 1, new_text: "zero\n" },
 				dir,
 				context,
 			);
-			expect(receipts.hasAny(filePath)).toBe(false);
+			expect(receipts.covers(filePath, 1, 4)).toBe(true);
 
 			const result = await editor(
 				{ path: filePath, old_text: "three", new_text: "THREE" },

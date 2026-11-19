@@ -26,7 +26,12 @@ import { splitBom } from "./bom";
 import { withFileLock } from "./file-locks";
 import { detectLineEnding } from "./line-endings";
 import { compilePosixRegex } from "./posix-regex";
-import { creditShown, type ReadReceipts, readFileStamp } from "./read-receipts";
+import {
+	changedRegion,
+	creditShown,
+	type ReadReceipts,
+	readFileStamp,
+} from "./read-receipts";
 import { wholeFileRefusal } from "./whole-file";
 
 /** Commands whose absence would otherwise be silent. */
@@ -1025,10 +1030,13 @@ export function createSedExecutor(options: SedExecutorOptions = {}) {
 						return;
 					}
 					await fs.writeFile(filePath, bom + result.output, "utf8");
+					// Reads move with the lines; the script's output is not text the
+					// model sent, so what it changed is not credited as seen.
 					receipts?.noteWrite(
 						filePath,
 						countLines(original),
 						countLines(result.output),
+						changedRegion(original, result.output, false),
 					);
 					// After the write, so this session's own change is not read back
 					// as somebody else's on the next call.
