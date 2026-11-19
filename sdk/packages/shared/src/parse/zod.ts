@@ -207,11 +207,19 @@ function propertyNamesOf(schema: z.ZodType): Set<string> {
 const WRONG_CLOSER = String.raw`\x60|"|'|<\/[A-Za-z][\w-]*>`;
 /** One argument written after it: `,name: value`, a value of plain shape. */
 const SWALLOWED_PAIR = String.raw`\s*,\s*[A-Za-z_]\w*\s*:\s*(?:\x60[^\x60\n]*\x60|"[^"\n]*"|'[^'\n]*'|-?\d+(?:\.\d+)?|true|false|null)`;
+/**
+ * The argument the string ran into and stopped inside: `,name:` and at most
+ * the opening of its value (`[`, `['`, `{`, a quote). The parser closes the
+ * string at the next delimiter it meets, and when the next argument is an
+ * array of strings that delimiter is the one opening its first item, so the
+ * tail ends `,start_line:90,task_progress:['` (pandorum 9sow0, 2026-11-19).
+ */
+const CUT_PAIR = String.raw`\s*,\s*([A-Za-z_]\w*)\s*:\s*(?:\[\s*[\x60"']?|\{|[\x60"'])?`;
 const SWALLOWED_TAIL = new RegExp(
 	// Spaces only after it, never a newline: the repair closes the string
 	// before any trailing whitespace, and a newline is the way out the
 	// refusal offers for text that really ends like this.
-	String.raw`(${WRONG_CLOSER})((?:${SWALLOWED_PAIR})+)[ \t]*\}?[ \t]*$`,
+	String.raw`(${WRONG_CLOSER})((?:${SWALLOWED_PAIR})*)(?:${CUT_PAIR})?[ \t]*\}?[ \t]*$`,
 );
 const SWALLOWED_PAIRS =
 	/\s*,\s*([A-Za-z_]\w*)\s*:\s*(\x60[^\x60\n]*\x60|"[^"\n]*"|'[^'\n]*'|[^,\s}]+)/g;
@@ -220,6 +228,8 @@ interface SwallowedArguments {
 	field: string;
 	closer: string;
 	pairs: Array<{ name: string; value: string }>;
+	/** The argument the tail stopped inside, its value lost. */
+	cut?: string;
 	tail: string;
 }
 
@@ -239,7 +249,13 @@ interface SwallowedArguments {
  * one line and the swallowed text.
  *
  * Only a tail that is nothing but `,name: value` pairs after the wrong closer,
- * every name an argument of this tool that the call does not carry. Text a
+ * optionally ending in one `,name:` cut off where its value began, every name
+ * an argument of this tool that the call does not carry. The cut form is
+ * 46 of 19,590 archived editor calls, every one an artifact, and the 2026-11-14
+ * version of this check missed it: pandorum 9sow0 (4.100.283) got "no
+ * `start_line`" four times for a call whose tail was
+ * `,start_line:90,task_progress:['`, and once a whole-file replace when
+ * `end_line` went with it. Text a
  * model meant to send cannot end that way without also leaving those very
  * arguments absent, and if it ever does, the refusal says how to send it.
  */
@@ -264,13 +280,13 @@ function findSwallowedArguments(
 		const pairs = [...(tail[2] ?? "").matchAll(SWALLOWED_PAIRS)].map(
 			(pair) => ({ name: pair[1] ?? "", value: pair[2] ?? "" }),
 		);
+		const cut = tail[3];
+		const named = [...pairs.map((pair) => pair.name), ...(cut ? [cut] : [])];
 		const swallowed =
-			pairs.length > 0 &&
-			pairs.every(
-				(pair) =>
-					pair.name !== field &&
-					names?.has(pair.name) &&
-					record[pair.name] === undefined,
+			named.length > 0 &&
+			named.every(
+				(name) =>
+					name !== field && names?.has(name) && record[name] === undefined,
 			);
 		if (swallowed) {
 			// The "closer" can itself be the closing quote of an argument that
@@ -287,6 +303,7 @@ function findSwallowedArguments(
 				field,
 				closer: endsAValue ? "" : (tail[1] ?? ""),
 				pairs,
+				cut,
 				tail: tail[0],
 			};
 		}
@@ -302,10 +319,11 @@ function describeSwallowedArguments(found: SwallowedArguments): string {
 			: found.closer === '"' || found.closer === "'"
 				? `a quote (${found.closer})`
 				: `\x60${found.closer}\x60`;
-	const written = found.pairs
-		.map((pair) => `\x60${pair.name}: ${pair.value}\x60`)
-		.join(", ");
-	const them = found.pairs.length === 1 ? "it" : "them";
+	const written = [
+		...found.pairs.map((pair) => `\x60${pair.name}: ${pair.value}\x60`),
+		...(found.cut ? [`the start of \x60${found.cut}\x60`] : []),
+	].join(", ");
+	const them = found.pairs.length + (found.cut ? 1 : 0) === 1 ? "it" : "them";
 	return (
 		`This call was not run. Its \x60${found.field}\x60 ends with ${JSON.stringify(found.tail.trim())}: ` +
 		`${closer ? `the string was closed with ${closer} instead of the delimiter that opened it` : "the string was not closed by the delimiter that opened it"}, so the parser read on past it, ` +

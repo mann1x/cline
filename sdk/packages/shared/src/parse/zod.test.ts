@@ -184,6 +184,86 @@ describe("validateWithZod: arguments swallowed into a string", () => {
 	});
 });
 
+describe("validateWithZod: a tail cut off inside the next argument", () => {
+	const Editor = z.object({
+		file_path: z.string().optional(),
+		new_text: z.string(),
+		start_line: z.number().optional(),
+		end_line: z.number().optional(),
+		replace_all: z.boolean().optional(),
+		intent: z.string().optional(),
+		task_progress: z.union([z.string(), z.array(z.string())]).optional(),
+	});
+
+	it("refuses the 9sow0 call: start_line written, task_progress cut where it began", () => {
+		// pandorum 9sow0 call 19 (4.100.283): the old check wanted every pair
+		// complete, missed this, and the editor said "no start_line" four times.
+		let message = "";
+		try {
+			validateWithZod(Editor, {
+				end_line: 90,
+				file_path: "manic_miner.html",
+				intent: "Fix line 90",
+				new_text: "c.fill();}}});}`,start_line:90,task_progress:['",
+			});
+		} catch (error) {
+			message = String(error);
+		}
+		expect(message).toContain("closed with a backtick");
+		expect(message).toContain(
+			"`start_line: 90`, the start of `task_progress`, which you did write",
+		);
+		expect(message).toContain("their own arguments");
+	});
+
+	it("refuses the call that would have replaced the whole file", () => {
+		// 9sow0 call 9: start_line and end_line both gone, so the editor read it
+		// as a whole-file replace and only the read guard stopped it.
+		expect(() =>
+			validateWithZod(Editor, {
+				file_path: "manic_miner.html",
+				new_text:
+					"c.fill();}});}`,replace_all:false,start_line:90,task_progress:['",
+			}),
+		).toThrow(
+			/`replace_all: false`, `start_line: 90`, the start of `task_progress`/,
+		);
+	});
+
+	it("refuses a tail that is only the cut argument", () => {
+		expect(() =>
+			validateWithZod(Editor, {
+				end_line: 136,
+				new_text: "</html>`,file_path:",
+			}),
+		).toThrow(
+			/the start of `file_path`, which you did write, arrived as the end of `new_text` instead of as its own argument/,
+		);
+	});
+
+	it("passes look-alikes", () => {
+		// Not an argument of this tool.
+		expect(
+			validateWithZod(Editor, { new_text: "f(`a`,width:[" }).new_text,
+		).toBe("f(`a`,width:[");
+		// The cut argument is in the call, so nothing was lost.
+		expect(
+			validateWithZod(Editor, {
+				new_text: "x`,task_progress:[",
+				task_progress: ["- [ ] a"],
+			}).new_text,
+		).toBe("x`,task_progress:[");
+		// More than an opener after the name: a real value, not a cut.
+		expect(
+			validateWithZod(Editor, { new_text: "x`,start_line:[1, 2" }).new_text,
+		).toBe("x`,start_line:[1, 2");
+		// A closer and nothing after it.
+		expect(validateWithZod(Editor, { new_text: "s = `a`" }).new_text).toBe(
+			"s = `a`",
+		);
+	});
+});
+
 describe("validateWithZod: an unknown closer is not named", () => {
 	it("does not blame the quote that ends a swallowed value", () => {
 		// agent uqj5pq: `old_text` ran on through `path: '...'`, which is no
