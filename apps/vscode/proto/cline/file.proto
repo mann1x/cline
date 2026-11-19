@@ -97,6 +97,9 @@ service FileService {
   // Opens a prompt template for editing, copying a builtin to disk first
   rpc openPromptTemplate(PromptTemplateEditRequest) returns (Empty);
 
+  // Deletes a user's prompt template (global or workspace); builtins cannot be deleted
+  rpc deletePromptTemplate(PromptTemplateEditRequest) returns (Empty);
+
   // Asks the selected model to write a prompt template for itself
   rpc generatePromptTemplate(EmptyRequest) returns (GeneratedPromptTemplate);
 

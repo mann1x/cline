@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -19,7 +19,7 @@ vi.mock("@shared/services/Logger", () => ({
 }))
 
 import { getBuiltinPromptTemplates } from "@cline/core"
-import { readPromptTemplateSettings, resolvePromptTemplateEditPath } from "./prompt-template-settings"
+import { deletePromptTemplateFile, readPromptTemplateSettings, resolvePromptTemplateEditPath } from "./prompt-template-settings"
 
 const roots: string[] = []
 
@@ -204,5 +204,85 @@ describe("resolvePromptTemplateEditPath", () => {
 	it("refuses a name that is not a template", async () => {
 		await expect(resolvePromptTemplateEditPath("nope.md")).rejects.toThrow("nope.md")
 		expect(existsSync(join(mocks.dataDir, "templates", "nope.md"))).toBe(false)
+	})
+})
+
+describe("deletePromptTemplateFile", () => {
+	it("deletes a global template, handing its name back to the builtin", async () => {
+		const target = await resolvePromptTemplateEditPath("qwen.md")
+
+		await deletePromptTemplateFile(target)
+
+		expect(existsSync(target)).toBe(false)
+		const settings = await readPromptTemplateSettings({ providerId: "ollama", modelId: "qwen3.5:9b" })
+		const qwen = settings.templates.filter((template) => template.name === "qwen")
+		expect(qwen.map((template) => [template.source, template.shadowed])).toEqual([["builtin", false]])
+	})
+
+	it("deletes a workspace template", async () => {
+		const workspace = makeRoot()
+		const directory = join(workspace, ".clinerules", "templates")
+		writeTemplate(directory, "mine.md", "---\n---\n")
+
+		await deletePromptTemplateFile(join(directory, "mine.md"), workspace)
+
+		expect(existsSync(join(directory, "mine.md"))).toBe(false)
+	})
+
+	it("refuses a builtin, which has no path", async () => {
+		await expect(deletePromptTemplateFile(undefined)).rejects.toThrow("built-in")
+	})
+
+	it("refuses a file outside the template directories", async () => {
+		const elsewhere = makeRoot()
+		writeTemplate(elsewhere, "notes.md", "keep me\n")
+
+		await expect(deletePromptTemplateFile(join(elsewhere, "notes.md"))).rejects.toThrow("Not in a template directory")
+		expect(existsSync(join(elsewhere, "notes.md"))).toBe(true)
+	})
+
+	it("refuses a workspace file when the workspace is not the one given", async () => {
+		const workspace = makeRoot()
+		const directory = join(workspace, ".clinerules", "templates")
+		writeTemplate(directory, "mine.md", "---\n---\n")
+
+		await expect(deletePromptTemplateFile(join(directory, "mine.md"), makeRoot())).rejects.toThrow(
+			"Not in a template directory",
+		)
+		expect(existsSync(join(directory, "mine.md"))).toBe(true)
+	})
+
+	it("refuses a path that only climbs out of a template directory", async () => {
+		const directory = join(mocks.dataDir, "templates")
+		writeTemplate(directory, "x.md", "---\n---\n")
+		writeTemplate(mocks.dataDir, "settings.md", "keep me\n")
+
+		await expect(deletePromptTemplateFile(join(directory, "..", "settings.md"))).rejects.toThrow(
+			"Not in a template directory",
+		)
+		expect(existsSync(join(mocks.dataDir, "settings.md"))).toBe(true)
+	})
+
+	it("refuses a link in the directory that points elsewhere", async () => {
+		const directory = join(mocks.dataDir, "templates")
+		writeTemplate(directory, "x.md", "---\n---\n")
+		const elsewhere = makeRoot()
+		writeTemplate(elsewhere, "target.md", "keep me\n")
+		symlinkSync(join(elsewhere, "target.md"), join(directory, "link.md"))
+
+		await expect(deletePromptTemplateFile(join(directory, "link.md"))).rejects.toThrow("Not in a template directory")
+		expect(existsSync(join(elsewhere, "target.md"))).toBe(true)
+	})
+
+	it("refuses anything that is not a .md file", async () => {
+		const directory = join(mocks.dataDir, "templates")
+		writeTemplate(directory, "qwen.md.bak-20260924", "old\n")
+
+		await expect(deletePromptTemplateFile(join(directory, "qwen.md.bak-20260924"))).rejects.toThrow("Not a template file")
+		expect(existsSync(join(directory, "qwen.md.bak-20260924"))).toBe(true)
+	})
+
+	it("says so when the file is already gone", async () => {
+		await expect(deletePromptTemplateFile(join(mocks.dataDir, "templates", "gone.md"))).rejects.toThrow("No template at")
 	})
 })

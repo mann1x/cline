@@ -1,6 +1,6 @@
 import { EmptyRequest } from "@shared/proto/cline/common"
 import { PromptTemplateEditRequest, type PromptTemplateInfo, type PromptTemplates } from "@shared/proto/cline/file"
-import { AlertTriangle, CircleAlert, FilePenLine, RefreshCw, Sparkles } from "lucide-react"
+import { AlertTriangle, CircleAlert, FilePenLine, RefreshCw, Sparkles, Trash2 } from "lucide-react"
 import { memo, useCallback, useEffect, useMemo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -63,13 +63,32 @@ const TemplateRow = memo(
 		template,
 		everyTool,
 		onEdit,
+		onDelete,
+		replacesBuiltin,
 	}: {
 		template: PromptTemplateInfo
 		/** Every tool a session can be handed, for reporting what is not covered. */
 		everyTool: readonly string[]
 		onEdit: (template: PromptTemplateInfo) => void
+		onDelete: (template: PromptTemplateInfo) => Promise<void>
+		/** A builtin of the same name exists, so deleting this file hands the name back to it. */
+		replacesBuiltin: boolean
 	}) => {
 		const dimmed = template.shadowed || template.error !== undefined
+		// A builtin is in the bundle, not on disk: there is nothing to delete.
+		const deletable = template.source !== "builtin" && template.filePath !== undefined
+		const [confirming, setConfirming] = useState(false)
+		const [deleting, setDeleting] = useState(false)
+
+		const remove = async () => {
+			setDeleting(true)
+			try {
+				await onDelete(template)
+			} finally {
+				setDeleting(false)
+				setConfirming(false)
+			}
+		}
 
 		return (
 			<div
@@ -91,7 +110,43 @@ const TemplateRow = memo(
 						<FilePenLine />
 						Edit
 					</Button>
+					{deletable && (
+						<Button
+							aria-label={`Delete ${template.fileName}`}
+							disabled={confirming || deleting}
+							onClick={() => setConfirming(true)}
+							size="xs"
+							title={`Delete ${template.filePath}`}
+							variant="ghost">
+							<Trash2 />
+						</Button>
+					)}
 				</div>
+
+				{confirming && (
+					<div className="flex items-center gap-2 flex-wrap text-xs">
+						<span className="text-foreground">
+							Delete {sourceLabel(template.source).toLowerCase()} template <code>{template.fileName}</code>?{" "}
+							{replacesBuiltin ? `The built-in ${template.name} applies again.` : "It cannot be undone."}
+						</span>
+						<Button
+							aria-label={`Yes, delete ${template.fileName}`}
+							disabled={deleting}
+							onClick={() => void remove()}
+							size="xs"
+							variant="danger">
+							{deleting ? "Deleting…" : "Yes"}
+						</Button>
+						<Button
+							aria-label={`No, keep ${template.fileName}`}
+							disabled={deleting}
+							onClick={() => setConfirming(false)}
+							size="xs"
+							variant="ghost">
+							No
+						</Button>
+					</div>
+				)}
 
 				{template.error !== undefined ? (
 					<div className="flex items-start gap-1.5 text-xs text-error">
@@ -170,6 +225,38 @@ const PromptTemplatesSection = () => {
 			}
 		},
 		[refresh],
+	)
+
+	const handleDelete = useCallback(
+		async (template: PromptTemplateInfo) => {
+			let refusal: string | undefined
+			try {
+				await FileServiceClient.deletePromptTemplate(
+					PromptTemplateEditRequest.create({
+						fileName: template.fileName,
+						filePath: template.filePath,
+					}),
+				)
+			} catch (e) {
+				refusal = e instanceof Error ? e.message : String(e)
+			}
+			// Either way the list may have moved: the file is gone, or it was
+			// already gone and the row was stale. The reload clears the error
+			// line when it succeeds, so a refusal is shown after it, not before.
+			await refresh()
+			if (refusal !== undefined) {
+				setError(refusal)
+			}
+		},
+		[refresh],
+	)
+
+	const builtinNames = useMemo(
+		() =>
+			new Set(
+				(state?.templates ?? []).filter((template) => template.source === "builtin").map((template) => template.name),
+			),
+		[state],
 	)
 
 	// Asks the selected model to write a template for itself. The point is the
@@ -306,7 +393,9 @@ const PromptTemplatesSection = () => {
 						<TemplateRow
 							everyTool={everyTool}
 							key={`${template.source}:${template.filePath ?? template.fileName}`}
+							onDelete={handleDelete}
 							onEdit={handleEdit}
+							replacesBuiltin={template.source !== "builtin" && builtinNames.has(template.name)}
 							template={template}
 						/>
 					))

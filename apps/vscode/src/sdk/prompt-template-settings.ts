@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs"
+import { realpath, unlink } from "node:fs/promises"
 import {
 	getBuiltinPromptTemplateSource,
 	getBuiltinPromptTemplates,
@@ -284,4 +285,44 @@ export async function resolvePromptTemplateEditPath(fileName: string, filePath?:
 		writeFileSync(target, source, "utf8")
 	}
 	return target
+}
+
+/**
+ * Deletes a template file from the global or the workspace template directory.
+ *
+ * Only a user's own template can go: a builtin lives in the bundle and has no
+ * path, and anything outside the two template directories — or not a `.md`
+ * directly inside one — is refused rather than trusted, because the path comes
+ * from the webview. Symlinks are resolved on both sides before the comparison,
+ * so a link in the directory cannot point the delete somewhere else.
+ *
+ * Deleting a copy that shadowed a builtin hands the name back to the builtin.
+ */
+export async function deletePromptTemplateFile(filePath: string | undefined, workspaceRoot?: string): Promise<void> {
+	if (!filePath) {
+		throw new Error("A built-in template cannot be deleted")
+	}
+	if (path.extname(filePath).toLowerCase() !== ".md") {
+		throw new Error(`Not a template file: ${filePath}`)
+	}
+	let real: string
+	try {
+		real = await realpath(filePath)
+	} catch {
+		throw new Error(`No template at ${filePath}`)
+	}
+	if (path.extname(real).toLowerCase() !== ".md") {
+		throw new Error(`Not a template file: ${filePath}`)
+	}
+	const directories = [
+		resolveGlobalTemplateDirectory(),
+		workspaceRoot ? resolveWorkspaceTemplateDirectory(workspaceRoot) : undefined,
+	].filter((directory): directory is string => Boolean(directory))
+	const allowed = await Promise.all(directories.map((directory) => realpath(directory).catch(() => undefined)))
+	const parent = path.dirname(real)
+	const same = (a: string, b: string) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b)
+	if (!allowed.some((directory) => directory !== undefined && same(directory, parent))) {
+		throw new Error(`Not in a template directory: ${filePath}`)
+	}
+	await unlink(real)
 }

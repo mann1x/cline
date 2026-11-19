@@ -6,12 +6,14 @@ import PromptTemplatesSection from "./PromptTemplatesSection"
 const mocks = vi.hoisted(() => ({
 	getPromptTemplates: vi.fn(),
 	openPromptTemplate: vi.fn(),
+	deletePromptTemplate: vi.fn(),
 }))
 
 vi.mock("@/services/grpc-client", () => ({
 	FileServiceClient: {
 		getPromptTemplates: mocks.getPromptTemplates,
 		openPromptTemplate: mocks.openPromptTemplate,
+		deletePromptTemplate: mocks.deletePromptTemplate,
 	},
 }))
 
@@ -51,6 +53,82 @@ beforeEach(() => {
 	mocks.openPromptTemplate.mockReset()
 	mocks.getPromptTemplates.mockResolvedValue(state())
 	mocks.openPromptTemplate.mockResolvedValue({})
+	mocks.deletePromptTemplate.mockReset()
+	mocks.deletePromptTemplate.mockResolvedValue({})
+})
+
+describe("deleting a template", () => {
+	const qwenCopy = template({
+		name: "qwen",
+		fileName: "qwen.md",
+		source: "global",
+		filePath: "/home/me/.cline/data/templates/qwen.md",
+	})
+	const qwenBuiltin = template({ name: "qwen", fileName: "qwen.md", shadowed: true })
+
+	it("offers a trash button on the user's own templates only", async () => {
+		mocks.getPromptTemplates.mockResolvedValue(state({ templates: [qwenBuiltin, qwenCopy] }))
+
+		render(<PromptTemplatesSection />)
+
+		expect(await screen.findAllByRole("button", { name: "Delete qwen.md" })).toHaveLength(1)
+		expect(screen.getAllByRole("button", { name: "Edit qwen.md" })).toHaveLength(2)
+	})
+
+	it("asks before deleting, and No keeps the file", async () => {
+		mocks.getPromptTemplates.mockResolvedValue(state({ templates: [qwenBuiltin, qwenCopy] }))
+		const user = userEvent.setup()
+
+		render(<PromptTemplatesSection />)
+		await user.click(await screen.findByRole("button", { name: "Delete qwen.md" }))
+
+		expect(screen.getByText(/The built-in qwen applies again/)).toBeInTheDocument()
+		expect(mocks.deletePromptTemplate).not.toHaveBeenCalled()
+
+		await user.click(screen.getByRole("button", { name: "No, keep qwen.md" }))
+
+		expect(mocks.deletePromptTemplate).not.toHaveBeenCalled()
+		expect(screen.queryByRole("button", { name: "Yes, delete qwen.md" })).not.toBeInTheDocument()
+	})
+
+	it("deletes on Yes and reloads the list", async () => {
+		mocks.getPromptTemplates.mockResolvedValueOnce(state({ templates: [qwenBuiltin, qwenCopy] }))
+		mocks.getPromptTemplates.mockResolvedValue(state({ templates: [template({ name: "qwen", fileName: "qwen.md" })] }))
+		const user = userEvent.setup()
+
+		render(<PromptTemplatesSection />)
+		await user.click(await screen.findByRole("button", { name: "Delete qwen.md" }))
+		await user.click(screen.getByRole("button", { name: "Yes, delete qwen.md" }))
+
+		expect(mocks.deletePromptTemplate).toHaveBeenCalledWith(
+			expect.objectContaining({ fileName: "qwen.md", filePath: "/home/me/.cline/data/templates/qwen.md" }),
+		)
+		await waitFor(() => expect(screen.queryByRole("button", { name: "Delete qwen.md" })).not.toBeInTheDocument())
+	})
+
+	it("says it cannot be undone when no builtin takes the name back", async () => {
+		mocks.getPromptTemplates.mockResolvedValue(
+			state({ templates: [template({ name: "mine", fileName: "mine.md", source: "workspace", filePath: "/w/mine.md" })] }),
+		)
+		const user = userEvent.setup()
+
+		render(<PromptTemplatesSection />)
+		await user.click(await screen.findByRole("button", { name: "Delete mine.md" }))
+
+		expect(screen.getByText(/It cannot be undone/)).toBeInTheDocument()
+	})
+
+	it("shows the refusal when the extension will not delete it", async () => {
+		mocks.getPromptTemplates.mockResolvedValue(state({ templates: [qwenBuiltin, qwenCopy] }))
+		mocks.deletePromptTemplate.mockRejectedValue(new Error("Not in a template directory: /x/qwen.md"))
+		const user = userEvent.setup()
+
+		render(<PromptTemplatesSection />)
+		await user.click(await screen.findByRole("button", { name: "Delete qwen.md" }))
+		await user.click(screen.getByRole("button", { name: "Yes, delete qwen.md" }))
+
+		expect(await screen.findByText(/Not in a template directory/)).toBeInTheDocument()
+	})
 })
 
 describe("PromptTemplatesSection", () => {
