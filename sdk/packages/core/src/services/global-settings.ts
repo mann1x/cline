@@ -5,6 +5,7 @@ import {
 	type AgentTool,
 	CONFIGURABLE_MODEL_TOOL_NAMES,
 	type ConfigurableModelToolName,
+	DEFAULT_PROMPT_TEMPLATE_NAME,
 	type ITelemetryService,
 	type ModelToolSettings,
 } from "@cline/shared";
@@ -78,6 +79,7 @@ export const GlobalSettingsSchema = z
 		disabledPlugins: GlobalSettingsStringListSchema.optional(),
 		disabledAgentPlugins: GlobalSettingsStringListSchema.optional(),
 		bundledSkills: BundledSkillSettingsSchema,
+		disabledPromptTemplates: GlobalSettingsStringListSchema.optional(),
 	})
 	.strip()
 	.transform((settings) => {
@@ -94,6 +96,7 @@ export const GlobalSettingsSchema = z
 			disabledPlugins?: string[];
 			disabledAgentPlugins?: string[];
 			bundledSkills?: Record<string, { enabled: boolean }>;
+			disabledPromptTemplates?: string[];
 		} = {
 			autoUpdateEnabled: settings.autoUpdateEnabled,
 			telemetryOptOut: settings.telemetryOptOut,
@@ -130,6 +133,9 @@ export const GlobalSettingsSchema = z
 			Object.keys(settings.bundledSkills).length > 0
 		) {
 			normalized.bundledSkills = settings.bundledSkills;
+		}
+		if (settings.disabledPromptTemplates?.length) {
+			normalized.disabledPromptTemplates = settings.disabledPromptTemplates;
 		}
 		return normalized;
 	});
@@ -367,6 +373,58 @@ export function resolveDisabledAgentPluginNames(
 	return new Set(
 		disabledPluginNames ?? readGlobalSettings().disabledAgentPlugins ?? [],
 	);
+}
+
+/**
+ * The prompt templates the user switched off, by lower-cased name.
+ *
+ * A global setting rather than a host's own, so that every host resolving a
+ * session's template -- the extension, the CLI, an SDK host -- leaves out the
+ * same ones: a template switched off in the extension and still applied by
+ * the CLI would make the two disagree about the prompt, which is the defect
+ * templates moved into core to end. `default` is never in it.
+ */
+export function resolveDisabledPromptTemplateNames(
+	disabledNames?: ReadonlyArray<string>,
+): Set<string> {
+	const names = new Set<string>();
+	for (const name of disabledNames ??
+		readGlobalSettings().disabledPromptTemplates ??
+		[]) {
+		const key = name.trim().toLowerCase();
+		if (key && key !== DEFAULT_PROMPT_TEMPLATE_NAME) {
+			names.add(key);
+		}
+	}
+	return names;
+}
+
+export function setPromptTemplateEnabledGlobally(
+	name: string,
+	enabled: boolean,
+): void {
+	const key = name.trim().toLowerCase();
+	if (!key) {
+		throw new Error("A prompt template needs a name to be switched on or off");
+	}
+	if (key === DEFAULT_PROMPT_TEMPLATE_NAME) {
+		throw new Error(
+			"The default template cannot be switched off: every other template is layered on it",
+		);
+	}
+	const settings = readGlobalSettings();
+	const names = resolveDisabledPromptTemplateNames(
+		settings.disabledPromptTemplates ?? [],
+	);
+	if (enabled) {
+		names.delete(key);
+	} else {
+		names.add(key);
+	}
+	writeGlobalSettings({
+		...settings,
+		disabledPromptTemplates: names.size > 0 ? [...names] : undefined,
+	});
 }
 
 export function isToolDisabledGlobally(toolName: string): boolean {

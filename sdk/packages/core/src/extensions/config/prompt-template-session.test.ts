@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { setPromptTemplateEnabledGlobally } from "../../services/global-settings";
 import {
 	describeResolvedPromptTemplate,
 	resolveSessionPromptTemplate,
@@ -126,5 +131,93 @@ describe("describeResolvedPromptTemplate", () => {
 		expect(
 			describeResolvedPromptTemplate({ modelId: "some-model" }, undefined),
 		).toBe("[PromptTemplates] some-model → none; the built-in prompt applies");
+	});
+});
+
+// A template the user switched off is taken out before anything is matched,
+// in every host, because the switch is a global setting core reads itself.
+describe("resolveSessionPromptTemplateFrom: templates switched off", () => {
+	const previousGlobalSettingsPath = process.env.CLINE_GLOBAL_SETTINGS_PATH;
+	afterEach(() => {
+		process.env.CLINE_GLOBAL_SETTINGS_PATH = previousGlobalSettingsPath;
+	});
+
+	it("drops a switched-off family template, and its models land on default", () => {
+		const { rendered } = resolveSessionPromptTemplateFrom({
+			providerId: "ollama",
+			modelId: "a3b-coder_tb:Q4_K_M",
+			family: "qwen35moe",
+			disabledTemplateNames: [" Qwen "],
+		});
+		expect(rendered?.name).toBe("default");
+		expect(rendered?.overlaid).toBe(false);
+	});
+
+	it("never drops default, even when asked to", () => {
+		const { rendered } = resolveSessionPromptTemplateFrom({
+			providerId: "ollama",
+			modelId: "a3b-coder_tb:Q4_K_M",
+			family: "qwen35moe",
+			disabledTemplateNames: ["qwen", "default"],
+		});
+		expect(rendered?.name).toBe("default");
+	});
+
+	it("drops a user's copy along with the builtin of the same name", async () => {
+		const root = await mkdtemp(join(tmpdir(), "core-template-off-"));
+		try {
+			const globalDir = join(root, "templates");
+			mkdirSync(globalDir, { recursive: true });
+			writeFileSync(
+				join(globalDir, "qwen.md"),
+				"---\nname: qwen\nmatch:\n  family: qwen*\n---\n# system\nmine\n",
+			);
+			const on = resolveSessionPromptTemplateFrom({
+				providerId: "ollama",
+				modelId: "m",
+				family: "qwen35moe",
+				globalDir,
+				disabledTemplateNames: [],
+			});
+			expect(on.rendered?.source).toBe("global");
+			const off = resolveSessionPromptTemplateFrom({
+				providerId: "ollama",
+				modelId: "m",
+				family: "qwen35moe",
+				globalDir,
+				disabledTemplateNames: ["qwen"],
+			});
+			expect(off.rendered?.name).toBe("default");
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("reads the global setting when the caller names none", async () => {
+		const root = await mkdtemp(join(tmpdir(), "core-template-off-"));
+		try {
+			process.env.CLINE_GLOBAL_SETTINGS_PATH = join(
+				root,
+				"global-settings.json",
+			);
+			setPromptTemplateEnabledGlobally("qwen", false);
+			expect(
+				resolveSessionPromptTemplateFrom({
+					providerId: "ollama",
+					modelId: "m",
+					family: "qwen35moe",
+				}).rendered?.name,
+			).toBe("default");
+			setPromptTemplateEnabledGlobally("qwen", true);
+			expect(
+				resolveSessionPromptTemplateFrom({
+					providerId: "ollama",
+					modelId: "m",
+					family: "qwen35moe",
+				}).rendered?.name,
+			).toBe("qwen");
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 });

@@ -4,14 +4,18 @@ import {
 	getBuiltinPromptTemplateSource,
 	getBuiltinPromptTemplates,
 	loadPromptTemplates,
+	resolveDisabledPromptTemplateNames,
 	resolvePromptTemplateDirectories,
+	setPromptTemplateEnabledGlobally,
 } from "@cline/core"
 import {
+	DEFAULT_PROMPT_TEMPLATE_NAME,
 	isOllamaNativeProvider,
 	type PromptTemplate,
 	type PromptTemplateSource,
 	promptTemplateMatchBlocks,
 	renderPromptTemplate,
+	withoutDisabledPromptTemplates,
 } from "@cline/shared"
 import { fileExistsAtPath } from "@utils/fs"
 import * as path from "path"
@@ -40,6 +44,11 @@ export interface PromptTemplateEntry {
 	active: boolean
 	/** Shadowed by a nearer template of the same name, so it never matches. */
 	shadowed: boolean
+	/**
+	 * Switched off by name in the global settings, so no session matches it
+	 * and the models it claimed fall to the next claim, in the end `default`.
+	 */
+	disabled: boolean
 	/** Match rules, rendered for display: `family: gemma*`. */
 	match: string[]
 	/** Tool descriptions this template overrides. */
@@ -164,7 +173,12 @@ export async function readPromptTemplateSettings(options: ReadPromptTemplateSett
 		{ knownToolNames: options.knownToolNames },
 	)
 	const all = [...getBuiltinPromptTemplates(), ...templates]
-	const rendered = renderPromptTemplate(all, {
+	// What a session resolves against: the same set without the templates the
+	// user switched off. The panel lists `all`, so a switched-off template can
+	// be switched back on, but answers "which one is active" from this.
+	const disabledNames = resolveDisabledPromptTemplateNames()
+	const enabled = withoutDisabledPromptTemplates(all, disabledNames)
+	const rendered = renderPromptTemplate(enabled, {
 		providerId: options.providerId,
 		modelId: options.modelId,
 		family,
@@ -191,6 +205,7 @@ export async function readPromptTemplateSettings(options: ReadPromptTemplateSett
 			rendered.source === template.source &&
 			rendered.filePath === template.filePath,
 		shadowed: lastIndexByName.get(template.name.trim().toLowerCase()) !== index,
+		disabled: disabledNames.has(template.name.trim().toLowerCase()),
 		match: describeMatch(template),
 		tools: Object.keys(template.tools).sort(),
 		hasSystem: template.system !== undefined,
@@ -208,6 +223,7 @@ export async function readPromptTemplateSettings(options: ReadPromptTemplateSett
 			filePath: error.filePath,
 			active: false,
 			shadowed: false,
+			disabled: false,
 			match: [],
 			tools: [],
 			hasSystem: false,
@@ -226,7 +242,7 @@ export async function readPromptTemplateSettings(options: ReadPromptTemplateSett
 					() => undefined,
 				)
 			: undefined
-		const scopeRendered = renderPromptTemplate(all, {
+		const scopeRendered = renderPromptTemplate(enabled, {
 			providerId: request.providerId,
 			modelId: request.modelId,
 			family: scopeFamily,
@@ -325,4 +341,17 @@ export async function deletePromptTemplateFile(filePath: string | undefined, wor
 		throw new Error(`Not in a template directory: ${filePath}`)
 	}
 	await unlink(real)
+}
+
+/**
+ * Switches a template on or off for every session in every host.
+ *
+ * By name, so the built-in and any copy of it go together. `default` cannot be
+ * switched off: it is the base layer every other template is layered on.
+ */
+export function setPromptTemplateEnabled(name: string, enabled: boolean): void {
+	if (name.trim().toLowerCase() === DEFAULT_PROMPT_TEMPLATE_NAME) {
+		throw new Error("The default template cannot be switched off")
+	}
+	setPromptTemplateEnabledGlobally(name, enabled)
 }

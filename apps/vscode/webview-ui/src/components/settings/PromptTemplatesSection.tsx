@@ -1,10 +1,17 @@
 import { EmptyRequest } from "@shared/proto/cline/common"
-import { PromptTemplateEditRequest, type PromptTemplateInfo, type PromptTemplates } from "@shared/proto/cline/file"
+import {
+	PromptTemplateEditRequest,
+	type PromptTemplateInfo,
+	type PromptTemplates,
+	PromptTemplateToggleRequest,
+} from "@shared/proto/cline/file"
+import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { AlertTriangle, CircleAlert, FilePenLine, RefreshCw, Sparkles, Trash2 } from "lucide-react"
 import { memo, useCallback, useEffect, useMemo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { FileServiceClient } from "@/services/grpc-client"
+import { useUserCheckboxChange } from "./common/useUserCheckboxChange"
 
 /**
  * The prompt templates panel.
@@ -24,6 +31,9 @@ function sourceLabel(source: string): string {
 	}
 	return source === "global" ? "Global" : "Workspace"
 }
+
+/** The base layer: every other template is a diff on it, so it is always on. */
+const DEFAULT_TEMPLATE_NAME = "default"
 
 /** At most this many names before the gap is reported as a count. */
 const MAX_NAMED_GAPS = 4
@@ -64,6 +74,7 @@ const TemplateRow = memo(
 		everyTool,
 		onEdit,
 		onDelete,
+		onToggle,
 		replacesBuiltin,
 	}: {
 		template: PromptTemplateInfo
@@ -71,10 +82,20 @@ const TemplateRow = memo(
 		everyTool: readonly string[]
 		onEdit: (template: PromptTemplateInfo) => void
 		onDelete: (template: PromptTemplateInfo) => Promise<void>
+		/** Switches the template on or off by name, the builtin and its copies together. */
+		onToggle: (template: PromptTemplateInfo, enabled: boolean) => Promise<void>
 		/** A builtin of the same name exists, so deleting this file hands the name back to it. */
 		replacesBuiltin: boolean
 	}) => {
-		const dimmed = template.shadowed || template.error !== undefined
+		const dimmed = template.shadowed || template.disabled || template.error !== undefined
+		// `default` is what every other template falls back to; switching it off
+		// would leave nothing to fall to. A file that did not parse has no name a
+		// session could match, so there is nothing to switch.
+		const switchable = template.name.trim().toLowerCase() !== DEFAULT_TEMPLATE_NAME && template.error === undefined
+		const enabled = !template.disabled
+		// The toolkit checkbox fires `change` when a re-render moves it too; only
+		// a click that differs from what is shown is the user's (ol-54).
+		const onEnabledChange = useUserCheckboxChange(enabled, (checked) => void onToggle(template, checked))
 		// A builtin is in the bundle, not on disk: there is nothing to delete.
 		const deletable = template.source !== "builtin" && template.filePath !== undefined
 		const [confirming, setConfirming] = useState(false)
@@ -100,10 +121,26 @@ const TemplateRow = memo(
 					<Badge variant={template.source === "builtin" ? "outline" : "info"}>{sourceLabel(template.source)}</Badge>
 					{template.active && <Badge variant="success">Active</Badge>}
 					{template.shadowed && <Badge variant="outline">Shadowed</Badge>}
+					{template.disabled && <Badge variant="outline">Off</Badge>}
 					{template.error !== undefined && <Badge variant="danger">Not loaded</Badge>}
+					{switchable && (
+						<VSCodeCheckbox
+							aria-label={`Use ${template.name}`}
+							checked={enabled}
+							className="ml-auto text-xs"
+							data-testid={`use-template-${template.name}`}
+							onChange={onEnabledChange}
+							title={
+								enabled
+									? `Switch ${template.name} off: the models it claims fall back to default`
+									: `Switch ${template.name} back on`
+							}>
+							On
+						</VSCodeCheckbox>
+					)}
 					<Button
 						aria-label={`Edit ${template.fileName}`}
-						className="ml-auto"
+						className={switchable ? undefined : "ml-auto"}
 						onClick={() => onEdit(template)}
 						size="xs"
 						variant="ghost">
@@ -145,6 +182,13 @@ const TemplateRow = memo(
 							variant="ghost">
 							No
 						</Button>
+					</div>
+				)}
+
+				{template.disabled && template.error === undefined && (
+					<div className="text-xs text-description">
+						Switched off for every session: the models it claims use the next template that claims them, or{" "}
+						<code>default</code>.
 					</div>
 				)}
 
@@ -251,6 +295,27 @@ const PromptTemplatesSection = () => {
 		[refresh],
 	)
 
+	const handleToggle = useCallback(
+		async (template: PromptTemplateInfo, enabled: boolean) => {
+			let refusal: string | undefined
+			try {
+				await FileServiceClient.setPromptTemplateEnabled(
+					PromptTemplateToggleRequest.create({ name: template.name, enabled }),
+				)
+			} catch (e) {
+				refusal = e instanceof Error ? e.message : String(e)
+			}
+			// Which template is active may have moved, and every row of the same
+			// name changes with it. As with a delete, the refusal is shown after
+			// the reload, which clears the error line.
+			await refresh()
+			if (refusal !== undefined) {
+				setError(refusal)
+			}
+		},
+		[refresh],
+	)
+
 	const builtinNames = useMemo(
 		() =>
 			new Set(
@@ -332,7 +397,8 @@ const PromptTemplatesSection = () => {
 							and <code>{state.workspaceDirectory}</code>
 						</>
 					) : null}{" "}
-					override the built-ins by name.
+					override the built-ins by name. Switch a template off and the models it claims fall back to the next one that
+					claims them, in the end <code>default</code>. It applies from the next session, in the CLI and SDK too.
 				</p>
 
 				{generated !== undefined && <div className="text-xs text-success mb-3">{generated}</div>}
@@ -395,6 +461,7 @@ const PromptTemplatesSection = () => {
 							key={`${template.source}:${template.filePath ?? template.fileName}`}
 							onDelete={handleDelete}
 							onEdit={handleEdit}
+							onToggle={handleToggle}
 							replacesBuiltin={template.source !== "builtin" && builtinNames.has(template.name)}
 							template={template}
 						/>

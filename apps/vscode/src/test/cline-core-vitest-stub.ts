@@ -283,6 +283,12 @@ export {
 	resolveStruggleThresholds,
 	type StruggleThresholds,
 } from "../../../../sdk/packages/core/src/runtime/safety/struggle-detector"
+// From source: the switch is core's global setting, and the panel has to read
+// the same file the session does.
+export {
+	resolveDisabledPromptTemplateNames,
+	setPromptTemplateEnabledGlobally,
+} from "../../../../sdk/packages/core/src/services/global-settings"
 export { isPrivateModelCatalogProvider } from "../../../../sdk/packages/core/src/services/llms/provider-defaults"
 // Real implementation re-exported from the sdk source (same pattern as the
 // apply-patch executors below) so store writes are reflected in the live

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import PromptTemplatesSection from "./PromptTemplatesSection"
@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 	getPromptTemplates: vi.fn(),
 	openPromptTemplate: vi.fn(),
 	deletePromptTemplate: vi.fn(),
+	setPromptTemplateEnabled: vi.fn(),
 }))
 
 vi.mock("@/services/grpc-client", () => ({
@@ -14,6 +15,7 @@ vi.mock("@/services/grpc-client", () => ({
 		getPromptTemplates: mocks.getPromptTemplates,
 		openPromptTemplate: mocks.openPromptTemplate,
 		deletePromptTemplate: mocks.deletePromptTemplate,
+		setPromptTemplateEnabled: mocks.setPromptTemplateEnabled,
 	},
 }))
 
@@ -25,6 +27,7 @@ function template(overrides: Record<string, unknown> = {}) {
 		filePath: undefined,
 		active: false,
 		shadowed: false,
+		disabled: false,
 		match: ["family: gemma*"],
 		tools: ["editor"],
 		hasSystem: true,
@@ -55,6 +58,8 @@ beforeEach(() => {
 	mocks.openPromptTemplate.mockResolvedValue({})
 	mocks.deletePromptTemplate.mockReset()
 	mocks.deletePromptTemplate.mockResolvedValue({})
+	mocks.setPromptTemplateEnabled.mockReset()
+	mocks.setPromptTemplateEnabled.mockResolvedValue({})
 })
 
 describe("deleting a template", () => {
@@ -252,5 +257,99 @@ describe("PromptTemplatesSection", () => {
 		render(<PromptTemplatesSection />)
 
 		await waitFor(() => expect(screen.getByText("host is not listening")).toBeTruthy())
+	})
+})
+
+describe("switching a template off", () => {
+	type Box = HTMLElement & { checked: boolean }
+	const box = (container: HTMLElement, name: string) =>
+		container.querySelector(`[data-testid="use-template-${name}"]`) as Box | null
+	// The toolkit element upgrades a tick after it is rendered.
+	const settle = () => act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+
+	it("offers the switch on every template but default and a broken file", async () => {
+		mocks.getPromptTemplates.mockResolvedValue(
+			state({
+				templates: [
+					template({ name: "default", fileName: "default.md", match: [] }),
+					template({ active: true }),
+					template({ name: "qwen", fileName: "qwen.md", source: "global", filePath: "/t/qwen.md" }),
+					template({ name: "bad", fileName: "bad.md", source: "global", filePath: "/t/bad.md", error: "no system" }),
+				],
+			}),
+		)
+		const { container } = render(<PromptTemplatesSection />)
+		await screen.findByLabelText("Edit qwen.md")
+		await settle()
+		expect(box(container, "default")).toBeNull()
+		expect(box(container, "bad")).toBeNull()
+		expect(box(container, "gemma")?.checked).toBe(true)
+		expect(box(container, "qwen")?.checked).toBe(true)
+	})
+
+	it("switches it off by name and reloads", async () => {
+		const { container } = render(<PromptTemplatesSection />)
+		await screen.findByLabelText("Edit gemma.md")
+		await settle()
+		mocks.getPromptTemplates.mockResolvedValue(state({ activeName: "default", templates: [template({ disabled: true })] }))
+		await act(async () => {
+			box(container, "gemma")?.click()
+		})
+		await screen.findByText("Off")
+		await settle()
+		expect(mocks.setPromptTemplateEnabled).toHaveBeenCalledTimes(1)
+		expect(mocks.setPromptTemplateEnabled.mock.calls[0][0]).toMatchObject({ name: "gemma", enabled: false })
+		expect(box(container, "gemma")?.checked).toBe(false)
+		expect(screen.getByText(/Switched off for every session/)).toBeTruthy()
+	})
+
+	it("does not take the namesake row's update for a second click", async () => {
+		// The built-in qwen and the user's copy share the switch. Clicking the
+		// copy's box unticks the built-in's on the reload, and the toolkit
+		// reports that programmatic change as a `change` event (ol-54).
+		const both = (disabled: boolean) =>
+			state({
+				templates: [
+					template({ name: "qwen", fileName: "qwen.md", shadowed: true, disabled }),
+					template({ name: "qwen", fileName: "qwen.md", source: "global", filePath: "/t/qwen.md", disabled }),
+				],
+			})
+		mocks.getPromptTemplates.mockResolvedValue(both(false))
+		const { container } = render(<PromptTemplatesSection />)
+		await screen.findByLabelText("Delete qwen.md")
+		await settle()
+		const boxes = () => [...container.querySelectorAll('[data-testid="use-template-qwen"]')] as Box[]
+		expect(boxes()).toHaveLength(2)
+		mocks.getPromptTemplates.mockResolvedValue(both(true))
+		await act(async () => {
+			boxes()[1]?.click()
+		})
+		await waitFor(() => expect(screen.getAllByText("Off")).toHaveLength(2))
+		await settle()
+		expect(boxes().map((b) => b.checked)).toEqual([false, false])
+		expect(mocks.setPromptTemplateEnabled).toHaveBeenCalledTimes(1)
+	})
+
+	it("switches an off template back on", async () => {
+		mocks.getPromptTemplates.mockResolvedValue(state({ templates: [template({ disabled: true })] }))
+		const { container } = render(<PromptTemplatesSection />)
+		await screen.findByText("Off")
+		await settle()
+		await act(async () => {
+			box(container, "gemma")?.click()
+		})
+		await waitFor(() => expect(mocks.setPromptTemplateEnabled).toHaveBeenCalledTimes(1))
+		expect(mocks.setPromptTemplateEnabled.mock.calls[0][0]).toMatchObject({ name: "gemma", enabled: true })
+	})
+
+	it("shows a refusal after the reload", async () => {
+		mocks.setPromptTemplateEnabled.mockRejectedValue(new Error("The default template cannot be switched off"))
+		const { container } = render(<PromptTemplatesSection />)
+		await screen.findByLabelText("Edit gemma.md")
+		await settle()
+		await act(async () => {
+			box(container, "gemma")?.click()
+		})
+		await screen.findByText("The default template cannot be switched off")
 	})
 })

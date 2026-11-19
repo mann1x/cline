@@ -19,7 +19,12 @@ vi.mock("@shared/services/Logger", () => ({
 }))
 
 import { getBuiltinPromptTemplates } from "@cline/core"
-import { deletePromptTemplateFile, readPromptTemplateSettings, resolvePromptTemplateEditPath } from "./prompt-template-settings"
+import {
+	deletePromptTemplateFile,
+	readPromptTemplateSettings,
+	resolvePromptTemplateEditPath,
+	setPromptTemplateEnabled,
+} from "./prompt-template-settings"
 
 const roots: string[] = []
 
@@ -34,13 +39,17 @@ function writeTemplate(dir: string, name: string, content: string): void {
 	writeFileSync(join(dir, name), content, "utf8")
 }
 
+const previousGlobalSettingsPath = process.env.CLINE_GLOBAL_SETTINGS_PATH
+
 beforeEach(() => {
 	mocks.dataDir = makeRoot()
+	process.env.CLINE_GLOBAL_SETTINGS_PATH = join(mocks.dataDir, "global-settings.json")
 	mocks.resolveOllamaModelFamily.mockReset()
 	mocks.resolveOllamaModelFamily.mockResolvedValue(undefined)
 })
 
 afterEach(() => {
+	process.env.CLINE_GLOBAL_SETTINGS_PATH = previousGlobalSettingsPath
 	while (roots.length > 0) {
 		rmSync(roots.pop() as string, { recursive: true, force: true })
 	}
@@ -284,5 +293,46 @@ describe("deletePromptTemplateFile", () => {
 
 	it("says so when the file is already gone", async () => {
 		await expect(deletePromptTemplateFile(join(mocks.dataDir, "templates", "gone.md"))).rejects.toThrow("No template at")
+	})
+})
+
+describe("switching a template off", () => {
+	it("marks it off, and the model it claimed resolves to default", async () => {
+		mocks.resolveOllamaModelFamily.mockResolvedValue("qwen35moe")
+		const before = await readPromptTemplateSettings({ providerId: "ollama", modelId: "a3b" })
+		expect(before.activeName).toBe("qwen")
+
+		setPromptTemplateEnabled("qwen", false)
+		const after = await readPromptTemplateSettings({
+			providerId: "ollama",
+			modelId: "a3b",
+			scopes: [{ scope: "Act", providerId: "ollama", modelId: "a3b" }],
+		})
+		expect(after.activeName).toBe("default")
+		expect(after.scopes[0]?.templateName).toBe("default")
+		const qwen = after.templates.find((t) => t.name === "qwen")
+		expect(qwen?.disabled).toBe(true)
+		expect(qwen?.active).toBe(false)
+		// Still listed, so it can be switched back on.
+		expect(after.templates.find((t) => t.name === "default")?.disabled).toBe(false)
+
+		setPromptTemplateEnabled("qwen", true)
+		expect((await readPromptTemplateSettings({ providerId: "ollama", modelId: "a3b" })).activeName).toBe("qwen")
+	})
+
+	it("switches a user's copy off with the builtin of the same name", async () => {
+		mocks.resolveOllamaModelFamily.mockResolvedValue("qwen35moe")
+		writeTemplate(join(mocks.dataDir, "templates"), "qwen.md", "---\nmatch:\n  family: [qwen*]\n---\n\n# system\nMine.\n")
+		setPromptTemplateEnabled("qwen", false)
+		const settings = await readPromptTemplateSettings({ providerId: "ollama", modelId: "a3b" })
+		expect(settings.templates.filter((t) => t.name === "qwen").map((t) => [t.source, t.disabled])).toEqual([
+			["builtin", true],
+			["global", true],
+		])
+		expect(settings.activeName).toBe("default")
+	})
+
+	it("refuses to switch default off", () => {
+		expect(() => setPromptTemplateEnabled("Default", false)).toThrow(/default template cannot be switched off/)
 	})
 })

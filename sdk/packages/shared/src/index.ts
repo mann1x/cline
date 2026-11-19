@@ -459,6 +459,7 @@ export {
 	scorePromptTemplate,
 	scorePromptTemplateDetailed,
 	shadowPromptTemplates,
+	withoutDisabledPromptTemplates,
 } from "./prompt/template-types";
 export type {
 	PromptTemplateWarning,

@@ -13,6 +13,7 @@ import {
 	readPlanActModeGlobally,
 	readToolAutoApproveGlobally,
 	readTuiThemeGlobally,
+	resolveDisabledPromptTemplateNames,
 	setAutoUpdateEnabledGlobally,
 	setCompactionModeGlobally,
 	setCompactionStrategyGlobally,
@@ -21,6 +22,7 @@ import {
 	setDisabledTools,
 	setModelToolEnabledGlobally,
 	setPlanActModeGlobally,
+	setPromptTemplateEnabledGlobally,
 	setTelemetryOptOutGlobally,
 	setToolAutoApproveGlobally,
 	setTuiThemeGlobally,
@@ -336,6 +338,42 @@ describe("global-settings", () => {
 			expect(readToolAutoApproveGlobally()).toBe(false);
 			setToolAutoApproveGlobally(true);
 			expect(readToolAutoApproveGlobally()).toBe(true);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("switches prompt templates off and on by name, never default", async () => {
+		const root = await mkdtemp(join(tmpdir(), "core-global-settings-"));
+		try {
+			const settingsPath = join(root, "global-settings.json");
+			process.env.CLINE_GLOBAL_SETTINGS_PATH = settingsPath;
+
+			expect([...resolveDisabledPromptTemplateNames()]).toEqual([]);
+			setPromptTemplateEnabledGlobally("Qwen", false);
+			setPromptTemplateEnabledGlobally("gemma", false);
+			expect([...resolveDisabledPromptTemplateNames()].sort()).toEqual([
+				"gemma",
+				"qwen",
+			]);
+			expect(
+				JSON.parse(await readFile(settingsPath, "utf8"))
+					.disabledPromptTemplates,
+			).toEqual(["gemma", "qwen"]);
+
+			setPromptTemplateEnabledGlobally("qwen", true);
+			setPromptTemplateEnabledGlobally("gemma", true);
+			// Nothing switched off leaves nothing behind in the file.
+			expect(
+				JSON.parse(await readFile(settingsPath, "utf8")),
+			).not.toHaveProperty("disabledPromptTemplates");
+
+			expect(() => setPromptTemplateEnabledGlobally("default", false)).toThrow(
+				/default template cannot be switched off/,
+			);
+			// A hand-edited file naming default does not take it out either.
+			writeGlobalSettings({ disabledPromptTemplates: ["default", "kimi"] });
+			expect([...resolveDisabledPromptTemplateNames()]).toEqual(["kimi"]);
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

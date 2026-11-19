@@ -100,6 +100,9 @@ service FileService {
   // Deletes a user's prompt template (global or workspace); builtins cannot be deleted
   rpc deletePromptTemplate(PromptTemplateEditRequest) returns (Empty);
 
+  // Switches a prompt template on or off by name, for every host; default cannot be switched off
+  rpc setPromptTemplateEnabled(PromptTemplateToggleRequest) returns (Empty);
+
   // Asks the selected model to write a prompt template for itself
   rpc generatePromptTemplate(EmptyRequest) returns (GeneratedPromptTemplate);
 
@@ -187,6 +190,7 @@ message PromptTemplateInfo {
   bool has_system = 9; // Whether it replaces the system prompt
   repeated string warnings = 10; // Non-fatal problems found in the file
   optional string error = 11; // Set instead of the rest when it did not parse
+  bool disabled = 12; // Switched off by name in the global settings, so no session matches it
 }
 
 // The prompt template state behind the settings panel
@@ -218,6 +222,13 @@ message PromptTemplateScope {
   // Nothing claimed this model, so it is running on the base layer. Not
   // visible from the name: the template is `default` either way.
   bool fallback = 7;
+}
+
+// Request to switch a prompt template on or off
+message PromptTemplateToggleRequest {
+  Metadata metadata = 1;
+  string name = 2; // The template's name; the builtin and every copy go together
+  bool enabled = 3;
 }
 
 // Request to open a prompt template for editing

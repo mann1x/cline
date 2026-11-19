@@ -5,8 +5,9 @@ import {
 	getBuiltinPromptTemplateSource,
 	getBuiltinPromptTemplates,
 	getShippedToolCallSignatures,
+	resolveDisabledPromptTemplateNames,
 } from "@cline/core"
-import { DEFAULT_PROMPT_TEMPLATE_NAME, renderPromptTemplate } from "@cline/shared"
+import { DEFAULT_PROMPT_TEMPLATE_NAME, renderPromptTemplate, withoutDisabledPromptTemplates } from "@cline/shared"
 import { fileExistsAtPath } from "@utils/fs"
 import * as path from "path"
 import type { ApiConfiguration } from "@/shared/api"
@@ -130,8 +131,10 @@ export async function generateTemplateForModel(options: GenerateTemplateOptions)
 	}
 
 	// What this model is given today, which is what it is being asked to
-	// improve on. When nothing claims it, it writes a template from the base.
-	const rendered = renderPromptTemplate(builtins, {
+	// improve on. When nothing claims it, it writes a template from the base. A
+	// template the user switched off is not what it is given, so it is not the
+	// base either.
+	const rendered = renderPromptTemplate(withoutDisabledPromptTemplates(builtins, resolveDisabledPromptTemplateNames()), {
 		providerId: options.providerId,
 		modelId: options.modelId,
 		family: options.family,

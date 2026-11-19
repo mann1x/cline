@@ -89,6 +89,7 @@ export async function getPromptTemplates(controller: Controller, _request: Empty
 			filePath: template.filePath,
 			active: template.active,
 			shadowed: template.shadowed,
+			disabled: template.disabled,
 			match: template.match,
 			tools: template.tools,
 			hasSystem: template.hasSystem,

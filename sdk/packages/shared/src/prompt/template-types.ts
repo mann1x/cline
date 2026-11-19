@@ -522,6 +522,34 @@ function comparePromptTemplateCandidates(
 export const DEFAULT_PROMPT_TEMPLATE_NAME = "default";
 
 /**
+ * The templates left once the ones the user switched off are taken out.
+ *
+ * By name, so switching `qwen` off takes the built-in and any copy of it out
+ * together: the question the switch answers is "do qwen models get a qwen
+ * template", and a copy left behind would answer yes. The models a removed
+ * template claimed then fall to whatever else claims them, and in the end to
+ * `default`, which is never removed: it is the base layer every other
+ * template is a diff on, and without it there is nothing to fall to.
+ */
+export function withoutDisabledPromptTemplates<
+	T extends Pick<PromptTemplate, "name">,
+>(templates: readonly T[], disabledNames: Iterable<string>): T[] {
+	const disabled = new Set<string>();
+	for (const name of disabledNames) {
+		const key = name.trim().toLowerCase();
+		if (key && key !== DEFAULT_PROMPT_TEMPLATE_NAME) {
+			disabled.add(key);
+		}
+	}
+	if (disabled.size === 0) {
+		return [...templates];
+	}
+	return templates.filter(
+		(template) => !disabled.has(template.name.trim().toLowerCase()),
+	);
+}
+
+/**
  * One template, fully resolved: what this session will actually send.
  *
  * The layering matters and is the whole point of the type. `default.md` holds

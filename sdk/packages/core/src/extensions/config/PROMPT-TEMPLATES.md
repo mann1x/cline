@@ -229,6 +229,29 @@ PROMPT_TEMPLATE_SPECIFICITY = { default: 0, provider: 1, family: 2, model: 3 }
 A template named `default` **replaces the base layer** rather than layering on
 top of it.
 
+### Switching a template off
+
+`disabledPromptTemplates` in core's global settings is a list of template
+names the user switched off. Settings → Features → Prompt Templates writes it
+through the **On** checkbox on each row. `resolveSessionPromptTemplateFrom()`
+removes those names from the set **before anything is matched**
+(`withoutDisabledPromptTemplates()` in `shared/src/prompt/template-types.ts`).
+The models a removed template claimed then go to the next template that claims
+them, and in the end to `default`.
+
+- **By name, not by file.** Switching `qwen` off removes the built-in *and*
+  every copy of it. The question the switch answers is "do qwen models get a
+  qwen template"; a global copy left behind would still answer yes. To get the
+  built-in back under a copy, delete the copy, don't switch it off.
+- **`default` can't be switched off.** It is the base layer every other
+  template is a diff on. The setter refuses it, and a hand-edited settings
+  file that names it is ignored.
+- **Every host honors it.** It is a global setting that core reads itself, so
+  the extension, the CLI and an SDK host leave out the same templates without
+  any of them passing the list. A host can pass `disabledTemplateNames` to
+  override it, for example a harness that pins its own set.
+- **It applies from the next session.** A session resolves its template once.
+
 ---
 
 ## 4. Layering: replace vs wrap

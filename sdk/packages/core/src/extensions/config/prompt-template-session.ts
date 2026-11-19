@@ -1,6 +1,11 @@
 import { primeDeclaredNumCtx, readDeclaredFamily } from "@cline/llms";
 import type { RenderedPromptTemplate } from "@cline/shared";
-import { isOllamaNativeProvider, renderPromptTemplate } from "@cline/shared";
+import {
+	isOllamaNativeProvider,
+	renderPromptTemplate,
+	withoutDisabledPromptTemplates,
+} from "@cline/shared";
+import { resolveDisabledPromptTemplateNames } from "../../services/global-settings";
 import { getBuiltinPromptTemplates } from "./builtin-templates";
 import {
 	loadPromptTemplates,
@@ -38,6 +43,12 @@ export interface SessionPromptTemplateRequest {
 	workspaceDir?: string;
 	/** Tool names, so a section naming something else can be reported. */
 	knownToolNames?: readonly string[];
+	/**
+	 * Template names the user switched off. Absent means the global setting
+	 * (`disabledPromptTemplates`), which every host shares; `default` is
+	 * never left out.
+	 */
+	disabledTemplateNames?: readonly string[];
 }
 
 export interface SessionPromptTemplateResult {
@@ -57,9 +68,14 @@ export function resolveSessionPromptTemplateFrom(
 		{ knownToolNames: request.knownToolNames },
 	);
 
-	// Builtins first so a user's template of the same name shadows one.
+	// Builtins first so a user's template of the same name shadows one. A
+	// template switched off goes before anything is matched, so the models it
+	// claimed fall to the next claim and in the end to `default`.
 	const rendered = renderPromptTemplate(
-		[...getBuiltinPromptTemplates(), ...templates],
+		withoutDisabledPromptTemplates(
+			[...getBuiltinPromptTemplates(), ...templates],
+			resolveDisabledPromptTemplateNames(request.disabledTemplateNames),
+		),
 		{
 			providerId: request.providerId,
 			modelId: request.modelId,
