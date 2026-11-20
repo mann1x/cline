@@ -56,6 +56,64 @@ import {
 export const TASK_PLAN_TOOL_NAME = "task_plan";
 export const TASK_UPDATE_TOOL_NAME = "task_update";
 export const TASK_VIEW_TOOL_NAME = "task_view";
+/**
+ * The optional argument the working tools carry so a task can be closed on a
+ * call the model is making anyway. Phase 1 measured every `task_update` as a
+ * request of its own -- the models never batch two calls in one turn -- and
+ * 6.7 to 7.8 of them a run took total input from 504k to 741-799k tokens
+ * (tg-bench, 2026-11-20). The checklist rode on other calls; this lets the
+ * close do the same, for a few dozen tokens per tool instead of 2,320.
+ */
+export const TASK_DONE_PARAM = "task_done";
+/** The tools that carry it: the ones a task is finished with. */
+export const TASK_DONE_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"editor",
+	"apply_patch",
+	"run_commands",
+	"check_file",
+]);
+
+/**
+ * `task_done` as sent: "T3", "T3: what was done", an array of those, or
+ * `{id, note}`. Anything else names no task and is reported, never guessed.
+ */
+export function readTaskDone(
+	value: unknown,
+): Array<{ id: string; note?: string; raw: string }> {
+	const out: Array<{ id: string; note?: string; raw: string }> = [];
+	const one = (entry: unknown): void => {
+		if (typeof entry === "string") {
+			const match =
+				/^\s*((?:task\s*)?[#tT]?\s*\d+(?:\.\d+)*)\s*(?:[:\-\u2013\u2014,]\s*)?([\s\S]*)$/i.exec(
+					entry,
+				);
+			const id = match ? normalizeTaskId(match[1]) : undefined;
+			const note = match?.[2]?.trim();
+			out.push({ id: id ?? "", ...(note ? { note } : {}), raw: entry });
+		} else if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+			const record = entry as { id?: unknown; note?: unknown };
+			const id = normalizeTaskId(record.id);
+			const note = typeof record.note === "string" ? record.note.trim() : "";
+			out.push({
+				id: id ?? "",
+				...(note ? { note } : {}),
+				raw: JSON.stringify(entry),
+			});
+		}
+	};
+	if (Array.isArray(value)) value.forEach(one);
+	else if (typeof value === "string" && value.trim().startsWith("[")) {
+		try {
+			const parsed = JSON.parse(value);
+			if (Array.isArray(parsed)) parsed.forEach(one);
+			else one(value);
+		} catch {
+			one(value);
+		}
+	} else one(value);
+	return out;
+}
+
 export const TASK_GRAPH_TOOL_NAMES: ReadonlySet<string> = new Set([
 	TASK_PLAN_TOOL_NAME,
 	TASK_UPDATE_TOOL_NAME,
@@ -295,18 +353,30 @@ export class TaskGraphStore {
 			}
 			return "resumed";
 		}
+		// A working call's \`task_done\` is replayed too. Whether that call
+		// succeeded is not in the call, so it is taken as sent: a refused edit
+		// that also closed a task is the one case this gets wrong.
+		const carriedDone = (call: HistoryToolCall): unknown =>
+			TASK_DONE_TOOL_NAMES.has(call.name) &&
+			call.input &&
+			typeof call.input === "object"
+				? (call.input as Record<string, unknown>)[TASK_DONE_PARAM]
+				: undefined;
 		const taskCalls = calls.filter(
 			(call) =>
 				call.name === TASK_PLAN_TOOL_NAME ||
-				call.name === TASK_UPDATE_TOOL_NAME,
+				call.name === TASK_UPDATE_TOOL_NAME ||
+				carriedDone(call) !== undefined,
 		);
-		if (taskCalls.length > 0) {
+		if (taskCalls.some((call) => TASK_GRAPH_TOOL_NAMES.has(call.name))) {
 			for (const call of taskCalls) {
 				const origin = { by: "model", ...(call.id ? { call: call.id } : {}) };
 				if (call.name === TASK_PLAN_TOOL_NAME) {
 					this.plan(call.input, origin, { silent: true });
-				} else {
+				} else if (call.name === TASK_UPDATE_TOOL_NAME) {
 					this.update(call.input, origin, { silent: true });
+				} else {
+					this.finish(carriedDone(call), origin, { silent: true });
 				}
 			}
 			this.onChange?.(this);
@@ -465,8 +535,71 @@ export class TaskGraphStore {
 		const readyNow = readyTasks(this.state)
 			.map((task) => task.id)
 			.filter((taskId) => !readyBefore.has(taskId));
+		this.autoStart(origin, lines);
 		if (!options.silent) this.onChange?.(this);
 		return { lines, changed: true, readyNow };
+	}
+
+	/**
+	 * With nothing active, start the first ready task and say so.
+	 *
+	 * Starting a task was a request of its own: 29 of 101 \`task_update\`
+	 * calls in phase 1b did nothing else, and S5 nudged for the rest. After a
+	 * plan or a close with nothing else under way, the next ready task is the
+	 * one the model takes up anyway; when it is not, one call moves it.
+	 */
+	private autoStart(origin: TaskChangeOrigin, lines: string[]): void {
+		const active = this.state.order.some(
+			(id) => this.state.tasks.get(id)?.status === "active",
+		);
+		if (active) return;
+		const next = readyTasks(this.state)[0];
+		if (!next) return;
+		this.record(
+			{ op: "update", update: { id: next.id, status: "active" } },
+			origin,
+		);
+		lines.push(
+			`${next.id} is active now (started for you, since nothing else was): ${shortTitle(next.title, 60)}.`,
+		);
+	}
+
+	/**
+	 * Close tasks named by a working call's \`task_done\`: done, with the note
+	 * as the outcome and its acceptance ticked, since saying it is done is
+	 * saying those hold. The next ready task starts as after any close.
+	 */
+	finish(
+		value: unknown,
+		origin: TaskChangeOrigin = {},
+		options: { silent?: boolean } = {},
+	): TaskOperationOutcome {
+		const entries = readTaskDone(value);
+		const bad = entries.filter((entry) => !entry.id);
+		const good = entries.filter((entry) => entry.id);
+		const lines: string[] = bad.map(
+			(entry) =>
+				`\`task_done\` ${JSON.stringify(entry.raw)} names no task: send its id, as "T3: what was done".`,
+		);
+		if (entries.length === 0) {
+			lines.push(
+				'`task_done` names no task: send its id, as "T3: what was done".',
+			);
+		}
+		if (good.length === 0) return { lines, changed: false, readyNow: [] };
+		const outcome = this.update(
+			{
+				updates: good.map((entry) => ({
+					id: entry.id,
+					status: "done",
+					check: ["*"],
+					...(entry.note ? { note: entry.note } : {}),
+				})),
+			},
+			origin,
+			options,
+		);
+		return { ...outcome, lines: [...lines, ...outcome.lines] };
 	}
 
 	/** Apply the changes a `task_update` call lists, each on its own. */
@@ -479,11 +612,21 @@ export class TaskGraphStore {
 		const lines: string[] = [];
 		let changed = false;
 		const readyBefore = new Set(readyTasks(this.state).map((task) => task.id));
+		const closedBefore = new Set(
+			this.state.order.filter((id) =>
+				isClosed((this.state.tasks.get(id) as Task).status),
+			),
+		);
 		for (const item of items) {
 			const result = this.applyUpdate(item, origin);
 			lines.push(...result.lines);
 			changed ||= result.changed;
 		}
+		const closedNow = this.state.order.some(
+			(id) =>
+				!closedBefore.has(id) &&
+				isClosed((this.state.tasks.get(id) as Task).status),
+		);
 		if (items.length === 0) {
 			lines.push(
 				"Nothing updated: send `updates` as a list of objects, each with the task's `id`.",
@@ -494,24 +637,17 @@ export class TaskGraphStore {
 			.map((task) => task.id)
 			.filter((id) => !readyBefore.has(id));
 		if (readyNow.length > 0) {
-			// S5: what the close made possible, and the call that starts it
-			// when nothing else is under way.
-			const anyActive = this.state.order.some(
-				(id) => this.state.tasks.get(id)?.status === "active",
-			);
+			// S5: what the close made possible.
 			lines.push(
 				`Ready now: ${readyNow
 					.map(
 						(id) =>
 							`${id} ${shortTitle((this.state.tasks.get(id) as Task).title, 50)}`,
 					)
-					.join("; ")}.${
-					anyActive
-						? ""
-						: ` Start the next one: \`task_update\` {"updates":[{"id":"${readyNow[0]}","status":"active"}]}.`
-				}`,
+					.join("; ")}.`,
 			);
 		}
+		if (closedNow) this.autoStart(origin, lines);
 		if (changed && !options.silent) this.onChange?.(this);
 		return { lines, changed, readyNow };
 	}

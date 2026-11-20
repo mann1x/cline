@@ -34,11 +34,32 @@ import { WRITE_CLASS_TOOL_NAMES } from "../../../runtime/safety/loop-detection";
 import { renderBoard, shortTitle } from "./board";
 import { openWork, type Task } from "./model";
 import {
+	readTaskDone,
+	TASK_DONE_PARAM,
+	TASK_DONE_TOOL_NAMES,
 	TASK_GRAPH_TOOL_NAMES,
 	TaskGraphStore,
 	type TaskGraphStoreOptions,
 } from "./store";
 import { createTaskGraphTools } from "./tools";
+
+/** The schema field: optional, short, and the same on every tool that has it. */
+const TASK_DONE_PROPERTY = {
+	type: "string",
+	description:
+		'Optional. The task this call completes, as "T3: what was done and how it was checked". It is closed only if the call succeeds.',
+} as const;
+
+/** `inputSchema` with `task_done` added, when the tool is one that carries it. */
+export function withTaskDoneParam(schema: unknown): unknown {
+	if (!schema || typeof schema !== "object") return schema;
+	const record = schema as { properties?: Record<string, unknown> };
+	if (!record.properties || TASK_DONE_PARAM in record.properties) return schema;
+	return {
+		...record,
+		properties: { ...record.properties, [TASK_DONE_PARAM]: TASK_DONE_PROPERTY },
+	};
+}
 
 export interface TaskGraphTrackerOptions extends TaskGraphStoreOptions {
 	/**
@@ -215,12 +236,12 @@ export function buildTaskGraphStaleNudge(
 	if (attempt === 2) {
 		return [
 			`[SYSTEM] ${task.id} is still the active task after more changes${where}.`,
-			`One \`task_update\` settles it: status done with a note of what was checked, or a note saying what is left.`,
+			`Settle it: add \`task_done: "${task.id}: what was checked"\` to your next call, or send a \`task_update\` note saying what is left.`,
 		].join(" ");
 	}
 	return [
 		`[SYSTEM] ${STALE_WRITES} changes${where} since ${task.id} (${shortTitle(task.title, 50)}) was last updated.`,
-		`If it is finished, close it with what was done and how it was checked: \`task_update\` {"updates":[{"id":"${task.id}","status":"done","note":"…"}]}.`,
+		`If it is finished, close it with what was done and how it was checked: add \`task_done: "${task.id}: …"\` to your next call.`,
 		"If not, add a note saying where it stands.",
 	].join(" ");
 }
@@ -230,19 +251,11 @@ export function buildTaskGraphVerifiedNudge(
 	task: Task,
 	command: string,
 ): string {
-	const open = task.acceptance
-		.map((item, index) => ({ ...item, index: index + 1 }))
-		.filter((item) => !item.done);
-	const tick = open.length
-		? ` Tick what it shows with \`check\` (${open
-				.slice(0, 3)
-				.map((item) => `${item.index}: ${shortTitle(item.text, 40)}`)
-				.join("; ")}).`
-		: "";
+	// `task_done` ticks the acceptance with the close, so no `check` is asked for.
 	return [
 		`[SYSTEM] \`${command}\` passed while ${task.id} (${shortTitle(task.title, 50)}) is active.`,
-		`If it checks ${task.id}, close it with this as the note: \`task_update\` {"updates":[{"id":"${task.id}","status":"done","note":"…"}]}.${tick}`,
-	].join("");
+		`If it checks ${task.id}, close it with this as the note: add \`task_done: "${task.id}: ${command.replace(/"/g, "'")} passed"\` to your next call.`,
+	].join(" ");
 }
 
 export function buildTaskGraphCloseOutNudge(
@@ -292,6 +305,8 @@ export class TaskGraphTracker {
 	private callsSinceNudge = Number.POSITIVE_INFINITY;
 	private readonly attempts = new Map<string, number>();
 	private queued: QueuedNudge | undefined;
+	/** What a working call's `task_done` did, said with the next reminder. */
+	private doneNotes: string[] = [];
 	private boardDue = false;
 	private closeOutFired = 0;
 	/** Changes made under the active task since it was last touched. */
@@ -458,11 +473,14 @@ export class TaskGraphTracker {
 		input: unknown,
 		toolName: string | undefined,
 		result: unknown,
+		closedATask = false,
 	): void {
 		if (reportsFailure(result)) {
 			this.retractFailedWrite(input, toolName);
 			return;
 		}
+		// The call said which task it finished; a check passing on it is that.
+		if (closedATask) return;
 		const command = readCheckCommand(toolName, input);
 		if (!command || !reportsSuccess(result)) return;
 		const active = this.activeTask();
@@ -473,6 +491,35 @@ export class TaskGraphTracker {
 			() => buildTaskGraphVerifiedNudge(active, command),
 			input,
 		);
+	}
+
+	/**
+	 * A working call carried `task_done`. Closed only when the call worked;
+	 * either way the model is told, with the next reminder.
+	 */
+	recordTaskDone(
+		value: unknown,
+		toolName: string,
+		result: unknown,
+		call?: string,
+		author = "model",
+	): void {
+		if (reportsFailure(result)) {
+			const named = readTaskDone(value)
+				.map((entry) => entry.id || entry.raw)
+				.join(", ");
+			this.doneNotes.push(
+				`[SYSTEM] ${named || "The task"} was not marked done: the \`${toolName}\` call that named it failed. Send \`task_done\` again on the call that works.`,
+			);
+			return;
+		}
+		const outcome = this.store.finish(value, {
+			by: author,
+			...(call ? { call } : {}),
+		});
+		if (outcome.lines.length > 0) {
+			this.doneNotes.push(`[SYSTEM] task_done: ${outcome.lines.join(" ")}`);
+		}
 	}
 
 	/** Take back what a call that then failed was counted for. */
@@ -489,7 +536,8 @@ export class TaskGraphTracker {
 
 	/** What to say after the turn's tool calls, cleared by the read. */
 	takePendingReminder(): string | undefined {
-		const parts: string[] = [];
+		const parts: string[] = [...this.doneNotes];
+		this.doneNotes = [];
 		if (this.queued) parts.push(this.queued.text);
 		if (this.boardDue) {
 			const board = renderBoard(this.store.getState());
@@ -530,18 +578,40 @@ export function withTaskGraphCapture<TInput, TOutput>(
 	tracker: TaskGraphTracker,
 ): AgentTool<TInput, TOutput> {
 	if (isTaskGraphWrapped(tool)) return tool;
+	const carries = TASK_DONE_TOOL_NAMES.has(tool.name);
 	const wrapped: AgentTool<TInput, TOutput> = {
 		...tool,
+		...(carries
+			? {
+					inputSchema: withTaskDoneParam(
+						tool.inputSchema,
+					) as typeof tool.inputSchema,
+				}
+			: {}),
 		execute: async (input, context) => {
+			// Read before the tool runs: its own validation strips keys its
+			// schema does not name.
+			const done =
+				carries && input && typeof input === "object"
+					? (input as Record<string, unknown>)[TASK_DONE_PARAM]
+					: undefined;
 			tracker.recordToolCall(input, tool.name);
 			let result: TOutput;
 			try {
 				result = await tool.execute(input, context);
 			} catch (error) {
 				tracker.retractFailedWrite(input, tool.name);
+				if (done !== undefined) {
+					tracker.recordTaskDone(done, tool.name, { success: false });
+				}
 				throw error;
 			}
-			tracker.recordToolResult(input, tool.name, result);
+			if (done !== undefined) {
+				// Closed first, so S4 below sees the board as it now is and
+				// does not ask to close what this call just closed.
+				tracker.recordTaskDone(done, tool.name, result, context?.toolCallId);
+			}
+			tracker.recordToolResult(input, tool.name, result, done !== undefined);
 			return result;
 		},
 	};

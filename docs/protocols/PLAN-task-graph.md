@@ -328,6 +328,28 @@ the model's next call followed it, which is what section 12 measures.
 The wording of each nudge is part of the template work, per family, and is
 tuned from section 12's compliance numbers, not guessed.
 
+### 10b. Round trips (phase 1c, 2026-11-20)
+
+The phase 1 A/B (tg-bench, qwen36 27b on eleven2go, 15 runs an arm) scored
+the same in all arms (108, 109, 109 of 110) and moved planning first from 4 to
+11 of 15 runs, but total input per run went from 504k (checklist) to 799k (B)
+and 741k (C), wall +20%. The models never make two calls in one turn, so each
+`task_update` (6.7-7.8 a run) re-sent the whole context; the checklist rode on
+calls already being made. Two cuts:
+
+- **Auto-start.** After a plan or a close, with nothing active, the first
+  ready task (priority, then creation order) is started on the same call and
+  the result says so. 29 of C's 101 updates only started a task.
+- **`task_done` on working calls.** `editor`, `apply_patch`, `run_commands`
+  and `check_file` carry an optional `task_done` ("T3: outcome"). Applied
+  after the call, only if it succeeded: done, note as outcome, acceptance
+  ticked, then auto-start. Refused calls and unknown ids are reported with the
+  next reminder. A fork replay applies it as sent (results are not in the
+  call). S3/S4 now point at it instead of a `task_update`.
+
+Re-run of arm C on 57669d5a7d plus these changes only (the editor rename kept
+out) decides whether phase 1 is complete.
+
 ### 11. Export to memory (phase 2)
 
 When Memory is configured, the board can be kept in a memory, one of the

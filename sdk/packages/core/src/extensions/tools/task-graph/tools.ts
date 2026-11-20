@@ -39,7 +39,7 @@ export function createTaskPlanTool(
 			"Write down the work as tasks, with the order between them, in one call. " +
 			"Plan before you change files: list every step the request needs, each with what has to be true when it is done (`acceptance`). " +
 			'In `depends` and `parent`, "#2" means the second task of this same call, so the whole plan goes in at once; an existing task is named by its id (T3). ' +
-			"Returns the ids, the order, and what can start now.",
+			"Returns the ids and the order; the first ready task is started for you.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -83,18 +83,8 @@ export function createTaskPlanTool(
 				by: author(),
 				...(context?.toolCallId ? { call: context.toolCallId } : {}),
 			});
-			const lines = [...outcome.lines];
-			if (outcome.changed) {
-				const active = store
-					.snapshot()
-					.tasks.some((task) => task.status === "active");
-				if (!active && outcome.readyNow.length > 0) {
-					lines.push(
-						`Start with ${outcome.readyNow[0]}: \`task_update\` {"updates":[{"id":"${outcome.readyNow[0]}","status":"active"}]}.`,
-					);
-				}
-			}
-			return answer(TASK_PLAN_TOOL_NAME, lines, outcome.changed);
+			// The store starts the first ready task when nothing is active.
+			return answer(TASK_PLAN_TOOL_NAME, outcome.lines, outcome.changed);
 		},
 	});
 }

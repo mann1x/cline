@@ -311,8 +311,9 @@ describe("the log and the conversation", () => {
 		const rewound = new TaskGraphStore({ logPath });
 		expect(rewound.reconcile(history([planCall]))).toBe("rewound");
 		expect(ids(rewound)).toEqual(["T1", "T2"]);
-		expect(task(rewound, "T1")?.status).toBe("pending");
-		expect(readFileSync(logPath, "utf8").trim().split("\n")).toHaveLength(2);
+		// The plan started T1 itself (nothing else was active), on the same call.
+		expect(task(rewound, "T1")?.status).toBe("active");
+		expect(readFileSync(logPath, "utf8").trim().split("\n")).toHaveLength(3);
 		// The next plan gets the id the dropped one had: the cut never happened.
 		rewound.plan({ tasks: [{ title: "C again" }] });
 		expect(ids(rewound)).toEqual(["T1", "T2", "T3"]);
@@ -418,6 +419,8 @@ describe("tracker", () => {
 	it("names the ready task when an edit lands with nothing active", () => {
 		const tracker = new TaskGraphTracker();
 		tracker.store.plan({ tasks: [{ title: "Fix slugify" }] });
+		// The plan started it; the model set it back.
+		tracker.store.update({ updates: [{ id: "T1", status: "pending" }] });
 		tracker.recordToolCall(edit.input, edit.name);
 		expect(tracker.takePendingReminder()).toContain("work on T1 (Fix slugify)");
 	});
@@ -444,19 +447,25 @@ describe("tracker", () => {
 		expect(tracker.takePendingReminder()).toBeUndefined();
 	});
 
-	it("does not touch the tool's schema", () => {
+	it("adds task_done to the tools a task is finished with, and to no other", () => {
 		const tracker = new TaskGraphTracker();
 		const schema = { type: "object", properties: { path: { type: "string" } } };
-		const tool = withTaskGraphCapture(
-			{
-				name: "editor",
-				description: "",
-				inputSchema: schema,
-				execute: async () => "ok",
-			},
-			tracker,
-		);
-		expect(tool.inputSchema).toBe(schema);
+		const wrap = (name: string) =>
+			withTaskGraphCapture(
+				{
+					name,
+					description: "",
+					inputSchema: schema,
+					execute: async () => "ok",
+				},
+				tracker,
+			);
+		expect(wrap("read_files").inputSchema).toBe(schema);
+		const editor = wrap("editor").inputSchema as {
+			properties: Record<string, unknown>;
+		};
+		expect(Object.keys(editor.properties)).toEqual(["path", "task_done"]);
+		expect(Object.keys(schema.properties)).toEqual(["path"]);
 	});
 
 	it("asks twice, differently, to close open work, then stops", () => {
@@ -572,7 +581,9 @@ describe("nudges (phase 1b)", () => {
 		expect(text).toContain(
 			"`cd /w && python3 -m unittest` passed while T1 (Fix wrap) is active",
 		);
-		expect(text).toContain("1: last line kept");
+		expect(text).toContain(
+			'add `task_done: "T1: cd /w && python3 -m unittest passed"` to your next call',
+		);
 	});
 
 	it("S4: not for a command that checks nothing, nor for a failing one", () => {
@@ -587,7 +598,7 @@ describe("nudges (phase 1b)", () => {
 		expect(tracker.takePendingReminder()).toBeUndefined();
 	});
 
-	it("S5: a close that unblocks work says what is ready and how to start it", () => {
+	it("S5: a close that unblocks work says what is ready and starts it", () => {
 		const store = new TaskGraphStore();
 		store.plan({
 			tasks: [
@@ -598,8 +609,141 @@ describe("nudges (phase 1b)", () => {
 		const outcome = store.update({
 			updates: [{ id: "T1", status: "done", note: "ok" }],
 		});
+		expect(outcome.lines.join("\n")).toContain("Ready now: T2 B.");
 		expect(outcome.lines.join("\n")).toContain(
-			'Start the next one: `task_update` {"updates":[{"id":"T2","status":"active"}]}',
+			"T2 is active now (started for you, since nothing else was)",
 		);
+		expect(task(store, "T2")?.status).toBe("active");
+	});
+});
+
+describe("fewer round trips", () => {
+	const ok = [{ query: "q", result: "OK", success: true }];
+	const failed = [{ query: "q", result: "", error: "no", success: false }];
+	const wrapped = (tracker: TaskGraphTracker, name: string, result: unknown) =>
+		withTaskGraphCapture(
+			{
+				name,
+				description: "",
+				inputSchema: { type: "object", properties: {} },
+				execute: async () => result,
+			},
+			tracker,
+		);
+
+	it("a plan starts its first ready task when nothing is active", () => {
+		const store = new TaskGraphStore();
+		const outcome = store.plan({
+			// Ready order is priority first: B (H) goes before A (M).
+			tasks: [{ title: "A" }, { title: "B", priority: "H" }],
+		});
+		expect(task(store, "T2")?.status).toBe("active");
+		expect(task(store, "T1")?.status).toBe("pending");
+		expect(outcome.lines.join("\n")).toContain("T2 is active now");
+	});
+
+	it("a plan with a started task starts nothing else", () => {
+		const store = new TaskGraphStore();
+		store.plan({ tasks: [{ title: "A" }, { title: "B", start: true }] });
+		expect(task(store, "T1")?.status).toBe("pending");
+		expect(task(store, "T2")?.status).toBe("active");
+	});
+
+	it("a close starts nothing while another task is active", () => {
+		const store = new TaskGraphStore();
+		store.plan({
+			tasks: [{ title: "A", start: true }, { title: "B" }, { title: "C" }],
+		});
+		store.update({ updates: [{ id: "T2", status: "active" }] });
+		store.update({ updates: [{ id: "T1", status: "done", note: "ok" }] });
+		expect(task(store, "T3")?.status).toBe("pending");
+	});
+
+	it("task_done on a working call closes the task, ticks it, and starts the next", async () => {
+		const tracker = new TaskGraphTracker();
+		tracker.store.plan({
+			tasks: [
+				{ title: "A", acceptance: ["x", "y"] },
+				{ title: "B", depends: ["#1"] },
+			],
+		});
+		const tool = wrapped(tracker, "run_commands", ok);
+		await tool.execute(
+			{
+				commands: ["python3 -m unittest"],
+				task_done: "T1: tests pass",
+			} as never,
+			{ toolCallId: "c9" } as never,
+		);
+		const t1 = task(tracker.store, "T1");
+		expect(t1?.status).toBe("done");
+		expect(t1?.outcome).toBe("tests pass");
+		expect(t1?.acceptance.every((item) => item.done)).toBe(true);
+		expect(task(tracker.store, "T2")?.status).toBe("active");
+		const said = tracker.takePendingReminder() ?? "";
+		expect(said).toContain("task_done: T1 now done");
+		expect(said).toContain("T2 is active now");
+		// The passing check on that same call asks for nothing more.
+		expect(said).not.toContain("passed while");
+		expect(tracker.store.getEvents().some((event) => event.call === "c9")).toBe(
+			true,
+		);
+	});
+
+	it("task_done on a failed call closes nothing and says why", async () => {
+		const tracker = new TaskGraphTracker();
+		tracker.store.plan({ tasks: [{ title: "A" }] });
+		await wrapped(tracker, "editor", failed).execute(
+			{ path: "/w/a", text: "x", task_done: "T1" } as never,
+			{} as never,
+		);
+		expect(task(tracker.store, "T1")?.status).toBe("active");
+		expect(tracker.takePendingReminder()).toContain(
+			"T1 was not marked done: the `editor` call that named it failed",
+		);
+	});
+
+	it("task_done that names no task is reported, not guessed", async () => {
+		const tracker = new TaskGraphTracker();
+		tracker.store.plan({ tasks: [{ title: "A" }] });
+		await wrapped(tracker, "editor", ok).execute(
+			{ path: "/w/a", text: "x", task_done: "the wrap fix" } as never,
+			{} as never,
+		);
+		expect(task(tracker.store, "T1")?.status).toBe("active");
+		expect(tracker.takePendingReminder()).toContain("names no task");
+	});
+
+	it("task_done on a tool that does not carry it is ignored", async () => {
+		const tracker = new TaskGraphTracker();
+		tracker.store.plan({ tasks: [{ title: "A" }] });
+		await wrapped(tracker, "read_files", ok).execute(
+			{ files: [], task_done: "T1" } as never,
+			{} as never,
+		);
+		expect(task(tracker.store, "T1")?.status).toBe("active");
+	});
+
+	it("a fork replays task_done carried by working calls", () => {
+		const store = new TaskGraphStore();
+		expect(
+			store.reconcile(
+				history([
+					{
+						id: "c1",
+						name: "task_plan",
+						input: { tasks: [{ title: "A" }, { title: "B" }] },
+					},
+					{
+						id: "c2",
+						name: "editor",
+						input: { path: "/w/a", text: "x", task_done: "T1: done it" },
+					},
+				]),
+			),
+		).toBe("replayed");
+		expect(task(store, "T1")?.status).toBe("done");
+		expect(task(store, "T1")?.outcome).toBe("done it");
+		expect(task(store, "T2")?.status).toBe("active");
 	});
 });
