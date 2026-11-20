@@ -33,3 +33,33 @@ export function editorFilePath(input: unknown): string | undefined {
 	}
 	return undefined;
 }
+
+/**
+ * The body of an `editor` call, from the call as the model wrote it.
+ *
+ * The model names it `text` since 2026-11-20; it was `new_text`. Same reason
+ * as `file_path` above, from the other end: in a template that sorts
+ * arguments by name, `start_line`, `old_text` and `path` sorted after
+ * `new_text` and so came after the long body, where they went missing
+ * (pandorum, 4.100.277-288: `start_line` lost in 7% of short edits and 18%
+ * of 200+-line ones). Everything the editor takes sorts before `text`.
+ *
+ * `new_text` is still read, for stored calls and for models that send it.
+ * When both are present `text` wins. Like {@link editorFilePath}, only for
+ * code that reads a call as it arrived; the executor is handed `new_text`.
+ */
+export const EDITOR_TEXT_ARG = "text";
+
+export function editorNewText(input: unknown): string | undefined {
+	if (input == null || typeof input !== "object" || Array.isArray(input)) {
+		return undefined;
+	}
+	const record = input as Record<string, unknown>;
+	if (typeof record.text === "string") {
+		return record.text;
+	}
+	if (typeof record.new_text === "string") {
+		return record.new_text;
+	}
+	return undefined;
+}

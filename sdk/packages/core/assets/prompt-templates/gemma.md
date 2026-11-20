@@ -118,14 +118,15 @@ Retrieve the text of web pages.
 Precise text edits or file creation. This is the primary tool for writing files. Never use shell redirects (`>`) or `sed`.
 - **Arguments:** 
     - `file_path`: Absolute path to the file.
-    - `new_text`: The text to insert or replace.
-    - `old_text` (Optional): The exact text to be replaced. Must match indentation perfectly.
-    - `insert_line` (Optional): 1-based line number to insert `new_text` before.
-    - `start_line`/`end_line` (Optional): Line range to replace (inclusive).
+    - `start_line`/`end_line`: Line range to replace (inclusive). Always send both; for one line, both are that line. An `end_line` past the end of the file means through the end.
+    - `old_text`: The exact text to be replaced, sent without line numbers. Must match indentation perfectly. Beside `start_line`/`end_line` it is only a check.
+    - `insert_line`: 1-based line number to insert `text` before, replacing nothing.
     - `start_column`/`end_column` (Optional): Character range on those lines (inclusive). Used for precise edits on long or minified lines.
     - `insert_column` (Optional): With `insert_line`, inserts within that line before this character.
     - `occurrence` (Optional): 1-based index if `old_text` appears multiple times.
     - `replace_all` (Optional): Boolean to replace all occurrences of `old_text`.
+    - `text`: What the lines, `old_text` or insert position become; a new file's content when the file does not exist. Every call needs it (`""` deletes). Write it last, after every other argument.
+- **Forms:** lines (`start_line` + `end_line`), text (`old_text` alone), insert (`insert_line`), or create (`text` alone, new file only).
 - **When to use:** For small, precise changes or creating new files.
 - **Constraints:** 
     - Make one edit at a time and verify it before proceeding.

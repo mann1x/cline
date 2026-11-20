@@ -7,6 +7,32 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
 
 ## [4.100.289] — 2026-11-20
 
+### Editor
+
+- **The editor's body argument is now `text` (was `new_text`).** Gemma 4's
+  chat template sorts a tool's arguments by name, so v9-agentic writes every
+  call alphabetically (2,280 of 2,314 editor calls), and `start_line`,
+  `old_text` and `path` came after `new_text`, behind the long text, where
+  they got lost. On pandorum (4.100.277–288) `start_line` was missing from 7%
+  of short edits and 18% of edits over 200 lines: 195 calls refused and 1.95M
+  characters regenerated. Every argument sorts before `text`, so the long
+  text now comes last. `new_text` is still accepted, and older conversations
+  and their edit cards read as before.
+- **One rule for where an edit goes.** The description gives four forms: lines
+  (`start_line` and `end_line`, always both), text (`old_text` alone), insert
+  (`insert_line`), and create (`text` alone, for a missing file). An `end_line`
+  past the end of the file means "through the end". The editor still accepts
+  `start_line` alone as one line, and `text` alone on a file read in full as
+  a rewrite.
+- **Large range replacements are refused only when the text is much shorter
+  than the range.** Replacing more than 60 lines and half the file without
+  `old_text` used to be refused outright. 85% of those refusals carried text
+  about the size of the range, and 63 of 86 landed the same rewrite on the
+  next call, so the refusal cost a full regeneration and prevented nothing.
+  It now applies only when the text is under a quarter of the range's lines.
+  The message says how many lines would be dropped.
+- Every built-in template's editor section is updated to match.
+
 ### Prompt templates
 
 - **`restore_file` and `task_progress` have a section in every built-in

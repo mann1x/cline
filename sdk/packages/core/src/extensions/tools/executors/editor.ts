@@ -902,11 +902,11 @@ const RETYPED_LINE_CHARS = 120;
  */
 function copiedAnchorHint(content: string, anchor: string): string {
 	const said =
-		" Your `new_text` is the same text as your `old_text`, character for character: the change you meant was never written into it.";
+		" Your `text` is the same text as your `old_text`, character for character: the change you meant was never written into it.";
 	const lines = anchor.split("\n");
 	const longest = lines.reduce((a, b) => (b.length > a.length ? b : a), "");
 	if (longest.length <= RETYPED_LINE_CHARS) {
-		return `${said} Write the change into \`new_text\` and send it once.`;
+		return `${said} Write the change into \`text\` and send it once.`;
 	}
 	const index = content.indexOf(longest);
 	const line =
@@ -914,7 +914,7 @@ function copiedAnchorHint(content: string, anchor: string): string {
 	const trimmed = longest.trimEnd();
 	const closers = /[)\]};,]{3,}$/.exec(trimmed)?.[0];
 	const tail = closers ?? trimmed.slice(-16);
-	return `${said} A line of ${longest.length} characters is too long to retype: send only the few characters that change, with the line they are on — for example \`{start_line: ${line ?? "<its line>"}, old_text: ${JSON.stringify(tail)}, new_text: <those characters as they should read>}\`. A short \`old_text\` with \`start_line\` is found inside that line.`;
+	return `${said} A line of ${longest.length} characters is too long to retype: send only the few characters that change, with the line they are on — for example \`{start_line: ${line ?? "<its line>"}, old_text: ${JSON.stringify(tail)}, text: <those characters as they should read>}\`. A short \`old_text\` with \`start_line\` is found inside that line.`;
 }
 
 function noChangeMessage(
@@ -969,7 +969,7 @@ function noChangeMessage(
 	}
 
 	throw new Error(
-		`${NO_CHANGE_ERROR_PREFIX}${why} in ${filePath}. The file was not modified. ${history}What you sent as \`new_text\` is character-for-character what that part of the file already holds, so this edit asks for nothing and sending it again cannot help.${comparison}`,
+		`${NO_CHANGE_ERROR_PREFIX}${why} in ${filePath}. The file was not modified. ${history}What you sent as \`text\` is character-for-character what that part of the file already holds, so this edit asks for nothing and sending it again cannot help.${comparison}`,
 	);
 }
 
@@ -1103,7 +1103,7 @@ function duplicatedRangeMessage(
 	existing?: { firstLine: number; lastLine: number },
 ): never {
 	const gutterHint = gutterSpan
-		? ` The gutter on your \`new_text\` covers lines ${gutterSpan.firstLine}-${gutterSpan.lastLine}, but the call names only ${range}: if you meant to replace ${gutterSpan.firstLine}-${gutterSpan.lastLine}, send \`end_line: ${gutterSpan.lastLine}\`.`
+		? ` The gutter on your \`text\` covers lines ${gutterSpan.firstLine}-${gutterSpan.lastLine}, but the call names only ${range}: if you meant to replace ${gutterSpan.firstLine}-${gutterSpan.lastLine}, send \`end_line: ${gutterSpan.lastLine}\`.`
 		: "";
 	// Counted for the same reason the no-op refusal is, and measured in the same
 	// session: after the model's turn was discarded at the output cap it sent
@@ -1123,10 +1123,10 @@ function duplicatedRangeMessage(
 	// it is adding are already in the file, and here is where.
 	const located = existing
 		? ` The ${added} line(s) you are adding are already in the file at lines ${existing.firstLine}-${existing.lastLine}, so applying this would put a second copy of them below the first.`
-		: ` Your \`new_text\` opens with the ${requestedLines} line(s) already at ${range} and then continues, so applying it would leave those lines in place and add ${added} more below them rather than replacing anything.`;
+		: ` Your \`text\` opens with the ${requestedLines} line(s) already at ${range} and then continues, so applying it would leave those lines in place and add ${added} more below them rather than replacing anything.`;
 	const next = existing
 		? ` If those lines are already what you want, this part is done — say so and go to the next change. If you meant to change them, edit lines ${existing.firstLine}-${existing.lastLine} directly and send only the text that should differ.`
-		: ` If you meant to add these lines, name the line they belong after instead of ${range}. If you meant to replace ${range}, leave out the copy of ${range} at the start of your \`new_text\`.`;
+		: ` If you meant to add these lines, name the line they belong after instead of ${range}. If you meant to replace ${range}, leave out the copy of ${range} at the start of your \`text\`.`;
 	throw new Error(
 		`${DUPLICATED_RANGE_ERROR_PREFIX}the edit to ${range} in ${filePath} was not applied. The file was not modified.${history}${located}${gutterHint}${next} Re-read the file first: after earlier edits the line numbers you are working from may no longer point at what you think.`,
 	);
@@ -1541,7 +1541,7 @@ async function replaceLineRange(
 				sentLines !== anchorLines
 			) {
 				throw new Error(
-					`No replacement performed: your \`old_text\` is at ${anchorAt}, inside ${named} the call names, but it covers only part of them, and \`new_text\` is ${sentLines} line(s) where \`old_text\` is ${anchorLines}. Whether \`new_text\` replaces ${named} or only \`old_text\` cannot be told from the call, and either guess writes the wrong code. Send \`old_text\` holding all of ${named} exactly as the file has them, or send \`old_text\` without the line numbers and only its replacement as \`new_text\`. ${filePath} currently holds:\n${
+					`No replacement performed: your \`old_text\` is at ${anchorAt}, inside ${named} the call names, but it covers only part of them, and \`text\` is ${sentLines} line(s) where \`old_text\` is ${anchorLines}. Whether \`text\` replaces ${named} or only \`old_text\` cannot be told from the call, and either guess writes the wrong code. Send \`old_text\` holding all of ${named} exactly as the file has them, or send \`old_text\` without the line numbers and only its replacement as \`text\`. ${filePath} currently holds:\n${
 						quoteCurrentLines(content, startLineOneBased, effectiveEndLine) ??
 						""
 					}`,
@@ -1572,9 +1572,9 @@ async function replaceLineRange(
 				after.trim() !== "" && replacement.trimEnd().endsWith(after.trim());
 			if (repeatsBefore || repeatsAfter) {
 				throw new Error(
-					`No replacement performed: \`old_text\` is part of ${anchorAt}, and \`new_text\` repeats the text ${
+					`No replacement performed: \`old_text\` is part of ${anchorAt}, and \`text\` repeats the text ${
 						repeatsBefore ? "before" : "after"
-					} it on that line (\`${(repeatsBefore ? before : after).trim()}\`), so \`new_text\` reads as the whole line while \`old_text\` names only part of it. Splicing it in would write that text twice. Send \`old_text\` as the whole line, or \`new_text\` as only what replaces \`old_text\`.`,
+					} it on that line (\`${(repeatsBefore ? before : after).trim()}\`), so \`text\` reads as the whole line while \`old_text\` names only part of it. Splicing it in would write that text twice. Send \`old_text\` as the whole line, or \`text\` as only what replaces \`old_text\`.`,
 				);
 			}
 			narrowedRangeText =
@@ -1633,7 +1633,7 @@ async function replaceLineRange(
 				divergence ? `\n${divergence}` : ""
 			} ${filePath} currently holds:\n${
 				quoteCurrentLines(content, startLineOneBased, effectiveEndLine) ?? ""
-			}\nReplacing the range would have changed lines your \`old_text\` never named. Send \`old_text\` on its own and let the file find it, or send the range on its own with \`new_text\` for exactly those lines — after re-reading them, because an anchor that misses usually means the line numbers have moved.`,
+			}\nReplacing the range would have changed lines your \`old_text\` never named. Send \`old_text\` on its own and let the file find it, or send the range on its own with \`text\` for exactly those lines — after re-reading them, because an anchor that misses usually means the line numbers have moved.`,
 		);
 	}
 
@@ -1649,14 +1649,27 @@ async function replaceLineRange(
 	// part of the file and is not.
 	const isFullSpanRewrite =
 		startLineOneBased === 1 && effectiveEndLine === lines.length;
+	// Only a replacement much shorter than the range it names. A text about
+	// as long as the range is the rewrite the model meant: across pandorum's
+	// sessions (4.100.277-288) 85% of the calls this guard refused carried
+	// text the size of the range or more, every one over lines the model had
+	// read as they are (the read check runs first), and after the refusal 63
+	// of 86 sent the same rewrite again and it landed -- median 306 lines
+	// refused, 308 landed. The guard cost one regeneration and prevented
+	// nothing. A short text over a long range is still refused: that is a
+	// range the model mismeasured, and replacing it drops what it never meant
+	// to touch.
+	const replacementLines =
+		newStr == null || newStr === "" ? 0 : newStr.split(/\r\n|\n/).length;
 	if (
 		!anchored &&
 		!isFullSpanRewrite &&
 		spanned > MAX_UNANCHORED_RANGE_LINES &&
-		spanned > lines.length * MAX_UNANCHORED_RANGE_SHARE
+		spanned > lines.length * MAX_UNANCHORED_RANGE_SHARE &&
+		replacementLines < spanned * MIN_UNANCHORED_REPLACEMENT_SHARE
 	) {
 		throw new Error(
-			`No replacement performed: lines ${startLineOneBased}-${effectiveEndLine} is ${spanned} of the file's ${lines.length} lines, and the call carries no \`old_text\` to check it against. An unanchored replacement this large is a whole-file rewrite, and one that is slightly wrong duplicates or drops the parts it did not mean to touch. Make the edit in smaller pieces, each anchored with the \`old_text\` it replaces, or send \`old_text\` for this range so the file can verify it — or, if you do mean to rewrite the file, say so exactly with \`start_line: 1\` and \`end_line: ${lines.length}\`. ${lines.length} is the file's length right now, counted a moment ago; if your last read said otherwise, the file has changed since — most often because of your own edits — and this number is the current one. Anything larger works too: an \`end_line\` past the end of the file means "to the end of the file", so you never have to know the count exactly.`,
+			`No replacement performed: lines ${startLineOneBased}-${effectiveEndLine} is ${spanned} of the file's ${lines.length} lines, and your \`text\` is ${replacementLines} line(s), so this call would drop ${spanned - replacementLines} lines with nothing to check them against. If you meant to change a smaller region, read it and send its own \`start_line\` and \`end_line\`. If you do mean to replace all of those lines, send \`old_text\` holding them so the file can verify it — or, to rewrite the whole file, \`start_line: 1\` and \`end_line: ${lines.length}\`. ${lines.length} is the file's length right now, counted a moment ago; if your last read said otherwise, the file has changed since — most often because of your own edits. An \`end_line\` past the end of the file means "to the end of the file", so you never have to know the count exactly.`,
 		);
 	}
 
@@ -1870,6 +1883,8 @@ function findUniqueAnchorSpan(
  */
 const MAX_UNANCHORED_RANGE_LINES = 60;
 const MAX_UNANCHORED_RANGE_SHARE = 0.5;
+/** ...and only when the text is under this share of the range's lines. */
+const MIN_UNANCHORED_REPLACEMENT_SHARE = 0.25;
 
 /** `  92 | text` — the gutter `read_files` renders, on every non-empty line. */
 const LINE_NUMBER_GUTTER = /^\s*\d+\s\|\s?/;
@@ -3095,7 +3110,7 @@ export function createEditorExecutor(
 				throw new Error(
 					`\`end_column\` needs \`start_column\`: a column pair names a span *within* one line, so both ends are required and one end alone bounds nothing.${
 						line != null
-							? ` You sent \`start_line: ${line}\` and \`end_column: ${column}\`. Send whichever of these you meant:\n  - the single character at column ${column}: \`start_line: ${line}, start_column: ${column}, end_column: ${column}\` (both ends are inclusive, so naming the same column twice is one character)\n  - from the start of the line through column ${column}: \`start_line: ${line}, start_column: 1, end_column: ${column}\`\n  - the whole of line ${line}: drop both columns and send \`start_line: ${line}, end_line: ${line}\`\nA deletion is \`new_text: ""\` in every one of those forms.`
+							? ` You sent \`start_line: ${line}\` and \`end_column: ${column}\`. Send whichever of these you meant:\n  - the single character at column ${column}: \`start_line: ${line}, start_column: ${column}, end_column: ${column}\` (both ends are inclusive, so naming the same column twice is one character)\n  - from the start of the line through column ${column}: \`start_line: ${line}, start_column: 1, end_column: ${column}\`\n  - the whole of line ${line}: drop both columns and send \`start_line: ${line}, end_line: ${line}\`\nA deletion is \`text: ""\` in every one of those forms.`
 							: ""
 					}`,
 				);
@@ -3165,7 +3180,7 @@ export function createEditorExecutor(
 			// sorts arguments in, once the call had already closed.
 			if (input.end_line != null) {
 				throw new Error(
-					`This call names \`end_line: ${input.end_line}\` and no \`start_line\`, so it says where the lines it replaces end and not where they begin. The file was not modified. Send it again with \`start_line\` as well, written before \`new_text\`.`,
+					`This call names \`end_line: ${input.end_line}\` and no \`start_line\`, so it says where the lines it replaces end and not where they begin. The file was not modified. Send it again with \`start_line\` as well, written before \`text\`.`,
 				);
 			}
 			// `new_text` alone against an existing file is a model asking to
@@ -3210,8 +3225,8 @@ export function createEditorExecutor(
 					? "an earlier edit changed the file's length, so what you read is no longer where you read it"
 					: "not all of it has been read in this session";
 				throw new Error(
-					`Read before replacing: this call replaces every one of the ${lineCount} line(s) in ${filePath}, and ${why}. The file was not modified. Call \`read_files\` for ${filePath} — all of it, since all of it is what you are replacing; when one read stops short of the end, read on from where it stopped with \`start_line\`, because reads that join up count together — then send this call again with \`file_path: "${filePath}"\` and the \`new_text\` the whole file should end up as. ` +
-						`Changing part of it is cheaper and safer: read around the lines you mean to change, then send \`file_path\`, \`start_line\`, \`end_line\` and the \`new_text\` for just those lines.`,
+					`Read before replacing: this call replaces every one of the ${lineCount} line(s) in ${filePath}, and ${why}. The file was not modified. Call \`read_files\` for ${filePath} — all of it, since all of it is what you are replacing; when one read stops short of the end, read on from where it stopped with \`start_line\`, because reads that join up count together — then send this call again with \`file_path: "${filePath}"\` and the \`text\` the whole file should end up as. ` +
+						`Changing part of it is cheaper and safer: read around the lines you mean to change, then send \`file_path\`, \`start_line\`, \`end_line\` and the \`text\` for just those lines.`,
 				);
 			}
 			requireRangeUncut(filePath, 1, lineCount);

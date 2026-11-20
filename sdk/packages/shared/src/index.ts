@@ -771,7 +771,12 @@ export {
 export * from "./tasks";
 export * from "./team";
 export { createTool } from "./tools/create";
-export { EDITOR_FILE_PATH_ARG, editorFilePath } from "./tools/editor-input";
+export {
+	EDITOR_FILE_PATH_ARG,
+	EDITOR_TEXT_ARG,
+	editorFilePath,
+	editorNewText,
+} from "./tools/editor-input";
 // Plan mode's hand-over to act mode, one implementation for every host.
 export {
 	ACT_MODE_CONTINUATION_PROMPT,

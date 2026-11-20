@@ -943,7 +943,7 @@ function findingCandidates(
 		{
 			text: cut,
 			say: `delete the \`${finding.found}\` at line ${line}, column ${at1}`,
-			call: `start_line: ${line}, start_column: ${at1}, new_text: ""`,
+			call: `start_line: ${line}, start_column: ${at1}, text: ""`,
 			line,
 			at,
 		},
@@ -952,14 +952,14 @@ function findingCandidates(
 		candidates.push({
 			text: body.slice(0, at) + expected + body.slice(at + 1),
 			say: `replace the \`${finding.found}\` at line ${line}, column ${at1} with \`${expected}\``,
-			call: `start_line: ${line}, start_column: ${at1}, new_text: "${expected}"`,
+			call: `start_line: ${line}, start_column: ${at1}, text: "${expected}"`,
 			line,
 			at,
 		});
 		candidates.push({
 			text: body.slice(0, at) + expected + body.slice(at),
 			say: `insert a \`${expected}\` before the \`${finding.found}\` at line ${line}, column ${at1}`,
-			call: `insert_line: ${line}, insert_column: ${at1}, new_text: "${expected}"`,
+			call: `insert_line: ${line}, insert_column: ${at1}, text: "${expected}"`,
 			line,
 			at,
 		});
@@ -995,8 +995,8 @@ function findingCandidates(
 			text: cut.slice(0, into) + finding.found + cut.slice(into),
 			say: `move the \`${finding.found}\` at line ${line}, column ${at1} to column ${column}`,
 			call:
-				`insert_line: ${line}, insert_column: ${column}, new_text: "${finding.found}"` +
-				`, then a second call with start_line: ${line}, start_column: ${at1 > column ? at1 + 1 : at1}, new_text: ""`,
+				`insert_line: ${line}, insert_column: ${column}, text: "${finding.found}"` +
+				`, then a second call with start_line: ${line}, start_column: ${at1 > column ? at1 + 1 : at1}, text: ""`,
 			line,
 			at,
 		});
@@ -1044,7 +1044,7 @@ function stopCandidates(
 				add({
 					text: body.slice(0, at) + closer + body.slice(at),
 					say: `insert a \`${closer}\` at line ${stop.line}, column ${stop.column}`,
-					call: `insert_line: ${stop.line}, insert_column: ${stop.column}, new_text: "${closer}"`,
+					call: `insert_line: ${stop.line}, insert_column: ${stop.column}, text: "${closer}"`,
 					line: stop.line,
 					at,
 				});
@@ -1088,7 +1088,7 @@ function stopCandidates(
 			add({
 				text: body.slice(0, at) + body.slice(at + 1),
 				say: `delete the \`${raw[index]}\` at line ${line}, column ${column}`,
-				call: `start_line: ${line}, start_column: ${column}, new_text: ""`,
+				call: `start_line: ${line}, start_column: ${column}, text: ""`,
 				line,
 				at,
 			});

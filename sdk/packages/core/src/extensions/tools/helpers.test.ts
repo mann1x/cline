@@ -51,7 +51,7 @@ describe("getEditorSizeError", () => {
 		const error = getEditorSizeError(
 			input({ start_line: 40, end_line: 137, new_text: OVERSIZED }),
 		);
-		expect(error).toContain("new_text was");
+		expect(error).toContain("text was");
 	});
 
 	// The old message told a range edit to do the thing it had just done.

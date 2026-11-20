@@ -309,7 +309,7 @@ describe("describeDelimiterBalance", () => {
 			// found". The editor addresses a character directly; so does this.
 			const report = describeDelimiterBalance("app.js", dDec);
 			expect(report).toContain(
-				'`editor` with start_line: 2, start_column: 48, new_text: ""',
+				'`editor` with start_line: 2, start_column: 48, text: ""',
 			);
 			expect(report).toContain("there is no text to match on");
 		});
@@ -324,7 +324,7 @@ describe("describeDelimiterBalance", () => {
 				"move the `}` at line 1, column 14 to column 13 — checked: after it, the JavaScript parser accepts this script",
 			);
 			expect(report).toContain(
-				'insert_line: 1, insert_column: 13, new_text: "}", then a second call with start_line: 1, start_column: 15, new_text: ""',
+				'insert_line: 1, insert_column: 13, text: "}", then a second call with start_line: 1, start_column: 15, text: ""',
 			);
 			expect(report).not.toContain("to column 12");
 		});
@@ -342,7 +342,7 @@ describe("describeDelimiterBalance", () => {
 				"move the `)` at line 13, column 386 to column 389 — checked",
 			);
 			expect(report).toContain(
-				'insert_line: 13, insert_column: 389, new_text: ")"',
+				'insert_line: 13, insert_column: 389, text: ")"',
 			);
 			for (const match of report.matchAll(/column (\d+)/g)) {
 				expect(Number(match[1])).toBeLessThanOrEqual(width + 1);
@@ -494,7 +494,7 @@ describe("describeDelimiterBalance", () => {
 			const lines = text.split("\n");
 			const steps = [
 				...call.matchAll(
-					/(insert|start)_line: (\d+), (?:insert|start)_column: (\d+), new_text: "([^"]*)"/g,
+					/(insert|start)_line: (\d+), (?:insert|start)_column: (\d+), text: "([^"]*)"/g,
 				),
 			];
 			for (const [, kind, line, column, insert] of steps) {

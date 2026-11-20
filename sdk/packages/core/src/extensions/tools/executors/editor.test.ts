@@ -1158,7 +1158,7 @@ describe("createEditorExecutor", () => {
 
 				await expect(failure).rejects.toThrow("Duplicated instead of replaced");
 				await expect(failure).rejects.toThrow(
-					"gutter on your `new_text` covers lines 2-8",
+					"gutter on your `text` covers lines 2-8",
 				);
 				await expect(failure).rejects.toThrow("send `end_line: 8`");
 				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
@@ -1242,11 +1242,13 @@ describe("createEditorExecutor", () => {
 		// `old_text` ten times in a row against an error message that explains
 		// the mistake precisely, burning a full generation each time. Naming it
 		// was not enough, so the editor recovers.
-		// Measured: start_line 30 / end_line 134 with 101 replacement lines in a
-		// 138-line file left 278 problems behind, and every existing guard passed
-		// it — read-before-edit was satisfied, and "adds more lines than the range
-		// holds" passes because 101 < 105.
-		it("refuses an unanchored replacement that is really a whole-file rewrite", async () => {
+		// Measured first: start_line 30 / end_line 134 with 101 replacement lines
+		// in a 138-line file left 278 problems behind, and the guard refused that
+		// shape. Measured since (pandorum, 4.100.277-288): 85% of its refusals
+		// carried text the size of the range, and 63 of 86 landed the same
+		// rewrite on the next call, so a text about the range's size passes now
+		// and only a short text over a long range is refused.
+		it("refuses a long unanchored range replaced by a short text", async () => {
 			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join(
 				"\n",
 			);
@@ -1258,14 +1260,40 @@ describe("createEditorExecutor", () => {
 							path: filePath,
 							start_line: 30,
 							end_line: 134,
-							new_text: Array.from({ length: 101 }, (_, i) => `new ${i}`).join(
+							new_text: Array.from({ length: 20 }, (_, i) => `new ${i}`).join(
 								"\n",
 							),
 						},
 						dir,
 						context,
 					),
-				).rejects.toThrow("whole-file rewrite");
+				).rejects.toThrow("would drop 85 lines");
+				await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(file);
+			});
+		});
+
+		it("allows a long unanchored range replaced by a text of about its size", async () => {
+			const file = Array.from({ length: 138 }, (_, i) => `line ${i + 1}`).join(
+				"\n",
+			);
+			await withTempFile(file, async (filePath, dir) => {
+				const editor = createEditorExecutor();
+				await editor(
+					{
+						path: filePath,
+						start_line: 30,
+						end_line: 134,
+						new_text: Array.from({ length: 101 }, (_, i) => `new ${i}`).join(
+							"\n",
+						),
+					},
+					dir,
+					context,
+				);
+				const after = (await fs.readFile(filePath, "utf-8")).split("\n");
+				expect(after).toHaveLength(29 + 101 + 4);
+				expect(after[29]).toBe("new 0");
+				expect(after[130]).toBe("line 135");
 			});
 		});
 
@@ -1338,7 +1366,7 @@ describe("createEditorExecutor", () => {
 						dir,
 						context,
 					),
-				).rejects.toThrow("whole-file rewrite");
+				).rejects.toThrow("would drop 99 lines");
 			});
 		});
 
@@ -1656,13 +1684,13 @@ describe("createEditorExecutor", () => {
 					context,
 				);
 				await expect(refused).rejects.toThrow(
-					"Your `new_text` is the same text as your `old_text`, character for character: the change you meant was never written into it.",
+					"Your `text` is the same text as your `old_text`, character for character: the change you meant was never written into it.",
 				);
 				await expect(refused).rejects.toThrow(
 					`A line of ${long.length} characters is too long to retype`,
 				);
 				await expect(refused).rejects.toThrow(
-					'{start_line: 2, old_text: ");}});});}", new_text:',
+					'{start_line: 2, old_text: ");}});});}", text:',
 				);
 
 				// What it suggests is an edit that applies.
@@ -1695,7 +1723,7 @@ describe("createEditorExecutor", () => {
 					context,
 				);
 				await expect(refused).rejects.toThrow(
-					"the change you meant was never written into it. Write the change into `new_text` and send it once.",
+					"the change you meant was never written into it. Write the change into `text` and send it once.",
 				);
 			});
 		});
@@ -3436,7 +3464,7 @@ describe("a column edit missing its start_column", () => {
 			expect(said).toContain("start_column: 5, end_column: 5");
 			expect(said).toContain("start_column: 1, end_column: 5");
 			expect(said).toContain("start_line: 2, end_line: 2");
-			expect(said).toContain('new_text: ""');
+			expect(said).toContain('text: ""');
 		});
 	});
 

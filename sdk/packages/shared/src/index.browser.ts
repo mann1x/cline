@@ -590,7 +590,12 @@ export {
 export * from "./tasks";
 export * from "./team";
 export { createTool } from "./tools/create";
-export { EDITOR_FILE_PATH_ARG, editorFilePath } from "./tools/editor-input";
+export {
+	EDITOR_FILE_PATH_ARG,
+	EDITOR_TEXT_ARG,
+	editorFilePath,
+	editorNewText,
+} from "./tools/editor-input";
 export { AUTH_ERROR_PATTERNS, isLikelyAuthError } from "./types/auth";
 // VCR is Node-only (uses node:fs, node:path), excluded from browser build
 export type { VcrRecording } from "./types/vcr";

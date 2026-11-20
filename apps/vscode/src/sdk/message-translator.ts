@@ -46,6 +46,7 @@ import {
 import {
 	type AgentEvent,
 	editorFilePath,
+	editorNewText,
 	formatDisplayUserInput,
 	isToolInputProgressUpdate,
 	type ProviderErrorClass,
@@ -1938,9 +1939,7 @@ function sdkToolToClineSayTool(toolName: string, input?: unknown, context?: Rang
 			// `editor` names its file `file_path` (`path` until 2026-10-20).
 			const filePath = editorFilePath(parsedInput) ?? ""
 			const newText =
-				getStringField(parsedInput, "new_text") ??
-				getStringField(parsedInput, "new_str") ??
-				getStringField(parsedInput, "content")
+				editorNewText(parsedInput) ?? getStringField(parsedInput, "new_str") ?? getStringField(parsedInput, "content")
 			const patch = getStringField(parsedInput, "patch") ?? getStringField(parsedInput, "diff")
 			const oldText = getStringField(parsedInput, "old_text") ?? getStringField(parsedInput, "old_str")
 			// `insert_line` inserts into an existing file (the SDK editor executor requires

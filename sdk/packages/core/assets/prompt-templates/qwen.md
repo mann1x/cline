@@ -115,7 +115,7 @@ You have dedicated tools for file operations. Using shell commands for these tas
 
 **Example Correction**:
 - Wrong: `run_commands(commands: ["sed -i 's/a/b/' src/app.ts"])`
-- Right: `editor(path: "src/app.ts", old_text: "a", new_text: "b")`
+- Right: `editor(file_path: "src/app.ts", old_text: "a", text: "b")`
 
 - Wrong: `run_commands(commands: ["cat src/app.ts"])`
 - Right: `read_files(files: [{path: "src/app.ts"}])`
@@ -188,13 +188,13 @@ Fetch the text of web pages. Use for retrieving documentation, API references, o
 Create and edit text files. This is the **only** correct way to write or modify files; do not use shell commands like `echo`, `sed`, or `tee`.
 
 - **Modes**:
-  - **Replace**: Provide `old_text` and `new_text`. `old_text` must match the file content exactly (including indentation). Use `occurrence` (1-based) if multiple matches exist, or `replace_all: true`.
-  - **Replace Lines**: Provide `start_line`, `new_text`, and optionally `end_line`. No `old_text` needed. Preferred for diagnostics that give line numbers.
-  - **Replace Characters**: Provide `start_line`, `start_column`, and `new_text`, optionally `end_line`/`end_column` (inclusive, each defaults to its start). Diagnostics give you `Line N, column C` — this is the mode that uses the column. On a minified line it changes only those characters. `start_column` alone replaces one character.
-  - **Insert**: Provide `insert_line` (integer) and `new_text`. Inserts before the specified line. Use `line_count + 1` to append at EOF. Add `insert_column` to insert within the line, before that character — this is how you add a single missing bracket; `line_length + 1` appends at the end of the line.
-  - **Create or replace whole**: Provide `new_text` and a `file_path`. A path that does not exist is created; one that does has every line replaced, which requires having read the file first. Do not delete a file to rewrite it — this call already writes it whole, and a file deleted at the end of a turn is simply gone.
+  - **Replace**: Provide `old_text` and `text`. `old_text` must match the file content exactly (including indentation). Use `occurrence` (1-based) if multiple matches exist, or `replace_all: true`.
+  - **Replace Lines**: Provide `start_line`, `text`, and `end_line`, always both. No `old_text` needed. Preferred for diagnostics that give line numbers.
+  - **Replace Characters**: Provide `start_line`, `start_column`, and `text`, optionally `end_line`/`end_column` (inclusive, each defaults to its start). Diagnostics give you `Line N, column C` — this is the mode that uses the column. On a minified line it changes only those characters. `start_column` alone replaces one character.
+  - **Insert**: Provide `insert_line` (integer) and `text`. Inserts before the specified line. Use `line_count + 1` to append at EOF. Add `insert_column` to insert within the line, before that character — this is how you add a single missing bracket; `line_length + 1` appends at the end of the line.
+  - **Create or replace whole**: Provide `text` and a `file_path`. A path that does not exist is created; one that does has every line replaced, which requires having read the file first. Do not delete a file to rewrite it — this call already writes it whole, and a file deleted at the end of a turn is simply gone.
 - **One at a time**: send one `editor` call, check it, then send the next. Parallelism is for reads, searches and commands; an edit changes the file, and several checked together leave several things to undo.
-- **Arguments**: `file_path` (string), `old_text` (string, optional), `new_text` (string), `insert_line` (integer, optional), `insert_column` (integer, optional), `start_line` (integer, optional), `end_line` (integer, optional), `start_column` (integer, optional), `end_column` (integer, optional), `occurrence` (integer, optional), `replace_all` (boolean, optional).
+- **Arguments**: `file_path` (string), `old_text` (string, optional), `text` (string), `insert_line` (integer, optional), `insert_column` (integer, optional), `start_line` (integer, optional), `end_line` (integer, optional), `start_column` (integer, optional), `end_column` (integer, optional), `occurrence` (integer, optional), `replace_all` (boolean, optional).
 - **Output**: One result named `edit:<path>` or `insert:<path>`, describing what changed. A failed edit changes nothing: the result says it failed and why, and the file is exactly as it was. Do not resend the same call — the reason names the fix. In particular, text copied from `read_files` must have line number gutters removed before using as `old_text`.
 
 # tool: apply_patch

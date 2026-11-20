@@ -788,11 +788,13 @@ function renderToolUseHTML(
 		input.old_string !== undefined && input.new_string !== undefined;
 	const hasPathDiff =
 		(input.file_path !== undefined || input.path !== undefined) &&
-		input.new_text !== undefined;
+		(input.new_text !== undefined || input.text !== undefined);
 
 	if (isEdit && (hasOldNew || hasPathDiff)) {
 		const oldText = String(input.old_string ?? input.old_text ?? "");
-		const newText = String(input.new_string ?? input.new_text ?? "");
+		const newText = String(
+			input.new_string ?? input.text ?? input.new_text ?? "",
+		);
 		const filePath = String(input.file_path ?? input.path ?? "file");
 		const isNewFile = !oldText && !input.insert_line;
 

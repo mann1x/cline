@@ -89,7 +89,7 @@ export function getEditorSizeError(input: EditFileInput): string | null {
 			input.start_line != null
 				? ` Lines ${input.start_line}-${input.end_line ?? input.start_line} is too much to rewrite in one call: replace it in consecutive pieces, lowest-numbered last, so the line numbers of the pieces you have not done yet do not move.`
 				: " Split the edit into smaller tool calls, or replace the region in one call by line number with `start_line`/`end_line`.";
-		return `Editor input too large: new_text was ${input.new_text.length} characters, exceeding the limit of ${EDITOR_ARG_CHAR_LIMIT}.${range}`;
+		return `Editor input too large: text was ${input.new_text.length} characters, exceeding the limit of ${EDITOR_ARG_CHAR_LIMIT}.${range}`;
 	}
 
 	return null;

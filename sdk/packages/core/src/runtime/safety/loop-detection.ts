@@ -13,7 +13,7 @@
 
 import { statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import type { LoopDetectionConfig } from "@cline/shared";
+import { editorNewText, type LoopDetectionConfig } from "@cline/shared";
 
 // =============================================================================
 // Pure helpers (verbatim port)
@@ -110,7 +110,7 @@ function steeringFor(
 	// closing" and none with the `};` removed; the guard's second answer told
 	// it the call was not landing where it thought.
 	if (copied && attempt <= 2 && EDITING_TOOL_NAMES.has(toolName)) {
-		return "Your `new_text` is the same text as your `old_text`, so this call finds what you meant and changes none of it: the change you described was never written into `new_text`. On a long line, do not send the whole line again — name the line with `start_line` and send as `old_text` only the few characters that change, with `new_text` as they should read.";
+		return "Your `text` is the same text as your `old_text`, so this call finds what you meant and changes none of it: the change you described was never written into `text`. On a long line, do not send the whole line again — name the line with `start_line` and send as `old_text` only the few characters that change, with `text` as they should read.";
 	}
 	if (attempt <= 1) {
 		return `Before sending anything else: look at what this call targets as it is right now, with a tool that reads rather than writes, and compare that against what you meant it to be. If it already says what you wanted, this piece is done — record that and move to the next one.`;
@@ -120,20 +120,21 @@ function steeringFor(
 		// text, and naming the wrong remedy is worse than naming none: a model
 		// told to "use coordinates" on a shell command will invent something.
 		return EDITING_TOOL_NAMES.has(toolName)
-			? `If it does not say what you wanted, this call is not landing where you think it is. Change how it addresses the file rather than what it writes: give \`start_line\` and \`start_column\` in place of \`old_text\`, keeping \`new_text\` — the replacement body is still required and is still called \`new_text\`. Matching text is exactly what fails on a long or minified line, and a position cannot be mistyped into matching nothing.`
+			? `If it does not say what you wanted, this call is not landing where you think it is. Change how it addresses the file rather than what it writes: give \`start_line\` and \`start_column\` in place of \`old_text\`, keeping \`text\` — the replacement body is still required and is still called \`text\`. Matching text is exactly what fails on a long or minified line, and a position cannot be mistyped into matching nothing.`
 			: `If the answer matters, change what produces it rather than asking again. Nothing about this call has changed, so nothing about its answer can — something has to happen first: make the edit, or use a different tool that answers the same question from the file itself.`;
 	}
 	return `Leave this alone now. Take the next thing that is still wrong and work on that; come back here only with something you have not already tried. If there is nothing else wrong, say in one sentence what is blocking you and stop — that is more use than another attempt.`;
 }
 
-/** An edit whose `new_text` repeats its `old_text`: one that can only ever be a no-op. */
+/** An edit whose `text` repeats its `old_text`: one that can only ever be a no-op. */
 function copiesItsAnchor(input: unknown): boolean {
 	if (!input || typeof input !== "object") return false;
-	const { old_text: oldText, new_text: newText } = input as Record<
-		string,
-		unknown
-	>;
-	return typeof oldText === "string" && oldText !== "" && oldText === newText;
+	const { old_text: oldText } = input as Record<string, unknown>;
+	return (
+		typeof oldText === "string" &&
+		oldText !== "" &&
+		oldText === editorNewText(input)
+	);
 }
 
 /**

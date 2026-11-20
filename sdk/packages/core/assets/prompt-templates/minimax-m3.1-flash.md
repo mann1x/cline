@@ -181,19 +181,19 @@ Output: one entry per request, identified by its URL, containing the page's text
 
 Make a controlled edit to one text file.
 
-Call shape: `editor(file_path: string, old_text?: string, new_text: string, insert_line?: integer, start_line?: integer, end_line?: integer, start_column?: number, end_column?: number, insert_column?: number, occurrence?: integer, replace_all?: boolean)`
+Call shape: `editor(file_path: string, old_text?: string, text: string, insert_line?: integer, start_line?: integer, end_line?: integer, start_column?: number, end_column?: number, insert_column?: number, occurrence?: integer, replace_all?: boolean)`
 
 Choose one operation:
 
-- Replace text: provide `old_text` and `new_text`. If the old text occurs more than once, use one-based `occurrence` to select it, or `replace_all: true` for every occurrence.
-- Replace lines: provide `start_line`, optional inclusive `end_line` (defaulting to `start_line`), and `new_text`. An empty replacement deletes the range. This is best when a diagnostic gives an exact line.
-- Replace characters: provide `start_line`, `start_column`, optional inclusive `end_line` and `end_column`, and `new_text`. Each range endpoint defaults to its start. This is appropriate for precise column diagnostics on long or minified lines.
-- Insert: provide `insert_line` and `new_text` to insert before that line. `insert_column` instead inserts within the line before that column. Use the line count plus one to append at EOF, or the line length plus one to append to a line.
-- Create or replace a whole file: provide only `file_path` and `new_text`. On an existing file, replacement is allowed after the file has been read. Prefer a targeted edit; do not delete a file to recreate it.
+- Replace text: provide `old_text` and `text`. If the old text occurs more than once, use one-based `occurrence` to select it, or `replace_all: true` for every occurrence.
+- Replace lines: provide `start_line`, `end_line` (inclusive, always sent with `start_line`), and `text`. An empty replacement deletes the range. This is best when a diagnostic gives an exact line.
+- Replace characters: provide `start_line`, `start_column`, optional inclusive `end_line` and `end_column`, and `text`. Each range endpoint defaults to its start. This is appropriate for precise column diagnostics on long or minified lines.
+- Insert: provide `insert_line` and `text` to insert before that line. `insert_column` instead inserts within the line before that column. Use the line count plus one to append at EOF, or the line length plus one to append to a line.
+- Create or replace a whole file: provide only `file_path` and `text`. On an existing file, replacement is allowed after the file has been read. Prefer a targeted edit; do not delete a file to recreate it.
 
-Read the target region before editing. The operation refuses stale or unseen ranges. Your own earlier edit may change later line numbers, so re-read the affected region before a subsequent edit. Put short arguments, including `file_path`, positions, and `old_text`, before the long `new_text` argument.
+Read the target region before editing. The operation refuses stale or unseen ranges. Your own earlier edit may change later line numbers, so re-read the affected region before a subsequent edit. Put short arguments, including `file_path`, positions, and `old_text`, before the long `text` argument.
 
-Output: one result for this edit, named `edit:<path>` or `insert:<path>`, describing what changed. A failed edit changes nothing, states why, and says the correction needed. Do not resend the same failed call. Remove `123 | ` line-number prefixes before copying read text into `new_text`.
+Output: one result for this edit, named `edit:<path>` or `insert:<path>`, describing what changed. A failed edit changes nothing, states why, and says the correction needed. Do not resend the same failed call. Remove `123 | ` line-number prefixes before copying read text into `text`.
 
 Make one edit at a time and run the cheap `check_file` verification before the next planned edit. Do not re-read a successful edit merely to confirm it.
 

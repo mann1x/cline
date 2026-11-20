@@ -405,7 +405,7 @@ describe("a call the tool has declared a no-op", () => {
 		}
 		const said = messages.join("\n");
 		expect(said).toContain(
-			"the change you described was never written into `new_text`",
+			"the change you described was never written into `text`",
 		);
 		expect(said).not.toContain("not landing where you think");
 	});
@@ -565,7 +565,7 @@ describe("steering a repeated call somewhere else", () => {
 		// It must not read as "send only the coordinates". Measured: eight
 		// editor calls in one transaction carried every argument except a
 		// `new_text` by that name, and were refused for it.
-		expect(message).toContain("still called `new_text`");
+		expect(message).toContain("still called `text`");
 	});
 
 	it("offers a tool that does not edit something it can do", () => {

@@ -715,7 +715,20 @@ export const LooseFetchWebContentInputSchema = z.union([
 ]);
 
 /**
- * The names a model reaches for when it means `new_text`.
+ * The names a model reaches for when it means `text`, the editor's body.
+ *
+ * `text` is the name the model is shown since 2026-11-20; it was `new_text`.
+ * The reason is the order arguments are written in: Gemma 4's renderer sorts
+ * a tool's parameters and every earlier call's arguments by name, and v9
+ * writes 99% of its calls that way (2,705 of 2,744 on pandorum, 4.100.277+).
+ * `start_line`, `old_text` and `path` sorted after `new_text`, so they came
+ * after the long body, and `start_line` went missing in 7% of short edits and
+ * 18% of 200+-line ones -- 195 refusals and 1.95M characters regenerated in
+ * three weeks. Every other argument sorts before `text`. See
+ * `editorNewText` in `@cline/shared` for code that reads stored calls.
+ *
+ * `new_text` is still taken, and is the first alias tried: older sessions,
+ * other hosts' templates and models trained on it send it.
  *
  * This is a landing net kept on judgement, not on evidence: every refused
  * `editor` call in the campaign that measured it was missing its body outright
@@ -735,20 +748,24 @@ export const LooseFetchWebContentInputSchema = z.union([
  * `new_text` wins wherever both are present: a model that sent the real
  * argument meant it, and a stray `text` beside it is not a vote.
  */
-const NEW_TEXT_ALIASES = ["text", "content", "replacement"] as const;
+const NEW_TEXT_ALIASES = ["new_text", "content", "replacement"] as const;
 
 export function withNewTextAlias(value: unknown): unknown {
 	if (value == null || typeof value !== "object" || Array.isArray(value)) {
 		return value;
 	}
 	const input = value as Record<string, unknown>;
-	if (typeof input.new_text === "string") {
-		return value;
+	if (typeof input.text === "string") {
+		// The real argument wins; a stray alias beside it is dropped rather
+		// than left for the schema to strip without a word.
+		const rest = { ...input };
+		for (const alias of NEW_TEXT_ALIASES) delete rest[alias];
+		return rest;
 	}
 	for (const alias of NEW_TEXT_ALIASES) {
 		if (typeof input[alias] === "string") {
 			const { [alias]: aliased, ...rest } = input;
-			return { ...rest, new_text: aliased };
+			return { ...rest, text: aliased };
 		}
 	}
 	return value;
@@ -793,9 +810,9 @@ export function describeEditorArgumentGap(value: unknown): string | null {
 	const has = (key: string) => input[key] !== undefined && input[key] !== null;
 	const notes: string[] = [];
 
-	if (!has("new_text") && EDITOR_ADDRESSING_ARGS.some(has)) {
+	if (!has("text") && !has("new_text") && EDITOR_ADDRESSING_ARGS.some(has)) {
 		notes.push(
-			'`new_text` is what goes into the region you addressed, and every form of this call needs it — a deletion included. To delete that region rather than replace it, send `new_text: ""`.',
+			'`text` is what goes into the region you addressed, and every form of this call needs it — a deletion included. To delete that region rather than replace it, send `text: ""`.',
 		);
 	}
 	if (!has(EDITOR_FILE_PATH_ARG)) {
@@ -827,12 +844,12 @@ export const EditFileInputSchema = z
 			.nullable()
 			.optional()
 			.describe(
-				`Exact text to replace (must match exactly once). Omit this when creating a missing file or inserting via insert_line. Keep this at or below ${EDITOR_ARG_CHAR_LIMIT} characters; a match string approaching that length means you are retyping the file, so address the region with start_line/end_line instead.`,
+				`Exact text to replace (must match exactly once), sent without line numbers. Beside start_line and end_line it is a check instead: the lines must hold this text. Keep this at or below ${EDITOR_ARG_CHAR_LIMIT} characters; a match string approaching that length means you are retyping the file, so address the region with start_line/end_line instead.`,
 			),
 		new_text: z
 			.string()
 			.describe(
-				`The new content to write when creating a missing file, the replacement text for edits, or the inserted text when insert_line is provided. Keep this at or below ${EDITOR_ARG_CHAR_LIMIT} characters for an edit. A whole-file write has no limit, because there is nothing to split it into: that is new_text alone for a file that does not exist, or start_line: 1 with end_line set to the file's line count for one that does.`,
+				`What the addressed lines, text or position become; the whole content when creating a file. Every call needs it; "" deletes. Keep this at or below ${EDITOR_ARG_CHAR_LIMIT} characters for an edit. A whole-file write has no limit: start_line: 1 with end_line at or past the end of the file, or text alone for a file that does not exist yet.`,
 			),
 		// See start_line above: coerced so a stringified line number still applies.
 		insert_line: z.coerce
@@ -841,7 +858,7 @@ export const EditFileInputSchema = z
 			.nullable()
 			.optional()
 			.describe(
-				"Optional positive one-based boundary line. When provided, the tool inserts new_text before that line instead of performing a replacement edit; use line_count + 1 to append at EOF.",
+				"Positive one-based line to insert before: the text is added and nothing is replaced. Use line_count + 1 to append at the end of the file.",
 			),
 		start_line: z.coerce
 			.number()
@@ -849,7 +866,7 @@ export const EditFileInputSchema = z
 			.nullable()
 			.optional()
 			.describe(
-				"Optional positive one-based first line to replace. With end_line, new_text replaces that whole line range and old_text is not needed. Use this when the text to replace is long, minified or repeated: a line number is unambiguous where an exact match is not.",
+				"First line to replace, one-based. Always send it with end_line: the two name the lines text replaces, both inclusive (for one line, both are that line). Use lines when the text to replace is long, minified or repeated: a line number is unambiguous where an exact match is not.",
 			),
 		end_line: z.coerce
 			.number()
@@ -857,7 +874,7 @@ export const EditFileInputSchema = z
 			.nullable()
 			.optional()
 			.describe(
-				"Optional positive one-based last line to replace, inclusive. Defaults to start_line, so start_line on its own replaces exactly that line.",
+				"Last line to replace, inclusive. Always send it with start_line. A number at or past the end of the file means through the end of the file, so you never need the exact count.",
 			),
 		start_column: z.coerce
 			.number()
@@ -881,7 +898,7 @@ export const EditFileInputSchema = z
 			.nullable()
 			.optional()
 			.describe(
-				"Optional positive one-based column on insert_line. When provided, new_text is inserted *before* that character on the existing line rather than as a new line; use line_length + 1 to append at the end of the line. This is how you add a single missing bracket without touching the rest of the line.",
+				"Optional positive one-based column on insert_line. When provided, text is inserted *before* that character on the existing line rather than as a new line; use line_length + 1 to append at the end of the line. This is how you add a single missing bracket without touching the rest of the line.",
 			),
 		occurrence: z.coerce
 			.number()
@@ -898,7 +915,7 @@ export const EditFileInputSchema = z
 			),
 	})
 	.describe(
-		"Edit a text file by replacing old_text with new_text, by replacing the start_line..end_line range with new_text, by creating the file with new_text if it does not exist, or by inserting new_text at insert_line. Prefer using this tool for file edits over shell commands. IMPORTANT: large edits can time out, so use small chunks and multiple calls when possible.",
+		"Edit a text file: replace lines start_line..end_line with text, replace old_text with text, insert text at insert_line, or create a missing file from text. Prefer using this tool for file edits over shell commands.",
 	);
 
 /**
@@ -914,7 +931,9 @@ export const EditFileInputSchema = z
 export const EditorToolInputSchema = z
 	.object({
 		[EDITOR_FILE_PATH_ARG]: EditFileInputSchema.shape.path,
-		...EditFileInputSchema.omit({ path: true }).shape,
+		...EditFileInputSchema.omit({ path: true, new_text: true }).shape,
+		// Last, and named to sort last: see `withNewTextAlias`.
+		text: EditFileInputSchema.shape.new_text,
 	})
 	.describe(EditFileInputSchema.description ?? "");
 
@@ -941,8 +960,8 @@ export function withFilePathAlias(value: unknown): unknown {
 }
 
 export function toEditFileInput(input: EditorToolInput): EditFileInput {
-	const { file_path, ...rest } = input;
-	return { path: file_path, ...rest };
+	const { file_path, text, ...rest } = input;
+	return { path: file_path, ...rest, new_text: text };
 }
 
 /**

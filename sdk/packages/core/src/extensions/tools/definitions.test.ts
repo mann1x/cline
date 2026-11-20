@@ -2389,7 +2389,7 @@ describe("default editor tool", () => {
 		expect(result).toEqual({
 			query: "edit:/tmp/example.ts",
 			result: "",
-			error: expect.stringContaining("new_text was"),
+			error: expect.stringContaining("text was"),
 			success: false,
 		});
 		if (typeof result !== "object" || result == null || !("error" in result)) {
@@ -2488,7 +2488,7 @@ describe("default editor tool", () => {
  * and correct, refused for a missing argument. Eight such calls in one
  * two-hour transaction, ten in another.
  */
-describe("an editor call that names new_text something else", () => {
+describe("an editor call that names its body something other than text", () => {
 	/** Captures what the executor was actually handed, typed. */
 	function recordingEditor() {
 		const seen: EditFileInput[] = [];
@@ -2499,13 +2499,15 @@ describe("an editor call that names new_text something else", () => {
 		return { seen, tool: createEditorTool(execute, { cwd: "/w" }) };
 	}
 
-	it("takes `text` as the replacement body", async () => {
+	// `text` is the advertised name since 2026-11-20; `new_text` is what it
+	// was, and is what older sessions and other templates still send.
+	it("takes `new_text`, the old name, as the replacement body", async () => {
 		const { seen, tool } = recordingEditor();
 
 		const result = await tool.execute(
 			{
 				path: "/w/game.html",
-				text: "const a = 1;",
+				new_text: "const a = 1;",
 				start_line: 95,
 				end_line: 95,
 			} as unknown as EditFileInput,
@@ -2533,14 +2535,14 @@ describe("an editor call that names new_text something else", () => {
 
 	// A model that sent the real argument meant it; a stray alias beside it is
 	// not a vote.
-	it("prefers new_text wherever both are present", async () => {
+	it("prefers text wherever both are present", async () => {
 		const { seen, tool } = recordingEditor();
 
 		await tool.execute(
 			{
 				path: "/w/a.ts",
-				new_text: "real",
-				text: "stray",
+				text: "real",
+				new_text: "stray",
 				start_line: 3,
 			} as unknown as EditFileInput,
 			{} as never,
@@ -2554,8 +2556,8 @@ describe("an editor call that names new_text something else", () => {
 	it("does not advertise the aliases in the schema", () => {
 		const { tool } = recordingEditor();
 
-		expect(hasSchemaKey(tool.inputSchema, "new_text")).toBe(true);
-		expect(hasSchemaKey(tool.inputSchema, "text")).toBe(false);
+		expect(hasSchemaKey(tool.inputSchema, "text")).toBe(true);
+		expect(hasSchemaKey(tool.inputSchema, "new_text")).toBe(false);
 		expect(hasSchemaKey(tool.inputSchema, "content")).toBe(false);
 	});
 
@@ -2570,7 +2572,7 @@ describe("an editor call that names new_text something else", () => {
 				{ path: "/w/a.ts", start_line: 3 } as unknown as EditFileInput,
 				{} as never,
 			),
-		).rejects.toThrow("new_text");
+		).rejects.toThrow("`text`");
 		expect(seen).toHaveLength(0);
 	});
 
@@ -2581,12 +2583,12 @@ describe("an editor call that names new_text something else", () => {
 			tool.execute(
 				{
 					path: "/w/a.ts",
-					text: 42,
+					new_text: 42,
 					start_line: 3,
 				} as unknown as EditFileInput,
 				{} as never,
 			),
-		).rejects.toThrow("new_text");
+		).rejects.toThrow("text");
 	});
 });
 
@@ -2614,8 +2616,8 @@ describe("an editor call refused for a missing argument", () => {
 			old_text: "  dGrid(c,x){",
 		});
 
-		expect(message).toContain("Missing required argument `new_text`");
-		expect(message).toContain('`new_text: ""`');
+		expect(message).toContain("Missing required argument `text`");
+		expect(message).toContain('`text: ""`');
 	});
 
 	it("says what the call did carry, so the model can tell which one it was", async () => {
