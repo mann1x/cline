@@ -19,7 +19,8 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   text now comes last. `new_text` is still accepted, and older conversations
   and their edit cards read as before.
 - **One rule for where an edit goes.** The description gives four forms: lines
-  (`start_line` and `end_line`, always both), text (`old_text` alone), insert
+  (`start_line` and `end_line`, always both, no `old_text`), text (`old_text`,
+  no line numbers), insert
   (`insert_line`), and create (`text` alone, for a missing file). An `end_line`
   past the end of the file means "through the end". The editor still accepts
   `start_line` alone as one line, and `text` alone on a file read in full as

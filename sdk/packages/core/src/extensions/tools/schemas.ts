@@ -844,7 +844,7 @@ export const EditFileInputSchema = z
 			.nullable()
 			.optional()
 			.describe(
-				`Exact text to replace (must match exactly once), sent without line numbers. Beside start_line and end_line it is a check instead: the lines must hold this text. Keep this at or below ${EDITOR_ARG_CHAR_LIMIT} characters; a match string approaching that length means you are retyping the file, so address the region with start_line/end_line instead.`,
+				`Exact text to replace (must match exactly once). Only without start_line/end_line: with line numbers, the lines already say what is replaced, so leave this out. Keep this at or below ${EDITOR_ARG_CHAR_LIMIT} characters; a match string approaching that length means you are retyping the file, so address the region with start_line/end_line instead.`,
 			),
 		new_text: z
 			.string()
