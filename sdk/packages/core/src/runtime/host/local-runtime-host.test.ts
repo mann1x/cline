@@ -532,6 +532,97 @@ describe("LocalRuntimeHost", () => {
 		);
 	});
 
+	it("runs the task graph in place of the checklist when it is on", async () => {
+		// The graph replaces the checklist: its three tools, no `task_progress`
+		// tool, no `task_progress` parameter on any other tool -- even with the
+		// checklist also switched on and a caller-built `task_progress` already
+		// in the toolset -- and the board's log beside the transcript.
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [
+					{
+						name: "editor",
+						inputSchema: {
+							type: "object",
+							properties: { path: { type: "string" } },
+						},
+						execute: vi.fn(),
+					},
+					{
+						name: "task_progress",
+						inputSchema: { type: "object", properties: {} },
+						execute: vi.fn(),
+					},
+				],
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			}),
+		};
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn().mockResolvedValue(createResult()),
+			getMessages: vi.fn().mockReturnValue([]),
+			getAgentId: vi.fn().mockReturnValue("agent-graph"),
+			getConversationId: vi.fn().mockReturnValue("conv-graph"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		let agentConfig:
+			| {
+					tools?: Array<{
+						name: string;
+						inputSchema?: { properties?: Record<string, unknown> };
+						execute: (input: unknown, context: unknown) => Promise<unknown>;
+					}>;
+			  }
+			| undefined;
+		const sessionsDir = join(isolatedHomeDir, "sessions");
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: new FileSessionService(sessionsDir),
+			runtimeBuilder: runtimeBuilder as never,
+			createAgent: ((config: typeof agentConfig) => {
+				agentConfig = config;
+				return agent;
+			}) as never,
+		});
+
+		const started = await manager.startSession(
+			normalizeStartInput({
+				config: createConfig({
+					taskProgress: { enabled: true },
+					taskGraph: { enabled: true },
+				}),
+				prompt: "hello",
+			}),
+		);
+
+		const tools = agentConfig?.tools ?? [];
+		const names = tools.map((tool) => tool.name);
+		expect(names).toEqual(
+			expect.arrayContaining(["task_plan", "task_update", "task_view"]),
+		);
+		expect(names).not.toContain("task_progress");
+		for (const tool of tools) {
+			expect(Object.keys(tool.inputSchema?.properties ?? {})).not.toContain(
+				"task_progress",
+			);
+		}
+		const plan = tools.find((tool) => tool.name === "task_plan");
+		await plan?.execute(
+			{ tasks: [{ title: "first step" }] },
+			{ agentId: "agent-graph", iteration: 1, toolCallId: "call_1" },
+		);
+		const sessionId = started.sessionId;
+		const log = readFileSync(
+			join(sessionsDir, sessionId, `${sessionId}.tasks.jsonl`),
+			"utf8",
+		);
+		expect(log).toContain('"title":"first step"');
+		expect(log).toContain('"call":"call_1"');
+	});
+
 	it("does not add a second task_progress when the tools already carry one", async () => {
 		// A caller that built its tools through `createDefaultTools` with a tracker
 		// already has the tool, and a duplicate name is its own failure.

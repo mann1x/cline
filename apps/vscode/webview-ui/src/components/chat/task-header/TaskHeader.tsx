@@ -17,6 +17,7 @@ import NewTaskButton from "./buttons/NewTaskButton"
 import OpenDiskConversationHistoryButton from "./buttons/OpenDiskConversationHistoryButton"
 import ContextWindow from "./ContextWindow"
 import { highlightText } from "./Highlights"
+import { TaskGraphPanel } from "./TaskGraphPanel"
 import { TaskProgressPanel } from "./TaskProgressPanel"
 import { TaskTokenSummary } from "./TaskTokenSummary"
 import TaskWorkingDirectoryBadge from "./TaskWorkingDirectoryBadge"
@@ -293,6 +294,11 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 						 * of the focus chain. Turning the checklist off therefore
 						 * suppresses the messages, and this panel disappears with them.
 						 */}
+						{/* The task graph's board, when the session runs the graph: it
+						    renders nothing until the first board arrives, and a session
+						    on the graph sends no checklist, so at most one of the two
+						    panels ever has anything to show. */}
+						<TaskGraphPanel clineMessages={clineMessages} />
 						<TaskProgressPanel clineMessages={clineMessages} enabled={focusChainSettings?.enabled ?? true} />
 					</div>
 				)}

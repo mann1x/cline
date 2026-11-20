@@ -152,4 +152,38 @@ describe("SdkSessionConfigBuilder", () => {
 		expect(typeof (fileHooks as { beforeModel?: unknown }).beforeModel).toBe("function")
 		expect(config.hooks).toBe(mocks.composeSessionHooks.mock.results[0].value)
 	})
+
+	describe("task graph", () => {
+		const settings = (focusChainSettings: unknown) => ({
+			getGlobalSettingsKey: vi.fn((key: string) => (key === "focusChainSettings" ? focusChainSettings : "act")),
+		})
+
+		it("leaves the graph off unless the preview switch is on", async () => {
+			const builder = new SdkSessionConfigBuilder({
+				stateManager: settings({ enabled: true, remindClineInterval: 6 }) as never,
+				emitHookMessage: vi.fn(),
+				onSwitchToActMode: vi.fn(),
+			})
+			mocks.buildSessionConfig.mockResolvedValueOnce({ extraTools: [], hooks: {} })
+			const config = await builder.build({ cwd: "/workspace", mode: "act" })
+			expect(config.taskGraph).toBeUndefined()
+		})
+
+		it("turns the graph on and sends every board to the panel as a task_graph row", async () => {
+			const emitHookMessage = vi.fn()
+			const builder = new SdkSessionConfigBuilder({
+				stateManager: settings({ enabled: true, remindClineInterval: 6, taskGraph: true }) as never,
+				emitHookMessage,
+				onSwitchToActMode: vi.fn(),
+			})
+			mocks.buildSessionConfig.mockResolvedValueOnce({ extraTools: [], hooks: {} })
+			const config = await builder.build({ cwd: "/workspace", mode: "act" })
+			expect(config.taskGraph?.enabled).toBe(true)
+			const snapshot = { tasks: [], layers: [], counts: { total: 0, closed: 0, active: 0, ready: 0, blocked: 0 } }
+			config.taskGraph?.onUpdate?.(snapshot)
+			expect(emitHookMessage).toHaveBeenCalledWith(
+				expect.objectContaining({ type: "say", say: "task_graph", text: JSON.stringify(snapshot), partial: false }),
+			)
+		})
+	})
 })

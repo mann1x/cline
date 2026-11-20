@@ -23,6 +23,7 @@ import type { CompactionRevisions } from "../extensions/context/compaction-revis
 import type { DocumentReaderSettings } from "../extensions/tools/executors/document/ocr";
 import type { ToolRoutingRule } from "../extensions/tools/model-tool-routing";
 import type { QaCredential } from "../extensions/tools/qa-credentials";
+import type { TaskGraphSnapshot } from "../extensions/tools/task-graph/store";
 import type { TaskProgressState } from "../extensions/tools/task-progress";
 import type {
 	AgentProfileConnection,
@@ -457,6 +458,22 @@ export interface CoreTaskProgressConfig {
 	reminderInterval?: number;
 	/** Called whenever the model sends a new checklist. */
 	onUpdate?: (state: TaskProgressState) => void;
+}
+
+/**
+ * The conversation's task graph (`task_plan`, `task_update`, `task_view`),
+ * which replaces the checklist when it is on: a session with the graph has no
+ * `task_progress` parameter on any tool and no `task_progress` tool.
+ *
+ * Off by default until the switch-over (plan: docs/protocols/PLAN-task-graph.md,
+ * phase 3).
+ */
+export interface CoreTaskGraphConfig {
+	enabled: boolean;
+	/** File-changing calls between repeats of the untracked-edit nudge. */
+	writeInterval?: number;
+	/** Called after every change to the board. */
+	onUpdate?: (snapshot: TaskGraphSnapshot) => void;
 }
 
 /**
@@ -1093,6 +1110,8 @@ export interface CoreSessionConfig
 	 * coding run as the one tool carrying no checklist.
 	 */
 	taskProgress?: CoreTaskProgressConfig;
+	/** The task graph; when enabled, `taskProgress` is ignored. */
+	taskGraph?: CoreTaskGraphConfig;
 	/**
 	 * Whether the run may end with a file the model changed and never checked.
 	 *

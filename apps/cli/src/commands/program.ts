@@ -146,6 +146,10 @@ export function addRootOptions(cmd: Command): Command {
 				"Keep a visible checklist across the task: on | off (default: on)",
 			)
 			.option(
+				"--task-graph",
+				"Replace the checklist with the task graph (task_plan, task_update, task_view): planned tasks with dependencies, and no checklist parameter on every tool. Preview, off by default; CLINE_TASK_GRAPH=1 does the same",
+			)
+			.option(
 				"--task-progress-interval <calls>",
 				"Tool calls between checklist reminders; 0 reminds never (default: the host's)",
 			)
@@ -566,6 +570,7 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 	if (opts.hooksDir !== undefined) result.hooksDir = opts.hooksDir;
 	if (opts.worktree !== undefined) result.worktree = !!opts.worktree;
 	if (opts.teammates !== undefined) result.teammates = !!opts.teammates;
+	if (opts.taskGraph !== undefined) result.taskGraph = !!opts.taskGraph;
 	if (opts.documents !== undefined) result.documents = !!opts.documents;
 	if (opts.ocr !== undefined) result.ocr = String(opts.ocr);
 	if (opts.ocrLanguages !== undefined)

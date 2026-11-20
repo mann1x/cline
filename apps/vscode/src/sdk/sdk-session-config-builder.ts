@@ -78,6 +78,23 @@ export class SdkSessionConfigBuilder {
 			},
 		}
 		config.hooks = composeSessionHooks(fileHooks, input.cwd)
+		// The task graph in place of the checklist, when the preview switch is
+		// on. Core owns the board; every change reaches the task panel as a
+		// `task_graph` row carrying the snapshot, persisted with the chat so a
+		// reopened task shows its board. The row is never drawn in the chat.
+		if (this.options.stateManager.getGlobalSettingsKey("focusChainSettings")?.taskGraph === true) {
+			config.taskGraph = {
+				enabled: true,
+				onUpdate: (snapshot) =>
+					this.options.emitHookMessage({
+						ts: Date.now(),
+						type: "say",
+						say: "task_graph",
+						text: JSON.stringify(snapshot),
+						partial: false,
+					}),
+			}
+		}
 		// Plan only: the tool disappears once the session is rebuilt in act mode,
 		// and the host's own tools stay either way.
 		config.extraTools = withSwitchToActModeTool(

@@ -778,6 +778,8 @@ message UpdateTerminalConnectionTimeoutRequest {
 message FocusChainSettings {
   bool enabled = 1;
   int32 remind_cline_interval = 2;
+  // The task graph in place of the checklist (preview, off by default).
+  optional bool task_graph = 3;
 }
 
 message UpdateTerminalConnectionTimeoutResponse {

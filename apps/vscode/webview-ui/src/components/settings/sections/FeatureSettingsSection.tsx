@@ -139,6 +139,9 @@ const agentFeatures: FeatureToggle[] = [
 const TASK_CHECKLIST_DESCRIPTION =
 	"Ask the model to keep a checklist of the task's steps, shown under the context window and updated as it works."
 
+const TASK_GRAPH_DESCRIPTION =
+	"Preview. Replaces the checklist with a task graph: the model plans tasks with dependencies (task_plan, task_update, task_view) and nothing is added to every tool call. The board is shown under the context window."
+
 const editorFeatures: FeatureToggle[] = [
 	{
 		id: "show-feature-tips",
@@ -400,6 +403,21 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 										remindClineInterval:
 											focusChainSettings?.remindClineInterval ??
 											DEFAULT_FOCUS_CHAIN_SETTINGS.remindClineInterval,
+										taskGraph: focusChainSettings?.taskGraph ?? false,
+									})
+								}
+							/>
+							<FeatureRow
+								checked={focusChainSettings?.taskGraph ?? false}
+								description={TASK_GRAPH_DESCRIPTION}
+								label="Task Graph (preview)"
+								onChange={(checked) =>
+									updateSetting("focusChainSettings", {
+										enabled: focusChainSettings?.enabled ?? true,
+										remindClineInterval:
+											focusChainSettings?.remindClineInterval ??
+											DEFAULT_FOCUS_CHAIN_SETTINGS.remindClineInterval,
+										taskGraph: checked,
 									})
 								}
 							/>

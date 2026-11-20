@@ -87,6 +87,9 @@ enum ClineSay {
   OUTPUT_LIMIT_RETRY = 43;
   // The exchange with the expert a stuck task was handed to.
   ESCALATION = 44;
+  // The conversation's task graph, as a JSON snapshot; drawn by the task
+  // panel, never as a chat row.
+  TASK_GRAPH = 45;
 }
 
 // Enum for ClineSayTool tool types

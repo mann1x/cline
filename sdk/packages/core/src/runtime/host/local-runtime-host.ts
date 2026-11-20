@@ -57,6 +57,11 @@ import {
 	LIST_FILES_TOOL_NAME,
 } from "../../extensions/tools/list-files";
 import {
+	TaskGraphTracker,
+	withTaskGraphCapture,
+} from "../../extensions/tools/task-graph";
+import {
+	buildTaskProgressState,
 	createTaskProgressCompletionGuard,
 	findLatestTaskProgress,
 	TASK_PROGRESS_PARAM,
@@ -1265,7 +1270,43 @@ export class LocalRuntimeHost implements RuntimeHost {
 			...runtime.tools,
 			...(configWithProvider.extraTools ?? []),
 		];
-		const taskProgressConfig = configWithProvider.taskProgress;
+		// The task graph replaces the checklist when it is on: no parameter on
+		// any tool, no `task_progress` tool, and its own guards. Its log sits
+		// beside the transcript and is brought in line with the history this
+		// session starts from -- a resume keeps it, a cut-back history drops
+		// what was made after the cut, a fork replays the copied calls, and a
+		// conversation from before the graph imports its last checklist.
+		const taskGraphConfig = configWithProvider.taskGraph;
+		const taskGraphTracker = taskGraphConfig?.enabled
+			? new TaskGraphTracker({
+					logPath: join(sessionDir, `${sessionId}.tasks.jsonl`),
+					...(taskGraphConfig.writeInterval !== undefined
+						? { writeInterval: taskGraphConfig.writeInterval }
+						: {}),
+					...(taskGraphConfig.onUpdate
+						? {
+								onChange: (store) =>
+									taskGraphConfig.onUpdate?.(store.snapshot()),
+							}
+						: {}),
+				})
+			: undefined;
+		if (taskGraphTracker) {
+			const legacy = findLatestTaskProgress(
+				initialMessages as readonly { content?: unknown }[] | undefined,
+			);
+			const outcome = taskGraphTracker.start(
+				initialMessages,
+				legacy ? buildTaskProgressState(legacy).items : undefined,
+			);
+			configWithProvider.logger?.log?.(
+				`[task-graph] ${outcome}: ${taskGraphTracker.store.getState().order.length} tasks`,
+				{ sessionId },
+			);
+		}
+		const taskProgressConfig = taskGraphTracker
+			? undefined
+			: configWithProvider.taskProgress;
 		const taskProgressTracker = taskProgressConfig?.enabled
 			? new TaskProgressTracker({
 					...(taskProgressConfig.reminderInterval !== undefined
@@ -1300,9 +1341,20 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// Added by name-check rather than unconditionally, because a caller that
 		// did build its tools through `createDefaultTools` with a tracker already
 		// has one and a duplicate name is its own failure.
-		const mergedToolsWithChecklist =
-			taskProgressTracker &&
-			!mergedTools.some((tool) => tool.name === TASK_PROGRESS_PARAM)
+		const mergedToolsWithChecklist = taskGraphTracker
+			? [
+					// A caller that built its toolset with the checklist already in
+					// it has its `task_progress` tool taken out: the graph is the plan.
+					...mergedTools.filter((tool) => tool.name !== TASK_PROGRESS_PARAM),
+					...taskGraphTracker
+						.tools()
+						.filter(
+							(tool) =>
+								!mergedTools.some((existing) => existing.name === tool.name),
+						),
+				]
+			: taskProgressTracker &&
+					!mergedTools.some((tool) => tool.name === TASK_PROGRESS_PARAM)
 				? [...mergedTools, createTaskProgressTool()]
 				: mergedTools;
 		// The other half of "did this run leave the file in a state anyone looked
@@ -1396,14 +1448,16 @@ export class LocalRuntimeHost implements RuntimeHost {
 			},
 		);
 		const toolsToWrap = mergedToolsWithFailureChecks;
-		const withChecklist = taskProgressTracker
-			? toolsToWrap.map((tool) =>
-					withTaskProgressCapture(tool, taskProgressTracker),
-				)
-			: // `toolsToWrap`, not `mergedTools`: falling back to the pre-checklist
-				// list drops every tool added since, which is how the checker would
-				// have gone missing on exactly the runs that have no checklist.
-				toolsToWrap;
+		const withChecklist = taskGraphTracker
+			? toolsToWrap.map((tool) => withTaskGraphCapture(tool, taskGraphTracker))
+			: taskProgressTracker
+				? toolsToWrap.map((tool) =>
+						withTaskProgressCapture(tool, taskProgressTracker),
+					)
+				: // `toolsToWrap`, not `mergedTools`: falling back to the pre-checklist
+					// list drops every tool added since, which is how the checker would
+					// have gone missing on exactly the runs that have no checklist.
+					toolsToWrap;
 		const tools = editVerificationTracker
 			? withChecklist.map((tool) =>
 					withEditVerificationCapture(tool, editVerificationTracker),
@@ -1413,9 +1467,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// rather than assigned: the runtime may already carry a guard (team
 		// obligations), and that one speaks to work the model cannot simply tick
 		// off, so it goes first and the checklist only gets a say once it passes.
-		const checklistCloseOutGuard = taskProgressTracker
-			? createTaskProgressCompletionGuard(taskProgressTracker)
-			: undefined;
+		const checklistCloseOutGuard = taskGraphTracker
+			? taskGraphTracker.completionGuard()
+			: taskProgressTracker
+				? createTaskProgressCompletionGuard(taskProgressTracker)
+				: undefined;
 		// Same composition, one more link: an unchecked edit is a fact about the
 		// work rather than a box the model can tick, so it speaks before the
 		// checklist and after anything the runtime already carries.
@@ -1496,12 +1552,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// The checklist's mid-run reminders, delivered after a turn's tools.
 		const existingAfterToolsReminder =
 			runtime.completionPolicy?.afterToolsReminder;
-		const completionPolicyWithChecklistCloseOut = taskProgressTracker
+		const checklistReminder = taskGraphTracker ?? taskProgressTracker;
+		const completionPolicyWithChecklistCloseOut = checklistReminder
 			? {
 					...completionPolicyWithGuards,
 					afterToolsReminder: () =>
 						existingAfterToolsReminder?.() ??
-						taskProgressTracker.takePendingReminder(),
+						checklistReminder.takePendingReminder(),
 				}
 			: completionPolicyWithGuards;
 		// The change protocol, where the user has asked for it. It settles at the
@@ -2438,6 +2495,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 					if (generation > seenCompactionGeneration) {
 						seenCompactionGeneration = generation;
 						struggleDetector?.noteCompaction();
+						taskGraphTracker?.noteCompaction();
 					}
 					try {
 						// Validate against the exact messages the state's hash was

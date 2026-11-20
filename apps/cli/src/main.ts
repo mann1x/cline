@@ -1343,6 +1343,11 @@ export async function runCli(): Promise<void> {
 			// the parameter it adds to every other tool, without the reminder
 			// and without the close-out guard -- while the prompt still told the
 			// model to keep a checklist.
+			// The task graph replaces the checklist when asked for; core then
+			// ignores `taskProgress` below.
+			...(args.taskGraph || process.env.CLINE_TASK_GRAPH === "1"
+				? { taskGraph: { enabled: true } }
+				: {}),
 			taskProgress: {
 				enabled: args.taskProgress !== "off",
 				...(args.taskProgressInterval !== undefined

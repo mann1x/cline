@@ -110,7 +110,8 @@ type LocalOnlyCoreSessionConfigKeys =
 	| "onReasoningLoopLimitReached"
 	// Carries an `onUpdate` callback, so it cannot cross a transport — and the
 	// checklist is applied by the local runtime when it merges the toolset.
-	| "taskProgress";
+	| "taskProgress"
+	| "taskGraph";
 
 export type RuntimeSessionConfig = Omit<
 	CoreSessionConfig,
@@ -152,6 +153,7 @@ export interface LocalRuntimeStartOptions {
 	onConsecutiveMistakeLimitReached?: LocalRuntimeBootstrapConfig["onConsecutiveMistakeLimitReached"];
 	onReasoningLoopLimitReached?: LocalRuntimeBootstrapConfig["onReasoningLoopLimitReached"];
 	taskProgress?: LocalRuntimeBootstrapConfig["taskProgress"];
+	taskGraph?: LocalRuntimeBootstrapConfig["taskGraph"];
 	checkpoint?: LocalRuntimeBootstrapConfig["checkpoint"];
 	compaction?: LocalRuntimeBootstrapConfig["compaction"];
 	modelCatalogDefaults?: Partial<NonNullable<ProviderSettings["modelCatalog"]>>;
@@ -204,6 +206,7 @@ export function splitCoreSessionConfig(config: ClineCoreStartConfig): {
 		onConsecutiveMistakeLimitReached,
 		onReasoningLoopLimitReached,
 		taskProgress,
+		taskGraph,
 		checkpoint,
 		compaction,
 		...transportConfig
@@ -227,6 +230,7 @@ export function splitCoreSessionConfig(config: ClineCoreStartConfig): {
 			onReasoningLoopLimitReached;
 	}
 	if (taskProgress) localConfigOverrides.taskProgress = taskProgress;
+	if (taskGraph) localConfigOverrides.taskGraph = taskGraph;
 	if (checkpoint?.createCheckpoint) {
 		localConfigOverrides.checkpoint = checkpoint;
 	}

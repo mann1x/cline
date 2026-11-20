@@ -139,7 +139,27 @@ describe("FeatureSettingsSection", () => {
 
 		fireEvent.click(container.querySelector('[id="Task Checklist"]') as Element)
 
-		expect(mockUpdateSetting).toHaveBeenCalledWith("focusChainSettings", { enabled: true, remindClineInterval: 11 })
+		expect(mockUpdateSetting).toHaveBeenCalledWith("focusChainSettings", {
+			enabled: true,
+			remindClineInterval: 11,
+			taskGraph: false,
+		})
+	})
+
+	it("turns the task graph on without resetting the checklist's own fields", () => {
+		mockExtensionState.value = {
+			...mockExtensionState.value,
+			focusChainSettings: { enabled: false, remindClineInterval: 11 },
+		}
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		fireEvent.click(container.querySelector('[id="Task Graph (preview)"]') as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("focusChainSettings", {
+			enabled: false,
+			remindClineInterval: 11,
+			taskGraph: true,
+		})
 	})
 
 	// Deleted upstream in c3671de7d and never restored, so the session factory's

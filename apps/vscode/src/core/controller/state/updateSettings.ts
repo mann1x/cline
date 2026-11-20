@@ -699,6 +699,9 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("focusChainSettings", {
 				enabled: request.focusChainSettings.enabled,
 				remindClineInterval: remindClineInterval > 0 ? remindClineInterval : current.remindClineInterval,
+				// Absent from a write that predates the field (or one that only
+				// flips the checklist) keeps what is stored.
+				taskGraph: request.focusChainSettings.taskGraph ?? current.taskGraph ?? false,
 			})
 		}
 

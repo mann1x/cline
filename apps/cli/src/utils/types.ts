@@ -165,6 +165,8 @@ export interface ParsedArgs {
 	/** Proposals put to the approver before the run gives up on a check. */
 	maxCheckProposals?: number;
 	invalidMaxCheckProposals?: string;
+	/** `--task-graph`: the task graph in place of the checklist. */
+	taskGraph?: boolean;
 	/** Whether the model keeps a checklist across the task. */
 	taskProgress?: "on" | "off";
 	/** Tool calls between checklist reminders. 0 reminds never. */

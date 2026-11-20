@@ -30,7 +30,7 @@ describe("updateSettings — focusChainSettings", () => {
 
 		assert.deepEqual(controller.stateManager.setGlobalState.mock.calls.at(-1), [
 			"focusChainSettings",
-			{ enabled: false, remindClineInterval: 6 },
+			{ enabled: false, remindClineInterval: 6, taskGraph: false },
 		])
 	})
 
@@ -44,7 +44,36 @@ describe("updateSettings — focusChainSettings", () => {
 
 		assert.deepEqual(controller.stateManager.setGlobalState.mock.calls.at(-1), [
 			"focusChainSettings",
-			{ enabled: true, remindClineInterval: 11 },
+			{ enabled: true, remindClineInterval: 11, taskGraph: false },
+		])
+	})
+
+	it("keeps the task graph switch when a request does not carry it", async () => {
+		// The checklist toggle of an older webview sends only its own two fields.
+		const controller = makeController({ enabled: true, remindClineInterval: 6, taskGraph: true })
+
+		await updateSettings(
+			controller,
+			UpdateSettingsRequest.create({ focusChainSettings: { enabled: false, remindClineInterval: 6 } }),
+		)
+
+		assert.deepEqual(controller.stateManager.setGlobalState.mock.calls.at(-1), [
+			"focusChainSettings",
+			{ enabled: false, remindClineInterval: 6, taskGraph: true },
+		])
+	})
+
+	it("stores the task graph switch when it is sent", async () => {
+		const controller = makeController({ enabled: true, remindClineInterval: 6 })
+
+		await updateSettings(
+			controller,
+			UpdateSettingsRequest.create({ focusChainSettings: { enabled: true, remindClineInterval: 6, taskGraph: true } }),
+		)
+
+		assert.deepEqual(controller.stateManager.setGlobalState.mock.calls.at(-1), [
+			"focusChainSettings",
+			{ enabled: true, remindClineInterval: 6, taskGraph: true },
 		])
 	})
 

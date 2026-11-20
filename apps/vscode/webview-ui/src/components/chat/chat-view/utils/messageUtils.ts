@@ -162,6 +162,7 @@ export function filterVisibleMessages(messages: ClineMessage[], options?: { show
 			case "deleted_api_reqs": // aggregated api_req metrics from deleted messages
 			case "subagent_usage": // aggregated subagent usage metrics for task-level accounting
 			case "task_progress": // task progress messages are displayed in TaskHeader, not in main chat
+			case "task_graph": // the task board, likewise drawn in TaskHeader
 			case "checkpoint_created": // checkpoint restore is exposed from user-message edit controls
 				return false
 			// NOTE: reasoning passes through and renders as its own row; it is

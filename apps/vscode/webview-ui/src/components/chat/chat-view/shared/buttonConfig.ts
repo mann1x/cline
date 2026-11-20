@@ -328,9 +328,14 @@ function isInertStatusMessage(message: ClineMessage): boolean {
 		}
 	}
 
-	return ["api_req_finished", "deleted_api_reqs", "mcp_server_request_started", "subagent_usage", "task_progress"].includes(
-		message.say || "",
-	)
+	return [
+		"api_req_finished",
+		"deleted_api_reqs",
+		"mcp_server_request_started",
+		"subagent_usage",
+		"task_progress",
+		"task_graph",
+	].includes(message.say || "")
 }
 
 /**

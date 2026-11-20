@@ -439,6 +439,7 @@ export type ClineSay =
 	| "load_mcp_documentation"
 	| "info" // Added for general informational messages like retry status
 	| "task_progress"
+	| "task_graph"
 	| "hook_status"
 	| "hook_output_stream"
 	| "subagent"

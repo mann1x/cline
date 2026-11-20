@@ -1,0 +1,428 @@
+/**
+ * The conversation's task graph: what a task is, how the log folds into a
+ * board, and the questions asked of it (ready, blocked, layers, cycles).
+ *
+ * Pure data and functions. Nothing here touches a file or a tool; the store
+ * persists the events and the tools validate what the model sends before an
+ * event is ever made, so folding the log never has to refuse anything.
+ *
+ * Adapted from claude-hooks' task store (the beads-style dependency graph),
+ * scoped to one conversation: ids are `T<n>` and `T<n>.<m>`, never reused,
+ * and the whole state is the fold of an append-only event log.
+ */
+
+export type TaskStatus =
+	| "pending"
+	| "active"
+	| "waiting"
+	| "done"
+	| "cancelled";
+export type TaskPriority = "H" | "M" | "L";
+
+/** Who made a change: the model, the person, an agent id, or an import. */
+export type TaskAuthor = string;
+
+export interface AcceptanceItem {
+	text: string;
+	done: boolean;
+}
+
+export interface TaskNote {
+	seq: number;
+	by: TaskAuthor;
+	text: string;
+}
+
+export interface Task {
+	id: string;
+	title: string;
+	description?: string;
+	status: TaskStatus;
+	priority: TaskPriority;
+	/** Ids this task waits on until each is done or cancelled. */
+	depends: string[];
+	parent?: string;
+	acceptance: AcceptanceItem[];
+	/** Parked by choice: neither ready nor nagged about, children included. */
+	later: boolean;
+	claimedBy?: string;
+	files: string[];
+	notes: TaskNote[];
+	/** The note given with `done` or `cancelled`: what the board decays to. */
+	outcome?: string;
+	createdSeq: number;
+	/** The event that last changed the task, for "stale" questions. */
+	touchedSeq: number;
+}
+
+/** The fields a create event carries; everything else starts at its default. */
+export interface TaskCreateFields {
+	id: string;
+	title: string;
+	description?: string;
+	acceptance?: string[];
+	depends?: string[];
+	parent?: string;
+	priority?: TaskPriority;
+	status?: TaskStatus;
+}
+
+/** One change to one task. Every field optional; applied in this order. */
+export interface TaskUpdateFields {
+	id: string;
+	title?: string;
+	description?: string;
+	priority?: TaskPriority;
+	status?: TaskStatus;
+	note?: string;
+	/** Acceptance items by index (0-based), as resolved by the tool. */
+	check?: number[];
+	uncheck?: number[];
+	acceptanceAdd?: string[];
+	dependsAdd?: string[];
+	dependsRemove?: string[];
+	later?: boolean;
+	files?: string[];
+	claimedBy?: string | null;
+}
+
+interface TaskEventBase {
+	/** Position in the log, from 1. */
+	seq: number;
+	/** Milliseconds since the epoch. */
+	ts: number;
+	by: TaskAuthor;
+	/**
+	 * The tool call that made it, which is what ties the log to the
+	 * conversation: a history cut before that call (an edit-and-resend, a
+	 * checkpoint restore) no longer has it, and the event goes with it.
+	 */
+	call?: string;
+}
+
+export type TaskEvent =
+	| (TaskEventBase & { op: "create"; task: TaskCreateFields })
+	| (TaskEventBase & { op: "update"; update: TaskUpdateFields });
+
+export interface TaskGraphState {
+	tasks: Map<string, Task>;
+	/** In creation order, which is also id order within a parent. */
+	order: string[];
+	nextTop: number;
+	nextChild: Map<string, number>;
+	lastSeq: number;
+}
+
+export function emptyTaskGraphState(): TaskGraphState {
+	return {
+		tasks: new Map(),
+		order: [],
+		nextTop: 1,
+		nextChild: new Map(),
+		lastSeq: 0,
+	};
+}
+
+export function isClosed(status: TaskStatus): boolean {
+	return status === "done" || status === "cancelled";
+}
+
+/** The id the next task gets, under `parent` or at the top. */
+export function nextTaskId(state: TaskGraphState, parent?: string): string {
+	if (parent) {
+		return `${parent}.${state.nextChild.get(parent) ?? 1}`;
+	}
+	return `T${state.nextTop}`;
+}
+
+function uniq(values: Iterable<string>): string[] {
+	return [...new Set(values)];
+}
+
+/** Apply one event. Mutates `state`; the store owns the only copy. */
+export function applyTaskEvent(state: TaskGraphState, event: TaskEvent): void {
+	state.lastSeq = Math.max(state.lastSeq, event.seq);
+	if (event.op === "create") {
+		const fields = event.task;
+		if (state.tasks.has(fields.id)) {
+			return;
+		}
+		state.tasks.set(fields.id, {
+			id: fields.id,
+			title: fields.title,
+			...(fields.description ? { description: fields.description } : {}),
+			status: fields.status ?? "pending",
+			priority: fields.priority ?? "M",
+			depends: uniq(fields.depends ?? []),
+			...(fields.parent ? { parent: fields.parent } : {}),
+			acceptance: (fields.acceptance ?? []).map((text) => ({
+				text,
+				done: false,
+			})),
+			later: false,
+			files: [],
+			notes: [],
+			createdSeq: event.seq,
+			touchedSeq: event.seq,
+		});
+		state.order.push(fields.id);
+		// Counters follow the ids actually created, so a log replayed from any
+		// source hands out the same next id it did the first time.
+		const parent = fields.parent;
+		const tail = Number(fields.id.slice(fields.id.lastIndexOf(".") + 1));
+		if (parent) {
+			state.nextChild.set(
+				parent,
+				Math.max(state.nextChild.get(parent) ?? 1, tail + 1),
+			);
+		} else {
+			const top = Number(fields.id.slice(1));
+			if (Number.isFinite(top)) {
+				state.nextTop = Math.max(state.nextTop, top + 1);
+			}
+		}
+		return;
+	}
+	const update = event.update;
+	const task = state.tasks.get(update.id);
+	if (!task) {
+		return;
+	}
+	if (update.title !== undefined) task.title = update.title;
+	if (update.description !== undefined) task.description = update.description;
+	if (update.priority !== undefined) task.priority = update.priority;
+	if (update.acceptanceAdd) {
+		for (const text of update.acceptanceAdd) {
+			task.acceptance.push({ text, done: false });
+		}
+	}
+	for (const index of update.check ?? []) {
+		const item = task.acceptance[index];
+		if (item) item.done = true;
+	}
+	for (const index of update.uncheck ?? []) {
+		const item = task.acceptance[index];
+		if (item) item.done = false;
+	}
+	if (update.dependsAdd) {
+		task.depends = uniq([...task.depends, ...update.dependsAdd]);
+	}
+	if (update.dependsRemove) {
+		const drop = new Set(update.dependsRemove);
+		task.depends = task.depends.filter((id) => !drop.has(id));
+	}
+	if (update.later !== undefined) task.later = update.later;
+	if (update.files) task.files = uniq([...task.files, ...update.files]);
+	if (update.claimedBy !== undefined) {
+		if (update.claimedBy === null) delete task.claimedBy;
+		else task.claimedBy = update.claimedBy;
+	}
+	if (update.note) {
+		task.notes.push({ seq: event.seq, by: event.by, text: update.note });
+	}
+	if (update.status !== undefined) {
+		task.status = update.status;
+		if (isClosed(update.status)) {
+			if (update.note) task.outcome = update.note;
+		} else {
+			delete task.outcome;
+		}
+	}
+	task.touchedSeq = event.seq;
+}
+
+export function foldTaskEvents(events: Iterable<TaskEvent>): TaskGraphState {
+	const state = emptyTaskGraphState();
+	for (const event of events) {
+		applyTaskEvent(state, event);
+	}
+	return state;
+}
+
+// ---------------------------------------------------------------------------
+// Questions asked of the graph
+// ---------------------------------------------------------------------------
+
+export function childrenOf(state: TaskGraphState, id: string): Task[] {
+	return state.order
+		.map((taskId) => state.tasks.get(taskId))
+		.filter((task): task is Task => task?.parent === id);
+}
+
+/** Whether the task or an ancestor is parked with `later`. */
+export function isParked(state: TaskGraphState, task: Task): boolean {
+	let current: Task | undefined = task;
+	const seen = new Set<string>();
+	while (current && !seen.has(current.id)) {
+		if (current.later) return true;
+		seen.add(current.id);
+		current = current.parent ? state.tasks.get(current.parent) : undefined;
+	}
+	return false;
+}
+
+/**
+ * The dependencies still open, which is what "blocked" means -- the task's
+ * own and its ancestors': a subtask of a task that waits on T2 waits on T2
+ * too, or it would be offered as ready work under a parent that cannot start.
+ */
+export function openDependencies(state: TaskGraphState, task: Task): string[] {
+	const open: string[] = [];
+	let current: Task | undefined = task;
+	const seen = new Set<string>();
+	while (current && !seen.has(current.id)) {
+		seen.add(current.id);
+		for (const id of current.depends) {
+			const dep = state.tasks.get(id);
+			if (dep !== undefined && !isClosed(dep.status) && !open.includes(id)) {
+				open.push(id);
+			}
+		}
+		current = current.parent ? state.tasks.get(current.parent) : undefined;
+	}
+	return open;
+}
+
+export function isBlocked(state: TaskGraphState, task: Task): boolean {
+	return (
+		!isClosed(task.status) &&
+		(openDependencies(state, task).length > 0 || isParked(state, task))
+	);
+}
+
+/**
+ * Open, not started, nothing in its way. A task with open children is not
+ * ready itself: its children are the work, and it closes after them.
+ */
+export function isReady(state: TaskGraphState, task: Task): boolean {
+	return (
+		task.status === "pending" &&
+		!isBlocked(state, task) &&
+		!childrenOf(state, task.id).some((child) => !isClosed(child.status))
+	);
+}
+
+const PRIORITY_RANK: Record<TaskPriority, number> = { H: 0, M: 1, L: 2 };
+
+/** Ready tasks, highest priority first, then in creation order. */
+export function readyTasks(state: TaskGraphState): Task[] {
+	return state.order
+		.map((id) => state.tasks.get(id) as Task)
+		.filter((task) => isReady(state, task))
+		.sort(
+			(a, b) =>
+				PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] ||
+				a.createdSeq - b.createdSeq,
+		);
+}
+
+/** Open tasks that list `id` among their dependencies. */
+export function dependentsOf(state: TaskGraphState, id: string): Task[] {
+	return state.order
+		.map((taskId) => state.tasks.get(taskId) as Task)
+		.filter((task) => !isClosed(task.status) && task.depends.includes(id));
+}
+
+/**
+ * Whether making `from` depend on `to` closes a loop: true when `from` is
+ * already reachable from `to` along dependency edges (or they are the same).
+ */
+export function wouldCycle(
+	state: TaskGraphState,
+	from: string,
+	to: string,
+	extra: ReadonlyMap<string, readonly string[]> = new Map(),
+): boolean {
+	const stack = [to];
+	const seen = new Set<string>();
+	while (stack.length > 0) {
+		const id = stack.pop() as string;
+		if (id === from) return true;
+		if (seen.has(id)) continue;
+		seen.add(id);
+		const deps = [
+			...(state.tasks.get(id)?.depends ?? []),
+			...(extra.get(id) ?? []),
+		];
+		stack.push(...deps);
+	}
+	return false;
+}
+
+/**
+ * Open tasks in dependency layers: layer 0 waits on nothing open, layer n on
+ * something in layer n-1. What can run side by side is one layer.
+ */
+export function taskLayers(state: TaskGraphState): Task[][] {
+	const open = state.order
+		.map((id) => state.tasks.get(id) as Task)
+		.filter((task) => !isClosed(task.status));
+	const layerOf = new Map<string, number>();
+	const visiting = new Set<string>();
+	const depth = (task: Task): number => {
+		const known = layerOf.get(task.id);
+		if (known !== undefined) return known;
+		if (visiting.has(task.id)) return 0;
+		visiting.add(task.id);
+		let layer = 0;
+		for (const depId of openDependencies(state, task)) {
+			const dep = state.tasks.get(depId);
+			if (dep) layer = Math.max(layer, depth(dep) + 1);
+		}
+		visiting.delete(task.id);
+		layerOf.set(task.id, layer);
+		return layer;
+	};
+	const layers: Task[][] = [];
+	for (const task of open) {
+		const layer = depth(task);
+		const row = layers[layer] ?? [];
+		row.push(task);
+		layers[layer] = row;
+	}
+	return layers.filter(Boolean);
+}
+
+export interface TaskGraphCounts {
+	total: number;
+	done: number;
+	cancelled: number;
+	active: number;
+	ready: number;
+	blocked: number;
+	waiting: number;
+}
+
+export function countTasks(state: TaskGraphState): TaskGraphCounts {
+	const counts: TaskGraphCounts = {
+		total: 0,
+		done: 0,
+		cancelled: 0,
+		active: 0,
+		ready: 0,
+		blocked: 0,
+		waiting: 0,
+	};
+	for (const id of state.order) {
+		const task = state.tasks.get(id) as Task;
+		counts.total += 1;
+		if (task.status === "done") counts.done += 1;
+		else if (task.status === "cancelled") counts.cancelled += 1;
+		else if (task.status === "active") counts.active += 1;
+		else if (task.status === "waiting") counts.waiting += 1;
+		else if (isBlocked(state, task)) counts.blocked += 1;
+		else if (isReady(state, task)) counts.ready += 1;
+	}
+	return counts;
+}
+
+/** Tasks the run should not end on: active ones, and ready ones. */
+export function openWork(state: TaskGraphState): Task[] {
+	return state.order
+		.map((id) => state.tasks.get(id) as Task)
+		.filter(
+			(task) =>
+				!isParked(state, task) &&
+				(task.status === "active" || isReady(state, task)),
+		);
+}

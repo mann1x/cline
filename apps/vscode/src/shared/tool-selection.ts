@@ -141,7 +141,7 @@ export const SELECTABLE_TOOLS: readonly SelectableTool[] = [
 		name: "sed",
 		label: "sed",
 		summary: "Stream edits, with a preview mode and an in-place mode.",
-		tokens: 637,
+		tokens: 686,
 		group: "write",
 	},
 	{
