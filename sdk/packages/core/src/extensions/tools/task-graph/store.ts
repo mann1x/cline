@@ -494,13 +494,22 @@ export class TaskGraphStore {
 			.map((task) => task.id)
 			.filter((id) => !readyBefore.has(id));
 		if (readyNow.length > 0) {
+			// S5: what the close made possible, and the call that starts it
+			// when nothing else is under way.
+			const anyActive = this.state.order.some(
+				(id) => this.state.tasks.get(id)?.status === "active",
+			);
 			lines.push(
 				`Ready now: ${readyNow
 					.map(
 						(id) =>
 							`${id} ${shortTitle((this.state.tasks.get(id) as Task).title, 50)}`,
 					)
-					.join("; ")}.`,
+					.join("; ")}.${
+					anyActive
+						? ""
+						: ` Start the next one: \`task_update\` {"updates":[{"id":"${readyNow[0]}","status":"active"}]}.`
+				}`,
 			);
 		}
 		if (changed && !options.silent) this.onChange?.(this);

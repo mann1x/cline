@@ -1280,6 +1280,13 @@ export class LocalRuntimeHost implements RuntimeHost {
 		const taskGraphTracker = taskGraphConfig?.enabled
 			? new TaskGraphTracker({
 					logPath: join(sessionDir, `${sessionId}.tasks.jsonl`),
+					onNudge: (id, key) =>
+						configWithProvider.logger?.log?.(
+							`[task-graph] nudge ${id} (${key})`,
+							{
+								sessionId,
+							},
+						),
 					...(taskGraphConfig.writeInterval !== undefined
 						? { writeInterval: taskGraphConfig.writeInterval }
 						: {}),

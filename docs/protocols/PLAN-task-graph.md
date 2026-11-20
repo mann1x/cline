@@ -408,8 +408,13 @@ on xOllama, build 1067a476de, checklist as shipped (reminder interval 6).
 - Not in phase 1: templates (phase 3), the habitual `task_progress` reader
   (phase 3), gates (phase 5), teams (phase 4).
 
-**1b. Nudges.** Section 10's solo set, then the team set, each logged with
-compliance. Without these, phase 1 is only a better list nobody writes.
+**1b. Nudges. Solo set written 2026-11-20** (S1, S2, S3, S4, S5, S7, S8 in
+`tracker.ts`; S6 waits on the struggle detector). Keyed once per situation,
+two attempts worded differently, one nudge per three calls; each fire logged
+as `[task-graph] nudge <id> (<key>)`. S1's call-count trigger tells a run that
+only answers a question to carry on. The team set (T1-T5) is phase 4.
+Compliance is measured on tg-bench: arm B (graph, 72f69ec47a/8597c7d02c,
+before 1b) against arm C (graph with 1b), both against the phase 0 baseline.
 
 **2. Panel and memory.** The tree, detail, graph tab, chat rows, the person's
 edits with the model being told, and export to memory with use and

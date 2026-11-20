@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderBoard } from "./board";
 import { readPlanInput, readUpdateInput } from "./readers";
 import { TaskGraphStore } from "./store";
@@ -494,5 +494,112 @@ describe("tracker", () => {
 		);
 		expect(result?.[0]?.success).toBe(true);
 		expect(tracker.store.getEvents()[0]?.call).toBe("call_9");
+	});
+});
+
+describe("nudges (phase 1b)", () => {
+	const read = { name: "read_files", input: { files: ["/w/a.py"] } };
+	const edit = (path = "/w/a.py") => ({
+		name: "editor",
+		input: { path, new_text: "x" },
+	});
+	const ok = [{ query: "q", result: "OK", success: true }];
+	const call = (
+		tracker: TaskGraphTracker,
+		c: { name: string; input: unknown },
+		result: unknown = ok,
+	) => {
+		tracker.recordToolCall(c.input, c.name);
+		tracker.recordToolResult(c.input, c.name, result);
+	};
+
+	it("S1: asks for a plan by the 4th call, and lets a run that only answers carry on", () => {
+		const tracker = new TaskGraphTracker();
+		for (let i = 0; i < 3; i++) call(tracker, read);
+		expect(tracker.takePendingReminder()).toBeUndefined();
+		call(tracker, read);
+		const text = tracker.takePendingReminder() ?? "";
+		expect(text).toContain("4 calls in and there is no plan yet");
+		expect(text).toContain("If it only needs an answer, carry on");
+	});
+
+	it("says a situation at most twice, the second time differently, and spaces nudges three calls apart", () => {
+		const onNudge = vi.fn();
+		const tracker = new TaskGraphTracker({ onNudge });
+		call(tracker, edit());
+		const first = tracker.takePendingReminder();
+		call(tracker, edit());
+		call(tracker, edit());
+		expect(tracker.takePendingReminder()).toBeUndefined();
+		call(tracker, edit());
+		const second = tracker.takePendingReminder();
+		expect(second).toBeDefined();
+		expect(second).not.toBe(first);
+		for (let i = 0; i < 6; i++) call(tracker, edit());
+		expect(tracker.takePendingReminder()).toBeUndefined();
+		expect(onNudge.mock.calls.map((c) => c[0])).toEqual(["S1", "S1"]);
+	});
+
+	it("S3: names the active task after three changes it was not updated for", () => {
+		const tracker = new TaskGraphTracker();
+		tracker.store.plan({ tasks: [{ title: "Store cents", start: true }] });
+		call(tracker, edit("/w/models.py"));
+		call(tracker, edit("/w/storage.py"));
+		expect(tracker.takePendingReminder()).toBeUndefined();
+		call(tracker, edit("/w/cli.py"));
+		const text = tracker.takePendingReminder() ?? "";
+		expect(text).toContain("since T1 (Store cents) was last updated");
+		expect(text).toContain("`/w/models.py`, `/w/storage.py`, `/w/cli.py`");
+		// Touching the task starts a new count.
+		tracker.store.update({ updates: [{ id: "T1", note: "half done" }] });
+		for (let i = 0; i < 3; i++) call(tracker, read);
+		call(tracker, edit());
+		expect(tracker.takePendingReminder()).toBeUndefined();
+	});
+
+	it("S4: a passing test run while a task is active points at closing it and at the unticked checks", () => {
+		const tracker = new TaskGraphTracker();
+		tracker.store.plan({
+			tasks: [
+				{ title: "Fix wrap", acceptance: ["last line kept"], start: true },
+			],
+		});
+		call(tracker, {
+			name: "run_commands",
+			input: { commands: ["cd /w && python3 -m unittest"] },
+		});
+		const text = tracker.takePendingReminder() ?? "";
+		expect(text).toContain(
+			"`cd /w && python3 -m unittest` passed while T1 (Fix wrap) is active",
+		);
+		expect(text).toContain("1: last line kept");
+	});
+
+	it("S4: not for a command that checks nothing, nor for a failing one", () => {
+		const tracker = new TaskGraphTracker();
+		tracker.store.plan({ tasks: [{ title: "A", start: true }] });
+		call(tracker, { name: "run_commands", input: { commands: ["ls -la"] } });
+		call(
+			tracker,
+			{ name: "run_commands", input: { commands: ["pytest -q"] } },
+			[{ query: "q", result: "1 failed", success: false }],
+		);
+		expect(tracker.takePendingReminder()).toBeUndefined();
+	});
+
+	it("S5: a close that unblocks work says what is ready and how to start it", () => {
+		const store = new TaskGraphStore();
+		store.plan({
+			tasks: [
+				{ title: "A", start: true },
+				{ title: "B", depends: ["#1"] },
+			],
+		});
+		const outcome = store.update({
+			updates: [{ id: "T1", status: "done", note: "ok" }],
+		});
+		expect(outcome.lines.join("\n")).toContain(
+			'Start the next one: `task_update` {"updates":[{"id":"T2","status":"active"}]}',
+		);
 	});
 });
