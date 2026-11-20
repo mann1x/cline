@@ -210,6 +210,22 @@ describe("lenient readers: nothing is dropped silently", () => {
 		});
 	}
 
+	it("refuses a JSON string that does not parse, saying where, instead of misreading it", () => {
+		// The real send from smoke run 0022: an acceptance item closed with `']"`.
+		const broken = String.raw`[{"title": "Fix slugify", "acceptance": ["returns 'hello-world', not 'hello-world-']", "start": true}, {"title": "Fix truncate", "depends": ["#1"]}]`;
+		const store = new TaskGraphStore();
+		const outcome = store.plan({ tasks: broken });
+		expect(outcome.changed).toBe(false);
+		expect(ids(store)).toEqual([]);
+		const text = outcome.lines.join("\n");
+		expect(text).toContain("string of JSON that does not parse");
+		expect(text).toContain("Send `tasks` as an array of objects");
+		const update = store.update({ updates: '[{"id": "T1", "status": "done"' });
+		expect(update.lines.join("\n")).toContain(
+			"Send `updates` as an array of objects",
+		);
+	});
+
 	it("reads subtasks as children of their item", () => {
 		const store = new TaskGraphStore();
 		store.plan({

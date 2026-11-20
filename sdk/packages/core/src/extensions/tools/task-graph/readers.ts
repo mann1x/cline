@@ -46,6 +46,37 @@ export interface ReadResult<T> {
 	ignored: string[];
 }
 
+/**
+ * Why a string that looks like JSON was not read as JSON, or undefined when
+ * it parses (or does not look like JSON at all).
+ *
+ * Not repaired: on a real send (smoke run 0022, an acceptance item closed
+ * with `']"`) jsonrepair turned the first task's acceptance into `"start"`,
+ * `": true"`, `"priority"` and dropped its fields -- and before this check the
+ * reader made one task titled with the whole string. Refusing with where it
+ * breaks costs one retry; a plan quietly read wrong costs the run.
+ */
+export function brokenJsonReason(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	if (!trimmed.startsWith("[") && !trimmed.startsWith("{")) return undefined;
+	try {
+		JSON.parse(trimmed);
+		return undefined;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		const at = /position (\d+)|column (\d+)|char(?:acter)? (\d+)/i.exec(
+			message,
+		);
+		const position = at ? Number(at[1] ?? at[2] ?? at[3]) : undefined;
+		const near =
+			position !== undefined
+				? ` near «${trimmed.slice(Math.max(0, position - 30), position + 10)}»`
+				: "";
+		return `it is a string of JSON that does not parse (${message.split("\n")[0]}${near})`;
+	}
+}
+
 /** A JSON string holding an array or object is read as that value. */
 function unwrapJson(value: unknown): unknown {
 	if (typeof value !== "string") return value;
@@ -234,6 +265,24 @@ const PLAN_KEYS = new Set([
  */
 export function readPlanInput(input: unknown): ReadResult<PlanItem> {
 	const ignored: string[] = [];
+	const broken =
+		brokenJsonReason(input) ??
+		(typeof input === "object" && input !== null
+			? brokenJsonReason(
+					(input as Record<string, unknown>).tasks ??
+						(input as Record<string, unknown>).plan ??
+						(input as Record<string, unknown>).items ??
+						(input as Record<string, unknown>).steps,
+				)
+			: undefined);
+	if (broken) {
+		return {
+			items: [],
+			ignored: [
+				`\`tasks\`, because ${broken}. Send \`tasks\` as an array of objects, not as a string`,
+			],
+		};
+	}
 	const record = unwrapJson(input);
 	let raw: unknown[];
 	if (typeof record === "object" && record !== null && !Array.isArray(record)) {
@@ -369,6 +418,23 @@ const UPDATE_KEYS = new Set([
  */
 export function readUpdateInput(input: unknown): ReadResult<UpdateItem> {
 	const ignored: string[] = [];
+	const broken =
+		brokenJsonReason(input) ??
+		(typeof input === "object" && input !== null
+			? brokenJsonReason(
+					(input as Record<string, unknown>).updates ??
+						(input as Record<string, unknown>).tasks ??
+						(input as Record<string, unknown>).items,
+				)
+			: undefined);
+	if (broken) {
+		return {
+			items: [],
+			ignored: [
+				`\`updates\`, because ${broken}. Send \`updates\` as an array of objects, not as a string`,
+			],
+		};
+	}
 	const record = unwrapJson(input);
 	let raw: unknown[];
 	if (typeof record === "object" && record !== null && !Array.isArray(record)) {
