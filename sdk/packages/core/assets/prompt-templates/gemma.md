@@ -155,6 +155,12 @@ Apply complex changes using a patch grammar. Use this for larger structural chan
 - **Output:** A single result listing which files were added, updated, moved, or deleted. If the patch fails to apply (usually due to context mismatch), the result explains why.
 {{DEFAULT}}
 
+# tool: restore_file
+{{DEFAULT}}
+
+# tool: task_progress
+{{DEFAULT}}
+
 # tool: ask_question
 Clarify requirements with the user.
 - **Arguments:** `question`: The query string. `options`: An array of 2-5 strings for the user to choose from.

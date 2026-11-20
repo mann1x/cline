@@ -230,6 +230,12 @@ The grammar is context-based, not line-number-based. Use context lines (prefixed
 
 - **Output**: A single text result describing the outcome of the entire patch. On success, it lists every file added, updated, moved, or deleted. On failure, it states that the patch did not apply, names the file where the match failed, and explains why (usually a context mismatch); in that case, re-read the file and rebuild the patch from the actual current content rather than resending the same text.
 
+# tool: restore_file
+{{DEFAULT}}
+
+# tool: task_progress
+{{DEFAULT}}
+
 # tool: ask_question
 Ask the user a clarifying question to gather information needed to proceed.
 

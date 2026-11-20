@@ -332,6 +332,12 @@ Hunks are located by context, never by line number, so don't write line numbers 
 
 Output: one result for the whole patch, listing the files it added, updated, moved or deleted. That list is your confirmation, so don't read those files back. If the patch did not apply, usually because its context lines no longer match the file, the result says it failed and why. Read the region as it is now and rebuild the patch from that. Resending the same text fails the same way. After it lands, call `check_file` on the files it touched before you make the next change.
 
+# tool: restore_file
+{{DEFAULT}}
+
+# tool: task_progress
+{{DEFAULT}}
+
 # tool: ask_question
 Ask only when an answer that only the user has would change what you build. Don't use it to confirm a choice you can make yourself, or to report progress. Their reply arrives as text — act on it in the same turn.
 

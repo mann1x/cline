@@ -149,6 +149,12 @@ One whole patch — context lines copied from the file, one line added:
 
 Output: one result covering the whole patch, saying which files were added, updated, moved or deleted. A patch that did not apply — almost always because its context lines no longer match the file — comes back failed and says why; re-read the file and rebuild the patch from what is actually there instead of resending.
 
+# tool: restore_file
+{{DEFAULT}}
+
+# tool: task_progress
+{{DEFAULT}}
+
 # tool: ask_question
 Ask when you need the answer to proceed — a decision only the user can make, a requirement only they know. Not for permission: if the sensible path is clear, take it.
 {{DEFAULT}}

@@ -219,6 +219,12 @@ Rules:
 
 Output: one result covering the whole patch, saying which files were added, updated, moved or deleted. A patch that did not apply — usually because its context lines no longer match the file — comes back failed and says why; re-read the file and rebuild the patch from what is actually there rather than resending it.
 
+# tool: restore_file
+{{DEFAULT}}
+
+# tool: task_progress
+{{DEFAULT}}
+
 # tool: ask_question
 {{DEFAULT}}
 

@@ -9,10 +9,12 @@ import {
 	YOLO_CLINE_SYSTEM_PROMPT,
 } from "@cline/shared";
 import { describe, expect, it } from "vitest";
+import { createSessionRevisions } from "../../runtime/atomic/session-revisions";
 import {
 	createApplyPatchTool,
 	createAskQuestionTool,
 	createAwkTool,
+	createDefaultTools,
 	createEditorTool,
 	createExtractDocumentTool,
 	createGrepTool,
@@ -22,9 +24,11 @@ import {
 	createShellTool,
 	createSkillsTool,
 	createSubmitAndExitTool,
+	createTaskProgressTool,
 	createWebFetchTool,
 } from "../tools/definitions";
 import { createListFilesTool } from "../tools/list-files";
+import { TaskProgressTracker } from "../tools/task-progress";
 import { createReadAgentReportTool } from "../tools/team/agent-reports";
 import { createAgentsStatusTool } from "../tools/team/agent-status";
 import { createLeadAgentTools } from "../tools/team/lead-agent-tools";
@@ -80,6 +84,8 @@ const LIVE_TOOLS = [
 	createAgentsStatusTool({ sessionId: "s" }),
 	...createLeadAgentTools({ sessionId: "s" }),
 	createListFilesTool({ cwd: "/workspace", createLister: {} as never }),
+	createTaskProgressTool(),
+	...createSessionRevisions({ root: "/workspace" }).tools,
 	...createAgentTeamsTools({
 		runtime: {} as never,
 		requesterId: "lead",
@@ -442,6 +448,61 @@ describe("shipped prompt templates", () => {
 				Object.keys(template.tools).sort(),
 				`${template.name} does not cover every tool`,
 			).toEqual([...SHIPPED_TOOL_NAMES].sort());
+		}
+	});
+
+	// LIVE_TOOLS is still a list someone keeps, and on 4.100.288 it lacked
+	// task_progress and restore_file: the runtime adds both outside the
+	// factories listed there, so every built-in template reached the model
+	// without a section for them (automaticum D157, mail #2353). These are the
+	// composers a session's tools actually come from, with every switch on, so
+	// a tool added to them fails here on the commit that adds it.
+	it("covers every tool the runtime composes for a session", () => {
+		const executors = {
+			readFile: stubExecutor,
+			search: stubExecutor,
+			bash: stubExecutor,
+			webFetch: stubExecutor,
+			editor: stubExecutor,
+			grep: stubExecutor,
+			sed: stubExecutor,
+			awk: stubExecutor,
+			extractDocument: stubExecutor,
+			applyPatch: stubExecutor,
+			skills: stubExecutor,
+			askQuestion: stubExecutor,
+			submit: stubExecutor,
+		};
+		const all = {
+			enableExtractDocument: true,
+			taskProgress: new TaskProgressTracker(),
+		};
+		const composed = [
+			...createDefaultTools({ executors, ...all, cwd: "/workspace" } as never),
+			// editor and apply_patch are offered one at a time.
+			...createDefaultTools({
+				executors,
+				...all,
+				enableEditor: false,
+				enableApplyPatch: true,
+				cwd: "/workspace",
+			} as never),
+			// submit_and_exit replaces ask_question when it is on.
+			...createDefaultTools({
+				executors,
+				...all,
+				enableSubmitAndExit: true,
+				cwd: "/workspace",
+			} as never),
+			...createSessionRevisions({ root: "/workspace" }).tools,
+		].map((tool) => tool.name);
+		expect(composed).toContain("task_progress");
+		expect(composed).toContain("restore_file");
+		for (const name of new Set(composed)) {
+			expect(
+				SHIPPED_TOOL_NAMES,
+				`${name} has no section in the shipped templates`,
+			).toContain(name);
 		}
 	});
 

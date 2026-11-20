@@ -169,6 +169,12 @@ Send the patch body directly. The legacy wrappers — `%%bash`, `apply_patch <<"
 
 Output: one result covering the whole patch, saying which files were added, updated, moved or deleted. A patch that did not apply — usually because its context lines no longer match the file — comes back failed and says why. Do not resend it: re-read the file and rebuild the patch from what is actually there.
 
+# tool: restore_file
+{{DEFAULT}}
+
+# tool: task_progress
+{{DEFAULT}}
+
 # tool: ask_question
 
 Ask the user a single question for clarifying or gathering information needed to complete the task — for example, a key implementation decision you cannot settle from the code. Provide an array of 2-5 options for the user to choose from. Never include an option to toggle to Act mode.

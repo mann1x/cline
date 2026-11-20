@@ -39,6 +39,7 @@ import {
 	createShellTool,
 	createSkillsTool,
 	createSubmitAndExitTool,
+	createTaskProgressTool,
 	createWebFetchTool,
 } from "../src/extensions/tools/definitions";
 import { createReadAgentReportTool } from "../src/extensions/tools/team/agent-reports";
@@ -46,6 +47,7 @@ import { createAgentsStatusTool } from "../src/extensions/tools/team/agent-statu
 import { createLeadAgentTools } from "../src/extensions/tools/team/lead-agent-tools";
 import { createSpawnAgentTool } from "../src/extensions/tools/team/spawn-agent-tool";
 import { createAgentTeamsTools } from "../src/extensions/tools/team/team-tools";
+import { createSessionRevisions } from "../src/runtime/atomic/session-revisions";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_PATH = join(
@@ -86,6 +88,10 @@ function liveTools(): { name: string; description?: string }[] {
 		createReadAgentReportTool(),
 		createAgentsStatusTool({ sessionId: "s" }),
 		...createLeadAgentTools({ sessionId: "s" }),
+		// Added by the runtime outside createDefaultTools, which is how both
+		// went without a section in every template until 4.100.289.
+		createTaskProgressTool(),
+		...createSessionRevisions({ root: "/workspace" }).tools,
 		...createAgentTeamsTools({
 			runtime: {} as never,
 			requesterId: "lead",

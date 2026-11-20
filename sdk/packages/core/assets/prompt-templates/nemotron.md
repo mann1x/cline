@@ -114,6 +114,12 @@ Output: one result for this one edit, named `edit:<path>` or `insert:<path>`, de
 Use `apply_patch` to modify files with a free‑form patch format. Supply the patch text as the `input` string. The preferred layout begins with `*** Begin Patch`, then one or more sections such as `*** Update File: path/to/file`, optionally followed by `@@` markers for context, lines preceded by `-` for removal, `+` for addition, and plain lines for surrounding context, ending with `*** End Patch`. Supported actions include adding a new file (every content line starts with `+`), updating an existing file, deleting a file, and moving a file (specify `*** Move to: <new path>` right after an update). In an update section, unchanged context lines help the tool locate the correct place to apply the change; line numbers are not used. If the patch cannot be applied because the context no longer matches the file, the result explains the failure and leaves the file untouched; you should refresh the file view and craft a new patch from the current content.
 Output: one result covering the whole patch, saying which files were added, updated, moved or deleted. A patch that did not apply — usually because its context lines no longer match the file — comes back failed and says why; re‑read the file and rebuild the patch from what is actually there rather than resending it.
 
+# tool: restore_file
+{{DEFAULT}}
+
+# tool: task_progress
+{{DEFAULT}}
+
 # tool: ask_question
 {{DEFAULT}}
 
