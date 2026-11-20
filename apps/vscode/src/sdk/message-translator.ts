@@ -4970,6 +4970,10 @@ function appendPersistedMetricsMessage(
 			cacheWrites: usage.cacheWrites,
 			cacheReads: usage.cacheReads,
 			cost: usage.totalCost,
+			// As the live row is stamped, so a reopened task names the server
+			// that answered each request rather than the format it replied in.
+			...(message.modelInfo?.provider ? { providerId: message.modelInfo.provider } : {}),
+			...(message.modelInfo?.id ? { modelId: message.modelInfo.id } : {}),
 			...(usage.reasoningTokens ? { reasoningTokens: usage.reasoningTokens } : {}),
 			...(usage.timings ? { timings: usage.timings } : {}),
 		} satisfies ClineApiReqInfo),

@@ -23,9 +23,9 @@ interface SamplingSectionProps {
 	/**
 	 * What the selected model itself sets, keyed by the engine's own spelling,
 	 * so a blank field can say which value it is leaving in force instead of
-	 * only that it is leaving one. Ollama answers this from `/api/show`; a
-	 * llama.cpp server does not report it, and the fields then read "model
-	 * default" as they always did.
+	 * only that it is leaving one. Ollama answers this from `/api/show`, a
+	 * llama.cpp or opencoti server from `/props`; a server that answers neither
+	 * leaves the fields reading "model default".
 	 */
 	modelParameters?: Record<string, string>
 	/** Offered only where the engine reads it. */
@@ -156,15 +156,19 @@ export const SamplingSection = ({
 
 	return (
 		<div className="flex flex-col gap-1">
+			{/* Styled as the Model Configuration header beside it (same size,
+			    weight, colour and 10px above and below): the small caption it
+			    used to be was easy to miss under a section header twice its size. */}
 			<button
 				aria-expanded={expanded}
-				className="flex items-center gap-1 bg-transparent border-0 p-0 cursor-pointer text-left text-foreground"
+				className="flex items-center bg-transparent border-0 p-0 cursor-pointer text-left text-description"
 				onClick={() => setExpanded((open) => !open)}
+				style={{ margin: "10px 0" }}
 				type="button">
-				<span className={`codicon codicon-chevron-${expanded ? "down" : "right"} text-xs`} />
-				<span className="text-xs font-medium uppercase tracking-wider">Advanced</span>
+				<span className={`codicon codicon-chevron-${expanded ? "down" : "right"}`} style={{ marginRight: "4px" }} />
+				<span className="font-bold uppercase">Advanced</span>
 				{count > 0 && (
-					<span className="text-xs text-description">
+					<span className="ml-1">
 						({count} sampling {count === 1 ? "parameter" : "parameters"} set)
 					</span>
 				)}

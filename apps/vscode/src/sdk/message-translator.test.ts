@@ -5931,6 +5931,30 @@ describe("tool display paths are relativized to the cwd", () => {
 		expect(parseTool(message.text).path).toBe("src/index.ts")
 	})
 
+	// A reopened opencoti task labelled every timing line "llama.cpp": the
+	// rebuilt request row carried no provider, so the label fell back to the
+	// format the timings came in.
+	it("stamps a reopened request row with the provider and model that answered it", () => {
+		const messages: SdkMessage[] = [
+			{ role: "user", content: '<user_input mode="act">hi</user_input>' } as SdkMessage,
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "Hello." }],
+				modelInfo: { id: "gemma-4-20b", provider: "opencoti" },
+				metrics: {
+					inputTokens: 16074,
+					outputTokens: 163,
+					timings: { engine: "llamacpp", promptTokens: 16074, promptMs: 3633, requestMs: 4717 },
+				},
+			} as SdkMessage,
+		]
+		const row = sdkMessagesToClineMessages(messages).find((m) => m.say === "api_req_started")
+		const info = JSON.parse(row?.text ?? "{}")
+		expect(info.providerId).toBe("opencoti")
+		expect(info.modelId).toBe("gemma-4-20b")
+		expect(info.timings.engine).toBe("llamacpp")
+	})
+
 	it("reconstructs hook status chips from injected hook context and keeps the completion retag", () => {
 		const messages: SdkMessage[] = [
 			{ role: "user", content: '<user_input mode="act">read the readme</user_input>' } as SdkMessage,

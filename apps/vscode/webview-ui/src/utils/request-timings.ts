@@ -164,8 +164,27 @@ const ENGINE_NAMES: Record<NonNullable<RequestTimings["engine"]>, string> = {
 	llamacpp: "llama.cpp",
 }
 
-export function engineName(timings: RequestTimings | undefined): string | undefined {
-	return timings?.engine ? ENGINE_NAMES[timings.engine] : undefined
+/**
+ * The servers that report timings in another engine's format, by provider id.
+ * `engine` says how the timings were parsed, not who answered: opencoti speaks
+ * llama.cpp's format and xOllama Ollama's, and naming the format there called
+ * an opencoti reply "llama.cpp" and an xOllama one "Ollama".
+ */
+const SERVER_NAMES: Record<string, string> = {
+	opencoti: "opencoti",
+	xollama: "xOllama",
+	ollama: "Ollama",
+}
+
+/**
+ * Who reported the timings: the provider the request went to when it is a
+ * server known by name, otherwise the engine whose format they came in.
+ */
+export function engineName(timings: RequestTimings | undefined, providerId?: string): string | undefined {
+	if (!timings?.engine) {
+		return undefined
+	}
+	return (providerId && SERVER_NAMES[providerId]) || ENGINE_NAMES[timings.engine]
 }
 
 /**
@@ -175,7 +194,7 @@ export function engineName(timings: RequestTimings | undefined): string | undefi
  * for every provider, and the engine's follow as the explanation. A row is
  * omitted rather than zeroed when its field is missing — see the module note.
  */
-export function timingRows(timings: RequestTimings | undefined, outputTokens?: number): TimingRow[] {
+export function timingRows(timings: RequestTimings | undefined, outputTokens?: number, providerId?: string): TimingRow[] {
 	if (!timings) {
 		return []
 	}
@@ -199,7 +218,7 @@ export function timingRows(timings: RequestTimings | undefined, outputTokens?: n
 		}
 	}
 
-	const name = engineName(timings)
+	const name = engineName(timings, providerId)
 	if (name) {
 		// The engine's own total sits next to Cerebriline's on purpose: the gap
 		// between them is time the request spent queued, which is invisible in

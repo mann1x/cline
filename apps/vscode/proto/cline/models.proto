@@ -103,6 +103,10 @@ service ModelsService {
   // `reasoning_effort` variable, read fresh from the configured llama.cpp or
   // opencoti server's /props. The value is the provider id.
   rpc readTemplateReasoningLevels(StringRequest) returns (TemplateReasoningLevels);
+  // What the configured llama.cpp or opencoti server applies to a sampler a
+  // request leaves out (/props default_generation_settings.params), for the
+  // placeholders of the sampling fields. Base URL from the stored config.
+  rpc readServerSamplingDefaults(ServerSamplingDefaultsRequest) returns (ServerSamplingDefaults);
   // Reads an Ollama endpoint's account and model catalog for display.
   //
   // Three reads: POST /api/me, which the local server signs with the host's own
@@ -1390,6 +1394,21 @@ message TemplateReasoningLevels {
   repeated string levels = 3;
   // The template's own default, when it states one.
   optional string default_level = 4;
+}
+
+message ServerSamplingDefaultsRequest {
+  string provider_id = 1;
+  // The selected model, for a llama-server in router mode; ignored by a
+  // server that loads one model.
+  optional string model_id = 2;
+}
+
+message ServerSamplingDefaults {
+  // The server answered.
+  bool reachable = 1;
+  // llama.cpp's own names (temperature, top_k, n_keep, ...), formatted for
+  // display: float32 noise dropped, the random seed as "random".
+  map<string, string> parameters = 2;
 }
 
 message OllamaModelParameters {

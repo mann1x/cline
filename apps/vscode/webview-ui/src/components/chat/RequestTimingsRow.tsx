@@ -44,14 +44,17 @@ export const RequestTimingsRow = memo<RequestTimingsRowProps>(({ message }) => {
 		}
 	}, [message.text])
 
-	const rows = useMemo(() => timingRows(info?.timings, info?.tokensOut), [info?.timings, info?.tokensOut])
+	const rows = useMemo(
+		() => timingRows(info?.timings, info?.tokensOut, info?.providerId),
+		[info?.timings, info?.tokensOut, info?.providerId],
+	)
 	const summary = useMemo(() => summarizeTimings(info?.timings, info?.tokensOut), [info?.timings, info?.tokensOut])
 
 	if (!showRequestTimings || !info?.timings || !summary) {
 		return null
 	}
 
-	const engine = engineName(info.timings)
+	const engine = engineName(info.timings, info.providerId)
 	const reasoningTokens = formatTokens(info.reasoningTokens)
 
 	return (

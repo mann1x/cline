@@ -5,6 +5,633 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.288] — 2026-11-20
+
+### Prompt templates
+
+- **Delete your own templates from Settings.** Each global or workspace
+  template in **Settings → Features → Prompt Templates** now has a trash
+  button. It asks Yes/No before deleting anything. When the file was a copy
+  overriding a built-in template (pressing **Edit** on a built-in makes such
+  a copy), the prompt says the built-in applies again once it is deleted.
+  Until now such a copy had to be found and deleted by hand, and it went on
+  overriding every later improvement to the built-in. On one test machine, a
+  `qwen.md` copied in September was missing the 20 tools added since.
+  Built-in templates cannot be deleted. The extension also refuses any path
+  that is not a `.md` file directly inside the global or the workspace
+  template directory, including one reached through a symbolic link.
+
+- **Switch a prompt template off.** Each template in **Settings → Features →
+  Prompt Templates** now has an **On** checkbox, except `default`, which every
+  other template is layered on. Untick it and the models that template
+  claimed fall back to the next template that claims them, and in the end to
+  `default`. The switch works by name: turning `qwen` off covers the built-in
+  `qwen` and any copy of it in your global or workspace templates. To get a
+  built-in back from under your own copy, delete the copy with the trash
+  button instead.
+
+  The setting lives in Cerebriline's global settings rather than VS Code's,
+  so the CLI and anything built on the SDK leave out the same templates. It
+  applies from the next task; a running one keeps the template it started
+  with. **Generate** follows it too: a template you switched off is no longer
+  the starting point for a new one.
+
+### Tool calls
+
+- **A swallowed `start_line` is caught again, also when the text runs into a
+  list.** Some Gemma 4 fine-tunes close `new_text` with a backtick, and the
+  server's repair then folds every argument written after it into the end of
+  the text. 4.100.279 refuses that call and tells the model which arguments
+  were lost. It missed a variant where the text stops just inside the next
+  argument, as in `` `,start_line:90,task_progress:[' ``. The editor then
+  answered that the call had no `start_line`, and the model, which had written
+  one, resent the same call four times. Once, `end_line` was lost as well and
+  the call read as a replacement of the whole file; only the read check
+  stopped it. The refusal now covers this form too and names the argument the
+  text stopped inside. Across 19,590 archived editor calls this adds 46
+  refusals, all of them broken calls, and keeps every earlier one.
+
+- **`sed` says why a line came out twice.** Without `quiet`, sed prints every
+  line of the file, and a `p` command prints its lines once more. So `90p`
+  answers with the whole file and line 90 twice, exactly as the system `sed`
+  does. Models write `90p` to look at one line, and with nothing to explain
+  the double, one read it as a duplicate line in the file and rewrote a whole
+  class to remove it. That's five sessions in the archive, every one of them
+  `90p`. The output is unchanged, and the result now carries a note: which
+  lines appear twice, that the file has them once, and to use
+  `quiet: true` (`sed -n`) or `read_files` to see only those lines. The tool's
+  description says the same up front.
+
+- **A `sed`, `grep` or `awk` card shows its command line.** It was folded into
+  a closed box under the file name, so a card showed the result but not the
+  script that made it, nor whether `-n` was set. The card now shows the
+  command as it would be typed, flags included: `sed -n 90p`, `sed -i -E …`.
+
+- **A read card shows the lines that were read.** A model sometimes writes
+  `end_line` beside the file list instead of on the file:
+  `{end_line: 490, files: [{path, start_line: 460}]}`. The tool reads 460-490,
+  but the card said "lines 460+", as if it had read to the end of the file.
+  So when the editor then refused an edit of 460-522, because 491-522 had
+  never been read, the refusal looked wrong while it was right. The card now
+  reads the call with the tool's own parser.
+
+- **An edit no longer throws away what the model has read.** An edit that
+  changed a file's line count used to drop every earlier read of that file,
+  even of lines far from the edit, so the next edit anywhere was refused until
+  the model read again. That was 579 refusals across the session archive: the
+  largest single cause of "read before editing" retries. Reads now move with
+  the lines. Reads above the edit stay, reads below it shift by the change in
+  length, and the lines the model just wrote count as read. `sed -i` and
+  `apply_patch` move reads the same way but don't credit the lines they wrote,
+  since the model never saw their result. A write from a command or from
+  outside the session still drops the reads, because nothing records where it
+  changed the file.
+
+- **A refusal for unread lines says which lines were read.** When the reads
+  reached only part of an edit, the refusal blamed "an edit that changed the
+  file's length", even when there had been none. It now names the lines the
+  reads cover, for example "your reads cover only lines 460-490 of the lines
+  460-522 you edit", so the model reads just the gap.
+
+### Settings
+
+- **opencoti and llama.cpp show the values a blank sampling field leaves in
+  force.** The fields under **Advanced** used to read "model default" on these
+  providers, while Ollama's form showed the model's own values. Cerebriline
+  now reads the server's `/props` and shows, in grey, what it applies to a
+  request that leaves the field out: temperature 0.8, top_k 64, top_p 0.95
+  and so on, after the server's start flags and the model's own metadata. A
+  random seed reads "random". A server without `/props` (vLLM, a hosted API)
+  is not asked, and its fields keep reading "model default".
+- **The Advanced header is as easy to see as Model Configuration.** It had
+  been a small caption beneath a section header twice its size. It now uses
+  the same size, weight and colour, with the same space above and below.
+
+### Chat
+
+- **The timing line names the server that answered.** Under each request,
+  the line ended with "llama.cpp" for an opencoti reply and "Ollama" for an
+  xOllama one: it named the format the timings arrived in rather than the
+  server. It now says "opencoti" and "xOllama", and so does "reported by …"
+  in the expanded rows. A generic OpenAI-compatible server still reads
+  "llama.cpp". Reopened tasks get the same label, because the request rows
+  rebuilt from history now carry the provider and model that answered.
+
+## [4.100.283] — 2026-11-14
+
+### Security
+
+- **OpenTelemetry updated past the baggage advisory.** `@opentelemetry/core`
+  below 2.8.0 parses an incoming W3C `baggage` header with no limit on its
+  size or number of entries (GHSA-8988-4f7v-96qf, "Unbounded memory
+  allocation in W3C Baggage propagation"). The extension bundled four copies
+  of it, three of them on the old 1.x line that its own telemetry still used,
+  and the SDK packages on npm pulled in 2.6.1. Both now use the 2.12.0 line:
+  one copy for the whole tree, which counts entries and total size while it
+  parses. The extension's telemetry moved from the 1.x API to 2.x with it.
+- **`@ai-sdk/provider-utils` 5.0.0 is gone** (GHSA-866g-f22w-33x8,
+  "Uncontrolled Resource Consumption"). It came in through Langfuse's AI SDK
+  integration, which pinned an old `@ai-sdk/otel`; that integration now
+  matches the other Langfuse packages at 5.10.1 and uses the one already in
+  the tree.
+
+### Telemetry
+
+- **OTLP headers now reach a gRPC collector.** With the protocol set to
+  `grpc`, the OTLP headers set in Cerebriline's telemetry settings or in
+  `CLINE_OTEL_EXPORTER_OTLP_HEADERS` (an authorization header, for example)
+  were dropped by the exporter with only a warning in its own log, so a
+  collector that required them refused the exports. They are now sent as
+  gRPC metadata, which is what OTLP headers mean over gRPC; where the
+  standard `OTEL_EXPORTER_OTLP_HEADERS` sets the same header, the configured
+  one wins and it is not sent twice. HTTP exporters sent them already and
+  are unchanged.
+
+## [4.100.282] — 2026-11-14
+
+### Chat panel
+
+- **Thinking with code in it fits the panel again.** A thinking block that
+  quoted a long line of code, a fenced block or a numbered listing, took
+  that line's width as its own, so every paragraph in it, not only the code,
+  ran off the right edge of the panel and could not be read. The block now
+  stays as wide as the panel: prose wraps, and only the code scrolls
+  sideways inside its own box.
+
+### Tools
+
+- **The editor says when an edit gave a JavaScript class a second method of
+  a name it already had.** A model meaning to rewrite one method sent the
+  edit to the line above, which held another: that method was gone, the
+  class now had two of the one it meant, and JavaScript runs only the last
+  of them, so the rewrite never ran. Nothing reported it, since it is valid
+  JavaScript. The edit result now names both lines and which one runs.
+  It is a note, never a refusal, and it only states what it has proved:
+  the engine itself confirms both are methods of the same class, the line
+  is one this call wrote, and the lines it replaced did not hold the name.
+  When any of that cannot be proved it says nothing. Replayed over 7,853
+  edits from past sessions it spoke 33 times, and TypeScript's own parser
+  confirmed every one. JavaScript files and the scripts in HTML pages only:
+  TypeScript and Python already report this themselves.
+- **A call whose string was closed with a backtick is now refused for
+  what it is.** Gemma 4 models sometimes close a string argument with a
+  backtick instead of its delimiter. Ollama's parser then closes the string
+  at the end of the call, so `start_line: 337`, which the model did write,
+  arrived as the last characters of `new_text`. The editor said, truthfully,
+  that the call had no `start_line`; the model, which had written one, sent
+  the same call again, five times in a row. Such a call is now refused before
+  it runs, with the tail quoted and the argument it swallowed named. Across
+  past sessions this shape is 104 of 19,023 editor calls, and before the
+  editor refused an `end_line` without a `start_line`, 21 of them replaced a
+  whole file with one line. Checked against all 19,023: every refusal is one
+  of those calls.
+- **An edit that quotes text the file holds is no longer refused for want
+  of a read.** The read check exists to make sure an edit is not built on
+  text the model has not seen; an `old_text` that is in the file right now
+  shows it has. Such an edit now goes through even when the file was never
+  read, or changed since it was read, and the replacement still changes only
+  the text it matched. A line-range edit, which carries no text to prove
+  anything, still needs the read.
+- **Reading a file's original counts as reading it when nothing has changed
+  it.** A model that read `revision: "original"` before editing anything was
+  shown the file exactly as it stood, and its next edit was refused as "not
+  read in this session". It then read the same way again and was refused
+  again. A revision identical to the file on disk is now read as the file and
+  counts; the refusal no longer says "not read" when a different revision was.
+- **The panel no longer shows a loop warning the model was not given.**
+  A repeated call that succeeds gets no warning, by design, but the panel
+  still said "warning it to change approach", for example for the full read
+  straight after `restore_file`, which that tool's own result asks for. The
+  notice now appears only when the warning reaches the model, and the same
+  goes for the "last warning" before a run is stopped.
+- **A repeated call that succeeds is no longer counted as a mistake, but
+  an edit going round in circles still is.** The loop guard judges a repeat
+  before it runs, and until now a "last warning" recorded a mistake, and the
+  next repeat stopped the run, before the result came back, even when that
+  call then worked. Both now wait for the result. A repeat that fails is
+  treated as before, and one that succeeds records nothing and stops nothing.
+  The exception is an edit that lands on the same text with the same result
+  for the third time: something keeps putting that text back, a restore or
+  another edit undoing it, and the edit goes back on top. That edit is warned
+  on its third, fourth and fifth landing, given a last warning on the sixth
+  and stopped on the seventh, as before. An edit whose result differs, even
+  slightly, is progress and is not counted. Replayed over 3,762 past
+  sessions: 44 reach a third identical landing and 12 a sixth, and every one
+  is an edit undone in between or a write that changed nothing. The warning
+  text no longer makes the next identical answer look new: it was counted as
+  part of the answer, which broke the very cycle it was warning about.
+- **A line edit after `restore_file` is no longer refused for lines the model
+  read.** The model read lines 150 to the end, made an edit, restored the file
+  to the version it had read, and its next edit of lines 159-166 was refused
+  as "either it was never read, or an earlier edit changed the file's length".
+  Neither was true. When the file is byte-for-byte what it was when those
+  lines were read, the reads count again. Lines it never read are still
+  refused, and so is any file that is not identical.
+- **The repeat warning counts the failure it is attached to.** It said a call
+  "has now failed 1 time" on the second identical failure.
+- **Every tool's row shows what the tool answered.** Rows for `check_file`,
+  `run_check`, `ask_lsp`, `grep`, `sed`, `awk`, `browser`, `restore_file`,
+  the Library tools and the rest named the tool and the file and nothing of
+  the result, so there was no way to see what the model saw before its next
+  move. Like an edit's card, such a row now carries a collapsed **Result**
+  line with the first line of the answer and its length: what a check
+  found, the matches a search found, what a command printed. Expand it to
+  read the whole answer, or copy it. A failed call says **Failed** in red,
+  with the tool's own words. It is kept when the task is reopened. Only
+  text is shown: a screenshot or a generated image is left out rather than
+  printed as code, and answers over 20,000 characters are shortened on the
+  row. Rows that already show their content (edits, reads, file lists, web
+  results, agents, MCP tools) are unchanged.
+
+## [4.100.277] — 2026-11-12
+
+### opencoti
+
+- **Booking off no longer shrinks the conversation until it cannot run.**
+  With "Book a context window" off, opencoti books each request its own
+  peak (the prompt minus the shared prefix, plus the reply's room) and
+  reports that peak in its window header. Cerebriline took it as the window
+  the conversation had been granted, and sized the next request's reply
+  room and the compaction point against it. Because the peak leaves out the
+  shared prefix, every turn's "window" came out about one prefix smaller
+  than the last: 262,144, then 96,461, 69,895, 44,289, 17,772 tokens in
+  five turns. The context bar then read "Granted 22.5k of 128.0k", replies
+  were capped at a few thousand tokens, and compaction kept trying to fit a
+  38k conversation into 22.5k. Without a booking, only the configured
+  window counts now. The same applies to an agent running outside its
+  pool without a window of its own.
+- **A conversation from 4.100.276 does not bring that figure back.**
+  Reopening one no longer restores a recorded "grant" that answered no
+  request for a window. With booking on, such a figure would have become
+  the exact window the conversation asks for.
+
+### Tools
+
+- **`transform_image` works again in the released builds.** The page that
+  resizes, crops or converts an image ran a copy of the planning function
+  and then called it by its source name. The minified builds rename the
+  function, so the page threw "planTransform is not defined", nothing was
+  drawn, and every call reported a valid image as "could not be read".
+  Icon files (`.ico`, `.icns`) went through the same page. The function is
+  now bound to its name in the page, and a test runs the page's script as
+  a minified build leaves it.
+
+### SDK and CLI
+
+- **One copy of the language-server, diagnostics and Chrome host code, in
+  `@cerebriline/core`.** A host without VS Code (the CLI, automaticum's
+  runner) can now take all of it from the SDK instead of keeping its own:
+  - `createLspHost`: the language servers behind `ask_lsp`, `check_file`
+    and the post-edit report, with injectable server specs (command,
+    arguments, languages, settings, environment, install probe). Defaults
+    cover TypeScript/JavaScript, HTML, CSS/SCSS/Less, JSON, Python, shell,
+    Go, Rust, C/C++ (clangd, without a background index) and C#
+    (csharp-ls).
+  - `createDiagnosticsCheckFileTool` and `createEditorDiagnosticsHooks`:
+    the extension's `check_file` and its "problems this edit introduced"
+    report, reading diagnostics from any source. The extension now runs
+    these same functions.
+  - `createChromeBrowserDriver` and `createChromeRenderDriver`: Chrome for
+    `browser`, `render_image` and `transform_image`, with the Chrome path,
+    its arguments and the Mermaid script given by the host.
+- **The CLI's language-server client was wrong in four ways, now fixed:**
+  - It took the server's own requests for answers to its requests. They
+    went unanswered, and one that shared an id with a pending request
+    resolved that request with nothing.
+  - Asked for settings, it answered nothing. The CSS validator then
+    crashed, and since the HTML server checks a page's `<style>` through
+    it, a page whose script did not parse reported no problems at all.
+    Servers now get the settings VS Code gives them.
+  - A file that changed was opened a second time instead of being sent as
+    a change. Servers ignore a second open, so after an edit they answered
+    about the old text.
+  - It found a symbol by its first mention in the text, while the extension
+    looks for its declaration first. The same `ask_lsp` question could
+    land on a different line on each host. Both now look for the
+    declaration first.
+- **The CLI's browser reports a page the way the extension does.** It uses
+  the same headless mode, user agent and waits, and the same console text
+  for an error or a timeout.
+- **The HTML language server's missing TypeScript libraries are reported.**
+  vscode-langservers-extracted 4.10.0 looks for them one folder too deep,
+  so without them a page's script is checked without types. The server's
+  status now says so, and `repairHtmlServerTypescript` links them in when
+  asked.
+
+### Dependencies
+
+- simple-git 3.36.0 → 4.0.2. 3.36.0 has open advisories, including a
+  critical one that let a git configuration run commands.
+- zod → 4.6.7, for an advisory where validating an oversized collection
+  could exhaust memory.
+- `dify-ai-provider` is now an optional add-on to `@cerebriline/llms`. It
+  pulled in an old undici with about twenty advisories for every install,
+  whether or not Dify was used. To use the Dify provider from the SDK,
+  install `dify-ai-provider` alongside it. The extension still includes it.
+
+## [4.100.276] — 2026-11-08
+
+### Agent tools
+
+- **A failed edit no longer withdraws a reminder another edit earned.** When
+  two parallel edits to the same file ran and one failed, the failed one
+  withdrew the "you just changed this file" reminder by matching its text,
+  and the edit that did land had queued the same words. The reminder now
+  remembers which calls queued it, and is withdrawn only when none of them
+  landed.
+- **Memory no longer refuses a correction as a duplicate.** A new note was
+  compared with the existing ones by the letters they share, so "the build
+  cache is enabled" and "the build cache is not enabled" counted as nearly
+  the same, and the correction was not kept. Two notes that differ in a
+  negation are never duplicates now, neither when a note is remembered nor
+  when notes are merged. When a note is refused, the reply says the match is
+  of wording, not of meaning.
+- **QA credentials:** values printed hex-encoded are masked too, joining
+  as written, URL-encoded, JSON-escaped and base64. The tool description no
+  longer says the values are "never shown". It says which forms are masked,
+  and that a value a command splits, re-cases or otherwise transforms is not
+  recognised.
+
+### Agents and the Library
+
+- **The agent status no longer promises a compaction.** An agent at its KV
+  compaction threshold was shown as "it compacts on its own at its next
+  turn". The figure is the last server reading, and the agent's own check
+  decides on a fresh one at its next turn, so the line now says it compacts
+  then if the server's figure still says so.
+- **The Library's problem check says what it checked.** With nothing found
+  it answered "Nothing is wrong with the Library." It now says no known
+  problem was found, and that it checked sources, files, indexing and
+  shelves, not whether the books' content is right.
+
+## [4.100.275] — 2026-11-08
+
+### Agent tools
+
+- **The bracket scan no longer offers an edit the parser has not accepted.**
+  The scan appended to editor, `check_file`, browser and command results
+  offered a ready-made `editor` call labelled "checked", but "checked" only
+  meant a bracket count balanced afterwards. On a real page it told the model
+  to delete a class's own, correct closing brace, while the real spare brace
+  two lines above dropped out of the report and the parse error stayed. Every
+  offered edit is now applied in memory and parsed. It is offered only when
+  the script then parses, or the parser stops later than before. The line the
+  parser stops on always leads the report, as the parser's own answer. A count
+  line after that point is marked as possibly correct code. TypeScript, CSS,
+  JSONC and module scripts, which nothing here parses, get no edit.
+- **A valid ES module is no longer reported as a syntax error.** The syntax
+  check parsed every `.js` file as a classic script. It called `import` /
+  `export`, top-level `await` and a `#!` line errors, and `ask_lsp`, the
+  browser tool and the page check repeated that. Module code is now reported
+  as not checked rather than as broken.
+- **The command-output banner** no longer says that the checker's report is
+  "the measurement" and that a count of the model's own is wrong. It says
+  which part is the parser's answer and which part is a bracket count.
+
+### Change protocol
+
+- **A rollback no longer deletes a file that existed before the
+  transaction.** Files too large or too many for the snapshot to hold were
+  taken for files the transaction had created. If the transaction shrank one
+  under the size limit, or deleted other files so it fit under the file cap,
+  the rollback deleted it. Such files are now left alone, and the verdict
+  names any it could not put back instead of saying every file is back as it
+  was.
+- **The built-in page check runs pages the way a browser does.** It failed
+  working games:
+  - a game started from `window.onload`, a `load` listener or
+    `DOMContentLoaded`;
+  - a game whose loop is `setInterval`;
+  - a page with a JSON or template `<script>` block.
+  A page made of ES modules, which the check cannot run, is now reported as
+  "nothing was verified" rather than as a page that did not run.
+- **A failed check is said to have measured an unparseable file only when a
+  parser refused it.** It used to say so whenever the bracket count found
+  something, including about TypeScript and about files that ran.
+- **`restore_file` counts repeated no-op restores per file, and only while
+  nothing has written to the file.** After three no-op restores of any files,
+  a fourth was told "your edits are not landing" and that the file had not
+  changed in between. That could be false about a file whose edit had landed
+  and been undone.
+
+### Loop guard
+
+- **A repeated call is judged afresh once a file it names has changed.** A
+  call that kept failing was told "the arguments have not changed, so neither
+  will the result", and the run could be stopped on it. That held even after
+  a shell command, a rollback or the user had changed the file so the call
+  would now work.
+- **`restore_file` with `last` steps back past a restore** instead of undoing
+  it, and outside a transaction it no longer promises a rollback.
+
+### Editor and apply_patch
+
+- **A range edit whose `old_text` is one line of the range** no longer
+  duplicates the rest of the range or calls the line numbers stale, and a
+  fragment anchor no longer splices a multi-line edit into the middle of a
+  line.
+- **`apply_patch` no longer matches a hunk by similarity.** A hunk whose
+  context was wrong deleted a real line and reported "fuzz factor 1000"; a
+  removed line must now match, and every path is checked before anything is
+  written. A partial write says which files were written.
+- **Edits are only allowed on lines the model was shown.** A grep with no
+  match, or a read-only sed or awk, recorded a read of the whole file.
+- The duplication guard no longer refuses a fix that adds missing closing
+  braces, and the first-difference hint names the line that differs.
+
+### Reading, searching, commands
+
+- **`read_files` counts lines the way every other tool does** (a lone CR does
+  not end one), decodes UTF-16 with a byte-order mark, refuses binary files,
+  notes invalid UTF-8, and no longer says "shown in full" when a line was cut.
+- **`search_codebase`** reports ripgrep's errors and timeouts instead of
+  falling back silently to a narrow search, gives columns in characters, and
+  its description says matching ignores case.
+- **`grep` and `sed`** follow GNU's rules: `$HOME` in a basic pattern, `-w
+  @Override`, a range whose end is before its start, `0,/re/`, `a\` with
+  indentation and `\U`/`\L` in replacements. "No match" names what was not
+  searched (missing paths, binaries, skipped directories, symlinks).
+- **`awk`** formats `%g`, `%e` and `%x` like C, compares strings and numbers as
+  POSIX says, honours `RS=""`, and accepts `print ($1 > 2)`.
+- **`run_commands`** keeps the output of a command that timed out, stops it,
+  runs pipelines with `pipefail`, and reports changed files after a failed
+  command too. A deletion is reported as a deletion; a `touch` that left the
+  content alone is not reported. Under PowerShell a native exit code is kept.
+  A detached command's later writes are reported at the end of its log.
+- **The plan-mode guard** catches `\rm`, `eval`, `exec`, `sudo -u`, `>|`,
+  here-docs and nested shells, and no longer refuses commands that write only
+  to `/tmp` or `/dev`, `git clean -n` or `--dry-run`.
+- **A timed-out `editor`, `apply_patch` or in-place `sed` call** says it may
+  have written its changes, instead of "failed".
+
+### Documents and the web
+
+- **`list_files`** lists excluded directories and symlinks (with their
+  targets) instead of hiding them, and a pattern that names an excluded
+  directory searches it.
+- **`fetch_web_content`** decodes entities once and in full, keeps `<pre>`,
+  decodes by the page's charset, does not show a PDF or an image as text,
+  tells a cancel from a timeout, and no longer claims to have applied the
+  prompt: the page's text comes back with it.
+- **`extract_document`**: a scan inside a form object or drawn as tiles is
+  recognized; a captioned photo is not said to have "no text layer"; a
+  password-protected .docx/.xlsx/.pptx asks for its password; PPT and XLS
+  honour a slide or sheet range; ebook contents give each entry's chapter; a
+  JPEG 2000 is named as one; a killed reader is not called out of memory
+  unless it says so; a pipe or a permission error is not "No file".
+
+### Agents, sdd, jev and the rest
+
+- **sdd**: a failed acceptance check, however it is spelled, keeps the slice
+  open; a check that needs a person leaves its requirements active; task
+  evidence that reports failures does not close the task.
+- **jev** says when it read only part of a long context.
+- **Delegated agents**: exit 127 is the environment's only when the check's
+  own program was not found; the round summary counts failed and unrun
+  checks; a transport timeout is an error, not a cancel; a quota refusal is
+  not "queued, wait"; a long compaction is not called progress.
+- **task_progress** reads numbered and `*` checklists, and awk or a sed
+  preview no longer count as file changes.
+- **Model routing**: only OpenAI's own models trade `editor` for
+  `apply_patch` (not GPTQ quantisations or gpt-oss), and descriptions that
+  name `editor` say when it is not offered.
+- **Media tools** tell a timeout, a cancel, a file that could not be saved
+  and an unreachable endpoint apart.
+- **QA credentials** are masked when printed URL-encoded, JSON-escaped, in
+  base64 or inside an HTTP Basic header.
+
+## [4.100.274] — 2026-11-05
+
+### Agent tools
+
+- **`sed`, `awk`, `grep` and `search_codebase` no longer read a binary or a
+  very large file whole.** They read each file into memory in one piece and
+  never looked first, so an agent that ran `sed` with `1,10p` on a 150 MB
+  compiled program ran the process out of memory and ended the session. They
+  now check the file first: one larger than 100 MB (the limit `read_files`
+  already had) or one that is binary is refused with a tool error saying why
+  and what to use instead. `sed` and `awk` report it for that file and still
+  run the others; `grep` names a file that is too large and passes a binary by
+  as before; `search_codebase` skips both.
+
+## [4.100.273] — 2026-11-04
+
+### Start-up
+
+- **A start-up that fails or stalls now says so in the Cerebriline view.**
+  Until the extension finished starting, VS Code showed the view as a blank
+  panel with a spinner, and kept showing it if start-up threw or never
+  finished, with no error anywhere in sight (#112). The view now says
+  "starting" at once; after 20 seconds it names the step it is waiting on, and
+  if start-up fails it shows the error. Both show where the logs are and a
+  **Reload Window** button.
+
+### MCP sign-in
+
+- **An MCP server signed in with the wrong account can now be changed.**
+  Authenticate was answered by the stored sign-in whenever it still worked, so
+  no browser opened, and a browser that did open signed in again with
+  whichever account it already had a session for. The only way out was to
+  wait about a day for the sign-in to expire. Each OAuth server now has
+  **Use another account**, which forgets the sign-in and asks the provider to
+  let you choose the account, and **Sign out**, which also asks the server to
+  revoke it where the server supports that. Both are under **Account** in the
+  server's settings and next to **Authenticate** when sign-in fails. The CLI's
+  `cline mcp` has both as well.
+
+## [4.100.272] — 2026-11-01
+
+### Sound effects
+
+- **`generate_sound_effect` makes a sound from a description and saves it in
+  the workspace:** a button click, a notification, a game event. It is set up
+  under **Offer sound effects** on the Audio tab, needs a model made for this
+  (`mannix/stable-audio:3-small-sfx-q8_0` on xOllama), and works in the plugin
+  and the CLI (`soundEffects` in a `--media-config` file). Leave its endpoint
+  empty to use the text-to-speech server. It needs xOllama v0.40.13-xollama.1 or later, or opencoti; older servers refuse it.
+
+### Media tools on a busy server
+
+- **A media request waiting its turn on xOllama is no longer abandoned.**
+  xOllama can hold a request in its queue for 10 minutes, but images, image
+  edits and icons gave up after 3 and speech after 5, and reported that they
+  were stopped. Each tool now allows for that wait on top of its working time,
+  so a stuck server can also take that much longer to fail. The stop button
+  still ends a call at once.
+
+## [4.100.271] — 2026-11-01
+
+### Media, embedding and scraping endpoints
+
+- **Pasting a full route into a Base URL now works.** The settings say
+  Cerebriline calls `POST <endpoint>/audio/speech`, so
+  `http://host:22434/v1/audio/speech` is a natural thing to paste, and it
+  failed: the route was added a second time, and the check on the server read
+  under it, so a working server showed as "not answering". The route is now
+  taken off for images, image edits, speech, transcription, video, embeddings,
+  reranking and scraping, with or without the `/v1`.
+- **A typed `host:port` works for the media tools.** Without `http://` the
+  settings could find the server and the tool's own request still failed.
+- **A server that answers is no longer called "not answering".** An address
+  that replies but isn't a media endpoint now says so and suggests the server's
+  address, and a rejected API key says to check the key. The tool is still
+  offered in both cases.
+
+## [4.100.270] — 2026-10-31
+
+### Delegating to an agent
+
+- **`/delegate` and `/delegate-background` complete the agent's name, in the
+  plugin and the CLI.** After the command, a menu lists your agents with their
+  descriptions and narrows as you type; Tab or Enter fills in the name and the
+  task goes after it. It also works before the first message of a chat, from
+  the agent files a new session would load. In the CLI, choosing `/delegate`
+  from the command list now puts it in the input and opens this menu, instead
+  of only printing how to use it.
+
+## [4.100.269] — 2026-10-29
+
+### Stopping a task
+
+- **Stopping a task before an Ollama model has answered once stops it at
+  once.** The first time a task uses a model, Cerebriline asks the server a
+  few short questions before the first turn: the model's settings
+  (`/api/show`), and whether it gives back earlier thinking (two tiny
+  `/api/chat` calls; opencoti's `/apply-template`). The stop did not reach
+  them, so a busy or stuck server that took those calls and never answered
+  kept the task running with no way out: the stop was accepted and nothing
+  happened, from the plugin and from the SDK alike. They now end when the
+  task is stopped, and a question cut short is asked again next time rather
+  than remembered as "no answer". When several tasks are waiting on the same
+  question, stopping one leaves the others waiting; the request is withdrawn
+  from the server once nobody is waiting on it.
+- **A stuck server no longer holds a task's start.** The model's settings,
+  the account and catalog reads and xOllama's feature check now give up after
+  30 seconds and carry on with the defaults, as they already did for a server
+  that is down.
+
+## [4.100.268] — 2026-10-29
+
+### Stopping a task
+
+- **Stopping a task while thinking is being condensed stops it at once.**
+  When a turn's thinking reaches its budget, Cerebriline asks the model for a
+  note that replaces it, and when a turn is cut off at the output limit it
+  asks for a note and a retrospective of the reasoning it is discarding.
+  Those requests did not hear the stop: the task kept running until they
+  finished, which could take several minutes, and a run stopped from the SDK
+  never ended as cancelled. The same was true of a compaction's summary,
+  retrospective and review requests. All of them now end when the task is
+  stopped.
+- **A note interrupted by a stop is written again on the next run.** It used
+  to be kept as "nothing to say", so the reasoning was never condensed, even
+  after the task was resumed.
+- **A note that starts repeating itself stops early.** A small model asked to
+  condense its reasoning can fall into writing the same line over and over;
+  that note was always thrown away, but only after it had run to its whole
+  output limit (51,000 tokens in eight minutes, measured). It now stops as
+  soon as it repeats itself, or once it passes the length it would be cut to.
+
 ## [4.100.267] — 2026-10-25
 
 ### Remote development

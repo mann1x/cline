@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { formatDuration, formatRate, prefillRate, summarizeTimings, timingRows } from "./request-timings"
+import { engineName, formatDuration, formatRate, prefillRate, summarizeTimings, timingRows } from "./request-timings"
 
 describe("formatDuration", () => {
 	it("picks the unit the number reads best in", () => {
@@ -180,5 +180,26 @@ describe("prefillRate", () => {
 			}),
 		).toBe(4_012.6)
 		expect(prefillRate(undefined)).toBeUndefined()
+	})
+})
+
+describe("engineName", () => {
+	// Reported: an opencoti reply's timing line said "llama.cpp" and an xOllama
+	// one "Ollama" -- the format the timings were parsed from, not the server.
+	it("names the server that answered, not the format it answered in", () => {
+		expect(engineName({ engine: "llamacpp" }, "opencoti")).toBe("opencoti")
+		expect(engineName({ engine: "ollama" }, "xollama")).toBe("xOllama")
+		expect(engineName({ engine: "ollama" }, "ollama")).toBe("Ollama")
+	})
+
+	it("falls back to the format for a generic provider or none", () => {
+		expect(engineName({ engine: "llamacpp" }, "openai-compatible")).toBe("llama.cpp")
+		expect(engineName({ engine: "llamacpp" })).toBe("llama.cpp")
+		expect(engineName({}, "opencoti")).toBeUndefined()
+	})
+
+	it("says who reported the engine total in the expanded rows", () => {
+		const rows = timingRows({ engine: "llamacpp", engineTotalMs: 4443, requestMs: 4717 }, 163, "opencoti")
+		expect(rows.find((row) => row.label === "Engine total")?.note).toBe("reported by opencoti")
 	})
 })

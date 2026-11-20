@@ -21,6 +21,7 @@ import { DropdownContainer } from "../common/ModelSelector"
 import { RequestTimingsToggle } from "../common/RequestTimingsToggle"
 import { SamplingSection } from "../common/SamplingSection"
 import { ThinkingBudgetField } from "../common/ThinkingBudgetField"
+import { useServerSamplingDefaults } from "../common/useServerSamplingDefaults"
 import { useApiConfigurationScope } from "../utils/ApiConfigurationScopeContext"
 import { useApiConfigurationHandlers } from "../utils/useApiConfigurationHandlers"
 import { useProviderApiKeyField } from "../utils/useProviderApiKeyField"
@@ -96,6 +97,8 @@ export const OpenAICompatibleProvider = ({
 	// resolved ModelInfo satisfies it structurally.
 	const openAiModelInfo: OpenAiCompatibleModelInfo = selectedModelInfo ?? openAiModelInfoSafeDefaults
 	const selectedModelOverrides = fromProtobufProviderModelOverrides(committedSelection?.overrides) ?? {}
+	// What a blank sampling field leaves in force, from the server's /props.
+	const serverSamplingDefaults = useServerSamplingDefaults(providerId, config?.baseUrl, selectedModelId)
 	// The window this configuration has stored, read by the resolver the
 	// session reads it with (`scopedContextWindow`): the config's own
 	// `contextWindow`, then the committed overrides. `undefined` is "none".
@@ -724,6 +727,7 @@ export const OpenAICompatibleProvider = ({
 						)}
 					</>
 				}
+				modelParameters={serverSamplingDefaults}
 				providerId={providerId}
 				showThinkBudgetMessage
 			/>
