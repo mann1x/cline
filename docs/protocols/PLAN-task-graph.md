@@ -371,7 +371,13 @@ B; a task-graph call shared a turn with work 0.1 times a run. What was left:
   against 74, 64 and 59 closing calls (B, C, C2). A done close now ticks what
   is open unless the call sends `check` or `uncheck`.
 
-Arm C3 re-runs C2 with these on the same base.
+Arm C3 re-runs C2 with these on the same base: 109/110, plan before write
+10/15, graph-only requests 2.8 a run (54k, 8% of input), no `task_done`
+refused (63 sent), input median 491k (A 438k, C 693k), wall median 202 s (A
+169 s). Left: 3 of 5 textkit runs alternated an edit and a `task_update`
+close and never used `task_done`. S9 answers that once per session, with the
+close's own reply (no request): the close could have ridden on the call before
+it. Phase 1 declared complete 2026-11-21.
 
 ### 11. Export to memory (phase 2)
 

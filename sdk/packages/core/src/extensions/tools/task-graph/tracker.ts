@@ -309,6 +309,11 @@ export class TaskGraphTracker {
 	private doneNotes: string[] = [];
 	private boardDue = false;
 	private closeOutFired = 0;
+	/** The last call outside the graph: a close right after it could have ridden on it. */
+	private lastWork:
+		| { tool: string; succeeded: boolean; carriedDone: boolean }
+		| undefined;
+	private taskDoneHintGiven = false;
 	/** Changes made under the active task since it was last touched. */
 	private staleFor:
 		| { id: string; seq: number; writes: number; files: string[] }
@@ -522,6 +527,49 @@ export class TaskGraphTracker {
 		}
 	}
 
+	/** A call outside the graph finished: what a close right after it could have ridden on. */
+	noteWorkingCall(
+		toolName: string,
+		result: unknown,
+		carriedDone: boolean,
+	): void {
+		this.lastWork = {
+			tool: toolName,
+			succeeded: !reportsFailure(result),
+			carriedDone,
+		};
+	}
+
+	/** Ids done now, to compare across a graph call. */
+	doneIds(): Set<string> {
+		const state = this.store.getState();
+		return new Set(
+			state.order.filter((id) => state.tasks.get(id)?.status === "done"),
+		);
+	}
+
+	/**
+	 * A graph call closed tasks right after a working call that could have
+	 * carried \`task_done\`: say so once, with the reply already going out.
+	 * In tg-bench arm C3 (2026-11-21) 3 of 5 textkit runs alternated an edit
+	 * and a \`task_update\` close and never used \`task_done\`; each close was a
+	 * request of its own.
+	 */
+	noteGraphCall(doneBefore: Set<string>): void {
+		if (this.taskDoneHintGiven) return;
+		const work = this.lastWork;
+		if (!work?.succeeded || work.carriedDone) return;
+		if (!TASK_DONE_TOOL_NAMES.has(work.tool)) return;
+		const closed = [...this.doneIds()].filter((id) => !doneBefore.has(id));
+		if (closed.length === 0) return;
+		this.taskDoneHintGiven = true;
+		this.onNudge?.("S9", "task-done-hint");
+		const ids = closed.join(", ");
+		this.doneNotes.push(
+			`[SYSTEM] ${ids} took a request of its own to close. Next time, put \`task_done\` (as "${closed[0]}: what was done") on the \`${work.tool}\` call that finishes the work: the task closes when that call succeeds, with no extra request.`,
+		);
+	}
+
 	/** Take back what a call that then failed was counted for. */
 	retractFailedWrite(input: unknown, toolName?: string): void {
 		if (!changesFiles(toolName, input)) return;
@@ -596,10 +644,14 @@ export function withTaskGraphCapture<TInput, TOutput>(
 					? (input as Record<string, unknown>)[TASK_DONE_PARAM]
 					: undefined;
 			tracker.recordToolCall(input, tool.name);
+			const graphCall = TASK_GRAPH_TOOL_NAMES.has(tool.name);
+			const doneBefore = graphCall ? tracker.doneIds() : undefined;
 			let result: TOutput;
 			try {
 				result = await tool.execute(input, context);
 			} catch (error) {
+				if (!graphCall)
+					tracker.noteWorkingCall(tool.name, { success: false }, false);
 				tracker.retractFailedWrite(input, tool.name);
 				if (done !== undefined) {
 					tracker.recordTaskDone(done, tool.name, { success: false });
@@ -612,6 +664,8 @@ export function withTaskGraphCapture<TInput, TOutput>(
 				tracker.recordTaskDone(done, tool.name, result, context?.toolCallId);
 			}
 			tracker.recordToolResult(input, tool.name, result, done !== undefined);
+			if (doneBefore) tracker.noteGraphCall(doneBefore);
+			else tracker.noteWorkingCall(tool.name, result, done !== undefined);
 			return result;
 		},
 	};

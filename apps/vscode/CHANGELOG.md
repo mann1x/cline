@@ -41,7 +41,9 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   tools take an optional `task_done` ("T3: what was done") that closes the
   task when the call succeeds, several at once as "T2, T3: …" or "T2-T5: …",
   quoted or not. Closing a task as done with `task_update` ticks its
-  acceptance unless the call ticks or unticks items itself.
+  acceptance unless the call ticks or unticks items itself. A close sent as
+  a request of its own right after an edit that could have carried
+  `task_done` gets a one-time hint saying so.
 
 ### Prompt templates
 

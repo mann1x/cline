@@ -830,4 +830,75 @@ describe("fewer round trips", () => {
 			false,
 		]);
 	});
+
+	it("a close right after a working call that could carry task_done says so, once", async () => {
+		const tracker = new TaskGraphTracker();
+		tracker.store.plan({
+			tasks: [{ title: "A" }, { title: "B" }, { title: "C" }, { title: "D" }],
+		});
+		const editor = wrapped(tracker, "editor", ok);
+		const reader = wrapped(tracker, "read_files", ok);
+		const update = withTaskGraphCapture(
+			tracker.tools().find((tool) => tool.name === "task_update") as never,
+			tracker,
+		) as { execute: (input: unknown, context: unknown) => Promise<unknown> };
+		const close = (id: string) =>
+			update.execute(
+				{ updates: [{ id, status: "done", note: "ok" }] },
+				{
+					toolCallId: `u-${id}`,
+				},
+			);
+		// After a read: nothing the close could have ridden on.
+		await reader.execute(
+			{ paths: ["a"] } as never,
+			{ toolCallId: "r1" } as never,
+		);
+		await close("T1");
+		expect(tracker.takePendingReminder() ?? "").not.toContain(
+			"request of its own",
+		);
+		// After an edit: the hint, naming the tool.
+		await editor.execute(
+			{ file_path: "a" } as never,
+			{ toolCallId: "e1" } as never,
+		);
+		await close("T2");
+		const hint = tracker.takePendingReminder() ?? "";
+		expect(hint).toContain("T2 took a request of its own");
+		expect(hint).toContain("`editor` call");
+		// Only once a session.
+		await editor.execute(
+			{ file_path: "a" } as never,
+			{ toolCallId: "e2" } as never,
+		);
+		await close("T3");
+		expect(tracker.takePendingReminder() ?? "").not.toContain(
+			"request of its own",
+		);
+	});
+
+	it("no hint after a failed edit or one that carried task_done", async () => {
+		for (const [result, input] of [
+			[failed, { file_path: "a" }],
+			[ok, { file_path: "a", task_done: "T2: x" }],
+		] as const) {
+			const tracker = new TaskGraphTracker();
+			tracker.store.plan({ tasks: [{ title: "A" }, { title: "B" }] });
+			const editor = wrapped(tracker, "editor", result);
+			const update = withTaskGraphCapture(
+				tracker.tools().find((tool) => tool.name === "task_update") as never,
+				tracker,
+			) as { execute: (input: unknown, context: unknown) => Promise<unknown> };
+			await editor.execute(input as never, { toolCallId: "e1" } as never);
+			tracker.takePendingReminder();
+			await update.execute(
+				{ updates: [{ id: "T1", status: "done", note: "ok" }] },
+				{ toolCallId: "u1" },
+			);
+			expect(tracker.takePendingReminder() ?? "").not.toContain(
+				"request of its own",
+			);
+		}
+	});
 });
