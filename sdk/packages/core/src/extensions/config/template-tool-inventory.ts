@@ -5,7 +5,8 @@
  * Two hand-kept lists (the sync script's and the test's) once agreed with each
  * other and with nothing else, so a tool the runtime adds outside them never
  * got a section: `task_progress` and `restore_file` until 4.100.289, the task
- * graph's three tools until 4.100.292. One list, built from the factories,
+ * graph's three tools until 4.100.292. (`task_progress` is gone since: the
+ * graph replaced the checklist.) One list, built from the factories,
  * read by both.
  */
 import { createSessionRevisions } from "../../runtime/atomic/session-revisions";
@@ -22,7 +23,6 @@ import {
 	createShellTool,
 	createSkillsTool,
 	createSubmitAndExitTool,
-	createTaskProgressTool,
 	createWebFetchTool,
 } from "../tools/definitions";
 import { createListFilesTool } from "../tools/list-files";
@@ -40,6 +40,29 @@ import { createAgentTeamsTools } from "../tools/team/team-tools";
  * plan mode. Copying any of them would pin one session's answer.
  */
 export const COMPUTED_TOOL_NAMES = ["run_commands", "skills", "task_plan"];
+
+/**
+ * Contributed by the VS Code host, so nothing here can build one to compare
+ * against: their text is guarded by a test in `apps/vscode`, next to the
+ * constants it has to match. Listed so a template's section for one is not
+ * taken for a tool that no longer exists.
+ */
+export const HOST_TOOL_NAMES = [
+	"check_file",
+	"ask_lsp",
+	"switch_to_act_mode",
+	"browser",
+	"generate_image",
+	"generate_icon",
+	"edit_image",
+	"render_image",
+	"transform_image",
+	"transcribe_audio",
+	"synthesize_speech",
+	"generate_sound_effect",
+	"generate_video",
+	"jev",
+];
 
 const stubExecutor = (() => {
 	throw new Error("not executed");
@@ -71,7 +94,6 @@ export function templateToolInventory(): {
 		createAgentsStatusTool({ sessionId: "s" }),
 		...createLeadAgentTools({ sessionId: "s" }),
 		createListFilesTool({ cwd: "/workspace", createLister: {} as never }),
-		createTaskProgressTool(),
 		...createSessionRevisions({ root: "/workspace" }).tools,
 		...createAgentTeamsTools({
 			runtime: {} as never,

@@ -233,9 +233,6 @@ The grammar is context-based, not line-number-based. Use context lines (prefixed
 # tool: restore_file
 {{DEFAULT}}
 
-# tool: task_progress
-{{DEFAULT}}
-
 # tool: ask_question
 Ask the user a clarifying question to gather information needed to proceed.
 

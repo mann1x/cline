@@ -868,23 +868,6 @@ export async function runCli(): Promise<void> {
 			return;
 		}
 	}
-	// Fails for the same reason: a run that keeps no checklist because the switch
-	// was misspelled is indistinguishable from one that keeps none because it was
-	// asked not to.
-	if (args.invalidTaskProgress) {
-		writeln(
-			`invalid --task-progress "${args.invalidTaskProgress}" (expected on or off)`,
-		);
-		process.exitCode = 1;
-		return;
-	}
-	if (args.invalidTaskProgressInterval) {
-		writeln(
-			`invalid --task-progress-interval "${args.invalidTaskProgressInterval}" (expected integer >= 0)`,
-		);
-		process.exitCode = 1;
-		return;
-	}
 	if (args.invalidRetries) {
 		writeln(
 			`${c.dim}[warn] ignoring invalid --retries value "${args.invalidRetries}" (expected integer >= 1)${c.reset}`,
@@ -1336,24 +1319,6 @@ export async function runCli(): Promise<void> {
 						},
 					}
 				: {}),
-			// On unless asked otherwise, which is what the extension does. Left
-			// unset until now, and unset is not "off with the same effect": the
-			// host reads `enabled` to decide whether to build the tracker at
-			// all, so the CLI shipped without the `task_progress` tool, without
-			// the parameter it adds to every other tool, without the reminder
-			// and without the close-out guard -- while the prompt still told the
-			// model to keep a checklist.
-			// The task graph replaces the checklist when asked for; core then
-			// ignores `taskProgress` below.
-			...(args.taskGraph || process.env.CLINE_TASK_GRAPH === "1"
-				? { taskGraph: { enabled: true } }
-				: {}),
-			taskProgress: {
-				enabled: args.taskProgress !== "off",
-				...(args.taskProgressInterval !== undefined
-					? { reminderInterval: args.taskProgressInterval }
-					: {}),
-			},
 			// What the extension gets from the editor's language servers and this
 			// host has no way to ask for. Named, `check_file` runs it and says it
 			// is the linter; unnamed, it stays the syntax check it honestly is.

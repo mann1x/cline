@@ -13,10 +13,10 @@ import { describe, expect, it } from "vitest";
 import { createSessionRevisions } from "../../runtime/atomic/session-revisions";
 import { createDefaultTools } from "../tools/definitions";
 import { TaskGraphTracker } from "../tools/task-graph/tracker";
-import { TaskProgressTracker } from "../tools/task-progress";
 import { parsePromptTemplate } from "./prompt-template-parser";
 import {
 	COMPUTED_TOOL_NAMES,
+	HOST_TOOL_NAMES,
 	templateToolInventory,
 } from "./template-tool-inventory";
 
@@ -55,28 +55,6 @@ const LIVE_TOOLS = templateToolInventory();
  * installed skill list, so the file carries `{{DEFAULT}}` for both rather than
  * one machine's answer.
  */
-/**
- * Contributed by the VS Code host, so nothing here can build one to compare
- * against — their text is guarded by a test in `apps/vscode`, next to the
- * constants it has to match. Listed because a template may override them and
- * the validator must not call such a section "a tool that does not exist".
- */
-const HOST_TOOL_NAMES = [
-	"check_file",
-	"ask_lsp",
-	"switch_to_act_mode",
-	"browser",
-	"generate_image",
-	"generate_icon",
-	"edit_image",
-	"render_image",
-	"transform_image",
-	"transcribe_audio",
-	"synthesize_speech",
-	"generate_sound_effect",
-	"generate_video",
-	"jev",
-];
 
 const SHIPPED_TOOL_NAMES = [
 	...LIVE_TOOLS.map((tool) => tool.name),
@@ -430,7 +408,6 @@ describe("shipped prompt templates", () => {
 		};
 		const all = {
 			enableExtractDocument: true,
-			taskProgress: new TaskProgressTracker(),
 		};
 		const composed = [
 			...createDefaultTools({ executors, ...all, cwd: "/workspace" } as never),
@@ -454,7 +431,8 @@ describe("shipped prompt templates", () => {
 			// templates had no section for them until 4.100.292.
 			...new TaskGraphTracker().tools(),
 		].map((tool) => tool.name);
-		expect(composed).toContain("task_progress");
+		expect(composed).not.toContain("task_progress");
+		expect(composed).toContain("task_plan");
 		expect(composed).toContain("restore_file");
 		for (const name of new Set(composed)) {
 			expect(

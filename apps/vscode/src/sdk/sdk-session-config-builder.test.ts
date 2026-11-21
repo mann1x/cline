@@ -158,21 +158,12 @@ describe("SdkSessionConfigBuilder", () => {
 			getGlobalSettingsKey: vi.fn((key: string) => (key === "focusChainSettings" ? focusChainSettings : "act")),
 		})
 
-		it("leaves the graph off unless the preview switch is on", async () => {
-			const builder = new SdkSessionConfigBuilder({
-				stateManager: settings({ enabled: true, remindClineInterval: 6 }) as never,
-				emitHookMessage: vi.fn(),
-				onSwitchToActMode: vi.fn(),
-			})
-			mocks.buildSessionConfig.mockResolvedValueOnce({ extraTools: [], hooks: {} })
-			const config = await builder.build({ cwd: "/workspace", mode: "act" })
-			expect(config.taskGraph).toBeUndefined()
-		})
-
-		it("turns the graph on and sends every board to the panel as a task_graph row", async () => {
+		it("runs the graph whatever an old setting says, and sends every board to the panel as a task_graph row", async () => {
+			// The preview switch is gone (4.100.292); a stored `taskGraph: false`
+			// from an older version is not read.
 			const emitHookMessage = vi.fn()
 			const builder = new SdkSessionConfigBuilder({
-				stateManager: settings({ enabled: true, remindClineInterval: 6, taskGraph: true }) as never,
+				stateManager: settings({ enabled: true, remindClineInterval: 6, taskGraph: false }) as never,
 				emitHookMessage,
 				onSwitchToActMode: vi.fn(),
 			})

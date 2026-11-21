@@ -351,10 +351,6 @@ export function withSessionDefaults(
 			...(config.checkpoint ?? {}),
 			enabled: config.checkpoint?.enabled ?? true,
 		},
-		taskProgress: {
-			...(config.taskProgress ?? {}),
-			enabled: config.taskProgress?.enabled ?? true,
-		},
 	};
 }
 

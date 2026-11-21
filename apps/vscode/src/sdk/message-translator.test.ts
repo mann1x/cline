@@ -7495,93 +7495,31 @@ describe("translateSessionEvent — empty turns", () => {
 })
 
 // ---------------------------------------------------------------------------
-// The task checklist reaching the panel
+// A checklist sent out of habit
 // ---------------------------------------------------------------------------
 
-// Two readers existed for one field. Core's `readTaskProgress` was widened to
-// the shapes models actually send; this file kept its own copy that accepted
-// a string and nothing else, and it is the copy the panel is fed from. Measured
-// on pandorum 4.100.124: two v9-agentic sessions sent 52 checklists, every one
-// of them an array, and the panel rendered none.
-describe("translateSessionEvent — the checklist that rides on a tool call", () => {
-	function checklistRows(toolName: string, input: Record<string, unknown>) {
+// The checklist is gone (4.100.292): core reads a habitual `task_progress`
+// onto the board, which reaches the panel as `task_graph`. No checklist row
+// is drawn from the tool input any more.
+describe("translateSessionEvent — a task_progress on a tool call", () => {
+	it("draws no checklist row", () => {
 		const state = new MessageTranslatorState()
-		translateSessionEvent(
+		for (const event of [
 			{
-				type: "agent_event",
-				payload: {
-					sessionId: "session-1",
-					event: {
-						type: "content_start",
-						contentType: "tool",
-						toolName,
-						toolCallId: "call-1",
-						input,
-					} as AgentEvent,
-				},
+				type: "content_start",
+				contentType: "tool",
+				toolName: "editor",
+				toolCallId: "call-1",
+				input: { path: "a.py", task_progress: "- [x] Read the file\n- [ ] Fix the loop" },
 			},
-			state,
-		)
-		const result = translateSessionEvent(
-			{
-				type: "agent_event",
-				payload: {
-					sessionId: "session-1",
-					event: { type: "content_end", contentType: "tool", toolName, toolCallId: "call-1" } as AgentEvent,
-				},
-			},
-			state,
-		)
-		return result.messages.filter((message) => message.say === ("task_progress" as ClineMessage["say"]))
-	}
-
-	it("still surfaces the string form", () => {
-		const rows = checklistRows("editor", {
-			path: "/src/app.ts",
-			task_progress: "- [x] Read the file\n- [ ] Fix the loop",
-		})
-
-		expect(rows).toHaveLength(1)
-		expect(rows[0].text).toBe("- [x] Read the file\n- [ ] Fix the loop")
-	})
-
-	// The shape v9-agentic sends, on every one of its 52 calls: the items are
-	// all present and the container is a list rather than a joined string.
-	it("surfaces the array form", () => {
-		const rows = checklistRows("editor", {
-			path: "/src/app.ts",
-			task_progress: ["- [ ] Run game to diagnose problem", "- [x] Analyze error and plan fix"],
-		})
-
-		expect(rows).toHaveLength(1)
-		expect(rows[0].text).toBe("- [ ] Run game to diagnose problem\n- [x] Analyze error and plan fix")
-	})
-
-	// The emit sat in the tail branch, after `run_commands` had already broken
-	// out to finalize its own row. `run_commands` carried 29 of those 52
-	// checklists -- more than any other tool -- so more than half were dropped
-	// for a second, independent reason.
-	it("surfaces a checklist a command call carried", () => {
-		const rows = checklistRows("run_commands", {
-			commands: ["bun test"],
-			task_progress: ["- [x] Write the test", "- [ ] Watch it fail"],
-		})
-
-		expect(rows).toHaveLength(1)
-		expect(rows[0].text).toBe("- [x] Write the test\n- [ ] Watch it fail")
-	})
-
-	it("surfaces a checklist the completion call carried", () => {
-		const rows = checklistRows("attempt_completion", {
-			result: "done",
-			task_progress: ["- [x] Write the test", "- [x] Watch it fail"],
-		})
-
-		expect(rows).toHaveLength(1)
-	})
-
-	it("says nothing when no checklist was sent", () => {
-		expect(checklistRows("editor", { path: "/src/app.ts" })).toHaveLength(0)
+			{ type: "content_end", contentType: "tool", toolName: "editor", toolCallId: "call-1" },
+		]) {
+			const result = translateSessionEvent(
+				{ type: "agent_event", payload: { sessionId: "session-1", event: event as AgentEvent } },
+				state,
+			)
+			expect(result.messages.some((message) => message.say === ("task_progress" as ClineMessage["say"]))).toBe(false)
+		}
 	})
 })
 

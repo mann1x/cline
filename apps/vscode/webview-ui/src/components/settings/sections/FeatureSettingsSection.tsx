@@ -1,5 +1,4 @@
 import { DEFAULT_ATOMIC_PROTOCOL_SETTINGS } from "@shared/AtomicProtocolSettings"
-import { DEFAULT_FOCUS_CHAIN_SETTINGS } from "@shared/FocusChainSettings"
 import { UpdateSettingsRequest } from "@shared/proto/cline/state"
 import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 import { memo, type ReactNode } from "react"
@@ -131,16 +130,6 @@ const agentFeatures: FeatureToggle[] = [
 		settingKey: "useAutoCondense",
 	},
 ]
-
-// Not in `agentFeatures`: that table maps a state key to a flat boolean, and
-// this setting is an object (`enabled` plus the reminder interval). Toggling it
-// has to preserve the interval rather than replace the whole object with a
-// boolean, so it gets its own row against the same `FeatureRow`.
-const TASK_CHECKLIST_DESCRIPTION =
-	"Ask the model to keep a checklist of the task's steps, shown under the context window and updated as it works."
-
-const TASK_GRAPH_DESCRIPTION =
-	"Preview. Replaces the checklist with a task graph: the model plans tasks with dependencies (task_plan, task_update, task_view) and nothing is added to every tool call. The board is shown under the context window."
 
 const editorFeatures: FeatureToggle[] = [
 	{
@@ -313,7 +302,6 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		worktreesEnabled,
 		backgroundEditEnabled,
 		showFeatureTips,
-		focusChainSettings,
 	} = useExtensionState()
 
 	// State lookup for mapped features
@@ -390,37 +378,6 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 									type="text"
 								/>
 							</div>
-							<FeatureRow
-								checked={focusChainSettings?.enabled ?? true}
-								description={TASK_CHECKLIST_DESCRIPTION}
-								label="Task Checklist"
-								onChange={(checked) =>
-									updateSetting("focusChainSettings", {
-										enabled: checked,
-										// Carried through, not defaulted: dropping it here would
-										// silently reset a tuned interval every time the toggle
-										// is flipped.
-										remindClineInterval:
-											focusChainSettings?.remindClineInterval ??
-											DEFAULT_FOCUS_CHAIN_SETTINGS.remindClineInterval,
-										taskGraph: focusChainSettings?.taskGraph ?? false,
-									})
-								}
-							/>
-							<FeatureRow
-								checked={focusChainSettings?.taskGraph ?? false}
-								description={TASK_GRAPH_DESCRIPTION}
-								label="Task Graph (preview)"
-								onChange={(checked) =>
-									updateSetting("focusChainSettings", {
-										enabled: focusChainSettings?.enabled ?? true,
-										remindClineInterval:
-											focusChainSettings?.remindClineInterval ??
-											DEFAULT_FOCUS_CHAIN_SETTINGS.remindClineInterval,
-										taskGraph: checked,
-									})
-								}
-							/>
 							<div className="space-y-2 py-3">
 								<Label className="text-sm font-medium text-foreground">Compaction Strategy</Label>
 								<p className="text-xs text-muted-foreground">

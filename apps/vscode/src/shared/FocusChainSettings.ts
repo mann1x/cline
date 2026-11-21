@@ -1,15 +1,17 @@
+/**
+ * Legacy: the checklist's settings, kept only so state an older version saved
+ * still loads and the proto field keeps its shape. Nothing reads them since
+ * 4.100.292, when the task graph replaced the checklist and the switches for
+ * both were removed; the board is always on.
+ */
 export interface FocusChainSettings {
-	// Enable/disable the focus chain feature
 	enabled: boolean
-	// Interval (in messages) to remind Cerebriline about focus chain
 	remindClineInterval: number
-	// The task graph (task_plan / task_update / task_view) in place of the
-	// checklist. A preview, off by default until the switch-over.
 	taskGraph?: boolean
 }
 
 export const DEFAULT_FOCUS_CHAIN_SETTINGS: FocusChainSettings = {
 	enabled: true,
 	remindClineInterval: 6,
-	taskGraph: false,
+	taskGraph: true,
 }

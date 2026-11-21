@@ -18,7 +18,6 @@ import OpenDiskConversationHistoryButton from "./buttons/OpenDiskConversationHis
 import ContextWindow from "./ContextWindow"
 import { highlightText } from "./Highlights"
 import { TaskGraphPanel } from "./TaskGraphPanel"
-import { TaskProgressPanel } from "./TaskProgressPanel"
 import { TaskTokenSummary } from "./TaskTokenSummary"
 import TaskWorkingDirectoryBadge from "./TaskWorkingDirectoryBadge"
 
@@ -79,7 +78,6 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 		workspaceRoots,
 		platform,
 		clineMessages,
-		focusChainSettings,
 		showCloudUsageInTaskHeader,
 	} = useExtensionState()
 
@@ -282,24 +280,11 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 							<OllamaCloudLimitLine modelId={selectedModelId} providerId={selectedProvider} />
 						)}
 
-						{/*
-						 * Under the context window, where the old focus chain lived. It
-						 * renders nothing until the model actually sends a checklist, so
-						 * a model that ignores the parameter costs no screen space.
-						 *
-						 * No `enabled` prop yet: `focusChainSettings` is read by the
-						 * extension when it configures the session, but it never reaches
-						 * the webview — it is absent from `ExtensionState`, and the
-						 * Features toggle that used to drive it was deleted with the rest
-						 * of the focus chain. Turning the checklist off therefore
-						 * suppresses the messages, and this panel disappears with them.
-						 */}
-						{/* The task graph's board, when the session runs the graph: it
-						    renders nothing until the first board arrives, and a session
-						    on the graph sends no checklist, so at most one of the two
-						    panels ever has anything to show. */}
+						{/* The task board, under the context window. It renders nothing
+						    until the first board arrives. A checklist an older
+						    conversation sent is not drawn: it is imported onto the
+						    board when the conversation is resumed (4.100.292). */}
 						<TaskGraphPanel clineMessages={clineMessages} />
-						<TaskProgressPanel clineMessages={clineMessages} enabled={focusChainSettings?.enabled ?? true} />
 					</div>
 				)}
 			</div>

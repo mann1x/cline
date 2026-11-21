@@ -137,9 +137,6 @@ Read the file again afterwards: its line numbers are back to what they were at t
 
 If you only want to *see* what the file said before your changes, do not restore it — call `read_files` with `revision: "original"` (or a number) and it is shown to you with the file left alone.
 
-# tool: task_progress
-Record the checklist for this task without doing anything else. Prefer sending `task_progress` alongside a tool call you are already making — it costs no extra step. Use this tool when you have no such call to make: writing the plan before starting, or ticking the last box at the end. Format: one item per line, "- [ ] pending" or "- [x] done".
-
 # tool: ask_question
 Ask user a question for clarifying or gathering information needed to complete the task. For example, ask the user clarifying questions about a key implementation decision. You should only ask one question. Provide an array of 2-5 options for the user to choose from. Never include an option to toggle to Act mode. Mark the option you would pick: end it with ' (recommended)' and say why in one sentence in the question. Mark exactly one. Leave every option unmarked only when the choice turns on the user's taste or on something only they know. Output: the user's answer, as plain text — one of the options you offered, or whatever they wrote instead. Act on it in the same turn; the answer arriving is not a reason to stop.
 

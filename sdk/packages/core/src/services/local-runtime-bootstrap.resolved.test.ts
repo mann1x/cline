@@ -168,11 +168,11 @@ describe("what a session was built with", () => {
 		const { config, resolvedConfig } = await bootstrap({}, null).run;
 		expect(config.compaction?.enabled).toBe(true);
 		expect(config.checkpoint?.enabled).toBe(true);
-		expect(config.taskProgress?.enabled).toBe(true);
+		// No switch for the board: the host runs it unless told otherwise.
+		expect(config.taskGraph?.enabled).not.toBe(false);
 		expect(resolvedConfig.session).toMatchObject({
 			compaction: { enabled: true },
 			checkpoint: { enabled: true },
-			taskProgress: { enabled: true },
 		});
 	});
 
@@ -181,7 +181,7 @@ describe("what a session was built with", () => {
 			{
 				compaction: { enabled: false, strategy: "basic" },
 				checkpoint: { enabled: false },
-				taskProgress: { enabled: false },
+				taskGraph: { enabled: false },
 			},
 			null,
 		).run;
@@ -190,7 +190,7 @@ describe("what a session was built with", () => {
 			strategy: "basic",
 		});
 		expect(config.checkpoint?.enabled).toBe(false);
-		expect(config.taskProgress?.enabled).toBe(false);
+		expect(config.taskGraph?.enabled).toBe(false);
 	});
 
 	it("asks Ollama about the model before it budgets, as the plugin does", async () => {

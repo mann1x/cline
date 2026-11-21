@@ -185,9 +185,6 @@ Output: one result covering the whole patch, saying which files were added, upda
 # tool: restore_file
 {{DEFAULT}}
 
-# tool: task_progress
-{{DEFAULT}}
-
 # tool: ask_question
 
 Ask the user a clarifying question. Call shape: `ask_question(question: string, options: [string])`. Provide 2–5 options as an array. Never include an option to toggle to Act mode.

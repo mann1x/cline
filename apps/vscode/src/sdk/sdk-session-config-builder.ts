@@ -84,11 +84,12 @@ export class SdkSessionConfigBuilder {
 			},
 		}
 		config.hooks = composeSessionHooks(fileHooks, input.cwd)
-		// The task graph in place of the checklist, when the preview switch is
-		// on. Core owns the board; every change reaches the task panel as a
-		// `task_graph` row carrying the snapshot, persisted with the chat so a
-		// reopened task shows its board. The row is never drawn in the chat.
-		if (this.options.stateManager.getGlobalSettingsKey("focusChainSettings")?.taskGraph === true) {
+		// The task graph, always: it replaced the checklist in 4.100.292 and
+		// has no switch. Core owns the board; every change reaches the task
+		// panel as a `task_graph` row carrying the snapshot, persisted with the
+		// chat so a reopened task shows its board. The row is never drawn in
+		// the chat.
+		{
 			const seed = this.options.takeTaskGraphSeed?.()
 			config.taskGraph = {
 				enabled: true,

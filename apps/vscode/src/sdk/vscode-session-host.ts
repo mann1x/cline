@@ -210,11 +210,6 @@ export class VscodeSessionHost implements SdkSessionHost {
 					modelId: inputWithRemoteConfig.config.modelId,
 				},
 			})
-			// The focus-chain settings have been reachable in the UI all
-			// along — enabled by default, with a reminder interval — while
-			// nothing read them, because the SDK path had no checklist at
-			// all. This is the wire between that setting and the behaviour.
-			const focusChainSettings = StateManager.get().getGlobalSettingsKey("focusChainSettings")
 			// The checker is named here rather than assumed in core, because
 			// `check_file` is this host's tool: it needs the editor's own
 			// diagnostics and does not exist in the SDK at all. A host that
@@ -270,12 +265,6 @@ export class VscodeSessionHost implements SdkSessionHost {
 					// the receipts, so it is the one that can say so.
 					forgetReads: options.forgetReads,
 					carryReadStamp: options.carryReadStamp,
-				},
-				taskProgress: {
-					enabled: focusChainSettings?.enabled ?? true,
-					...(focusChainSettings?.remindClineInterval !== undefined
-						? { reminderInterval: focusChainSettings.remindClineInterval }
-						: {}),
 				},
 			}
 			return {

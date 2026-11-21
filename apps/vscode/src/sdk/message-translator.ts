@@ -32,7 +32,6 @@ import {
 	PATCH_MARKERS,
 	projectSessionMessagesForDisplay,
 	readFileRequestsFrom,
-	readTaskProgress,
 	resolveMessageDisplayRole,
 	truncateCommandOutput,
 	uniqueAgentNames,
@@ -3353,24 +3352,6 @@ function readEscalationUsage(value: unknown): { usage: NonNullable<ClineEscalati
 	}
 }
 
-/**
- * Read the task checklist off a tool call's input.
- *
- * The parameter is optional on every tool, so most calls carry nothing. What
- * arrives when something does is core's question, not this file's: the field is
- * declared there, widened there, and measured there. This used to answer it a
- * second time — "a non-string value is not a checklist" — and that reading
- * survived core widening its own, so the tracker counted boxes the panel never
- * drew. Measured on pandorum 4.100.124: two v9-agentic sessions sent 52
- * checklists, all 52 as arrays, and this returned `undefined` for every one.
- *
- * So it delegates. The only thing left here is unwrapping the input, which
- * reaches this file as the raw string the stream carried.
- */
-export function readTaskProgressFromToolInput(input: unknown): string | undefined {
-	return readTaskProgress(typeof input === "string" ? parseToolInput(input) : input)
-}
-
 /** Build the say:"compaction" divider message for a compaction status payload. */
 export function buildCompactionMessage(info: ClineCompactionInfo, ts: number): ClineMessage {
 	return {
@@ -3909,29 +3890,6 @@ function translateAgentEvent(event: AgentEvent, state: MessageTranslatorState): 
 					if (state.checkDeniedToolApproval(event.toolCallId) || isKnownToolApprovalDenial(event.error)) {
 						state.clearStreamingTool()
 						break
-					}
-
-					// The checklist rides along on whatever tool the model was already
-					// calling, so it has to be read before the branches below claim
-					// that call. It used to sit in the tail branch, past four `break`s
-					// — `ask_question`, the completion tools, `run_commands`, MCP — and
-					// a checklist on any of those was dropped without a word. On
-					// pandorum `run_commands` carried more of them than any other tool.
-					//
-					// Emitted as its own say:"task_progress" row rather than folded into
-					// the tool row: the panel wants the newest checklist regardless of
-					// which tool carried it, and `openFocusChainFile` looks for exactly
-					// this message type. Reading is non-destructive — the stored input
-					// stays put for the branch that owns the row.
-					const checklist = readTaskProgressFromToolInput(state.getStreamingToolInput())
-					if (checklist) {
-						messages.push({
-							ts: state.nextTs(),
-							type: "say",
-							say: "task_progress" as ClineSay,
-							text: checklist,
-							partial: false,
-						})
 					}
 
 					// ask_question is serviced by the interaction coordinator (see content_start);

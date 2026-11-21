@@ -141,17 +141,10 @@ export function addRootOptions(cmd: Command): Command {
 				"--lint-command <command>",
 				'Project checker `check_file` runs on each file it is given, e.g. "npx biome check ${file}". Without ${file} the path is appended. Makes check_file the linter here, as it is in the extension',
 			)
-			.option(
-				"--task-progress <mode>",
-				"Keep a visible checklist across the task: on | off (default: on)",
-			)
-			.option(
-				"--task-graph",
-				"Replace the checklist with the task graph (task_plan, task_update, task_view): planned tasks with dependencies, and no checklist parameter on every tool. Preview, off by default; CLINE_TASK_GRAPH=1 does the same",
-			)
-			.option(
-				"--task-progress-interval <calls>",
-				"Tool calls between checklist reminders; 0 reminds never (default: the host's)",
+			// The task graph is always on since 4.100.292; the flag that asked
+			// for it in preview is still accepted so scripts keep working.
+			.addOption(
+				new Option("--task-graph", "The task graph (always on)").hideHelp(),
 			)
 			.option(
 				"--vision-model <model-id>",
@@ -540,37 +533,12 @@ export function commanderToParsedArgs(program: Command): ParsedArgs {
 		}
 	}
 
-	// Task-progress switch, rejected rather than coerced for the same reason as
-	// the mode above: a typo that fell back to the default would leave the
-	// checklist on while the user believed they had turned it off.
-	if (opts.taskProgress !== undefined) {
-		const raw = String(opts.taskProgress).trim();
-		if (raw === "on" || raw === "off") {
-			result.taskProgress = raw;
-		} else if (raw) {
-			result.invalidTaskProgress = raw;
-		}
-	}
-
-	// Zero is meaningful — it disables reminding while leaving the checklist
-	// itself in place — so the bound is >= 0, not >= 1 like `--retries`.
-	if (opts.taskProgressInterval !== undefined) {
-		const raw = String(opts.taskProgressInterval).trim();
-		const parsed = Number.parseInt(raw, 10);
-		if (raw && Number.isInteger(parsed) && parsed >= 0) {
-			result.taskProgressInterval = parsed;
-		} else if (raw) {
-			result.invalidTaskProgressInterval = raw;
-		}
-	}
-
 	// Simple string/number options
 	if (opts.dataDir !== undefined) result.dataDir = opts.dataDir;
 	if (opts.config !== undefined) result.configDir = opts.config;
 	if (opts.hooksDir !== undefined) result.hooksDir = opts.hooksDir;
 	if (opts.worktree !== undefined) result.worktree = !!opts.worktree;
 	if (opts.teammates !== undefined) result.teammates = !!opts.teammates;
-	if (opts.taskGraph !== undefined) result.taskGraph = !!opts.taskGraph;
 	if (opts.documents !== undefined) result.documents = !!opts.documents;
 	if (opts.ocr !== undefined) result.ocr = String(opts.ocr);
 	if (opts.ocrLanguages !== undefined)

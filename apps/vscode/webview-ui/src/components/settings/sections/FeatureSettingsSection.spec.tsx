@@ -120,46 +120,11 @@ describe("FeatureSettingsSection", () => {
 		expect(mockUpdateSetting).toHaveBeenCalledWith("hooksEnabled", true)
 	})
 
-	it("renders the Task Checklist toggle in the Agent section", () => {
+	it("offers no checklist or task-graph switch: the board is always on", () => {
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
-		const agentSection = container.querySelector("#agent-features")
-		expect(agentSection?.querySelector('[id="Task Checklist"]')).toBeTruthy()
-	})
-
-	it("keeps the reminder interval when the Task Checklist is toggled", () => {
-		// The setting is an object, so the toggle has to send the whole thing.
-		// A tuned interval must survive that round trip rather than snapping
-		// back to the default.
-		mockExtensionState.value = {
-			...mockExtensionState.value,
-			focusChainSettings: { enabled: false, remindClineInterval: 11 },
-		}
-		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
-
-		fireEvent.click(container.querySelector('[id="Task Checklist"]') as Element)
-
-		expect(mockUpdateSetting).toHaveBeenCalledWith("focusChainSettings", {
-			enabled: true,
-			remindClineInterval: 11,
-			taskGraph: false,
-		})
-	})
-
-	it("turns the task graph on without resetting the checklist's own fields", () => {
-		mockExtensionState.value = {
-			...mockExtensionState.value,
-			focusChainSettings: { enabled: false, remindClineInterval: 11 },
-		}
-		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
-
-		fireEvent.click(container.querySelector('[id="Task Graph (preview)"]') as Element)
-
-		expect(mockUpdateSetting).toHaveBeenCalledWith("focusChainSettings", {
-			enabled: false,
-			remindClineInterval: 11,
-			taskGraph: true,
-		})
+		expect(container.querySelector('[id="Task Checklist"]')).toBeNull()
+		expect(container.querySelector('[id="Task Graph (preview)"]')).toBeNull()
 	})
 
 	// Deleted upstream in c3671de7d and never restored, so the session factory's

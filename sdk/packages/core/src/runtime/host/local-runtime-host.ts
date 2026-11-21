@@ -44,7 +44,6 @@ import {
 	createCheckFileTool,
 } from "../../extensions/tools/check-file";
 import { joinCheckerToShell } from "../../extensions/tools/check-on-failure";
-import { createTaskProgressTool } from "../../extensions/tools/definitions";
 import {
 	createEditVerificationCompletionGuard,
 	EditVerificationTracker,
@@ -63,11 +62,8 @@ import {
 } from "../../extensions/tools/task-graph";
 import {
 	buildTaskProgressState,
-	createTaskProgressCompletionGuard,
 	findLatestTaskProgress,
 	TASK_PROGRESS_PARAM,
-	TaskProgressTracker,
-	withTaskProgressCapture,
 } from "../../extensions/tools/task-progress";
 import type { TeamEvent } from "../../extensions/tools/team";
 import { clearAgentReports } from "../../extensions/tools/team/agent-reports";
@@ -1280,17 +1276,25 @@ export class LocalRuntimeHost implements RuntimeHost {
 		const taskGraphConfig = configWithProvider.taskGraph;
 		// The board's rules go in the system prompt, the one channel every
 		// model reads as instructions, whatever template built the rest.
-		if (taskGraphConfig?.enabled) {
+		if (taskGraphConfig?.enabled !== false) {
 			configWithProvider.systemPrompt =
 				withTaskBoardRules(
 					configWithProvider.systemPrompt,
 					configWithProvider.mode === "plan",
 				) ?? configWithProvider.systemPrompt;
 		}
-		const taskGraphTracker = taskGraphConfig?.enabled
+		// On unless the host turns it off: the graph replaced the checklist
+		// (4.100.292), and an SDK session runs what the plugin runs.
+		const taskGraphOn = taskGraphConfig?.enabled !== false;
+		const taskGraphTracker = taskGraphOn
 			? new TaskGraphTracker({
 					logPath: join(sessionDir, `${sessionId}.tasks.jsonl`),
 					planMode: configWithProvider.mode === "plan",
+					onHabitualChecklist: (count) =>
+						configWithProvider.logger?.log?.(
+							`[task-graph] habitual task_progress send #${count}, read onto the board`,
+							{ sessionId },
+						),
 					onNudge: (id, key) =>
 						configWithProvider.logger?.log?.(
 							`[task-graph] nudge ${id} (${key})`,
@@ -1298,10 +1302,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 								sessionId,
 							},
 						),
-					...(taskGraphConfig.writeInterval !== undefined
+					...(taskGraphConfig?.writeInterval !== undefined
 						? { writeInterval: taskGraphConfig.writeInterval }
 						: {}),
-					...(taskGraphConfig.onUpdate
+					...(taskGraphConfig?.onUpdate
 						? {
 								onChange: (store) =>
 									taskGraphConfig.onUpdate?.(store.snapshot()),
@@ -1330,47 +1334,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 					taskGraphTracker.exportBoard({ ...header, sessionId }),
 			});
 		}
-		const taskProgressConfig = taskGraphTracker
-			? undefined
-			: configWithProvider.taskProgress;
-		const taskProgressTracker = taskProgressConfig?.enabled
-			? new TaskProgressTracker({
-					...(taskProgressConfig.reminderInterval !== undefined
-						? { reminderInterval: taskProgressConfig.reminderInterval }
-						: {}),
-					...(taskProgressConfig.onUpdate
-						? { onUpdate: taskProgressConfig.onUpdate }
-						: {}),
-				})
-			: undefined;
-		// A resumed task would otherwise come back with an empty checklist and the
-		// model would be reminded of nothing. History is the durable copy — every
-		// call that carried a checklist is in it — so the tracker is warmed from
-		// the transcript rather than persisted separately.
-		taskProgressTracker?.hydrate(
-			findLatestTaskProgress(
-				initialMessages as readonly { content?: unknown }[] | undefined,
-			),
-		);
-		// The checklist has two halves and this path only ever wired one of them.
-		//
-		// `withTaskProgressCapture` below adds the `task_progress` parameter to
-		// every tool and feeds the tracker, which is why the panel counts the
-		// boxes correctly. The standalone tool -- the name a model calls when it
-		// has no other call to attach the checklist to -- is pushed by
-		// `createDefaultTools`, and only when a tracker was passed *into* it.
-		// Here the tracker is built after the tools, so it never was: the
-		// parameter worked, the tool did not exist, and a model that called it
-		// got `AI_NoSuchToolError: Model tried to call unavailable tool
-		// 'task_progress'` while the panel beside it read "Tasks (7/7)".
-		//
-		// Added by name-check rather than unconditionally, because a caller that
-		// did build its tools through `createDefaultTools` with a tracker already
-		// has one and a duplicate name is its own failure.
+		// The checklist is gone (4.100.292); a host's toolset that still names a
+		// `task_progress` tool has it taken out, since the graph is the plan.
 		const mergedToolsWithChecklist = taskGraphTracker
 			? [
-					// A caller that built its toolset with the checklist already in
-					// it has its `task_progress` tool taken out: the graph is the plan.
 					...mergedTools.filter((tool) => tool.name !== TASK_PROGRESS_PARAM),
 					...taskGraphTracker
 						.tools()
@@ -1379,10 +1346,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 								!mergedTools.some((existing) => existing.name === tool.name),
 						),
 				]
-			: taskProgressTracker &&
-					!mergedTools.some((tool) => tool.name === TASK_PROGRESS_PARAM)
-				? [...mergedTools, createTaskProgressTool()]
-				: mergedTools;
+			: mergedTools.filter((tool) => tool.name !== TASK_PROGRESS_PARAM);
 		// The other half of "did this run leave the file in a state anyone looked
 		// at". The checklist says what the model meant to do; this says whether
 		// what it did was checked. Both watch the same merged list, so a host
@@ -1476,14 +1440,10 @@ export class LocalRuntimeHost implements RuntimeHost {
 		const toolsToWrap = mergedToolsWithFailureChecks;
 		const withChecklist = taskGraphTracker
 			? toolsToWrap.map((tool) => withTaskGraphCapture(tool, taskGraphTracker))
-			: taskProgressTracker
-				? toolsToWrap.map((tool) =>
-						withTaskProgressCapture(tool, taskProgressTracker),
-					)
-				: // `toolsToWrap`, not `mergedTools`: falling back to the pre-checklist
-					// list drops every tool added since, which is how the checker would
-					// have gone missing on exactly the runs that have no checklist.
-					toolsToWrap;
+			: // `toolsToWrap`, not `mergedTools`: falling back to the pre-checklist
+				// list drops every tool added since, which is how the checker would
+				// have gone missing on exactly the runs that have no board.
+				toolsToWrap;
 		const tools = editVerificationTracker
 			? withChecklist.map((tool) =>
 					withEditVerificationCapture(tool, editVerificationTracker),
@@ -1493,11 +1453,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// rather than assigned: the runtime may already carry a guard (team
 		// obligations), and that one speaks to work the model cannot simply tick
 		// off, so it goes first and the checklist only gets a say once it passes.
-		const checklistCloseOutGuard = taskGraphTracker
-			? taskGraphTracker.completionGuard()
-			: taskProgressTracker
-				? createTaskProgressCompletionGuard(taskProgressTracker)
-				: undefined;
+		const checklistCloseOutGuard = taskGraphTracker?.completionGuard();
 		// Same composition, one more link: an unchecked edit is a fact about the
 		// work rather than a box the model can tick, so it speaks before the
 		// checklist and after anything the runtime already carries.
@@ -1578,7 +1534,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// The checklist's mid-run reminders, delivered after a turn's tools.
 		const existingAfterToolsReminder =
 			runtime.completionPolicy?.afterToolsReminder;
-		const checklistReminder = taskGraphTracker ?? taskProgressTracker;
+		const checklistReminder = taskGraphTracker;
 		const completionPolicyWithChecklistCloseOut = checklistReminder
 			? {
 					...completionPolicyWithGuards,

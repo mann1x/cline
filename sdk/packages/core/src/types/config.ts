@@ -28,7 +28,6 @@ import type {
 	TaskGraphEdit,
 	TaskGraphEditOutcome,
 } from "../extensions/tools/task-graph/tracker";
-import type { TaskProgressState } from "../extensions/tools/task-progress";
 import type {
 	AgentProfileConnection,
 	AgentProviderConnection,
@@ -450,26 +449,10 @@ export interface CoreCompactionSummarizerConfig {
 }
 
 /**
- * Session settings for the model's task checklist.
- *
- * Off unless a host asks for it: the checklist costs a parameter on every tool
- * description and re-sent text every few calls, which is a trade a host makes
- * knowingly rather than inherits.
- */
-export interface CoreTaskProgressConfig {
-	enabled: boolean;
-	/** Tool calls between reminders. Non-positive disables reminding only. */
-	reminderInterval?: number;
-	/** Called whenever the model sends a new checklist. */
-	onUpdate?: (state: TaskProgressState) => void;
-}
-
-/**
  * The conversation's task graph (`task_plan`, `task_update`, `task_view`),
- * which replaces the checklist when it is on: a session with the graph has no
- * `task_progress` parameter on any tool and no `task_progress` tool.
+ * which replaced the `task_progress` checklist in 4.100.292.
  *
- * Off by default until the switch-over (plan: docs/protocols/PLAN-task-graph.md,
+ * On unless `enabled` is false (plan: docs/protocols/PLAN-task-graph.md,
  * phase 3).
  */
 export interface CoreTaskGraphConfig {
@@ -1133,16 +1116,7 @@ export interface CoreSessionConfig
 	telemetry?: ITelemetryService;
 	extensionContext?: ExtensionContext;
 	extraTools?: AgentTool[];
-	/**
-	 * The checklist the model keeps while it works.
-	 *
-	 * Applied to the whole session toolset — builtins and `extraTools` alike.
-	 * A host that replaces a builtin (VS Code swaps `run_commands` for its own
-	 * terminal-aware version) would otherwise leave the most-used tool in a
-	 * coding run as the one tool carrying no checklist.
-	 */
-	taskProgress?: CoreTaskProgressConfig;
-	/** The task graph; when enabled, `taskProgress` is ignored. */
+	/** The task graph: on unless `enabled` is false. */
 	taskGraph?: CoreTaskGraphConfig;
 	/**
 	 * Whether the run may end with a file the model changed and never checked.

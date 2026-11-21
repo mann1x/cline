@@ -32,6 +32,11 @@
 
 import type { AgentTool } from "@cline/shared";
 import { WRITE_CLASS_TOOL_NAMES } from "../../../runtime/safety/loop-detection";
+import {
+	parseTaskProgress,
+	readTaskProgress,
+	TASK_PROGRESS_PARAM,
+} from "../task-progress";
 import { renderBoard, shortTitle } from "./board";
 import { openWork, type Task } from "./model";
 import { type ExportedTaskBoard, exportTaskEvents } from "./saved-board";
@@ -72,6 +77,12 @@ export interface TaskGraphTrackerOptions extends TaskGraphStoreOptions {
 	writeInterval?: number;
 	/** Called with a nudge's id each time one is queued, for logs and counts. */
 	onNudge?: (id: string, key: string) => void;
+	/**
+	 * Called on each `task_progress` a model still sends out of habit, with the
+	 * session's count so far: the reader goes once these reach zero (plan,
+	 * phase 3).
+	 */
+	onHabitualChecklist?: (count: number) => void;
 	// `planMode` (from the store options): the plan goes on the board, and
 	// nothing asks for work to be done, started or closed (that is act
 	// mode's, once the person agrees). Fixed for a session; a switch rebuilds it.
@@ -489,6 +500,9 @@ export class TaskGraphTracker {
 	private readonly spacing: number;
 	private readonly onNudge: ((id: string, key: string) => void) | undefined;
 	private readonly planMode: boolean;
+	private readonly onHabitualChecklist: ((count: number) => void) | undefined;
+	/** `task_progress` sends this session, read onto the board. */
+	private habitualSends = 0;
 	private calls = 0;
 	/** S5: the active task as last touched, and what has happened under it since. */
 	private drift:
@@ -528,6 +542,7 @@ export class TaskGraphTracker {
 		this.store = new TaskGraphStore(options);
 		this.spacing = Math.max(1, options.writeInterval ?? DEFAULT_NUDGE_SPACING);
 		this.onNudge = options.onNudge;
+		this.onHabitualChecklist = options.onHabitualChecklist;
 		this.planMode = this.store.planMode;
 	}
 
@@ -967,6 +982,60 @@ export class TaskGraphTracker {
 		return parts.length ? parts.join("\n\n") : undefined;
 	}
 
+	/**
+	 * A `task_progress` the model sent out of habit: the checklist is gone
+	 * (4.100.292), the field is advertised nowhere, and what it says is put on
+	 * the board rather than dropped. An item matched by title updates that task
+	 * (ticked closes it; a task already closed is never reopened by an unticked
+	 * box); an item matching nothing becomes a top-level task. Said once to the
+	 * model, so it moves to the board's own calls.
+	 */
+	recordHabitualChecklist(markdown: string, call?: string): void {
+		const items = parseTaskProgress(markdown);
+		if (items.length === 0) return;
+		this.habitualSends += 1;
+		this.onHabitualChecklist?.(this.habitualSends);
+		const key = (title: string) =>
+			title.toLowerCase().replace(/\s+/g, " ").trim();
+		const origin = { by: "model" as const, ...(call ? { call } : {}) };
+		const state = this.store.getState();
+		const byTitle = new Map<string, Task>();
+		for (const id of state.order) {
+			const task = state.tasks.get(id) as Task;
+			byTitle.set(key(task.title), task);
+		}
+		const fresh = items.filter((item) => !byTitle.has(key(item.text)));
+		if (fresh.length > 0) {
+			this.store.plan(
+				{ tasks: fresh.map((item) => ({ title: item.text })) },
+				origin,
+			);
+		}
+		const after = this.store.getState();
+		const toClose: string[] = [];
+		for (const item of items) {
+			if (!item.done) continue;
+			const task = after.order
+				.map((id) => after.tasks.get(id) as Task)
+				.find((candidate) => key(candidate.title) === key(item.text));
+			if (task && task.status !== "done" && task.status !== "cancelled") {
+				toClose.push(task.id);
+			}
+		}
+		if (toClose.length > 0) {
+			this.store.update(
+				{ updates: toClose.map((id) => ({ id, status: "done" })) },
+				origin,
+			);
+		}
+		if (this.habitualSends === 1) {
+			this.doneNotes.push(
+				"[SYSTEM] There is no `task_progress` checklist any more: the list you sent was put on the task board. Keep the plan there: `task_plan` for steps, `task_done` on the call that finishes one.",
+			);
+		}
+		this.boardDue = true;
+	}
+
 	/** S8, the completion guard: at most two different asks per session. */
 	completionGuard(): () => string | undefined {
 		return () => {
@@ -1027,6 +1096,15 @@ export function withTaskGraphCapture<TInput, TOutput>(
 					? (input as Record<string, unknown>)[TASK_DONE_PARAM]
 					: undefined;
 			tracker.recordToolCall(input, tool.name);
+			// A checklist sent out of habit, read off the raw input too.
+			const habitual =
+				TASK_GRAPH_TOOL_NAMES.has(tool.name) ||
+				tool.name === TASK_PROGRESS_PARAM
+					? undefined
+					: readTaskProgress(input);
+			if (habitual !== undefined) {
+				tracker.recordHabitualChecklist(habitual, context?.toolCallId);
+			}
 			const graphCall = TASK_GRAPH_TOOL_NAMES.has(tool.name);
 			const doneBefore = graphCall ? tracker.doneIds() : undefined;
 			let result: TOutput;

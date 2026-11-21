@@ -252,9 +252,6 @@ Output: one result covering the whole patch, stating which files were added, upd
 # tool: restore_file
 {{DEFAULT}}
 
-# tool: task_progress
-{{DEFAULT}}
-
 # tool: ask_question
 
 Ask the user one clarifying question when a necessary decision cannot be resolved from the request or available context.

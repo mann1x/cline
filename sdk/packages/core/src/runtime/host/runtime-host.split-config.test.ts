@@ -17,21 +17,19 @@ describe("splitCoreSessionConfig", () => {
 		systemPrompt: "s",
 	} as never;
 
-	it("keeps taskProgress on the local runtime, not the transport", () => {
+	it("keeps taskGraph on the local runtime, not the transport", () => {
 		const onUpdate = () => {};
 		const split = splitCoreSessionConfig({
 			...(base as object),
-			taskProgress: { enabled: true, reminderInterval: 6, onUpdate },
+			taskGraph: { enabled: true, writeInterval: 3, onUpdate },
 		} as never);
 
-		expect(split.localRuntime?.taskProgress).toMatchObject({
+		expect(split.localRuntime?.taskGraph).toMatchObject({
 			enabled: true,
-			reminderInterval: 6,
+			writeInterval: 3,
 		});
-		expect(split.localRuntime?.taskProgress?.onUpdate).toBe(onUpdate);
-		expect(
-			(split.config as Record<string, unknown>).taskProgress,
-		).toBeUndefined();
+		expect(split.localRuntime?.taskGraph?.onUpdate).toBe(onUpdate);
+		expect((split.config as Record<string, unknown>).taskGraph).toBeUndefined();
 	});
 
 	it("keeps both terminal-guard decisions on the local runtime", () => {
@@ -56,9 +54,9 @@ describe("splitCoreSessionConfig", () => {
 		).toBeUndefined();
 	});
 
-	it("omits it entirely when the host did not ask for a checklist", () => {
+	it("omits it entirely when the host said nothing about the board", () => {
 		const split = splitCoreSessionConfig({ ...(base as object) } as never);
-		expect(split.localRuntime?.taskProgress).toBeUndefined();
+		expect(split.localRuntime?.taskGraph).toBeUndefined();
 	});
 
 	it("carries every compaction field except the callback across the transport", () => {

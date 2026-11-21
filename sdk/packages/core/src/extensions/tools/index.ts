@@ -153,21 +153,16 @@ export {
 	type WebFetchRequest,
 	WebFetchRequestSchema,
 } from "./schemas";
-// Task progress (the checklist the model keeps while it works)
+// Reading a `task_progress` checklist: an old conversation's, imported onto
+// the board on resume, and one a model still sends out of habit.
 export {
-	buildTaskProgressReminder,
 	buildTaskProgressState,
-	DEFAULT_TASK_PROGRESS_REMINDER_INTERVAL,
+	findLatestTaskProgress,
 	parseTaskProgress,
 	readTaskProgress,
 	TASK_PROGRESS_PARAM,
-	TASK_PROGRESS_PARAM_DESCRIPTION,
 	type TaskProgressItem,
 	type TaskProgressState,
-	TaskProgressTracker,
-	type TaskProgressTrackerOptions,
-	withTaskProgressCapture,
-	withTaskProgressParam,
 } from "./task-progress";
 export { TEAM_TOOL_NAMES } from "./team/team-tools";
 // Types

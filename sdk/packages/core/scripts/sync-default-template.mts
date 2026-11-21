@@ -29,6 +29,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	COMPUTED_TOOL_NAMES,
+	HOST_TOOL_NAMES,
 	templateToolInventory,
 } from "../src/extensions/config/template-tool-inventory";
 
@@ -95,6 +96,34 @@ function insertAfterTools(sections: Section[], added: Section[]): Section[] {
 	return [...sections.slice(0, at), ...added, ...sections.slice(at)];
 }
 
+/** `raw` without the named tool sections (heading to the next heading), untouched otherwise. */
+function removeSections(raw: string, names: string[]): string {
+	if (names.length === 0) return raw;
+	const out: string[] = [];
+	let skipping = false;
+	let joinAfterSkip = false;
+	for (const line of raw.split("\n")) {
+		if (/^# (system|tool: |compaction: )/.test(line)) {
+			const name = /^# tool: (.+)$/.exec(line)?.[1];
+			if (name !== undefined && names.includes(name)) {
+				// Drop the section and the blank lines that led into it.
+				while (out.length > 0 && (out[out.length - 1] ?? "").trim() === "")
+					out.pop();
+				skipping = true;
+				joinAfterSkip = true;
+				continue;
+			}
+			if (joinAfterSkip && out.length > 0) out.push("");
+			skipping = false;
+			joinAfterSkip = false;
+		}
+		if (!skipping) out.push(line);
+	}
+	// A removed last section leaves the file ending on the one before it.
+	if (skipping) return `${out.join("\n")}\n`;
+	return out.join("\n");
+}
+
 /** `raw` with `added` inserted after its last tool section, untouched otherwise. */
 function spliceAfterTools(raw: string, added: Section[]): string {
 	if (added.length === 0) return raw;
@@ -151,6 +180,17 @@ function main(): void {
 				}
 			}
 		}
+		// A section for a tool neither this package nor the host provides any
+		// more (task_progress, since 4.100.292) is removed, in every file.
+		const known = new Set([...descriptions.keys(), ...HOST_TOOL_NAMES]);
+		const gone = sections
+			.map(toolName)
+			.filter(
+				(name): name is string => Boolean(name) && !known.has(name as string),
+			);
+		const kept = gone.length
+			? sections.filter((section) => !gone.includes(toolName(section) ?? ""))
+			: sections;
 		const missing = [...descriptions.keys()].filter((name) => !have.has(name));
 		const added = missing.map((name) => ({
 			heading: `# tool: ${name}`,
@@ -163,13 +203,15 @@ function main(): void {
 		// was written by a model and keeps its text exactly, the new sections
 		// spliced in after its last tool section.
 		const next = isDefault
-			? render(insertAfterTools(sections, added))
-			: spliceAfterTools(raw, added);
+			? render(insertAfterTools(kept, added))
+			: spliceAfterTools(removeSections(raw, gone), added);
 		if (next === raw) continue;
 		for (const name of stale) problems.push(`${file}: ${name} is stale`);
 		for (const name of missing)
 			problems.push(`${file}: ${name} has no section`);
-		if (stale.length === 0 && missing.length === 0)
+		for (const name of gone)
+			problems.push(`${file}: ${name} is no longer a tool`);
+		if (stale.length === 0 && missing.length === 0 && gone.length === 0)
 			problems.push(`${file}: layout differs`);
 		if (!check) {
 			writeFileSync(path, next, "utf8");

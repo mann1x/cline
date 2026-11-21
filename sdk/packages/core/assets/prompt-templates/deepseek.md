@@ -172,9 +172,6 @@ Output: one result covering the whole patch, saying which files were added, upda
 # tool: restore_file
 {{DEFAULT}}
 
-# tool: task_progress
-{{DEFAULT}}
-
 # tool: ask_question
 
 Ask the user a single question for clarifying or gathering information needed to complete the task — for example, a key implementation decision you cannot settle from the code. Provide an array of 2-5 options for the user to choose from. Never include an option to toggle to Act mode.

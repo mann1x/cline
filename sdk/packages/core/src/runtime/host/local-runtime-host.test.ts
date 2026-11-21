@@ -476,19 +476,15 @@ describe("LocalRuntimeHost", () => {
 	});
 
 	it.each([
-		{ enabled: true, expected: true },
-		{ enabled: false, expected: false },
-	] as const)("offers task_progress as a callable tool when the checklist is on ($enabled)", async ({
-		enabled,
+		{ taskGraph: undefined, expected: true },
+		{ taskGraph: { enabled: false }, expected: false },
+	] as const)("runs the task graph unless the host turns it off ($taskGraph)", async ({
+		taskGraph,
 		expected,
 	}) => {
-		// The checklist has two halves and this path wired only one. The
-		// parameter wrapper fed the tracker -- so the panel counted boxes
-		// correctly -- while the standalone tool, pushed by `createDefaultTools`
-		// and only when a tracker is passed *into* it, was never added, because
-		// here the tracker is built after the tools. Reported live on 4.99.91:
-		// `AI_NoSuchToolError: Model tried to call unavailable tool
-		// 'task_progress'` beside a panel reading "Tasks (7/7)".
+		// The graph replaced the checklist (4.100.292): on by default, as the
+		// plugin runs it, and off only when asked. Either way there is no
+		// `task_progress` tool any more.
 		const runtimeBuilder = {
 			build: vi.fn().mockReturnValue({
 				tools: [],
@@ -519,17 +515,15 @@ describe("LocalRuntimeHost", () => {
 
 		await manager.startSession(
 			normalizeStartInput({
-				config: createConfig({ taskProgress: { enabled } }),
+				config: createConfig(taskGraph ? { taskGraph } : {}),
 				prompt: "hello",
 			}),
 		);
 
 		const names = (agentConfig?.tools ?? []).map((tool) => tool.name);
-		expect(names.includes("task_progress")).toBe(expected);
-		// Exactly one, whichever way it got there.
-		expect(names.filter((name) => name === "task_progress")).toHaveLength(
-			expected ? 1 : 0,
-		);
+		expect(names.includes("task_plan")).toBe(expected);
+		expect(names.includes("task_update")).toBe(expected);
+		expect(names).not.toContain("task_progress");
 	});
 
 	it("runs the task graph in place of the checklist when it is on", async () => {
@@ -590,10 +584,7 @@ describe("LocalRuntimeHost", () => {
 
 		const started = await manager.startSession(
 			normalizeStartInput({
-				config: createConfig({
-					taskProgress: { enabled: true },
-					taskGraph: { enabled: true },
-				}),
+				config: createConfig({ taskGraph: { enabled: true } }),
 				prompt: "hello",
 			}),
 		);
@@ -783,9 +774,9 @@ describe("LocalRuntimeHost", () => {
 		expect(start?.appendContext).toContain("T4 Report");
 	});
 
-	it("does not add a second task_progress when the tools already carry one", async () => {
-		// A caller that built its tools through `createDefaultTools` with a tracker
-		// already has the tool, and a duplicate name is its own failure.
+	it("takes out a task_progress tool a host still supplies, with or without the graph", async () => {
+		// The checklist is gone; a host toolset built before that may still
+		// name its tool, which would offer the model a plan with no board.
 		const runtimeBuilder = {
 			build: vi.fn().mockReturnValue({
 				tools: [
@@ -822,13 +813,13 @@ describe("LocalRuntimeHost", () => {
 
 		await manager.startSession(
 			normalizeStartInput({
-				config: createConfig({ taskProgress: { enabled: true } }),
+				config: createConfig({ taskGraph: { enabled: false } }),
 				prompt: "hello",
 			}),
 		);
 
 		const names = (agentConfig?.tools ?? []).map((tool) => tool.name);
-		expect(names.filter((name) => name === "task_progress")).toHaveLength(1);
+		expect(names).not.toContain("task_progress");
 	});
 
 	// The sub-agents and teammates this build creates are the ones that had no

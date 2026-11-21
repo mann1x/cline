@@ -378,21 +378,13 @@ describe("VscodeSessionHost fork wiring", () => {
 		)
 	})
 
-	it("carries the focus-chain setting into the session's taskProgress config", async () => {
-		mockFocusChainSettings.value = { enabled: false, remindClineInterval: 4 }
+	it("asks for no checklist, whatever the old focus-chain setting says", async () => {
+		// The checklist is gone (4.100.292); the stored setting is not read.
+		mockFocusChainSettings.value = { enabled: true, remindClineInterval: 4 }
 		const host = await VscodeSessionHost.create({ mcpHub: {} as never })
 		await host.start(gitStartInput)
 
-		expect(mockInnerStart.mock.calls[0][0].config.taskProgress).toEqual({ enabled: false, reminderInterval: 4 })
-		await host.dispose()
-	})
-
-	it("defaults taskProgress to enabled when the setting has never been written", async () => {
-		mockFocusChainSettings.value = undefined
-		const host = await VscodeSessionHost.create({ mcpHub: {} as never })
-		await host.start(gitStartInput)
-
-		expect(mockInnerStart.mock.calls[0][0].config.taskProgress).toEqual({ enabled: true })
+		expect(mockInnerStart.mock.calls[0][0].config.taskProgress).toBeUndefined()
 		await host.dispose()
 	})
 })

@@ -159,9 +159,6 @@ Apply complex changes using a patch grammar. Use this for larger structural chan
 # tool: restore_file
 {{DEFAULT}}
 
-# tool: task_progress
-{{DEFAULT}}
-
 # tool: ask_question
 Clarify requirements with the user.
 - **Arguments:** `question`: The query string. `options`: An array of 2-5 strings for the user to choose from.

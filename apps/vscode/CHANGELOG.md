@@ -7,6 +7,18 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
 
 ## [4.100.292] — pending
 
+### The task graph replaces the checklist
+
+- **The task board is always on; the checklist is removed**: no
+  `task_progress` parameter on every tool (about 2,320 tokens a request), no
+  `task_progress` tool, no checklist reminders, no Task Checklist or Task
+  Graph switch, no checklist panel.
+- **Old conversations** import their last checklist onto the board on resume.
+- **A habitual `task_progress` send** is read onto the board (matched by
+  title, otherwise a new task), said once to the model, and counted in the log.
+- **CLI:** `--task-progress` and `--task-progress-interval` removed;
+  `--task-graph` still accepted.
+
 ### Fixes
 
 - **Gemma 4 on an opencoti server no longer fails every request with the task
@@ -26,7 +38,7 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   step per change with where, what and why, and how each is checked; the task
   board no longer starts a task there or asks for the plan by call count.
 
-### Task graph (preview, off by default)
+### Task graph
 
 - **A conversation with no board starts with a note asking for the plan
   before the first change**, instead of waiting for the 4th tool call.

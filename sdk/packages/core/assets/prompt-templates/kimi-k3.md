@@ -222,9 +222,6 @@ Output: one result covering the whole patch, saying which files were added, upda
 # tool: restore_file
 {{DEFAULT}}
 
-# tool: task_progress
-{{DEFAULT}}
-
 # tool: ask_question
 {{DEFAULT}}
 

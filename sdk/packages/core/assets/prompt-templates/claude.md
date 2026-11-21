@@ -335,9 +335,6 @@ Output: one result for the whole patch, listing the files it added, updated, mov
 # tool: restore_file
 {{DEFAULT}}
 
-# tool: task_progress
-{{DEFAULT}}
-
 # tool: ask_question
 Ask only when an answer that only the user has would change what you build. Don't use it to confirm a choice you can make yourself, or to report progress. Their reply arrives as text — act on it in the same turn.
 

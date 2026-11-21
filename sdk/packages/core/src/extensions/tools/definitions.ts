@@ -87,13 +87,6 @@ import {
 	withFilePathAlias,
 	withNewTextAlias,
 } from "./schemas";
-import {
-	buildTaskProgressState,
-	readTaskProgress,
-	TASK_PROGRESS_PARAM,
-	TASK_PROGRESS_PARAM_DESCRIPTION,
-	withTaskProgressCapture,
-} from "./task-progress";
 import type {
 	ApplyPatchExecutor,
 	AskQuestionExecutor,
@@ -837,59 +830,6 @@ export function createShellTool(
 }
 
 /**
- * The checklist as a tool in its own right.
- *
- * It carries no behaviour: `withTaskProgressCapture` reads the checklist off
- * the raw input of every tool call, this one included, so the work is already
- * done by the time `execute` runs. What it adds is a name the model can call
- * when it has nothing else to do at that moment -- which is exactly when a
- * plan is usually written, and exactly when there is no other call to attach
- * it to.
- */
-export function createTaskProgressTool(): AgentTool<
-	Record<string, unknown>,
-	ToolOperationResult[]
-> {
-	return createTool<Record<string, unknown>, ToolOperationResult[]>({
-		name: TASK_PROGRESS_PARAM,
-		description:
-			"Record the checklist for this task without doing anything else. " +
-			"Prefer sending `task_progress` alongside a tool call you are already making — it costs no extra step. " +
-			"Use this tool when you have no such call to make: writing the plan before starting, or ticking the last box at the end. " +
-			`Format: one item per line, "- [ ] pending" or "- [x] done".`,
-		inputSchema: {
-			type: "object",
-			properties: {
-				[TASK_PROGRESS_PARAM]: {
-					// The same reader as the parameter on every other tool: this tool
-					// read strings only, and refused all 14 arrays deepseek sent it.
-					type: ["string", "array"],
-					items: { type: "string" },
-					description: TASK_PROGRESS_PARAM_DESCRIPTION,
-				},
-			},
-			required: [TASK_PROGRESS_PARAM],
-		},
-		retryable: false,
-		maxRetries: 0,
-		execute: async (input) => {
-			const checklist = readTaskProgress(input);
-			const state =
-				checklist === undefined ? undefined : buildTaskProgressState(checklist);
-			return [
-				{
-					query: "task_progress",
-					result: state?.total
-						? `Checklist recorded: ${state.total} item${state.total === 1 ? "" : "s"}, ${state.completed} done.`
-						: "No checklist sent, so nothing changed. Send the list as the `task_progress` argument.",
-					success: Boolean(state?.total),
-				},
-			];
-		},
-	});
-}
-
-/**
  * Create the fetch_web_content tool
  *
  * Fetches content from URLs and analyzes them using provided prompts.
@@ -1547,7 +1487,6 @@ export function createDefaultTools(
 		enableSkills = true,
 		enableAskQuestion = true,
 		enableSubmitAndExit = false,
-		taskProgress,
 		...config
 	} = options;
 
@@ -1629,25 +1568,6 @@ export function createDefaultTools(
 	// Add submit_and_exit tool if enabled and executor provided
 	if (submitExecutor) {
 		tools.push(createSubmitAndExitTool(submitExecutor, config));
-	}
-
-	// The checklist rides along on other tools, but models call it as a tool
-	// anyway -- reported live as `Model tried to call unavailable tool
-	// 'task_progress'`, twice in a row, while the panel showed "Tasks (2/6)".
-	// Being told a tool does not exist, while the prompt keeps asking for a
-	// checklist, costs a turn every time and teaches the model nothing. Calling
-	// it directly now works and means the same thing.
-	if (taskProgress) {
-		tools.push(createTaskProgressTool());
-	}
-
-	// Applied last, so every tool the caller enabled carries the checklist —
-	// including any added above after this line was written. The wrapper only
-	// adds a parameter and observes it; a tool's own behaviour is unchanged.
-	if (taskProgress) {
-		return tools.map((tool) =>
-			withTaskProgressCapture(tool, taskProgress),
-		) as unknown as AgentTool[];
 	}
 
 	return tools as unknown as AgentTool[];
