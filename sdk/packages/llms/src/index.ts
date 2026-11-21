@@ -247,6 +247,15 @@ export {
 	resolveLlamaCppThinkBudgetTokens,
 	resolveLlamaCppThinkBudgetWindow,
 } from "./providers/vendors/llamacpp-sampling";
+export {
+	acquireOllamaAccountSlot,
+	OLLAMA_PLAN_CONCURRENCY,
+	type OllamaAccountCap,
+	ollamaAccountSlotUsage,
+	ollamaPlanConcurrency,
+	resolveOllamaAccountCap,
+	withOllamaAccountSlots,
+} from "./providers/vendors/ollama-account-slots";
 // Ollama and xOllama: whether the endpoint answers, for the chat input.
 export {
 	type OllamaReachability,

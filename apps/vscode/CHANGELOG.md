@@ -21,6 +21,12 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
 
 ### Fixes
 
+- **Ollama Cloud requests respect the plan's concurrency, per account**
+  (issue #115): 3 at once on pay-as-you-go and Pro, 10 on Max and Team, shared
+  by the lead, subagents, the expert and side calls on every Ollama or xOllama
+  server signed in as that account. Extra requests wait in Cerebriline instead
+  of piling up in Ollama's queue, and the subagent limit on a cloud model
+  follows the plan.
 - **Gemma 4 on an opencoti server no longer fails every request with the task
   graph on** (HTTP 500 "map: filter-mapping not implemented"): `task_update`'s
   `check`/`uncheck` item schema used a list type the model's chat template

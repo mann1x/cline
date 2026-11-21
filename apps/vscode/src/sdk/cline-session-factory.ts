@@ -1379,6 +1379,30 @@ function collectAgentSlotLimits(
 }
 
 /**
+ * The agents' endpoint's stored count, held to the ollama.com plan's allowance.
+ *
+ * Core takes a per-endpoint entry ahead of the session's count, so a profile or
+ * provider entry with a higher `parallelSessions` would otherwise let more
+ * agents start than the account runs at once (issue #115). Keyed the way core
+ * keys endpoints: provider and base URL, lower-cased, no trailing slash.
+ */
+export function capEndpointByAccount(
+	entries: CoreSessionConfig["agentSlotLimits"],
+	endpoint: { providerId?: string; baseUrl?: string },
+	accountLimit: number | undefined,
+): CoreSessionConfig["agentSlotLimits"] {
+	if (!entries || accountLimit === undefined) {
+		return entries
+	}
+	const key = (entry: { providerId?: string; baseUrl?: string }) =>
+		`${(entry.providerId ?? "").toLowerCase()} ${(entry.baseUrl ?? "").toLowerCase().replace(/\/+$/, "")}`
+	const target = key(endpoint)
+	return entries.map((entry) =>
+		key(entry) === target && entry.limit > accountLimit ? { ...entry, limit: accountLimit } : entry,
+	)
+}
+
+/**
  * The tool-result cap stored on the shared provider entry.
  *
  * Read the same way as the parallel-session count, and for the same reason: a
@@ -2305,18 +2329,26 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 	// is silent: a server with no free slot queues the request instead of
 	// refusing it, so over-spawning reads as a slow run rather than a blocked
 	// one.
-	const agentSlots = await resolveAgentSlotLimit({
+	const agentsEndpoint = {
 		providerId: delegatedAgentConnection?.providerId ?? toSdkProviderId(providerId ?? ""),
 		baseUrl: delegatedAgentConnection?.baseUrl ?? baseUrl,
+	}
+	const agentSlots = await resolveAgentSlotLimit({
+		...agentsEndpoint,
 		parallelSessions: delegatedAgentConnection
 			? snapshotProviderSettings(agentsSnapshot)?.parallelSessions
 			: (profileSettings?.parallelSessions ?? readStoredParallelSessions(providerId)),
+		modelId: delegatedAgentConnection?.modelId ?? modelId,
 		fetch,
 	})
 	Logger.log(`[Agents] Concurrency: ${agentSlots.limit === 0 ? "uncapped" : agentSlots.limit} — ${agentSlots.reason}`)
 	// And the other endpoints an agent can name, which the session's count has
 	// nothing to say about.
-	const agentSlotLimits = collectAgentSlotLimits(stateManager.getGlobalSettingsKey("apiConfigurationProfiles"), apiConfig)
+	const agentSlotLimits = capEndpointByAccount(
+		collectAgentSlotLimits(stateManager.getGlobalSettingsKey("apiConfigurationProfiles"), apiConfig),
+		agentsEndpoint,
+		agentSlots.accountCap?.limit,
+	)
 	if (agentSlotLimits) {
 		Logger.log(
 			`[Agents] Per-endpoint concurrency: ${agentSlotLimits
@@ -2368,6 +2400,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 				providerId: connection.providerId,
 				baseUrl: connection.baseUrl,
 				parallelSessions: snapshotProviderSettings(snapshot)?.parallelSessions,
+				modelId: connection.modelId,
 				fetch,
 			})
 			agentNodes.push({

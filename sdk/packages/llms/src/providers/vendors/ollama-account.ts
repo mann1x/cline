@@ -41,6 +41,13 @@ export interface OllamaAccount {
 	readonly plan?: OllamaPlan;
 	readonly name?: string;
 	readonly email?: string;
+	/**
+	 * Which account this is, as an opaque in-memory key: two servers signed in
+	 * as one ollama.com account share its concurrency allowance, so requests
+	 * through either are counted together. A hash of the account's id (or
+	 * email), never the id itself; not shown, logged or stored.
+	 */
+	readonly key?: string;
 	/** Where to sign in, as the server itself computed it. */
 	readonly signinUrl?: string;
 }
@@ -127,6 +134,16 @@ function thinkingValue(value: unknown): string | undefined {
 	return nonEmptyString(value);
 }
 
+/** FNV-1a over the identity, so the key carries nothing readable. */
+function accountKey(identity: string): string {
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < identity.length; i += 1) {
+		hash ^= identity.charCodeAt(i);
+		hash = Math.imul(hash, 0x01000193) >>> 0;
+	}
+	return `acct-${hash.toString(16).padStart(8, "0")}`;
+}
+
 /**
  * Read `POST /api/me`.
  *
@@ -159,10 +176,15 @@ export function parseOllamaWhoami(
 	}
 	const plan = nonEmptyString(body.Plan) ?? nonEmptyString(body.plan);
 	const email = nonEmptyString(body.Email) ?? nonEmptyString(body.email);
+	const id =
+		nonEmptyString(body.ID) ??
+		nonEmptyString(body.Id) ??
+		nonEmptyString(body.id);
 	return {
 		reachable: true,
 		signedIn: true,
 		name,
+		key: accountKey(id ?? email ?? name),
 		// The server defaults a blank plan to "free" before it answers; this
 		// only covers a payload that omitted the field entirely.
 		plan: plan ?? "free",

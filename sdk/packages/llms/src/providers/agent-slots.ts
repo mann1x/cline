@@ -1,3 +1,5 @@
+import { resolveOllamaAccountCap } from "./vendors/ollama-account-slots";
+import { resolveOllamaOrigin } from "./vendors/ollama-reachability";
 import { probeOpencotiProps } from "./vendors/polykv";
 
 /**
@@ -85,6 +87,13 @@ export interface AgentSlotLimit {
 	admission?: "polykv" | "elastic";
 	/** Why, in one line, for the log. Never a value the caller branches on. */
 	reason: string;
+	/**
+	 * The ollama.com plan allowance that capped `limit`, for an Ollama or
+	 * xOllama endpoint serving a cloud model. Every request on that account,
+	 * from any session, agent or server, shares it (see
+	 * `ollama-account-slots`), so a host caps its per-endpoint bounds by it too.
+	 */
+	accountCap?: { plan: string; limit: number };
 }
 
 /**
@@ -112,9 +121,35 @@ export async function resolveAgentSlotLimit(input: {
 	providerId: string | undefined;
 	baseUrl?: string;
 	parallelSessions?: unknown;
+	/** The agents' model: a cloud model on Ollama draws on the account's plan. */
+	modelId?: string;
 	fetch?: typeof fetch;
 }): Promise<AgentSlotLimit> {
 	const configured = normalizeParallelSessions(input.parallelSessions);
+	if (input.providerId === "ollama" || input.providerId === "xollama") {
+		// The plan's allowance is what the account runs at once, whatever a
+		// profile says: more agents than that queue on Ollama's side and are
+		// rejected once its queue fills (issue #115). Configured lower, the lower
+		// number stands; not configured, the plan is the answer rather than one.
+		const cap = await resolveOllamaAccountCap({
+			baseUrl: resolveOllamaOrigin(input.providerId, input.baseUrl),
+			modelId: input.modelId,
+			...(input.fetch ? { fetch: input.fetch } : {}),
+		});
+		if (cap) {
+			const limit = configured ? Math.min(configured, cap.limit) : cap.limit;
+			return {
+				limit,
+				accountCap: { plan: cap.plan, limit: cap.limit },
+				reason:
+					configured && configured <= cap.limit
+						? `${configured} parallel session(s) configured; the ollama.com ${cap.plan} plan allows ${cap.limit}`
+						: `the ollama.com ${cap.plan} plan runs ${cap.limit} requests at once${
+								configured ? ` (${configured} configured)` : ""
+							}, shared by every request on the account`,
+			};
+		}
+	}
 	if (input.providerId === "opencoti") {
 		// One `/props` read answers both, and an unreachable server answers
 		// "not elastic" -- the fixed count is the safe reading when the

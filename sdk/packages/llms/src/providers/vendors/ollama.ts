@@ -48,6 +48,8 @@ import {
 	readOllamaRecommendation,
 	resetOllamaAccountStatus,
 } from "./ollama-account";
+import { withOllamaAccountSlots } from "./ollama-account-slots";
+import { resolveOllamaOrigin } from "./ollama-reachability";
 import {
 	createOllamaHealthProbe,
 	watchForStall,
@@ -1348,9 +1350,18 @@ export async function createOllamaProviderModule(
 	});
 	// Outermost, so the header that names the queue is gone before anything
 	// below could send it, and only for xOllama: stock Ollama has no such field.
-	const providerFetch = xollama
+	const progressFetch = xollama
 		? withXollamaToolCallProgress(timeoutFetch, { logger: context.logger })
 		: timeoutFetch;
+	// Outside everything else: a cloud-model request waits here for one of the
+	// ollama.com account's slots, which every session, agent and side call on
+	// any server signed in as that account shares, before the stall watcher
+	// below starts timing it.
+	const providerFetch = withOllamaAccountSlots(progressFetch, {
+		baseUrl: resolveOllamaOrigin(config.providerId, config.baseUrl),
+		probeFetch: serverFetch,
+		...(context.logger ? { logger: context.logger } : {}),
+	});
 	const provider = createOllama({
 		...(baseURL ? { baseURL } : {}),
 		...(Object.keys(headers).length > 0 ? { headers } : {}),

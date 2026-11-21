@@ -1866,6 +1866,7 @@ export async function runCli(): Promise<void> {
 				config.delegatedAgentConnection?.providerId ?? config.providerId,
 			baseUrl: config.delegatedAgentConnection?.baseUrl ?? config.baseUrl,
 			parallelSessions: args.parallelSessions,
+			modelId: config.delegatedAgentConnection?.modelId ?? config.modelId,
 		});
 		config.maxConcurrentAgents = agentSlots.limit;
 		// Agent nodes, when the run names any. Each is a whole agents
