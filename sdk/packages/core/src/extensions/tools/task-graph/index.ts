@@ -2,6 +2,7 @@ export {
 	boardCounts,
 	renderBoard,
 	renderLayers,
+	renderSavedBoard,
 	renderTask,
 } from "./board";
 export {
@@ -23,6 +24,7 @@ export {
 	TASK_PLAN_TOOL_NAME,
 	TASK_UPDATE_TOOL_NAME,
 	TASK_VIEW_TOOL_NAME,
+	type TaskGraphSeed,
 	type TaskGraphSnapshot,
 	TaskGraphStore,
 	type TaskSnapshot,

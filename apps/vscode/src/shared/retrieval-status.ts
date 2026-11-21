@@ -178,6 +178,15 @@ export interface MemoryNoteView {
 	/** How many times it was given to a task. */
 	recalled: number
 	expiresAt?: string
+	/** Set on a saved task board: the conversation it came from and its counts. */
+	board?: {
+		sessionId: string
+		title?: string
+		savedAt: string
+		keepUpdated: boolean
+		tasks: number
+		open: number
+	}
 }
 
 export interface RetrievalActionResult {
@@ -215,6 +224,10 @@ export type RetrievalAction =
 	| { action: "memoryNotes"; name: string }
 	| { action: "settleNote"; name: string; id: string; status: "noted" | "confirmed" | "outdated"; reason?: string }
 	| { action: "forgetNote"; name: string; id: string }
+	/** A saved task board: start the next new conversation from it. */
+	| { action: "useBoard"; name: string; id: string }
+	/** A saved task board: rewrite it on every change in a conversation working from it. */
+	| { action: "boardKeepUpdated"; name: string; id: string; keepUpdated: boolean }
 	| { action: "consolidateMemory"; name: string }
 	/** Bring the open folder's code index up to date; followed through the status. */
 	| { action: "codeIndexRefresh" }

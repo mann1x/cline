@@ -179,10 +179,17 @@ function noteViews(memory: ReturnType<typeof sharedMemory>, name: string): Memor
 		merged: item.merged ?? [],
 		recalled: item.recalled?.count ?? 0,
 		...(item.expiresAt ? { expiresAt: item.expiresAt } : {}),
+		...(item.board ? { board: item.board } : {}),
 	}))
 }
 
-async function act(request: RetrievalAction, outcome: Outcome): Promise<string | undefined> {
+/** What the Memory panel's board actions need from the running extension. */
+export interface RetrievalHost {
+	/** Start the next new conversation from this saved board. */
+	useBoard?: (seed: { events: unknown[]; by: string; noteId: string; memory: string; keepUpdated: boolean }) => void
+}
+
+async function act(request: RetrievalAction, outcome: Outcome, host: RetrievalHost = {}): Promise<string | undefined> {
 	const memory = sharedMemory()
 	switch (request.action) {
 		case "status":
@@ -274,6 +281,26 @@ async function act(request: RetrievalAction, outcome: Outcome): Promise<string |
 				? `${settled.id} is noted again, as the model left it.`
 				: `Marked ${settled.id} ${request.status}.`
 		}
+		case "useBoard": {
+			const saved = memory.readBoard(request.id, { memories: [request.name] })
+			if (!saved) throw new Error(`There is no saved board ${request.id} in "${request.name}".`)
+			if (!host.useBoard) throw new Error("A board can be used only from the Cerebriline panel.")
+			host.useBoard({
+				events: saved.board.events,
+				by: `memory:${request.id}`,
+				noteId: request.id,
+				memory: request.name,
+				keepUpdated: saved.board.keepUpdated,
+			})
+			return `The next new conversation starts from board ${request.id} (${saved.board.tasks} task${saved.board.tasks === 1 ? "" : "s"}, ${saved.board.open} open).`
+		}
+		case "boardKeepUpdated": {
+			const updated = memory.setBoardKeepUpdated(request.id, request.keepUpdated, { memories: [request.name] })
+			outcome.notes = noteViews(memory, request.name)
+			return updated.board?.keepUpdated
+				? `${request.id} is rewritten by every change in a conversation working from it.`
+				: `${request.id} stays as saved.`
+		}
 		case "forgetNote": {
 			const removed = await memory.forget(request.id, { memories: [request.name] })
 			outcome.notes = noteViews(memory, request.name)
@@ -317,13 +344,13 @@ async function act(request: RetrievalAction, outcome: Outcome): Promise<string |
 }
 
 /** Do one thing and say where everything stands afterwards. A failure is an answer, not a throw. */
-export async function runRetrievalAction(raw: string): Promise<RetrievalActionResult> {
+export async function runRetrievalAction(raw: string, host: RetrievalHost = {}): Promise<RetrievalActionResult> {
 	let message: string | undefined
 	let error: string | undefined
 	const outcome: Outcome = {}
 	try {
 		const request = JSON.parse(raw || "{}") as RetrievalAction
-		message = await act(request, outcome)
+		message = await act(request, outcome, host)
 	} catch (cause) {
 		error = cause instanceof Error ? cause.message : String(cause)
 	}

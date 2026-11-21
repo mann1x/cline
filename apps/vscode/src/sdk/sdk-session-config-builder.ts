@@ -28,6 +28,10 @@ export interface SdkSessionConfigBuilderOptions {
 	askUser?: AskUser
 	/** The live session's board handle, for the task panel's edits. */
 	onTaskGraphAttach?: (control: CoreTaskGraphControl) => void
+	/** Called after every change to the board (keep-updated saved boards). */
+	onTaskGraphChange?: () => void
+	/** A saved board the session starts from, when it is a new conversation. */
+	takeTaskGraphSeed?: () => { events: unknown[]; by: string } | undefined
 }
 
 /**
@@ -85,17 +89,21 @@ export class SdkSessionConfigBuilder {
 		// `task_graph` row carrying the snapshot, persisted with the chat so a
 		// reopened task shows its board. The row is never drawn in the chat.
 		if (this.options.stateManager.getGlobalSettingsKey("focusChainSettings")?.taskGraph === true) {
+			const seed = this.options.takeTaskGraphSeed?.()
 			config.taskGraph = {
 				enabled: true,
-				onUpdate: (snapshot) =>
+				onUpdate: (snapshot) => {
 					this.options.emitHookMessage({
 						ts: Date.now(),
 						type: "say",
 						say: "task_graph",
 						text: JSON.stringify(snapshot),
 						partial: false,
-					}),
+					})
+					this.options.onTaskGraphChange?.()
+				},
 				onAttach: (control) => this.options.onTaskGraphAttach?.(control),
+				...(seed ? { seed } : {}),
 			}
 		}
 		// Plan only: the tool disappears once the session is rebuilt in act mode,

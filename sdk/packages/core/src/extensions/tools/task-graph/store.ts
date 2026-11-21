@@ -180,6 +180,40 @@ export interface TaskChangeOrigin {
 	call?: string;
 }
 
+/** A saved board a new conversation starts from: its events, and who to author them as. */
+export interface TaskGraphSeed {
+	events: readonly unknown[];
+	/** As \`memory:m12\`. */
+	by: string;
+}
+
+/** A saved event's change, without its log position, time, author or call. */
+function seedEventBody(
+	raw: unknown,
+):
+	| { op: "create"; task: TaskCreateFields }
+	| { op: "update"; update: TaskUpdateFields }
+	| undefined {
+	if (!raw || typeof raw !== "object") return undefined;
+	const event = raw as { op?: unknown; task?: unknown; update?: unknown };
+	if (
+		event.op === "create" &&
+		event.task &&
+		typeof (event.task as { id?: unknown }).id === "string" &&
+		typeof (event.task as { title?: unknown }).title === "string"
+	) {
+		return { op: "create", task: event.task as TaskCreateFields };
+	}
+	if (
+		event.op === "update" &&
+		event.update &&
+		typeof (event.update as { id?: unknown }).id === "string"
+	) {
+		return { op: "update", update: event.update as TaskUpdateFields };
+	}
+	return undefined;
+}
+
 /** What an operation did, for the tool's result. */
 export interface TaskOperationOutcome {
 	/** Lines for the model, in order. */
@@ -381,7 +415,8 @@ export class TaskGraphStore {
 	reconcile(
 		history: readonly unknown[] | undefined,
 		legacyChecklist?: { text: string; done: boolean }[],
-	): "resumed" | "rewound" | "replayed" | "imported" | "empty" {
+		seed?: TaskGraphSeed,
+	): "resumed" | "rewound" | "replayed" | "imported" | "seeded" | "empty" {
 		const logged = this.readLog();
 		const calls = toolCallsInHistory(history);
 		if (logged.length > 0) {
@@ -435,6 +470,22 @@ export class TaskGraphStore {
 			}
 			this.onChange?.(this);
 			return "replayed";
+		}
+		// A conversation started from a saved board: its events, ids kept, each
+		// authored by where it came from. Made by no call, so a later cut-back
+		// keeps them, as it keeps any import.
+		if (seed && seed.events.length > 0) {
+			let applied = 0;
+			for (const raw of seed.events) {
+				const body = seedEventBody(raw);
+				if (!body) continue;
+				this.record(body, { by: seed.by });
+				applied += 1;
+			}
+			if (applied > 0) {
+				this.onChange?.(this);
+				return "seeded";
+			}
 		}
 		if (legacyChecklist && legacyChecklist.length > 0) {
 			for (const item of legacyChecklist) {

@@ -171,3 +171,38 @@ export function renderLayers(state: TaskGraphState): string {
 		)
 		.join("\n");
 }
+
+/**
+ * The board as a saved note reads (task graph phase 2, export to memory):
+ * a header naming the conversation and the time, the open tasks in full,
+ * the closed ones as one line with their outcome.
+ */
+export function renderSavedBoard(
+	state: TaskGraphState,
+	header: { title?: string; sessionId: string; savedAt: string },
+): string {
+	const tasks = state.order.map((id) => state.tasks.get(id) as Task);
+	const open = tasks.filter(
+		(task) => task.status !== "done" && task.status !== "cancelled",
+	);
+	const closed = tasks.filter(
+		(task) => task.status === "done" || task.status === "cancelled",
+	);
+	const lines = [
+		`Task board${header.title ? `: ${header.title}` : ""}`,
+		`Saved ${header.savedAt} from conversation ${header.sessionId}. ${boardCounts(state)}`,
+	];
+	if (open.length) {
+		lines.push("", "Open:");
+		for (const task of open) lines.push("", renderTask(state, task));
+	}
+	if (closed.length) {
+		lines.push("", "Closed:");
+		for (const task of closed) {
+			lines.push(
+				`- ${task.id} ${shortTitle(task.title)} (${task.status}${task.outcome ? `: ${task.outcome}` : ""})`,
+			);
+		}
+	}
+	return lines.join("\n");
+}

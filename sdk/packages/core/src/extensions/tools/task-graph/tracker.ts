@@ -31,13 +31,14 @@
 
 import type { AgentTool } from "@cline/shared";
 import { WRITE_CLASS_TOOL_NAMES } from "../../../runtime/safety/loop-detection";
-import { renderBoard, shortTitle } from "./board";
-import { openWork, type Task } from "./model";
+import { renderBoard, renderSavedBoard, shortTitle } from "./board";
+import { countTasks, openWork, type Task, type TaskEvent } from "./model";
 import {
 	readTaskDone,
 	TASK_DONE_PARAM,
 	TASK_DONE_TOOL_NAMES,
 	TASK_GRAPH_TOOL_NAMES,
+	type TaskGraphSeed,
 	TaskGraphStore,
 	type TaskGraphStoreOptions,
 } from "./store";
@@ -353,12 +354,38 @@ export class TaskGraphTracker {
 	start(
 		history: readonly unknown[] | undefined,
 		legacyChecklist?: { text: string; done: boolean }[],
+		seed?: TaskGraphSeed,
 	): ReturnType<TaskGraphStore["reconcile"]> {
-		const result = this.store.reconcile(history, legacyChecklist);
+		const result = this.store.reconcile(history, legacyChecklist, seed);
 		if (!this.store.isEmpty() && (history?.length ?? 0) > 0) {
 			this.boardDue = true;
 		}
+		// A board the person brought in: the model has not seen it, so it is
+		// shown with the first look, as after a compaction.
+		if (result === "seeded") this.boardDue = true;
 		return result;
+	}
+
+	/** The board as saved into a memory: its events, its text, and counts. */
+	exportBoard(header: { title?: string; sessionId: string }): {
+		events: TaskEvent[];
+		text: string;
+		tasks: number;
+		open: number;
+	} {
+		const state = this.store.getState();
+		const counts = countTasks(state);
+		return {
+			events: this.store
+				.getEvents()
+				.map(({ call: _call, ...event }) => event as TaskEvent),
+			text: renderSavedBoard(state, {
+				...header,
+				savedAt: new Date().toISOString(),
+			}),
+			tasks: counts.total,
+			open: counts.total - counts.done - counts.cancelled,
+		};
 	}
 
 	/** A compaction landed: the calls that built the board are gone (S7). */

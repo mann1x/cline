@@ -484,6 +484,12 @@ export interface CoreTaskGraphConfig {
 	 * is told about it.
 	 */
 	onAttach?: (control: CoreTaskGraphControl) => void;
+	/**
+	 * A saved board to start from, for a conversation with none yet: its
+	 * events, ids kept, each authored \`by\` (as \`memory:m12\`). Ignored when
+	 * the session already has a board.
+	 */
+	seed?: { events: readonly unknown[]; by: string };
 }
 
 /** The task panel's handle on a live session's board. */
@@ -492,6 +498,13 @@ export interface CoreTaskGraphControl {
 	sessionId: string;
 	edit(action: TaskGraphEdit): TaskGraphEditOutcome;
 	snapshot(): TaskGraphSnapshot;
+	/** The board as saved into a memory: events (no call ids), text, counts. */
+	exportBoard(header: { title?: string }): {
+		events: unknown[];
+		text: string;
+		tasks: number;
+		open: number;
+	};
 }
 
 /**

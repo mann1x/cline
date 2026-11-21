@@ -954,3 +954,83 @@ describe("the person's edits from the panel", () => {
 		expect(tracker.takeRunStartNote()).toBeUndefined();
 	});
 });
+
+describe("saved boards (export to memory)", () => {
+	it("exports events without call ids, and a text with open tasks in full", () => {
+		const tracker = new TaskGraphTracker();
+		tracker.store.plan(
+			{
+				tasks: [
+					{ title: "Store cents", acceptance: ["old files load"] },
+					{ title: "Report", depends: ["#1"] },
+				],
+			},
+			{ by: "model", call: "c1" },
+		);
+		tracker.store.update({
+			updates: [{ id: "T1", status: "done", note: "migrated" }],
+		});
+		const saved = tracker.exportBoard({ title: "ledger", sessionId: "s1" });
+		expect(saved.tasks).toBe(2);
+		expect(saved.open).toBe(1);
+		expect(saved.events.some((event) => "call" in event)).toBe(false);
+		expect(saved.text).toContain("Task board: ledger");
+		expect(saved.text).toContain("from conversation s1");
+		expect(saved.text).toMatch(/Open:\n\nT2 Report\nstatus: /);
+		expect(saved.text).toContain("- T1 Store cents (done: migrated)");
+	});
+
+	it("a new conversation starts from the saved events, ids kept and authored by the memory", () => {
+		const source = new TaskGraphTracker();
+		source.store.plan({
+			tasks: [{ title: "A" }, { title: "B", depends: ["#1"] }],
+		});
+		source.store.update({
+			updates: [{ id: "T1", status: "done", note: "ok" }],
+		});
+		const { events } = source.exportBoard({ sessionId: "s1" });
+
+		const tracker = new TaskGraphTracker();
+		expect(tracker.start([], undefined, { events, by: "memory:m7" })).toBe(
+			"seeded",
+		);
+		expect(task(tracker.store, "T1")?.status).toBe("done");
+		expect(task(tracker.store, "T2")?.status).toBe("active");
+		expect(
+			tracker.store.getEvents().every((event) => event.by === "memory:m7"),
+		).toBe(true);
+		// The model has not seen it: the board goes out with the first look.
+		expect(tracker.takePendingReminder() ?? "").toContain(
+			"The task board, as it stands",
+		);
+		// New tasks continue the numbering.
+		tracker.store.plan({ tasks: [{ title: "C" }] });
+		expect(tracker.store.getState().order).toEqual(["T1", "T2", "T3"]);
+	});
+
+	it("a seed is ignored when the session already has a board, and junk events are skipped", () => {
+		const dir = mkdtempSync(join(tmpdir(), "tg-seed-"));
+		try {
+			const logPath = join(dir, "s.tasks.jsonl");
+			const first = new TaskGraphTracker({ logPath });
+			first.store.plan({ tasks: [{ title: "Mine" }] });
+			const resumed = new TaskGraphTracker({ logPath });
+			expect(
+				resumed.start([], undefined, {
+					events: [{ op: "create", task: { id: "T1", title: "Theirs" } }],
+					by: "memory:m1",
+				}),
+			).toBe("resumed");
+			expect(task(resumed.store, "T1")?.title).toBe("Mine");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+		const fresh = new TaskGraphTracker();
+		expect(
+			fresh.start([], undefined, {
+				events: [{ op: "drop" }, "x", null],
+				by: "memory:m1",
+			}),
+		).toBe("empty");
+	});
+});

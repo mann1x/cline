@@ -182,6 +182,112 @@ describe("Memory", () => {
 		expect(found.items[0].text).toContain("node --test");
 	});
 
+	it("keeps a saved task board apart from the notes the model sees", async () => {
+		await memory.remember({ text: "Tests run with node --test." });
+		const events = [
+			{
+				seq: 1,
+				at: "t",
+				by: "model",
+				op: "create",
+				task: { id: "T1", title: "Store cents" },
+			},
+		];
+		const saved = await memory.saveBoard({
+			text: "Task board: ledger\n- T1 Store cents (active)\n tests run",
+			board: {
+				sessionId: "s1",
+				title: "ledger",
+				keepUpdated: false,
+				tasks: 1,
+				open: 1,
+				events,
+			},
+		});
+		expect(saved.board).toMatchObject({
+			sessionId: "s1",
+			tasks: 1,
+			open: 1,
+			keepUpdated: false,
+		});
+		expect(saved.board).not.toHaveProperty("events");
+		// The panel lists it; recall, the model's listing and export do not.
+		expect(memory.list().map((item) => item.id)).toContain(saved.id);
+		expect(
+			memory.list({ boards: "exclude" }).map((item) => item.id),
+		).not.toContain(saved.id);
+		expect(memory.list({ boards: "only" }).map((item) => item.id)).toEqual([
+			saved.id,
+		]);
+		const found = await memory.recall("tests run");
+		expect(found.items.map((item) => item.id)).not.toContain(saved.id);
+		expect(memory.exportMemory("main").notes.map((note) => note.text)).toEqual([
+			"Tests run with node --test.",
+		]);
+		// Read back whole, events and all.
+		expect(memory.readBoard(saved.id)?.board.events).toEqual(events);
+		expect(memory.readBoard("m1")).toBeUndefined();
+		// The model's forget leaves it; the person's removes it.
+		expect(await memory.forget(saved.id, { keepBoards: true })).toBe(false);
+		expect(await memory.forget(saved.id)).toBe(true);
+	});
+
+	it("writes over a saved board in place, and switches keep-updated", async () => {
+		const first = await memory.saveBoard({
+			text: "Task board: one task",
+			board: {
+				sessionId: "s1",
+				keepUpdated: false,
+				tasks: 1,
+				open: 1,
+				events: [],
+			},
+		});
+		const kept = memory.setBoardKeepUpdated(first.id, true);
+		expect(kept.board?.keepUpdated).toBe(true);
+		const second = await memory.saveBoard({
+			replaces: first.id,
+			text: "Task board: two tasks",
+			board: {
+				sessionId: "s2",
+				keepUpdated: true,
+				tasks: 2,
+				open: 0,
+				events: [],
+			},
+		});
+		expect(second.id).toBe(first.id);
+		expect(second.text).toBe("Task board: two tasks");
+		expect(second.board).toMatchObject({ sessionId: "s2", tasks: 2, open: 0 });
+		expect(memory.list({ boards: "only" })).toHaveLength(1);
+		await expect(
+			memory.saveBoard({
+				replaces: "m999",
+				text: "x",
+				board: {
+					sessionId: "s",
+					keepUpdated: false,
+					tasks: 0,
+					open: 0,
+					events: [],
+				},
+			}),
+		).rejects.toThrow("no saved board");
+		// A board longer than a note is cut, its events kept.
+		const long = await memory.saveBoard({
+			text: "x".repeat(MEMORY_MAX_CHARS + 50),
+			board: {
+				sessionId: "s3",
+				keepUpdated: false,
+				tasks: 0,
+				open: 0,
+				events: [{ a: 1 }],
+			},
+		});
+		expect(long.text.length).toBeLessThanOrEqual(MEMORY_MAX_CHARS);
+		expect(memory.readBoard(long.id)?.board.events).toEqual([{ a: 1 }]);
+	});
+
 	it("keeps the same note once in a memory, and again in another", async () => {
 		memory.createMemory({ name: "acme" });
 		const text = "Two-space indentation.";
@@ -602,6 +708,30 @@ describe("the memory tools", () => {
 		expect(found).not.toContain("Private: tests");
 		const listed = await call("recall", {});
 		expect(listed).toContain("the 2 newest of 2 notes");
+	});
+
+	it("never hands the model a saved task board, nor lets it forget one", async () => {
+		await memory.remember({ text: "Tests run with node --test." });
+		const saved = await memory.saveBoard({
+			text: "Task board: tests to fix",
+			board: {
+				sessionId: "s1",
+				keepUpdated: false,
+				tasks: 1,
+				open: 1,
+				events: [],
+			},
+		});
+		const listed = await call("recall", {});
+		expect(listed).toContain("1 newest of 1 note");
+		expect(listed).not.toContain("Task board");
+		expect(await call("recall", { query: "tests" })).not.toContain(
+			"Task board",
+		);
+		expect(await call("forget", { id: saved.id })).toContain(
+			"There is no note",
+		);
+		expect(memory.readBoard(saved.id)).toBeDefined();
 	});
 
 	it("forgets only in the memory the workspace stores to", async () => {

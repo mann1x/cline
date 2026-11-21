@@ -147,6 +147,77 @@ const InlineText = ({
 	)
 }
 
+/** "Save to memory": which memory, and whether the saved board follows this conversation. */
+const SaveToMemory = ({ onReply }: { onReply: (reply: { ok: boolean; text: string }) => void }) => {
+	const [choice, setChoice] = useState<{ names: string[]; memory: string; keepUpdated: boolean } | undefined>(undefined)
+	const call = async (action: Record<string, unknown>) => {
+		const response = await StateServiceClient.taskGraphAction(StringRequest.create({ value: JSON.stringify(action) }))
+		return JSON.parse(response.value) as {
+			ok?: boolean
+			lines?: string[]
+			memories?: { enabled: boolean; names: string[]; preferred: string }
+		}
+	}
+	const open = async () => {
+		try {
+			const answer = await call({ op: "memories" })
+			if (!answer.memories?.enabled) {
+				onReply({ ok: false, text: "Memory is off. Turn it on under Settings → Memory to save the board." })
+				return
+			}
+			setChoice({ names: answer.memories.names, memory: answer.memories.preferred, keepUpdated: false })
+		} catch (error) {
+			onReply({ ok: false, text: error instanceof Error ? error.message : String(error) })
+		}
+	}
+	const save = async () => {
+		if (!choice) return
+		try {
+			const answer = await call({ op: "save", memory: choice.memory, keepUpdated: choice.keepUpdated })
+			onReply({ ok: answer.ok === true, text: (answer.lines ?? []).join(" ") })
+			setChoice(undefined)
+		} catch (error) {
+			onReply({ ok: false, text: error instanceof Error ? error.message : String(error) })
+		}
+	}
+	if (!choice) {
+		return (
+			<button className={linkButton} onClick={() => void open()} type="button">
+				Save to memory…
+			</button>
+		)
+	}
+	return (
+		<div className="flex gap-2 items-center flex-wrap text-xs">
+			<select
+				aria-label="Memory to save the board in"
+				className="text-xs bg-input-background text-input-foreground border border-input-border"
+				onChange={(event) => setChoice({ ...choice, memory: event.target.value })}
+				value={choice.memory}>
+				{choice.names.map((name) => (
+					<option key={name} value={name}>
+						{name}
+					</option>
+				))}
+			</select>
+			<label className="flex items-center gap-1 cursor-pointer">
+				<input
+					checked={choice.keepUpdated}
+					onChange={(event) => setChoice({ ...choice, keepUpdated: event.target.checked })}
+					type="checkbox"
+				/>
+				Keep it updated
+			</label>
+			<button className={linkButton} onClick={() => void save()} type="button">
+				Save
+			</button>
+			<button className={linkButton} onClick={() => setChoice(undefined)} type="button">
+				Back
+			</button>
+		</div>
+	)
+}
+
 /** What can be done to a task from the panel. */
 const TaskActions = ({ task, send }: { task: TaskGraphPanelTask; send: SendTaskGraphAction }) => {
 	const [asking, setAsking] = useState<"done" | "cancelled" | undefined>(undefined)
@@ -352,7 +423,7 @@ export const TaskGraphPanel = memo(({ clineMessages }: TaskGraphPanelProps) => {
 
 			{isExpanded && (
 				<div className="flex flex-col gap-1 mt-0.5 pl-2">
-					<div className="flex gap-2 text-xs" role="tablist">
+					<div className="flex gap-2 text-xs items-center flex-wrap" role="tablist">
 						{(["list", "graph"] as const).map((name) => (
 							<button
 								aria-selected={tab === name}
@@ -367,6 +438,9 @@ export const TaskGraphPanel = memo(({ clineMessages }: TaskGraphPanelProps) => {
 								{name === "list" ? "List" : "Graph"}
 							</button>
 						))}
+						<span className="ml-auto">
+							<SaveToMemory onReply={setReply} />
+						</span>
 					</div>
 					{tab === "list" ? (
 						<ul className="list-none m-0 p-0 flex flex-col gap-0.5">

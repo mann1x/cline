@@ -110,9 +110,16 @@ const MemoryNotes = ({ retrieval, name, label, onClose }: MemoryNotesProps) => {
 						<li className="border-t border-(--vscode-panel-border) pt-2 text-xs" key={note.id}>
 							<div className="flex items-center gap-1 flex-wrap">
 								<code>{note.id}</code>
-								<span className={`border rounded-sm px-1 ${statusClass(note.status)}`}>
-									{STATUS_LABEL[note.status]}
-								</span>
+								{note.board ? (
+									<span className="border rounded-sm px-1 border-(--vscode-textLink-foreground) text-(--vscode-textLink-foreground)">
+										task board · {note.board.tasks} task{note.board.tasks === 1 ? "" : "s"}, {note.board.open}{" "}
+										open
+									</span>
+								) : (
+									<span className={`border rounded-sm px-1 ${statusClass(note.status)}`}>
+										{STATUS_LABEL[note.status]}
+									</span>
+								)}
 								{note.kind !== "fact" ? <span className="border rounded-sm px-1">{note.kind}</span> : null}
 								<span className="text-(--vscode-descriptionForeground)">
 									{note.createdAt.slice(0, 10)}
@@ -218,6 +225,34 @@ const MemoryNotes = ({ retrieval, name, label, onClose }: MemoryNotesProps) => {
 										</VSCodeButton>
 										<VSCodeButton appearance="icon" onClick={() => setConfirmForget(undefined)}>
 											Keep
+										</VSCodeButton>
+									</>
+								) : note.board ? (
+									<>
+										<VSCodeButton
+											appearance="secondary"
+											disabled={busy}
+											onClick={() => void act({ action: "useBoard", name, id: note.id })}>
+											Use in a new conversation
+										</VSCodeButton>
+										<label className="flex items-center gap-1 cursor-pointer">
+											<input
+												checked={note.board.keepUpdated}
+												disabled={busy}
+												onChange={(event) =>
+													void act({
+														action: "boardKeepUpdated",
+														name,
+														id: note.id,
+														keepUpdated: event.target.checked,
+													})
+												}
+												type="checkbox"
+											/>
+											Keep it updated from the conversation working on it
+										</label>
+										<VSCodeButton appearance="icon" disabled={busy} onClick={() => setConfirmForget(note.id)}>
+											Forget
 										</VSCodeButton>
 									</>
 								) : (

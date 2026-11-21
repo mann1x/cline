@@ -12,6 +12,9 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
 - **The task panel can change the board:** start, finish, cancel or reopen a
   task, tick its acceptance, add a task. Each change is yours in the board's
   log, and the model is told what changed with its next look.
+- **Save a board to Memory and start a new conversation from it**, optionally
+  keeping the saved board updated. Saved boards never reach the model through
+  recall or its memory tools.
 
 ## [4.100.289] — 2026-11-20
 

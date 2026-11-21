@@ -54,6 +54,66 @@ export interface MemoryItem extends Partial<MemoryNoteFields> {
 	memory: string;
 	tags: string[];
 	createdAt: string;
+	/** Set on a saved task board: what it is, without its events. */
+	board?: MemoryBoardSummary;
+}
+
+/**
+ * A conversation's task board, saved into a memory by the person (task graph,
+ * phase 2). Kept as a note so the Memory panel lists, forgets and moves it
+ * like one, but it is not a note for the model: recall, the model's listing
+ * and forgetting, consolidation and export all leave it out. The text is the
+ * board as read; the events are what a new conversation starts from, ids kept.
+ */
+export interface MemoryBoard {
+	format: typeof MEMORY_BOARD_FORMAT;
+	version: 1;
+	/** The conversation it was saved from, or last written by. */
+	sessionId: string;
+	title?: string;
+	savedAt: string;
+	/** Rewritten by every change in a conversation working from it. */
+	keepUpdated: boolean;
+	tasks: number;
+	open: number;
+	events: unknown[];
+}
+
+export type MemoryBoardSummary = Omit<
+	MemoryBoard,
+	"events" | "format" | "version"
+>;
+
+export const MEMORY_BOARD_FORMAT = "cerebriline-taskboard";
+/** The source a saved board's document carries; notes are \`memory:…\`. */
+export const MEMORY_BOARD_SOURCE = "taskboard:";
+
+function isBoardDocument(document: { source: string }): boolean {
+	return document.source.startsWith(MEMORY_BOARD_SOURCE);
+}
+
+function readBoard(metadata: Record<string, unknown>): MemoryBoard | undefined {
+	const board = metadata.board as Partial<MemoryBoard> | undefined;
+	if (
+		!board ||
+		typeof board !== "object" ||
+		board.format !== MEMORY_BOARD_FORMAT
+	) {
+		return undefined;
+	}
+	return {
+		format: MEMORY_BOARD_FORMAT,
+		version: 1,
+		sessionId: typeof board.sessionId === "string" ? board.sessionId : "",
+		...(typeof board.title === "string" && board.title
+			? { title: board.title }
+			: {}),
+		savedAt: typeof board.savedAt === "string" ? board.savedAt : "",
+		keepUpdated: board.keepUpdated === true,
+		tasks: Number(board.tasks) || 0,
+		open: Number(board.open) || 0,
+		events: Array.isArray(board.events) ? board.events : [],
+	};
 }
 
 /** What `remember` did with a note. */
@@ -634,6 +694,19 @@ export class Memory {
 			tags: tagsOfDocument(document),
 			// An imported note keeps the day it was noted, not the day it arrived.
 			createdAt: typeof noted === "string" && noted ? noted : document.addedAt,
+			...(() => {
+				const board = isBoardDocument(document)
+					? readBoard(document.metadata)
+					: undefined;
+				if (!board) return {};
+				const {
+					events: _events,
+					format: _format,
+					version: _version,
+					...summary
+				} = board;
+				return { board: summary };
+			})(),
 		};
 	}
 
@@ -1105,7 +1178,7 @@ export class Memory {
 			if (seen.has(hit.documentId)) continue;
 			seen.add(hit.documentId);
 			const document = this.library.store.getDocument(hit.documentId);
-			if (!document) continue;
+			if (!document || isBoardDocument(document)) continue;
 			const item: RecalledMemory = {
 				...this.toItem(document, names.get(hit.collectionId) ?? MAIN_MEMORY),
 				...(hit.rerankScore !== undefined
@@ -1173,11 +1246,25 @@ export class Memory {
 	}
 
 	/** Every note of the memories named, newest first. */
-	list(options: { memories?: readonly string[] } = {}): MemoryItem[] {
+	list(
+		options: {
+			memories?: readonly string[];
+			/** Saved task boards: with the notes (the panel), left out (the model), or alone. */
+			boards?: "include" | "exclude" | "only";
+		} = {},
+	): MemoryItem[] {
+		const boards = options.boards ?? "include";
 		return this.collections(options.memories ?? [MAIN_MEMORY])
 			.flatMap((collection) =>
 				this.library.store
 					.listDocuments(collection.id)
+					.filter((document) =>
+						boards === "include"
+							? true
+							: boards === "only"
+								? isBoardDocument(document)
+								: !isBoardDocument(document),
+					)
 					.map((document) => this.toItem(document, collection.name)),
 			)
 			.sort(
@@ -1189,10 +1276,15 @@ export class Memory {
 	/** Remove a note. False when the memories named hold none with that id. */
 	async forget(
 		id: string,
-		options: { memories?: readonly string[] } = {},
+		options: {
+			memories?: readonly string[];
+			/** Leave saved task boards alone: the model's forget does. */
+			keepBoards?: boolean;
+		} = {},
 	): Promise<boolean> {
 		const found = this.resolveNote(id, options.memories ?? [MAIN_MEMORY]);
 		if (!found) return false;
+		if (options.keepBoards && isBoardDocument(found.document)) return false;
 		await this.library.removeDocument(found.document.id);
 		return true;
 	}
@@ -1421,7 +1513,8 @@ export class Memory {
 			name,
 			...(info.workspace ? { workspace: info.workspace } : {}),
 			exportedAt: new Date().toISOString(),
-			notes: this.list({ memories: [name] })
+			// A saved board is the person's working state, not a note to carry.
+			notes: this.list({ memories: [name], boards: "exclude" })
 				.reverse()
 				.map((item) => ({
 					text: item.text,
@@ -1532,6 +1625,112 @@ export class Memory {
 	}
 
 	/** How many notes there are, and how many have vectors for this embedding model. */
+	// ── Saved task boards ──────────────────────────────────────────────
+
+	/**
+	 * Save a conversation's task board into a memory, or write over the board
+	 * \`replaces\` names. The text is cut to a note's length; the events are
+	 * kept whole, so a conversation started from it has every task, ids kept.
+	 */
+	async saveBoard(input: {
+		/** @default the main memory */
+		memory?: string;
+		text: string;
+		board: Omit<MemoryBoard, "format" | "version" | "savedAt">;
+		/** A saved board's id: write over it rather than adding one. */
+		replaces?: string;
+	}): Promise<MemoryItem> {
+		this.migrate();
+		const memory = input.memory ?? MAIN_MEMORY;
+		if (!this.listMemories().some((entry) => entry.name === memory)) {
+			throw new Error(`There is no memory named "${memory}".`);
+		}
+		const raw = input.text.trim() || "Task board (empty)";
+		const text =
+			raw.length > MEMORY_MAX_CHARS
+				? `${raw.slice(0, MEMORY_MAX_CHARS - 2).trimEnd()} …`
+				: raw;
+		const now = new Date().toISOString();
+		const metadata = {
+			tags: ["taskboard"],
+			board: {
+				...input.board,
+				format: MEMORY_BOARD_FORMAT,
+				version: 1,
+				savedAt: now,
+			} satisfies MemoryBoard,
+		};
+		if (input.replaces) {
+			const found = this.resolveNote(input.replaces, [memory]);
+			if (!found || !isBoardDocument(found.document)) {
+				throw new Error(
+					`There is no saved board ${input.replaces} in "${memory}".`,
+				);
+			}
+			const replaced = await this.library.replaceDocument(
+				found.document.id,
+				{
+					source: found.document.source,
+					text,
+					metadata: { ...metadata, createdAt: found.document.addedAt },
+				},
+				NOTE_SETTINGS,
+			);
+			return this.toItem(replaced, memory);
+		}
+		const result = await this.library.addDocument(
+			memory,
+			{
+				source: `${MEMORY_BOARD_SOURCE}${input.board.sessionId}:${now}`,
+				text,
+				metadata,
+			},
+			NOTE_SETTINGS,
+		);
+		return this.toItem(result.document, memory);
+	}
+
+	/** A saved board with its events, by id; undefined when the id is not a board. */
+	readBoard(
+		id: string,
+		options: { memories?: readonly string[] } = {},
+	): { item: MemoryItem; board: MemoryBoard } | undefined {
+		this.migrate();
+		const found = this.resolveNote(
+			id,
+			options.memories ?? this.listMemories().map((memory) => memory.name),
+		);
+		if (!found || !isBoardDocument(found.document)) return undefined;
+		const board = readBoard(found.document.metadata);
+		if (!board) return undefined;
+		return { item: this.toItem(found.document, found.memory), board };
+	}
+
+	/** Turn keep-updated on or off for a saved board. */
+	setBoardKeepUpdated(
+		id: string,
+		keepUpdated: boolean,
+		options: { memories?: readonly string[] } = {},
+	): MemoryItem {
+		this.migrate();
+		const found = this.resolveNote(
+			id,
+			options.memories ?? this.listMemories().map((memory) => memory.name),
+		);
+		const board =
+			found && isBoardDocument(found.document)
+				? readBoard(found.document.metadata)
+				: undefined;
+		if (!found || !board) throw new Error(`There is no saved board ${id}.`);
+		this.library.store.updateMetadata(found.document.id, {
+			...found.document.metadata,
+			board: { ...board, keepUpdated },
+		});
+		const updated =
+			this.library.store.getDocument(found.document.id) ?? found.document;
+		return this.toItem(updated, found.memory);
+	}
+
 	counts(model?: string): { notes: number; embeddedNotes: number } {
 		this.migrate();
 		const counts = this.library.store.counts(model);

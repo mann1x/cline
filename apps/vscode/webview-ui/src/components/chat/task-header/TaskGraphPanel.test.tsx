@@ -128,3 +128,45 @@ describe("TaskGraphPanel edits", () => {
 		await waitFor(() => expect(screen.getByRole("status").className).toContain("text-error"))
 	})
 })
+
+describe("TaskGraphPanel save to memory", () => {
+	beforeEach(() => {
+		taskGraphAction.mockReset()
+	})
+
+	it("offers the memories, then saves into the chosen one", async () => {
+		taskGraphAction.mockImplementation(async (request: { value: string }) => {
+			const action = JSON.parse(request.value)
+			if (action.op === "memories") {
+				return {
+					value: JSON.stringify({
+						ok: true,
+						lines: [],
+						memories: { enabled: true, names: ["main", "acme"], preferred: "acme" },
+					}),
+				}
+			}
+			return { value: JSON.stringify({ ok: true, lines: ['Saved the board as m4 in "main".'] }) }
+		})
+		render(<TaskGraphPanel clineMessages={[board(tasks)]} />)
+		fireEvent.click(screen.getByText("Tasks"))
+		fireEvent.click(screen.getByText("Save to memory…"))
+		const select = (await screen.findByLabelText("Memory to save the board in")) as HTMLSelectElement
+		expect(select.value).toBe("acme")
+		fireEvent.change(select, { target: { value: "main" } })
+		fireEvent.click(screen.getByLabelText("Keep it updated"))
+		fireEvent.click(screen.getByText("Save"))
+		await waitFor(() => expect(screen.getByRole("status").textContent).toContain("m4"))
+		expect(JSON.parse(taskGraphAction.mock.calls[1][0].value)).toEqual({ op: "save", memory: "main", keepUpdated: true })
+	})
+
+	it("says so when Memory is off", async () => {
+		taskGraphAction.mockResolvedValue({
+			value: JSON.stringify({ ok: false, lines: [], memories: { enabled: false, names: [], preferred: "main" } }),
+		})
+		render(<TaskGraphPanel clineMessages={[board(tasks)]} />)
+		fireEvent.click(screen.getByText("Tasks"))
+		fireEvent.click(screen.getByText("Save to memory…"))
+		await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Memory is off"))
+	})
+})

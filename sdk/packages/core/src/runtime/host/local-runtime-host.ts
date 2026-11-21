@@ -1305,6 +1305,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 			const outcome = taskGraphTracker.start(
 				initialMessages,
 				legacy ? buildTaskProgressState(legacy).items : undefined,
+				taskGraphConfig?.seed,
 			);
 			configWithProvider.logger?.log?.(
 				`[task-graph] ${outcome}: ${taskGraphTracker.store.getState().order.length} tasks`,
@@ -1314,6 +1315,8 @@ export class LocalRuntimeHost implements RuntimeHost {
 				sessionId,
 				edit: (action) => taskGraphTracker.edit(action),
 				snapshot: () => taskGraphTracker.store.snapshot(),
+				exportBoard: (header) =>
+					taskGraphTracker.exportBoard({ ...header, sessionId }),
 			});
 		}
 		const taskProgressConfig = taskGraphTracker

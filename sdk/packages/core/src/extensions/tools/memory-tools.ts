@@ -257,7 +257,8 @@ function createRecallTool(options: CreateMemoryToolsOptions): AgentTool {
 					return "No memory is open for reading in this workspace. The user chooses which under Settings > Memory.";
 				}
 				if (!query) {
-					const all = memory.list({ memories: recall });
+					// Saved task boards are the person's, not notes for the model.
+					const all = memory.list({ memories: recall, boards: "exclude" });
 					if (all.length === 0) {
 						return "Memory holds nothing here yet. remember keeps a note.";
 					}
@@ -324,7 +325,10 @@ function createForgetTool(options: CreateMemoryToolsOptions): AgentTool {
 					config.settings,
 					options.cwd,
 				);
-				const removed = await memory.forget(id, { memories: [store] });
+				const removed = await memory.forget(id, {
+					memories: [store],
+					keepBoards: true,
+				});
 				return removed
 					? `Forgot ${id}.`
 					: `There is no note ${id} in the "${store}" memory, the one this workspace stores to. A note in a memory that is only read here is the user's to remove.`;

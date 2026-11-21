@@ -479,7 +479,30 @@ keep-updated (section 11).
   panel calls `StateService.taskGraphAction` (JSON in, `{ok, lines}` out),
   which edits only the active session's board. Panel: Start, Done… (outcome
   optional), Cancel… (reason required), Reopen, acceptance ticks, + Add task.
-- Next: export to memory (section 11).
+- **Export to memory, 2026-11-21.** A saved board is a Memory document with
+  source `taskboard:<session>:<time>` and `metadata.board` (format
+  `cerebriline-taskboard`, session, title, savedAt, keepUpdated, counts, the
+  events without call ids); its text is `renderSavedBoard` (header, open tasks
+  in full via `renderTask`, closed as one line with the outcome), cut to a
+  note's 4,000 characters. `Memory.saveBoard` (add, or `replaces` in place),
+  `readBoard`, `setBoardKeepUpdated`; `recall`, `list({boards:"exclude"})`
+  (the model's listing), `forget({keepBoards})` (the model's), `consolidate`
+  (notes are `memory:` sources) and `exportMemory` leave boards out. Use:
+  `taskGraph.seed {events, by: "memory:<id>"}` seeds a session with no log
+  and no task calls (`reconcile` → "seeded", events authored by the memory,
+  made by no call so a cut-back keeps them; the board is shown with the first
+  look). Extension: `TaskBoardMemory` (`src/sdk/task-board-memory.ts`) holds
+  the seed the Memory panel picked until the next new task (`initTask`
+  without a history item), ties the session to the saved board, and on
+  every board change rewrites it after 1.5 s when that board says
+  keepUpdated (read at write time, so the Memory panel's switch takes effect
+  mid-conversation). Task panel: "Save to memory…" (memory, keep updated);
+  Memory panel: a task board chip, "Use in a new conversation", the keep-updated
+  switch, Forget.
+- Left for later in phase 2: saving the board of a conversation reopened from
+  history before its session is back (the board is read from the live
+  session), and starting from a saved board "by the person asking" (it needs
+  a tool, and the model has no board access in this phase).
 
 **3. Switch over.**
 - Templates.

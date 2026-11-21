@@ -125,6 +125,7 @@ import { readCurrentMessages } from "./session-host"
 import { describeSessionSettings, SESSION_SETTINGS_METADATA_KEY } from "./session-settings-snapshot"
 import { buildDisabledWorkflowNames, expandSlashCommands } from "./slash-command-expansion"
 import { StatePostDebouncer } from "./state-post-debouncer"
+import { TaskBoardMemory, type TaskBoardSeed } from "./task-board-memory"
 import { createTaskProxy, type TaskProxy } from "./task-proxy"
 import { syncTelemetrySettingFromSharedGlobalSettings } from "./telemetry-settings-sync"
 import { TurnStateTracker } from "./turn-state-tracker"
@@ -211,6 +212,8 @@ export class Controller {
 	private sessions: SdkSessionLifecycle
 	/** The newest session's board handle; edits go to it only while it is the active session. */
 	private taskGraphControl: CoreTaskGraphControl | undefined
+	/** Saving the board into Memory, starting from a saved one, keeping one updated. */
+	private readonly taskBoardMemory = new TaskBoardMemory({ cwd: () => this.getWorkspaceRoot() })
 	private sessionRebuilds: SdkSessionRebuildScheduler
 	private interactions: SdkInteractionCoordinator
 	private diffEdits: SdkDiffEditCoordinator
@@ -428,7 +431,10 @@ export class Controller {
 			askUser: (question, options) => this.interactions.handleAskQuestion(question, options, undefined),
 			onTaskGraphAttach: (control) => {
 				this.taskGraphControl = control
+				this.taskBoardMemory.attach(control)
 			},
+			onTaskGraphChange: () => this.taskBoardMemory.changed(),
+			takeTaskGraphSeed: () => this.taskBoardMemory.takeSeed(),
 		})
 		this.diffEdits = new SdkDiffEditCoordinator({
 			getCwd: () => this.getWorkspaceRoot(),
@@ -940,6 +946,26 @@ export class Controller {
 		}
 		const outcome = control.edit(action)
 		return { ok: outcome.changed, lines: outcome.lines }
+	}
+
+	/** The task panel's "Save to memory": the memories to choose from. */
+	taskBoardMemories(): Promise<{ enabled: boolean; names: string[]; preferred: string }> {
+		return this.taskBoardMemory.memories()
+	}
+
+	/** The task panel's "Save to memory". */
+	async saveTaskBoard(input: { memory?: string; keepUpdated: boolean }): Promise<{ ok: boolean; lines: string[] }> {
+		const active = this.sessions.getActiveSession()?.sessionId
+		if (!active) {
+			return { ok: false, lines: ["The board can be saved while its conversation is running or waiting for you."] }
+		}
+		const lines = await this.taskBoardMemory.save({ sessionId: active, ...input })
+		return { ok: lines[0]?.startsWith("Saved") ?? false, lines }
+	}
+
+	/** The Memory panel's "Use in a new conversation". */
+	useTaskBoard(seed: TaskBoardSeed): void {
+		this.taskBoardMemory.use(seed)
 	}
 
 	async refreshRemoteConfig(options: { force?: boolean } = {}): Promise<boolean> {
@@ -1587,6 +1613,7 @@ export class Controller {
 		this.turnStateTracker.set("streaming")
 		// Clear the previous turn's completion signal so this turn's phase is computed fresh.
 		this.messageTranslatorState.clearTurnOutcome()
+		this.taskBoardMemory?.beginTask(!historyItem, historyItem?.task ?? prompt)
 		return this.taskStart.initTask(prompt, images, files, historyItem, taskSettings)
 	}
 
