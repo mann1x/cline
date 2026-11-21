@@ -8,7 +8,12 @@
 import { randomUUID } from "node:crypto"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
-import type { BackgroundDelegationView, ConfiguredAgentDelegationResult, ConfiguredAgentSummary } from "@cline/core"
+import type {
+	BackgroundDelegationView,
+	ConfiguredAgentDelegationResult,
+	ConfiguredAgentSummary,
+	CoreTaskGraphControl,
+} from "@cline/core"
 import {
 	type CompareCheckpointResult,
 	createReadReceipts,
@@ -204,6 +209,8 @@ export class Controller {
 	private turnStateTracker!: TurnStateTracker
 	private messages: SdkMessageCoordinator
 	private sessions: SdkSessionLifecycle
+	/** The newest session's board handle; edits go to it only while it is the active session. */
+	private taskGraphControl: CoreTaskGraphControl | undefined
 	private sessionRebuilds: SdkSessionRebuildScheduler
 	private interactions: SdkInteractionCoordinator
 	private diffEdits: SdkDiffEditCoordinator
@@ -419,6 +426,9 @@ export class Controller {
 			// approval renders as markdown with real options rather than as a
 			// modal that flattens both.
 			askUser: (question, options) => this.interactions.handleAskQuestion(question, options, undefined),
+			onTaskGraphAttach: (control) => {
+				this.taskGraphControl = control
+			},
 		})
 		this.diffEdits = new SdkDiffEditCoordinator({
 			getCwd: () => this.getWorkspaceRoot(),
@@ -910,6 +920,26 @@ export class Controller {
 		this.remoteConfigTimer = setInterval(() => {
 			this.refreshRemoteConfig().catch((err) => Logger.error("[SdkController] Remote config timer failed:", err))
 		}, 3600000) // 1 hour
+	}
+
+	/**
+	 * A change from the task panel, applied to the active session's board as
+	 * the person's. The board exists only while the session does: a
+	 * conversation reopened from history gets one again with its next message.
+	 */
+	taskGraphAction(action: Parameters<CoreTaskGraphControl["edit"]>[0]): { ok: boolean; lines: string[] } {
+		const control = this.taskGraphControl
+		const active = this.sessions.getActiveSession()?.sessionId
+		if (!control || !active || control.sessionId !== active) {
+			return {
+				ok: false,
+				lines: [
+					"The board can be changed while its conversation is running or waiting for you. Send a message to resume it.",
+				],
+			}
+		}
+		const outcome = control.edit(action)
+		return { ok: outcome.changed, lines: outcome.lines }
 	}
 
 	async refreshRemoteConfig(options: { force?: boolean } = {}): Promise<boolean> {

@@ -32,6 +32,8 @@ export { createTaskGraphTools } from "./tools";
 export {
 	buildTaskGraphCloseOutNudge,
 	buildTaskGraphUntrackedNudge,
+	type TaskGraphEdit,
+	type TaskGraphEditOutcome,
 	TaskGraphTracker,
 	type TaskGraphTrackerOptions,
 	withTaskGraphCapture,

@@ -1,6 +1,12 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
-import { fireEvent, render, screen } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+const taskGraphAction = vi.fn()
+vi.mock("@/services/grpc-client", () => ({
+	StateServiceClient: { taskGraphAction: (request: { value: string }) => taskGraphAction(request) },
+}))
+
 import { findLatestTaskGraph, TaskGraphPanel, type TaskGraphPanelTask, taskGraphHeader } from "./TaskGraphPanel"
 
 const base: Omit<TaskGraphPanelTask, "id" | "title" | "status"> = {
@@ -60,5 +66,65 @@ describe("TaskGraphPanel", () => {
 		fireEvent.click(screen.getByRole("button", { name: /Tasks/ }))
 		expect(screen.queryByRole("checkbox")).toBeNull()
 		expect(screen.queryByRole("textbox")).toBeNull()
+	})
+})
+
+describe("TaskGraphPanel edits", () => {
+	beforeEach(() => {
+		taskGraphAction.mockReset()
+		taskGraphAction.mockResolvedValue({ value: JSON.stringify({ ok: true, lines: ["T2 now done."] }) })
+	})
+	const sent = () => taskGraphAction.mock.calls.map(([request]) => JSON.parse(request.value))
+	const openTask = (id: string, title: string) => {
+		render(<TaskGraphPanel clineMessages={[board(tasks)]} />)
+		fireEvent.click(screen.getByText("Tasks"))
+		fireEvent.click(screen.getByText(title))
+		return id
+	}
+
+	it("finishes a task with what was done, and shows the board's answer", async () => {
+		openTask("T2", "Store cents")
+		fireEvent.click(screen.getByText("Done…"))
+		fireEvent.change(screen.getByLabelText("Mark done"), { target: { value: "migrated" } })
+		fireEvent.click(screen.getByRole("button", { name: "Mark done" }))
+		expect(sent()).toEqual([{ op: "update", updates: [{ id: "T2", status: "done", note: "migrated" }] }])
+		await waitFor(() => expect(screen.getByRole("status").textContent).toBe("T2 now done."))
+	})
+
+	it("asks for a reason before cancelling", () => {
+		openTask("T2", "Store cents")
+		fireEvent.click(screen.getByText("Cancel…"))
+		const confirm = screen.getByRole("button", { name: "Cancel task" })
+		expect(confirm).toHaveProperty("disabled", true)
+		fireEvent.change(screen.getByLabelText("Cancel task"), { target: { value: "dropped" } })
+		fireEvent.click(confirm)
+		expect(sent()).toEqual([{ op: "update", updates: [{ id: "T2", status: "cancelled", note: "dropped" }] }])
+	})
+
+	it("ticks an acceptance item by its number", () => {
+		openTask("T2", "Store cents")
+		fireEvent.click(screen.getByLabelText("Tick: old files load"))
+		expect(sent()).toEqual([{ op: "update", updates: [{ id: "T2", check: [1] }] }])
+	})
+
+	it("reopens a closed task and adds a new one", () => {
+		openTask("T1", "Read the code")
+		fireEvent.click(screen.getByText("Reopen"))
+		fireEvent.click(screen.getByText("+ Add task"))
+		fireEvent.change(screen.getByLabelText("Add"), { target: { value: "Write docs" } })
+		fireEvent.click(screen.getByRole("button", { name: "Add" }))
+		expect(sent()).toEqual([
+			{ op: "update", updates: [{ id: "T1", status: "pending" }] },
+			{ op: "plan", tasks: [{ title: "Write docs" }] },
+		])
+	})
+
+	it("shows a refusal as an error", async () => {
+		taskGraphAction.mockResolvedValue({
+			value: JSON.stringify({ ok: false, lines: ["Send a message to resume it."] }),
+		})
+		openTask("T2", "Store cents")
+		fireEvent.click(screen.getByLabelText("Tick: old files load"))
+		await waitFor(() => expect(screen.getByRole("status").className).toContain("text-error"))
 	})
 })

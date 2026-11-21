@@ -623,6 +623,85 @@ describe("LocalRuntimeHost", () => {
 		expect(log).toContain('"call":"call_1"');
 	});
 
+	it("hands the panel a board handle, and tells the next run what the person changed", async () => {
+		const runtimeBuilder = {
+			build: vi.fn().mockReturnValue({
+				tools: [],
+				shutdown: vi.fn().mockResolvedValue(undefined),
+			}),
+		};
+		const agent = {
+			run: vi.fn().mockResolvedValue(createResult()),
+			continue: vi.fn().mockResolvedValue(createResult()),
+			getMessages: vi.fn().mockReturnValue([]),
+			getAgentId: vi.fn().mockReturnValue("agent-graph-edit"),
+			getConversationId: vi.fn().mockReturnValue("conv-graph-edit"),
+			abort: vi.fn(),
+			subscribeEvents: vi.fn().mockReturnValue(() => {}),
+			canStartRun: vi.fn().mockReturnValue(true),
+			shutdown: vi.fn().mockResolvedValue(undefined),
+		};
+		let agentConfig:
+			| {
+					hooks?: {
+						beforeRun?: (
+							context: unknown,
+						) => Promise<{ appendContext?: string } | undefined>;
+					};
+			  }
+			| undefined;
+		let control:
+			| {
+					sessionId: string;
+					edit: (action: unknown) => { lines: string[]; changed: boolean };
+					snapshot: () => { tasks: Array<{ id: string; status: string }> };
+			  }
+			| undefined;
+		const manager = new RuntimeHostUnderTest({
+			distinctId,
+			sessionService: new FileSessionService(join(isolatedHomeDir, "sessions")),
+			runtimeBuilder: runtimeBuilder as never,
+			createAgent: ((config: typeof agentConfig) => {
+				agentConfig = config;
+				return agent;
+			}) as never,
+		});
+		const started = await manager.startSession(
+			normalizeStartInput({
+				config: createConfig({
+					taskGraph: {
+						enabled: true,
+						onAttach: (handle) => {
+							control = handle as never;
+						},
+					},
+				}),
+				prompt: "hello",
+			}),
+		);
+		expect(control?.sessionId).toBe(started.sessionId);
+		const outcome = control?.edit({
+			op: "plan",
+			tasks: [{ title: "Write the docs" }],
+		});
+		expect(outcome?.changed).toBe(true);
+		expect(control?.snapshot().tasks.map((task) => task.id)).toEqual(["T1"]);
+		const runContext = {
+			snapshot: {
+				agentId: "agent-graph-edit",
+				conversationId: "conv-graph-edit",
+				messages: [],
+			},
+		};
+		const start = await agentConfig?.hooks?.beforeRun?.(runContext);
+		expect(start?.appendContext).toContain(
+			"The person changed the task board: Created 1",
+		);
+		// Told once.
+		const again = await agentConfig?.hooks?.beforeRun?.(runContext);
+		expect(again?.appendContext ?? "").not.toContain("The person changed");
+	});
+
 	it("does not add a second task_progress when the tools already carry one", async () => {
 		// A caller that built its tools through `createDefaultTools` with a tracker
 		// already has the tool, and a duplicate name is its own failure.

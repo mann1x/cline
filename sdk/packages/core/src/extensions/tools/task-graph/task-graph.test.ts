@@ -902,3 +902,55 @@ describe("fewer round trips", () => {
 		}
 	});
 });
+
+describe("the person's edits from the panel", () => {
+	it("are applied as the person's and told to the model once", () => {
+		const tracker = new TaskGraphTracker();
+		tracker.store.plan({ tasks: [{ title: "A" }, { title: "B" }] });
+		const outcome = tracker.edit({
+			op: "update",
+			updates: [{ id: "T2", status: "cancelled", note: "not needed" }],
+		});
+		expect(outcome.changed).toBe(true);
+		expect(task(tracker.store, "T2")?.status).toBe("cancelled");
+		const note = tracker.takeRunStartNote() ?? "";
+		expect(note).toContain("The person changed the task board");
+		expect(note).toContain("T2 now cancelled");
+		// Said once: neither the run start nor the reminder repeats it.
+		expect(tracker.takeRunStartNote()).toBeUndefined();
+		expect(tracker.takePendingReminder() ?? "").not.toContain("The person");
+	});
+
+	it("reach a run under way with the next tool results", () => {
+		const tracker = new TaskGraphTracker();
+		tracker.edit({ op: "plan", tasks: [{ title: "Write the docs" }] });
+		expect(tracker.takePendingReminder() ?? "").toContain(
+			"The person changed the task board: Created 1",
+		);
+		expect(tracker.takeRunStartNote()).toBeUndefined();
+	});
+
+	it("record who made them in the log", () => {
+		const dir = mkdtempSync(join(tmpdir(), "tg-edit-"));
+		try {
+			const tracker = new TaskGraphTracker({
+				logPath: join(dir, "s.tasks.jsonl"),
+			});
+			tracker.edit({ op: "plan", tasks: [{ title: "A" }] });
+			const events = readFileSync(join(dir, "s.tasks.jsonl"), "utf8")
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line));
+			expect(events.every((event) => event.by === "user")).toBe(true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("a change that changes nothing tells the model nothing", () => {
+		const tracker = new TaskGraphTracker();
+		tracker.store.plan({ tasks: [{ title: "A" }] });
+		tracker.edit({ op: "update", updates: [{ id: "T9", status: "done" }] });
+		expect(tracker.takeRunStartNote()).toBeUndefined();
+	});
+});

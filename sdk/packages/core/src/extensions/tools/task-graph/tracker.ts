@@ -296,6 +296,16 @@ interface QueuedNudge {
 	from: Set<unknown>;
 }
 
+/** A change from the task panel: \`task_update\`'s or \`task_plan\`'s input, as the person's. */
+export type TaskGraphEdit =
+	| { op: "update"; updates: unknown[] }
+	| { op: "plan"; tasks: unknown[] };
+
+export interface TaskGraphEditOutcome {
+	lines: string[];
+	changed: boolean;
+}
+
 export class TaskGraphTracker {
 	readonly store: TaskGraphStore;
 	private readonly spacing: number;
@@ -314,6 +324,8 @@ export class TaskGraphTracker {
 		| { tool: string; succeeded: boolean; carriedDone: boolean }
 		| undefined;
 	private taskDoneHintGiven = false;
+	/** What the person changed from the panel, for the model's next look. */
+	private userNotes: string[] = [];
 	/** Changes made under the active task since it was last touched. */
 	private staleFor:
 		| { id: string; seq: number; writes: number; files: string[] }
@@ -582,9 +594,45 @@ export class TaskGraphTracker {
 		}
 	}
 
+	/**
+	 * A change the person made from the task panel: applied as theirs
+	 * (\`by: "user"\`) and told to the model, with the next tool results when a
+	 * run is under way, or at the start of the next run when it is not. The
+	 * model does not have to ask; it is told what changed and by whom.
+	 */
+	edit(action: TaskGraphEdit): TaskGraphEditOutcome {
+		const origin = { by: "user" };
+		let outcome: { lines: string[]; changed: boolean };
+		if (action.op === "update") {
+			outcome = this.store.update({ updates: action.updates }, origin);
+		} else if (action.op === "plan") {
+			outcome = this.store.plan({ tasks: action.tasks }, origin);
+		} else {
+			return {
+				lines: [`Unknown change: ${String((action as { op?: unknown }).op)}.`],
+				changed: false,
+			};
+		}
+		if (outcome.changed) {
+			this.userNotes.push(
+				`[SYSTEM] The person changed the task board: ${outcome.lines.join(" ")}`,
+			);
+		}
+		return { lines: outcome.lines, changed: outcome.changed };
+	}
+
+	/** The person's changes not yet told, for the start of a run; cleared by the read. */
+	takeRunStartNote(): string | undefined {
+		if (this.userNotes.length === 0) return undefined;
+		const text = this.userNotes.join("\n\n");
+		this.userNotes = [];
+		return text;
+	}
+
 	/** What to say after the turn's tool calls, cleared by the read. */
 	takePendingReminder(): string | undefined {
-		const parts: string[] = [...this.doneNotes];
+		const parts: string[] = [...this.userNotes, ...this.doneNotes];
+		this.userNotes = [];
 		this.doneNotes = [];
 		if (this.queued) parts.push(this.queued.text);
 		if (this.boardDue) {

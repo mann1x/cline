@@ -1,4 +1,4 @@
-import type { CoreSessionConfig } from "@cline/core"
+import type { CoreSessionConfig, CoreTaskGraphControl } from "@cline/core"
 import { type AgentHooks, type AgentTool, createSwitchToActModeTool, withSwitchToActModeTool } from "@cline/shared"
 import type { StateManager } from "@/core/storage/StateManager"
 import { offerAgentProfileRepair } from "./agent-profile-repair"
@@ -26,6 +26,8 @@ export interface SdkSessionConfigBuilderOptions {
 	 * is rebuilt below rather than assigned.
 	 */
 	askUser?: AskUser
+	/** The live session's board handle, for the task panel's edits. */
+	onTaskGraphAttach?: (control: CoreTaskGraphControl) => void
 }
 
 /**
@@ -93,6 +95,7 @@ export class SdkSessionConfigBuilder {
 						text: JSON.stringify(snapshot),
 						partial: false,
 					}),
+				onAttach: (control) => this.options.onTaskGraphAttach?.(control),
 			}
 		}
 		// Plan only: the tool disappears once the session is rebuilt in act mode,

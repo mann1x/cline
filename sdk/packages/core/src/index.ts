@@ -1958,6 +1958,7 @@ export type {
 	CoreModelConfig,
 	CoreRuntimeFeatures,
 	CoreSessionConfig,
+	CoreTaskGraphControl,
 	DelegatedAgentConnectionOverride,
 } from "./types/config";
 export type {

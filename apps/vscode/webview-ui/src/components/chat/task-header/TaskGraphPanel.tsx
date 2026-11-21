@@ -1,12 +1,15 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
+import { StringRequest } from "@shared/proto/cline/common"
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
-import { memo, useMemo, useState } from "react"
+import { memo, useCallback, useMemo, useState } from "react"
 import { cn } from "@/lib/utils"
+import { StateServiceClient } from "@/services/grpc-client"
 
 /**
- * The conversation's task graph, under the context window. Read-only: the
- * board belongs to the model in this phase, and editing it from here (with the
- * model told what changed) is phase 2 of the plan.
+ * The conversation's task graph, under the context window. The person can
+ * change it from here: start, finish, cancel or reopen a task, tick its
+ * acceptance, add a task. Each change goes to the running session's board as
+ * the person's, and the model is told what changed with its next look.
  *
  * Core sends the whole board as a `say: "task_graph"` row after every change,
  * and the newest one wins, as the checklist's does. The shape mirrors core's
@@ -88,7 +91,106 @@ export function taskGraphHeader(tasks: TaskGraphPanelTask[]): string {
 	return parts.join(" · ")
 }
 
-const TaskDetail = ({ task }: { task: TaskGraphPanelTask }) => (
+/** A change to the board, in `task_update`'s or `task_plan`'s shape. */
+export type TaskGraphPanelAction =
+	| { op: "update"; updates: Record<string, unknown>[] }
+	| { op: "plan"; tasks: Record<string, unknown>[] }
+
+export type SendTaskGraphAction = (action: TaskGraphPanelAction) => void
+
+const linkButton = "bg-transparent border-0 p-0 cursor-pointer text-link text-xs hover:underline"
+
+/** A one-line text box with a confirm, for an outcome, a reason or a title. */
+const InlineText = ({
+	label,
+	placeholder,
+	required,
+	onSubmit,
+	onCancel,
+}: {
+	label: string
+	placeholder: string
+	required: boolean
+	onSubmit: (text: string) => void
+	onCancel: () => void
+}) => {
+	const [text, setText] = useState("")
+	const submit = () => {
+		if (required && !text.trim()) return
+		onSubmit(text.trim())
+	}
+	return (
+		<form
+			className="flex gap-1 items-center min-w-0"
+			onSubmit={(event) => {
+				event.preventDefault()
+				submit()
+			}}>
+			<input
+				aria-label={label}
+				autoFocus
+				className="min-w-0 flex-1 text-xs bg-input-background text-input-foreground border border-input-border rounded-xs px-1 py-0.5"
+				onChange={(event) => setText(event.target.value)}
+				onKeyDown={(event) => {
+					if (event.key === "Escape") onCancel()
+				}}
+				placeholder={placeholder}
+				value={text}
+			/>
+			<button className={linkButton} disabled={required && !text.trim()} type="submit">
+				{label}
+			</button>
+			<button className={linkButton} onClick={onCancel} type="button">
+				Back
+			</button>
+		</form>
+	)
+}
+
+/** What can be done to a task from the panel. */
+const TaskActions = ({ task, send }: { task: TaskGraphPanelTask; send: SendTaskGraphAction }) => {
+	const [asking, setAsking] = useState<"done" | "cancelled" | undefined>(undefined)
+	const update = (fields: Record<string, unknown>) => send({ op: "update", updates: [{ id: task.id, ...fields }] })
+	if (asking) {
+		return (
+			<InlineText
+				label={asking === "done" ? "Mark done" : "Cancel task"}
+				onCancel={() => setAsking(undefined)}
+				onSubmit={(note) => {
+					update({ status: asking, ...(note ? { note } : {}) })
+					setAsking(undefined)
+				}}
+				placeholder={asking === "done" ? "What was done (optional)" : "Why it is not needed"}
+				required={asking === "cancelled"}
+			/>
+		)
+	}
+	return (
+		<div className="flex gap-2 flex-wrap">
+			{isClosed(task) ? (
+				<button className={linkButton} onClick={() => update({ status: "pending" })} type="button">
+					Reopen
+				</button>
+			) : (
+				<>
+					{task.status !== "active" && task.ready && (
+						<button className={linkButton} onClick={() => update({ status: "active" })} type="button">
+							Start
+						</button>
+					)}
+					<button className={linkButton} onClick={() => setAsking("done")} type="button">
+						Done…
+					</button>
+					<button className={linkButton} onClick={() => setAsking("cancelled")} type="button">
+						Cancel…
+					</button>
+				</>
+			)}
+		</div>
+	)
+}
+
+const TaskDetail = ({ task, send }: { task: TaskGraphPanelTask; send?: SendTaskGraphAction }) => (
 	<div className="pl-4 pr-1 pb-1 flex flex-col gap-0.5 text-xs opacity-90">
 		{task.description && <div className="break-words">{task.description}</div>}
 		{task.depends.length > 0 && <div>after: {task.depends.join(", ")}</div>}
@@ -96,7 +198,22 @@ const TaskDetail = ({ task }: { task: TaskGraphPanelTask }) => (
 			<ul className="list-none m-0 p-0">
 				{task.acceptance.map((item, index) => (
 					<li className="flex gap-1 items-baseline" key={`${index}-${item.text}`}>
-						<span className="shrink-0">{item.done ? "☑" : "☐"}</span>
+						{send ? (
+							<button
+								aria-label={`${item.done ? "Untick" : "Tick"}: ${item.text}`}
+								className="shrink-0 bg-transparent border-0 p-0 cursor-pointer text-description"
+								onClick={() =>
+									send({
+										op: "update",
+										updates: [{ id: task.id, [item.done ? "uncheck" : "check"]: [index + 1] }],
+									})
+								}
+								type="button">
+								{item.done ? "☑" : "☐"}
+							</button>
+						) : (
+							<span className="shrink-0">{item.done ? "☑" : "☐"}</span>
+						)}
 						<span className="break-words min-w-0">{item.text}</span>
 					</li>
 				))}
@@ -113,6 +230,7 @@ const TaskDetail = ({ task }: { task: TaskGraphPanelTask }) => (
 				))}
 			</ul>
 		)}
+		{send && <TaskActions send={send} task={task} />}
 	</div>
 )
 
@@ -121,11 +239,13 @@ const TaskRow = ({
 	depth,
 	open,
 	onToggle,
+	send,
 }: {
 	task: TaskGraphPanelTask
 	depth: number
 	open: boolean
 	onToggle: () => void
+	send?: SendTaskGraphAction
 }) => {
 	const chip = statusChip(task)
 	return (
@@ -145,7 +265,7 @@ const TaskRow = ({
 				<span className={cn("shrink-0 opacity-70", chip.className)}>· {chip.label}</span>
 				{task.claimedBy && <span className="shrink-0 opacity-70">· {task.claimedBy}</span>}
 			</button>
-			{open && <TaskDetail task={task} />}
+			{open && <TaskDetail send={send} task={task} />}
 		</li>
 	)
 }
@@ -158,6 +278,20 @@ export const TaskGraphPanel = memo(({ clineMessages }: TaskGraphPanelProps) => {
 	const [isExpanded, setIsExpanded] = useState(false)
 	const [tab, setTab] = useState<"list" | "graph">("list")
 	const [openIds, setOpenIds] = useState<ReadonlySet<string>>(new Set())
+	const [reply, setReply] = useState<{ ok: boolean; text: string } | undefined>(undefined)
+	const [adding, setAdding] = useState(false)
+
+	const send = useCallback<SendTaskGraphAction>((action) => {
+		void (async () => {
+			try {
+				const response = await StateServiceClient.taskGraphAction(StringRequest.create({ value: JSON.stringify(action) }))
+				const answer = JSON.parse(response.value) as { ok?: boolean; lines?: string[] }
+				setReply({ ok: answer.ok === true, text: (answer.lines ?? []).join(" ") })
+			} catch (error) {
+				setReply({ ok: false, text: error instanceof Error ? error.message : String(error) })
+			}
+		})()
+	}, [])
 
 	const snapshot = useMemo(() => findLatestTaskGraph(clineMessages), [clineMessages])
 	const tasks = snapshot?.tasks ?? []
@@ -242,9 +376,28 @@ export const TaskGraphPanel = memo(({ clineMessages }: TaskGraphPanelProps) => {
 									key={task.id}
 									onToggle={() => toggle(task.id)}
 									open={openIds.has(task.id)}
+									send={send}
 									task={task}
 								/>
 							))}
+							<li className="text-xs">
+								{adding ? (
+									<InlineText
+										label="Add"
+										onCancel={() => setAdding(false)}
+										onSubmit={(title) => {
+											send({ op: "plan", tasks: [{ title }] })
+											setAdding(false)
+										}}
+										placeholder="New task"
+										required
+									/>
+								) : (
+									<button className={linkButton} onClick={() => setAdding(true)} type="button">
+										+ Add task
+									</button>
+								)}
+							</li>
 						</ul>
 					) : snapshot && snapshot.layers.length > 0 ? (
 						<ol className="list-none m-0 p-0 flex flex-col gap-0.5 text-xs">
@@ -258,6 +411,11 @@ export const TaskGraphPanel = memo(({ clineMessages }: TaskGraphPanelProps) => {
 						</ol>
 					) : (
 						<div className="text-xs opacity-80">No open tasks.</div>
+					)}
+					{reply && (
+						<div className={cn("text-xs break-words", reply.ok ? "opacity-80" : "text-error")} role="status">
+							{reply.text}
+						</div>
 					)}
 				</div>
 			)}

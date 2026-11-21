@@ -5,6 +5,14 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.290] — pending
+
+### Task graph (preview, off by default)
+
+- **The task panel can change the board:** start, finish, cancel or reopen a
+  task, tick its acceptance, add a task. Each change is yours in the board's
+  log, and the model is told what changed with its next look.
+
 ## [4.100.289] — 2026-11-20
 
 ### Editor

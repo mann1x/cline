@@ -1310,6 +1310,11 @@ export class LocalRuntimeHost implements RuntimeHost {
 				`[task-graph] ${outcome}: ${taskGraphTracker.store.getState().order.length} tasks`,
 				{ sessionId },
 			);
+			taskGraphConfig?.onAttach?.({
+				sessionId,
+				edit: (action) => taskGraphTracker.edit(action),
+				snapshot: () => taskGraphTracker.store.snapshot(),
+			});
 		}
 		const taskProgressConfig = taskGraphTracker
 			? undefined
@@ -2724,8 +2729,34 @@ export class LocalRuntimeHost implements RuntimeHost {
 				);
 			},
 		} as AgentConfig;
+		// What the person changed on the task board while no run was under way
+		// reaches the model with the next run's first request (mid-run changes
+		// ride the after-tools reminder instead).
+		// Captured now: the hooks object is replaced below, and a lookup at run
+		// time would find this wrapper and call itself.
+		const baseBeforeRun = agentConfig.hooks?.beforeRun;
+		const beforeRunWithBoardEdits = taskGraphTracker
+			? async (
+					context: Parameters<
+						NonNullable<NonNullable<AgentConfig["hooks"]>["beforeRun"]>
+					>[0],
+				) => {
+					const base = await baseBeforeRun?.(context);
+					const note = taskGraphTracker.takeRunStartNote();
+					if (!note) return base;
+					return {
+						...base,
+						appendContext: [base?.appendContext, note]
+							.filter(Boolean)
+							.join("\n\n"),
+					};
+				}
+			: baseBeforeRun;
 		agentConfig.hooks = {
 			...agentConfig.hooks,
+			...(beforeRunWithBoardEdits
+				? { beforeRun: beforeRunWithBoardEdits }
+				: {}),
 			onEvent: async (event) => {
 				await bootstrap.hooks?.onEvent?.(event);
 				if (event.type !== "assistant-message") return;

@@ -24,6 +24,10 @@ import type { DocumentReaderSettings } from "../extensions/tools/executors/docum
 import type { ToolRoutingRule } from "../extensions/tools/model-tool-routing";
 import type { QaCredential } from "../extensions/tools/qa-credentials";
 import type { TaskGraphSnapshot } from "../extensions/tools/task-graph/store";
+import type {
+	TaskGraphEdit,
+	TaskGraphEditOutcome,
+} from "../extensions/tools/task-graph/tracker";
 import type { TaskProgressState } from "../extensions/tools/task-progress";
 import type {
 	AgentProfileConnection,
@@ -474,6 +478,20 @@ export interface CoreTaskGraphConfig {
 	writeInterval?: number;
 	/** Called after every change to the board. */
 	onUpdate?: (snapshot: TaskGraphSnapshot) => void;
+	/**
+	 * Called once the session's board exists, with the handle the task panel
+	 * edits it through. A change made with it is the person's, and the model
+	 * is told about it.
+	 */
+	onAttach?: (control: CoreTaskGraphControl) => void;
+}
+
+/** The task panel's handle on a live session's board. */
+export interface CoreTaskGraphControl {
+	/** The session whose board this is. */
+	sessionId: string;
+	edit(action: TaskGraphEdit): TaskGraphEditOutcome;
+	snapshot(): TaskGraphSnapshot;
 }
 
 /**

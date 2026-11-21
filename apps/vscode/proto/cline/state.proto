@@ -42,6 +42,9 @@ service StateService {
   rpc retrievalAction(StringRequest) returns (String);
   // The message box's history and draft: a JSON action in, the snapshot out.
   rpc messageHistoryAction(StringRequest) returns (String);
+  // The task panel's change to the board (task graph): a JSON action in,
+  // {ok, lines} out. Applied as the person's, and the model is told.
+  rpc taskGraphAction(StringRequest) returns (String);
 }
 
 message AutoApprovalActions {

@@ -470,6 +470,16 @@ before 1b) against arm C (graph with 1b), both against the phase 0 baseline.
 **2. Panel and memory.** The tree, detail, graph tab, chat rows, the person's
 edits with the model being told, and export to memory with use and
 keep-updated (section 11).
+- **Edits, 2026-11-21.** `TaskGraphTracker.edit()` applies a `task_update` or
+  `task_plan` input with `by: "user"` and queues "[SYSTEM] The person changed
+  the task board: …". It is delivered once: with the after-tools reminder
+  when a run is under way, or as the next run's start context (a `beforeRun`
+  hook) when the session is idle. The host hands the extension a
+  `CoreTaskGraphControl` (`taskGraph.onAttach`, with the session id); the
+  panel calls `StateService.taskGraphAction` (JSON in, `{ok, lines}` out),
+  which edits only the active session's board. Panel: Start, Done… (outcome
+  optional), Cancel… (reason required), Reopen, acceptance ticks, + Add task.
+- Next: export to memory (section 11).
 
 **3. Switch over.**
 - Templates.
