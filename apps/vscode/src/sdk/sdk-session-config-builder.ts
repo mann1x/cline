@@ -31,7 +31,7 @@ export interface SdkSessionConfigBuilderOptions {
 	/** Called after every change to the board (keep-updated saved boards). */
 	onTaskGraphChange?: () => void
 	/** A saved board the session starts from, when it is a new conversation. */
-	takeTaskGraphSeed?: () => { events: unknown[]; by: string } | undefined
+	takeTaskGraphSeed?: () => { events: unknown[]; by: string; about?: string } | undefined
 }
 
 /**

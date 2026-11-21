@@ -499,10 +499,17 @@ keep-updated (section 11).
   mid-conversation). Task panel: "Save to memory…" (memory, keep updated);
   Memory panel: a task board chip, "Use in a new conversation", the keep-updated
   switch, Forget.
-- Left for later in phase 2: saving the board of a conversation reopened from
-  history before its session is back (the board is read from the live
-  session), and starting from a saved board "by the person asking" (it needs
-  a tool, and the model has no board access in this phase).
+- **History save and the seeded start, 2026-11-21.** A conversation with no
+  live session (reopened from history, no message sent yet) is saved from its
+  log: `exportTaskLog(<sessionDir>/<id>.tasks.jsonl)` folds the events as
+  written (a cut-back the next resume would apply is not applied; a torn last
+  line is skipped). A seeded session needs no tool: the board is filled
+  before the first request, and the tracker queues a run-start note ("This
+  conversation starts from a task board the person saved earlier (m12,
+  "ledger", saved 2026-11-21)…", then the board) that the `beforeRun` hook
+  puts into the first request after the system prompt. The person picks the
+  board in the Memory panel; asking for one in chat would need the model to
+  choose a board, which this phase does not give it.
 
 **3. Switch over.**
 - Templates.

@@ -185,6 +185,8 @@ export interface TaskGraphSeed {
 	events: readonly unknown[];
 	/** As \`memory:m12\`. */
 	by: string;
+	/** Where it came from, for the model: as \`m12, "ledger", saved 2026-11-21\`. */
+	about?: string;
 }
 
 /** A saved event's change, without its log position, time, author or call. */

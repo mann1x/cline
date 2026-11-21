@@ -487,9 +487,10 @@ export interface CoreTaskGraphConfig {
 	/**
 	 * A saved board to start from, for a conversation with none yet: its
 	 * events, ids kept, each authored \`by\` (as \`memory:m12\`). Ignored when
-	 * the session already has a board.
+	 * the session already has a board. The model is told at the first run's
+	 * start what the board is, with \`about\` saying where it came from.
 	 */
-	seed?: { events: readonly unknown[]; by: string };
+	seed?: { events: readonly unknown[]; by: string; about?: string };
 }
 
 /** The task panel's handle on a live session's board. */

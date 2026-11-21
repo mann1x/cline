@@ -186,7 +186,14 @@ function noteViews(memory: ReturnType<typeof sharedMemory>, name: string): Memor
 /** What the Memory panel's board actions need from the running extension. */
 export interface RetrievalHost {
 	/** Start the next new conversation from this saved board. */
-	useBoard?: (seed: { events: unknown[]; by: string; noteId: string; memory: string; keepUpdated: boolean }) => void
+	useBoard?: (seed: {
+		events: unknown[]
+		by: string
+		noteId: string
+		memory: string
+		keepUpdated: boolean
+		about?: string
+	}) => void
 }
 
 async function act(request: RetrievalAction, outcome: Outcome, host: RetrievalHost = {}): Promise<string | undefined> {
@@ -291,6 +298,13 @@ async function act(request: RetrievalAction, outcome: Outcome, host: RetrievalHo
 				noteId: request.id,
 				memory: request.name,
 				keepUpdated: saved.board.keepUpdated,
+				about: [
+					request.id,
+					saved.board.title ? `"${saved.board.title}"` : "",
+					saved.board.savedAt ? `saved ${saved.board.savedAt.slice(0, 10)}` : "",
+				]
+					.filter(Boolean)
+					.join(", "),
 			})
 			return `The next new conversation starts from board ${request.id} (${saved.board.tasks} task${saved.board.tasks === 1 ? "" : "s"}, ${saved.board.open} open).`
 		}

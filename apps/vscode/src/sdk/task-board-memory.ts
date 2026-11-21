@@ -1,4 +1,4 @@
-import { type CoreTaskGraphControl, sharedMemory } from "@cline/core"
+import { type CoreTaskGraphControl, type ExportedTaskBoard, exportTaskLog, sharedMemory } from "@cline/core"
 import { MAIN_MEMORY, memorySelectionFor } from "@cline/shared"
 import { Logger } from "@shared/services/Logger"
 import { readMemorySettings } from "./library-config"
@@ -11,6 +11,8 @@ export interface TaskBoardSeed {
 	noteId: string
 	memory: string
 	keepUpdated: boolean
+	/** Where it came from, for the model: as `m12, "ledger", saved 2026-11-21`. */
+	about?: string
 }
 
 /** Which saved board a session's board is tied to, for keep-updated. */
@@ -54,6 +56,8 @@ export class TaskBoardMemory {
 			memory?: () => MemoryLike
 			cwd?: () => Promise<string>
 			debounceMs?: number
+			/** A conversation's board log, for one with no live session. */
+			logPath?: (sessionId: string) => Promise<string | undefined>
 		} = {},
 	) {}
 
@@ -76,12 +80,12 @@ export class TaskBoardMemory {
 	}
 
 	/** For the session config: the armed board, once. */
-	takeSeed(): { events: unknown[]; by: string } | undefined {
+	takeSeed(): { events: unknown[]; by: string; about?: string } | undefined {
 		const seed = this.armed
 		if (!seed) return undefined
 		this.armed = undefined
 		this.attaching = seed
-		return { events: seed.events, by: seed.by }
+		return { events: seed.events, by: seed.by, ...(seed.about ? { about: seed.about } : {}) }
 	}
 
 	/** The live session's board handle arrived. */
@@ -140,30 +144,39 @@ export class TaskBoardMemory {
 		return { enabled: true, names, preferred: names.includes(preferred) ? preferred : MAIN_MEMORY }
 	}
 
-	/** From the task panel: save the live board into a memory, and tie the session to it. */
-	async save(input: { sessionId: string; memory?: string; keepUpdated: boolean }): Promise<string[]> {
-		const control = this.control
-		if (!control || control.sessionId !== input.sessionId) {
-			return ["The board can be saved while its conversation is running or waiting for you."]
-		}
+	/**
+	 * From the task panel: save the board into a memory, and tie the session to
+	 * it. The live session's board when the conversation has one; otherwise
+	 * (reopened from history, not sent a message yet) the board its log holds.
+	 */
+	async save(input: { sessionId: string; memory?: string; keepUpdated: boolean; title?: string }): Promise<string[]> {
 		const { enabled, names, preferred } = await this.memories()
 		if (!enabled) return ["Memory is off. Turn it on under Settings → Memory to save the board."]
+		const title = input.title?.trim() || this.title
+		const header = title ? { title } : {}
+		const control = this.control
+		let exported: ExportedTaskBoard | undefined
+		if (control && control.sessionId === input.sessionId) {
+			exported = control.exportBoard(header) as ExportedTaskBoard
+		} else {
+			const logPath = await this.options.logPath?.(input.sessionId)
+			exported = logPath ? exportTaskLog(logPath, { ...header, sessionId: input.sessionId }) : undefined
+		}
+		if (!exported || exported.tasks === 0) return ["The board is empty: there is nothing to save."]
 		const memory = input.memory && names.includes(input.memory) ? input.memory : preferred
-		const exported = control.exportBoard({ ...(this.title ? { title: this.title } : {}) })
-		if (exported.tasks === 0) return ["The board is empty: there is nothing to save."]
 		const item = await this.memory.saveBoard({
 			memory,
 			text: exported.text,
 			board: {
-				sessionId: control.sessionId,
-				...(this.title ? { title: this.title } : {}),
+				sessionId: input.sessionId,
+				...(title ? { title } : {}),
 				keepUpdated: input.keepUpdated,
 				tasks: exported.tasks,
 				open: exported.open,
 				events: exported.events,
 			},
 		})
-		this.link = { sessionId: control.sessionId, noteId: item.id, memory }
+		this.link = { sessionId: input.sessionId, noteId: item.id, memory }
 		return [
 			`Saved the board as ${item.id} in "${memory}" (${exported.tasks} task${exported.tasks === 1 ? "" : "s"}, ${exported.open} open)${
 				input.keepUpdated ? ", kept up to date from here" : ""

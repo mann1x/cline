@@ -20,6 +20,11 @@ export {
 } from "./model";
 export { normalizeTaskId, readPlanInput, readUpdateInput } from "./readers";
 export {
+	type ExportedTaskBoard,
+	exportTaskEvents,
+	exportTaskLog,
+} from "./saved-board";
+export {
 	TASK_GRAPH_TOOL_NAMES,
 	TASK_PLAN_TOOL_NAME,
 	TASK_UPDATE_TOOL_NAME,

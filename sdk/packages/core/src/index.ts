@@ -1576,6 +1576,12 @@ export {
 	type SddAction,
 	type SddToolOptions,
 } from "./extensions/tools/sdd-tool";
+// The task board read from a conversation's log, for saving a board from a
+// conversation that has no live session (task graph phase 2).
+export {
+	type ExportedTaskBoard,
+	exportTaskLog,
+} from "./extensions/tools/task-graph/saved-board";
 export {
 	type AgentFileFields,
 	agentFileName,

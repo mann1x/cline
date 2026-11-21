@@ -213,7 +213,13 @@ export class Controller {
 	/** The newest session's board handle; edits go to it only while it is the active session. */
 	private taskGraphControl: CoreTaskGraphControl | undefined
 	/** Saving the board into Memory, starting from a saved one, keeping one updated. */
-	private readonly taskBoardMemory = new TaskBoardMemory({ cwd: () => this.getWorkspaceRoot() })
+	private readonly taskBoardMemory = new TaskBoardMemory({
+		cwd: () => this.getWorkspaceRoot(),
+		logPath: async (sessionId) => {
+			const dir = await this.taskHistory.getTaskDirPath(sessionId)
+			return dir ? path.join(dir, `${sessionId}.tasks.jsonl`) : undefined
+		},
+	})
 	private sessionRebuilds: SdkSessionRebuildScheduler
 	private interactions: SdkInteractionCoordinator
 	private diffEdits: SdkDiffEditCoordinator
@@ -955,11 +961,14 @@ export class Controller {
 
 	/** The task panel's "Save to memory". */
 	async saveTaskBoard(input: { memory?: string; keepUpdated: boolean }): Promise<{ ok: boolean; lines: string[] }> {
-		const active = this.sessions.getActiveSession()?.sessionId
-		if (!active) {
-			return { ok: false, lines: ["The board can be saved while its conversation is running or waiting for you."] }
+		// The conversation on screen: its live session, or the one reopened
+		// from history whose board is read from its log.
+		const sessionId = this.sessions.getActiveSession()?.sessionId ?? this.task?.taskId
+		if (!sessionId) {
+			return { ok: false, lines: ["Open the conversation whose board you want to save."] }
 		}
-		const lines = await this.taskBoardMemory.save({ sessionId: active, ...input })
+		const title = (await this.taskHistory.findHistoryItem(sessionId).catch(() => undefined))?.task
+		const lines = await this.taskBoardMemory.save({ sessionId, ...input, ...(title ? { title } : {}) })
 		return { ok: lines[0]?.startsWith("Saved") ?? false, lines }
 	}
 

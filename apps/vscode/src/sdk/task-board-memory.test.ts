@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { CoreTaskGraphControl } from "@cline/core"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { TaskBoardMemory } from "./task-board-memory"
@@ -66,25 +69,66 @@ describe("TaskBoardMemory", () => {
 		})
 	})
 
-	it("refuses to save with Memory off, an empty board, or another session's board", async () => {
+	it("refuses to save with Memory off, or an empty board", async () => {
 		const memory = fakeMemory()
 		const boards = new TaskBoardMemory({ memory: () => memory as never })
 		boards.attach(control("s1", 0))
-		expect((await boards.save({ sessionId: "s2", keepUpdated: false }))[0]).toContain("while its conversation")
+		// Another conversation with no log has nothing to save.
+		expect((await boards.save({ sessionId: "s2", keepUpdated: false }))[0]).toContain("empty")
 		expect((await boards.save({ sessionId: "s1", keepUpdated: false }))[0]).toContain("empty")
 		memoryEnabled = false
 		expect((await boards.save({ sessionId: "s1", keepUpdated: false }))[0]).toContain("Memory is off")
 		expect(memory.saveBoard).not.toHaveBeenCalled()
 	})
 
+	it("saves the board of a conversation reopened from history, read from its log", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "board-log-"))
+		try {
+			const logPath = join(dir, "old.tasks.jsonl")
+			writeFileSync(
+				logPath,
+				[
+					{ seq: 1, ts: 1, by: "model", call: "c1", op: "create", task: { id: "T1", title: "Store cents" } },
+					{ seq: 2, ts: 2, by: "model", call: "c1", op: "create", task: { id: "T2", title: "Report" } },
+					{ seq: 3, ts: 3, by: "model", call: "c2", op: "update", update: { id: "T1", status: "done" } },
+				]
+					.map((event) => JSON.stringify(event))
+					.join("\n") + "\n",
+			)
+			const memory = fakeMemory()
+			const boards = new TaskBoardMemory({
+				memory: () => memory as never,
+				logPath: async (id) => (id === "old" ? logPath : undefined),
+			})
+			boards.attach(control("live"))
+			const lines = await boards.save({ sessionId: "old", keepUpdated: false, title: "ledger" })
+			expect(lines[0]).toContain("Saved the board as m1")
+			const saved = memory.boards.get("m1")
+			expect(saved?.board).toMatchObject({ sessionId: "old", title: "ledger", tasks: 2, open: 1 })
+			expect(saved?.text).toContain("Task board: ledger")
+			expect(saved?.board.events.some((event) => typeof event === "object" && event !== null && "call" in event)).toBe(
+				false,
+			)
+		} finally {
+			rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
 	it("starts the next new conversation from a picked board, not a resumed one", () => {
 		const boards = new TaskBoardMemory({ memory: () => fakeMemory() as never })
-		const seed = { events: [{ op: "create" }], by: "memory:m3", noteId: "m3", memory: "main", keepUpdated: true }
+		const seed = {
+			events: [{ op: "create" }],
+			by: "memory:m3",
+			noteId: "m3",
+			memory: "main",
+			keepUpdated: true,
+			about: 'm3, "ledger"',
+		}
 		boards.use(seed)
 		boards.beginTask(false)
 		expect(boards.takeSeed()).toBeUndefined()
 		boards.beginTask(true)
-		expect(boards.takeSeed()).toEqual({ events: seed.events, by: "memory:m3" })
+		expect(boards.takeSeed()).toEqual({ events: seed.events, by: "memory:m3", about: 'm3, "ledger"' })
 		// Once.
 		expect(boards.takeSeed()).toBeUndefined()
 	})

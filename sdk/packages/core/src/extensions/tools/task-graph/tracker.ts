@@ -31,8 +31,9 @@
 
 import type { AgentTool } from "@cline/shared";
 import { WRITE_CLASS_TOOL_NAMES } from "../../../runtime/safety/loop-detection";
-import { renderBoard, renderSavedBoard, shortTitle } from "./board";
-import { countTasks, openWork, type Task, type TaskEvent } from "./model";
+import { renderBoard, shortTitle } from "./board";
+import { openWork, type Task } from "./model";
+import { type ExportedTaskBoard, exportTaskEvents } from "./saved-board";
 import {
 	readTaskDone,
 	TASK_DONE_PARAM,
@@ -360,32 +361,32 @@ export class TaskGraphTracker {
 		if (!this.store.isEmpty() && (history?.length ?? 0) > 0) {
 			this.boardDue = true;
 		}
-		// A board the person brought in: the model has not seen it, so it is
-		// shown with the first look, as after a compaction.
-		if (result === "seeded") this.boardDue = true;
+		// A board the person brought in from Memory. The model has not seen it,
+		// and no tool loads it: it is told at the start of the first run, right
+		// after the system prompt, what the board is and where it came from.
+		if (result === "seeded") {
+			this.boardDue = false;
+			const board = renderBoard(this.store.getState());
+			this.userNotes.push(
+				[
+					`[SYSTEM] This conversation starts from a task board the person saved earlier${
+						seed?.about ? ` (${seed.about})` : ""
+					}. Its tasks keep their ids, notes and outcomes; the ones closed were closed in the conversation it came from. Work from it as from any board: start, update and close tasks as you go.`,
+					board ? `The board, as it stands:\n${board}` : "",
+				]
+					.filter(Boolean)
+					.join("\n"),
+			);
+		}
 		return result;
 	}
 
 	/** The board as saved into a memory: its events, its text, and counts. */
-	exportBoard(header: { title?: string; sessionId: string }): {
-		events: TaskEvent[];
-		text: string;
-		tasks: number;
-		open: number;
-	} {
-		const state = this.store.getState();
-		const counts = countTasks(state);
-		return {
-			events: this.store
-				.getEvents()
-				.map(({ call: _call, ...event }) => event as TaskEvent),
-			text: renderSavedBoard(state, {
-				...header,
-				savedAt: new Date().toISOString(),
-			}),
-			tasks: counts.total,
-			open: counts.total - counts.done - counts.cancelled,
-		};
+	exportBoard(header: {
+		title?: string;
+		sessionId: string;
+	}): ExportedTaskBoard {
+		return exportTaskEvents(this.store.getEvents(), header);
 	}
 
 	/** A compaction landed: the calls that built the board are gone (S7). */

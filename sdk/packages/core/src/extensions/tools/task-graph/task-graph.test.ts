@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -991,18 +991,28 @@ describe("saved boards (export to memory)", () => {
 		const { events } = source.exportBoard({ sessionId: "s1" });
 
 		const tracker = new TaskGraphTracker();
-		expect(tracker.start([], undefined, { events, by: "memory:m7" })).toBe(
-			"seeded",
-		);
+		expect(
+			tracker.start([], undefined, {
+				events,
+				by: "memory:m7",
+				about: 'm7, "ledger", saved 2026-11-21',
+			}),
+		).toBe("seeded");
 		expect(task(tracker.store, "T1")?.status).toBe("done");
 		expect(task(tracker.store, "T2")?.status).toBe("active");
 		expect(
 			tracker.store.getEvents().every((event) => event.by === "memory:m7"),
 		).toBe(true);
-		// The model has not seen it: the board goes out with the first look.
-		expect(tracker.takePendingReminder() ?? "").toContain(
-			"The task board, as it stands",
+		// The model has not seen it and has no tool to load it: it is told at
+		// the first run's start what the board is and where it came from, once.
+		const start = tracker.takeRunStartNote() ?? "";
+		expect(start).toContain(
+			'starts from a task board the person saved earlier (m7, "ledger", saved 2026-11-21)',
 		);
+		expect(start).toContain("The board, as it stands:");
+		expect(start).toContain("T2");
+		expect(tracker.takeRunStartNote()).toBeUndefined();
+		expect(tracker.takePendingReminder() ?? "").not.toContain("The board");
 		// New tasks continue the numbering.
 		tracker.store.plan({ tasks: [{ title: "C" }] });
 		expect(tracker.store.getState().order).toEqual(["T1", "T2", "T3"]);
@@ -1032,5 +1042,34 @@ describe("saved boards (export to memory)", () => {
 				by: "memory:m1",
 			}),
 		).toBe("empty");
+	});
+});
+
+describe("a board read from a conversation's log", () => {
+	it("exports what the log holds, without call ids, for a conversation with no session", async () => {
+		const { exportTaskLog } = await import("./saved-board");
+		const dir = mkdtempSync(join(tmpdir(), "tg-log-"));
+		try {
+			const logPath = join(dir, "s.tasks.jsonl");
+			expect(exportTaskLog(logPath, { sessionId: "s" })).toBeUndefined();
+			const writer = new TaskGraphStore({ logPath });
+			writer.plan(
+				{ tasks: [{ title: "A" }, { title: "B" }] },
+				{ by: "model", call: "c1" },
+			);
+			writer.update(
+				{ updates: [{ id: "T1", status: "done", note: "ok" }] },
+				{ by: "model", call: "c2" },
+			);
+			// A torn last line, as a crash mid-append leaves.
+			appendFileSync(logPath, '{"op":"upd');
+			const saved = exportTaskLog(logPath, { sessionId: "s", title: "two" });
+			expect(saved?.tasks).toBe(2);
+			expect(saved?.open).toBe(1);
+			expect(saved?.events.some((event) => "call" in event)).toBe(false);
+			expect(saved?.text).toContain("Task board: two");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
