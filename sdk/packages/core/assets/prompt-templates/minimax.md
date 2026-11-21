@@ -475,3 +475,12 @@ Output: one result, named `awk:<program>`, holding everything the program printe
 
 # tool: extract_document
 {{DEFAULT}}
+
+# tool: task_plan
+{{DEFAULT}}
+
+# tool: task_update
+{{DEFAULT}}
+
+# tool: task_view
+{{DEFAULT}}

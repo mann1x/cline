@@ -434,3 +434,12 @@ Output: plain text, one result per line as `file:line:column` followed by that s
 
 # tool: team_list_outcomes
 {{DEFAULT}}
+
+# tool: task_plan
+{{DEFAULT}}
+
+# tool: task_update
+{{DEFAULT}}
+
+# tool: task_view
+{{DEFAULT}}

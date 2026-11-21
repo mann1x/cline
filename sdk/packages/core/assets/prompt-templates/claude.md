@@ -567,3 +567,12 @@ Only after the user approves the plan in a message sent *after* you presented it
 
 # tool: team_list_outcomes
 {{DEFAULT}}
+
+# tool: task_plan
+{{DEFAULT}}
+
+# tool: task_update
+{{DEFAULT}}
+
+# tool: task_view
+{{DEFAULT}}

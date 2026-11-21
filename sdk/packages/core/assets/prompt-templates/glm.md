@@ -375,3 +375,12 @@ Output: one result for the whole call, named `awk:<program>`, holding everything
 
 # tool: extract_document
 {{DEFAULT}}
+
+# tool: task_plan
+{{DEFAULT}}
+
+# tool: task_update
+{{DEFAULT}}
+
+# tool: task_view
+{{DEFAULT}}

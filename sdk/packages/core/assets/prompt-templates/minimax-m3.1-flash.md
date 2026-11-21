@@ -571,3 +571,12 @@ The result is a one-line plain-text confirmation. This call ends the current run
 # tool: team_list_outcomes
 
 {{DEFAULT}}
+
+# tool: task_plan
+{{DEFAULT}}
+
+# tool: task_update
+{{DEFAULT}}
+
+# tool: task_view
+{{DEFAULT}}

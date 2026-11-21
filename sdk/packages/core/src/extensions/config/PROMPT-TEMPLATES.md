@@ -694,11 +694,33 @@ it fires on every file and reads like a defect in the template.
 
 ### After a tool description changes in code
 
+Nothing to run by hand any more (since 4.100.292). The package's `build`
+runs the sync and the bundle generator first, and `shipped-templates.test.ts`
+runs `--check`, so a tree that was not built still fails the suite:
+
 ```bash
-bun scripts/sync-default-template.mts          # rewrite default.md
-bun scripts/sync-default-template.mts --check  # CI: fail if stale
-bun scripts/generate-builtin-templates.mts
+bun scripts/sync-default-template.mts          # what the build runs
+bun scripts/sync-default-template.mts --check  # what the test runs
+bun scripts/generate-builtin-templates.mts     # also run by the build
 ```
+
+What the sync does:
+
+- copies each changed description into `default.md`;
+- gives a tool new to the code a section in **every** shipped template, after
+  its last tool section: the description in `default.md`, `{{DEFAULT}}` in
+  the family templates (a family file is spliced, never reformatted, since a
+  model wrote it). Which tools exist is built, not listed:
+  `template-tool-inventory.ts` constructs them from their factories, and the
+  test reads the same list. Two hand-kept lists are how `task_progress`,
+  `restore_file` and then the task graph's `task_plan`/`task_update`/`task_view`
+  each went without a section;
+- keeps `{{DEFAULT}}` for the descriptions composed per session
+  (`COMPUTED_TOOL_NAMES`: `run_commands`, `skills`, `task_plan`, whose text
+  differs between act and plan mode).
+
+A family section that rewrites a tool in its own words is still the model's
+text: the sync does not touch it, and the two hand-checks below still apply.
 
 Two homes the sync does not reach, both found on 2026-11-08 when the
 `check_file`, `browser` and `ask_lsp` descriptions were corrected:

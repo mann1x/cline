@@ -642,3 +642,12 @@ Run an `awk` program over one or more files. This is the tool for column-based q
 
 # tool: extract_document
 {{DEFAULT}}
+
+# tool: task_plan
+{{DEFAULT}}
+
+# tool: task_update
+{{DEFAULT}}
+
+# tool: task_view
+{{DEFAULT}}

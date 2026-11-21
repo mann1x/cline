@@ -466,3 +466,12 @@ Finalize one outcome. Output: {outcomeId, status}.
 
 # tool: team_list_outcomes
 List team outcomes. Output: [{id, teamId, title, status, requiredSections: [...], createdBy, createdAt, finalizedAt?}].
+
+# tool: task_plan
+{{DEFAULT}}
+
+# tool: task_update
+Change tasks: start one (status active), finish it (status done, with a `note` saying what was done and how it was checked; its acceptance is ticked with it unless you send `check` or `uncheck`), cancel it (with the reason), tick acceptance items (`check`: their numbers or text), or change dependencies. Several tasks in one call. A task cannot start while a task it depends on is open.
+
+# tool: task_view
+Read the task board. view: ready (default: the board, with what can start now), show (one task in full, with `id`), graph (open tasks in dependency layers), blocked (what each blocked task waits on).

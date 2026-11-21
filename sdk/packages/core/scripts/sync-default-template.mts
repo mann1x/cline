@@ -1,122 +1,56 @@
 /**
- * Rewrite the tool sections of `default.md` from the tools themselves.
+ * Rewrite the tool sections of the shipped templates from the tools themselves.
  *
  * `default.md` carries every tool description verbatim, because a template is
  * allowed to override one and a model reading the file has to be reading what
- * the model in a session is really given. A guard test proves the two match,
- * which turns any change to a description into a failing test and a manual
- * copy — fine for one tool, miserable for thirty, and the kind of chore that
- * ends with someone editing the test instead of the file.
+ * the model in a session is really given. Every family template carries a
+ * section for every tool too (its own words, or `{{DEFAULT}}`), so nothing in
+ * a file silently relies on the fallback.
  *
- * So the copying is done here:
+ *   bun scripts/sync-default-template.mts          # rewrite
+ *   bun scripts/sync-default-template.mts --check  # fail if anything is stale
  *
- *   bun scripts/sync-default-template.mts        # rewrite
- *   bun scripts/sync-default-template.mts --check  # fail if stale (CI)
+ * It runs on every build of this package (`build` in package.json) and the
+ * test suite runs the same check, so the file cannot go stale: a changed
+ * description is copied in, and a tool new to the code gets its section --
+ * its text in `default.md`, `{{DEFAULT}}` in the family templates -- after
+ * the last tool section. The tool list is built, not kept
+ * (`template-tool-inventory.ts`).
  *
  * The `# system` section is never touched. That part is written by hand and is
  * the whole point of the file; only the `# tool:` sections are generated.
- *
- * Two tools keep `{{DEFAULT}}` instead of their text: `run_commands` is written
- * against whichever shell was detected and `skills` appends the skills that
- * happen to be installed, so pinning either would pin one machine's answer.
- * Host tools — the ones `apps/vscode` contributes — cannot be constructed from
- * here at all, so their sections are left exactly as they are and guarded by a
- * test on that side of the boundary.
+ * Computed descriptions (`COMPUTED_TOOL_NAMES`) stay as the marker, and host
+ * tools -- the ones `apps/vscode` contributes -- cannot be constructed from
+ * here, so their sections are left exactly as they are and guarded by a test on
+ * that side of the boundary.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-	createApplyPatchTool,
-	createAskQuestionTool,
-	createAwkTool,
-	createEditorTool,
-	createExtractDocumentTool,
-	createGrepTool,
-	createReadFilesTool,
-	createSearchTool,
-	createSedTool,
-	createShellTool,
-	createSkillsTool,
-	createSubmitAndExitTool,
-	createTaskProgressTool,
-	createWebFetchTool,
-} from "../src/extensions/tools/definitions";
-import { createReadAgentReportTool } from "../src/extensions/tools/team/agent-reports";
-import { createAgentsStatusTool } from "../src/extensions/tools/team/agent-status";
-import { createLeadAgentTools } from "../src/extensions/tools/team/lead-agent-tools";
-import { createSpawnAgentTool } from "../src/extensions/tools/team/spawn-agent-tool";
-import { createAgentTeamsTools } from "../src/extensions/tools/team/team-tools";
-import { createSessionRevisions } from "../src/runtime/atomic/session-revisions";
+	COMPUTED_TOOL_NAMES,
+	templateToolInventory,
+} from "../src/extensions/config/template-tool-inventory";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const TEMPLATE_PATH = join(
-	here,
-	"..",
-	"assets",
-	"prompt-templates",
-	"default.md",
-);
+const TEMPLATE_DIR = join(here, "..", "assets", "prompt-templates");
+const COMPUTED = new Set(COMPUTED_TOOL_NAMES);
+const MARKER = "{{DEFAULT}}";
 
-/** Descriptions that are computed per machine and stay as the marker. */
-const COMPUTED = new Set(["run_commands", "skills"]);
-
-const stubExecutor = (() => {
-	throw new Error("not executed");
-}) as never;
-
-function liveTools(): { name: string; description?: string }[] {
-	// Only the tools whose description depends on where they run take a cwd.
-	// The rest were narrowed to a timeout of their own in f4fe3d36e and reject
-	// this object outright, so they are left to their defaults.
-	const config = { cwd: "/workspace" };
-	return [
-		createReadFilesTool(stubExecutor),
-		createSearchTool(stubExecutor, config),
-		createGrepTool(stubExecutor, config),
-		createAwkTool(stubExecutor, config),
-		createExtractDocumentTool(stubExecutor, config),
-		createShellTool(stubExecutor, config),
-		createWebFetchTool(stubExecutor),
-		createEditorTool(stubExecutor, config),
-		createSedTool(stubExecutor, config),
-		createApplyPatchTool(stubExecutor, config),
-		createSkillsTool(stubExecutor),
-		createAskQuestionTool(stubExecutor),
-		createSubmitAndExitTool(stubExecutor),
-		createSpawnAgentTool({ configProvider: {} as never }),
-		createReadAgentReportTool(),
-		createAgentsStatusTool({ sessionId: "s" }),
-		...createLeadAgentTools({ sessionId: "s" }),
-		// Added by the runtime outside createDefaultTools, which is how both
-		// went without a section in every template until 4.100.289.
-		createTaskProgressTool(),
-		...createSessionRevisions({ root: "/workspace" }).tools,
-		...createAgentTeamsTools({
-			runtime: {} as never,
-			requesterId: "lead",
-			teammateConfigProvider: {} as never,
-		}),
-	];
-}
+type Section = { heading: string; body: string };
 
 /**
- * Split the file into its sections without parsing it as a template.
- *
- * The parser would give back the sections' text but not the order they were
- * written in or the host sections it knows nothing about, and both have to
- * survive a rewrite.
+ * Split a file into its sections without parsing it as a template: the parser
+ * would give back the text but not the order or the sections it does not know,
+ * and both have to survive a rewrite.
  */
-function splitSections(raw: string): { heading: string; body: string }[] {
-	const lines = raw.split("\n");
-	const sections: { heading: string; body: string }[] = [];
+function splitSections(raw: string): Section[] {
+	const sections: Section[] = [];
 	let heading = "";
 	let body: string[] = [];
-	for (const line of lines) {
-		if (/^# (system|tool: )/.test(line)) {
-			if (heading !== "") {
-				sections.push({ heading, body: body.join("\n") });
-			}
+	for (const line of raw.split("\n")) {
+		if (/^# (system|tool: |compaction: )/.test(line)) {
+			if (heading !== "") sections.push({ heading, body: body.join("\n") });
 			heading = line;
 			body = [];
 			continue;
@@ -128,78 +62,132 @@ function splitSections(raw: string): { heading: string; body: string }[] {
 		}
 		body.push(line);
 	}
-	if (heading !== "") {
-		sections.push({ heading, body: body.join("\n") });
-	}
+	if (heading !== "") sections.push({ heading, body: body.join("\n") });
 	return sections;
+}
+
+function toolName(section: Section): string | undefined {
+	return /^# tool: (.+)$/.exec(section.heading)?.[1];
+}
+
+function render(sections: Section[]): string {
+	const preamble = sections
+		.filter((section) => section.heading === "")
+		.map((section) => section.body)
+		.join("\n")
+		.trimEnd();
+	const rest = sections
+		.filter((section) => section.heading !== "")
+		.map((section) => `${section.heading}\n${section.body.trim()}`);
+	return `${[preamble, ...rest].join("\n\n").trimEnd()}\n`;
+}
+
+/** New sections go after the last tool section, ahead of any compaction ones. */
+function insertAfterTools(sections: Section[], added: Section[]): Section[] {
+	if (added.length === 0) return sections;
+	let at = sections.length;
+	for (let index = sections.length - 1; index >= 0; index--) {
+		if (toolName(sections[index] as Section)) {
+			at = index + 1;
+			break;
+		}
+	}
+	return [...sections.slice(0, at), ...added, ...sections.slice(at)];
+}
+
+/** `raw` with `added` inserted after its last tool section, untouched otherwise. */
+function spliceAfterTools(raw: string, added: Section[]): string {
+	if (added.length === 0) return raw;
+	const lines = raw.split("\n");
+	let lastTool = -1;
+	for (let index = 0; index < lines.length; index++) {
+		if (/^# tool: /.test(lines[index] ?? "")) lastTool = index;
+	}
+	let end = lines.length;
+	for (let index = lastTool + 1; index < lines.length; index++) {
+		if (/^# (system|tool: |compaction: )/.test(lines[index] ?? "")) {
+			end = index;
+			break;
+		}
+	}
+	while (end > 0 && (lines[end - 1] ?? "").trim() === "") end--;
+	const block = added
+		.map((section) => `${section.heading}\n${section.body}`)
+		.join("\n\n");
+	const before = lines.slice(0, end).join("\n");
+	const after = lines.slice(end).join("\n").replace(/^\n*/, "");
+	return after
+		? `${before}\n\n${block}\n\n${after}`
+		: `${before}\n\n${block}\n`;
 }
 
 function main(): void {
 	const check = process.argv.includes("--check");
-	const raw = readFileSync(TEMPLATE_PATH, "utf8");
+	const tools = templateToolInventory();
 	const descriptions = new Map(
-		liveTools().map((tool) => [tool.name, (tool.description ?? "").trim()]),
+		tools.map((tool) => [tool.name, (tool.description ?? "").trim()]),
 	);
+	const problems: string[] = [];
+	const changed: string[] = [];
 
-	const preamble: string[] = [];
-	const sections = splitSections(raw);
-	const rendered: string[] = [];
-	const stale: string[] = [];
-	const missing = new Set(descriptions.keys());
+	for (const file of readdirSync(TEMPLATE_DIR)
+		.filter((f) => f.endsWith(".md"))
+		.sort()) {
+		const path = join(TEMPLATE_DIR, file);
+		const raw = readFileSync(path, "utf8");
+		const isDefault = file === "default.md";
+		const sections = splitSections(raw);
+		const have = new Set(sections.map(toolName).filter(Boolean) as string[]);
+		const stale: string[] = [];
 
-	for (const section of sections) {
-		if (section.heading === "") {
-			preamble.push(section.body);
-			continue;
+		if (isDefault) {
+			for (const section of sections) {
+				const name = toolName(section);
+				if (!name || COMPUTED.has(name) || !descriptions.has(name)) continue;
+				const wanted = descriptions.get(name) ?? "";
+				if (section.body.trim() !== wanted) {
+					stale.push(name);
+					section.body = wanted;
+				}
+			}
 		}
-		const toolMatch = /^# tool: (.+)$/.exec(section.heading);
-		const name = toolMatch?.[1];
-		const current = section.body.trim();
-		if (!name || COMPUTED.has(name) || !descriptions.has(name)) {
-			// The system section, a computed marker, or a host tool this package
-			// cannot build. All three are kept exactly as written.
-			missing.delete(name ?? "");
-			rendered.push(`${section.heading}\n${current}`);
-			continue;
+		const missing = [...descriptions.keys()].filter((name) => !have.has(name));
+		const added = missing.map((name) => ({
+			heading: `# tool: ${name}`,
+			body:
+				isDefault && !COMPUTED.has(name)
+					? (descriptions.get(name) ?? "")
+					: MARKER,
+		}));
+		// default.md is generated, so it is rendered whole; a family template
+		// was written by a model and keeps its text exactly, the new sections
+		// spliced in after its last tool section.
+		const next = isDefault
+			? render(insertAfterTools(sections, added))
+			: spliceAfterTools(raw, added);
+		if (next === raw) continue;
+		for (const name of stale) problems.push(`${file}: ${name} is stale`);
+		for (const name of missing)
+			problems.push(`${file}: ${name} has no section`);
+		if (stale.length === 0 && missing.length === 0)
+			problems.push(`${file}: layout differs`);
+		if (!check) {
+			writeFileSync(path, next, "utf8");
+			changed.push(file);
 		}
-		missing.delete(name);
-		const wanted = descriptions.get(name) ?? "";
-		if (current !== wanted) {
-			stale.push(name);
-		}
-		rendered.push(`${section.heading}\n${wanted}`);
 	}
 
-	// A tool that exists in code and has no section at all is the failure the
-	// guard test catches; say so here rather than writing it in silently, since
-	// where it belongs in the file is an editorial decision.
-	for (const name of missing) {
-		console.error(`  ${name} has no section in default.md — add one`);
-	}
-
-	// Sections are separated by a blank line. The parser does not need it; a
-	// person reading a thirty-section file does.
-	const next = `${[preamble.join("\n").trimEnd(), ...rendered].join("\n\n").trimEnd()}\n`;
-	if (next === raw && missing.size === 0) {
-		console.log("default.md is up to date.");
+	if (problems.length === 0) {
+		console.log("The shipped templates are up to date.");
 		return;
 	}
 	if (check) {
-		for (const name of stale) {
-			console.error(`  ${name} is stale in default.md`);
-		}
+		for (const line of problems) console.error(`  ${line}`);
 		console.error("Run: bun scripts/sync-default-template.mts");
 		process.exit(1);
 	}
-	writeFileSync(TEMPLATE_PATH, next, "utf8");
-	console.log(
-		stale.length > 0
-			? `Updated ${stale.length} section(s): ${stale.join(", ")}`
-			: "Rewrote default.md.",
-	);
-	if (missing.size > 0) {
-		process.exit(1);
-	}
+	for (const line of problems) console.log(`  ${line}`);
+	console.log(`Rewrote ${changed.length} file(s): ${changed.join(", ")}`);
 }
 
 main();

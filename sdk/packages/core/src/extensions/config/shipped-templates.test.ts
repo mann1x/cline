@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -10,31 +11,14 @@ import {
 } from "@cline/shared";
 import { describe, expect, it } from "vitest";
 import { createSessionRevisions } from "../../runtime/atomic/session-revisions";
-import {
-	createApplyPatchTool,
-	createAskQuestionTool,
-	createAwkTool,
-	createDefaultTools,
-	createEditorTool,
-	createExtractDocumentTool,
-	createGrepTool,
-	createReadFilesTool,
-	createSearchTool,
-	createSedTool,
-	createShellTool,
-	createSkillsTool,
-	createSubmitAndExitTool,
-	createTaskProgressTool,
-	createWebFetchTool,
-} from "../tools/definitions";
-import { createListFilesTool } from "../tools/list-files";
+import { createDefaultTools } from "../tools/definitions";
+import { TaskGraphTracker } from "../tools/task-graph/tracker";
 import { TaskProgressTracker } from "../tools/task-progress";
-import { createReadAgentReportTool } from "../tools/team/agent-reports";
-import { createAgentsStatusTool } from "../tools/team/agent-status";
-import { createLeadAgentTools } from "../tools/team/lead-agent-tools";
-import { createSpawnAgentTool } from "../tools/team/spawn-agent-tool";
-import { createAgentTeamsTools } from "../tools/team/team-tools";
 import { parsePromptTemplate } from "./prompt-template-parser";
+import {
+	COMPUTED_TOOL_NAMES,
+	templateToolInventory,
+} from "./template-tool-inventory";
 
 /**
  * The prompt templates that ship with Cline.
@@ -54,7 +38,6 @@ const TEMPLATE_DIR = join(
 );
 
 const stubExecutor = (async () => "") as never;
-const stubConfig = { cwd: "/workspace", shell: "/bin/bash" } as never;
 
 /**
  * Every tool the SDK can hand a session, built rather than listed.
@@ -65,41 +48,13 @@ const stubConfig = { cwd: "/workspace", shell: "/bin/bash" } as never;
  * means a tool added anywhere in this package fails the coverage test on the
  * commit that adds it.
  */
-const LIVE_TOOLS = [
-	createReadFilesTool(stubExecutor, stubConfig),
-	createSearchTool(stubExecutor, stubConfig),
-	createGrepTool(stubExecutor, stubConfig),
-	createSedTool(stubExecutor, stubConfig),
-	createAwkTool(stubExecutor, stubConfig),
-	createExtractDocumentTool(stubExecutor, stubConfig),
-	createShellTool(stubExecutor, stubConfig),
-	createWebFetchTool(stubExecutor, stubConfig),
-	createEditorTool(stubExecutor, stubConfig),
-	createApplyPatchTool(stubExecutor, stubConfig),
-	createSkillsTool(stubExecutor, stubConfig),
-	createAskQuestionTool(stubExecutor),
-	createSubmitAndExitTool(stubExecutor, stubConfig),
-	createSpawnAgentTool({ configProvider: {} as never }),
-	createReadAgentReportTool(),
-	createAgentsStatusTool({ sessionId: "s" }),
-	...createLeadAgentTools({ sessionId: "s" }),
-	createListFilesTool({ cwd: "/workspace", createLister: {} as never }),
-	createTaskProgressTool(),
-	...createSessionRevisions({ root: "/workspace" }).tools,
-	...createAgentTeamsTools({
-		runtime: {} as never,
-		requesterId: "lead",
-		teammateConfigProvider: {} as never,
-	}),
-] as { name: string; description?: string }[];
+const LIVE_TOOLS = templateToolInventory();
 
 /**
  * `run_commands` is written against the detected shell and `skills` appends the
  * installed skill list, so the file carries `{{DEFAULT}}` for both rather than
  * one machine's answer.
  */
-const COMPUTED_TOOL_NAMES = ["run_commands", "skills"];
-
 /**
  * Contributed by the VS Code host, so nothing here can build one to compare
  * against — their text is guarded by a test in `apps/vscode`, next to the
@@ -495,6 +450,9 @@ describe("shipped prompt templates", () => {
 				cwd: "/workspace",
 			} as never),
 			...createSessionRevisions({ root: "/workspace" }).tools,
+			// Added by the host when the task graph is on (4.100.289); the
+			// templates had no section for them until 4.100.292.
+			...new TaskGraphTracker().tools(),
 		].map((tool) => tool.name);
 		expect(composed).toContain("task_progress");
 		expect(composed).toContain("restore_file");
@@ -518,5 +476,30 @@ describe("shipped prompt templates", () => {
 				).toContain("{{DEFAULT}}");
 			}
 		}
+	});
+});
+
+describe("the sync keeps every shipped template current", () => {
+	// The build runs the sync; this is the same check for a tree nobody built.
+	it("reports nothing stale and no tool without a section", () => {
+		const result = spawnSync(
+			process.execPath.includes("bun") ? process.execPath : "bun",
+			[
+				join(
+					__dirname,
+					"..",
+					"..",
+					"..",
+					"scripts",
+					"sync-default-template.mts",
+				),
+				"--check",
+			],
+			{ encoding: "utf8" },
+		);
+		expect(`${result.stdout}${result.stderr}`).toContain(
+			"The shipped templates are up to date.",
+		);
+		expect(result.status).toBe(0);
 	});
 });

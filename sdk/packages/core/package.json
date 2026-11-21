@@ -49,7 +49,7 @@
 		}
 	},
 	"scripts": {
-		"build": "bun run ./bun.mts && bun tsc -p tsconfig.build.json && bun run ./scripts/verify-runtime-build-id.ts",
+		"build": "bun run ./scripts/sync-default-template.mts && bun run ./scripts/generate-builtin-templates.mts && bun run ./bun.mts && bun tsc -p tsconfig.build.json && bun run ./scripts/verify-runtime-build-id.ts",
 		"typecheck": "bun tsc -p tsconfig.dev.json --noEmit && bun run typecheck:smoke",
 		"typecheck:smoke": "bun tsc -p tsconfig.smoke.json --noEmit",
 		"test": "bun run test:unit && bun run test:e2e",
