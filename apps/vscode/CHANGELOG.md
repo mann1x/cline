@@ -5,7 +5,7 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.290] — pending
+## [4.100.290] — 2026-11-21
 
 ### Task graph (preview, off by default)
 
