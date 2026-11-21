@@ -5,73 +5,225 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
-## [4.100.292] — pending
+## [4.100.292] — 2026-11-21
 
 ### The task graph replaces the checklist
 
-- **The task board is always on; the checklist is removed**: no
-  `task_progress` parameter on every tool (about 2,320 tokens a request), no
-  `task_progress` tool, no checklist reminders, no Task Checklist or Task
-  Graph switch, no checklist panel.
-- **Old conversations** import their last checklist onto the board on resume.
-- **A habitual `task_progress` send** is read onto the board (matched by
-  title, otherwise a new task), said once to the model, and counted in the log.
-- **CLI:** `--task-progress` and `--task-progress-interval` removed;
-  `--task-graph` still accepted.
+- **The task board is on for everyone, and the checklist is gone.** The
+  checklist added an optional `task_progress` parameter to every tool, a
+  `task_progress` tool, a reminder every six calls and a close-out guard. The
+  parameter alone cost about 2,320 prompt tokens on every request (phase 0,
+  15 tools, qwen3.6 27b), whether or not the model used it. All of that is removed, along with the Task
+  Checklist and Task Graph (preview) switches in Settings → Features and the
+  checklist panel under the context window. The task graph (`task_plan`,
+  `task_update`, `task_view`, and `task_done` on the calls that finish work)
+  is now the only plan, with its board under the context window.
+- **Old conversations keep their plan.** A conversation from before the graph
+  is resumed with its last checklist imported onto the board, as before.
+  Its old checklist rows are no longer drawn.
+- **A model that still sends `task_progress` loses nothing.** A model trained
+  on the old shape, or a custom template that still asks for it, may keep
+  sending the field. It is advertised nowhere, but it is read off the call:
+  an item whose title matches a task updates it (a ticked box closes it, an
+  unticked one never reopens a closed task), and any other item becomes a new
+  task. The model is told once to use the board instead, and every send is
+  counted in the log (`[task-graph] habitual task_progress send #N`), so we
+  can tell when the reader is no longer needed.
+- **CLI:** `--task-progress` and `--task-progress-interval` are removed.
+  `--task-graph` is still accepted and changes nothing, since the graph is
+  always on. In the SDK, `taskGraph.enabled: false` still turns it off for a
+  host that wants no board; the `taskProgress` session option is removed.
+- **Templates:** the `# tool: task_progress` section is removed from every
+  shipped template. The template sync now also removes sections for tools
+  that no longer exist, in `default.md` and the family templates alike.
 
 ### Fixes
 
-- **Ollama Cloud requests respect the plan's concurrency, per account**
-  (issue #115): 3 at once on pay-as-you-go and Pro, 10 on Max and Team, shared
-  by the lead, subagents, the expert and side calls on every Ollama or xOllama
-  server signed in as that account. Extra requests wait in Cerebriline instead
-  of piling up in Ollama's queue, and the subagent limit on a cloud model
-  follows the plan.
-- **Gemma 4 on an opencoti server no longer fails every request with the task
-  graph on** (HTTP 500 "map: filter-mapping not implemented"): `task_update`'s
-  `check`/`uncheck` item schema used a list type the model's chat template
-  cannot render.
-- **MCP tools with the same schema shape are rewritten on the way out**, so
-  they cannot break those requests either.
+- **Requests to Ollama Cloud now respect your plan's concurrency, across the
+  whole account** (issue #115). An ollama.com plan runs a fixed number of
+  requests at once: 3 on pay-as-you-go and Pro, 10 on Max and Team. Requests
+  past that wait in Ollama's queue, and once the queue is full they are
+  rejected. Nothing capped how many we sent, so a lead that spawned several
+  subagents on a cloud model could leave them waiting or retrying, and the turn
+  never finished. Now every cloud-model request through an Ollama or xOllama
+  provider takes one of the account's slots and gives it back when its response
+  ends. The account is read from the server's sign-in, so the lead, every
+  subagent, the expert and side calls such as compaction share one count, even
+  across several Ollama and xOllama servers signed in as the same account. A
+  request past the allowance waits in Cerebriline, where it can be cancelled,
+  and the log says so. The number of subagents allowed at once on a cloud
+  model also follows the plan: a profile's parallel-session count can lower it
+  but never raise it, and with none set the plan decides instead of 1. Local
+  models, servers that are not signed in, and plans this build does not know
+  keep the previous behaviour. Each VS Code window counts on its own.
+
+- **Gemma 4 on an opencoti (llamafile) server failed every request with the
+  task graph on**: HTTP 500 "map: filter-mapping not implemented", before
+  anything was generated. `task_update` declared its `check` and `uncheck`
+  items as `type: ["integer", "string"]`; Gemma 4's canonical chat template
+  renders a list type in that one place with `map('upper')`, which the
+  server's template engine does not implement. They are declared with
+  `anyOf` now, which renders, and a test walks every built-in and task-graph
+  tool schema so the shape cannot come back. In 4.100.289 to 4.100.291, with
+  the task graph preview on; the Ollama provider was not affected (it renders
+  Gemma 4 with its own renderer). Found and narrowed down by the backup_models
+  session.
+- **The same shape from any other tool, MCP servers included, is rewritten on
+  its way into a request.** A tool schema can come from an MCP server, which
+  is not ours to edit, and one with a list type on an array's items would hit
+  the same 500. Every request now carries each tool's schema with that list
+  said as `anyOf`, which means the same thing. Whether a schema needs it is
+  known from the schema itself: one check per tool, cached, and a schema
+  without the shape goes out exactly as it was. A rewrite is logged once per
+  tool ("Tool schema for <name>: list types on array items rewritten as
+  anyOf"), so a server that sends the shape shows up in the log.
 
 ### Plan mode
 
-- **Plan mode no longer pushes the model into acting**: a plan-mode run that
-  ends on its plan is asked to let the user choose (act, discuss, or stop), and
-  the act-mode nudges that led a model to switch to act mode by itself stand
-  down there.
-- **Plan mode asks for a plan worth approving**: the cause found first, one
-  step per change with where, what and why, and how each is checked; the task
-  board no longer starts a task there or asks for the plan by call count.
+- **Plan mode no longer pushes the model into acting.** On pandorum
+  (gemma4-26b-agentic) a plan-mode run presented its plan and asked "Please let
+  me know if you approve this plan", and two act-mode nudges answered it: the
+  task board's "close these tasks, or do them now", and "you described the
+  next step instead of taking it; emit the tool call now". The only call left
+  that moved forward was `switch_to_act_mode`, and the model switched itself
+  and started editing. In plan mode now:
+  - a run that has looked at something and ends without a tool call is asked
+    once to put the choice to the user, with `ask_question` where it has it:
+    switch to act mode and carry out the plan, discuss it further, or stop
+    there and wait for instructions, and not to call `switch_to_act_mode`
+    until the user has chosen;
+  - the "you described the next step" nudge stands down;
+  - the task board asks for the plan with nothing started, and never asks to
+    start, update or close tasks; the run ends on the plan, its tasks open
+    for act mode.
+- **A plan worth approving.** The next run on pandorum asked properly, but the
+  plan was two lines ("Fix syntax error … line 90", "Verify"), and on the way
+  the model tried to edit with `sed`. Three things led there:
+  - `task_plan` started the first task itself, and "T1 is active now
+    (started for you)" was answered with "Okay, I'm starting T1. I will use
+    sed". In plan mode nothing is started now, by `start` or on its own, and
+    the result says to present the plan and ask the user once it is complete.
+  - The board asked for a plan at the 4th call, while the model was still
+    unsure of the cause, so the plan was written from a guess. In plan mode
+    there is no call-count ask; a run that has looked around and is ending
+    with an empty board is asked once to put the plan there, or to keep
+    looking if the cause is not found yet.
+  - Nothing said what a plan has to contain. The plan-mode instructions (every
+    model) now have a section on it: the cause found first; one step per
+    change, naming the file and place, what changes into what, and why that
+    removes the cause; how each step is checked, ending with the check for the
+    whole request; and what is still uncertain. The task board's plan-mode
+    start note and the plan-mode `task_plan` description say the same.
+- **"Let me know …" is no longer read as an announced action.** It is a
+  question to the user, and it was what set off the "you described the next
+  step" nudge in that run (it applied in act mode too).
+- The Gemma template no longer says not to offer "Switch to Act mode" as a
+  question option; it now says that is how plan mode asks how to proceed.
 
 ### Task graph
 
-- **A conversation with no board starts with a note asking for the plan
-  before the first change**, instead of waiting for the 4th tool call.
-- **The board's rules are in the system prompt** when the task graph is on,
-  for every model and template.
-- **The model is asked whether the plan still holds** when a check fails
-  after changes, or eight calls pass, while the active task is not updated.
+- **The board's rules are in the system prompt.** On pandorum
+  (gemma4-26b-agentic) a run ignored the start note and both plan asks, and
+  worked 53 calls with no board; its reasoning never once mentioned the plan.
+  Everything the board said came as a note on a tool result or a run-start
+  note, and no template had a word about it (the checklist's `task_progress`
+  section went with the checklist). With the task graph on, the system prompt
+  now ends with a short "Task board" section, whatever template built the
+  rest: plan before the first change in one `task_plan` call, close a task with
+  `task_done` on the call that finishes it, change the plan when the work
+  turns out different, and no plan for a request that only needs an answer.
+  In plan mode it says the plan goes on the board and nothing is started.
+
+- **The model is told to plan before its first change, at the start.** Every
+  plan nudge came after a tool call, and on pandorum gemma4-26b-agentic had
+  the fix by its 4th call: in 3 of 4 runs it edited at call 4 or 5 and never
+  planned, reading the asks that came with or after the edit as background.
+  A conversation with no board now starts with one note, right after the
+  system prompt: it keeps a task board, a request that changes files gets its
+  plan in one `task_plan` call before the first change, and a task is closed
+  with `task_done` on the call that finishes it. A request that changes no
+  file needs no plan. Said once per session, about 80 tokens.
+
+- **A new nudge for a plan that has fallen behind the work.** Nothing asked
+  for the plan to be kept current while the model debugged: on pandorum
+  (gemma4-26b-agentic) the run that planned kept "T1 Rewrite Level class"
+  active while the game check failed with a new `ReferenceError` and the model
+  read and searched for six calls, because the existing nudges count only file
+  changes and passing checks. Now, while a task is active and untouched, a
+  command that reports a failure after changes under that task (a nonzero
+  exit, an error line, or a check that prints `"ok": false`), or eight calls
+  with no board change, brings one note naming the task and the failure: add
+  the new problem with `task_plan` or note on the task where it stands, or
+  carry on if it is still the same work. Said at most twice per task, the
+  second time differently, within the usual three-call spacing; a note or
+  any other change to the task starts the count again.
+
+### Prompt templates
+
+- **The shipped templates can no longer go stale.** `default.md` (the verbatim
+  record of every tool description) was refreshed only when someone ran a
+  script by hand, and that script and its guard test each kept their own list
+  of tools, so a tool the runtime adds elsewhere never got a section: the task
+  graph's three tools had none in any template. The package build now runs the
+  sync and the bundle generator, the test suite runs the same check, and the
+  tool list is built from the factories. A tool new to the code gets a section
+  in every template on its own: its text in `default.md`, `{{DEFAULT}}` in the
+  family templates. Nothing changes for any model today: the three tools
+  reached every model with their built-in text before, and still do.
 
 ## [4.100.291] — 2026-11-21
 
 ### Task graph (preview, off by default)
 
 - **The first file change without a plan is always followed by the ask to
-  write one**, instead of waiting out the three-call spacing between nudges.
+  write one.** The plan nudge comes at most once every three tool calls, and
+  that kept quiet the one moment it matters most: on pandorum, gemma4-26b was
+  asked for a plan at its 4th call, edited at its 5th, and the "you just
+  changed a file and this task has no plan" ask, held back by the spacing,
+  never came while the fix went on. The first change of a conversation with
+  no plan now gets it at once; it still counts as one of the two asks for
+  that situation.
 
 ## [4.100.290] — 2026-11-21
 
 ### Task graph (preview, off by default)
 
-- **The task panel can change the board:** start, finish, cancel or reopen a
-  task, tick its acceptance, add a task. Each change is yours in the board's
-  log, and the model is told what changed with its next look.
-- **Save a board to Memory and start a new conversation from it**, optionally
-  keeping the saved board updated. Saved boards never reach the model through
-  recall or its memory tools.
+- **The task panel can change the board.** Open a task to start it, mark it
+  done (with what was done, optional), cancel it (with the reason), or reopen
+  a closed one; click an acceptance item to tick or untick it; "+ Add task"
+  adds one. Each change is recorded as yours (`by: user` in the board's log)
+  and the model is told what changed: with the next tool results when it is
+  working, or with your next message when it is waiting. It is told once, and
+  it does not have to ask. The board can be changed while its conversation is
+  running or waiting for you; a conversation reopened from history gets its
+  board back with the next message.
+- **Save a board to Memory, and start from it later.** With Memory on, the
+  task panel's "Save to memory…" saves the board into a memory you pick: the
+  open tasks in full, the closed ones with their outcome, a header naming the
+  conversation and the time. The Memory panel lists it as a task board, with
+  "Use in a new conversation": the next conversation you start begins with
+  that board, task ids kept, each task marked as coming from the saved board.
+  No tool is involved: the board is filled before the first request, and the
+  model is told with that request, right after the system prompt, that the
+  conversation starts from a board you saved (which one, its title and when)
+  and shown the board. "Keep it updated" (when
+  saving, or in the Memory panel) rewrites the saved board a moment after
+  each change in a conversation working from it; two conversations working
+  from one board each update it, and it records which wrote last.
+  "Save to memory…" also works on a conversation reopened from history
+  before you send it a message: the board is read from the conversation's own
+  log.
+- **A saved board is not a note for the model.** Recall, the model's own
+  listing and forgetting, merging similar notes and exporting a memory to a
+  file all leave saved boards out; only you save, use or forget one.
 
-## [4.100.289] — 2026-11-20
+### Tests
+
+- The tool selection test expected the costs from before `sed` was
+  re-measured at 686 tokens and the editor's description was rewritten
+  (1,987); it now expects 8.5k of 10.5k, and 686 of 2.7k for the write group.
+
+## [4.100.289] — 2026-11-21
 
 ### Editor
 
@@ -100,17 +252,6 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   The message says how many lines would be dropped.
 - Every built-in template's editor section is updated to match.
 
-### Task graph (preview, off by default)
-
-- **Fewer requests spent on the board.** After a plan, or a close with nothing
-  else under way, the next ready task starts by itself. The edit and command
-  tools take an optional `task_done` ("T3: what was done") that closes the
-  task when the call succeeds, several at once as "T2, T3: …" or "T2-T5: …",
-  quoted or not. Closing a task as done with `task_update` ticks its
-  acceptance unless the call ticks or unticks items itself. A close sent as
-  a request of its own right after an edit that could have carried
-  `task_done` gets a one-time hint saying so.
-
 ### Prompt templates
 
 - **`restore_file` and `task_progress` have a section in every built-in
@@ -130,6 +271,75 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   exists to keep benchmark details out of what the model reads, and it was
   failing on the three templates that carried the sentence. The example is now
   line 12. The note shown after a real run still names the actual lines.
+- **The tool selection list shows `sed` at its real cost, 686 tokens** (was
+  637). The 4.100.286 note made the description longer and the recorded cost
+  was not updated; the test that compares the two had been failing since.
+
+### Task graph (preview, off by default)
+
+- **A task graph can replace the checklist.** Settings → Features → "Task
+  Graph (preview)", or `--task-graph` / `CLINE_TASK_GRAPH=1` on the CLI. The
+  model plans with three tools: `task_plan` (several tasks in one call, with
+  dependencies and acceptance; `#2` names the second task of the same call),
+  `task_update` (start, finish with an outcome, cancel, tick acceptance,
+  change dependencies) and `task_view` (the board, one task, the dependency
+  layers, what is blocked). A task cannot start while a task it depends on is
+  open, and a subtask waits on what its parent waits on.
+- **A plan sent as broken JSON is refused, with where it breaks.** Models
+  sometimes send the list as a string of JSON; one that does not parse (seen
+  live: an acceptance item closed with `']"`) is answered with the parser's
+  message and the text around the break, and nothing is created. Repairing it
+  was tried and read the first task's fields as acceptance items.
+- **Nothing is added to the other tools.** With the graph on, no tool carries
+  the `task_progress` parameter and there is no `task_progress` tool. Measured
+  on qwen3.6 27B: that parameter cost 2,320 prompt tokens on every request
+  (+18% on a first request of 12,785), on 15 tools.
+- **Fewer round trips.** Every `task_update` was a request of its own, and in
+  the phase 1 A/B that took a run's total input from 504k to 741–799k tokens
+  (+47 to +59%) for the same score. Two changes cut it. After a plan, or after
+  a close with nothing else under way, the next ready task starts by itself
+  (29 of 101 updates did only that). And the edit and command tools
+  (`editor`, `apply_patch`, `run_commands`, `check_file`) take an optional
+  `task_done`, as "T3: what was done and how it was checked": the task closes
+  with that outcome, its acceptance ticked, only if the call succeeds; a
+  failed call says the task was not closed. The field costs a few dozen tokens
+  on those four tools, against 2,320 for the checklist on every tool.
+  `task_done` can close several tasks ("T2, T3: …", "T2-T5: …"), and is
+  read with the quotes some models wrap it in: 24 of 55 values in the re-run
+  came as `"T1: …"`, were refused as naming no task, and were then closed
+  again with a `task_update` each. A `task_update` that closes a task as done
+  ticks its acceptance too, unless it ticks or unticks items itself; the
+  "unticked acceptance" reply it used to give was followed by a request that
+  only ticked after 1 in 4 to 1 in 3 closes. A task closed with a
+  `task_update` right after a successful edit or command that could have
+  carried `task_done` gets one hint, once per conversation, with that reply:
+  put `task_done` on the call that finishes the work next time. Measured
+  without the hint, requests spent on the board alone fell from 7.8 a run to
+  2.8 and a run's median input from 693k to 491k tokens (checklist: 438k),
+  scoring 109 of 110.
+- **Close-out, pointed at the graph.** A run ending with active or ready tasks is asked twice,
+  differently, to close them with an outcome or say why they stay open. There
+  is no timed reminder. After a compaction the board is shown to the model
+  again.
+- **Nudges at the moment they are due, not on a timer.** No plan by the
+  fourth call or the first file change: asked for, with the call to make (a
+  run that only answers a question is told it can carry on). A change while
+  tasks exist and none is active: the ready task it may belong to. Three
+  changes under the active task without updating it: close it with what was
+  checked, or say where it stands. A test or build passing while a task is
+  active: close it with `task_done` on the next call. A close that unblocks
+  work: what is ready. Each situation is said at
+  most twice, the second time differently, and never more than once every
+  three tool calls.
+- **The board lives beside the conversation** (`<session>.tasks.jsonl`), one
+  event per change, each tied to the tool call that made it. Resuming keeps
+  it; a conversation cut back to an earlier message drops what was planned
+  after the cut; a fork rebuilds it from the copied history; a conversation
+  from before the graph imports its last checklist.
+- **The task panel shows the board, read-only:** progress and blocked count,
+  the active task, a tree with each task's status (blocked ones say what they
+  wait on), details on click, and a Graph tab with the dependency layers.
+  Editing from the panel comes later.
 
 ## [4.100.288] — 2026-11-20
 
