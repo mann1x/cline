@@ -5,6 +5,13 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.292] — pending
+
+### Task graph (preview, off by default)
+
+- **A conversation with no board starts with a note asking for the plan
+  before the first change**, instead of waiting for the 4th tool call.
+
 ## [4.100.291] — 2026-11-21
 
 ### Task graph (preview, off by default)

@@ -168,6 +168,16 @@ const PLAN_EXAMPLE =
 	'`task_plan` {"tasks":[{"title":"…","acceptance":["…"],"start":true},{"title":"…","depends":["#1"]}]}';
 
 /** S1, and S2's two shapes. The first attempt asks; the second narrows. */
+/** Said once at the start of a session with no board yet. */
+export function buildTaskGraphStartNote(): string {
+	return [
+		"[SYSTEM] This conversation keeps a task board.",
+		`If the request needs any file changed, write the plan before the first change, in one call: ${PLAN_EXAMPLE}.`,
+		'Every step with what has to be true when it is done, the order between them (`depends`), and `"start": true` on the first.',
+		"Close each task as you finish it (`task_done` on the call that finishes it). A request that changes no file needs no plan.",
+	].join(" ");
+}
+
 export function buildTaskGraphUntrackedNudge(
 	kind: UntrackedKind,
 	path: string | undefined,
@@ -362,6 +372,15 @@ export class TaskGraphTracker {
 		const result = this.store.reconcile(history, legacyChecklist, seed);
 		if (!this.store.isEmpty() && (history?.length ?? 0) > 0) {
 			this.boardDue = true;
+		}
+		// No board yet: say at the start of the first run, right after the
+		// system prompt, that this conversation plans on a board. Every nudge
+		// comes after a call, and a model that has the fix by its 4th call is
+		// editing by then: on pandorum (gemma4-26b-agentic, 2026-11-21) 3 of 4
+		// runs edited at call 4-5 and never planned, and the asks that came
+		// with or after the edit were read as background.
+		if (result === "empty") {
+			this.userNotes.push(buildTaskGraphStartNote());
 		}
 		// A board the person brought in from Memory. The model has not seen it,
 		// and no tool loads it: it is told at the start of the first run, right

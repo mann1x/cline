@@ -1084,3 +1084,28 @@ describe("a board read from a conversation's log", () => {
 		}
 	});
 });
+
+describe("the start of a session with no board", () => {
+	it("says once, at the first run's start, that a change needs a plan first", () => {
+		const tracker = new TaskGraphTracker();
+		expect(tracker.start([], undefined)).toBe("empty");
+		const note = tracker.takeRunStartNote() ?? "";
+		expect(note).toContain("This conversation keeps a task board.");
+		expect(note).toContain("before the first change, in one call: `task_plan`");
+		expect(note).toContain("A request that changes no file needs no plan.");
+		expect(tracker.takeRunStartNote()).toBeUndefined();
+	});
+
+	it("says nothing of the kind to a session that has a board", () => {
+		const dir = mkdtempSync(join(tmpdir(), "tg-start-"));
+		try {
+			const logPath = join(dir, "s.tasks.jsonl");
+			new TaskGraphTracker({ logPath }).store.plan({ tasks: [{ title: "A" }] });
+			const resumed = new TaskGraphTracker({ logPath });
+			expect(resumed.start([], undefined)).toBe("resumed");
+			expect(resumed.takeRunStartNote()).toBeUndefined();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
