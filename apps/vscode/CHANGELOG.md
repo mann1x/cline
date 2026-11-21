@@ -7,6 +7,13 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
 
 ## [4.100.292] — pending
 
+### Fixes
+
+- **Gemma 4 on an opencoti server no longer fails every request with the task
+  graph on** (HTTP 500 "map: filter-mapping not implemented"): `task_update`'s
+  `check`/`uncheck` item schema used a list type the model's chat template
+  cannot render.
+
 ### Plan mode
 
 - **Plan mode no longer pushes the model into acting**: a plan-mode run that

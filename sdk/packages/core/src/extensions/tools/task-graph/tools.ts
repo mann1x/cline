@@ -20,6 +20,10 @@ import {
 } from "./store";
 
 const STATUS_ENUM = ["pending", "active", "waiting", "done", "cancelled"];
+/** An acceptance item, by number or by its text. */
+const ITEM_NUMBER_OR_TEXT = {
+	anyOf: [{ type: "integer" }, { type: "string" }],
+};
 
 function answer(
 	query: string,
@@ -118,15 +122,20 @@ export function createTaskUpdateTool(
 								description:
 									"With done or cancelled: the outcome, shown on the board from then on.",
 							},
+							// anyOf, not `type: ["integer", "string"]`: Gemma 4's canonical
+							// template renders a list type inside `items` with
+							// map('upper'), which llama.cpp's jinja engine does not
+							// implement -- HTTP 500 on every request to an opencoti
+							// llamafile server (backup_models, mail #2357, 2026-11-21).
 							check: {
 								type: "array",
-								items: { type: ["integer", "string"] },
+								items: ITEM_NUMBER_OR_TEXT,
 								description:
 									"Acceptance items met, by number (1 = first) or text.",
 							},
 							uncheck: {
 								type: "array",
-								items: { type: ["integer", "string"] },
+								items: ITEM_NUMBER_OR_TEXT,
 							},
 							acceptance_add: { type: "array", items: { type: "string" } },
 							depends_add: { type: "array", items: { type: "string" } },
