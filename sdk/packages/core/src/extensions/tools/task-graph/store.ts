@@ -331,6 +331,13 @@ export interface TaskGraphStoreOptions {
 	/** Called after every change, with the new state. */
 	onChange?: (store: TaskGraphStore) => void;
 	now?: () => number;
+	/**
+	 * A plan-mode session: the plan goes on the board and nothing is started,
+	 * by `start` or by the auto-start. "T1 is active now (started for you)"
+	 * read as "go": pandorum 2026-11-21 (sgwez, gemma4-26b-agentic) answered
+	 * it with "Okay, I'm starting T1. I will use sed" in plan mode.
+	 */
+	planMode?: boolean;
 }
 
 export class TaskGraphStore {
@@ -339,8 +346,10 @@ export class TaskGraphStore {
 	private readonly logPath: string | undefined;
 	private readonly onChange: ((store: TaskGraphStore) => void) | undefined;
 	private readonly now: () => number;
+	readonly planMode: boolean;
 
 	constructor(options: TaskGraphStoreOptions = {}) {
+		this.planMode = options.planMode === true;
 		this.logPath = options.logPath;
 		this.onChange = options.onChange;
 		this.now = options.now ?? Date.now;
@@ -609,7 +618,7 @@ export class TaskGraphStore {
 			);
 			batchIds.push(id);
 			created.push(id);
-			if (item.start) {
+			if (item.start && !this.planMode) {
 				const task = this.state.tasks.get(id) as Task;
 				const open = openDependencies(this.state, task);
 				if (open.length > 0) {
@@ -643,6 +652,11 @@ export class TaskGraphStore {
 			.map((task) => task.id)
 			.filter((taskId) => !readyBefore.has(taskId));
 		this.autoStart(origin, lines);
+		if (this.planMode) {
+			lines.push(
+				"Plan mode: nothing is started. The work starts in act mode, once the user agrees. When the plan is complete, present it and ask the user how to proceed.",
+			);
+		}
 		if (!options.silent) this.onChange?.(this);
 		return { lines, changed: true, readyNow };
 	}
@@ -656,6 +670,7 @@ export class TaskGraphStore {
 	 * one the model takes up anyway; when it is not, one call moves it.
 	 */
 	private autoStart(origin: TaskChangeOrigin, lines: string[]): void {
+		if (this.planMode) return;
 		const active = this.state.order.some(
 			(id) => this.state.tasks.get(id)?.status === "active",
 		);

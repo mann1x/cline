@@ -72,12 +72,9 @@ export interface TaskGraphTrackerOptions extends TaskGraphStoreOptions {
 	writeInterval?: number;
 	/** Called with a nudge's id each time one is queued, for logs and counts. */
 	onNudge?: (id: string, key: string) => void;
-	/**
-	 * A plan-mode session: the plan goes on the board, and nothing asks for
-	 * work to be done, started or closed (that is act mode's, once the person
-	 * agrees). The mode is fixed for a session; a switch rebuilds it.
-	 */
-	planMode?: boolean;
+	// `planMode` (from the store options): the plan goes on the board, and
+	// nothing asks for work to be done, started or closed (that is act
+	// mode's, once the person agrees). Fixed for a session; a switch rebuilds it.
 }
 
 /** Calls with no task before S1 asks for a plan anyway. */
@@ -234,13 +231,27 @@ const PLAN_EXAMPLE =
 	'`task_plan` {"tasks":[{"title":"…","acceptance":["…"],"start":true},{"title":"…","depends":["#1"]}]}';
 
 /** S1, and S2's two shapes. The first attempt asks; the second narrows. */
+/** What a plan-mode task says: the plan is what the user approves. */
+const PLAN_MODE_TASKS =
+	"One task per change: the title says what changes and where (file, function or line), the description why that removes the cause, and the acceptance how it is checked (the command and the result that shows it worked); `depends` gives the order, and the last task checks the whole request.";
+
+/** Plan mode, the run ending with an empty board after looking around. */
+export function buildTaskGraphPlanAtEndNudge(): string {
+	return [
+		"[SYSTEM] The board has no plan yet. Before you present it, put it there in one `task_plan` call.",
+		PLAN_MODE_TASKS,
+		"If you do not know the cause yet, keep looking with read-only tools first.",
+	].join(" ");
+}
+
 /** Said once at the start of a session with no board yet. */
 export function buildTaskGraphStartNote(planMode = false): string {
 	if (planMode) {
 		return [
 			"[SYSTEM] This conversation keeps a task board, and this is plan mode.",
-			`If the request needs files changed, put the plan on the board in one call: ${PLAN_EXAMPLE_PLAN_MODE}.`,
-			"Every step with what has to be true when it is done and the order between them (`depends`). Start none: the work is done in act mode, once the user agrees.",
+			"Find the cause first; once you can say what is wrong and where, put the plan on the board in one `task_plan` call.",
+			PLAN_MODE_TASKS,
+			"Nothing is started in plan mode: the work is done in act mode, once the user agrees.",
 		].join(" ");
 	}
 	return [
@@ -453,6 +464,8 @@ export class TaskGraphTracker {
 	private doneNotes: string[] = [];
 	private boardDue = false;
 	private closeOutFired = 0;
+	/** Plan mode: the board was asked for its plan as the run ended. */
+	private planAskedAtEnd = false;
 	/** The last call outside the graph: a close right after it could have ridden on it. */
 	private lastWork:
 		| { tool: string; succeeded: boolean; carriedDone: boolean }
@@ -469,7 +482,7 @@ export class TaskGraphTracker {
 		this.store = new TaskGraphStore(options);
 		this.spacing = Math.max(1, options.writeInterval ?? DEFAULT_NUDGE_SPACING);
 		this.onNudge = options.onNudge;
-		this.planMode = options.planMode === true;
+		this.planMode = this.store.planMode;
 	}
 
 	/** The three tools, writing to this tracker's store. */
@@ -657,7 +670,15 @@ export class TaskGraphTracker {
 		const writes = changesFiles(toolName, input);
 		if (!writes) {
 			// S1 by call count: planning is cheapest before the first change.
-			if (snapshot.counts.total === 0 && this.calls >= PLAN_BY_CALL) {
+			// Not in plan mode, where looking is the work: asked at call 4 there,
+			// the model wrote the plan from a guess while its own reasoning was
+			// still unsure of the cause (sgwez, 2026-11-21). The completion
+			// guard asks for it there, as the run is about to end.
+			if (
+				!this.planMode &&
+				snapshot.counts.total === 0 &&
+				this.calls >= PLAN_BY_CALL
+			) {
 				this.nudge(
 					"S1",
 					"plan",
@@ -906,7 +927,15 @@ export class TaskGraphTracker {
 			// Plan mode ends on the plan, its tasks open: they are act mode's to
 			// do. Asking to close them there read as "do it now", and the model
 			// switched to act mode on its own (ojbur, 2026-11-21).
-			if (this.planMode) return undefined;
+			if (this.planMode) {
+				// Once, and only for a run that looked at something and is
+				// ending with an empty board: the plan belongs there.
+				if (this.planAskedAtEnd || this.calls < PLAN_BY_CALL) return undefined;
+				if (this.store.snapshot().counts.total > 0) return undefined;
+				this.planAskedAtEnd = true;
+				this.onNudge?.("S1", "plan-at-end");
+				return buildTaskGraphPlanAtEndNudge();
+			}
 			if (this.closeOutFired >= CLOSE_OUT_ATTEMPTS) return undefined;
 			const open = openWork(this.store.getState());
 			if (open.length === 0) return undefined;

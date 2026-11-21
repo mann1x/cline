@@ -35,11 +35,16 @@ export function createTaskPlanTool(
 ): AgentTool<unknown, ToolOperationResult[]> {
 	return createTool<unknown, ToolOperationResult[]>({
 		name: TASK_PLAN_TOOL_NAME,
-		description:
-			"Write down the work as tasks, with the order between them, in one call. " +
-			"Plan before you change files: list every step the request needs, each with what has to be true when it is done (`acceptance`). " +
-			'In `depends` and `parent`, "#2" means the second task of this same call, so the whole plan goes in at once; an existing task is named by its id (T3). ' +
-			"Returns the ids and the order; the first ready task is started for you.",
+		description: store.planMode
+			? "Put the plan on the board for the user to approve, in one call. " +
+				"Investigate first: read and run read-only checks until you know the cause and the exact change. " +
+				"One task per change: its title says what changes and where (file, function or line), its description why that removes the cause, and its acceptance how it is checked (the command and the result that shows it worked); the last task checks the whole request. " +
+				'In `depends` and `parent`, "#2" means the second task of this same call, so the whole plan goes in at once; an existing task is named by its id (T3). ' +
+				"Nothing is started in plan mode: the work begins in act mode, once the user agrees."
+			: "Write down the work as tasks, with the order between them, in one call. " +
+				"Plan before you change files: list every step the request needs, each with what has to be true when it is done (`acceptance`). " +
+				'In `depends` and `parent`, "#2" means the second task of this same call, so the whole plan goes in at once; an existing task is named by its id (T3). ' +
+				"Returns the ids and the order; the first ready task is started for you.",
 		inputSchema: {
 			type: "object",
 			properties: {

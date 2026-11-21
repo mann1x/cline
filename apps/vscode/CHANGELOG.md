@@ -13,6 +13,9 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   ends on its plan is asked to let the user choose (act, discuss, or stop), and
   the act-mode nudges that led a model to switch to act mode by itself stand
   down there.
+- **Plan mode asks for a plan worth approving**: the cause found first, one
+  step per change with where, what and why, and how each is checked; the task
+  board no longer starts a task there or asks for the plan by call count.
 
 ### Task graph (preview, off by default)
 

@@ -1246,31 +1246,64 @@ describe("plan mode", () => {
 		]);
 	};
 
-	it("starts by asking for the plan on the board, with nothing started", () => {
+	it("starts by asking for the cause first, then a plan of concrete changes, nothing started", () => {
 		const tracker = new TaskGraphTracker({ planMode: true });
 		tracker.start([], undefined);
 		const note = tracker.takeRunStartNote() ?? "";
 		expect(note).toContain("this is plan mode");
-		expect(note).toContain("Start none");
-		expect(note).not.toContain('"start":true');
+		expect(note).toContain("Find the cause first");
+		expect(note).toContain("One task per change");
+		expect(note).toContain("Nothing is started in plan mode");
 	});
 
-	it("asks for a plan by the 4th call without asking to start one", () => {
+	it("does not ask for the plan by call count: looking is the work (sgwez)", () => {
 		const tracker = new TaskGraphTracker({ planMode: true });
+		for (let i = 0; i < 12; i++) call(tracker, read);
+		expect(tracker.takePendingReminder()).toBeUndefined();
+	});
+
+	it("asks once for the plan on the board when a run that looked around ends with none", () => {
+		const tracker = new TaskGraphTracker({ planMode: true });
+		const guard = tracker.completionGuard();
+		call(tracker, read);
+		expect(guard()).toBeUndefined(); // an answer, not an investigation
 		for (let i = 0; i < 4; i++) call(tracker, read);
-		const text = tracker.takePendingReminder() ?? "";
-		expect(text).toContain("the board has no plan");
-		expect(text).toContain("start none");
-		expect(text).not.toContain('"start":true');
+		const text = guard() ?? "";
+		expect(text).toContain("The board has no plan yet");
+		expect(text).toContain("If you do not know the cause yet, keep looking");
+		expect(guard()).toBeUndefined();
+	});
+
+	it("starts nothing, by start or by itself, and says what comes next", () => {
+		const tracker = new TaskGraphTracker({ planMode: true });
+		const outcome = tracker.store.plan({
+			tasks: [
+				{ title: "Remove the extra } in dDec, line 90", start: true },
+				{ title: "Run the game", depends: ["#1"] },
+			],
+		});
+		const text = outcome.lines.join(" ");
+		expect(text).not.toContain("active");
+		expect(text).toContain("Plan mode: nothing is started");
+		expect(text).toContain("present it and ask the user how to proceed");
+		expect(tracker.store.snapshot().counts.active).toBe(0);
+	});
+
+	it("describes task_plan as the plan the user approves", () => {
+		const plan = new TaskGraphTracker({ planMode: true })
+			.tools()
+			.find((t) => t.name === "task_plan");
+		expect(plan?.description).toContain("for the user to approve");
+		expect(plan?.description).toContain(
+			"its description why that removes the cause",
+		);
+		expect(plan?.description).not.toContain("started for you");
 	});
 
 	it("never asks to close, start or update tasks, and the run ends on the plan", () => {
 		const tracker = new TaskGraphTracker({ planMode: true });
 		tracker.store.plan({
-			tasks: [
-				{ title: "Remove the brace", start: true },
-				{ title: "Run the check" },
-			],
+			tasks: [{ title: "Remove the brace" }, { title: "Run the check" }],
 		});
 		for (let i = 0; i < 12; i++) call(tracker, read);
 		expect(tracker.takePendingReminder()).toBeUndefined();
