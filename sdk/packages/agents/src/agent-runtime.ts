@@ -70,6 +70,7 @@ import {
 	TASK_PROVIDER_STREAM_STARTED_EVENT,
 	TOOL_INPUT_PROGRESS_KIND,
 	TOOL_REJECTION_SUFFIX,
+	templateSafeToolSchema,
 	trimNonEmpty,
 	type UnparsedToolCall,
 	unparsedToolCallInText,
@@ -1536,6 +1537,32 @@ export class AgentRuntime {
 	 * The nudge for a turn that produced no tool calls, or undefined once the
 	 * consecutive limit is reached and the run should be allowed to end.
 	 */
+	/**
+	 * A tool's schema as it goes into a request: an `items` list type said as
+	 * `anyOf`, which every chat template renders (Gemma 4's canonical one
+	 * fails on the list form under llama.cpp's jinja; mail #2357). The check is
+	 * the schema's own shape, cached per schema object, so a clean schema is
+	 * passed through as it is; a rewritten one is logged once per tool, which
+	 * is how an MCP server's tool carrying the shape shows up.
+	 */
+	private requestSchema(tool: AgentTool): AgentTool["inputSchema"] {
+		const safe = templateSafeToolSchema(tool.inputSchema);
+		if (
+			safe !== tool.inputSchema &&
+			!this.sanitizedSchemaLogged.has(tool.name)
+		) {
+			this.sanitizedSchemaLogged.add(tool.name);
+			this.config.logger?.log?.(
+				`Tool schema for ${tool.name}: list types on array items rewritten as anyOf for template compatibility`,
+				{ severity: "info" },
+			);
+		}
+		return safe;
+	}
+
+	/** Tools whose schema was rewritten for the request, logged once each. */
+	private readonly sanitizedSchemaLogged = new Set<string>();
+
 	/** Plan mode is the session that has the switch tool; act mode drops it. */
 	private isPlanMode(): boolean {
 		return this.tools.has(SWITCH_TO_ACT_MODE_TOOL_NAME);
@@ -3855,7 +3882,7 @@ export class AgentRuntime {
 			tools: [...this.tools.values()].map<AgentToolDefinition>((tool) => ({
 				name: tool.name,
 				description: tool.description,
-				inputSchema: tool.inputSchema,
+				inputSchema: this.requestSchema(tool),
 				// xOllama's council offers its readers only these (#372 D2).
 				...(tool.readOnly ? { readOnly: true } : {}),
 			})),

@@ -791,6 +791,10 @@ export {
 	sendTurnWithActModeContinuation,
 	withSwitchToActModeTool,
 } from "./tools/switch-to-act-mode";
+export {
+	listTypesOnItems,
+	templateSafeToolSchema,
+} from "./tools/template-safe-schema";
 export * from "./types";
 export { AUTH_ERROR_PATTERNS, isLikelyAuthError } from "./types/auth";
 export { initVcr } from "./vcr";

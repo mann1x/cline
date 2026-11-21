@@ -596,6 +596,10 @@ export {
 	editorFilePath,
 	editorNewText,
 } from "./tools/editor-input";
+export {
+	listTypesOnItems,
+	templateSafeToolSchema,
+} from "./tools/template-safe-schema";
 export { AUTH_ERROR_PATTERNS, isLikelyAuthError } from "./types/auth";
 // VCR is Node-only (uses node:fs, node:path), excluded from browser build
 export type { VcrRecording } from "./types/vcr";

@@ -13,6 +13,8 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   graph on** (HTTP 500 "map: filter-mapping not implemented"): `task_update`'s
   `check`/`uncheck` item schema used a list type the model's chat template
   cannot render.
+- **MCP tools with the same schema shape are rewritten on the way out**, so
+  they cannot break those requests either.
 
 ### Plan mode
 
