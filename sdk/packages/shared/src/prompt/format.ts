@@ -191,6 +191,31 @@ export const NO_TOOL_CALL_NUDGE_MESSAGE =
 	"in one short sentence and do not look for a way around it.";
 
 /**
+ * The no-tool-call nudge in plan mode, in place of the one above.
+ *
+ * Every act-mode branch is wrong here: in plan mode a turn that presents the
+ * plan and stops is how the run should end, and "emit the tool call now"
+ * leaves exactly one call that moves forward, `switch_to_act_mode`. Pandorum
+ * 2026-11-21 (ojbur, gemma4-26b-agentic): the plan was presented with "Please
+ * let me know if you approve this plan", two act-mode nudges answered it, and
+ * the model switched to act mode itself and started editing. So the question
+ * goes to the person, with the three ways on: carry the plan out, discuss it,
+ * or stop there.
+ */
+export function buildPlanModeNoToolCallNudge(hasAskQuestion: boolean): string {
+	const choices =
+		'"Switch to act mode and carry out the plan", "Discuss the plan further", and "Stop here and wait for instructions"';
+	return [
+		"[SYSTEM] You are in plan mode: this run makes no changes, and it does not switch to act mode on its own - only the user decides that.",
+		hasAskQuestion
+			? `If the plan is ready, ask the user how to proceed with one \`ask_question\` call, with these options: ${choices}. Mark the one you would pick with " (recommended)".`
+			: `If the plan is ready, end by asking the user how to proceed: ${choices}.`,
+		"If you still need to look at something before the plan is ready, carry on with read-only tools.",
+		"Do not call `switch_to_act_mode` until the user has chosen to switch.",
+	].join(" ");
+}
+
+/**
  * The third branch, for a model that was trying to ask the user something.
  *
  * The message above offers exactly two: keep working, or say you are finished.
@@ -593,7 +618,7 @@ export function buildAnnouncedIntentNudge(announcement: string): string {
 // "let's" needs its apostrophe: without one it is the verb, and "This lets
 // the player rest on the floor" closed a finished report (session y1t7j).
 const ANNOUNCED_INTENT =
-	/\b(?:let me|i'?ll|i will|i'?m going to|i am going to|now i(?:'?ll| will)|next,? i(?:'?ll| will)|let['’]s)\b/i;
+	/\b(?:let me(?!\s+know)|i'?ll|i will|i'?m going to|i am going to|now i(?:'?ll| will)|next,? i(?:'?ll| will)|let['’]s)\b/i;
 const CLAIMS_COMPLETION =
 	/\b(?:task (?:is )?(?:complete|finished|done)|all done|is now (?:complete|finished|fixed|working)|i(?:'?m| am) (?:done|finished)|nothing (?:else|more) to do|no further changes)\b/i;
 

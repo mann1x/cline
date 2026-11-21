@@ -400,6 +400,7 @@ export {
 	answersCompletionNudge,
 	buildAnnouncedIntentNudge,
 	buildNonConvergenceNudge,
+	buildPlanModeNoToolCallNudge,
 	buildUnparsedToolCallNudge,
 	claimsCompletion,
 	createModeSwitchNoticeTracker,

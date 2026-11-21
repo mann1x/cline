@@ -43,6 +43,7 @@ import {
 	answersCompletionNudge,
 	buildAnnouncedIntentNudge,
 	buildNonConvergenceNudge,
+	buildPlanModeNoToolCallNudge,
 	buildUnparsedToolCallNudge,
 	captureAgentUnexpectedReasoningTokens,
 	captureSdkError,
@@ -61,6 +62,7 @@ import {
 	normalizeJsonLikeStringsForSchema,
 	omitUndefinedValues,
 	reportsOutcome,
+	SWITCH_TO_ACT_MODE_TOOL_NAME,
 	TASK_CANCELLED_EVENT,
 	TASK_FIRST_CHUNK_RECEIVED_EVENT,
 	TASK_PROVIDER_REQUEST_STARTED_EVENT,
@@ -1228,6 +1230,8 @@ export class AgentRuntime {
 	 * announcing is allowed to end, and it is worth exactly once.
 	 */
 	private intentNudgeSpent = false;
+	/** The plan-mode "ask the user how to proceed" nudge, once per run. */
+	private planModeNudgeSpent = false;
 	/**
 	 * The self-repetition nudger, built on first use because `this.config` is
 	 * not assigned yet when field initialisers run. It stays `undefined` when
@@ -1532,6 +1536,11 @@ export class AgentRuntime {
 	 * The nudge for a turn that produced no tool calls, or undefined once the
 	 * consecutive limit is reached and the run should be allowed to end.
 	 */
+	/** Plan mode is the session that has the switch tool; act mode drops it. */
+	private isPlanMode(): boolean {
+		return this.tools.has(SWITCH_TO_ACT_MODE_TOOL_NAME);
+	}
+
 	private async getNoToolCallNudgeMessage(
 		text?: string,
 		guardAsked = false,
@@ -1549,6 +1558,18 @@ export class AgentRuntime {
 		const unparsed = unreadable ?? unparsedToolCallInText(text);
 		if (unparsed) {
 			return buildUnparsedToolCallNudge(unparsed);
+		}
+		// Plan mode: a turn that presents the plan and stops is the right end,
+		// and every act-mode branch below pushes toward a call, which there is
+		// `switch_to_act_mode` (ojbur, 2026-11-21). The question goes to the
+		// person instead, once per run, and only once the run has looked at
+		// something: a reply in a discussion is not a plan waiting for a word.
+		if (this.isPlanMode()) {
+			if (this.planModeNudgeSpent || !this.calledToolThisRun) {
+				return undefined;
+			}
+			this.planModeNudgeSpent = true;
+			return buildPlanModeNoToolCallNudge(this.tools.has("ask_question"));
 		}
 		// What the host knows and this message did not say. "You called nothing"
 		// is true of a model that has not started as well as of one that has
@@ -2252,6 +2273,7 @@ export class AgentRuntime {
 		this.steerAwaitingResume = false;
 		this.noToolCallNudgeAsked = false;
 		this.calledToolThisRun = false;
+		this.planModeNudgeSpent = false;
 		this.stoppedForUserBy = undefined;
 		this.state.lastRequestInputTokens = 0;
 		this.pendingHookContexts = [];
@@ -2689,7 +2711,7 @@ export class AgentRuntime {
 					// host with the budget at zero has said a silent turn ends the
 					// run, and this must not be a second door into the same room.
 					const announcement =
-						this.intentNudgeSpent || !this.nudgesEnabled()
+						this.intentNudgeSpent || !this.nudgesEnabled() || this.isPlanMode()
 							? undefined
 							: announcedIntentWithoutActing(finalText);
 					if (announcement) {

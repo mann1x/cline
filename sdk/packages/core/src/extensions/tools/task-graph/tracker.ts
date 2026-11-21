@@ -72,6 +72,12 @@ export interface TaskGraphTrackerOptions extends TaskGraphStoreOptions {
 	writeInterval?: number;
 	/** Called with a nudge's id each time one is queued, for logs and counts. */
 	onNudge?: (id: string, key: string) => void;
+	/**
+	 * A plan-mode session: the plan goes on the board, and nothing asks for
+	 * work to be done, started or closed (that is act mode's, once the person
+	 * agrees). The mode is fixed for a session; a switch rebuilds it.
+	 */
+	planMode?: boolean;
 }
 
 /** Calls with no task before S1 asks for a plan anyway. */
@@ -222,12 +228,21 @@ export function readCommandFailure(
 
 export type UntrackedKind = "missing" | "idle" | "finished";
 
+const PLAN_EXAMPLE_PLAN_MODE =
+	'`task_plan` {"tasks":[{"title":"…","acceptance":["…"]},{"title":"…","depends":["#1"]}]}';
 const PLAN_EXAMPLE =
 	'`task_plan` {"tasks":[{"title":"…","acceptance":["…"],"start":true},{"title":"…","depends":["#1"]}]}';
 
 /** S1, and S2's two shapes. The first attempt asks; the second narrows. */
 /** Said once at the start of a session with no board yet. */
-export function buildTaskGraphStartNote(): string {
+export function buildTaskGraphStartNote(planMode = false): string {
+	if (planMode) {
+		return [
+			"[SYSTEM] This conversation keeps a task board, and this is plan mode.",
+			`If the request needs files changed, put the plan on the board in one call: ${PLAN_EXAMPLE_PLAN_MODE}.`,
+			"Every step with what has to be true when it is done and the order between them (`depends`). Start none: the work is done in act mode, once the user agrees.",
+		].join(" ");
+	}
 	return [
 		"[SYSTEM] This conversation keeps a task board.",
 		`If the request needs any file changed, write the plan before the first change, in one call: ${PLAN_EXAMPLE}.`,
@@ -282,7 +297,18 @@ export function buildTaskGraphUntrackedNudge(
 }
 
 /** S1 before any change: the run is several calls in with nothing planned. */
-export function buildTaskGraphPlanFirstNudge(calls: number): string {
+export function buildTaskGraphPlanFirstNudge(
+	calls: number,
+	planMode = false,
+): string {
+	if (planMode) {
+		return [
+			`[SYSTEM] ${calls} calls in and the board has no plan.`,
+			`If this request needs changes, put the plan on the board in one call: ${PLAN_EXAMPLE_PLAN_MODE}.`,
+			"Every step with its acceptance and the order between them; start none, the work is done in act mode once the user agrees.",
+			"If it only needs an answer, carry on: no plan is needed.",
+		].join(" ");
+	}
 	return [
 		`[SYSTEM] ${calls} calls in and there is no plan yet.`,
 		`If this request needs changes, write the plan before the first one, in one call: ${PLAN_EXAMPLE}.`,
@@ -405,6 +431,7 @@ export class TaskGraphTracker {
 	readonly store: TaskGraphStore;
 	private readonly spacing: number;
 	private readonly onNudge: ((id: string, key: string) => void) | undefined;
+	private readonly planMode: boolean;
 	private calls = 0;
 	/** S5: the active task as last touched, and what has happened under it since. */
 	private drift:
@@ -442,6 +469,7 @@ export class TaskGraphTracker {
 		this.store = new TaskGraphStore(options);
 		this.spacing = Math.max(1, options.writeInterval ?? DEFAULT_NUDGE_SPACING);
 		this.onNudge = options.onNudge;
+		this.planMode = options.planMode === true;
 	}
 
 	/** The three tools, writing to this tracker's store. */
@@ -473,7 +501,7 @@ export class TaskGraphTracker {
 		// runs edited at call 4-5 and never planned, and the asks that came
 		// with or after the edit were read as background.
 		if (result === "empty") {
-			this.userNotes.push(buildTaskGraphStartNote());
+			this.userNotes.push(buildTaskGraphStartNote(this.planMode));
 		}
 		// A board the person brought in from Memory. The model has not seen it,
 		// and no tool loads it: it is told at the start of the first run, right
@@ -559,6 +587,7 @@ export class TaskGraphTracker {
 		}
 		const queued = this.queued;
 		this.nudgeForCall(input, toolName);
+		if (this.planMode) return;
 		this.advanceDrift(
 			input,
 			toolName,
@@ -633,14 +662,17 @@ export class TaskGraphTracker {
 					"S1",
 					"plan",
 					(attempt) =>
-						attempt === 1
-							? buildTaskGraphPlanFirstNudge(this.calls)
+						attempt === 1 || this.planMode
+							? buildTaskGraphPlanFirstNudge(this.calls, this.planMode)
 							: buildTaskGraphUntrackedNudge("missing", undefined, [], 2),
 					input,
 				);
 			}
 			return;
 		}
+		// Plan mode changes nothing, so nothing here is work to track (a write
+		// tried there is refused by the mode).
+		if (this.planMode) return;
 		const path = readEditedPath(input);
 		const firstChange = this.changes === 0;
 		this.changes += 1;
@@ -721,7 +753,7 @@ export class TaskGraphTracker {
 			return;
 		}
 		// The call said which task it finished; a check passing on it is that.
-		if (closedATask) return;
+		if (closedATask || this.planMode) return;
 		const command = readCheckCommand(toolName, input);
 		if (!command || !reportsSuccess(result)) return;
 		const active = this.activeTask();
@@ -871,6 +903,10 @@ export class TaskGraphTracker {
 	/** S8, the completion guard: at most two different asks per session. */
 	completionGuard(): () => string | undefined {
 		return () => {
+			// Plan mode ends on the plan, its tasks open: they are act mode's to
+			// do. Asking to close them there read as "do it now", and the model
+			// switched to act mode on its own (ojbur, 2026-11-21).
+			if (this.planMode) return undefined;
 			if (this.closeOutFired >= CLOSE_OUT_ATTEMPTS) return undefined;
 			const open = openWork(this.store.getState());
 			if (open.length === 0) return undefined;

@@ -7,6 +7,13 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
 
 ## [4.100.292] — pending
 
+### Plan mode
+
+- **Plan mode no longer pushes the model into acting**: a plan-mode run that
+  ends on its plan is asked to let the user choose (act, discuss, or stop), and
+  the act-mode nudges that led a model to switch to act mode by itself stand
+  down there.
+
 ### Task graph (preview, off by default)
 
 - **A conversation with no board starts with a note asking for the plan

@@ -1233,3 +1233,47 @@ describe("S5: the plan drifting from the work", () => {
 		expect(tracker.takePendingReminder()).toBeUndefined();
 	});
 });
+
+describe("plan mode", () => {
+	const read = { name: "read_files", input: { files: ["/w/a.html"] } };
+	const call = (
+		tracker: TaskGraphTracker,
+		c: { name: string; input: unknown },
+	) => {
+		tracker.recordToolCall(c.input, c.name);
+		tracker.recordToolResult(c.input, c.name, [
+			{ query: "q", result: "OK", success: true },
+		]);
+	};
+
+	it("starts by asking for the plan on the board, with nothing started", () => {
+		const tracker = new TaskGraphTracker({ planMode: true });
+		tracker.start([], undefined);
+		const note = tracker.takeRunStartNote() ?? "";
+		expect(note).toContain("this is plan mode");
+		expect(note).toContain("Start none");
+		expect(note).not.toContain('"start":true');
+	});
+
+	it("asks for a plan by the 4th call without asking to start one", () => {
+		const tracker = new TaskGraphTracker({ planMode: true });
+		for (let i = 0; i < 4; i++) call(tracker, read);
+		const text = tracker.takePendingReminder() ?? "";
+		expect(text).toContain("the board has no plan");
+		expect(text).toContain("start none");
+		expect(text).not.toContain('"start":true');
+	});
+
+	it("never asks to close, start or update tasks, and the run ends on the plan", () => {
+		const tracker = new TaskGraphTracker({ planMode: true });
+		tracker.store.plan({
+			tasks: [
+				{ title: "Remove the brace", start: true },
+				{ title: "Run the check" },
+			],
+		});
+		for (let i = 0; i < 12; i++) call(tracker, read);
+		expect(tracker.takePendingReminder()).toBeUndefined();
+		expect(tracker.completionGuard()()).toBeUndefined();
+	});
+});

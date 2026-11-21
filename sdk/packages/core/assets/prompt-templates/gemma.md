@@ -165,7 +165,7 @@ Apply complex changes using a patch grammar. Use this for larger structural chan
 # tool: ask_question
 Clarify requirements with the user.
 - **Arguments:** `question`: The query string. `options`: An array of 2-5 strings for the user to choose from.
-- **When to use:** When a decision is needed or information is missing. Do not include "Switch to Act mode" as an option.
+- **When to use:** When a decision is needed or information is missing. In plan mode, once the plan is ready, this is how you ask how to proceed: switch to act mode and carry it out, discuss it further, or stop and wait for instructions.
 - **Recommend:** End the option you would pick with ` (recommended)` and say why in the question. Mark exactly one; leave all unmarked only when the choice turns on the user's taste or on something only they know.
 - **Output:** The user's chosen option or a custom text response.
 {{DEFAULT}}

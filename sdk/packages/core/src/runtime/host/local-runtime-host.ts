@@ -1280,6 +1280,7 @@ export class LocalRuntimeHost implements RuntimeHost {
 		const taskGraphTracker = taskGraphConfig?.enabled
 			? new TaskGraphTracker({
 					logPath: join(sessionDir, `${sessionId}.tasks.jsonl`),
+					planMode: configWithProvider.mode === "plan",
 					onNudge: (id, key) =>
 						configWithProvider.logger?.log?.(
 							`[task-graph] nudge ${id} (${key})`,

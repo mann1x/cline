@@ -78,3 +78,18 @@ describe("buildAnnouncedIntentNudge", () => {
 		expect(nudge.length).toBeLessThan(600);
 	});
 });
+
+describe('"let me know" asks the user; it does not announce an action', () => {
+	it("stays silent for a plan that ends asking for approval (ojbur)", () => {
+		expect(
+			announcedIntentWithoutActing(
+				"I have created a plan. Please let me know if you approve this plan so I can proceed.",
+			),
+		).toBeUndefined();
+	});
+
+	it("still reads 'let me' followed by an action as a promise", () => {
+		const text = "Let me check the file first.";
+		expect(announcedIntentWithoutActing(text)).toBe(text);
+	});
+});
