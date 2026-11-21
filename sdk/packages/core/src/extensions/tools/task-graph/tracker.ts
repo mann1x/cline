@@ -47,7 +47,7 @@ import { createTaskGraphTools } from "./tools";
 const TASK_DONE_PROPERTY = {
 	type: "string",
 	description:
-		'Optional. The task this call completes, as "T3: what was done and how it was checked". It is closed only if the call succeeds.',
+		'Optional. The task this call completes, as "T3: what was done and how it was checked"; several as "T3, T4: …". It is closed, with its acceptance ticked, only if the call succeeds.',
 } as const;
 
 /** `inputSchema` with `task_done` added, when the tool is one that carries it. */

@@ -51,6 +51,7 @@ import {
 	readPlanInput,
 	readUpdateInput,
 	type UpdateItem,
+	unquoteArgument,
 } from "./readers";
 
 export const TASK_PLAN_TOOL_NAME = "task_plan";
@@ -73,9 +74,37 @@ export const TASK_DONE_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"check_file",
 ]);
 
+/** A task id with its prefix: what a second id in one `task_done` must carry. */
+const PREFIXED_TASK_ID = String.raw`(?:task\s*|[#tT])\s*\d+(?:\.\d+)*`;
+const LEADING_TASK_ID = /^\s*((?:task\s*)?[#tT]?\s*\d+(?:\.\d+)*)/i;
+const RANGE_TO = new RegExp(
+	String.raw`^\s*(?:\.\.|-|\u2013|\u2014|to)\s*(${PREFIXED_TASK_ID})(?![\w.])`,
+	"i",
+);
+const ALSO_ID = new RegExp(
+	String.raw`^\s*(?:,|&|\+|/|and\b)?\s*(${PREFIXED_TASK_ID})(?![\w.])`,
+	"i",
+);
+/** At most this many ids from one range, so "T1-T999" is not a mass close. */
+const MAX_RANGE = 20;
+
+/** "T2".."T5" as T2, T3, T4, T5; dotted ids name only their ends. */
+function expandRange(from: string, to: string): string[] {
+	const a = /^T(\d+)$/.exec(from);
+	const b = /^T(\d+)$/.exec(to);
+	if (!a || !b) return [from, to];
+	const lo = Number(a[1]);
+	const hi = Number(b[1]);
+	if (hi < lo || hi - lo >= MAX_RANGE) return [from, to];
+	return Array.from({ length: hi - lo + 1 }, (_, i) => `T${lo + i}`);
+}
+
 /**
- * `task_done` as sent: "T3", "T3: what was done", an array of those, or
- * `{id, note}`. Anything else names no task and is reported, never guessed.
+ * `task_done` as sent: "T3", "T3: what was done", several ids before the
+ * note ("T2, T3: …", "T2 and T3 …", "T2-T5: …"), an array of those, or
+ * `{id, note}`, quoted or not. Ids after the first carry their `T`, so
+ * "T3, 2 tests added" closes T3 alone. Anything else names no task and is
+ * reported, never guessed.
  */
 export function readTaskDone(
 	value: unknown,
@@ -83,13 +112,37 @@ export function readTaskDone(
 	const out: Array<{ id: string; note?: string; raw: string }> = [];
 	const one = (entry: unknown): void => {
 		if (typeof entry === "string") {
-			const match =
-				/^\s*((?:task\s*)?[#tT]?\s*\d+(?:\.\d+)*)\s*(?:[:\-\u2013\u2014,]\s*)?([\s\S]*)$/i.exec(
-					entry,
-				);
-			const id = match ? normalizeTaskId(match[1]) : undefined;
-			const note = match?.[2]?.trim();
-			out.push({ id: id ?? "", ...(note ? { note } : {}), raw: entry });
+			const text = unquoteArgument(entry);
+			const first = LEADING_TASK_ID.exec(text);
+			const firstId = first ? normalizeTaskId(first[1]) : undefined;
+			if (!first || !firstId) {
+				out.push({ id: "", raw: entry });
+				return;
+			}
+			const ids = [firstId];
+			let rest = text.slice(first[0].length);
+			for (;;) {
+				const range = RANGE_TO.exec(rest);
+				const to = range ? normalizeTaskId(range[1]) : undefined;
+				if (range && to) {
+					const last = ids.pop() as string;
+					ids.push(...expandRange(last, to));
+					rest = rest.slice(range[0].length);
+					continue;
+				}
+				const also = ALSO_ID.exec(rest);
+				const next = also ? normalizeTaskId(also[1]) : undefined;
+				if (also && next) {
+					ids.push(next);
+					rest = rest.slice(also[0].length);
+					continue;
+				}
+				break;
+			}
+			const note = rest.replace(/^\s*[:\-\u2013\u2014,]?\s*/, "").trim();
+			for (const id of [...new Set(ids)]) {
+				out.push({ id, ...(note ? { note } : {}), raw: entry });
+			}
 		} else if (entry && typeof entry === "object" && !Array.isArray(entry)) {
 			const record = entry as { id?: unknown; note?: unknown };
 			const id = normalizeTaskId(record.id);
@@ -101,10 +154,11 @@ export function readTaskDone(
 			});
 		}
 	};
-	if (Array.isArray(value)) value.forEach(one);
-	else if (typeof value === "string" && value.trim().startsWith("[")) {
+	const unwrapped = typeof value === "string" ? unquoteArgument(value) : value;
+	if (Array.isArray(unwrapped)) unwrapped.forEach(one);
+	else if (typeof unwrapped === "string" && unwrapped.startsWith("[")) {
 		try {
-			const parsed = JSON.parse(value);
+			const parsed = JSON.parse(unwrapped);
 			if (Array.isArray(parsed)) parsed.forEach(one);
 			else one(value);
 		} catch {
@@ -706,6 +760,22 @@ export class TaskGraphStore {
 		};
 		if (item.check.length) update.check = resolveChecks(item.check);
 		if (item.uncheck.length) update.uncheck = resolveChecks(item.uncheck);
+		// Closing as done says the acceptance holds, as \`task_done\` does: tick
+		// what is open unless the call ticks or unticks items itself. The
+		// "unticked acceptance" reply this replaces was followed by a request
+		// that only ticked: 23, 8 and 14 of them against 74, 64 and 59 closing
+		// calls in tg-bench arms B, C and C2 (2026-11-20).
+		if (
+			item.status === "done" &&
+			task.status !== "done" &&
+			!item.check.length &&
+			!item.uncheck.length
+		) {
+			const open = acceptanceAfterAdd
+				.map((_, index) => index)
+				.filter((index) => !task.acceptance[index]?.done);
+			if (open.length) update.check = open;
+		}
 		if (item.dependsAdd.length) {
 			const add: string[] = [];
 			for (const ref of item.dependsAdd) {

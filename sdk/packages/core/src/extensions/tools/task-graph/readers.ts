@@ -217,9 +217,48 @@ function readBool(value: unknown): boolean | undefined {
  * A task id as written -- `T3`, `t3`, `#3`, `3`, `T3.1` -- in the canonical
  * `T3` / `T3.1` form, or undefined when it is not shaped like one.
  */
+/**
+ * A string argument with the quotes a model wrapped it in taken off: `"T3: x"`
+ * as sent by a model that quotes every string, a lone opening quote, or a
+ * JSON string literal. 24 of 55 `task_done` values in tg-bench arm C2 came
+ * quoted (qwen3.6, 2026-11-20) -- copied from the nudge's own example -- and
+ * every one was refused as naming no task.
+ */
+export function unquoteArgument(text: string): string {
+	let out = text.trim();
+	if (out.length >= 2 && out.startsWith('"') && out.endsWith('"')) {
+		try {
+			const parsed = JSON.parse(out);
+			if (typeof parsed === "string") return parsed.trim();
+		} catch {
+			// Not a JSON literal; strip the quotes below.
+		}
+	}
+	const QUOTES = "\"'`\u201c\u201d\u2018\u2019";
+	const pairs: Record<string, string> = {
+		'"': '"',
+		"'": "'",
+		"`": "`",
+		"\u201c": "\u201d",
+		"\u2018": "\u2019",
+	};
+	const first = out[0];
+	if (first && QUOTES.includes(first)) {
+		const close = pairs[first] ?? first;
+		out = out.slice(1);
+		if (out.endsWith(close)) out = out.slice(0, -1);
+	} else if (out && QUOTES.includes(out[out.length - 1] as string)) {
+		// A closing quote with no opening one: only when nothing inside pairs it.
+		const last = out[out.length - 1] as string;
+		if (!out.slice(0, -1).includes(last)) out = out.slice(0, -1);
+	}
+	return out.trim();
+}
+
 export function normalizeTaskId(value: unknown): string | undefined {
-	const text = asText(value);
-	if (!text) return undefined;
+	const raw = asText(value);
+	if (!raw) return undefined;
+	const text = unquoteArgument(raw);
 	const match = /^(?:task\s*)?[#tT]?\s*(\d+(?:\.\d+)*)$/i.exec(text.trim());
 	return match ? `T${match[1]}` : undefined;
 }

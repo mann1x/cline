@@ -3,8 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderBoard } from "./board";
-import { readPlanInput, readUpdateInput } from "./readers";
-import { TaskGraphStore } from "./store";
+import {
+	normalizeTaskId,
+	readPlanInput,
+	readUpdateInput,
+	unquoteArgument,
+} from "./readers";
+import { readTaskDone, TaskGraphStore } from "./store";
 import { createTaskGraphTools } from "./tools";
 import { TaskGraphTracker, withTaskGraphCapture } from "./tracker";
 
@@ -745,5 +750,84 @@ describe("fewer round trips", () => {
 		expect(task(store, "T1")?.status).toBe("done");
 		expect(task(store, "T1")?.outcome).toBe("done it");
 		expect(task(store, "T2")?.status).toBe("active");
+	});
+
+	it("task_done is read with the quotes a model wraps it in", () => {
+		// qwen3.6 sent 24 of 55 values this way in tg-bench arm C2.
+		for (const value of [
+			'"T1: renamed the flag"',
+			'"T1: renamed the flag',
+			"`T1: renamed the flag`",
+			"\u201cT1: renamed the flag\u201d",
+		]) {
+			expect(readTaskDone(value)).toEqual([
+				{ id: "T1", note: "renamed the flag", raw: value },
+			]);
+		}
+		expect(unquoteArgument('"say \\"hi\\""')).toBe('say "hi"');
+		expect(normalizeTaskId('"T4"')).toBe("T4");
+	});
+
+	it("task_done names several tasks before its note, each with its T", () => {
+		const ids = (value: string) => readTaskDone(value).map((entry) => entry.id);
+		expect(ids("T2, T3: both fixed")).toEqual(["T2", "T3"]);
+		expect(ids("T2 and T3 fixed")).toEqual(["T2", "T3"]);
+		expect(ids("T2 T3 T4: x")).toEqual(["T2", "T3", "T4"]);
+		expect(ids("T2-T5: parser rewritten")).toEqual(["T2", "T3", "T4", "T5"]);
+		expect(ids("T2..T3")).toEqual(["T2", "T3"]);
+		// A second number without its T is the note, not a task.
+		expect(ids("T3, 2 tests added")).toEqual(["T3"]);
+		expect(readTaskDone("T3, 2 tests added")[0]?.note).toBe("2 tests added");
+		expect(ids("T3 - fixed T4's test too")).toEqual(["T3"]);
+		// A range too wide closes its two ends only.
+		expect(ids("T1-T40: all")).toEqual(["T1", "T40"]);
+		expect(readTaskDone("T2, T3: both fixed")[1]?.note).toBe("both fixed");
+	});
+
+	it("task_done with several ids closes them all on one call", async () => {
+		const tracker = new TaskGraphTracker();
+		tracker.store.plan({
+			tasks: [{ title: "A" }, { title: "B" }, { title: "C" }],
+		});
+		const tool = wrapped(tracker, "editor", ok);
+		await tool.execute(
+			{ file_path: "a.py", task_done: '"T1, T2: both in a.py"' } as never,
+			{ toolCallId: "c1" } as never,
+		);
+		expect(task(tracker.store, "T1")?.status).toBe("done");
+		expect(task(tracker.store, "T2")?.status).toBe("done");
+		expect(task(tracker.store, "T2")?.outcome).toBe("both in a.py");
+		expect(task(tracker.store, "T3")?.status).toBe("active");
+	});
+
+	it("a done close ticks the acceptance unless the call ticks or unticks", () => {
+		const store = new TaskGraphStore();
+		store.plan({
+			tasks: [
+				{ title: "A", acceptance: ["x", "y"] },
+				{ title: "B", acceptance: ["x", "y"] },
+				{ title: "C", acceptance: ["x", "y"] },
+			],
+		});
+		const plain = store.update({
+			updates: [{ id: "T1", status: "done", note: "ok" }],
+		});
+		expect(task(store, "T1")?.acceptance.every((a) => a.done)).toBe(true);
+		expect(plain.lines.join("\n")).not.toContain("unticked");
+		const partial = store.update({
+			updates: [{ id: "T2", status: "done", note: "ok", check: [1] }],
+		});
+		expect(task(store, "T2")?.acceptance.map((a) => a.done)).toEqual([
+			true,
+			false,
+		]);
+		expect(partial.lines.join("\n")).toContain('unticked acceptance: "y"');
+		store.update({
+			updates: [{ id: "T3", status: "done", note: "ok", uncheck: [2] }],
+		});
+		expect(task(store, "T3")?.acceptance.map((a) => a.done)).toEqual([
+			false,
+			false,
+		]);
 	});
 });

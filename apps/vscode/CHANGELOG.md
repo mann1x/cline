@@ -34,6 +34,15 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   The message says how many lines would be dropped.
 - Every built-in template's editor section is updated to match.
 
+### Task graph (preview, off by default)
+
+- **Fewer requests spent on the board.** After a plan, or a close with nothing
+  else under way, the next ready task starts by itself. The edit and command
+  tools take an optional `task_done` ("T3: what was done") that closes the
+  task when the call succeeds, several at once as "T2, T3: …" or "T2-T5: …",
+  quoted or not. Closing a task as done with `task_update` ticks its
+  acceptance unless the call ticks or unticks items itself.
+
 ### Prompt templates
 
 - **`restore_file` and `task_progress` have a section in every built-in

@@ -350,6 +350,29 @@ calls already being made. Two cuts:
 Re-run of arm C on 57669d5a7d plus these changes only (the editor rename kept
 out) decides whether phase 1 is complete.
 
+### 10c. What the re-run left (phase 1d, 2026-11-21)
+
+Arm C2 (auto-start + `task_done`) scored 108/110; total input 976k mean, 571k
+median, the mean carried by two ledger runs of 74-79 requests in test-debug
+loops. Counted by what each request carried, graph-only requests were 6.0 a
+run (164k, 17% of input) against 7.8 (184k, 25%) in C and 8.6 (211k, 26%) in
+B; a task-graph call shared a turn with work 0.1 times a run. What was left:
+
+- **Quoted `task_done`.** 24 of 55 values came as `"T1: …"` (qwen3.6 writes
+  the nudge's example with its quotes) and were refused as naming no task;
+  the model then closed the task with a `task_update`. Values and task ids are
+  now read with wrapping quotes, backticks or a JSON string literal removed.
+- **One edit finishing several tasks.** `task_done` took one id, so closes of
+  T2-T7 went to `task_update`. It now reads several ids before the note ("T2,
+  T3: …", "T2 and T3 …", "T2-T5: …", ranges up to 20); ids after the first
+  need their `T`, so "T3, 2 tests added" closes T3 alone.
+- **A tick request after a close.** A `task_update` close left the acceptance
+  unticked and said so; a request that only ticked followed 23, 8 and 14 times
+  against 74, 64 and 59 closing calls (B, C, C2). A done close now ticks what
+  is open unless the call sends `check` or `uncheck`.
+
+Arm C3 re-runs C2 with these on the same base.
+
 ### 11. Export to memory (phase 2)
 
 When Memory is configured, the board can be kept in a memory, one of the

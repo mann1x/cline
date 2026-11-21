@@ -96,7 +96,7 @@ export function createTaskUpdateTool(
 	return createTool<unknown, ToolOperationResult[]>({
 		name: TASK_UPDATE_TOOL_NAME,
 		description:
-			"Change tasks: start one (status active), finish it (status done, with a `note` saying what was done and how it was checked), cancel it (with the reason), tick acceptance items (`check`: their numbers or text), or change dependencies. " +
+			"Change tasks: start one (status active), finish it (status done, with a `note` saying what was done and how it was checked; its acceptance is ticked with it unless you send `check` or `uncheck`), cancel it (with the reason), tick acceptance items (`check`: their numbers or text), or change dependencies. " +
 			"Several tasks in one call. A task cannot start while a task it depends on is open.",
 		inputSchema: {
 			type: "object",
