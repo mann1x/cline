@@ -58,6 +58,7 @@ import {
 } from "../../extensions/tools/list-files";
 import {
 	TaskGraphTracker,
+	withTaskBoardRules,
 	withTaskGraphCapture,
 } from "../../extensions/tools/task-graph";
 import {
@@ -1277,6 +1278,15 @@ export class LocalRuntimeHost implements RuntimeHost {
 		// what was made after the cut, a fork replays the copied calls, and a
 		// conversation from before the graph imports its last checklist.
 		const taskGraphConfig = configWithProvider.taskGraph;
+		// The board's rules go in the system prompt, the one channel every
+		// model reads as instructions, whatever template built the rest.
+		if (taskGraphConfig?.enabled) {
+			configWithProvider.systemPrompt =
+				withTaskBoardRules(
+					configWithProvider.systemPrompt,
+					configWithProvider.mode === "plan",
+				) ?? configWithProvider.systemPrompt;
+		}
 		const taskGraphTracker = taskGraphConfig?.enabled
 			? new TaskGraphTracker({
 					logPath: join(sessionDir, `${sessionId}.tasks.jsonl`),

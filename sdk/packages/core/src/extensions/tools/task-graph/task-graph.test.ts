@@ -12,8 +12,10 @@ import {
 import { readTaskDone, TaskGraphStore } from "./store";
 import { createTaskGraphTools } from "./tools";
 import {
+	buildTaskBoardRules,
 	readCommandFailure,
 	TaskGraphTracker,
+	withTaskBoardRules,
 	withTaskGraphCapture,
 } from "./tracker";
 
@@ -1308,5 +1310,31 @@ describe("plan mode", () => {
 		for (let i = 0; i < 12; i++) call(tracker, read);
 		expect(tracker.takePendingReminder()).toBeUndefined();
 		expect(tracker.completionGuard()()).toBeUndefined();
+	});
+});
+
+describe("the task board's rules in the system prompt (yl4ti)", () => {
+	it("says how the board is used, in act mode and in plan mode", () => {
+		const act = buildTaskBoardRules();
+		expect(act).toContain("# Task board");
+		expect(act).toContain(
+			"Before the first file change, write the plan with one `task_plan` call",
+		);
+		expect(act).toContain("task_done");
+		expect(act).toContain("A request that only needs an answer needs no plan.");
+		const plan = buildTaskBoardRules(true);
+		expect(plan).toContain("In plan mode the plan goes on the board");
+		expect(plan).toContain("Nothing is started in plan mode");
+		expect(plan).not.toContain('"start": true');
+	});
+
+	it("is appended once, and never to an empty prompt", () => {
+		const once = withTaskBoardRules("You are a test agent.") ?? "";
+		expect(once.startsWith("You are a test agent.\n\n# Task board\n")).toBe(
+			true,
+		);
+		expect(withTaskBoardRules(once)).toBe(once);
+		expect(withTaskBoardRules("")).toBe("");
+		expect(withTaskBoardRules(undefined)).toBeUndefined();
 	});
 });

@@ -37,11 +37,14 @@ export {
 } from "./store";
 export { createTaskGraphTools } from "./tools";
 export {
+	buildTaskBoardRules,
 	buildTaskGraphCloseOutNudge,
 	buildTaskGraphUntrackedNudge,
+	TASK_BOARD_RULES_HEADING,
 	type TaskGraphEdit,
 	type TaskGraphEditOutcome,
 	TaskGraphTracker,
 	type TaskGraphTrackerOptions,
+	withTaskBoardRules,
 	withTaskGraphCapture,
 } from "./tracker";

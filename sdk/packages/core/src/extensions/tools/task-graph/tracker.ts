@@ -231,6 +231,52 @@ const PLAN_EXAMPLE =
 	'`task_plan` {"tasks":[{"title":"…","acceptance":["…"],"start":true},{"title":"…","depends":["#1"]}]}';
 
 /** S1, and S2's two shapes. The first attempt asks; the second narrows. */
+/** The heading the system prompt's task-board section opens with. */
+export const TASK_BOARD_RULES_HEADING = "# Task board";
+
+/**
+ * The task board's rules, for the system prompt of a session with the graph
+ * on. Everything else the board says rides on a tool result or a run-start
+ * note, and a model can read those as data: on pandorum (yl4ti,
+ * gemma4-26b-agentic, 2026-11-21) the model's reasoning never once mentioned
+ * the plan after the start note and two asks, and it worked 53 calls with no
+ * board. The system prompt is the channel it does follow (the plan-mode rules
+ * there were obeyed the same morning), and no template carried a word about
+ * the board: the checklist's `task_progress` section went with the checklist.
+ */
+export function buildTaskBoardRules(planMode = false): string {
+	if (planMode) {
+		return [
+			TASK_BOARD_RULES_HEADING,
+			"",
+			"This conversation keeps a task board: the plan as tasks, which the user sees and approves.",
+			"- In plan mode the plan goes on the board. Once you know the cause, write it with one `task_plan` call. " +
+				PLAN_MODE_TASKS,
+			"- Nothing is started in plan mode: the work is done in act mode, once the user agrees.",
+		].join("\n");
+	}
+	return [
+		TASK_BOARD_RULES_HEADING,
+		"",
+		"This conversation keeps a task board: the plan as tasks, which the user sees while you work.",
+		'- Before the first file change, write the plan with one `task_plan` call: one task per step the request needs, each with its acceptance (what is true when it is done, and how that is checked), `depends` for the order, and `"start": true` on the first.',
+		'- Close a task on the call that finishes it: add `task_done: "T1: what was done and how it was checked"` to that call.',
+		"- When the work turns out different from the plan (a new problem, a step it does not have), change the plan: add the task with `task_plan`, or note on the task where it stands with `task_update`.",
+		"- A request that only needs an answer needs no plan.",
+	].join("\n");
+}
+
+/** The system prompt with the task-board rules appended, once. */
+export function withTaskBoardRules(
+	systemPrompt: string | undefined,
+	planMode = false,
+): string | undefined {
+	if (!systemPrompt?.trim()) return systemPrompt;
+	if (systemPrompt.includes(`\n${TASK_BOARD_RULES_HEADING}\n`))
+		return systemPrompt;
+	return `${systemPrompt}\n\n${buildTaskBoardRules(planMode)}`;
+}
+
 /** What a plan-mode task says: the plan is what the user approves. */
 const PLAN_MODE_TASKS =
 	"One task per change: the title says what changes and where (file, function or line), the description why that removes the cause, and the acceptance how it is checked (the command and the result that shows it worked); `depends` gives the order, and the last task checks the whole request.";

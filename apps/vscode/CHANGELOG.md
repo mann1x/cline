@@ -30,6 +30,8 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
 
 - **A conversation with no board starts with a note asking for the plan
   before the first change**, instead of waiting for the 4th tool call.
+- **The board's rules are in the system prompt** when the task graph is on,
+  for every model and template.
 - **The model is asked whether the plan still holds** when a check fails
   after changes, or eight calls pass, while the active task is not updated.
 

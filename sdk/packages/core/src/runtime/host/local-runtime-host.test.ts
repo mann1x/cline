@@ -621,6 +621,10 @@ describe("LocalRuntimeHost", () => {
 		);
 		expect(log).toContain('"title":"first step"');
 		expect(log).toContain('"call":"call_1"');
+		// The board's rules ride in the system prompt, whatever built it.
+		expect(
+			(agentConfig as { systemPrompt?: string } | undefined)?.systemPrompt,
+		).toContain("\n\n# Task board\n");
 	});
 
 	it("hands the panel a board handle, and tells the next run what the person changed", async () => {
