@@ -313,6 +313,8 @@ export class TaskGraphTracker {
 	private readonly spacing: number;
 	private readonly onNudge: ((id: string, key: string) => void) | undefined;
 	private calls = 0;
+	/** File-changing calls so far: the first one with no plan is said at once. */
+	private changes = 0;
 	/** Calls since the last nudge was queued; starts open. */
 	private callsSinceNudge = Number.POSITIVE_INFINITY;
 	private readonly attempts = new Map<string, number>();
@@ -410,6 +412,8 @@ export class TaskGraphTracker {
 		key: string,
 		text: (attempt: 1 | 2) => string,
 		input: unknown,
+		/** Said now, whatever the spacing: a moment that will not come again. */
+		urgent = false,
 	): boolean {
 		const made = this.attempts.get(key) ?? 0;
 		if (made >= MAX_ATTEMPTS) return false;
@@ -417,7 +421,7 @@ export class TaskGraphTracker {
 			this.queued.from.add(input);
 			return true;
 		}
-		if (this.callsSinceNudge < this.spacing) return false;
+		if (!urgent && this.callsSinceNudge < this.spacing) return false;
 		// A more specific nudge for the same call replaces a waiting one; the
 		// replaced one keeps its attempt, since it was never read.
 		if (this.queued) {
@@ -459,6 +463,8 @@ export class TaskGraphTracker {
 			return;
 		}
 		const path = readEditedPath(input);
+		const firstChange = this.changes === 0;
+		this.changes += 1;
 		const active = this.activeTask();
 		if (active) {
 			// S3: count changes under the active task since it was last touched.
@@ -490,11 +496,16 @@ export class TaskGraphTracker {
 		}
 		const state = this.store.getState();
 		if (snapshot.counts.total === 0) {
+			// The first change with no plan is the moment a plan is for; the
+			// spacing held it back when the call-count ask had just gone out
+			// (pandorum 2026-11-21, gemma4-26b: asked at call 4, edited at
+			// call 5, and nothing said again for the rest of the fix).
 			this.nudge(
 				"S1",
 				"plan",
 				(attempt) => buildTaskGraphUntrackedNudge("missing", path, [], attempt),
 				input,
+				firstChange,
 			);
 			return;
 		}

@@ -537,6 +537,17 @@ describe("nudges (phase 1b)", () => {
 		expect(text).toContain("If it only needs an answer, carry on");
 	});
 
+	it("S1: the first change with no plan is said at once, even right after the call-count ask", () => {
+		const tracker = new TaskGraphTracker();
+		for (let i = 0; i < 4; i++) call(tracker, read);
+		expect(tracker.takePendingReminder() ?? "").toContain("4 calls in");
+		call(tracker, edit());
+		expect(tracker.takePendingReminder()).toBeDefined();
+		// Both attempts spent: nothing more for this situation.
+		for (let i = 0; i < 6; i++) call(tracker, edit());
+		expect(tracker.takePendingReminder()).toBeUndefined();
+	});
+
 	it("says a situation at most twice, the second time differently, and spaces nudges three calls apart", () => {
 		const onNudge = vi.fn();
 		const tracker = new TaskGraphTracker({ onNudge });

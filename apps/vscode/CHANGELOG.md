@@ -5,6 +5,13 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.291] — pending
+
+### Task graph (preview, off by default)
+
+- **The first file change without a plan is always followed by the ask to
+  write one**, instead of waiting out the three-call spacing between nudges.
+
 ## [4.100.290] — 2026-11-21
 
 ### Task graph (preview, off by default)
