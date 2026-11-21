@@ -11,7 +11,11 @@ import {
 } from "./readers";
 import { readTaskDone, TaskGraphStore } from "./store";
 import { createTaskGraphTools } from "./tools";
-import { TaskGraphTracker, withTaskGraphCapture } from "./tracker";
+import {
+	readCommandFailure,
+	TaskGraphTracker,
+	withTaskGraphCapture,
+} from "./tracker";
 
 let dir: string;
 beforeEach(() => {
@@ -1107,5 +1111,125 @@ describe("the start of a session with no board", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("S5: the plan drifting from the work", () => {
+	const read = { name: "read_files", input: { files: ["/w/a.html"] } };
+	const edit = { name: "editor", input: { path: "/w/a.html", new_text: "x" } };
+	const run = {
+		name: "run_commands",
+		input: { commands: [".\\run_game.exe a.html"] },
+	};
+	const ok = [{ query: "q", result: "OK", success: true }];
+	const ran = (output: string, success = true) => [
+		{
+			query: ".\\run_game.exe a.html",
+			result: `${output}\n\n--- the checker, run for you on the file(s) this command names. ---\nError: not this one`,
+			success,
+		},
+	];
+	const failing = ran(
+		'{"ok":false,"error":"ReferenceError: initClouds is not defined","frames_run":0}',
+	);
+	const call = (
+		tracker: TaskGraphTracker,
+		c: { name: string; input: unknown },
+		result: unknown = ok,
+	) => {
+		tracker.recordToolCall(c.input, c.name);
+		tracker.recordToolResult(c.input, c.name, result);
+	};
+	const planned = (onNudge?: (id: string, key: string) => void) => {
+		const tracker = new TaskGraphTracker(onNudge ? { onNudge } : {});
+		tracker.store.plan({
+			tasks: [
+				{ title: "Rewrite Level class", start: true },
+				{ title: "Verify by running the game", depends: ["#1"] },
+			],
+		});
+		return tracker;
+	};
+
+	it("reads what a command run reported going wrong, and only that", () => {
+		expect(readCommandFailure("run_commands", failing)).toBe(
+			"ReferenceError: initClouds is not defined",
+		);
+		expect(
+			readCommandFailure("run_commands", ran("tests: 3 FAILED, 9 passed")),
+		).toBe("tests: 3 FAILED, 9 passed");
+		expect(
+			readCommandFailure("run_commands", ran("build finished", false)),
+		).toBe("build finished");
+		// The checker's section after the output is not the command's.
+		expect(
+			readCommandFailure("run_commands", ran('{"ok":true}')),
+		).toBeUndefined();
+		expect(readCommandFailure("read_files", failing)).toBeUndefined();
+	});
+
+	it("a check failing after changes asks whether the plan still holds, naming the failure (ek3es)", () => {
+		const onNudge = vi.fn();
+		const tracker = planned(onNudge);
+		call(tracker, edit);
+		call(tracker, edit);
+		call(tracker, edit); // S3
+		expect(tracker.takePendingReminder() ?? "").toContain("3 changes");
+		call(tracker, run, failing);
+		call(tracker, read);
+		expect(tracker.takePendingReminder()).toBeUndefined(); // spacing
+		call(tracker, read);
+		const text = tracker.takePendingReminder() ?? "";
+		expect(text).toContain(
+			"T1 (Rewrite Level class) is still the active task, and the last check failed: `ReferenceError: initClouds is not defined`",
+		);
+		expect(text).toContain("add it with `task_plan`, or note on T1");
+		expect(text).toContain("If it is still T1, carry on.");
+		expect(onNudge.mock.calls.map((c) => c[0])).toEqual(["S3", "S5"]);
+	});
+
+	it("a failure before any change is the reproduction, not drift", () => {
+		const tracker = planned();
+		call(tracker, run, failing);
+		for (let i = 0; i < 6; i++) call(tracker, read);
+		expect(tracker.takePendingReminder()).toBeUndefined();
+	});
+
+	it("a clean run after the failure clears it", () => {
+		const tracker = planned();
+		call(tracker, edit);
+		call(tracker, run, failing);
+		call(tracker, run, ran('{"ok":true,"frames_run":60}'));
+		for (let i = 0; i < 4; i++) call(tracker, read);
+		expect(tracker.takePendingReminder()).toBeUndefined();
+	});
+
+	it("eight calls with the active task untouched ask too, twice at most, and a touch resets it", () => {
+		const tracker = planned();
+		for (let i = 0; i < 7; i++) call(tracker, read);
+		expect(tracker.takePendingReminder()).toBeUndefined();
+		call(tracker, read);
+		expect(tracker.takePendingReminder() ?? "").toContain(
+			"8 calls since T1 (Rewrite Level class) was last updated",
+		);
+		for (let i = 0; i < 8; i++) call(tracker, read);
+		const second = tracker.takePendingReminder() ?? "";
+		expect(second).toContain("The board still shows T1");
+		for (let i = 0; i < 16; i++) call(tracker, read);
+		expect(tracker.takePendingReminder()).toBeUndefined();
+		// A note on T1 is a touch: the count starts again, with fresh attempts.
+		tracker.store.update({
+			updates: [{ id: "T1", note: "Level fixed; clouds next" }],
+		});
+		for (let i = 0; i < 8; i++) call(tracker, read);
+		expect(tracker.takePendingReminder() ?? "").toContain("8 calls since T1");
+	});
+
+	it("says nothing with no task active", () => {
+		const tracker = new TaskGraphTracker();
+		tracker.store.plan({ tasks: [{ title: "A", start: true }] });
+		tracker.store.update({ updates: [{ id: "T1", status: "done" }] });
+		for (let i = 0; i < 12; i++) call(tracker, read);
+		expect(tracker.takePendingReminder()).toBeUndefined();
 	});
 });

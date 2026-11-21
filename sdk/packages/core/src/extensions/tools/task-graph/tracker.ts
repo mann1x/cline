@@ -13,6 +13,7 @@
  * | S2 untracked | a file change while tasks exist and none is active |
  * | S3 stale | 3 file changes since the active task was last touched |
  * | S4 verified | a test or build command passes while a task is active |
+ * | S5 drift | a command fails after changes, or 8 calls pass, while the active task is not touched |
  * | S5 ready | a close unblocked tasks (said in `task_update`'s own result) |
  * | S7 resume | the board, after a compaction or on resume |
  * | S8 close-out | the run ends with active or ready tasks (completion guard) |
@@ -79,6 +80,8 @@ const PLAN_BY_CALL = 4;
 const STALE_WRITES = 3;
 const DEFAULT_NUDGE_SPACING = 3;
 const MAX_ATTEMPTS = 2;
+/** S5: calls under an active task, untouched, before asking whether the plan still holds. */
+const DRIFT_CALLS = 8;
 const CLOSE_OUT_ATTEMPTS = 2;
 
 function readEditedPath(input: unknown): string | undefined {
@@ -158,6 +161,61 @@ export function readCheckCommand(
 		if (typeof text === "string" && CHECK_COMMAND.test(text)) {
 			return text.length > 80 ? `${text.slice(0, 79)}…` : text;
 		}
+	}
+	return undefined;
+}
+
+/** Where `run_commands` appends its own checker output to a command's. */
+const CHECKER_SECTION = /\n\n--- the checker/;
+const ERROR_LINE =
+	/\b(?:[A-Z]\w*(?:Error|Exception)\b|error:|FAIL(?:ED|URE)?\b|failed\b|Traceback\b|panicked\b)/;
+
+function clip(text: string, max = 120): string {
+	const line = text.trim();
+	return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+/**
+ * What a command run reported going wrong, as one line, or undefined when it
+ * reported nothing. A failed run (nonzero exit) counts, and so does output
+ * that names a failure: a check that exits 0 and prints `"ok": false` (as
+ * run_game.exe does) or an error line.
+ */
+export function readCommandFailure(
+	toolName: string | undefined,
+	result: unknown,
+): string | undefined {
+	if (toolName !== "run_commands") return undefined;
+	const entries = Array.isArray(result) ? result : [result];
+	for (const entry of entries) {
+		if (typeof entry !== "object" || entry === null) continue;
+		const record = entry as {
+			success?: unknown;
+			result?: unknown;
+			error?: unknown;
+		};
+		const raw =
+			typeof record.result === "string"
+				? record.result
+				: typeof record.error === "string"
+					? record.error
+					: "";
+		const output = raw.split(CHECKER_SECTION)[0] ?? "";
+		const firstLine = output.trim().split("\n")[0] ?? "";
+		try {
+			const parsed = JSON.parse(firstLine) as { ok?: unknown; error?: unknown };
+			if (parsed && typeof parsed === "object" && parsed.ok === false) {
+				return clip(
+					typeof parsed.error === "string" ? parsed.error : firstLine,
+				);
+			}
+		} catch {
+			// Not a JSON report: look for an error line.
+		}
+		const line = output.split("\n").find((text) => ERROR_LINE.test(text));
+		if (line) return clip(line);
+		if (record.success === false)
+			return clip(firstLine || "the command failed");
 	}
 	return undefined;
 }
@@ -258,6 +316,31 @@ export function buildTaskGraphStaleNudge(
 	].join(" ");
 }
 
+/** S5: the active task has not moved while the work has. */
+export function buildTaskGraphDriftNudge(
+	task: Task,
+	calls: number,
+	failure: string | undefined,
+	attempt: 1 | 2 = 1,
+): string {
+	const named = `${task.id} (${shortTitle(task.title, 50)})`;
+	const note = `\`task_update\` {"updates":[{"id":"${task.id}","note":"…"}]}`;
+	if (attempt === 2) {
+		return [
+			`[SYSTEM] The board still shows ${named} as the work in progress${failure ? `, and the check still fails: \`${failure}\`` : ""}.`,
+			`Bring it up to date in one call: a note on ${task.id} saying what is left, a new task for what you are fixing now (\`task_plan\`), or \`task_done\` if it is finished.`,
+			"If it is still the same work, carry on.",
+		].join(" ");
+	}
+	return [
+		failure
+			? `[SYSTEM] ${named} is still the active task, and the last check failed: \`${failure}\`.`
+			: `[SYSTEM] ${calls} calls since ${named} was last updated.`,
+		`If the plan has changed (a new problem, a step it does not have), add it with \`task_plan\`, or note on ${task.id} where it stands: ${note}.`,
+		`If it is still ${task.id}, carry on.`,
+	].join(" ");
+}
+
 /** S4: a check passed while a task is active. */
 export function buildTaskGraphVerifiedNudge(
 	task: Task,
@@ -323,6 +406,16 @@ export class TaskGraphTracker {
 	private readonly spacing: number;
 	private readonly onNudge: ((id: string, key: string) => void) | undefined;
 	private calls = 0;
+	/** S5: the active task as last touched, and what has happened under it since. */
+	private drift:
+		| {
+				id: string;
+				seq: number;
+				calls: number;
+				writes: number;
+				failure?: string;
+		  }
+		| undefined;
 	/** File-changing calls so far: the first one with no plan is said at once. */
 	private changes = 0;
 	/** Calls since the last nudge was queued; starts open. */
@@ -464,6 +557,73 @@ export class TaskGraphTracker {
 		if (toolName && TASK_GRAPH_TOOL_NAMES.has(toolName)) {
 			return;
 		}
+		const queued = this.queued;
+		this.nudgeForCall(input, toolName);
+		this.advanceDrift(
+			input,
+			toolName,
+			changesFiles(toolName, input),
+			this.queued !== queued,
+		);
+	}
+
+	/**
+	 * S5: the plan may have gone stale while the work moved on: a check
+	 * failing after changes, or a long stretch of calls, under an active task
+	 * nobody touched. Pandorum 2026-11-21 (ek3es, gemma4-26b-agentic): T1
+	 * "Rewrite Level class" stayed active while the check failed with a new
+	 * ReferenceError and the model read and searched for six calls; S3 counts
+	 * changes and S4 passing checks, so the board went quiet.
+	 */
+	private advanceDrift(
+		input: unknown,
+		toolName: string | undefined,
+		writes: boolean,
+		nudgedNow: boolean,
+	): void {
+		const active = this.activeTask();
+		if (!active) {
+			this.drift = undefined;
+			return;
+		}
+		if (
+			!this.drift ||
+			this.drift.id !== active.id ||
+			this.drift.seq !== active.touchedSeq
+		) {
+			this.drift = {
+				id: active.id,
+				seq: active.touchedSeq,
+				calls: 0,
+				writes: 0,
+			};
+		}
+		const drift = this.drift;
+		drift.calls += 1;
+		if (writes) drift.writes += 1;
+		if (nudgedNow) return;
+		// A command run about to report decides for itself: its result
+		// replaces the failure an earlier run left.
+		const failed =
+			drift.failure !== undefined &&
+			drift.writes > 0 &&
+			toolName !== "run_commands";
+		if (!failed && drift.calls < DRIFT_CALLS) return;
+		const calls = drift.calls;
+		const failure = failed ? drift.failure : undefined;
+		const made = this.nudge(
+			"S5",
+			`drift:${active.id}:${active.touchedSeq}`,
+			(attempt) => buildTaskGraphDriftNudge(active, calls, failure, attempt),
+			input,
+		);
+		if (made && this.queued?.id === "S5") {
+			drift.calls = 0;
+			drift.failure = undefined;
+		}
+	}
+
+	private nudgeForCall(input: unknown, toolName: string | undefined): void {
 		const snapshot = this.store.snapshot();
 		const writes = changesFiles(toolName, input);
 		if (!writes) {
@@ -550,7 +710,13 @@ export class TaskGraphTracker {
 		result: unknown,
 		closedATask = false,
 	): void {
+		if (toolName === "run_commands" && this.drift) {
+			// The latest run decides: a later clean run clears an earlier failure.
+			this.drift.failure = readCommandFailure(toolName, result);
+		}
 		if (reportsFailure(result)) {
+			if (this.drift && changesFiles(toolName, input) && this.drift.writes > 0)
+				this.drift.writes -= 1;
 			this.retractFailedWrite(input, toolName);
 			return;
 		}
