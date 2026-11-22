@@ -7,6 +7,8 @@ import {
 	parseApiConfigurationSnapshot,
 	proposeProfileName,
 	removeApiConfigurationProfile,
+	renameApiConfigurationProfile,
+	renameProfileReference,
 	serializeApiConfigurationProfiles,
 	upsertApiConfigurationProfile,
 } from "@shared/api-config-profiles"
@@ -80,6 +82,13 @@ export interface ApiConfigurationProfilesState {
 	loadProfile: (name: string) => Promise<void>
 	saveProfile: (name: string) => Promise<void>
 	deleteProfile: (name: string) => Promise<void>
+	/**
+	 * Gives profile `from` the name `to`, and moves every reference the
+	 * extension keeps (each tab's loaded profile, the Memory panel's and the
+	 * Library's profile) with it. False, and nothing written, when `to` is
+	 * empty or another profile already has it.
+	 */
+	renameProfile: (from: string, to: string) => Promise<boolean>
 }
 
 /**
@@ -103,6 +112,8 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 		escalationModeApiConfiguration,
 		agentNodes,
 		planActSeparateModelsSetting,
+		memorySettings,
+		librarySettings,
 	} = useExtensionState()
 	const { handleFieldsChange } = useApiConfigurationHandlers()
 
@@ -456,6 +467,36 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 		[profiles, activeNames, writeActiveNames],
 	)
 
+	const renameProfile = useCallback(
+		async (from: string, to: string) => {
+			const renamed = renameApiConfigurationProfile(profiles, from, to)
+			if (!renamed) {
+				return false
+			}
+			const name = findApiConfigurationProfile(renamed, to.trim())?.name ?? to.trim()
+			// Every tab that had it loaded still has it loaded, by its new name:
+			// a rename changes nothing in any panel.
+			const nextNames: Record<string, string> = {}
+			for (const [key, value] of Object.entries(activeNames)) {
+				nextNames[key] = value.toLowerCase() === from.toLowerCase() ? name : value
+			}
+			// One write: a rename seen half done would leave a tab, or the
+			// Memory or Library panel, pointing at a profile that no longer exists.
+			const memory = renameProfileReference(memorySettings, "hydeProfile", from, name)
+			const library = renameProfileReference(librarySettings, "imageProfile", from, name)
+			await StateServiceClient.updateSettings(
+				UpdateSettingsRequest.create({
+					apiConfigurationProfiles: serializeApiConfigurationProfiles(renamed),
+					activeApiConfigurationProfile: JSON.stringify(nextNames),
+					...(memory !== undefined ? { memorySettings: memory } : {}),
+					...(library !== undefined ? { librarySettings: library } : {}),
+				}),
+			)
+			return true
+		},
+		[profiles, activeNames, memorySettings, librarySettings],
+	)
+
 	return {
 		profiles,
 		activeName: activeProfile?.name ?? "",
@@ -464,6 +505,7 @@ export function useApiConfigurationProfiles(scope: ApiConfigurationProfileScope)
 		loadProfile,
 		saveProfile,
 		deleteProfile,
+		renameProfile,
 	}
 }
 

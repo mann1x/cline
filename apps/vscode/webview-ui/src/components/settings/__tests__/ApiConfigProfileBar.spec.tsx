@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import ApiConfigProfileBar from "../ApiConfigProfileBar"
 import { DROPDOWN_Z_INDEX } from "../ApiOptions"
@@ -12,7 +12,13 @@ const profilesHook = {
 	loadProfile: vi.fn(),
 	saveProfile: vi.fn(),
 	deleteProfile: vi.fn(),
+	renameProfile: vi.fn().mockResolvedValue(true),
 }
+
+const refreshAgents = vi.fn().mockResolvedValue({ agents: [] })
+vi.mock("@/services/grpc-client", () => ({
+	FileServiceClient: { refreshAgents: (...args: unknown[]) => refreshAgents(...args) },
+}))
 
 vi.mock("../utils/useApiConfigurationProfiles", () => ({
 	useApiConfigurationProfiles: () => profilesHook,
@@ -23,22 +29,32 @@ describe("ApiConfigProfileBar", () => {
 		vi.clearAllMocks()
 		profilesHook.isDirty = false
 		profilesHook.activeName = "local-qwen"
+		profilesHook.renameProfile.mockResolvedValue(true)
+		refreshAgents.mockResolvedValue({ agents: [] })
 	})
 
 	afterEach(() => {
 		__resetPendingEdits()
 	})
 
+	const field = () => document.getElementById("api-config-profile") as HTMLElement & { value: string }
+
+	/** Opens the list and clicks a profile in it. */
+	function pick(name: string) {
+		fireEvent.focus(field())
+		fireEvent.click(screen.getByRole("option", { name }))
+	}
+
 	/**
-	 * Picks a profile from the list.
+	 * Types into the picker.
 	 *
 	 * Assigned rather than passed as `target`: the custom element is not
 	 * upgraded under jsdom, so it has no `value` setter for fireEvent to find.
 	 */
-	function pick(name: string) {
-		const dropdown = document.getElementById("api-config-profile") as HTMLElement & { value: string }
-		dropdown.value = name
-		fireEvent.change(dropdown)
+	function type(text: string) {
+		fireEvent.focus(field())
+		field().value = text
+		fireEvent.input(field())
 	}
 
 	it("opens its list above the provider controls below it", () => {
@@ -64,7 +80,7 @@ describe("ApiConfigProfileBar", () => {
 
 		const wrapper = document.getElementById("api-config-profile")?.parentElement as HTMLElement
 		expect(wrapper.className).toContain("flex-1")
-		expect(screen.getByText("local-qwen")).toBeInTheDocument()
+		expect(field().getAttribute("value") ?? field().value).toBe("local-qwen")
 	})
 
 	/**
@@ -152,21 +168,18 @@ describe("ApiConfigProfileBar", () => {
 			expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument()
 		})
 
-		it("puts the list back to the profile that is actually loaded", () => {
-			// The dropdown moved to the name that was clicked before anything was
-			// loaded. `value` still holds activeName and has not changed, so React
-			// has nothing to re-apply -- the list would go on naming a profile the
-			// panel is not showing.
+		it("goes back to showing the profile that is actually loaded", () => {
+			// The old dropdown moved to the name that was clicked before anything
+			// was loaded, and a cancelled switch left it naming a profile the panel
+			// was not showing.
 			profilesHook.isDirty = true
 			render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
-			const before = document.getElementById("api-config-profile")
 			pick("cloud-sonnet")
 
 			fireEvent.click(screen.getByText("Cancel"))
 
-			const after = document.getElementById("api-config-profile")
-			expect(after).not.toBe(before)
-			expect(after?.getAttribute("current-value") ?? (after as any)?.value).toBe("local-qwen")
+			expect(screen.queryByRole("listbox")).toBeNull()
+			expect(field().getAttribute("value") ?? field().value).toBe("local-qwen")
 		})
 
 		it("does nothing when the profile already loaded is picked again", () => {
@@ -271,5 +284,126 @@ describe("ApiConfigProfileBar", () => {
 		fireEvent.click(screen.getByText("Save as…"))
 
 		expect(screen.getByPlaceholderText("Profile name")).toHaveValue("ollama · qwen3")
+	})
+
+	// pandorum, 2026-11-22: too many profiles to find one in the list.
+	describe("filtering the list", () => {
+		it("shows every profile until something is typed", () => {
+			render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+			fireEvent.focus(field())
+			expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+				"local-qwen",
+				"cloud-sonnet",
+				"vision",
+			])
+		})
+
+		it("keeps the profiles whose name has every word typed", () => {
+			render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+			type("SON cloud")
+			expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["cloud-sonnet"])
+			expect(screen.getByText("1 of 3 profiles")).toBeInTheDocument()
+		})
+
+		it("says so when nothing matches", () => {
+			render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+			type("gemini")
+			expect(screen.queryAllByRole("option")).toHaveLength(0)
+			expect(screen.getByText("No profile matches “gemini”.")).toBeInTheDocument()
+		})
+
+		it("loads the only match on Enter", () => {
+			render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+			type("vis")
+			fireEvent.keyDown(field(), { key: "Enter" })
+			expect(profilesHook.loadProfile).toHaveBeenCalledWith("vision")
+		})
+
+		it("moves through the list with the arrows", () => {
+			render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+			fireEvent.focus(field())
+			fireEvent.keyDown(field(), { key: "ArrowDown" })
+			fireEvent.keyDown(field(), { key: "ArrowDown" })
+			fireEvent.keyDown(field(), { key: "Enter" })
+			expect(profilesHook.loadProfile).toHaveBeenCalledWith("cloud-sonnet")
+		})
+	})
+
+	// Renaming took "Save as…" under the new name and a Delete of the old one.
+	describe("the right-click menu", () => {
+		function rightClick(element: HTMLElement) {
+			fireEvent.contextMenu(element, { clientX: 40, clientY: 60 })
+		}
+
+		it("opens on a profile in the list, for that profile", () => {
+			render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+			fireEvent.focus(field())
+			rightClick(screen.getByRole("option", { name: "vision" }))
+
+			const menu = screen.getByRole("menu")
+			expect(menu.textContent).toContain("vision")
+			expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Rename…", "Copy name", "Delete…"])
+		})
+
+		it("opens on the field for the loaded profile", () => {
+			render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+			rightClick(field())
+			expect(screen.getByRole("menu").textContent).toContain("local-qwen")
+		})
+
+		it("renames from the menu", async () => {
+			render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+			fireEvent.focus(field())
+			rightClick(screen.getByRole("option", { name: "vision" }))
+			fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }))
+
+			const input = screen.getByPlaceholderText("New profile name") as HTMLElement & { value: string }
+			expect(input).toHaveValue("vision")
+			input.value = "vision · qwen3-vl"
+			fireEvent.input(input)
+			fireEvent.click(screen.getByText("Rename"))
+
+			await waitFor(() => expect(profilesHook.renameProfile).toHaveBeenCalledWith("vision", "vision · qwen3-vl"))
+			await waitFor(() => expect(screen.queryByPlaceholderText("New profile name")).toBeNull())
+		})
+
+		it("will not rename onto another profile's name", () => {
+			render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+			rightClick(field())
+			fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }))
+
+			const input = screen.getByPlaceholderText("New profile name") as HTMLElement & { value: string }
+			input.value = "Cloud-Sonnet"
+			fireEvent.input(input)
+
+			expect(screen.getByText("Another profile is already called “Cloud-Sonnet”.")).toBeInTheDocument()
+			fireEvent.click(screen.getByText("Rename"))
+			fireEvent.keyDown(input, { key: "Enter" })
+			expect(profilesHook.renameProfile).not.toHaveBeenCalled()
+		})
+
+		it("names the agents whose files still use the old name", async () => {
+			refreshAgents.mockResolvedValue({
+				agents: [
+					{ name: "reviewer", profile: "Local-Qwen" },
+					{ name: "planner", profile: "cloud-sonnet" },
+				],
+			})
+			render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+			rightClick(field())
+			fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }))
+
+			expect(await screen.findByText(/The agent reviewer name it in its file/)).toBeInTheDocument()
+		})
+
+		it("asks before deleting from the menu", () => {
+			render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+			fireEvent.focus(field())
+			rightClick(screen.getByRole("option", { name: "cloud-sonnet" }))
+			fireEvent.click(screen.getByRole("menuitem", { name: "Delete…" }))
+
+			expect(screen.getByText("Delete “cloud-sonnet”?")).toBeInTheDocument()
+			expect(profilesHook.deleteProfile).not.toHaveBeenCalled()
+		})
 	})
 })

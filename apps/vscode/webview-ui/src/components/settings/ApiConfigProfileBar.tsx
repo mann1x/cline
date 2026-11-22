@@ -1,11 +1,19 @@
-import { VSCodeButton, VSCodeDropdown, VSCodeOption, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
-import { AlertTriangle } from "lucide-react"
-import { useCallback, useEffect, useState } from "react"
+import { EmptyRequest } from "@shared/proto/cline/common"
+import { VSCodeButton, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
+import { AlertTriangle, Check } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { FileServiceClient } from "@/services/grpc-client"
+import { matchesFilter } from "@/utils/text-filter"
 import { DROPDOWN_Z_INDEX, DropdownContainer, SETTINGS_MODAL_Z_INDEX } from "./ApiOptions"
 import { hasPendingEdits } from "./utils/pendingEdits"
 import { type ApiConfigurationProfileScope, useApiConfigurationProfiles } from "./utils/useApiConfigurationProfiles"
 
-const NO_PROFILE = "__none__"
+/** Where a right-click landed, and on which profile. */
+interface ProfileMenu {
+	name: string
+	x: number
+	y: number
+}
 
 interface ApiConfigProfileBarProps {
 	/** The configuration in view; decides what a save captures and a load writes. */
@@ -25,7 +33,7 @@ interface ApiConfigProfileBarProps {
  * and Act are holding.
  */
 const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) => {
-	const { profiles, activeName, isDirty, suggestedName, loadProfile, saveProfile, deleteProfile } =
+	const { profiles, activeName, isDirty, suggestedName, loadProfile, saveProfile, deleteProfile, renameProfile } =
 		useApiConfigurationProfiles(scope)
 	const [isNaming, setIsNaming] = useState(false)
 	const [draftName, setDraftName] = useState("")
@@ -35,12 +43,29 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 	// Delete used to act on the click: one misplaced press next to "Save as…"
 	// took a profile with it, with nothing to undo.
 	const [pendingDelete, setPendingDelete] = useState<string | null>(null)
-	// Picking a name moves the dropdown immediately, before anything has been
-	// loaded, so a cancelled switch leaves it showing a profile that is not the
-	// one in the panel. Nothing puts it back: `value` still holds `activeName`,
-	// which has not changed, so React has nothing to re-apply. Bumping this
-	// remounts the dropdown, which re-applies `value` on mount.
-	const [selectionEpoch, setSelectionEpoch] = useState(0)
+	// The picker is a combobox, not a dropdown: with many profiles saved the
+	// list was too long to find one in (pandorum, 2026-11-22). Typing filters
+	// it; closed, the field shows the loaded profile.
+	const [listOpen, setListOpen] = useState(false)
+	const [query, setQuery] = useState("")
+	const [highlight, setHighlight] = useState(-1)
+	const pickerRef = useRef<HTMLDivElement>(null)
+	const itemRefs = useRef<(HTMLDivElement | null)[]>([])
+	// The right-click menu, and the rename it can start. Renaming used to take
+	// "Save as…" under the new name and a Delete of the old one.
+	const [menu, setMenu] = useState<ProfileMenu | null>(null)
+	const [renaming, setRenaming] = useState<string | null>(null)
+	const [renameDraft, setRenameDraft] = useState("")
+	// Agents name a profile in their own files; a rename cannot edit those.
+	const [agentsNaming, setAgentsNaming] = useState<string[]>([])
+
+	// The field opens holding the loaded profile's name, selected, so typing
+	// replaces it; until it is changed it is not a filter.
+	const filtering = query.trim() !== "" && query !== activeName
+	const shown = useMemo(
+		() => (filtering ? profiles.filter((profile) => matchesFilter(query, profile.name)) : profiles),
+		[profiles, query, filtering],
+	)
 
 	// Reopening the field after the panel has changed should offer a name for
 	// what is in it now, not the one suggested the last time it was opened.
@@ -57,6 +82,11 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 	}, [isNaming])
 
 	const nameIsTaken = profiles.some((profile) => profile.name.toLowerCase() === draftName.trim().toLowerCase())
+	const renameTarget = renaming ?? ""
+	const renameTaken =
+		renameDraft.trim().toLowerCase() !== renameTarget.toLowerCase() &&
+		profiles.some((profile) => profile.name.toLowerCase() === renameDraft.trim().toLowerCase())
+	const renameUnchanged = renameDraft.trim() === renameTarget
 
 	// A red outline on the buttons that resolve it.
 	//
@@ -72,16 +102,77 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 			} as React.CSSProperties)
 		: undefined
 
-	/** Puts the dropdown back to the profile that is actually loaded. */
+	/** Closes a switch that was not confirmed; the field shows the loaded profile again. */
 	const restoreSelection = useCallback(() => {
 		setPendingSwitch(null)
-		setSelectionEpoch((epoch) => epoch + 1)
 	}, [])
+
+	const closeList = useCallback(() => {
+		setListOpen(false)
+		setHighlight(-1)
+		setQuery("")
+	}, [])
+
+	// A click anywhere else closes the list and the menu.
+	useEffect(() => {
+		if (!listOpen && !menu) {
+			return
+		}
+		const onDown = (event: MouseEvent) => {
+			const target = event.target as Node
+			if (menu && (target as Element).closest?.("[data-profile-menu]")) {
+				return
+			}
+			setMenu(null)
+			if (pickerRef.current && !pickerRef.current.contains(target)) {
+				closeList()
+			}
+		}
+		document.addEventListener("mousedown", onDown)
+		return () => document.removeEventListener("mousedown", onDown)
+	}, [listOpen, menu, closeList])
+
+	// The highlighted profile stays in view while the arrows move it.
+	useEffect(() => {
+		if (highlight >= 0) {
+			itemRefs.current[highlight]?.scrollIntoView?.({ block: "nearest" })
+		}
+	}, [highlight])
+
+	// A new filter starts the highlight over.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `query` is the trigger, not a value the body reads.
+	useEffect(() => {
+		setHighlight(-1)
+	}, [query])
+
+	// Which agents name the profile being renamed, so the row can say they keep
+	// the old name: their files are the user's, and a rename does not edit them.
+	useEffect(() => {
+		if (!renaming) {
+			setAgentsNaming([])
+			return
+		}
+		let current = true
+		FileServiceClient.refreshAgents(EmptyRequest.create({}))
+			.then((response) => {
+				if (current) {
+					setAgentsNaming(
+						(response.agents ?? [])
+							.filter((agent) => agent.profile.trim().toLowerCase() === renaming.toLowerCase())
+							.map((agent) => agent.name),
+					)
+				}
+			})
+			.catch(() => undefined)
+		return () => {
+			current = false
+		}
+	}, [renaming])
 
 	// A modal that can only be left with the mouse traps a keyboard user, and
 	// the backdrop it would otherwise hang off is not focusable.
 	useEffect(() => {
-		if (!pendingSwitch && !pendingDelete) {
+		if (!pendingSwitch && !pendingDelete && !menu) {
 			return
 		}
 		const onKey = (event: KeyboardEvent) => {
@@ -90,19 +181,21 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 					restoreSelection()
 				}
 				setPendingDelete(null)
+				setMenu(null)
 			}
 		}
 		document.addEventListener("keydown", onKey)
 		return () => document.removeEventListener("keydown", onKey)
-	}, [pendingSwitch, pendingDelete, restoreSelection])
+	}, [pendingSwitch, pendingDelete, menu, restoreSelection])
 
 	/**
 	 * Copy on the profile picker copies the selected profile's name.
 	 *
-	 * The picker is a dropdown, so there is no text to select in it, and a
-	 * right-click Copy copied nothing -- when what the user wanted was the name,
-	 * to start a "Save as…" from it rather than from the generated one. A real
-	 * text selection still wins: this only answers a copy with nothing selected.
+	 * The picker was a dropdown with no text to select, and a Copy copied
+	 * nothing -- when what the user wanted was the name, to start a "Save as…"
+	 * from it rather than from the generated one. It is a text field now, and
+	 * "Copy name" is on its right-click menu, but a copy with nothing selected
+	 * still answers with the name. A real text selection still wins.
 	 */
 	const copyProfileName = (event: React.ClipboardEvent) => {
 		if (!activeName || (window.getSelection()?.toString() ?? "") !== "") {
@@ -156,6 +249,101 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 		await loadProfile(name)
 	}
 
+	/** A profile picked from the list. */
+	const choose = async (name: string) => {
+		closeList()
+		if (name === activeName) {
+			return
+		}
+		// A load overwrites the whole panel, and what it overwrites is not all
+		// on screen: a value typed a moment ago may still be sitting inside its
+		// debounce, unsaved and invisible to `isDirty`. Ask on either.
+		if (isDirty || hasPendingEdits()) {
+			setPendingSwitch(name)
+			return
+		}
+		await switchTo(name)
+	}
+
+	const openList = (event?: { target: EventTarget | null }) => {
+		setListOpen(true)
+		setQuery(activeName)
+		// Selected, so the first key typed replaces the name and filters.
+		const field = event?.target as { select?: () => void } | null
+		field?.select?.()
+	}
+
+	const startRename = (name: string) => {
+		setMenu(null)
+		closeList()
+		setIsNaming(false)
+		setRenaming(name)
+		setRenameDraft(name)
+	}
+
+	const commitRename = async () => {
+		if (!renaming || !renameDraft.trim() || renameTaken || renameUnchanged) {
+			return
+		}
+		if (await renameProfile(renaming, renameDraft)) {
+			setRenaming(null)
+		}
+	}
+
+	const copyName = (name: string) => {
+		setMenu(null)
+		void navigator.clipboard?.writeText(name).catch(() => undefined)
+	}
+
+	/** The menu at the pointer, or under the field when it came from the keyboard. */
+	const openMenu = (name: string, at: { x: number; y: number }) => {
+		setMenu({ name, x: at.x, y: at.y })
+	}
+
+	const onPickerKey = (event: React.KeyboardEvent) => {
+		// The context-menu key and Shift+F10 open the menu on the highlighted
+		// profile, or the loaded one, as a right-click would.
+		if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+			const name = listOpen && highlight >= 0 ? shown[highlight]?.name : activeName
+			if (name) {
+				event.preventDefault()
+				const box = (event.target as HTMLElement).getBoundingClientRect?.()
+				openMenu(name, { x: box?.left ?? 0, y: box?.bottom ?? 0 })
+			}
+			return
+		}
+		if (!listOpen) {
+			if (event.key === "ArrowDown" || event.key === "Enter") {
+				event.preventDefault()
+				openList(event)
+			}
+			return
+		}
+		switch (event.key) {
+			case "ArrowDown":
+				event.preventDefault()
+				setHighlight((index) => Math.min(index + 1, shown.length - 1))
+				break
+			case "ArrowUp":
+				event.preventDefault()
+				setHighlight((index) => Math.max(index - 1, 0))
+				break
+			case "Enter": {
+				event.preventDefault()
+				// The highlighted one, or the only one the filter left.
+				const name = highlight >= 0 ? shown[highlight]?.name : shown.length === 1 ? shown[0].name : undefined
+				if (name) {
+					void choose(name)
+				}
+				break
+			}
+			case "Escape":
+				event.preventDefault()
+				closeList()
+				break
+		}
+	}
+
 	const commitSave = async () => {
 		if (!draftName.trim()) {
 			return
@@ -180,36 +368,82 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 					className="flex-1 min-w-[140px]"
 					onCopy={copyProfileName}
 					onKeyDown={copyProfileNameOnKey}
+					ref={pickerRef}
 					zIndex={DROPDOWN_Z_INDEX + 1}>
-					<VSCodeDropdown
+					<VSCodeTextField
+						aria-autocomplete="list"
+						aria-controls="api-config-profile-list"
+						aria-expanded={listOpen}
 						className="w-full"
 						id="api-config-profile"
-						key={selectionEpoch}
-						onChange={async (event) => {
-							const value = (event.target as HTMLSelectElement).value
-							if (!value || value === NO_PROFILE || value === activeName) {
-								return
+						onClick={(event) => {
+							if (!listOpen) {
+								openList(event)
 							}
-							// A load overwrites the whole panel, and what it overwrites is
-							// not all on screen: a value typed a moment ago may still be
-							// sitting inside its debounce, unsaved and invisible to
-							// `isDirty`. Ask on either.
-							if (isDirty || hasPendingEdits()) {
-								setPendingSwitch(value)
-								return
-							}
-							await switchTo(value)
 						}}
-						value={activeName || NO_PROFILE}>
-						<VSCodeOption value={NO_PROFILE}>
-							{profiles.length === 0 ? "No saved profiles" : "Select a profile…"}
-						</VSCodeOption>
-						{profiles.map((profile) => (
-							<VSCodeOption key={profile.name} value={profile.name}>
-								{profile.name}
-							</VSCodeOption>
-						))}
-					</VSCodeDropdown>
+						onContextMenu={(event) => {
+							if (!activeName) {
+								return
+							}
+							event.preventDefault()
+							openMenu(activeName, { x: event.clientX, y: event.clientY })
+						}}
+						onFocus={(event) => openList(event)}
+						onInput={(event) => {
+							setQuery((event.target as HTMLInputElement).value)
+							setListOpen(true)
+						}}
+						onKeyDown={onPickerKey}
+						placeholder={profiles.length === 0 ? "No saved profiles" : "Select a profile, or type to filter…"}
+						role="combobox"
+						value={listOpen ? query : activeName}>
+						<span className="codicon codicon-chevron-down" slot="end" />
+					</VSCodeTextField>
+					{listOpen && profiles.length > 0 ? (
+						<div
+							className="absolute left-0 right-0 top-full max-h-[260px] overflow-y-auto border border-solid border-(--vscode-list-activeSelectionBackground) bg-(--vscode-dropdown-background) rounded-b-[3px]"
+							id="api-config-profile-list"
+							role="listbox">
+							{shown.length === 0 ? (
+								<div className="px-2.5 py-1.5 text-(--vscode-descriptionForeground)">
+									No profile matches “{query.trim()}”.
+								</div>
+							) : (
+								shown.map((profile, index) => (
+									<div
+										aria-selected={profile.name === activeName}
+										className={`flex items-center gap-1.5 px-2.5 py-1 cursor-pointer break-all ${
+											index === highlight
+												? "bg-(--vscode-list-activeSelectionBackground) text-(--vscode-list-activeSelectionForeground)"
+												: ""
+										}`}
+										key={profile.name}
+										onClick={() => void choose(profile.name)}
+										onContextMenu={(event) => {
+											event.preventDefault()
+											setHighlight(index)
+											openMenu(profile.name, { x: event.clientX, y: event.clientY })
+										}}
+										onMouseEnter={() => setHighlight(index)}
+										ref={(element) => {
+											itemRefs.current[index] = element
+										}}
+										role="option">
+										<Check
+											aria-hidden="true"
+											className={`w-3.5 h-3.5 shrink-0 ${profile.name === activeName ? "" : "invisible"}`}
+										/>
+										<span>{profile.name}</span>
+									</div>
+								))
+							)}
+							{filtering && shown.length > 0 ? (
+								<div className="px-2.5 py-1 text-xs text-(--vscode-descriptionForeground)">
+									{shown.length} of {profiles.length} profiles
+								</div>
+							) : null}
+						</div>
+					) : null}
 				</DropdownContainer>
 
 				{activeName && isDirty ? (
@@ -228,7 +462,13 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 						{isDirty ? "Revert" : "Load"}
 					</VSCodeButton>
 				) : null}
-				<VSCodeButton appearance="secondary" onClick={() => setIsNaming((open) => !open)} style={unsavedStyle}>
+				<VSCodeButton
+					appearance="secondary"
+					onClick={() => {
+						setRenaming(null)
+						setIsNaming((open) => !open)
+					}}
+					style={unsavedStyle}>
 					Save as…
 				</VSCodeButton>
 				{activeName ? (
@@ -334,6 +574,90 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 							</VSCodeButton>
 						</div>
 					</div>
+				</div>
+			) : null}
+
+			{menu ? (
+				<div
+					className="fixed min-w-[160px] py-1 border border-solid border-(--vscode-menu-border,var(--vscode-panel-border)) bg-(--vscode-menu-background,var(--vscode-editor-background)) text-(--vscode-menu-foreground,var(--vscode-foreground)) rounded shadow-lg"
+					data-profile-menu=""
+					role="menu"
+					style={{ left: menu.x, top: menu.y, zIndex: SETTINGS_MODAL_Z_INDEX }}>
+					<div className="px-3 pt-0.5 pb-1 text-xs text-(--vscode-descriptionForeground) truncate max-w-[260px]">
+						{menu.name}
+					</div>
+					{[
+						{ label: "Rename…", act: () => startRename(menu.name) },
+						{ label: "Copy name", act: () => copyName(menu.name) },
+						{
+							label: "Delete…",
+							act: () => {
+								setMenu(null)
+								closeList()
+								setPendingDelete(menu.name)
+							},
+						},
+					].map((item) => (
+						<button
+							className="block w-full text-left px-3 py-1 bg-transparent border-0 cursor-pointer text-inherit hover:bg-(--vscode-menu-selectionBackground,var(--vscode-list-activeSelectionBackground)) hover:text-(--vscode-menu-selectionForeground,inherit)"
+							key={item.label}
+							onClick={item.act}
+							role="menuitem"
+							type="button">
+							{item.label}
+						</button>
+					))}
+				</div>
+			) : null}
+
+			{renaming ? (
+				<div className="mt-2">
+					<div className="flex items-center gap-2">
+						<VSCodeTextField
+							aria-label={`New name for “${renaming}”`}
+							className="flex-1"
+							onInput={(event) => setRenameDraft((event.target as HTMLInputElement).value)}
+							onKeyDown={(event: { key: string }) => {
+								if (event.key === "Enter") {
+									void commitRename()
+								}
+								if (event.key === "Escape") {
+									setRenaming(null)
+								}
+							}}
+							placeholder="New profile name"
+							value={renameDraft}
+						/>
+						<VSCodeButton
+							appearance="primary"
+							disabled={!renameDraft.trim() || renameTaken || renameUnchanged}
+							onClick={commitRename}>
+							Rename
+						</VSCodeButton>
+						<VSCodeButton appearance="secondary" onClick={() => setRenaming(null)}>
+							Cancel
+						</VSCodeButton>
+					</div>
+					<p className="text-xs mt-1 mb-0 text-(--vscode-descriptionForeground)">
+						{renameTaken ? (
+							<span className="text-(--vscode-errorForeground)">
+								Another profile is already called “{renameDraft.trim()}”.
+							</span>
+						) : (
+							<span>
+								Renaming “{renaming}”. Every tab that has it loaded, and the Memory and Library settings that use
+								it, follow the new name.
+							</span>
+						)}
+						{agentsNaming.length > 0 ? (
+							<span>
+								{" "}
+								{agentsNaming.length === 1 ? "The agent" : "The agents"} {agentsNaming.join(", ")} name it in{" "}
+								{agentsNaming.length === 1 ? "its file" : "their files"}; edit{" "}
+								{agentsNaming.length === 1 ? "it" : "them"} on the Agents tab to use the new name.
+							</span>
+						) : null}
+					</p>
 				</div>
 			) : null}
 

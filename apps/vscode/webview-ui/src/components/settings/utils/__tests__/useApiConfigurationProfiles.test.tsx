@@ -375,3 +375,54 @@ describe("useApiConfigurationProfiles — an Agents node", () => {
 		expect(profile.snapshot.providerConfig.selectedModelId).toBeUndefined()
 	})
 })
+
+describe("useApiConfigurationProfiles — renaming a profile", () => {
+	const saved = { ...extensionState }
+
+	beforeEach(() => {
+		vi.clearAllMocks()
+		updateSettings.mockResolvedValue(undefined)
+	})
+
+	afterEach(() => {
+		Object.assign(extensionState, saved)
+	})
+
+	// Renaming took "Save as…" and a Delete, and the tabs, the Memory panel and
+	// the Library that named the old profile were left pointing at nothing.
+	it("moves every reference with it, in one write", async () => {
+		Object.assign(extensionState, {
+			activeApiConfigurationProfile: JSON.stringify({
+				plan: PROFILE.name,
+				act: PROFILE.name,
+				vision: SWITCHING_PROFILE.name,
+			}),
+			memorySettings: JSON.stringify({ hyde: true, hydeProfile: PROFILE.name }),
+			librarySettings: JSON.stringify({ imageProfile: SWITCHING_PROFILE.name }),
+		})
+		const { result } = renderHook(() => useApiConfigurationProfiles({ kind: "mode", mode: "act" }))
+
+		expect(await result.current.renameProfile(PROFILE.name, "renamed coder")).toBe(true)
+
+		expect(updateSettings).toHaveBeenCalledOnce()
+		const request = updateSettings.mock.calls[0][0]
+		const names = JSON.parse(request.apiConfigurationProfiles).map((profile: { name: string }) => profile.name)
+		expect(names).toContain("renamed coder")
+		expect(names).not.toContain(PROFILE.name)
+		expect(JSON.parse(request.activeApiConfigurationProfile)).toEqual({
+			plan: "renamed coder",
+			act: "renamed coder",
+			vision: SWITCHING_PROFILE.name,
+		})
+		expect(JSON.parse(request.memorySettings)).toEqual({ hyde: true, hydeProfile: "renamed coder" })
+		// The Library named another profile: not written at all.
+		expect(request.librarySettings).toBeUndefined()
+	})
+
+	it("writes nothing when the name belongs to another profile", async () => {
+		const { result } = renderHook(() => useApiConfigurationProfiles({ kind: "mode", mode: "act" }))
+
+		expect(await result.current.renameProfile(PROFILE.name, SWITCHING_PROFILE.name.toUpperCase())).toBe(false)
+		expect(updateSettings).not.toHaveBeenCalled()
+	})
+})

@@ -163,6 +163,57 @@ export function removeApiConfigurationProfile(
 	return profiles.filter((entry) => entry.name.toLowerCase() !== name.toLowerCase())
 }
 
+/**
+ * The list with profile `from` called `to`, still ordered by name; what it
+ * holds and when it was last saved stay as they were.
+ *
+ * `undefined` when there is no profile `from`, when `to` is empty, or when
+ * another profile already has the name `to` (compared without case, as every
+ * lookup here is). Changing only the case of a profile's own name is a rename.
+ */
+export function renameApiConfigurationProfile(
+	profiles: readonly ApiConfigurationProfile[],
+	from: string,
+	to: string,
+): ApiConfigurationProfile[] | undefined {
+	const name = to.trim().slice(0, MAX_PROFILE_NAME_LENGTH)
+	const profile = findApiConfigurationProfile(profiles, from)
+	if (!profile || !name) {
+		return undefined
+	}
+	const others = removeApiConfigurationProfile(profiles, from)
+	if (findApiConfigurationProfile(others, name)) {
+		return undefined
+	}
+	return [...others, { ...profile, name }].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
+ * A stored settings record (JSON) with its `field` moved from profile `from`
+ * to `to`; `undefined` when the record does not name `from` there, so the
+ * caller writes only what changed. The Memory panel's `hydeProfile` and the
+ * Library's `imageProfile` name a profile this way.
+ */
+export function renameProfileReference(raw: string | undefined, field: string, from: string, to: string): string | undefined {
+	if (!raw) {
+		return undefined
+	}
+	try {
+		const parsed: unknown = JSON.parse(raw)
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			return undefined
+		}
+		const record = parsed as Record<string, unknown>
+		const value = record[field]
+		if (typeof value !== "string" || value.trim().toLowerCase() !== from.toLowerCase()) {
+			return undefined
+		}
+		return JSON.stringify({ ...record, [field]: to })
+	} catch {
+		return undefined
+	}
+}
+
 export function findApiConfigurationProfile(
 	profiles: readonly ApiConfigurationProfile[],
 	name: string,

@@ -8,6 +8,8 @@ import {
 	profileProviderSettingsFor,
 	proposeProfileName,
 	removeApiConfigurationProfile,
+	renameApiConfigurationProfile,
+	renameProfileReference,
 	serializeApiConfigurationProfiles,
 	upsertApiConfigurationProfile,
 } from "./api-config-profiles"
@@ -239,5 +241,41 @@ describe("profileProviderSettingsFor", () => {
 		["the stored value is not JSON", "garbage", "garbage", "act"],
 	])("reports nothing when %s", (_label, profilesRaw, activeRaw, scope) => {
 		expect(profileProviderSettingsFor(profilesRaw, activeRaw, scope)).toBeUndefined()
+	})
+})
+
+describe("renaming a profile", () => {
+	const snapshot = { mode: {} } as never
+	const list = [
+		{ name: "alpha", updatedAt: 1, snapshot },
+		{ name: "local-qwen", updatedAt: 2, snapshot },
+		{ name: "vision", updatedAt: 3, snapshot },
+	]
+
+	it("renames it, keeps what it holds, and keeps the list in order", () => {
+		const renamed = renameApiConfigurationProfile(list, "LOCAL-qwen", "  zeta qwen  ")
+		expect(renamed?.map((profile) => profile.name)).toEqual(["alpha", "vision", "zeta qwen"])
+		expect(renamed?.[2]).toEqual({ name: "zeta qwen", updatedAt: 2, snapshot })
+	})
+
+	it("refuses a name another profile has, an empty name and a missing profile", () => {
+		expect(renameApiConfigurationProfile(list, "local-qwen", "Vision")).toBeUndefined()
+		expect(renameApiConfigurationProfile(list, "local-qwen", "   ")).toBeUndefined()
+		expect(renameApiConfigurationProfile(list, "nope", "other")).toBeUndefined()
+	})
+
+	it("lets a profile change only the case of its own name", () => {
+		expect(renameApiConfigurationProfile(list, "local-qwen", "Local-Qwen")?.[1].name).toBe("Local-Qwen")
+	})
+
+	it("moves a settings record that names the old profile, and leaves others alone", () => {
+		const raw = JSON.stringify({ hyde: true, hydeProfile: "local-qwen" })
+		expect(JSON.parse(renameProfileReference(raw, "hydeProfile", "Local-Qwen", "zeta") ?? "{}")).toEqual({
+			hyde: true,
+			hydeProfile: "zeta",
+		})
+		expect(renameProfileReference(raw, "hydeProfile", "vision", "zeta")).toBeUndefined()
+		expect(renameProfileReference(undefined, "hydeProfile", "local-qwen", "zeta")).toBeUndefined()
+		expect(renameProfileReference("not json", "hydeProfile", "local-qwen", "zeta")).toBeUndefined()
 	})
 })

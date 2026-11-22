@@ -11,7 +11,7 @@ import {
 	ToggleWindsurfRuleRequest,
 	ToggleWorkflowRequest,
 } from "@shared/proto/cline/file"
-import { VSCodeButton, VSCodeLink } from "@vscode/webview-ui-toolkit/react"
+import { VSCodeButton, VSCodeLink, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import React, { useEffect, useRef, useState } from "react"
 import { useClickAway, useWindowSize } from "react-use"
 import styled from "styled-components"
@@ -21,6 +21,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import useRemoteConfigSettings from "@/hooks/useRemoteConfigSettings"
 import { FileServiceClient } from "@/services/grpc-client"
 import { isMacOSOrLinux } from "@/utils/platformUtils"
+import { matchesFilter } from "@/utils/text-filter"
 import AgentsTab from "./AgentsTab"
 import HookRow from "./HookRow"
 import NewRuleRow from "./NewRuleRow"
@@ -58,6 +59,8 @@ const ClineRulesToggleModal: React.FC = () => {
 	// Built-in and Global are long lists that push each other off the panel, so
 	// one is open at a time: opening one closes the other.
 	const [openSkillGroup, setOpenSkillGroup] = useState<"bundled" | "global" | null>("global")
+	// The Skills tab's quick filter (#116: with many skills one could not be found).
+	const [skillFilter, setSkillFilter] = useState("")
 
 	const isWindows = !isMacOSOrLinux()
 	const [isVisible, setIsVisible] = useState(false)
@@ -237,6 +240,22 @@ const ClineRulesToggleModal: React.FC = () => {
 	const hasRemoteRules = remoteRules.length > 0
 	const hasRemoteWorkflows = remoteWorkflows.length > 0
 	const hasRemoteSkills = remoteSkills.length > 0
+
+	// While the filter has text every group shows only its matches and opens on
+	// its own, so a match is never hidden inside a closed group; a group with no
+	// match is left out, and adding a skill waits until the filter is cleared.
+	const filteringSkills = skillFilter.trim() !== ""
+	const skillShown = (skill: { name: string; description?: string; path?: string }) =>
+		matchesFilter(skillFilter, skill.name, skill.description, skill.path?.split(/[\\/]/).at(-2))
+	const shownRemoteSkills = remoteSkills.filter((skill) => matchesFilter(skillFilter, skill.name))
+	const shownBundledSkills = bundledSkills.filter(skillShown)
+	const ownGlobalSkills = globalSkills.filter((skill) => !skill.path.startsWith("remote:"))
+	const shownGlobalSkills = ownGlobalSkills.filter(skillShown)
+	const shownLocalSkills = localSkills.filter(skillShown)
+	const skillMatchCount =
+		shownRemoteSkills.length + shownBundledSkills.length + shownGlobalSkills.length + shownLocalSkills.length
+	const bundledOpen = filteringSkills || openSkillGroup === "bundled"
+	const globalOpen = filteringSkills || openSkillGroup === "global"
 
 	// Handle toggle rule using gRPC
 	const toggleRule = (isGlobal: boolean, rulePath: string, enabled: boolean) => {
@@ -793,12 +812,19 @@ const ClineRulesToggleModal: React.FC = () => {
 							</>
 						) : currentView === "skills" ? (
 							<>
+								<SkillFilterField onChange={setSkillFilter} value={skillFilter} />
+								{filteringSkills && skillMatchCount === 0 ? (
+									<p className="text-sm text-(--vscode-descriptionForeground) mt-0 mb-3">
+										No skill matches “{skillFilter.trim()}”.
+									</p>
+								) : null}
+
 								{/* Enterprise Skills Section (remote) */}
-								{hasRemoteSkills && (
+								{shownRemoteSkills.length > 0 && (
 									<div className="mb-3">
 										<div className="text-sm font-normal mb-2">Enterprise Skills</div>
 										<div className="flex flex-col gap-0">
-											{remoteSkills
+											{[...shownRemoteSkills]
 												.sort((a, b) => a.name.localeCompare(b.name))
 												.map((skill) => {
 													const enabled = skill.locked || skill.enabled
@@ -820,17 +846,18 @@ const ClineRulesToggleModal: React.FC = () => {
 								)}
 
 								{/* Built-in Skills Section (shipped with the extension) */}
-								{bundledSkills.length > 0 && (
+								{shownBundledSkills.length > 0 && (
 									<div className="mb-3">
 										<SkillGroupHeader
 											count={bundledSkills.length}
 											enabledCount={bundledSkills.filter((skill) => skill.enabled).length}
+											matchCount={filteringSkills ? shownBundledSkills.length : undefined}
 											onToggle={() => setOpenSkillGroup(openSkillGroup === "bundled" ? null : "bundled")}
-											open={openSkillGroup === "bundled"}
+											open={bundledOpen}
 											title="Built-in Skills"
 										/>
-										<div className={openSkillGroup === "bundled" ? "flex flex-col gap-0" : "hidden"}>
-											{[...bundledSkills]
+										<div className={bundledOpen ? "flex flex-col gap-0" : "hidden"}>
+											{[...shownBundledSkills]
 												.sort((a, b) => a.name.localeCompare(b.name))
 												.map((skill) => (
 													<RuleRow
@@ -848,53 +875,55 @@ const ClineRulesToggleModal: React.FC = () => {
 								)}
 
 								{/* Global Skills Section */}
-								<div className="mb-3">
-									<SkillGroupHeader
-										count={globalSkills.filter((s) => !s.path.startsWith("remote:")).length}
-										enabledCount={
-											globalSkills.filter((s) => !s.path.startsWith("remote:") && s.enabled).length
-										}
-										onToggle={() => setOpenSkillGroup(openSkillGroup === "global" ? null : "global")}
-										open={openSkillGroup === "global"}
-										title="Global Skills"
-									/>
-									<div className={openSkillGroup === "global" ? "flex flex-col gap-0" : "hidden"}>
-										{globalSkills
-											.filter((s) => !s.path.startsWith("remote:"))
-											.sort((a, b) => a.name.localeCompare(b.name))
-											.map((skill) => (
-												<RuleRow
-													enabled={skill.enabled}
-													isGlobal={true}
-													key={skill.path}
-													rulePath={skill.path}
-													ruleType="skill"
-													toggleRule={(_path, enabled) => toggleSkill(true, skill.path, enabled)}
-												/>
-											))}
-										<NewRuleRow isGlobal={true} ruleType="skill" />
+								{!filteringSkills || shownGlobalSkills.length > 0 ? (
+									<div className="mb-3">
+										<SkillGroupHeader
+											count={ownGlobalSkills.length}
+											enabledCount={ownGlobalSkills.filter((s) => s.enabled).length}
+											matchCount={filteringSkills ? shownGlobalSkills.length : undefined}
+											onToggle={() => setOpenSkillGroup(openSkillGroup === "global" ? null : "global")}
+											open={globalOpen}
+											title="Global Skills"
+										/>
+										<div className={globalOpen ? "flex flex-col gap-0" : "hidden"}>
+											{[...shownGlobalSkills]
+												.sort((a, b) => a.name.localeCompare(b.name))
+												.map((skill) => (
+													<RuleRow
+														enabled={skill.enabled}
+														isGlobal={true}
+														key={skill.path}
+														rulePath={skill.path}
+														ruleType="skill"
+														toggleRule={(_path, enabled) => toggleSkill(true, skill.path, enabled)}
+													/>
+												))}
+											{filteringSkills ? null : <NewRuleRow isGlobal={true} ruleType="skill" />}
+										</div>
 									</div>
-								</div>
+								) : null}
 
 								{/* Workspace Skills Section */}
-								<div className="-mb-2.5">
-									<div className="text-sm font-normal mb-2">Workspace Skills</div>
-									<div className="flex flex-col gap-0">
-										{localSkills
-											.sort((a, b) => a.name.localeCompare(b.name))
-											.map((skill) => (
-												<RuleRow
-													enabled={skill.enabled}
-													isGlobal={false}
-													key={skill.path}
-													rulePath={skill.path}
-													ruleType="skill"
-													toggleRule={(path, enabled) => toggleSkill(false, path, enabled)}
-												/>
-											))}
-										<NewRuleRow isGlobal={false} ruleType="skill" />
+								{!filteringSkills || shownLocalSkills.length > 0 ? (
+									<div className="-mb-2.5">
+										<div className="text-sm font-normal mb-2">Workspace Skills</div>
+										<div className="flex flex-col gap-0">
+											{[...shownLocalSkills]
+												.sort((a, b) => a.name.localeCompare(b.name))
+												.map((skill) => (
+													<RuleRow
+														enabled={skill.enabled}
+														isGlobal={false}
+														key={skill.path}
+														rulePath={skill.path}
+														ruleType="skill"
+														toggleRule={(path, enabled) => toggleSkill(false, path, enabled)}
+													/>
+												))}
+											{filteringSkills ? null : <NewRuleRow isGlobal={false} ruleType="skill" />}
+										</div>
 									</div>
-								</div>
+								) : null}
 							</>
 						) : null}
 					</div>
@@ -915,12 +944,15 @@ export const SkillGroupHeader = ({
 	enabledCount,
 	open,
 	onToggle,
+	matchCount,
 }: {
 	title: string
 	count: number
 	enabledCount: number
 	open: boolean
 	onToggle: () => void
+	/** While the list is filtered, how many of its skills match. */
+	matchCount?: number
 }) => (
 	<button
 		aria-expanded={open}
@@ -930,9 +962,44 @@ export const SkillGroupHeader = ({
 		<span className={`codicon codicon-chevron-${open ? "down" : "right"}`} />
 		<span>{title}</span>
 		<span className="text-xs text-(--vscode-descriptionForeground)">
-			{count === 0 ? "none" : `${count}, ${enabledCount} on`}
+			{count === 0 ? "none" : matchCount !== undefined ? `${matchCount} of ${count} match` : `${count}, ${enabledCount} on`}
 		</span>
 	</button>
+)
+
+/** The Skills tab's quick filter: a text field with a clear button. */
+export const SkillFilterField = ({ value, onChange }: { value: string; onChange: (value: string) => void }) => (
+	<VSCodeTextField
+		aria-label="Filter skills"
+		className="w-full mb-3"
+		data-testid="skill-filter"
+		onInput={(event) => onChange((event.target as HTMLInputElement).value)}
+		onKeyDown={(event: { key: string }) => {
+			if (event.key === "Escape" && value !== "") {
+				onChange("")
+			}
+		}}
+		placeholder="Filter skills by name or description"
+		value={value}>
+		<span className="codicon codicon-filter" slot="start" />
+		{value ? (
+			<button
+				aria-label="Clear the filter"
+				className="input-icon-button codicon codicon-close"
+				onClick={() => onChange("")}
+				slot="end"
+				style={{
+					background: "none",
+					border: "none",
+					color: "inherit",
+					padding: 0,
+					display: "flex",
+					alignItems: "center",
+				}}
+				type="button"
+			/>
+		) : null}
+	</VSCodeTextField>
 )
 
 const StyledTabButton = styled.button<{ $isActive: boolean }>`
