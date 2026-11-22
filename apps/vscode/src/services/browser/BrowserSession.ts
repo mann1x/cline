@@ -10,6 +10,7 @@ import {
 	LOCAL_BROWSER_ORDER,
 	type LocalBrowserId,
 	puppeteerLaunchOptions,
+	startBrowserProcess,
 } from "@cline/core"
 import { Controller } from "@core/controller"
 import { BrowserActionResult } from "@shared/ExtensionMessage"
@@ -311,17 +312,25 @@ export class BrowserSession {
 				// Nothing on the machine: the Chromium downloaded on first use.
 				return [(await ensureChromiumExists()).executablePath]
 			},
-			launch: (path) =>
-				launch(
-					puppeteerLaunchOptions(engineOf(identifyBrowser(path)), {
-						executablePath: path,
-						chromiumArgs: [
-							"--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-							...userArgs,
-						],
-						defaultViewport: browserSettings.viewport,
-					}) as LaunchOptions,
-				),
+			// Through `startBrowserProcess`: a browser that restarts itself on
+			// start (a staged update) is attached to instead of reported failed.
+			launch: async (path) =>
+				(
+					await startBrowserProcess<Browser>(
+						{
+							launch: (options) => launch(options as LaunchOptions),
+							connect: (options) => connect(options),
+						},
+						puppeteerLaunchOptions(engineOf(identifyBrowser(path)), {
+							executablePath: path,
+							chromiumArgs: [
+								"--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+								...userArgs,
+							],
+							defaultViewport: browserSettings.viewport,
+						}),
+					)
+				).browser,
 			warn: (message) => {
 				Logger.warn(`[browser] ${message}`)
 				void HostProvider.window.showMessage({ type: ShowMessageType.WARNING, message: `Browser tool: ${message}` })

@@ -8,6 +8,7 @@ import {
 	launchWithFallback,
 	stagedUpdatePath,
 } from "./browser-launch";
+import { startBrowserProcess } from "./browser-process";
 
 describe("where an update waits and which browser a path is", () => {
 	it("stages the update beside the executable, Windows style", () => {
@@ -96,6 +97,42 @@ describe("launchWithFallback", () => {
 		expect(warnings[0]).toContain("Chrome installed an update");
 	});
 
+	it("uses a browser that restarted itself on start, and says why", async () => {
+		// Edge on pandorum: an update staged and held by Edge running in the
+		// background; every start hands over to a new process and exits.
+		await writeFile(path.join(dir, "new_chrome.exe"), "new chrome");
+		const adoptedBrowser = { close: async () => {} };
+		const result = await launchWithFallback({
+			...base(),
+			launch: async (exe) =>
+				(
+					await startBrowserProcess(
+						{
+							launch: async (options: Record<string, unknown>) => {
+								const profile = String(options.userDataDir);
+								setTimeout(() => {
+									void writeFile(
+										path.join(profile, "DevToolsActivePort"),
+										"40123\n/devtools/browser/x",
+									);
+								}, 50);
+								throw new Error(`Failed to launch the browser process! ${exe}`);
+							},
+							connect: async () => adoptedBrowser,
+						},
+						{ executablePath: exe },
+					)
+				).browser,
+		});
+		expect(result.browser).toBe(adoptedBrowser);
+		expect(result.executablePath).toBe(chrome);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain(
+			"Chrome has an update waiting to be installed, so it restarted itself",
+		);
+		expect(warnings[0]).toContain("The tool is using the restarted browser.");
+	});
+
 	it("treats a swapped executable as an update even without a staged file", async () => {
 		const tried: string[] = [];
 		await launchWithFallback({
@@ -127,7 +164,9 @@ describe("launchWithFallback", () => {
 		});
 		expect(result.executablePath).toBe(edge);
 		expect(warnings[0]).toContain("update waiting to be installed");
-		expect(warnings[0]).toContain("Open Chrome once");
+		expect(warnings[0]).toContain(
+			"every Chrome window is closed, including Chrome running in the background",
+		);
 		expect(warnings[1]).toContain("using Microsoft Edge instead");
 	});
 
@@ -211,6 +250,23 @@ describe("launchWithFallback", () => {
 			}),
 		).rejects.toThrow(/Brave: nope/);
 		expect(tried).toHaveLength(1);
+	});
+
+	it("passes a named browser's own error on when it cannot be found", async () => {
+		await expect(
+			launchWithFallback({
+				...base(),
+				resolvePrimary: async () => {
+					throw new Error(
+						"Brave is not installed here. Installed: chrome, edge.",
+					);
+				},
+				resolveFallbacks: async () => [],
+				launch: async () => "never",
+			}),
+		).rejects.toThrow(
+			/^Brave is not installed here\. Installed: chrome, edge\.$/,
+		);
 	});
 
 	it("does not try Edge twice when Edge was the first choice", async () => {

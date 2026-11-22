@@ -16,6 +16,7 @@ import {
 	puppeteerLaunchOptions,
 } from "./browser-catalog";
 import { launchWithFallback } from "./browser-launch";
+import { startBrowserProcess } from "./browser-process";
 
 /**
  * A `browser` driver for a host without VS Code: the seven methods the tool
@@ -102,6 +103,7 @@ export class MissingChromeError extends Error {
 /** Only the parts of puppeteer used here, so it can be typed without it. */
 interface PuppeteerLike {
 	launch: (options: Record<string, unknown>) => Promise<PuppeteerBrowser>;
+	connect: (options: Record<string, unknown>) => Promise<PuppeteerBrowser>;
 }
 interface PuppeteerBrowser {
 	newPage: () => Promise<PuppeteerPage>;
@@ -306,7 +308,9 @@ export function createChromeBrowserDriver(
 				if (options?.headless === false) {
 					launchOptions.headless = false;
 				}
-				return puppeteer.launch(launchOptions);
+				return startBrowserProcess(puppeteer, launchOptions).then(
+					(started) => started.browser,
+				);
 			},
 			warn: (message) => options?.warn?.(message),
 		});

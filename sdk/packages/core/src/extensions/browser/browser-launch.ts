@@ -1,6 +1,7 @@
 import { access, stat } from "node:fs/promises";
 import * as path from "node:path";
 import { identifyBrowser, LOCAL_BROWSER_NAMES } from "./browser-catalog";
+import { wasAdopted } from "./browser-process";
 
 async function fileExistsAtPath(file: string): Promise<boolean> {
 	try {
@@ -126,6 +127,25 @@ export interface LaunchOutcome<T> {
 	executablePath: string;
 }
 
+/** How a waiting update gets installed: every window closed, background included. */
+function finishUpdateHint(label: string): string {
+	return `The update installs once every ${label} window is closed, including ${label} running in the background, and ${label} is started again.`;
+}
+
+/**
+ * What to tell the person when the browser restarted itself on start and the
+ * tool attached to the restarted one.
+ */
+function adoptionMessage(label: string, evidence: UpdateEvidence): string {
+	if (evidence.stagedAfter) {
+		return `${label} has an update waiting to be installed, so it restarted itself when the browser tool started it. The tool is using the restarted browser. ${finishUpdateHint(label)}`;
+	}
+	if ((evidence.stagedBefore && !evidence.stagedAfter) || evidence.swapped) {
+		return `${label} installed an update when the browser tool started it, and restarted itself. The tool is using the restarted browser.`;
+	}
+	return `${label} restarted itself when the browser tool started it. The tool is using the restarted browser.`;
+}
+
 function messageOf(error: unknown): string {
 	const text = error instanceof Error ? error.message : String(error);
 	// Puppeteer appends a troubleshooting link and blank lines.
@@ -134,7 +154,9 @@ function messageOf(error: unknown): string {
 
 /**
  * Start the chosen browser; when it does not start, start it again if an
- * update was the cause, then fall back to Edge. Throws when nothing started,
+ * update was the cause, then fall back to the other installed browsers. A
+ * launch that attached to a browser which restarted itself (see
+ * `startBrowserProcess`) is a start, and the person is told why. Throws when nothing started,
  * with every attempt named, so the caller can try a browser that is not a
  * local process at all.
  */
@@ -144,9 +166,11 @@ export async function launchWithFallback<T>(
 	const isWindows = options.isWindows ?? process.platform === "win32";
 	const failures: string[] = [];
 	let primary: LaunchCandidate | undefined;
+	let unresolved: unknown;
 	try {
 		primary = await options.resolvePrimary();
 	} catch (error) {
+		unresolved = error;
 		failures.push(`no browser to start: ${messageOf(error)}`);
 	}
 
@@ -154,10 +178,16 @@ export async function launchWithFallback<T>(
 		const label = browserLabel(primary.executablePath);
 		const before = await readUpdateState(primary.executablePath, isWindows);
 		try {
-			return {
-				browser: await options.launch(primary.executablePath),
-				executablePath: primary.executablePath,
-			};
+			const browser = await options.launch(primary.executablePath);
+			if (wasAdopted(browser)) {
+				options.warn(
+					adoptionMessage(
+						label,
+						await updateEvidence(primary.executablePath, before, isWindows),
+					),
+				);
+			}
+			return { browser, executablePath: primary.executablePath };
 		} catch (error) {
 			const evidence = await updateEvidence(
 				primary.executablePath,
@@ -183,7 +213,7 @@ export async function launchWithFallback<T>(
 				}
 			} else if (evidence.stagedAfter) {
 				options.warn(
-					`${label} has an update waiting to be installed, and it did not start for the browser tool. Open ${label} once to finish the update.`,
+					`${label} has an update waiting to be installed, and it did not start for the browser tool. ${finishUpdateHint(label)}`,
 				);
 				failures.push(`${label} (update waiting): ${messageOf(error)}`);
 			} else {
@@ -217,6 +247,11 @@ export async function launchWithFallback<T>(
 		}
 	}
 
+	// Nothing was started at all and nothing else was tried (a browser named
+	// that is not installed): its own message says it best.
+	if (unresolved !== undefined && failures.length === 1) {
+		throw unresolved;
+	}
 	throw new BrowserLaunchError(failures);
 }
 

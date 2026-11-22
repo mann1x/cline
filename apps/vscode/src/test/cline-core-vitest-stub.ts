@@ -21,6 +21,7 @@ export {
 	stagedUpdatePath,
 	updateEvidence,
 } from "../../../../sdk/packages/core/src/extensions/browser/browser-launch"
+export { startBrowserProcess, wasAdopted } from "../../../../sdk/packages/core/src/extensions/browser/browser-process"
 export {
 	installOcrLanguages,
 	parseOcrLanguages,

@@ -1092,6 +1092,13 @@ export {
 	updateEvidence,
 } from "./extensions/browser/browser-launch";
 export {
+	type PuppeteerStarter,
+	parseDevToolsActivePort,
+	type StartedBrowser,
+	startBrowserProcess,
+	wasAdopted,
+} from "./extensions/browser/browser-process";
+export {
 	type ChromeBrowserDriverOptions,
 	chromeCandidates,
 	createChromeBrowserDriver,
