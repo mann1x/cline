@@ -849,4 +849,5 @@ export async function loginOpenAICodex(): Promise<OAuthCredentials> {
 	return {}
 }
 
+export { normalizeRuntimeCommandName } from "../../../../sdk/packages/core/src/extensions/config/runtime-commands"
 export { resolveMessageDisplayRole } from "../../../../sdk/packages/core/src/session/user-run-messages"

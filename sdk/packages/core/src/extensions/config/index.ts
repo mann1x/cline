@@ -58,6 +58,7 @@ export type {
 	ResolveRuntimeSlashCommandOptions,
 	RuntimeCommandKind,
 } from "./runtime-commands";
+export { normalizeRuntimeCommandName } from "./runtime-commands";
 export {
 	getShippedToolCallSignatures,
 	HOST_TOOL_INPUT_SCHEMAS,

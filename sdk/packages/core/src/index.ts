@@ -320,6 +320,7 @@ export {
 	isBundledSkillPath,
 	loadPromptTemplates,
 	loadPromptTemplatesFromDirectory,
+	normalizeRuntimeCommandName,
 	PROMPT_TEMPLATES_DIRECTORY_NAME,
 	type PromptTemplateDirectory,
 	type PromptTemplateFileWarnings,

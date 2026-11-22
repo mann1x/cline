@@ -1,5 +1,7 @@
+// By package name: the extension's typecheck admits nothing outside
+// apps/vscode, and vitest maps @cline/core to the source-backed stub.
+import { normalizeRuntimeCommandName } from "@cline/core"
 import { describe, expect, it } from "vitest"
-import { normalizeRuntimeCommandName } from "../../../../sdk/packages/core/src/extensions/config/runtime-commands"
 import { skillCommandName, VSCODE_ONLY_COMMANDS } from "./slashCommands"
 
 describe("skillCommandName", () => {
