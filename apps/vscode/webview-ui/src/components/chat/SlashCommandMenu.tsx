@@ -16,8 +16,15 @@ interface SlashCommandMenuProps {
 	remoteWorkflowToggles?: Record<string, boolean>
 	remoteWorkflows?: any[]
 	mcpServers?: McpServer[]
-	/** Shown instead of the commands: the cursor is on the name `/delegate` takes. */
+	/**
+	 * Shown instead of the commands: the agents when the cursor is on the name
+	 * `/delegate` takes, or the skills matching what follows `/skill`.
+	 */
 	agents?: SlashCommand[]
+	/** The skills offered among the commands for a plain `/`. */
+	skills?: SlashCommand[]
+	/** What an empty list says. */
+	emptyText?: string
 }
 
 const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
@@ -32,6 +39,8 @@ const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
 	remoteWorkflows,
 	mcpServers = [],
 	agents,
+	skills = [],
+	emptyText = "No matching commands found",
 }) => {
 	const menuRef = useRef<HTMLDivElement>(null)
 
@@ -45,11 +54,13 @@ const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
 			remoteWorkflowToggles,
 			remoteWorkflows,
 			mcpServers,
+			skills,
 		)
 	const defaultCommands = filteredCommands.filter((cmd) => cmd.section === "default" || !cmd.section)
 	const workflowCommands = filteredCommands.filter((cmd) => cmd.section === "custom")
 	const mcpCommands = filteredCommands.filter((cmd) => cmd.section === "mcp")
 	const agentCommands = filteredCommands.filter((cmd) => cmd.section === "agent")
+	const skillCommands = filteredCommands.filter((cmd) => cmd.section === "skill")
 
 	// Screen reader announcements
 	const getCommandLabel = useCallback((command: SlashCommand) => {
@@ -155,10 +166,16 @@ const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
 						{renderCommandSection(workflowCommands, "Workflow Commands", defaultCommands.length, false)}
 						{renderCommandSection(mcpCommands, "MCP Prompts", defaultCommands.length + workflowCommands.length, true)}
 						{renderCommandSection(agentCommands, "Agents", 0, true)}
+						{renderCommandSection(
+							skillCommands,
+							"Skills",
+							defaultCommands.length + workflowCommands.length + mcpCommands.length,
+							true,
+						)}
 					</>
 				) : (
 					<div aria-selected="false" className="py-2 px-3 cursor-default flex flex-col" role="option">
-						<div className="text-[0.85em] text-(--vscode-descriptionForeground)">No matching commands found</div>
+						<div className="text-[0.85em] text-(--vscode-descriptionForeground)">{emptyText}</div>
 					</div>
 				)}
 			</div>

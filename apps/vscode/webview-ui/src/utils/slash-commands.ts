@@ -1,8 +1,15 @@
 import type { McpServer } from "@shared/mcp"
 import { PLATFORM_CONFIG, PlatformType } from "@/config/platform.config"
-import { BASE_SLASH_COMMANDS, type SlashCommand, VSCODE_ONLY_COMMANDS } from "../../../src/shared/slashCommands.ts"
+import {
+	BASE_SLASH_COMMANDS,
+	type SlashCommand,
+	skillCommandName,
+	VSCODE_ONLY_COMMANDS,
+} from "../../../src/shared/slashCommands.ts"
+import { matchesFilter } from "./text-filter"
 
 export type { SlashCommand }
+export { skillCommandName }
 
 const DEFAULT_SLASH_COMMANDS: SlashCommand[] =
 	PLATFORM_CONFIG.type === PlatformType.VSCODE ? [...BASE_SLASH_COMMANDS, ...VSCODE_ONLY_COMMANDS] : BASE_SLASH_COMMANDS
@@ -181,6 +188,7 @@ export function getMatchingSlashCommands(
 	remoteWorkflowToggles?: Record<string, boolean>,
 	remoteWorkflows?: any[],
 	mcpServers: McpServer[] = [],
+	skills: readonly SlashCommand[] = [],
 ): SlashCommand[] {
 	const workflowCommands = getWorkflowCommands(
 		localWorkflowToggles,
@@ -192,11 +200,60 @@ export function getMatchingSlashCommands(
 	const allCommands = [...DEFAULT_SLASH_COMMANDS, ...workflowCommands, ...mcpPromptCommands]
 
 	if (!query) {
-		return allCommands
+		return [...allCommands, ...skills]
 	}
 
-	// filter commands that start with the query (case insensitive)
-	return allCommands.filter((cmd) => cmd.name.toLowerCase().startsWith(query.toLowerCase()))
+	// filter commands that start with the query (case insensitive); a skill
+	// matches anywhere in its name, so `/deploy` finds `docker-compose-deploy`.
+	const wanted = query.toLowerCase()
+	return [
+		...allCommands.filter((cmd) => cmd.name.toLowerCase().startsWith(wanted)),
+		...skills.filter((skill) => skill.name.includes(wanted)),
+	]
+}
+
+/**
+ * The enabled skills as menu entries, one per command name (the first of a
+ * name wins, as in the runtime), in name order. A skill switched off on the
+ * Skills tab is left out: the runtime does not offer it either.
+ */
+export function getSkillCommands(
+	skills: ReadonlyArray<{ name: string; description?: string; enabled?: boolean }>,
+): SlashCommand[] {
+	const byName = new Map<string, SlashCommand>()
+	for (const skill of skills) {
+		const name = skillCommandName(skill.name)
+		if (skill.enabled === false || !name || byName.has(name)) {
+			continue
+		}
+		byName.set(name, { name, description: skill.description, section: "skill" })
+	}
+	return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
+ * The filter typed after `/skill`, when the message starts with it and the
+ * cursor is in what follows; undefined anywhere else. Several words are
+ * allowed, unlike any other slash command.
+ */
+export function getSkillQuery(text: string, cursorPosition: number): string | undefined {
+	return text.slice(0, cursorPosition).match(/^\/skill\s+([^\n]*)$/)?.[1]
+}
+
+/** The skills with every word of the filter in their name or description. */
+export function getMatchingSkills(query: string, skills: readonly SlashCommand[]): SlashCommand[] {
+	return skills.filter((skill) => matchesFilter(query, skill.name, skill.description))
+}
+
+/** Replace `/skill <filter>` with the skill's command, leaving the cursor where the request goes. */
+export function insertSkillCommand(
+	text: string,
+	skillName: string,
+	cursorPosition: number,
+): { newValue: string; newCursorPosition: number } {
+	const rest = text.slice(cursorPosition).replace(/^[^\S\n]+/, "")
+	const command = `/${skillName} `
+	return { newValue: `${command}${rest}`, newCursorPosition: command.length }
 }
 
 /**
@@ -267,6 +324,7 @@ export function validateSlashCommand(
 	remoteWorkflowToggles?: Record<string, boolean>,
 	remoteWorkflows?: any[],
 	mcpServers: McpServer[] = [],
+	skillNames: readonly string[] = [],
 ): "full" | "partial" | null {
 	if (!command) {
 		return null
@@ -279,7 +337,12 @@ export function validateSlashCommand(
 		remoteWorkflows,
 	)
 	const mcpPromptCommands = getMcpPromptCommands(mcpServers)
-	const allCommands = [...DEFAULT_SLASH_COMMANDS, ...workflowCommands, ...mcpPromptCommands]
+	const allCommands = [
+		...DEFAULT_SLASH_COMMANDS,
+		...workflowCommands,
+		...mcpPromptCommands,
+		...skillNames.map((name) => ({ name })),
+	]
 
 	// case insensitive matching
 	const exactMatch = allCommands.some((cmd) => cmd.name.toLowerCase() === command.toLowerCase())

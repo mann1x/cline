@@ -38,8 +38,12 @@ import { isSafari } from "@/utils/platformUtils"
 import {
 	getDelegateAgentQuery,
 	getMatchingDelegateAgents,
+	getMatchingSkills,
 	getMatchingSlashCommands,
+	getSkillCommands,
+	getSkillQuery,
 	insertDelegateAgent,
+	insertSkillCommand,
 	insertSlashCommand,
 	removeSlashCommand,
 	shouldShowSlashCommandsMenu,
@@ -251,7 +255,12 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		const [selectedSlashCommandsIndex, setSelectedSlashCommandsIndex] = useState(0)
 		const [slashCommandsQuery, setSlashCommandsQuery] = useState("")
 		const [delegateAgents, setDelegateAgents] = useState<{ name: string; description: string }[]>([])
+		// Also dismisses the `/skill` picker: both are closed by Escape or a
+		// click away, and reopen on the next keystroke.
 		const [delegateMenuDismissed, setDelegateMenuDismissed] = useState(false)
+		// The enabled skills as commands: offered by the `/` menu and the
+		// `/skill` picker, and known to the highlighter.
+		const [skillCommands, setSkillCommands] = useState<SlashCommand[]>([])
 		const slashCommandsMenuContainerRef = useRef<HTMLDivElement>(null)
 
 		const [thumbnailsHeight, setThumbnailsHeight] = useState(0)
@@ -365,6 +374,44 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			[delegateAgentQuery, delegateAgents],
 		)
 
+		// `/skill <words>`: the skills whose name or description has every word.
+		const skillQuery = delegateMenuDismissed ? undefined : getSkillQuery(inputValue, cursorPosition)
+		const choosingSkill = skillQuery !== undefined
+		const skillItems = useMemo(
+			() => (skillQuery === undefined ? [] : getMatchingSkills(skillQuery, skillCommands)),
+			[skillQuery, skillCommands],
+		)
+
+		const loadSkills = useCallback(() => {
+			FileServiceClient.refreshSkills(EmptyRequest.create({}))
+				.then((response) =>
+					setSkillCommands(
+						getSkillCommands([
+							...(response.localSkills ?? []),
+							...(response.globalSkills ?? []),
+							...(response.bundledSkills ?? []),
+						]),
+					),
+				)
+				.catch((error) => console.error("Failed to list skills:", error))
+		}, [])
+		// Once for the highlighter, and again each time a menu opens: a skill
+		// can be added or switched off at any point.
+		useEffect(() => {
+			loadSkills()
+		}, [loadSkills])
+		useEffect(() => {
+			if (choosingSkill || showSlashCommandsMenu) {
+				loadSkills()
+			}
+		}, [choosingSkill, showSlashCommandsMenu, loadSkills])
+		// A new filter starts the highlight at the top.
+		useEffect(() => {
+			if (skillQuery !== undefined) {
+				setSelectedSlashCommandsIndex(0)
+			}
+		}, [skillQuery])
+
 		useEffect(() => {
 			const handleClickOutsideSlashMenu = (event: MouseEvent) => {
 				if (
@@ -376,14 +423,14 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				}
 			}
 
-			if (showSlashCommandsMenu || delegateAgentItems.length > 0) {
+			if (showSlashCommandsMenu || delegateAgentItems.length > 0 || choosingSkill) {
 				document.addEventListener("mousedown", handleClickOutsideSlashMenu)
 			}
 
 			return () => {
 				document.removeEventListener("mousedown", handleClickOutsideSlashMenu)
 			}
-		}, [showSlashCommandsMenu, delegateAgentItems.length])
+		}, [showSlashCommandsMenu, delegateAgentItems.length, choosingSkill])
 
 		const handleMentionSelect = useCallback(
 			(type: ContextMenuOptionType, value?: string) => {
@@ -502,6 +549,23 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			[setInputValue, inputValue, cursorPosition],
 		)
 
+		const handleSkillSelect = useCallback(
+			(skill: SlashCommand) => {
+				const { newValue, newCursorPosition } = insertSkillCommand(inputValue, skill.name, cursorPosition)
+				setInputValue(newValue)
+				setCursorPosition(newCursorPosition)
+				setIntendedCursorPosition(newCursorPosition)
+				setSelectedSlashCommandsIndex(0)
+				setTimeout(() => {
+					if (textAreaRef.current) {
+						textAreaRef.current.blur()
+						textAreaRef.current.focus()
+					}
+				}, 0)
+			},
+			[setInputValue, inputValue, cursorPosition],
+		)
+
 		const handleSlashCommandsSelect = useCallback(
 			(command: SlashCommand) => {
 				setShowSlashCommandsMenu(false)
@@ -559,6 +623,33 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					return
 				}
 
+				if (choosingSkill) {
+					if (event.key === "Escape") {
+						setDelegateMenuDismissed(true)
+						return
+					}
+
+					if ((event.key === "ArrowUp" || event.key === "ArrowDown") && skillItems.length > 0) {
+						event.preventDefault()
+						const direction = event.key === "ArrowUp" ? -1 : 1
+						setSelectedSlashCommandsIndex(
+							(prevIndex) => (prevIndex + direction + skillItems.length) % skillItems.length,
+						)
+						return
+					}
+
+					// Enter picks; with nothing to pick it does nothing, rather than
+					// sending a `/skill ...` no skill answers to.
+					if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
+						event.preventDefault()
+						const skill = skillItems[selectedSlashCommandsIndex] ?? skillItems[0]
+						if (skill) {
+							handleSkillSelect(skill)
+						}
+						return
+					}
+				}
+
 				if (delegateAgentItems.length > 0) {
 					if (event.key === "Escape") {
 						setDelegateMenuDismissed(true)
@@ -602,6 +693,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								remoteWorkflowToggles,
 								remoteConfigSettings?.remoteGlobalWorkflows,
 								mcpServers,
+								skillCommands,
 							)
 
 							if (allCommands.length === 0) {
@@ -627,6 +719,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							remoteWorkflowToggles,
 							remoteConfigSettings?.remoteGlobalWorkflows,
 							mcpServers,
+							skillCommands,
 						)
 						if (commands.length > 0) {
 							handleSlashCommandsSelect(commands[selectedSlashCommandsIndex])
@@ -796,6 +889,10 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				handleSlashCommandsSelect,
 				delegateAgentItems,
 				handleDelegateAgentSelect,
+				choosingSkill,
+				skillItems,
+				skillCommands,
+				handleSkillSelect,
 				sendingDisabled,
 			],
 		)
@@ -1110,6 +1207,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					globalWorkflowToggles,
 					remoteWorkflowToggles,
 					remoteConfigSettings?.remoteGlobalWorkflows,
+					[],
+					skillCommands.map((skill) => skill.name),
 				)
 
 				if (isValidCommand) {
@@ -1123,7 +1222,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			highlightLayerRef.current.innerHTML = processedText
 			highlightLayerRef.current.scrollTop = textAreaRef.current.scrollTop
 			highlightLayerRef.current.scrollLeft = textAreaRef.current.scrollLeft
-		}, [localWorkflowToggles, globalWorkflowToggles, remoteWorkflowToggles, remoteConfigSettings])
+		}, [localWorkflowToggles, globalWorkflowToggles, remoteWorkflowToggles, remoteConfigSettings, skillCommands])
 
 		useLayoutEffect(() => {
 			updateHighlights()
@@ -1545,20 +1644,36 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							<span className="text-error font-bold text-xs">Files other than images are currently disabled</span>
 						</div>
 					)}
-					{(showSlashCommandsMenu || delegateAgentItems.length > 0) && (
+					{(showSlashCommandsMenu || delegateAgentItems.length > 0 || choosingSkill) && (
 						<div ref={slashCommandsMenuContainerRef}>
 							<SlashCommandMenu
-								agents={delegateAgentItems.length > 0 ? delegateAgentItems : undefined}
+								agents={
+									delegateAgentItems.length > 0 ? delegateAgentItems : choosingSkill ? skillItems : undefined
+								}
+								emptyText={
+									choosingSkill
+										? skillCommands.length === 0
+											? "No skill is enabled"
+											: `No skill matches “${(skillQuery ?? "").trim()}”`
+										: undefined
+								}
 								globalWorkflowToggles={globalWorkflowToggles}
 								localWorkflowToggles={localWorkflowToggles}
 								mcpServers={mcpServers}
 								onMouseDown={handleMenuMouseDown}
-								onSelect={delegateAgentItems.length > 0 ? handleDelegateAgentSelect : handleSlashCommandsSelect}
+								onSelect={
+									delegateAgentItems.length > 0
+										? handleDelegateAgentSelect
+										: choosingSkill
+											? handleSkillSelect
+											: handleSlashCommandsSelect
+								}
 								query={slashCommandsQuery}
 								remoteWorkflows={remoteConfigSettings?.remoteGlobalWorkflows}
 								remoteWorkflowToggles={remoteWorkflowToggles}
 								selectedIndex={selectedSlashCommandsIndex}
 								setSelectedIndex={setSelectedSlashCommandsIndex}
+								skills={skillCommands}
 							/>
 						</div>
 					)}

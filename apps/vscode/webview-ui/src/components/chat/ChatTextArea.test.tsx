@@ -41,6 +41,15 @@ vi.mock("@/services/grpc-client", () => ({
 		getRelativePaths: vi.fn(async () => ({ paths: [] })),
 		openImage: vi.fn(async () => ({})),
 		openFile: vi.fn(async () => ({})),
+		refreshSkills: vi.fn(async () => ({
+			globalSkills: [
+				{ name: "docker-compose-deploy", description: "Deploy a stack with docker compose", path: "/g/a", enabled: true },
+				{ name: "QA Smoke Tests", description: "Run the smoke suite against a build", path: "/g/b", enabled: true },
+				{ name: "tdd-coverage", description: "Measure test coverage", path: "/g/c", enabled: false },
+			],
+			localSkills: [],
+			bundledSkills: [],
+		})),
 	},
 	SlashServiceClient: {
 		listAgents: vi.fn(async () => ({
@@ -196,5 +205,65 @@ describe("ChatTextArea /delegate agent names", () => {
 		expect(await screen.findByText("docs")).toBeInTheDocument()
 		fireEvent.keyDown(textarea, { key: "Escape" })
 		expect(screen.queryByText("docs")).not.toBeInTheDocument()
+	})
+})
+
+// Chris, 2026-11-22: a way to find a skill from the chat box, as /delegate
+// finds an agent.
+describe("ChatTextArea skills", () => {
+	function renderWith(initial: string) {
+		const setInputValue = vi.fn()
+		const onSend = vi.fn()
+		render(
+			<ChatTextArea
+				activeQuote={null}
+				inputValue={initial}
+				onSelectFilesAndImages={vi.fn()}
+				onSend={onSend}
+				placeholderText="Type a message"
+				selectedFiles={[]}
+				selectedImages={[]}
+				sendingDisabled={false}
+				setInputValue={setInputValue}
+				setSelectedFiles={vi.fn()}
+				setSelectedImages={vi.fn()}
+				shouldDisableFilesAndImages={false}
+			/>,
+		)
+		const textarea = screen.getByPlaceholderText("Type a message") as HTMLTextAreaElement
+		fireEvent.change(textarea, { target: { value: initial, selectionStart: initial.length } })
+		return { textarea, setInputValue, onSend }
+	}
+
+	it("/skill offers the skills whose name or description has every word, and fills in the one chosen", async () => {
+		const { textarea, setInputValue } = renderWith("/skill suite build")
+
+		expect(await screen.findByText("/qa-smoke-tests")).toBeInTheDocument()
+		expect(screen.queryByText("/docker-compose-deploy")).not.toBeInTheDocument()
+
+		fireEvent.keyDown(textarea, { key: "Enter" })
+		expect(setInputValue).toHaveBeenLastCalledWith("/qa-smoke-tests ")
+	})
+
+	it("/skill leaves out a skill that is switched off", async () => {
+		renderWith("/skill ")
+		expect(await screen.findByText("/docker-compose-deploy")).toBeInTheDocument()
+		expect(screen.queryByText("/tdd-coverage")).not.toBeInTheDocument()
+	})
+
+	it("/skill says so when nothing matches, and Enter does not send", async () => {
+		const { textarea, onSend } = renderWith("/skill kubernetes")
+		expect(await screen.findByText("No skill matches “kubernetes”")).toBeInTheDocument()
+		fireEvent.keyDown(textarea, { key: "Enter" })
+		expect(onSend).not.toHaveBeenCalled()
+	})
+
+	it("the / menu lists skills, matched anywhere in the name", async () => {
+		// Opened by a change, so it starts empty: a value set to what it already
+		// holds fires none.
+		const { textarea } = renderWith("")
+		fireEvent.change(textarea, { target: { value: "/deploy", selectionStart: 7 } })
+		expect(await screen.findByText("/docker-compose-deploy")).toBeInTheDocument()
+		expect(screen.getByText("Skills")).toBeInTheDocument()
 	})
 })

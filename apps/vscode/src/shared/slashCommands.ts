@@ -1,7 +1,7 @@
 export interface SlashCommand {
 	name: string
 	description?: string
-	section?: "default" | "custom" | "mcp" | "agent"
+	section?: "default" | "custom" | "mcp" | "agent" | "skill"
 	cliCompatible?: boolean
 }
 
@@ -52,4 +52,32 @@ export const BASE_SLASH_COMMANDS: SlashCommand[] = [
 ]
 
 // VS Code-only slash commands
-export const VSCODE_ONLY_COMMANDS: SlashCommand[] = []
+export const VSCODE_ONLY_COMMANDS: SlashCommand[] = [
+	// A picker, not a command: what follows it filters the skills, and the one
+	// picked replaces it as `/<skill-name>`. Nothing is sent as `/skill`.
+	{
+		name: "skill",
+		description: "Find a skill: type words from its name or description",
+		section: "default",
+	},
+]
+
+/**
+ * A skill's command name, as the runtime spells it.
+ *
+ * A copy of `normalizeRuntimeCommandName` in @cline/core
+ * (extensions/config/runtime-commands.ts), which the webview cannot import:
+ * the `/` menu and the `/skill` picker insert the token the runtime knows a
+ * skill by, or the model is handed a command that names no skill.
+ * `slashCommands.test.ts` beside it holds the two to the same answers.
+ */
+export function skillCommandName(name: string): string {
+	return name
+		.trim()
+		.toLowerCase()
+		.replace(/\s+/g, "-")
+		.replace(/[^\p{L}\p{N}_.:@-]+/gu, "-")
+		.replace(/-+/g, "-")
+		.replace(/^-/, "")
+		.replace(/-$/, "")
+}
