@@ -11,9 +11,12 @@ import * as path from "path"
 import type { ConsoleMessage, ScreenshotOptions } from "puppeteer-core"
 import { Browser, connect, launch, Page, TimeoutError } from "puppeteer-core"
 import { StateManager } from "@/core/storage/StateManager"
+import { HostProvider } from "@/hosts/host-provider"
 import { telemetryService } from "@/services/telemetry"
+import { ShowMessageType } from "@/shared/proto/host/window"
 import { Logger } from "@/shared/services/Logger"
 import { discoverChromeInstances, isPortOpen, testBrowserConnection } from "./BrowserDiscovery"
+import { findEdge, launchWithFallback } from "./browser-launch"
 import { ensureChromiumExists } from "./utils"
 
 // Define browser connection info interface
@@ -208,19 +211,38 @@ export class BrowserSession {
 		}
 	}
 
+	/**
+	 * The browser the settings and discovery chose, then -- when it does not
+	 * start -- the same one again if an update was the cause, then Edge. What
+	 * happened is told to the person (`warn`); the model only sees the page.
+	 * Throws `BrowserLaunchError` when no local browser started.
+	 */
 	async launchLocalBrowser() {
 		const browserSettings = this.stateManager.getGlobalSettingsKey("browserSettings")
-		const { path } = await this.getDetectedChromePath()
 		const userArgs = splitArgs(browserSettings.customArgs)
-		this.browser = await launch({
-			args: [
-				"--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-				...userArgs,
-			],
-			executablePath: path,
-			defaultViewport: browserSettings.viewport,
-			headless: "shell", // Always use headless mode for local connections
+		const { browser } = await launchWithFallback({
+			resolvePrimary: async () => {
+				const detected = await this.getDetectedChromePath()
+				return { executablePath: detected.path, source: detected.isBundled ? "bundled" : "settings or system" }
+			},
+			resolveFallback: () => findEdge(),
+			launch: (executablePath) =>
+				launch({
+					args: [
+						"--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+						...userArgs,
+					],
+					executablePath,
+					defaultViewport: browserSettings.viewport,
+					headless: "shell", // Always use headless mode for local connections
+				}),
+			warn: (message) => {
+				Logger.warn(`[browser] ${message}`)
+				void HostProvider.window.showMessage({ type: ShowMessageType.WARNING, message: `Browser tool: ${message}` })
+			},
+			log: (message) => Logger.warn(message),
 		})
+		this.browser = browser
 		this.isConnectedToRemote = false
 	}
 

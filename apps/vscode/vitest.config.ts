@@ -10,6 +10,7 @@ export default defineConfig({
 			"src/sdk/**/*.test.ts",
 			"src/services/updates/**/*.test.ts",
 			"src/services/news/**/*.test.ts",
+			"src/services/browser/**/*.test.ts",
 			"src/hosts/vscode/VscodeEditPreview.test.ts",
 			"src/hosts/vscode/undocked-chat.test.ts",
 			"src/hosts/vscode/startup-view.test.ts",

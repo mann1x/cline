@@ -3,9 +3,18 @@ import * as path from "node:path"
 import type { BrowserDriver, RenderDriver } from "@cline/core"
 import * as vscode from "vscode"
 import { StateManager } from "@/core/storage/StateManager"
+import { HostProvider } from "@/hosts/host-provider"
 import { CONFIG_SECTION } from "@/registry"
 import { BrowserSession } from "@/services/browser/BrowserSession"
 import { renderWithChrome } from "@/services/browser/render-page"
+import {
+	BrowserWithIntegratedFallback,
+	isIntegratedBrowserAvailable,
+	type LmToolHost,
+	VscodeIntegratedBrowser,
+} from "@/services/browser/VscodeIntegratedBrowser"
+import { ShowMessageType } from "@/shared/proto/host/window"
+import { Logger } from "@/shared/services/Logger"
 
 /**
  * The VS Code half of `browser`.
@@ -25,8 +34,33 @@ import { renderWithChrome } from "@/services/browser/render-page"
  */
 const SCREENSHOT_FORMAT_WEBP = false
 
+/**
+ * Chrome (or the configured browser), then Edge, then VS Code's integrated
+ * browser. Each step down is a warning to the person, not to the model.
+ */
 export function createVscodeBrowserDriver(): BrowserDriver {
-	return new BrowserSession(StateManager.get(), SCREENSHOT_FORMAT_WEBP)
+	return new BrowserWithIntegratedFallback(
+		new BrowserSession(StateManager.get(), SCREENSHOT_FORMAT_WEBP),
+		() => {
+			const host = vscodeLmToolHost()
+			return isIntegratedBrowserAvailable(host) ? new VscodeIntegratedBrowser(host) : undefined
+		},
+		(message) => {
+			Logger.warn(`[browser] ${message}`)
+			void HostProvider.window.showMessage({ type: ShowMessageType.WARNING, message: `Browser tool: ${message}` })
+		},
+	)
+}
+
+/** `vscode.lm`'s tools, as the integrated browser driver needs them. */
+function vscodeLmToolHost(): LmToolHost {
+	return {
+		toolNames: () => vscode.lm.tools.map((tool) => tool.name),
+		invoke: async (name, input) => {
+			const result = await vscode.lm.invokeTool(name, { input, toolInvocationToken: undefined })
+			return result.content as unknown[]
+		},
+	}
 }
 
 /**
