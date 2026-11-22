@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs"
 import * as path from "node:path"
-import type { BrowserDriver, RenderDriver } from "@cline/core"
+import { type BrowserDriver, findLocalBrowsers, type RenderDriver } from "@cline/core"
 import * as vscode from "vscode"
 import { StateManager } from "@/core/storage/StateManager"
 import { HostProvider } from "@/hosts/host-provider"
@@ -9,6 +9,7 @@ import { BrowserSession } from "@/services/browser/BrowserSession"
 import { renderWithChrome } from "@/services/browser/render-page"
 import {
 	BrowserWithIntegratedFallback,
+	INTEGRATED_BROWSER_TOOLS,
 	isIntegratedBrowserAvailable,
 	type LmToolHost,
 	VscodeIntegratedBrowser,
@@ -50,6 +51,27 @@ export function createVscodeBrowserDriver(): BrowserDriver {
 			void HostProvider.window.showMessage({ type: ShowMessageType.WARNING, message: `Browser tool: ${message}` })
 		},
 	)
+}
+
+/**
+ * One log line naming the browsers the tool can use: the installed ones and
+ * whether VS Code's integrated browser tools are registered (and if not,
+ * which are missing). Written once after activation, so a machine can be
+ * checked without opening a page.
+ */
+export function logBrowserAvailability(): void {
+	try {
+		const names = new Set(vscodeLmToolHost().toolNames())
+		const missing = Object.values(INTEGRATED_BROWSER_TOOLS).filter((name) => !names.has(name))
+		const local = findLocalBrowsers().map((browser) => browser.id)
+		Logger.info(
+			`[browser] installed: ${local.join(", ") || "none"}; VS Code's integrated browser: ${
+				missing.length === 0 ? "available" : `not available (tools missing: ${missing.join(", ")})`
+			}`,
+		)
+	} catch (error) {
+		Logger.warn(`[browser] could not check the browsers: ${error instanceof Error ? error.message : String(error)}`)
+	}
 }
 
 /** `vscode.lm`'s tools, as the integrated browser driver needs them. */

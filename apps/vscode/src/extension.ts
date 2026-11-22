@@ -4,6 +4,7 @@
 import assert from "node:assert"
 import { disableCurrentDirectoryExecutableSearch } from "@cline/shared"
 import * as vscode from "vscode"
+import { logBrowserAvailability } from "@/hosts/vscode/browser-support"
 import { Logger } from "@/shared/services/Logger"
 import { sendAccountButtonClickedEvent } from "./core/controller/ui/subscribeToAccountButtonClicked"
 import { sendChatButtonClickedEvent } from "./core/controller/ui/subscribeToChatButtonClicked"
@@ -595,6 +596,9 @@ ${ctx.cellJson || "{}"}
 	context.subscriptions.push({ dispose: unsubSecrets })
 
 	Logger.log(`[Cerebriline] extension activated in ${performance.now() - activationStartTime} ms`)
+	// Which browsers the `browser` tool can use, once VS Code has registered
+	// its own chat tools: checkable from the log without opening a page.
+	setTimeout(logBrowserAvailability, 20_000)
 
 	return createClineAPI(webview.controller)
 }
