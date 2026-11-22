@@ -190,6 +190,9 @@ Actions:
 - `type` — type `text` at the current focus.
 - `scroll_down`, `scroll_up` — one viewport.
 - `close` — shut the browser down. Do this when finished with it.
+- `list_browsers` — list the browsers this machine can open a page in, by id.
+
+`open` takes an optional `browser`: one of the ids `list_browsers` returns (for example `firefox`), to check the same page in another browser. Without it the browser already open is kept, or the default one is started. Naming a different browser than the open one closes it and starts the one named.
 
 Every action reports the console messages and uncaught errors produced while it ran, so a syntax error, a failed fetch or a null dereference comes back as text you can act on. `[error]` and `[Page Error]` lines are real failures. A page that says nothing printed nothing — that is a pass, not a failed call, and for a local file it is checked: the page's own scripts and the local scripts it loads by `src` are parsed, and a silent console over one that does not parse is reported as the failure it is, not as a pass. Silence says nothing threw; it does not say the page drew what it should.
 

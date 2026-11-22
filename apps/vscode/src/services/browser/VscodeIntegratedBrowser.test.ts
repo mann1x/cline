@@ -233,3 +233,76 @@ describe("BrowserWithIntegratedFallback", () => {
 		expect(local.launched).toBe(2)
 	})
 })
+
+describe("choosing VS Code's integrated browser by name", () => {
+	function local(): BrowserDriverLike & { launches: unknown[] } {
+		const launches: unknown[] = []
+		return {
+			launches,
+			launchBrowser: async (options) => {
+				launches.push(options)
+			},
+			listBrowsers: async () => [{ id: "chrome", name: "Chrome", isDefault: true }],
+			navigateToUrl: async (url) => ({ currentUrl: `local:${url}` }),
+			click: async () => ({}),
+			type: async () => ({}),
+			scrollDown: async () => ({}),
+			scrollUp: async () => ({}),
+			closeBrowser: async () => ({}),
+		}
+	}
+
+	it("lists it after the local browsers when it is there", async () => {
+		const wrapper = new BrowserWithIntegratedFallback(
+			local(),
+			() => new VscodeIntegratedBrowser(fakeHost({}).host),
+			() => {},
+		)
+		expect((await wrapper.listBrowsers()).map((choice) => choice.id)).toEqual(["chrome", "vscode"])
+		const without = new BrowserWithIntegratedFallback(
+			local(),
+			() => undefined,
+			() => {},
+		)
+		expect((await without.listBrowsers()).map((choice) => choice.id)).toEqual(["chrome"])
+	})
+
+	it("opens it directly for `vscode`, quietly, and errors when it is not there", async () => {
+		const warnings: string[] = []
+		const { host, calls } = fakeHost({})
+		const localBrowser = local()
+		const wrapper = new BrowserWithIntegratedFallback(
+			localBrowser,
+			() => new VscodeIntegratedBrowser(host),
+			(m) => warnings.push(m),
+		)
+		await wrapper.launchBrowser({ browser: "vscode" })
+		const result = await wrapper.navigateToUrl("file:///C:/game.html")
+		expect(calls[0].name).toBe("open_browser_page")
+		expect(result.browser).toBe("VS Code's integrated browser")
+		expect(localBrowser.launches).toEqual([])
+		expect(warnings).toEqual([])
+
+		const without = new BrowserWithIntegratedFallback(
+			local(),
+			() => undefined,
+			() => {},
+		)
+		await expect(without.launchBrowser({ browser: "vscode" })).rejects.toThrow("workbench.browser.enableChatTools")
+	})
+
+	it("passes any other named browser to the local side, with no fallback", async () => {
+		const failing: BrowserDriverLike = {
+			...local(),
+			launchBrowser: async () => {
+				throw new Error("Brave is not installed here.")
+			},
+		}
+		const wrapper = new BrowserWithIntegratedFallback(
+			failing,
+			() => new VscodeIntegratedBrowser(fakeHost({}).host),
+			() => {},
+		)
+		await expect(wrapper.launchBrowser({ browser: "brave" })).rejects.toThrow("Brave is not installed here.")
+	})
+})

@@ -348,7 +348,7 @@ Output: one result — for `path`, the directory's entries, directories first wi
 
 Open and interact with a page in a real browser, reporting console output and uncaught errors.
 
-Call shape: `browser(action: string, url?: string, coordinate?: string, text?: string)`
+Call shape: `browser(action: string, url?: string, coordinate?: string, text?: string, browser?: string)`
 
 Actions are:
 
@@ -357,6 +357,7 @@ Actions are:
 - `type` — type `text` at the current focus.
 - `scroll_down` or `scroll_up` — scroll by one viewport.
 - `close` — close the browser.
+- `list_browsers` — list the browsers this machine can open a page in; pass one's id as `browser` on `open` to check the page in it.
 
 Use `browser` after editing HTML, CSS, or JavaScript loaded by a page and before reporting completion. It checks runtime behavior that `check_file` cannot: a page can parse and still throw during execution. Do not ask the user to confirm whether the page works.
 

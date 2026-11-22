@@ -1,5 +1,21 @@
 import { existsSync } from "node:fs";
-import type { BrowserActionResult, BrowserDriver } from "../tools/browser";
+import type {
+	BrowserActionResult,
+	BrowserChoice,
+	BrowserDriver,
+	BrowserLaunchOptions,
+} from "../tools/browser";
+import {
+	engineOf,
+	findLocalBrowser,
+	findLocalBrowsers,
+	identifyBrowser,
+	LOCAL_BROWSER_NAMES,
+	LOCAL_BROWSER_ORDER,
+	type LocalBrowserId,
+	puppeteerLaunchOptions,
+} from "./browser-catalog";
+import { launchWithFallback } from "./browser-launch";
 
 /**
  * A `browser` driver for a host without VS Code: the seven methods the tool
@@ -166,6 +182,11 @@ export interface ChromeBrowserDriverOptions {
 	args?: string[];
 	/** How to load puppeteer-core. Defaults to resolving the installed peer. */
 	loadPuppeteer?: PuppeteerLoader;
+	/**
+	 * Where to tell the person what the launch did: an update applied, a
+	 * fallback browser used. Never the model; a host without one stays quiet.
+	 */
+	warn?: (message: string) => void;
 }
 
 export const DEFAULT_CHROME_ARGS = [
@@ -211,26 +232,87 @@ export function createChromeBrowserDriver(
 	let browser: PuppeteerBrowser | undefined;
 	let page: PuppeteerPage | undefined;
 	let mousePosition: string | undefined;
+	/** What the next launch starts: a listed browser id, or the default. */
+	let requested: string | undefined;
+	let browserName: string | undefined;
 
+	/** The executable for `requested`, or for the default. */
+	function resolveExecutable(): { executablePath: string; id: LocalBrowserId } {
+		if (requested) {
+			if (!(LOCAL_BROWSER_ORDER as readonly string[]).includes(requested)) {
+				throw new Error(
+					`\`${requested}\` is not a browser this host can start. Use one of: ${findLocalBrowsers()
+						.map((found) => found.id)
+						.join(", ")}.`,
+				);
+			}
+			const found = findLocalBrowser(requested as LocalBrowserId);
+			if (!found) {
+				throw new Error(
+					`${LOCAL_BROWSER_NAMES[requested as LocalBrowserId]} is not installed here. Installed: ${
+						findLocalBrowsers()
+							.map((other) => other.id)
+							.join(", ") || "none"
+					}.`,
+				);
+			}
+			return { executablePath: found.executablePath, id: found.id };
+		}
+		const executablePath =
+			options?.chromePath ??
+			findChrome() ??
+			findLocalBrowsers()[0]?.executablePath;
+		if (!executablePath) {
+			throw new MissingChromeError();
+		}
+		return { executablePath, id: identifyBrowser(executablePath) };
+	}
+
+	/**
+	 * Start the browser through the shared launch chain: a named browser is
+	 * that one (started again once if an update stopped its first start); the
+	 * default is the configured one or Chrome, then every other installed
+	 * browser. Messages about what happened go to `options.warn`, not the model.
+	 */
 	async function ensurePage(): Promise<PuppeteerPage> {
 		if (page) {
 			return page;
 		}
-		const executablePath = options?.chromePath ?? findChrome();
-		if (!executablePath) {
-			throw new MissingChromeError();
-		}
 		const puppeteer = (await loadPuppeteer(
 			options?.loadPuppeteer,
 		)) as PuppeteerLike;
-		browser = await puppeteer.launch({
-			executablePath,
-			headless: options?.headless === false ? false : "shell",
-			args: options?.args ?? DEFAULT_CHROME_ARGS,
-			defaultViewport: DEFAULT_VIEWPORT,
-			timeout: options?.launchTimeoutMs ?? 30_000,
+		const { browser: started, executablePath } = await launchWithFallback({
+			resolvePrimary: async () => {
+				const resolved = resolveExecutable();
+				return {
+					executablePath: resolved.executablePath,
+					source: requested ? `asked for: ${requested}` : "default",
+				};
+			},
+			resolveFallbacks: async () =>
+				requested
+					? []
+					: findLocalBrowsers().map((found) => found.executablePath),
+			launch: (path) => {
+				const launchOptions = puppeteerLaunchOptions(
+					engineOf(identifyBrowser(path)),
+					{
+						executablePath: path,
+						chromiumArgs: options?.args ?? DEFAULT_CHROME_ARGS,
+						defaultViewport: DEFAULT_VIEWPORT,
+						timeout: options?.launchTimeoutMs ?? 30_000,
+					},
+				);
+				if (options?.headless === false) {
+					launchOptions.headless = false;
+				}
+				return puppeteer.launch(launchOptions);
+			},
+			warn: (message) => options?.warn?.(message),
 		});
-		page = await browser.newPage();
+		browser = started;
+		browserName = LOCAL_BROWSER_NAMES[identifyBrowser(executablePath)];
+		page = await started.newPage();
 		return page;
 	}
 
@@ -294,6 +376,7 @@ export function createChromeBrowserDriver(
 				logs: logs.join("\n"),
 				currentUrl: current.url(),
 				...(mousePosition ? { currentMousePosition: mousePosition } : {}),
+				...(browserName ? { browser: browserName } : {}),
 			};
 		} finally {
 			current.off("console", onConsole);
@@ -311,8 +394,39 @@ export function createChromeBrowserDriver(
 		});
 
 	return {
-		async launchBrowser() {
+		async launchBrowser(launch?: BrowserLaunchOptions) {
+			requested = launch?.browser;
 			await ensurePage();
+		},
+		async listBrowsers(): Promise<BrowserChoice[]> {
+			const configured = options?.chromePath ?? findChrome();
+			const defaultId = configured
+				? identifyBrowser(configured)
+				: findLocalBrowsers()[0]?.id;
+			const choices: BrowserChoice[] = findLocalBrowsers().map((found) => ({
+				id: found.id,
+				name: found.name,
+				detail: found.executablePath,
+				...(found.id === defaultId ? { isDefault: true } : {}),
+			}));
+			if (
+				configured &&
+				!choices.some((choice) => choice.detail === configured)
+			) {
+				const id = identifyBrowser(configured);
+				const listed = choices.find((choice) => choice.id === id);
+				if (listed) {
+					listed.detail = configured;
+				} else {
+					choices.unshift({
+						id,
+						name: LOCAL_BROWSER_NAMES[id],
+						detail: configured,
+						isDefault: true,
+					});
+				}
+			}
+			return choices;
 		},
 		navigateToUrl(url: string) {
 			return doAction(async (current) => {
@@ -367,6 +481,7 @@ export function createChromeBrowserDriver(
 			browser = undefined;
 			page = undefined;
 			mousePosition = undefined;
+			browserName = undefined;
 			await closing?.close();
 			return {};
 		},

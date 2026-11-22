@@ -7,32 +7,46 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
 
 ## [4.100.293] — 2026-11-22
 
-### The browser tool starts when Chrome does not
+### The browser tool: pick the browser, and it starts when Chrome does not
 
+- **Test a page in another browser.** The `browser` tool has a new
+  `list_browsers` action. It lists the browsers this machine can open a page
+  in: Chrome, Microsoft Edge, Brave, Firefox and Chromium, wherever each is
+  installed (Brave's per-user install on Windows included), plus VS Code's
+  integrated browser when it is available. `open` takes an optional
+  `browser` with one of those ids, so the same page can be checked in Chrome,
+  then in Firefox, then in Edge. Naming a different browser than the open one
+  closes it and starts the one named. Each result names the browser that
+  rendered it. Firefox is driven over WebDriver BiDi with the same console,
+  error, screenshot and click reporting as the others. A browser named that
+  is not installed is an error that lists the installed ones; nothing else is
+  started in its place.
 - **A Chrome update no longer breaks the browser tool.** Chrome stages an
   update while it is closed and installs it the next time it starts, then
   restarts itself. When the browser tool was that next start, the process it
   launched exited at once and the tool reported "Failed to launch the browser
-  process!" (seen on a machine where Chrome is never opened). The tool now
-  checks for this: if Chrome installed an update during the start, it starts
-  Chrome again. If an update is waiting and could not be installed, you are
-  told to open Chrome once to finish it.
-- **Microsoft Edge is the fallback.** When Chrome (or the browser set in the
-  browser settings) still does not start, or none is installed and the
-  bundled Chromium cannot be downloaded, the tool starts Edge with the same
-  options.
-- **VS Code's integrated browser is the last fallback.** When no local browser
-  starts, the tool uses the browser built into VS Code (1.110 and later), the
-  one VS Code's own agent uses. It needs `chat.agent.enabled` and
-  `workbench.browser.enableChatTools`, both on by default. Screenshots,
-  clicks at a point, typing and scrolling work there. Console errors, warnings,
-  uncaught page errors and failed requests are reported, but plain
+  process!" (seen twice in one day on a machine where Chrome is never opened).
+  The tool now checks for this: if the browser installed an update during the
+  start, it starts it again. If an update is waiting and could not be
+  installed, you are told to open the browser once to finish it. This covers
+  every browser on the list, and the CLI as well as the extension.
+- **The other installed browsers are the fallback.** When Chrome (or the
+  browser set in the browser settings) does not start, the tool tries Edge,
+  then Brave, then Firefox. The bundled Chromium is downloaded only when no
+  browser at all is installed; before, it was downloaded whenever Chrome was
+  missing, even with Edge on the machine.
+- **VS Code's integrated browser is the last fallback**, and can be asked for
+  by name (`vscode`). It is the browser built into VS Code 1.110 and later,
+  the one VS Code's own agent uses, and it needs `chat.agent.enabled` and
+  `workbench.browser.enableChatTools` (both on by default). Screenshots,
+  clicks at a point, typing and scrolling work there. Console errors,
+  warnings, uncaught page errors and failed requests are reported, but plain
   `console.log` lines are not. VS Code asks before it opens a page or clicks,
   unless you allow those tools in **Chat: Manage Tool Approval**. The page
   opens in an editor tab, which stays open after the tool closes the browser.
-- **You are told, the model is not.** Every step down (retry, Edge, VS Code's
-  browser) is a warning notification for you. The model gets the page it
-  asked for as before.
+- **You are told, the model is not.** Every step down (retry, another
+  browser, VS Code's browser) is a warning notification for you, or a line on
+  stderr in the CLI. The model gets the page it asked for as before.
 
 ## [4.100.292] — 2026-11-21
 

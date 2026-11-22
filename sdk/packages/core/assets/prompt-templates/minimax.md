@@ -255,7 +255,7 @@ Do not run `ls`, `dir`, `find` or `Get-ChildItem` through `run_commands` to look
 Output: one result — for `path`, the directory's entries, directories first with a trailing `/`, files with their size, links with `->` and their target; for `pattern`, the matching paths relative to the workspace, and "more than N" when there were more than were shown.
 
 # tool: browser
-Open a page in a real browser and report what it printed to the console and what it threw. This is how you check that a page works. Do not ask the user whether it works — open it and read the errors yourself. Call shape: `browser(action: string, url?: string, coordinate?: string, text?: string)`.
+Open a page in a real browser and report what it printed to the console and what it threw. This is how you check that a page works. Do not ask the user whether it works — open it and read the errors yourself. Call shape: `browser(action: string, url?: string, coordinate?: string, text?: string, browser?: string)`.
 
 Use it after editing any HTML, CSS or JavaScript the page loads, and before reporting a task finished. `check_file` cannot answer this: no language server checks the script inside an `.html` file, and a file that parses can still throw the moment it runs.
 
@@ -265,6 +265,9 @@ Use it after editing any HTML, CSS or JavaScript the page loads, and before repo
 - `type` — type `text` at the current focus.
 - `scroll_down`, `scroll_up` — one viewport.
 - `close` — shut the browser down. Do this when finished with it.
+- `list_browsers` — list the browsers this machine can open a page in, by id.
+
+`open` takes an optional `browser`: one of the ids `list_browsers` returns (for example `firefox`), to check the same page in another browser. Without it the browser already open is kept, or the default one is started.
 
 Every action reports the console messages and uncaught errors produced while it ran, so a syntax error, a failed fetch or a null dereference comes back as text you can act on. `[error]` and `[Page Error]` lines are real failures. A page that says nothing printed nothing — that is a pass, not a failed call, and for a local file it is checked: a silent console over a file that does not parse is reported as the failure it is, not as a pass.
 

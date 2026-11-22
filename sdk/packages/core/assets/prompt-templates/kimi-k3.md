@@ -277,10 +277,11 @@ Output is directories first with a trailing `/`, then files with their sizes. Th
 Open a page in a real browser and report its console output and uncaught errors. Check the page yourself instead of asking the user whether it works.
 
 Arguments:
-- `action` — what to do. One of: `open`, `click`, `type`, `scroll_down`, `scroll_up`, `close`.
+- `action` — what to do. One of: `open`, `click`, `type`, `scroll_down`, `scroll_up`, `close`, `list_browsers` (the browsers this machine can open a page in).
 - `url` — required for `open`. An absolute file path is accepted and converted.
 - `coordinate` — required for `click`, as `"x,y"` in page pixels.
 - `text` — required for `type`.
+- `browser` — optional for `open`: an id from `list_browsers`, to check the same page in another browser.
 
 Call it after editing any HTML, CSS or JavaScript, and before reporting a task finished — `check_file` cannot answer this, since no language server checks the script inside an `.html` file and a file that parses can still throw when it runs. `[error]` and `[Page Error]` lines are real failures; a page that printed nothing is a pass, not a failed call. The browser stays open between calls; `close` it when finished.
 

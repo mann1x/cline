@@ -730,6 +730,8 @@ export type BrowserActionResult = {
 	logs?: string
 	currentUrl?: string
 	currentMousePosition?: string
+	/** The browser that rendered it ("Firefox"), as the tool names it. */
+	browser?: string
 }
 
 export interface ClineAskUseMcpServer {

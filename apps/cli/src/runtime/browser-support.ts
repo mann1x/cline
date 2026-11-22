@@ -3,6 +3,7 @@ import {
 	type ChromeBrowserDriverOptions,
 	createChromeBrowserDriver,
 	findChrome,
+	findLocalBrowsers,
 	MissingChromeError,
 } from "@cline/core";
 
@@ -21,6 +22,9 @@ export function createCliBrowserDriver(
 	options?: Omit<ChromeBrowserDriverOptions, "loadPuppeteer">,
 ): BrowserDriver {
 	return createChromeBrowserDriver({
+		// What the launch did (an update applied, another browser used) is for
+		// the person at the terminal, on stderr where it cannot mix with output.
+		warn: (message) => process.stderr.write(`[browser] ${message}\n`),
 		...options,
 		loadPuppeteer: () => import("puppeteer-core"),
 	});
@@ -28,5 +32,5 @@ export function createCliBrowserDriver(
 
 /** Kept for symmetry with the extension's driver, which spawns Chrome itself. */
 export function chromeIsAvailable(): boolean {
-	return findChrome() !== undefined;
+	return findChrome() !== undefined || findLocalBrowsers().length > 0;
 }

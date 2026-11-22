@@ -495,3 +495,99 @@ describe("browser", () => {
 		expect(output).toContain("ERR_CONNECTION_REFUSED");
 	});
 });
+
+describe("choosing a browser", () => {
+	const choices = [
+		{ id: "chrome", name: "Chrome", detail: "C:\\chrome.exe", isDefault: true },
+		{ id: "firefox", name: "Firefox", detail: "C:\\firefox.exe" },
+		{ id: "vscode", name: "VS Code's integrated browser" },
+	];
+
+	it("lists the browsers the host can start, default marked, without starting one", async () => {
+		const driver = fakeDriver({ listBrowsers: vi.fn(async () => choices) });
+		const tool = createBrowserTool({ cwd: CWD, createDriver: () => driver });
+		const text = String(await run(tool, { action: "list_browsers" }));
+		expect(text).toContain("- `chrome` — Chrome (default): C:\\chrome.exe");
+		expect(text).toContain("- `firefox` — Firefox: C:\\firefox.exe");
+		expect(text).toContain("- `vscode` — VS Code's integrated browser");
+		expect(driver.launchBrowser).not.toHaveBeenCalled();
+	});
+
+	it("says so when the host has only its default browser", async () => {
+		const tool = createBrowserTool({
+			cwd: CWD,
+			createDriver: () => fakeDriver(),
+		});
+		expect(String(await run(tool, { action: "list_browsers" }))).toContain(
+			"default browser only",
+		);
+	});
+
+	it("starts the browser `open` names, and names it in the answer", async () => {
+		const driver = fakeDriver({
+			navigateToUrl: vi.fn(async () => result({ browser: "Firefox" })),
+		});
+		const tool = createBrowserTool({ cwd: CWD, createDriver: () => driver });
+		const text = String(
+			await run(tool, {
+				action: "open",
+				url: "/repo/game.html",
+				browser: "Firefox",
+			}),
+		);
+		expect(driver.launchBrowser).toHaveBeenCalledWith({ browser: "firefox" });
+		expect(text).toContain("open (Firefox): file:///repo/game.html");
+	});
+
+	it("closes the open browser and starts another when `open` names a different one", async () => {
+		const driver = fakeDriver();
+		const tool = createBrowserTool({ cwd: CWD, createDriver: () => driver });
+		await run(tool, { action: "open", url: "/repo/game.html" });
+		await run(tool, {
+			action: "open",
+			url: "/repo/game.html",
+			browser: "brave",
+		});
+		await run(tool, {
+			action: "open",
+			url: "/repo/game.html",
+			browser: "brave",
+		});
+		await run(tool, { action: "open", url: "/repo/game.html" });
+		expect(vi.mocked(driver.launchBrowser).mock.calls).toEqual([
+			[undefined],
+			[{ browser: "brave" }],
+		]);
+		expect(driver.closeBrowser).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports a browser that could not be started, and starts again next time", async () => {
+		const driver = fakeDriver({
+			launchBrowser: vi.fn(async (options?: { browser?: string }) => {
+				if (options?.browser === "safari") {
+					throw new Error(
+						"`safari` is not a browser this host can start. Use one of: chrome, firefox.",
+					);
+				}
+			}),
+		});
+		const tool = createBrowserTool({ cwd: CWD, createDriver: () => driver });
+		const failed = String(
+			await run(tool, {
+				action: "open",
+				url: "/repo/game.html",
+				browser: "safari",
+			}),
+		);
+		expect(failed).toContain("The browser could not open");
+		expect(failed).toContain("Use one of: chrome, firefox");
+		await run(tool, {
+			action: "open",
+			url: "/repo/game.html",
+			browser: "firefox",
+		});
+		expect(driver.launchBrowser).toHaveBeenLastCalledWith({
+			browser: "firefox",
+		});
+	});
+});

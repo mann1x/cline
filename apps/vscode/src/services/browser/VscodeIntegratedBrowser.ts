@@ -30,6 +30,12 @@ import type { BrowserActionResult } from "@shared/ExtensionMessage"
  * an extension cannot.
  */
 
+/** `list_browsers`' id for it, and the name results carry. */
+export const INTEGRATED_BROWSER_ID = "vscode"
+export const INTEGRATED_BROWSER_NAME = "VS Code's integrated browser"
+
+const NEEDS_SETTINGS = `it needs "chat.agent.enabled" and "workbench.browser.enableChatTools" turned on`
+
 export const INTEGRATED_BROWSER_TOOLS = {
 	open: "open_browser_page",
 	navigate: "navigate_page",
@@ -238,13 +244,15 @@ export class VscodeIntegratedBrowser {
 			logs: logs.join("\n"),
 			currentUrl: urlFromSummary(summary),
 			currentMousePosition: this.mousePosition,
+			browser: INTEGRATED_BROWSER_NAME,
 		}
 	}
 }
 
 /** The driver surface the `browser` tool calls, as both browsers provide it. */
 export interface BrowserDriverLike {
-	launchBrowser(): Promise<void>
+	launchBrowser(options?: { browser?: string }): Promise<void>
+	listBrowsers?(): Promise<Array<{ id: string; name: string; detail?: string; isDefault?: boolean }>>
 	navigateToUrl(url: string): Promise<BrowserActionResult>
 	click(coordinate: string): Promise<BrowserActionResult>
 	type(text: string): Promise<BrowserActionResult>
@@ -254,9 +262,11 @@ export interface BrowserDriverLike {
 }
 
 /**
- * The local browser (Chrome, then Edge), and VS Code's integrated browser when
- * neither starts. The switch is told to the person; the model gets the page
- * either way. Decided once per launch, so a later launch tries Chrome again.
+ * The local browsers (Chrome, Edge, Brave, Firefox), and VS Code's integrated
+ * browser when none starts. The switch is told to the person; the model gets
+ * the page either way. Decided once per launch, so a later launch tries the
+ * local ones again. A browser named by the caller is that browser or an
+ * error: the point of naming one is to compare browsers.
  */
 export class BrowserWithIntegratedFallback implements BrowserDriverLike {
 	private active?: BrowserDriverLike
@@ -267,17 +277,49 @@ export class BrowserWithIntegratedFallback implements BrowserDriverLike {
 		private readonly warn: (message: string) => void,
 	) {}
 
-	async launchBrowser(): Promise<void> {
+	async listBrowsers(): Promise<Array<{ id: string; name: string; detail?: string; isDefault?: boolean }>> {
+		const local = (await this.local.listBrowsers?.()) ?? []
+		const integrated = this.integrated()
+		return integrated
+			? [
+					...local,
+					{
+						id: INTEGRATED_BROWSER_ID,
+						name: INTEGRATED_BROWSER_NAME,
+						detail: "an editor tab in VS Code; reports console errors and warnings, not console.log",
+						...(local.length === 0 ? { isDefault: true } : {}),
+					},
+				]
+			: local
+	}
+
+	async launchBrowser(options?: { browser?: string }): Promise<void> {
+		if (options?.browser === INTEGRATED_BROWSER_ID) {
+			const integrated = this.integrated()
+			if (!integrated) {
+				throw new Error(`VS Code's integrated browser is not available: ${NEEDS_SETTINGS}.`)
+			}
+			await integrated.launchBrowser()
+			this.active = integrated
+			return
+		}
+		if (options?.browser) {
+			await this.local.launchBrowser(options)
+			this.active = this.local
+			return
+		}
 		try {
 			await this.local.launchBrowser()
 			this.active = this.local
 			return
 		} catch (error) {
-			const reason = (error instanceof Error ? error.message : String(error)).replace(/\s*TROUBLESHOOTING:.*$/s, "").trim()
+			const reason = (error instanceof Error ? error.message : String(error))
+				.replace(/\s*TROUBLESHOOTING:[\s\S]*$/, "")
+				.trim()
 			const fallback = this.integrated()
 			if (!fallback) {
 				this.warn(
-					`The browser tool could not start a local browser (${reason}). VS Code's integrated browser is not available either: it needs "chat.agent.enabled" and "workbench.browser.enableChatTools" turned on.`,
+					`The browser tool could not start a local browser (${reason}). VS Code's integrated browser is not available either: ${NEEDS_SETTINGS}.`,
 				)
 				throw error
 			}

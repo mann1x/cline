@@ -18,6 +18,8 @@ export type BrowserActionResult = {
 	logs?: string;
 	currentUrl?: string;
 	currentMousePosition?: string;
+	/** The browser that rendered it, by name ("Firefox"), when the host knows. */
+	browser?: string;
 };
 
 /**
@@ -60,6 +62,9 @@ Actions:
 - \`type\` — type \`text\` at the current focus.
 - \`scroll_down\`, \`scroll_up\` — one viewport.
 - \`close\` — shut the browser down. Do this when finished with it.
+- \`list_browsers\` — list the browsers this machine can open a page in, by id.
+
+\`open\` takes an optional \`browser\`: one of the ids \`list_browsers\` returns (for example \`firefox\`), to check the same page in another browser. Without it the browser already open is kept, or the default one is started. Naming a different browser than the open one closes it and starts the one named.
 
 Every action reports the console messages and uncaught errors produced while it ran, so a syntax error, a failed fetch or a null dereference comes back as text you can act on. \`[error]\` and \`[Page Error]\` lines are real failures. A page that says nothing printed nothing — that is a pass, not a failed call, and for a local file it is checked: the page's own scripts and the local scripts it loads by \`src\` are parsed, and a silent console over one that does not parse is reported as the failure it is, not as a pass. Silence says nothing threw; it does not say the page drew what it should.
 
@@ -79,8 +84,21 @@ export const BROWSER_TOOL_INPUT_SCHEMA = {
 	properties: {
 		action: {
 			type: "string",
-			enum: ["open", "click", "type", "scroll_down", "scroll_up", "close"],
+			enum: [
+				"open",
+				"click",
+				"type",
+				"scroll_down",
+				"scroll_up",
+				"close",
+				"list_browsers",
+			],
 			description: "What to do.",
+		},
+		browser: {
+			type: "string",
+			description:
+				"For `open`, optional: the id of the browser to use, from `list_browsers`. Omit for the default.",
 		},
 		url: {
 			type: "string",
@@ -106,6 +124,7 @@ export const BROWSER_ACTIONS = [
 	"scroll_down",
 	"scroll_up",
 	"close",
+	"list_browsers",
 ] as const;
 export type BrowserToolAction = (typeof BROWSER_ACTIONS)[number];
 
@@ -117,8 +136,31 @@ export type BrowserToolAction = (typeof BROWSER_ACTIONS)[number];
  * which a unit test should have to stand up to check how a console log is
  * rendered.
  */
+/** One browser a host can open a page in, as `list_browsers` reports it. */
+export interface BrowserChoice {
+	/** What `open`'s `browser` takes: "chrome", "firefox", "vscode", … */
+	id: string;
+	name: string;
+	/** Where it is, or what it is: a path, a version, a note. */
+	detail?: string;
+	/** The one used when `open` names none. */
+	isDefault?: boolean;
+}
+
+export interface BrowserLaunchOptions {
+	/** A `BrowserChoice.id`; the host's default when absent. */
+	browser?: string;
+}
+
 export interface BrowserDriver {
-	launchBrowser(): Promise<void>;
+	/**
+	 * Start a browser. With `options.browser`, that one or an error naming the
+	 * ones there are -- never a silent substitute, since the caller asked for it
+	 * to compare browsers.
+	 */
+	launchBrowser(options?: BrowserLaunchOptions): Promise<void>;
+	/** The browsers the host can start. A host without it has only its default. */
+	listBrowsers?(): Promise<BrowserChoice[]>;
 	navigateToUrl(url: string): Promise<BrowserActionResult>;
 	click(coordinate: string): Promise<BrowserActionResult>;
 	type(text: string): Promise<BrowserActionResult>;
@@ -142,6 +184,7 @@ export interface BrowserToolOptions {
 
 interface BrowserToolInput {
 	action?: unknown;
+	browser?: unknown;
 	url?: unknown;
 	coordinate?: unknown;
 	text?: unknown;
@@ -208,7 +251,8 @@ export function renderBrowserResult(
 	target?: string,
 ): string {
 	const where = result.currentUrl ?? target;
-	const heading = where ? `${action}: ${where}` : action;
+	const label = result.browser ? `${action} (${result.browser})` : action;
+	const heading = where ? `${label}: ${where}` : label;
 	const logs = (result.logs ?? "").trim();
 	if (logs === "") {
 		return `${heading}\n\nConsole: nothing. The page printed no messages and threw no errors.`;
@@ -394,21 +438,55 @@ async function locateParseError(
 	}
 }
 
+/** `list_browsers`'s answer: one line per browser, the default marked. */
+export function renderBrowserList(choices: BrowserChoice[]): string {
+	if (choices.length === 0) {
+		return "No browser is available on this machine.";
+	}
+	const lines = choices.map(
+		(choice) =>
+			`- \`${choice.id}\` — ${choice.name}${choice.isDefault ? " (default)" : ""}${choice.detail ? `: ${choice.detail}` : ""}`,
+	);
+	return `Browsers available (pass the id as \`browser\` on \`open\`):\n${lines.join("\n")}`;
+}
+
 export function createBrowserTool(options: BrowserToolOptions): AgentTool {
 	// One browser per session, built on demand and reused: launching Chrome per
 	// call would cost seconds each time and lose the page between them.
 	let driver: BrowserDriver | undefined;
 	let launched = false;
+	/** The browser asked for at launch; undefined is the host's default. */
+	let launchedWith: string | undefined;
 
-	async function ensureLaunched(): Promise<BrowserDriver> {
+	async function getDriver(): Promise<BrowserDriver> {
 		if (!driver) {
 			driver = await options.createDriver();
 		}
-		if (!launched) {
-			await driver.launchBrowser();
-			launched = true;
-		}
 		return driver;
+	}
+
+	/**
+	 * The open browser, or a new one. `browser` is only read by `open`; when it
+	 * names a different browser than the open one, that one is closed first.
+	 */
+	async function ensureLaunched(browser?: string): Promise<BrowserDriver> {
+		const current = await getDriver();
+		if (launched && browser !== undefined && browser !== launchedWith) {
+			try {
+				await current.closeBrowser();
+			} catch (error) {
+				options.onError?.("[Browser] failed to close before switching", error);
+			}
+			launched = false;
+		}
+		if (!launched) {
+			await current.launchBrowser(
+				browser !== undefined ? { browser } : undefined,
+			);
+			launched = true;
+			launchedWith = browser;
+		}
+		return current;
 	}
 
 	return createTool({
@@ -423,6 +501,21 @@ export function createBrowserTool(options: BrowserToolOptions): AgentTool {
 			}
 			if (!(BROWSER_ACTIONS as readonly string[]).includes(action)) {
 				return `\`${action}\` is not a browser action. Use one of: ${BROWSER_ACTIONS.join(", ")}.`;
+			}
+
+			if (action === "list_browsers") {
+				try {
+					const current = await getDriver();
+					if (!current.listBrowsers) {
+						return "This host opens pages in its default browser only; `browser` is not available here.";
+					}
+					return renderBrowserList(await current.listBrowsers());
+				} catch (error) {
+					const message =
+						error instanceof Error ? error.message : String(error);
+					options.onError?.("[Browser] list_browsers failed", error);
+					return `The browsers could not be listed: ${message}`;
+				}
 			}
 
 			if (action === "close") {
@@ -442,7 +535,11 @@ export function createBrowserTool(options: BrowserToolOptions): AgentTool {
 			let result: BrowserActionResult;
 			let target: string | undefined;
 			try {
-				const session = await ensureLaunched();
+				const session = await ensureLaunched(
+					action === "open"
+						? readString(request.browser)?.toLowerCase()
+						: undefined,
+				);
 				switch (action) {
 					case "open": {
 						const url = readString(request.url);

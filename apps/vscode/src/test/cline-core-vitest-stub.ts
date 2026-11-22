@@ -4,6 +4,24 @@ import type { CoreSpawnReason } from "@cline/shared"
 import { createFileReadExecutor } from "../../../../sdk/packages/core/src/extensions/tools/executors/file-read"
 
 export {
+	browserCandidatePaths,
+	engineOf,
+	findLocalBrowser,
+	findLocalBrowsers,
+	identifyBrowser,
+	LOCAL_BROWSER_NAMES,
+	LOCAL_BROWSER_ORDER,
+	puppeteerLaunchOptions,
+} from "../../../../sdk/packages/core/src/extensions/browser/browser-catalog"
+export {
+	BrowserLaunchError,
+	browserLabel,
+	launchWithFallback,
+	readUpdateState,
+	stagedUpdatePath,
+	updateEvidence,
+} from "../../../../sdk/packages/core/src/extensions/browser/browser-launch"
+export {
 	installOcrLanguages,
 	parseOcrLanguages,
 } from "../../../../sdk/packages/core/src/extensions/tools/executors/document/ocr"

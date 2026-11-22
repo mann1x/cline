@@ -1,4 +1,16 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises"
+import {
+	type BrowserChoice,
+	type BrowserLaunchOptions,
+	engineOf,
+	findLocalBrowser,
+	findLocalBrowsers,
+	identifyBrowser,
+	LOCAL_BROWSER_NAMES,
+	LOCAL_BROWSER_ORDER,
+	type LocalBrowserId,
+	puppeteerLaunchOptions,
+} from "@cline/core"
 import { Controller } from "@core/controller"
 import { BrowserActionResult } from "@shared/ExtensionMessage"
 import { fileExistsAtPath } from "@utils/fs"
@@ -9,14 +21,14 @@ import os from "os"
 import pWaitFor from "p-wait-for"
 import * as path from "path"
 import type { ConsoleMessage, ScreenshotOptions } from "puppeteer-core"
-import { Browser, connect, launch, Page, TimeoutError } from "puppeteer-core"
+import { Browser, connect, LaunchOptions, launch, Page, TimeoutError } from "puppeteer-core"
 import { StateManager } from "@/core/storage/StateManager"
 import { HostProvider } from "@/hosts/host-provider"
 import { telemetryService } from "@/services/telemetry"
 import { ShowMessageType } from "@/shared/proto/host/window"
 import { Logger } from "@/shared/services/Logger"
 import { discoverChromeInstances, isPortOpen, testBrowserConnection } from "./BrowserDiscovery"
-import { findEdge, launchWithFallback } from "./browser-launch"
+import { launchWithFallback } from "./browser-launch"
 import { ensureChromiumExists } from "./utils"
 
 // Define browser connection info interface
@@ -45,6 +57,8 @@ export class BrowserSession {
 	private lastConnectionAttempt: number = 0
 	private isConnectedToRemote: boolean = false
 	private useWebp: boolean
+	/** The open browser's name for results ("Firefox"); undefined when none. */
+	private browserName?: string
 
 	// Telemetry tracking properties
 	private sessionStartTime: number = 0
@@ -154,7 +168,7 @@ export class BrowserSession {
 		this.ulid = ulid
 	}
 
-	async launchBrowser() {
+	async launchBrowser(options?: BrowserLaunchOptions) {
 		if (this.browser) {
 			await this.closeBrowser() // this may happen when the model launches a browser again after having used it already before
 		}
@@ -167,8 +181,11 @@ export class BrowserSession {
 		this.isConnectedToRemote = false
 
 		const browserSettings = this.stateManager.getGlobalSettingsKey("browserSettings")
+		const requested = options?.browser
 
-		if (browserSettings.remoteBrowserEnabled) {
+		// A browser asked for by name is a local one: the remote host is
+		// whatever Chrome is listening there.
+		if (browserSettings.remoteBrowserEnabled && !requested) {
 			Logger.log(`launch browser called -- remote host mode (non-headless)`)
 			try {
 				await this.launchRemoteBrowser()
@@ -199,8 +216,8 @@ export class BrowserSession {
 				await this.launchLocalBrowser()
 			}
 		} else {
-			Logger.log(`launch browser called -- local mode (headless)`)
-			await this.launchLocalBrowser()
+			Logger.log(`launch browser called -- local mode (headless)${requested ? `, ${requested} asked for` : ""}`)
+			await this.launchLocalBrowser(requested)
 		}
 
 		this.page = await this.browser?.newPage()
@@ -212,30 +229,99 @@ export class BrowserSession {
 	}
 
 	/**
-	 * The browser the settings and discovery chose, then -- when it does not
-	 * start -- the same one again if an update was the cause, then Edge. What
-	 * happened is told to the person (`warn`); the model only sees the page.
-	 * Throws `BrowserLaunchError` when no local browser started.
+	 * The configured browser, or the system Chrome. Unlike
+	 * `getDetectedChromePath` this downloads nothing: the bundled Chromium is
+	 * the last fallback, after every browser already on the machine.
 	 */
-	async launchLocalBrowser() {
+	private async configuredOrSystemChrome(): Promise<string | undefined> {
+		const configured = this.stateManager.getGlobalSettingsKey("browserSettings").chromeExecutablePath
+		if (configured && (await fileExistsAtPath(configured))) {
+			return configured
+		}
+		try {
+			const system = chromeLauncher.Launcher.getFirstInstallation()
+			if (system && !system.includes(".Trash") && (await fileExistsAtPath(system))) {
+				return system
+			}
+		} catch {
+			// Not installed; the catalog below may still find one.
+		}
+		return findLocalBrowser("chrome")?.executablePath
+	}
+
+	/**
+	 * The browsers this machine can start, for `list_browsers`: the configured
+	 * one first, then each installed browser. The default is the one a launch
+	 * with no browser named would start.
+	 */
+	async listBrowsers(): Promise<BrowserChoice[]> {
+		const primary = await this.configuredOrSystemChrome()
+		const found = findLocalBrowsers()
+		const choices: BrowserChoice[] = found.map((browser) => ({
+			id: browser.id,
+			name: browser.name,
+			detail: browser.executablePath,
+		}))
+		if (primary) {
+			const id = identifyBrowser(primary)
+			const listed = choices.find((choice) => choice.id === id)
+			if (listed) {
+				listed.detail = primary
+				listed.isDefault = true
+			} else {
+				choices.unshift({ id, name: LOCAL_BROWSER_NAMES[id], detail: primary, isDefault: true })
+			}
+		} else if (choices[0]) {
+			choices[0].isDefault = true
+		}
+		return choices
+	}
+
+	/**
+	 * Start a local browser. Named: that browser, retried once if an update
+	 * stopped its first start, or an error listing the installed ones. Not
+	 * named: the configured browser or Chrome, then Edge, Brave, Firefox, and
+	 * the bundled Chromium last. What happened is told to the person (`warn`);
+	 * the model only sees the page. Throws `BrowserLaunchError` when nothing
+	 * started.
+	 */
+	async launchLocalBrowser(requested?: string) {
 		const browserSettings = this.stateManager.getGlobalSettingsKey("browserSettings")
 		const userArgs = splitArgs(browserSettings.customArgs)
-		const { browser } = await launchWithFallback({
+		const named = requested ? this.resolveNamedBrowser(requested) : undefined
+		const { browser, executablePath } = await launchWithFallback({
 			resolvePrimary: async () => {
-				const detected = await this.getDetectedChromePath()
-				return { executablePath: detected.path, source: detected.isBundled ? "bundled" : "settings or system" }
+				if (named) {
+					return { executablePath: await named, source: `asked for: ${requested}` }
+				}
+				const primary = await this.configuredOrSystemChrome()
+				if (!primary) {
+					throw new Error("Chrome is not installed and no browser is set in the browser settings")
+				}
+				return { executablePath: primary, source: "settings or system" }
 			},
-			resolveFallback: () => findEdge(),
-			launch: (executablePath) =>
-				launch({
-					args: [
-						"--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-						...userArgs,
-					],
-					executablePath,
-					defaultViewport: browserSettings.viewport,
-					headless: "shell", // Always use headless mode for local connections
-				}),
+			resolveFallbacks: async () => {
+				if (named) {
+					return []
+				}
+				const installed = findLocalBrowsers().map((found) => found.executablePath)
+				if (installed.length > 0) {
+					return installed
+				}
+				// Nothing on the machine: the Chromium downloaded on first use.
+				return [(await ensureChromiumExists()).executablePath]
+			},
+			launch: (path) =>
+				launch(
+					puppeteerLaunchOptions(engineOf(identifyBrowser(path)), {
+						executablePath: path,
+						chromiumArgs: [
+							"--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+							...userArgs,
+						],
+						defaultViewport: browserSettings.viewport,
+					}) as LaunchOptions,
+				),
 			warn: (message) => {
 				Logger.warn(`[browser] ${message}`)
 				void HostProvider.window.showMessage({ type: ShowMessageType.WARNING, message: `Browser tool: ${message}` })
@@ -243,7 +329,28 @@ export class BrowserSession {
 			log: (message) => Logger.warn(message),
 		})
 		this.browser = browser
+		this.browserName = LOCAL_BROWSER_NAMES[identifyBrowser(executablePath)]
 		this.isConnectedToRemote = false
+	}
+
+	/** The executable for a browser named by id, or an error naming the installed ones. */
+	private async resolveNamedBrowser(requested: string): Promise<string> {
+		const installed = () => findLocalBrowsers().map((found) => found.id)
+		if (!(LOCAL_BROWSER_ORDER as readonly string[]).includes(requested)) {
+			throw new Error(
+				`\`${requested}\` is not a browser this host can start. Use one of: ${installed().join(", ") || "none"}.`,
+			)
+		}
+		const id = requested as LocalBrowserId
+		const configured = this.stateManager.getGlobalSettingsKey("browserSettings").chromeExecutablePath
+		if (configured && identifyBrowser(configured) === id && (await fileExistsAtPath(configured))) {
+			return configured
+		}
+		const path = id === "chrome" ? await this.configuredOrSystemChrome() : findLocalBrowser(id)?.executablePath
+		if (!path) {
+			throw new Error(`${LOCAL_BROWSER_NAMES[id]} is not installed here. Installed: ${installed().join(", ") || "none"}.`)
+		}
+		return path
 	}
 
 	async launchRemoteBrowser() {
@@ -281,6 +388,7 @@ export class BrowserSession {
 				})
 				this.page = await this.browser?.newPage()
 				this.isConnectedToRemote = true
+				this.browserName = "Chrome (remote)"
 				return
 			} catch (error) {
 				Logger.log(`Failed to connect using cached endpoint: ${error}`)
@@ -333,6 +441,7 @@ export class BrowserSession {
 				})
 				this.page = await this.browser?.newPage()
 				this.isConnectedToRemote = true
+				this.browserName = "Chrome (remote)"
 				return
 			} catch (error) {
 				Logger.log(`Failed to connect to remote browser: ${error}`)
@@ -388,6 +497,7 @@ export class BrowserSession {
 			this.page = undefined
 			this.currentMousePosition = undefined
 			this.isConnectedToRemote = false
+			this.browserName = undefined
 
 			// Reset tracking properties
 			this.sessionStartTime = 0
@@ -503,6 +613,7 @@ export class BrowserSession {
 			logs: logs.join("\n"),
 			currentUrl: this.page.url(),
 			currentMousePosition: this.currentMousePosition,
+			...(this.browserName ? { browser: this.browserName } : {}),
 		}
 	}
 
