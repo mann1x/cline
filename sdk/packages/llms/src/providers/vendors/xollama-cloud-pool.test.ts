@@ -8,6 +8,7 @@ import {
 } from "./ollama-account-slots";
 import { resetXollamaProbes } from "./xollama";
 import {
+	describeXollamaCloudPool,
 	parseXollamaCloudPool,
 	readXollamaCloudPool,
 	resetXollamaCloudPools,
@@ -128,6 +129,24 @@ const POOL = {
 	next_reset: "2026-11-23T00:00:00Z",
 	pool: [{ label: "work-2", plan: "pro", parallel: 3, in_use: 0 }],
 };
+
+describe("describeXollamaCloudPool", () => {
+	// Live, 2026-11-22: a signed-out primary counts in `accounts`, and an
+	// omitted accounts_at_once means all of them.
+	it("says 'at once' only when fewer accounts take requests than are configured", () => {
+		const pool = parseXollamaCloudPool({
+			accounts: 2,
+			parallel: 3,
+			parallel_now: 3,
+		});
+		expect(describeXollamaCloudPool(pool as never)).toBe(
+			"xOllama pool of 2 Ollama Cloud account(s)",
+		);
+		expect(describeXollamaCloudPool(parseXollamaCloudPool(POOL) as never)).toBe(
+			"xOllama pool of 4 Ollama Cloud account(s), 3 at once",
+		);
+	});
+});
 
 describe("parseXollamaCloudPool", () => {
 	it("reads the route, and is nothing for a server with no pool", () => {
@@ -291,6 +310,7 @@ describe("resolveAgentSlotLimit on a pooled xOllama", () => {
 			fetch: s.fetchImpl,
 		});
 		expect(slots.limit).toBe(1);
+		expect(slots.reason).toContain("reached its usage limit or is signed out");
 		expect(slots.reason).toContain("the first is back at 2026-11-23T00:00:00Z");
 	});
 });

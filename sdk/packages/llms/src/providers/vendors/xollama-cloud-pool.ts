@@ -32,7 +32,10 @@ export const XOLLAMA_CLOUD_ACCOUNTS_FEATURE = "cloud_accounts_v1";
 export const XOLLAMA_CLOUD_POOL_TTL_MS = 60_000;
 
 export interface XollamaCloudPool {
-	/** Accounts in the pool, the primary not counted. Always > 0 here. */
+	/**
+	 * Accounts configured on the server, whatever their state (a signed-out
+	 * one counts here and adds nothing to `parallelNow`). Always > 0 here.
+	 */
 	accounts: number;
 	/** How many of them take requests at the same time. */
 	accountsAtOnce: number;
@@ -152,9 +155,17 @@ export function xollamaPoolKey(baseUrl: string | undefined): string {
 	return `xollama:${xollamaOrigin(baseUrl)}`;
 }
 
-/** How the pool reads in a log line. */
+/**
+ * How the pool reads in a log line. `accounts` counts every configured
+ * account, signed out ones included, and an omitted `accounts_at_once` means
+ * all of them, so "N at once" is said only when it is fewer.
+ */
 export function describeXollamaCloudPool(pool: XollamaCloudPool): string {
-	return `xOllama pool of ${pool.accounts} Ollama Cloud account(s), ${pool.accountsAtOnce} at once`;
+	const atOnce =
+		pool.accountsAtOnce < pool.accounts
+			? `, ${pool.accountsAtOnce} at once`
+			: "";
+	return `xOllama pool of ${pool.accounts} Ollama Cloud account(s)${atOnce}`;
 }
 
 /** Test seam. */

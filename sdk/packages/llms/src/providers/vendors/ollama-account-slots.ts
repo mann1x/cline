@@ -339,12 +339,12 @@ export function withOllamaAccountSlots(
 		});
 		if (!cap) return baseFetch(input, init);
 		if (cap.pool && cap.limit === 0) {
-			// Every account in the pool has run out or been refused. Waiting here
+			// Every account in the pool has run out, is signed out or was refused. Waiting here
 			// would wait for a reading to change; the server answers at once with
 			// a 402 that says when the first account is back, and that is the
 			// message to show.
 			options.logger?.log?.(
-				`[ollama] ${describeOllamaAccountCap(cap)}: no account has room${
+				`[ollama] ${describeOllamaAccountCap(cap)}: no account can take requests (each has reached its usage limit or is signed out)${
 					cap.pool.nextReset
 						? `; the first is back at ${cap.pool.nextReset}`
 						: ""

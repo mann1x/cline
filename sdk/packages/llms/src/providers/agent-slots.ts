@@ -2,6 +2,7 @@ import { resolveOllamaAccountCap } from "./vendors/ollama-account-slots";
 import { resolveOllamaOrigin } from "./vendors/ollama-reachability";
 import { probeOpencotiProps } from "./vendors/polykv";
 import { withXollamaAuth } from "./vendors/xollama";
+import { describeXollamaCloudPool } from "./vendors/xollama-cloud-pool";
 
 /**
  * How many requests an endpoint will serve at once, and what that means for
@@ -158,13 +159,16 @@ export async function resolveAgentSlotLimit(input: {
 			// the first is back.
 			const allowed = Math.max(1, cap.limit);
 			const limit = configured ? Math.min(configured, allowed) : allowed;
-			const pool = `${cap.pool.accounts} Ollama Cloud account(s), ${cap.pool.accountsAtOnce} at once`;
+			const pool = describeXollamaCloudPool(cap.pool).replace(
+				/^xOllama pool of /,
+				"",
+			);
 			return {
 				limit,
 				accountCap: { plan: cap.plan, limit: allowed },
 				reason:
 					cap.limit === 0
-						? `every account in this xOllama server's pool (${pool}) has run out${
+						? `no account in this xOllama server's pool (${pool}) can take requests: each has reached its usage limit or is signed out${
 								cap.pool.nextReset
 									? `; the first is back at ${cap.pool.nextReset}`
 									: ""
