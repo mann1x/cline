@@ -249,6 +249,7 @@ export {
 } from "./providers/vendors/llamacpp-sampling";
 export {
 	acquireOllamaAccountSlot,
+	describeOllamaAccountCap,
 	OLLAMA_PLAN_CONCURRENCY,
 	type OllamaAccountCap,
 	ollamaAccountSlotUsage,
@@ -428,6 +429,12 @@ export {
 	type XollamaSideCallEvent,
 	xollamaDrivesModel,
 } from "./providers/vendors/xollama";
+export {
+	parseXollamaCloudPool,
+	readXollamaCloudPool,
+	XOLLAMA_CLOUD_ACCOUNTS_FEATURE,
+	type XollamaCloudPool,
+} from "./providers/vendors/xollama-cloud-pool";
 // xOllama: a model's opencoti engine, addressed as a bare opencoti root.
 export {
 	readXollamaEngines,

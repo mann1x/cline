@@ -5,6 +5,29 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.296] — 2026-11-22
+
+### An xOllama server with several Ollama Cloud accounts is used to its size
+
+- **The automatic cap follows the server's account pool.** An xOllama build
+  with several ollama.com accounts (`cloud_accounts_v1`) serves cloud models
+  through all of them, some at the same time. Cerebriline capped cloud
+  requests by the plan of the account the server is signed in as (3 at once
+  on Pro), so against a server with three Pro accounts taking requests it
+  stopped at 3 while the server could serve 9. On such a server the cap is
+  now the server's own count of what it can serve right now, read from
+  `/api/xollama/cloud` (`parallel_now`), shared by every session, agent and
+  side call using that server. It is read again every minute, and at once
+  after a 402 or 429, so an account that runs out lowers the cap for the
+  next request. Delegated agents get the same number, and a profile's
+  **Parallel sessions** can still only lower it.
+- **When every account has run out**, a request is no longer held on this
+  side: it goes to the server, whose answer says when the first account is
+  back, and the agents log says the same.
+- The Ollama provider, and an xOllama without the feature or without a pool,
+  keep the per-account cap as before. When the server has a local API key,
+  the pool is read with it.
+
 ## [4.100.295] — 2026-11-22
 
 ### Find a skill from the chat box

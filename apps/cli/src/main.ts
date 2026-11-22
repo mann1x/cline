@@ -1867,6 +1867,18 @@ export async function runCli(): Promise<void> {
 			baseUrl: config.delegatedAgentConnection?.baseUrl ?? config.baseUrl,
 			parallelSessions: args.parallelSessions,
 			modelId: config.delegatedAgentConnection?.modelId ?? config.modelId,
+			// An xOllama keeps its cloud account pool behind its local key.
+			...((
+				config.delegatedAgentConnection
+					? config.delegatedAgentConnection.apiKey
+					: config.apiKey
+			)
+				? {
+						apiKey: config.delegatedAgentConnection
+							? config.delegatedAgentConnection.apiKey
+							: config.apiKey,
+					}
+				: {}),
 		});
 		config.maxConcurrentAgents = agentSlots.limit;
 		// Agent nodes, when the run names any. Each is a whole agents

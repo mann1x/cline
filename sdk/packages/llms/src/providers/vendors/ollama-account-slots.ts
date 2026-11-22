@@ -22,6 +22,11 @@
 //
 // One extension host, one count. Two VS Code windows are two processes and
 // count separately.
+//
+// An xOllama server with a pool of cloud accounts (`cloud_accounts_v1`) is
+// counted as one unit instead: its allowance is the pool's `parallel_now`,
+// keyed by the server, because `/api/me` there answers for the primary
+// account alone (see `xollama-cloud-pool`).
 
 import type { BasicLogger } from "@cline/shared";
 import {
@@ -30,6 +35,13 @@ import {
 	primeOllamaAccountStatus,
 	readOllamaAccountCache,
 } from "./ollama-account";
+import {
+	describeXollamaCloudPool,
+	readXollamaCloudPool,
+	refreshXollamaCloudPool,
+	type XollamaCloudPool,
+	xollamaPoolKey,
+} from "./xollama-cloud-pool";
 
 /** Concurrent requests per plan, as Ollama publishes them. */
 export const OLLAMA_PLAN_CONCURRENCY: Readonly<Record<string, number>> = {
@@ -57,6 +69,19 @@ export interface OllamaAccountCap {
 	key: string;
 	plan: string;
 	limit: number;
+	/**
+	 * Set when the allowance is an xOllama server's account pool: `key` is
+	 * then the server, `limit` the pool's `parallel_now` (0 when every
+	 * account has run out), and `plan` reads "xOllama pool".
+	 */
+	pool?: XollamaCloudPool;
+}
+
+/** How a cap reads in a log line. */
+export function describeOllamaAccountCap(cap: OllamaAccountCap): string {
+	return cap.pool
+		? describeXollamaCloudPool(cap.pool)
+		: `cloud account (${cap.plan}, ${cap.limit} requests at once)`;
 }
 
 /** The account's allowance, when the server is signed in on a known plan. */
@@ -89,12 +114,27 @@ export async function resolveOllamaAccountCap(input: {
 	baseUrl: string;
 	modelId: string | undefined;
 	fetch?: typeof fetch;
+	/** "xollama" asks the server for its account pool first. */
+	providerId?: string;
 }): Promise<OllamaAccountCap | undefined> {
 	if (!input.modelId) return undefined;
-	await primeOllamaAccountStatus(input.baseUrl, input.fetch);
+	const [pool] = await Promise.all([
+		input.providerId === "xollama"
+			? readXollamaCloudPool(input.baseUrl, input.fetch ?? globalThis.fetch)
+			: Promise.resolve(undefined),
+		primeOllamaAccountStatus(input.baseUrl, input.fetch),
+	]);
 	const status = readOllamaAccountCache(input.baseUrl);
-	const cap = ollamaAccountCap(status);
-	return cap && isOllamaCloudModel(status, input.modelId) ? cap : undefined;
+	if (!isOllamaCloudModel(status, input.modelId)) return undefined;
+	if (pool) {
+		return {
+			key: xollamaPoolKey(input.baseUrl),
+			plan: "xOllama pool",
+			limit: pool.parallelNow,
+			pool,
+		};
+	}
+	return ollamaAccountCap(status);
 }
 
 class AccountSlots {
@@ -278,6 +318,8 @@ export function withOllamaAccountSlots(
 		/** For the account read; the unwrapped server fetch. */
 		probeFetch?: typeof fetch;
 		logger?: BasicLogger;
+		/** "xollama" counts against the server's account pool when it has one. */
+		providerId?: string;
 	},
 ): typeof fetch {
 	return (async (input, init) => {
@@ -293,12 +335,27 @@ export function withOllamaAccountSlots(
 			baseUrl: options.baseUrl,
 			modelId: requestModel(init?.body),
 			...(options.probeFetch ? { fetch: options.probeFetch } : {}),
+			...(options.providerId ? { providerId: options.providerId } : {}),
 		});
 		if (!cap) return baseFetch(input, init);
+		if (cap.pool && cap.limit === 0) {
+			// Every account in the pool has run out or been refused. Waiting here
+			// would wait for a reading to change; the server answers at once with
+			// a 402 that says when the first account is back, and that is the
+			// message to show.
+			options.logger?.log?.(
+				`[ollama] ${describeOllamaAccountCap(cap)}: no account has room${
+					cap.pool.nextReset
+						? `; the first is back at ${cap.pool.nextReset}`
+						: ""
+				}`,
+			);
+			return afterPoolAnswer(await baseFetch(input, init), options);
+		}
 		const usage = ollamaAccountSlotUsage(cap.key);
 		if (usage && usage.active >= usage.limit) {
 			options.logger?.log?.(
-				`[ollama] cloud account (${cap.plan}, ${cap.limit} requests at once): all ${cap.limit} in use, ${
+				`[ollama] ${describeOllamaAccountCap(cap)}: all ${cap.limit} in use, ${
 					usage.waiting + 1
 				} waiting; this request starts when one finishes`,
 			);
@@ -314,6 +371,25 @@ export function withOllamaAccountSlots(
 			release();
 			throw error;
 		}
+		if (cap.pool) afterPoolAnswer(response, options);
 		return releaseWhenDone(response, release, init?.signal);
 	}) as typeof fetch;
+}
+
+/**
+ * A 402 or 429 from a pooled server means an account just ran out or every
+ * slot was taken: read the pool again now rather than a minute from now, so
+ * the next request is capped at what the server can still serve.
+ */
+function afterPoolAnswer(
+	response: Response,
+	options: { baseUrl: string; probeFetch?: typeof fetch },
+): Response {
+	if (response.status === 402 || response.status === 429) {
+		void refreshXollamaCloudPool(
+			options.baseUrl,
+			options.probeFetch ?? globalThis.fetch,
+		);
+	}
+	return response;
 }

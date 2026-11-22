@@ -1,6 +1,7 @@
 import { resolveOllamaAccountCap } from "./vendors/ollama-account-slots";
 import { resolveOllamaOrigin } from "./vendors/ollama-reachability";
 import { probeOpencotiProps } from "./vendors/polykv";
+import { withXollamaAuth } from "./vendors/xollama";
 
 /**
  * How many requests an endpoint will serve at once, and what that means for
@@ -124,18 +125,57 @@ export async function resolveAgentSlotLimit(input: {
 	/** The agents' model: a cloud model on Ollama draws on the account's plan. */
 	modelId?: string;
 	fetch?: typeof fetch;
+	/**
+	 * The endpoint's key. An xOllama server keeps its account pool
+	 * (`/api/xollama/cloud`) behind its local key when one is set.
+	 */
+	apiKey?: string;
 }): Promise<AgentSlotLimit> {
 	const configured = normalizeParallelSessions(input.parallelSessions);
 	if (input.providerId === "ollama" || input.providerId === "xollama") {
+		const origin = resolveOllamaOrigin(input.providerId, input.baseUrl);
+		const baseFetch = input.fetch ?? globalThis.fetch;
+		const probeFetch =
+			input.providerId === "xollama" && input.apiKey
+				? withXollamaAuth(baseFetch, origin, {
+						Authorization: `Bearer ${input.apiKey}`,
+					})
+				: input.fetch;
 		// The plan's allowance is what the account runs at once, whatever a
 		// profile says: more agents than that queue on Ollama's side and are
 		// rejected once its queue fills (issue #115). Configured lower, the lower
 		// number stands; not configured, the plan is the answer rather than one.
 		const cap = await resolveOllamaAccountCap({
-			baseUrl: resolveOllamaOrigin(input.providerId, input.baseUrl),
+			baseUrl: origin,
 			modelId: input.modelId,
-			...(input.fetch ? { fetch: input.fetch } : {}),
+			providerId: input.providerId,
+			...(probeFetch ? { fetch: probeFetch } : {}),
 		});
+		if (cap?.pool) {
+			// A server with several cloud accounts: what it serves at once now.
+			// Never 0 here, which would read as "uncapped": with every account
+			// out, one agent at a time meets the server's 402 that says when
+			// the first is back.
+			const allowed = Math.max(1, cap.limit);
+			const limit = configured ? Math.min(configured, allowed) : allowed;
+			const pool = `${cap.pool.accounts} Ollama Cloud account(s), ${cap.pool.accountsAtOnce} at once`;
+			return {
+				limit,
+				accountCap: { plan: cap.plan, limit: allowed },
+				reason:
+					cap.limit === 0
+						? `every account in this xOllama server's pool (${pool}) has run out${
+								cap.pool.nextReset
+									? `; the first is back at ${cap.pool.nextReset}`
+									: ""
+							}`
+						: configured && configured <= cap.limit
+							? `${configured} parallel session(s) configured; this xOllama server's pool (${pool}) serves ${cap.limit}`
+							: `this xOllama server's pool (${pool}) serves ${cap.limit} requests at once${
+									configured ? ` (${configured} configured)` : ""
+								}, shared by every request on the server`,
+			};
+		}
 		if (cap) {
 			const limit = configured ? Math.min(configured, cap.limit) : cap.limit;
 			return {

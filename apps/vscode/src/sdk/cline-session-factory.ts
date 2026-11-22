@@ -2340,6 +2340,10 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 			: (profileSettings?.parallelSessions ?? readStoredParallelSessions(providerId)),
 		modelId: delegatedAgentConnection?.modelId ?? modelId,
 		fetch,
+		// An xOllama keeps its cloud account pool behind its local key.
+		...((delegatedAgentConnection ? delegatedAgentConnection.apiKey : apiKey)
+			? { apiKey: delegatedAgentConnection ? delegatedAgentConnection.apiKey : apiKey }
+			: {}),
 	})
 	Logger.log(`[Agents] Concurrency: ${agentSlots.limit === 0 ? "uncapped" : agentSlots.limit} — ${agentSlots.reason}`)
 	// And the other endpoints an agent can name, which the session's count has
@@ -2402,6 +2406,7 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 				parallelSessions: snapshotProviderSettings(snapshot)?.parallelSessions,
 				modelId: connection.modelId,
 				fetch,
+				...(connection.apiKey ? { apiKey: connection.apiKey } : {}),
 			})
 			agentNodes.push({
 				id: node.id,

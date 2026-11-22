@@ -1360,6 +1360,7 @@ export async function createOllamaProviderModule(
 	const providerFetch = withOllamaAccountSlots(progressFetch, {
 		baseUrl: resolveOllamaOrigin(config.providerId, config.baseUrl),
 		probeFetch: serverFetch,
+		providerId: config.providerId,
 		...(context.logger ? { logger: context.logger } : {}),
 	});
 	const provider = createOllama({
