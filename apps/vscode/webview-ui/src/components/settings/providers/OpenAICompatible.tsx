@@ -34,7 +34,18 @@ interface OpenAICompatibleProviderProps {
 	showModelOptions: boolean
 	isPopup?: boolean
 	currentMode: Mode
+	/**
+	 * Moves on every "ready" answer of the provider status check
+	 * (`useProviderStatus().readySeq`): the model list is fetched again, so an
+	 * endpoint that was down when the panel opened fills it once it is back.
+	 */
+	providerReadySeq?: number
+	/** Called when a retry finds models after the endpoint had listed none. */
+	onModelsRecovered?: () => void
 }
+
+/** How often an empty model list is asked for again while the panel shows. */
+export const EMPTY_MODEL_LIST_RETRY_MS = 15_000
 
 /**
  * The OpenAI Compatible provider configuration component
@@ -44,6 +55,8 @@ export const OpenAICompatibleProvider = ({
 	showModelOptions,
 	isPopup,
 	currentMode,
+	providerReadySeq,
+	onModelsRecovered,
 }: OpenAICompatibleProviderProps) => {
 	const { apiConfiguration, remoteConfigSettings } = useExtensionState()
 	const { handleFieldChange, handleModeFieldChange } = useApiConfigurationHandlers()
@@ -64,6 +77,11 @@ export const OpenAICompatibleProvider = ({
 	const latestOpenAiBaseUrlRef = useRef(config?.baseUrl || "")
 	const latestOpenAiApiKeyRef = useRef(legacyOpenAiApiKey)
 	const openAiModelsRequestRef = useRef(0)
+	// The last answer listed no models (the endpoint was down, or has none):
+	// a later answer with models is a recovery the status dot should hear of.
+	const listedNoModelsRef = useRef(false)
+	const onModelsRecoveredRef = useRef(onModelsRecovered)
+	onModelsRecoveredRef.current = onModelsRecovered
 
 	useEffect(() => {
 		latestOpenAiBaseUrlRef.current = config?.baseUrl || ""
@@ -294,6 +312,11 @@ export const OpenAICompatibleProvider = ({
 
 				if (openAiModelsRequestRef.current === requestId) {
 					setAvailableOpenAiModels(response.values)
+					const listed = response.values.length > 0
+					if (listed && listedNoModelsRef.current) {
+						onModelsRecoveredRef.current?.()
+					}
+					listedNoModelsRef.current = !listed
 				}
 			} catch (error) {
 				console.error("Failed to refresh OpenAI models:", error)
@@ -326,6 +349,37 @@ export const OpenAICompatibleProvider = ({
 	useEffect(() => {
 		void refreshOpenAiModels(config?.baseUrl, latestOpenAiApiKeyRef.current)
 	}, [config?.baseUrl, refreshOpenAiModels])
+
+	// The status check found the endpoint ready: ask for the list again. The
+	// first value is the mount's, which the fetch above already covers.
+	const seenReadySeqRef = useRef(providerReadySeq)
+	useEffect(() => {
+		if (providerReadySeq === undefined || providerReadySeq === seenReadySeqRef.current) {
+			return
+		}
+		seenReadySeqRef.current = providerReadySeq
+		void refreshOpenAiModels(latestOpenAiBaseUrlRef.current, latestOpenAiApiKeyRef.current)
+	}, [providerReadySeq, refreshOpenAiModels])
+
+	// The host answers an unreachable endpoint with an empty list, not an
+	// error, and nothing else asks again: a server that comes back up stayed a
+	// plain text field until the panel was left and reopened. While the list
+	// is empty and a URL is set, ask again on a slow timer, only while the
+	// panel can be seen.
+	const hasBaseUrl = Boolean(config?.baseUrl?.trim())
+	const modelListEmpty = availableOpenAiModels.length === 0
+	useEffect(() => {
+		if (!hasBaseUrl || !modelListEmpty) {
+			return
+		}
+		const timer = setInterval(() => {
+			if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+				return
+			}
+			void refreshOpenAiModels(latestOpenAiBaseUrlRef.current, latestOpenAiApiKeyRef.current)
+		}, EMPTY_MODEL_LIST_RETRY_MS)
+		return () => clearInterval(timer)
+	}, [hasBaseUrl, modelListEmpty, refreshOpenAiModels])
 
 	const handleOpenAiModelSelection = useCallback(
 		(modelId: string) => {

@@ -562,7 +562,9 @@ const ApiOptions = ({
 				<OpenAICompatibleProvider
 					currentMode={currentMode}
 					isPopup={isPopup}
+					onModelsRecovered={scope ? undefined : providerStatus.recheck}
 					providerId={selectedProvider}
+					providerReadySeq={scope ? undefined : providerStatus.readySeq}
 					showModelOptions={showModelOptions}
 				/>
 			)}

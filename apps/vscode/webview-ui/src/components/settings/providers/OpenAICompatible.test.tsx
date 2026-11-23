@@ -2,7 +2,7 @@ import { ApiFormat } from "@shared/proto/cline/models"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import type { ChangeEventHandler, ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { OpenAICompatibleProvider } from "./OpenAICompatible"
+import { EMPTY_MODEL_LIST_RETRY_MS, OpenAICompatibleProvider } from "./OpenAICompatible"
 
 const mocks = vi.hoisted(() => ({
 	commitSelection: vi.fn(),
@@ -777,4 +777,67 @@ describe("OpenAICompatibleProvider", () => {
 			expect(screen.queryByTestId("context-minimum-warning")).toBeNull()
 		})
 	}
+
+	// A server that was down when the panel opened, and came back: the list
+	// stayed a text field until the user left the panel and returned.
+	describe("an endpoint that comes back up", () => {
+		it("asks for the list again on a timer while it is empty, and tells the status dot once it recovers", async () => {
+			vi.useFakeTimers()
+			const recovered = vi.fn()
+			mocks.refreshOpenAiModels.mockResolvedValue({ values: [] })
+			render(
+				<OpenAICompatibleProvider
+					currentMode="act"
+					onModelsRecovered={recovered}
+					providerId="opencoti"
+					showModelOptions={false}
+				/>,
+			)
+			await act(async () => {})
+			expect(mocks.refreshOpenAiModels).toHaveBeenCalledTimes(1)
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(EMPTY_MODEL_LIST_RETRY_MS)
+			})
+			expect(mocks.refreshOpenAiModels).toHaveBeenCalledTimes(2)
+			expect(recovered).not.toHaveBeenCalled()
+
+			mocks.refreshOpenAiModels.mockResolvedValue({ values: ["custom-model", "other-model"] })
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(EMPTY_MODEL_LIST_RETRY_MS)
+			})
+			expect(mocks.refreshOpenAiModels).toHaveBeenCalledTimes(3)
+			expect(recovered).toHaveBeenCalledTimes(1)
+			expect(screen.getByText("other-model")).toBeTruthy()
+
+			// Listed now: no more retries.
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(EMPTY_MODEL_LIST_RETRY_MS * 3)
+			})
+			expect(mocks.refreshOpenAiModels).toHaveBeenCalledTimes(3)
+		})
+
+		it("fetches the list again when the status check answers ready, not at mount", async () => {
+			const props = { currentMode: "act" as const, providerId: "opencoti", showModelOptions: false }
+			const { rerender } = render(<OpenAICompatibleProvider {...props} providerReadySeq={0} />)
+			await act(async () => {})
+			expect(mocks.refreshOpenAiModels).toHaveBeenCalledTimes(1)
+
+			mocks.refreshOpenAiModels.mockResolvedValue({ values: ["other-model"] })
+			rerender(<OpenAICompatibleProvider {...props} providerReadySeq={1} />)
+			await act(async () => {})
+			expect(mocks.refreshOpenAiModels).toHaveBeenCalledTimes(2)
+			expect(screen.getByText("other-model")).toBeTruthy()
+		})
+
+		it("does not retry a list that came back", async () => {
+			vi.useFakeTimers()
+			mocks.refreshOpenAiModels.mockResolvedValue({ values: ["custom-model"] })
+			renderProvider()
+			await act(async () => {})
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(EMPTY_MODEL_LIST_RETRY_MS * 2)
+			})
+			expect(mocks.refreshOpenAiModels).toHaveBeenCalledTimes(1)
+		})
+	})
 })

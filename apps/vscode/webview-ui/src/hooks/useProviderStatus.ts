@@ -24,6 +24,12 @@ export interface ProviderStatusView {
 	detail: string
 	/** A check is in flight; the state shown is the last answer. */
 	checking: boolean
+	/**
+	 * Counts the "ready" answers. A panel whose model list came back empty
+	 * while the endpoint was down fetches it again when this moves, so a
+	 * server that is back fills the list without leaving the panel.
+	 */
+	readySeq: number
 	recheck: () => void
 }
 
@@ -53,6 +59,7 @@ export function useProviderStatus(
 	const [state, setState] = useState<ProviderStatusState>("unknown")
 	const [detail, setDetail] = useState(NOT_YET)
 	const [checking, setChecking] = useState(false)
+	const [readySeq, setReadySeq] = useState(0)
 	// Only the newest check may set the result: a slow answer for the previous
 	// provider must not paint the new one.
 	const generation = useRef(0)
@@ -70,8 +77,12 @@ export function useProviderStatus(
 			if (mine !== generation.current) {
 				return
 			}
-			setState(toProviderStatusState(response.state))
+			const next = toProviderStatusState(response.state)
+			setState(next)
 			setDetail(response.detail || NOT_YET)
+			if (next === "ready") {
+				setReadySeq((n) => n + 1)
+			}
 		} catch (error) {
 			if (mine !== generation.current) {
 				return
@@ -117,5 +128,5 @@ export function useProviderStatus(
 	}, [providerId, modelId, settings, check])
 
 	const recheck = useCallback(() => void check(), [check])
-	return { state, detail, checking, recheck }
+	return { state, detail, checking, readySeq, recheck }
 }

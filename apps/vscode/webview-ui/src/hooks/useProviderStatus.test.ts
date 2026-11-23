@@ -133,4 +133,15 @@ describe("useProviderStatus", () => {
 		expect(result.current.state).toBe("unknown")
 		expect(read).not.toHaveBeenCalled()
 	})
+
+	it("counts the ready answers, not the failed ones", async () => {
+		read.mockResolvedValueOnce(answer("fail")).mockResolvedValueOnce(answer("ready")).mockResolvedValueOnce(answer("ready"))
+		const { result } = renderHook(() => useProviderStatus("opencoti", undefined, undefined))
+		await waitFor(() => expect(result.current.state).toBe("fail"))
+		expect(result.current.readySeq).toBe(0)
+		act(() => result.current.recheck())
+		await waitFor(() => expect(result.current.readySeq).toBe(1))
+		act(() => result.current.recheck())
+		await waitFor(() => expect(result.current.readySeq).toBe(2))
+	})
 })
