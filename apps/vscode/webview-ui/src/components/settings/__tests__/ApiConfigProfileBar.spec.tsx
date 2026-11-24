@@ -319,13 +319,39 @@ describe("ApiConfigProfileBar", () => {
 			expect(profilesHook.loadProfile).toHaveBeenCalledWith("vision")
 		})
 
-		it("moves through the list with the arrows", () => {
+		it("moves through the list with the arrows, from the loaded profile", () => {
+			profilesHook.activeName = "cloud-sonnet"
 			render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
 			fireEvent.focus(field())
 			fireEvent.keyDown(field(), { key: "ArrowDown" })
-			fireEvent.keyDown(field(), { key: "ArrowDown" })
 			fireEvent.keyDown(field(), { key: "Enter" })
-			expect(profilesHook.loadProfile).toHaveBeenCalledWith("cloud-sonnet")
+			expect(profilesHook.loadProfile).toHaveBeenCalledWith("vision")
+		})
+
+		// pandorum, 2026-11-24: with a long list it opened at the top, and the
+		// ticked profile had to be scrolled to every time.
+		it("opens at the loaded profile, highlighted and scrolled into view", () => {
+			const saved = profilesHook.profiles
+			profilesHook.profiles = Array.from({ length: 40 }, (_, i) => ({ name: `profile-${i}` }))
+			profilesHook.activeName = "profile-31"
+			const scrolled: Array<{ text: string | null; block?: string }> = []
+			const original = Element.prototype.scrollIntoView
+			Element.prototype.scrollIntoView = function (this: Element, arg?: boolean | ScrollIntoViewOptions) {
+				scrolled.push({ text: this.textContent, block: typeof arg === "object" ? arg.block : undefined })
+			}
+			try {
+				render(<ApiConfigProfileBar scope={{ kind: "mode", mode: "act" }} />)
+				fireEvent.focus(field())
+				expect(scrolled).toContainEqual({ text: "profile-31", block: "center" })
+				const option = screen.getByRole("option", { name: "profile-31" })
+				expect(option.className).toContain("list-activeSelectionBackground")
+				fireEvent.keyDown(field(), { key: "ArrowDown" })
+				fireEvent.keyDown(field(), { key: "Enter" })
+				expect(profilesHook.loadProfile).toHaveBeenCalledWith("profile-32")
+			} finally {
+				Element.prototype.scrollIntoView = original
+				profilesHook.profiles = saved
+			}
 		})
 	})
 

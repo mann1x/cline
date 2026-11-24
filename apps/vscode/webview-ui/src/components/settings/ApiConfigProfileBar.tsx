@@ -145,6 +145,24 @@ const ApiConfigProfileBar = ({ scope, description }: ApiConfigProfileBarProps) =
 		setHighlight(-1)
 	}, [query])
 
+	// The list opens at the loaded profile, highlighted and in the middle of
+	// the view, as a native select does: with a long list it opened at the
+	// top, and the ticked profile had to be scrolled to every time (pandorum,
+	// 2026-11-24). After the reset above, which opening also triggers by
+	// putting the name in the field, so the highlight it sets is the one kept.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: opening is the trigger; the list and the name are read as they are at that moment.
+	useEffect(() => {
+		if (!listOpen) {
+			return
+		}
+		const index = shown.findIndex((profile) => profile.name === activeName)
+		if (index < 0) {
+			return
+		}
+		setHighlight(index)
+		itemRefs.current[index]?.scrollIntoView?.({ block: "center" })
+	}, [listOpen])
+
 	// Which agents name the profile being renamed, so the row can say they keep
 	// the old name: their files are the user's, and a rename does not edit them.
 	useEffect(() => {
