@@ -23,6 +23,10 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   backslashes (`c:\Users\\manni\\…`), which Windows opens as the same file
   but the reminder kept as a different one, so no check of the plain path
   ever cleared it. Repeated separators now count as one.
+- **The profile list opens at the loaded profile.** With many API
+  configuration profiles, the picker opened at the top and the ticked one had
+  to be scrolled to every time. It now opens with the loaded profile
+  highlighted in the middle of the list, and the arrow keys move from there.
 
 ## [4.100.296] — 2026-11-22
 
