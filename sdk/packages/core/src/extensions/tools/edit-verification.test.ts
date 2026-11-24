@@ -83,6 +83,33 @@ describe("what counts as checked", () => {
 		expect(t.getState().unchecked).toEqual([]);
 	});
 
+	// Session c9rrl: one edit came with over-escaped separators, which Windows
+	// opens as the same file. Its entry outlived every check of the plain path,
+	// and the run was asked twice to check a file it had just checked.
+	it("treats over-escaped separators as one file", () => {
+		const t = tracker();
+		t.recordToolCall("editor", {
+			file_path:
+				"c:\\Users\\\\manni\\\\source\\\\repos\\\\test\\\\manic_miner.html",
+		});
+		t.recordToolCall("editor", {
+			file_path: "c:\\Users\\manni\\source\\repos\\test\\manic_miner.html",
+		});
+		t.recordToolCall("check_file", {
+			paths: ["c:\\Users\\manni\\source\\repos\\test\\manic_miner.html"],
+		});
+
+		expect(t.getState().unchecked).toEqual([]);
+	});
+
+	it("keeps a UNC share apart from a rooted path", () => {
+		const t = tracker();
+		t.recordToolCall("editor", { file_path: "\\\\server\\share\\a.ts" });
+		t.recordToolCall("check_file", { paths: ["\\server\\share\\a.ts"] });
+
+		expect(t.getState().unchecked).toEqual(["\\\\server\\share\\a.ts"]);
+	});
+
 	it("ignores tools that neither edit nor check", () => {
 		const t = tracker();
 		t.recordToolCall("read_files", { files: [{ path: "a.ts" }] });

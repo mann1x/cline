@@ -150,7 +150,15 @@ function filesReportedOn(output: unknown): string[] | undefined {
  * guard errs towards asking rather than towards silence.
  */
 function normalizePath(filePath: string): string {
-	const forward = filePath.replace(/\\/g, "/").replace(/^\.\//, "");
+	// Repeated separators are one: a model that over-escapes its JSON writes
+	// `c:\\Users\\\\manni\\\\…`, which Windows opens as the same file, and
+	// kept as `c:/users//manni//…` the edit was never cleared by any check of
+	// the plain path (session c9rrl was asked twice to check a file it had
+	// just checked). A leading pair is kept: it is a UNC share, not noise.
+	const forward = filePath
+		.replace(/\\/g, "/")
+		.replace(/(?!^)\/{2,}/g, "/")
+		.replace(/^\.\//, "");
 	// Case is folded only where the filesystem folds it. On Linux `Foo.ts` and
 	// `foo.ts` are two files, and checking one cleared the other (automaticum
 	// audit 2026-11-08, m4).
