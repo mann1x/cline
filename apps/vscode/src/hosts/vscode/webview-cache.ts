@@ -17,7 +17,7 @@
 // VS Code to exit, deletes the folder, starts VS Code again and leaves a log
 // that the next start writes to the Cerebriline output.
 
-import { spawn } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
 import * as fs from "node:fs"
 import * as path from "node:path"
 import * as vscode from "vscode"
@@ -213,6 +213,56 @@ export function posixPurgeScript(input: PurgeScriptInput): string {
 }
 
 /**
+ * The Windows launcher: a short-lived PowerShell that has WMI create the
+ * script's process and prints `<return value> <pid>`.
+ *
+ * Not a detached child: Node's `detached` on Windows is DETACHED_PROCESS, and
+ * Windows PowerShell 5.1 started without a console exits 0 without running a
+ * line (pandorum, 2026-11-25: the first live run quit VS Code and nothing
+ * followed). A process WMI creates belongs to no one's tree or job, so VS
+ * Code's exit cannot take it down, and it starts with the user's own
+ * environment rather than the extension host's.
+ */
+export function windowsLauncherArgs(script: string): string[] {
+	const commandLine = `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "${script}"`
+	return [
+		"-NoProfile",
+		"-NonInteractive",
+		"-Command",
+		[
+			"$si = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }",
+			`$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ${psQuote(commandLine)}; ProcessStartupInformation = $si }`,
+			'Write-Output ("" + $r.ReturnValue + " " + $r.ProcessId)',
+		].join("; "),
+	]
+}
+
+/** Start the script so that it outlives VS Code. Resolves to its pid. */
+async function startDetached(script: string): Promise<number> {
+	if (process.platform !== "win32") {
+		const child = spawn("/bin/sh", [script], { detached: true, stdio: "ignore", env: cleanEnv() })
+		child.unref()
+		if (!child.pid) {
+			throw new Error("/bin/sh could not be started")
+		}
+		return child.pid
+	}
+	const out = await new Promise<string>((resolve, reject) => {
+		execFile(
+			"powershell.exe",
+			windowsLauncherArgs(script),
+			{ windowsHide: true, timeout: 30_000 },
+			(error, stdout, stderr) => (error ? reject(new Error(`${error.message} ${stderr}`.trim())) : resolve(stdout)),
+		)
+	})
+	const [code, pid] = out.trim().split(/\s+/).map(Number)
+	if (code !== 0 || !pid) {
+		throw new Error(`Windows refused to start it (Win32_Process.Create returned ${out.trim() || "nothing"})`)
+	}
+	return pid
+}
+
+/**
  * What starts this VS Code again. In the extension host `execPath` is the
  * editor's own executable on Windows and Linux; on macOS it is a helper inside
  * the bundle, so the app is found from `appRoot` (`<X.app>/Contents/Resources/app`).
@@ -227,7 +277,8 @@ function relaunchTarget(): PurgeScriptInput["relaunch"] {
 }
 
 /**
- * The environment the script runs with. The extension host's own carries
+ * The environment the macOS and Linux script runs with (on Windows WMI gives
+ * it the user's own). The extension host's carries
  * ELECTRON_RUN_AS_NODE and VS Code's IPC handles: an editor started with them
  * would come up as a bare Node or try to talk to the instance that just quit.
  */
@@ -277,16 +328,19 @@ export async function purgeWebviewCacheAndRestart(context: CacheContext): Promis
 	const windows = process.platform === "win32"
 	const script = path.join(storage, windows ? "webview-cache-purge.ps1" : "webview-cache-purge.sh")
 	await fs.promises.writeFile(script, windows ? windowsPurgeScript(input) : posixPurgeScript(input), { mode: 0o700 })
-	const [command, args] = windows
-		? [
-				"powershell.exe",
-				["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", script],
-			]
-		: ["/bin/sh", [script]]
-	const child = spawn(command, args, { detached: true, stdio: "ignore", windowsHide: true, env: cleanEnv() })
-	child.unref()
+	let helper: number
+	try {
+		helper = await startDetached(script)
+	} catch (error) {
+		// Quitting with nothing left to do the work is the one outcome to avoid.
+		Logger.error(`[webview] could not start the cache-clearing script ${script}: ${error}`)
+		void vscode.window.showErrorMessage(
+			`Cerebriline could not start the script that clears VS Code's webview cache, so VS Code stays open. Close VS Code and delete ${target} yourself. (${error instanceof Error ? error.message : String(error)})`,
+		)
+		return
+	}
 	Logger.log(
-		`[webview] clearing VS Code's webview cache: ${target} is deleted once VS Code (pid ${input.pid}) has exited, by ${script} (pid ${child.pid})`,
+		`[webview] clearing VS Code's webview cache: ${target} is deleted once VS Code (pid ${input.pid}) has exited, by ${script} (pid ${helper})`,
 	)
 	await vscode.commands.executeCommand("workbench.action.quit")
 }

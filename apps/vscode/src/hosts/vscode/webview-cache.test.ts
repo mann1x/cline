@@ -3,7 +3,7 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { posixPurgeScript, WebviewLoadWatchdog, webviewCacheDir, windowsPurgeScript } from "./webview-cache"
+import { posixPurgeScript, WebviewLoadWatchdog, webviewCacheDir, windowsLauncherArgs, windowsPurgeScript } from "./webview-cache"
 
 describe("the panel's load watchdog (pandorum, 2026-11-25)", () => {
 	beforeEach(() => vi.useFakeTimers())
@@ -104,6 +104,27 @@ describe("the Windows script", () => {
 	it("deletes nothing when VS Code never exits", () => {
 		const loop = script.slice(0, script.indexOf("Remove-Item"))
 		expect(loop).toContain('nothing deleted"; exit 1')
+	})
+})
+
+describe("the Windows launcher (pandorum, 2026-11-25)", () => {
+	// A detached powershell.exe exited 0 without running a line; WMI's
+	// Win32_Process.Create ran the script and outlived its parent.
+	const args = windowsLauncherArgs(
+		"C:\\Users\\o'brien\\AppData\\Roaming\\Code\\User\\globalStorage\\mann1x.cerebriline\\webview-cache-purge.ps1",
+	)
+	const command = args[args.indexOf("-Command") + 1]
+
+	it("has WMI create the script's process, hidden, and reports its pid", () => {
+		expect(command).toContain("Invoke-CimMethod -ClassName Win32_Process -MethodName Create")
+		expect(command).toContain("ShowWindow = [uint16]0")
+		expect(command).toContain('$r.ReturnValue + " " + $r.ProcessId')
+	})
+
+	it("quotes the script path for both the command line and PowerShell", () => {
+		expect(command).toContain(
+			`-File "C:\\Users\\o''brien\\AppData\\Roaming\\Code\\User\\globalStorage\\mann1x.cerebriline\\webview-cache-purge.ps1"'`,
+		)
 	})
 })
 
