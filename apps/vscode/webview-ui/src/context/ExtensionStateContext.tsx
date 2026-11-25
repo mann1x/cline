@@ -367,6 +367,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		globalWorkflowToggles: {},
 		shellIntegrationTimeout: 4000,
 		terminalReuseEnabled: true,
+		maxTerminals: 5,
 		vscodeTerminalExecutionMode: "vscodeTerminal",
 		defaultTerminalProfile: "default",
 		isNewUser: false,

@@ -8,6 +8,7 @@ import { OpenaiReasoningEffort } from "@shared/storage/types"
 import { TelemetrySetting } from "@shared/TelemetrySetting"
 import { asUpdateChannel } from "@shared/UpdateSettings"
 import { ClineEnv } from "@/config"
+import { normalizeMaxTerminals } from "@/hosts/vscode/terminal/terminal-limit"
 import { installDocumentReaderLanguages } from "@/sdk/document-reader-languages"
 import { installLibraryVectors } from "@/sdk/library-config"
 import { applyModelRequestCapture } from "@/sdk/model-request-capture"
@@ -262,6 +263,13 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		if (request.terminalReuseEnabled !== undefined) {
 			controller.stateManager.setGlobalState("terminalReuseEnabled", request.terminalReuseEnabled)
 			controller.terminalManager?.setTerminalReuseEnabled(!!request.terminalReuseEnabled)
+		}
+
+		// Zero is a value here ("no limit"), so this tests presence, not truth.
+		if (request.maxTerminals !== undefined) {
+			const maxTerminals = normalizeMaxTerminals(request.maxTerminals)
+			controller.stateManager.setGlobalState("maxTerminals", maxTerminals)
+			controller.terminalManager?.setMaxTerminals(maxTerminals)
 		}
 
 		if (request.vscodeTerminalExecutionMode !== undefined && request.vscodeTerminalExecutionMode !== "") {

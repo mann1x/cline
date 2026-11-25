@@ -152,6 +152,7 @@ export async function getStateToPostToWebview(controller: {
 	const maxToolResultChars = stateManager.getGlobalSettingsKey("maxToolResultChars")
 	const toolResultFormat = stateManager.getGlobalSettingsKey("toolResultFormat")
 	const terminalReuseEnabled = stateManager.getGlobalStateKey("terminalReuseEnabled")
+	const maxTerminals = stateManager.getGlobalSettingsKey("maxTerminals")
 	const vscodeTerminalExecutionMode = stateManager.getGlobalStateKey("vscodeTerminalExecutionMode")
 	const defaultTerminalProfile = stateManager.getGlobalSettingsKey("defaultTerminalProfile")
 	const isNewUser = stateManager.getGlobalStateKey("isNewUser")
@@ -333,6 +334,7 @@ export async function getStateToPostToWebview(controller: {
 		maxToolResultChars,
 		toolResultFormat,
 		terminalReuseEnabled,
+		maxTerminals,
 		vscodeTerminalExecutionMode,
 		defaultTerminalProfile,
 		isNewUser,

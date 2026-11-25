@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, it } from "mocha"
 import * as sinon from "sinon"
 import * as vscode from "vscode"
 import { setVscodeHostProviderMock } from "@/test/host-provider-test-utils"
+import { TerminalLimitReachedError } from "./terminal-limit"
 import { VscodeTerminalManager } from "./VscodeTerminalManager"
 import { CLINE_TERMINAL_NAME, TerminalInfo, TerminalRegistry } from "./VscodeTerminalRegistry"
 
@@ -39,6 +40,10 @@ describe("VscodeTerminalManager", () => {
 	beforeEach(() => {
 		sandbox = sinon.createSandbox({ useFakeTimers: true })
 		manager = new VscodeTerminalManager()
+		// The test window is shared by every test here, and disposal is not
+		// synchronous, so its real terminal count is noise. The limit has its
+		// own tests below, with the count stated.
+		sandbox.stub(TerminalRegistry, "countOpenTerminals").returns(0)
 	})
 
 	afterEach(() => {
@@ -617,6 +622,125 @@ describe("VscodeTerminalManager", () => {
  * 21 live `pwsh.exe`, 16 of them revived in a single second at window start,
  * against a registry that never held more than two.
  */
+// mann1x/cline#56: a cap on how many Cerebriline terminals a window holds.
+describe("VscodeTerminalManager terminal limit", () => {
+	let sandbox: sinon.SinonSandbox
+	let manager: VscodeTerminalManager
+	const created: vscode.Terminal[] = []
+
+	function idleTerminal(id: number, lastActive: number, busy = false): TerminalInfo & { dispose: sinon.SinonStub } {
+		const dispose = sandbox.stub()
+		return {
+			id,
+			busy,
+			lastCommand: "",
+			lastActive,
+			// No shellIntegration: never in a confirmed cwd, so never reused.
+			terminal: { sendText: sandbox.stub(), show: sandbox.stub(), dispose } as unknown as vscode.Terminal,
+			dispose,
+		}
+	}
+
+	beforeEach(() => {
+		sandbox = sinon.createSandbox()
+		manager = new VscodeTerminalManager()
+		// Reuse off, so the acquisition goes straight to opening a terminal --
+		// the only place the limit applies.
+		manager.setTerminalReuseEnabled(false)
+	})
+
+	afterEach(() => {
+		manager.disposeAll()
+		TerminalRegistry.disposeTerminalsPendingCleanup()
+		sandbox.restore()
+		for (const terminal of created.splice(0)) {
+			terminal.dispose()
+		}
+	})
+
+	it("closes the least recently used idle terminal to open a new one at the limit", async () => {
+		const older = idleTerminal(101, 1_000)
+		const newer = idleTerminal(102, 2_000)
+		const running = idleTerminal(103, 500, true)
+		sandbox.stub(TerminalRegistry, "getAllTerminals").returns([newer, running, older])
+		sandbox.stub(TerminalRegistry, "countOpenTerminals").returns(3)
+		manager.setMaxTerminals(3)
+
+		const terminal = (await manager.getOrCreateTerminal("/tmp/cline-target")) as unknown as TerminalInfo
+		created.push(terminal.terminal)
+		TerminalRegistry.removeTerminal(terminal.id)
+
+		assert.equal(older.dispose.callCount, 1)
+		assert.equal(newer.dispose.callCount, 0)
+		// A busy terminal may be a dev server; it is never closed for room.
+		assert.equal(running.dispose.callCount, 0)
+		assert.equal(terminal.busy, true)
+	})
+
+	it("opens no terminal when every one is busy, and says why", async () => {
+		const server = idleTerminal(201, 1_000, true)
+		const watcher = idleTerminal(202, 2_000, true)
+		sandbox.stub(TerminalRegistry, "getAllTerminals").returns([server, watcher])
+		sandbox.stub(TerminalRegistry, "countOpenTerminals").returns(2)
+		const createTerminal = sandbox.spy(TerminalRegistry, "createTerminal")
+		manager.setMaxTerminals(2)
+
+		await assert.rejects(manager.getOrCreateTerminal("/tmp/cline-target"), (error: unknown) => {
+			assert.ok(error instanceof TerminalLimitReachedError)
+			assert.equal(error.limit, 2)
+			assert.equal(error.open, 2)
+			return true
+		})
+		assert.equal(createTerminal.callCount, 0)
+		assert.equal(server.dispose.callCount, 0)
+		assert.equal(watcher.dispose.callCount, 0)
+	})
+
+	it("opens a terminal below the limit without closing anything", async () => {
+		const idle = idleTerminal(301, 1_000)
+		sandbox.stub(TerminalRegistry, "getAllTerminals").returns([idle])
+		sandbox.stub(TerminalRegistry, "countOpenTerminals").returns(1)
+		manager.setMaxTerminals(2)
+
+		const terminal = (await manager.getOrCreateTerminal("/tmp/cline-target")) as unknown as TerminalInfo
+		created.push(terminal.terminal)
+		TerminalRegistry.removeTerminal(terminal.id)
+
+		assert.equal(idle.dispose.callCount, 0)
+	})
+
+	it("has no limit at 0", async () => {
+		const server = idleTerminal(401, 1_000, true)
+		sandbox.stub(TerminalRegistry, "getAllTerminals").returns([server])
+		sandbox.stub(TerminalRegistry, "countOpenTerminals").returns(50)
+		manager.setMaxTerminals(0)
+
+		const terminal = (await manager.getOrCreateTerminal("/tmp/cline-target")) as unknown as TerminalInfo
+		created.push(terminal.terminal)
+		TerminalRegistry.removeTerminal(terminal.id)
+
+		assert.equal(terminal.busy, true)
+	})
+
+	// The count is of windows, not of what the registry tracks: a terminal
+	// left open on purpose (an ssh session) is still one.
+	it("counts untracked Cerebriline windows, and not other terminals, closed ones or ones being closed", () => {
+		const tracked = idleTerminal(501, 1_000)
+		const leaving = idleTerminal(502, 1_000)
+		sandbox.stub(TerminalRegistry, "getAllTerminals").returns([tracked])
+		TerminalRegistry.queueTerminalForCleanup(leaving, "over-limit")
+		const window = [
+			tracked.terminal,
+			{ name: CLINE_TERMINAL_NAME, exitStatus: undefined },
+			{ name: CLINE_TERMINAL_NAME, exitStatus: { code: 0 } },
+			{ name: "my own shell", exitStatus: undefined },
+			Object.assign(leaving.terminal, { name: CLINE_TERMINAL_NAME, exitStatus: undefined }),
+		] as unknown as vscode.Terminal[]
+
+		assert.equal(TerminalRegistry.countOpenTerminals(window), 2)
+	})
+})
+
 describe("TerminalRegistry orphan reclamation", () => {
 	let sandbox: sinon.SinonSandbox
 	const created: vscode.Terminal[] = []

@@ -55,6 +55,7 @@ import { clearSdkRemoteConfig, refreshSdkRemoteConfig } from "@/core/storage/rem
 import { StateManager } from "@/core/storage/StateManager"
 import { WorkspaceRootManager } from "@/core/workspace/WorkspaceRootManager"
 import { HostProvider } from "@/hosts/host-provider"
+import { DEFAULT_MAX_TERMINALS, normalizeMaxTerminals } from "@/hosts/vscode/terminal/terminal-limit"
 import { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTerminalManager"
 import { ExtensionRegistryInfo } from "@/registry"
 import { OcaAuthService } from "@/services/auth/oca/OcaAuthService"
@@ -2859,6 +2860,11 @@ export class Controller {
 			terminalManager.setTerminalReuseEnabled(!!terminalReuseEnabled)
 		}
 
+		const maxTerminals = this.stateManager.getGlobalSettingsKey("maxTerminals")
+		if (maxTerminals !== undefined) {
+			terminalManager.setMaxTerminals(normalizeMaxTerminals(maxTerminals))
+		}
+
 		const defaultTerminalProfile = this.stateManager.getGlobalSettingsKey("defaultTerminalProfile")
 		if (defaultTerminalProfile !== undefined && defaultTerminalProfile !== "") {
 			terminalManager.setDefaultTerminalProfile(String(defaultTerminalProfile))
@@ -2866,7 +2872,8 @@ export class Controller {
 
 		Logger.log(
 			`[SdkController] Applied terminal settings: profile=${defaultTerminalProfile ?? "default"}, ` +
-				`timeout=${shellIntegrationTimeout ?? 4000}, reuse=${terminalReuseEnabled ?? true}`,
+				`timeout=${shellIntegrationTimeout ?? 4000}, reuse=${terminalReuseEnabled ?? true}, ` +
+				`maxTerminals=${maxTerminals ?? DEFAULT_MAX_TERMINALS}`,
 		)
 	}
 

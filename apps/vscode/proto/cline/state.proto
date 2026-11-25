@@ -375,6 +375,7 @@ message Settings {
   optional bool notice_copy_bar_answer = 253;
   optional string tool_result_format = 254;
   optional bool show_cloud_usage_in_task_header = 255;
+  optional int32 max_terminals = 256;
 }
 
 message State {
@@ -493,6 +494,7 @@ message UpdateSettingsRequest {
   optional bool mcp_marketplace_enabled = 6;
   optional int32 shell_integration_timeout = 8;
   optional bool terminal_reuse_enabled = 9;
+  optional int32 max_terminals = 121;
   optional bool mcp_responses_collapsed = 10;
   optional McpDisplayMode mcp_display_mode = 11;
   optional PlanActMode mode = 13;

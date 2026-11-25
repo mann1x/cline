@@ -3,6 +3,7 @@ import { EventEmitter } from "events"
 import * as fs from "fs"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import * as vscode from "vscode"
+import { TerminalLimitReachedError } from "@/hosts/vscode/terminal/terminal-limit"
 import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTerminalManager"
 import type { TerminalCompletionDetails } from "@/integrations/terminal/types"
 import { SdkForegroundCommandCoordinator } from "./sdk-foreground-command-coordinator"
@@ -113,6 +114,56 @@ describe("createVscodeRunCommandsTool", () => {
 		)
 
 		expect(getTerminalManager).toHaveBeenCalledOnce()
+	})
+
+	// mann1x/cline#56: at the "Maximum terminals" limit with every terminal
+	// busy, the command runs as a child process instead of in one more window.
+	it("runs a command without a terminal when every terminal is busy at the limit, and says so", async () => {
+		const runCommand = vi.fn()
+		const getTerminalManager = vi.fn(
+			() =>
+				({
+					getOrCreateTerminal: async () => {
+						throw new TerminalLimitReachedError(5, 5)
+					},
+					runCommand,
+				}) as unknown as VscodeTerminalManager,
+		)
+		const tool = createVscodeRunCommandsTool({ cwd: process.cwd(), getTerminalManager })
+
+		const results = await tool.execute(
+			{ commands: ["printf 'ran-without-a-terminal\\n'"] },
+			{ agentId: "agent-1", conversationId: "conversation-1", iteration: 1 },
+		)
+
+		expect(runCommand).not.toHaveBeenCalled()
+		expect(results).toEqual([expect.objectContaining({ success: true })])
+		const result = String((results as Array<{ result: unknown }>)[0].result)
+		// The note alone: this suite's @cline/core stub runs no process, so the
+		// child's output is empty here. What it would print is core's to test.
+		expect(result).toBe(
+			"[Ran without a terminal window: all 5 Cerebriline terminals are busy with other commands, and the limit is 5 (Settings > Terminal > Maximum terminals).]",
+		)
+	})
+
+	it("does not run a command elsewhere when the terminal fails for another reason", async () => {
+		const getTerminalManager = vi.fn(
+			() =>
+				({
+					getOrCreateTerminal: async () => {
+						throw new Error("The terminal's shell process exited while preparing to run the command.")
+					},
+				}) as unknown as VscodeTerminalManager,
+		)
+		const tool = createVscodeRunCommandsTool({ cwd: process.cwd(), getTerminalManager })
+
+		const results = await tool.execute(
+			{ commands: ["printf 'must-not-run\\n'"] },
+			{ agentId: "agent-1", conversationId: "conversation-1", iteration: 1 },
+		)
+
+		expect(results).toEqual([expect.objectContaining({ success: false })])
+		expect(JSON.stringify(results)).not.toContain("must-not-run\\n")
 	})
 
 	it("constructs a cmd tool from the stock array-valued Command Prompt profile", () => {

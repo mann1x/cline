@@ -16,6 +16,7 @@ const TerminalSettingsSection: React.FC<TerminalSettingsSectionProps> = ({ rende
 	const {
 		shellIntegrationTimeout,
 		terminalReuseEnabled,
+		maxTerminals,
 		defaultTerminalProfile,
 		availableTerminalProfiles,
 		vscodeTerminalExecutionMode,
@@ -62,6 +63,23 @@ const TerminalSettingsSection: React.FC<TerminalSettingsSectionProps> = ({ rende
 			setInputValue((shellIntegrationTimeout / 1000).toString())
 			setInputError(null)
 		}
+	}
+
+	const [maxTerminalsInput, setMaxTerminalsInput] = useState(String(maxTerminals ?? 5))
+	const [maxTerminalsError, setMaxTerminalsError] = useState<string | null>(null)
+
+	// Saved on every valid keystroke, like the timeout above. 0 is a value
+	// ("no limit"), so the check is for a whole number, not a positive one.
+	const handleMaxTerminalsChange = (event: Event) => {
+		const value = (event.target as HTMLInputElement).value
+		setMaxTerminalsInput(value)
+		const trimmed = value.trim()
+		if (!/^\d+$/.test(trimmed)) {
+			setMaxTerminalsError("Enter a whole number, or 0 for no limit")
+			return
+		}
+		setMaxTerminalsError(null)
+		updateSetting("maxTerminals", Number.parseInt(trimmed, 10))
 	}
 
 	const handleTerminalReuseChange = (event: Event) => {
@@ -147,6 +165,30 @@ const TerminalSettingsSection: React.FC<TerminalSettingsSectionProps> = ({ rende
 									When enabled, Cerebriline will reuse existing terminal windows that aren't in the current
 									working directory. Disable this if you experience issues with task lockout after a terminal
 									command.
+								</p>
+							</div>
+
+							<div className="mb-4">
+								<div className="mb-2">
+									<label className="font-medium block mb-1" htmlFor="max-terminals">
+										Maximum terminals
+									</label>
+									<VSCodeTextField
+										className="w-full"
+										id="max-terminals"
+										onChange={(event) => handleMaxTerminalsChange(event as Event)}
+										placeholder="5"
+										value={maxTerminalsInput}
+									/>
+									{maxTerminalsError && (
+										<div className="text-(--vscode-errorForeground) text-xs mt-1">{maxTerminalsError}</div>
+									)}
+								</div>
+								<p className="text-xs text-(--vscode-descriptionForeground)">
+									How many Cerebriline terminals this window may have open at once; 0 for no limit. At the
+									limit, Cerebriline closes its least recently used idle terminal to open a new one, and when
+									all of them are busy (a dev server, a watcher) it runs the command without a terminal and says
+									so. It never stops a running command to make room.
 								</p>
 							</div>
 						</>

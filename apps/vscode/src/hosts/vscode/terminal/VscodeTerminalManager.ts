@@ -8,6 +8,7 @@ import {
 	type TerminalProcessResultPromise as ITerminalProcessResultPromise,
 } from "@/integrations/terminal/types"
 import { Logger } from "@/shared/services/Logger"
+import { DEFAULT_MAX_TERMINALS, normalizeMaxTerminals, TerminalLimitReachedError } from "./terminal-limit"
 import { mergePromise, VscodeTerminalProcess } from "./VscodeTerminalProcess"
 import { TerminalInfo, TerminalRegistry } from "./VscodeTerminalRegistry"
 
@@ -80,6 +81,7 @@ export class VscodeTerminalManager {
 	private shellIntegrationTimeout = 4000
 	private terminalReuseEnabled = true
 	private defaultTerminalProfile = "default"
+	private maxTerminals = DEFAULT_MAX_TERMINALS
 
 	/**
 	 * Resolve a terminal's stored shellPath to an effective path.
@@ -217,6 +219,7 @@ export class VscodeTerminalManager {
 		}
 		vscodeTerminalInfo.busy = true
 		vscodeTerminalInfo.lastCommand = command
+		vscodeTerminalInfo.lastActive = Date.now()
 		const process = new VscodeTerminalProcess()
 		this.processes.set(vscodeTerminalInfo.id, process)
 
@@ -346,6 +349,7 @@ export class VscodeTerminalManager {
 			// acquire a terminal themselves, and by this point the acquisition
 			// they would re-enter has finished choosing.
 			TerminalRegistry.disposeTerminalsPendingCleanup("abandoned-during-preparation")
+			TerminalRegistry.disposeTerminalsPendingCleanup("over-limit")
 		}
 	}
 
@@ -469,6 +473,7 @@ export class VscodeTerminalManager {
 		}
 
 		// If all terminals are busy or don't match shell profile, create a new one with the configured shell
+		this.makeRoomForTerminal()
 		const newTerminalInfo = TerminalRegistry.createTerminal(cwd, expectedShellPath)
 		newTerminalInfo.busy = true
 		this.terminalIds.add(newTerminalInfo.id)
@@ -512,6 +517,55 @@ export class VscodeTerminalManager {
 
 	setTerminalReuseEnabled(enabled: boolean): void {
 		this.terminalReuseEnabled = enabled
+	}
+
+	/** `0` means no limit. */
+	setMaxTerminals(maxTerminals: number): void {
+		this.maxTerminals = normalizeMaxTerminals(maxTerminals)
+	}
+
+	/**
+	 * Keep a new terminal within the "Maximum terminals" setting (mann1x/cline#56).
+	 *
+	 * Reached only when no terminal could be reused: every idle one of the
+	 * right shell has already been tried. So what is left to make room with is
+	 * an idle terminal that could not be used -- another shell profile, reuse
+	 * turned off -- and those are closed least recently used first. They hold
+	 * nothing but the output of a command that finished.
+	 *
+	 * A busy terminal is never closed or interrupted to make room: it may be a
+	 * dev server the model started on purpose. When busy ones alone fill the
+	 * limit this throws, and `run_commands` runs the command without a
+	 * terminal instead of opening one more window.
+	 *
+	 * Synchronous from the count to the caller's `createTerminal`, so parallel
+	 * acquisitions in one batch each see the terminals the others made.
+	 */
+	private makeRoomForTerminal(): void {
+		if (this.maxTerminals <= 0) {
+			return
+		}
+		const open = TerminalRegistry.countOpenTerminals()
+		const excess = open - this.maxTerminals + 1
+		if (excess <= 0) {
+			return
+		}
+		const idle = TerminalRegistry.getAllTerminals()
+			.filter((t) => !t.busy)
+			.sort((a, b) => a.lastActive - b.lastActive)
+		if (idle.length < excess) {
+			Logger.log(
+				`[TerminalManager] ${open} Cerebriline terminals open, limit ${this.maxTerminals}, ${idle.length} idle: running without a terminal`,
+			)
+			throw new TerminalLimitReachedError(this.maxTerminals, open)
+		}
+		for (const terminalInfo of idle.slice(0, excess)) {
+			Logger.log(
+				`[TerminalManager] ${open} Cerebriline terminals open, limit ${this.maxTerminals}: closing idle terminal ${terminalInfo.id} to open a new one`,
+			)
+			this.evictTerminal(terminalInfo)
+			TerminalRegistry.queueTerminalForCleanup(terminalInfo, "over-limit")
+		}
 	}
 
 	setDefaultTerminalProfile(profileId: string): void {

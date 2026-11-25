@@ -384,6 +384,10 @@ const USER_SETTINGS_FIELDS = {
 	jevSettings: { default: "" as string },
 	enableCheckpointsSetting: { default: true as boolean },
 	shellIntegrationTimeout: { default: 4000 as number },
+	// How many Cerebriline terminals a window may hold; 0 for no limit. At the
+	// limit an idle one is closed for the new one, and a command that finds
+	// them all busy runs without a terminal (mann1x/cline#56).
+	maxTerminals: { default: 5 as number },
 	// 0 means "unset": the SDK's own DEFAULT_MAX_TOOL_RESULT_CHARS applies.
 	maxToolResultChars: { default: 0 as number },
 	// How a tool's result is written into the request: `json`, as it always

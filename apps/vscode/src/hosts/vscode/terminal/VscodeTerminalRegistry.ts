@@ -23,9 +23,10 @@ export interface TerminalInfo {
  * `abandoned-during-preparation` is the no-shell-integration case: the cwd can
  * never be confirmed, so every acquisition abandons the terminal it tried to
  * reuse. `unobserved-command` is a managed command whose completion Cerebriline lost
- * track of.
+ * track of. `over-limit` is an idle terminal closed to make room for a new one
+ * under the "Maximum terminals" setting.
  */
-export type TerminalCleanupReason = "abandoned-during-preparation" | "unobserved-command"
+export type TerminalCleanupReason = "abandoned-during-preparation" | "unobserved-command" | "over-limit"
 
 /** The terminal name every Cline-created terminal carries. */
 export const CLINE_TERMINAL_NAME = "Cerebriline"
@@ -202,6 +203,33 @@ export class TerminalRegistry {
 			)
 		}
 		return reclaimed
+	}
+
+	/**
+	 * How many Cerebriline terminal windows are open, as the "Maximum
+	 * terminals" setting counts them.
+	 *
+	 * Not only the tracked ones: a terminal Cerebriline stopped tracking but
+	 * deliberately left open (an ssh session, a command the user took over) is
+	 * still a window. Terminals already queued for disposal are not counted,
+	 * since they close at the end of the acquisition doing the counting. The
+	 * tracked list is read alongside the window's, because a terminal created
+	 * a moment ago is in the registry before VS Code lists it.
+	 */
+	static countOpenTerminals(windowTerminals: readonly vscode.Terminal[] = vscode.window.terminals): number {
+		const open = new Set<vscode.Terminal>()
+		for (const info of TerminalRegistry.getAllTerminals()) {
+			open.add(info.terminal)
+		}
+		for (const terminal of windowTerminals) {
+			if (terminal.name === CLINE_TERMINAL_NAME && !TerminalRegistry.isTerminalClosed(terminal)) {
+				open.add(terminal)
+			}
+		}
+		for (const { terminalInfo } of TerminalRegistry.terminalsPendingCleanup.values()) {
+			open.delete(terminalInfo.terminal)
+		}
+		return open.size
 	}
 
 	static getAllTerminals(): TerminalInfo[] {

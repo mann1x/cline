@@ -182,6 +182,8 @@ export interface ExtensionState {
 	/** How tool results are written into the request; new conversations only. */
 	toolResultFormat?: "json" | "text"
 	terminalReuseEnabled?: boolean
+	/** How many Cerebriline terminals a window may hold; 0 means no limit. */
+	maxTerminals?: number
 	defaultTerminalProfile?: string
 	vscodeTerminalExecutionMode: string
 	backgroundCommandRunning?: boolean

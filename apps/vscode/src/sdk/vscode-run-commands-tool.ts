@@ -26,6 +26,7 @@ import { TerminalUserInterventionAction, telemetryService } from "@services/tele
 import { ClineTempManager } from "@services/temp"
 import * as fs from "fs"
 import { StateManager } from "@/core/storage/StateManager"
+import { describeTerminalLimitFallback, TerminalLimitReachedError } from "@/hosts/vscode/terminal/terminal-limit"
 import type { VscodeTerminalManager } from "@/hosts/vscode/terminal/VscodeTerminalManager"
 import { MAX_UNRETRIEVED_LINES } from "@/integrations/terminal/constants"
 import {
@@ -580,7 +581,7 @@ function createVscodeShellExecutor(options: VscodeRunCommandsToolOptions, state:
 		// tool call, not the setting's current value (see createVscodeRunCommandsTool).
 		const { profileId, shell } = state.snapshot
 
-		if (effectiveMode === "backgroundExec") {
+		const runInBackground = async (): Promise<string> => {
 			// Background path — use SDK's createShellExecutor.
 			// Recreate the executor if the shell has changed
 			if (!bgExecutor || bgExecutorShell !== shell) {
@@ -611,18 +612,45 @@ function createVscodeShellExecutor(options: VscodeRunCommandsToolOptions, state:
 			}
 		}
 
+		if (effectiveMode === "backgroundExec") {
+			return await runInBackground()
+		}
+
 		// Foreground path — use VscodeTerminalManager
 		if (!terminalManager) {
 			terminalManager = getTerminalManager()
 		}
-		return await executeForeground(
-			command,
-			commandCwd || cwd,
-			terminalManager,
-			MAX_COMMAND_OUTPUT_CHARS,
-			context.signal,
-			options.foregroundCommands,
-			profileId,
-		)
+		try {
+			return await executeForeground(
+				command,
+				commandCwd || cwd,
+				terminalManager,
+				MAX_COMMAND_OUTPUT_CHARS,
+				context.signal,
+				options.foregroundCommands,
+				profileId,
+			)
+		} catch (error) {
+			// Every Cerebriline terminal is busy and the "Maximum terminals"
+			// setting is reached (mann1x/cline#56). The command has not started
+			// anywhere, so it runs as a child process instead of in one more
+			// window, and the result says so: the model must not go looking for
+			// it in a terminal.
+			if (!(error instanceof TerminalLimitReachedError)) {
+				throw error
+			}
+			Logger.log(`[VscodeRunCommands] ${error.message}; running this command without a terminal`)
+			const note = describeTerminalLimitFallback(error)
+			try {
+				const output = await runInBackground()
+				return output ? `${note}\n${output}` : note
+			} catch (failure) {
+				// A failing command's output travels on the error; the note goes with it.
+				if (failure instanceof CommandExitError) {
+					throw new CommandExitError(failure.exitCode, `${note}\n${failure.output}`)
+				}
+				throw failure
+			}
+		}
 	}
 }
