@@ -26,7 +26,7 @@ import {
 	normalizeLineEndings,
 	normalizeNewFileLineEndings,
 } from "./line-endings";
-import { MAX_LINE_CHARS } from "./output-limits";
+import { MAX_LINE_CHARS, MAX_LONE_LINE_CHARS } from "./output-limits";
 import {
 	changedRegion,
 	isWhole,
@@ -2661,9 +2661,13 @@ export function createEditorExecutor(
 	 * (csf-16). `grep` prints a 400-character window of a long line, and
 	 * credited the whole of it the same way. `reach` is the last column the
 	 * edit touches on `line`, `Infinity` for the whole line; `start` the first,
-	 * when the edit has one. Reading again cuts the line again, so the way past
-	 * is named instead: columns inside the part shown, or `old_text`, which
-	 * only matches text the model has.
+	 * when the edit has one. The way past is named: a read of the line by
+	 * itself, which shows it whole up to MAX_LONE_LINE_CHARS, then columns
+	 * inside the part shown, or `old_text`, which only matches text the model
+	 * has. Without the first, a rewrite of a block through the line had no way
+	 * past at all (pandorum a695t: the same rewrite of lines 29-768 refused
+	 * four times, the file re-read in chunks between, each read cutting line
+	 * 651 where the last one had).
 	 */
 	const requireUncut = (
 		filePath: string,
@@ -2687,12 +2691,15 @@ export function createEditorExecutor(
 			reach > cut.shown
 				? `reaches ${Number.isFinite(reach) ? `column ${reach}` : "the whole line"}, past what you have seen`
 				: `starts at column ${start}, before what you have seen`;
-		const more =
+		const inside = `edit inside columns ${from}-${cut.shown}, or anchor the edit on text with \`old_text\``;
+		const way =
 			cut.length <= MAX_LINE_CHARS
-				? "read_files shows this line whole"
-				: "grep for a pattern from the rest of the line shows the characters around it";
+				? `Read it with \`read_files\`, which shows this line whole, then send this edit again; or ${inside}.`
+				: cut.length <= MAX_LONE_LINE_CHARS
+					? `Read line ${line} by itself — \`read_files\` with \`start_line\` and \`end_line\` both ${line} — to see all of it, then send this edit again; or ${inside}.`
+					: `It is too long for one read to show whole: ${inside} — grep for a pattern from the rest of the line shows the characters around it.`;
 		throw new Error(
-			`Not modified: line ${line} of ${filePath} is ${cut.length.toLocaleString("en-US")} characters, and the reads so far showed you only ${seen}. This edit ${what}. Edit inside columns ${from}-${cut.shown}, or anchor the edit on text with \`old_text\` — ${more}.`,
+			`Not modified: line ${line} of ${filePath} is ${cut.length.toLocaleString("en-US")} characters, and the reads so far showed you only ${seen}. This edit ${what}. ${way}`,
 		);
 	};
 

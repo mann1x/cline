@@ -43,6 +43,19 @@ export const MAX_READ_LINES = 2_000;
 /** Max characters kept per line in file reads (defangs minified files). */
 export const MAX_LINE_CHARS = 2_000;
 
+/**
+ * Max characters shown of a line read by itself (`start_line` = `end_line`).
+ *
+ * The cut at {@link MAX_LINE_CHARS} keeps a minified file from filling a read,
+ * and it applied to every read alike, so a line cut once was cut on every read
+ * after it: the editor refused a rewrite through the line (the model had not
+ * seen its end) and nothing could ever show the end. pandorum a695t,
+ * 2026-11-25: a 3,745-character line, the file re-read in chunks four times,
+ * and the same rewrite refused four times. One line asked for alone is the
+ * request to see it, and is shown up to this, within the read's own cap.
+ */
+export const MAX_LONE_LINE_CHARS = 20_000;
+
 /** The most of one line `grep` prints; a longer one is cut around its match. */
 export const MAX_GREP_LINE_CHARS = 400;
 

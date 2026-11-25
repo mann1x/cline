@@ -26,7 +26,9 @@ async function opened(name: string, text: string) {
 	const editor = createEditorExecutor({ receipts });
 	const edit = (input: Record<string, unknown>) =>
 		editor({ path: file, ...input } as never, dir, ctx);
-	return { file, shown, edit };
+	const readLines = async (start_line: number, end_line: number) =>
+		String(await read({ path: name, start_line, end_line }, ctx));
+	return { file, shown, edit, readLines };
 }
 
 // csf-5: columns count UTF-16 units, and a cut between the two halves of an
@@ -119,6 +121,64 @@ describe("csf-16: an edit cannot reach past where a read cut the line", () => {
 		const { file, edit } = await opened("m.js", long);
 		await edit({ old_text: "TAIL", new_text: "HEAD" });
 		expect(await fs.readFile(file, "utf8")).toContain("aHEADb");
+	});
+});
+
+// pandorum a695t, 2026-11-25: a rewrite of lines 29-768 ran through line 651,
+// 3,745 characters, and every read cut that line at 2,000 -- the file re-read
+// in chunks four times, the same rewrite refused four times, the refusal
+// naming only column edits and old_text. A line read by itself is shown whole.
+describe("a line every read cut can be read whole by itself", () => {
+	const long = `top\n${"a".repeat(3_000)}TAIL${"b".repeat(700)}\nbottom\n`;
+
+	it("says how in the read that cut it", async () => {
+		const { shown } = await opened("m.js", long);
+		expect(shown).toContain(
+			"read it by itself (`start_line` and `end_line` both 2) to see up to 20,000 characters of it",
+		);
+	});
+
+	it("refuses a block rewrite through the line, naming that read", async () => {
+		const { file, edit } = await opened("m.js", long);
+		await expect(
+			edit({ start_line: 1, end_line: 3, new_text: "rewritten\n" }),
+		).rejects.toThrow(
+			/Read line 2 by itself — `read_files` with `start_line` and `end_line` both 2 — to see all of it, then send this edit again/,
+		);
+		expect(await fs.readFile(file, "utf8")).toBe(long);
+	});
+
+	it("shows the whole line, and the rewrite goes through after it", async () => {
+		const { file, edit, readLines } = await opened("m.js", long);
+		const alone = await readLines(2, 2);
+		expect(alone).toContain(`TAIL${"b".repeat(700)}`);
+		expect(alone).not.toContain("[line truncated]");
+		await edit({ start_line: 1, end_line: 3, new_text: "rewritten\n" });
+		expect(await fs.readFile(file, "utf8")).toBe("rewritten\n");
+	});
+
+	it("cuts a line too long even alone, and says to grep", async () => {
+		const huge = `${"a".repeat(25_000)}\n`;
+		const { file, edit, readLines } = await opened("h.js", huge);
+		const alone = await readLines(1, 1);
+		expect(alone).toContain("[line truncated]");
+		expect(alone).toContain(
+			"cut at 20000 characters, so not all of it was shown: that is the most one read shows of a line, so grep",
+		);
+		await expect(
+			edit({ start_line: 1, end_line: 1, new_text: "x" }),
+		).rejects.toThrow(
+			/showed you only the first 20,000.*too long for one read to show whole/,
+		);
+		await edit({
+			start_line: 1,
+			start_column: 19_999,
+			end_column: 20_000,
+			new_text: "ZZ",
+		});
+		expect((await fs.readFile(file, "utf8")).slice(19_997, 20_001)).toBe(
+			"aZZa",
+		);
 	});
 });
 

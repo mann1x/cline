@@ -23,6 +23,7 @@ import { withFileLock } from "./file-locks";
 import {
 	MAX_GREP_LINE_CHARS,
 	MAX_LINE_CHARS,
+	MAX_LONE_LINE_CHARS,
 	MAX_READ_LINES,
 	MAX_READ_OUTPUT_CHARS,
 	MAX_READ_REFUSAL_CHARS,
@@ -224,6 +225,8 @@ interface CapturedLine {
 	cutFrom?: number;
 }
 
+const TRUNCATED_MARK = " [line truncated]";
+
 function getAbortError(signal: AbortSignal): Error {
 	const { reason } = signal;
 	if (reason instanceof Error) {
@@ -268,6 +271,19 @@ async function readTextWindow(
 	const lineNumberPrefixChars = includeLineNumbers
 		? String(maxCapturedLineNumber).length + 3
 		: 0;
+	// A line asked for by itself is shown up to MAX_LONE_LINE_CHARS, so a line
+	// another read cut has a way to be seen whole. Kept inside the read's own
+	// cap, so the read is never refused as too large for it.
+	const lone = hasFiniteEndLine && requestedEndLine === requestedStartLine;
+	const lineChars = lone
+		? Math.max(
+				MAX_LINE_CHARS,
+				Math.min(
+					MAX_LONE_LINE_CHARS,
+					maxReadChars - lineNumberPrefixChars - 1 - TRUNCATED_MARK.length,
+				),
+			)
+		: MAX_LINE_CHARS;
 
 	// `Readable.from([text])`, with the array: handed the string bare it is
 	// iterated as an iterable of characters, and every line arrives one letter
@@ -321,9 +337,9 @@ async function readTextWindow(
 			}
 
 			let line = rawLine;
-			const cut = line.length > MAX_LINE_CHARS;
+			const cut = line.length > lineChars;
 			if (cut) {
-				line = `${line.slice(0, MAX_LINE_CHARS)} [line truncated]`;
+				line = `${line.slice(0, lineChars)}${TRUNCATED_MARK}`;
 			}
 
 			const nextChars = chars + line.length + lineNumberPrefixChars + 1;
@@ -399,7 +415,7 @@ async function readTextWindow(
 	// window of it does not narrow what this read showed.
 	const cuts = captured.flatMap(({ lineNumber, text, cutFrom }) =>
 		cutFrom !== undefined
-			? [{ line: lineNumber, shown: MAX_LINE_CHARS, length: cutFrom }]
+			? [{ line: lineNumber, shown: lineChars, length: cutFrom }]
 			: text.length > MAX_GREP_LINE_CHARS
 				? [{ line: lineNumber, shown: text.length, length: text.length }]
 				: [],
@@ -418,14 +434,22 @@ async function readTextWindow(
 		: `${fileLineCount}`;
 
 	// A line cut at the display limit means the read did not show it all, and
-	// "shown in full" said otherwise (readers 14).
+	// "shown in full" said otherwise (readers 14). The note names the read that
+	// shows it whole, when there is one: "grep for what you need" was the only
+	// way named, and a model rewriting a block through the line needs all of it.
 	const cutLines = captured.flatMap(({ lineNumber, cutFrom }) =>
 		cutFrom !== undefined ? [lineNumber] : [],
 	);
+	const one = cutLines.length === 1;
+	const grepIt = `grep for what you need on ${one ? "it" : "them"}, which prints the text around each match`;
 	const cutNote =
 		cutLines.length === 0
 			? ""
-			: ` ${cutLines.length === 1 ? `Line ${cutLines[0]} was` : `Lines ${cutLines.slice(0, 5).join(", ")}${cutLines.length > 5 ? ` and ${cutLines.length - 5} more` : ""} were`} cut at ${MAX_LINE_CHARS} characters, so not all of ${cutLines.length === 1 ? "it was" : "them were"} shown: grep for what you need on ${cutLines.length === 1 ? "it" : "them"}, which prints the text around each match.`;
+			: ` ${one ? `Line ${cutLines[0]} was` : `Lines ${cutLines.slice(0, 5).join(", ")}${cutLines.length > 5 ? ` and ${cutLines.length - 5} more` : ""} were`} cut at ${lineChars} characters, so not all of ${one ? "it was" : "them were"} shown: ${
+					lone
+						? `that is the most one read shows of a line, so ${grepIt}.`
+						: `read ${one ? `it by itself (\`start_line\` and \`end_line\` both ${cutLines[0]})` : "one by itself (`start_line` and `end_line` both its number)"} to see up to ${MAX_LONE_LINE_CHARS.toLocaleString("en-US")} characters of it, or ${grepIt}.`
+				}`;
 
 	const effectiveEndLine = Math.min(requestedEndLine, totalLines);
 	if (lastCapturedLine >= effectiveEndLine) {

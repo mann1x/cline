@@ -22,6 +22,7 @@ import { MAX_LINE_COUNT_SCAN } from "./executors/file-read";
 import {
 	MAX_COMMAND_OUTPUT_CHARS,
 	MAX_LINE_CHARS,
+	MAX_LONE_LINE_CHARS,
 	MAX_READ_LINES,
 	MAX_SEARCH_OUTPUT_CHARS,
 } from "./executors/output-limits";
@@ -486,7 +487,7 @@ export function createReadFilesTool(
 		description:
 			"Read the content of text or image files at the provided absolute paths, or return only an inclusive one-based line range when start_line/end_line are provided on the same file entry as its path. " +
 			"When you already know multiple files you need, read them together in one call, and call this tool in the same response as other independent tool calls. " +
-			`Each read returns at most ${MAX_READ_LINES} lines, and a window too large to return at once is refused with how many lines of that file do fit; every read reports the file's total line count (as N+ past ${MAX_LINE_COUNT_SCAN.toLocaleString("en-US")} lines), so page through a long file with start_line/end_line on that file's entry. A line longer than ${MAX_LINE_CHARS.toLocaleString("en-US")} characters is cut, and the read says which. ` +
+			`Each read returns at most ${MAX_READ_LINES} lines, and a window too large to return at once is refused with how many lines of that file do fit; every read reports the file's total line count (as N+ past ${MAX_LINE_COUNT_SCAN.toLocaleString("en-US")} lines), so page through a long file with start_line/end_line on that file's entry. A line longer than ${MAX_LINE_CHARS.toLocaleString("en-US")} characters is cut, and the read says which; read that line by itself (\`start_line\` and \`end_line\` both its number) to see up to ${MAX_LONE_LINE_CHARS.toLocaleString("en-US")} characters of it. ` +
 			"Reading a range is the normal case; reading a file whole is the exception. Locate first, then read: a diagnostic or a stack trace already names the line, `search_codebase` reports the line every match is on, and `ask_lsp` resolves a symbol to where it is defined. " +
 			"Any of those hands you a line number to read around — take roughly 30 lines either side of it, and widen only if what you needed turned out to fall outside that. Read a file entire only when you have no line to start from and it is genuinely small. " +
 			"The cost of reading more than you need is not the tool call: every line returned stays in the conversation for the rest of the task, crowding out the room left to reason about it. " +
