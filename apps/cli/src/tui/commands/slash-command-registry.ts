@@ -19,6 +19,7 @@ export type LocalSlashCommandName =
 	| "model"
 	| "theme"
 	| "compact"
+	| "agent"
 	| "delegate"
 	| "delegate-background"
 	| "agents"
@@ -92,6 +93,12 @@ const TUI_LOCAL_COMMANDS: Array<{
 		preserveInput: true,
 	},
 	{
+		name: "agent",
+		description:
+			"Hand a task to an agent: /agent <agent> [/skill] <task>, or describe it and the model picks one",
+		preserveInput: true,
+	},
+	{
 		name: "delegate",
 		description: "Hand a task to a configured agent",
 		preserveInput: true,
@@ -140,6 +147,7 @@ const SYSTEM_COMMAND_ORDER = [
 	"plugins",
 	"compact",
 	"skills",
+	"agent",
 	"delegate",
 	"delegate-background",
 	"agents",

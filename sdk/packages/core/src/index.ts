@@ -424,6 +424,9 @@ export {
 	withAuthorizationPrompt,
 } from "./extensions/mcp";
 export {
+	type AgentCommandAgent,
+	type AgentCommandContext,
+	type AgentCommandPlan,
 	type AgentProfileConnection,
 	type AgentProviderConnection,
 	type AgentTask,
@@ -461,9 +464,11 @@ export {
 	type DelegatedAgentRuntimeConfig,
 	delegateToConfiguredAgent,
 	findConfiguredAgent,
+	isAgentCommand,
 	listConfiguredAgentSummaries,
 	loadConfiguredAgentConfigs,
 	parseConfiguredAgentConfig,
+	planAgentCommand,
 	renderDelegationForTranscript,
 	reviveTeamStateDates,
 	type SpawnTeammateOptions,

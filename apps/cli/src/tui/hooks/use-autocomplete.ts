@@ -80,7 +80,102 @@ export function extractDelegateAgentQuery(
 
 /** Whether a command's first argument is an agent name to choose. */
 export function takesAgentName(commandName: string): boolean {
-	return commandName === "delegate" || commandName === "delegate-background";
+	return (
+		commandName === "delegate" ||
+		commandName === "delegate-background" ||
+		commandName === "agent"
+	);
+}
+
+/**
+ * Which argument of `/agent` is being typed: the first takes an agent or a
+ * skill, the second (after an agent) a skill. `index` is where the word
+ * starts. Undefined past those: the rest is the task.
+ */
+export type AgentCommandSlot =
+	| { position: "first"; query: string; index: number }
+	| { position: "second"; agentName: string; query: string; index: number };
+
+export function extractAgentCommandSlot(
+	text: string,
+): AgentCommandSlot | undefined {
+	const first = /^(\s*\/agent\s+)([^\s@]*)$/.exec(text);
+	if (first) {
+		return {
+			position: "first",
+			query: first[2] ?? "",
+			index: first[1]?.length ?? 0,
+		};
+	}
+	const second = /^(\s*\/agent\s+([^\s/@][^\s@]*)\s+)([^\s@]*)$/.exec(text);
+	if (second) {
+		return {
+			position: "second",
+			agentName: second[2] ?? "",
+			query: second[3] ?? "",
+			index: second[1]?.length ?? 0,
+		};
+	}
+	return undefined;
+}
+
+/** An agent as the pickers need it. */
+export interface AutocompleteAgent {
+	name: string;
+	description: string;
+	/** The agent file's `skills:`; absent or empty means every skill. */
+	skills?: readonly string[];
+}
+
+/**
+ * What `/agent` offers for the word being typed: agents whose name starts
+ * with it, then skills with it in their name; after an agent, only the skills
+ * it may load. Names only, so ordinary words typed as a task empty the list
+ * and Enter sends them.
+ */
+export function getAgentCommandOptions(
+	slot: Pick<AgentCommandSlot, "position" | "query"> & { agentName?: string },
+	agents: readonly AutocompleteAgent[],
+	skillNames: readonly { name: string; description?: string }[],
+): AutocompleteOption[] {
+	const wanted = slot.query.replace(/^\//, "").toLowerCase();
+	const skillOptions = (allowed?: ReadonlySet<string>) =>
+		skillNames
+			.filter(
+				(skill) =>
+					(!allowed || allowed.has(skill.name.toLowerCase())) &&
+					skill.name.toLowerCase().includes(wanted),
+			)
+			.map((skill) => ({
+				display: `/${skill.name}`,
+				value: `/${skill.name} `,
+				description: skill.description,
+			}));
+	if (slot.position === "first") {
+		const agentOptions = slot.query.startsWith("/")
+			? []
+			: agents
+					.filter((agent) => agent.name.toLowerCase().startsWith(wanted))
+					.map((agent) => ({
+						display: agent.name,
+						value: `${agent.name} `,
+						description: agent.description,
+					}));
+		return [...agentOptions, ...skillOptions()].slice(
+			0,
+			MAX_COMPLETION_RESULTS,
+		);
+	}
+	const agent = agents.find(
+		(entry) => entry.name.toLowerCase() === slot.agentName?.toLowerCase(),
+	);
+	if (!agent) {
+		return [];
+	}
+	const allowed = agent.skills?.length
+		? new Set(agent.skills.map((name) => name.toLowerCase()))
+		: undefined;
+	return skillOptions(allowed).slice(0, MAX_COMPLETION_RESULTS);
 }
 
 export function insertMention(
@@ -156,7 +251,7 @@ export function useAutocomplete(opts: {
 	workspaceRoot: string;
 	systemCommands: SlashCommandRegistryEntry[];
 	skillCommands: SlashCommandRegistryEntry[];
-	listAgents?: () => Promise<{ name: string; description: string }[]>;
+	listAgents?: () => Promise<AutocompleteAgent[]>;
 }) {
 	const { workspaceRoot, systemCommands, skillCommands, listAgents } = opts;
 
@@ -164,9 +259,12 @@ export function useAutocomplete(opts: {
 	const [filter, setFilter] = useState("");
 	const [selected, setSelected] = useState(0);
 	const [mentionResults, setMentionResults] = useState<string[]>([]);
-	const [agents, setAgents] = useState<{ name: string; description: string }[]>(
-		[],
-	);
+	const [agents, setAgents] = useState<AutocompleteAgent[]>([]);
+	// Set while the cursor is on an `/agent` argument rather than the name
+	// `/delegate` takes: the same mode, offering agents and skills.
+	const [agentSlot, setAgentSlot] = useState<
+		Pick<AgentCommandSlot, "position"> & { agentName?: string }
+	>();
 
 	const searchTimerRef = useRef<NodeJS.Timeout | null>(null);
 	const searchCounterRef = useRef(0);
@@ -271,7 +369,10 @@ export function useAutocomplete(opts: {
 	const updateAutocomplete = useCallback(
 		(text: string) => {
 			const agent = extractDelegateAgentQuery(text);
-			if (agent.inAgentMode) {
+			const slot = agent.inAgentMode
+				? undefined
+				: extractAgentCommandSlot(text);
+			if (agent.inAgentMode || slot) {
 				// Asked once per opening, not per keystroke; an agent file can
 				// appear between openings.
 				if (!choosingAgentRef.current) {
@@ -287,11 +388,21 @@ export function useAutocomplete(opts: {
 						.catch(() => {});
 				}
 				setMode("agent");
-				setFilter(agent.query);
+				setFilter(slot ? slot.query : agent.query);
+				setAgentSlot(
+					slot
+						? {
+								position: slot.position,
+								agentName:
+									slot.position === "second" ? slot.agentName : undefined,
+							}
+						: undefined,
+				);
 				setSelected(0);
 				return;
 			}
 			choosingAgentRef.current = false;
+			setAgentSlot(undefined);
 
 			const slash = extractSlashQuery(text);
 			if (slash.inSlashMode) {
@@ -339,11 +450,22 @@ export function useAutocomplete(opts: {
 	const getFilteredOptions = useCallback((): AutocompleteOption[] => {
 		if (mode === "/") return getFilteredSlashOptions(filter);
 		if (mode === "@") return getFilteredMentionOptions(filter);
-		if (mode === "agent") return getFilteredAgentOptions(filter);
+		if (mode === "agent") {
+			return agentSlot
+				? getAgentCommandOptions(
+						{ ...agentSlot, query: filter },
+						agents,
+						skillCommands.filter((command) => command.source === "skill"),
+					)
+				: getFilteredAgentOptions(filter);
+		}
 		return [];
 	}, [
 		mode,
 		filter,
+		agentSlot,
+		agents,
+		skillCommands,
 		getFilteredSlashOptions,
 		getFilteredMentionOptions,
 		getFilteredAgentOptions,
@@ -351,6 +473,7 @@ export function useAutocomplete(opts: {
 
 	const close = useCallback(() => {
 		choosingAgentRef.current = false;
+		setAgentSlot(undefined);
 		setMode(false);
 		setFilter("");
 		setSelected(0);

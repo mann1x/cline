@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+	extractAgentCommandSlot,
 	extractDelegateAgentQuery,
 	extractSlashQuery,
 	formatMentionAutocompleteValue,
+	getAgentCommandOptions,
 	getFirstSelectableIndex,
 	insertMention,
 	takesAgentName,
@@ -103,5 +105,82 @@ describe("TUI autocomplete of the /delegate agent", () => {
 		expect(takesAgentName("delegate")).toBe(true);
 		expect(takesAgentName("delegate-background")).toBe(true);
 		expect(takesAgentName("agents")).toBe(false);
+	});
+});
+
+describe("/agent arguments", () => {
+	const agents = [
+		{
+			name: "reviewer",
+			description: "Reviews code",
+			skills: ["review-website", "lint"],
+		},
+		{ name: "qa", description: "Runs QA" },
+	];
+	const skills = [
+		{ name: "deploy", description: "Deploys" },
+		{ name: "lint", description: "Lints" },
+		{ name: "review-website", description: "Reviews a website" },
+	];
+	const displays = (options: { display: string }[]) =>
+		options.map((option) => option.display);
+
+	it("finds the first word, then the second, then nothing", () => {
+		expect(extractAgentCommandSlot("/agent rev")).toEqual({
+			position: "first",
+			query: "rev",
+			index: 7,
+		});
+		expect(extractAgentCommandSlot("/agent reviewer /li")).toEqual({
+			position: "second",
+			agentName: "reviewer",
+			query: "/li",
+			index: 16,
+		});
+		expect(
+			extractAgentCommandSlot("/agent reviewer check the"),
+		).toBeUndefined();
+		expect(takesAgentName("agent")).toBe(true);
+	});
+
+	it("offers agents then skills first, and the agent's own skills second", () => {
+		expect(
+			displays(
+				getAgentCommandOptions(
+					{ position: "first", query: "rev" },
+					agents,
+					skills,
+				),
+			),
+		).toEqual(["reviewer", "/review-website"]);
+		expect(
+			displays(
+				getAgentCommandOptions(
+					{ position: "second", agentName: "reviewer", query: "" },
+					agents,
+					skills,
+				),
+			),
+		).toEqual(["/lint", "/review-website"]);
+		expect(
+			displays(
+				getAgentCommandOptions(
+					{ position: "second", agentName: "qa", query: "dep" },
+					agents,
+					skills,
+				),
+			),
+		).toEqual(["/deploy"]);
+	});
+
+	// An empty list lets Enter send the text as the task.
+	it("offers nothing for an ordinary word", () => {
+		expect(
+			getAgentCommandOptions(
+				{ position: "first", query: "launch" },
+				agents,
+				skills,
+			),
+		).toEqual([]);
 	});
 });

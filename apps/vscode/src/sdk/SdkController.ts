@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
 import type {
+	AgentCommandPlan,
 	BackgroundDelegationView,
 	ConfiguredAgentDelegationResult,
 	ConfiguredAgentSummary,
@@ -26,6 +27,7 @@ import {
 	loadConfiguredAgentConfigs,
 	loadRulesForSystemPromptFromRecords,
 	type PreparedRemoteConfigCoreIntegration,
+	planAgentCommand,
 	type RuleConfig,
 	readSessionCheckpointHistory,
 	resolveDefaultMcpSettingsPath,
@@ -1807,6 +1809,32 @@ export class Controller {
 			sessionId: activeSession.sessionId,
 			agentName,
 			prompt,
+		})
+	}
+
+	/**
+	 * What an `/agent ...` message does (see core's `planAgentCommand`).
+	 *
+	 * The skills are the ones the session would load, so a skill named in the
+	 * command is checked against the agent's own list before the agent runs
+	 * without it.
+	 */
+	async planAgentCommand(text: string): Promise<AgentCommandPlan> {
+		const agents = await this.listConfiguredAgents()
+		let skillNames: string[] = []
+		try {
+			const service = await this.ensureUserInstructionService(await this.getWorkspaceRoot())
+			skillNames = service
+				.listRuntimeCommands()
+				.filter((command) => command.kind === "skill")
+				.map((command) => command.name)
+		} catch (error) {
+			Logger.warn("[SdkController] /agent: skills could not be listed; none will be recognised", error)
+		}
+		return planAgentCommand(text, {
+			agents,
+			skillNames,
+			agentsEnabled: this.stateManager.getGlobalSettingsKey("subagentsEnabled") === true,
 		})
 	}
 

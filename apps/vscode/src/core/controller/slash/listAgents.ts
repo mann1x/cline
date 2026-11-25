@@ -14,6 +14,7 @@ export async function listAgents(controller: Controller, _request: EmptyRequest)
 				// One field for "somewhere other than the session", because that is
 				// the only thing a picker needs to say about where an agent runs.
 				runsOn: agent.profile ?? agent.modelId ?? "",
+				skills: agent.skills ?? [],
 			}),
 		),
 	})

@@ -18,7 +18,8 @@ interface SlashCommandMenuProps {
 	mcpServers?: McpServer[]
 	/**
 	 * Shown instead of the commands: the agents when the cursor is on the name
-	 * `/delegate` takes, or the skills matching what follows `/skill`.
+	 * `/delegate` takes, the skills matching what follows `/skill`, or the
+	 * agents and skills an `/agent` argument takes. Agents first, then skills.
 	 */
 	agents?: SlashCommand[]
 	/** The skills offered among the commands for a plain `/`. */
@@ -165,11 +166,19 @@ const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
 						{renderCommandSection(defaultCommands, "Default Commands", 0, true)}
 						{renderCommandSection(workflowCommands, "Workflow Commands", defaultCommands.length, false)}
 						{renderCommandSection(mcpCommands, "MCP Prompts", defaultCommands.length + workflowCommands.length, true)}
-						{renderCommandSection(agentCommands, "Agents", 0, true)}
+						{/* Offsets follow the render order, which is also the order of
+						    the list the arrow keys walk: `/agent` offers agents and skills
+						    together, and both used to count from the same row. */}
+						{renderCommandSection(
+							agentCommands,
+							"Agents",
+							defaultCommands.length + workflowCommands.length + mcpCommands.length,
+							true,
+						)}
 						{renderCommandSection(
 							skillCommands,
 							"Skills",
-							defaultCommands.length + workflowCommands.length + mcpCommands.length,
+							defaultCommands.length + workflowCommands.length + mcpCommands.length + agentCommands.length,
 							true,
 						)}
 					</>

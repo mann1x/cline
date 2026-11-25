@@ -8,6 +8,13 @@ export {
 	readAgentCheck,
 } from "./agent-check";
 export {
+	type AgentCommandAgent,
+	type AgentCommandContext,
+	type AgentCommandPlan,
+	isAgentCommand,
+	planAgentCommand,
+} from "./agent-command";
+export {
 	AGENT_CONTROLS_NOTE,
 	AGENT_SANDBOX_ROLE_NOTE,
 	AgentControlFields,

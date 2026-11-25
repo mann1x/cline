@@ -290,6 +290,83 @@ export function insertDelegateAgent(
 	}
 }
 
+/** An agent as `/agent` offers it: its name, and the skills it may load (none listed: every one). */
+export interface AgentCommandAgent {
+	name: string
+	description: string
+	skills?: readonly string[]
+}
+
+/**
+ * Which argument of `/agent` the cursor is on, and what is typed there so far;
+ * undefined anywhere else. The first takes an agent or a skill, the second (after
+ * a first word that is not a skill) only a skill. Past that it is free text.
+ */
+export type AgentCommandSlot = { position: "first"; query: string } | { position: "second"; agentName: string; query: string }
+
+export function getAgentCommandSlot(text: string, cursorPosition: number): AgentCommandSlot | undefined {
+	const beforeCursor = text.slice(0, cursorPosition)
+	const first = beforeCursor.match(/^\/agent\s+([^\s@]*)$/)
+	if (first) {
+		return { position: "first", query: first[1] }
+	}
+	const second = beforeCursor.match(/^\/agent\s+([^\s/@][^\s@]*)\s+([^\s@]*)$/)
+	if (second) {
+		return { position: "second", agentName: second[1], query: second[2] }
+	}
+	return undefined
+}
+
+/**
+ * What the `/agent` menu offers at the cursor: agents whose name starts with
+ * what was typed, then skills with it in their name; for the second argument,
+ * only the skills that agent may load. Matching names only, not descriptions,
+ * so ordinary words typed as a task close the menu instead of finding a skill
+ * that happens to mention them.
+ */
+export function getMatchingAgentCommandItems(
+	slot: AgentCommandSlot,
+	agents: readonly AgentCommandAgent[],
+	skills: readonly SlashCommand[],
+): SlashCommand[] {
+	const wanted = slot.query.replace(/^\//, "").toLowerCase()
+	const matchingSkills = (allowed?: ReadonlySet<string>) =>
+		skills.filter((skill) => (!allowed || allowed.has(skill.name)) && skill.name.includes(wanted))
+	if (slot.position === "first") {
+		const agentItems = slot.query.startsWith("/")
+			? []
+			: agents
+					.filter((agent) => agent.name.toLowerCase().startsWith(wanted))
+					.map((agent) => ({ name: agent.name, description: agent.description, section: "agent" as const }))
+		return [...agentItems, ...matchingSkills()]
+	}
+	const agent = agents.find((entry) => entry.name.toLowerCase() === slot.agentName.toLowerCase())
+	if (!agent) {
+		return []
+	}
+	const allowed = agent.skills?.length ? new Set(agent.skills.map(skillCommandName)) : undefined
+	return matchingSkills(allowed)
+}
+
+/**
+ * Replace the word under the cursor with the chosen agent or skill. A skill
+ * goes in with its slash, which is how the agent's `skills` tool knows it.
+ */
+export function insertAgentCommandItem(
+	text: string,
+	item: SlashCommand,
+	cursorPosition: number,
+): { newValue: string; newCursorPosition: number } {
+	const word = text.slice(0, cursorPosition).match(/\S*$/)?.[0] ?? ""
+	const start = cursorPosition - word.length
+	const token = item.section === "agent" ? item.name : `/${item.name}`
+	const rest = text.slice(cursorPosition).replace(/^\S*/, "")
+	return {
+		newValue: `${text.slice(0, start)}${token}${rest.startsWith(" ") ? rest : ` ${rest}`}`,
+		newCursorPosition: start + token.length + 1,
+	}
+}
+
 /**
  * Insert a slash command at position or replace partial command
  */

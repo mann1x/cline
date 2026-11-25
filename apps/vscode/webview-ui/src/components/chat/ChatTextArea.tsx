@@ -36,12 +36,16 @@ import {
 import { useMetaKeyDetection, useShortcut } from "@/utils/hooks"
 import { isSafari } from "@/utils/platformUtils"
 import {
+	type AgentCommandAgent,
+	getAgentCommandSlot,
 	getDelegateAgentQuery,
+	getMatchingAgentCommandItems,
 	getMatchingDelegateAgents,
 	getMatchingSkills,
 	getMatchingSlashCommands,
 	getSkillCommands,
 	getSkillQuery,
+	insertAgentCommandItem,
 	insertDelegateAgent,
 	insertSkillCommand,
 	insertSlashCommand,
@@ -254,7 +258,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		const [showSlashCommandsMenu, setShowSlashCommandsMenu] = useState(false)
 		const [selectedSlashCommandsIndex, setSelectedSlashCommandsIndex] = useState(0)
 		const [slashCommandsQuery, setSlashCommandsQuery] = useState("")
-		const [delegateAgents, setDelegateAgents] = useState<{ name: string; description: string }[]>([])
+		const [delegateAgents, setDelegateAgents] = useState<AgentCommandAgent[]>([])
 		// Also dismisses the `/skill` picker: both are closed by Escape or a
 		// click away, and reopen on the next keystroke.
 		const [delegateMenuDismissed, setDelegateMenuDismissed] = useState(false)
@@ -349,10 +353,14 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		// `/delegate` from the menu opens this too, and a sent message closes it.
 		const delegateAgentQuery = delegateMenuDismissed ? undefined : getDelegateAgentQuery(inputValue, cursorPosition)
 		const choosingDelegateAgent = delegateAgentQuery !== undefined
+		// `/agent <agent or skill> <skill>`: which argument the cursor is on.
+		const agentCommandSlot = delegateMenuDismissed ? undefined : getAgentCommandSlot(inputValue, cursorPosition)
+		const choosingAgentCommand = agentCommandSlot !== undefined
+		const needAgents = choosingDelegateAgent || choosingAgentCommand
 
 		// Asked each time the menu opens: an agent file can appear at any point.
 		useEffect(() => {
-			if (!choosingDelegateAgent) {
+			if (!needAgents) {
 				return
 			}
 			let cancelled = false
@@ -367,7 +375,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				cancelled = true
 				setDelegateAgents([])
 			}
-		}, [choosingDelegateAgent])
+		}, [needAgents])
 
 		const delegateAgentItems = useMemo(
 			() => (delegateAgentQuery === undefined ? [] : getMatchingDelegateAgents(delegateAgentQuery, delegateAgents)),
@@ -381,6 +389,17 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			() => (skillQuery === undefined ? [] : getMatchingSkills(skillQuery, skillCommands)),
 			[skillQuery, skillCommands],
 		)
+
+		// Empty once nothing matches, which closes the menu: what is being typed
+		// is the task, and Enter sends it.
+		const agentCommandItems =
+			agentCommandSlot === undefined ? [] : getMatchingAgentCommandItems(agentCommandSlot, delegateAgents, skillCommands)
+		const agentCommandQuery = agentCommandSlot ? `${agentCommandSlot.position}:${agentCommandSlot.query}` : undefined
+		useEffect(() => {
+			if (agentCommandQuery !== undefined) {
+				setSelectedSlashCommandsIndex(0)
+			}
+		}, [agentCommandQuery])
 
 		const loadSkills = useCallback(() => {
 			FileServiceClient.refreshSkills(EmptyRequest.create({}))
@@ -401,10 +420,10 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			loadSkills()
 		}, [loadSkills])
 		useEffect(() => {
-			if (choosingSkill || showSlashCommandsMenu) {
+			if (choosingSkill || showSlashCommandsMenu || choosingAgentCommand) {
 				loadSkills()
 			}
-		}, [choosingSkill, showSlashCommandsMenu, loadSkills])
+		}, [choosingSkill, showSlashCommandsMenu, choosingAgentCommand, loadSkills])
 		// A new filter starts the highlight at the top.
 		useEffect(() => {
 			if (skillQuery !== undefined) {
@@ -423,14 +442,14 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				}
 			}
 
-			if (showSlashCommandsMenu || delegateAgentItems.length > 0 || choosingSkill) {
+			if (showSlashCommandsMenu || delegateAgentItems.length > 0 || choosingSkill || agentCommandItems.length > 0) {
 				document.addEventListener("mousedown", handleClickOutsideSlashMenu)
 			}
 
 			return () => {
 				document.removeEventListener("mousedown", handleClickOutsideSlashMenu)
 			}
-		}, [showSlashCommandsMenu, delegateAgentItems.length, choosingSkill])
+		}, [showSlashCommandsMenu, delegateAgentItems.length, choosingSkill, agentCommandItems.length])
 
 		const handleMentionSelect = useCallback(
 			(type: ContextMenuOptionType, value?: string) => {
@@ -549,6 +568,23 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			[setInputValue, inputValue, cursorPosition],
 		)
 
+		const handleAgentCommandSelect = useCallback(
+			(item: SlashCommand) => {
+				const { newValue, newCursorPosition } = insertAgentCommandItem(inputValue, item, cursorPosition)
+				setInputValue(newValue)
+				setCursorPosition(newCursorPosition)
+				setIntendedCursorPosition(newCursorPosition)
+				setSelectedSlashCommandsIndex(0)
+				setTimeout(() => {
+					if (textAreaRef.current) {
+						textAreaRef.current.blur()
+						textAreaRef.current.focus()
+					}
+				}, 0)
+			},
+			[setInputValue, inputValue, cursorPosition],
+		)
+
 		const handleSkillSelect = useCallback(
 			(skill: SlashCommand) => {
 				const { newValue, newCursorPosition } = insertSkillCommand(inputValue, skill.name, cursorPosition)
@@ -646,6 +682,29 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						if (skill) {
 							handleSkillSelect(skill)
 						}
+						return
+					}
+				}
+
+				if (agentCommandItems.length > 0) {
+					if (event.key === "Escape") {
+						setDelegateMenuDismissed(true)
+						return
+					}
+
+					if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+						event.preventDefault()
+						const direction = event.key === "ArrowUp" ? -1 : 1
+						setSelectedSlashCommandsIndex(
+							(prevIndex) => (prevIndex + direction + agentCommandItems.length) % agentCommandItems.length,
+						)
+						return
+					}
+
+					if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
+						event.preventDefault()
+						const item = agentCommandItems[selectedSlashCommandsIndex] ?? agentCommandItems[0]
+						handleAgentCommandSelect(item)
 						return
 					}
 				}
@@ -889,6 +948,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				handleSlashCommandsSelect,
 				delegateAgentItems,
 				handleDelegateAgentSelect,
+				agentCommandItems,
+				handleAgentCommandSelect,
 				choosingSkill,
 				skillItems,
 				skillCommands,
@@ -1644,11 +1705,20 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							<span className="text-error font-bold text-xs">Files other than images are currently disabled</span>
 						</div>
 					)}
-					{(showSlashCommandsMenu || delegateAgentItems.length > 0 || choosingSkill) && (
+					{(showSlashCommandsMenu ||
+						delegateAgentItems.length > 0 ||
+						choosingSkill ||
+						agentCommandItems.length > 0) && (
 						<div ref={slashCommandsMenuContainerRef}>
 							<SlashCommandMenu
 								agents={
-									delegateAgentItems.length > 0 ? delegateAgentItems : choosingSkill ? skillItems : undefined
+									agentCommandItems.length > 0
+										? agentCommandItems
+										: delegateAgentItems.length > 0
+											? delegateAgentItems
+											: choosingSkill
+												? skillItems
+												: undefined
 								}
 								emptyText={
 									choosingSkill
@@ -1662,11 +1732,13 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								mcpServers={mcpServers}
 								onMouseDown={handleMenuMouseDown}
 								onSelect={
-									delegateAgentItems.length > 0
-										? handleDelegateAgentSelect
-										: choosingSkill
-											? handleSkillSelect
-											: handleSlashCommandsSelect
+									agentCommandItems.length > 0
+										? handleAgentCommandSelect
+										: delegateAgentItems.length > 0
+											? handleDelegateAgentSelect
+											: choosingSkill
+												? handleSkillSelect
+												: handleSlashCommandsSelect
 								}
 								query={slashCommandsQuery}
 								remoteWorkflows={remoteConfigSettings?.remoteGlobalWorkflows}

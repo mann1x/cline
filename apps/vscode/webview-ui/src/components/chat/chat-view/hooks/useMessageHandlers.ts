@@ -1,6 +1,6 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import { EmptyRequest, StringRequest } from "@shared/proto/cline/common"
-import { DelegateRequest } from "@shared/proto/cline/slash"
+import { type AgentCommandPlan, DelegateRequest } from "@shared/proto/cline/slash"
 import { AskResponseRequest, NewTaskRequest } from "@shared/proto/cline/task"
 import { IntentEvent } from "@shared/proto/cline/ui"
 import { useCallback, useRef, useState } from "react"
@@ -134,6 +134,33 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 					;(chatState as any).disableAutoScrollRef.current = false
 				}
 				return
+			}
+
+			// `/agent ...`: the extension says what it does. A named agent runs
+			// as `/delegate` would; anything else goes on to the lead below as a
+			// request to hand the work to an agent. A refusal (no task, a skill
+			// the agent may not load, agents off) is shown by the extension and
+			// leaves the text in the box to be fixed.
+			if (/^\/agent(?:\s|$)/.test(messageToSend)) {
+				let plan: AgentCommandPlan
+				try {
+					plan = await SlashServiceClient.prepareAgentCommand(StringRequest.create({ value: messageToSend }))
+				} catch (err) {
+					console.error("/agent was refused:", err)
+					return
+				}
+				if (plan.agentName) {
+					setInputValue("")
+					setActiveQuote(null)
+					await SlashServiceClient.delegate(
+						DelegateRequest.create({ agentName: plan.agentName, prompt: plan.prompt }),
+					).catch((err) => console.error("Failed to delegate to agent:", err))
+					if ("disableAutoScrollRef" in chatState) {
+						;(chatState as any).disableAutoScrollRef.current = false
+					}
+					return
+				}
+				messageToSend = plan.leadMessage
 			}
 
 			// `/delegate-background <agent> <task>` is the same delegation with

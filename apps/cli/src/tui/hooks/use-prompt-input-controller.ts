@@ -1,3 +1,4 @@
+import { isAgentCommand } from "@cline/core";
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { shouldExpandSkillSlashCommands } from "../../runtime/prompt";
 import { formatCliErrorMessage } from "../../utils/cline-pass-errors";
@@ -10,6 +11,7 @@ import {
 import type { TextareaHandle } from "../components/input-bar";
 import { useSession } from "../contexts/session-context";
 import type { AppView, TuiProps } from "../types";
+import { planCliAgentCommand } from "../utils/agent-command";
 import {
 	createUniquePastedTextSnippetMarker,
 	expandPastedTextSnippets,
@@ -22,6 +24,7 @@ import {
 } from "../utils/skill-command-input";
 import type { AutocompleteOption, useAutocomplete } from "./use-autocomplete";
 import {
+	extractAgentCommandSlot,
 	extractDelegateAgentQuery,
 	extractSlashQuery,
 	takesAgentName,
@@ -48,6 +51,8 @@ export function usePromptInputController(input: {
 	refreshRepoStatus: () => void;
 	setAppView: (view: AppView) => void;
 	turnErrorReportedRef: { current: boolean };
+	/** The configured agents, for planning `/agent`. */
+	listAgents?: TuiProps["onListAgents"];
 }) {
 	const {
 		autocomplete,
@@ -61,6 +66,7 @@ export function usePromptInputController(input: {
 		refreshRepoStatus,
 		setAppView,
 		turnErrorReportedRef,
+		listAgents,
 	} = input;
 	const session = useSession();
 	const [inputKey, setInputKey] = useState(0);
@@ -254,10 +260,23 @@ export function usePromptInputController(input: {
 			} else if (autocomplete.mode === "agent") {
 				const text = inputValueRef.current;
 				const agent = extractDelegateAgentQuery(text);
+				const slot = agent.inAgentMode
+					? undefined
+					: extractAgentCommandSlot(text);
 				if (agent.inAgentMode) {
 					const newText = text.slice(0, agent.nameIndex) + option.value;
 					ta.setText(newText);
 					ta.cursorOffset = newText.length;
+				} else if (slot) {
+					const newText = text.slice(0, slot.index) + option.value;
+					ta.setText(newText);
+					ta.cursorOffset = newText.length;
+					// An agent chosen first: its skills are offered next.
+					if (slot.position === "first" && !option.value.startsWith("/")) {
+						setInputValue(newText);
+						autocomplete.updateAutocomplete(newText);
+						return;
+					}
 				}
 			} else if (autocomplete.mode === "@") {
 				const text = inputValueRef.current;
@@ -284,8 +303,37 @@ export function usePromptInputController(input: {
 		async (delivery?: "queue" | "steer") => {
 			if (localCommandInFlightRef.current) return;
 
-			const prompt = inputValueRef.current.trim();
+			let prompt = inputValueRef.current.trim();
 			if (!prompt) return;
+
+			// `/agent ...`: a named agent runs as `/delegate` does; anything else
+			// goes on below as a request to the lead to hand the work off. A
+			// refusal keeps the text in the input to be fixed.
+			if (!delivery && isAgentCommand(prompt)) {
+				const plan = await planCliAgentCommand(
+					prompt,
+					slashCommandRegistry,
+					listAgents,
+				);
+				if (plan.kind === "refused") {
+					session.appendEntry({
+						kind: "error",
+						text: `/agent: ${plan.reason}`,
+					});
+					return;
+				}
+				if (plan.kind === "delegate") {
+					setInputKey((k) => k + 1);
+					setInputValue("");
+					clearPasteAttachments();
+					await runSlashCommand("delegate", {
+						text: `/delegate ${plan.agentName} ${plan.prompt}`,
+						cursorOffset: 0,
+					});
+					return;
+				}
+				prompt = plan.message;
+			}
 
 			if (!delivery && prompt.startsWith("/")) {
 				const parts = prompt.split(/\s+/);
@@ -422,6 +470,7 @@ export function usePromptInputController(input: {
 			clearPasteAttachments,
 			configVerbose,
 			inputHistory,
+			listAgents,
 			modelId,
 			onSubmit,
 			providerId,

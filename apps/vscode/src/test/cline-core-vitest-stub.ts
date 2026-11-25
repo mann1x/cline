@@ -850,4 +850,7 @@ export async function loginOpenAICodex(): Promise<OAuthCredentials> {
 }
 
 export { normalizeRuntimeCommandName } from "../../../../sdk/packages/core/src/extensions/config/runtime-commands"
+// The real planner, from source: the chat and the CLI must plan `/agent` the
+// same way, and a stub would only agree with itself.
+export { isAgentCommand, planAgentCommand } from "../../../../sdk/packages/core/src/extensions/tools/team/agent-command"
 export { resolveMessageDisplayRole } from "../../../../sdk/packages/core/src/session/user-run-messages"

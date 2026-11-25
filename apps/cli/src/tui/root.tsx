@@ -886,6 +886,7 @@ function App(props: TuiProps) {
 		refreshRepoStatus,
 		setAppView,
 		turnErrorReportedRef: agentHandlers.turnErrorReportedRef,
+		listAgents: props.onListAgents,
 	});
 	const focusPromptTextarea = promptInput.focusTextarea;
 	const submitInitialPrompt = promptInput.submitInitialPrompt;
