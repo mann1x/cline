@@ -820,6 +820,19 @@ export function describeEditorArgumentGap(value: unknown): string | null {
 			"`file_path` is the one file this call edits. It is not carried over from an earlier call and is never inferred, so a call without it is not aimed at anything.",
 		);
 	}
+	// pandorum otpes, 2026-11-25: `editor` with `revision: "original"` and no
+	// `text`, to put the file back after two whole-class rewrites went wrong.
+	// The answer named only the missing `text`, and the run ended there; the
+	// tool that does it is one call away.
+	if (has("revision")) {
+		const revision =
+			typeof input.revision === "string" || typeof input.revision === "number"
+				? JSON.stringify(input.revision)
+				: '"original"';
+		notes.push(
+			`\`revision\` is not an argument of \`editor\`, which only writes the \`text\` you send. To put a version of the file back whole, call \`restore_file\` with \`path\` and \`revision: ${revision}\`; to see it first without changing anything, \`read_files\` with that \`revision\`.`,
+		);
+	}
 	const readArgs = READ_FILES_ARGS.filter(has);
 	if (readArgs.length > 0) {
 		const names = readArgs.map((arg) => `\`${arg}\``).join(" and ");

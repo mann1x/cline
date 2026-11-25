@@ -2646,6 +2646,22 @@ describe("an editor call refused for a missing argument", () => {
 		expect(message).toContain("`line_numbers`");
 	});
 
+	// pandorum otpes, 2026-11-25: the model sent this to put the file back,
+	// was told only that `text` was missing, and the run ended there.
+	it("names restore_file when the call asks for a revision", async () => {
+		const message = await refusal({
+			file_path: "manic_miner.html",
+			intent: "Restore the file to its original state to start fresh.",
+			revision: "original",
+		});
+
+		expect(message).toContain("Missing required argument `text`");
+		expect(message).toContain(
+			'call `restore_file` with `path` and `revision: "original"`',
+		);
+		expect(message).toContain("`read_files` with that `revision`");
+	});
+
 	// The tool that fills in the file a model forgot to name is the tool that
 	// edits the wrong one.
 	it("proposes no path of its own when the file is what is missing", async () => {
