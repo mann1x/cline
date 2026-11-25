@@ -32,6 +32,7 @@ const ClineCommands = {
 	HistoryButton: prefix + ".historyButtonClicked",
 	UndockChat: prefix + ".undockChat",
 	DockChat: prefix + ".dockChat",
+	ClearWebviewCache: prefix + ".clearWebviewCache",
 	AccountButton: prefix + ".accountButtonClicked",
 	WorktreesButton: prefix + ".worktreesButtonClicked",
 	TerminalOutput: prefix + ".addTerminalOutputToChat",

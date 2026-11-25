@@ -55,6 +55,7 @@ import { DIFF_VIEW_URI_SCHEME, diffContentProvider } from "./hosts/vscode/Vscode
 import { EDIT_PREVIEW_URI_SCHEME, editPreviewContentProvider, VscodeEditPreview } from "./hosts/vscode/VscodeEditPreview"
 import { VscodeWebviewProvider } from "./hosts/vscode/VscodeWebviewProvider"
 import { exportVSCodeStorageToSharedFiles } from "./hosts/vscode/vscode-to-file-migration"
+import { confirmWebviewCachePurge, reportWebviewCachePurge } from "./hosts/vscode/webview-cache"
 import { ExtensionRegistryInfo } from "./registry"
 import { AuthService, LogoutReason } from "./sdk/auth-service"
 import { startMemoryLog } from "./sdk/extension-memory-log"
@@ -130,6 +131,8 @@ export async function activate(context: vscode.ExtensionContext) {
 	// `activate`, then from `setupHostProvider`, each time still ahead of the
 	// subscriber and each time silently producing nothing.
 	reportOllamaStreamDispatcher()
+	// What the last "Clear VS Code's webview cache" did while VS Code was closed.
+	void reportWebviewCachePurge(context)
 
 	// The host's memory, now and every five minutes: a baseline to read a
 	// later figure against.
@@ -194,6 +197,9 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.commands.registerCommand(commands.HistoryButton, () => sendHistoryButtonClickedEvent()))
 	context.subscriptions.push(vscode.commands.registerCommand(commands.UndockChat, () => webview.undock()))
 	context.subscriptions.push(vscode.commands.registerCommand(commands.DockChat, () => webview.dock()))
+	context.subscriptions.push(
+		vscode.commands.registerCommand(commands.ClearWebviewCache, () => confirmWebviewCachePurge(context)),
+	)
 	context.subscriptions.push(vscode.commands.registerCommand(commands.AccountButton, () => sendAccountButtonClickedEvent()))
 	context.subscriptions.push(vscode.commands.registerCommand(commands.WorktreesButton, () => sendWorktreesButtonClickedEvent()))
 	// Cerebriline is not on the Marketplace -- upstream Cline is, and one of us

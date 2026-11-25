@@ -160,6 +160,11 @@
 				"icon": "$(layout-sidebar-right)"
 			},
 			{
+				"command": "cerebriline.clearWebviewCache",
+				"title": "Clear VS Code's Webview Cache and Restart",
+				"category": "Cerebriline"
+			},
+			{
 				"command": "cerebriline.accountButtonClicked",
 				"title": "Account",
 				"icon": "$(account)"

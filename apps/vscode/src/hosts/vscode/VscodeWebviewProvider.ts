@@ -11,6 +11,7 @@ import type { ExtensionMessage } from "@/shared/ExtensionMessage"
 import { Logger } from "@/shared/services/Logger"
 import { WebviewMessage } from "@/shared/WebviewMessage"
 import { setUndockedChatPanel } from "./undocked-chat"
+import { offerWebviewCachePurge, WebviewLoadWatchdog } from "./webview-cache"
 
 /*
 https://github.com/microsoft/vscode-webview-ui-toolkit-samples/blob/main/default/weather-webview/src/providers/WeatherViewProvider.ts
@@ -35,6 +36,15 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 	 */
 	private panel?: vscode.WebviewPanel
 	private panelDisposables: vscode.Disposable[] = []
+	/**
+	 * Waits for the chat page to say its first word. A page that stays silent
+	 * is one VS Code could not load ("Could not register service worker"),
+	 * which the extension is never told about; see `webview-cache.ts`.
+	 */
+	private readonly loadWatchdog = new WebviewLoadWatchdog(
+		() => this.isVisible(),
+		(waitedMs) => void offerWebviewCachePurge(this.context, waitedMs, () => this.loadWatchdog.silent),
+	)
 
 	/** The webview the chat app is running in: the undocked panel if there is one, else the sidebar. */
 	private get chatWebview(): vscode.Webview | undefined {
@@ -122,7 +132,17 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 		)
 		setUndockedChatPanel(() => panel.viewColumn)
 		await vscode.commands.executeCommand("setContext", ExtensionRegistryInfo.contextKeys.ChatUndocked, true)
+		panel.onDidChangeViewState(
+			() => {
+				if (panel.visible) {
+					this.loadWatchdog.shown()
+				}
+			},
+			null,
+			this.panelDisposables,
+		)
 		panel.webview.html = await this.chatHtml()
+		this.loadWatchdog.arm()
 		if (this.webview) {
 			this.webview.webview.html = this.getUndockedPlaceholderHtml()
 		}
@@ -153,6 +173,7 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 		await vscode.commands.executeCommand("setContext", ExtensionRegistryInfo.contextKeys.ChatUndocked, false)
 		if (this.webview) {
 			this.webview.webview.html = await this.chatHtml()
+			this.loadWatchdog.arm()
 		}
 		await vscode.commands.executeCommand(`${VscodeWebviewProvider.SIDEBAR_ID}.focus`)
 		Logger.log("[VscodeWebviewProvider] Chat docked")
@@ -211,6 +232,9 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 
 		// Undocked, the chat app is running in its own window; see `panel`.
 		webviewView.webview.html = this.panel ? this.getUndockedPlaceholderHtml() : await this.chatHtml()
+		if (!this.panel) {
+			this.loadWatchdog.arm()
+		}
 
 		// Sets up an event listener to listen for messages passed from the webview view context
 		// and executes code based on the message that is received
@@ -229,6 +253,7 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 		webviewView.onDidChangeVisibility(
 			async () => {
 				if (this.webview?.visible) {
+					this.loadWatchdog.shown()
 					telemetryService.capturePanelOpened("sidebar_visible")
 					// View becoming visible should not steal editor focus.
 					await sendShowWebviewEvent(true)
@@ -311,6 +336,8 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 	 * @param webview A reference to the extension webview
 	 */
 	async handleWebviewMessage(message: WebviewMessage) {
+		// Anything at all from the page means it loaded.
+		this.loadWatchdog.contact()
 		const postMessageToWebview = (response: ExtensionMessage) => this.postMessageToWebview(response)
 
 		switch (message.type) {
@@ -375,6 +402,7 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 		}
 		setUndockedChatPanel(undefined)
 		panel?.dispose()
+		this.loadWatchdog.dispose()
 		this.disposeView()
 		await super.dispose()
 	}
