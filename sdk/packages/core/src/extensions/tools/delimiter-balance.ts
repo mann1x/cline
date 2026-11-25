@@ -1007,6 +1007,67 @@ function findingCandidates(
 /** How many lines above the parser's stop are searched for the edit. */
 const STOP_LOOKBACK = 3;
 
+const OPENER_OF: Record<string, string> = { "}": "{", ")": "(", "]": "[" };
+
+/** A line's leading whitespace. */
+function leadOf(raw: string): string {
+	return raw.slice(0, raw.length - raw.trimStart().length);
+}
+
+/**
+ * The line that opened the block a lone closer on `line` ends, judged by
+ * indentation: the nearest non-blank line above at the same or a shallower
+ * indentation, when it is at exactly the same one and ends with the opener.
+ *
+ * A closer alone on its line and lined up with the line that opened its block
+ * is where the author meant the block to end; when the parser stops on one,
+ * the spare closer is inside the block, not here. pandorum 9adth, 2026-11-25:
+ * the parser stopped at line 127, the `}` closing `function update(){` at
+ * line 108, and the scan offered deleting it -- the script then parsed with
+ * six lines of `update` left at the top level. The spare `}` was on line 120.
+ */
+function alignedOpener(
+	lines: string[],
+	origin: Cursor,
+	line: number,
+): number | undefined {
+	const raw = lines[line - origin.line];
+	const opener = raw === undefined ? undefined : OPENER_OF[raw.trim()];
+	if (raw === undefined || opener === undefined || line <= origin.line) {
+		return undefined;
+	}
+	const lead = leadOf(raw);
+	// The span's first line is whole only when the span starts its line: in
+	// an HTML file it is what follows `<script>`, with no indentation to read.
+	const top = origin.column <= 1 ? origin.line : origin.line + 1;
+	for (let above = line - 1; above >= top; above -= 1) {
+		const text = lines[above - origin.line] ?? "";
+		if (text.trim() === "") {
+			continue;
+		}
+		const theirs = leadOf(text);
+		if (theirs.length > lead.length) {
+			continue;
+		}
+		return theirs === lead && text.trimEnd().endsWith(opener)
+			? above
+			: undefined;
+	}
+	return undefined;
+}
+
+/** Whether a candidate deletes a lone closer that lines up with its block. */
+function deletesAlignedCloser(
+	body: string,
+	origin: Cursor,
+	candidate: Candidate,
+): boolean {
+	if (candidate.text.length !== body.length - 1) {
+		return false;
+	}
+	return alignedOpener(body.split("\n"), origin, candidate.line) !== undefined;
+}
+
 /** A ceiling on the edits tried around the stop, so a long line cannot stall. */
 const MAX_STOP_CANDIDATES = 160;
 
@@ -1094,6 +1155,38 @@ function stopCandidates(
 			});
 		}
 	}
+	// Stopped on a closer lined up with the line that opened its block: the
+	// spare one is inside the block, however far above the lookback. Each line
+	// in it with more closers of that kind than openers is a statement that
+	// should balance on its own, so its closers are tried too.
+	const opened = alignedOpener(lines, origin, stop.line);
+	if (opened !== undefined) {
+		const closer = lines[stop.line - origin.line]?.trim() ?? "";
+		const key = closer === "}" ? "curly" : closer === ")" ? "round" : "square";
+		for (let line = stop.line - STOP_LOOKBACK - 1; line > opened; line -= 1) {
+			const raw = lines[line - origin.line];
+			const counts = balance.get(line);
+			if (raw === undefined || !counts || counts[key] >= 0) {
+				continue;
+			}
+			const start = offsetIn(body, origin, line, 1);
+			if (start < 0) {
+				continue;
+			}
+			for (let index = raw.length - 1; index >= 0; index -= 1) {
+				if (raw[index] !== closer) {
+					continue;
+				}
+				add({
+					text: body.slice(0, start + index) + body.slice(start + index + 1),
+					say: `delete the \`${closer}\` at line ${line}, column ${index + 1}`,
+					call: `start_line: ${line}, start_column: ${index + 1}, text: ""`,
+					line,
+					at: start + index,
+				});
+			}
+		}
+	}
 	return candidates;
 }
 
@@ -1104,9 +1197,12 @@ function stopCandidates(
  * kept, and among them the line's own count comes first -- a move cannot
  * change a count, so on a line one `}` short the edit that adds it beats one
  * that borrows a spare further down (pandorum g5tmt line 93) -- then an edit
- * after which the script parses, then the edit nearest the stop, then the
- * order tried. Nearest, not furthest: a wrong deletion can carry the parser
- * further by letting a later spare closer balance it.
+ * after which the script parses, then one that leaves alone a closer lined up
+ * with the line that opened its block (pandorum 9adth: deleting the `}` that
+ * ended `update` parsed, and left part of it at the top level), then the edit
+ * nearest the stop, then the order tried. Nearest, not furthest: a wrong
+ * deletion can carry the parser further by letting a later spare closer
+ * balance it.
  */
 function chooseRepair(
 	body: string,
@@ -1114,7 +1210,7 @@ function chooseRepair(
 	candidates: Candidate[],
 	parser: Parser,
 	stop: ParseStop,
-): string | null {
+): Repair | null {
 	if (body.length > MAX_REPAIR_BYTES) {
 		return null;
 	}
@@ -1132,6 +1228,7 @@ function chooseRepair(
 		candidate: Candidate;
 		after: ParseStop | undefined;
 		off: number;
+		aligned: boolean;
 		distance: number;
 	} | null = null;
 	for (const candidate of candidates) {
@@ -1169,15 +1266,17 @@ function chooseRepair(
 				Math.abs(counts.square)
 			: 0;
 		const distance = stopAt < 0 ? 0 : Math.abs(candidate.at - stopAt);
+		const aligned = deletesAlignedCloser(body, origin, candidate);
 		const better =
 			best === null ||
 			off < best.off ||
 			(off === best.off &&
 				((after === undefined && best.after !== undefined) ||
 					((after === undefined) === (best.after === undefined) &&
-						distance < best.distance)));
+						((!aligned && best.aligned) ||
+							(aligned === best.aligned && distance < best.distance)))));
 		if (better) {
-			best = { candidate, after, off, distance };
+			best = { candidate, after, off, aligned, distance };
 		}
 	}
 	if (!best) {
@@ -1198,11 +1297,25 @@ function chooseRepair(
 		best.after === undefined
 			? `one edit ${parser.name} accepts`
 			: `one edit that gets ${parser.name} further`;
-	return (
-		`${lead}: ${best.candidate.say} — checked: ${outcome}. ` +
-		"Brackets cannot tell which block was meant to close here, so make sure it is this one.\n" +
-		`      ${PRESCRIPTION_MARKER}${best.candidate.call} — if that is the change you mean; there is no text to match on.`
-	);
+	return {
+		text:
+			`${lead}: ${best.candidate.say} — checked: ${outcome}. ` +
+			"Brackets cannot tell which block was meant to close here, so make sure it is this one.\n" +
+			`      ${PRESCRIPTION_MARKER}${best.candidate.call} — if that is the change you mean; there is no text to match on.`,
+		accepts: best.after === undefined,
+		say: best.candidate.say,
+		call: best.candidate.call,
+		parser: parser.name,
+	};
+}
+
+/** The edit {@link chooseRepair} offers, and whether the script then parses. */
+interface Repair {
+	text: string;
+	accepts: boolean;
+	say: string;
+	call: string;
+	parser: string;
 }
 
 /**
@@ -1514,6 +1627,8 @@ export function describeDelimiterBalance(
 		);
 	}
 
+	// An edit after which the whole script parses, headlined when there is one.
+	let fixes: Repair | undefined;
 	// Everything below goes to one place only: the parser's stop when there is
 	// one, the first line otherwise. Saying this much about all six would cost
 	// more of the model's attention than the five leads are worth.
@@ -1543,7 +1658,10 @@ export function describeDelimiterBalance(
 			stop,
 		);
 		if (repair) {
-			detail.push(`      ${repair}`);
+			detail.push(`      ${repair.text}`);
+			if (repair.accepts) {
+				fixes = repair;
+			}
 		} else if (stopped.body.length <= MAX_REPAIR_BYTES) {
 			// Whether the search ran at all, which is not the same as it finding
 			// nothing — a file over the size guard is never tried, and a report
@@ -1575,10 +1693,17 @@ export function describeDelimiterBalance(
 	const hidden = distinct.length - shown.length;
 	// The scope is said up front: the same model took a report on the whole
 	// file for a report on the one line it was looking at.
-	const heading =
+	const scanned =
 		shown.length === 1
 			? "Delimiter scan of the whole file, read from line 1:"
 			: `Delimiter scan of the whole file, read from line 1 — ${distinct.length} line(s) do not balance${hidden > 0 ? `, first ${shown.length} shown` : ""}:`;
+	// The one edit that makes the script parse, first. Down in the details it
+	// was read past: pandorum 9adth quoted the parser's error and the count on
+	// either side of it, twice, and rewrote a class by hand instead -- adding
+	// a brace to a line that was right.
+	const heading = fixes
+		? `One edit makes ${fixes.parser} accept the whole script: ${fixes.say} — \`editor\` with ${fixes.call}. Check it closes the block you mean; the scan below says how it was found.\n${scanned}`
+		: scanned;
 
 	// What the counts are and what they are not. An earlier closing line said
 	// the first line named "is where the parser gave up"; on the seed it was

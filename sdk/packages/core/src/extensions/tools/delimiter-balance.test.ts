@@ -804,3 +804,51 @@ describe("an edit that only appears to get the parser further", () => {
 		}
 	});
 });
+
+// pandorum 9adth, 2026-11-25: the parser stopped at line 127, the `}` closing
+// `function update(){` and lined up with it. The spare `}` was on line 120,
+// past the three-line lookback, so the scan offered deleting the closer of
+// `update` -- the script parsed with the rest of `update` at the top level.
+// The model read past that offer anyway, twice, and rewrote a class by hand.
+describe("a spare closer inside the block the parser stopped at the end of", () => {
+	const source = [
+		"function update(){",
+		"    if(a){b();}",
+		"    list.forEach(e=>{if(e.al){x();}})};",
+		"    if(c){d();}",
+		"    if(c){d();}",
+		"    if(c){d();}",
+		"    if(c){d();}",
+		"    z();",
+		"}",
+		"",
+		"function after(){ return 1; }",
+		"",
+	].join("\n");
+
+	it("is found, and the closer lined up with the block is left alone", () => {
+		const report = describeDelimiterBalance("game.js", source) ?? "";
+		expect(report).toContain("delete the `}` at line 3, column 38");
+		expect(report).not.toContain("delete the `}` at line 9, column 1");
+		const fixed = source.split("\n");
+		fixed[2] = `${fixed[2].slice(0, 37)}${fixed[2].slice(38)}`;
+		expect(findScriptSyntaxError("game.js", fixed.join("\n"))).toBeUndefined();
+	});
+
+	it("is headlined when it makes the whole script parse", () => {
+		const report = describeDelimiterBalance("game.js", source) ?? "";
+		expect(report.split("\n")[0]).toBe(
+			'One edit makes the JavaScript parser accept the whole script: delete the `}` at line 3, column 38 — `editor` with start_line: 3, start_column: 38, text: "". Check it closes the block you mean; the scan below says how it was found.',
+		);
+		expect(report.split("\n")[1]).toMatch(/^Delimiter scan of the whole file/);
+	});
+
+	it("has no headline when no single edit makes it parse", () => {
+		const report =
+			describeDelimiterBalance(
+				"game.js",
+				"function f(){\n  if(a){{{\n  b();\n}\n",
+			) ?? "";
+		expect(report).not.toContain("One edit makes");
+	});
+});
