@@ -5,6 +5,25 @@ built for local and small models.
 
 Upstream Cline's own changelog is a separate document and is not reproduced here.
 
+## [4.100.298] — 2026-11-25
+
+### Fixes
+
+- **A Cerebriline panel that does not load now says why, and offers the
+  fix.** "Error loading webview … Could not register service worker:
+  InvalidStateError: The document is in an invalid state" comes from VS
+  Code's own webview cache (the `Service Worker` folder in VS Code's user
+  data folder), which can go bad after an update. Cerebriline was never told
+  about it; the panel just stayed empty. When the panel has sent nothing 25
+  seconds after it was opened, Cerebriline now writes that to its log and
+  offers **Clear Cache and Restart VS Code** or **Reload Window**. Clearing
+  closes every VS Code window (unsaved files are asked about as usual),
+  deletes that folder once VS Code has exited, and starts VS Code again;
+  VS Code rebuilds the cache by itself, and the next start writes what was
+  done to the Cerebriline log. If the clearing script cannot be started,
+  VS Code stays open and says so. The same fix is in the command palette as
+  **Cerebriline: Clear VS Code's Webview Cache and Restart**.
+
 ## [4.100.297] — 2026-11-24
 
 ### Fixes
