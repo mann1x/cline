@@ -1,5 +1,6 @@
 import { Graph, layout } from "@dagrejs/dagre"
 import type { TaskGraphPanelSnapshot, TaskGraphPanelTask } from "@/components/chat/task-header/TaskGraphPanel"
+import { nodePortsOf } from "./edit"
 import { formatDuration, type ViewerPipelineDefinition, type ViewerPipelineNode, type ViewerRun } from "./model"
 
 /**
@@ -29,6 +30,8 @@ export interface CardData {
 	task?: string
 	/** A run's task: the run it stands for. */
 	run?: string
+	/** A node with several outputs: one handle each, so an edge can leave from one. */
+	ports?: string[]
 	[field: string]: unknown
 }
 
@@ -54,6 +57,8 @@ export interface GraphEdge {
 	source: string
 	target: string
 	label?: string
+	/** The source's output, when the source has several. */
+	port?: string
 	state: EdgeState
 }
 
@@ -126,6 +131,7 @@ export function pipelineGraph(definition: ViewerPipelineDefinition | undefined, 
 				? formatDuration(state.endedAt - state.startedAt)
 				: undefined
 		const target = nodeTarget(node)
+		const ports = nodePortsOf(node)
 		nodes.push({
 			id: node.id,
 			...CARD_SIZE,
@@ -139,6 +145,7 @@ export function pipelineGraph(definition: ViewerPipelineDefinition | undefined, 
 				...(state && state.attempts > 1 ? { attempts: state.attempts } : {}),
 				...(time ? { time } : {}),
 				...(state?.reused ? { badge: "reused" } : {}),
+				...(ports.length > 1 ? { ports } : {}),
 			},
 		})
 		const after = Array.isArray(node.after) ? node.after : []
@@ -151,6 +158,7 @@ export function pipelineGraph(definition: ViewerPipelineDefinition | undefined, 
 				source,
 				target: node.id,
 				...(port !== "out" ? { label: port } : {}),
+				port,
 				state: edgeState(run, source, port, node.id),
 			})
 		}

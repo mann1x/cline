@@ -608,7 +608,7 @@ export class PipelineSession {
 			throw new Error(
 				file.approved
 					? `"${file.name}" changed since the version the person approved (${file.approved.hash}; the file is ${file.hash}). Only an approved version runs: ask the person to approve this one, or run \`pipeline test\`.`
-					: `"${file.name}" has not been approved. Only an approved version runs: ask the person to approve it (the /pipelines command, or "Approve pipeline" in VS Code), or run \`pipeline test\`.`,
+					: `"${file.name}" has not been approved. Only an approved version runs: ask the person to approve it (the /pipelines command, or Approve in VS Code's board viewer), or run \`pipeline test\`.`,
 			);
 		}
 		return file.definition;

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react"
 import type { TaskGraphPanelSnapshot, TaskGraphPanelTask } from "@/components/chat/task-header/TaskGraphPanel"
+import { lineDiff } from "./edit"
 import { taskStatus } from "./graph"
 import { shortJson } from "./Inspector"
 import { formatDuration, type ViewerPipeline, type ViewerPipelineDefinition, type ViewerRun } from "./model"
@@ -70,14 +71,57 @@ export function PlanPane({ board, onSelect }: { board: TaskGraphPanelSnapshot; o
 }
 
 /** Definition: the file as it is, with its validation and approval. */
+/** The whole definition as JSON, applied to the draft (phase 4). */
+export interface DefinitionEdit {
+	/** The definition shown: the draft's, or the file's. */
+	definition: ViewerPipelineDefinition
+	onApply: (json: string) => string | undefined
+}
+
+function DefinitionEditor({ edit }: { edit: DefinitionEdit }) {
+	const shown = JSON.stringify(edit.definition, null, "\t")
+	const [text, setText] = useState(shown)
+	const [error, setError] = useState<string>()
+	return (
+		<section className="bv-section">
+			<h3 className="bv-h">Edit as JSON</h3>
+			<textarea
+				aria-label="The pipeline as JSON"
+				className="bv-editor bv-tall"
+				onChange={(event) => {
+					setText(event.target.value)
+					setError(undefined)
+				}}
+				spellCheck={false}
+				value={text}
+			/>
+			{error && <div className="bv-error">{error}</div>}
+			<div className="bv-actions">
+				<button
+					className="bv-button bv-primary"
+					disabled={text === shown}
+					onClick={() => setError(edit.onApply(text))}
+					type="button">
+					Apply to the draft
+				</button>
+				<button className="bv-button" disabled={text === shown} onClick={() => setText(shown)} type="button">
+					Undo
+				</button>
+			</div>
+		</section>
+	)
+}
+
 export function DefinitionPane({
 	pipeline,
 	run,
 	onOpenFile,
+	edit,
 }: {
 	pipeline?: ViewerPipeline
 	run?: ViewerRun
 	onOpenFile: (path: string) => void
+	edit?: DefinitionEdit
 }) {
 	if (run) {
 		const changed = pipeline && run.hash && pipeline.hash !== run.hash
@@ -124,7 +168,7 @@ export function DefinitionPane({
 					) : pipeline.approved ? (
 						`Changed since version ${pipeline.approved.hash} was approved. Approve it again to run it.`
 					) : (
-						"Not approved. Run Cerebriline: Approve Pipeline to let it run."
+						"Not approved. Approve it in the bar above, or with Cerebriline: Approve Pipeline."
 					)}
 				</dd>
 			</dl>
@@ -140,7 +184,89 @@ export function DefinitionPane({
 					</ul>
 				</section>
 			)}
-			<pre className="bv-pre bv-tall">{pipeline.text}</pre>
+			{edit ? (
+				<DefinitionEditor edit={edit} key={JSON.stringify(edit.definition)} />
+			) : (
+				<pre className="bv-pre bv-tall">{pipeline.text}</pre>
+			)}
+		</div>
+	)
+}
+
+const when = (iso: string | undefined) => {
+	if (!iso) return ""
+	const ts = Date.parse(iso)
+	return Number.isFinite(ts) ? clock(ts) : iso
+}
+
+/** Versions: the proposal against the approved version, and the versions kept. */
+export function VersionsPane({ pipeline }: { pipeline: ViewerPipeline }) {
+	const diff = useMemo(
+		() =>
+			pipeline.approvedText !== undefined && !pipeline.isApproved
+				? lineDiff(pipeline.approvedText, pipeline.text)
+				: undefined,
+		[pipeline.approvedText, pipeline.text, pipeline.isApproved],
+	)
+	const versions = pipeline.versions ?? []
+	return (
+		<div className="bv-pane">
+			{pipeline.isApproved ? (
+				<div className="bv-note">The file is the approved version {pipeline.hash}.</div>
+			) : diff ? (
+				<section className="bv-section">
+					<h3 className="bv-h">
+						Version {pipeline.hash} against the approved {pipeline.approved?.hash}
+					</h3>
+					<pre className="bv-pre bv-diff bv-tall">
+						{diff.map((line, index) => (
+							<span className="bv-diff-line" data-kind={line.kind} key={index}>
+								{line.kind === "add" ? "+ " : line.kind === "del" ? "- " : "  "}
+								{line.text}
+								{"\n"}
+							</span>
+						))}
+					</pre>
+				</section>
+			) : pipeline.approved ? (
+				<div className="bv-note">
+					The approved version {pipeline.approved.hash} was not kept here (it was approved before versions were kept),
+					so there is nothing to compare against: Git has it.
+				</div>
+			) : (
+				<div className="bv-note">Never approved: the whole file is new.</div>
+			)}
+			<section className="bv-section">
+				<h3 className="bv-h">Kept versions</h3>
+				{versions.length === 0 ? (
+					<div className="bv-note">None kept yet: a version is kept when it is saved or approved.</div>
+				) : (
+					<table className="bv-table">
+						<thead>
+							<tr>
+								<th>Version</th>
+								<th>By</th>
+								<th>Saved</th>
+								<th />
+							</tr>
+						</thead>
+						<tbody>
+							{versions.map((version) => (
+								<tr key={version.hash}>
+									<td className="bv-mono">{version.hash}</td>
+									<td>{version.by === "model" ? "the model" : "you"}</td>
+									<td>{when(version.at)}</td>
+									<td>
+										{version.hash === pipeline.approved?.hash && <Chip status="approved" />}
+										{version.hash === pipeline.hash && <Chip status="current" />}
+										{version.rejected && <Chip status="rejected" />}
+									</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+				)}
+			</section>
 		</div>
 	)
 }

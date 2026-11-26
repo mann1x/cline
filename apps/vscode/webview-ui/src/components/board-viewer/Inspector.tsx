@@ -1,10 +1,11 @@
-import type { ReactNode } from "react"
+import { type ReactNode, useState } from "react"
 import type { TaskGraphPanelTask } from "@/components/chat/task-header/TaskGraphPanel"
+import { nodeJson } from "./edit"
 import { taskStatus } from "./graph"
-import { formatDuration, type ViewerEvent, type ViewerNodeState, type ViewerPipelineNode } from "./model"
+import { formatDuration, type ViewerEvent, type ViewerNodeState, type ViewerPipelineNode, type ViewerReply } from "./model"
 import { eventSummary } from "./report"
 
-/** What the inspector shows: the selected card. Read-only in phase 3; editing is phase 4. */
+/** What the inspector shows: the selected card, and how it is edited when it can be (phase 4). */
 export type InspectorSubject =
 	| { kind: "node"; id: string; node?: ViewerPipelineNode; state?: ViewerNodeState; events: ViewerEvent[]; runStart?: number }
 	| { kind: "task"; task: TaskGraphPanelTask }
@@ -39,12 +40,31 @@ const Pair = ({ label, children }: { label: string; children: ReactNode }) => (
 	</>
 )
 
-export function Inspector({ subject, onOpenRun }: { subject: InspectorSubject; onOpenRun: (run: string) => void }) {
+/** Editing a pipeline node: its JSON replaces it in the draft. Returns why it did not, or undefined. */
+export interface NodeEdit {
+	onApply: (json: string) => string | undefined
+	onDelete: () => void
+}
+
+/** A change to a task, as the task panel sends it. */
+export type TaskEdit = (fields: Record<string, unknown>) => Promise<ViewerReply>
+
+export function Inspector({
+	subject,
+	onOpenRun,
+	nodeEdit,
+	taskEdit,
+}: {
+	subject: InspectorSubject
+	onOpenRun: (run: string) => void
+	nodeEdit?: NodeEdit
+	taskEdit?: TaskEdit
+}) {
 	switch (subject.kind) {
 		case "node":
-			return <NodeInspector subject={subject} />
+			return <NodeInspector edit={nodeEdit} key={subject.node ? nodeJson(subject.node) : subject.id} subject={subject} />
 		case "task":
-			return <TaskInspector onOpenRun={onOpenRun} task={subject.task} />
+			return <TaskInspector edit={taskEdit} key={subject.task.id} onOpenRun={onOpenRun} task={subject.task} />
 		case "gate":
 			return (
 				<div>
@@ -64,7 +84,46 @@ export function Inspector({ subject, onOpenRun }: { subject: InspectorSubject; o
 	}
 }
 
-function NodeInspector({ subject }: { subject: Extract<InspectorSubject, { kind: "node" }> }) {
+function NodeEditor({ node, edit }: { node: ViewerPipelineNode; edit: NodeEdit }) {
+	const [text, setText] = useState(() => nodeJson(node))
+	const [error, setError] = useState<string>()
+	const changed = text !== nodeJson(node)
+	return (
+		<Section title="Edit">
+			<textarea
+				aria-label={`${node.id} as JSON`}
+				className="bv-editor"
+				onChange={(event) => {
+					setText(event.target.value)
+					setError(undefined)
+				}}
+				rows={Math.min(24, Math.max(6, text.split("\n").length + 1))}
+				spellCheck={false}
+				value={text}
+			/>
+			{error && <div className="bv-error">{error}</div>}
+			<div className="bv-actions">
+				<button
+					className="bv-button bv-primary"
+					disabled={!changed}
+					onClick={() => setError(edit.onApply(text))}
+					type="button">
+					Apply
+				</button>
+				<button className="bv-button" disabled={!changed} onClick={() => setText(nodeJson(node))} type="button">
+					Undo
+				</button>
+				<span className="bv-spacer" />
+				<button className="bv-button bv-danger" onClick={edit.onDelete} type="button">
+					Delete node
+				</button>
+			</div>
+			<div className="bv-note">Changes go to the draft. Save it from the bar above the canvas.</div>
+		</Section>
+	)
+}
+
+function NodeInspector({ subject, edit }: { subject: Extract<InspectorSubject, { kind: "node" }>; edit?: NodeEdit }) {
 	const { id, node, state, events, runStart } = subject
 	const fields = node
 		? Object.fromEntries(Object.entries(node).filter(([key]) => !["id", "type", "after", "name"].includes(key)))
@@ -116,7 +175,8 @@ function NodeInspector({ subject }: { subject: Extract<InspectorSubject, { kind:
 					<div className="bv-error">{state.error ?? `Last attempt: ${state.lastError}`}</div>
 				</Section>
 			)}
-			{fields && Object.keys(fields).length > 0 && (
+			{node && edit && <NodeEditor edit={edit} node={node} />}
+			{!edit && fields && Object.keys(fields).length > 0 && (
 				<Section title="Fields">
 					<pre className="bv-pre">{shortJson(fields)}</pre>
 				</Section>
@@ -174,7 +234,111 @@ function NodeInspector({ subject }: { subject: Extract<InspectorSubject, { kind:
 	)
 }
 
-function TaskInspector({ task, onOpenRun }: { task: TaskGraphPanelTask; onOpenRun: (run: string) => void }) {
+/** One line to send: a title, an acceptance item, a gate, a note. */
+function FieldForm({
+	label,
+	placeholder,
+	initial = "",
+	action,
+	onSend,
+}: {
+	label: string
+	placeholder: string
+	initial?: string
+	action: string
+	onSend: (value: string) => Promise<boolean>
+}) {
+	const [value, setValue] = useState(initial)
+	const [busy, setBusy] = useState(false)
+	return (
+		<form
+			className="bv-form"
+			onSubmit={async (event) => {
+				event.preventDefault()
+				if (!value.trim() || busy) return
+				setBusy(true)
+				const done = await onSend(value.trim())
+				setBusy(false)
+				if (done && !initial) setValue("")
+			}}>
+			<input
+				aria-label={label}
+				className="bv-input"
+				onChange={(event) => setValue(event.target.value)}
+				placeholder={placeholder}
+				value={value}
+			/>
+			<button className="bv-button" disabled={busy || !value.trim() || value.trim() === initial} type="submit">
+				{action}
+			</button>
+		</form>
+	)
+}
+
+function TaskControls({ task, edit }: { task: TaskGraphPanelTask; edit: TaskEdit }) {
+	const [answer, setAnswer] = useState<ViewerReply>()
+	const send = async (fields: Record<string, unknown>) => {
+		const reply = await edit({ id: task.id, ...fields })
+		setAnswer(reply)
+		return reply.ok
+	}
+	const held = task.claimedBy?.startsWith("pipeline:")
+	const statuses: { label: string; status: string }[] =
+		task.status === "done" || task.status === "cancelled"
+			? [{ label: "Reopen", status: "pending" }]
+			: [
+					...(task.status !== "active" ? [{ label: "Start", status: "active" }] : []),
+					{ label: "Done", status: "done" },
+					{ label: "Cancel", status: "cancelled" },
+				]
+	return (
+		<Section title="Change">
+			{held ? (
+				<div className="bv-note">A pipeline run holds this task: its status is the run's.</div>
+			) : (
+				<div className="bv-actions">
+					{statuses.map(({ label, status }) => (
+						<button className="bv-button" key={status} onClick={() => void send({ status })} type="button">
+							{label}
+						</button>
+					))}
+				</div>
+			)}
+			<FieldForm
+				action="Rename"
+				initial={task.title}
+				label="Title"
+				onSend={(title) => send({ title })}
+				placeholder="Title"
+			/>
+			<FieldForm
+				action="Add"
+				label="New acceptance item"
+				onSend={(item) => send({ acceptance_add: [item] })}
+				placeholder="Done when…"
+			/>
+			<FieldForm action="Add" label="New gate" onSend={(gate) => send({ gate: [gate] })} placeholder="human:Ship it?" />
+			<FieldForm action="Note" label="Note" onSend={(note) => send({ note })} placeholder="A note on the task" />
+			{answer && (answer.lines.length > 0 || answer.errors.length > 0) && (
+				<ul className="bv-list bv-reply" data-ok={answer.ok}>
+					{[...answer.errors, ...answer.lines].map((line, index) => (
+						<li key={index}>{line}</li>
+					))}
+				</ul>
+			)}
+		</Section>
+	)
+}
+
+function TaskInspector({
+	task,
+	onOpenRun,
+	edit,
+}: {
+	task: TaskGraphPanelTask
+	onOpenRun: (run: string) => void
+	edit?: TaskEdit
+}) {
 	const run = task.claimedBy?.startsWith("pipeline:") ? task.claimedBy.slice("pipeline:".length) : undefined
 	const status = taskStatus(task)
 	return (
@@ -227,11 +391,22 @@ function TaskInspector({ task, onOpenRun }: { task: TaskGraphPanelTask; onOpenRu
 					<ul className="bv-list">
 						{task.acceptance.map((check, index) => (
 							<li key={index}>
-								<span
-									aria-label={check.done ? "met" : "not met"}
-									className={`codicon codicon-${check.done ? "pass-filled" : "circle-large-outline"}`}
-									style={{ fontSize: 12, marginRight: 6, verticalAlign: "-2px" }}
-								/>
+								{edit ? (
+									<button
+										aria-label={check.done ? `Mark "${check.text}" not met` : `Mark "${check.text}" met`}
+										className={`bv-check codicon codicon-${check.done ? "pass-filled" : "circle-large-outline"}`}
+										onClick={() =>
+											void edit({ id: task.id, [check.done ? "uncheck" : "check"]: [index + 1] })
+										}
+										type="button"
+									/>
+								) : (
+									<span
+										aria-label={check.done ? "met" : "not met"}
+										className={`codicon codicon-${check.done ? "pass-filled" : "circle-large-outline"}`}
+										style={{ fontSize: 12, marginRight: 6, verticalAlign: "-2px" }}
+									/>
+								)}
 								{check.text}
 							</li>
 						))}
@@ -287,6 +462,7 @@ function TaskInspector({ task, onOpenRun }: { task: TaskGraphPanelTask; onOpenRu
 					</ul>
 				</Section>
 			)}
+			{edit && <TaskControls edit={edit} task={task} />}
 		</div>
 	)
 }

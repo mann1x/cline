@@ -1235,10 +1235,13 @@ export {
 } from "./extensions/lsp/lsp-host";
 export {
 	approvePipeline,
+	type BoardTaskLike,
+	boardToPipeline,
 	createPipelineTool,
 	findPipeline,
 	foldJournal,
 	listPipelines,
+	listPipelineVersions,
 	NODE_TYPES,
 	PIPELINE_RUNS_DIR,
 	PIPELINE_TOOL_DESCRIPTION,
@@ -1251,9 +1254,15 @@ export {
 	type PipelineRunOptions,
 	type PipelineRunResult,
 	PipelineSession,
+	type PipelineVersion,
 	pipelineHash,
+	pipelineSlug,
+	pipelineToTemplate,
 	RUNNABLE_NODE_TYPES,
 	readJournal,
+	readPipelineVersion,
+	rejectPipeline,
+	savePipeline,
 	validatePipeline,
 } from "./extensions/pipelines";
 export {
@@ -1650,8 +1659,11 @@ export {
 // when no session is running.
 export {
 	loadTaskTemplates,
+	saveTaskTemplate,
+	TASK_TEMPLATE_DIR,
 	type TaskTemplate,
 	taskTemplateDirs,
+	templateSlug,
 } from "./extensions/tools/task-graph/templates";
 export {
 	type AgentFileFields,

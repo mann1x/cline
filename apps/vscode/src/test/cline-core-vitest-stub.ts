@@ -22,23 +22,36 @@ export {
 	updateEvidence,
 } from "../../../../sdk/packages/core/src/extensions/browser/browser-launch"
 export { startBrowserProcess, wasAdopted } from "../../../../sdk/packages/core/src/extensions/browser/browser-process"
+export { boardToPipeline, pipelineToTemplate } from "../../../../sdk/packages/core/src/extensions/pipelines/convert"
 export {
 	foldJournal,
 	PIPELINE_RUNS_DIR,
 	readJournal,
 } from "../../../../sdk/packages/core/src/extensions/pipelines/journal"
+export { validatePipeline } from "../../../../sdk/packages/core/src/extensions/pipelines/validate"
 export {
 	approvePipeline,
 	findPipeline,
 	listPipelines,
+	listPipelineVersions,
 	PIPELINES_DIR,
+	pipelineSlug,
+	readPipelineVersion,
+	rejectPipeline,
+	savePipeline,
 } from "../../../../sdk/packages/core/src/extensions/pipelines/workspace"
 export {
 	installOcrLanguages,
 	parseOcrLanguages,
 } from "../../../../sdk/packages/core/src/extensions/tools/executors/document/ocr"
 export { exportTaskLog } from "../../../../sdk/packages/core/src/extensions/tools/task-graph/saved-board"
-export { loadTaskTemplates, taskTemplateDirs } from "../../../../sdk/packages/core/src/extensions/tools/task-graph/templates"
+export {
+	loadTaskTemplates,
+	saveTaskTemplate,
+	TASK_TEMPLATE_DIR,
+	taskTemplateDirs,
+	templateSlug,
+} from "../../../../sdk/packages/core/src/extensions/tools/task-graph/templates"
 export { createModelRequestWriter } from "../../../../sdk/packages/core/src/services/llms/model-request-files"
 export {
 	resolveSessionOutputCap,

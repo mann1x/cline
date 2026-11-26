@@ -1,14 +1,40 @@
-import { writeFileSync } from "node:fs"
+import { existsSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
+import {
+	approvePipeline,
+	boardToPipeline,
+	findPipeline,
+	type PipelineDefinition,
+	pipelineSlug,
+	pipelineToTemplate,
+	rejectPipeline,
+	savePipeline,
+	saveTaskTemplate,
+	TASK_TEMPLATE_DIR,
+	templateSlug,
+	validatePipeline,
+} from "@cline/core"
 import * as vscode from "vscode"
 import { onBoardChanged } from "@/core/webview/board-viewer-hooks"
 import { getNonce } from "@/core/webview/getNonce"
-import { BOARD_VIEWER_DATA, type ViewerFocus, type ViewerRequest } from "@/shared/board-viewer"
+import {
+	BOARD_VIEWER_DATA,
+	BOARD_VIEWER_REPLY,
+	type ViewerBoardTask,
+	type ViewerFocus,
+	type ViewerReplyMessage,
+	type ViewerRequest,
+} from "@/shared/board-viewer"
 import { collectViewerData } from "./collect"
 
 /**
  * The board viewer (pipelines plan phase 3): an editor-area panel beside the
  * chat that draws the conversation's task board, the workspace's pipelines
- * and their runs. Read-only. It is the chat's own webview bundle, started
+ * and their runs. Phase 4 made it an editor: the person's edits to a
+ * pipeline are validated here and saved as approved versions, the model's
+ * proposals are approved or rejected here, a board can be saved as a
+ * pipeline and a pipeline as a task template, and a task can be changed as
+ * the task panel changes it. It is the chat's own webview bundle, started
  * with `data-view="board"` on its root, so it shares the theme and the build.
  *
  * The data is read here, on the extension side, because pipeline runs never
@@ -27,6 +53,8 @@ export interface BoardViewerDeps {
 	workspaceRoot: () => string | undefined
 	/** The conversation's latest `task_graph` row text, when there is a conversation. */
 	boardText: () => string | undefined
+	/** A change to the conversation's board as the person's, as the task panel sends it. */
+	boardEdit?: (action: { op: "update"; updates: unknown[] }) => { ok: boolean; lines: string[] }
 }
 
 let current: BoardViewer | undefined
@@ -137,6 +165,151 @@ class BoardViewer {
 				void this.saveReport(request as { name?: unknown; text?: unknown })
 				return
 		}
+		const id = (request as { id?: unknown } | undefined)?.id
+		if (typeof id !== "number") return
+		void this.answer(request as ViewerRequest & { id: number })
+			.catch((error: unknown) => ({ ok: false, errors: [error instanceof Error ? error.message : String(error)] }))
+			.then((outcome) => {
+				const reply: ViewerReplyMessage = { type: BOARD_VIEWER_REPLY, id, ...outcome }
+				void this.panel.webview.postMessage(reply)
+				if (outcome.ok) this.schedule(0)
+			})
+	}
+
+	/** A request the panel waits on: what it changed, or why it did not. */
+	private async answer(request: ViewerRequest & { id: number }): Promise<{ ok: boolean; errors?: string[]; lines?: string[] }> {
+		const root = this.deps.workspaceRoot()
+		switch (request.type) {
+			case "boardViewer/validate": {
+				const checked = validatePipeline(request.definition)
+				return { ok: checked.ok, errors: checked.errors }
+			}
+			case "boardViewer/editTask": {
+				if (!this.deps.boardEdit) return { ok: false, errors: ["This editor cannot change the board."] }
+				if (!Array.isArray(request.updates)) return { ok: false, errors: ["Not a board change."] }
+				const outcome = this.deps.boardEdit({ op: "update", updates: request.updates })
+				return { ok: outcome.ok, lines: outcome.lines }
+			}
+		}
+		if (!root) return { ok: false, errors: ["Open a folder first: pipelines live in the workspace."] }
+		switch (request.type) {
+			case "boardViewer/save":
+				return this.save(root, request.slug, request.base, request.definition)
+			case "boardViewer/approve":
+				return this.approve(root, request.slug, request.hash)
+			case "boardViewer/reject":
+				return this.reject(root, request.slug, request.hash)
+			case "boardViewer/boardToPipeline":
+				return this.boardToPipeline(root, request.tasks)
+			case "boardViewer/toTemplate":
+				return this.toTemplate(root, request.slug)
+			default:
+				return { ok: false, errors: ["Not a request this panel knows."] }
+		}
+	}
+
+	/** The person's edit: saved and approved, as their own edits are (plan section 7). */
+	private save(root: string, slug: string, base: string, definition: unknown): { ok: boolean; errors?: string[] } {
+		const checked = validatePipeline(definition)
+		if (!checked.ok || !checked.pipeline) return { ok: false, errors: checked.errors }
+		if (pipelineSlug(checked.pipeline.name) !== slug) {
+			return {
+				ok: false,
+				errors: [
+					`The name gives the file its name: "${checked.pipeline.name}" would be a new file, not this one. Keep the name, or rename the file.`,
+				],
+			}
+		}
+		const saved = savePipeline(root, checked.pipeline, base, { by: "person" })
+		return saved.ok ? { ok: true } : { ok: false, errors: saved.errors }
+	}
+
+	private async approve(root: string, slug: string, hash: string): Promise<{ ok: boolean; errors?: string[] }> {
+		const file = findPipeline(root, slug)
+		if (!file) return { ok: false, errors: [`No pipeline ${slug} any more.`] }
+		if (file.hash !== hash) {
+			return { ok: false, errors: [`The file changed to version ${file.hash} while you looked: read it again first.`] }
+		}
+		if (!file.valid) return { ok: false, errors: file.errors }
+		const answer = await vscode.window.showWarningMessage(
+			`Approve ${file.name} (version ${file.hash})? It can then run its commands and tools in the background.`,
+			{ modal: true },
+			"Approve",
+		)
+		if (answer !== "Approve") return { ok: false }
+		approvePipeline(root, slug)
+		return { ok: true }
+	}
+
+	private async reject(root: string, slug: string, hash: string): Promise<{ ok: boolean; errors?: string[] }> {
+		const file = findPipeline(root, slug)
+		if (!file) return { ok: false, errors: [`No pipeline ${slug} any more.`] }
+		if (file.hash !== hash) {
+			return { ok: false, errors: [`The file changed to version ${file.hash} while you looked: read it again first.`] }
+		}
+		const answer = await vscode.window.showWarningMessage(
+			`Reject version ${file.hash} of ${file.name}? The file goes back to the approved version ${file.approved?.hash ?? ""}.`,
+			{ modal: true },
+			"Reject",
+		)
+		if (answer !== "Reject") return { ok: false }
+		rejectPipeline(root, slug)
+		return { ok: true }
+	}
+
+	/** The board as a new pipeline file: a proposal the person reads and approves. */
+	private async boardToPipeline(root: string, tasks: ViewerBoardTask[]): Promise<{ ok: boolean; errors?: string[] }> {
+		if (!Array.isArray(tasks) || tasks.length === 0) return { ok: false, errors: ["The board has no tasks."] }
+		const name = await vscode.window.showInputBox({
+			title: "Save the board as a pipeline",
+			prompt: "The pipeline's name. It is saved to .cerebriline/pipelines for you to read and approve.",
+			validateInput: (value) =>
+				!value.trim()
+					? "Give it a name."
+					: findPipeline(root, value)
+						? `${pipelineSlug(value)}.pipeline.json exists: choose another name.`
+						: undefined,
+		})
+		if (!name?.trim()) return { ok: false }
+		const { definition, notes } = boardToPipeline(tasks, name.trim())
+		const saved = savePipeline(root, definition, undefined, { by: "person", approve: false })
+		if (!saved.ok) return { ok: false, errors: saved.errors }
+		this.focus = { pipeline: saved.file.slug }
+		void vscode.window.showInformationMessage(
+			[
+				`Saved ${saved.file.name} with ${definition.nodes.length} nodes. Read it and approve it before it runs.`,
+				...notes,
+			].join(" "),
+		)
+		return { ok: true }
+	}
+
+	/** A pipeline as a task template in the workspace, for work the model should do rather than run. */
+	private async toTemplate(root: string, slug: string): Promise<{ ok: boolean; errors?: string[] }> {
+		const file = findPipeline(root, slug)
+		if (!file?.definition) return { ok: false, errors: [file ? "It does not validate." : `No pipeline ${slug} any more.`] }
+		const name = await vscode.window.showInputBox({
+			title: "Save the pipeline as a task template",
+			prompt: 'The template\'s name. The model starts from it with task_plan {"template": name}.',
+			value: file.name,
+			validateInput: (value) => (value.trim() ? undefined : "Give it a name."),
+		})
+		if (!name?.trim()) return { ok: false }
+		const dir = join(root, TASK_TEMPLATE_DIR)
+		if (existsSync(join(dir, `${templateSlug(name.trim())}.json`))) {
+			const answer = await vscode.window.showWarningMessage(
+				`A template named ${name.trim()} exists. Replace it?`,
+				{ modal: true },
+				"Replace",
+			)
+			if (answer !== "Replace") return { ok: false }
+		}
+		const template = pipelineToTemplate(file.definition as PipelineDefinition, name.trim())
+		const path = saveTaskTemplate(dir, template)
+		void vscode.window.showInformationMessage(
+			`Saved ${template.tasks.length} tasks as the template ${name.trim()} in ${vscode.workspace.asRelativePath(path)}.`,
+		)
+		return { ok: true }
 	}
 
 	private async saveReport(request: { name?: unknown; text?: unknown }): Promise<void> {

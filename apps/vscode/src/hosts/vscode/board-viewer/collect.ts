@@ -1,6 +1,13 @@
 import { existsSync, readdirSync, statSync } from "node:fs"
 import { join } from "node:path"
-import { foldJournal, listPipelines, PIPELINE_RUNS_DIR, readJournal } from "@cline/core"
+import {
+	foldJournal,
+	listPipelines,
+	listPipelineVersions,
+	PIPELINE_RUNS_DIR,
+	readJournal,
+	readPipelineVersion,
+} from "@cline/core"
 import type {
 	ViewerData,
 	ViewerEvent,
@@ -9,6 +16,7 @@ import type {
 	ViewerPipeline,
 	ViewerPipelineDefinition,
 	ViewerRun,
+	ViewerVersion,
 } from "@/shared/board-viewer"
 
 /** The newest runs the panel lists. Older ones stay in their journals. */
@@ -49,18 +57,31 @@ function readPipelines(workspace: string): ViewerPipeline[] {
 	} catch {
 		return []
 	}
-	return files.map((file) => ({
-		name: file.name,
-		slug: file.slug,
-		path: file.path,
-		hash: file.hash,
-		text: file.text,
-		valid: file.valid,
-		errors: file.errors,
-		isApproved: file.isApproved,
-		...(file.approved ? { approved: { ...file.approved } } : {}),
-		...(file.definition ? { definition: file.definition as unknown as ViewerPipelineDefinition } : {}),
-	}))
+	return files.map((file) => {
+		const approvedText =
+			file.approved && !file.isApproved ? readPipelineVersion(workspace, file.slug, file.approved.hash)?.text : undefined
+		let versions: ViewerVersion[] = []
+		try {
+			versions = listPipelineVersions(workspace, file.slug).map(({ text: _text, ...version }) => version)
+		} catch {
+			versions = []
+		}
+		return {
+			name: file.name,
+			slug: file.slug,
+			path: file.path,
+			hash: file.hash,
+			text: file.text,
+			valid: file.valid,
+			errors: file.errors,
+			isApproved: file.isApproved,
+			...(file.approved ? { approved: { ...file.approved } } : {}),
+			...(file.definition ? { definition: file.definition as unknown as ViewerPipelineDefinition } : {}),
+			...(file.author ? { author: file.author } : {}),
+			...(approvedText !== undefined ? { approvedText } : {}),
+			...(versions.length ? { versions } : {}),
+		}
+	})
 }
 
 function readRuns(workspace: string, maxRuns: number, maxEvents: number): ViewerRun[] {

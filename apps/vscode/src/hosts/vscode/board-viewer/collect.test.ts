@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { approvePipeline, savePipeline } from "@cline/core"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { collectViewerData, focusForFile } from "./collect"
 
@@ -92,5 +93,23 @@ describe("what the board viewer reads from the workspace", () => {
 		expect(focusForFile("C:\\w\\.cerebriline\\pipeline-runs\\build-2.jsonl")).toEqual({ run: "build-2" })
 		expect(focusForFile("/w/src/index.ts")).toBeUndefined()
 		expect(focusForFile(undefined)).toBeUndefined()
+	})
+
+	it("gives a proposal its author, the approved text to compare against and the kept versions", () => {
+		const first = savePipeline(root, { name: "deploy", nodes: [{ id: "up", type: "command", command: "make up" }] })
+		if (!first.ok) throw new Error("not saved")
+		approvePipeline(root, "deploy")
+		const next = savePipeline(
+			root,
+			{ name: "deploy", nodes: [{ id: "up", type: "command", command: "make up --force" }] },
+			first.file.hash,
+		)
+		if (!next.ok) throw new Error("not saved")
+		const [pipeline] = collectViewerData({ workspace: root }).pipelines
+		expect(pipeline).toMatchObject({ isApproved: false, author: "model", approvedText: first.file.text })
+		expect(pipeline?.versions?.map((version) => version.hash)).toContain(first.file.hash)
+		expect(pipeline?.versions?.every((version) => !("text" in version))).toBe(true)
+		approvePipeline(root, "deploy")
+		expect(collectViewerData({ workspace: root }).pipelines[0]).not.toHaveProperty("approvedText")
 	})
 })

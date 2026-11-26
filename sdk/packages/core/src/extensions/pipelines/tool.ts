@@ -21,6 +21,7 @@ import {
 	findPipeline,
 	listPipelines,
 	PIPELINES_DIR,
+	readPipelineVersion,
 	savePipeline,
 } from "./workspace";
 
@@ -231,11 +232,18 @@ export function createPipelineTool(
 								["Not saved:", ...saved.errors.map((error) => `- ${error}`)],
 								false,
 							);
+						const rejected = readPipelineVersion(
+							workspaceRoot,
+							saved.file.slug,
+							saved.file.hash,
+						)?.rejected;
 						return answer([
 							`${saved.created ? "Created" : "Saved"} ${saved.file.path.replace(`${workspaceRoot}/`, "")}, version ${saved.file.hash}.`,
 							saved.file.isApproved
 								? "This version is approved."
-								: "It is a proposal: the person approves it before it can `run`. `test` runs it now, with pins.",
+								: rejected
+									? `The person rejected this exact version (${rejected.at}): change what they objected to before asking again.`
+									: "It is a proposal: the person approves it before it can `run`. `test` runs it now, with pins.",
 						]);
 					}
 					case "run": {

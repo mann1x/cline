@@ -5,11 +5,19 @@
  * journal outlives the version that wrote it.
  */
 
-import { BOARD_VIEWER_DATA, type ViewerData, type ViewerPipeline, type ViewerRun } from "@shared/board-viewer"
+import {
+	BOARD_VIEWER_DATA,
+	BOARD_VIEWER_REPLY,
+	type ViewerData,
+	type ViewerPipeline,
+	type ViewerRequest,
+	type ViewerRun,
+} from "@shared/board-viewer"
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import { findLatestTaskGraph, type TaskGraphPanelSnapshot } from "@/components/chat/task-header/TaskGraphPanel"
 
 export type {
+	ViewerBoardTask,
 	ViewerData,
 	ViewerEvent,
 	ViewerFocus,
@@ -19,8 +27,10 @@ export type {
 	ViewerPipeline,
 	ViewerPipelineDefinition,
 	ViewerPipelineNode,
+	ViewerReplyMessage,
 	ViewerRequest,
 	ViewerRun,
+	ViewerVersion,
 } from "@shared/board-viewer"
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -96,4 +106,40 @@ export function formatDuration(ms: number | undefined): string {
 	const s = Math.floor(ms / 1000)
 	if (s < 3600) return `${Math.floor(s / 60)} m ${String(s % 60).padStart(2, "0")} s`
 	return `${Math.floor(s / 3600)} h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")} m`
+}
+
+/** What the extension answered to a request. */
+export interface ViewerReply {
+	ok: boolean
+	errors: string[]
+	lines: string[]
+}
+
+type Asked = Extract<ViewerRequest, { id: number }>
+type Ask = Asked extends infer R ? (R extends unknown ? Omit<R, "id"> : never) : never
+
+let nextRequest = 1
+const waiting = new Map<number, (reply: ViewerReply) => void>()
+
+/** A request the extension answers; `post` sends it (the platform's postMessage). */
+export function ask(post: (request: ViewerRequest) => void, request: Ask): Promise<ViewerReply> {
+	const id = nextRequest++
+	return new Promise((resolve) => {
+		waiting.set(id, resolve)
+		post({ ...request, id } as ViewerRequest)
+	})
+}
+
+/** Settles the request a reply answers; false when the message is not a reply. */
+export function settleReply(message: unknown): boolean {
+	if (!isObject(message) || message.type !== BOARD_VIEWER_REPLY || typeof message.id !== "number") return false
+	const resolve = waiting.get(message.id)
+	if (!resolve) return true
+	waiting.delete(message.id)
+	resolve({
+		ok: message.ok === true,
+		errors: Array.isArray(message.errors) ? message.errors.map(String) : [],
+		lines: Array.isArray(message.lines) ? message.lines.map(String) : [],
+	})
+	return true
 }

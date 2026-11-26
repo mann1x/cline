@@ -27,8 +27,8 @@
 	--bv-waiting: var(--vscode-editorWarning-foreground, #cca700);
 	--bv-idle: var(--vscode-descriptionForeground, #9d9d9d);
 
-	display: grid;
-	grid-template-rows: auto auto 1fr;
+	display: flex;
+	flex-direction: column;
 	height: 100vh;
 	background: var(--bv-bg);
 	color: var(--bv-fg);
@@ -119,6 +119,7 @@
 /* Body: rail | main | inspector */
 .bv-body {
 	display: grid;
+	flex: 1 1 0;
 	grid-template-columns: 232px minmax(0, 1fr);
 	min-height: 0;
 }
@@ -280,9 +281,63 @@
 }
 
 /* Canvas */
-.bv-canvas {
+.bv-canvas,
+.bv-flow {
 	height: 100%;
 	width: 100%;
+}
+.bv-palette {
+	align-items: center;
+	background: var(--bv-surface);
+	border: 1px solid var(--bv-border);
+	border-radius: 2px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	max-width: calc(100% - 140px);
+	padding: 4px 6px;
+}
+.bv-palette-label {
+	color: var(--bv-muted);
+	font-size: 11px;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+.bv-palette-item {
+	appearance: none;
+	background: none;
+	border: 1px solid var(--bv-border);
+	border-radius: 2px;
+	color: var(--bv-fg);
+	cursor: grab;
+	font-family: var(--bv-mono);
+	font-size: 11px;
+	padding: 1px 6px;
+}
+.bv-palette-item:hover {
+	background: var(--bv-hover);
+}
+.bv-palette-item:focus-visible {
+	outline: 1px solid var(--bv-accent);
+}
+.bv-palette-delete {
+	border-color: var(--bv-failed);
+	color: var(--bv-failed);
+	cursor: pointer;
+}
+/* An output's name, inside the card beside its handle. */
+.bv-port-label {
+	background: var(--bv-surface);
+	color: var(--bv-muted);
+	font-family: var(--bv-mono);
+	font-size: 9px;
+	line-height: 12px;
+	padding: 0 2px;
+	pointer-events: none;
+	position: absolute;
+	right: 6px;
+	top: -6px;
+	white-space: nowrap;
 }
 .bv-canvas .react-flow {
 	--xy-background-color: var(--bv-bg);
@@ -588,6 +643,125 @@
 }
 .bv-button:hover {
 	background: var(--vscode-button-secondaryHoverBackground, var(--bv-hover));
+}
+.bv-button:disabled {
+	cursor: default;
+	opacity: 0.5;
+}
+.bv-button.bv-primary {
+	background: var(--vscode-button-background, var(--bv-accent));
+	color: var(--vscode-button-foreground, #fff);
+}
+.bv-button.bv-primary:hover:not(:disabled) {
+	background: var(--vscode-button-hoverBackground, var(--bv-accent));
+}
+.bv-button.bv-danger {
+	color: var(--bv-failed);
+}
+.bv-actions .bv-spacer {
+	flex: 1;
+}
+
+/* Action bar: what can be done with what is shown (phase 4) */
+.bv-actionbar {
+	border-bottom: 1px solid var(--bv-border);
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 6px 12px;
+}
+.bv-actionbar-row {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.bv-actionbar-row .bv-spacer {
+	flex: 1;
+}
+.bv-actionbar-text {
+	color: var(--bv-muted);
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.bv-actionbar-errors,
+.bv-reply {
+	margin: 0;
+}
+.bv-section .bv-reply {
+	margin-top: 8px;
+}
+.bv-reply[data-ok="false"] {
+	color: var(--bv-failed);
+}
+.bv-chip[data-status="draft"],
+.bv-chip[data-status="proposed"],
+.bv-chip[data-status="changed"],
+.bv-chip[data-status="current"] {
+	--chip: var(--bv-waiting);
+}
+.bv-chip[data-status="rejected"] {
+	--chip: var(--bv-failed);
+}
+
+/* Editing: JSON, one-line forms, acceptance checks */
+.bv-editor {
+	background: var(--vscode-input-background, var(--bv-surface));
+	border: 1px solid var(--vscode-input-border, var(--bv-border));
+	border-radius: 2px;
+	color: var(--vscode-input-foreground, var(--bv-fg));
+	display: block;
+	font-family: var(--bv-mono);
+	margin-bottom: 8px;
+	padding: 6px 8px;
+	resize: vertical;
+	tab-size: 2;
+	width: 100%;
+}
+.bv-editor.bv-tall {
+	min-height: 360px;
+}
+.bv-editor:focus,
+.bv-input:focus {
+	outline: 1px solid var(--bv-accent);
+	outline-offset: -1px;
+}
+.bv-form {
+	display: flex;
+	gap: 6px;
+	margin-top: 8px;
+}
+.bv-input {
+	background: var(--vscode-input-background, var(--bv-surface));
+	border: 1px solid var(--vscode-input-border, var(--bv-border));
+	border-radius: 2px;
+	color: var(--vscode-input-foreground, var(--bv-fg));
+	flex: 1;
+	font: inherit;
+	min-width: 0;
+	padding: 3px 6px;
+}
+.bv-check {
+	appearance: none;
+	background: none;
+	border: 0;
+	color: inherit;
+	cursor: pointer;
+	font-size: 12px;
+	margin-right: 6px;
+	padding: 0;
+	vertical-align: -2px;
+}
+
+/* Diff of a proposal against the approved version */
+.bv-diff-line {
+	display: block;
+}
+.bv-diff-line[data-kind="add"] {
+	background: color-mix(in srgb, var(--bv-done) 16%, transparent);
+}
+.bv-diff-line[data-kind="del"] {
+	background: color-mix(in srgb, var(--bv-failed) 16%, transparent);
 }
 
 /* Run monitor timeline */

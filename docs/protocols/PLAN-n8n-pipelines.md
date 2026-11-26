@@ -377,6 +377,58 @@ pandorum as a local vsix, and keeps the feature off by default.
      and the inspector goes under the canvas.
 4. **Editing and versions.** Canvas editing, the inspector's edits,
    proposals and approval, board → pipeline and pipeline → template.
+   **Built 2026-11-26.** As built:
+   - **Versions.** Every version saved or approved is kept under
+     `.cerebriline/pipelines/versions/<slug>/<hash>.json` with its author
+     (`model` for `pipeline save`, `person` for the viewer and for a file
+     edited by hand) and the version it replaced; 20 per pipeline, and the
+     approved one is never dropped. A version keeps its first author, so a
+     proposal stays the model's after it is approved.
+   - **Drafts, not writes per edit.** The plan said every edit goes to the
+     file. A new node starts with placeholder fields and a half-wired graph
+     does not validate, so each edit would be refused. Edits go to a draft
+     instead, which the extension validates 250 ms after each change; the
+     bar shows the problems, and **Save** is enabled only when there are
+     none. Saving is the person's version and approves it (section 7). It is
+     refused when the file moved on since the draft started (`base`), and
+     when the name changed, since the name gives the file its name. One
+     draft at a time: another pipeline can be edited once it is saved or
+     discarded.
+   - **Canvas:** a palette (click, or drag onto the canvas) adds a node
+     after the picked card, on a branch's first output. Dragging from a
+     handle wires an `after`; a branching node has a handle per output,
+     named on the card. Delete (or the palette's Delete button) removes the
+     picked edge or node, and with a node every reference to it. The layout
+     stays automatic: positions are not saved.
+   - **Inspector:** a pipeline node is edited as its JSON (Apply to the
+     draft; a new id renames every reference); the Definition tab edits the
+     whole pipeline the same way. A task: Start / Done / Cancel / Reopen
+     (not for a task a run holds), rename, add an acceptance item, a gate or
+     a note, and tick acceptance items, through the task panel's own board
+     RPC, as the person's.
+   - **Proposals:** the bar says whose version the file is and offers
+     **Approve** (for the version on screen only, after a modal confirm),
+     **Reject** (the file goes back to the approved version; the rejected
+     one is marked, and `pipeline save` tells the model when it sends a
+     rejected version again) and **Changes**, the Versions tab: a line diff
+     against the approved version and the kept versions. Reject needs an
+     approved version that was kept; one approved before 4.100.305 is in
+     Git only.
+   - **Board → pipeline** ("Save as a pipeline" on the board): each task an
+     `agent` node with its title, description and acceptance as the prompt;
+     acceptance items that are only a command (`` `bun test` passes ``)
+     become a `check` after it; `human:` gates become `wait` nodes before
+     it; other gates and cancelled tasks are left out and listed. A task
+     with subtasks is their container: its subtasks take its dependencies.
+     Saved as the person's but not approved, for them to read first.
+   - **Pipeline → template** ("Save as task template"): nodes that do work
+     become tasks in order; `if`, `switch`, `merge` and `set` pass their
+     dependencies through; a `check` becomes an acceptance item of the
+     tasks before it; an `approval` or `human:` wait becomes a gate on the
+     tasks after it; `{{ $vars.x }}` becomes the template's `{{x}}`.
+   - Retry, Skip and Re-run from a node in the inspector are not built:
+     they act on a live run, which is the session's, and belong with
+     phase 5's run handling.
 5. **Measured.** A tg-bench-like set of pipeline tasks (write a pipeline from
    a description; run, fix and re-run a failing one; gate a task on a run),
    on qwen3.6 27B dense and on a cloud model. A model that fails it gets the
@@ -417,4 +469,6 @@ pandorum as a local vsix, and keeps the feature off by default.
   it says it is idempotent; otherwise it fails visibly.
 - **Two editors of one file** (the model's `save` and the person's canvas).
   Each save validates against the file's current hash and is refused on a
-  mismatch, as the editor tool refuses a stale read.
+  mismatch, as the editor tool refuses a stale read. Built: the viewer's
+  draft carries the version it started from, and the bar says when the file
+  moved on.

@@ -1,4 +1,12 @@
 export {
+	acceptanceCommand,
+	type BoardConversion,
+	type BoardTaskLike,
+	boardToPipeline,
+	type PipelineTemplate,
+	pipelineToTemplate,
+} from "./convert";
+export {
 	EXPRESSION_FUNCTIONS,
 	ExpressionError,
 	expressionErrors,
@@ -63,11 +71,18 @@ export {
 	approvePipeline,
 	findPipeline,
 	listPipelines,
+	listPipelineVersions,
+	PIPELINE_VERSIONS_KEPT,
 	PIPELINES_DIR,
 	type PipelineApproval,
+	type PipelineAuthor,
 	type PipelineFile,
+	type PipelineVersion,
 	pipelineSlug,
 	pipelinesDir,
 	readApprovals,
+	readPipelineVersion,
+	rejectPipeline,
+	type SaveOptions,
 	savePipeline,
 } from "./workspace";

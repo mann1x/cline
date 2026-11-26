@@ -27,6 +27,16 @@ export interface ViewerPipelineDefinition {
 	nodes: ViewerPipelineNode[]
 }
 
+/** One kept version of a pipeline file (phase 4). */
+export interface ViewerVersion {
+	hash: string
+	/** "model" for a `pipeline save`, "person" for the person's own. */
+	by: string
+	at: string
+	base?: string
+	rejected?: { at: string }
+}
+
 export interface ViewerPipeline {
 	name: string
 	slug: string
@@ -40,6 +50,12 @@ export interface ViewerPipeline {
 	isApproved: boolean
 	approved?: { hash: string; by?: string; at?: string }
 	definition?: ViewerPipelineDefinition
+	/** Who wrote the file's version, when it was kept. */
+	author?: string
+	/** The approved version's text, when the file is not it and it was kept: the proposal's diff. */
+	approvedText?: string
+	/** Kept versions, newest first. */
+	versions?: ViewerVersion[]
 }
 
 export interface ViewerNodeOutput {
@@ -129,8 +145,45 @@ export interface ViewerDataMessage {
 	data: ViewerData
 }
 
-/** From the panel. */
+export const BOARD_VIEWER_REPLY = "boardViewer/reply"
+
+/** From the extension: the answer to a request that carried an `id`. */
+export interface ViewerReplyMessage {
+	type: typeof BOARD_VIEWER_REPLY
+	id: number
+	ok: boolean
+	/** Validation errors, or why it was refused. */
+	errors?: string[]
+	/** What the board said back to a task edit. */
+	lines?: string[]
+}
+
+/** A task from the board, as board → pipeline takes it. */
+export interface ViewerBoardTask {
+	id: string
+	title: string
+	description?: string
+	status?: string
+	parent?: string
+	acceptance?: string[]
+	depends?: string[]
+	gates?: string[]
+}
+
+/** From the panel. Requests with an `id` are answered with a reply. */
 export type ViewerRequest =
 	| { type: "boardViewer/ready" }
 	| { type: "boardViewer/openFile"; path: string }
 	| { type: "boardViewer/saveReport"; name: string; text: string }
+	/** Check a draft without saving it. */
+	| { type: "boardViewer/validate"; id: number; definition: unknown }
+	/** The person's edit, saved and approved; `base` is the version the draft started from. */
+	| { type: "boardViewer/save"; id: number; slug: string; base: string; definition: unknown }
+	| { type: "boardViewer/approve"; id: number; slug: string; hash: string }
+	| { type: "boardViewer/reject"; id: number; slug: string; hash: string }
+	/** Save the board as a new pipeline, for the person to read and approve. */
+	| { type: "boardViewer/boardToPipeline"; id: number; tasks: ViewerBoardTask[] }
+	/** Save a pipeline as a task template. */
+	| { type: "boardViewer/toTemplate"; id: number; slug: string }
+	/** A change to the conversation's board, as the task panel sends it (`task_update`'s fields). */
+	| { type: "boardViewer/editTask"; id: number; updates: Record<string, unknown>[] }

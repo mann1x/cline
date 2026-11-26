@@ -120,8 +120,35 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   its details: a node's fields, output and journal, or a task's acceptance,
   gates and notes. A run also has a Run monitor (a timeline per node),
   Activity (its journal) and a Report to copy or save as Markdown. The tab
-  follows the files as runs progress. It only shows: editing in it comes
-  later.
+  follows the files as runs progress.
+- **Edit a pipeline in the Board tab.** Add a step from the palette above
+  the canvas (click it, or drag it onto the canvas), wire steps by dragging
+  from one card's handle to another (a branch has one handle per outcome),
+  and delete a step or a wire with Delete. Pick a step to edit it as JSON in
+  the inspector, or edit the whole pipeline in the Definition tab. Edits
+  stay a draft, checked as you go, with the problems listed above the
+  canvas. **Save** writes the file and approves it as your version.
+  **Discard** drops the draft. If the file changed while you were editing,
+  the save is refused rather than overwriting the change.
+- **Approve or reject what the model proposed, against what you approved.**
+  When the model has changed a pipeline, the bar above the canvas says so.
+  **Changes** shows the change line by line against the approved version,
+  and lists the versions kept. **Approve** approves the version on screen.
+  **Reject** puts the approved version back in the file, and the model is
+  told if it sends the rejected version again. Versions are kept under
+  `.cerebriline/pipelines/versions/`.
+- **A board as a pipeline, and a pipeline as a plan.** **Save as a
+  pipeline** on the conversation's board turns each task into an agent step.
+  An acceptance item that is just a command (`` `bun test` passes ``)
+  becomes a check after the task, and a `human:` gate becomes a wait before
+  it. You read the pipeline and approve it before it runs. **Save as task
+  template** on a pipeline does the opposite: its steps become a saved plan
+  that the model works through itself (`task_plan {"template": …}`), with
+  checks as acceptance items, approvals as gates, and the pipeline's inputs
+  as the plan's variables.
+- **Change a task from the Board tab.** Pick a task's card to start it,
+  close or cancel it, rename it, add an acceptance item, a gate or a note,
+  or tick its acceptance items, as in the task panel.
 
 - **Workflows the model writes and runs in the background.** Turn on
   Settings > Features > Pipelines (off by default) and the model gets a
@@ -133,10 +160,10 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   its answer as JSON if asked), fan work out to a swarm, call a web
   endpoint, or run another pipeline. Steps run in parallel where they do not
   depend on each other.
-- **Nothing runs until you approve it.** A saved file is a proposal. Run
-  **Cerebriline: Approve Pipeline** from the command palette, read the file
-  it opens and approve that version; any later change to the file needs
-  approving again. The model cannot approve its own pipeline. Each command
+- **Nothing runs until you approve it.** A saved file is a proposal.
+  Approve it in the Board tab, or run **Cerebriline: Approve Pipeline**
+  from the command palette and approve the file it opens. Any later change
+  to the file needs approving again. The model cannot approve its own pipeline. Each command
   and tool inside a run is still asked for under your auto-approve
   settings, as if the model had called it directly.
 - **Runs live on the task board.** A run holds its task until it ends and
@@ -162,7 +189,8 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
 - **CLI:** `--pipelines` or `CLINE_PIPELINES=1` turns it on, and
   `/pipelines` lists pipelines, approves one (`/pipelines approve <name>`)
   and lists runs (`/pipelines runs`).
-- **Not in this version:** there is no viewer for a pipeline's graph yet.
+- **Not in this version:** retrying, skipping or re-running a step from the
+  Board tab. Use `pipeline resume` and `pipeline rerun` for now.
   Pipelines suit cloud models or a 27B-class local model; a small model
   writes them poorly.
 

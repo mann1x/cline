@@ -230,6 +230,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				}
 				return undefined
 			},
+			boardEdit: (action: { op: "update"; updates: unknown[] }) => webview.controller.taskGraphAction(action),
 		}
 		setBoardViewerOpener((focus) => openBoardViewerPanel(boardViewerDeps, focus))
 		context.subscriptions.push(
