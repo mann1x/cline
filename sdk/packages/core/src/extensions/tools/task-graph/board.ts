@@ -24,6 +24,12 @@ import {
 	waitsOn,
 } from "./model";
 
+// Measured on pandorum's boards (129 transcripts, 4.100.292-298, replayed
+// call by call on 2026-11-26): at most 17 tasks and 11 closed; the board
+// text p90 440 characters, largest 726 (~200 tokens). More than four tasks
+// were closed in 15 transcripts, and of the 5 times the model named a closed
+// task in task_update or task_view, every one was among the four shown: none
+// reached for one the decay had hidden. The caps stay as they are.
 const TITLE_MAX = 70;
 const READY_SHOWN = 5;
 const BLOCKED_SHOWN = 6;
