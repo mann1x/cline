@@ -37,6 +37,7 @@ import { useMetaKeyDetection, useShortcut } from "@/utils/hooks"
 import { isSafari } from "@/utils/platformUtils"
 import {
 	type AgentCommandAgent,
+	agentCommandEmptyText,
 	getAgentCommandSlot,
 	getDelegateAgentQuery,
 	getMatchingAgentCommandItems,
@@ -273,6 +274,21 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		const [cursorPosition, setCursorPosition] = useState(0)
 		const [searchQuery, setSearchQuery] = useState("")
 		const textAreaRef = useRef<HTMLTextAreaElement | null>(null)
+		// Set while the box blurs and refocuses itself after a menu pick.
+		const refocusingRef = useRef(false)
+		const refocusTextArea = useCallback(() => {
+			const textArea = textAreaRef.current
+			if (!textArea) {
+				return
+			}
+			refocusingRef.current = true
+			try {
+				textArea.blur()
+				textArea.focus()
+			} finally {
+				refocusingRef.current = false
+			}
+		}, [])
 		const [isMouseDownOnMenu, setIsMouseDownOnMenu] = useState(false)
 		const highlightLayerRef = useRef<HTMLDivElement>(null)
 		const [selectedMenuIndex, setSelectedMenuIndex] = useState(-1)
@@ -394,6 +410,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		// is the task, and Enter sends it.
 		const agentCommandItems =
 			agentCommandSlot === undefined ? [] : getMatchingAgentCommandItems(agentCommandSlot, delegateAgents, skillCommands)
+		const agentCommandEmpty = agentCommandEmptyText(agentCommandSlot, delegateAgents, agentCommandItems)
 		const agentCommandQuery = agentCommandSlot ? `${agentCommandSlot.position}:${agentCommandSlot.query}` : undefined
 		useEffect(() => {
 			if (agentCommandQuery !== undefined) {
@@ -543,8 +560,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					// scroll to cursor
 					setTimeout(() => {
 						if (textAreaRef.current) {
-							textAreaRef.current.blur()
-							textAreaRef.current.focus()
+							refocusTextArea()
 						}
 					}, 0)
 				}
@@ -560,8 +576,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				setIntendedCursorPosition(newCursorPosition)
 				setTimeout(() => {
 					if (textAreaRef.current) {
-						textAreaRef.current.blur()
-						textAreaRef.current.focus()
+						refocusTextArea()
 					}
 				}, 0)
 			},
@@ -577,8 +592,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				setSelectedSlashCommandsIndex(0)
 				setTimeout(() => {
 					if (textAreaRef.current) {
-						textAreaRef.current.blur()
-						textAreaRef.current.focus()
+						refocusTextArea()
 					}
 				}, 0)
 			},
@@ -594,8 +608,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				setSelectedSlashCommandsIndex(0)
 				setTimeout(() => {
 					if (textAreaRef.current) {
-						textAreaRef.current.blur()
-						textAreaRef.current.focus()
+						refocusTextArea()
 					}
 				}, 0)
 			},
@@ -623,8 +636,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 					setTimeout(() => {
 						if (textAreaRef.current) {
-							textAreaRef.current.blur()
-							textAreaRef.current.focus()
+							refocusTextArea()
 						}
 					}, 0)
 				}
@@ -1106,6 +1118,12 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		}, [showContextMenu])
 
 		const handleBlur = useCallback(() => {
+			// A blur this box caused itself to put the caret back is not the
+			// person leaving: dismissing here closed the `/agent` menu as soon
+			// as `/agent` or an agent's name was picked (owner, 2026-11-26).
+			if (refocusingRef.current) {
+				return
+			}
 			// Only hide the context menu if the user didn't click on it
 			if (!isMouseDownOnMenu) {
 				setShowContextMenu(false)
@@ -1148,8 +1166,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					// https://stackoverflow.com/questions/29899364/how-do-you-scroll-to-the-position-of-the-cursor-in-a-textarea/40951875#40951875
 					setTimeout(() => {
 						if (textAreaRef.current) {
-							textAreaRef.current.blur()
-							textAreaRef.current.focus()
+							refocusTextArea()
 						}
 					}, 0)
 					// NOTE: callbacks dont utilize return function to cleanup, but it's fine since this timeout immediately executes and will be cleaned up by the browser (no chance component unmounts before it executes)
@@ -1708,11 +1725,12 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					{(showSlashCommandsMenu ||
 						delegateAgentItems.length > 0 ||
 						choosingSkill ||
-						agentCommandItems.length > 0) && (
+						agentCommandItems.length > 0 ||
+						agentCommandEmpty !== undefined) && (
 						<div ref={slashCommandsMenuContainerRef}>
 							<SlashCommandMenu
 								agents={
-									agentCommandItems.length > 0
+									agentCommandItems.length > 0 || agentCommandEmpty !== undefined
 										? agentCommandItems
 										: delegateAgentItems.length > 0
 											? delegateAgentItems
@@ -1721,11 +1739,13 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 												: undefined
 								}
 								emptyText={
-									choosingSkill
-										? skillCommands.length === 0
-											? "No skill is enabled"
-											: `No skill matches “${(skillQuery ?? "").trim()}”`
-										: undefined
+									agentCommandEmpty !== undefined
+										? agentCommandEmpty
+										: choosingSkill
+											? skillCommands.length === 0
+												? "No skill is enabled"
+												: `No skill matches “${(skillQuery ?? "").trim()}”`
+											: undefined
 								}
 								globalWorkflowToggles={globalWorkflowToggles}
 								localWorkflowToggles={localWorkflowToggles}

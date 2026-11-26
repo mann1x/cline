@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react"
+import { useState } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import ChatTextArea from "./ChatTextArea"
 
@@ -265,5 +266,65 @@ describe("ChatTextArea skills", () => {
 		fireEvent.change(textarea, { target: { value: "/deploy", selectionStart: 7 } })
 		expect(await screen.findByText("/docker-compose-deploy")).toBeInTheDocument()
 		expect(screen.getByText("Skills")).toBeInTheDocument()
+	})
+})
+
+// The owner, 2026-11-26: "/agent reviewer /media" completed neither the
+// agent's name nor, after it, the skill. Typed one keystroke at a time into a
+// box that holds its own value, as the chat's does.
+describe("ChatTextArea /agent", () => {
+	function Typed({ onSend }: { onSend: () => void }) {
+		const [value, setValue] = useState("")
+		return (
+			<ChatTextArea
+				activeQuote={null}
+				inputValue={value}
+				onSelectFilesAndImages={vi.fn()}
+				onSend={onSend}
+				placeholderText="Type a message"
+				selectedFiles={[]}
+				selectedImages={[]}
+				sendingDisabled={false}
+				setInputValue={setValue}
+				setSelectedFiles={vi.fn()}
+				setSelectedImages={vi.fn()}
+				shouldDisableFilesAndImages={false}
+			/>
+		)
+	}
+
+	function typeEach(textarea: HTMLTextAreaElement, text: string) {
+		for (const char of text) {
+			const value = textarea.value + char
+			fireEvent.change(textarea, { target: { value, selectionStart: value.length } })
+		}
+	}
+
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+
+	it("offers the agents as soon as /agent is picked from the / menu", async () => {
+		render(<Typed onSend={vi.fn()} />)
+		const textarea = screen.getByPlaceholderText("Type a message") as HTMLTextAreaElement
+		typeEach(textarea, "/agen")
+		fireEvent.keyDown(textarea, { key: "Enter" })
+		await settle()
+		expect(textarea.value).toBe("/agent ")
+		// No keystroke since the pick: the pick's own refocus must not close it.
+		expect(await screen.findByText("qa")).toBeInTheDocument()
+		expect(screen.getByText("docs")).toBeInTheDocument()
+	})
+
+	it("completes the agent's name, then offers its skills at once", async () => {
+		render(<Typed onSend={vi.fn()} />)
+		const textarea = screen.getByPlaceholderText("Type a message") as HTMLTextAreaElement
+		typeEach(textarea, "/agent q")
+		expect(await screen.findByText("qa")).toBeInTheDocument()
+		fireEvent.keyDown(textarea, { key: "Tab" })
+		await settle()
+		expect(textarea.value).toBe("/agent qa ")
+		expect(await screen.findByText("/qa-smoke-tests")).toBeInTheDocument()
+		typeEach(textarea, "/smo")
+		fireEvent.keyDown(textarea, { key: "Enter" })
+		expect(textarea.value).toBe("/agent qa /qa-smoke-tests ")
 	})
 })

@@ -349,6 +349,29 @@ export function getMatchingAgentCommandItems(
 }
 
 /**
+ * Why the `/agent` menu has nothing for a skill being typed as the second
+ * argument (`/agent reviewer /med`), or undefined when it is not one.
+ * Silence read as a broken menu when the agent may only load some skills.
+ */
+export function agentCommandEmptyText(
+	slot: AgentCommandSlot | undefined,
+	agents: readonly AgentCommandAgent[],
+	items: readonly SlashCommand[],
+): string | undefined {
+	if (slot?.position !== "second" || !slot.query.startsWith("/") || items.length > 0) {
+		return undefined
+	}
+	const agent = agents.find((entry) => entry.name.toLowerCase() === slot.agentName.toLowerCase())
+	if (!agent) {
+		return agents.length === 0 ? undefined : `No agent “${slot.agentName}”`
+	}
+	if (agent.skills?.length) {
+		return `${agent.name} loads only ${agent.skills.map((skill) => `/${skillCommandName(skill)}`).join(", ")}`
+	}
+	return `No skill matches “${slot.query}”`
+}
+
+/**
  * Replace the word under the cursor with the chosen agent or skill. A skill
  * goes in with its slash, which is how the agent's `skills` tool knows it.
  */

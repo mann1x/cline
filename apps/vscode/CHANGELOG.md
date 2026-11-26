@@ -23,6 +23,13 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   the task. In the extension and the CLI.
 - **The `/` menu showing agents and skills together no longer highlights
   the wrong row.** Both sections counted from the same row.
+- **`/agent` completes again.** Picking `/agent` from the `/` menu now
+  opens the agent list at once, and completing an agent's name opens its
+  skills at once. Before, both menus stayed shut until you typed another
+  character: putting the cursor back after a pick was taken for leaving the
+  box, and that closed them. When an agent's skill menu is empty it says
+  why: the agent loads only certain skills (and names them), the agent does
+  not exist, or no skill matches.
 
 ### Task board
 
