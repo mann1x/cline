@@ -1549,6 +1549,15 @@ export class LocalRuntimeHost implements RuntimeHost {
 					withEditVerificationCapture(tool, editVerificationTracker),
 				)
 			: withChecklist;
+		// Pipelines phase 2: this conversation's runs the host was running when
+		// it stopped (a reload) are picked up, now that the tools they call
+		// exist. Later, not now: a run starts its nodes as it is picked up.
+		if (pipelineSession) {
+			setTimeout(() => {
+				const lines = pipelineSession.recoverInterrupted();
+				if (lines.length > 0) taskGraphTracker?.notePipelineNews(lines);
+			}, 0);
+		}
 		// Don't let the run end quietly on a checklist with open boxes. Composed
 		// rather than assigned: the runtime may already carry a guard (team
 		// obligations), and that one speaks to work the model cannot simply tick

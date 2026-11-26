@@ -1,6 +1,6 @@
 # Plan: pipelines on the task graph (native, preview, off by default)
 
-Status 2026-11-26: approved by the owner 2026-11-26; phases 0 and 1 built. Tracked as ol-173.
+Status 2026-11-26: approved by the owner 2026-11-26; phases 0, 1 and 2 built. Tracked as ol-173.
 Replaces the 2026-11-25 draft, which drove a user's n8n server over MCP. The
 owner ruled that out: there is no n8n server and none will be added, and an
 n8n reached through MCP would be a thin slice of n8n at a large price in tool
@@ -304,7 +304,38 @@ pandorum as a local vsix, and keeps the feature off by default.
      phase 2, with the failure handling.
 2. **Agents and failure handling.** `agent`, `swarm`, `pipeline` (sub-runs)
    and `http` nodes; retries, error routes, `onFailure`; `test` with pins and
-   `--until`; partial re-run.
+   `--until`; partial re-run. **Built 2026-11-26.** As built:
+   - `agent` calls the session's own `spawn_agent` (open spawn: `task`,
+     `instructions`) or a configured agent's `subagent_<name>` tool (`agent`),
+     waiting for it; `json: true` reads the answer (or its first fenced or
+     bracketed block) as the items. `swarm` calls `spawn_swarm` (`instructions`,
+     `tasks` as a list or an expression, or `task` with `count`); one item per
+     worker's report. Both go through `callTool`, so a session without those
+     tools fails the node saying so, and their approvals are the session's.
+   - `http` (`url`, `method`, `headers`, `body`, `allowFailure`) asks the
+     person for each request unless the `pipeline_http` policy auto-approves
+     it (yolo's `*` does); a status outside 2xx fails it. Items: a JSON list
+     as it is, otherwise `[{status, headers, body}]`.
+   - `pipeline` runs another pipeline's approved version to its end (a test's
+     sub-run is a test); its items are what its last nodes gave. Refused at
+     save when it names itself, and at run time when the name is already on
+     the stack or the stack is five deep. Stopping the parent stops it.
+   - Every node: `retry {max, wait (1 s), backoff (2)}` (never after a stop);
+     `onError`: `stop` (default), `continue` (items `[{error}]` on `out`) or
+     `route` (`[{error, input}]` on the node's `error` output, which only
+     then exists, so `"x.error"` is checked at save). An interruption found
+     after a reload follows `onError` too.
+   - `onFailure` (top level) starts that pipeline's approved version when a
+     run fails, with `run`, `pipeline`, `node` and `error` as inputs; not for
+     a stop or a test, and not for a pipeline already in the chain.
+   - `test` takes `until`: nothing starts after that node, and the run ends
+     done. `rerun` (run, node) is a new run that reuses every node's output
+     from the old run except that node, the nodes whose JSON changed since
+     (the journal now records the definition), and everything after either.
+   - Pick-up after a reload: the session that started a run picks it up
+     when the conversation starts again (`recoverInterrupted`, journals carry
+     `session`); another conversation's runs and tests are left alone; a
+     sub-run is closed as stopped, since its parent's node decides.
 3. **The viewer, read-only.** The editor-area panel with the canvas for
    boards and pipelines, Run monitor, Activity, Report, and the inspector
    (read).

@@ -21,6 +21,7 @@
 import { join } from "node:path";
 import type { TaskGraphStore } from "../tools/task-graph/store";
 import { TaskGraphStore as Board } from "../tools/task-graph/store";
+import { buildConfiguredAgentToolName } from "../tools/team/configured-agent-tool";
 import { type ExpressionScope, fill, fillString, test } from "./expr";
 import {
 	appendJournal,
@@ -31,8 +32,11 @@ import {
 	readJournal,
 } from "./journal";
 import {
+	type AgentNode,
 	type CommandNode,
 	DEFAULT_PORT,
+	ERROR_PORT,
+	type HttpNode,
 	type LoopNode,
 	type MergeNode,
 	type NodeOutput,
@@ -41,6 +45,8 @@ import {
 	parseRef,
 	type RunStatus,
 	type SetNode,
+	type SubPipelineNode,
+	type SwarmNode,
 	type SwitchNode,
 	type ToolNode,
 } from "./model";
@@ -51,6 +57,26 @@ export interface NodeContext {
 	signal: AbortSignal;
 	/** The run's task on the conversation's board, when it has one. */
 	task?: string;
+	/** The pipelines this run is inside, outermost first, its own last. */
+	stack: string[];
+	/** A test run: what it starts is a test too. */
+	test?: boolean;
+}
+
+/** An http node's request, as the host sends it. */
+export interface HttpRequest {
+	method: string;
+	url: string;
+	headers: Record<string, string>;
+	body?: string;
+}
+
+/** A sub-pipeline's run, as the host reports it when it ends. */
+export interface SubRunResult {
+	run: string;
+	status: string;
+	error?: string;
+	items: unknown[];
 }
 
 /** What a run needs from the session it runs in. */
@@ -74,6 +100,17 @@ export interface PipelineHost {
 	): Promise<{ open: true } | { failed: string }>;
 	/** Asks the person; true approves. */
 	approve(message: string, context: NodeContext): Promise<boolean>;
+	/** A web request, with the session's approval for it. */
+	http?(
+		request: HttpRequest,
+		context: NodeContext,
+	): Promise<{ status: number; headers: Record<string, string>; body: string }>;
+	/** Runs another workspace pipeline to its end. */
+	runPipeline?(
+		name: string,
+		inputs: Record<string, unknown>,
+		context: NodeContext,
+	): Promise<SubRunResult>;
 }
 
 export interface PipelineRunOptions {
@@ -86,6 +123,14 @@ export interface PipelineRunOptions {
 	inputs?: Record<string, unknown>;
 	/** A test run: nodes with `pin` return it instead of running. */
 	usePins?: boolean;
+	/** A test that stops after this node: what follows it is not run. */
+	until?: string;
+	/** The pipelines this one runs inside (a sub-run), outermost first. */
+	stack?: string[];
+	/** The session starting it, recorded so it picks the run up after a reload. */
+	sessionId?: string;
+	/** A sub-run: the run whose `pipeline` node started it. */
+	parentRun?: string;
 	/** `$env`: what the host allows a pipeline to read. */
 	env?: Record<string, string>;
 	/** The conversation's board: the run gets one task on it. */
@@ -101,6 +146,10 @@ export interface PipelineRunResult {
 	error?: string;
 	/** What the conversation's board said when the run's task closed. */
 	boardLines: string[];
+	/** Its result: the items of the nodes nothing runs after, in order. */
+	items: unknown[];
+	/** The node whose failure ended it. */
+	failedNode?: string;
 }
 
 export interface PipelineNodeView {
@@ -167,6 +216,9 @@ export class PipelineRun {
 	private status: RunStatus = "running";
 	private error: string | undefined;
 	private halted = false;
+	/** `until` reached: nothing more starts, and the run still ends done. */
+	private stoppedAfter: string | undefined;
+	private failedNode: string | undefined;
 	private finished: Promise<PipelineRunResult> | undefined;
 
 	private constructor(options: PipelineRunOptions, id: string) {
@@ -242,7 +294,109 @@ export class PipelineRun {
 			hash: options.hash,
 			inputs,
 			...(run.conversationTask ? { task: run.conversationTask } : {}),
+			...(options.sessionId ? { session: options.sessionId } : {}),
+			...(options.parentRun ? { parent: options.parentRun } : {}),
+			definition: options.definition,
 		});
+		run.finished = run.execute();
+		return run;
+	}
+
+	/**
+	 * Run again from `node`, in a new run: every node that is not `node`, not
+	 * after it, and unchanged since `from` ran keeps the output it had there;
+	 * the rest run (n8n's partial execution). A node is unchanged when its
+	 * JSON is the same as in the definition `from` recorded, and so is
+	 * everything it is after.
+	 */
+	static rerun(
+		options: PipelineRunOptions & { from: string; node: string },
+	): PipelineRun {
+		const previous = foldJournal(
+			readJournal(join(options.journalDir, `${options.from}.jsonl`)),
+		);
+		if (!previous.run) throw new Error(`no run "${options.from}"`);
+		if (previous.status === "running" || previous.status === "waiting")
+			throw new Error(`run "${options.from}" is still running`);
+		const nodes = new Map(
+			options.definition.nodes.map((node) => [node.id, node]),
+		);
+		if (!nodes.has(options.node))
+			throw new Error(
+				`no node "${options.node}" in "${options.definition.name}" (it has ${[...nodes.keys()].join(", ")})`,
+			);
+		const before = new Map(
+			(previous.run.definition?.nodes ?? []).map((node) => [
+				node.id,
+				JSON.stringify(node),
+			]),
+		);
+		if (!previous.run.definition && previous.run.hash !== options.hash)
+			throw new Error(
+				`run "${options.from}" did not record its definition, and the pipeline changed since: start a new run`,
+			);
+		// What has to run again: the node, what changed, and everything after either.
+		const again = new Set<string>([options.node]);
+		for (const node of options.definition.nodes) {
+			const same = previous.run.definition
+				? before.get(node.id) === JSON.stringify(node)
+				: true;
+			if (!same) again.add(node.id);
+		}
+		for (let grew = true; grew; ) {
+			grew = false;
+			for (const node of options.definition.nodes) {
+				if (again.has(node.id)) continue;
+				if ((node.after ?? []).some((ref) => again.has(parseRef(ref).node))) {
+					again.add(node.id);
+					grew = true;
+				}
+			}
+		}
+		const inputs = resolveInputs(
+			options.definition,
+			options.inputs ?? previous.run.inputs,
+		);
+		const run = new PipelineRun(
+			options,
+			nextRunId(options.journalDir, options.definition.name),
+		);
+		run.inputs = inputs;
+		run.openConversationTask();
+		run.write({
+			t: "run",
+			ts: run.now(),
+			run: run.id,
+			pipeline: options.definition.name,
+			hash: options.hash,
+			inputs,
+			...(run.conversationTask ? { task: run.conversationTask } : {}),
+			...(options.sessionId ? { session: options.sessionId } : {}),
+			definition: options.definition,
+			from: options.from,
+		});
+		for (const node of options.definition.nodes) {
+			if (again.has(node.id)) continue;
+			const old = previous.nodes.get(node.id);
+			if (old?.status === "done" && old.output) {
+				const state = run.states.get(node.id) as NodeState;
+				state.status = "done";
+				state.output = old.output;
+				run.write({
+					t: "end",
+					ts: run.now(),
+					node: node.id,
+					output: old.output,
+					reused: options.from,
+				});
+				run.boardUpdate(node.id, {
+					status: "done",
+					note: `${summarize(old.output)} (from ${options.from})`,
+				});
+			} else if (old?.status === "skipped") {
+				run.markSkipped(node.id, old.reason ?? `skipped in ${options.from}`);
+			}
+		}
 		run.finished = run.execute();
 		return run;
 	}
@@ -266,21 +420,24 @@ export class PipelineRun {
 		for (const [id, state] of run.states) {
 			if (state.status !== "running") continue;
 			const node = run.nodes.get(id) as PipelineNode;
+			const reason =
+				"interrupted: it was running when the host stopped, and it is not marked idempotent";
 			if (node.idempotent || node.type === "wait" || node.type === "approval") {
 				state.status = "pending";
 				delete state.waitingOn;
+			} else if (node.onError === "continue" || node.onError === "route") {
+				// The author said what a failure does here; an interruption is one.
+				run.settleError(node, reason, run.inputItems(node));
 			} else {
 				interrupted ??= id;
-				run.markFailed(
-					id,
-					"interrupted: it was running when the host stopped, and it is not marked idempotent",
-				);
+				run.markFailed(id, reason);
 			}
 		}
 		run.write({ t: "resume", ts: run.now() });
 		run.reopenConversationTask();
 		if (interrupted) {
 			run.halted = true;
+			run.failedNode = interrupted;
 			run.error = `node "${interrupted}" was interrupted`;
 		}
 		run.finished = run.execute();
@@ -388,7 +545,7 @@ export class PipelineRun {
 	}
 
 	private closeConversationTask(
-		result: Omit<PipelineRunResult, "boardLines">,
+		result: Pick<PipelineRunResult, "run" | "status" | "error">,
 	): string[] {
 		const store = this.options.board;
 		if (!store) return [];
@@ -521,7 +678,7 @@ export class PipelineRun {
 		const max = this.definition.maxParallel ?? DEFAULT_MAX_PARALLEL;
 		const running = new Map<string, Promise<void>>();
 		for (;;) {
-			if (!this.halted) {
+			if (!this.halted && !this.stoppedAfter) {
 				for (const node of this.settle()) {
 					if (running.size >= max) break;
 					if (running.has(node.id)) continue;
@@ -537,11 +694,14 @@ export class PipelineRun {
 		const status: PipelineRunResult["status"] =
 			this.status === "stopped" ? "stopped" : this.halted ? "failed" : "done";
 		this.status = status;
-		if (status !== "done") {
+		if (status !== "done" || this.stoppedAfter) {
 			// What was never reached says so on the run's board.
+			const why = this.stoppedAfter
+				? `the test stopped after ${this.stoppedAfter}`
+				: `the run ${status}`;
 			for (const [id, state] of this.states) {
 				if (state.status === "pending")
-					this.boardUpdate(id, { note: `not reached: the run ${status}` });
+					this.boardUpdate(id, { note: `not reached: ${why}` });
 			}
 		}
 		this.write({
@@ -555,45 +715,130 @@ export class PipelineRun {
 			status,
 			...(this.error ? { error: this.error } : {}),
 		};
-		return { ...result, boardLines: this.closeConversationTask(result) };
+		return {
+			...result,
+			boardLines: this.closeConversationTask(result),
+			items: this.resultItems(),
+			...(this.failedNode ? { failedNode: this.failedNode } : {}),
+		};
+	}
+
+	/** The items of the nodes that ran and that nothing runs after. */
+	private resultItems(): unknown[] {
+		const fed = new Set<string>();
+		for (const node of this.nodes.values())
+			for (const ref of node.after ?? []) fed.add(parseRef(ref).node);
+		return this.definition.nodes
+			.filter((node) => !fed.has(node.id))
+			.flatMap((node) => {
+				const state = this.states.get(node.id);
+				return state?.status === "done" ? (state.output?.items ?? []) : [];
+			});
+	}
+
+	/** `onError: continue | route`: the failure becomes the node's output. */
+	private settleError(
+		node: PipelineNode,
+		message: string,
+		items: unknown[],
+	): void {
+		const state = this.states.get(node.id) as NodeState;
+		const route = node.onError === "route";
+		const output: NodeOutput = {
+			items: [route ? { error: message, input: items } : { error: message }],
+			port: route ? ERROR_PORT : DEFAULT_PORT,
+			error: message,
+		};
+		state.status = "done";
+		state.output = output;
+		delete state.waitingOn;
+		this.write({ t: "end", ts: this.now(), node: node.id, output });
+		this.boardUpdate(node.id, {
+			status: "done",
+			note: `failed, ${route ? "routed to error" : "went on"}: ${message}`,
+		});
 	}
 
 	private async launch(node: PipelineNode): Promise<void> {
 		const state = this.states.get(node.id) as NodeState;
-		state.status = "running";
-		state.attempts += 1;
-		this.write({
-			t: "start",
-			ts: this.now(),
-			node: node.id,
-			attempt: state.attempts,
-		});
-		this.boardUpdate(node.id, { status: "active" });
-		try {
-			const items = this.inputItems(node);
-			const pinned = this.options.usePins === true && Array.isArray(node.pin);
-			const output = pinned
-				? { items: node.pin as unknown[], port: DEFAULT_PORT }
-				: await this.runNode(node, items, {});
-			state.status = "done";
-			state.output = output;
+		const items = this.inputItems(node);
+		const tries = 1 + (node.retry?.max ?? 0);
+		for (let attempt = 1; ; attempt++) {
+			state.status = "running";
+			state.attempts += 1;
 			this.write({
-				t: "end",
+				t: "start",
 				ts: this.now(),
 				node: node.id,
-				output,
-				...(pinned ? { pinned: true } : {}),
+				attempt: state.attempts,
 			});
-			this.boardUpdate(node.id, { status: "done", note: summarize(output) });
-		} catch (error) {
-			const message = this.abort.signal.aborted
-				? `stopped: ${this.error ?? "stopped"}`
-				: (error as Error).message || String(error);
-			this.markFailed(node.id, message);
-			if (!this.halted) {
-				this.halted = true;
-				this.error = `node "${node.id}" failed: ${message}`;
+			this.boardUpdate(node.id, { status: "active" });
+			try {
+				const pinned = this.options.usePins === true && Array.isArray(node.pin);
+				const output = pinned
+					? { items: node.pin as unknown[], port: DEFAULT_PORT }
+					: await this.runNode(node, items, {});
+				state.status = "done";
+				state.output = output;
+				delete state.lastError;
+				this.write({
+					t: "end",
+					ts: this.now(),
+					node: node.id,
+					output,
+					...(pinned ? { pinned: true } : {}),
+				});
+				this.boardUpdate(node.id, { status: "done", note: summarize(output) });
+				if (this.options.until === node.id) this.stoppedAfter = node.id;
+				return;
+			} catch (error) {
+				if (this.abort.signal.aborted) {
+					this.fail(node.id, `stopped: ${this.error ?? "stopped"}`);
+					return;
+				}
+				const message = (error as Error).message || String(error);
+				if (attempt < tries) {
+					const retry = node.retry as NonNullable<PipelineNode["retry"]>;
+					const wait =
+						(retry.wait ?? 1) * (retry.backoff ?? 2) ** (attempt - 1);
+					state.lastError = message;
+					this.write({
+						t: "retry",
+						ts: this.now(),
+						node: node.id,
+						attempt: state.attempts,
+						error: message,
+						wait,
+					});
+					this.boardUpdate(node.id, {
+						note: `attempt ${attempt} failed (${message.slice(0, 120)}); again in ${wait} s`,
+					});
+					try {
+						await pause(wait * 1000, this.abort.signal);
+					} catch {
+						this.fail(node.id, `stopped: ${this.error ?? "stopped"}`);
+						return;
+					}
+					continue;
+				}
+				const tried = tries > 1 ? ` (after ${tries} attempts)` : "";
+				if (node.onError === "continue" || node.onError === "route") {
+					this.settleError(node, `${message}${tried}`, items);
+					return;
+				}
+				this.fail(node.id, `${message}${tried}`);
+				return;
 			}
+		}
+	}
+
+	/** A node failed for good: the run stops at it. */
+	private fail(id: string, message: string): void {
+		this.markFailed(id, message);
+		if (!this.halted) {
+			this.halted = true;
+			this.failedNode = id;
+			this.error = `node "${id}" failed: ${message}`;
 		}
 	}
 
@@ -656,6 +901,8 @@ export class PipelineRun {
 			node: node.id,
 			signal,
 			...(this.conversationTask ? { task: this.conversationTask } : {}),
+			stack: [...(this.options.stack ?? []), this.definition.name],
+			...(this.options.usePins ? { test: true } : {}),
 		};
 		const scope = this.scope(items, extra);
 		const raced = <T>(work: Promise<T>): Promise<T> =>
@@ -822,9 +1069,147 @@ export class PipelineRun {
 				}
 				return { items, port: DEFAULT_PORT };
 			}
+			case "agent": {
+				const agent = node as AgentNode;
+				const task = asText(fill(agent.task, scope));
+				const result = await raced(
+					agent.agent
+						? this.options.host.callTool(
+								configuredAgentTool(agent.agent),
+								{ prompt: task, wait: true },
+								context,
+							)
+						: this.options.host.callTool(
+								"spawn_agent",
+								{
+									task,
+									...(agent.instructions
+										? { instructions: asText(fill(agent.instructions, scope)) }
+										: {}),
+									name: agent.name ?? agent.id,
+									wait: true,
+								},
+								context,
+							),
+				);
+				return agentOutput(result, agent.json === true);
+			}
+			case "swarm": {
+				const swarm = node as SwarmNode;
+				const listed =
+					typeof swarm.tasks === "string"
+						? swarm.tasks.includes("{{")
+							? fillString(swarm.tasks, scope)
+							: fillString(`{{${swarm.tasks}}}`, scope)
+						: swarm.tasks;
+				if (listed !== undefined && !Array.isArray(listed))
+					throw new NodeFailure(
+						`"tasks" gave ${asText(listed).slice(0, 60)}, not a list`,
+					);
+				const result = await raced(
+					this.options.host.callTool(
+						"spawn_swarm",
+						{
+							systemPrompt: asText(fill(swarm.instructions, scope)),
+							...(listed
+								? {
+										tasks: listed.map((entry) => ({
+											task: asText(fill(asText(entry), scope)),
+										})),
+									}
+								: {
+										task: asText(fill(swarm.task ?? "", scope)),
+										...(swarm.count ? { count: swarm.count } : {}),
+									}),
+							wait: true,
+						},
+						context,
+					),
+				);
+				return agentOutput(result, false);
+			}
+			case "http": {
+				const http = node as HttpNode;
+				if (!this.options.host.http)
+					throw new NodeFailure("this session cannot make web requests");
+				const body =
+					http.body === undefined
+						? undefined
+						: typeof http.body === "string"
+							? asText(fill(http.body, scope))
+							: JSON.stringify(fill(http.body, scope));
+				const headers = Object.fromEntries(
+					Object.entries(http.headers ?? {}).map(([key, value]) => [
+						key,
+						asText(fill(value, scope)),
+					]),
+				);
+				if (
+					body !== undefined &&
+					typeof http.body !== "string" &&
+					!Object.keys(headers).some(
+						(key) => key.toLowerCase() === "content-type",
+					)
+				)
+					headers["content-type"] = "application/json";
+				const response = await raced(
+					this.options.host.http(
+						{
+							method: (http.method ?? "GET").toUpperCase(),
+							url: asText(fill(http.url, scope)),
+							headers,
+							...(body !== undefined ? { body } : {}),
+						},
+						context,
+					),
+				);
+				let parsed: unknown = response.body;
+				try {
+					parsed = JSON.parse(response.body);
+				} catch {
+					// Text it is.
+				}
+				const ok = response.status >= 200 && response.status < 300;
+				if (!ok && !http.allowFailure)
+					throw new NodeFailure(
+						`${(http.method ?? "GET").toUpperCase()} returned ${response.status}${response.body ? `: ${response.body.trim().slice(0, 200)}` : ""}`,
+					);
+				return {
+					items: Array.isArray(parsed)
+						? parsed
+						: [
+								{
+									status: response.status,
+									headers: response.headers,
+									body: parsed,
+								},
+							],
+					port: DEFAULT_PORT,
+					status: response.status,
+					text: clip(response.body),
+				};
+			}
+			case "pipeline": {
+				const sub = node as SubPipelineNode;
+				if (!this.options.host.runPipeline)
+					throw new NodeFailure("this session cannot run another pipeline");
+				const name = asText(fill(sub.pipeline, scope));
+				const result = await raced(
+					this.options.host.runPipeline(
+						name,
+						(fill(sub.inputs ?? {}, scope) as Record<string, unknown>) ?? {},
+						context,
+					),
+				);
+				if (result.status !== "done")
+					throw new NodeFailure(
+						`${name} (${result.run}) ${result.status}${result.error ? `: ${result.error}` : ""}`,
+					);
+				return { items: result.items, port: DEFAULT_PORT, run: result.run };
+			}
 			default:
 				throw new NodeFailure(
-					`"${node.type}" nodes are not available in this version yet`,
+					`"${(node as { type: string }).type}" is not a node type`,
 				);
 		}
 	}
@@ -974,4 +1359,83 @@ function mergeByKey(lists: unknown[][], key: string): unknown[] {
 		}
 	}
 	return [...merged.values(), ...loose];
+}
+
+/** Waits, or rejects when the run is stopped. */
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal.aborted) {
+			reject(signal.reason ?? new Error("stopped"));
+			return;
+		}
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		const onAbort = () => {
+			clearTimeout(timer);
+			reject(signal.reason ?? new Error("stopped"));
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
+/** The tool a configured agent is offered as (`subagent_<name>`). */
+function configuredAgentTool(name: string): string {
+	return buildConfiguredAgentToolName(name);
+}
+
+/** The answer's text: a report's `text`, or the whole result as JSON. */
+function answerText(result: unknown): string {
+	if (typeof result === "string") return result;
+	if (isObject(result)) {
+		for (const key of ["text", "report", "summary", "result"]) {
+			if (typeof result[key] === "string") return result[key] as string;
+		}
+	}
+	return asText(result);
+}
+
+/** JSON out of an answer: the whole text, or the first fenced or bracketed block. */
+export function answerJson(text: string): unknown {
+	const attempts = [
+		text.trim(),
+		/```(?:json)?\s*([\s\S]*?)```/.exec(text)?.[1]?.trim(),
+		/[[{][\s\S]*[\]}]/.exec(text)?.[0],
+	];
+	for (const candidate of attempts) {
+		if (!candidate) continue;
+		try {
+			return JSON.parse(candidate) as unknown;
+		} catch {
+			// The next shape.
+		}
+	}
+	throw new NodeFailure(`the answer is not JSON: ${text.trim().slice(0, 160)}`);
+}
+
+/** An agent's or a swarm's result as a node's output. */
+function agentOutput(result: unknown, json: boolean): NodeOutput {
+	// One item per worker when the result lists them.
+	const listed = isObject(result)
+		? (["reports", "agents", "results", "workers"]
+				.map((key) => result[key])
+				.find((value) => Array.isArray(value)) as unknown[] | undefined)
+		: Array.isArray(result)
+			? result
+			: undefined;
+	const text = answerText(result);
+	if (json) {
+		const value = answerJson(text);
+		return {
+			items: Array.isArray(value) ? value : [value],
+			port: DEFAULT_PORT,
+			text: clip(text),
+		};
+	}
+	return {
+		items: listed ?? [{ text }],
+		port: DEFAULT_PORT,
+		text: clip(text),
+	};
 }

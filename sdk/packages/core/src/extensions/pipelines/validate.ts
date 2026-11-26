@@ -14,6 +14,7 @@ import {
 	NODE_TYPES,
 	type NodeType,
 	nodePorts,
+	ON_ERROR,
 	type PipelineDefinition,
 	type PipelineNode,
 	parseRef,
@@ -36,7 +37,21 @@ const REQUIRED: Partial<Record<NodeType, string[]>> = {
 	loop: ["over", "body"],
 	wait: ["gate"],
 	approval: ["message"],
+	agent: ["task"],
+	swarm: ["instructions"],
+	http: ["url"],
+	pipeline: ["pipeline"],
 };
+
+const HTTP_METHODS = [
+	"GET",
+	"HEAD",
+	"POST",
+	"PUT",
+	"PATCH",
+	"DELETE",
+	"OPTIONS",
+];
 
 function isObject(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
@@ -86,6 +101,10 @@ function nodeErrors(
 		approval: ["message"],
 		check: ["command", "when", "message"],
 		set: ["items"],
+		agent: ["task", "agent", "instructions"],
+		swarm: ["instructions", "task"],
+		http: ["url", "method"],
+		pipeline: ["pipeline"],
 	};
 	for (const field of strings[type] ?? []) {
 		if (raw[field] !== undefined && typeof raw[field] !== "string") {
@@ -146,6 +165,80 @@ function nodeErrors(
 			errors.push(...nodeErrors(raw.body, `${where}.body`, runnable, true));
 		}
 	}
+	if (type === "swarm") {
+		const tasks = raw.tasks;
+		if (tasks === undefined && raw.task === undefined) {
+			errors.push(
+				`${where}: a swarm node needs "tasks" (one per worker) or "task" with "count"`,
+			);
+		} else if (
+			tasks !== undefined &&
+			typeof tasks !== "string" &&
+			!(
+				Array.isArray(tasks) &&
+				tasks.every((entry) => typeof entry === "string")
+			)
+		) {
+			errors.push(
+				`${where}: "tasks" is a list of texts, or an expression giving one`,
+			);
+		}
+		if (
+			raw.count !== undefined &&
+			!(Number.isInteger(raw.count) && (raw.count as number) >= 1)
+		) {
+			errors.push(`${where}: "count" is a whole number of at least 1`);
+		}
+	}
+	if (type === "http") {
+		if (
+			raw.method !== undefined &&
+			!HTTP_METHODS.includes(String(raw.method).toUpperCase())
+		) {
+			errors.push(
+				`${where}: method "${String(raw.method)}" is not one of ${HTTP_METHODS.join(", ")}`,
+			);
+		}
+		if (
+			raw.headers !== undefined &&
+			!(
+				isObject(raw.headers) &&
+				Object.values(raw.headers).every((value) => typeof value === "string")
+			)
+		) {
+			errors.push(`${where}: "headers" is an object of header names and texts`);
+		}
+	}
+	if (
+		type === "pipeline" &&
+		raw.inputs !== undefined &&
+		!isObject(raw.inputs)
+	) {
+		errors.push(`${where}: "inputs" is an object of input names and values`);
+	}
+	if (
+		raw.onError !== undefined &&
+		!(ON_ERROR as readonly string[]).includes(raw.onError as string)
+	) {
+		errors.push(
+			`${where}: onError "${String(raw.onError)}" is not one of ${ON_ERROR.join(", ")}`,
+		);
+	}
+	if (raw.retry !== undefined) {
+		const retry = raw.retry;
+		if (
+			!isObject(retry) ||
+			!(Number.isInteger(retry.max) && (retry.max as number) >= 1) ||
+			(retry.wait !== undefined &&
+				!(typeof retry.wait === "number" && retry.wait >= 0)) ||
+			(retry.backoff !== undefined &&
+				!(typeof retry.backoff === "number" && retry.backoff >= 1))
+		) {
+			errors.push(
+				`${where}: "retry" is {max: retries (at least 1), wait?: seconds, backoff?: a factor of at least 1}`,
+			);
+		}
+	}
 	if (
 		raw.timeout !== undefined &&
 		!(typeof raw.timeout === "number" && raw.timeout > 0)
@@ -195,6 +288,20 @@ export function validatePipeline(
 	) {
 		errors.push('"maxParallel" is a whole number of at least 1');
 	}
+	if (
+		value.onFailure !== undefined &&
+		(typeof value.onFailure !== "string" || !value.onFailure.trim())
+	) {
+		errors.push(
+			'"onFailure" is the name of a pipeline to run when a run fails',
+		);
+	} else if (
+		typeof value.onFailure === "string" &&
+		typeof value.name === "string" &&
+		value.onFailure.trim().toLowerCase() === value.name.trim().toLowerCase()
+	) {
+		errors.push('"onFailure" names this pipeline itself');
+	}
 	if (!Array.isArray(value.nodes) || value.nodes.length === 0) {
 		errors.push('"nodes" is a list with at least one node');
 		return { ok: false, errors };
@@ -229,6 +336,17 @@ export function validatePipeline(
 			);
 		}
 		errors.push(...nodeErrors(entry, where, runnable, false));
+		const sub = (
+			entry.type === "loop" && isObject(entry.body) ? entry.body : entry
+		) as Record<string, unknown>;
+		if (
+			sub.type === "pipeline" &&
+			typeof sub.pipeline === "string" &&
+			typeof value.name === "string" &&
+			sub.pipeline.trim().toLowerCase() === value.name.trim().toLowerCase()
+		) {
+			errors.push(`${where}: a pipeline does not run itself`);
+		}
 	});
 	// What each node is after: known nodes, real outputs, no loops.
 	for (const node of byId.values()) {

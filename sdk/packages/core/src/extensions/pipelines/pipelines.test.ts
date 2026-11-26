@@ -155,7 +155,8 @@ describe("validatePipeline", () => {
 				{ id: "e", type: "set", after: ["c.maybe"] },
 				{ id: "f", type: "set", after: ["g"], fields: { v: "{{ 1 + }}" } },
 				{ id: "g", type: "set", after: ["f"] },
-				{ id: "h", type: "agent", task: "x" },
+				{ id: "h", type: "http", onError: "shrug", retry: { max: 0 } },
+				{ id: "h2", type: "swarm", instructions: "r" },
 				{
 					id: "i",
 					type: "loop",
@@ -176,9 +177,12 @@ describe("validatePipeline", () => {
 		expect(text).toContain('"c" has no output "maybe"');
 		expect(text).toContain("{{ 1 + }}");
 		expect(text).toContain("the nodes run in a circle");
+		expect(text).toContain('node "h": a http node needs "url"');
 		expect(text).toContain(
-			'"agent" nodes are not available in this version yet',
+			'node "h": onError "shrug" is not one of stop, continue, route',
 		);
+		expect(text).toContain('node "h": "retry" is {max: retries (at least 1)');
+		expect(text).toContain('node "h2": a swarm node needs "tasks"');
 		expect(text).toContain("a loop body is one");
 		expect(text).toContain('node "i": the id is used twice');
 	});

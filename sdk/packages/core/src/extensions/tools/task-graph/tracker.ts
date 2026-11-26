@@ -743,6 +743,13 @@ export class TaskGraphTracker {
 		this.boardDue = true;
 	}
 
+	/** Pipelines phase 2: what happened to runs outside a turn (picked up after a reload). */
+	notePipelineNews(lines: readonly string[]): void {
+		if (lines.length === 0) return;
+		this.doneNotes.push(`[SYSTEM] ${lines.join(" ")}`);
+		this.boardDue = true;
+	}
+
 	/** T1: a plan whose first layer has two or more tasks, with a team to run them. */
 	private nudgeParallel(input: unknown): void {
 		if (!this.team || this.planMode) return;

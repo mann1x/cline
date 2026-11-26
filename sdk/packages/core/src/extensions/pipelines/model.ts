@@ -35,23 +35,8 @@ export const NODE_TYPES = [
 ] as const;
 export type NodeType = (typeof NODE_TYPES)[number];
 
-/**
- * The types this build can run. `agent`, `swarm`, `http` and `pipeline`
- * are the plan's phase 2; a file using one is refused with that said,
- * rather than accepted and failed at run time.
- */
-export const RUNNABLE_NODE_TYPES: ReadonlySet<NodeType> = new Set([
-	"tool",
-	"command",
-	"set",
-	"if",
-	"switch",
-	"merge",
-	"loop",
-	"wait",
-	"approval",
-	"check",
-]);
+/** The types this build can run: all of them since phase 2. */
+export const RUNNABLE_NODE_TYPES: ReadonlySet<NodeType> = new Set(NODE_TYPES);
 
 /** What a loop's body may be: one node that works on one item. */
 export const LOOP_BODY_TYPES: ReadonlySet<NodeType> = new Set([
@@ -59,7 +44,26 @@ export const LOOP_BODY_TYPES: ReadonlySet<NodeType> = new Set([
 	"command",
 	"set",
 	"check",
+	"http",
+	"agent",
+	"pipeline",
 ]);
+
+/** What a node does when it fails, after its retries. */
+export const ON_ERROR = ["stop", "continue", "route"] as const;
+export type OnError = (typeof ON_ERROR)[number];
+
+/** The output a node with `onError: "route"` fires when it fails. */
+export const ERROR_PORT = "error";
+
+/** Retries after a failure: `max` more attempts, `wait` s before the first, times `backoff` each time. */
+export interface RetryPolicy {
+	max: number;
+	/** Seconds before the first retry (1 when absent). */
+	wait?: number;
+	/** What each wait is multiplied by for the next (2 when absent). */
+	backoff?: number;
+}
 
 export const MERGE_MODES = ["all", "append", "first", "by-key"] as const;
 export type MergeMode = (typeof MERGE_MODES)[number];
@@ -84,6 +88,14 @@ interface NodeBase {
 	timeout?: number;
 	/** Test data: a run with pins on returns these items without running it. */
 	pin?: unknown[];
+	/** Try again after a failure (not after a stop). */
+	retry?: RetryPolicy;
+	/**
+	 * After the last attempt failed: `stop` the run (the default), `continue`
+	 * with `[{error}]` as the node's items, or `route` them to its `error`
+	 * output for the nodes after `"<id>.error"`.
+	 */
+	onError?: OnError;
 }
 
 export interface ToolNode extends NodeBase {
@@ -138,8 +150,16 @@ export interface LoopNode extends NodeBase {
 }
 
 type BodyOf<T> = T extends unknown ? Omit<T, "id" | "after"> : never;
-/** A loop's body: one tool, command, set or check node, without an id or `after`. */
-export type LoopBody = BodyOf<ToolNode | CommandNode | SetNode | CheckNode>;
+/** A loop's body: one tool, command, set, check, http, agent or pipeline node, without an id or `after`. */
+export type LoopBody = BodyOf<
+	| ToolNode
+	| CommandNode
+	| SetNode
+	| CheckNode
+	| HttpNode
+	| AgentNode
+	| SubPipelineNode
+>;
 
 export interface WaitNode extends NodeBase {
 	type: "wait";
@@ -161,10 +181,46 @@ export interface CheckNode extends NodeBase {
 	message?: string;
 }
 
-/** Phase 2 types: known to the format, refused by this build. */
-export interface LaterNode extends NodeBase {
-	type: "agent" | "swarm" | "http" | "pipeline";
-	[field: string]: unknown;
+/** One sub-agent with a task: a configured agent by name, or an open spawn. */
+export interface AgentNode extends NodeBase {
+	type: "agent";
+	task: string;
+	/** A configured agent's name; an open spawn when absent. */
+	agent?: string;
+	/** The open spawn's role. */
+	instructions?: string;
+	/** Read the answer as JSON: its value is the node's items. */
+	json?: boolean;
+}
+
+/** Several workers at once (`spawn_swarm`); one item per worker's report. */
+export interface SwarmNode extends NodeBase {
+	type: "swarm";
+	/** The role every worker runs with. */
+	instructions: string;
+	/** One task per worker, or an expression giving the list. */
+	tasks?: string[] | string;
+	/** One task for every worker, with `count`. */
+	task?: string;
+	count?: number;
+}
+
+/** A web request. A status outside 2xx fails it unless `allowFailure`. */
+export interface HttpNode extends NodeBase {
+	type: "http";
+	url: string;
+	method?: string;
+	headers?: Record<string, string>;
+	/** Sent as JSON unless it is text. */
+	body?: unknown;
+	allowFailure?: boolean;
+}
+
+/** Another workspace pipeline, run with inputs; its result is this node's items. */
+export interface SubPipelineNode extends NodeBase {
+	type: "pipeline";
+	pipeline: string;
+	inputs?: Record<string, unknown>;
 }
 
 export type PipelineNode =
@@ -178,7 +234,10 @@ export type PipelineNode =
 	| WaitNode
 	| ApprovalNode
 	| CheckNode
-	| LaterNode;
+	| AgentNode
+	| SwarmNode
+	| HttpNode
+	| SubPipelineNode;
 
 export interface PipelineInput {
 	type?: "string" | "number" | "boolean" | "object" | "array";
@@ -193,20 +252,26 @@ export interface PipelineDefinition {
 	inputs?: Record<string, PipelineInput>;
 	/** At most this many nodes run at once (4 when absent). */
 	maxParallel?: number;
+	/**
+	 * A pipeline started when a run of this one fails, with the inputs
+	 * `run`, `pipeline`, `node` and `error` (n8n's error workflow).
+	 */
+	onFailure?: string;
 	nodes: PipelineNode[];
 }
 
 /** The named outputs a node type fires; a bare ref means `out`. */
 export function nodePorts(node: PipelineNode): string[] {
+	const error = node.onError === "route" ? [ERROR_PORT] : [];
 	switch (node.type) {
 		case "if":
-			return ["true", "false"];
+			return ["true", "false", ...error];
 		case "switch":
-			return [...(node as SwitchNode).cases, "default"];
+			return [...(node as SwitchNode).cases, "default", ...error];
 		case "approval":
-			return ["approve", "reject"];
+			return ["approve", "reject", ...error];
 		default:
-			return [DEFAULT_PORT];
+			return [DEFAULT_PORT, ...error];
 	}
 }
 
@@ -233,8 +298,14 @@ export interface NodeOutput {
 	exit?: number;
 	stdout?: string;
 	stderr?: string;
-	/** A tool's answer as text. */
+	/** A tool's or an agent's answer as text. */
 	text?: string;
+	/** Why it failed, when `onError` let the run go on. */
+	error?: string;
+	/** An http node's status. */
+	status?: number;
+	/** A sub-pipeline's run. */
+	run?: string;
 }
 
 export type NodeStatus = "pending" | "running" | "done" | "skipped" | "failed";

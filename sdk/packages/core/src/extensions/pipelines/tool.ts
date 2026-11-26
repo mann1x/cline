@@ -37,6 +37,7 @@ export const PIPELINE_ACTIONS = [
 	"status",
 	"stop",
 	"resume",
+	"rerun",
 	"runs",
 ] as const;
 
@@ -46,13 +47,13 @@ export const PIPELINE_TOOL_DESCRIPTION =
 	"), run by Cerebriline in the background while you work. " +
 	"Actions: list; catalog (the node types and their fields: read it before writing one); show (name); " +
 	"save (pipeline: the JSON; base: the version `show` gave, to replace a file); validate (pipeline); " +
-	"run (name, inputs; task: a task id that waits on the run); test (name or pipeline, inputs; pinned, no side effects); " +
-	"status, stop, resume (run); runs. " +
+	"run (name, inputs; task: a task id that waits on the run); test (name or pipeline, inputs, until?: a node to stop after; pinned, no side effects); " +
+	"status, stop, resume (run); rerun (run, node: run again from that node, reusing what came before); runs. " +
 	"A saved pipeline is a proposal: only a version the person approved runs; `test` runs any version.";
 
 const CATALOG = [
 	'Nodes run after what they list in `after` ("build", or "ok.true" for a branch\'s output). A node whose input did not run is skipped, and so is what follows it.',
-	"Every node: id, type, after?, name?, description?, timeout? (s), idempotent? (safe to rerun after a reload), pin? (items a test returns).",
+	'Every node: id, type, after?, name?, description?, timeout? (s), idempotent? (safe to rerun after a reload), pin? (items a test returns), retry? {max, wait? (s, 1), backoff? (2)}, onError? stop (default) | continue (its items become [{error}]) | route (they go to its output "<id>.error").',
 	"- tool: tool, input (any tool of this session, with its approvals). Items: its result.",
 	"- command: command, cwd?, allowFailure? (a non-zero exit fails it otherwise). Items: [{exit, stdout, stderr}].",
 	"- set: fields {name: value} (once per input item; keepInput? starts from the item) or items (an expression giving a list).",
@@ -62,8 +63,12 @@ const CATALOG = [
 	"- wait: gate (timer:+10m or an ISO time, commit:<sha>@<branch>, gh-pr:owner/repo#n, gh-run:owner/repo/id, human:<what the person decides>, run:<agent>).",
 	"- approval: message → outputs approve / reject (the person answers on the task board).",
 	"- check: command (passes on exit 0) or when; message. Fails the run when it does not hold.",
+	"- agent: task, agent? (a configured agent's name; an open sub-agent otherwise), instructions? (its role), json? (the answer read as JSON is the items). Items: [{text}].",
+	"- swarm: instructions (every worker's role), tasks (one per worker, or an expression giving a list) or task with count. Items: one per worker.",
+	"- http: url, method? (GET), headers?, body? (JSON unless text), allowFailure? (a status outside 2xx fails it otherwise). Asks the person unless the pipeline_http policy approves. Items: the JSON list, or [{status, headers, body}].",
+	"- pipeline: pipeline (another pipeline's name), inputs?. Runs its approved version to the end; items: what its last nodes gave. Never itself, at most 5 deep.",
 	`Expressions: {{ … }} in any text. Names: $vars (inputs), $node.<id> (items, exit, stdout, stderr, text, port), $input, $item / $json, $index, $run, $env. Functions: ${EXPRESSION_FUNCTIONS.join(", ")}. No JavaScript.`,
-	'Top level: {"name", "description"?, "inputs"? {name: {type, default?, required?}}, "maxParallel"? (4), "nodes": [...]}.',
+	'Top level: {"name", "description"?, "inputs"? {name: {type, default?, required?}}, "maxParallel"? (4), "onFailure"? (a pipeline started when a run fails, with inputs run, pipeline, node, error), "nodes": [...]}.',
 ];
 
 function record(input: unknown): Record<string, unknown> {
@@ -117,7 +122,15 @@ export function createPipelineTool(
 				},
 				run: {
 					type: "string",
-					description: "A run id, for status, stop and resume.",
+					description: "A run id, for status, stop, resume and rerun.",
+				},
+				node: {
+					type: "string",
+					description: "rerun: the node to run again from.",
+				},
+				until: {
+					type: "string",
+					description: "test: stop after this node.",
 				},
 				allowSideEffects: {
 					type: "boolean",
@@ -166,7 +179,7 @@ export function createPipelineTool(
 					}
 					case "catalog":
 						return answer([
-							`Node types: ${[...RUNNABLE_NODE_TYPES].join(", ")}. Not yet available: ${NODE_TYPES.filter((type) => !RUNNABLE_NODE_TYPES.has(type)).join(", ")}.`,
+							`Node types: ${NODE_TYPES.filter((type) => RUNNABLE_NODE_TYPES.has(type)).join(", ")}.`,
 							...CATALOG,
 						]);
 					case "show": {
@@ -263,6 +276,9 @@ export function createPipelineTool(
 							source,
 							inputs,
 							args.allowSideEffects === true,
+							typeof args.until === "string" && args.until
+								? args.until
+								: undefined,
 						);
 						const result = await run.result();
 						const view = run.view();
@@ -322,6 +338,21 @@ export function createPipelineTool(
 					case "resume": {
 						const run = session.resume(runId);
 						return answer([`Resumed ${run.id}. \`status\` shows where it is.`]);
+					}
+					case "rerun": {
+						const node = typeof args.node === "string" ? args.node : "";
+						if (!node)
+							return answer(
+								["rerun needs `node`: the node to run again from."],
+								false,
+							);
+						const run = session.rerun(runId, node);
+						const reused = run
+							.view()
+							.nodes.filter((entry) => entry.status === "done").length;
+						return answer([
+							`Started ${run.id} from ${node}, reusing ${reused} node${reused === 1 ? "" : "s"} of ${runId}. \`status\` shows where it is.`,
+						]);
 					}
 					case "runs": {
 						const runs = session.runs();

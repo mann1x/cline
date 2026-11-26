@@ -13,7 +13,12 @@ import {
 	readFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import type { NodeOutput, NodeStatus, RunStatus } from "./model";
+import type {
+	NodeOutput,
+	NodeStatus,
+	PipelineDefinition,
+	RunStatus,
+} from "./model";
 
 export const PIPELINE_RUNS_DIR = join(".cerebriline", "pipeline-runs");
 
@@ -27,9 +32,33 @@ export type JournalEvent =
 			inputs: Record<string, unknown>;
 			/** The conversation board's task for the run, when it has one. */
 			task?: string;
+			/** The session that started it: the one that picks it up after a reload. */
+			session?: string;
+			/** The definition it ran, for a partial re-run to compare nodes against. */
+			definition?: PipelineDefinition;
+			/** A partial re-run: the run its reused outputs came from. */
+			from?: string;
+			/** A sub-run: the run whose `pipeline` node started it. */
+			parent?: string;
 	  }
 	| { t: "start"; ts: number; node: string; attempt: number }
-	| { t: "end"; ts: number; node: string; output: NodeOutput; pinned?: boolean }
+	| {
+			t: "end";
+			ts: number;
+			node: string;
+			output: NodeOutput;
+			pinned?: boolean;
+			/** Taken from this earlier run, not run again. */
+			reused?: string;
+	  }
+	| {
+			t: "retry";
+			ts: number;
+			node: string;
+			attempt: number;
+			error: string;
+			wait: number;
+	  }
 	| { t: "skip"; ts: number; node: string; reason: string }
 	| { t: "fail"; ts: number; node: string; error: string }
 	| { t: "wait"; ts: number; node: string; on: string }
@@ -51,6 +80,10 @@ export interface NodeState {
 	endedAt?: number;
 	/** What it is waiting on, while it waits. */
 	waitingOn?: string;
+	/** The last failed attempt's error, while it is retried. */
+	lastError?: string;
+	/** Its output was taken from this earlier run. */
+	reused?: string;
 }
 
 export interface JournalFold {
@@ -114,9 +147,13 @@ export function foldJournal(events: readonly JournalEvent[]): JournalFold {
 				state.status = "done";
 				state.output = event.output;
 				state.endedAt = event.ts;
+				if (event.reused) state.reused = event.reused;
 				delete state.waitingOn;
 				break;
 			}
+			case "retry":
+				node(event.node).lastError = event.error;
+				break;
 			case "skip": {
 				const state = node(event.node);
 				state.status = "skipped";

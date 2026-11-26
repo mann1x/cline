@@ -12,6 +12,12 @@
  *   answer, the panel's Resolve, the run or command ending).
  * - An `approval` is a `human:` gate on the run's task: Resolve approves,
  *   removing the gate rejects.
+ * - An `agent` or `swarm` node calls the session's own `spawn_agent`,
+ *   `spawn_swarm` or configured-agent tool, as a `tool` node would.
+ * - An `http` node asks the person, unless the `pipeline_http` policy
+ *   approves it (phase 2).
+ * - A `pipeline` node runs another workspace pipeline's approved version
+ *   to its end; a pipeline never runs inside itself, and at most five deep.
  */
 
 import { spawn } from "node:child_process";
@@ -31,13 +37,21 @@ import {
 } from "../tools/task-graph/gates";
 import { parseGate } from "../tools/task-graph/model";
 import type { TaskGraphStore } from "../tools/task-graph/store";
-import { foldJournal, PIPELINE_RUNS_DIR, readJournal } from "./journal";
+import {
+	appendJournal,
+	foldJournal,
+	PIPELINE_RUNS_DIR,
+	readJournal,
+} from "./journal";
 import type { PipelineDefinition, PipelineNode } from "./model";
 import {
+	type HttpRequest,
 	type NodeContext,
 	type PipelineHost,
 	PipelineRun,
+	type PipelineRunResult,
 	pipelineHolder,
+	type SubRunResult,
 } from "./runner";
 import { pipelineHash } from "./validate";
 import { findPipeline, type PipelineFile } from "./workspace";
@@ -54,6 +68,13 @@ const NOT_FROM_A_PIPELINE = new Set([
 
 const COMMAND_TOOL = "run_commands";
 const OUTPUT_CAP = 256_000;
+/** The policy an http node's request is asked under: it asks unless set to auto-approve. */
+export const PIPELINE_HTTP_POLICY = "pipeline_http";
+/** How deep pipelines run inside each other. */
+const MAX_DEPTH = 5;
+
+const sameName = (a: string, b: string) =>
+	a.trim().toLowerCase() === b.trim().toLowerCase();
 
 export interface PipelineSessionOptions {
 	workspaceRoot: string;
@@ -116,7 +137,12 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
 /** The side-effecting nodes a test run refuses unless pinned or allowed. */
 export function unpinnedSideEffects(definition: PipelineDefinition): string[] {
 	const effectful = (node: { type: string; pin?: unknown }) =>
-		(node.type === "command" || node.type === "tool") &&
+		(node.type === "command" ||
+			node.type === "tool" ||
+			node.type === "http" ||
+			node.type === "agent" ||
+			node.type === "swarm" ||
+			node.type === "pipeline") &&
 		!Array.isArray(node.pin);
 	return definition.nodes
 		.filter(
@@ -143,6 +169,9 @@ export class PipelineSession {
 				this.runCommand(command, opts, context),
 			waitGate: (spec, context) => this.waitGate(spec, context),
 			approve: (message, context) => this.approve(message, context),
+			http: (request, context) => this.http(request, context),
+			runPipeline: (name, inputs, context) =>
+				this.runPipeline(name, inputs, context),
 		};
 	}
 
@@ -346,11 +375,112 @@ export class PipelineSession {
 		return "open" in decided;
 	}
 
+	/**
+	 * A web request. Asked of the person unless the `pipeline_http` policy
+	 * auto-approves it: a request can change something somewhere else, and
+	 * approving the pipeline did not approve that.
+	 */
+	private async http(
+		request: HttpRequest,
+		context: NodeContext,
+	): Promise<{
+		status: number;
+		headers: Record<string, string>;
+		body: string;
+	}> {
+		const policy = policyFor(this.options.toolPolicies, PIPELINE_HTTP_POLICY);
+		if (policy.enabled === false)
+			throw new Error(
+				`${PIPELINE_HTTP_POLICY} is switched off for this session`,
+			);
+		if (policy.autoApprove !== true) {
+			if (!this.options.requestApproval)
+				throw new Error(
+					`${request.method} ${request.url} needs the person's approval, and this session cannot ask for it`,
+				);
+			const answer = await this.options.requestApproval({
+				sessionId: this.options.sessionId,
+				agentId: pipelineHolder(context.run),
+				conversationId: this.options.sessionId,
+				iteration: 0,
+				toolCallId: `${context.run}:${context.node}`,
+				toolName: PIPELINE_HTTP_POLICY,
+				input: { method: request.method, url: request.url },
+				policy: { ...policy, autoApprove: false },
+			});
+			if (!answer.approved)
+				throw new Error(
+					`the person did not approve ${request.method} ${request.url}${answer.reason ? `: ${answer.reason}` : ""}`,
+				);
+		}
+		const response = await fetch(request.url, {
+			method: request.method,
+			headers: request.headers,
+			...(request.body !== undefined ? { body: request.body } : {}),
+			signal: context.signal,
+		});
+		const text = await response.text();
+		const headers: Record<string, string> = {};
+		response.headers.forEach((value, key) => {
+			headers[key] = value;
+		});
+		return {
+			status: response.status,
+			headers,
+			body: text.length > OUTPUT_CAP ? text.slice(0, OUTPUT_CAP) : text,
+		};
+	}
+
+	/** A `pipeline` node: another pipeline, run to its end. */
+	private async runPipeline(
+		name: string,
+		inputs: Record<string, unknown>,
+		context: NodeContext,
+	): Promise<SubRunResult> {
+		if (context.stack.some((entry) => sameName(entry, name)))
+			throw new Error(
+				`${name} is already running above this node (${[...context.stack, name].join(" → ")})`,
+			);
+		if (context.stack.length >= MAX_DEPTH)
+			throw new Error(
+				`pipelines run at most ${MAX_DEPTH} deep (${context.stack.join(" → ")})`,
+			);
+		const file = findPipeline(this.options.workspaceRoot, name);
+		if (!file) throw new Error(`no pipeline "${name}"`);
+		// A test's sub-run is a test too: pins, and nothing approved needed.
+		const run = context.test
+			? this.startTest(
+					file,
+					inputs,
+					true,
+					context.stack,
+					undefined,
+					context.run,
+				)
+			: this.startApproved(file, inputs, context.stack, context.run);
+		const stop = () => run.stop("the pipeline above it stopped");
+		context.signal.addEventListener("abort", stop, { once: true });
+		try {
+			const result = await run.result();
+			return {
+				run: result.run,
+				status: result.status,
+				...(result.error ? { error: result.error } : {}),
+				items: result.items,
+			};
+		} finally {
+			context.signal.removeEventListener("abort", stop);
+		}
+	}
+
 	// ---------------------------------------------------------------------
 	// Runs
 	// ---------------------------------------------------------------------
 
-	private track(run: PipelineRun): PipelineRun {
+	private track(
+		run: PipelineRun,
+		context: { test?: boolean; stack?: string[] } = {},
+	): PipelineRun {
 		this.live.set(run.id, run);
 		void run.result().then(
 			(result) => {
@@ -358,7 +488,12 @@ export class PipelineSession {
 				this.options.log?.(
 					`[pipelines] ${run.id} ${result.status}${result.error ? `: ${result.error}` : ""}`,
 				);
-				this.options.onRunEnded?.(run, result.boardLines);
+				const lines = [...result.boardLines];
+				if (!context.test) {
+					const started = this.startOnFailure(run, result, context.stack ?? []);
+					if (started) lines.push(started);
+				}
+				this.options.onRunEnded?.(run, lines);
 			},
 			(error) => {
 				this.live.delete(run.id);
@@ -370,6 +505,44 @@ export class PipelineSession {
 		return run;
 	}
 
+	/**
+	 * A failed run's `onFailure` pipeline, started with what failed. Not for
+	 * a stop, a test, or a pipeline already in the chain (no loops). Returns
+	 * the line to tell the model, or why it did not start.
+	 */
+	private startOnFailure(
+		run: PipelineRun,
+		result: PipelineRunResult,
+		stack: string[],
+	): string | undefined {
+		const name = run.definition.onFailure;
+		if (!name || result.status !== "failed") return undefined;
+		const chain = [...stack, run.definition.name];
+		if (chain.some((entry) => sameName(entry, name))) {
+			return `${run.id} failed; its onFailure pipeline ${name} is already in this chain (${chain.join(" → ")}), so it was not started again.`;
+		}
+		try {
+			const file = findPipeline(this.options.workspaceRoot, name);
+			if (!file) throw new Error(`no pipeline "${name}"`);
+			const child = this.startApproved(
+				file,
+				{
+					run: run.id,
+					pipeline: run.definition.name,
+					node: result.failedNode ?? "",
+					error: result.error ?? "",
+				},
+				chain,
+			);
+			this.options.log?.(
+				`[pipelines] ${run.id} failed: onFailure ${name} started as ${child.id}`,
+			);
+			return `${run.id} failed; its onFailure pipeline ${name} started as ${child.id}.`;
+		} catch (error) {
+			return `${run.id} failed; its onFailure pipeline ${name} could not start: ${(error as Error).message}`;
+		}
+	}
+
 	private baseOptions(
 		definition: PipelineDefinition,
 		hash: string,
@@ -379,6 +552,7 @@ export class PipelineSession {
 			definition,
 			hash,
 			host,
+			sessionId: this.options.sessionId,
 			journalDir: this.journalDir,
 			...(this.options.board ? { board: this.options.board } : {}),
 			...(this.options.env ? { env: this.options.env } : {}),
@@ -395,6 +569,37 @@ export class PipelineSession {
 	): PipelineRun {
 		const file = findPipeline(this.options.workspaceRoot, name);
 		if (!file) throw new Error(`no pipeline "${name}"`);
+		const run = this.startApproved(file, inputs, []);
+		if (gateTask && this.options.board) {
+			this.options.board.update(
+				{ updates: [{ id: gateTask, gate: [`pipeline:${run.id}`] }] },
+				{ by: "model" },
+			);
+		}
+		return run;
+	}
+
+	/** The approved version of `file`, started; refused otherwise. */
+	private startApproved(
+		file: PipelineFile,
+		inputs: Record<string, unknown>,
+		stack: string[],
+		parentRun?: string,
+	): PipelineRun {
+		const definition = this.approvedDefinition(file);
+		return this.track(
+			PipelineRun.start({
+				...this.baseOptions(definition, file.hash),
+				inputs,
+				...(stack.length ? { stack } : {}),
+				...(parentRun ? { parentRun } : {}),
+			}),
+			{ stack },
+		);
+	}
+
+	/** What may run of `file`: its definition, when that version is approved. */
+	private approvedDefinition(file: PipelineFile): PipelineDefinition {
 		if (!file.valid || !file.definition)
 			throw new Error(
 				`"${file.name}" does not validate: ${file.errors.join("; ")}`,
@@ -406,19 +611,7 @@ export class PipelineSession {
 					: `"${file.name}" has not been approved. Only an approved version runs: ask the person to approve it (the /pipelines command, or "Approve pipeline" in VS Code), or run \`pipeline test\`.`,
 			);
 		}
-		const run = this.track(
-			PipelineRun.start({
-				...this.baseOptions(file.definition, file.hash),
-				inputs,
-			}),
-		);
-		if (gateTask && this.options.board) {
-			this.options.board.update(
-				{ updates: [{ id: gateTask, gate: [`pipeline:${run.id}`] }] },
-				{ by: "model" },
-			);
-		}
-		return run;
+		return file.definition;
 	}
 
 	/**
@@ -432,9 +625,25 @@ export class PipelineSession {
 		source: PipelineFile | { definition: PipelineDefinition; text: string },
 		inputs: Record<string, unknown> = {},
 		allowSideEffects = false,
+		until?: string,
+	): PipelineRun {
+		return this.startTest(source, inputs, allowSideEffects, [], until);
+	}
+
+	private startTest(
+		source: PipelineFile | { definition: PipelineDefinition; text: string },
+		inputs: Record<string, unknown>,
+		allowSideEffects: boolean,
+		stack: string[],
+		until?: string,
+		parentRun?: string,
 	): PipelineRun {
 		const definition = source.definition;
 		if (!definition) throw new Error("the pipeline does not validate");
+		if (until && !definition.nodes.some((node) => node.id === until))
+			throw new Error(
+				`no node "${until}" to stop after (it has ${definition.nodes.map((node) => node.id).join(", ")})`,
+			);
 		const unpinned = unpinnedSideEffects(definition);
 		if (unpinned.length > 0 && !allowSideEffects) {
 			throw new Error(
@@ -454,7 +663,11 @@ export class PipelineSession {
 				),
 				inputs,
 				usePins: true,
+				...(until ? { until } : {}),
+				...(stack.length ? { stack } : {}),
+				...(parentRun ? { parentRun } : {}),
 			}),
+			{ test: true, stack },
 		);
 	}
 
@@ -501,7 +714,95 @@ export class PipelineSession {
 				? PipelineRun.recover(options)
 				: PipelineRun.resume(options);
 		if (!run) throw new Error(`${runId} cannot be resumed`);
-		return this.track(run);
+		return this.track(run, {
+			test: fold.run.pipeline.endsWith("-test"),
+		});
+	}
+
+	/**
+	 * Run `runId` again from `node`, as a new run that reuses what came
+	 * before it (plan section 5). The pipeline as it is now: a run's approved
+	 * version, a test's file as it is.
+	 */
+	rerun(runId: string, node: string): PipelineRun {
+		const fold = foldJournal(
+			readJournal(join(this.journalDir, `${runId}.jsonl`)),
+		);
+		if (!fold.run) throw new Error(`no run "${runId}"`);
+		const test = fold.run.pipeline.endsWith("-test");
+		const file = findPipeline(
+			this.options.workspaceRoot,
+			fold.run.pipeline.replace(/-test$/, ""),
+		);
+		if (!file?.definition)
+			throw new Error(
+				`the pipeline of ${runId} ("${fold.run.pipeline}") is no longer in the workspace`,
+			);
+		const definition = test
+			? { ...file.definition, name: fold.run.pipeline }
+			: this.approvedDefinition(file);
+		return this.track(
+			PipelineRun.rerun({
+				...this.baseOptions(
+					definition,
+					file.hash,
+					test
+						? {
+								...this.host,
+								waitGate: async () => ({ open: true }),
+								approve: async () => true,
+							}
+						: this.host,
+				),
+				from: runId,
+				node,
+				...(test ? { usePins: true } : {}),
+			}),
+			{ test },
+		);
+	}
+
+	/**
+	 * After a reload: this session's runs that were running or waiting when
+	 * the host stopped are picked up from their journals. A run of another
+	 * session is left to it (its task is on that conversation's board), and a
+	 * test is not picked up. Returns what to tell the model.
+	 */
+	recoverInterrupted(): string[] {
+		if (!existsSync(this.journalDir)) return [];
+		const lines: string[] = [];
+		for (const file of readdirSync(this.journalDir)) {
+			if (!file.endsWith(".jsonl")) continue;
+			const id = file.slice(0, -".jsonl".length);
+			if (this.live.has(id)) continue;
+			const fold = foldJournal(readJournal(join(this.journalDir, file)));
+			if (fold.status !== "running" && fold.status !== "waiting") continue;
+			if (fold.run?.session !== this.options.sessionId) continue;
+			if (fold.run.pipeline.endsWith("-test")) continue;
+			// A sub-run is its parent's to decide: the parent's node failed as
+			// interrupted, or starts a new one when it is idempotent.
+			if (fold.run.parent) {
+				appendJournal(join(this.journalDir, file), {
+					t: "done",
+					ts: Date.now(),
+					status: "stopped",
+					error: `the window closed while it ran inside ${fold.run.parent}`,
+				});
+				continue;
+			}
+			try {
+				const run = this.resume(id);
+				const view = run.view();
+				lines.push(
+					`${id} was running when the window closed; it was picked up from its journal${view.status === "failed" || view.error ? ` (${view.error})` : ""}.`,
+				);
+			} catch (error) {
+				lines.push(
+					`${id} was running when the window closed and could not be picked up: ${(error as Error).message}. \`pipeline resume\` tries again; \`pipeline status\` shows where it stopped.`,
+				);
+			}
+		}
+		return lines;
 	}
 
 	/** Runs in this workspace, newest first. */

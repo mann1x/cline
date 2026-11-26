@@ -110,7 +110,10 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
   `.cerebriline/pipelines/`: steps that call tools or run commands, set
   values, branch (`if`, `switch`), merge, loop over a list, wait for a time,
   a commit, a PR check or another task, ask you to approve, or run a check.
-  Steps run in parallel where they do not depend on each other.
+  Steps can also hand a task to a sub-agent or a configured agent (reading
+  its answer as JSON if asked), fan work out to a swarm, call a web
+  endpoint, or run another pipeline. Steps run in parallel where they do not
+  depend on each other.
 - **Nothing runs until you approve it.** A saved file is a proposal. Run
   **Cerebriline: Approve Pipeline** from the command palette, read the file
   it opens and approve that version; any later change to the file needs
@@ -120,23 +123,29 @@ Upstream Cline's own changelog is a separate document and is not reproduced here
 - **Runs live on the task board.** A run holds its task until it ends and
   the model is told when it does. An approval step shows as a gate on that
   task: **Resolve** approves and removing the gate rejects. A run is
-  journalled under `.cerebriline/pipeline-runs/`. A run cut off by a reload,
-  a stopped run or a failed one can be resumed (`pipeline resume`) from where
-  it was, rather than started over. A reload does not resume runs by itself
-  yet.
+  journalled under `.cerebriline/pipeline-runs/`. A run cut off by a reload
+  is picked up when its conversation is opened again. A stopped or failed
+  run can be resumed (`pipeline resume`) from where it was, or run again
+  from one step (`pipeline rerun`), reusing what the steps before it
+  produced.
+- **When a step fails.** A step can be retried (`retry`, with a growing
+  wait), let the run go on with the error as its result, or send the error
+  down a branch of its own (`onError`). A pipeline can name another to run
+  when it fails (`onFailure`), given what failed. A web request asks you
+  first, every time, unless all tools are auto-approved.
 - **`pipeline test`** runs a pipeline without approval but refuses any step
-  with a side effect, such as a push or a write, unless that step is pinned
-  to a stand-in result. Waits open at once.
+  with a side effect, such as a push, a write, an agent or a web request,
+  unless that step is pinned to a stand-in result. Waits open at once, and
+  `until` stops the test after a chosen step.
 - **Per model.** Each provider's Tools section has a `pipeline` switch (on
   by default) for models that cannot handle pipelines. It shows as off, with
   the reason, while the feature is off.
 - **CLI:** `--pipelines` or `CLINE_PIPELINES=1` turns it on, and
   `/pipelines` lists pipelines, approves one (`/pipelines approve <name>`)
   and lists runs (`/pipelines runs`).
-- **Not in this version:** steps that start agents, call HTTP endpoints or
-  run another pipeline are recognised but refused, and there is no viewer
-  for a pipeline's graph yet. Pipelines suit cloud models or a 27B-class
-  local model; a small model writes them poorly.
+- **Not in this version:** there is no viewer for a pipeline's graph yet.
+  Pipelines suit cloud models or a 27B-class local model; a small model
+  writes them poorly.
 
 ### Settings
 
