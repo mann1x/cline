@@ -26,6 +26,7 @@ import type {
 	DelegatedAgentConfigProvider,
 	DelegatedPrepareTurnTarget,
 	SubAgentEndContext,
+	SubAgentProgressContext,
 	SubAgentStartContext,
 	TeamEvent,
 } from "../../extensions/tools/team";
@@ -85,6 +86,9 @@ export interface RuntimeBuilderInput {
 	onSubAgentEvent?: (event: AgentEvent) => void;
 	onSubAgentStart?: (context: SubAgentStartContext) => void | Promise<void>;
 	onSubAgentEnd?: (context: SubAgentEndContext) => void | Promise<void>;
+	onSubAgentProgress?: (
+		context: SubAgentProgressContext,
+	) => void | Promise<void>;
 	createSpawnTool?: (options?: SpawnToolOptions) => AgentTool;
 	/** `spawn_swarm`, when the host can build one. See `local/spawn-tool.ts`. */
 	createSwarmTool?: () => AgentTool;

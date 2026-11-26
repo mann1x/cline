@@ -407,6 +407,34 @@ export interface SubAgentEndContext {
 	error?: Error;
 }
 
+/** A running sub-agent's transcript so far, after one of its turns. */
+export interface SubAgentProgressContext extends SubAgentStartContext {
+	messages: readonly unknown[];
+}
+
+/**
+ * After each of a sub-agent's turns, its transcript so far for whoever keeps
+ * it (the session writes it beside the lead's). Without it the transcript was
+ * written only when the agent ended: Chris's report taken while
+ * `docker-deploy` worked showed it "running" with no messages, and a window
+ * that closes mid-run loses all of it. Errors are ignored.
+ */
+export function reportSubAgentProgress(
+	hook:
+		| ((context: SubAgentProgressContext) => void | Promise<void>)
+		| undefined,
+	event: AgentEvent,
+	context: () => SubAgentProgressContext | undefined,
+): void {
+	if (!hook || event.type !== "iteration_end") return;
+	try {
+		const current = context();
+		if (current) void Promise.resolve(hook(current)).catch(() => {});
+	} catch {
+		// Best-effort observer callback.
+	}
+}
+
 /** How a delegation that has ended is identified to its last observer. */
 export interface SubAgentSettledContext {
 	/** The spawning tool call; see {@link SubAgentStartContext.toolCallId}. */
@@ -452,6 +480,10 @@ export interface SpawnAgentToolConfig {
 	 * Errors are ignored so lifecycle observers cannot break task execution.
 	 */
 	onSubAgentEnd?: (context: SubAgentEndContext) => void | Promise<void>;
+	/** After each of a sub-agent's turns, its transcript so far (see {@link reportSubAgentProgress}). */
+	onSubAgentProgress?: (
+		context: SubAgentProgressContext,
+	) => void | Promise<void>;
 	/**
 	 * Called once the spawn is over, however it ended -- including the paths
 	 * {@link onSubAgentEnd} never sees, where the agent failed or was stopped
@@ -1535,6 +1567,17 @@ async function runSpawnedAgent(
 					trouble.progressed();
 				}
 				progress.observe(event);
+				reportSubAgentProgress(config.onSubAgentProgress, event, () =>
+					started
+						? {
+								...started,
+								parentAgentId,
+								input,
+								toolCallId: context.toolCallId,
+								messages: agent.getMessages(),
+							}
+						: undefined,
+				);
 			},
 			hookErrorMode: config.hookErrorMode,
 			toolPolicies: config.toolPolicies,

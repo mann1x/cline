@@ -27,6 +27,7 @@ import {
 } from "../../../extensions/tools/executors/document-extract";
 import type {
 	SubAgentEndContext,
+	SubAgentProgressContext,
 	SubAgentSettledContext,
 	SubAgentStartContext,
 } from "../../../extensions/tools/team";
@@ -177,6 +178,7 @@ export interface SessionSubAgentLifecycleCallbacks {
 	onSubAgentEvent: (event: AgentEvent) => void;
 	onSubAgentStart: (context: SubAgentStartContext) => void;
 	onSubAgentEnd: (context: SubAgentEndContext) => void;
+	onSubAgentProgress: (context: SubAgentProgressContext) => void;
 	onSubAgentSettled: (context: SubAgentSettledContext) => Promise<void>;
 }
 
@@ -265,6 +267,14 @@ export function createSessionSubAgentLifecycleCallbacks(
 			}
 			void deps.invokeBackendOptional(
 				"handleSubAgentEnd",
+				rootSessionId,
+				context,
+			);
+		},
+		// Its transcript so far, written beside the lead's as it works.
+		onSubAgentProgress: (context) => {
+			void deps.invokeBackendOptional(
+				"handleSubAgentProgress",
 				rootSessionId,
 				context,
 			);

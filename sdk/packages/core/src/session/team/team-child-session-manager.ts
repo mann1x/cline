@@ -7,8 +7,13 @@ import { ensureHookLogDir } from "@cline/shared/storage";
 import { z } from "zod";
 import type {
 	SubAgentEndContext,
+	SubAgentProgressContext,
 	SubAgentStartContext,
 } from "../../extensions/tools/team";
+
+/** How often a running sub-agent's transcript is rewritten, at most. */
+const SUBAGENT_PROGRESS_INTERVAL_MS = 5_000;
+
 import type { HookEventPayload } from "../../hooks";
 import { nowIso } from "../../services/session-artifacts";
 import { resolveMetadataWithTitle } from "../../services/session-data";
@@ -44,6 +49,11 @@ export class TeamChildSessionManager {
 	private readonly teamTaskLastProgressLineBySession = new Map<
 		string,
 		string
+	>();
+	/** A running sub-agent's last transcript write, and the one in flight. */
+	private readonly subagentProgress = new Map<
+		string,
+		{ at: number; writing?: Promise<void>; ended?: boolean }
 	>();
 
 	constructor(
@@ -380,10 +390,67 @@ export class TeamChildSessionManager {
 		await this.applySubagentStatusBySessionId(subSessionId, "running");
 	}
 
+	/**
+	 * A running sub-agent's transcript so far, written after its turns (at most
+	 * every few seconds), so a report taken while it works, or a window closed
+	 * under it, keeps what it did. Its end writes the final one; nothing is
+	 * written after that.
+	 */
+	async handleSubAgentProgress(
+		rootSessionId: string,
+		context: SubAgentProgressContext,
+	): Promise<void> {
+		const entry = this.subagentProgress.get(context.subAgentId) ?? { at: 0 };
+		const now = Date.now();
+		if (
+			entry.ended ||
+			entry.writing ||
+			now - entry.at < SUBAGENT_PROGRESS_INTERVAL_MS
+		)
+			return;
+		entry.at = now;
+		this.subagentProgress.set(context.subAgentId, entry);
+		const write = (async () => {
+			const subSessionId = await this.upsertSubagentSession({
+				agentId: context.subAgentId,
+				parentAgentId: context.parentAgentId,
+				conversationId: context.conversationId,
+				prompt: context.input.task,
+				rootSessionId,
+			});
+			if (!subSessionId || entry.ended) return;
+			const persisted = this.toPersistedMessages(
+				context.messages as LlmsProviders.MessageWithMetadata[],
+			);
+			if (persisted)
+				await this.manifestStore.persistSessionMessages(
+					subSessionId,
+					persisted,
+				);
+		})();
+		entry.writing = write;
+		try {
+			await write;
+		} finally {
+			entry.writing = undefined;
+		}
+	}
+
 	async handleSubAgentEnd(
 		rootSessionId: string,
 		context: SubAgentEndContext,
 	): Promise<void> {
+		// A progress write still going would land after the final transcript,
+		// and a late one would mark the agent running again: the end is kept.
+		const progress = this.subagentProgress.get(context.subAgentId);
+		this.subagentProgress.set(context.subAgentId, {
+			at: progress?.at ?? 0,
+			ended: true,
+		});
+		if (progress) {
+			progress.ended = true;
+			await progress.writing?.catch(() => undefined);
+		}
 		const subSessionId = await this.upsertSubagentSession({
 			agentId: context.subAgentId,
 			parentAgentId: context.parentAgentId,

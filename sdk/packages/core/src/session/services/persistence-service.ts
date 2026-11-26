@@ -5,6 +5,7 @@ import type { AgentResult, BasicLogger } from "@cline/shared";
 import { nanoid } from "nanoid";
 import type {
 	SubAgentEndContext,
+	SubAgentProgressContext,
 	SubAgentStartContext,
 } from "../../extensions/tools/team";
 import type { HookEventPayload } from "../../hooks";
@@ -458,6 +459,13 @@ export class UnifiedSessionPersistenceService {
 		context: SubAgentEndContext,
 	): Promise<void> {
 		return this.teamChildren.handleSubAgentEnd(rootSessionId, context);
+	}
+
+	handleSubAgentProgress(
+		rootSessionId: string,
+		context: SubAgentProgressContext,
+	): Promise<void> {
+		return this.teamChildren.handleSubAgentProgress(rootSessionId, context);
 	}
 
 	private isPidAlive(pid: number): boolean {

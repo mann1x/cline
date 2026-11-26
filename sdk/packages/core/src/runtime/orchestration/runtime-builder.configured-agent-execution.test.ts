@@ -50,8 +50,18 @@ vi.mock("./session-runtime-orchestrator", () => {
 						noticeType: "status",
 						message: "configured agent running",
 					});
+					listener({
+						type: "iteration_end",
+						iteration: 1,
+						hadToolCalls: false,
+						toolCallCount: 0,
+					} as AgentEvent);
 				}
 				return runMock(input);
+			}
+
+			getMessages(): unknown[] {
+				return ["configured turn 1"];
 			}
 		},
 	};
@@ -165,6 +175,7 @@ Write a concise commit message.`,
 		const onSubAgentEvent = vi.fn();
 		const onSubAgentStart = vi.fn();
 		const onSubAgentEnd = vi.fn();
+		const onSubAgentProgress = vi.fn();
 		const effectiveToolPolicies = {
 			"*": { autoApprove: false },
 			read_files: { enabled: false },
@@ -177,6 +188,7 @@ Write a concise commit message.`,
 			onSubAgentEvent,
 			onSubAgentStart,
 			onSubAgentEnd,
+			onSubAgentProgress,
 		});
 
 		expect(
@@ -232,6 +244,13 @@ Write a concise commit message.`,
 			expect.objectContaining({
 				type: "notice",
 				message: "configured agent running",
+			}),
+		);
+		// Its transcript so far, after its turn: a configured agent too.
+		expect(onSubAgentProgress).toHaveBeenCalledWith(
+			expect.objectContaining({
+				subAgentId: "configured-sub-agent",
+				messages: ["configured turn 1"],
 			}),
 		);
 		expect(onSubAgentEnd).toHaveBeenCalledWith(

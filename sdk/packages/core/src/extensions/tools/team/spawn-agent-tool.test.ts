@@ -261,6 +261,71 @@ describe("createSpawnAgentTool", () => {
 		});
 	});
 
+	it("hands the transcript so far to onSubAgentProgress after each turn, not on other events", async () => {
+		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
+		const onSubAgentProgress = vi.fn();
+		runMock.mockImplementation(async () => {
+			const config = agentConstructorSpy.mock.calls.at(-1)?.[0] as {
+				onEvent?: (event: unknown) => void;
+			};
+			config.onEvent?.({ type: "iteration_start", iteration: 1 });
+			config.onEvent?.({
+				type: "content_end",
+				contentType: "text",
+				text: "looking",
+			});
+			config.onEvent?.({
+				type: "iteration_end",
+				iteration: 1,
+				hadToolCalls: true,
+				toolCallCount: 1,
+			});
+			config.onEvent?.({ type: "iteration_start", iteration: 2 });
+			config.onEvent?.({
+				type: "iteration_end",
+				iteration: 2,
+				hadToolCalls: false,
+				toolCallCount: 0,
+			});
+			return {
+				text: "done",
+				iterations: 2,
+				finishReason: "completed",
+				usage: { inputTokens: 1, outputTokens: 1 },
+			};
+		});
+		const tool = createSpawnAgentTool({
+			configProvider: createDelegatedAgentConfigProvider({
+				providerId: "anthropic",
+				modelId: "m",
+			}),
+			createSubAgentTools: () => [],
+			// A progress observer that throws must not touch the run.
+			onSubAgentProgress: (context) => {
+				onSubAgentProgress(context);
+				throw new Error("disk full");
+			},
+		});
+		const output = (await tool.execute(
+			{ systemPrompt: "You verify.", task: "Verify the stack." },
+			{
+				agentId: "lead",
+				conversationId: "conv-lead",
+				iteration: 1,
+				toolCallId: "call-1",
+			},
+		)) as { text: string };
+		expect(output.text).toBe("done");
+		expect(onSubAgentProgress).toHaveBeenCalledTimes(2);
+		expect(onSubAgentProgress.mock.calls[0]?.[0]).toMatchObject({
+			subAgentId: "sub-agent-1",
+			parentAgentId: "lead",
+			toolCallId: "call-1",
+			input: { task: "Verify the stack." },
+			messages: ["turn-1", "turn-2"],
+		});
+	});
+
 	it("creates a sub-agent, forwards callbacks, and returns normalized output", async () => {
 		const { createSpawnAgentTool } = await import("./spawn-agent-tool.js");
 		runMock.mockResolvedValue({

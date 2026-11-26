@@ -748,6 +748,83 @@ describe("UnifiedSessionPersistenceService", () => {
 		expect(payload.messages).toHaveLength(2);
 	});
 
+	// Chris's #118 report: a `docker-deploy` agent at its 18th turn showed as
+	// "running" with an empty transcript, written only at its start.
+	it("writes a running sub-agent's transcript as it works, and its end writes the last one", async () => {
+		const sessionsDir = mkdtempSync(join(tmpdir(), "running-agent-messages-"));
+		tempDirs.push(sessionsDir);
+		const service = new FileSessionService(sessionsDir);
+		const rootSessionId = "root-running-session";
+		await service.createRootSessionWithArtifacts({
+			sessionId: rootSessionId,
+			source: SessionSource.CLI,
+			pid: process.pid,
+			interactive: false,
+			provider: "ollama",
+			model: "deepseek-v4.1-flash:cloud",
+			cwd: "/tmp/project",
+			workspaceRoot: "/tmp/project",
+			enableTools: true,
+			enableSpawn: true,
+			enableTeams: false,
+			prompt: "lead task",
+			startedAt: "2026-11-26T15:34:44.000Z",
+		});
+		const context = {
+			subAgentId: "docker-deploy-1",
+			conversationId: "conv-docker-deploy-1",
+			parentAgentId: "lead",
+			input: { name: "docker-deploy", task: "Verify the stack." },
+		};
+		const turn = (n: number) =>
+			Array.from({ length: n }, (_, i) => ({
+				role: i % 2 ? "assistant" : "user",
+				content: `turn ${i}`,
+			}));
+		const transcript = async () => {
+			const row = (await service.listSessions(10)).find(
+				(item) => item.agentId === "docker-deploy-1",
+			);
+			return {
+				row,
+				messages: (
+					JSON.parse(readFileSync(row?.messagesPath as string, "utf8")) as {
+						messages: unknown[];
+					}
+				).messages,
+			};
+		};
+		await service.handleSubAgentStart(rootSessionId, context);
+		expect((await transcript()).messages).toHaveLength(0);
+
+		await service.handleSubAgentProgress(rootSessionId, {
+			...context,
+			messages: turn(4),
+		});
+		const running = await transcript();
+		expect(running.row?.status).toBe("running");
+		expect(running.messages).toHaveLength(4);
+		// A turn right after is not written again (at most every few seconds).
+		await service.handleSubAgentProgress(rootSessionId, {
+			...context,
+			messages: turn(6),
+		});
+		expect((await transcript()).messages).toHaveLength(4);
+
+		await service.handleSubAgentEnd(rootSessionId, {
+			...context,
+			agentResult: { messages: turn(8) } as never,
+		});
+		// Nothing is written after the end, however late it comes.
+		await service.handleSubAgentProgress(rootSessionId, {
+			...context,
+			messages: turn(2),
+		});
+		const ended = await transcript();
+		expect(ended.row?.status).toBe("completed");
+		expect(ended.messages).toHaveLength(8);
+	});
+
 	it("persists plain spawn_agent result usage on child messages", async () => {
 		const sessionsDir = mkdtempSync(join(tmpdir(), "spawn-agent-messages-"));
 		tempDirs.push(sessionsDir);

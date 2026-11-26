@@ -50,6 +50,7 @@ import type {
 } from "../extensions/plugin/plugin-load-report";
 import type {
 	SubAgentEndContext,
+	SubAgentProgressContext,
 	SubAgentStartContext,
 	TeamEvent,
 } from "../extensions/tools/team";
@@ -780,6 +781,9 @@ export interface PrepareLocalRuntimeBootstrapOptions {
 		onSubAgentEvent?: (event: AgentEvent) => void;
 		onSubAgentStart?: (context: SubAgentStartContext) => void | Promise<void>;
 		onSubAgentEnd?: (context: SubAgentEndContext) => void | Promise<void>;
+		onSubAgentProgress?: (
+			context: SubAgentProgressContext,
+		) => void | Promise<void>;
 	};
 	createSpawnTool: (options?: SpawnToolOptions) => AgentTool;
 	createSwarmTool?: () => AgentTool;
@@ -1204,6 +1208,7 @@ export async function prepareLocalRuntimeBootstrap(
 			onSubAgentEvent: subAgentLifecycleCallbacks?.onSubAgentEvent,
 			onSubAgentStart: subAgentLifecycleCallbacks?.onSubAgentStart,
 			onSubAgentEnd: subAgentLifecycleCallbacks?.onSubAgentEnd,
+			onSubAgentProgress: subAgentLifecycleCallbacks?.onSubAgentProgress,
 			userInstructionService: userInstructionService,
 			pluginSkillDirectories,
 			agentPluginSkills: loadedAgentPluginPackages?.skills,

@@ -1326,6 +1326,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 								: undefined,
 						onSubAgentEvent: input.onSubAgentEvent,
 						onSubAgentStart: input.onSubAgentStart,
+						onSubAgentProgress: input.onSubAgentProgress,
 						// The agent's changes go back to the lead as revisions and its
 						// overlay is disposed before anyone reads the result, so the
 						// note naming them is in the answer the lead is handed.

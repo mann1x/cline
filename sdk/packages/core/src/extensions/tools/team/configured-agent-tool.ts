@@ -61,10 +61,12 @@ import {
 	configuredAgentKey,
 	controlFields,
 	controlReport,
+	reportSubAgentProgress,
 	requeueNote,
 	type SpawnAgentOutput,
 	type SpawnBackgroundAck,
 	type SubAgentEndContext,
+	type SubAgentProgressContext,
 	type SubAgentSettledContext,
 	type SubAgentStartContext,
 	storedControls,
@@ -211,6 +213,9 @@ export interface ConfiguredAgentToolConfig {
 	) => Promise<ToolApprovalResult> | ToolApprovalResult;
 	onSubAgentStart?: (context: SubAgentStartContext) => void | Promise<void>;
 	onSubAgentEnd?: (context: SubAgentEndContext) => void | Promise<void>;
+	onSubAgentProgress?: (
+		context: SubAgentProgressContext,
+	) => void | Promise<void>;
 	/** See `SpawnAgentToolConfig.onSubAgentSettled`. */
 	onSubAgentSettled?: (context: SubAgentSettledContext) => void | Promise<void>;
 	/** See `SpawnAgentToolConfig.commandSandboxFor`: where its check runs. */
@@ -713,6 +718,17 @@ export function createConfiguredAgentTools(
 								trouble.progressed();
 							}
 							progress.observe(event);
+							reportSubAgentProgress(options.onSubAgentProgress, event, () =>
+								started
+									? {
+											...started,
+											parentAgentId,
+											input: spawnInput,
+											toolCallId: context.toolCallId,
+											messages: subAgent.getMessages(),
+										}
+									: undefined,
+							);
 						},
 						hookErrorMode: options.hookErrorMode,
 						toolPolicies: options.toolPolicies,
